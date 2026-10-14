@@ -257,7 +257,6 @@ describe('MCP package entrypoint', () => {
         'takt_list_tasks',
         'takt_get_run',
         'takt_tell_run',
-        'takt_create_goal',
         'takt_list_goals',
         'takt_get_goal',
       ]));

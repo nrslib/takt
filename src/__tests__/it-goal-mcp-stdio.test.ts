@@ -1,175 +1,85 @@
-import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import * as crypto from 'node:crypto';
-import { createServer, type Server } from 'node:http';
-import { basename, join } from 'node:path';
-import { createElement } from 'react';
-import { cleanup, render } from 'ink-testing-library';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cleanup,render } from 'ink-testing-library';
+import { execFileSync } from 'node:child_process';
+import * as crypto from 'node:crypto';
+import { mkdirSync,mkdtempSync,realpathSync,rmSync,writeFileSync } from 'node:fs';
+import { createServer,type Server } from 'node:http';
+import { basename,join } from 'node:path';
+import { createElement } from 'react';
+import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
 import { z } from 'zod/v4';
-import { createTaktMcpServer, TAKT_MCP_MANAGER_TOOL_NAMES } from '../features/mcp/server.js';
-import { GoalStore } from '../infra/goals/store.js';
-import { goalRecord } from './helpers/goal-fixtures.js';
-import { TaskRunner } from '../infra/task/runner.js';
-import { reconcileGoalTasks } from '../infra/goals/reconcile.js';
-import { createManagerConversationSession } from '../features/manager/conversationSession.js';
 import { createManagerConversationPlan } from '../features/manager/conversationPlan.js';
-import { createGoalConfirmation } from '../features/manager/goalConfirmation.js';
-import { connectManagerMcp, TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
+import { createManagerConversationSession } from '../features/manager/conversationSession.js';
+import { connectManagerMcp } from '../features/manager/managerMcp.js';
 import { ManagerView } from '../features/manager/ManagerView.js';
 import { readManagerDisplayEvents } from '../features/manager/savedEvents.js';
-import { recoverManagerEvents } from '../features/manager/completionTurn.js';
-import { MockProvider } from '../infra/providers/mock.js';
-import { resetScenario, setMockScenario } from '../infra/mock/index.js';
+import { createTaktMcpServer,TAKT_MCP_MANAGER_TOOL_NAMES } from '../features/mcp/server.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 import { invalidateResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
-import { firstTextContent } from './helpers/mcp-content.js';
-import { confirmationKeys, confirmationPayload, goalId, goalInput, signedConfirmation } from './helpers/goal-fixtures.js';
-import { registerFixtureGoal } from './helpers/registered-goal.js';
+import { GoalStore } from '../infra/goals/store.js';
+import { readManagerEvents } from '../infra/goals/events.js';
+import { resetScenario,setMockScenario } from '../infra/mock/index.js';
+import { TaskRunner } from '../infra/task/runner.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
-import { TaskStore } from '../infra/task/store.js';
+import { goalId,goalRecord } from './helpers/goal-fixtures.js';
+import { firstTextContent } from './helpers/mcp-content.js';
 
 vi.mock('node:crypto', async (importOriginal) => {
   const original = await importOriginal<typeof import('node:crypto')>();
   return { ...original, randomUUID: vi.fn(original.randomUUID) };
 });
 
-describe('Goal MCP stdio entrypoint', () => {
-  describe.each(['source', 'dist'] as const)('%s manager removal', (entrypoint) => {
-    it.each([false, true])('returns valid stdio responses while deleting task resources (worktree: %s)', async (worktree) => {
-      const temporaryRoot = join(process.cwd(), '.tmp');
-      mkdirSync(temporaryRoot, { recursive: true });
-      const cwd = realpathSync(mkdtempSync(join(temporaryRoot, 'goal-removal-stdio-')));
-      writeFileSync(join(cwd, 'README.md'), 'removal fixture\n');
-      initializeGitFixture(cwd, ['README.md']);
-      execFileSync('git', ['branch', '-M', 'main'], { cwd, stdio: 'pipe' });
-      mkdirSync(join(cwd, '.takt'), { recursive: true });
-      writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\nmanager:\n  auto_run: false\n');
-      const goal = await registerFixtureGoal(cwd);
-      const branch = 'takt/stdio-cleanup';
-      execFileSync('git', ['branch', branch, goal.branch], { cwd, stdio: 'pipe' });
-      const sha = execFileSync('git', ['rev-parse', branch], { cwd, encoding: 'utf8', stdio: 'pipe' }).trim();
-      const worktreePath = join(cwd, '.takt', 'worktrees', 'stdio-cleanup');
-      if (worktree) mkdirSync(worktreePath, { recursive: true });
-      const runner = new TaskRunner(cwd);
-      const task = runner.addTask('stdio-cleanup', { goal_id: goalId,
-        goal_purpose: 'stdio 削除の検証', branch, worktree: false,
-        ...(worktree ? { worktree_path: worktreePath } : {}),
-      });
-      new TaskStore(cwd).update((current) => ({ tasks: current.tasks.map((task) => ({ ...task, status: 'completed',
-        started_at: '2026-10-08T00:00:00Z', completed_at: '2026-10-08T00:01:00Z',
-        completion: { success: true, interrupted: false, branch, sha },
-      })) }));
-      await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, workUnits: [{ taskName: task.name,
-        purpose: 'stdio 削除の検証', integration: { sourceBranch: branch, expectedSha: sha,
-          goalSha: sha, status: 'merged', recordedAt: '2026-10-08T00:00:00Z' },
-      }] }));
-      const client = new Client({ name: 'removal-stdio-test', version: '1' });
-      const protocolErrors: Error[] = [];
-      client.onerror = (error) => protocolErrors.push(error);
-      const transport = new StdioClientTransport({ command: process.execPath,
-        args: [...(entrypoint === 'source' ? ['node_modules/.bin/vite-node', '--config',
-          'src/__tests__/helpers/vite-node.config.ts', 'src/__tests__/helpers/mcp-source-stdio-entrypoint.ts']
-          : ['dist/app/mcp/index.js']), '--tool-set', 'manager'],
-        cwd: process.cwd(), stderr: 'pipe', env: { ...getDefaultEnvironment(),
-          TAKT_CONFIG_DIR: process.env.TAKT_CONFIG_DIR!, GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM!,
-          GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL!,
-        },
-      });
-      try {
-        await client.connect(transport);
-        const result = await client.callTool({ name: 'takt_remove_goal_task', arguments: {
-          cwd, goalId, taskName: task.name, reason: '取り込み済みのため片付け',
-        } });
-        expect(result.isError, firstTextContent(result.content)).toBeUndefined();
-        expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ taskName: task.name });
-        await client.ping();
-        expect(protocolErrors).toEqual([]);
-        const operations = await client.callTool({ name: 'takt_list_goal_operations', arguments: { cwd, goalId } });
-        expect(operations.isError).toBeUndefined();
-        expect(JSON.parse(firstTextContent(operations.content)).operations).toEqual([
-          expect.objectContaining({ eventId: null, tool: 'remove', status: 'completed',
-            arguments: { taskName: task.name, reason: '取り込み済みのため片付け' } }),
-        ]);
-        expect(runner.listTaskStateItems()).toEqual([]);
-        expect(existsSync(worktreePath)).toBe(false);
-        const branches = execFileSync('git', ['branch', '--format=%(refname:short)'], { cwd,
-          encoding: 'utf8', stdio: 'pipe' }).trim().split('\n');
-        expect(branches.includes(branch)).toBe(worktree);
-      } finally {
-        await client.close(); await transport.close();
-        rmSync(cwd, { recursive: true, force: true });
-      }
-    }, 30_000);
-  });
-
-  it.each(['source', 'dist'] as const)('propagates the host public key from the %s stdio entrypoint to goal creation', async (entrypoint) => {
-    const temporaryRoot = join(process.cwd(), '.tmp');
-    mkdirSync(temporaryRoot, { recursive: true });
-    const cwd = realpathSync(mkdtempSync(join(temporaryRoot, 'goal-mcp-stdio-')));
-    const keys = confirmationKeys();
-    const publicKeyPath = join(cwd, 'confirmation.pub');
-    writeFileSync(publicKeyPath, keys.publicKey);
-    const env = {
-      ...process.env,
-      GIT_AUTHOR_NAME: 'Goal Test', GIT_AUTHOR_EMAIL: 'goal@example.test',
-      GIT_COMMITTER_NAME: 'Goal Test', GIT_COMMITTER_EMAIL: 'goal@example.test',
-    };
-    execFileSync('git', ['init', '--initial-branch=main'], { cwd, env, stdio: 'pipe' });
-    execFileSync('git', ['config', 'user.name', 'Goal Test'], { cwd, env });
-    execFileSync('git', ['config', 'user.email', 'goal@example.test'], { cwd, env });
-    const tree = execFileSync('git', ['hash-object', '-w', '-t', 'tree', '--stdin'], { cwd, env, input: '', encoding: 'utf-8' }).trim();
-    const commit = execFileSync('git', ['commit-tree', tree, '-m', 'goal fixture'], { cwd, env, encoding: 'utf-8' }).trim();
-    execFileSync('git', ['update-ref', 'refs/heads/main', commit], { cwd, env });
-    const client = new Client({ name: 'goal-stdio-test-client', version: '1.0.0' });
-    const transport = new StdioClientTransport({
-      command: process.execPath,
-      args: [
-        ...(entrypoint === 'source' ? [
-          'node_modules/.bin/vite-node', '--config', 'src/__tests__/helpers/vite-node.config.ts',
-          'src/__tests__/helpers/mcp-source-stdio-entrypoint.ts',
-        ] : ['dist/app/mcp/index.js']),
-        '--goal-confirmation-public-key', publicKeyPath,
-      ],
-      cwd: process.cwd(),
-      env: {
-        ...getDefaultEnvironment(),
-        TAKT_CONFIG_DIR: process.env.TAKT_CONFIG_DIR!,
-        GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM!,
-        GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL!,
-      },
-      stderr: 'pipe',
-    });
-    try {
-      await client.connect(transport);
-      expect((await client.listTools()).tools.map(({ name }) => name)).toContain('takt_create_goal');
-      const result = await client.callTool({ name: 'takt_create_goal', arguments: {
-        cwd, ...goalInput(), confirmation: signedConfirmation(confirmationPayload(cwd), keys.privateKey),
-      } });
-      expect(result.isError).toBeUndefined();
-      const created = (JSON.parse(firstTextContent(result.content)) as { goal: { id: string; branch: string } }).goal;
-      expect(created.id).toBe(goalId);
-      expect(JSON.parse(readFileSync(join(cwd, '.takt', 'goals', goalId, 'goal.json'), 'utf-8'))).toEqual(created);
-      expect(execFileSync('git', ['rev-parse', `refs/heads/${created.branch}`], { cwd, env, encoding: 'utf-8' }).trim()).toBe(commit);
-    } finally {
-      await client.close();
-      await transport.close();
-      rmSync(cwd, { recursive: true, force: true });
-    }
-  }, 30_000);
+it('keeps the workspace assignment after removing the original repository in the same MCP session', async () => {
+  const temporaryRoot = join(process.cwd(), '.tmp');
+  mkdirSync(temporaryRoot, { recursive: true });
+  const root = realpathSync(mkdtempSync(join(temporaryRoot, 'workspace-removal-')));
+  const repositories = ['original', 'added'].map((name) => join(root, name));
+  for (const repository of repositories) {
+    mkdirSync(repository);
+    initializeGitFixture(repository, []);
+    mkdirSync(join(repository, '.takt'));
+    writeFileSync(join(repository, '.takt', 'config.yaml'), 'provider: mock\nmanager:\n  auto_run: false\n');
+  }
+  const [original, added] = repositories as [string, string];
+  vi.stubEnv('TAKT_CONFIG_DIR', join(root, 'global'));
+  const server = createTaktMcpServer({}, { toolSet: 'manager', allowedProjectRoot: original });
+  const client = new Client({ name: 'workspace-removal-test', version: '1' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  try {
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    const add = await client.callTool({ name: 'takt_add_workspace_repository', arguments: { repositoryDirectory: added } });
+    expect(add.isError, firstTextContent(add.content)).toBeUndefined();
+    const store = new GoalStore(original);
+    await store.create(goalRecord());
+    const remove = () => client.callTool({ name: 'takt_remove_workspace_repository', arguments: { repositoryDirectory: original } });
+    expect((await remove()).isError).toBe(true);
+    await store.update(goalId, (goal) => ({ ...goal, executionStatus: 'aborted' }));
+    const removed = await remove();
+    expect(removed.isError, firstTextContent(removed.content)).toBeUndefined();
+    expect(JSON.parse(firstTextContent(removed.content)).workspace.repositoryDirectories).toEqual([added]);
+    const rename = await client.callTool({ name: 'takt_rename_workspace', arguments: { name: '更新した担当' } });
+    expect(rename.isError, firstTextContent(rename.content)).toBeUndefined();
+    expect((await client.callTool({ name: 'takt_list_goals', arguments: { cwd: added } })).isError).toBeUndefined();
+    expect((await client.callTool({ name: 'takt_list_goals', arguments: { cwd: original } })).isError).toBe(true);
+  } finally {
+    await client.close();
+    await server.close();
+    vi.unstubAllEnvs();
+    invalidateGlobalConfigCache();
+    for (const repository of repositories) invalidateResolvedConfigCache(repository);
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 const questionSchema = z.object({
   id: z.string().min(1), body: z.string(), status: z.enum(['pending', 'answered', 'withdrawn']),
   options: z.array(z.string()).optional(), recommendation: z.string().optional(),
-  dependentWorkKeys: z.array(z.string()).optional(),
   answer: z.object({ text: z.string(), source: z.literal('tui'), answeredAt: z.iso.datetime() }).optional(),
 });
 const askedQuestion = {
-  body: '出力形式はどれですか', options: ['CSV', 'JSON'], recommendation: 'CSV', dependentWorkKeys: ['export'],
+  body: '出力形式はどれですか', options: ['CSV', 'JSON'], recommendation: 'CSV',
 };
 const kinds = ['question', 'awaiting_merge', 'completed', 'progress', 'blocked', 'custom'] as const;
 type NotificationKind = typeof kinds[number];
@@ -208,6 +118,9 @@ describe('manager questions, answers and notifications through production bounda
     const temporaryRoot = join(process.cwd(), '.tmp');
     mkdirSync(temporaryRoot, { recursive: true });
     cwd = realpathSync(mkdtempSync(join(temporaryRoot, 'manager-questions-')));
+    const globalDirectory = join(cwd, '.takt', 'global-config');
+    mkdirSync(globalDirectory, { recursive: true });
+    vi.stubEnv('TAKT_CONFIG_DIR', globalDirectory);
     git(['init', '--initial-branch=main']);
     git(['config', 'user.name', 'Manager Test']);
     git(['config', 'user.email', 'manager@example.test']);
@@ -302,10 +215,9 @@ describe('manager questions, answers and notifications through production bounda
   }
 
   async function mountManager(): Promise<void> {
-    const confirmation = createGoalConfirmation(cwd);
-    connection = await connectManagerMcp(cwd, confirmation.publicKey);
+    connection = await connectManagerMcp(cwd);
     const plan = createManagerConversationPlan(cwd, {});
-    session = createManagerConversationSession({ cwd, confirmation, mcpClient: connection.client,
+    session = createManagerConversationSession({ cwd,
       plan: { ...plan, ctx: { ...plan.ctx, mcpServers: connection.servers } } });
     app = render(createElement(ManagerView, { cwd, lang: 'en', session, initialDiagnostics: [], onExit: vi.fn() }));
     await vi.waitFor(() => expect(app!.lastFrame()?.replaceAll('\n', '')).toContain(basename(cwd)));
@@ -359,18 +271,10 @@ describe('manager questions, answers and notifications through production bounda
     }
   });
 
-  it('refuses dependent work before creating its instructions or queue and permits unrelated work', async () => {
+  it('allows manager-selected work while a question remains pending', async () => {
     const question = await ask();
-    const blocked = await enqueue('export');
-    expect(blocked.isError).toBe(true);
-    expect(firstTextContent(blocked.content)).toContain(question.id);
-    expect(new TaskRunner(cwd).listTaskStateItems()).toEqual([]);
-    expect(existsSync(join(cwd, '.takt', 'tasks.yaml'))).toBe(false);
-    expect(existsSync(join(cwd, '.takt', 'tasks')) ? readdirSync(join(cwd, '.takt', 'tasks')) : []).toEqual([]);
-
-    expect((await enqueue('documentation')).isError).not.toBe(true);
-    expect((await enqueue()).isError).not.toBe(true);
-    expect(new TaskRunner(cwd).listPendingTaskItems()).toHaveLength(2);
+    expect((await enqueue('export')).isError).not.toBe(true);
+    expect(new TaskRunner(cwd).listPendingTaskItems()).toHaveLength(1);
     expect((await invoke('takt_get_goal_question', { questionId: question.id })).question).toMatchObject({ status: 'pending' });
   });
 
@@ -454,27 +358,36 @@ describe('manager questions, answers and notifications through production bounda
     expect((await readManagerDisplayEvents(cwd)).events).toEqual(expect.arrayContaining([expect.objectContaining({ message: expect.stringContaining(question.body) })]));
   });
 
-  it.each(['HTTP error', 'connection error'] as const)('keeps the question usable and records a diagnostic after a Slack %s', async (failure) => {
+  it.each(['HTTP error', 'connection error'] as const)('keeps the question usable and work running while reporting a Slack %s to stderr', async (failure) => {
     responseStatus = failure === 'HTTP error' ? 503 : 0;
+    const stderr = vi.spyOn(process.stderr, 'write');
     const question = await ask();
     expect(question.status).toBe('pending');
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.text).toContain(question.id);
+    expect(stderr).toHaveBeenCalledWith(failure === 'HTTP error'
+      ? 'Slack webhook failed: HTTP 503\n' : 'Slack webhook connection failed\n');
+    expect(stderr.mock.calls.flat().join('')).not.toContain(webhook);
     const display = await readManagerDisplayEvents(cwd);
-    const diagnostics = [...display.events, ...display.diagnostics].filter(({ message }) => /slack|webhook/i.test(message));
-    expect(diagnostics.length).toBeGreaterThan(0);
-    for (const diagnostic of diagnostics) expect(diagnostic.message).not.toContain(webhook);
-    await invoke('takt_withdraw_goal_question', { questionId: question.id });
+    expect(display.questions).toEqual([expect.objectContaining({ goalId, question: expect.objectContaining(question) })]);
+    expect(display.events).toHaveLength(1);
+    expect(display.events[0]!.message).toContain(`/answer ${question.id}`);
+    expect(JSON.stringify(display)).not.toContain(webhook);
     expect((await enqueue('export')).isError).not.toBe(true);
+    expect(new TaskRunner(cwd).listPendingTaskItems()).toHaveLength(1);
+    await invoke('takt_withdraw_goal_question', { questionId: question.id });
+    expect((await invoke('takt_get_goal_question', { questionId: question.id })).question).toMatchObject({ status: 'withdrawn' });
   });
 
-  it('disables question notifications while retaining questions, dependency checks and other notification kinds', async () => {
+  it('disables question notifications while retaining questions, manager-selected work and other notification kinds', async () => {
     configure('question');
     const question = await ask();
     expect(question.status).toBe('pending');
     expect(requests).toEqual([]);
     expect((await readManagerDisplayEvents(cwd)).events).toEqual([]);
-    const refused = await enqueue('export');
-    expect(refused.isError).toBe(true);
-    expect(firstTextContent(refused.content)).toContain(question.id);
+    expect((await enqueue('export')).isError).not.toBe(true);
+    expect(new TaskRunner(cwd).listPendingTaskItems()).toHaveLength(1);
+    expect((await invoke('takt_get_goal_question', { questionId: question.id })).question).toMatchObject({ status: 'pending' });
     await invoke('takt_notify_goal', { kind: 'custom', body: '独立した通知', severity: 'info' });
     expect(requests).toHaveLength(1);
     expect(requests[0]!.text).toContain('独立した通知');
@@ -499,11 +412,7 @@ describe('manager questions, answers and notifications through production bounda
       const completion = { success: true, interrupted: false, branch: source, sha };
       runner.completeTask({ task, success: true, branch: source, completion, response: 'validated',
         executionLog: [], startedAt: '2026-10-08T00:00:00Z', completedAt: '2026-10-08T00:01:00Z' });
-      await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal,
-        workUnits: [{ taskName: added.name, purpose: '出力の検証' }],
-        events: [{ id: 'question-fixture-event', kind: 'completion', taskName: added.name, runSlug: 'question-fixture-run', processed: true, result: completion }],
-      }));
-      await invoke('takt_merge_goal_task', { taskName: added.name, expectedSha: sha });
+      expect(await invoke('takt_merge_goal_task', { taskName: added.name, expectedSha: sha })).toMatchObject({ status: 'merged' });
     } else {
       git(['update-ref', `refs/heads/${branch}`, sha]);
       await invoke('takt_complete_goal', { expectedSha: sha, summary: '出力の検証が完了しました' });
@@ -517,29 +426,19 @@ describe('manager questions, answers and notifications through production bounda
     expect(requests[0]!.text).toContain(goalId.slice(0, 8));
     expect(requests[0]!.text.split('\n')[0]).toContain(basename(cwd));
     expect(requests[0]!.text).not.toContain(goalId);
-    const saved = z.object({ notifications: z.array(z.object({ kind: z.string() })) }).parse((await invoke('takt_get_goal')).goal);
-    expect(saved.notifications.map((notification) => notification.kind)).toEqual([kind]);
-    expect((await readManagerDisplayEvents(cwd)).events).toHaveLength(1);
-  });
-
-  it('does not duplicate saved progress, TUI events or Slack delivery when task integration is repeated', async () => {
-    await produce('progress');
     const saved = await new GoalStore(cwd).get(goalId);
-    const unit = saved.workUnits![0]!;
-    const notifications = saved.notifications;
-    const displayed = (await readManagerDisplayEvents(cwd)).events;
-    expect(notifications).toHaveLength(1);
-    expect(displayed).toHaveLength(1);
-    expect(requests).toHaveLength(1);
-
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const result = await invoke('takt_merge_goal_task', {
-        taskName: unit.taskName, expectedSha: unit.integration!.expectedSha,
+    expect(saved.notifications?.map((notification) => notification.kind)).toEqual([kind]);
+    const display = await readManagerDisplayEvents(cwd);
+    expect(display.events).toHaveLength(kind === 'progress' ? 2 : 1);
+    expect(display.events).toContainEqual({
+      id: JSON.stringify([goalId, 'notification', saved.notifications![0]!.id]), message: requests[0]!.text,
+    });
+    if (kind === 'progress') {
+      expect(saved.workLog).toHaveLength(1);
+      expect(display.events[0]).toEqual({
+        id: JSON.stringify([goalId, 'work-log', saved.workLog[0]!.id]), message: `${goalId}: ${saved.workLog[0]!.summary}`,
       });
-      expect(result).toMatchObject({ status: 'merged', sha: unit.integration!.goalSha, recorded: true });
-      expect((await new GoalStore(cwd).get(goalId)).notifications).toEqual(notifications);
-      expect((await readManagerDisplayEvents(cwd)).events).toEqual(displayed);
-      expect(requests).toHaveLength(1);
+      expect(requests[0]!.text).toContain('出力の検証');
     }
   });
 
@@ -547,10 +446,17 @@ describe('manager questions, answers and notifications through production bounda
     configure(kind, kind === 'completed' ? 'auto' : 'approve');
     await produce(kind);
     expect(requests).toEqual([]);
-    expect((await readManagerDisplayEvents(cwd)).events).toEqual([]);
+    const saved = await new GoalStore(cwd).get(goalId);
+    expect(saved.notifications).toBeUndefined();
+    expect((await readManagerDisplayEvents(cwd)).events).toEqual(kind === 'progress' ? [{
+      id: JSON.stringify([goalId, 'work-log', saved.workLog[0]!.id]), message: `${goalId}: ${saved.workLog[0]!.summary}`,
+    }] : []);
     const goal = (await invoke('takt_get_goal')).goal;
     if (kind === 'question') expect(goal).toMatchObject({ questions: [expect.objectContaining({ status: 'pending' })] });
-    else if (kind === 'progress') expect(goal).toMatchObject({ workUnits: [expect.objectContaining({ integration: expect.objectContaining({ status: 'merged' }) })] });
+    else if (kind === 'progress') {
+      const taskSha = git(['rev-parse', 'takt/question-fixture-work']);
+      expect(git(['merge-base', '--is-ancestor', taskSha, goalRecord().branch])).toBe('');
+    }
     else if (kind === 'completed' || kind === 'awaiting_merge') expect(goal).toMatchObject({ status: kind });
     await invoke('takt_notify_goal', { kind: kind === 'custom' ? 'blocked' : 'custom', body: '別種類の通知', severity: 'info' });
     expect(requests).toHaveLength(1);
@@ -603,80 +509,6 @@ describe('manager questions, answers and notifications through production bounda
     expect((await readManagerDisplayEvents(cwd)).events).toEqual([]);
   });
 
-  it.each([200, 503, 0])('runs mock manager question creation, Slack delivery, TUI choice and dependent enqueue in the same screen (HTTP status: %s)', async (status) => {
-    responseStatus = status;
-    const input = { ...askedQuestion, recommendation: 'CSV: 表計算で確認できます' };
-    const observed: { prompt: string; sessionId?: string; allowedTools?: string[]; permissionMode?: string; mcpOnlySideEffects?: readonly string[] }[] = [];
-    const setup = MockProvider.prototype.setup;
-    vi.spyOn(MockProvider.prototype, 'setup').mockImplementation(function (this: MockProvider, config) {
-      const agent = setup.call(this, config);
-      if (config.name !== 'manager') return agent;
-      return { call: async (prompt, options) => {
-        observed.push({ prompt, sessionId: options.sessionId, allowedTools: options.allowedTools,
-          permissionMode: options.permissionMode, mcpOnlySideEffects: options.mcpOnlySideEffects });
-        return agent.call(prompt, options);
-      } };
-    });
-    const legacyPath = join(cwd, '.takt', 'goals', goalId, 'goal.json');
-    const legacy = JSON.parse(readFileSync(legacyPath, 'utf8'));
-    delete legacy.executionStatus; delete legacy.acceptanceCriteriaVersion;
-    legacy.sessions = [{ provider: 'mock', sessionId: 'saved-goal-session' }];
-    writeFileSync(legacyPath, JSON.stringify(legacy));
-    await new GoalStore(cwd).create({ ...goalRecord(), id: '450e8400-e29b-41d4-a716-446655440001' });
-    setMockScenario([{ persona: 'manager', status: 'done', content: JSON.stringify({ message: '回答を待ちます', summary: null }),
-      mcpToolCalls: [{ server: TAKT_MANAGER_MCP_SERVER_NAME, tool: 'takt_ask_goal_question', arguments: { cwd, goalId, ...input } }] }]);
-    await mountManager();
-    await send('出力の開発を進めてください');
-    await vi.waitFor(() => expect(app!.lastFrame()).toContain('回答を待ちます'), { timeout: 30_000 });
-    const list = z.object({ questions: z.array(questionSchema) }).parse(await invoke('takt_list_goal_questions'));
-    const question = list.questions[0]!;
-    expect(question).toMatchObject({ ...input, status: 'pending' });
-    expect(requests).toHaveLength(1);
-    if (status !== 200) {
-      const displayed = await readManagerDisplayEvents(cwd);
-      expect([...displayed.events, ...displayed.diagnostics].some(({ message }) => /slack|webhook/i.test(message))).toBe(true);
-    }
-    setMockScenario([{ persona: 'manager', status: 'done', content: JSON.stringify({ message: '質問を確認してください', summary: null }) }]);
-    await send('保存された質問を表示してください');
-    await vi.waitFor(() => expect(app!.lastFrame()).toContain('質問を確認してください'), { timeout: 30_000 });
-    await vi.waitFor(() => {
-      for (const text of [goalId, question.id, question.body, 'CSV', 'JSON', input.recommendation]) expect(app!.lastFrame()).toContain(text);
-      expect(app!.lastFrame()).toContain('Pending questions');
-    });
-    const blocked = await enqueue('export');
-    expect(blocked.isError).toBe(true);
-    expect(firstTextContent(blocked.content)).toContain(question.id);
-    expect(new TaskRunner(cwd).listTaskStateItems()).toEqual([]);
-    setMockScenario([{ persona: 'manager', status: 'done', content: JSON.stringify({ message: '回答に従って投入しました', summary: null }),
-      mcpToolCalls: [{ server: TAKT_MANAGER_MCP_SERVER_NAME, tool: 'takt_enqueue_goal_task', arguments: {
-        cwd, goalId, operationName: 'work:export', workKey: 'export', purpose: '回答で選ばれた出力を実装する', task: 'Implement JSON output', workflow: 'safe',
-      } }] }]);
-
-    await selectJsonAnswer(question.id);
-
-    await vi.waitFor(() => expect(new TaskRunner(cwd).listPendingTaskItems()).toHaveLength(1), { timeout: 30_000 });
-    await vi.waitFor(() => expect(app!.lastFrame()).toContain('回答に従って投入しました'), { timeout: 30_000 });
-    expect(observed).toHaveLength(3);
-    expect(JSON.parse(observed[2]!.prompt)).toMatchObject({
-      goal: { id: goalId, questions: [] },
-      event: { questionId: question.id, answer: { text: 'JSON', source: 'tui', answeredAt: expect.any(String) } },
-    });
-    expect(observed[2]).toMatchObject({ sessionId: undefined, permissionMode: 'readonly' });
-    for (const call of observed) expect(call.prompt).not.toContain(webhook);
-    expect(observed[2]!.mcpOnlySideEffects).toEqual(observed[2]!.allowedTools);
-    expect(observed[2]!.allowedTools?.every((tool) => tool === 'Read' || tool.startsWith(`mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__`))).toBe(true);
-    const answered = questionSchema.parse((await invoke('takt_get_goal_question', { questionId: question.id })).question);
-    expect(answered).toMatchObject({ status: 'answered', answer: { text: 'JSON', source: 'tui', answeredAt: expect.any(String) } });
-    const saved = z.object({ events: z.array(z.object({ questionId: z.string(), processed: z.boolean() })) }).parse((await invoke('takt_get_goal')).goal);
-    expect(saved.events).toEqual([expect.objectContaining({ questionId: question.id, processed: true })]);
-    await vi.waitFor(() => expect(app!.lastFrame()).not.toContain('Pending questions'));
-    const queued = new TaskRunner(cwd).listTaskStateItems()[0]!;
-    expect(queued).toMatchObject({ goalId, goalWorkKey: 'export' });
-    await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, workUnits: [] }));
-    await reconcileGoalTasks(cwd, goalId);
-    expect((await new GoalStore(cwd).get(goalId)).workUnits).toEqual([expect.objectContaining({ taskName: queued.name, workKey: 'export' })]);
-  });
-
   it('records a free-text TUI answer without treating an AI self-report as a human operation', async () => {
     const question = await ask({ body: '出力先のパスを教えてください' });
     const answer = '/tmp/customer export';
@@ -686,7 +518,6 @@ describe('manager questions, answers and notifications through production bounda
     await vi.waitFor(() => expect(app!.lastFrame()).toContain('回答済み:'), { timeout: 30_000 });
     expect((await invoke('takt_get_goal_question', { questionId: question.id })).question).toMatchObject({ status: 'pending' });
     expect(new TaskRunner(cwd).listTaskStateItems()).toEqual([]);
-    setMockScenario([{ persona: 'manager', status: 'done', content: JSON.stringify({ message: '自由記述を確認しました', summary: null }) }]);
     await send(`/answer ${question.id}`);
     await vi.waitFor(() => expect(app!.lastFrame()).toContain('Enter your answer'));
     await send(answer);
@@ -694,7 +525,10 @@ describe('manager questions, answers and notifications through production bounda
       expect((await invoke('takt_get_goal_question', { questionId: question.id })).question)
         .toMatchObject({ status: 'answered', answer: { text: answer, source: 'tui' } });
     }, { timeout: 30_000 });
-    await vi.waitFor(() => expect(app!.lastFrame()).toContain('自由記述を確認しました'), { timeout: 30_000 });
+    await vi.waitFor(() => expect(app!.lastFrame()).toContain('Answer saved'));
+    expect(readManagerEvents(cwd).map(({ event }) => event)).toEqual([expect.objectContaining({
+      kind: 'answer', goalId, questionId: question.id, answer: { text: answer, source: 'tui', answeredAt: expect.any(String) },
+    })]);
     expect(new TaskRunner(cwd).listTaskStateItems()).toEqual([]);
     const pending = await ask({ body: '通知の宛先はどこですか' });
     const withdrawn = await ask({ body: '不要になった確認' });
@@ -706,27 +540,6 @@ describe('manager questions, answers and notifications through production bounda
       expect.objectContaining({ id: withdrawn.id, status: 'withdrawn' }),
     ]));
   });
-
-  it('recovers the same saved answer event after a failed manager turn without recording the answer again', async () => {
-    const question = await ask();
-    setMockScenario([{ persona: 'manager', status: 'error', content: '', error: 'injected answer turn failure' }]);
-    await mountManager();
-    await selectJsonAnswer(question.id);
-    await vi.waitFor(async () => {
-      const saved = z.object({ events: z.array(z.object({ questionId: z.string(), processed: z.boolean() })) }).parse(await new GoalStore(cwd).get(goalId));
-      expect(saved.events).toEqual([expect.objectContaining({ questionId: question.id, processed: false })]);
-      expect(JSON.stringify(await readManagerDisplayEvents(cwd))).toContain('injected answer turn failure');
-    }, { timeout: 10_000 });
-    await vi.waitFor(() => expect(app!.lastFrame()).toContain('Answer saved'), { timeout: 10_000 });
-    const savedQuestion = async () => z.object({ questions: z.array(questionSchema) }).parse(await new GoalStore(cwd).get(goalId))
-      .questions.find((candidate) => candidate.id === question.id);
-    const before = await savedQuestion();
-    setMockScenario([{ persona: 'manager', status: 'done', content: JSON.stringify({ message: '回答ターンを復旧しました', summary: null }) }]);
-    await recoverManagerEvents(cwd);
-    expect(await savedQuestion()).toEqual(before);
-    const after = z.object({ events: z.array(z.object({ questionId: z.string(), processed: z.boolean() })) }).parse(await new GoalStore(cwd).get(goalId));
-    expect(after.events).toEqual([expect.objectContaining({ questionId: question.id, processed: true })]);
-  }, 30_000);
 
   it('shows saved notifications on reopening and on the next message in the same mounted TUI', async () => {
     const first = '保存済みの進捗を確認してください';

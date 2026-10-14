@@ -4,43 +4,40 @@ import { goalId, goalRecord } from './helpers/goal-fixtures.js';
 
 const doubles = vi.hoisted(() => ({
   read: vi.fn(), write: vi.fn(), lstat: vi.fn(), readdir: vi.fn(),
-  safe: vi.fn(), capture: vi.fn(), assertSnapshot: vi.fn(), exclusive: vi.fn(),
-}));
-vi.mock('../infra/goals/execution-lock.js', () => ({
-  withGoalExecutionLock: (_cwd: string, action: () => unknown) => action(),
+  safe: vi.fn(), capture: vi.fn(), assertSnapshot: vi.fn(),
 }));
 vi.mock('node:fs', () => ({ readdirSync: doubles.readdir }));
 vi.mock('../shared/utils/private-file.js', () => ({
-  readPrivateFileState: doubles.read,
+  readPrivateFileState: doubles.read, writePrivateFile: doubles.write, ensurePrivateDirectory: vi.fn(),
   capturePrivateDirectoryReadSnapshot: doubles.capture, assertPrivateDirectoryReadSnapshot: doubles.assertSnapshot,
 }));
 vi.mock('../shared/utils/private-path-identity.js', () => ({
   assertSafePath: doubles.safe, lstatOrUndefined: doubles.lstat,
 }));
-vi.mock('../shared/utils/private-file-lock.js', () => ({ runPrivateFileExclusiveAsync: doubles.exclusive }));
-vi.mock('../infra/goals/record-pages.js', () => ({ writeGoalWithRecordIndex: doubles.write }));
 
 describe('GoalStore validation and publication', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     doubles.lstat.mockReturnValue({});
     doubles.read.mockReturnValue({ state: { exists: false } });
-    doubles.exclusive.mockImplementation(async (_path: string, action: () => unknown) => action());
   });
-  it('validates and publishes a new complete record inside the lock', async () => {
+  it('validates and publishes a new complete record without creating a lock', async () => {
     expect(await new GoalStore('/project').create(goalRecord())).toEqual(goalRecord());
-    expect(doubles.write).toHaveBeenCalledWith(`/project/.takt/goals/${goalId}/goal.json`, goalRecord());
+    expect(doubles.write).toHaveBeenCalledOnce();
+    expect(doubles.write.mock.calls[0]![0]).toBe(`/project/.takt/goals/${goalId}/goal.json`);
+    expect(JSON.parse(doubles.write.mock.calls[0]![1])).toEqual(goalRecord());
   });
   it('refuses an existing record without publishing', async () => {
     doubles.read.mockReturnValue({ content: Buffer.from(JSON.stringify(goalRecord())) });
     await expect(new GoalStore('/project').create(goalRecord())).rejects.toThrow();
     expect(doubles.write).not.toHaveBeenCalled();
   });
-  it('validates updates after rereading the record under its short storage lock', async () => {
+  it('validates updates after rereading the current record', async () => {
     doubles.read.mockReturnValue({ content: Buffer.from(JSON.stringify(goalRecord())) });
-    const updated = await new GoalStore('/project').update(goalId, (goal) => ({ ...goal, workUnits: [{ taskName: 'task-a', purpose: '検証する' }] }));
-    expect(updated.workUnits).toEqual([{ taskName: 'task-a', purpose: '検証する' }]);
-    expect(doubles.write.mock.calls[0]![1]).toEqual(updated);
+    const entry = { id: '550e8400-e29b-41d4-a716-446655440001', summary: '検証を投入した', recordedAt: '2026-10-14T00:00:00Z' };
+    const updated = await new GoalStore('/project').update(goalId, (goal) => ({ ...goal, workLog: [entry] }));
+    expect(updated.workLog).toEqual([entry]);
+    expect(JSON.parse(doubles.write.mock.calls[0]![1])).toEqual(updated);
     await expect(new GoalStore('/project').update(goalId, (goal) => ({ ...goal, id: '550e8400-e29b-41d4-a716-446655440001' }))).rejects.toThrow();
     expect(doubles.write).toHaveBeenCalledTimes(1);
   });

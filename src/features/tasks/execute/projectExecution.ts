@@ -32,6 +32,7 @@ export async function withProjectExecution<Result>(
   let forceShutdownStarted = false;
   let tasksClaimed = false;
   let executionCompleted = false;
+  let managerFailed = false;
   const onExit = (): void => {
     try {
       lock.release();
@@ -69,6 +70,7 @@ export async function withProjectExecution<Result>(
     const result = await execute({
       schedulingSignal: scheduling.signal, taskAbortSignal: task.signal,
       onTasksClaimed: () => { tasksClaimed = true; },
+      onManagerFailure: () => { managerFailed = true; },
     });
     executionCompleted = true;
     return result;
@@ -80,7 +82,7 @@ export async function withProjectExecution<Result>(
       } finally {
         onExit();
         // Retry normal empty-queue exits, but do not loop on failures before claiming tasks.
-        if (!scheduling.signal.aborted && (automaticRun !== true || tasksClaimed || executionCompleted)) {
+        if (!managerFailed && !scheduling.signal.aborted && (automaticRun !== true || tasksClaimed || executionCompleted)) {
           try {
             const { ensureManagerRun } = await import('../../manager/autoRun.js');
             await ensureManagerRun(cwd);

@@ -44,13 +44,12 @@ describe('manager provider output schema', () => {
     let failure: unknown;
     try {
       const { createManagerConversationSession } = await import('../features/manager/conversationSession.js');
-      const { createGoalConfirmation } = await import('../features/manager/goalConfirmation.js');
       const session = createManagerConversationSession({
         cwd: '/test/manager-repository',
         plan: { ctx: { providerType: 'codex', lang: 'ja', model: undefined,
           provider: makeProvider({ supportsStructuredOutput: true, setup: () => ({ call }) }) },
         strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read'] } },
-        confirmation: createGoalConfirmation('/test/manager-repository'), mcpClient: { callTool: vi.fn() },
+
       });
       try { result = await session.handleUserMessage({ text: '相談' }); }
       finally { await session.close(); }

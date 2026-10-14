@@ -113,8 +113,3 @@ function questionNotificationPrefix(questionId: string): string {
 export function formatGoalQuestionNotification(question: GoalQuestion, language: Language): string {
   return questionNotificationPrefix(question.id) + formatQuestionDetails(question, language, false, false);
 }
-
-export function isDirectorQuestionNotification(goal: Goal, notification: GoalNotificationInput): boolean {
-  return notification.kind === 'question' && (goal.questions ?? []).some((question) =>
-    question.recipient === 'director' && notification.body.startsWith(questionNotificationPrefix(question.id)));
-}

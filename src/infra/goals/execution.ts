@@ -1,18 +1,19 @@
 import { GoalStore } from './store.js';
 import { GoalIdSchema, type Goal } from './schema.js';
 import { transitionGoalExecution } from './state.js';
-import { withGoalTurns } from './turn-lock.js';
-import { withGoalWrites } from './operations.js';
+import { deleteGoalEvents, saveManagerEvent } from './events.js';
 
 export async function setGoalExecutionStatus(
   cwd: string, goalId: string, executionStatus: Goal['executionStatus'], signal: AbortSignal,
 ): Promise<Goal> {
   GoalIdSchema.parse(goalId);
   const store = new GoalStore(cwd);
-  await store.get(goalId);
-  return withGoalTurns(cwd, [goalId], () => withGoalWrites(cwd, goalId, () =>
-    store.update(goalId, (goal) => {
-      signal.throwIfAborted();
-      return transitionGoalExecution(goal, executionStatus);
-    })), {}, signal);
+  const previous = await store.get(goalId);
+  signal.throwIfAborted();
+  const goal = await store.update(goalId, (current) => transitionGoalExecution(current, executionStatus));
+  if (executionStatus === 'aborted') deleteGoalEvents(cwd, goalId);
+  if (executionStatus === 'active' && previous.executionStatus === 'paused') {
+    saveManagerEvent(cwd, { kind: 'resumed', goalId });
+  }
+  return goal;
 }

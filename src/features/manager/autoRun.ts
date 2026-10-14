@@ -6,18 +6,16 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { TaskStore } from '../../infra/task/store.js';
 import { GoalStore } from '../../infra/goals/store.js';
+import { readManagerEvents } from '../../infra/goals/events.js';
 import { isGoalPaused } from '../../infra/goals/state.js';
-import { withGoalExecutionLock } from '../../infra/goals/execution-lock.js';
 import { resolveTaskContent } from '../../infra/task/mapper.js';
 import { getProjectExecutionOwner } from '../../infra/task/project-execution-lock.js';
-import { recordManagerRunFailure } from '../../infra/task/manager-run-state.js';
+import { notifyManagerTurnFailure } from './turnFailureNotification.js';
 import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
 import { ensurePrivateDirectory } from '../../shared/utils/private-file.js';
 import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
-import { GOAL_TURN_OWNERS_ENV } from '../../infra/goals/turn-lock.js';
-import { GOAL_EVENT_CONTEXT_ENV } from '../../infra/goals/operations.js';
 import { createLogger } from '../../shared/utils/debug.js';
 import { MANAGER_GOAL_TASKS_ENV } from '../../shared/constants.js';
 
@@ -41,10 +39,15 @@ function hasRunnablePending(cwd: string): boolean {
   return runnable;
 }
 
+function hasManagerWork(cwd: string): boolean {
+  return hasRunnablePending(cwd) || readManagerEvents(cwd).some(({ event }) =>
+    !isGoalPaused(new GoalStore(cwd).getSync(event.goalId)));
+}
+
 export async function ensureManagerRun(cwd: string): Promise<void> {
   let descriptor: number | undefined;
   try {
-    if (!resolveManagerConfig(cwd).autoRun || !hasRunnablePending(cwd)) return;
+    if (!resolveManagerConfig(cwd).autoRun || !hasManagerWork(cwd)) return;
     if (getProjectExecutionOwner(cwd) !== undefined) return;
     const logs = join(cwd, '.takt', 'manager-logs');
     ensurePrivateDirectory(logs);
@@ -55,22 +58,19 @@ export async function ensureManagerRun(cwd: string): Promise<void> {
       fileURLToPath(new URL('../../app/cli/index.ts', import.meta.url)), 'run',
     ];
     const env = buildChildProcessEnv();
-    delete env[GOAL_TURN_OWNERS_ENV];
-    delete env[GOAL_EVENT_CONTEXT_ENV];
     env[MANAGER_GOAL_TASKS_ENV] = '1';
-    const child = withGoalExecutionLock(cwd, () => {
-      if (!hasRunnablePending(cwd) || getProjectExecutionOwner(cwd) !== undefined) return undefined;
-      return spawn(process.execPath, args, {
-        cwd, detached: true, shell: false, stdio: ['ignore', descriptor, descriptor], env,
-      });
+    if (!hasManagerWork(cwd) || getProjectExecutionOwner(cwd) !== undefined) return;
+    const child = spawn(process.execPath, args, {
+      cwd, detached: true, shell: false, stdio: ['ignore', descriptor, descriptor], env,
     });
-    if (child === undefined) return;
     await new Promise<void>((resolve, reject) => {
       child.once('error', reject);
       child.once('spawn', () => { child.unref(); resolve(); });
     });
   } catch (error) {
-    recordManagerRunFailure(cwd, error);
+    log.error('Cannot start manager run', { error: sanitizeSensitiveText(getErrorMessage(error)) });
+    const notification = await notifyManagerTurnFailure(cwd, undefined, error);
+    if (notification !== undefined) process.stderr.write(`${notification}\n`);
   } finally {
     if (descriptor !== undefined) closeSync(descriptor);
   }

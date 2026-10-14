@@ -8,9 +8,9 @@ import buildPrompt, { buildManagerSystemPrompt, loadManagerCase } from './manage
 import { createManagerConversationPlan } from '../dist/features/manager/conversationPlan.js';
 import { buildGoalTurnContext } from '../dist/features/manager/turnContext.js';
 import { GoalSchema } from '../dist/infra/goals/schema.js';
-import { prepareGoalOperation } from '../dist/infra/goals/operations.js';
+import { ManagerEventSchema } from '../dist/infra/goals/events.js';
 import { invalidateGlobalConfigCache } from '../dist/infra/config/global/globalConfig.js';
-import { goalDiffInputSchema, goalHistoryInputSchema } from '../dist/features/mcp/schemas.js';
+import { goalDiffInputSchema, goalHistoryInputSchema, recordGoalWorkLogInputSchema } from '../dist/features/mcp/schemas.js';
 
 const suite = parse(readFileSync(new URL('./scenarios/manager-work-split/manager-work-split.yaml', import.meta.url), 'utf8'));
 const preserveEnv = (key, prior) => { if (prior === undefined) delete process.env[key]; else process.env[key] = prior; };
@@ -26,17 +26,24 @@ test('assembles all 34 turn prompts without a provider call, excluding scoring c
     assert.ok(prompt.includes(`Repository: ${JSON.stringify(fixture.cwd)}`));
     assert.ok(prompt.includes('"task"'));
     assert.ok(prompt.includes(JSON.stringify(fixture.readResults)));
-    assert.doesNotMatch(prompt, /llm-rubric|manager-work-split\/operations|Expected \d+\.\.|見出しや文言の一致ではなく、内容で判定する|Judge substance rather than headings/);
+    const tools = JSON.parse(prompt.split('TOOLS:\n')[1].split('\n\nUSER:')[0]);
+    assert.deepEqual(tools.takt_record_goal_work_log.required, ['cwd', 'goalId', 'summary']);
+    assert.ok(recordGoalWorkLogInputSchema.safeParse({
+      cwd: fixture.cwd, goalId: '650e8400-e29b-41d4-a716-446655440000', summary: 'Selected the next work after reviewing the goal.',
+    }).success);
+    assert.doesNotMatch(prompt, /llm-rubric|manager-work-split\/tool-calls|Expected \d+\.\.|見出しや文言の一致ではなく、内容で判定する|Judge substance rather than headings/);
     if (fixture.turn === 'conversation') assert.ok(prompt.includes(`USER:\n${fixture.user}`));
     else {
       const user = prompt.split('USER:\n')[1].split('\n\n')[0];
       const context = JSON.parse(user);
       assert.equal(context.goal.id, fixture.goal.id);
-      assert.equal(context.event.id, fixture.event.id);
+      assert.deepEqual(ManagerEventSchema.parse(context.event), fixture.event);
       assert.equal(context.tasks[0].startedAt, fixture.tasks[0].startedAt);
-      if (vars.case === 'constraint-carryover') {
-        assert.ok(context.omissions.acceptanceCriteria.omitted > 0 || context.omissions.acceptanceCriteria.truncated);
-      }
+      assert.deepEqual(context.goal.constraints, fixture.goal.constraints);
+      assert.deepEqual(context.goal.workLog, fixture.goal.workLog);
+      const readGoal = fixture.readResults.find(({ tool }) => tool === 'takt_get_goal').result.goal;
+      assert.deepEqual(GoalSchema.parse(readGoal), GoalSchema.parse(fixture.goal));
+
     }
   }
 });
@@ -46,23 +53,26 @@ test('data carryover includes the saved constraints and pending work through the
     const fixture = loadManagerCase('constraint-carryover-data', lang);
     const context = JSON.parse(buildGoalTurnContext(fixture.cwd, GoalSchema.parse(fixture.goal), fixture.event, fixture.tasks));
     assert.deepEqual(context.goal.acceptanceCriteria, fixture.goal.acceptanceCriteria);
+    assert.deepEqual(context.goal.constraints, fixture.goal.constraints);
+    assert.equal(context.goal.constraints.length, 3);
+    assert.equal(context.goal.acceptanceCriteria.length, 4);
     const request = fixture.readResults.find(({ tool }) => tool === 'Read').result;
     assert.deepEqual(request.acceptanceCriteria, fixture.goal.acceptanceCriteria);
+    assert.deepEqual(request.constraints, fixture.goal.constraints);
     assert.deepEqual(request.work.map(({ workKey }) => workKey), ['channel-totals', 'report-export']);
-    assert.deepEqual(fixture.goal.workUnits.map(({ workKey }) => workKey), ['foundation']);
-    assert.equal(fixture.goal.workUnits[0].integration.status, 'merged');
+    assert.equal(fixture.tasks[0].goalWorkKey, 'foundation');
+    assert.ok(fixture.goal.workLog.some(({ summary }) => summary.includes('foundation') && summary.includes(fixture.tasks[0].completion.sha)));
     assert.equal(fixture.readResults.find(({ tool }) => tool === 'takt_get_goal_relation').result.goalBranch, fixture.goal.branch);
   }
 });
 
-test('already checked inventory results include integration history and a completed verification run', () => {
+test('already checked inventory results include git history and a completed verification run', () => {
   for (const lang of ['ja', 'en']) {
     const fixture = loadManagerCase('integration-already-checked', lang);
     const goal = GoalSchema.parse(fixture.goal);
     const context = JSON.parse(buildGoalTurnContext(fixture.cwd, goal, fixture.event, fixture.tasks));
     const reader = context.tasks.find(({ name }) => name === 'result-2');
-    const storage = goal.workUnits.find(({ taskName }) => taskName === 'result-1');
-    assert.ok(reader.startedAt > storage.integration.recordedAt);
+    const storage = fixture.tasks.find(({ name }) => name === 'result-1');
     const history = fixture.readResults.find(({ tool }) => tool === 'takt_get_goal_history');
     assert.ok(goalHistoryInputSchema.safeParse(history.arguments).success);
     assert.equal(history.arguments.taskName, reader.name);
@@ -71,11 +81,11 @@ test('already checked inventory results include integration history and a comple
     assert.equal(history.result.truncated, false);
     assert.ok(history.result.commits.every(({ truncated }) => truncated === false));
     const shas = history.result.commits.map(({ sha }) => sha);
-    assert.ok(shas.includes(storage.integration.goalSha));
-    assert.ok(shas.includes(storage.integration.expectedSha));
-    const run = fixture.readResults.find(({ tool, arguments: args }) => tool === 'takt_get_run' && args.runSlug === reader.references.runSlug);
+    assert.ok(shas.includes(storage.completion.sha));
+    assert.ok(shas.includes(storage.completion.sha));
+    const run = fixture.readResults.find(({ tool, arguments: args }) => tool === 'takt_get_run' && args.runSlug === reader.runSlug);
     assert.equal(run.result.status, 'completed');
-    assert.equal(run.result.task, goal.workUnits.find(({ taskName }) => taskName === reader.name).purpose);
+    assert.equal(run.result.task, reader.goalPurpose);
     const report = run.result.reports[0].content;
     assert.ok(report.includes(reader.completion.sha));
     assert.match(report, lang === 'ja' ? /ビルドと.*結合テストが成功/ : /Build and integration tests passed/);
@@ -113,53 +123,21 @@ test('completion fixtures supply file patches and commit history through product
   }
 });
 
-test('event fixtures use production saved operations accepted by buildGoalTurnContext', () => {
+test('event fixtures carry production goal memory, inbox events and current task state', () => {
   for (const { vars } of suite.tests) {
     const fixture = loadManagerCase(vars.case, vars.lang);
     if (fixture.turn !== 'event') continue;
     const goal = GoalSchema.parse(fixture.goal);
-    const context = JSON.parse(buildGoalTurnContext(fixture.cwd, goal, fixture.event, fixture.tasks));
-    assert.ok(goal.operations.length > 0);
-    for (const saved of goal.operations) {
-      for (const key of ['cwd', 'goalId', 'operationName']) {
-        assert.equal(Object.hasOwn(saved.arguments, key), false);
-      }
-      const production = prepareGoalOperation({ ...goal, operations: [] },
-        { goalId: goal.id, eventId: saved.eventId }, saved.operationName, saved.tool, saved.arguments);
-      assert.equal(saved.id, production.id);
-      assert.deepEqual(saved.arguments, production.arguments);
-      const task = fixture.tasks.find(({ name }) => name === saved.arguments.taskName);
-      const unit = goal.workUnits.find(({ taskName }) => taskName === saved.arguments.taskName);
-      if (saved.tool === 'integrate') {
-        assert.ok(task?.completion);
-        assert.ok(unit?.integration);
-        assert.equal(saved.arguments.expectedSha, task.completion.sha);
-        assert.deepEqual(saved.result, {
-          status: 'merged', sha: unit.integration.goalSha,
-          sourceBranch: task.completion.branch, expectedSha: saved.arguments.expectedSha,
-          targetBranch: goal.branch, recorded: true,
-        });
-      } else {
-        assert.equal(saved.tool, 'enqueue');
-        const enqueued = fixture.tasks.find(({ name }) => name === saved.result.taskName);
-        assert.ok(enqueued);
-        assert.ok(goal.workUnits.some(({ taskName, workKey }) => taskName === enqueued.name && workKey === saved.arguments.workKey));
-        assert.equal(saved.result.tasksFile, enqueued.filePath);
-        assert.equal(saved.result.workflow, saved.arguments.workflow);
-      }
-      assert.ok(goal.events.some(({ id }) => id === saved.eventId));
-      const operation = context.goal.operations.find(({ id }) => id === saved.id);
-      if (saved.eventId === fixture.event.id || saved.status !== 'completed') {
-        assert.ok(operation);
-        assert.deepEqual(operation.arguments, saved.arguments);
-        assert.equal(operation.operationName, saved.operationName);
-        assert.deepEqual(operation.result, saved.result);
-      } else {
-        assert.equal(operation, undefined);
-      }
-      const readGoal = fixture.readResults.find(({ tool }) => tool === 'takt_get_goal').result.goal;
-      assert.deepEqual(readGoal.operations, fixture.goal.operations);
-    }
+    const event = ManagerEventSchema.parse(fixture.event);
+    const context = JSON.parse(buildGoalTurnContext(fixture.cwd, goal, event, fixture.tasks));
+    assert.deepEqual(context.goal, goal);
+    assert.deepEqual(context.event, event);
+    assert.deepEqual(context.tasks, fixture.tasks);
+    assert.equal(context.references.goal, `${fixture.cwd}/.takt/goals/${goal.id}/goal.json`);
+    assert.equal(context.references.tasks, `${fixture.cwd}/.takt/tasks.yaml`);
+    const readGoal = fixture.readResults.find(({ tool }) => tool === 'takt_get_goal').result.goal;
+    assert.deepEqual(GoalSchema.parse(readGoal), goal);
+    assert.ok(goal.workLog.some(({ summary }) => fixture.tasks.some((task) => summary.includes(task.completion.sha))));
   }
 });
 
@@ -240,26 +218,23 @@ test('failure fixtures preserve attempts, revised instructions and causes throug
       const fixture = loadManagerCase(caseId, lang);
       const goal = GoalSchema.parse(fixture.goal);
       const context = JSON.parse(buildGoalTurnContext(fixture.cwd, goal, fixture.event, fixture.tasks));
-      const failures = goal.events.filter(({ kind, result }) => kind === 'completion' && result.success === false);
+      const failures = context.tasks.filter(({ completion }) => completion.success === false);
       assert.equal(failures.length, caseId === 'escalate-repeated-failure' ? 2 : 1);
-      assert.equal(fixture.event.id, failures.at(-1).id);
+      assert.equal(fixture.event.taskName, failures.at(-1).name);
       assert.equal(context.event.result.success, false);
       assert.equal(context.event.result.failureReason, fixture.event.result.failureReason);
       assert.equal(goal.executionStatus, 'active');
       for (const event of failures) {
-        const task = context.tasks.find(({ name }) => name === event.taskName);
+        const task = context.tasks.find(({ name }) => name === event.name);
         assert.equal(task.completion.success, false);
         const run = fixture.readResults.find(({ tool, result }) => tool === 'takt_get_run' && result.runSlug === event.runSlug);
         assert.ok(run.result.reports[0].content.length > 0);
       }
       if (caseId === 'escalate-repeated-failure') {
-        assert.equal(failures[0].processed, true);
-        assert.equal(failures[1].processed, false);
-        const retry = goal.operations.find(({ tool }) => tool === 'enqueue');
-        assert.equal(retry.eventId, failures[0].id);
-        assert.equal(retry.result.taskName, failures[1].taskName);
         const instruction = fixture.readResults.find(({ arguments: args }) => args.file_path?.endsWith('/order.md'));
-        assert.equal(instruction.result, retry.arguments.task);
+        assert.ok(instruction.result.length > 0);
+        assert.notEqual(failures[0].runSlug, failures[1].runSlug);
+        assert.notEqual(failures[0].completion.failureReason, failures[1].completion.failureReason);
         const pending = fixture.readResults.find(({ tool }) => tool === 'Read').result.work;
         assert.deepEqual(pending.map(({ workKey }) => workKey), ['payment-check', 'checkout-guide', 'admin-copy']);
       }

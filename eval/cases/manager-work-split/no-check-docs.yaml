@@ -5,14 +5,14 @@ ja:
   concurrency: 3
   defaultWorkflow: default
   mainMerge: auto
-  goal: &a3
+  goal: &a2
     id: 650e8400-e29b-41d4-a716-446655440000
     objective: 検索とエクスポートのヘルプを現行操作に合わせる
     outOfScope:
       - 本番への公開と外部サービスの追加
     acceptanceCriteria:
       - 検索ヘルプが検索操作を、エクスポートヘルプが既存の出力操作を正しく説明する
-    creationOrigin: human
+    constraints: []
     mode: local
     status: created
     executionStatus: active
@@ -20,61 +20,26 @@ ja:
     branch: takt/goal/catalog
     startBranch: main
     integrationBranch: main
-    confirmation:
-      confirmedAt: 2026-10-10T23:00:00Z
-      confirmedBy: human
-    workUnits:
-      - workKey: search-doc
-        purpose: 検索ヘルプを更新する
-        taskName: result-1
-        integration:
-          status: merged
-          sourceBranch: takt/task/result-1
-          expectedSha: "1111111111111111111111111111111111111111"
-          goalSha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-          recordedAt: 2026-10-11T00:20:00Z
-      - workKey: export-doc
-        purpose: エクスポートヘルプを更新する
-        taskName: result-2
-        integration:
-          status: merged
-          sourceBranch: takt/task/result-2
-          expectedSha: "2222222222222222222222222222222222222222"
-          goalSha: cccccccccccccccccccccccccccccccccccccccc
-          recordedAt: 2026-10-11T00:25:00Z
-    events:
-      - &a1
-        id: completion:result-2:run-result-2
-        kind: completion
-        taskName: result-2
-        runSlug: run-result-2
-        result: &a2
-          success: true
-          interrupted: false
-          branch: takt/task/result-2
-          sha: "2222222222222222222222222222222222222222"
-          workflowResult: completed
-        processed: false
-    decisions: []
-    questions: []
-    operations:
-      - id: 628ef4b03337b2569882a81e4882ff30cccfef05be9a238c6a7dde91564b13b1
-        eventId: completion:result-2:run-result-2
-        operationName: integrate-last
-        tool: integrate
-        arguments:
-          expectedSha: "2222222222222222222222222222222222222222"
-          taskName: result-2
-        status: completed
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-000000000032
+        recordedAt: 2026-10-11T00:20:00Z
+        summary: "result-1 を takt/goal/catalog に取り込みました。成果 SHA: 1111111111111111111111111111111111111111、取り込み後 SHA: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb。検索ヘルプを更新する"
+      - id: 650e8400-e29b-41d4-a716-000000000033
         recordedAt: 2026-10-11T00:25:00Z
-        result:
-          status: merged
-          sha: "cccccccccccccccccccccccccccccccccccccccc"
-          sourceBranch: "takt/task/result-2"
-          expectedSha: "2222222222222222222222222222222222222222"
-          targetBranch: "takt/goal/catalog"
-          recorded: true
-  event: *a1
+        summary: "result-2 を takt/goal/catalog に取り込みました。成果 SHA: 2222222222222222222222222222222222222222、取り込み後 SHA: cccccccccccccccccccccccccccccccccccccccc。エクスポートヘルプを更新する"
+    questions: []
+  event:
+    kind: completion
+    taskName: result-2
+    runSlug: run-result-2
+    result: &a1
+      success: true
+      interrupted: false
+      branch: takt/task/result-2
+      sha: "2222222222222222222222222222222222222222"
+      workflowResult: completed
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-11T00:20:00Z
   tasks:
     - name: result-1
       goalId: 650e8400-e29b-41d4-a716-446655440000
@@ -90,6 +55,8 @@ ja:
         branch: takt/task/result-1
         sha: "1111111111111111111111111111111111111111"
         workflowResult: completed
+      goalWorkKey: search-doc
+      goalPurpose: 検索ヘルプを更新する
     - name: result-2
       goalId: 650e8400-e29b-41d4-a716-446655440000
       kind: completed
@@ -98,7 +65,9 @@ ja:
       startedAt: 2026-10-11T00:05:00Z
       filePath: /workspace/project/.takt/tasks.yaml
       runSlug: run-result-2
-      completion: *a2
+      completion: *a1
+      goalWorkKey: export-doc
+      goalPurpose: エクスポートヘルプを更新する
   readResults:
     - tool: Read
       arguments:
@@ -109,20 +78,24 @@ ja:
         cwd: /workspace/project
         goalId: 650e8400-e29b-41d4-a716-446655440000
       result:
-        goal: *a3
+        goal: *a2
     - tool: takt_list_tasks
       arguments:
         cwd: /workspace/project
       result:
         tasks:
           - name: result-1
+            goalId: 650e8400-e29b-41d4-a716-446655440000
+            summary: 検索ヘルプを更新する
             status: completed
             startedAt: 2026-10-11T00:05:00Z
-            goalId: 650e8400-e29b-41d4-a716-446655440000
+            runSlug: run-result-1
           - name: result-2
+            goalId: 650e8400-e29b-41d4-a716-446655440000
+            summary: エクスポートヘルプを更新する
             status: completed
             startedAt: 2026-10-11T00:05:00Z
-            goalId: 650e8400-e29b-41d4-a716-446655440000
+            runSlug: run-result-2
     - tool: takt_get_run
       arguments:
         cwd: /workspace/project
@@ -135,8 +108,7 @@ ja:
         stepLogs: []
         reports:
           - filename: implementation.md
-            content: |-
-              docs/search.md に、検索語の入力、検索ボタンによる実行、状態フィルターの変更と結果一覧の読み方を追記した。src/ui/search.ts の submitSearch と statusFilter の処理、画面の「検索」「状態」の表記に各手順を照合した。見本データで検索語を入れて実行すると該当する行だけが表示され、状態を選ぶとその状態の行だけが残った。記載した結果が画面の結果と一致した。ページ内の検索結果見出しへのリンクはリンク検査で解決し、エクスポートページへのリンクは追加していない。
+            content: docs/search.md に、検索語の入力、検索ボタンによる実行、状態フィルターの変更と結果一覧の読み方を追記した。src/ui/search.ts の submitSearch と statusFilter の処理、画面の「検索」「状態」の表記に各手順を照合した。見本データで検索語を入れて実行すると該当する行だけが表示され、状態を選ぶとその状態の行だけが残った。記載した結果が画面の結果と一致した。ページ内の検索結果見出しへのリンクはリンク検査で解決し、エクスポートページへのリンクは追加していない。
     - tool: takt_get_run
       arguments:
         cwd: /workspace/project
@@ -149,8 +121,7 @@ ja:
         stepLogs: []
         reports:
           - filename: implementation.md
-            content: |-
-              docs/export.md に、出力形式で CSV を選び、エクスポートボタンを押してファイルを取得する手順と、対象データがないときの案内を追記した。src/ui/export.ts の formatSelect と downloadExport の処理、画面の「CSV」「エクスポート」の表記に照合した。見本データ2件ではヘッダーと2行の CSV が取得でき、0件では画面に「出力するデータがありません」と表示された。説明と実際の結果が一致した。ページ内の出力形式見出しへのリンクはリンク検査で解決し、検索ページへのリンクは追加していない。
+            content: docs/export.md に、出力形式で CSV を選び、エクスポートボタンを押してファイルを取得する手順と、対象データがないときの案内を追記した。src/ui/export.ts の formatSelect と downloadExport の処理、画面の「CSV」「エクスポート」の表記に照合した。見本データ2件ではヘッダーと2行の CSV が取得でき、0件では画面に「出力するデータがありません」と表示された。説明と実際の結果が一致した。ページ内の出力形式見出しへのリンクはリンク検査で解決し、検索ページへのリンクは追加していない。
     - tool: takt_get_goal_diff
       arguments:
         cwd: /workspace/project
@@ -162,7 +133,7 @@ ja:
         comparisonBranch: main
         sourceSha: cccccccccccccccccccccccccccccccccccccccc
         comparisonSha: dddddddddddddddddddddddddddddddddddddddd
-        files: &a1
+        files: &a3
           - path: docs/search.md
             additions: 7
             deletions: 1
@@ -194,7 +165,7 @@ ja:
         comparisonBranch: main
         sourceSha: cccccccccccccccccccccccccccccccccccccccc
         comparisonSha: dddddddddddddddddddddddddddddddddddddddd
-        files: *a1
+        files: *a3
         patch: |
           diff --git a/docs/export.md b/docs/export.md
           --- a/docs/export.md
@@ -258,14 +229,14 @@ en:
   concurrency: 3
   defaultWorkflow: default
   mainMerge: auto
-  goal: &a6
+  goal: &a5
     id: 650e8400-e29b-41d4-a716-446655440000
     objective: Align search and export help with current UI operations
     outOfScope:
       - Production publishing and adding external services
     acceptanceCriteria:
       - Search help explains search operations and export help explains existing export operations
-    creationOrigin: human
+    constraints: []
     mode: local
     status: created
     executionStatus: active
@@ -273,61 +244,26 @@ en:
     branch: takt/goal/catalog
     startBranch: main
     integrationBranch: main
-    confirmation:
-      confirmedAt: 2026-10-10T23:00:00Z
-      confirmedBy: human
-    workUnits:
-      - workKey: search-doc
-        purpose: Update search help
-        taskName: result-1
-        integration:
-          status: merged
-          sourceBranch: takt/task/result-1
-          expectedSha: "1111111111111111111111111111111111111111"
-          goalSha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-          recordedAt: 2026-10-11T00:20:00Z
-      - workKey: export-doc
-        purpose: Update export help
-        taskName: result-2
-        integration:
-          status: merged
-          sourceBranch: takt/task/result-2
-          expectedSha: "2222222222222222222222222222222222222222"
-          goalSha: cccccccccccccccccccccccccccccccccccccccc
-          recordedAt: 2026-10-11T00:25:00Z
-    events:
-      - &a4
-        id: completion:result-2:run-result-2
-        kind: completion
-        taskName: result-2
-        runSlug: run-result-2
-        result: &a5
-          success: true
-          interrupted: false
-          branch: takt/task/result-2
-          sha: "2222222222222222222222222222222222222222"
-          workflowResult: completed
-        processed: false
-    decisions: []
-    questions: []
-    operations:
-      - id: 628ef4b03337b2569882a81e4882ff30cccfef05be9a238c6a7dde91564b13b1
-        eventId: completion:result-2:run-result-2
-        operationName: integrate-last
-        tool: integrate
-        arguments:
-          expectedSha: "2222222222222222222222222222222222222222"
-          taskName: result-2
-        status: completed
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-000000000032
+        recordedAt: 2026-10-11T00:20:00Z
+        summary: "Integrated result-1 into takt/goal/catalog. Result SHA: 1111111111111111111111111111111111111111; goal SHA after integration: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb. Update search help"
+      - id: 650e8400-e29b-41d4-a716-000000000033
         recordedAt: 2026-10-11T00:25:00Z
-        result:
-          status: merged
-          sha: "cccccccccccccccccccccccccccccccccccccccc"
-          sourceBranch: "takt/task/result-2"
-          expectedSha: "2222222222222222222222222222222222222222"
-          targetBranch: "takt/goal/catalog"
-          recorded: true
-  event: *a4
+        summary: "Integrated result-2 into takt/goal/catalog. Result SHA: 2222222222222222222222222222222222222222; goal SHA after integration: cccccccccccccccccccccccccccccccccccccccc. Update export help"
+    questions: []
+  event:
+    kind: completion
+    taskName: result-2
+    runSlug: run-result-2
+    result: &a4
+      success: true
+      interrupted: false
+      branch: takt/task/result-2
+      sha: "2222222222222222222222222222222222222222"
+      workflowResult: completed
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-11T00:20:00Z
   tasks:
     - name: result-1
       goalId: 650e8400-e29b-41d4-a716-446655440000
@@ -343,6 +279,8 @@ en:
         branch: takt/task/result-1
         sha: "1111111111111111111111111111111111111111"
         workflowResult: completed
+      goalWorkKey: search-doc
+      goalPurpose: Update search help
     - name: result-2
       goalId: 650e8400-e29b-41d4-a716-446655440000
       kind: completed
@@ -351,7 +289,9 @@ en:
       startedAt: 2026-10-11T00:05:00Z
       filePath: /workspace/project/.takt/tasks.yaml
       runSlug: run-result-2
-      completion: *a5
+      completion: *a4
+      goalWorkKey: export-doc
+      goalPurpose: Update export help
   readResults:
     - tool: Read
       arguments:
@@ -362,20 +302,24 @@ en:
         cwd: /workspace/project
         goalId: 650e8400-e29b-41d4-a716-446655440000
       result:
-        goal: *a6
+        goal: *a5
     - tool: takt_list_tasks
       arguments:
         cwd: /workspace/project
       result:
         tasks:
           - name: result-1
+            goalId: 650e8400-e29b-41d4-a716-446655440000
+            summary: Update search help
             status: completed
             startedAt: 2026-10-11T00:05:00Z
-            goalId: 650e8400-e29b-41d4-a716-446655440000
+            runSlug: run-result-1
           - name: result-2
+            goalId: 650e8400-e29b-41d4-a716-446655440000
+            summary: Update export help
             status: completed
             startedAt: 2026-10-11T00:05:00Z
-            goalId: 650e8400-e29b-41d4-a716-446655440000
+            runSlug: run-result-2
     - tool: takt_get_run
       arguments:
         cwd: /workspace/project
@@ -388,8 +332,7 @@ en:
         stepLogs: []
         reports:
           - filename: implementation.md
-            content: |-
-              Added search-term entry, the Search button, status-filter changes and result-list guidance to docs/search.md. Matched each step against submitSearch and statusFilter in src/ui/search.ts and the Search/Status UI labels. With sample data, entering a term returned only matching rows; choosing a status retained only rows with that status. Documented outcomes matched the UI. Link checking resolved the local search-results heading; no export-page link was added.
+            content: Added search-term entry, the Search button, status-filter changes and result-list guidance to docs/search.md. Matched each step against submitSearch and statusFilter in src/ui/search.ts and the Search/Status UI labels. With sample data, entering a term returned only matching rows; choosing a status retained only rows with that status. Documented outcomes matched the UI. Link checking resolved the local search-results heading; no export-page link was added.
     - tool: takt_get_run
       arguments:
         cwd: /workspace/project
@@ -402,8 +345,7 @@ en:
         stepLogs: []
         reports:
           - filename: implementation.md
-            content: |-
-              Added CSV format selection, the Export button, downloading the file and the empty-data message to docs/export.md. Matched the instructions against formatSelect and downloadExport in src/ui/export.ts and the CSV/Export UI labels. Two sample records produced a header and two CSV rows; zero records displayed No data to export. Documented outcomes matched the actual results. Link checking resolved the local output-format heading; no search-page link was added.
+            content: Added CSV format selection, the Export button, downloading the file and the empty-data message to docs/export.md. Matched the instructions against formatSelect and downloadExport in src/ui/export.ts and the CSV/Export UI labels. Two sample records produced a header and two CSV rows; zero records displayed No data to export. Documented outcomes matched the actual results. Link checking resolved the local output-format heading; no search-page link was added.
     - tool: takt_get_goal_diff
       arguments:
         cwd: /workspace/project
@@ -415,7 +357,7 @@ en:
         comparisonBranch: main
         sourceSha: cccccccccccccccccccccccccccccccccccccccc
         comparisonSha: dddddddddddddddddddddddddddddddddddddddd
-        files: &a1
+        files: &a6
           - path: docs/search.md
             additions: 7
             deletions: 1
@@ -447,7 +389,7 @@ en:
         comparisonBranch: main
         sourceSha: cccccccccccccccccccccccccccccccccccccccc
         comparisonSha: dddddddddddddddddddddddddddddddddddddddd
-        files: *a1
+        files: *a6
         patch: |
           diff --git a/docs/export.md b/docs/export.md
           --- a/docs/export.md

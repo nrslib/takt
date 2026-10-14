@@ -4,14 +4,14 @@ import { goalRecord } from './helpers/goal-fixtures.js';
 import { isGoalPaused, transitionGoalExecution } from '../infra/goals/state.js';
 
 describe('Goal saved record schema', () => {
-  it.each(['human', 'director'] as const)('preserves every required field for %s creation', (creationOrigin) => {
-    const record = { ...goalRecord(), creationOrigin };
+  it('preserves every required field', () => {
+    const record = goalRecord();
     expect(GoalSchema.parse(record)).toEqual(record);
   });
 
   it.each([
     'id', 'objective', 'outOfScope', 'acceptanceCriteria', 'mode', 'status',
-    'branch', 'startBranch', 'integrationBranch', 'creationOrigin', 'confirmation',
+    'branch', 'startBranch', 'integrationBranch', 'constraints', 'workLog',
   ])('rejects a record missing %s', (field) => {
     const record: Record<string, unknown> = goalRecord();
     delete record[field];
@@ -100,31 +100,24 @@ describe('goal execution state and question participants', () => {
     expect(GoalSchema.safeParse({ ...goalRecord(), acceptanceCriteriaVersion }).success).toBe(false);
   });
 
-  it.each(['human', 'director'])('preserves the %s question recipient', (recipient) => {
+  it.each(['human'])('preserves the %s question recipient', (recipient) => {
     const question = { id: '650e8400-e29b-41d4-a716-446655440001', body: 'Which format?', status: 'pending', recipient };
     expect(GoalQuestionSchema.parse(question)).toEqual(question);
   });
 
-  it.each(['tui', 'slack', 'director'])('preserves an answer from %s', (source) => {
+  it.each(['tui', 'slack'])('preserves an answer from %s', (source) => {
     const question = { id: '650e8400-e29b-41d4-a716-446655440001', body: 'Which format?', status: 'answered', recipient: 'human',
       answer: { source, text: 'JSON', answeredAt: '2026-10-08T00:00:00Z' } };
     expect(GoalQuestionSchema.parse(question)).toEqual(question);
   });
 
-  it('preserves the request result and evidence references of a delegation completion event', () => {
-    const event = { id: '650e8400-e29b-41d4-a716-446655440001', kind: 'delegation_completion',
-      requestId: 'request-a', result: { success: true }, evidenceRefs: ['delegations/request-a/result.json'], processed: false };
-    expect(GoalSchema.parse({ ...goalRecord(), events: [event] }).events).toEqual([event]);
-  });
-
   it.each([
-    { actor: 'manager', operation: 'integrate' }, { actor: 'human', operation: 'allow' },
-    { actor: 'adjudicator', operation: 'allow' }, { actor: 'adjudicator', operation: 'stop' },
-    { actor: 'adjudicator', operation: 'escalate' },
-  ])('preserves a $actor decision to $operation with its acceptance criteria version', (participant) => {
-    const decision = { id: '650e8400-e29b-41d4-a716-446655440001', eventId: 'completion-event-a', ...participant,
-      reason: 'reviewed evidence', evidenceRefs: ['run-a/reports/review.md'], recordedAt: '2026-10-08T00:00:00Z',
-      acceptanceCriteriaVersion: 1 };
-    expect(GoalSchema.parse({ ...goalRecord(), decisions: [decision] }).decisions).toEqual([decision]);
+    { creationOrigin: 'director' },
+    { confirmation: { confirmedAt: '2026-10-08T00:00:00Z', confirmedBy: 'human' } },
+    { decisions: [] },
+    { events: [{ id: 'event', kind: 'delegation_completion', requestId: 'r', result: {}, evidenceRefs: [], processed: false }] },
+    { questions: [{ id: '650e8400-e29b-41d4-a716-446655440001', body: 'question', recipient: 'director', status: 'pending' }] },
+  ])('rejects removed goal fields %#', (fields) => {
+    expect(GoalSchema.safeParse({ ...goalRecord(), ...fields }).success).toBe(false);
   });
 });

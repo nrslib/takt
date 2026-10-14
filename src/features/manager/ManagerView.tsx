@@ -1,3 +1,6 @@
+import { basename } from 'node:path';
+import { findAssignedGoalRepository } from './assignment.js';
+import type { ManagerAssignment } from './startupResolution.js';
 import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { PromptInput } from '../tui/PromptInput.js';
@@ -14,6 +17,8 @@ import { readManagerDisplayEvents, type ManagerDisplayGoal } from './savedEvents
 import { GoalIdSchema, type GoalQuestion } from '../../infra/goals/schema.js';
 import { isGoalPaused } from '../../infra/goals/state.js';
 import { GoalStore } from '../../infra/goals/store.js';
+import { notifyManagerTurnFailure } from './turnFailureNotification.js';
+import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 
 type PendingQuestion = { goalId: string; objective: string; question: GoalQuestion };
 
@@ -21,11 +26,13 @@ function toDisplayBullet(item: string): string {
   return `- ${toDisplayText(item).replace(/\n/g, '\n  ')}`;
 }
 
-export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, startup }: {
+export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, startup, assignment }: {
+  assignment?: ManagerAssignment;
   cwd: string; lang: 'en' | 'ja'; session: ManagerConversationSession; onExit: () => void;
   initialDiagnostics: readonly string[];
   startup?: { run: (signal: AbortSignal) => Promise<readonly string[]>; fail: (error: unknown) => void };
 }): ReactElement {
+  const [currentAssignment, setCurrentAssignment] = useState<ManagerAssignment | undefined>();
   const [editor, setEditor] = useState(() => createEditorState(''));
   const [entries, setEntries] = useState<TranscriptEntry[]>(() => initialDiagnostics.map((content) => ({
     role: 'assistant', content: toDisplayText(content),
@@ -38,6 +45,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   const [abortTarget, setAbortTarget] = useState<ManagerDisplayGoal | null>(null);
   const [answerTarget, setAnswerTarget] = useState<{ pending: PendingQuestion; choice: number | null } | null>(null);
   const active = useRef<AbortController | null>(null);
+  const polling = useRef(false);
   const registering = useRef(false);
   const selected = useRef(false);
   const answerChoice = useRef<number | null>(null);
@@ -45,6 +53,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   const starting = useRef(startup !== undefined);
   const exiting = useRef(false);
   const displayed = useRef(new Set<string>());
+  const lastRefreshError = useRef<string | undefined>(undefined);
   const { waitUntilRenderFlush } = useApp();
   const { stdout } = useStdout();
   const contentWidth = Math.max(1, (stdout.columns ?? 80) - 6);
@@ -56,7 +65,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
         const controller = new AbortController();
         active.current = controller;
         try {
-          // Recovery can call the provider too, so stdout must contain the notices first.
+          // Flush the experimental and cost notices before starting background work.
           await waitUntilRenderFlush();
           if (!mounted.current || controller.signal.aborted) return;
           const diagnostics = await startup.run(controller.signal);
@@ -72,22 +81,57 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
         }
       }
       await refreshEvents();
-    })().catch((error: unknown) => append(getErrorMessage(error)));
+    })().catch(reportRefreshError);
     return () => { mounted.current = false; active.current?.abort(); };
   }, []);
   const append = (content: string): void => {
     if (mounted.current) setEntries((previous) => [...previous, { role: 'assistant', content: toDisplayText(content) }]);
   };
+  const reportRefreshError = (error: unknown): void => {
+    const message = getErrorMessage(error);
+    if (lastRefreshError.current !== message) append(message);
+    lastRefreshError.current = message;
+  };
+  const reportFailure = async (error: unknown): Promise<void> => {
+    append(sanitizeSensitiveText(getErrorMessage(error)));
+    const notification = await notifyManagerTurnFailure(cwd, undefined, error);
+    if (notification !== undefined) append(notification);
+  };
+  const appendResult = async (result: { kind: string; message: string }, signal?: AbortSignal): Promise<void> => {
+    if (result.kind === 'error' && !signal?.aborted) await reportFailure(new Error(result.message));
+    else append(result.message);
+  };
   const refreshEvents = async (): Promise<PendingQuestion[]> => {
-    const { events, diagnostics, questions: savedQuestions, goals: savedGoals } = await readManagerDisplayEvents(cwd, lang);
-    if (mounted.current) { setQuestions(savedQuestions); setGoals(savedGoals); }
-    for (const event of [...events, ...diagnostics]) {
-      if (displayed.current.has(event.id) || !mounted.current) continue;
-      displayed.current.add(event.id);
-      append(event.message);
+    const resolved = await session.getAssignment();
+    const snapshots = await Promise.all((resolved?.repositoryDirectories ?? [cwd]).map(async (directory) => ({
+      directory, snapshot: await readManagerDisplayEvents(directory, lang),
+    })));
+    const savedQuestions = snapshots.flatMap(({ snapshot }) => snapshot.questions);
+    if (mounted.current) {
+      setCurrentAssignment(resolved);
+      setQuestions(savedQuestions);
+      setGoals(snapshots.flatMap(({ snapshot }) => snapshot.goals));
     }
+    for (const { directory, snapshot } of snapshots) {
+      for (const event of [...snapshot.events, ...snapshot.diagnostics]) {
+        const id = JSON.stringify([directory, event.id]);
+        if (displayed.current.has(id) || !mounted.current) continue;
+        displayed.current.add(id);
+        append(event.message);
+      }
+    }
+    lastRefreshError.current = undefined;
     return savedQuestions;
   };
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (!mounted.current || exiting.current || starting.current || polling.current) return;
+      polling.current = true;
+      void refreshEvents().catch(reportRefreshError)
+        .finally(() => { polling.current = false; });
+    }, 500);
+    return () => clearInterval(timer);
+  }, []);
   const resetChoice = (): void => { selected.current = false; setApprove(false); };
   const submit = async (text: string): Promise<void> => {
     const controller = new AbortController();
@@ -104,7 +148,9 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
         if (goalId === undefined || goalId === '') append(getLabel('manager.goalExecutionUsage', lang));
         else if (!GoalIdSchema.safeParse(goalId).success) append(getLabel('manager.invalidGoalId', lang));
         else if (command[1] === 'abort') {
-          const goal = await new GoalStore(cwd).get(goalId);
+          const resolved = await session.getAssignment();
+          const repository = resolved === undefined ? cwd : await findAssignedGoalRepository(goalId, resolved);
+          const goal = await new GoalStore(repository).get(goalId);
           if (active.current !== controller || !mounted.current) return;
           if (goal.status === 'completed' && goal.executionStatus !== 'aborted') {
             append(getLabel('manager.completedGoalCannotAbort', lang, { goalId }));
@@ -114,7 +160,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
           const options = { goalId, abortSignal: controller.signal };
           const result = await (command[1] === 'pause' ? session.pauseGoal(options) : session.resumeGoal(options));
           if (active.current !== controller || !mounted.current) return;
-          append(result.message);
+          await appendResult(result, controller.signal);
           await refreshEvents();
         }
         return;
@@ -131,11 +177,11 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
       }
       const result = await session.handleUserMessage({ text, abortSignal: controller.signal });
       if (active.current !== controller || !mounted.current) return;
-      append(result.message);
+      await appendResult(result, controller.signal);
       setPending(session.getPendingSummary());
       await refreshEvents();
     } catch (error) {
-      append(getErrorMessage(error));
+      if (!controller.signal.aborted) await reportFailure(error);
     } finally {
       if (active.current === controller) {
         active.current = null;
@@ -151,9 +197,9 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
     resetChoice();
     try {
       const result = await session.abortGoal({ goalId, abortSignal: controller.signal });
-      append(result.message);
+      await appendResult(result, controller.signal);
       await refreshEvents();
-    } catch (error) { append(getErrorMessage(error)); }
+    } catch (error) { if (!controller.signal.aborted) await reportFailure(error); }
     finally {
       if (active.current === controller) {
         active.current = null;
@@ -171,9 +217,9 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
       const result = await session.answerQuestion({
         goalId: target.goalId, questionId: target.question.id, text, abortSignal: controller.signal,
       });
-      append(result.message);
+      await appendResult(result, controller.signal);
       await refreshEvents();
-    } catch (error) { append(getErrorMessage(error)); }
+    } catch (error) { if (!controller.signal.aborted) await reportFailure(error); }
     finally {
       if (active.current === controller) {
         active.current = null;
@@ -188,13 +234,12 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
     resetChoice();
     try {
       const result = await session.approveSummary(revision);
-      append(result.kind === 'goal_registered'
-        ? `${ja ? 'ゴール登録完了' : 'Goal registered'}: ${result.goal.id}\n${result.goal.branch}`
-        : result.message);
+      if (result.kind === 'goal_registered') append(`${ja ? 'ゴール登録完了' : 'Goal registered'}: ${result.goal.id}\n${result.goal.branch}`);
+      else await appendResult(result);
       if (result.kind === 'goal_registered') append(result.turn.message);
       await refreshEvents();
     } catch (error) {
-      append(getErrorMessage(error));
+      await reportFailure(error);
     } finally {
       registering.current = false;
       if (mounted.current) setBusy(false);
@@ -212,7 +257,6 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
     if (active.current !== null) {
       if (key.escape) {
         active.current.abort();
-        active.current = null;
         setPending(null);
         setBusy(false);
       }
@@ -287,7 +331,11 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   return (
     <Box flexDirection="column">
       <Text bold>{`manager — ${ja ? '実験的機能' : 'Experimental'}`}</Text>
-      <Text>{toDisplayText(cwd)}</Text>
+      <Text>{toDisplayText(currentAssignment?.kind === 'workspace'
+        ? `${currentAssignment.name} (${currentAssignment.repositoryDirectories.length})`
+        : assignment?.kind === 'workspace'
+          ? `${assignment.name} (${assignment.repositoryDirectories.length})` : basename(cwd))}</Text>
+      <Text dimColor>{toDisplayText(cwd)}</Text>
       <TranscriptView entries={entries} userMessageColors={FALLBACK_USER_MESSAGE_COLORS} />
       {goals.some((goal) => goal.executionStatus === 'aborted') && (
         <Box borderStyle="round" flexDirection="column">
@@ -350,11 +398,14 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
       {pending !== null && (
         <Box borderStyle="round" flexDirection="column">
           <Text bold>{ja ? '登録する要約' : 'Summary to register'}</Text>
+          {pending.repositoryDirectory !== undefined && <Text>{toDisplayText(pending.repositoryDirectory)}</Text>}
           <Text>{toDisplayText(pending.summary.objective)}</Text>
           <Text>{`${ja ? '範囲外' : 'Out of scope'}:`}</Text>
           {pending.summary.outOfScope.map((item, index) => <Text key={index}>{toDisplayBullet(item)}</Text>)}
           <Text>{`${ja ? '受け入れ条件' : 'Acceptance criteria'}:`}</Text>
           {pending.summary.acceptanceCriteria.map((item, index) => <Text key={index}>{toDisplayBullet(item)}</Text>)}
+          <Text>{`${ja ? '作業の制約' : 'Work constraints'}:`}</Text>
+          {pending.summary.constraints.map((item, index) => <Text key={index}>{toDisplayBullet(item)}</Text>)}
           {pending.summary.startBranch !== undefined && <Text>{`startBranch: ${toDisplayText(pending.summary.startBranch)}`}</Text>}
           {pending.summary.integrationBranch !== undefined && <Text>{`integrationBranch: ${toDisplayText(pending.summary.integrationBranch)}`}</Text>}
           <Text inverse={approve}>{ja ? '登録を承認' : 'Approve registration'}</Text>

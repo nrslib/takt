@@ -10,15 +10,15 @@ ja:
     objective: Python の売上集計パイプラインに月別・販売経路別の純売上集計と CSV 出力を追加する
     outOfScope:
       - データの収集元の変更と本番への配備
-    acceptanceCriteria: &a3
-      - "作業の制約: 途中は変更したモジュールの pytest だけを流す。"
-      - "作業の制約: 全データでの再集計はローカルの保存済みデータで、ゴール全体の最後に 1 回だけ行う。"
-      - "作業の制約: 本番のデータベースには接続しない。途中の検証は手元の見本データで行う。"
+    acceptanceCriteria: &a2
       - CSV の日付・販売経路・金額・返金額を読み込み、欠損値と不正な金額を報告する。
       - 月別・販売経路別の純売上と注文数を集計し、返金と月末の境界を正しく扱う。
       - 新しい集計の出力形式を使って CSV レポートを生成し、既存の日別集計の結果を維持する。
       - 見本データで集計値と CSV の列を確かめ、再集計の結果と実行手順を記録する。
-    creationOrigin: human
+    constraints: &a3
+      - "作業の制約: 途中は変更したモジュールの pytest だけを流す。"
+      - "作業の制約: 全データでの再集計はローカルの保存済みデータで、ゴール全体の最後に 1 回だけ行う。"
+      - "作業の制約: 本番のデータベースには接続しない。途中の検証は手元の見本データで行う。"
     mode: local
     status: created
     executionStatus: active
@@ -26,63 +26,28 @@ ja:
     branch: takt/goal/sales-report
     startBranch: main
     integrationBranch: main
-    confirmation:
-      confirmedAt: 2026-10-10T23:00:00Z
-      confirmedBy: human
-    workUnits:
-      - taskName: foundation
-        workKey: foundation
-        purpose: 売上 CSV の読み込みと入力検証の土台を用意する
-        integration:
-          status: merged
-          sourceBranch: takt/task/foundation
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          goalSha: cccccccccccccccccccccccccccccccccccccccc
-          recordedAt: 2026-10-11T00:10:00Z
-    events:
-      - &a1
-        id: completion:foundation:run-foundation
-        kind: completion
-        taskName: foundation
-        runSlug: run-foundation
-        result: &a2
-          success: true
-          interrupted: false
-          branch: takt/task/foundation
-          sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          workflowResult: completed
-        processed: false
-    decisions:
-      - id: decision-plan
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-446655440010
         recordedAt: 2026-10-10T23:01:00Z
-        eventId: null
-        actor: manager
-        operation: plan
-        reason: |-
+        summary: |-
           channel-totals: 読み込み済みの売上レコードから月別・販売経路別の集計と出力形式を作る
           report-export: 新しい集計の出力形式を使って CSV レポートと実行手順を追加する
-        evidenceRefs:
-          - project-request.md
-        acceptanceCriteriaVersion: 1
-    questions: []
-    operations:
-      - id: bd4c510d0595b9ad58dcd13f50993a07798c9ad6356d2b78b016af2e641bc824
-        eventId: completion:foundation:run-foundation
-        operationName: integrate-foundation
-        tool: integrate
-        arguments:
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          taskName: foundation
-        status: completed
+      - id: 650e8400-e29b-41d4-a716-000000000032
         recordedAt: 2026-10-11T00:10:00Z
-        result:
-          status: merged
-          sha: cccccccccccccccccccccccccccccccccccccccc
-          sourceBranch: takt/task/foundation
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          targetBranch: takt/goal/sales-report
-          recorded: true
-  event: *a1
+        summary: "foundation を takt/goal/sales-report に取り込みました。成果 SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa、取り込み後 SHA: cccccccccccccccccccccccccccccccccccccccc。売上 CSV の読み込みと入力検証の土台を用意する"
+    questions: []
+  event:
+    kind: completion
+    taskName: foundation
+    runSlug: run-foundation
+    result: &a1
+      success: true
+      interrupted: false
+      branch: takt/task/foundation
+      sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      workflowResult: completed
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-11T00:20:00Z
   tasks:
     - name: foundation
       goalId: 650e8400-e29b-41d4-a716-446655440000
@@ -92,14 +57,17 @@ ja:
       startedAt: 2026-10-11T00:00:00Z
       filePath: /workspace/project/.takt/tasks.yaml
       runSlug: run-foundation
-      completion: *a2
+      completion: *a1
+      goalWorkKey: foundation
+      goalPurpose: 売上 CSV の読み込みと入力検証の土台を用意する
   readResults:
     - tool: Read
       arguments:
         file_path: /workspace/project/project-request.md
       result:
         objective: Python の売上集計パイプラインに月別・販売経路別の純売上集計と CSV 出力を追加する
-        acceptanceCriteria: *a3
+        acceptanceCriteria: *a2
+        constraints: *a3
         work:
           - workKey: channel-totals
             purpose: 月別・販売経路別の純売上と注文数を集計し、出力形式を定める
@@ -158,15 +126,15 @@ en:
     objective: Add monthly net sales by channel and CSV export to the Python sales aggregation pipeline
     outOfScope:
       - Changing data collection sources and production deployment
-    acceptanceCriteria: &a7
-      - "Work constraint: During work, run only pytest tests for the changed modules."
-      - "Work constraint: Recompute the entire dataset from locally stored data exactly once at the end of the whole goal."
-      - "Work constraint: Do not connect to the production database. Use local sample data for intermediate validation."
+    acceptanceCriteria: &a6
       - Load dates, sales channels, amounts and refunds from CSV, reporting missing values and invalid amounts.
       - Aggregate monthly net sales and order counts by channel, handling refunds and month-end boundaries correctly.
       - Generate CSV reports using the new aggregate output format and preserve existing daily totals.
       - Check aggregate values and CSV columns with sample data, recording recomputation results and operating instructions.
-    creationOrigin: human
+    constraints: &a7
+      - "Work constraint: During work, run only pytest tests for the changed modules."
+      - "Work constraint: Recompute the entire dataset from locally stored data exactly once at the end of the whole goal."
+      - "Work constraint: Do not connect to the production database. Use local sample data for intermediate validation."
     mode: local
     status: created
     executionStatus: active
@@ -174,63 +142,28 @@ en:
     branch: takt/goal/sales-report
     startBranch: main
     integrationBranch: main
-    confirmation:
-      confirmedAt: 2026-10-10T23:00:00Z
-      confirmedBy: human
-    workUnits:
-      - taskName: foundation
-        workKey: foundation
-        purpose: Provide sales CSV loading and input validation
-        integration:
-          status: merged
-          sourceBranch: takt/task/foundation
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          goalSha: cccccccccccccccccccccccccccccccccccccccc
-          recordedAt: 2026-10-11T00:10:00Z
-    events:
-      - &a5
-        id: completion:foundation:run-foundation
-        kind: completion
-        taskName: foundation
-        runSlug: run-foundation
-        result: &a6
-          success: true
-          interrupted: false
-          branch: takt/task/foundation
-          sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          workflowResult: completed
-        processed: false
-    decisions:
-      - id: decision-plan
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-446655440010
         recordedAt: 2026-10-10T23:01:00Z
-        eventId: null
-        actor: manager
-        operation: plan
-        reason: |-
+        summary: |-
           channel-totals: Produce monthly sales aggregates by channel and their output format from loaded sales records
           report-export: Add CSV reports and operating instructions using the new aggregate output format
-        evidenceRefs:
-          - project-request.md
-        acceptanceCriteriaVersion: 1
-    questions: []
-    operations:
-      - id: bd4c510d0595b9ad58dcd13f50993a07798c9ad6356d2b78b016af2e641bc824
-        eventId: completion:foundation:run-foundation
-        operationName: integrate-foundation
-        tool: integrate
-        arguments:
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          taskName: foundation
-        status: completed
+      - id: 650e8400-e29b-41d4-a716-000000000032
         recordedAt: 2026-10-11T00:10:00Z
-        result:
-          status: merged
-          sha: cccccccccccccccccccccccccccccccccccccccc
-          sourceBranch: takt/task/foundation
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          targetBranch: takt/goal/sales-report
-          recorded: true
-  event: *a5
+        summary: "Integrated foundation into takt/goal/sales-report. Result SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; goal SHA after integration: cccccccccccccccccccccccccccccccccccccccc. Provide sales CSV loading and input validation"
+    questions: []
+  event:
+    kind: completion
+    taskName: foundation
+    runSlug: run-foundation
+    result: &a5
+      success: true
+      interrupted: false
+      branch: takt/task/foundation
+      sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      workflowResult: completed
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-11T00:20:00Z
   tasks:
     - name: foundation
       goalId: 650e8400-e29b-41d4-a716-446655440000
@@ -240,14 +173,17 @@ en:
       startedAt: 2026-10-11T00:00:00Z
       filePath: /workspace/project/.takt/tasks.yaml
       runSlug: run-foundation
-      completion: *a6
+      completion: *a5
+      goalWorkKey: foundation
+      goalPurpose: Provide sales CSV loading and input validation
   readResults:
     - tool: Read
       arguments:
         file_path: /workspace/project/project-request.md
       result:
         objective: Add monthly net sales by channel and CSV export to the Python sales aggregation pipeline
-        acceptanceCriteria: *a7
+        acceptanceCriteria: *a6
+        constraints: *a7
         work:
           - workKey: channel-totals
             purpose: Aggregate monthly net sales and order counts by channel and define the output format

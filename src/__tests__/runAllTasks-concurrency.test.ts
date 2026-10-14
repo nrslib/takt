@@ -3,8 +3,8 @@
  */
 
 vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkQueuedTaskProviders: vi.fn(async () => undefined), checkPendingTaskProviders: vi.fn(async () => undefined), checkTaskNameProvider: vi.fn(async () => undefined), checkTaskProviders: vi.fn(async () => undefined), terminalProviderConfirmation: vi.fn(() => undefined) }));
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { TaskInfo, TaskListItem } from '../infra/task/index.js';
+import { beforeEach,describe,expect,it,vi } from 'vitest';
+import type { TaskInfo,TaskListItem } from '../infra/task/index.js';
 
 const { mockLoadConfigRaw } = vi.hoisted(() => ({
   mockLoadConfigRaw: vi.fn<(...args: unknown[]) => Record<string, unknown>>(() => ({
@@ -72,9 +72,10 @@ vi.mock('../infra/config/index.js', () => ({
 }));
 
 const mockLoadConfig = mockLoadConfigRaw;
-
-vi.mock('../features/manager/completionTurn.js', () => ({ recoverManagerEvents: vi.fn(async () => {}) }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
+vi.mock('../features/manager/runEventManager.js', () => ({
+  createRunEventManager: vi.fn(() => ({ processPending: vi.fn(async () => false), hasFailedEvents: vi.fn(() => false), close: vi.fn(async () => {}) })),
+}));
 vi.mock('../infra/task/project-execution-lock.js', () => ({
   acquireProjectExecutionLock: vi.fn(() => ({
     owner: { ownerId: 'run-test-owner', pid: process.pid, kind: 'run', state: 'starting',
@@ -238,11 +239,11 @@ vi.mock('../shared/i18n/index.js', () => ({
   getLabel: vi.fn((key: string) => key),
 }));
 
-import { info, header, status, success, error as errorFn } from '../shared/ui/index.js';
-import { runAllTasks } from '../features/tasks/index.js';
 import { checkQueuedTaskProviders } from '../features/tasks/execute/providerPreflight.js';
-import { executeWorkflow, executeWorkflowForRun } from '../features/tasks/execute/workflowExecution.js';
+import { executeWorkflow,executeWorkflowForRun } from '../features/tasks/execute/workflowExecution.js';
+import { runAllTasks } from '../features/tasks/index.js';
 import { loadWorkflowByIdentifier } from '../infra/config/index.js';
+import { error as errorFn,header,info,status,success } from '../shared/ui/index.js';
 
 const mockInfo = vi.mocked(info);
 const mockHeader = vi.mocked(header);

@@ -444,7 +444,7 @@ validation に失敗します。
 | `awaiting_merge` | 人の取り込み待ち | `true` |
 | `completed` | ゴールの完成 | `true` |
 | `progress` | 作業単位の取り込み | `true` |
-| `blocked` | manager が通知ツールで伝える行き詰まり、manager のイベント処理の失敗 | `true` |
+| `blocked` | manager が通知ツールで伝える行き詰まり、manager のイベント処理・TUI の会話の失敗 | `true` |
 | `custom` | manager が通知ツールで伝える任意の出来事 | `true` |
 
 ```yaml
@@ -463,13 +463,9 @@ manager:
 プロジェクトの `question: true` で上書きでき、プロジェクトでそのキーを省略すると
 グローバルの値を使います。他の種類の指定には影響しません。
 
-`false` は該当種類の通知の保存と Slack 送信を無効にします。
-質問の保存・回答・依存する作業の投入判定、作業単位の取り込み、ゴールの状態更新は維持します。
-通知を無効にしても回答待ちの質問は TUI に表示されます。
-`TAKT_NOTIFY_WEBHOOK` が未設定なら Slack には送らず、有効な保存通知は
-次の TUI 起動時・発言時に表示します。Slack 送信に失敗しても manager の処理は止めず、
-診断を保存して TUI に表示します。通常の run・pipeline の既存通知には
-`manager.notifications` を適用しません。
+`false` は、その種類の通知の保存、TUI での通知表示、Slack 送信を無効にします。質問への回答、成果の取り込み、ゴールの状態更新は続き、回答待ちの質問も表示されます。
+
+`TAKT_NOTIFY_WEBHOOK` を指定すると Slack に送信します。有効な保存通知は、TUI を開いている間も更新して表示します。manager のイベント処理や TUI の会話が失敗すると `blocked` を通知し、同じ失敗でも通知します。失敗状態のファイルは作りません。Slack の送信失敗はログに出し、manager の作業は続けます。通常の run・pipeline の通知はこの設定の対象外です。
 
 ## API キー設定
 

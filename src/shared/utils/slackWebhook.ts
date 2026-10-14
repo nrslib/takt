@@ -13,7 +13,7 @@ const TIMEOUT_MS = 10_000;
  *
  * Never throws: errors are written to stderr so the caller's flow is not disrupted.
  */
-export async function sendSlackNotification(webhookUrl: string, message: string, onFailure?: (message: string) => void): Promise<void> {
+export async function sendSlackNotification(webhookUrl: string, message: string): Promise<void> {
   try {
     const response = await fetch(webhookUrl, {
       method: 'POST',
@@ -26,11 +26,9 @@ export async function sendSlackNotification(webhookUrl: string, message: string,
       process.stderr.write(
         `Slack webhook failed: HTTP ${String(response.status)}\n`,
       );
-      onFailure?.(`Slack webhook failed: HTTP ${String(response.status)}`);
     }
   } catch {
     process.stderr.write('Slack webhook connection failed\n');
-    onFailure?.('Slack webhook connection failed');
   }
 }
 

@@ -373,9 +373,13 @@ tui:
     exceededStart: "保存済みの停止位置: {start}（iteration {iteration}）"
 
 manager:
+  conversationFailureNotification: |-
+    manager の処理に失敗しました。
+    理由: {reason}
+    会話と現在の作業状態を確認してから、もう一度操作してください。
   turnFailureNotification: |-
     manager によるイベント処理が失敗しました。未処理のイベントが残っています。
-    原因を解消した後、実行中のゴールは takt manager を再起動するか、TUI で /resume {goalId} を実行するか、takt run を実行すると、未処理のイベントが再び処理されます。
+    原因を解消した後、takt run を実行すると、進行中のゴールの未処理イベントを再び処理します。
     一時停止中のゴールは TUI で /resume {goalId} を実行して再開してください。中止済みのゴールは再開できません。
     理由: {reason}
   goalExecutionUsage: "一時停止: /pause <goalId> / 再開: /resume <goalId> / 中止: /abort <goalId>（ゴールID必須）"
@@ -396,7 +400,6 @@ manager:
   description: "実験的な manager の会話 TUI を起動します"
   experimentalNotice: "manager は実験的機能です。動作・設定・保存するデータの形式は予告なく変わることがあります。"
   costNotice: "manager は自動でタスクを投入・実行するため、provider の API の費用がかかります。"
-  notifyIntegrated: "作業単位「{task}」を取り込みました: {purpose}\nコミット: {sha}"
   notificationHeadings:
     progress: "進捗をお知らせします — {project}"
     awaiting_merge: "マージを待っています — {project}"

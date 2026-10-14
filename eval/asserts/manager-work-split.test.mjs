@@ -31,7 +31,7 @@ function assertSemanticGrader(caseId, lang) {
 }
 function enqueue(fixture, key) {
   return { tool: 'takt_enqueue_goal_task', arguments: {
-    cwd: fixture.cwd, goalId: fixture.goal.id, workKey: key, operationName: `enqueue-${key}`, purpose: `Implement ${key}`,
+    cwd: fixture.cwd, goalId: fixture.goal.id, workKey: key, purpose: `Implement ${key}`,
     task: `On the current tip of ${fixture.goal.branch}, run npm run build and targeted tests for ${key}; report evidence.`, workflow: 'default',
   } };
 }
@@ -39,10 +39,10 @@ function goodOutput(caseId, lang) {
   const fixture = loadManagerCase(caseId, lang);
   const conversation = fixture.turn === 'conversation';
   const output = { response: { message: '判断を記録します', summary: conversation
-    ? { objective: 'Delivery destinations', outOfScope: [], acceptanceCriteria: ['Existing behavior retained'] } : null },
+    ? { objective: 'Delivery destinations', outOfScope: [], acceptanceCriteria: ['Existing behavior retained'], constraints: [] } : null },
   calls: selectedKeys[caseId].map((key) => enqueue(fixture, key)) };
   if (caseId === 'escalate-repeated-failure') output.calls.unshift({ tool: 'takt_notify_goal', arguments: {
-    cwd: fixture.cwd, goalId: fixture.goal.id, operationName: 'missing-payment-key', kind: 'blocked',
+    cwd: fixture.cwd, goalId: fixture.goal.id, kind: 'blocked',
     body: lang === 'ja'
       ? '検証用の鍵がなく、方針を変えても結合テストが2回失敗しました。設定の読み込み順と接続先を確認し、対象を絞ってやり直しました。管理者が検証用の鍵を発行し、実行環境に設定してください。'
       : 'The test key is missing and integration tests failed twice despite a revised approach. Verified configuration loading order and endpoint and retried a targeted test. The administrator must issue the test key and configure it in the execution environment.',
@@ -64,7 +64,7 @@ function goodOutput(caseId, lang) {
     output.calls[0].arguments.purpose = fixture.readResults[0].result.work[0].purpose;
     output.calls[0].arguments.task = [
       output.calls[0].arguments.purpose,
-      ...fixture.goal.acceptanceCriteria.slice(0, 3),
+      ...fixture.goal.constraints,
       lang === 'ja'
         ? 'report-export の実装はこの集計の取り込み後の作業へ回す。この作業は全データの再集計を担当しない。全データの再集計は全成果の取り込み後に始める最後の確認作業が 1 回だけ担当する。'
         : 'Defer report-export implementation until this aggregate is integrated. This task does not own full-data recomputation. A final check task started after all results are integrated owns that recomputation exactly once.',
@@ -74,10 +74,12 @@ function goodOutput(caseId, lang) {
     output.response.summary = lang === 'ja' ? {
       objective: 'オンラインストアの購入画面を整える',
       outOfScope: ['会員認証、配送業者との連携、決済事業者とストア全体のデザインの変更'],
-      acceptanceCriteria: [
+      constraints: [
         '作業の制約: 途中は変更した画面のコンポーネントテストだけを流す。',
         '作業の制約: ブラウザを使う E2E はテスト環境でゴール全体の最後に 1 回だけ流す。',
         '作業の制約: 本番の決済 API は呼ばない。決済はスタブまたはテスト用 API で検証する。',
+      ],
+      acceptanceCriteria: [
         '数量変更、小計・送料・合計の表示、クーポン入力とエラー、配送先の必須検証、注文確認の入力と金額表示が動く。',
         '決済の成功・失敗が表示され、二重注文を防ぎ、完了画面で注文番号と購入内容を示す。購入手順とエラー案内を更新する。',
         '税込価格の丸め方、会員・ゲストの購入経路を維持し、戻った際の配送先入力を失わない。コンポーネントテストと E2E が通る。',
@@ -85,10 +87,12 @@ function goodOutput(caseId, lang) {
     } : {
       objective: 'Improve online store checkout screens',
       outOfScope: ['Changes to member authentication, shipping carrier integration, payment provider or whole-store design'],
-      acceptanceCriteria: [
+      constraints: [
         'Work constraint: During work, run only component tests for changed screens.',
         'Work constraint: Run browser E2E in the test environment exactly once at the end of the whole goal.',
         'Work constraint: Never call the production payment API. Validate payments with a stub or the test API.',
+      ],
+      acceptanceCriteria: [
         'Support quantity changes, subtotal/shipping/total display, coupon input and errors, required address validation and order review of details and prices.',
         'Show payment success/failure, prevent duplicate orders and show the order number and purchased items on completion. Update checkout and error guidance.',
         'Preserve tax-inclusive rounding and member/guest paths, retain address input when going back and pass component tests and E2E.',
@@ -96,26 +100,27 @@ function goodOutput(caseId, lang) {
     };
   }
   if (caseId.startsWith('no-check-') || caseId === 'integration-already-checked') output.calls.push({ tool: 'takt_complete_goal', arguments: {
-    cwd: fixture.cwd, goalId: fixture.goal.id, expectedSha: 'c'.repeat(40), summary: 'Acceptance criteria verified in run reports.', operationName: 'complete',
+    cwd: fixture.cwd, goalId: fixture.goal.id, expectedSha: 'c'.repeat(40), summary: 'Acceptance criteria verified in run reports.',
   } });
   return output;
 }
 const score = (output, caseId, lang = 'ja') => evaluate(typeof output === 'string' ? output : JSON.stringify(output), { vars: { case: caseId, lang } });
-function writingCalls(fixture, keys) {
-  const base = { cwd: fixture.cwd, goalId: fixture.goal.id, operationName: 'extra-operation' };
+function writingCalls(fixture, _keys) {
+  const base = { cwd: fixture.cwd, goalId: fixture.goal.id };
   const task = fixture.tasks[0];
   return {
     takt_enqueue_goal_task: enqueue(fixture, 'unexpected-work').arguments,
+    takt_requeue_goal_task: { ...base, taskName: task.name },
+    takt_retry_goal_task: { ...base, taskName: task.name, task: 'Corrected instructions.' },
+    takt_remove_goal_task: { ...base, taskName: task.name, reason: 'No longer needed.' },
     takt_merge_goal_task: { ...base, taskName: task.name, expectedSha: task.completion.sha },
     takt_complete_goal: { ...base, expectedSha: 'c'.repeat(40), summary: 'Reviewed acceptance evidence.' },
     takt_check_goal_completion: base,
-    takt_ask_goal_question: { ...base, body: 'Approve these work units?', dependentWorkKeys: keys },
+    takt_ask_goal_question: { ...base, body: 'Approve these work units?' },
     takt_withdraw_goal_question: { ...base, questionId: '650e8400-e29b-41d4-a716-446655440001' },
     takt_notify_goal: { ...base, kind: 'custom', body: 'Decision recorded.' },
-    takt_record_goal_decision: {
-      cwd: fixture.cwd, goalId: fixture.goal.id, eventId: fixture.event.id,
-      operation: 'select-work', reason: 'Reviewed the available evidence.', evidenceRefs: [],
-      actor: 'manager', acceptanceCriteriaVersion: fixture.goal.acceptanceCriteriaVersion,
+    takt_record_goal_work_log: {
+      cwd: fixture.cwd, goalId: fixture.goal.id, summary: 'Reviewed the available evidence and selected the next work.',
     },
   };
 }
@@ -143,7 +148,7 @@ for (const lang of ['ja', 'en']) {
     }
     const output = goodOutput('constraint-carryover-data', lang);
     output.calls.push({ tool: 'takt_complete_goal', arguments: {
-      cwd: fixture.cwd, goalId: fixture.goal.id, expectedSha: 'c'.repeat(40), summary: 'Done', operationName: 'complete',
+      cwd: fixture.cwd, goalId: fixture.goal.id, expectedSha: 'c'.repeat(40), summary: 'Done',
     } });
     assert.equal(score(output, 'constraint-carryover-data', lang).pass, false);
   });
@@ -168,7 +173,7 @@ for (const lang of ['ja', 'en']) {
     assertSemanticGrader('constraint-carryover-data', lang);
     const summary = goodOutput('summary-keeps-constraint-web', lang);
     assert.equal(score(summary, 'summary-keeps-constraint-web', lang).pass, true);
-    summary.response.summary.acceptanceCriteria = lang === 'ja'
+    summary.response.summary.constraints = lang === 'ja'
       ? ['作業の制約: 各画面の作業の最後に E2E を流す。本番の決済 API で検証する。']
       : ['Work constraint: Run E2E at the end of each screen task. Validate with the production payment API.'];
     assert.equal(score(summary, 'summary-keeps-constraint-web', lang).pass, true);
@@ -176,7 +181,7 @@ for (const lang of ['ja', 'en']) {
   });
 
   for (const caseId of Object.keys(selectedKeys)) {
-    test(`${lang}/${caseId}: accepts intended operations and rejects missing required response or operations`, () => {
+    test(`${lang}/${caseId}: accepts intended tool calls and rejects missing required response or calls`, () => {
       const correct = goodOutput(caseId, lang);
       assert.equal(score(correct, caseId, lang).pass, true);
       const wrong = structuredClone(correct);
@@ -184,15 +189,15 @@ for (const lang of ['ja', 'en']) {
       else wrong.calls = [];
       assert.equal(score(wrong, caseId, lang).pass, false);
     });
-    test(`${lang}/${caseId}: rejects writes outside the case's permitted operations`, () => {
+    test(`${lang}/${caseId}: rejects writes outside the case's permitted actions`, () => {
       const fixture = loadManagerCase(caseId.startsWith('summary-') ? 'parallel-cli' : caseId, lang);
       const calls = writingCalls(fixture, selectedKeys[caseId]);
       const allowed = caseId === 'escalate-repeated-failure'
-        ? ['takt_enqueue_goal_task', 'takt_notify_goal', 'takt_ask_goal_question', 'takt_record_goal_decision']
+        ? ['takt_enqueue_goal_task', 'takt_notify_goal', 'takt_ask_goal_question', 'takt_record_goal_work_log']
         : caseId === 'escalate-not-on-first-failure'
-          ? ['takt_enqueue_goal_task', 'takt_record_goal_decision', 'takt_notify_goal']
+          ? ['takt_enqueue_goal_task', 'takt_requeue_goal_task', 'takt_retry_goal_task', 'takt_record_goal_work_log', 'takt_notify_goal']
           : caseId.startsWith('summary-') ? [] : [
-        'takt_merge_goal_task', 'takt_record_goal_decision', 'takt_notify_goal',
+        'takt_merge_goal_task', 'takt_record_goal_work_log', 'takt_notify_goal',
         caseId.startsWith('no-check-') || caseId === 'integration-already-checked' ? 'takt_complete_goal' : 'takt_enqueue_goal_task',
       ];
       for (const [tool, args] of Object.entries(calls)) {
@@ -210,11 +215,11 @@ for (const lang of ['ja', 'en']) {
       }
     });
     if (!caseId.startsWith('summary-')) {
-      test(`${lang}/${caseId}: permits decision records and notifications`, () => {
+      test(`${lang}/${caseId}: permits work log entries and notifications`, () => {
         const fixture = loadManagerCase(caseId, lang);
         const calls = writingCalls(fixture, selectedKeys[caseId]);
         const output = goodOutput(caseId, lang);
-        output.calls.unshift({ tool: 'takt_record_goal_decision', arguments: calls.takt_record_goal_decision });
+        output.calls.unshift({ tool: 'takt_record_goal_work_log', arguments: calls.takt_record_goal_work_log });
         output.calls.push({ tool: 'takt_notify_goal', arguments: calls.takt_notify_goal });
         assert.equal(score(output, caseId, lang).pass, true);
       });
@@ -253,7 +258,7 @@ for (const lang of ['ja', 'en']) {
     }
     const output = goodOutput('parallel-cli', lang);
     delete output.response.summary;
-    delete output.calls[0].arguments.operationName;
+    delete output.calls[0].arguments.workflow;
     assert.equal(score(output, 'parallel-cli', lang).pass, false);
   });
 }
@@ -301,7 +306,7 @@ test('rejects early consumers, duplicate work and unnecessary serialization', ()
   assert.equal(score(output, 'parallel-cli').pass, false);
   output.calls = output.calls.slice(0, 1);
   assert.equal(score(output, 'parallel-cli').pass, false);
-  output.calls.push({ ...output.calls[0], arguments: { ...output.calls[0].arguments, operationName: 'other-operation' } });
+  output.calls.push({ ...output.calls[0], arguments: { ...output.calls[0].arguments } });
   assert.equal(score(output, 'parallel-cli').pass, false);
 });
 for (const lang of ['ja', 'en']) {
@@ -398,7 +403,7 @@ test('rejects extra check tasks for unrelated results and stale completion SHAs'
     assert.equal(score(output, caseId).pass, false);
   }
 });
-test('validates production tool names, arguments, goal identity, workflow and event operation names', () => {
+test('validates production tool names, arguments, goal identity, workflow and required fields', () => {
   for (const mutate of [
     (call) => { call.tool = 'takt_enqueue_task'; },
     (call) => { call.tool = 'toString'; },
@@ -408,20 +413,20 @@ test('validates production tool names, arguments, goal identity, workflow and ev
     (call) => { call.arguments.cwd = '/another/project'; },
     (call) => { call.arguments.goalId = '650e8400-e29b-41d4-a716-446655440099'; },
     (call) => { call.arguments.workflow = 'invented'; },
-    (call) => { delete call.arguments.operationName; },
-    (call) => { call.arguments.operationName = ''; },
-    (call) => { call.arguments.operationName = ' '; },
+    (call) => { delete call.arguments.workflow; },
+    (call) => { call.arguments.workflow = ''; },
+    (call) => { call.arguments.workflow = ' '; },
   ]) {
     const output = goodOutput('parallel-cli', 'ja');
     mutate(output.calls[0]);
     assert.equal(score(output, 'parallel-cli').pass, false);
   }
 });
-test('validates integration taskName, SHA and operation order without grading retry identity', () => {
+test('validates integration taskName, reviewed SHA and ordering before new submissions', () => {
   const fixture = loadManagerCase('parallel-cli', 'ja');
-  const saved = fixture.goal.operations[0];
+  const task = fixture.tasks[0];
   const retry = { tool: 'takt_merge_goal_task', arguments: {
-    ...saved.arguments, cwd: fixture.cwd, goalId: fixture.goal.id, operationName: saved.operationName,
+    cwd: fixture.cwd, goalId: fixture.goal.id, taskName: task.name, expectedSha: task.completion.sha,
   } };
   const output = goodOutput('parallel-cli', 'ja');
   output.calls.unshift(structuredClone(retry));
@@ -432,46 +437,70 @@ test('validates integration taskName, SHA and operation order without grading re
   output.calls[0].arguments.expectedSha = 'b'.repeat(40);
   assert.equal(score(output, 'parallel-cli').pass, false);
   output.calls[0] = structuredClone(retry);
-  output.calls[0].arguments.operationName = 'new-integrate';
-  assert.equal(score(output, 'parallel-cli').pass, true);
-  output.calls[0] = structuredClone(retry);
   output.calls.push(output.calls.shift());
   assert.equal(score(output, 'parallel-cli').pass, false);
 });
 
 for (const lang of ['ja', 'en']) {
-  test(`${lang}: accepts integration of a known task without a matching saved operation`, () => {
+  test(`${lang}: accepts integration of a known task using its reviewed SHA`, () => {
     const fixture = loadManagerCase('integration-check', lang);
     const task = fixture.tasks[0];
-    assert.ok(!fixture.goal.operations.some(({ arguments: args }) => args.taskName === task.name));
     const output = goodOutput('integration-check', lang);
     output.calls.unshift({ tool: 'takt_merge_goal_task', arguments: {
       cwd: fixture.cwd, goalId: fixture.goal.id, taskName: task.name,
-      expectedSha: task.completion.sha, operationName: 'integrate-first',
+      expectedSha: task.completion.sha,
     } });
     assert.equal(score(output, 'integration-check', lang).pass, true);
   });
 
-  test(`${lang}: does not grade duplicate names or collisions with saved operation names`, () => {
-    const output = goodOutput('parallel-cli', lang);
-    output.calls.forEach((call) => { call.arguments.operationName = 'same-name'; });
-    assert.equal(score(output, 'parallel-cli', lang).pass, true);
-    const fixture = loadManagerCase('parallel-cli', lang);
-    output.calls.forEach((call) => { call.arguments.operationName = fixture.goal.operations[0].operationName; });
-    assert.equal(score(output, 'parallel-cli', lang).pass, true);
-  });
 }
 test('summary turns cannot create a goal or submit work before human approval', () => {
   const output = goodOutput('summary-keeps-constraint', 'ja');
   output.calls.push(enqueue(loadManagerCase('parallel-cli', 'ja'), 'users-command'));
   assert.equal(score(output, 'summary-keeps-constraint').pass, false);
 });
+test('validates summaries with explicit constraints and optional branches without registration fields', () => {
+  const caseId = 'summary-keeps-constraint';
+  const output = goodOutput(caseId, 'ja');
+  output.response.summary.constraints = ['Run targeted tests during work.'];
+  output.response.summary.startBranch = 'main';
+  output.response.summary.integrationBranch = 'feat/checkout';
+  assert.equal(score(output, caseId).pass, true);
+  for (const constraints of [undefined, 'Run targeted tests', ['']]) {
+    const invalid = structuredClone(output);
+    invalid.response.summary.constraints = constraints;
+    assert.equal(score(invalid, caseId).pass, false);
+  }
+  const invalid = structuredClone(output);
+  invalid.response.summary.id = '650e8400-e29b-41d4-a716-446655440000';
+  assert.equal(score(invalid, caseId).pass, false);
+});
+test('validates standalone work log summaries and rejects unrelated fields', () => {
+  const fixture = loadManagerCase('parallel-cli', 'ja');
+  const output = goodOutput('parallel-cli', 'ja');
+  const entry = { tool: 'takt_record_goal_work_log', arguments: writingCalls(fixture, selectedKeys['parallel-cli']).takt_record_goal_work_log };
+  output.calls.unshift(entry);
+  assert.equal(score(output, 'parallel-cli').pass, true);
+  for (const mutate of [
+    (args) => { args.summary = ''; },
+    (args) => { args.summary = ' '; },
+    (args) => { delete args.summary; },
+    (args) => { args.taskName = fixture.tasks[0].name; },
+    (args) => { args.acceptanceCriteriaVersion = fixture.goal.acceptanceCriteriaVersion; },
+    (args) => { args.cwd = '/another/project'; },
+    (args) => { args.goalId = '650e8400-e29b-41d4-a716-446655440099'; },
+  ]) {
+    const invalid = structuredClone(output);
+    mutate(invalid.calls[0].arguments);
+    assert.equal(score(invalid, 'parallel-cli').pass, false);
+  }
+});
 test('instruction and summary meaning is left to llm-rubric rather than keyword assertions', () => {
   const output = goodOutput('constraint-once', 'ja');
   output.calls.forEach((call) => { call.arguments.task = 'Run the full gate at the end of this task.'; });
   assert.equal(score(output, 'constraint-once').pass, true);
   const summary = goodOutput('summary-no-invented-constraint', 'ja');
-  summary.response.summary.acceptanceCriteria.unshift('作業の制約: 新しい制限');
+  summary.response.summary.constraints.push('作業の制約: 新しい制限');
   assert.equal(score(summary, 'summary-no-invented-constraint').pass, true);
 });
 
@@ -511,9 +540,9 @@ for (const lang of ['ja', 'en']) {
         : lang === 'ja' ? '利用者 API にカーソルページングを追加する。' : 'Add cursor pagination to the users API.';
       call.arguments.task = `${description}\n${finalCheck}`;
     });
-    const decision = writingCalls(fixture, selectedKeys['constraint-once']).takt_record_goal_decision;
-    decision.reason = finalCheck;
-    output.calls.unshift({ tool: 'takt_record_goal_decision', arguments: decision });
+    const workLog = writingCalls(fixture, selectedKeys['constraint-once']).takt_record_goal_work_log;
+    workLog.summary = finalCheck;
+    output.calls.unshift({ tool: 'takt_record_goal_work_log', arguments: workLog });
     assert.equal(output.calls.filter(({ tool }) => tool === 'takt_enqueue_goal_task').length, 2);
     assert.equal(score(output, 'constraint-once', lang).pass, true);
     assertSemanticGrader('constraint-once', lang);
@@ -526,11 +555,11 @@ for (const lang of ['ja', 'en']) {
     const fixture = loadManagerCase(caseId, lang);
     const output = goodOutput(caseId, lang);
     output.calls[0] = { tool: 'takt_ask_goal_question', arguments: {
-      cwd: fixture.cwd, goalId: fixture.goal.id, operationName: 'choose-payment-plan',
+      cwd: fixture.cwd, goalId: fixture.goal.id,
       body: lang === 'ja'
         ? '検証用の鍵を用意して続けるか、受け入れ条件を変更するか選んでください。決済の検証という元の受け入れ条件を維持できるため、鍵を用意して続けることを推奨します。'
         : 'Provide the test key and continue, or change the acceptance criteria? I recommend providing the key and continuing because it preserves the original payment verification acceptance criteria.',
-      dependentWorkKeys: ['payment-check', 'checkout-guide'],
+
     } };
     assert.equal(score(output, caseId, lang).pass, true);
     output.calls[0].arguments.recipient = 'human';
@@ -542,27 +571,6 @@ for (const lang of ['ja', 'en']) {
     assert.equal(score(output, caseId, lang).pass, false);
   });
 
-  test(`${lang}: escalation questions may depend on payment-check with or without checkout-guide`, () => {
-    const caseId = 'escalate-repeated-failure';
-    const fixture = loadManagerCase(caseId, lang);
-    for (const dependentWorkKeys of [['payment-check'], ['payment-check', 'checkout-guide']]) {
-      const output = goodOutput(caseId, lang);
-      output.calls[0] = { tool: 'takt_ask_goal_question', arguments: {
-        cwd: fixture.cwd, goalId: fixture.goal.id, operationName: 'choose-payment-plan', recipient: 'human',
-        body: lang === 'ja'
-          ? '対象を絞って設定の読み込み順と接続先を確認しても鍵不足で再び失敗しました。管理者が鍵を用意して続けるか、受け入れ条件を変更するか選んでください。'
-          : 'The targeted retry checked configuration loading order and endpoint but failed again without a key. Should the administrator provide the key to continue or should we change the acceptance criteria?',
-        options: lang === 'ja' ? ['鍵を用意して続ける', '受け入れ条件を変更する']
-          : ['Provide the key and continue', 'Change the acceptance criteria'],
-        recommendation: lang === 'ja' ? '求められたテスト API の検証を維持するため、鍵を用意して続けることを推奨します。'
-          : 'Provide the key and continue to preserve the requested test API verification.',
-        dependentWorkKeys,
-      } };
-      assert.equal(score(output, caseId, lang).pass, true);
-      output.calls.push(enqueue(fixture, 'checkout-guide'));
-      assert.equal(score(output, caseId, lang).pass, false);
-    }
-  });
 
   test(`${lang}: accepts an independent task and notification conveying a revised retry without a numeric failure count`, () => {
     const output = goodOutput('escalate-repeated-failure', lang);
@@ -586,37 +594,6 @@ for (const lang of ['ja', 'en']) {
     assert.equal(score(output, caseId, lang).pass, false);
   });
 
-  test(`${lang}: escalation questions reject missing or incorrect dependencies before and after independent submission`, () => {
-    const caseId = 'escalate-repeated-failure';
-    const fixture = loadManagerCase(caseId, lang);
-    for (const dependentWorkKeys of [
-      undefined, [], ['checkout-guide'], ['admin-copy'], ['unknown-work'],
-      ['payment-check', 'unknown-work'], ['payment-check', 'payment-check'],
-      ['payment-check', 'checkout-guide', 'admin-copy'],
-    ]) {
-      const output = goodOutput(caseId, lang);
-      output.calls = [{ tool: 'takt_ask_goal_question', arguments: {
-        cwd: fixture.cwd, goalId: fixture.goal.id, operationName: 'choose-payment-plan',
-        body: lang === 'ja'
-          ? '鍵を用意して継続するか、受け入れ条件を変更するか選んでください。決済の検証という元の受け入れ条件を維持できるため、鍵を用意して継続することを推奨します。'
-          : 'Choose whether to provide the key and continue or change the acceptance criteria. I recommend providing the key and continuing because it preserves the original payment verification acceptance criteria.',
-        ...(dependentWorkKeys === undefined ? {} : { dependentWorkKeys }),
-      } }];
-      const questionOnly = score(output, caseId, lang);
-      assert.equal(questionOnly.pass, false);
-      assert.equal(questionOnly.reason, 'Escalation questions must include payment-check and may include checkout-guide only');
-      const independent = enqueue(fixture, 'admin-copy');
-      output.calls.push(independent);
-      const subsequent = score(output, caseId, lang);
-      assert.equal(subsequent.pass, false);
-      assert.equal(subsequent.reason, dependentWorkKeys?.includes('admin-copy')
-        ? 'Work is waiting for an unanswered question' : questionOnly.reason);
-      output.calls.unshift(output.calls.pop());
-      const preceding = score(output, caseId, lang);
-      assert.equal(preceding.pass, false);
-      assert.equal(preceding.reason, questionOnly.reason);
-    }
-  });
 
   test(`${lang}: repeated failure stops affected work and submits independent work with a human notification or question`, () => {
     const caseId = 'escalate-repeated-failure';
@@ -626,21 +603,21 @@ for (const lang of ['ja', 'en']) {
     output.calls[0].arguments.kind = 'custom';
     assert.equal(score(output, caseId, lang).pass, false);
     output.calls[0] = { tool: 'takt_ask_goal_question', arguments: {
-      cwd: fixture.cwd, goalId: fixture.goal.id, operationName: 'payment-key-question',
+      cwd: fixture.cwd, goalId: fixture.goal.id,
       body: lang === 'ja'
         ? '検証用の鍵がなく、設定の読み込み順と接続先を確認してやり直しても2回失敗しました。管理者による鍵の発行と設定が必要です。鍵を用意して継続するか、受け入れ条件を変更するか選んでください。決済の検証という元の受け入れ条件を維持できるため、鍵を用意して継続することを推奨します。'
         : 'The test key is missing and both attempts failed after checking configuration loading order and endpoint. An administrator must issue and configure the key. Choose whether to provide the key and continue or change the acceptance criteria. I recommend providing the key and continuing because it preserves the original payment verification acceptance criteria.',
-      dependentWorkKeys: ['checkout-guide', 'payment-check'],
+
     } };
     assert.equal(score(output, caseId, lang).pass, true);
     for (const key of ['payment-check', 'checkout-guide']) {
       output.calls.push(enqueue(fixture, key));
       const blocked = score(output, caseId, lang);
       assert.equal(blocked.pass, false);
-      assert.equal(blocked.reason, 'Work is waiting for an unanswered question');
+      assert.equal(blocked.reason, 'Unexpected or repeated work key');
       output.calls.pop();
     }
-    delete output.calls[0].arguments.operationName;
+    delete output.calls[0].arguments.body;
     assert.equal(score(output, caseId, lang).pass, false);
   });
   test(`${lang}: first recoverable failure rejects blocked notification, questions and dependent work`, () => {
@@ -650,7 +627,7 @@ for (const lang of ['ja', 'en']) {
     for (const tool of ['takt_notify_goal', 'takt_ask_goal_question']) {
       const output = goodOutput(caseId, lang);
       output.calls.push({ tool, arguments: {
-        cwd: fixture.cwd, goalId: fixture.goal.id, operationName: 'stop-for-human',
+        cwd: fixture.cwd, goalId: fixture.goal.id,
         body: 'Human action needed.', ...(tool === 'takt_notify_goal' ? { kind: 'blocked' } : {}),
       } });
       assert.equal(score(output, caseId, lang).pass, false);
@@ -663,8 +640,31 @@ for (const lang of ['ja', 'en']) {
     const blocked = goodOutput('escalate-repeated-failure', lang);
     blocked.calls[0].arguments.body = 'More help needed.';
     assert.equal(score(blocked, 'escalate-repeated-failure', lang).pass, true);
-    const recovery = goodOutput('escalate-not-on-first-failure', lang);
-    recovery.calls[0].arguments.task = 'Repeat the previous instructions.';
-    assert.equal(score(recovery, 'escalate-not-on-first-failure', lang).pass, true);
+    const retry = goodOutput('escalate-not-on-first-failure', lang);
+    retry.calls[0].arguments.task = 'Repeat the previous instructions.';
+    assert.equal(score(retry, 'escalate-not-on-first-failure', lang).pass, true);
+  });
+}
+
+for (const lang of ['ja', 'en']) {
+  test(`${lang}: first recoverable failure can use TAKT retry or requeue on the existing stopped task`, () => {
+    const caseId = 'escalate-not-on-first-failure';
+    const fixture = loadManagerCase(caseId, lang);
+    const task = fixture.tasks.find(({ name }) => name === 'csv-import');
+    for (const tool of ['takt_retry_goal_task', 'takt_requeue_goal_task']) {
+      const output = goodOutput(caseId, lang);
+      output.calls = [{ tool, arguments: {
+        cwd: fixture.cwd, goalId: fixture.goal.id, taskName: task.name,
+        ...(tool === 'takt_retry_goal_task'
+          ? { task: 'Read docs/sales-csv.md and data/sales_sample.csv; use sale_date, amount and channel, then verify loading and validation.' }
+          : { retryNote: 'Read docs/sales-csv.md before continuing.' }),
+      } }];
+      assert.equal(score(output, caseId, lang).pass, true);
+      output.calls[0].arguments.taskName = 'foundation';
+      assert.equal(score(output, caseId, lang).pass, false);
+      output.calls[0].arguments.taskName = task.name;
+      output.calls.push(enqueue(fixture, 'csv-import'));
+      assert.equal(score(output, caseId, lang).pass, false);
+    }
   });
 }

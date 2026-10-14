@@ -5,14 +5,14 @@ ja:
   concurrency: 3
   defaultWorkflow: default
   mainMerge: auto
-  goal: &a4
+  goal: &a3
     id: 650e8400-e29b-41d4-a716-446655440000
     objective: 既存サービスの操作説明と請求データの表記を更新する
     outOfScope:
       - 本番への公開と外部サービスの追加
-    acceptanceCriteria: &a3
+    acceptanceCriteria: &a2
       - 検索ヘルプとエクスポートヘルプが現行操作を説明し、請求データの通貨コードを正規化する
-    creationOrigin: human
+    constraints: []
     mode: local
     status: created
     executionStatus: active
@@ -20,64 +20,29 @@ ja:
     branch: takt/goal/catalog
     startBranch: main
     integrationBranch: main
-    confirmation:
-      confirmedAt: 2026-10-10T23:00:00Z
-      confirmedBy: human
-    workUnits:
-      - taskName: foundation
-        workKey: foundation
-        purpose: 保存と読み込みの土台を用意する
-        integration:
-          status: merged
-          sourceBranch: takt/task/foundation
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          goalSha: cccccccccccccccccccccccccccccccccccccccc
-          recordedAt: 2026-10-11T00:10:00Z
-    events:
-      - &a1
-        id: completion:foundation:run-foundation
-        kind: completion
-        taskName: foundation
-        runSlug: run-foundation
-        result: &a2
-          success: true
-          interrupted: false
-          branch: takt/task/foundation
-          sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          workflowResult: completed
-        processed: false
-    decisions:
-      - id: decision-plan
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-446655440010
         recordedAt: 2026-10-10T23:01:00Z
-        eventId: null
-        actor: manager
-        operation: plan
-        reason: |-
+        summary: |-
           search-doc: 検索画面の既存操作をdocs/search.mdに説明する
           export-doc: エクスポート画面の既存操作をdocs/export.mdに説明する
           billing-migration: 請求データの通貨表記だけを正規化する移行を追加する
-        evidenceRefs:
-          - project-request.md
-        acceptanceCriteriaVersion: 1
-    questions: []
-    operations:
-      - id: bd4c510d0595b9ad58dcd13f50993a07798c9ad6356d2b78b016af2e641bc824
-        eventId: completion:foundation:run-foundation
-        operationName: integrate-foundation
-        tool: integrate
-        arguments:
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          taskName: foundation
-        status: completed
+      - id: 650e8400-e29b-41d4-a716-000000000032
         recordedAt: 2026-10-11T00:10:00Z
-        result:
-          status: merged
-          sha: "cccccccccccccccccccccccccccccccccccccccc"
-          sourceBranch: "takt/task/foundation"
-          expectedSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-          targetBranch: "takt/goal/catalog"
-          recorded: true
-  event: *a1
+        summary: "foundation を takt/goal/catalog に取り込みました。成果 SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa、取り込み後 SHA: cccccccccccccccccccccccccccccccccccccccc。保存と読み込みの土台を用意する"
+    questions: []
+  event:
+    kind: completion
+    taskName: foundation
+    runSlug: run-foundation
+    result: &a1
+      success: true
+      interrupted: false
+      branch: takt/task/foundation
+      sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      workflowResult: completed
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-11T00:20:00Z
   tasks:
     - name: foundation
       goalId: 650e8400-e29b-41d4-a716-446655440000
@@ -87,14 +52,17 @@ ja:
       startedAt: 2026-10-11T00:00:00Z
       filePath: /workspace/project/.takt/tasks.yaml
       runSlug: run-foundation
-      completion: *a2
+      completion: *a1
+      goalWorkKey: foundation
+      goalPurpose: 保存と読み込みの土台を用意する
   readResults:
     - tool: Read
       arguments:
         file_path: /workspace/project/project-request.md
       result:
         objective: 既存サービスの操作説明と請求データの表記を更新する
-        acceptanceCriteria: *a3
+        acceptanceCriteria: *a2
+        constraints: []
         work:
           - workKey: search-doc
             purpose: 検索画面の既存操作をdocs/search.mdに説明する
@@ -124,7 +92,7 @@ ja:
         cwd: /workspace/project
         goalId: 650e8400-e29b-41d4-a716-446655440000
       result:
-        goal: *a4
+        goal: *a3
     - tool: takt_get_goal_relation
       arguments:
         cwd: /workspace/project
@@ -150,14 +118,14 @@ en:
   concurrency: 3
   defaultWorkflow: default
   mainMerge: auto
-  goal: &a8
+  goal: &a6
     id: 650e8400-e29b-41d4-a716-446655440000
     objective: Update existing service instructions and billing data notation
     outOfScope:
       - Production publishing and adding external services
-    acceptanceCriteria: &a7
+    acceptanceCriteria: &a5
       - Search and export help describe current operations; normalize currency codes in billing data
-    creationOrigin: human
+    constraints: []
     mode: local
     status: created
     executionStatus: active
@@ -165,64 +133,29 @@ en:
     branch: takt/goal/catalog
     startBranch: main
     integrationBranch: main
-    confirmation:
-      confirmedAt: 2026-10-10T23:00:00Z
-      confirmedBy: human
-    workUnits:
-      - taskName: foundation
-        workKey: foundation
-        purpose: Provide the storage and loading foundation
-        integration:
-          status: merged
-          sourceBranch: takt/task/foundation
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          goalSha: cccccccccccccccccccccccccccccccccccccccc
-          recordedAt: 2026-10-11T00:10:00Z
-    events:
-      - &a5
-        id: completion:foundation:run-foundation
-        kind: completion
-        taskName: foundation
-        runSlug: run-foundation
-        result: &a6
-          success: true
-          interrupted: false
-          branch: takt/task/foundation
-          sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          workflowResult: completed
-        processed: false
-    decisions:
-      - id: decision-plan
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-446655440010
         recordedAt: 2026-10-10T23:01:00Z
-        eventId: null
-        actor: manager
-        operation: plan
-        reason: |-
+        summary: |-
           search-doc: Document existing search UI operations in docs/search.md
           export-doc: Document existing export UI operations in docs/export.md
           billing-migration: Add a migration normalizing only currency notation in billing data
-        evidenceRefs:
-          - project-request.md
-        acceptanceCriteriaVersion: 1
-    questions: []
-    operations:
-      - id: bd4c510d0595b9ad58dcd13f50993a07798c9ad6356d2b78b016af2e641bc824
-        eventId: completion:foundation:run-foundation
-        operationName: integrate-foundation
-        tool: integrate
-        arguments:
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          taskName: foundation
-        status: completed
+      - id: 650e8400-e29b-41d4-a716-000000000032
         recordedAt: 2026-10-11T00:10:00Z
-        result:
-          status: merged
-          sha: "cccccccccccccccccccccccccccccccccccccccc"
-          sourceBranch: "takt/task/foundation"
-          expectedSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-          targetBranch: "takt/goal/catalog"
-          recorded: true
-  event: *a5
+        summary: "Integrated foundation into takt/goal/catalog. Result SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; goal SHA after integration: cccccccccccccccccccccccccccccccccccccccc. Provide the storage and loading foundation"
+    questions: []
+  event:
+    kind: completion
+    taskName: foundation
+    runSlug: run-foundation
+    result: &a4
+      success: true
+      interrupted: false
+      branch: takt/task/foundation
+      sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      workflowResult: completed
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-11T00:20:00Z
   tasks:
     - name: foundation
       goalId: 650e8400-e29b-41d4-a716-446655440000
@@ -232,14 +165,17 @@ en:
       startedAt: 2026-10-11T00:00:00Z
       filePath: /workspace/project/.takt/tasks.yaml
       runSlug: run-foundation
-      completion: *a6
+      completion: *a4
+      goalWorkKey: foundation
+      goalPurpose: Provide the storage and loading foundation
   readResults:
     - tool: Read
       arguments:
         file_path: /workspace/project/project-request.md
       result:
         objective: Update existing service instructions and billing data notation
-        acceptanceCriteria: *a7
+        acceptanceCriteria: *a5
+        constraints: []
         work:
           - workKey: search-doc
             purpose: Document existing search UI operations in docs/search.md
@@ -250,8 +186,7 @@ en:
     - tool: Read
       arguments:
         file_path: /workspace/project/repository-layout.md
-      result: |-
-        docs/search.md and docs/export.md describe separate existing UIs without links to each other or edits to shared contents. UI specifications are settled. migrations/billing/normalize-currency.sql affects only billing_records; search/export examples remain fixed samples. docs/billing-currency.md settles the rule: trim surrounding whitespace in currency_code and uppercase ASCII letters; do not map aliases or old codes; retain NULL and empty strings. Amounts and other columns are unchanged.
+      result: "docs/search.md and docs/export.md describe separate existing UIs without links to each other or edits to shared contents. UI specifications are settled. migrations/billing/normalize-currency.sql affects only billing_records; search/export examples remain fixed samples. docs/billing-currency.md settles the rule: trim surrounding whitespace in currency_code and uppercase ASCII letters; do not map aliases or old codes; retain NULL and empty strings. Amounts and other columns are unchanged."
     - tool: takt_get_run
       arguments:
         cwd: /workspace/project
@@ -270,7 +205,7 @@ en:
         cwd: /workspace/project
         goalId: 650e8400-e29b-41d4-a716-446655440000
       result:
-        goal: *a8
+        goal: *a6
     - tool: takt_get_goal_relation
       arguments:
         cwd: /workspace/project

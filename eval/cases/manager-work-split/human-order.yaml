@@ -10,10 +10,10 @@ ja:
     objective: 2つの環境の保存データを移行する
     outOfScope:
       - 本番への公開と外部サービスの追加
-    acceptanceCriteria: &a3
-      - "作業の制約: Aの結果を見てからBを行う。"
+    acceptanceCriteria: &a2
       - AとBのデータを新しい形式へ変換する
-    creationOrigin: human
+    constraints: &a3
+      - "作業の制約: Aの結果を見てからBを行う。"
     mode: local
     status: created
     executionStatus: active
@@ -21,63 +21,28 @@ ja:
     branch: takt/goal/catalog
     startBranch: main
     integrationBranch: main
-    confirmation:
-      confirmedAt: 2026-10-10T23:00:00Z
-      confirmedBy: human
-    workUnits:
-      - taskName: foundation
-        workKey: foundation
-        purpose: 保存と読み込みの土台を用意する
-        integration:
-          status: merged
-          sourceBranch: takt/task/foundation
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          goalSha: cccccccccccccccccccccccccccccccccccccccc
-          recordedAt: 2026-10-11T00:10:00Z
-    events:
-      - &a1
-        id: completion:foundation:run-foundation
-        kind: completion
-        taskName: foundation
-        runSlug: run-foundation
-        result: &a2
-          success: true
-          interrupted: false
-          branch: takt/task/foundation
-          sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          workflowResult: completed
-        processed: false
-    decisions:
-      - id: decision-plan
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-446655440010
         recordedAt: 2026-10-10T23:01:00Z
-        eventId: null
-        actor: manager
-        operation: plan
-        reason: |-
+        summary: |-
           migration-a: A環境の台帳を新形式へ変換する
           migration-b: B環境の台帳を新形式へ変換する
-        evidenceRefs:
-          - project-request.md
-        acceptanceCriteriaVersion: 1
-    questions: []
-    operations:
-      - id: bd4c510d0595b9ad58dcd13f50993a07798c9ad6356d2b78b016af2e641bc824
-        eventId: completion:foundation:run-foundation
-        operationName: integrate-foundation
-        tool: integrate
-        arguments:
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          taskName: foundation
-        status: completed
+      - id: 650e8400-e29b-41d4-a716-000000000032
         recordedAt: 2026-10-11T00:10:00Z
-        result:
-          status: merged
-          sha: "cccccccccccccccccccccccccccccccccccccccc"
-          sourceBranch: "takt/task/foundation"
-          expectedSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-          targetBranch: "takt/goal/catalog"
-          recorded: true
-  event: *a1
+        summary: "foundation を takt/goal/catalog に取り込みました。成果 SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa、取り込み後 SHA: cccccccccccccccccccccccccccccccccccccccc。保存と読み込みの土台を用意する"
+    questions: []
+  event:
+    kind: completion
+    taskName: foundation
+    runSlug: run-foundation
+    result: &a1
+      success: true
+      interrupted: false
+      branch: takt/task/foundation
+      sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      workflowResult: completed
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-11T00:20:00Z
   tasks:
     - name: foundation
       goalId: 650e8400-e29b-41d4-a716-446655440000
@@ -87,14 +52,17 @@ ja:
       startedAt: 2026-10-11T00:00:00Z
       filePath: /workspace/project/.takt/tasks.yaml
       runSlug: run-foundation
-      completion: *a2
+      completion: *a1
+      goalWorkKey: foundation
+      goalPurpose: 保存と読み込みの土台を用意する
   readResults:
     - tool: Read
       arguments:
         file_path: /workspace/project/project-request.md
       result:
         objective: 2つの環境の保存データを移行する
-        acceptanceCriteria: *a3
+        acceptanceCriteria: *a2
+        constraints: *a3
         work:
           - workKey: migration-a
             purpose: A環境の台帳を新形式へ変換する
@@ -153,10 +121,10 @@ en:
     objective: Migrate saved data in two environments
     outOfScope:
       - Production publishing and adding external services
-    acceptanceCriteria: &a7
-      - "Work constraint: Review the result of A before doing B."
+    acceptanceCriteria: &a6
       - Convert A and B data to the new format
-    creationOrigin: human
+    constraints: &a7
+      - "Work constraint: Review the result of A before doing B."
     mode: local
     status: created
     executionStatus: active
@@ -164,63 +132,28 @@ en:
     branch: takt/goal/catalog
     startBranch: main
     integrationBranch: main
-    confirmation:
-      confirmedAt: 2026-10-10T23:00:00Z
-      confirmedBy: human
-    workUnits:
-      - taskName: foundation
-        workKey: foundation
-        purpose: Provide the storage and loading foundation
-        integration:
-          status: merged
-          sourceBranch: takt/task/foundation
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          goalSha: cccccccccccccccccccccccccccccccccccccccc
-          recordedAt: 2026-10-11T00:10:00Z
-    events:
-      - &a5
-        id: completion:foundation:run-foundation
-        kind: completion
-        taskName: foundation
-        runSlug: run-foundation
-        result: &a6
-          success: true
-          interrupted: false
-          branch: takt/task/foundation
-          sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          workflowResult: completed
-        processed: false
-    decisions:
-      - id: decision-plan
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-446655440010
         recordedAt: 2026-10-10T23:01:00Z
-        eventId: null
-        actor: manager
-        operation: plan
-        reason: |-
+        summary: |-
           migration-a: Convert environment A ledger to the new format
           migration-b: Convert environment B ledger to the new format
-        evidenceRefs:
-          - project-request.md
-        acceptanceCriteriaVersion: 1
-    questions: []
-    operations:
-      - id: bd4c510d0595b9ad58dcd13f50993a07798c9ad6356d2b78b016af2e641bc824
-        eventId: completion:foundation:run-foundation
-        operationName: integrate-foundation
-        tool: integrate
-        arguments:
-          expectedSha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-          taskName: foundation
-        status: completed
+      - id: 650e8400-e29b-41d4-a716-000000000032
         recordedAt: 2026-10-11T00:10:00Z
-        result:
-          status: merged
-          sha: "cccccccccccccccccccccccccccccccccccccccc"
-          sourceBranch: "takt/task/foundation"
-          expectedSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-          targetBranch: "takt/goal/catalog"
-          recorded: true
-  event: *a5
+        summary: "Integrated foundation into takt/goal/catalog. Result SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; goal SHA after integration: cccccccccccccccccccccccccccccccccccccccc. Provide the storage and loading foundation"
+    questions: []
+  event:
+    kind: completion
+    taskName: foundation
+    runSlug: run-foundation
+    result: &a5
+      success: true
+      interrupted: false
+      branch: takt/task/foundation
+      sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      workflowResult: completed
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-11T00:20:00Z
   tasks:
     - name: foundation
       goalId: 650e8400-e29b-41d4-a716-446655440000
@@ -230,14 +163,17 @@ en:
       startedAt: 2026-10-11T00:00:00Z
       filePath: /workspace/project/.takt/tasks.yaml
       runSlug: run-foundation
-      completion: *a6
+      completion: *a5
+      goalWorkKey: foundation
+      goalPurpose: Provide the storage and loading foundation
   readResults:
     - tool: Read
       arguments:
         file_path: /workspace/project/project-request.md
       result:
         objective: Migrate saved data in two environments
-        acceptanceCriteria: *a7
+        acceptanceCriteria: *a6
+        constraints: *a7
         work:
           - workKey: migration-a
             purpose: Convert environment A ledger to the new format

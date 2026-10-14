@@ -1,7 +1,6 @@
-import { safeExternalErrorMessage } from '../../shared/utils/safeExternalErrorMessage.js';
+import { resolveTaskOrderContent } from '../tasks/orderRevision.js';
+import { appendGoalWorkLog } from '../../infra/goals/workLog.js';
 import { GoalStore } from '../../infra/goals/store.js';
-import { reconcileGoalTasks } from '../../infra/goals/reconcile.js';
-import { assertGoalWorkReady } from '../../infra/goals/questions.js';
 import { ensureManagerRun } from '../manager/autoRun.js';
 import { enqueueTask } from '../../infra/task/enqueueService.js';
 import { saveEnqueuedTaskFile } from '../../infra/task/enqueuedTaskFile.js';
@@ -11,51 +10,38 @@ import { assertCwdAllowedByMcpRoot, errorResult, jsonResult, type McpOperationDe
 import type { EnqueueGoalTaskInput, ListGoalsInput } from './schemas.js';
 import { TaskRunner } from '../../infra/task/runner.js';
 import { join } from 'node:path';
-import { beginGoalOperation, finishGoalOperation, validateGoalOperation } from '../../infra/goals/operations.js';
 import { goalWrite } from './goalWrite.js';
 
 export async function enqueueTaktGoalTask(input: EnqueueGoalTaskInput, deps: McpOperationDependencies, signal: AbortSignal) {
   let enqueued = false;
   try {
-    return await goalWrite(input, deps, signal, async (_policy, _mainMerge, operation) => {
+    return await goalWrite(input, deps, signal, async () => {
       const store = new GoalStore(input.cwd);
-      const queued = operation === undefined ? undefined : new TaskRunner(input.cwd).listTaskStateItems()
-        .find((task) => task.goalId === input.goalId && task.goalOperationId === operation.id);
-      if (operation === undefined) await reconcileGoalTasks(input.cwd, input.goalId);
       const goal = await store.get(input.goalId);
-      if (queued === undefined) {
-        await validateGoalOperation(store, goal.id, operation, signal, async () => {
-          if (goal.status !== 'created') throw new Error('Goal cannot accept work');
-          assertGoalWorkReady(goal, input.workKey);
-          validateGoalWorkflow(input.workflow, input.cwd);
-          signal.throwIfAborted();
-        });
-        if (operation !== undefined) await beginGoalOperation(store, goal.id, operation);
-      }
-      const created = queued === undefined ? await enqueueTask({
+      const runner = new TaskRunner(input.cwd);
+      const allTasks = input.workKey === undefined ? runner.listAllTaskItems() : [];
+      const existing = runner.listTaskStateItems().find((task) => {
+        if (task.goalId !== goal.id) return false;
+        if (input.workKey !== undefined) return task.goalWorkKey === input.workKey;
+        if (task.goalPurpose !== input.purpose || task.workflow !== input.workflow) return false;
+        const saved = allTasks.find((item) => item.name === task.name);
+        return saved !== undefined && resolveTaskOrderContent(input.cwd, saved.taskDir, saved.content) === input.task.trim();
+      });
+      if (existing !== undefined) return { taskName: existing.name, tasksFile: join(input.cwd, '.takt', 'tasks.yaml'), workflow: existing.workflow };
+      if (goal.status !== 'created') throw new Error('Goal cannot accept work');
+      validateGoalWorkflow(input.workflow, input.cwd);
+      signal.throwIfAborted();
+      const created = await enqueueTask({
         cwd: input.cwd, task: input.task, workflow: input.workflow,
         goalId: goal.id, goalPurpose: input.purpose,
-        ...(operation === undefined ? {} : { goalOperationId: operation.id }),
         ...(input.workKey === undefined ? {} : { goalWorkKey: input.workKey }),
         worktree: true, autoPr: false, shouldPublishBranchToOrigin: false,
         taskContext: { baseBranch: goal.branch }, abortSignal: signal,
-      }, deps.saveTaskFile ?? saveEnqueuedTaskFile) : { taskName: queued.name, tasksFile: join(input.cwd, '.takt', 'tasks.yaml'), workflow: input.workflow };
+      }, deps.saveTaskFile ?? saveEnqueuedTaskFile);
       enqueued = true;
-      try {
-        await store.update(goal.id, (current) => finishGoalOperation({
-          ...current, workUnits: [...(current.workUnits ?? []), {
-            taskName: created.taskName, purpose: input.purpose,
-            ...(input.workKey === undefined ? {} : { workKey: input.workKey }),
-          }].filter((unit, index, units) => units.findIndex((saved) => saved.taskName === unit.taskName) === index),
-        }, operation, created));
-      } catch (error) {
-        // The queue owns the saved task; reconciliation can restore its work unit.
-        if (operation !== undefined) throw error;
-        return {
-          ...created, taskEnqueued: true, workUnitRecorded: false,
-          workUnitRecordError: safeExternalErrorMessage(error),
-        };
-      }
+      await store.update(goal.id, (current) => appendGoalWorkLog(current, {
+        summary: `Submitted ${created.taskName}: ${input.purpose}`,
+      }));
       return created;
     }, 'Goal task enqueue failed', 'enqueue');
   } finally { if (enqueued) await ensureManagerRun(input.cwd); }

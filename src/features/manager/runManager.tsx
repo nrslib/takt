@@ -1,25 +1,46 @@
-import { realpathSync } from 'node:fs';
+import { getGlobalConfigDir } from '../../infra/config/paths.js';
+import { resolveConfigValue } from '../../infra/config/index.js';
+import { createWorkspaceManagerContext, resolveManagerStartup } from './startupResolution.js';
+import { selectOption } from '../../shared/prompt/index.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
 import { mountInk } from '../tui/inkMount.js';
+import { toSingleLineText } from '../tui/displayText.js';
 import { createManagerConversationPlan } from './conversationPlan.js';
 import { createManagerConversationSession, getManagerOutputSchema } from './conversationSession.js';
 import type { ManagerConversationSession } from './conversationSession.js';
-import { createGoalConfirmation } from './goalConfirmation.js';
 import { connectManagerMcp } from './managerMcp.js';
 import { ManagerView } from './ManagerView.js';
-import { recoverManagerEvents } from './completionTurn.js';
 import { ensureManagerRun } from './autoRun.js';
-import { getErrorMessage } from '../../shared/utils/error.js';
-import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
+import { notifyManagerTurnFailure } from './turnFailureNotification.js';
 
 export async function runManager(input: { cwd: string; agentOverrides?: AssistantCliOverrides }): Promise<void> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     throw new Error('takt manager requires an interactive terminal');
   }
-  const cwd = realpathSync(input.cwd);
+  const globalConfigDirectory = getGlobalConfigDir();
+  const resolution = await resolveManagerStartup(input.cwd, globalConfigDirectory);
+  let context;
+  if (resolution.kind === 'selection') {
+    const lang = resolveConfigValue(input.cwd, 'language');
+    if (resolution.workspaces.length === 0) {
+      process.stdout.write(lang === 'ja' ? 'workspace がありません。Git リポジトリで takt manager を起動し、担当の追加を依頼してください。\n'
+        : 'No workspaces. Start takt manager in a Git repository and ask it to add another repository.\n');
+      return;
+    }
+    const workspaceId = await selectOption(
+      lang === 'ja' ? '担当する workspace を選んでください' : 'Select a workspace',
+      resolution.workspaces.map((workspace) => ({
+        value: workspace.id,
+        label: `${toSingleLineText(workspace.name)} (${workspace.repositoryDirectories.length})`,
+      })),
+    );
+    if (workspaceId === null) return;
+    const workspace = resolution.workspaces.find((workspace) => workspace.id === workspaceId)!;
+    context = createWorkspaceManagerContext(workspace, globalConfigDirectory);
+  } else context = resolution.context;
+  const { cwd, assignment } = context;
   const plan = createManagerConversationPlan(cwd, input.agentOverrides ?? {});
-  const confirmation = createGoalConfirmation(cwd);
-  const mcp = await connectManagerMcp(cwd, confirmation.publicKey);
+  const mcp = await connectManagerMcp(cwd, assignment);
   let session: ManagerConversationSession | undefined;
   let startupTask: Promise<readonly string[]> | undefined;
   try {
@@ -32,23 +53,17 @@ export async function runManager(input: { cwd: string; agentOverrides?: Assistan
     });
     session = createManagerConversationSession({
       cwd, plan: { ...plan, ctx: { ...plan.ctx, mcpServers: mcp.servers } },
-      confirmation, mcpClient: mcp.client,
-      agentOverrides: input.agentOverrides,
+      agentOverrides: input.agentOverrides, assignment,
     });
     const viewSession = session;
     await mountInk<void>(({ settle, fail }) => (
-      <ManagerView cwd={cwd} lang={plan.ctx.lang} session={viewSession}
+      <ManagerView cwd={cwd} assignment={assignment} lang={plan.ctx.lang} session={viewSession}
         initialDiagnostics={[]} onExit={() => settle()} startup={{
           run: (signal) => {
             startupTask = (async () => {
               const diagnostics: string[] = [];
-              try {
-                await recoverManagerEvents(cwd, {}, signal);
-              } catch (error) {
-                diagnostics.push(sanitizeSensitiveText(getErrorMessage(error)));
-              }
               if (signal.aborted) return [];
-              await ensureManagerRun(cwd);
+              for (const directory of assignment.repositoryDirectories) await ensureManagerRun(directory);
               return diagnostics;
             })();
             return startupTask;
@@ -56,11 +71,19 @@ export async function runManager(input: { cwd: string; agentOverrides?: Assistan
           fail,
         }} />
     ), 'Manager TUI exited before completing its session');
+  } catch (error) {
+    const notification = await notifyManagerTurnFailure(cwd, undefined, error);
+    if (notification !== undefined) process.stderr.write(`${notification}\n`);
+    throw error;
   } finally {
-    // Recovery owns separate MCP resources and must finish teardown before the session closes.
     try { await startupTask; }
     finally {
-      try { await session?.close(); } finally { await mcp.dispose(); }
+      try { await session?.close(); } finally {
+        try { await mcp.dispose(); } finally {
+          const current = await session?.getAssignment();
+          for (const directory of current?.repositoryDirectories ?? assignment.repositoryDirectories) await ensureManagerRun(directory);
+        }
+      }
     }
   }
 }
