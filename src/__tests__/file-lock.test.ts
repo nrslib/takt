@@ -64,6 +64,21 @@ describe('withFileLock', () => {
     expect(content).toBeUndefined();
   });
 
+  it('releases its own lock when closing the write handle changes the mtime', () => {
+    vi.mocked(fs.closeSync).mockImplementationOnce(() => {
+      stat = { ...stat, mtimeMs: stat.mtimeMs + 1_000 } as fs.Stats;
+    });
+
+    withFileLock(lockPath, () => {
+      expect(fs.closeSync).toHaveBeenCalledWith(42);
+      expect(stat.mtimeMs).toBe(101_000);
+      expect(content).toBe(selfContent);
+    });
+
+    expect(content).toBeUndefined();
+    expect(withFileLock(lockPath, () => 'next')).toBe('next');
+  });
+
   it('waits for another holder to release before running the action', () => {
     content = otherContent;
     vi.spyOn(Atomics, 'wait').mockImplementation(() => {

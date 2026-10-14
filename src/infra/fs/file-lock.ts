@@ -70,8 +70,7 @@ function readSnapshot(lockPath: string): LockSnapshot | undefined {
 function unlinkSnapshot(lockPath: string, expected: LockSnapshot): void {
   const current = readSnapshot(lockPath);
   if (current === undefined || current.stat.dev !== expected.stat.dev
-    || current.stat.ino !== expected.stat.ino || current.content !== expected.content
-    || current.stat.mtimeMs !== expected.stat.mtimeMs) return;
+    || current.stat.ino !== expected.stat.ino || current.content !== expected.content) return;
   try {
     unlinkSync(lockPath);
   } catch (error) {
