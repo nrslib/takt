@@ -55,7 +55,13 @@ Retrieval prioritizes authenticated `gh` credentials. Private repository attachm
 
 ### Saving Tasks from Interactive Mode
 
-You can also save tasks from interactive mode. After refining requirements through conversation, use `/save` (or the save action when prompted) to persist the task to `tasks.yaml` instead of executing immediately.
+You can also save tasks from interactive mode. After refining requirements through conversation, use `/go`, review the instruction preview, and select **Save as Task** to persist the task to `tasks.yaml`.
+
+Loading Issue #N provides conversation context. Each `/go` judges whether the latest task is work on that Issue. A related instruction shows `Issue: #N` immediately after its task heading; only that binding supplies N to execution, task saving, or Issue creation. Saved tasks use N in `issue`, generated branches (`takt/N/{slug}`), and PR bodies (`Closes #N`). Unrelated instructions omit the binding. Choose **Continue editing** to correct it. `/issue` replaces the context for subsequent judgments. When **Create Issue** creates M from an instruction bound to N, the saved task remains bound to N and a link to M is commented on N; without a binding, the task uses the newly created M.
+
+CLI, TUI, and MCP registration allows multiple pending or running tasks for the same Issue, PR, or branch without an extra warning or confirmation. Only workflow automatic enqueue rejects active same-target duplicates under the storage lock. Direct `takt add '#N'` still records N without requiring an instruction binding line.
+
+Automatically generated branch names are checked against local refs, remote-tracking refs, all configured remotes (including branches not yet fetched), and ownership metadata for other task clones. Collisions use checked suffixes (`-2`, `-3`, …) and create a new branch from the base. If ownership publication races with another creator, the new clone's branch is renamed and published without replacing existing metadata. A query or storage failure stops creation. Explicit branch names retain the existing fetch and reuse behavior.
 
 In ordinary interactive mode, press Escape at any worktree-settings prompt after selecting **Save as Task** to cancel that save and return to the action menu. The confirmed instruction and its attachments stay in the same conversation. Selecting **Save as Task** again starts the settings questions from the beginning without reusing answers from the cancelled attempt.
 

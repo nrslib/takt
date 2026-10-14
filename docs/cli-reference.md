@@ -81,9 +81,9 @@ Approximate sizes are 250 MB for Claude SDK, 340 MB for Codex, 60 MB for OpenCod
 
 `takt install deepseek-harness` installs the required official SDK. It needs access to the npm registry. If the provider still malfunctions after installation, run `takt install deepseek-harness --force`. See the [configuration guide](./configuration.md#deepseek-harness-deepseek-harness) for credentials and `provider: deepseek-harness`.
 
-## Manager (experimental)
+## Manager (in preparation)
 
-`takt manager` opens a goal conversation TUI in an interactive terminal. manager is experimental: behavior, settings, and saved data formats may change without notice. It automatically queues and runs tasks, which incurs provider API costs. These notices appear above the input box on every startup and in `takt manager --help`, in the configured language (Japanese or English).
+Manager is in preparation and currently unavailable. `takt manager` is not registered, and `takt-mcp` exposes no goal tools in its default, `all`, or `read-only` tool sets.
 
 ## Web UI execution boundary
 
@@ -126,6 +126,8 @@ In the TUI conversation history, submitted user messages are initially printed w
 5. Execute (run workflow, create PR)
 
 `/go` creates instructions for the latest task topic; earlier topics are included only when you explicitly combine them into the same task.
+
+When an Issue is loaded, each `/go` judges whether the latest task belongs to that current Issue. A related instruction shows `Issue: #N` immediately after the task heading in the preview, before the existing action menu. Execute, Save as Task, and Create Issue use N only when that line matches the current Issue. Unrelated tasks follow the flow without a loaded Issue. Choose Continue editing to correct the binding; no extra confirmation is added. After `/issue` replaces the context, the next instruction is judged again without inheriting earlier bindings.
 
 ### Interactive Mode Variants
 

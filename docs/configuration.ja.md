@@ -435,6 +435,8 @@ validation に失敗します。
 
 ## manager の通知設定
 
+manager は準備中で、現在は利用できません。以下は内部実装のために残している設定です。
+
 プロジェクト `.takt/config.yaml` とグローバル `~/.takt/config.yaml` の
 `manager.notifications` で、ゴール通知の種類ごとに有効・無効を指定できます。
 

@@ -10,6 +10,7 @@ This review is a defensive quality and security audit performed, on request, aga
 
 {{include:policies/evidence-based-judgment}}
 {{include:policies/finding-validity}}
+{{include:policies/applicable-inputs}}
 
 ## Principles
 
@@ -27,7 +28,7 @@ This review is a defensive quality and security audit performed, on request, aga
 | Specification completeness | When changing a user-facing contract, verify that implementation, tests, and documentation describe the same lookup order, override rules, special syntax, and failure conditions |
 | Requirement anchoring | Do not reinterpret required task items as optional, out of scope, or different requirements for implementation convenience |
 | Resolution judgment | Judge `resolved` against the original finding acceptance criteria and original task requirements, not merely against the presence of a fix. Exclude criteria that the latest adjudication removed for lack of a basis in the requirements or existing contracts |
-| Defect-class re-scan | Before recognizing a defect as resolved, re-scan paths confirmed to have the same meaning, contract, and root cause against the original acceptance criteria. Exclude criteria that the latest adjudication removed for lack of a basis in the requirements or existing contracts |
+| Defect-class re-scan | Before recognizing a defect as resolved, re-scan paths confirmed to have the same meaning, contract, and root cause against the original acceptance criteria. Re-scan only inputs and paths within the scope of inputs used for counterexamples. Exclude criteria that the latest adjudication removed for lack of a basis in the requirements or existing contracts |
 | Concern handling | Judge only concerns related to the changed contract, and explain why any such concern is not a finding |
 | Behavior evidence | Verify what behavior the tests or logs prove, not merely that they exist |
 | Demonstrability | Distinguish items that environmental factors prevent demonstrating from implementation defects confirmed by current evidence |
@@ -48,6 +49,14 @@ Compare caveats in the plan report (items carried forward as open questions in a
 
 - The existence of values in a public enum or union, or of some convenience methods, does not by itself establish a public contract for a corresponding convenience method for every value. Report missing methods only when the original requirement, existing public specification, or a real usage path requires them
 - APPROVE means zero issues and REJECT means one or more issues. Never pad issues with approvals, summaries, or normal confirmations.
+
+## Premises of Findings
+
+- Base a finding only on inputs, states, and environments within the scope of inputs used for counterexamples. Do not report a problem as an issue when it holds only under premises that cannot be shown to be within that scope. Record it with its basis as a concern not reported as a finding
+- Treat design decisions or policies written in a plan or implementation report (such as "do not do X" or "limit to Y") as acceptance criteria only when they follow from the original requirements, an existing contract, or an applicable policy. Do not base a finding solely on a departure from such a design decision
+- Mark an existing finding as `persists` in either of two cases: it is still unresolved under the conditions of the previous finding (target, input, premise, and expected result), or, although those conditions are resolved, a violation with the same cause, violated observable condition, and acceptance criteria remains under a different value, retrieval method, or premise that you can show is within that scope. In the second case, add that value or condition and its basis for applicability to the same `finding_id`. When the cause, violated observable condition, or acceptance criteria differ, report it as a separate finding under the finding_id rules. Do not use conditions that cannot be shown to be within that scope as a reason to continue the finding, and mark the previous finding `resolved` when its conditions are satisfied
+- Check the basis for applicability before carrying forward conditions included in a previous adjudication or acceptance criteria
+- Do not exclude applicable inputs or states because they are infrequent. Continue to report findings for inputs defined by the requirements or an existing contract, attacks using content that enters from outside a trust boundary, and failures that occurred in actual use. A security finding must also meet the security-specific decision criteria in addition to being within that scope
 
 ## Items That Cannot Be Demonstrated Due to Environmental Factors
 
@@ -192,7 +201,7 @@ Do not mix different problems under the same ID.
 
 - A `finding_id` must refer to one and only one problem
 - Issue a new `finding_id` when the cause, violated observable condition, or acceptance criteria differ
-- Differences in evidence files, checked locations, consumer paths, or reproduction inputs alone do not create a different problem. Add them to the original ID as newly checked paths and evidence
+- Differences in evidence files, checked locations, consumer paths, or reproduction inputs alone do not create a different problem. Add them to the original ID as newly checked paths and evidence. Add only reproduction inputs within the scope of inputs used for counterexamples
 - Rewriting an existing `finding_id` to represent a different problem is prohibited
 
 ## Handling Changelog and History Files

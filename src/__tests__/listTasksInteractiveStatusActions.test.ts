@@ -26,6 +26,7 @@ const {
   mockRunTui,
   mockSelectAndExecuteTask,
   mockSaveTaskFromInteractive,
+  mockCreateIssueAndSaveTask,
   mockResolveConfigValues,
 } = vi.hoisted(() => ({
   mockSelectOption: vi.fn(),
@@ -46,6 +47,7 @@ const {
   mockRunTui: vi.fn(),
   mockSelectAndExecuteTask: vi.fn(),
   mockSaveTaskFromInteractive: vi.fn(),
+  mockCreateIssueAndSaveTask: vi.fn(),
   mockResolveConfigValues: vi.fn(() => ({ language: 'en', interactivePreviewSteps: 3 })),
 }));
 
@@ -109,6 +111,8 @@ vi.mock('../features/tasks/execute/selectAndExecute.js', async (importOriginal) 
 vi.mock('../features/tasks/add/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   saveTaskFromInteractive: (...args: unknown[]) => mockSaveTaskFromInteractive(...args),
+  createIssueAndSaveTask: (...args: unknown[]) => mockCreateIssueAndSaveTask(...args),
+  promptLabelSelection: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock('../infra/config/index.js', async (importOriginal) => ({
@@ -289,7 +293,7 @@ describe('listTasks interactive status actions', () => {
     }) => {
       await options.dispatch('default', {
         action: 'execute',
-        task: 'task for Issue #456',
+        task: '# Fix Issue\n\nIssue: #456\n\nFix the reported problem.',
         issueContextReplacement: { issueNumber: 456 },
       });
       return { kind: 'cancelled' };
@@ -299,7 +303,7 @@ describe('listTasks interactive status actions', () => {
 
     expect(mockSelectAndExecuteTask).toHaveBeenCalledWith(
       '/project',
-      'task for Issue #456',
+      '# Fix Issue\n\nIssue: #456\n\nFix the reported problem.',
       expect.objectContaining({
         traceTaskContext: { source: 'issue', issueNumber: 456 },
       }),
@@ -333,6 +337,55 @@ describe('listTasks interactive status actions', () => {
       { allowCancel: true },
     );
   });
+
+  it.each(['execute', 'save_task', 'create_issue'] as const)(
+    'resolves bound and unrelated instructions separately for list action %s', async (action) => {
+      const bound = '# Fix Issue\n\nIssue: #456\n\nFix the reported problem.';
+      const unrelated = '# Update logs\n\n```text\nIssue: #456\n```';
+      mockListAllTaskItems.mockReturnValue([runningInteractiveTask]);
+      mockSelectOption
+        .mockResolvedValueOnce('running:0')
+        .mockResolvedValueOnce('interactive')
+        .mockResolvedValueOnce(null);
+      mockRunTui.mockImplementation(async (options: {
+        dispatch: (workflowId: string, result: unknown) => Promise<void>;
+      }) => {
+        for (const task of [bound, unrelated]) {
+          await options.dispatch('default', {
+            action, task, issueContextReplacement: { issueNumber: 456 },
+          });
+        }
+        return { kind: 'cancelled' };
+      });
+
+      await listTasks('/project');
+
+      if (action === 'execute') {
+        expect(mockSelectAndExecuteTask.mock.calls.map((call) => ({
+          task: call[1], issue: call[2]?.traceTaskContext?.issueNumber,
+          skipTaskList: call[2]?.skipTaskList,
+        }))).toEqual([
+          { task: bound, issue: 456, skipTaskList: true },
+          { task: unrelated, issue: undefined, skipTaskList: true },
+        ]);
+        expect(mockSaveTaskFromInteractive).not.toHaveBeenCalled();
+      } else if (action === 'save_task') {
+        expect(mockSaveTaskFromInteractive.mock.calls.map((call) => ({
+          task: call[1], issue: call[3]?.issue,
+        }))).toEqual([
+          { task: bound, issue: 456 }, { task: unrelated, issue: undefined },
+        ]);
+      } else {
+        expect(mockCreateIssueAndSaveTask.mock.calls.map((call) => ({
+          task: call[1], sourceIssue: call[3]?.sourceIssue,
+        }))).toEqual([
+          { task: bound, sourceIssue: { number: 456, language: 'en' } },
+          { task: unrelated, sourceIssue: undefined },
+        ]);
+      }
+      expect(mockSelectOption).toHaveBeenCalledTimes(3);
+    },
+  );
 
   it('running task の対話から複数Issueへの置換を実行番号なしで渡す', async () => {
     mockListAllTaskItems.mockReturnValue([runningInteractiveTask]);

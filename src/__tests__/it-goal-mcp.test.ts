@@ -413,8 +413,8 @@ describe('manager goal task enqueue', () => {
     });
   });
 
-  it.each(['all', 'manager'] as const)('recovers once per read and checks enqueue startup once with the %s tool set', async (toolSet) => {
-    await withServer(cwd, undefined, toolSet, async (client) => {
+  it('recovers once per read and checks enqueue startup once with the manager tool set', async () => {
+    await withServer(cwd, undefined, 'manager', async (client) => {
       const recovery = vi.spyOn(managerRecovery, 'recoverManagerEvents');
       const startup = vi.spyOn(managerAutoRun, 'ensureManagerRun');
       expect((await enqueue(client)).isError).toBeUndefined();
@@ -1822,9 +1822,13 @@ async function withServer<T>(
     await server.connect(serverTransport);
     await client.connect(clientTransport);
     const names = (await client.listTools()).tools.map(({ name }) => name);
-    expect(names).toContain('takt_list_goals');
-    expect(names).toContain('takt_get_goal');
-    if (toolSet === 'all') expect(names).toContain('takt_create_goal');
+    if (toolSet === 'manager') {
+      expect(names).toContain('takt_list_goals');
+      expect(names).toContain('takt_get_goal');
+    } else {
+      expect(names.filter((name) => name.startsWith('takt_') && name.includes('goal'))).toEqual([]);
+    }
+    if (toolSet === 'manager') expect(names).toContain('takt_create_goal');
     return await action(client);
   } finally {
     await client.close();
@@ -1908,7 +1912,7 @@ describe('Goal MCP registration', () => {
     const head = git(cwd, ['symbolic-ref', 'HEAD']);
     const index = git(cwd, ['ls-files', '--stage']);
     const status = git(cwd, ['status', '--porcelain']);
-    await withServer(cwd, keys.publicKey, 'all', async (client) => {
+    await withServer(cwd, keys.publicKey, 'manager', async (client) => {
       const created = await create(client, request({ creationOrigin }));
       expect(created).toMatchObject({ ...goalRecord(), integrationBranch: 'release', creationOrigin,
         executionStatus: 'active', acceptanceCriteriaVersion: 1, branch: expect.stringMatching(/^takt\/\d{8}T\d{4}-.+/) });
@@ -1924,13 +1928,13 @@ describe('Goal MCP registration', () => {
   it.each(['main', 'release'] as const)('uses the current local main commit from %s when the start is omitted', async (source) => {
     const commit = source === 'main' ? mainCommit : releaseCommit;
     git(cwd, ['update-ref', 'refs/heads/main', commit]);
-    const created = await withServer(cwd, keys.publicKey, 'all', (client) => create(client, request()));
+    const created = await withServer(cwd, keys.publicKey, 'manager', (client) => create(client, request()));
     expectSavedGoal(created, 'main', 'release', commit);
   });
 
   it('uses the start branch as the default integration branch when base_branch is absent', async () => {
     writeFileSync(join(cwd, '.takt', 'config.yaml'), '');
-    const created = await withServer(cwd, keys.publicKey, 'all', (client) => create(client, request()));
+    const created = await withServer(cwd, keys.publicKey, 'manager', (client) => create(client, request()));
     expectSavedGoal(created, 'main', 'main', mainCommit);
   });
 
@@ -1938,7 +1942,7 @@ describe('Goal MCP registration', () => {
     git(cwd, ['update-ref', '-d', 'refs/heads/main']);
     if (present) git(cwd, ['update-ref', 'refs/heads/master', mainCommit]);
     const branches = git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
-    await withServer(cwd, keys.publicKey, 'all', async (client) => {
+    await withServer(cwd, keys.publicKey, 'manager', async (client) => {
       if (present) {
         expectSavedGoal(await create(client, request()), 'master', 'release', mainCommit);
       } else {
@@ -1953,7 +1957,7 @@ describe('Goal MCP registration', () => {
     git(cwd, ['update-ref', '-d', 'refs/heads/main']);
     if (!present) git(cwd, ['update-ref', '-d', 'refs/remotes/origin/main']);
     const branches = git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
-    await withServer(cwd, keys.publicKey, 'all', async (client) => {
+    await withServer(cwd, keys.publicKey, 'manager', async (client) => {
       if (present) {
         expectSavedGoal(await create(client, request()), 'main', 'release', mainCommit);
       } else {
@@ -1966,7 +1970,7 @@ describe('Goal MCP registration', () => {
   it.each([true, false])('prefers the local default over a different remote commit with local present=%s', async (localPresent) => {
     setRemoteDefault(releaseCommit);
     if (!localPresent) git(cwd, ['update-ref', '-d', 'refs/heads/main']);
-    const created = await withServer(cwd, keys.publicKey, 'all', (client) => create(client, request()));
+    const created = await withServer(cwd, keys.publicKey, 'manager', (client) => create(client, request()));
     expectSavedGoal(created, 'main', 'release', localPresent ? mainCommit : releaseCommit);
   });
 
@@ -1974,7 +1978,7 @@ describe('Goal MCP registration', () => {
     setRemoteDefault(mainCommit);
     git(cwd, ['update-ref', '-d', 'refs/heads/main']);
     const branches = git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
-    await withServer(cwd, keys.publicKey, 'all', async (client) => {
+    await withServer(cwd, keys.publicKey, 'manager', async (client) => {
       expect((await client.callTool({ name: 'takt_create_goal', arguments: request({ startBranch: 'main' }) })).isError).toBe(true);
       expectNoGoalSideEffects(branches);
     });
@@ -1986,7 +1990,7 @@ describe('Goal MCP registration', () => {
     git(cwd, ['update-ref', 'refs/remotes/origin/release', releaseCommit]);
     if (!present) git(cwd, ['update-ref', '-d', 'refs/heads/release']);
     const branches = git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
-    await withServer(cwd, keys.publicKey, 'all', async (client) => {
+    await withServer(cwd, keys.publicKey, 'manager', async (client) => {
       const input = request({ integrationBranch: 'release' });
       if (present) {
         expectSavedGoal(await create(client, input), 'main', 'release', mainCommit);
@@ -2001,7 +2005,7 @@ describe('Goal MCP registration', () => {
     git(cwd, ['update-ref', 'refs/remotes/origin/release', releaseCommit]);
     if (!present) git(cwd, ['update-ref', '-d', 'refs/heads/release']);
     const branches = git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
-    await withServer(cwd, keys.publicKey, 'all', async (client) => {
+    await withServer(cwd, keys.publicKey, 'manager', async (client) => {
       const input = request({ startBranch: 'release' });
       if (present) {
         expectSavedGoal(await create(client, input), 'release', 'release', releaseCommit);
@@ -2012,10 +2016,10 @@ describe('Goal MCP registration', () => {
     });
   });
 
-  it.each([goalInput().objective, 'replacement'])('reads the created goal with objective %s from a new read-only server using list and detail tools', async (objective) => {
-    const created = await withServer(cwd, keys.publicKey, 'all', (client) => create(client, request({ objective })));
+  it.each([goalInput().objective, 'replacement'])('reads the created goal with objective %s from a new manager server using list and detail tools', async (objective) => {
+    const created = await withServer(cwd, keys.publicKey, 'manager', (client) => create(client, request({ objective })));
     expect(created.objective).toBe(objective);
-    await withServer(cwd, undefined, 'read-only', async (client) => {
+    await withServer(cwd, undefined, 'manager', async (client) => {
       const listed = await client.callTool({ name: 'takt_list_goals', arguments: { cwd } });
       expect(listed.isError).toBeUndefined();
       expect(JSON.parse(firstTextContent(listed.content))).toMatchObject({ goals: [expect.objectContaining({ id: goalId, objective })] });
@@ -2028,7 +2032,7 @@ describe('Goal MCP registration', () => {
   it('uses a signed explicit start and integration branch instead of the default', async () => {
     const input = request();
     const payload = { ...confirmationPayload(cwd), startBranch: 'release', integrationBranch: 'main' };
-    await withServer(cwd, keys.publicKey, 'all', async (client) => {
+    await withServer(cwd, keys.publicKey, 'manager', async (client) => {
       const created = await create(client, {
         ...input, startBranch: 'release', integrationBranch: 'main',
         confirmation: signedConfirmation(payload, keys.privateKey),
@@ -2039,7 +2043,7 @@ describe('Goal MCP registration', () => {
   });
 
   it('uses a signed release integration branch for reads, completion and confirmation after configuration changes', async () => {
-    const created = await withServer(cwd, keys.publicKey, 'all', (client) => create(client, request({ integrationBranch: 'release' })));
+    const created = await withServer(cwd, keys.publicKey, 'manager', (client) => create(client, request({ integrationBranch: 'release' })));
     writeFileSync(join(cwd, '.takt', 'config.yaml'), 'base_branch: main\nmanager:\n  auto_run: false\n  main_merge: approve\n');
     const args = { cwd, goalId: created.id };
     await withServer(cwd, undefined, 'manager', async (client) => {
@@ -2067,7 +2071,7 @@ describe('Goal MCP registration', () => {
     const corruptPath = join(cwd, '.takt', 'goals', goalId, 'goal.json');
     mkdirSync(join(cwd, '.takt', 'goals', goalId), { recursive: true });
     writeFileSync(corruptPath, '{');
-    await withServer(cwd, undefined, 'read-only', async (client) => {
+    await withServer(cwd, undefined, 'manager', async (client) => {
       const listed = await client.callTool({ name: 'takt_list_goals', arguments: { cwd } });
       expect(listed.isError).toBe(true);
       const output = JSON.parse(firstTextContent(listed.content)) as {
@@ -2089,7 +2093,7 @@ describe('Goal MCP registration', () => {
 
   it('rejects a missing explicit integration branch before publication', async () => {
     const branches = git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
-    await withServer(cwd, keys.publicKey, 'all', async (client) => {
+    await withServer(cwd, keys.publicKey, 'manager', async (client) => {
       const input = request({ startBranch: 'release', integrationBranch: 'missing' });
       expect((await client.callTool({ name: 'takt_create_goal', arguments: input })).isError).toBe(true);
       expectNoGoalSideEffects(branches);
@@ -2097,7 +2101,7 @@ describe('Goal MCP registration', () => {
   });
 
   it('rejects reuse of a confirmed ID without changing the existing goal or branch', async () => {
-    await withServer(cwd, keys.publicKey, 'all', async (client) => {
+    await withServer(cwd, keys.publicKey, 'manager', async (client) => {
       const created = await create(client, request());
       const saved = readFileSync(join(cwd, '.takt', 'goals', goalId, 'goal.json'));
       const branches = git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
@@ -2112,7 +2116,7 @@ describe('Goal MCP registration', () => {
   it('rejects a branch name collision without overwriting the existing Git reference', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-10-04T14:43:00.000Z'));
-    await withServer(cwd, keys.publicKey, 'all', async (client) => {
+    await withServer(cwd, keys.publicKey, 'manager', async (client) => {
       const created = await create(client, request());
       rmSync(join(cwd, '.takt', 'goals', goalId), { recursive: true, force: true });
       git(cwd, ['update-ref', `refs/heads/${created.branch}`, releaseCommit]);
@@ -2135,7 +2139,7 @@ describe('Goal MCP registration', () => {
       if (kind === 'changed criteria') input.acceptanceCriteria = ['unconfirmed criterion'];
       if (kind === 'tool public key') input.goalConfirmationPublicKey = otherKeys.publicKey;
       const branches = git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
-      await withServer(cwd, keys.publicKey, 'all', async (client) => {
+      await withServer(cwd, keys.publicKey, 'manager', async (client) => {
         expect((await client.callTool({ name: 'takt_create_goal', arguments: input })).isError).toBe(true);
         expectNoGoalSideEffects(branches);
       });
@@ -2144,7 +2148,7 @@ describe('Goal MCP registration', () => {
 
   it('rejects creation without a host public key while keeping read tools usable', async () => {
     const branches = git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
-    await withServer(cwd, undefined, 'all', async (client) => {
+    await withServer(cwd, undefined, 'manager', async (client) => {
       expect((await client.callTool({ name: 'takt_create_goal', arguments: request() })).isError).toBe(true);
       const result = await client.callTool({ name: 'takt_list_goals', arguments: { cwd } });
       expect(result.isError).toBeUndefined();
@@ -2157,7 +2161,7 @@ describe('Goal MCP registration', () => {
     const branches = git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
     await withServer(cwd, keys.publicKey, 'read-only', async (client) => {
       const names = (await client.listTools()).tools.map(({ name }) => name).sort();
-      expect(names).toEqual(['takt_get_goal', 'takt_get_run', 'takt_list_goals', 'takt_list_tasks']);
+      expect(names).toEqual(['takt_get_run', 'takt_list_tasks']);
       expect([...TAKT_MCP_READ_ONLY_TOOL_NAMES].sort()).toEqual(names);
       expect((await client.callTool({ name: 'takt_create_goal', arguments: request() })).isError).toBe(true);
       expectNoGoalSideEffects(branches);
@@ -2166,7 +2170,7 @@ describe('Goal MCP registration', () => {
 
   it('does not publish a goal when the signed start branch does not exist', async () => {
     const branches = git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
-    await withServer(cwd, keys.publicKey, 'all', async (client) => {
+    await withServer(cwd, keys.publicKey, 'manager', async (client) => {
       const payload = { ...confirmationPayload(cwd), startBranch: 'missing' };
       const result = await client.callTool({ name: 'takt_create_goal', arguments: {
         ...request(), startBranch: 'missing', confirmation: signedConfirmation(payload, keys.privateKey),
@@ -2179,7 +2183,7 @@ describe('Goal MCP registration', () => {
   it('removes only the newly created branch when publication fails and allows retry', async () => {
     const branches = git(cwd, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
     const publication = vi.spyOn(GoalStore.prototype, 'create').mockRejectedValueOnce(new Error('Injected publication failure'));
-    await withServer(cwd, keys.publicKey, 'all', async (client) => {
+    await withServer(cwd, keys.publicKey, 'manager', async (client) => {
       const result = await client.callTool({ name: 'takt_create_goal', arguments: request() });
       expect(result.isError).toBe(true);
       expect(publication).toHaveBeenCalledTimes(1);
@@ -2195,7 +2199,7 @@ describe('Goal MCP registration', () => {
       await publish.call(this, goal);
       throw new Error('Injected failure after publication');
     });
-    await withServer(cwd, keys.publicKey, 'all', async (client) => {
+    await withServer(cwd, keys.publicKey, 'manager', async (client) => {
       expect((await client.callTool({ name: 'takt_create_goal', arguments: request() })).isError).toBe(true);
       const goal = await new GoalStore(cwd).get(goalId);
       expect(git(cwd, ['rev-parse', `refs/heads/${goal.branch}`])).toBe(mainCommit);
@@ -2209,7 +2213,7 @@ describe('Goal MCP registration', () => {
       git(cwd, ['update-ref', `refs/heads/${record.branch}`, releaseCommit]);
       throw new Error('Injected publication failure after branch advancement');
     });
-    await withServer(cwd, keys.publicKey, 'all', async (client) => {
+    await withServer(cwd, keys.publicKey, 'manager', async (client) => {
       expect((await client.callTool({ name: 'takt_create_goal', arguments: request() })).isError).toBe(true);
       expect(createdBranch).toEqual(expect.any(String));
       expect(git(cwd, ['rev-parse', `refs/heads/${createdBranch}`])).toBe(releaseCommit);
@@ -2227,7 +2231,7 @@ describe('Goal MCP registration', () => {
     const branches = git(outside, ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads']);
     const newId = '550e8400-e29b-41d4-a716-446655440001';
     try {
-      await withServer(cwd, keys.publicKey, 'all', async (client) => {
+      await withServer(cwd, keys.publicKey, 'manager', async (client) => {
         for (const name of ['takt_list_goals', 'takt_get_goal']) {
           expect((await client.callTool({ name, arguments: { cwd: outside, ...(name === 'takt_get_goal' ? { goalId } : {}) } })).isError).toBe(true);
         }

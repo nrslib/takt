@@ -357,6 +357,7 @@ export function runGitCommandAbortable(
   args: string[],
   abortSignal?: AbortSignal,
   env?: NodeJS.ProcessEnv,
+  timeoutMs?: number,
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     if (abortSignal?.aborted) {
@@ -374,8 +375,13 @@ export function runGitCommandAbortable(
     let stdout = '';
     let stderr = '';
     let settled = false;
+    let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+    let timeoutKillTimer: ReturnType<typeof setTimeout> | undefined;
 
     const cleanup = (): void => {
+      if (timeoutTimer) {
+        clearTimeout(timeoutTimer);
+      }
       if (abortSignal) {
         abortSignal.removeEventListener('abort', onAbort);
       }
@@ -414,6 +420,14 @@ export function runGitCommandAbortable(
       rejectOnce(new Error(TASK_EXECUTION_ABORTED_MESSAGE));
     };
 
+    const onTimeout = (): void => {
+      timeoutKillTimer = setTimeout(() => {
+        terminateProcessGroup(child, 'SIGKILL');
+      }, 500);
+      timeoutKillTimer.unref?.();
+      rejectOnce(new Error(`git ${args[0]} timed out after ${timeoutMs} ms`), true);
+    };
+
     abortSignal?.addEventListener('abort', onAbort, { once: true });
     child.stdout?.on('data', (chunk) => {
       stdout += chunk.toString('utf-8');
@@ -430,6 +444,9 @@ export function runGitCommandAbortable(
       );
     });
     child.on('close', (code) => {
+      if (timeoutKillTimer) {
+        clearTimeout(timeoutKillTimer);
+      }
       if (abortSignal?.aborted) {
         rejectOnce(new Error(TASK_EXECUTION_ABORTED_MESSAGE));
         return;
@@ -441,6 +458,11 @@ export function runGitCommandAbortable(
       const message = stderr.trim() || `git ${args[0]} exited with code ${code}`;
       rejectOnce(new Error(message));
     });
+
+    if (timeoutMs !== undefined) {
+      timeoutTimer = setTimeout(onTimeout, timeoutMs);
+      timeoutTimer.unref?.();
+    }
   });
 }
 

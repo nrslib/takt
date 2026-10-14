@@ -71,6 +71,7 @@ export async function saveEnqueuedTaskFile(
       task_dir: preparedSpec.taskDirRelative,
       slug,
       summary,
+      deduplicateActiveTargets: options?.deduplicateActiveTargets,
     });
   } catch (error) {
     cleanupTaskSpecDirectory(preparedSpec.taskDir);

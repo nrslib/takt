@@ -27,37 +27,14 @@ async function parse(args: string[]) {
 }
 
 describe('manager CLI entrypoint', () => {
-  it.each([
-    { lang: 'ja', description: /実験的.*会話 TUI/u, changes: /動作・設定・保存するデータの形式.*予告なく/u, costs: /自動でタスクを投入・実行.*provider の API の費用/u },
-    { lang: 'en', description: /experimental.*conversation TUI/iu, changes: /behavior, settings, and saved data formats.*without notice/iu, costs: /automatically queues and runs tasks.*provider API costs/iu },
-  ])('shows experimental and cost notices in manager --help for $lang without starting the manager', async ({ lang, description, changes, costs }) => {
+  it.each(['ja', 'en'])('keeps manager out of command registration and help for %s', async (lang) => {
     doubles.resolveConfigValue.mockReturnValue(lang);
     const { program } = await import('../app/cli/program.js');
     await import('../app/cli/commands.js');
-    const writeOut = vi.fn();
-    program.configureOutput({ writeOut });
 
-    await expect(program.parseAsync(['node', 'takt', 'manager', '--help']))
-      .rejects.toMatchObject({ code: 'commander.helpDisplayed', exitCode: 0 });
-
-    const help = writeOut.mock.calls.map(([message]) => message).join('').replace(/\s+/gu, ' ');
-    expect(help).toContain('Usage: takt manager');
-    expect(help).toMatch(description);
-    expect(help).toMatch(changes);
-    expect(help).toMatch(costs);
-    expect(doubles.resolveConfigValue).toHaveBeenCalledWith(process.cwd(), 'language');
+    expect(program.commands.map((command) => command.name())).not.toContain('manager');
+    expect(program.helpInformation()).not.toMatch(/\bmanager\b/u);
     expect(doubles.manager).not.toHaveBeenCalled();
-    expect(doubles.assistant).not.toHaveBeenCalled();
-  });
-
-  it('starts the manager TUI with the target repository and CLI provider/model overrides', async () => {
-    await parse(['--provider', 'mock', '--model', 'manager-test-model', 'manager']);
-
-    expect(doubles.manager).toHaveBeenCalledWith(expect.objectContaining({
-      cwd: '/test/manager-repository',
-      agentOverrides: expect.objectContaining({ provider: 'mock', model: 'manager-test-model' }),
-    }));
-    expect(doubles.assistant).not.toHaveBeenCalled();
   });
 
   it('keeps the argument-free takt entrypoint on the existing assistant route', async () => {

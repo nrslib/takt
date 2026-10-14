@@ -437,6 +437,8 @@ Separately from config-key overrides, `TAKT_NOTIFY_WEBHOOK` sets a Slack Incomin
 
 ## Manager Notification Settings
 
+Manager is in preparation and currently unavailable. The settings below are retained for the internal implementation.
+
 Use `manager.notifications` in project `.takt/config.yaml` or global
 `~/.takt/config.yaml` to enable or disable each kind of goal notification.
 

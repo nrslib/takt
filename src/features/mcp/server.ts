@@ -54,12 +54,10 @@ export type TaktMcpToolSet = 'all' | 'read-only' | 'manager';
 export const TAKT_MCP_READ_ONLY_TOOL_NAMES = [
   'takt_list_tasks',
   'takt_get_run',
-  'takt_list_goals',
-  'takt_get_goal',
 ] as const;
 
 export const TAKT_MCP_MANAGER_TOOL_NAMES = [
-  'takt_create_goal', ...TAKT_MCP_READ_ONLY_TOOL_NAMES,
+  'takt_create_goal', ...TAKT_MCP_READ_ONLY_TOOL_NAMES, 'takt_list_goals', 'takt_get_goal',
   'takt_enqueue_goal_task', 'takt_list_workflows',
   'takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion',
   'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation',
@@ -129,7 +127,7 @@ export function createTaktMcpServer(
   if (options.toolSet !== 'read-only') server.registerTool('takt_list_workflows', {
     title: 'List workflows', description: 'Read workflow names and descriptions.', inputSchema: listGoalsInputSchema,
   }, (input) => operation(input.cwd, 'Workflow list failed', () => listTaktWorkflows(input, operationDeps)));
-  if (options.toolSet !== 'read-only') {
+  if (options.toolSet === 'manager') {
     server.registerTool('takt_record_goal_decision', {
       title: 'Record a goal decision', description: 'Append a structured decision and optionally reference a superseded decision. Existing decisions are retained.', inputSchema: recordGoalDecisionInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal decision failed', () => recordTaktGoalDecision(input, operationDeps, extra.signal), false));
@@ -189,7 +187,7 @@ export function createTaktMcpServer(
     }, (input, extra) => operation(input.cwd, 'Goal relation failed', () => getTaktGoalRelation(input, operationDeps, extra.signal), false));
   }
 
-  if (options.toolSet !== 'read-only') {
+  if (options.toolSet === 'manager') {
     server.registerTool(
       'takt_create_goal',
       {
@@ -212,25 +210,27 @@ export function createTaktMcpServer(
     );
   }
 
-  server.registerTool(
-    TAKT_MCP_READ_ONLY_TOOL_NAMES[2],
-    {
-      title: 'List TAKT goals',
-      description: 'Read goals saved in .takt/goals/. Invalid saved records return individual errors alongside healthy goals. Path, access, and traversal identity failures remain whole-tool errors.',
-      inputSchema: listGoalsInputSchema,
-    },
-    (input) => operation(input.cwd, 'Goal list failed', () => listTaktGoals(input, operationDeps)),
-  );
+  if (options.toolSet === 'manager') {
+    server.registerTool(
+      'takt_list_goals',
+      {
+        title: 'List TAKT goals',
+        description: 'Read goals saved in .takt/goals/. Invalid saved records return individual errors alongside healthy goals. Path, access, and traversal identity failures remain whole-tool errors.',
+        inputSchema: listGoalsInputSchema,
+      },
+      (input) => operation(input.cwd, 'Goal list failed', () => listTaktGoals(input, operationDeps)),
+    );
 
-  server.registerTool(
-    TAKT_MCP_READ_ONLY_TOOL_NAMES[3],
-    {
-      title: 'Get a TAKT goal',
-      description: 'Read all saved information for the specified goal ID.',
-      inputSchema: getGoalInputSchema,
-    },
-    (input) => operation(input.cwd, 'Goal read failed', () => getTaktGoal(input, operationDeps)),
-  );
+    server.registerTool(
+      'takt_get_goal',
+      {
+        title: 'Get a TAKT goal',
+        description: 'Read all saved information for the specified goal ID.',
+        inputSchema: getGoalInputSchema,
+      },
+      (input) => operation(input.cwd, 'Goal read failed', () => getTaktGoal(input, operationDeps)),
+    );
+  }
 
   server.registerTool(
     TAKT_MCP_READ_ONLY_TOOL_NAMES[0],

@@ -27,15 +27,16 @@ import {
   resolveCloneSubmoduleOptions,
   runGitCommandAbortable,
 } from './clone-exec.js';
-import { loadCloneMeta, removeCloneMeta as removeCloneMetaFile, saveCloneMeta as saveCloneMetaFile } from './clone-meta.js';
+import { loadCloneMeta, removeCloneMeta as removeCloneMetaFile, saveCloneMeta as saveCloneMetaFile, saveGeneratedCloneMeta } from './clone-meta.js';
 import { syncProjectLocalTaktForRetry } from './projectLocalTaktSync.js';
 import {
   toLocalBranchRef,
   toPullRequestBaseRef,
   toRemoteTrackingBranchRef,
 } from '../../shared/utils/gitBranchValidation.js';
-import { isTaskAbortError } from './clone-errors.js';
+import { isTaskAbortError, TASK_EXECUTION_ABORTED_MESSAGE } from './clone-errors.js';
 import { createTaskClonePath, createTempClonePath } from './clone-path.js';
+import { resolveGeneratedBranch, resolveGeneratedBranchAbortable } from './clone-generated-branch.js';
 
 export type { WorktreeOptions, WorktreeResult };
 
@@ -123,10 +124,6 @@ export class CloneManager {
   }
 
   private static resolveBranchName(options: WorktreeOptions): string {
-    if (options.branch) {
-      return options.branch;
-    }
-
     const slug = options.taskSlug;
 
     if (options.issueNumber !== undefined && slug) {
@@ -152,7 +149,10 @@ export class CloneManager {
 
   createSharedClone(projectDir: string, options: WorktreeOptions): WorktreeResult {
     const clonePath = CloneManager.resolveClonePath(projectDir, options);
-    const branch = CloneManager.resolveBranchName(options);
+    const requestedBranch = options.branch || CloneManager.resolveBranchName(options);
+    let branch = options.branch
+      ? requestedBranch
+      : resolveGeneratedBranch(projectDir, requestedBranch, options.cloneMetadataDirectory);
     const cloneSubmoduleOptions = resolveCloneSubmoduleOptions(projectDir);
 
     log.info(
@@ -160,23 +160,25 @@ export class CloneManager {
       { path: clonePath, branch }
     );
 
-    try {
-      execFileSync('git', [
-        'fetch',
-        '--force',
-        'origin',
-        `${toLocalBranchRef(branch)}:${toRemoteTrackingBranchRef(branch)}`,
-      ], {
-        cwd: projectDir,
-        stdio: 'pipe',
-      });
-    } catch {
-      if (options.pullRequestBaseBranch !== undefined) {
-        throw new Error(REMOTE_BRANCH_FETCH_FAILED_MESSAGE);
+    if (options.branch) {
+      try {
+        execFileSync('git', [
+          'fetch',
+          '--force',
+          'origin',
+          `${toLocalBranchRef(branch)}:${toRemoteTrackingBranchRef(branch)}`,
+        ], {
+          cwd: projectDir,
+          stdio: 'pipe',
+        });
+      } catch {
+        if (options.pullRequestBaseBranch !== undefined) {
+          throw new Error(REMOTE_BRANCH_FETCH_FAILED_MESSAGE);
+        }
+        log.info('Failed to prefetch branch from origin, continuing', {
+          branch,
+        });
       }
-      log.info('Failed to prefetch branch from origin, continuing', {
-        branch,
-      });
     }
 
     if (options.pullRequestBaseBranch !== undefined) {
@@ -195,14 +197,14 @@ export class CloneManager {
       }
     }
 
-    if (remoteBranchExists(projectDir, branch)) {
+    if (options.branch && remoteBranchExists(projectDir, branch)) {
       cloneAndIsolate(projectDir, clonePath);
       fetchRemoteBranchIntoIsolatedClone(projectDir, clonePath, branch);
       execFileSync('git', ['checkout', '-B', branch, toLocalBranchRef(branch)], {
         cwd: clonePath,
         stdio: 'pipe',
       });
-    } else if (localBranchExists(projectDir, branch)) {
+    } else if (options.branch && localBranchExists(projectDir, branch)) {
       cloneAndIsolate(projectDir, clonePath, branch);
     } else {
       const { branch: baseBranch, fetchedCommit } = CloneManager.resolveBaseBranch(projectDir, options.baseBranch);
@@ -235,7 +237,20 @@ export class CloneManager {
     }
 
     if (!options.skipProjectLocalTaktSync) syncProjectLocalTaktForRetry(projectDir, clonePath);
-    this.saveCloneMeta(projectDir, branch, clonePath, options.cloneMetadataDirectory);
+    if (options.branch) {
+      this.saveCloneMeta(projectDir, branch, clonePath, options.cloneMetadataDirectory);
+    } else {
+      try {
+        while (!saveGeneratedCloneMeta(projectDir, branch, clonePath, options.cloneMetadataDirectory)) {
+          const nextBranch = resolveGeneratedBranch(projectDir, requestedBranch, options.cloneMetadataDirectory);
+          execFileSync('git', ['branch', '-m', branch, nextBranch], { cwd: clonePath, stdio: 'pipe' });
+          branch = nextBranch;
+        }
+      } catch (err) {
+        this.removeClone(clonePath);
+        throw err;
+      }
+    }
     log.info('Clone created', { path: clonePath, branch });
 
     return {
@@ -256,7 +271,10 @@ export class CloneManager {
     abortSignal?: AbortSignal,
   ): Promise<WorktreeResult> {
     const clonePath = CloneManager.resolveClonePath(projectDir, options);
-    const branch = CloneManager.resolveBranchName(options);
+    const requestedBranch = options.branch || CloneManager.resolveBranchName(options);
+    let branch = options.branch
+      ? requestedBranch
+      : await resolveGeneratedBranchAbortable(projectDir, requestedBranch, abortSignal, options.cloneMetadataDirectory);
     const cloneSubmoduleOptions = resolveCloneSubmoduleOptions(projectDir);
 
     log.info(
@@ -264,23 +282,25 @@ export class CloneManager {
       { path: clonePath, branch },
     );
 
-    try {
-      await runGitCommandAbortable(projectDir, [
-        'fetch',
-        '--force',
-        'origin',
-        `${toLocalBranchRef(branch)}:${toRemoteTrackingBranchRef(branch)}`,
-      ], abortSignal);
-    } catch (err) {
-      if (options.pullRequestBaseBranch !== undefined) {
-        if (isTaskAbortError(err)) {
-          throw err;
+    if (options.branch) {
+      try {
+        await runGitCommandAbortable(projectDir, [
+          'fetch',
+          '--force',
+          'origin',
+          `${toLocalBranchRef(branch)}:${toRemoteTrackingBranchRef(branch)}`,
+        ], abortSignal);
+      } catch (err) {
+        if (options.pullRequestBaseBranch !== undefined) {
+          if (isTaskAbortError(err)) {
+            throw err;
+          }
+          throw new Error(REMOTE_BRANCH_FETCH_FAILED_MESSAGE);
         }
-        throw new Error(REMOTE_BRANCH_FETCH_FAILED_MESSAGE);
+        log.info('Failed to prefetch branch from origin, continuing', {
+          branch,
+        });
       }
-      log.info('Failed to prefetch branch from origin, continuing', {
-        branch,
-      });
     }
 
     if (options.pullRequestBaseBranch !== undefined) {
@@ -299,7 +319,7 @@ export class CloneManager {
       }
     }
 
-    if (await remoteBranchExistsAbortable(projectDir, branch, abortSignal)) {
+    if (options.branch && await remoteBranchExistsAbortable(projectDir, branch, abortSignal)) {
       await cloneAndIsolateAbortable(projectDir, clonePath, undefined, abortSignal);
       await fetchRemoteBranchIntoIsolatedCloneAbortable(projectDir, clonePath, branch, abortSignal);
       await runGitCommandAbortable(
@@ -307,7 +327,7 @@ export class CloneManager {
         ['checkout', '-B', branch, toLocalBranchRef(branch)],
         abortSignal,
       );
-    } else if (await localBranchExistsAbortable(projectDir, branch, abortSignal)) {
+    } else if (options.branch && await localBranchExistsAbortable(projectDir, branch, abortSignal)) {
       await cloneAndIsolateAbortable(projectDir, clonePath, branch, abortSignal);
     } else {
       const { branch: baseBranch, fetchedCommit } = await resolveBaseBranchAbortable(
@@ -354,7 +374,24 @@ export class CloneManager {
     }
 
     if (!options.skipProjectLocalTaktSync) syncProjectLocalTaktForRetry(projectDir, clonePath);
-    this.saveCloneMeta(projectDir, branch, clonePath, options.cloneMetadataDirectory);
+    if (options.branch) {
+      this.saveCloneMeta(projectDir, branch, clonePath, options.cloneMetadataDirectory);
+    } else {
+      try {
+        for (;;) {
+          if (abortSignal?.aborted) throw new Error(TASK_EXECUTION_ABORTED_MESSAGE);
+          if (saveGeneratedCloneMeta(projectDir, branch, clonePath, options.cloneMetadataDirectory)) break;
+          const nextBranch = await resolveGeneratedBranchAbortable(
+            projectDir, requestedBranch, abortSignal, options.cloneMetadataDirectory,
+          );
+          await runGitCommandAbortable(clonePath, ['branch', '-m', branch, nextBranch], abortSignal);
+          branch = nextBranch;
+        }
+      } catch (err) {
+        this.removeClone(clonePath);
+        throw err;
+      }
+    }
     log.info('Clone created', { path: clonePath, branch });
 
     return {

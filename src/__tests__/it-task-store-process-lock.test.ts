@@ -78,7 +78,7 @@ describe('TaskStore process lock', () => {
     testDirs.length = 0;
   });
 
-  it('serializes simultaneous same-target additions across processes without lost updates', async () => {
+  it('serializes simultaneous automatic same-target additions across processes without lost updates', async () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-task-store-process-lock-'));
     testDirs.push(projectDir);
     const releaseFile = join(projectDir, 'release');
