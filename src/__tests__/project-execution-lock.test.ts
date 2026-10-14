@@ -15,11 +15,17 @@ vi.mock('node:fs', async (importOriginal) => ({
   unlinkSync: mocks.unlink, rmdirSync: mocks.rmdir,
   readFileSync: mocks.read, fstatSync: mocks.fileStat,
 }));
-vi.mock('../infra/task/process.js', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../infra/task/process.js')>(),
-  getSelfProcessIdentity: mocks.identity, getProcessIdentity: mocks.currentIdentity,
-  isProcessAlive: mocks.alive,
-}));
+vi.mock('../infra/task/process.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../infra/task/process.js')>();
+  return {
+    ...actual,
+    getSelfProcessIdentity: mocks.identity, getProcessIdentity: mocks.currentIdentity,
+    isProcessAlive: mocks.alive,
+    isRecordedProcessAlive: (pid: number, identity: import('../infra/task/process.js').ProcessIdentity | undefined) => (
+      mocks.alive(pid) && !actual.hasProcessIdentityMismatch(identity, mocks.currentIdentity(pid))
+    ),
+  };
+});
 import { acquireProjectExecutionLock } from '../infra/task/project-execution-lock.js';
 
 const projectDir = '/project';

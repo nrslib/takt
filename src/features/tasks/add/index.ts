@@ -25,6 +25,7 @@ import {
   createIssueAndEnqueueTask,
   formatIssueEnqueueFailure,
   type PrepareEnqueuedTaskSpec,
+  type IssueEnqueueResult,
   type SaveEnqueuedTaskFile,
   type SaveEnqueuedTaskFileOptions,
 } from '../../../infra/task/enqueueService.js';
@@ -187,12 +188,12 @@ export async function createIssueAndSaveTask(
   task: string,
   workflow?: string,
   options?: CreateIssueAndSaveTaskOptions,
-): Promise<void> {
+): Promise<IssueEnqueueResult> {
   const gitProvider = getGitProvider();
   const sourceIssue = options?.sourceIssue;
   const saveInteractiveTask: SaveEnqueuedTaskFile = async (saveCwd, taskContent, saveOptions) => {
     return saveTaskFromInteractive(saveCwd, taskContent, saveOptions?.workflow, {
-      issue: saveOptions?.issue,
+      issue: sourceIssue?.number ?? saveOptions?.issue,
       ...(options?.attachments ? { attachments: options.attachments } : {}),
     });
   };
@@ -218,8 +219,9 @@ export async function createIssueAndSaveTask(
     if (result.failure.stage !== 'issue_creation') {
       error(formatIssueEnqueueFailure(result.failure, getErrorMessage));
     }
-    return;
+    return result;
   }
+  return result;
 }
 
 /**

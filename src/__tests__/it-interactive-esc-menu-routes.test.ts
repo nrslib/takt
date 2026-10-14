@@ -164,12 +164,12 @@ describe('readline /go action menu through the real selector', () => {
     it.each(pipedCases)('$name', async ({ answers, action }) => {
       const input = pipe();
       const capture = fixture.provider([{ content: 'Agreed task' }, { content: 'Continued answer' }]);
-      const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched' });
-      input.end('/go build the task\n' + answers);
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched', notice: 'Action completed.' });
+      input.end('/go build the task\n' + answers + (action === 'cancel' ? '' : '/cancel\n'));
       try {
         const result = await startPipedConversation(dispatch);
         result.cleanupAttachments?.();
-        expect(result.action).toBe(action);
+        expect(result.action).toBe('cancel');
         if (action === 'cancel') {
           expect(dispatch).not.toHaveBeenCalled();
           if (answers.includes('next message')) {
@@ -188,7 +188,7 @@ describe('readline /go action menu through the real selector', () => {
     it('reads staged answers before EOF and dispatches only after confirmation', async () => {
       const input = pipe();
       fixture.provider([{ content: 'Agreed task' }]);
-      const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched' });
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched', notice: 'Issue created.' });
       const run = startPipedConversation(dispatch);
       input.write('/go build the task\n');
       await vi.waitFor(() => expect(terminal.output()).toContain('2. ' + getLabel('interactive.ui.actions.createIssue', 'en')));
@@ -198,9 +198,11 @@ describe('readline /go action menu through the real selector', () => {
       expect(dispatch).not.toHaveBeenCalled();
       input.write('n\n');
       try {
+        await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
+        input.end('/cancel\n');
         const result = await run;
         result.cleanupAttachments?.();
-        expect(result.action).toBe('create_issue_only');
+        expect(result.action).toBe('cancel');
         expect(dispatch).toHaveBeenCalledOnce();
       } finally {
         input.end();
@@ -252,12 +254,13 @@ describe('readline /go action menu through the real selector', () => {
       const worktree = vi.fn();
       const dispatch = vi.fn(async () => {
         worktree(await confirm('Create worktree?', false));
-        return { kind: 'dispatched' as const };
+        return { kind: 'dispatched' as const, notice: 'Issue and task created.' };
       });
-      input.end(`/go build the task\n2\nY\n${answer}\n`);
+      input.end(`/go build the task\n2\nY\n${answer}\n/cancel\n`);
       const result = await startPipedConversation(dispatch);
       result.cleanupAttachments?.();
-      expect(result.action).toBe('create_issue');
+      expect(result.action).toBe('cancel');
+      expect(dispatch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ action: 'create_issue' }));
       expect(worktree).toHaveBeenCalledExactlyOnceWith(answer === 'Y');
     });
 
@@ -267,11 +270,11 @@ describe('readline /go action menu through the real selector', () => {
     ])('uses the displayed PR menu order for $action', async ({ answers, action }) => {
       const input = pipe();
       fixture.provider([{ content: 'PR task' }]);
-      const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched' });
-      input.end('/go review the PR\n' + answers);
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched', notice: 'Action completed.' });
+      input.end('/go review the PR\n' + answers + '/cancel\n');
       const result = await startPipedConversation(dispatch, true);
       result.cleanupAttachments?.();
-      expect(result.action).toBe(action);
+      expect(result.action).toBe('cancel');
       expect(dispatch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ action, task: 'PR task' }));
       expect(terminal.output()).toContain('2. ' + getLabel('interactive.ui.actions.execute', 'en'));
     });
@@ -299,18 +302,22 @@ describe('readline /go action menu through the real selector', () => {
 
   it('chooses task saving on initial Enter without confirming immediate execution', async () => {
     const capture = fixture.provider([{ content: 'Agreed task' }]);
-    const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched' });
+    const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched', notice: 'Task saved.' });
     const run = interactiveMode(fixture.cwd, undefined, undefined, undefined, undefined, { dispatch });
     void run.catch(() => undefined);
     await terminal.waitForPrompt('> ', 0);
     const mark = terminal.mark();
     await terminal.send('/go build the task\r');
     await terminal.waitForPrompt(getLabel('interactive.ui.actionPrompt', 'en'), mark);
+    const actionMark = terminal.mark();
     await terminal.send('\r');
+    await terminal.waitForPrompt('Task saved.', actionMark);
+    await terminal.waitForPrompt('> ', actionMark);
+    await terminal.send('/cancel\r');
 
     const result = await run;
     try {
-      expect(result).toMatchObject({ action: 'save_task', task: 'Agreed task' });
+      expect(result.action).toBe('cancel');
       expect(dispatch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ action: 'save_task', task: 'Agreed task' }));
       expect(capture.callCount).toBe(1);
     } finally {
@@ -329,7 +336,7 @@ describe('readline /go action menu through the real selector', () => {
     { action: 'execute', arrows: 2, hint: '[y/N]:', answer: '\x1B', outcome: 'save_task' },
   ])('handles $action answer=$answer without dispatching before confirmation', async ({ arrows, hint, answer, outcome }) => {
     const capture = fixture.provider([{ content: 'Agreed task' }]);
-    const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched' });
+    const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched', notice: 'Action completed.' });
     const run = interactiveMode(fixture.cwd, undefined, undefined, undefined, undefined, { dispatch });
     void run.catch(() => undefined);
     await terminal.waitForPrompt('> ', 0);
@@ -349,9 +356,12 @@ describe('readline /go action menu through the real selector', () => {
       await terminal.send('\x1B[A'.repeat(arrows) + '\r');
     }
 
+    await terminal.waitForPrompt('Action completed.', mark);
+    await terminal.waitForPrompt('> ', mark);
+    await terminal.send('/cancel\r');
     const result = await run;
     try {
-      expect(result).toMatchObject({ action: outcome, task: 'Agreed task' });
+      expect(result.action).toBe('cancel');
       expect(dispatch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ action: outcome, task: 'Agreed task' }));
       expect(capture.callCount).toBe(1);
     } finally {

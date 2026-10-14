@@ -222,16 +222,23 @@ export async function runTellCommand(options: TellCommandOptions): Promise<strin
   ].join('\n');
   const preferred = options.preferredRunSlug !== undefined
     && candidateOptions.some((candidate) => candidate.value === options.preferredRunSlug);
-  const selectedRunSlug = preferred
-    ? await selectOptionWithDefault(
-      selectorPrompt,
-      candidateOptions,
-      options.preferredRunSlug!,
-    )
-    : await selectOption(
-      selectorPrompt,
-      candidateOptions,
-    );
+  let selectedRunSlug: string | null;
+  try {
+    selectedRunSlug = preferred
+      ? await selectOptionWithDefault(
+        selectorPrompt,
+        candidateOptions,
+        options.preferredRunSlug!,
+      )
+      : await selectOption(
+        selectorPrompt,
+        candidateOptions,
+      );
+  } catch (error) {
+    return getLabel('tui.errors.tellSelectionFailed', options.lang, {
+      error: sanitizeTerminalText(getErrorMessage(error)),
+    });
+  }
   if (selectedRunSlug === null) {
     return getLabel('tui.errors.tellCancelled', options.lang);
   }
@@ -249,26 +256,26 @@ export async function runTellCommand(options: TellCommandOptions): Promise<strin
   }
   const { content } = contentResolution;
 
-  const confirmed = await confirmWithCancel(getLabel('tui.tell.confirm', options.lang, {
-    task: safeTellDisplayText(selected.task.name, '(unnamed task)'),
-    summary: safeTellDisplayText(selected.task.summary, '(no summary)'),
-    workflow: safeTellDisplayText(selected.meta.workflow, 'unknown'),
-    step: safeTellDisplayText(selected.meta.currentStep, 'unknown'),
-    runSlug: safeTellDisplayText(selected.runSlug, 'unknown'),
-    content: safeTellContentDisplayText(content),
-  }));
-  if (confirmed.kind === 'cancelled' || !confirmed.value) {
-    return getLabel('tui.errors.tellCancelled', options.lang);
-  }
-
   try {
+    const confirmed = await confirmWithCancel(getLabel('tui.tell.confirm', options.lang, {
+      task: safeTellDisplayText(selected.task.name, '(unnamed task)'),
+      summary: safeTellDisplayText(selected.task.summary, '(no summary)'),
+      workflow: safeTellDisplayText(selected.meta.workflow, 'unknown'),
+      step: safeTellDisplayText(selected.meta.currentStep, 'unknown'),
+      runSlug: safeTellDisplayText(selected.runSlug, 'unknown'),
+      content: safeTellContentDisplayText(content),
+    }));
+    if (confirmed.kind === 'cancelled' || !confirmed.value) {
+      return getLabel('tui.errors.tellCancelled', options.lang);
+    }
+
+    // The common writer rechecks the task while holding the intervention lock.
     const result = await issueTellableRunningTask(options.cwd, selectedRunSlug, content);
     return getLabel('tui.tell.sent', options.lang, {
       task: safeTellDisplayText(result.target.task.name, '(unnamed task)'),
       instructionId: String(result.instructionId),
     });
   } catch (error) {
-    // The common writer rechecks the task while holding the intervention lock.
     return getLabel('tui.errors.tellStale', options.lang, {
       error: sanitizeTerminalText(getErrorMessage(error)),
     });

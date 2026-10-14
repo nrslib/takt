@@ -1881,6 +1881,7 @@ describe('DefaultSystemStepServices', () => {
     });
     expect(mockSaveTaskFile).toHaveBeenCalledWith('/repo', 'Implement follow-up effect', {
       workflow: 'takt-default',
+      deduplicateActiveTargets: true,
       issue: 586,
       worktree: true,
       baseBranch: 'improve',
@@ -1930,6 +1931,7 @@ describe('DefaultSystemStepServices', () => {
 
     expect(mockSaveTaskFile).toHaveBeenCalledWith('/repo', 'Implement follow-up effect', {
       workflow: 'takt-default',
+      deduplicateActiveTargets: true,
       worktree: true,
       autoPr: true,
       draftPr: false,
@@ -1974,6 +1976,7 @@ describe('DefaultSystemStepServices', () => {
     expect(mockResolveBaseBranch).not.toHaveBeenCalled();
     expect(mockSaveTaskFile).toHaveBeenCalledWith('/repo', 'Implement follow-up effect', {
       workflow: 'takt-default',
+      deduplicateActiveTargets: true,
       baseBranch: 'improve',
     });
     expect(result).toEqual({
@@ -2163,6 +2166,7 @@ describe('DefaultSystemStepServices', () => {
 
     expect(mockSaveTaskFile).toHaveBeenCalledWith('/repo', 'Address review comments', {
       workflow: 'takt-default',
+      deduplicateActiveTargets: true,
       worktree: true,
       branch: 'task/test-branch',
       baseBranch: 'main',
@@ -2224,6 +2228,7 @@ describe('DefaultSystemStepServices', () => {
     expect(mockResolveBaseBranch).not.toHaveBeenCalled();
     expect(mockSaveTaskFile).toHaveBeenCalledWith('/repo', 'Address review comments', {
       workflow: 'takt-default',
+      deduplicateActiveTargets: true,
       worktree: true,
       branch: 'task/test-branch',
       baseBranch: 'improve',

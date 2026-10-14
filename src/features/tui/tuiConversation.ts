@@ -177,7 +177,7 @@ export type TuiLocalCommand =
     text?: string;
   }
   | { kind: 'paste_image' }
-  | { kind: 'notice'; message: string };
+  | { kind: 'notice'; message: string; operationResult?: true };
 
 export interface TuiConversation {
   /**
@@ -210,6 +210,7 @@ export interface TuiConversation {
    * session keeps no transcript of its own (exec).
    */
   recordRejectedDraft?(task: string): void;
+  recordOperationResult?(notice: string): void;
   /** Snapshot all user/assistant context needed by a recreated provider session. */
   snapshotHistory?(): readonly ConversationMessage[];
   /** Latest run confirmed by a successful task-state lookup in this conversation. */
@@ -225,6 +226,7 @@ export interface TuiConversation {
 }
 
 export interface TuiConversationWithSourceContext extends TuiConversation {
+  recordOperationResult(notice: string): void;
   /** Replace the Source Context without rebuilding the conversation. */
   setSourceContext(sourceContext: string): void;
   /** Current Source Context to retain when settings rebuild the conversation. */
@@ -286,6 +288,10 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
       session.recordRejectedDraft(task);
     },
 
+    recordOperationResult(notice: string): void {
+      session.recordOperationResult(notice);
+    },
+
     snapshotHistory(): readonly ConversationMessage[] {
       return session.snapshotHistory();
     },
@@ -336,7 +342,7 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
             return { kind: 'handoff', id: 'assistant-retry', text: match.text || undefined };
           }
           return previousOrder === undefined
-            ? { kind: 'notice', message: getLabel('interactive.ui.retryNoOrder', ctx.lang) }
+            ? { kind: 'notice', message: getLabel('interactive.ui.retryNoOrder', ctx.lang), operationResult: true }
             : { kind: 'choose_action', task: previousOrder, origin: 'retry' };
         }
         case SlashCommand.Requeue:

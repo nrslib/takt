@@ -832,6 +832,25 @@ describe('/resume command', () => {
     expect(result.action).toBe('cancel');
   });
 
+  it('shows /retry without a previous order and passes the result to the next AI turn', async () => {
+    setupRawStdin(toRawInputs(['/retry', 'What can I do next?', '/cancel']));
+    const { provider, capture } = createMockProvider(['You can create a new order.']);
+    const ctx = createSessionContext({ provider: provider as SessionContext['provider'] });
+
+    const result = await runConversationLoop('/test', ctx, {
+      ...defaultStrategy,
+      enableRetryCommand: true,
+      enableAssistantRetryCommands: false,
+      previousOrderContent: undefined,
+    }, undefined, undefined);
+
+    expect(mockLogInfo).toHaveBeenCalledWith('No previous order found.');
+    expect(capture.prompts).toHaveLength(1);
+    expect(capture.prompts[0]).toContain('No previous order found.');
+    expect(capture.prompts[0]).toContain('What can I do next?');
+    expect(result.action).toBe('cancel');
+  });
+
   it.each(['retry', 'requeue'] as const)('should process the next input in the same dialogue after /%s confirmation cancellation', async (command) => {
     setupRawStdin(toRawInputs(['before command', `/${command} keep scope`, 'after cancellation', '/cancel']));
     const { provider, capture } = createMockProvider(['Initial answer.', 'Continued answer.']);

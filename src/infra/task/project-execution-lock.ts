@@ -4,8 +4,9 @@ import {
   openSync, readFileSync, readdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import { isRecordedProcessAlive } from '../fs/file-lock.js';
 import {
-  getProcessIdentity, getSelfProcessIdentity, hasProcessIdentityMismatch, isProcessAlive, sameProcessIdentity,
+  getSelfProcessIdentity, sameProcessIdentity,
   type ProcessIdentity,
 } from './process.js';
 
@@ -197,11 +198,8 @@ function recoverOwner(directory: string, nextOwnerId: string): void {
   const snapshot = readOwner(directory);
   if (snapshot === undefined) return;
   const { owner } = snapshot;
-  if (isProcessAlive(owner.pid)) {
-    const currentIdentity = getProcessIdentity(owner.pid);
-    if (!hasProcessIdentityMismatch(owner.processIdentity, currentIdentity)) {
-      throw new ProjectExecutionAlreadyRunningError(owner);
-    }
+  if (isRecordedProcessAlive(owner.pid, owner.processIdentity)) {
+    throw new ProjectExecutionAlreadyRunningError(owner);
   }
   if (owner.ownerId === nextOwnerId) {
     throw new Error('Project execution owner ID collides with a previous owner');
@@ -213,8 +211,7 @@ export function getProjectExecutionOwner(cwd: string): ExecutionOwner | undefine
   const directory = join(cwd, '.takt', LOCK_DIRECTORY);
   const snapshot = readOwner(directory);
   if (snapshot === undefined) return undefined;
-  if (isProcessAlive(snapshot.owner.pid)
-    && !hasProcessIdentityMismatch(snapshot.owner.processIdentity, getProcessIdentity(snapshot.owner.pid))) {
+  if (isRecordedProcessAlive(snapshot.owner.pid, snapshot.owner.processIdentity)) {
     return snapshot.owner;
   }
   removeOwner(directory, snapshot);

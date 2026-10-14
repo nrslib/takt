@@ -19,6 +19,8 @@ import {
   type ConversationDispatchOutcome,
 } from '../../features/interactive/index.js';
 import { cleanupInteractiveResultAttachments } from '../../features/interactive/imageAttachments.js';
+import type { TaskExecutionOutcome } from '../../features/tasks/execute/selectAndExecute.js';
+import { describeSavedTask, describeIssueResult, describeIssueOnlyResult, describeExecutionResult, runConversationOperation } from '../../features/interactive/operationFeedback.js';
 import { INTERACTIVE_MODES } from '../../core/models/index.js';
 import {
   getWorkflowDescription,
@@ -37,6 +39,7 @@ import { resolveIssueInput, resolvePrInput } from './routing-inputs.js';
 import { createPullRequestContext } from '../../core/workflow/pr-context.js';
 import { toLocalBranchRef } from '../../shared/utils/gitBranchValidation.js';
 import { getAssistantSessionPersona } from '../../features/interactive/assistantMode.js';
+import { resolveInstructionIssue } from '../../features/interactive/issueBinding.js';
 
 export async function executeDefaultAction(task?: string): Promise<void> {
   const { cwd: resolvedCwd, pipelineMode } = getCliExecutionContext();
@@ -246,15 +249,10 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     taskHistory: loadTaskHistory(resolvedCwd, lang),
   });
   let result: InteractiveModeResult;
-  let dispatchCompletedInLoop = false;
   const dispatchSelectedAction = async (
     actionResult: InteractiveModeResult,
   ): Promise<ConversationDispatchOutcome> => {
-    const outcome = await dispatchConversation(workflowId, actionResult);
-    if (outcome.kind !== 'cancelled') {
-      dispatchCompletedInLoop = true;
-    }
-    return outcome;
+    return dispatchConversation(workflowId, actionResult);
   };
   const assistantOverrideProvider = agentOverrides?.provider;
 
@@ -349,15 +347,25 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     }
   }
 
-  await finishConversation(workflowId, result, dispatchCompletedInLoop);
+  await finishConversation(workflowId, result);
 
   async function finishConversation(
     chosenWorkflowId: string,
     conversationResult: InteractiveModeResult,
-    dispatchCompleted = false,
   ): Promise<void> {
     try {
-      if (!dispatchCompleted) {
+      if (conversationResult.action === 'cancel') {
+        return;
+      }
+      if (!useTui && conversationResult.action === 'execute') {
+        applyIssueContextReplacement(conversationResult);
+        const result = await executeConversation(chosenWorkflowId, conversationResult);
+        const outcome = describeExecutionResult(result, lang);
+        if ('success' in result && !result.success) {
+          throw new Error(outcome.notice);
+        }
+        info(outcome.notice);
+      } else {
         await dispatchConversation(chosenWorkflowId, conversationResult);
       }
     } finally {
@@ -365,15 +373,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
     }
   }
 
-  /**
-   * Runs what the conversation decided on. The attachments are left alone: a
-   * resident TUI session pastes into the same store after this returns, and the
-   * caller that owns the store cleans it up when the session ends.
-   */
-  async function dispatchConversation(
-    chosenWorkflowId: string,
-    conversationResult: InteractiveModeResult,
-  ): Promise<ConversationDispatchOutcome> {
+  function applyIssueContextReplacement(conversationResult: InteractiveModeResult): void {
     if (conversationResult.issueContextReplacement !== undefined) {
       sourcePrNumber = undefined;
       prBranch = undefined;
@@ -385,63 +385,83 @@ export async function executeDefaultAction(task?: string): Promise<void> {
         ...(sourceIssueNumber === undefined ? {} : { issueNumber: sourceIssueNumber }),
       };
     }
-    return dispatchConversationAction<InteractiveModeResult['action'], ConversationDispatchOutcome>(conversationResult, {
-      execute: async ({ task: confirmedTask }) => {
-        if (prBranch) {
-          info(`Fetching and checking out PR branch: ${prBranch}`);
-          checkoutBranch(resolvedCwd, prBranch);
-          if (selectOptions.prContext) {
-            selectOptions.prContext = createPullRequestContext({
-              ...selectOptions.prContext,
-              baseDiffRef: materializePullRequestBase(
-                resolvedCwd,
-                resolvedCwd,
-                selectOptions.prContext.baseBranch,
-              ),
-              headDiffRef: toLocalBranchRef(prBranch),
-            });
-          }
-          success(`Checked out PR branch: ${prBranch}`);
-        }
-        selectOptions.interactiveUserInput = true;
-        selectOptions.workflow = chosenWorkflowId;
-        selectOptions.interactiveMetadata = { confirmed: true, task: confirmedTask };
-        selectOptions.skipTaskList = true;
-        if (conversationResult.attachments) {
-          selectOptions.attachments = conversationResult.attachments;
-        }
-        await selectAndExecuteTask(resolvedCwd, confirmedTask, {
-          ...selectOptions,
-          failureMode: useTui ? 'return' : 'exit',
-        }, agentOverrides);
-        return { kind: 'dispatched' };
-      },
+  }
+
+  async function executeConversation(
+    chosenWorkflowId: string,
+    conversationResult: InteractiveModeResult,
+  ): Promise<TaskExecutionOutcome> {
+    if (sourceIssueNumber !== undefined || conversationResult.issueContextReplacement !== undefined) {
+      const boundIssue = resolveInstructionIssue(conversationResult.task, sourceIssueNumber);
+      selectOptions.traceTaskContext = {
+        source: 'issue',
+        ...(boundIssue === undefined ? {} : { issueNumber: boundIssue }),
+      };
+    }
+    if (prBranch) {
+      info(`Fetching and checking out PR branch: ${prBranch}`);
+      checkoutBranch(resolvedCwd, prBranch);
+      if (selectOptions.prContext) {
+        selectOptions.prContext = createPullRequestContext({
+          ...selectOptions.prContext,
+          baseDiffRef: materializePullRequestBase(
+            resolvedCwd,
+            resolvedCwd,
+            selectOptions.prContext.baseBranch,
+          ),
+          headDiffRef: toLocalBranchRef(prBranch),
+        });
+      }
+      success(`Checked out PR branch: ${prBranch}`);
+    }
+    selectOptions.interactiveUserInput = true;
+    selectOptions.workflow = chosenWorkflowId;
+    selectOptions.interactiveMetadata = { confirmed: true, task: conversationResult.task };
+    selectOptions.skipTaskList = true;
+    if (conversationResult.attachments) {
+      selectOptions.attachments = conversationResult.attachments;
+    }
+    return selectAndExecuteTask(resolvedCwd, conversationResult.task, {
+      ...selectOptions,
+      failureMode: 'return',
+    }, agentOverrides);
+  }
+
+  /**
+   * Runs what the conversation decided on. The attachments are left alone: a
+   * resident TUI session pastes into the same store after this returns, and the
+   * caller that owns the store cleans it up when the session ends.
+   */
+  async function dispatchConversation(
+    chosenWorkflowId: string,
+    conversationResult: InteractiveModeResult,
+  ): Promise<ConversationDispatchOutcome> {
+    applyIssueContextReplacement(conversationResult);
+    return runConversationOperation(conversationResult.action, lang, () => dispatchConversationAction(conversationResult, {
+      execute: async () => describeExecutionResult(await executeConversation(chosenWorkflowId, conversationResult), lang),
       create_issue: async ({ task: confirmedTask }) => {
+        const boundIssue = resolveInstructionIssue(confirmedTask, sourceIssueNumber);
         const labels = await promptLabelSelection(lang);
-        await createIssueAndSaveTask(resolvedCwd, confirmedTask, chosenWorkflowId, {
+        const result = await createIssueAndSaveTask(resolvedCwd, confirmedTask, chosenWorkflowId, {
           labels,
-          ...(sourceIssueNumber !== undefined
-            ? { sourceIssue: { number: sourceIssueNumber, language: lang } }
+          ...(boundIssue !== undefined
+            ? { sourceIssue: { number: boundIssue, language: lang } }
             : {}),
           ...(conversationResult.attachments ? { attachments: conversationResult.attachments } : {}),
         });
-        return { kind: 'dispatched' };
+        return describeIssueResult(result, lang);
       },
       create_issue_only: async ({ task: confirmedTask }) => {
         const labels = await promptLabelSelection(lang);
-        const result = createIssueFromTaskResult(confirmedTask, { cwd: resolvedCwd, labels });
-        if (result.success) return { kind: 'dispatched' };
-        return result.issueCreated === true
-          ? { kind: 'dispatched', warning: result.error }
-          : { kind: 'failed', error: result.error };
+        return describeIssueOnlyResult(createIssueFromTaskResult(confirmedTask, { cwd: resolvedCwd, labels }), lang);
       },
       save_task: async ({ task: confirmedTask }) => {
+        const boundIssue = resolveInstructionIssue(confirmedTask, sourceIssueNumber);
         if (sourcePrNumber !== undefined) {
           if (prBranch === undefined) {
-            logError('Fetched PR head branch is required when saving a PR review task.');
-            process.exit(1);
+            throw new Error('Fetched PR head branch is required when saving a PR review task.');
           }
-          await saveTaskFromInteractive(resolvedCwd, confirmedTask, chosenWorkflowId, {
+          const result = await saveTaskFromInteractive(resolvedCwd, confirmedTask, chosenWorkflowId, {
             prNumber: sourcePrNumber,
             presetSettings: {
               worktree: true,
@@ -451,20 +471,16 @@ export async function executeDefaultAction(task?: string): Promise<void> {
             },
             ...(conversationResult.attachments ? { attachments: conversationResult.attachments } : {}),
           });
-          return { kind: 'dispatched' };
+          return describeSavedTask(result, lang);
         }
         const saveResult = await saveTaskFromInteractive(resolvedCwd, confirmedTask, chosenWorkflowId, {
-          ...(sourceIssueNumber !== undefined ? { issue: sourceIssueNumber } : {}),
+          ...(boundIssue !== undefined ? { issue: boundIssue } : {}),
           allowCancel: true,
           ...(conversationResult.attachments ? { attachments: conversationResult.attachments } : {}),
         });
-        return saveResult !== undefined
-          && 'kind' in saveResult
-          && saveResult.kind === 'cancelled'
-          ? { kind: 'cancelled' }
-          : { kind: 'dispatched' };
+        return describeSavedTask(saveResult, lang);
       },
-      cancel: () => ({ kind: 'dispatched' }),
-    });
+      cancel: () => ({ kind: 'cancelled', notice: getLabel('interactive.ui.cancelled', lang) }),
+    }));
   }
 }

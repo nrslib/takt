@@ -327,13 +327,11 @@ describe('personaMode', () => {
     expect(mockProvider._call).toHaveBeenCalledTimes(1);
   });
 
-  it('should return to the action selector after a cancelled persona save', async () => {
+  it('should return to the conversation after a cancelled persona save', async () => {
     setupRawStdin(toRawInputs(['/go', '/cancel']));
     setupMockProvider(['Task summary.']);
-    mockSelectOption
-      .mockResolvedValueOnce('save_task')
-      .mockResolvedValueOnce('continue');
-    const dispatch = vi.fn().mockResolvedValue({ kind: 'cancelled' });
+    mockSelectOption.mockResolvedValueOnce('save_task');
+    const dispatch = vi.fn().mockResolvedValue({ kind: 'cancelled', notice: 'Task saving cancelled. No task was saved.' });
     const personaModeWithDispatch = personaMode as unknown as (
       cwd: string,
       firstStep: FirstStepInfo,
@@ -353,7 +351,7 @@ describe('personaMode', () => {
     );
 
     expect(result.action).toBe('cancel');
-    expect(mockSelectOption).toHaveBeenCalledTimes(2);
+    expect(mockSelectOption).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
       action: 'save_task',
       task: 'Task summary.',

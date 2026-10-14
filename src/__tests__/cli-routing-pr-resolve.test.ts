@@ -201,6 +201,12 @@ function createMockPrReview(overrides: Partial<PrReviewData & { baseRefName?: st
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockSelectAndExecuteTask.mockResolvedValue({ success: true } as never);
+  mockSaveTaskFromInteractive.mockResolvedValue({ taskName: 'saved-task', tasksFile: '/test/cwd/.takt/tasks.yaml' });
+  mockCreateIssueAndSaveTask.mockResolvedValue({
+    success: true,
+    created: { taskName: 'issue-task', tasksFile: '/test/cwd/.takt/tasks.yaml', workflow: 'default', issueNumber: 42 },
+  });
   mockPipelineMode = false;
   for (const key of Object.keys(mockOpts)) {
     delete mockOpts[key];
@@ -258,6 +264,7 @@ describe('interactive image attachment routing', () => {
     await expect(executeDefaultAction()).rejects.toThrow('execute failed');
 
     expect(cleanupAttachments).toHaveBeenCalledTimes(1);
+    expect(mockSelectAndExecuteTask).toHaveBeenCalledTimes(1);
   });
 
   it('should pass attachments from interactive save_task result to saveTaskFromInteractive', async () => {
@@ -373,11 +380,13 @@ describe('PR resolution in routing', () => {
       );
     });
 
-    it('should exit with a controlled error when a saved PR task has no head branch', async () => {
+    it('should report the missing PR head branch without saving or exiting the conversation', async () => {
       mockOpts.pr = 456;
-      mockInteractiveMode.mockResolvedValue({
-        action: 'save_task',
-        task: 'Saved PR task',
+      let notice: string | undefined;
+      mockInteractiveMode.mockImplementationOnce(async (...args) => {
+        const outcome = await args[5]!.dispatch!({ action: 'save_task', task: 'Saved PR task' });
+        notice = outcome.notice;
+        return { action: 'cancel', task: '' };
       });
       mockCheckCliStatus.mockReturnValue({ available: true });
       mockFetchPrReviewComments.mockReturnValue(createMockPrReview({ headRefName: undefined }));
@@ -385,11 +394,9 @@ describe('PR resolution in routing', () => {
         throw new Error('process.exit called');
       });
 
-      await expect(executeDefaultAction()).rejects.toThrow('process.exit called');
-      expect(mockLogError).toHaveBeenCalledWith(
-        'Fetched PR head branch is required when saving a PR review task.',
-      );
-      expect(mockExit).toHaveBeenCalledWith(1);
+      await expect(executeDefaultAction()).resolves.toBeUndefined();
+      expect(notice).toContain('Fetched PR head branch is required when saving a PR review task.');
+      expect(mockExit).not.toHaveBeenCalled();
       expect(mockSaveTaskFromInteractive).not.toHaveBeenCalled();
 
       mockExit.mockRestore();
@@ -464,12 +471,13 @@ describe('PR resolution in routing', () => {
       { name: 'one Issue', replacement: { issueNumber: 123 }, trace: { source: 'issue', issueNumber: 123 } },
       { name: 'multiple Issues', replacement: {}, trace: { source: 'issue' } },
     ])('should execute $name after /issue without the previous PR context', async ({ replacement, trace }) => {
+      const task = '# Task for the new Issue\n\nIssue: #123\n\nImplement the fix.';
       mockOpts.pr = 456;
       mockCheckCliStatus.mockReturnValue({ available: true });
       mockFetchPrReviewComments.mockReturnValue(createMockPrReview({ headRefName: 'feat/my-pr-branch' }));
       mockInteractiveMode.mockResolvedValue({
         action: 'execute',
-        task: 'task for the new Issue context',
+        task,
         issueContextReplacement: replacement,
       });
 
@@ -486,12 +494,13 @@ describe('PR resolution in routing', () => {
       { name: 'one Issue', replacement: { issueNumber: 123 }, savedOptions: { issue: 123, allowCancel: true } },
       { name: 'multiple Issues', replacement: {}, savedOptions: { allowCancel: true } },
     ])('should save $name after /issue without the previous PR settings', async ({ replacement, savedOptions }) => {
+      const task = '# Task for the new Issue\n\nIssue: #123\n\nImplement the fix.';
       mockOpts.pr = 456;
       mockCheckCliStatus.mockReturnValue({ available: true });
       mockFetchPrReviewComments.mockReturnValue(createMockPrReview({ headRefName: 'feat/my-pr-branch' }));
       mockInteractiveMode.mockResolvedValue({
         action: 'save_task',
-        task: 'saved task for the new Issue context',
+        task,
         issueContextReplacement: replacement,
       });
 
@@ -499,7 +508,7 @@ describe('PR resolution in routing', () => {
 
       expect(mockSaveTaskFromInteractive).toHaveBeenCalledExactlyOnceWith(
         '/test/cwd',
-        'saved task for the new Issue context',
+        task,
         'default',
         savedOptions,
       );

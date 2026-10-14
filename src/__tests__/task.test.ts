@@ -256,6 +256,22 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(store.read()).toEqual({ tasks: [] });
   });
 
+  it.each([false, true])('should reject nested access with a separate store=%s and retain the outer lock', (separateStore) => {
+    const store = new TaskStore(testDir);
+    const nestedStore = separateStore ? new TaskStore(testDir) : store;
+    const lockFile = join(testDir, '.takt', 'tasks.yaml.lock');
+
+    store.update((current) => {
+      const owner = readFileSync(lockFile, 'utf-8');
+      expect(() => nestedStore.read()).toThrow(/reentrant lock detected/);
+      expect(readFileSync(lockFile, 'utf-8')).toBe(owner);
+      return current;
+    });
+
+    expect(existsSync(lockFile)).toBe(false);
+    expect(nestedStore.read()).toEqual({ tasks: [] });
+  });
+
   it('should clear retry metadata without mutating the source task record', () => {
     const resumePoint = {
       version: 2 as const,

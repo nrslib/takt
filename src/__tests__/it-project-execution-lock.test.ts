@@ -18,7 +18,10 @@ vi.mock('node:crypto', async (importOriginal) => {
 vi.mock('../infra/task/process.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../infra/task/process.js')>();
   return { ...actual, getProcessIdentity: vi.fn(actual.getProcessIdentity),
-    getSelfProcessIdentity: vi.fn(actual.getSelfProcessIdentity) };
+    getSelfProcessIdentity: vi.fn(actual.getSelfProcessIdentity),
+    isRecordedProcessAlive: (pid: number, identity: ProcessIdentity | undefined) => (
+      actual.isProcessAlive(pid) && !actual.hasProcessIdentityMismatch(identity, getProcessIdentity(pid))
+    ) };
 });
 vi.mock('../infra/task/summarize.js', () => ({
   summarizeTaskName: vi.fn().mockResolvedValue('mcp-during-watch'),

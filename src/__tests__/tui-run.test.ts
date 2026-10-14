@@ -22,6 +22,7 @@ import { matchSlashCommand } from '../features/interactive/commandMatcher.js';
 import { filterSlashCommands } from '../features/interactive/slashCommandRegistry.js';
 import type { ImageAttachmentStore } from '../features/interactive/imageAttachments.js';
 import { getLabel } from '../shared/i18n/index.js';
+import { describeExecutionResult } from '../features/interactive/operationFeedback.js';
 import { expectUndeliveredPrompt } from './helpers/undelivered.js';
 
 const {
@@ -267,7 +268,7 @@ function startRun(overrides?: Partial<RunTuiOptions>) {
 
 function createConversationDouble(
   overrides: Partial<TuiConversationWithSourceContext> = {},
-): TuiConversationWithSourceContext {
+): TuiConversationWithSourceContext & { recordOperationResult: (notice: string) => void } {
   let sourceContext: string | undefined;
   return {
     lang: 'en' as const,
@@ -284,6 +285,7 @@ function createConversationDouble(
     }),
     resumeSession: vi.fn(),
     recordRejectedDraft: vi.fn(),
+    recordOperationResult: vi.fn(),
     snapshotHistory: vi.fn(() => []),
     getSessionId: vi.fn(() => undefined),
     setEffort: vi.fn(),
@@ -393,9 +395,250 @@ beforeEach(() => {
 });
 
 describe('runTui', () => {
+  describe('operation feedback in the same conversation', () => {
+    const input = (text: string) => ({
+      text, abortSignal: new AbortController().signal, onAssistantChunk: vi.fn(),
+    });
+
+    it.each([
+      ['tell', 'Sent to running-login-fix (instruction #3).'],
+      ['tell', 'Tell cancelled. No instruction was sent.'],
+      ['tell', 'Tell target is stale: running-login-fix.'],
+      ['tell', 'Tell generation failed: provider unavailable.'],
+      ['tell', getLabel('tui.errors.tellSelectionFailed', 'en', { error: 'Interactive selection input exceeds 65536 byte limit' })],
+      ['assistant-retry', 'Task saved: retried-login-fix.'],
+      ['assistant-retry', 'Retry cancelled. No task was changed.'],
+      ['assistant-retry', 'Retry target is stale: failed-login-fix.'],
+      ['assistant-retry', 'Retry generation failed: provider unavailable.'],
+      ['assistant-requeue', 'Task requeued: failed-login-fix.'],
+      ['assistant-requeue', 'Requeue cancelled. No task was changed.'],
+      ['assistant-requeue', 'Requeue target is stale: failed-login-fix.'],
+      ['assistant-requeue', 'Requeue failed: task storage unavailable.'],
+    ] as const)('should retain the %s notice "%s" in history and the next provider input', async (id, notice) => {
+      realTuiConversation.current = true;
+      const handler = id === 'tell' ? mockRunTellCommand : mockRunAssistantRetryCommand;
+      handler.mockResolvedValueOnce(notice);
+      const call = vi.fn().mockResolvedValue({
+        persona: 'interactive', status: 'done', content: 'Original proposal', timestamp: new Date(),
+      });
+      const setup = vi.spyOn(getProvider('mock'), 'setup').mockReturnValue({ call });
+      const tree = scriptRender();
+      const run = startRun();
+      try {
+        await waitForMount(tree, 1);
+        const first = tree.conversationProps();
+        await first.conversation.submit(input('Prepare a login fix'));
+        first.onExit({ kind: 'handoff', id, text: '' }, { history: ['Prepare a login fix'], queue: [] });
+        await waitForMount(tree, 2);
+
+        const next = tree.conversationProps();
+        expect(next.initialEntries).toEqual([{ role: 'system', content: notice }]);
+        expect(next.conversation.snapshotHistory?.().map((message) => message.content)).toContain(notice);
+        expect(next.conversation.snapshotHistory?.().filter((message) => message.operationResult).map((message) => message.content))
+          .toEqual([notice]);
+        expect(next.conversation.resolveLocalCommand('/accept')).toMatchObject({
+          kind: 'execute', task: 'Original proposal', origin: 'accept',
+        });
+        expect(call).toHaveBeenCalledTimes(1);
+        await expect(next.conversation.submit(input('どうなった？'))).resolves.toMatchObject({ kind: 'assistant_response' });
+        expect(call.mock.calls[1]?.[0]).toContain(notice);
+        expect(call.mock.calls[1]?.[0]).toContain('どうなった？');
+        expect(handler).toHaveBeenCalledTimes(1);
+      } finally {
+        tree.conversationProps().onExit(
+          { kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] },
+        );
+        const finished = await run;
+        if (finished.kind === 'selected') finished.result.cleanupAttachments?.();
+        setup.mockRestore();
+      }
+    });
+
+    it.each([
+      ['save_task', 'Task saved: actual-login-fix.'],
+      ['create_issue', 'Issue #42 created. Task saved: actual-issue-fix.'],
+      ['create_issue', 'Issue #42 created. No task was saved: disk full.'],
+      ['execute', 'Execution finished.'],
+      ['execute', describeExecutionResult({ success: false, reason: 'workflow aborted' }, 'en').notice],
+      ['execute', describeExecutionResult({ success: false, reason: 'Workflow not found: missing-workflow' }, 'en').notice],
+      ['execute', describeExecutionResult({ success: false, reason: 'Managed provider installation was declined' }, 'en').notice],
+      ['execute', describeExecutionResult({ success: false }, 'en').notice],
+    ] as const)('should record the /go %s result "%s" in the same conversation', async (action, notice) => {
+      realTuiConversation.current = true;
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched', notice });
+      mockSelectAction.mockResolvedValueOnce(action);
+      const call = vi.fn().mockResolvedValue({
+        persona: 'interactive', status: 'done', content: 'Original proposal', timestamp: new Date(),
+      });
+      const setup = vi.spyOn(getProvider('mock'), 'setup').mockReturnValue({ call });
+      const tree = scriptRender();
+      const run = startRun({ dispatch });
+      try {
+        await waitForMount(tree, 1);
+        const first = tree.conversationProps();
+        await first.conversation.submit(input('Prepare a login fix'));
+        first.onExit({ kind: 'choose_action', origin: 'go', task: 'Original proposal' }, { history: ['/go'], queue: [] });
+        await waitForMount(tree, 2);
+
+        const next = tree.conversationProps();
+        expect(next.initialEntries).toEqual([{ role: 'system', content: notice }]);
+        expect(next.conversation.snapshotHistory?.().map((message) => message.content)).toContain(notice);
+        expect(next.conversation.resolveLocalCommand('/accept')).toMatchObject({
+          kind: 'execute', task: 'Original proposal', origin: 'accept',
+        });
+        expect(call).toHaveBeenCalledTimes(1);
+        await next.conversation.submit(input('どうなった？'));
+        expect(call.mock.calls[1]?.[0]).toContain(notice);
+        expect(call.mock.calls[1]?.[0]).toContain('どうなった？');
+        expect(dispatch).toHaveBeenCalledTimes(1);
+      } finally {
+        tree.conversationProps().onExit(
+          { kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] },
+        );
+        const finished = await run;
+        if (finished.kind === 'selected') finished.result.cleanupAttachments?.();
+        setup.mockRestore();
+      }
+    });
+
+    it.each(['tell', 'assistant-retry', 'assistant-requeue'] as const)('should record the %s result after a settings rebuild succeeds or fails', async (id) => {
+      for (const rebuildFails of [true, false]) {
+        realTuiConversation.current = true;
+        mockRunTellCommand.mockClear();
+        mockRunAssistantRetryCommand.mockClear();
+        const handler = id === 'tell' ? mockRunTellCommand : mockRunAssistantRetryCommand;
+        const completedNotice = `${id} completed`;
+        handler.mockResolvedValue(completedNotice);
+        const call = vi.fn().mockResolvedValue({
+          persona: 'interactive', status: 'done', content: 'Original proposal', timestamp: new Date(),
+        });
+        const setup = vi.spyOn(getProvider('mock'), 'setup').mockReturnValue({ call });
+        const tree = scriptRender();
+        const run = startRun();
+        try {
+          await waitForMount(tree, 1);
+          const first = tree.conversationProps();
+          await first.conversation.submit(input('Prepare a login fix'));
+          first.onExit({ kind: 'handoff', id: 'model', text: 'temporary-model' }, { history: [], queue: [] });
+          await waitForMount(tree, 2);
+          if (rebuildFails) {
+            mockGetWorkflowDescription.mockImplementationOnce(() => { throw new Error('rebuild failed'); });
+          }
+          tree.conversationProps().onExit({ kind: 'handoff', id, text: 'follow up' }, { history: [], queue: [] });
+          await waitForMount(tree, 3);
+
+          const next = tree.conversationProps();
+          const notice = next.initialEntries.find((entry) => entry.role === 'system')?.content;
+          expect(notice).toBeDefined();
+          if (rebuildFails) {
+            expect(notice).toMatch(/failed/i);
+            expect(notice).toContain('rebuild failed');
+            expect(mockRunTellCommand).not.toHaveBeenCalled();
+            expect(mockRunAssistantRetryCommand).not.toHaveBeenCalled();
+          } else {
+            expect(notice).toBe(completedNotice);
+            expect(handler).toHaveBeenCalledTimes(1);
+            expect(handler).toHaveBeenCalledWith(expect.objectContaining({
+              inlineText: 'follow up',
+              ...(id === 'tell' ? {} : { command: id === 'assistant-retry' ? 'retry' : 'requeue' }),
+            }));
+          }
+          const records = next.conversation.snapshotHistory?.().filter((message) => message.operationResult);
+          expect(records?.map((message) => message.content)).toEqual([notice]);
+          await expect(next.conversation.submit(input('どうなった？'))).resolves.toMatchObject({ kind: 'assistant_response' });
+          expect(call).toHaveBeenCalledTimes(2);
+          expect(call.mock.calls[1]?.[0]).toContain(notice);
+          expect(call.mock.calls[1]?.[0]).toContain('どうなった？');
+        } finally {
+          tree.conversationProps().onExit(
+            { kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] },
+          );
+          const finished = await run;
+          if (finished.kind === 'selected') finished.result.cleanupAttachments?.();
+          setup.mockRestore();
+        }
+      }
+    });
+
+    it.each(['save_task', 'create_issue', 'execute'] as const)('should record a /go %s exception and process the next question in the same run', async (action) => {
+      realTuiConversation.current = true;
+      const reason = 'Active task target already exists: login-fix';
+      const dispatch = vi.fn().mockRejectedValue(new Error(reason));
+      mockSelectAction.mockResolvedValueOnce(action).mockResolvedValue('continue');
+      const call = vi.fn().mockResolvedValue({
+        persona: 'interactive', status: 'done', content: 'Original proposal', timestamp: new Date(),
+      });
+      const setup = vi.spyOn(getProvider('mock'), 'setup').mockReturnValue({ call });
+      const tree = scriptRender();
+      const run = startRun({ dispatch });
+      try {
+        await waitForMount(tree, 1);
+        const first = tree.conversationProps();
+        await first.conversation.submit(input('Prepare a login fix'));
+        const instruction = await first.conversation.createInstruction(input(''));
+        expect(instruction).toMatchObject({ kind: 'task_instruction' });
+        if (instruction.kind !== 'task_instruction') throw new Error('Expected a task instruction');
+        first.onExit({ kind: 'choose_action', origin: 'go', task: instruction.task }, { history: ['/go'], queue: [] });
+        await waitForMount(tree, 2);
+
+        const next = tree.conversationProps();
+        const notice = next.initialEntries.find((entry) => entry.role === 'system')?.content;
+        expect(notice).toContain(reason);
+        expect(next.conversation.snapshotHistory?.().map((message) => message.content)).toContain(notice);
+        await next.conversation.submit(input('積まれた？'));
+        expect(call.mock.calls[2]?.[0]).toContain(reason);
+        expect(call.mock.calls[2]?.[0]).toContain('積まれた？');
+        expect(dispatch).toHaveBeenCalledTimes(1);
+      } finally {
+        tree.conversationProps().onExit(
+          { kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] },
+        );
+        const finished = await run.catch(() => undefined);
+        if (finished?.kind === 'selected') finished.result.cleanupAttachments?.();
+        setup.mockRestore();
+      }
+    });
+
+    it('should record a cancelled /go save and answer the next question without reopening its selector', async () => {
+      realTuiConversation.current = true;
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'cancelled', notice: 'Task saving cancelled. No task was saved.' });
+      mockSelectAction.mockResolvedValueOnce('save_task').mockResolvedValue('continue');
+      const call = vi.fn().mockResolvedValue({
+        persona: 'interactive', status: 'done', content: 'Original proposal', timestamp: new Date(),
+      });
+      const setup = vi.spyOn(getProvider('mock'), 'setup').mockReturnValue({ call });
+      const tree = scriptRender();
+      const run = startRun({ dispatch });
+      try {
+        await waitForMount(tree, 1);
+        const first = tree.conversationProps();
+        await first.conversation.submit(input('Prepare a login fix'));
+        first.onExit({ kind: 'choose_action', origin: 'go', task: 'Original proposal' }, { history: ['/go'], queue: [] });
+        await waitForMount(tree, 2);
+
+        const next = tree.conversationProps();
+        expect(mockSelectAction).toHaveBeenCalledTimes(1);
+        const notice = next.initialEntries.find((entry) => entry.role === 'system')?.content;
+        expect(notice).toMatch(/cancel/i);
+        expect(next.conversation.snapshotHistory?.().map((message) => message.content)).toContain(notice);
+        await next.conversation.submit(input('積まれた？'));
+        expect(call.mock.calls[1]?.[0]).toContain(notice);
+        expect(dispatch).toHaveBeenCalledTimes(1);
+      } finally {
+        tree.conversationProps().onExit(
+          { kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] },
+        );
+        const finished = await run;
+        if (finished.kind === 'selected') finished.result.cleanupAttachments?.();
+        setup.mockRestore();
+      }
+    });
+  });
+
   it.each(['en', 'ja'] as const)('reports Issue-only creation as an Issue notice in %s and redisplays the conversation', async (lang) => {
     const tree = scriptRender();
-    const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched' });
+    const notice = getLabel('interactive.operation.issueOnlyCreated', lang, { issueNumber: '123' });
+    const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched', notice });
     mockSelectAction.mockResolvedValueOnce('create_issue_only');
     const run = startRun({ lang, dispatch });
     await waitForMount(tree, 1);
@@ -410,7 +653,7 @@ describe('runTui', () => {
         action: 'create_issue_only', task: 'Issue instruction',
       }));
       expect(tree.conversationProps().initialEntries).toEqual([
-        { role: 'system', content: getLabel('tui.ui.issueCreated', lang) },
+        { role: 'system', content: notice },
       ]);
     } finally {
       tree.conversationProps().onExit(
@@ -668,7 +911,7 @@ describe('runTui', () => {
     }]);
   });
 
-  it('should replace Source Context through /issue and keep the TUI conversation active', async () => {
+  it('should generate instructions before and after /issue in the same TUI conversation', async () => {
     realTuiConversation.current = true;
     const issueProvider = installIssueProvider();
     const providerCalls: Array<{ prompt: string; sessionId?: string }> = [];
@@ -677,7 +920,11 @@ describe('runTui', () => {
       return {
         persona: 'interactive',
         status: 'done' as const,
-        content: 'Generated task instruction',
+        content: providerCalls.length === 2
+          ? '# Fix first Issue\n\nIssue: #123\n\nFix the first problem.'
+          : providerCalls.length === 4
+            ? '# Fix next Issue\n\nIssue: #456\n\nFix the next problem.'
+            : 'Conversation response',
         timestamp: new Date(),
         sessionId: 'ai-session',
       };
@@ -705,6 +952,12 @@ describe('runTui', () => {
       expect(providerCalls).toHaveLength(1);
       expect(providerCalls[0]?.prompt).toContain('## Issue #123: Issue 123');
 
+      await expect(conversation.createInstruction(input(''))).resolves.toMatchObject({
+        kind: 'task_instruction', task: '# Fix first Issue\n\nIssue: #123\n\nFix the first problem.',
+      });
+      expect(providerCalls[1]?.prompt).toContain('## Issue #123: Issue 123');
+      conversation.recordRejectedDraft?.('# Fix first Issue\n\nIssue: #123\n\nFix the first problem.');
+
       const command = conversation.resolveLocalCommand('/issue #456');
       expect(conversation.isCommandLine('/issue #456')).toBe(true);
       expect(command).toMatchObject({ kind: 'handoff', text: '#456' });
@@ -715,7 +968,7 @@ describe('runTui', () => {
       tree.conversationProps().onExit(command, { history: ['/issue #456'], queue: [] });
       await waitForMount(tree, 2);
 
-      expect(providerCalls).toHaveLength(1);
+      expect(providerCalls).toHaveLength(2);
       expect(issueProvider.checkCliStatus).toHaveBeenCalledWith('/repo');
       expect(issueProvider.fetchIssue).toHaveBeenCalledWith(456, '/repo');
       expect(tree.conversationProps().initialEntries.some((entry) =>
@@ -724,16 +977,17 @@ describe('runTui', () => {
 
       await expect(tree.conversationProps().conversation.submit(input('after the Issue change')))
         .resolves.toMatchObject({ kind: 'assistant_response' });
-      expect(providerCalls[1]?.prompt).toContain('## Issue #456: Issue 456');
-      expect(providerCalls[1]?.prompt).not.toContain('## Issue #123: Issue 123');
-      expect(providerCalls[1]?.sessionId).toBe('ai-session');
-
-      await expect(tree.conversationProps().conversation.createInstruction(input('')))
-        .resolves.toMatchObject({ kind: 'task_instruction', task: 'Generated task instruction' });
       expect(providerCalls[2]?.prompt).toContain('## Issue #456: Issue 456');
       expect(providerCalls[2]?.prompt).not.toContain('## Issue #123: Issue 123');
-      expect(providerCalls[2]?.prompt).toContain('before the Issue change');
-      expect(providerCalls[2]?.prompt).toContain('after the Issue change');
+      expect(providerCalls[2]?.sessionId).toBe('ai-session');
+
+      await expect(tree.conversationProps().conversation.createInstruction(input('')))
+        .resolves.toMatchObject({ kind: 'task_instruction', task: '# Fix next Issue\n\nIssue: #456\n\nFix the next problem.' });
+      expect(providerCalls[3]?.prompt).toContain('## Issue #456: Issue 456');
+      expect(providerCalls[3]?.prompt).not.toContain('## Issue #123: Issue 123');
+      expect(providerCalls[3]?.prompt).toContain('before the Issue change');
+      expect(providerCalls[3]?.prompt).toContain('after the Issue change');
+      expect(providerCalls[3]?.prompt).toContain('# Fix first Issue\n\nIssue: #123');
 
       const failedCommand = conversation.resolveLocalCommand('/issue 999999');
       expect(failedCommand).toMatchObject({ kind: 'handoff', text: '999999' });
@@ -743,13 +997,18 @@ describe('runTui', () => {
       tree.conversationProps().onExit(failedCommand, { history: ['/issue 999999'], queue: [] });
       await waitForMount(tree, 3);
 
-      expect(providerCalls).toHaveLength(3);
+      expect(providerCalls).toHaveLength(4);
       expect(tree.conversationProps().initialEntries.some((entry) => entry.content.includes('#999999'))).toBe(true);
+      const failureNotice = tree.conversationProps().initialEntries.find((entry) => entry.content.includes('#999999'))?.content;
+      expect(failureNotice).toBeDefined();
+      expect(tree.conversationProps().conversation.snapshotHistory?.().map((message) => message.content))
+        .not.toContain(failureNotice);
       await expect(tree.conversationProps().conversation.submit(input('after the failed Issue change')))
         .resolves.toMatchObject({ kind: 'assistant_response' });
-      expect(providerCalls[3]?.prompt).toContain('## Issue #456: Issue 456');
-      expect(providerCalls[3]?.prompt).not.toContain('## Issue #123: Issue 123');
-      expect(providerCalls[3]?.sessionId).toBe('ai-session');
+      expect(providerCalls[4]?.prompt).toContain('## Issue #456: Issue 456');
+      expect(providerCalls[4]?.prompt).not.toContain('## Issue #123: Issue 123');
+      expect(providerCalls[4]?.prompt).not.toContain(failureNotice);
+      expect(providerCalls[4]?.sessionId).toBe('ai-session');
     } finally {
       tree.conversationProps().onExit(
         { kind: 'result', result: { action: 'cancel', task: '' } },
@@ -1455,7 +1714,7 @@ describe('runTui', () => {
         workflowStructure: '1. plan',
         stepPreviews: [],
       }));
-      const dispatch = vi.fn().mockResolvedValue(undefined);
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched', notice: 'Execution finished.' });
       const tree = scriptRender();
       const run = startRun({ dispatch });
       await waitForMount(tree, 1);
@@ -2594,7 +2853,7 @@ describe('runTui', () => {
       expect(tree.mounts.count).toBe(1);
     });
 
-    it('should reopen the action menu after a cancelled save without showing a saved notice', async () => {
+    it('should return to the conversation after a cancelled save without reopening the action menu', async () => {
       const tree = scriptRender();
       const attachment = {
         placeholder: '[Image #1]',
@@ -2614,7 +2873,7 @@ describe('runTui', () => {
         .mockResolvedValueOnce('save_task')
         .mockResolvedValueOnce('save_task')
         .mockResolvedValueOnce('continue');
-      const dispatch = vi.fn().mockResolvedValue({ kind: 'cancelled' });
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'cancelled', notice: 'Task saving cancelled. No task was saved.' });
       const run = startRun({ dispatch });
       let result: Awaited<typeof run> | undefined;
       let exitRequested = false;
@@ -2628,19 +2887,9 @@ describe('runTui', () => {
         );
         await waitForMount(tree, 2);
 
-        expect(mockSelectAction).toHaveBeenCalledTimes(3);
-        expect(mockSelectAction.mock.calls).toEqual([
-          ['Review task'],
-          ['Review task'],
-          ['Review task'],
-        ]);
-        expect(dispatch).toHaveBeenCalledTimes(2);
+        expect(mockSelectAction).toHaveBeenCalledExactlyOnceWith('Review task');
+        expect(dispatch).toHaveBeenCalledTimes(1);
         expect(dispatch).toHaveBeenNthCalledWith(1, 'default', expect.objectContaining({
-          action: 'save_task',
-          task: 'Review task',
-          attachments: [attachment],
-        }));
-        expect(dispatch).toHaveBeenNthCalledWith(2, 'default', expect.objectContaining({
           action: 'save_task',
           task: 'Review task',
           attachments: [attachment],
@@ -2677,7 +2926,7 @@ describe('runTui', () => {
     });
 
     it.each(['execute', 'create_issue'] as const)(
-      'should dispatch %s after a cancelled save with the confirmed task and attachments',
+      'should dispatch a newly requested %s after returning from a cancelled save with the attachments',
       async (action) => {
         const tree = scriptRender();
         const attachment = {
@@ -2698,8 +2947,8 @@ describe('runTui', () => {
           .mockResolvedValueOnce('save_task')
           .mockResolvedValueOnce(action);
         const dispatch = vi.fn()
-          .mockResolvedValueOnce({ kind: 'cancelled' })
-          .mockResolvedValueOnce({ kind: 'dispatched' });
+          .mockResolvedValueOnce({ kind: 'cancelled', notice: 'Task saving cancelled. No task was saved.' })
+          .mockResolvedValueOnce({ kind: 'dispatched', notice: 'Execution finished.' });
         const run = startRun({ dispatch });
         let result: Awaited<typeof run> | undefined;
         let exitRequested = false;
@@ -2712,6 +2961,13 @@ describe('runTui', () => {
             { history: ['Review task'], queue: [] },
           );
           await waitForMount(tree, 2);
+
+          expect(mockSelectAction).toHaveBeenCalledTimes(1);
+          tree.conversationProps().onExit(
+            { kind: 'choose_action', task: 'Review task', origin: 'go' },
+            { history: ['Review task', '/go'], queue: [] },
+          );
+          await waitForMount(tree, 3);
 
           expect(mockSelectAction.mock.calls).toEqual([
             ['Review task'],
@@ -2729,7 +2985,7 @@ describe('runTui', () => {
           }));
           expect(attachmentStore.cleanup).not.toHaveBeenCalled();
           expect(attachmentStore.seal).not.toHaveBeenCalled();
-          expect(tree.conversationProps().initialHistory).toEqual(['Review task']);
+          expect(tree.conversationProps().initialHistory).toEqual(['Review task', '/go']);
 
           tree.conversationProps().onExit(
             { kind: 'result', result: { action: 'cancel', task: '' } },
@@ -3079,7 +3335,7 @@ describe('runTui', () => {
         .mockReturnValueOnce(first)
         .mockReturnValueOnce(rebuilt);
       mockSelectInteractiveProvider.mockResolvedValue('claude');
-      const dispatch = vi.fn().mockResolvedValue(undefined);
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched', notice: 'Execution finished.' });
       const startupOverrides = { provider: 'codex', model: 'workflow-model' } as const;
       const tree = scriptRender();
       const run = startRun({ agentOverrides: startupOverrides, dispatch });
@@ -3101,6 +3357,10 @@ describe('runTui', () => {
       );
       await waitForMount(tree, 4);
 
+      const operationRecordsBeforeDispatch = [
+        vi.mocked(first.recordOperationResult).mock.calls.length,
+        vi.mocked(rebuilt.recordOperationResult).mock.calls.length,
+      ];
       await tree.conversationProps().conversation.createInstruction({
         text: '',
         abortSignal: new AbortController().signal,
@@ -3128,37 +3388,44 @@ describe('runTui', () => {
         { history: [], queue: [] },
       );
       await run;
+      expect(operationRecordsBeforeDispatch).toEqual([0, 0]);
     });
 
     it('should run the decision and come back to the same conversation', async () => {
       const tree = scriptRender();
-      const dispatch = vi.fn().mockResolvedValue(undefined);
-      const conversation = { resumeSession: vi.fn(), commandAvailability: {} };
+      const notice = 'Execution finished for ship it.';
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched', notice });
+      const conversation = createConversationDouble();
       mockCreateTuiConversation.mockReturnValue(conversation);
       const run = startRun({ dispatch });
       await waitForMount(tree, 1);
 
-      const first = tree.conversationProps();
-      first.onExit({ kind: 'result', result: { action: 'execute', task: 'ship it' } }, { history: ['ship it'], queue: [] });
-      await waitForMount(tree, 2);
+      try {
+        const first = tree.conversationProps();
+        first.onExit({ kind: 'result', result: { action: 'execute', task: 'ship it' } }, { history: ['ship it'], queue: [] });
+        await waitForMount(tree, 2);
 
-      expect(dispatch).toHaveBeenCalledExactlyOnceWith(
-        'default',
-        expect.objectContaining({ action: 'execute', task: 'ship it' }),
-      );
-      const second = tree.conversationProps();
-      expect(second.initialEntries.map((entry) => entry.content))
-        .toContain(getLabel('tui.ui.runFinished', 'en'));
-      expect(second.initialHistory).toEqual(['ship it']);
-
-      second.onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
+        expect(dispatch).toHaveBeenCalledExactlyOnceWith(
+          'default',
+          expect.objectContaining({ action: 'execute', task: 'ship it' }),
+        );
+        const second = tree.conversationProps();
+        expect(second.initialEntries.map((entry) => entry.content)).toContain(notice);
+        expect(second.initialHistory).toEqual(['ship it']);
+      } finally {
+        tree.conversationProps().onExit(
+          { kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] },
+        );
+        const finished = await run;
+        if (finished.kind === 'selected') finished.result.cleanupAttachments?.();
+      }
       await expect(run).resolves.toMatchObject({ result: { action: 'cancel' } });
     });
 
     it('should put the line the last mount was writing back into the next one', async () => {
       const tree = scriptRender();
-      const dispatch = vi.fn().mockResolvedValue(undefined);
-      mockCreateTuiConversation.mockReturnValue({ resumeSession: vi.fn(), commandAvailability: {} });
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched', notice: 'Execution finished.' });
+      mockCreateTuiConversation.mockReturnValue(createConversationDouble());
       const run = startRun({ dispatch });
       await waitForMount(tree, 1);
 
@@ -3200,7 +3467,8 @@ describe('runTui', () => {
       const conversation = createConversationDouble();
       mockCreateTuiConversation.mockReturnValueOnce(conversation);
       mockSelectAction.mockResolvedValue(action);
-      const dispatch = vi.fn().mockResolvedValue(undefined);
+      const notice = `${getLabel(label, lang)}: actual-task / #42`;
+      const dispatch = vi.fn().mockResolvedValue({ kind: 'dispatched', notice });
       const run = startRun({ cwd: projectDir, lang, dispatch });
       await waitForMount(tree, 1);
 
@@ -3209,7 +3477,7 @@ describe('runTui', () => {
           { kind: 'choose_action', origin: 'go', task: 'first task' }, { history: ['/go'], queue: [] },
         );
         await waitForMount(tree, 2);
-        const expectedNotice = [{ role: 'system', content: getLabel(label, lang) }];
+        const expectedNotice = [{ role: 'system', content: notice }];
         expect(tree.conversationProps().initialEntries).toEqual(expectedNotice);
 
         mkdirSync(dirname(noticePath), { recursive: true });

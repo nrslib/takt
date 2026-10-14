@@ -129,6 +129,8 @@ In the TUI conversation history, submitted user messages are initially printed w
 
 `/go` creates instructions for the latest task topic; earlier topics are included only when you explicitly combine them into the same task.
 
+When an Issue is loaded, each `/go` judges whether the latest task belongs to that current Issue. A related instruction shows `Issue: #N` immediately after the task heading in the preview, before the existing action menu. Execute, Save as Task, and Create Issue use N only when that line matches the current Issue. Unrelated tasks follow the flow without a loaded Issue. Choose Continue editing to correct the binding; no extra confirmation is added. After `/issue` replaces the context, the next instruction is judged again without inheriting earlier bindings.
+
 ### Interactive Mode Variants
 
 | Mode | Description |
@@ -157,6 +159,8 @@ Use `/issue <number>` or `/issue <number> <number> ...` in an ordinary CLI/TUI `
 Use `/requeue` and `/retry` in CLI/TUI `assistant` and `grill-me` conversations. `/requeue` confirms and resubmits a failed or exceeded task. `/retry` revises a failed task's instructions before resubmitting it. If the task or start position is ambiguous, TAKT stops and tells you. Both commands return the confirmed task to `pending` without running it immediately. To change the restart position for an exceeded task, add guidance to `/requeue`. In the Web UI, use the action on the task instead.
 
 Selections are temporary and are not persisted. Workflow, mode, provider, and model changes create a new AI session on the next ordinary message or `/go`; the prior transcript is included once as reference context. An effort-only change applies to the next call in the current session. Changing provider clears temporary model and effort overrides. If multiple settings commands are run before the next input, only the most recently selected value for each setting is applied. These conversation overrides do not affect workflow execution.
+
+The results of saving, creating an Issue, or executing after /go, and of /tell, /retry, and /requeue, are recorded in the conversation with the same facts as the screen notice. Subsequent messages and /go can refer to the saved task name, Issue number, cancellation, and failure reason. Saving or Issue creation failures return to the same conversation after displaying the reason. Cancelling the save settings also returns to the conversation without reopening the selector. If saving fails after an Issue was created, the notice distinguishes the existing Issue from the unsaved task. Notices for /issue and conversation settings changes are excluded from these operation records.
 
 ### Formal Specification Verification
 
