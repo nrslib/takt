@@ -68,6 +68,11 @@ steps:
           - condition: needs_fix
 
   - name: reviewers
+    input_reports:
+      from_step: remediation
+      reports:
+        - fix-plan.md
+        - fix-report.md
     uses: review-fix-dual-reviewers
     with:
       architecture_review_instruction: follow-up-architecture-review
@@ -97,6 +102,11 @@ steps:
           - condition: needs_fix
 
   - name: final-gate
+    input_reports:
+      from_step: remediation
+      reports:
+        - review-resolution.md
+      optional_if_unrun: true
     kind: workflow_call
     call: final-gate
     args:
@@ -144,6 +154,8 @@ steps:
     rules:
       - condition: COMPLETE
         next: reviewers
+      - condition: no_fix
+        next: final-gate
       - condition: need_replan
         next: final-gate
       - condition: ABORT

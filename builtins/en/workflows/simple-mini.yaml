@@ -62,6 +62,11 @@ steps:
         interactive_only: true
 
   - name: review
+    input_reports:
+      from_step: remediation
+      reports:
+        - review-resolution.md
+      optional_if_unrun: true
     uses: simple-coding-review
     with:
       review_policy:
@@ -124,6 +129,8 @@ steps:
     rules:
       - condition: COMPLETE
         next: follow-up-review
+      - condition: no_fix
+        next: review
       - condition: need_replan
         next: plan
       - condition: ABORT

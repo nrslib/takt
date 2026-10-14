@@ -197,6 +197,88 @@ steps:
     expect(parentOutput?.content).toContain('Local review complete');
   });
 
+  it('supplies completed remediation reports to follow-up parallel reviewers only', async () => {
+    writeWorkflow(tmpDir, 'shared/remediation.yaml', `name: shared/remediation
+subworkflow:
+  callable: true
+initial_step: fix
+steps:
+  - name: fix
+    persona: fixer
+    instruction: "Fix findings"
+    output_contracts:
+      report:
+        - name: fix-plan.md
+          format: "Repair plan"
+        - name: fix-report.md
+          format: "Repair result"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'initial-reviewers',
+      max_steps: 8,
+      steps: [{
+        name: 'initial-reviewers',
+        instruction: 'Initial review',
+        parallel: [{
+          name: 'initial-review',
+          persona: 'initial-reviewer',
+          instruction: 'Review initially',
+          rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+        }],
+        rules: [{ condition: 'all("COMPLETE")', next: 'remediation' }],
+      }, {
+        name: 'remediation',
+        kind: 'workflow_call',
+        call: 'shared/remediation',
+        rules: [{ condition: 'COMPLETE', next: 'reviewers' }],
+      }, {
+        name: 'reviewers',
+        instruction: 'Follow-up review',
+        input_reports: { from_step: 'remediation', reports: ['fix-plan.md', 'fix-report.md'] },
+        parallel: [{
+          name: 'follow-up-review',
+          persona: 'follow-up-reviewer',
+          instruction: 'Review the repair',
+          rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+        }],
+        rules: [{ condition: 'all("COMPLETE")', next: 'COMPLETE' }],
+      }],
+    });
+    vi.mocked(runReportPhase).mockImplementation(async (step, _iteration, context, onReportWritten) => {
+      if (step.name !== 'fix') return;
+      mkdirSync(context.reportDir, { recursive: true });
+      for (const report of step.outputContracts ?? []) {
+        writeFileSync(join(context.reportDir, report.name), `REPAIR_EVIDENCE_${report.name}`);
+        onReportWritten?.(report.name);
+      }
+    });
+    const prompts = new Map<string, string>();
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: prompt });
+      prompts.set(String(persona), prompt);
+      return makeResponse({ persona: String(persona), content: 'done' });
+    });
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'aggregate' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'aggregate' },
+    ]);
+    engine = new WorkflowEngine(config, tmpDir, 'Review and repair', createWorkflowCallOptions(tmpDir));
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(prompts.get('initial-reviewer')).not.toContain('REPAIR_EVIDENCE_');
+    expect(prompts.get('follow-up-reviewer')).toContain('### fix-plan.md\nREPAIR_EVIDENCE_fix-plan.md');
+    expect(prompts.get('follow-up-reviewer')).toContain('### fix-report.md\nREPAIR_EVIDENCE_fix-report.md');
+  });
+
   it.each([
     ['success', false],
     ['incomplete', true],

@@ -12,6 +12,7 @@ subworkflow:
   visibility: internal
   returns:
     - need_replan
+    - no_fix
   params:
     plan_policy:
       type: facet_ref[]
@@ -65,7 +66,7 @@ steps:
       - condition: 修正対象あり
         next: fix-plan
       - condition: 修正対象なし
-        next: COMPLETE
+        return: no_fix
       - condition: タスク全体の再計画が必要
         return: need_replan
 

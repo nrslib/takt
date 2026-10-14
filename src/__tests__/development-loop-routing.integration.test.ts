@@ -285,8 +285,14 @@ describe('shipped development completion and remediation routes', () => {
       const initial = config.steps.find(step => step.name === 'review');
       const followUp = config.steps.find(step => step.name === 'follow-up-review');
       if (!initial || !followUp) throw new Error('Missing simple review steps');
+      expect(initial.inputReports).toEqual(name === 'simple-mini'
+        ? { fromStep: 'remediation', reports: ['review-resolution.md'], optionalIfUnrun: true }
+        : undefined);
+      expect(followUp.inputReports).toEqual({ fromStep: 'remediation', reports: ['fix-plan.md', 'fix-report.md'] });
       expect(initial.instruction).not.toContain('--step-remediation--workflow-');
-      expect(followUp.instruction).toContain('--step-remediation--workflow-');
+      expect(followUp.instruction).not.toContain('--step-remediation--workflow-');
+      expect(followUp.instruction).toContain('fix-plan.md');
+      expect(followUp.instruction).toContain('fix-report.md');
       expect(determineRuleTransition(config.steps.find(step => step.name === 'remediation')!, 0)?.nextStep)
         .toBe('follow-up-review');
       expect(determineRuleTransition(initial, 1)?.nextStep).toBe('remediation');
@@ -301,12 +307,40 @@ describe('shipped development completion and remediation routes', () => {
       const initial = config.steps.find(step => step.name === 'initial-reviewers');
       const followUp = config.steps.find(step => step.name === 'reviewers');
       if (!initial?.parallel || !followUp?.parallel) throw new Error('Missing reviewer steps');
+      expect(initial.inputReports).toBeUndefined();
+      expect(followUp.inputReports).toEqual({ fromStep: 'remediation', reports: ['fix-plan.md', 'fix-report.md'] });
       expect(getAllParallelSubSteps(initial.parallel).some(step => step.instruction?.includes('--step-remediation--workflow-'))).toBe(false);
-      expect(getAllParallelSubSteps(followUp.parallel).every(step => step.instruction?.includes('--step-remediation--workflow-'))).toBe(true);
+      expect(getAllParallelSubSteps(followUp.parallel).some(step => step.instruction?.includes('--step-remediation--workflow-'))).toBe(false);
+      expect(getAllParallelSubSteps(followUp.parallel).every(step => step.instruction?.includes('fix-plan.md') && step.instruction.includes('fix-report.md'))).toBe(true);
       expect(determineRuleTransition(config.steps.find(step => step.name === 'gather')!, 0)?.nextStep)
         .toBe('initial-reviewers');
       expect(determineRuleTransition(config.steps.find(step => step.name === 'remediation')!, 0)?.nextStep)
         .toBe('reviewers');
+    },
+  );
+
+  it.each(variants(['review-fix-frontend', 'review-fix-backend', 'review-fix-dual',
+    'review-fix-dual-cqrs', 'review-fix-backend-cqrs', 'simple-core', 'simple', 'simple-mini']))(
+    '$language/$name routes no_fix to judgment with the exact adjudication report', ({ language, name }) => {
+      const config = load(language, name);
+      const remediation = config.steps.find(step => step.name === 'remediation');
+      if (!remediation?.rules) throw new Error('Missing remediation call');
+      const noFixRule = remediation.rules.findIndex(rule =>
+        rule.condition.kind === 'semantic' && rule.condition.label === 'no_fix');
+      expect(noFixRule).toBeGreaterThanOrEqual(0);
+      const targetName = name === 'simple-mini' ? 'review'
+        : name === 'simple' || name === 'simple-core' ? 'supervise' : 'final-gate';
+      expect(determineRuleTransition(remediation, noFixRule)?.nextStep).toBe(targetName);
+      const target = config.steps.find(step => step.name === targetName);
+      expect(target?.inputReports).toEqual({
+        fromStep: 'remediation',
+        reports: ['review-resolution.md'],
+        optionalIfUnrun: true,
+      });
+      const child = load(language, 'review-remediation');
+      expect(child.subworkflow?.returns).toContain('no_fix');
+      const adjudication = child.steps.find(step => step.name === 'review-adjudication');
+      expect(adjudication?.rules?.[1]?.returnValue).toBe('no_fix');
     },
   );
 

@@ -184,10 +184,11 @@ describe('ParallelRunner live intervention integration', () => {
   it('reruns the whole parallel step when the parent status judgment receives an instruction', async () => {
     const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
     let issued = false;
-    vi.mocked(runReportPhase).mockImplementation(async (_step, _iteration, context) => {
+    vi.mocked(runReportPhase).mockImplementation(async (_step, _iteration, context, onReportWritten) => {
       const reportDir = resolve(projectCwd, context.reportDir);
       mkdirSync(reportDir, { recursive: true });
       writeFileSync(join(reportDir, 'review.md'), 'review report');
+      onReportWritten?.('review.md');
     });
     vi.mocked(runStatusJudgmentPhase).mockImplementation(async (step) => {
       if (step.name === 'reviewers' && !issued) {
