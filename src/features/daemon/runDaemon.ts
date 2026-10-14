@@ -12,10 +12,24 @@ import { createRunEventManager } from '../manager/runEventManager.js';
 import { ensureManagerRun } from '../manager/autoRun.js';
 import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
 import { enqueueDueGoalPatrols } from '../manager/patrol.js';
+import { notifyManagerTurnFailure } from '../manager/turnFailureNotification.js';
+import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 
 const POLL_INTERVAL_MS = 500;
 const EVENTS_PER_PROJECT = 10;
 const log = createLogger('daemon');
+
+interface PollingFailure {
+  firstFailedAt: number;
+  lastNotifiedAt?: number;
+  error: unknown;
+}
+
+async function notifyPollingFailure(cwd: string, failure: PollingFailure): Promise<void> {
+  const notification = await notifyManagerTurnFailure(cwd, undefined, failure.error);
+  if (notification !== undefined) process.stderr.write(`${notification}\n`);
+  failure.lastNotifiedAt = Date.now();
+}
 
 export async function runDaemon(): Promise<void> {
   const globalConfigDirectory = resolve(getGlobalConfigDir());
@@ -25,6 +39,7 @@ export async function runDaemon(): Promise<void> {
   if (!registerDaemonOwner(globalConfigDirectory, { pid: process.pid, identity, version: packageVersion, cliPath })) return;
   const controller = new AbortController();
   const managers = new Map<string, ReturnType<typeof createRunEventManager>>();
+  const pollingFailures = new Map<string, PollingFailure>();
   const stop = (): void => { controller.abort(); };
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);
@@ -43,8 +58,10 @@ export async function runDaemon(): Promise<void> {
       log.debug('Daemon projects', { projects });
       for (const cwd of projects) {
         if (controller.signal.aborted) break;
+        const errors: Array<{ error: unknown; failedAt: number }> = [];
+        let patrolInterval: number | undefined;
         try {
-          const { patrolInterval } = resolveManagerConfig(cwd);
+          patrolInterval = resolveManagerConfig(cwd).patrolInterval;
           await enqueueDueGoalPatrols(cwd, patrolInterval);
           let manager = managers.get(cwd);
           if (manager === undefined) {
@@ -53,16 +70,36 @@ export async function runDaemon(): Promise<void> {
           }
           await manager.processPending(controller.signal, EVENTS_PER_PROJECT);
           if (controller.signal.aborted) break;
-          await ensureManagerRun(cwd);
-          if (await hasDaemonProjectWork(cwd)) hasWork = true;
+          await ensureManagerRun(cwd, { notifyOnFailure: false });
         } catch (error) {
-          hasWork = true;
-          log.error('Cannot inspect daemon project', { cwd, error: getErrorMessage(error) });
+          errors.push({ error, failedAt: Date.now() });
+          log.error('Cannot inspect daemon project', { cwd, error: sanitizeSensitiveText(getErrorMessage(error)) });
+        }
+        try {
+          if (await hasDaemonProjectWork(cwd, (error) => { errors.push({ error, failedAt: Date.now() }); })) hasWork = true;
+        } catch (error) {
+          errors.push({ error, failedAt: Date.now() });
+          log.error('Cannot inspect daemon project work', { cwd, error: sanitizeSensitiveText(getErrorMessage(error)) });
+        }
+        if (errors.length === 0) {
+          pollingFailures.delete(cwd);
+          continue;
+        }
+        const now = Date.now();
+        const lastError = errors[errors.length - 1]!.error;
+        const failure = pollingFailures.get(cwd) ?? { firstFailedAt: errors[0]!.failedAt, error: lastError };
+        failure.error = lastError;
+        pollingFailures.set(cwd, failure);
+        if (patrolInterval !== undefined && now - (failure.lastNotifiedAt ?? failure.firstFailedAt) >= patrolInterval * 1000) {
+          await notifyPollingFailure(cwd, failure);
         }
       }
       if (!hasWork) break;
     }
   } finally {
+    for (const [cwd, failure] of pollingFailures) {
+      if (failure.lastNotifiedAt === undefined) await notifyPollingFailure(cwd, failure);
+    }
     for (const [cwd, manager] of managers) {
       try { await manager.close(); }
       catch (error) { log.error('Cannot close daemon project manager', { cwd, error: getErrorMessage(error) }); }

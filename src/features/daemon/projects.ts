@@ -5,6 +5,8 @@ import { GoalStore } from '../../infra/goals/store.js';
 import { readManagerEvents } from '../../infra/goals/events.js';
 import { TaskStore } from '../../infra/task/store.js';
 import { createLogger } from '../../shared/utils/debug.js';
+import { getErrorMessage } from '../../shared/utils/error.js';
+import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 
 const log = createLogger('daemon');
 
@@ -34,11 +36,21 @@ export async function listDaemonProjects(globalConfigDirectory: string): Promise
   return [...directories].sort();
 }
 
-export async function hasDaemonProjectWork(cwd: string): Promise<boolean> {
+export async function hasDaemonProjectWork(cwd: string, onReadError?: (error: unknown) => void): Promise<boolean> {
   const { goals, errors } = await new GoalStore(cwd).list();
-  for (const failure of errors) log.error('Cannot read goal', { goalId: failure.goalId, error: failure.error.message });
-  return errors.length > 0
-    || goals.some((goal) => goal.status !== 'completed' && goal.executionStatus !== 'aborted')
-    || readManagerEvents(cwd).length > 0
-    || new TaskStore(cwd).read().tasks.some((task) => task.status === 'pending' || task.status === 'running');
+  for (const failure of errors) {
+    log.error('Cannot read goal', { goalId: failure.goalId, error: sanitizeSensitiveText(failure.error.message) });
+    onReadError?.(failure.error);
+  }
+  const hasGoalOrEventWork = goals.some((goal) => goal.status !== 'completed' && goal.executionStatus !== 'aborted')
+    || readManagerEvents(cwd).length > 0;
+  try {
+    const hasTaskWork = new TaskStore(cwd).read().tasks.some((task) => task.status === 'pending' || task.status === 'running');
+    return hasGoalOrEventWork || hasTaskWork;
+  } catch (error) {
+    log.error('Cannot read daemon project tasks', { cwd, error: sanitizeSensitiveText(getErrorMessage(error)) });
+    onReadError?.(error);
+    // Unreadable tasks cannot establish work; readable goals and events still can.
+    return hasGoalOrEventWork;
+  }
 }

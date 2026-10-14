@@ -37,7 +37,7 @@ function hasRunnablePending(cwd: string): boolean {
   return runnable;
 }
 
-export async function ensureManagerRun(cwd: string): Promise<void> {
+export async function ensureManagerRun(cwd: string, options?: { notifyOnFailure: boolean }): Promise<void> {
   let descriptor: number | undefined;
   try {
     if (!resolveManagerConfig(cwd).autoRun || !hasRunnablePending(cwd)) return;
@@ -58,6 +58,7 @@ export async function ensureManagerRun(cwd: string): Promise<void> {
     });
   } catch (error) {
     log.error('Cannot start manager run', { error: sanitizeSensitiveText(getErrorMessage(error)) });
+    if (options?.notifyOnFailure === false) throw error;
     const notification = await notifyManagerTurnFailure(cwd, undefined, error);
     if (notification !== undefined) process.stderr.write(`${notification}\n`);
   } finally {
