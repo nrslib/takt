@@ -80,7 +80,7 @@ takt update codex     # 指定対象だけを更新
 
 ## manager（準備中）
 
-manager は準備中で、現在は利用できません。`takt manager` はコマンドとして登録されておらず、`takt-mcp` もゴール系ツールを公開していません。
+manager は準備中で、現在は利用できません。`takt manager` はコマンドとして登録されておらず、`takt-mcp` も既定・`all`・`read-only` のツールセットではゴール系ツールを公開していません。
 
 ## Web UI の実行境界
 

@@ -83,7 +83,7 @@ Approximate sizes are 250 MB for Claude SDK, 340 MB for Codex, 60 MB for OpenCod
 
 ## Manager (in preparation)
 
-Manager is in preparation and currently unavailable. `takt manager` is not registered, and `takt-mcp` exposes no goal tools.
+Manager is in preparation and currently unavailable. `takt manager` is not registered, and `takt-mcp` exposes no goal tools in its default, `all`, or `read-only` tool sets.
 
 ## Web UI execution boundary
 
