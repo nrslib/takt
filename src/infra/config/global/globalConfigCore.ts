@@ -227,7 +227,7 @@ export class GlobalConfigManager {
       ),
       caccia: parsed.caccia,
       manager: parsed.manager === undefined ? undefined : {
-        autoRun: parsed.manager.auto_run, defaultWorkflow: parsed.manager.default_workflow, notifications: parsed.manager.notifications,
+        autoRun: parsed.manager.auto_run, patrolInterval: parsed.manager.patrol_interval, defaultWorkflow: parsed.manager.default_workflow, notifications: parsed.manager.notifications,
       },
       merge: parsed.merge,
       assistant: normalizeAssistantConfig(parsed.assistant),

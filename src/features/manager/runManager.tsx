@@ -12,6 +12,8 @@ import { connectManagerMcp } from './managerMcp.js';
 import { ManagerView } from './ManagerView.js';
 import { ensureManagerRun } from './autoRun.js';
 import { notifyManagerTurnFailure } from './turnFailureNotification.js';
+import { registerProject } from '../../infra/config/global/projectRegistry.js';
+import { ensureDaemon } from '../daemon/lifecycle.js';
 
 export async function runManager(input: { cwd: string; agentOverrides?: AssistantCliOverrides }): Promise<void> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
@@ -39,6 +41,10 @@ export async function runManager(input: { cwd: string; agentOverrides?: Assistan
     context = createWorkspaceManagerContext(workspace, globalConfigDirectory);
   } else context = resolution.context;
   const { cwd, assignment } = context;
+  for (const directory of assignment.repositoryDirectories) {
+    await registerProject({ globalConfigDirectory, projectDirectory: directory, command: 'manager', managerUsed: true });
+  }
+  await ensureDaemon();
   const plan = createManagerConversationPlan(cwd, input.agentOverrides ?? {});
   const mcp = await connectManagerMcp(cwd, assignment);
   let session: ManagerConversationSession | undefined;

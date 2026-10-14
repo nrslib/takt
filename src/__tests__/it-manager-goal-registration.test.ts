@@ -8,6 +8,7 @@ import { afterEach,beforeEach,expect,it,vi } from 'vitest';
 import * as conversationPlans from '../features/manager/conversationPlan.js';
 import * as managerMcp from '../features/manager/managerMcp.js';
 import { createRunEventManager } from '../features/manager/runEventManager.js';
+import { readManagerDisplayEvents } from '../features/manager/savedEvents.js';
 import { createManagerConversationSession } from '../features/manager/conversationSession.js';
 import { createTaktMcpServer } from '../features/mcp/server.js';
 import { runWithWorkerPool } from '../features/tasks/execute/parallelExecution.js';
@@ -20,6 +21,9 @@ import type { ProviderAgent } from '../infra/providers/types.js';
 import { TaskRunner } from '../infra/task/runner.js';
 import { goalInput } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
+import { readProjectRegistry } from '../infra/config/global/projectRegistry.js';
+
+vi.mock('../features/daemon/lifecycle.js', () => ({ ensureDaemon: vi.fn(async () => {}) }));
 
 let root: string;
 let cwd: string;
@@ -56,7 +60,7 @@ beforeEach(async () => {
 });
 afterEach(async () => { await client?.close(); await server?.close(); vi.restoreAllMocks(); vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); });
 
-it('drains registration and both task results in run, then restores their records in the TUI conversation', async () => {
+it('processes events separately from run and restores their saved records in the TUI', async () => {
   let goalId = '';
   let results = 0;
   const call = vi.fn<ProviderAgent['call']>().mockImplementation(async (prompt) => {
@@ -87,10 +91,15 @@ it('drains registration and both task results in run, then restores their record
     return reply('結果を取り込みました');
   });
   const context = session(call);
+  const manager = createRunEventManager(cwd);
+  const signal = new AbortController().signal;
   try {
     await context.session.handleUserMessage({ text: 'ゴールを相談します' });
     const registered = await context.session.approveSummary(context.session.getPendingSummary()!.revision);
     expect(registered.kind).toBe('goal_registered'); expect(call).toHaveBeenCalledOnce();
+    expect((await readProjectRegistry(process.env.TAKT_CONFIG_DIR!)).projects).toContainEqual(expect.objectContaining({
+      canonicalDirectory: cwd, managerUsed: true,
+    }));
     expect(readManagerEvents(cwd).map(({ event }) => event.kind)).toEqual(['registered']);
     vi.spyOn(runExecution, 'executeRunTaskAndCompleteWithDetails').mockImplementation(async (task, runner) => {
       const resultBranch = `result-${results}`;
@@ -105,11 +114,23 @@ it('drains registration and both task results in run, then restores their record
       return { success: true, runSlug, completion };
     });
     const runner = new TaskRunner(cwd);
-    const result = await runWithWorkerPool(runner, [], 1, cwd, { provider: 'mock' }, undefined, 10);
-    expect(result).toMatchObject({ success: 2, fail: 0 });
+    const empty = await runWithWorkerPool(runner, [], 1, cwd, { provider: 'mock' }, undefined, 10);
+    expect(empty).toEqual({ success: 0, fail: 0, executedTaskNames: [] });
+    expect(readManagerEvents(cwd).map(({ event }) => event.kind)).toEqual(['registered']);
+    expect(call).toHaveBeenCalledOnce();
+    await manager.processPending(signal, 10);
+    for (let index = 0; index < 2; index++) {
+      const result = await runWithWorkerPool(runner, [], 1, cwd, { provider: 'mock' }, undefined, 10);
+      expect(result).toMatchObject({ success: 1, fail: 0 });
+      expect(readManagerEvents(cwd).map(({ event }) => event.kind)).toEqual(['completion']);
+      expect(call).toHaveBeenCalledTimes(index + 2);
+      await manager.processPending(signal, 10);
+    }
     expect(call).toHaveBeenCalledTimes(4);
     expect(readManagerEvents(cwd)).toEqual([]);
     expect((await new GoalStore(cwd).get(goalId)).workLog.map((record) => record.summary)).toContain('最初のタスクを投入しました');
+    const display = await readManagerDisplayEvents(cwd, 'ja');
+    expect(display.events.map(({ message }) => message)).toContain(`${goalId}: 最初のタスクを投入しました`);
     const waiting = await new GoalStore(cwd).get(goalId);
     expect(waiting.status).toBe('awaiting_merge'); expect(waiting.completion?.targetSha).toBeUndefined();
     git('merge', '--no-ff', '--no-edit', waiting.completion!.goalSha);
@@ -120,7 +141,7 @@ it('drains registration and both task results in run, then restores their record
     expect(call.mock.calls[1]![1].sessionId).toBeUndefined();
     expect(call.mock.calls.slice(2).every(([, options]) => options.sessionId === 'shared-conversation')).toBe(true);
     expect(call.mock.calls.at(-1)![0]).toContain('最初のタスクを投入しました');
-  } finally { await context.session.close(); }
+  } finally { await manager.close(); await context.session.close(); }
 });
 it('keeps events while paused, handles the saved answer after resume, and discards them after abort', async () => {
   const call = vi.fn<ProviderAgent['call']>().mockResolvedValue(reply('処理しました'));
@@ -135,10 +156,10 @@ it('keeps events while paused, handles the saved answer after resume, and discar
     await context.session.pauseGoal({ goalId: goal.id });
     saveManagerEvent(cwd, { kind: 'completion', goalId: goal.id, taskName: 'ended', runSlug: 'run-ended', result: { success: false, interrupted: true } });
     await context.session.answerQuestion({ goalId: goal.id, questionId: asked.questionId as string, text: 'CSV' });
-    await manager.processPending(signal); expect(call).not.toHaveBeenCalled(); expect(readManagerEvents(cwd)).toHaveLength(2);
+    await manager.processPending(signal, 10); expect(call).not.toHaveBeenCalled(); expect(readManagerEvents(cwd)).toHaveLength(2);
     await context.session.resumeGoal({ goalId: goal.id });
     expect(readManagerEvents(cwd)).toHaveLength(3);
-    await manager.processPending(signal);
+    await manager.processPending(signal, 10);
     expect(readManagerEvents(cwd)).toEqual([]); expect(call).toHaveBeenCalledTimes(3);
     saveManagerEvent(cwd, { kind: 'completion', goalId: goal.id, taskName: 'later', runSlug: 'run-later', result: { success: false, interrupted: false } });
     await context.session.abortGoal({ goalId: goal.id }); expect(readManagerEvents(cwd)).toEqual([]);

@@ -16,6 +16,15 @@ afterEach(() => vi.mocked(crypto.randomUUID).mockReset()
 const policy = { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true };
 
 describe('saved goal questions', () => {
+  it('saves question creation time and preserves it when answering or withdrawing', () => {
+    const before = Date.now();
+    const created = addGoalQuestion(goalRecord(), { body: '形式はどれですか' });
+    const createdAt = created.goal.questions![0]!.createdAt!;
+    expect(Date.parse(createdAt)).toBeGreaterThanOrEqual(before);
+    expect(Date.parse(createdAt)).toBeLessThanOrEqual(Date.now());
+    expect(answerGoalQuestion(created.goal, created.questionId, 'JSON').questions![0]!.createdAt).toBe(createdAt);
+    expect(withdrawGoalQuestion(created.goal, created.questionId).questions![0]!.createdAt).toBe(createdAt);
+  });
 
   it('rejects missing questions and blank answers without creating an event', () => {
     const created = addGoalQuestion(goalRecord(), { body: '形式はどれですか' });

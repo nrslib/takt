@@ -1,5 +1,5 @@
-const manager = vi.hoisted(() => ({ process: vi.fn(), hasFailed: vi.fn(() => false), close: vi.fn() }));
-vi.mock('../features/manager/runEventManager.js', () => ({ createRunEventManager: () => ({ processPending: manager.process, hasFailedEvents: manager.hasFailed, close: manager.close }) }));
+const manager = vi.hoisted(() => ({ create: vi.fn() }));
+vi.mock('../features/manager/runEventManager.js', () => ({ createRunEventManager: manager.create }));
 vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkPendingTaskProviders: vi.fn(async () => undefined), checkTaskNameProvider: vi.fn(async () => undefined), checkQueuedTaskProviders: vi.fn(async () => undefined), terminalProviderConfirmation: vi.fn(() => undefined) }));
 /**
  * Worker pool の結果集計・再キュー・停止境界を検証する。
@@ -11,9 +11,12 @@ import chalk from 'chalk';
 import type { AutoRequeueResult, TaskInfo } from '../infra/task/index.js';
 import type { executeRunTaskAndComplete as ExecuteRunTask } from '../features/tasks/execute/runTaskExecution.js';
 
-const { executeRunTaskAndComplete } = vi.hoisted(() => ({
+const { executeRunTaskAndComplete, executeWithDetails, saveEvent } = vi.hoisted(() => ({
   executeRunTaskAndComplete: vi.fn(),
+  executeWithDetails: vi.fn(),
+  saveEvent: vi.fn(),
 }));
+vi.mock('../infra/goals/events.js', () => ({ saveManagerEvent: saveEvent }));
 
 vi.mock('../shared/exitCodes.js', () => ({ EXIT_SIGINT: 130 }));
 vi.mock('../shared/i18n/index.js', () => ({ getLabel: vi.fn((key: string) => key) }));
@@ -23,6 +26,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 }));
 vi.mock('../features/tasks/execute/runTaskExecution.js', () => ({
   executeRunTaskAndComplete,
+  executeRunTaskAndCompleteWithDetails: executeWithDetails,
 }));
 vi.mock('../features/tasks/execute/taskExecution.js', () => ({
   executeAndCompleteTask: vi.fn(),
@@ -73,9 +77,6 @@ function createRunner(taskBatches: TaskInfo[][] = []) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  manager.process.mockReset().mockResolvedValue(undefined);
-  manager.hasFailed.mockReset().mockReturnValue(false);
-  manager.close.mockReset().mockResolvedValue(undefined);
   vi.mocked(checkPendingTaskProviders).mockReset().mockResolvedValue(undefined);
   vi.mocked(isInputWaiting).mockReturnValue(false);
   executeRunTaskAndComplete.mockResolvedValue(true);
@@ -153,74 +154,25 @@ describe('runWithWorkerPool', () => {
     }
   });
 
-  it('processes an inbox event before deciding to exit an empty run and executes the task it submitted', async () => {
-    const task = createTask('submitted-by-manager');
-    let submitted = false;
+  it('タスクが空の run は manager を作成せず終了する', async () => {
     const runner = createRunner();
-    manager.process.mockImplementationOnce(async () => { submitted = true; return true; });
-    runner.claimNextTasks.mockImplementation(() => {
-      if (!submitted) return [];
-      submitted = false;
-      return [task];
-    });
-    const result = await runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 10);
-    expect(result).toEqual({ success: 1, fail: 0, executedTaskNames: [task.name] });
-    expect(manager.process.mock.invocationCallOrder[0]).toBeLessThan(runner.claimNextTasks.mock.invocationCallOrder[0]!);
-    expect(manager.close).toHaveBeenCalledOnce();
+    await expect(runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 10))
+      .resolves.toEqual({ success: 0, fail: 0, executedTaskNames: [] });
+    expect(runner.claimNextTasks).toHaveBeenCalledOnce();
+    expect(manager.create).not.toHaveBeenCalled();
   });
 
-  it('consumes an event published while claiming before leaving an empty run', async () => {
-    let event = false;
-    let submitted = false;
-    const runner = createRunner();
-    runner.claimNextTasks.mockImplementationOnce(() => { event = true; return []; });
-    manager.process.mockImplementation(async () => {
-      if (!event) return false;
-      event = false; submitted = true;
-      return true;
+  it.each([true, false])('ゴールのタスクの終了を受信箱へ保存し、イベントを処理せず終了する: success=%s', async (success) => {
+    const task = createTask('goal-task');
+    task.data!.goal_id = '550e8400-e29b-41d4-a716-446655440000';
+    const completion = { success, interrupted: !success };
+    executeWithDetails.mockResolvedValue({ success, runSlug: 'run-goal-task', completion });
+    const result = await runWithWorkerPool(createRunner() as never, [task], 1, '/cwd', undefined, undefined, 10);
+    expect(result).toEqual({ success: success ? 1 : 0, fail: success ? 0 : 1, executedTaskNames: [task.name] });
+    expect(saveEvent).toHaveBeenCalledExactlyOnceWith('/cwd', {
+      kind: 'completion', goalId: task.data!.goal_id, taskName: task.name, runSlug: 'run-goal-task', result: completion,
     });
-    runner.claimNextTasks.mockImplementation(() => {
-      if (!submitted) return [];
-      submitted = false;
-      return [createTask('next')];
-    });
-    const result = await runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 10);
-    expect(result.executedTaskNames).toEqual(['next']);
-    expect(event).toBe(false);
-  });
-
-  it.each(['run', 'watch'] as const)('stops %s after an event failure, drains active tasks and never retries the event', async (mode) => {
-    const scheduling = new AbortController();
-    const failure = new Error('manager failed');
-    const failed = vi.fn();
-    let finish!: (value: boolean) => void;
-    executeRunTaskAndComplete.mockImplementationOnce(() => new Promise<boolean>((resolve) => { finish = resolve; }));
-    const runner = createRunner(mode === 'watch' ? [[createTask('running')]] : []);
-    manager.process.mockRejectedValueOnce(failure);
-    const pool = runWithWorkerPool(runner as never, mode === 'run' ? [createTask('running')] : [], 1,
-      '/cwd', undefined, undefined, 10, mode, {
-        schedulingSignal: scheduling.signal, taskAbortSignal: new AbortController().signal, onManagerFailure: failed,
-      });
-    let settled = false;
-    const result = pool.catch((error: unknown) => { settled = true; return error; });
-    await vi.waitFor(() => expect(failed).toHaveBeenCalledOnce());
-    expect(settled).toBe(false);
-    finish(true);
-    expect(await result).toBe(failure);
-    expect(manager.process).toHaveBeenCalledOnce();
-    expect(manager.close).toHaveBeenCalledOnce();
-  });
-
-  it('処理できなかったイベントが残ったら、run を止めずに manager の失敗として伝える', async () => {
-    const failed = vi.fn();
-    const runner = createRunner([]);
-    manager.process.mockResolvedValue(false);
-    manager.hasFailed.mockReturnValue(true);
-    await runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 10, 'run', {
-      schedulingSignal: new AbortController().signal, taskAbortSignal: new AbortController().signal, onManagerFailure: failed,
-    });
-    expect(failed).toHaveBeenCalled();
-    expect(manager.close).toHaveBeenCalledOnce();
+    expect(manager.create).not.toHaveBeenCalled();
   });
 
   it('入口の停止信号を使い、SIGINT ハンドラを重複登録しない', async () => {

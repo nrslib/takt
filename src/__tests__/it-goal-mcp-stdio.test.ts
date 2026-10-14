@@ -10,6 +10,7 @@ import { createElement } from 'react';
 import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
 import { z } from 'zod/v4';
 import { createManagerConversationPlan } from '../features/manager/conversationPlan.js';
+import { ensureDaemon } from '../features/daemon/lifecycle.js';
 import { createManagerConversationSession } from '../features/manager/conversationSession.js';
 import { connectManagerMcp } from '../features/manager/managerMcp.js';
 import { ManagerView } from '../features/manager/ManagerView.js';
@@ -24,6 +25,8 @@ import { TaskRunner } from '../infra/task/runner.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 import { goalId,goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
+
+vi.mock('../features/daemon/lifecycle.js', () => ({ ensureDaemon: vi.fn(async () => {}) }));
 
 vi.mock('node:crypto', async (importOriginal) => {
   const original = await importOriginal<typeof import('node:crypto')>();
@@ -113,6 +116,7 @@ describe('manager questions, answers and notifications through production bounda
   }
 
   beforeEach(async () => {
+    vi.mocked(ensureDaemon).mockReset().mockResolvedValue(undefined);
     resetScenario();
     vi.stubEnv('TAKT_NOTIFY_WEBHOOK', undefined);
     const temporaryRoot = join(process.cwd(), '.tmp');
@@ -518,17 +522,25 @@ describe('manager questions, answers and notifications through production bounda
     await vi.waitFor(() => expect(app!.lastFrame()).toContain('回答済み:'), { timeout: 30_000 });
     expect((await invoke('takt_get_goal_question', { questionId: question.id })).question).toMatchObject({ status: 'pending' });
     expect(new TaskRunner(cwd).listTaskStateItems()).toEqual([]);
-    await send(`/answer ${question.id}`);
-    await vi.waitFor(() => expect(app!.lastFrame()).toContain('Enter your answer'));
-    await send(answer);
-    await vi.waitFor(async () => {
-      expect((await invoke('takt_get_goal_question', { questionId: question.id })).question)
-        .toMatchObject({ status: 'answered', answer: { text: answer, source: 'tui' } });
-    }, { timeout: 30_000 });
+    expect(ensureDaemon).not.toHaveBeenCalled();
+    let confirmDaemonStartup!: () => void;
+    const daemonStartup = new Promise<void>((resolve) => { confirmDaemonStartup = resolve; });
+    vi.mocked(ensureDaemon).mockImplementationOnce(() => daemonStartup);
+    try {
+      await send(`/answer ${question.id}`);
+      await vi.waitFor(() => expect(app!.lastFrame()).toContain('Enter your answer'));
+      await send(answer);
+      await vi.waitFor(async () => {
+        expect((await invoke('takt_get_goal_question', { questionId: question.id })).question)
+          .toMatchObject({ status: 'answered', answer: { text: answer, source: 'tui' } });
+      }, { timeout: 30_000 });
+      expect(ensureDaemon).toHaveBeenCalledExactlyOnceWith();
+      expect(app!.lastFrame()).not.toContain('Answer saved');
+      expect(readManagerEvents(cwd).map(({ event }) => event)).toEqual([expect.objectContaining({
+        kind: 'answer', goalId, questionId: question.id, answer: { text: answer, source: 'tui', answeredAt: expect.any(String) },
+      })]);
+    } finally { confirmDaemonStartup(); }
     await vi.waitFor(() => expect(app!.lastFrame()).toContain('Answer saved'));
-    expect(readManagerEvents(cwd).map(({ event }) => event)).toEqual([expect.objectContaining({
-      kind: 'answer', goalId, questionId: question.id, answer: { text: answer, source: 'tui', answeredAt: expect.any(String) },
-    })]);
     expect(new TaskRunner(cwd).listTaskStateItems()).toEqual([]);
     const pending = await ask({ body: '通知の宛先はどこですか' });
     const withdrawn = await ask({ body: '不要になった確認' });

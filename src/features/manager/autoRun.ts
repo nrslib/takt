@@ -1,12 +1,9 @@
 import { spawn } from 'node:child_process';
-import { closeSync, existsSync, openSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
+import { closeSync, openSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { TaskStore } from '../../infra/task/store.js';
 import { GoalStore } from '../../infra/goals/store.js';
-import { readManagerEvents } from '../../infra/goals/events.js';
 import { isGoalPaused } from '../../infra/goals/state.js';
 import { resolveTaskContent } from '../../infra/task/mapper.js';
 import { getProjectExecutionOwner } from '../../infra/task/project-execution-lock.js';
@@ -18,6 +15,7 @@ import { getErrorMessage } from '../../shared/utils/error.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { createLogger } from '../../shared/utils/debug.js';
 import { MANAGER_GOAL_TASKS_ENV } from '../../shared/constants.js';
+import { resolveCliInvocation } from '../../shared/utils/cli-invocation.js';
 
 const log = createLogger('manager-auto-run');
 
@@ -39,27 +37,18 @@ function hasRunnablePending(cwd: string): boolean {
   return runnable;
 }
 
-function hasManagerWork(cwd: string): boolean {
-  return hasRunnablePending(cwd) || readManagerEvents(cwd).some(({ event }) =>
-    !isGoalPaused(new GoalStore(cwd).getSync(event.goalId)));
-}
-
 export async function ensureManagerRun(cwd: string): Promise<void> {
   let descriptor: number | undefined;
   try {
-    if (!resolveManagerConfig(cwd).autoRun || !hasManagerWork(cwd)) return;
+    if (!resolveManagerConfig(cwd).autoRun || !hasRunnablePending(cwd)) return;
     if (getProjectExecutionOwner(cwd) !== undefined) return;
     const logs = join(cwd, '.takt', 'manager-logs');
     ensurePrivateDirectory(logs);
     descriptor = openSync(join(logs, `run-${randomUUID()}.log`), 'wx', 0o600);
-    const built = fileURLToPath(new URL('../../app/cli/index.js', import.meta.url));
-    const args = existsSync(built) ? [built, 'run'] : [
-      '--import', createRequire(import.meta.url).resolve('tsx/esm'),
-      fileURLToPath(new URL('../../app/cli/index.ts', import.meta.url)), 'run',
-    ];
+    const { args } = resolveCliInvocation('run');
     const env = buildChildProcessEnv();
     env[MANAGER_GOAL_TASKS_ENV] = '1';
-    if (!hasManagerWork(cwd) || getProjectExecutionOwner(cwd) !== undefined) return;
+    if (!hasRunnablePending(cwd) || getProjectExecutionOwner(cwd) !== undefined) return;
     const child = spawn(process.execPath, args, {
       cwd, detached: true, shell: false, stdio: ['ignore', descriptor, descriptor], env,
     });

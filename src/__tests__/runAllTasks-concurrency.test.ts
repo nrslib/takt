@@ -73,9 +73,6 @@ vi.mock('../infra/config/index.js', () => ({
 
 const mockLoadConfig = mockLoadConfigRaw;
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
-vi.mock('../features/manager/runEventManager.js', () => ({
-  createRunEventManager: vi.fn(() => ({ processPending: vi.fn(async () => false), hasFailedEvents: vi.fn(() => false), close: vi.fn(async () => {}) })),
-}));
 vi.mock('../infra/task/project-execution-lock.js', () => ({
   acquireProjectExecutionLock: vi.fn(() => ({
     owner: { ownerId: 'run-test-owner', pid: process.pid, kind: 'run', state: 'starting',

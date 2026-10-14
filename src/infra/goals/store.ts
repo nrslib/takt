@@ -8,6 +8,7 @@ import {
   writePrivateFile,
 } from '../../shared/utils/private-file.js';
 import { assertSafePath, lstatOrUndefined } from '../../shared/utils/private-path-identity.js';
+import { withFileLock } from '../fs/file-lock.js';
 import { GoalIdSchema, GoalSchema, type Goal } from './schema.js';
 
 const GOAL_FILE_NAME = 'goal.json';
@@ -52,10 +53,13 @@ export class GoalStore {
 
   async update(id: string, transform: (goal: Goal) => Goal): Promise<Goal> {
     const filePath = this.filePath(id);
-    const goal = GoalSchema.parse(transform(this.getSync(id)));
-    if (goal.id !== id) throw new Error('Goal update cannot change its ID');
-    writePrivateFile(filePath, JSON.stringify(goal));
-    return goal;
+    assertSafePath(filePath, false);
+    return withFileLock(`${filePath}.lock`, () => {
+      const goal = GoalSchema.parse(transform(this.getSync(id)));
+      if (goal.id !== id) throw new Error('Goal update cannot change its ID');
+      writePrivateFile(filePath, JSON.stringify(goal));
+      return goal;
+    });
   }
 
   async list(): Promise<GoalListResult> {

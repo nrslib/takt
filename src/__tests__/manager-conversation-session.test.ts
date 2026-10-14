@@ -3,6 +3,7 @@ import { assertStrictStructuredOutputSchema,validateStructuredOutputAgainstSchem
 import * as assignments from '../features/manager/assignment.js';
 import type { ManagerConversationPlan } from '../features/manager/conversationPlan.js';
 import { createManagerConversationSession } from '../features/manager/conversationSession.js';
+import { ensureDaemon } from '../features/daemon/lifecycle.js';
 import type { Goal } from '../infra/goals/schema.js';
 import { GoalCreateInputSchema } from '../infra/goals/schema.js';
 import { createGoal } from '../infra/goals/service.js';
@@ -22,6 +23,7 @@ vi.mock('../infra/goals/store.js', () => ({ GoalStore: class {
     list = answerDoubles.list;
   } }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
+vi.mock('../features/daemon/lifecycle.js', () => ({ ensureDaemon: vi.fn(async () => {}) }));
 
 const doubles = { call: vi.fn<ProviderAgent['call']>(), setup: vi.fn<Provider['setup']>() };
 
@@ -460,7 +462,20 @@ it('saves a human answer as an inbox event without calling a second agent', asyn
   answerDoubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => transform({ ...goalRecord(), questions: [{ id: questionId, recipient: 'human', status: 'pending', body: '形式はどれですか' }] }));
   expect((await session.answerQuestion({ goalId: goalRecord().id, questionId, text: 'CSV' })).kind).toBe('reply');
   expect(events.save).toHaveBeenCalledWith(cwd, expect.objectContaining({ kind: 'answer', questionId, answer: expect.objectContaining({ text: 'CSV', source: 'tui' }) }));
+  expect(ensureDaemon).toHaveBeenCalledOnce();
+  expect(events.save.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(ensureDaemon).mock.invocationCallOrder[0]!);
   expect(doubles.call).not.toHaveBeenCalled(); await session.close();
+});
+
+it('ensures the daemon after saving a resumed goal', async () => {
+  const { session } = fixture();
+  answerDoubles.get.mockResolvedValue({ ...goalRecord(), executionStatus: 'paused' });
+  try {
+    expect((await session.resumeGoal({ goalId: goalRecord().id })).kind).toBe('reply');
+    expect(events.save).toHaveBeenCalledWith(cwd, { kind: 'resumed', goalId: goalRecord().id });
+    expect(ensureDaemon).toHaveBeenCalledOnce();
+    expect(events.save.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(ensureDaemon).mock.invocationCallOrder[0]!);
+  } finally { await session.close(); }
 });
 
 

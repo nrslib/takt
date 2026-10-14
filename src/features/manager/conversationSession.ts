@@ -11,6 +11,7 @@ import { toDisplayText } from '../tui/displayText.js';
 import type { ManagerConversationPlan } from './conversationPlan.js';
 import { createGoal } from '../../infra/goals/service.js';
 import { ensureManagerRun } from './autoRun.js';
+import { ensureDaemon } from '../daemon/lifecycle.js';
 import { GoalStore } from '../../infra/goals/store.js';
 import { answerGoalQuestion } from '../../infra/goals/questions.js';
 import { setGoalExecutionStatus } from '../../infra/goals/execution.js';
@@ -121,6 +122,7 @@ export function createManagerConversationSession(input: {
       if (executionStatus === 'aborted') new TaskRunner(repository).invalidatePendingGoalTasks(options.goalId);
       if (executionStatus === 'active') {
         controller.signal.throwIfAborted();
+        await ensureDaemon();
         await ensureManagerRun(repository);
       }
       const label = executionStatus === 'aborted' ? 'manager.goalAborted'
@@ -148,6 +150,7 @@ export function createManagerConversationSession(input: {
         const saved = await new GoalStore(repository).update(options.goalId, (goal) => answerGoalQuestion(goal, options.questionId, options.text));
         const answer = saved.questions!.find((question) => question.id === options.questionId)!.answer!;
         saveManagerEvent(repository, { kind: 'answer', goalId: options.goalId, questionId: options.questionId, answer });
+        await ensureDaemon();
         await ensureManagerRun(repository);
         return { kind: 'reply', message: 'Answer saved' };
       } catch (error) {
@@ -273,6 +276,7 @@ export function createManagerConversationSession(input: {
         const repository = assignment === undefined ? repositoryDirectory ?? cwd
           : await resolveAssignedProjectRoot(repositoryDirectory ?? cwd, assignment);
         const goal = await createGoal({ ...summary, cwd: repository, id: randomUUID() });
+        await ensureDaemon();
         await ensureManagerRun(repository);
         return { kind: 'goal_registered', goal, turn: { kind: 'reply', message: plan.ctx.lang === 'ja' ? '最初の投入のイベントを保存しました' : 'Saved the event for initial task submission' } };
       } catch (error) {

@@ -400,7 +400,7 @@ manager:
     会話と現在の作業状態を確認してから、もう一度操作してください。
   turnFailureNotification: |-
     manager によるイベント処理が失敗しました。未処理のイベントが残っています。
-    原因を解消した後、takt run を実行すると、進行中のゴールの未処理イベントを再び処理します。
+    ログと設定を確認し、イベント処理の失敗原因を解消してください。
     一時停止中のゴールは TUI で /resume {goalId} を実行して再開してください。中止済みのゴールは再開できません。
     理由: {reason}
   goalExecutionUsage: "一時停止: /pause <goalId> / 再開: /resume <goalId> / 中止: /abort <goalId>（ゴールID必須）"

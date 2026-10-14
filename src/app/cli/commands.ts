@@ -49,6 +49,20 @@ export function parseMergeConcurrency(value: string): number {
 }
 
 program
+  .command('daemon')
+  .description('Run the manager daemon (started automatically by takt manager; use takt daemon stop to stop it)')
+  .action(async () => {
+    const { runDaemon } = await import('../../features/daemon/runDaemon.js');
+    await runDaemon();
+  })
+  .command('stop')
+  .description('Stop the manager daemon')
+  .action(async () => {
+    const { stopDaemon } = await import('../../features/daemon/lifecycle.js');
+    await stopDaemon();
+  });
+
+program
   .command('manager')
   .description('Open the experimental manager conversation TUI')
   .action(async () => {

@@ -78,7 +78,7 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   }
   const rawCaccia = denormalizeCacciaConfig(config.caccia);
   if (config.manager !== undefined) {
-    raw.manager = { auto_run: config.manager.autoRun, default_workflow: config.manager.defaultWorkflow, notifications: config.manager.notifications };
+    raw.manager = { auto_run: config.manager.autoRun, patrol_interval: config.manager.patrolInterval, default_workflow: config.manager.defaultWorkflow, notifications: config.manager.notifications };
   }
   const rawMerge = denormalizeMergeConfig(config.merge);
   if (rawMerge !== undefined) raw.merge = rawMerge;

@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const doubles = vi.hoisted(() => ({ manager: vi.fn(), assistant: vi.fn(), resolveConfigValue: vi.fn() }));
+const daemon = vi.hoisted(() => ({ run: vi.fn(), stop: vi.fn() }));
+vi.mock('../features/daemon/runDaemon.js', () => ({ runDaemon: daemon.run }));
+vi.mock('../features/daemon/lifecycle.js', () => ({ stopDaemon: daemon.stop }));
 vi.mock('../features/manager/runManager.js', () => ({ runManager: doubles.manager }));
 vi.mock('../app/cli/routing.js', () => ({ executeDefaultAction: doubles.assistant }));
 vi.mock('../app/cli/updateCheck.js', () => ({ runUpdateCheck: vi.fn() }));
@@ -27,6 +30,25 @@ async function parse(args: string[]) {
 }
 
 describe('manager CLI entrypoint', () => {
+  it('routes the internal daemon invocation and its public stop command', async () => {
+    await parse(['daemon']);
+    expect(daemon.run).toHaveBeenCalledOnce();
+    expect(daemon.stop).not.toHaveBeenCalled();
+    await parse(['daemon', 'stop']);
+    expect(daemon.stop).toHaveBeenCalledOnce();
+    const initialization = await import('../app/cli/initialization.js');
+    expect(initialization.initializeCliExecutionContext).not.toHaveBeenCalled();
+    expect(doubles.manager).not.toHaveBeenCalled();
+    expect(doubles.assistant).not.toHaveBeenCalled();
+  });
+
+  it('advertises stop in help without an internal start subcommand', async () => {
+    const { program } = await import('../app/cli/program.js');
+    await import('../app/cli/commands.js');
+    const command = program.commands.find((candidate) => candidate.name() === 'daemon')!;
+    expect(command.helpInformation()).toContain('stop');
+    expect(command.commands.map((candidate) => candidate.name())).toEqual(['stop']);
+  });
   it.each([
     { lang: 'ja', description: /実験的.*会話 TUI/u, changes: /動作・設定・保存するデータの形式.*予告なく/u, costs: /自動でタスクを投入・実行.*provider の API の費用/u },
     { lang: 'en', description: /experimental.*conversation TUI/iu, changes: /behavior, settings, and saved data formats.*without notice/iu, costs: /automatically queues and runs tasks.*provider API costs/iu },

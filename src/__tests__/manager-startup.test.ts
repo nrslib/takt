@@ -2,6 +2,8 @@ import type { ComponentProps,ReactElement } from 'react';
 import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
 import { assertStrictStructuredOutputSchema,validateStructuredOutputAgainstSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
 import { ensureManagerRun } from '../features/manager/autoRun.js';
+import { ensureDaemon } from '../features/daemon/lifecycle.js';
+import { registerProject } from '../infra/config/global/projectRegistry.js';
 import { managerOutputSchema } from '../features/manager/conversationSession.js';
 import { TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
 import type { ManagerView } from '../features/manager/ManagerView.js';
@@ -14,6 +16,8 @@ import { selectOption } from '../shared/prompt/index.js';
 vi.mock('../features/manager/startupResolution.js', async (original) => ({ ...await original<typeof import('../features/manager/startupResolution.js')>(), resolveManagerStartup: vi.fn() }));
 vi.mock('../shared/prompt/index.js', async (original) => ({ ...await original<typeof import('../shared/prompt/index.js')>(), selectOption: vi.fn() }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
+vi.mock('../features/daemon/lifecycle.js', () => ({ ensureDaemon: vi.fn(async () => {}) }));
+vi.mock('../infra/config/global/projectRegistry.js', () => ({ registerProject: vi.fn() }));
 const doubles = vi.hoisted(() => ({ plan: vi.fn(), connect: vi.fn(), session: vi.fn(), mount: vi.fn(), realpath: vi.fn(), preflight: vi.fn(), list: vi.fn(), codex: vi.fn(), execFile: vi.fn(), openCode: vi.fn(), claude: vi.fn() }));
 vi.mock('node:child_process', async (importOriginal) => ({ ...await importOriginal<typeof import('node:child_process')>(), execFile: doubles.execFile }));
 vi.mock('../infra/opencode/index.js', () => ({ callOpenCode: doubles.openCode, callOpenCodeCustom: doubles.openCode, compactOpenCodeSession: vi.fn() }));
@@ -285,6 +289,12 @@ describe('manager startup and teardown', () => {
     doubles.plan.mockReturnValueOnce({ ctx: { lang: 'ja', providerType: 'mock', provider: {} }, strategy: {} });
     await runManager({ cwd: '/repository' });
     expect(doubles.mount).toHaveBeenCalledTimes(1);
+    expect(registerProject).toHaveBeenCalledExactlyOnceWith({
+      globalConfigDirectory: process.env.TAKT_CONFIG_DIR,
+      projectDirectory: '/canonical/repository', command: 'manager', managerUsed: true,
+    });
+    expect(ensureDaemon).toHaveBeenCalledOnce();
+    expect(vi.mocked(ensureDaemon).mock.invocationCallOrder[0]).toBeLessThan(doubles.mount.mock.invocationCallOrder[0]!);
   });
 
   it('checks all currently assigned repositories again after the TUI closes', async () => {

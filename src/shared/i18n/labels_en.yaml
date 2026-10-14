@@ -400,7 +400,7 @@ manager:
     Review the conversation and current work state before trying again.
   turnFailureNotification: |-
     The manager failed to process an event. Unprocessed events remain.
-    After resolving the cause, run takt run to process pending events for active goals again.
+    Review the logs and configuration to resolve the event processing failure.
     For a paused goal, run /resume {goalId} in the TUI to resume it. An aborted goal cannot be resumed.
     Reason: {reason}
   goalExecutionUsage: "Pause: /pause <goalId> / Resume: /resume <goalId> / Abort: /abort <goalId> (goal ID required)"

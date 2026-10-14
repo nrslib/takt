@@ -33,6 +33,7 @@ interface StoredProjectRegistration {
   readonly createdAt: string;
   readonly lastSeenAt: string;
   readonly lastCommand: string;
+  readonly managerUsed?: boolean;
 }
 
 /** Public Web UI view. `id` and `projectDirectory` are compatibility aliases. */
@@ -88,6 +89,9 @@ function parseRegistration(value: unknown, expectedLocationId: string): StoredPr
   }
   const raw = value as Readonly<Record<string, unknown>>;
   if (raw.version !== REGISTRY_VERSION) throw new Error('registration version is unsupported');
+  if (raw.managerUsed !== undefined && typeof raw.managerUsed !== 'boolean') {
+    throw new Error('managerUsed is invalid');
+  }
   const locationId = requireString(raw.locationId, 'locationId');
   const canonicalDirectory = requireString(raw.canonicalDirectory, 'canonicalDirectory');
   const stateId = requireString(raw.stateId, 'stateId');
@@ -109,6 +113,7 @@ function parseRegistration(value: unknown, expectedLocationId: string): StoredPr
     createdAt: requireTimestamp(raw.createdAt, 'createdAt'),
     lastSeenAt: requireTimestamp(raw.lastSeenAt, 'lastSeenAt'),
     lastCommand: requireString(raw.lastCommand, 'lastCommand'),
+    ...(raw.managerUsed === undefined ? {} : { managerUsed: raw.managerUsed as boolean }),
   };
 }
 
@@ -204,6 +209,7 @@ export async function registerProject(options: {
   readonly globalConfigDirectory: string;
   readonly projectDirectory: string;
   readonly command: string;
+  readonly managerUsed?: true;
 }): Promise<RegisteredProject> {
   const canonicalDirectory = await realpath(options.projectDirectory);
   const fingerprint = await readDirectoryFingerprint(canonicalDirectory);
@@ -266,8 +272,9 @@ export async function registerProject(options: {
         lastSeenAt: now,
         lastCommand: options.command,
       };
-  await atomicWriteRegistration(target, stored);
-  return toPublicProject(stored, true);
+  const registration = options.managerUsed === true ? { ...stored, managerUsed: true } : stored;
+  await atomicWriteRegistration(target, registration);
+  return toPublicProject(registration, true);
 }
 
 function isMissing(error: unknown): boolean {

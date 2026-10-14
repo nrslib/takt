@@ -43,6 +43,8 @@ interface StepLogEntry {
   readonly persona: string;
   readonly status: string;
   readonly content: string;
+  readonly timestamp?: string;
+  readonly iteration?: number;
   readonly workflow?: SessionHistoryEntry['workflow'];
   readonly stack?: SessionHistoryEntry['stack'];
 }
@@ -92,6 +94,9 @@ export interface RunSessionContext {
   readonly workflow: string;
   readonly status: string;
   readonly currentStep?: string;
+  readonly currentIteration?: number;
+  readonly currentStepStartedAt?: string;
+  readonly currentStepExecutionCount?: number;
   readonly phase?: 1 | 2 | 3;
   readonly stepLogs: readonly StepLogEntry[];
   readonly reports: readonly ReportEntry[];
@@ -134,6 +139,8 @@ function buildStepLogs(sessionLog: SessionLog): StepLogEntry[] {
     persona: entry.persona,
     status: entry.status,
     content: truncateContent(entry.content, MAX_CONTENT_LENGTH),
+    timestamp: entry.timestamp,
+    ...(entry.iteration === undefined ? {} : { iteration: entry.iteration }),
     workflow: entry.workflow,
     stack: entry.stack,
   }));
@@ -1198,10 +1205,30 @@ export function loadRunSessionContext(
   const logSelection = findSessionLogFile(cwd, logsDir);
 
   let stepLogs: StepLogEntry[] = [];
+  let currentStepStartedAt: string | undefined;
+  let currentStepExecutionCount: number | undefined;
   if (logSelection) {
     const sessionLog = readSelectedSessionLog(logSelection, logSelection.path);
     if (sessionLog) {
       stepLogs = buildStepLogs(sessionLog);
+      if (meta.currentStep !== undefined && sessionLog.stepStarts !== undefined) {
+        const starts = sessionLog.stepStarts.filter((start) => start.step === meta.currentStep
+          && (start.workflow === undefined || start.workflow === meta.workflow)
+          && (start.stack === undefined || start.stack.length <= 1)
+          && (start.parallel === undefined || start.parallel.role === 'parent'));
+        currentStepExecutionCount = starts.length;
+        currentStepStartedAt = starts.filter((start) => start.iteration === meta.currentIteration).at(-1)?.timestamp;
+        // A step that calls a child workflow records starts only under the child's step names.
+        const leaf = currentStepStartedAt === undefined
+          ? sessionLog.stepStarts.filter((start) => start.parallel === undefined || start.parallel.role === 'parent').at(-1)
+          : undefined;
+        if (leaf !== undefined && leaf.stack !== undefined && leaf.stack.length > 1
+          && leaf.stack[0]?.step === meta.currentStep) {
+          currentStepStartedAt = leaf.timestamp;
+          currentStepExecutionCount = sessionLog.stepStarts.filter((start) => start.step === leaf.step
+            && start.workflow === leaf.workflow).length;
+        }
+      }
     }
   }
 
@@ -1227,6 +1254,9 @@ export function loadRunSessionContext(
     workflow: meta.workflow,
     status: meta.status,
     ...(meta.currentStep === undefined ? {} : { currentStep: meta.currentStep }),
+    ...(meta.currentIteration === undefined ? {} : { currentIteration: meta.currentIteration }),
+    ...(currentStepStartedAt === undefined ? {} : { currentStepStartedAt }),
+    ...(currentStepExecutionCount === undefined ? {} : { currentStepExecutionCount }),
     ...(meta.phase === undefined ? {} : { phase: meta.phase }),
     stepLogs,
     reports,

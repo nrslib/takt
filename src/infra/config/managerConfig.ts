@@ -3,13 +3,14 @@ import { loadGlobalConfig } from './global/globalConfig.js';
 import type { ManagerNotificationKind } from '../../core/models/config-types.js';
 
 export function resolveManagerConfig(cwd: string): {
-  autoRun: boolean; defaultWorkflow?: string; mainMerge: 'auto' | 'approve';
+  autoRun: boolean; patrolInterval: number; defaultWorkflow?: string; mainMerge: 'auto' | 'approve';
   notifications: Record<ManagerNotificationKind, boolean>;
 } {
   const project = loadProjectConfig(cwd).manager;
   const global = loadGlobalConfig().manager;
   return {
     autoRun: project?.autoRun ?? global?.autoRun ?? true,
+    patrolInterval: project?.patrolInterval ?? global?.patrolInterval ?? 1800,
     defaultWorkflow: project?.defaultWorkflow ?? global?.defaultWorkflow,
     mainMerge: project?.mainMerge ?? 'approve',
     notifications: {

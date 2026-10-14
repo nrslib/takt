@@ -23,6 +23,7 @@ vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { async list() { re
 const inbox = vi.hoisted(() => ({ read: vi.fn(() => [] as unknown[]), remove: vi.fn() }));
 vi.mock('../infra/goals/events.js', () => ({ readManagerEvents: inbox.read, deleteManagerEvent: inbox.remove, saveManagerEvent: vi.fn(), deleteGoalEvents: vi.fn() }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
+vi.mock('../features/daemon/lifecycle.js', () => ({ ensureDaemon: vi.fn(async () => {}) }));
 const startupDoubles = vi.hoisted(() => ({ flush: vi.fn(async () => {}) }));
 vi.mock('ink', async (importOriginal) => {
   const original = await importOriginal<typeof import('ink')>();

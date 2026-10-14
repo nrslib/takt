@@ -301,6 +301,24 @@ describe('manager conversation configuration and provider boundary', () => {
     });
     expect(loadProjectConfig(cwd)).toEqual(loaded);
   });
+
+  it('preserves patrol intervals through project and global load/save and resolves project precedence', () => {
+    const globalDirectory = join(cwd, 'patrol-global');
+    mkdirSync(globalDirectory); vi.stubEnv('TAKT_CONFIG_DIR', globalDirectory);
+    writeFileSync(join(globalDirectory, 'config.yaml'), 'provider: mock\nmanager:\n  patrol_interval: 900\n');
+    invalidateGlobalConfigCache();
+    saveGlobalConfig(loadGlobalConfig()); invalidateGlobalConfigCache();
+    expect(loadGlobalConfig().manager?.patrolInterval).toBe(900);
+    expect(parse(readFileSync(join(globalDirectory, 'config.yaml'), 'utf8'))).toMatchObject({ manager: { patrol_interval: 900 } });
+    const projectPath = join(cwd, '.takt', 'config.yaml');
+    writeFileSync(projectPath, 'provider: mock\nmanager:\n  patrol_interval: 60\n');
+    saveProjectConfig(cwd, loadProjectConfig(cwd));
+    expect(loadProjectConfig(cwd).manager?.patrolInterval).toBe(60);
+    expect(parse(readFileSync(projectPath, 'utf8'))).toMatchObject({ manager: { patrol_interval: 60 } });
+    expect(resolveManagerConfig(cwd).patrolInterval).toBe(60);
+    saveProjectConfig(cwd, { ...loadProjectConfig(cwd), manager: undefined });
+    expect(resolveManagerConfig(cwd).patrolInterval).toBe(900);
+  });
   it.each([false, true])('preserves global manager settings and resolves project fields independently (auto run: %s)', (autoRun) => {
     const globalDirectory = join(cwd, 'global');
     mkdirSync(globalDirectory);

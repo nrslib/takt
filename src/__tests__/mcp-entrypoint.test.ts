@@ -410,6 +410,7 @@ describe('MCP package entrypoint', () => {
       status: 'running',
       startTime: '2026-09-09T00:00:00.000Z',
       currentStep: 'implement',
+      currentIteration: 2,
       phase: 2,
     }), 'utf-8');
     writeFileSync(join(runDir, 'logs', 'session-001.jsonl'), [
@@ -428,6 +429,10 @@ describe('MCP package entrypoint', () => {
         content: 'Plan is ready',
         instruction: 'Create a plan',
         timestamp: '2026-09-09T00:01:00.000Z',
+      }),
+      JSON.stringify({
+        type: 'step_start', step: 'implement', persona: 'coder', iteration: 2,
+        timestamp: '2026-09-09T00:02:00.000Z',
       }),
     ].join('\n') + '\n', 'utf-8');
     writeFileSync(join(runDir, 'reports', '00-progress.md'), reportMarker, 'utf-8');
@@ -490,9 +495,12 @@ describe('MCP package entrypoint', () => {
       expect(getPayload).toEqual(expect.objectContaining({
         runSlug,
         currentStep: 'implement',
+        currentIteration: 2,
+        currentStepStartedAt: '2026-09-09T00:02:00.000Z',
+        currentStepExecutionCount: 1,
         phase: 2,
         stepLogs: expect.arrayContaining([
-          expect.objectContaining({ step: 'plan', content: 'Plan is ready' }),
+          expect.objectContaining({ step: 'plan', content: 'Plan is ready', iteration: 1, timestamp: '2026-09-09T00:01:00.000Z' }),
         ]),
         reports: expect.arrayContaining([
           expect.objectContaining({ filename: '00-progress.md', content: reportMarker }),

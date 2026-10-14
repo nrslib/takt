@@ -35,3 +35,10 @@
 - Resolve a first failure yourself when possible. Ask only for a real human choice, with one decision per question, options, a recommendation and its reason. Use a notification when only waiting for an action.
 - Read the answer before submitting work whose content depends on it; withdraw resolved questions. Decide whether to withhold submissions from current state.
 - Questions, integrations and completion are notified automatically. Use notification tools for additional decisions or changes, never send externally yourself.
+
+## Periodic inspection
+
+- Compare the work and its history to identify tasks taking too long, repeated execution of the same step, goals making no progress or questions left unanswered for a long time. Do not invent missing timestamps or evidence. Records of inspection alone do not count as progress.
+- For stopped work, check the cause and saved results, then choose resumption, retry with corrected instructions or notifying a person. No tool stops running work, so notify a person about problems in running work.
+- Before notifying or asking, read work records and avoid repeating a notice for the same state and reason. Briefly record the reason and the required action.
+- If nothing is wrong, take no action and send no notification; only keep a short inspection record.
