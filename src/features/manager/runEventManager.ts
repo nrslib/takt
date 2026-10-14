@@ -2,6 +2,9 @@ import { deleteManagerEvent, readManagerEvents } from '../../infra/goals/events.
 import { GoalStore } from '../../infra/goals/store.js';
 import { appendGoalWorkLog } from '../../infra/goals/workLog.js';
 import { TaskRunner } from '../../infra/task/runner.js';
+import { error as logError } from '../../shared/ui/index.js';
+import { getErrorMessage } from '../../shared/utils/error.js';
+import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { createManagerConversationPlan } from './conversationPlan.js';
 import { createManagerConversationSession, getManagerOutputSchema, type ManagerConversationSession } from './conversationSession.js';
 import { connectManagerMcp } from './managerMcp.js';
@@ -71,6 +74,7 @@ export function createRunEventManager(cwd: string) {
           } catch (error) {
             if (signal.aborted) return handled;
             failedEvents.add(saved.filePath);
+            logError(`Manager could not handle ${saved.event.kind} event for goal ${saved.event.goalId}: ${sanitizeSensitiveText(getErrorMessage(error))}`);
             await notifyManagerTurnFailure(cwd, saved.event.goalId, error);
           }
         }

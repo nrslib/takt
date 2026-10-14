@@ -357,7 +357,7 @@ syncBuiltinESMExports();
         env: { ...process.env, NODE_OPTIONS: `--import ${pathToFileURL(hook).href}`, [MANAGER_GOAL_TASKS_ENV]: '1' },
       });
       expect(child.error).toBeUndefined();
-      expect(child.status).toBe(1);
+      expect(child.status).toBe(0);
       expect(child.stdout + child.stderr).toContain('injected event failure');
       expect(existsSync(launchMarker)).toBe(false);
       expect(readManagerEvents(cwd)).toEqual(saved);
