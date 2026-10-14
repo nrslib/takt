@@ -40,6 +40,43 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+describe('isRecordedProcessAlive', () => {
+  it.each([
+    { recorded: startTime, current: startTime, expected: true },
+    { recorded: startTime, current: '2026-10-03T14:23:41.1234567Z', expected: false },
+    { recorded: startTime, current: undefined, expected: true },
+    { recorded: undefined, current: startTime, expected: true },
+    { recorded: 'legacy-start-time', current: startTime, expected: true },
+  ])('checks a live PID with recorded=$recorded and current=$current', async ({ recorded, current, expected }) => {
+    vi.spyOn(process, 'kill').mockReturnValue(true);
+    vi.mocked(execFileSync).mockImplementation(() => {
+      if (current === undefined) throw new Error('inspector unavailable');
+      return current;
+    });
+    const { isRecordedProcessAlive } = await import('../infra/task/process.js');
+    expect(isRecordedProcessAlive(otherPid, recorded === undefined ? undefined : { startTime: recorded })).toBe(expected);
+    expect(process.kill).toHaveBeenCalledWith(otherPid, 0);
+  });
+
+  it('does not inspect the identity of a dead PID', async () => {
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('dead'), { code: 'ESRCH' });
+    });
+    const { isRecordedProcessAlive } = await import('../infra/task/process.js');
+    expect(isRecordedProcessAlive(otherPid, { startTime })).toBe(false);
+    expect(execFileSync).not.toHaveBeenCalled();
+  });
+
+  it('keeps an owner alive when probing is denied and identity is unknown', async () => {
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('denied'), { code: 'EPERM' });
+    });
+    vi.mocked(execFileSync).mockImplementation(() => { throw new Error('denied'); });
+    const { isRecordedProcessAlive } = await import('../infra/task/process.js');
+    expect(isRecordedProcessAlive(otherPid, { startTime })).toBe(true);
+  });
+});
+
 describe('Windows のプロセス識別', () => {
   it('指定した別 PID の UTC 開始時刻を精度を保って返す', async () => {
     vi.mocked(execFileSync).mockReturnValue(`${startTime}\r\n`);

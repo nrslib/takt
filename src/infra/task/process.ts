@@ -153,6 +153,11 @@ export function isProcessAlive(ownerPid: number): boolean {
   }
 }
 
+export function isRecordedProcessAlive(pid: number, processIdentity: ProcessIdentity | undefined): boolean {
+  return isProcessAlive(pid)
+    && !hasProcessIdentityMismatch(processIdentity, getProcessIdentity(pid));
+}
+
 export function isStaleRunningTask(
   ownerPid: number | undefined,
   ownerStartTime?: string,
