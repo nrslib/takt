@@ -8,8 +8,11 @@ import { resolveCliInvocation } from '../../shared/utils/cli-invocation.js';
 import { createLogger, initDebugLogger } from '../../shared/utils/debug.js';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { hasDaemonProjectWork, listDaemonProjects } from './projects.js';
+import { createRunEventManager } from '../manager/runEventManager.js';
+import { ensureManagerRun } from '../manager/autoRun.js';
 
 const POLL_INTERVAL_MS = 500;
+const EVENTS_PER_PROJECT = 10;
 const log = createLogger('daemon');
 
 export async function runDaemon(): Promise<void> {
@@ -20,6 +23,7 @@ export async function runDaemon(): Promise<void> {
   if (identity === undefined) throw new Error('Cannot identify daemon process');
   const { cliPath } = resolveCliInvocation('daemon');
   const controller = new AbortController();
+  const managers = new Map<string, ReturnType<typeof createRunEventManager>>();
   const stop = (): void => { controller.abort(); };
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);
@@ -40,6 +44,14 @@ export async function runDaemon(): Promise<void> {
       for (const cwd of projects) {
         if (controller.signal.aborted) break;
         try {
+          let manager = managers.get(cwd);
+          if (manager === undefined) {
+            manager = createRunEventManager(cwd);
+            managers.set(cwd, manager);
+          }
+          await manager.processPending(controller.signal, EVENTS_PER_PROJECT);
+          if (controller.signal.aborted) break;
+          await ensureManagerRun(cwd);
           if (await hasDaemonProjectWork(cwd)) hasWork = true;
         } catch (error) {
           hasWork = true;
@@ -49,6 +61,10 @@ export async function runDaemon(): Promise<void> {
       if (!hasWork) break;
     }
   } finally {
+    for (const [cwd, manager] of managers) {
+      try { await manager.close(); }
+      catch (error) { log.error('Cannot close daemon project manager', { cwd, error: getErrorMessage(error) }); }
+    }
     removeDaemonOwner(globalConfigDirectory);
     process.removeListener('SIGTERM', stop);
     process.removeListener('SIGINT', stop);

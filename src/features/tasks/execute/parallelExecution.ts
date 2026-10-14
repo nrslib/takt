@@ -23,7 +23,6 @@ import { forceExitAfterOpenCodeCleanup } from './forceShutdown.js';
 import { isInputWaiting } from './inputWait.js';
 import type { TaskExecutionOptions } from './types.js';
 import { claimTasksWithGoalCompletions } from './claimTasks.js';
-import { createRunEventManager } from '../../manager/runEventManager.js';
 import { checkQueuedTaskProviders, checkPendingTaskProviders } from './providerPreflight.js';
 
 const log = createLogger('worker-pool');
@@ -42,8 +41,6 @@ interface RunWorkerOptions {
 export interface WorkerPoolShutdownSignals {
   readonly schedulingSignal: AbortSignal;
   readonly taskAbortSignal: AbortSignal;
-  onTasksClaimed?(): void;
-  onManagerFailure?(): void;
 }
 
 type RaceResult =
@@ -143,7 +140,6 @@ export async function runWithWorkerPool(
   const queue = [...initialTasks];
   const active = new Map<Promise<boolean>, TaskInfo>();
   const colorCounter = { value: 0 };
-  const manager = createRunEventManager(cwd);
   let preparationFailure: { error: unknown } | undefined;
 
   const claimPreparedTasks = async (): Promise<void> => {
@@ -153,20 +149,6 @@ export async function runWithWorkerPool(
         cwd, taskExecutionOptions, goalTasksOnly);
     } catch (error) {
       if (!schedulingSignal.aborted || error !== schedulingSignal.reason) preparationFailure = { error };
-    }
-  };
-
-  const processManagerEvents = async (): Promise<boolean> => {
-    if (schedulingSignal.aborted || preparationFailure !== undefined) return false;
-    try {
-      const handled = await manager.processPending(schedulingSignal);
-      // A failed event stays for the next run; do not start that run automatically.
-      if (manager.hasFailedEvents()) shutdownSignals?.onManagerFailure?.();
-      return handled;
-    } catch (error) {
-      shutdownSignals?.onManagerFailure?.();
-      preparationFailure = { error };
-      return false;
     }
   };
 
@@ -183,7 +165,6 @@ export async function runWithWorkerPool(
     }
     while (true) {
       if (!schedulingSignal.aborted && preparationFailure === undefined) {
-        if (queue.length > 0) shutdownSignals?.onTasksClaimed?.();
         fillSlots(queue, active, concurrency, taskRunner, cwd, taskExecutionOptions, runOptions,
           schedulingSignal, taskAbortSignal, colorCounter);
         if ((selfSigintOnce || selfSigintTwice) && !selfSigintInjected && active.size > 0) {
@@ -197,16 +178,12 @@ export async function runWithWorkerPool(
         }
       }
 
-      await processManagerEvents();
       await claimPreparedTasks();
       if (!schedulingSignal.aborted && preparationFailure === undefined
         && queue.length > 0 && active.size < concurrency) continue;
 
       if (active.size === 0
         && (schedulingSignal.aborted || preparationFailure !== undefined || mode === 'run')) {
-        if (!schedulingSignal.aborted && preparationFailure === undefined) {
-          if (await processManagerEvents()) continue;
-        }
         break;
       }
 
@@ -269,7 +246,7 @@ export async function runWithWorkerPool(
   } finally {
     // The caller owns the project lock until every task has finished saving.
     await Promise.allSettled([...active.keys()]);
-    try { await manager.close(); } finally { shutdownManager?.cleanup(); }
+    shutdownManager?.cleanup();
   }
 
   if (preparationFailure !== undefined) throw preparationFailure.error;

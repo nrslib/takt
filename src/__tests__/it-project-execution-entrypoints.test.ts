@@ -146,14 +146,14 @@ describe('プロジェクト実行ロックの入口', () => {
     expect(mocks.release).toHaveBeenCalledOnce();
   });
 
-  it('自動 run は空キューで正常終了しても解放後に再起動を判定する', async () => {
+  it('自動 run は空キューで正常終了しても再起動しない', async () => {
     mocks.claim.mockReturnValue([]);
     mocks.pool.mockResolvedValue({ success: 0, fail: 0, executedTaskNames: [] });
     mocks.ensure.mockImplementation(async () => expect(mocks.release).toHaveBeenCalledOnce());
     await expect(runAllTasks('/project', { goalTasksOnly: true })).resolves.toBeUndefined();
     expect(mocks.pool).toHaveBeenCalledOnce();
     expect(mocks.pool.mock.calls[0]![1]).toEqual([]);
-    expect(mocks.ensure).toHaveBeenCalledExactlyOnceWith('/project');
+    expect(mocks.ensure).not.toHaveBeenCalled();
   });
 
   it.each(['initial processing', 'claim'] as const)('自動 run は取得前の $0 の失敗では再起動を判定しない', async (boundary) => {
@@ -172,7 +172,7 @@ describe('プロジェクト実行ロックの入口', () => {
     expect(mocks.runner).toHaveBeenCalledWith('/project', expect.objectContaining({ goalTasksOnly: true }));
     expect(mocks.requeue).not.toHaveBeenCalled();
     expect(mocks.pool.mock.calls[0]![0]).toBeInstanceOf((await import('../infra/task/index.js')).TaskRunner);
-    expect(mocks.ensure).toHaveBeenCalledExactlyOnceWith('/project');
+    expect(mocks.ensure).not.toHaveBeenCalled();
   });
 
   it('自動起動した run は生きている所有者がいれば設定もキューも読み込まずに終了する', async () => {

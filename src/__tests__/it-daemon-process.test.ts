@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,6 +8,8 @@ import { registerProject } from '../infra/config/global/projectRegistry.js';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { isDaemonOwnerRunning, readDaemonOwner, writeDaemonOwner } from '../infra/daemon/owner.js';
 import { GoalStore } from '../infra/goals/store.js';
+import { readManagerEvents, saveManagerEvent } from '../infra/goals/events.js';
+import { readManagerDisplayEvents } from '../features/manager/savedEvents.js';
 import { isProcessAlive } from '../infra/task/process.js';
 import { packageVersion } from '../shared/package-info.js';
 import { captureOwnedChild, captureOwnedProcess, terminateOwnedProcess, type OwnedProcess } from './helpers/owned-process.js';
@@ -33,6 +35,7 @@ afterEach(async () => {
   const owner = readDaemonOwner(getGlobalConfigDir());
   if (owner !== undefined) owned.push({ pid: owner.pid, identity: owner.identity });
   for (const processOwner of owned) await terminateOwnedProcess(processOwner, () => false);
+  vi.unstubAllEnvs();
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -123,4 +126,52 @@ it('does not signal a reused PID belonging to an unrelated live process', async 
   await lifecycle.stopDaemon();
   expect(isProcessAlive(process.pid)).toBe(true);
   expect(readDaemonOwner(getGlobalConfigDir())).toBeUndefined();
+});
+
+it('handles an inbox event without pending tasks or run and exposes its saved result to the TUI', async () => {
+  execFileSync('git', ['init', '-b', 'main'], { cwd, stdio: 'pipe' });
+  const goal = await keepWork();
+  const scenario = join(root, 'scenario.json');
+  const message = 'daemon が完了イベントを取り込みました';
+  writeFileSync(scenario, JSON.stringify([{ persona: 'manager', content: '', structured_output: { message, summary: null } }]));
+  vi.stubEnv('TAKT_MOCK_SCENARIO', scenario);
+  saveManagerEvent(cwd, { kind: 'completion', goalId: goal.id, taskName: 'finished', runSlug: 'run-finished', result: { success: true, interrupted: false } });
+  const owner = await start();
+  await vi.waitFor(async () => {
+    expect(readManagerEvents(cwd), JSON.stringify((await new GoalStore(cwd).get(goal.id)).notifications)).toEqual([]);
+    expect((await readManagerDisplayEvents(cwd, 'ja')).events.map((event) => event.message))
+      .toContain(`${goal.id}: ${message}`);
+  }, { timeout: 10_000 });
+  expect(isDaemonOwnerRunning(owner)).toBe(true);
+  expect(existsSync(join(cwd, '.takt', 'manager-logs'))).toBe(false);
+});
+
+it('keeps a failed event and blocked notification across multiple daemon polls without retrying', async () => {
+  execFileSync('git', ['init', '-b', 'main'], { cwd, stdio: 'pipe' });
+  const goal = await keepWork();
+  const scenario = join(root, 'scenario.json');
+  const calls = join(root, 'calls.jsonl');
+  writeFileSync(scenario, JSON.stringify([
+    { persona: 'manager', content: '', status: 'error', error: 'injected failure' },
+    { persona: 'manager', content: '', structured_output: { message: 'unexpected retry', summary: null } },
+  ]));
+  vi.stubEnv('TAKT_MOCK_SCENARIO', scenario);
+  vi.stubEnv('TAKT_MOCK_CALL_LOG', calls);
+  saveManagerEvent(cwd, { kind: 'registered', goalId: goal.id });
+  await start();
+  await vi.waitFor(async () => {
+    const saved = await new GoalStore(cwd).get(goal.id);
+    expect(saved.notifications?.filter((notification) => notification.kind === 'blocked')).toHaveLength(1);
+  }, { timeout: 10_000 });
+  const logPath = join(getGlobalConfigDir(), 'logs', 'daemon.log');
+  const before = readFileSync(logPath, 'utf8').split('Daemon projects').length;
+  await vi.waitFor(() => {
+    expect(readFileSync(logPath, 'utf8').split('Daemon projects').length).toBeGreaterThanOrEqual(before + 3);
+  }, { timeout: 5_000 });
+  expect(readManagerEvents(cwd)).toHaveLength(1);
+  expect(existsSync(calls), JSON.stringify((await new GoalStore(cwd).get(goal.id)).notifications)).toBe(true);
+  const recorded = readFileSync(calls, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { event: string; personaName: string });
+  expect(recorded.filter((call) => call.event === 'start' && call.personaName === 'manager')).toHaveLength(1);
+  expect((await new GoalStore(cwd).get(goal.id)).notifications?.filter((notification) => notification.kind === 'blocked')).toHaveLength(1);
+  expect(existsSync(join(cwd, '.takt', 'manager-logs'))).toBe(false);
 });

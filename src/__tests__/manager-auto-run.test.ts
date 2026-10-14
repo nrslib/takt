@@ -166,11 +166,11 @@ it('notifies a whole queue read failure without spawning', async () => {
   expect(doubles.diagnostic).toHaveBeenCalledOnce();
 });
 
-it('starts run for an inbox event even when no tasks are pending', async () => {
+it('does not start run for an inbox event when no tasks are pending', async () => {
   doubles.pending.mockReturnValue([]);
   doubles.events.mockReturnValue([{ event: { kind: 'registered', goalId: goalRecord().id } }]);
   await ensureManagerRun('/project');
-  expect(doubles.spawn).toHaveBeenCalledOnce();
+  expect(doubles.spawn).not.toHaveBeenCalled();
 });
 it('keeps paused events without repeatedly starting an empty run', async () => {
   doubles.pending.mockReturnValue([]);
