@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-description: 'PR #1803: completed report handoff at four review consumers'
+description: 'PR #1803: report handoff at four review consumers, including one anomalous follow-up input'
 prompts:
   - label: follow-up-baseline
     raw: file://../../prompts/review-artifact-input-handoff/follow-up-baseline.md
@@ -47,7 +47,7 @@ defaultTest:
 evaluateOptions:
   maxConcurrency: 1
 tests:
-  - description: follow-up repair report is used to retain unresolved finding
+  - description: anomalous completed-call and incomplete-verifier combination retains unresolved finding
     prompts: [follow-up-baseline, follow-up-current]
     vars:
       case: follow-up

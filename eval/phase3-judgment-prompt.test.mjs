@@ -60,14 +60,14 @@ test('loads workflow-owned uses rules, parallel sub-step rules, and loop monitor
   const reviewer = loadPhase3JudgmentRules({ language: 'en', workflow: 'review-backend', step_name: 'coding-review' });
   assert.deepEqual(reviewer.candidates.map(({ label }) => label), ['approved', 'needs_fix']);
   const monitor = loadPhase3JudgmentRules({ language: 'en', workflow: 'development-remediation-dynamic', loop_monitor_index: 1 });
-  assert.equal(monitor.name, '_loop_judge_fix_fix-replan');
+  assert.equal(monitor.name, '_loop_judge_fix');
   assert.equal(monitor.candidates[3].label, 'No feasible path can satisfy the requirements');
   for (const language of ['ja', 'en']) {
     const finalGate = loadPhase3JudgmentRules({ language, workflow: 'peer-review', step_name: 'final-gate' });
     assert.equal(finalGate.name, 'final-gate');
     assert.deepEqual(finalGate.candidates.map(({ label }) => label), ['APPROVE', 'REJECT', 'BLOCKED']);
     const firstMonitor = loadPhase3JudgmentRules({ language, workflow: 'development-remediation-dynamic', loop_monitor_index: 1 });
-    assert.equal(firstMonitor.name, '_loop_judge_fix_fix-replan');
+    assert.equal(firstMonitor.name, '_loop_judge_fix');
     assert.equal(firstMonitor.candidates[0].label, language === 'ja'
       ? '健全（修正進捗があり、報告内容も収束している）'
       : 'Healthy (fix progress exists and report content is converging)');

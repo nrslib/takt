@@ -92,6 +92,7 @@ steps:
       reports:
         - fix-plan.md
         - fix-report.md
+        - fix-verification.md
     uses: simple-coding-review
     with:
       review_policy:
@@ -104,7 +105,7 @@ steps:
         - unit-testing
         - e2e-testing
       review_instruction:
-        follow-up-simple-review-coding
+        simple-review-coding
     rules:
       - condition: approved
         next: COMPLETE
@@ -122,6 +123,10 @@ steps:
         - coding
         - testing
         - architecture
+      verification_policy:
+        - coding
+        - testing
+        - review
       fix_knowledge:
         - architecture
         - unit-testing

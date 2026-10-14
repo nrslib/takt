@@ -76,4 +76,5 @@ export const WorkflowResumePointSchema = z.object({
     z.string().min(1),
     WorkflowStepParticipationRecordSchema,
   ),
+  missing_report_generations: z.record(z.string(), z.array(z.string().min(1))).optional(),
 }).strict();

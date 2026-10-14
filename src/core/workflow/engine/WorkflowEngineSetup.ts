@@ -50,6 +50,7 @@ import {
   resolveWorkflowStepReportNamesWithDiagnostics,
 } from '../review-report-discovery.js';
 import { DynamicParallelSelectionStore } from '../dynamic-parallel/selection-store.js';
+import { ReportGenerationIndex } from '../report-generation-index.js';
 import {
   restoreWorkflowCallInvocationEvidence,
   snapshotWorkflowCallInvocationEvidence,
@@ -151,6 +152,7 @@ export function createSharedRuntime(
     dynamicFacetSelectionStore: new DynamicFacetSelectionStore(new Map()),
     workflowCallInvocationEvidence: restoreWorkflowCallInvocationEvidence(resumePoint),
     workflowStepParticipationIndex: restoreWorkflowStepParticipationIndex(resumePoint),
+    reportGenerationIndex: new ReportGenerationIndex(resumePoint?.missing_report_generations),
   };
 }
 
@@ -292,9 +294,10 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getProjectCwd: () => params.projectCwd,
     getReportDir: params.getReportDir,
     getRunPaths: params.getRunPaths,
+    reportGenerationIndex: params.sharedRuntime.reportGenerationIndex,
     getLanguage: () => params.options.language,
     getInteractive: () => params.options.interactive === true,
-    getWorkflowSteps: () => params.config.steps.map((step) => ({ name: step.name, description: step.description })),
+    getWorkflowSteps: () => params.config.steps,
     getWorkflowName: () => params.config.name,
     getTask: () => params.task,
     getWorkflowDescription: () => params.config.description,

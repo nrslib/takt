@@ -108,7 +108,7 @@ test('review adjudication retains A1-A4 applicability cases and provider conditi
 
   const current = parse(readFileSync(new URL(`./${suite.config}`, import.meta.url), 'utf8'));
   const historical = parse(readFileSync(
-    new URL('./archive/agents/fix-verifier/fix-verification-applicable-inputs.yaml', import.meta.url), 'utf8'));
+    new URL('./agents/fix-verifier/fix-verification-applicable-inputs.yaml', import.meta.url), 'utf8'));
   assert.deepEqual(current.providers, historical.providers);
   assert.deepEqual(current.defaultTest, historical.defaultTest);
   assert.deepEqual(current.evaluateOptions, historical.evaluateOptions);

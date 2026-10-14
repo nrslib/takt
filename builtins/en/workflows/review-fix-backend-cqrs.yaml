@@ -73,6 +73,7 @@ steps:
       reports:
         - fix-plan.md
         - fix-report.md
+        - fix-verification.md
     uses: review-fix-backend-cqrs-reviewers
     with:
       architecture_review_instruction: follow-up-architecture-review
@@ -143,6 +144,11 @@ steps:
         - cqrs-es
         - architecture
         - backend
+      verification_policy:
+        - coding
+        - testing
+        - review
+        - cqrs-es
       fix_knowledge:
         - backend
         - cqrs-es

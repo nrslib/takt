@@ -7,6 +7,11 @@ const evalDir = dirname(fileURLToPath(import.meta.url));
 const CLASSIFICATIONS = [
   {
     tier: 'active',
+    reason: '完了検証・再計画・レビュー裁定で反例に使う入力の根拠を確かめる',
+    suites: ['fix-verification-applicable-inputs'],
+  },
+  {
+    tier: 'active',
     reason: 'レビュー裁定が既存の入力適用範囲に沿って指摘を採用するか測る',
     suites: ['review-adjudication-applicable-inputs'],
   },
@@ -47,6 +52,21 @@ const CLASSIFICATIONS = [
       'remediation-scope-fix-plan-en',
       'remediation-scope-write-tests',
       'remediation-scope-write-tests-en',
+    ],
+  },
+  {
+    tier: 'active',
+    reason: '復元した fix-verifier の状態閉包・経路判定・証拠境界を測る',
+    suites: [
+      'fix-verifier-family-boundary',
+      'fix-verifier-state-closure',
+      'fix-verifier-state-routing',
+      'fix-verifier-model-matrix',
+      'fix-verifier-routing-model-matrix',
+      'fix-verification-scope',
+      'fix-verification-current-diff-regression',
+      'fix-verification-preserved-condition',
+      'remediation-evidence',
     ],
   },
   {
@@ -184,11 +204,15 @@ const CLASSIFICATIONS = [
 ];
 
 const EXECUTION_OVERRIDES = {
+  'fix-verification-applicable-inputs': {
+    defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
+    reason: 'Sol Low、Opus 5、Luna Max の3モデルで完了検証・再計画・裁定の入力範囲を比較する',
+  },
   'review-artifact-input-handoff': {
     defaultEligible: false,
     credentials: ['codex'],
     cost: 'high',
-    reason: '完了済み成果物の実行時受け渡しを4ケースの新旧プロンプトで比較する明示選択の評価',
+    reason: '成果物の受け渡しを4ケースの新旧プロンプトで比較する。follow-upは完了記録とincomplete検証報告の異常な組合せへの堅牢性診断',
   },
   'review-adjudication-applicable-inputs': {
     defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
@@ -378,6 +402,10 @@ const EXECUTION_OVERRIDES = {
     cost: 'high',
     reason: '全シナリオを3モデルで測る production-condition suite である',
   },
+  'remediation-evidence': {
+    defaultEligible: false, credentials: ['codex'], cost: 'standard',
+    reason: '共有 remediation 指示の変更時に固定証跡で判定を比較する',
+  },
   'fix-plan-cause-check': {
     defaultEligible: false,
     credentials: ['claude', 'codex'],
@@ -437,6 +465,14 @@ const EXECUTION_OVERRIDES = {
     credentials: ['claude', 'codex'],
     cost: 'high',
     reason: '3モデル比較のため両CLI認証と大きな実行枠を要する',
+  },
+  'fix-verifier-model-matrix': {
+    defaultEligible: false, credentials: ['claude', 'codex', 'opencode'], cost: 'high',
+    reason: 'Claude・Codex・opencode の複数モデル比較を要する',
+  },
+  'fix-verifier-routing-model-matrix': {
+    defaultEligible: false, credentials: ['claude', 'codex', 'opencode'], cost: 'high',
+    reason: 'Claude・Codex・opencode の複数モデル比較を要する',
   },
   'review-impact-path-coverage': {
     defaultEligible: false,
@@ -532,6 +568,18 @@ const EXECUTION_OVERRIDES = {
     cost: 'high',
     reason: '3モデル比較のため両CLI認証と大きな実行枠を要する',
   },
+  'fix-verification-scope': {
+    defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
+    reason: '独立検証で修正範囲と因果関係を比較する',
+  },
+  'fix-verification-current-diff-regression': {
+    defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
+    reason: '修正差分による退行を独立検証で比較する',
+  },
+  'fix-verification-preserved-condition': {
+    defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
+    reason: '既存契約保存の完了義務を独立検証で比較する',
+  },
   'security-review-method': {
     defaultEligible: false,
     credentials: ['claude', 'codex'],
@@ -571,6 +619,8 @@ const EXECUTION_OVERRIDES = {
 };
 
 const PREPARE_TARGET_OVERRIDES = {
+  'fix-verification-applicable-inputs': ['f1', 'f2', 'f3', 'r1', 'r2', 'n1', 'n2', 'n3', 'n4', 'n5', 'a1', 'a2', 'a3', 'a4']
+    .map((caseId) => `fix-verification-applicable-inputs-${caseId}`),
   'review-adjudication-applicable-inputs': ['a1', 'a2', 'a3', 'a4']
     .map((caseId) => `review-adjudication-applicable-inputs-${caseId}`),
   'finding-premise-scope': ['rv1', 'rv2', 'rn1', 'rn2', 'pl1', 'pn1']
@@ -605,6 +655,9 @@ const PREPARE_TARGET_OVERRIDES = {
   'interactive-topic-boundary': [],
   'completion-scope-structured': [],
   'phase3-follow-input': [],
+  'remediation-evidence': [],
+  'fix-verifier-model-matrix': ['fix-verifier-state-closure'],
+  'fix-verifier-routing-model-matrix': ['fix-verifier-state-routing'],
   'completion-scope-routing': [],
   'evidence-judgment': [],
   coding: ['coding-review'],

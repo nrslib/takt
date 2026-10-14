@@ -214,6 +214,7 @@ export interface WorkflowSharedRuntimeState {
   dynamicFacetSelectionStore?: import('./dynamic-facets/dynamicFacetSelectionStore.js').DynamicFacetSelectionStore;
   workflowCallInvocationEvidence?: WorkflowCallInvocationEvidence;
   workflowStepParticipationIndex?: WorkflowStepParticipationIndex;
+  reportGenerationIndex?: import('./report-generation-index.js').ReportGenerationIndex;
   resumeArtifactOccurrenceIndex?: import('./run/resume-artifact-occurrence-index.js').ResumeArtifactOccurrenceIndex;
 }
 

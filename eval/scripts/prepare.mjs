@@ -56,6 +56,15 @@ const TARGETS = [
     requiredFacetKinds: ['policies'],
     promptExtension: 'j2',
   })),
+  ...['f1', 'f2', 'f3', 'r1', 'r2', 'n1', 'n2', 'n3', 'n4', 'n5', 'a1', 'a2', 'a3', 'a4'].map((caseId) => ({
+    id: `fix-verification-applicable-inputs-${caseId}`,
+    workflow: ['r1', 'r2', 'n4'].includes(caseId) ? 'review-remediation' : caseId.startsWith('a') ? 'peer-review' : 'review-remediation',
+    step: ['r1', 'r2', 'n4'].includes(caseId) ? 'verification-replan' : caseId.startsWith('a') ? 'review-adjudication' : 'fix-verifier',
+    fixture: `eval/fixtures/fix-verification-applicable-inputs/${caseId}`,
+    projectFromFixture: true,
+    requiredFacetKinds: ['policies'],
+    promptExtension: 'j2',
+  })),
   ...['a1', 'a3', 'a5'].map((caseId) => ({
     id: `security-threat-model-${caseId}`,
     workflow: 'takt-development-review',
@@ -304,7 +313,7 @@ const TARGETS = [
   { id: 'rescan-coding', workflow: 'peer-review', step: 'coding-review', fixture: 'eval/fixtures/inventory-es' },
   { id: 'frontend-implement', workflow: 'frontend', step: 'implement', fixture: 'eval/fixtures/frontend-app', mutable: true },
   { id: 'cqrs-implement', workflow: 'backend-cqrs', step: 'implement', fixture: 'eval/fixtures/backend-cqrs', mutable: true },
-  { id: 'fix-closure', workflow: 'review-remediation', step: 'fix', fixture: 'eval/fixtures/fix-closure', mutable: true },
+  { id: 'fix-closure', workflow: 'review-remediation', step: 'fix-retry', fixture: 'eval/fixtures/fix-closure', mutable: true },
   { id: 'fix-self-scan', workflow: 'peer-review', step: 'fix', fixture: 'eval/fixtures/fix-self-scan', mutable: true },
   { id: 'fix-plan-fresh-findings', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-fresh-findings' },
   { id: 'fix-plan-boundary-preflight', workflow: 'peer-review', step: 'fix-plan', fixture: 'eval/fixtures/fix-plan-boundary-preflight' },
@@ -669,6 +678,9 @@ const TARGETS = [
       candidateIds: ['cli'],
     },
   },
+  { id: 'fix-verifier-family-boundary', workflow: 'review-remediation', step: 'fix-verifier', fixture: 'eval/fixtures/fix-verifier-family-boundary' },
+  { id: 'fix-verifier-state-closure', workflow: 'review-remediation', step: 'fix-verifier', fixture: 'eval/fixtures/fix-verifier-state-closure' },
+  { id: 'fix-verifier-state-routing', workflow: 'review-remediation', step: 'fix-verifier', fixture: 'eval/fixtures/fix-verifier-state-closure', phase: 'phase3' },
   { id: 'review-adjudication', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-adjudication' },
   {
     id: 'review-adjudication-phase2',
@@ -698,6 +710,9 @@ const TARGETS = [
     step: 'supervise',
     fixture: 'eval/fixtures/final-readiness-precision',
   },
+  { id: 'fix-verification-scope', workflow: 'review-remediation', step: 'fix-verifier', fixture: 'eval/fixtures/fix-verification-scope' },
+  { id: 'fix-verification-current-diff-regression', workflow: 'review-remediation', step: 'fix-verifier', fixture: 'eval/fixtures/fix-verification-current-diff-regression' },
+  { id: 'fix-verification-preserved-condition', workflow: 'review-remediation', step: 'fix-verifier', fixture: 'eval/fixtures/fix-verification-preserved-condition' },
 
 ];
 

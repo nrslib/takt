@@ -139,12 +139,24 @@ export function prepareTemplatePlaceholders(
         injectedReports.set(normalizedReference, { reference: normalizedReference, scope: 'missing', content: missing });
         return missing;
       }
+      if (context.unavailableLocalReports?.includes(normalizedReference)) {
+        const missing = formatMissingReportReference(normalizedReference);
+        injectedReports.set(normalizedReference, { reference: normalizedReference, scope: 'missing', content: missing });
+        return missing;
+      }
+      let resolvedPath: string | undefined;
       const resolved = resolveReportReferenceDetailed(reportDir, reference, {
         stepName: step.name,
         reportsRootDir: context.reportsRootDir,
         resumeReportConsumerKey: context.resumeReportConsumerKey,
         validateExistence: context.validateReportReferences !== false,
+        onResolvedPath: (path) => { resolvedPath = path; },
       });
+      if (resolvedPath !== undefined && context.isUnavailableReportPath?.(resolvedPath)) {
+        const missing = formatMissingReportReference(normalizedReference);
+        injectedReports.set(normalizedReference, { reference: normalizedReference, scope: 'missing', content: missing });
+        return missing;
+      }
       if (context.validateReportReferences !== false) {
         injectedReports.set(normalizedReference, { reference: normalizedReference, ...resolved });
       }

@@ -79,6 +79,9 @@ const { buildDynamicParallelSelectionIdentity } = await import('../../dist/core/
   const oldInstruction = (currentStep, id) => {
     const snapshot = baselineSnapshot.lines[id];
     if (!snapshot) throw new Error(`Baseline instruction ${id} missing`);
+    if (id === 'follow-up') {
+      return { ...currentStep, instruction: `${currentStep.instruction.trimEnd()}\n\n${snapshot.baseline_line}` };
+    }
     const sourceLines = readFileSync(join(repo, snapshot.source), 'utf8').split('\n');
     const currentLine = snapshot.current_line.trimStart();
     const baselineLine = snapshot.baseline_line.trimStart();
@@ -240,6 +243,7 @@ const { buildDynamicParallelSelectionIdentity } = await import('../../dist/core/
     writeFileSync(join(prompts, `${id}-current.md`), currentPrompt);
     receipts.push({
       case: id,
+      reachability: spec.reachability ?? 'normal',
       baseline_sha: baselineSha,
       source_step: source.name,
       consumer_step: consumer.name,
@@ -254,13 +258,18 @@ const { buildDynamicParallelSelectionIdentity } = await import('../../dist/core/
 
   prepareCase('follow-up', {
     workflow: 'peer-review', source: 'remediation', consumer: 'reviewers', expected: 'F-17-unresolved',
-    expectTail: false, shadowNames: ['fix-plan.md', 'fix-report.md'],
+    // This deliberately combines a completed call record with an incomplete
+    // verifier report. The normal remediation loop cannot reach this state.
+    reachability: 'anomalous_report_combination',
+    expectTail: true, shadowNames: ['fix-plan.md', 'fix-report.md', 'fix-verification.md'],
     seed: ({ current, reportDir, registerCall, registerReport }) => {
       const call = registerCall(current, 'remediation', [], reportDir, 2);
       registerReport(call.child, 'fix-plan', call.path, call.directory, 'fix-plan.md',
         '# Fix plan\nFinding F-17: reject tenant-mismatched token reuse. Completion requires tenant equality before dispatch.');
       registerReport(call.child, 'fix', call.path, call.directory, 'fix-report.md',
         '# Fix report\nF-17-unresolved: the implementation still sends a reused token before comparing tenant IDs. The focused test covers only matching tenants.');
+      registerReport(call.child, 'fix-verifier', call.path, call.directory, 'fix-verification.md',
+        '# Completion verification\nincomplete: F-17 remains unresolved because dispatch precedes tenant validation.');
     },
     currentTarget: (workflow) => childOf(workflow, 'reviewers').steps[0].parallel.fixed
       .find((step) => step.name === 'coding-review'),

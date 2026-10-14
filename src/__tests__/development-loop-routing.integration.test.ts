@@ -215,6 +215,8 @@ describe('shipped development completion and remediation routes', () => {
       };
       expect(replannerWarnings(withoutProducer).some(message => message.includes(`{report:${report}}`))).toBe(true);
     }
+    expect(config.steps.find(step => step.name === 'fix-verifier')?.outputContracts)
+      .toEqual(expect.arrayContaining([expect.objectContaining({ name: 'fix-verification.md' })]));
   });
 
   it.each(['ja', 'en'] as const)('%s: detects a missing producer through the builtin call chain', (language) => {
@@ -234,12 +236,13 @@ describe('shipped development completion and remediation routes', () => {
     }
   });
 
-  it.each(variants(remediations))('$language/$name completes repair for follow-up review after fix-plan and fix', async ({ language, name }) => {
+  it.each(variants(remediations))('$language/$name verifies repair before returning to follow-up review', async ({ language, name }) => {
     const config = load(language, name);
     start(config, 'fix-plan');
     expect((await execute(config, 'fix-plan', 0)).nextStep).toBe('fix');
-    const fixed = await execute(config, 'fix', 0);
-    expect(fixed).toMatchObject({ nextStep: 'COMPLETE', isComplete: true });
+    expect((await execute(config, 'fix', 0)).nextStep).toBe('fix-verifier');
+    const verified = await execute(config, 'fix-verifier', 0);
+    expect(verified).toMatchObject({ nextStep: 'COMPLETE', isComplete: true });
   });
 
   it.each(variants(remediations))('$language/$name can revise a defective repair plan before completion', async ({ language, name }) => {
@@ -247,7 +250,24 @@ describe('shipped development completion and remediation routes', () => {
     start(config, 'fix');
     expect((await execute(config, 'fix', 1)).nextStep).toBe('fix-replan');
     expect((await execute(config, 'fix-replan', 0)).nextStep).toBe('fix');
-    expect((await execute(config, 'fix', 0)).nextStep).toBe('COMPLETE');
+    expect((await execute(config, 'fix', 0)).nextStep).toBe('fix-verifier');
+    expect((await execute(config, 'fix-verifier', 0)).nextStep).toBe('COMPLETE');
+  });
+
+  it.each(variants(remediations))('$language/$name retries incomplete repairs through the independent verifier', async ({ language, name }) => {
+    const config = load(language, name);
+    start(config, 'fix-verifier');
+    expect((await execute(config, 'fix-verifier', 2)).nextStep).toBe('fix-retry');
+    expect((await execute(config, 'fix-retry', 0)).nextStep).toBe('fix-verifier');
+    expect((await execute(config, 'fix-verifier', 0)).nextStep).toBe('COMPLETE');
+  });
+
+  it.each(variants(remediations))('$language/$name replans invalid repair plans before verification', async ({ language, name }) => {
+    const config = load(language, name);
+    start(config, 'fix-verifier');
+    expect((await execute(config, 'fix-verifier', 1)).nextStep).toBe('verification-replan');
+    expect((await execute(config, 'verification-replan', 0)).nextStep).toBe('fix');
+    expect((await execute(config, 'fix', 0)).nextStep).toBe('fix-verifier');
   });
 
   it.each(variants(remediations))('$language/$name returns a task-wide plan defect to its caller', async ({ language, name }) => {
@@ -288,11 +308,9 @@ describe('shipped development completion and remediation routes', () => {
       expect(initial.inputReports).toEqual(name === 'simple-mini'
         ? { fromStep: 'remediation', reports: ['review-resolution.md'], optionalIfUnrun: true }
         : undefined);
-      expect(followUp.inputReports).toEqual({ fromStep: 'remediation', reports: ['fix-plan.md', 'fix-report.md'] });
+      expect(followUp.inputReports).toEqual({ fromStep: 'remediation', reports: ['fix-plan.md', 'fix-report.md', 'fix-verification.md'] });
       expect(initial.instruction).not.toContain('--step-remediation--workflow-');
       expect(followUp.instruction).not.toContain('--step-remediation--workflow-');
-      expect(followUp.instruction).toContain('fix-plan.md');
-      expect(followUp.instruction).toContain('fix-report.md');
       expect(determineRuleTransition(config.steps.find(step => step.name === 'remediation')!, 0)?.nextStep)
         .toBe('follow-up-review');
       expect(determineRuleTransition(initial, 1)?.nextStep).toBe('remediation');
@@ -308,10 +326,9 @@ describe('shipped development completion and remediation routes', () => {
       const followUp = config.steps.find(step => step.name === 'reviewers');
       if (!initial?.parallel || !followUp?.parallel) throw new Error('Missing reviewer steps');
       expect(initial.inputReports).toBeUndefined();
-      expect(followUp.inputReports).toEqual({ fromStep: 'remediation', reports: ['fix-plan.md', 'fix-report.md'] });
+      expect(followUp.inputReports).toEqual({ fromStep: 'remediation', reports: ['fix-plan.md', 'fix-report.md', 'fix-verification.md'] });
       expect(getAllParallelSubSteps(initial.parallel).some(step => step.instruction?.includes('--step-remediation--workflow-'))).toBe(false);
       expect(getAllParallelSubSteps(followUp.parallel).some(step => step.instruction?.includes('--step-remediation--workflow-'))).toBe(false);
-      expect(getAllParallelSubSteps(followUp.parallel).every(step => step.instruction?.includes('fix-plan.md') && step.instruction.includes('fix-report.md'))).toBe(true);
       expect(determineRuleTransition(config.steps.find(step => step.name === 'gather')!, 0)?.nextStep)
         .toBe('initial-reviewers');
       expect(determineRuleTransition(config.steps.find(step => step.name === 'remediation')!, 0)?.nextStep)

@@ -23,5 +23,11 @@ export function cloneWorkflowResumePoint(resumePoint: WorkflowResumePoint): Work
           { report_names: [...record.report_names] },
         ]),
     ),
+    ...(resumePoint.missing_report_generations === undefined ? {} : {
+      missing_report_generations: Object.fromEntries(
+        Object.entries(resumePoint.missing_report_generations)
+          .map(([namespace, names]) => [namespace, [...names]]),
+      ),
+    }),
   };
 }

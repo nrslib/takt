@@ -175,6 +175,7 @@ steps:
       reports:
         - fix-plan.md
         - fix-report.md
+        - fix-verification.md
     uses: simple-coding-review
     with:
       review_policy:
@@ -196,6 +197,8 @@ steps:
         $param: review_policy
       fix_policy:
         $param: development_policy
+      verification_policy:
+        $param: review_policy
       fix_knowledge:
         $param: review_knowledge
     rules:

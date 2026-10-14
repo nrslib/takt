@@ -201,6 +201,7 @@ export interface WorkflowResumePoint {
   elapsed_ms: number;
   workflow_call_invocations: Record<string, WorkflowCallInvocationRecord>;
   workflow_step_participations: Record<string, WorkflowStepParticipationRecord>;
+  missing_report_generations?: Record<string, string[]>;
 }
 
 export interface WorkflowStepParticipationRecord {

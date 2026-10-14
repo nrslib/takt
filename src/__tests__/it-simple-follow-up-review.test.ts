@@ -25,7 +25,7 @@ describe('simple workflow follow-up review', () => {
   it.each(['en', 'ja'].flatMap(language =>
     ['simple-core', 'simple', 'simple-mini', 'simple-backend', 'simple-dual', 'pure']
       .map(name => ({ language, name }))))(
-    '$language/$name reads the completed sibling repair reports only after remediation',
+    '$language/$name reviews completed repair only after an incomplete fix is retried and verified',
     async ({ language, name }) => {
       project = mkdtempSync(join(tmpdir(), 'takt-simple-follow-up-'));
       mkdirSync(join(project, '.takt'), { recursive: true });
@@ -41,6 +41,8 @@ describe('simple workflow follow-up review', () => {
       const workflow = { ...loaded, initialStep: 'review' };
       const reviewPrompts: string[] = [];
       const visited: string[] = [];
+      const phaseOneSteps: string[] = [];
+      let verifierJudgments = 0;
       vi.mocked(executeStructuredAgent).mockResolvedValue({
         persona: 'dynamic-facet-selector', status: 'done', content: '', timestamp: new Date(),
         structuredOutput: { selected_ids: [], rationale: 'No additional facet applies.' },
@@ -50,20 +52,27 @@ describe('simple workflow follow-up review', () => {
         const step = options?.workflowMeta?.currentStep;
         if (!step) throw new Error('Missing current step');
         visited.push(step);
+        if (options?.executionPhase === 1) phaseOneSteps.push(step);
         if (step === 'review' || step === 'follow-up-review') {
           if (options?.executionPhase === 1) {
             reviewPrompts.push(prompt);
             if (step === 'follow-up-review') {
-              expect(prompt).toContain(`${language === 'ja' ? '修正計画' : 'Repair plan'}:\nREPAIR_PLAN_EVIDENCE`);
-              expect(prompt).toContain(`${language === 'ja' ? '修正結果' : 'Repair result'}:\nREPAIR_TEST_EVIDENCE`);
-              expect(prompt).not.toContain('## Declared report inputs');
-              expect(prompt).not.toContain('## 宣言された成果物入力');
+              expect(prompt).toContain('### remediation: fix-plan.md\nREPAIR_PLAN_EVIDENCE');
+              expect(prompt).toContain('### remediation: fix-report.md\nREPAIR_RETRY_EVIDENCE');
+              expect(prompt).toContain('### remediation: fix-verification.md\nVERIFICATION_APPROVED_EVIDENCE');
+              expect(prompt).toContain('REPAIR_RETRY_EVIDENCE');
+              expect(prompt).toContain('VERIFICATION_APPROVED_EVIDENCE');
             }
           }
           return { persona: persona ?? 'coding-reviewer', status: 'done',
             content: step === 'review' ? 'INITIAL_FINDING' : 'FOLLOW_UP_APPROVED', timestamp: new Date() };
         }
-        const content = step === 'fix-plan' ? 'REPAIR_PLAN_EVIDENCE' : step === 'fix' ? 'REPAIR_TEST_EVIDENCE' : `${step} result`;
+        const content = step === 'fix-plan' ? 'REPAIR_PLAN_EVIDENCE'
+          : step === 'fix' ? 'REPAIR_TEST_EVIDENCE'
+            : step === 'fix-retry' ? 'REPAIR_RETRY_EVIDENCE'
+              : step === 'fix-verifier' ? verifierJudgments === 0
+                ? 'VERIFICATION_INCOMPLETE_EVIDENCE' : 'VERIFICATION_APPROVED_EVIDENCE'
+                : `${step} result`;
         return { persona: persona ?? 'agent', status: 'done', content, timestamp: new Date() };
       });
       const engine = new WorkflowEngine(workflow, project, 'Repair a concrete finding', {
@@ -81,7 +90,10 @@ describe('simple workflow follow-up review', () => {
         ),
         structuredCaller: { judgeStatus: vi.fn(async (instruction, _tagInstruction, _candidates, options) => {
           options.onStructuredPromptResolved?.({ systemPrompt: 'conductor', userInstruction: instruction });
-          return { candidateIndex: ['review', 'supervise'].includes(options.stepName) ? 1 : 0,
+          const candidateIndex = options.stepName === 'fix-verifier'
+            ? verifierJudgments++ === 0 ? 2 : 0
+            : ['review', 'supervise'].includes(options.stepName) ? 1 : 0;
+          return { candidateIndex,
             method: 'structured_output' as const };
         }), evaluateCondition: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn() },
       });
@@ -91,6 +103,10 @@ describe('simple workflow follow-up review', () => {
       expect(result.status, abortReasons.join('; ')).toBe('completed');
       expect(visited.indexOf('review')).toBeLessThan(visited.indexOf('fix'));
       expect(visited.indexOf('fix')).toBeLessThan(visited.indexOf('follow-up-review'));
+      expect(phaseOneSteps.filter(step => step === 'fix-verifier')).toHaveLength(2);
+      expect(phaseOneSteps.filter(step => step === 'fix-retry')).toHaveLength(1);
+      expect(phaseOneSteps.filter(step => step === 'follow-up-review')).toHaveLength(1);
+      expect(phaseOneSteps.indexOf('follow-up-review')).toBeGreaterThan(phaseOneSteps.lastIndexOf('fix-verifier'));
       expect(reviewPrompts).toHaveLength(2);
       expect(reviewPrompts[0]).not.toContain('REPAIR_PLAN_EVIDENCE');
       expect(reviewPrompts[1]).toContain('REPAIR_PLAN_EVIDENCE');

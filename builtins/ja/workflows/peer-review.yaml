@@ -48,6 +48,12 @@ subworkflow:
       default:
         - takt
         - architecture
+    verification_knowledge:
+      type: facet_ref[]
+      facet_kind: knowledge
+      default:
+        - takt
+        - architecture
     plan_policy:
       type: facet_ref[]
       facet_kind: policy
@@ -61,6 +67,13 @@ subworkflow:
       default:
         - coding
         - testing
+    verification_policy:
+      type: facet_ref[]
+      facet_kind: policy
+      default:
+        - coding
+        - testing
+        - review
     final_gate_policy:
       type: facet_ref[]
       facet_kind: policy
@@ -78,6 +91,10 @@ subworkflow:
       type: facet_ref
       facet_kind: instruction
       default: fix-replan
+    fix_verification_replan_instruction:
+      type: facet_ref
+      facet_kind: instruction
+      default: verification-replan
     fix_plan_report_format:
       type: facet_ref
       facet_kind: report_format
@@ -166,6 +183,7 @@ steps:
       reports:
         - fix-plan.md
         - fix-report.md
+        - fix-verification.md
     uses: peer-review-suite-call
     vars:
       review_mode: follow_up
@@ -235,12 +253,18 @@ steps:
         $param: fix_policy
       fix_knowledge:
         $param: fix_knowledge
+      verification_knowledge:
+        $param: verification_knowledge
       plan_policy:
         $param: plan_policy
+      verification_policy:
+        $param: verification_policy
       fix_plan_instruction:
         $param: fix_plan_instruction
       fix_replan_instruction:
         $param: fix_replan_instruction
+      fix_verification_replan_instruction:
+        $param: fix_verification_replan_instruction
       fix_plan_report_format:
         $param: fix_plan_report_format
     rules:

@@ -18,6 +18,7 @@ import { executeAgent } from '../../../agents/agent-usecases.js';
 import { getWorkflowResumeFrameKind, isWorkflowCallStep } from '../step-kind.js';
 import { ParallelLogger } from './parallel-logger.js';
 import { runReportPhase, ReportPhaseGenerationError } from '../phase-runner.js';
+import { getReportFiles } from '../output-contract-files.js';
 import { RuleDetectionExhaustedError } from '../evaluation/RuleDetectionExhaustedError.js';
 import { WorkflowCallAbortedError } from './WorkflowCallAbortedError.js';
 import { incrementStepIteration } from './state-manager.js';
@@ -1096,7 +1097,10 @@ export class ParallelRunner {
                 ...phaseCtx,
                 injectedReports: subInstruction.injectedReports,
                 reportInputs: reportInputTracker.snapshot(),
-              }, (reportName) => writtenReportNames.push(reportName));
+              }, (reportName) => {
+                writtenReportNames.push(reportName);
+                this.deps.stepExecutor.recordReportGeneration(phaseCtx.reportDir, reportName, true);
+              });
               restartIfLiveInterventionPending();
               if (reportResult && 'blocked' in reportResult) {
                 const blockedResponse: AgentResponse = {
@@ -1162,6 +1166,11 @@ export class ParallelRunner {
                 );
               } else {
                 throw reportError;
+              }
+            }
+            for (const reportName of getReportFiles(subStep.outputContracts)) {
+              if (!writtenReportNames.includes(reportName)) {
+                this.deps.stepExecutor.recordReportGeneration(phaseCtx.reportDir, reportName, false);
               }
             }
           }

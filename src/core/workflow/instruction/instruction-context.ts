@@ -96,6 +96,10 @@ export interface InstructionContext {
   workflowCallVars?: Readonly<Record<string, string | number | boolean>>;
   /** Verified report bodies supplied by declared logical producers. */
   declaredReportInputs?: readonly DeclaredReportInputs[];
+  /** Local reports whose latest generation attempt did not write a body. */
+  unavailableLocalReports?: readonly string[];
+  /** Check the exact file selected by current, resume, or ancestor lookup. */
+  isUnavailableReportPath?: (path: string) => boolean;
   companion?: {
     mailboxDirectory: string;
     reviewMode: CompanionReviewMode;

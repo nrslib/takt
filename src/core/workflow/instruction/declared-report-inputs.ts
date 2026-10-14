@@ -81,7 +81,7 @@ function logicalProducer(sourceName: string, reportPath: string): string {
 
 /** Resolve only the declared producer's completed execution and contracted reports. */
 export function resolveDeclaredReportInputs(
-  consumer: WorkflowStep,
+  consumer: Pick<WorkflowStep, 'name' | 'inputReports'>,
   context: DeclaredReportInputContext,
 ): DeclaredReportInputs | undefined {
   const declaration = consumer.inputReports;

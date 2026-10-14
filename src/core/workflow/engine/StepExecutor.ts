@@ -7,7 +7,7 @@
  */
 
 import { existsSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 import type {
   AgentWorkflowStep,
   WorkflowStep,
@@ -23,7 +23,7 @@ import type {
   ResolvedFacetPool,
   ResolvedFacetContent,
 } from '../../models/types.js';
-import { isNormalOrTeamLeaderWorkflowStep } from '../../models/types.js';
+import { getAllParallelSubSteps, isNormalOrTeamLeaderWorkflowStep } from '../../models/types.js';
 import type {
   PhaseName,
   PhasePromptParts,
@@ -43,6 +43,9 @@ import {
   StructuredAgentResponseError,
 } from '../../../agents/structured-caller/transport.js';
 import { InstructionBuilder } from '../instruction/InstructionBuilder.js';
+import { extractReportReferences } from '../instruction/report-reference.js';
+import { getReportFiles } from '../output-contract-files.js';
+import { classifyReportRelativePath } from '../../models/reserved-report-names.js';
 import type { DeclaredReportInputs, InjectedReport, Phase1ReportInputs, PreparedInstruction, ReportReferenceObserver } from '../instruction/prepared-instruction.js';
 import { Phase1ReportInputTracker } from '../instruction/report-inputs.js';
 import type {
@@ -189,16 +192,27 @@ export interface StepExecutorDeps {
   readonly getProjectCwd: () => string;
   readonly getReportDir: () => string;
   readonly getRunPaths: () => RunPaths;
+  readonly reportGenerationIndex?: import('../report-generation-index.js').ReportGenerationIndex;
   readonly getFailureDir: () => string;
   readonly getLanguage: () => Language | undefined;
   readonly getInteractive: () => boolean;
-  readonly getWorkflowSteps: () => ReadonlyArray<{ name: string; description?: string }>;
+  readonly getWorkflowSteps: () => ReadonlyArray<{
+    name: string;
+    description?: string;
+    instruction?: string;
+    inputReports?: WorkflowStep['inputReports'];
+    parallel?: WorkflowStep['parallel'];
+  }>;
   readonly getWorkflowName: () => string;
   readonly getTask: () => string;
   readonly getWorkflowDescription: () => string | undefined;
   readonly getWorkflowRules: () => readonly WorkflowWideRule[] | undefined;
   readonly getWorkflowCallVars?: () => Readonly<Record<string, string | number | boolean>> | undefined;
-  readonly resolveDeclaredReportInputs: (step: WorkflowStep, state: WorkflowState, reportDir: string) => DeclaredReportInputs | undefined;
+  readonly resolveDeclaredReportInputs: (
+    step: Pick<WorkflowStep, 'name' | 'inputReports'>,
+    state: WorkflowState,
+    reportDir: string,
+  ) => DeclaredReportInputs | undefined;
   readonly getInheritedReportInputs: () => DeclaredReportInputs | undefined;
   readonly getRetryNote: () => string | undefined;
   readonly getPrContext?: () => PullRequestContext | undefined;
@@ -1381,6 +1395,15 @@ export class StepExecutor {
     return this.prepareInstruction(step, stepIteration, state, task, maxSteps, fallbackContext, transaction).text;
   }
 
+  recordReportGeneration(reportDir: string, reportName: string, written: boolean): void {
+    this.deps.reportGenerationIndex?.record(
+      this.deps.getRunPaths().reportsRootAbs,
+      reportDir,
+      reportName,
+      written,
+    );
+  }
+
   prepareInstruction(
     step: WorkflowStep,
     stepIteration: number,
@@ -1443,6 +1466,14 @@ export class StepExecutor {
       workflowDescription: this.deps.getWorkflowDescription(),
       workflowCallVars: this.deps.getWorkflowCallVars?.(),
       declaredReportInputs,
+      unavailableLocalReports: this.deps.reportGenerationIndex?.missingNames(reportsRootDir, reportDir),
+      isUnavailableReportPath: this.deps.reportGenerationIndex === undefined
+        ? undefined
+        : (path) => this.deps.reportGenerationIndex!.isMissing(
+            reportsRootDir,
+            dirname(path),
+            basename(path),
+          ),
       retryNote: this.deps.getRetryNote(),
       prContext: this.deps.getPrContext?.(),
       reviewScope: this.deps.getReviewScope(),
@@ -1540,12 +1571,18 @@ export class StepExecutor {
     // Phase 2: report output (no tools)
     // Report generation is only valid after a completed Phase 1 response.
     if (nextResponse.status === 'done' && step.outputContracts && step.outputContracts.length > 0) {
+      const writtenReports = new Set<string>();
+      let reportGenerationError: ReportPhaseGenerationError | undefined;
       try {
         const reportResult = await runReportPhase(
           step,
           stepIteration,
           { ...phaseCtx, injectedReports, reportInputs },
-          onReportWritten,
+          (reportName) => {
+            writtenReports.add(reportName);
+            this.recordReportGeneration(phaseCtx.reportDir, reportName, true);
+            onReportWritten?.(reportName);
+          },
         );
         if (reportResult && 'blocked' in reportResult) {
           onTerminalOperation?.({
@@ -1577,13 +1614,66 @@ export class StepExecutor {
               reportError.failureMessage ?? getErrorMessage(reportError),
             );
           }
-          log.info('Report phase failed, continuing to status judgment', {
+          log.info('Report phase failed', {
             step: step.name,
             error: getErrorMessage(reportError),
           });
+          reportGenerationError = reportError;
         } else {
           throw reportError;
         }
+      }
+      const missingReports = getReportFiles(step.outputContracts)
+        .filter((name) => !writtenReports.has(name));
+      for (const reportName of missingReports) {
+        this.recordReportGeneration(phaseCtx.reportDir, reportName, false);
+      }
+      const consumers = missingReports.length === 0 ? [] : this.deps.getWorkflowSteps().flatMap((workflowStep) => [
+        workflowStep,
+        ...(workflowStep.parallel === undefined ? [] : getAllParallelSubSteps(workflowStep.parallel)),
+      ]);
+      const missingRequiredReports = missingReports.filter((name) => consumers.some((consumer) => {
+        const declared = consumer.inputReports;
+        if (declared?.fromStep === step.name
+          && (declared.reports === 'all' || declared.reports.includes(name))) {
+          return true;
+        }
+        if (declared !== undefined && declared.fromStep !== step.name) {
+          if (declared.reports !== 'all' && declared.reports.includes(name)) return false;
+          if (declared.reports === 'all') {
+            try {
+              // An unrun producer reserves its names here; the consumer enforces completion.
+              const ownershipProbe = {
+                ...consumer,
+                inputReports: { ...declared, optionalIfUnrun: true as const },
+              };
+              const declaredNames = this.deps.resolveDeclaredReportInputs(
+                ownershipProbe, state, phaseCtx.reportDir,
+              )?.declaredNames ?? [];
+              if (declaredNames.includes(name)) return false;
+            } catch (error) {
+              log.debug('Could not resolve another producer while checking a current report', {
+                step: step.name,
+                consumer: consumer.name,
+                error: getErrorMessage(error),
+              });
+            }
+          }
+        }
+        return extractReportReferences(consumer.instruction).some((reference) => {
+          const classification = classifyReportRelativePath(reference.trim());
+          return classification.kind === 'public' && classification.normalizedPath === name;
+        });
+      }));
+      if (missingRequiredReports.length > 0) {
+        const message = `Step "${step.name}" did not generate required report(s) in the current execution: ${missingRequiredReports.join(', ')}`;
+        if (reportGenerationError !== undefined) {
+          throw createAgentFailureError(
+            reportGenerationError.failureCategory ?? AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+            message,
+          );
+        }
+        throw new Error(message);
       }
     }
 

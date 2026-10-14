@@ -73,6 +73,7 @@ steps:
       reports:
         - fix-plan.md
         - fix-report.md
+        - fix-verification.md
     uses: review-fix-dual-reviewers
     with:
       architecture_review_instruction: follow-up-architecture-review
@@ -146,6 +147,12 @@ steps:
         - architecture
         - backend
         - frontend
+      verification_policy:
+        - coding
+        - testing
+        - design-fidelity
+        - screen-api
+        - review
       fix_knowledge:
         - frontend
         - backend

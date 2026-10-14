@@ -20,7 +20,11 @@ in `eval/suite-registry.mjs`.
 旧版で異なる4行は `eval/fixtures/review-artifact-input-handoff/baseline-lines.json` に
 元コミットとともに固定しており、準備時に Git 履歴を取得する必要はない。
 レビュー統合ケースでは `gather` が同じ報告スコープに作る `review-target.md` も用意する。
-この評価は受け渡し後の判断を測るもので、日英すべての配線や実行時の欠落拒否は
+`follow-up` は完了済み呼び出しの記録と `incomplete` の検証報告を意図的に
+組み合わせた異常入力への堅牢性診断である。通常の `review-remediation` は
+`incomplete` から `fix-retry` に戻るため、この組合せから後続レビューへ進まない。
+このケースの結果を通常経路での後続レビュー品質の根拠にはしない。
+日英すべての配線、通常経路の検証後の受け渡し、実行時の欠落拒否は
 ワークフローのテストで検証する。
 
 `phase3-follow-input` は Phase 3 の入力に書かれた結論の対応づけを測る。
@@ -172,7 +176,7 @@ parsing with Markdown decoration and conflicting-label rejection. These are indi
 not an end-to-end review loop. See [the experiment record](experiments/review-proof-boundary.md)
 for baseline conditions and the limits of comparative claims.
 
-レビュー裁定の入力適用範囲A1〜A4は現行の `review-adjudication-applicable-inputs` スイートで評価します。従来のfixture、期待判断、Sol Low・Opus 5・Luna Maxの比較条件を維持し、`npm run eval:prompts:review-adjudication-applicable-inputs` で明示実行します。旧 `fix-verifier` と `verification-replan` の専用評価設定は [archive](archive/README.md) に移しました。
+`fix-verification-applicable-inputs` は完了検証7ケース、再計画3ケース、レビュー裁定4ケースを、隔離したfixtureと現在のファセットで評価します。`npm run eval:prompts:fix-verification-applicable-inputs` で明示実行します。レビュー裁定A1〜A4だけの評価は `npm run eval:prompts:review-adjudication-applicable-inputs` で実行できます。専用verifierの状態・経路を測る `fix-verifier-family-boundary`、`fix-verifier-state-closure`、`fix-verifier-state-routing` と複数モデル比較の設定も登録されています。これらは各stepの評価であり、修正ループ全体の収束は測りません。
 
 `finding-premise-scope` はレビュー担当4ケースと再計画2ケースを、ケースごとの隔離 fixture と現在のファセットから生成したプロンプトで評価します。Codex gpt-6-sol low、Claude Opus 5、Codex gpt-6-luna max を使い、判定役は gpt-6-sol low です。両 CLI の認証が必要なためデフォルト実行から除外し、`npm run eval:prompts:finding-premise-scope` で明示実行します。rv1 は計画の設計判断（秘密値を写さない）を受入条件として指摘にしないこと、rv2 は前回の裁定が広げた取引先 CSV の形式外の金額表記を理由に persists にしないことを測ります。rn1 は契約が定める円記号付きの金額を persists とし、rn2 は外部の提出者が付けたファイル名による保存先の外への書き込みを blocking の指摘にすることを測ります。pl1 は裁定が広げた形式外の表記を再計画の作業にしないこと、pn1 は契約が定める表記を作業にすることを測ります。
 
@@ -440,6 +444,8 @@ remain excluded.
 | `follow-up-testing-review-repair-regression` | peer-review / follow-up testing-review -> review-adjudication | follow-up-review-repair-regression | whether review-adjudication recovers in-perspective omissions, verifies reviewer evidence, keeps regression detection within the selected repair scope, and excludes adjacent or structure-freezing test expansion; measured on Opus 5, Luna Max, and Sol High |
 | `review-adjudication` | peer-review / review-adjudication | review-adjudication | whether adjudication separates technical validity from the current remediation scope, keeps required same-cause paths and diff-induced regressions in scope, and excludes even severe horizontal improvements from the fix plan |
 | `review-adjudication-applicable-inputs` | peer-review / review-adjudication | fix-verification-applicable-inputs/a1-a4 | whether adjudication applies the documented input scope to four existing findings; explicit three-model comparison |
+| `fix-verification-applicable-inputs` | review-remediation / fix-verifier and verification-replan; peer-review / review-adjudication | fix-verification-applicable-inputs | whether independent verification and replanning distinguish supported counterexamples from unsupported input extensions |
+| `fix-verifier-state-closure` / `fix-verifier-state-routing` | review-remediation / fix-verifier | fix-verifier-state-closure | source-backed completion obligations and workflow-owned routing |
 | `review-adjudication-binding` | peer-review / follow-up security-review | review-adjudication-binding | whether Opus 5, Luna Max, and Sol High keep three out-of-scope findings non-blocking, reopen only with an allowed basis, and distinguish bare ESC or unconstrained repository-owned rules from a reproduced OSC terminal effect |
 | `security-review-method` | peer-review / initial security-review | security-review-method | whether Opus 5, Luna Max, and Sol High approve unchanged boundaries and bound SQL, reject verified SQL injection, authorization bypass, credential exposure, and helper-mediated command injection, and keep repository-author-controlled size alone non-blocking |
 | `task-instruction-gherkin` | interactive task summarization | direct English and Japanese conversations | whether implementation details and abstraction intent remain in Markdown while focused Gherkin captures only externally observable behavior, and whether formal-spec mode keeps complete Quint and Alloy requirements independently understandable through adjacent meaning comments in each notation |
@@ -638,6 +644,11 @@ npm run eval:prompts:implement-contract-traceability
 npm run eval:prompts:follow-up-review-repair-regression
 npm run eval:prompts:follow-up-testing-review-repair-regression
 npm run eval:prompts:review-adjudication
+npm run eval:prompts:fix-verification-applicable-inputs
+npm run eval:prompts:fix-verifier-family-boundary
+npm run eval:prompts:fix-verifier-state-closure
+npm run eval:prompts:fix-verifier-state-routing
+npm run eval:prompts:fix-verifier-model-matrix
 npm run eval:prompts:security-review-method
 npm run eval:prompts:task-instruction-gherkin
 npm run eval:prompts:final-readiness-supervision

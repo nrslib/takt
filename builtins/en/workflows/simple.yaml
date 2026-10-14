@@ -119,6 +119,7 @@ steps:
       reports:
         - fix-plan.md
         - fix-report.md
+        - fix-verification.md
     uses: simple-coding-review
     with:
       review_policy:
@@ -131,7 +132,7 @@ steps:
         - unit-testing
         - e2e-testing
       review_instruction:
-        follow-up-simple-review-coding
+        simple-review-coding
     dynamic_facets:
       pool: coding-facets
     rules:
@@ -149,6 +150,11 @@ steps:
         - testing
         - ai-antipattern
       fix_policy:
+        - coding
+        - testing
+        - ai-antipattern
+      verification_policy:
+        - review
         - coding
         - testing
         - ai-antipattern

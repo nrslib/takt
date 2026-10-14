@@ -24,6 +24,7 @@ import {
   snapshotWorkflowCallInvocationEvidence,
 } from '../workflow-call-invocation-index.js';
 import { restoreWorkflowStepParticipationIndex } from '../workflow-step-participation-index.js';
+import { ReportGenerationIndex } from '../report-generation-index.js';
 import { buildRunPaths, buildRunPathsFromRunsDirectory, type RunPaths } from '../run/run-paths.js';
 import { createRunFailure } from '../run/run-failure.js';
 import type {
@@ -257,6 +258,8 @@ export class WorkflowEngine extends EventEmitter {
       restoreWorkflowCallInvocationEvidence(this.options.resumePoint);
     this.sharedRuntime.workflowStepParticipationIndex ??=
       restoreWorkflowStepParticipationIndex(this.options.resumePoint);
+    this.sharedRuntime.reportGenerationIndex ??=
+      new ReportGenerationIndex(this.options.resumePoint?.missing_report_generations);
     if (
       this.sharedRuntime.resumeArtifactOccurrenceIndex === undefined
       && this.options.resumeSource?.resumeMode === 'requeue'
@@ -628,6 +631,7 @@ export class WorkflowEngine extends EventEmitter {
       elapsed_ms: Date.now() - this.sharedRuntime.startedAtMs,
       workflow_call_invocations: workflowCallInvocations,
       workflow_step_participations: workflowStepParticipations,
+      missing_report_generations: this.sharedRuntime.reportGenerationIndex!.serialized(),
     };
   }
 
@@ -741,6 +745,7 @@ export class WorkflowEngine extends EventEmitter {
       stack,
       workflow_call_invocations: workflowCallInvocations,
       workflow_step_participations: workflowStepParticipations,
+      missing_report_generations: this.sharedRuntime.reportGenerationIndex!.serialized(),
     };
     this.activeResumePoint = refreshedResumePoint;
     this.sharedRuntime.activeResumePoint = refreshedResumePoint;
@@ -1010,6 +1015,7 @@ function restoreActiveResumePoint(
   if (current !== undefined) {
     restored.workflow_call_invocations = current.workflow_call_invocations;
     restored.workflow_step_participations = current.workflow_step_participations;
+    restored.missing_report_generations = current.missing_report_generations;
   }
 
   sharedRuntime.activeResumePoint = restored;

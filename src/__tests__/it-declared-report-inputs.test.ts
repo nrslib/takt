@@ -287,6 +287,12 @@ describe('declared report inputs', () => {
     expect(f.resolve).toThrow(/not_completed/);
   });
 
+  it('rejects an unrun mandatory all-reports source when the consumer runs', () => {
+    const f = fixture();
+    f.consumer.inputReports = { fromStep: 'source', reports: 'all' };
+    expect(f.resolve).toThrow(/Report input from "source"/);
+  });
+
   it.each(['workflow_call', 'agent'] as const)(
     'reserves an unrun %s source contract for reports: all without blocking unrelated local reports',
     (sourceKind) => {
