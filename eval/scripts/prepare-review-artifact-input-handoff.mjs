@@ -82,10 +82,11 @@ const { buildDynamicParallelSelectionIdentity } = await import('../../dist/core/
     const sourceLines = readFileSync(join(repo, snapshot.source), 'utf8').split('\n');
     const currentLine = snapshot.current_line.trimStart();
     const baselineLine = snapshot.baseline_line.trimStart();
-    if (!sourceLines.includes(snapshot.current_line) || !currentStep.instruction.includes(currentLine)) {
+    const currentBlock = [currentLine, ...(snapshot.current_tail ?? [])].join('\n');
+    if (!sourceLines.includes(snapshot.current_line) || !currentStep.instruction.includes(currentBlock)) {
       throw new Error(`Current instruction differs from the frozen ${id} line`);
     }
-    return { ...currentStep, instruction: currentStep.instruction.replace(currentLine, baselineLine) };
+    return { ...currentStep, instruction: currentStep.instruction.replace(currentBlock, baselineLine) };
   };
   const hash = (value) => createHash('sha256').update(value).digest('hex');
   const receipts = [];
@@ -177,7 +178,8 @@ const { buildDynamicParallelSelectionIdentity } = await import('../../dist/core/
       reportDir,
       resumeStackPrefix: [],
     });
-    if (declaredReportInputs === undefined || !declaredReportInputs.includes(spec.expected)) {
+    if (declaredReportInputs === undefined
+      || !declaredReportInputs.reports.some(({ content }) => content.includes(spec.expected))) {
       throw new Error(`${id}: expected source receipt missing`);
     }
     const currentTarget = spec.currentTarget(current);
@@ -194,8 +196,11 @@ const { buildDynamicParallelSelectionIdentity } = await import('../../dist/core/
     };
     const targetReportDir = spec.targetReportDir?.(reportDir) ?? reportDir;
     mkdirSync(targetReportDir, { recursive: true });
+    for (const name of spec.shadowNames ?? []) {
+      writeFileSync(join(targetReportDir, name), `UNRELATED-SHADOW-${id}-${name}`);
+    }
     const build = (step, workflow, supplied) => {
-      const instruction = new InstructionBuilder(step, {
+      const prepared = new InstructionBuilder(step, {
         task: '@@EVAL_TASK@@',
         iteration: 5,
         maxSteps: workflow.maxSteps,
@@ -209,19 +214,27 @@ const { buildDynamicParallelSelectionIdentity } = await import('../../dist/core/
         workflowName: workflow.name,
         workflowSteps: workflow.steps,
         currentStepIndex: workflow.steps.findIndex((entry) => entry.name === step.name),
-        declaredReportInputs: supplied,
+        declaredReportInputs: supplied === undefined ? undefined : [supplied],
         workflowState: state,
-      }).build();
+      }).prepare();
       const persona = step.personaPath ? loadPersonaPromptFromPath(step.personaPath, project).trim() : '';
-      return `${persona ? `${persona}\n\n` : ''}${instruction}`.replaceAll('@@EVAL_TASK@@', '{{task}}');
+      return {
+        prompt: `${persona ? `${persona}\n\n` : ''}${prepared.text}`.replaceAll('@@EVAL_TASK@@', '{{task}}'),
+        injectedReports: prepared.injectedReports,
+      };
     };
-    const baselinePrompt = build(baselineTarget, baseline, undefined);
-    const currentPrompt = build(currentTarget, current, declaredReportInputs);
-    if (baselinePrompt.includes('## 宣言された成果物入力') || !currentPrompt.includes('## 宣言された成果物入力')) {
+    const baselinePrompt = build(baselineTarget, baseline, undefined).prompt;
+    const currentBuilt = build(currentTarget, current, declaredReportInputs);
+    const currentPrompt = currentBuilt.prompt;
+    if (baselinePrompt.includes('## 宣言された成果物入力')
+      || currentPrompt.includes('## 宣言された成果物入力') !== spec.expectTail) {
       throw new Error(`${id}: prompt handoff boundary mismatch`);
     }
     if (baselinePrompt.includes(spec.expected) || !currentPrompt.includes(spec.expected)) {
       throw new Error(`${id}: receipt is not candidate-only`);
+    }
+    if (currentPrompt.includes(`UNRELATED-SHADOW-${id}-`)) {
+      throw new Error(`${id}: unrelated same-name report shadowed the declared producer`);
     }
     writeFileSync(join(prompts, `${id}-baseline.md`), baselinePrompt);
     writeFileSync(join(prompts, `${id}-current.md`), currentPrompt);
@@ -230,8 +243,9 @@ const { buildDynamicParallelSelectionIdentity } = await import('../../dist/core/
       baseline_sha: baselineSha,
       source_step: source.name,
       consumer_step: consumer.name,
-      report_files: [...declaredReportInputs.matchAll(/^### (.+)$/gm)].map((match) => match[1]),
-      receipt_sha256: hash(declaredReportInputs),
+      report_files: declaredReportInputs.reports.map(({ reference }) => reference),
+      receipt_sha256: hash(JSON.stringify(declaredReportInputs.reports)),
+      injected_report_scopes: currentBuilt.injectedReports.map(({ reference, scope }) => ({ reference, scope })),
       baseline_prompt_sha256: hash(baselinePrompt),
       current_prompt_sha256: hash(currentPrompt),
       expected_marker: spec.expected,
@@ -240,6 +254,7 @@ const { buildDynamicParallelSelectionIdentity } = await import('../../dist/core/
 
   prepareCase('follow-up', {
     workflow: 'peer-review', source: 'remediation', consumer: 'reviewers', expected: 'F-17-unresolved',
+    expectTail: false, shadowNames: ['fix-plan.md', 'fix-report.md'],
     seed: ({ current, reportDir, registerCall, registerReport }) => {
       const call = registerCall(current, 'remediation', [], reportDir, 2);
       registerReport(call.child, 'fix-plan', call.path, call.directory, 'fix-plan.md',
@@ -255,6 +270,7 @@ const { buildDynamicParallelSelectionIdentity } = await import('../../dist/core/
 
   prepareCase('replan', {
     workflow: 'development-core', source: 'peer-review', consumer: 'replan', expected: 'EXT-LOCK-27',
+    expectTail: false, shadowNames: ['review-resolution.md'],
     seed: ({ current, reportDir, registerCall, registerReport }) => {
       const call = registerCall(current, 'peer-review', [], reportDir);
       registerReport(call.child, 'final-gate', call.path, call.directory, 'review-resolution.md',
@@ -266,6 +282,7 @@ const { buildDynamicParallelSelectionIdentity } = await import('../../dist/core/
 
   prepareCase('synthesis', {
     workflow: 'review', source: 'reviewers', consumer: 'review-synthesis', expected: 'BACK-4',
+    expectTail: true, shadowNames: ['backend-review.md'],
     seed: ({ current, reportDir, registerCall, registerReport, registerDynamic }) => {
       registerReport(current, 'gather', [], reportDir, 'review-target.md',
         '# Review target\nReview src/routes.mjs authorization and its focused tests.');
@@ -281,6 +298,7 @@ const { buildDynamicParallelSelectionIdentity } = await import('../../dist/core/
 
   prepareCase('merge', {
     workflow: 'merge-review', source: 'review', consumer: 'judge', expected: 'AUTH-9',
+    expectTail: true, shadowNames: ['review-summary.md'],
     seed: ({ current, reportDir, registerCall, registerReport, registerDynamic }) => {
       const review = registerCall(current, 'review', [], reportDir);
       registerReport(review.child, 'gather', review.path, review.directory, 'review-target.md',

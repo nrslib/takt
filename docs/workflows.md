@@ -223,7 +223,7 @@ The base commit is taken from the merge-base against the first existing ref amon
 
 ### Report reference lookup
 
-`{report:filename}` searches the current workflow namespace first, then the resume snapshot's exact mapping for the consumer and reference name (when available), then the immediate parent, further ancestors, and finally the run's reports root. The first matching scope wins: a report in a nearer scope shadows a report of the same name farther away. Sibling and descendant workflow namespaces are never searched.
+For a report selected by the step's `input_reports`, `{report:filename}` uses that declared producer's completed report. Other report references search the current workflow namespace first, then the resume snapshot's exact mapping for the consumer and reference name (when available), then the immediate parent, further ancestors, and finally the run's reports root. The first matching scope wins for those other references: a report in a nearer scope shadows one of the same name farther away. Sibling and descendant workflow namespaces are never searched.
 
 Parent and ancestor reports, including the run root, are read-only references. Reports are always written to the current workflow's own `reportDir`; resolving a parent reference does not change the write destination. If no report exists, the reference becomes an explicit missing-report sentence. Invalid paths, reserved names, symlinks, and non-missing I/O errors remain errors.
 
@@ -858,10 +858,14 @@ An agent step, `workflow_call`, or parallel parent/sub-step can declare report i
     from_step: remediation
     reports: [fix-plan.md, fix-report.md]
   persona: reviewer
-  instruction: Review the completed repair using the supplied reports.
+  instruction: |
+    Review the completed repair against this plan:
+    {report:fix-plan.md}
+    And this result:
+    {report:fix-report.md}
 ```
 
-`reports: all` selects all reports produced by the source's completed execution, including selected parallel reviewers and nested calls. An explicit list selects those public report file names and rejects missing or ambiguous matches. TAKT reads the exact completed invocation and adds the report contents to the agent's Phase 1 instruction, or passes them to the called workflow's agent steps when the consumer is a `workflow_call`. A missing, incomplete, or unrelated report fails the step; TAKT does not search neighboring report directories. Use `optional_if_unrun: true` only when a valid route reaches the consumer before its source has executed. Once the source starts, its reports are required.
+`reports: all` selects all reports produced by the source's completed execution, including selected parallel reviewers and nested calls. An explicit list selects those public report file names and rejects missing or ambiguous matches. `{report:filename}` inserts a selected report's body at that position, even when another report with the same name exists in the consumer's local or ancestor scope. If `reports: all` selects several reports with that name, a single `{report:filename}` is ambiguous and fails. Selected reports without a placeholder are appended to the agent's Phase 1 instruction; reports sharing a name are shown separately with their logical producers. A `workflow_call` passes the same selected inputs to its child agents, including through nested calls. A parallel parent's declaration applies to its children unless a child declares its own inputs. A missing, incomplete, or unrelated report fails the step; TAKT does not search neighboring report directories. Use `optional_if_unrun: true` only when a valid route reaches the consumer before its source has executed. Before the source runs, its contracted report names are reserved, so `{report:filename}` cannot fall back to an unrelated local or ancestor report of the same name. Once the source starts, its reports are required.
 
 ## Runtime provider promotion
 

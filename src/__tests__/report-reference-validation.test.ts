@@ -175,6 +175,65 @@ describe('report reference validation', () => {
     });
   });
 
+  it('recognizes declared reports across a nested source call without hiding unrelated warnings', () => {
+    const producer: WorkflowConfig = {
+      name: 'producer', initialStep: 'write', maxSteps: 4, subworkflow: { callable: true },
+      steps: [makeStep({ name: 'write', outputContracts: [{ name: 'review-summary.md', format: 'summary' }] })],
+    };
+    const target: WorkflowConfig = {
+      name: 'target', initialStep: 'read', maxSteps: 4, subworkflow: { callable: true },
+      steps: [makeStep({ name: 'read', instruction: '{report:review-summary.md}\n{report:ghost.md}' })],
+    };
+    const workflow: WorkflowConfig = {
+      name: 'parent', initialStep: 'start', maxSteps: 4,
+      steps: [
+        makeStep({ name: 'start', kind: 'workflow_call', call: 'producer', rules: [makeRule('COMPLETE', 'consume')] }),
+        makeStep({ name: 'consume', kind: 'workflow_call', call: 'target',
+          inputReports: { fromStep: 'start', reports: 'all' } }),
+      ],
+    };
+    const diagnostics = validateWorkflowReportReferences(workflow, ({ step }) =>
+      step.call === 'producer' ? producer : target, { projectCwd: '/project', lookupCwd: '/project' });
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).toContain('{report:ghost.md}');
+  });
+
+  it('preserves declared reports through a nested call without its own declaration', () => {
+    const producer: WorkflowConfig = {
+      name: 'producer', initialStep: 'write', maxSteps: 4, subworkflow: { callable: true },
+      steps: [makeStep({ name: 'write', outputContracts: [{ name: 'plan.md', format: 'plan' }] })],
+    };
+    const leaf: WorkflowConfig = {
+      name: 'leaf', initialStep: 'read', maxSteps: 4, subworkflow: { callable: true },
+      steps: [makeStep({ name: 'read', instruction: '{report:plan.md}' })],
+    };
+    const middle: WorkflowConfig = {
+      name: 'middle', initialStep: 'delegate', maxSteps: 4, subworkflow: { callable: true },
+      steps: [makeStep({ name: 'delegate', kind: 'workflow_call', call: 'leaf' })],
+    };
+    const workflow: WorkflowConfig = {
+      name: 'parent', initialStep: 'start', maxSteps: 4,
+      steps: [
+        makeStep({ name: 'start', kind: 'workflow_call', call: 'producer', rules: [makeRule('COMPLETE', 'consume')] }),
+        makeStep({ name: 'consume', kind: 'workflow_call', call: 'middle',
+          inputReports: { fromStep: 'start', reports: 'all' } }),
+      ],
+    };
+    const diagnostics = validateWorkflowReportReferences(workflow, ({ step }) =>
+      step.call === 'producer' ? producer : step.call === 'middle' ? middle : leaf,
+    { projectCwd: '/project', lookupCwd: '/project' });
+    expect(diagnostics).toEqual([]);
+  });
+
+  it('recognizes a parallel parent declaration in its agent child', () => {
+    const diagnostics = validate([
+      makeStep({ name: 'start', outputContracts: [{ name: 'plan.md', format: 'plan' }], rules: [makeRule('done', 'consume')] }),
+      makeStep({ name: 'consume', inputReports: { fromStep: 'start', reports: ['plan.md'] },
+        parallel: [makeStep({ name: 'review', instruction: '{report:plan.md}' })] }),
+    ]);
+    expect(diagnostics).toEqual([]);
+  });
+
   it.each(['parallel', 'arpeggio'] as const)('preserves preflight diagnostics outside the shared instruction preparation for %s', (runner) => {
     const consume = makeStep({ name: 'consume', instruction: '{report:plan.md}',
       ...(runner === 'parallel'

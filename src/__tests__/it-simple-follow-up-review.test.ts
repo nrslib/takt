@@ -54,8 +54,10 @@ describe('simple workflow follow-up review', () => {
           if (options?.executionPhase === 1) {
             reviewPrompts.push(prompt);
             if (step === 'follow-up-review') {
-              expect(prompt).toContain('### fix-plan.md\nREPAIR_PLAN_EVIDENCE');
-              expect(prompt).toContain('### fix-report.md\nREPAIR_TEST_EVIDENCE');
+              expect(prompt).toContain(`${language === 'ja' ? '修正計画' : 'Repair plan'}:\nREPAIR_PLAN_EVIDENCE`);
+              expect(prompt).toContain(`${language === 'ja' ? '修正結果' : 'Repair result'}:\nREPAIR_TEST_EVIDENCE`);
+              expect(prompt).not.toContain('## Declared report inputs');
+              expect(prompt).not.toContain('## 宣言された成果物入力');
             }
           }
           return { persona: persona ?? 'coding-reviewer', status: 'done',

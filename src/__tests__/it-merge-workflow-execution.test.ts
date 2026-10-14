@@ -128,6 +128,10 @@ describe('Builtin PR merge workflow execution', () => {
           content: 'Fix plan, implementation, and validation evidence.', timestamp: new Date() };
       }
       expect(prompt).toContain('CHILD_REVIEW_REPORT');
+      if (name === 'merge-review') {
+        expect(prompt).toContain(`${language === 'ja' ? 'レビューサマリー' : 'Review summary'}: CHILD_REVIEW_REPORT`);
+        expect(prompt).not.toContain('{report:review-summary.md}');
+      }
       const childReports = join(reportDirectory, 'subworkflows');
       const report = readdirSync(childReports, { recursive: true, encoding: 'utf8' })
         .find((name) => name.endsWith('review-summary.md'));
@@ -306,9 +310,9 @@ describe('Builtin PR merge workflow execution', () => {
     ]));
     expect(h.judgedSteps).not.toContain('fix-verifier');
     expect(h.simpleReviewPrompts).toHaveLength(2);
-    expect(h.simpleReviewPrompts[0]).not.toContain('### fix-plan.md');
-    expect(h.simpleReviewPrompts[1]).toContain('### fix-plan.md');
-    expect(h.simpleReviewPrompts[1]).toContain('### fix-report.md');
+    expect(h.simpleReviewPrompts[0]).not.toContain(`${language === 'ja' ? '修正計画' : 'Repair plan'}:\nFix plan, implementation`);
+    expect(h.simpleReviewPrompts[1]).toContain(`${language === 'ja' ? '修正計画' : 'Repair plan'}:\n`);
+    expect(h.simpleReviewPrompts[1]).toContain(`${language === 'ja' ? '修正結果' : 'Repair result'}:\n`);
     expect(h.simpleReviewPrompts[1]).toContain('Fix plan, implementation, and validation evidence.');
     expect(h.judgedSteps.filter((step) => step === 'review-adjudication')).toHaveLength(2);
     expect(h.calls).toContain('commit_and_push');
@@ -363,9 +367,10 @@ describe('Builtin PR merge workflow execution', () => {
     engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
     expect((await engine.run()).status, `${abortReasons.join('; ')}; step=${engine.getState().currentStep}; reviews=${JSON.stringify([...reviewCount])}`).toBe('completed');
     expect(reviewCount.get('arch-review')).toBe(3);
-    expect(parallelReviewPrompts[0]).not.toContain('### fix-plan.md');
+    expect(parallelReviewPrompts[0]).not.toContain(`${language === 'ja' ? '修正計画' : 'Repair plan'}:\nReport from fix-plan`);
     expect(parallelReviewPrompts.slice(1).every((prompt) =>
-      prompt.includes('### fix-plan.md') && prompt.includes('### fix-report.md'))).toBe(true);
+      prompt.includes(`${language === 'ja' ? '修正計画' : 'Repair plan'}:\nReport from fix-plan`)
+      && prompt.includes(`${language === 'ja' ? '修正結果' : 'Repair result'}:\nReport from fix`))).toBe(true);
   });
 
   it.each(['ja', 'en'] as const)('%sのsimpleは修正計画で対応不能ならpushしない', async (language) => {

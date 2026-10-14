@@ -390,6 +390,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-pipe-reader.test.ts',
   'src/__tests__/it-project-execution-entrypoints.test.ts',
   'src/__tests__/it-report-input-contracts.test.ts',
+  'src/__tests__/it-resume-declared-report-reference-snapshot.test.ts',
   'src/__tests__/it-run-session-instruct.test.ts',
   'src/__tests__/it-system-enqueue-effect-duplicate.test.ts',
   'src/__tests__/it-tui-esc-menu-routes.test.ts',

@@ -711,7 +711,9 @@ export class ParallelRunner {
               : undefined;
             subStepInstructionByName.set(subStep.name, '');
             return await this.runWorkflowCallSubStep(
-              subStep,
+              step.inputReports === undefined || subStep.inputReports !== undefined
+                ? subStep
+                : { ...subStep, inputReports: step.inputReports },
               state,
               runtime,
               startedAt,

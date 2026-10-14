@@ -140,8 +140,8 @@ describe('review-remediation return routing and report handoff', () => {
     const destination = name === 'simple-mini' ? 'review' : 'supervise';
     const judge = prompts.find((prompt) => prompt.step === destination);
     expect(state.status, abortReasons.join('; ')).toBe('completed');
-    expect(judge?.text).toContain('### review-resolution.md\nADJUDICATION_DECISION_EVIDENCE');
-    expect(judge?.text).not.toContain('### fix-plan.md');
+    expect(judge?.text).toContain('### remediation: review-resolution.md\nADJUDICATION_DECISION_EVIDENCE');
+    expect(judge?.text).not.toContain('FIX_PLAN_EVIDENCE');
     expect(writtenReports).toContain('review-resolution.md');
     expect(writtenReports).not.toContain('fix-plan.md');
     expect(writtenReports).not.toContain('fix-report.md');
@@ -159,8 +159,8 @@ describe('review-remediation return routing and report handoff', () => {
     const { state, prompts, writtenReports, abortReasons } = await run(language, name, 'fixed');
     const reviewer = prompts.find((prompt) => prompt.step === (isReviewFix(name) ? 'coding-review' : 'follow-up-review'));
     expect(state.status, abortReasons.join('; ')).toBe('completed');
-    expect(reviewer?.text).toContain('### fix-plan.md\nFIX_PLAN_EVIDENCE');
-    expect(reviewer?.text).toContain('### fix-report.md\nFIX_REPORT_EVIDENCE');
+    expect(reviewer?.text).toContain(`${language === 'ja' ? '修正計画' : 'Repair plan'}:\nFIX_PLAN_EVIDENCE`);
+    expect(reviewer?.text).toContain(`${language === 'ja' ? '修正結果' : 'Repair result'}:\nFIX_REPORT_EVIDENCE`);
     expect(writtenReports).toContain('fix-plan.md');
     expect(writtenReports).toContain('fix-report.md');
   });

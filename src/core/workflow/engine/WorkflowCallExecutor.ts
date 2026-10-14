@@ -539,6 +539,9 @@ export class WorkflowCallExecutor {
     const childWorkflow = prepared.childWorkflow;
     const occurrence = prepared.occurrence;
     const resumeStackPrefix = prepared.resumeStackPrefix;
+    const reportInputScope = resumeStackPrefix.at(-1)?.kind === 'parallel'
+      ? resumeStackPrefix.slice(0, -1)
+      : resumeStackPrefix;
     const stepIterationIdentity = buildWorkflowStackStepIterationIdentity(
       parentConfig,
       request.step.name,
@@ -592,16 +595,18 @@ export class WorkflowCallExecutor {
     const inheritedEstimatorSource = options.autoRoutingEstimatorSource;
     const childOptions: WorkflowEngineOptions = {
       ...inheritedOptions,
-      inheritedReportInputs: resolveDeclaredReportInputs(request.step, {
-        workflow: parentConfig,
-        state: this.deps.state,
-        sharedRuntime: this.deps.sharedRuntime,
-        workflowCallResolver: this.deps.resolveWorkflowCall,
-        projectCwd: this.deps.projectCwd,
-        lookupCwd: this.deps.getCwd(),
-        reportDir: this.deps.runPaths.reportsAbs,
-        resumeStackPrefix,
-      }),
+      inheritedReportInputs: request.step.inputReports === undefined
+        ? options.inheritedReportInputs
+        : resolveDeclaredReportInputs(request.step, {
+            workflow: parentConfig,
+            state: this.deps.state,
+            sharedRuntime: this.deps.sharedRuntime,
+            workflowCallResolver: this.deps.resolveWorkflowCall,
+            projectCwd: this.deps.projectCwd,
+            lookupCwd: this.deps.getCwd(),
+            reportDir: this.deps.runPaths.reportsAbs,
+            resumeStackPrefix: reportInputScope,
+          }),
       abortSignal: this.deps.getAbortSignal?.() ?? options.abortSignal,
       maxStepsOverride: this.deps.sharedRuntime.maxSteps ?? this.deps.getMaxSteps(),
       initialSessions: Object.fromEntries(this.deps.state.personaSessions),

@@ -29,10 +29,19 @@ test('all four cases use the exact declared producer receipt in the current Phas
     const newPrompt = readFileSync(join(promptDir, `${receipt.case}-current.md`), 'utf8');
     assert.ok(!oldPrompt.includes('## 宣言された成果物入力'));
     assert.ok(!oldPrompt.includes(receipt.expected_marker));
-    assert.ok(newPrompt.includes('## 宣言された成果物入力'));
+    assert.equal(newPrompt.includes('## 宣言された成果物入力'),
+      receipt.case === 'synthesis' || receipt.case === 'merge');
     assert.ok(newPrompt.includes(receipt.expected_marker));
-    assert.ok(receipt.report_files.every((name) => newPrompt.includes(`### ${name}`)));
+    assert.ok(!newPrompt.includes(`UNRELATED-SHADOW-${receipt.case}-`));
+    assert.ok(receipt.report_files.every((name) =>
+      receipt.injected_report_scopes.some((report) => report.reference === name && report.scope === 'declared-producer')));
   }
+  assert.match(readFileSync(join(promptDir, 'follow-up-current.md'), 'utf8'), /修正計画:\n# Fix plan[\s\S]*修正結果:\n# Fix report/);
+  assert.match(readFileSync(join(promptDir, 'replan-current.md'), 'utf8'), /最終判定:\n# Review resolution/);
+  assert.match(readFileSync(join(promptDir, 'synthesis-current.md'), 'utf8'), /レビュー対象: # Review target/);
+  assert.match(readFileSync(join(promptDir, 'merge-current.md'), 'utf8'), /レビューサマリー: # Review summary/);
+  assert.ok(receipts.find((receipt) => receipt.case === 'synthesis')?.injected_report_scopes.some((report) =>
+    report.reference === 'review-target.md' && report.scope === 'step'));
   assert.match(readFileSync(join(promptDir, 'follow-up-baseline.md'), 'utf8'), /iteration-<n>--step-remediation/);
   assert.doesNotMatch(readFileSync(join(promptDir, 'follow-up-current.md'), 'utf8'), /iteration-<n>--step-remediation/);
   assert.match(readFileSync(join(promptDir, 'merge-baseline.md'), 'utf8'), /subworkflows\//);

@@ -6,13 +6,15 @@ import type { WorkflowConfig, WorkflowResumePointEntry, WorkflowStep } from '../
 import { createInitialState } from '../core/workflow/engine/state-manager.js';
 import { WorkflowCallExecutor } from '../core/workflow/engine/WorkflowCallExecutor.js';
 import { resolveDeclaredReportInputs } from '../core/workflow/instruction/declared-report-inputs.js';
+import { InstructionBuilder } from '../core/workflow/instruction/InstructionBuilder.js';
+import { formatMissingReportReference } from '../core/workflow/instruction/report-reference.js';
 import { WorkflowCallInvocationIndex } from '../core/workflow/workflow-call-invocation-index.js';
 import { WorkflowStepParticipationIndex } from '../core/workflow/workflow-step-participation-index.js';
 import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
 import { buildDynamicParallelSelectionIdentity } from '../core/workflow/dynamic-parallel/identity.js';
 import type { WorkflowSharedRuntimeState } from '../core/workflow/types.js';
 import { makeNormalizedWorkflowCallStep } from './helpers/normalized-workflow-call-step.js';
-import { makeStep } from './test-helpers.js';
+import { makeInstructionContext, makeStep } from './test-helpers.js';
 
 function workflow(name: string, steps: WorkflowStep[]): WorkflowConfig {
   return { name, initialStep: steps[0]!.name, maxSteps: 5, steps };
@@ -68,16 +70,18 @@ describe('declared report inputs', () => {
         writeFileSync(join(directory, 'review.md'), `review from call ${instance}`);
       }
     };
-    return { consumer, reportDir, state, resolve, record, source, parent, child, sharedRuntime, invocations };
+    const resolvedText = (resumeStackPrefix: readonly WorkflowResumePointEntry[] = []) =>
+      resolve(resumeStackPrefix)?.reports.map(({ content }) => content).join('\n');
+    return { consumer, reportDir, state, resolve, resolvedText, record, source, parent, child, sharedRuntime, invocations };
   }
 
   it('passes only the declared completed invocation body to the consumer', () => {
     const f = fixture();
     f.record(1, true);
-    expect(f.resolve()).toContain('review from call 1');
+    expect(f.resolvedText()).toContain('review from call 1');
     f.record(2, true);
-    expect(f.resolve()).toContain('review from call 2');
-    expect(f.resolve()).not.toContain('review from call 1');
+    expect(f.resolvedText()).toContain('review from call 2');
+    expect(f.resolvedText()).not.toContain('review from call 1');
   });
 
   it('does not fall back to an older completed call when the current call is pending', () => {
@@ -90,7 +94,7 @@ describe('declared report inputs', () => {
   it('resets completion before replaying the same call occurrence', () => {
     const f = fixture();
     f.record(1, true);
-    expect(f.resolve()).toContain('review from call 1');
+    expect(f.resolvedText()).toContain('review from call 1');
     const executor = new WorkflowCallExecutor({
       getConfig: () => f.parent,
       getOptions: () => ({}),
@@ -141,7 +145,7 @@ describe('declared report inputs', () => {
     participation.record(f.child, 'replan', callPath, ['fix-plan.md']);
     mkdirSync(join(f.reportDir, 'subworkflows', namespace), { recursive: true });
     writeFileSync(join(f.reportDir, 'subworkflows', namespace, 'fix-plan.md'), 'latest replan');
-    expect(f.resolve()).toContain('latest replan');
+    expect(f.resolvedText()).toContain('latest replan');
 
     const executor = new WorkflowCallExecutor({
       getConfig: () => f.parent,
@@ -167,7 +171,7 @@ describe('declared report inputs', () => {
       ...f.invocations.get(f.parent, f.source.name, [])!,
       completed: true,
     });
-    expect(f.resolve()).toContain('latest replan');
+    expect(f.resolvedText()).toContain('latest replan');
   });
 
   it('does not fill a later producer failure from an earlier same-name report', () => {
@@ -188,7 +192,7 @@ describe('declared report inputs', () => {
     participation.record(f.child, 'plan', callPath, ['fix-plan.md']);
     mkdirSync(join(f.reportDir, 'subworkflows', namespace), { recursive: true });
     writeFileSync(join(f.reportDir, 'subworkflows', namespace, 'fix-plan.md'), 'earlier plan');
-    expect(f.resolve()).toContain('earlier plan');
+    expect(f.resolvedText()).toContain('earlier plan');
     participation.record(f.child, 'replan', callPath, []);
     expect(f.resolve).toThrow(/not_produced:replan:fix-plan.md/);
   });
@@ -199,11 +203,11 @@ describe('declared report inputs', () => {
     const firstPath = [buildWorkflowResumePointEntry(outer, 'delegate', 'workflow_call', 1, undefined, 1)];
     const secondPath = [buildWorkflowResumePointEntry(outer, 'delegate', 'workflow_call', 2, undefined, 2)];
     f.record(1, true, true, firstPath);
-    expect(f.resolve(firstPath)).toContain('review from call 1');
+    expect(f.resolvedText(firstPath)).toContain('review from call 1');
     expect(() => f.resolve(secondPath)).toThrow(/0 matching completed reports/);
     f.record(2, true, true, secondPath);
-    expect(f.resolve(secondPath)).toContain('review from call 2');
-    expect(f.resolve(secondPath)).not.toContain('review from call 1');
+    expect(f.resolvedText(secondPath)).toContain('review from call 2');
+    expect(f.resolvedText(secondPath)).not.toContain('review from call 1');
   });
 
   it('rejects a missing contracted report despite an unrelated same-name file', () => {
@@ -244,8 +248,8 @@ describe('declared report inputs', () => {
       selected_pool_ids: [],
       effective_selection_ids: ['backend'],
     });
-    expect(f.resolve()).toContain('backend findings');
-    expect(f.resolve()).not.toContain('unrelated security findings');
+    expect(f.resolvedText()).toContain('backend findings');
+    expect(f.resolvedText()).not.toContain('unrelated security findings');
     f.state.dynamicParallelSelections.set(identity, {
       identity,
       step_name: 'reviewers',
@@ -278,8 +282,34 @@ describe('declared report inputs', () => {
   it('allows an optional source only before it has run', () => {
     const f = fixture();
     f.consumer.inputReports = { fromStep: 'source', reports: ['review.md'], optionalIfUnrun: true };
-    expect(f.resolve()).toBeUndefined();
+    expect(f.resolve()).toEqual({ declaredNames: ['review.md'], reports: [] });
     f.record(1, false);
     expect(f.resolve).toThrow(/not_completed/);
   });
+
+  it.each(['workflow_call', 'agent'] as const)(
+    'reserves an unrun %s source contract for reports: all without blocking unrelated local reports',
+    (sourceKind) => {
+      const f = fixture();
+      if (sourceKind === 'agent') {
+        f.parent.steps[0] = makeStep({
+          name: 'source',
+          outputContracts: [{ name: 'review.md', format: '# Review' }],
+        });
+      }
+      f.consumer.inputReports = { fromStep: 'source', reports: 'all', optionalIfUnrun: true };
+      writeFileSync(join(f.reportDir, 'review.md'), 'UNRELATED-REVIEW');
+      writeFileSync(join(f.reportDir, 'local-note.md'), 'LOCAL-NOTE');
+
+      const declared = f.resolve();
+      expect(declared).toEqual({ declaredNames: ['review.md'], reports: [] });
+      const prepared = new InstructionBuilder(
+        makeStep({ instruction: '{report:review.md}\n{report:local-note.md}' }),
+        makeInstructionContext({ reportDir: f.reportDir, declaredReportInputs: [declared!] }),
+      ).prepare();
+      expect(prepared.text).toContain(formatMissingReportReference('review.md'));
+      expect(prepared.text).toContain('LOCAL-NOTE');
+      expect(prepared.text).not.toContain('UNRELATED-REVIEW');
+    },
+  );
 });

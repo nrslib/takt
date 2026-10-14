@@ -43,7 +43,7 @@ import {
   StructuredAgentResponseError,
 } from '../../../agents/structured-caller/transport.js';
 import { InstructionBuilder } from '../instruction/InstructionBuilder.js';
-import type { InjectedReport, Phase1ReportInputs, PreparedInstruction, ReportReferenceObserver } from '../instruction/prepared-instruction.js';
+import type { DeclaredReportInputs, InjectedReport, Phase1ReportInputs, PreparedInstruction, ReportReferenceObserver } from '../instruction/prepared-instruction.js';
 import { Phase1ReportInputTracker } from '../instruction/report-inputs.js';
 import type {
   DynamicFacetSelectionContext,
@@ -198,8 +198,8 @@ export interface StepExecutorDeps {
   readonly getWorkflowDescription: () => string | undefined;
   readonly getWorkflowRules: () => readonly WorkflowWideRule[] | undefined;
   readonly getWorkflowCallVars?: () => Readonly<Record<string, string | number | boolean>> | undefined;
-  readonly resolveDeclaredReportInputs: (step: WorkflowStep, state: WorkflowState, reportDir: string) => string | undefined;
-  readonly getInheritedReportInputs: () => string | undefined;
+  readonly resolveDeclaredReportInputs: (step: WorkflowStep, state: WorkflowState, reportDir: string) => DeclaredReportInputs | undefined;
+  readonly getInheritedReportInputs: () => DeclaredReportInputs | undefined;
   readonly getRetryNote: () => string | undefined;
   readonly getPrContext?: () => PullRequestContext | undefined;
   /** Changed file set for this task. Recomputed per instruction build (the working tree moves). */
@@ -1419,7 +1419,7 @@ export class StepExecutor {
     const declaredReportInputs = [
       this.deps.getInheritedReportInputs(),
       this.deps.resolveDeclaredReportInputs(step, state, reportDir),
-    ].filter((value): value is string => value !== undefined).join('\n\n');
+    ].filter((value): value is DeclaredReportInputs => value !== undefined);
     const resumeReportConsumerKey = buildResumeReportConsumerKeyFromStack(
       this.deps.getCurrentWorkflowStack?.() ?? [],
     );
@@ -1442,7 +1442,7 @@ export class StepExecutor {
       workflowName: this.deps.getWorkflowName(),
       workflowDescription: this.deps.getWorkflowDescription(),
       workflowCallVars: this.deps.getWorkflowCallVars?.(),
-      declaredReportInputs: declaredReportInputs.length > 0 ? declaredReportInputs : undefined,
+      declaredReportInputs,
       retryNote: this.deps.getRetryNote(),
       prContext: this.deps.getPrContext?.(),
       reviewScope: this.deps.getReviewScope(),
@@ -1474,7 +1474,11 @@ export class StepExecutor {
       this.deps.reportReferenceObserver?.resolved(
         step,
         state.currentStep,
-        instruction.injectedReports.map(({ reference, scope }) => ({ reference, scope })),
+        instruction.injectedReports.map(({ reference, scope, producer }) => ({
+          reference,
+          scope,
+          ...(producer === undefined ? {} : { producer }),
+        })),
       );
     }
     return instruction;

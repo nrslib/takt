@@ -231,6 +231,7 @@
     "src/__tests__/it-project-execution-entrypoints.test.ts",
     "src/__tests__/it-project-execution-lock.test.ts",
     "src/__tests__/it-report-input-contracts.test.ts",
+    "src/__tests__/it-resume-declared-report-reference-snapshot.test.ts",
     "src/__tests__/it-runAllTasks-auto-requeue.test.ts",
     "src/__tests__/it-step-structured-output-fallback.test.ts",
     "src/__tests__/it-system-effects.test.ts",

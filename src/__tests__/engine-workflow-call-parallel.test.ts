@@ -242,7 +242,7 @@ steps:
         parallel: [{
           name: 'follow-up-review',
           persona: 'follow-up-reviewer',
-          instruction: 'Review the repair',
+          instruction: 'Plan:\n{report:fix-plan.md}\nResult:\n{report:fix-report.md}',
           rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
         }],
         rules: [{ condition: 'all("COMPLETE")', next: 'COMPLETE' }],
@@ -270,13 +270,360 @@ steps:
       { index: 0, method: 'aggregate' },
     ]);
     engine = new WorkflowEngine(config, tmpDir, 'Review and repair', createWorkflowCallOptions(tmpDir));
+    const resolvedReports = vi.fn();
+    engine.on('report:resolved', resolvedReports);
 
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
     expect(prompts.get('initial-reviewer')).not.toContain('REPAIR_EVIDENCE_');
-    expect(prompts.get('follow-up-reviewer')).toContain('### fix-plan.md\nREPAIR_EVIDENCE_fix-plan.md');
-    expect(prompts.get('follow-up-reviewer')).toContain('### fix-report.md\nREPAIR_EVIDENCE_fix-report.md');
+    expect(prompts.get('follow-up-reviewer')).toContain('Plan:\nREPAIR_EVIDENCE_fix-plan.md\nResult:\nREPAIR_EVIDENCE_fix-report.md');
+    expect(prompts.get('follow-up-reviewer')).not.toContain('## Declared report inputs');
+    expect(resolvedReports).toHaveBeenCalledWith(expect.objectContaining({
+      reports: [
+        { reference: 'fix-plan.md', scope: 'declared-producer', producer: 'remediation' },
+        { reference: 'fix-report.md', scope: 'declared-producer', producer: 'remediation' },
+      ],
+    }));
+  });
+
+  it.each([
+    { replacement: 'alpha', reportName: 'repair-alpha.md' },
+    { replacement: 'beta', reportName: 'repair-beta.md' },
+  ])('uses the selected replacement workflow and its $reportName contract', async ({ replacement, reportName }) => {
+    writeWorkflow(tmpDir, 'shared/selected.yaml', `name: shared/${replacement}
+subworkflow:
+  callable: true
+initial_step: repair
+steps:
+  - name: repair
+    persona: repairer
+    instruction: "Repair through ${replacement}"
+    output_contracts:
+      report:
+        - name: ${reportName}
+          format: "Repair evidence"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent', initial_step: 'source', max_steps: 4,
+      steps: [{
+        name: 'source', kind: 'workflow_call', call: 'shared/selected',
+        rules: [{ condition: 'COMPLETE', next: 'consume' }],
+      }, {
+        name: 'consume', persona: 'consumer',
+        input_reports: { from_step: 'source', reports: 'all' },
+        instruction: `Selected repair:\n{report:${reportName}}`,
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
+    });
+    vi.mocked(runReportPhase).mockImplementation(async (step, _iteration, context, onReportWritten) => {
+      if (step.name !== 'repair') return;
+      mkdirSync(context.reportDir, { recursive: true });
+      writeFileSync(join(context.reportDir, reportName), `CURRENT-${replacement}`);
+      onReportWritten?.(reportName);
+      const rootReports = context.reportDir.split('/subworkflows/')[0]!;
+      mkdirSync(rootReports, { recursive: true });
+      writeFileSync(join(rootReports, reportName), 'UNRELATED-SAME-NAME');
+    });
+    const prompts = new Map<string, string>();
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: prompt });
+      prompts.set(String(persona), prompt);
+      return makeResponse({ persona: String(persona), content: 'done' });
+    });
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+    ]);
+    engine = new WorkflowEngine(config, tmpDir, 'Review a replaced producer', createWorkflowCallOptions(tmpDir));
+    const resolvedReports = vi.fn();
+    engine.on('report:resolved', resolvedReports);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(prompts.get('consumer')).toContain(`Selected repair:\nCURRENT-${replacement}`);
+    expect(prompts.get('consumer')).not.toContain('UNRELATED-SAME-NAME');
+    expect(prompts.get('consumer')).not.toContain('## Declared report inputs');
+    expect(resolvedReports).toHaveBeenCalledWith(expect.objectContaining({
+      reports: [{ reference: reportName, scope: 'declared-producer', producer: 'source' }],
+    }));
+  });
+
+  it.each([false, true])('keeps two same-name parallel call reports when no single reference is requested (inline=%s)', async (inline) => {
+    for (const id of ['alpha', 'beta']) {
+      writeWorkflow(tmpDir, `shared/${id}.yaml`, `name: shared/${id}
+subworkflow:
+  callable: true
+initial_step: review-${id}
+steps:
+  - name: review-${id}
+    persona: reviewer-${id}
+    instruction: Review ${id}
+    output_contracts:
+      report:
+        - name: review.md
+          format: Review report
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    }
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent', initial_step: 'reviewers', max_steps: 6,
+      steps: [{
+        name: 'reviewers', instruction: 'Run both reviews',
+        parallel: ['alpha', 'beta'].map((id) => ({
+          name: id, kind: 'workflow_call', call: `shared/${id}`,
+          rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+        })),
+        rules: [{ condition: 'all("COMPLETE")', next: 'consumer' }],
+      }, {
+        name: 'consumer', persona: 'consumer',
+        input_reports: { from_step: 'reviewers', reports: 'all' },
+        instruction: inline ? 'One review: {report:review.md}' : 'Compare both reviews.',
+        output_contracts: { report: [{ name: 'summary.md', format: 'Summary' }] },
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
+    });
+    const consumerPrompts: string[] = [];
+    const phase2Reports: Array<readonly { reference: string; content: string; producer?: string }[]> = [];
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: prompt });
+      if (persona === 'consumer') consumerPrompts.push(prompt);
+      return makeResponse({ persona: String(persona), content: 'done' });
+    });
+    vi.mocked(runReportPhase).mockImplementation(async (step, _iteration, context, onReportWritten) => {
+      if (step.name === 'consumer') {
+        phase2Reports.push(context.injectedReports ?? []);
+        mkdirSync(context.reportDir, { recursive: true });
+        writeFileSync(join(context.reportDir, 'summary.md'), 'SUMMARY');
+        onReportWritten?.('summary.md');
+        return;
+      }
+      if (step.name !== 'review-alpha' && step.name !== 'review-beta') return;
+      mkdirSync(context.reportDir, { recursive: true });
+      writeFileSync(join(context.reportDir, 'review.md'), `REVIEW_${step.name}`);
+      onReportWritten?.('review.md');
+      const rootReports = context.reportDir.split('/subworkflows/')[0]!;
+      writeFileSync(join(rootReports, 'review.md'), 'UNRELATED_REVIEW');
+    });
+    vi.mocked(mockRuleEvaluation).mockImplementation((step) => ({
+      index: 0, method: step.parallel === undefined ? 'phase3_tag' : 'aggregate',
+    }));
+    engine = new WorkflowEngine(config, tmpDir, 'Compare reviews', createWorkflowCallOptions(tmpDir));
+    const abort = vi.fn();
+    engine.on('workflow:abort', abort);
+
+    const state = await engine.run();
+
+    if (inline) {
+      expect(state.status).toBe('aborted');
+      expect(consumerPrompts).toEqual([]);
+      expect(abort.mock.calls[0]?.[1]).toMatch(/ambiguous declared inputs/);
+    } else {
+      expect(state.status).toBe('completed');
+      expect(consumerPrompts).toHaveLength(1);
+      expect(consumerPrompts[0]).toContain('### reviewers / alpha: review.md\nREVIEW_review-alpha');
+      expect(consumerPrompts[0]).toContain('### reviewers / beta: review.md\nREVIEW_review-beta');
+      expect(consumerPrompts[0]).not.toContain('UNRELATED_REVIEW');
+      expect(phase2Reports).toEqual([[
+        expect.objectContaining({ reference: 'review.md', content: 'REVIEW_review-alpha', producer: 'reviewers / alpha' }),
+        expect.objectContaining({ reference: 'review.md', content: 'REVIEW_review-beta', producer: 'reviewers / beta' }),
+      ]]);
+    }
+  });
+
+  it.each([false, true])('distinguishes nested calls with the same step name in report inputs (inline=%s)', async (inline) => {
+    writeWorkflow(tmpDir, 'shared/inner.yaml', `name: shared/inner
+subworkflow:
+  callable: true
+initial_step: write-inner
+steps:
+  - name: write-inner
+    persona: inner-writer
+    instruction: Write inner review
+    output_contracts:
+      report:
+        - name: review.md
+          format: Review
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    writeWorkflow(tmpDir, 'shared/outer.yaml', `name: shared/outer
+subworkflow:
+  callable: true
+initial_step: write-outer
+steps:
+  - name: write-outer
+    persona: outer-writer
+    instruction: Write outer review
+    output_contracts:
+      report:
+        - name: review.md
+          format: Review
+    rules:
+      - condition: done
+        next: repair
+  - name: repair
+    kind: workflow_call
+    call: shared/inner
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent', initial_step: 'repair', max_steps: 8,
+      steps: [{
+        name: 'repair', kind: 'workflow_call', call: 'shared/outer',
+        rules: [{ condition: 'COMPLETE', next: 'consumer' }],
+      }, {
+        name: 'consumer', persona: 'consumer',
+        input_reports: { from_step: 'repair', reports: 'all' },
+        instruction: inline ? 'One review: {report:review.md}' : 'Compare both reviews.',
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
+    });
+    const consumerPrompts: string[] = [];
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: prompt });
+      if (persona === 'consumer') consumerPrompts.push(prompt);
+      return makeResponse({ persona: String(persona), content: 'done' });
+    });
+    vi.mocked(runReportPhase).mockImplementation(async (step, _iteration, context, onReportWritten) => {
+      if (step.name !== 'write-outer' && step.name !== 'write-inner') return;
+      mkdirSync(context.reportDir, { recursive: true });
+      writeFileSync(join(context.reportDir, 'review.md'), step.name === 'write-outer' ? 'OUTER_REVIEW' : 'INNER_REVIEW');
+      onReportWritten?.('review.md');
+    });
+    vi.mocked(mockRuleEvaluation).mockImplementation(() => ({ index: 0, method: 'phase3_tag' }));
+    engine = new WorkflowEngine(config, tmpDir, 'Compare nested reviews', createWorkflowCallOptions(tmpDir));
+    const abort = vi.fn();
+    engine.on('workflow:abort', abort);
+    const resolvedReports = vi.fn();
+    engine.on('report:resolved', resolvedReports);
+
+    const state = await engine.run();
+
+    if (inline) {
+      expect(state.status).toBe('aborted');
+      expect(consumerPrompts).toEqual([]);
+      expect(abort.mock.calls[0]?.[1]).toMatch(/ambiguous declared inputs/);
+    } else {
+      expect(state.status).toBe('completed');
+      expect(consumerPrompts).toHaveLength(1);
+      expect(consumerPrompts[0]?.match(/^### .*: review\.md$/gm)).toEqual([
+        '### repair: review.md',
+        '### repair / repair: review.md',
+      ]);
+      expect(consumerPrompts[0]).toContain('OUTER_REVIEW');
+      expect(consumerPrompts[0]).toContain('INNER_REVIEW');
+      expect(resolvedReports).toHaveBeenCalledWith(expect.objectContaining({
+        reports: [
+          { reference: 'review.md', scope: 'declared-producer', producer: 'repair' },
+          { reference: 'review.md', scope: 'declared-producer', producer: 'repair / repair' },
+        ],
+      }));
+    }
+  });
+
+  it.each([
+    { childOverride: false, expected: 'PRIMARY_PLAN', rejected: 'ALTERNATE_PLAN' },
+    { childOverride: true, expected: 'ALTERNATE_PLAN', rejected: 'PRIMARY_PLAN' },
+  ])('passes parallel parent reports through nested workflow calls and honors child override ($childOverride)', async ({ childOverride, expected, rejected }) => {
+    for (const id of ['primary', 'alternate']) {
+      writeWorkflow(tmpDir, `shared/${id}.yaml`, `name: shared/${id}
+subworkflow:
+  callable: true
+initial_step: ${id}-plan
+steps:
+  - name: ${id}-plan
+    persona: ${id}-writer
+    instruction: Write ${id} plan
+    output_contracts:
+      report:
+        - name: fix-plan.md
+          format: Repair plan
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    }
+    writeWorkflow(tmpDir, 'shared/leaf.yaml', `name: shared/leaf
+subworkflow:
+  callable: true
+initial_step: read-plan
+steps:
+  - name: read-plan
+    persona: leaf-reader
+    instruction: 'Selected plan: {report:fix-plan.md}'
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    writeWorkflow(tmpDir, 'shared/middle.yaml', `name: shared/middle
+subworkflow:
+  callable: true
+initial_step: delegate-leaf
+steps:
+  - name: delegate-leaf
+    kind: workflow_call
+    call: shared/leaf
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent', initial_step: 'primary', max_steps: 10,
+      steps: [{
+        name: 'primary', kind: 'workflow_call', call: 'shared/primary',
+        rules: [{ condition: 'COMPLETE', next: 'alternate' }],
+      }, {
+        name: 'alternate', kind: 'workflow_call', call: 'shared/alternate',
+        rules: [{ condition: 'COMPLETE', next: 'reviewers' }],
+      }, {
+        name: 'reviewers', instruction: 'Review the plan',
+        input_reports: { from_step: 'primary', reports: ['fix-plan.md'] },
+        parallel: [{
+          name: 'delegate', kind: 'workflow_call', call: 'shared/middle',
+          ...(childOverride ? { input_reports: { from_step: 'alternate', reports: ['fix-plan.md'] } } : {}),
+          rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+        }],
+        rules: [{ condition: 'all("COMPLETE")', next: 'COMPLETE' }],
+      }],
+    });
+    const leafPrompts: string[] = [];
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: prompt });
+      if (persona === 'leaf-reader') leafPrompts.push(prompt);
+      return makeResponse({ persona: String(persona), content: 'done' });
+    });
+    vi.mocked(runReportPhase).mockImplementation(async (step, _iteration, context, onReportWritten) => {
+      if (step.name !== 'primary-plan' && step.name !== 'alternate-plan') return;
+      mkdirSync(context.reportDir, { recursive: true });
+      writeFileSync(join(context.reportDir, 'fix-plan.md'), step.name === 'primary-plan' ? 'PRIMARY_PLAN' : 'ALTERNATE_PLAN');
+      onReportWritten?.('fix-plan.md');
+      const rootReports = context.reportDir.split('/subworkflows/')[0]!;
+      writeFileSync(join(rootReports, 'fix-plan.md'), 'UNRELATED_PLAN');
+    });
+    vi.mocked(mockRuleEvaluation).mockImplementation((step) => ({
+      index: 0, method: step.parallel === undefined ? 'phase3_tag' : 'aggregate',
+    }));
+    engine = new WorkflowEngine(config, tmpDir, 'Review repair plan', createWorkflowCallOptions(tmpDir));
+    const abort = vi.fn();
+    engine.on('workflow:abort', abort);
+
+    const state = await engine.run();
+
+    expect(state.status, String(abort.mock.calls[0]?.[1])).toBe('completed');
+    expect(leafPrompts).toHaveLength(1);
+    expect(leafPrompts[0]).toContain(`Selected plan: ${expected}`);
+    expect(leafPrompts[0]).not.toContain(rejected);
+    expect(leafPrompts[0]).not.toContain('UNRELATED_PLAN');
   });
 
   it.each([
@@ -324,7 +671,7 @@ steps:
       }, {
         name: 'consume',
         persona: 'consumer',
-        instruction: 'Read the current review',
+        instruction: 'Current review:\n{report:review.md}',
         input_reports: { from_step: 'reviewers', reports: 'all' },
         rules: [{ condition: 'done', next: 'COMPLETE' }],
       }],
@@ -372,7 +719,7 @@ steps:
       expect(state.status).toBe('completed');
       expect(abort).not.toHaveBeenCalled();
       expect(consumerPrompts).toHaveLength(1);
-      expect(consumerPrompts[0]).toContain('review from attempt 2');
+      expect(consumerPrompts[0]).toContain('Current review:\nreview from attempt 2');
       expect(consumerPrompts[0]).not.toContain('review from attempt 1');
     }
   });

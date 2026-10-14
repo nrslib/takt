@@ -713,7 +713,7 @@ export interface WorkflowEngineOptions extends PrMergeOptions {
   /** Scalar execution context inherited through nested workflow_call boundaries. */
   workflowCallVars?: Readonly<Record<string, string | number | boolean>>;
   /** Verified report bodies passed by the owning workflow_call to this child. */
-  inheritedReportInputs?: string;
+  inheritedReportInputs?: import('./instruction/prepared-instruction.js').DeclaredReportInputs;
   /** Exact verified resource root for the run's workflow execution bundle. */
   workflowBundleResourceRoot?: string;
   /** Full resume-stack-derived identity for the workflow_call that owns this engine. */

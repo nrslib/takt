@@ -17,6 +17,7 @@ import { loadTemplate } from '../../../shared/prompts/index.js';
 import type { PullRequestContext } from '../pr-context.js';
 import type { TaskReviewScope } from '../review-scope.js';
 import type { CompanionReviewMode } from '../../models/companion-types.js';
+import type { DeclaredReportInputs } from './prepared-instruction.js';
 
 /**
  * Context for building instruction from template.
@@ -94,7 +95,7 @@ export interface InstructionContext {
   /** Scalar context inherited through workflow_call boundaries. */
   workflowCallVars?: Readonly<Record<string, string | number | boolean>>;
   /** Verified report bodies supplied by declared logical producers. */
-  declaredReportInputs?: string;
+  declaredReportInputs?: readonly DeclaredReportInputs[];
   companion?: {
     mailboxDirectory: string;
     reviewMode: CompanionReviewMode;
