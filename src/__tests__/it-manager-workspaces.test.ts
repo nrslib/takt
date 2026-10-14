@@ -21,6 +21,7 @@ import { MockProvider } from '../infra/providers/mock.js';
 import { goalInput,goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
+vi.mock('../features/daemon/lifecycle.js', () => ({ ensureDaemon: vi.fn(async () => {}) }));
 
 describe('manager workspace storage and repository boundaries', () => {
   let root: string;

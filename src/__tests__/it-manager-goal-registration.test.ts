@@ -20,6 +20,9 @@ import type { ProviderAgent } from '../infra/providers/types.js';
 import { TaskRunner } from '../infra/task/runner.js';
 import { goalInput } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
+import { readProjectRegistry } from '../infra/config/global/projectRegistry.js';
+
+vi.mock('../features/daemon/lifecycle.js', () => ({ ensureDaemon: vi.fn(async () => {}) }));
 
 let root: string;
 let cwd: string;
@@ -91,6 +94,9 @@ it('drains registration and both task results in run, then restores their record
     await context.session.handleUserMessage({ text: 'ゴールを相談します' });
     const registered = await context.session.approveSummary(context.session.getPendingSummary()!.revision);
     expect(registered.kind).toBe('goal_registered'); expect(call).toHaveBeenCalledOnce();
+    expect((await readProjectRegistry(process.env.TAKT_CONFIG_DIR!)).projects).toContainEqual(expect.objectContaining({
+      canonicalDirectory: cwd, managerUsed: true,
+    }));
     expect(readManagerEvents(cwd).map(({ event }) => event.kind)).toEqual(['registered']);
     vi.spyOn(runExecution, 'executeRunTaskAndCompleteWithDetails').mockImplementation(async (task, runner) => {
       const resultBranch = `result-${results}`;

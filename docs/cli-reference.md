@@ -83,6 +83,8 @@ Approximate sizes are 250 MB for Claude SDK, 340 MB for Codex, 60 MB for OpenCod
 
 ## Manager (experimental)
 
+Use `takt daemon stop` to stop the manager background daemon. Opening manager or answering a question or resuming a goal in its TUI starts the daemon again when needed. It exits automatically when its projects have no unfinished goals, pending events, or pending/running tasks.
+
 `takt manager` opens a goal conversation TUI in an interactive terminal. manager is experimental: behavior, settings, and saved data formats may change without notice. It automatically queues and runs tasks, which incurs provider API costs. These notices appear above the input box on every startup and in `takt manager --help`, in the configured language (Japanese or English).
 
 ## Web UI execution boundary

@@ -108,4 +108,7 @@ program.hook('preSubcommand', async (_command, subcommand) => {
 });
 
 // Common initialization for all commands
-program.hook('preAction', runPreActionHook);
+program.hook('preAction', async (_command, actionCommand) => {
+  if (actionCommand.name() === 'daemon' || actionCommand.parent?.name() === 'daemon') return;
+  await runPreActionHook();
+});

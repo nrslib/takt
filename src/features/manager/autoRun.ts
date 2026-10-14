@@ -1,7 +1,5 @@
 import { spawn } from 'node:child_process';
-import { closeSync, existsSync, openSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
+import { closeSync, openSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { TaskStore } from '../../infra/task/store.js';
@@ -18,6 +16,7 @@ import { getErrorMessage } from '../../shared/utils/error.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { createLogger } from '../../shared/utils/debug.js';
 import { MANAGER_GOAL_TASKS_ENV } from '../../shared/constants.js';
+import { resolveCliInvocation } from '../../shared/utils/cli-invocation.js';
 
 const log = createLogger('manager-auto-run');
 
@@ -52,11 +51,7 @@ export async function ensureManagerRun(cwd: string): Promise<void> {
     const logs = join(cwd, '.takt', 'manager-logs');
     ensurePrivateDirectory(logs);
     descriptor = openSync(join(logs, `run-${randomUUID()}.log`), 'wx', 0o600);
-    const built = fileURLToPath(new URL('../../app/cli/index.js', import.meta.url));
-    const args = existsSync(built) ? [built, 'run'] : [
-      '--import', createRequire(import.meta.url).resolve('tsx/esm'),
-      fileURLToPath(new URL('../../app/cli/index.ts', import.meta.url)), 'run',
-    ];
+    const { args } = resolveCliInvocation('run');
     const env = buildChildProcessEnv();
     env[MANAGER_GOAL_TASKS_ENV] = '1';
     if (!hasManagerWork(cwd) || getProjectExecutionOwner(cwd) !== undefined) return;
