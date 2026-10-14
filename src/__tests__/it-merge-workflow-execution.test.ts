@@ -117,7 +117,8 @@ describe('Builtin PR merge workflow execution', () => {
           if (!reportDir) throw new Error('Missing reviewer report directory');
           const parentSubworkflows = join(dirname(dirname(reportDir)), 'subworkflows');
           const remediation = readdirSync(parentSubworkflows)
-            .find((entry) => entry.includes('--step-remediation--workflow-'));
+            .filter((entry) => entry.includes('--step-remediation--workflow-'))
+            .sort((a, b) => Number(b.match(/^iteration-(\d+)/)?.[1]) - Number(a.match(/^iteration-(\d+)/)?.[1]))[0];
           if (!remediation) throw new Error('Missing sibling remediation report directory');
           for (const report of ['fix-plan.md', 'fix-report.md']) {
             followUpReportContents.push(readFileSync(join(parentSubworkflows, remediation, report), 'utf8'));
