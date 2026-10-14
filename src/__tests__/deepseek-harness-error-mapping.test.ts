@@ -28,6 +28,7 @@ const runtimeBehavior = vi.hoisted(() => ({
   instanceCount: 0,
   uniqueSessions: false,
   confirmedExit: false,
+  cleanupReceipts: [] as string[],
   runGate: undefined as ((prompt: string) => Promise<void>) | undefined,
   onClose: undefined as (() => Promise<void>) | undefined,
 }));
@@ -44,7 +45,10 @@ vi.mock('@deepseek-ai/dsh-sdk-client', async (importOriginal) => {
     DeepSeekHarness: class {
       private readonly id = runtimeBehavior.uniqueSessions ? `cache-session-${++runtimeBehavior.instanceCount}` : 'error-mapping-session';
       /** Capture the mocked SDK environment so cleanup tests can publish the configured exit receipt. */
-      constructor(private readonly options: { env?: NodeJS.ProcessEnv }) {}
+      constructor(private readonly options: { env?: NodeJS.ProcessEnv }) {
+        const receipt = options.env?.TAKT_DSH_CLEANUP_CONFIRMATION;
+        if (receipt !== undefined) runtimeBehavior.cleanupReceipts.push(receipt);
+      }
 
       /** Count SDK startup calls without creating a runtime process. */
       async start(): Promise<void> {
@@ -77,6 +81,7 @@ vi.mock('@deepseek-ai/dsh-sdk-client', async (importOriginal) => {
         runtimeBehavior.closeCount += 1;
         await runtimeBehavior.onClose?.();
         if (runtimeBehavior.confirmedExit && this.options.env?.TAKT_DSH_CLEANUP_CONFIRMATION) {
+          await mkdir(path.dirname(this.options.env.TAKT_DSH_CLEANUP_CONFIRMATION), { recursive: true });
           await writeFile(this.options.env.TAKT_DSH_CLEANUP_CONFIRMATION, 'confirmed\n');
         }
         if (runtimeBehavior.closeError !== undefined) {
@@ -137,6 +142,7 @@ import {
   getDeepSeekRuntimePaths,
   withDeepSeekRuntimeCreation,
 } from '../infra/deepseek-harness/runtime-state.js';
+import * as runtimeStateModule from '../infra/deepseek-harness/runtime-state.js';
 import { AGENT_FAILURE_CATEGORIES } from '../shared/types/agent-failure.js';
 import type { StreamEvent } from '../shared/types/provider.js';
 
@@ -147,12 +153,14 @@ let temporaryRoot: string;
 let resourceCleanup: Promise<void> | undefined;
 const drainGatedTurns: (() => Promise<void>)[] = [];
 
+/** Create an explicit arrival/release boundary for deterministic async lifecycle tests. */
 function createSignal() {
   let resolve!: () => void;
   const promise = new Promise<void>((notify) => { resolve = notify; });
   return { promise, resolve };
 }
 
+/** Track gated turns so fixture teardown drains startup and pruning before removing their root. */
 function createRunGate(prompts: string[]) {
   const release = createSignal();
   const arrivals = new Map(prompts.map((prompt) => [prompt, createSignal()]));
@@ -197,6 +205,7 @@ function createRunGate(prompts: string[]) {
   };
 }
 
+/** Drain all turns and runtime cleanup before removing fixtures and restoring their environment. */
 function cleanupTestResources(): Promise<void> {
   if (resourceCleanup === undefined) {
     resourceCleanup = (async () => {
@@ -242,11 +251,49 @@ describe('DeepSeek Harness SDK error mapping', () => {
     runtimeBehavior.instanceCount = 0;
     runtimeBehavior.uniqueSessions = false;
     runtimeBehavior.confirmedExit = false;
+    runtimeBehavior.cleanupReceipts.length = 0;
     runtimeBehavior.runGate = undefined;
     runtimeBehavior.onClose = undefined;
   });
 
   afterEach(cleanupTestResources);
+
+  it('shares in-flight receipt reconciliation between the watcher and explicit shutdown', async () => {
+    runtimeBehavior.uniqueSessions = true;
+    expect((await callDeepSeekHarness('worker', 'fresh', { cwd: temporaryRoot })).status).toBe('done');
+    const receipt = runtimeBehavior.cleanupReceipts[0]!;
+    const arrived = createSignal();
+    const release = createSignal();
+    let acknowledgementCount = 0;
+    const acknowledgement = vi.spyOn(runtimeStateModule, 'acknowledgeDeepSeekRuntimeCleanup')
+      .mockImplementation(async () => {
+        acknowledgementCount += 1;
+        if (acknowledgementCount === 1) return undefined;
+        arrived.resolve();
+        await release.promise;
+        return false;
+      });
+    runtimeBehavior.closeError = new Error('unconfirmed cleanup');
+    const closing = closeDeepSeekHarnessProcesses();
+    // Attach a rejection handler before controlling the asynchronous receipt boundary.
+    void closing.catch(() => undefined);
+    try {
+      await arrived.promise;
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(acknowledgementCount).toBe(2);
+      release.resolve();
+      await expect(closing).rejects.toThrow('cleanup is unconfirmed');
+      expect(acknowledgementCount).toBe(2);
+    } finally {
+      release.resolve();
+      await closing.catch(() => undefined);
+      acknowledgement.mockRestore();
+      // The SDK is entirely mocked: confirm its no-process fixture so no watcher escapes this test.
+      await mkdir(path.dirname(receipt), { recursive: true });
+      await writeFile(receipt, 'confirmed\n');
+      await closeDeepSeekHarnessProcesses();
+    }
+  });
 
   it.each([
     [

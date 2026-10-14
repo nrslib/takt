@@ -26,7 +26,7 @@ Nix flakes を使う場合は`nix develop` でこのプロジェクト用の Nod
 nix develop
 ```
 
-リリース前に `npm run sync:nix-deps` を実行し、更新された `package-lock.json` と `flake.nix` をコミットしてください。`package.json` の範囲内で lock を最新に更新し、`npmDepsHash` を再計算するため、Nix ビルドが `npm install` と同じ依存を同梱します。
+リリース前に `npm run check:release` を実行し、更新された `package-lock.json` と `flake.nix` をコミットしてください。最初の工程の `sync:nix-deps` は npm 10.9.4 で lock を更新し、その lock を `npm ci` でインストールして `npmDepsHash` を再計算します（Nix が必要です）。これにより Nix ビルドとリリースチェックで同じ依存を使えます。
 
 ## 貢献の流れ
 
@@ -52,7 +52,7 @@ npm run test:opencode-probe
 npm run test:e2e:smoke
 ```
 
-`npm test` は高速なユニットテストを実行します。実装を終えたら `npm run test:it` で軽い結合テストも確認してください。結合テストを追加・変更した場合は `npm test -- src/__tests__/releaseVerificationWiring.test.ts` を単体で実行します。重い結合テストを変更した場合は、PR を提出する前に `npm test -- <test-file>` で対象ファイルも実行してください。`npm run test:opencode-probe` は OpenCode のプロンプトを使ったスモークテストです。リリース時は `npm run check:release` でビルド、lint、ユニットテスト、結合テスト、E2E をまとめて確認できます。
+`npm test` は高速なユニットテストを実行します。実装を終えたら `npm run test:it` で軽い結合テストも確認してください。結合テストを追加・変更した場合は `npm test -- src/__tests__/releaseVerificationWiring.test.ts` を単体で実行します。重い結合テストを変更した場合は、PR を提出する前に `npm test -- <test-file>` で対象ファイルも実行してください。`npm run test:opencode-probe` は OpenCode のプロンプトを使ったスモークテストです。リリース時は `npm run check:release` で依存同期、ビルド、npm 10 と 11 による pack 済みパッケージのグローバルインストール確認、lint、ユニットテスト、結合テスト、E2E を実行します。
 
 E2E テストの実行方法と前提条件は [E2E テスト概要](./testing/e2e.md) を参照してください。
 

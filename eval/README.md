@@ -237,6 +237,10 @@ minutes with no JSON or diagnostic event; override those inactivity windows
 with `CODEX_REVIEW_IDLE_TIMEOUT_SECONDS` and
 `OPENCODE_REVIEW_IDLE_TIMEOUT_SECONDS` when needed.
 
+`finding-premise-scope` はレビュー担当4ケースと再計画2ケースを、ケースごとの隔離 fixture と現在のファセットから生成したプロンプトで評価します。Codex gpt-6-sol low、Claude Opus 5、Codex gpt-6-luna max を使い、判定役は gpt-6-sol low です。両 CLI の認証が必要なためデフォルト実行から除外し、`npm run eval:prompts:finding-premise-scope` で明示実行します。rv1 は計画の設計判断（秘密値を写さない）を受入条件として指摘にしないこと、rv2 は前回の裁定が広げた取引先 CSV の形式外の金額表記を理由に persists にしないことを測ります。rn1 は契約が定める円記号付きの金額を persists とし、rn2 は外部の提出者が付けたファイル名による保存先の外への書き込みを blocking の指摘にすることを測ります。pl1 は裁定が広げた形式外の表記を再計画の作業にしないこと、pn1 は契約が定める表記を作業にすることを測ります。
+
+`fix-verification-applicable-inputs` は完了検証7ケース・再計画3ケース・レビュー裁定4ケースを、ケースごとの隔離 fixture と現在のファセットから生成したプロンプトで評価します。Codex gpt-6-sol low、Claude Opus 5、Codex gpt-6-luna max を使い、判定役は gpt-6-sol low です。両 CLI の認証が必要なためデフォルト実行から除外し、`npm run eval:prompts:fix-verification-applicable-inputs` で明示実行します。f1/f2/f3 はそれぞれ組の選択、請求明細、バッチ設定を使い、根拠のない入力を理由に差し戻さないことを測ります。r1/r2 は前回の根拠のない反例を条件に取り込まないことを測ります。n1/n2/n3/n5 は長いパスの表示衝突・下限処理・端末制御列・CSV 契約の小数金額の衝突を検出し、n4 は根拠のある反例を再計画に取り込む対照です。a1/a2 は音声変換 CLI の外部コマンド検索を題材に、相対要素だけの PATH を変更前の文書が約束するかによって、同じレビュー指摘を修正対象にするかを測ります。a3 は連携先の課題タイトルをシェルのコマンド文字列に埋め込む変更の指摘を修正対象にする対照です。a4 は利用者自身のプロジェクトで、PATH の相対要素から悪意のある実行ファイルを起動する指摘を扱います。変更前の文書には利用者の環境の改ざんを防御対象にしない方針があります。a4 は main の既存の脅威モデル規則でも修正対象から外れる可能性があるため、旧版との比較結果を確認する必要があります。fixture のテスト成功は評価の準備確認であり、対照ケースの修正完了を意味しません。これは seed レポートを使う各 step の評価で、修正ループ全体の収束や所要時間は測定しません。
+
 The `fix-verifier-family-boundary` suite checks that source discovery keeps
 implementation/evidence gaps separate from omitted family paths and excludes a
 neighboring contract. Invoke it with
@@ -516,6 +520,8 @@ remain excluded.
 | `final-readiness-supervision` | final-gate / supervise Phase 1 | final-readiness-supervision | whether the supervisor identifies a newly discovered required consumer from the unmet acceptance criteria and avoids unrelated exploration |
 | `final-readiness-preservation` | final-gate / supervise Phase 2 | final-readiness-supervision | whether the supervisor preserves the unresolved finding and does not reopen a previously excluded documentation request |
 | `final-readiness-precision` | final-gate / supervise | final-readiness-precision | three cases: APPROVE when every code requirement is fulfilled despite an absent mock E2E record, REJECT for an unmet code requirement, and BLOCKED for an external decision that task-scope code changes cannot provide |
+| `finding-premise-scope` | peer-review / coding-review (RV1 initial, RV2・RN1 follow-up), security-review (RN2 initial); development-core / replan (PL1, PN1) | finding-premise-scope (6 independent cases) | 計画の設計判断や前回の裁定が広げた形式外の入力を指摘・作業にせず、契約が定める入力と外部入力による保存先の外への書き込みは指摘・作業にする |
+| `fix-verification-applicable-inputs` | review-remediation / fix-verifier (F1–F3, N1–N3, N5), verification-replan (R1–R2, N4); peer-review / review-adjudication (A1–A4) | fix-verification-applicable-inputs (14 independent cases) | 入力元と契約に裏付けられた反例だけで差し戻し・再計画し、長いパスの衝突、明示された下限、端末制御列、CSV 契約の小数金額の衝突を取りこぼさない |
 | `fix-verification-scope` | review-remediation / fix-verifier | fix-verification-scope | whether completion verification accepts satisfied planned conditions while recording, but not selecting for repair, a broad-gate failure with no causal connection to the current change |
 | `fix-verification-current-diff-regression` | review-remediation / fix-verifier | fix-verification-current-diff-regression | whether completion verification marks a broad-gate failure incomplete when the current diff caused the regression |
 | `fix-verification-preserved-condition` | review-remediation / fix-verifier | fix-verification-preserved-condition | whether completion verification marks a repair incomplete when it breaks an existing condition that the plan requires preserving |

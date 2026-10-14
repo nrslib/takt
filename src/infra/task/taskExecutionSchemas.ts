@@ -52,6 +52,7 @@ export const TaskExecutionConfigObjectSchema = z.object({
   merge_caccia_required: z.boolean().optional(),
   merge_pushed_head_sha: z.string().regex(/^[0-9a-f]{40}$/u).optional(),
   merge_push_base_head_sha: z.string().regex(/^[0-9a-f]{40}$/u).optional(),
+  merge_skip_caccia_if_no_activity: z.boolean().optional(),
   merge_caccia_approved_head_sha: z.string().regex(/^[0-9a-f]{40}$/u).optional(),
   merge_caccia_skipped_head_sha: z.string().regex(/^[0-9a-f]{40}$/u).optional(),
   resume_point: WorkflowResumePointCodecSchema.optional(),
@@ -121,6 +122,16 @@ export const TaskExecutionConfigObjectSchema = z.object({
     ctx.addIssue({ code: z.ZodIssueCode.custom,
       message: 'PR merge push base requires a recorded pushed head',
       path: ['merge_push_base_head_sha'] });
+  }
+  if (data.merge_skip_caccia_if_no_activity === true && data.merge_pushed_head_sha === undefined) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom,
+      message: 'Caccia activity skip requires a recorded pushed head',
+      path: ['merge_skip_caccia_if_no_activity'] });
+  }
+  if (data.merge_skip_caccia_if_no_activity === true && data.merge_push_base_head_sha === undefined) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom,
+      message: 'Caccia activity skip requires a recorded push base head',
+      path: ['merge_skip_caccia_if_no_activity'] });
   }
   if (data.source === 'pr_review' && data.branch === undefined) {
     ctx.addIssue({

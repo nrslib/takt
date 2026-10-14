@@ -28,6 +28,8 @@
 | 現在のコードまたは証拠が指摘内容と矛盾する | 根拠なし、または確認後は問題なし |
 | 必要な外部環境がなく、実装上の欠陥を確認も反証もできない | 環境上確認不能 |
 
+{{include:policies/applicable-inputs}}
+
 {{include:policies/finding-validity}}
 
 ## 原則

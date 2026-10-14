@@ -1,12 +1,14 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DeepSeekHarness, HarnessClient, RequestTimeoutError, TransportClosedError, type DeepSeekHarnessOptions } from '@deepseek-ai/dsh-sdk-client';
+import { parse as parseYaml } from 'yaml';
 
 const sdkConstructorOptions = vi.hoisted(() => [] as Array<DeepSeekHarnessOptions | undefined>);
 const managedModuleLoads = vi.hoisted(() => vi.fn());
@@ -46,7 +48,7 @@ import {
   closeDeepSeekHarnessProcesses,
 } from '../infra/deepseek-harness/index.js';
 import { DeepSeekHarnessProvider } from '../infra/providers/deepseek-harness.js';
-import { installDeepSeekHarness } from '../infra/deepseek-harness/managed-package.js';
+import { DeepSeekHarnessInstallRequiredError, installDeepSeekHarness } from '../infra/deepseek-harness/managed-package.js';
 import {
   assertDeepSeekRuntimeCreationAllowed,
   getDeepSeekRuntimePaths,
@@ -200,6 +202,20 @@ async function waitForExit(child: ReturnType<typeof spawn>): Promise<void> {
   await new Promise<void>((resolve) => child.once('exit', () => resolve()));
 }
 
+/** Find a nonexistent process-group ID for deterministic stale-owner cleanup fixtures. */
+function unusedProcessGroupPid(): number {
+  let pid = process.pid + 100_000;
+  while (true) {
+    try {
+      process.kill(-pid, 0);
+      pid += 100_000;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+      return pid;
+    }
+  }
+}
+
 /** Run an isolated parent with supplied environment, capture stdout, and bound its process-group lifetime. */
 async function runSeparateParentProcess(
   script: string,
@@ -253,6 +269,16 @@ async function waitForFile(path: string, timeoutMs: number): Promise<void> {
   throw new Error('Timed out waiting for the separate parent process marker');
 }
 
+/** Wait for asynchronously owned runtime resources to be removed after exit confirmation. */
+async function waitForPathRemoval(path: string, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!existsSync(path)) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for resource removal: ${path}`);
+}
+
 describe('DeepSeek Harness TypeScript SDK client', () => {
   beforeEach(async () => {
     sdkConstructorOptions.length = 0;
@@ -279,6 +305,23 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
     savedEnvironment.clear();
   });
 
+  it.skipIf(!SUPPORTED_RUNTIME)('reports missing or damaged SDK before resolving any configured Git plugin', async () => {
+    managedModuleLoads.mockImplementationOnce(() => { throw new DeepSeekHarnessInstallRequiredError(); });
+    const cloneDirectoriesBefore = (await readdir(tmpdir()))
+      .filter((entry) => entry.startsWith('takt-deepseek-plugin-'));
+    const response = await callDeepSeekHarness('worker', 'Must not fetch a plugin.', {
+      cwd: temporaryRoot,
+      providerOptions: { plugins: [{ id: 'unreachable', source: 'unsupported-plugin-source' }] },
+    });
+    expect(response.status).toBe('error');
+    expect(response.content).toContain('takt install deepseek-harness');
+    expect(response.content).not.toContain('plugin source');
+    expect(managedModuleLoads).toHaveBeenCalledOnce();
+    expect(sdkConstructorOptions).toHaveLength(0);
+    expect((await readdir(tmpdir())).filter((entry) => entry.startsWith('takt-deepseek-plugin-')))
+      .toEqual(cloneDirectoriesBefore);
+  });
+
   it.skipIf(!SUPPORTED_RUNTIME)('keeps real SDK initialization, turn and shutdown deadlines independent', async () => {
     const api = await startLocalApi();
     const response = await callDeepSeekHarness('worker', 'Return ok.', {
@@ -288,7 +331,11 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
     expect(response.status).toBe('done');
     expect(sdkConstructorOptions).toHaveLength(1);
     expect(sdkConstructorOptions[0]).toMatchObject({
-      initializeTimeoutMs: 30_000, requestTimeoutMs: 5_000, shutdownTimeoutMs: 2_000,
+      initializeTimeoutMs: 30_000,
+      requestTimeoutMs: 5_000,
+      shutdownTimeoutMs: 2_000,
+      disposeEofGraceMs: 15_000,
+      disposeGraceMs: 15_000,
     });
   });
 
@@ -373,6 +420,111 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
     );
     expect(managedModuleLoads).toHaveBeenCalledTimes(1);
     expect(api.requests).toHaveLength(3);
+  }, 90_000);
+
+  it.skipIf(!SUPPORTED_RUNTIME)('loads Git plugins in the official runtime and separates sessions by plugin source', async () => {
+    const api = await startLocalApi();
+    const workspace = join(temporaryRoot, 'git-plugin-workspace');
+    await mkdir(workspace, { recursive: true });
+    const pluginDirectoriesBefore = (await readdir(tmpdir()))
+      .filter((entry) => entry.startsWith('takt-deepseek-plugin-'));
+
+    const createGitPlugin = async (directoryName: string, text: string): Promise<string> => {
+      const repository = join(temporaryRoot, directoryName);
+      await mkdir(repository, { recursive: true });
+      execFileSync('git', ['init', '-b', 'main'], { cwd: repository });
+      execFileSync('git', ['config', 'user.email', 'test@example.invalid'], { cwd: repository });
+      execFileSync('git', ['config', 'user.name', 'Test'], { cwd: repository });
+      await writeFile(join(repository, 'package.json'), JSON.stringify({
+        name: directoryName,
+        type: 'module',
+        main: 'index.js',
+        dependencies: { 'git-plugin-test-helper': 'file:packages/plugin-helper' },
+      }));
+      await mkdir(join(repository, 'packages', 'plugin-helper'), { recursive: true });
+      await writeFile(join(repository, 'packages', 'plugin-helper', 'package.json'), JSON.stringify({
+        name: 'git-plugin-test-helper',
+        version: '1.0.0',
+        type: 'module',
+        main: 'index.js',
+      }));
+      await writeFile(join(repository, 'packages', 'plugin-helper', 'index.js'), [
+        'export function decorate(text) {',
+        "  return `dependency:${text}`;",
+        '}',
+      ].join('\n'));
+      await writeFile(join(repository, 'index.js'), [
+        "import { decorate } from 'git-plugin-test-helper';",
+        "import { writeFileSync } from 'node:fs';",
+        'export default function apply(_ctx, config) {',
+        '  writeFileSync(config.marker, decorate(config.text));',
+        '}',
+      ].join('\n'));
+      execFileSync('git', ['add', '.'], { cwd: repository });
+      execFileSync('git', ['commit', '-m', 'plugin'], { cwd: repository });
+      const ref = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim();
+      return `git:${pathToFileURL(repository).href}#${ref}`;
+    };
+
+    const firstText = 'git-plugin-first-marker';
+    const secondText = 'git-plugin-second-marker';
+    const firstMarker = join(temporaryRoot, 'first-plugin-loaded');
+    const secondMarker = join(temporaryRoot, 'second-plugin-loaded');
+    const firstSource = await createGitPlugin('first-git-plugin', firstText);
+    const secondSource = await createGitPlugin('second-git-plugin', secondText);
+    const runWithPlugin = (
+      source: string,
+      sessionId?: string,
+      overrides: { omitRef?: boolean; ref?: string; config?: Record<string, unknown> } = {},
+    ) => {
+      const sourceRef = source.split('#')[1]!;
+      const ref = overrides.ref === undefined ? sourceRef : overrides.ref;
+      const config = {
+        marker: source === firstSource ? firstMarker : secondMarker,
+        text: source === firstSource ? firstText : secondText,
+        ...overrides.config,
+      };
+      return callDeepSeekHarness('worker', 'Return ok.', {
+        cwd: workspace,
+        sessionId,
+        providerOptions: {
+          baseUrl: api.endpoint,
+          plugins: [{
+            id: 'git-test-plugin',
+            source: source.split('#')[0]!,
+            ...(overrides.omitRef ? {} : { ref }),
+            config,
+          },
+          ],
+        },
+      });
+    };
+
+    const first = await runWithPlugin(firstSource);
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const second = await runWithPlugin(secondSource, undefined, { omitRef: true });
+    expect(warning.mock.calls.flat().join('\n')).toContain('no ref');
+    warning.mockRestore();
+    expect(first).toMatchObject({ status: 'done', sessionId: expect.any(String) });
+    expect(second).toMatchObject({ status: 'done', sessionId: expect.any(String) });
+    expect(second.sessionId).not.toBe(first.sessionId);
+    expect(await readFile(firstMarker, 'utf8')).toBe(`dependency:${firstText}`);
+    expect(await readFile(secondMarker, 'utf8')).toBe(`dependency:${secondText}`);
+
+    const continued = await runWithPlugin(firstSource, first.sessionId);
+    expect(continued).toMatchObject({ status: 'done', sessionId: first.sessionId });
+
+    const changed = await runWithPlugin(secondSource, first.sessionId);
+    expect(changed).toMatchObject({ status: 'error', failureCategory: 'session_continuation_unsupported' });
+    const changedRef = await runWithPlugin(firstSource, first.sessionId, { ref: 'main' });
+    expect(changedRef).toMatchObject({ status: 'error', failureCategory: 'session_continuation_unsupported' });
+    const changedConfig = await runWithPlugin(firstSource, first.sessionId, { config: { text: `${firstText}-changed` } });
+    expect(changedConfig).toMatchObject({ status: 'error', failureCategory: 'session_continuation_unsupported' });
+    expect(api.requests).toHaveLength(3);
+
+    await closeDeepSeekHarnessProcesses();
+    expect((await readdir(tmpdir())).filter((entry) => entry.startsWith('takt-deepseek-plugin-')))
+      .toEqual(pluginDirectoriesBefore);
   }, 90_000);
 
   it.skipIf(!SUPPORTED_RUNTIME)('refuses the same session ID after a failed turn tears down its runtime', async () => {
@@ -919,6 +1071,15 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
     });
     expect(JSON.stringify(response)).not.toContain('SDK-RAW-TEST-DIAGNOSTIC');
     expect(await readdir(runtimePaths.owners)).toHaveLength(0);
+    // This test deliberately corrupts the durable barrier; clear its isolated no-runtime fixture for teardown.
+    await rm(join(runtimePaths.state, 'cleanup-blocked'), { force: true });
+    await rm(join(runtimePaths.state, '.runtime-state-lock'), { recursive: true, force: true });
+    const cleanupReceipt = sdkConstructorOptions.at(-1)?.env?.TAKT_DSH_CLEANUP_CONFIRMATION;
+    if (typeof cleanupReceipt === 'string') {
+      await mkdir(path.dirname(cleanupReceipt), { recursive: true });
+      await writeFile(cleanupReceipt, 'confirmed\n');
+    }
+    await closeDeepSeekHarnessProcesses();
   });
 
   it.skipIf(!SUPPORTED_RUNTIME)('uses supervisor exit proof when SDK close rejects after actual group cleanup', async () => {
@@ -928,6 +1089,8 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
     const originalClose = DeepSeekHarness.prototype.close;
     const closeSpy = vi.spyOn(DeepSeekHarness.prototype, 'close').mockImplementation(async function (this: DeepSeekHarness) {
       await originalClose.call(this);
+      const receiptPath = sdkConstructorOptions.at(-1)?.env?.TAKT_DSH_CLEANUP_CONFIRMATION;
+      if (typeof receiptPath === 'string') await waitForFile(receiptPath, 10_000);
       throw new Error('SDK close rejected after confirmed process exit');
     });
     await expect(closeDeepSeekHarnessProcesses()).resolves.toBeUndefined();
@@ -937,6 +1100,364 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
     closeSpy.mockRestore();
     expect((await callDeepSeekHarness('worker', 'new live runtime', options)).status).toBe('done');
   }, 60_000);
+
+  it.skipIf(process.platform === 'win32')('retains the Git clone and credential patch until a delayed exit receipt arrives', async () => {
+    const pluginRepository = join(temporaryRoot, 'late-cleanup-plugin');
+    await mkdir(pluginRepository);
+    execFileSync('git', ['init', '-b', 'main'], { cwd: pluginRepository, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 'test@example.invalid'], { cwd: pluginRepository });
+    execFileSync('git', ['config', 'user.name', 'Test'], { cwd: pluginRepository });
+    await writeFile(join(pluginRepository, 'index.mjs'), 'export default class Plugin {}\n');
+    execFileSync('git', ['add', 'index.mjs'], { cwd: pluginRepository });
+    execFileSync('git', ['commit', '-m', 'plugin fixture'], { cwd: pluginRepository, stdio: 'ignore' });
+
+    vi.spyOn(DeepSeekHarness.prototype, 'start').mockResolvedValue(undefined);
+    vi.spyOn(DeepSeekHarness.prototype, 'run').mockImplementation(async (_input, options) => {
+      const sessionId = 'deferred-cleanup-session';
+      options?.onNotification?.({
+        method: 'session.event',
+        params: {
+          sessionId,
+          event: {
+            type: 'assistant/message',
+            data: { message: { content: [{ type: 'text', text: 'completed' }] } },
+          },
+        },
+      });
+      options?.onNotification?.({
+        method: 'session.event',
+        params: { sessionId, event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } },
+      });
+      return {
+        sessionId,
+        finalResponse: 'completed',
+        events: [],
+        notifications: [],
+      };
+    });
+    let harness: DeepSeekHarness | undefined;
+    vi.spyOn(DeepSeekHarness.prototype, 'close').mockImplementation(async function (this: DeepSeekHarness) {
+      harness = this;
+      throw new Error('simulated unconfirmed shutdown');
+    });
+
+    const response = await callDeepSeekHarness('worker', 'retain resources until confirmed exit', {
+      cwd: temporaryRoot,
+      providerOptions: {
+        plugins: [{
+          id: 'late-cleanup-plugin',
+          source: pathToFileURL(pluginRepository).href,
+          ref: 'main',
+          config: { enabled: true },
+        }],
+      },
+    });
+    const patchPath = sdkConstructorOptions[0]?.patches?.[0];
+    const receiptPath = sdkConstructorOptions[0]?.env?.TAKT_DSH_CLEANUP_CONFIRMATION;
+    expect(typeof patchPath).toBe('string');
+    expect(typeof receiptPath).toBe('string');
+    if (typeof patchPath !== 'string' || typeof receiptPath !== 'string') {
+      throw new Error('DeepSeek Harness did not receive managed resource paths');
+    }
+
+    const patch = parseYaml(await readFile(patchPath, 'utf8')) as Array<{
+      insert?: Array<{ name?: string }>;
+    }>;
+    const pluginEntrypoint = patch.find((entry) => entry.insert !== undefined)?.insert?.[0]?.name;
+    expect(typeof pluginEntrypoint).toBe('string');
+    if (typeof pluginEntrypoint !== 'string') throw new Error('Credential patch did not include the Git plugin');
+    const cloneDirectory = dirname(fileURLToPath(pluginEntrypoint));
+    const runtimePaths = getDeepSeekRuntimePaths();
+    const cleanupPaths = JSON.parse(String(sdkConstructorOptions[0]?.env?.TAKT_DSH_CLEANUP_PATHS)) as string[];
+    const ownerPath = join(runtimePaths.owners, 'late-cleanup-runtime.json');
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      detached: process.platform !== 'win32',
+      stdio: 'ignore',
+    });
+    await new Promise<void>((resolve, reject) => {
+      child.once('error', reject);
+      child.once('spawn', resolve);
+    });
+    if (child.pid === undefined) throw new Error('Delayed cleanup runtime did not start');
+    await mkdir(runtimePaths.owners, { recursive: true });
+    await writeFile(ownerPath, JSON.stringify({
+      parentPid: process.pid,
+      supervisorPid: process.pid,
+      runtimePid: child.pid,
+      cleanupPaths,
+      cleanupConfirmationPath: receiptPath,
+      cleanupRoot: dirname(cleanupPaths[0]!),
+    }));
+
+    try {
+      expect(response.status).toBe('done');
+      await expect(closeDeepSeekHarnessProcesses()).rejects.toThrow('cleanup is unconfirmed');
+      expect(harness).toBeDefined();
+      expect(existsSync(patchPath)).toBe(true);
+      expect(existsSync(cloneDirectory)).toBe(true);
+      expect(existsSync(join(runtimePaths.state, 'cleanup-blocked'))).toBe(true);
+
+      process.kill(process.platform === 'win32' ? child.pid : -child.pid, 'SIGTERM');
+      await waitForExit(child);
+      await mkdir(dirname(receiptPath), { recursive: true });
+      await writeFile(receiptPath, 'confirmed\n', { mode: 0o600 });
+      await waitForPathRemoval(cleanupPaths[0]!);
+      await waitForPathRemoval(cleanupPaths[1]!);
+      await waitForPathRemoval(ownerPath);
+      expect(await readdir(runtimePaths.owners)).toHaveLength(0);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null && child.pid !== undefined) {
+        try { process.kill(process.platform === 'win32' ? child.pid : -child.pid, 'SIGKILL'); } catch { /* Already exited. */ }
+        await waitForExit(child);
+      }
+      if (existsSync(cleanupPaths[0]!) || existsSync(cleanupPaths[1]!) || existsSync(ownerPath)) {
+        await mkdir(dirname(receiptPath), { recursive: true });
+        await writeFile(receiptPath, 'confirmed\n', { mode: 0o600 });
+        await waitForPathRemoval(cleanupPaths[0]!, 10_000);
+        await waitForPathRemoval(cleanupPaths[1]!, 10_000);
+      }
+      await rm(receiptPath, { force: true });
+      await rm(ownerPath, { force: true });
+    }
+  });
+
+  it.skipIf(!SUPPORTED_RUNTIME)('cleans resources in the supervisor after its parent exits', async () => {
+    const runtimePaths = getDeepSeekRuntimePaths();
+    const patchDirectory = await mkdtemp(join(tmpdir(), 'takt-deepseek-credentials-parent-exit-'));
+    const pluginDirectory = await mkdtemp(join(tmpdir(), 'takt-deepseek-plugin-parent-exit-'));
+    const cleanupPaths = [patchDirectory, pluginDirectory];
+    const receiptPath = join(
+      runtimePaths.state,
+      'cleanup-receipts',
+      `${path.basename(patchDirectory)}.confirmed`,
+    );
+    const runtimeStarted = join(temporaryRoot, 'parent-exit-runtime-started');
+    const runtimeSignal = join(temporaryRoot, 'parent-exit-runtime-signal');
+    const runtimePidMarker = join(temporaryRoot, 'parent-exit-runtime-pid');
+    const releaseRuntime = join(temporaryRoot, 'parent-exit-runtime-release');
+    const preloadPath = join(temporaryRoot, 'fake-runtime-preload.mjs');
+    const fakeRuntime = [
+      "import { existsSync, readFileSync, writeFileSync } from 'node:fs';",
+      "import { setTimeout as delay } from 'node:timers/promises';",
+      'const cleanupPaths = JSON.parse(process.env.TAKT_DSH_CLEANUP_PATHS);',
+      `writeFileSync(${JSON.stringify(runtimeStarted)}, 'ready');`,
+      `writeFileSync(${JSON.stringify(runtimePidMarker)}, String(process.pid));`,
+      'process.on("SIGTERM", async () => {',
+      `  writeFileSync(${JSON.stringify(runtimeSignal)}, cleanupPaths.every((path) => existsSync(path)) ? 'present' : 'missing');`,
+      '  const deadline = Date.now() + 20000;',
+      '  while (Date.now() < deadline) {',
+      `    try { readFileSync(${JSON.stringify(releaseRuntime)}); break; } catch (error) { if (error.code !== 'ENOENT') throw error; }`,
+      '    await delay(10);',
+      '  }',
+      '  process.exit(0);',
+      '});',
+      'setInterval(() => {}, 1000);',
+    ].join('\n');
+    await writeFile(preloadPath, [
+      "import { syncBuiltinESMExports } from 'node:module';",
+      "import childProcess from 'node:child_process';",
+      'const originalSpawn = childProcess.spawn;',
+      'childProcess.spawn = (command, args, options) => {',
+      "  if (command === process.execPath && typeof args?.[0] === 'string' && args[0].includes('/@deepseek-ai/dsh/')) {",
+      `    return originalSpawn(process.execPath, ['-e', ${JSON.stringify(fakeRuntime)}], options);`,
+      '  }',
+      '  return originalSpawn(command, args, options);',
+      '};',
+      'syncBuiltinESMExports();',
+    ].join('\n'));
+
+    const environment: NodeJS.ProcessEnv = {
+      PATH: process.env.PATH ?? '/usr/bin:/bin',
+      HOME: join(temporaryRoot, 'parent-exit-home'),
+      TAKT_CONFIG_DIR: process.env.TAKT_CONFIG_DIR,
+      DSH_HOME: process.env.DSH_HOME,
+      TAKT_DSH_OWNER_DIRECTORY: runtimePaths.owners,
+      TAKT_DSH_STATE_DIRECTORY: runtimePaths.state,
+      TAKT_DSH_MANAGED_PACKAGE_DIRECTORY: fileURLToPath(new URL('../..', import.meta.url)),
+      TAKT_DSH_CLEANUP_PATHS: JSON.stringify(cleanupPaths),
+      TAKT_DSH_CLEANUP_CONFIRMATION: receiptPath,
+      TAKT_DSH_CLEANUP_ROOT: dirname(patchDirectory),
+      TEST_RUNTIME_SUPERVISOR: fileURLToPath(new URL('../infra/deepseek-harness/runtime-supervisor.mjs', import.meta.url)),
+      TEST_SUPERVISOR_NODE_OPTIONS: `--import=${pathToFileURL(preloadPath).href}`,
+      TEST_RUNTIME_STARTED: runtimeStarted,
+      NO_COLOR: '1',
+    };
+    const parentScript = [
+      "import { spawn } from 'node:child_process';",
+      "import { existsSync } from 'node:fs';",
+      "import { setTimeout as delay } from 'node:timers/promises';",
+      'const childEnvironment = {',
+      '  ...process.env,',
+      '  NODE_OPTIONS: process.env.TEST_SUPERVISOR_NODE_OPTIONS,',
+      '  TAKT_DSH_PARENT_PID: String(process.pid),',
+      '};',
+      'delete childEnvironment.TEST_SUPERVISOR_NODE_OPTIONS;',
+      'const supervisor = spawn(process.execPath, [process.env.TEST_RUNTIME_SUPERVISOR], {',
+      '  env: childEnvironment,',
+      "  stdio: ['pipe', 'ignore', 'ignore'],",
+      '});',
+      'const deadline = Date.now() + 15000;',
+      'while (Date.now() < deadline && !existsSync(process.env.TEST_RUNTIME_STARTED)) await delay(10);',
+      'if (!existsSync(process.env.TEST_RUNTIME_STARTED)) process.exit(71);',
+      'await new Promise((resolve) => process.stdout.write("supervisor-started", resolve));',
+      'process.exit(0);',
+    ].join('\n');
+
+    let reconciled = false;
+    try {
+      const parent = await runSeparateParentProcess(parentScript, environment);
+      expect(parent.timedOut).toBe(false);
+      expect(parent.exitCode).toBe(0);
+      expect(parent.stdout).toBe('supervisor-started');
+      await waitForFile(runtimeSignal, 20_000);
+      expect(await readFile(runtimeSignal, 'utf8')).toBe('present');
+      expect(existsSync(patchDirectory)).toBe(true);
+      expect(existsSync(pluginDirectory)).toBe(true);
+      const ownerEntries = await readdir(runtimePaths.owners);
+      expect(ownerEntries).toHaveLength(1);
+      const ownerPath = join(runtimePaths.owners, ownerEntries[0]!);
+      const owner = JSON.parse(await readFile(ownerPath, 'utf8')) as {
+        cleanupPaths?: string[];
+        cleanupConfirmationPath?: string;
+        cleanupRoot?: string;
+        runtimePid?: number;
+      };
+      expect(owner).toMatchObject({
+        cleanupPaths,
+        cleanupConfirmationPath: receiptPath,
+        cleanupRoot: dirname(patchDirectory),
+        runtimePid: Number(await readFile(runtimePidMarker, 'utf8')),
+      });
+      await expect(readFile(receiptPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+
+      await writeFile(releaseRuntime, 'exit');
+      await waitForFile(receiptPath, 20_000);
+      expect(existsSync(patchDirectory)).toBe(false);
+      expect(existsSync(pluginDirectory)).toBe(false);
+      expect(await readdir(runtimePaths.owners)).toHaveLength(1);
+
+      await assertDeepSeekRuntimeCreationAllowed();
+      expect(await readdir(runtimePaths.owners)).toHaveLength(0);
+      await expect(readFile(receiptPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      reconciled = true;
+    } finally {
+      await writeFile(releaseRuntime, 'exit').catch(() => undefined);
+      const runtimePid = Number(await readFile(runtimePidMarker, 'utf8').catch(() => ''));
+      if (Number.isSafeInteger(runtimePid) && runtimePid > 0) {
+        try { process.kill(-runtimePid, 'SIGKILL'); } catch { /* The group may already have exited. */ }
+        const deadline = Date.now() + 5_000;
+        let groupExited = false;
+        while (Date.now() < deadline) {
+          try {
+            process.kill(-runtimePid, 0);
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
+              groupExited = true;
+              break;
+            }
+            throw error;
+          }
+        }
+        if (!groupExited) throw new Error('Fake runtime process group did not exit during test cleanup');
+      }
+      if (!reconciled && Number.isSafeInteger(runtimePid) && runtimePid > 0) {
+        if (!existsSync(receiptPath)) await waitForFile(receiptPath, 20_000).catch(() => undefined);
+        await assertDeepSeekRuntimeCreationAllowed().catch(() => undefined);
+      }
+      await rm(patchDirectory, { recursive: true, force: true });
+      await rm(pluginDirectory, { recursive: true, force: true });
+    }
+  }, 90_000);
+
+  it('reconciles cleanup paths from an exited owner record', async () => {
+    const runtimePaths = getDeepSeekRuntimePaths();
+    const patchDirectory = await mkdtemp(join(tmpdir(), 'takt-deepseek-credentials-dead-owner-'));
+    const pluginDirectory = await mkdtemp(join(tmpdir(), 'takt-deepseek-plugin-dead-owner-'));
+    const cleanupPaths = [patchDirectory, pluginDirectory];
+    const receiptPath = join(
+      runtimePaths.state,
+      'cleanup-receipts',
+      `${path.basename(patchDirectory)}.confirmed`,
+    );
+    await mkdir(runtimePaths.owners, { recursive: true });
+    let runtimePid = process.pid + 100_000;
+    while (true) {
+      try {
+        process.kill(-runtimePid, 0);
+        runtimePid += 100_000;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+        break;
+      }
+    }
+    const ownerPath = join(runtimePaths.owners, 'dead-runtime-with-cleanup.json');
+    await writeFile(ownerPath, JSON.stringify({
+      parentPid: runtimePid,
+      supervisorPid: runtimePid,
+      runtimePid,
+      cleanupPaths,
+      cleanupConfirmationPath: receiptPath,
+      cleanupRoot: dirname(cleanupPaths[0]!),
+    }));
+
+    try {
+      await assertDeepSeekRuntimeCreationAllowed();
+      expect(existsSync(patchDirectory)).toBe(false);
+      expect(existsSync(pluginDirectory)).toBe(false);
+      expect(await readdir(runtimePaths.owners)).toHaveLength(0);
+      await expect(readFile(receiptPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(patchDirectory, { recursive: true, force: true });
+      await rm(pluginDirectory, { recursive: true, force: true });
+      await rm(ownerPath, { force: true });
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')('reconciles an exited legacy owner without removing unowned resources', async () => {
+    const runtimePaths = getDeepSeekRuntimePaths();
+    const unownedResource = await mkdtemp(join(temporaryRoot, 'unowned-legacy-resource-'));
+    const runtimePid = unusedProcessGroupPid();
+    await mkdir(runtimePaths.owners, { recursive: true });
+    const ownerPath = join(runtimePaths.owners, 'legacy-runtime.json');
+    await writeFile(ownerPath, JSON.stringify({
+      parentPid: runtimePid,
+      supervisorPid: runtimePid,
+      runtimePid,
+    }));
+
+    await assertDeepSeekRuntimeCreationAllowed();
+
+    expect(existsSync(unownedResource)).toBe(true);
+    expect(await readdir(runtimePaths.owners)).toHaveLength(0);
+  });
+
+  it.skipIf(process.platform === 'win32')('retains the owner and cleanup barrier when resource cleanup fails', async () => {
+    const runtimePaths = getDeepSeekRuntimePaths();
+    await mkdir(runtimePaths.state, { recursive: true });
+    await mkdir(runtimePaths.owners, { recursive: true });
+    const cleanupRoot = join(runtimePaths.state, 'cleanup-root-file');
+    await writeFile(cleanupRoot, 'not a directory');
+    const cleanupPath = join(cleanupRoot, 'takt-deepseek-cleanup-failure');
+    const receiptPath = join(runtimePaths.state, 'cleanup-receipts', 'takt-deepseek-cleanup-failure.confirmed');
+    const runtimePid = unusedProcessGroupPid();
+    const ownerPath = join(runtimePaths.owners, 'cleanup-failure-runtime.json');
+    await writeFile(ownerPath, JSON.stringify({
+      parentPid: runtimePid,
+      supervisorPid: runtimePid,
+      runtimePid,
+      cleanupPaths: [cleanupPath],
+      cleanupConfirmationPath: receiptPath,
+      cleanupRoot,
+    }));
+
+    await expect(assertDeepSeekRuntimeCreationAllowed()).rejects.toThrow('cleanup is unconfirmed');
+
+    expect(JSON.parse(await readFile(ownerPath, 'utf8'))).toMatchObject({ cleanupFailed: true });
+    expect(JSON.parse(await readFile(join(runtimePaths.state, 'cleanup-blocked'), 'utf8')))
+      .toMatchObject({ runtimePids: expect.arrayContaining([runtimePid]), unknownRuntime: false });
+    expect(existsSync(cleanupRoot)).toBe(true);
+  });
 
   it.skipIf(process.platform === 'win32')('keeps a global cleanup barrier until the failed process group is confirmed stopped', async () => {
     const runtimePaths = getDeepSeekRuntimePaths();

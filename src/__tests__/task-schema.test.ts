@@ -105,6 +105,13 @@ describe('TaskExecutionConfigSchema', () => {
     expect(() => TaskExecutionConfigSchema.parse({})).not.toThrow();
   });
 
+  it('should require the push base when skipping Caccia for missing activity', () => {
+    expect(() => TaskExecutionConfigSchema.parse({
+      merge_pushed_head_sha: 'a'.repeat(40),
+      merge_skip_caccia_if_no_activity: true,
+    })).toThrow('Caccia activity skip requires a recorded push base head');
+  });
+
   it('should accept worktree as string', () => {
     expect(() => TaskExecutionConfigSchema.parse({ worktree: '/custom/path' })).not.toThrow();
   });

@@ -98,7 +98,9 @@ export class TaskLifecycleService {
     });
   }
 
-  recordPrMergePushedHead(taskName: string, headSha: string, previousRemoteHeadSha: string): void {
+  recordPrMergePushedHead(
+    taskName: string, headSha: string, previousRemoteHeadSha: string, skipIfNoCodeRabbitActivity = false,
+  ): void {
     this.store.update((current) => {
       const index = current.tasks.findIndex((task) => task.name === taskName);
       const task = current.tasks[index];
@@ -108,6 +110,7 @@ export class TaskLifecycleService {
       const tasks = [...current.tasks];
       tasks[index] = { ...task, merge_pushed_head_sha: headSha,
         merge_push_base_head_sha: previousRemoteHeadSha,
+        merge_skip_caccia_if_no_activity: skipIfNoCodeRabbitActivity ? true : undefined,
         merge_caccia_approved_head_sha: undefined, merge_caccia_skipped_head_sha: undefined };
       return { tasks };
     });

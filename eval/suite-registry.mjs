@@ -12,6 +12,16 @@ const CLASSIFICATIONS = [
   },
   {
     tier: 'active',
+    reason: '完了検証・再計画・レビュー裁定で反例に使う入力の根拠を確かめ、実在する欠陥を維持する境界を測る',
+    suites: ['fix-verification-applicable-inputs'],
+  },
+  {
+    tier: 'active',
+    reason: 'レビューと再計画が、根拠のない入力や計画の設計判断を指摘・作業にせず、根拠のある入力と外部入力による攻撃は指摘し続ける境界を測る',
+    suites: ['finding-premise-scope'],
+  },
+  {
+    tier: 'active',
     reason: 'Phase 3 が入力の結論をルールへ対応づけ、入力外の再評価と入力内の矛盾を区別するか測る',
     suites: ['phase3-follow-input'],
   },
@@ -196,6 +206,14 @@ const EXECUTION_OVERRIDES = {
   'manager-work-split': {
     defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
     reason: 'Sol Low、Opus 5、Luna Max で日英の操作選択と引数を比較する明示選択の評価',
+  },
+  'finding-premise-scope': {
+    defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
+    reason: 'Sol Low、Opus 5、Luna Max の3モデルでレビューと再計画の指摘・作業の前提の範囲を比較する明示選択の評価',
+  },
+  'fix-verification-applicable-inputs': {
+    defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
+    reason: 'Sol Low、Opus 5、Luna Max の3モデルで完了検証・再計画・レビュー裁定の入力範囲を比較する明示選択の評価',
   },
   'review-external-confirmation': {
     defaultEligible: false, credentials: ['codex', 'claude'], cost: 'high',
@@ -607,6 +625,10 @@ const EXECUTION_OVERRIDES = {
 
 const PREPARE_TARGET_OVERRIDES = {
   'manager-work-split': [],
+  'finding-premise-scope': ['rv1', 'rv2', 'rn1', 'rn2', 'pl1', 'pn1']
+    .map((caseId) => `finding-premise-scope-${caseId}`),
+  'fix-verification-applicable-inputs': ['f1', 'f2', 'f3', 'r1', 'r2', 'n1', 'n2', 'n3', 'n4', 'n5', 'a1', 'a2', 'a3', 'a4']
+    .map((caseId) => `fix-verification-applicable-inputs-${caseId}`),
   'security-threat-model': ['a1', 'a2', 'a3', 'a4', 'a5']
     .map((caseId) => `security-threat-model-${caseId}`),
   'secondary-platform-adjudication': [

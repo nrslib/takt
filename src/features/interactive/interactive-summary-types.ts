@@ -34,7 +34,7 @@ export interface WorkflowContext {
   taskHistory?: TaskHistorySummaryItem[];
 }
 
-export type InteractiveModeAction = 'execute' | 'save_task' | 'create_issue' | 'cancel';
+export type InteractiveModeAction = 'execute' | 'save_task' | 'create_issue' | 'create_issue_only' | 'cancel';
 
 export type PostSummaryAction = InteractiveModeAction | 'continue';
 
@@ -60,6 +60,8 @@ export const BASE_SUMMARY_ACTIONS: readonly SummaryActionValue[] = [
 
 export interface InteractiveSummaryUIText {
   actionPrompt: string;
+  issueSaveTaskConfirm: string;
+  executeConfirm: string;
   actions: {
     execute: string;
     createIssue: string;

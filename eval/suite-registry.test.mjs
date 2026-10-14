@@ -135,9 +135,10 @@ test('every registered prepare target resolves to an actual prepare target', () 
   assert.deepEqual(unresolvedTargets, []);
 });
 
-test('threat model and platform cases bind each task to its own isolated fixture', () => {
+test('agent cases bind each task to its own isolated fixture', () => {
   for (const [suite, directory, cases] of [
     ['security-threat-model', 'security-review', ['a1', 'a2', 'a3', 'a4', 'a5']],
+    ['fix-verification-applicable-inputs', 'fix-verifier', ['f1', 'f2', 'f3', 'r1', 'r2', 'n1', 'n2', 'n3', 'n4', 'n5', 'a1', 'a2', 'a3', 'a4']],
     ['secondary-platform-adjudication', 'review-adjudication',
       [...Array.from({ length: 13 }, (_, index) => `b${index + 1}`), 'c1']],
   ]) {

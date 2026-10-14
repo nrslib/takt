@@ -23,6 +23,7 @@ import {
 import { runTuiConversation } from '../features/tui/conversationRunner.js';
 import { formatTranscriptEntryOutput } from '../features/tui/transcriptOutput.js';
 import { PromptInput } from '../features/tui/PromptInput.js';
+import { layoutPromptRows, resolvePromptContentWidth } from '../features/tui/promptLayout.js';
 import {
   createTuiConversation,
   type TuiConversation,
@@ -100,6 +101,12 @@ const NO_ORDER_COMMANDS: CommandAvailability = {
   enableRetryCommand: false,
   hasPreviousOrder: false,
 };
+
+/** Expected visible row; submissions still assert the complete original draft. */
+function visiblePromptLine(text: string, cursor = text.length, columns = 100): string {
+  const layout = layoutPromptRows(text, cursor, resolvePromptContentWidth(columns, 1));
+  return `❯ ${layout.rows[layout.cursorRow] ?? ''}`;
+}
 
 function createPendingProviderConversation() {
   const pending: Array<() => void> = [];
@@ -317,6 +324,7 @@ class ResizableOutput extends PassThrough {
   }
 }
 
+/** Waits for a bounded output predicate and detaches its listener on success or timeout. */
 function waitForOutput(
   output: ResizableOutput,
   predicate: (captured: string) => boolean,
@@ -348,7 +356,7 @@ function waitForOutput(
     output.on('data', check);
     timeout = setTimeout(() => {
       cleanup();
-      reject(new Error(`Timed out waiting for terminal output: ${description}`));
+      reject(new Error(`Timed out waiting for terminal output: ${description}\nLast frames:\n${stripAnsi(output.frames.slice(-3).join(''))}`));
     }, 5_000);
     check();
   });
@@ -593,7 +601,7 @@ describe('TranscriptEntryView', () => {
       );
       await waitForOutput(
         stdout,
-        (captured) => captured.includes(message) && captured.includes('not submitted'),
+        (captured) => captured.includes(message) && stripAnsi(captured).includes(visiblePromptLine('not submitted', 13, wideColumns)),
         'initial transcript and prompt',
       );
       await flushFrames();
@@ -607,7 +615,7 @@ describe('TranscriptEntryView', () => {
         stdout.resize(columns);
         await waitForOutput(
           stdout,
-          () => stripAnsi(stdout.frames.slice(start).join('')).includes('not subm'),
+          () => stripAnsi(stdout.frames.slice(start).join('')).includes(visiblePromptLine('not submitted', 13, columns)),
           'prompt redraw after resize settles',
         );
         await flushFrames();
@@ -623,7 +631,7 @@ describe('TranscriptEntryView', () => {
         expect(countOccurrences(buffer.replace(/\s/g, ''), message.replace(/\s/g, '')), buffer).toBe(1);
         expect(countOccurrences(buffer, 'answer')).toBe(1);
         expect(countOccurrences(buffer, 'notice')).toBe(1);
-        expect(countOccurrences(buffer.replace(/[\s│]/g, ''), 'notsubmitted'), buffer).toBe(1);
+        expect(countOccurrences(buffer, visiblePromptLine('not submitted', 13, columns)), buffer).toBe(1);
         // Committed history is owned by the terminal, never replayed by the app.
         expect(countOccurrences(stdout.frames.join(''), message)).toBe(1);
       }
@@ -631,7 +639,7 @@ describe('TranscriptEntryView', () => {
       const unchangedStart = stdout.frames.length;
       stdout.resize(wideColumns);
       input.write('!');
-      await waitForOutput(stdout, (output) => output.includes('not submitted!'), 'draft edit after resize');
+      await waitForOutput(stdout, (output) => stripAnsi(output).includes(visiblePromptLine('not submitted!', 14, wideColumns)), 'draft edit after resize');
       const unchangedOutput = stdout.frames.slice(unchangedStart).join('');
       expect(unchangedOutput).not.toContain('\x1b[3J');
       expect(unchangedOutput).not.toContain(archive[0]);
@@ -698,7 +706,12 @@ describe('TranscriptEntryView', () => {
     }
   });
 
-  it.each([false, true])('should not archive a multiline input frame when height or width shrinks (incremental=%s)', async (incrementalRendering) => {
+  it.each([
+    [false, true],
+    [true, true],
+    [false, false],
+    [true, false],
+  ] as const)('should not archive a multiline input frame when height or width shrinks (incremental=%s, anchored=%s)', async (incrementalRendering, anchorLiveFrame) => {
     const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
     const stdout = new ResizableOutput(80, 20);
     const input = createTestInput();
@@ -720,7 +733,7 @@ describe('TranscriptEntryView', () => {
         initialQueue={[]} residentSession={false} modelLabel={() => MODEL_LABEL} onExit={() => undefined}
       />, {
         stdout: stdout as unknown as NodeJS.WriteStream, stderr: new PassThrough() as unknown as NodeJS.WriteStream,
-        stdin: input, exitOnCtrlC: false, interactive: true, incrementalRendering, anchorLiveFrame: true, patchConsole: false,
+        stdin: input, exitOnCtrlC: false, interactive: true, incrementalRendering, anchorLiveFrame, patchConsole: false,
       });
       await app.waitUntilRenderFlush();
       await updateTerminal();
@@ -736,10 +749,11 @@ describe('TranscriptEntryView', () => {
           const offset = stdout.frames.length;
           terminal.resize(columns, rows);
           stdout.resize(columns, rows);
-          await waitForOutput(stdout, () => stdout.frames.slice(offset).join('').includes('╭'), 'resized input frame');
+          await waitForOutput(stdout, () => stdout.frames.slice(offset).join('').includes('╰'), 'resized input frame');
           await app.waitUntilRenderFlush();
           await updateTerminal();
           const buffer = getTerminalText(terminal);
+          expect(countOccurrences(buffer, '│ ❯'), buffer).toBe(1);
           expect(countOccurrences(buffer, '╭'), buffer).toBe(1);
           expect(countOccurrences(buffer, '╰'), buffer).toBe(1);
           expect(countOccurrences(buffer, 'Thinking'), buffer).toBe(busy ? 1 : 0);
@@ -751,20 +765,21 @@ describe('TranscriptEntryView', () => {
       expect(conversation.submitCalls[0]?.text).toBe(draft);
       // A large PTY write may be split while the terminal resizes. Painted
       // rows must remain at/below the cursor even during a partial frame.
-      const frame = [...stdout.frames].reverse().find((value) => value.includes('Thinking') && value.includes('DRAFT_END'));
+      const frame = [...stdout.frames].reverse().find((value) => value.includes('Thinking') && stripAnsi(value).includes('DRAFT_END'));
       if (frame === undefined) throw new Error('No complete busy frame was captured');
-      for (const cut of [frame.indexOf('\x1b[?7l'), frame.indexOf('╭') + 1]) {
+      for (const cut of [frame.indexOf('\x1b[?7l'), frame.indexOf('│ ❯') + 1]) {
         const partial = new Terminal({ allowProposedApi: true, cols: 80, rows: 20, convertEol: true, scrollback: 10000 });
         try {
           await writeTerminalFrames(partial, ['SHELL_MARKER\r\n', ...Array<string>(40).fill('older shell line\r\n'), frame.slice(0, cut)]);
           partial.resize(80, 6);
           await writeTerminalFrames(partial, [frame.slice(cut)]);
           const history = Array.from({ length: partial.buffer.active.baseY }, (_, index) => partial.buffer.active.getLine(index)?.translateToString(true) ?? '').join('\n');
-          expect(history).not.toMatch(/╭|╰|Thinking/);
+          expect(history).not.toMatch(/│ ❯|╰|Thinking/);
           partial.resize(80, 20);
           await writeTerminalFrames(partial, [frame]);
           const buffer = getTerminalText(partial);
-          expect(countOccurrences(buffer, '╭'), buffer).toBe(1);
+          expect(countOccurrences(buffer, '│ ❯'), buffer).toBe(1);
+          expect(countOccurrences(buffer, '╰'), buffer).toBe(1);
           expect(countOccurrences(buffer, 'Thinking'), buffer).toBe(1);
           expect(buffer).toContain('SHELL_MARKER');
         } finally {
@@ -775,7 +790,8 @@ describe('TranscriptEntryView', () => {
       app.unmount();
       await app.waitUntilExit();
       await updateTerminal();
-      expect(getTerminalText(terminal)).not.toContain('╭');
+      expect(getTerminalText(terminal)).not.toContain('│ ❯');
+      expect(getTerminalText(terminal)).not.toContain('╰');
     } finally {
       app?.unmount();
       await app?.waitUntilExit();
@@ -970,7 +986,7 @@ describe('TranscriptEntryView', () => {
       input.write(pendingPrompt);
       await waitForOutput(
         stdout,
-        (captured) => stripAnsi(captured).replace(/\s+/g, ' ').includes(pendingPrompt),
+        (captured) => stripAnsi(captured).includes(visiblePromptLine(pendingPrompt, pendingPrompt.length, wideColumns)),
         'busy prompt',
       );
       await updateTerminal();
@@ -980,14 +996,15 @@ describe('TranscriptEntryView', () => {
       stdout.resize(narrowColumns);
       await waitForOutput(
         stdout,
-        () => stripAnsi(stdout.frames.slice(narrowStart).join('')).includes('terminal width is narrow'),
+        () => stripAnsi(stdout.frames.slice(narrowStart).join('')).includes(visiblePromptLine(pendingPrompt, pendingPrompt.length, narrowColumns)),
         'narrow wrapped prompt redraw',
       );
       await updateTerminal();
       const narrowScreen = stripAnsi(getVisibleTerminalText(terminal, stdout.rows));
-      expect(countOccurrences(narrowScreen, 'pending prompt wraps when')).toBe(1);
-      expect(narrowScreen.split('\n').some((line) => line.includes('terminal width is narrow'))).toBe(true);
-      expect(countOccurrences(narrowScreen, 'terminal width is narrow')).toBe(1);
+      // The caret's wrapped row is first; earlier input rows are folded, not lost.
+      expect(countOccurrences(narrowScreen, 'pending prompt wraps when')).toBe(0);
+      expect(narrowScreen).toContain('↑ 1');
+      expect(countOccurrences(narrowScreen, visiblePromptLine(pendingPrompt, pendingPrompt.length, narrowColumns))).toBe(1);
       expect(countOccurrences(narrowScreen, UI.thinking)).toBe(1);
       expect(countOccurrences(getTerminalText(terminal), UI.thinking)).toBe(1);
 
@@ -996,14 +1013,13 @@ describe('TranscriptEntryView', () => {
       stdout.resize(wideColumns);
       await waitForOutput(
         stdout,
-        () => stripAnsi(stdout.frames.slice(wideStart).join('')).includes(pendingPrompt),
+        () => stripAnsi(stdout.frames.slice(wideStart).join('')).includes(visiblePromptLine(pendingPrompt, pendingPrompt.length, wideColumns)),
         'wide single-row prompt redraw',
       );
       await updateTerminal();
       const wideScreen = stripAnsi(getVisibleTerminalText(terminal, stdout.rows));
-      expect(countOccurrences(wideScreen.replace(/\s+/g, ' '), pendingPrompt)).toBe(1);
-      expect(countOccurrences(wideScreen, 'terminal width is narrow')).toBe(1);
-      expect(wideScreen.split('\n').some((line) => line.includes(pendingPrompt))).toBe(true);
+      expect(countOccurrences(wideScreen, visiblePromptLine(pendingPrompt, pendingPrompt.length, wideColumns))).toBe(1);
+      expect(wideScreen).not.toContain('↑ ');
       expect(countOccurrences(wideScreen, UI.thinking)).toBe(1);
       expect(countOccurrences(getTerminalText(terminal), UI.thinking)).toBe(1);
 
@@ -1033,7 +1049,7 @@ describe('TranscriptEntryView', () => {
       }
       expect(countOccurrences(buffer, '/go task')).toBe(1);
       expect(countOccurrences(buffer, UI.thinking), buffer).toBe(1);
-      expect(countOccurrences(buffer.replace(/\s+/g, ' '), pendingPrompt), buffer).toBe(1);
+      expect(countOccurrences(buffer, visiblePromptLine(pendingPrompt, pendingPrompt.length, wideColumns)), buffer).toBe(1);
       expect(conversation.instructionCalls).toHaveLength(0);
       expect(conversation.submitCalls).toHaveLength(1);
       expect(stdout.frames.join('')).not.toMatch(/\x1b\[(?:2|3)J/);
@@ -1043,6 +1059,386 @@ describe('TranscriptEntryView', () => {
       app?.cleanup();
       terminal.dispose();
       chalk.level = originalChalkLevel;
+    }
+  });
+
+  it('should place the terminal cursor at the Japanese prompt insertion point in an anchored live frame', async () => {
+    const stdout = new ResizableOutput(40, 12);
+    const terminal = new Terminal({ allowProposedApi: true, cols: 40, rows: 12, convertEol: true });
+    let app: ReturnType<typeof renderInk> | undefined;
+
+    try {
+      app = renderInk(
+        <PromptInput
+          text="やあてすと"
+          cursor={2}
+          contentWidth={34}
+          cursorRowOffset={0}
+          placeholder="Type a message"
+          hint="Enter: send"
+          completions={[]}
+          completionIndex={0}
+          disabled={false}
+        />,
+        {
+          stdout: stdout as unknown as NodeJS.WriteStream,
+          stderr: new PassThrough() as unknown as NodeJS.WriteStream,
+          stdin: createTestInput(),
+          exitOnCtrlC: false,
+          interactive: true,
+          anchorLiveFrame: true,
+          patchConsole: false,
+        },
+      );
+      await waitForOutput(stdout, (captured) => captured.includes('やあてすと'), 'Japanese prompt');
+      await writeTerminalFrames(terminal, stdout.frames);
+
+      expect(terminal.buffer.active.cursorX).toBe(8);
+      expect(terminal.buffer.active.cursorY).toBe(1);
+    } finally {
+      app?.unmount();
+      await app?.waitUntilExit();
+      app?.cleanup();
+      terminal.dispose();
+    }
+  });
+
+  it.each([
+    { anchorLiveFrame: false, columns: 40 },
+    { anchorLiveFrame: true, columns: 40 },
+    { anchorLiveFrame: false, columns: 14 },
+    { anchorLiveFrame: true, columns: 14 },
+  ])('should align the physical cursor with preserved tabs (anchored=$anchorLiveFrame, columns=$columns)', async ({ anchorLiveFrame, columns }) => {
+    const text = 'a\tやあ\tてすと';
+    const cursor = 6;
+    const contentWidth = resolvePromptContentWidth(columns, 1);
+    const layout = layoutPromptRows(text, cursor, contentWidth);
+    const row = (layout.rows[layout.cursorRow] ?? '').replaceAll('\t', ' ');
+    const stdout = new ResizableOutput(columns, 12);
+    const terminal = new Terminal({ allowProposedApi: true, cols: columns, rows: 12, convertEol: true });
+    const app = renderInk(<PromptInput
+      text={text} cursor={cursor} contentWidth={contentWidth} cursorRowOffset={0} cursorFirst
+      placeholder="Type a message" hint="Enter: send" completions={[]} completionIndex={0} disabled={false}
+    />, {
+      stdout: stdout as unknown as NodeJS.WriteStream, stderr: new PassThrough() as unknown as NodeJS.WriteStream,
+      stdin: createTestInput(), exitOnCtrlC: false, interactive: true, anchorLiveFrame, patchConsole: false,
+    });
+    try {
+      await app.waitUntilRenderFlush();
+      await writeTerminalFrames(terminal, stdout.frames);
+      const buffer = terminal.buffer.active;
+      const line = buffer.getLine(buffer.baseY + buffer.cursorY)?.translateToString(true) ?? '';
+      expect(line).toContain(`❯ ${row}`);
+      expect(buffer.cursorX).toBe(line.indexOf('❯ ') + 2 + stringWidth(row.slice(0, layout.cursorColumn)));
+      expect(stdout.frames.join('')).not.toContain('\t');
+    } finally {
+      app.unmount();
+      await app.waitUntilExit();
+      app.cleanup();
+      terminal.dispose();
+    }
+  });
+
+  it.each([
+    { name: 'a shorter rewrapped group', columns: 60, rows: 30, anchor: '\x1b[1G\x1b[J', below: 2 + 2 },
+    { name: 'a group taller than the window', columns: 30, rows: 4, anchor: '\x1b[1;1H\x1b[J', below: 1 + 2 },
+  ])('should end a Terminal.app redraw where the rewrapped live group ended: $name', async ({ columns, rows, anchor, below }) => {
+    // Terminal.app rewraps the group holding the cursor and keeps the rows below
+    // the cursor on a height reduction. Two 120-cell rows and the 5-cell model
+    // row become five rows at 60 columns, two of them blank leading rows.
+    const stdout = new ResizableOutput(120, 30);
+    /** Anchors a three-line fixture on its first row to expose Terminal.app reflow offsets. */
+    function CursorFirstFrame(): ReactNode {
+      const { setCursorPosition } = useCursor();
+      setCursorPosition({ x: 2, y: 0 });
+      return <Text>{'> draft\nstatus\nmodel'}</Text>;
+    }
+    const app = renderInk(<CursorFirstFrame />, {
+      stdout: stdout as unknown as NodeJS.WriteStream, stderr: new PassThrough() as unknown as NodeJS.WriteStream,
+      stdin: createTestInput(), exitOnCtrlC: false, interactive: true, anchorLiveFrame: true,
+      reflowsCursorGroup: true, patchConsole: false,
+    });
+    try {
+      await app.waitUntilRenderFlush();
+      const start = stdout.frames.length;
+      stdout.resize(columns, rows);
+      await waitForOutput(stdout, () => stdout.frames.slice(start).join('').includes('model'), 'redraw after the resize');
+      const redraw = stdout.frames.slice(start).join('').replace(/\x1b\[\?2026[hl]/g, '');
+      expect(redraw).toContain(`${anchor}${'\n'.repeat(below)}\x1b[${below}A\x1b[1G`);
+      expect(redraw).not.toMatch(/\x1b\[(?:2|3)J/);
+    } finally {
+      app.unmount();
+      await app.waitUntilExit();
+      app.cleanup();
+    }
+  });
+
+  it.each([
+    { name: 'Terminal.app', reflowsCursorGroup: true, prefix: '\x1b[2A\x1b[1G\x1b[J', below: 3 + 3 },
+    { name: 'xterm.js', reflowsCursorGroup: false, prefix: '\x1b[1A\x1b[1G\x1b[J', below: 3 },
+  ])('should redraw from the top border above the cursor after a width reduction: $name', async ({ reflowsCursorGroup, prefix, below }) => {
+    // At 60 columns the 120-cell border row becomes two rows, so Terminal.app
+    // moves the cursor's row from 1 to 2; xterm.js leaves the group as drawn.
+    const stdout = new ResizableOutput(120, 30);
+    /** Positions the hardware cursor below a one-row border for resize-origin assertions. */
+    function BorderedFrame(): ReactNode {
+      const { setCursorPosition } = useCursor();
+      setCursorPosition({ x: 2, y: 1 });
+      return <Text>{'╭──╮\n> draft\nstatus\nmodel'}</Text>;
+    }
+    const app = renderInk(<BorderedFrame />, {
+      stdout: stdout as unknown as NodeJS.WriteStream, stderr: new PassThrough() as unknown as NodeJS.WriteStream,
+      stdin: createTestInput(), exitOnCtrlC: false, interactive: true, anchorLiveFrame: true,
+      reflowsCursorGroup, patchConsole: false,
+    });
+    try {
+      await app.waitUntilRenderFlush();
+      const start = stdout.frames.length;
+      stdout.resize(60, 30);
+      await waitForOutput(stdout, () => stdout.frames.slice(start).join('').includes('model'), 'redraw after the resize');
+      const redraw = stdout.frames.slice(start).join('').replace(/\x1b\[\?2026[hl]/g, '');
+      expect(redraw).toContain(`${prefix}${'\n'.repeat(below)}\x1b[${below}A\x1b[1G`);
+      expect(redraw).not.toContain('\x1b8');
+    } finally {
+      app.unmount();
+      await app.waitUntilExit();
+      app.cleanup();
+    }
+  });
+
+  it('should not accumulate blank rows above a Terminal.app live group across resize cycles', async () => {
+    // The blank rows a narrow redraw leaves belong to the same wrapped group,
+    // so widening rewraps them away instead of leaving a growing gap.
+    const stdout = new ResizableOutput(120, 30);
+    /** Keeps a fixed cursor intent while repeated resizes exercise the same live group. */
+    function CursorFirstFrame(): ReactNode {
+      const { setCursorPosition } = useCursor();
+      setCursorPosition({ x: 2, y: 0 });
+      return <Text>{'> draft\nstatus\nmodel'}</Text>;
+    }
+    const app = renderInk(<CursorFirstFrame />, {
+      stdout: stdout as unknown as NodeJS.WriteStream, stderr: new PassThrough() as unknown as NodeJS.WriteStream,
+      stdin: createTestInput(), exitOnCtrlC: false, interactive: true, anchorLiveFrame: true,
+      reflowsCursorGroup: true, patchConsole: false,
+    });
+    try {
+      await app.waitUntilRenderFlush();
+      for (let cycle = 0; cycle < 3; cycle += 1) {
+        for (const columns of [60, 120]) {
+          const start = stdout.frames.length;
+          stdout.resize(columns, 30);
+          await waitForOutput(stdout, () => stdout.frames.slice(start).join('').includes('model'), `redraw at ${columns} columns`);
+          const redraw = stdout.frames.slice(start).join('').replace(/\x1b\[\?2026[hl]/g, '');
+          expect(redraw).toContain(columns === 60
+            ? '\x1b[1G\x1b[J\n\n\n\n\x1b[4A\x1b[1G'
+            : '\x1b[1A\x1b[1G\x1b[J\n\n\x1b[2A\x1b[1G');
+        }
+      }
+    } finally {
+      app.unmount();
+      await app.waitUntilExit();
+      app.cleanup();
+    }
+  });
+
+  it('should redraw an xterm.js live group in place after a width reduction', async () => {
+    const stdout = new ResizableOutput(120, 30);
+    /** Exposes the first-row anchor used when xterm.js leaves its cursor group unrewrapped. */
+    function CursorFirstFrame(): ReactNode {
+      const { setCursorPosition } = useCursor();
+      setCursorPosition({ x: 2, y: 0 });
+      return <Text>{'> draft\nstatus\nmodel'}</Text>;
+    }
+    const app = renderInk(<CursorFirstFrame />, {
+      stdout: stdout as unknown as NodeJS.WriteStream, stderr: new PassThrough() as unknown as NodeJS.WriteStream,
+      stdin: createTestInput(), exitOnCtrlC: false, interactive: true, anchorLiveFrame: true, patchConsole: false,
+    });
+    try {
+      await app.waitUntilRenderFlush();
+      const start = stdout.frames.length;
+      stdout.resize(60, 30);
+      await waitForOutput(stdout, () => stdout.frames.slice(start).join('').includes('model'), 'redraw after the resize');
+      expect(stdout.frames.slice(start).join('').replace(/\x1b\[\?2026[hl]/g, '')).toContain('\x1b[1G\x1b[J\n\n\x1b[2A\x1b[1G');
+    } finally {
+      app.unmount();
+      await app.waitUntilExit();
+      app.cleanup();
+    }
+  });
+
+  it('should not duplicate a Japanese draft when an xterm.js terminal resizes', async () => {
+    const stdout = new ResizableOutput(120, 30);
+    const terminal = new Terminal({ allowProposedApi: true, cols: 120, rows: 30, convertEol: true, scrollback: 10000 });
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const history = '日本語の長い紹介文'.repeat(75);
+    let app: ReturnType<typeof renderInk> | undefined;
+    let processedFrames = 0;
+    const updateTerminal = async (): Promise<void> => {
+      await writeTerminalFrames(terminal, stdout.frames.slice(processedFrames));
+      processedFrames = stdout.frames.length;
+    };
+    try {
+      await writeTerminalFrames(terminal, ['SHELL_MARKER\r\n', ...Array<string>(40).fill('older shell line\r\n')]);
+      app = renderInk(<ConversationView
+        ui={UI} lang="ja" conversation={conversation} userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
+        initialEntries={[{ role: 'assistant', content: history }]}
+        submitMode="chat" autoSubmit={false} initialHistory={[]} initialDraft={{ text: 'やあ', cursor: 2 }}
+        initialQueue={[]} residentSession={false} modelLabel={() => MODEL_LABEL} onExit={() => undefined}
+      />, {
+        stdout: stdout as unknown as NodeJS.WriteStream, stderr: new PassThrough() as unknown as NodeJS.WriteStream,
+        stdin: createTestInput(), exitOnCtrlC: false, interactive: true, anchorLiveFrame: true, patchConsole: false,
+      });
+      await app.waitUntilRenderFlush();
+      await updateTerminal();
+      for (const [columns, rows] of [[118, 30], [117, 30], [116, 30], [120, 30], [80, 6], [14, 6], [40, 2], [32, 1], [120, 30]] as const) {
+        terminal.resize(columns, rows);
+        const offset = stdout.frames.length;
+        stdout.resize(columns, rows);
+        await waitForOutput(stdout, () => stdout.frames.slice(offset).join('').includes('やあ'), 'the resized Japanese draft');
+        await app.waitUntilRenderFlush();
+        await updateTerminal();
+        const buffer = getTerminalText(terminal);
+        expect(countOccurrences(buffer, 'やあ'), buffer).toBe(1);
+        expect(countOccurrences(buffer, '╰'), buffer).toBe(rows > 2 ? 1 : 0);
+        expect(countOccurrences(buffer.replace(/\s/g, ''), history), buffer).toBe(1);
+        expect(buffer).toContain('SHELL_MARKER');
+        const active = terminal.buffer.active;
+        const caretLine = active.getLine(active.baseY + active.cursorY)?.translateToString(true) ?? '';
+        expect(caretLine).toContain('❯ やあ');
+        expect(active.cursorX).toBe(rows > 2 ? 8 : 7);
+      }
+      expect(stdout.frames.join('')).not.toMatch(/\x1b\[(?:2|3)J/);
+      app.unmount();
+      await app.waitUntilExit();
+      await updateTerminal();
+      expect(getTerminalText(terminal)).not.toMatch(/やあ|╰|│ ❯/);
+      expect(getTerminalText(terminal)).toContain('SHELL_MARKER');
+    } finally {
+      app?.unmount();
+      await app?.waitUntilExit();
+      app?.cleanup();
+      terminal.dispose();
+    }
+  });
+
+  it('should retain the caret row when an oversized cursor-first frame is clipped', async () => {
+    const stdout = new ResizableOutput(40, 3);
+    const terminal = new Terminal({ allowProposedApi: true, cols: 40, rows: 3, convertEol: true });
+    let app: ReturnType<typeof renderInk> | undefined;
+    try {
+      await writeTerminalFrames(terminal, ['SHELL_MARKER\r\n', ...Array<string>(10).fill('older shell line\r\n')]);
+      app = renderInk(<PromptInput
+        text={'やあ\nnext row\nafter row\nhidden tail'} cursor={0} contentWidth={34}
+        cursorRowOffset={0} cursorFirst placeholder="Type a message" hint="Enter: send"
+        completions={[]} completionIndex={0} disabled={false} showHint={false}
+      />, {
+        stdout: stdout as unknown as NodeJS.WriteStream, stderr: new PassThrough() as unknown as NodeJS.WriteStream,
+        stdin: createTestInput(), exitOnCtrlC: false, interactive: true, anchorLiveFrame: true, patchConsole: false,
+      });
+      await app.waitUntilRenderFlush();
+      const processed = stdout.frames.length;
+      await writeTerminalFrames(terminal, stdout.frames);
+      const screen = getVisibleTerminalText(terminal, stdout.rows);
+      expect(screen).toContain('❯ やあ');
+      expect(screen).toContain('next row');
+      expect(screen).not.toContain('hidden tail');
+      expect(screen.split('\n')[0]).toMatch(/^╭/u);
+      expect(terminal.buffer.active.cursorX).toBe(4);
+      expect(terminal.buffer.active.cursorY).toBe(1);
+      app.unmount();
+      await app.waitUntilExit();
+      await writeTerminalFrames(terminal, stdout.frames.slice(processed));
+      expect(getTerminalText(terminal)).toContain('SHELL_MARKER');
+      expect(getTerminalText(terminal)).not.toContain('│ ❯');
+    } finally {
+      app?.unmount();
+      await app?.waitUntilExit();
+      app?.cleanup();
+      terminal.dispose();
+    }
+  });
+
+  it.each([false, true])('should retain the first-row IME cursor and queued status through tiny resizes (anchored=%s)', async (anchorLiveFrame) => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const stdout = new ResizableOutput(80, 20);
+    const input = createTestInput();
+    const terminal = new Terminal({ allowProposedApi: true, cols: 80, rows: 20, convertEol: true });
+    const draft = 'earlier input row\nやあてすと';
+    let app: ReturnType<typeof renderInk> | undefined;
+    let processedFrames = 0;
+    const updateTerminal = async (): Promise<void> => {
+      await writeTerminalFrames(terminal, stdout.frames.slice(processedFrames));
+      processedFrames = stdout.frames.length;
+    };
+    const assertCursor = (): void => {
+      const buffer = terminal.buffer.active;
+      const caretLine = buffer.getLine(buffer.baseY + buffer.cursorY)?.translateToString(true) ?? '';
+      const layout = layoutPromptRows(draft, draft.length, resolvePromptContentWidth(stdout.columns, 1));
+      const caretRow = layout.rows[layout.cursorRow] ?? '';
+      expect(caretLine).toContain(`❯ ${caretRow}`);
+      expect(buffer.cursorX).toBe(caretLine.indexOf('❯ ') + 2 + stringWidth(caretRow.slice(0, layout.cursorColumn)));
+      expect(buffer.cursorX).toBeLessThan(stdout.columns);
+      const beforeCaret = Array.from({ length: buffer.baseY + buffer.cursorY }, (_, index) => (
+        buffer.getLine(index)?.translateToString(true) ?? ''
+      )).join('\n');
+      expect(beforeCaret).not.toMatch(/│ ❯|╰|Thinking|queued one|queued two|↑ \d/);
+      expect(beforeCaret).toContain('SHELL_MARKER');
+      expect(countOccurrences(getTerminalText(terminal).replace(/\s/g, ''), 'committedhistorymarker')).toBe(1);
+    };
+    try {
+      await writeTerminalFrames(terminal, ['SHELL_MARKER\r\n', ...Array<string>(40).fill('older shell line\r\n')]);
+      app = renderInk(<ConversationView
+        ui={UI} lang="en" conversation={conversation} userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
+        initialEntries={[{ role: 'assistant', content: 'committed history marker' }]}
+        submitMode="chat" autoSubmit={false} initialHistory={[]} initialDraft={undefined}
+        initialQueue={[]} residentSession={false} modelLabel={() => MODEL_LABEL} onExit={() => undefined}
+      />, {
+        stdout: stdout as unknown as NodeJS.WriteStream, stderr: new PassThrough() as unknown as NodeJS.WriteStream,
+        stdin: input, exitOnCtrlC: false, interactive: true, anchorLiveFrame, patchConsole: false,
+      });
+      input.write('first question');
+      await waitForOutput(stdout, (value) => stripAnsi(value).includes(visiblePromptLine('first question', 14, 80)), 'first draft');
+      input.write(ENTER);
+      await waitForOutput(stdout, (value) => value.includes(UI.thinking), 'busy status');
+      for (const line of ['queued one', 'queued two']) {
+        input.write(line);
+        await waitForOutput(stdout, (value) => stripAnsi(value).includes(visiblePromptLine(line, line.length, 80)), 'queued draft');
+        input.write(ENTER);
+        await flushFrames();
+      }
+      input.write(`\x1b[200~${draft}\x1b[201~`);
+      await waitForOutput(stdout, (value) => stripAnsi(value).includes(visiblePromptLine(draft, draft.length, 80)), 'Japanese draft');
+      await app.waitUntilRenderFlush();
+      await updateTerminal();
+      assertCursor();
+      for (const [columns, rows] of [[14, 6], [40, 2], [32, 1], [14, 3], [40, 5], [80, 20]] as const) {
+        terminal.resize(columns, rows);
+        const start = stdout.frames.length;
+        stdout.resize(columns, rows);
+        const layout = layoutPromptRows(draft, draft.length, resolvePromptContentWidth(columns, 1));
+        await waitForOutput(stdout, () => stripAnsi(stdout.frames.slice(start).join('')).includes(`❯ ${layout.rows[layout.cursorRow] ?? ''}`), 'resized Japanese caret row');
+        await app.waitUntilRenderFlush();
+        await updateTerminal();
+        assertCursor();
+      }
+      const screen = getVisibleTerminalText(terminal, stdout.rows);
+      expect(screen).toContain('queued one');
+      expect(screen).toContain('queued two');
+      expect(screen).toContain(UI.thinking);
+      expect(conversation.submitCalls).toHaveLength(1);
+      expect(stdout.frames.join('')).not.toMatch(/\x1b\[(?:2|3)J/);
+      app.unmount();
+      await app.waitUntilExit();
+      await updateTerminal();
+      expect(getTerminalText(terminal)).not.toMatch(/│ ❯|╰|Thinking|queued one|queued two|↑ \d/);
+    } finally {
+      app?.unmount();
+      await app?.waitUntilExit();
+      app?.cleanup();
+      if (conversation.submitCalls.length > 0) {
+        conversation.resolveWith({ kind: 'assistant_response', content: 'cleanup response' });
+      }
+      terminal.dispose();
     }
   });
 
@@ -1160,6 +1556,7 @@ describe('TranscriptEntryView', () => {
         text="not submitted"
         cursor={13}
         contentWidth={24}
+        cursorRowOffset={0}
         placeholder="Type a message"
         hint="Enter: send"
         completions={[]}
@@ -1217,6 +1614,112 @@ describe('TranscriptView', () => {
 });
 
 describe('ConversationView', () => {
+  it.each([CTRL_C, CTRL_D])('should exit a pending install confirmation after one interrupt (%j)', async (interrupt) => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const onExit = vi.fn();
+    const answers: boolean[] = [];
+    conversation.submit = async (input) => {
+      answers.push(await input.confirmManagedProvider!('Install pi (52 MB)?'));
+      return { kind: 'assistant_response', content: 'must not be committed after cancellation' };
+    };
+    const draft = 'retained draft';
+    const view = renderConversation(conversation, 'chat', onExit, {
+      autoSubmit: true, initialDraft: { text: draft, cursor: draft.length },
+    });
+    try {
+      await vi.waitFor(() => expect(view.lastFrame()).toContain('Install pi (52 MB)?'));
+      view.stdin.write(interrupt);
+      await vi.waitFor(() => expect(onExit).toHaveBeenCalledOnce());
+      expect(answers).toEqual([false]);
+      expect(onExit).toHaveBeenCalledWith(
+        { kind: 'result', result: { action: 'cancel', task: '' } },
+        { history: [], queue: [], draft: { text: draft, cursor: draft.length } },
+      );
+      expect(view.lastFrame()).not.toContain('must not be committed');
+    } finally {
+      view.unmount();
+    }
+  });
+
+  it.each([1, 2, 3, 4, 6, 8])('should budget one truncated confirmation row in a %s-row terminal', async (rows) => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const requested = vi.fn();
+    conversation.submit = async (input) => {
+      requested();
+      await input.confirmManagedProvider!(`Install pi?\n${'long description '.repeat(10)}`);
+      return { kind: 'error', message: 'installation declined' };
+    };
+    const stdout = new ResizableOutput(40, rows);
+    const app = renderInk(<ConversationView
+      ui={UI} lang="en" conversation={conversation} initialEntries={[]}
+      userMessageColors={FALLBACK_USER_MESSAGE_COLORS} submitMode="chat" autoSubmit
+      initialHistory={[]} initialDraft={{ text: 'retained draft', cursor: 14 }} initialQueue={[]} residentSession={false}
+      modelLabel={() => MODEL_LABEL} onExit={() => undefined}
+    />, {
+      stdout: stdout as unknown as NodeJS.WriteStream, stderr: new PassThrough() as unknown as NodeJS.WriteStream,
+      stdin: createTestInput(), exitOnCtrlC: false, debug: true, patchConsole: false,
+    });
+    try {
+      await vi.waitFor(() => expect(requested).toHaveBeenCalledOnce());
+      await app.waitUntilRenderFlush();
+      const frame = stripAnsi(stdout.frames.filter((value) => value.includes('❯')).at(-1) ?? '');
+      expect(frame).toContain('❯ retained draft');
+      expect(frame.replace(/\n$/, '').split('\n').length).toBeLessThanOrEqual(Math.max(1, rows - 1));
+      if (rows > 2) expect(frame).toContain('Install pi? long description');
+      else expect(frame).not.toContain('Install pi?');
+    } finally {
+      app.unmount();
+      await app.waitUntilExit();
+      app.cleanup();
+    }
+  });
+
+  it('should preserve original tabs when submitting a normalized display draft', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const text = 'a\t日\tb';
+    const view = renderConversation(conversation, 'chat', vi.fn(), {
+      initialDraft: { text, cursor: text.length },
+    });
+    try {
+      await flushFrames();
+      expect(view.lastFrame()).toContain('❯ a 日 b');
+      expect(view.lastFrame()).not.toContain('\t');
+      view.stdin.write(ENTER);
+      await flushFrames();
+      expect(conversation.submitCalls[0]?.text).toBe(text);
+    } finally {
+      view.unmount();
+    }
+  });
+
+  it.each([
+    { submitMode: 'chat', committed: 'てすと' },
+    { submitMode: 'chat', committed: 'てすと\r' },
+    { submitMode: 'summarize', committed: 'てすと' },
+    { submitMode: 'summarize', committed: 'てすと\r' },
+  ] as const)('should insert committed Japanese text without sending until a separate Enter ($submitMode, $committed)', async ({ submitMode, committed }) => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const view = renderConversation(conversation, submitMode, vi.fn());
+    try {
+      await flushFrames();
+      // Exercise terminals reporting committed text, with or without a CR in
+      // that same text event. A separate bare CR has no composition metadata.
+      view.stdin.write('やあ、');
+      view.stdin.write(committed);
+      await flushFrames();
+      expect(view.lastFrame()).toContain('❯ やあ、てすと');
+      expect(conversation.submitCalls).toHaveLength(0);
+      expect(conversation.instructionCalls).toHaveLength(0);
+      view.stdin.write(ENTER);
+      await flushFrames();
+      const calls = submitMode === 'chat' ? conversation.submitCalls : conversation.instructionCalls;
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.text).toBe('やあ、てすと');
+    } finally {
+      view.unmount();
+    }
+  });
+
   it.each(['abort', 'unmount'] as const)('releases a pending install confirmation on %s and retains an in-progress draft on abort', async (action) => {
     const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
     const answers: boolean[] = [];
@@ -1662,7 +2165,7 @@ describe('ConversationView', () => {
       // Typing during the answer edits the draft as usual.
       app.stdin.write('queued one');
       await flushFrames();
-      expect(app.lastFrame() ?? '').toContain('❯ queued one');
+      expect(app.lastFrame() ?? '').toContain(visiblePromptLine('queued one'));
 
       app.stdin.write(ENTER);
       await flushFrames();
@@ -1733,10 +2236,10 @@ describe('ConversationView', () => {
 
       // The draft is still there, and the caret is still where it was left: the
       // next character lands inside the word rather than at the end.
-      expect(app.lastFrame() ?? '').toContain('❯ half typed');
+      expect(app.lastFrame() ?? '').toContain(visiblePromptLine('half typed', 5));
       app.stdin.write('X');
       await flushFrames();
-      expect(app.lastFrame() ?? '').toContain('❯ half Xtyped');
+      expect(app.lastFrame() ?? '').toContain(visiblePromptLine('half Xtyped', 6));
 
       app.unmount();
     });
@@ -2017,7 +2520,7 @@ describe('ConversationView', () => {
 
       app.stdin.write(ARROW_UP);
       await flushFrames();
-      expect(app.lastFrame() ?? '').toContain('❯ queued two');
+      expect(app.lastFrame() ?? '').toContain(visiblePromptLine('queued two'));
 
       app.stdin.write(' amended');
       await flushFrames();
@@ -2043,11 +2546,11 @@ describe('ConversationView', () => {
 
       app.stdin.write(ARROW_UP);
       await flushFrames();
-      expect(app.lastFrame() ?? '').toContain('❯ first question');
+      expect(app.lastFrame() ?? '').toContain(visiblePromptLine('first question'));
 
       app.stdin.write(ARROW_UP);
       await flushFrames();
-      expect(app.lastFrame() ?? '').toContain('❯ remembered');
+      expect(app.lastFrame() ?? '').toContain(visiblePromptLine('remembered'));
 
       app.unmount();
     });
@@ -2263,7 +2766,7 @@ describe('ConversationView', () => {
 
       app.stdin.write('X');
       await flushFrames();
-      expect(app.lastFrame() ?? '').toContain('❯ half Xtyped');
+      expect(app.lastFrame() ?? '').toContain(visiblePromptLine('half Xtyped', 6));
 
       app.unmount();
     });
@@ -2363,7 +2866,7 @@ describe('ConversationView', () => {
       await flushFrames();
 
       const frame = app.lastFrame() ?? '';
-      expect(frame).toContain('❯ draft text');
+      expect(frame).toContain(visiblePromptLine('draft text'));
       expect(frame).not.toContain(UI.responseInterrupted);
       expect(onExit).not.toHaveBeenCalled();
 
@@ -2598,9 +3101,10 @@ describe('ConversationView', () => {
     app.unmount();
   });
 
-  it('should wrap a long draft inside the box instead of cutting it off', async () => {
+  it('should fold rows before the caret without losing a wrapped draft when submitting', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
     const app = renderConversation(
-      createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS),
+      conversation,
       'chat',
       vi.fn(),
     );
@@ -2612,16 +3116,22 @@ describe('ConversationView', () => {
     await flushFrames();
 
     const frame = app.lastFrame() ?? '';
-    // Every typed character survived, and the tail is on screen rather than cut.
-    expect((frame.match(/ab /g) ?? []).length).toBe(60);
+    // Earlier rows are folded below the caret row, while the full buffer survives.
+    expect(frame).toContain('↑ 1');
     expect(frame).toContain('END');
-    // The box grew downwards; no row runs past the terminal width.
+    expect(countOccurrences(frame, '╭')).toBe(1);
+    expect(frame.split('\n').findIndex((row) => row.startsWith('╭')) + 1)
+      .toBe(frame.split('\n').findIndex((row) => row.includes('END')));
+    // The caret row and folding indicator stay inside the terminal width.
     const boxRows = frame.split('\n').filter((row) => row.startsWith('│'));
     expect(boxRows.length).toBeGreaterThan(1);
     for (const row of boxRows) {
       expect(row.length).toBeLessThanOrEqual(100);
     }
 
+    app.stdin.write(ENTER);
+    await flushFrames();
+    expect(conversation.submitCalls[0]?.text).toBe(draft);
     app.unmount();
   });
 
@@ -2697,7 +3207,7 @@ describe('ConversationView', () => {
     app.stdin.write(CTRL_K);
     await flushFrames();
 
-    expect(app.lastFrame() ?? '').toContain('keep this ');
+    expect(app.lastFrame() ?? '').toContain(visiblePromptLine('keep this '));
     expect(app.lastFrame() ?? '').not.toContain('cut that');
 
     app.stdin.write(ENTER);
@@ -2714,12 +3224,12 @@ describe('ConversationView', () => {
     });
     await flushFrames();
 
-    expect(app.lastFrame() ?? '').toContain('❯ half typed');
+    expect(app.lastFrame() ?? '').toContain(visiblePromptLine('half typed', 5));
 
     // Typing continues from the caret, not from the end of the restored line.
     app.stdin.write('X');
     await flushFrames();
-    expect(app.lastFrame() ?? '').toContain('❯ half Xtyped');
+    expect(app.lastFrame() ?? '').toContain(visiblePromptLine('half Xtyped', 6));
 
     app.unmount();
   });
@@ -3156,7 +3666,7 @@ describe('ConversationView', () => {
     app.stdin.write(ENTER);
     await flushFrames();
 
-    expect(app.lastFrame() ?? '').toContain(`❯ ${PASTED_IMAGE_PLACEHOLDER}`);
+    expect(app.lastFrame() ?? '').toContain(visiblePromptLine(PASTED_IMAGE_PLACEHOLDER));
     expect(onExit).not.toHaveBeenCalled();
 
     app.unmount();
@@ -3174,7 +3684,7 @@ describe('ConversationView', () => {
     app.stdin.write(CTRL_V);
     await flushFrames();
 
-    expect(app.lastFrame() ?? '').toContain(`❯ a${PASTED_IMAGE_PLACEHOLDER}`);
+    expect(app.lastFrame() ?? '').toContain(visiblePromptLine(`a${PASTED_IMAGE_PLACEHOLDER}b`, 1 + PASTED_IMAGE_PLACEHOLDER.length));
 
     app.stdin.write(ENTER);
     await flushFrames();
@@ -3199,7 +3709,7 @@ describe('ConversationView', () => {
     const frame = app.lastFrame() ?? '';
     expect(frame).toContain(getLabel('tui.errors.imagePasteFailed', 'en'));
     expect(frame).toContain('Clipboard does not contain an image.');
-    expect(frame).toContain('❯ draft');
+    expect(frame).toContain(visiblePromptLine('draft'));
 
     app.stdin.write('!');
     await flushFrames();
@@ -3221,7 +3731,7 @@ describe('ConversationView', () => {
     expect(conversation.savedImages).toHaveLength(1);
     expect(conversation.savedImages[0]?.mimeType).toBe('image/png');
     expect(conversation.savedImages[0]?.data.equals(INLINE_IMAGE_DATA)).toBe(true);
-    expect(app.lastFrame() ?? '').toContain(`❯ ${PASTED_IMAGE_PLACEHOLDER}`);
+    expect(app.lastFrame() ?? '').toContain(visiblePromptLine(PASTED_IMAGE_PLACEHOLDER));
 
     app.stdin.write(ENTER);
     await flushFrames();
@@ -3673,7 +4183,7 @@ describe('ConversationView', () => {
     await flushFrames();
     continued.stdin.write('second turn');
     await flushFrames();
-    expect(continued.lastFrame() ?? '').toContain('❯ second turn');
+    expect(continued.lastFrame() ?? '').toContain(visiblePromptLine('second turn'));
 
     continued.stdin.write(ENTER);
     await flushFrames();
@@ -3741,8 +4251,12 @@ describe('ConversationView', () => {
 
     expect(conversation.submitCalls).toHaveLength(0);
     const frame = app.lastFrame() ?? '';
-    expect(frame).toContain('❯ first line');
-    expect(frame).toContain('  second line');
+    expect(frame).toContain(visiblePromptLine('second line'));
+    expect(frame).toContain('↑ 1');
+    app.stdin.write(ARROW_UP);
+    await flushFrames();
+    expect(app.lastFrame()).toContain(visiblePromptLine('first line'));
+    expect(app.lastFrame()).toContain('  second line');
 
     app.stdin.write(ENTER);
     await flushFrames();
@@ -3811,7 +4325,7 @@ describe('ConversationView', () => {
 
     const acceptedFrame = app.lastFrame() ?? '';
     // The buffer now holds the accepted command and the menu is gone.
-    expect(acceptedFrame).toContain('❯ /accept');
+    expect(acceptedFrame).toContain(visiblePromptLine('/accept'));
     expect(acceptedFrame).not.toContain('/cancel');
 
     app.unmount();
@@ -3839,6 +4353,147 @@ describe('ConversationView', () => {
 });
 
 describe('TUI scrollback output', () => {
+  it('should keep the terminal input cursor at the insertion point inside a Japanese draft', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const stdout = new ResizableOutput(80, 20);
+    const stderr = new PassThrough();
+    const terminal = new Terminal({
+      allowProposedApi: true,
+      cols: stdout.columns,
+      rows: stdout.rows,
+      convertEol: true,
+    });
+    let app: ReturnType<typeof renderInk> | undefined;
+
+    try {
+      app = renderInk(
+        <ConversationView
+          ui={UI}
+          lang="en"
+          conversation={conversation}
+          userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
+          initialEntries={[]}
+          submitMode="chat"
+          autoSubmit={false}
+          initialHistory={[]}
+          initialDraft={{ text: 'やあてすと', cursor: 2 }}
+          initialQueue={[]}
+          residentSession={false}
+          modelLabel={() => MODEL_LABEL}
+          onExit={() => undefined}
+        />,
+        {
+          stdout: stdout as unknown as NodeJS.WriteStream,
+          stderr: stderr as unknown as NodeJS.WriteStream,
+          stdin: createTestInput(),
+          exitOnCtrlC: false,
+          interactive: true,
+          patchConsole: false,
+        },
+      );
+
+      await waitForOutput(stdout, (value) => value.includes('やあてすと'), 'Japanese draft');
+      await flushFrames();
+      await writeTerminalFrames(terminal, stdout.frames);
+
+      const screenRows = Array.from({ length: stdout.rows }, (_, index) => (
+        terminal.buffer.active.getLine(terminal.buffer.active.baseY + index)?.translateToString(true) ?? ''
+      ));
+      const promptRow = screenRows.find((row) => row.includes('やあてすと'));
+      if (promptRow === undefined) {
+        throw new Error('The Japanese draft was not present in the terminal screen.');
+      }
+      const draftStart = promptRow.indexOf('やあてすと');
+
+      expect(terminal.buffer.active.cursorX).toBe(draftStart + stringWidth('やあ'));
+      expect(terminal.buffer.active.cursorY + terminal.buffer.active.baseY)
+        .toBe(screenRows.indexOf(promptRow));
+    } finally {
+      terminal.dispose();
+      app?.unmount();
+    }
+  });
+
+  it('should keep the terminal input cursor at the Japanese draft insertion point with queued lines visible', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const stdout = new ResizableOutput(80, 20);
+    const stderr = new PassThrough();
+    const input = createTestInput();
+    const terminal = new Terminal({
+      allowProposedApi: true,
+      cols: stdout.columns,
+      rows: stdout.rows,
+      convertEol: true,
+    });
+    let app: ReturnType<typeof renderInk> | undefined;
+
+    try {
+      app = renderInk(
+        <ConversationView
+          ui={UI}
+          lang="en"
+          conversation={conversation}
+          userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
+          initialEntries={[]}
+          submitMode="chat"
+          autoSubmit={false}
+          initialHistory={[]}
+          initialDraft={undefined}
+          initialQueue={[]}
+          residentSession={false}
+          modelLabel={() => MODEL_LABEL}
+          onExit={() => undefined}
+        />,
+        {
+          stdout: stdout as unknown as NodeJS.WriteStream,
+          stderr: stderr as unknown as NodeJS.WriteStream,
+          stdin: input,
+          exitOnCtrlC: false,
+          interactive: true,
+          patchConsole: false,
+        },
+      );
+
+      await waitForOutput(stdout, (value) => value.includes(UI.placeholder), 'initial prompt');
+      input.write('first question');
+      await waitForOutput(stdout, (value) => stripAnsi(value).includes(visiblePromptLine('first question', 14, 80)), 'first question draft');
+      input.write(ENTER);
+      await waitForOutput(stdout, (value) => value.includes(UI.thinking), 'busy status');
+      input.write('queued one');
+      await waitForOutput(stdout, (value) => stripAnsi(value).includes(visiblePromptLine('queued one', 10, 80)), 'first queued draft');
+      input.write(ENTER);
+      await waitForOutput(stdout, (value) => value.includes(UI.queuedHint), 'visible queue summary');
+      input.write('queued two');
+      await waitForOutput(stdout, (value) => stripAnsi(value).includes(visiblePromptLine('queued two', 10, 80)), 'second queued draft');
+      input.write(ENTER);
+      await flushFrames();
+      input.write('やあ');
+      await waitForOutput(stdout, (value) => value.includes('やあ'), 'initial Japanese draft');
+      input.write('てすと');
+      await waitForOutput(stdout, (value) => value.includes('やあてすと'), 'continued Japanese draft');
+      await writeTerminalFrames(terminal, stdout.frames);
+
+      const screenRows = Array.from({ length: stdout.rows }, (_, index) => (
+        terminal.buffer.active.getLine(terminal.buffer.active.baseY + index)?.translateToString(true) ?? ''
+      ));
+      expect(screenRows.some((row) => row.includes('❯ queued one'))).toBe(true);
+      expect(screenRows.some((row) => row.includes('❯ queued two'))).toBe(true);
+      const promptRow = screenRows.find((row) => row.includes('❯ やあてすと'));
+      if (promptRow === undefined) {
+        throw new Error('The Japanese draft was not present in the terminal screen.');
+      }
+      const draftStart = promptRow.indexOf('やあてすと');
+      const expectedCursorX = draftStart + stringWidth('やあてすと');
+
+      expect(terminal.buffer.active.cursorX).toBe(expectedCursorX);
+      expect(terminal.buffer.active.cursorY + terminal.buffer.active.baseY)
+        .toBe(screenRows.indexOf(promptRow));
+    } finally {
+      terminal.dispose();
+      app?.unmount();
+    }
+  });
+
   it('should show local notices at five and six terminal rows', async () => {
     const renderLocalNotice = async (rows: number) => {
       const conversation = createScriptedConversation(
@@ -3908,13 +4563,15 @@ describe('TUI scrollback output', () => {
     const sixRows = await renderLocalNotice(6);
 
     expect(fiveRows.screen).toContain('No assistant response found.');
+    // The notice takes priority over the two border rows.
     expect(fiveRows.screen).not.toMatch(/[╭╮╰╯]/u);
     expect(fiveRows.output).not.toContain('\x1b[3J');
     expect(fiveRows.conversation.submitCalls).toHaveLength(0);
     expect(fiveRows.onExit).not.toHaveBeenCalled();
 
     expect(sixRows.screen).toContain('No assistant response found.');
-    expect(sixRows.screen).toMatch(/[╭╮╰╯]/u);
+    expect(countOccurrences(sixRows.screen, '╭')).toBe(1);
+    expect(countOccurrences(sixRows.screen, '╰')).toBe(1);
     expect(sixRows.output).not.toContain('\x1b[3J');
     expect(sixRows.conversation.submitCalls).toHaveLength(0);
     expect(sixRows.onExit).not.toHaveBeenCalled();
@@ -3994,14 +4651,14 @@ describe('TUI scrollback output', () => {
       const failureScreen = getVisibleTerminalText(terminal, stdout.rows);
 
       expect(failureScreen).toContain('Clipboard does not contain an image.');
-      expect(failureScreen).toContain('draft');
+      expect(failureScreen).toContain(visiblePromptLine('draft', 5, 80));
       expect(failureScreen).toContain(UI.thinking);
       expect(failureScreen).toContain('streamed update');
       expect(await getMaximumTerminalScrollbackOffset(stdout)).toBe(0);
       expect(stdout.frames.join('')).not.toContain('\x1b[3J');
 
       input.write('!');
-      await waitForOutput(stdout, (value) => value.includes('draft!'), 'edited draft');
+      await waitForOutput(stdout, (value) => stripAnsi(value).includes(visiblePromptLine('draft!', 6, 80)), 'edited draft');
       input.write(ENTER);
       await waitForOutput(
         stdout,
@@ -4091,7 +4748,7 @@ describe('TUI scrollback output', () => {
       const outputFrameCountBeforeResponse = stdout.frames.length;
 
       input.write('question during response');
-      await waitForOutput(stdout, (captured) => captured.includes('question during response'), 'draft echo');
+      await waitForOutput(stdout, (captured) => stripAnsi(captured).includes(visiblePromptLine('question during response', 24, 80)), 'draft echo');
       input.write(ENTER);
       await waitForOutput(
         stdout,
@@ -4175,17 +4832,22 @@ describe('TUI scrollback output', () => {
         input.write(`queued item ${index}`);
         await waitForOutput(
           stdout,
-          (value) => value.includes(`queued item ${index}`),
+          (value) => stripAnsi(value).includes(visiblePromptLine(`queued item ${index}`, `queued item ${index}`.length, 80)),
           `queued draft ${index}`,
         );
+        const queuedStart = stdout.frames.length;
         input.write(ENTER);
+        // With both input borders, height 8 leaves room for one queued row.
         const expectedQueueSummary = index === 0
           ? UI.queuedHint
           : UI.queuedMore.replace('{count}', String(index));
         await waitForOutput(
           stdout,
-          (value) => value.includes(expectedQueueSummary),
-          `queued line ${index}`,
+          () => {
+            const latest = stdout.frames.slice(queuedStart).join('');
+            return latest.includes(expectedQueueSummary) && latest.includes(UI.placeholder);
+          },
+          `queued line ${index}: ${expectedQueueSummary}`,
         );
       }
       input.write('/');
@@ -4272,7 +4934,7 @@ describe('TUI scrollback output', () => {
       terminal.stdin.write('unique-user-message');
       await waitForOutput(
         terminal.stdout,
-        (value) => value.includes('unique-user-message'),
+        (value) => stripAnsi(value).includes(visiblePromptLine('unique-user-message', 19, 40)),
         'user draft',
       );
       terminal.stdin.write(ENTER);
