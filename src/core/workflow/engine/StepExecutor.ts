@@ -198,6 +198,8 @@ export interface StepExecutorDeps {
   readonly getWorkflowDescription: () => string | undefined;
   readonly getWorkflowRules: () => readonly WorkflowWideRule[] | undefined;
   readonly getWorkflowCallVars?: () => Readonly<Record<string, string | number | boolean>> | undefined;
+  readonly resolveDeclaredReportInputs: (step: WorkflowStep, state: WorkflowState, reportDir: string) => string | undefined;
+  readonly getInheritedReportInputs: () => string | undefined;
   readonly getRetryNote: () => string | undefined;
   readonly getPrContext?: () => PullRequestContext | undefined;
   /** Changed file set for this task. Recomputed per instruction build (the working tree moves). */
@@ -1414,6 +1416,10 @@ export class StepExecutor {
     // read-only フォールバックするための reports ルート。engine の runPaths から
     // 明示的に渡す（リゾルバ側でパス文字列から推測しない）。
     const reportsRootDir = this.deps.getRunPaths().reportsRootAbs;
+    const declaredReportInputs = [
+      this.deps.getInheritedReportInputs(),
+      this.deps.resolveDeclaredReportInputs(step, state, reportDir),
+    ].filter((value): value is string => value !== undefined).join('\n\n');
     const resumeReportConsumerKey = buildResumeReportConsumerKeyFromStack(
       this.deps.getCurrentWorkflowStack?.() ?? [],
     );
@@ -1436,6 +1442,7 @@ export class StepExecutor {
       workflowName: this.deps.getWorkflowName(),
       workflowDescription: this.deps.getWorkflowDescription(),
       workflowCallVars: this.deps.getWorkflowCallVars?.(),
+      declaredReportInputs: declaredReportInputs.length > 0 ? declaredReportInputs : undefined,
       retryNote: this.deps.getRetryNote(),
       prContext: this.deps.getPrContext?.(),
       reviewScope: this.deps.getReviewScope(),
@@ -1493,6 +1500,7 @@ export class StepExecutor {
     phase2Diagnostic?: string,
     injectedReports?: readonly InjectedReport[],
     reportInputs?: Phase1ReportInputs,
+    onReportWritten?: (reportName: string) => void,
   ): Promise<AgentResponse> {
     let nextResponse = response;
 
@@ -1529,7 +1537,12 @@ export class StepExecutor {
     // Report generation is only valid after a completed Phase 1 response.
     if (nextResponse.status === 'done' && step.outputContracts && step.outputContracts.length > 0) {
       try {
-        const reportResult = await runReportPhase(step, stepIteration, { ...phaseCtx, injectedReports, reportInputs });
+        const reportResult = await runReportPhase(
+          step,
+          stepIteration,
+          { ...phaseCtx, injectedReports, reportInputs },
+          onReportWritten,
+        );
         if (reportResult && 'blocked' in reportResult) {
           onTerminalOperation?.({
             origin: reviewerOperationOrigin(step.name),
@@ -2203,6 +2216,7 @@ export class StepExecutor {
     }
 
     let terminalOperation: StepRunResult['terminalOperation'];
+    const writtenReportNames: string[] = [];
     try {
       response = await this.applyPostExecutionPhases(
         step,
@@ -2218,6 +2232,7 @@ export class StepExecutor {
         completionRetryDiagnostic,
         preparedInstruction.injectedReports,
         reportInputTracker.snapshot(),
+        (reportName) => writtenReportNames.push(reportName),
       );
     } catch (error) {
       if (error instanceof RuleDetectionExhaustedError) {
@@ -2251,6 +2266,7 @@ export class StepExecutor {
         stepIteration,
         providerInfo,
       },
+      writtenReportNames,
     );
     return {
       response,
@@ -2306,13 +2322,16 @@ export class StepExecutor {
       readonly stepIteration: number;
       readonly providerInfo: StepProviderInfo;
     },
+    writtenReportNames?: readonly string[],
   ): void {
     if (!step.outputContracts || step.outputContracts.length === 0) return;
     const context = this.createReportExecutionContext(execution);
     const baseDir = resolveReportDirectory(this.deps.getCwd(), this.deps.getReportDir());
 
+    const written = writtenReportNames === undefined ? undefined : new Set(writtenReportNames);
     for (const entry of step.outputContracts) {
       const fileName = entry.name;
+      if (written !== undefined && !written.has(fileName)) continue;
       this.checkReportFile(step, baseDir, fileName, context);
     }
   }

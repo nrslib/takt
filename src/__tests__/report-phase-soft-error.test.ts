@@ -103,6 +103,8 @@ function makeStepExecutor(): StepExecutor {
     getWorkflowName: () => 'test-workflow',
     getWorkflowDescription: () => undefined,
     getWorkflowRules: () => undefined,
+    getInheritedReportInputs: () => undefined,
+    resolveDeclaredReportInputs: () => undefined,
     getRetryNote: () => undefined,
     getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
     structuredCaller: {

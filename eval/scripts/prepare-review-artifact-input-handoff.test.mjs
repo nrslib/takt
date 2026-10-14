@@ -1,0 +1,45 @@
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import test from 'node:test';
+
+const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const promptDir = join(repo, 'eval/prompts/review-artifact-input-handoff');
+
+test('all four cases use the exact declared producer receipt in the current Phase 1 prompt', () => {
+  const prepared = spawnSync(process.execPath, ['eval/scripts/prepare-review-artifact-input-handoff.mjs'], {
+    cwd: repo,
+    encoding: 'utf8',
+    env: { ...process.env, PATH: '/dev/null' },
+  });
+  assert.equal(prepared.status, 0, prepared.stderr);
+  const receipts = JSON.parse(readFileSync(join(promptDir, 'receipts.json'), 'utf8'));
+  assert.deepEqual(receipts.map((entry) => entry.case), ['follow-up', 'replan', 'synthesis', 'merge']);
+  assert.deepEqual(receipts.map((entry) => entry.report_files), [
+    ['fix-plan.md', 'fix-report.md'],
+    ['review-resolution.md'],
+    ['backend-review.md', 'testing-review.md'],
+    ['review-target.md', 'backend-review.md', 'review-summary.md'],
+  ]);
+  for (const receipt of receipts) {
+    assert.equal(receipt.baseline_sha, '946a0283df86e00dce84b7d381a6bb188b29594b');
+    const oldPrompt = readFileSync(join(promptDir, `${receipt.case}-baseline.md`), 'utf8');
+    const newPrompt = readFileSync(join(promptDir, `${receipt.case}-current.md`), 'utf8');
+    assert.ok(!oldPrompt.includes('## 宣言された成果物入力'));
+    assert.ok(!oldPrompt.includes(receipt.expected_marker));
+    assert.ok(newPrompt.includes('## 宣言された成果物入力'));
+    assert.ok(newPrompt.includes(receipt.expected_marker));
+    assert.ok(receipt.report_files.every((name) => newPrompt.includes(`### ${name}`)));
+  }
+  assert.match(readFileSync(join(promptDir, 'follow-up-baseline.md'), 'utf8'), /iteration-<n>--step-remediation/);
+  assert.doesNotMatch(readFileSync(join(promptDir, 'follow-up-current.md'), 'utf8'), /iteration-<n>--step-remediation/);
+  assert.match(readFileSync(join(promptDir, 'merge-baseline.md'), 'utf8'), /subworkflows\//);
+  assert.doesNotMatch(readFileSync(join(promptDir, 'merge-current.md'), 'utf8'), /subworkflows\//);
+  const synthesisTarget = join(
+    repo,
+    'eval/.work/review-artifact-input-handoff/.takt/runs/eval/synthesis/reports/review-target.md',
+  );
+  assert.match(readFileSync(synthesisTarget, 'utf8'), /Review src\/routes\.mjs authorization/);
+});

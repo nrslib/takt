@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -29,6 +29,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
+import { ReportPhaseGenerationError, runReportPhase } from '../core/workflow/phase-runner.js';
 import {
   invalidateAllResolvedConfigCache,
   invalidateGlobalConfigCache,
@@ -194,6 +195,104 @@ steps:
     expect(delegatedOutput?.content).toBe('Child review complete');
     expect(parentOutput?.content).toContain('Child review complete');
     expect(parentOutput?.content).toContain('Local review complete');
+  });
+
+  it.each([
+    ['success', false],
+    ['incomplete', true],
+  ] as const)('repeated static parallel workflow_call %s uses only the current child report', async (_label, failSecondReport) => {
+    writeWorkflow(tmpDir, 'shared/review.yaml', `name: shared/review
+subworkflow:
+  callable: true
+initial_step: review
+steps:
+  - name: review
+    persona: child-reviewer
+    instruction: "Review"
+    output_contracts:
+      report:
+        - name: review.md
+          format: "Report findings"
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent',
+      initial_step: 'reviewers',
+      max_steps: 10,
+      steps: [{
+        name: 'reviewers',
+        instruction: 'Run review',
+        parallel: [{
+          name: 'delegate-review',
+          kind: 'workflow_call',
+          call: 'shared/review',
+          rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }],
+        }],
+        rules: [
+          { condition: 'all("COMPLETE")', next: 'again' },
+          { condition: 'all("COMPLETE")', next: 'consume' },
+        ],
+      }, {
+        name: 'again',
+        persona: 'coordinator',
+        instruction: 'Run another review',
+        rules: [{ condition: 'done', next: 'reviewers' }],
+      }, {
+        name: 'consume',
+        persona: 'consumer',
+        instruction: 'Read the current review',
+        input_reports: { from_step: 'reviewers', reports: 'all' },
+        rules: [{ condition: 'done', next: 'COMPLETE' }],
+      }],
+    });
+    let reportAttempt = 0;
+    vi.mocked(runReportPhase).mockImplementation(async (step, _iteration, context, onReportWritten) => {
+      if (step.name !== 'review') return;
+      reportAttempt += 1;
+      if (reportAttempt === 2 && failSecondReport) {
+        throw new ReportPhaseGenerationError('report failed', 'provider_error', {
+          requiresFreshPhase1: false,
+          failureReasons: ['provider_error'],
+        });
+      }
+      mkdirSync(context.reportDir, { recursive: true });
+      writeFileSync(join(context.reportDir, 'review.md'), `review from attempt ${reportAttempt}`);
+      onReportWritten?.('review.md');
+    });
+    const consumerPrompts: string[] = [];
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: prompt });
+      if (persona === 'consumer') consumerPrompts.push(prompt);
+      return makeResponse({ persona: String(persona), content: 'done' });
+    });
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'aggregate' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 0, method: 'phase3_tag' },
+      { index: 1, method: 'aggregate' },
+      { index: 0, method: 'phase3_tag' },
+    ]);
+    engine = new WorkflowEngine(config, tmpDir, 'Review twice', createWorkflowCallOptions(tmpDir));
+    const abort = vi.fn();
+    engine.on('workflow:abort', abort);
+
+    const state = await engine.run();
+
+    expect(reportAttempt).toBe(2);
+    if (failSecondReport) {
+      expect(state.status).toBe('aborted');
+      expect(consumerPrompts).toEqual([]);
+      expect(abort.mock.calls[0]?.[1]).toMatch(/workflow_report_input_not_produced:review:review\.md/);
+    } else {
+      expect(state.status).toBe('completed');
+      expect(abort).not.toHaveBeenCalled();
+      expect(consumerPrompts).toHaveLength(1);
+      expect(consumerPrompts[0]).toContain('review from attempt 2');
+      expect(consumerPrompts[0]).not.toContain('review from attempt 1');
+    }
   });
 
   it('workflow_call vars は parallel caller から nested reviewer instruction まで継承される', async () => {

@@ -6,7 +6,11 @@ import type {
   WorkflowState,
   WorkflowStep,
 } from '../../models/types.js';
-import { getAllParallelSubSteps, isNormalOrTeamLeaderWorkflowStep } from '../../models/types.js';
+import {
+  getAllParallelSubSteps,
+  isDynamicParallelSubSteps,
+  isNormalOrTeamLeaderWorkflowStep,
+} from '../../models/types.js';
 import { isDelegatedWorkflowStep, isSystemWorkflowStep, isWorkflowCallStep } from '../step-kind.js';
 import type {
   RuntimeStepResolution,
@@ -398,6 +402,9 @@ export class WorkflowEngineStepCoordinator {
     const reportedSteps = new Set<WorkflowStep>([
       step,
       ...reports.map(({ step: reportedStep }) => reportedStep),
+      ...(step.parallel !== undefined && !isDynamicParallelSubSteps(step.parallel)
+        ? getAllParallelSubSteps(step.parallel)
+        : []),
     ]);
     for (const participatedStep of reportedSteps) {
       const parallelParentStepName = step.parallel !== undefined

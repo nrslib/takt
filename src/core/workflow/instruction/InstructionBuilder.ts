@@ -169,7 +169,14 @@ export class InstructionBuilder {
         previousResponseText: previousResponsePrepared || undefined,
       },
     );
-    const instructions = this.appendCompanionInstruction(prepared.text);
+    const instructions = this.context.declaredReportInputs === undefined
+      ? this.appendCompanionInstruction(prepared.text)
+      : [
+          this.appendCompanionInstruction(prepared.text),
+          '',
+          language === 'ja' ? '## 宣言された成果物入力' : '## Declared report inputs',
+          this.context.declaredReportInputs,
+        ].join('\n');
     const reportPreparation = this.step.outputContracts?.flatMap((entry) => {
       if (!isOutputContractItem(entry)) return [];
       const content = [entry.order, entry.format].filter(Boolean).join('\n\n');

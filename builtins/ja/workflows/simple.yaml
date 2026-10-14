@@ -114,6 +114,11 @@ steps:
         next: remediation
 
   - name: follow-up-review
+    input_reports:
+      from_step: remediation
+      reports:
+        - fix-plan.md
+        - fix-report.md
     uses: simple-coding-review
     with:
       review_policy:

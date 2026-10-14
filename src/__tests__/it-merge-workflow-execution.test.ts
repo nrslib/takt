@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowEffect, WorkflowStep } from '../core/models/types.js';
 import { WorkflowEngine } from '../core/workflow/index.js';
@@ -101,7 +101,6 @@ describe('Builtin PR merge workflow execution', () => {
     const decision = { approved: scenario.approved !== false,
       reason: scenario.reason ?? (scenario.approved === false ? 'AI denied this PR' : 'AI approved this PR') };
     let reviewCount = 0;
-    const followUpReportContents: string[] = [];
     vi.mocked(executeStructuredAgent).mockResolvedValue({ persona: 'dynamic-facet-selector',
       status: 'done', content: '', timestamp: new Date(),
       structuredOutput: { selected_ids: ['backend'], rationale: 'Review the changed backend path.' } });
@@ -110,20 +109,8 @@ describe('Builtin PR merge workflow execution', () => {
       if (simple && options?.workflowMeta?.currentStep === 'gather') {
         return { persona: persona ?? 'planner', status: 'done', content: 'GATHERED_CONTEXT: backend change in PR.', timestamp: new Date() };
       }
-      if ((simple && options?.workflowMeta?.workflowName === 'single-review-suite') || (!simple && prompt.includes('review-summary.md'))) {
+      if ((simple && options?.workflowMeta?.workflowName === 'single-review-suite') || (!simple && options?.workflowMeta?.currentStep === 'write_report')) {
         if (simple && options?.executionPhase === 1) simpleReviewPrompts.push(prompt);
-        if (simple && options?.executionPhase === 1 && reviewCount > 0) {
-          const reportDir = prompt.match(/- Report Directory: (.+)\//)?.[1];
-          if (!reportDir) throw new Error('Missing reviewer report directory');
-          const parentSubworkflows = join(dirname(dirname(reportDir)), 'subworkflows');
-          const remediation = readdirSync(parentSubworkflows)
-            .filter((entry) => entry.includes('--step-remediation--workflow-'))
-            .sort((a, b) => Number(b.match(/^iteration-(\d+)/)?.[1]) - Number(a.match(/^iteration-(\d+)/)?.[1]))[0];
-          if (!remediation) throw new Error('Missing sibling remediation report directory');
-          for (const report of ['fix-plan.md', 'fix-report.md']) {
-            followUpReportContents.push(readFileSync(join(parentSubworkflows, remediation, report), 'utf8'));
-          }
-        }
         const reviewResult = simple && scenario.qualityFailed && reviewCount === 0 ? 'REJECT' : 'APPROVE';
         if (simple && options?.executionPhase === 1) reviewCount++;
         const reviewReason = reviewResult === 'REJECT' ? 'Concrete code defect' : 'No unresolved issues';
@@ -140,7 +127,7 @@ describe('Builtin PR merge workflow execution', () => {
         return { persona: persona ?? 'developer', status: 'done',
           content: 'Fix plan, implementation, and validation evidence.', timestamp: new Date() };
       }
-      expect(prompt).toContain(join(reportDirectory, 'subworkflows'));
+      expect(prompt).toContain('CHILD_REVIEW_REPORT');
       const childReports = join(reportDirectory, 'subworkflows');
       const report = readdirSync(childReports, { recursive: true, encoding: 'utf8' })
         .find((name) => name.endsWith('review-summary.md'));
@@ -232,7 +219,7 @@ describe('Builtin PR merge workflow execution', () => {
       }),
     });
     engine.on('workflow:abort', (_state, reason) => failures.push(reason));
-    return { engine, calls, judgedSteps, comments, failures, observedStatuses, childContexts, cloneCwd, executeEffect, followUpReportContents, simpleReviewPrompts, finishCi: () => { ciFinished = true; } };
+    return { engine, calls, judgedSteps, comments, failures, observedStatuses, childContexts, cloneCwd, executeEffect, simpleReviewPrompts, finishCi: () => { ciFinished = true; } };
   }
 
   it.each(['ja', 'en'] as const)('%sのsimpleは単体レビューと共通最終ゲートを経てpush後のCIを待ってmergeする', async (language) => {
@@ -318,11 +305,11 @@ describe('Builtin PR merge workflow execution', () => {
       'review', 'review-adjudication', 'fix-plan', 'fix', 'final-gate',
     ]));
     expect(h.judgedSteps).not.toContain('fix-verifier');
-    expect(h.followUpReportContents).toHaveLength(2);
-    expect(h.followUpReportContents.every((content) => content.length > 0)).toBe(true);
     expect(h.simpleReviewPrompts).toHaveLength(2);
-    expect(h.simpleReviewPrompts[0]).not.toContain('--step-remediation--workflow-');
-    expect(h.simpleReviewPrompts[1]).toContain('--step-remediation--workflow-');
+    expect(h.simpleReviewPrompts[0]).not.toContain('### fix-plan.md');
+    expect(h.simpleReviewPrompts[1]).toContain('### fix-plan.md');
+    expect(h.simpleReviewPrompts[1]).toContain('### fix-report.md');
+    expect(h.simpleReviewPrompts[1]).toContain('Fix plan, implementation, and validation evidence.');
     expect(h.judgedSteps.filter((step) => step === 'review-adjudication')).toHaveLength(2);
     expect(h.calls).toContain('commit_and_push');
     expect(h.calls).toContain('merge_pr');
@@ -336,8 +323,6 @@ describe('Builtin PR merge workflow execution', () => {
     );
     if (!workflow) throw new Error('Missing review-fix-backend workflow');
     const reviewCount = new Map<string, number>();
-    const followUpReports: string[] = [];
-    const remediationSelections: string[] = [];
     const parallelReviewPrompts: string[] = [];
     vi.mocked(executeStructuredAgent).mockResolvedValue({
       persona: 'dynamic-facet-selector', status: 'done', content: '', timestamp: new Date(),
@@ -349,19 +334,6 @@ describe('Builtin PR merge workflow execution', () => {
       if (step === 'arch-review' && options?.executionPhase === 1) {
         parallelReviewPrompts.push(prompt);
         const count = reviewCount.get(step) ?? 0;
-        if (count > 0) {
-          const reportDir = prompt.match(/- Report Directory: (.+)\//)?.[1];
-          if (!reportDir) throw new Error('Missing parallel reviewer report directory');
-          const siblingRoot = join(reportDir, 'subworkflows');
-          const remediation = readdirSync(siblingRoot)
-            .filter((entry) => entry.includes('--step-remediation--workflow-'))
-            .sort((a, b) => Number(b.match(/^iteration-(\d+)/)?.[1]) - Number(a.match(/^iteration-(\d+)/)?.[1]))[0];
-          if (!remediation) throw new Error('Missing sibling remediation directory');
-          remediationSelections.push(remediation);
-          for (const report of ['fix-plan.md', 'fix-report.md']) {
-            followUpReports.push(readFileSync(join(siblingRoot, remediation, report), 'utf8'));
-          }
-        }
         reviewCount.set(step, count + 1);
       }
       return { persona: persona ?? 'agent', status: 'done', content: `Report from ${step}`, timestamp: new Date() };
@@ -389,16 +361,11 @@ describe('Builtin PR merge workflow execution', () => {
     });
     const abortReasons: string[] = [];
     engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
-    expect((await engine.run()).status, `${abortReasons.join('; ')}; step=${engine.getState().currentStep}; reviews=${JSON.stringify([...reviewCount])}; reports=${followUpReports.length}`).toBe('completed');
+    expect((await engine.run()).status, `${abortReasons.join('; ')}; step=${engine.getState().currentStep}; reviews=${JSON.stringify([...reviewCount])}`).toBe('completed');
     expect(reviewCount.get('arch-review')).toBe(3);
-    expect(parallelReviewPrompts[0]).not.toContain('--step-remediation--workflow-');
-    expect(parallelReviewPrompts.slice(1).every((prompt) => prompt.includes('--step-remediation--workflow-'))).toBe(true);
-    expect(followUpReports).toHaveLength(4);
-    expect(followUpReports.every((report) => report.length > 0)).toBe(true);
-    expect(remediationSelections).toHaveLength(2);
-    expect(remediationSelections[0]).not.toBe(remediationSelections[1]);
-    expect(remediationSelections.map((entry) => Number(entry.match(/^iteration-(\d+)/)?.[1])))
-      .toEqual([1, 2]);
+    expect(parallelReviewPrompts[0]).not.toContain('### fix-plan.md');
+    expect(parallelReviewPrompts.slice(1).every((prompt) =>
+      prompt.includes('### fix-plan.md') && prompt.includes('### fix-report.md'))).toBe(true);
   });
 
   it.each(['ja', 'en'] as const)('%sのsimpleは修正計画で対応不能ならpushしない', async (language) => {

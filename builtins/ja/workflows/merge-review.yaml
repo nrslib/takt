@@ -37,13 +37,16 @@ steps:
       - condition: when(true)
         next: judge
   - name: judge
+    input_reports:
+      from_step: review
+      reports: all
     persona: supervisor
     edit: false
     capabilities: readonly
     structured_output:
       schema_ref: merge-decision
     instruction: |
-      対象PRの累積差分について、{report_dir}/subworkflows/ に保存された今回の子workflowのレビューレポートを確認してください。
+      対象PRの累積差分について、完了済みのレビューステップから渡された報告を確認してください。
       子workflowのCOMPLETEを承認とみなしてはいけません。未解消の指摘、外部レビューのCHANGES_REQUESTED、CI失敗、競合があれば approved=false とし、具体的な理由を出力してください。
       head SHA: {context:wait_ci.status.headSha}
       CI passed: {context:wait_ci.status.ci.passed}

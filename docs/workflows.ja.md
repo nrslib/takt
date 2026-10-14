@@ -849,6 +849,19 @@ output_contracts:
 - `use_judge`（デフォルト `true`）— そのレポートを Phase 3 のステータス判定に入力するかどうか。書き出すだけで判定の根拠にしないレポートには `use_judge: false` を指定します。rules の判定が必要な step では少なくとも 1 件の `use_judge` レポートを残す必要があります。
 - `order` — report format facet への参照（`format` と同じ方法で解決）で、その内容が Phase 2 のデフォルトのレポート作成指示を置き換えます。format テンプレートだけでは足りない、レポート作成手順のカスタム指示が必要なときに使います。
 
+agent step、`workflow_call`、parallel の親・子 step は同じ workflow 内の別 step が作成したレポートを入力として宣言できます。
+
+```yaml
+- name: follow-up-review
+  input_reports:
+    from_step: remediation
+    reports: [fix-plan.md, fix-report.md]
+  persona: reviewer
+  instruction: 渡された報告を使って修正後の内容を確認してください。
+```
+
+`reports: all` は指定した step の完了済み実行から全レポートを選びます。選択された並列レビュアーや入れ子の呼び出しで作成された報告も対象です。ファイル名を列挙した場合は一致する公開レポートだけを選び、欠落や重複があれば失敗します。TAKT は該当する完了済み呼び出しの本文を読み、agent の Phase 1 指示へ追加します。入力側が `workflow_call` の場合は呼び出し先の agent に渡します。報告がない場合や呼び出しが未完了の場合、近隣のディレクトリから探さずに失敗します。実行前の経路から入力側へ進む場合に限り `optional_if_unrun: true` を指定してください。入力元が開始した後は報告が必須です。
+
 ## Step レベルのプロバイダープロモーション
 
 workflow の promotion は `runtime.yaml` で選択された target ladder だけを進めます。各エントリは厳密に `{at: N}` でなければならず、provider、model、provider options、condition はロード時に拒否されます。各段階の実行設定は `runtime.yaml` に記述してください。

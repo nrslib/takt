@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -54,14 +54,8 @@ describe('simple workflow follow-up review', () => {
           if (options?.executionPhase === 1) {
             reviewPrompts.push(prompt);
             if (step === 'follow-up-review') {
-              const reportDir = prompt.match(/- Report Directory: (.+)\//)?.[1];
-              if (!reportDir) throw new Error('Missing follow-up review report directory');
-              const siblings = join(reportDir, 'subworkflows');
-              const remediation = readdirSync(siblings)
-                .find(entry => entry.includes('--step-remediation--workflow-'));
-              if (!remediation) throw new Error('Missing completed remediation');
-              expect(readFileSync(join(siblings, remediation, 'fix-plan.md'), 'utf8')).toContain('REPAIR_PLAN_EVIDENCE');
-              expect(readFileSync(join(siblings, remediation, 'fix-report.md'), 'utf8')).toContain('REPAIR_TEST_EVIDENCE');
+              expect(prompt).toContain('### fix-plan.md\nREPAIR_PLAN_EVIDENCE');
+              expect(prompt).toContain('### fix-report.md\nREPAIR_TEST_EVIDENCE');
             }
           }
           return { persona: persona ?? 'coding-reviewer', status: 'done',
@@ -96,8 +90,8 @@ describe('simple workflow follow-up review', () => {
       expect(visited.indexOf('review')).toBeLessThan(visited.indexOf('fix'));
       expect(visited.indexOf('fix')).toBeLessThan(visited.indexOf('follow-up-review'));
       expect(reviewPrompts).toHaveLength(2);
-      expect(reviewPrompts[0]).not.toContain('--step-remediation--workflow-');
-      expect(reviewPrompts[1]).toContain('--step-remediation--workflow-');
+      expect(reviewPrompts[0]).not.toContain('REPAIR_PLAN_EVIDENCE');
+      expect(reviewPrompts[1]).toContain('REPAIR_PLAN_EVIDENCE');
       expect(reviewPrompts[1]).not.toContain('参照先の報告 ... はこの run に存在しない');
       if (name === 'pure') {
         const skillsInstruction = readFileSync(join(process.cwd(), 'builtins', language,

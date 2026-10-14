@@ -10,6 +10,19 @@ ChatGPT plan), so runs consume subscription quota, not API billing. Provider
 requirements and high-cost exceptions are recorded separately from suite tier
 in `eval/suite-registry.mjs`.
 
+`review-artifact-input-handoff` は #1803 の日本語4ケースで、固定した旧版
+`946a0283d` と現在の成果物受け渡しを比較する。`npm run build` の後に
+`npm run eval:prompts:review-artifact-input-handoff` を実行する。
+準備スクリプトは宣言した元ステップの完了記録、実行参加記録、出力契約、実ファイルを通して
+現在版の Phase 1 入力を作り、旧版には同じ fixture を与える。
+`eval/prompts/review-artifact-input-handoff/receipts.json` に入力とプロンプトの
+ハッシュを記録する。モデルは両版とも `gpt-6.1-sol`、reasoning effort は high。
+旧版で異なる4行は `eval/fixtures/review-artifact-input-handoff/baseline-lines.json` に
+元コミットとともに固定しており、準備時に Git 履歴を取得する必要はない。
+レビュー統合ケースでは `gather` が同じ報告スコープに作る `review-target.md` も用意する。
+この評価は受け渡し後の判断を測るもので、日英すべての配線や実行時の欠落拒否は
+ワークフローのテストで検証する。
+
 `phase3-follow-input` は Phase 3 の入力に書かれた結論の対応づけを測る。
 現行のレビュー・最終判定・ループ判定について6ケースを日本語・英語で用意し、同じスイート内で `variant` によって
 baseline（固定した40桁の `baseline_revision` のテンプレートと文字列 `conductor`）と

@@ -1,5 +1,6 @@
 import {
   getAllParallelSubSteps,
+  isDynamicParallelSubSteps,
   type DynamicParallelSelectionSnapshot,
   type WorkflowConfig,
   type WorkflowCallStep,
@@ -12,6 +13,7 @@ import { MAX_WORKFLOW_CALL_DEPTH } from './workflow-call-depth.js';
 import { buildWorkflowResumePointEntry, getWorkflowReference } from './workflow-reference.js';
 import { workflowCallNamespaceSegmentMatchesInvocation } from './workflow-call-namespace.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
+import { buildDynamicParallelSelectionIdentity } from './dynamic-parallel/identity.js';
 import {
   resolveReviewReportStepParticipation,
   type ReviewReportParticipationEvidence,
@@ -38,6 +40,7 @@ export interface InheritedReportSourceResolverContext {
   readonly lookupCwd: string;
   readonly resumeStackPrefix: readonly WorkflowResumePointEntry[];
   readonly participation: ReviewReportParticipationEvidence;
+  readonly requireCompletedCalls?: true;
 }
 
 export interface ReviewReportDiscoveryContextOptions {
@@ -52,6 +55,7 @@ export interface ReviewReportDiscoveryContextOptions {
   readonly workflowCallInvocations: ReviewReportParticipationEvidence['workflowCallInvocations'];
   readonly workflowStepParticipations?: ReviewReportParticipationEvidence['workflowStepParticipations'];
   readonly dynamicParallelSelections?: ReadonlyMap<string, DynamicParallelSelectionSnapshot>;
+  readonly requireCompletedCalls?: true;
 }
 
 export function createReviewReportDiscoveryContext(
@@ -72,6 +76,7 @@ export function createReviewReportDiscoveryContext(
       workflowStepParticipations: options.workflowStepParticipations ?? new Map(),
       dynamicParallelSelections: options.dynamicParallelSelections ?? new Map(),
     },
+    requireCompletedCalls: options.requireCompletedCalls,
   };
 }
 
@@ -204,6 +209,12 @@ function resolveWorkflowCallReportNames(
   workflowReferences: ReadonlySet<string>,
   depth: number,
 ): InheritedReviewReportNamesResult {
+  if (context.requireCompletedCalls === true && reportParticipation.invocation.completed !== true) {
+    return {
+      reportNames: [],
+      failures: [{ kind: 'fatal', reason: `workflow_call_input_not_completed:${step.name}` }],
+    };
+  }
   let childWorkflow: WorkflowConfig | null | undefined;
   try {
     childWorkflow = context.workflowCallResolver?.({
@@ -296,6 +307,23 @@ function resolveWorkflowStepReportNames(
 ): InheritedReviewReportNamesResult {
   const participation = resolveParticipation(step, context, parallelParentStepName);
   if (participation.kind === 'not-participated') {
+    const staticParallelParent = parallelParentStepName === undefined
+      ? undefined
+      : context.workflow.steps.find((candidate) => candidate.name === parallelParentStepName);
+    if (
+      context.requireCompletedCalls === true
+      && staticParallelParent?.parallel !== undefined
+      && !isDynamicParallelSubSteps(staticParallelParent.parallel)
+      && (hasReportOutputs(step) || step.kind === 'workflow_call')
+    ) {
+      return {
+        reportNames: [],
+        failures: [{
+          kind: 'fatal',
+          reason: `workflow_report_input_static_reviewer_missing:${parallelParentStepName}:${step.name}`,
+        }],
+      };
+    }
     return { reportNames: [], failures: [] };
   }
   if (participation.kind === 'invalid') {
@@ -305,7 +333,20 @@ function resolveWorkflowStepReportNames(
     };
   }
   const generatedReportNames = new Set(participation.reportNames);
-  const reportNames = getReportFiles(step.outputContracts)
+  const dynamicSelection = step.parallel !== undefined && isDynamicParallelSubSteps(step.parallel)
+    ? context.participation.dynamicParallelSelections.get(
+        buildDynamicParallelSelectionIdentity(context.workflow, step.name, context.resumeStackPrefix),
+      )
+    : undefined;
+  const missingSelectedReviewers = context.requireCompletedCalls === true && dynamicSelection !== undefined
+    ? dynamicSelection.effective_selection_ids.filter((id) =>
+        !participation.parallelParticipants.some((candidate) => candidate.name === id))
+    : [];
+  const contractedReportNames = getReportFiles(step.outputContracts);
+  const missingContractedReports = context.requireCompletedCalls === true
+    ? contractedReportNames.filter((fileName) => !generatedReportNames.has(fileName))
+    : [];
+  const reportNames = contractedReportNames
     .filter((fileName) => generatedReportNames.has(fileName))
     .map((fileName) => [...namespace, fileName].join(REPORT_PATH_SEPARATOR));
   const parallelResults = participation.parallelParticipants.map((parallelStep) =>
@@ -329,7 +370,16 @@ function resolveWorkflowStepReportNames(
       )
     : { reportNames: [], failures: [] };
   return combineReportNameResults([
-    { reportNames, failures: [] },
+    {
+      reportNames,
+      failures: missingContractedReports.map((fileName) => ({
+        kind: 'fatal' as const,
+        reason: `workflow_report_input_not_produced:${step.name}:${fileName}`,
+      })).concat(missingSelectedReviewers.map((id) => ({
+        kind: 'fatal' as const,
+        reason: `workflow_report_input_selected_reviewer_missing:${step.name}:${id}`,
+      }))),
+    },
     ...parallelResults,
     nestedWorkflowCallResult,
   ]);

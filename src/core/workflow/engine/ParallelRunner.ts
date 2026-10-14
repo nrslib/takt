@@ -740,7 +740,9 @@ export class ParallelRunner {
           }
           const { executableSubStep, subIteration } = preparedSubStep;
           const subInstruction = this.deps.stepExecutor.prepareInstruction(
-            executableSubStep,
+            step.inputReports === undefined || executableSubStep.inputReports !== undefined
+              ? executableSubStep
+              : { ...executableSubStep, inputReports: step.inputReports },
             subIteration,
             state,
             task,
@@ -1085,13 +1087,14 @@ export class ParallelRunner {
           const phaseCtx = completionRetryDiagnostic === undefined
             ? basePhaseContext
             : { ...basePhaseContext, completionRetryDiagnostic };
+          const writtenReportNames: string[] = [];
           if (subStep.outputContracts && subStep.outputContracts.length > 0) {
             try {
               const reportResult = await runReportPhase(subStep, subIteration, {
                 ...phaseCtx,
                 injectedReports: subInstruction.injectedReports,
                 reportInputs: reportInputTracker.snapshot(),
-              });
+              }, (reportName) => writtenReportNames.push(reportName));
               restartIfLiveInterventionPending();
               if (reportResult && 'blocked' in reportResult) {
                 const blockedResponse: AgentResponse = {
@@ -1231,6 +1234,7 @@ export class ParallelRunner {
             stepIteration: subIteration,
             providerInfo: subPm,
           },
+          writtenReportNames,
         );
 
         return {
@@ -1553,6 +1557,7 @@ export class ParallelRunner {
         stepIteration,
         providerInfo: parentPm,
       },
+      [],
     );
     const selectedFailure = this.selectFailureByDefinitionOrder(subResults);
     return {

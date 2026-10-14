@@ -72,6 +72,9 @@ fragment root の `params` は必須の型付き parameter を宣言し、`uses`
   pass_previous_response: true # 前の出力を渡すか（デフォルト: true）
   allowed_tools: [...]         # 許可ツール一覧（任意、参考情報）
   output_contracts: [...]      # 出力契約設定（任意）
+  input_reports:               # 同じ workflow の完了済み step からレポートを受け取る（任意）
+    from_step: remediation
+    reports: [fix-plan.md, fix-report.md] # または all
   quality_gates: [...]         # agent step 用の品質 gate（文字列指示 / command gate、任意）
   rules: [...]                 # 遷移ルール（必須）
 ```

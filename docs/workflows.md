@@ -850,6 +850,19 @@ Every report entry requires `name` and `format`. Two optional fields refine beha
 - `use_judge` (default `true`) — whether the report is fed into the Phase 3 status judgment. Set `use_judge: false` for reports that should be written but not used as judgment evidence. A step whose rules need judgment must keep at least one `use_judge` report.
 - `order` — a report-format facet reference (resolved like `format`) whose content replaces the default report-writing instruction in Phase 2. Use it when the agent needs custom directions for producing the report beyond the format template itself.
 
+An agent step, `workflow_call`, or parallel parent/sub-step can declare report inputs from another step in the same workflow:
+
+```yaml
+- name: follow-up-review
+  input_reports:
+    from_step: remediation
+    reports: [fix-plan.md, fix-report.md]
+  persona: reviewer
+  instruction: Review the completed repair using the supplied reports.
+```
+
+`reports: all` selects all reports produced by the source's completed execution, including selected parallel reviewers and nested calls. An explicit list selects those public report file names and rejects missing or ambiguous matches. TAKT reads the exact completed invocation and adds the report contents to the agent's Phase 1 instruction, or passes them to the called workflow's agent steps when the consumer is a `workflow_call`. A missing, incomplete, or unrelated report fails the step; TAKT does not search neighboring report directories. Use `optional_if_unrun: true` only when a valid route reaches the consumer before its source has executed. Once the source starts, its reports are required.
+
 ## Runtime provider promotion
 
 Workflow promotion only advances the ladder selected by `runtime.yaml`. Each entry must be the

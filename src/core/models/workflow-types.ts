@@ -210,6 +210,13 @@ export interface WorkflowStepParticipationRecord {
 export interface WorkflowCallInvocationRecord {
   call_instance: number;
   report_namespace_segment: string;
+  completed?: true;
+}
+
+export interface WorkflowReportInput {
+  fromStep: string;
+  reports: readonly string[] | 'all';
+  optionalIfUnrun?: true;
 }
 
 export interface DynamicParallelSelectionSnapshot {
@@ -283,6 +290,7 @@ export interface WorkflowPromotionEntry {
 
 interface WorkflowStepBase {
   name: string;
+  inputReports?: WorkflowReportInput;
   description?: string;
   personaDisplayName: string;
   providerRoutingPersonaKey?: string;

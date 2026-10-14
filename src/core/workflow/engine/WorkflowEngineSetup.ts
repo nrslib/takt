@@ -57,6 +57,7 @@ import {
 } from '../workflow-call-invocation-index.js';
 import { SelectorInputReader } from '../dynamic-parallel/selector-input-reader.js';
 import { restoreWorkflowStepParticipationIndex } from '../workflow-step-participation-index.js';
+import { resolveDeclaredReportInputs } from '../instruction/declared-report-inputs.js';
 import {
   createWorkflowStepAbortSignalContext,
   recordWorkflowStepProviderActivity,
@@ -299,6 +300,17 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getWorkflowDescription: () => params.config.description,
     getWorkflowRules: () => workflowRules,
     getWorkflowCallVars: () => params.options.workflowCallVars,
+    getInheritedReportInputs: () => params.options.inheritedReportInputs,
+    resolveDeclaredReportInputs: (step, state, reportDir) => resolveDeclaredReportInputs(step, {
+      workflow: params.config,
+      state,
+      sharedRuntime: params.sharedRuntime,
+      workflowCallResolver: params.options.workflowCallResolver,
+      projectCwd: params.projectCwd,
+      lookupCwd: params.getCwd(),
+      reportDir,
+      resumeStackPrefix: params.resumeStackPrefix,
+    }),
     getRetryNote: () => params.options.retryNote,
     getPrContext: () => params.options.prContext,
     getReviewScope,

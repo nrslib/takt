@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { ProviderNeutralStructuredCaller, type StructuredCaller } from '../../../agents/structured-caller.js';
 import { createWorkRequirementEstimator } from '../../../agents/auto-routing-usecase.js';
 import { createLogger, generateReportDir, getErrorMessage, isValidReportDirName } from '../../../shared/utils/index.js';
+import { getAllParallelSubSteps, isDynamicParallelSubSteps } from '../../models/types.js';
 import type {
   AgentResponse,
   WorkflowConfig,
@@ -661,6 +662,15 @@ export class WorkflowEngine extends EventEmitter {
       );
     }
     this.workflowCallRunner.cancelPendingInvocation();
+    if (step.parallel !== undefined && !isDynamicParallelSubSteps(step.parallel)) {
+      this.sharedRuntime.workflowCallInvocationEvidence!.index.clearPreviousParallelChildInvocations(
+        this.config,
+        step.name,
+        getAllParallelSubSteps(step.parallel).filter(isWorkflowCallStep).map((child) => child.name),
+        this.resumeStackPrefix,
+        occurrence,
+      );
+    }
     this.setActiveResumePoint(step, iteration, occurrence, this.resumeStackPrefix);
     return undefined;
   }

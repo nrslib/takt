@@ -52,6 +52,7 @@ export const WorkflowRestartPointSchema = z.object({
 
 export const WorkflowCallInvocationRecordSchema = z.object({
   call_instance: z.number().int().positive(),
+  completed: z.literal(true).optional(),
   report_namespace_segment: z.string().regex(
     /^iteration-[1-9]\d*--step-[^/]+--workflow-[^/]+(?:--site-[a-f0-9]{64})?$/,
     'Invalid workflow-call report namespace segment',

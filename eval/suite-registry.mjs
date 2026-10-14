@@ -53,6 +53,7 @@ const CLASSIFICATIONS = [
     tier: 'active',
     reason: '現在の review architecture の探索範囲・証拠・裁定境界を横断して測る',
     suites: [
+      'review-artifact-input-handoff',
       'initial-review-contract-discovery',
       'testing-review-observable-evidence',
       'scope-architecture-search',
@@ -183,6 +184,12 @@ const CLASSIFICATIONS = [
 ];
 
 const EXECUTION_OVERRIDES = {
+  'review-artifact-input-handoff': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'high',
+    reason: '完了済み成果物の実行時受け渡しを4ケースの新旧プロンプトで比較する明示選択の評価',
+  },
   'review-adjudication-applicable-inputs': {
     defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
     reason: 'Sol Low、Opus 5、Luna Max の3モデルでレビュー裁定の入力範囲を比較する明示選択の評価',

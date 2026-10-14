@@ -93,6 +93,8 @@ export interface InstructionContext {
   workflowRules?: readonly WorkflowWideRule[];
   /** Scalar context inherited through workflow_call boundaries. */
   workflowCallVars?: Readonly<Record<string, string | number | boolean>>;
+  /** Verified report bodies supplied by declared logical producers. */
+  declaredReportInputs?: string;
   companion?: {
     mailboxDirectory: string;
     reviewMode: CompanionReviewMode;

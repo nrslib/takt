@@ -64,6 +64,11 @@ steps:
           - condition: needs_fix
 
   - name: reviewers
+    input_reports:
+      from_step: remediation
+      reports:
+        - fix-plan.md
+        - fix-report.md
     uses: review-fix-backend-reviewers
     with:
       architecture_review_instruction: follow-up-architecture-review

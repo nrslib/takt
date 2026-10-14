@@ -136,11 +136,13 @@ describe('report phase with structured_output', () => {
     );
 
     // When
-    await runReportPhase(step, 1, ctx);
+    const writtenReports: string[] = [];
+    await runReportPhase(step, 1, ctx, (reportName) => writtenReports.push(reportName));
 
     // Then
     const reportContent = readFileSync(join(cwd, REPORT_DIR_REL, 'repro.md'), 'utf-8');
     expect(reportContent).toBe(PHASE2_MARKDOWN);
+    expect(writtenReports).toEqual(['repro.md']);
     expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(runAgent).mock.calls[0]?.[2]?.outputSchema).toBeUndefined();
     expect(vi.mocked(runAgent).mock.calls[0]?.[2]?.sessionId).toBe('phase1-session');

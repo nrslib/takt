@@ -25,6 +25,7 @@
  * Usage:
  *   node eval/scripts/prepare.mjs [targetId...]   # default: all targets
  */
+import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -700,7 +701,11 @@ const TARGETS = [
 
 ];
 
-export const PREPARE_TARGET_IDS = Object.freeze(TARGETS.map(({ id }) => id));
+const ARTIFACT_HANDOFF_TARGET = 'review-artifact-input-handoff';
+export const PREPARE_TARGET_IDS = Object.freeze([
+  ...TARGETS.map(({ id }) => id),
+  ARTIFACT_HANDOFF_TARGET,
+]);
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, '../..');
@@ -894,9 +899,15 @@ function composeConfiguredDynamicFacets(target, selection, targetId, stepName, p
 async function main() {
   const requested = process.argv.slice(2);
   for (const id of requested) {
-    if (!TARGETS.some((t) => t.id === id)) {
-      throw new Error(`Unknown target "${id}". Available: ${TARGETS.map((t) => t.id).join(', ')}`);
+    if (!PREPARE_TARGET_IDS.includes(id)) {
+      throw new Error(`Unknown target "${id}". Available: ${PREPARE_TARGET_IDS.join(', ')}`);
     }
+  }
+  if (requested.includes(ARTIFACT_HANDOFF_TARGET)) {
+    execFileSync(process.execPath, ['eval/scripts/prepare-review-artifact-input-handoff.mjs'], {
+      cwd: repoRoot,
+      stdio: 'inherit',
+    });
   }
   const targets = requested.length > 0 ? TARGETS.filter((t) => requested.includes(t.id)) : TARGETS;
 
