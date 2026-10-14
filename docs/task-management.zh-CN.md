@@ -234,6 +234,8 @@ takt list
 
 选择带有 worktree clone 的运行中任务后，会打开普通 assistant 对话，并将该任务作为 `/tell` 的初始目标。对话中可以查看其他任务或讨论新任务。`/tell` 在确认后再次检查目标，只向确认时选中的任务写入；已完成、已删除、slug 不匹配或非 clone 的 run 不会成为候选，也不会接收指令。
 
+由 `takt merge` 启动的合并任务，以及 requeue 或 retry 后由 `takt run` / `takt watch` 执行的合并任务，只要仍在运行且具有 worktree clone，也可作为 `/tell` 的目标。CLI/TUI 对话、从 `takt list` 打开的对话和 MCP 的 `takt_tell_run` 使用相同的目标解析。合并 run 的元数据和介入记录保存在原项目的 `.takt/runs/<slug>/` 中。指令会在下一个 agent step 送达，包括子 workflow 内的 agent step；system step 不会消费这些指令。
+
 ### Exceeded 任务的操作
 
 | 操作 | 说明 |

@@ -253,6 +253,8 @@ CLI/TUI の assistant と grill-me 会話では `/requeue [補足]` で failed �
 
 ワークツリークローンを持つ実行中タスクを選ぶと、そのタスクを `/tell` の初期対象にした通常の assistant 会話が開きます。会話中に別のタスクを確認したり、新しいタスクを相談したりできます。`/tell` は確定後に対象を再確認し、選択されたタスクだけへ書き込みます。完了、削除、slug 不一致、clone でない run は候補にも書き込み先にもなりません。
 
+`takt merge` で起動したマージタスクや、requeue・retry 後に `takt run` / `takt watch` が実行するマージタスクも、ワークツリークローンを持つ実行中の run なら `/tell` の対象になります。CLI/TUI の会話、`takt list` から開く会話、MCP の `takt_tell_run` は同じ対象解決を使います。マージ run のメタデータと介入は元プロジェクトの `.takt/runs/<slug>/` に保存されます。指示は子 workflow 内も含めて次の agent step で配達され、system step では消費されません。
+
 ### Exceeded タスクの操作
 
 | 操作 | 説明 |
