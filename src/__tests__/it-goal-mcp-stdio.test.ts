@@ -61,6 +61,7 @@ describe('Goal MCP stdio entrypoint', () => {
           'node_modules/.bin/vite-node', '--config', 'src/__tests__/helpers/vite-node.config.ts',
           'src/__tests__/helpers/mcp-source-stdio-entrypoint.ts',
         ] : ['dist/app/mcp/index.js']),
+        '--tool-set', 'manager',
         '--goal-confirmation-public-key', publicKeyPath,
       ],
       cwd: process.cwd(),
@@ -323,7 +324,7 @@ describe('manager questions, answers and notifications through production bounda
       await server.connect(b);
       await reader.connect(a);
       expect((await reader.listTools()).tools.map(({ name }) => name).sort()).toEqual([
-        'takt_list_tasks', 'takt_get_run', 'takt_list_goals', 'takt_get_goal',
+        'takt_list_tasks', 'takt_get_run',
       ].sort());
     } finally { try { await reader.close(); } finally { await server.close(); } }
   });

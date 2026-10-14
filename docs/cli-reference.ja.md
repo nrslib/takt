@@ -78,9 +78,9 @@ takt update codex     # 指定対象だけを更新
 
 `takt install deepseek-harness` は必要な公式 SDK を導入します。npm レジストリへの接続が必要です。導入後も動作しない場合は `takt install deepseek-harness --force` で入れ直してください。認証情報と `provider: deepseek-harness` の設定は[設定ガイド](./configuration.ja.md#deepseek-harness-deepseek-harness)を参照してください。
 
-## manager（実験的）
+## manager（準備中）
 
-`takt manager` は対話端末でゴール相談の TUI を起動します。manager は実験的機能です。動作・設定・保存するデータの形式は予告なく変わることがあります。自動でタスクを投入・実行するため、provider の API の費用がかかります。起動するたびに入力欄の上にこの注意を表示し、`takt manager --help` にも言語設定（日本語・英語）に合わせて表示します。
+manager は準備中で、現在は利用できません。`takt manager` はコマンドとして登録されておらず、`takt-mcp` もゴール系ツールを公開していません。
 
 ## Web UI の実行境界
 

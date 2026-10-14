@@ -318,7 +318,7 @@ describe('manager turns after worker pool completion', () => {
     if (entry === 'run') await runAllTasks(cwd, { goalTasksOnly: true });
     else if (entry === 'TUI') await openManagerScreen();
     else {
-      const server = createTaktMcpServer({}, { allowedProjectRoot: cwd });
+      const server = createTaktMcpServer({}, { toolSet: 'manager', allowedProjectRoot: cwd });
       const client = new Client({ name: 'crash-recovery', version: '1' });
       const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
       await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
