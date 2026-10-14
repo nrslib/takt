@@ -3650,6 +3650,70 @@ describe('ConversationView', () => {
     app.unmount();
   });
 
+  it('records a missing /retry order for the next answer and /go without recording other notices', async () => {
+    const retryNotice = getLabel('interactive.ui.retryNoOrder', 'en');
+    const replayNotice = getLabel('instruct.ui.replayNoOrder', 'en');
+    const call = vi.fn()
+      .mockResolvedValueOnce({ persona: 'retry', status: 'done', content: 'Earlier answer.', timestamp: new Date() })
+      .mockResolvedValueOnce({ persona: 'retry', status: 'done', content: 'Next answer.', timestamp: new Date() })
+      .mockResolvedValueOnce({ persona: 'retry', status: 'done', content: 'Task instruction.', timestamp: new Date() });
+    const store = createSessionImageAttachmentStore('/repo');
+    const conversation = createTuiConversation({
+      cwd: '/repo',
+      plan: {
+        ctx: {
+          provider: makeProvider({ setup: () => ({ call }) }),
+          providerType: 'mock', model: 'mock-model', lang: 'en',
+          personaName: 'retry', sessionId: undefined,
+        },
+        strategy: {
+          systemPrompt: 'system', formalSpec: false, modelCheckTimeoutSeconds: 300,
+          allowedTools: [], transformPrompt: (message: string) => message,
+          introMessage: 'Retry mode', previousOrderContent: '',
+          enableRetryCommand: true, enableAssistantRetryCommands: false,
+        },
+      },
+      attachmentStore: store,
+      persistSession: false,
+    });
+    const onExit = vi.fn();
+    const app = renderConversation(conversation, 'chat', onExit);
+    try {
+      await flushFrames();
+      for (const input of ['Earlier question', '/replay', '/retry']) {
+        app.stdin.write(input);
+        await flushFrames();
+        app.stdin.write(ENTER);
+        await flushFrames();
+      }
+
+      expect(app.lastFrame()).toContain(retryNotice);
+      expect(conversation.resolveLocalCommand('/accept')).toMatchObject({
+        kind: 'execute', task: 'Earlier answer.',
+      });
+
+      app.stdin.write('What next?');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await vi.waitFor(() => expect(call).toHaveBeenCalledTimes(2));
+      expect(call.mock.calls[1]?.[0]).toContain(retryNotice);
+
+      app.stdin.write('/go');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await vi.waitFor(() => expect(call).toHaveBeenCalledTimes(3));
+      expect(call.mock.calls[2]?.[0]).toContain(retryNotice);
+      expect(conversation.snapshotHistory?.().filter((message) => message.operationResult)).toEqual([
+        { role: 'assistant', content: retryNotice, operationResult: true },
+      ]);
+      expect(call.mock.calls[2]?.[0]).not.toContain(replayNotice);
+      expect(onExit).toHaveBeenCalled();
+    } finally {
+      app.unmount();
+      cleanupImageAttachmentStore(store);
+    }
+  });
+
   it('should insert the pasted image placeholder at the caret', async () => {
     const conversation = createScriptedConversation(
       new Map<string, TuiLocalCommand>([

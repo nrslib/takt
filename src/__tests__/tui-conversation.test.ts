@@ -1048,6 +1048,7 @@ describe('TUI local commands', () => {
     expect(conversation.resolveLocalCommand('/retry')).toEqual({
       kind: 'notice',
       message: getLabel('interactive.ui.retryNoOrder', 'en'),
+      operationResult: true,
     });
     expect(conversation.commandAvailability).toMatchObject({
       enableRetryCommand: true,

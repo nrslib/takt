@@ -177,7 +177,7 @@ export type TuiLocalCommand =
     text?: string;
   }
   | { kind: 'paste_image' }
-  | { kind: 'notice'; message: string };
+  | { kind: 'notice'; message: string; operationResult?: true };
 
 export interface TuiConversation {
   /**
@@ -342,7 +342,7 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
             return { kind: 'handoff', id: 'assistant-retry', text: match.text || undefined };
           }
           return previousOrder === undefined
-            ? { kind: 'notice', message: getLabel('interactive.ui.retryNoOrder', ctx.lang) }
+            ? { kind: 'notice', message: getLabel('interactive.ui.retryNoOrder', ctx.lang), operationResult: true }
             : { kind: 'choose_action', task: previousOrder, origin: 'retry' };
         }
         case SlashCommand.Requeue:

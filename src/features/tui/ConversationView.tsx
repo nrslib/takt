@@ -611,11 +611,16 @@ export function ConversationView({
         captureClipboardImage();
         drainQueueRef.current();
         return;
-      case 'notice':
+      case 'notice': {
         appendTranscript(transcriptEntry('user', text));
-        setNotice(toSingleLineText(command.message));
+        const notice = toSingleLineText(command.message);
+        setNotice(notice);
+        if (command.operationResult) {
+          conversation.recordOperationResult?.(notice);
+        }
         drainQueueRef.current();
         return;
+      }
     }
   }, [appendTranscript, captureClipboardImage, finishRun]);
 

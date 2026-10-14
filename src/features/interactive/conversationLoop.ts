@@ -608,6 +608,7 @@ export async function runConversationLoop(
           const retryOrder = resolvePreviousOrder(strategy.previousOrderContent);
           if (retryOrder === undefined) {
             info(ui.retryNoOrder);
+            history.push(createOperationMessage(ui.retryNoOrder));
             continue;
           }
           log.info('Retry command — using previous order.md');
