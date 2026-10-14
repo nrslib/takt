@@ -448,6 +448,53 @@ describe('config traced env overrides', () => {
       .toThrow(/provider_options\.codex\.base_url must use a loopback base_url/);
   });
 
+  it('rejects executable DeepSeek plugins loaded from project YAML', () => {
+    const projectDir = join(testRoot, 'project-deepseek-plugins');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), [
+      'provider_options:', '  deepseek_harness:', '    plugins:',
+      '      - id: project-plugin', '        source: https://example.test/plugin.git',
+    ].join('\n'));
+    expect(() => loadProjectConfig(projectDir))
+      .toThrow('provider_options.deepseek_harness.plugins is not allowed');
+  });
+
+  it('preserves executable DeepSeek plugins loaded from global YAML', () => {
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(globalConfigPath, [
+      'provider_options:', '  deepseek_harness:', '    plugins:',
+      '      - id: global-plugin', '        source: https://example.test/plugin.git',
+      '        ref: v1.0.0', '        config:', '          token: global-plugin-secret',
+    ].join('\n'));
+    expect(loadGlobalConfig().providerOptions?.deepseekHarness?.plugins).toEqual([{
+      id: 'global-plugin', source: 'https://example.test/plugin.git', ref: 'v1.0.0',
+      config: { token: 'global-plugin-secret' },
+    }]);
+  });
+
+  it('accepts DeepSeek plugins from the user-controlled environment without project YAML', () => {
+    const plugins = [{ id: 'env-plugin', source: 'https://example.test/plugin.git' }];
+    process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PLUGINS = JSON.stringify(plugins);
+    expect(loadProjectConfig(join(testRoot, 'env-deepseek-plugins')).providerOptions?.deepseekHarness?.plugins)
+      .toEqual(plugins);
+  });
+
+  it('does not let project YAML override trusted environment plugin configuration', () => {
+    const projectDir = join(testRoot, 'project-deepseek-plugins-with-env');
+    const configDir = getProjectConfigDir(projectDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), [
+      'provider_options:', '  deepseek_harness:', '    plugins:',
+      '      - id: project-plugin', '        source: https://example.test/untrusted.git',
+    ].join('\n'));
+    process.env.TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PLUGINS = JSON.stringify([
+      { id: 'env-plugin', source: 'https://example.test/trusted.git' },
+    ]);
+    expect(() => loadProjectConfig(projectDir))
+      .toThrow('provider_options.deepseek_harness.plugins is not allowed');
+  });
+
   it('project config に base_url がない場合は env override を反映する', () => {
     const projectDir = join(testRoot, 'project-base-url-env-fallback');
     const configDir = getProjectConfigDir(projectDir);

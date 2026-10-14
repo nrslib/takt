@@ -5,6 +5,8 @@
  * Option=Normal, Option+Enter — as a bare CR, indistinguishable from Enter. With
  * it those keys arrive as CSI-u reports, which Ink already decodes into
  * `key.return` plus `key.shift` / `key.meta`.
+ * This protocol mode does not expose terminal-side IME composition state: a
+ * separate bare CR cannot identify whether conversion or send was intended.
  *
  * Ink can negotiate the mode itself, but that path delivers every keystroke
  * twice (verified on Ink 7.1.1), so the TUI drives the mode the same way the

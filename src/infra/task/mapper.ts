@@ -74,6 +74,7 @@ function buildTaskFileData(task: TaskRecord, content: string): TaskFileData {
     merge_caccia_required: task.merge_caccia_required,
     merge_pushed_head_sha: task.merge_pushed_head_sha,
     merge_push_base_head_sha: task.merge_push_base_head_sha,
+    merge_skip_caccia_if_no_activity: task.merge_skip_caccia_if_no_activity,
     merge_caccia_approved_head_sha: task.merge_caccia_approved_head_sha,
     merge_caccia_skipped_head_sha: task.merge_caccia_skipped_head_sha,
   });

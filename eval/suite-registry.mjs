@@ -12,7 +12,12 @@ const CLASSIFICATIONS = [
   },
   {
     tier: 'active',
-    reason: 'Phase 3 がレビュー・最終判定・ループ判定の入力を現行ルールへ対応づけるか測る',
+    reason: 'レビューと再計画が、根拠のない入力や計画の設計判断を指摘・作業にせず、根拠のある入力と外部入力による攻撃は指摘し続ける境界を測る',
+    suites: ['finding-premise-scope'],
+  },
+  {
+    tier: 'active',
+    reason: 'Phase 3 が入力の結論をルールへ対応づけ、入力外の再評価と入力内の矛盾を区別するか測る',
     suites: ['phase3-follow-input'],
   },
   {
@@ -181,6 +186,10 @@ const EXECUTION_OVERRIDES = {
   'review-adjudication-applicable-inputs': {
     defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
     reason: 'Sol Low、Opus 5、Luna Max の3モデルでレビュー裁定の入力範囲を比較する明示選択の評価',
+  },
+  'finding-premise-scope': {
+    defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
+    reason: 'Sol Low、Opus 5、Luna Max の3モデルでレビューと再計画の指摘・作業の前提の範囲を比較する明示選択の評価',
   },
   'review-external-confirmation': {
     defaultEligible: false, credentials: ['codex', 'claude'], cost: 'high',
@@ -557,6 +566,8 @@ const EXECUTION_OVERRIDES = {
 const PREPARE_TARGET_OVERRIDES = {
   'review-adjudication-applicable-inputs': ['a1', 'a2', 'a3', 'a4']
     .map((caseId) => `review-adjudication-applicable-inputs-${caseId}`),
+  'finding-premise-scope': ['rv1', 'rv2', 'rn1', 'rn2', 'pl1', 'pn1']
+    .map((caseId) => `finding-premise-scope-${caseId}`),
   'security-threat-model': ['a1', 'a2', 'a3', 'a4', 'a5']
     .map((caseId) => `security-threat-model-${caseId}`),
   'secondary-platform-adjudication': [

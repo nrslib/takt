@@ -26,7 +26,7 @@ If you use Nix flakes, `nix develop` opens a shell with the project Node.js runt
 nix develop
 ```
 
-Before a release, run `npm run sync:nix-deps` and commit the updated `package-lock.json` and `flake.nix`. It updates the lockfile within the ranges in `package.json` and recomputes `npmDepsHash`, so the Nix build bundles the same dependencies as `npm install`.
+Before a release, run `npm run check:release` and commit any updates to `package-lock.json` and `flake.nix`. The first step, `sync:nix-deps`, updates the lock with npm 10.9.4, installs it with `npm ci`, and recomputes `npmDepsHash` (requires Nix). This keeps the Nix build and release checks on the same dependencies.
 
 ## How to Contribute
 
@@ -52,7 +52,7 @@ npm run test:opencode-probe
 npm run test:e2e:smoke
 ```
 
-`npm test` runs the fast unit tests. After implementation, run `npm run test:it` for light integration coverage. If you add or change an integration test, run `npm test -- src/__tests__/releaseVerificationWiring.test.ts` separately. For a changed heavy integration test, also run its file with `npm test -- <test-file>` before submitting the PR. `npm run test:opencode-probe` checks the OpenCode prompts. For a release, `npm run check:release` runs the build, lint, unit, integration, and E2E checks.
+`npm test` runs the fast unit tests. After implementation, run `npm run test:it` for light integration coverage. If you add or change an integration test, run `npm test -- src/__tests__/releaseVerificationWiring.test.ts` separately. For a changed heavy integration test, also run its file with `npm test -- <test-file>` before submitting the PR. `npm run test:opencode-probe` checks the OpenCode prompts. For a release, `npm run check:release` runs dependency sync, build, a packed global install check with npm 10 and 11, lint, unit, integration, and E2E checks.
 
 See the [E2E testing overview](./docs/testing/e2e.md) for how to run the E2E suites and their prerequisites.
 

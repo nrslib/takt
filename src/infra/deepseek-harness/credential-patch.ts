@@ -8,6 +8,7 @@ import {
   writeNewPrivateFileWithMode,
 } from '../../shared/utils/private-file.js';
 import type { DeepSeekCredentialBinding } from './credential-binding.js';
+import type { ResolvedDeepSeekHarnessPlugin } from './git-plugin.js';
 
 const PATCH_FILE_NAME = 'credentials.patch.yml';
 const PATCH_DIRECTORY_PREFIX = 'takt-deepseek-credentials-';
@@ -29,6 +30,7 @@ export interface DeepSeekCredentialPatch {
 export async function createDeepSeekCredentialPatch(
   binding: DeepSeekCredentialBinding,
   systemPrompt?: string,
+  plugins: readonly ResolvedDeepSeekHarnessPlugin[] = [],
 ): Promise<DeepSeekCredentialPatch> {
   let patchDirectoryPath: string;
   try {
@@ -56,6 +58,7 @@ export async function createDeepSeekCredentialPatch(
             config: { prompt: systemPrompt },
           }],
         }]),
+      ...(plugins.length === 0 ? [] : [{ insert: plugins }]),
     ];
     ensurePrivateDirectory(patchDirectoryPath);
     writeNewPrivateFileWithMode(patchPath, stringifyYaml(document), PATCH_FILE_MODE);

@@ -82,8 +82,10 @@ export class TaskRunner {
     this.lifecycle.recordPrMergeClonePrepared(taskName);
   }
 
-  recordPrMergePushedHead(taskName: string, headSha: string, previousRemoteHeadSha: string): void {
-    this.lifecycle.recordPrMergePushedHead(taskName, headSha, previousRemoteHeadSha);
+  recordPrMergePushedHead(
+    taskName: string, headSha: string, previousRemoteHeadSha: string, skipIfNoCodeRabbitActivity = false,
+  ): void {
+    this.lifecycle.recordPrMergePushedHead(taskName, headSha, previousRemoteHeadSha, skipIfNoCodeRabbitActivity);
   }
 
   recordPrMergeCacciaHandoff(taskName: string, headSha: string, outcome: 'reviewed' | 'skipped'): void {

@@ -80,7 +80,7 @@ export async function runTuiTaskConversation(
       ?? strategy.selectAction;
     const action = selector
       ? await selector(normalized, ctx.lang)
-      : await selectPostSummaryAction(normalized, ui.proposed, ui);
+      : await selectPostSummaryAction(normalized, ui.proposed, ui, ctx.lang);
     return action === null ? null : { action, task: normalized };
   };
 

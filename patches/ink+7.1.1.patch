@@ -1,20 +1,109 @@
 diff --git a/node_modules/ink/build/anchored-log-update.js b/node_modules/ink/build/anchored-log-update.js
 new file mode 100644
-index 0000000..38e242d
+index 0000000..b0955fe
 --- /dev/null
 +++ b/node_modules/ink/build/anchored-log-update.js
-@@ -0,0 +1,88 @@
+@@ -0,0 +1,219 @@
++import { stripVTControlCharacters } from 'node:util';
 +import ansiEscapes from 'ansi-escapes';
 +import cliCursor from 'cli-cursor';
 +import sliceAnsi from 'slice-ansi';
++import stringWidth from 'string-width';
 +
-+// Keep the hidden terminal cursor at the FIRST live row, not below the frame.
-+// Height reductions then discard live rows below it rather than committing
-+// their leading rows to scrollback. A single soft-wrapped group also lets
-+// xterm-like terminals leave the cursor's live group for the app to redraw.
-+export default function createAnchored(stream) {
++const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
++
++// Rows the drawn group occupies after the terminal rewraps it at `columns`,
++// and the row of the cursor cell. The scaffold padded every drawn line except
++// the last to `drawnColumns` cells, so the group is one logical line.
++function measureReflow(lines, drawnColumns, columns, cursor) {
++    let row = 0;
++    let column = 0;
++    let cursorRow = 0;
++    const place = (width) => {
++        if (column + width > columns) {
++            row += 1;
++            column = 0;
++        }
++        column += width;
++    };
++    lines.forEach((line, index) => {
++        let used = 0;
++        for (const { segment } of graphemes.segment(stripVTControlCharacters(line))) {
++            if (index === cursor.y && used === cursor.x) {
++                cursorRow = row + Number(column >= columns);
++            }
++            const width = stringWidth(segment);
++            if (width === 0) {
++                continue;
++            }
++            place(width);
++            used += width;
++        }
++        const end = index === lines.length - 1 ? Math.max(1, used) : drawnColumns;
++        for (; used < end; used += 1) {
++            if (index === cursor.y && used === cursor.x) {
++                cursorRow = row + Number(column >= columns);
++            }
++            place(1);
++        }
++        if (index === cursor.y && cursor.x >= used) {
++            cursorRow = row + Math.floor((column + cursor.x - used) / columns);
++        }
++    });
++    return { rows: row + 1, cursorRow };
++}
++
++// Keep the terminal cursor near the TOP of the live frame, with its IME column
++// inside its row. Do not put draft/status rows above the caret: a terminal can
++// archive rows above the cursor before the application receives a resize.
++// One soft-wrapped group leaves the entire live frame for the app to redraw.
++// The anchor is found relative to the cursor rather than with DECRC, because
++// DECSC is not adjusted when a terminal reflows or trims rows.
++//
++// `reflowsGroup` is for terminals (macOS Terminal.app) that rewrap the group
++// containing the cursor and, when the window gets shorter, keep the rows below
++// the cursor and archive rows above it. After a resize such a terminal leaves
++// the rewrapped group taller than the new frame; blank rows left below the frame
++// would be counted before the caret row on the next height reduction. The
++// redraw therefore ends where the rewrapped group ended, and the leftover rows
++// become blank leading rows of the same group. Widening rewraps them away
++// again, and static output starts on them, so they do not accumulate.
++export default function createAnchored(stream, { reflowsGroup = false } = {}) {
 +    let previousOutput = '';
 +    let hasFrame = false;
++    let cursorPosition;
++    // Group lines as drawn, starting with `drawnPadding` blank leading rows.
++    let drawnLines = [];
++    let drawnPadding = 0;
++    // Where painting left the terminal cursor, in group coordinates.
++    let drawnAnchor = { x: 0, y: 0 };
++    let drawnColumns = 0;
++    let drawnRows = 0;
++    // Rows from the group's first row that the previous group still occupies
++    // after a resize.
++    let pendingRows = 0;
++    const currentSize = () => ({
++        columns: Math.max(1, stream.columns || 80),
++        rows: Math.max(1, stream.rows || 24),
++    });
++    // Move to the first row of the drawn group, including its blank rows.
++    const returnToAnchor = () => {
++        const toRowStart = (up) => (up > 0 ? ansiEscapes.cursorUp(up) : '') + ansiEscapes.cursorTo(0);
++        const { columns, rows } = currentSize();
++        if (!reflowsGroup || (columns === drawnColumns && rows === drawnRows)) {
++            pendingRows = 0;
++            return toRowStart(drawnAnchor.y);
++        }
++        const reflow = measureReflow(drawnLines, drawnColumns, columns, drawnAnchor);
++        if (reflow.rows >= rows) {
++            // Every visible row belongs to the previous group; the terminal
++            // has already archived the rest of it.
++            pendingRows = rows;
++            return ansiEscapes.cursorTo(0, 0);
++        }
++        pendingRows = reflow.rows;
++        return toRowStart(reflow.cursorRow);
++    };
 +    let cursorDirty = false;
 +    let cursorHidden = false;
 +    const render = (str) => {
@@ -26,47 +115,84 @@ index 0000000..38e242d
 +            cliCursor.hide(stream);
 +            cursorHidden = true;
 +        }
-+        const columns = Math.max(1, stream.columns || 80);
-+        const rows = Math.max(1, stream.rows || 24);
++        const { columns, rows } = currentSize();
++        const sameSize = columns === drawnColumns && rows === drawnRows;
 +        const output = str.endsWith('\n') ? str.slice(0, -1) : str;
-+        const lines = output === '' ? [] : output.split('\n').slice(-rows);
-+        let frame = hadFrame ? ansiEscapes.eraseDown : '';
++        const outputLines = output === '' ? [] : output.split('\n');
++        // An oversized frame loses its bottom rows, and only drops rows above
++        // the cursor when the cursor row would not fit otherwise.
++        const top = cursorPosition === undefined
++            ? Math.max(0, outputLines.length - rows)
++            : Math.max(0, cursorPosition.y - rows + 1);
++        const lines = outputLines.slice(top, top + rows)
++            .map(line => sliceAnsi(line.replaceAll('\t', ' '), 0, columns));
++        const cursor = cursorPosition === undefined
++            ? undefined
++            : { x: cursorPosition.x, y: cursorPosition.y - top };
++        let frame = hadFrame ? returnToAnchor() + ansiEscapes.eraseDown : '';
++        // A same-size redraw keeps the frame's first row where it was.
++        const padding = lines.length === 0 ? 0 : Math.min(
++            Math.max(0, rows - lines.length),
++            hadFrame && sameSize ? drawnPadding : Math.max(0, pendingRows - lines.length),
++        );
++        const group = [...Array(padding).fill(''), ...lines];
 +        if (lines.length > 0) {
-+            const below = lines.length - 1;
++            const below = group.length - 1;
 +            // Make space using line feeds BEFORE drawing. Any scrolled rows
 +            // are committed history or blank rows, never a live input frame.
 +            frame += '\n'.repeat(below)
 +                + (below > 0 ? ansiEscapes.cursorUp(below) : '')
 +                + ansiEscapes.cursorTo(0);
-+            // ASCII scaffolding establishes one wrapped group. Overwrite it
-+            // with wraparound disabled so tabs/emoji cannot add uncounted rows.
-+            // Save/restore keeps the real cursor at the group's first row.
-+            // Paint bottom-to-top: even if a PTY splits this write and a
-+            // resize occurs mid-frame, no painted live rows precede the cursor.
-+            frame += '\x1b7' + ' '.repeat(columns * lines.length)
++            // ASCII scaffolding establishes one wrapped group: full leading
++            // rows and one cell of the last row, so a later rewrap counts only
++            // the cells actually drawn. Overwrite it with wraparound disabled
++            // so tabs/emoji cannot add uncounted rows. Paint bottom-to-top:
++            // even if a PTY splits this write and a resize occurs mid-frame,
++            // no painted live rows precede the cursor. Painting finishes on
++            // the frame's first row; do not DECRC to a stale screen row.
++            frame += ' '.repeat(columns * below + 1)
 +                + '\x1b[?7l' + ansiEscapes.cursorTo(0)
-+                + [...lines].reverse().map(line => sliceAnsi(line.replaceAll('\t', ' '), 0, columns))
-+                    .join(ansiEscapes.cursorUp(1) + ansiEscapes.cursorTo(0))
-+                + '\x1b[?7h\x1b8';
++                + [...lines].reverse().join(ansiEscapes.cursorUp(1) + ansiEscapes.cursorTo(0))
++                + '\x1b[?7h' + ansiEscapes.cursorTo(0);
++            if (cursor !== undefined) {
++                frame += (cursor.y > 0 ? ansiEscapes.cursorDown(cursor.y) : '')
++                    + ansiEscapes.cursorTo(cursor.x);
++            }
 +        }
 +        if (frame !== '') {
 +            stream.write(frame);
 +        }
 +        previousOutput = str;
 +        hasFrame = lines.length > 0;
++        drawnLines = group;
++        drawnPadding = padding;
++        drawnAnchor = { x: cursor?.x ?? 0, y: padding + (cursor?.y ?? 0) };
++        drawnColumns = columns;
++        drawnRows = rows;
++        pendingRows = 0;
 +        cursorDirty = false;
 +        return hadFrame || hasFrame;
 +    };
 +    render.clear = () => {
 +        if (hasFrame) {
-+            stream.write(ansiEscapes.eraseDown);
++            // Static output starts on the group's blank leading rows.
++            stream.write(returnToAnchor() + ansiEscapes.eraseDown);
++        }
++        else {
++            // Static output written after a resize clear must not be followed
++            // by a bottom-aligned frame.
++            pendingRows = 0;
 +        }
 +        previousOutput = '';
 +        hasFrame = false;
++        // Clearing for static output or resize must retain the current IME
++        // intent: neither operation necessarily re-renders the input component.
 +        cursorDirty = false;
 +    };
 +    render.done = () => {
 +        render.clear();
++        pendingRows = 0;
++        cursorPosition = undefined;
 +        if (cursorHidden) {
 +            cliCursor.show(stream);
 +            cursorHidden = false;
@@ -75,17 +201,22 @@ index 0000000..38e242d
 +    render.reset = () => {
 +        previousOutput = '';
 +        hasFrame = false;
++        cursorPosition = undefined;
++        pendingRows = 0;
 +        cursorDirty = false;
 +    };
 +    render.sync = (str) => {
 +        previousOutput = str;
 +        hasFrame = str !== '' && str !== '\n';
++        cursorPosition = undefined;
++        drawnLines = hasFrame ? str.replace(/\n$/, '').split('\n') : [];
++        drawnPadding = 0;
++        drawnAnchor = { x: 0, y: 0 };
++        pendingRows = 0;
 +        cursorDirty = false;
 +    };
 +    render.setCursorPosition = (position) => {
-+        if (position !== undefined) {
-+            throw new Error('anchorLiveFrame requires a software caret, not useCursor().');
-+        }
++        cursorPosition = position;
 +        cursorDirty = true;
 +    };
 +    render.isCursorDirty = () => cursorDirty;
@@ -140,7 +271,7 @@ index ee8a6b8..eca2196 100644
  //# sourceMappingURL=Static.js.map
 \ No newline at end of file
 diff --git a/node_modules/ink/build/ink.js b/node_modules/ink/build/ink.js
-index 0082666..8d7353a 100644
+index 0082666..8a79a1a 100644
 --- a/node_modules/ink/build/ink.js
 +++ b/node_modules/ink/build/ink.js
 @@ -160,6 +160,8 @@ export default class Ink {
@@ -152,16 +283,21 @@ index 0082666..8d7353a 100644
      exitPromise;
      exitResult;
      beforeExitHandler;
-@@ -216,6 +218,8 @@ export default class Ink {
+@@ -214,8 +216,13 @@ export default class Ink {
+         }
+         this.rootNode.onImmediateRender = this.onRender;
          this.rootNode.onStaticChange = this.handleStaticChange;
++        const canAnchorLiveFrame = this.interactive && options.stdout.isTTY &&
++            !options.debug && !options.alternateScreen && !this.isScreenReaderEnabled;
          this.log = logUpdate.create(options.stdout, {
              incremental: options.incrementalRendering,
-+            anchored: options.anchorLiveFrame && this.interactive && options.stdout.isTTY &&
-+                !options.debug && !options.alternateScreen && !this.isScreenReaderEnabled,
++            anchored: options.anchorLiveFrame && canAnchorLiveFrame,
++            anchorCursorFrame: canAnchorLiveFrame,
++            reflowsCursorGroup: Boolean(options.reflowsCursorGroup),
          });
          this.cursorPosition = undefined;
          this.throttledLog = unthrottled
-@@ -277,9 +281,23 @@ export default class Ink {
+@@ -277,9 +284,23 @@ export default class Ink {
          void this.exitPromise.catch(noop);
      }
      resized = () => {
@@ -186,7 +322,7 @@ index 0082666..8d7353a 100644
              this.log.clear();
              this.lastOutput = '';
              this.lastOutputToRender = '';
-@@ -289,6 +307,25 @@ export default class Ink {
+@@ -289,6 +310,25 @@ export default class Ink {
          this.onRender();
          this.lastTerminalWidth = currentWidth;
      };
@@ -212,7 +348,7 @@ index 0082666..8d7353a 100644
      resolveExitPromise = () => { };
      rejectExitPromise = () => { };
      unsubscribeExit = () => { };
-@@ -431,6 +468,7 @@ export default class Ink {
+@@ -431,6 +471,7 @@ export default class Ink {
          }
      }
      writeToStdout(data) {
@@ -220,7 +356,7 @@ index 0082666..8d7353a 100644
          if (this.isUnmounted) {
              return;
          }
-@@ -460,6 +498,7 @@ export default class Ink {
+@@ -460,6 +501,7 @@ export default class Ink {
          }
      }
      writeToStderr(data) {
@@ -228,7 +364,7 @@ index 0082666..8d7353a 100644
          if (this.isUnmounted) {
              return;
          }
-@@ -492,6 +531,7 @@ export default class Ink {
+@@ -492,6 +534,7 @@ export default class Ink {
          if (this.isUnmounted || this.isUnmounting) {
              return;
          }
@@ -236,7 +372,7 @@ index 0082666..8d7353a 100644
          this.isUnmounting = true;
          if (this.beforeExitHandler) {
              process.off('beforeExit', this.beforeExitHandler);
-@@ -606,7 +646,7 @@ export default class Ink {
+@@ -606,7 +649,7 @@ export default class Ink {
          }
      }
      async waitUntilExit() {
@@ -245,7 +381,7 @@ index 0082666..8d7353a 100644
              this.beforeExitHandler = () => {
                  this.unmount();
              };
-@@ -615,6 +655,7 @@ export default class Ink {
+@@ -615,6 +658,7 @@ export default class Ink {
          return this.exitPromise;
      }
      async waitUntilRenderFlush() {
@@ -253,7 +389,7 @@ index 0082666..8d7353a 100644
          if (this.isUnmounted || this.isUnmounting) {
              await this.awaitExit();
              return;
-@@ -653,6 +694,7 @@ export default class Ink {
+@@ -653,6 +697,7 @@ export default class Ink {
          await yieldImmediate();
      }
      clear() {
@@ -261,7 +397,7 @@ index 0082666..8d7353a 100644
          if (this.interactive && !this.options.debug) {
              this.log.clear();
              // Sync lastOutput so that unmount's final onRender
-@@ -746,6 +788,14 @@ export default class Ink {
+@@ -746,6 +791,14 @@ export default class Ink {
          return this.nextRenderCommit.promise;
      }
      renderInteractiveFrame(output, outputHeight, staticOutput) {
@@ -276,7 +412,7 @@ index 0082666..8d7353a 100644
          const hasStaticOutput = staticOutput !== '';
          const isTty = this.options.stdout.isTTY;
          // Detect fullscreen: output fills or exceeds terminal height.
-@@ -761,15 +811,21 @@ export default class Ink {
+@@ -761,15 +814,21 @@ export default class Ink {
              isUnmounting: this.isUnmounting,
          });
          if (shouldClearTerminal) {
@@ -300,7 +436,7 @@ index 0082666..8d7353a 100644
              if (sync) {
                  this.options.stdout.write(esu);
              }
-@@ -873,6 +929,7 @@ export default class Ink {
+@@ -873,6 +932,7 @@ export default class Ink {
          if (this.isSuspended) {
              throw new Error('The terminal is already suspended. Resume the current suspension before suspending again.');
          }
@@ -309,23 +445,25 @@ index 0082666..8d7353a 100644
          if (!this.interactive || this.isUnmounted || this.isUnmounting) {
              return;
 diff --git a/node_modules/ink/build/log-update.d.ts b/node_modules/ink/build/log-update.d.ts
-index 6e91353..5dbd383 100644
+index 6e91353..aaab45b 100644
 --- a/node_modules/ink/build/log-update.d.ts
 +++ b/node_modules/ink/build/log-update.d.ts
-@@ -12,9 +12,10 @@ export type LogUpdate = {
+@@ -12,9 +12,12 @@ export type LogUpdate = {
      (str: string): boolean;
  };
  declare const logUpdate: {
 -    create: (stream: Writable, { showCursor, incremental }?: {
-+    create: (stream: Writable, { showCursor, incremental, anchored }?: {
++    create: (stream: Writable, { showCursor, incremental, anchored, anchorCursorFrame, reflowsCursorGroup }?: {
          showCursor?: boolean | undefined;
          incremental?: boolean | undefined;
 +        anchored?: boolean | undefined;
++        anchorCursorFrame?: boolean | undefined;
++        reflowsCursorGroup?: boolean | undefined;
      }) => LogUpdate;
  };
  export default logUpdate;
 diff --git a/node_modules/ink/build/log-update.js b/node_modules/ink/build/log-update.js
-index cdb5fc4..c4e663c 100644
+index cdb5fc4..f0f1191 100644
 --- a/node_modules/ink/build/log-update.js
 +++ b/node_modules/ink/build/log-update.js
 @@ -1,9 +1,30 @@
@@ -383,33 +521,79 @@ index cdb5fc4..c4e663c 100644
          previousOutput = '';
          previousLines = [];
          previousCursorPosition = undefined;
-@@ -243,7 +266,10 @@ const createIncremental = (stream, { showCursor = false } = {}) => {
+@@ -243,11 +266,43 @@ const createIncremental = (stream, { showCursor = false } = {}) => {
      render.willRender = (str) => hasChanges(str, getActiveCursor());
      return render;
  };
 -const create = (stream, { showCursor = false, incremental = false } = {}) => {
-+const create = (stream, { showCursor = false, incremental = false, anchored = false } = {}) => {
+-    if (incremental) {
+-        return createIncremental(stream, { showCursor });
++const create = (stream, { showCursor = false, incremental = false, anchored = false, anchorCursorFrame = false, reflowsCursorGroup = false } = {}) => {
 +    if (anchored) {
-+        return createAnchored(stream);
-+    }
-     if (incremental) {
-         return createIncremental(stream, { showCursor });
++        return createAnchored(stream, { reflowsGroup: reflowsCursorGroup });
      }
+-    return createStandard(stream, { showCursor });
++    let current = incremental
++        ? createIncremental(stream, { showCursor })
++        : createStandard(stream, { showCursor });
++    if (!anchorCursorFrame) {
++        return current;
++    }
++    let cursorAnchored = false;
++    let hasOutput = false;
++    const render = (str) => {
++        const changed = current(str);
++        hasOutput = str !== '' && str !== '\n';
++        return changed;
++    };
++    render.clear = () => { current.clear(); hasOutput = false; };
++    render.done = () => { current.done(); hasOutput = false; };
++    render.reset = () => { current.reset(); hasOutput = false; };
++    render.sync = (str) => { current.sync(str); hasOutput = str !== '' && str !== '\n'; };
++    render.isCursorDirty = () => current.isCursorDirty();
++    render.willRender = (str) => current.willRender(str);
++    render.setCursorPosition = (position) => {
++        if (!cursorAnchored && !hasOutput && position !== undefined && position.y <= 1) {
++            // Select before drawing, never write while an input component is
++            // rendering (it may be inside Ink's resize drawing pause).
++            // A cursor on the first row, or under a one-row border, owns the
++            // anchor; group its following live rows so reflow cannot make an
++            // erase reach committed history.
++            current = createAnchored(stream, { reflowsGroup: reflowsCursorGroup });
++            cursorAnchored = true;
++            hasOutput = false;
++        }
++        current.setCursorPosition(position);
++    };
++    return render;
+ };
+ const logUpdate = { create };
+ export default logUpdate;
 diff --git a/node_modules/ink/build/render.d.ts b/node_modules/ink/build/render.d.ts
-index 867edca..16f2ddd 100644
+index 867edca..3bc9506 100644
 --- a/node_modules/ink/build/render.d.ts
 +++ b/node_modules/ink/build/render.d.ts
-@@ -68,4 +68,10 @@ export type RenderOptions = {
+@@ -68,6 +68,20 @@ export type RenderOptions = {
      */
      incrementalRendering?: boolean;
      /**
-+    Keep a software-caret live frame in one cursor-anchored wrapped group.
-+    Clears only the region below its first row and does not support useCursor.
-+    Main-screen interactive TTY only; overrides incremental rendering.
++    Keep a live frame in one cursor-anchored wrapped group. Layouts may
++    useCursor to place the IME cursor on its first row, or below a one-row
++    border. Rows above the cursor may be archived when the window gets shorter
++    than the rows from them to the frame's end. Clears only the owned
++    live region. Main-screen interactive TTY only; overrides incremental rendering.
 +    */
 +    anchorLiveFrame?: boolean;
 +    /**
++    The terminal rewraps the wrapped group that holds the cursor and keeps the
++    rows below the cursor when its window gets shorter (macOS Terminal.app).
++    Anchored redraws after a resize then end where the rewrapped group ended.
++    */
++    reflowsCursorGroup?: boolean;
++    /**
      Enable React Concurrent Rendering mode.
+ 
+     When enabled:
 diff --git a/node_modules/ink/build/renderer.js b/node_modules/ink/build/renderer.js
 index bf23246..6080403 100644
 --- a/node_modules/ink/build/renderer.js

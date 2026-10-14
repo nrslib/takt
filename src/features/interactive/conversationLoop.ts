@@ -336,7 +336,7 @@ export async function runConversationLoop(
       while (true) {
         const selectedAction = actionSelector
           ? await actionSelector(normalized.task, ctx.lang)
-          : await selectPostSummaryAction(normalized.task, ui.proposed, ui);
+          : await selectPostSummaryAction(normalized.task, ui.proposed, ui, ctx.lang);
         if (selectedAction === 'continue' || selectedAction === null) {
           if (selectedAction === 'continue' && source === 'go') {
             history.push({ role: 'assistant', content: normalized.task });

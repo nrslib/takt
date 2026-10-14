@@ -58,6 +58,12 @@ describe('Caccia report lifecycle', () => {
     temporaryRoots.push(projectCwd, cloneCwd);
     mkdirSync(join(projectCwd, '.takt'), { recursive: true });
     writeFileSync(join(projectCwd, '.takt', 'config.yaml'), `language: ${language}\n`, 'utf8');
+    const globalConfigDir = join(projectCwd, 'global-config');
+    mkdirSync(globalConfigDir);
+    writeFileSync(join(globalConfigDir, 'config.yaml'), 'notification_sound: false\n', 'utf8');
+    vi.stubEnv('TAKT_CONFIG_DIR', globalConfigDir);
+    invalidateGlobalConfigCache();
+    expect(loadGlobalConfig().notificationSound).toBe(false);
     const policy = readFileSync(new URL(`../../builtins/${language}/facets/policies/caccia-review.md`, import.meta.url), 'utf8').trim();
     mockRunStatusJudgmentPhase.mockResolvedValueOnce({
       label: language === 'ja'
@@ -248,7 +254,11 @@ describe('Caccia report lifecycle', () => {
         } else {
           const label = taskDisplayLabel ?? 'pare';
           const color = taskColorIndex === 2 ? '\x1b[35m' : '\x1b[33m';
-          for (const line of lines) expect(line.startsWith(`${color}[${label}]\x1b[0m`)).toBe(true);
+          for (const [index, line] of lines.entries()) {
+            expect(line.startsWith(`${color}[${label}]\x1b[0m`),
+              `Unprefixed line ${index}: ${JSON.stringify(line)}; previous: ${JSON.stringify(lines[index - 1])}`)
+              .toBe(true);
+          }
         }
       }
     } finally {

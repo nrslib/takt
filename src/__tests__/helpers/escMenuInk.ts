@@ -18,6 +18,7 @@ vi.mock('ink', () => ({
   Text: () => null,
   Static: () => null,
   useInput: () => undefined,
+  useCursor: () => ({ setCursorPosition: () => undefined }),
   useStdout: () => ({ stdout: process.stdout }),
   useWindowSize: () => ({ columns: 100, rows: 24 }),
   render: (element: { props: ConversationViewProps }) => {

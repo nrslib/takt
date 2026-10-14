@@ -86,6 +86,32 @@ describe('DeepSeek Harness credential patch', () => {
     }
   });
 
+  it('adds resolved Git plugins without adding source URLs to the Cordis patch', async () => {
+    const patch = await createDeepSeekCredentialPatch(
+      createBinding(path.join(root, '.credentials.yaml'), 'DEEPSEEK_API_KEY'),
+      undefined,
+      [{
+        id: 'example-plugin',
+        name: 'file:///tmp/plugin/index.js',
+        config: { enabled: true },
+      }],
+    );
+    try {
+      const document = await readPatchDocument(patch.path) as Array<Record<string, unknown>>;
+      expect(document.at(-1)).toEqual({
+        insert: [{
+          id: 'example-plugin',
+          name: 'file:///tmp/plugin/index.js',
+          config: { enabled: true },
+        }],
+      });
+      expect(document).toContainEqual({ id: 'session-persistence-jsonl', disabled: true });
+      expect(document).toContainEqual({ id: 'session-log-deepseek', config: { enabled: false } });
+    } finally {
+      await patch.dispose();
+    }
+  });
+
   it.skipIf(process.platform === 'win32')('creates the patch file and its directory with private modes', async () => {
     const patch = await createDeepSeekCredentialPatch(
       createBinding(path.join(root, '.credentials.yaml'), 'DEEPSEEK_API_KEY'),

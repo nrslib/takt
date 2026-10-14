@@ -8,7 +8,8 @@ import { getErrorMessage, sanitizeTerminalText } from '../../../shared/utils/ind
 import type { TaskExecutionOptions } from '../execute/types.js';
 import { selectAndExecuteTask } from '../execute/selectAndExecute.js';
 import { checkQueuedTaskProviders, terminalProviderConfirmation } from '../execute/providerPreflight.js';
-import { createIssueAndSaveTask, promptLabelSelection, saveTaskFromInteractive } from '../add/index.js';
+import { createIssueAndSaveTask, createIssueFromTaskResult, promptLabelSelection, saveTaskFromInteractive } from '../add/index.js';
+import type { ConversationDispatchOutcome } from '../../interactive/actionDispatcher.js';
 import {
   type ListAction,
   showFullDiff,
@@ -165,7 +166,7 @@ async function dispatchListConversation(
   workflowId: string,
   result: InteractiveModeResult,
   agentOverrides?: TaskExecutionOptions,
-): Promise<void> {
+): Promise<ConversationDispatchOutcome | void> {
   const issueContextReplacement = result.issueContextReplacement;
   const traceTaskContext = issueContextReplacement === undefined
     ? undefined
@@ -198,6 +199,14 @@ async function dispatchListConversation(
         ...(result.attachments ? { attachments: result.attachments } : {}),
       });
       return;
+    }
+    case 'create_issue_only': {
+      const labels = await promptLabelSelection(lang);
+      const issueResult = createIssueFromTaskResult(result.task, { cwd, labels });
+      if (issueResult.success) return { kind: 'dispatched' };
+      return issueResult.issueCreated === true
+        ? { kind: 'dispatched', warning: issueResult.error }
+        : { kind: 'failed', error: issueResult.error };
     }
     case 'save_task':
       await saveTaskFromInteractive(cwd, result.task, workflowId, {
@@ -290,7 +299,7 @@ export async function listTasks(
               runSlug: task.runSlug,
             },
             dispatch: async (workflowId, result) => {
-              await dispatchListConversation(cwd, config.language === 'ja' ? 'ja' : 'en', workflowId, result, options);
+              return dispatchListConversation(cwd, config.language === 'ja' ? 'ja' : 'en', workflowId, result, options);
             },
           });
         } catch (error) {

@@ -8,6 +8,11 @@ export interface InkInputGuard {
   detach(): void;
 }
 
+export interface InkMountOptions {
+  /** Opt in only for the conversation's IME input; other views keep Ink defaults. */
+  readonly anchorLiveFrame?: boolean;
+}
+
 /**
  * Surfaces the first failure. A teardown that also failed rides along as the
  * cause so it stays observable without hiding what actually went wrong.
@@ -57,6 +62,7 @@ export async function mountInk<T>(
   }) => ReactElement,
   exitedEarlyMessage: string,
   inputGuard?: InkInputGuard,
+  options: InkMountOptions = {},
 ): Promise<T> {
   let settle!: (value: T) => void;
   let fail!: (error: unknown) => void;
@@ -119,9 +125,15 @@ export async function mountInk<T>(
         // terminal (`hasInteractiveTerminal`) and owns it, so that decision is
         // handed to Ink rather than re-made from the environment.
         interactive: true,
-        // Keep the real cursor at the live region's first row. Otherwise a
-        // height reduction can move old input-box rows into native scrollback.
-        anchorLiveFrame: true,
+        // Only the conversation's IME input opts into the anchored renderer.
+        // Keep other views on Ink's default rendering and resize paths.
+        ...(options.anchorLiveFrame === true ? {
+          // A height reduction must not archive old input/status rows.
+          anchorLiveFrame: true,
+          // Terminal.app rewraps the cursor's group and keeps the rows below the
+          // cursor on a height reduction; xterm.js terminals do neither.
+          reflowsCursorGroup: process.env.TERM_PROGRAM === 'Apple_Terminal',
+        } : {}),
       });
 
       // An Ink teardown before the view settles would leave this pending.

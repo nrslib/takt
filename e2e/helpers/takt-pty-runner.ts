@@ -53,6 +53,8 @@ export interface TaktPtySession {
   visibleTranscript(): Promise<string[]>;
   /** The rows of the live screen, oldest first. */
   visibleScreen(): Promise<string[]>;
+  /** Physical terminal cursor, in zero-based viewport cells, after queued writes drain. */
+  cursorPosition(): Promise<{ readonly column: number; readonly row: number }>;
   /** Reflow the emulator and resize the real PTY (delivers SIGWINCH to TAKT). */
   resize(cols: number, rows: number): Promise<void>;
   /** Resolve once the pattern appears in the output; reject with the output on timeout. */
@@ -192,6 +194,12 @@ export function startTaktPty(options: TaktPtyOptions): TaktPtySession {
     },
 
     visibleScreen: readScreen,
+
+    /** Drains queued terminal writes before returning the zero-based physical cursor coordinates. */
+    async cursorPosition(): Promise<{ readonly column: number; readonly row: number }> {
+      await drainTerminal();
+      return { column: terminal.buffer.active.cursorX, row: terminal.buffer.active.cursorY };
+    },
 
     /** Drains prior output before resizing both the emulator and the application's PTY. */
     async resize(cols: number, rows: number): Promise<void> {

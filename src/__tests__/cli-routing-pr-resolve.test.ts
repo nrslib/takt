@@ -576,9 +576,24 @@ describe('PR resolution in routing', () => {
           sourceContext: expect.stringContaining('Fix auth bug'),
         },
         expect.anything(),
-        { dispatch: expect.any(Function) },
+        { excludeActions: ['create_issue'], dispatch: expect.any(Function) },
       );
       expect(mockInteractiveMode).not.toHaveBeenCalled();
+    });
+
+    it.each(['grill-me', 'persona fallback'] as const)('withholds Issue creation in a PR %s session', async (mode) => {
+      mockOpts.pr = 456;
+      mockSelectInteractiveMode.mockResolvedValueOnce(mode === 'grill-me' ? 'grill-me' : 'persona');
+      mockCheckCliStatus.mockReturnValue({ available: true });
+      mockFetchPrReviewComments.mockReturnValue(createMockPrReview());
+
+      await executeDefaultAction();
+
+      expect(mockInteractiveMode).toHaveBeenCalledWith(
+        '/test/cwd', expect.anything(), expect.anything(), undefined, undefined,
+        expect.objectContaining({ excludeActions: ['create_issue'], dispatch: expect.any(Function) }),
+      );
+      expect(mockPersonaMode).not.toHaveBeenCalled();
     });
 
     it('should offer the supported modes when PR source context is available', async () => {

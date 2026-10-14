@@ -906,6 +906,9 @@ export function denormalizeProviderOptions(
       ...(providerOptions.deepseekHarness.shutdownTimeoutMs !== undefined
         ? { shutdown_timeout_ms: providerOptions.deepseekHarness.shutdownTimeoutMs }
         : {}),
+      ...(providerOptions.deepseekHarness.plugins !== undefined
+        ? { plugins: providerOptions.deepseekHarness.plugins.map((plugin) => ({ ...plugin })) }
+        : {}),
     };
     if (Object.keys(deepseekHarness).length > 0) {
       raw.deepseek_harness = deepseekHarness;

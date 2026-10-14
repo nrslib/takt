@@ -161,6 +161,8 @@ for baseline conditions and the limits of comparative claims.
 
 レビュー裁定の入力適用範囲A1〜A4は現行の `review-adjudication-applicable-inputs` スイートで評価します。従来のfixture、期待判断、Sol Low・Opus 5・Luna Maxの比較条件を維持し、`npm run eval:prompts:review-adjudication-applicable-inputs` で明示実行します。旧 `fix-verifier` と `verification-replan` の専用評価設定は [archive](archive/README.md) に移しました。
 
+`finding-premise-scope` はレビュー担当4ケースと再計画2ケースを、ケースごとの隔離 fixture と現在のファセットから生成したプロンプトで評価します。Codex gpt-6-sol low、Claude Opus 5、Codex gpt-6-luna max を使い、判定役は gpt-6-sol low です。両 CLI の認証が必要なためデフォルト実行から除外し、`npm run eval:prompts:finding-premise-scope` で明示実行します。rv1 は計画の設計判断（秘密値を写さない）を受入条件として指摘にしないこと、rv2 は前回の裁定が広げた取引先 CSV の形式外の金額表記を理由に persists にしないことを測ります。rn1 は契約が定める円記号付きの金額を persists とし、rn2 は外部の提出者が付けたファイル名による保存先の外への書き込みを blocking の指摘にすることを測ります。pl1 は裁定が広げた形式外の表記を再計画の作業にしないこと、pn1 は契約が定める表記を作業にすることを測ります。
+
 The `instruction-research-handoff` suite evaluates the instruction-summary,
 plan, report, and routing boundaries from the instruction-research handoff
 regression. It contains ten fixed cases (five summary cases and five
@@ -431,6 +433,7 @@ remain excluded.
 | `final-readiness-supervision` | final-gate / supervise Phase 1 | final-readiness-supervision | whether the supervisor identifies a newly discovered required consumer from the unmet acceptance criteria and avoids unrelated exploration |
 | `final-readiness-preservation` | final-gate / supervise Phase 2 | final-readiness-supervision | whether the supervisor preserves the unresolved finding and does not reopen a previously excluded documentation request |
 | `final-readiness-precision` | final-gate / supervise | final-readiness-precision | three cases: APPROVE when every code requirement is fulfilled despite an absent mock E2E record, REJECT for an unmet code requirement, and BLOCKED for an external decision that task-scope code changes cannot provide |
+| `finding-premise-scope` | peer-review / coding-review (RV1 initial, RV2・RN1 follow-up), security-review (RN2 initial); development-core / replan (PL1, PN1) | finding-premise-scope (6 independent cases) | 計画の設計判断や前回の裁定が広げた形式外の入力を指摘・作業にせず、契約が定める入力と外部入力による保存先の外への書き込みは指摘・作業にする |
 
 GUI設計の比較例、採点、旧・新比較の手順は [frontend-design.md](frontend-design.md) を参照。
 

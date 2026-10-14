@@ -1,0 +1,8 @@
+{
+  "name": "expense-vendor-import",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { withUpdateAdvice } from '../managed-providers/messages.js';
-import { realpathSync } from 'node:fs';
+import { realpathSync, unwatchFile, watchFile } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -48,6 +48,7 @@ import {
   type ManagedDeepSeekHarnessModules,
 } from './managed-package.js';
 import { parseDeepSeekHarnessModelReference } from './model-reference.js';
+import { resolveDeepSeekHarnessGitPlugins, type DeepSeekHarnessPluginResolution } from './git-plugin.js';
 import { type DeepSeekCredentialHomeOrigin } from './credential-home.js';
 import { resolveConfiguredDeepSeekEndpoint } from './endpoint-consistency.js';
 import {
@@ -81,6 +82,7 @@ import {
   deepSeekCleanupBlockedMessage,
   deepSeekContinuationMessage,
   getDeepSeekRuntimePaths,
+  acknowledgeDeepSeekRuntimeCleanup,
   markDeepSeekSessionUsed,
   markDeepSeekCleanupFailure,
   withDeepSeekRuntimeCreation,
@@ -89,6 +91,7 @@ import type { DeepSeekHarnessCallOptions } from './types.js';
 const DEEPSEEK_HARNESS_STARTUP_TIMEOUT_MS = 30_000;
 const DEEPSEEK_HARNESS_CALL_TIMEOUT_MS = 3_600_000;
 const DEEPSEEK_HARNESS_SHUTDOWN_TIMEOUT_MS = 1_000;
+const DEEPSEEK_HARNESS_DISPOSAL_GRACE_MS = 15_000;
 const DEEPSEEK_HARNESS_MAX_ERROR_BYTES = 8 * 1024;
 const DEEPSEEK_HARNESS_MAX_PENDING_RESPONSE_LENGTH = 10_000;
 const DEEPSEEK_HARNESS_MAX_NODE_TIMER_MS = 2_147_483_647;
@@ -993,6 +996,10 @@ function normalizeHarnessNotification(
 class DeepSeekHarnessProcess {
   get stale(): boolean { return this.modules.stale === true; }
   private closed = false;
+  private runtimeStartAttempted = false;
+  private resourceDisposal: Promise<void> | undefined;
+  private cleanupReconciliation: Promise<boolean> | undefined;
+  private cleanupReceiptListener: (() => void) | undefined;
   activeTurns = 1;
   lastUsed = ++runtimeUseSequence;
   sessionId: string | undefined;
@@ -1003,12 +1010,18 @@ class DeepSeekHarnessProcess {
     private readonly configuration: ResolvedDeepSeekConfiguration,
     private readonly environment: ProcessEnvironmentResolution,
     private readonly credentialPatch: DeepSeekCredentialPatch,
+    private readonly pluginResolution: DeepSeekHarnessPluginResolution,
     readonly identity: string,
     readonly credentialFingerprint: string,
     private readonly modules: ManagedDeepSeekHarnessModules,
   ) {
     const runtimePaths = getDeepSeekRuntimePaths();
-    this.cleanupConfirmationPath = path.join(path.dirname(credentialPatch.path), 'runtime-exit-confirmed');
+    const patchDirectory = path.dirname(credentialPatch.path);
+    this.cleanupConfirmationPath = path.join(
+      runtimePaths.state,
+      'cleanup-receipts',
+      `${path.basename(patchDirectory)}.confirmed`,
+    );
     const supervisorPath = fileURLToPath(new URL('./runtime-supervisor.mjs', import.meta.url));
     const env: NodeJS.ProcessEnv = {
       ...environment.env,
@@ -1016,6 +1029,11 @@ class DeepSeekHarnessProcess {
       TAKT_DSH_STATE_DIRECTORY: runtimePaths.state,
       TAKT_DSH_PARENT_PID: String(process.pid),
       TAKT_DSH_CLEANUP_CONFIRMATION: this.cleanupConfirmationPath,
+      TAKT_DSH_CLEANUP_ROOT: path.dirname(patchDirectory),
+      TAKT_DSH_CLEANUP_PATHS: JSON.stringify([
+        patchDirectory,
+        ...pluginResolution.cleanupPaths,
+      ]),
       TAKT_DSH_MANAGED_PACKAGE_DIRECTORY: modules.directory,
     };
     this.harness = new modules.sdk.DeepSeekHarness({
@@ -1028,8 +1046,8 @@ class DeepSeekHarnessProcess {
       initializeTimeoutMs: DEEPSEEK_HARNESS_STARTUP_TIMEOUT_MS,
       requestTimeoutMs: configuration.requestTimeoutMs,
       shutdownTimeoutMs: configuration.shutdownTimeoutMs,
-      disposeEofGraceMs: DEEPSEEK_HARNESS_SHUTDOWN_TIMEOUT_MS,
-      disposeGraceMs: DEEPSEEK_HARNESS_SHUTDOWN_TIMEOUT_MS,
+      disposeEofGraceMs: DEEPSEEK_HARNESS_DISPOSAL_GRACE_MS,
+      disposeGraceMs: DEEPSEEK_HARNESS_DISPOSAL_GRACE_MS,
       cwd: configuration.cwd,
       provider: configuration.provider,
       model: configuration.model,
@@ -1054,34 +1072,24 @@ class DeepSeekHarnessProcess {
   async start(abortSignal?: AbortSignal): Promise<void> {
     if (this.closed) throw new this.modules.sdk.TransportClosedError('closed');
     if (isAbortSignalAborted(abortSignal)) throw abortError(abortSignal?.reason);
-    let failureCleanupError: Error | undefined;
     try {
       await withDeepSeekRuntimeCreation(
         async () => {
           if (isAbortSignalAborted(abortSignal)) throw abortError(abortSignal?.reason);
+          this.runtimeStartAttempted = true;
           await waitForAbortable(this.harness.start(), abortSignal);
         },
         async () => {
           if (this.closed) return true;
           try {
             await this.harness.close();
+            return true;
           } catch {
-            if (!(await this.hasCleanupConfirmation())) return false;
+            return this.hasCleanupConfirmation();
           }
-          this.closed = true;
-          try {
-            await this.credentialPatch.dispose();
-          } catch {
-            failureCleanupError = new DeepSeekHarnessTransportError(
-              'DeepSeek Harness credential patch cleanup failed.',
-              'credential-patch-cleanup-failed',
-            );
-          }
-          return true;
         },
       );
     } catch (error) {
-      if (failureCleanupError !== undefined) throw failureCleanupError;
       if (isAbortSignalAborted(abortSignal)) {
         if (!this.closed) await this.close();
         throw abortError(abortSignal?.reason);
@@ -1144,34 +1152,143 @@ class DeepSeekHarnessProcess {
     }
   }
 
-  /** Close SDK/patch; failed SDK cleanup carries confirmed quarantine status, while patch cleanup never does. */
+  /** Close the SDK runtime and dispose resources only after its supervisor confirms process-group exit. */
   async close(): Promise<void> {
     if (this.closed) return;
+    let sdkCloseSucceeded = false;
     try {
       await this.harness.close();
+      sdkCloseSucceeded = true;
     } catch {
-      if (!(await this.hasCleanupConfirmation())) {
-        let cleanupBarrierPersisted = false;
-        try {
-          await markDeepSeekCleanupFailure();
-          cleanupBarrierPersisted = true;
-        } catch {
-          // Admission retains its fail-closed lock; do not claim a durable barrier.
-        }
+      // A failed SDK close needs a durable supervisor receipt before cleanup is acknowledged.
+    }
+    let cleanupConfirmed = false;
+    let cleanupBarrierPersisted = false;
+    cleanupConfirmed = await this.waitForRuntimeExitConfirmation(sdkCloseSucceeded);
+    if (cleanupConfirmed) {
+      await this.disposeResources();
+      this.closed = true;
+      this.releasePendingCleanupOwnership();
+      return;
+    }
+
+    try {
+      await markDeepSeekCleanupFailure();
+      cleanupBarrierPersisted = true;
+    } catch {
+      // Admission retains its fail-closed lock; do not claim a durable barrier.
+    }
+    this.retainPendingCleanupOwnership();
+    throw new DeepSeekHarnessTransportError(
+      deepSeekCleanupBlockedMessage(), 'cleanup-failed', undefined, cleanupBarrierPersisted,
+    );
+  }
+
+  /** Reconcile the durable owner and dispose resources only after process-group exit is proven. */
+  async disposeAfterConfirmedExit(allowMissingOwnerAfterSdkClose = false): Promise<boolean> {
+    if (this.closed) {
+      this.releasePendingCleanupOwnership();
+      return true;
+    }
+    if (this.cleanupReconciliation !== undefined) return this.cleanupReconciliation;
+    const reconciliation = (async (): Promise<boolean> => {
+      if (!(await this.confirmRuntimeExit(allowMissingOwnerAfterSdkClose))) return false;
+      await this.disposeResources();
+      this.closed = true;
+      this.releasePendingCleanupOwnership();
+      return true;
+    })();
+    this.cleanupReconciliation = reconciliation;
+    try {
+      return await reconciliation;
+    } finally {
+      if (this.cleanupReconciliation === reconciliation) this.cleanupReconciliation = undefined;
+    }
+  }
+
+  /** Wait a bounded grace period for durable process-group exit evidence. */
+  private async waitForRuntimeExitConfirmation(allowMissingOwnerAfterSdkClose: boolean): Promise<boolean> {
+    const deadline = Date.now() + DEEPSEEK_HARNESS_DISPOSAL_GRACE_MS;
+    while (true) {
+      let cleanupAcknowledged: boolean | undefined | null;
+      try {
+        cleanupAcknowledged = await this.confirmRuntimeExit(allowMissingOwnerAfterSdkClose);
+      } catch {
+        return false;
+      }
+      if (cleanupAcknowledged === true) return true;
+      if (cleanupAcknowledged === undefined || cleanupAcknowledged === null || Date.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  /** Reconcile this runtime's receipt, permitting a missing owner only after successful SDK close. */
+  private async confirmRuntimeExit(
+    allowMissingOwnerAfterSdkClose: boolean,
+  ): Promise<boolean | undefined | null> {
+    if (!this.runtimeStartAttempted) return true;
+    const cleanupAcknowledged = await acknowledgeDeepSeekRuntimeCleanup(this.cleanupConfirmationPath);
+    if (cleanupAcknowledged === undefined && allowMissingOwnerAfterSdkClose) return true;
+    return cleanupAcknowledged;
+  }
+
+  /** Share concurrent resource disposal and classify failures without exposing plugin or credential data. */
+  private async disposeResources(): Promise<void> {
+    if (this.resourceDisposal !== undefined) return this.resourceDisposal;
+    const disposal = (async (): Promise<void> => {
+      const [patchResult, pluginResult] = await Promise.allSettled([
+        this.credentialPatch.dispose(),
+        this.pluginResolution.dispose(),
+      ]);
+      if (patchResult.status === 'rejected') {
         throw new DeepSeekHarnessTransportError(
-          deepSeekCleanupBlockedMessage(), 'cleanup-failed', undefined, cleanupBarrierPersisted,
+          'DeepSeek Harness credential patch cleanup failed.',
+          'credential-patch-cleanup-failed',
         );
       }
-    }
+      if (pluginResult.status === 'rejected') {
+        throw new DeepSeekHarnessTransportError(
+          'DeepSeek Harness Git plugin cleanup failed.',
+          'git-plugin-cleanup-failed',
+        );
+      }
+    })();
+    this.resourceDisposal = disposal;
     try {
-      await this.credentialPatch.dispose();
-    } catch {
-      throw new DeepSeekHarnessTransportError(
-        'DeepSeek Harness credential patch cleanup failed.',
-        'credential-patch-cleanup-failed',
-      );
+      await disposal;
+    } finally {
+      if (this.resourceDisposal === disposal) this.resourceDisposal = undefined;
     }
-    this.closed = true;
+  }
+
+  /** Retain cleanup ownership and retry when a delayed supervisor receipt changes. */
+  private retainPendingCleanupOwnership(): void {
+    pendingCleanupProcesses.add(this);
+    if (this.cleanupReceiptListener === undefined) {
+      const listener = (): void => {
+        void this.disposeAfterConfirmedExit().then(
+          () => undefined,
+          (error: unknown) => { pendingCleanupFailures.set(this, error); },
+        );
+      };
+      this.cleanupReceiptListener = listener;
+      try {
+        watchFile(this.cleanupConfirmationPath, { interval: 100, persistent: false }, listener);
+      } catch (error) {
+        pendingCleanupFailures.set(this, error);
+      }
+    }
+    this.cleanupReceiptListener?.();
+  }
+
+  /** Release receipt watching and pending-failure bookkeeping after confirmed cleanup. */
+  private releasePendingCleanupOwnership(): void {
+    pendingCleanupProcesses.delete(this);
+    pendingCleanupFailures.delete(this);
+    if (this.cleanupReceiptListener !== undefined) {
+      unwatchFile(this.cleanupConfirmationPath, this.cleanupReceiptListener);
+      this.cleanupReceiptListener = undefined;
+    }
   }
 
   /** Accept only this instance's supervisor receipt written after proven group exit. */
@@ -1183,6 +1300,9 @@ class DeepSeekHarnessProcess {
     }
   }
 }
+
+const pendingCleanupProcesses = new Set<DeepSeekHarnessProcess>();
+const pendingCleanupFailures = new Map<DeepSeekHarnessProcess, unknown>();
 
 /** Map SDK error types to fixed diagnostics without exposing raw upstream data. */
 function mapSdkError(error: unknown, sdk: ManagedDeepSeekHarnessModules['sdk']): Error {
@@ -1349,13 +1469,20 @@ async function getOrCreateProcess(
 
   await assertDeepSeekRuntimeCreationAllowed();
   const managedModules = await loadManagedDeepSeekHarnessModules();
-  const credentialPatch = await createDeepSeekCredentialPatch(binding, configuration.systemPrompt);
+  const pluginResolution = await resolveDeepSeekHarnessGitPlugins(providerOptions?.plugins, options.abortSignal);
+  let credentialPatch: DeepSeekCredentialPatch | undefined;
   let processRecord: DeepSeekHarnessProcess | undefined;
   try {
+    credentialPatch = await createDeepSeekCredentialPatch(
+      binding,
+      configuration.systemPrompt,
+      pluginResolution.plugins,
+    );
     processRecord = new DeepSeekHarnessProcess(
       configuration,
       environment,
       credentialPatch,
+      pluginResolution,
       identity,
       binding.fingerprint,
       managedModules,
@@ -1364,7 +1491,8 @@ async function getOrCreateProcess(
     return processRecord;
   } catch (error) {
     if (processRecord !== undefined) removeProcess(processRecord);
-    await credentialPatch.dispose().catch(() => undefined);
+    if (credentialPatch !== undefined) await credentialPatch.dispose().catch(() => undefined);
+    await pluginResolution.dispose();
     throw error;
   }
 }
@@ -1772,8 +1900,19 @@ export async function closeDeepSeekHarnessProcesses(): Promise<void> {
   processes.clear();
   sessionBindings.clear();
   const results = await Promise.allSettled(active.map((processRecord) => processRecord.close()));
+  const pending = [...pendingCleanupProcesses];
+  const pendingResults = await Promise.allSettled(
+    pending.map((processRecord) => processRecord.disposeAfterConfirmedExit()),
+  );
   sessionDispatchQueue.clear();
-  if (results.some((result) => result.status === 'rejected')) {
+  if (
+    results.some((result) => result.status === 'rejected')
+    || pendingResults.some((result, index) => result.status === 'rejected'
+      || (result.status === 'fulfilled' && !result.value
+        && (pendingCleanupProcesses.has(pending[index]!) || pendingCleanupFailures.has(pending[index]!))))
+    || pendingCleanupProcesses.size > 0
+    || pendingCleanupFailures.size > 0
+  ) {
     throw new Error(deepSeekCleanupBlockedMessage());
   }
 }
