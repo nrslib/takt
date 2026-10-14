@@ -1,6 +1,7 @@
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { isRecordedProcessAlive, withFileLock } from '../fs/file-lock.js';
 import { getProcessIdentity, hasProcessIdentityMismatch, isProcessAlive, sameProcessIdentity } from '../task/process.js';
 import { ensurePrivateDirectory, readPrivateFileState, writePrivateFile } from '../../shared/utils/private-file.js';
 
@@ -25,6 +26,16 @@ export function readDaemonOwner(globalConfigDirectory: string): DaemonOwner | un
 export function writeDaemonOwner(globalConfigDirectory: string, owner: DaemonOwner): void {
   ensurePrivateDirectory(globalConfigDirectory);
   writePrivateFile(ownerPath(globalConfigDirectory), JSON.stringify(DaemonOwnerSchema.parse(owner)));
+}
+
+export function registerDaemonOwner(globalConfigDirectory: string, owner: DaemonOwner): boolean {
+  ensurePrivateDirectory(globalConfigDirectory);
+  return withFileLock(`${ownerPath(globalConfigDirectory)}.lock`, () => {
+    const existing = readDaemonOwner(globalConfigDirectory);
+    if (existing !== undefined && isRecordedProcessAlive(existing.pid, existing.identity)) return false;
+    writeDaemonOwner(globalConfigDirectory, owner);
+    return true;
+  });
 }
 
 export function removeDaemonOwner(globalConfigDirectory: string): void {

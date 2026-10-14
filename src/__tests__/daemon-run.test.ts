@@ -3,15 +3,14 @@ import { runDaemon } from '../features/daemon/runDaemon.js';
 
 const doubles = vi.hoisted(() => ({
   projects: vi.fn(), work: vi.fn(), create: vi.fn(), ensure: vi.fn(),
-  readOwner: vi.fn(), writeOwner: vi.fn(), removeOwner: vi.fn(), delay: vi.fn(),
+  registerOwner: vi.fn(), removeOwner: vi.fn(), delay: vi.fn(),
   patrol: vi.fn(),
 }));
 vi.mock('../features/daemon/projects.js', () => ({ listDaemonProjects: doubles.projects, hasDaemonProjectWork: doubles.work }));
 vi.mock('../features/manager/runEventManager.js', () => ({ createRunEventManager: doubles.create }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: doubles.ensure }));
 vi.mock('../infra/daemon/owner.js', () => ({
-  readDaemonOwner: doubles.readOwner, isDaemonOwnerRunning: () => true,
-  writeDaemonOwner: doubles.writeOwner, removeDaemonOwner: doubles.removeOwner,
+  registerDaemonOwner: doubles.registerOwner, removeDaemonOwner: doubles.removeOwner,
 }));
 vi.mock('../infra/task/process.js', () => ({ getSelfProcessIdentity: () => ({ startTime: 'test-start' }) }));
 vi.mock('../shared/utils/cli-invocation.js', () => ({ resolveCliInvocation: () => ({ cliPath: '/cli.js' }) }));
@@ -22,11 +21,25 @@ vi.mock('../infra/config/managerConfig.js', () => ({ resolveManagerConfig: () =>
 
 beforeEach(() => {
   vi.resetAllMocks();
+  doubles.registerOwner.mockReturnValue(true);
   doubles.projects.mockResolvedValue(['/project-a', '/project-b']);
   doubles.work.mockResolvedValue(false);
   doubles.delay.mockResolvedValue(undefined);
 });
 afterEach(() => vi.restoreAllMocks());
+
+it('exits without polling or removing ownership when another daemon is registered', async () => {
+  doubles.registerOwner.mockReturnValue(false);
+  const before = process.rawListeners('SIGTERM');
+  await runDaemon();
+  expect(doubles.registerOwner).toHaveBeenCalledExactlyOnceWith(process.env.TAKT_CONFIG_DIR, {
+    pid: process.pid, identity: { startTime: 'test-start' }, version: expect.any(String), cliPath: '/cli.js',
+  });
+  expect(doubles.delay).not.toHaveBeenCalled();
+  expect(doubles.projects).not.toHaveBeenCalled();
+  expect(doubles.removeOwner).not.toHaveBeenCalled();
+  expect(process.rawListeners('SIGTERM')).toEqual(before);
+});
 
 it('processes projects sequentially with a fixed event limit, then checks run startup and remaining work', async () => {
   const calls: string[] = [];

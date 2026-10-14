@@ -83,6 +83,52 @@ it('starts detached, records its executable/version, reuses it and stops from an
   expect(existsSync(join(outside, '.takt'))).toBe(false);
 });
 
+it('lets concurrent ensureDaemon calls both succeed with a single running daemon', async () => {
+  await keepWork();
+  await expect(Promise.all([lifecycle.ensureDaemon(), lifecycle.ensureDaemon()])).resolves.toEqual([undefined, undefined]);
+  const owner = readDaemonOwner(getGlobalConfigDir());
+  expect(owner).toBeDefined();
+  owned.push({ pid: owner!.pid, identity: owner!.identity });
+  expect(isDaemonOwnerRunning(owner!)).toBe(true);
+  await lifecycle.stopDaemon();
+  expect(isProcessAlive(owner!.pid)).toBe(false);
+});
+
+it('keeps only one daemon when two processes start with the same global configuration directory', async () => {
+  await keepWork();
+  const children = [0, 1].map(() => spawn(process.execPath, [cliPath, 'daemon'], {
+    cwd, env: { ...process.env, TAKT_CONFIG_DIR: getGlobalConfigDir() }, stdio: ['ignore', 'ignore', 'pipe'],
+  }));
+  const stderr = ['', ''];
+  children.forEach((child, index) => {
+    child.stderr!.on('data', (chunk) => { stderr[index] += String(chunk); });
+  });
+  for (const child of children) {
+    const captured = await captureOwnedChild(child);
+    if (captured !== undefined) owned.push(captured);
+  }
+  await vi.waitFor(() => {
+    const owner = readDaemonOwner(getGlobalConfigDir());
+    expect(owner).toBeDefined();
+    const running = children.filter((child) => child.exitCode === null && child.signalCode === null);
+    expect(running).toHaveLength(1);
+    expect(running[0]!.pid).toBe(owner!.pid);
+    expect(isDaemonOwnerRunning(owner!)).toBe(true);
+    const exited = children.find((child) => child.pid !== owner!.pid)!;
+    expect(exited.exitCode, stderr.join('\n')).toBe(0);
+    expect(existsSync(join(getGlobalConfigDir(), 'daemon.json.lock'))).toBe(false);
+  }, { timeout: 10_000 });
+  const owner = readDaemonOwner(getGlobalConfigDir())!;
+  const logPath = join(getGlobalConfigDir(), 'logs', 'daemon.log');
+  await vi.waitFor(() => {
+    expect(readFileSync(logPath, 'utf8').split('Daemon projects').length).toBeGreaterThanOrEqual(3);
+  }, { timeout: 5_000 });
+  expect(readDaemonOwner(getGlobalConfigDir())).toEqual(owner);
+  await lifecycle.stopDaemon();
+  expect(isProcessAlive(owner.pid)).toBe(false);
+  expect(readDaemonOwner(getGlobalConfigDir())).toBeUndefined();
+});
+
 it('exits and removes the owner record when no projects have work', async () => {
   const owner = await start();
   await vi.waitFor(() => {

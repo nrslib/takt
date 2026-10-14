@@ -1,7 +1,7 @@
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
-import { isDaemonOwnerRunning, readDaemonOwner, removeDaemonOwner, writeDaemonOwner } from '../../infra/daemon/owner.js';
+import { registerDaemonOwner, removeDaemonOwner } from '../../infra/daemon/owner.js';
 import { getSelfProcessIdentity } from '../../infra/task/process.js';
 import { packageVersion } from '../../shared/package-info.js';
 import { resolveCliInvocation } from '../../shared/utils/cli-invocation.js';
@@ -19,11 +19,10 @@ const log = createLogger('daemon');
 
 export async function runDaemon(): Promise<void> {
   const globalConfigDirectory = resolve(getGlobalConfigDir());
-  const existing = readDaemonOwner(globalConfigDirectory);
-  if (existing !== undefined && isDaemonOwnerRunning(existing)) return;
   const identity = getSelfProcessIdentity();
   if (identity === undefined) throw new Error('Cannot identify daemon process');
   const { cliPath } = resolveCliInvocation('daemon');
+  if (!registerDaemonOwner(globalConfigDirectory, { pid: process.pid, identity, version: packageVersion, cliPath })) return;
   const controller = new AbortController();
   const managers = new Map<string, ReturnType<typeof createRunEventManager>>();
   const stop = (): void => { controller.abort(); };
@@ -31,7 +30,6 @@ export async function runDaemon(): Promise<void> {
   process.on('SIGINT', stop);
   try {
     initDebugLogger({ enabled: true, logFile: join(globalConfigDirectory, 'logs', 'daemon.log') });
-    writeDaemonOwner(globalConfigDirectory, { pid: process.pid, identity, version: packageVersion, cliPath });
     log.info('Daemon started', { pid: process.pid, version: packageVersion, cliPath });
     while (!controller.signal.aborted) {
       // Leave the first polling interval for the launching manager to observe startup.

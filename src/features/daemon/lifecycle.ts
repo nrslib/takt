@@ -58,7 +58,9 @@ export async function ensureDaemon(): Promise<void> {
     const deadline = Date.now() + PROCESS_WAIT_MS;
     while (Date.now() < deadline) {
       const started = readDaemonOwner(directory);
-      if (started !== undefined && started.pid === child.pid && isDaemonOwnerRunning(started)) {
+      // A concurrent caller may have started the same daemon first; the child then exits as the loser.
+      if (started !== undefined && isDaemonOwnerRunning(started)
+        && (started.pid === child.pid || (started.version === packageVersion && started.cliPath === cliPath))) {
         log.info('Daemon startup confirmed', { pid: started.pid });
         return;
       }

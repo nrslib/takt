@@ -7,6 +7,7 @@ const doubles = vi.hoisted(() => ({
   safe: vi.fn(), capture: vi.fn(), assertSnapshot: vi.fn(),
 }));
 vi.mock('node:fs', () => ({ readdirSync: doubles.readdir }));
+vi.mock('../infra/fs/file-lock.js', () => ({ withFileLock: (_path: string, action: () => unknown) => action() }));
 vi.mock('../shared/utils/private-file.js', () => ({
   readPrivateFileState: doubles.read, writePrivateFile: doubles.write, ensurePrivateDirectory: vi.fn(),
   capturePrivateDirectoryReadSnapshot: doubles.capture, assertPrivateDirectoryReadSnapshot: doubles.assertSnapshot,
