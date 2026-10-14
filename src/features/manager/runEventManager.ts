@@ -1,4 +1,6 @@
-import { deleteManagerEvent, readManagerEvents } from '../../infra/goals/events.js';
+import { deleteManagerEvent, readManagerEvents, type SavedManagerEvent } from '../../infra/goals/events.js';
+import type { Goal } from '../../infra/goals/schema.js';
+import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
 import { GoalStore } from '../../infra/goals/store.js';
 import { appendGoalWorkLog } from '../../infra/goals/workLog.js';
 import { TaskRunner } from '../../infra/task/runner.js';
@@ -10,6 +12,7 @@ import { createManagerConversationSession, getManagerOutputSchema, type ManagerC
 import { connectManagerMcp } from './managerMcp.js';
 import { buildGoalTurnContext } from './turnContext.js';
 import { notifyManagerTurnFailure } from './turnFailureNotification.js';
+import { isGoalPatrolDue } from './patrol.js';
 
 export function createRunEventManager(cwd: string) {
   // Failed events remain in the inbox; polling does not retry them.
@@ -38,44 +41,85 @@ export function createRunEventManager(cwd: string) {
     });
     return session;
   };
+  const canProcessPatrol = (goal: Goal, saved: SavedManagerEvent): boolean => {
+    const { patrolInterval } = resolveManagerConfig(cwd);
+    return isGoalPatrolDue(goal, Date.now(), patrolInterval)
+      && (goal.lastPatrolCompletedAt === undefined || Date.parse(saved.event.createdAt) > Date.parse(goal.lastPatrolCompletedAt));
+  };
+  const processEvent = async (saved: SavedManagerEvent, signal: AbortSignal, budget: { remaining: number }): Promise<boolean> => {
+    budget.remaining--;
+    const store = new GoalStore(cwd);
+    const patrol = saved.event.kind === 'patrol';
+    try {
+      let goal = await store.get(saved.event.goalId);
+      if (patrol && !canProcessPatrol(goal, saved)) {
+        deleteManagerEvent(saved);
+        return true;
+      }
+      if (goal.executionStatus === 'paused') {
+        budget.remaining++;
+        return false;
+      }
+      if (goal.executionStatus !== 'aborted') {
+        if (patrol) {
+          // Retry failures only when a due patrol is being handled, never on ordinary polls.
+          for (const failed of readManagerEvents(cwd)) {
+            if (signal.aborted) return false;
+            if (budget.remaining === 0) break;
+            if (failed.event.kind === 'patrol' || !failedEvents.has(failed.filePath)) continue;
+            await processEvent(failed, signal, budget);
+          }
+        }
+        if (signal.aborted) return false;
+        const manager = await getSession(signal);
+        if (patrol) {
+          goal = await store.get(saved.event.goalId);
+          if (!canProcessPatrol(goal, saved)) {
+            deleteManagerEvent(saved);
+            return true;
+          }
+        }
+        const result = await manager.handleUserMessage({
+          text: buildGoalTurnContext(cwd, goal, saved.event, new TaskRunner(cwd).listTaskStateItems()),
+          abortSignal: signal,
+        });
+        if (signal.aborted) return false;
+        if (result.kind === 'error') throw new Error(result.message);
+        const summary = manager.getPendingSummary();
+        if (summary !== null) {
+          manager.dismissSummary(summary.revision);
+          throw new Error('Event processing requires actions for the existing goal, not a registration summary');
+        }
+        await store.update(goal.id, (current) => ({
+          ...appendGoalWorkLog(current, { summary: result.message, ...(patrol ? { kind: 'patrol' as const } : {}) }),
+          ...(patrol ? { lastPatrolCompletedAt: new Date().toISOString() } : {}),
+        }));
+      }
+      deleteManagerEvent(saved);
+      failedEvents.delete(saved.filePath);
+      return true;
+    } catch (error) {
+      if (signal.aborted) return false;
+      logError(`Manager could not handle ${saved.event.kind} event for goal ${saved.event.goalId}: ${sanitizeSensitiveText(getErrorMessage(error))}`);
+      await notifyManagerTurnFailure(cwd, saved.event.goalId, error);
+      if (patrol) {
+        await store.update(saved.event.goalId, (current) => ({ ...current, lastPatrolCompletedAt: new Date().toISOString() }));
+        deleteManagerEvent(saved);
+        return true;
+      }
+      failedEvents.add(saved.filePath);
+      return false;
+    }
+  };
   return {
     async processPending(signal: AbortSignal, maxEvents: number): Promise<boolean> {
       let handled = false;
-      let attempted = 0;
+      const budget = { remaining: maxEvents };
+      const failedAtPollStart = new Set(failedEvents);
       for (const saved of readManagerEvents(cwd)) {
-        if (signal.aborted || attempted >= maxEvents) return handled;
-        if (failedEvents.has(saved.filePath)) continue;
-        attempted++;
-        try {
-          const store = new GoalStore(cwd);
-          const goal = await store.get(saved.event.goalId);
-          if (goal.executionStatus === 'paused') {
-            attempted--;
-            continue;
-          }
-          if (goal.executionStatus !== 'aborted') {
-            const manager = await getSession(signal);
-            const result = await manager.handleUserMessage({
-              text: buildGoalTurnContext(cwd, goal, saved.event, new TaskRunner(cwd).listTaskStateItems()),
-              abortSignal: signal,
-            });
-            if (signal.aborted) return handled;
-            if (result.kind === 'error') throw new Error(result.message);
-            const summary = manager.getPendingSummary();
-            if (summary !== null) {
-              manager.dismissSummary(summary.revision);
-              throw new Error('Event processing requires actions for the existing goal, not a registration summary');
-            }
-            await store.update(goal.id, (current) => appendGoalWorkLog(current, { summary: result.message }));
-          }
-          deleteManagerEvent(saved);
-          handled = true;
-        } catch (error) {
-          if (signal.aborted) return handled;
-          failedEvents.add(saved.filePath);
-          logError(`Manager could not handle ${saved.event.kind} event for goal ${saved.event.goalId}: ${sanitizeSensitiveText(getErrorMessage(error))}`);
-          await notifyManagerTurnFailure(cwd, saved.event.goalId, error);
-        }
+        if (signal.aborted || budget.remaining <= 0) return handled;
+        if (failedAtPollStart.has(saved.filePath)) continue;
+        if (await processEvent(saved, signal, budget)) handled = true;
       }
       return handled;
     },

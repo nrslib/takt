@@ -4,7 +4,7 @@ import { GoalQuestionInputSchema, GoalQuestionSchema, type Goal, type GoalQuesti
 export function addGoalQuestion(goal: Goal, input: GoalQuestionInput): { goal: Goal; questionId: string } {
   const id = randomUUID();
   if (goal.questions?.some((question) => question.id === id)) throw new Error('Question ID already exists');
-  const question = GoalQuestionSchema.parse({ ...GoalQuestionInputSchema.parse(input), id, status: 'pending' });
+  const question = GoalQuestionSchema.parse({ ...GoalQuestionInputSchema.parse(input), id, status: 'pending', createdAt: new Date().toISOString() });
   return { goal: { ...goal, questions: [...(goal.questions ?? []), question] }, questionId: id };
 }
 

@@ -10,6 +10,8 @@ import { getErrorMessage } from '../../shared/utils/error.js';
 import { hasDaemonProjectWork, listDaemonProjects } from './projects.js';
 import { createRunEventManager } from '../manager/runEventManager.js';
 import { ensureManagerRun } from '../manager/autoRun.js';
+import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
+import { enqueueDueGoalPatrols } from '../manager/patrol.js';
 
 const POLL_INTERVAL_MS = 500;
 const EVENTS_PER_PROJECT = 10;
@@ -44,6 +46,8 @@ export async function runDaemon(): Promise<void> {
       for (const cwd of projects) {
         if (controller.signal.aborted) break;
         try {
+          const { patrolInterval } = resolveManagerConfig(cwd);
+          await enqueueDueGoalPatrols(cwd, patrolInterval);
           let manager = managers.get(cwd);
           if (manager === undefined) {
             manager = createRunEventManager(cwd);

@@ -17,6 +17,7 @@ export const GoalAnswerSchema = z.object({
 }).strict();
 export const GoalQuestionSchema = GoalQuestionInputSchema.extend({
   id: z.uuid(), status: z.enum(['pending', 'answered', 'withdrawn']),
+  createdAt: z.iso.datetime().optional(),
   answer: GoalAnswerSchema.optional(),
 }).superRefine((question, ctx) => {
   if ((question.status === 'answered') !== (question.answer !== undefined)) {
@@ -89,6 +90,7 @@ export const GoalCompletionSchema = z.object({
 
 export const GoalWorkLogInputSchema = z.object({
   summary: goalText,
+  kind: z.literal('patrol').optional(),
 }).strict();
 export const GoalWorkLogSchema = GoalWorkLogInputSchema.extend({
   id: z.uuid(), recordedAt: z.iso.datetime(),
@@ -96,6 +98,8 @@ export const GoalWorkLogSchema = GoalWorkLogInputSchema.extend({
 
 export const GoalRecordObjectSchema = z.object({
   id: GoalIdSchema,
+  createdAt: z.iso.datetime().optional(),
+  lastPatrolCompletedAt: z.iso.datetime().optional(),
   ...summaryShape,
   mode: z.literal('local'),
   status: z.enum(['created', 'awaiting_merge', 'completed']),

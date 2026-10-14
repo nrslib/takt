@@ -49,7 +49,7 @@ async function start() {
 
 async function keepWork() {
   await registerProject({ globalConfigDirectory: getGlobalConfigDir(), projectDirectory: cwd, command: 'manager', managerUsed: true });
-  return new GoalStore(cwd).create(goalRecord());
+  return new GoalStore(cwd).create({ ...goalRecord(), createdAt: new Date().toISOString() });
 }
 
 it('starts detached, records its executable/version, reuses it and stops from an unrelated directory', async () => {
@@ -174,4 +174,29 @@ it('keeps a failed event and blocked notification across multiple daemon polls w
   expect(recorded.filter((call) => call.event === 'start' && call.personaName === 'manager')).toHaveLength(1);
   expect((await new GoalStore(cwd).get(goal.id)).notifications?.filter((notification) => notification.kind === 'blocked')).toHaveLength(1);
   expect(existsSync(join(cwd, '.takt', 'manager-logs'))).toBe(false);
+});
+
+it('patrols an active goal without run, saves completion time and does not repeat it on ordinary polls', async () => {
+  execFileSync('git', ['init', '-b', 'main'], { cwd, stdio: 'pipe' });
+  const goal = await keepWork();
+  await new GoalStore(cwd).update(goal.id, (current) => ({ ...current, createdAt: new Date(Date.now() - 3_600_000).toISOString() }));
+  const scenario = join(root, 'patrol-scenario.json');
+  const calls = join(root, 'patrol-calls.jsonl');
+  writeFileSync(scenario, JSON.stringify([{ persona: 'manager', content: '', structured_output: { message: '点検を終えました', summary: null } }]));
+  vi.stubEnv('TAKT_MOCK_SCENARIO', scenario); vi.stubEnv('TAKT_MOCK_CALL_LOG', calls);
+  const owner = await start();
+  await vi.waitFor(async () => {
+    const saved = await new GoalStore(cwd).get(goal.id);
+    expect(saved.lastPatrolCompletedAt).toBeDefined();
+    expect(saved.workLog).toEqual([expect.objectContaining({ kind: 'patrol' })]);
+    expect(readManagerEvents(cwd)).toEqual([]);
+  }, { timeout: 10_000 });
+  const logPath = join(getGlobalConfigDir(), 'logs', 'daemon.log');
+  const before = readFileSync(logPath, 'utf8').split('Daemon projects').length;
+  await vi.waitFor(() => {
+    expect(readFileSync(logPath, 'utf8').split('Daemon projects').length).toBeGreaterThanOrEqual(before + 3);
+  }, { timeout: 5_000 });
+  const recorded = readFileSync(calls, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { event: string; personaName: string });
+  expect(recorded.filter((call) => call.event === 'start' && call.personaName === 'manager')).toHaveLength(1);
+  expect(isDaemonOwnerRunning(owner)).toBe(true);
 });

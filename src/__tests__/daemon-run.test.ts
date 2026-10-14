@@ -4,6 +4,7 @@ import { runDaemon } from '../features/daemon/runDaemon.js';
 const doubles = vi.hoisted(() => ({
   projects: vi.fn(), work: vi.fn(), create: vi.fn(), ensure: vi.fn(),
   readOwner: vi.fn(), writeOwner: vi.fn(), removeOwner: vi.fn(), delay: vi.fn(),
+  patrol: vi.fn(),
 }));
 vi.mock('../features/daemon/projects.js', () => ({ listDaemonProjects: doubles.projects, hasDaemonProjectWork: doubles.work }));
 vi.mock('../features/manager/runEventManager.js', () => ({ createRunEventManager: doubles.create }));
@@ -16,6 +17,8 @@ vi.mock('../infra/task/process.js', () => ({ getSelfProcessIdentity: () => ({ st
 vi.mock('../shared/utils/cli-invocation.js', () => ({ resolveCliInvocation: () => ({ cliPath: '/cli.js' }) }));
 vi.mock('../shared/utils/debug.js', () => ({ initDebugLogger: vi.fn(), createLogger: () => ({ info: vi.fn(), debug: vi.fn(), error: vi.fn() }) }));
 vi.mock('node:timers/promises', () => ({ setTimeout: doubles.delay }));
+vi.mock('../features/manager/patrol.js', () => ({ enqueueDueGoalPatrols: doubles.patrol }));
+vi.mock('../infra/config/managerConfig.js', () => ({ resolveManagerConfig: () => ({ patrolInterval: 1800 }) }));
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -38,13 +41,16 @@ it('processes projects sequentially with a fixed event limit, then checks run st
   }));
   doubles.create.mockReturnValueOnce(managers[0]).mockReturnValueOnce(managers[1]);
   doubles.ensure.mockImplementation(async (cwd: string) => { calls.push(`run:${cwd}`); });
+  doubles.patrol.mockImplementation(async (cwd: string, interval: number) => {
+    expect(interval).toBe(1800); calls.push(`patrol:${cwd}`);
+  });
   doubles.work.mockImplementation(async (cwd: string) => { calls.push(`work:${cwd}`); return false; });
 
   await runDaemon();
 
   expect(calls).toEqual([
-    'events:/project-a', 'run:/project-a', 'work:/project-a',
-    'events:/project-b', 'run:/project-b', 'work:/project-b',
+    'patrol:/project-a', 'events:/project-a', 'run:/project-a', 'work:/project-a',
+    'patrol:/project-b', 'events:/project-b', 'run:/project-b', 'work:/project-b',
   ]);
   expect(doubles.create.mock.calls).toEqual([['/project-a'], ['/project-b']]);
   for (const manager of managers) expect(manager.close).toHaveBeenCalledOnce();
@@ -59,6 +65,7 @@ it('keeps each project manager across polling rounds so failed events stay exclu
   await runDaemon();
   expect(doubles.create).toHaveBeenCalledExactlyOnceWith('/project');
   expect(manager.processPending).toHaveBeenCalledTimes(2);
+  expect(doubles.patrol).toHaveBeenCalledTimes(2);
   expect(doubles.ensure).toHaveBeenCalledTimes(2);
   expect(manager.close).toHaveBeenCalledOnce();
 });

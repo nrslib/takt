@@ -12,7 +12,7 @@ export async function createGoal(input: GoalCreateInput): Promise<Goal> {
   await registerProject({ globalConfigDirectory: getGlobalConfigDir(), projectDirectory: input.cwd, command: 'manager', managerUsed: true });
   const { commit, ...branches } = prepareGoalBranch(input.cwd, input.id, input.startBranch, input.integrationBranch);
   const goal = GoalSchema.parse({
-    id: input.id, objective: input.objective, outOfScope: input.outOfScope,
+    id: input.id, createdAt: new Date().toISOString(), objective: input.objective, outOfScope: input.outOfScope,
     acceptanceCriteria: input.acceptanceCriteria, constraints: input.constraints,
     workLog: [], mode: 'local', status: 'created', executionStatus: 'active',
     acceptanceCriteriaVersion: 1, ...branches,
