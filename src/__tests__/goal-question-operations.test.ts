@@ -122,6 +122,49 @@ it('keeps questions usable with question notification delivery disabled', async 
   expect(goal.notifications).toBeUndefined();
 });
 
+it('preserves question changes made before the update reads the goal', async () => {
+  const previousQuestion = {
+    id: '650e8400-e29b-41d4-a716-446655440001', body: '先の質問', recipient: 'human' as const, status: 'pending' as const,
+  };
+  goal.questions = [previousQuestion];
+  doubles.update.mockImplementationOnce(async (_id: string, transform: (current: Goal) => Goal) => {
+    const current = { ...goal, questions: [
+      { ...previousQuestion, status: 'answered' as const, answer: { text: 'CSV', source: 'tui' as const, answeredAt: '2026-10-14T00:00:00Z' } },
+      { ...previousQuestion, id: '650e8400-e29b-41d4-a716-446655440002', body: '別の質問' },
+    ] };
+    goal = transform(current);
+    return structuredClone(goal);
+  });
+
+  const result = await askTaktGoalQuestion({ ...input, body: '新しい質問' }, {}, signal);
+
+  expect(result.isError).toBeUndefined();
+  expect(goal.questions).toEqual([
+    expect.objectContaining({ id: previousQuestion.id, status: 'answered', answer: expect.objectContaining({ text: 'CSV' }) }),
+    expect.objectContaining({ body: '別の質問', status: 'pending' }),
+    expect.objectContaining({ body: '新しい質問', status: 'pending' }),
+  ]);
+  expect(JSON.parse(firstTextContent(result.content))).toEqual({ questionId: goal.questions![2]!.id });
+  expect(goal.notifications).toHaveLength(1);
+});
+
+it('reuses a pending question from the update without adding a duplicate notification', async () => {
+  const question = {
+    id: '650e8400-e29b-41d4-a716-446655440001', body: '形式はどれですか', recipient: 'human' as const, status: 'pending' as const,
+  };
+  doubles.update.mockImplementationOnce(async (_id: string, transform: (current: Goal) => Goal) => {
+    goal = transform({ ...goal, questions: [question] });
+    return structuredClone(goal);
+  });
+
+  const result = await askTaktGoalQuestion({ ...input, body: question.body }, {}, signal);
+
+  expect(result.isError).toBeUndefined();
+  expect(JSON.parse(firstTextContent(result.content))).toEqual({ questionId: question.id });
+  expect(goal.questions).toEqual([question]);
+  expect(goal.notifications).toBeUndefined();
+});
+
 it('returns read and write errors for missing questions and persistence failure', async () => {
   expect((await getTaktGoalQuestion({ ...input, questionId: 'missing' }, {})).isError).toBe(true);
   expect((await withdrawTaktGoalQuestion({ ...input, questionId: 'missing' }, {}, signal)).isError).toBe(true);

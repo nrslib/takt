@@ -19,11 +19,12 @@ export async function enqueueTaktGoalTask(input: EnqueueGoalTaskInput, deps: Mcp
       const store = new GoalStore(input.cwd);
       const goal = await store.get(input.goalId);
       const runner = new TaskRunner(input.cwd);
+      const allTasks = input.workKey === undefined ? runner.listAllTaskItems() : [];
       const existing = runner.listTaskStateItems().find((task) => {
         if (task.goalId !== goal.id) return false;
         if (input.workKey !== undefined) return task.goalWorkKey === input.workKey;
         if (task.goalPurpose !== input.purpose || task.workflow !== input.workflow) return false;
-        const saved = runner.listAllTaskItems().find((item) => item.name === task.name);
+        const saved = allTasks.find((item) => item.name === task.name);
         return saved !== undefined && resolveTaskOrderContent(input.cwd, saved.taskDir, saved.content) === input.task.trim();
       });
       if (existing !== undefined) return { taskName: existing.name, tasksFile: join(input.cwd, '.takt', 'tasks.yaml'), workflow: existing.workflow };

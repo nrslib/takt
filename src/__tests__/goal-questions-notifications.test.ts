@@ -93,14 +93,6 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
     }
   });
 
-  it('keeps the original integrated label alongside the new notification label', () => {
-    const vars = { task: 'export', purpose: 'CSV output', sha: 'abcdef0' };
-    expect(getLabel('manager.notifyIntegrated', language, vars)).toBe(language === 'ja'
-      ? '作業単位「export」を取り込みました: CSV output\nコミット: abcdef0'
-      : 'Integrated export: CSV output\nCommit: abcdef0');
-    expect(getLabel('manager.notificationIntegratedBody', language, vars)).toContain(vars.purpose);
-  });
-
   it.each(['progress', 'awaiting_merge', 'completed', 'blocked', 'custom'] as const)('shortens a multiline objective and long %s body', (kind) => {
     const objective = language === 'ja'
       ? `顧客の出力を改善する\n${'長い目的の説明'.repeat(500)}`

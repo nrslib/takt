@@ -18,6 +18,7 @@ import { createTaktMcpServer,TAKT_MCP_MANAGER_TOOL_NAMES } from '../features/mcp
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 import { invalidateResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
 import { GoalStore } from '../infra/goals/store.js';
+import { readManagerEvents } from '../infra/goals/events.js';
 import { resetScenario,setMockScenario } from '../infra/mock/index.js';
 import { TaskRunner } from '../infra/task/runner.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
@@ -357,16 +358,25 @@ describe('manager questions, answers and notifications through production bounda
     expect((await readManagerDisplayEvents(cwd)).events).toEqual(expect.arrayContaining([expect.objectContaining({ message: expect.stringContaining(question.body) })]));
   });
 
-  it.each(['HTTP error', 'connection error'] as const)('keeps the question usable and records a diagnostic after a Slack %s', async (failure) => {
+  it.each(['HTTP error', 'connection error'] as const)('keeps the question usable and work running while reporting a Slack %s to stderr', async (failure) => {
     responseStatus = failure === 'HTTP error' ? 503 : 0;
+    const stderr = vi.spyOn(process.stderr, 'write');
     const question = await ask();
     expect(question.status).toBe('pending');
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.text).toContain(question.id);
+    expect(stderr).toHaveBeenCalledWith(failure === 'HTTP error'
+      ? 'Slack webhook failed: HTTP 503\n' : 'Slack webhook connection failed\n');
+    expect(stderr.mock.calls.flat().join('')).not.toContain(webhook);
     const display = await readManagerDisplayEvents(cwd);
-    const diagnostics = [...display.events, ...display.diagnostics].filter(({ message }) => /slack|webhook/i.test(message));
-    expect(diagnostics.length).toBeGreaterThan(0);
-    for (const diagnostic of diagnostics) expect(diagnostic.message).not.toContain(webhook);
-    await invoke('takt_withdraw_goal_question', { questionId: question.id });
+    expect(display.questions).toEqual([expect.objectContaining({ goalId, question: expect.objectContaining(question) })]);
+    expect(display.events).toHaveLength(1);
+    expect(display.events[0]!.message).toContain(`/answer ${question.id}`);
+    expect(JSON.stringify(display)).not.toContain(webhook);
     expect((await enqueue('export')).isError).not.toBe(true);
+    expect(new TaskRunner(cwd).listPendingTaskItems()).toHaveLength(1);
+    await invoke('takt_withdraw_goal_question', { questionId: question.id });
+    expect((await invoke('takt_get_goal_question', { questionId: question.id })).question).toMatchObject({ status: 'withdrawn' });
   });
 
   it('disables question notifications while retaining questions, manager-selected work and other notification kinds', async () => {
@@ -402,9 +412,7 @@ describe('manager questions, answers and notifications through production bounda
       const completion = { success: true, interrupted: false, branch: source, sha };
       runner.completeTask({ task, success: true, branch: source, completion, response: 'validated',
         executionLog: [], startedAt: '2026-10-08T00:00:00Z', completedAt: '2026-10-08T00:01:00Z' });
-      await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal,
-      }));
-      await invoke('takt_merge_goal_task', { taskName: added.name, expectedSha: sha });
+      expect(await invoke('takt_merge_goal_task', { taskName: added.name, expectedSha: sha })).toMatchObject({ status: 'merged' });
     } else {
       git(['update-ref', `refs/heads/${branch}`, sha]);
       await invoke('takt_complete_goal', { expectedSha: sha, summary: '出力の検証が完了しました' });
@@ -418,16 +426,31 @@ describe('manager questions, answers and notifications through production bounda
     expect(requests[0]!.text).toContain(goalId.slice(0, 8));
     expect(requests[0]!.text.split('\n')[0]).toContain(basename(cwd));
     expect(requests[0]!.text).not.toContain(goalId);
-    const saved = z.object({ notifications: z.array(z.object({ kind: z.string() })) }).parse((await invoke('takt_get_goal')).goal);
-    expect(saved.notifications.map((notification) => notification.kind)).toEqual([kind]);
-    expect((await readManagerDisplayEvents(cwd)).events).toHaveLength(1);
+    const saved = await new GoalStore(cwd).get(goalId);
+    expect(saved.notifications?.map((notification) => notification.kind)).toEqual([kind]);
+    const display = await readManagerDisplayEvents(cwd);
+    expect(display.events).toHaveLength(kind === 'progress' ? 2 : 1);
+    expect(display.events).toContainEqual({
+      id: JSON.stringify([goalId, 'notification', saved.notifications![0]!.id]), message: requests[0]!.text,
+    });
+    if (kind === 'progress') {
+      expect(saved.workLog).toHaveLength(1);
+      expect(display.events[0]).toEqual({
+        id: JSON.stringify([goalId, 'work-log', saved.workLog[0]!.id]), message: `${goalId}: ${saved.workLog[0]!.summary}`,
+      });
+      expect(requests[0]!.text).toContain('出力の検証');
+    }
   });
 
   it.each(kinds)('disables only %s notification delivery while preserving the underlying operation', async (kind) => {
     configure(kind, kind === 'completed' ? 'auto' : 'approve');
     await produce(kind);
     expect(requests).toEqual([]);
-    expect((await readManagerDisplayEvents(cwd)).events).toEqual([]);
+    const saved = await new GoalStore(cwd).get(goalId);
+    expect(saved.notifications).toBeUndefined();
+    expect((await readManagerDisplayEvents(cwd)).events).toEqual(kind === 'progress' ? [{
+      id: JSON.stringify([goalId, 'work-log', saved.workLog[0]!.id]), message: `${goalId}: ${saved.workLog[0]!.summary}`,
+    }] : []);
     const goal = (await invoke('takt_get_goal')).goal;
     if (kind === 'question') expect(goal).toMatchObject({ questions: [expect.objectContaining({ status: 'pending' })] });
     else if (kind === 'progress') {
@@ -495,7 +518,6 @@ describe('manager questions, answers and notifications through production bounda
     await vi.waitFor(() => expect(app!.lastFrame()).toContain('回答済み:'), { timeout: 30_000 });
     expect((await invoke('takt_get_goal_question', { questionId: question.id })).question).toMatchObject({ status: 'pending' });
     expect(new TaskRunner(cwd).listTaskStateItems()).toEqual([]);
-    setMockScenario([{ persona: 'manager', status: 'done', content: JSON.stringify({ message: '自由記述を確認しました', summary: null }) }]);
     await send(`/answer ${question.id}`);
     await vi.waitFor(() => expect(app!.lastFrame()).toContain('Enter your answer'));
     await send(answer);
@@ -503,7 +525,10 @@ describe('manager questions, answers and notifications through production bounda
       expect((await invoke('takt_get_goal_question', { questionId: question.id })).question)
         .toMatchObject({ status: 'answered', answer: { text: answer, source: 'tui' } });
     }, { timeout: 30_000 });
-    await vi.waitFor(() => expect(app!.lastFrame()).toContain('自由記述を確認しました'), { timeout: 30_000 });
+    await vi.waitFor(() => expect(app!.lastFrame()).toContain('Answer saved'));
+    expect(readManagerEvents(cwd).map(({ event }) => event)).toEqual([expect.objectContaining({
+      kind: 'answer', goalId, questionId: question.id, answer: { text: answer, source: 'tui', answeredAt: expect.any(String) },
+    })]);
     expect(new TaskRunner(cwd).listTaskStateItems()).toEqual([]);
     const pending = await ask({ body: '通知の宛先はどこですか' });
     const withdrawn = await ask({ body: '不要になった確認' });

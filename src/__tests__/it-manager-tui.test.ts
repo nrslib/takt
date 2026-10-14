@@ -101,6 +101,28 @@ beforeEach(() => { vi.clearAllMocks(); failureNotice.mockReset(); memory.goals.m
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('manager TUI human approval', () => {
+  it('shows consecutive refresh errors once and reports changes or failures after recovery', async () => {
+    const readEvents = vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockRejectedValue(new Error('refresh error A'));
+    const context = mount();
+    try {
+      await vi.waitFor(() => expect(readEvents.mock.calls.length).toBeGreaterThanOrEqual(3), { timeout: 2500 });
+      expect(context.app.lastFrame()?.match(/refresh error A/gu)).toHaveLength(1);
+
+      readEvents.mockRejectedValue(new Error('refresh error B'));
+      const beforeChange = readEvents.mock.calls.length;
+      await vi.waitFor(() => expect(readEvents.mock.calls.length).toBeGreaterThanOrEqual(beforeChange + 2), { timeout: 2000 });
+      await vi.waitFor(() => expect(context.app.lastFrame()?.match(/refresh error B/gu)).toHaveLength(1));
+
+      readEvents.mockResolvedValue({ events: [], diagnostics: [], questions: [], goals: [] });
+      const beforeRecovery = readEvents.mock.calls.length;
+      await vi.waitFor(() => expect(readEvents.mock.calls.length).toBeGreaterThan(beforeRecovery));
+      readEvents.mockRejectedValue(new Error('refresh error A'));
+      await vi.waitFor(() => expect(context.app.lastFrame()?.match(/refresh error A/gu)).toHaveLength(2));
+      expect(context.call).not.toHaveBeenCalled();
+      expect(failureNotice).not.toHaveBeenCalled();
+    } finally { context.app.unmount(); await context.session.close(); }
+  });
+
   it('keeps displaying and reading workspace B after A is removed in the turn that adds B', async () => {
     const repositoryB = '/test/repository-b';
     const repository = { kind: 'repository' as const, repositoryDirectory: cwd, repositoryDirectories: [cwd] };

@@ -65,10 +65,51 @@ it.each(['provider', 'startup', 'memory'] as const)('retains a failed event and 
   if (failure === 'startup') doubles.preflight.mockRejectedValue(error);
   if (failure === 'memory') doubles.update.mockRejectedValue(error);
   const manager = createRunEventManager('/project');
-  await expect(manager.processPending(new AbortController().signal)).rejects.toThrow();
+  await expect(manager.processPending(new AbortController().signal)).resolves.toBe(false);
   expect(inbox).toHaveLength(1); expect(doubles.remove).not.toHaveBeenCalled();
   expect(doubles.notify).toHaveBeenCalledExactlyOnceWith('/project', goal.id, expect.any(Error));
   await manager.close(); expect(doubles.dispose).toHaveBeenCalledOnce();
+});
+it('releases the manager MCP when startup fails and starts a fresh one for the next event', async () => {
+  inbox = [saved('task-a'), saved('task-b')];
+  doubles.preflight.mockRejectedValueOnce(new Error('startup failed'));
+  const manager = createRunEventManager('/project');
+  await expect(manager.processPending(new AbortController().signal)).resolves.toBe(true);
+  expect(doubles.connect).toHaveBeenCalledTimes(2);
+  expect(doubles.dispose).toHaveBeenCalledOnce();
+  expect(inbox.map((event) => event.event.taskName)).toEqual(['task-a']);
+  await manager.close();
+  expect(doubles.dispose).toHaveBeenCalledTimes(2);
+});
+it('continues other goals and new events while attempting a failed event only once per run', async () => {
+  const failed = saved('task-a');
+  const otherGoal = { ...goalRecord(), id: '650e8400-e29b-41d4-a716-446655440002' };
+  const next = { ...saved('task-b'), event: { ...saved('task-b').event, goalId: otherGoal.id } };
+  const arriving = { ...saved('task-c'), event: { ...saved('task-c').event, goalId: otherGoal.id } };
+  inbox = [failed, next];
+  doubles.get.mockImplementation(async (id: string) => id === goal.id ? goal : otherGoal);
+  doubles.turn.mockResolvedValueOnce({ kind: 'error', message: 'task-a failed' });
+  doubles.remove.mockImplementation((event: SavedManagerEvent) => {
+    inbox = inbox.filter((item) => item !== event);
+    if (event === next) inbox.push(arriving);
+  });
+  const manager = createRunEventManager('/project');
+
+  await expect(manager.processPending(new AbortController().signal)).resolves.toBe(true);
+
+  expect(inbox).toEqual([failed]);
+  expect(doubles.turn).toHaveBeenCalledTimes(3);
+  for (const [index, name] of ['task-a', 'task-b', 'task-c'].entries()) {
+    expect(doubles.turn.mock.calls[index]![0].text).toContain(name);
+  }
+  expect(doubles.notify).toHaveBeenCalledExactlyOnceWith('/project', goal.id, expect.any(Error));
+  expect(doubles.remove.mock.calls.map(([event]) => event)).toEqual([next, arriving]);
+
+  await expect(manager.processPending(new AbortController().signal)).resolves.toBe(false);
+  expect(inbox).toEqual([failed]);
+  expect(doubles.turn).toHaveBeenCalledTimes(3);
+  expect(doubles.notify).toHaveBeenCalledOnce();
+  await manager.close();
 });
 it('leaves paused events and does not create a manager for an empty or paused inbox', async () => {
   const manager = createRunEventManager('/project');

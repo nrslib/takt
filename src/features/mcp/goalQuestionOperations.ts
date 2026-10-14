@@ -9,17 +9,19 @@ import type { AskGoalQuestionInput, GetGoalQuestionInput, GetGoalInput } from '.
 export function askTaktGoalQuestion(input: AskGoalQuestionInput, deps: McpOperationDependencies, signal: AbortSignal) {
   return goalWrite(input, deps, signal, async (policy) => {
     const store = new GoalStore(input.cwd);
-    const current = await store.get(input.goalId);
-    const existing = current.questions?.find((question) => question.body === input.body && question.status === 'pending');
-    if (existing !== undefined) return { questionId: existing.id };
-    const added = addGoalQuestion(current, {
-      body: input.body, options: input.options, recommendation: input.recommendation, recipient: input.recipient,
+    const saved = await store.update(input.goalId, (current) => {
+      const existing = current.questions?.find((question) => question.body === input.body && question.status === 'pending');
+      if (existing !== undefined) return current;
+      const added = addGoalQuestion(current, {
+        body: input.body, options: input.options, recommendation: input.recommendation, recipient: input.recipient,
+      });
+      const question = added.goal.questions!.at(-1)!;
+      return appendGoalNotification(added.goal, {
+        kind: 'question', body: formatGoalQuestionNotification(question, resolveConfigValue(input.cwd, 'language')),
+      }, policy);
     });
-    const question = added.goal.questions!.at(-1)!;
-    await store.update(input.goalId, (goal) => appendGoalNotification({ ...goal, questions: added.goal.questions }, {
-      kind: 'question', body: formatGoalQuestionNotification(question, resolveConfigValue(input.cwd, 'language')),
-    }, policy));
-    return { questionId: added.questionId };
+    const question = saved.questions!.find((candidate) => candidate.body === input.body && candidate.status === 'pending')!;
+    return { questionId: question.id };
   }, 'Goal question failed', 'question');
 }
 

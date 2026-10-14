@@ -9,30 +9,43 @@ import { buildGoalTurnContext } from './turnContext.js';
 import { notifyManagerTurnFailure } from './turnFailureNotification.js';
 
 export function createRunEventManager(cwd: string) {
+  // A failed event stays in the inbox for the next run, but is not retried by this run.
+  const failedEvents = new Set<string>();
   let session: ManagerConversationSession | undefined;
   let mcp: Awaited<ReturnType<typeof connectManagerMcp>> | undefined;
   const getSession = async (signal: AbortSignal): Promise<ManagerConversationSession> => {
     if (session !== undefined) return session;
     const plan = createManagerConversationPlan(cwd, {});
     mcp = await connectManagerMcp(cwd);
-    await plan.ctx.provider.preflight?.({
-      cwd, abortSignal: signal, model: plan.ctx.model, providerOptions: plan.ctx.providerOptions,
-      allowedTools: plan.strategy.allowedTools, mcpOnlySideEffects: plan.strategy.allowedTools,
-      permissionMode: 'readonly', mcpServers: mcp.servers,
-      outputSchema: getManagerOutputSchema(plan.ctx.providerType),
-    });
+    try {
+      await plan.ctx.provider.preflight?.({
+        cwd, abortSignal: signal, model: plan.ctx.model, providerOptions: plan.ctx.providerOptions,
+        allowedTools: plan.strategy.allowedTools, mcpOnlySideEffects: plan.strategy.allowedTools,
+        permissionMode: 'readonly', mcpServers: mcp.servers,
+        outputSchema: getManagerOutputSchema(plan.ctx.providerType),
+      });
+    } catch (error) {
+      const started = mcp;
+      mcp = undefined;
+      await started.dispose();
+      throw error;
+    }
     session = createManagerConversationSession({
       cwd, plan: { ...plan, ctx: { ...plan.ctx, mcpServers: mcp.servers } },
     });
     return session;
   };
   return {
+    hasFailedEvents(): boolean {
+      return failedEvents.size > 0;
+    },
     async processPending(signal: AbortSignal): Promise<boolean> {
       let handled = false;
       while (!signal.aborted) {
         let processed = false;
         for (const saved of readManagerEvents(cwd)) {
           if (signal.aborted) return handled;
+          if (failedEvents.has(saved.filePath)) continue;
           try {
             const store = new GoalStore(cwd);
             const goal = await store.get(saved.event.goalId);
@@ -57,8 +70,8 @@ export function createRunEventManager(cwd: string) {
             handled = true;
           } catch (error) {
             if (signal.aborted) return handled;
+            failedEvents.add(saved.filePath);
             await notifyManagerTurnFailure(cwd, saved.event.goalId, error);
-            throw error;
           }
         }
         if (!processed) return handled;

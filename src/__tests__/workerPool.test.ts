@@ -1,5 +1,5 @@
-const manager = vi.hoisted(() => ({ process: vi.fn(), close: vi.fn() }));
-vi.mock('../features/manager/runEventManager.js', () => ({ createRunEventManager: () => ({ processPending: manager.process, close: manager.close }) }));
+const manager = vi.hoisted(() => ({ process: vi.fn(), hasFailed: vi.fn(() => false), close: vi.fn() }));
+vi.mock('../features/manager/runEventManager.js', () => ({ createRunEventManager: () => ({ processPending: manager.process, hasFailedEvents: manager.hasFailed, close: manager.close }) }));
 vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkPendingTaskProviders: vi.fn(async () => undefined), checkTaskNameProvider: vi.fn(async () => undefined), checkQueuedTaskProviders: vi.fn(async () => undefined), terminalProviderConfirmation: vi.fn(() => undefined) }));
 /**
  * Worker pool の結果集計・再キュー・停止境界を検証する。
@@ -74,6 +74,7 @@ function createRunner(taskBatches: TaskInfo[][] = []) {
 beforeEach(() => {
   vi.clearAllMocks();
   manager.process.mockReset().mockResolvedValue(undefined);
+  manager.hasFailed.mockReset().mockReturnValue(false);
   manager.close.mockReset().mockResolvedValue(undefined);
   vi.mocked(checkPendingTaskProviders).mockReset().mockResolvedValue(undefined);
   vi.mocked(isInputWaiting).mockReturnValue(false);
@@ -207,6 +208,18 @@ describe('runWithWorkerPool', () => {
     finish(true);
     expect(await result).toBe(failure);
     expect(manager.process).toHaveBeenCalledOnce();
+    expect(manager.close).toHaveBeenCalledOnce();
+  });
+
+  it('処理できなかったイベントが残ったら、run を止めずに manager の失敗として伝える', async () => {
+    const failed = vi.fn();
+    const runner = createRunner([]);
+    manager.process.mockResolvedValue(false);
+    manager.hasFailed.mockReturnValue(true);
+    await runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 10, 'run', {
+      schedulingSignal: new AbortController().signal, taskAbortSignal: new AbortController().signal, onManagerFailure: failed,
+    });
+    expect(failed).toHaveBeenCalled();
     expect(manager.close).toHaveBeenCalledOnce();
   });
 

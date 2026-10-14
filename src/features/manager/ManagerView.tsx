@@ -53,6 +53,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   const starting = useRef(startup !== undefined);
   const exiting = useRef(false);
   const displayed = useRef(new Set<string>());
+  const lastRefreshError = useRef<string | undefined>(undefined);
   const { waitUntilRenderFlush } = useApp();
   const { stdout } = useStdout();
   const contentWidth = Math.max(1, (stdout.columns ?? 80) - 6);
@@ -80,11 +81,16 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
         }
       }
       await refreshEvents();
-    })().catch((error: unknown) => append(getErrorMessage(error)));
+    })().catch(reportRefreshError);
     return () => { mounted.current = false; active.current?.abort(); };
   }, []);
   const append = (content: string): void => {
     if (mounted.current) setEntries((previous) => [...previous, { role: 'assistant', content: toDisplayText(content) }]);
+  };
+  const reportRefreshError = (error: unknown): void => {
+    const message = getErrorMessage(error);
+    if (lastRefreshError.current !== message) append(message);
+    lastRefreshError.current = message;
   };
   const reportFailure = async (error: unknown): Promise<void> => {
     append(sanitizeSensitiveText(getErrorMessage(error)));
@@ -114,13 +120,14 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
         append(event.message);
       }
     }
+    lastRefreshError.current = undefined;
     return savedQuestions;
   };
   useEffect(() => {
     const timer = setInterval(() => {
       if (!mounted.current || exiting.current || starting.current || polling.current) return;
       polling.current = true;
-      void refreshEvents().catch((error: unknown) => append(getErrorMessage(error)))
+      void refreshEvents().catch(reportRefreshError)
         .finally(() => { polling.current = false; });
     }, 500);
     return () => clearInterval(timer);

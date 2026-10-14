@@ -43,3 +43,19 @@ it.each([true, false])('checks canonical instructions before reusing work withou
   expect((await enqueueTaktGoalTask({ ...input, workKey: undefined }, {}, signal)).isError).toBeUndefined();
   expect(doubles.enqueue).toHaveBeenCalledTimes(same ? 0 : 1);
 });
+
+it('reads task instructions once when checking multiple candidates without a work key', async () => {
+  doubles.states.mockReturnValue(['task-a', 'task-b'].map((name) => ({
+    name, goalId: goal.id, goalPurpose: input.purpose, workflow: input.workflow,
+  })));
+  doubles.tasks.mockReturnValue([
+    { name: 'task-a', content: '別の指示' }, { name: 'task-b', content: input.task },
+  ]);
+
+  const result = await enqueueTaktGoalTask({ ...input, workKey: undefined }, {}, signal);
+
+  expect(result.isError).toBeUndefined();
+  expect(doubles.tasks).toHaveBeenCalledOnce();
+  expect(doubles.enqueue).not.toHaveBeenCalled();
+  expect(doubles.update).not.toHaveBeenCalled();
+});

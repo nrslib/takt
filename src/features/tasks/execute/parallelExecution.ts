@@ -158,8 +158,12 @@ export async function runWithWorkerPool(
 
   const processManagerEvents = async (): Promise<boolean> => {
     if (schedulingSignal.aborted || preparationFailure !== undefined) return false;
-    try { return await manager.processPending(schedulingSignal); }
-    catch (error) {
+    try {
+      const handled = await manager.processPending(schedulingSignal);
+      // A failed event stays for the next run; do not start that run automatically.
+      if (manager.hasFailedEvents()) shutdownSignals?.onManagerFailure?.();
+      return handled;
+    } catch (error) {
       shutdownSignals?.onManagerFailure?.();
       preparationFailure = { error };
       return false;
