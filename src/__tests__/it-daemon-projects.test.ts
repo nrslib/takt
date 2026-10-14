@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -55,8 +55,12 @@ it('combines marked projects and workspace assignments once, skipping unavailabl
     id, name: 'test', repositoryDirectories: [assigned, cwd, join(root, 'missing')],
   }));
   expect(await listDaemonProjects(globalConfigDirectory)).toEqual([assigned, cwd].sort());
-  rmSync(cwd, { recursive: true });
+  // Keep the old inode allocated so replacement identity does not depend on inode reuse.
+  renameSync(cwd, join(root, 'original-project'));
   mkdirSync(cwd);
+  expect((await readProjectRegistry(globalConfigDirectory)).projects).toEqual([
+    expect.objectContaining({ canonicalDirectory: cwd, available: false }),
+  ]);
   expect(await listDaemonProjects(globalConfigDirectory)).toEqual([assigned]);
 });
 

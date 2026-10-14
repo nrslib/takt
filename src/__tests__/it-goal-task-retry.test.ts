@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
 import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
 import * as managerMcp from '../features/manager/managerMcp.js';
+import { createRunEventManager } from '../features/manager/runEventManager.js';
 import { ManagerEventSchema, type ManagerEvent } from '../infra/goals/events.js';
 import { createTaktMcpServer } from '../features/mcp/server.js';
 import { runWithWorkerPool } from '../features/tasks/execute/parallelExecution.js';
@@ -195,6 +196,19 @@ describe('goal task retry through manager MCP and persistent task execution', ()
       completion: { success: true, branch, sha: resultSha } });
     expect(completed.runSlug).toBeDefined();
     expect(completed.runSlug).not.toBe('failed-run');
+    const saved = readManagerEvents(cwd).map(({ event }) => event);
+    expect(saved).toEqual([
+      { kind: 'registered', goalId, createdAt: expect.any(String) },
+      { kind: 'completion', goalId, taskName, runSlug: completed.runSlug,
+        result: completed.completion, createdAt: expect.any(String) },
+    ]);
+    expect(processed).toEqual([]);
+    expect((await store.get(goalId)).workLog.filter(({ summary }) => summary === 'Retry result inspected')).toEqual([]);
+    const manager = createRunEventManager(cwd);
+    try {
+      expect(await manager.processPending(new AbortController().signal, 10)).toBe(true);
+    } finally { await manager.close(); }
+    expect(processed).toEqual(saved);
     const event = processed.find((event) => event.kind === 'completion' && event.runSlug === completed.runSlug);
     expect(readManagerEvents(cwd)).toEqual([]);
     expect((await store.get(goalId)).workLog).toContainEqual(expect.objectContaining({ summary: 'Retry result inspected' }));

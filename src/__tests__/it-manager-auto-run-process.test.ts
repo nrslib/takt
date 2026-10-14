@@ -11,6 +11,7 @@ import { acquireProjectExecutionLock } from '../infra/task/project-execution-loc
 import { TaskRunner } from '../infra/task/runner.js';
 import { MANAGER_GOAL_TASKS_ENV } from '../shared/constants.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
+import { registerProject } from '../infra/config/global/projectRegistry.js';
 import { captureOwnedChild,ownedProcessMarkerScript,readOwnedProcessMarker,terminateOwnedProcess,type OwnedProcess } from './helpers/owned-process.js';
 import { registerFixtureGoal } from './helpers/registered-goal.js';
 
@@ -214,6 +215,14 @@ try {
     ]), { timeout: 15000 });
     await vi.waitFor(() => expect(isProcessAlive(worker!.pid)).toBe(false), { timeout: 15000 });
     expect(readdirSync(cwd).filter((file) => file.startsWith('worker-entered-'))).toHaveLength(1);
+    const completedGoalTask = runner.listTaskStateItems().find(({ name }) => name === task.name)!;
+    const savedEvents = readManagerEvents(cwd);
+    expect(savedEvents.map(({ event }) => event)).toEqual([
+      { kind: 'registered', goalId: goal.id, createdAt: expect.any(String) },
+      { kind: 'completion', goalId: goal.id, taskName: task.name, runSlug: completedGoalTask.runSlug,
+        result: completedGoalTask.completion, createdAt: expect.any(String) },
+    ]);
+    expect((await new GoalStore(cwd).get(goal.id)).workLog).toEqual([]);
     const direct = spawn(process.execPath, [join(process.cwd(), 'dist/app/cli/index.js'), 'run'], {
       cwd, stdio: ['ignore', 'ignore', 'pipe'],
       env: { ...process.env, NODE_OPTIONS: `--import ${pathToFileURL(hook).href}`, TAKT_CONFIG_DIR: configDirectory, TAKT_TEST_AUTO_RUN_ROOT: cwd },
@@ -247,7 +256,20 @@ try {
     });
     expect(runner.listAllTaskItems().find(({ name }) => name === watched.name)?.kind).toBe('completed');
     expect((await new GoalStore(cwd).get(goal.id)).notifications?.filter(({ kind }) => kind === 'blocked') ?? []).toEqual([]);
-    expect(readManagerEvents(cwd)).toEqual([]);
+    expect(readManagerEvents(cwd)).toEqual(savedEvents);
+    expect((await new GoalStore(cwd).get(goal.id)).workLog).toEqual([]);
+    rmSync(join(cwd, '.takt', 'goals', 'invalid-entry'), { recursive: true });
+    await registerProject({ globalConfigDirectory: configDirectory, projectDirectory: cwd, command: 'manager', managerUsed: true });
+    const daemon = spawn(process.execPath, [join(process.cwd(), 'dist/app/cli/index.js'), 'daemon'], {
+      cwd, stdio: ['ignore', 'ignore', 'pipe'],
+      env: { ...process.env, NODE_OPTIONS: `--import ${pathToFileURL(hook).href}`, TAKT_CONFIG_DIR: configDirectory, TAKT_TEST_AUTO_RUN_ROOT: cwd },
+    });
+    const daemonOwned = captureOwnedChild(daemon);
+    void daemonOwned.catch(() => {});
+    children.push({ child: daemon, owned: daemonOwned });
+    let daemonErrors = '';
+    daemon.stderr!.on('data', (chunk) => { daemonErrors += String(chunk); });
+    await vi.waitFor(() => expect(readManagerEvents(cwd), daemonErrors).toEqual([]), { timeout: 15000 });
     expect((await new GoalStore(cwd).get(goal.id)).workLog.filter(({ summary }) => summary === 'ready work saved')).toHaveLength(2);
   } catch (error) {
     errors.push(error);
@@ -323,7 +345,7 @@ syncBuiltinESMExports();
   }
 });
 
-it('handles an event-only run failure once, keeps its inbox and reports blocked without restarting', async () => {
+it('leaves events and goals unchanged in event-only runs without calling the manager or restarting', async () => {
   const root = join(process.cwd(), '.tmp');
   mkdirSync(root, { recursive: true });
   const cwd = mkdtempSync(join(root, 'manager-event-failure-'));
@@ -332,7 +354,9 @@ it('handles an event-only run failure once, keeps its inbox and reports blocked 
     writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\n');
     saveManagerEvent(cwd, { kind: 'registered', goalId: goal.id });
     const saved = readManagerEvents(cwd);
+    const savedGoal = await new GoalStore(cwd).get(goal.id);
     const launchMarker = join(cwd, 'unexpected-relaunch');
+    const managerMarker = join(cwd, 'unexpected-manager');
     const hook = join(cwd, 'event-failure-hook.mjs');
     const mockUrl = pathToFileURL(join(process.cwd(), 'dist/infra/providers/mock.js')).href;
     writeFileSync(hook, `
@@ -340,7 +364,10 @@ import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { writeFileSync } from 'node:fs';
 import { MockProvider } from ${JSON.stringify(mockUrl)};
-MockProvider.prototype.setup = () => ({ call: async () => { throw new Error('injected event failure'); } });
+MockProvider.prototype.setup = () => {
+  writeFileSync(${JSON.stringify(managerMarker)}, 'unexpected manager call');
+  throw new Error('Run must not process manager events');
+};
 const spawn = childProcess.spawn;
 childProcess.spawn = (command, args, options) => {
   if (args.includes('run')) {
@@ -358,10 +385,10 @@ syncBuiltinESMExports();
       });
       expect(child.error).toBeUndefined();
       expect(child.status).toBe(0);
-      expect(child.stdout + child.stderr).toContain('injected event failure');
+      expect(existsSync(managerMarker)).toBe(false);
       expect(existsSync(launchMarker)).toBe(false);
       expect(readManagerEvents(cwd)).toEqual(saved);
-      expect((await new GoalStore(cwd).get(goal.id)).notifications?.filter(({ kind }) => kind === 'blocked')).toHaveLength(attempt + 1);
+      expect(await new GoalStore(cwd).get(goal.id)).toEqual(savedGoal);
       const lock = acquireProjectExecutionLock(cwd, 'run');
       lock.release();
     }
