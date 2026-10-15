@@ -28,6 +28,26 @@ describe('bounded MCP responses', () => {
       expect(JSON.parse(firstTextContent(result.content).slice(0, -suffix.length)).value.length).toBeGreaterThan(0);
     }
   });
+  it('returns the final truncated response when the marker alone exceeds the size limit', () => {
+    const suffix = '\n' + 'r'.repeat(MCP_RESPONSE_MAX_BYTES);
+    const result = jsonResult({ body: 'x'.repeat(8192), rows: [1] }, undefined, suffix);
+
+    expect(responseBytes(result)).toBeGreaterThan(MCP_RESPONSE_MAX_BYTES);
+    expect(result.isError).toBeUndefined();
+    const text = firstTextContent(result.content);
+    expect(text.endsWith(suffix)).toBe(true);
+    const payload = JSON.parse(text.slice(0, -suffix.length));
+    expect(payload.body).toBe('x'.repeat(64));
+    expect(payload.rows).toEqual([]);
+    expect(payload.truncated).toBe(true);
+    expect(payload.omissions).toEqual([
+      { path: 'body', totalBytes: 8192, returnedBytes: 64 },
+      { path: 'rows', totalCount: 1, returnedCount: 0 },
+    ]);
+    expect(payload.omittedDetails).toBe(0);
+    expect(payload.retrieval).toContain('path and textOffset');
+    expect(payload.retrieval).toContain('offset and a smaller limit');
+  });
   it('bounds omission metadata and large collections', () => {
     const result = jsonResult({ rows: Array.from({ length: 200 }, () => ({ a: 'x'.repeat(8000), b: 'y'.repeat(8000) })) });
     const payload = JSON.parse(firstTextContent(result.content));

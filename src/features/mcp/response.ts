@@ -95,6 +95,7 @@ export function jsonResult(value: Record<string, unknown>, isError?: boolean, su
       retrieval: 'Read the selected goal with path and textOffset, or repeat the list with offset and a smaller limit. Omission paths use [] for collection totals; select a saved index or recordId for one entry. Use run view, stepIndex or report for run artifacts.',
     }) + suffix, isError);
     if (responseBytes(result) <= MCP_RESPONSE_MAX_BYTES) return result;
+    if (stringBytes === 64 && items === 0) return result;
     if (stringBytes > 64) stringBytes = Math.floor(stringBytes / 2);
     else items = Math.floor(items / 2);
   }
