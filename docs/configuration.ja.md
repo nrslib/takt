@@ -1475,7 +1475,7 @@ provider_options:
 
 `enabled: false` の場合、`claude-sdk` と別名 `claude` には `skills: []` を渡し、`claude-headless` と `claude-terminal` には `--disable-slash-commands` を渡します。この CLI flag は custom Claude slash command も無効にします。`enabled: true` の場合、TAKT は Skill 用の option/flag を追加せず、Claude の標準探索を維持します。この値は通常の provider option leaf 優先順位と `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED` に従い、retry と resume でも維持されます。
 
-これは context filter であり sandbox ではありません。Skill file が Read/Bash から到達可能な場合は引き続き読めます。TAKT は `settingSources`、Claude settings、user/repository の Skill file を変更しません。管理導入する Agent SDK の固定版は `0.3.295` です。CLI session では `--disable-slash-commands` 対応が必要で、headless (`claude-headless`) と terminal (`claude-terminal`) の各 CLI session の開始前に確認し、非対応なら更新を促すエラーを返します。検証済みの Claude Code 最低 version は `2.1.220` です。
+これは context filter であり sandbox ではありません。Skill file が Read/Bash から到達可能な場合は引き続き読めます。TAKT は `settingSources`、Claude settings、user/repository の Skill file を変更しません。管理導入する Agent SDK の固定版は `0.3.300` です。CLI session では `--disable-slash-commands` 対応が必要で、headless (`claude-headless`) と terminal (`claude-terminal`) の各 CLI session の開始前に確認し、非対応なら更新を促すエラーを返します。検証済みの Claude Code 最低 version は `2.1.220` です。
 
 #### Claude Code の sandbox 制御 (`allow_unsandboxed_commands`)
 
