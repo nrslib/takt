@@ -1,12 +1,13 @@
 import { basename } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { findAssignedGoalRepository } from './assignment.js';
 import type { ManagerAssignment } from './startupResolution.js';
-import { Box, Text, useApp, useInput, useStdout } from 'ink';
+import { Box, Text, useApp, useInput, usePaste, useStdout } from 'ink';
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { PromptInput } from '../tui/PromptInput.js';
 import { TranscriptView, type TranscriptEntry } from '../tui/TranscriptEntryView.js';
 import { StatusLine } from '../tui/StatusLine.js';
-import { applyEditorKey, commitEditorInput, createEditorState } from '../tui/editorState.js';
+import { applyEditorKey, commitEditorInput, createEditorState, type EditorState } from '../tui/editorState.js';
 import { resolveEditorKey } from '../tui/editorKeys.js';
 import { FALLBACK_USER_MESSAGE_COLORS } from '../tui/terminalColors.js';
 import { toDisplayText } from '../tui/displayText.js';
@@ -33,7 +34,9 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   startup?: { run: (signal: AbortSignal) => Promise<readonly string[]>; fail: (error: unknown) => void };
 }): ReactElement {
   const [currentAssignment, setCurrentAssignment] = useState<ManagerAssignment | undefined>();
-  const [editor, setEditor] = useState(() => createEditorState(''));
+  const editorRef = useRef(createEditorState(''));
+  const [editor, setEditor] = useState(editorRef.current);
+  const [queued, setQueued] = useState<string[]>([]);
   const [entries, setEntries] = useState<TranscriptEntry[]>(() => initialDiagnostics.map((content) => ({
     role: 'assistant', content: toDisplayText(content),
   })));
@@ -42,6 +45,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   const [busy, setBusy] = useState(startup !== undefined);
   const [questions, setQuestions] = useState<PendingQuestion[]>([]);
   const [goals, setGoals] = useState<ManagerDisplayGoal[]>([]);
+  const displaySnapshot = useRef({ assignment: currentAssignment, questions, goals });
   const [abortTarget, setAbortTarget] = useState<ManagerDisplayGoal | null>(null);
   const [answerTarget, setAnswerTarget] = useState<{ pending: PendingQuestion; choice: number | null } | null>(null);
   const active = useRef<AbortController | null>(null);
@@ -58,6 +62,10 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   const { stdout } = useStdout();
   const contentWidth = Math.max(1, (stdout.columns ?? 80) - 6);
   const ja = lang === 'ja';
+  const edit = (next: EditorState): void => {
+    editorRef.current = next;
+    setEditor(next);
+  };
   useEffect(() => {
     mounted.current = true;
     void (async () => {
@@ -72,7 +80,11 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
           if (!mounted.current || controller.signal.aborted) return;
           for (const diagnostic of diagnostics) append(diagnostic);
         } catch (error) {
-          if (!controller.signal.aborted) startup.fail(error);
+          if (!controller.signal.aborted) {
+            exiting.current = true;
+            setQueued([]);
+            startup.fail(error);
+          }
           return;
         } finally {
           if (active.current === controller) active.current = null;
@@ -107,10 +119,13 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
       directory, snapshot: await readManagerDisplayEvents(directory, lang),
     })));
     const savedQuestions = snapshots.flatMap(({ snapshot }) => snapshot.questions);
+    const savedGoals = snapshots.flatMap(({ snapshot }) => snapshot.goals);
     if (mounted.current) {
-      setCurrentAssignment(resolved);
-      setQuestions(savedQuestions);
-      setGoals(snapshots.flatMap(({ snapshot }) => snapshot.goals));
+      const previous = displaySnapshot.current;
+      if (!isDeepStrictEqual(previous.assignment, resolved)) setCurrentAssignment(resolved);
+      if (!isDeepStrictEqual(previous.questions, savedQuestions)) setQuestions(savedQuestions);
+      if (!isDeepStrictEqual(previous.goals, savedGoals)) setGoals(savedGoals);
+      displaySnapshot.current = { assignment: resolved, questions: savedQuestions, goals: savedGoals };
     }
     for (const { directory, snapshot } of snapshots) {
       for (const event of [...snapshot.events, ...snapshot.diagnostics]) {
@@ -185,10 +200,18 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
     } finally {
       if (active.current === controller) {
         active.current = null;
-        if (mounted.current) setBusy(false);
+        if (mounted.current) setBusy(registering.current);
       }
     }
   };
+  useEffect(() => {
+    if (!mounted.current || exiting.current || starting.current || registering.current
+      || active.current !== null || busy || abortTarget !== null || answerTarget !== null) return;
+    const text = queued[0];
+    if (text === undefined) return;
+    setQueued((previous) => previous.slice(1));
+    void submit(text);
+  }, [queued, busy, abortTarget, answerTarget]);
   const abortGoal = async (goalId: string): Promise<void> => {
     const controller = new AbortController();
     active.current = controller;
@@ -242,27 +265,46 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
       await reportFailure(error);
     } finally {
       registering.current = false;
-      if (mounted.current) setBusy(false);
+      if (mounted.current) setBusy(active.current !== null);
     }
   };
+  const insertText = (text: string): void => {
+    if (exiting.current) return;
+    if (!registering.current && active.current === null) {
+      if (abortTarget !== null) return;
+      if (answerTarget !== null && answerChoice.current !== null) {
+        answerChoice.current = null;
+        setAnswerTarget({ ...answerTarget, choice: null });
+      }
+    }
+    if (!registering.current && pending !== null && session.getPendingSummary()?.revision === pending.revision) {
+      session.dismissSummary(pending.revision);
+      setPending(null);
+      resetChoice();
+    }
+    edit(applyEditorKey(editorRef.current, { kind: 'insert', text }));
+  };
+  usePaste(insertText);
   useInput((input, key) => {
-    if (exiting.current || registering.current) return;
+    if (exiting.current) return;
     if (key.ctrl && input === 'c') {
       exiting.current = true;
       active.current?.abort();
+      setQueued([]);
       onExit();
       return;
     }
-    if (starting.current) return;
-    if (active.current !== null) {
-      if (key.escape) {
-        active.current.abort();
-        setPending(null);
-        setBusy(false);
-      }
+    if (active.current !== null && key.escape) {
+      active.current.abort();
+      setQueued([]);
+      setPending(null);
       return;
     }
-    if (abortTarget !== null) {
+    if (registering.current && key.escape) {
+      setQueued([]);
+      return;
+    }
+    if (!registering.current && active.current === null && abortTarget !== null) {
       if (key.escape) { setAbortTarget(null); resetChoice(); return; }
       if (key.upArrow || key.downArrow) {
         selected.current = key.upArrow;
@@ -273,7 +315,8 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
       }
       return;
     }
-    if (answerTarget !== null) {
+    const editKey = resolveEditorKey(input, key, contentWidth);
+    if (!registering.current && active.current === null && answerTarget !== null) {
       if (key.escape) { setAnswerTarget(null); return; }
       const options = answerTarget.pending.question.options ?? [];
       if (answerChoice.current !== null && (key.upArrow || key.downArrow)) {
@@ -289,9 +332,10 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
         } else void saveAnswer(answerTarget.pending, options[answerChoice.current]!);
         return;
       }
-      if (key.return && !(key.shift || key.meta) && editor.text.trim() !== '') {
-        setEditor(commitEditorInput(editor, editor.text));
-        void saveAnswer(answerTarget.pending, editor.text);
+      if (key.return && !(key.shift || key.meta) && editorRef.current.text.trim() !== '') {
+        const text = editorRef.current.text;
+        edit(commitEditorInput(editorRef.current, text));
+        void saveAnswer(answerTarget.pending, text);
         return;
       }
       if (answerChoice.current !== null) {
@@ -299,7 +343,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
         setAnswerTarget({ ...answerTarget, choice: null });
       }
     }
-    if (pending !== null) {
+    if (!registering.current && pending !== null && session.getPendingSummary()?.revision === pending.revision) {
       if (key.upArrow || key.downArrow) {
         selected.current = key.upArrow;
         setApprove(selected.current);
@@ -318,15 +362,15 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
     }
     if (key.return) {
       if (key.shift || key.meta) {
-        setEditor((previous) => applyEditorKey(previous, { kind: 'newline' }));
-      } else if (editor.text.trim() !== '') {
-        setEditor(commitEditorInput(editor, editor.text));
-        void submit(editor.text);
+        edit(applyEditorKey(editorRef.current, { kind: 'newline' }));
+      } else if (editorRef.current.text.trim() !== '') {
+        const text = editorRef.current.text;
+        edit(commitEditorInput(editorRef.current, text));
+        setQueued((previous) => [...previous, text]);
       }
       return;
     }
-    const editKey = resolveEditorKey(input, key, contentWidth);
-    if (editKey !== null) setEditor((previous) => applyEditorKey(previous, editKey));
+    if (editKey !== null) edit(applyEditorKey(editorRef.current, editKey));
   });
   return (
     <Box flexDirection="column">
@@ -337,6 +381,12 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
           ? `${assignment.name} (${assignment.repositoryDirectories.length})` : basename(cwd))}</Text>
       <Text dimColor>{toDisplayText(cwd)}</Text>
       <TranscriptView entries={entries} userMessageColors={FALLBACK_USER_MESSAGE_COLORS} />
+      {queued.length > 0 && (
+        <Box borderStyle="round" flexDirection="column">
+          <Text bold>{`${ja ? '送信待ち' : 'Queued messages'}: ${queued.length}`}</Text>
+          {queued.map((text, index) => <Text key={index}>{toDisplayText(text)}</Text>)}
+        </Box>
+      )}
       {goals.some((goal) => goal.executionStatus === 'aborted') && (
         <Box borderStyle="round" flexDirection="column">
           <Text bold>{getLabel('manager.abortedGoals', lang)}</Text>
@@ -422,7 +472,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
       <PromptInput text={editor.text} cursor={editor.cursor} contentWidth={contentWidth}
         placeholder={answerTarget === null ? (ja ? 'ゴールを相談してください' : 'Discuss your goal') : (ja ? '回答を入力してください' : 'Enter your answer')}
         hint="Enter: send / Shift+Enter: newline / Esc: interrupt / Ctrl+C: exit"
-        completions={[]} completionIndex={0} disabled={busy || pending !== null || abortTarget !== null} />
+        completions={[]} completionIndex={0} disabled={pending !== null || abortTarget !== null} />
     </Box>
   );
 }
