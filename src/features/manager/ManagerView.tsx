@@ -300,6 +300,10 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
       setPending(null);
       return;
     }
+    if (registering.current && key.escape) {
+      setQueued([]);
+      return;
+    }
     if (!registering.current && active.current === null && abortTarget !== null) {
       if (key.escape) { setAbortTarget(null); resetChoice(); return; }
       if (key.upArrow || key.downArrow) {

@@ -1116,6 +1116,31 @@ describe('manager TUI human approval', () => {
     }
   });
 
+  it('discards queued conversation with Esc while goal registration is pending', async () => {
+    const registration = deferred<Awaited<ReturnType<typeof createGoal>>>();
+    const context = mount();
+    context.register.mockReturnValueOnce(registration.promise);
+    try {
+      await send(context, 'CSV出力を追加したい', summaryA);
+      context.app.stdin.write(UP);
+      context.app.stdin.write(ENTER);
+      await waitFor(() => expect(context.register).toHaveBeenCalledOnce());
+      await typeAndSubmit(context, 'discard during registration');
+      await waitFor(() => expect(queuedFrame(context)).toContain('discard during registration'));
+
+      context.app.stdin.write('\x1b[27u');
+      await waitFor(() => expect(queuedFrame(context)).toBeUndefined());
+      registration.resolve(goalRecord());
+      await waitFor(() => expect(context.app.lastFrame()).not.toContain('Working'));
+      expect(context.call).toHaveBeenCalledOnce();
+      expect(context.register).toHaveBeenCalledOnce();
+    } finally {
+      context.app.unmount();
+      registration.resolve(goalRecord());
+      await context.session.close();
+    }
+  });
+
   it.each(['assignment', 'questions', 'goals'] as const)('skips unchanged polling renders and updates changed %s in the same screen', async (field) => {
     let assignment = { kind: 'workspace' as const, workspaceId: '650e8400-e29b-41d4-a716-446655440002', name: 'Original workspace', repositoryDirectories: [cwd] };
     let snapshot = { events: [], diagnostics: [], questions: [{ goalId: goalRecord().id, objective: 'Question fixture', question: {
