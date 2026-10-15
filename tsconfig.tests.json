@@ -12,6 +12,7 @@
     "rootDir": "."
   },
   "include": [
+    "e2e/helpers/managed-sdk-setup.ts",
     "e2e/specs/project-execution-lock.e2e.ts",
     "e2e/specs/task-auto-pr.e2e.ts",
     "e2e/specs/watch.e2e.ts",

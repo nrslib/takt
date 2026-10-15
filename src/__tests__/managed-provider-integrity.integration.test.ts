@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { mkdir, mkdtemp, open, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -145,6 +147,24 @@ describe('managed provider binary integrity', () => {
     await utimes(installed.path, restoredMtime, restoredMtime);
     expect((await inspectManagedProvider('claude-sdk')).state).toBe('missing');
     await expect(loadManagedSdk('claude-sdk')).rejects.toThrow('takt install claude-sdk');
+  });
+
+  // test-setup.ts resolves TMPDIR, so respell it through macOS's /var -> /private/var filesystem-root alias.
+  const realTmp = realpathSync(tmpdir());
+  const aliasedTmp = realTmp.startsWith('/private/') ? realTmp.slice('/private'.length) : undefined;
+  it.skipIf(aliasedTmp === undefined || realpathSync(aliasedTmp) !== realTmp)('installs and loads when the config directory is spelled through a filesystem-root alias', async () => {
+    const aliasedBase = join(aliasedTmp!, relative(realTmp, await mkdtemp(join(realTmp, 'takt-managed-alias-'))));
+    try {
+      vi.stubEnv('TAKT_CONFIG_DIR', join(aliasedBase, 'config'));
+      await writeBinary(65537);
+
+      await installManagedSdk('claude-sdk', { npmPath: npm });
+
+      expect((await inspectManagedProvider('claude-sdk')).state).toBe('ready');
+      expect(typeof (await loadManagedSdk('claude-sdk')).modules[0].query).toBe('function');
+    } finally {
+      await rm(aliasedBase, { recursive: true, force: true });
+    }
   });
 
   it('closes a failed read and preserves the published generation', async () => {
