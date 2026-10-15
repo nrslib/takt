@@ -50,8 +50,11 @@ function createMockChildProcess(): MockChildProcess {
   return child;
 }
 
-function mockSpawnWithScenario(scenario: SpawnScenario): void {
+function mockSpawnWithScenario(scenarios: SpawnScenario | SpawnScenario[]): void {
+  let attempt = 0;
   mockSpawn.mockImplementation((_cmd: string, _args: string[], _options: object) => {
+    const scenario = Array.isArray(scenarios) ? scenarios[attempt++] : scenarios;
+    if (scenario === undefined) throw new Error('Missing Copilot spawn scenario');
     const child = createMockChildProcess();
 
     queueMicrotask(() => {
@@ -95,6 +98,8 @@ describe('callCopilot', () => {
   });
 
   afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
     vi.unstubAllEnvs();
   });
 
@@ -408,7 +413,8 @@ describe('callCopilot', () => {
     expect(result.content).toContain('TAKT_COPILOT_GITHUB_TOKEN');
   });
 
-  it('should classify a session.error rate limit as rate_limited', async () => {
+  it('should classify a session.error rate limit after eight retries', async () => {
+    vi.useFakeTimers();
     const filler = JSON.stringify({ type: 'session.mcp_server_status_changed', data: { padding: 'x'.repeat(2000) } });
     const sessionError = JSON.stringify({
       type: 'session.error',
@@ -421,24 +427,147 @@ describe('callCopilot', () => {
     });
     mockSpawnWithScenario({ code: 1, stdout: `${filler}\n${sessionError}\n` });
 
-    const result = await callCopilot('coder', 'implement feature', { cwd: '/repo' });
+    const pending = callCopilot('coder', 'implement feature', { cwd: '/repo' });
+    await vi.advanceTimersByTimeAsync(121_000);
+    const result = await pending;
 
     expect(result.status).toBe('rate_limited');
     expect(result.errorKind).toBe('rate_limit');
     expect(result.error).toContain("You've hit your rate limit");
     expect(result.rateLimitInfo?.provider).toBe('copilot');
+    expect(mockSpawn).toHaveBeenCalledTimes(9);
   });
 
-  it('should classify rate limit text on stderr as rate_limited', async () => {
+  it('should exhaust eight capped delays before returning a stderr rate limit', async () => {
+    vi.useFakeTimers();
     mockSpawnWithScenario({
       code: 1,
       stderr: 'Error: Rate limit exceeded after 5 retries. Please try again later.',
     });
 
-    const result = await callCopilot('coder', 'implement feature', { cwd: '/repo' });
+    const onStream = vi.fn();
+    const pending = callCopilot('coder', 'implement feature', { cwd: '/repo', onStream });
+    await vi.advanceTimersByTimeAsync(0);
+    for (const [index, delay] of [1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000].entries()) {
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(mockSpawn).toHaveBeenCalledTimes(index + 1);
+      expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(mockSpawn).toHaveBeenCalledTimes(index + 2);
+    }
+    const result = await pending;
 
     expect(result.status).toBe('rate_limited');
     expect(result.error).toContain('Rate limit exceeded');
+    expect(result.errorKind).toBe('rate_limit');
+    expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toHaveLength(1);
+  });
+
+  it.each(['statusCode', 'errorType', 'errorCode', 'stderr'] as const)(
+    '%s の429を2回再試行し実行制約と成功結果を保持する', async (channel) => {
+      vi.useFakeTimers();
+      const failure = channel === 'stderr'
+        ? { code: 1, stderr: 'HTTP 429: Too Many Requests' }
+        : { code: 1, stdout: `${JSON.stringify({ type: 'session.error', data: {
+          [channel]: channel === 'statusCode' ? 429 : channel === 'errorType' ? 'rate_limit' : 'rate_limited',
+          message: 'request rejected',
+        } })}\n` };
+      mockSpawnWithScenario([failure, failure, { stdout: 'final answer' }]);
+      const onStream = vi.fn();
+      const pending = callCopilot('coder', 'original prompt', {
+        cwd: '/repo', model: 'claude-sonnet-4.6', sessionId: 'original-session', permissionMode: 'readonly',
+        preparedMcp: { args: ['--additional-mcp-config=@/tmp/mcp.json'], dispose: vi.fn(async () => {}) }, onStream,
+      });
+      await vi.advanceTimersByTimeAsync(999);
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(mockSpawn).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(mockSpawn).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await pending;
+      expect(result).toMatchObject({ status: 'done', content: 'final answer' });
+      expect(result.errorKind).toBeUndefined();
+      expect(mockSpawn).toHaveBeenCalledTimes(3);
+      for (const [, args] of mockSpawn.mock.calls) {
+        expect(args).toEqual(expect.arrayContaining([
+          '-p', 'original prompt', '--model', 'claude-sonnet-4.6', '--resume', 'original-session',
+          '--allow-tool=read', '--deny-tool=write', '--deny-tool=shell', '--additional-mcp-config=@/tmp/mcp.json',
+        ]));
+        expect(args).not.toContain('--yolo');
+        expect(args).not.toContain('--allow-all-tools');
+      }
+      const results = onStream.mock.calls.filter(([event]) => event.type === 'result');
+      expect(results).toHaveLength(1);
+      expect(results[0]?.[0].data.success).toBe(true);
+      expect(mockRm).toHaveBeenCalled();
+    },
+  );
+
+  it('429で失敗した試行のshareセッションを成功結果へ混入させない', async () => {
+    vi.useFakeTimers();
+    const shareFiles = new Map<string, string>();
+    mockMkdtemp.mockImplementation(async () => `/tmp/takt-copilot-attempt-${mockMkdtemp.mock.calls.length}`);
+    mockReadFile.mockImplementation(async (path: string) => {
+      const content = shareFiles.get(path);
+      if (content === undefined) throw Object.assign(new Error('share file missing'), { code: 'ENOENT' });
+      return content;
+    });
+    mockRm.mockImplementation(async (directory: string) => {
+      for (const path of shareFiles.keys()) if (path.startsWith(`${directory}/`)) shareFiles.delete(path);
+    });
+    mockSpawn.mockImplementation((_cmd: string, args: string[]) => {
+      const child = createMockChildProcess();
+      const attempt = mockSpawn.mock.calls.length;
+      const share = args[args.indexOf('--share') + 1];
+      if (attempt === 1) shareFiles.set(share!, '> **Session ID:** `aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`');
+      queueMicrotask(() => {
+        if (attempt === 1) child.stderr.emit('data', Buffer.from('HTTP 429: Too Many Requests'));
+        else child.stdout.emit('data', Buffer.from(`${JSON.stringify({ type: 'result', sessionId: 'final-session', data: { result: 'final answer' } })}\n`));
+        child.emit('close', attempt === 1 ? 1 : 0, null);
+      });
+      return child;
+    });
+    const pending = callCopilot('coder', 'prompt', { cwd: '/repo' });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await pending).toMatchObject({ status: 'done', content: 'final answer', sessionId: 'final-session' });
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+    expect(shareFiles.size).toBe(0);
+  });
+
+  it.each([
+    'usage_limit_exceeded',
+    'HTTP 429: Your workspace is out of credits. Add credits to continue.',
+    'You hit your spend cap set in your workspace. Increase your spend cap to continue. HTTP 429',
+  ])('構造化429と使い切りが混在したら即終了する: %s', async (message) => {
+    mockSpawnWithScenario({ code: 1, stdout: `${JSON.stringify({ type: 'session.error', data: { statusCode: 429, message } })}\n` });
+    expect(await callCopilot('coder', 'prompt', { cwd: '/repo' })).toMatchObject({ status: 'rate_limited', content: '', errorKind: 'rate_limit' });
+    expect(mockSpawn).toHaveBeenCalledOnce();
+  });
+
+  it('429の再試行中に使い切りを受けたら追加起動しない', async () => {
+    vi.useFakeTimers();
+    mockSpawnWithScenario(['HTTP 429: Too Many Requests', 'HTTP 429: usage_limit_exceeded'].map((stderr) => ({ code: 1, stderr })));
+    const pending = callCopilot('coder', 'prompt', { cwd: '/repo' });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await pending).toMatchObject({ status: 'rate_limited', errorKind: 'rate_limit' });
+    await vi.advanceTimersByTimeAsync(121_000);
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+  });
+
+  it('429の待機中に中断したら追加起動せず一時資源を解放する', async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    mockSpawnWithScenario({ code: 1, stderr: 'HTTP 429: Too Many Requests' });
+    const pending = callCopilot('coder', 'prompt', { cwd: '/repo', abortSignal: controller.signal });
+    await vi.advanceTimersByTimeAsync(500);
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(121_000);
+    const result = await pending;
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('aborted');
+    expect(mockSpawn).toHaveBeenCalledOnce();
+    expect(mockRm).toHaveBeenCalled();
   });
 
   it('should keep non rate limit session.error exits as error', async () => {

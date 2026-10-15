@@ -18,7 +18,8 @@ import {
   spawnManagedProcess,
 } from '../../shared/utils/index.js';
 import type { StreamEvent } from '../../shared/types/provider.js';
-import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
+import { buildRateLimitedResponseFields, classifyRateLimitError, type RateLimitClass } from '../rate-limit/detection.js';
+import { RATE_LIMIT_MAX_RETRIES, waitForRateLimitRetry } from '../rate-limit/retry.js';
 import type { CopilotCallOptions } from './types.js';
 import {
   emitStructuredEvents,
@@ -355,7 +356,7 @@ function isAuthenticationError(error: CopilotExecError): boolean {
   return patterns.some((pattern) => message.includes(pattern));
 }
 
-function findRateLimitMessage(error: CopilotExecError): string | undefined {
+function findRateLimitMessage(error: CopilotExecError): { message: string; classification: RateLimitClass } | undefined {
   for (const line of parseValidJsonLines(error.stdout ?? '')) {
     const root = toRecord(line);
     if (root?.type !== 'session.error') {
@@ -363,16 +364,18 @@ function findRateLimitMessage(error: CopilotExecError): string | undefined {
     }
     const data = extractCopilotEventData(root);
     const message = firstNonEmptyString([data.message]);
+    const detail = [message, error.stderr].filter((value) => value !== undefined).join('\n');
+    const classification = classifyRateLimitError(detail, data.statusCode === 429 || data.statusCode === '429'
+      || data.errorType === 'rate_limit' || data.errorCode === 'rate_limited' ? 429 : undefined);
     if (
-      data.errorType === 'rate_limit'
-      || data.errorCode === 'rate_limited'
-      || data.statusCode === 429
+      classification !== 'NotRateLimit'
     ) {
-      return trimDetail(message, 'Copilot rate limit exceeded');
+      return { message: trimDetail(detail, 'Copilot rate limit exceeded'), classification };
     }
   }
   const stderr = error.stderr ?? '';
-  return containsRateLimitError(stderr) ? trimDetail(stderr) : undefined;
+  const classification = classifyRateLimitError(stderr);
+  return classification !== 'NotRateLimit' ? { message: trimDetail(stderr), classification } : undefined;
 }
 
 function classifyExecutionError(error: CopilotExecError, options: CopilotCallOptions): string {
@@ -550,6 +553,7 @@ interface CopilotCallOutcome {
   readonly content: string;
   readonly sessionId?: string;
   readonly error?: string;
+  readonly rateLimitClass?: RateLimitClass;
 }
 
 function executionErrorOutcome(
@@ -629,8 +633,9 @@ async function executeCopilotCall(
     if (rateLimitMessage !== undefined) {
       return {
         status: 'rate_limited',
-        content: rateLimitMessage,
-        error: rateLimitMessage,
+        content: rateLimitMessage.message,
+        error: rateLimitMessage.message,
+        rateLimitClass: rateLimitMessage.classification,
         sessionId: resumableSessionId,
       };
     }
@@ -680,23 +685,33 @@ function emitResult(
  */
 export class CopilotClient {
   async call(agentType: string, prompt: string, options: CopilotCallOptions): Promise<AgentResponse> {
-    let shareTmpDir: string | undefined;
-    let shareFilePath: string | undefined;
-    try {
-      const shareTmpParentDir = ensureCurrentTmpDirExists();
-      shareTmpDir = await mkdtemp(join(shareTmpParentDir, 'takt-copilot-'));
-      shareFilePath = join(shareTmpDir, 'session.md');
-    } catch (err) {
-      log.debug('mkdtemp failed, skipping session extraction', { err });
+    let outcome: CopilotCallOutcome;
+    let retries = 0;
+    while (true) {
+      if (options.abortSignal?.aborted) {
+        outcome = executionErrorOutcome(COPILOT_ABORTED_MESSAGE, options.sessionId);
+        break;
+      }
+      let shareTmpDir: string | undefined;
+      let shareFilePath: string | undefined;
+      try {
+        const shareTmpParentDir = ensureCurrentTmpDirExists();
+        shareTmpDir = await mkdtemp(join(shareTmpParentDir, 'takt-copilot-'));
+        shareFilePath = join(shareTmpDir, 'session.md');
+      } catch (err) {
+        log.debug('mkdtemp failed, skipping session extraction', { err });
+      }
+      options.onActivity?.({ kind: 'attempt_started' });
+      const executionOutcome = await executeCopilotCall(prompt, options, shareFilePath);
+      outcome = await finalizeCopilotCall(executionOutcome, shareTmpDir);
+      if (outcome.rateLimitClass !== 'Transient' || retries >= RATE_LIMIT_MAX_RETRIES) break;
+      try {
+        await waitForRateLimitRetry(++retries, options.abortSignal);
+      } catch {
+        outcome = executionErrorOutcome(COPILOT_ABORTED_MESSAGE, options.sessionId);
+        break;
+      }
     }
-
-    options.onActivity?.({ kind: 'attempt_started' });
-    const executionOutcome = await executeCopilotCall(
-      prompt,
-      options,
-      shareFilePath,
-    );
-    const outcome = await finalizeCopilotCall(executionOutcome, shareTmpDir);
     emitResult(outcome, options);
     if (outcome.status === 'rate_limited') {
       return {

@@ -77,7 +77,8 @@ import {
   createPartTimeoutReason,
   type AgentFailureCategory,
 } from '../../shared/types/agent-failure.js';
-import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
+import { buildRateLimitedResponseFields, classifyRateLimitError, type RateLimitClass } from '../rate-limit/detection.js';
+import { RATE_LIMIT_MAX_RETRIES, waitForRateLimitRetry } from '../rate-limit/retry.js';
 import {
   createSensitiveTextStreamRedactor,
   sanitizeSensitiveText,
@@ -291,7 +292,7 @@ async function postmortemRateLimitError(
   sessionID: string,
   directory: string,
   abortSignal: AbortSignal,
-): Promise<string | undefined> {
+): Promise<{ message: string; classification: RateLimitClass } | undefined> {
   let messages: OpenCodeSessionMessages;
   try {
     const result = await withTimeout(
@@ -326,11 +327,9 @@ async function postmortemRateLimitError(
     return undefined;
   }
   const message = extractOpenCodeErrorMessage(error);
-  if (extractStatusCode(error) === RATE_LIMIT_STATUS_CODE) {
-    return message ?? `HTTP ${RATE_LIMIT_STATUS_CODE} Too Many Requests`;
-  }
-  if (message !== undefined && containsRateLimitError(message)) {
-    return message;
+  const classification = classifyRateLimitError(message, extractStatusCode(error));
+  if (classification !== 'NotRateLimit') {
+    return { message: message ?? `HTTP ${RATE_LIMIT_STATUS_CODE} Too Many Requests`, classification };
   }
   return undefined;
 }
@@ -721,6 +720,7 @@ interface OpenCodeCallState {
   recoveryState: ReturnType<typeof createStructuredOutputRecoveryState>;
   toolGuardRecovery: ReturnType<typeof createToolGuardRecoveryState>;
   maxAttempts: number;
+  rateLimitRetries: number;
 }
 
 const RETRY_ATTEMPT = Symbol('retry-open-code-attempt');
@@ -946,6 +946,7 @@ export class OpenCodeAttemptRunner {
         recoveryState: createStructuredOutputRecoveryState(options.outputSchema !== undefined),
         toolGuardRecovery: createToolGuardRecoveryState(activeGuardSuite.policy.toolGuard.editCorrectionLimit),
         maxAttempts: OPENCODE_RETRY_MAX_ATTEMPTS,
+        rateLimitRetries: 0,
       };
       for (let attempt = 1; attempt <= callState.maxAttempts; attempt++) {
         guardedOptions.onActivity?.({ kind: 'attempt_started' });
@@ -1001,6 +1002,7 @@ export class OpenCodeAttemptRunner {
   } | undefined;
   let finalizationInvalidationError: OpenCodeSharedServerInvalidationError | undefined;
   let attemptCleanupError: AggregateError | undefined;
+  let rateLimitClass: RateLimitClass = 'NotRateLimit';
   const structuredAttemptPlan = planStructuredOutputAttempt(callState.recoveryState, hasInitialSessionId);
   // tool-guard fresh recovery 後の attempt は fresh session を強制する。
   // plan の sessionMode を実態に合わせないと、後段の
@@ -1134,6 +1136,28 @@ export class OpenCodeAttemptRunner {
     if (!options.abortSignal?.aborted) return;
     const failure = guardSuite.getCallFailure();
     throw new Error(failure?.verdict.reason ?? OPENCODE_STREAM_ABORTED_MESSAGE);
+  };
+
+  const handleRateLimitFailure = async (
+    message: string,
+    classification: RateLimitClass,
+    failedSessionId: string | undefined,
+  ): Promise<AgentResponse | typeof RETRY_ATTEMPT> => {
+    throwIfCallAborted();
+    throwIfServerInvalidated();
+    if (classification === 'Transient' && callState.rateLimitRetries < RATE_LIMIT_MAX_RETRIES) {
+      callState.rateLimitRetries += 1;
+      callState.maxAttempts += 1;
+      await waitForRateLimitRetry(callState.rateLimitRetries, options.abortSignal);
+      throwIfCallAborted();
+      throwIfServerInvalidated();
+      return RETRY_ATTEMPT;
+    }
+    const response = this.buildRateLimitedResponse(agentType, failedSessionId,
+      sanitizeAttemptError(message), attempt - 1);
+    if (failedSessionId) scheduleResultEmission(false, response.error ?? response.content, failedSessionId);
+    throwIfServerInvalidated();
+    return response;
   };
 
   guardSuite.startAttempt((failure) => {
@@ -1337,6 +1361,7 @@ export class OpenCodeAttemptRunner {
     }).catch((error) => {
       promptError = getErrorMessage(error);
       if (!streamAbortController.signal.aborted) {
+        rateLimitClass = classifyRateLimitError(promptError, extractStatusCode(error));
         abortCause = 'prompt';
         streamAbortController.abort();
       }
@@ -1762,10 +1787,11 @@ export class OpenCodeAttemptRunner {
             capturedStructuredOutput = info.structured as Record<string, unknown>;
           }
           const streamError = extractOpenCodeErrorMessage(info?.error);
-          if (streamError) {
+          rateLimitClass = classifyRateLimitError(streamError, extractStatusCode(info?.error));
+          if (streamError || rateLimitClass !== 'NotRateLimit') {
             success = false;
-            failureMessage = streamError;
-            diag.onStreamError('message.updated', sanitizeAttemptError(streamError));
+            failureMessage = streamError ?? `HTTP ${RATE_LIMIT_STATUS_CODE} Too Many Requests`;
+            diag.onStreamError('message.updated', sanitizeAttemptError(failureMessage));
             break;
           }
         }
@@ -1788,10 +1814,11 @@ export class OpenCodeAttemptRunner {
             capturedStructuredOutput = info.structured as Record<string, unknown>;
           }
           const streamError = extractOpenCodeErrorMessage(info?.error);
-          if (streamError) {
+          rateLimitClass = classifyRateLimitError(streamError, extractStatusCode(info?.error));
+          if (streamError || rateLimitClass !== 'NotRateLimit') {
             success = false;
-            failureMessage = streamError;
-            diag.onStreamError('message.completed', sanitizeAttemptError(streamError));
+            failureMessage = streamError ?? `HTTP ${RATE_LIMIT_STATUS_CODE} Too Many Requests`;
+            diag.onStreamError('message.completed', sanitizeAttemptError(failureMessage));
             break;
           }
         }
@@ -1811,6 +1838,7 @@ export class OpenCodeAttemptRunner {
         if (isCurrentAssistantMessage) {
           success = false;
           failureMessage = extractOpenCodeErrorMessage(info?.error) ?? 'OpenCode message failed';
+          rateLimitClass = classifyRateLimitError(failureMessage, extractStatusCode(info?.error));
           diag.onStreamError('message.failed', sanitizeAttemptError(failureMessage));
           break;
         }
@@ -1848,6 +1876,7 @@ export class OpenCodeAttemptRunner {
         if (errorProps.sessionID === activeSessionId) {
           success = false;
           failureMessage = extractOpenCodeErrorMessage(errorProps.error) ?? 'OpenCode session error';
+          rateLimitClass = classifyRateLimitError(failureMessage, extractStatusCode(errorProps.error));
           diag.onStreamError('session.error', sanitizeAttemptError(failureMessage));
           break;
         }
@@ -1958,7 +1987,8 @@ export class OpenCodeAttemptRunner {
       // メッセージ文字列だけでは判別できないため、セッションを検死する。
       if (
         abortCause === 'timeout'
-        && !containsRateLimitError(message)
+        && rateLimitClass === 'NotRateLimit'
+        && classifyRateLimitError(message) === 'NotRateLimit'
         && opencodeApiClient !== undefined
         && activeSessionId !== undefined
       ) {
@@ -1977,33 +2007,13 @@ export class OpenCodeAttemptRunner {
             sessionId: activeSessionId,
             model: options.model,
           });
-          // 検死で 429 と確定済み。message 文字列に 429 の語が含まれるとは
-          // 限らない（statusCode だけで判定した場合）ため再判定はしない。
-          const rateLimitedResponse = this.buildRateLimitedResponse(
-            agentType,
-            activeSessionId,
-            sanitizeAttemptError(rateLimitMessage),
-            attempt - 1,
-          );
-          scheduleResultEmission(
-            false,
-            rateLimitedResponse.error ?? rateLimitedResponse.content,
-            activeSessionId,
-          );
-          throwIfServerInvalidated();
-          return rateLimitedResponse;
+          message = rateLimitMessage.message;
+          rateLimitClass = rateLimitMessage.classification;
         }
       }
-      if (containsRateLimitError(message)) {
-        const rateLimitedResponse = this.buildRateLimitedResponse(
-          agentType,
-          activeSessionId,
-          sanitizeAttemptError(message),
-          attempt - 1,
-        );
-        scheduleResultEmission(false, rateLimitedResponse.error ?? rateLimitedResponse.content, activeSessionId);
-        throwIfServerInvalidated();
-        return rateLimitedResponse;
+      if (rateLimitClass === 'NotRateLimit') rateLimitClass = classifyRateLimitError(message);
+      if (rateLimitClass !== 'NotRateLimit') {
+        return await handleRateLimitFailure(message, rateLimitClass, activeSessionId);
       }
       // Failures that point at the native json_schema request itself: a
       // model that never emits the StructuredOutput tool ("did not produce
@@ -2113,14 +2123,15 @@ export class OpenCodeAttemptRunner {
       // 混同しない。
       const retriable = toolGuardFailure === undefined
         && this.isRetriableError(message, abortCause);
-      if (retriable && attempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
+      const standardAttempt = attempt - callState.rateLimitRetries;
+      if (retriable && standardAttempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
         throwIfCallAborted();
         log.info('Retrying OpenCode call after transient failure', {
           agentType,
           attempt,
           message: sanitizeAttemptError(message),
         });
-        await this.waitForRetryDelay(attempt, options.abortSignal);
+        await this.waitForRetryDelay(standardAttempt, options.abortSignal);
         throwIfCallAborted();
         throwIfServerInvalidated();
         return RETRY_ATTEMPT;
@@ -2241,21 +2252,16 @@ export class OpenCodeAttemptRunner {
       return buildAttemptErrorResponse(errorMessage);
     }
 
-    if (containsRateLimitError(errorMessage)) {
-      const rateLimitedResponse = this.buildRateLimitedResponse(
-        agentType,
-        sessionId,
-        sanitizeAttemptError(errorMessage),
-        attempt - 1,
-      );
-      if (sessionId) {
-        scheduleResultEmission(false, rateLimitedResponse.error ?? rateLimitedResponse.content, sessionId);
+    const exceptionClass = classifyRateLimitError(errorMessage, extractStatusCode(error));
+    if (!options.abortSignal.aborted && (stopResult === undefined || stopResult.ok)
+      && exceptionClass !== 'NotRateLimit') {
+      try {
+        return await handleRateLimitFailure(errorMessage, exceptionClass, sessionId);
+      } catch (retryError) {
+        const invalidation = currentServerInvalidationError();
+        if (invalidation !== undefined) return buildServerInvalidationResponse(invalidation);
+        errorMessage = getErrorMessage(retryError);
       }
-      const invalidationAfterRateLimitEmit = currentServerInvalidationError();
-      if (invalidationAfterRateLimitEmit !== undefined) {
-        return buildServerInvalidationResponse(invalidationAfterRateLimitEmit);
-      }
-      return rateLimitedResponse;
     }
 
     pendingCompletion = {
@@ -2269,14 +2275,15 @@ export class OpenCodeAttemptRunner {
 
     const retriable = (stopResult === undefined || stopResult.ok)
       && this.isRetriableError(errorMessage, abortCause);
-    if (retriable && attempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
+    const standardAttempt = attempt - callState.rateLimitRetries;
+    if (retriable && standardAttempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
       throwIfCallAborted();
       log.info('Retrying OpenCode call after transient exception', {
         agentType,
         attempt,
         errorMessage: sanitizeAttemptError(errorMessage),
       });
-      await this.waitForRetryDelay(attempt, options.abortSignal);
+      await this.waitForRetryDelay(standardAttempt, options.abortSignal);
       throwIfCallAborted();
       const invalidationAfterRetryDelay = currentServerInvalidationError();
       if (invalidationAfterRetryDelay !== undefined) {

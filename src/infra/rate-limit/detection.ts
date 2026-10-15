@@ -15,6 +15,29 @@ const RATE_LIMIT_ERROR_PATTERNS = [
   /usage_limit_exceeded/i,
 ] as const;
 
+const RATE_LIMIT_EXHAUSTED_PATTERNS = [
+  /\b(?:you['’]ve\s+)?hit\s+your\s+usage\s+limit\b/i,
+  /\bhit\s+your\s+(?:weekly|5-hour|session)\s+limit\b/i,
+  /\bout of extra usage\b/i,
+  /\busage_limit_exceeded\b/i,
+  /\bworkspace\b[^\n\r]*\bout of credits\b/i,
+  /\b(?:hit|reached|exceeded)\s+(?:(?:your|the|a)\s+)?spend cap\b/i,
+  /\bspend cap\s+(?:(?:has been|was|is)\s+)?(?:reached|exceeded)\b/i,
+] as const;
+
+export type RateLimitClass = 'NotRateLimit' | 'Transient' | 'Exhausted';
+
+// 失敗として確定した入力専用。成功本文には通知全文の判定を使う。
+export function classifyRateLimitError(text: string | undefined, statusCode?: number | string): RateLimitClass {
+  if (text && RATE_LIMIT_EXHAUSTED_PATTERNS.some((pattern) => pattern.test(text))) {
+    return 'Exhausted';
+  }
+  if (statusCode === 429 || statusCode === '429' || containsRateLimitError(text)) {
+    return 'Transient';
+  }
+  return 'NotRateLimit';
+}
+
 // Claude CLI が rate limit 到達を assistant text や result 本文として返すときの通知文。
 // 通知は単独の 1 行メッセージとして届くので、本文全体がその形をしているときだけ一致させる。
 // 部分一致にすると、ファイル内容や tool 出力、エージェントの引用（例: この定義を含む diff）

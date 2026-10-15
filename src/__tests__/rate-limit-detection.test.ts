@@ -12,12 +12,45 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildRateLimitInfo,
+  classifyRateLimitError,
   containsRateLimitError,
   findRateLimitMarkerNoticeLine,
   isRateLimitMarkerNotice,
   isRateLimitNoticeResponse,
   resolveRateLimitTextSource,
 } from '../infra/rate-limit/detection.js';
+
+describe('classifyRateLimitError', () => {
+  it.each(['HTTP 429', 'Too Many Requests', 'rate limit exceeded', 'rate_limit_error'])(
+    '一時的な失敗を分類する: %s', (message) => {
+      expect(classifyRateLimitError(message)).toBe('Transient');
+    },
+  );
+  it.each([
+    "You've hit your usage limit", "You've hit your weekly limit", "You've hit your 5-hour limit",
+    "You've hit your session limit", "You're out of extra usage", 'usage_limit_exceeded',
+    'Your workspace is out of credits. Add credits to continue.',
+    'You hit your spend cap set in your workspace.',
+    'Your spend cap has been reached.',
+  ])('使い切りは429との出現順によらず優先する: %s', (message) => {
+    expect(classifyRateLimitError(message)).toBe('Exhausted');
+    expect(classifyRateLimitError(`HTTP 429: ${message}`)).toBe('Exhausted');
+    expect(classifyRateLimitError(`${message} HTTP 429`)).toBe('Exhausted');
+    expect(classifyRateLimitError(message, 429)).toBe('Exhausted');
+  });
+  it.each([429, '429'] as const)('構造化statusCode=%sを分類する', (status) => {
+    expect(classifyRateLimitError('request rejected', status)).toBe('Transient');
+  });
+  it('余额を含むだけの429は一時的な失敗として分類する', () => {
+    expect(classifyRateLimitError('HTTP 429: 余额不足')).toBe('Transient');
+  });
+  it('rate limit以外の失敗は分類しない', () => {
+    expect(classifyRateLimitError('permission denied')).toBe('NotRateLimit');
+    expect(classifyRateLimitError('Permission denied while reading the spend cap setting')).toBe('NotRateLimit');
+    expect(classifyRateLimitError('HTTP 429 while reading the spend cap setting')).toBe('Transient');
+    expect(classifyRateLimitError(undefined)).toBe('NotRateLimit');
+  });
+});
 
 describe('containsRateLimitError', () => {
   it.each([
@@ -88,6 +121,18 @@ describe('containsRateLimitError', () => {
 });
 
 describe('isRateLimitMarkerNotice', () => {
+  it.each([
+    '```text\nusage_limit_exceeded\n```',
+    '~~~text\nusage_limit_exceeded\n~~~',
+    '> > usage_limit_exceeded',
+    '説明:\n    usage_limit_exceeded\n以上',
+    '```text\nusage_limit_exceeded',
+  ])('コードや引用に含まれる通知を全文通知と区別する: %s', (text) => {
+    expect(isRateLimitMarkerNotice(text)).toBe(false);
+    expect(isRateLimitNoticeResponse(text)).toBe(false);
+    expect(resolveRateLimitTextSource(text)).toBeUndefined();
+  });
+
   it.each([
     "You're out of extra usage · resets 2:30pm (Asia/Tokyo)",
     'usage_limit_exceeded: resets 12:30pm',
