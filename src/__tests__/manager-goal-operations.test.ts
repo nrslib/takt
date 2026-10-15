@@ -2,6 +2,7 @@ import { beforeEach,expect,it,vi } from 'vitest';
 import { enqueueTaktGoalTask } from '../features/mcp/goalOperations.js';
 import type { Goal } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
+import { responseBytes, MCP_RESPONSE_MAX_BYTES } from '../features/mcp/response.js';
 const doubles = vi.hoisted(() => ({ get: vi.fn(), update: vi.fn(), states: vi.fn(), tasks: vi.fn(), enqueue: vi.fn(), workflow: vi.fn(), ensure: vi.fn() }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.get; update = doubles.update; } }));
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { listTaskStateItems = doubles.states; listAllTaskItems = doubles.tasks; } }));
@@ -58,4 +59,13 @@ it('reads task instructions once when checking multiple candidates without a wor
   expect(doubles.tasks).toHaveBeenCalledOnce();
   expect(doubles.enqueue).not.toHaveBeenCalled();
   expect(doubles.update).not.toHaveBeenCalled();
+});
+it('returns a bounded enqueue result without the accumulated goal histories', async () => {
+  goal.workLog = Array.from({ length: 200 }, (_, index) => ({ id: `550e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`, summary: '作業'.repeat(20000), recordedAt: '2026-10-14T00:00:00Z' }));
+  goal.questions = Array.from({ length: 100 }, (_, index) => ({ id: `650e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`, body: '質問'.repeat(20000), status: 'pending', recipient: 'human' }));
+  goal.notifications = Array.from({ length: 100 }, (_, index) => ({ id: `750e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`, body: '通知'.repeat(20000), kind: 'custom', recordedAt: '2026-10-14T00:00:00Z' }));
+  const result = await enqueueTaktGoalTask(input, {}, signal);
+  expect(result.isError).toBeUndefined();
+  expect(responseBytes(result)).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
+  expect(goal.workLog).toHaveLength(201);
 });

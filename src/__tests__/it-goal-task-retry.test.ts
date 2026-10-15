@@ -235,6 +235,42 @@ describe('goal task retry through manager MCP and persistent task execution', ()
     }, 'read-only');
   });
 
+  it.each(['requeue', 'retry', 'remove'] as const)('retrieves saved %s results through task and work-log read tools', async (kind) => {
+    await withClient(async (client) => {
+      const read = async (name: string, args: Record<string, unknown> = {}) => {
+        const result = await client.callTool({ name, arguments: { cwd, goalId, ...args } });
+        expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+        return JSON.parse(firstTextContent(result.content));
+      };
+      await read('takt_record_goal_work_log', { summary: '操作前' });
+      const reason = '別の方法に変更'.repeat(3000);
+      const result = await read(`takt_${kind}_goal_task`, { taskName,
+        ...(kind === 'retry' ? { task: revisedOrder } : kind === 'remove' ? { reason } : { retryNote: note }),
+      });
+      expect(result.status).toBe(kind === 'remove' ? 'removed' : 'pending');
+      await read('takt_record_goal_work_log', { summary: '操作後' });
+      const latest = await read('takt_list_goal_work_log', { limit: 1 });
+      expect(latest).toMatchObject({ totalCount: 3, returnedCount: 1, nextOffset: 1, truncated: true });
+      expect(latest.workLog[0].summary).toBe('操作後');
+      const page = await read('takt_list_goal_work_log', { limit: 1, offset: latest.nextOffset });
+      const recordId = page.workLog[0].id;
+      let summary = '';
+      let textOffset = 0;
+      for (;;) {
+        const text = await read('takt_get_goal', { path: 'workLog.summary', recordId, textOffset });
+        summary += text.content;
+        if (text.nextOffset === null) break;
+        textOffset = text.nextOffset;
+      }
+      expect(summary).toBe(kind === 'remove' ? `Removed ${taskName}: ${reason}`
+        : `${kind === 'retry' ? 'Retried with corrected instructions' : 'Requeued'} ${taskName}`);
+      const tasks = await client.callTool({ name: 'takt_list_tasks', arguments: { cwd, limit: 1 } });
+      expect(tasks.isError).toBeUndefined();
+      const savedTasks = JSON.parse(firstTextContent(tasks.content)).tasks;
+      expect(savedTasks).toEqual(kind === 'remove' ? [] : [expect.objectContaining({ name: taskName, status: 'pending' })]);
+    });
+  });
+
   it('preserves the existing human Requeue path for an ordinary failed task', async () => {
     new TaskStore(cwd).update((current) => ({ tasks: current.tasks.map((task) => ({
       ...task, goal_id: undefined, goal_purpose: undefined, goal_work_key: undefined,

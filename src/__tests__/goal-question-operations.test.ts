@@ -5,6 +5,9 @@ import { askTaktGoalQuestion,getTaktGoalQuestion,listTaktGoalQuestions,withdrawT
 import { GoalSchema,type Goal } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
+import { listTaktGoalRecords, recordTaktGoalWorkLog } from '../features/mcp/goalWorkLogOperations.js';
+import { listGoalRecordsInputSchema } from '../features/mcp/schemas.js';
+import { responseBytes, MCP_RESPONSE_MAX_BYTES } from '../features/mcp/response.js';
 vi.mock('node:crypto', async (original) => {
   const actual = await original<typeof import('node:crypto')>();
   return { ...actual, randomUUID: vi.fn(actual.randomUUID) };
@@ -80,7 +83,7 @@ it('allows withdrawing and reading an existing question for an aborted goal', as
   expect(JSON.parse(firstTextContent((await getTaktGoalQuestion({ ...input, questionId }, {})).content)))
     .toEqual({ question: goal.questions[0] });
   expect(JSON.parse(firstTextContent((await listTaktGoalQuestions(input, {})).content)))
-    .toEqual({ questions: goal.questions });
+    .toMatchObject({ questions: goal.questions, totalCount: 1, truncated: false });
 });
 
 it('persists a manager event with severity before delivery', async () => {
@@ -182,4 +185,67 @@ it('rejects a root outside the MCP scope before reading or saving', async () => 
   expect(doubles.get).not.toHaveBeenCalled();
   expect(doubles.update).not.toHaveBeenCalled();
   expect(doubles.lock).not.toHaveBeenCalled();
+});
+
+it('bounds question reads, creation, withdrawal, notifications and work-log writes with large saved histories', async () => {
+  goal.workLog = Array.from({ length: 100 }, (_, index) => ({ id: `550e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`, summary: `記録${index}:` + '作業'.repeat(10000), recordedAt: '2026-10-14T00:00:00Z' }));
+  goal.questions = Array.from({ length: 100 }, (_, index) => ({ id: `650e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`, body: '質問'.repeat(20000), status: 'pending', recipient: 'human' }));
+  goal.notifications = Array.from({ length: 100 }, (_, index) => ({ id: `750e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`, body: '通知'.repeat(20000), kind: 'custom', recordedAt: '2026-10-14T00:00:00Z' }));
+  const questionId = goal.questions[99]!.id;
+  const previous = structuredClone(goal.workLog);
+  const results = [
+    await getTaktGoalQuestion({ ...input, questionId }, {}),
+    await listTaktGoalQuestions(input, {}),
+    await askTaktGoalQuestion({ ...input, body: '新しい質問'.repeat(20000) }, {}, signal),
+    await withdrawTaktGoalQuestion({ ...input, questionId }, {}, signal),
+    await notifyTaktGoal({ ...input, body: '更新通知'.repeat(20000), kind: 'custom' }, {}, signal),
+    await recordTaktGoalWorkLog({ ...input, summary: '保存内容'.repeat(20000) }, {}, signal),
+    await listTaktGoalRecords(input, {}),
+  ];
+  for (const result of results) {
+    expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+    expect(responseBytes(result)).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
+  }
+  const saved = JSON.parse(firstTextContent(results[5]!.content));
+  expect(saved.totalCount).toBe(101);
+  expect(saved.entry.id).toBe(goal.workLog[100]!.id);
+  expect(saved).not.toHaveProperty('workLog');
+  expect(JSON.parse(firstTextContent(results[3]!.content))).toMatchObject({
+    goalId: goal.id, status: 'created', questionId, questionStatus: 'withdrawn',
+  });
+  expect(JSON.parse(firstTextContent(results[4]!.content))).toMatchObject({
+    goal: { id: goal.id, status: 'created' }, notificationId: goal.notifications!.at(-1)!.id,
+  });
+  expect(goal.workLog.slice(0, 100)).toEqual(previous);
+  expect(goal.workLog[100]!.summary).toBe('保存内容'.repeat(20000));
+  expect(goal.questions.find((question) => question.id === questionId)!.status).toBe('withdrawn');
+  const first = JSON.parse(firstTextContent((await getTaktGoalQuestion({ ...input, questionId, path: 'body', maxBytes: 12 }, {})).content));
+  const next = JSON.parse(firstTextContent((await getTaktGoalQuestion({ ...input, questionId, path: 'body', maxBytes: 12, textOffset: first.nextOffset }, {})).content));
+  expect(first).toMatchObject({ content: '質問質問', nextOffset: 12, truncated: true });
+  expect(next.offset).toBe(12);
+});
+
+it.each([undefined, 1, 50])('returns recent work with limit %s and a usable continuation', async (limit) => {
+  goal.workLog = Array.from({ length: 60 }, (_, index) => ({ id: `550e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`, summary: `記録${index}`, recordedAt: '2026-10-14T00:00:00Z' }));
+  const first = JSON.parse(firstTextContent((await listTaktGoalRecords({ ...input, limit }, {})).content));
+  expect(first.workLog).toHaveLength(limit ?? 50);
+  expect(first.workLog[0].summary).toBe('記録59');
+  const next = JSON.parse(firstTextContent((await listTaktGoalRecords({ ...input, limit, offset: first.nextOffset }, {})).content));
+  expect(next.workLog[0].summary).toBe(`記録${59 - (limit ?? 50)}`);
+});
+
+it.each([0, 51, -1, 1.5])('rejects a work-log limit of %s', (limit) => {
+  expect(listGoalRecordsInputSchema.safeParse({ ...input, limit }).success).toBe(false);
+});
+
+it('puts pending questions first and retrieves the next pending question with its returned ID', async () => {
+  const first = { id: '650e8400-e29b-41d4-a716-446655440001', body: '古い質問', recipient: 'human' as const, status: 'withdrawn' as const };
+  const second = { ...first, id: '650e8400-e29b-41d4-a716-446655440002', body: '確認1', status: 'pending' as const };
+  const third = { ...second, id: '650e8400-e29b-41d4-a716-446655440003', body: '確認2' };
+  goal.questions = [first, second, third];
+  const page = JSON.parse(firstTextContent((await listTaktGoalQuestions({ ...input, limit: 1 }, {})).content));
+  expect(page).toMatchObject({ questions: [second], totalCount: 3, nextOffset: 1, omittedCount: 2 });
+  const next = JSON.parse(firstTextContent((await listTaktGoalQuestions({ ...input, limit: 1, offset: page.nextOffset }, {})).content));
+  expect(next.questions[0]).toEqual(third);
+  expect(JSON.parse(firstTextContent((await getTaktGoalQuestion({ ...input, questionId: next.questions[0].id }, {})).content)).question).toEqual(third);
 });

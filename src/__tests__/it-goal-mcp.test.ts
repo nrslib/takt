@@ -20,6 +20,7 @@ import { TaskRunner } from '../infra/task/index.js';
 import { goalId } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 import { registerFixtureGoal } from './helpers/registered-goal.js';
+import { MCP_RESPONSE_MAX_BYTES } from '../features/mcp/response.js';
 
 vi.mock('node:fs/promises', async (importOriginal) => ({
   ...await importOriginal<typeof import('node:fs/promises')>(),
@@ -517,6 +518,109 @@ describe('local goal integration and inspection through manager MCP', () => {
     await setImmediate();
   });
 
+  it('uses the same response bound and artifact selectors in manager and read-only servers', async () => {
+    await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal,
+      workLog: Array.from({ length: 100 }, (_, index) => ({ id: `550e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`, summary: '作業'.repeat(20000), recordedAt: '2026-10-14T00:00:00Z' })),
+      questions: Array.from({ length: 100 }, (_, index) => ({ id: `650e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`, body: '質問'.repeat(20000), recipient: 'human', status: 'pending' })),
+      notifications: Array.from({ length: 100 }, (_, index) => ({ id: `750e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`, body: '通知'.repeat(20000), kind: 'custom', recordedAt: '2026-10-14T00:00:00Z' })),
+    }));
+    const runSlug = 'bounded';
+    const runDir = join(cwd, '.takt', 'runs', runSlug);
+    mkdirSync(join(runDir, 'logs'), { recursive: true });
+    mkdirSync(join(runDir, 'reports'), { recursive: true });
+    const task = 'A'.repeat(4096) + 'B'.repeat(65904);
+    writeFileSync(join(runDir, 'meta.json'), JSON.stringify({ task, workflow: 'safe', runSlug,
+      runRoot: `.takt/runs/${runSlug}`, reportDirectory: `.takt/runs/${runSlug}/reports`, logsDirectory: `.takt/runs/${runSlug}/logs`,
+      contextDirectory: `.takt/runs/${runSlug}/context`, status: 'completed', startTime: '2026-10-14T00:00:00Z' }));
+    writeFileSync(join(runDir, 'reports', 'large.md'), '日本語'.repeat(100000));
+    const responses: unknown[] = [];
+    for (const toolSet of ['manager', 'read-only'] as const) await withServer(cwd, toolSet, async (client) => {
+      for (const name of ['takt_get_goal', 'takt_list_goals', 'takt_get_run']) {
+        const result = await client.callTool({ name, arguments: { cwd, ...(name === 'takt_get_goal' ? { goalId } : name === 'takt_get_run' ? { runSlug } : {}) } });
+        expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+        expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
+        responses.push(JSON.parse(firstTextContent(result.content)));
+      }
+      const report = await client.callTool({ name: 'takt_get_run', arguments: { cwd, runSlug, view: 'report', report: 'large.md', maxBytes: 12 } });
+      expect(report.isError).toBeUndefined();
+      expect(JSON.parse(firstTextContent(report.content))).toMatchObject({ report: { content: '日本語日', truncated: true, nextOffset: 12 } });
+      for (const offset of [0, 4096]) {
+        const result = await client.callTool({ name: 'takt_get_run', arguments: { cwd, runSlug, view: 'task', offset } });
+        expect(result.isError).toBeUndefined();
+        expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
+        const payload = JSON.parse(firstTextContent(result.content));
+        expect(payload).not.toHaveProperty('taskOmission');
+        expect(payload.task).toEqual({ content: (offset === 0 ? 'A' : 'B').repeat(4096),
+          offset, returnedBytes: 4096, totalBytes: 70000, direction: 'forward', truncated: true, nextOffset: offset + 4096 });
+        responses.push(payload);
+      }
+      const entry = await client.callTool({ name: 'takt_get_goal', arguments: { cwd, goalId, path: 'workLog.0.summary', textOffset: 12, maxBytes: 12 } });
+      expect(entry.isError).toBeUndefined();
+      expect(JSON.parse(firstTextContent(entry.content))).toMatchObject({ content: '作業作業', offset: 12, truncated: true });
+      if (toolSet === 'manager') {
+        const tools = (await client.listTools()).tools;
+        expect(tools.find((tool) => tool.name === 'takt_list_goal_work_log')!.inputSchema.properties).toHaveProperty('limit');
+        const logs = await client.callTool({ name: 'takt_list_goal_work_log', arguments: { cwd, goalId, limit: 1, offset: 1 } });
+        expect(logs.isError).toBeUndefined();
+        expect(JSON.parse(firstTextContent(logs.content))).toMatchObject({ returnedCount: 1, offset: 1, nextOffset: 2 });
+        const workflow = await client.callTool({ name: 'takt_list_workflows', arguments: { cwd, limit: 1 } });
+        expect(workflow.isError).toBeUndefined();
+        const first = JSON.parse(firstTextContent(workflow.content));
+        expect(first.returnedCount).toBe(1);
+        const next = await client.callTool({ name: 'takt_list_workflows', arguments: { cwd, limit: 1, offset: first.nextOffset } });
+        expect(next.isError).toBeUndefined();
+        expect(JSON.parse(firstTextContent(next.content)).workflows[0].name).not.toBe(first.workflows[0].name);
+      }
+    });
+    expect(responses.slice(0, 5)).toEqual(responses.slice(5));
+  });
+
+  it('continues individual saved-record errors through manager and read-only MCP inputs', async () => {
+    const saved = await new GoalStore(cwd).get(goalId);
+    const ids = Array.from({ length: 51 }, (_, index) => `650e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`);
+    const corruptRecords = ['{', '{}', 'null', JSON.stringify(saved)];
+    for (const [index, id] of ids.entries()) {
+      const directory = join(cwd, '.takt', 'goals', id);
+      mkdirSync(directory);
+      writeFileSync(join(directory, 'goal.json'), corruptRecords[index % corruptRecords.length]!);
+    }
+    const responses: unknown[] = [];
+    for (const toolSet of ['manager', 'read-only'] as const) await withServer(cwd, toolSet, async (client) => {
+      const tools = (await client.listTools()).tools;
+      expect(tools.find(({ name }) => name === 'takt_list_goals')!.inputSchema.properties).toHaveProperty('errorOffset');
+      const first = await client.callTool({ name: 'takt_list_goals', arguments: { cwd, limit: 50, errorOffset: 0 } });
+      const page = JSON.parse(firstTextContent(first.content));
+      expect(first.isError).toBe(true);
+      expect(Buffer.byteLength(JSON.stringify(first))).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
+      expect(page).toMatchObject({ totalCount: 1, returnedCount: 1, nextOffset: null,
+        goals: [{ id: goalId }], errorPage: { collection: 'errors', totalCount: 51, returnedCount: 50,
+          omittedCount: 1, offset: 0, nextOffset: 50, truncated: true } });
+      expect(page.errors.map((error: { goalId: string }) => error.goalId)).toEqual(ids.slice(0, 50));
+      expect(page.errorPage.retrieval).toContain('errorPage.nextOffset');
+      expect(page.errorPage.retrieval).toContain('errorOffset');
+      const next = await client.callTool({ name: 'takt_list_goals', arguments: { cwd, limit: 50, errorOffset: page.errorPage.nextOffset } });
+      const last = JSON.parse(firstTextContent(next.content));
+      expect(next.isError).toBe(true);
+      expect(Buffer.byteLength(JSON.stringify(next))).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
+      expect(last.goals).toEqual(page.goals);
+      expect(last.errors.map((error: { goalId: string }) => error.goalId)).toEqual(ids.slice(50));
+      expect(last.errorPage).toMatchObject({ totalCount: 51, returnedCount: 1, omittedCount: 50, offset: 50, nextOffset: null, truncated: true });
+      for (const error of [...page.errors, ...last.errors] as { error: string }[]) {
+        expect(error.error).toContain('Invalid goal file');
+        expect(error.error).not.toContain(cwd);
+      }
+      responses.push([page, last]);
+      if (toolSet === 'manager') {
+        expect(tools.find(({ name }) => name === 'takt_list_workflows')!.inputSchema.properties).not.toHaveProperty('errorOffset');
+        const workflow = await client.callTool({ name: 'takt_list_workflows', arguments: { cwd, offset: 0, limit: 1 } });
+        expect(workflow.isError).toBeUndefined();
+        const rejected = await client.callTool({ name: 'takt_list_workflows', arguments: { cwd, offset: 0, limit: 1, errorOffset: 0 } });
+        expect(rejected.isError).toBe(true);
+      }
+    });
+    expect(responses[0]).toEqual(responses[1]);
+  });
+
   function configure(mode: 'auto' | 'approve' | undefined, target?: string) {
     writeFileSync(join(cwd, '.takt', 'config.yaml'), [
       'provider: mock', 'branch_name_strategy: romaji', ...(target === undefined ? [] : [`base_branch: ${target}`]),
@@ -697,7 +801,7 @@ describe('local goal integration and inspection through manager MCP', () => {
       expect(git(cwd, ['rev-parse', 'release'])).toBe(base);
       const saved = await new GoalStore(cwd).get(goalId);
       const targetSha = git(cwd, ['rev-parse', 'main']);
-      expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ status: 'merged', sha: targetSha, goal: saved, completion: { goalBranch: branch, goalSha: sha, targetBranch: 'main', summary } });
+      expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ status: 'merged', sha: targetSha, goal: { id: saved.id, status: saved.status, completion: saved.completion }, completion: { goalBranch: branch, goalSha: sha, targetBranch: 'main', summary } });
       expect(saved.status).toBe('completed');
       expect(saved.completion).toMatchObject({ targetSha, goalSha: sha, summary });
       expect(temporaryDirectories).toHaveLength(1);
@@ -798,7 +902,7 @@ describe('local goal integration and inspection through manager MCP', () => {
       };
       expect(saved.completion?.changeSummary).toEqual(changeSummary);
       expect(JSON.parse(firstTextContent(response.content))).toMatchObject({
-        goal: saved, completion: { changeSummary },
+        goal: { id: saved.id, status: saved.status, completion: saved.completion }, completion: { changeSummary },
       });
       expect(saved.status).toBe(mode === 'auto' ? 'completed' : 'awaiting_merge');
       if (mode === 'auto') {

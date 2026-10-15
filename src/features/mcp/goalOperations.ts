@@ -6,11 +6,12 @@ import { enqueueTask } from '../../infra/task/enqueueService.js';
 import { saveEnqueuedTaskFile } from '../../infra/task/enqueuedTaskFile.js';
 import { listWorkflows } from '../../infra/config/index.js';
 import { GoalWorkflowNotAllowedError, validateGoalWorkflow } from './goalWorkflowValidation.js';
-import { assertCwdAllowedByMcpRoot, errorResult, jsonResult, type McpOperationDependencies } from './operations.js';
+import { assertCwdAllowedByMcpRoot, errorResult, type McpOperationDependencies } from './operations.js';
 import type { EnqueueGoalTaskInput, ListGoalsInput } from './schemas.js';
 import { TaskRunner } from '../../infra/task/runner.js';
 import { join } from 'node:path';
 import { goalWrite } from './goalWrite.js';
+import { pagedResult } from './response.js';
 
 export async function enqueueTaktGoalTask(input: EnqueueGoalTaskInput, deps: McpOperationDependencies, signal: AbortSignal) {
   let enqueued = false;
@@ -50,7 +51,7 @@ export async function enqueueTaktGoalTask(input: EnqueueGoalTaskInput, deps: Mcp
 export function listTaktWorkflows(input: ListGoalsInput, deps: McpOperationDependencies) {
   try {
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
-    return jsonResult({ workflows: listWorkflows(input.cwd).flatMap((name) => {
+    const workflows = listWorkflows(input.cwd).flatMap((name) => {
       try {
         const workflow = validateGoalWorkflow(name, input.cwd);
         return [{ name, description: workflow.description }];
@@ -58,6 +59,8 @@ export function listTaktWorkflows(input: ListGoalsInput, deps: McpOperationDepen
         if (error instanceof GoalWorkflowNotAllowedError) return [];
         throw error;
       }
-    }) });
+    });
+    const offset = input.offset ?? 0;
+    return pagedResult('workflows', workflows.slice(offset, offset + (input.limit ?? 50)), workflows.length, offset);
   } catch (error) { return errorResult('Workflow list failed', error); }
 }

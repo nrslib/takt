@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GoalStore } from '../infra/goals/store.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
+import type { Goal } from '../infra/goals/schema.js';
 
 const doubles = vi.hoisted(() => ({
   read: vi.fn(), write: vi.fn(), lstat: vi.fn(), readdir: vi.fn(),
@@ -64,6 +65,16 @@ describe('GoalStore validation and publication', () => {
     doubles.read.mockReturnValue({ content: Buffer.from(JSON.stringify(goalRecord())) });
     expect(await new GoalStore('/project').list()).toEqual({ goals: [goalRecord()], errors: [] });
     expect(doubles.assertSnapshot).toHaveBeenCalledWith({ path: '/project/.takt/goals' });
+  });
+  it('projects and selects one validated record at a time without changing default listing', async () => {
+    const other = { ...goalRecord(), id: '550e8400-e29b-41d4-a716-446655440001' };
+    doubles.readdir.mockReturnValue([{ name: goalId }, { name: other.id }]);
+    doubles.read.mockImplementation((file: string) => ({ content: Buffer.from(JSON.stringify(file.includes(other.id) ? other : goalRecord())) }));
+    const project = vi.fn((goal: Goal) => goal.id === goalId ? { id: goal.id } : undefined);
+    expect(await new GoalStore('/project').list(project)).toEqual({ goals: [{ id: goalId }], errors: [] });
+    expect(project).toHaveBeenCalledTimes(2);
+    expect(doubles.assertSnapshot).toHaveBeenCalledOnce();
+    expect((await new GoalStore('/project').list()).goals).toEqual([goalRecord(), other]);
   });
   it('ignores only an unpublished registration directory', async () => {
     doubles.readdir.mockReturnValue([{ name: goalId }]);
