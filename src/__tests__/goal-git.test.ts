@@ -33,13 +33,25 @@ describe('Goal Git registration', () => {
       ['rev-parse', '--verify', 'refs/heads/develop^{commit}'],
     ]);
   });
-  it('uses the configured base branch only as the default integration branch at registration', () => {
+  it('uses the configured base branch as the default start and integration branch at registration', () => {
     doubles.config.mockReturnValue('release');
+    doubles.exec.mockReturnValueOnce('refs/heads/release');
     expect(prepareGoalBranch('/project', goalId, undefined, undefined)).toMatchObject({
-      startBranch: 'main', integrationBranch: 'release', commit: 'a'.repeat(40),
+      startBranch: 'release', integrationBranch: 'release', commit: 'a'.repeat(40),
     });
     expect(doubles.config).toHaveBeenCalledWith('/project', 'baseBranch');
+    expect(doubles.detect).not.toHaveBeenCalled();
     expect(doubles.exec).toHaveBeenCalledWith('git', ['rev-parse', '--verify', 'refs/heads/release^{commit}'], expect.any(Object));
+  });
+  it('uses the integration branch as the default start ahead of configuration and repository defaults', () => {
+    doubles.config.mockReturnValue('configured');
+    doubles.exec.mockReturnValueOnce('refs/heads/develop');
+    expect(prepareGoalBranch('/project', goalId, undefined, 'develop')).toMatchObject({
+      startBranch: 'develop', integrationBranch: 'develop', commit: 'a'.repeat(40),
+    });
+    expect(doubles.config).not.toHaveBeenCalled();
+    expect(doubles.detect).not.toHaveBeenCalled();
+    expect(doubles.exec).toHaveBeenCalledWith('git', ['rev-parse', '--verify', 'refs/heads/develop^{commit}'], expect.any(Object));
   });
   it('rejects a configured integration branch without a local commit', () => {
     doubles.config.mockReturnValue('missing');
