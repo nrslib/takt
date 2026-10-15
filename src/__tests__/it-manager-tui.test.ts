@@ -79,24 +79,32 @@ function queuedFrame(context: ReturnType<typeof mount>): string | undefined {
     ?.find((frame) => /\n│\s*(?:送信待ち|queued messages|pending messages)\s*:\s*\d+/iu.test(frame));
 }
 
+function waitFor(assertions: () => void): Promise<void> {
+  return vi.waitFor(assertions, { timeout: 10_000 });
+}
+
 async function typeAndSubmit(context: ReturnType<typeof mount>, text: string): Promise<void> {
   context.app.stdin.write(text);
-  await vi.waitFor(() => expect(promptFrame(context)).toContain(text));
+  await waitFor(() => expect(promptFrame(context)).toContain(text));
   context.app.stdin.write(ENTER);
+  await waitFor(() => {
+    expect(promptFrame(context)).toMatch(/Discuss your goal|Enter your answer|ゴールを相談してください|回答を入力してください/u);
+    expect(promptFrame(context)).not.toContain(text);
+  });
 }
 
 async function send(context: ReturnType<typeof mount>, text: string, summary: ManagerGoalSummary) {
   const { app, call, session } = context;
   const before = call.mock.calls.length;
   app.stdin.write(text);
-  await vi.waitFor(() => expect(app.lastFrame()).toContain(text));
+  await waitFor(() => expect(promptFrame(context)).toContain(text));
   app.stdin.write(ENTER);
-  await vi.waitFor(() => {
+  await waitFor(() => {
     expect(call).toHaveBeenCalledTimes(before + 1);
     expect(session.getPendingSummary()?.summary).toEqual(summary);
-  });
-  await vi.waitFor(() => {
     const frame = app.lastFrame();
+    expect(queuedFrame(context)).toBeUndefined();
+    expect(promptFrame(context)).toContain(context.lang === 'ja' ? 'ゴールを相談してください' : 'Discuss your goal');
     expect(frame).toContain(summary.objective);
     expect(frame).toContain(context.lang === 'ja' ? '範囲外:' : 'Out of scope:');
     expect(frame).toContain(context.lang === 'ja' ? '受け入れ条件:' : 'Acceptance criteria:');
@@ -115,14 +123,16 @@ async function approve(context: ReturnType<typeof mount>, summary: ManagerGoalSu
   app.stdin.write(UP);
   app.stdin.write(ENTER);
 
-  await vi.waitFor(() => expect(register).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(register).toHaveBeenCalledTimes(1));
   expect(register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cwd, ...summary }));
   const request = GoalCreateInputSchema.parse(register.mock.calls[0]![0]);
   expect(request).toMatchObject({ cwd, ...summary });
   const registered = GoalSchema.parse(await register.mock.results[0]!.value);
-  await vi.waitFor(() => {
+  await waitFor(() => {
     expect(app.lastFrame()).toContain(registered.id);
     expect(app.lastFrame()).toContain(registered.branch);
+    expect(app.lastFrame()).not.toContain(context.lang === 'ja' ? '処理中' : 'Working');
+    expect(queuedFrame(context)).toBeUndefined();
   });
 }
 
@@ -139,9 +149,9 @@ describe('manager TUI human approval', () => {
       context.call.mockReturnValueOnce(turn.promise);
       try {
         await typeAndSubmit(context, 'first request');
-        await vi.waitFor(() => expect(context.call).toHaveBeenCalledOnce());
+        await waitFor(() => expect(context.call).toHaveBeenCalledOnce());
         context.app.stdin.write('unsent draft');
-        await vi.waitFor(() => {
+        await waitFor(() => {
           const frame = context.app.lastFrame()!;
           const prompt = frame.slice(frame.lastIndexOf('╭'));
           expect(stripVTControlCharacters(frame)).toContain('Working');
@@ -149,7 +159,7 @@ describe('manager TUI human approval', () => {
           expect(prompt).toContain('unsent draft\x1b[7m \x1b[27m');
         });
         context.app.stdin.write('\x1b[D');
-        await vi.waitFor(() => {
+        await waitFor(() => {
           const frame = context.app.lastFrame()!;
           const prompt = frame.slice(frame.lastIndexOf('╭'));
           expect(stripVTControlCharacters(frame)).toContain('Working');
@@ -158,7 +168,7 @@ describe('manager TUI human approval', () => {
         });
 
         turn.resolve(response(null));
-        await vi.waitFor(() => {
+        await waitFor(() => {
           const frame = context.app.lastFrame()!;
           expect(stripVTControlCharacters(frame)).not.toContain('Working');
           expect(stripVTControlCharacters(frame.slice(frame.lastIndexOf('╭')))).toContain('unsent draft');
@@ -183,10 +193,10 @@ describe('manager TUI human approval', () => {
     for (const turn of turns) context.call.mockReturnValueOnce(turn.promise);
     try {
       await typeAndSubmit(context, 'first request');
-      await vi.waitFor(() => expect(context.call).toHaveBeenCalledOnce());
+      await waitFor(() => expect(context.call).toHaveBeenCalledOnce());
       for (const [index, text] of ['second request', 'third request'].entries()) {
         await typeAndSubmit(context, text);
-        await vi.waitFor(() => {
+        await waitFor(() => {
           expect(queuedFrame(context)).toContain(text);
           expect(queuedFrame(context)).toMatch(new RegExp(`(?:送信待ち|queued|pending messages)[^\\n]*${index + 1}`, 'iu'));
           expect(promptFrame(context)).toContain('ゴールを相談してください');
@@ -195,12 +205,12 @@ describe('manager TUI human approval', () => {
       }
       expect(queuedFrame(context)!.indexOf('second request')).toBeLessThan(queuedFrame(context)!.indexOf('third request'));
       context.app.stdin.write('unsent while queued');
-      await vi.waitFor(() => expect(promptFrame(context)).toContain('unsent while queued'));
+      await waitFor(() => expect(promptFrame(context)).toContain('unsent while queued'));
 
       turns[0]!.resolve(response(summary));
-      await vi.waitFor(() => expect(context.call).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(context.call).toHaveBeenCalledTimes(2));
       expect(context.call.mock.calls.map(([text]) => text)).toEqual(['first request', 'second request']);
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(queuedFrame(context)).toMatch(/(?:送信待ち|queued|pending messages)[^\n]*1/iu);
         expect(queuedFrame(context)).toContain('third request');
         expect(queuedFrame(context)).not.toContain('second request');
@@ -209,12 +219,15 @@ describe('manager TUI human approval', () => {
       expect(promptFrame(context)).toContain('unsent while queued');
 
       turns[1]!.resolve(response(null));
-      await vi.waitFor(() => expect(context.call).toHaveBeenCalledTimes(3));
+      await waitFor(() => expect(context.call).toHaveBeenCalledTimes(3));
       expect(context.call.mock.calls.map(([text]) => text)).toEqual(['first request', 'second request', 'third request']);
       turns[2]!.resolve(response(null));
-      await vi.waitFor(() => expect(context.app.lastFrame()).not.toContain('処理中'));
-      expect(queuedFrame(context)).toBeUndefined();
-      expect(promptFrame(context)).toContain('unsent while queued');
+      await waitFor(() => {
+        expect(context.call.mock.calls.map(([text]) => text)).toEqual(['first request', 'second request', 'third request']);
+        expect(context.app.lastFrame()).not.toContain('処理中');
+        expect(queuedFrame(context)).toBeUndefined();
+        expect(promptFrame(context)).toContain('unsent while queued');
+      });
       expect(context.register).not.toHaveBeenCalled();
     } finally {
       context.app.unmount();
@@ -229,18 +242,18 @@ describe('manager TUI human approval', () => {
     for (const turn of turns) context.call.mockReturnValueOnce(turn.promise);
     try {
       await typeAndSubmit(context, 'first request');
-      await vi.waitFor(() => expect(context.call).toHaveBeenCalledOnce());
+      await waitFor(() => expect(context.call).toHaveBeenCalledOnce());
       for (const text of ['second request', 'third request', 'fourth request']) {
         await typeAndSubmit(context, text);
-        await vi.waitFor(() => expect(queuedFrame(context)).toContain(text));
+        await waitFor(() => expect(queuedFrame(context)).toContain(text));
       }
       expect(context.call).toHaveBeenCalledOnce();
       expect(queuedFrame(context)).toContain('Queued messages: 3');
 
       turns[0]!.resolve(response(null));
-      await vi.waitFor(() => expect(context.call).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(context.call).toHaveBeenCalledTimes(2));
       expect(context.call.mock.calls.map(([text]) => text)).toEqual(['first request', 'second request']);
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(queuedFrame(context)).toContain('third request');
         expect(queuedFrame(context)).toContain('fourth request');
         expect(queuedFrame(context)).not.toContain('second request');
@@ -248,9 +261,9 @@ describe('manager TUI human approval', () => {
       expect(context.call).toHaveBeenCalledTimes(2);
 
       turns[1]!.reject(new Error('provider failed'));
-      await vi.waitFor(() => expect(context.call).toHaveBeenCalledTimes(3));
+      await waitFor(() => expect(context.call).toHaveBeenCalledTimes(3));
       expect(context.call.mock.calls.map(([text]) => text)).toEqual(['first request', 'second request', 'third request']);
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(context.app.lastFrame()).toContain('provider failed');
         expect(queuedFrame(context)).toContain('Queued messages: 1');
         expect(queuedFrame(context)).toContain('fourth request');
@@ -259,12 +272,14 @@ describe('manager TUI human approval', () => {
       expect(context.call).toHaveBeenCalledTimes(3);
 
       turns[2]!.resolve(response(null));
-      await vi.waitFor(() => expect(context.call).toHaveBeenCalledTimes(4));
+      await waitFor(() => expect(context.call).toHaveBeenCalledTimes(4));
       expect(context.call.mock.calls.map(([text]) => text)).toEqual(['first request', 'second request', 'third request', 'fourth request']);
       turns[3]!.resolve(response(null));
-      await vi.waitFor(() => expect(context.app.lastFrame()).not.toContain('Working'));
-      expect(queuedFrame(context)).toBeUndefined();
-      expect(context.call).toHaveBeenCalledTimes(4);
+      await waitFor(() => {
+        expect(context.app.lastFrame()).not.toContain('Working');
+        expect(queuedFrame(context)).toBeUndefined();
+        expect(context.call).toHaveBeenCalledTimes(4);
+      });
     } finally {
       context.app.unmount();
       for (const turn of turns) turn.resolve(response(null));
@@ -278,21 +293,28 @@ describe('manager TUI human approval', () => {
     context.call.mockReturnValueOnce(turn.promise).mockResolvedValue(response(null));
     try {
       await typeAndSubmit(context, 'first request');
-      await vi.waitFor(() => expect(context.call).toHaveBeenCalledOnce());
+      await waitFor(() => expect(context.call).toHaveBeenCalledOnce());
       const signal = context.call.mock.calls[0]![1].abortSignal!;
       await typeAndSubmit(context, 'discard second');
       await typeAndSubmit(context, 'discard third');
-      await vi.waitFor(() => expect(queuedFrame(context)).toContain('discard third'));
+      await waitFor(() => expect(queuedFrame(context)).toContain('discard third'));
 
       context.app.stdin.write('\x1b[27u');
-      await vi.waitFor(() => expect(signal.aborted).toBe(true));
+      await waitFor(() => expect(signal.aborted).toBe(true));
       expect(context.call).toHaveBeenCalledOnce();
       turn.resolve(response(null));
-      await vi.waitFor(() => expect(context.app.lastFrame()).toContain('Conversation interrupted'));
+      await waitFor(() => {
+        expect(context.app.lastFrame()).toContain('Conversation interrupted');
+        expect(context.app.lastFrame()).not.toContain('Working');
+        expect(queuedFrame(context)).toBeUndefined();
+      });
       await typeAndSubmit(context, 'fresh request');
-      await vi.waitFor(() => expect(context.app.lastFrame()).toContain('Please review the summary.'));
-      expect(context.call.mock.calls.map(([text]) => text)).toEqual(['first request', 'fresh request']);
-      expect(queuedFrame(context)).toBeUndefined();
+      await waitFor(() => {
+        expect(context.app.lastFrame()).toContain('Please review the summary.');
+        expect(context.app.lastFrame()).not.toContain('Working');
+        expect(context.call.mock.calls.map(([text]) => text)).toEqual(['first request', 'fresh request']);
+        expect(queuedFrame(context)).toBeUndefined();
+      });
     } finally {
       context.app.unmount();
       turn.resolve(response(null));
@@ -306,12 +328,12 @@ describe('manager TUI human approval', () => {
     context.call.mockReturnValueOnce(turn.promise);
     try {
       await typeAndSubmit(context, 'first request');
-      await vi.waitFor(() => expect(context.call).toHaveBeenCalledOnce());
+      await waitFor(() => expect(context.call).toHaveBeenCalledOnce());
       await typeAndSubmit(context, 'queued before exit');
-      await vi.waitFor(() => expect(queuedFrame(context)).toContain('queued before exit'));
+      await waitFor(() => expect(queuedFrame(context)).toContain('queued before exit'));
       const signal = context.call.mock.calls[0]![1].abortSignal!;
       context.app.stdin.write('\x03');
-      await vi.waitFor(() => expect(context.onExit).toHaveBeenCalledOnce());
+      await waitFor(() => expect(context.onExit).toHaveBeenCalledOnce());
       expect(signal.aborted).toBe(true);
       turn.resolve(response(null));
       await context.session.close();
@@ -329,21 +351,26 @@ describe('manager TUI human approval', () => {
     context.call.mockReturnValueOnce(turn.promise).mockResolvedValue(response(null));
     try {
       await typeAndSubmit(context, 'first request');
-      await vi.waitFor(() => expect(context.call).toHaveBeenCalledOnce());
+      await waitFor(() => expect(context.call).toHaveBeenCalledOnce());
       context.app.stdin.write('line one');
       context.app.stdin.write('\x1b[13;2u');
       context.app.stdin.write('line two');
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(promptFrame(context)).toContain('line one');
         expect(promptFrame(context)).toContain('line two');
       });
       expect(context.call).toHaveBeenCalledOnce();
       expect(queuedFrame(context)).toBeUndefined();
       turn.resolve(response(null));
-      await vi.waitFor(() => expect(context.app.lastFrame()).not.toContain('Working'));
+      await waitFor(() => expect(context.app.lastFrame()).not.toContain('Working'));
       context.app.stdin.write(ENTER);
-      await vi.waitFor(() => expect(context.call).toHaveBeenCalledTimes(2));
-      expect(context.call.mock.calls[1]![0]).toBe('line one\nline two');
+      await waitFor(() => {
+        expect(context.call).toHaveBeenCalledTimes(2);
+        expect(context.call.mock.calls[1]![0]).toBe('line one\nline two');
+        expect(context.app.lastFrame()).not.toContain('Working');
+        expect(queuedFrame(context)).toBeUndefined();
+        expect(promptFrame(context)).toContain('Discuss your goal');
+      });
     } finally {
       context.app.unmount();
       turn.resolve(response(null));
@@ -356,7 +383,7 @@ describe('manager TUI human approval', () => {
     context.call.mockResolvedValue(response(null));
     const text = LONG_TEXT;
     try {
-      await vi.waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
+      await waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
       if (delivery === 'separate chunks') {
         context.app.stdin.write(text);
         context.app.stdin.write(ENTER);
@@ -366,10 +393,14 @@ describe('manager TUI human approval', () => {
         context.app.stdin.write(ENTER);
       }
 
-      await vi.waitFor(() => expect(context.app.lastFrame()).toContain('末尾の確認'));
-      await vi.waitFor(() => expect(context.call).toHaveBeenCalledExactlyOnceWith(text, expect.any(Object)));
-      await vi.waitFor(() => expect(promptFrame(context)).toContain('Discuss your goal'));
-      expect(promptFrame(context)).not.toContain('末尾の確認');
+      await waitFor(() => {
+        expect(context.app.lastFrame()).toContain('末尾の確認');
+        expect(context.call).toHaveBeenCalledExactlyOnceWith(text, expect.any(Object));
+        expect(promptFrame(context)).toContain('Discuss your goal');
+        expect(promptFrame(context)).not.toContain('末尾の確認');
+        expect(queuedFrame(context)).toBeUndefined();
+        expect(context.app.lastFrame()).not.toContain('Working');
+      });
       context.app.stdin.write(ENTER);
       await context.session.close();
       expect(context.call).toHaveBeenCalledOnce();
@@ -387,7 +418,11 @@ describe('manager TUI human approval', () => {
     const text = `${'詳細な回答を保存してください。'.repeat(80)}回答の末尾`;
     try {
       await typeAndSubmit(context, `/answer ${target.question.id}`);
-      await vi.waitFor(() => expect(context.app.lastFrame()).toContain('Enter your answer'));
+      await waitFor(() => {
+        expect(context.app.lastFrame()).toContain('Enter your answer');
+        expect(context.app.lastFrame()).not.toContain('Working');
+        expect(queuedFrame(context)).toBeUndefined();
+      });
       if (delivery === 'separate chunks') {
         context.app.stdin.write(text);
         context.app.stdin.write(ENTER);
@@ -397,18 +432,22 @@ describe('manager TUI human approval', () => {
       } else if (delivery === 'one bracketed paste chunk') context.app.stdin.write(`\x1b[200~${text}\x1b[201~${ENTER}`);
       else {
         context.app.stdin.write(`${text}\r`);
-        await vi.waitFor(() => expect(promptFrame(context)).toContain('回答の末尾'));
+        await waitFor(() => expect(promptFrame(context)).toContain('回答の末尾'));
         expect(answer).not.toHaveBeenCalled();
         expect(context.call).not.toHaveBeenCalled();
         expect(queuedFrame(context)).toBeUndefined();
         context.app.stdin.write(ENTER);
       }
-      await vi.waitFor(() => expect(context.app.lastFrame()).toContain('回答の末尾'));
-      await vi.waitFor(() => expect(answer).toHaveBeenCalledExactlyOnceWith({
-        goalId: target.goalId, questionId: target.question.id, text, abortSignal: expect.any(AbortSignal),
-      }));
-      await vi.waitFor(() => expect(promptFrame(context)).toContain('Discuss your goal'));
-      expect(promptFrame(context)).not.toContain('回答の末尾');
+      await waitFor(() => {
+        expect(context.app.lastFrame()).toContain('回答の末尾');
+        expect(answer).toHaveBeenCalledExactlyOnceWith({
+          goalId: target.goalId, questionId: target.question.id, text, abortSignal: expect.any(AbortSignal),
+        });
+        expect(promptFrame(context)).toContain('Discuss your goal');
+        expect(promptFrame(context)).not.toContain('回答の末尾');
+        expect(queuedFrame(context)).toBeUndefined();
+        expect(context.app.lastFrame()).not.toContain('Working');
+      });
       expect(context.call).not.toHaveBeenCalled();
     } finally { context.app.unmount(); await context.session.close(); }
   });
@@ -417,17 +456,21 @@ describe('manager TUI human approval', () => {
     const context = mount();
     context.call.mockResolvedValue(response(null));
     try {
-      await vi.waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
+      await waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
       context.app.stdin.write(delivery === 'plain text without Enter' ? LONG_TEXT
         : delivery === 'unbracketed body containing CR' ? `${LONG_TEXT}\r` : `\x1b[200~${LONG_TEXT}\r\x1b[201~`);
-      await vi.waitFor(() => expect(promptFrame(context)).toContain('末尾の確認'));
+      await waitFor(() => expect(promptFrame(context)).toContain('末尾の確認'));
       expect(context.call).not.toHaveBeenCalled();
       expect(queuedFrame(context)).toBeUndefined();
 
       context.app.stdin.write(ENTER);
-      await vi.waitFor(() => expect(context.call).toHaveBeenCalledExactlyOnceWith(LONG_TEXT, expect.any(Object)));
-      await vi.waitFor(() => expect(promptFrame(context)).toContain('Discuss your goal'));
-      expect(promptFrame(context)).not.toContain('末尾の確認');
+      await waitFor(() => {
+        expect(context.call).toHaveBeenCalledExactlyOnceWith(LONG_TEXT, expect.any(Object));
+        expect(promptFrame(context)).toContain('Discuss your goal');
+        expect(promptFrame(context)).not.toContain('末尾の確認');
+        expect(queuedFrame(context)).toBeUndefined();
+        expect(context.app.lastFrame()).not.toContain('Working');
+      });
     } finally { context.app.unmount(); await context.session.close(); }
   });
 
@@ -435,16 +478,18 @@ describe('manager TUI human approval', () => {
     const context = mount();
     context.call.mockResolvedValue(response(null));
     try {
-      await vi.waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
+      await waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
       context.app.stdin.write('\x1b[200~確認\x1b[201~');
-      await vi.waitFor(() => expect(promptFrame(context)).toContain('確認'));
+      await waitFor(() => expect(promptFrame(context)).toContain('確認'));
       expect(context.call).not.toHaveBeenCalled();
       // 本文中の終了マーカーで貼り付けが閉じると、後続の単独CRはEnterと区別できない。
       context.app.stdin.write('してください');
       context.app.stdin.write('\r');
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(context.call).toHaveBeenCalledExactlyOnceWith('確認してください', expect.any(Object));
         expect(promptFrame(context)).toContain('Discuss your goal');
+        expect(queuedFrame(context)).toBeUndefined();
+        expect(context.app.lastFrame()).not.toContain('Working');
       });
       expect(promptFrame(context)).not.toContain('確認してください');
       context.app.stdin.write(ENTER);
@@ -458,15 +503,15 @@ describe('manager TUI human approval', () => {
     const pause = vi.spyOn(context.session, 'pauseGoal').mockResolvedValue({ kind: 'reply', message: 'Goal paused' });
     const command = `/pause ${goalRecord().id}`;
     try {
-      await vi.waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
+      await waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
       context.app.stdin.write(`${command}\r`);
-      await vi.waitFor(() => expect(promptFrame(context)).toContain(command));
+      await waitFor(() => expect(promptFrame(context)).toContain(command));
       expect(pause).not.toHaveBeenCalled();
       expect(context.call).not.toHaveBeenCalled();
       expect(queuedFrame(context)).toBeUndefined();
 
       context.app.stdin.write(ENTER);
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(promptFrame(context)).toContain('Discuss your goal');
         expect(context.app.lastFrame()).toContain('Goal paused');
         expect(context.app.lastFrame()).not.toContain('Working');
@@ -489,7 +534,7 @@ describe('manager TUI human approval', () => {
         if (state === 'turn') {
           context.call.mockImplementationOnce(async () => { await completion.promise; return response(null); });
           await typeAndSubmit(context, 'first request');
-          await vi.waitFor(() => expect(context.call).toHaveBeenCalledOnce());
+          await waitFor(() => expect(context.call).toHaveBeenCalledOnce());
         } else if (state === 'registration') {
           context.register.mockImplementationOnce(async ({ cwd: _cwd, ...input }) => {
             await completion.promise;
@@ -498,20 +543,20 @@ describe('manager TUI human approval', () => {
           await send(context, 'CSV出力を追加したい', summaryA);
           context.app.stdin.write(UP);
           context.app.stdin.write(ENTER);
-          await vi.waitFor(() => expect(context.register).toHaveBeenCalledOnce());
-        } else await vi.waitFor(() => expect(startup!.run).toHaveBeenCalledOnce());
+          await waitFor(() => expect(context.register).toHaveBeenCalledOnce());
+        } else await waitFor(() => expect(startup!.run).toHaveBeenCalledOnce());
         context.call.mockResolvedValue(response(null));
         const before = context.call.mock.calls.map(([text]) => text);
         const text = LONG_TEXT;
 
         context.app.stdin.write(`${LONG_TEXT}\r`);
-        await vi.waitFor(() => expect(promptFrame(context)).toContain('末尾の確認'));
+        await waitFor(() => expect(promptFrame(context)).toContain('末尾の確認'));
         expect(context.call.mock.calls.map(([text]) => text)).toEqual(before);
         expect(queuedFrame(context)).toBeUndefined();
 
         if (submitBeforeCompletion) {
           context.app.stdin.write(ENTER);
-          await vi.waitFor(() => {
+          await waitFor(() => {
             expect(queuedFrame(context)).toContain('Queued messages: 1');
             expect(queuedFrame(context)).toContain('末尾の確認');
             expect(promptFrame(context)).toContain('Discuss your goal');
@@ -521,19 +566,19 @@ describe('manager TUI human approval', () => {
 
         completion.resolve();
         if (!submitBeforeCompletion) {
-          await vi.waitFor(() => expect(context.app.lastFrame()).not.toContain('Working'));
+          await waitFor(() => expect(context.app.lastFrame()).not.toContain('Working'));
           expect(promptFrame(context)).toContain('末尾の確認');
           expect(queuedFrame(context)).toBeUndefined();
           expect(context.call.mock.calls.map(([text]) => text)).toEqual(before);
           context.app.stdin.write(ENTER);
         }
-        await vi.waitFor(() => {
+        await waitFor(() => {
           expect(context.call.mock.calls.map(([prompt]) => prompt)).toEqual([...before, text]);
           expect(context.app.lastFrame()).not.toContain('Working');
           expect(promptFrame(context)).toContain('Discuss your goal');
+          expect(queuedFrame(context)).toBeUndefined();
+          expect(promptFrame(context)).not.toContain('末尾の確認');
         });
-        expect(queuedFrame(context)).toBeUndefined();
-        expect(promptFrame(context)).not.toContain('末尾の確認');
         expect(context.call).toHaveBeenCalledTimes(before.length + 1);
       } finally {
         context.app.unmount();
@@ -551,17 +596,21 @@ describe('manager TUI human approval', () => {
       context.call.mockResolvedValue(response(null));
       if (delivery === 'one unbracketed chunk') {
         context.app.stdin.write(`${LONG_TEXT}${ENTER}`);
-        await vi.waitFor(() => expect(promptFrame(context)).toContain('末尾の確認'));
+        await waitFor(() => expect(promptFrame(context)).toContain('末尾の確認'));
         expect(context.call).toHaveBeenCalledOnce();
         expect(context.register).not.toHaveBeenCalled();
         expect(queuedFrame(context)).toBeUndefined();
         context.app.stdin.write(ENTER);
       } else context.app.stdin.write(`\x1b[200~${LONG_TEXT}\r\x1b[201~${ENTER}`);
 
-      await vi.waitFor(() => expect(context.call.mock.calls.map(([text]) => text)).toEqual(['CSV出力を追加したい', LONG_TEXT]));
-      await vi.waitFor(() => expect(promptFrame(context)).toContain('Discuss your goal'));
-      expect(promptFrame(context)).not.toContain('末尾の確認');
-      expect(context.session.getPendingSummary()).toBeNull();
+      await waitFor(() => {
+        expect(context.call.mock.calls.map(([text]) => text)).toEqual(['CSV出力を追加したい', LONG_TEXT]);
+        expect(promptFrame(context)).toContain('Discuss your goal');
+        expect(promptFrame(context)).not.toContain('末尾の確認');
+        expect(context.session.getPendingSummary()).toBeNull();
+        expect(queuedFrame(context)).toBeUndefined();
+        expect(context.app.lastFrame()).not.toContain('Working');
+      });
       expect(context.register).not.toHaveBeenCalled();
     } finally { context.app.unmount(); await context.session.close(); }
   });
@@ -571,7 +620,11 @@ describe('manager TUI human approval', () => {
     const abort = vi.spyOn(context.session, 'abortGoal').mockResolvedValue({ kind: 'reply', message: 'Goal aborted' });
     try {
       await typeAndSubmit(context, `/abort ${goalRecord().id}`);
-      await vi.waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.abortConfirmation', 'en')));
+      await waitFor(() => {
+        expect(context.app.lastFrame()).toContain(getLabel('manager.abortConfirmation', 'en'));
+        expect(context.app.lastFrame()).not.toContain('Working');
+        expect(queuedFrame(context)).toBeUndefined();
+      });
       context.app.stdin.write(UP);
       context.app.stdin.write(delivery === 'one unbracketed chunk' ? `${LONG_TEXT}${ENTER}` : `\x1b[200~${LONG_TEXT}\r\x1b[201~`);
       await new Promise<void>((resolve) => setImmediate(resolve));
@@ -582,7 +635,12 @@ describe('manager TUI human approval', () => {
       expect(promptFrame(context)).not.toContain('末尾の確認');
 
       context.app.stdin.write(ENTER);
-      await vi.waitFor(() => expect(abort).toHaveBeenCalledExactlyOnceWith({ goalId: goalRecord().id, abortSignal: expect.any(AbortSignal) }));
+      await waitFor(() => {
+        expect(abort).toHaveBeenCalledExactlyOnceWith({ goalId: goalRecord().id, abortSignal: expect.any(AbortSignal) });
+        expect(context.app.lastFrame()).toContain('Goal aborted');
+        expect(context.app.lastFrame()).not.toContain(getLabel('manager.abortConfirmation', 'en'));
+        expect(context.app.lastFrame()).not.toContain('Working');
+      });
       expect(context.call).not.toHaveBeenCalled();
     } finally { context.app.unmount(); await context.session.close(); }
   });
@@ -597,25 +655,34 @@ describe('manager TUI human approval', () => {
     const answer = vi.spyOn(context.session, 'answerQuestion').mockResolvedValue({ kind: 'reply', message: 'Answer saved' });
     try {
       await typeAndSubmit(context, `/answer ${target.question.id}`);
-      await vi.waitFor(() => expect(context.app.lastFrame()).toContain('Free text'));
+      await waitFor(() => {
+        expect(context.app.lastFrame()).toContain('Free text');
+        expect(context.app.lastFrame()).not.toContain('Working');
+        expect(queuedFrame(context)).toBeUndefined();
+      });
       if (delivery === 'selected option') context.app.stdin.write(ENTER);
       else {
         context.app.stdin.write(delivery === 'plain text without Enter' ? LONG_TEXT
           : delivery === 'one unbracketed chunk' ? `${LONG_TEXT}\r`
             : `\x1b[200~${LONG_TEXT}\r\x1b[201~`);
-        await vi.waitFor(() => expect(promptFrame(context)).toContain('末尾の確認'));
+        await waitFor(() => expect(promptFrame(context)).toContain('末尾の確認'));
         expect(answer).not.toHaveBeenCalled();
         expect(context.call).not.toHaveBeenCalled();
         context.app.stdin.write(ENTER);
       }
 
-      await vi.waitFor(() => expect(answer).toHaveBeenCalledExactlyOnceWith({
-        goalId: target.goalId, questionId: target.question.id,
-        text: delivery === 'selected option' ? 'CSV' : LONG_TEXT,
-        abortSignal: expect.any(AbortSignal),
-      }));
-      await vi.waitFor(() => expect(promptFrame(context)).toContain('Discuss your goal'));
-      expect(promptFrame(context)).not.toContain('末尾の確認');
+      await waitFor(() => {
+        expect(answer).toHaveBeenCalledExactlyOnceWith({
+          goalId: target.goalId, questionId: target.question.id,
+          text: delivery === 'selected option' ? 'CSV' : LONG_TEXT,
+          abortSignal: expect.any(AbortSignal),
+        });
+        expect(promptFrame(context)).toContain('Discuss your goal');
+        expect(promptFrame(context)).not.toContain('末尾の確認');
+        expect(context.app.lastFrame()).toContain('Answer saved');
+        expect(context.app.lastFrame()).not.toContain('Working');
+        expect(queuedFrame(context)).toBeUndefined();
+      });
       expect(context.call).not.toHaveBeenCalled();
     } finally { context.app.unmount(); await context.session.close(); }
   });
@@ -634,14 +701,23 @@ describe('manager TUI human approval', () => {
     const command = selection === 'abort' ? `/abort ${target.goalId}` : `/answer ${target.question.id}`;
     try {
       await typeAndSubmit(context, 'first request');
-      await vi.waitFor(() => expect(context.call).toHaveBeenCalledOnce());
+      await waitFor(() => expect(context.call).toHaveBeenCalledOnce());
       await typeAndSubmit(context, command);
       await typeAndSubmit(context, 'continue after selection');
+      await waitFor(() => {
+        expect(queuedFrame(context)).toContain('Queued messages: 2');
+        expect(queuedFrame(context)).toContain(command);
+        expect(queuedFrame(context)).toContain('continue after selection');
+        expect(promptFrame(context)).toContain('Discuss your goal');
+      });
       turn.resolve(response(null));
-      await vi.waitFor(() => {
+      await waitFor(() => {
         const frame = context.app.lastFrame()!.replace(/[│\s]+/gu, ' ');
         expect(frame).toContain(selection === 'abort' ? getLabel('manager.abortWarning', 'en') : 'Free text');
         expect(queuedFrame(context)).toContain('continue after selection');
+        expect(queuedFrame(context)).toContain('Queued messages: 1');
+        expect(context.app.lastFrame()).not.toContain('Working');
+        expect(context.call).toHaveBeenCalledOnce();
       });
       expect(context.call).toHaveBeenCalledOnce();
       expect(abort).not.toHaveBeenCalled();
@@ -649,7 +725,7 @@ describe('manager TUI human approval', () => {
 
       context.app.stdin.write(selection === 'abort' ? UP : '\x1b[B');
       context.app.stdin.write(ENTER);
-      await vi.waitFor(() => {
+      await waitFor(() => {
         if (selection === 'abort') {
           expect(abort).toHaveBeenCalledExactlyOnceWith({ goalId: target.goalId, abortSignal: expect.any(AbortSignal) });
           expect(answer).not.toHaveBeenCalled();
@@ -658,8 +734,10 @@ describe('manager TUI human approval', () => {
           expect(abort).not.toHaveBeenCalled();
         }
         expect(context.call).toHaveBeenCalledTimes(2);
+        expect(context.call.mock.calls.map(([text]) => text)).toEqual(['first request', 'continue after selection']);
+        expect(queuedFrame(context)).toBeUndefined();
+        expect(context.app.lastFrame()).not.toContain('Working');
       });
-      expect(context.call.mock.calls.map(([text]) => text)).toEqual(['first request', 'continue after selection']);
     } finally {
       context.app.unmount();
       turn.resolve(response(null));
@@ -679,7 +757,7 @@ describe('manager TUI human approval', () => {
       }
       await vi.advanceTimersByTimeAsync(400);
       context.app.stdin.write(ENTER);
-      await vi.waitFor(() => expect(context.register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cwd, ...summaryA })));
+      await waitFor(() => expect(context.register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cwd, ...summaryA })));
       expect(context.call).toHaveBeenCalledOnce();
     } finally { context.app.unmount(); vi.useRealTimers(); await context.session.close(); }
   });
@@ -691,18 +769,32 @@ describe('manager TUI human approval', () => {
     const abort = vi.spyOn(context.session, 'abortGoal');
     try {
       await typeAndSubmit(context, 'first request');
-      await vi.waitFor(() => expect(context.call).toHaveBeenCalledOnce());
+      await waitFor(() => expect(context.call).toHaveBeenCalledOnce());
       await typeAndSubmit(context, `/abort ${goalRecord().id}`);
       await typeAndSubmit(context, 'conversation after cancellation');
+      await waitFor(() => {
+        expect(queuedFrame(context)).toContain('Queued messages: 2');
+        expect(queuedFrame(context)).toContain(`/abort ${goalRecord().id}`);
+        expect(queuedFrame(context)).toContain('conversation after cancellation');
+        expect(promptFrame(context)).toContain('Discuss your goal');
+      });
       turn.resolve(response(null));
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(context.app.lastFrame()).toContain(getLabel('manager.abortConfirmation', 'en'));
         expect(queuedFrame(context)).toContain('conversation after cancellation');
+        expect(queuedFrame(context)).toContain('Queued messages: 1');
+        expect(context.app.lastFrame()).not.toContain('Working');
+        expect(context.call).toHaveBeenCalledOnce();
       });
       expect(context.call).toHaveBeenCalledOnce();
       context.app.stdin.write(key);
-      await vi.waitFor(() => expect(context.call).toHaveBeenCalledTimes(2));
-      expect(context.call.mock.calls.map(([text]) => text)).toEqual(['first request', 'conversation after cancellation']);
+      await waitFor(() => {
+        expect(context.call).toHaveBeenCalledTimes(2);
+        expect(context.call.mock.calls.map(([text]) => text)).toEqual(['first request', 'conversation after cancellation']);
+        expect(queuedFrame(context)).toBeUndefined();
+        expect(context.app.lastFrame()).not.toContain('Working');
+        expect(context.app.lastFrame()).not.toContain(getLabel('manager.abortConfirmation', 'en'));
+      });
       expect(abort).not.toHaveBeenCalled();
     } finally {
       context.app.unmount();
@@ -716,7 +808,7 @@ describe('manager TUI human approval', () => {
     const readEvents = vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue(emptySnapshot);
     const context = mount();
     try {
-      await vi.waitFor(() => expect(readEvents).toHaveBeenCalledOnce());
+      await waitFor(() => expect(readEvents).toHaveBeenCalledOnce());
       vi.useFakeTimers();
       context.call.mockImplementationOnce(async () => {
         readEvents.mockImplementationOnce(() => new Promise((resolve) => {
@@ -729,7 +821,7 @@ describe('manager TUI human approval', () => {
       context.app.stdin.write(UP);
       await vi.advanceTimersByTimeAsync(400);
       context.app.stdin.write(ENTER);
-      await vi.waitFor(() => expect(context.register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cwd, ...summaryA })));
+      await waitFor(() => expect(context.register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cwd, ...summaryA })));
       expect(context.call).toHaveBeenCalledOnce();
     } finally {
       context.app.unmount();
@@ -747,9 +839,9 @@ describe('manager TUI human approval', () => {
       await send(context, 'CSV出力を追加したい', summaryA);
       context.app.stdin.write(UP);
       context.app.stdin.write(ENTER);
-      await vi.waitFor(() => expect(context.register).toHaveBeenCalledOnce());
+      await waitFor(() => expect(context.register).toHaveBeenCalledOnce());
       context.app.stdin.write('\x03');
-      await vi.waitFor(() => expect(context.onExit).toHaveBeenCalledOnce());
+      await waitFor(() => expect(context.onExit).toHaveBeenCalledOnce());
       registration.resolve(goalRecord());
       await context.session.close();
       expect(context.call).toHaveBeenCalledOnce();
@@ -768,9 +860,9 @@ describe('manager TUI human approval', () => {
     try {
       const context = mount('en', startup);
       try {
-        await vi.waitFor(() => expect(startup.run).toHaveBeenCalledOnce());
+        await waitFor(() => expect(startup.run).toHaveBeenCalledOnce());
         context.app.stdin.write('recovery draft');
-        await vi.waitFor(() => {
+        await waitFor(() => {
           const frame = context.app.lastFrame()!;
           const prompt = frame.slice(frame.lastIndexOf('╭'));
           expect(stripVTControlCharacters(frame)).toContain('Working');
@@ -778,7 +870,7 @@ describe('manager TUI human approval', () => {
           expect(prompt).toContain('recovery draft\x1b[7m \x1b[27m');
         });
         context.app.stdin.write('\x1b[D');
-        await vi.waitFor(() => {
+        await waitFor(() => {
           const frame = context.app.lastFrame()!;
           const prompt = frame.slice(frame.lastIndexOf('╭'));
           expect(stripVTControlCharacters(frame)).toContain('Working');
@@ -787,14 +879,14 @@ describe('manager TUI human approval', () => {
         });
         expect(context.call).not.toHaveBeenCalled();
         recovery.resolve(['recovery complete']);
-        await vi.waitFor(() => {
+        await waitFor(() => {
           const frame = context.app.lastFrame()!;
           expect(stripVTControlCharacters(frame)).toContain('recovery complete');
           expect(stripVTControlCharacters(frame)).not.toContain('Working');
           expect(stripVTControlCharacters(frame.slice(frame.lastIndexOf('╭')))).toContain('recovery draft');
         });
         context.app.stdin.write(ENTER);
-        await vi.waitFor(() => expect(context.call).toHaveBeenCalledExactlyOnceWith('recovery draft', expect.any(Object)));
+        await waitFor(() => expect(context.call).toHaveBeenCalledExactlyOnceWith('recovery draft', expect.any(Object)));
       } finally {
         context.app.unmount();
         recovery.resolve([]);
@@ -812,13 +904,13 @@ describe('manager TUI human approval', () => {
     const context = mount('en', startup);
     context.call.mockReturnValueOnce(turn.promise).mockResolvedValue(response(null));
     try {
-      await vi.waitFor(() => expect(startup.run).toHaveBeenCalledOnce());
+      await waitFor(() => expect(startup.run).toHaveBeenCalledOnce());
       context.app.stdin.write('first startup request');
       context.app.stdin.write(ENTER);
       context.app.stdin.write('second startup request');
       context.app.stdin.write(ENTER);
       context.app.stdin.write('startup draft');
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(queuedFrame(context)).toContain('first startup request');
         expect(queuedFrame(context)).toContain('second startup request');
         expect(queuedFrame(context)).toMatch(/Queued messages: 2/u);
@@ -826,13 +918,15 @@ describe('manager TUI human approval', () => {
       });
       expect(context.call).not.toHaveBeenCalled();
       recovery.resolve([]);
-      await vi.waitFor(() => expect(context.call).toHaveBeenCalledExactlyOnceWith('first startup request', expect.any(Object)));
+      await waitFor(() => expect(context.call).toHaveBeenCalledExactlyOnceWith('first startup request', expect.any(Object)));
       turn.resolve(response(null));
-      await vi.waitFor(() => expect(context.call).toHaveBeenCalledTimes(2));
-      expect(context.call.mock.calls.map(([text]) => text)).toEqual(['first startup request', 'second startup request']);
-      await vi.waitFor(() => expect(context.app.lastFrame()).not.toContain('Working'));
-      expect(promptFrame(context)).toContain('startup draft');
-      expect(queuedFrame(context)).toBeUndefined();
+      await waitFor(() => {
+        expect(context.call).toHaveBeenCalledTimes(2);
+        expect(context.call.mock.calls.map(([text]) => text)).toEqual(['first startup request', 'second startup request']);
+        expect(context.app.lastFrame()).not.toContain('Working');
+        expect(promptFrame(context)).toContain('startup draft');
+        expect(queuedFrame(context)).toBeUndefined();
+      });
     } finally {
       context.app.unmount();
       recovery.resolve([]);
@@ -847,12 +941,12 @@ describe('manager TUI human approval', () => {
     const startup = { run: vi.fn(async () => { await recovery.promise; throw failure; }), fail: vi.fn() };
     const context = mount('en', startup);
     try {
-      await vi.waitFor(() => expect(startup.run).toHaveBeenCalledOnce());
+      await waitFor(() => expect(startup.run).toHaveBeenCalledOnce());
       await typeAndSubmit(context, 'queued before startup failure');
-      await vi.waitFor(() => expect(queuedFrame(context)).toContain('queued before startup failure'));
+      await waitFor(() => expect(queuedFrame(context)).toContain('queued before startup failure'));
       recovery.resolve([]);
-      await vi.waitFor(() => expect(startup.fail).toHaveBeenCalledExactlyOnceWith(failure));
-      await vi.waitFor(() => expect(queuedFrame(context)).toBeUndefined());
+      await waitFor(() => expect(startup.fail).toHaveBeenCalledExactlyOnceWith(failure));
+      await waitFor(() => expect(queuedFrame(context)).toBeUndefined());
       context.app.stdin.write('after failure');
       context.app.stdin.write(ENTER);
       await context.session.close();
@@ -871,10 +965,10 @@ describe('manager TUI human approval', () => {
     const context = mount('en', startup);
     context.call.mockResolvedValue(response(null));
     try {
-      await vi.waitFor(() => expect(startupDoubles.flush).toHaveBeenCalledOnce());
+      await waitFor(() => expect(startupDoubles.flush).toHaveBeenCalledOnce());
       for (const text of ['first startup request', 'second startup request']) {
         await typeAndSubmit(context, text);
-        await vi.waitFor(() => expect(queuedFrame(context)).toContain(text));
+        await waitFor(() => expect(queuedFrame(context)).toContain(text));
       }
       expect(queuedFrame(context)).toContain('Queued messages: 2');
       expect(startup.run).not.toHaveBeenCalled();
@@ -882,12 +976,12 @@ describe('manager TUI human approval', () => {
 
       if (interrupt) {
         context.app.stdin.write('\x1b[27u');
-        await vi.waitFor(() => expect(queuedFrame(context)).toBeUndefined());
+        await waitFor(() => expect(queuedFrame(context)).toBeUndefined());
         expect(context.app.lastFrame()).toContain('Working');
       }
       expect(context.onExit).not.toHaveBeenCalled();
       flush.resolve();
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(startup.run).toHaveBeenCalledTimes(interrupt ? 0 : 1);
         expect(context.call.mock.calls.map(([text]) => text)).toEqual(interrupt
           ? [] : ['first startup request', 'second startup request']);
@@ -909,18 +1003,18 @@ describe('manager TUI human approval', () => {
     const context = mount('en', startup);
     context.call.mockResolvedValue(response(null));
     try {
-      await vi.waitFor(() => expect(startup.run).toHaveBeenCalledOnce());
+      await waitFor(() => expect(startup.run).toHaveBeenCalledOnce());
       const signal = startup.run.mock.calls[0]![0];
       for (const text of ['first startup request', 'second startup request']) {
         await typeAndSubmit(context, text);
-        await vi.waitFor(() => expect(queuedFrame(context)).toContain(text));
+        await waitFor(() => expect(queuedFrame(context)).toContain(text));
       }
       expect(queuedFrame(context)).toContain('Queued messages: 2');
       expect(context.call).not.toHaveBeenCalled();
 
       if (interrupt) {
         context.app.stdin.write('\x1b[27u');
-        await vi.waitFor(() => {
+        await waitFor(() => {
           expect(signal.aborted).toBe(true);
           expect(queuedFrame(context)).toBeUndefined();
         });
@@ -928,7 +1022,7 @@ describe('manager TUI human approval', () => {
       } else expect(signal.aborted).toBe(false);
       expect(context.onExit).not.toHaveBeenCalled();
       recovery.resolve(['late recovery diagnostic']);
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(context.call.mock.calls.map(([text]) => text)).toEqual(interrupt
           ? [] : ['first startup request', 'second startup request']);
         expect(queuedFrame(context)).toBeUndefined();
@@ -941,11 +1035,11 @@ describe('manager TUI human approval', () => {
 
       if (interrupt) {
         await typeAndSubmit(context, 'fresh request');
-        await vi.waitFor(() => {
+        await waitFor(() => {
           expect(context.call.mock.calls.map(([text]) => text)).toEqual(['fresh request']);
           expect(context.app.lastFrame()).not.toContain('Working');
+          expect(queuedFrame(context)).toBeUndefined();
         });
-        expect(queuedFrame(context)).toBeUndefined();
       }
     } finally {
       context.app.unmount();
@@ -960,15 +1054,15 @@ describe('manager TUI human approval', () => {
     const startup = { run: vi.fn((_signal: AbortSignal) => recovery.promise), fail: vi.fn() };
     const context = mount('en', startup);
     try {
-      await vi.waitFor(() => expect(startup.run).toHaveBeenCalledOnce());
+      await waitFor(() => expect(startup.run).toHaveBeenCalledOnce());
       const signal = startup.run.mock.calls[0]![0];
       await typeAndSubmit(context, 'queued before startup failure');
-      await vi.waitFor(() => expect(queuedFrame(context)).toContain('queued before startup failure'));
+      await waitFor(() => expect(queuedFrame(context)).toContain('queued before startup failure'));
       expect(context.call).not.toHaveBeenCalled();
 
       if (interrupt) {
         context.app.stdin.write('\x1b[27u');
-        await vi.waitFor(() => {
+        await waitFor(() => {
           expect(signal.aborted).toBe(true);
           expect(queuedFrame(context)).toBeUndefined();
         });
@@ -976,7 +1070,7 @@ describe('manager TUI human approval', () => {
       } else expect(signal.aborted).toBe(false);
       expect(context.onExit).not.toHaveBeenCalled();
       recovery.reject(failure);
-      await vi.waitFor(() => expect(context.app.lastFrame()).not.toContain('Working'));
+      await waitFor(() => expect(context.app.lastFrame()).not.toContain('Working'));
 
       if (interrupt) expect(startup.fail).not.toHaveBeenCalled();
       else expect(startup.fail).toHaveBeenCalledExactlyOnceWith(failure);
@@ -998,19 +1092,22 @@ describe('manager TUI human approval', () => {
       await send(context, 'CSV出力を追加したい', summaryA);
       context.app.stdin.write(UP);
       context.app.stdin.write(ENTER);
-      await vi.waitFor(() => expect(context.register).toHaveBeenCalledOnce());
+      await waitFor(() => expect(context.register).toHaveBeenCalledOnce());
       await typeAndSubmit(context, 'conversation after registration');
       context.app.stdin.write('registration draft');
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(queuedFrame(context)).toContain('conversation after registration');
         expect(promptFrame(context)).toContain('registration draft');
       });
       expect(context.call).toHaveBeenCalledOnce();
       registration.resolve(goalRecord());
-      await vi.waitFor(() => expect(context.call).toHaveBeenCalledTimes(2));
-      expect(context.call.mock.calls[1]![0]).toBe('conversation after registration');
-      await vi.waitFor(() => expect(context.app.lastFrame()).not.toContain('Working'));
-      expect(promptFrame(context)).toContain('registration draft');
+      await waitFor(() => {
+        expect(context.call).toHaveBeenCalledTimes(2);
+        expect(context.call.mock.calls[1]![0]).toBe('conversation after registration');
+        expect(context.app.lastFrame()).not.toContain('Working');
+        expect(promptFrame(context)).toContain('registration draft');
+        expect(queuedFrame(context)).toBeUndefined();
+      });
       expect(context.register).toHaveBeenCalledOnce();
     } finally {
       context.app.unmount();
@@ -1029,14 +1126,19 @@ describe('manager TUI human approval', () => {
     const context = mount();
     vi.spyOn(context.session, 'getAssignment').mockImplementation(async () => structuredClone(assignment));
     try {
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(context.app.lastFrame()).toContain('Original workspace');
         expect(context.app.lastFrame()).toContain('Original question');
         expect(context.app.lastFrame()).toContain('Original paused goal');
       });
       const beforePolls = readEvents.mock.calls.length;
       const beforeCommits = context.commits.mock.calls.length;
-      await vi.waitFor(() => expect(readEvents.mock.calls.length).toBeGreaterThanOrEqual(beforePolls + 2), { timeout: 2000 });
+      await waitFor(() => {
+        expect(readEvents.mock.calls.length).toBeGreaterThanOrEqual(beforePolls + 2);
+        expect(context.app.lastFrame()).toContain('Original workspace');
+        expect(context.app.lastFrame()).toContain('Original question');
+        expect(context.app.lastFrame()).toContain('Original paused goal');
+      });
       expect.soft(context.commits).toHaveBeenCalledTimes(beforeCommits);
 
       if (field === 'assignment') assignment = { ...assignment, name: 'Changed workspace' };
@@ -1044,13 +1146,17 @@ describe('manager TUI human approval', () => {
       else snapshot = { ...snapshot, goals: [{ ...snapshot.goals[0]!, objective: 'Changed paused goal' }] };
       const changed = field === 'assignment' ? 'Changed workspace' : field === 'questions' ? 'Changed question' : 'Changed paused goal';
       const original = field === 'assignment' ? 'Original workspace' : field === 'questions' ? 'Original question' : 'Original paused goal';
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(context.app.lastFrame()).toContain(changed);
         expect(context.app.lastFrame()).not.toContain(original);
-      }, { timeout: 2000 });
+      });
       const afterChange = context.commits.mock.calls.length;
       const afterPolls = readEvents.mock.calls.length;
-      await vi.waitFor(() => expect(readEvents.mock.calls.length).toBeGreaterThanOrEqual(afterPolls + 2), { timeout: 2000 });
+      await waitFor(() => {
+        expect(readEvents.mock.calls.length).toBeGreaterThanOrEqual(afterPolls + 2);
+        expect(context.app.lastFrame()).toContain(changed);
+        expect(context.app.lastFrame()).not.toContain(original);
+      });
       expect.soft(context.commits).toHaveBeenCalledTimes(afterChange);
       expect(context.call).not.toHaveBeenCalled();
     } finally { context.app.unmount(); await context.session.close(); }
@@ -1060,19 +1166,23 @@ describe('manager TUI human approval', () => {
     const readEvents = vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockRejectedValue(new Error('refresh error A'));
     const context = mount();
     try {
-      await vi.waitFor(() => expect(readEvents.mock.calls.length).toBeGreaterThanOrEqual(3), { timeout: 2500 });
-      expect(context.app.lastFrame()?.match(/refresh error A/gu)).toHaveLength(1);
+      await waitFor(() => {
+        expect(readEvents.mock.calls.length).toBeGreaterThanOrEqual(3);
+        expect(context.app.lastFrame()?.match(/refresh error A/gu)).toHaveLength(1);
+      });
 
       readEvents.mockRejectedValue(new Error('refresh error B'));
       const beforeChange = readEvents.mock.calls.length;
-      await vi.waitFor(() => expect(readEvents.mock.calls.length).toBeGreaterThanOrEqual(beforeChange + 2), { timeout: 2000 });
-      await vi.waitFor(() => expect(context.app.lastFrame()?.match(/refresh error B/gu)).toHaveLength(1));
+      await waitFor(() => {
+        expect(readEvents.mock.calls.length).toBeGreaterThanOrEqual(beforeChange + 2);
+        expect(context.app.lastFrame()?.match(/refresh error B/gu)).toHaveLength(1);
+      });
 
       readEvents.mockResolvedValue({ events: [], diagnostics: [], questions: [], goals: [] });
       const beforeRecovery = readEvents.mock.calls.length;
-      await vi.waitFor(() => expect(readEvents.mock.calls.length).toBeGreaterThan(beforeRecovery));
+      await waitFor(() => expect(readEvents.mock.calls.length).toBeGreaterThan(beforeRecovery));
       readEvents.mockRejectedValue(new Error('refresh error A'));
-      await vi.waitFor(() => expect(context.app.lastFrame()?.match(/refresh error A/gu)).toHaveLength(2));
+      await waitFor(() => expect(context.app.lastFrame()?.match(/refresh error A/gu)).toHaveLength(2));
       expect(context.call).not.toHaveBeenCalled();
       expect(failureNotice).not.toHaveBeenCalled();
     } finally { context.app.unmount(); await context.session.close(); }
@@ -1090,7 +1200,7 @@ describe('manager TUI human approval', () => {
     const readEvents = vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], questions: [], goals: [] });
     const context = mount('en', undefined, repository);
     try {
-      await vi.waitFor(() => expect(readEvents).toHaveBeenCalledWith(cwd, 'en'));
+      await waitFor(() => expect(readEvents).toHaveBeenCalledWith(cwd, 'en'));
       context.call.mockImplementationOnce(async (_prompt, options) => {
         options.onStream?.({ type: 'tool_use', data: { id: 'add-b', tool: 'takt_add_workspace_repository', input: { repositoryDirectory: repositoryB } } });
         savedWorkspace = workspace;
@@ -1100,9 +1210,9 @@ describe('manager TUI human approval', () => {
         return response(null);
       });
       context.app.stdin.write('add B and remove A');
-      await vi.waitFor(() => expect(context.app.lastFrame()).toContain('add B and remove A'));
+      await waitFor(() => expect(promptFrame(context)).toContain('add B and remove A'));
       context.app.stdin.write(ENTER);
-      await vi.waitFor(() => expect(context.app.lastFrame()).toContain('A + B (1)'));
+      await waitFor(() => expect(context.app.lastFrame()).toContain('A + B (1)'));
       expect(readEvents).toHaveBeenCalledWith(repositoryB, 'en');
       expect(readEvents.mock.calls.every(([directory, language]) => directory === repositoryB && language === 'en')).toBe(true);
       expect(await context.session.getAssignment()).toMatchObject({ kind: 'workspace', workspaceId: workspace.id, repositoryDirectories: [repositoryB] });
@@ -1124,7 +1234,7 @@ describe('manager TUI human approval', () => {
     it('shows both notices on every startup without calling the provider', async () => {
       for (let startup = 0; startup < 2; startup++) {
         const context = mount(lang);
-        await vi.waitFor(() => expectNotices(context.app.lastFrame()));
+        await waitFor(() => expectNotices(context.app.lastFrame()));
         expect(context.call).not.toHaveBeenCalled();
         expect(context.register).not.toHaveBeenCalled();
         context.app.unmount();
@@ -1144,23 +1254,27 @@ describe('manager TUI human approval', () => {
       };
       const context = mount(lang, startup);
       try {
-        await vi.waitFor(() => {
+        await waitFor(() => {
           expectNotices(context.app.lastFrame());
           expect(startupDoubles.flush).toHaveBeenCalledTimes(1);
         });
         expect(startup.run).not.toHaveBeenCalled();
         context.app.stdin.write('startup draft');
-        await vi.waitFor(() => expect(promptFrame(context)).toContain('startup draft'));
+        await waitFor(() => expect(promptFrame(context)).toContain('startup draft'));
         expect(context.call).not.toHaveBeenCalled();
 
         finishFlush();
-        await vi.waitFor(() => expect(context.app.lastFrame()).toContain('startup diagnostic'));
+        await waitFor(() => {
+          expect(context.app.lastFrame()).toContain('startup diagnostic');
+          expect(context.app.lastFrame()).not.toContain(lang === 'ja' ? '処理中' : 'Working');
+          expect(promptFrame(context)).toContain('startup draft');
+        });
         expect(startup.run).toHaveBeenCalledTimes(1);
         expect(startup.fail).not.toHaveBeenCalled();
         expect(context.call).not.toHaveBeenCalled();
         expect(promptFrame(context)).toContain('startup draft');
         context.app.stdin.write(ENTER);
-        await vi.waitFor(() => expect(context.session.getPendingSummary()?.summary).toEqual(summaryA));
+        await waitFor(() => expect(context.session.getPendingSummary()?.summary).toEqual(summaryA));
         expect(context.call).toHaveBeenCalledExactlyOnceWith('startup draft', expect.any(Object));
         expectNotices(context.app.lastFrame());
         expect(startup.run).toHaveBeenCalledTimes(1);
@@ -1178,7 +1292,7 @@ describe('manager TUI human approval', () => {
       else startup.run.mockRejectedValueOnce(failure);
       const context = mount(lang, startup);
 
-      await vi.waitFor(() => expect(startup.fail).toHaveBeenCalledExactlyOnceWith(failure));
+      await waitFor(() => expect(startup.fail).toHaveBeenCalledExactlyOnceWith(failure));
       expect(startup.run).toHaveBeenCalledTimes(source === 'flush' ? 0 : 1);
       expect(context.call).not.toHaveBeenCalled();
       await context.session.close();
@@ -1189,12 +1303,12 @@ describe('manager TUI human approval', () => {
       startupDoubles.flush.mockReturnValueOnce(new Promise<void>((resolve) => { finishFlush = resolve; }));
       const startup = { run: vi.fn(async (_signal: AbortSignal) => [] as string[]), fail: vi.fn() };
       const context = mount(lang, startup);
-      await vi.waitFor(() => expect(startupDoubles.flush).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(startupDoubles.flush).toHaveBeenCalledTimes(1));
 
       context.app.stdin.write('ignored');
       context.app.stdin.write(ENTER);
       context.app.stdin.write('\x03');
-      await vi.waitFor(() => expect(context.onExit).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(context.onExit).toHaveBeenCalledTimes(1));
       finishFlush();
       await startupDoubles.flush.mock.results[0]!.value;
 
@@ -1216,14 +1330,14 @@ describe('manager TUI human approval', () => {
         fail: vi.fn(),
       };
       const context = mount(lang, startup);
-      await vi.waitFor(() => expect(startup.run).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(startup.run).toHaveBeenCalledTimes(1));
       const signal = startup.run.mock.calls[0]![0];
 
       context.app.stdin.write('ignored');
       context.app.stdin.write(ENTER);
       const beforeExit = promptFrame(context);
       context.app.stdin.write('\x03');
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(signal.aborted).toBe(true);
         expect(context.onExit).toHaveBeenCalledTimes(1);
       });
@@ -1246,7 +1360,7 @@ describe('manager TUI human approval', () => {
       startupDoubles.flush.mockReturnValueOnce(new Promise<void>((resolve) => { finishFlush = resolve; }));
       const startup = { run: vi.fn(async () => [] as string[]), fail: vi.fn() };
       const context = mount(lang, startup);
-      await vi.waitFor(() => expect(startupDoubles.flush).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(startupDoubles.flush).toHaveBeenCalledTimes(1));
       context.app.unmount();
 
       finishFlush();
@@ -1258,7 +1372,7 @@ describe('manager TUI human approval', () => {
 
     it('keeps both notices above the input after a conversation redraw and a summary', async () => {
       const context = mount(lang);
-      await vi.waitFor(() => expectNotices(context.app.lastFrame()));
+      await waitFor(() => expectNotices(context.app.lastFrame()));
       await send(context, 'CSV出力を追加したい', summaryA);
       expectNotices(context.app.lastFrame());
     });
@@ -1270,7 +1384,7 @@ describe('manager TUI human approval', () => {
         cwd, lang, session: context.session, initialDiagnostics: [], onExit: vi.fn(),
       }));
 
-      await vi.waitFor(() => {
+      await waitFor(() => {
         const frame = context.app.lastFrame()!;
         const text = frame.replace(/\s+/gu, '');
         for (const key of ['manager.experimentalNotice', 'manager.costNotice']) {
@@ -1283,14 +1397,20 @@ describe('manager TUI human approval', () => {
   });
 
   it('does not register quoted summaries when the provider has no current summary', async () => {
-    const { app, call, register, session } = mount();
+    const context = mount();
+    const { app, call, register, session } = context;
     const structuredOutput = { message: `Quoted summary: ${JSON.stringify(summaryA)}`, summary: null };
     call.mockResolvedValueOnce({ ...response(summaryA), content: JSON.stringify(structuredOutput), structuredOutput });
-    await vi.waitFor(() => expect(app.lastFrame()).toContain(cwd));
+    await waitFor(() => expect(app.lastFrame()).toContain(cwd));
     app.stdin.write('要件を相談したい');
-    await vi.waitFor(() => expect(app.lastFrame()).toContain('要件を相談したい'));
+    await waitFor(() => expect(promptFrame(context)).toContain('要件を相談したい'));
     app.stdin.write(ENTER);
-    await vi.waitFor(() => expect(app.lastFrame()).toContain('Quoted summary'));
+    await waitFor(() => {
+      expect(app.lastFrame()).toContain('Quoted summary');
+      expect(app.lastFrame()).not.toContain('Working');
+      expect(queuedFrame(context)).toBeUndefined();
+      expect(promptFrame(context)).toContain('Discuss your goal');
+    });
     app.stdin.write(UP);
     app.stdin.write(ENTER);
     expect(session.getPendingSummary()).toBeNull();
@@ -1299,7 +1419,7 @@ describe('manager TUI human approval', () => {
   it('identifies the manager, target repository and experimental status without starting a conversation', async () => {
     const { app, call, register } = mount();
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(app.lastFrame()).toMatch(/manager/iu);
       expect(app.lastFrame()).toContain(cwd);
       expect(app.lastFrame()).toMatch(/experimental/iu);
@@ -1311,11 +1431,11 @@ describe('manager TUI human approval', () => {
   it('continues conversation on the default confirmation choice without registering', async () => {
     const context = mount();
     const { app, register } = context;
-    await vi.waitFor(() => expect(app.lastFrame()).toContain(cwd));
+    await waitFor(() => expect(app.lastFrame()).toContain(cwd));
     await send(context, 'CSV出力を追加したい', summaryA);
 
     app.stdin.write(ENTER);
-    await vi.waitFor(() => expect(context.session.getPendingSummary()).toBeNull());
+    await waitFor(() => expect(context.session.getPendingSummary()).toBeNull());
     await send(context, '範囲外の内容を確認してください', summaryA);
 
     expect(register).not.toHaveBeenCalled();
@@ -1324,7 +1444,7 @@ describe('manager TUI human approval', () => {
   it('approves the revised displayed summary only through the confirmation keys in the same mounted screen', async () => {
     const context = mount();
     const { app, call } = context;
-    await vi.waitFor(() => expect(app.lastFrame()).toContain(cwd));
+    await waitFor(() => expect(app.lastFrame()).toContain(cwd));
     await send(context, 'CSV出力を追加したい', summaryA);
     app.stdin.write(ENTER);
     call.mockResolvedValueOnce(response(summaryB));
@@ -1347,7 +1467,7 @@ describe('manager TUI human approval', () => {
           const summary = { objective: summaryA.objective, outOfScope: ['基準'], acceptanceCriteria: ['基準'], constraints: [], [field]: values, };
           const reply = response(summary);
           context.call.mockResolvedValueOnce({ ...reply, structuredOutput: format === 'content' ? undefined : reply.structuredOutput });
-          await vi.waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
+          await waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
 
           await send(context, '要約を確認してください', summary);
 
@@ -1370,7 +1490,7 @@ describe('manager TUI human approval', () => {
           const summary = { ...summaryA, [field]: values };
           const reply = response(summary);
           context.call.mockResolvedValueOnce({ ...reply, structuredOutput: format === 'content' ? undefined : reply.structuredOutput });
-          await vi.waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
+          await waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
 
           await send(context, '要約を確認してください', summary);
 
@@ -1388,7 +1508,7 @@ describe('manager TUI human approval', () => {
         const summary = { ...summaryA, outOfScope: [] };
         const reply = response(summary);
         context.call.mockResolvedValueOnce({ ...reply, structuredOutput: format === 'content' ? undefined : reply.structuredOutput });
-        await vi.waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
+        await waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
 
         await send(context, '要約を確認してください', summary);
 
@@ -1401,11 +1521,11 @@ describe('manager TUI human approval', () => {
       const context = mount(lang);
       const summary = { ...summaryA, outOfScope: ['CSV\x1b[', '通知'], acceptanceCriteria: ['\x1b[31mCSVを取得できる\x1b[0m'] };
       vi.spyOn(context.session, 'getPendingSummary').mockReturnValue({ revision: 1, summary });
-      await vi.waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
+      await waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
       context.app.stdin.write('要約を確認してください');
-      await vi.waitFor(() => expect(context.app.lastFrame()).toContain('要約を確認してください'));
+      await waitFor(() => expect(promptFrame(context)).toContain('要約を確認してください'));
       context.app.stdin.write(ENTER);
-      await vi.waitFor(() => {
+      await waitFor(() => {
         expect(context.app.lastFrame()).toContain('- CSV');
         expect(context.app.lastFrame()).toContain('- 通知');
         expect(context.app.lastFrame()).toContain('- CSVを取得できる');
@@ -1422,14 +1542,14 @@ it('displays run manager work records without processing inbox events and inform
     inbox.read.mockReturnValue([{ filePath: '/inbox/1.json', event: { kind: 'registered', goalId: goalRecord().id, createdAt: '2026-10-14T00:00:00Z' } }]);
     const record = { id: '550e8400-e29b-41d4-a716-446655440005', recordedAt: '2026-10-14T00:00:00Z', summary: 'task-X を取り込み、task-Y を投入しました' };
     memory.goals.mockReturnValue([{ ...goalRecord(), workLog: [record] }]);
-    await vi.waitFor(() => expect(context.app.lastFrame()).toContain(record.summary), { timeout: 3000 });
+    await waitFor(() => expect(context.app.lastFrame()).toContain(record.summary));
     expect(context.call).not.toHaveBeenCalled();
     expect(inbox.read).not.toHaveBeenCalled();
     expect(inbox.remove).not.toHaveBeenCalled();
     context.app.stdin.write('進捗を教えてください');
-    await vi.waitFor(() => expect(context.app.lastFrame()).toContain('進捗を教えてください'));
+    await waitFor(() => expect(promptFrame(context)).toContain('進捗を教えてください'));
     context.app.stdin.write(ENTER);
-    await vi.waitFor(() => expect(context.call).toHaveBeenCalledOnce());
+    await waitFor(() => expect(context.call).toHaveBeenCalledOnce());
     expect(context.call.mock.calls[0]![0]).toContain(record.summary);
   } finally { context.app.unmount(); await context.session.close(); }
 });
@@ -1441,12 +1561,17 @@ it('notifies each failed TUI conversation and displays its blocked message', asy
   context.call.mockRejectedValue(new Error('provider failed'));
   try {
     for (let attempt = 0; attempt < 2; attempt++) {
-      context.app.stdin.write('進めてください');
-      await vi.waitFor(() => expect(context.app.lastFrame()).toContain('進めてください'));
-      context.app.stdin.write(ENTER);
-      await vi.waitFor(() => expect(failureNotice).toHaveBeenCalledTimes(attempt + 1));
+      await typeAndSubmit(context, '進めてください');
+      await waitFor(() => {
+        expect(context.call).toHaveBeenCalledTimes(attempt + 1);
+        expect(failureNotice).toHaveBeenCalledTimes(attempt + 1);
+        expect(context.app.lastFrame()?.match(/Blocked conversation notice/gu)).toHaveLength(attempt + 1);
+        expect(context.app.lastFrame()).not.toContain('Working');
+        expect(queuedFrame(context)).toBeUndefined();
+        expect(promptFrame(context)).toContain('Discuss your goal');
+      });
       expect(failureNotice).toHaveBeenLastCalledWith(cwd, undefined, expect.objectContaining({ message: 'provider failed' }));
-      await vi.waitFor(() => expect(context.app.lastFrame()).toContain('Blocked conversation notice'));
+      expect(context.app.lastFrame()).toContain('Blocked conversation notice');
     }
     expect(context.session.getPendingSummary()).toBeNull();
     expect(context.register).not.toHaveBeenCalled();
