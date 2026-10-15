@@ -18,8 +18,8 @@ function resolveDefaultBranchRef(cwd: string, branch: string): string {
 export function prepareGoalBranch(cwd: string, id: string, requestedStart: string | undefined,
   requestedIntegration: string | undefined) {
   GoalIdSchema.parse(id);
-  const startBranch = requestedStart ?? detectDefaultBranch(cwd);
   const configuredIntegration = requestedIntegration ?? resolveConfigValue(cwd, 'baseBranch');
+  const startBranch = requestedStart ?? configuredIntegration ?? detectDefaultBranch(cwd);
   const integrationBranch = configuredIntegration ?? startBranch;
   const startRef = requestedStart === undefined
     ? resolveDefaultBranchRef(cwd, startBranch)
