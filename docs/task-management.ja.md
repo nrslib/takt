@@ -338,13 +338,13 @@ takt list --non-interactive --action try --branch takt/my-branch
 
 ## CodeRabbit レビューループ（`caccia`）
 
-タスク後処理で PR を新規作成または更新した後、TAKT は Caccia レビューループを実行できます。連結経路はデフォルトで無効です。project または global 設定で `caccia.enabled: true` にした場合だけ起動します。Pipeline モードでも `--auto-pr` による PR 作成成功後に同じ連結経路を使います。
+マージ用ビルトインは Caccia を明示的に実行します。`merge-review` は `review → caccia → wait_ci → 評価コメント`、`merge-review-fix` と `merge-review-fix-simple` は `review/fix → commit_and_push → caccia → wait_ci → merge_pr` の順です。`success` と `skipped` は返された head の CI 待ちへ進みます。`limit` は未解決件数をコメントして COMPLETE で終了し、マージしません。効果の失敗は `error` をコメントして ABORT で終了します。push、タスク後処理、Pipeline からの暗黙の Caccia は廃止しました。`merge.auto_start: true` では PR 公開後にマージ用 workflow が起動し、その明示効果が Caccia を実行します。
 
-Caccia は CodeRabbit の投稿を待ち、`coderabbitai` が開始した未解決スレッドだけを処理します。各反復は一時クローンで指定された workflow を実行し、判断レポートを `.takt/runs/` に残します。修正を Push したら、その反復で判断したスレッドだけを Resolve し、Push したコミットへの CodeRabbit のレビューを待ちます。人が開始したスレッドは未解決のまま残します。レビューへの返信は投稿しません。連結 Caccia の結果で完了済みタスクの結果は変わりません。成功と反復上限到達はログに記録し、設定済み通知経路にも送ります。
+Caccia は CodeRabbit の投稿を待ち、`coderabbitai` が開始した未解決スレッドだけを処理します。各反復は一時クローンで指定された workflow を実行し、判断レポートを `.takt/runs/` に残します。修正を Push したら、その反復で判断したスレッドだけを Resolve し、Push したコミットへの CodeRabbit のレビューを待ちます。人が開始したスレッドは未解決のまま残します。レビューへの返信は投稿しません。成功と反復上限到達はログに記録し、設定済み通知経路にも送ります。
 
-`wait_timeout_ms` は初回レビューと Push 後の各レビューの待機期限で、再依頼もこの期限に含みます。レビュー制限通知の再試行時刻が期限より前なら到来時に `@coderabbitai review` コメントで一度だけ依頼し、期限以降なら直ちにスキップします。制限通知を受けた後、レビューが期限までに完了しなければスキップします。制限通知を受けずに期限に達した場合は初回待機をスキップし、Push 後の待機をエラーとして記録します。完了済みタスクの結果は保持され、単独の `takt caccia` はスキップ・エラー時に非ゼロで終了します。
+`wait_timeout_ms` は初回レビューと Push 後の各レビューの待機期限で、再依頼もこの期限に含みます。レビュー制限通知の再試行時刻が期限より前なら到来時に `@coderabbitai review` コメントで一度だけ依頼し、期限以降なら直ちにスキップします。制限通知を受けた後、レビューが期限までに完了しなければスキップします。制限通知を受けずに期限に達した場合は初回待機をスキップし、Push 後の待機をエラーとして記録します。system 効果は失敗を `success: false` と `error` で返します。単独の `takt caccia` はスキップ・エラー時に非ゼロで終了します。
 
-連結実行の進捗、ワークフロー、終了結果、失敗は親タスクの表示モードに従います。並列実行では同じタスク名プレフィックスと色を使い、silent では画面に出力しません。親タスクは Caccia の終了を待ってから完了処理へ進みます。
+効果実行の進捗、ワークフロー、終了結果、失敗は親タスクの表示モードに従います。並列実行では同じタスク名プレフィックスと色を使い、silent では画面に出力しません。workflow は効果の結果を待ってから次のステップへ進みます。
 
 同じ機能は `takt caccia <PR番号>` で単独実行できます。結果と設定は [CLI リファレンス](./cli-reference.ja.md#takt-caccia) と[設定リファレンス](./configuration.ja.md)を参照してください。
 

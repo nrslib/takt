@@ -652,7 +652,7 @@ System step 由 TAKT engine 执行，不启动 agent。使用 `kind: system` 或
         next: plan_from_existing_pr
 ```
 
-`effects` 执行 engine-side action：`enqueue_task`、`comment_pr`、`sync_with_root`、`resolve_conflicts_with_ai`、`merge_pr` 和 `close_pr`。每种 effect 在一个 step 中最多一次，结果通过 `when(effect.<step>.<type>.<field>)` 路由。
+`effects` 执行 engine-side action：`commit_and_push`, `caccia`, `enqueue_task`、`comment_pr`、`sync_with_root`、`resolve_conflicts_with_ai`、`merge_pr` 和 `close_pr`。每种 effect 在一个 step 中最多一次，结果通过 `when(effect.<step>.<type>.<field>)` 路由。
 
 ```yaml
   - name: prepare_merge
@@ -1012,3 +1012,28 @@ follow-up 的错误、限流、blocked 或异常都不会由 Companion 处理再
 3. **使用描述性 step 名称** — 便于阅读日志
 4. **逐步测试 workflow** — 从简单版本开始再增加复杂度
 5. **使用 `takt eject` 定制** — 先复制 builtin workflow，而不是从零编写
+
+### Caccia system effect
+
+此 effect 要求 `takt merge` 或 `enqueue_task mode: from_pr` 任务提供与目标 PR 一致的隔离 clone 执行上下文。`pr` 接受正整数或完整模板引用，不接受普通字符串中的嵌入引用。effect 使用既有 `caccia.enabled`、`wait_timeout_ms`、`max_iterations` 和 `workflow` 配置；关闭或未配置时立即返回，无需等待。独立命令 `takt caccia <PR>` 不受 `enabled` 限制。
+
+```yaml
+  - name: caccia
+    mode: system
+    effects:
+      - type: caccia
+        pr: "{context:identify.pr.number}"
+    rules:
+      - condition: when(effect.caccia.caccia.success == false)
+        next: error_comment
+      - condition: when(effect.caccia.caccia.outcome == "limit")
+        next: limit_comment
+      - condition: when(true)
+        next: wait_ci
+```
+
+正常结果包含 `success: true`、`failed: false`、`outcome`（`success` / `skipped` / `limit`）、`headSha`、`unresolvedCount`、`skipReason` 和 `reason`；不适用的原因字段为 `null`。条件使用 `effect.<step>.caccia.*`，模板使用 `{effect:<step>.caccia.<field>}`。跳过原因包括 `config_disabled`、`github_unavailable`、`initial_review_unavailable`、`review_rate_limited` 和 `review_skipped`。失败返回 `success: false`、`failed: true` 与 `error`，不保证 head。读取正常字段前先判断失败。
+
+修复 push 后验证 SHA 并对同一个 clone 进行 fast-forward。CI 将 PR status 的 head 与 `effect.caccia.caccia.headSha` 对照，合并使用 clone 当前 HEAD 作为 expected SHA。此前 push effect 的结果作为历史记录保留。
+
+合并 builtin 明确执行 Caccia：`merge-review` 按 `review → caccia → wait_ci → 评价评论` 执行，`merge-review-fix` 和 `merge-review-fix-simple` 按 `review/fix → commit_and_push → caccia → wait_ci → merge_pr` 执行。`success` 与 `skipped` 继续等待返回 head 的 CI。`limit` 评论未解决线程数后以 COMPLETE 结束，不合并；执行错误评论 `error` 后以 ABORT 结束。push、任务后处理和 Pipeline 不再隐式启动 Caccia。设置 `merge.auto_start: true` 时，PR 发布后启动合并 workflow，由其明确的 effect 执行 Caccia。

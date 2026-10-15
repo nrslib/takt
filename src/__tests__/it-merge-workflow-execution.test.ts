@@ -8,6 +8,16 @@ import type { WorkflowCallResolutionRequest } from '../core/workflow/types.js';
 import { loadWorkflowByIdentifier } from '../infra/config/loaders/workflowResolver.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 import { resolveWorkflowCallTarget } from '../infra/config/loaders/workflowCallResolver.js';
+import { cacciaEffect } from '../features/caccia/system-effect.js';
+
+const cacciaGit = vi.hoisted(() => vi.fn());
+vi.mock('../infra/task/clone-exec.js', async (original) => ({
+  ...await original<typeof import('../infra/task/clone-exec.js')>(), runGitCommandAbortable: cacciaGit,
+}));
+vi.mock('../infra/task/git-environment.js', async (original) => ({
+  ...await original<typeof import('../infra/task/git-environment.js')>(),
+  buildSafeGitEnvironment: vi.fn(async () => ({})),
+}));
 
 vi.mock('../agents/runner.js', () => ({ runAgent: vi.fn() }));
 vi.mock('../agents/structured-caller/transport.js', async (importOriginal) => ({
@@ -34,6 +44,8 @@ interface Scenario {
   gatherFailed?: boolean;
   prePushRemoteConflicting?: boolean;
   prePushRemoteHeadDiffers?: boolean;
+  caccia?: Record<string, unknown>;
+  cacciaError?: Error;
 }
 
 describe('Builtin PR merge workflow execution', () => {
@@ -164,6 +176,18 @@ describe('Builtin PR merge workflow execution', () => {
     });
     const executeEffect = vi.fn(async (effect: WorkflowEffect, payload: Record<string, unknown>) => {
       calls.push(effect.type);
+      if (String(effect.type) === 'caccia') {
+        if (scenario.cacciaError) {
+          cacciaGit.mockRejectedValueOnce(scenario.cacciaError);
+          return cacciaEffect({ cwd: cloneCwd, projectCwd: project, task: 'Review PR',
+            prExecutionContext: { prNumber, headBranch: 'feature/pr', baseBranch: 'main',
+              headSha, headRepositoryUrl: '/remote', headRepositoryPushUrls: ['/remote'] } }, prNumber);
+        }
+        const result = scenario.caccia ?? { success: true, failed: false, outcome: 'skipped',
+          headSha, unresolvedCount: 0, skipReason: 'config_disabled', reason: 'Caccia is disabled' };
+        if (typeof result.headSha === 'string') headSha = result.headSha;
+        return result;
+      }
       if (effect.type === 'comment_pr') comments.push(String(payload.body));
       const failed = (effect.type === 'sync_with_root' && scenario.syncFailed)
         || (effect.type === 'resolve_conflicts_with_ai' && scenario.conflictFailed)
@@ -222,6 +246,76 @@ describe('Builtin PR merge workflow execution', () => {
     engine.on('workflow:abort', (_state, reason) => failures.push(reason));
     return { engine, calls, judgedSteps, comments, failures, observedStatuses, childContexts, cloneCwd, executeEffect, finishCi: () => { ciFinished = true; } };
   }
+
+  describe.each(['ja', 'en'])('%sのCaccia結果による分岐', (language) => {
+    describe.each(['merge-review', 'merge-review-fix', 'merge-review-fix-simple'])('%s', (name) => {
+      it.each(['success', 'skipped'] as const)('%sのheadでCIを待って既存の終端まで進む', async (outcome) => {
+        const updatedHead = 'd'.repeat(40);
+        const h = harness(name, { ciRunning: true, caccia: {
+          success: true, failed: false, outcome, headSha: updatedHead, unresolvedCount: 0,
+          skipReason: outcome === 'skipped' ? 'review_rate_limited' : null,
+          reason: outcome === 'skipped' ? 'Review rate limited after push' : null,
+        } }, language);
+        const running = h.engine.run();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(h.calls.filter((call) => call === 'caccia')).toHaveLength(1);
+        expect(h.calls).not.toContain('merge_pr');
+        expect(h.comments).toEqual([]);
+        h.finishCi();
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect((await running).status).toBe('completed');
+        expect(h.failures).toEqual([]);
+        expect(h.observedStatuses.at(-1)?.headSha).toBe(updatedHead);
+        expect(h.calls.filter((call) => call === 'merge_pr')).toHaveLength(name === 'merge-review' ? 0 : 1);
+        if (name !== 'merge-review') {
+          expect(h.calls.indexOf('commit_and_push')).toBeLessThan(h.calls.indexOf('caccia'));
+          expect(h.calls.indexOf('caccia')).toBeLessThan(h.calls.indexOf('merge_pr'));
+        }
+        expect(h.judgedSteps).not.toContain('caccia');
+        expect(h.executeEffect.mock.calls.filter(([effect]) => String(effect.type) === 'caccia'))
+          .toEqual([[expect.objectContaining({ type: 'caccia' }), { type: 'caccia', pr: 123 }, expect.anything()]]);
+      });
+
+      it.each([3, 11])('上限到達では未解決%s件をPRへコメントしてマージせずCOMPLETEになる', async (unresolvedCount) => {
+        const h = harness(name, { caccia: { success: true, failed: false, outcome: 'limit',
+          unresolvedCount, headSha: 'b'.repeat(40), skipReason: null, reason: null } }, language);
+        const state = await h.engine.run();
+        expect(state.status).toBe('completed');
+        expect(h.calls.filter((call) => call === 'caccia')).toHaveLength(1);
+        expect(h.calls).not.toContain('merge_pr');
+        expect(h.comments).toHaveLength(1);
+        const counts = h.comments[0]!.match(/\d+/gu)?.map(Number);
+        expect(counts).toEqual([unresolvedCount]);
+        expect(h.executeEffect.mock.calls.filter(([effect]) => effect.type === 'comment_pr'))
+          .toEqual([[expect.anything(), expect.objectContaining({ pr: 123, body: h.comments[0] }), expect.anything()]]);
+      });
+
+      it.each(['feature/team', '@org/team'])('効果の公開エラーを安全なコメントへ渡す: %s', async (ref) => {
+        const h = harness(name, { cacciaError: new Error(`fatal: couldn't find remote ref ${ref}; contact @reviewer`) }, language);
+        const state = await h.engine.run();
+        expect(state.status).toBe('aborted');
+        expect(h.calls).not.toContain('merge_pr');
+        expect(h.comments).toHaveLength(1);
+        const body = h.comments[0]!;
+        expect(body).toContain('remote ref');
+        expect(body).toContain(ref.replaceAll('@', '＠'));
+        expect(body).not.toContain('@');
+      });
+
+      it('失敗内容をPRへコメントしてマージせずABORTになる', async () => {
+        const error = 'Pull request head changed during Caccia execution';
+        const h = harness(name, { caccia: { success: false, failed: true, error } }, language);
+        const state = await h.engine.run();
+        expect(state.status).toBe('aborted');
+        expect(h.calls.filter((call) => call === 'caccia')).toHaveLength(1);
+        expect(h.calls).not.toContain('merge_pr');
+        expect(h.comments).toHaveLength(1);
+        expect(h.comments[0]).toContain(error);
+        expect(h.executeEffect.mock.calls.filter(([effect]) => effect.type === 'comment_pr'))
+          .toEqual([[expect.anything(), expect.objectContaining({ pr: 123, body: h.comments[0] }), expect.anything()]]);
+      });
+    });
+  });
 
   it.each(['ja', 'en'] as const)('%sのsimpleは単体レビューと共通最終ゲートを経てpush後のCIを待ってmergeする', async (language) => {
     const h = harness('merge-review-fix-simple', { ciRunning: true, syncFailed: true }, language);

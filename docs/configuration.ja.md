@@ -257,15 +257,15 @@ dynamic parallel と `dynamic_facets` の selector は読み取り専用で、`R
 
 ```yaml
 caccia:
-  enabled: false          # タスクが PR を作成・更新した後の自動連結を有効化
+  enabled: false          # caccia 効果による CodeRabbit の待機を有効化
   wait_timeout_ms: 1800000 # 初回レビューとPush後の各コミットのレビューを待つ上限（ミリ秒）
   max_iterations: 3       # 修正と再レビューの最大反復回数
   workflow: caccia        # 各スレッド群の判断と修正に使う workflow
 ```
 
-`enabled: true` の場合だけ連結経路を起動します。単独実行の `takt caccia <PR番号>` はこのフラグに関係なく利用できます。既定値は無効、1,800,000 ミリ秒、3 回、workflow `caccia` です。project に `caccia` ブロックがある場合は global のブロックより優先し、省略した項目には上記の既定値を適用します。`workflow` に workflow 識別子を指定するとビルトイン workflow を差し替えられます。
+`caccia` 効果は `enabled: true` の場合だけ CodeRabbit を待ちます。無効なら待たずに `outcome: skipped` と `skipReason: config_disabled` を返します。単独実行の `takt caccia <PR番号>` はこのフラグに関係なく利用できます。既定値は無効、1,800,000 ミリ秒、3 回、workflow `caccia` です。project に `caccia` ブロックがある場合は global のブロックより優先し、省略した項目には上記の既定値を適用します。`workflow` に workflow 識別子を指定するとビルトイン workflow を差し替えられます。
 
-`wait_timeout_ms` は初回と各 Push 後のレビュー待機期限で、再依頼もこの期限に含みます。レビュー制限通知の再試行時刻が期限より前なら到来時に一度だけレビューを依頼し、期限以降なら直ちにスキップします。制限通知を受けた後、レビューが期限までに完了しなければスキップします。制限通知を受けずに期限に達した場合は初回待機をスキップし、Push 後の待機をエラーとします。単独コマンドはいずれも非ゼロで終了し、連結実行では元のタスク結果を保持します。
+`wait_timeout_ms` は初回と各 Push 後のレビュー待機期限で、再依頼もこの期限に含みます。レビュー制限通知の再試行時刻が期限より前なら到来時に一度だけレビューを依頼し、期限以降なら直ちにスキップします。制限通知を受けた後、レビューが期限までに完了しなければスキップします。制限通知を受けずに期限に達した場合は初回待機をスキップし、Push 後の待機をエラーとします。単独コマンドはいずれも非ゼロで終了し、system 効果は失敗を `success: false` と `error` で返し、workflow のルールで分岐します。
 
 ## プロジェクト設定
 
@@ -1732,4 +1732,4 @@ fork の除外も `where` より先に適用します。fork を対象にする�
 
 `threat_check_max_diff_bytes` は fork の AI 評価へ渡す累積差分の上限で、正の整数（UTF-8 バイト数）です。既定は200,000です。上限超過では差分を切り詰めて判定せず、人間による確認を求める PR コメントを残して停止します。機械的検査で指示ファイル・CI 定義や危険な Git 設定を検出した場合、AI 評価と本体 workflow は実行しません。
 
-`auto_start: true` は workflow が PR を作成・更新した後、その PR を対象にマージ処理を起動します。Caccia も有効なら、その終了後に開始します。手動で作成した PR は自動起動の対象外です。
+`auto_start: true` は workflow が PR を作成・更新した後、その PR を対象にマージ処理を起動します。Caccia はマージ用 workflow 内の明示効果で実行します。手動で作成した PR は自動起動の対象外です。

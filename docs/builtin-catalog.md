@@ -32,9 +32,9 @@ Organized by category.
 | 🔍 Review | `review` | Review from several perspectives suited to the changes. |
 |  | `review-fix` | Fix review findings and check again. |
 |  | `caccia` | One CodeRabbit review iteration: judge supplied threads, fix valid findings, and write a decision report. |
-|  | `merge-review` | Run `review`, wait for CI to settle, and comment on the PR. The merge command checks fork threats before invoking this workflow. |
-|  | `merge-review-fix` | Run `review-fix`, commit and push fixes, wait for CI on the pushed head, check for CHANGES_REQUESTED, then merge and comment on the result. |
-|  | `merge-review-fix-simple` | The default for `takt merge`. One read-only reviewer assesses changes; adjudication, fix planning, editing, verification, and follow-up review run as separate steps. It shares synchronization, conflict resolution, push, CI wait, CHANGES_REQUESTED check, and merge steps with `merge-review-fix`. |
+|  | `merge-review` | Runs review and the Caccia effect, waits for CI, and comments on the evaluation. |
+|  | `merge-review-fix` | review-fix → push → Caccia effect → CI and review checks on the latest head → merge. |
+|  | `merge-review-fix-simple` | Default for takt merge: one reviewer with separate adjudication, fixes and verification, then push → Caccia effect → CI and review checks → merge. |
 |  | `audit-unit` | Comprehensive unit test audit. Enumerate behaviors and coverage gaps, then produce an issue-ready report without modifying code |
 |  | `audit-e2e` | Comprehensive E2E audit. Enumerate user flows and coverage gaps, then produce an issue-ready report without modifying code |
 |  | `audit-security` | Full security audit. Reads every project file one by one for security review |
@@ -101,6 +101,8 @@ provider. Later runtime targets override earlier matching targets; workflow
 YAML itself does not contain provider/model/provider-options fields.
 
 Run `takt` to choose a workflow interactively.
+
+The merge builtins execute Caccia explicitly: `merge-review` runs `review → caccia → wait_ci → evaluation comment`, while `merge-review-fix` and `merge-review-fix-simple` run `review/fix → commit_and_push → caccia → wait_ci → merge_pr`. `success` and `skipped` continue to CI on the returned head. `limit` comments with the unresolved thread count and ends COMPLETE without merging. An effect error comments with `error` and ends ABORT. Push, task post-processing, and Pipeline no longer start Caccia implicitly. With `merge.auto_start: true`, PR publication starts the merge workflow, whose explicit effect owns Caccia.
 
 ## Builtin Personas
 

@@ -83,7 +83,7 @@ If this is your first run, configure a provider in `~/.takt/config.yaml` or use 
 
 ## CodeRabbit Review Loop
 
-On GitHub, run `takt caccia <PR-number>` to wait for CodeRabbit reviews, handle unresolved bot threads in isolated clones, and keep a decision report for each iteration. The same loop can run after TAKT creates or updates a PR when `caccia.enabled` is enabled; linked execution is disabled by default. See the [CLI reference](./docs/cli-reference.md#takt-caccia) and [configuration guide](./docs/configuration.md#caccia-review-loop).
+On GitHub, run `takt caccia <PR-number>` to wait for CodeRabbit reviews, handle unresolved bot threads in isolated clones, and keep a decision report for each iteration. Merge workflows call the loop through an explicit `caccia` effect. `caccia.enabled` controls whether that effect waits for CodeRabbit and defaults to false. Push and PR publication do not start Caccia implicitly. See the [CLI reference](./docs/cli-reference.md#takt-caccia) and [configuration guide](./docs/configuration.md#caccia-review-loop).
 
 ### Video Tutorial
 
