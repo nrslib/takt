@@ -316,6 +316,11 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
       return;
     }
     const editKey = resolveEditorKey(input, key, contentWidth);
+    // Ink は本文と同じチャンクに入った CR/LF を Enter と分類しない。
+    const trailingEnter = !key.return && !(key.shift || key.meta)
+      && editKey?.kind === 'insert' && /[\r\n]$/u.test(input);
+    if (trailingEnter) insertText(input.replace(/(?:\r\n|\r|\n)$/u, ''));
+    const submitInput = key.return || trailingEnter;
     if (!registering.current && active.current === null && answerTarget !== null) {
       if (key.escape) { setAnswerTarget(null); return; }
       const options = answerTarget.pending.question.options ?? [];
@@ -332,7 +337,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
         } else void saveAnswer(answerTarget.pending, options[answerChoice.current]!);
         return;
       }
-      if (key.return && !(key.shift || key.meta) && editorRef.current.text.trim() !== '') {
+      if (submitInput && !(key.shift || key.meta) && editorRef.current.text.trim() !== '') {
         const text = editorRef.current.text;
         edit(commitEditorInput(editorRef.current, text));
         void saveAnswer(answerTarget.pending, text);
@@ -360,7 +365,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
       setPending(null);
       resetChoice();
     }
-    if (key.return) {
+    if (submitInput) {
       if (key.shift || key.meta) {
         edit(applyEditorKey(editorRef.current, { kind: 'newline' }));
       } else if (editorRef.current.text.trim() !== '') {
