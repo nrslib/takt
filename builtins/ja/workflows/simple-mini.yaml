@@ -62,26 +62,50 @@ steps:
         interactive_only: true
 
   - name: review
-    tags:
-      - review
-    edit: false
-    persona: coding-reviewer
-    policy:
-      - contract-change
-      - review
-      - coding
-      - testing
-      - architecture
-    knowledge:
-      - architecture
-      - unit-testing
-      - e2e-testing
-    pass_previous_response: false
-    instruction: simple-review-coding
-    output_contracts:
-      report:
-        - name: coding-review.md
-          format: coding-review
+    input_reports:
+      from_step: remediation
+      reports:
+        - review-resolution.md
+      optional_if_unrun: true
+    uses: simple-coding-review
+    with:
+      review_policy:
+        - review
+        - coding
+        - testing
+        - architecture
+      review_knowledge:
+        - architecture
+        - unit-testing
+        - e2e-testing
+      review_instruction:
+        simple-review-coding
+    rules:
+      - condition: approved
+        next: COMPLETE
+      - condition: needs_fix
+        next: remediation
+
+  - name: follow-up-review
+    input_reports:
+      from_step: remediation
+      reports:
+        - fix-plan.md
+        - fix-report.md
+        - fix-verification.md
+    uses: simple-coding-review
+    with:
+      review_policy:
+        - review
+        - coding
+        - testing
+        - architecture
+      review_knowledge:
+        - architecture
+        - unit-testing
+        - e2e-testing
+      review_instruction:
+        simple-review-coding
     rules:
       - condition: approved
         next: COMPLETE
@@ -109,6 +133,8 @@ steps:
         - e2e-testing
     rules:
       - condition: COMPLETE
+        next: follow-up-review
+      - condition: no_fix
         next: review
       - condition: need_replan
         next: plan

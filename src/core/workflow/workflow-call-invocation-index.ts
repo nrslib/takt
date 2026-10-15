@@ -166,6 +166,46 @@ export class WorkflowCallInvocationIndex {
     return record === undefined ? undefined : { ...record };
   }
 
+  clearPreviousParallelChildInvocations(
+    workflow: WorkflowConfig,
+    parentStepName: string,
+    childStepNames: readonly string[],
+    workflowCallPath: readonly WorkflowResumePointEntry[],
+    currentParentOccurrence: number,
+  ): void {
+    if (childStepNames.length === 0) return;
+    const workflowReference = getWorkflowReference(workflow);
+    const expectedCalls = parseIdentity(buildWorkflowCallInvocationIdentity(
+      workflowReference,
+      parentStepName,
+      workflowCallPath,
+    )).calls;
+    const childNames = new Set(childStepNames);
+    for (const identity of this.records.keys()) {
+      const parsed = parseIdentity(identity);
+      const parentFrame = parsed.calls.at(-1);
+      if (
+        parsed.workflow !== workflowReference
+        || !childNames.has(parsed.step)
+        || parsed.calls.length !== expectedCalls.length + 1
+        || parentFrame?.workflow !== workflowReference
+        || parentFrame.step !== parentStepName
+        || parentFrame.kind !== 'parallel'
+        || parentFrame.instance === currentParentOccurrence
+        || !expectedCalls.every((expected, index) => {
+          const actual = parsed.calls[index];
+          return actual?.workflow === expected.workflow
+            && actual.step === expected.step
+            && actual.kind === expected.kind
+            && actual.instance === expected.instance;
+        })
+      ) {
+        continue;
+      }
+      this.records.delete(identity);
+    }
+  }
+
   snapshot(): ReadonlyMap<string, WorkflowCallInvocationRecord> {
     return new Map([...this.records].map(([identity, record]) => [identity, { ...record }]));
   }

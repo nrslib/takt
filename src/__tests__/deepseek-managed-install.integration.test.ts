@@ -20,6 +20,7 @@ import { callDeepSeekHarness } from '../infra/deepseek-harness/index.js';
 import { isSupportedDeepSeekHarnessPlatform } from '../infra/deepseek-harness/platform.js';
 import { createConversationSession } from '../features/interactive/conversationSession.js';
 import { makeProvider, makeSessionContext } from './test-helpers.js';
+import { hasFilesystemRootAlias, mkdtempThroughFilesystemRootAlias } from './helpers/filesystem-root-alias.js';
 import { selectAndExecuteTask } from '../features/tasks/execute/selectAndExecute.js';
 import { getProvider } from '../infra/providers/index.js';
 import * as ui from '../shared/ui/index.js';
@@ -1582,8 +1583,8 @@ steps:
     expect(await getReadyDeepSeekHarnessPackageDirectory()).toBe(previous);
   });
 
-  it.skipIf(process.platform !== 'darwin')('accepts the macOS /var filesystem alias', async () => {
-    const aliasRoot = await mkdtemp(join(tmpdir(), 'takt-deepseek-alias-'));
+  it.skipIf(!hasFilesystemRootAlias)('accepts the macOS /var filesystem alias', async () => {
+    const aliasRoot = mkdtempThroughFilesystemRootAlias('takt-deepseek-alias-');
     try {
       vi.stubEnv('TAKT_CONFIG_DIR', join(aliasRoot, 'config'));
       await installDeepSeekHarness({ npmPath: fakeNpmPath });

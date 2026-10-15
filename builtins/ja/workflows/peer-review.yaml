@@ -178,6 +178,12 @@ steps:
       - condition: needs_fix
         next: review-adjudication
   - name: reviewers
+    input_reports:
+      from_step: remediation
+      reports:
+        - fix-plan.md
+        - fix-report.md
+        - fix-verification.md
     uses: peer-review-suite-call
     vars:
       review_mode: follow_up

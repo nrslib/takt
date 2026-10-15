@@ -2,7 +2,7 @@ name: review-fix-simple
 subworkflow:
   callable: true
   visibility: internal
-description: 単体レビューと標準の裁定・検証付き修正ループでコード品質を確認する。
+description: 1体の読み取り専用レビュアーによるレビューの後、指摘を裁定・修正し、再レビューと要件確認を行う。
 all_steps:
   rules:
     - ref: findings-handling
