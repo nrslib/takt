@@ -11,6 +11,7 @@ export const RELEASE_GATE_SCRIPTS = Object.freeze([
   'sync:nix-deps',
   'build',
   'test:global-install',
+  'test:managed-install',
   'lint',
   'test',
   'test:it:all',

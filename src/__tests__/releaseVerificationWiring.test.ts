@@ -414,6 +414,7 @@ describe('release verification wiring', () => {
       'sync:nix-deps',
       'build',
       'test:global-install',
+      'test:managed-install',
       'lint',
       'test',
       'test:it:all',
@@ -522,6 +523,7 @@ describe('release verification wiring', () => {
       'run sync:nix-deps',
       'run build',
       'run test:global-install',
+      'run test:managed-install',
       'run lint',
       'run test',
       'run test:it:all',
@@ -560,11 +562,11 @@ describe('release verification wiring', () => {
     },
     {
       failingCommand: 'run lint',
-      expectedCommands: ['run sync:nix-deps', 'run build', 'run test:global-install', 'run lint'],
+      expectedCommands: ['run sync:nix-deps', 'run build', 'run test:global-install', 'run test:managed-install', 'run lint'],
     },
     {
       failingCommand: 'run test:it:all',
-      expectedCommands: ['run sync:nix-deps', 'run build', 'run test:global-install', 'run lint', 'run test', 'run test:it:all'],
+      expectedCommands: ['run sync:nix-deps', 'run build', 'run test:global-install', 'run test:managed-install', 'run lint', 'run test', 'run test:it:all'],
     },
     {
       failingCommand: 'run test:e2e:all',
@@ -572,6 +574,7 @@ describe('release verification wiring', () => {
         'run sync:nix-deps',
         'run build',
         'run test:global-install',
+        'run test:managed-install',
         'run lint',
         'run test',
         'run test:it:all',
