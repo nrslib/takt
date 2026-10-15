@@ -3,7 +3,13 @@ import { executePrWorkflow as executeRealPrWorkflow, runLinkedMergeSafely, runMe
 import type { SystemStepPrListItem } from '../core/workflow/system/system-step-services.js';
 import { GitLabProvider } from '../infra/gitlab/GitLabProvider.js';
 
-const mocks = vi.hoisted(() => ({ provider: vi.fn(), config: vi.fn(), details: vi.fn(), status: vi.fn() }));
+const mocks = vi.hoisted(() => ({ provider: vi.fn(), config: vi.fn(), details: vi.fn(), status: vi.fn(), agent: vi.fn(), selectionData: vi.fn(),
+  confirm: vi.fn(), confirmWithCancel: vi.fn() }));
+vi.mock('../agents/agent-usecases.js', () => ({ executeAgent: mocks.agent }));
+vi.mock('../shared/prompt/index.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../shared/prompt/index.js')>()),
+  confirm: mocks.confirm, confirmWithCancel: mocks.confirmWithCancel,
+}));
 vi.mock('../infra/git/index.js', () => ({ getGitProvider: mocks.provider }));
 vi.mock('../infra/config/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()), resolveConfigValue: mocks.config,
@@ -36,8 +42,12 @@ function processedNumbers(): number[] {
 describe('Merge target selection and execution', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    mocks.confirm.mockResolvedValue(true);
+    mocks.confirmWithCancel.mockResolvedValue({ kind: 'value', value: true });
     mocks.provider.mockReturnValue({ checkCliStatus: () => ({ available: true }),
-      fetchPrDetails: mocks.details, fetchPrStatus: mocks.status });
+      fetchPrDetails: mocks.details, fetchPrStatus: mocks.status, fetchPrSelectionData: mocks.selectionData });
+    mocks.selectionData.mockImplementation((number: number) => ({ number, title: `PR ${number}`, body: 'Description', files: ['docs/guide.md'] }));
+    mocks.agent.mockResolvedValue({ status: 'done', content: '', persona: 'selector', structuredOutput: { selected: true, reason: '意図に合う' } });
     setPrs([pr(123), pr(456)]);
     executePrWorkflow.mockResolvedValue({ merged: true });
   });
@@ -52,6 +62,9 @@ describe('Merge target selection and execution', () => {
       { where: { labels: ['absent'] } });
     expect(processedNumbers()).toEqual([123]);
     expect(listOpenPrNumbers).not.toHaveBeenCalled();
+    expect(fetchPrListItem).not.toHaveBeenCalled();
+    expect(mocks.agent).not.toHaveBeenCalled();
+    expect(mocks.selectionData).not.toHaveBeenCalled();
   });
 
   it('条件がなければdraft・fork以外のopen PRを一巡して再スキャンしない', async () => {
@@ -60,6 +73,8 @@ describe('Merge target selection and execution', () => {
     expect(processedNumbers().sort()).toEqual([123]);
     expect(listOpenPrNumbers).toHaveBeenCalledOnce();
     expect(listOpenPrNumbers).toHaveBeenCalledWith('/project');
+    expect(mocks.agent).not.toHaveBeenCalled();
+    expect(mocks.selectionData).not.toHaveBeenCalled();
   });
 
   it('既定のproviderへ番号一覧取得を引き継ぐ', async () => {
@@ -217,6 +232,130 @@ describe('Merge target selection and execution', () => {
     setPrs([]);
     expect(await run()).toMatchObject({ processedCount: 0, mergedCount: 0, exitCode: 0 });
     expect(executePrWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('テキスト指定では機械的条件を通過しAIが選択したPRだけを実行する', async () => {
+    setPrs([pr(10), pr(11), pr(12, { draft: true }), pr(13, { same_repository: false }), pr(14, { author: 'bob' })]);
+    mocks.agent.mockResolvedValueOnce({ status: 'done', structuredOutput: { selected: true, reason: '文書の変更' } })
+      .mockResolvedValueOnce({ status: 'done', structuredOutput: { selected: false, reason: '実装を含む' } });
+    expect(await run({ selectionText: 'ドキュメントのみ', where: { author: 'alice' } }))
+      .toEqual({ processedCount: 1, mergedCount: 1, exitCode: 0 });
+    expect(mocks.selectionData.mock.calls.map(([number]) => number)).toEqual([10, 11]);
+    expect(mocks.agent).toHaveBeenCalledTimes(2);
+    expect(processedNumbers()).toEqual([10]);
+  });
+
+  it('テキストだけの指定では設定の選定条件を保持する', async () => {
+    setPrs([pr(10), pr(11, { author: 'bob' })]);
+    await run({ selectionText: '文書のみ' }, { where: { author: 'bob' } });
+    expect(mocks.selectionData.mock.calls.map(([number]) => number)).toEqual([11]);
+    expect(processedNumbers()).toEqual([11]);
+  });
+
+  it('テキスト指定のCLI条件は設定条件全体を置換する', async () => {
+    setPrs([pr(10), pr(11, { author: 'bob', labels: [] })]);
+    await run({ selectionText: '文書のみ', where: { author: 'bob' } }, { where: { author: 'alice', labels: ['ready'] } });
+    expect(mocks.selectionData.mock.calls.map(([number]) => number)).toEqual([11]);
+    expect(processedNumbers()).toEqual([11]);
+  });
+
+  it('テキスト指定でも包含オプションを適用してからAIへ渡す', async () => {
+    setPrs([pr(10, { draft: true }), pr(11, { same_repository: false })]);
+    await run({ selectionText: '文書のみ', includeDraft: true, includeForks: true });
+    expect(mocks.selectionData.mock.calls.map(([number]) => number)).toEqual([10, 11]);
+    expect(processedNumbers()).toEqual([10, 11]);
+  });
+
+  it('全候補の判定と結果通知を完了してからワークフローを起動する', async () => {
+    const events: string[] = [];
+    mocks.agent.mockImplementation(async () => {
+      events.push('judge');
+      expect(executePrWorkflow).not.toHaveBeenCalled();
+      return { status: 'done', structuredOutput: { selected: true, reason: '文書の変更' } };
+    });
+    const onSelectionResult = vi.fn(() => { events.push('report'); });
+    executePrWorkflow.mockImplementation(async () => { events.push('execute'); return { merged: true }; });
+    await run({ selectionText: '文書のみ', onSelectionResult });
+    expect(events).toEqual(['judge', 'judge', 'report', 'execute', 'execute']);
+    expect(onSelectionResult).toHaveBeenCalledWith([
+      { number: 123, selected: true, reason: '文書の変更' },
+      { number: 456, selected: true, reason: '文書の変更' },
+    ]);
+    expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(mocks.confirmWithCancel).not.toHaveBeenCalled();
+  });
+
+  it('先行候補を選択した後の判定失敗でも全PRを未処理にする', async () => {
+    mocks.agent.mockResolvedValueOnce({ status: 'done', structuredOutput: { selected: true, reason: '文書の変更' } })
+      .mockRejectedValueOnce(new Error('provider failed'));
+    const onSelectionResult = vi.fn();
+    await expect(run({ selectionText: '文書のみ', onSelectionResult })).rejects.toThrow();
+    expect(mocks.agent).toHaveBeenCalledTimes(2);
+    expect(executePrWorkflow).not.toHaveBeenCalled();
+    expect(onSelectionResult).not.toHaveBeenCalled();
+  });
+
+  it('先行候補を選択した後の材料取得失敗でも全PRを未処理にする', async () => {
+    mocks.selectionData.mockImplementation((number: number) => {
+      if (number === 456) throw new Error('files unavailable');
+      return { number, title: '文書更新', body: '利用手順', files: ['docs/guide.md'] };
+    });
+    const onSelectionResult = vi.fn();
+    await expect(run({ selectionText: '文書のみ', onSelectionResult })).rejects.toThrow();
+    expect(mocks.agent).toHaveBeenCalledOnce();
+    expect(executePrWorkflow).not.toHaveBeenCalled();
+    expect(onSelectionResult).not.toHaveBeenCalled();
+  });
+
+  it('テキスト指定の後続PR詳細取得失敗では先行PRも実行しない', async () => {
+    fetchPrListItem.mockImplementation((number: number) => {
+      if (number === 456) throw new Error('details unavailable');
+      return pr(number);
+    });
+    await expect(run({ selectionText: '文書のみ' })).rejects.toThrow();
+    expect(executePrWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('AIが全候補を除外したら処理ゼロで正常終了し除外結果を通知する', async () => {
+    mocks.agent.mockResolvedValue({ status: 'done', structuredOutput: { selected: false, reason: '実装を含む' } });
+    const onSelectionResult = vi.fn();
+    expect(await run({ selectionText: '文書のみ', onSelectionResult }))
+      .toEqual({ processedCount: 0, mergedCount: 0, exitCode: 0 });
+    expect(executePrWorkflow).not.toHaveBeenCalled();
+    expect(onSelectionResult).toHaveBeenCalledWith([
+      { number: 123, selected: false, reason: '実装を含む' },
+      { number: 456, selected: false, reason: '実装を含む' },
+    ]);
+  });
+
+  it('機械的候補ゼロならテキスト指定でもAIを呼ばず正常終了する', async () => {
+    setPrs([pr(10, { draft: true }), pr(11, { same_repository: false })]);
+    expect(await run({ selectionText: '文書のみ' })).toEqual({ processedCount: 0, mergedCount: 0, exitCode: 0 });
+    expect(mocks.selectionData).not.toHaveBeenCalled();
+    expect(mocks.agent).not.toHaveBeenCalled();
+    expect(executePrWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('テキスト選別後も並列数を守り実際のマージ結果だけを集計する', async () => {
+    setPrs([pr(10), pr(11), pr(12)]);
+    const releases: Array<() => void> = [];
+    let active = 0;
+    let maxActive = 0;
+    executePrWorkflow.mockImplementation(({ prNumber }: { prNumber: number }) => new Promise((resolve) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      releases.push(() => { active -= 1; resolve({ merged: prNumber !== 10 }); });
+    }));
+    const running = run({ selectionText: '文書のみ' });
+    await vi.waitFor(() => expect(releases).toHaveLength(2));
+    releases[0]!();
+    await vi.waitFor(() => expect(releases).toHaveLength(3));
+    releases[1]!();
+    releases[2]!();
+    expect(await running).toEqual({ processedCount: 3, mergedCount: 2, exitCode: 1 });
+    expect(mocks.agent).toHaveBeenCalledTimes(3);
+    expect(maxActive).toBe(2);
+    expect(processedNumbers()).toEqual([10, 11, 12]);
   });
 
   it('既定はsimple workflow・squash・自動起動無効・draft除外である', () => {

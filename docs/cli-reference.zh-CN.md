@@ -607,6 +607,10 @@ takt purge --retention-days 14
 
 ### `takt merge`
 
+只接受一个位置参数：纯十进制数字作为 PR 编号，其他文本作为 AI 筛选条件。指定编号时忽略筛选条件和 AI 判断，只处理该 PR。指定文本时，先应用现有 CLI 条件或 `merge.where` 配置以及 draft/fork 排除规则，再由 AI 判断剩余候选。判断材料包括标题、正文、标签、head/base 分支名称和全部变更文件路径，不包括差异正文或审查评论。只指定文本时保留配置中的筛选条件。
+
+所有候选均返回有效的结构化判断后，显示选中的 PR 编号及理由和排除的 PR 编号，无需确认即可执行选中的 PR workflow。判断缺失或无效、提供商错误、材料获取失败或文件列表不完整时，不启动任何 PR workflow，并以非零退出码结束。候选或选中结果为空时，处理数和合并数均为 0，退出码为 0。处理数和实际合并数的显示保持原有含义。
+
 默认使用 `merge-review-fix-simple` workflow：由一个只读审查代理进行审查，再由独立步骤裁定问题、规划和实施修复、验证并重新审查。需要并行审查时，可指定 `--workflow merge-review-fix`。不指定 PR 编号时，默认同时处理 2 个 PR；`merge.concurrency` 可更改默认值，`--concurrency` 可覆盖本次运行。指定编号时只处理该 PR。如果启用了 `caccia.enabled`，workflow 推送 PR 后会等待 CodeRabbit 审查和 Caccia 处理，再根据最新的 head 进行 CI 判断和合并。仅当 workflow 推送前后均确认没有 CodeRabbit 活动时，才会跳过关联的 Caccia 等待并继续正常的 CI 判断与合并。审查、线程、评论、提交状态或检查运行中有 CodeRabbit 活动，或者活动状态不明时，不会跳过等待。如果在等待期限内无法确认首次审查，关联的 Caccia 会记录为已跳过，并停止合并。审查限额通知给出的重试时间达到或超过等待期限时，关联的 Caccia 会立即跳过，然后继续正常的 CI 判断与合并；若早于期限，则在该时间到达时只发送一次 `@coderabbitai review` 评论。首次审查或 Caccia 推送修复后的等待中收到限额通知后，审查到期限仍未完成时会记录为已跳过，然后继续正常的 CI 判断与合并。CodeRabbit 明确跳过审查时同样如此。Caccia 推送修复后若未收到限额通知且再审查超时，也会停止合并。继续前会核对最新的 head 和 PR 身份，并重新检查 fork 风险。继续执行保存有跳过结果的任务时，会重新确认并根据结果决定是否继续合并。
 
 每个 PR 的合并任务都会显示在 `takt list`。隔离克隆与普通任务使用相同的 `worktree_dir`：默认位于 `../takt-worktrees`，父目录不可写时使用现有的 `.takt/worktrees` 后备位置。失败或冲突时会保留克隆及 Git 合并状态，以便检查。再次运行 `takt merge` 会创建新任务和隔离克隆，并保留失败的任务及克隆。要继续原有任务，请在 `takt list` 中使用 **Requeue**；要修改指令后继续，请使用 **Retry**。继续执行时会重新核对 PR 身份和 fork 风险。同一 PR 的合并任务正在运行或等待执行时，会阻止新任务启动及失败任务继续执行。确认 PR 已合并后才删除克隆。AI 可修改与冲突相关的源码、测试和 lockfile；TAKT 暂存本次修改，并保留此前未暂存或未跟踪的用户改动。
@@ -614,4 +618,5 @@ takt purge --retention-days 14
 ```bash
 takt merge --concurrency 4
 takt merge 123
+takt merge "仅文档变更"
 ```
