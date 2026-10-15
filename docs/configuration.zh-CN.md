@@ -244,7 +244,7 @@ assistant:
 | `sync_conflict_resolver` | object | `{ auto_approve_tools: false }` | sync conflict resolver 策略 |
 | `observability` | object | disabled | opt-in OpenTelemetry 基础设施 |
 
-Codex、Claude SDK、claude-headless、OpenCode 和 Copilot 对临时 HTTP 429 错误使用同一 provider 最多重试 8 次，等待时间依次为 1、2、4、8、16、30、30、30 秒。重试成功则正常完成。明确的使用额度、余额或 spend cap 耗尽通知会立即进入 `rate_limit_fallback.switch_chain`；持续的临时限流会在重试预算耗尽后进入该流程。同一错误同时包含限流和额度耗尽时，以额度耗尽为准。未配置切换目标时仍会停止执行。没有与重试相关的配置项，其他错误的现有重试条件保持不变。
+Codex、Claude SDK、claude-headless、OpenCode 和 Copilot 对临时 HTTP 429 错误使用同一 provider 最多重试 8 次，等待时间依次为 1、2、4、8、16、30、30、30 秒。重试成功则正常完成。明确匹配已知额度耗尽信号的通知会立即进入 `rate_limit_fallback.switch_chain`；持续的临时限流会在重试预算耗尽后进入该流程。同一错误同时包含限流和额度耗尽时，以额度耗尽为准。未配置切换目标时仍会停止执行。没有与重试相关的配置项，其他错误的现有重试条件保持不变。
 
 ## Caccia Review Loop
 

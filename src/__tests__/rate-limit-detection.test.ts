@@ -41,6 +41,9 @@ describe('classifyRateLimitError', () => {
   it.each([429, '429'] as const)('構造化statusCode=%sを分類する', (status) => {
     expect(classifyRateLimitError('request rejected', status)).toBe('Transient');
   });
+  it('余额を含むだけの429は一時的な失敗として分類する', () => {
+    expect(classifyRateLimitError('HTTP 429: 余额不足')).toBe('Transient');
+  });
   it('rate limit以外の失敗は分類しない', () => {
     expect(classifyRateLimitError('permission denied')).toBe('NotRateLimit');
     expect(classifyRateLimitError('Permission denied while reading the spend cap setting')).toBe('NotRateLimit');
