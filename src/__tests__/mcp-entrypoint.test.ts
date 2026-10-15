@@ -12,6 +12,7 @@ import { createConversationSession } from '../features/interactive/conversationS
 import { getTaktRun, listTaktTasks } from '../features/mcp/operations.js';
 import { resolveCloneBaseDir } from '../infra/task/index.js';
 import { getCloneMetaPath } from '../infra/task/clone-meta.js';
+import { MCP_RESPONSE_MAX_BYTES } from '../features/mcp/response.js';
 
 const { readFileSyncMock, readRunMetaBySlugMock } = vi.hoisted(() => ({
   readFileSyncMock: vi.fn(),
@@ -61,6 +62,318 @@ function writeRunFixture(
     interventionPath: join(baseCwd, '.takt', 'runs', runSlug, 'interventions.jsonl'),
   };
 }
+
+function writeRunningCloneFixture(cwd: string) {
+  const runSlug = 'active-run';
+  const cloneCwd = join(cwd, '.takt', 'worktrees', 'active');
+  writeRunFixture(cloneCwd, runSlug, 'implement');
+  mkdirSync(join(cwd, '.takt', 'runs', runSlug), { recursive: true });
+  writeFileSync(join(cwd, '.takt', 'tasks.yaml'), stringifyYaml({ tasks: [{
+    name: 'active', status: 'running', content: 'Active task', workflow: 'default',
+    worktree: true, auto_pr: false, created_at: '2026-09-09T00:00:00.000Z',
+    started_at: '2026-09-09T00:00:00.000Z', completed_at: null,
+    run_slug: runSlug, worktree_path: cloneCwd,
+  }] }));
+  return { runSlug, cloneCwd, interventionPath: join(cwd, '.takt', 'runs', runSlug, 'interventions.jsonl') };
+}
+
+it.each([
+  { name: 'short', content: 'Saved additional instruction.', maxBytes: 4096 },
+  { name: 'long', content: 'a'.repeat(65537), maxBytes: 4096 },
+  { name: 'UTF-8', content: '追加指示', maxBytes: 4 },
+])('retrieves the complete $name instruction by the ID returned from tell', async ({ content, maxBytes }) => {
+  const cwd = mkdtempSync(join(tmpdir(), 'takt-mcp-instruction-'));
+  const { runSlug, cloneCwd, interventionPath } = writeRunningCloneFixture(cwd);
+  const server = createTaktMcpServer({}, { allowedProjectRoot: cwd });
+  const client = new Client({ name: 'instruction-read-test', version: '1' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  try {
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    const call = async (name: string, input: Record<string, unknown>) => {
+      const result = await client.callTool({ name, arguments: { cwd, runSlug, ...input } });
+      expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
+      return JSON.parse(firstTextContent(result.content));
+    };
+    const first = await call('takt_tell_run', { content: 'First instruction' });
+    const second = await call('takt_tell_run', { content });
+    expect(second.instructionId).not.toBe(first.instructionId);
+    const saved = readFileSync(interventionPath, 'utf8');
+    const savedQueue = readFileSync(join(cwd, '.takt', 'tasks.yaml'), 'utf8');
+    const summary = await call('takt_get_run', {});
+    if (Buffer.byteLength(content) > MCP_RESPONSE_MAX_BYTES) {
+      expect(summary.truncated).toBe(true);
+      expect(summary.omissions).toContainEqual(expect.objectContaining({
+        path: 'liveIntervention.instructions[].content',
+        totalBytes: Buffer.byteLength(content), returnedBytes: 4096,
+      }));
+    }
+    const firstRead = await call('takt_get_run', { view: 'instructions', instructionId: first.instructionId });
+    expect(firstRead.instruction).toMatchObject({ instructionId: first.instructionId,
+      content: 'First instruction', state: 'pending', truncated: false, nextOffset: null });
+    if (maxBytes === 4) {
+      expect((await call('takt_get_run', { view: 'instructions', instructionId: second.instructionId, maxBytes: 4096 })).instruction)
+        .toMatchObject({ content, truncated: false, nextOffset: null });
+    }
+    let restored = '';
+    let offset = 0;
+    for (;;) {
+      const { instruction } = await call('takt_get_run', { view: 'instructions', instructionId: second.instructionId, offset, maxBytes });
+      expect(instruction).toMatchObject({ instructionId: second.instructionId, state: 'pending',
+        offset, totalBytes: Buffer.byteLength(content), direction: 'forward' });
+      expect(instruction.returnedBytes).toBe(Buffer.byteLength(instruction.content));
+      expect(instruction.returnedBytes).toBeGreaterThan(0);
+      expect(instruction.returnedBytes).toBeLessThanOrEqual(maxBytes);
+      expect(instruction.truncated).toBe(offset > 0 || instruction.returnedBytes < Buffer.byteLength(content));
+      restored += instruction.content;
+      if (instruction.nextOffset === null) break;
+      expect(instruction.nextOffset).toBe(offset + instruction.returnedBytes);
+      offset = instruction.nextOffset;
+    }
+    expect(restored).toBe(content);
+    expect(readFileSync(interventionPath, 'utf8')).toBe(saved);
+    expect(readFileSync(join(cwd, '.takt', 'tasks.yaml'), 'utf8')).toBe(savedQueue);
+    expect(existsSync(join(cloneCwd, '.takt', 'runs', runSlug, 'interventions.jsonl'))).toBe(false);
+  } finally {
+    await client.close(); await server.close();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+it('lists saved instructions in order with empty and 50-item page boundaries and rejects invalid selections', async () => {
+  const cwd = mkdtempSync(join(tmpdir(), 'takt-mcp-instruction-list-'));
+  const { runSlug, interventionPath } = writeRunningCloneFixture(cwd);
+  const server = createTaktMcpServer({}, { allowedProjectRoot: cwd });
+  const client = new Client({ name: 'instruction-list-test', version: '1' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  try {
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    const read = async (input: Record<string, unknown> = {}) => {
+      const result = await client.callTool({ name: 'takt_get_run', arguments: { cwd, runSlug, view: 'instructions', ...input } });
+      expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
+      return JSON.parse(firstTextContent(result.content));
+    };
+    expect(await read()).toMatchObject({ instructions: [], collection: 'instructions', totalCount: 0,
+      returnedCount: 0, omittedCount: 0, offset: 0, nextOffset: null, truncated: false });
+    const ids: number[] = [];
+    for (let index = 0; index < 51; index++) {
+      const result = await client.callTool({ name: 'takt_tell_run', arguments: { cwd, runSlug, content: `Instruction ${index}` } });
+      expect(result.isError).toBeUndefined();
+      ids.push(JSON.parse(firstTextContent(result.content)).instructionId);
+      if (index === 0) expect(await read()).toMatchObject({ totalCount: 1, returnedCount: 1, nextOffset: null, truncated: false });
+    }
+    writeFileSync(interventionPath, readFileSync(interventionPath, 'utf8') + JSON.stringify({
+      type: 'delivered', instructionIds: [ids[0]], deliveredAt: '2026-09-09T00:02:00.000Z',
+      mode: 'next_step', step: 'implement', phase: 1,
+    }) + '\n');
+    const saved = readFileSync(interventionPath, 'utf8');
+    const first = await read({ limit: 50 });
+    expect(first).toMatchObject({ totalCount: 51, returnedCount: 50, omittedCount: 1, offset: 0, nextOffset: 50, truncated: true });
+    expect(first.instructions[0]).toMatchObject({ instructionId: ids[0], state: 'deliveredNextStep', deliveryMode: 'next_step' });
+    const second = await read({ limit: 50, offset: first.nextOffset });
+    expect(second).toMatchObject({ totalCount: 51, returnedCount: 1, omittedCount: 50, offset: 50, nextOffset: null, truncated: true });
+    const instructions = [...first.instructions, ...second.instructions];
+    expect(instructions.map((entry) => entry.instructionId)).toEqual(ids);
+    for (const entry of instructions) {
+      expect(entry.issuedAt).toEqual(expect.any(String));
+      expect(entry).not.toHaveProperty('content');
+    }
+    expect((await read({ instructionId: ids[0] })).instruction).toMatchObject({
+      content: 'Instruction 0', state: 'deliveredNextStep', deliveryMode: 'next_step',
+    });
+    for (const input of [
+      { instructionId: 0 }, { instructionId: -1 }, { instructionId: 1.5 }, { instructionId: Number.MAX_SAFE_INTEGER + 1 },
+      { instructionId: 52 }, { instructionId: 1, view: 'summary' }, { instructionId: 1, view: 'log' },
+      { instructionId: 1, view: 'report', report: '00-progress.md' }, { instructionId: 1, view: undefined },
+      { limit: 0 }, { limit: 51 }, { offset: -1 }, { instructionId: 1, maxBytes: 3 }, { instructionId: 1, maxBytes: 4097 },
+    ]) {
+      const result = await client.callTool({ name: 'takt_get_run', arguments: { cwd, runSlug, view: 'instructions', ...input } });
+      expect(result.isError, JSON.stringify(input)).toBe(true);
+    }
+    expect(readFileSync(interventionPath, 'utf8')).toBe(saved);
+  } finally {
+    await client.close(); await server.close();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+it.each(['read-only', 'all'] as const)('returns bounded run summaries and retrievable artifacts for %s', async (toolSet) => {
+  const cwd = mkdtempSync(join(tmpdir(), 'takt-mcp-bounded-'));
+  const slug = 'large-run';
+  const { runDir } = writeRunFixture(cwd, slug, 'implement', '先頭' + '日本語'.repeat(100000) + '末尾');
+  for (let index = 0; index < 60; index++) writeFileSync(join(runDir, 'reports', `report-${String(index).padStart(3, '0')}.md`), '大容量'.repeat(30000));
+  const metaPath = join(runDir, 'meta.json');
+  const metadata = { ...JSON.parse(readFileSync(metaPath, 'utf8')), task: 'S'.repeat(16), currentIteration: 2, phase: 2 };
+  writeFileSync(metaPath, JSON.stringify(metadata));
+  writeFileSync(join(runDir, 'interventions.jsonl'), JSON.stringify({
+    type: 'issued', instructionId: 1, issuedAt: '2026-09-09T00:00:00.000Z', content: '追加指示',
+  }) + '\n');
+  const timestamp = '2026-09-09T00:02:00.000Z';
+  const log = (step: string, content: string, iteration: number) => ({ type: 'step_complete', step, persona: 'coder', status: 'done', iteration, content, instruction: 'work', timestamp });
+  writeFileSync(join(runDir, 'logs', 'session.jsonl'), [
+    { type: 'workflow_start', task: slug, workflowName: 'default', startTime: timestamp },
+    log('plan', '先頭の計画' + '長文'.repeat(50000) + '計画の末尾', 1),
+    { type: 'step_start', step: 'implement', persona: 'coder', iteration: 2, timestamp },
+    log('implement', '先頭の実装' + '長文'.repeat(50000) + '実装の末尾', 2),
+  ].map((record) => JSON.stringify(record)).join('\n') + '\n');
+  const server = createTaktMcpServer({}, { allowedProjectRoot: cwd, toolSet, includeReferenceMarkers: true });
+  const client = new Client({ name: 'bounded-run-test', version: '1' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  try {
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    const tools = await client.listTools();
+    const schema = tools.tools.find((tool) => tool.name === 'takt_get_run')!.inputSchema;
+    expect(schema.properties).toHaveProperty('view');
+    expect(schema.properties).toHaveProperty('stepIndex');
+    expect(schema.properties).toHaveProperty('report');
+    const read = async (input: Record<string, unknown>) => {
+      const result = await client.callTool({ name: 'takt_get_run', arguments: { cwd, runSlug: slug, ...input } });
+      expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
+      const text = firstTextContent(result.content);
+      expect(text.split('\n')).toHaveLength(2);
+      return JSON.parse(text.split('\n')[0]!);
+    };
+    const selections = [{}, { view: 'summary' }, { view: 'log', maxBytes: 24 },
+      { view: 'report', report: '00-progress.md', maxBytes: 24 },
+      { view: 'instructions' }, { view: 'instructions', instructionId: 1, maxBytes: 4 }];
+    const shortResponses = [];
+    for (const selection of selections) shortResponses.push(await read(selection));
+    const longTask = 'A'.repeat(4096) + 'B'.repeat(65904);
+    writeFileSync(metaPath, JSON.stringify({ ...metadata, task: longTask }));
+    for (const [index, selection] of selections.entries()) {
+      const response = await read(selection);
+      const short = shortResponses[index];
+      expect(short).not.toHaveProperty('task');
+      expect(response).not.toHaveProperty('task');
+      expect(short.taskOmission).toEqual({ totalBytes: 16, returnedBytes: 0, truncated: true });
+      expect(response.taskOmission).toEqual({ totalBytes: 70000, returnedBytes: 0, truncated: true });
+      const { taskOmission: _shortOmission, ...shortContent } = short;
+      const { taskOmission: _longOmission, ...longContent } = response;
+      expect(longContent).toEqual(shortContent);
+    }
+    const summary = await read({});
+    expect(summary.retrieval).toContain('view task');
+    expect(summary.retrieval).toContain('task.nextOffset');
+    let restoredTask = '';
+    let taskOffset = 0;
+    for (;;) {
+      const response = await read({ view: 'task', offset: taskOffset });
+      expect(response).not.toHaveProperty('taskOmission');
+      const page = response.task;
+      expect(page).toMatchObject({ totalBytes: 70000, offset: taskOffset, direction: 'forward',
+        returnedBytes: Buffer.byteLength(page.content), truncated: true });
+      expect(page.returnedBytes).toBeGreaterThan(0);
+      expect(page.returnedBytes).toBeLessThanOrEqual(4096);
+      if (taskOffset === 0) expect(page.content).toBe('A'.repeat(4096));
+      if (taskOffset === 4096) expect(page.content).toBe('B'.repeat(4096));
+      restoredTask += page.content;
+      if (page.nextOffset === null) break;
+      expect(page.nextOffset).toBe(taskOffset + page.returnedBytes);
+      taskOffset = page.nextOffset;
+    }
+    expect(restoredTask).toBe(longTask);
+    expect(summary).toMatchObject({ status: 'running', currentStep: 'implement', currentIteration: 2,
+      currentStepStartedAt: timestamp, currentStepExecutionCount: 1, phase: 2,
+      stepLogs: [{ index: 0, step: 'plan', persona: 'coder', status: 'done', iteration: 1, timestamp }, { index: 1, step: 'implement', persona: 'coder', status: 'done', iteration: 2, timestamp }] });
+    expect(summary.reports[0]).toEqual({ filename: '00-progress.md', sizeBytes: Buffer.byteLength('先頭' + '日本語'.repeat(100000) + '末尾') });
+    for (const step of summary.stepLogs) expect(step).not.toHaveProperty('content');
+    for (const report of summary.reports) expect(report).not.toHaveProperty('content');
+    expect(summary.reportPage).toMatchObject({ totalCount: 61, returnedCount: 50, nextOffset: 50, truncated: true });
+    expect((await read({ offset: 50 })).reports).toHaveLength(11);
+    const latest = await read({ view: 'log', maxBytes: 24 });
+    expect(latest.log).toMatchObject({ index: 1, truncated: true });
+    expect(latest.log.content.endsWith('実装の末尾')).toBe(true);
+    const earlier = await read({ view: 'log', stepIndex: 0, maxBytes: 24 });
+    expect(earlier.log.content.endsWith('計画の末尾')).toBe(true);
+    const preceding = await read({ view: 'log', maxBytes: 24, offset: latest.log.nextOffset });
+    expect(preceding.log.offset + preceding.log.returnedBytes).toBe(latest.log.offset);
+    const report = await read({ view: 'report', report: '00-progress.md', maxBytes: 24 });
+    expect(report.report).toMatchObject({ offset: 0, truncated: true, nextOffset: 24 });
+    expect(report.report.content.startsWith('先頭')).toBe(true);
+    const next = await read({ view: 'report', report: '00-progress.md', maxBytes: 24, offset: report.report.nextOffset });
+    expect(next.report.offset).toBe(24);
+    writeFileSync(join(runDir, 'reports', 'small.md'), '短い本文');
+    expect((await read({ view: 'report', report: 'small.md' })).report).toMatchObject({ content: '短い本文', truncated: false, nextOffset: null });
+    const originalMeta = readFileSync(metaPath, 'utf8');
+    writeFileSync(metaPath, JSON.stringify({ ...JSON.parse(originalMeta), task: '\u0000'.repeat(6000), workflow: '\u0000'.repeat(6000), currentStep: '\u0000'.repeat(6000) }));
+    const escaped = '先頭' + '\u0000'.repeat(8000) + '末尾';
+    writeFileSync(join(runDir, 'reports', 'escaped.md'), escaped);
+    const escapedReport = (await read({ view: 'report', report: 'escaped.md' })).report;
+    expect(escapedReport.returnedBytes).toBeLessThan(4096);
+    expect(escapedReport.returnedBytes).toBe(Buffer.byteLength(escapedReport.content));
+    expect((await read({ view: 'report', report: 'escaped.md', offset: escapedReport.nextOffset })).report.offset)
+      .toBe(escapedReport.offset + escapedReport.returnedBytes);
+    writeFileSync(join(runDir, 'logs', 'session.jsonl'), [
+      { type: 'workflow_start', task: slug, workflowName: 'default', startTime: timestamp },
+      log('implement', escaped, 2),
+    ].map((record) => JSON.stringify(record)).join('\n'));
+    const escapedLog = (await read({ view: 'log' })).log;
+    expect(escapedLog.returnedBytes).toBeLessThan(4096);
+    expect(escapedLog.returnedBytes).toBe(Buffer.byteLength(escapedLog.content));
+    expect(escapedLog.content.endsWith('末尾')).toBe(true);
+    const escapedPrevious = (await read({ view: 'log', offset: escapedLog.nextOffset })).log;
+    expect(escapedPrevious.offset + escapedPrevious.returnedBytes).toBe(escapedLog.offset);
+    writeFileSync(metaPath, originalMeta);
+    writeFileSync(join(runDir, 'logs', 'session.jsonl'), [
+      { type: 'workflow_start', task: slug, workflowName: 'default', startTime: timestamp },
+      log('small', '短いログ', 3),
+    ].map((record) => JSON.stringify(record)).join('\n'));
+    expect((await read({ view: 'log' })).log).toMatchObject({ content: '短いログ', truncated: false, nextOffset: null });
+    const forbidden = await client.callTool({ name: 'takt_get_run', arguments: { cwd, runSlug: slug, view: 'report', report: '../meta.json' } });
+    expect(forbidden.isError).toBe(true);
+  } finally {
+    await client.close();
+    await server.close();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+it.each(['Short task', '日本語'])('reads task text with UTF-8 byte bounds and validates page sizes: %j', async (task) => {
+  const cwd = mkdtempSync(join(tmpdir(), 'takt-mcp-task-'));
+  const runSlug = 'task-run';
+  const { runDir } = writeRunFixture(cwd, runSlug, 'implement');
+  const metaPath = join(runDir, 'meta.json');
+  writeFileSync(metaPath, JSON.stringify({ ...JSON.parse(readFileSync(metaPath, 'utf8')), task }));
+  const server = createTaktMcpServer({}, { allowedProjectRoot: cwd });
+  const client = new Client({ name: 'task-read-test', version: '1' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  try {
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    const read = async (input: Record<string, unknown>) => {
+      const result = await client.callTool({ name: 'takt_get_run', arguments: { cwd, runSlug, ...input } });
+      expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
+      return JSON.parse(firstTextContent(result.content));
+    };
+    const summary = await read({});
+    expect(summary).not.toHaveProperty('task');
+    expect(summary.taskOmission).toEqual({ totalBytes: Buffer.byteLength(task), returnedBytes: 0, truncated: task.length > 0 });
+    const complete = await read({ view: 'task', maxBytes: 4096 });
+    expect(complete).not.toHaveProperty('taskOmission');
+    expect(complete.task).toEqual({ content: task, totalBytes: Buffer.byteLength(task), offset: 0,
+      returnedBytes: Buffer.byteLength(task), direction: 'forward', truncated: false, nextOffset: null });
+    const first = await read({ view: 'task', maxBytes: 4 });
+    if (task === '日本語') {
+      expect(first.task).toEqual({ content: '日', totalBytes: 9, offset: 0, returnedBytes: 3,
+        direction: 'forward', truncated: true, nextOffset: 3 });
+      expect((await read({ view: 'task', maxBytes: 4, offset: first.task.nextOffset })).task)
+        .toMatchObject({ content: '本', offset: 3, returnedBytes: 3, nextOffset: 6 });
+    }
+    for (const maxBytes of [3, 4097]) {
+      const rejected = await client.callTool({ name: 'takt_get_run', arguments: { cwd, runSlug, view: 'task', maxBytes } });
+      expect(rejected.isError).toBe(true);
+    }
+  } finally {
+    await client.close(); await server.close();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
 
 function writeCloneOwnershipMetadata(projectCwd: string, branch: string, clonePath: string): void {
   const metadataPath = getCloneMetaPath(projectCwd, branch);
@@ -260,6 +573,25 @@ describe('MCP package entrypoint', () => {
         'takt_list_goals',
         'takt_get_goal',
       ]));
+      for (const name of ['takt_requeue_goal_task', 'takt_retry_goal_task', 'takt_remove_goal_task', 'takt_enqueue_task', 'takt_tell_run']) {
+        const description = tools.tools.find((tool) => tool.name === name)!.description;
+        expect(description, name).toContain('64 KiB');
+        expect(description, name).toContain('truncation');
+        expect(description, name).toContain('takt_list_tasks offset/limit');
+        if (name === 'takt_tell_run') {
+          for (const selector of ['takt_get_run', 'runSlug', 'view instructions', 'instructionId', 'offset/limit', 'offset/maxBytes', 'nextOffset']) {
+            expect(description).toContain(selector);
+          }
+        } else if (name !== 'takt_enqueue_task') {
+          for (const selector of ['takt_list_goal_work_log offset/limit', 'takt_get_goal path workLog.summary', 'recordId', 'textOffset/maxBytes']) {
+            expect(description, name).toContain(selector);
+          }
+        }
+      }
+      const getRunDescription = tools.tools.find((tool) => tool.name === 'takt_get_run')!.description;
+      for (const selector of ['64 KiB', 'truncation', 'view instructions', 'instructionId', 'offset/limit', 'offset/maxBytes', 'nextOffset']) {
+        expect(getRunDescription).toContain(selector);
+      }
       const enqueueTool = tools.tools.find((tool) => tool.name === 'takt_enqueue_task');
       expect(enqueueTool).toEqual(expect.objectContaining({
         title: 'Enqueue TAKT task',
@@ -500,10 +832,10 @@ describe('MCP package entrypoint', () => {
         currentStepExecutionCount: 1,
         phase: 2,
         stepLogs: expect.arrayContaining([
-          expect.objectContaining({ step: 'plan', content: 'Plan is ready', iteration: 1, timestamp: '2026-09-09T00:01:00.000Z' }),
+          expect.objectContaining({ step: 'plan', persona: 'planner', status: 'done', iteration: 1, timestamp: '2026-09-09T00:01:00.000Z' }),
         ]),
         reports: expect.arrayContaining([
-          expect.objectContaining({ filename: '00-progress.md', content: reportMarker }),
+          expect.objectContaining({ filename: '00-progress.md', sizeBytes: Buffer.byteLength(reportMarker) }),
         ]),
         liveIntervention: expect.objectContaining({
           issuedTotal: 1,
@@ -588,7 +920,7 @@ describe('MCP package entrypoint', () => {
       });
       expect.soft(readRunMetaBySlugMock).not.toHaveBeenCalled();
       expect(result.isError).toBeUndefined();
-      expect(JSON.parse(firstTextContent(result.content))).toEqual({
+      expect(JSON.parse(firstTextContent(result.content))).toMatchObject({
         tasks: [{
           name: 'untrusted-task',
           summary: 'Task with an untrusted worktree path',
@@ -622,6 +954,9 @@ describe('MCP package entrypoint', () => {
     mkdirSync(ownedClone, { recursive: true });
     mkdirSync(unownedClone, { recursive: true });
     writeRunFixture(ownedClone, ownedSlug, 'owned-step', 'OWNED_REPORT');
+    writeRunFixture(cwd, ownedSlug, 'project-step');
+    const projectMetaPath = join(cwd, '.takt', 'runs', ownedSlug, 'meta.json');
+    writeFileSync(projectMetaPath, JSON.stringify({ ...JSON.parse(readFileSync(projectMetaPath, 'utf8')), task: 'Project task' }));
     writeRunFixture(unownedClone, unownedSlug, 'unowned-step', 'UNOWNED_REPORT_SECRET');
     writeCloneOwnershipMetadata(cwd, ownedBranch, ownedClone);
     // The same metadata in another project must not grant project A access.
@@ -695,7 +1030,7 @@ describe('MCP package entrypoint', () => {
       expect.soft(readRunMetaBySlugMock.mock.calls.map(([runCwd, slug]) => [runCwd, slug]))
         .toEqual([[ownedClone, ownedSlug]]);
       expect(listed.isError).toBeUndefined();
-      expect(JSON.parse(firstTextContent(listed.content))).toEqual({
+      expect(JSON.parse(firstTextContent(listed.content))).toMatchObject({
         tasks: [
           { name: 'owned-task', summary: 'Owned task', status: 'running', startedAt: '2026-09-09T00:00:00.000Z', workflow: 'default', runSlug: ownedSlug, currentStep: 'owned-step' },
           { name: 'unowned-task', summary: 'Unowned task', status: 'running', startedAt: '2026-09-09T00:00:00.000Z', workflow: 'default', runSlug: unownedSlug, error: expect.stringMatching(/\S/) },
@@ -705,10 +1040,17 @@ describe('MCP package entrypoint', () => {
 
       const owned = await client.callTool({
         name: 'takt_get_run',
-        arguments: { cwd, runSlug: ownedSlug },
+        arguments: { cwd, runSlug: ownedSlug, view: 'report', report: '00-progress.md' },
       });
       expect(owned.isError).toBeUndefined();
       expect(firstTextContent(owned.content)).toContain('OWNED_REPORT');
+      const ownedTask = await client.callTool({ name: 'takt_get_run', arguments: { cwd, runSlug: ownedSlug, view: 'task' } });
+      expect(ownedTask.isError).toBeUndefined();
+      expect(JSON.parse(firstTextContent(ownedTask.content)).task).toMatchObject({ content: ownedSlug, nextOffset: null });
+      readRunMetaBySlugMock.mockClear();
+      const unownedTask = await client.callTool({ name: 'takt_get_run', arguments: { cwd, runSlug: unownedSlug, view: 'task' } });
+      expect(unownedTask.isError).toBe(true);
+      expect(readRunMetaBySlugMock).not.toHaveBeenCalled();
 
       const unowned = await client.callTool({
         name: 'takt_get_run',
@@ -733,6 +1075,9 @@ describe('MCP package entrypoint', () => {
       expect(unownedTell.isError).toBe(true);
       expect(readFileSync(unownedInterventionPath, 'utf-8')).toBe(unchangedIntervention);
       expect(existsSync(join(unownedClone, '.takt', 'runs', unownedSlug, 'interventions.jsonl'))).toBe(false);
+      const page = await client.callTool({ name: 'takt_list_tasks', arguments: { cwd, limit: 1, offset: 2 } });
+      expect(page.isError).toBeUndefined();
+      expect(JSON.parse(firstTextContent(page.content))).toMatchObject({ tasks: [{ name: 'pending-task' }], totalCount: 3, returnedCount: 1, offset: 2, nextOffset: null, truncated: true });
     } finally {
       await client.close();
       await server.close();
@@ -787,7 +1132,7 @@ describe('MCP package entrypoint', () => {
       const result = await client.callTool({ name: 'takt_list_tasks', arguments: { cwd } });
 
       expect(result.isError).toBeUndefined();
-      expect(JSON.parse(firstTextContent(result.content))).toEqual({
+      expect(JSON.parse(firstTextContent(result.content))).toMatchObject({
         tasks: [
           { name: 'healthy', summary: 'healthy summary', status: 'running', startedAt: '2026-09-09T00:00:00.000Z', workflow: 'default', runSlug: healthySlug, currentStep: 'implement' },
           { name: 'broken', summary: 'broken summary', status: 'running', startedAt: '2026-09-09T00:00:00.000Z', workflow: 'saved-workflow', runSlug: brokenSlug, error: expect.stringMatching(/\S/) },
@@ -1113,6 +1458,14 @@ describe('MCP package entrypoint', () => {
       await server.connect(serverTransport);
       await client.connect(clientTransport);
 
+      const readRun = async () => {
+        const result = await client.callTool({ name: 'takt_get_run', arguments: { cwd, runSlug: activeSlug } });
+        expect(result.isError).toBeUndefined();
+        return JSON.parse(firstTextContent(result.content));
+      };
+      expect((await readRun()).liveIntervention.instructions).toEqual([
+        expect.objectContaining({ instructionId: 1, content: 'Keep the existing session flow.' }),
+      ]);
       const written = await client.callTool({
         name: 'takt_tell_run',
         arguments: { cwd, runSlug: activeSlug, content: 'Skip Android support for this task.' },
@@ -1126,6 +1479,14 @@ describe('MCP package entrypoint', () => {
       expect(writtenEvents).toEqual([
         expect.objectContaining({ instructionId: 1, content: 'Keep the existing session flow.' }),
         expect.objectContaining({ instructionId: 2, content: 'Skip Android support for this task.' }),
+      ]);
+      const instructionId = JSON.parse(firstTextContent(written.content)).instructionId;
+      expect((await readRun()).liveIntervention.instructions).toContainEqual(expect.objectContaining({
+        instructionId, content: 'Skip Android support for this task.',
+      }));
+      const tasks = await client.callTool({ name: 'takt_list_tasks', arguments: { cwd, limit: 1 } });
+      expect(JSON.parse(firstTextContent(tasks.content)).tasks).toEqual([
+        expect.objectContaining({ name: 'active', runSlug: activeSlug, status: 'running' }),
       ]);
 
       writeFileSync(join(activeRunDir, 'meta.json'), JSON.stringify({
@@ -1161,6 +1522,41 @@ describe('MCP package entrypoint', () => {
       await client.close();
       await server.close();
       rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('reads saved enqueued tasks on subsequent task-list pages', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-mcp-enqueue-read-'));
+    const configDirectory = mkdtempSync(join(tmpdir(), 'takt-mcp-enqueue-config-'));
+    vi.stubEnv('TAKT_CONFIG_DIR', configDirectory);
+    mkdirSync(join(cwd, '.takt', 'workflows'), { recursive: true });
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nbranch_name_strategy: romaji\nmanager:\n  auto_run: false\n');
+    writeFileSync(join(cwd, '.takt', 'workflows', 'fixture.yaml'), 'name: fixture\ninitial_step: work\nsteps:\n  - name: work\n    persona: ./persona.md\n    instruction: "{task}"\n    rules:\n      - condition: when(true)\n        next: COMPLETE\n');
+    writeFileSync(join(cwd, '.takt', 'workflows', 'persona.md'), 'Work on the fixture task.');
+    const server = createTaktMcpServer({}, { allowedProjectRoot: cwd });
+    const client = new Client({ name: 'enqueue-read-test', version: '1' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const names: string[] = [];
+      for (const task of ['First task', 'Second task']) {
+        const result = await client.callTool({ name: 'takt_enqueue_task', arguments: { cwd, task, workflow: 'fixture', worktree: false, autoPr: false } });
+        expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+        names.push(JSON.parse(firstTextContent(result.content)).taskName);
+      }
+      const first = await client.callTool({ name: 'takt_list_tasks', arguments: { cwd, limit: 1 } });
+      const page = JSON.parse(firstTextContent(first.content));
+      expect(page).toMatchObject({ totalCount: 2, returnedCount: 1, nextOffset: 1, truncated: true });
+      const second = await client.callTool({ name: 'takt_list_tasks', arguments: { cwd, limit: 1, offset: page.nextOffset } });
+      const last = JSON.parse(firstTextContent(second.content));
+      expect(last).toMatchObject({ returnedCount: 1, nextOffset: null });
+      expect([...page.tasks, ...last.tasks]).toEqual(names.map((name) => expect.objectContaining({ name, status: 'pending' })));
+    } finally {
+      await client.close(); await server.close();
+      vi.unstubAllEnvs();
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(configDirectory, { recursive: true, force: true });
     }
   });
 

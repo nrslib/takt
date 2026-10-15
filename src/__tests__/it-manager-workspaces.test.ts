@@ -13,7 +13,9 @@ import { connectManagerMcp,TAKT_MANAGER_MCP_SERVER_NAME } from '../features/mana
 import { ManagerView } from '../features/manager/ManagerView.js';
 import { createWorkspaceManagerContext,resolveManagerStartup,type ManagerAssignment } from '../features/manager/startupResolution.js';
 import { addManagerRepository,removeManagerRepository,renameManagerWorkspace } from '../features/manager/workspaceOperations.js';
-import { createTaktMcpServer } from '../features/mcp/server.js';
+import { createTaktMcpServer,type TaktMcpServerOptions } from '../features/mcp/server.js';
+import { MCP_RESPONSE_MAX_BYTES } from '../features/mcp/response.js';
+import { ensureManagerRun } from '../features/manager/autoRun.js';
 import { createWorkspace,findWorkspaceForRepository,readWorkspace,readWorkspaceRegistry } from '../infra/config/global/workspaceRegistry.js';
 import { GoalStore } from '../infra/goals/store.js';
 import { resetScenario,setMockScenario } from '../infra/mock/index.js';
@@ -44,6 +46,31 @@ describe('manager workspace storage and repository boundaries', () => {
     return { kind: 'repository', repositoryDirectory: repositoryA, repositoryDirectories: [repositoryA] };
   }
 
+  async function withClient(options: TaktMcpServerOptions, action: (client: Client) => Promise<void>): Promise<void> {
+    const server = createTaktMcpServer({}, { allowedProjectRoot: repositoryA, toolSet: 'manager', ...options });
+    const client = new Client({ name: 'workspace-test', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+    try { await action(client); }
+    finally { await client.close(); await server.close(); }
+  }
+
+  async function call(client: Client, name: string, args: Record<string, unknown>) {
+    const result = await client.callTool({ name, arguments: args });
+    expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
+    return JSON.parse(firstTextContent(result.content));
+  }
+
+  function workspaceRepositories(count: number): string[] {
+    return Array.from({ length: count }, (_, index) => {
+      const directory = join(root, 'repositories', 'r'.repeat(180), 's'.repeat(180), `開発-${index}-${'作業'.repeat(30)}`);
+      mkdirSync(directory, { recursive: true });
+      execFileSync('git', ['init', '-b', 'main', directory], { stdio: 'pipe' });
+      return directory;
+    });
+  }
+
   beforeEach(() => {
     root = realpathSync(mkdtempSync(join(tmpdir(), 'takt-workspaces-')));
     globalDirectory = join(root, 'global');
@@ -52,6 +79,126 @@ describe('manager workspace storage and repository boundaries', () => {
     repositoryA = repository('a'); repositoryB = repository('b'); repositoryC = repository('c');
   });
   afterEach(() => { cleanup(); resetScenario(); vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); });
+
+  it('retrieves every saved repository after bounded add, remove and rename responses without repeating the mutation', async () => {
+    const directories = [repositoryA, ...workspaceRepositories(110)];
+    const workspace = await createWorkspace({ globalConfigDirectory: globalDirectory, name: '開発担当', repositoryDirectories: directories });
+    expect(Buffer.byteLength(JSON.stringify({ workspace }))).toBeGreaterThan(MCP_RESPONSE_MAX_BYTES);
+    await withClient({ managerAssignment: { kind: 'workspace', workspaceId: workspace.id } }, async (client) => {
+      const operations = [
+        { name: 'takt_add_workspace_repository', args: { repositoryDirectory: repositoryB } },
+        { name: 'takt_remove_workspace_repository', args: { repositoryDirectory: repositoryA } },
+        { name: 'takt_rename_workspace', args: { name: '開発担当更新' } },
+      ];
+      for (const operation of operations) {
+        const output = (await call(client, operation.name, operation.args)).workspace;
+        const saved = (await readWorkspace(globalDirectory, workspace.id))!;
+        expect(Buffer.byteLength(JSON.stringify({ workspace: saved }))).toBeGreaterThan(MCP_RESPONSE_MAX_BYTES);
+        expect(output).toMatchObject({ id: saved.id, name: saved.name, totalCount: saved.repositoryDirectories.length,
+          returnedCount: output.repositoryDirectories.length, omittedCount: saved.repositoryDirectories.length - output.repositoryDirectories.length,
+          offset: 0, nextOffset: output.repositoryDirectories.length, truncated: true });
+        const members: string[] = [...output.repositoryDirectories];
+        let offset = output.nextOffset;
+        while (offset !== null) {
+          const page = (await call(client, 'takt_list_tasks', { cwd: repositoryA, view: 'workspace', offset, limit: 50 })).workspace;
+          expect(page).toMatchObject({ offset, returnedCount: page.repositoryDirectories.length,
+            omittedCount: saved.repositoryDirectories.length - page.repositoryDirectories.length });
+          expect(page.nextOffset).toBe(offset + page.returnedCount < page.totalCount ? offset + page.returnedCount : null);
+          members.push(...page.repositoryDirectories);
+          offset = page.nextOffset;
+        }
+        expect(members).toEqual(saved.repositoryDirectories);
+        expect(await readWorkspace(globalDirectory, workspace.id)).toEqual(saved);
+      }
+    });
+  });
+
+  it('pages 51 repositories and retrieves UTF-8 name and saved repository strings', async () => {
+    const directories = [repositoryA, ...workspaceRepositories(50)];
+    const workspace = await createWorkspace({ globalConfigDirectory: globalDirectory, name: '開発担当', repositoryDirectories: directories });
+    await withClient({ managerAssignment: { kind: 'workspace', workspaceId: workspace.id } }, async (client) => {
+      const { tools } = await client.listTools();
+      for (const name of ['takt_add_workspace_repository', 'takt_remove_workspace_repository', 'takt_rename_workspace', 'takt_list_tasks']) {
+        const description = tools.find((tool) => tool.name === name)!.description;
+        for (const selector of ['64 KiB', 'truncation', 'takt_list_tasks view workspace', 'offset/limit', 'path name or repositoryDirectories.N', 'textOffset/maxBytes']) {
+          expect(description, name).toContain(selector);
+        }
+      }
+      const read = (args: Record<string, unknown>) => call(client, 'takt_list_tasks', { cwd: repositoryA, view: 'workspace', ...args });
+      expect((await read({ limit: 1 })).workspace).toMatchObject({ totalCount: 51, returnedCount: 1, omittedCount: 50, nextOffset: 1 });
+      const first = (await read({ limit: 50 })).workspace;
+      const last = (await read({ offset: first.nextOffset, limit: 50 })).workspace;
+      expect(first).toMatchObject({ returnedCount: 50, nextOffset: 50 });
+      expect(last).toMatchObject({ returnedCount: 1, nextOffset: null });
+      expect([...first.repositoryDirectories, ...last.repositoryDirectories]).toEqual(directories);
+      for (const args of [{ limit: 0 }, { limit: 51 }, { offset: -1 }, { cwd: 'relative' }, { path: 'id' }]) {
+        expect((await client.callTool({ name: 'takt_list_tasks', arguments: { cwd: repositoryA, view: 'workspace', ...args } })).isError).toBe(true);
+      }
+      expect((await read({ path: 'name' }))).toMatchObject({ content: workspace.name, truncated: false, nextOffset: null });
+      for (const [path, original, maxBytes] of [
+        ['name', workspace.name, 4], ['repositoryDirectories.50', directories[50]!, 64],
+      ] as const) {
+        let text = '';
+        let textOffset = 0;
+        for (;;) {
+          const page = await read({ path, textOffset, maxBytes });
+          expect(page).toMatchObject({ workspaceId: workspace.id, path, offset: textOffset, totalBytes: Buffer.byteLength(original),
+            returnedBytes: Buffer.byteLength(page.content) });
+          expect(page.returnedBytes).toBeLessThanOrEqual(maxBytes);
+          text += page.content;
+          if (page.nextOffset === null) break;
+          expect(page.truncated).toBe(true);
+          expect(page.nextOffset).toBe(textOffset + page.returnedBytes);
+          textOffset = page.nextOffset;
+        }
+        expect(text).toBe(original);
+      }
+      const longName = '開発担当'.repeat(6000);
+      const renamed = await call(client, 'takt_rename_workspace', { name: longName });
+      expect(renamed.truncated).toBe(true);
+      expect(renamed.omissions).toContainEqual(expect.objectContaining({ path: 'workspace.name', totalBytes: Buffer.byteLength(longName),
+        returnedBytes: Buffer.byteLength(renamed.workspace.name) }));
+      let restored = '';
+      let textOffset = 0;
+      for (;;) {
+        const page = await read({ path: 'name', textOffset });
+        restored += page.content;
+        if (page.nextOffset === null) break;
+        textOffset = page.nextOffset;
+      }
+      expect(restored).toBe(longName);
+      expect((await client.callTool({ name: 'takt_list_tasks', arguments: { cwd: repositoryA, view: 'workspace', path: 'repositoryDirectories.51' } })).isError).toBe(true);
+    });
+  });
+
+  it('keeps the created workspace identity after removing the session base and reads an empty workspace without launching work', async () => {
+    await withClient({}, async (client) => {
+      const workspace = (await call(client, 'takt_add_workspace_repository', { repositoryDirectory: repositoryB })).workspace;
+      expect(workspace.repositoryDirectories).toEqual([repositoryA, repositoryB]);
+      await call(client, 'takt_remove_workspace_repository', { repositoryDirectory: repositoryA });
+      const read = () => call(client, 'takt_list_tasks', { cwd: join(root, 'missing'), view: 'workspace' });
+      expect((await read()).workspace).toMatchObject({ id: workspace.id, repositoryDirectories: [repositoryB] });
+      await call(client, 'takt_remove_workspace_repository', { repositoryDirectory: repositoryB });
+      const saved = readFileSync(join(globalDirectory, 'workspaces', workspace.id, 'workspace.json'), 'utf8');
+      vi.mocked(ensureManagerRun).mockClear();
+      expect((await read()).workspace).toMatchObject({ id: workspace.id, repositoryDirectories: [],
+        totalCount: 0, returnedCount: 0, omittedCount: 0, offset: 0, nextOffset: null, truncated: false });
+      expect(ensureManagerRun).not.toHaveBeenCalled();
+      expect(readFileSync(join(globalDirectory, 'workspaces', workspace.id, 'workspace.json'), 'utf8')).toBe(saved);
+      expect(existsSync(join(repositoryA, '.takt', 'tasks.yaml'))).toBe(false);
+    });
+  });
+
+  it.each(['read-only', 'all'] as const)('rejects workspace reads for %s without exposing assigned data', async (toolSet) => {
+    const workspace = await createWorkspace({ globalConfigDirectory: globalDirectory, name: '開発担当', repositoryDirectories: [repositoryA] });
+    await withClient({ toolSet, managerAssignment: { kind: 'workspace', workspaceId: workspace.id } }, async (client) => {
+      const result = await client.callTool({ name: 'takt_list_tasks', arguments: { cwd: repositoryA, view: 'workspace' } });
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toBeUndefined();
+      expect(firstTextContent(result.content)).toMatch(/only available to managers/);
+      expect((await call(client, 'takt_list_tasks', { cwd: repositoryA })).tasks).toEqual([]);
+    });
+  });
 
   it('creates a workspace on addition and resolves the same context from every member and subdirectory', async () => {
     const workspace = await addManagerRepository(single(), repositoryB, globalDirectory);

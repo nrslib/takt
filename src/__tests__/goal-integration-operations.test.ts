@@ -1,6 +1,8 @@
 import { beforeEach,expect,it,vi } from 'vitest';
 import { checkTaktGoalCompletion,completeTaktGoal,mergeTaktGoalTask } from '../features/mcp/goalIntegrationOperations.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
+import { firstTextContent } from './helpers/mcp-content.js';
+import { responseBytes, MCP_RESPONSE_MAX_BYTES } from '../features/mcp/response.js';
 const doubles = vi.hoisted(() => ({ get: vi.fn(), merge: vi.fn(), complete: vi.fn(), check: vi.fn(), config: vi.fn(), resolve: vi.fn() }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.get; } }));
 vi.mock('../infra/goals/integration.js', () => ({ integrateGoalTask: doubles.merge, completeGoal: doubles.complete, checkGoalCompletion: doubles.check }));
@@ -25,4 +27,22 @@ it.each(['auto', 'approve'] as const)('uses the configured %s completion policy'
   doubles.config.mockReturnValue({ mainMerge, policy });
   await completeTaktGoal({ ...input, expectedSha: 'a'.repeat(40), summary: 'evidence' }, {}, signal);
   expect(doubles.complete).toHaveBeenCalledExactlyOnceWith(input.cwd, input.goalId, 'a'.repeat(40), 'evidence', mainMerge, signal, policy);
+});
+it.each(['merge', 'complete', 'check'] as const)('bounds %s results while retaining saved state and completion instructions', async (kind) => {
+  const completion = { goalBranch: 'goal', goalSha: 'a'.repeat(40), targetBranch: 'main',
+    summary: '完成根拠'.repeat(20000), instructions: ['git merge ' + 'a'.repeat(40)], reason: 'human merge',
+    changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false } };
+  const goal = { ...goalRecord(), status: 'awaiting_merge', completion,
+    workLog: Array.from({ length: 200 }, () => ({ summary: '履歴'.repeat(20000) })) };
+  doubles[kind].mockResolvedValue({ status: kind === 'merge' ? 'merged' : 'awaiting_merge', included: false, sha: 'b'.repeat(40), completion, goal });
+  const result = kind === 'merge' ? await mergeTaktGoalTask({ ...input, taskName: 'task', expectedSha: 'a'.repeat(40) }, {}, signal)
+    : kind === 'complete' ? await completeTaktGoal({ ...input, summary: 'evidence', expectedSha: 'a'.repeat(40) }, {}, signal)
+      : await checkTaktGoalCompletion(input, {}, signal);
+  expect(result.isError).toBeUndefined();
+  expect(responseBytes(result)).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
+  const output = JSON.parse(firstTextContent(result.content));
+  expect(output).toMatchObject({ status: kind === 'merge' ? 'merged' : 'awaiting_merge', included: false, sha: 'b'.repeat(40),
+    goal: { status: 'awaiting_merge' }, completion: { goalSha: 'a'.repeat(40), targetBranch: 'main', instructions: completion.instructions, reason: 'human merge', truncated: true } });
+  expect(output.goal).not.toHaveProperty('workLog');
+  expect(output.completion.omissions[0].totalBytes).toBe(Buffer.byteLength(completion.summary));
 });

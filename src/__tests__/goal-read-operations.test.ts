@@ -51,5 +51,8 @@ it('converts inspection and root errors into MCP errors without reporting succes
 });
 it('does not return oversized serialized metadata as a complete result', async () => {
   doubles.diff.mockResolvedValue({ files: [], patch: 'x'.repeat(65537), truncated: false });
-  expect((await getTaktGoalDiff(input, {}, signal)).isError).toBe(true);
+  const result = await getTaktGoalDiff(input, {}, signal);
+  expect(result.isError).toBeUndefined();
+  expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(65536);
+  expect(JSON.parse((result.content[0] as { text: string }).text)).toMatchObject({ truncated: true, patch: expect.any(String) });
 });

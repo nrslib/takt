@@ -147,7 +147,8 @@ vi.mock('node:fs', async (importOriginal) => {
   };
 });
 
-vi.mock('../infra/fs/session.js', () => ({
+vi.mock('../infra/fs/session.js', async (original) => ({
+  ...await original<typeof import('../infra/fs/session.js')>(),
   loadNdjsonLog: vi.fn(),
   parseNdjsonLogContent: vi.fn(),
 }));
@@ -159,6 +160,7 @@ import {
   findRunForTask,
   getRunPaths,
   loadRunSessionContext,
+  loadRunSessionPage,
   formatRunSessionForPrompt,
   MAX_RUN_REPORT_BYTES,
   type RunSessionContext,
@@ -382,10 +384,12 @@ describe('loadRunSessionContext', () => {
     const context = loadRunSessionContext(tmpDir, slug);
     expect(context).toMatchObject({ currentStep: 'implement', currentIteration: 3, currentStepStartedAt: '2026-10-14T00:04:00Z', currentStepExecutionCount: 2 });
     expect(context.stepLogs[0]).toMatchObject({ timestamp: '2026-10-14T00:02:00Z', iteration: 1 });
+    expect(loadRunSessionPage(tmpDir, slug, { maxBytes: 4096 })).toMatchObject({ currentStepStartedAt: '2026-10-14T00:04:00Z', currentStepExecutionCount: 2 });
     const next = { type: 'step_start', step: 'review', persona: 'reviewer', iteration: 4, timestamp: '2026-10-14T00:05:00Z' };
     writeFileSync(logPath, JSON.stringify({ type: 'workflow_start', task: '巡回の材料', workflowName: 'default', startTime: '2026-10-14T00:00:00Z' }) + '\n' + JSON.stringify(next));
     mockParseNdjsonLogContent.mockImplementationOnce(parse);
     expect(loadRunSessionContext(tmpDir, slug).currentStepStartedAt).toBeUndefined();
+    expect(loadRunSessionPage(tmpDir, slug, { maxBytes: 4096 })).toMatchObject({ currentStepStartedAt: null, currentStepExecutionCount: 0 });
   });
 
   it('takes timing and execution count from the running child step when the current step calls a child workflow', async () => {
@@ -409,6 +413,9 @@ describe('loadRunSessionContext', () => {
     expect(loadRunSessionContext(tmpDir, slug)).toMatchObject({
       currentStep: 'develop', currentStepStartedAt: '2026-10-14T00:05:00Z', currentStepExecutionCount: 2,
     });
+    expect(loadRunSessionPage(tmpDir, slug, { maxBytes: 4096 })).toMatchObject({
+      currentStep: 'develop', currentStepStartedAt: '2026-10-14T00:05:00Z', currentStepExecutionCount: 2,
+    });
   });
 
   it('does not report a child step of an earlier parent step as the current step', async () => {
@@ -428,6 +435,17 @@ describe('loadRunSessionContext', () => {
     ].map((record) => JSON.stringify(record)).join('\n'));
     mockParseNdjsonLogContent.mockImplementationOnce(parse);
     expect(loadRunSessionContext(tmpDir, slug).currentStepStartedAt).toBeUndefined();
+    expect(loadRunSessionPage(tmpDir, slug, { maxBytes: 4096 }).currentStepStartedAt).toBeNull();
+  });
+
+  it('preserves complete task strings for the ordinary reader and prompt formatter', () => {
+    const slug = 'task-text-run';
+    for (const task of ['Short task', '日本語'.repeat(10000)]) {
+      createRunDir(tmpDir, slug, { task, workflow: 'default', status: 'completed', startTime: '2026-02-01T00:00:00.000Z' });
+      const context = loadRunSessionContext(tmpDir, slug);
+      expect(context.task).toBe(task);
+      expect(formatRunSessionForPrompt(context).runTask).toBe(task);
+    }
   });
 
   it('should load context with step logs and reports', () => {

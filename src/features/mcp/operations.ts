@@ -5,7 +5,10 @@ import { GoalStore } from '../../infra/goals/store.js';
 import { readRunMetaBySlug } from '../../core/workflow/run/run-meta.js';
 import { getGitProvider, initGitProvider } from '../../infra/git/index.js';
 import { TaskRunner } from '../../infra/task/index.js';
-import { loadRunSessionContext } from '../interactive/runSessionReader.js';
+import { loadRunSessionPage } from '../interactive/runSessionReader.js';
+import { jsonResult, textResult, pagedResult, MCP_TEXT_PAGE_BYTES } from './response.js';
+import { goalSummary, goalValuePage, selectGoalValue } from './goalResponse.js';
+export { jsonResult } from './response.js';
 import {
   issueTellableRunningTask,
   type TellableRunningTask,
@@ -43,17 +46,6 @@ export interface McpOperationDependencies {
   includeReferenceMarkers?: boolean;
 }
 
-function textResult(text: string, isError?: boolean): CallToolResult {
-  return {
-    ...(isError ? { isError: true } : {}),
-    content: [{ type: 'text', text }],
-  };
-}
-
-export function jsonResult(value: Record<string, unknown>, isError?: boolean): CallToolResult {
-  return textResult(JSON.stringify(value), isError);
-}
-
 export function errorResult(action: string, error: unknown): CallToolResult {
   return textResult(`${action}: ${safeExternalErrorMessage(error)}`, true);
 }
@@ -61,13 +53,31 @@ export function errorResult(action: string, error: unknown): CallToolResult {
 export async function listTaktGoals(input: ListGoalsInput, deps: McpOperationDependencies): Promise<CallToolResult> {
   try {
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
-    const { goals, errors } = await new GoalStore(input.cwd).list();
-    return jsonResult({
-      goals: goals,
+    let totalCount = 0;
+    const offset = input.offset ?? 0;
+    const limit = input.limit ?? 50;
+    const { goals, errors } = await new GoalStore(input.cwd).list((goal) => {
+      const index = totalCount++;
+      return index >= offset && index < offset + limit ? goalSummary(goal) : undefined;
+    });
+    const errorOffset = input.errorOffset ?? 0;
+    const selectedErrors = errors.slice(errorOffset, errorOffset + limit)
+      .map(({ goalId, error }) => ({ goalId, error: safeExternalErrorMessage(error) }));
+    return pagedResult('goals', goals, totalCount, offset, errors.length > 0, {
       ...(errors.length > 0 ? {
-        errors: errors.map(({ goalId, error }) => ({ goalId, error: safeExternalErrorMessage(error) })),
+        errors: selectedErrors,
+        errorPage: {
+          collection: 'errors',
+          totalCount: errors.length,
+          returnedCount: selectedErrors.length,
+          omittedCount: errors.length - selectedErrors.length,
+          offset: errorOffset,
+          nextOffset: errorOffset + selectedErrors.length < errors.length ? errorOffset + selectedErrors.length : null,
+          truncated: selectedErrors.length < errors.length,
+          retrieval: 'Pass errorPage.nextOffset as errorOffset to read more errors.',
+        },
       } : {}),
-    }, errors.length > 0);
+    });
   } catch (error) {
     return errorResult('Goal list failed', error);
   }
@@ -76,7 +86,13 @@ export async function listTaktGoals(input: ListGoalsInput, deps: McpOperationDep
 export async function getTaktGoal(input: GetGoalInput, deps: McpOperationDependencies): Promise<CallToolResult> {
   try {
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
-    return jsonResult({ goal: await new GoalStore(input.cwd).get(input.goalId) });
+    const goal = await new GoalStore(input.cwd).get(input.goalId);
+    if (input.path !== undefined) {
+      const value = selectGoalValue(goal, input.path, input.recordId);
+      if (Array.isArray(value)) return pagedResult('items', value.slice(input.offset ?? 0, (input.offset ?? 0) + (input.limit ?? 50)), value.length, input.offset ?? 0, undefined, { goalId: goal.id, path: input.path });
+      return jsonResult({ goalId: goal.id, path: input.path, ...goalValuePage(value, input) });
+    }
+    return jsonResult({ goal: goalSummary(goal) });
   } catch (error) {
     return errorResult('Goal read failed', error);
   }
@@ -137,8 +153,10 @@ export function listTaktTasks(
 ): CallToolResult {
   try {
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
-    const tasks = new TaskRunner(input.cwd).listTaskStateItems().map((task) => taskSummary(input.cwd, task));
-    return jsonResult({ tasks });
+    const tasks = new TaskRunner(input.cwd).listTaskStateItems();
+    const offset = input.offset ?? 0;
+    const selected = tasks.slice(offset, offset + (input.limit ?? 50)).map((task) => taskSummary(input.cwd, task));
+    return pagedResult('tasks', selected, tasks.length, offset);
   } catch (error) {
     return errorResult('Task list failed', error);
   }
@@ -151,15 +169,9 @@ export function getTaktRun(
   try {
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
     const runCwd = findRunReadCwd(input.cwd, input.runSlug);
-    const context = loadRunSessionContext(runCwd, input.runSlug, {
-      liveInterventionProjectCwd: input.cwd,
-    });
-    const payload = JSON.stringify({ runSlug: input.runSlug, ...context });
-    return textResult(
-      deps.includeReferenceMarkers
-        ? `${payload}\n${formatTaskStateReferenceMarker(input.runSlug)}`
-        : payload,
-    );
+    const context = loadRunSessionPage(runCwd, input.runSlug, { ...input, maxBytes: input.maxBytes ?? MCP_TEXT_PAGE_BYTES, liveInterventionProjectCwd: input.cwd });
+    return jsonResult({ runSlug: input.runSlug, ...context }, undefined,
+      deps.includeReferenceMarkers ? `\n${formatTaskStateReferenceMarker(input.runSlug)}` : '');
   } catch (error) {
     return errorResult('Run read failed', error);
   }

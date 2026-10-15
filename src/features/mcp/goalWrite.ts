@@ -5,7 +5,7 @@ import { resolveManagerNotificationOptions, sendSavedGoalNotifications } from '.
 import { assertCwdAllowedByMcpRoot, errorResult, jsonResult, type McpOperationDependencies } from './operations.js';
 import {
   askGoalQuestionInputSchema, completeGoalInputSchema, enqueueGoalTaskInputSchema, goalWriteInputSchema,
-  mergeGoalTaskInputSchema, notifyGoalInputSchema, withdrawGoalQuestionInputSchema, type GetGoalInput,
+  mergeGoalTaskInputSchema, notifyGoalInputSchema, withdrawGoalQuestionInputSchema, type GoalIdentityInput,
 } from './schemas.js';
 import { requeueGoalTaskInputSchema, retryGoalTaskInputSchema } from './goalTaskRetrySchemas.js';
 import { removeGoalTaskInputSchema } from './goalTaskRemovalSchemas.js';
@@ -18,7 +18,7 @@ const inputSchemas = {
 };
 
 export async function goalWrite(
-  input: GetGoalInput, deps: McpOperationDependencies, signal: AbortSignal,
+  input: GoalIdentityInput, deps: McpOperationDependencies, signal: AbortSignal,
   action: (policy: GoalNotificationPolicy, mainMerge: 'auto' | 'approve') => Promise<Record<string, unknown>>,
   errorContext: string, tool: keyof typeof inputSchemas,
 ) {
