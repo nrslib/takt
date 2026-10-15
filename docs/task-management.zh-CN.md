@@ -218,7 +218,7 @@ takt list
 | **Create PR** | 将失败 run 的修改提交并 push，创建 pull request |
 | **Delete** | 删除失败任务记录 |
 
-在 CLI/TUI 的 assistant 和 grill-me 对话中，`/requeue [补充说明]` 根据对话确定 failed 任务和起点，显示任务名称、摘要、workflow 和起点后请求 Y/n 确认。确认后会将任务置为 `pending`，不修改 `order.md`。`/retry [补充说明]` 根据对话确定 failed 任务，显示完整修订 order，并让用户选择 **Save task** 或 **Continue**。Save task 会归档旧版并将任务置为 `pending`；Continue 不修改任务并返回对话。补充说明仅作为对话判断的参考，不直接指定任务。目标含糊或没有候选时会返回提示，不显示确认界面。两种命令都需要交互式终端，也不会立即启动 workflow。在 persona 对话和 Web UI 中，这些命令文本作为普通消息处理。`takt resume` 中面向直接 run 的 `/retry` 保持独立。
+在 CLI/TUI 的 assistant 和 grill-me 对话中，`/requeue [补充说明]` 根据对话确定 failed 或 exceeded 任务。补充说明作为对话最后的用户发言传给任务选择和起点选择，不会与任务名称进行机械匹配。AI 无法确定目标或判断失败时，会显示候选任务列表供用户选择；无法确定起点时，也会显示可用起点列表。显示任务名称、摘要、workflow 和起点后请求 Y/n 确认。确认后将任务置为 `pending`，不修改 `order.md`。取消选择或确认不会修改任务，结果会记录在对话中；重新排队成功的结果也会连同任务名称记录下来。`/retry [补充说明]` 保持原有行为：根据对话确定 failed 任务，显示完整修订 order，并让用户选择 **Save task** 或 **Continue**。Save task 会归档旧版并将任务置为 `pending`；Continue 不修改任务并返回对话。`/retry` 的目标或起点不明确时会返回提示；两种命令都在没有候选时返回提示。两种命令都需要交互式终端，没有 TTY 时不会显示选择或修改任务，也不会立即启动 workflow。在 persona 对话和 Web UI 中，这些命令文本作为普通消息处理。`takt resume` 中面向直接 run 的 `/retry` 保持独立。
 
 ### Pending 任务的操作
 
@@ -241,7 +241,7 @@ takt list
 | **Requeue** | 返回 `pending`，从停止处继续 |
 | **Delete** | 永久删除任务 |
 
-会话中的 `/requeue` 也可以处理 exceeded 任务。确认已停止的位置后，它会保留已有恢复信息并将任务置为 `pending`，不提供起点选择，也不会启动 worker。
+会话中的 `/requeue` 也可以处理 exceeded 任务。补充说明用于判断继续已保存的执行或从指定步骤（包括子 workflow 的步骤）重新执行，确认界面会显示操作和位置。继续会保留已有执行信息，重新执行会清除旧 checkpoint 和 iteration limit 信息。指定位置不可用或 AI 无法确定起点时，会显示可用起点供用户选择。没有补充说明时保留已保存的停止位置。不修改指示书，也不会启动 worker。任务列表中的 **Requeue** 仍使用已保存的停止位置。
 
 ### PR-Failed 任务的操作
 
