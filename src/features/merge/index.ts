@@ -493,6 +493,14 @@ export async function runMerge(
     }
     numbers = results.filter((result) => result.selected).map((result) => result.number);
     options.onSelectionResult?.(results);
+
+    const eligibleNumbers: number[] = [];
+    for (const prNumber of numbers) {
+      options.abortSignal?.throwIfAborted();
+      const pr = dependencies.fetchPrListItem(prNumber, options.projectCwd);
+      if (pr !== undefined && matchesSelectionConditions(pr)) eligibleNumbers.push(prNumber);
+    }
+    numbers = eligibleNumbers;
   }
   const workflow = options.workflow ?? options.settings.workflow;
   const running = new Set<Promise<void>>();

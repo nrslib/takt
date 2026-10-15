@@ -266,6 +266,56 @@ describe('Merge target selection and execution', () => {
     expect(processedNumbers()).toEqual([10, 11]);
   });
 
+  it('テキスト選別後に最新のdraftとwhereを再確認してから実行する', async () => {
+    const initialPrs = [pr(10), pr(11), pr(12)];
+    const latestPrs = new Map([
+      [10, pr(10, { draft: true })],
+      [11, pr(11, { labels: [] })],
+      [12, pr(12)],
+    ]);
+    const fetchCounts = new Map<number, number>();
+    const events: string[] = [];
+    setPrs(initialPrs);
+    fetchPrListItem.mockImplementation((number: number) => {
+      const count = (fetchCounts.get(number) ?? 0) + 1;
+      fetchCounts.set(number, count);
+      events.push(`fetch:${number}:${count}`);
+      return count === 1 ? initialPrs.find((item) => item.number === number) : latestPrs.get(number);
+    });
+    mocks.agent.mockImplementation(async () => {
+      events.push('judge');
+      return { status: 'done', structuredOutput: { selected: true, reason: '文書の変更' } };
+    });
+    executePrWorkflow.mockImplementation(async ({ prNumber }: { prNumber: number }) => {
+      events.push(`execute:${prNumber}`);
+      return { merged: true };
+    });
+
+    await run({ selectionText: '文書のみ', where: { labels: ['ready'] } });
+
+    expect(processedNumbers()).toEqual([12]);
+    expect(events).toEqual([
+      'fetch:10:1', 'judge', 'fetch:11:1', 'judge', 'fetch:12:1', 'judge',
+      'fetch:10:2', 'fetch:11:2', 'fetch:12:2', 'execute:12',
+    ]);
+  });
+
+  it('テキスト選別後の詳細再取得が失敗したらworkflowを開始しない', async () => {
+    const initialPrs = [pr(123), pr(456)];
+    const fetchCounts = new Map<number, number>();
+    setPrs(initialPrs);
+    fetchPrListItem.mockImplementation((number: number) => {
+      const count = (fetchCounts.get(number) ?? 0) + 1;
+      fetchCounts.set(number, count);
+      if (number === 456 && count === 2) throw new Error('latest details unavailable');
+      return initialPrs.find((item) => item.number === number);
+    });
+
+    await expect(run({ selectionText: '文書のみ' })).rejects.toThrow('latest details unavailable');
+
+    expect(executePrWorkflow).not.toHaveBeenCalled();
+  });
+
   it('全候補の判定と結果通知を完了してからワークフローを起動する', async () => {
     const events: string[] = [];
     mocks.agent.mockImplementation(async () => {
