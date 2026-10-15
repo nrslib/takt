@@ -15,8 +15,8 @@ const GOAL_FILE_NAME = 'goal.json';
 
 class InvalidGoalFileError extends Error {}
 
-interface GoalListResult {
-  goals: Goal[];
+interface GoalListResult<T = Goal> {
+  goals: T[];
   errors: { goalId: string; error: Error }[];
 }
 
@@ -62,17 +62,22 @@ export class GoalStore {
     });
   }
 
-  async list(): Promise<GoalListResult> {
+  async list(): Promise<GoalListResult>;
+  async list<T>(project: (goal: Goal) => T | undefined): Promise<GoalListResult<T>>;
+  async list<T>(project?: (goal: Goal) => T | undefined): Promise<GoalListResult<Goal | T>> {
     assertSafePath(this.root, true);
     if (lstatOrUndefined(this.root) === undefined) return { goals: [], errors: [] };
     const snapshot = capturePrivateDirectoryReadSnapshot(this.root);
-    const goals: Goal[] = [];
+    const goals: (Goal | T)[] = [];
     const errors: GoalListResult['errors'] = [];
     for (const entry of readdirSync(this.root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
       const id = GoalIdSchema.parse(entry.name);
       try {
         const goal = this.read(id);
-        if (goal !== undefined) goals.push(goal);
+        if (goal !== undefined) {
+          const projected = project === undefined ? goal : project(goal);
+          if (projected !== undefined) goals.push(projected);
+        }
       } catch (error) {
         if (!(error instanceof InvalidGoalFileError)) throw error;
         errors.push({ goalId: id, error });

@@ -477,8 +477,8 @@ describe('manager questions, answers and notifications through production bounda
     await invoke('takt_check_goal_completion');
     expect((await new GoalStore(cwd).get(goalId)).status).toBe('completed');
     expect(requests).toHaveLength(2);
-    const saved = z.object({ notifications: z.array(z.object({ kind: z.string() })) }).parse((await invoke('takt_get_goal')).goal);
-    expect(saved.notifications.map((notification) => notification.kind)).toEqual(['awaiting_merge', 'completed']);
+    const saved = z.object({ items: z.array(z.object({ kind: z.string() })) }).parse(await invoke('takt_get_goal', { path: 'notifications' }));
+    expect(saved.items.map((notification) => notification.kind)).toEqual(['awaiting_merge', 'completed']);
   });
 
   it('does not send a success notification when the reviewed SHA changed', async () => {
