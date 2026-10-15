@@ -16,6 +16,7 @@ import { loadWorkflowByIdentifier,resolveWorkflowCallTarget } from '../infra/con
 import { getWorkflowSourcePath } from '../infra/config/loaders/workflowSourceMetadata.js';
 import { getRepertoireDir } from '../infra/config/paths.js';
 import { GoalStore } from '../infra/goals/store.js';
+import { GoalSchema } from '../infra/goals/schema.js';
 import { TaskRunner } from '../infra/task/index.js';
 import { goalId } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
@@ -492,6 +493,7 @@ describe('local goal integration and inspection through manager MCP', () => {
   const mergeTool = 'takt_merge_goal_task';
   const completeTool = 'takt_complete_goal';
   const checkTool = 'takt_check_goal_completion';
+  const reopenTool = 'takt_reopen_goal';
 
   beforeEach(async () => {
     temporaryDirectories = [];
@@ -518,12 +520,16 @@ describe('local goal integration and inspection through manager MCP', () => {
     await setImmediate();
   });
 
-  it('uses the same response bound and artifact selectors in manager and read-only servers', async () => {
+  async function saveLargeGoalHistory() {
     await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal,
       workLog: Array.from({ length: 100 }, (_, index) => ({ id: `550e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`, summary: '作業'.repeat(20000), recordedAt: '2026-10-14T00:00:00Z' })),
       questions: Array.from({ length: 100 }, (_, index) => ({ id: `650e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`, body: '質問'.repeat(20000), recipient: 'human', status: 'pending' })),
       notifications: Array.from({ length: 100 }, (_, index) => ({ id: `750e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`, body: '通知'.repeat(20000), kind: 'custom', recordedAt: '2026-10-14T00:00:00Z' })),
     }));
+  }
+
+  it('uses the same response bound and artifact selectors in manager and read-only servers', async () => {
+    await saveLargeGoalHistory();
     const runSlug = 'bounded';
     const runDir = join(cwd, '.takt', 'runs', runSlug);
     mkdirSync(join(runDir, 'logs'), { recursive: true });
@@ -941,6 +947,114 @@ describe('local goal integration and inspection through manager MCP', () => {
       expect(completion.instructions.slice(1)).toEqual([
         'git status --short', "git switch 'main'", `git merge --no-ff --no-edit '${sha}'`,
       ]);
+    });
+  });
+
+  it('reopens the same goal, enqueues corrective work and submits a new approval notification on the same connection', async () => {
+    const sha = commitFiles(branch, { 'result.txt': 'approved\n' });
+    git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
+    const store = new GoalStore(cwd);
+    await withServer(cwd, 'manager', async (client) => {
+      expect((await call(client, completeTool, { expectedSha: sha, summary })).isError).toBeUndefined();
+      const before = await store.get(goalId);
+      const firstNotification = before.notifications!.find(({ kind }) => kind === 'awaiting_merge')!;
+      expect(firstNotification.body).toBe(summary);
+      const reason = '  取り込み前に入力検証を修正する  ';
+      const reopened = await call(client, reopenTool, { reason });
+      expect(reopened.isError, firstTextContent(reopened.content)).toBeUndefined();
+      const output = JSON.parse(firstTextContent(reopened.content));
+      const saved = GoalSchema.parse(JSON.parse(readFileSync(join(cwd, '.takt', 'goals', goalId, 'goal.json'), 'utf8')));
+      expect(saved.status).toBe('created');
+      expect(output.goal.status).toBe('created');
+      expect(saved.completion).toEqual(before.completion);
+      expect(saved.workLog.at(-1)).toMatchObject({ id: output.workLogEntryId, summary: reason });
+      expect(saved.notifications).toEqual(before.notifications);
+
+      const enqueued = await call(client, 'takt_enqueue_goal_task', { task: '入力を検証する', purpose: '入力検証の修正', workflow: 'safe' });
+      expect(enqueued.isError, firstTextContent(enqueued.content)).toBeUndefined();
+      const { taskName } = JSON.parse(firstTextContent(enqueued.content));
+      const runner = new TaskRunner(cwd);
+      expect(runner.listPendingTaskItems()).toEqual([expect.objectContaining({ name: taskName, data: expect.objectContaining({ goal_id: goalId, base_branch: branch }) })]);
+      const claimed = runner.claimNextTasks(1)[0]!;
+      expect(claimed.name).toBe(taskName);
+      const correctedSha = commitFiles(branch, { 'result.txt': 'corrected and validated\n' });
+      const source = 'takt/corrective-result';
+      git(cwd, ['update-ref', `refs/heads/${source}`, correctedSha]);
+      const task = runner.updateRunningTaskExecution(taskName, { runSlug: 'corrective-run', branch: source });
+      runner.completeTask({ task, success: true, branch: source,
+        completion: { success: true, interrupted: false, branch: source, sha: correctedSha },
+        response: '入力検証を修正した', executionLog: [], startedAt: '2026-10-15T00:00:00Z', completedAt: '2026-10-15T00:01:00Z' });
+      expect((await call(client, mergeTool, { taskName, expectedSha: correctedSha })).isError).toBeUndefined();
+      expectIncluded(correctedSha, branch);
+      expect((await store.get(goalId)).completion).toEqual(before.completion);
+      const newSha = git(cwd, ['rev-parse', branch]);
+      expect(newSha).not.toBe(sha);
+      const newSummary = '入力検証の修正と追加テストを確認した';
+      expect((await call(client, completeTool, { expectedSha: newSha, summary: newSummary })).isError).toBeUndefined();
+      const resubmitted = await store.get(goalId);
+      expect(resubmitted).toMatchObject({ status: 'awaiting_merge', completion: { goalSha: newSha, summary: newSummary } });
+      const notifications = resubmitted.notifications!.filter(({ kind }) => kind === 'awaiting_merge');
+      expect(notifications).toEqual([firstNotification, expect.objectContaining({ kind: 'awaiting_merge', body: newSummary })]);
+      expect(notifications[1]!.id).not.toBe(firstNotification.id);
+    });
+  });
+
+  it('bounds reopening a goal with large saved histories and preserves its complete evidence and maximum-length reason', async () => {
+    await saveLargeGoalHistory();
+    const sha = commitFiles(branch, { 'result.txt': 'ready\n' });
+    git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
+    await withServer(cwd, 'manager', async (client) => {
+      expect((await call(client, completeTool, { expectedSha: sha, summary: '完成根拠'.repeat(20000) })).isError).toBeUndefined();
+      const before = await new GoalStore(cwd).get(goalId);
+      const reason = '理'.repeat(128 * 1024);
+      const result = await call(client, reopenTool, { reason });
+      expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
+      const payload = JSON.parse(firstTextContent(result.content));
+      expect(payload.goal).toMatchObject({ id: goalId, status: 'created', completion: {
+        goalSha: sha, targetBranch: 'main', instructions: before.completion!.instructions,
+        reason: before.completion!.reason, truncated: true,
+        omissions: [{ path: 'completion.summary', totalBytes: Buffer.byteLength(before.completion!.summary) }],
+      } });
+      for (const field of ['workLog', 'questions', 'notifications']) expect(payload.goal).not.toHaveProperty(field);
+      const saved = await new GoalStore(cwd).get(goalId);
+      expect(saved.completion).toEqual(before.completion);
+      expect(saved.workLog.at(-1)).toMatchObject({ id: payload.workLogEntryId, summary: reason });
+      const detail = await call(client, 'takt_get_goal', { path: 'workLog.summary', recordId: payload.workLogEntryId, textOffset: 0, maxBytes: 12 });
+      expect(detail.isError).toBeUndefined();
+      expect(JSON.parse(firstTextContent(detail.content))).toMatchObject({ content: '理理理理', totalBytes: Buffer.byteLength(reason), nextOffset: 12 });
+    });
+  });
+
+  it.each(['paused', 'aborted'] as const)('rejects reopening a %s goal and leaves saved state unchanged', async (executionStatus) => {
+    const sha = commitFiles(branch, { 'result.txt': 'ready\n' });
+    git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
+    await withServer(cwd, 'manager', async (client) => {
+      expect((await call(client, completeTool, { expectedSha: sha, summary })).isError).toBeUndefined();
+      await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal, executionStatus }));
+      const file = join(cwd, '.takt', 'goals', goalId, 'goal.json');
+      const before = readFileSync(file, 'utf8');
+      const result = await call(client, reopenTool, { reason: '追加の修正' });
+      expect(result.isError).toBe(true);
+      expect(firstTextContent(result.content)).toContain(executionStatus);
+      expect(readFileSync(file, 'utf8')).toBe(before);
+    });
+  });
+
+  it('rejects reopening when the approved SHA is merged even if the goal tip has advanced', async () => {
+    const sha = commitFiles(branch, { 'result.txt': 'approved\n' });
+    git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
+    await withServer(cwd, 'manager', async (client) => {
+      expect((await call(client, completeTool, { expectedSha: sha, summary })).isError).toBeUndefined();
+      const later = commitFiles(branch, { 'later.txt': 'not reviewed\n' });
+      git(cwd, ['update-ref', `refs/heads/${branch}`, later]);
+      git(cwd, ['update-ref', 'refs/heads/main', sha]);
+      const before = await new GoalStore(cwd).get(goalId);
+      const result = await call(client, reopenTool, { reason: '追加の修正' });
+      expect(result.isError).toBe(true);
+      expect(firstTextContent(result.content)).toContain('takt_check_goal_completion');
+      expect(await new GoalStore(cwd).get(goalId)).toEqual(before);
+      expect(git(cwd, ['rev-parse', branch])).toBe(later);
     });
   });
 
