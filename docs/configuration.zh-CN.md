@@ -258,7 +258,7 @@ caccia:
 
 `caccia` effect 只有在 `enabled: true` 时等待 CodeRabbit；关闭时立即返回 `skipped` 和 `skipReason: config_disabled`。无论该开关为何值，都可以手动运行 `takt caccia <PR-number>`。默认值为关闭、1,800,000 毫秒、3 轮和 workflow `caccia`。如果项目中存在 `caccia` 配置块，它整体优先于全局块；所选配置块中省略的字段使用上述默认值。将 `workflow` 设置为 workflow 标识符即可替换 builtin workflow。
 
-`wait_timeout_ms` 规定初次审查和每次推送后复审的等待期限，重新请求审查也包含在内。若审查限额通知给出的可重试时间早于期限，Caccia 会在该时间到达时请求一次审查；若可重试时间为期限或更晚，则立即跳过。收到限额通知后，审查到期限仍未完成时也会跳过。未收到限额通知时，初次等待超时会跳过，推送后的等待超时会记录为错误。单独命令在跳过或出错时以非零状态退出；system effect 返回 `success: false` 和 `error`，供 workflow 分支使用。
+`wait_timeout_ms` 规定初次审查和每次推送后复审的等待期限，重新请求审查也包含在内。若审查限额通知给出的可重试时间早于期限，Caccia 会在该时间到达时请求一次审查；若可重试时间为期限或更晚，则立即跳过。收到限额通知后，审查到期限仍未完成时也会跳过。未收到限额通知时，初次等待超时会跳过，推送后的等待超时会记录为错误。单独命令在跳过或出错时以非零状态退出；system effect 在跳过时返回 `success: true` 与 `outcome: 'skipped'`，出错时返回 `success: false` 和 `error`，供 workflow 分支使用。
 
 effect 的进度、workflow 输出、结果和失败信息继承父任务的显示模式和任务名前缀。silent 模式的父任务不会产生 Caccia 屏幕输出。
 
