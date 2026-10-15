@@ -3,6 +3,6 @@
   "version": "1.0.0",
   "private": true,
   "dependencies": {
-    "@openai/codex-sdk": "0.159.2"
+    "@openai/codex-sdk": "0.159.3"
   }
 }
