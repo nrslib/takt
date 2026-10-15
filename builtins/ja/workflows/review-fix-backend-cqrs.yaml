@@ -34,38 +34,9 @@ steps:
     uses: review-gather-to-reviewers
     rules:
       - condition: レビュー対象の情報収集完了
-        next: initial-reviewers
+        next: reviewers
       - condition: レビュー対象を特定できない、情報不足
         next: ABORT
-
-  - name: initial-reviewers
-    uses: review-fix-backend-cqrs-reviewers
-    with:
-      architecture_review_instruction: review-arch
-      coding_review_instruction: review-coding
-      security_review_instruction: review-security
-      cqrs_es_review_instruction: review-cqrs-es
-    rules:
-      self:
-        - condition: any("error")
-          next: initial-reviewers
-        - condition: all("approved")
-          next: final-gate
-        - condition: any("needs_fix")
-          next: remediation
-      parallel:
-        arch-review:
-          - condition: approved
-          - condition: needs_fix
-        cqrs-es-review:
-          - condition: approved
-          - condition: needs_fix
-        coding-review:
-          - condition: approved
-          - condition: needs_fix
-        security-review:
-          - condition: approved
-          - condition: needs_fix
 
   - name: reviewers
     input_reports:
@@ -74,12 +45,13 @@ steps:
         - fix-plan.md
         - fix-report.md
         - fix-verification.md
+      optional_if_unrun: true
     uses: review-fix-backend-cqrs-reviewers
     with:
-      architecture_review_instruction: follow-up-architecture-review
-      coding_review_instruction: follow-up-coding-review
-      security_review_instruction: follow-up-security-review
-      cqrs_es_review_instruction: follow-up-cqrs-es-review
+      architecture_review_instruction: review-arch
+      coding_review_instruction: review-coding
+      security_review_instruction: review-security
+      cqrs_es_review_instruction: review-cqrs-es
     rules:
       self:
         - condition: any("error")

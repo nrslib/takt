@@ -45,14 +45,15 @@ function isReviewFix(name: string): boolean {
   return name.startsWith('review-fix-');
 }
 
-function loadFocusedWorkflow(project: string, language: string, name: string): WorkflowConfig {
+function loadFocusedWorkflow(project: string, language: string, name: string,
+  initialStep: 'gather' | 'remediation' = 'remediation'): WorkflowConfig {
   const loaded = loadWorkflowFromFile(
     join(process.cwd(), 'builtins', language, 'workflows', `${name}.yaml`),
     project,
   );
   return {
     ...loaded,
-    initialStep: 'remediation',
+    initialStep,
     steps: loaded.steps.map((step) => {
       if (step.name === 'reviewers' && step.parallel !== undefined) {
         const coding = getAllParallelSubSteps(step.parallel).find((child) => child.name === 'coding-review');
@@ -85,9 +86,10 @@ describe('review-remediation return routing and report handoff', () => {
     rmSync(project, { recursive: true, force: true });
   });
 
-  async function run(language: string, name: string, scenario: Scenario) {
+  async function run(language: string, name: string, scenario: Scenario,
+    initialStep: 'gather' | 'remediation' = 'remediation') {
     writeFileSync(join(project, '.takt', 'config.yaml'), `language: ${language}\n`);
-    const config = loadFocusedWorkflow(project, language, name);
+    const config = loadFocusedWorkflow(project, language, name, initialStep);
     const prompts: Array<{ step: string; text: string }> = [];
     const writtenReports: string[] = [];
     let verificationCount = 0;
@@ -151,6 +153,19 @@ describe('review-remediation return routing and report handoff', () => {
     const state = await engine.run();
     return { state, prompts, writtenReports, abortReasons, abortFailures };
   }
+
+  it.each(cases.filter(({ name }) => isReviewFix(name)))(
+    '$language/$name starts review without requiring repair reports', async ({ language, name }) => {
+      const { state, prompts, abortReasons } = await run(language, name, 'fixed', 'gather');
+      const review = prompts.find(prompt => prompt.step === 'coding-review');
+      expect(state.status, abortReasons.join('; ')).toBe('completed');
+      expect(review?.text).toBeDefined();
+      expect(review?.text).not.toContain('FIX_PLAN_EVIDENCE');
+      expect(review?.text).not.toContain('FIX_REPORT_EVIDENCE');
+      expect(review?.text).not.toContain('fix-verification.md');
+      expect(prompts.some(prompt => prompt.step === 'fix-plan')).toBe(false);
+    },
+  );
 
   it.each(cases)('$language/$name routes no_fix to independent judgment with its adjudication report', async ({ language, name }) => {
     const { state, prompts, writtenReports, abortReasons } = await run(language, name, 'no_fix');

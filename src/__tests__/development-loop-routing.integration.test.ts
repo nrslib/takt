@@ -320,19 +320,50 @@ describe('shipped development completion and remediation routes', () => {
 
   it.each(variants(['review-fix-frontend', 'review-fix-backend', 'review-fix-dual',
     'review-fix-dual-cqrs', 'review-fix-backend-cqrs']))(
-    '$language/$name applies repair evidence only to the follow-up reviewer instructions', ({ language, name }) => {
+    '$language/$name counts the initial review in the monitored repair cycle', ({ language, name }) => {
       const config = load(language, name);
-      const initial = config.steps.find(step => step.name === 'initial-reviewers');
-      const followUp = config.steps.find(step => step.name === 'reviewers');
-      if (!initial?.parallel || !followUp?.parallel) throw new Error('Missing reviewer steps');
-      expect(initial.inputReports).toBeUndefined();
-      expect(followUp.inputReports).toEqual({ fromStep: 'remediation', reports: ['fix-plan.md', 'fix-report.md', 'fix-verification.md'] });
-      expect(getAllParallelSubSteps(initial.parallel).some(step => step.instruction?.includes('--step-remediation--workflow-'))).toBe(false);
-      expect(getAllParallelSubSteps(followUp.parallel).some(step => step.instruction?.includes('--step-remediation--workflow-'))).toBe(false);
-      expect(determineRuleTransition(config.steps.find(step => step.name === 'gather')!, 0)?.nextStep)
-        .toBe('initial-reviewers');
-      expect(determineRuleTransition(config.steps.find(step => step.name === 'remediation')!, 0)?.nextStep)
-        .toBe('reviewers');
+      const byName = (stepName: string) => {
+        const step = config.steps.find(candidate => candidate.name === stepName);
+        if (!step) throw new Error(`Missing ${stepName}`);
+        return step;
+      };
+      const reviewer = byName('reviewers');
+      expect(config.steps.some(step => step.name === 'initial-reviewers')).toBe(false);
+      expect(reviewer.inputReports).toEqual({
+        fromStep: 'remediation',
+        reports: ['fix-plan.md', 'fix-report.md', 'fix-verification.md'],
+        optionalIfUnrun: true,
+      });
+      expect(getAllParallelSubSteps(reviewer.parallel!).some(step => step.instruction?.includes('--step-remediation--workflow-'))).toBe(false);
+      expect(determineRuleTransition(byName('gather'), 0)?.nextStep).toBe('reviewers');
+
+      for (const firstDecision of ['approved', 'needs_fix'] as const) {
+        const detector = new CycleDetector(config.loopMonitors);
+        const route = (stepName: string, ruleIndex: number, expectedNext: string) => {
+          const next = determineRuleTransition(byName(stepName), ruleIndex)?.nextStep;
+          expect(next).toBe(expectedNext);
+          return detector.recordAndCheck(stepName, next!);
+        };
+        expect(route('gather', 0, 'reviewers').triggered).toBe(false);
+        if (firstDecision === 'needs_fix') {
+          expect(route('reviewers', 2, 'remediation').triggered).toBe(false);
+          expect(route('remediation', 0, 'reviewers').triggered).toBe(false);
+        }
+        for (let cycle = 1; cycle <= 3; cycle++) {
+          expect(route('reviewers', 1, 'final-gate').triggered).toBe(false);
+          expect(route('final-gate', 1, 'remediation').triggered).toBe(false);
+          expect(route('remediation', 0, 'reviewers').triggered).toBe(cycle === 3);
+        }
+      }
+
+      const exitDetector = new CycleDetector(config.loopMonitors);
+      expect(exitDetector.recordAndCheck('reviewers', 'final-gate').triggered).toBe(false);
+      expect(exitDetector.recordAndCheck('final-gate', 'COMPLETE').triggered).toBe(false);
+
+      const noFixDetector = new CycleDetector(config.loopMonitors);
+      expect(noFixDetector.recordAndCheck('reviewers', 'remediation').triggered).toBe(false);
+      expect(determineRuleTransition(byName('remediation'), 1)?.nextStep).toBe('final-gate');
+      expect(noFixDetector.recordAndCheck('remediation', 'final-gate').triggered).toBe(false);
     },
   );
 
