@@ -37,13 +37,17 @@ steps:
       - condition: when(true)
         next: judge
   - name: judge
+    input_reports:
+      from_step: review
+      reports: all
     persona: supervisor
     edit: false
     capabilities: readonly
     structured_output:
       schema_ref: merge-decision
     instruction: |
-      Read this invocation's child workflow review reports under {report_dir}/subworkflows/ for the cumulative PR diff.
+      Assess the cumulative PR diff using the following review summary and other supplied reports from the completed review step.
+      Review summary: {report:review-summary.md}
       Child COMPLETE is not approval. Set approved=false for unresolved findings, CHANGES_REQUESTED reviews, failed CI or conflicts, and explain the reason.
       head SHA: {context:wait_ci.status.headSha}
       CI passed: {context:wait_ci.status.ci.passed}

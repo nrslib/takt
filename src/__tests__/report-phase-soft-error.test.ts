@@ -67,7 +67,12 @@ function makeReportStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
   });
 }
 
-function makeStepExecutor(): StepExecutor {
+function makeStepExecutor(workflowSteps: Array<{
+  name: string;
+  instruction?: string;
+  inputReports?: WorkflowStep['inputReports'];
+  parallel?: WorkflowStep['parallel'];
+}> = [{ name: 'review' }], reservedReportNames?: string[], producerUnrun = false): StepExecutor {
   const deps: StepExecutorDeps = {
     optionsBuilder: {
       buildAgentOptions: vi.fn().mockReturnValue({}),
@@ -99,10 +104,22 @@ function makeStepExecutor(): StepExecutor {
     getFailureDir: () => '/tmp/project/.takt/runs/test/failures',
     getLanguage: () => undefined,
     getInteractive: () => false,
-    getWorkflowSteps: () => [{ name: 'review' }],
+    getWorkflowSteps: () => workflowSteps,
     getWorkflowName: () => 'test-workflow',
     getWorkflowDescription: () => undefined,
     getWorkflowRules: () => undefined,
+    getInheritedReportInputs: () => undefined,
+    resolveDeclaredReportInputs: () => reservedReportNames === undefined
+      ? undefined
+      : {
+          declaredNames: reservedReportNames,
+          reports: producerUnrun ? [] : reservedReportNames.map((reference) => ({
+            reference,
+            scope: 'declared-producer' as const,
+            content: `Report ${reference}`,
+            producer: 'decision',
+          })),
+        },
     getRetryNote: () => undefined,
     getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
     structuredCaller: {
@@ -133,6 +150,8 @@ function makeParallelRunner(): ParallelRunner {
         text: `instruction:${step.name}`, injectedReports: [],
       })),
       emitStepReports: vi.fn(),
+      recordReportGeneration: vi.fn(),
+      finalizeReportGeneration: vi.fn(),
       persistPreviousResponseSnapshot: vi.fn(),
       normalizeStructuredOutput: vi.fn((_step: WorkflowStep, response: AgentResponse) => response),
       completeReviewerResponse: vi.fn(async ({ initialResponse }) => ({
@@ -227,6 +246,144 @@ describe('ReportPhaseGenerationError soft error', () => {
     expect(runStatusJudgmentPhase).toHaveBeenCalledOnce();
     expect(response.matchedRuleIndex).toBe(0);
     expect(response.matchedRuleMethod).toBe('phase3_tag');
+  });
+
+  it('stops before Phase 3 when the missing current report is consumed by another workflow step', async () => {
+    const executor = makeStepExecutor([
+      { name: 'review' },
+      { name: 'follow-up', instruction: 'Use {report:review.md}' },
+    ]);
+    vi.mocked(runReportPhase).mockRejectedValue(new ReportPhaseGenerationError(
+      'report failed',
+      'provider_error',
+      { requiresFreshPhase1: false, failureReasons: ['provider_error'] },
+    ));
+
+    await expect(executor.applyPostExecutionPhases(
+      makeReportStep(), makeState(), 1, makeDoneResponse(), vi.fn(),
+    )).rejects.toMatchObject({
+      name: 'AgentFailureError',
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+    });
+    expect(runStatusJudgmentPhase).not.toHaveBeenCalled();
+  });
+
+  it('finds a report consumer in a parallel reviewer without changing the workflow step list', async () => {
+    const executor = makeStepExecutor([
+      { name: 'review' },
+      { name: 'reviewers', parallel: [makeStep({ name: 'coding-review', instruction: 'Use {report: review.md }' })] },
+    ]);
+    vi.mocked(runReportPhase).mockRejectedValue(new ReportPhaseGenerationError(
+      'report failed',
+      'provider_error',
+      { requiresFreshPhase1: false, failureReasons: ['provider_error'] },
+    ));
+
+    await expect(executor.applyPostExecutionPhases(
+      makeReportStep(), makeState(), 1, makeDoneResponse(), vi.fn(),
+    )).rejects.toThrow('review.md');
+    expect(runStatusJudgmentPhase).not.toHaveBeenCalled();
+  });
+
+  it('requires a report named by a declared producer even without a placeholder', async () => {
+    const executor = makeStepExecutor([
+      { name: 'review' },
+      { name: 'follow-up', inputReports: { fromStep: 'review', reports: ['review.md'] } },
+    ]);
+    vi.mocked(runReportPhase).mockRejectedValue(new ReportPhaseGenerationError(
+      'report failed',
+      'provider_error',
+      { requiresFreshPhase1: false, failureReasons: ['provider_error'] },
+    ));
+
+    await expect(executor.applyPostExecutionPhases(
+      makeReportStep(), makeState(), 1, makeDoneResponse(), vi.fn(),
+    )).rejects.toThrow('review.md');
+    expect(runStatusJudgmentPhase).not.toHaveBeenCalled();
+  });
+
+  it('does not treat a different declared producer with the same report name as this step\'s consumer', async () => {
+    const executor = makeStepExecutor([
+      { name: 'review' },
+      {
+        name: 'follow-up',
+        instruction: 'Use {report:review.md}',
+        inputReports: { fromStep: 'other-review', reports: ['review.md'] },
+      },
+    ]);
+    vi.mocked(runReportPhase).mockRejectedValue(new ReportPhaseGenerationError(
+      'report failed',
+      'provider_error',
+      { requiresFreshPhase1: false, failureReasons: ['provider_error'] },
+    ));
+
+    const response = await executor.applyPostExecutionPhases(
+      makeReportStep(), makeState(), 1, makeDoneResponse(), vi.fn(),
+    );
+    expect(response.matchedRuleIndex).toBe(0);
+  });
+
+  it('keeps a local report reference required when a different producer declares all reports', async () => {
+    const executor = makeStepExecutor([
+      { name: 'review' },
+      {
+        name: 'follow-up',
+        instruction: 'Use {report:review.md}',
+        inputReports: { fromStep: 'decision', reports: 'all' },
+      },
+    ], ['other.md']);
+    vi.mocked(runReportPhase).mockRejectedValue(new ReportPhaseGenerationError(
+      'report failed',
+      'provider_error',
+      { requiresFreshPhase1: false, failureReasons: ['provider_error'] },
+    ));
+
+    await expect(executor.applyPostExecutionPhases(
+      makeReportStep(), makeState(), 1, makeDoneResponse(), vi.fn(),
+    )).rejects.toThrow('review.md');
+  });
+
+  it('preserves soft continuation when an all-reports producer owns the same name', async () => {
+    const executor = makeStepExecutor([
+      { name: 'review' },
+      {
+        name: 'follow-up',
+        instruction: 'Use {report:review.md}',
+        inputReports: { fromStep: 'decision', reports: 'all' },
+      },
+    ], ['review.md']);
+    vi.mocked(runReportPhase).mockRejectedValue(new ReportPhaseGenerationError(
+      'report failed',
+      'provider_error',
+      { requiresFreshPhase1: false, failureReasons: ['provider_error'] },
+    ));
+
+    const response = await executor.applyPostExecutionPhases(
+      makeReportStep(), makeState(), 1, makeDoneResponse(), vi.fn(),
+    );
+    expect(response.matchedRuleIndex).toBe(0);
+  });
+
+  it('preserves soft continuation when an unrun optional producer reserves the report name', async () => {
+    const executor = makeStepExecutor([
+      { name: 'review' },
+      {
+        name: 'follow-up',
+        instruction: 'Use {report:review.md}',
+        inputReports: { fromStep: 'decision', reports: 'all', optionalIfUnrun: true },
+      },
+    ], ['review.md'], true);
+    vi.mocked(runReportPhase).mockRejectedValue(new ReportPhaseGenerationError(
+      'report failed',
+      'provider_error',
+      { requiresFreshPhase1: false, failureReasons: ['provider_error'] },
+    ));
+
+    const response = await executor.applyPostExecutionPhases(
+      makeReportStep(), makeState(), 1, makeDoneResponse(), vi.fn(),
+    );
+    expect(response.matchedRuleIndex).toBe(0);
+    expect(runStatusJudgmentPhase).toHaveBeenCalledOnce();
   });
 
   it('rethrows generic report errors from StepExecutor instead of continuing to Phase 3', async () => {

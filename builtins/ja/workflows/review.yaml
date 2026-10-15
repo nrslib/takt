@@ -39,6 +39,9 @@ steps:
         next: ABORT
 
   - name: review-synthesis
+    input_reports:
+      from_step: reviewers
+      reports: all
     capabilities: readonly
     tags:
       - review
@@ -62,7 +65,8 @@ steps:
       レビュー結果を統合し、最終サマリーを作成する役割です。
 
       **やること:**
-      1. `review-target.md` と Report Directory に存在するすべてのレビュワーレポートを読む。任意のレビュワーが未選択の場合、そのレポートが存在すると仮定しない。
+      1. 次のレビュー対象と完了済みのレビュワーステップから渡されたすべての報告を読む。任意のレビュワーが未選択の場合、そのレポートが存在すると仮定しない。
+         レビュー対象: {report:review-target.md}
       2. 利用可能なすべてのレビュー結果を統合
       3. 統合レビューサマリーと総合判定を作成
     output_contracts: &review_synthesis_output_contracts
@@ -106,6 +110,9 @@ steps:
             ```
 
   - name: supervise
+    input_reports:
+      from_step: reviewers
+      reports: all
     capabilities: readonly
     tags:
       - review

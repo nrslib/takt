@@ -11,7 +11,7 @@ import type { WorkflowStep } from '../../models/types.js';
 import { isReviewMode } from '../../models/review-mode.js';
 import type { InstructionContext } from './instruction-context.js';
 import { resolveWorkflowStateReference } from '../state/workflow-state-access.js';
-import { REPORT_REFERENCE_PATTERN, resolveReportReferenceDetailed } from './report-reference.js';
+import { formatMissingReportReference, REPORT_REFERENCE_PATTERN, resolveReportReferenceDetailed } from './report-reference.js';
 import { classifyReportRelativePath } from '../../models/reserved-report-names.js';
 import type { InjectedReport, PreparedInstruction } from './prepared-instruction.js';
 import { renderTaskReviewScope } from '../review-scope.js';
@@ -120,14 +120,43 @@ export function prepareTemplatePlaceholders(
       const normalizedReference = classification.kind === 'public'
         ? classification.normalizedPath
         : reference;
+      const declarations = context.declaredReportInputs ?? [];
+      const declaredMatches = declarations.flatMap(({ reports }) =>
+        reports.filter((report) => report.reference === normalizedReference));
+      const reservedBy = declarations.filter(({ declaredNames }) => declaredNames.includes(normalizedReference));
+      if (declaredMatches.length > 1 || reservedBy.length > 1) {
+        throw new Error(`Report reference "${normalizedReference}" has ambiguous declared inputs`);
+      }
       const existing = injectedReports.get(normalizedReference);
       if (existing !== undefined) return existing.content;
+      const declared = declaredMatches[0];
+      if (declared !== undefined) {
+        injectedReports.set(normalizedReference, declared);
+        return declared.content;
+      }
+      if (reservedBy.length === 1) {
+        const missing = formatMissingReportReference(normalizedReference);
+        injectedReports.set(normalizedReference, { reference: normalizedReference, scope: 'missing', content: missing });
+        return missing;
+      }
+      if (context.unavailableLocalReports?.includes(normalizedReference)) {
+        const missing = formatMissingReportReference(normalizedReference);
+        injectedReports.set(normalizedReference, { reference: normalizedReference, scope: 'missing', content: missing });
+        return missing;
+      }
+      let resolvedPath: string | undefined;
       const resolved = resolveReportReferenceDetailed(reportDir, reference, {
         stepName: step.name,
         reportsRootDir: context.reportsRootDir,
         resumeReportConsumerKey: context.resumeReportConsumerKey,
         validateExistence: context.validateReportReferences !== false,
+        onResolvedPath: (path) => { resolvedPath = path; },
       });
+      if (resolvedPath !== undefined && context.isUnavailableReportPath?.(resolvedPath)) {
+        const missing = formatMissingReportReference(normalizedReference);
+        injectedReports.set(normalizedReference, { reference: normalizedReference, scope: 'missing', content: missing });
+        return missing;
+      }
       if (context.validateReportReferences !== false) {
         injectedReports.set(normalizedReference, { reference: normalizedReference, ...resolved });
       }

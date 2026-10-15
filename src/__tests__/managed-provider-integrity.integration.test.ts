@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, open, readFile, readdir, rm, stat, utimes, writeFile } 
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { hasFilesystemRootAlias, mkdtempThroughFilesystemRootAlias } from './helpers/filesystem-root-alias.js';
 import { inspectManagedProvider, installManagedSdk } from '../infra/managed-providers/package.js';
 import { loadManagedSdk } from '../infra/managed-providers/loader.js';
 
@@ -145,6 +146,21 @@ describe('managed provider binary integrity', () => {
     await utimes(installed.path, restoredMtime, restoredMtime);
     expect((await inspectManagedProvider('claude-sdk')).state).toBe('missing');
     await expect(loadManagedSdk('claude-sdk')).rejects.toThrow('takt install claude-sdk');
+  });
+
+  it.skipIf(!hasFilesystemRootAlias)('installs and loads when the config directory is spelled through a filesystem-root alias', async () => {
+    const aliasedBase = mkdtempThroughFilesystemRootAlias('takt-managed-alias-');
+    try {
+      vi.stubEnv('TAKT_CONFIG_DIR', join(aliasedBase, 'config'));
+      await writeBinary(65537);
+
+      await installManagedSdk('claude-sdk', { npmPath: npm });
+
+      expect((await inspectManagedProvider('claude-sdk')).state).toBe('ready');
+      expect(typeof (await loadManagedSdk('claude-sdk')).modules[0].query).toBe('function');
+    } finally {
+      await rm(aliasedBase, { recursive: true, force: true });
+    }
   });
 
   it('closes a failed read and preserves the published generation', async () => {

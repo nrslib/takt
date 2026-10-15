@@ -1,5 +1,5 @@
 name: takt-default-team
-description: TAKT development workflow that preserves takt-default's planning, testing, review, final-gate, and implementation Companion contracts while switching implementation, remediation, and retry remediation to static Team Leader coder execution without implementation dynamic facets.
+description: TAKT development workflow using Team Leader for implementation and repair while preserving planning, testing, review, final gate, and Companion contracts.
 max_steps: 51
 initial_step: develop
 

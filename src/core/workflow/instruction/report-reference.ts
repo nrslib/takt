@@ -51,6 +51,8 @@ export interface ResolveReportReferenceContext {
    * 文脈のみ）。containment 検証は常に行う。
    */
   readonly validateExistence?: boolean;
+  /** Observe the exact file selected after current, resume, and ancestor lookup. */
+  readonly onResolvedPath?: (path: string) => void;
 }
 
 /**
@@ -314,6 +316,7 @@ export function resolveReportReferenceDetailed(
     targetAbs,
     context,
   );
+  if (resolved !== undefined) context.onResolvedPath?.(resolved.path);
   return resolved === undefined
     ? { content: formatMissingReportReference(normalizedReference), scope: 'missing' }
     : { content: resolved.content, scope: resolved.scope };

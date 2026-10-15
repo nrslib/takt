@@ -174,7 +174,8 @@ async function readNodePtyHashes(directory: string): Promise<NodePtyHashes> {
     }
     return {
       entrySha256: sha256(await readFile(entryPath)),
-      nativePath: relative(directory, nativePath),
+      // require.resolve returns real paths, so key them against the real directory.
+      nativePath: relative(await realpath(directory), nativePath),
       nativeSha256: sha256(await readFile(nativePath)),
       helperSha256: helperPath === undefined ? undefined : sha256(await readFile(helperPath)),
     };

@@ -95,6 +95,7 @@ export async function runReportPhase(
   step: WorkflowStep,
   stepIteration: number,
   ctx: ReportPhaseRunnerContext,
+  onReportWritten?: (reportName: string) => void,
 ): Promise<ReportPhaseBlockedResult | ReportPhaseRateLimitedResult | void> {
   return executeReportPhase(step, stepIteration, ctx, {}, (report) => {
     writeReportFile(
@@ -103,6 +104,7 @@ export async function runReportPhase(
       report.reportContent,
       ctx.reportContentSanitizer,
     );
+    onReportWritten?.(report.reportName);
   });
 }
 

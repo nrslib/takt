@@ -25,6 +25,7 @@
  * Usage:
  *   node eval/scripts/prepare.mjs [targetId...]   # default: all targets
  */
+import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -47,7 +48,7 @@ export function assertRequiredFacetSnapshots(id, requiredFacetKinds, sourcePaths
 // mutable targets run in a disposable copy under eval/.work/<id>.
 const TARGETS = [
   ...['a1', 'a2', 'a3', 'a4'].map((caseId) => ({
-    id: `fix-verification-applicable-inputs-${caseId}`,
+    id: `review-adjudication-applicable-inputs-${caseId}`,
     workflow: 'peer-review',
     step: 'review-adjudication',
     fixture: `eval/fixtures/fix-verification-applicable-inputs/${caseId}`,
@@ -55,10 +56,10 @@ const TARGETS = [
     requiredFacetKinds: ['policies'],
     promptExtension: 'j2',
   })),
-  ...['f1', 'f2', 'f3', 'r1', 'r2', 'n1', 'n2', 'n3', 'n4', 'n5'].map((caseId) => ({
+  ...['f1', 'f2', 'f3', 'r1', 'r2', 'n1', 'n2', 'n3', 'n4', 'n5', 'a1', 'a2', 'a3', 'a4'].map((caseId) => ({
     id: `fix-verification-applicable-inputs-${caseId}`,
-    workflow: 'review-remediation',
-    step: ['r1', 'r2', 'n4'].includes(caseId) ? 'verification-replan' : 'fix-verifier',
+    workflow: ['r1', 'r2', 'n4'].includes(caseId) ? 'review-remediation' : caseId.startsWith('a') ? 'peer-review' : 'review-remediation',
+    step: ['r1', 'r2', 'n4'].includes(caseId) ? 'verification-replan' : caseId.startsWith('a') ? 'review-adjudication' : 'fix-verifier',
     fixture: `eval/fixtures/fix-verification-applicable-inputs/${caseId}`,
     projectFromFixture: true,
     requiredFacetKinds: ['policies'],
@@ -677,25 +678,9 @@ const TARGETS = [
       candidateIds: ['cli'],
     },
   },
-  {
-    id: 'fix-verifier-family-boundary',
-    workflow: 'review-remediation',
-    step: 'fix-verifier',
-    fixture: 'eval/fixtures/fix-verifier-family-boundary',
-  },
-  {
-    id: 'fix-verifier-state-closure',
-    workflow: 'review-remediation',
-    step: 'fix-verifier',
-    fixture: 'eval/fixtures/fix-verifier-state-closure',
-  },
-  {
-    id: 'fix-verifier-state-routing',
-    workflow: 'review-remediation',
-    step: 'fix-verifier',
-    fixture: 'eval/fixtures/fix-verifier-state-closure',
-    phase: 'phase3',
-  },
+  { id: 'fix-verifier-family-boundary', workflow: 'review-remediation', step: 'fix-verifier', fixture: 'eval/fixtures/fix-verifier-family-boundary' },
+  { id: 'fix-verifier-state-closure', workflow: 'review-remediation', step: 'fix-verifier', fixture: 'eval/fixtures/fix-verifier-state-closure' },
+  { id: 'fix-verifier-state-routing', workflow: 'review-remediation', step: 'fix-verifier', fixture: 'eval/fixtures/fix-verifier-state-closure', phase: 'phase3' },
   { id: 'review-adjudication', workflow: 'peer-review', step: 'review-adjudication', fixture: 'eval/fixtures/review-adjudication' },
   {
     id: 'review-adjudication-phase2',
@@ -725,27 +710,17 @@ const TARGETS = [
     step: 'supervise',
     fixture: 'eval/fixtures/final-readiness-precision',
   },
-  {
-    id: 'fix-verification-scope',
-    workflow: 'review-remediation',
-    step: 'fix-verifier',
-    fixture: 'eval/fixtures/fix-verification-scope',
-  },
-  {
-    id: 'fix-verification-current-diff-regression',
-    workflow: 'review-remediation',
-    step: 'fix-verifier',
-    fixture: 'eval/fixtures/fix-verification-current-diff-regression',
-  },
-  {
-    id: 'fix-verification-preserved-condition',
-    workflow: 'review-remediation',
-    step: 'fix-verifier',
-    fixture: 'eval/fixtures/fix-verification-preserved-condition',
-  },
+  { id: 'fix-verification-scope', workflow: 'review-remediation', step: 'fix-verifier', fixture: 'eval/fixtures/fix-verification-scope' },
+  { id: 'fix-verification-current-diff-regression', workflow: 'review-remediation', step: 'fix-verifier', fixture: 'eval/fixtures/fix-verification-current-diff-regression' },
+  { id: 'fix-verification-preserved-condition', workflow: 'review-remediation', step: 'fix-verifier', fixture: 'eval/fixtures/fix-verification-preserved-condition' },
+
 ];
 
-export const PREPARE_TARGET_IDS = Object.freeze(TARGETS.map(({ id }) => id));
+const ARTIFACT_HANDOFF_TARGET = 'review-artifact-input-handoff';
+export const PREPARE_TARGET_IDS = Object.freeze([
+  ...TARGETS.map(({ id }) => id),
+  ARTIFACT_HANDOFF_TARGET,
+]);
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, '../..');
@@ -939,9 +914,15 @@ function composeConfiguredDynamicFacets(target, selection, targetId, stepName, p
 async function main() {
   const requested = process.argv.slice(2);
   for (const id of requested) {
-    if (!TARGETS.some((t) => t.id === id)) {
-      throw new Error(`Unknown target "${id}". Available: ${TARGETS.map((t) => t.id).join(', ')}`);
+    if (!PREPARE_TARGET_IDS.includes(id)) {
+      throw new Error(`Unknown target "${id}". Available: ${PREPARE_TARGET_IDS.join(', ')}`);
     }
+  }
+  if (requested.includes(ARTIFACT_HANDOFF_TARGET)) {
+    execFileSync(process.execPath, ['eval/scripts/prepare-review-artifact-input-handoff.mjs'], {
+      cwd: repoRoot,
+      stdio: 'inherit',
+    });
   }
   const targets = requested.length > 0 ? TARGETS.filter((t) => requested.includes(t.id)) : TARGETS;
 
