@@ -292,6 +292,7 @@ describe('deterministic stdio MCP server fixture (MCP-INTEGRATION-TESTS)', () =>
         'takt_retry_goal_task',
         'takt_remove_goal_task',
         'takt_complete_goal',
+        'takt_reopen_goal',
         'takt_check_goal_completion',
         'takt_get_goal_diff',
         'takt_get_goal_history',

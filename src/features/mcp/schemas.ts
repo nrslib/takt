@@ -85,6 +85,10 @@ export const listGoalsInputSchema = goalIdentityInputSchema.extend({
   errorOffset: readOffsetSchema.describe('Offset into individual saved-record errors; independent of the healthy goal offset.'),
 });
 export const goalWriteInputSchema = goalIdentityInputSchema.extend({ goalId: GoalIdSchema });
+export const reopenGoalInputSchema = goalWriteInputSchema.extend({
+  reason: GoalWorkLogInputSchema.shape.summary.describe('Required reason for reopening the goal. Saved in the work log without trimming.'),
+});
+export type ReopenGoalInput = z.infer<typeof reopenGoalInputSchema>;
 export const getGoalInputSchema = goalWriteInputSchema.extend({
   path: z.string().max(512).regex(/^(objective|outOfScope|acceptanceCriteria|constraints|completion|questions|workLog|notifications)(\.(\d+|body|summary|recommendation|answer|text|options|instructions|reason|changeSummary|files|path|worktrees))*$/).optional()
     .describe('Saved field path, for example workLog.0.summary or completion.summary. Array indices refer to saved order.'),

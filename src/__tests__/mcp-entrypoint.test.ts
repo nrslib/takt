@@ -653,6 +653,29 @@ describe('MCP package entrypoint', () => {
     }
   });
 
+  it.each(['manager', 'all', 'read-only'] as const)('exposes reopening with a required reason only to writable %s tools', async (toolSet) => {
+    const server = createTaktMcpServer({}, { toolSet });
+    const client = new Client({ name: 'takt-mcp-reopen-client', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const tool = (await client.listTools()).tools.find(({ name }) => name === 'takt_reopen_goal');
+      if (toolSet === 'read-only') {
+        expect(tool).toBeUndefined();
+      } else {
+        expect(tool?.inputSchema.required?.slice().sort()).toEqual(['cwd', 'goalId', 'reason']);
+        expect(Object.keys(tool!.inputSchema.properties!).sort()).toEqual(['cwd', 'goalId', 'reason']);
+        expect(tool?.inputSchema.properties?.reason).toMatchObject({ type: 'string', maxLength: 128 * 1024 });
+        for (const selector of ['64 KiB', 'truncation', 'takt_get_goal', 'workLog.summary', 'recordId', 'textOffset/maxBytes']) {
+          expect(tool?.description).toContain(selector);
+        }
+      }
+    } finally {
+      await client.close(); await server.close();
+    }
+  });
+
   it('can register the same server with read-only task-state tools', async () => {
     const server = createTaktMcpServer({}, { toolSet: 'read-only' });
     const client = new Client({ name: 'takt-mcp-read-only-test-client', version: '1.0.0' });
