@@ -492,7 +492,6 @@ export async function runMerge(
         getGitProvider(), options.abortSignal));
     }
     numbers = results.filter((result) => result.selected).map((result) => result.number);
-    options.onSelectionResult?.(results);
 
     const eligibleNumbers: number[] = [];
     for (const prNumber of numbers) {
@@ -501,6 +500,8 @@ export async function runMerge(
       if (pr !== undefined && matchesSelectionConditions(pr)) eligibleNumbers.push(prNumber);
     }
     numbers = eligibleNumbers;
+    const eligibleNumberSet = new Set(eligibleNumbers);
+    options.onSelectionResult?.(results.filter((result) => !result.selected || eligibleNumberSet.has(result.number)));
   }
   const workflow = options.workflow ?? options.settings.workflow;
   const running = new Set<Promise<void>>();

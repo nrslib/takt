@@ -300,6 +300,46 @@ describe('Merge target selection and execution', () => {
     ]);
   });
 
+  it('選択したPRが詳細再取得時にdraft化したら選択結果からも除外する', async () => {
+    const initialPrs = [pr(123), pr(456), pr(789)];
+    const fetchCounts = new Map<number, number>();
+    const events: string[] = [];
+    setPrs(initialPrs);
+    fetchPrListItem.mockImplementation((number: number) => {
+      const count = (fetchCounts.get(number) ?? 0) + 1;
+      fetchCounts.set(number, count);
+      events.push(`fetch:${number}:${count}`);
+      if (count === 1) return initialPrs.find((item) => item.number === number);
+      return number === 456 ? pr(456, { draft: true }) : initialPrs.find((item) => item.number === number);
+    });
+    let judgmentIndex = 0;
+    mocks.agent.mockImplementation(async () => {
+      const candidate = initialPrs[judgmentIndex]!;
+      judgmentIndex += 1;
+      events.push(`judge:${candidate.number}`);
+      return { status: 'done', structuredOutput: {
+        selected: candidate.number !== 789, reason: '文書の変更',
+      } };
+    });
+    const onSelectionResult = vi.fn(() => { events.push('report'); });
+    executePrWorkflow.mockImplementation(async ({ prNumber }: { prNumber: number }) => {
+      events.push(`execute:${prNumber}`);
+      return { merged: true };
+    });
+
+    await run({ selectionText: '文書のみ', onSelectionResult });
+
+    expect(processedNumbers()).toEqual([123]);
+    expect(onSelectionResult).toHaveBeenCalledWith([
+      { number: 123, selected: true, reason: '文書の変更' },
+      { number: 789, selected: false, reason: '文書の変更' },
+    ]);
+    expect(events).toEqual([
+      'fetch:123:1', 'judge:123', 'fetch:456:1', 'judge:456', 'fetch:789:1', 'judge:789',
+      'fetch:123:2', 'fetch:456:2', 'report', 'execute:123',
+    ]);
+  });
+
   it('テキスト選別後の詳細再取得が失敗したらworkflowを開始しない', async () => {
     const initialPrs = [pr(123), pr(456)];
     const fetchCounts = new Map<number, number>();
