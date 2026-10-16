@@ -50,7 +50,7 @@ Do not change a dependency array just to silence a lint warning. First organize 
 
 | Criterion | Decision |
 |------|------|
-| A Hook groups state, Effects, Context, queries, forms, and event conversion as one screen behavior | OK |
+| A screen-specific Hook directly handles the screen's types, APIs, and state and groups state, Effects, Context, queries, forms, operation acceptance decisions, and processing start as an implementation split of the screen (excluding a Hook that only delegates to another custom state owner) | OK |
 | A Hook wraps only a pure calculation | Consider using a regular function instead |
 | A Hook, component, and screen have circular dependencies that hide the path for changing display or communication | REJECT |
 | The path from state, events, and derived values returned by a Hook to rendering inputs is clear | OK |

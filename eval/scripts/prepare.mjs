@@ -306,12 +306,23 @@ const TARGETS = [
     requiredFacetKinds: ['policies', 'knowledge'],
     promptExtension: 'j2',
   },
+  ...['good', 'bad', 'bad2', 'good-hook'].map(variant => ({
+    id: `frontend-mediator-review-${variant}`,
+    workflow: 'frontend',
+    step: 'frontend-review',
+    fixture: `eval/fixtures/frontend-mediator-review/${variant}`,
+    snapshotPrefix: 'frontend-review-context',
+    copyFixture: true,
+    requiredFacetKinds: ['policies', 'knowledge'],
+    promptExtension: 'j2',
+  })),
   { id: 'cqrs-review', workflow: 'review-backend-cqrs', step: 'cqrs-es-review', fixture: 'eval/fixtures/backend-cqrs' },
   // rescan は arch-review と同じ facet 構成だが fixture が異なるため、
   // 省略時に全文を確認できるスナップショットを inventory-es 側に生成する専用エントリが必要
   { id: 'rescan', workflow: 'peer-review', step: 'arch-review', fixture: 'eval/fixtures/inventory-es' },
   { id: 'rescan-coding', workflow: 'peer-review', step: 'coding-review', fixture: 'eval/fixtures/inventory-es' },
   { id: 'frontend-implement', workflow: 'frontend', step: 'implement', fixture: 'eval/fixtures/frontend-app', mutable: true },
+  { id: 'frontend-mediator-implement', workflow: 'frontend', step: 'implement', fixture: 'eval/fixtures/frontend-mediator', mutable: true, requiredFacetKinds: ['policies', 'knowledge'] },
   { id: 'cqrs-implement', workflow: 'backend-cqrs', step: 'implement', fixture: 'eval/fixtures/backend-cqrs', mutable: true },
   { id: 'fix-closure', workflow: 'review-remediation', step: 'fix-retry', fixture: 'eval/fixtures/fix-closure', mutable: true },
   { id: 'fix-self-scan', workflow: 'peer-review', step: 'fix', fixture: 'eval/fixtures/fix-self-scan', mutable: true },
