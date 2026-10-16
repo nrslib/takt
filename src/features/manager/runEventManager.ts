@@ -22,12 +22,11 @@ export function createRunEventManager(cwd: string) {
   const getSession = async (signal: AbortSignal): Promise<ManagerConversationSession> => {
     if (session !== undefined) return session;
     const plan = createManagerConversationPlan(cwd, {});
-    mcp = await connectManagerMcp(cwd);
+    mcp = await connectManagerMcp(cwd, undefined, plan.ctx.mcpServers);
     try {
       await plan.ctx.provider.preflight?.({
         cwd, abortSignal: signal, model: plan.ctx.model, providerOptions: plan.ctx.providerOptions,
-        allowedTools: plan.strategy.allowedTools, mcpOnlySideEffects: plan.strategy.allowedTools,
-        permissionMode: 'readonly', mcpServers: mcp.servers,
+        permissionMode: 'full', mcpServers: mcp.servers,
         outputSchema: getManagerOutputSchema(plan.ctx.providerType),
       });
     } catch (error) {

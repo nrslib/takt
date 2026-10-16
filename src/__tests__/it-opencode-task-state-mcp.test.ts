@@ -10,7 +10,6 @@ import { createAssistantConversationPlan } from '../features/interactive/convers
 import { createManagerConversationPlan } from '../features/manager/conversationPlan.js';
 import { createManagerConversationSession } from '../features/manager/conversationSession.js';
 import { connectManagerMcp } from '../features/manager/managerMcp.js';
-import { TAKT_MCP_MANAGER_TOOL_NAMES } from '../features/mcp/server.js';
 import { OpenCodeProvider } from '../infra/providers/opencode.js';
 import { createOpenCodeServerStartMock } from './helpers/opencode-server-process-test-helpers.js';
 import { MockEventStream, sessionIdle, successfulSessionAbort } from './helpers/opencode-client-test-helpers.js';
@@ -205,11 +204,9 @@ describe('OpenCode task-state MCP integration', () => {
     }));
     expect(server.args).toEqual(expect.arrayContaining(['--tool-set', 'manager']));
 
-    const mcpTools = TAKT_MCP_MANAGER_TOOL_NAMES.map((name) => `${serverName}_${name}`);
     const sessionId = 'manager-first-session';
-    const deniedTool = `${serverName}_takt_enqueue_task`;
     const { sessionCreate, promptAsync, permissionReply } = createOpenCodeClientMock(
-      sessionId, [...mcpTools, deniedTool], { message: 'What is your goal?', summary: null },
+      sessionId, ['bash', 'edit', 'webfetch'], { message: 'What is your goal?', summary: null },
     );
     const plan = createManagerConversationPlan(projectCwd, { language: 'en' });
     const session = createManagerConversationSession({
@@ -218,7 +215,6 @@ describe('OpenCode task-state MCP integration', () => {
     });
     try {
       expect(plan.ctx.provider).toBeInstanceOf(OpenCodeProvider);
-      expect(plan.strategy.allowedTools).toEqual(['Read', ...TAKT_MCP_MANAGER_TOOL_NAMES.map((name) => `mcp__${serverName}__${name}`)]);
       expect(await session.handleUserMessage({ text: 'ゴールを相談したい' })).toEqual({ kind: 'reply', message: 'What is your goal?' });
 
       expect(getFirstOpenCodeStartConfig().mcp).toEqual({
@@ -231,15 +227,12 @@ describe('OpenCode task-state MCP integration', () => {
       expect(server.env).not.toHaveProperty('TAKT_MANAGER_GOAL_OWNERS');
       expect(sessionCreate).toHaveBeenCalledTimes(1);
       const sessionOptions = sessionCreate.mock.calls[0]![0] as { permission: OpenCodePermissionRule[] };
-      for (const tool of mcpTools) {
-        expect(getPermissionRule(sessionOptions.permission, tool)).toEqual({ permission: tool, pattern: '*', action: 'allow' });
-      }
-      expect(getPermissionRule(sessionOptions.permission, deniedTool)).toBeUndefined();
+      expect(getPermissionRule(sessionOptions.permission, '*')).toEqual({ permission: '*', pattern: '*', action: 'allow' });
       expect(promptAsync).toHaveBeenCalledTimes(1);
       const promptOptions = promptAsync.mock.calls[0]![0] as { sessionID: string; tools: Record<string, boolean> };
       expect(promptOptions.sessionID).toBe(sessionId);
-      expect(Object.entries(promptOptions.tools).filter(([, enabled]) => enabled).map(([name]) => name).sort()).toEqual(['read', ...mcpTools].sort());
-      expect(permissionReply.mock.calls.map(([request]) => request.reply)).toEqual([...mcpTools.map(() => 'once'), 'reject']);
+      expect(promptOptions.tools).toMatchObject({ read: true, bash: true, edit: true, webfetch: true });
+      expect(permissionReply.mock.calls.map(([request]) => request.reply)).toEqual(['always', 'always', 'always']);
       expect(managerMcp.callTool).not.toHaveBeenCalled();
     } finally {
       await session.close();

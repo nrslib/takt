@@ -18,7 +18,7 @@ vi.mock('../features/manager/managerMcp.js', async (original) => ({
 vi.mock('../features/manager/conversationPlan.js', () => ({
   createManagerConversationPlan: () => ({
     ctx: { provider: new MockProvider(), providerType: 'mock', lang: 'ja' },
-    strategy: { systemPrompt: 'manager patrol fixture', allowedTools: ['Read'] },
+    strategy: { systemPrompt: 'manager patrol fixture' },
   }),
 }));
 

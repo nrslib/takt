@@ -44,7 +44,7 @@ function fixture(providerType: ManagerConversationPlan['ctx']['providerType'] = 
       providerType, model: undefined, lang: 'ja',
       provider: makeProvider({ supportsStructuredOutput: true, setup: doubles.setup }),
     },
-    strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read'] },
+    strategy: { systemPrompt: 'manager fixture' },
   };
   const session = createManagerConversationSession({ cwd, plan });
   return { session, register, plan };
@@ -63,6 +63,31 @@ beforeEach(() => {
 });
 
 describe('manager conversation approval', () => {
+  it('prepares all MCP servers and calls the provider with full permissions and configured options', async () => {
+    const dispose = vi.fn(async () => {});
+    const prepare = vi.fn(async () => ({ dispose }));
+    const validate = vi.fn();
+    vi.spyOn(mcpAdapters, 'createMcpAdapter').mockReturnValue({
+      validate, prepare, classifyFailure: () => ({ category: 'provider_error' }),
+    });
+    const { session, plan } = fixture();
+    const servers = { manager: { command: 'node' }, browser: { command: '/browser-mcp' } };
+    plan.ctx.mcpServers = servers;
+    plan.ctx.providerOptions = { codex: { networkAccess: true } };
+    try {
+      expect((await session.handleUserMessage({ text: 'アプリを確認してください' })).kind).toBe('reply');
+      expect(validate).toHaveBeenCalledWith(expect.objectContaining({ servers }));
+      expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ servers }), {
+        cwd, abortSignal: expect.any(AbortSignal), permissionMode: 'full',
+      });
+      const options = doubles.call.mock.calls[0]![1];
+      expect(options).toMatchObject({ permissionMode: 'full', mcpServers: servers, providerOptions: plan.ctx.providerOptions });
+      expect(options.allowedTools).toBeUndefined();
+      expect(options.mcpOnlySideEffects).toBeUndefined();
+      expect(dispose).toHaveBeenCalledOnce();
+    } finally { await session.close(); }
+  });
+
   it('passes a strict Codex conversation schema requiring both nullable branches to the provider', async () => {
     const { session } = fixture('codex');
     try {

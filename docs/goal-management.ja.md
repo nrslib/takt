@@ -18,6 +18,25 @@ manager:
 
 manager は Claude、Codex、OpenCode に対応します。道具は TAKT にある投入、再開、やり直し、削除、run の参照、差分と履歴、取り込み、完成確認の機能を使います。作業前にタスク、run の記録とレポート、git を確認し、済んだ操作は繰り返しません。
 
+TUI と daemon の manager は、既存の provider 権限制御を通して `full` 権限を使います。provider の通常の道具と利用者の MCP サーバーを利用でき、manager 固定の許可ツール一覧は設けません。利用者が設定した provider options はそのまま渡します。
+
+利用者の MCP は、既存の `runtime.yaml` の割り当て規則で指定します。自分で用意したブラウザ MCP サーバーを割り当てる例です。
+
+```yaml
+version: 1
+mcp:
+  servers:
+    browser:
+      type: stdio
+      command: /absolute/path/to/browser-mcp-server
+  targets:
+    personas:
+      manager:
+        servers: [browser]
+```
+
+`command` は利用するサーバーの実行ファイルへ置き換えてください。ブラウザ MCP は同梱せず、既定でも有効にしません。manager には `defaults.servers` と persona の割り当てを合成し、persona の除外と `internal_agents.selector.exclude` を適用します。manager 自身の TAKT MCP は常に追加し、利用者が同名のサーバーを定義した場合も manager 自身の定義を優先します。
+
 ## 巡回
 
 daemon は未完成で active なゴールを定期的に巡回します。`manager.patrol_interval` は秒単位の正の整数で、既定は `1800`（30 分）です。プロジェクト設定がグローバル設定より優先されます。新規ゴールの初回は作成時刻から、以後は巡回の終了時刻から数えます。長すぎる実行、同じ段階の繰り返し、進まないゴール、長く未回答の質問を確認し、必要な再開・やり直し・通知を行います。実行中のタスクの問題は人に知らせます。巡回が失敗した場合は `blocked` を通知し、次の間隔で再確認します。失敗として残った通常のイベントも巡回時に再試行します。

@@ -44,7 +44,7 @@ export interface AgentExecutionContext {
   stepQualifiedName: string | undefined;
   /** True when the current node is a `workflow_call` control node (not an agent). */
   isWorkflowCallNode: boolean;
-  /** True when resolving for an internal agent (selector/assistant). */
+  /** True when resolving for an internal agent (selector/assistant/manager). */
   isInternalAgent: boolean;
 }
 
@@ -220,8 +220,8 @@ export function resolveMcpAssignment(
 /**
  * Resolve the shared MCP assignment for a TAKT-owned internal agent.
  *
- * Internal agents do not have a workflow persona, tag, or step target. They
- * still receive `defaults.servers`, and the common internal-agent exclusion
+ * Internal agents may specify a persona, but have no workflow tag or step target.
+ * They receive `defaults.servers`, and the common internal-agent exclusion
  * is applied with `isInternalAgent: true`.
  */
 export interface ResolvedInternalAgentMcpServers {
@@ -231,13 +231,14 @@ export interface ResolvedInternalAgentMcpServers {
 
 export function resolveInternalAgentMcpServers(
   section: McpAssignmentSection | undefined,
+  persona?: string,
 ): ResolvedInternalAgentMcpServers {
   if (section === undefined) {
     return { servers: {}, identity: undefined };
   }
 
   const resolved = resolveMcpAssignment(section, {
-    persona: undefined,
+    persona,
     tags: [],
     stepQualifiedName: undefined,
     isWorkflowCallNode: false,

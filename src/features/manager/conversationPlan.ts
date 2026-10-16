@@ -1,13 +1,13 @@
 import { resolveConfigValue, resolveNonWorkflowProviderOptions } from '../../infra/config/index.js';
 import { resolveAssistantProviderModel } from '../interactive/assistantConfig.js';
 import { getProvider } from '../../infra/providers/index.js';
-import { resolveRequiredReadOnlyCapabilities } from '../../infra/providers/requiredCapabilities.js';
+import { getGlobalConfigDir, getProjectConfigDir } from '../../infra/config/paths.js';
+import { resolveInvocationRuntimeProviderFileWithOrigins } from '../../infra/config/runtime-provider/invocation.js';
+import { resolveInternalAgentMcpServers } from '../../infra/config/runtime-provider/mcp-assignment.js';
 import { resolveFacetByName, resolveFacetByNameWithSource, resolveRefToContent } from '../../infra/config/loaders/resource-resolver.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
 import type { McpServerConfig, StepProviderOptions } from '../../core/models/index.js';
 import type { Provider, ProviderType } from '../../infra/providers/index.js';
-import { TAKT_MCP_MANAGER_TOOL_NAMES } from '../mcp/server.js';
-import { TAKT_MANAGER_MCP_SERVER_NAME } from './managerMcp.js';
 import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
 
 export interface ManagerConversationContext {
@@ -23,7 +23,6 @@ export interface ManagerConversationPlan {
   ctx: ManagerConversationContext;
   strategy: {
     systemPrompt: string;
-    allowedTools: string[];
   };
 }
 
@@ -39,10 +38,16 @@ export function createManagerConversationPlan(
   const configured = resolved.runtimeManaged
     ? resolved.providerOptions
     : resolveNonWorkflowProviderOptions(cwd, undefined, undefined, resolved.provider);
-  const restrictions = resolveRequiredReadOnlyCapabilities(
-    'manager', cwd, context, resolved.provider, provider, configured,
-    TAKT_MCP_MANAGER_TOOL_NAMES.map((name) => `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${name}`),
-  );
+  if (!provider.supportsStructuredOutput) {
+    throw new Error(`Provider "${resolved.provider}" does not support manager structured output`);
+  }
+  if (!provider.supportedMcpTransports?.has('stdio')) {
+    throw new Error(`Provider "${resolved.provider}" does not support manager stdio MCP`);
+  }
+  const { runtimeFile } = resolveInvocationRuntimeProviderFileWithOrigins({
+    globalConfigDir: getGlobalConfigDir(), projectConfigDir: getProjectConfigDir(cwd),
+  });
+  const { servers } = resolveInternalAgentMcpServers(runtimeFile?.mcp, 'manager');
   const persona = resolveFacetByName('manager', 'personas', context);
   const policy = resolveFacetByName('manager', 'policies', context);
   const knowledge = resolveFacetByName('manager', 'knowledge', context);
@@ -54,7 +59,7 @@ export function createManagerConversationPlan(
   return {
     ctx: {
       provider, providerType: resolved.provider, model: resolved.model, lang,
-      providerOptions: restrictions.providerOptions,
+      providerOptions: configured, mcpServers: servers,
     },
     strategy: {
       systemPrompt: [
@@ -64,7 +69,6 @@ export function createManagerConversationPlan(
         `Repository manager.main_merge: ${JSON.stringify(managerConfig.mainMerge)}`,
         `Concurrency limit: ${resolveConfigValue(cwd, 'concurrency')}`,
       ].join('\n\n'),
-      allowedTools: restrictions.allowedTools,
     },
   };
 }

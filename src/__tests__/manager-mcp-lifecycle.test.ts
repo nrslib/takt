@@ -7,6 +7,22 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({ Client: class { co
 vi.mock('@modelcontextprotocol/sdk/client/stdio.js', () => ({ StdioClientTransport: class { close = doubles.transportClose; constructor(input: unknown) { doubles.transport(input); } } }));
 
 describe('manager MCP resources', () => {
+  it('preserves user MCP servers and gives its own definition priority on a name collision', async () => {
+    const userServers = {
+      browser: { command: '/browser-mcp' },
+      [TAKT_MANAGER_MCP_SERVER_NAME]: { command: '/conflicting-user-mcp' },
+    };
+    const connection = await connectManagerMcp('/repository', undefined, userServers);
+    try {
+      expect(Object.keys(connection.servers).sort()).toEqual(['browser', TAKT_MANAGER_MCP_SERVER_NAME].sort());
+      expect(connection.servers.browser).toEqual(userServers.browser);
+      expect(connection.servers[TAKT_MANAGER_MCP_SERVER_NAME]).toMatchObject({
+        command: process.execPath, args: expect.arrayContaining(['--tool-set', 'manager']),
+      });
+      expect(doubles.transport).toHaveBeenCalledWith(expect.objectContaining({ command: process.execPath }));
+      expect(userServers[TAKT_MANAGER_MCP_SERVER_NAME].command).toBe('/conflicting-user-mcp');
+    } finally { await connection.dispose(); }
+  });
   afterEach(() => vi.unstubAllEnvs());
   beforeEach(() => {
     vi.clearAllMocks();

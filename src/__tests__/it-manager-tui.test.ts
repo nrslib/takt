@@ -52,7 +52,7 @@ function mount(lang: 'ja' | 'en' = 'en', startup?: ComponentProps<typeof Manager
     cwd, assignment,
     plan: {
       ctx: { providerType: 'mock', model: undefined, lang, provider: makeProvider({ supportsStructuredOutput: true, setup: () => ({ call }) }) },
-      strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read'] },
+      strategy: { systemPrompt: 'manager fixture' },
     },
   });
   const onExit = vi.fn();

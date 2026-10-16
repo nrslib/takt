@@ -46,15 +46,13 @@ export async function runManager(input: { cwd: string; agentOverrides?: Assistan
   }
   await ensureDaemon();
   const plan = createManagerConversationPlan(cwd, input.agentOverrides ?? {});
-  const mcp = await connectManagerMcp(cwd, assignment);
+  const mcp = await connectManagerMcp(cwd, assignment, plan.ctx.mcpServers);
   let session: ManagerConversationSession | undefined;
   let startupTask: Promise<readonly string[]> | undefined;
   try {
     await plan.ctx.provider.preflight?.({
       cwd, model: plan.ctx.model, providerOptions: plan.ctx.providerOptions,
-      allowedTools: plan.strategy.allowedTools,
-      mcpOnlySideEffects: plan.strategy.allowedTools,
-      permissionMode: 'readonly', mcpServers: mcp.servers,
+      permissionMode: 'full', mcpServers: mcp.servers,
       outputSchema: getManagerOutputSchema(plan.ctx.providerType),
     });
     session = createManagerConversationSession({
