@@ -35,7 +35,7 @@ beforeEach(() => {
   doubles.remove.mockImplementation((event: SavedManagerEvent) => { inbox = inbox.filter((item) => item !== event); });
   doubles.get.mockImplementation(async () => goal);
   doubles.update.mockImplementation(async (_id: string, transform: (value: Goal) => Goal) => { goal = transform(goal); return goal; });
-  doubles.plan.mockReturnValue({ ctx: { provider: { preflight: doubles.preflight }, providerType: 'mock', model: undefined, lang: 'ja' }, strategy: { allowedTools: ['Read'] } });
+  doubles.plan.mockReturnValue({ ctx: { provider: { preflight: doubles.preflight }, providerType: 'mock', model: undefined, lang: 'ja' }, strategy: { systemPrompt: 'manager fixture' } });
   doubles.connect.mockResolvedValue({ servers: {}, dispose: doubles.dispose });
   doubles.createSession.mockReturnValue({ handleUserMessage: doubles.turn, getPendingSummary: () => null, close: doubles.close });
   doubles.turn.mockResolvedValue({ kind: 'reply', message: 'task-X を取り込み、task-Y を投入しました' });
@@ -45,6 +45,31 @@ afterEach(() => vi.useRealTimers());
 function patrol(filePath = '/inbox/patrol.json'): SavedManagerEvent {
   return { filePath, event: { kind: 'patrol', goalId: goal.id, createdAt: new Date().toISOString() } };
 }
+
+it('transfers user MCP servers to connection setup and the merged servers to preflight and session', async () => {
+  const userServers = { browser: { command: '/browser-mcp' } };
+  const servers = { ...userServers, manager: { command: 'node' } };
+  const providerOptions = { codex: { networkAccess: true } };
+  doubles.plan.mockReturnValueOnce({
+    ctx: { provider: { preflight: doubles.preflight }, providerType: 'mock', lang: 'ja', mcpServers: userServers, providerOptions },
+    strategy: { systemPrompt: 'manager fixture' },
+  });
+  doubles.connect.mockResolvedValueOnce({ servers, dispose: doubles.dispose });
+  inbox = [saved('task-a')];
+  const manager = createRunEventManager('/project');
+  const signal = new AbortController().signal;
+  try {
+    await expect(manager.processPending(signal, 10)).resolves.toBe(true);
+    expect(doubles.connect).toHaveBeenCalledExactlyOnceWith('/project', undefined, userServers);
+    expect(doubles.preflight).toHaveBeenCalledExactlyOnceWith({
+      cwd: '/project', abortSignal: signal, model: undefined, providerOptions,
+      permissionMode: 'full', mcpServers: servers, outputSchema: { type: 'object' },
+    });
+    expect(doubles.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      plan: expect.objectContaining({ ctx: expect.objectContaining({ mcpServers: servers, providerOptions }) }),
+    }));
+  } finally { await manager.close(); }
+});
 
 it('saves patrol completion without treating its record as progress and discards delayed duplicates', async () => {
   vi.useFakeTimers(); vi.setSystemTime('2026-10-14T01:00:00Z');
@@ -176,7 +201,7 @@ it('uses one project session and awaits each event before starting the next', as
   expect(goal.workLog.map((record) => record.summary)).toEqual(['task-a を取り込みました', 'task-X を取り込み、task-Y を投入しました']);
   expect(inbox).toEqual([]);
   expect(doubles.createSession).toHaveBeenCalledOnce();
-  expect(doubles.preflight).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: 'readonly', mcpServers: {} }));
+  expect(doubles.preflight).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: 'full', mcpServers: {} }));
   await manager.close();
   expect(doubles.close).toHaveBeenCalledOnce(); expect(doubles.dispose).toHaveBeenCalledOnce();
 });

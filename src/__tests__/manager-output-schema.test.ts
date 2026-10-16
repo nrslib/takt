@@ -48,7 +48,7 @@ describe('manager provider output schema', () => {
         cwd: '/test/manager-repository',
         plan: { ctx: { providerType: 'codex', lang: 'ja', model: undefined,
           provider: makeProvider({ supportsStructuredOutput: true, setup: () => ({ call }) }) },
-        strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read'] } },
+        strategy: { systemPrompt: 'manager fixture' } },
 
       });
       try { result = await session.handleUserMessage({ text: '相談' }); }

@@ -18,6 +18,25 @@ manager:
 
 Manager supports Claude, Codex and OpenCode. Its tools use existing TAKT features for submission, requeue, retry, removal, run inspection, diffs, history, integration and completion checks. Before acting, it checks tasks, run records and reports, and git, without repeating finished actions.
 
+Both the TUI and daemon manager use `full` permissions through the existing provider permission controls. Manager can use the provider's normal tools and user MCP servers; it does not impose a fixed tool allowlist. Configured provider options are preserved.
+
+Assign user MCP servers through the existing `runtime.yaml` rules. For example, to assign a browser MCP server you have installed:
+
+```yaml
+version: 1
+mcp:
+  servers:
+    browser:
+      type: stdio
+      command: /absolute/path/to/browser-mcp-server
+  targets:
+    personas:
+      manager:
+        servers: [browser]
+```
+
+Replace `command` with your server executable. No browser MCP server is bundled or enabled by default. Manager receives `defaults.servers` and its persona assignments, with persona exclusions and `internal_agents.selector.exclude` applied. Its own TAKT MCP server is always added and takes precedence over a user server with the same name.
+
 ## Patrol
 
 The daemon periodically inspects unfinished active goals. `manager.patrol_interval` is a positive integer in seconds, defaulting to `1800` (30 minutes); project settings override global settings. The first patrol for a new goal is measured from creation, and later patrols from the previous completion. It checks long-running work, repeated steps, stalled goals and unanswered questions, then resumes, retries or notifies as needed. Problems in running tasks are reported to a person. Failed patrols send `blocked` and are checked again after the interval. Ordinary failed events remaining in the inbox are also retried during patrol.

@@ -41,7 +41,7 @@ function reply(message: string, summary: ReturnType<typeof goalInput> | null = n
 function session(call: ProviderAgent['call']) {
   const provider = new MockProvider();
   const setup = vi.spyOn(provider, 'setup').mockReturnValue({ call });
-  const plan = { ctx: { provider, providerType: 'mock' as const, model: undefined, lang: 'ja' as const }, strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read'] } };
+  const plan = { ctx: { provider, providerType: 'mock' as const, model: undefined, lang: 'ja' as const }, strategy: { systemPrompt: 'manager fixture' } };
   vi.spyOn(conversationPlans, 'createManagerConversationPlan').mockReturnValue(plan);
   vi.spyOn(managerMcp, 'connectManagerMcp').mockResolvedValue({ client, servers: {}, dispose: async () => {} });
   return { setup, session: createManagerConversationSession({ cwd, plan }) };

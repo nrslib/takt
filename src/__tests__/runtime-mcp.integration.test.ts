@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { afterEach,beforeEach,describe,expect,it } from 'vitest';
 import { RUNTIME_PROVIDER_FILENAME } from '../infra/config/runtime-provider/constants.js';
 import { resolveRuntimeProviderFile } from '../infra/config/runtime-provider/loader.js';
-import { resolveMcpAssignment } from '../infra/config/runtime-provider/mcp-assignment.js';
+import { resolveInternalAgentMcpServers, resolveMcpAssignment } from '../infra/config/runtime-provider/mcp-assignment.js';
 import { hasActiveMcpSection } from '../infra/config/runtime-provider/mode.js';
 
 /**
@@ -67,6 +67,21 @@ function baseCtx(overrides: {
 }
 
 describe('runtime MCP integration: loader → mode → resolveMcpAssignment (MCP-INTEGRATION-TESTS)', () => {
+  it('resolves a manager persona with common internal exclusions while keeping other internal agents unchanged', () => {
+    writeRuntimeYaml(projectDir, [
+      ...COMMON_RUNTIME_YAML,
+      '  defaults:', '    servers: [common, legacy]',
+      '  targets:', '    personas:', '      manager:', '        servers: [github, legacy]',
+      '    internal_agents:', '      selector:', '        exclude: [legacy]',
+    ]);
+    const runtime = resolveRuntimeProviderFile({ globalConfigDir: projectDir, projectConfigDir: projectDir });
+    expect(resolveInternalAgentMcpServers(runtime?.mcp, 'manager').servers).toEqual({
+      common: { type: 'stdio', command: 'common-srv' }, github: { type: 'http', url: 'https://api.github.com/mcp' },
+    });
+    expect(resolveInternalAgentMcpServers(runtime?.mcp).servers).toEqual({ common: { type: 'stdio', command: 'common-srv' } });
+    expect(resolveInternalAgentMcpServers(undefined)).toEqual({ servers: {}, identity: undefined });
+    expect(resolveInternalAgentMcpServers({}, 'manager')).toEqual({ servers: {}, identity: undefined });
+  });
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'takt-mcp-integration-'));
     projectDir = join(root, 'project-.takt');

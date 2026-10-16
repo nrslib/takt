@@ -59,7 +59,7 @@ describe('manager startup and teardown', () => {
     vi.mocked(selectOption).mockReset().mockResolvedValue(null);
     doubles.preflight.mockReset().mockResolvedValue(undefined);
     doubles.list.mockReset().mockResolvedValue('[]');
-    doubles.plan.mockReturnValue({ ctx: { lang: 'ja', providerType: 'mock', provider: { preflight: doubles.preflight } }, strategy: { allowedTools: ['Read'] } });
+    doubles.plan.mockReturnValue({ ctx: { lang: 'ja', providerType: 'mock', provider: { preflight: doubles.preflight } }, strategy: { systemPrompt: 'manager fixture' } });
     doubles.connect.mockResolvedValue({ client: {}, servers: {}, dispose });
     doubles.session.mockReturnValue({ close, getAssignment: async () => undefined });
     doubles.mount.mockImplementation(async (buildTree) => {
@@ -108,7 +108,7 @@ describe('manager startup and teardown', () => {
     } else {
       expect(doubles.connect).toHaveBeenCalledWith('/other/repository', {
         kind: 'workspace', workspaceId: other.id, name: other.name, repositoryDirectories: other.repositoryDirectories,
-      });
+      }, undefined);
       expect(vi.mocked(selectOption).mock.invocationCallOrder[0]).toBeLessThan(doubles.mount.mock.invocationCallOrder[0]!);
     }
   });
@@ -123,7 +123,7 @@ describe('manager startup and teardown', () => {
   it('preflights Codex with a strict conversation schema before opening the TUI', async () => {
     doubles.plan.mockReturnValueOnce({
       ctx: { lang: 'ja', providerType: 'codex', provider: { preflight: doubles.preflight } },
-      strategy: { allowedTools: ['Read'] },
+      strategy: { systemPrompt: 'manager fixture' },
     });
     doubles.preflight.mockImplementationOnce(async ({ outputSchema }) => {
       assertStrictStructuredOutputSchema(outputSchema);
@@ -141,7 +141,7 @@ describe('manager startup and teardown', () => {
   it.each(['claude', 'claude-sdk'] as const)('keeps the existing schema constraints in %s startup preflight', async (providerType) => {
     doubles.plan.mockReturnValueOnce({
       ctx: { lang: 'ja', providerType, provider: { preflight: doubles.preflight } },
-      strategy: { allowedTools: ['Read'] },
+      strategy: { systemPrompt: 'manager fixture' },
     });
     await runManager({ cwd: '/repository' });
     expect(doubles.preflight.mock.calls[0]![0].outputSchema).toEqual(managerOutputSchema);
@@ -150,14 +150,18 @@ describe('manager startup and teardown', () => {
   it('waits for provider preflight before setting up the conversation or opening the TUI', async () => {
     let complete!: () => void;
     doubles.preflight.mockReturnValueOnce(new Promise<void>((resolve) => { complete = resolve; }));
-    const servers = { manager: { command: 'node' } };
+    const userServers = { browser: { command: '/browser-mcp' } };
+    const servers = { ...userServers, manager: { command: 'node' } };
+    doubles.plan.mockReturnValueOnce({
+      ctx: { lang: 'ja', providerType: 'mock', provider: { preflight: doubles.preflight }, mcpServers: userServers },
+      strategy: { systemPrompt: 'manager fixture' },
+    });
     doubles.connect.mockResolvedValueOnce({ client: {}, servers, dispose });
     const run = runManager({ cwd: '/repository' });
     await vi.waitFor(() => expect(doubles.preflight).toHaveBeenCalledTimes(1));
     expect(doubles.preflight).toHaveBeenCalledWith({
       cwd: '/canonical/repository', model: undefined, providerOptions: undefined,
-      allowedTools: ['Read'], mcpOnlySideEffects: ['Read'],
-      permissionMode: 'readonly', mcpServers: servers,
+      permissionMode: 'full', mcpServers: servers,
       outputSchema: managerOutputSchema,
     });
     expect(doubles.session).not.toHaveBeenCalled();
@@ -165,39 +169,30 @@ describe('manager startup and teardown', () => {
     complete();
     await run;
     expect(doubles.mount).toHaveBeenCalledTimes(1);
+    expect(doubles.connect).toHaveBeenCalledWith('/canonical/repository', expect.objectContaining({ kind: 'repository' }), userServers);
+    expect(doubles.session).toHaveBeenCalledWith(expect.objectContaining({
+      plan: expect.objectContaining({ ctx: expect.objectContaining({ mcpServers: servers }) }),
+    }));
   });
 
-  it.each(['list failure', 'name collision', 'success'] as const)('checks effective Codex MCP configuration before the TUI: %s', async (outcome) => {
+  it('opens Codex manager without requiring an MCP isolation probe', async () => {
+    const userServers = { browser: { command: '/browser-mcp' } };
+    const servers = { ...userServers, [TAKT_MANAGER_MCP_SERVER_NAME]: { command: 'node', args: ['manager.js'] } };
+    const providerOptions = { codex: { fastMode: true, networkAccess: true } };
     doubles.plan.mockReturnValue({
-      ctx: { lang: 'ja', providerType: 'codex', provider: new CodexProvider(), model: 'chosen-model', providerOptions: { codex: { fastMode: true, networkAccess: false } } },
-      strategy: { allowedTools: ['Read', `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__takt_list_goals`] },
+      ctx: { lang: 'ja', providerType: 'codex', provider: new CodexProvider(), model: 'chosen-model', providerOptions, mcpServers: userServers },
+      strategy: { systemPrompt: 'manager fixture' },
     });
-    doubles.connect.mockResolvedValueOnce({
-      client: {}, servers: { [TAKT_MANAGER_MCP_SERVER_NAME]: { command: 'node', args: ['manager.js'] } }, dispose,
-    });
-    if (outcome === 'list failure') doubles.list.mockRejectedValueOnce(new Error('list unavailable'));
-    else doubles.list.mockResolvedValueOnce(JSON.stringify([
-      { name: outcome === 'name collision' ? TAKT_MANAGER_MCP_SERVER_NAME : 'unrelated', enabled: false },
-    ]));
-
-    const run = runManager({ cwd: '/repository' });
-    if (outcome === 'success') {
-      await run;
-      expect(doubles.mount).toHaveBeenCalledTimes(1);
-      expect(doubles.list.mock.invocationCallOrder[0]).toBeLessThan(doubles.session.mock.invocationCallOrder[0]!);
-    } else {
-      await expect(run).rejects.toThrow();
-      expect(doubles.session).not.toHaveBeenCalled();
-      expect(doubles.mount).not.toHaveBeenCalled();
-      expect(close).not.toHaveBeenCalled();
-    }
-    expect(doubles.list).toHaveBeenCalledTimes(1);
-    expect(doubles.list).toHaveBeenCalledWith(expect.objectContaining({
-      executablePath: '/test/codex', cwd: '/canonical/repository',
-      configOverrides: expect.arrayContaining(['model="chosen-model"', 'sandbox_mode="read-only"', 'features.fast_mode=true']),
+    doubles.connect.mockResolvedValueOnce({ client: {}, servers, dispose });
+    await runManager({ cwd: '/repository' });
+    expect(doubles.connect).toHaveBeenCalledWith('/canonical/repository', expect.objectContaining({ kind: 'repository' }), userServers);
+    expect(doubles.session).toHaveBeenCalledWith(expect.objectContaining({
+      plan: expect.objectContaining({ ctx: expect.objectContaining({ mcpServers: servers, providerOptions }) }),
     }));
+    expect(doubles.mount).toHaveBeenCalledOnce();
+    expect(doubles.list).not.toHaveBeenCalled();
     expect(doubles.codex).not.toHaveBeenCalled();
-    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(dispose).toHaveBeenCalledOnce();
   });
 
   it.each(['missing CLI', 'wrong version', 'success'] as const)('resolves the selected OpenCode CLI before the TUI: %s', async (outcome) => {
@@ -208,7 +203,7 @@ describe('manager startup and teardown', () => {
     });
     doubles.plan.mockReturnValueOnce({
       ctx: { lang: 'ja', providerType: 'opencode', provider: new OpenCodeProvider(), model: 'probe/probe' },
-      strategy: { allowedTools: ['Read', `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__takt_list_goals`] },
+      strategy: { systemPrompt: 'manager fixture' },
     });
     const run = runManager({ cwd: '/repository' });
     if (outcome === 'success') {
@@ -231,7 +226,7 @@ describe('manager startup and teardown', () => {
       callback(outcome === 'missing CLI' ? new Error('ENOENT') : null, outcome === 'unsupported constraints' ? '--tools' : '--tools --strict-mcp-config --json-schema', '');
     });
     doubles.plan.mockReturnValueOnce({
-      ctx: { lang: 'ja', providerType: 'claude', provider: new ClaudeProvider() }, strategy: { allowedTools: ['Read'] },
+      ctx: { lang: 'ja', providerType: 'claude', provider: new ClaudeProvider() }, strategy: { systemPrompt: 'manager fixture' },
     });
     const run = runManager({ cwd: '/repository' });
     if (outcome === 'success') {
@@ -272,17 +267,6 @@ describe('manager startup and teardown', () => {
     expect(doubles.codex).not.toHaveBeenCalled();
     expect(doubles.openCode).not.toHaveBeenCalled();
     expect(doubles.claude).not.toHaveBeenCalled();
-  });
-
-  it.each([OpenCodeProvider, ClaudeProvider])('rejects unsupported manager tool restrictions before probing the runtime: %s', async (ProviderClass) => {
-    doubles.plan.mockReturnValueOnce({
-      ctx: { lang: 'ja', providerType: ProviderClass === OpenCodeProvider ? 'opencode' : 'claude', provider: new ProviderClass(), model: 'probe/probe' }, strategy: { allowedTools: ['Bash'] },
-    });
-    await expect(runManager({ cwd: '/repository' })).rejects.toThrow();
-    expect(doubles.execFile).not.toHaveBeenCalled();
-    expect(doubles.mount).not.toHaveBeenCalled();
-    expect(doubles.session).not.toHaveBeenCalled();
-    expect(dispose).toHaveBeenCalledTimes(1);
   });
 
   it('opens the TUI when the provider requires no runtime preflight', async () => {
