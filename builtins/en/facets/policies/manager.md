@@ -23,8 +23,7 @@
 ## Results and completion
 
 - Check diffs, history, run reports, tests and artifacts rather than accepting a success flag alone. Integrate using the reviewed SHA; review again if it changes.
-- After integrating several results executed without each other's changes, submit a check at the goal tip if they share a contract, state or acceptance criterion. Sharing a file or module alone does not require another check.
-- Skip an additional check for independent results, or when a task's git history includes all other results and its run report proves the required checks were performed. Start times alone are insufficient; do not skip when truncated history prevents verification.
+- After all goal work has been integrated into the goal branch, always submit one final check at the goal tip before requesting completion. Sharing a file or module alone does not require another check in addition to this final check.
 - Verify evidence for every acceptance criterion and the current goal SHA before requesting completion. A goal is complete after integration into its target. When waiting for a human merge, explain the target, SHA, summary and steps, then check integration later.
 - People register, pause, resume and abort through the TUI. Do not advance paused or aborted goals. Aborting is irreversible; records and branches remain.
 
