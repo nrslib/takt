@@ -501,7 +501,10 @@ export async function runMerge(
     }
     numbers = eligibleNumbers;
     const eligibleNumberSet = new Set(eligibleNumbers);
-    options.onSelectionResult?.(results.filter((result) => !result.selected || eligibleNumberSet.has(result.number)));
+    options.onSelectionResult?.(results.map((result) => ({
+      ...result,
+      selected: result.selected && eligibleNumberSet.has(result.number),
+    })));
   }
   const workflow = options.workflow ?? options.settings.workflow;
   const running = new Set<Promise<void>>();

@@ -291,16 +291,27 @@ describe('Merge target selection and execution', () => {
       return { merged: true };
     });
 
-    await run({ selectionText: '文書のみ', where: { labels: ['ready'] } });
+    const onSelectionResult = vi.fn();
+    await run({ selectionText: '文書のみ', where: { labels: ['ready'] }, onSelectionResult });
 
     expect(processedNumbers()).toEqual([12]);
+    expect(onSelectionResult).toHaveBeenCalledWith([
+      { number: 10, selected: false, reason: '文書の変更' },
+      { number: 11, selected: false, reason: '文書の変更' },
+      { number: 12, selected: true, reason: '文書の変更' },
+    ]);
     expect(events).toEqual([
       'fetch:10:1', 'judge', 'fetch:11:1', 'judge', 'fetch:12:1', 'judge',
       'fetch:10:2', 'fetch:11:2', 'fetch:12:2', 'execute:12',
     ]);
   });
 
-  it('選択したPRが詳細再取得時にdraft化したら選択結果からも除外する', async () => {
+  it.each([
+    { change: 'draft化', where: {}, latestPr: pr(456, { draft: true }) },
+    { change: 'base変更', where: { base_branch: 'main' }, latestPr: pr(456, { base_branch: 'develop' }) },
+    { change: '管理マーカー削除', where: { managed_by_takt: true }, latestPr: pr(456, { managed_by_takt: false }) },
+    { change: 'close済み', where: {}, latestPr: undefined },
+  ])('選択したPRが詳細再取得時に$changeで不適格になったら除外結果を通知する', async ({ where, latestPr }) => {
     const initialPrs = [pr(123), pr(456), pr(789)];
     const fetchCounts = new Map<number, number>();
     const events: string[] = [];
@@ -310,7 +321,7 @@ describe('Merge target selection and execution', () => {
       fetchCounts.set(number, count);
       events.push(`fetch:${number}:${count}`);
       if (count === 1) return initialPrs.find((item) => item.number === number);
-      return number === 456 ? pr(456, { draft: true }) : initialPrs.find((item) => item.number === number);
+      return number === 456 ? latestPr : initialPrs.find((item) => item.number === number);
     });
     let judgmentIndex = 0;
     mocks.agent.mockImplementation(async () => {
@@ -327,17 +338,31 @@ describe('Merge target selection and execution', () => {
       return { merged: true };
     });
 
-    await run({ selectionText: '文書のみ', onSelectionResult });
+    await run({ selectionText: '文書のみ', where, onSelectionResult });
 
     expect(processedNumbers()).toEqual([123]);
     expect(onSelectionResult).toHaveBeenCalledWith([
       { number: 123, selected: true, reason: '文書の変更' },
+      { number: 456, selected: false, reason: '文書の変更' },
       { number: 789, selected: false, reason: '文書の変更' },
     ]);
     expect(events).toEqual([
       'fetch:123:1', 'judge:123', 'fetch:456:1', 'judge:456', 'fetch:789:1', 'judge:789',
       'fetch:123:2', 'fetch:456:2', 'report', 'execute:123',
     ]);
+  });
+
+  it.each([false, true])('唯一のAI選択済みPRが再取得時にdraft=%sなら通知と処理件数へ反映する', async (draft) => {
+    setPrs([pr(456)]);
+    fetchPrListItem.mockReturnValueOnce(pr(456)).mockReturnValueOnce(pr(456, { draft }));
+    const onSelectionResult = vi.fn();
+
+    expect(await run({ selectionText: '文書のみ', onSelectionResult }))
+      .toEqual({ processedCount: draft ? 0 : 1, mergedCount: draft ? 0 : 1, exitCode: 0 });
+    expect(onSelectionResult).toHaveBeenCalledWith([
+      { number: 456, selected: !draft, reason: '意図に合う' },
+    ]);
+    expect(processedNumbers()).toEqual(draft ? [] : [456]);
   });
 
   it('テキスト選別後の詳細再取得が失敗したらworkflowを開始しない', async () => {
