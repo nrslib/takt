@@ -65,7 +65,7 @@ defaultTest:
         model: gpt-6-sol
         reasoning_effort: low
         timeout_ms: 300000
-        working_dir: fixtures/frontend-mediator
+        working_dir: fixtures/frontend-mediator-review-grader
         isolate_working_dir: true
         disable_inherited_skills: true
   assert:

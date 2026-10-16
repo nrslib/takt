@@ -90,6 +90,38 @@ test('YAML providers and grader load and grade twice without changing the parent
   assert.ok(calls.every(call => !existsSync(call.cwd)));
 });
 
+test('YAML grader uses an isolated empty fixture instead of the implementation fixture', async t => {
+  setup(t);
+  const configPath = join(evalDirectory, 'agents/frontend-review/frontend-mediator-review.yaml');
+  const suite = parse(readFileSync(configPath, 'utf8'));
+  const graderOptions = suite.defaultTest.options.provider;
+  assert.equal(graderOptions.config.working_dir, 'fixtures/frontend-mediator-review-grader');
+  assert.equal(graderOptions.config.isolate_working_dir, true);
+  const directory = join(evalDirectory, graderOptions.config.working_dir);
+  assert.deepEqual(readdirSync(directory), ['.gitkeep']);
+  const review = JSON.stringify({ verdict: 'APPROVE', findings: [] });
+  const grade = JSON.stringify({ pass: true, score: 1, reason: 'mock grade' });
+  const start = t.mock.method(Codex.prototype, 'startThread', function (thread) {
+    assert.notEqual(thread.workingDirectory, directory);
+    assert.deepEqual(readdirSync(thread.workingDirectory), ['.gitkeep']);
+    assert.equal(readFileSync(join(thread.workingDirectory, '.gitkeep'), 'utf8'), '');
+    assert.equal(thread.sandboxMode, 'read-only');
+    return { run: async prompt => {
+      assert.equal(prompt, review);
+      return { finalResponse: grade };
+    } };
+  });
+  const grader = await loadApiProvider(graderOptions.id, { options: graderOptions, basePath: dirname(configPath) });
+
+  const result = await grader.callApi(review, {});
+
+  assert.equal(result.error, undefined);
+  assert.equal(result.output, grade);
+  assert.equal(start.mock.callCount(), 1);
+  assert.equal(existsSync(start.mock.calls[0].arguments[0].workingDirectory), false);
+  assert.deepEqual(readdirSync(directory), ['.gitkeep']);
+});
+
 test('Luna reviews each selected fixture in isolation with disposable HOME, read-only and explicit model/effort', async t => {
   const { root, home } = setup(t);
   const initialCwd = process.cwd();

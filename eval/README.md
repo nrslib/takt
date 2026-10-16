@@ -556,6 +556,8 @@ provider は既存レビューと同じ Luna (`gpt-5.6-luna`, max) と Opus (`cl
 Opus は safe mode・project 設定のみ・slash command 無効、許可ツールを Read/Glob/Grep に限定し、
 `dontAsk`・セッション保存なしで実行する。環境変数は実装 eval と同じ allowlist。
 両者とも `isolate_working_dir: true` を必須にする。採点は隔離した Codex `gpt-6-sol` low。
+grader の作業ディレクトリは `.gitkeep` だけを置く `fixtures/frontend-mediator-review-grader/` の一時コピーとし、
+採点対象は llm-rubric に渡すレビュー JSON とする。
 レビュー provider は実装成果物を `.results` に保存せず、回答は promptfoo の結果に残る。
 
 ```sh
