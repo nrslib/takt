@@ -131,7 +131,7 @@ function buildRetryRunInfo(
 function resolveTaskRetryPullRequestContext(
   task: TaskListItem,
   projectDir: string,
-  worktreePath: string,
+  worktreePath: string | undefined,
 ): PullRequestContext | undefined {
   const data = task.data;
   if (data?.source !== 'pr_review') {
@@ -144,7 +144,7 @@ function resolveTaskRetryPullRequestContext(
     throw new Error(`PR review task "${sanitizeTerminalText(task.name)}" is missing head branch.`);
   }
 
-  if (data.merge_task === true && data.merge_clone_prepared === false) {
+  if (!worktreePath || data.merge_task === true && data.merge_clone_prepared === false) {
     return resolveTaskPullRequestContext({
       projectDir, prNumber: data.pr_number, headBranch: data.branch,
       ...(data.base_branch === undefined ? {} : { savedBaseBranch: data.base_branch }),
@@ -229,6 +229,7 @@ export async function requeueFailedTask(
     task,
     projectDir,
     worktreePath: selection.worktreePath,
+    freshStart: selection.freshStart,
     startStep: selection.startStep,
     retryNote,
     resumePoint: selection.selectedResumePoint,
@@ -314,6 +315,7 @@ export async function retryFailedTask(
       task,
       projectDir,
       worktreePath: selection.worktreePath,
+      freshStart: selection.freshStart,
       startStep: selection.startStep,
       retryNote: executionRetryNote,
       resumePoint: selection.selectedResumePoint,

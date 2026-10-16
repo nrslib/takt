@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { checkQueuedTaskProviders } from '../features/tasks/execute/providerPreflight.js';
 import { prepareFailedTaskRetry } from '../features/tasks/taskRetryPreparation.js';
 import { persistFailedTaskRetry } from '../features/tasks/taskRetryPersistence.js';
+import { inspectReusedWorktreeExecution } from '../features/tasks/execute/reusedWorktree.js';
 import { TaskRunner, type TaskInfo } from '../infra/task/index.js';
 import * as config from '../infra/config/index.js';
 import { checkWorkflowProviders } from '../infra/config/runtime-provider/execution-preparation.js';
@@ -94,6 +95,65 @@ describe('managed provider preflight for reused worktrees', () => {
     expect(vi.mocked(checkWorkflowProviders).mock.calls.at(-1)?.[2].name).toBe('merge');
     expect(runner.listTasks()[0]?.status).toBe('pending');
     expect(fs.existsSync(clone)).toBe(false);
+  });
+
+  it('requeues a failed initial clone without losing its canonical order or execution options', async () => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-preflight-fresh-clone-'));
+    temporaryProjects.push(project);
+    const taskDir = '.takt/tasks/canonical';
+    const orderPath = path.join(project, taskDir, 'order.md');
+    const workflowPath = path.join(project, '.takt/workflows/retry.yaml');
+    fs.mkdirSync(path.dirname(orderPath), { recursive: true });
+    fs.mkdirSync(path.dirname(workflowPath), { recursive: true });
+    fs.writeFileSync(orderPath, '# Canonical order\nKeep the task intact.\n');
+    fs.writeFileSync(workflowPath, 'name: retry\ninitial_step: plan\nmax_steps: 1\nsteps:\n  - name: plan\n    instruction: "{task}"\n');
+    const runner = new TaskRunner(project);
+    const added = runner.addTask('Canonical order', {
+      task_dir: taskDir, worktree: true, workflow: './.takt/workflows/retry.yaml',
+      auto_pr: true, draft_pr: false, source: 'manual', issue: 42,
+      branch: 'feature/initial', base_branch: 'main',
+    });
+    runner.addTask('Other task', { workflow: './.takt/workflows/retry.yaml' });
+    const otherBefore = runner.listTasks()[1];
+    expect(runner.claimNextTasks(1)[0]?.name).toBe(added.name);
+    runner.forceFailRunningTask(added.name, { error: 'Git clone failed' });
+    const failed = runner.listFailedTasks()[0]!;
+
+    const preparation = prepareFailedTaskRetry(failed, project);
+    expect(preparation.freshStart).toBe(true);
+    expect(preparation.previousOrderContent).toBe('# Canonical order\nKeep the task intact.');
+    await persistFailedTaskRetry({
+      task: failed, projectDir: project, worktreePath: preparation.worktreePath,
+      freshStart: preparation.freshStart, startStep: undefined, retryNote: undefined,
+      resumePoint: undefined, workflow: undefined, taskDir: failed.taskDir,
+      sourceRunSlug: preparation.matchedRunSlug, restartPoint: undefined,
+    });
+
+    const queued = runner.listTasks()[0]!;
+    expect(queued).toMatchObject({
+      status: 'pending', taskDir, worktreePath: undefined, resumeMode: undefined,
+      sourceRunSlug: undefined, data: {
+        worktree: true, workflow: './.takt/workflows/retry.yaml', auto_pr: true, draft_pr: false,
+        source: 'manual', issue: 42, branch: 'feature/initial', base_branch: 'main',
+      },
+    });
+    expect(fs.readFileSync(orderPath, 'utf8')).toBe('# Canonical order\nKeep the task intact.\n');
+    expect(runner.listTasks()[1]).toEqual(otherBefore);
+    expect(inspectReusedWorktreeExecution(project, queued)).toBeUndefined();
+    expect(vi.mocked(checkWorkflowProviders).mock.calls.at(-1)?.[1]).toBe(project);
+  });
+
+  it('refuses a fresh clone retry after a workflow step has failed', () => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-preflight-fresh-clone-reject-'));
+    temporaryProjects.push(project);
+    const runner = new TaskRunner(project);
+    const added = runner.addTask('Task', { worktree: true, workflow: 'default' });
+    runner.claimNextTasks(1);
+    runner.forceFailRunningTask(added.name, { step: 'plan', error: 'Agent failed' });
+
+    expect(() => runner.requeueTask(added.name, ['failed'], { freshStart: true }))
+      .toThrow('execution or worktree history exists');
+    expect(runner.listFailedTasks()[0]?.kind).toBe('failed');
   });
 
   it.each([true, false])('checks only the SDK of the workflow used by a reused clone with project sync %s', async (sync) => {

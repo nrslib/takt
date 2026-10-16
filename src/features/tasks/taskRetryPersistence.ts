@@ -12,7 +12,8 @@ import { checkQueuedTaskProviders, terminalProviderConfirmation } from './execut
 export interface FailedTaskRetryPersistenceOptions {
   readonly task: TaskListItem;
   readonly projectDir: string;
-  readonly worktreePath: string;
+  readonly worktreePath: string | undefined;
+  readonly freshStart?: boolean;
   readonly startStep: string | undefined;
   readonly retryNote: string | undefined;
   readonly resumePoint: WorkflowResumePoint | undefined;
@@ -43,20 +44,30 @@ export async function persistFailedTaskRetry(options: FailedTaskRetryPersistence
   if (options.task.kind !== 'failed') {
     throw new Error(`Failed task retry persistence requires failed task. received: ${options.task.kind}`);
   }
+  if ((options.freshStart === true) !== (options.worktreePath === undefined)) {
+    throw new Error('Fresh clone retry and worktree path disagree.');
+  }
 
   const assertWorktree = (): void => {
+    if (options.freshStart) return;
+    const worktreePath = options.worktreePath;
+    if (worktreePath === undefined) {
+      throw new Error('Worktree path is not set for task retry.');
+    }
     if (options.task.data?.merge_task === true) {
-      assertPrMergeRetryWorktreePath(options.projectDir, options.worktreePath,
+      assertPrMergeRetryWorktreePath(options.projectDir, worktreePath,
         options.task.data.merge_clone_prepared === true);
     } else {
-      assertReusableWorktreePath(options.projectDir, options.worktreePath);
+      assertReusableWorktreePath(options.projectDir, worktreePath);
     }
   };
   assertWorktree();
-  await checkQueuedTaskProviders(options.projectDir, options.task, {}, terminalProviderConfirmation(), undefined, {
-    workflow: options.workflow,
-    worktreePath: options.worktreePath,
-  });
+  await checkQueuedTaskProviders(options.projectDir,
+    options.freshStart ? { ...options.task, kind: 'pending' } : options.task,
+    {}, terminalProviderConfirmation(), undefined, {
+      workflow: options.workflow,
+      worktreePath: options.worktreePath,
+    });
   let revision: PersistedTaskOrderRevision | undefined;
   try {
     if (options.revisedOrder !== undefined) {
@@ -81,6 +92,7 @@ export async function persistFailedTaskRetry(options: FailedTaskRetryPersistence
         taskDir: revision?.taskDirRelative ?? options.taskDir,
         sourceRunSlug: options.sourceRunSlug ?? undefined,
         restartPoint: options.restartPoint,
+        ...(options.freshStart ? { freshStart: true } : {}),
       },
     );
   } catch (error) {

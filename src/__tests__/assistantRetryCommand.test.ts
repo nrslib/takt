@@ -165,6 +165,7 @@ const implementRestartPoint: WorkflowRestartPoint = {
 
 const preparation: FailedTaskRetryPreparation = {
   worktreePath: task.worktreePath!,
+  freshStart: false,
   interactionCwd: task.worktreePath!,
   runsBaseDir: task.worktreePath!,
   failure: task.failure!,
@@ -262,7 +263,7 @@ function setInvalidSavedStart(savedStep = 'reviewers'): string {
     stack: [{ workflow: 'default', workflow_ref: 'project:root', step: savedStep, kind: 'agent', occurrence: 1 }],
     iteration: 4, elapsed_ms: 1000, workflow_call_invocations: {}, workflow_step_participations: {},
   };
-  const startPathOptions = { projectCwd: options.cwd, lookupCwd: preparation.worktreePath, resumePoint };
+  const startPathOptions = { projectCwd: options.cwd, lookupCwd: preparation.interactionCwd, resumePoint };
   const startOptions = buildTaskRetryStartOptions(workflowConfig, startPathOptions);
   mocks.prepareFailedTaskRetry.mockReturnValue({ ...preparation, previousWorkflow: 'default', resumePoint });
   mocks.buildFailedTaskRetryStartContext.mockReturnValue({

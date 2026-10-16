@@ -14,6 +14,7 @@ interface AutoRequeueOptions {
 }
 
 export interface TaskRetryOptions {
+  freshStart?: boolean;
   startStep?: string;
   retryNote?: string;
   resumePoint?: WorkflowResumePoint;
@@ -21,6 +22,14 @@ export interface TaskRetryOptions {
   taskDir?: string;
   sourceRunSlug?: string;
   restartPoint?: WorkflowRestartPoint;
+}
+
+function assertFreshCloneRetryCandidate(task: TaskRecord): void {
+  if (task.status !== 'failed' || !task.worktree || task.merge_task === true
+    || task.worktree_path !== undefined || task.run_slug !== undefined || task.source_run_slug !== undefined
+    || !task.failure?.error.trim() || task.failure.step?.trim() || task.resume_point) {
+    throw new Error(`Task "${task.name}" cannot start a fresh clone retry because execution or worktree history exists.`);
+  }
 }
 
 export type AutoRequeueSkipReason =
@@ -238,6 +247,9 @@ export class TaskRetryService {
     resumeMode: RunResumeSource['resumeMode'],
     options: TaskRetryOptions = {},
   ): TaskInfo {
+    if (options.freshStart) {
+      throw new Error('A fresh clone retry must be queued before execution.');
+    }
     const taskName = normalizeTaskRef(taskRef);
     let found: TaskRecord | undefined;
 
@@ -293,6 +305,12 @@ export class TaskRetryService {
       }
 
       const target = current.tasks[index]!;
+      if (options.freshStart) {
+        assertFreshCloneRetryCandidate(target);
+        if (options.resumePoint || options.sourceRunSlug) {
+          throw new Error('A fresh clone retry cannot resume a previous run.');
+        }
+      }
       const updated = buildRetryTaskRecord(
         target,
         'pending',
@@ -302,7 +320,7 @@ export class TaskRetryService {
           resumePoint: options.resumePoint,
           workflow: options.workflow,
           taskDir: options.taskDir,
-          resumeSource: resolveResumeSource(options.sourceRunSlug, target, 'requeue'),
+          resumeSource: options.freshStart ? undefined : resolveResumeSource(options.sourceRunSlug, target, 'requeue'),
           restartPoint: options.restartPoint,
         },
       );
