@@ -8,9 +8,47 @@
 
 ## [Unreleased]
 
-### Removed
+## [0.71.0] - 2026-10-15
 
-- workflow の実行結果をセッション状態に保存し、次回の対話モード起動時に前回の結果を表示する機能を削除しました。TUI は操作の完了後に定型通知を表示します。
+### Added
+
+- `takt merge [pr-number]` で、PR のレビュー・修正・マージを行う workflow を実行できるようにしました (#1704)。番号を省くと、`--author`、`--label`、`--base`、`--head`、`--managed-by-takt`、`--include-forks`、`--include-draft`、または設定の `merge.where` で開いている PR を選びます。下書きと fork は既定で除外し、fork の PR は脅威チェックを通します。既定の workflow は `merge-review-fix-simple`(読み取り専用のレビュアー 1 人のあと、裁定・修正・検証を別の step で行う)で、並列レビューは `--workflow merge-review-fix` で使えます。既定では 2 件ずつ並行して処理し(`merge.concurrency`、`--concurrency`)、マージ方法の既定は `squash` です(`merge.method`)。PR ごとに `takt list` のタスクとして記録して隔離した clone で実行し、失敗したタスクは Requeue / Retry で再開できます。`caccia.enabled` が true なら、push のたびに CodeRabbit と Caccia を挟みます。処理した PR が 1 件でも未マージのまま残ると、終了コードは 1 です。
+- `takt update [provider]` で、インストール済みの provider SDK を TAKT が固定した版に更新できるようにしました。provider を省くと、版がずれているインストール済みの provider だけを更新します。
+- DeepSeek Harness provider で、`provider_options.deepseek_harness.plugins`(`id`、`source`、`ref`、`config`)から Git の plugin を読み込めるようにしました。plugin は HTTPS か SSH で一時的な runtime に clone します。定義できるのは global 設定、信頼された global の runtime profile、`TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PLUGINS` だけで、プロジェクトで定義した plugin は拒否します。lifecycle scripts は実行せず、`config` の値はログに出しません。
+- `/tell`、`/retry`、`/requeue`、指示書の修正で AI がタスクを選んだり指示を作ったりしている間、TUI の状態行に進捗を表示するようにしました。
+
+### Changed
+
+- BREAKING: Claude Agent SDK、Codex SDK、OpenCode SDK、Pi SDK を TAKT と一緒にはインストールしないようにしました (#1738)。provider を使う前に一度 `takt install <provider>`(`claude-sdk`、`codex`、`opencode`、`pi`)を実行してください。既定の provider は `claude-sdk` なので、多くの場合は `takt install claude-sdk` が必要です。SDK は TAKT が固定した版で TAKT の設定ディレクトリの下に入ります。端末では、SDK が無いと実行前にインストールするかを確認します。CI、pipeline モード、`takt watch` など対話できない実行では ``Run `takt install <provider>` `` で止まるので、ジョブの中で先にインストールしてください。OpenCode は従来どおり CLI も必要です。`claude-headless`、`claude-terminal`、`cursor`、`copilot`、`kiro` は影響を受けません。
+- 固定している provider SDK の版は Claude Agent SDK 0.3.300、Codex SDK 0.162.1 です。
+- DeepSeek Harness の SDK と runtime を 0.2.1-alpha.2 に更新しました (#1755)。ローカルの JSONL セッション保存に加えて、セッションログの API へのアップロードも無効にしています。既存のインストールは `takt update deepseek-harness` で更新してください。
+- Pi provider で、SDK の `codemode` ツールを既定で有効にしました (#1744)。`codemode` から呼ぶツールにも、ほかのツールと同じ権限モードと `allowed_tools` を適用します。`allowed_tools` を明示して `codemode` を含めていない場合は無効のままです。
+- `/go`、`/tell`、`/retry`、`/requeue` のあと、TUI は実際の結果(保存したタスク、作成した Issue の番号、実行の成否と失敗の理由)を表示し、会話にも記録するようにしました。次の AI の応答と `/go` は何が起きたかを踏まえます。これに伴い、セッション状態の保存と、次回の対話モード起動時に前回の結果を表示する機能を削除しました。
+- `/go` のメニューを「タスクにつむ / Issueを建てる / その場で実行する / 会話を続ける」の順にし、「タスクにつむ」を初期選択にしました。Issue を建てるときはタスクも保存するかを確認し(既定は Yes)、その場で実行するときは、workflow が終わるまで TUI が使えなくなるため確認を挟みます(既定は No)。Escape でメニューに戻ります。PR モードでは Issue の項目を出しません。
+- 同じプロジェクトで `takt run` か `takt watch` が実行中のときは、もう一方を起動しないようにしました(`TAKT run is already running for this project (PID N)`)。
+- `takt list` の Sync with root と workflow の `sync_with_root` で、AI による競合解消はファイルの編集だけを行い、TAKT が競合マーカー(diff3 を含む)が残っていないことを確かめてから stage と commit を行うようにしました。バイナリの競合、無関係な追跡済みの変更、未追跡ファイルがある場合は拒否します。関連するソース・テスト・lock ファイルの更新は許可し、元からあった利用者の未 stage の編集は残します。AI の出力は実行中にストリーム表示します。
+- 有効なタスクがある Issue や PR を対象にしたタスクも、利用者が追加する場合は再び追加できるようにしました。重複を防ぐのは workflow からの自動投入だけです。指示書の `Issue: #N` 行は、作業がその Issue を扱うときだけ付けます。
+- retry と requeue で、引き継ぐ run やレポートが見つからない場合は、警告して続行せず、最初の step の前で止めるようにしました。通常のファイルと symlink 以外は、警告を出して引き継ぎから外します。
+- CodeRabbit のレート制限の通知にある再開時刻が待機期限より前なら、`takt caccia` はその時刻に `@coderabbitai review` を 1 回投稿して待機を続けるようにしました。
+- ビルトインのレビュー・修正のプロンプトで、範囲内だと示せない入力や、計画に書かれただけの設計判断を、差し戻しや修正範囲を広げる理由にしないようにしました。ステータス判定は、入力の外を調べ直して結論を覆さないようにしました。
+
+### Fixed
+
+- CodeRabbit がレビューを明示的に skip したとき、`takt caccia` が期限まで待ち続けないようにしました。レビュー完了とレート制限の通知は、レビュー対象のコミットと照合します。
+- ステータス判定の system prompt に、名前だけではなくビルトインの `conductor` persona が渡るようにしました。
+- 端末のサイズを変えると、TUI の入力欄と考え中の表示が重複して残る問題を直しました (#1721)。
+- 日本語 IME の未確定文字が、画面下部ではなく入力位置に表示されるようにしました (#1773)。
+- TUI を長く使うと `beforeExit` の `MaxListenersExceededWarning` が出る問題を直しました。
+- 自動生成するブランチ名が、ローカル・リモート・保存済みの clone にある名前や、Git の参照の親子関係で衝突する名前と重ならないようにしました。
+- `GIT_SSH` のパスに空白や引用符が含まれていても、リモートを確認できるようにしました。
+- TAKT の設定ディレクトリのパスに symlink(macOS の `/var` など)が含まれると、`takt install deepseek-harness` のインストール検査が失敗する問題を直しました。
+
+### Internal
+
+- `npm run check:release` の最初に依存を同期し、実際のグローバルインストールと managed provider のインストールを確認するようにしました(`test:global-install`、`test:managed-install`)。
+- 実プロバイダーの E2E で、managed SDK を実行ごとに一度だけインストールするようにしました。
+- `tasks.yaml` のロックを 1 段のファイルロックにしました。
+- CI のテストで不安定だった待機とプロセスの識別を直しました。
 
 ## [0.70.0] - 2026-10-09
 

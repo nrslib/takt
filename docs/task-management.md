@@ -253,6 +253,8 @@ In CLI/TUI assistant and grill-me conversations, `/requeue [guidance]` resolves 
 
 Selecting a running task with a worktree clone opens the ordinary assistant conversation with that task as the initial `/tell` target. The conversation can inspect other tasks or discuss a new task. `/tell` rechecks the selected task after confirmation and writes only to that task; completed, missing, mismatched, and non-clone runs are not candidates or recipients.
 
+Running merge tasks started by `takt merge`, or by `takt run` / `takt watch` after requeue or retry, are also `/tell` targets when they have a worktree clone. CLI/TUI conversations, conversations opened from `takt list`, and MCP's `takt_tell_run` use the same target resolution. Merge run metadata and interventions are stored in the original project's `.takt/runs/<slug>/`. Instructions are delivered at the next agent step, including agent steps inside a child workflow; system steps do not consume them.
+
 ### Actions for Exceeded Tasks
 
 | Action | Description |

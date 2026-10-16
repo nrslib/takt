@@ -1,6 +1,6 @@
 import { getLabel } from '../shared/i18n/index.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -70,6 +70,9 @@ import type { AgentResponse, LoopMonitorRule, WorkflowConfig } from '../core/mod
 import type { LiveInterventionChannel } from '../core/workflow/live-intervention/types.js';
 import { executeWorkflow } from '../features/tasks/execute/workflowExecution.js';
 import * as workflowExecutionBundle from '../features/tasks/execute/workflowExecutionBundle.js';
+import { issueTellableRunningTask } from '../features/tasks/liveIntervention.js';
+import { TaskRunner } from '../infra/task/index.js';
+import { stringify as stringifyYaml } from 'yaml';
 import { LiveInterventionFileStore } from '../infra/workflow/live-intervention-store.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import {
@@ -1984,6 +1987,77 @@ describe('WorkflowEngine live intervention integration', () => {
       });
     },
   );
+
+  it('delivers a confirmed merge instruction to the next child agent step without a terminal warning', async () => {
+    const runSlug = 'merge-delivery-run';
+    const cloneCwd = join(projectCwd, '.takt', 'worktrees', 'merge');
+    mkdirSync(cloneCwd, { recursive: true });
+    const childPath = join(projectCwd, '.takt', 'workflows', 'merge-child.yaml');
+    mkdirSync(join(projectCwd, '.takt', 'workflows'), { recursive: true });
+    writeFileSync(childPath, stringifyYaml({
+      name: 'merge-child', subworkflow: { callable: true }, max_steps: 3, initial_step: 'review',
+      steps: [
+        { name: 'review', persona: 'Review this change.', instruction: 'Review the merge.',
+          rules: [{ condition: 'needs-fix', next: 'fix' }, { condition: 'approved', next: 'COMPLETE' }] },
+        { name: 'fix', persona: 'Fix this change.', instruction: 'Fix the merge.',
+          rules: [{ condition: 'done', next: 'COMPLETE' }] },
+      ],
+    }), 'utf8');
+    const config: WorkflowConfig = {
+      name: 'merge-parent', maxSteps: 5, initialStep: 'review-call',
+      steps: [{ name: 'review-call', personaDisplayName: 'review-call', instruction: '',
+        kind: 'workflow_call', call: childPath, rules: [makeRule('COMPLETE', 'COMPLETE')] }],
+    };
+    const runner = new TaskRunner(projectCwd);
+    const task = runner.startPrMergeTask({
+      prNumber: 1805, headBranch: 'feature/tell-merge', baseBranch: 'main', headSha: 'a'.repeat(40),
+      headRepositoryUrl: 'https://example.com/owner/takt.git',
+      headRepositoryPushUrls: ['https://example.com/owner/takt.git'],
+      workflow: config.name, method: 'squash', worktreePath: cloneCwd,
+      threatCheckMaxDiffBytes: 100_000, cacciaRequired: false,
+    });
+    runner.recordPrMergeClonePrepared(task.name);
+    runner.updateRunningTaskExecution(task.name, { runSlug });
+    const store = new LiveInterventionFileStore(projectCwd, runSlug);
+    const content = 'Keep the agreed merge scope at the next agent step.';
+    let issuing: ReturnType<typeof issueTellableRunningTask> | undefined;
+    vi.mocked(runStatusJudgmentPhase).mockImplementationOnce(async () => {
+      expect(vi.mocked(runAgent).mock.calls).toHaveLength(1);
+      expect(store.read().instructions).toEqual([]);
+      issuing = issueTellableRunningTask(projectCwd, runSlug, content);
+      await issuing;
+      expect(store.read()).toMatchObject({ pending: 1, deliveredNextStep: 0 });
+      return { label: 'needs-fix', method: 'auto_select' };
+    });
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) =>
+      dispatchMockResponse(persona, instruction, options, makeResponse({ content: 'done', sessionId: 'merge-child-session' })));
+
+    const result = await executeWorkflow(config, 'Merge PR #1805', cloneCwd, {
+      projectCwd, provider: 'mock', reportDirName: runSlug,
+      runPathsDirectory: join(projectCwd, '.takt', 'runs'), language: 'ja', outputMode: 'terminal',
+    });
+
+    expect(issuing).toBeDefined();
+    await expect(issuing).resolves.toMatchObject({ instructionId: 1 });
+    expect(result.success).toBe(true);
+    const calls = vi.mocked(runAgent).mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.[1]).not.toContain(content);
+    expect(calls[1]?.[1]).toContain(content);
+    expect(calls[1]?.[2].cwd).toBe(cloneCwd);
+    expect(store.read()).toMatchObject({
+      pending: 0, deliveredNextStep: 1, deliveredSameSession: 0,
+      unconsumedWarned: 0, terminalStatus: 'completed',
+      instructions: [expect.objectContaining({ instructionId: 1, content, state: 'deliveredNextStep' })],
+    });
+    const events = readFileSync(store.getFilePath(), 'utf8').trim().split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(events.find((event) => event.type === 'terminal')).toMatchObject({
+      status: 'completed', unconsumedInstructionIds: [],
+    });
+    expect(mockOutputWarn.mock.calls.filter(([message]) => /未消化の追加指示/u.test(String(message)))).toEqual([]);
+    expect(existsSync(join(cloneCwd, '.takt', 'runs', runSlug, 'interventions.jsonl'))).toBe(false);
+  });
 
   it('passes project-side instructions from executeWorkflow into an engine running in a clone cwd', async () => {
     const cloneCwd = mkdtempSync(join(tmpdir(), 'takt-live-engine-clone-'));

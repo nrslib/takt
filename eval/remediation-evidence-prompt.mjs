@@ -21,6 +21,7 @@ export default function buildRemediationEvidencePrompt({ vars }) {
   const facetsRoot = join(builtinsRoot, language, 'facets');
   const facet = path => readFacet(facetsRoot, path);
   const reports = {
+    'review-resolution.md': vars.review_decision ?? vars.task,
     'fix-plan.md': vars.fix_plan,
     'fix-report.md': vars.fix_report,
   };

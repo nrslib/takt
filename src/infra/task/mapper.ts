@@ -211,6 +211,7 @@ export function toTaskState(tasksFile: string, task: TaskRecord): TaskState {
     branch: task.branch,
     worktree: task.worktree,
     worktreePath: task.worktree_path,
+    ...(task.merge_task === undefined ? {} : { mergeTask: task.merge_task }),
     workflow: task.workflow,
     prUrl: task.pr_url,
     failure: task.failure,

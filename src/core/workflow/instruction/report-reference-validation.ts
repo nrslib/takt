@@ -1,4 +1,5 @@
 import type { WorkflowConfig, WorkflowStep } from '../../models/types.js';
+import type { WorkflowReportInput } from '../../models/workflow-types.js';
 import { getAllParallelSubSteps } from '../../models/types.js';
 import { classifyReportRelativePath, reportPathRejectionMessage } from '../../models/reserved-report-names.js';
 import { COMPLETE_STEP, ABORT_STEP } from '../constants.js';
@@ -208,12 +209,33 @@ interface AncestorReportScope {
   readonly optional: ReadonlySet<string>;
 }
 
+function declaredReportNames(node: WorkflowNode, declaration: WorkflowReportInput | undefined): ReadonlySet<string> {
+  if (declaration === undefined) return new Set();
+  if (declaration.reports !== 'all') return new Set(declaration.reports);
+  const source = node.workflow.steps.find((step) => step.name === declaration.fromStep);
+  if (source === undefined) return new Set();
+  const names = new Set<string>();
+  const visited = new Set<WorkflowNode>();
+  const collectChild = (child: WorkflowNode): void => {
+    if (visited.has(child)) return;
+    visited.add(child);
+    for (const step of child.workflow.steps) collectContractReportNames(step, names, false);
+    for (const call of child.calls) collectChild(call.child);
+  };
+  collectContractReportNames(source, names, false);
+  for (const call of node.calls) {
+    if (call.stepPath[0] === source.name) collectChild(call.child);
+  }
+  return names;
+}
+
 function validateReferences(
   diagnostics: ReportReferenceDiagnostic[],
   node: WorkflowNode,
   ancestors: readonly AncestorReportScope[],
   path: readonly string[],
   callPath: ReportReferenceConsumer['callPath'],
+  inheritedDeclaredNames: ReadonlySet<string>,
 ): void {
   const { workflow, availability } = node;
   const validateInstruction = (
@@ -222,6 +244,7 @@ function validateReferences(
     current: ReadonlySet<string>,
     optional: ReadonlySet<string>,
     consumerStepPath: readonly string[] | undefined,
+    selectedReports: ReadonlySet<string>,
   ): void => {
     for (const raw of new Set(extractReportReferences(instruction))) {
       const reference = raw.trim();
@@ -235,6 +258,7 @@ function validateReferences(
         continue;
       }
       const name = classification.normalizedPath;
+      if (selectedReports.has(name)) continue;
       const producer = findReportInScopes(
         () => current.has(name) ? current : undefined,
         () => undefined,
@@ -260,17 +284,28 @@ function validateReferences(
       });
     }
   };
-  const validateStep = (step: WorkflowStep, current: ReadonlySet<string>, optional: ReadonlySet<string>, stepPath: readonly string[]): void => {
+  const validateStep = (
+    step: WorkflowStep,
+    current: ReadonlySet<string>,
+    optional: ReadonlySet<string>,
+    stepPath: readonly string[],
+    inheritedReports: ReadonlySet<string>,
+    parallelReports: ReadonlySet<string>,
+  ): void => {
+    const local = step.inputReports === undefined
+      ? parallelReports
+      : declaredReportNames(node, step.inputReports);
+    const selected = new Set([...inheritedReports, ...local]);
     const resolvesInstruction = (step.kind === undefined || step.kind === 'agent')
       && step.parallel === undefined && step.arpeggio === undefined;
-    validateInstruction(step.instruction, `step "${step.name}"`, current, optional, resolvesInstruction ? stepPath : undefined);
+    validateInstruction(step.instruction, `step "${step.name}"`, current, optional, resolvesInstruction ? stepPath : undefined, selected);
     for (const subStep of step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel)) {
-      validateStep(subStep, current, optional, [...stepPath, subStep.name]);
+      validateStep(subStep, current, optional, [...stepPath, subStep.name], inheritedReports, local);
     }
   };
   for (const step of workflow.steps) {
     const current = availability.guaranteed.get(step.name);
-    if (current !== undefined) validateStep(step, current, availability.optionalBefore.get(step.name)!, [step.name]);
+    if (current !== undefined) validateStep(step, current, availability.optionalBefore.get(step.name)!, [step.name], inheritedDeclaredNames, new Set());
   }
   for (const monitor of workflow.loopMonitors ?? []) {
     const cycleSteps = monitor.cycle.filter((name) => availability.guaranteed.has(name));
@@ -288,6 +323,7 @@ function validateReferences(
         ...(availability.optionalProduced.get(name) ?? []),
       ])),
       [loopJudgeStepName(monitor.cycle)],
+      new Set(),
     );
   }
 }
@@ -371,13 +407,24 @@ export function validateWorkflowReportReferences(
     callPath: ReportReferenceConsumer['callPath'],
     consumingTarget: boolean,
     active: ReadonlySet<WorkflowNode>,
+    inheritedDeclaredNames: ReadonlySet<string>,
   ): void => {
     if (active.has(node)) throw new Error(`Configuration error: recursive workflow_call cycle detected at workflow "${node.workflow.name}"`);
     const selectedHere = consumingTarget || workflowIdentity(node.workflow) === targetSource;
-    if (selectedHere) validateReferences(diagnostics, node, ancestors, path, callPath);
+    if (selectedHere) validateReferences(diagnostics, node, ancestors, path, callPath, inheritedDeclaredNames);
     const nextActive = new Set([...active, node]);
     for (const call of node.calls) {
       if (!selectedHere && !relevant.has(call.child)) continue;
+      const parentStep = node.workflow.steps.find((step) => step.name === call.stepPath[0]);
+      const callStep = call.stepPath.length === 1
+        ? parentStep
+        : parentStep?.parallel === undefined
+          ? undefined
+          : getAllParallelSubSteps(parentStep.parallel).find((step) => step.name === call.stepPath.at(-1));
+      const childDeclaration = callStep?.inputReports ?? parentStep?.inputReports;
+      const childDeclaredNames = childDeclaration === undefined
+        ? inheritedDeclaredNames
+        : declaredReportNames(node, childDeclaration);
       visit(
         call.child,
         [{ guaranteed: call.reportsBeforeCall, allProduced: node.availability.allProduced, optional: call.optionalBeforeCall }, ...ancestors],
@@ -385,10 +432,11 @@ export function validateWorkflowReportReferences(
         [...callPath, ...call.stepPath.map((step) => ({ workflowRef: getWorkflowReference(node.workflow), step }))],
         selectedHere,
         nextActive,
+        childDeclaredNames,
       );
     }
   };
   if (roots.length === 0) throw new Error('Configuration error: recursive workflow_call caller graph has no root');
-  for (const root of roots) visit(root, [], [], [], false, new Set());
+  for (const root of roots) visit(root, [], [], [], false, new Set(), new Set());
   return diagnostics;
 }

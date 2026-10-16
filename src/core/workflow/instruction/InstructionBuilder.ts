@@ -169,7 +169,24 @@ export class InstructionBuilder {
         previousResponseText: previousResponsePrepared || undefined,
       },
     );
-    const instructions = this.appendCompanionInstruction(prepared.text);
+    const referencedDeclaredNames = new Set(
+      [...workflowRules.injectedReports, ...prepared.injectedReports]
+        .filter((report) => report.scope === 'declared-producer')
+        .map((report) => report.reference),
+    );
+    const unreferencedDeclaredReports = (this.context.declaredReportInputs ?? [])
+      .flatMap(({ reports }) => reports)
+      .filter((report) => !referencedDeclaredNames.has(report.reference));
+    const instructions = unreferencedDeclaredReports.length === 0
+      ? this.appendCompanionInstruction(prepared.text)
+      : [
+          this.appendCompanionInstruction(prepared.text),
+          '',
+          language === 'ja' ? '## 宣言された成果物入力' : '## Declared report inputs',
+          unreferencedDeclaredReports.map((report) =>
+            `### ${report.producer === undefined ? report.reference : `${report.producer}: ${report.reference}`}\n${report.content}`,
+          ).join('\n\n'),
+        ].join('\n');
     const reportPreparation = this.step.outputContracts?.flatMap((entry) => {
       if (!isOutputContractItem(entry)) return [];
       const content = [entry.order, entry.format].filter(Boolean).join('\n\n');
@@ -263,12 +280,12 @@ export class InstructionBuilder {
       hasReportPreparation: reportPreparation.length > 0,
       reportPreparation,
     });
-    const injectedReports = new Map(
+    const referencedReports = new Map(
       [...workflowRules.injectedReports, ...prepared.injectedReports].map((report) => [report.reference, report]),
     );
     return {
       text,
-      injectedReports: [...injectedReports.values()],
+      injectedReports: [...referencedReports.values(), ...unreferencedDeclaredReports],
       reportInputs: {
         userInputs: [...this.context.userInputs],
         ...(previousResponsePrepared ? { previousResponse: previousResponsePrepared } : {}),

@@ -1231,6 +1231,7 @@ export class TeamLeaderRunner {
     };
 
     let terminalOperation: StepRunResult['terminalOperation'];
+    const writtenReportNames: string[] = [];
     aggregatedResponse = await this.deps.stepExecutor.applyPostExecutionPhases(
       executableStep,
       state,
@@ -1247,6 +1248,7 @@ export class TeamLeaderRunner {
       undefined,
       preparedInstruction.injectedReports,
       reportInputTracker.snapshot(),
+      (reportName) => writtenReportNames.push(reportName),
     );
 
     state.stepOutputs.set(step.name, aggregatedResponse);
@@ -1275,6 +1277,7 @@ export class TeamLeaderRunner {
         stepIteration,
         providerInfo: leaderProviderInfo,
       },
+      writtenReportNames,
     );
 
     const result: StepRunResult = {

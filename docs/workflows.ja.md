@@ -224,7 +224,7 @@ base コミットは `refs/takt/pr-base/<branch>` → `refs/takt/base/<branch>` 
 
 ### レポート参照の探索
 
-`{report:filename}` は現在のワークフローの名前空間、resume snapshot にある consumer と参照名の exact mapping（利用可能な場合）、直近の親、さらに上位の祖先、run の reports ルートの順に探索します。最初に見つかった scope の本文を使います。同名レポートが複数ある場合は参照元に近い scope が優先されます（shadowing）。兄弟や子孫のワークフローの名前空間は探索しません。
+step の `input_reports` で選択したレポートは `{report:filename}` に宣言した生成元の完了済み本文を展開します。それ以外の参照は現在のワークフローの名前空間、resume snapshot にある consumer と参照名の exact mapping（利用可能な場合）、直近の親、さらに上位の祖先、run の reports ルートの順に探索します。それ以外の参照では最初に見つかった scope の本文を使い、同名レポートが複数ある場合は参照元に近い scope を優先します。兄弟や子孫のワークフローの名前空間は探索しません。
 
 親・祖先と run ルートのレポートは読み取り専用です。書き込み先は常に現在のワークフロー自身の `reportDir` です。親への参照を解決しても書き込み先は変わりません。どこにもレポートがない場合は明示的な欠落文へ置換します。不正なパス、予約名、symlink、欠落以外の I/O エラーはエラーのまま扱います。
 
@@ -848,6 +848,22 @@ output_contracts:
 
 - `use_judge`（デフォルト `true`）— そのレポートを Phase 3 のステータス判定に入力するかどうか。書き出すだけで判定の根拠にしないレポートには `use_judge: false` を指定します。rules の判定が必要な step では少なくとも 1 件の `use_judge` レポートを残す必要があります。
 - `order` — report format facet への参照（`format` と同じ方法で解決）で、その内容が Phase 2 のデフォルトのレポート作成指示を置き換えます。format テンプレートだけでは足りない、レポート作成手順のカスタム指示が必要なときに使います。
+
+agent step、`workflow_call`、parallel の親・子 step は同じ workflow 内の別 step が作成したレポートを入力として宣言できます。
+
+```yaml
+- name: follow-up-review
+  input_reports:
+    from_step: remediation
+    reports: [fix-plan.md, fix-report.md]
+  persona: reviewer
+  instruction: |
+    次の計画と結果を使って修正後の内容を確認してください。
+    計画: {report:fix-plan.md}
+    結果: {report:fix-report.md}
+```
+
+`reports: all` は指定した step の完了済み実行から全レポートを選びます。選択された並列レビュアーや入れ子の呼び出しで作成された報告も対象です。ファイル名を列挙した場合は一致する公開レポートだけを選び、欠落や重複があれば失敗します。`{report:filename}` は選択した本文をその位置に展開します。入力側や祖先に同名のレポートがあっても宣言した生成元の本文を使います。`reports: all` が同名の報告を複数選ぶ場合、その名前の `{report:filename}` は曖昧として失敗します。構文で参照しなかった選択済みの報告は agent の Phase 1 指示の末尾へ追加し、同名の報告にはそれぞれの論理的な生成元を示します。`workflow_call` は入れ子の呼び出し先まで同じ入力を渡します。parallel の親にある宣言は子にも適用されますが、子自身の宣言があればそちらを使います。報告がない場合や呼び出しが未完了の場合、近隣のディレクトリから探さずに失敗します。実行前の経路から入力側へ進む場合に限り `optional_if_unrun: true` を指定してください。入力元の実行前も出力契約にある報告名は予約され、同名の無関係なローカル・祖先の報告にはフォールバックしません。入力元が開始した後は報告が必須です。
 
 ## Step レベルのプロバイダープロモーション
 

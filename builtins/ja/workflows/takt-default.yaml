@@ -1,5 +1,5 @@
 name: takt-default
-description: TAKT固有ファセットと実装 companion を、共通コアの裁定・修正検証付きピアレビュー収束ループ、要件の最終確認へ注入する。
+description: TAKT固有ファセットと実装 companion を共通コアのレビュー・裁定・修正・要件確認へ注入する。
 max_steps: 51
 initial_step: develop
 
