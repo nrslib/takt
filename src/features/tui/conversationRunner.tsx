@@ -177,6 +177,8 @@ export async function runTuiConversation(
       <ConversationView
         ui={{
           thinking: getLabel('tui.ui.thinking', options.lang),
+          extendedThinking: getLabel('tui.ui.extendedThinking', options.lang),
+          responding: getLabel('tui.ui.responding', options.lang),
           hint: getLabel('tui.ui.hint', options.lang),
           placeholder: getLabel('tui.ui.placeholder', options.lang),
           queuedHint: getLabel('tui.ui.queuedHint', options.lang),

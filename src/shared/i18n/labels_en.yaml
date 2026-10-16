@@ -334,6 +334,8 @@ issue:
 tui:
   ui:
     thinking: "Thinking..."
+    extendedThinking: "Reasoning..."
+    responding: "Responding"
     selectTask: "Selecting a task..."
     selectStart: "Choosing a starting point..."
     reviseInstruction: "Revising the instruction..."

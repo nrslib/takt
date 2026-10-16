@@ -9,6 +9,8 @@ import {
   type ReactElement,
 } from 'react';
 import type { InteractiveModeResult } from '../interactive/interactive.js';
+import type { StreamEvent } from '../../shared/types/provider.js';
+import { formatToolInput } from '../../shared/ui/toolInput.js';
 import { MAX_VISIBLE_ROWS, PromptInput } from './PromptInput.js';
 import { StatusLine } from './StatusLine.js';
 import { TranscriptView, type TranscriptEntry } from './TranscriptEntryView.js';
@@ -34,6 +36,8 @@ import { drainPendingWork, useImagePaste, type PendingWork } from './useImagePas
 
 export interface ConversationUiText {
   thinking: string;
+  extendedThinking: string;
+  responding: string;
   hint: string;
   placeholder: string;
   /** Shown under the queued lines while the assistant is still answering. */
@@ -124,6 +128,10 @@ const CANCELLED: InteractiveModeResult = { action: 'cancel', task: '' };
 /** Queued lines shown below the prompt; the rest are counted in one row. */
 const MAX_QUEUE_ROWS = 3;
 
+type Activity =
+  | { readonly kind: 'waiting' | 'thinking' | 'responding' }
+  | { readonly kind: 'tool'; readonly id: string; readonly label: string };
+
 /** `/go` asks the session for a task instruction rather than for a reply. */
 function isInstructionRequest(text: string): boolean {
   const trimmed = text.trimStart();
@@ -168,7 +176,10 @@ export function ConversationView({
   const [editor, setEditorView] = useState<EditorState>(editorRef.current);
   const [completionIndex, setCompletionIndex] = useState(0);
   const [streamingRaw, setStreamingRaw] = useState('');
-  const [isBusy, setIsBusy] = useState(false);
+  const [turn, setTurn] = useState<{ readonly id: number; readonly startedAt: number } | null>(null);
+  const [activity, setActivity] = useState<Activity>({ kind: 'waiting' });
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const isBusy = turn !== null;
   /**
    * Lines submitted while the assistant was still answering. The ref is what the
    * key handlers and the drain read, the state is its render mirror — the same
@@ -215,6 +226,16 @@ export function ConversationView({
   const finalExitRef = useRef(false);
   const cancellingRef = useRef(false);
 
+  useEffect(() => {
+    if (turn === null) return;
+    const interval = setInterval(() => {
+      if (!exitedRef.current && !cancellingRef.current && inFlightRef.current?.id === turn.id) {
+        setElapsedSeconds(Math.floor((performance.now() - turn.startedAt) / 1000));
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [turn]);
+
   const { columns, rows } = useWindowSize();
   useEffect(() => {
     if (liveStatusReader === undefined) {
@@ -243,6 +264,12 @@ export function ConversationView({
   );
   const completions = completionsHidden ? [] : allCompletions;
   const streamingPreview = useMemo(() => toDisplayText(streamingRaw), [streamingRaw]);
+  const elapsed = elapsedSeconds < 60
+    ? `${elapsedSeconds}s`
+    : `${Math.floor(elapsedSeconds / 60)}m${String(elapsedSeconds % 60).padStart(2, '0')}s`;
+  const activityLabel = activity.kind === 'tool' ? activity.label
+    : activity.kind === 'thinking' ? ui.extendedThinking
+    : activity.kind === 'responding' ? ui.responding : ui.thinking;
   // The model name comes from config or `--model`, so it crosses the display
   // boundary like any other outside text before it reaches a fixed-height row.
   // A submission can lazily replace the session before this component renders
@@ -327,6 +354,7 @@ export function ConversationView({
       return;
     }
     exitedRef.current = true;
+    setTurn(null);
     exitReportedRef.current = true;
     if (isFinalExit(requested)) {
       // Sealed synchronously with the settle: a capture that finishes afterwards
@@ -422,6 +450,27 @@ export function ConversationView({
             return;
           }
           setStreamingRaw((streamed) => streamed + chunk);
+          setActivity({ kind: 'responding' });
+        },
+        onStreamEvent: (event: StreamEvent) => {
+          if (!isCurrent()) return;
+          switch (event.type) {
+            case 'thinking':
+              setActivity({ kind: 'thinking' });
+              break;
+            case 'tool_use':
+              setActivity({
+                kind: 'tool',
+                id: event.data.id,
+                label: toSingleLineText(`${toSingleLineText(event.data.tool)} ${formatToolInput(event.data.tool, event.data.input)}`),
+              });
+              break;
+            case 'tool_result':
+              setActivity((current) => current.kind === 'tool'
+                && (event.data.id === undefined || event.data.id === current.id)
+                ? { kind: 'waiting' } : current);
+              break;
+          }
         },
       };
       const outcome = submitMode === 'summarize'
@@ -437,7 +486,7 @@ export function ConversationView({
       // own records exactly the turns the view accepted.
       outcome.commit?.();
       setStreamingRaw('');
-      setIsBusy(false);
+      setTurn(null);
       // What the call would have told a terminal it does not own — the provider
       // taking images as paths, for one — belongs above the answer it came with.
       const notices = outcome.notices ?? [];
@@ -487,10 +536,12 @@ export function ConversationView({
     }
     setNotice(null);
     setStreamingRaw('');
-    setIsBusy(true);
     const controller = new AbortController();
     submissionCountRef.current += 1;
     const submissionId = submissionCountRef.current;
+    setTurn({ id: submissionId, startedAt: performance.now() });
+    setElapsedSeconds(0);
+    setActivity({ kind: 'waiting' });
     inFlightRef.current = {
       id: submissionId,
       controller,
@@ -518,7 +569,7 @@ export function ConversationView({
     inFlightRef.current = null;
     inFlight.controller.abort();
     setStreamingRaw('');
-    setIsBusy(false);
+    setTurn(null);
     setNotice(null);
     appendTranscript(transcriptEntry('system', inFlight.isInstruction
       ? ui.instructionInterrupted
@@ -537,6 +588,7 @@ export function ConversationView({
    */
   const finishRun = useCallback(async (next: ConversationExit): Promise<void> => {
     cancellingRef.current = true;
+    setTurn(null);
     // Reject any pending answer before waiting on its submission. The drain
     // also aborts its controller, but confirmation must never hold exit open.
     confirmationRef.current?.(false);
@@ -878,8 +930,8 @@ export function ConversationView({
         {showStatusLine && (
           <StatusLine
             busy={isBusy}
-            label={`${ui.thinking} ${ui.interruptHint}`}
-            streamed={streamingPreview}
+            label={`${elapsed} ${ui.interruptHint} ${activityLabel}`}
+            streamed={activity.kind === 'responding' ? streamingPreview : ''}
           />
         )}
         {showLiveStatus && (
