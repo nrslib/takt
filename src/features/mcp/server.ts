@@ -9,6 +9,7 @@ import {
   getRunInputSchema,
   listTasksInputSchema,
   tellRunInputSchema,
+  tellGoalRunInputSchema,
   enqueueGoalTaskInputSchema,
   mergeGoalTaskInputSchema,
   completeGoalInputSchema,
@@ -35,6 +36,7 @@ import { requeueTaktGoalTask, retryTaktGoalTask } from './goalTaskRetryOperation
 import { requeueGoalTaskInputSchema, retryGoalTaskInputSchema } from './goalTaskRetrySchemas.js';
 import { removeGoalTaskInputSchema } from './goalTaskRemovalSchemas.js';
 import { removeTaktGoalTask } from './goalTaskRemovalOperations.js';
+import { tellTaktGoalRun } from './goalTellOperations.js';
 import { askTaktGoalQuestion, listTaktGoalQuestions, getTaktGoalQuestion, withdrawTaktGoalQuestion } from './goalQuestionOperations.js';
 import { notifyTaktGoal } from './goalNotificationOperations.js';
 import { recordTaktGoalWorkLog, listTaktGoalRecords } from './goalWorkLogOperations.js';
@@ -74,6 +76,7 @@ export const TAKT_MCP_MANAGER_TOOL_NAMES = [
   'takt_remove_goal_task',
   'takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion',
   'takt_reopen_goal',
+  'takt_tell_run',
   'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation',
   'takt_ask_goal_question', 'takt_list_goal_questions', 'takt_get_goal_question',
   'takt_withdraw_goal_question', 'takt_notify_goal',
@@ -138,6 +141,11 @@ export function createTaktMcpServer(
   };
   const workspaceRetrieval = 'Responses fit 64 KiB, with explicit truncation. Managers can read the current workspace with takt_list_tasks view workspace and offset/limit (1-50), or path name or repositoryDirectories.N (saved index) and textOffset/maxBytes for text. cwd must be absolute and does not select the workspace.';
   if (options.toolSet === 'manager') {
+    server.registerTool('takt_tell_run', {
+      title: 'Send an instruction to running goal work',
+      description: 'Send an additional instruction to the running task selected by goalId and taskName, and save its original text in the goal work log. Responses fit 64 KiB, with explicit truncation. Read saved instructions with takt_get_run, runSlug and view instructions using offset/limit (1-50), or select instructionId and offset/maxBytes for forward UTF-8 text. Follow nextOffset for continuation. Read the saved work log with takt_get_goal path workLog.summary, recordId and textOffset/maxBytes.',
+      inputSchema: tellGoalRunInputSchema,
+    }, (input, extra) => operation(input.cwd, 'Goal run tell failed', (deps) => tellTaktGoalRun(projectInput(input, deps), deps, extra.signal), false));
     server.registerTool('takt_add_workspace_repository', {
       title: 'Add an assigned repository', description: `Add a Git repository to the manager workspace, creating a workspace when needed. ${workspaceRetrieval}`,
       inputSchema: { repositoryDirectory: z.string().min(1) },

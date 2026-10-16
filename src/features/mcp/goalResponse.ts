@@ -71,6 +71,10 @@ export function integrationSummary(result: Record<string, unknown>) {
     ...(completion === undefined ? {} : { completion: completionSummary(completion as Goal['completion']) }) };
 }
 
+export function goalTellSummary(goalId: string, taskName: string, runSlug: string, instructionId: number, workLogEntryId: string) {
+  return { goalId, taskName, runSlug, instructionId, workLogEntryId };
+}
+
 export function selectGoalValue(root: unknown, path: string, recordId?: string): unknown {
   let value = root;
   for (const [index, part] of path.split('.').entries()) {

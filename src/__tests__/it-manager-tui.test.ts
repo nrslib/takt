@@ -378,6 +378,31 @@ describe('manager TUI human approval', () => {
     }
   });
 
+  it.each(['separate CR', 'last character with CR', 'last character with LF', 'last character with CRLF'] as const)('sends character-by-character input with one immediate Enter and clears the prompt: %s', async (delivery) => {
+    const context = mount();
+    context.call.mockResolvedValue(response(null));
+    const text = `${'長い文章を1文字ずつ入力します。'.repeat(80)}最終文字`;
+    try {
+      await waitFor(() => expect(promptFrame(context)).toContain('Discuss your goal'));
+      for (const character of text.slice(0, -1)) context.app.stdin.write(character);
+      await waitFor(() => expect(promptFrame(context)).toContain('最終文'));
+      expect(context.call).not.toHaveBeenCalled();
+      const lastCharacter = text.slice(-1);
+      if (delivery === 'separate CR') {
+        context.app.stdin.write(lastCharacter);
+        context.app.stdin.write(ENTER);
+      } else context.app.stdin.write(`${lastCharacter}${delivery === 'last character with LF' ? '\n' : delivery === 'last character with CRLF' ? '\r\n' : ENTER}`);
+
+      await waitFor(() => {
+        expect(context.call, JSON.stringify({ prompt: promptFrame(context).slice(-400), sent: context.call.mock.calls.map(([body]) => body) })).toHaveBeenCalledExactlyOnceWith(text, expect.any(Object));
+        expect(promptFrame(context)).toContain('Discuss your goal');
+        expect(promptFrame(context)).not.toContain('最終文字');
+        expect(queuedFrame(context)).toBeUndefined();
+        expect(context.app.lastFrame()).not.toContain('Working');
+      });
+    } finally { context.app.unmount(); await context.session.close(); }
+  });
+
   it.each(['separate chunks', 'one bracketed paste chunk', 'one unbracketed chunk'] as const)('sends a long paste with one immediate Enter and clears the input: %s', async (delivery) => {
     const context = mount();
     context.call.mockResolvedValue(response(null));
@@ -388,10 +413,7 @@ describe('manager TUI human approval', () => {
         context.app.stdin.write(text);
         context.app.stdin.write(ENTER);
       } else if (delivery === 'one bracketed paste chunk') context.app.stdin.write(`\x1b[200~${text}\x1b[201~${ENTER}`);
-      else {
-        context.app.stdin.write(`${text}${ENTER}`);
-        context.app.stdin.write(ENTER);
-      }
+      else context.app.stdin.write(`${text}${ENTER}`);
 
       await waitFor(() => {
         expect(context.app.lastFrame()).toContain('末尾の確認');
@@ -407,7 +429,7 @@ describe('manager TUI human approval', () => {
     } finally { context.app.unmount(); await context.session.close(); }
   });
 
-  it.each(['separate chunks', 'one unbracketed chunk', 'one bracketed paste chunk', 'body CR before separate Enter'] as const)('sends a long free-text answer once with a separate Enter without sending it as conversation: %s', async (delivery) => {
+  it.each(['separate chunks', 'one unbracketed chunk', 'one bracketed paste chunk', 'bracketed body CR before separate Enter'] as const)('sends a long free-text answer once without sending it as conversation: %s', async (delivery) => {
     const target = { goalId: goalRecord().id, objective: 'Answer fixture', question: {
       id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human' as const,
       status: 'pending' as const, body: 'Where should the output go?',
@@ -426,12 +448,10 @@ describe('manager TUI human approval', () => {
       if (delivery === 'separate chunks') {
         context.app.stdin.write(text);
         context.app.stdin.write(ENTER);
-      } else if (delivery === 'one unbracketed chunk') {
-        context.app.stdin.write(`${text}${ENTER}`);
-        context.app.stdin.write(ENTER);
-      } else if (delivery === 'one bracketed paste chunk') context.app.stdin.write(`\x1b[200~${text}\x1b[201~${ENTER}`);
+      } else if (delivery === 'one unbracketed chunk') context.app.stdin.write(`${text}${ENTER}`);
+      else if (delivery === 'one bracketed paste chunk') context.app.stdin.write(`\x1b[200~${text}\x1b[201~${ENTER}`);
       else {
-        context.app.stdin.write(`${text}\r`);
+        context.app.stdin.write(`\x1b[200~${text}\r\x1b[201~`);
         await waitFor(() => expect(promptFrame(context)).toContain('回答の末尾'));
         expect(answer).not.toHaveBeenCalled();
         expect(context.call).not.toHaveBeenCalled();
@@ -452,20 +472,23 @@ describe('manager TUI human approval', () => {
     } finally { context.app.unmount(); await context.session.close(); }
   });
 
-  it.each(['plain text without Enter', 'unbracketed body containing CR', 'bracketed paste containing CR'] as const)('keeps a long draft unsent until an outside Enter: %s', async (delivery) => {
+  it.each(['plain text without Enter', 'unbracketed body containing internal CR', 'unbracketed body containing internal LF', 'bracketed paste containing CR'] as const)('keeps a long draft unsent until an outside Enter: %s', async (delivery) => {
     const context = mount();
     context.call.mockResolvedValue(response(null));
+    const text = delivery === 'unbracketed body containing internal CR' ? `${LONG_TEXT}続き`
+      : delivery === 'unbracketed body containing internal LF' ? `${LONG_TEXT}\n続き` : LONG_TEXT;
     try {
       await waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
       context.app.stdin.write(delivery === 'plain text without Enter' ? LONG_TEXT
-        : delivery === 'unbracketed body containing CR' ? `${LONG_TEXT}\r` : `\x1b[200~${LONG_TEXT}\r\x1b[201~`);
+        : delivery === 'unbracketed body containing internal CR' ? `${LONG_TEXT}\r続き`
+          : delivery === 'unbracketed body containing internal LF' ? text : `\x1b[200~${LONG_TEXT}\r\x1b[201~`);
       await waitFor(() => expect(promptFrame(context)).toContain('末尾の確認'));
       expect(context.call).not.toHaveBeenCalled();
       expect(queuedFrame(context)).toBeUndefined();
 
       context.app.stdin.write(ENTER);
       await waitFor(() => {
-        expect(context.call).toHaveBeenCalledExactlyOnceWith(LONG_TEXT, expect.any(Object));
+        expect(context.call).toHaveBeenCalledExactlyOnceWith(text, expect.any(Object));
         expect(promptFrame(context)).toContain('Discuss your goal');
         expect(promptFrame(context)).not.toContain('末尾の確認');
         expect(queuedFrame(context)).toBeUndefined();
@@ -504,7 +527,7 @@ describe('manager TUI human approval', () => {
     const command = `/pause ${goalRecord().id}`;
     try {
       await waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
-      context.app.stdin.write(`${command}\r`);
+      context.app.stdin.write(`\x1b[200~${command}\r\x1b[201~`);
       await waitFor(() => expect(promptFrame(context)).toContain(command));
       expect(pause).not.toHaveBeenCalled();
       expect(context.call).not.toHaveBeenCalled();
@@ -524,9 +547,10 @@ describe('manager TUI human approval', () => {
 
   describe.each(['turn', 'startup', 'registration'] as const)('long input during %s', (state) => {
     it.each([
-      { submitBeforeCompletion: false },
-      { submitBeforeCompletion: true },
-    ])('keeps body CR unsent and submits once with a separate Enter: $submitBeforeCompletion', async ({ submitBeforeCompletion }) => {
+      { delivery: 'bracketed draft', submitBeforeCompletion: false },
+      { delivery: 'bracketed draft', submitBeforeCompletion: true },
+      { delivery: 'unbracketed submission', submitBeforeCompletion: true },
+    ])('preserves submission timing for $delivery before completion=$submitBeforeCompletion', async ({ delivery, submitBeforeCompletion }) => {
       const completion = deferred<void>();
       const startup = state === 'startup' ? { run: vi.fn(async () => { await completion.promise; return []; }), fail: vi.fn() } : undefined;
       const context = mount('en', startup);
@@ -549,13 +573,15 @@ describe('manager TUI human approval', () => {
         const before = context.call.mock.calls.map(([text]) => text);
         const text = LONG_TEXT;
 
-        context.app.stdin.write(`${LONG_TEXT}\r`);
-        await waitFor(() => expect(promptFrame(context)).toContain('末尾の確認'));
-        expect(context.call.mock.calls.map(([text]) => text)).toEqual(before);
-        expect(queuedFrame(context)).toBeUndefined();
+        context.app.stdin.write(delivery === 'bracketed draft' ? `\x1b[200~${LONG_TEXT}\r\x1b[201~` : `${LONG_TEXT}\r`);
+        if (delivery === 'bracketed draft') {
+          await waitFor(() => expect(promptFrame(context)).toContain('末尾の確認'));
+          expect(context.call.mock.calls.map(([text]) => text)).toEqual(before);
+          expect(queuedFrame(context)).toBeUndefined();
+        }
 
         if (submitBeforeCompletion) {
-          context.app.stdin.write(ENTER);
+          if (delivery === 'bracketed draft') context.app.stdin.write(ENTER);
           await waitFor(() => {
             expect(queuedFrame(context)).toContain('Queued messages: 1');
             expect(queuedFrame(context)).toContain('末尾の確認');
@@ -594,14 +620,8 @@ describe('manager TUI human approval', () => {
       await send(context, 'CSV出力を追加したい', summaryA);
       context.app.stdin.write(UP);
       context.call.mockResolvedValue(response(null));
-      if (delivery === 'one unbracketed chunk') {
-        context.app.stdin.write(`${LONG_TEXT}${ENTER}`);
-        await waitFor(() => expect(promptFrame(context)).toContain('末尾の確認'));
-        expect(context.call).toHaveBeenCalledOnce();
-        expect(context.register).not.toHaveBeenCalled();
-        expect(queuedFrame(context)).toBeUndefined();
-        context.app.stdin.write(ENTER);
-      } else context.app.stdin.write(`\x1b[200~${LONG_TEXT}\r\x1b[201~${ENTER}`);
+      if (delivery === 'one unbracketed chunk') context.app.stdin.write(`${LONG_TEXT}${ENTER}`);
+      else context.app.stdin.write(`\x1b[200~${LONG_TEXT}\r\x1b[201~${ENTER}`);
 
       await waitFor(() => {
         expect(context.call.mock.calls.map(([text]) => text)).toEqual(['CSV出力を追加したい', LONG_TEXT]);
@@ -661,10 +681,10 @@ describe('manager TUI human approval', () => {
         expect(queuedFrame(context)).toBeUndefined();
       });
       if (delivery === 'selected option') context.app.stdin.write(ENTER);
+      else if (delivery === 'one unbracketed chunk') context.app.stdin.write(`${LONG_TEXT}\r`);
       else {
         context.app.stdin.write(delivery === 'plain text without Enter' ? LONG_TEXT
-          : delivery === 'one unbracketed chunk' ? `${LONG_TEXT}\r`
-            : `\x1b[200~${LONG_TEXT}\r\x1b[201~`);
+          : `\x1b[200~${LONG_TEXT}\r\x1b[201~`);
         await waitFor(() => expect(promptFrame(context)).toContain('末尾の確認'));
         expect(answer).not.toHaveBeenCalled();
         expect(context.call).not.toHaveBeenCalled();

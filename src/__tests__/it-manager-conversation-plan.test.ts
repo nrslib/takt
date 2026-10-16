@@ -29,7 +29,7 @@ vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
 }));
 vi.mock('../infra/codex/mcp-list.js', () => ({ runCodexMcpList: vi.fn() }));
 
-const toolNames = ['takt_add_workspace_repository', 'takt_remove_workspace_repository', 'takt_rename_workspace', 'takt_list_goals', 'takt_get_goal', 'takt_list_tasks', 'takt_get_run', 'takt_enqueue_goal_task', 'takt_requeue_goal_task', 'takt_retry_goal_task', 'takt_remove_goal_task', 'takt_list_workflows', 'takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion', 'takt_reopen_goal', 'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation', 'takt_ask_goal_question', 'takt_list_goal_questions', 'takt_get_goal_question', 'takt_withdraw_goal_question', 'takt_notify_goal', 'takt_record_goal_work_log', 'takt_list_goal_work_log'];
+const toolNames = ['takt_add_workspace_repository', 'takt_remove_workspace_repository', 'takt_rename_workspace', 'takt_list_goals', 'takt_get_goal', 'takt_list_tasks', 'takt_get_run', 'takt_tell_run', 'takt_enqueue_goal_task', 'takt_requeue_goal_task', 'takt_retry_goal_task', 'takt_remove_goal_task', 'takt_list_workflows', 'takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion', 'takt_reopen_goal', 'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation', 'takt_ask_goal_question', 'takt_list_goal_questions', 'takt_get_goal_question', 'takt_withdraw_goal_question', 'takt_notify_goal', 'takt_record_goal_work_log', 'takt_list_goal_work_log'];
 const managerTools = ['Read', ...toolNames.map((name) => `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${name}`)];
 
 describe('manager conversation configuration and provider boundary', () => {
