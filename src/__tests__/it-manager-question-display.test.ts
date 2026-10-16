@@ -90,7 +90,7 @@ async function mountGoalControls(lang: 'ja' | 'en', goal: Goal) {
   session = createManagerConversationSession({
     cwd,
     plan: { ctx: { providerType: 'mock', model: undefined, lang, provider },
-      strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read'] } },
+      strategy: { systemPrompt: 'manager fixture' } },
   });
   app = render(createElement(ManagerView, { cwd, lang, session, initialDiagnostics: [], onExit: vi.fn() }));
   await vi.waitFor(() => expect(app!.lastFrame()!.replace(/\n/gu, '')).toContain(cwd));
@@ -448,7 +448,7 @@ it('shows pending questions and their answer commands when question notification
     cwd,
     plan: {
       ctx: { providerType: 'mock', model: undefined, lang: 'ja', provider: new MockProvider() },
-      strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read'] },
+      strategy: { systemPrompt: 'manager fixture' },
     },
   });
   app = render(createElement(ManagerView, { cwd, lang: 'ja', session, initialDiagnostics: [], onExit: vi.fn() }));
@@ -497,7 +497,7 @@ it.each([true, false])('shows human questions and their saved automatic notifica
   session = createManagerConversationSession({
     cwd,
     plan: { ctx: { providerType: 'mock', model: undefined, lang: 'ja', provider: new MockProvider() },
-      strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read'] } },
+      strategy: { systemPrompt: 'manager fixture' } },
   });
   app = render(createElement(ManagerView, { cwd, lang: 'ja', session, initialDiagnostics: [], onExit: vi.fn() }));
   await vi.waitFor(() => {

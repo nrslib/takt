@@ -30,7 +30,11 @@ export async function prepareManagerMcp(assignment?: ManagerAssignmentIdentity) 
   return { command: process.execPath, args, env, servers };
 }
 
-export async function connectManagerMcp(cwd: string, assignment?: ManagerAssignmentIdentity) {
+export async function connectManagerMcp(
+  cwd: string,
+  assignment?: ManagerAssignmentIdentity,
+  userServers?: Record<string, McpServerConfig>,
+) {
   const prepared = await prepareManagerMcp(assignment);
   const client = new Client({ name: 'takt-manager', version: packageVersion });
   const transport = new StdioClientTransport({
@@ -42,7 +46,7 @@ export async function connectManagerMcp(cwd: string, assignment?: ManagerAssignm
   };
   try {
     await client.connect(transport);
-    return { client, servers: prepared.servers, dispose };
+    return { client, servers: { ...userServers, ...prepared.servers }, dispose };
   } catch (error) {
     try { await dispose(); }
     catch (cleanupError) { throw new AggregateError([error, cleanupError], 'Manager MCP startup and cleanup failed'); }

@@ -193,7 +193,7 @@ export function createManagerConversationSession(input: {
             const adapter = createMcpAdapter(plan.ctx.providerType);
             const resolved = { enabled: true, servers, serverNames: Object.keys(servers).sort(), identity: buildMcpServerSetIdentity(servers) };
             adapter.validate(resolved);
-            prepared = await adapter.prepare(resolved, { cwd, abortSignal: controller.signal, permissionMode: 'readonly' });
+            prepared = await adapter.prepare(resolved, { cwd, abortSignal: controller.signal, permissionMode: 'full' });
           }
           if (controller.signal.aborted) throw new Error('Conversation interrupted');
           const memories = await Promise.all((assignment?.repositoryDirectories ?? [cwd]).map(async (repositoryDirectory) => {
@@ -211,9 +211,7 @@ export function createManagerConversationSession(input: {
           const response = await agent.call(prompt, {
             cwd, model: plan.ctx.model, sessionId, abortSignal: controller.signal,
             providerOptions: plan.ctx.providerOptions,
-            allowedTools: plan.strategy.allowedTools,
-            mcpOnlySideEffects: plan.strategy.allowedTools,
-            permissionMode: 'readonly', outputSchema: getManagerOutputSchema(plan.ctx.providerType), language: plan.ctx.lang,
+            permissionMode: 'full', outputSchema: getManagerOutputSchema(plan.ctx.providerType), language: plan.ctx.lang,
             mcpServers: servers, preparedMcp: prepared,
             onStream: (event) => {
               if (event.type === 'tool_use' && addRepositoryToolNames.has(event.data.tool)) {

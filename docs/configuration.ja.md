@@ -1025,7 +1025,7 @@ mcp:
 | `mcp.targets.personas` | `{ <persona>: { servers?, exclude? } }` | persona 単位の追加/除外。 |
 | `mcp.targets.tags` | `{ <tag>: { servers?, exclude? } }` | tag 単位の追加/除外。 |
 | `mcp.targets.steps` | `{ <leaf-workflow>/<step>: { servers?, exclude? } }` | step 単位の追加/除外。制御ノード（`workflow_call` など）は解決対象外です。 |
-| `mcp.targets.internal_agents` | `{ selector: { exclude? } }` | 両内部 agent（`selector` と `assistant`）へ適用する除外。`selector.exclude` のみ受け付けます。 |
+| `mcp.targets.internal_agents` | `{ selector: { exclude? } }` | 内部 agent（`selector`、`assistant`、`manager`）へ適用する除外。`selector.exclude` のみ受け付けます。manager は `mcp.targets.personas.manager` にも一致し、自身の TAKT MCP は常に追加されます。 |
 
 server エントリ:
 

@@ -1039,7 +1039,7 @@ mcp:
 | `mcp.targets.personas` | `{ <persona>: { servers?, exclude? } }` | Per-persona additions/exclusions. |
 | `mcp.targets.tags` | `{ <tag>: { servers?, exclude? } }` | Per-tag additions/exclusions. |
 | `mcp.targets.steps` | `{ <leaf-workflow>/<step>: { servers?, exclude? } }` | Per-step additions/exclusions. Control nodes (`workflow_call` etc.) are not resolution targets. |
-| `mcp.targets.internal_agents` | `{ selector: { exclude? } }` | Exclusions applied to both internal agents (`selector` and `assistant`). Only `selector.exclude` is accepted. |
+| `mcp.targets.internal_agents` | `{ selector: { exclude? } }` | Exclusions applied to internal agents (`selector`, `assistant`, and `manager`). Only `selector.exclude` is accepted. Manager also matches `mcp.targets.personas.manager`; its own TAKT MCP server is always added. |
 
 Server entries:
 

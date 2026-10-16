@@ -312,7 +312,7 @@ describe('manager workspace storage and repository boundaries', () => {
     const identity = { kind: 'workspace' as const, workspaceId: workspace!.id };
     const session = createManagerConversationSession({ cwd: repositoryA, assignment: identity,
       plan: { ctx: { provider: new MockProvider(), providerType: 'mock', model: undefined, lang: 'ja' },
-        strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read'] } } });
+        strategy: { systemPrompt: 'manager fixture' } } });
     const reply = (repositoryDirectory: string | undefined) => setMockScenario([{ persona: 'manager', status: 'done', content: JSON.stringify({
       message: '確認', summary: { ...goalInput(), repositoryDirectory },
     }) }, { persona: 'manager', status: 'done', content: JSON.stringify({ message: '登録済み', summary: null }) }]);
@@ -359,7 +359,7 @@ describe('manager workspace storage and repository boundaries', () => {
     });
     const session = createManagerConversationSession({ cwd: repositoryA, assignment,
       plan: { ctx: { provider, providerType: 'mock', model: undefined, lang: 'ja', mcpServers: mcp.servers },
-        strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read', ...['takt_add_workspace_repository', 'takt_remove_workspace_repository', 'takt_list_goals'].map((tool) => `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${tool}`)] } } });
+        strategy: { systemPrompt: 'manager fixture' } } });
     const scenario = (tool: string, args: Record<string, unknown>, removeOriginal = false) => setMockScenario([{ persona: 'manager', status: 'done',
       content: JSON.stringify({ message: '担当を更新', summary: null }),
       streamEvents: [{ type: 'tool_use', tool, id: 'workspace-operation', input: args }],
@@ -390,7 +390,7 @@ describe('manager workspace storage and repository boundaries', () => {
     const mcp = await connectManagerMcp(repositoryA, assignment);
     const session = createManagerConversationSession({ cwd: repositoryA, assignment,
       plan: { ctx: { provider: new MockProvider(), providerType: 'mock', model: undefined, lang: 'ja', mcpServers: mcp.servers },
-        strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read', `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__takt_add_workspace_repository`] } } });
+        strategy: { systemPrompt: 'manager fixture' } } });
     try {
       for (const repositoryDirectory of [join(root, 'missing'), root, repositoryB]) {
         const result = await mcp.client.callTool({ name: 'takt_add_workspace_repository', arguments: { repositoryDirectory } });
@@ -411,7 +411,7 @@ describe('manager workspace storage and repository boundaries', () => {
     const goal = await new GoalStore(repositoryB).create({ ...goalRecord(), executionStatus: 'paused' });
     const session = createManagerConversationSession({ cwd: repositoryA, assignment,
       plan: { ctx: { provider: new MockProvider(), providerType: 'mock', model: undefined, lang: 'ja' },
-        strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read'] } } });
+        strategy: { systemPrompt: 'manager fixture' } } });
     const app = render(createElement(ManagerView, { cwd: repositoryA, assignment, lang: 'ja', session, initialDiagnostics: [], onExit: vi.fn() }));
     try {
       await vi.waitFor(() => { expect(app.lastFrame()).toContain(`${workspace!.name} (2)`); expect(app.lastFrame()).toContain(goal.id); });
