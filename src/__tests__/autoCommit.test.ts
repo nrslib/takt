@@ -18,9 +18,9 @@ vi.mock('node:child_process', () => ({
   execFileSync: vi.fn(),
 }));
 
-const mockResolveConfigValue = vi.fn(() => undefined);
+const mockResolveConfigValue = vi.fn<(_projectDir: string, _key: string) => boolean | undefined>(() => undefined);
 vi.mock('../infra/config/index.js', () => ({
-  resolveConfigValue: (...args: unknown[]) => mockResolveConfigValue(...args),
+  resolveConfigValue: (projectDir: string, key: string) => mockResolveConfigValue(projectDir, key),
 }));
 
 const { mockLogInfo, mockLogError } = vi.hoisted(() => ({
@@ -47,7 +47,7 @@ function includesCommand(args: readonly string[], command: string): boolean {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockExecFile.mockImplementation(((_file, _args, _options, callback) => {
+  mockExecFile.mockImplementation(((_file: string, _args: readonly string[], _options: object, callback: (error: Error | null, stdout: string, stderr: string) => void) => {
     callback(null, '', '');
   }) as typeof execFile);
   mockResolveConfigValue.mockReturnValue(undefined);
@@ -59,7 +59,7 @@ afterEach(() => {
 
 describe('autoCommitAndPush', () => {
   it('should create a commit and push when there are changes', async () => {
-    mockExecFile.mockImplementation(((_file, _args, _options, callback) => {
+    mockExecFile.mockImplementation(((_file: string, _args: readonly string[], _options: object, callback: (error: Error | null, stdout: string, stderr: string) => void) => {
       callback(null, 'filter.test.clean\nfilter.test.required\n', '');
     }) as typeof execFile);
     mockExecFileSync.mockImplementation((_cmd, args) => {
@@ -68,18 +68,21 @@ describe('autoCommitAndPush', () => {
         return 'M src/index.ts\n';
       }
       if (includesCommand(argsArr, 'rev-parse')) {
-        return 'abc1234\n';
+        return argsArr.includes('--short') ? 'abc1234\n' : `${'a'.repeat(40)}\n`;
       }
+      if (argsArr.includes('symbolic-ref')) return 'task/my-task\n';
+      if (argsArr.includes('cat-file')) return `${'a'.repeat(40)} missing\n`;
       if (includesCommand(argsArr, 'config')) {
         return 'filter.test.clean\nfilter.test.required\n';
       }
-      return Buffer.from('');
+      return '';
     });
 
     const result = await autoCommitAndPush('/tmp/clone', 'my-task', '/project');
 
     expect(result.success).toBe(true);
     expect(result.commitHash).toBe('abc1234');
+    expect(result.publishedHead).toBe('a'.repeat(40));
     expect(result.message).toContain('abc1234');
 
     const addCall = mockExecFileSync.mock.calls.find(
@@ -126,16 +129,21 @@ describe('autoCommitAndPush', () => {
       if (includesCommand(argsArr, 'diff')) {
         return ''; // No changes
       }
+      if (argsArr.includes('rev-parse')) return `${'a'.repeat(40)}\n`;
+      if (argsArr.includes('symbolic-ref')) return 'task/my-task\n';
+      if (argsArr.includes('cat-file')) return 'commit\n';
       if (includesCommand(argsArr, 'config')) {
         return '';
       }
-      return Buffer.from('');
+      return '';
     });
 
     const result = await autoCommitAndPush('/tmp/clone', 'my-task', '/project');
 
     expect(result.success).toBe(true);
     expect(result.commitHash).toBeUndefined();
+    expect(result.publishedHead).toBeUndefined();
+    expect(result.localPushFailed).toBeUndefined();
     expect(result.message).toBe('No changes to commit');
 
     expect(mockExecFileSync).toHaveBeenCalledWith(
@@ -186,13 +194,15 @@ describe('autoCommitAndPush', () => {
       if (includesCommand(argsArr, 'rev-parse')) {
         return 'abc1234\n';
       }
+      if (argsArr.includes('symbolic-ref')) return 'task/my-task\n';
+      if (argsArr.includes('cat-file')) return 'abc1234 missing\n';
       if (includesCommand(argsArr, 'config')) {
         return '';
       }
       if (includesCommand(argsArr, 'push')) {
         throw new Error('refusing to update checked out branch');
       }
-      return Buffer.from('');
+      return '';
     });
 
     // When: auto-commit runs in clone mode.
@@ -202,6 +212,7 @@ describe('autoCommitAndPush', () => {
     expect(result.success).toBe(true);
     expect(result.commitHash).toBe('abc1234');
     expect(result.localPushFailed).toBe(true);
+    expect(result.publishedHead).toBeUndefined();
     expect(result.message).toContain('abc1234');
     expect(result.message).not.toContain('Auto-commit failed');
     expect(mockExecFileSync).toHaveBeenCalledWith(
@@ -228,10 +239,12 @@ describe('autoCommitAndPush', () => {
       if (includesCommand(argsArr, 'rev-parse')) {
         return 'def5678\n';
       }
+      if (argsArr.includes('symbolic-ref')) return 'task/my-task\n';
+      if (argsArr.includes('cat-file')) return 'def5678 missing\n';
       if (includesCommand(argsArr, 'config')) {
         return '';
       }
-      return Buffer.from('');
+      return '';
     });
 
     await autoCommitAndPush('/tmp/clone', 'test-task', '/project');
@@ -257,10 +270,12 @@ describe('autoCommitAndPush', () => {
       if (includesCommand(argsArr, 'rev-parse')) {
         return 'aaa1111\n';
       }
+      if (argsArr.includes('symbolic-ref')) return 'task/my-task\n';
+      if (argsArr.includes('cat-file')) return 'aaa1111 missing\n';
       if (includesCommand(argsArr, 'config')) {
         return '';
       }
-      return Buffer.from('');
+      return '';
     });
 
     await autoCommitAndPush('/tmp/clone', '認証機能を追加する', '/project');
@@ -290,7 +305,9 @@ describe('autoCommitAndPush', () => {
       if (includesCommand(argsArr, 'rev-parse')) {
         return 'abc1234\n';
       }
-      return Buffer.from('');
+      if (argsArr.includes('symbolic-ref')) return 'task/my-task\n';
+      if (argsArr.includes('cat-file')) return 'abc1234 missing\n';
+      return '';
     });
 
     await autoCommitAndPush('/tmp/clone', 'my-task', '/project');

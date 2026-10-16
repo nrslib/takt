@@ -133,7 +133,7 @@ describe('postExecutionFlow', () => {
     vi.clearAllMocks();
     mockRunLinkedCacciaSafely.mockReset();
     mockRunLinkedMergeSafely.mockReset();
-    mockAutoCommitAndPush.mockReturnValue({ success: true, commitHash: 'abc123' });
+    mockAutoCommitAndPush.mockReturnValue({ success: true, commitHash: 'abc123', publishedHead: 'abc123'.padEnd(40, '0') });
     mockPushBranch.mockReturnValue(undefined);
     mockCommentOnPr.mockReturnValue({ success: true });
     mockCreatePullRequest.mockReturnValue({ success: true, url: 'https://github.com/org/repo/pull/1' });
@@ -175,7 +175,7 @@ describe('postExecutionFlow', () => {
     const committed = createDeferred();
     mockAutoCommitAndPush.mockImplementationOnce(async () => {
       await committed.promise;
-      return { success: true, commitHash: 'abc123' };
+      return { success: true, commitHash: 'abc123', publishedHead: 'abc123'.padEnd(40, '0') };
     });
 
     const execution = postExecutionFlow({
@@ -396,13 +396,68 @@ describe('postExecutionFlow', () => {
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
   });
 
-  it('commit がない場合は PR 関連処理をスキップする', async () => {
-    mockAutoCommitAndPush.mockReturnValue({ success: true, commitHash: undefined });
+  it.each([undefined, 'abc123'])('公開した HEAD がない場合はコミットの有無によらず後続をスキップする (%s)', async (commitHash) => {
+    mockAutoCommitAndPush.mockReturnValue({ success: true, commitHash });
 
     await postExecutionFlow(baseOptions);
 
     expect(mockFindExistingPr).not.toHaveBeenCalled();
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
+    expect(mockPushBranch).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('エージェントの公開済み HEAD で push と PR 処理へ進む (existingPr=%s)', async (existing) => {
+    mockAutoCommitAndPush.mockReturnValue({ success: true, publishedHead: 'a'.repeat(40) });
+    mockBuildPrBody.mockReturnValueOnce('pr-body');
+    mockFindExistingPr.mockReturnValue(existing ? { number: 42, url: 'https://github.com/org/repo/pull/42' } : undefined);
+
+    const result = await postExecutionFlow(baseOptions);
+
+    expect(mockPushBranch).toHaveBeenCalledExactlyOnceWith('/project', baseOptions.branch);
+    expect(result.prUrl).toBe(`https://github.com/org/repo/pull/${existing ? 42 : 1}`);
+    if (existing) {
+      expect(mockCommentOnPr).toHaveBeenCalledExactlyOnceWith(42, 'pr-body', '/project');
+    } else {
+      expect(mockCreatePullRequest).toHaveBeenCalledTimes(1);
+    }
+    expect(mockSuccess.mock.calls.map(([message]) => message)).toEqual([
+      existing ? 'PR updated with comment: https://github.com/org/repo/pull/42' : 'PR created: https://github.com/org/repo/pull/1',
+    ]);
+  });
+
+  it('エージェントの公開済み HEAD で PR を作らず origin push できる', async () => {
+    mockAutoCommitAndPush.mockReturnValue({ success: true, publishedHead: 'a'.repeat(40) });
+
+    expect(await postExecutionFlow({ ...baseOptions, shouldCreatePr: false, shouldPublishBranchToOrigin: true })).toEqual({});
+
+    expect(mockPushBranch).toHaveBeenCalledExactlyOnceWith('/project', baseOptions.branch);
+    expect(mockFindExistingPr).not.toHaveBeenCalled();
+    expect(mockSuccess).not.toHaveBeenCalled();
+  });
+
+  it('エージェントの公開済み HEAD を origin push 失敗時の表示に使う', async () => {
+    const publishedHead = 'b'.repeat(40);
+    mockAutoCommitAndPush.mockReturnValue({ success: true, publishedHead });
+    mockPushBranch.mockImplementationOnce(() => { throw new Error('push rejected'); });
+
+    const result = await postExecutionFlow(baseOptions);
+
+    expect(result.prFailed).toBe(true);
+    expect(result.prError?.split('\n').find((line) => line.startsWith('Commit:'))).toBe(`Commit: ${publishedHead}`);
+    expect(mockCreatePullRequest).not.toHaveBeenCalled();
+    expect(mockSuccess).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('エージェントの base 公開失敗を通常失敗として返す (createPr=%s)', async (shouldCreatePr) => {
+    mockAutoCommitAndPush.mockReturnValue({ success: true, localPushFailed: true, message: 'No changes to commit' });
+
+    const result = await postExecutionFlow({ ...baseOptions, shouldCreatePr, shouldPublishBranchToOrigin: true });
+
+    expect(result).toEqual({ taskFailed: true, taskError: 'Push to main repo failed after commit creation.' });
+    expect(mockPushBranch).not.toHaveBeenCalled();
+    expect(mockFindExistingPr).not.toHaveBeenCalled();
+    expect(mockCreatePullRequest).not.toHaveBeenCalled();
+    expect(mockSuccess).not.toHaveBeenCalled();
   });
 
   it('branch がない場合は PR 関連処理をスキップする', async () => {
@@ -462,11 +517,11 @@ describe('postExecutionFlow', () => {
     expect(mockSuccess).not.toHaveBeenCalled();
   });
 
-  it('ローカルpush失敗後も commitHash があれば（localPushFailed なし）PR 作成失敗を prFailed として返す', async () => {
+  it('公開した HEAD があれば PR 作成失敗を prFailed として返す', async () => {
     // relay push 済みのケースでは、PR 作成まで継続して失敗理由を返す。
     mockAutoCommitAndPush.mockReturnValue({
       success: true,
-      commitHash: 'abc123',
+      commitHash: 'abc123', publishedHead: 'abc123'.padEnd(40, '0'),
       message: 'Committed locally; relay push succeeded',
     });
     mockFindExistingPr.mockReturnValue(undefined);
@@ -555,7 +610,7 @@ describe('postExecutionFlow', () => {
   it('auto_pr かつ shouldPublishBranchToOrigin では root branch を origin へ push して PR 作成へ進む', async () => {
     mockAutoCommitAndPush.mockReturnValue({
       success: true,
-      commitHash: 'abc123',
+      commitHash: 'abc123', publishedHead: 'abc123'.padEnd(40, '0'),
       message: 'Committed: abc123 - takt: Fix the bug',
     });
     mockFindExistingPr.mockReturnValue(undefined);
@@ -574,7 +629,7 @@ describe('postExecutionFlow', () => {
   it('shouldPublishBranchToOrigin が true のとき root branch を origin へ push して完了できる', async () => {
     mockAutoCommitAndPush.mockReturnValue({
       success: true,
-      commitHash: 'abc123',
+      commitHash: 'abc123', publishedHead: 'abc123'.padEnd(40, '0'),
       message: 'Committed: abc123 - takt: Fix the bug',
     });
 
@@ -597,7 +652,7 @@ describe('postExecutionFlow', () => {
   it('shouldPublishBranchToOrigin が true でローカル push 成功時も root branch を origin へ push する', async () => {
     mockAutoCommitAndPush.mockReturnValue({
       success: true,
-      commitHash: 'abc123',
+      commitHash: 'abc123', publishedHead: 'abc123'.padEnd(40, '0'),
       message: 'Committed: abc123 - takt: Fix the bug',
     });
 
@@ -614,7 +669,7 @@ describe('postExecutionFlow', () => {
     expect(result.prFailed).toBeUndefined();
   });
 
-  it('shouldPublishBranchToOrigin が true でコミットがない場合は origin push もしない', async () => {
+  it('shouldPublishBranchToOrigin が true で公開した HEAD がない場合は origin push もしない', async () => {
     mockAutoCommitAndPush.mockReturnValue({ success: true, commitHash: undefined });
 
     const options: PostExecutionOptions = {
@@ -631,7 +686,7 @@ describe('postExecutionFlow', () => {
   it('shouldPublishBranchToOrigin が true のとき origin push が失敗したら prFailed で prError に伝播する', async () => {
     mockAutoCommitAndPush.mockReturnValue({
       success: true,
-      commitHash: 'abc123',
+      commitHash: 'abc123', publishedHead: 'abc123'.padEnd(40, '0'),
       message: 'Committed: abc123 - takt: Fix the bug',
     });
     mockPushBranch.mockImplementation(() => {
@@ -706,7 +761,7 @@ describe('postExecutionFlow', () => {
   it('shouldCreatePr が true かつ shouldPublishBranchToOrigin で origin push が失敗したら prFailed を返す', async () => {
     mockAutoCommitAndPush.mockReturnValue({
       success: true,
-      commitHash: 'abc123',
+      commitHash: 'abc123', publishedHead: 'abc123'.padEnd(40, '0'),
       message: 'Committed: abc123 - takt: Fix the bug',
     });
     mockPushBranch.mockImplementation(() => {
@@ -737,7 +792,7 @@ describe('postExecutionFlow', () => {
 
     mockAutoCommitAndPush.mockReturnValue({
       success: true,
-      commitHash: 'abc123',
+      commitHash: 'abc123', publishedHead: 'abc123'.padEnd(40, '0'),
       message: 'Committed: abc123 - takt: Fix the bug',
     });
     mockPushBranch.mockImplementation(() => {
