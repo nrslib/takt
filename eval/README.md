@@ -405,6 +405,8 @@ remain excluded.
 | `cqrs` | review-backend-cqrs / cqrs-es-review | backend-cqrs | recall on 3 planted CQRS+ES violations |
 | `rescan` | peer-review / arch-review (round 2) | inventory-es | re-scan evidence + recall on 4 planted defects after previous findings were resolved |
 | `frontend-coder` | frontend / implement | frontend-app (work copy) | artifact checks on the implemented change |
+| `frontend-mediator-review` | frontend / frontend-review (React knowledge) | frontend-mediator-review/{good,bad,bad2,good-hook} (separate copies) | page-owned state false positives and delegation-layer false negatives; Luna max / Opus |
+| `frontend-mediator-coder` | frontend / implement | frontend-mediator (fresh copy per call) | page operation ownership versus a separate Mediator layer; paired editing and display-only cases; Codex low / Claude Opus |
 | `cqrs-coder` | backend-cqrs / implement | backend-cqrs (work copy) | artifact checks on the implemented change |
 | `fix-closure` | review-remediation / fix | fix-closure (work copy) | whether implementation closes the planned obligations across fix units and hierarchical projections |
 | `fix-self-scan` | peer-review / fix | fix-self-scan (work copy) | whether the coder's post-edit self-scan removes change-induced dead code, keeps the declared layer direction, and consolidates duplicated override semantics instead of shipping a plan-complete but messy fix |
@@ -506,6 +508,188 @@ JS
 ```
 
 ## Improvement workflow (red -> green)
+
+### Frontend operation ownership
+
+
+### Mediator の配置を測るレビュー評価
+
+`frontend-mediator-review` は `frontend / frontend-review` の React knowledge を含む構成を使う。
+既存の `frontend` / `frontend-opus` の課題・fixture・期待値は変更しない。
+仮説 H1 は別の状態操作層への委譲を承認する見逃し、H2 はページ自身の判断に別層を要求する誤検知。
+`review-frontend` workflow との比較はこのスイートには含めない。
+
+| ケース | 実装 | 合格条件 |
+|--------|------|----------|
+| good | OrderEditPage が下書き・保存状態と保存・編集の受理判断を所有。純粋関数は別ファイル、領域の入力途中の値は局所 state | APPROVE、または別層の新設・ページからの状態や判断の切り出しを修正必須にしない REJECT |
+| bad | OrderEditMediator クラスと useOrderEditMediator が状態と操作処理を持ち、ページは委譲 | 状態と操作判断をページ外に置いて委譲する構造を修正必須として REJECT |
+| bad2 | bad と同じ構造を OrderEditSession / useOrderEditSession（ja/en のファセット全体にない名前）に改名 | bad と同じ。名称に依存せず問題を指摘 |
+| good-hook | good と同じ機能をページ専用 useOrderEditPage に実装分割。注文編集固有の型・API を直接扱い、useReducer・受理判断・保存開始をまとめる | good と同じ。専用 hook を別層と見なして廃止やページ本体への移動を修正必須にしない |
+
+fixture は `fixtures/frontend-mediator-review/{good,bad,bad2,good-hook}/`。各ケースは専用 prompt と
+prepare target に対応し、`tests[].prompts` で1ケースと1 prompt を対応付ける。
+prepare はそれぞれ `.work/frontend-mediator-review-<case>` にコピーし、ファセット snapshot を保存する。
+実行ごとにその1つだけをリポジトリ外へコピーするため、他の変種や採点コード・期待値は見せない。
+モデルに渡す snapshot 名は全ケースで `frontend-review-context-*` に揃え、ケース名を含めない。
+課題とレビュー対象の説明は全ケース共通で、設計パターン・配置・期待判定を指定しない。
+API・型・領域/表示部品・純粋関数・依存設定は4変種で同一。
+商品未検出も顧客未検出と同様に role="alert" で表示し、描画中の throw による雑音を除く。
+素材は既存 Opus 成果物の `src/` を参照し、テスト・node_modules・dist はコピーしていない。
+
+回答には `verdict: APPROVE|REJECT` と `findings: [{file, blocking, reason}]` の JSON を要求する。
+`asserts/frontend-mediator-review.mjs` の format metric は JSON のみ（json）、単一フェンス（fenced）、
+前置き・後置き付き（prose）を区別し、課題どおり JSON のみを形式合格にする。
+設計 metric の gradeDesign は、文字列中の括弧を考慮し、フェンス内外を問わず出力中から
+verdict と findings を持つ JSON オブジェクトを候補として列挙する。候補がちょうど1つで、
+verdict・findings・blocking が整合する場合だけ、その JSON を llm-rubric に渡す。
+findings 内の通常の指摘や無関係な JSON は候補に数えない。前置きの未閉鎖の `{` からも独立して抽出する。
+候補が0個・複数、または不正な shape の場合は grader を呼ばず不合格にする。
+前置きがあっても設計採点は行う。llm-rubric は指摘の実質を判定し、特定語の名指しは不要。
+good で別層を任意に提案しただけでは失敗にせず、bad/bad2 は別の不備だけの REJECT では合格にしない。
+条件間の比較は設計 metric 別（good-precision、good-hook-precision、bad-recall、bad2-recall）に行う。
+形式 metric（format）は別に記録する。形式違反でも総合 pass は失敗するため、総合 pass 率を設計の比較には使わない。
+
+provider は既存レビューと同じ Luna (`gpt-5.6-luna`, max) と Opus (`claude-opus-5`)。
+`providers/frontend-mediator-review.mjs` は `cli-review.mjs` の prompt ごとの working_dir 合成を使い、
+実行には実装 eval wrapper の隔離を再利用する。Codex は SDK の read-only・approval never、
+一時 HOME/CODEX_HOME（auth.json のみ）・継承 skill 無効化を適用する。
+Opus は safe mode・project 設定のみ・slash command 無効、許可ツールを Read/Glob/Grep に限定し、
+`dontAsk`・セッション保存なしで実行する。環境変数は実装 eval と同じ allowlist。
+両者とも `isolate_working_dir: true` を必須にする。採点は隔離した Codex `gpt-6-sol` low。
+grader の作業ディレクトリは `.gitkeep` だけを置く `fixtures/frontend-mediator-review-grader/` の一時コピーとし、
+採点対象は llm-rubric に渡すレビュー JSON とする。
+レビュー provider は実装成果物を `.results` に保存せず、回答は promptfoo の結果に残る。
+
+```sh
+node --test eval/asserts/frontend-mediator-review.test.mjs eval/providers/frontend-mediator-review.test.mjs eval/providers/frontend-mediator-coder.test.mjs eval/asserts/frontend-mediator-implement.test.mjs eval/providers/frontend-mediator-skill-isolation.test.mjs eval/suite-registry.test.mjs
+node eval/scripts/prepare.mjs frontend-mediator-review-good frontend-mediator-review-bad frontend-mediator-review-bad2 frontend-mediator-review-good-hook
+# 以下は API を使う RED 探索。ハーネスの単体検証とは別に実行する。
+npm run eval:prompts:frontend-mediator-review
+# provider 別
+npm run eval:prompts:frontend-mediator-review -- --filter-providers codex-luna-max
+npm run eval:prompts:frontend-mediator-review -- --filter-providers claude-opus-5
+```
+
+prepare は作業ツリーのファセットを読む。main 条件を測るときは `builtins/` が main と同じか確認する。
+revision、生成 prompt と snapshot、fixture、モデル設定、回答原文と採点結果を条件ごとに保存する。
+旧条件で期待との不一致を観測して初めて RED と呼び、回答の指摘内容も確認する。
+提供された main 条件の RED 記録（eval-jJK-2026-10-16T14:36:50）では、Luna/Opus とも bad/bad2 の
+状態操作層への委譲を指摘せず、good の Opus は JSON 前の前置きだけで形式不合格になった。
+今回の改修後の実モデル評価は未実行であり、GREEN はまだ確認していない。
+単体テストは形式と設計入力の分離・ケース配線・レビュー対象の型/未使用コード、別層とページ専用 hook の保存動作、SDK モックと偽 CLI による
+隔離・権限・後片付けを検証する。型チェックは既存 bootstrap `main.tsx` を除くレビュー対象コードを対象とし、
+実ブラウザでの機能同等性と実際の認証成功は検証しない。テスト成果物は一時ディレクトリへ保存する。
+
+`frontend-mediator-coder` は、現行の frontend / implement ファセットを使い、
+注文編集・保存と合計金額表示だけの対照ケースを比較する mutable スイート。
+ファセット本文は変更しない。`src/` に React ページを持たないリポジトリ本体、および
+既存 fixture を検索し、顧客価格と明細編集と保存を連動させる類似実装がないことを確認した。
+ケース本文と fixture 内には設計パターンや状態の置き場所の誘導を含めていない。
+prepare は作業ツリーのファセットを読む。main の RED を測る際は、評価元の
+`builtins/` が main と一致していることを確認する。ローカル改修を含む prepare は別条件として扱う。
+
+```sh
+node --test eval/asserts/frontend-mediator-implement.test.mjs eval/providers/frontend-mediator-coder.test.mjs eval/providers/frontend-mediator-skill-isolation.test.mjs eval/suite-registry.test.mjs
+node eval/scripts/prepare.mjs frontend-mediator-implement
+node eval/scripts/run-evals.mjs --prepare frontend-mediator-coder --no-cache
+# provider 別に測る場合（rubric の判定はどちらも隔離した read-only Codex low）
+node eval/scripts/run-evals.mjs --prepare frontend-mediator-coder --no-cache --filter-providers codex
+node eval/scripts/run-evals.mjs --prepare frontend-mediator-coder --no-cache --filter-providers claude-opus-5
+```
+
+`npm run eval:prompts:frontend-mediator-coder` でも両 provider を実行する。
+Codex は pagination provider と同じく `@openai/codex-sdk` を直接使用する
+（モデル gpt-6-sol、reasoning low、approval never を SDK オプションで明示する）。
+実装側と rubric 側の双方で、呼び出しごとに一時 HOME とその配下の CODEX_HOME を作り、
+ユーザーの `$CODEX_HOME`（未設定なら `~/.codex`）から `auth.json` だけをコピーする。
+`auth.json` がなければ明確なエラーで停止する。config.toml、AGENTS.md、skills、履歴等はコピーしない。
+SDK に渡す環境変数は PATH、TMPDIR、LANG、LC_ALL と隔離先の HOME、CODEX_HOME だけ。
+`buildCodexSkillConfig` に `repo: false, user: false` を渡して作業コピー内の継承 skill も無効化し、
+ネットワークと web search も無効にする。認証を含む一時 HOME は成功・失敗にかかわらず削除する。
+rubric も同じ wrapper を `role: rubric` で使い、明示した working_dir のコピーを
+リポジトリ外の一時ディレクトリに作って read-only（実装側は workspace-write）で実行し、終了後に削除する。
+
+Opus は既存 Claude provider の `--setting-sources=project` に加え、
+`--disable-slash-commands` と `--safe-mode` を指定して `claude-opus-5` を直接実行する。
+`claude --help` では safe mode は CLAUDE.md、skills、インストール済み plugins、hooks、MCP、
+custom commands/agents 等を無効化し、認証・モデル選択・組み込みツール・権限は通常どおり維持すると説明されている。
+`--setting-sources=project` で user 設定の読み込みも除外する。管理ポリシーは引き続き適用される。
+Keychain を使う通常ログインのため、HOME と USER は実ユーザーの値を維持し、CLAUDE_CONFIG_DIR は渡さない。
+引き継ぐ環境変数は PATH、TMPDIR、LANG、LC_ALL、TERM、HOME、USER と認証用の
+ANTHROPIC_API_KEY、CLAUDE_CODE_OAUTH_TOKEN だけ。シェル初期化を経由しない。
+作業ディレクトリはリポジトリ外の一時コピーを使う。
+Opus の実行上限は30分（`timeout_ms: 1800000`）。Codex 実装は15分、rubric は5分。
+detached でプロセスグループを作り、時間切れにはグループ全体へ SIGKILL を送る。
+Opus は `--output-format stream-json --verbose --include-partial-messages` で逐次出力を取得し、
+`claude.stdout.log` と `claude.stderr.log` に受信の都度追記する。
+response と rubric 入力へ渡すのは stream-json の result イベントの result（最終応答）だけであり、
+ストリーム全文や途中のツール出力は含めない。result がない・複数・失敗・文字列でない場合は明示的に失敗する。
+約440万文字のストリームを偽 CLI で生成し、ログ全文の保存と rubric 入力の分離を単体テストで確認する。
+隔離テストでは SDK をモックし、Opus は偽 CLI を使って環境・引数、子孫プロセスの停止、
+タイムアウト・異常終了・起動失敗時の作業コピーとログの保存を確認する。
+実際の認証成功は API を呼ぶため、この単体テストでは検証しない。
+rubric も Codex SDK を使うため、別途の OpenAI API 用 grader は不要。
+
+prepare 単体は呼び出し間のリセットをしないため、wrapper が **各ケース・各 provider・各反復ごとに**
+`eval/.work/frontend-mediator-implement` を隔離コピーする。元の作業コピーへは書き戻さない。
+fixture からの変更・削除一覧と、変更・追加された `src/` のソースおよび設定ファイルの内容を JSON 出力し、
+`eval/.results/frontend-mediator-coder/<uuid>/` に prompt、result、project を保存する。
+実装がタイムアウト・エラーで失敗した場合も同じ場所に `project/` を退避し、
+`result.json` にエラーを記録する。Opus のログも成功・失敗を問わずこのディレクトリに残す。
+起動前に失敗した場合はログが空の場合がある。作業コピーの `node_modules` は保存対象から除く。
+artifact assert はチャットの自己申告を使わず、provider metadata が指す project を再読する。
+単体呼び出し時は `eval/.work/frontend-mediator-implement` を検査する。
+
+rubric の `files` には未変更ファイルを含めない。`node_modules`、`dist`、`build`、`out`、coverage・cache、
+lockfile、source map、tsbuildinfo、minified JS を除外する。ルートの package.json、tsconfig、
+各種 `*.config.*` などの設定変更は含める。削除は `deletedPaths` に記録する。
+JSON 全体の上限は200,000文字とし、超過時は切り捨てず `Rubric input exceeds ... characters` で失敗させる。
+
+artifact assert は新規・変更ファイルについて Mediator を含むファイル名・AST 識別子、
+状態と購読・通知のメンバーを併せ持つ非 React クラス、fixture の package.json にない既知の状態管理ライブラリの
+import / re-export / dynamic import / require を拒否する。クラスと Mediator 名の検査は本番コードだけに適用し、
+`*.test.*`、`*.spec.*`、`__tests__`、`test-setup` 等のテスト専用コードは除外する。
+状態管理ライブラリの import 検査はテストでも継続する。コメントと単なる文字列内の名称は無視する。
+ライブラリを生成先の package.json に追記しても許容条件は変わらない。
+未実装のまま合格しないよう、ページの存在とソース変更も要求する。
+ライブラリ検知は assert 内の列挙集合に限る。補助 rubric は「状態の所有」と「操作の処理の開始」を
+判定軸とする。ページ・独立領域とは別に状態を保持する実体（クラスインスタンス、
+モジュールスコープの可変状態、store、状態機械インスタンス）を新設するか、操作通知を受けて
+通信・副作用を開始する別層（再利用可能な hook・関数・オブジェクトを含む）を置き、
+ページが委譲するだけになる構造を不合格とする。操作判断を担う中間オブジェクトの props 配布も不合格。
+ページ固有の型・API・状態を直接扱い、ページの操作判断が閉じる専用 hook は合格に含める。
+呼び出し元の数では判定しない。操作の種類や保存先を引数で差し替えて他画面でも使う前提の
+汎用インターフェースを持つ hook は汎用層として扱う。
+**純粋関数の切り出しは合格**。引数のデータから新しいデータや真偽を返す検証、
+明細の追加・合算、差分判定、価格計算、reducer 関数そのもの（純粋な遷移表による計算を含む）は、
+別ファイルでも許容する。ページがそれらを呼んで自分の state を更新し、保存の開始判断を
+ページまたはページ専用 hook が行えば合格。通信だけを行う `saveOrder` 等の API 関数や型定義も許容する。
+ページ外の `saveOrderIfChanged` のような関数が差分・保存中の判断と送信開始をまとめて持ち、
+ページがそれを呼ぶだけなら不合格。
+回帰例は RED 実行 `eval-Yyr-2026-10-16T12:58:50` の Codex 成果物
+`eval/.results/frontend-mediator-coder/1ea328b2-d125-4809-84bd-3040a782a723/project/`。
+この例の `src/features/orders/order-edit.ts` は `validQuantity`・`addLine`・`orderChanged` の純粋関数だけを持ち、
+`src/routes/order-edit.tsx` が draft・saveState と保存・編集の開始判断を所有するため、構造は合格とする。
+`operation-ownership` は構造だけ、`functional-completeness` は価格連動、保存の二入口、
+二重実行防止、未変更時の送信抑止、成功・失敗表示などの機能完了だけを採点する。
+構造 metric は機能の欠落を理由に落とさず、機能 metric は実装場所を理由に落とさない。
+対照ケースでは新しい状態管理層の有無だけを rubric で確認し、保存機能は要求しない。
+
+正実装・誤実装の mutation は assert のテスト内で一時 fixture として作成する。
+静的 assert は、インスタンスの可変フィールドまたは状態更新メソッドを持ち、かつ購読・通知の
+メンバーも持つ非 React クラスを拒否する。メソッドの存在だけでは拒否せず、
+通信専用の API クラスは許容する。
+クラス・識別子・ライブラリの反例に加え、ページ内 useReducer、
+領域の局所 state、ページ専用 hook の正例を確認する。
+createOrderStore、モジュールスコープの可変 state を持つ遷移表と dispatch だけのページ、
+汎用 useOrderController は静的 assert では通し、rubric が構造上の不合格を担う。
+純粋な reducer や遷移表による計算とは区別する。静的テストの pass は構造の合格を意味しない。
+isolation テストはユーザーの auth.json だけがコピーされ、設定・skill が混入しないこと、
+SDK の環境変数と実装・rubric の作業ディレクトリが隔離され、成功・失敗時に削除されることを確認する。
+偽の Claude CLI で safe mode の引数、HOME・USER の維持と環境変数の制限、
+時間切れに CLI と子・孫プロセスが SIGKILL で停止することも確認する。
+これらの成否は検出器の契約検証であり、現行ファセットの RED 観測ではない。
+RED の確認には上記の実モデル eval を実行し、artifact / rubric の各 metric と保存したコードを確認する。
 
 ### Database pagination
 
@@ -659,6 +843,7 @@ npx promptfoo view               # browse results in the web UI
 
 Do not use `--repeat` with mutable coder suites such as `fix-closure`,
 `frontend-coder`, or `cqrs-coder`; independent trials require a fresh work copy.
+`frontend-mediator-coder` creates a fresh copy per call, so it supports independent repeats.
 
 Run from the repo root. The custom providers resolve `working_dir` and prompt
 paths in their provider config relative to `eval/`, regardless of the config
