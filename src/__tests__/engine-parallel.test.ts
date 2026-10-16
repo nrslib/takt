@@ -32,7 +32,8 @@ vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
   };
 });
 
-vi.mock('../core/workflow/phase-runner.js', () => ({
+vi.mock('../core/workflow/phase-runner.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../core/workflow/phase-runner.js')>(),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
   runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
@@ -61,6 +62,7 @@ import type { WorkflowConfig } from '../core/models/types.js';
 import { isDynamicParallelSubSteps } from '../core/models/types.js';
 import { runAgent } from '../agents/runner.js';
 import { runReportPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
+import { ReportPhaseGenerationError } from '../core/workflow/report-phase-runner.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import { RuleEvaluator as ActualRuleEvaluator } from '../core/workflow/evaluation/RuleEvaluator.js';
 import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
@@ -544,9 +546,10 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       'reports',
       reportName,
     );
-    vi.mocked(runReportPhase).mockImplementation(async () => {
+    vi.mocked(runReportPhase).mockImplementation(async (_step, _iteration, _context, onReportWritten) => {
       mkdirSync(join(reportPath, '..'), { recursive: true });
       writeFileSync(reportPath, '# Architecture review\n');
+      onReportWritten?.(reportName);
       return undefined;
     });
     const config = buildDefaultWorkflowConfig({
@@ -1201,11 +1204,12 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       report: [{ name: 'frontend-review.md', format: 'review' }],
     };
     const config = normalizeWorkflowConfig(raw, tmpDir);
-    vi.mocked(runReportPhase).mockImplementation(async (step) => {
+    vi.mocked(runReportPhase).mockImplementation(async (step, _iteration, _context, onReportWritten) => {
       const reportDir = join(tmpDir, '.takt', 'runs', 'test-report-dir', 'reports');
       mkdirSync(reportDir, { recursive: true });
       for (const contract of step.outputContracts ?? []) {
         writeFileSync(join(reportDir, contract.name), `${step.name} report`, 'utf-8');
+        onReportWritten?.(contract.name);
       }
     });
     vi.mocked(runAgent).mockImplementation(async (persona, _instruction, options) => {
@@ -1249,6 +1253,140 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     expect(resumePoint?.workflow_step_participations[childIdentity]).toEqual({
       report_names: ['architecture-review.md'],
     });
+  });
+
+  it.each([
+    { failedAttempt: 1, label: 'the first static parallel run' },
+    { failedAttempt: 2, label: 'a repeated static parallel run with an old report file' },
+  ])('rejects a missing required child report in $label', async ({ failedAttempt }) => {
+    const backend = makeStep('backend', {
+      outputContracts: [{ name: 'backend.md', format: 'backend report' }],
+    });
+    const testing = makeStep('testing', {
+      outputContracts: [{ name: 'testing.md', format: 'testing report' }],
+    });
+    const reviewers = makeStep('reviewers', {
+      parallel: [backend, testing],
+      rules: failedAttempt === 1
+        ? [makeRule('complete', 'consumer')]
+        : [makeRule('repeat', 'again'), makeRule('complete', 'consumer')],
+    });
+    const config: WorkflowConfig = {
+      name: 'static-report-handoff',
+      initialStep: 'reviewers',
+      maxSteps: 5,
+      steps: [
+        reviewers,
+        makeStep('again', { rules: [makeRule('complete', 'reviewers')] }),
+        makeStep('consumer', {
+          inputReports: { fromStep: 'reviewers', reports: 'all' },
+          rules: [makeRule('complete', 'COMPLETE')],
+        }),
+      ],
+    };
+    const reportDir = join(tmpDir, '.takt', 'runs', 'test-report-dir', 'reports');
+    let testingAttempt = 0;
+    vi.mocked(runReportPhase).mockImplementation(async (step, _iteration, _context, onReportWritten) => {
+      if (step.name === 'testing' && ++testingAttempt === failedAttempt) {
+        throw new ReportPhaseGenerationError('report failed', 'provider_error', {
+          requiresFreshPhase1: false,
+          failureReasons: ['provider_error'],
+        });
+      }
+      for (const contract of step.outputContracts ?? []) {
+        writeFileSync(join(reportDir, contract.name), `${step.name} report from attempt ${testingAttempt}`);
+        onReportWritten?.(contract.name);
+      }
+    });
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: persona ?? '', userInstruction: instruction });
+      return makeResponse({ persona: persona ?? 'reviewer', content: 'approved' });
+    });
+    let reviewersRun = 0;
+    vi.mocked(mockRuleEvaluation).mockImplementation((step) => {
+      if (step.name === 'reviewers') {
+        const index = failedAttempt === 2 && reviewersRun++ === 0 ? 0 : failedAttempt === 2 ? 1 : 0;
+        return { index, method: 'aggregate' };
+      }
+      return step.name === 'again' ? { index: 0, method: 'phase3_tag' } : undefined;
+    });
+
+    const engine = new WorkflowEngine(config, tmpDir, 'Review changes', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+    });
+    let abortReason = '';
+    engine.on('workflow:abort', (_state, reason) => { abortReason = reason; });
+    const state = await engine.run();
+    expect(state.status).toBe('aborted');
+    expect(abortReason).toMatch(/not_produced:testing:testing.md/);
+    expect(testingAttempt).toBe(failedAttempt);
+    const childIdentity = buildWorkflowStepParticipationIdentity(
+      getWorkflowReference(config),
+      'testing',
+      [],
+      'reviewers',
+    );
+    expect(engine.getResumePoint()?.workflow_step_participations[childIdentity]).toEqual({ report_names: [] });
+    if (failedAttempt === 2) {
+      expect(readFileSync(join(reportDir, 'testing.md'), 'utf-8')).toContain('attempt 1');
+    }
+  });
+
+  it('stops a parallel report producer before status judgment when a later step requires its report', async () => {
+    const backend = makeStep('backend', {
+      outputContracts: [{ name: 'backend.md', format: 'backend report' }],
+    });
+    const testing = makeStep('testing', {
+      outputContracts: [{ name: 'testing.md', format: 'testing report' }],
+    });
+    const config: WorkflowConfig = {
+      name: 'parallel-required-report',
+      initialStep: 'reviewers',
+      maxSteps: 3,
+      steps: [
+        makeStep('reviewers', {
+          parallel: [backend, testing],
+          rules: [makeRule('complete', 'consumer')],
+        }),
+        makeStep('consumer', {
+          instruction: 'Use {report:testing.md}',
+          rules: [makeRule('complete', 'COMPLETE')],
+        }),
+      ],
+    };
+    vi.mocked(runReportPhase).mockImplementation(async (step, _iteration, context, onReportWritten) => {
+      if (step.name === 'testing') {
+        throw new ReportPhaseGenerationError('testing report failed', 'provider_error', {
+          requiresFreshPhase1: false,
+          failureReasons: ['provider_error'],
+        });
+      }
+      mkdirSync(context.reportDir, { recursive: true });
+      writeFileSync(join(context.reportDir, 'backend.md'), 'backend report');
+      onReportWritten?.('backend.md');
+    });
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: persona ?? '', userInstruction: instruction });
+      return makeResponse({ persona: persona ?? 'reviewer', content: 'approved' });
+    });
+    const judgedSteps: string[] = [];
+    vi.mocked(mockRuleEvaluation).mockImplementation((step) => {
+      judgedSteps.push(step.name);
+      return { index: 0, method: 'phase3_tag' };
+    });
+    const engine = new WorkflowEngine(config, tmpDir, 'Review changes', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+    });
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(judgedSteps).not.toContain('testing');
+    expect(judgedSteps).not.toContain('reviewers');
+    expect(judgedSteps).not.toContain('consumer');
+    expect(state.stepOutputs.get('testing')?.error).toContain('testing.md');
+    expect(state.stepOutputs.get('testing')?.failureCategory).toBe('provider_error');
   });
 
   it('should allow OpenCode default model for a static participant after dropping a mismatched candidate', async () => {

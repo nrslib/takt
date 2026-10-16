@@ -92,28 +92,49 @@ steps:
         interactive_only: true
 
   - name: review
-    tags:
-      - review
-    edit: false
-    persona: coding-reviewer
-    policy:
-      - contract-change
-      - review
-      - coding
-      - testing
-      - ai-antipattern
-    knowledge:
-      - architecture
-      - unit-testing
-      - e2e-testing
+    uses: simple-coding-review
+    with:
+      review_policy:
+        - review
+        - coding
+        - testing
+        - ai-antipattern
+      review_knowledge:
+        - architecture
+        - unit-testing
+        - e2e-testing
+      review_instruction:
+        simple-review-coding
     dynamic_facets:
       pool: coding-facets
-    pass_previous_response: false
-    instruction: simple-review-coding
-    output_contracts:
-      report:
-        - name: coding-review.md
-          format: coding-review
+    rules:
+      - condition: approved
+        next: supervise
+      - condition: needs_fix
+        next: remediation
+
+  - name: follow-up-review
+    input_reports:
+      from_step: remediation
+      reports:
+        - fix-plan.md
+        - fix-report.md
+        - fix-verification.md
+    uses: simple-coding-review
+    with:
+      review_policy:
+        - review
+        - coding
+        - testing
+        - ai-antipattern
+      review_knowledge:
+        - architecture
+        - unit-testing
+        - e2e-testing
+      review_instruction:
+        simple-review-coding
+    dynamic_facets:
+      pool: coding-facets
     rules:
       - condition: approved
         next: supervise
@@ -143,13 +164,20 @@ steps:
         - e2e-testing
     rules:
       - condition: COMPLETE
-        next: review
+        next: follow-up-review
+      - condition: no_fix
+        next: supervise
       - condition: need_replan
         next: plan
       - condition: ABORT
         next: ABORT
 
   - name: supervise
+    input_reports:
+      from_step: remediation
+      reports:
+        - review-resolution.md
+      optional_if_unrun: true
     tags:
       - review
       - final-gate

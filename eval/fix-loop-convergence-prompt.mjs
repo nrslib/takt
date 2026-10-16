@@ -30,12 +30,12 @@ const ROLES = {
     afterInstruction: [DRY_RUN_NOTE],
   },
   monitor: {
-    intro: 'あなたは TAKT ワークフローの loop_monitor 判定を行う supervisor エージェントである。fix-retry と fix-verifier のサイクルが閾値 4 回に達した（{cycle_count}=4）。次の instruction 全文に従うこと。',
+    intro: 'あなたは TAKT ワークフローの loop_monitor 判定を行う supervisor エージェントである。fix と fix-replan のサイクルが閾値 4 回に達した（{cycle_count}=4）。次の instruction 全文に従うこと。',
     instruction: 'instructions/loop-monitor-reviewers-fix.md',
     afterInstruction: [[
       '判定の選択肢は次の4つである。ちょうど1つを選ぶこと。',
-      '1. 健全（修正進捗があり、報告内容も収束している）→ fix-retry へ継続',
-      '2. 修正未完了または報告未収束だが、次の修正が実行可能である → fix-retry へ継続',
+      '1. 健全（修正進捗があり、報告内容も収束している）→ fix へ継続',
+      '2. 修正未完了または報告未収束だが、次の修正が実行可能である → fix へ継続',
       '3. 修正方針の前提を変える必要があり、再計画が実行可能である → fix-replan へ',
       '4. 要件を満たす実現可能な打開手段がない → ABORT',
     ].join('\n')],
