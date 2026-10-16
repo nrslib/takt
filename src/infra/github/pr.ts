@@ -5,6 +5,7 @@
  */
 
 import { execFile, execFileSync } from 'node:child_process';
+import { z } from 'zod';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { fetchPaginatedApi } from '../git/paginated-api.js';
 import { isTaktManagedPrBody } from '../git/format.js';
@@ -17,6 +18,7 @@ import type {
   CommentResult,
   MergeResult,
   PrListItem,
+  PrSelectionData,
   ListOpenPrsOptions,
   PrReviewData,
   PrReviewComment,
@@ -178,6 +180,38 @@ export function fetchPrListItem(prNumber: number, cwd: string): PrListItem | und
     throw new Error(`Invalid pull request #${prNumber} details`);
   }
   return response.state === 'open' ? toPrListItem(response) : undefined;
+}
+
+const prSelectionDetailsSchema = z.object({
+  number: z.number().int().positive().safe(),
+  title: z.string().min(1),
+  body: z.string().nullable(),
+  changed_files: z.number().int().nonnegative().safe(),
+});
+const prSelectionFilesSchema = z.array(z.object({ filename: z.string().min(1) }));
+
+export function fetchPrSelectionData(prNumber: number, cwd: string): PrSelectionData {
+  if (!Number.isSafeInteger(prNumber) || prNumber < 1) {
+    throw new Error('PR number must be a positive safe integer');
+  }
+  const repo = resolveRepositoryNameWithOwner(cwd);
+  const endpoint = `repos/${repo}/pulls/${prNumber}`;
+  const raw = execFileSync('gh', ['api', endpoint], {
+    cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'],
+    maxBuffer: GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES,
+  });
+  const details = prSelectionDetailsSchema.parse(JSON.parse(raw) as unknown);
+  if (details.number !== prNumber) throw new Error('PR selection metadata refers to a different PR');
+  const files = Array.from(fetchPaginatedApi<string>({
+    command: 'gh', cwd, context: `pull request #${prNumber} files`, allPages: true,
+    maxBuffer: GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES,
+    initialEndpoint: `${endpoint}/files?per_page=${OPEN_PRS_PER_PAGE}&page=1`,
+    parsePage: (body) => prSelectionFilesSchema.parse(JSON.parse(body) as unknown).map((file) => file.filename),
+  }));
+  if (files.length !== details.changed_files) {
+    throw new Error(`Incomplete file list for pull request #${prNumber}`);
+  }
+  return { number: details.number, title: details.title, body: details.body ?? '', files };
 }
 
 export function listOpenPrs(cwd: string, options?: { readonly allPages?: false }): PrListItem[];
