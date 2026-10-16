@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stringify as stringifyYaml } from 'yaml';
 import { createTaktMcpServer } from '../app/mcp/server.js';
 import type { SessionContext } from '../features/interactive/aiCaller.js';
@@ -13,6 +13,15 @@ import { getTaktRun, listTaktTasks } from '../features/mcp/operations.js';
 import { resolveCloneBaseDir } from '../infra/task/index.js';
 import { getCloneMetaPath } from '../infra/task/clone-meta.js';
 import { MCP_RESPONSE_MAX_BYTES } from '../features/mcp/response.js';
+import { tellTaktGoalRun } from '../features/mcp/goalTellOperations.js';
+import { goalTellSummary } from '../features/mcp/goalResponse.js';
+import * as liveIntervention from '../features/tasks/liveIntervention.js';
+import * as goalNotifications from '../features/manager/notifications.js';
+import { ensureManagerRun } from '../features/manager/autoRun.js';
+import { GoalStore } from '../infra/goals/store.js';
+import type { Goal } from '../infra/goals/schema.js';
+import { TaskRunner, type TaskState } from '../infra/task/index.js';
+import { goalRecord } from './helpers/goal-fixtures.js';
 
 const { readFileSyncMock, readRunMetaBySlugMock } = vi.hoisted(() => ({
   readFileSyncMock: vi.fn(),
@@ -34,6 +43,141 @@ vi.mock('../core/workflow/run/run-meta.js', async (importOriginal) => {
   return { ...actual, readRunMetaBySlug: readRunMetaBySlugMock };
 });
 
+
+describe('goal tell operation', () => {
+  let goal: Goal;
+  let task: TaskState;
+  let target: liveIntervention.TellableRunningTask;
+  const input = { cwd: '/project', goalId: goalRecord().id, taskName: 'active', content: '  追加指示\n ' };
+  const signal = new AbortController().signal;
+
+  beforeEach(() => {
+    goal = goalRecord();
+    task = { name: 'active', kind: 'running', status: 'running', goalId: goal.id, runSlug: 'active-run',
+      worktree: true, worktreePath: '/project/.takt/worktrees/active',
+      filePath: '/project/.takt/tasks.yaml', createdAt: '2026-10-15T00:00:00Z' };
+    target = { task, runSlug: 'active-run', worktreePath: task.worktreePath!, meta: {
+      task: 'work', workflow: 'safe', runSlug: 'active-run', runRoot: '.takt/runs/active-run',
+      reportDirectory: 'reports', contextDirectory: 'context', logsDirectory: 'logs',
+      status: 'running', startTime: '2026-10-15T00:00:00Z',
+    } };
+    vi.spyOn(GoalStore.prototype, 'get').mockImplementation(async () => goal);
+    vi.spyOn(GoalStore.prototype, 'update').mockImplementation(async (_id, transform) => {
+      goal = transform(goal);
+      return goal;
+    });
+    vi.spyOn(TaskRunner.prototype, 'listTaskStateItems').mockImplementation(() => [task]);
+    vi.spyOn(liveIntervention, 'resolveTellableRunningTask').mockImplementation(() => target);
+    vi.spyOn(liveIntervention, 'issueTellableRunningTask').mockImplementation(async () => ({ instructionId: 7, target }));
+    vi.spyOn(goalNotifications, 'resolveManagerNotificationOptions').mockReturnValue({
+      mainMerge: 'approve', webhookUrl: undefined,
+      policy: { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true },
+    });
+    vi.spyOn(goalNotifications, 'sendSavedGoalNotifications').mockResolvedValue();
+  });
+
+  afterEach(() => {
+    for (const mock of [GoalStore.prototype.get, GoalStore.prototype.update, TaskRunner.prototype.listTaskStateItems,
+      liveIntervention.resolveTellableRunningTask, liveIntervention.issueTellableRunningTask,
+      goalNotifications.resolveManagerNotificationOptions, goalNotifications.sendSavedGoalNotifications]) {
+      vi.mocked(mock).mockRestore();
+    }
+  });
+
+  it('issues the instruction before saving the original work log, then notifies and returns only saved identities', async () => {
+    const previous = goal;
+    vi.mocked(liveIntervention.issueTellableRunningTask).mockImplementation(async () => {
+      expect(goal.workLog).toEqual(previous.workLog);
+      expect(GoalStore.prototype.update).not.toHaveBeenCalled();
+      expect(goalNotifications.sendSavedGoalNotifications).not.toHaveBeenCalled();
+      return { instructionId: 7, target };
+    });
+    vi.mocked(GoalStore.prototype.update).mockImplementation(async (_id, transform) => {
+      expect(liveIntervention.issueTellableRunningTask).toHaveResolvedWith({ instructionId: 7, target });
+      expect(goalNotifications.sendSavedGoalNotifications).not.toHaveBeenCalled();
+      goal = transform(goal);
+      return goal;
+    });
+    vi.mocked(goalNotifications.sendSavedGoalNotifications).mockImplementation(async (_cwd, before, current) => {
+      expect(before).toEqual(previous);
+      expect(current.workLog.at(-1)?.summary).toBe(input.content);
+      expect(liveIntervention.issueTellableRunningTask).toHaveBeenCalledOnce();
+    });
+    const result = await tellTaktGoalRun(input, {}, signal);
+    expect(result.isError).toBeUndefined();
+    expect(liveIntervention.issueTellableRunningTask).toHaveBeenCalledExactlyOnceWith(input.cwd, 'active-run', input.content);
+    expect(goal.workLog.at(-1)?.summary).toBe(input.content);
+    expect(JSON.parse(firstTextContent(result.content))).toEqual({
+      goalId: goal.id, taskName: task.name, runSlug: 'active-run', instructionId: 7, workLogEntryId: goal.workLog.at(-1)!.id,
+    });
+    expect(goalNotifications.sendSavedGoalNotifications).toHaveBeenCalledOnce();
+  });
+
+  it.each(['missing task', 'different goal', 'not running', 'missing run', 'different run task', 'different run goal'])(
+    'rejects %s before saving or notifying', async (condition) => {
+      if (condition === 'missing task') vi.mocked(TaskRunner.prototype.listTaskStateItems).mockReturnValue([]);
+      if (condition === 'different goal') task = { ...task, goalId: '550e8400-e29b-41d4-a716-446655440001' };
+      if (condition === 'not running') task = { ...task, kind: 'completed', status: 'completed' };
+      if (condition === 'missing run') task = { ...task, runSlug: undefined };
+      if (condition === 'different run task') target = { ...target, task: { ...task, name: 'other' } };
+      if (condition === 'different run goal') target = { ...target, task: { ...task, goalId: undefined } };
+      const result = await tellTaktGoalRun(input, {}, signal);
+      expect(result.isError).toBe(true);
+      expect(liveIntervention.issueTellableRunningTask).not.toHaveBeenCalled();
+      expect(GoalStore.prototype.update).not.toHaveBeenCalled();
+      expect(goalNotifications.sendSavedGoalNotifications).not.toHaveBeenCalled();
+      expect(goal.workLog).toEqual([]);
+    },
+  );
+
+  it.each(['write failed', 'EACCES: permission denied', 'ENOENT: no such file or directory'])(
+    'reports the issued instruction identity without notifying when saving fails with %s', async (message) => {
+      vi.mocked(GoalStore.prototype.update).mockRejectedValue(new Error(message));
+      const result = await tellTaktGoalRun(input, {}, signal);
+      expect(result.isError).toBe(true);
+      expect(goal.workLog).toEqual([]);
+      expect(firstTextContent(result.content)).toContain('Instruction 7 was issued');
+      expect(firstTextContent(result.content)).toContain('saving the goal work log failed');
+      expect(liveIntervention.issueTellableRunningTask).toHaveBeenCalledExactlyOnceWith(input.cwd, 'active-run', input.content);
+      expect(goalNotifications.sendSavedGoalNotifications).not.toHaveBeenCalled();
+    },
+  );
+
+  it('returns an error without saving or notifying when issuing the instruction fails', async () => {
+    const previous = goal;
+    vi.mocked(liveIntervention.issueTellableRunningTask).mockRejectedValue(new Error('write failed'));
+    const result = await tellTaktGoalRun(input, {}, signal);
+    expect(result.isError).toBe(true);
+    expect(goal).toEqual(previous);
+    expect(GoalStore.prototype.update).not.toHaveBeenCalled();
+    expect(goalNotifications.sendSavedGoalNotifications).not.toHaveBeenCalled();
+  });
+
+  it('formats only the instruction and work log identities', () => {
+    expect(goalTellSummary(goal.id, 'active', 'active-run', 7, 'saved-id')).toEqual({
+      goalId: goal.id, taskName: 'active', runSlug: 'active-run', instructionId: 7, workLogEntryId: 'saved-id',
+    });
+  });
+
+  it.each(['paused', 'aborted', 'not running'] as const)('does not launch the runner after rejecting %s work through MCP', async (condition) => {
+    if (condition === 'not running') task = { ...task, kind: 'pending', status: 'pending' };
+    else goal = { ...goal, executionStatus: condition };
+    vi.mocked(ensureManagerRun).mockClear();
+    const server = createTaktMcpServer({}, { toolSet: 'manager', allowedProjectRoot: process.cwd() });
+    const client = new Client({ name: 'tell-no-launch', version: '1' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const result = await client.callTool({ name: 'takt_tell_run', arguments: { ...input, cwd: process.cwd() } });
+      expect(result.isError).toBe(true);
+      expect(GoalStore.prototype.get).toHaveBeenCalledWith(input.goalId);
+      expect(ensureManagerRun).not.toHaveBeenCalled();
+      expect(liveIntervention.issueTellableRunningTask).not.toHaveBeenCalled();
+      expect(GoalStore.prototype.update).not.toHaveBeenCalled();
+    } finally { await client.close(); await server.close(); }
+  });
+});
 
 function writeRunFixture(
   baseCwd: string,
@@ -674,6 +818,38 @@ describe('MCP package entrypoint', () => {
     } finally {
       await client.close(); await server.close();
     }
+  });
+
+  it.each(['manager', 'all', 'read-only', undefined] as const)('exposes the appropriate tell schema for tool set %s', async (toolSet) => {
+    const server = createTaktMcpServer({}, { toolSet });
+    const client = new Client({ name: 'tell-schema-client', version: '1' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const tools = (await client.listTools()).tools.filter(({ name }) => name === 'takt_tell_run');
+      if (toolSet === 'read-only') {
+        expect(tools).toEqual([]);
+        return;
+      }
+      expect(tools).toHaveLength(1);
+      const tool = tools[0]!;
+      const fields = toolSet === 'manager' ? ['content', 'cwd', 'goalId', 'taskName'] : ['content', 'cwd', 'runSlug'];
+      expect(Object.keys(tool.inputSchema.properties!).sort()).toEqual(fields);
+      expect(tool.inputSchema.required?.slice().sort()).toEqual(fields);
+      expect(tool.inputSchema.additionalProperties).toBe(false);
+      for (const selector of ['Responses fit 64 KiB, with explicit truncation', 'takt_get_run', 'runSlug', 'view instructions', 'instructionId', 'offset/maxBytes']) {
+        expect(tool.description).toContain(selector);
+      }
+      if (toolSet === 'manager') {
+        vi.mocked(ensureManagerRun).mockClear();
+        const result = await client.callTool({ name: 'takt_tell_run', arguments: {
+          cwd: process.cwd(), goalId: goalRecord().id, taskName: 'task', content: 'instruction', runSlug: 'arbitrary-run',
+        } });
+        expect(result.isError).toBe(true);
+        expect(ensureManagerRun).not.toHaveBeenCalled();
+      }
+    } finally { await client.close(); await server.close(); }
   });
 
   it('can register the same server with read-only task-state tools', async () => {

@@ -18,6 +18,7 @@ import { getRepertoireDir } from '../infra/config/paths.js';
 import { GoalStore } from '../infra/goals/store.js';
 import { GoalSchema } from '../infra/goals/schema.js';
 import { TaskRunner } from '../infra/task/index.js';
+import { LiveInterventionFileStore } from '../infra/workflow/live-intervention-store.js';
 import { goalId } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 import { registerFixtureGoal } from './helpers/registered-goal.js';
@@ -1198,6 +1199,193 @@ describe('local goal integration and inspection through manager MCP', () => {
       expect(JSON.parse(firstTextContent(after.content))).toMatchObject({ included: true, ahead: 0 });
     });
   });
+});
+
+describe('manager instructions to running goal work', () => {
+  let cwd: string;
+  let outside: string;
+
+  beforeEach(async () => {
+    cwd = realpathSync(mkdtempSync(join(tmpdir(), 'takt-goal-tell-')));
+    outside = realpathSync(mkdtempSync(join(tmpdir(), 'takt-goal-tell-outside-')));
+    for (const root of [cwd, outside]) {
+      initializeRepository(root);
+      mkdirSync(join(root, '.takt', 'workflows'), { recursive: true });
+      writeFileSync(join(root, '.takt', 'config.yaml'), 'provider: mock\nbranch_name_strategy: romaji\nmanager:\n  auto_run: false\n');
+      writeFileSync(join(root, '.takt', 'workflows', 'safe.yaml'), [
+        'name: safe', 'max_steps: 2', 'initial_step: work', 'steps:',
+        '  - name: work', '    persona: coder', '    instruction: Implement validation',
+        '    rules:', '      - condition: when(true)', '        next: COMPLETE',
+      ].join('\n'));
+      await registerFixtureGoal(root);
+    }
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  });
+
+  async function startGoalTask(client: Client, root = cwd) {
+    const enqueued = await client.callTool({ name: 'takt_enqueue_goal_task', arguments: {
+      cwd: root, goalId, purpose: '入力検証', task: '入力検証を実装する', workflow: 'safe',
+    } });
+    expect(enqueued.isError, firstTextContent(enqueued.content)).toBeUndefined();
+    const { taskName } = JSON.parse(firstTextContent(enqueued.content)) as { taskName: string };
+    const runner = new TaskRunner(root);
+    expect(runner.claimNextTasks(1)[0]?.name).toBe(taskName);
+    const runSlug = 'goal-active-run';
+    const worktreePath = join(root, '.takt', 'worktrees', 'active');
+    runner.updateRunningTaskExecution(taskName, { runSlug, worktreePath });
+    const runDirectory = join(worktreePath, '.takt', 'runs', runSlug);
+    mkdirSync(join(runDirectory, 'logs'), { recursive: true });
+    mkdirSync(join(runDirectory, 'reports'), { recursive: true });
+    writeFileSync(join(runDirectory, 'meta.json'), JSON.stringify({
+      task: '入力検証を実装する', workflow: 'safe', runSlug,
+      runRoot: `.takt/runs/${runSlug}`, reportDirectory: `.takt/runs/${runSlug}/reports`,
+      contextDirectory: `.takt/runs/${runSlug}/context`, logsDirectory: `.takt/runs/${runSlug}/logs`,
+      status: 'running', startTime: '2026-10-15T00:00:00Z', currentStep: 'work',
+    }));
+    return { taskName, runSlug, runDirectory, root,
+      interventionPath: join(root, '.takt', 'runs', runSlug, 'interventions.jsonl') };
+  }
+
+  function snapshot(target: Awaited<ReturnType<typeof startGoalTask>>) {
+    const paths = [join(target.root, '.takt', 'goals', goalId, 'goal.json'),
+      join(target.root, '.takt', 'tasks.yaml'), join(target.runDirectory, 'meta.json'), target.interventionPath];
+    return paths.map((path) => existsSync(path) ? readFileSync(path, 'utf8') : null);
+  }
+
+  it.each([
+    { name: 'whitespace and newlines', content: '  範囲は入力検証のみ\n\t追加の変更は不要  \n' },
+    { name: 'maximum-length text and large history', content: 'x'.repeat(128 * 1024) },
+  ])('sends and rereads $name for the task enqueued on the same manager connection', async ({ content }) => {
+    await withServer(cwd, 'manager', async (client) => {
+      const target = await startGoalTask(client);
+      const store = new GoalStore(cwd);
+      await store.update(goalId, (goal) => ({ ...goal, workLog: Array.from({ length: 80 }, (_, index) => ({
+        id: `550e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`,
+        summary: '既存記録'.repeat(1000), recordedAt: '2026-10-15T00:00:00Z',
+      })) }));
+      const before = await store.get(goalId);
+      const result = await client.callTool({ name: 'takt_tell_run', arguments: {
+        cwd, goalId, taskName: target.taskName, content,
+      } });
+      expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
+      const payload = JSON.parse(firstTextContent(result.content));
+      expect(payload).toEqual({ goalId, taskName: target.taskName, runSlug: target.runSlug,
+        instructionId: 1, workLogEntryId: expect.any(String) });
+      const saved = await store.get(goalId);
+      expect(saved.workLog.slice(0, -1)).toEqual(before.workLog);
+      expect(saved.workLog.at(-1)).toMatchObject({ id: payload.workLogEntryId, summary: content });
+      const events = readFileSync(target.interventionPath, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+      expect(events).toEqual([expect.objectContaining({ type: 'issued', instructionId: payload.instructionId, content })]);
+      const afterSend = snapshot(target);
+      let instruction = '';
+      let workLog = '';
+      let instructionOffset: number | null = 0;
+      let workLogOffset: number | null = 0;
+      while (instructionOffset !== null) {
+        const read = await client.callTool({ name: 'takt_get_run', arguments: {
+          cwd, runSlug: payload.runSlug, view: 'instructions', instructionId: payload.instructionId,
+          offset: instructionOffset, maxBytes: 4096,
+        } });
+        expect(read.isError, firstTextContent(read.content)).toBeUndefined();
+        const page = JSON.parse(firstTextContent(read.content)).instruction;
+        instruction += page.content;
+        instructionOffset = page.nextOffset;
+      }
+      while (workLogOffset !== null) {
+        const read = await client.callTool({ name: 'takt_get_goal', arguments: {
+          cwd, goalId, path: 'workLog.summary', recordId: payload.workLogEntryId,
+          textOffset: workLogOffset, maxBytes: 4096,
+        } });
+        expect(read.isError, firstTextContent(read.content)).toBeUndefined();
+        const page = JSON.parse(firstTextContent(read.content));
+        workLog += page.content;
+        workLogOffset = page.nextOffset;
+      }
+      expect(instruction).toBe(content);
+      expect(workLog).toBe(content);
+      expect(snapshot(target)).toEqual(afterSend);
+    });
+  });
+
+  it('reports the issued instruction identity and preserves it when the work log update fails', async () => {
+    await withServer(cwd, 'manager', async (client) => {
+      const target = await startGoalTask(client);
+      const before = snapshot(target);
+      const content = '  追加指示\n ';
+      const update = vi.spyOn(GoalStore.prototype, 'update').mockRejectedValue(new Error('write failed'));
+      const result = await client.callTool({ name: 'takt_tell_run', arguments: {
+        cwd, goalId, taskName: target.taskName, content,
+      } });
+      expect(result.isError).toBe(true);
+      expect(update).toHaveBeenCalledExactlyOnceWith(goalId, expect.any(Function));
+      const instructionMatch = /Instruction (\d+) was issued/.exec(firstTextContent(result.content));
+      expect(instructionMatch).not.toBeNull();
+      const instructionId = Number(instructionMatch![1]);
+      const read = await client.callTool({ name: 'takt_get_run', arguments: {
+        cwd, runSlug: target.runSlug, view: 'instructions', instructionId,
+      } });
+      expect(read.isError, firstTextContent(read.content)).toBeUndefined();
+      expect(JSON.parse(firstTextContent(read.content)).instruction).toMatchObject({ instructionId, content });
+      const events = readFileSync(target.interventionPath, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+      expect(events).toEqual([expect.objectContaining({ type: 'issued', instructionId, content })]);
+      expect(snapshot(target).slice(0, 3)).toEqual(before.slice(0, 3));
+    });
+  });
+
+  it.each(['completed', 'failed'] as const)(
+    'rejects a %s intervention record without changing the saved goal, task, run or instruction file', async (status) => {
+      await withServer(cwd, 'manager', async (client) => {
+        const target = await startGoalTask(client);
+        await new LiveInterventionFileStore(cwd, target.runSlug).recordTerminal(status);
+        expect(new TaskRunner(cwd).listTaskStateItems().find((task) => task.name === target.taskName)?.kind).toBe('running');
+        expect(JSON.parse(readFileSync(join(target.runDirectory, 'meta.json'), 'utf8')).status).toBe('running');
+        const before = snapshot(target);
+        const result = await client.callTool({ name: 'takt_tell_run', arguments: {
+          cwd, goalId, taskName: target.taskName, content: '  追加指示\n ',
+        } });
+        expect(result.isError).toBe(true);
+        expect(snapshot(target)).toEqual(before);
+      });
+    },
+  );
+
+  it.each(['outside repository', 'different goal', 'pending task', 'aborted goal', 'paused goal', 'direct runSlug'] as const)(
+    'rejects %s without changing the saved goal, task, run or instruction file', async (condition) => {
+      await withServer(cwd, 'manager', async (client) => {
+        const target = condition === 'outside repository'
+          ? await withServer(outside, 'manager', (other) => startGoalTask(other, outside))
+          : await startGoalTask(client);
+        if (condition === 'aborted goal' || condition === 'paused goal') {
+          await new GoalStore(cwd).update(goalId, (goal) => ({ ...goal,
+            executionStatus: condition === 'aborted goal' ? 'aborted' : 'paused' }));
+        }
+        if (condition === 'different goal' || condition === 'pending task') {
+          const path = join(cwd, '.takt', 'tasks.yaml');
+          const { parse, stringify } = await import('yaml');
+          const queue = parse(readFileSync(path, 'utf8'));
+          if (condition === 'different goal') queue.tasks[0].goal_id = '550e8400-e29b-41d4-a716-446655440001';
+          else queue.tasks[0].status = 'pending';
+          writeFileSync(path, stringify(queue));
+        }
+        const before = snapshot(target);
+        const localGoal = readFileSync(join(cwd, '.takt', 'goals', goalId, 'goal.json'), 'utf8');
+        const result = await client.callTool({ name: 'takt_tell_run', arguments: {
+          cwd: target.root, goalId, taskName: target.taskName, content: '追加指示',
+          ...(condition === 'direct runSlug' ? { runSlug: target.runSlug } : {}),
+        } });
+        expect(result.isError).toBe(true);
+        expect(snapshot(target)).toEqual(before);
+        expect(readFileSync(join(cwd, '.takt', 'goals', goalId, 'goal.json'), 'utf8')).toBe(localGoal);
+        expect(existsSync(target.interventionPath)).toBe(false);
+      });
+    },
+  );
 });
 
 async function withServer<T>(

@@ -172,6 +172,12 @@ export const tellRunInputSchema = z.object({
   }).describe('Additional instruction to deliver to the selected running clone task.'),
 }).strict();
 
+export const tellGoalRunInputSchema = goalWriteInputSchema.extend({
+  taskName: goalTaskNameSchema,
+  content: tellRunInputSchema.shape.content,
+});
+
+export type TellGoalRunInput = z.infer<typeof tellGoalRunInputSchema>;
 export type EnqueueTaskInput = z.infer<typeof enqueueTaskInputSchema>;
 export type ListTasksInput = z.infer<typeof listTasksInputSchema>;
 export type GetRunInput = z.infer<typeof getRunInputSchema>;
