@@ -315,7 +315,8 @@ export class TaskRetryService {
         target,
         'pending',
         {
-          startStep: options.startStep,
+          startStep: options.freshStart && options.startStep === undefined && options.restartPoint === undefined
+            ? target.start_step : options.startStep,
           retryNote: options.retryNote,
           resumePoint: options.resumePoint,
           workflow: options.workflow,

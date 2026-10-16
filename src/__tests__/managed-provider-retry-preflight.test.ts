@@ -7,6 +7,7 @@ import { prepareFailedTaskRetry } from '../features/tasks/taskRetryPreparation.j
 import { persistFailedTaskRetry } from '../features/tasks/taskRetryPersistence.js';
 import { inspectReusedWorktreeExecution } from '../features/tasks/execute/reusedWorktree.js';
 import { TaskRunner, type TaskInfo } from '../infra/task/index.js';
+import type { WorkflowRestartPoint } from '../core/models/index.js';
 import * as config from '../infra/config/index.js';
 import { checkWorkflowProviders } from '../infra/config/runtime-provider/execution-preparation.js';
 
@@ -154,6 +155,48 @@ describe('managed provider preflight for reused worktrees', () => {
     expect(() => runner.requeueTask(added.name, ['failed'], { freshStart: true }))
       .toThrow('execution or worktree history exists');
     expect(runner.listFailedTasks()[0]?.kind).toBe('failed');
+  });
+
+  it('keeps the saved start step when the direct fresh clone retry omits a start choice', () => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-preflight-fresh-start-step-'));
+    temporaryProjects.push(project);
+    const runner = new TaskRunner(project);
+    const added = runner.addTask('Task', { worktree: true, workflow: 'default', start_step: 'implement' });
+    runner.claimNextTasks(1);
+    runner.forceFailRunningTask(added.name, { error: 'Git clone failed' });
+    runner.requeueTask(added.name, ['failed'], { startStep: 'implement' });
+    runner.claimNextTasks(1);
+    runner.forceFailRunningTask(added.name, { error: 'Git clone failed' });
+    expect(runner.listFailedTasks()[0]?.data?.start_step).toBe('implement');
+
+    runner.requeueTask(added.name, ['failed'], { freshStart: true });
+
+    expect(runner.listTasks()[0]?.data?.start_step).toBe('implement');
+  });
+
+  const selectedRestartPoint: WorkflowRestartPoint = {
+    stack: [{ workflow: 'default', workflow_ref: 'default', step: 'review', kind: 'agent' }],
+  };
+  it.each([
+    { selection: 'explicit start step', options: { startStep: 'review' }, startStep: 'review', restartPoint: undefined },
+    { selection: 'explicit restart point', options: { restartPoint: selectedRestartPoint },
+      startStep: undefined, restartPoint: selectedRestartPoint },
+  ])('honors $selection over the saved start step for a fresh clone', ({ options, startStep, restartPoint }) => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-preflight-fresh-selected-start-'));
+    temporaryProjects.push(project);
+    const runner = new TaskRunner(project);
+    const added = runner.addTask('Task', { worktree: true, workflow: 'default', start_step: 'implement' });
+    runner.claimNextTasks(1);
+    runner.forceFailRunningTask(added.name, { error: 'Git clone failed' });
+    runner.requeueTask(added.name, ['failed'], { startStep: 'implement' });
+    runner.claimNextTasks(1);
+    runner.forceFailRunningTask(added.name, { error: 'Git clone failed' });
+    expect(runner.listFailedTasks()[0]?.data?.start_step).toBe('implement');
+
+    runner.requeueTask(added.name, ['failed'], { freshStart: true, ...options });
+
+    expect(runner.listTasks()[0]?.data?.start_step).toBe(startStep);
+    expect(runner.listTasks()[0]?.data?.restart_point).toEqual(restartPoint);
   });
 
   it.each([true, false])('checks only the SDK of the workflow used by a reused clone with project sync %s', async (sync) => {
