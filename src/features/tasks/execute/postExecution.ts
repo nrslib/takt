@@ -152,7 +152,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
     return { taskFailed: true, taskError: LOCAL_PUSH_FAILURE_MESSAGE };
   }
 
-  if (commitResult.commitHash && branch && (shouldPublishBranchToOrigin === true || shouldCreatePr)) {
+  if (commitResult.publishedHead && branch && (shouldPublishBranchToOrigin === true || shouldCreatePr)) {
     abortSignal?.throwIfAborted();
     try {
       pushBranch(projectCwd, branch);
@@ -166,7 +166,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
       const pushFailureMessage = [
         'Workflow completed, but publishing failed. Local results are preserved.',
         `Branch: ${branch}`,
-        `Commit: ${commitResult.commitHash}`,
+        `Commit: ${commitResult.publishedHead}`,
         'Remote: origin',
         `${ORIGIN_PUSH_FAILURE_MESSAGE} ${pushDetail}`.trim(),
         'TAKT does not prompt for Git HTTPS credentials.',
@@ -181,7 +181,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
     }
   }
 
-  if (commitResult.commitHash && branch && shouldCreatePr) {
+  if (commitResult.publishedHead && branch && shouldCreatePr) {
     abortSignal?.throwIfAborted();
     const resolvedGitProvider = gitProvider ?? getGitProvider();
     const report = workflowIdentifier ? `Workflow \`${workflowIdentifier}\` completed successfully.` : 'Task completed successfully.';

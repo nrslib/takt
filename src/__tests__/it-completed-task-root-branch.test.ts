@@ -116,8 +116,93 @@ describe('completed task actions with root branch materialized on completion', (
 
     expect(result.success).toBe(true);
     expect(result.commitHash).toBeTruthy();
+    expect(result.commitHash).toBe(git(fixture.worktreeDir, ['rev-parse', '--short', 'HEAD']));
+    expect(result.publishedHead).toBe(git(fixture.worktreeDir, ['rev-parse', 'HEAD']));
+    expect(git(fixture.rootDir, ['rev-parse', fixture.branch])).toBe(result.publishedHead);
     expect(git(fixture.rootDir, ['branch', '--list', fixture.branch])).toContain(fixture.branch);
     expect(git(fixture.rootDir, ['show', `${fixture.branch}:slides/deck.md`])).toContain('# slides');
+  });
+
+  it.each([true, false])('publishes clean agent commits and rechecks the same clone after publication (branch specified: %s)', async (specified) => {
+    const { worktreeDir, rootDir, branch } = fixture;
+    const target = specified ? branch : undefined;
+    rmSync(join(worktreeDir, 'slides', 'deck.md'));
+    const initial = await autoCommitAndPush(worktreeDir, 'agent task', rootDir, target);
+    expect(initial.success).toBe(true);
+    expect(initial.publishedHead).toBeUndefined();
+    expect(git(rootDir, ['branch', '--list', branch])).toBe('');
+
+    for (const content of ['first agent commit', 'second agent commit']) {
+      writeFileSync(join(worktreeDir, 'slides', 'deck.md'), content);
+      git(worktreeDir, ['add', '-A']);
+      git(worktreeDir, ['commit', '-m', content]);
+      const head = git(worktreeDir, ['rev-parse', 'HEAD']);
+      expect(git(worktreeDir, ['status', '--porcelain'])).toBe('');
+
+      const published = await autoCommitAndPush(worktreeDir, 'agent task', rootDir, target);
+      expect(published.success).toBe(true);
+      expect(published.localPushFailed).toBeUndefined();
+      expect(published.commitHash).toBeUndefined();
+      expect(published.publishedHead).toBe(head);
+      expect(git(rootDir, ['rev-parse', branch])).toBe(head);
+      expect(git(rootDir, ['show', `${branch}:slides/deck.md`])).toBe(content);
+
+      const repeated = await autoCommitAndPush(worktreeDir, 'agent task', rootDir, target);
+      expect(repeated.success).toBe(true);
+      expect(repeated.commitHash).toBeUndefined();
+      expect(repeated.publishedHead).toBeUndefined();
+      expect(repeated.localPushFailed).toBeUndefined();
+    }
+  });
+
+  it('publishes a clean HEAD even when its object is already present without a published branch', async () => {
+    const { worktreeDir, rootDir, branch } = fixture;
+    git(worktreeDir, ['add', '-A']);
+    git(worktreeDir, ['commit', '-m', 'agent commit']);
+    const head = git(worktreeDir, ['rev-parse', 'HEAD']);
+    git(rootDir, ['fetch', '--no-write-fetch-head', worktreeDir, 'HEAD']);
+
+    const result = await autoCommitAndPush(worktreeDir, 'agent task', rootDir, branch);
+
+    expect(result.publishedHead).toBe(head);
+    expect(result.commitHash).toBeUndefined();
+    expect(git(rootDir, ['rev-parse', branch])).toBe(head);
+  });
+
+  it.each(['refs/heads/other-base', 'refs/remotes/origin/other-base'])('does not create a result branch when clean HEAD is already reachable from %s', async (baseRef) => {
+    const { worktreeDir, rootDir, branch } = fixture;
+    git(worktreeDir, ['add', '-A']);
+    git(worktreeDir, ['commit', '-m', 'other base']);
+    const head = git(worktreeDir, ['rev-parse', 'HEAD']);
+    git(rootDir, ['fetch', worktreeDir, `HEAD:${baseRef}`]);
+
+    const result = await autoCommitAndPush(worktreeDir, 'unchanged task', rootDir, branch);
+
+    expect(result.success).toBe(true);
+    expect(result.publishedHead).toBeUndefined();
+    expect(result.localPushFailed).toBeUndefined();
+    expect(git(rootDir, ['branch', '--list', branch])).toBe('');
+    expect(git(rootDir, ['rev-parse', baseRef])).toBe(head);
+  });
+
+  it.each([true, false])('reports publication rejection for a clean divergent HEAD (branch specified: %s)', async (specified) => {
+    const { worktreeDir, rootDir, branch } = fixture;
+    git(worktreeDir, ['add', '-A']);
+    git(worktreeDir, ['commit', '-m', 'agent commit']);
+    git(rootDir, ['checkout', '-b', branch]);
+    writeFileSync(join(rootDir, 'README.md'), 'divergent root commit');
+    git(rootDir, ['add', '-A']);
+    git(rootDir, ['commit', '-m', 'root commit']);
+    const rootHead = git(rootDir, ['rev-parse', 'HEAD']);
+    git(rootDir, ['checkout', 'main']);
+
+    const result = await autoCommitAndPush(worktreeDir, 'agent task', rootDir, specified ? branch : undefined);
+
+    expect(result.localPushFailed).toBe(true);
+    expect(result.commitHash).toBeUndefined();
+    expect(result.publishedHead).toBeUndefined();
+    expect(git(rootDir, ['rev-parse', branch])).toBe(rootHead);
+    expect(git(worktreeDir, ['status', '--porcelain'])).toBe('');
   });
 
   it('shows diff stat through the root branch ref after completion', async () => {
@@ -204,8 +289,6 @@ describe('branch deletion', () => {
     // Delete branch
     const result = deleteBranch(repoDir, {
       info: foundBefore!,
-      filesChanged: 1,
-      taskSlug: '20260203T1002-regular-branch',
       originalInstruction: 'Test instruction',
     });
 

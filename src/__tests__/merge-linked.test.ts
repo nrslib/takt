@@ -41,7 +41,7 @@ const entries = [
 describe('Merge launch after PR creation', () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    mocks.commit.mockResolvedValue({ success: true, commitHash: 'a'.repeat(40) });
+    mocks.commit.mockResolvedValue({ success: true, commitHash: 'a'.repeat(40), publishedHead: 'a'.repeat(40) });
     mocks.pipelineCommit.mockResolvedValue(true);
     mocks.createPr.mockReturnValue({ success: true, url: prUrl });
     mocks.submitPr.mockReturnValue(prUrl);
