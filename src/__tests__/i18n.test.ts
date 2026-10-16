@@ -10,6 +10,15 @@ beforeEach(() => {
 });
 
 describe('getLabel', () => {
+  it.each(['en', 'ja'] as const)('resolves distinct waiting, extended-thinking and responding labels for %s', (lang) => {
+    const labels = ['thinking', 'extendedThinking', 'responding'].map((activity) => getLabel(`tui.ui.${activity}`, lang));
+    for (const label of labels) {
+      expect(label.trim().length).toBeGreaterThan(0);
+      expect(label).not.toMatch(/tui\.ui\.|undefined/);
+    }
+    expect(new Set(labels).size).toBe(3);
+  });
+
   it('returns a label by key (defaults to en)', () => {
     const result = getLabel('interactive.ui.intro');
     expect(result).toBeTypeOf('string');

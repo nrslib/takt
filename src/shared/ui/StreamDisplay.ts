@@ -8,6 +8,7 @@
 import chalk from 'chalk';
 import type { StreamEvent, StreamCallback } from '../types/provider.js';
 import { truncate } from './LogManager.js';
+import { formatToolInput } from './toolInput.js';
 import { sanitizeTerminalStreamText, sanitizeTerminalText } from '../utils/text.js';
 
 /** Progress information for stream display */
@@ -96,7 +97,7 @@ export class StreamDisplay {
   showToolUse(tool: string, input: Record<string, unknown>): void {
     if (this.quiet) return;
     this.flushText();
-    const inputPreview = this.formatToolInput(tool, input);
+    const inputPreview = formatToolInput(tool, input);
     // Starting a spinner would corrupt the interactive prompt output.
     if (tool !== 'AskUserQuestion') {
       this.startToolSpinner(tool, inputPreview);
@@ -286,36 +287,6 @@ export class StreamDisplay {
           break;
       }
     };
-  }
-
-  private formatToolInput(tool: string, input: Record<string, unknown>): string {
-    switch (tool) {
-      case 'Bash':
-        return this.formatToolPreview(String(input.command || ''), 60);
-      case 'Read':
-        return this.formatToolPreview(String(input.file_path || ''), 60);
-      case 'Write':
-      case 'Edit':
-        return this.formatToolPreview(String(input.file_path || ''), 60);
-      case 'Glob':
-        return this.formatToolPreview(String(input.pattern || ''), 60);
-      case 'Grep':
-        return this.formatToolPreview(String(input.pattern || ''), 60);
-      default: {
-        const keys = Object.keys(input);
-        if (keys.length === 0) return '';
-        const firstKey = keys[0];
-        if (firstKey) {
-          const value = input[firstKey];
-          return this.formatToolPreview(String(value || ''), 50);
-        }
-        return '';
-      }
-    }
-  }
-
-  private formatToolPreview(value: string, maxLength: number): string {
-    return truncate(sanitizeTerminalText(value.replace(/\s+/g, ' ')), maxLength);
   }
 
   private ensureToolOutputHeader(tool?: string): void {

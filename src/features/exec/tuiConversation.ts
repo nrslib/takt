@@ -121,7 +121,9 @@ export function createExecTuiConversation(options: ExecTuiConversationOptions): 
             // instead of being written to stdout underneath it.
             outputMode: 'silent',
             onStream: (event) => {
-              if (!turnEnded && event.type === 'text') {
+              if (turnEnded) return;
+              input.onStreamEvent?.(event);
+              if (event.type === 'text') {
                 input.onAssistantChunk(event.data.text);
               }
             },

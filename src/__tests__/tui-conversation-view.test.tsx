@@ -15,6 +15,7 @@ import {
 import type { InteractiveModeResult } from '../features/interactive/interactive.js';
 import type { PastedImage } from '../features/interactive/inlineImagePaste.js';
 import type { EditorDraft } from '../features/tui/editorState.js';
+import type { StreamCallback, StreamEvent } from '../shared/types/provider.js';
 import {
   TranscriptEntryView,
   TranscriptView,
@@ -74,6 +75,8 @@ const INLINE_IMAGE_DATA = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
 const INLINE_IMAGE_PASTE = `\x1b]1337;File=inline=1;name=shot.png;size=${INLINE_IMAGE_DATA.length}:${INLINE_IMAGE_DATA.toString('base64')}\x07`;
 
 const UI: ConversationUiText = {
+  extendedThinking: 'Reasoning...',
+  responding: 'Responding',
   interruptHint: getLabel('tui.ui.interruptHint', 'en'),
   responseInterrupted: getLabel('tui.ui.responseInterrupted', 'en'),
   instructionInterrupted: getLabel('tui.ui.instructionInterrupted', 'en'),
@@ -486,6 +489,10 @@ function getTerminalText(terminal: Terminal): string {
   )).join('\n');
 }
 
+function statusRows(frame: string): string[] {
+  return stripAnsi(frame).split('\n').filter((line) => /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] /u.test(line.trimStart()));
+}
+
 function getVisibleTerminalText(terminal: Terminal, rows: number): string {
   const baseY = terminal.buffer.active.baseY;
   return Array.from({ length: rows }, (_, index) => (
@@ -756,7 +763,10 @@ describe('TranscriptEntryView', () => {
           expect(countOccurrences(buffer, '│ ❯'), buffer).toBe(1);
           expect(countOccurrences(buffer, '╭'), buffer).toBe(1);
           expect(countOccurrences(buffer, '╰'), buffer).toBe(1);
-          expect(countOccurrences(buffer, 'Thinking'), buffer).toBe(busy ? 1 : 0);
+          expect(statusRows(buffer), buffer).toHaveLength(busy ? 1 : 0);
+          if (busy && columns >= 32) {
+            expect(statusRows(buffer)[0]).toContain(UI.interruptHint);
+          }
           expect(buffer).toContain('SHELL_MARKER');
           expect(buffer.replace(/\s/g, '')).toContain('committedhistorymarker');
         }
@@ -1005,8 +1015,9 @@ describe('TranscriptEntryView', () => {
       expect(countOccurrences(narrowScreen, 'pending prompt wraps when')).toBe(0);
       expect(narrowScreen).toContain('↑ 1');
       expect(countOccurrences(narrowScreen, visiblePromptLine(pendingPrompt, pendingPrompt.length, narrowColumns))).toBe(1);
-      expect(countOccurrences(narrowScreen, UI.thinking)).toBe(1);
-      expect(countOccurrences(getTerminalText(terminal), UI.thinking)).toBe(1);
+      expect(statusRows(narrowScreen)).toHaveLength(1);
+      expect(statusRows(narrowScreen)[0]).toContain(UI.interruptHint);
+      expect(statusRows(getTerminalText(terminal))).toHaveLength(1);
 
       terminal.resize(wideColumns, stdout.rows);
       const wideStart = stdout.frames.length;
@@ -1610,6 +1621,411 @@ describe('TranscriptView', () => {
     expect(stripAnsi(bandRows.at(-1)!)).toBe(' '.repeat(columns));
     expect(bandRows.slice(1, -1).map((row) => stripAnsi(row).trim().replace(/^❯\s*/, ''))).toEqual(expectedLines);
     expect(rows.slice(bandRows.length).every((row) => !row.includes(background))).toBe(true);
+  });
+});
+
+describe('ConversationView activity status', () => {
+  function status(app: ReturnType<typeof render>): string {
+    const rows = statusRows(app.lastFrame() ?? '');
+    expect(rows).toHaveLength(1);
+    return rows[0]!;
+  }
+
+  function emit(input: TuiSubmitInput | undefined, event: StreamEvent): void {
+    const sink = (input as (TuiSubmitInput & { onStreamEvent?: StreamCallback }) | undefined)?.onStreamEvent;
+    expect(sink).toBeTypeOf('function');
+    sink!(event);
+  }
+
+  async function begin(app: ReturnType<typeof render>): Promise<void> {
+    await flushFrames();
+    app.stdin.write('hello');
+    await flushFrames();
+    app.stdin.write(ENTER);
+    await flushFrames();
+  }
+
+  it.each(['chat', 'summarize'] as const)('should replace each activity on the same mounted %s view and hide private content', async (submitMode) => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, submitMode, vi.fn());
+    try {
+      await begin(app);
+      const input = (submitMode === 'chat' ? conversation.submitCalls : conversation.instructionCalls)[0];
+      expect(status(app)).toContain(UI.thinking);
+      expect(status(app)).toContain(UI.interruptHint);
+      expect(status(app)).toMatch(/\b0s\b/);
+
+      input!.onAssistantChunk('old response tail');
+      await flushFrames();
+      expect(status(app)).toContain(UI.responding);
+      expect(status(app)).toContain('old response tail');
+
+      emit(input, { type: 'thinking', data: { thinking: 'PRIVATE_REASONING secret' } });
+      await flushFrames();
+      expect(status(app)).toContain(UI.extendedThinking);
+      for (const forbidden of ['PRIVATE_REASONING', 'secret', 'old response tail']) {
+        expect(status(app)).not.toContain(forbidden);
+      }
+
+      emit(input, { type: 'tool_use', data: { id: 'bash-1', tool: 'Bash', input: { command: 'npm test' } } });
+      await flushFrames();
+      expect(status(app)).toContain('Bash');
+      expect(status(app)).toContain('npm test');
+      expect(status(app)).not.toContain('old response tail');
+      expect(status(app)).toContain(UI.interruptHint);
+
+      emit(input, { type: 'tool_output', data: { id: 'bash-1', tool: 'Bash', output: 'PRIVATE_OUTPUT' } });
+      await flushFrames();
+      expect(status(app)).toContain('npm test');
+      expect(status(app)).not.toContain('PRIVATE_OUTPUT');
+
+      emit(input, { type: 'tool_result', data: { id: 'bash-1', content: 'PRIVATE_RESULT', isError: false } });
+      await flushFrames();
+      expect(status(app)).toContain(UI.thinking);
+      for (const forbidden of ['Bash', 'npm test', 'PRIVATE_RESULT', 'old response tail']) {
+        expect(status(app)).not.toContain(forbidden);
+      }
+
+      emit(input, { type: 'text', data: { text: '\nfirst line\nlast line' } });
+      input!.onAssistantChunk('\nfirst line\nlast line');
+      emit(input, { type: 'text', data: { text: ' appended tail' } });
+      input!.onAssistantChunk(' appended tail');
+      await flushFrames();
+      expect(status(app)).toContain(UI.responding);
+      expect(status(app)).toContain('last line');
+      expect(status(app)).not.toContain('first line');
+      expect(countOccurrences(status(app), 'last line')).toBe(1);
+      expect(countOccurrences(status(app), 'appended tail')).toBe(1);
+      expect(status(app)).toContain(UI.interruptHint);
+
+      conversation.resolveWith({ kind: 'assistant_response', content: 'confirmed answer' });
+      await flushFrames();
+      expect(statusRows(app.lastFrame() ?? '')).toEqual([]);
+      expect(app.lastFrame()).toContain('confirmed answer');
+      expect(app.lastFrame()).not.toContain(UI.interruptHint);
+    } finally {
+      app.unmount();
+    }
+  });
+
+  it('should keep the latest tool until its own result arrives, including a result without an id', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      await begin(app);
+      const input = conversation.submitCalls[0];
+      emit(input, { type: 'tool_use', data: { id: 'older', tool: 'Read', input: { file_path: 'old.ts' } } });
+      emit(input, { type: 'tool_use', data: { id: 'current', tool: 'Edit', input: { file_path: 'current.ts' } } });
+      await flushFrames();
+      expect(status(app)).toContain('Edit');
+      expect(status(app)).toContain('current.ts');
+      emit(input, { type: 'tool_result', data: { id: 'older', content: 'old result', isError: false } });
+      await flushFrames();
+      expect(status(app)).toContain('Edit');
+      expect(status(app)).toContain('current.ts');
+      emit(input, { type: 'tool_result', data: { content: 'current failed', isError: true } });
+      await flushFrames();
+      expect(status(app)).toContain(UI.thinking);
+      expect(status(app)).not.toContain('current.ts');
+    } finally {
+      app.unmount();
+    }
+  });
+
+  it('should advance elapsed seconds without events and preserve the turn start across activity changes', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setInterval', 'clearInterval'] });
+    vi.setSystemTime(new Date('2026-10-16T00:00:00Z'));
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      await begin(app);
+      expect(status(app)).toMatch(/\b0s\b/);
+      vi.advanceTimersByTime(1_000);
+      await flushFrames();
+      expect(status(app)).toMatch(/\b1s\b/);
+      const input = conversation.submitCalls[0];
+      emit(input, { type: 'tool_use', data: { id: 'slow', tool: 'Bash', input: { command: 'npm test' } } });
+      await flushFrames();
+      expect(status(app)).toMatch(/\b1s\b/);
+      vi.advanceTimersByTime(1_000);
+      await flushFrames();
+      expect(status(app)).toMatch(/\b2s\b/);
+      expect(status(app)).toContain('npm test');
+      vi.advanceTimersByTime(56_000);
+      await flushFrames();
+      expect(status(app)).toMatch(/\b58s\b/);
+      emit(input, { type: 'thinking', data: { thinking: 'private' } });
+      await flushFrames();
+      expect(status(app)).toMatch(/\b58s\b/);
+      vi.advanceTimersByTime(4_000);
+      await flushFrames();
+      expect(status(app)).toMatch(/\b1m02s\b/);
+      expect(status(app)).toContain(UI.extendedThinking);
+    } finally {
+      app.unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['chat', 'summarize'] as const)('should keep elapsed time increasing when the wall clock moves backward in %s mode', async (submitMode) => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setInterval', 'clearInterval'] });
+    vi.setSystemTime(new Date('2026-10-16T00:00:00Z'));
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, submitMode, vi.fn());
+    try {
+      await begin(app);
+      expect(status(app)).toMatch(/\b0s\b/);
+      vi.advanceTimersByTime(2_000);
+      await flushFrames();
+      expect(status(app)).toMatch(/\b2s\b/);
+
+      vi.setSystemTime(new Date('2026-10-15T23:59:00Z'));
+      vi.advanceTimersByTime(1_000);
+      await flushFrames();
+      expect(status(app)).toMatch(/\b3s\b/);
+    } finally {
+      app.unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['completed', 'interrupted', 'error'] as const)('should reset elapsed time for the queued turn after the previous turn is %s', async (ending) => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setInterval', 'clearInterval'] });
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      await begin(app);
+      vi.advanceTimersByTime(2_000);
+      await flushFrames();
+      expect(status(app)).toMatch(/\b2s\b/);
+      app.stdin.write('next turn');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+      if (ending === 'interrupted') {
+        app.stdin.write(ESC);
+      } else {
+        conversation.resolveWith(ending === 'error'
+          ? { kind: 'error', message: 'provider failed' }
+          : { kind: 'assistant_response', content: 'first complete' });
+      }
+      await flushFrames();
+      expect(conversation.submitCalls.map(({ text }) => text)).toEqual(['hello', 'next turn']);
+      expect(status(app)).toMatch(/\b0s\b/);
+      expect(status(app)).toContain(UI.thinking);
+      vi.advanceTimersByTime(1_000);
+      await flushFrames();
+      expect(status(app)).toMatch(/\b1s\b/);
+    } finally {
+      app.unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['completed', 'interrupted', 'error'] as const)('should clear the activity and stop the clock when the turn is %s', async (ending) => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setInterval', 'clearInterval'] });
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      await begin(app);
+      vi.advanceTimersByTime(2_000);
+      await flushFrames();
+      expect(status(app)).toMatch(/\b2s\b/);
+      if (ending === 'interrupted') {
+        app.stdin.write(ESC);
+      } else {
+        conversation.resolveWith(ending === 'error'
+          ? { kind: 'error', message: 'provider failed' }
+          : { kind: 'assistant_response', content: 'complete' });
+      }
+      await flushFrames();
+      expect(statusRows(app.lastFrame() ?? '')).toEqual([]);
+      expect(app.lastFrame()).not.toContain(UI.interruptHint);
+      const count = app.frames.length;
+      vi.advanceTimersByTime(3_000);
+      await flushFrames();
+      expect(app.frames).toHaveLength(count);
+    } finally {
+      app.unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it('should release running timers when the busy view unmounts', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setInterval', 'clearInterval'] });
+    const initialTimers = vi.getTimerCount();
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      await begin(app);
+      vi.advanceTimersByTime(1_000);
+      await flushFrames();
+      expect(status(app)).toMatch(/\b1s\b/);
+      app.unmount();
+      await flushFrames();
+      expect(vi.getTimerCount()).toBe(initialTimers);
+    } finally {
+      app.unmount();
+      vi.useRealTimers();
+    }
+  });
+
+  it('should ignore interrupted activity events while the next turn is responding', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      await begin(app);
+      const interrupted = conversation.submitCalls[0];
+      emit(interrupted, { type: 'tool_use', data: { id: 'old', tool: 'Read', input: { file_path: 'old.ts' } } });
+      await flushFrames();
+      expect(status(app)).toContain('old.ts');
+      app.stdin.write(ESC);
+      await flushFrames();
+      app.stdin.write('next');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+      const current = conversation.submitCalls[1];
+      current!.onAssistantChunk('accepted tail');
+      await flushFrames();
+      expect(status(app)).toContain(UI.responding);
+      for (const event of [
+        { type: 'thinking', data: { thinking: 'PRIVATE_LATE_THOUGHT' } },
+        { type: 'tool_use', data: { id: 'late', tool: 'Bash', input: { command: 'late command' } } },
+        { type: 'tool_result', data: { id: 'old', content: 'late result', isError: false } },
+      ] satisfies StreamEvent[]) {
+        emit(interrupted, event);
+        await flushFrames();
+        expect(status(app)).toContain(UI.responding);
+        expect(status(app)).toContain('accepted tail');
+        for (const forbidden of ['PRIVATE_LATE_THOUGHT', 'Bash', 'late command', 'late result', 'old.ts']) {
+          expect(status(app)).not.toContain(forbidden);
+        }
+      }
+    } finally {
+      app.unmount();
+    }
+  });
+
+  it('should update a single terminal row without leaving activity or prompt residue in scrollback', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setInterval', 'clearInterval'] });
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const stdout = new ResizableOutput(48, 14);
+    const input = createTestInput();
+    const terminal = new Terminal({ allowProposedApi: true, cols: 48, rows: 14, convertEol: true, scrollback: 1000 });
+    let app: ReturnType<typeof renderInk> | undefined;
+    let processed = 0;
+    async function updateTerminal(): Promise<string> {
+      await app!.waitUntilRenderFlush();
+      await writeTerminalFrames(terminal, stdout.frames.slice(processed));
+      processed = stdout.frames.length;
+      return getTerminalText(terminal);
+    }
+    try {
+      await writeTerminalFrames(terminal, Array<string>(30).fill('older shell history\r\n'));
+      app = renderInk(<ConversationView
+        ui={UI} lang="en" conversation={conversation} userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
+        initialEntries={[]} submitMode="chat" autoSubmit={false} initialHistory={[]}
+        initialDraft={undefined} initialQueue={[]} residentSession={false}
+        modelLabel={() => MODEL_LABEL} onExit={() => undefined}
+      />, {
+        stdout: stdout as unknown as NodeJS.WriteStream,
+        stderr: new PassThrough() as unknown as NodeJS.WriteStream,
+        stdin: input, exitOnCtrlC: false, interactive: true, patchConsole: false,
+      });
+      await flushFrames();
+      input.write('hello');
+      await flushFrames();
+      input.write(ENTER);
+      await flushFrames();
+      let buffer = await updateTerminal();
+      expect(statusRows(buffer)).toHaveLength(1);
+      expect(countOccurrences(buffer, UI.interruptHint)).toBe(1);
+      const submission = conversation.submitCalls[0];
+      const events: StreamEvent[] = [
+        { type: 'tool_use', data: { id: 'long-read', tool: 'Read\x1b[2J\n', input: { file_path: `日本語\n${'very-long-path/'.repeat(30)}END_OF_PATH` } } },
+        { type: 'tool_result', data: { id: 'long-read', content: 'PRIVATE_RESULT', isError: false } },
+        { type: 'thinking', data: { thinking: 'PRIVATE_THOUGHT' } },
+      ];
+      for (const event of events) {
+        emit(submission, event);
+        vi.advanceTimersByTime(1_000);
+        await flushFrames();
+        buffer = await updateTerminal();
+        expect(statusRows(buffer)).toHaveLength(1);
+        expect(countOccurrences(buffer, UI.interruptHint)).toBe(1);
+        expect(countOccurrences(buffer, '│ ❯')).toBe(1);
+        expect(statusRows(buffer)[0]).toContain(UI.interruptHint);
+        if (event.type === 'tool_use') {
+          expect(statusRows(buffer)[0]).toContain('Read');
+        }
+        expect(stringWidth(statusRows(buffer)[0]!)).toBeLessThanOrEqual(48);
+        for (const forbidden of ['END_OF_PATH', 'PRIVATE_RESULT', 'PRIVATE_THOUGHT']) {
+          expect(buffer).not.toContain(forbidden);
+        }
+      }
+      submission!.onAssistantChunk('earlier line\nCURRENT_TAIL');
+      await flushFrames();
+      buffer = await updateTerminal();
+      expect(statusRows(buffer)).toHaveLength(1);
+      expect(statusRows(buffer)[0]).toContain(UI.responding);
+      conversation.resolveWith({ kind: 'assistant_response', content: 'confirmed reply' });
+      await flushFrames();
+      buffer = await updateTerminal();
+      expect(buffer).toContain('confirmed reply');
+      expect(buffer).toContain('older shell history');
+      expect(statusRows(buffer)).toEqual([]);
+      for (const forbidden of [UI.interruptHint, UI.extendedThinking, 'CURRENT_TAIL', 'very-long-path/']) {
+        expect(buffer).not.toContain(forbidden);
+      }
+      expect(stdout.frames.join('')).not.toContain('\x1b[2J');
+    } finally {
+      app?.unmount();
+      await app?.waitUntilExit();
+      app?.cleanup();
+      terminal.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['en', 'ja'] as const)('should render the resolved activity labels through the runner in %s', async (lang) => {
+    const terminal = installProcessPseudoTerminal(24);
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-activity-labels-'));
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const run = runTuiConversation({
+      cwd, lang, conversation, initialEntries: [], submitMode: 'chat', autoSubmit: false,
+      modelLabel: () => MODEL_LABEL, chooseAction: async () => null, continuePrompt: 'continue',
+    });
+    void run.catch(() => undefined);
+    try {
+      await Promise.race([
+        run.then(() => { throw new Error('runner ended before accepting input'); }),
+        waitForOutput(terminal.stdout, (value) => value.includes(getLabel('tui.ui.placeholder', lang)), 'localized prompt'),
+      ]);
+      terminal.stdin.write('hello');
+      await flushFrames();
+      terminal.stdin.write(ENTER);
+      await flushFrames();
+      const offset = terminal.stdout.frames.length;
+      emit(conversation.submitCalls[0], { type: 'thinking', data: { thinking: 'PRIVATE_THOUGHT' } });
+      await flushFrames();
+      expect(stripAnsi(terminal.stdout.frames.slice(offset).join(''))).toContain(getLabel('tui.ui.extendedThinking', lang));
+      const responseOffset = terminal.stdout.frames.length;
+      conversation.submitCalls[0]!.onAssistantChunk('visible response');
+      await flushFrames();
+      expect(stripAnsi(terminal.stdout.frames.slice(responseOffset).join(''))).toContain(getLabel('tui.ui.responding', lang));
+      expect(terminal.stdout.frames.join('')).not.toContain('PRIVATE_THOUGHT');
+      conversation.resolveWith({ kind: 'assistant_response', content: 'confirmed' });
+      await flushFrames();
+      terminal.stdin.write(CTRL_D);
+      await run;
+    } finally {
+      if (conversation.submitCalls.length > 0) conversation.resolveWith({ kind: 'assistant_response', content: 'cleanup' });
+      terminal.stdin.write(CTRL_D);
+      await run.catch(() => undefined);
+      terminal.restore();
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 });
 
@@ -3255,31 +3671,33 @@ describe('ConversationView', () => {
   it('should submit the draft on Enter and show the streamed tail while in flight', async () => {
     const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
     const app = renderConversation(conversation, 'chat', vi.fn());
-    await flushFrames();
+    try {
+      await flushFrames();
 
-    app.stdin.write('hi');
-    await flushFrames();
-    app.stdin.write(ENTER);
-    await flushFrames();
+      app.stdin.write('hi');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
 
-    expect(conversation.submitCalls).toHaveLength(1);
-    expect(conversation.submitCalls[0]?.text).toBe('hi');
-    expect(conversation.submitCalls[0]?.abortSignal.aborted).toBe(false);
+      expect(conversation.submitCalls).toHaveLength(1);
+      expect(conversation.submitCalls[0]?.text).toBe('hi');
+      expect(conversation.submitCalls[0]?.abortSignal.aborted).toBe(false);
 
-    conversation.submitCalls[0]?.onAssistantChunk('streamed tail');
-    await flushFrames();
-    expect(app.lastFrame() ?? '').toContain('streamed tail');
-    expect(app.lastFrame() ?? '').toContain('Thinking...');
+      conversation.submitCalls[0]?.onAssistantChunk('streamed tail');
+      await flushFrames();
+      expect(app.lastFrame() ?? '').toContain('streamed tail');
+      expect(app.lastFrame() ?? '').toContain(UI.responding);
 
-    conversation.resolveWith({ kind: 'assistant_response', content: 'final answer' });
-    await flushFrames();
+      conversation.resolveWith({ kind: 'assistant_response', content: 'final answer' });
+      await flushFrames();
 
-    const frame = app.lastFrame() ?? '';
-    expect(frame).toContain('final answer');
-    expect(frame).not.toContain('streamed tail');
-    expect(frame).not.toContain('Thinking...');
-
-    app.unmount();
+      const frame = app.lastFrame() ?? '';
+      expect(frame).toContain('final answer');
+      expect(frame).not.toContain('streamed tail');
+      expect(frame).not.toContain('Thinking...');
+    } finally {
+      app.unmount();
+    }
   });
 
   it('should show the assistant marker at most once per frame across the streaming hand-off', async () => {
@@ -3393,23 +3811,37 @@ describe('ConversationView', () => {
   });
 
   it('should report a rejected submission as a failed exit instead of hanging', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setInterval', 'clearInterval'] });
+    const initialTimers = vi.getTimerCount();
     const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
     const onExit = vi.fn();
     const app = renderConversation(conversation, 'chat', onExit);
-    await flushFrames();
+    try {
+      await flushFrames();
+      app.stdin.write('hi');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+      vi.advanceTimersByTime(2_000);
+      await flushFrames();
+      expect(statusRows(app.lastFrame() ?? '')[0]).toMatch(/\b2s\b/);
 
-    app.stdin.write('hi');
-    await flushFrames();
-    app.stdin.write(ENTER);
-    await flushFrames();
+      const failure = new Error('provider crashed');
+      conversation.rejectWith(failure);
+      await flushFrames();
 
-    const failure = new Error('provider crashed');
-    conversation.rejectWith(failure);
-    await flushFrames();
-
-    expect(onExit).toHaveBeenCalledExactlyOnceWith({ kind: 'failed', error: failure }, expect.objectContaining({ history: expect.any(Array) }));
-
-    app.unmount();
+      expect(onExit).toHaveBeenCalledExactlyOnceWith({ kind: 'failed', error: failure }, expect.objectContaining({ history: expect.any(Array) }));
+      expect(statusRows(app.lastFrame() ?? '')).toEqual([]);
+      await vi.waitFor(() => expect(vi.getTimerCount()).toBe(initialTimers));
+      const frame = app.lastFrame();
+      vi.advanceTimersByTime(3_000);
+      await flushFrames();
+      expect(app.lastFrame()).toBe(frame);
+      expect(vi.getTimerCount()).toBe(initialTimers);
+    } finally {
+      app.unmount();
+      vi.useRealTimers();
+    }
   });
 
   it('should cancel on Ctrl+D with a draft in the buffer, like the readline editor', async () => {
@@ -4716,7 +5148,7 @@ describe('TUI scrollback output', () => {
 
       expect(failureScreen).toContain('Clipboard does not contain an image.');
       expect(failureScreen).toContain(visiblePromptLine('draft', 5, 80));
-      expect(failureScreen).toContain(UI.thinking);
+      expect(failureScreen).toContain(UI.responding);
       expect(failureScreen).toContain('streamed update');
       expect(await getMaximumTerminalScrollbackOffset(stdout)).toBe(0);
       expect(stdout.frames.join('')).not.toContain('\x1b[3J');
