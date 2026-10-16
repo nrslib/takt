@@ -797,6 +797,50 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(existsSync(tasksFilePath)).toBe(true);
   });
 
+  it.each([
+    { merge_caccia_required: false },
+    { merge_skip_caccia_if_no_activity: true },
+    { merge_caccia_approved_head_sha: 'b'.repeat(40) },
+    { merge_caccia_skipped_head_sha: 'b'.repeat(40) },
+    { merge_caccia_required: true, merge_skip_caccia_if_no_activity: true,
+      merge_caccia_skipped_head_sha: 'b'.repeat(40) },
+    { merge_caccia_required: true, merge_caccia_approved_head_sha: 'b'.repeat(40) },
+  ])('reads and updates saved tasks while removing only obsolete Caccia fields: %j', (legacy) => {
+    const mergeTask = createFailedRecord({ name: 'merge-pr-123', source: 'pr_review', pr_number: 123,
+      branch: 'feature/pr', base_branch: 'main', worktree: true, worktree_path: '/retained-clone',
+      workflow: 'merge-review', merge_task: true, merge_method: 'squash',
+      merge_head_repository_url: '/remote', merge_head_repository_push_urls: ['/remote'],
+      merge_initial_head_sha: 'a'.repeat(40), merge_clone_prepared: true,
+      merge_threat_check_max_diff_bytes: 1000,
+      merge_pushed_head_sha: 'b'.repeat(40), merge_push_base_head_sha: 'a'.repeat(40) });
+    const pendingTask = createPendingRecord({ name: 'normal', content: 'merge_caccia_required: false' });
+    writeTasksFile(testDir, [{ ...mergeTask, ...legacy }, pendingTask]);
+    const file = join(testDir, '.takt', 'tasks.yaml');
+    const original = readFileSync(file, 'utf8');
+
+    expect(runner.listAllTaskItems().map((task) => [task.name, task.content])).toEqual([
+      ['merge-pr-123', 'Do work'], ['normal', 'merge_caccia_required: false'],
+    ]);
+    expect(readFileSync(file, 'utf8')).toBe(original);
+    const claimed = runner.claimNextTasks(1)[0]!;
+    expect(claimed.name).toBe('normal');
+    expect(claimed.content).toBe('merge_caccia_required: false');
+    const saved = loadTasksFile(testDir).tasks;
+    expect(saved).toHaveLength(2);
+    expect(saved[0]).toEqual(mergeTask);
+    expect(saved[1]).toMatchObject({ name: 'normal', status: 'running', content: pendingTask.content });
+    expect(new TaskRunner(testDir).listAllTaskItems().map((task) => task.name)).toEqual(['merge-pr-123', 'normal']);
+  });
+
+  it('preserves unknown fields and rejects them even alongside obsolete Caccia state', () => {
+    writeTasksFile(testDir, [{ ...createPendingRecord({}), merge_caccia_required: false, unknown_field: true }]);
+    const file = join(testDir, '.takt', 'tasks.yaml');
+    const original = readFileSync(file, 'utf8');
+    expect(() => runner.listAllTaskItems()).toThrow();
+    expect(() => runner.claimNextTasks(1)).toThrow();
+    expect(readFileSync(file, 'utf8')).toBe(original);
+  });
+
   it('should preserve tasks.yaml and throw when pending record has started_at', () => {
     writeTasksFile(testDir, [{
       name: 'broken-pending-task',

@@ -30,6 +30,18 @@ function assertPrIdentity(context: PrExecutionContext, details: PrDetails): void
   }
 }
 
+async function recordSkippedHead(options: CacciaEffectOptions, headSha: string): Promise<void> {
+  const context = options.prExecutionContext;
+  const recorder = options.prMergePushRecorder;
+  if (!context || !recorder) return;
+  const provider = options.gitProvider ?? getGitProvider();
+  if (!provider.fetchPrDetails) throw new Error('PR details are not supported by this Git provider');
+  const latest = await provider.fetchPrDetails(context.prNumber, options.projectCwd, options.abortSignal);
+  assertPrIdentity(context, latest);
+  if (latest.headSha !== headSha) throw new Error('Pull request head changed before Caccia was skipped');
+  recorder.record(headSha, headSha, context);
+}
+
 export async function cacciaEffect(
   options: CacciaEffectOptions,
   prNumber: number,
@@ -48,10 +60,12 @@ export async function cacciaEffect(
     const initialHeadSha = (await git(['rev-parse', 'HEAD'])).stdout.trim();
     const settings = resolveCacciaSettings(resolveConfigValue(options.projectCwd, 'caccia'));
     if (!settings.enabled) {
+      await recordSkippedHead(options, initialHeadSha);
       return { success: true, failed: false, outcome: 'skipped', headSha: initialHeadSha,
         unresolvedCount: 0, skipReason: 'config_disabled', reason: 'Caccia is disabled in configuration' };
     }
     if ((resolveConfigValue(options.projectCwd, 'vcsProvider') ?? detectVcsProvider(options.projectCwd)) !== 'github') {
+      await recordSkippedHead(options, initialHeadSha);
       return { success: true, failed: false, outcome: 'skipped', headSha: initialHeadSha,
         unresolvedCount: 0, skipReason: 'github_unavailable', reason: 'GitHub is required for the Caccia effect' };
     }
@@ -74,6 +88,7 @@ export async function cacciaEffect(
     });
     if (result.outcome === 'not_run') throw new Error('Enabled Caccia did not execute');
     if (result.skipReason === 'github_unavailable') {
+      await recordSkippedHead(options, initialHeadSha);
       return { success: true, failed: false, outcome: result.outcome, headSha: initialHeadSha,
         unresolvedCount: result.unresolvedCount, skipReason: result.skipReason, reason: result.reason ?? null };
     }
@@ -111,6 +126,9 @@ export async function cacciaEffect(
           throw new Error('Fork threat check failed after Caccia changes');
         }
       }
+    }
+    if (expectedHeadSha === initialHeadSha) {
+      options.prMergePushRecorder?.record(headSha, headSha, context);
     }
     return { success: true, failed: false, outcome: result.outcome, headSha,
       unresolvedCount: result.unresolvedCount, skipReason: result.skipReason ?? null, reason: result.reason ?? null };

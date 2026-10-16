@@ -1236,4 +1236,6 @@ Normal results include `success: true`, `failed: false`, `outcome` (`success`, `
 
 After a repair push, the same clone is synchronized with a verified fast-forward. CI should compare PR status head with `effect.caccia.caccia.headSha`; merge uses the clone's current head as its expected SHA. Historical push effect results remain unchanged.
 
+GitLab also provides MR details and CI status, so `skipped` with `github_unavailable` continues to CI on the returned head. Merge methods and head constraints remain unsupported; `merge_pr` fails when either is supplied.
+
 The merge builtins execute Caccia explicitly: `merge-review` runs `review → caccia → wait_ci → evaluation comment`, while `merge-review-fix` and `merge-review-fix-simple` run `review/fix → commit_and_push → caccia → wait_ci → merge_pr`. `success` and `skipped` continue to CI on the returned head. `limit` comments with the unresolved thread count and ends COMPLETE without merging. An effect error comments with `error` and ends ABORT. Push, task post-processing, and Pipeline no longer start Caccia implicitly. With `merge.auto_start: true`, PR publication starts the merge workflow, whose explicit effect owns Caccia.

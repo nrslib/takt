@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { stringify } from 'yaml';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runAgent } from '../agents/runner.js';
+import { invalidateResolvedConfigCache } from '../infra/config/index.js';
 import { renderPullRequestContext } from '../core/workflow/pr-context.js';
 import type { CacciaInput, CacciaResult } from '../features/caccia/index.js';
 
@@ -13,13 +14,39 @@ const mocks = vi.hoisted(() => ({
   details: vi.fn(), status: vi.fn(), comment: vi.fn(), merge: vi.fn(), review: vi.fn(),
   threat: vi.fn(), execution: vi.fn(), metadataAvailable: true,
   reviewStatus: vi.fn(), threads: vi.fn(), resolveThread: vi.fn(),
+  gitlab: false, glab: vi.fn(), gitlabUrl: 'https://gitlab.example/org/repo.git', localRemote: '',
 }));
+vi.mock('node:child_process', async (original) => {
+  const actual = await original<typeof import('node:child_process')>();
+  return { ...actual,
+    execFile: (...args: unknown[]) => {
+      if (mocks.gitlab && (args[0] === 'glab' || (args[0] === 'git' && (args[1] as string[])[0] === 'remote'))) {
+        const callback = args[3] as (error: Error | null, output: string) => void;
+        const output: string = args[0] === 'git' ? mocks.gitlabUrl : mocks.glab(args[1]);
+        queueMicrotask(() => callback(null, output));
+        return { kill: vi.fn() };
+      }
+      return Reflect.apply(actual.execFile, undefined, args);
+    },
+    execFileSync: (...args: unknown[]) => {
+      if (mocks.gitlab && args[0] === 'glab') return mocks.glab(args[1]);
+      return Reflect.apply(actual.execFileSync, undefined, args);
+    },
+    spawn: (...args: unknown[]) => {
+      if (mocks.gitlab && args[0] === 'git' && ['fetch', 'push'].includes((args[1] as string[])[0]!)) {
+        const gitArgs = (args[1] as string[]).map((arg) => arg === mocks.gitlabUrl ? mocks.localRemote : arg);
+        return Reflect.apply(actual.spawn, undefined, [args[0], gitArgs, ...args.slice(2)]);
+      }
+      return Reflect.apply(actual.spawn, undefined, args);
+    },
+  };
+});
 vi.mock('../features/caccia/index.js', async (original) => ({
   ...await original<typeof import('../features/caccia/index.js')>(), runCaccia: mocks.caccia,
 }));
 vi.mock('../infra/git/index.js', async (original) => ({
   ...await original<typeof import('../infra/git/index.js')>(),
-  getGitProvider: () => ({ checkCliStatus: () => ({ available: true }),
+  getGitProvider: () => mocks.gitlab ? new GitLabProvider() : ({ checkCliStatus: () => ({ available: true }),
     fetchPrDetails: mocks.metadataAvailable ? mocks.details : undefined, fetchPrStatus: mocks.status, fetchPrReviewComments: mocks.review,
     commentOnPr: mocks.comment, mergePr: mocks.merge }),
 }));
@@ -57,6 +84,7 @@ import { executeTaskAndCompleteWithDetails } from '../features/tasks/execute/tas
 import { addTask } from '../features/tasks/add/index.js';
 import { createDefaultSystemStepServices } from '../infra/workflow/system/DefaultSystemStepServices.js';
 import { TaskRunner } from '../infra/task/index.js';
+import { GitLabProvider } from '../infra/gitlab/GitLabProvider.js';
 import type { WorkflowState } from '../core/models/types.js';
 
 function git(cwd: string, ...args: string[]): string {
@@ -85,6 +113,7 @@ describe('Caccia effect through PR workflow execution', () => {
       provider: 'mock', language: 'en', vcs_provider: vcsProvider,
       ...(caccia === undefined ? {} : { caccia }),
     }));
+    invalidateResolvedConfigCache(project);
   }
 
   function writeWorkflow() {
@@ -112,7 +141,8 @@ describe('Caccia effect through PR workflow execution', () => {
           ] },
         { name: 'report', kind: 'system', effects: [{ type: 'comment_pr', pr: 123,
           body: 'outcome={effect:external_review.caccia.outcome}; head={effect:external_review.caccia.headSha}; unresolved={effect:external_review.caccia.unresolvedCount}' }],
-          rules: [{ condition: 'when(true)', next: outcome === 'limit' ? 'COMPLETE' : 'ci' }] },
+          rules: [{ condition: 'when(effect.report.comment_pr.success == true)', next: outcome === 'limit' ? 'COMPLETE' : 'ci' },
+            { condition: 'when(true)', next: 'ABORT' }] },
         { name: 'ci', kind: 'system',
           system_inputs: [{ type: 'pr_status', source: 'current_pr', as: 'pr' }],
           wait: { until: 'when(context.ci.pr.headSha == effect.external_review.caccia.headSha && context.ci.pr.ci.finished == true)',
@@ -121,6 +151,9 @@ describe('Caccia effect through PR workflow execution', () => {
             { condition: 'when(true)', next: 'ABORT' }] },
         { name: 'merge', kind: 'system', effects: [{ type: 'merge_pr', pr: 123 }],
           rules: [{ condition: 'when(effect.merge.merge_pr.success == true)', next: 'COMPLETE' },
+            { condition: 'when(true)', next: 'merge_failed' }] },
+        { name: 'merge_failed', kind: 'system', effects: [{ type: 'comment_pr', pr: 123, body: 'Merge failed' }],
+          rules: [{ condition: 'when(effect.merge_failed.comment_pr.success == true)', next: 'COMPLETE' },
             { condition: 'when(true)', next: 'ABORT' }] },
         { name: 'error', kind: 'system', effects: [{ type: 'comment_pr', pr: 123,
           body: '{effect:external_review.caccia.error}' }],
@@ -131,6 +164,8 @@ describe('Caccia effect through PR workflow execution', () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    mocks.gitlab = false;
+    mocks.gitlabUrl = 'https://gitlab.example/org/repo.git';
     mocks.metadataAvailable = true;
     root = mkdtempSync(join(tmpdir(), 'takt-caccia-effect-'));
     project = join(root, 'project');
@@ -388,6 +423,140 @@ describe('Caccia effect through PR workflow execution', () => {
     expect(mocks.resolveThread).toHaveBeenCalledOnce();
   });
 
+  it.each(([
+    ['merge', false], ['merge', true], ['from_pr_custom_base', false], ['from_pr_custom_base', true],
+  ] as const).flatMap(([entry, externalChange]) =>
+    (['success', 'config_disabled', 'review_skipped', 'limit'] as const).map((result) => ({ entry, externalChange, result })),
+  ))('$entryは通常push後のpushなし$resultを保存し再投入する: 外部変更=$externalChange', async ({ entry, externalChange, result }) => {
+    await useRealCaccia([remote]);
+    const worker = mocks.caccia.getMockImplementation()!;
+    mocks.caccia.mockImplementationOnce(async (input) => {
+      await worker(input);
+      throw new Error('Review failed after push');
+    });
+    expect(await run(entry, false)).toEqual({ merged: false });
+    const runner = new TaskRunner(project);
+    const firstFailed = runner.listFailedTasks()[0]!;
+    const clone = activeClone;
+    const firstSavedHead = effectHead;
+    if (entry === 'merge') expect(firstFailed.data?.merge_pushed_head_sha).toBe(firstSavedHead);
+    else expect(firstFailed.data?.caccia_pushed_head?.headSha).toBe(firstSavedHead);
+
+    async function retry(task: Parameters<typeof executePersistedPrMergeTask>[0], restoredRunner: TaskRunner) {
+      expect(task.worktreePath).toBe(clone);
+      if (entry === 'merge') {
+        return (await executePersistedPrMergeTask(task, restoredRunner, project, undefined, { outputMode: 'silent' })).merged;
+      }
+      return (await executeTaskAndCompleteWithDetails(task, restoredRunner, project, async (request) => {
+        expect(request.cwd).toBe(clone);
+        expect(request.prContext?.baseBranch).toBe('review-base');
+        return runWorkflowExecution({ ...request, runPathsDirectory: join(project, '.takt', 'runs') });
+      }, { provider: 'mock' }, { outputMode: 'silent' })).success;
+    }
+
+    runner.requeueTask(firstFailed.name, ['failed']);
+    const secondRunner = new TaskRunner(project);
+    const secondTask = secondRunner.claimNextTasks(1)[0]!;
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+      expect(options?.cwd).toBe(clone);
+      options?.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: prompt });
+      writeFileSync(join(clone, 'workflow-fix.txt'), 'change on retry before Caccia\n');
+      return { persona: 'coder', status: 'done', content: 'Fixed again', timestamp: new Date() };
+    });
+    effectOutcome = result === 'success' ? 'success' : result === 'limit' ? 'limit' : 'skipped';
+    unresolvedCount = result === 'limit' ? 1 : 0;
+    skipReason = result === 'config_disabled' || result === 'review_skipped' ? result : null;
+    effectReason = result === 'review_skipped' ? 'Review is unavailable' : null;
+    if (result === 'config_disabled') configure({ enabled: false });
+    else if (result !== 'success') {
+      mocks.caccia.mockImplementation(async (input) => {
+        if (input.entry !== 'linked' || !input.expectedInitialHeadSha) throw new Error('Expected current PR head');
+        effectHead = input.expectedInitialHeadSha;
+        return { outcome: effectOutcome, headSha: effectHead, unresolvedCount,
+          ...(result === 'review_skipped' ? { skipReason: result, reason: effectReason! } : {}) };
+      });
+    }
+    writeWorkflow();
+    mocks.merge.mockReturnValue({ success: false, error: 'Merge unavailable' });
+    mocks.comment.mockClear();
+    mocks.comment.mockImplementation((_pr, body) => body === 'Merge failed' || result === 'limit'
+      ? { success: false, error: 'Comment unavailable' } : { success: true });
+    const record = vi.spyOn(TaskRunner.prototype, entry === 'merge' ? 'recordPrMergePushedHead' : 'recordCacciaPushedHead');
+    mocks.caccia.mockClear(); mocks.resolveThread.mockClear();
+    expect(await retry(secondTask, secondRunner)).toBe(false);
+    const secondExecution = await mocks.execution.mock.calls.at(-1)![0];
+    expect(secondExecution.success).toBe(false);
+    const savedHead = git(root, '--git-dir', remote, 'rev-parse', 'refs/heads/feature/pr');
+    expect(savedHead).not.toBe(firstSavedHead);
+    expect(git(clone, 'rev-parse', 'HEAD')).toBe(savedHead);
+    expect(record).toHaveBeenCalledOnce();
+    if (result === 'config_disabled') expect(mocks.caccia).not.toHaveBeenCalled();
+    else {
+      expect(mocks.caccia).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ expectedInitialHeadSha: savedHead }));
+      expect(await mocks.caccia.mock.results[0]!.value).toMatchObject({ outcome: effectOutcome, headSha: savedHead });
+    }
+    expect(mocks.resolveThread).not.toHaveBeenCalled();
+    expect(mocks.comment).toHaveBeenCalledWith(123,
+      `outcome=${effectOutcome}; head=${savedHead}; unresolved=${unresolvedCount}`, project);
+    if (result === 'limit') expect(mocks.merge).not.toHaveBeenCalled();
+    else {
+      expect(mocks.merge).toHaveBeenCalledWith(123, project, entry === 'merge' ? 'squash' : undefined, savedHead);
+      expect(mocks.comment).toHaveBeenCalledWith(123, 'Merge failed', project);
+    }
+    const failed = new TaskRunner(project).listFailedTasks()[0]!;
+    expect(failed.name).toBe(firstFailed.name);
+    if (entry === 'merge') expect(failed.data).toMatchObject({ merge_pushed_head_sha: savedHead,
+      merge_push_base_head_sha: savedHead, merge_push_source: 'caccia' });
+    else expect(failed.data).toMatchObject({ base_branch: 'review-base', caccia_pushed_head: {
+      headSha: savedHead, baseBranch: 'main', headRepositoryUrl: remote, headRepositoryPushUrls: [remote] } });
+    new TaskRunner(project).requeueTask(failed.name, ['failed']);
+    const thirdRunner = new TaskRunner(project);
+    const thirdTask = thirdRunner.claimNextTasks(1)[0]!;
+    if (entry === 'merge') expect(thirdTask.data).toMatchObject({ merge_pushed_head_sha: savedHead,
+      merge_push_base_head_sha: savedHead, merge_push_source: 'caccia' });
+    else expect(thirdTask.data).toMatchObject({ base_branch: 'review-base',
+      caccia_pushed_head: failed.data!.caccia_pushed_head });
+    if (externalChange) {
+      git(author, 'fetch', 'origin', 'refs/heads/feature/pr');
+      git(author, 'merge', '--ff-only', 'FETCH_HEAD');
+      writeFileSync(join(author, 'external.txt'), 'external\n');
+      git(author, 'add', 'external.txt');
+      git(author, 'commit', '-m', 'External change');
+      git(author, 'push', 'origin', 'HEAD:refs/heads/feature/pr');
+    }
+    mocks.caccia.mockClear(); mocks.status.mockClear(); mocks.execution.mockClear(); mocks.merge.mockClear();
+    vi.mocked(runAgent).mockClear();
+    effectOutcome = 'success'; unresolvedCount = 0; skipReason = null; effectReason = null;
+    configure({ enabled: true, wait_timeout_ms: 17, max_iterations: 2, workflow: 'custom-caccia' });
+    mocks.caccia.mockImplementation(async (input) => {
+      if (input.entry !== 'linked' || !input.expectedInitialHeadSha) throw new Error('Expected current PR head');
+      expect(input.expectedInitialHeadSha).toBe(savedHead);
+      return { outcome: 'success', headSha: savedHead, unresolvedCount: 0 };
+    });
+    writeWorkflow();
+    mocks.comment.mockReturnValue({ success: true });
+    mocks.merge.mockImplementation((_pr, _cwd, _method, expectedSha) => {
+      expect(expectedSha).toBe(savedHead);
+      expect(git(clone, 'rev-parse', 'HEAD')).toBe(savedHead);
+      merged = true;
+      return { success: true };
+    });
+    if (externalChange && entry === 'merge') await expect(retry(thirdTask, thirdRunner)).rejects.toThrow();
+    else expect(await retry(thirdTask, thirdRunner)).toBe(!externalChange);
+    if (externalChange) {
+      expect(git(clone, 'rev-parse', 'HEAD')).toBe(savedHead);
+      if (entry === 'merge') expect(mocks.execution).not.toHaveBeenCalled();
+      expect(runAgent).not.toHaveBeenCalled();
+      expect(mocks.caccia).not.toHaveBeenCalled();
+      expect(mocks.status).not.toHaveBeenCalled();
+      expect(mocks.merge).not.toHaveBeenCalled();
+    } else {
+      expect(mocks.caccia).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ expectedInitialHeadSha: savedHead }));
+      expect(mocks.status).toHaveBeenCalled();
+      expect(mocks.merge).toHaveBeenCalledExactlyOnceWith(123, project, entry === 'merge' ? 'squash' : undefined, savedHead);
+    }
+  });
+
   it.each(['merge', 'from_pr', 'from_pr_local_origin', 'from_pr_custom_base'] as const)('%sは同じcloneをCaccia後のheadへ同期しCIとmergeへ渡す', async (entry) => {
     const result = await run(entry);
     const execution = await mocks.execution.mock.calls.at(-1)?.[0];
@@ -468,28 +637,96 @@ describe('Caccia effect through PR workflow execution', () => {
     expect(mocks.caccia).not.toHaveBeenCalled();
   });
 
-  it('GitLabのfrom_pr taskではメタデータAPIやCaccia本体を呼ばず理由付きskippedで終了する', async () => {
-    writeFileSync(workflowFile, stringify({ name: 'gitlab-caccia', initial_step: 'external_review',
-      steps: [{ name: 'external_review', kind: 'system', effects: [{ type: 'caccia', pr: 123 }],
-        rules: [{ condition: `when(effect.external_review.caccia.success == true && effect.external_review.caccia.outcome == "skipped" && effect.external_review.caccia.skipReason == "github_unavailable" && effect.external_review.caccia.reason != null && effect.external_review.caccia.unresolvedCount == 0 && effect.external_review.caccia.headSha == "${initialHead}")`, next: 'COMPLETE' },
-          { condition: 'when(true)', next: 'ABORT' }] }] }));
+  it.each((['merge', 'from_pr'] as const).flatMap((entry) =>
+    (['running', 'old_success', 'merged_results'] as const).map((pipeline) => ({ entry, pipeline }))))(
+    'GitLabの$entryは実providerでskip後に返却headのCIを待つ: $pipeline', async ({ entry, pipeline }) => {
     configure({ enabled: true }, 'gitlab');
-    const services = createDefaultSystemStepServices({ cwd: project, projectCwd: project, task: 'enqueue' });
-    const effect = { type: 'enqueue_task', mode: 'from_pr', pr: 123, workflow: workflowFile, task: 'Review current PR' } as const;
-    await services.executeEffect(effect, effect, {} as WorkflowState);
-    const task = new TaskRunner(project).claimNextTasks(1)[0]!;
-    const resolved = await resolveTaskExecution(task, project, undefined, { outputMode: 'silent' });
-    mocks.metadataAvailable = false;
-    const result = await runWorkflowExecution({
-      cwd: resolved.execCwd, projectCwd: project, task: task.content, workflowIdentifier: workflowFile,
-      prContext: resolved.prContext, cacciaExecutionSource: 'from_pr', outputMode: 'silent',
-      runPathsDirectory: join(project, '.takt', 'runs'), reportDirName: 'gitlab-caccia-contract',
+    mocks.gitlab = true;
+    const subfolder = pipeline === 'running' ? 'apps/gitlab' : '';
+    if (subfolder !== '') mocks.gitlabUrl = `https://gitlab.example/${subfolder}/org/repo.git`;
+    mocks.localRemote = remote;
+    const requests: string[][] = [];
+    let ciCompleted = false;
+    mocks.glab.mockImplementation((args: string[]) => {
+      requests.push(args);
+      if (args[0] === 'config') {
+        expect(args).toEqual(['config', 'get', 'subfolder', '--host', 'gitlab.example']);
+        return subfolder === '' ? '' : `/${subfolder}/`;
+      }
+      if (args[0] === 'auth') return '';
+      if (args[0] === 'mr' && args[1] === 'note') return '';
+      if (args[0] === 'mr' && args[1] === 'view') return JSON.stringify({ iid: 123, title: 'MR', description: '',
+        web_url: `${mocks.gitlabUrl.replace(/\.git$/u, '')}/-/merge_requests/123`, source_branch: 'feature/pr', target_branch: 'main' });
+      const endpoint = args.at(-1)!;
+      if (endpoint === 'projects/1') return JSON.stringify({ id: 1, path_with_namespace: 'org/repo' });
+      if (endpoint === `projects/1/repository/commits/${'c'.repeat(40)}`) return JSON.stringify({
+        id: 'c'.repeat(40), parent_ids: ['b'.repeat(40), initialHead],
+      });
+      if (/\/(diffs|notes|discussions)\?/u.test(endpoint)) return '[]';
+      if (endpoint === 'projects/org%2Frepo/merge_requests/123') return JSON.stringify({
+        iid: 123, project_id: 1, source_project_id: 1, target_project_id: 1,
+        source_branch: 'feature/pr', target_branch: 'main', sha: initialHead, state: 'opened', detailed_merge_status: 'mergeable',
+        head_pipeline: {
+          sha: pipeline === 'merged_results' ? 'c'.repeat(40) : pipeline === 'old_success' && !ciCompleted ? 'b'.repeat(40) : initialHead,
+          project_id: 1, source: pipeline === 'merged_results' ? 'merge_request_event' : 'push',
+          ref: pipeline === 'merged_results' ? 'refs/merge-requests/123/merge' : 'feature/pr',
+          status: ciCompleted || pipeline === 'old_success' ? 'success' : 'running',
+        },
+      });
+      throw new Error(`Unexpected glab request: ${JSON.stringify(args)}`);
     });
-    expect(result.success, JSON.stringify(result)).toBe(true);
+    writeFileSync(workflowFile, stringify({ name: 'gitlab-caccia', initial_step: 'external_review',
+      steps: [
+        { name: 'external_review', kind: 'system', effects: [{ type: 'caccia', pr: 123 }],
+          rules: [{ condition: `when(effect.external_review.caccia.success == true && effect.external_review.caccia.outcome == "skipped" && effect.external_review.caccia.skipReason == "github_unavailable" && effect.external_review.caccia.headSha == "${initialHead}")`, next: 'wait_ci' },
+            { condition: 'when(true)', next: 'ABORT' }] },
+        { name: 'wait_ci', kind: 'system', system_inputs: [{ type: 'pr_status', source: 'current_pr', as: 'pr' }],
+          wait: { until: 'when(context.wait_ci.pr.headSha == effect.external_review.caccia.headSha && context.wait_ci.pr.ci.finished == true)',
+            interval_ms: 5, max_retries: 200, on_timeout: 'ABORT' },
+          rules: [{ condition: 'when(context.wait_ci.pr.ci.passed == true)', next: 'after_ci' },
+            { condition: 'when(true)', next: 'ABORT' }] },
+        { name: 'after_ci', kind: 'system', effects: [{ type: 'comment_pr', pr: 123, body: 'CI passed' }],
+          rules: [{ condition: 'when(true)', next: 'COMPLETE' }] },
+      ] }));
+    const runner = new TaskRunner(project);
+    const execute = async () => {
+      if (entry === 'merge') return executePrWorkflow({ projectCwd: project, prNumber: 123, workflow: workflowFile,
+        settings: resolveMergeSettings(undefined), display: { outputMode: 'silent' } });
+      const services = createDefaultSystemStepServices({ cwd: project, projectCwd: project, task: 'enqueue' });
+      const effect = { type: 'enqueue_task', mode: 'from_pr', pr: 123, workflow: workflowFile, task: 'Review current PR' } as const;
+      await services.executeEffect(effect, effect, {} as WorkflowState);
+      const task = runner.claimNextTasks(1)[0]!;
+      return executeTaskAndCompleteWithDetails(task, runner, project, (request) => runWorkflowExecution({ ...request,
+        runPathsDirectory: join(project, '.takt', 'runs') }), { provider: 'mock' }, { outputMode: 'silent' });
+    };
+    const running = execute();
+    const completed = vi.fn();
+    void running.then(completed, completed);
+    try {
+      await vi.waitFor(() => {
+        const saved = runner.listAllTaskItems().find((task) => task.kind === 'running');
+        expect(saved?.data).toMatchObject(entry === 'merge'
+          ? { merge_pushed_head_sha: initialHead, merge_push_source: 'caccia' }
+          : { caccia_pushed_head: { headSha: initialHead } });
+        expect(requests.filter((args) => args.at(-1) === 'projects/org%2Frepo/merge_requests/123').length)
+          .toBeGreaterThan(entry === 'merge' ? 3 : 2);
+      }, { timeout: 60_000 });
+      expect(completed).not.toHaveBeenCalled();
+      expect(requests.filter((args) => args[0] === 'mr' && args[1] === 'note')).toEqual([]);
+    } finally {
+      ciCompleted = true;
+      await running;
+    }
+    const result = await running;
+    expect(entry === 'merge' ? (result as { merged: boolean }).merged : (result as { success: boolean }).success).toBe(entry !== 'merge');
+    expect(requests.filter((args) => args[0] === 'mr' && args[1] === 'note')).toEqual([
+      ['mr', 'note', '123', '--message', 'CI passed'],
+    ]);
     expect(mocks.details).not.toHaveBeenCalled();
+    expect(mocks.status).not.toHaveBeenCalled();
     expect(mocks.caccia).not.toHaveBeenCalled();
     expect(mocks.merge).not.toHaveBeenCalled();
-    expect(git(resolved.execCwd, 'rev-parse', 'HEAD')).toBe(initialHead);
+    expect(runAgent).not.toHaveBeenCalled();
   });
 
   it.each([

@@ -82,6 +82,43 @@ describe('Caccia effect result', () => {
     expect(mocks.run).not.toHaveBeenCalled();
     expect(mocks.details).not.toHaveBeenCalled();
   });
+  it.each(['config_disabled', 'provider_unavailable', 'github_unavailable'] as const)(
+    'validates and records the current head before an early skip: %s', async (source) => {
+      const record = vi.fn();
+      if (source === 'config_disabled') mocks.config.mockReturnValue({ enabled: false });
+      else if (source === 'provider_unavailable') mocks.detect.mockReturnValue('gitlab');
+      else mocks.run.mockResolvedValue({ outcome: 'skipped', unresolvedCount: 0, skipReason: source });
+      mocks.git.mockImplementation(async (_cwd, args) => ({
+        stdout: args[0] === 'symbolic-ref' ? 'feature' : updated, stderr: '',
+      }));
+      mocks.details.mockResolvedValue({ ...options().prExecutionContext, number: 123, headSha: updated });
+      expect(await cacciaEffect({ ...options(), prMergePushRecorder: { record } }, 123)).toMatchObject({
+        success: true, failed: false, outcome: 'skipped', headSha: updated,
+        skipReason: source === 'config_disabled' ? source : 'github_unavailable',
+      });
+      expect(record).toHaveBeenCalledExactlyOnceWith(updated, updated, options().prExecutionContext);
+      expect(mocks.details).toHaveBeenCalledWith(123, '/project', undefined);
+      expect(mocks.run).toHaveBeenCalledTimes(source === 'github_unavailable' ? 1 : 0);
+    });
+  it.each([
+    ['config_disabled', 'head'], ['config_disabled', 'identity'], ['config_disabled', 'record'],
+    ['provider_unavailable', 'fetch'], ['github_unavailable', 'head'],
+  ] as const)('fails an early skip on validation or storage failure: %s %s', async (source, failure) => {
+    const record = vi.fn(() => { if (failure === 'record') throw new Error('Storage failed'); });
+    if (source === 'config_disabled') mocks.config.mockReturnValue({ enabled: false });
+    else if (source === 'provider_unavailable') mocks.detect.mockReturnValue('gitlab');
+    else mocks.run.mockResolvedValue({ outcome: 'skipped', unresolvedCount: 0, skipReason: source });
+    const changed = { ...options().prExecutionContext,
+      number: failure === 'identity' ? 456 : 123, headSha: failure === 'head' ? updated : initial };
+    if (source === 'github_unavailable') {
+      mocks.details.mockResolvedValueOnce({ ...options().prExecutionContext, number: 123 }).mockResolvedValue(changed);
+    } else mocks.details.mockResolvedValue(changed);
+    if (failure === 'fetch') mocks.details.mockRejectedValue(new Error('Metadata unavailable'));
+    expect(await cacciaEffect({ ...options(), prMergePushRecorder: { record } }, 123))
+      .toMatchObject({ success: false, failed: true });
+    expect(record).toHaveBeenCalledTimes(failure === 'record' ? 1 : 0);
+    expect(mocks.run).toHaveBeenCalledTimes(source === 'github_unavailable' ? 1 : 0);
+  });
   it('uses the explicit VCS setting before remote detection', async () => {
     mocks.detect.mockReturnValue(undefined);
     mocks.config.mockImplementation((_cwd, key) => key === 'vcsProvider' ? 'github'
@@ -148,6 +185,63 @@ describe('Caccia effect result', () => {
       .toMatchObject({ success: false, failed: true });
     expect(record.mock.calls).toEqual([[updated, initial, options().prExecutionContext],
       [latest, updated, options().prExecutionContext]]);
+  });
+  it.each([
+    { outcome: 'success', headSha: updated, unresolvedCount: 0 },
+    { outcome: 'skipped', unresolvedCount: 0, skipReason: 'initial_review_unavailable' },
+    { outcome: 'skipped', headSha: updated, unresolvedCount: 0, skipReason: 'review_rate_limited' },
+    { outcome: 'skipped', headSha: updated, unresolvedCount: 0, skipReason: 'review_skipped' },
+    { outcome: 'limit', headSha: updated, unresolvedCount: 1 },
+  ] satisfies CacciaResult[])('records a verified no-push head: $outcome $skipReason', async (result) => {
+    const record = vi.fn();
+    const input = { ...options(), prMergePushRecorder: { record } };
+    mocks.git.mockImplementation(async (_cwd, args) => ({
+      stdout: args[0] === 'symbolic-ref' ? 'feature' : updated, stderr: '',
+    }));
+    mocks.details.mockResolvedValue({ ...input.prExecutionContext, number: 123, headSha: updated });
+    mocks.run.mockResolvedValue(result);
+    expect(await cacciaEffect(input, 123)).toMatchObject({ success: true, failed: false,
+      outcome: result.outcome, headSha: updated, unresolvedCount: result.unresolvedCount });
+    expect(record).toHaveBeenCalledExactlyOnceWith(updated, updated, input.prExecutionContext);
+  });
+  it.each([
+    ['success', 'head'], ['success', 'identity'], ['skipped', 'identity'], ['limit', 'head'],
+  ] as const)('does not record a no-push %s when the latest PR %s changes', async (outcome, changed) => {
+    const record = vi.fn();
+    mocks.run.mockResolvedValue({ outcome, headSha: initial, unresolvedCount: outcome === 'limit' ? 1 : 0,
+      ...(outcome === 'skipped' ? { skipReason: 'review_skipped' } : {}) });
+    mocks.details.mockResolvedValueOnce({ ...options().prExecutionContext, number: 123 })
+      .mockResolvedValue({ ...options().prExecutionContext,
+        number: changed === 'identity' ? 456 : 123, headSha: changed === 'head' ? updated : initial });
+    expect(await cacciaEffect({ ...options(), prMergePushRecorder: { record } }, 123))
+      .toMatchObject({ success: false, failed: true });
+    expect(record).not.toHaveBeenCalled();
+  });
+  it.each(['success', 'skipped', 'limit'] as const)('fails the effect when recording a no-push %s fails', async (outcome) => {
+    const record = vi.fn(() => { throw new Error('Storage failed'); });
+    mocks.run.mockResolvedValue({ outcome, headSha: initial, unresolvedCount: outcome === 'limit' ? 1 : 0,
+      ...(outcome === 'skipped' ? { skipReason: 'review_skipped' } : {}) });
+    expect(await cacciaEffect({ ...options(), prMergePushRecorder: { record } }, 123))
+      .toMatchObject({ success: false, failed: true });
+    expect(record).toHaveBeenCalledExactlyOnceWith(initial, initial, options().prExecutionContext);
+  });
+  it('keeps the previous remote head recorded at push after a successful review', async () => {
+    const record = vi.fn();
+    mocks.run.mockImplementation(async (input) => {
+      if (input.entry === 'linked') input.onPushedHead?.(updated);
+      return { outcome: 'success', headSha: updated, unresolvedCount: 0 };
+    });
+    mocks.details.mockResolvedValueOnce({ ...options().prExecutionContext, number: 123 })
+      .mockResolvedValue({ ...options().prExecutionContext, number: 123, headSha: updated, sameRepository: true });
+    let merged = false;
+    mocks.git.mockImplementation(async (_cwd, args) => {
+      if (args[0] === 'merge') merged = true;
+      return { stdout: args[0] === 'symbolic-ref' ? 'feature'
+        : args[1] === 'FETCH_HEAD' || merged ? updated : initial, stderr: '' };
+    });
+    expect(await cacciaEffect({ ...options(), prMergePushRecorder: { record } }, 123))
+      .toMatchObject({ success: true, headSha: updated });
+    expect(record).toHaveBeenCalledExactlyOnceWith(updated, initial, options().prExecutionContext);
   });
   it('stops when persisting a successful push fails', async () => {
     const record = vi.fn(() => { throw new Error('Storage failed'); });

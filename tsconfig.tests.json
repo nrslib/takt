@@ -161,6 +161,7 @@
     "src/__tests__/github-pr.test.ts",
     "src/__tests__/github-provider.test.ts",
     "src/__tests__/gitlab-issue.test.ts",
+    "src/__tests__/gitlab-pr-execution.test.ts",
     "src/__tests__/gitlab-provider.test.ts",
     "src/__tests__/globalConfig-defaults.test.ts",
     "src/__tests__/goal-abort-monitor.test.ts",

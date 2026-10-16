@@ -1036,4 +1036,6 @@ follow-up 的错误、限流、blocked 或异常都不会由 Companion 处理再
 
 修复 push 后验证 SHA 并对同一个 clone 进行 fast-forward。CI 将 PR status 的 head 与 `effect.caccia.caccia.headSha` 对照，合并使用 clone 当前 HEAD 作为 expected SHA。此前 push effect 的结果作为历史记录保留。
 
+GitLab 也提供 MR 详情和 CI 状态，原因是 `github_unavailable` 的 `skipped` 会继续等待返回 head 的 CI。合并方式和 head 限制仍不受支持，传入这些参数的 `merge_pr` 会失败。
+
 合并 builtin 明确执行 Caccia：`merge-review` 按 `review → caccia → wait_ci → 评价评论` 执行，`merge-review-fix` 和 `merge-review-fix-simple` 按 `review/fix → commit_and_push → caccia → wait_ci → merge_pr` 执行。`success` 与 `skipped` 继续等待返回 head 的 CI。`limit` 评论未解决线程数后以 COMPLETE 结束，不合并；执行错误评论 `error` 后以 ABORT 结束。push、任务后处理和 Pipeline 不再隐式启动 Caccia。设置 `merge.auto_start: true` 时，PR 发布后启动合并 workflow，由其明确的 effect 执行 Caccia。
