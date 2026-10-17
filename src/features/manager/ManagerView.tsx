@@ -190,7 +190,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
         }
         return;
       }
-      const result = await session.handleUserMessage({ text, abortSignal: controller.signal });
+      const result = await session.handleUserMessage({ text, abortSignal: controller.signal, onNotification: append });
       if (active.current !== controller || !mounted.current) return;
       await appendResult(result, controller.signal);
       setPending(session.getPendingSummary());

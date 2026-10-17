@@ -46,6 +46,21 @@ function patrol(filePath = '/inbox/patrol.json'): SavedManagerEvent {
   return { filePath, event: { kind: 'patrol', goalId: goal.id, createdAt: new Date().toISOString() } };
 }
 
+it('passes the event goal identity, repository and constraints separately from conversation text', async () => {
+  goal = { ...goal, constraints: ['外部への送信は禁止'] };
+  inbox = [saved('task-a')];
+  const manager = createRunEventManager('/project');
+  const signal = new AbortController().signal;
+  try {
+    expect(await manager.processPending(signal, 1)).toBe(true);
+    expect(doubles.turn).toHaveBeenCalledWith(expect.objectContaining({
+      abortSignal: signal,
+      goal: { id: goal.id, repositoryDirectory: '/project', constraints: goal.constraints },
+    }));
+    expect(JSON.parse(doubles.turn.mock.calls[0]![0].text).event.taskName).toBe('task-a');
+  } finally { await manager.close(); }
+});
+
 it('transfers user MCP servers to connection setup and the merged servers to preflight and session', async () => {
   const userServers = { browser: { command: '/browser-mcp' } };
   const servers = { ...userServers, manager: { command: 'node' } };

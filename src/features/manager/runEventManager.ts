@@ -82,6 +82,7 @@ export function createRunEventManager(cwd: string) {
         const result = await manager.handleUserMessage({
           text: buildGoalTurnContext(cwd, goal, saved.event, new TaskRunner(cwd).listTaskStateItems()),
           abortSignal: signal,
+          goal: { id: goal.id, repositoryDirectory: cwd, constraints: goal.constraints },
         });
         if (signal.aborted) return false;
         if (result.kind === 'error') throw new Error(result.message);
