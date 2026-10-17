@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
@@ -117,4 +117,44 @@ export function runTakt(options: TaktRunOptions): TaktRunResult {
   }
 
   return { stdout: '', stderr: '', exitCode: 1 };
+}
+
+export async function runTaktAsync(options: TaktRunOptions): Promise<TaktRunResult> {
+  const binPath = getTaktBinPath();
+  const timeout = options.timeout ?? DEFAULT_TIMEOUT;
+  const provider = options.injectProvider === false
+    ? undefined
+    : process.env.TAKT_E2E_PROVIDER;
+  const args = injectProviderArgs(options.args, provider);
+
+  for (let attempt = 0; ; attempt++) {
+    const result = await new Promise<TaktRunResult>((resolveResult, reject) => {
+      const child = execFile('node', [binPath, ...args], {
+        cwd: options.cwd,
+        env: options.env,
+        encoding: 'utf-8',
+        timeout,
+        maxBuffer: MAX_BUFFER,
+      }, (error, stdout, stderr) => {
+        if (error?.signal === 'SIGTERM' || error?.signal === 'SIGKILL') {
+          reject(new Error(`takt process timed out after ${timeout}ms`));
+          return;
+        }
+
+        resolveResult({
+          stdout,
+          stderr,
+          exitCode: error ? (typeof error.code === 'number' ? error.code : 1) : 0,
+        });
+      });
+      child.stdin?.end(options.input);
+    });
+
+    if (result.exitCode !== 0
+      && attempt < MAX_TRANSIENT_RETRIES
+      && isTransientProviderFailure(result.stdout, result.stderr)) {
+      continue;
+    }
+    return result;
+  }
 }

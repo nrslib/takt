@@ -17,8 +17,8 @@ import {
   createIsolatedEnv,
   updateIsolatedConfig,
   type IsolatedEnv,
-} from '../helpers/isolated-env';
-import { formatTaktRunResult, runTakt } from '../helpers/takt-runner';
+} from '../helpers/isolated-env.js';
+import { formatTaktRunResult, runTaktAsync } from '../helpers/takt-runner.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -207,7 +207,7 @@ describe('E2E: Run interrupted task cleanup and high-priority run flows', () => 
       expect(runningTask).toBeDefined();
       expect(runningTask?.owner_pid).toBeTypeOf('number');
 
-      const rerunResult = runTakt({
+      const rerunResult = await runTaktAsync({
         args: ['run', '--provider', 'mock'],
         cwd: repo.path,
         env: {
@@ -244,7 +244,7 @@ describe('E2E: Run interrupted task cleanup and high-priority run flows', () => 
     }
   }, 240_000);
 
-  it('should process high-concurrency batch without leaving inconsistent task state', () => {
+  it('should process high-concurrency batch without leaving inconsistent task state', async () => {
     // Given: 12 pending tasks with concurrency=10
     updateIsolatedConfig(isolatedEnv.taktDir, {
       provider: 'mock',
@@ -261,7 +261,7 @@ describe('E2E: Run interrupted task cleanup and high-priority run flows', () => 
     writeFileSync(tasksFile, createPendingTasksYaml(12, workflowPath, 'parallel-load'), 'utf-8');
 
     // When: run all tasks
-    const result = runTakt({
+    const result = await runTaktAsync({
       args: ['run', '--provider', 'mock'],
       cwd: repo.path,
       env: {
@@ -285,7 +285,7 @@ describe('E2E: Run interrupted task cleanup and high-priority run flows', () => 
     );
   }, 240_000);
 
-  it('should initialize project dirs and execute tasks after add+run when global config is absent', () => {
+  it('should initialize project dirs and execute tasks after add+run when global config is absent', async () => {
     const envWithoutConfig = createEnvWithoutGlobalConfig();
 
     try {
@@ -299,7 +299,7 @@ describe('E2E: Run interrupted task cleanup and high-priority run flows', () => 
       expect(existsSync(envWithoutConfig.globalConfigPath)).toBe(false);
 
       // When: add 2 tasks and run once
-      const addResult1 = runTakt({
+      const addResult1 = await runTaktAsync({
         args: ['--provider', 'mock', '--workflow', workflowPath, 'add', 'Initialize flow task 1'],
         cwd: repo.path,
         env: {
@@ -310,7 +310,7 @@ describe('E2E: Run interrupted task cleanup and high-priority run flows', () => 
         timeout: 240_000,
       });
 
-      const addResult2 = runTakt({
+      const addResult2 = await runTaktAsync({
         args: ['--provider', 'mock', '--workflow', workflowPath, 'add', 'Initialize flow task 2'],
         cwd: repo.path,
         env: {
@@ -321,7 +321,7 @@ describe('E2E: Run interrupted task cleanup and high-priority run flows', () => 
         timeout: 240_000,
       });
 
-      const runResult = runTakt({
+      const runResult = await runTaktAsync({
         args: ['--provider', 'mock', 'run'],
         cwd: repo.path,
         env: {
