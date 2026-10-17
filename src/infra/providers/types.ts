@@ -5,7 +5,7 @@ import type {
   ProviderActivityCallback,
   StreamCallback,
 } from '../../shared/types/provider.js';
-import type { PermissionHandler, SkillPermissionHandler, AskUserQuestionHandler } from '../../core/workflow/types.js';
+import type { PermissionHandler, SkillPermissionHandler, AskUserQuestionHandler, ToolPermissionDecisionHandler } from '../../core/workflow/types.js';
 import type { PreparedProviderMcp } from './mcp/types.js';
 
 export interface AgentSetup {
@@ -53,6 +53,7 @@ export interface ProviderCallOptions {
   onStream?: StreamCallback;
   onActivity?: ProviderActivityCallback;
   onPermissionRequest?: PermissionHandler;
+  onToolPermissionDecision?: ToolPermissionDecisionHandler;
   onSkillPermissionRequest?: SkillPermissionHandler;
   onAskUserQuestion?: AskUserQuestionHandler;
   bypassPermissions?: boolean;

@@ -21,6 +21,8 @@ import { getLabel } from '../../shared/i18n/index.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
 import type { ProviderType } from '../../infra/providers/index.js';
 import { toManagerOutputSchema, toStrictManagerOutputSchema } from './outputSchema.js';
+import { createManagerToolPermissionHandler } from './toolPermissionDecision.js';
+import type { ManagerPermissionGoal } from './toolPermissionJudge.js';
 
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
 import { MANAGER_ASSIGNMENT_ENV, findAssignedGoalRepository, resolveAssignedProjectRoot, resolveCurrentManagerAssignment, type ManagerAssignmentIdentity } from './assignment.js';
@@ -68,6 +70,12 @@ export function getManagerOutputSchema(providerType: ProviderType): Record<strin
 }
 
 export interface PendingManagerSummary { revision: number; summary: ManagerGoalSummary; repositoryDirectory?: string }
+interface ManagerTurnOptions {
+  text: string;
+  abortSignal?: AbortSignal;
+  goal?: ManagerPermissionGoal;
+  onNotification?: (message: string) => void;
+}
 type ManagerTurnResult =
   | { kind: 'reply'; message: string }
   | { kind: 'error'; message: string };
@@ -87,6 +95,7 @@ export function createManagerConversationSession(input: {
   let active: AbortController | null = null;
   let registering = false;
   let sessionId: string | undefined;
+  let previousDenials: { goalKey: string | undefined; reasons: string[] } | undefined;
   let closed = false;
   const operations = new Set<Promise<ManagerResult | null>>();
   const track = <T extends ManagerResult | null>(operation: Promise<T>): Promise<T> => {
@@ -164,7 +173,7 @@ export function createManagerConversationSession(input: {
     getPendingSummary(): PendingManagerSummary | null {
       return pending === null ? null : structuredClone(pending);
     },
-    async handleUserMessage(options: { text: string; abortSignal?: AbortSignal }): Promise<ManagerTurnResult> {
+    async handleUserMessage(options: ManagerTurnOptions): Promise<ManagerTurnResult> {
       if (closed) return { kind: 'error', message: 'Manager session is closed' };
       if (registering) return { kind: 'error', message: 'Goal registration is in progress' };
       if (active !== null) return { kind: 'error', message: 'A conversation turn is already running' };
@@ -172,11 +181,16 @@ export function createManagerConversationSession(input: {
       const turn = generation;
       const controller = new AbortController();
       active = controller;
+      const goalKey = options.goal === undefined ? undefined : JSON.stringify([options.goal.repositoryDirectory, options.goal.id]);
+      const priorReasons = previousDenials?.goalKey === goalKey ? previousDenials?.reasons : undefined;
+      previousDenials = undefined;
+      const denialReasons: string[] = [];
       const cancel = (): void => {
         controller.abort();
         if (generation === turn) {
           invalidate();
           sessionId = undefined;
+          previousDenials = undefined;
         }
       };
       options.abortSignal?.addEventListener('abort', cancel, { once: true });
@@ -208,7 +222,16 @@ export function createManagerConversationSession(input: {
           }));
           const text = memories.some(({ goals, diagnostics }) => (goals !== undefined && goals.length > 0) || diagnostics.length > 0)
             ? `${options.text}\n\nGoal memory (including run manager results): ${buildGoalMemory(memories)}` : options.text;
-          const prompt = assignment === undefined ? text : `Current manager assignment: ${JSON.stringify(assignment)}\n\n${text}`;
+          const turnText = priorReasons === undefined || priorReasons.length === 0 ? text
+            : `${text}\n\nPrevious tool permission denials: ${JSON.stringify(priorReasons)}`;
+          const prompt = assignment === undefined ? turnText : `Current manager assignment: ${JSON.stringify(assignment)}\n\n${turnText}`;
+          const claude = plan.ctx.providerType === 'claude' || plan.ctx.providerType === 'claude-sdk';
+          if (claude && plan.permissionJudge === undefined) throw new Error('Manager permission judge plan is missing');
+          const onToolPermissionDecision = claude ? createManagerToolPermissionHandler({
+            plan: plan.permissionJudge!, cwd, instruction: options.text, goal: options.goal,
+            abortSignal: controller.signal, onNotification: options.onNotification,
+            onDenial: (reason) => { if (turn === generation && !controller.signal.aborted) denialReasons.push(reason); },
+          }) : undefined;
           const repositoryAdditionIds = new Set<string>();
           let usedTools = false;
           const callAgent = async () => {
@@ -217,6 +240,7 @@ export function createManagerConversationSession(input: {
               providerOptions: plan.ctx.providerOptions,
               permissionMode: 'full', outputSchema: getManagerOutputSchema(plan.ctx.providerType), language: plan.ctx.lang,
               mcpServers: servers, preparedMcp: prepared,
+              ...(onToolPermissionDecision === undefined ? {} : { onToolPermissionDecision }),
               onStream: (event) => {
                 if (event.type === 'tool_use') usedTools = true;
                 if (event.type === 'tool_use' && addRepositoryToolNames.has(event.data.tool)) {
@@ -267,6 +291,7 @@ export function createManagerConversationSession(input: {
         if (turn === generation) invalidate();
         result = { kind: 'error', message: getErrorMessage(error) };
       } finally {
+        if (!closed && !controller.signal.aborted) previousDenials = { goalKey, reasons: denialReasons };
         try {
           const assignment = await getAssignment();
           for (const directory of assignment?.repositoryDirectories ?? [cwd]) await ensureManagerRun(directory);
@@ -306,12 +331,13 @@ export function createManagerConversationSession(input: {
       if (closed || registering || active !== null) throw new Error('Manager session is unavailable');
       invalidate();
       sessionId = undefined;
+      previousDenials = undefined;
     },
     getPendingSummary: session.getPendingSummary,
     dismissSummary(revision: number): void {
       if (!registering && pending?.revision === revision) invalidate();
     },
-    handleUserMessage: (options: { text: string; abortSignal?: AbortSignal }) => track(session.handleUserMessage(options)),
+    handleUserMessage: (options: ManagerTurnOptions) => track(session.handleUserMessage(options)),
     approveSummary: (revision: number) => track(session.approveSummary(revision)),
     answerQuestion: (options: { goalId: string; questionId: string; text: string; abortSignal?: AbortSignal }) => track(session.answerQuestion(options)),
     pauseGoal: (options: { goalId: string; abortSignal?: AbortSignal }) => track(changeGoalExecution(options, 'paused')),
@@ -319,6 +345,7 @@ export function createManagerConversationSession(input: {
     abortGoal: (options: { goalId: string; abortSignal?: AbortSignal }) => track(changeGoalExecution(options, 'aborted')),
     async close(): Promise<void> {
       closed = true;
+      previousDenials = undefined;
       invalidate();
       active?.abort();
       const results = await Promise.allSettled([...operations]);

@@ -28,6 +28,10 @@ import type {
 
 export type { SandboxSettings };
 import type { PermissionResult } from '../../core/workflow/index.js';
+import type { ToolPermissionDecisionHandler } from '../../core/workflow/types.js';
+export type {
+  ToolPermissionDecisionRequest, ToolPermissionDecision, ToolPermissionDecisionHandler,
+} from '../../core/workflow/types.js';
 
 // Re-export PermissionResult for convenience
 export type { PermissionResult, PermissionUpdate };
@@ -58,22 +62,6 @@ export interface PermissionRequest {
 export type PermissionHandler = (
   request: PermissionRequest
 ) => Promise<PermissionResult>;
-
-export interface ToolPermissionDecisionRequest {
-  readonly toolName: string;
-  readonly toolInput: unknown;
-  /** 実際に道具が走る作業ディレクトリ。 */
-  readonly cwd: string;
-  /** 親の中断とフックの中断をまとめたシグナル。 */
-  readonly abortSignal?: AbortSignal;
-}
-
-export type ToolPermissionDecision =
-  | { readonly decision: 'allow' }
-  | { readonly decision: 'deny'; readonly reason: string };
-
-export type ToolPermissionDecisionHandler =
-  (request: ToolPermissionDecisionRequest) => Promise<ToolPermissionDecision>;
 
 /** AskUserQuestion tool input */
 export interface AskUserQuestionInput {
@@ -144,6 +132,7 @@ export interface ClaudeCallOptions {
   onActivity?: ProviderActivityCallback;
   /** Custom permission handler for interactive permission prompts */
   onPermissionRequest?: PermissionHandler;
+  onToolPermissionDecision?: ToolPermissionDecisionHandler;
   /** Custom handler for AskUserQuestion tool */
   onAskUserQuestion?: AskUserQuestionHandler;
   /** Bypass all permission checks */

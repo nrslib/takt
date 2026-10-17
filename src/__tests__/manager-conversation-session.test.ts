@@ -49,6 +49,13 @@ function fixture(providerType: ManagerConversationPlan['ctx']['providerType'] = 
       provider: makeProvider({ supportsStructuredOutput: true, setup: doubles.setup }),
     },
     strategy: { systemPrompt: 'manager fixture' },
+    ...(providerType === 'claude' || providerType === 'claude-sdk' ? {
+      permissionJudge: {
+        resolution: { provider: providerType, model: undefined, providerOptions: {} },
+        language: 'ja' as const, systemPrompt: 'permission judge fixture',
+        managerPersona: 'manager fixture', managerPolicy: 'manager policy fixture',
+      },
+    } : {}),
   };
   const session = createManagerConversationSession({ cwd, plan });
   return { session, register, plan };

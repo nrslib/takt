@@ -9,6 +9,8 @@ import type { AssistantCliOverrides } from '../../core/config/provider-resolutio
 import type { McpServerConfig, StepProviderOptions } from '../../core/models/index.js';
 import type { Provider, ProviderType } from '../../infra/providers/index.js';
 import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
+import { resolveRuntimeManagerPermissionJudgeProvider } from '../../infra/config/runtime-provider/internal-agents.js';
+import type { ManagerPermissionJudgePlan } from './toolPermissionJudge.js';
 
 export interface ManagerConversationContext {
   provider: Provider;
@@ -21,6 +23,7 @@ export interface ManagerConversationContext {
 
 export interface ManagerConversationPlan {
   ctx: ManagerConversationContext;
+  permissionJudge?: ManagerPermissionJudgePlan;
   strategy: {
     systemPrompt: string;
   };
@@ -56,7 +59,25 @@ export function createManagerConversationPlan(
   const instruction = instructionSource === undefined ? undefined
     : resolveRefToContent('manager', { manager: instructionSource }, cwd, 'instructions', context);
   if (persona === undefined || instruction === undefined || policy === undefined || knowledge === undefined) throw new Error('Manager facets are missing');
+  let permissionJudge: ManagerPermissionJudgePlan | undefined;
+  if (resolved.provider === 'claude' || resolved.provider === 'claude-sdk') {
+    const seat = resolveRuntimeManagerPermissionJudgeProvider(cwd);
+    const judgeProvider = seat === undefined ? resolved.provider : seat.provider;
+    if (judgeProvider === undefined) throw new Error('Manager permission judge provider is not configured');
+    const judgePersona = resolveFacetByName('manager-permission-judge', 'personas', context);
+    const judgePolicy = resolveFacetByName('manager-permission-judge', 'policies', context);
+    if (judgePersona === undefined || judgePolicy === undefined) throw new Error('Manager permission judge facets are missing');
+    permissionJudge = {
+      resolution: {
+        provider: judgeProvider, model: seat === undefined ? resolved.model : seat.model,
+        providerOptions: (seat === undefined ? configured : seat.providerOptions) ?? {},
+      },
+      language: lang, systemPrompt: [judgePersona.trim(), judgePolicy.trim()].join('\n\n'),
+      managerPersona: persona, managerPolicy: policy,
+    };
+  }
   return {
+    ...(permissionJudge === undefined ? {} : { permissionJudge }),
     ctx: {
       provider, providerType: resolved.provider, model: resolved.model, lang,
       providerOptions: configured, mcpServers: servers,
