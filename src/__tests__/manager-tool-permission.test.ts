@@ -99,8 +99,8 @@ function handler(options: DecisionOptions): ToolPermissionDecisionHandler {
   expect(options.onToolPermissionDecision, 'manager は Claude の各ターンに判断 handler を渡す').toBeTypeOf('function');
   return options.onToolPermissionDecision!;
 }
-async function decide(toolName: string, toolInput: unknown = {}) {
-  const session = createSession();
+async function decide(toolName: string, toolInput: unknown = {}, language: 'ja' | 'en' = 'ja') {
+  const session = createSession('claude-sdk', language);
   let decision: ToolPermissionDecision | undefined;
   doubles.call.mockImplementationOnce(async (_prompt: string, options: DecisionOptions) => {
     decision = await handler(options)(request(toolName, toolInput));
@@ -174,6 +174,36 @@ describe('manager tool permission classification', () => {
     expectDenial(await decide(name));
     expect(executeIsolatedStructuredInternalAgent).not.toHaveBeenCalled();
   });
+  describe.each(['allow', 'deny'] as const)('command lookup with judge decision %s', (decision) => {
+    it.each([
+      'command -v codex', 'command -V codex',
+      'command -pv codex', 'command -pV codex', 'command -p -v codex',
+      "bash -c 'command -v codex'", "sh -c 'command -v codex'", "zsh -c 'command -v codex'",
+    ])('returns the judge decision through PreToolUse: %s', async (command) => {
+      vi.mocked(executeIsolatedStructuredInternalAgent).mockResolvedValue(judgment({
+        decision, reason: decision === 'deny' ? 'judge examined command' : null,
+      }));
+      const session = createSession();
+      let output: unknown;
+      doubles.call.mockImplementationOnce(async (_prompt: string, options: DecisionOptions) => {
+        const sdk = buildSdkOptions({ cwd, abortSignal: options.abortSignal, onToolPermissionDecision: handler(options) });
+        const hook = sdk.hooks?.PreToolUse?.find(({ matcher }) => matcher === undefined)?.hooks[0];
+        expect(hook).toBeTypeOf('function');
+        output = await hook!({ hook_event_name: 'PreToolUse', session_id: 'sdk-session', transcript_path: '/fixture/transcript',
+          cwd: toolCwd, tool_name: 'Bash', tool_input: { command }, tool_use_id: 'fixture-tool-use',
+        }, 'fixture-tool-use', { signal: new AbortController().signal });
+        return reply();
+      });
+      try {
+        expect((await session.handleUserMessage({ text: humanInstruction })).kind).toBe('reply');
+        expect(executeIsolatedStructuredInternalAgent).toHaveBeenCalledOnce();
+        expect(output).toEqual({ hookSpecificOutput: {
+          hookEventName: 'PreToolUse', permissionDecision: decision,
+          ...(decision === 'deny' ? { permissionDecisionReason: 'judge examined command' } : {}),
+        } });
+      } finally { await session.close(); }
+    });
+  });
   it.each([
     'claude -p inspect', 'codex exec inspect', 'cursor-agent inspect', 'opencode run inspect',
     'gemini inspect', 'copilot inspect', 'aider inspect', 'takt run inspect',
@@ -182,6 +212,20 @@ describe('manager tool permission classification', () => {
     "'cursor-agent' inspect", 'co"de"x exec inspect', 'pwd && codex exec inspect',
     'co\\dex exec inspect', '/usr/local/bin/codex exec inspect', 'npx --yes @openai/codex exec inspect',
     'env -u SESSION MODE=test bunx --bun gemini inspect', 'takt manager',
+    'timeout 60 codex exec inspect', 'timeout --signal TERM --kill-after 5 60 codex exec inspect',
+    'nohup claude -p inspect', 'exec codex exec inspect', 'exec -a manager codex exec inspect',
+    'command codex exec inspect', 'command -- codex exec inspect', 'time -p codex exec inspect',
+    'command codex', 'command -p codex', 'command -- codex -v', 'command codex -v',
+    "bash -c 'command codex'", "sh -c 'command codex'", "zsh -c 'command codex'",
+    'command -v codex; codex exec inspect', 'codex exec inspect; command -v codex',
+    'time -f elapsed codex exec inspect', 'nice -n 5 codex exec inspect', 'nice --adjustment=5 codex exec inspect',
+    'sudo codex exec inspect', 'sudo -u root codex exec inspect', 'sudo --user root codex exec inspect',
+    'sudo --user=root codex exec inspect', 'sudo -uroot codex exec inspect',
+    'xargs codex', 'xargs -n 1 -P 2 codex exec inspect', 'xargs -I {} codex exec inspect {}',
+    'stdbuf -o L codex exec inspect', 'stdbuf -oL codex exec inspect',
+    'bash -c "codex exec inspect"', "sh -c 'claude -p inspect'", "zsh -c 'gemini inspect'",
+    "bash -lc 'codex exec inspect'", "bash -c 'sh -c \"codex exec inspect\"'",
+    "timeout 60 sudo -u root env MODE=test nohup bash -c 'codex exec inspect'",
   ])('denies an AI CLI launch without a judge: %s', async (command) => {
     expectDenial(await decide('Bash', { command }));
     expect(executeIsolatedStructuredInternalAgent).not.toHaveBeenCalled();
@@ -190,10 +234,27 @@ describe('manager tool permission classification', () => {
     "printf '%s\\n' 'codex'", '# codex exec inspect', "cat <<'EOF'\ncodex exec inspect\nEOF",
     "printf 'codex", 'printf "%s" "$(unknown-wrapper inspect)"',
     'takt list run', 'printf codex # claude -p inspect',
+    'timeout 5 git status', 'sudo -u root git status', 'sudo -u codex git status',
+    'sudo --user codex git status', 'sudo --user=codex git status', 'sudo -ucodex git status',
+    'exec -a codex git status', 'nice -n 5 git status', 'stdbuf -o L git status',
+    "bash -c 'printf codex'", "bash -c 'codex exec $(pwd)'",
+    "codex exec inspect; bash -c 'printf $(pwd)'", "bash -c 'printf $(pwd)'; codex exec inspect",
+    "bash -c 'codex exec inspect; sh -c \"printf $(pwd)\"'",
   ])('judges text or unsupported syntax instead of treating a name as a launch: %s', async (command) => {
     vi.mocked(executeIsolatedStructuredInternalAgent).mockResolvedValue(judgment({ decision: 'deny', reason: 'judge examined command' }));
     expect(await decide('Bash', { command })).toEqual({ decision: 'deny', reason: 'judge examined command' });
     expect(executeIsolatedStructuredInternalAgent).toHaveBeenCalledOnce();
+  });
+  describe.each(['ja', 'en'] as const)('fixed denial reasons in %s', (language) => {
+    it.each(['Task', 'Agent', 'Bash'])('returns the localized %s denial through the session', async (toolName) => {
+      const reason = toolName === 'Bash'
+        ? language === 'ja' ? 'Bash: 別の AI コマンド行エージェントを起動する操作は許可されていません。'
+          : 'Bash: Launching another AI command-line agent is not allowed.'
+        : language === 'ja' ? `${toolName}: manager から別の AI エージェントを起動する操作は許可されていません。`
+          : `${toolName}: The manager is not allowed to launch another AI agent.`;
+      expect(await decide(toolName, { command: 'timeout 60 codex exec inspect' }, language)).toEqual({ decision: 'deny', reason });
+      expect(executeIsolatedStructuredInternalAgent).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -314,16 +375,34 @@ describe('manager permission judge input and output', () => {
     expectDenial(await decide('Bash'));
     expect(executeIsolatedStructuredInternalAgent).toHaveBeenCalledOnce();
   });
+  describe.each(['ja', 'en'] as const)('fixed judge failure reasons in %s', (language) => {
+    it.each([
+      { failure: 'error response', ja: '道具の判断役の実行に失敗したため拒否しました。', en: 'Denied because the tool permission judge failed to run.' },
+      { failure: 'invalid output', ja: '道具の判断役の出力が不正なため拒否しました。', en: 'Denied because the tool permission judge returned invalid output.' },
+      { failure: 'missing reason', ja: '道具の判断役が理由を返さなかったため拒否しました。', en: 'Denied because the tool permission judge did not provide a reason.' },
+      { failure: 'exception', ja: '道具の判断役の実行または出力の検証に失敗したため拒否しました。', en: 'Denied because the tool permission judge failed to run or its output could not be validated.' },
+    ])('denies $failure with the localized reason without retrying', async ({ failure, ja, en }) => {
+      if (failure === 'exception') vi.mocked(executeIsolatedStructuredInternalAgent).mockRejectedValueOnce(new Error('judge failure'));
+      else {
+        const response = failure === 'error response' ? { ...judgment(undefined), status: 'error' as const }
+          : judgment(failure === 'invalid output' ? {} : { decision: 'deny', reason: '   ' });
+        vi.mocked(executeIsolatedStructuredInternalAgent).mockResolvedValueOnce(response);
+      }
+      expect(await decide('Bash', { command: 'pwd' }, language)).toEqual({ decision: 'deny', reason: language === 'ja' ? ja : en });
+      expect(executeIsolatedStructuredInternalAgent).toHaveBeenCalledOnce();
+    });
+  });
 });
 
 describe('manager permission judge deadline and cancellation', () => {
-  it('denies an already cancelled request without invoking the judge or leaving timers', async () => {
+  it.each(['ja', 'en'] as const)('denies an already cancelled request in %s without invoking the judge or leaving timers', async (language) => {
     vi.useFakeTimers();
     const controller = new AbortController();
     controller.abort();
-    const session = createSession();
+    const session = createSession('claude-sdk', language);
     doubles.call.mockImplementationOnce(async (_prompt: string, options: DecisionOptions) => {
-      expectDenial(await handler(options)(request('Bash', {}, controller.signal)));
+      expect(await handler(options)(request('Bash', {}, controller.signal))).toEqual({ decision: 'deny', reason: language === 'ja'
+        ? '道具の判断が中断されたため拒否しました。' : 'Denied because the tool permission check was interrupted.' });
       return reply();
     });
     try {
@@ -337,7 +416,7 @@ describe('manager permission judge deadline and cancellation', () => {
     expect(MANAGER_PERMISSION_JUDGE_TIMEOUT_MS).toBe(30_000);
     expect(MANAGER_PERMISSION_JUDGE_TIMEOUT_MS).toBeLessThan(TOOL_PERMISSION_DECISION_TIMEOUT_MS);
   });
-  it('denies at 30 seconds even if the judge ignores abort, and never accepts its late allow', async () => {
+  it.each(['ja', 'en'] as const)('denies at 30 seconds in %s even if the judge ignores abort, and never accepts its late allow', async (language) => {
     vi.useFakeTimers();
     let complete!: (response: AgentResponse) => void;
     let started!: () => void;
@@ -345,7 +424,7 @@ describe('manager permission judge deadline and cancellation', () => {
     vi.mocked(executeIsolatedStructuredInternalAgent).mockImplementationOnce(() => {
       started(); return new Promise((resolve) => { complete = resolve; });
     });
-    const session = createSession();
+    const session = createSession('claude-sdk', language);
     let decision: ToolPermissionDecision | undefined;
     doubles.call.mockImplementationOnce(async (_prompt: string, options: DecisionOptions) => {
       decision = await handler(options)(request()); return reply();
@@ -359,7 +438,8 @@ describe('manager permission judge deadline and cancellation', () => {
       expect(decision).toBeUndefined();
       await vi.advanceTimersByTimeAsync(1);
       expect((await turn).kind).toBe('reply');
-      expectDenial(decision!);
+      expect(decision).toEqual({ decision: 'deny', reason: language === 'ja'
+        ? '道具の判断役が30秒の期限を超えたため拒否しました。' : 'Denied because the tool permission judge exceeded the 30-second time limit.' });
       expect(vi.mocked(executeIsolatedStructuredInternalAgent).mock.calls[0]![3].abortSignal?.aborted).toBe(true);
       complete(judgment({ decision: 'allow', reason: null }));
       await Promise.resolve();
@@ -397,8 +477,9 @@ describe('manager permission confirmation and turn context', () => {
   beforeEach(() => {
     vi.mocked(executeIsolatedStructuredInternalAgent).mockResolvedValue(judgment({ decision: 'ask', reason }));
   });
-  it('denies confirmation immediately, delivers a goal-less notice, and exposes the reason in the next turn', async () => {
-    const session = createSession(); const onNotification = vi.fn();
+  it.each(['ja', 'en'] as const)('denies confirmation immediately in %s, delivers a goal-less notice, and exposes the reason in the next turn', async (language) => {
+    const session = createSession('claude-sdk', language); const onNotification = vi.fn();
+    const expectedReason = language === 'ja' ? `人の確認待ち (Bash): ${reason}` : `Waiting for human confirmation (Bash): ${reason}`;
     let decision: ToolPermissionDecision | undefined;
     doubles.call.mockImplementationOnce(async (_prompt: string, options: DecisionOptions) => {
       const decidePermission = handler(options);
@@ -411,25 +492,24 @@ describe('manager permission confirmation and turn context', () => {
         cwd: toolCwd, tool_name: 'Bash', tool_input: { command: 'pwd' }, tool_use_id: 'fixture-tool-use',
       }, 'fixture-tool-use', { signal: new AbortController().signal });
       expect(output).toMatchObject({ hookSpecificOutput: {
-        permissionDecision: 'deny', permissionDecisionReason: expect.stringContaining(reason),
+        permissionDecision: 'deny', permissionDecisionReason: expectedReason,
       } });
       return reply();
     });
     try {
       const turn: TurnOptions = { text: humanInstruction, onNotification };
       expect((await session.handleUserMessage(turn)).kind).toBe('reply');
-      expectDenial(decision!);
-      expect(decision).toMatchObject({ reason: expect.stringContaining(reason) });
-      expect(decision).toMatchObject({ reason: expect.stringMatching(/人.*確認.*待|waiting.*human/iu) });
-      expect(onNotification).toHaveBeenCalledWith(expect.stringContaining(reason));
-      expect(doubles.slack).toHaveBeenCalledWith(webhook, expect.stringContaining(reason));
+      expect(decision).toEqual({ decision: 'deny', reason: expectedReason });
+      expect(onNotification).toHaveBeenCalledWith(`manager: ${expectedReason}`);
+      expect(doubles.slack).toHaveBeenCalledWith(webhook, `manager: ${expectedReason}`);
       expect(doubles.update).not.toHaveBeenCalled();
       expect((await session.handleUserMessage({ text: '拒否の理由を説明してください' })).kind).toBe('reply');
-      expect(doubles.call.mock.calls[1]![0]).toContain(reason);
+      expect(doubles.call.mock.calls[1]![0]).toContain(expectedReason);
     } finally { await session.close(); }
   });
-  it('saves a custom notice for the specified goal repository and sends it through existing goal delivery', async () => {
-    const session = createSession(); const previous = goal;
+  it.each(['ja', 'en'] as const)('saves a custom notice in %s for the specified goal repository and sends it through existing goal delivery', async (language) => {
+    const session = createSession('claude-sdk', language); const previous = goal;
+    const expectedReason = language === 'ja' ? `人の確認待ち (Bash): ${reason}` : `Waiting for human confirmation (Bash): ${reason}`;
     const repositoryDirectory = '/fixture/goal-repository';
     doubles.call.mockImplementationOnce(async (_prompt: string, options: DecisionOptions) => {
       expectDenial(await handler(options)(request())); return reply();
@@ -439,7 +519,7 @@ describe('manager permission confirmation and turn context', () => {
       expect((await session.handleUserMessage(turn)).kind).toBe('reply');
       expect(doubles.update).toHaveBeenCalledWith(goal.id, expect.any(Function));
       expect(doubles.store).toHaveBeenLastCalledWith(repositoryDirectory);
-      expect(goal.notifications).toEqual([expect.objectContaining({ kind: 'custom', body: expect.stringContaining(reason) })]);
+      expect(goal.notifications).toEqual([expect.objectContaining({ kind: 'custom', body: expectedReason })]);
       expect(doubles.savedNotification).toHaveBeenCalledWith(repositoryDirectory, previous, goal, webhook);
     } finally { await session.close(); }
   });
