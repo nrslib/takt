@@ -612,6 +612,18 @@ it.each(['result', 'throw'] as const)('returns the second overflow failure from 
   } finally { await session.close(); }
 });
 
+it('does not retry an overflow after the failed attempt already used a tool', async () => {
+  const { session } = fixture();
+  try {
+    doubles.call.mockImplementationOnce(async (_prompt, options) => {
+      options.onStream?.({ type: 'tool_use', data: { tool: 'mcp__takt__takt_enqueue_goal_task', id: 'tool-1', input: {} } });
+      throw new Error('Prompt is too long');
+    });
+    expect(await session.handleUserMessage({ text: '相談' })).toEqual({ kind: 'error', message: 'Prompt is too long' });
+    expect(doubles.call).toHaveBeenCalledOnce();
+  } finally { await session.close(); }
+});
+
 it('does not retry unrelated provider failures or cancelled overflow calls', async () => {
   const { session } = fixture();
   try {

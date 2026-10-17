@@ -210,6 +210,7 @@ export function createManagerConversationSession(input: {
             ? `${options.text}\n\nGoal memory (including run manager results): ${buildGoalMemory(memories)}` : options.text;
           const prompt = assignment === undefined ? text : `Current manager assignment: ${JSON.stringify(assignment)}\n\n${text}`;
           const repositoryAdditionIds = new Set<string>();
+          let usedTools = false;
           const callAgent = async () => {
             const response = await agent.call(prompt, {
               cwd, model: plan.ctx.model, sessionId, abortSignal: controller.signal,
@@ -217,6 +218,7 @@ export function createManagerConversationSession(input: {
               permissionMode: 'full', outputSchema: getManagerOutputSchema(plan.ctx.providerType), language: plan.ctx.lang,
               mcpServers: servers, preparedMcp: prepared,
               onStream: (event) => {
+                if (event.type === 'tool_use') usedTools = true;
                 if (event.type === 'tool_use' && addRepositoryToolNames.has(event.data.tool)) {
                   repositoryAdditionIds.add(event.data.id);
                 }
@@ -239,7 +241,8 @@ export function createManagerConversationSession(input: {
           try {
             response = await callAgent();
           } catch (error) {
-            if (!/prompt is too long/i.test(getErrorMessage(error)) || controller.signal.aborted || turn !== generation) throw error;
+            // A fresh session cannot see operations the failed attempt already ran, so retry only before any tool use.
+            if (usedTools || !/prompt is too long/i.test(getErrorMessage(error)) || controller.signal.aborted || turn !== generation) throw error;
             sessionId = undefined;
             response = await callAgent();
           }
