@@ -394,6 +394,16 @@ tui:
     exceededStart: "保存済みの停止位置: {start}（iteration {iteration}）"
 
 manager:
+  toolPermission:
+    agentDenied: "{toolName}: manager から別の AI エージェントを起動する操作は許可されていません。"
+    bashDenied: "Bash: 別の AI コマンド行エージェントを起動する操作は許可されていません。"
+    awaitingConfirmation: "人の確認待ち ({toolName}): {reason}"
+    judgeFailed: "道具の判断役の実行に失敗したため拒否しました。"
+    judgeInvalidOutput: "道具の判断役の出力が不正なため拒否しました。"
+    judgeMissingReason: "道具の判断役が理由を返さなかったため拒否しました。"
+    judgeTimeout: "道具の判断役が30秒の期限を超えたため拒否しました。"
+    judgeInterrupted: "道具の判断が中断されたため拒否しました。"
+    judgeValidationFailed: "道具の判断役の実行または出力の検証に失敗したため拒否しました。"
   conversationFailureNotification: |-
     manager の処理に失敗しました。
     理由: {reason}

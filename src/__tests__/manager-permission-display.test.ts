@@ -20,22 +20,24 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-it('shows a saved custom permission notice for its goal through the existing display events', async () => {
-  const body = '人の確認待ち: 送信先を選択してください';
+it.each(['ja', 'en'] as const)('shows a saved custom permission notice in %s for its goal through the existing display events', async (language) => {
+  const body = language === 'ja' ? '人の確認待ち (Bash): 送信先を選択してください'
+    : 'Waiting for human confirmation (Bash): Choose a destination';
   const goal: Goal = { ...goalRecord(), notifications: [{
     id: '650e8400-e29b-41d4-a716-446655440003', kind: 'custom', body, recordedAt: '2026-10-17T00:00:00Z',
   }] };
   doubles.list.mockResolvedValueOnce({ goals: [goal], errors: [] });
 
-  const result = await savedEvents.readManagerDisplayEvents('/fixture/manager', 'ja');
+  const result = await savedEvents.readManagerDisplayEvents('/fixture/manager', language);
 
   expect(result.events).toEqual([expect.objectContaining({ message: expect.stringContaining(body) })]);
   expect(result.events[0]!.message).toContain(goal.id.slice(0, 8));
 });
 
-it('displays a goal-less permission notice during a successful conversation and accepts the next message', async () => {
+it.each(['ja', 'en'] as const)('displays a goal-less permission notice in %s during a successful conversation and accepts the next message', async (language) => {
   vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], questions: [], goals: [] });
-  const notice = '人の確認待ち: 外部送信先の選択が必要です';
+  const notice = language === 'ja' ? '人の確認待ち (Bash): 外部送信先の選択が必要です'
+    : 'Waiting for human confirmation (Bash): Choose an external destination';
   const unusedOperation = async (): Promise<never> => { throw new Error('unused manager operation'); };
   type Turn = Parameters<ManagerConversationSession['handleUserMessage']>[0] & { onNotification?: (message: string) => void };
   const handleUserMessage = vi.fn(async (options: Turn) => {
@@ -49,7 +51,7 @@ it('displays a goal-less permission notice during a successful conversation and 
     abortGoal: unusedOperation, close: async () => {},
   };
   const app = render(createElement(ManagerView, {
-    cwd: '/fixture/manager', lang: 'ja', session, initialDiagnostics: [], onExit: vi.fn(),
+    cwd: '/fixture/manager', lang: language, session, initialDiagnostics: [], onExit: vi.fn(),
   }));
   try {
     for (const text of ['最初の相談', '確認後の相談']) {

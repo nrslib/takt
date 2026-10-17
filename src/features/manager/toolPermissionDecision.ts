@@ -1,4 +1,5 @@
 import type { ToolPermissionDecisionHandler } from '../../core/workflow/types.js';
+import { getLabel } from '../../shared/i18n/index.js';
 import { classifyManagerToolPermission } from './toolPermissionClassifier.js';
 import { judgeManagerToolPermission, type ManagerPermissionGoal, type ManagerPermissionJudgePlan } from './toolPermissionJudge.js';
 import { notifyManagerToolPermission } from './toolPermissionNotification.js';
@@ -13,12 +14,12 @@ export function createManagerToolPermissionHandler(input: {
   onDenial: (reason: string) => void;
 }): ToolPermissionDecisionHandler {
   return async (request) => {
-    const classification = classifyManagerToolPermission(request);
+    const classification = classifyManagerToolPermission(request, input.plan.language);
     const result = classification.decision === 'judge'
       ? await judgeManagerToolPermission(input.plan, request, input) : classification;
     if (result.decision === 'allow') return result;
     const reason = result.decision === 'ask'
-      ? `人の確認待ち (${request.toolName}): ${result.reason}` : result.reason;
+      ? getLabel('manager.toolPermission.awaitingConfirmation', input.plan.language, { toolName: request.toolName, reason: result.reason }) : result.reason;
     input.onDenial(reason);
     if (result.decision === 'ask') {
       const message = await notifyManagerToolPermission({ cwd: input.cwd, goal: input.goal, message: reason });

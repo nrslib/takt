@@ -1,6 +1,7 @@
 import { z } from 'zod/v4';
 import { executeIsolatedStructuredInternalAgent, type ResolvedInternalAgentOptions } from '../../agents/agent-usecases.js';
 import type { ToolPermissionDecisionRequest } from '../../core/workflow/types.js';
+import { getLabel } from '../../shared/i18n/index.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { toStrictManagerOutputSchema } from './outputSchema.js';
 
@@ -61,18 +62,18 @@ export async function judgeManagerToolPermission(
       interrupted,
     ]);
     signal.throwIfAborted();
-    if (response.status !== 'done') return { decision: 'deny', reason: '道具の判断役の実行に失敗したため拒否しました。' };
+    if (response.status !== 'done') return { decision: 'deny', reason: getLabel('manager.toolPermission.judgeFailed', plan.language) };
     const raw: unknown = response.structuredOutput === undefined ? JSON.parse(response.content) : response.structuredOutput;
     const parsed = decisionSchema.safeParse(raw);
-    if (!parsed.success) return { decision: 'deny', reason: '道具の判断役の出力が不正なため拒否しました。' };
+    if (!parsed.success) return { decision: 'deny', reason: getLabel('manager.toolPermission.judgeInvalidOutput', plan.language) };
     if (parsed.data.decision === 'allow') return { decision: 'allow' };
-    if (!parsed.data.reason?.trim()) return { decision: 'deny', reason: '道具の判断役が理由を返さなかったため拒否しました。' };
+    if (!parsed.data.reason?.trim()) return { decision: 'deny', reason: getLabel('manager.toolPermission.judgeMissingReason', plan.language) };
     return { decision: parsed.data.decision, reason: sanitizeSensitiveText(parsed.data.reason.trim()) };
   } catch {
-    return { decision: 'deny', reason: deadline.signal.aborted
-      ? '道具の判断役が30秒の期限を超えたため拒否しました。'
-      : signal.aborted ? '道具の判断が中断されたため拒否しました。'
-        : '道具の判断役の実行または出力の検証に失敗したため拒否しました。' };
+    return { decision: 'deny', reason: getLabel(deadline.signal.aborted
+      ? 'manager.toolPermission.judgeTimeout'
+      : signal.aborted ? 'manager.toolPermission.judgeInterrupted'
+        : 'manager.toolPermission.judgeValidationFailed', plan.language) };
   } finally {
     if (timer !== undefined) clearTimeout(timer);
     if (onAbort !== undefined) signal.removeEventListener('abort', onAbort);
