@@ -18,9 +18,9 @@ manager:
 
 manager は Claude、Codex、OpenCode に対応します。道具は TAKT にある投入、再開、やり直し、削除、run の参照、差分と履歴、取り込み、完成確認の機能を使います。作業前にタスク、run の記録とレポート、git を確認し、済んだ操作は繰り返しません。
 
-TUI と daemon の manager は、既存の provider 権限制御を通して `full` 権限を使います。provider の通常の道具と利用者の MCP サーバーを利用できますが、claude（claude-sdk）ではここで説明する実行前審査を行います。利用者が設定した provider options はそのまま渡します。
+TUI と daemon の manager は、既存の provider 権限制御を通して `full` 権限を使います。provider の通常の道具と利用者の MCP サーバーを利用できますが、claude（claude-sdk）または codex ではここで説明する実行前審査を行います。利用者が設定した provider options はそのまま渡します。
 
-manager の provider が claude（claude-sdk）の会話では、人が操作のたびに承認する代わりに、AI の判断役が道具の実行前に審査します。判断は許可、理由付きの拒否、人への確認のいずれかです。既定で有効になり、入切の設定はありません。
+manager の provider が claude（claude-sdk）または codex の会話では、人が操作のたびに承認する代わりに、AI の判断役が道具の実行前に審査します。判断は許可、理由付きの拒否、人への確認のいずれかです。既定で有効になり、入切の設定はありません。
 
 審査を通らずに実行できるのは、組み込みの読み取り道具 `Read`、`Glob`、`Grep`、`ToolSearch` と、manager 自身の TAKT MCP の道具だけです。それ以外は、未知の道具や外部 MCP の道具も含めてすべて審査します。`Bash` は内容が読み取りだけに見える場合も毎回審査します。`Task` や `Agent` による別のエージェントの起動は常に拒否し、`Bash` から別の AI コマンドラインエージェントを起動する指示も拒否します。
 

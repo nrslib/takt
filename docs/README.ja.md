@@ -286,7 +286,7 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 | `takt run` | 積まれたタスクをまとめて実行します |
 | `takt watch` | タスクキューを監視し、pending タスクを自動実行します（常駐プロセス） |
 | `takt ui` | 実験的な Viewer 中心の Web UI を `http://127.0.0.1:20525` で起動します |
-| `takt manager` | 実験的なゴール相談 TUI を起動します。動作・設定・保存するデータの形式は予告なく変わることがあります。自動でタスクを投入・実行するため、provider の API の費用がかかります。claude（claude-sdk）では、道具の実行前に AI が審査します。起動時に daemon が自動で起動し、イベント処理と巡回を行います。`takt daemon stop` で daemon を停止できます |
+| `takt manager` | 実験的なゴール相談 TUI を起動します。動作・設定・保存するデータの形式は予告なく変わることがあります。自動でタスクを投入・実行するため、provider の API の費用がかかります。claude（claude-sdk）または codex では、道具の実行前に AI が審査します。起動時に daemon が自動で起動し、イベント処理と巡回を行います。`takt daemon stop` で daemon を停止できます |
 | `takt list` | タスクブランチを管理します（マージ、リトライ、リキュー、強制失敗、追加指示、削除） |
 | `takt #N` | GitHub Issue を初期入力としてタスク化します |
 | `takt eject` | ビルトインの workflow/facet をコピーしてカスタマイズできます |
@@ -303,7 +303,7 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 
 ### manager の道具の実行前審査
 
-`takt manager` の provider が claude（claude-sdk）の会話では、人が操作のたびに承認する代わりに、AI の判断役が道具の実行前に審査します。判断は許可、理由付きの拒否、人への確認のいずれかです。既定で有効になり、入切の設定はありません。
+`takt manager` の provider が claude（claude-sdk）または codex の会話では、人が操作のたびに承認する代わりに、AI の判断役が道具の実行前に審査します。判断は許可、理由付きの拒否、人への確認のいずれかです。既定で有効になり、入切の設定はありません。
 
 審査を通らずに実行できるのは、組み込みの読み取り道具 `Read`、`Glob`、`Grep`、`ToolSearch` と、manager 自身の TAKT MCP の道具だけです。それ以外は、未知の道具や外部 MCP の道具も含めてすべて審査します。`Bash` は内容が読み取りだけに見える場合も毎回審査します。`Task` や `Agent` による別のエージェントの起動は常に拒否し、`Bash` から別の AI コマンドラインエージェントを起動する指示も拒否します。
 
