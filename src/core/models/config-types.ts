@@ -90,6 +90,8 @@ export interface InternalAgentSeats {
   loopJudge?: ProviderRoutingEntry;
   /** `review-completion-judge`: completion-retry episode の網羅性判定役。 */
   completionRetryJudge?: ProviderRoutingEntry;
+  /** `manager-permission-judge`: manager の道具の使用を審査する判断役。 */
+  managerPermissionJudge?: ProviderRoutingEntry;
 }
 
 export interface ProviderRoutingConfig {
