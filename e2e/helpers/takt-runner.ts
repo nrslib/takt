@@ -147,6 +147,11 @@ export async function runTaktAsync(options: TaktRunOptions): Promise<TaktRunResu
           exitCode: error ? (typeof error.code === 'number' ? error.code : 1) : 0,
         });
       });
+      child.stdin?.on('error', (error: NodeJS.ErrnoException) => {
+        if (error.code !== 'EPIPE') {
+          reject(error);
+        }
+      });
       child.stdin?.end(options.input);
     });
 
