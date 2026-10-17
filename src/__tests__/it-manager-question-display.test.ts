@@ -102,6 +102,23 @@ async function mountGoalControls(lang: 'ja' | 'en', goal: Goal) {
   return { store, call, callTool, send };
 }
 
+function expectGoalMemory(memory: string, goal: Goal): void {
+  expect(JSON.parse(memory)).toEqual({
+    repositoryCount: 1, truncated: false, retrieval: expect.any(String),
+    repositories: [{
+      repositoryDirectory: cwd, goalCount: 1, diagnosticCount: 0, diagnostics: [],
+      goals: [{
+        id: goal.id, objective: goal.objective, status: goal.status, executionStatus: goal.executionStatus,
+        branch: goal.branch, integrationBranch: goal.integrationBranch,
+        taskCount: 0, taskStates: {}, workUnitCount: 0,
+        pendingQuestionCount: 0, questions: [], workLogCount: 0, workLog: [],
+        references: { goal: join(cwd, '.takt', 'goals', goal.id, 'goal.json') },
+        truncated: true, retrieval: expect.any(String),
+      }],
+    }],
+  });
+}
+
 const irreversibleWarning = /取り消せ|元に戻せ|不可逆|cannot.*undo|irreversible/iu;
 
 async function expectAbortConfirmation(goal: Goal): Promise<void> {
@@ -221,7 +238,7 @@ it.each([
   await vi.waitFor(() => expect(call).toHaveBeenCalledOnce());
   const [conversation, memory] = call.mock.calls[0]![0].split('\n\nGoal memory (including run manager results): ');
   expect(conversation).toBe(text);
-  expect(JSON.parse(memory!)).toEqual([{ repositoryDirectory: cwd, goals: [saved], diagnostics: [] }]);
+  expectGoalMemory(memory!, saved);
   expect(await store.get(saved.id)).toEqual(saved);
   expect(app!.lastFrame()!.replace(/\s+/gu, ' ')).not.toMatch(irreversibleWarning);
   expect(callTool).not.toHaveBeenCalled();
@@ -426,7 +443,7 @@ it.each([
   await vi.waitFor(() => expect(call).toHaveBeenCalledOnce());
   const [conversation, memory] = call.mock.calls[0]![0].split('\n\nGoal memory (including run manager results): ');
   expect(conversation).toBe(text);
-  expect(JSON.parse(memory!)).toEqual([{ repositoryDirectory: cwd, goals: [saved], diagnostics: [] }]);
+  expectGoalMemory(memory!, saved);
   expect(await store.get(goalId)).toEqual(saved);
 });
 

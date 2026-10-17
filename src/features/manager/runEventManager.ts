@@ -78,6 +78,7 @@ export function createRunEventManager(cwd: string) {
             return true;
           }
         }
+        manager.resetConversation();
         const result = await manager.handleUserMessage({
           text: buildGoalTurnContext(cwd, goal, saved.event, new TaskRunner(cwd).listTaskStateItems()),
           abortSignal: signal,

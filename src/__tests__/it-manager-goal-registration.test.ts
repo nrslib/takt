@@ -138,9 +138,12 @@ it('processes events separately from run and restores their saved records in the
     expect((await new GoalStore(cwd).get(goalId)).status).toBe('completed');
     expect(git('show', 'main:result-0.txt')).toContain('入力'); expect(git('show', 'main:result-1.txt')).toContain('出力');
     expect(context.setup).toHaveBeenCalledTimes(2);
-    expect(call.mock.calls[1]![1].sessionId).toBeUndefined();
-    expect(call.mock.calls.slice(2).every(([, options]) => options.sessionId === 'shared-conversation')).toBe(true);
-    expect(call.mock.calls.at(-1)![0]).toContain('最初のタスクを投入しました');
+    // Daemon events (calls 1-3) each start a fresh session; the TUI conversation (calls 0 and 4) keeps its own.
+    expect(call.mock.calls.slice(1, 4).map(([, options]) => options.sessionId)).toEqual([undefined, undefined, undefined]);
+    expect(call.mock.calls[4]![1].sessionId).toBe('shared-conversation');
+    // The TUI turn receives the daemon's latest work records as a bounded summary, not the full log.
+    const latestWorkLog = (await new GoalStore(cwd).get(goalId)).workLog.filter((record) => record.kind !== 'patrol').at(-2)!.summary;
+    expect(call.mock.calls.at(-1)![0]).toContain(latestWorkLog);
   } finally { await manager.close(); await context.session.close(); }
 });
 it('keeps events while paused, handles the saved answer after resume, and discards them after abort', async () => {

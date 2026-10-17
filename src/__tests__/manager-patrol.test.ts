@@ -56,3 +56,34 @@ it('provides task and question times while excluding patrol records from last pr
   expect(context.tasks[0].startedAt).toBe('2026-10-14T00:20:00Z');
   expect(context.goal.questions[0].createdAt).toBe('2026-10-14T00:05:00Z');
 });
+
+
+it('bounds long goal records while preserving the event and task states', () => {
+  const goal: Goal = { ...goalRecord(), objective: '目的'.repeat(30000),
+    constraints: ['非表示の制約'.repeat(10000)],
+    workLog: Array.from({ length: 200 }, (_, index) => ({
+      id: `550e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`,
+      recordedAt: '2026-10-14T00:10:00Z', summary: `作業${index}:` + '詳細'.repeat(20000),
+    })),
+  };
+  const event = { kind: 'patrol' as const, goalId: goal.id, createdAt: '2026-10-14T01:00:00Z' };
+  const tasks = [
+    { name: 'task-a', kind: 'running' as const, status: 'running' as const, goalId: goal.id,
+      goalWorkKey: 'work-a', createdAt: event.createdAt, filePath: '/task-a', summary: '実行中のタスク' },
+    { name: 'task-b', kind: 'completed' as const, status: 'completed' as const, goalId: goal.id,
+      goalWorkKey: 'work-a', createdAt: event.createdAt, filePath: '/task-b' },
+  ];
+  const text = buildGoalTurnContext('/project', goal, event, tasks);
+  const context = JSON.parse(text);
+  expect(Buffer.byteLength(text)).toBeLessThan(8 * 1024);
+  expect(text).not.toContain(goal.objective);
+  expect(text).not.toContain(goal.workLog[199]!.summary);
+  expect(context.goal).not.toHaveProperty('constraints');
+  expect(context.goal).toMatchObject({ id: goal.id, status: goal.status, executionStatus: goal.executionStatus,
+    taskCount: 2, taskStates: { running: 1, completed: 1 }, workUnitCount: 1, workLogCount: 200,
+    references: { goal: `/project/.takt/goals/${goal.id}/goal.json` },
+  });
+  expect(context.goal.workLog.map((record: { id: string }) => record.id)).toEqual(goal.workLog.slice(-3).reverse().map((record) => record.id));
+  expect(context.event).toEqual(event);
+  expect(context.tasks).toEqual(tasks);
+});

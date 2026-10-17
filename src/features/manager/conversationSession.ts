@@ -13,6 +13,7 @@ import { createGoal } from '../../infra/goals/service.js';
 import { ensureManagerRun } from './autoRun.js';
 import { ensureDaemon } from '../daemon/lifecycle.js';
 import { GoalStore } from '../../infra/goals/store.js';
+import { buildGoalMemory, buildManagerGoalSummary } from './turnContext.js';
 import { answerGoalQuestion } from '../../infra/goals/questions.js';
 import { setGoalExecutionStatus } from '../../infra/goals/execution.js';
 import { TaskRunner } from '../../infra/task/runner.js';
@@ -199,38 +200,53 @@ export function createManagerConversationSession(input: {
           const memories = await Promise.all((assignment?.repositoryDirectories ?? [cwd]).map(async (repositoryDirectory) => {
             try {
               const { goals, errors } = await new GoalStore(repositoryDirectory).list();
-              return { repositoryDirectory, goals, diagnostics: errors.map(({ goalId, error }) => ({ goalId, message: getErrorMessage(error) })) };
+              const tasks = new TaskRunner(repositoryDirectory).listTaskStateItems();
+              return { repositoryDirectory, goals: goals.map((goal) => buildManagerGoalSummary(repositoryDirectory, goal, tasks)), diagnostics: errors.map(({ goalId, error }) => ({ goalId, message: getErrorMessage(error) })) };
             } catch (error) {
               return { repositoryDirectory, goals: undefined, diagnostics: [{ message: getErrorMessage(error) }] };
             }
           }));
           const text = memories.some(({ goals, diagnostics }) => (goals !== undefined && goals.length > 0) || diagnostics.length > 0)
-            ? `${options.text}\n\nGoal memory (including run manager results): ${JSON.stringify(memories)}` : options.text;
+            ? `${options.text}\n\nGoal memory (including run manager results): ${buildGoalMemory(memories)}` : options.text;
           const prompt = assignment === undefined ? text : `Current manager assignment: ${JSON.stringify(assignment)}\n\n${text}`;
           const repositoryAdditionIds = new Set<string>();
-          const response = await agent.call(prompt, {
-            cwd, model: plan.ctx.model, sessionId, abortSignal: controller.signal,
-            providerOptions: plan.ctx.providerOptions,
-            permissionMode: 'full', outputSchema: getManagerOutputSchema(plan.ctx.providerType), language: plan.ctx.lang,
-            mcpServers: servers, preparedMcp: prepared,
-            onStream: (event) => {
-              if (event.type === 'tool_use' && addRepositoryToolNames.has(event.data.tool)) {
-                repositoryAdditionIds.add(event.data.id);
-              }
-              if (event.type === 'tool_result' && event.data.id !== undefined
-                && repositoryAdditionIds.delete(event.data.id) && !event.data.isError) {
-                try {
-                  const content: unknown = JSON.parse(event.data.content);
-                  const result = (Array.isArray(content)
-                    ? JSON.parse(content.find((block) => block.type === 'text')?.text)
-                    : content) as { workspace?: { id?: string } } | null;
-                  if (result?.workspace?.id) assignmentIdentity = { kind: 'workspace', workspaceId: result.workspace.id };
-                } catch { return; }
-              }
-            },
-          });
+          let usedTools = false;
+          const callAgent = async () => {
+            const response = await agent.call(prompt, {
+              cwd, model: plan.ctx.model, sessionId, abortSignal: controller.signal,
+              providerOptions: plan.ctx.providerOptions,
+              permissionMode: 'full', outputSchema: getManagerOutputSchema(plan.ctx.providerType), language: plan.ctx.lang,
+              mcpServers: servers, preparedMcp: prepared,
+              onStream: (event) => {
+                if (event.type === 'tool_use') usedTools = true;
+                if (event.type === 'tool_use' && addRepositoryToolNames.has(event.data.tool)) {
+                  repositoryAdditionIds.add(event.data.id);
+                }
+                if (event.type === 'tool_result' && event.data.id !== undefined
+                  && repositoryAdditionIds.delete(event.data.id) && !event.data.isError) {
+                  try {
+                    const content: unknown = JSON.parse(event.data.content);
+                    const result = (Array.isArray(content)
+                      ? JSON.parse(content.find((block) => block.type === 'text')?.text)
+                      : content) as { workspace?: { id?: string } } | null;
+                    if (result?.workspace?.id) assignmentIdentity = { kind: 'workspace', workspaceId: result.workspace.id };
+                  } catch { return; }
+                }
+              },
+            });
+            if (response.status !== 'done') throw new Error(response.error ?? 'Manager provider failed');
+            return response;
+          };
+          let response;
+          try {
+            response = await callAgent();
+          } catch (error) {
+            // A fresh session cannot see operations the failed attempt already ran, so retry only before any tool use.
+            if (usedTools || !/prompt is too long/i.test(getErrorMessage(error)) || controller.signal.aborted || turn !== generation) throw error;
+            sessionId = undefined;
+            response = await callAgent();
+          }
           if (turn !== generation || controller.signal.aborted) throw new Error('Conversation interrupted');
-          if (response.status !== 'done') throw new Error(response.error ?? 'Manager provider failed');
           const raw: unknown = response.structuredOutput ?? JSON.parse(response.content);
           const parsed = (plan.ctx.providerType === 'codex' ? codexResponseSchema : responseSchema).parse(raw);
           sessionId = response.sessionId ?? sessionId;
@@ -286,6 +302,11 @@ export function createManagerConversationSession(input: {
   };
   return {
     getAssignment,
+    resetConversation(): void {
+      if (closed || registering || active !== null) throw new Error('Manager session is unavailable');
+      invalidate();
+      sessionId = undefined;
+    },
     getPendingSummary: session.getPendingSummary,
     dismissSummary(revision: number): void {
       if (!registering && pending?.revision === revision) invalidate();
