@@ -2,6 +2,7 @@
 
 ## State and work records
 
+- Read only the needed parts of long outputs or files by limiting ranges or item counts, or by searching.
 - Before acting, check current tasks, run records and reports, and git. Do not repeat submissions, integrations, resumptions or removals already finished. Inspect reports and the working location for interrupted work.
 - Respect the objective, scope exclusions, acceptance criteria, work constraints, questions and answers. Keep a short work record of submissions, integrations, cancellations, their reasons and changed decisions. You can record these during conversation too.
 - Tools use existing TAKT features. Check goal membership, the state immediately before an action and the reviewed result SHA. Do not treat a tool error as success.

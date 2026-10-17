@@ -1,5 +1,9 @@
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { beforeEach,describe,expect,it,vi } from 'vitest';
 import { assertStrictStructuredOutputSchema,validateStructuredOutputAgainstSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
+import * as conversationPlans from '../features/manager/conversationPlan.js';
+import * as managerMcps from '../features/manager/managerMcp.js';
+import { createRunEventManager } from '../features/manager/runEventManager.js';
 import * as assignments from '../features/manager/assignment.js';
 import type { ManagerConversationPlan } from '../features/manager/conversationPlan.js';
 import { createManagerConversationSession } from '../features/manager/conversationSession.js';
@@ -528,4 +532,126 @@ it('reports an unavailable goal memory in the next turn instead of stopping unre
   expect(prompt).toContain(failure.message);
   expect(prompt).toContain('diagnostics');
   await session.close();
+});
+
+
+it('bounds goal memory across assigned repositories with large objectives and work logs', async () => {
+  const repositories = ['/project-a', '/project-b'];
+  const assignment = { kind: 'workspace' as const, workspaceId: 'workspace', name: 'workspace', repositoryDirectories: repositories };
+  vi.spyOn(assignments, 'resolveCurrentManagerAssignment').mockResolvedValue(assignment);
+  const goals = Array.from({ length: 100 }, (_, index) => ({
+    ...goalRecord(), id: `550e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`,
+    objective: '目的'.repeat(30000),
+    workLog: Array.from({ length: 100 }, (_, record) => ({
+      id: `650e8400-e29b-41d4-a716-${String(record).padStart(12, '0')}`,
+      recordedAt: '2026-10-14T00:00:00Z', summary: `作業${record}:` + '詳細'.repeat(20000),
+    })),
+  }));
+  answerDoubles.list.mockResolvedValue({ goals, errors: [] });
+  const { plan } = fixture();
+  doubles.call.mockResolvedValue(response(null));
+  const session = createManagerConversationSession({ cwd, plan, assignment: { kind: 'workspace', workspaceId: 'workspace' } });
+  try {
+    expect((await session.handleUserMessage({ text: '進捗' })).kind).toBe('reply');
+    const prompt = doubles.call.mock.calls[0]![0];
+    const memoryText = prompt.split('Goal memory (including run manager results): ')[1]!;
+    expect(Buffer.byteLength(memoryText)).toBeLessThanOrEqual(64 * 1024);
+    const memory = JSON.parse(memoryText);
+    expect(memory.truncated).toBe(true);
+    expect(memory.repositories.map((repository: { repositoryDirectory: string }) => repository.repositoryDirectory)).toEqual(repositories);
+    expect(memory.repositories[0].goalCount).toBe(100);
+    expect(memory.repositories[0].goals.length).toBeGreaterThan(0);
+    expect(memory.repositories[0].goals.length).toBeLessThan(100);
+    expect(prompt).not.toContain(goals[0]!.objective);
+    expect(prompt).not.toContain(goals[0]!.workLog[99]!.summary);
+    expect(memory.repositories[0].goals[0]).toMatchObject({ workLogCount: 100,
+      references: { goal: `/project-a/.takt/goals/${goals[0]!.id}/goal.json` },
+    });
+    expect(memory.repositories[0].goals[0].workLog).toHaveLength(3);
+  } finally { await session.close(); }
+});
+
+it.each(['result', 'throw'] as const)('retries prompt overflow from a provider %s once with a new session and keeps its result', async (failure) => {
+  const { session, plan } = fixture();
+  const dispose = vi.fn(async () => {});
+  const prepare = vi.fn(async () => ({ dispose }));
+  vi.spyOn(mcpAdapters, 'createMcpAdapter').mockReturnValue({ validate: vi.fn(), prepare, classifyFailure: () => ({ category: 'provider_error' }) });
+  plan.ctx.mcpServers = { manager: { command: 'node' } };
+  try {
+    await session.handleUserMessage({ text: '最初の相談' });
+    const message = 'Claude Code returned an error result: Prompt is too long';
+    if (failure === 'throw') doubles.call.mockRejectedValueOnce(new Error(message));
+    else doubles.call.mockResolvedValueOnce({ ...response(null), status: 'error', error: message });
+    doubles.call.mockResolvedValueOnce({ ...response(summaryB, '再試行の結果'), sessionId: 'fresh-session' });
+    expect(await session.handleUserMessage({ text: '続き' })).toEqual({ kind: 'reply', message: '再試行の結果' });
+    expect(doubles.call).toHaveBeenCalledTimes(3);
+    expect(doubles.call.mock.calls[1]![1].sessionId).toBe('manager-session');
+    expect(doubles.call.mock.calls[2]![1].sessionId).toBeUndefined();
+    expect(doubles.call.mock.calls[2]![0]).toBe(doubles.call.mock.calls[1]![0]);
+    expect(doubles.call.mock.calls[2]![1].preparedMcp).toBe(doubles.call.mock.calls[1]![1].preparedMcp);
+    expect(prepare).toHaveBeenCalledTimes(2);
+    expect(dispose).toHaveBeenCalledTimes(2);
+    expect(session.getPendingSummary()?.summary).toEqual(summaryB);
+    await session.handleUserMessage({ text: 'その後' });
+    expect(doubles.call.mock.calls[3]![1].sessionId).toBe('fresh-session');
+  } finally { await session.close(); }
+});
+
+it.each(['result', 'throw'] as const)('returns the second overflow failure from a provider %s without a third attempt', async (failure) => {
+  const { session } = fixture();
+  try {
+    await session.handleUserMessage({ text: '最初の相談' });
+    const message = 'Prompt is too long';
+    if (failure === 'throw') doubles.call.mockRejectedValue(new Error(message));
+    else doubles.call.mockResolvedValue({ ...response(null), status: 'error', error: message });
+    expect(await session.handleUserMessage({ text: '続き' })).toEqual({ kind: 'error', message });
+    expect(doubles.call).toHaveBeenCalledTimes(3);
+    expect(doubles.call.mock.calls[1]![1].sessionId).toBe('manager-session');
+    expect(doubles.call.mock.calls[2]![1].sessionId).toBeUndefined();
+    expect(session.getPendingSummary()).toBeNull();
+  } finally { await session.close(); }
+});
+
+it('does not retry unrelated provider failures or cancelled overflow calls', async () => {
+  const { session } = fixture();
+  try {
+    doubles.call.mockRejectedValueOnce(new Error('unrelated provider failure'));
+    expect((await session.handleUserMessage({ text: '相談' })).kind).toBe('error');
+    expect(doubles.call).toHaveBeenCalledOnce();
+    const controller = new AbortController();
+    doubles.call.mockImplementationOnce(async () => { controller.abort(); throw new Error('Prompt is too long'); });
+    expect((await session.handleUserMessage({ text: '続き', abortSignal: controller.signal })).kind).toBe('error');
+    expect(doubles.call).toHaveBeenCalledTimes(2);
+  } finally { await session.close(); }
+});
+
+it.each([false, true])('calls the provider without a sessionId for each daemon event while reusing MCP and preflight (overflow: %s)', async (overflow) => {
+  const { plan } = fixture();
+  const preflight = vi.fn(async () => {});
+  plan.ctx.provider.preflight = preflight;
+  vi.spyOn(conversationPlans, 'createManagerConversationPlan').mockReturnValue(plan);
+  const dispose = vi.fn(async () => {});
+  const connect = vi.spyOn(managerMcps, 'connectManagerMcp').mockResolvedValue({ client: new Client({ name: 'test', version: '1' }), servers: {}, dispose });
+  vi.spyOn(mcpAdapters, 'createMcpAdapter').mockReturnValue({
+    validate: vi.fn(), prepare: vi.fn(async () => ({ dispose: vi.fn(async () => {}) })),
+    classifyFailure: () => ({ category: 'provider_error' }),
+  });
+  events.read.mockReturnValue(['task-a', 'task-b'].map((taskName) => ({ filePath: `/inbox/${taskName}.json`, event: {
+    kind: 'completion', goalId: goalRecord().id, createdAt: '2026-10-14T00:00:00Z',
+    taskName, runSlug: `run-${taskName}`, result: { success: true, interrupted: false },
+  } })));
+  doubles.call.mockResolvedValue(response(null, '処理完了'));
+  if (overflow) doubles.call.mockResolvedValueOnce({ ...response(null), status: 'error', error: 'Prompt is too long' });
+  const manager = createRunEventManager(cwd);
+  try {
+    expect(await manager.processPending(new AbortController().signal, 2)).toBe(true);
+    expect(doubles.call).toHaveBeenCalledTimes(overflow ? 3 : 2);
+    for (const [, options] of doubles.call.mock.calls) expect(options.sessionId).toBeUndefined();
+    expect(JSON.parse(doubles.call.mock.calls[0]![0]).event.taskName).toBe('task-a');
+    expect(JSON.parse(doubles.call.mock.calls.at(-1)![0]).event.taskName).toBe('task-b');
+    expect(connect).toHaveBeenCalledOnce();
+    expect(preflight).toHaveBeenCalledOnce();
+    expect(events.remove).toHaveBeenCalledTimes(2);
+  } finally { await manager.close(); }
+  expect(dispose).toHaveBeenCalledOnce();
 });

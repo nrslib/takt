@@ -7,7 +7,7 @@ import type { SavedManagerEvent } from '../infra/goals/events.js';
 const doubles = vi.hoisted(() => ({
   read: vi.fn(), remove: vi.fn(), get: vi.fn(), update: vi.fn(),
   plan: vi.fn(), connect: vi.fn(), dispose: vi.fn(), preflight: vi.fn(),
-  turn: vi.fn(), close: vi.fn(), createSession: vi.fn(), notify: vi.fn(),
+  turn: vi.fn(), reset: vi.fn(), close: vi.fn(), createSession: vi.fn(), notify: vi.fn(),
 }));
 vi.mock('../infra/goals/events.js', () => ({ readManagerEvents: doubles.read, deleteManagerEvent: doubles.remove }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.get; update = doubles.update; } }));
@@ -37,7 +37,7 @@ beforeEach(() => {
   doubles.update.mockImplementation(async (_id: string, transform: (value: Goal) => Goal) => { goal = transform(goal); return goal; });
   doubles.plan.mockReturnValue({ ctx: { provider: { preflight: doubles.preflight }, providerType: 'mock', model: undefined, lang: 'ja' }, strategy: { systemPrompt: 'manager fixture' } });
   doubles.connect.mockResolvedValue({ servers: {}, dispose: doubles.dispose });
-  doubles.createSession.mockReturnValue({ handleUserMessage: doubles.turn, getPendingSummary: () => null, close: doubles.close });
+  doubles.createSession.mockReturnValue({ handleUserMessage: doubles.turn, resetConversation: doubles.reset, getPendingSummary: () => null, close: doubles.close });
   doubles.turn.mockResolvedValue({ kind: 'reply', message: 'task-X を取り込み、task-Y を投入しました' });
 });
 afterEach(() => vi.useRealTimers());
@@ -186,7 +186,7 @@ it('includes failed-event retries in the polling limit and retains paused failur
   expect(doubles.turn).toHaveBeenCalledTimes(5);
   await manager.close();
 });
-it('uses one project session and awaits each event before starting the next', async () => {
+it('resets conversation history for each event and awaits each event before starting the next', async () => {
   inbox = [saved('task-a'), saved('task-b')];
   let finish!: () => void;
   doubles.turn.mockImplementationOnce(() => new Promise((resolve) => { finish = () => resolve({ kind: 'reply', message: 'task-a を取り込みました' }); }));
@@ -200,7 +200,13 @@ it('uses one project session and awaits each event before starting the next', as
   expect(doubles.turn.mock.calls[1]![0].text).toContain('task-b');
   expect(goal.workLog.map((record) => record.summary)).toEqual(['task-a を取り込みました', 'task-X を取り込み、task-Y を投入しました']);
   expect(inbox).toEqual([]);
+  expect(doubles.reset).toHaveBeenCalledTimes(2);
+  for (let index = 0; index < 2; index++) {
+    expect(doubles.reset.mock.invocationCallOrder[index]).toBeLessThan(doubles.turn.mock.invocationCallOrder[index]!);
+  }
   expect(doubles.createSession).toHaveBeenCalledOnce();
+  expect(doubles.connect).toHaveBeenCalledOnce();
+  expect(doubles.preflight).toHaveBeenCalledOnce();
   expect(doubles.preflight).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: 'full', mcpServers: {} }));
   await manager.close();
   expect(doubles.close).toHaveBeenCalledOnce(); expect(doubles.dispose).toHaveBeenCalledOnce();
