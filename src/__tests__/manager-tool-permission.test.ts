@@ -226,6 +226,14 @@ describe('manager tool permission classification', () => {
     'bash -c "codex exec inspect"', "sh -c 'claude -p inspect'", "zsh -c 'gemini inspect'",
     "bash -lc 'codex exec inspect'", "bash -c 'sh -c \"codex exec inspect\"'",
     "timeout 60 sudo -u root env MODE=test nohup bash -c 'codex exec inspect'",
+    "codex exec inspect; bash -c 'printf $(pwd)'", "bash -c 'printf $(pwd)'; codex exec inspect",
+    "bash -c 'codex exec inspect; sh -c \"printf $(pwd)\"'",
+    "bash -c 'codex exec $(pwd)'", 'printf codex; codex exec $(pwd)',
+    'printf $(pwd); codex exec inspect', "bash -c 'printf $(pwd); codex exec inspect'",
+    'printf "$(pwd)"; codex exec inspect',
+    "sh -c 'printf $(pwd); codex exec inspect'", "zsh -c 'printf $(pwd); codex exec inspect'",
+    'printf "$(printf "%s" "$(pwd)")"; codex exec inspect',
+    'printf $(printf \\)); codex exec inspect',
   ])('denies an AI CLI launch without a judge: %s', async (command) => {
     expectDenial(await decide('Bash', { command }));
     expect(executeIsolatedStructuredInternalAgent).not.toHaveBeenCalled();
@@ -237,12 +245,26 @@ describe('manager tool permission classification', () => {
     'timeout 5 git status', 'sudo -u root git status', 'sudo -u codex git status',
     'sudo --user codex git status', 'sudo --user=codex git status', 'sudo -ucodex git status',
     'exec -a codex git status', 'nice -n 5 git status', 'stdbuf -o L git status',
-    "bash -c 'printf codex'", "bash -c 'codex exec $(pwd)'",
-    "codex exec inspect; bash -c 'printf $(pwd)'", "bash -c 'printf $(pwd)'; codex exec inspect",
-    "bash -c 'codex exec inspect; sh -c \"printf $(pwd)\"'",
+    "bash -c 'printf codex'",
+    "bash -c 'printf $(pwd)'", 'printf codex; printf "$(pwd)"',
   ])('judges text or unsupported syntax instead of treating a name as a launch: %s', async (command) => {
     vi.mocked(executeIsolatedStructuredInternalAgent).mockResolvedValue(judgment({ decision: 'deny', reason: 'judge examined command' }));
     expect(await decide('Bash', { command })).toEqual({ decision: 'deny', reason: 'judge examined command' });
+    expect(executeIsolatedStructuredInternalAgent).toHaveBeenCalledOnce();
+  });
+  it.each([
+    'printf codex; printf exec $(pwd)', "bash -c 'printf exec $(pwd)'",
+    "bash -c 'printf $(pwd)'", "bash -c 'sh -c \"printf $(pwd)\"'",
+    'printf $(pwd); printf exec inspect', "bash -c 'printf $(pwd); printf exec inspect'",
+    'printf "$(pwd)"; printf exec inspect', 'printf "$(pwd); codex exec inspect"',
+    "sh -c 'printf $(pwd); printf exec inspect'", "zsh -c 'printf $(pwd); printf exec inspect'",
+    'printf $(printf "done; codex exec inspect")',
+    'printf $(printf "$(pwd); codex exec inspect")',
+    'printf $(pwd) "ignored; codex exec inspect"', 'printf $(pwd) \\; codex exec inspect',
+    'printf $(pwd; codex exec inspect', 'printf "$(pwd); codex exec inspect',
+    'env $(pwd) codex; printf done', 'printf $(pwd) # ; codex exec inspect',
+  ])('returns the judge allowance when unsupported syntax has no detected launch: %s', async (command) => {
+    expect(await decide('Bash', { command })).toEqual({ decision: 'allow' });
     expect(executeIsolatedStructuredInternalAgent).toHaveBeenCalledOnce();
   });
   describe.each(['ja', 'en'] as const)('fixed denial reasons in %s', (language) => {

@@ -22,14 +22,60 @@ const prefixValueOptions: Record<string, readonly string[]> = {
 };
 
 type Classification = { decision: 'allow' } | { decision: 'deny'; reason: string } | { decision: 'judge' };
+type ShellQuote = "'" | '"' | undefined;
 
-// 未対応の shell 構文は解析結果を使わず、呼び出し全体を判断役へ渡す。
-function commandWords(command: string): string[][] | undefined {
+function nextCommandBoundary(command: string, start: number, quote: ShellQuote): number | undefined {
+  const scopes: { quote: ShellQuote; depth: number; hasWord: boolean }[] = [{ quote, depth: 0, hasWord: true }];
+  for (let index = start; index < command.length; index++) {
+    const scope = scopes.at(-1)!;
+    const char = command[index]!;
+    if (scope.quote === "'") {
+      if (char === "'") scope.quote = undefined;
+      continue;
+    }
+    if (char === '\\') {
+      const next = command[++index];
+      if (next === undefined) return undefined;
+      if (next !== '\n') scope.hasWord = true;
+      continue;
+    }
+    if (scope.quote === '"' && char === '"') { scope.quote = undefined; continue; }
+    if (char === '$' && command[index + 1] === '(') {
+      scope.hasWord = true;
+      scopes.push({ quote: undefined, depth: 1, hasWord: false });
+      index++;
+      continue;
+    }
+    if (char === '$' || char === '`') return undefined;
+    if (scope.quote === '"') continue;
+    if (char === "'" || char === '"') { scope.quote = char; scope.hasWord = true; continue; }
+    if (char === '#' && !scope.hasWord) {
+      while (index < command.length && command[index] !== '\n') index++;
+      if (scopes.length === 1) return index < command.length ? index : undefined;
+      continue;
+    }
+    if (char === '(' || char === ')') {
+      if (scopes.length === 1) return undefined;
+      scope.depth += char === '(' ? 1 : -1;
+      if (scope.depth === 0) scopes.pop();
+      scope.hasWord = false;
+      continue;
+    }
+    if ('<>'.includes(char)) return undefined;
+    if (';|&\n'.includes(char) && scopes.length === 1) return index;
+    scope.hasWord = !/[\s;|&]/u.test(char);
+  }
+  return undefined;
+}
+
+// 未対応部分の単語は確定せず、外側の区切りが確認できたコマンドだけを追加する。
+function commandWords(command: string): { commands: string[][]; complete: boolean } {
   const commands: string[][] = [];
   let words: string[] = [];
   let word = '';
   let hasWord = false;
-  let quote: "'" | '"' | undefined;
+  let quote: ShellQuote;
+  let complete = true;
   const flushWord = (): void => {
     if (hasWord) words.push(word);
     word = ''; hasWord = false;
@@ -39,6 +85,10 @@ function commandWords(command: string): string[][] | undefined {
     if (words.length > 0) commands.push(words);
     words = [];
   };
+  const incompleteResult = (): { commands: string[][]; complete: boolean } => ({
+    commands: words.length > 0 ? [...commands, words] : commands,
+    complete: false,
+  });
   for (let index = 0; index < command.length; index++) {
     const char = command[index]!;
     if (quote === "'") {
@@ -48,21 +98,30 @@ function commandWords(command: string): string[][] | undefined {
     }
     if (char === '\\') {
       const next = command[++index];
-      if (next === undefined) return undefined;
+      if (next === undefined) return incompleteResult();
       if (next !== '\n') {
         word += quote === '"' && !['$', '`', '"', '\\'].includes(next) ? `\\${next}` : next;
         hasWord = true;
       }
       continue;
     }
+    if (char === '$' && command[index + 1] === '(') {
+      complete = false;
+      const boundary = nextCommandBoundary(command, index, quote);
+      if (boundary === undefined) return incompleteResult();
+      if (words.length > 0) commands.push(words);
+      words = []; word = ''; hasWord = false; quote = undefined;
+      index = boundary;
+      continue;
+    }
     if (quote === '"') {
       if (char === '"') quote = undefined;
-      else if (char === '$' || char === '`') return undefined;
+      else if (char === '$' || char === '`') return incompleteResult();
       else word += char;
       continue;
     }
     if (char === "'" || char === '"') { quote = char; hasWord = true; continue; }
-    if ('$`()<>'.includes(char)) return undefined;
+    if ('$`()<>'.includes(char)) return incompleteResult();
     if (char === '#' && !hasWord) {
       while (index < command.length && command[index] !== '\n') index++;
       flushCommand();
@@ -72,16 +131,16 @@ function commandWords(command: string): string[][] | undefined {
     if (/\s/u.test(char)) { flushWord(); continue; }
     word += char; hasWord = true;
   }
-  if (quote !== undefined) return undefined;
+  if (quote !== undefined) return incompleteResult();
   flushCommand();
-  return commands;
+  return { commands, complete };
 }
 
 function commandLaunchesAgent(command: string): boolean | undefined {
-  const commands = commandWords(command);
-  if (commands === undefined) return undefined;
+  const { commands, complete } = commandWords(command);
   const results = commands.map(launchesAgent);
-  return results.includes(undefined) ? undefined : results.includes(true);
+  if (results.includes(true)) return true;
+  return !complete || results.includes(undefined) ? undefined : false;
 }
 
 function launchesAgent(words: string[]): boolean | undefined {
