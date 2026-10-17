@@ -18,7 +18,17 @@ manager:
 
 Manager supports Claude, Codex and OpenCode. Its tools use existing TAKT features for submission, requeue, retry, removal, run inspection, diffs, history, integration and completion checks. Before acting, it checks tasks, run records and reports, and git, without repeating finished actions.
 
-Both the TUI and daemon manager use `full` permissions through the existing provider permission controls. Manager can use the provider's normal tools and user MCP servers; it does not impose a fixed tool allowlist. Configured provider options are preserved.
+Both the TUI and daemon manager use `full` permissions through the existing provider permission controls. Manager can use the provider's normal tools and user MCP servers, subject to the tool review for claude (claude-sdk) described here. Configured provider options are preserved.
+
+In manager conversations with the claude (claude-sdk) provider, an AI permission judge reviews tool use before execution instead of asking a person to approve every operation. It decides to allow, deny with a reason, or ask a person. This review is enabled by default and has no on/off setting.
+
+Only the built-in read tools `Read`, `Glob`, `Grep`, and `ToolSearch`, and the manager's own TAKT MCP tools, run without this review. All other tools are reviewed, including unknown tools and external MCP tools. `Bash` is reviewed every time, even when its contents appear to be read-only. Launching another agent through `Task` or `Agent` is always denied, as are instructions to launch another AI command-line agent through `Bash`.
+
+When an operation is denied, the reason returns to the manager, which takes it into account in its next response. An “ask a person” decision also denies the operation for now and notifies the TUI and Slack that human confirmation is pending, with the reason. The operation is not held open while waiting. These notifications use existing kinds; no new notification kind is added.
+
+Set the judge's provider and model through `provider.targets.internal_agents.manager-permission-judge` in `runtime.yaml`. Like other internal agent seats, it accepts `profile` or `ladder`, but not `pool`. If unassigned, it uses the same provider, model, and provider options as the manager.
+
+The judge has a short deadline. A timeout, exception, or invalid decision format denies the operation, without an automatic retry of the judgment.
 
 Assign user MCP servers through the existing `runtime.yaml` rules. For example, to assign a browser MCP server you have installed:
 

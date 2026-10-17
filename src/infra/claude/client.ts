@@ -58,6 +58,7 @@ export class ClaudeClient {
       onStream: options.onStream,
       onActivity: options.onActivity,
       onPermissionRequest: options.onPermissionRequest,
+      onToolPermissionDecision: options.onToolPermissionDecision,
       onAskUserQuestion: options.onAskUserQuestion,
       bypassPermissions: options.bypassPermissions,
       anthropicApiKey: options.anthropicApiKey,

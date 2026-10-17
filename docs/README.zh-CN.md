@@ -276,7 +276,7 @@ steps:
 | `takt run` | 执行所有待处理任务 |
 | `takt watch` | 监视任务队列并自动执行待处理任务 |
 | `takt ui` | 在 `http://127.0.0.1:20525` 启动实验性的 Viewer 优先 Web UI |
-| `takt manager` | 启动实验性的目标对话 TUI。行为、设置和保存的数据格式可能会随时更改，恕不另行通知。自动将任务加入队列并执行，因此会产生 provider API 费用。启动时 daemon 会自动启动，处理事件并进行巡查。使用 `takt daemon stop` 可停止 daemon |
+| `takt manager` | 启动实验性的目标对话 TUI。行为、设置和保存的数据格式可能会随时更改，恕不另行通知。自动将任务加入队列并执行，因此会产生 provider API 费用。使用 claude（claude-sdk）时，AI 会在工具执行前进行审查。启动时 daemon 会自动启动，处理事件并进行巡查。使用 `takt daemon stop` 可停止 daemon |
 | `takt list` | 管理任务分支：合并、重试、重新排队、强制失败、指导或删除 |
 | `takt #N` | 将 GitHub Issue 作为任务输入 |
 | `takt eject` | 复制 builtin workflow/facet 以便定制 |
@@ -290,6 +290,18 @@ steps:
 TAKT 还提供两个客户端集成入口：`takt-acp` 通过 stdio JSON-RPC 作为 [Agent Client Protocol](./cli-reference.zh-CN.md#acp-agent) agent 运行；`takt-mcp` 作为 stdio [MCP server](./cli-reference.zh-CN.md#mcp-server) 运行，让 MCP 客户端（Codex、Claude Code 等）可以加入任务队列、读取 task/run 状态，并向正在运行的 worktree clone 任务发送追加指令。使用 `takt run` 或 `takt watch` 执行待处理任务。
 
 普通 `takt` assistant 对话在 provider 支持 MCP 时也可以只读查看相同的 task 状态。新任务使用 `/go`，向正在运行的 worktree clone 追加指令时使用 `/tell` 选择目标并确认后发送。
+
+### manager 工具执行前的权限审查
+
+在 `takt manager` 使用 claude（claude-sdk）provider 的对话中，AI 权限判断 agent 会在工具执行前进行审查，代替每次都向用户请求批准。判断结果为允许、拒绝并附带理由，或请求人工确认。审查默认启用，没有开关设置。
+
+只有内置只读工具 `Read`、`Glob`、`Grep`、`ToolSearch` 和 manager 自身的 TAKT MCP 工具可以跳过审查。其他所有工具都需要审查，包括未知工具和外部 MCP 工具。`Bash` 每次都需要审查，即使命令内容看起来只是读取操作。通过 `Task` 或 `Agent` 启动其他 agent 一律拒绝；通过 `Bash` 启动其他 AI 命令行 agent 的指令也会被拒绝。
+
+拒绝理由会返回给 manager，供其在下一次回复中考虑。判定为请求人工确认时，操作也会先被拒绝，并通过 TUI 和 Slack 通知正在等待人工确认及其理由。不会挂起工具操作来等待确认。通知使用现有类型，不增加新的通知类型。
+
+判断 agent 的 provider 和 model 可通过 `runtime.yaml` 中的 `provider.targets.internal_agents.manager-permission-judge` 指定。与其他内部 agent seat 一样，可以使用 `profile` 或 `ladder`，不能使用 `pool`。未分配时使用与 manager 相同的 provider、model 和 provider options。
+
+判断有较短的期限。超时、异常或判断格式不符合要求时都会拒绝操作，不会自动重试判断。
 
 ### 即时 exec 模式
 
