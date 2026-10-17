@@ -81,7 +81,8 @@ describe('strict manager tool restrictions', () => {
       if (restriction === 'strictToolAllowlist') {
         expect(await sdk.canUseTool(tool, {})).toMatchObject({ behavior: allowed ? 'allow' : 'deny' });
       }
-      const hook = sdk.hooks.PreToolUse[0].hooks[0];
+      const hook = sdk.hooks.PreToolUse.find(({ matcher }: { matcher?: string }) => matcher === undefined)?.hooks[0];
+      expect(hook).toBeTypeOf('function');
       expect(await hook({ tool_name: tool })).toMatchObject({ hookSpecificOutput: { permissionDecision: allowed ? 'allow' : 'deny' } });
     }
   });
@@ -96,7 +97,9 @@ describe('strict manager tool restrictions', () => {
 
   it('does not allow a native output collector when no output schema was requested', async () => {
     const sdk = buildSdkOptions({ cwd: '/tmp/project', permissionMode: 'readonly', mcpOnlySideEffects: ['Read'] });
-    const result = await sdk.hooks!.PreToolUse![0]!.hooks[0]!({ tool_name: 'StructuredOutput' } as HookInput, undefined, { signal: new AbortController().signal });
+    const hook = sdk.hooks?.PreToolUse?.find(({ matcher }) => matcher === undefined)?.hooks[0];
+    expect(hook).toBeDefined();
+    const result = await hook!({ tool_name: 'StructuredOutput' } as HookInput, undefined, { signal: new AbortController().signal });
     expect(result).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
   });
 
