@@ -59,6 +59,22 @@ export type PermissionHandler = (
   request: PermissionRequest
 ) => Promise<PermissionResult>;
 
+export interface ToolPermissionDecisionRequest {
+  readonly toolName: string;
+  readonly toolInput: unknown;
+  /** 実際に道具が走る作業ディレクトリ。 */
+  readonly cwd: string;
+  /** 親の中断とフックの中断をまとめたシグナル。 */
+  readonly abortSignal?: AbortSignal;
+}
+
+export type ToolPermissionDecision =
+  | { readonly decision: 'allow' }
+  | { readonly decision: 'deny'; readonly reason: string };
+
+export type ToolPermissionDecisionHandler =
+  (request: ToolPermissionDecisionRequest) => Promise<ToolPermissionDecision>;
+
 /** AskUserQuestion tool input */
 export interface AskUserQuestionInput {
   questions: Array<{
@@ -182,6 +198,7 @@ export interface ClaudeSpawnOptions {
   onPermissionRequest?: PermissionHandler;
   /** Custom handler for AskUserQuestion tool */
   onAskUserQuestion?: AskUserQuestionHandler;
+  onToolPermissionDecision?: ToolPermissionDecisionHandler;
   /** Bypass all permission checks */
   bypassPermissions?: boolean;
   /** Anthropic API key to inject via env (bypasses CLI auth) */
