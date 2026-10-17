@@ -69,6 +69,10 @@ CLI・TUI・MCPから登録する場合は、同じIssue・PR・ブランチのp
 
 MCP client は `takt-mcp` stdio server を使って、shell command を直接呼ばずに pending タスクを保存し、task/run 状態を確認し、実行中 worktree clone へ追加指示を送れます。`takt_enqueue_task` は `.takt/tasks.yaml` に pending レコードを書き込み、`takt_list_tasks` は要約、`takt_get_run` は1つの run の詳細、`takt_tell_run` は再確認後に実行中 clone への書き込みを行います。Issue 作成後に保存が失敗し、Issue 番号まで解決済みなら、Issue は open のまま残り、MCP error result は再試行用の番号を返します。番号抽出に失敗した場合は代わりに Issue URL を返すことがあります。tool は server が許可した project root 内の絶対パス `cwd` を必須とし、enqueue と tell には空でない本文も必要です。pending タスクの実行には `takt run`、継続監視と実行には `takt watch` を使用してください。設定方法と tool 入力の詳細は [CLI リファレンス](./cli-reference.ja.md#mcp-server) を参照してください。
 
+`takt_cleanup_tasks` は絞り込んだタスクの一覧を確認してから削除するツールです。絶対パスの `cwd` と `reason` が必須です。任意入力は `statuses`（`pending`、`completed`、`failed`、`exceeded`、`pr_failed` を複数指定でき、`running` は指定できません）、`goalId`、`branch`、`confirm`（既定値は `false`）です。`statuses`、`goalId`、`branch` のいずれか1つ以上が必要です。
+
+`confirm` の省略時または `false` の場合は対象一覧だけを返し、何も削除しません。`confirm: true` の場合だけ、`takt list` と同じ範囲を削除します。このツールは `all` のツール一覧だけで利用でき、`read-only` と `manager` には含まれません。`manager` には別のツール `takt_remove_goal_task` があります。
+
 通常の assistant 会話には、MCP 対応 provider の場合だけ読み取り専用の task 状態 tool が渡されます。新しいタスクには `/go`、実行中 worktree clone への追加指示には `/tell` で対象を選び、内容を確認してから送ります。failed タスクの再投入には `/requeue` または `/retry` を使用できます。MCP 非対応 provider でも会話は利用できますが、task 状態の参照はできません。
 
 ## タスクディレクトリ形式
@@ -335,6 +339,21 @@ takt list --non-interactive --action try --branch takt/my-branch
 ```
 
 利用可能なアクションは `diff`、`sync`、`try`、`merge`、`delete` です。
+
+`takt list --non-interactive --action delete` の `--status <status...>` には、`pending`、`completed`、`failed`、`exceeded`、`pr_failed` を複数指定できます。実行中のタスクは削除できないため、`running` は指定できません。`--goal <goalId>` は指定ゴールに属するタスクに絞ります。既存の `--branch <branch>` も使用でき、単独指定では `completed` のタスクだけが対象です。
+
+`--status`、`--goal`、`--branch` のいずれか1つ以上が必須です。無指定では何も削除せず、エラーで終了します。`--yes` を省略すると対象のタスク名・状態・ブランチ・ゴールの一覧を表示し、削除せず正常終了します。削除は `--yes` を指定した場合だけ行います。`--format json` を併せると対象一覧を JSON で取得でき、JSON 出力には `goal_id` が含まれます。
+
+削除する範囲は対話の一覧からの削除と同じで、タスクの作業場所の clone、worktree セッションのファイル、clone のメタ情報、ブランチ、`.takt/tasks.yaml` の記録です。
+
+```bash
+# 対象一覧を確認してから削除します
+takt list --non-interactive --action delete --status failed pr_failed
+takt list --non-interactive --action delete --status failed pr_failed --yes
+
+# 対象一覧を JSON で確認します
+takt list --non-interactive --action delete --status failed pr_failed --format json
+```
 
 ## CodeRabbit レビューループ（`caccia`）
 

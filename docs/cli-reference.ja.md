@@ -269,6 +269,11 @@ codex mcp add takt -- takt-mcp
 | `takt_list_tasks` | ログ・レポート本文を読み込まず、タスクと run の要約を取得する。 |
 | `takt_get_run` | 1つの run の現在 step、phase、ログ、レポート、追加指示の配信状況を取得する。 |
 | `takt_tell_run` | 対象を再確認して、実行中の worktree clone タスクへ追加指示を送る。 |
+| `takt_cleanup_tasks` | 絞り込んだ対象を一覧表示し、`confirm: true` の場合だけ削除します（`all` 限定）。 |
+
+`takt_cleanup_tasks` は絞り込んだタスクの一覧を確認してから削除するツールです。絶対パスの `cwd` と `reason` が必須です。任意入力は `statuses`（`pending`、`completed`、`failed`、`exceeded`、`pr_failed` を複数指定でき、`running` は指定できません）、`goalId`、`branch`、`confirm`（既定値は `false`）です。`statuses`、`goalId`、`branch` のいずれか1つ以上が必要です。
+
+`confirm` の省略時または `false` の場合は対象一覧だけを返し、何も削除しません。`confirm: true` の場合だけ、`takt list` と同じ範囲を削除します。このツールは `all` のツール一覧だけで利用でき、`read-only` と `manager` には含まれません。`manager` には別のツール `takt_remove_goal_task` があります。
 
 各 tool の `cwd` は `realpath` で解決され、MCP server の許可 project root 内にある必要があります。既定の許可 root は `takt-mcp` を起動したディレクトリです。
 
@@ -453,7 +458,22 @@ takt list --non-interactive --action delete --branch takt/my-branch --yes
 takt list --non-interactive --format json
 ```
 
-`--action` に指定できるのは `diff`、`sync`、`try`、`merge`、`delete` の5種です。非インタラクティブのアクションには `--branch` が必須で、`delete` にはさらに `--yes` が必須です。`sync` が失敗した場合は終了コード `1` で終了します。
+`--action` に指定できるのは `diff`、`sync`、`try`、`merge`、`delete` の5種です。非インタラクティブモードの `delete` 以外のアクションには `--branch` が必須です。`sync` が失敗した場合は終了コード `1` で終了します。
+
+`takt list --non-interactive --action delete` の `--status <status...>` には、`pending`、`completed`、`failed`、`exceeded`、`pr_failed` を複数指定できます。実行中のタスクは削除できないため、`running` は指定できません。`--goal <goalId>` は指定ゴールに属するタスクに絞ります。既存の `--branch <branch>` も使用でき、単独指定では `completed` のタスクだけが対象です。
+
+`--status`、`--goal`、`--branch` のいずれか1つ以上が必須です。無指定では何も削除せず、エラーで終了します。`--yes` を省略すると対象のタスク名・状態・ブランチ・ゴールの一覧を表示し、削除せず正常終了します。削除は `--yes` を指定した場合だけ行います。`--format json` を併せると対象一覧を JSON で取得でき、JSON 出力には `goal_id` が含まれます。
+
+削除する範囲は対話の一覧からの削除と同じで、タスクの作業場所の clone、worktree セッションのファイル、clone のメタ情報、ブランチ、`.takt/tasks.yaml` の記録です。
+
+```bash
+# 対象一覧を確認してから削除します
+takt list --non-interactive --action delete --status failed pr_failed
+takt list --non-interactive --action delete --status failed pr_failed --yes
+
+# 対象一覧を JSON で確認します
+takt list --non-interactive --action delete --status failed pr_failed --format json
+```
 
 インタラクティブモードでは **Merge from root** を選択でき、ルートリポジトリの HEAD をワークツリーブランチにマージします。コンフリクト発生時は AI が自動解決を試みます。
 
