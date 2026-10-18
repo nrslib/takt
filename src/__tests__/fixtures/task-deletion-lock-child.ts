@@ -14,20 +14,7 @@ function waitSync(name: string): void {
   }
 }
 
-if (role === 'claim') {
-  const open = fs.openSync;
-  fs.openSync = ((file, ...args) => {
-    try {
-      return open(file, ...args);
-    } catch (error) {
-      if (String(file) === join(project, '.takt', 'tasks.yaml.lock')
-        && (error as NodeJS.ErrnoException).code === 'EEXIST') {
-        fs.writeFileSync(marker('claim-waiting'), 'waiting');
-      }
-      throw error;
-    }
-  }) as typeof fs.openSync;
-} else {
+if (role === 'delete') {
   const remove = fs.rmSync;
   fs.rmSync = (file, options) => {
     if (String(file) === join(project, '.takt', 'worktrees', 'race')) {
@@ -42,7 +29,7 @@ syncBuiltinESMExports();
 const { TaskRunner } = await import('../../infra/task/runner.js');
 const { deleteTaskResources } = await import('../../features/tasks/list/taskDeleteActions.js');
 const runner = new TaskRunner(project);
-const selected = role === 'delete' ? runner.listAllTaskItems()[0]! : undefined;
+const selected = role === 'delete' ? runner.listAllTaskItems().find((task) => task.name === 'race')! : undefined;
 fs.writeFileSync(marker(`${role}-ready`), 'ready');
 waitSync(`start-${role}`);
 try {

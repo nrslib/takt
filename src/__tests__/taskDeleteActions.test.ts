@@ -111,6 +111,45 @@ afterEach(() => {
 });
 
 describe('taskDeleteActions', () => {
+  it('rejects a missing selection before cleanup with the existing error', () => {
+    setupTasksFile(tmpDir);
+    const runner = new TaskRunner(tmpDir);
+    const selected = runner.listAllTaskItems().find((task) => task.kind === 'completed')!;
+    runner.deleteTask(selected.name, 'completed');
+
+    expect(() => deleteTaskResources(selected)).toThrow('Task not found: completed-task (completed)');
+    expect(mockDeleteBranch).not.toHaveBeenCalled();
+  });
+
+  it('keeps the record until cleanup succeeds', () => {
+    setupTasksFile(tmpDir);
+    const runner = new TaskRunner(tmpDir);
+    const selected = runner.listAllTaskItems().find((task) => task.kind === 'completed')!;
+    mockDeleteBranch.mockImplementationOnce(() => {
+      expect(runner.listAllTaskItems()).toContainEqual(expect.objectContaining({ name: selected.name, kind: 'completed' }));
+      return true;
+    });
+
+    expect(deleteTaskResources(selected)).toBe(true);
+    expect(runner.listAllTaskItems().map((task) => task.name)).not.toContain(selected.name);
+  });
+
+  it.each(['removed', 'running'] as const)('rechecks the target after cleanup when it becomes %s', (state) => {
+    setupTasksFile(tmpDir);
+    const runner = new TaskRunner(tmpDir);
+    const selected = runner.listAllTaskItems().find((task) => task.kind === 'completed')!;
+    mockDeleteBranch.mockImplementationOnce(() => {
+      if (state === 'removed') runner.deleteTask(selected.name, 'completed');
+      else runner.startReExecution(selected.name, ['completed'], 'instruct');
+      return true;
+    });
+
+    expect(() => deleteTaskResources(selected)).toThrow('Task not found: completed-task (completed)');
+    expect(mockDeleteBranch).toHaveBeenCalledTimes(1);
+    expect(runner.listAllTaskItems().find((task) => task.name === selected.name)?.kind)
+      .toBe(state === 'removed' ? undefined : 'running');
+  });
+
   it('rejects a completed selection after re-execution starts without cleanup', () => {
     const tasksFile = setupTasksFile(tmpDir);
     const runner = new TaskRunner(tmpDir);

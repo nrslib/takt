@@ -323,6 +323,7 @@ describe('deterministic stdio MCP server fixture (MCP-INTEGRATION-TESTS)', () =>
         'takt_list_goals',
         'takt_get_goal',
         'takt_list_tasks',
+        'takt_cleanup_tasks',
         'takt_get_run',
         'takt_tell_run',
       ].sort());

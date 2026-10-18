@@ -118,8 +118,9 @@ describe('non-interactive filtered deletion with real task resources', () => {
     const clone = join(project, '.takt', 'worktrees', 'race');
     mkdirSync(clone, { recursive: true });
     writeFileSync(join(clone, 'sentinel'), 'keep');
-    saveRecords(project, [record('race', 'pending', { goal_id: undefined,
-      branch: 'feature/race', worktree_path: clone })]);
+    saveRecords(project, [record('race', first === 'delete' ? 'completed' : 'pending', { goal_id: undefined,
+      branch: 'feature/race', worktree_path: clone }),
+    ...(first === 'delete' ? [record('other', 'pending', { goal_id: undefined })] : [])]);
     startWorker('delete');
     startWorker('claim');
     await waitForMarker(join(root, 'delete-ready'));
@@ -128,8 +129,12 @@ describe('non-interactive filtered deletion with real task resources', () => {
     if (first === 'delete') {
       await waitForMarker(join(root, 'cleanup-started'));
       writeFileSync(join(root, 'start-claim'), 'start');
-      await waitForMarker(join(root, 'claim-waiting'));
-      expect(existsSync(join(root, 'claim-result'))).toBe(false);
+      await waitForMarker(join(root, 'claim-result'));
+      const claim: unknown = JSON.parse(readFileSync(join(root, 'claim-result'), 'utf8'));
+      expect(claim).toEqual({ claimed: ['other'] });
+      expect(new TaskRunner(project).listAllTaskItems().map((task) => ({ name: task.name, kind: task.kind })))
+        .toEqual(expect.arrayContaining([{ name: 'race', kind: 'completed' }, { name: 'other', kind: 'running' }]));
+      expect(existsSync(join(root, 'delete-result'))).toBe(false);
       expect(existsSync(clone)).toBe(true);
       writeFileSync(join(root, 'release-cleanup'), 'release');
     } else {
@@ -140,11 +145,12 @@ describe('non-interactive filtered deletion with real task resources', () => {
     await waitForMarker(join(root, 'claim-result'));
     const deletion = JSON.parse(readFileSync(join(root, 'delete-result'), 'utf8')) as { success?: boolean; error?: string };
     const claim = JSON.parse(readFileSync(join(root, 'claim-result'), 'utf8')) as { claimed: string[] };
-    expect(claim.claimed).toEqual(first === 'delete' ? [] : ['race']);
+    expect(claim.claimed).toEqual(first === 'delete' ? ['other'] : ['race']);
     if (first === 'delete') {
       expect(deletion).toEqual({ success: true });
       expect(existsSync(clone)).toBe(false);
-      expect(names(project)).toEqual([]);
+      expect(new TaskRunner(project).listAllTaskItems().map((task) => ({ name: task.name, kind: task.kind })))
+        .toEqual([{ name: 'other', kind: 'running' }]);
     } else {
       expect(deletion.error).toBeDefined();
       expect(existsSync(join(root, 'cleanup-started'))).toBe(false);

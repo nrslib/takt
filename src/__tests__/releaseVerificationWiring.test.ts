@@ -755,6 +755,16 @@ describe('release verification wiring', () => {
       script: 'test:it:heavy:serial:git',
       normalized: 'src/__tests__/companion-diff-runtime.integration.test.ts',
     },
+    {
+      target: 'src/__tests__/it-list-filtered-delete.test.ts',
+      script: 'test:it:heavy:serial:git',
+      normalized: 'src/__tests__/it-list-filtered-delete.test.ts',
+    },
+    {
+      target: 'it-list-filtered-delete.test.ts',
+      script: 'test:it:heavy:serial:git',
+      normalized: 'src/__tests__/it-list-filtered-delete.test.ts',
+    },
   ])('should route $target to $script', ({ target, script, normalized }) => {
     expect(selectNpmTestRuns([target])).toEqual([{
       npmArgs: ['run', script, '--', normalized],
