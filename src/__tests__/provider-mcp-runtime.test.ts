@@ -3,6 +3,8 @@ import { statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 // New modules under test (implemented in the following `implement` step).
 import { createMcpAdapter, type ResolvedMcpServers, type ProviderMcpContext } from '../infra/providers/mcp/index.js';
+import { TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
+import { TAKT_MCP_MANAGER_TOOL_NAMES } from '../features/mcp/server.js';
 import { createTaskStateMcpServers } from '../features/interactive/taskStateMcp.js';
 
 /**
@@ -56,6 +58,39 @@ function baseContext(overrides: Partial<ProviderMcpContext> = {}): ProviderMcpCo
 }
 
 describe('Codex adapter (MCP-CODEX)', () => {
+  it('approves only explicitly listed manager tools while preserving external MCP configuration', async () => {
+    const servers: ResolvedMcpServers = {
+      enabled: true, serverNames: [TAKT_MANAGER_MCP_SERVER_NAME, 'external'], identity: 'fixture-manager',
+      servers: {
+        [TAKT_MANAGER_MCP_SERVER_NAME]: { command: 'node', args: ['manager.js'], env: { FIXTURE: 'manager' } },
+        external: { type: 'http', url: 'https://example.test/mcp' },
+      },
+    };
+    const context: ProviderMcpContext & { toolApprovalAllowlist: Readonly<Record<string, readonly string[]>> } = {
+      ...baseContext(), toolApprovalAllowlist: { [TAKT_MANAGER_MCP_SERVER_NAME]: TAKT_MCP_MANAGER_TOOL_NAMES, missing: ['never_assigned'] },
+    };
+    const prepared = await createMcpAdapter('codex').prepare(servers, context);
+    try {
+      const entries = prepared.config!.mcp_servers!;
+      const manager = entries[TAKT_MANAGER_MCP_SERVER_NAME] as Record<string, unknown>;
+      expect(manager).toMatchObject({ command: 'node', args: ['manager.js'], env: { FIXTURE: 'manager' } });
+      expect(manager.tools).toEqual(Object.fromEntries(TAKT_MCP_MANAGER_TOOL_NAMES.map((name) => [name, { approval_mode: 'approve' }])));
+      expect(manager.default_tools_approval_mode).toBeUndefined();
+      expect(entries.external).toEqual({ url: 'https://example.test/mcp' });
+      expect(entries.missing).toBeUndefined();
+    } finally { await prepared.dispose(); }
+  });
+
+  it('keeps manager-named servers unchanged without an explicit tool approval assignment', async () => {
+    const server = { command: 'node', args: ['manager.js'] };
+    const prepared = await createMcpAdapter('codex').prepare({
+      enabled: true, serverNames: [TAKT_MANAGER_MCP_SERVER_NAME], identity: 'ordinary-run',
+      servers: { [TAKT_MANAGER_MCP_SERVER_NAME]: server },
+    }, baseContext());
+    try { expect(prepared.config?.mcp_servers?.[TAKT_MANAGER_MCP_SERVER_NAME]).toEqual(server); }
+    finally { await prepared.dispose(); }
+  });
+
   it('Given the codex adapter, When prepared with stdio+http servers, Then CodexOptions.config contains mcp_servers for both', async () => {
     const adapter = createMcpAdapter('codex');
     const prepared = await adapter.prepare(resolvedServers(), baseContext());

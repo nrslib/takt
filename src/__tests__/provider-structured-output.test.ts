@@ -30,6 +30,8 @@ vi.mock('../infra/claude/client.js', () => ({
   callClaudeCustom: mockCallClaudeCustom,
 }));
 
+vi.mock('../infra/codex/skill-config.js', () => ({ buildCodexSkillConfig: vi.fn() }));
+
 // ===== Codex =====
 const {
   mockCallCodex,
@@ -99,6 +101,7 @@ import { ClaudeProvider } from '../infra/providers/claude.js';
 import { CodexProvider } from '../infra/providers/codex.js';
 import { OpenCodeProvider } from '../infra/providers/opencode.js';
 import { MockProvider } from '../infra/providers/mock.js';
+import { buildCodexSessionConfig } from '../infra/codex/session-config.js';
 import type { StepProviderOptions } from '../core/models/workflow-types.js';
 
 const SCHEMA = {
@@ -294,6 +297,26 @@ describe('ClaudeProvider — structured output', () => {
 // ---------- Codex ----------
 
 describe('CodexProvider — structured output', () => {
+  it.each([undefined, 'judge system prompt'])('isolates the judge from a manager hook and disables hooks at the SDK configuration boundary (system prompt: %s)', async (systemPrompt) => {
+    vi.clearAllMocks();
+    mockCallCodex.mockResolvedValue(doneResponse('manager-permission-judge'));
+    mockCallCodexCustom.mockResolvedValue(doneResponse('manager-permission-judge'));
+    const onToolPermissionDecision = vi.fn();
+    await new CodexProvider().setupIsolatedStructured({ name: 'manager-permission-judge', systemPrompt }).call('judge', {
+      cwd: '/tmp', sessionId: 'manager-session', permissionMode: 'full', outputSchema: SCHEMA,
+      onToolPermissionDecision, providerOptions: { codex: { fastMode: true } },
+      preparedMcp: { dispose: async () => {}, config: { mcp_servers: { manager: { command: 'node' } } } },
+    });
+    const calls = systemPrompt === undefined ? mockCallCodex.mock.calls : mockCallCodexCustom.mock.calls;
+    const options = calls[0]![systemPrompt === undefined ? 2 : 3];
+    expect(options.onToolPermissionDecision).toBeUndefined();
+    expect(options).toMatchObject({ internalAgentIsolation: 'strict-readonly', sessionId: undefined, permissionMode: 'readonly', preparedMcp: undefined });
+    const { config } = buildCodexSessionConfig(options);
+    expect(config.features).toMatchObject({ hooks: false, fast_mode: true });
+    expect(config.mcp_servers).toBeUndefined();
+    expect(onToolPermissionDecision).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });

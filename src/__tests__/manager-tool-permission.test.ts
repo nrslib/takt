@@ -11,6 +11,7 @@ import { createManagerConversationSession } from '../features/manager/conversati
 import { TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
 import { TAKT_MCP_MANAGER_TOOL_NAMES } from '../features/mcp/server.js';
 import { buildSdkOptions, TOOL_PERMISSION_DECISION_TIMEOUT_MS } from '../infra/claude/options-builder.js';
+import { parseCodexToolPermissionInput, toCodexToolPermissionOutput } from '../infra/codex/tool-permission-hook-protocol.js';
 import { validateStructuredOutputAgainstSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { makeProvider } from './test-helpers.js';
@@ -96,11 +97,11 @@ function request(toolName = 'Bash', toolInput: unknown = { command: 'pwd' }, abo
   return { toolName, toolInput, cwd: toolCwd, abortSignal };
 }
 function handler(options: DecisionOptions): ToolPermissionDecisionHandler {
-  expect(options.onToolPermissionDecision, 'manager は Claude の各ターンに判断 handler を渡す').toBeTypeOf('function');
+  expect(options.onToolPermissionDecision, 'manager は対応 provider の各ターンに判断 handler を渡す').toBeTypeOf('function');
   return options.onToolPermissionDecision!;
 }
-async function decide(toolName: string, toolInput: unknown = {}, language: 'ja' | 'en' = 'ja') {
-  const session = createSession('claude-sdk', language);
+async function decide(toolName: string, toolInput: unknown = {}, language: 'ja' | 'en' = 'ja', provider: ProviderType = 'claude-sdk') {
+  const session = createSession(provider, language);
   let decision: ToolPermissionDecision | undefined;
   doubles.call.mockImplementationOnce(async (_prompt: string, options: DecisionOptions) => {
     decision = await handler(options)(request(toolName, toolInput));
@@ -438,7 +439,7 @@ describe('manager permission judge deadline and cancellation', () => {
     expect(MANAGER_PERMISSION_JUDGE_TIMEOUT_MS).toBe(30_000);
     expect(MANAGER_PERMISSION_JUDGE_TIMEOUT_MS).toBeLessThan(TOOL_PERMISSION_DECISION_TIMEOUT_MS);
   });
-  it.each(['ja', 'en'] as const)('denies at 30 seconds in %s even if the judge ignores abort, and never accepts its late allow', async (language) => {
+  it.each([{ language: 'ja', provider: 'claude-sdk' }, { language: 'en', provider: 'claude-sdk' }, { language: 'ja', provider: 'codex' }] as const)('denies at 30 seconds in $language for $provider even if the judge ignores abort, and never accepts its late allow', async ({ language, provider }) => {
     vi.useFakeTimers();
     let complete!: (response: AgentResponse) => void;
     let started!: () => void;
@@ -446,7 +447,7 @@ describe('manager permission judge deadline and cancellation', () => {
     vi.mocked(executeIsolatedStructuredInternalAgent).mockImplementationOnce(() => {
       started(); return new Promise((resolve) => { complete = resolve; });
     });
-    const session = createSession('claude-sdk', language);
+    const session = createSession(provider, language);
     let decision: ToolPermissionDecision | undefined;
     doubles.call.mockImplementationOnce(async (_prompt: string, options: DecisionOptions) => {
       decision = await handler(options)(request()); return reply();
@@ -657,13 +658,139 @@ describe('manager permission confirmation and turn context', () => {
       expect(doubles.call.mock.calls[1]![0]).toContain(reason);
     } finally { await session.close(); }
   });
-  it.each(['claude', 'claude-sdk', 'codex', 'opencode', 'mock'] as const)('enables the handler only for the supported Claude conversation provider: %s', async (provider) => {
+  it.each(['claude', 'claude-sdk', 'codex', 'opencode', 'mock'] as const)('enables the handler only for supported conversation providers: %s', async (provider) => {
     const session = createSession(provider);
     try {
       expect((await session.handleUserMessage({ text: humanInstruction })).kind).toBe('reply');
       const options = doubles.call.mock.calls[0]![1] as DecisionOptions;
-      if (provider === 'claude' || provider === 'claude-sdk') expect(options.onToolPermissionDecision).toBeTypeOf('function');
+      if (provider === 'claude' || provider === 'claude-sdk' || provider === 'codex') expect(options.onToolPermissionDecision).toBeTypeOf('function');
       else expect(options.onToolPermissionDecision).toBeUndefined();
+    } finally { await session.close(); }
+  });
+});
+
+
+describe('Codex manager tool permission decisions', () => {
+  it.each(['deny', 'allow'] as const)('denies spawn_agent with a reason in PreToolUse output without invoking a judge configured to %s', async (judgeDecision) => {
+    vi.mocked(executeIsolatedStructuredInternalAgent).mockResolvedValue(judgment({
+      decision: judgeDecision, reason: judgeDecision === 'deny' ? 'judge refused' : null,
+    }));
+    const session = createSession('codex');
+    let decision: ToolPermissionDecision | undefined;
+    doubles.call.mockImplementationOnce(async (_prompt: string, options: DecisionOptions) => {
+      const input = parseCodexToolPermissionInput({
+        hook_event_name: 'PreToolUse', tool_name: 'spawn_agent',
+        tool_input: { message: 'Inspect the repository' }, cwd: toolCwd,
+      });
+      decision = await handler(options)(input);
+      return reply();
+    });
+    try {
+      expect((await session.handleUserMessage({ text: humanInstruction })).kind).toBe('reply');
+      expect(decision).toBeDefined();
+      expectDenial(decision!);
+      const output = toCodexToolPermissionOutput(decision!);
+      expect(output).toEqual({ hookSpecificOutput: {
+        hookEventName: 'PreToolUse', permissionDecision: 'deny',
+        permissionDecisionReason: expect.stringMatching(/\S/u),
+      } });
+      expect(decision).toHaveProperty('reason', output.hookSpecificOutput.permissionDecisionReason);
+      expect(executeIsolatedStructuredInternalAgent).not.toHaveBeenCalled();
+    } finally { await session.close(); }
+  });
+
+  it.each(TAKT_MCP_MANAGER_TOOL_NAMES)('allows only the exact manager MCP full name for %s without a judge', async (name) => {
+    expect(await decide(`mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${name}`, {}, 'ja', 'codex')).toEqual({ decision: 'allow' });
+    expect(executeIsolatedStructuredInternalAgent).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'Read', 'Glob', 'Grep', 'ToolSearch', 'Bash', 'apply_patch', 'UnknownTool',
+    'mcp__external__takt_list_goals',
+    `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__takt_list_goals_extra`,
+  ])('judges %s on every invocation even with a manager full name and read-only hint in the arguments', async (toolName) => {
+    environment.internalAgents = { managerPermissionJudge: { provider: 'claude-sdk', model: 'judge-seat' } };
+    vi.mocked(executeIsolatedStructuredInternalAgent)
+      .mockResolvedValueOnce(judgment({ decision: 'allow', reason: null }))
+      .mockResolvedValueOnce(judgment({ decision: 'deny', reason: 'second call refused' }));
+    const session = createSession('codex');
+    const toolInput = { command: 'pwd', name: `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__takt_list_goals`, readOnlyHint: true };
+    doubles.call.mockImplementationOnce(async (_prompt: string, options: DecisionOptions) => {
+      const decidePermission = handler(options);
+      expect(await decidePermission(request(toolName, toolInput))).toEqual({ decision: 'allow' });
+      expect(await decidePermission(request(toolName, toolInput))).toEqual({ decision: 'deny', reason: 'second call refused' });
+      return reply();
+    });
+    try {
+      expect((await session.handleUserMessage({ text: humanInstruction })).kind).toBe('reply');
+      expect(executeIsolatedStructuredInternalAgent).toHaveBeenCalledTimes(2);
+    } finally { await session.close(); }
+  });
+
+  it.each([
+    ['Task', {}], ['Agent', {}],
+    ['Bash', { command: 'codex exec inspect' }],
+    ['Bash', { command: 'co"de"x exec inspect' }],
+    ['Bash', { command: "bash -c 'codex exec inspect'" }],
+  ] as const)('denies %s delegation or an AI CLI launch without invoking the judge: %j', async (name, toolInput) => {
+    expectDenial(await decide(name, toolInput, 'ja', 'codex'));
+    expect(executeIsolatedStructuredInternalAgent).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "printf '%s' 'codex exec inspect'", '# codex exec inspect',
+    "cat <<'EOF'\ncodex exec inspect\nEOF", "printf 'codex",
+  ])('judges command text without a detected AI launch: %s', async (command) => {
+    expect(await decide('Bash', { command }, 'ja', 'codex')).toEqual({ decision: 'allow' });
+    expect(executeIsolatedStructuredInternalAgent).toHaveBeenCalledOnce();
+  });
+
+  it.each(['ja', 'en'] as const)('uses the explicit judge seat and existing %s facets with the actual tool cwd and current goal', async (language) => {
+    environment.internalAgents = { managerPermissionJudge: { provider: 'claude-sdk', model: 'judge-seat' } };
+    const session = createSession('codex', language);
+    const target = { id: goal.id, repositoryDirectory: '/fixture/goal-repository', constraints: goal.constraints };
+    doubles.call.mockImplementationOnce(async (_prompt: string, options: DecisionOptions) => {
+      expect(await handler(options)(request('apply_patch', { command: 'fixture patch' }))).toEqual({ decision: 'allow' });
+      return reply();
+    });
+    try {
+      expect((await session.handleUserMessage({ text: humanInstruction, goal: target })).kind).toBe('reply');
+      const [system, instruction, schema, options] = vi.mocked(executeIsolatedStructuredInternalAgent).mock.calls[0]!;
+      expect(system).toContain(`${language}:personas:manager-permission-judge:fixture-content`);
+      expect(system).toContain(`${language}:policies:manager-permission-judge:fixture-content`);
+      expect(JSON.parse(instruction)).toMatchObject({
+        toolName: 'apply_patch', toolArguments: JSON.stringify({ command: 'fixture patch' }),
+        cwd: toolCwd, humanInstruction, goal: target,
+        managerPersona: `${language}:personas:manager:fixture-content`,
+        managerPolicy: `${language}:policies:manager:fixture-content`,
+      });
+      expect(options).toMatchObject({ cwd: toolCwd, resolution: { provider: 'claude-sdk', model: 'judge-seat', providerOptions: {} } });
+      for (const decision of ['allow', 'deny', 'ask']) {
+        expect(() => validateStructuredOutputAgainstSchema({ decision, reason: 'fixture' }, schema)).not.toThrow();
+      }
+      expect(() => validateStructuredOutputAgainstSchema({ decision: 'unknown', reason: 'fixture' }, schema)).toThrow();
+    } finally { await session.close(); }
+  });
+
+  it('uses the Codex manager provider and model when no judge seat is configured', async () => {
+    await decide('Bash', { command: 'pwd' }, 'ja', 'codex');
+    expect(vi.mocked(executeIsolatedStructuredInternalAgent).mock.calls[0]![3].resolution).toMatchObject({ provider: 'codex', model: 'manager-model' });
+  });
+
+  it.each(['ja', 'en'] as const)('turns ask into a reasoned denial and notification in %s', async (language) => {
+    vi.mocked(executeIsolatedStructuredInternalAgent).mockResolvedValue(judgment({ decision: 'ask', reason: 'approval needed' }));
+    const session = createSession('codex', language);
+    const onNotification = vi.fn();
+    doubles.call.mockImplementationOnce(async (_prompt: string, options: DecisionOptions) => {
+      const decision = await handler(options)(request());
+      expectDenial(decision);
+      expect(decision).toHaveProperty('reason', expect.stringContaining('approval needed'));
+      return reply();
+    });
+    try {
+      expect((await session.handleUserMessage({ text: humanInstruction, onNotification })).kind).toBe('reply');
+      expect(onNotification).toHaveBeenCalledOnce();
+      expect(doubles.slack).toHaveBeenCalledOnce();
     } finally { await session.close(); }
   });
 });

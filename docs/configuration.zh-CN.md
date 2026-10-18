@@ -781,7 +781,7 @@ defaults
   < steps
 ```
 
-内部 `selector`、`assistant`、`loop-judge`、`review-completion-judge` 和 `manager-permission-judge` 使用单独的解析顺序。`manager-permission-judge` 在 manager 使用 claude（claude-sdk）provider 的对话中，负责工具执行前的权限审查。可通过 `runtime.yaml` 中的 `provider.targets.internal_agents.manager-permission-judge` 指定其 provider 和 model，使用 `profile` 或 `ladder`，不能使用 `pool`。所有 seat 都是可选的；未分配时使用普通默认解析。不过，`manager-permission-judge` 未分配时使用与 manager 相同的 provider、model 和 provider options：
+内部 `selector`、`assistant`、`loop-judge`、`review-completion-judge` 和 `manager-permission-judge` 使用单独的解析顺序。`manager-permission-judge` 在 manager 使用 claude（claude-sdk）或 codex provider 的对话中，负责工具执行前的权限审查。可通过 `runtime.yaml` 中的 `provider.targets.internal_agents.manager-permission-judge` 指定其 provider 和 model，使用 `profile` 或 `ladder`，不能使用 `pool`。所有 seat 都是可选的；未分配时使用普通默认解析。不过，`manager-permission-judge` 未分配时使用与 manager 相同的 provider、model 和 provider options：
 
 ```text
 defaults

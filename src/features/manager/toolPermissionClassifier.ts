@@ -1,13 +1,14 @@
 import type { ToolPermissionDecisionRequest } from '../../core/workflow/types.js';
 import type { Language } from '../../core/models/types.js';
+import type { ProviderType } from '../../shared/types/provider.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { TAKT_MCP_MANAGER_TOOL_NAMES } from '../mcp/server.js';
 import { TAKT_MANAGER_MCP_SERVER_NAME } from './managerMcp.js';
 
-const passthroughTools = new Set<string>([
-  'Read', 'Glob', 'Grep', 'ToolSearch',
+const codexPassthroughTools = new Set<string>([
   ...TAKT_MCP_MANAGER_TOOL_NAMES.map((name) => `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${name}`),
 ]);
+const claudePassthroughTools = new Set<string>(['Read', 'Glob', 'Grep', 'ToolSearch', ...codexPassthroughTools]);
 const agentCommands = new Set(['claude', 'codex', 'cursor-agent', 'opencode', 'gemini', 'copilot', 'aider']);
 const prefixValueOptions: Record<string, readonly string[]> = {
   nohup: [],
@@ -199,9 +200,11 @@ function launchesAgent(words: string[]): boolean | undefined {
   return false;
 }
 
-export function classifyManagerToolPermission(request: ToolPermissionDecisionRequest, language: Language): Classification {
+export function classifyManagerToolPermission(request: ToolPermissionDecisionRequest, language: Language, provider: ProviderType): Classification {
+  const passthroughTools = provider === 'codex' ? codexPassthroughTools : claudePassthroughTools;
   if (passthroughTools.has(request.toolName)) return { decision: 'allow' };
-  if (request.toolName === 'Task' || request.toolName === 'Agent') {
+  if (request.toolName === 'Task' || request.toolName === 'Agent'
+    || (provider === 'codex' && request.toolName === 'spawn_agent')) {
     return { decision: 'deny', reason: getLabel('manager.toolPermission.agentDenied', language, { toolName: request.toolName }) };
   }
   if (request.toolName === 'Bash' && typeof request.toolInput === 'object' && request.toolInput !== null) {
