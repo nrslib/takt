@@ -5,6 +5,7 @@ import {
   type RunPaths,
 } from '../../../core/workflow/run/run-paths.js';
 import { buildTaskInstruction } from '../../../infra/task/index.js';
+import { firstLine } from '../../../infra/task/naming.js';
 import {
   copyTaskAttachmentsToRunContext,
   resolveTaskAttachmentManifest,
@@ -74,7 +75,12 @@ export function resolveTaskSpecForExecution(
     runSlug: runPaths.slug,
     sourceTaskDir,
     attachmentManifest,
-    taskPrompt: buildTaskInstruction(contextTaskRef, contextOrderRef),
+    taskPrompt: [
+      `Task: ${firstLine(orderContent)}`,
+      `Task directory: ${path.basename(sourceTaskDir)}`,
+      '',
+      buildTaskInstruction(contextTaskRef, contextOrderRef),
+    ].join('\n'),
     orderContent,
     stagedOrderContent,
   });

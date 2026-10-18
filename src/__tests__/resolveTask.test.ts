@@ -862,6 +862,8 @@ describe('resolveTaskExecution', () => {
   });
 
   it('should resolve separate run identities for repeated task_dir execution without staging', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-02-16T01:02:03.000Z'));
     const root = createTempProjectDir();
     const taskDir = '.takt/tasks/reused-task-123';
     const sourceTaskDir = path.join(root, taskDir);
@@ -870,7 +872,8 @@ describe('resolveTaskExecution', () => {
 
     const task = createTask({
       taskDir,
-      content: 'Run reused task',
+      name: 'reused-task',
+      content: 'Implement using only the files in the run context.',
       data: {
         task: 'Run reused task',
         workflow: 'default',
@@ -878,14 +881,18 @@ describe('resolveTaskExecution', () => {
     });
     vi.spyOn(Math, 'random')
       .mockReturnValueOnce(0.1)
-      .mockReturnValueOnce(0.2);
+      .mockReturnValueOnce(0.2)
+      .mockReturnValue(0.1);
 
     const first = await resolveTaskExecutionStrict(task, root);
     const second = await resolveTaskExecutionStrict(task, root);
 
-    expect(first.reportDirName).not.toBe('reused-task-123');
+    expect(first.reportDirName).toContain('-reused-task-');
     expect(second.reportDirName).not.toBe('reused-task-123');
     expect(second.reportDirName).not.toBe(first.reportDirName);
+    const other = await resolveTaskExecutionStrict({ ...task, name: 'other-task' }, root);
+    expect(other.reportDirName).toContain('-other-task-');
+    expect(other.reportDirName).not.toBe(first.reportDirName);
     expect(first.taskSpec?.orderContent).toBe('# reused task instruction');
     expect(second.taskSpec?.orderContent).toBe('# reused task instruction');
     expect(fs.existsSync(
@@ -964,13 +971,15 @@ describe('resolveTaskExecution', () => {
     const sourceTaskDir = path.join(root, taskDir);
     const orderContent = '# worktree collision instruction';
     const taskContent = 'Run worktree task';
+    const taskName = 'worktree-collision-task';
     fs.mkdirSync(sourceTaskDir, { recursive: true });
     fs.writeFileSync(path.join(sourceTaskDir, 'order.md'), orderContent);
 
-    const existingReportDirName = generateExecutionReportDir(worktreePath, taskContent);
+    const existingReportDirName = generateExecutionReportDir(worktreePath, taskName);
     fs.mkdirSync(path.join(worktreePath, '.takt', 'runs', existingReportDirName), { recursive: true });
 
     const task = createTask({
+      name: taskName,
       slug: 'worktree-collision-task',
       content: taskContent,
       taskDir,
