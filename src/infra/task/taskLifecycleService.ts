@@ -1,6 +1,7 @@
 import { TaskRecordSchema, type TaskFileData, type TaskRecord, type TaskFailure } from './schema.js';
 import type { TaskInfo, TaskResult } from './types.js';
-import { toTaskInfo } from './mapper.js';
+import { resolveTaskContent, toTaskInfo } from './mapper.js';
+import { cleanupTaskSpecDirectory, prepareTaskSpecDirectory, type PreparedTaskSpecDirectory } from './enqueueService.js';
 import { TaskStore } from './store.js';
 import { firstLine, nowIso } from './naming.js';
 import { slugify } from '../../shared/utils/slug.js';
@@ -411,26 +412,44 @@ export class TaskLifecycleService {
     },
   ): TaskInfo {
     let found: TaskRecord | undefined;
+    let preparedSpec: PreparedTaskSpecDirectory | undefined;
+    try {
+      this.store.update((current) => {
+        const index = current.tasks.findIndex((task) => task.name === taskName && task.status === 'running');
+        if (index === -1) {
+          throw new Error(`Running task not found for execution update: ${taskName}`);
+        }
 
-    this.store.update((current) => {
-      const index = current.tasks.findIndex((task) => task.name === taskName && task.status === 'running');
-      if (index === -1) {
-        throw new Error(`Running task not found for execution update: ${taskName}`);
-      }
+        const target = current.tasks[index]!;
+        let summary = target.summary;
+        if (target.task_dir === undefined && (target.merge_task === true
+          || (execution.worktreePath !== undefined && target.worktree !== false))) {
+          const content = resolveTaskContent(this.projectDir, target);
+          preparedSpec = prepareTaskSpecDirectory(this.projectDir, content);
+          summary ??= firstLine(content);
+        }
+        const updated: TaskRecord = {
+          ...target,
+          ...(preparedSpec === undefined ? {} : {
+            content: undefined,
+            content_file: undefined,
+            task_dir: preparedSpec.taskDirRelative,
+            summary,
+          }),
+          run_slug: execution.runSlug,
+          worktree_path: execution.worktreePath ?? target.worktree_path,
+          branch: execution.branch ?? target.branch,
+        };
 
-      const target = current.tasks[index]!;
-      const updated: TaskRecord = {
-        ...target,
-        run_slug: execution.runSlug,
-        worktree_path: execution.worktreePath ?? target.worktree_path,
-        branch: execution.branch ?? target.branch,
-      };
-
-      found = updated;
-      const tasks = [...current.tasks];
-      tasks[index] = updated;
-      return { tasks };
-    });
+        found = updated;
+        const tasks = [...current.tasks];
+        tasks[index] = updated;
+        return { tasks };
+      });
+    } catch (error) {
+      if (preparedSpec !== undefined) cleanupTaskSpecDirectory(preparedSpec.taskDir);
+      throw error;
+    }
 
     return toTaskInfo(this.projectDir, this.tasksFile, found!);
   }

@@ -384,6 +384,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-interactive-routes.test.ts',
   'src/__tests__/it-issue-dispatch-notification.test.ts',
   'src/__tests__/it-list-esc-menu-routes.test.ts',
+  'src/__tests__/it-live-intervention-task-spec.test.ts',
   'src/__tests__/it-manager-conversation-plan.test.ts',
   'src/__tests__/it-manager-question-display.test.ts',
   'src/__tests__/it-manager-tui.test.ts',

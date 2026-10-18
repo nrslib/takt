@@ -8,6 +8,11 @@ import type { ProviderPermissionProfiles } from '../core/models/provider-profile
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
 import type { ExecuteTaskOptions, WorkflowExecutionResult } from '../features/tasks/execute/types.js';
 import type { Goal } from '../infra/goals/schema.js';
+import { resolveTaskSpecForExecution } from '../features/tasks/execute/taskSpecContext.js';
+
+vi.mock('../features/tasks/execute/taskSpecContext.js', () => ({
+  resolveTaskSpecForExecution: vi.fn(),
+}));
 
 const goalDoubles = vi.hoisted(() => ({ get: vi.fn(), git: vi.fn() }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class {
@@ -243,12 +248,61 @@ describe('executeAndCompleteTask', () => {
       status: 'running',
       runSlug: execution.runSlug,
       worktreePath: execution.worktreePath,
+      ...(execution.worktreePath === undefined ? {} : { taskDir: `.takt/tasks/${taskName}` }),
       data: {
         task: `Task: ${taskName}`,
         workflow: 'default',
         ...(execution.branch ? { branch: execution.branch } : {}),
       },
     }));
+    vi.mocked(resolveTaskSpecForExecution).mockReset().mockImplementation((projectCwd, _execCwd, taskDir, runSlug) => ({
+      runSlug,
+      sourceTaskDir: `${projectCwd}/${taskDir}`,
+      attachmentManifest: [],
+      taskPrompt: `Read .takt/runs/${runSlug}/context/task/order.md`,
+      orderContent: 'Do work',
+      stagedOrderContent: 'Do work',
+    }));
+  });
+
+  it('passes a newly prepared clone spec to workflow, post execution and result persistence', async () => {
+    const task = createTask('inline-clone');
+    task.data = { ...task.data!, worktree: true };
+    const resolved = await mockResolveTaskExecution();
+    mockResolveTaskExecution.mockResolvedValue({ ...resolved,
+      execCwd: '/clone', isWorktree: true, worktreePath: '/clone', branch: 'feature/clone',
+    });
+    const executor = vi.fn(async (_options: ExecuteTaskOptions) => ({ success: true }));
+
+    const result = await executeTaskAndCompleteWithDetails(task, createTaskRunnerMock() as never, '/project', executor);
+
+    expect(result.success).toBe(true);
+    expect(resolveTaskSpecForExecution).toHaveBeenCalledWith('/project', '/clone', '.takt/tasks/inline-clone', resolved.reportDirName);
+    const spec = vi.mocked(resolveTaskSpecForExecution).mock.results[0]!.value;
+    expect(executor.mock.calls[0]![0]).toMatchObject({ task: spec.taskPrompt, taskSpec: spec, cwd: '/clone' });
+    expect(mockPostExecutionFlow).toHaveBeenCalledWith(expect.objectContaining({ orderContent: spec.orderContent }));
+    expect(mockBuildTaskResult.mock.calls[0]![0].task.taskDir).toBe('.takt/tasks/inline-clone');
+  });
+
+  it.each(['missing task_dir', 'resolution failure'] as const)('fails before starting a clone workflow on %s and preserves the saved task reference', async (failure) => {
+    const task = createTask('inline-clone');
+    const resolved = await mockResolveTaskExecution();
+    mockResolveTaskExecution.mockResolvedValue({ ...resolved, execCwd: '/clone', isWorktree: true, worktreePath: '/clone' });
+    const update = mockUpdateRunningTaskExecution.getMockImplementation()!;
+    const saved = { ...update(task.name, { runSlug: resolved.reportDirName, worktreePath: '/clone' }),
+      ...(failure === 'missing task_dir' ? { taskDir: undefined } : {}),
+    };
+    mockUpdateRunningTaskExecution.mockReturnValueOnce(saved);
+    if (failure === 'resolution failure') vi.mocked(resolveTaskSpecForExecution).mockImplementationOnce(() => { throw new Error('cannot resolve spec'); });
+    const executor = vi.fn(async (_options: ExecuteTaskOptions) => ({ success: true }));
+
+    const result = await executeTaskAndCompleteWithDetails(task, createTaskRunnerMock() as never, '/project', executor);
+
+    expect(result.success).toBe(false);
+    expect(executor).not.toHaveBeenCalled();
+    expect(mockPersistTaskError).toHaveBeenCalledWith(expect.anything(), saved,
+      expect.any(String), expect.any(String), expect.any(Error), { emitStatusLog: true });
+    expect(mockPostExecutionFlow).not.toHaveBeenCalled();
   });
 
   it.each([false, true])('provides a task signal without an external controller only for goal work (owned=%s)', async (owned) => {
@@ -1350,6 +1404,7 @@ describe('executeAndCompleteTask', () => {
       managedPr: false,
       shouldPublishBranchToOrigin: false,
       reportDirName: '20260726-pr-context',
+      worktreePath: '/worktree/clone',
       branch: prContext.headBranch,
       baseBranch: prContext.baseBranch,
       prContext,
@@ -1928,6 +1983,7 @@ describe('executeAndCompleteTask', () => {
     const result = await executeAndCompleteTaskWithoutWorkflow(task, createTaskRunnerMock() as never, '/project');
 
     expect(result).toBe(true);
+    expect(resolveTaskSpecForExecution).not.toHaveBeenCalled();
     expect(mockPostExecutionFlow).toHaveBeenCalledWith(
       expect.objectContaining({
         orderContent: '## Task\n\nUse the full order.md content.',

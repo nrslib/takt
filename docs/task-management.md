@@ -71,6 +71,8 @@ MCP clients can use the `takt-mcp` stdio server to save pending tasks, inspect t
 
 The ordinary assistant conversation receives only the read-only task-state tools when its provider supports MCP. Use `/go` for a new task, `/tell` to select, review, and confirm an additional instruction for a running worktree clone, or `/requeue` and `/retry` to return a failed task to the queue. A provider without MCP support keeps the conversation available but cannot look up task state.
 
+After delivery succeeds, instructions sent through `takt_tell_run` or CLI `/tell` are also appended to the task's source `order.md`, with their instruction ID and receipt time, and reflected in the active run's `context/task/order.md`. This preserves them for later agents and resumed runs. Persistence failures produce a warning on standard error without preventing delivery or making tell fail.
+
 ## Task Directory Format
 
 TAKT stores task metadata in `.takt/tasks.yaml` and each task's detailed specification in `.takt/tasks/{slug}/`.

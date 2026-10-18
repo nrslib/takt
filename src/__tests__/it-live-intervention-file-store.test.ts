@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
 import {
   existsSync,
@@ -16,6 +16,7 @@ import { pathToFileURL } from 'node:url';
 import { stringify as stringifyYaml } from 'yaml';
 import { LiveInterventionFileStore } from '../infra/workflow/live-intervention-store.js';
 import { issueTellableRunningTask } from '../features/tasks/liveIntervention.js';
+import * as privateFile from '../shared/utils/private-file.js';
 
 const RUN_SLUG = 'live-run';
 
@@ -116,6 +117,60 @@ function waitForMessage(child: ChildProcess, expected: ChildMessage['type']): Pr
 describe('LiveInterventionFileStore integration', () => {
   const projectDirectories: string[] = [];
   const childProcesses: ChildProcess[] = [];
+
+  it('persists only newly delivered IDs after recording delivery and keeps the lock until persistence finishes', async () => {
+    const projectCwd = createProjectDirectory();
+    projectDirectories.push(projectCwd);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const persist = vi.fn(async (instructions) => {
+      expect(store.read().deliveredNextStep).toBe(1);
+      expect(instructions).toEqual([{ instructionId: 1, issuedAt: 'received', content: 'first' }]);
+      expect(existsSync(`${store.getFilePath()}.lock`)).toBe(true);
+      entered();
+      await gate;
+    });
+    const store = new LiveInterventionFileStore(projectCwd, RUN_SLUG, persist);
+    await store.issue('first', 'received');
+    const delivery = await store.prepareDelivery({ mode: 'next_step', step: 'review', phase: 1 });
+    const committing = store.commitDelivery(delivery);
+    await started;
+    const issuer = createStore(projectCwd);
+    const issuing = issuer.issue('second');
+    expect(issuer.read().issuedTotal).toBe(1);
+    release();
+    await committing;
+    await issuing;
+    persist.mockImplementationOnce(async (instructions) => {
+      expect(instructions.map((instruction: { instructionId: number }) => instruction.instructionId)).toEqual([2]);
+    });
+    await store.commitDelivery(await store.prepareDelivery({ mode: 'next_step', step: 'fix', phase: 1 }));
+    expect(persist).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not invoke persistence when the delivery record cannot be appended', async () => {
+    const projectCwd = createProjectDirectory();
+    projectDirectories.push(projectCwd);
+    const persist = vi.fn();
+    const store = new LiveInterventionFileStore(projectCwd, RUN_SLUG, persist);
+    await store.issue('first');
+    const delivery = await store.prepareDelivery({ mode: 'next_step', step: 'fix', phase: 1 });
+    await expect(store.commitDelivery({ ...delivery, instructionIds: [999] })).rejects.toThrow();
+    expect(persist).not.toHaveBeenCalled();
+    expect(store.read().pending).toBe(1);
+    const append = vi.spyOn(privateFile, 'appendPrivateFile').mockImplementationOnce(() => {
+      throw new Error('deterministic delivery append failure');
+    });
+    try {
+      await expect(store.commitDelivery(delivery)).rejects.toThrow();
+    } finally {
+      append.mockRestore();
+    }
+    expect(persist).not.toHaveBeenCalled();
+    expect(store.read().pending).toBe(1);
+  });
 
   afterEach(() => {
     for (const child of childProcesses.splice(0)) {
