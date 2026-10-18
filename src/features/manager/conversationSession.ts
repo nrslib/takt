@@ -4,6 +4,7 @@ import { z } from 'zod/v4';
 import { GoalSummarySchema, type Goal, type ManagerGoalSummary } from '../../infra/goals/schema.js';
 import { isStdioServer } from '../../infra/providers/mcp/types.js';
 import { TAKT_MANAGER_MCP_SERVER_NAME } from './managerMcp.js';
+import { TAKT_MCP_MANAGER_TOOL_NAMES } from '../mcp/server.js';
 import { createMcpAdapter } from '../../infra/providers/mcp/index.js';
 import { buildMcpServerSetIdentity } from '../../infra/config/runtime-provider/mcp-schema.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
@@ -208,7 +209,12 @@ export function createManagerConversationSession(input: {
             const adapter = createMcpAdapter(plan.ctx.providerType);
             const resolved = { enabled: true, servers, serverNames: Object.keys(servers).sort(), identity: buildMcpServerSetIdentity(servers) };
             adapter.validate(resolved);
-            prepared = await adapter.prepare(resolved, { cwd, abortSignal: controller.signal, permissionMode: 'full' });
+            prepared = await adapter.prepare(resolved, {
+              cwd, abortSignal: controller.signal, permissionMode: 'full',
+              ...(plan.ctx.providerType === 'codex' ? {
+                toolApprovalAllowlist: { [TAKT_MANAGER_MCP_SERVER_NAME]: TAKT_MCP_MANAGER_TOOL_NAMES },
+              } : {}),
+            });
           }
           if (controller.signal.aborted) throw new Error('Conversation interrupted');
           const memories = await Promise.all((assignment?.repositoryDirectories ?? [cwd]).map(async (repositoryDirectory) => {
@@ -225,10 +231,10 @@ export function createManagerConversationSession(input: {
           const turnText = priorReasons === undefined || priorReasons.length === 0 ? text
             : `${text}\n\nPrevious tool permission denials: ${JSON.stringify(priorReasons)}`;
           const prompt = assignment === undefined ? turnText : `Current manager assignment: ${JSON.stringify(assignment)}\n\n${turnText}`;
-          const claude = plan.ctx.providerType === 'claude' || plan.ctx.providerType === 'claude-sdk';
-          if (claude && plan.permissionJudge === undefined) throw new Error('Manager permission judge plan is missing');
-          const onToolPermissionDecision = claude ? createManagerToolPermissionHandler({
-            plan: plan.permissionJudge!, cwd, instruction: options.text, goal: options.goal,
+          const usesPermissionJudge = plan.ctx.providerType === 'claude' || plan.ctx.providerType === 'claude-sdk' || plan.ctx.providerType === 'codex';
+          if (usesPermissionJudge && plan.permissionJudge === undefined) throw new Error('Manager permission judge plan is missing');
+          const onToolPermissionDecision = usesPermissionJudge ? createManagerToolPermissionHandler({
+            plan: plan.permissionJudge!, provider: plan.ctx.providerType, cwd, instruction: options.text, goal: options.goal,
             abortSignal: controller.signal, onNotification: options.onNotification,
             onDenial: (reason) => { if (turn === generation && !controller.signal.aborted) denialReasons.push(reason); },
           }) : undefined;

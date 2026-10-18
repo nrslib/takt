@@ -87,6 +87,28 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 const { CodexClient } = await import('../infra/codex/client.js');
 
 describe('CodexClient — structuredOutput 抽出', () => {
+  it('通常のタスク実行には manager のフック設定を追加しない', async () => {
+    mockEvents = [{ type: 'turn.completed' }];
+    const result = await new CodexClient().call('coder', 'prompt', { cwd: '/tmp', fastMode: true });
+    expect(result.status).toBe('done');
+    expect(lastCodexConstructorOptions?.config?.features).toMatchObject({ fast_mode: true });
+    expect((lastCodexConstructorOptions?.config?.features as Record<string, unknown>).hooks).toBeUndefined();
+    expect(lastCodexConstructorOptions?.config?.hooks).toBeUndefined();
+    expect(lastCodexConstructorOptions?.configOverrides?.filter((value) => value.startsWith('hooks.state')) ?? []).toEqual([]);
+    expect(lastThreadOptions?.approvalPolicy).toBe('never');
+  });
+
+  it('strict-readonly の判断役では fast_mode を維持して hooks を無効にする', async () => {
+    mockEvents = [{ type: 'turn.completed' }];
+    const options: CodexCallOptions & { internalAgentIsolation: 'strict-readonly' } = {
+      cwd: '/tmp', fastMode: true, permissionMode: 'readonly', internalAgentIsolation: 'strict-readonly',
+      outputSchema: { type: 'object', additionalProperties: false },
+    };
+    expect((await new CodexClient().call('manager-permission-judge', 'judge', options)).status).toBe('done');
+    expect(lastCodexConstructorOptions?.config?.features).toMatchObject({ hooks: false, fast_mode: true });
+    expect(lastThreadOptions).toMatchObject({ sandboxMode: 'read-only', approvalPolicy: 'never' });
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockBuildCodexSkillConfig.mockReset();
