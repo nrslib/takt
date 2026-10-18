@@ -42,9 +42,8 @@ function cleanupBranchIfPresent(task: TaskListItem, projectDir: string, options?
 export function deleteTaskResources(task: TaskListItem, options?: DeleteBranchOptions): boolean {
   if (task.kind === 'running') throw new Error(`Cannot delete running task "${task.name}"`);
   const projectDir = getProjectDir(task);
-  if (!cleanupBranchIfPresent(task, projectDir, options)) return false;
-  new TaskRunner(projectDir).deleteTask(task.name, task.kind);
-  return true;
+  return new TaskRunner(projectDir).deleteTaskWithCleanup(task.name, task.kind,
+    () => cleanupBranchIfPresent(task, projectDir, options));
 }
 
 export async function deleteTaskByKind(task: TaskListItem): Promise<boolean> {
