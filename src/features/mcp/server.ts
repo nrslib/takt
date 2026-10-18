@@ -8,6 +8,7 @@ import {
   enqueueTaskInputSchema,
   getRunInputSchema,
   listTasksInputSchema,
+  cleanupTasksInputSchema,
   tellRunInputSchema,
   tellGoalRunInputSchema,
   enqueueGoalTaskInputSchema,
@@ -32,6 +33,7 @@ import {
   type McpOperationDependencies,
 } from './operations.js';
 import { enqueueTaktGoalTask, listTaktWorkflows } from './goalOperations.js';
+import { cleanupTaktTasks } from './taskCleanupOperations.js';
 import { requeueTaktGoalTask, retryTaktGoalTask } from './goalTaskRetryOperations.js';
 import { requeueGoalTaskInputSchema, retryGoalTaskInputSchema } from './goalTaskRetrySchemas.js';
 import { removeGoalTaskInputSchema } from './goalTaskRemovalSchemas.js';
@@ -238,6 +240,14 @@ export function createTaktMcpServer(
       title: 'Read goal containment', description: 'Return compared SHAs, containment in the integration target, and the number of goal commits ahead of that target. Responses fit 64 KiB, with explicit truncation. Read saved fields with takt_get_goal path.',
       inputSchema: goalWriteInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal relation failed', (deps) => getTaktGoalRelation(projectInput(input, deps), deps, extra.signal), false));
+  }
+
+  if (options.toolSet === 'all') {
+    server.registerTool('takt_cleanup_tasks', {
+      title: 'Clean up stopped tasks',
+      description: 'Select stopped tasks by statuses, goalId or branch; at least one filter and a reason are required. Running tasks are excluded. Branch alone selects completed tasks. Without confirm true, return the selected tasks without deleting anything. With confirm true, use the same cleanup as the task list. Responses fit 64 KiB with explicit truncation.',
+      inputSchema: cleanupTasksInputSchema,
+    }, (input) => operation(input.cwd, 'Task cleanup failed', (deps) => cleanupTaktTasks(input, deps), false));
   }
 
   if (options.toolSet === undefined || options.toolSet === 'all') {

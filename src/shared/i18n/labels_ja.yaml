@@ -6,6 +6,18 @@
 # =============================================================================
 
 # ===== Interactive Mode UI =====
+taskDeletion:
+  statusOption: "削除対象の状態で絞り込む（pending|completed|failed|exceeded|pr_failed、複数指定可）"
+  goalOption: "削除対象のゴールIDで絞り込む"
+  invalidStatus: "削除対象に指定できない状態です: {status}。pending、completed、failed、exceeded、pr_failedを指定してください。"
+  filtersRequired: "削除には --status、--goal、--branch のいずれかが必要です。"
+  preview: "削除対象のタスク（プレビュー。削除するには --yes を指定）:"
+  previewTask: "タスク名: {name} | 状態: {status} | ブランチ: {branch} | ゴール: {goal}"
+  empty: "削除条件に一致するタスクはありません。"
+  deleted: "タスクを削除しました: {name}"
+  failed: "タスクの削除に失敗しました: {name}"
+  failedWithError: "タスク {name} の削除に失敗しました: {error}"
+
 interactive:
   operation:
     taskSaved: "タスクを保存しました: {taskName}。"
