@@ -35,6 +35,7 @@ import { runAgent } from '../agents/runner.js';
 import { issueTellableRunningTask } from '../features/tasks/liveIntervention.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { LiveInterventionFileStore } from '../infra/workflow/live-intervention-store.js';
+import { stageTaskSpecForExecution } from '../features/tasks/execute/taskSpecContext.js';
 
 describe('Merge PR persistent clone ownership', () => {
   let root: string;
@@ -102,6 +103,7 @@ describe('Merge PR persistent clone ownership', () => {
     });
   });
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     rmSync(root, { recursive: true, force: true });
@@ -110,6 +112,37 @@ describe('Merge PR persistent clone ownership', () => {
     return runMerge({ projectCwd: project, prNumber: 123, concurrency: 1,
       settings: resolveMergeSettings({ workflow: 'merge-review' }) });
   }
+  it('同秒の再投入でもプロジェクト側の既存runを避け、保存値とtaskSpecを同じslugで実行する', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-02-16T01:02:03.000Z'));
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const execute = mocks.workflow.getMockImplementation()!;
+    mocks.workflow.mockImplementation(async (request: WorkflowExecutionRequest) => {
+      expect(request.taskSpec).toBeDefined();
+      expect(request.taskSpec!.runSlug).toBe(request.reportDirName);
+      stageTaskSpecForExecution(request.taskSpec!, buildRunPaths(project, request.reportDirName!));
+      return execute(request);
+    });
+    await run();
+    const runner = new TaskRunner(project);
+    const first = runner.listFailedTasks()[0]!;
+    expect(first.runSlug).toContain(`-${first.name}-`);
+    expect(existsSync(buildRunPaths(project, first.runSlug!).runRootAbs)).toBe(true);
+    expect(existsSync(buildRunPaths(first.worktreePath!, first.runSlug!).runRootAbs)).toBe(false);
+    runner.requeueTask(first.name, ['failed']);
+    const claimed = runner.claimNextTasks(1)[0]!;
+
+    await executePersistedPrMergeTask(claimed, runner, project);
+
+    const resumed = runner.listFailedTasks()[0]!;
+    const request = mocks.workflow.mock.calls[1]![0] as WorkflowExecutionRequest;
+    expect(resumed.runSlug).toBe(`${first.runSlug}-2`);
+    expect(request.reportDirName).toBe(resumed.runSlug);
+    expect(request.resumeSource?.sourceRunSlug).toBe(first.runSlug);
+    expect(request.task).toBe(request.taskSpec!.taskPrompt);
+    expect(readFileSync(buildRunPaths(project, resumed.runSlug!).contextTaskOrderAbs, 'utf8'))
+      .toBe(readFileSync(join(project, resumed.taskDir!, 'order.md'), 'utf8'));
+  });
   it('creates the real merge source and lets agents read delivered instructions from project context after resume', async () => {
     const threatAgent = mocks.agent.getMockImplementation()!;
     mocks.agent.mockImplementation((...args: Parameters<typeof runAgent>) =>

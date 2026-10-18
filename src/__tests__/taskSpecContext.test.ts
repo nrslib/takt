@@ -61,9 +61,35 @@ describe('stageTaskSpecForExecution', () => {
     const stagedOrderPath = path.join(execCwd, '.takt', 'runs', '20260216-spec-task', 'context', 'task', 'order.md');
 
     expect(taskPrompt).toContain('.takt/runs/20260216-spec-task/context/task');
+    expect(taskPrompt).toContain('# Task');
+    expect(taskPrompt).toContain('spec-task');
+    expect(taskPrompt).toContain('Primary spec: `.takt/runs/20260216-spec-task/context/task/order.md`');
+    expect(taskPrompt).toContain('Use report files in Report Directory as primary execution history.');
+    expect(taskPrompt).not.toContain('Implement exactly this.');
     expect(orderContent).toBe(sourceOrderContent);
     expect(stagedOrderContent).toBe(sourceOrderContent);
     expect(fs.readFileSync(stagedOrderPath, 'utf-8')).toBe(sourceOrderContent);
+  });
+
+  it('includes only the short first line and distinguishes source directories sharing the same title', () => {
+    const projectCwd = createTempProjectDir();
+    const execCwd = createTempProjectDir();
+    const title = `# ${'Long task description '.repeat(6)}`;
+    const prompts = ['source-alpha', 'source-beta'].map((name) => {
+      const taskDir = `.takt/tasks/${name}`;
+      fs.mkdirSync(path.join(projectCwd, taskDir), { recursive: true });
+      fs.writeFileSync(path.join(projectCwd, taskDir, 'order.md'), `${title}\n\nDetailed instructions.`);
+      return resolveTaskSpecForExecution(projectCwd, execCwd, taskDir, 'same-run').taskPrompt;
+    });
+
+    for (const [index, name] of ['source-alpha', 'source-beta'].entries()) {
+      expect(prompts[index]).toContain(title.slice(0, 80));
+      expect(prompts[index]).toContain(name);
+      expect(prompts[index]).not.toContain(title);
+      expect(prompts[index]).not.toContain('Detailed instructions.');
+    }
+    expect(prompts[0]).not.toContain('source-beta');
+    expect(prompts[1]).not.toContain('source-alpha');
   });
 
   it('uses an explicit project-side destination that is readable from the clone cwd', () => {
