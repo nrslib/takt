@@ -14,4 +14,18 @@ export class TaskDeletionService {
       };
     });
   }
+
+  deleteTaskWithCleanup(
+    name: string,
+    status: 'pending' | 'failed' | 'completed' | 'exceeded' | 'pr_failed',
+    cleanup: () => boolean,
+  ): boolean {
+    const exists = this.store.read().tasks.some((task) => task.name === name && task.status === status);
+    if (!exists) {
+      throw new Error(`Task not found: ${name} (${status})`);
+    }
+    if (!cleanup()) return false;
+    this.deleteTaskByNameAndStatus(name, status);
+    return true;
+  }
 }

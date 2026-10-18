@@ -43,8 +43,9 @@ vi.mock('../features/tasks/list/taskActions.js', () => ({
 
 import { confirm } from '../shared/prompt/index.js';
 import { error as logError } from '../shared/ui/index.js';
-import { deleteTaskByKind, deleteAllTasks } from '../features/tasks/list/taskDeleteActions.js';
+import { deleteTaskResources, deleteTaskByKind, deleteAllTasks } from '../features/tasks/list/taskDeleteActions.js';
 import type { TaskListItem } from '../infra/task/types.js';
+import { TaskRunner } from '../infra/task/runner.js';
 
 const mockConfirm = vi.mocked(confirm);
 const mockLogError = vi.mocked(logError);
@@ -78,7 +79,7 @@ function setupTasksFile(projectDir: string): string {
         status: 'completed',
         content: 'completed',
         branch: 'takt/completed-task',
-        worktree_path: '/tmp/takt/completed-task',
+        worktree_path: path.join(projectDir, '.takt', 'worktrees', 'completed-task'),
         created_at: '2025-01-15T00:00:00.000Z',
         started_at: '2025-01-15T00:01:00.000Z',
         completed_at: '2025-01-15T00:02:00.000Z',
@@ -102,7 +103,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockLstatFailure.path = '';
   mockDeleteBranch.mockReturnValue(true);
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-test-delete-'));
+  tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'takt-test-delete-')));
 });
 
 afterEach(() => {
@@ -110,6 +111,80 @@ afterEach(() => {
 });
 
 describe('taskDeleteActions', () => {
+  it('rejects a missing selection before cleanup with the existing error', () => {
+    setupTasksFile(tmpDir);
+    const runner = new TaskRunner(tmpDir);
+    const selected = runner.listAllTaskItems().find((task) => task.kind === 'completed')!;
+    runner.deleteTask(selected.name, 'completed');
+
+    expect(() => deleteTaskResources(selected)).toThrow('Task not found: completed-task (completed)');
+    expect(mockDeleteBranch).not.toHaveBeenCalled();
+  });
+
+  it('keeps the record until cleanup succeeds', () => {
+    setupTasksFile(tmpDir);
+    const runner = new TaskRunner(tmpDir);
+    const selected = runner.listAllTaskItems().find((task) => task.kind === 'completed')!;
+    mockDeleteBranch.mockImplementationOnce(() => {
+      expect(runner.listAllTaskItems()).toContainEqual(expect.objectContaining({ name: selected.name, kind: 'completed' }));
+      return true;
+    });
+
+    expect(deleteTaskResources(selected)).toBe(true);
+    expect(runner.listAllTaskItems().map((task) => task.name)).not.toContain(selected.name);
+  });
+
+  it.each(['removed', 'running'] as const)('rechecks the target after cleanup when it becomes %s', (state) => {
+    setupTasksFile(tmpDir);
+    const runner = new TaskRunner(tmpDir);
+    const selected = runner.listAllTaskItems().find((task) => task.kind === 'completed')!;
+    mockDeleteBranch.mockImplementationOnce(() => {
+      if (state === 'removed') runner.deleteTask(selected.name, 'completed');
+      else runner.startReExecution(selected.name, ['completed'], 'instruct');
+      return true;
+    });
+
+    expect(() => deleteTaskResources(selected)).toThrow('Task not found: completed-task (completed)');
+    expect(mockDeleteBranch).toHaveBeenCalledTimes(1);
+    expect(runner.listAllTaskItems().find((task) => task.name === selected.name)?.kind)
+      .toBe(state === 'removed' ? undefined : 'running');
+  });
+
+  it('rejects a completed selection after re-execution starts without cleanup', () => {
+    const tasksFile = setupTasksFile(tmpDir);
+    const runner = new TaskRunner(tmpDir);
+    const selected = runner.listAllTaskItems().find((task) => task.kind === 'completed')!;
+    runner.startReExecution(selected.name, ['completed'], 'instruct');
+
+    expect(() => deleteTaskResources(selected)).toThrow();
+    expect(mockDeleteBranch).not.toHaveBeenCalled();
+    expect(runner.listAllTaskItems().find((task) => task.name === selected.name)?.kind).toBe('running');
+    expect(fs.existsSync(tasksFile)).toBe(true);
+  });
+
+  it('preserves the record on a cleanup exception and releases the lock for the next operation', () => {
+    setupTasksFile(tmpDir);
+    const runner = new TaskRunner(tmpDir);
+    const selected = runner.listAllTaskItems().find((task) => task.kind === 'completed')!;
+    mockDeleteBranch.mockImplementationOnce(() => { throw new Error('cleanup failed'); });
+
+    expect(() => deleteTaskResources(selected)).toThrow();
+    expect(runner.listAllTaskItems().map((task) => task.name)).toContain(selected.name);
+    expect(deleteTaskResources(selected)).toBe(true);
+    expect(runner.listAllTaskItems().map((task) => task.name)).not.toContain(selected.name);
+  });
+
+  it('rejects running tasks at the resource deletion boundary without touching records or branches', () => {
+    const tasksFile = setupTasksFile(tmpDir);
+    const original = fs.readFileSync(tasksFile, 'utf8');
+    const running: TaskListItem = { kind: 'running', name: 'running-task', createdAt: '2026-02-09T00:00:00Z',
+      filePath: tasksFile, content: 'running', branch: 'feature/running' };
+
+    expect(() => deleteTaskResources(running, { quiet: true })).toThrow();
+    expect(mockDeleteBranch).not.toHaveBeenCalled();
+    expect(fs.readFileSync(tasksFile, 'utf8')).toBe(original);
+  });
+
   it('should delete pending task when confirmed', async () => {
     const tasksFile = setupTasksFile(tmpDir);
     const task: TaskListItem = {
@@ -155,7 +230,7 @@ describe('taskDeleteActions', () => {
       filePath: tasksFile,
       content: 'failed',
       branch: 'takt/failed-task',
-      worktreePath: '/tmp/takt/failed-task',
+      worktreePath: path.join(tmpDir, '.takt', 'worktrees', 'failed-task'),
     };
     mockConfirm.mockResolvedValue(true);
 
@@ -243,7 +318,7 @@ describe('taskDeleteActions', () => {
       filePath: tasksFile,
       content: 'failed',
       branch: 'takt/failed-task',
-      worktreePath: '/tmp/takt/failed-task',
+      worktreePath: path.join(tmpDir, '.takt', 'worktrees', 'failed-task'),
     };
     mockConfirm.mockResolvedValue(true);
     mockDeleteBranch.mockReturnValue(false);
@@ -282,7 +357,7 @@ describe('taskDeleteActions', () => {
       filePath: tasksFile,
       content: 'exceeded',
       branch: 'takt/exceeded-task',
-      worktreePath: '/tmp/takt/exceeded-task',
+      worktreePath: path.join(tmpDir, '.takt', 'worktrees', 'exceeded-task'),
     };
     mockConfirm.mockResolvedValue(true);
 
@@ -303,7 +378,7 @@ describe('taskDeleteActions', () => {
       filePath: tasksFile,
       content: 'completed',
       branch: 'takt/completed-task',
-      worktreePath: '/tmp/takt/completed-task',
+      worktreePath: path.join(tmpDir, '.takt', 'worktrees', 'completed-task'),
     };
     mockConfirm.mockResolvedValue(true);
 
@@ -322,7 +397,7 @@ describe('deleteAllTasks', () => {
     const tasks: TaskListItem[] = [
       { kind: 'pending', name: 'pending-task', createdAt: '2025-01-15', filePath: tasksFile, content: 'pending' },
       { kind: 'failed', name: 'failed-task', createdAt: '2025-01-15', filePath: tasksFile, content: 'failed' },
-      { kind: 'completed', name: 'completed-task', createdAt: '2025-01-15', filePath: tasksFile, content: 'completed', branch: 'takt/completed-task', worktreePath: '/tmp/takt/completed-task' },
+      { kind: 'completed', name: 'completed-task', createdAt: '2025-01-15', filePath: tasksFile, content: 'completed', branch: 'takt/completed-task', worktreePath: path.join(tmpDir, '.takt', 'worktrees', 'completed-task') },
     ];
     mockConfirm.mockResolvedValue(true);
 
@@ -386,8 +461,8 @@ describe('deleteAllTasks', () => {
   it('should skip task when branch cleanup fails but continue with others', async () => {
     const tasksFile = setupTasksFile(tmpDir);
     const tasks: TaskListItem[] = [
+      { kind: 'completed', name: 'completed-task', createdAt: '2025-01-15', filePath: tasksFile, content: 'completed', branch: 'takt/completed-task', worktreePath: path.join(tmpDir, '.takt', 'worktrees', 'completed-task') },
       { kind: 'pending', name: 'pending-task', createdAt: '2025-01-15', filePath: tasksFile, content: 'pending' },
-      { kind: 'completed', name: 'completed-task', createdAt: '2025-01-15', filePath: tasksFile, content: 'completed', branch: 'takt/completed-task', worktreePath: '/tmp/takt/completed-task' },
     ];
     mockConfirm.mockResolvedValue(true);
     mockDeleteBranch.mockReturnValue(false);
@@ -403,7 +478,7 @@ describe('deleteAllTasks', () => {
   it('should return false when all tasks fail branch cleanup', async () => {
     const tasksFile = setupTasksFile(tmpDir);
     const tasks: TaskListItem[] = [
-      { kind: 'completed', name: 'completed-task', createdAt: '2025-01-15', filePath: tasksFile, content: 'completed', branch: 'takt/completed-task', worktreePath: '/tmp/takt/completed-task' },
+      { kind: 'completed', name: 'completed-task', createdAt: '2025-01-15', filePath: tasksFile, content: 'completed', branch: 'takt/completed-task', worktreePath: path.join(tmpDir, '.takt', 'worktrees', 'completed-task') },
     ];
     mockConfirm.mockResolvedValue(true);
     mockDeleteBranch.mockReturnValue(false);
@@ -422,7 +497,7 @@ describe('deleteAllTasks', () => {
       filePath: tasksFile,
       content: 'exceeded',
       branch: 'takt/exceeded-task',
-      worktreePath: '/tmp/takt/exceeded-task',
+      worktreePath: path.join(tmpDir, '.takt', 'worktrees', 'exceeded-task'),
     };
     mockConfirm.mockResolvedValue(true);
 
@@ -443,7 +518,7 @@ describe('deleteAllTasks', () => {
       filePath: tasksFile,
       content: 'completed',
       branch: 'takt/completed-task',
-      worktreePath: '/tmp/takt/completed-task',
+      worktreePath: path.join(tmpDir, '.takt', 'worktrees', 'completed-task'),
     };
     const tasks: TaskListItem[] = [completedTask];
     mockConfirm.mockResolvedValue(true);

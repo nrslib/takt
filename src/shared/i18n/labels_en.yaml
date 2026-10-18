@@ -5,6 +5,18 @@
 # Template variables use {variableName} syntax.
 # =============================================================================
 
+taskDeletion:
+  statusOption: "Filter deletion by status (pending|completed|failed|exceeded|pr_failed; multiple values allowed)"
+  goalOption: "Filter deletion by goal ID"
+  invalidStatus: "Invalid deletion status: {status}. Use pending, completed, failed, exceeded, or pr_failed."
+  filtersRequired: "Deletion requires at least one of --status, --goal, or --branch."
+  preview: "Tasks selected for deletion (preview; use --yes to delete):"
+  previewTask: "Name: {name} | Status: {status} | Branch: {branch} | Goal: {goal}"
+  empty: "No tasks match the deletion filters."
+  deleted: "Deleted task: {name}"
+  failed: "Failed to delete task: {name}"
+  failedWithError: "Failed to delete task {name}: {error}"
+
 # ===== Interactive Mode UI =====
 interactive:
   operation:

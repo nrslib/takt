@@ -388,6 +388,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-manager-patrol.test.ts',
   'src/__tests__/it-manager-question-display.test.ts',
   'src/__tests__/it-manager-tui.test.ts',
+  'src/__tests__/it-mcp-task-cleanup.test.ts',
   'src/__tests__/it-opencode-task-state-mcp.test.ts',
   'src/__tests__/it-phase3-persona-prompts.test.ts',
   'src/__tests__/it-pipe-reader.test.ts',
@@ -444,6 +445,7 @@ export const parallelIntegrationTestFiles = Object.freeze([
 // Add a file here only with a measured interference reason.
 export const serialGitTestFiles = Object.freeze([
   'src/__tests__/companion-diff-runtime.integration.test.ts',
+  'src/__tests__/it-list-filtered-delete.test.ts',
   // 2026-08-09: ラウンド9で遷移表→実 WorkflowEngine シナリオへ置換した結果、Git fixture+filesystem I/O の重量級になった(#1264 shard 飽和の主因)。
   // 2026-08-09: heavy 並列スライスで birpc onTaskUpdate 期限超過が CI 2コアランナーで2連続再現(#1264)。filesystem+fsync 負荷の実測干渉のため serial へ。
   'src/__tests__/it-operation-journal-store.test.ts',

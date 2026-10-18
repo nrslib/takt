@@ -7,6 +7,9 @@ import { InvalidArgumentError, type Command } from 'commander';
 import type { Language } from '../../core/models/config-types.js';
 import type { RoutingTelemetryStatus } from '../../infra/config/global/globalConfigAccessors.js';
 import { parseFacetType, VALID_FACET_TYPES } from '../../features/config/facetTypes.js';
+import { isDeletableTaskStatus, type DeletableTaskStatus } from '../../features/tasks/list/taskDeleteSelection.js';
+import { getLabel } from '../../shared/i18n/index.js';
+import { sanitizeTerminalText } from '../../shared/utils/text.js';
 import { program } from './program.js';
 import { resolveAgentOverrides, resolveWorkflowCliOption } from './helpers.js';
 
@@ -301,6 +304,13 @@ program
   .description('List task branches (merge/delete)')
   .option('--non-interactive', 'Run list in non-interactive mode')
   .option('--action <action>', 'Non-interactive action (diff|sync|try|merge|delete)')
+  .option('--status <status...>', getLabel('taskDeletion.statusOption'), (value: string, previous: DeletableTaskStatus[] = []) => {
+    if (!isDeletableTaskStatus(value)) {
+      throw new InvalidArgumentError(getLabel('taskDeletion.invalidStatus', undefined, { status: sanitizeTerminalText(value) }));
+    }
+    return [...previous, value];
+  })
+  .option('--goal <goalId>', getLabel('taskDeletion.goalOption'))
   .option('--format <format>', 'Output format for non-interactive list (text|json)')
   .option('--yes', 'Skip confirmation prompts in non-interactive mode')
   .action(async (_opts, command) => {
@@ -313,6 +323,8 @@ program
       {
         enabled: opts.nonInteractive === true,
         action: opts.action as string | undefined,
+        status: opts.status as DeletableTaskStatus[] | undefined,
+        goal: opts.goal as string | undefined,
         branch: opts.branch as string | undefined,
         format: opts.format as string | undefined,
         yes: opts.yes === true,

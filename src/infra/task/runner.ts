@@ -197,6 +197,14 @@ export class TaskRunner {
     this.deletion.deleteTaskByNameAndStatus(name, kind);
   }
 
+  deleteTaskWithCleanup(
+    name: string,
+    kind: 'pending' | 'failed' | 'completed' | 'exceeded' | 'pr_failed',
+    cleanup: () => boolean,
+  ): boolean {
+    return this.deletion.deleteTaskWithCleanup(name, kind, cleanup);
+  }
+
   exceedTask(taskName: string, options: ExceedTaskOptions): void {
     this.exceed.exceedTask(taskName, options);
   }

@@ -148,6 +148,17 @@ export const listTasksInputSchema = z.object({
   ...textReadShape,
 }).strict();
 
+export const cleanupTasksInputSchema = z.object({
+  cwd: absolutePathSchema,
+  statuses: z.array(z.enum(['pending', 'completed', 'failed', 'exceeded', 'pr_failed'])).min(1).optional(),
+  goalId: GoalIdSchema.optional(),
+  branch: branchSchema.optional(),
+  reason: taskContentSchema.describe('Required reason for cleaning up the selected stopped tasks.'),
+  confirm: z.boolean().optional().describe('Omit or pass false to preview. Only true deletes the selected stopped tasks and their existing cleanup resources.'),
+}).strict();
+
+export type CleanupTasksInput = z.infer<typeof cleanupTasksInputSchema>;
+
 export const getRunInputSchema = z.object({
   cwd: absolutePathSchema,
   runSlug: z.string().trim().min(1).max(255),
