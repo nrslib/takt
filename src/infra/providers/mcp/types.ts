@@ -23,6 +23,8 @@ export function isStdioServer(server: McpServerConfig): server is McpStdioServer
 /** Context passed to `ProviderMcpAdapter.prepare`. */
 export interface ProviderMcpContext {
   cwd: string;
+  /** Session-local tools explicitly approved by the conversation owner. */
+  toolApprovalAllowlist?: Readonly<Record<string, readonly string[]>>;
   abortSignal?: AbortSignal;
   /** Optional source path for error messages (e.g. `<project>/.takt/runtime.yaml`). */
   sourcePath?: string;

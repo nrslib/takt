@@ -60,7 +60,7 @@ export function createManagerConversationPlan(
     : resolveRefToContent('manager', { manager: instructionSource }, cwd, 'instructions', context);
   if (persona === undefined || instruction === undefined || policy === undefined || knowledge === undefined) throw new Error('Manager facets are missing');
   let permissionJudge: ManagerPermissionJudgePlan | undefined;
-  if (resolved.provider === 'claude' || resolved.provider === 'claude-sdk') {
+  if (resolved.provider === 'claude' || resolved.provider === 'claude-sdk' || resolved.provider === 'codex') {
     const seat = resolveRuntimeManagerPermissionJudgeProvider(cwd);
     const judgeProvider = seat === undefined ? resolved.provider : seat.provider;
     if (judgeProvider === undefined) throw new Error('Manager permission judge provider is not configured');

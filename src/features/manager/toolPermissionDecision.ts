@@ -1,4 +1,5 @@
 import type { ToolPermissionDecisionHandler } from '../../core/workflow/types.js';
+import type { ProviderType } from '../../shared/types/provider.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { classifyManagerToolPermission } from './toolPermissionClassifier.js';
 import { judgeManagerToolPermission, type ManagerPermissionGoal, type ManagerPermissionJudgePlan } from './toolPermissionJudge.js';
@@ -6,6 +7,7 @@ import { notifyManagerToolPermission } from './toolPermissionNotification.js';
 
 export function createManagerToolPermissionHandler(input: {
   plan: ManagerPermissionJudgePlan;
+  provider: ProviderType;
   cwd: string;
   instruction: string;
   goal?: ManagerPermissionGoal;
@@ -14,7 +16,7 @@ export function createManagerToolPermissionHandler(input: {
   onDenial: (reason: string) => void;
 }): ToolPermissionDecisionHandler {
   return async (request) => {
-    const classification = classifyManagerToolPermission(request, input.plan.language);
+    const classification = classifyManagerToolPermission(request, input.plan.language, input.provider);
     const result = classification.decision === 'judge'
       ? await judgeManagerToolPermission(input.plan, request, input) : classification;
     if (result.decision === 'allow') return result;
