@@ -652,6 +652,21 @@ describe('release verification wiring', () => {
     ]);
   });
 
+  it('routes tell task specification persistence through the light integration gate', () => {
+    const testFile = 'src/__tests__/it-live-intervention-task-spec.test.ts';
+
+    expect(selectNpmTestRuns([testFile])).toEqual([
+      { npmArgs: ['run', 'test:it:light', '--', testFile] },
+    ]);
+  });
+
+  it('routes tell publication concurrency through the heavy integration gate', () => {
+    const testFile = 'src/__tests__/it-live-intervention-task-spec-concurrency.test.ts';
+    expect(selectNpmTestRuns([testFile])).toEqual([
+      { npmArgs: ['run', 'test:it:heavy:parallel', '--', testFile] },
+    ]);
+  });
+
   it('should type-check every test on the whitelist, and only tests that exist', () => {
     const testsConfigPath = new URL('../../tsconfig.tests.json', import.meta.url);
     // The file carries the rule as comments, which JSON.parse does not take.
@@ -663,6 +678,11 @@ describe('release verification wiring', () => {
 
     expect(listed.length).toBeGreaterThan(0);
     expect(listed).toContain('src/__tests__/initialization.test.ts');
+    expect(listed).toContain('src/__tests__/it-live-intervention-engine.test.ts');
+    expect(listed).toContain('src/__tests__/it-live-intervention-task-spec.test.ts');
+    expect(listed).toContain('src/__tests__/taskSpecContext.test.ts');
+    expect(listed).toContain('src/__tests__/it-live-intervention-task-spec-concurrency.test.ts');
+    expect(listed).toContain('src/__tests__/liveInterventionPersistence.test.ts');
     expect(listed, 'the list is read by people; keep it sorted').toEqual([...listed].sort());
     for (const entry of listed) {
       expect(existsSync(new URL(`../../${entry}`, import.meta.url)), entry).toBe(true);

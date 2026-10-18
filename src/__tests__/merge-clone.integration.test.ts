@@ -15,6 +15,7 @@ vi.mock('../infra/github/pr.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()), fetchPrDetails: mocks.details, fetchPrStatus: mocks.status,
 }));
 vi.mock('../agents/agent-usecases.js', () => ({ executeAgent: mocks.agent }));
+vi.mock('../agents/runner.js', () => ({ runAgent: vi.fn() }));
 vi.mock('../features/tasks/execute/workflowExecutionApi.js', () => ({ runWorkflowExecution: mocks.workflow }));
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -30,6 +31,10 @@ import { PrStatusTimeoutError } from '../core/workflow/system/pr-execution-conte
 import * as cloneExec from '../infra/task/clone-exec.js';
 import * as threatCheck from '../features/merge/threat-check.js';
 import { createCheckoutFilter } from './helpers/checkout-filter.js';
+import { runAgent } from '../agents/runner.js';
+import { issueTellableRunningTask } from '../features/tasks/liveIntervention.js';
+import { buildRunPaths } from '../core/workflow/run/run-paths.js';
+import { LiveInterventionFileStore } from '../infra/workflow/live-intervention-store.js';
 
 describe('Merge PR persistent clone ownership', () => {
   let root: string;
@@ -105,6 +110,70 @@ describe('Merge PR persistent clone ownership', () => {
     return runMerge({ projectCwd: project, prNumber: 123, concurrency: 1,
       settings: resolveMergeSettings({ workflow: 'merge-review' }) });
   }
+  it('creates the real merge source and lets agents read delivered instructions from project context after resume', async () => {
+    const threatAgent = mocks.agent.getMockImplementation()!;
+    mocks.agent.mockImplementation((...args: Parameters<typeof runAgent>) =>
+      args[2]?.workflowMeta?.workflowName === 'tell-merge' ? runAgent(...args) : threatAgent(...args));
+    const workflow = join(project, 'tell-merge.yaml');
+    writeFileSync(workflow, [
+      'name: tell-merge', 'max_steps: 5', 'initial_step: review', 'steps:',
+      '  - name: review', '    instruction: Read the primary spec.',
+      '    rules:', '      - condition: done', '        next: COMPLETE',
+    ].join('\n'));
+    const actual = await vi.importActual<typeof import('../features/tasks/execute/workflowExecutionApi.js')>(
+      '../features/tasks/execute/workflowExecutionApi.js',
+    );
+    mocks.workflow.mockImplementation((request: WorkflowExecutionRequest) => actual.runWorkflowExecution({
+      ...request, agentOverrides: { provider: 'mock' }, outputMode: 'silent',
+    }));
+    const content = 'merge の再開後も保存した指示を読む';
+    const reads: string[] = [];
+    let issued = false;
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options.onPromptResolved?.({ systemPrompt: persona ?? '', userInstruction: instruction });
+      options.onDispatch?.(options.permissionMode);
+      if (!issued) {
+        const orderRef = instruction.match(/Primary spec: `([^`]+)`/)![1]!;
+        reads.push(readFileSync(join(options.cwd!, orderRef), 'utf8'));
+        issued = true;
+        const running = new TaskRunner(project).listTaskStateItems().find((task) => task.kind === 'running')!;
+        const source = join(project, running.taskDir!, 'order.md');
+        expect(readFileSync(source, 'utf8')).toMatch(/^Evaluate pull request #123 using this workflow\./);
+        await issueTellableRunningTask(project, running.runSlug!, content);
+        expect(readFileSync(source, 'utf8')).not.toContain(content);
+        return { persona: persona ?? 'reviewer', status: 'done', content: 'done',
+          sessionId: 'merge-session', timestamp: new Date() };
+      }
+      expect(options.sessionId).toBe('merge-session');
+      return { persona: persona ?? 'reviewer', status: 'error', content: 'failed',
+        error: 'failure after delivery', timestamp: new Date() };
+    });
+    await executePrWorkflow({ projectCwd: project, prNumber: 123, workflow,
+      settings: resolveMergeSettings(undefined) });
+    const runner = new TaskRunner(project);
+    const failed = runner.listFailedTasks()[0]!;
+    const originalSpecDir = failed.taskDir;
+    const workflowResult = await mocks.workflow.mock.results[0]!.value as Awaited<ReturnType<typeof actual.runWorkflowExecution>>;
+    expect(new LiveInterventionFileStore(project, failed.runSlug!).read().deliveredSameSession, workflowResult.reason).toBe(1);
+    expect(reads[0]).not.toContain(content);
+    expect(readFileSync(buildRunPaths(project, failed.runSlug!).contextTaskOrderAbs, 'utf8')).toContain(content);
+    expect(existsSync(buildRunPaths(failed.worktreePath!, failed.runSlug!).contextTaskAbs)).toBe(false);
+    runner.requeueTask(failed.name, ['failed']);
+    const claimed = runner.claimNextTasks(1)[0]!;
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options.onPromptResolved?.({ systemPrompt: persona ?? '', userInstruction: instruction });
+      options.onDispatch?.(options.permissionMode);
+      const ref = instruction.match(/Primary spec: `([^`]+)`/)![1]!;
+      reads.push(readFileSync(join(options.cwd!, ref), 'utf8'));
+      return { persona: persona ?? 'reviewer', status: 'done', content: 'done', timestamp: new Date() };
+    });
+    await executePersistedPrMergeTask(claimed, runner, project);
+    expect(reads.at(-1)).toContain(content);
+    const resumed = runner.listFailedTasks()[0]!;
+    expect(resumed.taskDir).toBe(originalSpecDir);
+    expect(resumed.runSlug).not.toBe(failed.runSlug);
+    expect(readFileSync(buildRunPaths(project, resumed.runSlug!).contextTaskOrderAbs, 'utf8')).toContain(content);
+  });
   it('forkのheadを専用cloneで実行し未マージ時はcloneを保持する', async () => {
     const result = await run();
     expect(mocks.workflow).toHaveBeenCalledOnce();

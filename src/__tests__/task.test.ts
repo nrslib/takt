@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, writeFileSync, existsSync, rmSync, readFileSync, symlinkSync, utimesSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, existsSync, rmSync, readFileSync, readdirSync, symlinkSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { prepareTaskSpecDirectory } from '../infra/task/enqueueService.js';
 import { TaskRunner } from '../infra/task/runner.js';
 import { TaskRetryService } from '../infra/task/taskRetryService.js';
 import { TaskLifecycleService } from '../infra/task/taskLifecycleService.js';
@@ -175,6 +176,169 @@ describe('TaskRunner (tasks.yaml)', () => {
 
   afterEach(() => {
     rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it.each([
+    { source: 'content', summary: undefined },
+    { source: 'content_file', summary: undefined },
+    { source: 'content', summary: '運用用要約' },
+    { source: 'content_file', summary: '運用用要約' },
+  ] as const)('preserves the description when migrating $source with summary=$summary and reusing the clone spec after requeue', ({ source, summary }) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime('2026-10-18T01:00:00Z');
+      const content = '  元の作業\n詳細  ';
+      const expectedSummary = summary ?? '元の作業';
+      writeFileSync(join(testDir, 'task.txt'), content);
+      writeTasksFile(testDir, [createPendingRecord({
+        content: source === 'content' ? content : undefined,
+        content_file: source === 'content_file' ? 'task.txt' : undefined,
+        summary,
+        worktree: true,
+      })]);
+      const task = runner.claimNextTasks(1)[0]!;
+      const existing = prepareTaskSpecDirectory(testDir, task.content, { orderContent: 'keep' });
+      const cloneCwd = join(testDir, '.takt/worktrees/clone');
+      const running = runner.updateRunningTaskExecution(task.name, { runSlug: 'clone-first', worktreePath: cloneCwd });
+      expect(running.taskDir).not.toBe(existing.taskDirRelative);
+      expect(readFileSync(join(existing.taskDir, 'order.md'), 'utf8')).toBe('keep');
+      const orderPath = join(testDir, running.taskDir!, 'order.md');
+      expect(readFileSync(orderPath, 'utf8')).toBe(content);
+      expect(running.summary).toBe(expectedSummary);
+      const record = loadTasksFile(testDir).tasks[0];
+      expect(record).toMatchObject({ task_dir: running.taskDir, run_slug: 'clone-first', worktree_path: cloneCwd, summary: expectedSummary });
+      expect(record).not.toHaveProperty('content');
+      expect(record).not.toHaveProperty('content_file');
+      expect(readFileSync(join(testDir, 'task.txt'), 'utf8')).toBe(content);
+      writeFileSync(orderPath, '変更された先頭行\n追加指示');
+      runner.forceFailRunningTask(task.name, { error: 'retry' });
+      runner.requeueTask(task.name, ['failed']);
+      const claimed = runner.claimNextTasks(1)[0]!;
+      expect(claimed.taskDir).toBe(running.taskDir);
+      expect(claimed.summary).toBe(expectedSummary);
+      const resumed = runner.updateRunningTaskExecution(task.name, { runSlug: 'clone-resumed', worktreePath: cloneCwd });
+      expect(resumed.taskDir).toBe(running.taskDir);
+      expect(resumed.summary).toBe(expectedSummary);
+      expect(loadTasksFile(testDir).tasks[0]?.summary).toBe(expectedSummary);
+      expect(readFileSync(orderPath, 'utf8')).toBe('変更された先頭行\n追加指示');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['content', 'content_file'] as const)('limits the migrated %s description to the first 80 characters', (source) => {
+    const content = `  ${'あ'.repeat(81)}\n詳細  `;
+    writeFileSync(join(testDir, 'task.txt'), content);
+    writeTasksFile(testDir, [createPendingRecord({
+      content: source === 'content' ? content : undefined,
+      content_file: source === 'content_file' ? 'task.txt' : undefined,
+      worktree: true,
+    })]);
+    const task = runner.claimNextTasks(1)[0]!;
+
+    const running = runner.updateRunningTaskExecution(task.name, {
+      runSlug: 'clone-first', worktreePath: join(testDir, '.takt/worktrees/clone'),
+    });
+
+    expect(loadTasksFile(testDir).tasks[0]?.summary).toBe('あ'.repeat(80));
+    expect(readFileSync(join(testDir, running.taskDir!, 'order.md'), 'utf8')).toBe(content);
+  });
+
+  it.each(['content', 'content_file'] as const)('removes only the newly prepared clone spec when saving %s execution state fails', (source) => {
+    writeFileSync(join(testDir, 'task.txt'), 'Do work');
+    writeTasksFile(testDir, [createPendingRecord({
+      content: source === 'content' ? 'Do work' : undefined,
+      content_file: source === 'content_file' ? 'task.txt' : undefined,
+      worktree: true,
+    })]);
+    const task = runner.claimNextTasks(1)[0]!;
+    const existing = prepareTaskSpecDirectory(testDir, 'Existing', { orderContent: 'keep' });
+    const directoriesBefore = readdirSync(join(testDir, '.takt/tasks'));
+    const state = new TaskStore(testDir).read();
+    const update = vi.spyOn(TaskStore.prototype, 'update').mockImplementationOnce((mutator) => {
+      mutator(state);
+      throw new Error('save failed');
+    });
+    try {
+      expect(() => runner.updateRunningTaskExecution(task.name, {
+        runSlug: 'clone-first', worktreePath: join(testDir, '.takt/worktrees/clone'),
+      })).toThrow();
+    } finally {
+      update.mockRestore();
+    }
+    expect(readdirSync(join(testDir, '.takt/tasks'))).toEqual(directoriesBefore);
+    expect(readFileSync(join(existing.taskDir, 'order.md'), 'utf8')).toBe('keep');
+    expect(new TaskStore(testDir).read()).toEqual(state);
+    expect(loadTasksFile(testDir).tasks[0]).not.toHaveProperty('summary');
+    expect(readFileSync(join(testDir, 'task.txt'), 'utf8')).toBe('Do work');
+  });
+
+  it.each([
+    { worktree: true, worktreePath: undefined },
+    { worktree: false, worktreePath: '/unused-clone' },
+  ])('does not prepare a source spec for setup or non-clone updates: %j', (execution) => {
+    writeTasksFile(testDir, [createPendingRecord({ worktree: execution.worktree })]);
+    const task = runner.claimNextTasks(1)[0]!;
+    const updated = runner.updateRunningTaskExecution(task.name, { runSlug: 'setup-run', worktreePath: execution.worktreePath });
+    expect(updated.taskDir).toBeUndefined();
+    expect(updated.content).toBe('Do work');
+    expect(loadTasksFile(testDir).tasks[0]).toMatchObject({ content: 'Do work', run_slug: 'setup-run' });
+    expect(loadTasksFile(testDir).tasks[0]).not.toHaveProperty('summary');
+    expect(existsSync(join(testDir, '.takt/tasks'))).toBe(false);
+  });
+
+  it('prepares a merge source spec without overwriting a reserved directory and reuses it after requeue', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime('2026-10-18T01:00:00Z');
+      const task = runner.startPrMergeTask({ prNumber: 123, headBranch: 'feature/pr', baseBranch: 'main',
+        headSha: 'a'.repeat(40), headRepositoryUrl: '/head', headRepositoryPushUrls: ['/head'],
+        workflow: 'merge-review', worktreePath: join(testDir, '.takt/worktrees/merge'),
+        method: 'squash', threatCheckMaxDiffBytes: 1024 });
+      const existing = prepareTaskSpecDirectory(testDir, task.content, { orderContent: '既存タスクを保持する' });
+      const running = runner.updateRunningTaskExecution(task.name, { runSlug: 'merge-first' });
+      expect(running.taskDir).not.toBe(existing.taskDirRelative);
+      expect(readFileSync(join(existing.taskDir, 'order.md'), 'utf8')).toBe('既存タスクを保持する');
+      const source = join(testDir, running.taskDir!, 'order.md');
+      expect(readFileSync(source, 'utf8')).toBe(task.content);
+      expect(running.summary).toBe(task.summary);
+      expect(loadTasksFile(testDir).tasks[0]).toMatchObject({ task_dir: running.taskDir, run_slug: 'merge-first' });
+      expect(loadTasksFile(testDir).tasks[0]).not.toHaveProperty('content');
+      expect(loadTasksFile(testDir).tasks[0]).not.toHaveProperty('content_file');
+      writeFileSync(source, task.content + '\n追加指示');
+      runner.forceFailRunningTask(task.name, { error: 'retry' });
+      runner.requeueTask(task.name, ['failed']);
+      runner.claimNextTasks(1);
+      const resumed = runner.updateRunningTaskExecution(task.name, { runSlug: 'merge-resumed' });
+      expect(resumed.taskDir).toBe(running.taskDir);
+      expect(resumed.summary).toBe(task.summary);
+      expect(readFileSync(source, 'utf8')).toBe(task.content + '\n追加指示');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('removes only the newly prepared merge spec when saving the execution state fails', () => {
+    const task = runner.startPrMergeTask({ prNumber: 123, headBranch: 'feature/pr', baseBranch: 'main',
+      headSha: 'a'.repeat(40), headRepositoryUrl: '/head', headRepositoryPushUrls: ['/head'],
+      workflow: 'merge-review', worktreePath: join(testDir, '.takt/worktrees/merge'),
+      method: 'squash', threatCheckMaxDiffBytes: 1024 });
+    const existing = prepareTaskSpecDirectory(testDir, 'Existing', { orderContent: 'keep' });
+    const before = readdirSync(join(testDir, '.takt/tasks'));
+    const state = new TaskStore(testDir).read();
+    const update = vi.spyOn(TaskStore.prototype, 'update').mockImplementationOnce((mutator) => {
+      mutator(state);
+      throw new Error('save failed');
+    });
+    try {
+      expect(() => runner.updateRunningTaskExecution(task.name, { runSlug: 'merge-first' })).toThrow();
+    } finally {
+      update.mockRestore();
+    }
+    expect(readdirSync(join(testDir, '.takt/tasks'))).toEqual(before);
+    expect(readFileSync(join(existing.taskDir, 'order.md'), 'utf8')).toBe('keep');
+    expect(loadTasksFile(testDir).tasks[0]?.content).toBe(task.content);
+    expect(loadTasksFile(testDir).tasks[0]).not.toHaveProperty('task_dir');
   });
 
   it.each([undefined, 'from_pr'] as const)('preserves the execution source through failure, requeue and claim: %s', (source) => {
