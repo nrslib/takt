@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { formatGoalName, formatInquirySummary } from '../features/manager/goalDisplay.js';
+import { formatGoalName, formatInquirySummary, formatPendingQuestion } from '../features/manager/goalDisplay.js';
+import { getLabel } from '../shared/i18n/index.js';
 
 describe('manager goal names', () => {
   it('normalizes line breaks and repeated whitespace before shortening', () => {
@@ -31,6 +32,13 @@ describe('manager goal names', () => {
 });
 
 describe('manager inquiry summaries', () => {
+  it.each(['ja', 'en'] as const)('formats an inquiry row with the common name and summary in %s', (lang) => {
+    const objective = '目的'.repeat(30);
+    const body = '要点\n' + '本文'.repeat(40);
+    expect(formatPendingQuestion({ goalId: 'goal', objective, question: {
+      id: 'question', recipient: 'human', status: 'pending', kind: 'approval', body,
+    } }, lang)).toBe(`${getLabel('manager.inquiryKinds.approval', lang)}: ${formatGoalName(objective)} — ${formatInquirySummary(body)}`);
+  });
   it('normalizes the body into a single line', () => {
     expect(formatInquirySummary('  保存先\r\n を\t 選ぶ\n  ')).toBe('保存先 を 選ぶ');
   });

@@ -1,5 +1,6 @@
 import { Box } from 'ink';
 import { cleanup, render } from 'ink-testing-library';
+import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createElement } from 'react';
@@ -159,14 +160,17 @@ describe('manager polling and answer cancellation', () => {
   function mount(lang: 'ja' | 'en') {
     const unused = async (): Promise<never> => { throw new Error('Unexpected manager operation'); };
     const answerQuestion = vi.fn<ManagerConversationSession['answerQuestion']>(unused);
+    const pauseGoal = vi.fn<ManagerConversationSession['pauseGoal']>(unused);
+    const resumeGoal = vi.fn<ManagerConversationSession['resumeGoal']>(unused);
+    const abortGoal = vi.fn<ManagerConversationSession['abortGoal']>(unused);
     const session: ManagerConversationSession = {
       getAssignment: async () => undefined, getPendingSummary: () => null, resetConversation: () => {},
       dismissSummary: () => {}, handleUserMessage: unused, approveSummary: unused, answerQuestion,
-      pauseGoal: unused, resumeGoal: unused, abortGoal: unused, close: async () => {},
+      pauseGoal, resumeGoal, abortGoal, close: async () => {},
     };
     const read = vi.spyOn(savedEvents, 'readManagerDisplayEvents');
     app = render(createElement(ManagerView, { cwd, lang, session, initialDiagnostics: ['会話ログの目印'], onExit: vi.fn() }));
-    return { answerQuestion, read };
+    return { answerQuestion, pauseGoal, resumeGoal, abortGoal, read };
   }
 
   const prompt = () => vi.mocked(PromptInput).mock.calls.at(-1)![0];
@@ -174,14 +178,54 @@ describe('manager polling and answer cancellation', () => {
     && /Free text|Enter your answer|自由記述|回答を入力してください/u.test(box));
 
   async function openAnswer(): Promise<void> {
-    app!.stdin.write(`/answer ${questionId}`);
-    await waitFor(() => expect(prompt().text).toBe(`/answer ${questionId}`));
+    app!.stdin.write('/answer');
+    await waitFor(() => expect(prompt().text).toBe('/answer'));
+    app!.stdin.write('\r');
+    await waitFor(() => expect(boxes(app!.lastFrame()!).some((box) => /↑|↓/u.test(box) && /Enter/u.test(box) && /Esc/u.test(box))).toBe(true));
     app!.stdin.write('\r');
     await waitFor(() => {
       expect(prompt().placeholder).toMatch(/Enter your answer|回答を入力してください/u);
       expect(answerDialogs()).toHaveLength(1);
     });
   }
+
+  describe.each(['ja', 'en'] as const)('selection lists in %s', (lang) => {
+    describe.each([38, 160])('terminal width %i', (columns) => {
+      it.each(['answer', 'pause', 'resume', 'abort'] as const)('renders compact %s candidates outside the log and Esc leaves the store unchanged', async (command) => {
+        const saved = await store.create({ ...goalRecord(), objective,
+          executionStatus: command === 'resume' ? 'paused' : 'active', questions: [question({ kind: 'approval', operation: {
+            toolName: 'Bash', args: '{}', cwd, argsDigest: createHash('sha256').update('{}').digest('hex'),
+          } })] });
+        const file = join(cwd, '.takt', 'goals', saved.id, 'goal.json');
+        const before = readFileSync(file, 'utf8');
+        const calls = mount(lang);
+        vi.spyOn(app!.stdout, 'columns', 'get').mockReturnValue(columns);
+        app!.stdin.write(`/${command}`);
+        await waitFor(() => expect(prompt().text).toBe(`/${command}`));
+        app!.stdin.write('\r');
+        const list = () => boxes(app!.lastFrame()!).find((box) => /↑|↓/u.test(box) && /Enter/u.test(box) && /Esc/u.test(box));
+        await waitFor(() => expect(list()).toBeDefined());
+        const selectedBox = list()!;
+        if (columns === 160) {
+          const rows = contentRows(selectedBox).filter((row) => row.includes(shortName));
+          expect(rows).toHaveLength(1);
+          expect(rows[0]).toMatch(command === 'answer'
+            ? (lang === 'ja' ? /承認/u : /approval/iu)
+            : (lang === 'ja' ? /実行|一時停止|停止中/u : /active|paused/iu));
+        }
+        expect(selectedBox).not.toContain(saved.id);
+        expect(selectedBox).not.toContain('本文の末尾');
+        for (const option of saved.questions![0]!.options!) expect(selectedBox).not.toContain(option);
+        expect(app!.lastFrame()!.indexOf('会話ログの目印')).toBeLessThan(app!.lastFrame()!.indexOf(selectedBox));
+        for (const line of selectedBox.split('\n')) expect(stringWidth(line)).toBeLessThanOrEqual(columns);
+        app!.stdin.write('\x1b[27u');
+        await waitFor(() => expect(list()).toBeUndefined());
+        for (const call of [calls.answerQuestion, calls.pauseGoal, calls.resumeGoal, calls.abortGoal]) expect(call).not.toHaveBeenCalled();
+        expect(readFileSync(file, 'utf8')).toBe(before);
+        expect(await store.get(saved.id)).toEqual(saved);
+      });
+    });
+  });
 
   it.each(['ja', 'en'] as const)('shows full details only after opening the answer in %s and preserves saved data', async (lang) => {
     const saved = await store.create({ ...goalRecord(), objective, executionStatus: 'paused', questions: [question({})] });

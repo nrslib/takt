@@ -53,7 +53,7 @@ it.each(['ja', 'en'] as const)('delivers %s text with the repository or workspac
   expect(current).toEqual(before);
 });
 
-it('delivers the saved human question with localized details and its complete answer command', async () => {
+it('delivers the saved human question with localized details and its ID-free answer guidance', async () => {
   const question = { id: '650e8400-e29b-41d4-a716-446655440003', body: '出力形式はどれですか',
     options: ['CSV', 'JSON'], recommendation: 'CSV', recipient: 'human' as const, status: 'pending' as const };
   const current = { ...goalRecord(), questions: [question], notifications: [{ ...notice,
@@ -65,7 +65,11 @@ it('delivers the saved human question with localized details and its complete an
   expect(text).toContain(question.body);
   expect(text).toMatch(/選択肢:\s*CSV.*JSON/u);
   expect(text).toMatch(/推奨:\s*CSV/u);
-  expect(text).toContain(`/answer ${question.id}`);
+  const guidance = text.split('\n').filter((line) => line.includes('/answer'));
+  expect(guidance).toHaveLength(1);
+  expect(guidance[0]).toMatch(/\/answer\b/u);
+  expect(guidance[0]).not.toContain(question.id);
+  expect(guidance[0]).toMatch(/一覧|選択/u);
   expect(text).toContain('takt manager');
   expect(text).toContain('TUI');
   expect(text).not.toMatch(/Options:|Recommendation:/u);
@@ -94,7 +98,11 @@ it.each([
   expect(lines[4]).toContain('TUI');
   const guidance = lines.filter((line) => line.includes('/answer'));
   expect(guidance).toHaveLength(status === 'pending' ? 1 : 0);
-  if (status === 'pending') expect(guidance[0]).toContain(`/answer ${question.id}`);
+  if (status === 'pending') {
+    expect(guidance[0]).toMatch(/\/answer\b/u);
+    expect(guidance[0]).not.toContain(question.id);
+    expect(guidance[0]).toMatch(language === 'ja' ? /一覧|選択/u : /list|select|choose/iu);
+  }
   expect(current).toEqual(before);
 });
 
