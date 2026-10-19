@@ -1,40 +1,24 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
-import { GoalInquiryInputSchema, GoalQuestionSchema, type Goal, type GoalAnswerInput, type GoalQuestion, type GoalQuestionInput } from './schema.js';
+import { GoalQuestionSchema, type Goal, type GoalAnswerInput, type GoalQuestion, type GoalQuestionInput } from './schema.js';
+import { createInquiry, withdrawInquiry, answerInquiry } from './inquiry.js';
 
 export function addGoalQuestion(goal: Goal, input: GoalQuestionInput): { goal: Goal; questionId: string } {
-  const id = randomUUID();
-  if (goal.questions?.some((question) => question.id === id)) throw new Error('Question ID already exists');
-  const parsed = GoalInquiryInputSchema.parse(input);
-  const operation = parsed.operation === undefined ? undefined : {
-    ...parsed.operation,
-    argsDigest: createHash('sha256').update(parsed.operation.args).digest('hex'),
-    args: sanitizeSensitiveText(parsed.operation.args),
-  };
-  const question = GoalQuestionSchema.parse({ ...parsed, ...(operation === undefined ? {} : { operation }), id, status: 'pending', createdAt: new Date().toISOString() });
-  return { goal: { ...goal, questions: [...(goal.questions ?? []), question] }, questionId: id };
+  const question = createInquiry(input);
+  if (goal.questions?.some((candidate) => candidate.id === question.id)) throw new Error('Question ID already exists');
+  return { goal: { ...goal, questions: [...(goal.questions ?? []), question] }, questionId: question.id };
 }
 
 export function withdrawGoalQuestion(goal: Goal, questionId: string, reason?: string): Goal {
   const question = goal.questions?.find((candidate) => candidate.id === questionId);
   if (question === undefined) throw new Error('Question does not exist');
   if (question.status !== 'pending') return goal;
-  const withdrawn = GoalQuestionSchema.parse({
-    ...question, status: 'withdrawn', ...(reason === undefined ? {} : { withdrawalReason: reason }), withdrawnAt: new Date().toISOString(),
-  });
+  const withdrawn = withdrawInquiry(question, reason);
   return { ...goal, questions: goal.questions?.map((candidate) => candidate.id === questionId ? withdrawn : candidate) };
 }
 
 export function answerGoalQuestion(goal: Goal, questionId: string, answer: string | GoalAnswerInput): Goal {
   const question = goal.questions?.find((candidate) => candidate.id === questionId);
   if (question === undefined) throw new Error('Question does not exist');
-  if (question.status !== 'pending') throw new Error('Question is not awaiting an answer');
-  if (question.recipient !== 'human') throw new Error('Question is not addressed to a human');
-  const answered = GoalQuestionSchema.parse({
-    ...question, status: 'answered', answer: {
-      ...(typeof answer === 'string' ? { text: answer } : answer), source: 'tui', answeredAt: new Date().toISOString(),
-    },
-  });
+  const answered = answerInquiry(question, answer);
   return {
     ...goal,
     questions: goal.questions?.map((candidate) => candidate.id === questionId ? answered : candidate),
