@@ -7,6 +7,11 @@ const evalDir = dirname(fileURLToPath(import.meta.url));
 const CLASSIFICATIONS = [
   {
     tier: 'active',
+    reason: 'CI回復の調査分類と根本修正レビューを本番ファセットで評価する',
+    suites: ['merge-ci-investigation', 'merge-ci-review'],
+  },
+  {
+    tier: 'active',
     reason: '完了検証・再計画・レビュー裁定で反例に使う入力の根拠を確かめる',
     suites: ['fix-verification-applicable-inputs'],
   },
@@ -204,6 +209,14 @@ const CLASSIFICATIONS = [
 ];
 
 const EXECUTION_OVERRIDES = {
+  'merge-ci-investigation': {
+    defaultEligible: false, credentials: ['codex'], cost: 'high',
+    reason: '日英6事例を各3回、指定モデルで明示実行する',
+  },
+  'merge-ci-review': {
+    defaultEligible: false, credentials: ['codex'], cost: 'high',
+    reason: '日英5事例を各3回、指定モデルで明示実行する',
+  },
   'fix-verification-applicable-inputs': {
     defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
     reason: 'Sol Low、Opus 5、Luna Max の3モデルで完了検証・再計画・裁定の入力範囲を比較する',

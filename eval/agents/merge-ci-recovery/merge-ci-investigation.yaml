@@ -1,0 +1,253 @@
+description: 'merge-ci-investigation: 本番CI回復ファセットの日英評価'
+outputPath: eval/.results/merge-ci-investigation.json
+prompts:
+  - label: ja-clock
+    raw: file://../../prompts/merge-ci-investigation-ja-clock.phase1.md
+    config:
+      working_dir: .work/merge-ci-recovery/merge-ci-investigation-ja-clock
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+  - label: ja-clock-main
+    raw: file://../../prompts/merge-ci-investigation-ja-clock-main.phase1.md
+    config:
+      working_dir: .work/merge-ci-recovery/merge-ci-investigation-ja-clock-main
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+  - label: ja-runner
+    raw: file://../../prompts/merge-ci-investigation-ja-runner.phase1.md
+    config:
+      working_dir: .work/merge-ci-recovery/merge-ci-investigation-ja-runner
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+  - label: ja-runner-403
+    raw: file://../../prompts/merge-ci-investigation-ja-runner-403.phase1.md
+    config:
+      working_dir: .work/merge-ci-recovery/merge-ci-investigation-ja-runner-403
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+  - label: ja-secret
+    raw: file://../../prompts/merge-ci-investigation-ja-secret.phase1.md
+    config:
+      working_dir: .work/merge-ci-recovery/merge-ci-investigation-ja-secret
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+  - label: ja-secret-empty
+    raw: file://../../prompts/merge-ci-investigation-ja-secret-empty.phase1.md
+    config:
+      working_dir: .work/merge-ci-recovery/merge-ci-investigation-ja-secret-empty
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+  - label: en-clock
+    raw: file://../../prompts/merge-ci-investigation-en-clock.phase1.md
+    config:
+      working_dir: .work/merge-ci-recovery/merge-ci-investigation-en-clock
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+  - label: en-clock-main
+    raw: file://../../prompts/merge-ci-investigation-en-clock-main.phase1.md
+    config:
+      working_dir: .work/merge-ci-recovery/merge-ci-investigation-en-clock-main
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+  - label: en-runner
+    raw: file://../../prompts/merge-ci-investigation-en-runner.phase1.md
+    config:
+      working_dir: .work/merge-ci-recovery/merge-ci-investigation-en-runner
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+  - label: en-runner-403
+    raw: file://../../prompts/merge-ci-investigation-en-runner-403.phase1.md
+    config:
+      working_dir: .work/merge-ci-recovery/merge-ci-investigation-en-runner-403
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+  - label: en-secret
+    raw: file://../../prompts/merge-ci-investigation-en-secret.phase1.md
+    config:
+      working_dir: .work/merge-ci-recovery/merge-ci-investigation-en-secret
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+  - label: en-secret-empty
+    raw: file://../../prompts/merge-ci-investigation-en-secret-empty.phase1.md
+    config:
+      working_dir: .work/merge-ci-recovery/merge-ci-investigation-en-secret-empty
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-sol-high
+    config:
+      cli: codex
+      model: gpt-5.6-sol
+      reasoning_effort: high
+      isolate_working_dir: true
+      disable_inherited_skills: true
+evaluateOptions:
+  maxConcurrency: 3
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        model: gpt-5.6-sol
+        model_reasoning_effort: high
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+tests:
+  - description: ja-clock
+    prompts: [ja-clock]
+    options:
+      working_dir: .work/merge-ci-recovery/merge-ci-investigation-ja-clock
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+    vars:
+      kind: investigation
+      case: clock
+    assert:
+      - type: javascript
+        value: file://../../asserts/merge-ci-recovery.mjs
+      - type: llm-rubric
+        value: |-
+          Require defect: clock.test.mjs assumes that a 5 ms sleep resumes before the 20 ms TTL, but the trace shows 31 ms. Identify that causal timing assumption and a deterministic clock or synchronization fix in repository tests. Reject external classification or rerun as the fix. The narrative, report, summary and final structured field must agree; a contradictory result fails even if the final label matches. Judge the substance and evidence, not exact wording. The case records are synthetic evaluation inputs; do not penalize that fact.
+  - description: ja-clock-main
+    prompts: [ja-clock-main]
+    options:
+      working_dir: .work/merge-ci-recovery/merge-ci-investigation-ja-clock-main
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+    vars:
+      kind: investigation
+      case: clock-main
+    assert:
+      - type: javascript
+        value: file://../../asserts/merge-ci-recovery.mjs
+      - type: llm-rubric
+        value: |-
+          Require defect for the same timing assumption. The identical failure on main must not justify deferring the fix or classifying it as external. Explain the test-clock cause. The narrative, report, summary and final structured field must agree; a contradictory result fails even if the final label matches. Judge the substance and evidence, not exact wording. The case records are synthetic evaluation inputs; do not penalize that fact.
+  - description: ja-runner
+    prompts: [ja-runner]
+    options:
+      working_dir: .work/merge-ci-recovery/merge-ci-investigation-ja-runner
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+    vars:
+      kind: investigation
+      case: runner
+    assert:
+      - type: javascript
+        value: file://../../asserts/merge-ci-recovery.mjs
+      - type: llm-rubric
+        value: |-
+          Require external, based on the explicit hosted-runner provisioning incident before checkout/tests. Repository edits cannot repair hosted capacity. Do not invent a failed test or assertion. The narrative, report, summary and final structured field must agree; a contradictory result fails even if the final label matches. Judge the substance and evidence, not exact wording. The case records are synthetic evaluation inputs; do not penalize that fact.
+  - description: ja-runner-403
+    prompts: [ja-runner-403]
+    options:
+      working_dir: .work/merge-ci-recovery/merge-ci-investigation-ja-runner-403
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+    vars:
+      kind: investigation
+      case: runner-403
+    assert:
+      - type: javascript
+        value: file://../../asserts/merge-ci-recovery.mjs
+      - type: llm-rubric
+        value: |-
+          Require insufficient_evidence. HTTP 403 blocks access to logs; neither runner outage nor repository defect is established. Do not claim to have seen provisioning logs, or permit speculative repair/rerun/merge. The narrative, report, summary and final structured field must agree; a contradictory result fails even if the final label matches. Judge the substance and evidence, not exact wording. The case records are synthetic evaluation inputs; do not penalize that fact.
+  - description: ja-secret
+    prompts: [ja-secret]
+    options:
+      working_dir: .work/merge-ci-recovery/merge-ci-investigation-ja-secret
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+    vars:
+      kind: investigation
+      case: secret
+    assert:
+      - type: javascript
+        value: file://../../asserts/merge-ci-recovery.mjs
+      - type: llm-rubric
+        value: |-
+          Require external based on the explicit environment secret inventory proving DEPLOY_TOKEN is absent; code references the secret correctly. Do not invent failed tests or propose repository code as a substitute for provisioning the external credential. The narrative, report, summary and final structured field must agree; a contradictory result fails even if the final label matches. Judge the substance and evidence, not exact wording. The case records are synthetic evaluation inputs; do not penalize that fact.
+  - description: ja-secret-empty
+    prompts: [ja-secret-empty]
+    options:
+      working_dir: .work/merge-ci-recovery/merge-ci-investigation-ja-secret-empty
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+    vars:
+      kind: investigation
+      case: secret-empty
+    assert:
+      - type: javascript
+        value: file://../../asserts/merge-ci-recovery.mjs
+      - type: llm-rubric
+        value: |-
+          Require insufficient_evidence: the job log is empty; workflow references alone do not establish a missing secret or external cause. Do not invent a failed test, credential inventory, or authorize rerun/repair/merge. The narrative, report, summary and final structured field must agree; a contradictory result fails even if the final label matches. Judge the substance and evidence, not exact wording. The case records are synthetic evaluation inputs; do not penalize that fact.
+  - description: en-clock
+    prompts: [en-clock]
+    options:
+      working_dir: .work/merge-ci-recovery/merge-ci-investigation-en-clock
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+    vars:
+      kind: investigation
+      case: clock
+    assert:
+      - type: javascript
+        value: file://../../asserts/merge-ci-recovery.mjs
+      - type: llm-rubric
+        value: |-
+          Require defect: clock.test.mjs assumes that a 5 ms sleep resumes before the 20 ms TTL, but the trace shows 31 ms. Identify that causal timing assumption and a deterministic clock or synchronization fix in repository tests. Reject external classification or rerun as the fix. The narrative, report, summary and final structured field must agree; a contradictory result fails even if the final label matches. Judge the substance and evidence, not exact wording. The case records are synthetic evaluation inputs; do not penalize that fact.
+  - description: en-clock-main
+    prompts: [en-clock-main]
+    options:
+      working_dir: .work/merge-ci-recovery/merge-ci-investigation-en-clock-main
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+    vars:
+      kind: investigation
+      case: clock-main
+    assert:
+      - type: javascript
+        value: file://../../asserts/merge-ci-recovery.mjs
+      - type: llm-rubric
+        value: |-
+          Require defect for the same timing assumption. The identical failure on main must not justify deferring the fix or classifying it as external. Explain the test-clock cause. The narrative, report, summary and final structured field must agree; a contradictory result fails even if the final label matches. Judge the substance and evidence, not exact wording. The case records are synthetic evaluation inputs; do not penalize that fact.
+  - description: en-runner
+    prompts: [en-runner]
+    options:
+      working_dir: .work/merge-ci-recovery/merge-ci-investigation-en-runner
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+    vars:
+      kind: investigation
+      case: runner
+    assert:
+      - type: javascript
+        value: file://../../asserts/merge-ci-recovery.mjs
+      - type: llm-rubric
+        value: |-
+          Require external, based on the explicit hosted-runner provisioning incident before checkout/tests. Repository edits cannot repair hosted capacity. Do not invent a failed test or assertion. The narrative, report, summary and final structured field must agree; a contradictory result fails even if the final label matches. Judge the substance and evidence, not exact wording. The case records are synthetic evaluation inputs; do not penalize that fact.
+  - description: en-runner-403
+    prompts: [en-runner-403]
+    options:
+      working_dir: .work/merge-ci-recovery/merge-ci-investigation-en-runner-403
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+    vars:
+      kind: investigation
+      case: runner-403
+    assert:
+      - type: javascript
+        value: file://../../asserts/merge-ci-recovery.mjs
+      - type: llm-rubric
+        value: |-
+          Require insufficient_evidence. HTTP 403 blocks access to logs; neither runner outage nor repository defect is established. Do not claim to have seen provisioning logs, or permit speculative repair/rerun/merge. The narrative, report, summary and final structured field must agree; a contradictory result fails even if the final label matches. Judge the substance and evidence, not exact wording. The case records are synthetic evaluation inputs; do not penalize that fact.
+  - description: en-secret
+    prompts: [en-secret]
+    options:
+      working_dir: .work/merge-ci-recovery/merge-ci-investigation-en-secret
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+    vars:
+      kind: investigation
+      case: secret
+    assert:
+      - type: javascript
+        value: file://../../asserts/merge-ci-recovery.mjs
+      - type: llm-rubric
+        value: |-
+          Require external based on the explicit environment secret inventory proving DEPLOY_TOKEN is absent; code references the secret correctly. Do not invent failed tests or propose repository code as a substitute for provisioning the external credential. The narrative, report, summary and final structured field must agree; a contradictory result fails even if the final label matches. Judge the substance and evidence, not exact wording. The case records are synthetic evaluation inputs; do not penalize that fact.
+  - description: en-secret-empty
+    prompts: [en-secret-empty]
+    options:
+      working_dir: .work/merge-ci-recovery/merge-ci-investigation-en-secret-empty
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+    vars:
+      kind: investigation
+      case: secret-empty
+    assert:
+      - type: javascript
+        value: file://../../asserts/merge-ci-recovery.mjs
+      - type: llm-rubric
+        value: |-
+          Require insufficient_evidence: the job log is empty; workflow references alone do not establish a missing secret or external cause. Do not invent a failed test, credential inventory, or authorize rerun/repair/merge. The narrative, report, summary and final structured field must agree; a contradictory result fails even if the final label matches. Judge the substance and evidence, not exact wording. The case records are synthetic evaluation inputs; do not penalize that fact.

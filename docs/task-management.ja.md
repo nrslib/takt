@@ -342,6 +342,8 @@ takt list --non-interactive --action try --branch takt/my-branch
 
 マージ用ビルトインは Caccia を明示的に実行します。`merge-review` は `review → caccia → wait_ci → 評価コメント`、`merge-review-fix` と `merge-review-fix-simple` は `review/fix → commit_and_push → caccia → wait_ci → merge_pr` の順です。`success` と `skipped` は返された head の CI 待ちへ進みます。`limit` は未解決件数をコメントして COMPLETE で終了し、マージしません。効果の失敗は `error` をコメントして ABORT で終了します。push、タスク後処理、Pipeline からの暗黙の Caccia は廃止しました。`merge.auto_start: true` では PR 公開後にマージ用 workflow が起動し、その明示効果が Caccia を実行します。
 
+`merge-review-fix` と `merge-review-fix-simple` はCI失敗が確定するたびに失敗チェック、run・attempt・jobの参照先、ログ本文、PRの累積差分、関連コードを調査します。フレークやmainでも失敗する欠陥はPRの作業ツリーで根本修正し、読み取り専用レビューを経てpush → Caccia → CI待ちへ戻ります。修正は最大2周です。外部要因を証拠で判断した場合だけ、修正回数とは独立してCIを1回再実行します。修正2周後も未使用なら再実行できます。同じHEADの新しいattemptを待ち、すべてのチェックと既存のマージ条件を再確認します。証拠不足、修正2周後も残る欠陥、修正レビューのREJECT、再実行後の失敗では回数・最後の失敗チェックと参照先・調査要点をPRへコメントしてABORTします。調査・修正レポートはrunに残ります。初回成功とCIのtimeoutの扱いは変わらず、`merge-review` はコメント専用のままです。GitHub Actionsのログ取得・再実行の権限不足や未対応Providerは明示します。
+
 Caccia は CodeRabbit の投稿を待ち、`coderabbitai` が開始した未解決スレッドだけを処理します。各反復は一時クローンで指定された workflow を実行し、判断レポートを `.takt/runs/` に残します。修正を Push したら、その反復で判断したスレッドだけを Resolve し、Push したコミットへの CodeRabbit のレビューを待ちます。人が開始したスレッドは未解決のまま残します。レビューへの返信は投稿しません。成功と反復上限到達はログに記録し、設定済み通知経路にも送ります。
 
 `wait_timeout_ms` は初回レビューと Push 後の各レビューの待機期限で、再依頼もこの期限に含みます。レビュー制限通知の再試行時刻が期限より前なら到来時に `@coderabbitai review` コメントで一度だけ依頼し、期限以降なら直ちにスキップします。制限通知を受けた後、レビューが期限までに完了しなければスキップします。制限通知を受けずに期限に達した場合は初回待機をスキップし、Push 後の待機をエラーとして記録します。system 効果は失敗を `success: false` と `error` で返します。単独の `takt caccia` はスキップ・エラー時に非ゼロで終了します。

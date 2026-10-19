@@ -1013,6 +1013,14 @@ follow-up 的错误、限流、blocked 或异常都不会由 Companion 处理再
 4. **逐步测试 workflow** — 从简单版本开始再增加复杂度
 5. **使用 `takt eject` 定制** — 先复制 builtin workflow，而不是从零编写
 
+### CI恢复输入与效果
+
+重跑前会获取当前PR HEAD，若与证据的HEAD不同则拒绝重跑。接受重跑后若HEAD变化，恢复流程立即退出等待，保留原HEAD的失败检查和日志，评论说明HEAD不匹配后ABORT。`pr_status`的system input始终提供`rerunHeadChanged`和`rerunHeadChangeReason`；普通polling返回`false`和空字符串。run、repository和attempt验证继续生效。
+
+`comment_pr`支持可选的`body_format: plain_text`。整个插值后的正文使用代码块输出，反引号分隔符比正文中的最长连续反引号更长。CI恢复停止及push失败评论使用该格式，使检查名、job名、调查摘要和错误保持为字面文本。未指定时继续按原样传递Markdown正文。
+
+恢复输入`pr_ci_failure`接受`source: current_pr`和完整的HEAD状态引用`head_sha`，返回PR、HEAD、完整性、包含run/attempt/job及日志的`checks`、`unavailable`、`fixRounds`、`rerunCount`及评论用`details`。`rerun_ci` effect接受`pr`和完整证据引用`failure`，仅在证据完整且调查判断为外部原因时对失败run去重并重跑一次。其`rerun`结果保存PR、HEAD及旧attempt；将完整引用传给`pr_status.rerun_from`即可等待新attempt。重跑step执行前，该可选引用保持普通polling。计数属于同一次workflow执行。
+
 ### Caccia system effect
 
 此 effect 要求 `takt merge` 或 `enqueue_task mode: from_pr` 任务提供与目标 PR 一致的隔离 clone 执行上下文。`pr` 接受正整数或完整模板引用，不接受普通字符串中的嵌入引用。effect 使用既有 `caccia.enabled`、`wait_timeout_ms`、`max_iterations` 和 `workflow` 配置；关闭或未配置时立即返回，无需等待。独立命令 `takt caccia <PR>` 不受 `enabled` 限制。
@@ -1039,3 +1047,5 @@ follow-up 的错误、限流、blocked 或异常都不会由 Companion 处理再
 GitLab 也提供 MR 详情和 CI 状态，原因是 `github_unavailable` 的 `skipped` 会继续等待返回 head 的 CI。合并方式和 head 限制仍不受支持，传入这些参数的 `merge_pr` 会失败。
 
 合并 builtin 明确执行 Caccia：`merge-review` 按 `review → caccia → wait_ci → 评价评论` 执行，`merge-review-fix` 和 `merge-review-fix-simple` 按 `review/fix → commit_and_push → caccia → wait_ci → merge_pr` 执行。`success` 与 `skipped` 继续等待返回 head 的 CI。`limit` 评论未解决线程数后以 COMPLETE 结束，不合并；执行错误评论 `error` 后以 ABORT 结束。push、任务后处理和 Pipeline 不再隐式启动 Caccia。设置 `merge.auto_start: true` 时，PR 发布后启动合并 workflow，由其明确的 effect 执行 Caccia。
+
+`merge-review-fix` 和 `merge-review-fix-simple` 在每次 CI 确定失败后，使用失败检查、run/attempt/job 引用、日志内容、PR 累计差异及相关代码进行调查。仓库缺陷（包括不稳定测试及 main 上也存在的失败）在当前 PR 工作树中根本修复，经只读审查后执行 push → Caccia → CI，最多两轮。只有证据证明是外部原因时才允许重跑一次；该预算独立于修复轮数，两轮修复后仍可使用。重跑后等待同一 HEAD 的新 attempt，并重新检查所有检查及既有合并条件。证据不足、两轮修复后仍有缺陷、修复审查 REJECT 或重跑失败时，将次数、最后失败的检查及引用、调查要点评论到 PR，然后 ABORT。调查和修复报告保留在 run 中。初次成功和 CI timeout 行为不变，`merge-review` 仍只发表评论。GitHub Actions 日志及重跑权限不足、Provider 不支持时会明确报告。
