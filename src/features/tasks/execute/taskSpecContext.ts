@@ -131,7 +131,7 @@ export function restageTaskSpecForExecution(
     if (fs.existsSync(temporaryAttachmentsDir)) {
       fs.cpSync(temporaryAttachmentsDir, path.join(runPaths.contextTaskAbs, 'attachments'), {
         recursive: true,
-        force: false,
+        force: true,
       });
     }
     fs.renameSync(temporaryOrderPath, runPaths.contextTaskOrderAbs);

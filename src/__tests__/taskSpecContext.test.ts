@@ -317,6 +317,34 @@ describe('stageTaskSpecForExecution', () => {
 });
 
 describe('restageTaskSpecForExecution', () => {
+  it('同じ run の再ステージングで正本の同一パスの添付更新を反映する', () => {
+    const projectCwd = createTempProjectDir();
+    const taskDir = '.takt/tasks/spec-task';
+    const sourceTaskDir = path.join(projectCwd, taskDir);
+    const sourceOrderPath = path.join(sourceTaskDir, 'order.md');
+    const sourceAttachmentPath = path.join(sourceTaskDir, 'attachments/input.txt');
+    const runSlug = '20261019-042955-implement-using-only-the-files-lryauj';
+    const runPaths = buildRunPaths(projectCwd, runSlug);
+    const stagedAttachmentPath = path.join(runPaths.contextTaskAbs, 'attachments/input.txt');
+    fs.mkdirSync(path.dirname(sourceAttachmentPath), { recursive: true });
+    fs.writeFileSync(sourceOrderPath, 'Read `attachments/input.txt`.');
+    fs.writeFileSync(sourceAttachmentPath, 'original attachment');
+    resolveAndStageTaskSpec(projectCwd, projectCwd, taskDir, runSlug);
+    const initialOrder = fs.readFileSync(runPaths.contextTaskOrderAbs, 'utf8');
+    expect(fs.readFileSync(stagedAttachmentPath, 'utf8')).toBe('original attachment');
+
+    fs.writeFileSync(sourceAttachmentPath, 'updated attachment');
+    fs.appendFileSync(sourceOrderPath, '\n\n## 追加の指示\n\n更新した添付を確認する。');
+    const refreshedSpec = resolveTaskSpecForExecution(projectCwd, projectCwd, taskDir, runSlug);
+    restageTaskSpecForExecution(refreshedSpec, runPaths);
+
+    const updatedOrder = fs.readFileSync(runPaths.contextTaskOrderAbs, 'utf8');
+    expect(fs.readFileSync(stagedAttachmentPath, 'utf8')).toBe('updated attachment');
+    expect(updatedOrder.startsWith(initialOrder)).toBe(true);
+    expect(updatedOrder).toContain('## 追加の指示\n\n更新した添付を確認する。');
+    expect(updatedOrder).toContain(`\`.takt/runs/${runSlug}/context/task/attachments/input.txt\``);
+  });
+
   it('publishes newly added attachments for the same run while retaining existing context files', () => {
     const projectCwd = createTempProjectDir();
     const taskDir = '.takt/tasks/spec-task';
