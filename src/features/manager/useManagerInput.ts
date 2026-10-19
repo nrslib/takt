@@ -3,9 +3,10 @@ import type { Dispatch, RefObject, SetStateAction } from 'react';
 import { applyEditorKey, commitEditorInput, type EditorState } from '../tui/editorState.js';
 import { resolveEditorKey } from '../tui/editorKeys.js';
 import type { ManagerConversationSession } from './conversationSession.js';
-import type { useManagerAbortConfirmation } from './useManagerAbortConfirmation.js';
+import type { ManagerAbortTarget, useManagerAbortConfirmation } from './useManagerAbortConfirmation.js';
 import type { PendingQuestion, useManagerQuestionAnswer } from './useManagerQuestionAnswer.js';
 import type { useManagerSummaryApproval } from './useManagerSummaryApproval.js';
+import type { ManagerSelectedTarget, useManagerSelection } from './useManagerSelection.js';
 import { SlashCommand } from '../../shared/constants.js';
 
 export function classifyManagerGoInput(text: string): 'command' | 'arguments' | 'draft' | null {
@@ -18,7 +19,7 @@ export function classifyManagerGoInput(text: string): 'command' | 'arguments' | 
 
 export function useManagerInput({
   exiting, active, registering, editorRef, edit, setQueued, onExit, contentWidth, session,
-  abortConfirmation, questionAnswer, summaryApproval, abortGoal, saveAnswer, register, onInputUnavailable,
+  abortConfirmation, questionAnswer, summaryApproval, selection, selectTarget, abortGoal, saveAnswer, register, onInputUnavailable,
 }: {
   exiting: RefObject<boolean>;
   active: RefObject<AbortController | null>;
@@ -32,7 +33,9 @@ export function useManagerInput({
   abortConfirmation: ReturnType<typeof useManagerAbortConfirmation>;
   questionAnswer: ReturnType<typeof useManagerQuestionAnswer>;
   summaryApproval: ReturnType<typeof useManagerSummaryApproval>;
-  abortGoal: (goalId: string) => Promise<void>;
+  selection: ReturnType<typeof useManagerSelection>;
+  selectTarget: (target: ManagerSelectedTarget) => void;
+  abortGoal: (target: ManagerAbortTarget) => Promise<void>;
   saveAnswer: (target: PendingQuestion, text: string) => Promise<void>;
   register: (revision: number) => Promise<void>;
   onInputUnavailable: () => void;
@@ -50,6 +53,7 @@ export function useManagerInput({
   const insertText = (text: string): void => {
     if (exiting.current) return;
     if (!registering.current && active.current === null) {
+      if (selection.selection !== null) return;
       if (abortTarget !== null) { onInputUnavailable(); return; }
       if (answerTarget !== null) questionAnswer.switchToFreeText(answerTarget);
     }
@@ -78,6 +82,10 @@ export function useManagerInput({
     if (!registering.current && active.current === null && abortTarget !== null) {
       if (input !== '' && !key.ctrl && !key.meta && !key.return && !key.escape) onInputUnavailable();
       abortConfirmation.handleInput(abortTarget, key, abortGoal);
+      return;
+    }
+    if (!registering.current && active.current === null && selection.selection !== null) {
+      selection.handleInput(key, selectTarget);
       return;
     }
     const editKey = resolveEditorKey(input, key, contentWidth);

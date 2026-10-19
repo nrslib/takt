@@ -1,4 +1,6 @@
 vi.mock('../infra/goals/events.js', async (original) => ({ ...await original<typeof import('../infra/goals/events.js')>(), saveManagerEvent: vi.fn() }));
+vi.mock('../features/daemon/lifecycle.js', () => ({ ensureDaemon: vi.fn(async () => {}) }));
+vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { cleanup,render } from 'ink-testing-library';
@@ -23,13 +25,14 @@ import { resolveManagerConfig } from '../infra/config/managerConfig.js';
 import { invalidateResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
 import { appendGoalNotification,formatGoalQuestionNotification } from '../infra/goals/notifications.js';
 import { addGoalQuestion,withdrawGoalQuestion } from '../infra/goals/questions.js';
-import type { Goal } from '../infra/goals/schema.js';
+import type { Goal, GoalQuestion } from '../infra/goals/schema.js';
 import { GoalStore } from '../infra/goals/store.js';
 import { MockProvider } from '../infra/providers/mock.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
 import type { JsonTaskListItem } from '../infra/task/listSerializer.js';
 import { TaskRunner } from '../infra/task/runner.js';
 import { TaskStore } from '../infra/task/store.js';
+import { getLabel } from '../shared/i18n/index.js';
 import { goalId,goalRecord } from './helpers/goal-fixtures.js';
 
 vi.mock('node:child_process', async (original) => {
@@ -123,16 +126,80 @@ const irreversibleWarning = /取り消せ|元に戻せ|不可逆|cannot.*undo|ir
 async function expectAbortConfirmation(goal: Goal): Promise<void> {
   await vi.waitFor(() => {
     const frame = app!.lastFrame()!.replace(/\s+/gu, ' ');
-    expect(frame).toContain(goal.id);
     expect(frame).toContain(goal.objective);
     expect(frame).toMatch(irreversibleWarning);
   });
+}
+
+async function selectGoal(goal: Goal): Promise<void> {
+  await vi.waitFor(() => {
+    const lists = app!.lastFrame()?.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu) ?? [];
+    expect(lists.some((box) => box.includes(goal.objective) && /↑|↓/u.test(box) && /Enter/u.test(box) && /Esc/u.test(box))).toBe(true);
+  });
+  app!.stdin.write('\r');
 }
 
 function confirmAbort(): void {
   app!.stdin.write('\x1b[A');
   app!.stdin.write('\r');
 }
+
+it.each(['choice', 'free text'] as const)('persists only the selected inquiry through the real session with a %s answer', async (mode) => {
+  const pending: GoalQuestion = { id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human', status: 'pending',
+    body: 'Choose output format', options: mode === 'choice' ? ['CSV', 'JSON'] : undefined };
+  const saved: Goal = { ...goalRecord(), objective: 'Shared goal name', questions: [pending] };
+  const { store, call, send } = await mountGoalControls('en', saved);
+  const other = await store.create({ ...saved, id: '550e8400-e29b-41d4-a716-446655440001' });
+  const candidates = (await readManagerDisplayEvents(cwd, 'en')).questions;
+  const selected = candidates[1]!;
+  const untouched = await store.get(selected.goalId === saved.id ? other.id : saved.id);
+  await send('/answer');
+  await vi.waitFor(() => {
+    const lists = app!.lastFrame()?.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu) ?? [];
+    expect(lists.some((box) => box.includes(saved.objective) && /↑|↓/u.test(box) && /Enter/u.test(box))).toBe(true);
+  });
+  app!.stdin.write('\x1b[B');
+  app!.stdin.write('\r');
+  await vi.waitFor(() => expect(app!.lastFrame()).toContain(mode === 'choice' ? 'Free text' : 'Enter your answer'));
+  expect((await store.get(selected.goalId)).questions![0]!.status).toBe('pending');
+  if (mode === 'choice') app!.stdin.write('\x1b[B');
+  else app!.stdin.write('Custom output destination');
+  app!.stdin.write('\r');
+  await vi.waitFor(async () => expect((await store.get(selected.goalId)).questions![0]).toMatchObject({
+    status: 'answered', answer: { text: mode === 'choice' ? 'JSON' : 'Custom output destination', source: 'tui' },
+  }));
+  expect(await store.get(untouched.id)).toEqual(untouched);
+  expect(call).not.toHaveBeenCalled();
+});
+
+it.each(['pause', 'resume', 'abort'] as const)('filters mixed saved goal states and applies %s only to the second selected goal', async (command) => {
+  const executionStatus = command === 'resume' ? 'paused' : 'active';
+  const saved: Goal = { ...goalRecord(), objective: 'Eligible first', executionStatus };
+  const { store, call, send } = await mountGoalControls('en', saved);
+  const other = await store.create({ ...saved, id: '550e8400-e29b-41d4-a716-446655440001', objective: 'Eligible second' });
+  await store.create({ ...saved, id: '550e8400-e29b-41d4-a716-446655440002', objective: 'Completed candidate', status: 'completed',
+    completion: { goalBranch: saved.branch, goalSha: 'a'.repeat(40), targetBranch: 'main', targetSha: 'b'.repeat(40),
+      summary: 'Completed', instructions: ['Verified merge'],
+      changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false } } });
+  await store.create({ ...saved, id: '550e8400-e29b-41d4-a716-446655440003', objective: 'Aborted candidate', executionStatus: 'aborted' });
+  await send(`/${command}`);
+  await vi.waitFor(() => {
+    const lists = app!.lastFrame()?.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu) ?? [];
+    const list = lists.find((box) => /↑|↓/u.test(box) && /Enter/u.test(box) && /Esc/u.test(box));
+    expect(list).toBeDefined();
+    expect(list).toContain(saved.objective);
+    expect(list).toContain(other.objective);
+    expect(list).not.toContain('Completed candidate');
+    expect(list).not.toContain('Aborted candidate');
+  });
+  app!.stdin.write('\x1b[B');
+  app!.stdin.write('\r');
+  if (command === 'abort') { await expectAbortConfirmation(other); confirmAbort(); }
+  const expected = command === 'pause' ? 'paused' : command === 'resume' ? 'active' : 'aborted';
+  await vi.waitFor(async () => expect((await store.get(other.id)).executionStatus).toBe(expected));
+  expect(await store.get(saved.id)).toEqual(saved);
+  expect(call).not.toHaveBeenCalled();
+});
 
 it.each([
   { lang: 'ja' as const, executionStatus: 'active' as const },
@@ -160,12 +227,10 @@ it.each([
   expect(await store.get(saved.id)).toEqual(saved);
   expect(new TaskStore(cwd).read()).toEqual(before);
   abort.mockClear();
-  await send(`/abort ${saved.id}`);
+  await send('/abort');
   await vi.waitFor(() => {
-    const frame = app!.lastFrame()!.replace(/\s+/gu, ' ');
-    expect(frame).toMatch(lang === 'ja' ? /完了済み.*中止できません/u : /completed.*cannot.*abort/iu);
-    expect(frame).toContain(saved.id);
-    expect(frame).not.toMatch(irreversibleWarning);
+    expect(app!.lastFrame()).toMatch(lang === 'ja' ? /対象.*(?:ありません|なし)|中止.*(?:ありません|なし)/u : /no.*(?:goals|targets)/iu);
+    expect(app!.lastFrame()).not.toMatch(irreversibleWarning);
   });
   expect(abort).not.toHaveBeenCalled();
   expect(await store.get(saved.id)).toEqual(saved);
@@ -183,7 +248,8 @@ it.each([
   };
   const { store, call, send } = await mountGoalControls(lang, saved);
   if (executionStatus === 'paused') await vi.waitFor(() => expect(app!.lastFrame()).toContain(saved.objective));
-  await send(`/abort ${saved.id}`);
+  await send('/abort');
+  await selectGoal(saved);
   await expectAbortConfirmation(saved);
   expect(await store.get(saved.id)).toEqual(saved);
   expect(call).not.toHaveBeenCalled();
@@ -199,8 +265,8 @@ it.each([
   };
   await vi.waitFor(expectAbortedGoal);
   expect(call).not.toHaveBeenCalled();
-  await send(`/resume ${saved.id}`);
-  await vi.waitFor(() => expect(app!.lastFrame()).toMatch(/再開.*でき|cannot.*resum|中止|abort/iu));
+  await send('/resume');
+  await vi.waitFor(() => expect(app!.lastFrame()).toMatch(/(?:対象|再開).*(?:ありません|なし)|no.*(?:goals|targets)/iu));
   expect((await store.get(saved.id)).executionStatus).toBe('aborted');
   app!.unmount();
   app = render(createElement(ManagerView, { cwd, lang, session: session!, initialDiagnostics: [], onExit: vi.fn() }));
@@ -210,7 +276,8 @@ it.each([
 it.each(['default', 'escape'] as const)('cancels abort with %s without changing saved state or calling the agent', async (choice) => {
   const saved = { ...goalRecord(), objective: 'Abort target' };
   const { store, call, send } = await mountGoalControls('ja', saved);
-  await send(`/abort ${saved.id}`);
+  await send('/abort');
+  await selectGoal(saved);
   await expectAbortConfirmation(saved);
   app!.stdin.write(choice === 'default' ? '\r' : '\x1b[27u');
   await vi.waitFor(() => expect(app!.lastFrame()!.replace(/\s+/gu, ' ')).not.toMatch(irreversibleWarning));
@@ -254,7 +321,8 @@ it('invalidates only pending work belonging to the confirmed goal and preserves 
   runner.failTask({ task: failed, success: false, startedAt: '2026-10-10T00:00:00Z', completedAt: '2026-10-10T00:01:00Z', response: 'Execution failed', executionLog: [] });
   const before = runner.listTaskStateItems();
   const beforeRecords = new TaskStore(cwd).read().tasks;
-  await send(`/abort ${saved.id}`);
+  await send('/abort');
+  await selectGoal(saved);
   await expectAbortConfirmation(saved);
   expect(runner.listTaskStateItems()).toEqual(before);
   confirmAbort();
@@ -306,27 +374,55 @@ it('invalidates only pending work belonging to the confirmed goal and preserves 
   expect(await store.get(saved.id)).toEqual({ ...saved, executionStatus: 'aborted' });
 });
 
-it('keeps a failed pending invalidation visible and retries it without reopening the aborted goal', async () => {
+it.each(['retry', 'cancel', 'escape'] as const)('handles failed pending invalidation through TUI %s without reopening the aborted goal', async (action) => {
   const saved = { ...goalRecord(), objective: 'Abort target' };
   const { store, send, call } = await mountGoalControls('en', saved);
   const runner = new TaskRunner(cwd);
   const pending = runner.addTask('pending abort retry', { goal_id: saved.id });
-  await send(`/abort ${saved.id}`);
+  await send('/abort');
+  await selectGoal(saved);
   await expectAbortConfirmation(saved);
-  const update = vi.spyOn(TaskStore.prototype, 'update').mockImplementationOnce(() => { throw new Error('Pending write unavailable'); });
+  const abort = vi.spyOn(session!, 'abortGoal');
+  const failUpdate = (): never => { throw new Error('Pending write unavailable'); };
+  const update = vi.spyOn(TaskStore.prototype, 'update').mockImplementationOnce(failUpdate);
   confirmAbort();
   await vi.waitFor(async () => expect((await store.get(saved.id)).executionStatus).toBe('aborted'));
   await vi.waitFor(() => expect(app!.lastFrame()).toContain('Pending write unavailable'));
+  await vi.waitFor(() => {
+    expect(app!.lastFrame()).toContain(getLabel('manager.retryAbort', 'en'));
+    expect(app!.lastFrame()).not.toContain('Working');
+  });
   update.mockRestore();
   expect(new TaskStore(cwd).read().tasks).toContainEqual(expect.objectContaining({ name: pending.name, status: 'pending', started_at: null, completed_at: null }));
   expect(runner.claimNextTasks(1)).toEqual([]);
-  await send(`/abort ${saved.id}`);
-  await expectAbortConfirmation(saved);
+  if (action !== 'retry') {
+    app!.stdin.write(action === 'cancel' ? '\r' : '\x1b[27u');
+    await vi.waitFor(() => expect(app!.lastFrame()).not.toContain(getLabel('manager.retryAbort', 'en')));
+    expect(abort).toHaveBeenCalledOnce();
+    expect((await store.get(saved.id)).executionStatus).toBe('aborted');
+    expect(new TaskStore(cwd).read().tasks.find(({ name }) => name === pending.name)?.status).toBe('pending');
+    expect(call).not.toHaveBeenCalled();
+    return;
+  }
+  const errorCount = app!.lastFrame()?.match(/Pending write unavailable/gu)?.length ?? 0;
+  const retryUpdate = vi.spyOn(TaskStore.prototype, 'update').mockImplementationOnce(failUpdate);
+  confirmAbort();
+  await vi.waitFor(() => {
+    expect(abort).toHaveBeenCalledTimes(2);
+    expect(retryUpdate).toHaveBeenCalledOnce();
+    expect(app!.lastFrame()?.match(/Pending write unavailable/gu)?.length).toBeGreaterThan(errorCount);
+    expect(app!.lastFrame()).toContain(getLabel('manager.retryAbort', 'en'));
+    expect(app!.lastFrame()).not.toContain('Working');
+  });
+  retryUpdate.mockRestore();
+  expect(new TaskStore(cwd).read().tasks.find(({ name }) => name === pending.name)?.status).toBe('pending');
   confirmAbort();
   await vi.waitFor(() => expect(runner.listTaskStateItems()).toContainEqual(expect.objectContaining({ name: pending.name, status: 'failed', failure: expect.objectContaining({ retryable: false }) })));
   expect(new TaskStore(cwd).read().tasks).toContainEqual(expect.objectContaining({ name: pending.name, status: 'failed', started_at: null, completed_at: null, failure: expect.objectContaining({ retryable: false }) }));
   expect(runner.claimNextTasks(1)).toEqual([]);
   expect((await store.get(saved.id)).executionStatus).toBe('aborted');
+  await vi.waitFor(() => expect(app!.lastFrame()).not.toContain(getLabel('manager.retryAbort', 'en')));
+  expect(abort.mock.calls.map(([options]) => options.goalId)).toEqual([saved.id, saved.id, saved.id]);
   expect(call).not.toHaveBeenCalled();
 });
 
@@ -401,23 +497,24 @@ it.each(['ja', 'en'] as const)('pauses and resumes an awaiting-merge goal from c
     },
   };
   const { store, call, send } = await mountGoalControls(lang, saved);
-  await send(`/pause ${goalId}`);
+  await send('/pause');
+  await selectGoal(saved);
   await vi.waitFor(async () => expect((await store.get(goalId)).executionStatus).toBe('paused'));
   expect(await store.get(goalId)).toEqual({ ...saved, executionStatus: 'paused' });
   await vi.waitFor(() => {
-    const rows = app!.lastFrame()!.split('\n');
-    const goalRow = rows.findIndex((row) => row.includes(saved.objective));
-    expect(goalRow).toBeGreaterThanOrEqual(0);
-    expect(rows.slice(Math.max(0, goalRow - 1), goalRow + 3).join('\n')).toMatch(lang === 'ja' ? /一時停止|停止中/u : /paused/iu);
+    const boxes = app!.lastFrame()!.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu) ?? [];
+    const paused = boxes.find((box) => /一時停止中のゴール|Paused goals/u.test(box));
+    expect(paused).toContain(saved.objective);
+    expect(paused).toMatch(lang === 'ja' ? /一時停止|停止中/u : /paused/iu);
   });
   expect(call).not.toHaveBeenCalled();
-  await send(`/resume ${goalId}`);
+  await send('/resume');
+  await selectGoal(saved);
   await vi.waitFor(async () => expect((await store.get(goalId)).executionStatus).toBe('active'));
   expect(await store.get(goalId)).toEqual(saved);
   await vi.waitFor(() => {
-    const rows = app!.lastFrame()!.split('\n');
-    const goalRow = rows.findIndex((row) => row.includes(saved.objective));
-    if (goalRow !== -1) expect(rows.slice(Math.max(0, goalRow - 1), goalRow + 3).join('\n')).not.toMatch(lang === 'ja' ? /一時停止|停止中/u : /paused/iu);
+    const boxes = app!.lastFrame()!.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu) ?? [];
+    expect(boxes.filter((box) => /一時停止中のゴール|Paused goals/u.test(box))).toEqual([]);
   });
   expect(call).not.toHaveBeenCalled();
 });
@@ -670,7 +767,6 @@ it.each(['ja', 'en'] as const)('reopens the %s TUI with withdrawn question detai
     expect(frame).toContain(question.body);
     expect(frame.replace(/\n\s*/gu, '')).toContain((lang === 'ja' ? '選択肢: ' : 'Options: ') + question.options.join(', '));
     expect(frame).toContain(lang === 'ja' ? '推奨: CSV' : 'Recommendation: CSV');
-    expect(frame.split('\n').filter((line) => line.includes('/answer'))).toEqual([]);
     expect(frame).not.toContain(question.id);
   });
   expect(await store.get(saved.id)).toEqual(withdrawn);

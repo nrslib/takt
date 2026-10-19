@@ -66,10 +66,12 @@ Enter each command on its own line in the TUI.
 | Command | Behavior |
 |---------|----------|
 | `/go` | Request a summary of the current conversation, or approve and register an existing summary. Takes no arguments. |
-| `/answer <questionId>` | Answer with an option or free text. |
-| `/pause <goalId>` | Stop new submissions and integrations. Running tasks continue and results are deferred. |
-| `/resume <goalId>` | Resume deferred events and tasks. |
-| `/abort <goalId>` | Abort after confirmation, interrupting this goal's running tasks and invalidating unstarted tasks. |
+| `/answer` | Select a pending inquiry from the list, then answer with an option or free text. |
+| `/pause` | Select an active goal to stop new submissions and integrations. Running tasks continue and results are deferred. |
+| `/resume` | Select a paused goal to resume deferred events and tasks. |
+| `/abort` | Select an unfinished goal, then confirm the irreversible abort, interrupting its running tasks and invalidating unstarted tasks. |
+
+These commands take no arguments. Use ↑/↓ to choose, Enter to select, or Esc to close the list without making changes. If there are no eligible targets, the TUI shows a notice instead of opening a list.
 
 Aborting is irreversible. Goal records and branches remain. Answers are saved for the run manager's next decision. Receiving answers from Slack is not implemented.
 

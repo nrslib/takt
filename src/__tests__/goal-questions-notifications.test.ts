@@ -15,6 +15,13 @@ afterEach(() => vi.mocked(crypto.randomUUID).mockReset()
   .mockImplementation(() => '650e8400-e29b-41d4-a716-446655440001'));
 const policy = { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true };
 
+function expectAnswerSelectionGuidance(text: string, questionId: string): void {
+  const guidance = text.split('\n').filter((line) => line.includes('/answer'));
+  expect(guidance).toHaveLength(1);
+  expect(guidance[0]).toMatch(/\/answer\b/u);
+  expect(guidance[0]).not.toContain(questionId);
+}
+
 describe('saved goal questions', () => {
   it('saves question creation time and preserves it when answering or withdrawing', () => {
     const before = Date.now();
@@ -340,8 +347,7 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
       const options = destination === 'slack' && exceeds
         ? ['e\u0301'.repeat(59) + '…', ...savedQuestion.options!.slice(1)] : savedQuestion.options!;
       expect(lines[3]).toBe(optionPrefix + options.join(', '));
-      expect(lines[5]).toContain(destination === 'slack' ? `/answer ${savedQuestion.id}` : '/answer');
-      if (destination === 'tui') expect(lines[5]).not.toContain(savedQuestion.id);
+      expectAnswerSelectionGuidance(lines[5]!, savedQuestion.id);
     }
   });
 
@@ -365,8 +371,7 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
       expect(lines).toContain(recommendationPrefix + 'e\u0301'.repeat(199) + '…');
       expect(lines.filter((line) => line.includes('/answer'))).toHaveLength(status === 'pending' ? 1 : 0);
       if (status === 'pending') {
-        expect(lines.at(-1)).toContain(destination === 'slack' ? `/answer ${question.id}` : '/answer');
-        if (destination === 'tui') expect(lines.at(-1)).not.toContain(question.id);
+        expectAnswerSelectionGuidance(lines.at(-1)!, question.id);
       }
       if (destination === 'tui') {
         expect(lines[3]).toBe(optionPrefix + options.join(', '));
@@ -416,7 +421,7 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
     expect(text).toContain(question.body);
     expect(text).toMatch(language === 'ja' ? /選択肢:\s*CSV.*JSON/u : /Options:\s*CSV.*JSON/u);
     expect(text).toMatch(language === 'ja' ? /推奨:\s*CSV/u : /Recommendation:\s*CSV/u);
-    expect(text).toContain(`/answer ${question.id}`);
+    expectAnswerSelectionGuidance(text, question.id);
     expect(text).toContain('takt manager');
     expect(text).toContain('TUI');
     expect(text).toContain('customer-export');
@@ -438,7 +443,7 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
     const guidance = lines.filter((line) => line.includes('/answer'));
     if (status === 'pending') {
       expect(guidance).toHaveLength(1);
-      expect(guidance[0]).toContain(`/answer ${question.id}`);
+      expectAnswerSelectionGuidance(text, question.id);
     } else {
       expect(guidance).toEqual([]);
     }
@@ -468,7 +473,7 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
     expect(text).toContain('CSV');
     expect(text).toContain('JSON');
     expect(text).toContain('CSV is preferred.');
-    expect(text).toContain(`/answer ${savedQuestion.id}`);
+    expectAnswerSelectionGuidance(text, savedQuestion.id);
     expect(text.length).toBeLessThan(2000);
     expect(savedQuestion.body).toHaveLength('Which output format? '.length * 1000);
   });
@@ -481,7 +486,7 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
     expect(text).toContain('Format 4');
     expect(text).toContain('95');
     expect(text).toContain('TUI');
-    expect(text).toContain(`/answer ${savedQuestion.id}`);
+    expectAnswerSelectionGuidance(text, savedQuestion.id);
     expect(text.length).toBeLessThan(2000);
     expect(savedQuestion.options).toHaveLength(100);
     expect(body).toContain('Format 99');

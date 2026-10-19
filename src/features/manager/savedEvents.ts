@@ -7,7 +7,7 @@ import { getErrorMessage } from '../../shared/utils/error.js';
 import { formatGoalNotification } from '../../infra/goals/notifications.js';
 import type { Goal, GoalQuestion } from '../../infra/goals/schema.js';
 
-export type ManagerDisplayGoal = Pick<Goal, 'id' | 'objective' | 'executionStatus'>;
+export type ManagerDisplayGoal = Pick<Goal, 'id' | 'objective' | 'status' | 'executionStatus'>;
 
 export async function readManagerDisplayEvents(cwd: string, language: Language = resolveConfigValue(cwd, 'language')): Promise<{
   events: { id: string; message: string }[]; diagnostics: { id: string; message: string }[];
@@ -22,7 +22,7 @@ export async function readManagerDisplayEvents(cwd: string, language: Language =
   const { notifications: policy } = resolveManagerConfig(cwd);
   try {
     const { goals, errors } = await new GoalStore(cwd).list();
-    displayGoals.push(...goals.map(({ id, objective, executionStatus }) => ({ id, objective, executionStatus })));
+    displayGoals.push(...goals.map(({ id, objective, status, executionStatus }) => ({ id, objective, status, executionStatus })));
     for (const goal of goals) {
       questions.push(...(goal.questions ?? []).filter((question) => question.status === 'pending' && question.recipient === 'human')
         .map((question) => ({ goalId: goal.id, objective: goal.objective, question })));

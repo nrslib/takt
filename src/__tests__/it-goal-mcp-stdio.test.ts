@@ -84,6 +84,14 @@ const questionSchema = z.object({
 const askedQuestion = {
   body: '出力形式はどれですか', options: ['CSV', 'JSON'], recommendation: 'CSV',
 };
+
+function expectAnswerSelectionGuidance(text: string, questionId: string): void {
+  const guidance = text.split('\n').filter((line) => line.includes('/answer'));
+  expect(guidance).toHaveLength(1);
+  expect(guidance[0]).toMatch(/\/answer\b.*(?:list|select|choose)|(?:list|select|choose).*\/answer\b/iu);
+  expect(guidance[0]).not.toContain(questionId);
+}
+
 const kinds = ['question', 'awaiting_merge', 'completed', 'progress', 'blocked', 'custom'] as const;
 type NotificationKind = typeof kinds[number];
 
@@ -233,18 +241,6 @@ describe('manager questions, answers and notifications through production bounda
     app!.stdin.write('\r');
   }
 
-  async function selectJsonAnswer(questionId: string): Promise<void> {
-    await send(`/answer ${questionId}`);
-    await vi.waitFor(() => expect(app!.lastFrame()).toContain('Free text'));
-    app!.stdin.write('\x1b[B');
-    app!.stdin.write('\r');
-    await vi.waitFor(async () => {
-      const saved = z.object({ questions: z.array(questionSchema) }).parse(await new GoalStore(cwd).get(goalId));
-      const question = saved.questions.find((candidate) => candidate.id === questionId);
-      expect(question).toMatchObject({ status: 'answered', answer: { text: 'JSON', source: 'tui' } });
-    }, { timeout: 30_000 });
-  }
-
   it('saves optional question fields and reads the same question using the returned ID', async () => {
     const question = await ask();
     expect(question).toMatchObject({ ...askedQuestion, status: 'pending' });
@@ -311,9 +307,9 @@ describe('manager questions, answers and notifications through production bounda
     const question = await ask();
     expect(requests).toHaveLength(1);
     expect(requests[0]).toMatchObject({ method: 'POST', contentType: 'application/json' });
-    for (const value of [goalId.slice(0, 8), question.id, askedQuestion.body, 'CSV', 'JSON']) expect(requests[0]!.text).toContain(value);
+    for (const value of [goalId.slice(0, 8), askedQuestion.body, 'CSV', 'JSON']) expect(requests[0]!.text).toContain(value);
     expect(requests[0]!.text.split('\n')[0]).toContain(basename(cwd));
-    expect(requests[0]!.text).toContain(`/answer ${question.id}`);
+    expectAnswerSelectionGuidance(requests[0]!.text, question.id);
     expect(requests[0]!.text).not.toContain(goalId);
     const displayed = await readManagerDisplayEvents(cwd);
     expect(displayed.events).toEqual(expect.arrayContaining([expect.objectContaining({ message: expect.stringContaining(askedQuestion.body) })]));
@@ -330,8 +326,10 @@ describe('manager questions, answers and notifications through production bounda
     const created = z.object({ questionId: z.string().min(1) }).parse(JSON.parse(firstTextContent(result.content)));
     expect(requests).toHaveLength(1);
     expect(requests[0]).toMatchObject({ method: 'POST', contentType: 'application/json' });
-    expect(requests[0]!.text).toContain(created.questionId);
+    expectAnswerSelectionGuidance(requests[0]!.text, created.questionId);
     expect(requests[0]!.text).toContain(askedQuestion.body);
+    expect((await invoke('takt_get_goal_question', { questionId: created.questionId })).question)
+      .toMatchObject({ ...askedQuestion, id: created.questionId, status: 'pending' });
   }, 30_000);
 
   it.each([
@@ -368,7 +366,7 @@ describe('manager questions, answers and notifications through production bounda
     const question = await ask();
     expect(question.status).toBe('pending');
     expect(requests).toHaveLength(1);
-    expect(requests[0]!.text).toContain(question.id);
+    expectAnswerSelectionGuidance(requests[0]!.text, question.id);
     expect(stderr).toHaveBeenCalledWith(failure === 'HTTP error'
       ? 'Slack webhook failed: HTTP 503\n' : 'Slack webhook connection failed\n');
     expect(stderr.mock.calls.flat().join('')).not.toContain(webhook);
@@ -531,7 +529,12 @@ describe('manager questions, answers and notifications through production bounda
     const daemonStartup = new Promise<void>((resolve) => { confirmDaemonStartup = resolve; });
     vi.mocked(ensureDaemon).mockImplementationOnce(() => daemonStartup);
     try {
-      await send(`/answer ${question.id}`);
+      await send('/answer');
+      await vi.waitFor(() => {
+        const lists = app!.lastFrame()?.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu) ?? [];
+        expect(lists.some((box) => box.includes(question.body) && /↑|↓/u.test(box) && /Enter/u.test(box) && /Esc/u.test(box))).toBe(true);
+      });
+      app!.stdin.write('\r');
       await vi.waitFor(() => expect(app!.lastFrame()).toContain('Enter your answer'));
       await send(answer);
       await vi.waitFor(async () => {
