@@ -47,6 +47,48 @@ export function assertRequiredFacetSnapshots(id, requiredFacetKinds, sourcePaths
 // id doubles as the prompt basename (normal targets use phase1; loop monitors use phase3).
 // mutable targets run in a disposable copy under eval/.work/<id>.
 const TARGETS = [
+  ...[
+    ['rt', 'security-review'],
+    ['rc', 'coding-review'],
+    ['rq', 'arch-review'],
+    ['ne', 'security-review'],
+    ['np', 'coding-review'],
+    ['nb', 'arch-review'],
+  ].map(([caseId, step]) => ({
+    id: `finding-realistic-premise-${caseId}`,
+    workflow: 'peer-review',
+    via: 'initial-reviewers',
+    step,
+    fixture: `eval/fixtures/finding-realistic-premise/${caseId}`,
+    projectFromFixture: true,
+    requiredFacetKinds: ['policies'],
+    promptExtension: 'j2',
+    ...(step === 'security-review' ? {
+      dynamicFacetSelection: {
+        sourceWorkflow: 'development-review',
+        pool: 'security-review-facets',
+        candidateIds: ['cli'],
+      },
+    } : {}),
+  })),
+  ...['at', 'ac', 'aq', 'ae', 'ap', 'ab'].map((caseId) => ({
+    id: `finding-realistic-premise-${caseId}`,
+    workflow: 'peer-review',
+    step: 'review-adjudication',
+    fixture: `eval/fixtures/finding-realistic-premise/${caseId}`,
+    projectFromFixture: true,
+    requiredFacetKinds: ['policies'],
+    promptExtension: 'j2',
+  })),
+  ...['vd1', 'vd2', 'vn1', 'vn2', 'pd1'].map((caseId) => ({
+    id: `finding-realistic-premise-${caseId}`,
+    workflow: 'review-remediation',
+    step: caseId === 'pd1' ? 'verification-replan' : 'fix-verifier',
+    fixture: `eval/fixtures/finding-realistic-premise/${caseId}`,
+    projectFromFixture: true,
+    requiredFacetKinds: ['policies'],
+    promptExtension: 'j2',
+  })),
   ...['a1', 'a2', 'a3', 'a4'].map((caseId) => ({
     id: `review-adjudication-applicable-inputs-${caseId}`,
     workflow: 'peer-review',

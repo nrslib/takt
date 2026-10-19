@@ -74,6 +74,7 @@
     "eval:prompts:fix-verifier-state-routing": "node eval/scripts/prepare.mjs fix-verifier-state-routing && node eval/scripts/run-evals.mjs fix-verifier-state-routing",
     "eval:prompts:fix-verifier-model-matrix": "node eval/scripts/prepare.mjs fix-verifier-state-closure fix-verifier-state-routing && node eval/scripts/run-evals.mjs fix-verifier-model-matrix fix-verifier-routing-model-matrix --no-cache",
     "eval:prompts:finding-premise-scope": "node eval/scripts/run-evals.mjs finding-premise-scope --prepare --no-cache",
+    "eval:prompts:finding-realistic-premise": "node eval/scripts/run-evals.mjs --prepare finding-realistic-premise --no-cache",
     "eval:prompts:review-adjudication-binding": "node eval/scripts/prepare.mjs review-adjudication-binding && node eval/scripts/run-evals.mjs review-adjudication-binding",
     "eval:prompts:security-review-method": "node eval/scripts/prepare.mjs security-review-method && node eval/scripts/run-evals.mjs security-review-method",
     "eval:prompts:security-threat-model": "node eval/scripts/run-evals.mjs security-threat-model --prepare --no-cache",
