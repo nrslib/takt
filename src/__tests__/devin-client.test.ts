@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockSpawn, debugSpy } = vi.hoisted(() => ({
@@ -32,6 +32,8 @@ type SpawnScenario = {
   code?: number | null;
   signal?: NodeJS.Signals | null;
   error?: Partial<NodeJS.ErrnoException> & { message: string };
+  /** Raw content written to the `--export` path before the process closes; omitted = no export. */
+  exportContent?: string;
 };
 
 type MockChildProcess = EventEmitter & {
@@ -119,54 +121,23 @@ function recordInvocation(call: unknown[]): void {
   }
 }
 
-function isListInvocation(args: string[]): boolean {
-  return args[0] === 'list';
+function writeExport(args: string[], content: string | undefined): void {
+  const index = args.indexOf('--export');
+  const path = index >= 0 ? args[index + 1] : undefined;
+  if (content !== undefined && path !== undefined) {
+    writeFileSync(path, content, 'utf-8');
+  }
 }
 
-// `devin list` calls (session snapshotting) get `listStdout`; the main `-p`
-// call gets `scenario`.
-function mockSpawnWithScenario(scenario: SpawnScenario, listStdout = '[]'): void {
-  mockSpawn.mockImplementation((...call: unknown[]) => {
-    recordInvocation(call);
-    const effective = isListInvocation(call[1] as string[])
-      ? { stdout: listStdout, code: 0 }
-      : scenario;
-    const child = createMockChildProcess();
-    queueMicrotask(() => {
-      if (effective.stdout) {
-        child.stdout.emit('data', Buffer.from(effective.stdout, 'utf-8'));
-      }
-      if (effective.stderr) {
-        child.stderr.emit('data', Buffer.from(effective.stderr, 'utf-8'));
-      }
-      if (effective.error) {
-        child.emit('error', Object.assign(new Error(effective.error.message), effective.error));
-        return;
-      }
-      child.emit(
-        'close',
-        effective.code === undefined ? 0 : effective.code,
-        effective.signal === undefined ? null : effective.signal,
-      );
-    });
-    return child;
-  });
+function exportWithSession(sessionId: string): string {
+  return JSON.stringify({ schema_version: 'ATIF-v1.7', session_id: sessionId, steps: [] });
 }
 
-function mockSpawnSequence(scenarios: SpawnScenario[]): void {
-  let callIndex = 0;
+function mockSpawnWithScenario(scenario: SpawnScenario): void {
   mockSpawn.mockImplementation((...call: unknown[]) => {
     recordInvocation(call);
-    const scenario = scenarios[callIndex];
-    callIndex += 1;
     const child = createMockChildProcess();
     queueMicrotask(() => {
-      if (!scenario) {
-        child.emit('error', Object.assign(new Error(`Unexpected spawn call #${callIndex}`), {
-          code: 'ERR_TEST_UNEXPECTED_SPAWN',
-        }));
-        return;
-      }
       if (scenario.stdout) {
         child.stdout.emit('data', Buffer.from(scenario.stdout, 'utf-8'));
       }
@@ -177,6 +148,7 @@ function mockSpawnSequence(scenarios: SpawnScenario[]): void {
         child.emit('error', Object.assign(new Error(scenario.error.message), scenario.error));
         return;
       }
+      writeExport(call[1] as string[], scenario.exportContent);
       child.emit(
         'close',
         scenario.code === undefined ? 0 : scenario.code,
@@ -191,14 +163,9 @@ function spawnCall(index: number): [string, string[], { cwd?: string; env?: Node
   return mockSpawn.mock.calls[index] as [string, string[], { cwd?: string; env?: NodeJS.ProcessEnv; stdio?: unknown; shell?: boolean }];
 }
 
-// First-turn calls run `devin list` before and after the main `-p` call for
-// session resolution, so the main invocation is identified by its `-p` flag.
 function mainSpawnCall(): [string, string[], { cwd?: string; env?: NodeJS.ProcessEnv; stdio?: unknown; shell?: boolean }] {
-  const call = mockSpawn.mock.calls.find((c) => (c[1] as string[]).includes('-p'));
-  if (call === undefined) {
-    throw new Error('no spawn call with -p found');
-  }
-  return call as [string, string[], { cwd?: string; env?: NodeJS.ProcessEnv; stdio?: unknown; shell?: boolean }];
+  expect(mockSpawn).toHaveBeenCalledTimes(1);
+  return spawnCall(0);
 }
 
 describe('callDevin', () => {
@@ -363,69 +330,54 @@ describe('callDevin', () => {
     expect(spawnFiles.get('prompt')).toBe(largePrompt);
   });
 
-  it('Given no session, When called, Then resolves the new session ID via devin list', async () => {
-    // Snapshot before, main call, then session list after — the new session
-    // is identified as the one absent from the pre-call snapshot.
-    mockSpawnSequence([
-      { stdout: '[]', code: 0 },
-      { stdout: 'first turn done', code: 0 },
-      { stdout: JSON.stringify([{ id: 'keen-otter', title: 'implement' }]), code: 0 },
-    ]);
+  it('Given no session, When called, Then resolves the new session ID from the --export transcript in a single spawn', async () => {
+    mockSpawnWithScenario({ stdout: 'first turn done', code: 0, exportContent: exportWithSession('keen-otter') });
 
     const result = await callDevin('coder', 'implement', { cwd: '/repo' });
 
     expect(result.status).toBe('done');
     expect(result.sessionId).toBe('keen-otter');
-    expect(mockSpawn).toHaveBeenCalledTimes(3);
-    const [, beforeListArgs] = spawnCall(0);
-    const [, afterListArgs] = spawnCall(2);
-    expect(beforeListArgs).toEqual(['list', '--format', 'json']);
-    expect(afterListArgs).toEqual(['list', '--format', 'json']);
+    const [, args] = mainSpawnCall();
+    expect(args).toContain('--export');
   });
 
-  it('Given a session, When called, Then does not spawn a devin list call', async () => {
-    mockSpawnWithScenario({ stdout: 'done', code: 0 });
+  it('Given parallel calls in the same directory, When each finishes, Then each resolves only its own exported session', async () => {
+    let next = 0;
+    const ids = ['session-a', 'session-b'];
+    mockSpawn.mockImplementation((...call: unknown[]) => {
+      const child = createMockChildProcess();
+      const id = ids[next++] ?? 'unexpected';
+      queueMicrotask(() => {
+        child.stdout.emit('data', Buffer.from(`done ${id}`, 'utf-8'));
+        writeExport(call[1] as string[], exportWithSession(id));
+        child.emit('close', 0, null);
+      });
+      return child;
+    });
+
+    const [a, b] = await Promise.all([
+      callDevin('coder', 'task a', { cwd: '/repo' }),
+      callDevin('coder', 'task b', { cwd: '/repo' }),
+    ]);
+
+    expect(a.content).toBe('done session-a');
+    expect(a.sessionId).toBe('session-a');
+    expect(b.content).toBe('done session-b');
+    expect(b.sessionId).toBe('session-b');
+  });
+
+  it('Given a session, When called, Then keeps the given session ID', async () => {
+    mockSpawnWithScenario({ stdout: 'done', code: 0, exportContent: exportWithSession('rare-boater') });
 
     const result = await callDevin('coder', 'implement', { cwd: '/repo', sessionId: 'rare-boater' });
 
     expect(result.sessionId).toBe('rare-boater');
-    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    const [, args] = mainSpawnCall();
+    expect(args).toEqual(expect.arrayContaining(['-r', 'rare-boater']));
   });
 
-  it('Given a parallel sibling session in the same directory, When called, Then resolves the session matching this prompt title', async () => {
-    // Parallel steps share the cwd and its `devin list` output: the sibling's
-    // session also appears as new, so the prompt-derived title decides.
-    const prompt = 'implement the devin provider for takt';
-    mockSpawnSequence([
-      { stdout: '[]', code: 0 },
-      { stdout: 'first turn done', code: 0 },
-      {
-        stdout: JSON.stringify([
-          { id: 'sibling-session', title: 'unrelated sibling step prompt...' },
-          { id: 'keen-otter', title: prompt },
-        ]),
-        code: 0,
-      },
-    ]);
-
-    const result = await callDevin('coder', prompt, { cwd: '/repo' });
-
-    expect(result.status).toBe('done');
-    expect(result.sessionId).toBe('keen-otter');
-  });
-
-  it('Given multiple new sessions and no title match, When called, Then leaves the session unresolved rather than picking a sibling', async () => {
-    mockSpawnSequence([
-      { stdout: '[]', code: 0 },
-      { stdout: 'first turn done', code: 0 },
-      {
-        stdout: JSON.stringify([
-          { id: 'sibling-a', title: 'totally different task...' },
-          { id: 'sibling-b', title: 'another unrelated task...' },
-        ]),
-        code: 0,
-      },
-    ]);
+  it('Given no export file was written, When called, Then still succeeds without a session ID', async () => {
+    mockSpawnWithScenario({ stdout: 'first turn done', code: 0 });
 
     const result = await callDevin('coder', 'implement', { cwd: '/repo' });
 
@@ -433,31 +385,8 @@ describe('callDevin', () => {
     expect(result.sessionId).toBeUndefined();
   });
 
-  it('Given a pre-existing session in the snapshot, When called, Then only new sessions are considered for resolution', async () => {
-    mockSpawnSequence([
-      { stdout: JSON.stringify([{ id: 'old-session', title: 'implement' }]), code: 0 },
-      { stdout: 'first turn done', code: 0 },
-      {
-        stdout: JSON.stringify([
-          { id: 'keen-otter', title: 'other title' },
-          { id: 'old-session', title: 'implement' },
-        ]),
-        code: 0,
-      },
-    ]);
-
-    const result = await callDevin('coder', 'implement', { cwd: '/repo' });
-
-    expect(result.status).toBe('done');
-    expect(result.sessionId).toBe('keen-otter');
-  });
-
-  it('Given devin list fails, When called, Then still succeeds without a session ID', async () => {
-    mockSpawnSequence([
-      { stdout: '[]', code: 0 },
-      { stdout: 'first turn done', code: 0 },
-      { stderr: 'boom', code: 1 },
-    ]);
+  it('Given a malformed export, When called, Then still succeeds without a session ID', async () => {
+    mockSpawnWithScenario({ stdout: 'first turn done', code: 0, exportContent: 'not json' });
 
     const result = await callDevin('coder', 'implement', { cwd: '/repo' });
 
@@ -465,12 +394,8 @@ describe('callDevin', () => {
     expect(result.sessionId).toBeUndefined();
   });
 
-  it('Given devin list returns malformed JSON, When called, Then still succeeds without a session ID', async () => {
-    mockSpawnSequence([
-      { stdout: '[]', code: 0 },
-      { stdout: 'first turn done', code: 0 },
-      { stdout: 'not json', code: 0 },
-    ]);
+  it('Given an export with an unsafe session ID, When called, Then rejects it', async () => {
+    mockSpawnWithScenario({ stdout: 'first turn done', code: 0, exportContent: exportWithSession('bad;rm -rf') });
 
     const result = await callDevin('coder', 'implement', { cwd: '/repo' });
 
