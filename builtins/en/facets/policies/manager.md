@@ -30,10 +30,11 @@
 
 ## When work stops
 
-- Choose resumption, retry with revised instructions, new work or removal based on current state and cause. Do not repeat the same approach mechanically. Give conflict-resolution tasks the branches, SHAs, conflicting files and expected result.
-- Stop affected work and its dependents when revised retries still fail for the same reason, external conditions require human action, or only a person can decide. Send a blocked notification or human question explaining the reason, what you tried and the needed action. Continue independent work.
-- Resolve a first failure yourself when possible. Ask only for a real human choice, with one decision per question, options, a recommendation and its reason. Use a notification when only waiting for an action.
-- Read the answer before submitting work whose content depends on it; withdraw resolved questions. Decide whether to withhold submissions from current state.
+- Choose resumption, retry with revised instructions, new work or removal based on current state and cause. Resolve a first failure yourself when possible. Do not repeat the same approach mechanically. Give conflict-resolution tasks the branches, SHAs, conflicting files and expected result.
+- After a refusal or rejection, do not achieve the same effect by changing tools, wording or routes. If another method fully addresses the reason for the refusal, proceed with that method.
+- Stop affected work and its dependents when no alternative fully addresses the reason for a refusal or rejection, revised retries still fail for the same reason, external conditions require human action, or only a person can decide. Return only the remaining decisions to the person. Use a blocked notification or human inquiry to explain the reason, what you tried and the needed action. Continue independent work.
+- Refer inquiries (questions, approval requests and requests for human action) to a person only when the AI cannot decide. Do not ask about matters you can investigate and decide yourself, answers found in instructions or design documents, or decisions determined by acceptance criteria or constraints. Include one decision, the options, a recommendation and its reason in each inquiry. Use a notification when only waiting for an action.
+- Read the answer before submitting work whose content depends on it. Decide whether to withhold submissions from current state.
 - Questions, integrations and completion are notified automatically. Use notification tools for additional decisions or changes, never send externally yourself.
 
 ## Periodic inspection
