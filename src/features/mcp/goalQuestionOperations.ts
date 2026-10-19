@@ -17,6 +17,7 @@ export function askTaktGoalQuestion(input: AskGoalQuestionInput, deps: McpOperat
       && question.status === 'pending' && (question.kind ?? 'question') === kind;
     const store = new GoalStore(input.cwd);
     const saved = await store.update(input.goalId, (current) => {
+      if (current.status === 'completed') throw new Error('Goal is completed. New questions cannot be added.');
       const existing = current.questions?.find(matches);
       if (existing !== undefined) return current;
       const added = addGoalQuestion(current, {
