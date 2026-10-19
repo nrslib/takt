@@ -24,7 +24,7 @@ Collect results on the goal branch, then integrate into the target to finish. ma
 
 Goal memory contains objective, scope exclusions, acceptance criteria, constraints, workLog, questions and answers. Check current state in tasks, runs and git. Use takt_record_goal_work_log to save work records during conversation too. Specify kind: patrol for records of inspection or notices alone. Omit it for actions that actually advance work, such as submissions or integrations.
 
-Questions go to people. The TUI /answer command saves a selected or free-text answer. Receiving answers from Slack is not implemented. Paused goals defer events; aborted goals cannot resume.
+Questions go to people. The TUI /answer command saves a selected or free-text answer. Receiving answers from Slack is not implemented. Code closes any inquiries left when a goal is completed or aborted; the manager must not close them again. Pausing leaves inquiries open and defers events. Aborted goals cannot resume.
 
 Notifications appear in the TUI and Slack. manager.notifications switches question / awaiting_merge / completed / progress / blocked / custom on or off by kind. Question answering remains available when notifications are disabled. Failed event processing or TUI conversation sends blocked. Repeated failures still notify; no failure-state file is created. Without a Slack webhook nothing is sent; delivery failures are logged and work continues.
 
