@@ -647,11 +647,12 @@ describe('callDevin', () => {
           status: 'in_progress',
           content: [{ type: 'content', content: { type: 'text', text: 'running...' } }],
         },
+        // A completed update arrives without content; the result carries the
+        // last cumulative output seen while the call was running.
         {
           sessionUpdate: 'tool_call_update',
           toolCallId: 'exec:0',
           status: 'completed',
-          content: [{ type: 'content', content: { type: 'text', text: 'tests pass' } }],
         },
         { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'answer' } },
       ],
@@ -669,10 +670,97 @@ describe('callDevin', () => {
     });
     expect(onStream).toHaveBeenCalledWith({
       type: 'tool_result',
-      data: { id: 'exec:0', content: 'tests pass', isError: false },
+      data: { id: 'exec:0', content: 'running...', isError: false },
     });
     const resultCall = onStream.mock.calls.at(-1)?.[0] as { data: { result: string; sessionId: string; success: boolean } };
     expect(resultCall.data).toEqual({ result: 'partial answer', sessionId: 'keen-otter', success: true });
+  });
+
+  it('Given cumulative tool_call_update content, When called, Then only the appended suffix streams as tool_output', async () => {
+    const onStream = vi.fn();
+    const text = (t: string): unknown => ({ type: 'content', content: { type: 'text', text: t } });
+    mockAcpServer({
+      updates: [
+        {
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'exec:0',
+          status: 'in_progress',
+          _meta: { 'cognition.ai/inferenceToolName': 'exec' },
+        },
+        {
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'exec:0',
+          status: 'in_progress',
+          content: [text('line1')],
+        },
+        {
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'exec:0',
+          status: 'in_progress',
+          content: [text('line1\nline2')],
+        },
+        {
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'exec:0',
+          status: 'in_progress',
+          content: [text('line1\nline2\nline3')],
+        },
+        // A repeated snapshot of the same output produces no new event.
+        {
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'exec:0',
+          status: 'in_progress',
+          content: [text('line1\nline2\nline3')],
+        },
+        { sessionUpdate: 'tool_call_update', toolCallId: 'exec:0', status: 'completed' },
+        { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'done' } },
+      ],
+    });
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo', onStream });
+
+    expect(result.status).toBe('done');
+    const events = onStream.mock.calls.map((call) => call[0] as { type: string; data: Record<string, unknown> });
+    const outputs = events.filter((event) => event.type === 'tool_output').map((event) => event.data.output);
+    expect(outputs).toEqual(['line1', '\nline2', '\nline3']);
+    const results = events.filter((event) => event.type === 'tool_result');
+    expect(results).toEqual([
+      { type: 'tool_result', data: { id: 'exec:0', content: 'line1\nline2\nline3', isError: false } },
+    ]);
+  });
+
+  it('Given a tool_call_update whose content is replaced rather than extended, When called, Then the new content streams whole', async () => {
+    const onStream = vi.fn();
+    const text = (t: string): unknown => ({ type: 'content', content: { type: 'text', text: t } });
+    mockAcpServer({
+      updates: [
+        {
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'exec:0',
+          status: 'in_progress',
+          content: [text('line1\nline2')],
+          _meta: { 'cognition.ai/inferenceToolName': 'exec' },
+        },
+        {
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'exec:0',
+          status: 'in_progress',
+          content: [text('rewritten')],
+        },
+        { sessionUpdate: 'tool_call_update', toolCallId: 'exec:0', status: 'failed' },
+        { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'done' } },
+      ],
+    });
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo', onStream });
+
+    expect(result.status).toBe('done');
+    const events = onStream.mock.calls.map((call) => call[0] as { type: string; data: Record<string, unknown> });
+    const outputs = events.filter((event) => event.type === 'tool_output').map((event) => event.data.output);
+    expect(outputs).toEqual(['line1\nline2', 'rewritten']);
+    expect(events.filter((event) => event.type === 'tool_result')).toEqual([
+      { type: 'tool_result', data: { id: 'exec:0', content: 'rewritten', isError: true } },
+    ]);
   });
 
   it('Given updates replayed during session/load, When called, Then history is not re-emitted', async () => {

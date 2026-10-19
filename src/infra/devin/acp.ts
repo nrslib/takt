@@ -76,13 +76,25 @@ function toolCallText(content: ToolCallContent[] | null | undefined): string {
   return parts.join('\n').trim();
 }
 
+interface DevinToolStreamState {
+  name: string;
+  /** Last cumulative output text seen; ACP tool content replaces, it does not append. */
+  output: string;
+  /** Set once a tool_result has been emitted so completion fires exactly once. */
+  finalized: boolean;
+}
+
 // Maps Devin ACP session updates onto the same stream events other TAKT
 // providers emit: `tool_call` -> tool_use, `tool_call_update` -> tool_output
-// while running and tool_result once completed/failed, message chunks -> text
-// and thought chunks -> thinking.
+// deltas while running and tool_result once completed/failed, message chunks
+// -> text and thought chunks -> thinking. ACP `tool_call_update` content is
+// cumulative (marked `cognition.ai/terminalPreview`) and a completed update
+// usually carries no content at all, so the last seen output is kept for the
+// tool_result and only the appended suffix is streamed as tool_output —
+// matching the delta contract codex/pi already emit.
 function sessionUpdateToStreamEvents(
   update: SessionUpdate,
-  toolNames: Map<string, string>,
+  toolStates: Map<string, DevinToolStreamState>,
 ): StreamEvent[] {
   switch (update.sessionUpdate) {
     case 'agent_message_chunk':
@@ -95,7 +107,9 @@ function sessionUpdateToStreamEvents(
         : [];
     case 'tool_call': {
       const name = toolNameOf(update);
-      toolNames.set(update.toolCallId, name);
+      const output = toolCallText(update.content);
+      const finished = update.status === 'completed' || update.status === 'failed';
+      toolStates.set(update.toolCallId, { name, output, finalized: finished });
       const events: StreamEvent[] = [{
         type: 'tool_use',
         data: {
@@ -104,35 +118,7 @@ function sessionUpdateToStreamEvents(
           input: isRecord(update.rawInput) ? update.rawInput : {},
         },
       }];
-      if (update.status === 'completed' || update.status === 'failed') {
-        events.push({
-          type: 'tool_result',
-          data: {
-            id: update.toolCallId,
-            content: toolCallText(update.content),
-            isError: update.status === 'failed',
-          },
-        });
-      }
-      return events;
-    }
-    case 'tool_call_update': {
-      const events: StreamEvent[] = [];
-      let name = toolNames.get(update.toolCallId);
-      if (name === undefined) {
-        name = toolNameOf(update);
-        toolNames.set(update.toolCallId, name);
-        events.push({
-          type: 'tool_use',
-          data: {
-            id: update.toolCallId,
-            tool: name,
-            input: isRecord(update.rawInput) ? update.rawInput : {},
-          },
-        });
-      }
-      const output = toolCallText(update.content);
-      if (update.status === 'completed' || update.status === 'failed') {
+      if (finished) {
         events.push({
           type: 'tool_result',
           data: {
@@ -145,6 +131,46 @@ function sessionUpdateToStreamEvents(
         events.push({
           type: 'tool_output',
           data: { id: update.toolCallId, tool: name, output },
+        });
+      }
+      return events;
+    }
+    case 'tool_call_update': {
+      const events: StreamEvent[] = [];
+      let state = toolStates.get(update.toolCallId);
+      if (state === undefined) {
+        state = { name: toolNameOf(update), output: '', finalized: false };
+        toolStates.set(update.toolCallId, state);
+        events.push({
+          type: 'tool_use',
+          data: {
+            id: update.toolCallId,
+            tool: state.name,
+            input: isRecord(update.rawInput) ? update.rawInput : {},
+          },
+        });
+      }
+      const output = toolCallText(update.content);
+      const current = output.length > 0 ? output : state.output;
+      const delta = current.startsWith(state.output)
+        ? current.slice(state.output.length)
+        : current;
+      state.output = current;
+      if (delta.length > 0) {
+        events.push({
+          type: 'tool_output',
+          data: { id: update.toolCallId, tool: state.name, output: delta },
+        });
+      }
+      if ((update.status === 'completed' || update.status === 'failed') && !state.finalized) {
+        state.finalized = true;
+        events.push({
+          type: 'tool_result',
+          data: {
+            id: update.toolCallId,
+            content: state.output,
+            isError: update.status === 'failed',
+          },
         });
       }
       return events;
@@ -392,7 +418,7 @@ export async function runDevinAcpPrompt(
   let promptActive = false;
   let sendCancel: (() => void) | undefined;
   const textParts: string[] = [];
-  const toolNames = new Map<string, string>();
+  const toolStates = new Map<string, DevinToolStreamState>();
 
   const app = client({ name: 'takt' })
     .onRequest(methods.client.session.requestPermission, ({ params }) =>
@@ -405,7 +431,7 @@ export async function runDevinAcpPrompt(
       if (update.sessionUpdate === 'agent_message_chunk' && update.content.type === 'text') {
         textParts.push(update.content.text);
       }
-      for (const event of sessionUpdateToStreamEvents(update, toolNames)) {
+      for (const event of sessionUpdateToStreamEvents(update, toolStates)) {
         options.onStream?.(event);
       }
     });
