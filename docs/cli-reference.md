@@ -317,7 +317,7 @@ All three tools require the absolute project `cwd` and are limited to the projec
 
 `takt_list_tasks` returns all tasks even when an individual worktree validation or run metadata read fails. Only the affected entry gains a sanitized `error` string alongside its available basic information; other entries retain their previous contents. Run information is never read from a worktree that failed validation. An unreadable queue or a `cwd` outside the allowed root remains a whole-tool error with no task array.
 
-After delivery succeeds, `takt_tell_run` and CLI `/tell` append instructions to the task's source `order.md` and refresh the active run's `context/task/order.md`. Each addition retains its instruction ID and receipt time, so later agents and resumed runs can read it. If persistence fails, a warning is written to standard error; the accepted instruction remains delivered and tell still succeeds.
+After delivery succeeds, `takt_tell_run` and CLI `/tell` append instructions to the task's source `order.md` and refresh the active run's `context/task/order.md`. When persistence succeeds, each addition retains its instruction ID and receipt time so later agents and resumed runs can read it. If persistence fails, a warning is written to standard error; the accepted instruction remains delivered and tell still succeeds.
 
 ## Instant Exec Mode
 

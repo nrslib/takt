@@ -58,7 +58,7 @@ MCP 客户端可以使用 `takt-mcp` stdio server 保存待处理任务、读取
 
 普通 assistant 对话在 provider 支持 MCP 时只接收只读的 task 状态工具。新任务使用 `/go`，向正在运行的 worktree clone 追加指令时使用 `/tell` 选择目标、查看内容并确认，重新排队失败任务时使用 `/requeue` 或 `/retry`。不支持 MCP 的 provider 仍可继续对话，但无法查询 task 状态。
 
-通过 `takt_tell_run` 或 CLI `/tell` 发送的追加指令会在投递成功后连同指令 ID 和接收时间写入任务的源 `order.md`，并反映到正在运行的 run 的 `context/task/order.md`。后续 agent 和恢复后的 run 都可以读取这些指令。保存失败时会向标准错误输出警告，但不会阻止投递，也不会使 tell 失败。
+通过 `takt_tell_run` 或 CLI `/tell` 发送的追加指令会在投递成功后连同指令 ID 和接收时间写入任务的源 `order.md`，并反映到正在运行的 run 的 `context/task/order.md`。保存成功时，后续 agent 和恢复后的 run 都可以读取这些指令。保存失败时会向标准错误输出警告，但不会阻止投递，也不会使 tell 失败。
 
 ## 任务目录格式
 
