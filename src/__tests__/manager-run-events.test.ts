@@ -54,7 +54,7 @@ it('passes the event goal identity, repository and constraints separately from c
   try {
     expect(await manager.processPending(signal, 1)).toBe(true);
     expect(doubles.turn).toHaveBeenCalledWith(expect.objectContaining({
-      abortSignal: signal,
+      abortSignal: expect.any(AbortSignal),
       goal: { id: goal.id, repositoryDirectory: '/project', constraints: goal.constraints },
     }));
     expect(JSON.parse(doubles.turn.mock.calls[0]![0].text).event.taskName).toBe('task-a');
@@ -77,7 +77,7 @@ it('transfers user MCP servers to connection setup and the merged servers to pre
     await expect(manager.processPending(signal, 10)).resolves.toBe(true);
     expect(doubles.connect).toHaveBeenCalledExactlyOnceWith('/project', undefined, userServers);
     expect(doubles.preflight).toHaveBeenCalledExactlyOnceWith({
-      cwd: '/project', abortSignal: signal, model: undefined, providerOptions,
+      cwd: '/project', abortSignal: expect.any(AbortSignal), model: undefined, providerOptions,
       permissionMode: 'full', mcpServers: servers, outputSchema: { type: 'object' },
     });
     expect(doubles.createSession).toHaveBeenCalledWith(expect.objectContaining({
@@ -329,4 +329,155 @@ it('does not let paused events consume the processing limit for active goals', a
   expect(doubles.turn.mock.calls[0]![0].text).toContain('active');
   expect(inbox).toHaveLength(1);
   await manager.close();
+});
+
+it.each(['preflight', 'turn'] as const)('retains a timed-out event during %s, skips ordinary polls and retries it on patrol', async (stage) => {
+  vi.useFakeTimers(); vi.setSystemTime('2026-10-14T01:00:00Z');
+  const event = saved('task-a'); inbox = [event];
+  let finish!: () => void;
+  let turnSignal!: AbortSignal;
+  doubles[stage].mockImplementationOnce(({ abortSignal }: { abortSignal: AbortSignal }) => new Promise((resolve) => {
+    turnSignal = abortSignal;
+    finish = () => resolve({ kind: 'error', message: 'provider interrupted' });
+  }));
+  const manager = createRunEventManager('/project');
+  const signal = new AbortController().signal;
+  let settled = false;
+  const processing = manager.processPending(signal, 10).then((handled) => { settled = true; return handled; });
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(turnSignal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(30 * 60 * 1000 - 1);
+    expect(turnSignal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(turnSignal.aborted).toBe(true);
+    expect(signal.aborted).toBe(false);
+    expect(settled).toBe(false);
+    expect(doubles.notify).not.toHaveBeenCalled();
+    expect(inbox).toEqual([event]);
+    finish();
+    expect(await processing).toBe(false);
+    expect(doubles.notify).toHaveBeenCalledExactlyOnceWith('/project', goal.id, expect.objectContaining({
+      message: expect.stringMatching(/timed out/i),
+    }));
+    expect(vi.getTimerCount()).toBe(0);
+    const attempts = doubles[stage].mock.calls.length;
+    await manager.processPending(signal, 10);
+    expect(doubles[stage]).toHaveBeenCalledTimes(attempts);
+    inbox.push(patrol());
+    expect(await manager.processPending(signal, 10)).toBe(true);
+    expect(inbox).toEqual([]);
+    expect(goal.workLog.map((record) => record.kind)).toEqual([undefined, 'patrol']);
+    expect(doubles.notify).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    finish(); await processing; await manager.close();
+  }
+});
+
+it.each(['preflight', 'turn'] as const)('notifies a timed-out patrol during %s and waits for the next patrol interval', async (stage) => {
+  vi.useFakeTimers(); vi.setSystemTime('2026-10-14T01:00:00Z');
+  inbox = [patrol()];
+  doubles[stage].mockImplementationOnce(({ abortSignal }: { abortSignal: AbortSignal }) => new Promise((_resolve, reject) => {
+    abortSignal.addEventListener('abort', () => reject(new Error('provider interrupted')), { once: true });
+  }));
+  const manager = createRunEventManager('/project');
+  const signal = new AbortController().signal;
+  try {
+    const processing = manager.processPending(signal, 10);
+    await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+    expect(await processing).toBe(true);
+    expect(inbox).toEqual([]);
+    expect(goal.lastPatrolCompletedAt).toBe('2026-10-14T01:30:00.000Z');
+    expect(goal.workLog).toEqual([]);
+    expect(doubles.notify).toHaveBeenCalledExactlyOnceWith('/project', goal.id, expect.objectContaining({
+      message: expect.stringMatching(/timed out/i),
+    }));
+    const attempts = doubles[stage].mock.calls.length;
+    inbox.push(patrol());
+    await manager.processPending(signal, 10);
+    expect(doubles[stage]).toHaveBeenCalledTimes(attempts);
+    await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+    inbox.push(patrol());
+    await manager.processPending(signal, 10);
+    expect(inbox).toEqual([]);
+    expect(doubles.turn).toHaveBeenLastCalledWith(expect.objectContaining({ abortSignal: expect.any(AbortSignal) }));
+    expect(goal.workLog).toEqual([expect.objectContaining({ kind: 'patrol' })]);
+    expect(doubles.notify).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { await manager.close(); }
+});
+
+it.each([
+  ['completion', 'preflight'], ['completion', 'turn'], ['patrol', 'preflight'], ['patrol', 'turn'],
+] as const)('retains a stopped %s event during %s without reporting a timeout or marking it failed', async (kind, stage) => {
+  vi.useFakeTimers(); vi.setSystemTime('2026-10-14T01:00:00Z');
+  const event = kind === 'patrol' ? patrol() : saved('task-a'); inbox = [event];
+  let turnSignal!: AbortSignal;
+  doubles[stage].mockImplementationOnce(({ abortSignal }: { abortSignal: AbortSignal }) => new Promise((_resolve, reject) => {
+    turnSignal = abortSignal;
+    abortSignal.addEventListener('abort', () => reject(new Error('provider stopped')), { once: true });
+  }));
+  const manager = createRunEventManager('/project');
+  const controller = new AbortController();
+  try {
+    const processing = manager.processPending(controller.signal, 10);
+    await vi.advanceTimersByTimeAsync(0);
+    controller.abort();
+    expect(turnSignal.aborted).toBe(true);
+    expect(await processing).toBe(false);
+    expect(inbox).toEqual([event]);
+    expect(goal.lastPatrolCompletedAt).toBeUndefined();
+    expect(doubles.notify).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+    // A stop must not exclude an ordinary event from subsequent polling.
+    expect(await manager.processPending(new AbortController().signal, 10)).toBe(true);
+    expect(inbox).toEqual([]);
+    await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+    expect(doubles.notify).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { await manager.close(); }
+});
+
+it('shares the timeout across preflight and the message, then gives the next event a fresh deadline', async () => {
+  vi.useFakeTimers(); vi.setSystemTime('2026-10-14T01:00:00Z');
+  const first = saved('task-a'); const second = saved('task-b'); inbox = [first, second];
+  let finishPreflight!: () => void;
+  let preflightSignal!: AbortSignal;
+  doubles.preflight.mockImplementationOnce(({ abortSignal }: { abortSignal: AbortSignal }) => new Promise<void>((resolve) => {
+    preflightSignal = abortSignal;
+    finishPreflight = resolve;
+  }));
+  const signals: AbortSignal[] = [];
+  const finishes: Array<() => void> = [];
+  doubles.turn.mockImplementation(({ abortSignal }: { abortSignal: AbortSignal }) => new Promise((resolve) => {
+    signals.push(abortSignal);
+    finishes.push(() => resolve({ kind: 'reply', message: '処理完了' }));
+  }));
+  const manager = createRunEventManager('/project');
+  const processing = manager.processPending(new AbortController().signal, 2);
+  try {
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+    finishPreflight();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(signals[0]).toBe(preflightSignal);
+    await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
+    expect(signals[0]!.aborted).toBe(true);
+    finishes[0]!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(signals).toHaveLength(2);
+    expect(signals[1]!.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(30 * 60 * 1000 - 1);
+    expect(signals[1]!.aborted).toBe(false);
+    finishes[1]!();
+    expect(await processing).toBe(true);
+    expect(inbox).toEqual([first]);
+    expect(goal.workLog).toEqual([expect.objectContaining({ summary: '処理完了' })]);
+    expect(doubles.notify).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    finishPreflight();
+    for (const finish of finishes) finish();
+    await processing; await manager.close();
+  }
 });
