@@ -1,5 +1,7 @@
 import { EventEmitter } from 'node:events';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockSpawn, debugSpy } = vi.hoisted(() => ({
@@ -133,6 +135,18 @@ function exportWithSession(sessionId: string): string {
   return JSON.stringify({ schema_version: 'ATIF-v1.7', session_id: sessionId, steps: [] });
 }
 
+function exportWithUsage(sessionId: string, steps: unknown[]): string {
+  return JSON.stringify({ schema_version: 'ATIF-v1.7', session_id: sessionId, steps });
+}
+
+function userStep(stepId: number): Record<string, unknown> {
+  return { step_id: stepId, source: 'user' };
+}
+
+function agentStep(stepId: number, metrics: Record<string, number>): Record<string, unknown> {
+  return { step_id: stepId, source: 'agent', metrics };
+}
+
 function mockSpawnWithScenario(scenario: SpawnScenario): void {
   mockSpawn.mockImplementation((...call: unknown[]) => {
     recordInvocation(call);
@@ -169,13 +183,32 @@ function mainSpawnCall(): [string, string[], { cwd?: string; env?: NodeJS.Proces
 }
 
 describe('callDevin', () => {
+  let xdgConfigHome: string;
+  const tmpDirs: string[] = [];
+
+  function writeUserConfig(content: string): void {
+    const dir = join(xdgConfigHome, 'devin');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'config.json'), content, 'utf-8');
+  }
+
+  function generatedConfig(): Record<string, unknown> {
+    return JSON.parse(spawnFiles.get('config') ?? '{}') as Record<string, unknown>;
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
     spawnFiles.clear();
+    xdgConfigHome = mkdtempSync(join(tmpdir(), 'takt-devin-test-'));
+    tmpDirs.push(xdgConfigHome);
+    process.env.XDG_CONFIG_HOME = xdgConfigHome;
   });
 
   afterEach(() => {
     restoreEnv();
+    for (const dir of tmpDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('Given full permission and a session, When called, Then invokes devin print mode with dangerous mode and resume', async () => {
@@ -217,7 +250,7 @@ describe('callDevin', () => {
     const [, args] = mainSpawnCall();
     expect(args).toEqual(expect.arrayContaining(['--permission-mode', 'accept-edits']));
     expect(args).toContain('--config');
-    const config = JSON.parse(spawnFiles.get('config') ?? '{}') as { permissions?: { allow?: string[] } };
+    const config = generatedConfig() as { permissions?: { allow?: string[] } };
     expect(config.permissions?.allow).toEqual(expect.arrayContaining(['exec', 'edit', 'Write(**)']));
   });
 
@@ -229,7 +262,7 @@ describe('callDevin', () => {
     const [, args] = mainSpawnCall();
     expect(args).toEqual(expect.arrayContaining(['--permission-mode', 'auto']));
     expect(args).toContain('--config');
-    const config = JSON.parse(spawnFiles.get('config') ?? '{}') as { permissions?: { deny?: string[] }; shell?: { setup_complete?: boolean } };
+    const config = generatedConfig() as { permissions?: { deny?: string[] }; shell?: { setup_complete?: boolean } };
     expect(config.permissions?.deny).toEqual(expect.arrayContaining(['exec', 'edit', 'Write(**)', 'mcp__*']));
     expect(config.permissions?.deny).not.toContain('Fetch(**)');
     expect(config.shell?.setup_complete).toBe(true);
@@ -244,18 +277,116 @@ describe('callDevin', () => {
       internalAgentIsolation: 'strict-readonly',
     });
 
-    const config = JSON.parse(spawnFiles.get('config') ?? '{}') as { permissions?: { deny?: string[] } };
+    const config = generatedConfig() as { permissions?: { deny?: string[] } };
     expect(config.permissions?.deny).toContain('Fetch(**)');
   });
 
-  it('Given no permission mode, When called, Then defaults to auto mode without a config override', async () => {
+  it('Given no permission mode, When called, Then defaults to auto mode and still passes the merged user config', async () => {
+    writeUserConfig(JSON.stringify({
+      agent: { model: 'claude-opus-5-5-medium' },
+      permissions: { allow: ['Exec(git)'], deny: ['Exec(sudo)'] },
+    }));
     mockSpawnWithScenario({ stdout: 'done', code: 0 });
 
     await callDevin('coder', 'inspect', { cwd: '/repo' });
 
     const [, args] = mainSpawnCall();
     expect(args).toEqual(expect.arrayContaining(['--permission-mode', 'auto']));
-    expect(args).not.toContain('--config');
+    expect(args).toContain('--config');
+    const config = generatedConfig() as {
+      agent?: { model?: string };
+      permissions?: { allow?: string[]; deny?: string[] };
+    };
+    expect(config.agent?.model).toBe('claude-opus-5-5-medium');
+    expect(config.permissions?.allow).toEqual(['Exec(git)']);
+    expect(config.permissions?.deny).toEqual(['Exec(sudo)']);
+  });
+
+  it('Given full permission, When called, Then the generated config keeps user settings without added rules', async () => {
+    writeUserConfig(JSON.stringify({
+      agent: { model: 'swe-2-max' },
+      permissions: { allow: ['Exec(git)'], ask: ['Write(.env*)'] },
+      theme_mode: 'dark',
+    }));
+    mockSpawnWithScenario({ stdout: 'done', code: 0 });
+
+    await callDevin('coder', 'implement', { cwd: '/repo', permissionMode: 'full' });
+
+    const [, args] = mainSpawnCall();
+    expect(args).toEqual(expect.arrayContaining(['--permission-mode', 'dangerous']));
+    const config = generatedConfig() as {
+      agent?: { model?: string };
+      theme_mode?: string;
+      shell?: { setup_complete?: boolean };
+      permissions?: { allow?: string[]; deny?: string[]; ask?: string[] };
+    };
+    expect(config.agent?.model).toBe('swe-2-max');
+    expect(config.theme_mode).toBe('dark');
+    expect(config.shell?.setup_complete).toBe(true);
+    expect(config.permissions).toEqual({ allow: ['Exec(git)'], ask: ['Write(.env*)'] });
+  });
+
+  it('Given a user config with its own rules, When edit mode runs, Then TAKT allow rules are appended after user rules', async () => {
+    writeUserConfig(JSON.stringify({
+      permissions: { allow: ['Exec(git)'], deny: ['Fetch(domain:evil.example)'] },
+    }));
+    mockSpawnWithScenario({ stdout: 'done', code: 0 });
+
+    await callDevin('coder', 'implement', { cwd: '/repo', permissionMode: 'edit' });
+
+    const config = generatedConfig() as { permissions?: { allow?: string[]; deny?: string[] } };
+    expect(config.permissions?.allow).toEqual(['Exec(git)', 'exec', 'edit', 'Write(**)']);
+    expect(config.permissions?.deny).toEqual(['Fetch(domain:evil.example)']);
+  });
+
+  it('Given a user config with its own deny rules, When readonly mode runs, Then TAKT deny rules are appended after user rules', async () => {
+    writeUserConfig(JSON.stringify({
+      permissions: { deny: ['Exec(sudo)'] },
+    }));
+    mockSpawnWithScenario({ stdout: 'done', code: 0 });
+
+    await callDevin('coder', 'inspect', { cwd: '/repo', permissionMode: 'readonly' });
+
+    const config = generatedConfig() as { permissions?: { deny?: string[] } };
+    expect(config.permissions?.deny).toEqual([
+      'Exec(sudo)', 'exec', 'edit', 'Write(**)', 'mcp__*',
+    ]);
+  });
+
+  it('Given a user config with JSONC comments and trailing commas, When called, Then it is still merged', async () => {
+    writeUserConfig(`{
+      // user's chosen model
+      "agent": { "model": "claude-opus-5-5-medium", },
+      "permissions": {
+        "allow": ["Fetch(https://api.example.com/*)"], // URL keeps its //
+      },
+    }`);
+    mockSpawnWithScenario({ stdout: 'done', code: 0 });
+
+    await callDevin('coder', 'inspect', { cwd: '/repo' });
+
+    const config = generatedConfig() as {
+      agent?: { model?: string };
+      permissions?: { allow?: string[] };
+    };
+    expect(config.agent?.model).toBe('claude-opus-5-5-medium');
+    expect(config.permissions?.allow).toEqual(['Fetch(https://api.example.com/*)']);
+  });
+
+  it('Given an unparseable user config, When called, Then the generated config falls back to defaults', async () => {
+    writeUserConfig('not json at all {{{');
+    mockSpawnWithScenario({ stdout: 'done', code: 0 });
+
+    await callDevin('coder', 'inspect', { cwd: '/repo', permissionMode: 'readonly' });
+
+    const config = generatedConfig() as {
+      version?: number;
+      shell?: { setup_complete?: boolean };
+      permissions?: { deny?: string[] };
+    };
+    expect(config.version).toBe(1);
+    expect(config.shell?.setup_complete).toBe(true);
+    expect(config.permissions?.deny).toEqual(expect.arrayContaining(['exec', 'edit', 'Write(**)', 'mcp__*']));
   });
 
   it('Given system prompt, When called, Then prepends it to the prompt file', async () => {
@@ -498,5 +629,99 @@ describe('callDevin', () => {
     const eventTypes = onStream.mock.calls.map((call) => (call[0] as { type: string }).type);
     expect(eventTypes).toEqual(['text', 'result']);
     expect(onStream).toHaveBeenCalledWith({ type: 'text', data: { text: 'streamed answer' } });
+  });
+
+  it('Given an export with agent metrics, When called, Then reports provider token usage for this turn', async () => {
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+      exportContent: exportWithUsage('keen-otter', [
+        { step_id: 1, source: 'system' },
+        userStep(2),
+        agentStep(3, { prompt_tokens: 100, completion_tokens: 10, cached_tokens: 40 }),
+        agentStep(4, { prompt_tokens: 60, completion_tokens: 5, cached_tokens: 12 }),
+      ]),
+    });
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo' });
+
+    expect(result.status).toBe('done');
+    expect(result.providerUsage).toEqual({
+      inputTokens: 160,
+      outputTokens: 15,
+      totalTokens: 175,
+      cachedInputTokens: 52,
+      usageMissing: false,
+    });
+  });
+
+  it('Given a resumed-session export, When called, Then only steps after the last user step count toward usage', async () => {
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+      exportContent: exportWithUsage('rare-boater', [
+        userStep(1),
+        agentStep(2, { prompt_tokens: 500, completion_tokens: 50, cached_tokens: 100 }),
+        { step_id: 3, source: 'system' },
+        userStep(4),
+        agentStep(5, { prompt_tokens: 30, completion_tokens: 3, cached_tokens: 7 }),
+      ]),
+    });
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo', sessionId: 'rare-boater' });
+
+    expect(result.providerUsage).toEqual({
+      inputTokens: 30,
+      outputTokens: 3,
+      totalTokens: 33,
+      cachedInputTokens: 7,
+      usageMissing: false,
+    });
+  });
+
+  it('Given an agent step without cached tokens, When called, Then cachedInputTokens is omitted', async () => {
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+      exportContent: exportWithUsage('keen-otter', [
+        userStep(1),
+        agentStep(2, { prompt_tokens: 10, completion_tokens: 2 }),
+      ]),
+    });
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo' });
+
+    expect(result.providerUsage).toEqual({
+      inputTokens: 10,
+      outputTokens: 2,
+      totalTokens: 12,
+      usageMissing: false,
+    });
+  });
+
+  it('Given an export without agent metrics, When called, Then providerUsage is marked missing', async () => {
+    mockSpawnWithScenario({ stdout: 'done', code: 0, exportContent: exportWithSession('keen-otter') });
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo' });
+
+    expect(result.status).toBe('done');
+    expect(result.providerUsage).toEqual({ usageMissing: true, reason: 'usage_tokens_missing' });
+  });
+
+  it('Given a malformed export, When called, Then providerUsage is marked missing', async () => {
+    mockSpawnWithScenario({ stdout: 'done', code: 0, exportContent: 'not json' });
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo' });
+
+    expect(result.providerUsage).toEqual({ usageMissing: true, reason: 'usage_not_available' });
+  });
+
+  it('Given a non-zero exit, When called, Then providerUsage is marked missing', async () => {
+    mockSpawnWithScenario({ stdout: '', stderr: 'boom', code: 2 });
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo' });
+
+    expect(result.status).toBe('error');
+    expect(result.providerUsage).toEqual({ usageMissing: true, reason: 'usage_not_available' });
   });
 });
