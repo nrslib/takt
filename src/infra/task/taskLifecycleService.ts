@@ -21,6 +21,7 @@ import { GoalStore } from '../goals/store.js';
 import { isGoalPaused } from '../goals/state.js';
 import { withGoalExecutionLock } from '../goals/execution-lock.js';
 import type { MergeMethod } from '../../core/models/config-types.js';
+import type { PrExecutionContext } from '../../core/workflow/system/pr-execution-context.js';
 import { getSelfTaskProcessIdentity } from './taskProcessIdentity.js';
 
 export class TaskLifecycleService {
@@ -36,7 +37,7 @@ export class TaskLifecycleService {
     prNumber: number; headBranch: string; baseBranch: string; headSha: string;
     headRepositoryUrl: string; headRepositoryPushUrls: readonly string[];
     workflow: string; method: MergeMethod; worktreePath: string;
-    threatCheckMaxDiffBytes: number; cacciaRequired: boolean;
+    threatCheckMaxDiffBytes: number;
     parentTaskName?: string;
   }): TaskInfo {
     const content = `Evaluate pull request #${input.prNumber} using this workflow. Review the cumulative PR diff and record the outcome on the PR.`;
@@ -66,7 +67,6 @@ export class TaskLifecycleService {
         merge_head_repository_push_urls: input.headRepositoryPushUrls,
         merge_initial_head_sha: input.headSha,
         merge_clone_prepared: false,
-        merge_caccia_required: input.cacciaRequired,
         auto_pr: false, should_publish_branch_to_origin: false,
       });
       const conflict = findActiveTaskTargetConflict(
@@ -99,7 +99,8 @@ export class TaskLifecycleService {
   }
 
   recordPrMergePushedHead(
-    taskName: string, headSha: string, previousRemoteHeadSha: string, skipIfNoCodeRabbitActivity = false,
+    taskName: string, headSha: string, previousRemoteHeadSha: string,
+    source: NonNullable<TaskFileData['merge_push_source']>,
   ): void {
     this.store.update((current) => {
       const index = current.tasks.findIndex((task) => task.name === taskName);
@@ -109,24 +110,25 @@ export class TaskLifecycleService {
       }
       const tasks = [...current.tasks];
       tasks[index] = { ...task, merge_pushed_head_sha: headSha,
-        merge_push_base_head_sha: previousRemoteHeadSha,
-        merge_skip_caccia_if_no_activity: skipIfNoCodeRabbitActivity ? true : undefined,
-        merge_caccia_approved_head_sha: undefined, merge_caccia_skipped_head_sha: undefined };
+        merge_push_base_head_sha: previousRemoteHeadSha, merge_push_source: source };
       return { tasks };
     });
   }
 
-  recordPrMergeCacciaHandoff(taskName: string, headSha: string, outcome: 'reviewed' | 'skipped'): void {
+  recordCacciaPushedHead(taskName: string, headSha: string, context: PrExecutionContext): void {
     this.store.update((current) => {
       const index = current.tasks.findIndex((task) => task.name === taskName);
       const task = current.tasks[index];
-      if (task?.status !== 'running' || task.merge_task !== true || task.merge_pushed_head_sha === undefined) {
-        throw new Error(`Pushed PR merge task not found: ${taskName}`);
+      if (task?.status !== 'running' || task.caccia_execution_source !== 'from_pr'
+        || task.merge_task === true || task.pr_number !== context.prNumber
+        || task.branch !== context.headBranch) {
+        throw new Error(`Matching running from_pr task not found: ${taskName}`);
       }
       const tasks = [...current.tasks];
-      tasks[index] = { ...task,
-        merge_caccia_approved_head_sha: outcome === 'reviewed' ? headSha : undefined,
-        merge_caccia_skipped_head_sha: outcome === 'skipped' ? headSha : undefined };
+      tasks[index] = { ...task, caccia_pushed_head: {
+        headSha, baseBranch: context.baseBranch, headRepositoryUrl: context.headRepositoryUrl,
+        headRepositoryPushUrls: [...context.headRepositoryPushUrls],
+      } };
       return { tasks };
     });
   }

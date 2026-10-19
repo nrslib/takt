@@ -34,9 +34,11 @@ describe('PR clone code effects', () => {
       headRepositoryPushUrls: ['/fork', '/mirror'], baseRepositoryUrl: '/project' });
     expect(result).toMatchObject({ headRepositoryUrl: '/fork', headRepositoryPushUrls: ['/fork', '/mirror'], baseRepositoryUrl: '/project' });
     await result.operations.fetch('base', 'refs/heads/main:refs/remotes/base/main');
+    await result.operations.fetch('origin', 'refs/heads/feature/pr');
     await result.operations.push('HEAD:refs/heads/feature/pr');
     expect(mocks.network.mock.calls.map((call) => call.slice(0, 2))).toEqual([
-      ['/clone', ['fetch', '--force', 'base', 'refs/heads/main:refs/remotes/base/main']],
+      ['/clone', ['fetch', '--force', '/project', 'refs/heads/main:refs/remotes/base/main']],
+      ['/clone', ['fetch', '--force', '/fork', 'refs/heads/feature/pr']],
       ['/clone', ['push', '/fork', 'HEAD:refs/heads/feature/pr']],
       ['/clone', ['push', '/mirror', 'HEAD:refs/heads/feature/pr']],
     ]);
@@ -69,6 +71,49 @@ describe('PR clone code effects', () => {
       headRepositoryPushUrls: ['/fork', '/mirror'], abortSignal: controller.signal });
     mocks.network.mockImplementationOnce(() => { controller.abort(); throw new Error('aborted'); });
     await expect(result.operations.push('HEAD:refs/heads/feature/pr')).rejects.toThrow('aborted');
+    expect(mocks.network).toHaveBeenCalledOnce();
+  });
+
+  it.each([[true, false], [false, true], [true, true], [false, false]])(
+    'Cacciaは個別送信の成功だけを通知しpush全体の失敗を保持する: %j', async (firstSucceeds, secondSucceeds) => {
+      const result = await createCacciaCloneGitOperations({ cwd: '/clone', headRepositoryUrl: '/fork',
+        headRepositoryPushUrls: ['/fork', '/mirror'] });
+      const events: string[] = [];
+      const failures = [new Error('first denied'), new Error('second denied')];
+      mocks.network.mockImplementation(async (_cwd, args) => {
+        const index = args[1] === '/fork' ? 0 : 1;
+        events.push(args[1]);
+        if (![firstSucceeds, secondSucceeds][index]) throw failures[index];
+      });
+      const notified = vi.fn(() => { events.push('notified'); });
+      const push = result.operations.push('HEAD:refs/heads/feature/pr', notified);
+      if (firstSucceeds && secondSucceeds) await expect(push).resolves.toBeUndefined();
+      else await expect(push).rejects.toBe(failures[firstSucceeds ? 1 : 0]);
+      expect(events).toEqual(['/fork', ...(firstSucceeds ? ['notified'] : []),
+        '/mirror', ...(secondSucceeds ? ['notified'] : [])]);
+      expect(notified).toHaveBeenCalledTimes(Number(firstSucceeds) + Number(secondSucceeds));
+    },
+  );
+
+  it.each([false, true])('Cacciaの通知例外は先行push失敗=%sでも即座に伝播する', async (firstFails) => {
+    const result = await createCacciaCloneGitOperations({ cwd: '/clone', headRepositoryUrl: '/fork',
+      headRepositoryPushUrls: ['/fork', '/mirror', '/third'] });
+    if (firstFails) mocks.network.mockRejectedValueOnce(new Error('push denied'));
+    const failure = new Error('storage failed');
+    const notified = vi.fn(() => { throw failure; });
+    await expect(result.operations.push('HEAD:refs/heads/feature/pr', notified)).rejects.toBe(failure);
+    expect(mocks.network).toHaveBeenCalledTimes(firstFails ? 2 : 1);
+    expect(notified).toHaveBeenCalledOnce();
+  });
+
+  it('Cacciaは成功を記録してからabortし後続送信を止める', async () => {
+    const controller = new AbortController();
+    const result = await createCacciaCloneGitOperations({ cwd: '/clone', headRepositoryUrl: '/fork',
+      headRepositoryPushUrls: ['/fork', '/mirror'], abortSignal: controller.signal });
+    const aborted = new Error('aborted after push');
+    const notified = vi.fn(() => { controller.abort(aborted); });
+    await expect(result.operations.push('HEAD:refs/heads/feature/pr', notified)).rejects.toBe(aborted);
+    expect(notified).toHaveBeenCalledOnce();
     expect(mocks.network).toHaveBeenCalledOnce();
   });
   it('異なるPRやrootでの修正を拒否しcommitとpushを行わない', async () => {

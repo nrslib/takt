@@ -24,6 +24,7 @@ const {
   mockRecordPrMergePushedHead,
   mockFetchPrDetails,
   mockPushPrMergeHead,
+  mockCommentOnPr,
 } = vi.hoisted(() => ({
   mockExistsSync: vi.fn(() => true),
   mockConfirmWithCancel: vi.fn(),
@@ -47,11 +48,12 @@ const {
   mockRecordPrMergePushedHead: vi.fn(),
   mockFetchPrDetails: vi.fn(),
   mockPushPrMergeHead: vi.fn(),
+  mockCommentOnPr: vi.fn(),
 }));
 
 vi.mock('node:fs', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  existsSync: (...args: unknown[]) => mockExistsSync(...args),
+  existsSync: mockExistsSync,
 }));
 
 vi.mock('node:child_process', async (importOriginal) => ({
@@ -106,7 +108,8 @@ vi.mock('../infra/workflow/system/pr-clone-git.js', () => ({
   createPrCloneGitOperations: mockCreatePrCloneGitOperations,
 }));
 
-vi.mock('../features/merge/threat-check.js', () => ({
+vi.mock('../features/merge/threat-check.js', async (original) => ({
+  ...await original<typeof import('../features/merge/threat-check.js')>(),
   checkForkThreats: mockCheckForkThreats,
 }));
 
@@ -151,7 +154,7 @@ const mergeTask: TaskListItem = {
     merge_head_repository_url: 'https://example.test/fork.git',
     merge_head_repository_push_urls: ['https://example.test/fork.git'],
     merge_initial_head_sha: oldHeadSha, merge_clone_prepared: true,
-    merge_threat_check_max_diff_bytes: 1024, merge_caccia_required: false,
+    merge_threat_check_max_diff_bytes: 1024,
   },
 };
 
@@ -220,7 +223,8 @@ describe('createPullRequestForTask', () => {
       headRepositoryUrl: 'https://example.test/fork.git',
       headRepositoryPushUrls: ['https://example.test/fork.git'], sameRepository: true,
     }));
-    mockGetGitProvider.mockReturnValue({ findExistingPr: mockFindExistingPr, fetchPrDetails: mockFetchPrDetails });
+    mockGetGitProvider.mockReturnValue({ findExistingPr: mockFindExistingPr, fetchPrDetails: mockFetchPrDetails,
+      commentOnPr: mockCommentOnPr });
     mockRunGitCommandAbortable.mockImplementation(async (cwd, args) => {
       const gitArgs = args as string[];
       if (cwd === '/project' && gitArgs[0] === 'remote' && gitArgs.length === 1) return { stdout: 'origin\n', stderr: '' };
@@ -332,7 +336,7 @@ describe('createPullRequestForTask', () => {
       baseRepositoryUrl: 'https://example.test/base.git',
     }));
     expect(mockPushPrMergeHead).toHaveBeenCalledWith(`${newHeadSha}:refs/heads/feature/pr-123`);
-    expect(mockRecordPrMergePushedHead).toHaveBeenCalledWith(mergeTask.name, newHeadSha, oldHeadSha);
+    expect(mockRecordPrMergePushedHead).toHaveBeenCalledWith(mergeTask.name, newHeadSha, oldHeadSha, 'manual');
     expect(mockRecordPrMergePushedHead.mock.invocationCallOrder[0])
       .toBeLessThan(mockPushPrMergeHead.mock.invocationCallOrder[0]!);
     expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
@@ -372,7 +376,7 @@ describe('createPullRequestForTask', () => {
     expect(await createPullRequestForTask('/project', task)).toBe(false);
 
     expect(pushedUrls).toEqual(['https://example.test/fork.git']);
-    expect(mockRecordPrMergePushedHead).toHaveBeenCalledWith(task.name, newHeadSha, oldHeadSha);
+    expect(mockRecordPrMergePushedHead).toHaveBeenCalledWith(task.name, newHeadSha, oldHeadSha, 'manual');
     expect(mockFetchPrDetails).toHaveBeenCalledTimes(2);
   });
 
@@ -385,7 +389,7 @@ describe('createPullRequestForTask', () => {
     expect(await createPullRequestForTask('/project', mergeTask)).toBe(false);
 
     expect(mockPushPrMergeHead).toHaveBeenCalledOnce();
-    expect(mockRecordPrMergePushedHead).toHaveBeenCalledWith(mergeTask.name, newHeadSha, oldHeadSha);
+    expect(mockRecordPrMergePushedHead).toHaveBeenCalledWith(mergeTask.name, newHeadSha, oldHeadSha, 'manual');
     expect(mockRecordPrMergePushedHead.mock.invocationCallOrder[0])
       .toBeLessThan(mockPushPrMergeHead.mock.invocationCallOrder[0]!);
     expect(mockFetchPrDetails).toHaveBeenCalledTimes(3);
@@ -442,7 +446,7 @@ describe('createPullRequestForTask', () => {
       headRepositoryUrl: 'https://example.test/fork.git',
       headRepositoryPushUrls: ['https://example.test/fork.git'], sameRepository: false,
     }));
-    mockCheckForkThreats.mockResolvedValue({ passed: false, comment: 'Threat check failed' });
+    mockCheckForkThreats.mockResolvedValue({ passed: false, comment: 'Threat check failed: @org/team\u001b[31m' });
 
     expect(await createPullRequestForTask('/project', mergeTask)).toBe(false);
     expect(mockCheckForkThreats).toHaveBeenCalledWith(expect.objectContaining({
@@ -450,6 +454,8 @@ describe('createPullRequestForTask', () => {
     }));
     expect(mockPushPrMergeHead).not.toHaveBeenCalled();
     expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
+    expect(mockCommentOnPr).not.toHaveBeenCalled();
+    expect(mockError).toHaveBeenCalledWith('Threat check failed: @org/team');
   });
 
   it('fork PRは保存済みheadの公開先へ脅威検査後にpushする', async () => {

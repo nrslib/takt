@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => ({ git: vi.fn(), diff: vi.fn(), agent: vi.fn() })
 vi.mock('node:child_process', () => ({ execFile: mocks.diff }));
 vi.mock('../infra/task/clone-exec.js', () => ({ runGitCommandAbortable: mocks.git }));
 vi.mock('../agents/agent-usecases.js', () => ({ executeAgent: mocks.agent }));
-import { checkForkThreats } from '../features/merge/threat-check.js';
+import { checkForkThreats, toPublicThreatCheckComment } from '../features/merge/threat-check.js';
 
 const options = { cwd: '/clone', projectCwd: '/project', baseRef: 'refs/remotes/base/main', maxDiffBytes: 100 };
 let diff: string;
@@ -81,6 +81,23 @@ describe('Fork threat check', () => {
     const result = await checkForkThreats(options);
     expect(result).toMatchObject({ passed: false, comment: expect.stringContaining('src/auth.ts') });
     if (!result.passed) expect(result.comment).toContain('認証情報を外部へ送信する');
+  });
+
+  it.each(['files', 'reason'] as const)('AI判定の%sのmentionだけを公開時に変換し生本文を保持する', async (field) => {
+    inputs();
+    const files = [field === 'files' ? 'src/@org/team.ts' : 'src/auth.ts'];
+    const reason = field === 'reason' ? '認証情報を@org/teamへ送信する' : '認証情報を外部へ送信する';
+    mocks.agent.mockResolvedValue({ status: 'done', structuredOutput: { suspicious: true, reason, files } });
+    const result = await checkForkThreats(options);
+    expect(result.passed).toBe(false);
+    if (result.passed) throw new Error('Expected rejection');
+    const raw = result.comment;
+    const published = toPublicThreatCheckComment(raw);
+    expect(published).toContain(files[0]!.replaceAll('@', '＠'));
+    expect(published).toContain(reason.replaceAll('@', '＠'));
+    expect(published).not.toContain('@');
+    expect(result.comment).toBe(raw);
+    expect(raw).toContain('@org/team');
   });
 
   it.each([undefined, {}, { suspicious: 'false', reason: 'safe', files: [] },

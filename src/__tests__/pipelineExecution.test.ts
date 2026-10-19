@@ -27,7 +27,8 @@ const mockPublicationCoordinator = {
 };
 const mockCreateLoopAnalysisPublicationCoordinator = vi.fn();
 const mockSettleLoopAnalysisPublication = vi.fn();
-const mockRunLinkedCacciaSafely = vi.fn();
+const mockRunCaccia = vi.fn();
+const mockRunLinkedMergeSafely = vi.fn();
 
 function createDeferred() {
   let resolve!: () => void;
@@ -36,7 +37,11 @@ function createDeferred() {
 }
 
 vi.mock('../features/caccia/index.js', () => ({
-  runLinkedCacciaSafely: (...args: unknown[]) => Reflect.apply(mockRunLinkedCacciaSafely, undefined, args),
+  runCaccia: (...args: unknown[]) => Reflect.apply(mockRunCaccia, undefined, args),
+}));
+
+vi.mock('../features/merge/index.js', () => ({
+  runLinkedMergeSafely: (...args: unknown[]) => Reflect.apply(mockRunLinkedMergeSafely, undefined, args),
 }));
 
 vi.mock('../features/tasks/execute/loopAnalysisPublication.js', () => ({
@@ -153,7 +158,8 @@ describe('executePipeline', () => {
     mockResolveConfigValues.mockReturnValue({ pipeline: undefined });
     mockResolveConfigValue.mockReturnValue(undefined);
     mockCreateLoopAnalysisPublicationCoordinator.mockReturnValue(mockPublicationCoordinator);
-    mockRunLinkedCacciaSafely.mockReset();
+    mockRunCaccia.mockReset();
+    mockRunLinkedMergeSafely.mockReset();
   });
 
   it('should return exit code 2 when neither --issue nor --task is specified', async () => {
@@ -392,7 +398,7 @@ describe('executePipeline', () => {
     });
 
     expect(exitCode).toBe(5);
-    expect(mockRunLinkedCacciaSafely).not.toHaveBeenCalled();
+    expect(mockRunCaccia).not.toHaveBeenCalled();
     expect(mockSettleLoopAnalysisPublication).toHaveBeenCalledWith(mockPublicationCoordinator);
   });
 
@@ -1362,12 +1368,13 @@ describe('executePipeline', () => {
         cwd: '/tmp/test',
       });
 
-      expect(mockRunLinkedCacciaSafely).toHaveBeenCalledWith(
+      expect(mockRunLinkedMergeSafely).toHaveBeenCalledWith(
         '/tmp/test',
         'https://github.com/test/pr/99',
         undefined,
         expect.objectContaining({ outputMode: 'terminal' }),
       );
+      expect(mockRunCaccia).not.toHaveBeenCalled();
 
       expect(mockBuildSlackRunSummary).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1380,13 +1387,13 @@ describe('executePipeline', () => {
   });
 
   describe('--pr pipeline', () => {
-    it.each(['terminal', 'silent'] as const)('inherits the %s parent display and waits for linked Caccia before reporting success', async (outputMode) => {
+    it.each(['terminal', 'silent'] as const)('inherits the %s parent display and waits for linked merge before reporting success', async (outputMode) => {
       mockExecuteTask.mockResolvedValueOnce(true);
       const url = 'https://github.com/org/repo/pull/42';
       mockCreatePullRequest.mockReturnValueOnce({ success: true, url });
       const completion = createDeferred();
       const started = createDeferred();
-      mockRunLinkedCacciaSafely.mockImplementationOnce(() => {
+      mockRunLinkedMergeSafely.mockImplementationOnce(() => {
         started.resolve();
         return completion.promise;
       });
@@ -1399,7 +1406,8 @@ describe('executePipeline', () => {
         expect(completed).toBe(false);
         expect(mockStatus).not.toHaveBeenCalledWith('Result', 'Success', 'green');
         expect(mockExecuteTask).toHaveBeenCalledWith(expect.objectContaining(display));
-        expect(mockRunLinkedCacciaSafely).toHaveBeenCalledWith('/tmp/test', url, undefined, expect.objectContaining(display));
+        expect(mockRunLinkedMergeSafely).toHaveBeenCalledWith('/tmp/test', url, undefined, expect.objectContaining(display));
+        expect(mockRunCaccia).not.toHaveBeenCalled();
         expect(mockSettleLoopAnalysisPublication).not.toHaveBeenCalled();
       } finally { completion.resolve(); await pending; }
       expect(await pending).toBe(0);

@@ -790,7 +790,7 @@ system step は TAKT エンジン自身が実行する step で、agent は起�
         next: plan_from_existing_pr
 ```
 
-`effects` はエンジン側のアクションを実行します: `enqueue_task`、`comment_pr`、`sync_with_root`、`resolve_conflicts_with_ai`、`merge_pr`、`close_pr`。各 effect type は 1 step につき最大 1 回しか書けず、結果は `when(effect.<step>.<type>.<field>)` でルーティングします。
+`effects` はエンジン側のアクションを実行します: `commit_and_push`、`caccia`、`enqueue_task`、`comment_pr`、`sync_with_root`、`resolve_conflicts_with_ai`、`merge_pr`、`close_pr`。各 effect type は 1 step につき最大 1 回しか書けず、結果は `when(effect.<step>.<type>.<field>)` でルーティングします。
 
 ```yaml
   - name: prepare_merge
@@ -1193,6 +1193,33 @@ PR 状態の取得は1回あたり15秒で期限切れになります。`wait` �
 
 fork の脅威検査は merge コマンドが本体 workflow の前に実行します。番号指定と自動起動でも検査し、同一リポジトリの PR では省略します。機械的検出、AI の疑わしい判定、差分上限超過や未判定は理由を PR にコメントして本体を開始しません。Git の取得・push と provider のツールは通常の設定を使用します。
 
-`merge-review` は `review` を実行し、CI の結果と評価を PR にコメントします。`merge-review-fix` は同期と競合解決の後に `review-fix` を実行し、修正の push、CI とレビュー状態の確認、マージへ進みます。レビューや CI が失敗した場合は理由をコメントして停止します。
+`merge-review` は `review` と Caccia 効果を実行し、CI の結果と評価を PR にコメントします。`merge-review-fix` は同期と競合解決の後に `review-fix` を実行し、修正の push、Caccia 効果、CI とレビュー状態の確認、マージへ進みます。レビューや CI が失敗した場合は理由をコメントして停止します。
 
-`takt merge` の既定である `merge-review-fix-simple` は、PR と土台ブランチを同期し、必要なら競合を解消してから `review-fix-simple` を実行します。情報収集後は1体の読み取り専用レビュアーが変更に応じたファセットで確認します。指摘は別ステップで裁定し、修正計画・修正・完了検証を経て再レビューします。要件の最終確認が完了したら修正を push し、その head の CI と GitHub のレビュー・マージ可能状態を確認してマージします。子 workflow の失敗や CI の失敗ではマージせず、結果を PR にコメントします。並列の専門レビューを使う場合は `merge-review-fix` を選べます。
+`takt merge` の既定である `merge-review-fix-simple` は、PR と土台ブランチを同期し、必要なら競合を解消してから `review-fix-simple` を実行します。情報収集後は1体の読み取り専用レビュアーが変更に応じたファセットで確認します。指摘は別ステップで裁定し、修正計画・修正・完了検証を経て再レビューします。要件の最終確認が完了したら修正を push し、Caccia 効果が返す head の CI と GitHub のレビュー・マージ可能状態を確認してマージします。子 workflow の失敗や CI の失敗ではマージせず、結果を PR にコメントします。並列の専門レビューを使う場合は `merge-review-fix` を選べます。
+
+### Caccia システム効果
+
+この効果は `takt merge` または `enqueue_task mode: from_pr` のタスクが持つ、対象 PR と一致した隔離クローンの実行文脈を必要とします。`pr` は正の整数または完全なテンプレート参照です。通常文字列に埋め込んだ参照は受理しません。既存の `caccia.enabled`、`wait_timeout_ms`、`max_iterations`、`workflow` を読みます。無効・未設定なら待たずに終了します。単独の `takt caccia <PR>` は `enabled` に関係なく利用できます。
+
+```yaml
+  - name: caccia
+    mode: system
+    effects:
+      - type: caccia
+        pr: "{context:identify.pr.number}"
+    rules:
+      - condition: when(effect.caccia.caccia.success == false)
+        next: error_comment
+      - condition: when(effect.caccia.caccia.outcome == "limit")
+        next: limit_comment
+      - condition: when(true)
+        next: wait_ci
+```
+
+正常結果は `success: true`、`failed: false` と `outcome`（`success` / `skipped` / `limit`）、`headSha`、`unresolvedCount`、`skipReason`、`reason` を含みます。該当しない理由は `null` です。条件では `effect.<step>.caccia.*`、テンプレートでは `{effect:<step>.caccia.<field>}` から参照します。`skipReason` は `config_disabled`、`github_unavailable`、`initial_review_unavailable`、`review_rate_limited`、`review_skipped` です。失敗は `success: false`、`failed: true`、`error` を返し、head は保証しません。正常結果のフィールドを読む前に失敗を判定してください。
+
+修正の push 後は SHA を照合して同じクローンを fast-forward します。CI 待ちは PR status の head と `effect.caccia.caccia.headSha` を照合し、マージは現在のクローン HEAD を expected SHA として使います。過去の push 効果の結果は履歴として保持します。
+
+GitLab でも MR の詳細と CI 状態を取得し、`github_unavailable` の `skipped` 後に返された head の CI を待ちます。マージ方式の指定と head 一致制約は未対応なので、これらを渡す `merge_pr` は失敗します。
+
+マージ用ビルトインは Caccia を明示的に実行します。`merge-review` は `review → caccia → wait_ci → 評価コメント`、`merge-review-fix` と `merge-review-fix-simple` は `review/fix → commit_and_push → caccia → wait_ci → merge_pr` の順です。`success` と `skipped` は返された head の CI 待ちへ進みます。`limit` は未解決件数をコメントして COMPLETE で終了し、マージしません。効果の失敗は `error` をコメントして ABORT で終了します。push、タスク後処理、Pipeline からの暗黙の Caccia は廃止しました。`merge.auto_start: true` では PR 公開後にマージ用 workflow が起動し、その明示効果が Caccia を実行します。

@@ -94,7 +94,7 @@ type RawProviderOptions = {
     request_timeout_ms?: number;
     shutdown_timeout_ms?: number;
     reasoning_effort?: DeepSeekReasoningEffort;
-    plugins?: Array<{ id: string; source: string; ref?: string; config?: Record<string, unknown> }>;
+    plugins?: DeepSeekHarnessProviderOptions['plugins'];
   };
   pi?: {
     guards?: RawProviderGuardOptions;
@@ -472,7 +472,9 @@ export function normalizeProviderOptions(
         ? { reasoningEffort: options.deepseek_harness.reasoning_effort }
         : {}),
       ...(options.deepseek_harness.plugins !== undefined
-        ? { plugins: options.deepseek_harness.plugins.map((plugin) => ({ ...plugin })) }
+        ? { plugins: options.deepseek_harness.plugins.map((plugin) => (
+            typeof plugin === 'string' ? plugin : { ...plugin }
+          )) }
         : {}),
     };
     if (Object.keys(deepseekHarness).length > 0) {
@@ -1399,7 +1401,9 @@ export function resolveEffectiveProviderOptions(
               ? { reasoningEffort: deepseekHarnessReasoningEffort }
               : {}),
             ...(deepseekHarnessPlugins !== undefined
-              ? { plugins: deepseekHarnessPlugins.map((plugin) => ({ ...plugin })) }
+              ? { plugins: deepseekHarnessPlugins.map((plugin) => (
+                  typeof plugin === 'string' ? plugin : { ...plugin }
+                )) }
               : {}),
           },
         }
@@ -1512,7 +1516,11 @@ function stripClaudeAllowedTools(
           ...providerOptions.deepseekHarness,
           ...(providerOptions.deepseekHarness.plugins === undefined
             ? {}
-            : { plugins: providerOptions.deepseekHarness.plugins.map((plugin) => ({ ...plugin })) }),
+            : {
+                plugins: providerOptions.deepseekHarness.plugins.map((plugin) => (
+                  typeof plugin === 'string' ? plugin : { ...plugin }
+                )),
+              }),
         } }
       : {}),
     ...(providerOptions.pi !== undefined

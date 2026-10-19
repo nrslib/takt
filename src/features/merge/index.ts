@@ -1,7 +1,8 @@
+import { resolveMergeSettings } from './settings.js';
 import { existsSync, lstatSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import type { MergeConfig, MergeSettings } from '../../core/models/config-types.js';
+import type { MergeSettings } from '../../core/models/config-types.js';
 import type { WorkflowPrListWhere } from '../../core/models/workflow-system-input-types.js';
 import { matchesPrWhere } from '../../core/workflow/system/pr-matcher.js';
 import { createPullRequestContext } from '../../core/workflow/pr-context.js';
@@ -11,14 +12,8 @@ import { isWorkflowPath, resolveConfigValue } from '../../infra/config/index.js'
 import { cloneAndIsolateAbortable, runGitCommandAbortable } from '../../infra/task/clone-exec.js';
 import { buildSafeGitEnvironment } from '../../infra/task/git-environment.js';
 import { createPrCloneGitOperations } from '../../infra/workflow/system/pr-clone-git.js';
-import {
-  fetchCodeRabbitCommitActivity,
-  fetchCodeRabbitCommitActivityForCommit,
-  fetchCodeRabbitReviewStatus,
-} from '../../infra/github/pr.js';
 import { assertPrMergeCloneIdentity, assertSavedPrMergeIdentity, resolvePrMergeBaseRepositoryUrl } from './pr-merge-identity.js';
-import { resolveCacciaSettings, runCaccia } from '../caccia/index.js';
-import { checkForkThreats } from './threat-check.js';
+import { checkForkThreats, toPublicThreatCheckComment } from './threat-check.js';
 import { toLocalBranchRef, toPullRequestBaseRef } from '../../shared/utils/gitBranchValidation.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { runWorkflowExecution } from '../tasks/execute/workflowExecutionApi.js';
@@ -31,18 +26,7 @@ import { generateReportDir } from '../../shared/utils/reportDir.js';
 
 const log = createLogger('merge');
 
-export function resolveMergeSettings(config: MergeConfig | undefined): MergeSettings {
-  return {
-    workflow: config?.workflow ?? 'merge-review-fix-simple',
-    method: config?.method ?? 'squash',
-    concurrency: config?.concurrency ?? 2,
-    autoStart: config?.autoStart ?? false,
-    includeDraft: config?.includeDraft ?? false,
-    includeForks: config?.includeForks ?? false,
-    threatCheckMaxDiffBytes: config?.threatCheckMaxDiffBytes ?? 200_000,
-    ...(config?.where === undefined ? {} : { where: config.where }),
-  };
-}
+export { resolveMergeSettings } from './settings.js';
 
 type MergeDisplayOptions = Pick<ExecuteTaskOptions,
   'outputMode' | 'taskPrefix' | 'taskColorIndex' | 'taskDisplayLabel'>;
@@ -86,7 +70,6 @@ export async function executePrWorkflow(request: PrWorkflowRequest): Promise<{ m
   }
   const details = await provider.fetchPrDetails(request.prNumber, request.projectCwd, request.abortSignal);
   if (details.number !== request.prNumber) throw new Error('PR metadata refers to a different PR');
-  const cacciaRequired = resolveCacciaSettings(resolveConfigValue(request.projectCwd, 'caccia')).enabled;
   const cloneBase = resolveCloneBaseDir(request.projectCwd);
   mkdirSync(cloneBase, { recursive: true });
   const worktreePath = createTaskClonePath(cloneBase, new Date().toISOString().replace(/[-:.]/gu, '').slice(0, 13),
@@ -98,7 +81,6 @@ export async function executePrWorkflow(request: PrWorkflowRequest): Promise<{ m
     headRepositoryPushUrls: details.headRepositoryPushUrls,
     workflow: request.workflow, method: request.settings.method, worktreePath,
     threatCheckMaxDiffBytes: request.settings.threatCheckMaxDiffBytes,
-    cacciaRequired,
     parentTaskName: request.parentTaskName,
   });
   return executePersistedPrMergeTask(task, runner, request.projectCwd, request.abortSignal, request.display);
@@ -239,15 +221,24 @@ async function runPrMergeWorkflow(
       { branch: details.headBranch, originUrl: cloneGit.headRepositoryUrl, baseUrl: cloneGit.baseRepositoryUrl },
     );
   }
-  const headSha = (await git(['rev-parse', 'HEAD'])).stdout.trim();
-  const configuredCacciaSettings = resolveCacciaSettings(resolveConfigValue(request.projectCwd, 'caccia'));
-  const cacciaRequired = data.merge_caccia_required === true || configuredCacciaSettings.enabled;
-  const cacciaSettings = { ...configuredCacciaSettings, enabled: cacciaRequired };
-  if (isRetry ? details.headSha !== data.merge_initial_head_sha
-      && details.headSha !== data.merge_push_base_head_sha
-      && details.headSha !== data.merge_pushed_head_sha
-      && (cacciaRequired || details.headSha !== headSha)
-    : headSha !== details.headSha) throw new Error('PR head changed since clone preparation');
+  let headSha = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+  const headMatches = isRetry
+    ? data.merge_push_source === 'caccia'
+      ? details.headSha === data.merge_pushed_head_sha
+      : details.headSha === data.merge_initial_head_sha
+        || details.headSha === data.merge_pushed_head_sha
+        || details.headSha === headSha
+    : headSha === details.headSha;
+  if (!headMatches) throw new Error('PR head changed since clone preparation');
+  if (isRetry && details.headSha === data.merge_pushed_head_sha && headSha !== details.headSha) {
+    await cloneGit.operations.fetch('origin', headRef);
+    if ((await git(['rev-parse', 'FETCH_HEAD'])).stdout.trim() !== details.headSha) {
+      throw new Error('PR head changed during retry synchronization');
+    }
+    await git(['merge', '--ff-only', 'FETCH_HEAD']);
+    headSha = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+    if (headSha !== details.headSha) throw new Error('PR head changed during retry synchronization');
+  }
   if (!isRetry) runner.recordPrMergeClonePrepared(task.name);
   if (!details.sameRepository) {
     const check = await checkForkThreats({
@@ -256,160 +247,11 @@ async function runPrMergeWorkflow(
     });
     request.abortSignal?.throwIfAborted();
     if (!check.passed) {
-      const comment = provider.commentOnPr(request.prNumber, check.comment, request.projectCwd);
+      const comment = provider.commentOnPr(request.prNumber, toPublicThreatCheckComment(check.comment), request.projectCwd);
       if (!comment.success) throw new Error(comment.error);
       return { merged: false };
     }
   }
-  let pushedHeadRequiresCaccia = data.merge_pushed_head_sha !== undefined;
-  let handoffHeadSha = data.merge_caccia_approved_head_sha;
-  let remoteHeadSha = details.headSha;
-  const hasNoCodeRabbitActivity = async (expectedHeadSha: string): Promise<boolean> => {
-    const deadlineAt = Date.now() + cacciaSettings.waitTimeoutMs;
-    const review = await fetchCodeRabbitReviewStatus(
-      request.prNumber, request.projectCwd, deadlineAt, request.abortSignal,
-    );
-    if (review === undefined) return false;
-    if (review.headSha !== expectedHeadSha) {
-      throw new Error('Pull request head changed before the merge workflow push');
-    }
-    if (review.hasUnknownCodeRabbitThreadActivity || review.hasUnknownCodeRabbitPostActivity) return false;
-    if (review.hasCodeRabbitPost || review.hasCodeRabbitReviewActivity
-      || review.hasCodeRabbitThreadReplyActivity || review.reviewedHeadShas.length > 0) {
-      return false;
-    }
-    const activity = await fetchCodeRabbitCommitActivity(
-      request.prNumber, request.projectCwd, review.headSha, deadlineAt, request.abortSignal,
-    );
-    if (activity !== undefined && activity.headSha !== review.headSha) {
-      throw new Error('Pull request head changed while checking CodeRabbit activity');
-    }
-    return activity?.detected === false;
-  };
-  const completeCacciaHandoff = async (
-    pushedHeadSha: string,
-    previousRemoteHeadSha: string | undefined,
-    skipIfNoCodeRabbitActivity: boolean,
-  ): Promise<void> => {
-    let confirmedNoActivity = false;
-    if (skipIfNoCodeRabbitActivity) {
-      if (previousRemoteHeadSha === undefined) {
-        throw new Error('PR merge push base head is required to confirm absent CodeRabbit activity');
-      }
-      const activity = await fetchCodeRabbitCommitActivityForCommit(
-        request.prNumber,
-        request.projectCwd,
-        previousRemoteHeadSha,
-        Date.now() + cacciaSettings.waitTimeoutMs,
-        request.abortSignal,
-      );
-      confirmedNoActivity = activity?.headSha === previousRemoteHeadSha && activity.detected === false;
-      runner.recordPrMergePushedHead(task.name, pushedHeadSha, previousRemoteHeadSha, confirmedNoActivity);
-    }
-    const result = await runCaccia({
-      entry: 'linked', prNumber: request.prNumber, projectCwd: request.projectCwd,
-      settings: cacciaSettings, abortSignal: request.abortSignal,
-      skipIfNoCodeRabbitActivity: confirmedNoActivity,
-      expectedInitialHeadSha: pushedHeadSha, ...request.display,
-      onPushedHead: (cacciaHeadSha) => {
-        runner.recordPrMergePushedHead(task.name, cacciaHeadSha, remoteHeadSha);
-        remoteHeadSha = cacciaHeadSha;
-      },
-    });
-    const skippedForNoActivity = result.outcome === 'skipped'
-      && result.skipReason === 'no_coderabbit_activity' && confirmedNoActivity;
-    const skippedByCodeRabbit = result.outcome === 'skipped'
-      && (result.skipReason === 'review_skipped' || result.skipReason === 'review_rate_limited');
-    if (result.outcome !== 'success' && !skippedForNoActivity && !skippedByCodeRabbit) {
-      throw new Error(`Caccia did not complete for pull request #${request.prNumber}: ${result.reason ?? result.outcome}`);
-    }
-    const latest = await provider.fetchPrDetails!(request.prNumber, request.projectCwd, request.abortSignal);
-    if (latest.number !== details.number || latest.headBranch !== details.headBranch
-      || latest.baseBranch !== details.baseBranch || latest.headRepositoryUrl !== details.headRepositoryUrl
-      || JSON.stringify(latest.headRepositoryPushUrls) !== JSON.stringify(details.headRepositoryPushUrls)) {
-      throw new Error('Pull request identity changed during Caccia execution');
-    }
-    const reviewedOrSkippedHeadSha = result.headSha;
-    if (reviewedOrSkippedHeadSha === undefined || latest.headSha !== reviewedOrSkippedHeadSha) {
-      throw new Error('Pull request head changed after Caccia review');
-    }
-    await cloneGit.operations.fetch('origin', headRef);
-    if ((await git(['rev-parse', 'FETCH_HEAD'])).stdout.trim() !== latest.headSha) {
-      throw new Error('Pull request head changed during Caccia synchronization');
-    }
-    await git(['merge', '--ff-only', 'FETCH_HEAD']);
-    const updatedHeadSha = (await git(['rev-parse', 'HEAD'])).stdout.trim();
-    if (updatedHeadSha !== latest.headSha) {
-      throw new Error('Pull request head changed during Caccia synchronization');
-    }
-    if (!details.sameRepository) {
-      const check = await checkForkThreats({
-        cwd, projectCwd: request.projectCwd, baseRef: prContext.baseDiffRef!,
-        maxDiffBytes: request.settings.threatCheckMaxDiffBytes, abortSignal: request.abortSignal,
-      });
-      if (!check.passed) {
-        const comment = provider.commentOnPr(request.prNumber, check.comment, request.projectCwd);
-        if (!comment.success) throw new Error(comment.error);
-        throw new Error('Fork threat check failed after Caccia changes');
-      }
-    }
-    runner.recordPrMergeCacciaHandoff(
-      task.name, updatedHeadSha, skippedForNoActivity || skippedByCodeRabbit ? 'skipped' : 'reviewed',
-    );
-    handoffHeadSha = updatedHeadSha;
-    remoteHeadSha = updatedHeadSha;
-  };
-  if (cacciaRequired && pushedHeadRequiresCaccia && handoffHeadSha === undefined) {
-    const pendingHeadSha = data.merge_pushed_head_sha!;
-    if (details.headSha === pendingHeadSha && headSha !== pendingHeadSha) {
-      await cloneGit.operations.fetch('origin', headRef);
-      if ((await git(['rev-parse', 'FETCH_HEAD'])).stdout.trim() !== pendingHeadSha) {
-        throw new Error('Pull request head changed during pending Caccia synchronization');
-      }
-      await git(['merge', '--ff-only', 'FETCH_HEAD']);
-      if ((await git(['rev-parse', 'HEAD'])).stdout.trim() !== pendingHeadSha) {
-        throw new Error('Pull request head changed during pending Caccia synchronization');
-      }
-    } else if (details.headSha !== pendingHeadSha) {
-      if (details.headSha !== (data.merge_push_base_head_sha ?? data.merge_initial_head_sha)
-        || headSha !== pendingHeadSha) {
-        throw new Error('Pull request head changed before Caccia retry');
-      }
-      await cloneGit.operations.push(`HEAD:${headRef}`);
-      const latest = await provider.fetchPrDetails(request.prNumber, request.projectCwd, request.abortSignal);
-      if (latest.number !== details.number || latest.headBranch !== details.headBranch
-        || latest.baseBranch !== details.baseBranch || latest.headRepositoryUrl !== details.headRepositoryUrl
-        || JSON.stringify(latest.headRepositoryPushUrls) !== JSON.stringify(details.headRepositoryPushUrls)
-        || latest.headSha !== pendingHeadSha) {
-        throw new Error('Pull request head changed during pending push recovery');
-      }
-      remoteHeadSha = latest.headSha;
-    }
-    await completeCacciaHandoff(
-      data.merge_pushed_head_sha!,
-      data.merge_push_base_head_sha,
-      data.merge_skip_caccia_if_no_activity === true,
-    );
-  }
-  const prGitOperations = cacciaRequired ? {
-    ...cloneGit.operations,
-    push: async (refspec: string): Promise<void> => {
-      const pushedHeadSha = (await git(['rev-parse', 'HEAD'])).stdout.trim();
-      const previousRemoteHeadSha = remoteHeadSha;
-      const skipIfNoCodeRabbitActivity = await hasNoCodeRabbitActivity(remoteHeadSha);
-      runner.recordPrMergePushedHead(task.name, pushedHeadSha, previousRemoteHeadSha, skipIfNoCodeRabbitActivity);
-      pushedHeadRequiresCaccia = true;
-      handoffHeadSha = undefined;
-      await cloneGit.operations.push(refspec);
-      remoteHeadSha = pushedHeadSha;
-      await completeCacciaHandoff(pushedHeadSha, previousRemoteHeadSha, skipIfNoCodeRabbitActivity);
-    },
-    assertMergeAllowed: (headSha: string): void => {
-      if (pushedHeadRequiresCaccia && handoffHeadSha !== headSha) {
-        throw new Error('PR merge is blocked until Caccia completes the pushed head handoff');
-      }
-    },
-  } : cloneGit.operations;
   const result = await runWorkflowExecution({
     ...request.display,
     cwd, projectCwd: request.projectCwd,
@@ -430,11 +272,17 @@ async function runPrMergeWorkflow(
     } }),
     prContext, prExecutionContext: {
       prNumber: request.prNumber, headBranch: details.headBranch, baseBranch: details.baseBranch,
-      headSha: handoffHeadSha ?? headSha,
+      headSha,
       headRepositoryUrl: cloneGit.headRepositoryUrl, headRepositoryPushUrls: cloneGit.headRepositoryPushUrls,
       preserveConflictState: true,
+      threatCheckMaxDiffBytes: request.settings.threatCheckMaxDiffBytes,
     },
-    prGitOperations,
+    prGitOperations: cloneGit.operations,
+    cacciaExecutionSource: 'merge',
+    prMergePushRecorder: {
+      record: (pushedHeadSha, previousRemoteHeadSha) =>
+        runner.recordPrMergePushedHead(task.name, pushedHeadSha, previousRemoteHeadSha, 'caccia'),
+    },
     mergeMethod: request.settings.method, abortSignal: request.abortSignal,
     runPathsDirectory: join(request.projectCwd, '.takt', 'runs'),
     skipWorktreeRuntimeProtection: true,

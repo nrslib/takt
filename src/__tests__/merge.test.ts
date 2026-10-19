@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { executePrWorkflow as executeRealPrWorkflow, runLinkedMergeSafely, runMerge, resolveMergeSettings } from '../features/merge/index.js';
 import type { SystemStepPrListItem } from '../core/workflow/system/system-step-services.js';
-import { GitLabProvider } from '../infra/gitlab/GitLabProvider.js';
 
 const mocks = vi.hoisted(() => ({ provider: vi.fn(), config: vi.fn(), details: vi.fn(), status: vi.fn() }));
 vi.mock('../infra/git/index.js', () => ({ getGitProvider: mocks.provider }));
@@ -71,7 +70,7 @@ describe('Merge target selection and execution', () => {
   });
 
   it('providerが一括取得に未対応なら詳細やworkflowを開始しない', async () => {
-    mocks.provider.mockReturnValue(new GitLabProvider());
+    mocks.provider.mockReturnValue({});
     await expect(runMerge({ projectCwd: '/project', concurrency: 1,
       settings: resolveMergeSettings(undefined) })).rejects.toThrow('does not support bulk');
     expect(executePrWorkflow).not.toHaveBeenCalled();

@@ -108,7 +108,6 @@ describe('tell command and live intervention file store', () => {
       method: 'squash',
       worktreePath: cloneCwd,
       threatCheckMaxDiffBytes: 100_000,
-      cacciaRequired: false,
     });
     runner.recordPrMergeClonePrepared(task.name);
     runner.updateRunningTaskExecution(task.name, { runSlug });

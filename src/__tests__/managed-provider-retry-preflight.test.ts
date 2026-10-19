@@ -78,7 +78,7 @@ describe('managed provider preflight for reused worktrees', () => {
       headRepositoryUrl: 'https://example.test/repo.git',
       headRepositoryPushUrls: ['https://example.test/repo.git'],
       workflow: './.takt/workflows/merge.yaml', method: 'merge', worktreePath: clone,
-      threatCheckMaxDiffBytes: 1000, cacciaRequired: false,
+      threatCheckMaxDiffBytes: 1000,
     });
     runner.forceFailRunningTask(started.name, { step: 'review', error: 'merge failed' });
     const failed = runner.listFailedTasks()[0]!;
