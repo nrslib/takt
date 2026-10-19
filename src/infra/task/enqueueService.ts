@@ -22,6 +22,7 @@ export interface SaveEnqueuedTaskFileOptions extends Record<string, unknown> {
   shouldPublishBranchToOrigin?: boolean;
   prNumber?: number;
   contextPrNumber?: number;
+  cacciaExecutionSource?: 'from_pr';
 }
 
 export interface PreparedTaskSpecDirectory {

@@ -75,6 +75,8 @@ MCP client は `takt-mcp` stdio server を使って、shell command を直接呼
 
 通常の assistant 会話には、MCP 対応 provider の場合だけ読み取り専用の task 状態 tool が渡されます。新しいタスクには `/go`、実行中 worktree clone への追加指示には `/tell` で対象を選び、内容を確認してから送ります。failed タスクの再投入には `/requeue` または `/retry` を使用できます。MCP 非対応 provider でも会話は利用できますが、task 状態の参照はできません。
 
+`takt_tell_run` または CLI の `/tell` で配送が成立した追加指示は、指示 ID・受信時刻とともにタスクの正本 `order.md` に追記され、実行中 run の `context/task/order.md` にも反映されます。保存に成功した場合は、後続の役と再開後の run が同じ追加指示を参照できます。保存に失敗した場合は標準エラーへ警告し、配送や tell の成功は妨げません。
+
 ## タスクディレクトリ形式
 
 TAKT はタスクのメタデータを `.takt/tasks.yaml` に、各タスクの詳細仕様を `.takt/tasks/{slug}/` に保存します。
@@ -241,7 +243,7 @@ takt list
 | **Create PR** | 失敗した run の変更をコミットして push し、プルリクエストを作成 |
 | **Delete** | 失敗したタスクレコードを削除 |
 
-CLI/TUI の assistant と grill-me 会話では `/requeue [補足]` で failed タスクと開始位置を会話から決め、タスク名、要約、workflow、開始位置を表示して Y/n で確認できます。承認後は `order.md` を変えずに `pending` へ戻します。`/retry [補足]` は failed タスクを会話から決め、改訂後の order 全文を表示して **タスクにつむ** または **会話を続ける** を選びます。タスクにつむと旧版をアーカイブして `pending` に戻し、会話を続けると変更せず会話へ戻ります。インラインの補足は対象名ではなく会話による判断を助ける情報です。対象が曖昧な場合や候補がない場合は確認画面を出さず通知します。どちらも対話端末が必要で、workflow をその場で開始しません。persona 会話と Web UI ではコマンド文字列を通常メッセージとして扱います。`takt resume` の直接 run 向け `/retry` は別経路です。
+CLI/TUI の assistant と grill-me 会話では `/requeue [補足]` で failed または exceeded タスクを会話から決めます。補足は会話の最後のユーザー発話として対象タスクと開始位置の両方の判定に渡します。候補名との機械的な照合は行いません。AI が対象を決められない場合や判定に失敗した場合は候補タスクの一覧を表示し、人が選びます。開始位置が決まらない場合も選択可能な位置の一覧から選べます。タスク名、要約、workflow、開始位置を表示して Y/n で確認し、承認後は `order.md` を変えずに `pending` へ戻します。選択や確認を取りやめた場合は変更せず、その旨を会話に残します。再投入した結果もタスク名とともに会話へ残ります。`/retry [補足]` は従来どおり failed タスクを会話から決め、改訂後の order 全文を表示して **タスクにつむ** または **会話を続ける** を選びます。タスクにつむと旧版をアーカイブして `pending` に戻し、会話を続けると変更せず会話へ戻ります。`/retry` で対象や開始位置が曖昧な場合や、どちらのコマンドでも候補がない場合は通知して終了します。どちらも対話端末が必要で、TTY がなければ選択も変更も行いません。workflow をその場で開始しません。persona 会話と Web UI ではコマンド文字列を通常メッセージとして扱います。`takt resume` の直接 run 向け `/retry` は別経路です。
 
 ### Pending タスクの操作
 
@@ -257,6 +259,8 @@ CLI/TUI の assistant と grill-me 会話では `/requeue [補足]` で failed �
 
 ワークツリークローンを持つ実行中タスクを選ぶと、そのタスクを `/tell` の初期対象にした通常の assistant 会話が開きます。会話中に別のタスクを確認したり、新しいタスクを相談したりできます。`/tell` は確定後に対象を再確認し、選択されたタスクだけへ書き込みます。完了、削除、slug 不一致、clone でない run は候補にも書き込み先にもなりません。
 
+`takt merge` で起動したマージタスクや、requeue・retry 後に `takt run` / `takt watch` が実行するマージタスクも、ワークツリークローンを持つ実行中の run なら `/tell` の対象になります。CLI/TUI の会話、`takt list` から開く会話、MCP の `takt_tell_run` は同じ対象解決を使います。マージ run のメタデータと介入は元プロジェクトの `.takt/runs/<slug>/` に保存されます。指示は子 workflow 内も含めて次の agent step で配達され、system step では消費されません。
+
 ### Exceeded タスクの操作
 
 | 操作 | 説明 |
@@ -264,7 +268,7 @@ CLI/TUI の assistant と grill-me 会話では `/requeue [補足]` で failed �
 | **Requeue** | 停止した位置から再開する形でタスクを `pending` に戻す |
 | **Delete** | タスクを完全に削除 |
 
-会話からの `/requeue` は exceeded タスクも対象にできます。添えた発話から、保存された実行の継続または指定ステップ（子 workflow のステップを含む）からの再実行を判定し、その操作と位置を確認してから `pending` に戻します。継続では保存済みの実行情報を保持し、再実行では旧 checkpoint と iteration limit 情報を除去します。指定位置が不明・利用不能なら再投入しません。発話がなければ保存された停止位置を保持します。指示書の改訂や worker の開始は行いません。タスク一覧の **Requeue** は引き続き保存された停止位置を使います。
+会話からの `/requeue` は exceeded タスクも対象にできます。添えた発話から、保存された実行の継続または指定ステップ（子 workflow のステップを含む）からの再実行を判定し、その操作と位置を確認してから `pending` に戻します。継続では保存済みの実行情報を保持し、再実行では旧 checkpoint と iteration limit 情報を除去します。指定位置が不明・利用不能で AI が決められない場合は、利用可能な開始位置を人が選びます。発話がなければ保存された停止位置を保持します。指示書の改訂や worker の開始は行いません。タスク一覧の **Requeue** は引き続き保存された停止位置を使います。
 
 ### PR 失敗タスクの操作
 
@@ -357,13 +361,13 @@ takt list --non-interactive --action delete --status failed pr_failed --format j
 
 ## CodeRabbit レビューループ（`caccia`）
 
-タスク後処理で PR を新規作成または更新した後、TAKT は Caccia レビューループを実行できます。連結経路はデフォルトで無効です。project または global 設定で `caccia.enabled: true` にした場合だけ起動します。Pipeline モードでも `--auto-pr` による PR 作成成功後に同じ連結経路を使います。
+マージ用ビルトインは Caccia を明示的に実行します。`merge-review` は `review → caccia → wait_ci → 評価コメント`、`merge-review-fix` と `merge-review-fix-simple` は `review/fix → commit_and_push → caccia → wait_ci → merge_pr` の順です。`success` と `skipped` は返された head の CI 待ちへ進みます。`limit` は未解決件数をコメントして COMPLETE で終了し、マージしません。効果の失敗は `error` をコメントして ABORT で終了します。push、タスク後処理、Pipeline からの暗黙の Caccia は廃止しました。`merge.auto_start: true` では PR 公開後にマージ用 workflow が起動し、その明示効果が Caccia を実行します。
 
-Caccia は CodeRabbit の投稿を待ち、`coderabbitai` が開始した未解決スレッドだけを処理します。各反復は一時クローンで指定された workflow を実行し、判断レポートを `.takt/runs/` に残します。修正を Push したら、その反復で判断したスレッドだけを Resolve し、Push したコミットへの CodeRabbit のレビューを待ちます。人が開始したスレッドは未解決のまま残します。レビューへの返信は投稿しません。連結 Caccia の結果で完了済みタスクの結果は変わりません。成功と反復上限到達はログに記録し、設定済み通知経路にも送ります。
+Caccia は CodeRabbit の投稿を待ち、`coderabbitai` が開始した未解決スレッドだけを処理します。各反復は一時クローンで指定された workflow を実行し、判断レポートを `.takt/runs/` に残します。修正を Push したら、その反復で判断したスレッドだけを Resolve し、Push したコミットへの CodeRabbit のレビューを待ちます。人が開始したスレッドは未解決のまま残します。レビューへの返信は投稿しません。成功と反復上限到達はログに記録し、設定済み通知経路にも送ります。
 
-`wait_timeout_ms` は初回レビューと Push 後の各レビューの待機期限で、再依頼もこの期限に含みます。レビュー制限通知の再試行時刻が期限より前なら到来時に `@coderabbitai review` コメントで一度だけ依頼し、期限以降なら直ちにスキップします。制限通知を受けた後、レビューが期限までに完了しなければスキップします。制限通知を受けずに期限に達した場合は初回待機をスキップし、Push 後の待機をエラーとして記録します。完了済みタスクの結果は保持され、単独の `takt caccia` はスキップ・エラー時に非ゼロで終了します。
+`wait_timeout_ms` は初回レビューと Push 後の各レビューの待機期限で、再依頼もこの期限に含みます。レビュー制限通知の再試行時刻が期限より前なら到来時に `@coderabbitai review` コメントで一度だけ依頼し、期限以降なら直ちにスキップします。制限通知を受けた後、レビューが期限までに完了しなければスキップします。制限通知を受けずに期限に達した場合は初回待機をスキップし、Push 後の待機をエラーとして記録します。system 効果は失敗を `success: false` と `error` で返します。単独の `takt caccia` はスキップ・エラー時に非ゼロで終了します。
 
-連結実行の進捗、ワークフロー、終了結果、失敗は親タスクの表示モードに従います。並列実行では同じタスク名プレフィックスと色を使い、silent では画面に出力しません。親タスクは Caccia の終了を待ってから完了処理へ進みます。
+効果実行の進捗、ワークフロー、終了結果、失敗は親タスクの表示モードに従います。並列実行では同じタスク名プレフィックスと色を使い、silent では画面に出力しません。workflow は効果の結果を待ってから次のステップへ進みます。
 
 同じ機能は `takt caccia <PR番号>` で単独実行できます。結果と設定は [CLI リファレンス](./cli-reference.ja.md#takt-caccia) と[設定リファレンス](./configuration.ja.md)を参照してください。
 

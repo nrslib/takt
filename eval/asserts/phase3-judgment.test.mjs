@@ -46,7 +46,7 @@ test('rejects missing, fractional, nonnumeric, and out-of-range steps', () => {
 
 test('resolves loop-monitor candidates in each language using the same order as the prompt', () => {
   for (const language of ['ja', 'en']) {
-    const vars = { language, workflow: 'development-remediation-dynamic', loop_monitor_index: 2 };
+    const vars = { language, workflow: 'development-remediation-dynamic', loop_monitor_index: 1 };
     const { candidates: monitorCandidates } = loadPhase3JudgmentRules(vars);
     const expectedLabel = language === 'ja' ? '要件を満たす実現可能な打開手段がない' : 'No feasible path can satisfy the requirements';
     const result = assertJudgment('{"step":4,"reason":"The same failure occurred four times."}', {
@@ -122,8 +122,8 @@ test('reads Claude JSON step, then rule only when step is absent, then productio
     assert.equal(result.reason, reason);
     assert.deepEqual(Object.keys(result.namedScores), ['phase3-follow-input/rule']);
   }
-  const result = assertJudgment('判定: ルール 1\n[FIX-VERIFIER:1]', {
-    vars: { language: 'ja', workflow: 'development-remediation-dynamic', step_name: 'fix-verifier', expected_label: 'verified' },
+  const result = assertJudgment('判定: ルール 1\n[FIX:1]', {
+    vars: { language: 'ja', workflow: 'development-remediation-dynamic', step_name: 'fix', expected_label: '修正完了' },
     provider: claudeProvider,
   });
   assert.equal(result.pass, true);

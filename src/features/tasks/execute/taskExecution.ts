@@ -30,6 +30,7 @@ import {
   persistTaskResult,
 } from './taskResultHandler.js';
 import { runWorkflowExecution } from './workflowExecutionApi.js';
+import { resolveTaskSpecForExecution } from './taskSpecContext.js';
 import {
   createLoopAnalysisPublicationCoordinator,
   settleLoopAnalysisPublication,
@@ -194,7 +195,7 @@ export async function executeTaskAndCompleteWithDetails(
       execCwd,
       workflowIdentifier,
       isWorktree,
-      taskSpec,
+      taskSpec: resolvedTaskSpec,
       reportDirName,
       branch,
       worktreePath,
@@ -229,6 +230,13 @@ export async function executeTaskAndCompleteWithDetails(
       ...(branch ? { branch } : {}),
     });
     taskForPersistence = executionTask;
+    let taskSpec = resolvedTaskSpec;
+    if (taskSpec === undefined && isWorktree) {
+      if (executionTask.taskDir === undefined) {
+        throw new Error(`Clone task is missing task_dir: ${task.name}`);
+      }
+      taskSpec = resolveTaskSpecForExecution(cwd, execCwd, executionTask.taskDir, reportDirName);
+    }
 
     const projectRootCwd = cwd;
     loopAnalysisPublication = autoPr && branch
@@ -268,6 +276,12 @@ export async function executeTaskAndCompleteWithDetails(
         prNumber,
       }),
       ...(prContext ? { prContext } : {}),
+      cacciaExecutionSource: task.data?.caccia_execution_source,
+      cacciaPushedHead: task.data?.caccia_pushed_head,
+      ...(task.data?.caccia_execution_source === 'from_pr' ? { prMergePushRecorder: {
+        record: (headSha, _previousRemoteHeadSha, context) =>
+          taskRunner.recordCacciaPushedHead(task.name, headSha, context),
+      } } : {}),
       ...(loopAnalysisPublication === undefined
         ? {}
         : { loopAnalysisPublication }),

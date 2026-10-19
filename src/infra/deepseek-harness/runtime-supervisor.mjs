@@ -2,8 +2,12 @@
 
 import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
+import { Buffer } from 'node:buffer';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { clearTimeout } from 'node:timers';
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { fileURLToPath, URL } from 'node:url';
 import {
   cleanupDeepSeekRuntimeResources,
   assertDeepSeekRuntimeCreationAllowedLocked,
@@ -40,14 +44,84 @@ try {
   process.exit(70);
 }
 
+let npmPluginEntrypoints = [];
+try {
+  npmPluginEntrypoints = JSON.parse(process.env.TAKT_DSH_NPM_PLUGIN_ENTRYPOINTS ?? '[]');
+  if (!Array.isArray(npmPluginEntrypoints)
+    || npmPluginEntrypoints.some((entrypoint) => typeof entrypoint !== 'string' || !entrypoint.startsWith('file://'))) {
+    process.exit(70);
+  }
+} catch {
+  process.exit(70);
+}
+
 const require = createRequire(join(managedPackageDirectory, 'package.json'));
 const runtimePackage = require('@deepseek-ai/dsh/package.json');
 const runtimeBin = require.resolve(`@deepseek-ai/dsh/${runtimePackage.bin.dsh}`);
 const ownerPath = join(ownerDirectory, `${process.pid}.json`);
 let runtime;
 let terminationPromise;
+let npmPluginLoadFailureObserved = false;
+let runtimeDiagnosticLine = '';
+let resolveRuntimeStderrClosed;
+let runtimeStderrClosedSettled = false;
+const runtimeStderrClosed = new Promise((resolve) => { resolveRuntimeStderrClosed = resolve; });
+const CORDIS_NPM_PLUGIN_LOAD_FAILURE_MARKER = 'TAKT_DSH_CORDIS_NPM_PLUGIN_LOAD_FAILURE';
+const MAX_RUNTIME_DIAGNOSTIC_LINE_LENGTH = 16_384;
+const runtimeDiagnosticToken = randomBytes(32);
+const runtimeDiagnosticObserver = fileURLToPath(new URL('./runtime-diagnostic-observer.mjs', import.meta.url));
+const runtimeBootModule = createRequire(runtimeBin).resolve('@deepseek-ai/dsh-app-boot');
 let resolveOwnerReady;
 const ownerReady = new Promise((resolve) => { resolveOwnerReady = resolve; });
+
+/** Bind diagnostic events to this invocation so child plugins cannot impersonate the observer. */
+function inspectRuntimeDiagnosticLine(line) {
+  let diagnostic;
+  try {
+    diagnostic = JSON.parse(line);
+  } catch {
+    return;
+  }
+  if (typeof diagnostic?.entrypoint !== 'string' || !npmPluginEntrypoints.includes(diagnostic.entrypoint)) return;
+  if (typeof diagnostic.token !== 'string' || diagnostic.token.length !== runtimeDiagnosticToken.length * 2) return;
+  const receivedToken = Buffer.from(diagnostic.token, 'hex');
+  if (receivedToken.length !== runtimeDiagnosticToken.length
+    || !timingSafeEqual(receivedToken, runtimeDiagnosticToken)) return;
+  npmPluginLoadFailureObserved = true;
+  if (runtime?.pid !== undefined) signalProcessGroup(runtime.pid, 'SIGTERM');
+}
+
+/** Consume private observer events while bounding the pending line. */
+function inspectRuntimeDiagnostic(chunk) {
+  const lines = `${runtimeDiagnosticLine}${chunk.toString('utf8')}`.split(/\r?\n/u);
+  runtimeDiagnosticLine = lines.pop() ?? '';
+  if (runtimeDiagnosticLine.length > MAX_RUNTIME_DIAGNOSTIC_LINE_LENGTH) {
+    runtimeDiagnosticLine = runtimeDiagnosticLine.slice(-MAX_RUNTIME_DIAGNOSTIC_LINE_LENGTH);
+  }
+  for (const line of lines) inspectRuntimeDiagnosticLine(line);
+}
+
+/** Let shutdown publish its one fixed safe marker after observer events settle. */
+function settleRuntimeStderr() {
+  if (runtimeStderrClosedSettled) return;
+  runtimeStderrClosedSettled = true;
+  resolveRuntimeStderrClosed();
+}
+
+/** Drain diagnostics briefly, then close pipes that detached descendants may still hold open. */
+async function drainRuntimeStderr() {
+  let timeout;
+  try {
+    await Promise.race([
+      runtimeStderrClosed,
+      new Promise((resolve) => { timeout = setTimeout(resolve, 1_000); }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+    runtime.stderr?.destroy();
+    settleRuntimeStderr();
+  }
+}
 
 /** Atomically publish the supervised runtime PID and optional failed-cleanup marker. */
 async function writeOwner(cleanupFailure = false) {
@@ -176,22 +250,52 @@ try {
   await withDeepSeekRuntimeStateFileLock(stateDirectory, async (lock) => {
     await assertDeepSeekRuntimeCreationAllowedLocked(stateDirectory, ownerDirectory, parentPid, lock);
     try {
-      runtime = spawn(process.execPath, [runtimeBin, ...process.argv.slice(2)], {
+      runtime = spawn(process.execPath, ['--import', runtimeDiagnosticObserver, runtimeBin, ...process.argv.slice(2)], {
         cwd: process.cwd(),
-        env: process.env,
+        env: {
+          ...process.env,
+          TAKT_DSH_RUNTIME_BOOT_MODULE: runtimeBootModule,
+          TAKT_DSH_NPM_PLUGIN_ENTRYPOINTS: JSON.stringify(npmPluginEntrypoints),
+        },
         detached: process.platform !== 'win32',
-        stdio: ['pipe', 'inherit', 'ignore'],
+        stdio: ['pipe', 'inherit', 'pipe', 'pipe', 'pipe'],
       });
+      const observerTokenPipe = runtime.stdio[4];
+      if (observerTokenPipe === null || observerTokenPipe === undefined) {
+        throw new Error('Failed to create the runtime observer token pipe');
+      }
+      if (runtime.stderr === null) {
+        settleRuntimeStderr();
+      } else {
+        runtime.stderr.once('end', settleRuntimeStderr);
+        runtime.stderr.once('error', settleRuntimeStderr);
+        runtime.stderr.once('close', settleRuntimeStderr);
+        runtime.stderr.resume();
+      }
+      runtime.stdio[3]?.on('data', inspectRuntimeDiagnostic);
 
       runtime.once('exit', async (code, signal) => {
         await ownerReady;
         const cleanupConfirmed = await terminateRuntime().catch(() => false);
-        process.exitCode = cleanupConfirmed ? (code ?? (signal ? 1 : 0)) : 1;
+        await drainRuntimeStderr();
+        if (npmPluginLoadFailureObserved) {
+          process.stderr.write(`${CORDIS_NPM_PLUGIN_LOAD_FAILURE_MARKER}\n`);
+          process.exitCode = 1;
+        } else {
+          process.exitCode = cleanupConfirmed ? (code ?? (signal ? 1 : 0)) : 1;
+        }
         process.stdin.destroy();
       });
 
       await new Promise((resolve, reject) => {
-        runtime.once('spawn', resolve);
+        observerTokenPipe.once('error', reject);
+        runtime.once('spawn', () => {
+          try {
+            observerTokenPipe.end(runtimeDiagnosticToken.toString('hex'), resolve);
+          } catch (error) {
+            reject(error);
+          }
+        });
         runtime.once('error', reject);
       });
       await writeOwner();

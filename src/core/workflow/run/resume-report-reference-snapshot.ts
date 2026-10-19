@@ -1,12 +1,20 @@
 import { lstatSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import type {
   WorkflowConfig,
   WorkflowResumePoint,
+  WorkflowResumePointEntry,
+  WorkflowStep,
 } from '../../models/types.js';
+import { getAllParallelSubSteps } from '../../models/types.js';
+import type { WorkflowReportInput } from '../../models/workflow-types.js';
 import { classifyReportRelativePath } from '../../models/reserved-report-names.js';
 import type { WorkflowCallResolver } from '../types.js';
 import { extractReportReferences } from '../instruction/report-reference.js';
+import {
+  createReviewReportDiscoveryContext,
+  resolveWorkflowStepReportNamesWithDiagnostics,
+} from '../review-report-discovery.js';
 import { buildWorkflowCallInvocationIdentity } from '../workflow-call-invocation-index.js';
 import { getResumePointWorkflowReference, getWorkflowReference } from '../workflow-reference.js';
 import { buildRunPaths, buildRunPathsFromRunsDirectory } from './run-paths.js';
@@ -24,6 +32,48 @@ interface BuildResumeReportSnapshotConsumerOptions {
   readonly workflow: WorkflowConfig;
   readonly resumePoint: WorkflowResumePoint;
   readonly workflowCallResolver?: WorkflowCallResolver;
+}
+
+function declaredReportNames(
+  workflow: WorkflowConfig,
+  declaration: WorkflowReportInput | undefined,
+  options: BuildResumeReportSnapshotConsumerOptions,
+  resumeStackPrefix: readonly WorkflowResumePointEntry[],
+): readonly string[] {
+  if (declaration === undefined) return [];
+  if (declaration.reports !== 'all') return declaration.reports;
+  const source = workflow.steps.find((step) => step.name === declaration.fromStep);
+  if (source === undefined) return [];
+  const discovered = resolveWorkflowStepReportNamesWithDiagnostics(source, createReviewReportDiscoveryContext({
+    step: source,
+    workflow,
+    workflowCallResolver: options.workflowCallResolver,
+    projectCwd: options.projectCwd,
+    lookupCwd: options.cwd,
+    resumeStackPrefix,
+    stepOutputNames: new Set(),
+    restoredStepIterationNames: new Set(),
+    workflowCallInvocations: {
+      kind: 'exact',
+      records: new Map(Object.entries(options.resumePoint.workflow_call_invocations)),
+    },
+    workflowStepParticipations: new Map(Object.entries(options.resumePoint.workflow_step_participations)),
+    requireCompletedCalls: true,
+  }));
+  return discovered.failures.length === 0
+    ? [...new Set(discovered.reportNames.map((name) => basename(name)))]
+    : [];
+}
+
+function findWorkflowStep(workflow: WorkflowConfig, name: string): WorkflowStep | undefined {
+  for (const step of workflow.steps) {
+    if (step.name === name) return step;
+    const child = step.parallel === undefined
+      ? undefined
+      : getAllParallelSubSteps(step.parallel).find((candidate) => candidate.name === name);
+    if (child !== undefined) return child;
+  }
+  return undefined;
 }
 
 function namespaceParents(directory: string): string[] {
@@ -67,6 +117,7 @@ function resolveReferencePath(
 function resolveResumeLocation(options: BuildResumeReportSnapshotConsumerOptions): {
   readonly activeStep: WorkflowConfig['steps'][number];
   readonly reportDirectory: string;
+  readonly declaredNames: ReadonlySet<string>;
 } | undefined {
   const stack = options.resumePoint.stack;
   const activeEntry = stack.at(-1);
@@ -75,15 +126,17 @@ function resolveResumeLocation(options: BuildResumeReportSnapshotConsumerOptions
   }
   let workflow = options.workflow;
   const namespace: string[] = [];
+  const declaredNames = new Set<string>();
   for (let index = 0; index < stack.length - 1; index += 1) {
     const entry = stack[index]!;
     if (getResumePointWorkflowReference(entry) !== getWorkflowReference(workflow)) {
       return undefined;
     }
+    const step = findWorkflowStep(workflow, entry.step);
+    for (const name of declaredReportNames(workflow, step?.inputReports, options, stack.slice(0, index))) declaredNames.add(name);
     if (entry.kind !== 'workflow_call') {
       continue;
     }
-    const step = workflow.steps.find((candidate) => candidate.name === entry.step);
     if (step?.kind !== 'workflow_call') {
       return undefined;
     }
@@ -111,10 +164,11 @@ function resolveResumeLocation(options: BuildResumeReportSnapshotConsumerOptions
   if (getResumePointWorkflowReference(activeEntry) !== getWorkflowReference(workflow)) {
     return undefined;
   }
-  const activeStep = workflow.steps.find((step) => step.name === activeEntry.step);
+  const activeStep = findWorkflowStep(workflow, activeEntry.step);
+  for (const name of declaredReportNames(workflow, activeStep?.inputReports, options, stack.slice(0, -1))) declaredNames.add(name);
   return activeStep === undefined
     ? undefined
-    : { activeStep, reportDirectory: namespace.join('/') };
+    : { activeStep, reportDirectory: namespace.join('/'), declaredNames };
 }
 
 export function buildResumeReportSnapshotConsumerEntry(
@@ -142,6 +196,7 @@ export function buildResumeReportSnapshotConsumerEntry(
       if (classification.kind !== 'public') {
         return [];
       }
+      if (location.declaredNames.has(classification.normalizedPath)) return [];
       const path = resolveReferencePath(reportsRoot, reportDirectories, classification.normalizedPath);
       return path === undefined ? [] : [{ reference: classification.normalizedPath, path }];
     });

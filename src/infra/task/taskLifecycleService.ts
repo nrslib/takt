@@ -1,6 +1,7 @@
 import { TaskRecordSchema, type TaskFileData, type TaskRecord, type TaskFailure } from './schema.js';
 import type { TaskInfo, TaskResult } from './types.js';
-import { toTaskInfo } from './mapper.js';
+import { resolveTaskContent, toTaskInfo } from './mapper.js';
+import { cleanupTaskSpecDirectory, prepareTaskSpecDirectory, type PreparedTaskSpecDirectory } from './enqueueService.js';
 import { TaskStore } from './store.js';
 import { firstLine, nowIso } from './naming.js';
 import { slugify } from '../../shared/utils/slug.js';
@@ -21,6 +22,7 @@ import { GoalStore } from '../goals/store.js';
 import type { Goal } from '../goals/schema.js';
 import { isGoalPaused } from '../goals/state.js';
 import type { MergeMethod } from '../../core/models/config-types.js';
+import type { PrExecutionContext } from '../../core/workflow/system/pr-execution-context.js';
 import { getSelfTaskProcessIdentity } from './taskProcessIdentity.js';
 
 export class TaskLifecycleService {
@@ -36,7 +38,7 @@ export class TaskLifecycleService {
     prNumber: number; headBranch: string; baseBranch: string; headSha: string;
     headRepositoryUrl: string; headRepositoryPushUrls: readonly string[];
     workflow: string; method: MergeMethod; worktreePath: string;
-    threatCheckMaxDiffBytes: number; cacciaRequired: boolean;
+    threatCheckMaxDiffBytes: number;
     parentTaskName?: string;
   }): TaskInfo {
     const content = `Evaluate pull request #${input.prNumber} using this workflow. Review the cumulative PR diff and record the outcome on the PR.`;
@@ -66,7 +68,6 @@ export class TaskLifecycleService {
         merge_head_repository_push_urls: input.headRepositoryPushUrls,
         merge_initial_head_sha: input.headSha,
         merge_clone_prepared: false,
-        merge_caccia_required: input.cacciaRequired,
         auto_pr: false, should_publish_branch_to_origin: false,
       });
       const conflict = findActiveTaskTargetConflict(
@@ -99,7 +100,8 @@ export class TaskLifecycleService {
   }
 
   recordPrMergePushedHead(
-    taskName: string, headSha: string, previousRemoteHeadSha: string, skipIfNoCodeRabbitActivity = false,
+    taskName: string, headSha: string, previousRemoteHeadSha: string,
+    source: NonNullable<TaskFileData['merge_push_source']>,
   ): void {
     this.store.update((current) => {
       const index = current.tasks.findIndex((task) => task.name === taskName);
@@ -109,24 +111,25 @@ export class TaskLifecycleService {
       }
       const tasks = [...current.tasks];
       tasks[index] = { ...task, merge_pushed_head_sha: headSha,
-        merge_push_base_head_sha: previousRemoteHeadSha,
-        merge_skip_caccia_if_no_activity: skipIfNoCodeRabbitActivity ? true : undefined,
-        merge_caccia_approved_head_sha: undefined, merge_caccia_skipped_head_sha: undefined };
+        merge_push_base_head_sha: previousRemoteHeadSha, merge_push_source: source };
       return { tasks };
     });
   }
 
-  recordPrMergeCacciaHandoff(taskName: string, headSha: string, outcome: 'reviewed' | 'skipped'): void {
+  recordCacciaPushedHead(taskName: string, headSha: string, context: PrExecutionContext): void {
     this.store.update((current) => {
       const index = current.tasks.findIndex((task) => task.name === taskName);
       const task = current.tasks[index];
-      if (task?.status !== 'running' || task.merge_task !== true || task.merge_pushed_head_sha === undefined) {
-        throw new Error(`Pushed PR merge task not found: ${taskName}`);
+      if (task?.status !== 'running' || task.caccia_execution_source !== 'from_pr'
+        || task.merge_task === true || task.pr_number !== context.prNumber
+        || task.branch !== context.headBranch) {
+        throw new Error(`Matching running from_pr task not found: ${taskName}`);
       }
       const tasks = [...current.tasks];
-      tasks[index] = { ...task,
-        merge_caccia_approved_head_sha: outcome === 'reviewed' ? headSha : undefined,
-        merge_caccia_skipped_head_sha: outcome === 'skipped' ? headSha : undefined };
+      tasks[index] = { ...task, caccia_pushed_head: {
+        headSha, baseBranch: context.baseBranch, headRepositoryUrl: context.headRepositoryUrl,
+        headRepositoryPushUrls: [...context.headRepositoryPushUrls],
+      } };
       return { tasks };
     });
   }
@@ -404,26 +407,44 @@ export class TaskLifecycleService {
     },
   ): TaskInfo {
     let found: TaskRecord | undefined;
+    let preparedSpec: PreparedTaskSpecDirectory | undefined;
+    try {
+      this.store.update((current) => {
+        const index = current.tasks.findIndex((task) => task.name === taskName && task.status === 'running');
+        if (index === -1) {
+          throw new Error(`Running task not found for execution update: ${taskName}`);
+        }
 
-    this.store.update((current) => {
-      const index = current.tasks.findIndex((task) => task.name === taskName && task.status === 'running');
-      if (index === -1) {
-        throw new Error(`Running task not found for execution update: ${taskName}`);
-      }
+        const target = current.tasks[index]!;
+        let summary = target.summary;
+        if (target.task_dir === undefined && (target.merge_task === true
+          || (execution.worktreePath !== undefined && target.worktree !== false))) {
+          const content = resolveTaskContent(this.projectDir, target);
+          preparedSpec = prepareTaskSpecDirectory(this.projectDir, content);
+          summary ??= firstLine(content);
+        }
+        const updated: TaskRecord = {
+          ...target,
+          ...(preparedSpec === undefined ? {} : {
+            content: undefined,
+            content_file: undefined,
+            task_dir: preparedSpec.taskDirRelative,
+            summary,
+          }),
+          run_slug: execution.runSlug,
+          worktree_path: execution.worktreePath ?? target.worktree_path,
+          branch: execution.branch ?? target.branch,
+        };
 
-      const target = current.tasks[index]!;
-      const updated: TaskRecord = {
-        ...target,
-        run_slug: execution.runSlug,
-        worktree_path: execution.worktreePath ?? target.worktree_path,
-        branch: execution.branch ?? target.branch,
-      };
-
-      found = updated;
-      const tasks = [...current.tasks];
-      tasks[index] = updated;
-      return { tasks };
-    });
+        found = updated;
+        const tasks = [...current.tasks];
+        tasks[index] = updated;
+        return { tasks };
+      });
+    } catch (error) {
+      if (preparedSpec !== undefined) cleanupTaskSpecDirectory(preparedSpec.taskDir);
+      throw error;
+    }
 
     return toTaskInfo(this.projectDir, this.tasksFile, found!);
   }

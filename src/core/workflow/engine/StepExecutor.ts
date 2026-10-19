@@ -7,7 +7,7 @@
  */
 
 import { existsSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 import type {
   AgentWorkflowStep,
   WorkflowStep,
@@ -23,7 +23,7 @@ import type {
   ResolvedFacetPool,
   ResolvedFacetContent,
 } from '../../models/types.js';
-import { isNormalOrTeamLeaderWorkflowStep } from '../../models/types.js';
+import { getAllParallelSubSteps, isNormalOrTeamLeaderWorkflowStep } from '../../models/types.js';
 import type {
   PhaseName,
   PhasePromptParts,
@@ -43,7 +43,10 @@ import {
   StructuredAgentResponseError,
 } from '../../../agents/structured-caller/transport.js';
 import { InstructionBuilder } from '../instruction/InstructionBuilder.js';
-import type { InjectedReport, Phase1ReportInputs, PreparedInstruction, ReportReferenceObserver } from '../instruction/prepared-instruction.js';
+import { extractReportReferences } from '../instruction/report-reference.js';
+import { getReportFiles } from '../output-contract-files.js';
+import { classifyReportRelativePath } from '../../models/reserved-report-names.js';
+import type { DeclaredReportInputs, InjectedReport, Phase1ReportInputs, PreparedInstruction, ReportReferenceObserver } from '../instruction/prepared-instruction.js';
 import { Phase1ReportInputTracker } from '../instruction/report-inputs.js';
 import type {
   DynamicFacetSelectionContext,
@@ -189,15 +192,28 @@ export interface StepExecutorDeps {
   readonly getProjectCwd: () => string;
   readonly getReportDir: () => string;
   readonly getRunPaths: () => RunPaths;
+  readonly reportGenerationIndex?: import('../report-generation-index.js').ReportGenerationIndex;
   readonly getFailureDir: () => string;
   readonly getLanguage: () => Language | undefined;
   readonly getInteractive: () => boolean;
-  readonly getWorkflowSteps: () => ReadonlyArray<{ name: string; description?: string }>;
+  readonly getWorkflowSteps: () => ReadonlyArray<{
+    name: string;
+    description?: string;
+    instruction?: string;
+    inputReports?: WorkflowStep['inputReports'];
+    parallel?: WorkflowStep['parallel'];
+  }>;
   readonly getWorkflowName: () => string;
   readonly getTask: () => string;
   readonly getWorkflowDescription: () => string | undefined;
   readonly getWorkflowRules: () => readonly WorkflowWideRule[] | undefined;
   readonly getWorkflowCallVars?: () => Readonly<Record<string, string | number | boolean>> | undefined;
+  readonly resolveDeclaredReportInputs: (
+    step: Pick<WorkflowStep, 'name' | 'inputReports'>,
+    state: WorkflowState,
+    reportDir: string,
+  ) => DeclaredReportInputs | undefined;
+  readonly getInheritedReportInputs: () => DeclaredReportInputs | undefined;
   readonly getRetryNote: () => string | undefined;
   readonly getPrContext?: () => PullRequestContext | undefined;
   /** Changed file set for this task. Recomputed per instruction build (the working tree moves). */
@@ -1379,6 +1395,76 @@ export class StepExecutor {
     return this.prepareInstruction(step, stepIteration, state, task, maxSteps, fallbackContext, transaction).text;
   }
 
+  recordReportGeneration(reportDir: string, reportName: string, written: boolean): void {
+    this.deps.reportGenerationIndex?.record(
+      this.deps.getRunPaths().reportsRootAbs,
+      reportDir,
+      reportName,
+      written,
+    );
+  }
+
+  finalizeReportGeneration(
+    step: WorkflowStep,
+    state: WorkflowState,
+    reportDir: string,
+    writtenReports: ReadonlySet<string>,
+    reportGenerationError?: ReportPhaseGenerationError,
+  ): void {
+    const missingReports = getReportFiles(step.outputContracts)
+      .filter((name) => !writtenReports.has(name));
+    for (const reportName of missingReports) {
+      this.recordReportGeneration(reportDir, reportName, false);
+    }
+    const consumers = missingReports.length === 0 ? [] : this.deps.getWorkflowSteps().flatMap((workflowStep) => [
+      workflowStep,
+      ...(workflowStep.parallel === undefined ? [] : getAllParallelSubSteps(workflowStep.parallel)),
+    ]);
+    const missingRequiredReports = missingReports.filter((name) => consumers.some((consumer) => {
+      const declared = consumer.inputReports;
+      if (declared?.fromStep === step.name
+        && (declared.reports === 'all' || declared.reports.includes(name))) {
+        return true;
+      }
+      if (declared !== undefined && declared.fromStep !== step.name) {
+        if (declared.reports !== 'all' && declared.reports.includes(name)) return false;
+        if (declared.reports === 'all') {
+          try {
+            // An unrun producer reserves its names here; the consumer enforces completion.
+            const ownershipProbe = {
+              ...consumer,
+              inputReports: { ...declared, optionalIfUnrun: true as const },
+            };
+            const declaredNames = this.deps.resolveDeclaredReportInputs(
+              ownershipProbe, state, reportDir,
+            )?.declaredNames ?? [];
+            if (declaredNames.includes(name)) return false;
+          } catch (error) {
+            log.debug('Could not resolve another producer while checking a current report', {
+              step: step.name,
+              consumer: consumer.name,
+              error: getErrorMessage(error),
+            });
+          }
+        }
+      }
+      return extractReportReferences(consumer.instruction).some((reference) => {
+        const classification = classifyReportRelativePath(reference.trim());
+        return classification.kind === 'public' && classification.normalizedPath === name;
+      });
+    }));
+    if (missingRequiredReports.length > 0) {
+      const message = `Step "${step.name}" did not generate required report(s) in the current execution: ${missingRequiredReports.join(', ')}`;
+      if (reportGenerationError !== undefined) {
+        throw createAgentFailureError(
+          reportGenerationError.failureCategory ?? AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+          message,
+        );
+      }
+      throw new Error(message);
+    }
+  }
+
   prepareInstruction(
     step: WorkflowStep,
     stepIteration: number,
@@ -1414,6 +1500,10 @@ export class StepExecutor {
     // read-only フォールバックするための reports ルート。engine の runPaths から
     // 明示的に渡す（リゾルバ側でパス文字列から推測しない）。
     const reportsRootDir = this.deps.getRunPaths().reportsRootAbs;
+    const declaredReportInputs = [
+      this.deps.getInheritedReportInputs(),
+      this.deps.resolveDeclaredReportInputs(step, state, reportDir),
+    ].filter((value): value is DeclaredReportInputs => value !== undefined);
     const resumeReportConsumerKey = buildResumeReportConsumerKeyFromStack(
       this.deps.getCurrentWorkflowStack?.() ?? [],
     );
@@ -1436,6 +1526,15 @@ export class StepExecutor {
       workflowName: this.deps.getWorkflowName(),
       workflowDescription: this.deps.getWorkflowDescription(),
       workflowCallVars: this.deps.getWorkflowCallVars?.(),
+      declaredReportInputs,
+      unavailableLocalReports: this.deps.reportGenerationIndex?.missingNames(reportsRootDir, reportDir),
+      isUnavailableReportPath: this.deps.reportGenerationIndex === undefined
+        ? undefined
+        : (path) => this.deps.reportGenerationIndex!.isMissing(
+            reportsRootDir,
+            dirname(path),
+            basename(path),
+          ),
       retryNote: this.deps.getRetryNote(),
       prContext: this.deps.getPrContext?.(),
       reviewScope: this.deps.getReviewScope(),
@@ -1467,7 +1566,11 @@ export class StepExecutor {
       this.deps.reportReferenceObserver?.resolved(
         step,
         state.currentStep,
-        instruction.injectedReports.map(({ reference, scope }) => ({ reference, scope })),
+        instruction.injectedReports.map(({ reference, scope, producer }) => ({
+          reference,
+          scope,
+          ...(producer === undefined ? {} : { producer }),
+        })),
       );
     }
     return instruction;
@@ -1493,6 +1596,7 @@ export class StepExecutor {
     phase2Diagnostic?: string,
     injectedReports?: readonly InjectedReport[],
     reportInputs?: Phase1ReportInputs,
+    onReportWritten?: (reportName: string) => void,
   ): Promise<AgentResponse> {
     let nextResponse = response;
 
@@ -1528,8 +1632,19 @@ export class StepExecutor {
     // Phase 2: report output (no tools)
     // Report generation is only valid after a completed Phase 1 response.
     if (nextResponse.status === 'done' && step.outputContracts && step.outputContracts.length > 0) {
+      const writtenReports = new Set<string>();
+      let reportGenerationError: ReportPhaseGenerationError | undefined;
       try {
-        const reportResult = await runReportPhase(step, stepIteration, { ...phaseCtx, injectedReports, reportInputs });
+        const reportResult = await runReportPhase(
+          step,
+          stepIteration,
+          { ...phaseCtx, injectedReports, reportInputs },
+          (reportName) => {
+            writtenReports.add(reportName);
+            this.recordReportGeneration(phaseCtx.reportDir, reportName, true);
+            onReportWritten?.(reportName);
+          },
+        );
         if (reportResult && 'blocked' in reportResult) {
           onTerminalOperation?.({
             origin: reviewerOperationOrigin(step.name),
@@ -1560,14 +1675,16 @@ export class StepExecutor {
               reportError.failureMessage ?? getErrorMessage(reportError),
             );
           }
-          log.info('Report phase failed, continuing to status judgment', {
+          log.info('Report phase failed', {
             step: step.name,
             error: getErrorMessage(reportError),
           });
+          reportGenerationError = reportError;
         } else {
           throw reportError;
         }
       }
+      this.finalizeReportGeneration(step, state, phaseCtx.reportDir, writtenReports, reportGenerationError);
     }
 
     return this.applyPostExecutionRules(
@@ -2203,6 +2320,7 @@ export class StepExecutor {
     }
 
     let terminalOperation: StepRunResult['terminalOperation'];
+    const writtenReportNames: string[] = [];
     try {
       response = await this.applyPostExecutionPhases(
         step,
@@ -2218,6 +2336,7 @@ export class StepExecutor {
         completionRetryDiagnostic,
         preparedInstruction.injectedReports,
         reportInputTracker.snapshot(),
+        (reportName) => writtenReportNames.push(reportName),
       );
     } catch (error) {
       if (error instanceof RuleDetectionExhaustedError) {
@@ -2251,6 +2370,7 @@ export class StepExecutor {
         stepIteration,
         providerInfo,
       },
+      writtenReportNames,
     );
     return {
       response,
@@ -2306,13 +2426,16 @@ export class StepExecutor {
       readonly stepIteration: number;
       readonly providerInfo: StepProviderInfo;
     },
+    writtenReportNames?: readonly string[],
   ): void {
     if (!step.outputContracts || step.outputContracts.length === 0) return;
     const context = this.createReportExecutionContext(execution);
     const baseDir = resolveReportDirectory(this.deps.getCwd(), this.deps.getReportDir());
 
+    const written = writtenReportNames === undefined ? undefined : new Set(writtenReportNames);
     for (const entry of step.outputContracts) {
       const fileName = entry.name;
+      if (written !== undefined && !written.has(fileName)) continue;
       this.checkReportFile(step, baseDir, fileName, context);
     }
   }

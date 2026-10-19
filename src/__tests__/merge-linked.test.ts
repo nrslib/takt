@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => ({
   commit: vi.fn(), pipelineCommit: vi.fn(), push: vi.fn(), createPr: vi.fn(), findPr: vi.fn(),
   caccia: vi.fn(), merge: vi.fn(), runWorkflow: vi.fn(), submitPr: vi.fn(),
 }));
-vi.mock('../features/caccia/index.js', () => ({ runLinkedCacciaSafely: mocks.caccia }));
+vi.mock('../features/caccia/index.js', () => ({ runCaccia: mocks.caccia }));
 vi.mock('../features/merge/index.js', () => ({ runLinkedMergeSafely: mocks.merge }));
 vi.mock('../infra/task/index.js', () => ({ autoCommitAndPush: mocks.commit }));
 vi.mock('../infra/task/git.js', () => ({ pushBranch: mocks.push }));
@@ -50,22 +50,11 @@ describe('Merge launch after PR creation', () => {
     mocks.merge.mockResolvedValue(undefined);
   });
 
-  it.each(entries)('%sはcaccia無効でも作成した同じPRをmerge起動入口へ渡す', async (_name, execute) => {
+  it.each(entries)('%sは作成した同じPRを直接merge起動入口へ渡す', async (_name, execute) => {
     await execute();
     expect(mocks.merge).toHaveBeenCalledOnce();
     expect(mocks.merge.mock.calls[0]?.slice(0, 2)).toEqual(['/project', prUrl]);
-  });
-
-  it.each(entries)('%sはcacciaの完了前にmergeを起動しない', async (_name, execute) => {
-    let finishCaccia!: () => void;
-    mocks.caccia.mockImplementation(() => new Promise<void>((resolve) => { finishCaccia = resolve; }));
-    const running = execute();
-    await vi.waitFor(() => expect(mocks.caccia).toHaveBeenCalledOnce());
-    expect(mocks.merge).not.toHaveBeenCalled();
-    finishCaccia();
-    await running;
-    expect(mocks.merge).toHaveBeenCalledOnce();
-    expect(mocks.merge.mock.calls[0]?.slice(0, 2)).toEqual(['/project', prUrl]);
+    expect(mocks.caccia).not.toHaveBeenCalled();
   });
 
   it.each(entries)('%sはPR作成失敗時にmergeを起動しない', async (_name, execute) => {

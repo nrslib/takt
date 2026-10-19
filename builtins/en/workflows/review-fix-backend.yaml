@@ -39,92 +39,43 @@ steps:
         next: ABORT
 
   - name: reviewers
-    tags:
-      - review
-    parallel:
-      fixed:
-        - name: arch-review
-          capabilities: readonly
-          tags:
-            - review
-          edit: false
-          persona: architecture-reviewer
-          policy:
-            - contract-change
-            - review
-            - architecture
-            - backend
-          knowledge:
-            - architecture
-            - backend
-          instruction: review-arch
-          output_contracts:
-            report:
-              - name: architect-review.md
-                format: architecture-review
-          rules:
-            - condition: approved
-            - condition: needs_fix
-
-        - name: coding-review
-          capabilities: readonly
-          tags:
-            - review
-          edit: false
-          persona: coding-reviewer
-          policy:
-            - contract-change
-            - review
-            - coding
-          instruction: review-coding
-          output_contracts:
-            report:
-              - name: coding-review.md
-                format: coding-review
-          rules:
-            - condition: approved
-            - condition: needs_fix
-
-      pool:
-        - name: security-review
-          description: Do not select by default. Select only when (a) the change may affect secret or credential handling, external-input handling, process execution, filesystem operations, network or terminal boundaries, sandboxing, or permissions, or (b) the change is large enough that security impact cannot be confidently ruled out. Do not select for documentation-only, comment-only, or test-only changes, or small localized fixes.
-          capabilities: readonly
-          tags:
-            - review
-          edit: false
-          persona: security-reviewer
-          policy:
-            - contract-change
-            - security-review
-          knowledge:
-            - security
-            - security-data
-            - security-dependencies
-          dynamic_facets:
-            pool: security-review-facets
-            selector:
-              instruction: select-applicable-candidates
-          instruction: review-security
-          output_contracts:
-            report:
-              - name: security-review.md
-                format: security-review
-          rules:
-            - condition: approved
-            - condition: needs_fix
-      selection:
-        selector:
-          instruction: select-applicable-candidates
-
+    input_reports:
+      from_step: remediation
+      reports:
+        - fix-plan.md
+        - fix-report.md
+        - fix-verification.md
+      optional_if_unrun: true
+    uses: review-fix-backend-reviewers
+    with:
+      architecture_review_instruction: review-arch
+      coding_review_instruction: review-coding
+      security_review_instruction: review-security
     rules:
-      - condition: any("error")
-        next: reviewers
-      - condition: all("approved")
-        next: final-gate
-      - condition: any("needs_fix")
-        next: remediation
+      self:
+        - condition: any("error")
+          next: reviewers
+        - condition: all("approved")
+          next: final-gate
+        - condition: any("needs_fix")
+          next: remediation
+      parallel:
+        arch-review:
+          - condition: approved
+          - condition: needs_fix
+        coding-review:
+          - condition: approved
+          - condition: needs_fix
+        security-review:
+          - condition: approved
+          - condition: needs_fix
 
   - name: final-gate
+    input_reports:
+      from_step: remediation
+      reports:
+        - review-resolution.md
+      optional_if_unrun: true
     kind: workflow_call
     call: final-gate
     args:
@@ -168,6 +119,8 @@ steps:
     rules:
       - condition: COMPLETE
         next: reviewers
+      - condition: no_fix
+        next: final-gate
       - condition: need_replan
         next: final-gate
       - condition: ABORT

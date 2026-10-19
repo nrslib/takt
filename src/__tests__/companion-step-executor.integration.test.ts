@@ -123,6 +123,8 @@ function deps(input: {
     getWorkflowName: () => 'test-workflow',
     getTask: () => 'task',
     getWorkflowDescription: () => undefined,
+    getInheritedReportInputs: () => undefined,
+    resolveDeclaredReportInputs: () => undefined,
     getRetryNote: () => undefined,
     getReviewScope: () => ({ kind: 'not_a_git_repository' }),
     structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),

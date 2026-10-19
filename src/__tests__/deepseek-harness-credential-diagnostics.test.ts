@@ -67,6 +67,7 @@ describe('DeepSeek Harness actionable runtime failure classification', () => {
   it('uses only known SDK exception codes and never the exception message for generic diagnostics', () => {
     expect(buildDeepSeekSdkFailureDiagnostic('jsonrpc-error')).toMatch(/JSON-RPC.*withheld/iu);
     expect(buildDeepSeekSdkFailureDiagnostic('transport-closed')).toMatch(/connection closed.*withheld/iu);
+    expect(buildDeepSeekSdkFailureDiagnostic('plugin-cleanup-failed')).toMatch(/plugin cleanup.*withheld/iu);
     for (const code of ['runtime-error', 'runtime-unavailable', 'unknown', 'AUTH: store-only-secret']) {
       expect(buildDeepSeekSdkFailureDiagnostic(code)).toBeUndefined();
     }

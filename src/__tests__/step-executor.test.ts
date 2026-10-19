@@ -107,6 +107,8 @@ describe('StepExecutor', () => {
       getWorkflowSteps: () => [{ name: 'implement' }],
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
+      getInheritedReportInputs: () => undefined,
+      resolveDeclaredReportInputs: () => undefined,
       getRetryNote: () => undefined,
       getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
@@ -194,6 +196,8 @@ describe('StepExecutor', () => {
       getWorkflowSteps: () => [{ name: 'implement' }],
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
+      getInheritedReportInputs: () => undefined,
+      resolveDeclaredReportInputs: () => undefined,
       getRetryNote: () => undefined,
       getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
@@ -267,6 +271,8 @@ describe('StepExecutor', () => {
       getWorkflowSteps: () => [{ name: 'implement' }],
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
+      getInheritedReportInputs: () => undefined,
+      resolveDeclaredReportInputs: () => undefined,
       getRetryNote: () => undefined,
       getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
@@ -347,6 +353,8 @@ describe('StepExecutor', () => {
       getWorkflowSteps: () => [{ name: 'implement' }],
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
+      getInheritedReportInputs: () => undefined,
+      resolveDeclaredReportInputs: () => undefined,
       getRetryNote: () => undefined,
       getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
@@ -422,6 +430,8 @@ describe('StepExecutor', () => {
       getWorkflowSteps: () => [{ name: 'implement' }],
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
+      getInheritedReportInputs: () => undefined,
+      resolveDeclaredReportInputs: () => undefined,
       getRetryNote: () => undefined,
       getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
@@ -496,6 +506,8 @@ describe('StepExecutor', () => {
       getWorkflowSteps: () => [{ name: 'implement' }],
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
+      getInheritedReportInputs: () => undefined,
+      resolveDeclaredReportInputs: () => undefined,
       getRetryNote: () => undefined,
       getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
@@ -573,6 +585,8 @@ describe('StepExecutor', () => {
       getWorkflowSteps: () => [{ name: 'implement' }],
       getWorkflowName: () => 'test-workflow',
       getWorkflowDescription: () => undefined,
+      getInheritedReportInputs: () => undefined,
+      resolveDeclaredReportInputs: () => undefined,
       getRetryNote: () => undefined,
       getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
       structuredCaller: {
@@ -665,6 +679,8 @@ describe('StepExecutor dynamic facet integration', () => {
         getTask: () => 'task',
         getWorkflowDescription: () => undefined,
         getWorkflowRules: () => undefined,
+        getInheritedReportInputs: () => undefined,
+        resolveDeclaredReportInputs: () => undefined,
         getRetryNote: () => undefined,
         getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
         structuredCaller: {

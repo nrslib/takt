@@ -134,7 +134,8 @@ export function validateSystemEffectPayload(
     requireString(payload.body, 'body');
   }
   if (
-    effect.type === 'sync_with_root'
+    effect.type === 'caccia'
+    || effect.type === 'sync_with_root'
     || effect.type === 'commit_and_push'
     || effect.type === 'resolve_conflicts_with_ai'
     || effect.type === 'merge_pr'

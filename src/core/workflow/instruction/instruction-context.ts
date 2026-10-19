@@ -17,6 +17,7 @@ import { loadTemplate } from '../../../shared/prompts/index.js';
 import type { PullRequestContext } from '../pr-context.js';
 import type { TaskReviewScope } from '../review-scope.js';
 import type { CompanionReviewMode } from '../../models/companion-types.js';
+import type { DeclaredReportInputs } from './prepared-instruction.js';
 
 /**
  * Context for building instruction from template.
@@ -93,6 +94,12 @@ export interface InstructionContext {
   workflowRules?: readonly WorkflowWideRule[];
   /** Scalar context inherited through workflow_call boundaries. */
   workflowCallVars?: Readonly<Record<string, string | number | boolean>>;
+  /** Verified report bodies supplied by declared logical producers. */
+  declaredReportInputs?: readonly DeclaredReportInputs[];
+  /** Local reports whose latest generation attempt did not write a body. */
+  unavailableLocalReports?: readonly string[];
+  /** Check the exact file selected by current, resume, or ancestor lookup. */
+  isUnavailableReportPath?: (path: string) => boolean;
   companion?: {
     mailboxDirectory: string;
     reviewMode: CompanionReviewMode;

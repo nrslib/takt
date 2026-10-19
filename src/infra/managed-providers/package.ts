@@ -89,9 +89,11 @@ export async function managedModulePath(directory: string, name: string, exportN
 
 async function installationFiles(provider: SdkProvider, directory: string, assets: Assets): Promise<Record<string, string>> {
   const files: Record<string, string> = Object.create(null) as Record<string, string>;
+  // ownedPath returns real paths, so key them against the real directory.
+  const realDirectory = await realpath(directory);
   const add = async (path: string): Promise<void> => {
     const owned = await ownedPath(directory, path);
-    files[relative(directory, owned)] = await hashFile(owned);
+    files[relative(realDirectory, owned)] = await hashFile(owned);
   };
   for (const [name, version] of Object.entries(assets.manifest.dependencies)) {
     const manifestPath = join(directory, 'node_modules', name, 'package.json');

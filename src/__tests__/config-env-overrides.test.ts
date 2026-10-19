@@ -10,6 +10,7 @@ import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/ta
 const testRoot = join(tmpdir(), `takt-config-env-${randomUUID()}`);
 const globalTaktDir = join(testRoot, 'global');
 const globalConfigPath = join(globalTaktDir, 'config.yaml');
+const npmPluginResolution = vi.hoisted(() => vi.fn());
 
 type ConfigWithObservability<T> = T & {
   observability?: {
@@ -26,6 +27,15 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => {
     ...original,
     getGlobalConfigPath: () => globalConfigPath,
     getTaktDir: () => globalTaktDir,
+  };
+});
+
+vi.mock('../infra/deepseek-harness/npm-plugin.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../infra/deepseek-harness/npm-plugin.js')>();
+  return {
+    ...actual,
+    resolveDeepSeekHarnessNpmPlugins: (...args: Parameters<typeof actual.resolveDeepSeekHarnessNpmPlugins>) =>
+      npmPluginResolution(...args),
   };
 });
 
@@ -448,29 +458,41 @@ describe('config traced env overrides', () => {
       .toThrow(/provider_options\.codex\.base_url must use a loopback base_url/);
   });
 
-  it('rejects executable DeepSeek plugins loaded from project YAML', () => {
-    const projectDir = join(testRoot, 'project-deepseek-plugins');
+  it.each([
+    ['npm source string', ['      - npm:local-project-plugin@1.0.0']],
+    ['npm source object', ['      - source: npm:local-project-plugin@1.0.0', '        id: project-plugin']],
+    ['Git source object', ['      - id: project-plugin', '        source: https://example.test/plugin.git']],
+  ] as const)('rejects executable DeepSeek plugins from project YAML before npm resolution (%s)', (_form, pluginLines) => {
+    npmPluginResolution.mockClear();
+    const projectDir = join(testRoot, `project-deepseek-plugins-${_form.replaceAll(' ', '-')}`);
     const configDir = getProjectConfigDir(projectDir);
     mkdirSync(configDir, { recursive: true });
     writeFileSync(join(configDir, 'config.yaml'), [
-      'provider_options:', '  deepseek_harness:', '    plugins:',
-      '      - id: project-plugin', '        source: https://example.test/plugin.git',
+      'provider_options:', '  deepseek_harness:', '    plugins:', ...pluginLines,
     ].join('\n'));
     expect(() => loadProjectConfig(projectDir))
       .toThrow('provider_options.deepseek_harness.plugins is not allowed');
+    expect(npmPluginResolution).not.toHaveBeenCalled();
   });
 
   it('preserves executable DeepSeek plugins loaded from global YAML', () => {
     mkdirSync(globalTaktDir, { recursive: true });
     writeFileSync(globalConfigPath, [
       'provider_options:', '  deepseek_harness:', '    plugins:',
+      '      - npm:local-global-plugin@1.0.0',
+      '      - source: npm:another-global-plugin@2.0.0', '        id: npm-global-plugin',
+      '        config:', '          enabled: true',
       '      - id: global-plugin', '        source: https://example.test/plugin.git',
       '        ref: v1.0.0', '        config:', '          token: global-plugin-secret',
     ].join('\n'));
-    expect(loadGlobalConfig().providerOptions?.deepseekHarness?.plugins).toEqual([{
-      id: 'global-plugin', source: 'https://example.test/plugin.git', ref: 'v1.0.0',
-      config: { token: 'global-plugin-secret' },
-    }]);
+    expect(loadGlobalConfig().providerOptions?.deepseekHarness?.plugins).toEqual([
+      'npm:local-global-plugin@1.0.0',
+      { id: 'npm-global-plugin', source: 'npm:another-global-plugin@2.0.0', config: { enabled: true } },
+      {
+        id: 'global-plugin', source: 'https://example.test/plugin.git', ref: 'v1.0.0',
+        config: { token: 'global-plugin-secret' },
+      },
+    ]);
   });
 
   it('accepts DeepSeek plugins from the user-controlled environment without project YAML', () => {

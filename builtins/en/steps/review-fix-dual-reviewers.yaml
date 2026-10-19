@@ -1,0 +1,104 @@
+params:
+  architecture_review_instruction:
+    type: facet_ref
+    facet_kind: instruction
+  coding_review_instruction:
+    type: facet_ref
+    facet_kind: instruction
+  frontend_review_instruction:
+    type: facet_ref
+    facet_kind: instruction
+  security_review_instruction:
+    type: facet_ref
+    facet_kind: instruction
+tags:
+  - review
+parallel:
+  fixed:
+    - name: arch-review
+      capabilities: readonly
+      tags:
+        - review
+      edit: false
+      persona: architecture-reviewer
+      policy:
+        - contract-change
+        - review
+        - architecture
+        - backend
+        - frontend
+      knowledge:
+        - architecture
+        - frontend
+        - backend
+      instruction:
+        $param: architecture_review_instruction
+      output_contracts:
+        report:
+          - name: architect-review.md
+            format: architecture-review
+
+    - name: frontend-review
+      capabilities: readonly
+      tags:
+        - review
+      edit: false
+      persona: frontend-reviewer
+      policy:
+        - contract-change
+        - review
+        - design-fidelity
+        - frontend
+      knowledge: frontend
+      instruction:
+        $param: frontend_review_instruction
+      output_contracts:
+        report:
+          - name: frontend-review.md
+            format: frontend-review
+
+    - name: coding-review
+      capabilities: readonly
+      tags:
+        - review
+      edit: false
+      persona: coding-reviewer
+      policy:
+        - contract-change
+        - review
+        - coding
+      instruction:
+        $param: coding_review_instruction
+      output_contracts:
+        report:
+          - name: coding-review.md
+            format: coding-review
+
+  pool:
+    - name: security-review
+      description: Do not select by default. Select only when (a) the change may affect secret or credential handling, external-input handling, process execution, filesystem operations, network or terminal boundaries, sandboxing, or permissions, or (b) the change is large enough that security impact cannot be confidently ruled out. Even when the change is documentation-only, comment-only, test-only, or a small localized fix, select it if (a) or (b) applies. Do not select it if neither applies.
+      capabilities: readonly
+      tags:
+        - review
+      edit: false
+      persona: security-reviewer
+      policy:
+        - contract-change
+        - security-review
+      knowledge:
+        - security
+        - security-data
+        - security-dependencies
+      dynamic_facets:
+        pool: security-review-facets
+        selector:
+          instruction: select-applicable-candidates
+      instruction:
+        $param: security_review_instruction
+      output_contracts:
+        report:
+          - name: security-review.md
+            format: security-review
+  selection:
+    selector:
+      instruction: select-applicable-candidates

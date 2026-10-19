@@ -25,7 +25,7 @@ const suiteDir = dirname(suitePath);
 const suite = parse(readFileSync(suitePath, 'utf8'), { merge: true });
 const baseVars = {
   language: 'ja', variant: 'candidate', workflow: 'development-remediation-dynamic',
-  step_name: 'fix-verifier', input_source: 'report', input: '検証対象を照合した。',
+  step_name: 'fix', input_source: 'report', input: '修正を完了した。',
 };
 
 function caseVars(testCase, variant) {
@@ -53,14 +53,14 @@ function runnerSystem(variant, language) {
 }
 
 test('loads workflow-owned uses rules, parallel sub-step rules, and loop monitors', () => {
-  const verifier = loadPhase3JudgmentRules(baseVars);
-  assert.equal(verifier.name, 'fix-verifier');
-  assert.equal(verifier.candidates[0].label, 'verified');
-  assert.equal(verifier.candidates.length, 3);
+  const repair = loadPhase3JudgmentRules(baseVars);
+  assert.equal(repair.name, 'fix');
+  assert.equal(repair.candidates[0].label, '修正完了');
+  assert.equal(repair.candidates.length, 3);
   const reviewer = loadPhase3JudgmentRules({ language: 'en', workflow: 'review-backend', step_name: 'coding-review' });
   assert.deepEqual(reviewer.candidates.map(({ label }) => label), ['approved', 'needs_fix']);
-  const monitor = loadPhase3JudgmentRules({ language: 'en', workflow: 'development-remediation-dynamic', loop_monitor_index: 2 });
-  assert.equal(monitor.name, '_loop_judge_fix-retry_fix-verifier');
+  const monitor = loadPhase3JudgmentRules({ language: 'en', workflow: 'development-remediation-dynamic', loop_monitor_index: 1 });
+  assert.equal(monitor.name, '_loop_judge_fix');
   assert.equal(monitor.candidates[3].label, 'No feasible path can satisfy the requirements');
   for (const language of ['ja', 'en']) {
     const finalGate = loadPhase3JudgmentRules({ language, workflow: 'peer-review', step_name: 'final-gate' });
@@ -132,7 +132,7 @@ for (const language of ['ja', 'en']) {
 
   test(`matches the production StatusJudgmentBuilder for report and response (${language})`, () => {
     const definition = parse(readFileSync(resolve(repoRoot, `builtins/${language}/workflows/development-remediation-dynamic.yaml`), 'utf8'));
-    const rawStep = definition.steps.find(({ name }) => name === 'fix-verifier');
+    const rawStep = definition.steps.find(({ name }) => name === 'fix');
     const step = {
       name: rawStep.name,
       rules: rawStep.rules.map((rule) => ({
@@ -189,8 +189,8 @@ test('rejects missing or malformed input, baseline revisions, and ambiguous rule
   }
 });
 
-test('covers eight cases in both languages and variants without rendering grading expectations', () => {
-  assert.equal(suite.tests.length, 16);
+test('covers six current cases in both languages and variants without rendering grading expectations', () => {
+  assert.equal(suite.tests.length, 12);
   assert.deepEqual(suite.defaultTest.vars.variant, ['baseline', 'candidate']);
   const expectedLabels = {
     ja: ['verified', 'approved', '要件を満たす実現可能な打開手段がない', 'needs_fix', 'needs_fix', 'verified',
@@ -220,8 +220,8 @@ test('covers eight cases in both languages and variants without rendering gradin
       rows += testCase.providers.length;
     }
   }
-  assert.equal(seen.size, 32);
-  assert.equal(rows, 96);
+  assert.equal(seen.size, 24);
+  assert.equal(rows, 72);
 });
 
 test('binds every case to only its fixture and the required native-schema and strengthened providers', () => {

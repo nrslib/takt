@@ -38,6 +38,13 @@ export interface ListOpenPrsOptions {
   readonly allPages?: boolean;
 }
 
+export interface PrSelectionData {
+  number: number;
+  title: string;
+  body: string;
+  files: string[];
+}
+
 export interface CreatePrOptions {
   branch: string;
   title: string;
@@ -156,6 +163,7 @@ export interface GitProvider {
 
   listOpenPrNumbers?(cwd: string): number[];
   fetchPrListItem?(prNumber: number, cwd: string): PrListItem | undefined;
+  fetchPrSelectionData?(prNumber: number, cwd: string): PrSelectionData;
 
   findExistingPr(branch: string, cwd?: string): ExistingPr | undefined;
 

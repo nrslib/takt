@@ -183,6 +183,9 @@ async function runEffect(
   payload: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   switch (effect.type) {
+    case 'caccia':
+      if (!options.cacciaService) throw new Error('Caccia execution service is required');
+      return options.cacciaService.execute(payload.pr as number);
     case 'commit_and_push':
       return commitAndPushEffect(options, payload as Parameters<typeof commitAndPushEffect>[1]);
     case 'enqueue_task':

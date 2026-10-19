@@ -1,4 +1,5 @@
 import type { UserConfig } from 'vitest/config';
+import { createRequire } from 'node:module';
 import {
   heavyParallelIntegrationTestFiles,
   lightIntegrationTestFiles,
@@ -52,6 +53,10 @@ export const itSerialTestGlobs = [
 // Keep one sufficiently large ceiling for every platform and runner.
 const testTimeout = 120_000;
 
+const require = createRequire(import.meta.url);
+const { installNotificationSilence } = require('./scripts/test-notification-silence.cjs') as typeof import('./scripts/test-notification-silence.cjs');
+installNotificationSilence();
+
 export const commonSrcTestConfig = {
   env: {
     TAKT_CONFIG_DIR: '',
@@ -69,7 +74,7 @@ export const commonSrcTestConfig = {
   environment: 'node',
   globals: false,
   reporters: ['dot'],
-  setupFiles: ['src/__tests__/test-setup.ts'],
+  setupFiles: ['scripts/test-notification-silence.cjs', 'src/__tests__/test-setup.ts'],
   testTimeout,
   teardownTimeout: 5000,
   coverage: {

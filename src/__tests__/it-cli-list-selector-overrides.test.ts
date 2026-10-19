@@ -28,6 +28,7 @@ const {
     const command: Record<string, unknown> = {
       description: vi.fn().mockReturnThis(),
       argument: vi.fn().mockReturnThis(),
+      allowExcessArguments: vi.fn().mockReturnThis(),
       option: vi.fn().mockReturnThis(),
       opts: vi.fn(() => ({})),
       optsWithGlobals: vi.fn(() => ({})),

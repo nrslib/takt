@@ -253,7 +253,7 @@ describe('non-interactive filtered deletion with real task resources', () => {
       merge_task: true, source: 'pr_review', pr_number: 123, merge_method: 'merge',
       merge_head_repository_url: project, merge_head_repository_push_urls: [project],
       merge_initial_head_sha: git(project, ['rev-parse', 'HEAD']),
-      merge_threat_check_max_diff_bytes: 1000, merge_caccia_required: false, merge_clone_prepared: true,
+      merge_threat_check_max_diff_bytes: 1000, merge_clone_prepared: true,
     })]);
 
     await listTasksNonInteractive(project, { enabled: true, action: 'delete', yes: true,

@@ -2,7 +2,7 @@ name: review-fix-simple
 subworkflow:
   callable: true
   visibility: internal
-description: Review with one agent, then use the standard adjudication and verified remediation loop.
+description: One read-only reviewer followed by adjudicated repair, follow-up review, and final requirement check.
 all_steps:
   rules:
     - ref: findings-handling

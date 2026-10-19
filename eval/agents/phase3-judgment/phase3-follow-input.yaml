@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-description: 'Phase 3: 検証・レビュー・最終確認・ループ判定の8ケースで入力の結論を守るか比較（baseline / candidate、日英）'
+description: 'Phase 3: 検証・レビュー・最終確認・ループ判定の6ケースで入力の結論を守るか比較（baseline / candidate、日英）'
 prompts:
   - file://../../phase3-judgment-prompt.mjs
 providers:
@@ -134,23 +134,6 @@ defaultTest:
       metric: phase3-follow-input/row
       value: file://../../asserts/phase3-judgment.mjs
 tests:
-  - description: '1 ja: 公開ツールの拒否応答の検証'
-    providers: &toolProviders
-      - codex-sol-low-tool-refusal
-      - codex-luna-max-tool-refusal
-      - claude-opus-5-強めた条件-tool-refusal
-    vars: &verifierJa
-      language: ja
-      workflow: development-remediation-dynamic
-      step_name: fix-verifier
-      input: file://../../cases/phase3-judgment/1-ja.md
-      expected_label: verified
-  - description: '1 en: Verification of public tool rejection responses'
-    providers: *toolProviders
-    vars: &verifierEn
-      <<: *verifierJa
-      language: en
-      input: file://../../cases/phase3-judgment/1-en.md
   - description: '2 ja: 決済の返金処理のレビュー'
     providers: &refundProviders
       - codex-sol-low-refund
@@ -176,7 +159,7 @@ tests:
     vars:
       language: ja
       workflow: development-remediation-dynamic
-      loop_monitor_index: 2
+      loop_monitor_index: 1
       input_source: response
       input: file://../../cases/phase3-judgment/3-ja.md
       expected_label: 要件を満たす実現可能な打開手段がない
@@ -185,7 +168,7 @@ tests:
     vars:
       language: en
       workflow: development-remediation-dynamic
-      loop_monitor_index: 2
+      loop_monitor_index: 1
       input_source: response
       input: file://../../cases/phase3-judgment/3-en.md
       expected_label: No feasible path can satisfy the requirements
@@ -216,16 +199,6 @@ tests:
       <<: *reviewEn
       input: file://../../cases/phase3-judgment/5-en.md
       expected_label: needs_fix
-  - description: '6 ja: 結果見出しのない修正完了検証'
-    providers: *toolProviders
-    vars:
-      <<: *verifierJa
-      input: file://../../cases/phase3-judgment/6-ja.md
-  - description: '6 en: Fix verification without a result heading'
-    providers: *toolProviders
-    vars:
-      <<: *verifierEn
-      input: file://../../cases/phase3-judgment/6-en.md
   - description: '7 ja: Web アプリの会員登録の最終確認'
     providers: &signupProviders
       - codex-sol-low-signup

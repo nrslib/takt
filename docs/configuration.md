@@ -257,17 +257,19 @@ The optional `caccia` object is accepted in both `~/.takt/config.yaml` and `.tak
 
 ```yaml
 caccia:
-  enabled: false          # Enable automatic Caccia after a task creates or updates a PR
+  enabled: false          # Allow the caccia effect to wait for CodeRabbit
   wait_timeout_ms: 1800000 # Maximum wait for the initial review and each pushed commit review, in milliseconds
   max_iterations: 3       # Maximum fix-and-review iterations
   workflow: caccia        # Workflow used to judge and fix each set of threads
 ```
 
-The linked path runs only when `enabled` is `true`. The standalone `takt caccia <PR-number>` command is available regardless of this flag. Defaults are disabled, 1,800,000 milliseconds, 3 iterations, and workflow `caccia`. A project `caccia` block takes precedence over the global block; omitted fields in the selected block receive these defaults. Set `workflow` to a workflow identifier to replace the builtin workflow.
+The `caccia` effect waits for CodeRabbit only when `enabled` is `true`; otherwise it returns `skipped` with `skipReason: config_disabled` immediately. The standalone `takt caccia <PR-number>` command is available regardless of this flag. Defaults are disabled, 1,800,000 milliseconds, 3 iterations, and workflow `caccia`. A project `caccia` block takes precedence over the global block; omitted fields in the selected block receive these defaults. Set `workflow` to a workflow identifier to replace the builtin workflow.
 
-`wait_timeout_ms` bounds the initial review wait and each pushed-commit review wait, including a retry request. If a CodeRabbit rate-limit notice gives a retry time before the deadline, Caccia requests one review when that time arrives; a retry time at or beyond the deadline skips Caccia immediately. A review still incomplete at the deadline after a rate-limit notice also skips Caccia. Without a rate-limit notice, an initial timeout skips Caccia and a pushed-commit timeout is an error. The standalone command exits non-zero in either case; linked execution preserves the completed task result and logs errors.
+`wait_timeout_ms` bounds the initial review wait and each pushed-commit review wait, including a retry request. If a CodeRabbit rate-limit notice gives a retry time before the deadline, Caccia requests one review when that time arrives; a retry time at or beyond the deadline skips Caccia immediately. A review still incomplete at the deadline after a rate-limit notice also skips Caccia. Without a rate-limit notice, an initial timeout skips Caccia and a pushed-commit timeout is an error. The standalone command exits non-zero in either case; the system effect returns failures as `success: false` with `error` for workflow routing.
 
-Linked progress, workflow output, results, and failures inherit the parent task's display mode and task prefix. Silent parents produce no Caccia screen output.
+Effect progress, workflow output, results, and failures inherit the parent task's display mode and task prefix. Silent parents produce no Caccia screen output.
+
+The merge builtins execute Caccia explicitly: `merge-review` runs `review → caccia → wait_ci → evaluation comment`, while `merge-review-fix` and `merge-review-fix-simple` run `review/fix → commit_and_push → caccia → wait_ci → merge_pr`. `success` and `skipped` continue to CI on the returned head. `limit` comments with the unresolved thread count and ends COMPLETE without merging. An effect error comments with `error` and ends ABORT. Push, task post-processing, and Pipeline no longer start Caccia implicitly. With `merge.auto_start: true`, PR publication starts the merge workflow, whose explicit effect owns Caccia.
 
 ## Project Configuration
 
@@ -1367,6 +1369,11 @@ provider_options:
     request_timeout_ms: 3600000
     shutdown_timeout_ms: 1000
     plugins:
+      - npm:@example/cordis-plugin@1.2.3
+      - source: npm:another-cordis-plugin@2.0.0
+        id: another-plugin
+        config:
+          enabled: true
       - id: example-plugin
         source: git:https://github.com/example/plugin.git
         ref: v1.2.3
@@ -1376,7 +1383,9 @@ provider_options:
 
 Define `plugins` in global configuration (`~/.takt/config.yaml`) or trusted global runtime profiles, not in project or workflow configuration. A user-controlled `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PLUGINS` JSON array can also supply plugin options. Project-defined plugins are rejected; an empty list may disable plugins. Plugins execute with the runtime's permissions and may access credentials, so load only code you trust. Plugin `config` values are hidden in previews, session logs, and telemetry, without changing the values supplied to the runtime.
 
-DeepSeek Harness plugins can be loaded from Git HTTPS or SSH repositories. Plaintext `http://` and `git://` sources are rejected. Use `git:` before a Git URL when desired; set `ref` to a tag, branch, or commit. Pin a tag or commit to select a Git source revision. This alone does not guarantee reproducible dependency resolution: when the repository has a `package.json`, TAKT installs dependencies with `npm install --package-lock=false`, so resolved dependency versions may vary between runs. Omitting `ref` uses the repository's default revision and emits a warning. Lifecycle scripts are not run. npm package sources are not supported. Private repositories use the existing SSH keys or Git credential helper; SSH sources may use the conventional `git` username, but must not embed passwords, tokens, or secrets. Other credential-bearing URLs are rejected before Git is run. Git and askpass prompts are disabled; default SSH uses batch mode. Configure working credentials and trusted host keys before running TAKT. An existing custom SSH command or executable is preserved.
+DeepSeek Harness plugins can be loaded from npm packages or Git HTTPS/SSH repositories. Use `npm:<package-spec>` as a string or as the `source` in an object; `id` and `config` are optional. TAKT installs npm packages into temporary directories without running lifecycle scripts, resolves the package `exports` or `main` entrypoint, and removes the temporary files when the runtime ends. npm plugins execute with the runtime's permissions and may access credentials. Only use packages whose code you trust. Pin package versions to fix the top-level package tarball; this alone does not guarantee reproducible dependency resolution. TAKT installs with `--package-lock=false`, so ranged transitive dependencies may resolve to different versions between runs unless the published package includes an appropriate `npm-shrinkwrap.json`. URLs containing credentials or sensitive query parameters are rejected before npm starts; use protected npm configuration for authentication instead. Git sources retain their existing behavior: plaintext `http://` and `git://` sources are rejected. Use `git:` before a Git URL when desired; set `ref` to a tag, branch, or commit. Pin a tag or commit to select a Git source revision. This alone does not guarantee reproducible dependency resolution: when the repository has a `package.json`, TAKT installs dependencies with `npm install --package-lock=false`, so resolved dependency versions may vary between runs. Omitting `ref` uses the repository's default revision and emits a warning. Lifecycle scripts are not run. Private repositories use the existing SSH keys or Git credential helper; SSH sources may use the conventional `git` username, but must not embed passwords, tokens, or secrets. Other credential-bearing URLs are rejected before Git is run. Git and askpass prompts are disabled; default SSH uses batch mode. Configure working credentials and trusted host keys before running TAKT. An existing custom SSH command or executable is preserved.
+
+If the official runtime reports that a configured npm plugin did not activate, TAKT stops that provider call and reports an actionable entrypoint/configuration hint without forwarding raw plugin diagnostics.
 
 `base_url` is optional. Project config accepts loopback addresses only; set an external endpoint in global config or `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL`. TAKT's `base_url` setting takes precedence over the provider-native `DEEPSEEK_BASE_URL`.
 
@@ -1503,7 +1512,7 @@ provider_options:
 
 With `enabled: false`, `claude-sdk` and its `claude` alias receive `skills: []`; `claude-headless` and `claude-terminal` receive `--disable-slash-commands`. This also disables custom Claude slash commands for those CLI sessions. With `enabled: true`, TAKT adds no Skill option or flag, preserving Claude's normal discovery. The setting follows normal provider-option leaf priority, including `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED`, and is retained for retries and resumed sessions.
 
-This is a context filter, not a sandbox: a Skill file can still be reachable through Read or Bash. TAKT does not change `settingSources`, Claude settings, or user/repository Skill files. The pinned Agent SDK version for managed installation is `0.3.261`. CLI sessions require a Claude Code version that supports `--disable-slash-commands`; TAKT verifies the flag before starting either a headless (`claude-headless`) or terminal (`claude-terminal`) CLI session and reports an update error when unavailable. Claude Code `2.1.220` is the verified minimum.
+This is a context filter, not a sandbox: a Skill file can still be reachable through Read or Bash. TAKT does not change `settingSources`, Claude settings, or user/repository Skill files. The pinned Agent SDK version for managed installation is `0.3.300`. CLI sessions require a Claude Code version that supports `--disable-slash-commands`; TAKT verifies the flag before starting either a headless (`claude-headless`) or terminal (`claude-terminal`) CLI session and reports an update error when unavailable. Claude Code `2.1.220` is the verified minimum.
 
 #### Claude Code sandbox control (`allow_unsandboxed_commands`)
 
@@ -1728,6 +1737,8 @@ Interactive entry points confirm required installations and approximate disk spa
 Approximate sizes are 250 MB for Claude SDK, 340 MB for Codex, 60 MB for OpenCode, 52 MB for Pi and 510 MB for DeepSeek Harness (measured on macOS arm64). Sizes vary by OS and architecture. Claude and Codex include managed CLI binaries. Explicit `TAKT_CLAUDE_CLI_PATH` and `TAKT_CODEX_CLI_PATH` overrides remain supported; same-name commands on PATH are not reused automatically. Install the external OpenCode CLI separately. Use `takt install <provider> --force` to reinstall. Failed updates preserve the previous intact generation.
 
 ## Merge selection
+
+GitLab supports MR details, CI status acquisition, and bulk selection. When Caccia is enabled, its effect in `takt merge` and `from_pr` tasks returns `skipped` with `github_unavailable` and continues to CI on the returned head. Merged results pipelines are matched through the merge commit's second parent and the source head. Missing pipelines and pipelines for an older head do not pass CI. Selecting a merge method or constraining the head is still unsupported: `merge_pr` fails when either is supplied. Completing the CI wait does not imply a successful merge.
 
 The default `merge.workflow` is `merge-review-fix-simple`. It gathers context, runs one read-only reviewer with dynamic facets, then adjudicates findings and handles fixes and verification in separate steps before the shared push, CI, CHANGES_REQUESTED, and merge flow. Set `merge.workflow: merge-review-fix` to use parallel review. A CLI `--workflow` overrides this setting.
 
