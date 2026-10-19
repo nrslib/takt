@@ -134,6 +134,7 @@ TAKT の実行には Node.js `>=22.22.0` が必要です。
 - `copilot` — [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli)
 - `cursor` — [Cursor Agent](https://docs.cursor.com/)
 - `kiro` — [Kiro CLI](https://kiro.dev/docs/cli/headless/)
+- `devin` — [Devin CLI](https://devin.ai/)
 
 任意:
 
@@ -320,7 +321,7 @@ exec は前回の設定から開始するか、初回実行時はデフォルト
 最小限の `~/.takt/config.yaml` は次の通りです。
 
 ```yaml
-provider: claude-sdk    # claude-sdk, claude (alias), claude-headless, claude-terminal, codex, opencode, deepseek-harness, cursor, copilot, kiro, pi, or mock
+provider: claude-sdk    # claude-sdk, claude (alias), claude-headless, claude-terminal, codex, opencode, deepseek-harness, cursor, copilot, kiro, devin, pi, or mock
 model: sonnet       # プロバイダーにそのまま渡されます
 language: ja        # en or ja
 ```

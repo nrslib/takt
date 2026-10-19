@@ -440,7 +440,7 @@ TAKT 观察实际收到的 provider event，不会合成 keepalive。OpenCode �
 
 ## API Key 配置
 
-TAKT 支持 Claude、Codex、OpenCode、Pi、官方 DeepSeek Harness SDK、Cursor、Copilot 和 Kiro provider。Claude/Codex/OpenCode 使用各自 SDK credential，Pi 使用 Pi SDK credential store 或 provider 原生环境变量，DeepSeek Harness 先通过 `takt install deepseek-harness` 安装 TypeScript SDK/runtime，再通过官方 credential store（`$DSH_HOME/.credentials.yaml`，默认 `~/.dsh/.credentials.yaml`）或 `DEEPSEEK_API_KEY` 认证，Cursor 支持 API key 或已有 `cursor-agent login` session，Copilot 使用 GitHub token，Kiro 使用 API key。
+TAKT 支持 Claude、Codex、OpenCode、Pi、官方 DeepSeek Harness SDK、Cursor、Copilot、Kiro 和 Devin provider。Claude/Codex/OpenCode 使用各自 SDK credential，Pi 使用 Pi SDK credential store 或 provider 原生环境变量，DeepSeek Harness 先通过 `takt install deepseek-harness` 安装 TypeScript SDK/runtime，再通过官方 credential store（`$DSH_HOME/.credentials.yaml`，默认 `~/.dsh/.credentials.yaml`）或 `DEEPSEEK_API_KEY` 认证，Cursor 支持 API key 或已有 `cursor-agent login` session，Copilot 使用 GitHub token，Kiro 使用 API key。
 
 全局配置 schema 还保留了一些当前不能作为顶层 provider 选择的 legacy 或 provider integration API key 字段。这些字段本身不会启用 provider；请根据所选 provider，使用下文记录的认证环境变量或配置 key。
 
@@ -505,7 +505,7 @@ kiro_api_key: ...              # Kiro CLI
 
 ### 安全
 
-TAKT 不读取、复制或改写保存的 DeepSeek credential 值。DeepSeek Harness TypeScript SDK/runtime 支持 glibc >= 2.28 的 Linux x64/arm64 和 macOS arm64 >= 14.0。Cursor 已有 `cursor-agent login` session 时可以不设置 API key；Copilot 和 Kiro 仍需各自的 CLI。
+TAKT 不读取、复制或改写保存的 DeepSeek credential 值。DeepSeek Harness TypeScript SDK/runtime 支持 glibc >= 2.28 的 Linux x64/arm64 和 macOS arm64 >= 14.0。Cursor 已有 `cursor-agent login` session 时可以不设置 API key；Copilot、Kiro 和 Devin 仍需各自的 CLI。
 
 ### CLI 路径覆盖
 
@@ -837,7 +837,9 @@ Provider profile 可以为不同 provider 设置默认权限模式和按 step �
 | `edit` | 允许带确认的文件编辑 | `acceptEdits` | `workspace-write` | `workspace-write` | `read`、`grep`、`find`、`ls`、`edit`、`write`、`bash`、`codemode` | 此 SDK 不提供 | 默认 flags（无 `--force`） | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` | `accept-edits` ACP session mode + 生成的 `--config` allow 规则（`exec`、`edit`、`Write(**)`） |
 | `full` | 绕过所有权限检查 | `bypassPermissions` | `danger-full-access` | `danger-full-access` | 所有注册 Pi 工具 | 此 SDK 不提供 | `--force` | `--yolo` | `--trust-all-tools` | `bypass` ACP session mode；permission 请求以 `allow_once` 应答 |
 
-Devin 通过 `devin acp`（基于 stdio 的 Agent Client Protocol）而不是 print 模式运行，因此权限模式分三层实施：用 `session/set_mode` 设置的 ACP session mode（`readonly` 对应 `ask`，`edit` 和未设置对应 `accept-edits`，`full` 对应 `bypass`）、追加到以用户 Devin 配置（`$XDG_CONFIG_HOME/devin/config.json`，默认 `~/.config/devin/config.json`；Windows 为 `%APPDATA%\devin\config.json`）为基础生成的 `--config` 中的 permission 规则，以及对 `session/request_permission` 的应答——只有 `full` 模式选择 `allow_once`，`allow_always` 因会把决定持久化到 Devin config 而从不被选择。`strict-readonly` 内部 agent 隔离还会额外 deny `Fetch(**)`。
+Devin 通过 `devin acp`（基于 stdio 的 Agent Client Protocol）而不是 print 模式运行，因此权限模式分三层实施：用 `session/set_mode` 设置的 ACP session mode（`readonly` 对应 `ask`，`edit` 和未设置对应 `accept-edits`，`full` 对应 `bypass`）、追加到以用户 Devin 配置（`$XDG_CONFIG_HOME/devin/config.json`，默认 `~/.config/devin/config.json`；Windows 为 `%APPDATA%\devin\config.json`）为基础生成的 `--config` 中的 permission 规则，以及对 `session/request_permission` 的应答——对送达 TAKT 的请求，只有 `full` 模式选择 `allow_once`，`allow_always` 因会把决定持久化到 Devin config 而从不被选择。`strict-readonly` 内部 agent 隔离还会额外 deny `Fetch(**)`。
+
+生成的 `--config` 只替换 Devin 的用户级配置。仓库内项目级 `.devin/config.json`（以及 `.devin/config.local.json`）在 Devin 中优先级更高，其 `permissions.allow` 规则会在 Devin 向 TAKT 发起权限请求之前预先批准 tool 调用。实测：在 `edit` 模式或未设置权限模式时，仓库 `.devin/config.json` 中的 `allow: ["exec", ...]` 让一条本应被 TAKT 拒绝的 shell 命令得以执行。`readonly` 和 `strict-readonly` 不受影响（ACP `ask` 模式不暴露 write/exec 工具），且对于 TAKT 发出的规则，TAKT 的 `deny` 规则仍优先于项目的 `allow` 规则。在不受信任的仓库上运行 `edit` 模式的 Devin step 之前，请先检查该仓库的 `.devin/config.json`。
 
 Pi 的权限模式是 SDK active-tool allowlist，而不是操作系统 sandbox；TAKT 不为 Pi 增加逐工具确认。使用 Pi 时请确保 workflow 输入和 extension 可信。
 

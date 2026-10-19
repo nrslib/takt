@@ -477,7 +477,7 @@ manager:
 
 ## API キー設定
 
-TAKT は Claude、Codex、OpenCode、Pi、公式 DeepSeek Harness SDK、Cursor、Copilot、Kiro provider をサポートしています。Claude/Codex/OpenCode は各 SDK の認証情報、Pi は Pi SDK の credential store または provider 環境変数、DeepSeek Harness は公式store（`$DSH_HOME/.credentials.yaml`、既定 `~/.dsh/.credentials.yaml`）または `DEEPSEEK_API_KEY` 環境変数、Kiro は API キーを使い、Cursor は API キーまたは `cursor-agent login` セッションで認証でき、Copilot は GitHub トークンを使います。
+TAKT は Claude、Codex、OpenCode、Pi、公式 DeepSeek Harness SDK、Cursor、Copilot、Kiro、Devin provider をサポートしています。Claude/Codex/OpenCode は各 SDK の認証情報、Pi は Pi SDK の credential store または provider 環境変数、DeepSeek Harness は公式store（`$DSH_HOME/.credentials.yaml`、既定 `~/.dsh/.credentials.yaml`）または `DEEPSEEK_API_KEY` 環境変数、Kiro は API キーを使い、Cursor は API キーまたは `cursor-agent login` セッションで認証でき、Copilot は GitHub トークンを使います。
 
 グローバル設定 schema には現在トップレベル provider として選択できない一部の legacy または provider integration 用 API key フィールドも残っています。これらのフィールドだけでは provider は有効になりません。選択した provider について、以下に記載した認証用の環境変数または設定キーを使用してください。
 
@@ -1117,7 +1117,9 @@ TAKT は provider 非依存の3つのパーミッションモードを使用し�
 | `edit` | 確認付きでファイル編集を許可 | `acceptEdits` | `workspace-write` | `workspace-write` | `read`, `grep`, `find`, `ls`, `edit`, `write`, `bash`, `codemode` | この SDK では公開されません | デフォルトフラグ（`--force` なし） | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` | `accept-edits` ACP session mode + 生成 `--config` の allow ルール（`exec`、`edit`、`Write(**)`） |
 | `full` | すべてのパーミッションチェックをバイパス | `bypassPermissions` | `danger-full-access` | `danger-full-access` | 登録済み Pi tool すべて | この SDK では公開されません | `--force` | `--yolo` | `--trust-all-tools` | `bypass` ACP session mode。permission 要求には `allow_once` で応答 |
 
-Devin は print モードではなく `devin acp`（stdio 上の Agent Client Protocol）経由で実行されるため、permission mode は3つの層で強制されます。`session/set_mode` で設定する ACP session mode（`readonly` は `ask`、`edit` と未設定は `accept-edits`、`full` は `bypass`）、ユーザーの Devin config（`$XDG_CONFIG_HOME/devin/config.json`、既定 `~/.config/devin/config.json`。Windows は `%APPDATA%\devin\config.json`）を元に生成した `--config` へ追加する permission ルール、そして `session/request_permission` への応答です。`allow_once` は `full` モードでのみ選択され、`allow_always` は Devin config に決定を永続化するため選択されません。`strict-readonly` の internal-agent 隔離では `Fetch(**)` も追加で拒否します。
+Devin は print モードではなく `devin acp`（stdio 上の Agent Client Protocol）経由で実行されるため、permission mode は3つの層で強制されます。`session/set_mode` で設定する ACP session mode（`readonly` は `ask`、`edit` と未設定は `accept-edits`、`full` は `bypass`）、ユーザーの Devin config（`$XDG_CONFIG_HOME/devin/config.json`、既定 `~/.config/devin/config.json`。Windows は `%APPDATA%\devin\config.json`）を元に生成した `--config` へ追加する permission ルール、そして `session/request_permission` への応答です。TAKT に届いた要求に対しては `allow_once` が `full` モードでのみ選択され、`allow_always` は Devin config に決定を永続化するため選択されません。`strict-readonly` の internal-agent 隔離では `Fetch(**)` も追加で拒否します。
+
+生成する `--config` が置き換えるのは Devin のユーザーレベル config のみです。リポジトリ内のプロジェクトレベル `.devin/config.json`（および `.devin/config.local.json`）は Devin でより優先され、その `permissions.allow` ルールは Devin が TAKT に permission を要求する前に tool call を事前承認します。実測では、`edit` モードまたは permission mode 未設定時に、リポジトリの `.devin/config.json` に `allow: ["exec", ...]` があると TAKT が拒否するはずの shell コマンドが実行されました。`readonly` と `strict-readonly` は影響を受けません（ACP `ask` モードは write/exec tool を公開しないため）。また、TAKT が発行するルールについては TAKT の `deny` ルールがプロジェクトの `allow` ルールに優先します。信頼できないリポジトリで `edit` モードの Devin step を実行する前に、そのリポジトリの `.devin/config.json` を確認してください。
 
 Pi の permission mode は SDK の active-tool allowlist であり、OS sandbox ではありません。また、TAKT は Pi に tool ごとの確認 prompt を追加しません。特に Pi の `edit` は `bash` を有効化し、file tool は絶対 path も受け取れます。信頼できる workflow input と extension だけで実行してください。internal agent の role に狭い権限が必要なら、Pi の profile に capabilities と permission mode を明示してください。
 
