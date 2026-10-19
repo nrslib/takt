@@ -6,6 +6,8 @@
 
 Start `takt manager` in an interactive terminal and describe the objective, scope exclusions, acceptance criteria and work constraints. Review the summary and choose Approve registration to let the TUI register the goal. Choose Continue conversation to revise it.
 
+Enter `/go` alone to request a summary of the current conversation. The returned summary waits for approval; enter `/go` again to approve and register it through the same registration process. If a summary is already displayed, `/go` registers it without regenerating it. If there is insufficient material, manager explains this and you can continue the conversation. Manager can also offer a summary without `/go`.
+
 After registration, the manager inside the daemon handles events, submits tasks, checks and integrates results, and selects next work. The TUI displays work records and lets you continue the conversation with a manager that receives those records. Closing the TUI leaves an already running run active.
 
 By default, required runs start automatically. Disable this to start `takt run` / `takt watch` yourself.
@@ -63,6 +65,7 @@ Enter each command on its own line in the TUI.
 
 | Command | Behavior |
 |---------|----------|
+| `/go` | Request a summary of the current conversation, or approve and register an existing summary. Takes no arguments. |
 | `/answer <questionId>` | Answer with an option or free text. |
 | `/pause <goalId>` | Stop new submissions and integrations. Running tasks continue and results are deferred. |
 | `/resume <goalId>` | Resume deferred events and tasks. |

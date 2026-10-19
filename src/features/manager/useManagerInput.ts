@@ -6,10 +6,19 @@ import type { ManagerConversationSession } from './conversationSession.js';
 import type { useManagerAbortConfirmation } from './useManagerAbortConfirmation.js';
 import type { PendingQuestion, useManagerQuestionAnswer } from './useManagerQuestionAnswer.js';
 import type { useManagerSummaryApproval } from './useManagerSummaryApproval.js';
+import { SlashCommand } from '../../shared/constants.js';
+
+export function classifyManagerGoInput(text: string): 'command' | 'arguments' | 'draft' | null {
+  if (/[\r\n]/u.test(text)) return null;
+  const line = text.replace(/^[\t ]+|[\t ]+$/gu, '');
+  if (line === SlashCommand.Go) return 'command';
+  if (line.startsWith(`${SlashCommand.Go} `) || line.startsWith(`${SlashCommand.Go}\t`)) return 'arguments';
+  return SlashCommand.Go.startsWith(line) ? 'draft' : null;
+}
 
 export function useManagerInput({
   exiting, active, registering, editorRef, edit, setQueued, onExit, contentWidth, session,
-  abortConfirmation, questionAnswer, summaryApproval, abortGoal, saveAnswer, register,
+  abortConfirmation, questionAnswer, summaryApproval, abortGoal, saveAnswer, register, onInputUnavailable,
 }: {
   exiting: RefObject<boolean>;
   active: RefObject<AbortController | null>;
@@ -26,20 +35,25 @@ export function useManagerInput({
   abortGoal: (goalId: string) => Promise<void>;
   saveAnswer: (target: PendingQuestion, text: string) => Promise<void>;
   register: (revision: number) => Promise<void>;
+  onInputUnavailable: () => void;
 }): void {
   const { abortTarget } = abortConfirmation;
   const { answerTarget } = questionAnswer;
   const { pending, setPending } = summaryApproval;
+  const editDraft = (next: EditorState): void => {
+    if (!registering.current && pending !== null && session.getPendingSummary()?.revision === pending.revision
+      && next.text !== editorRef.current.text && classifyManagerGoInput(next.text) === null) {
+      summaryApproval.dismiss(pending);
+    }
+    edit(next);
+  };
   const insertText = (text: string): void => {
     if (exiting.current) return;
     if (!registering.current && active.current === null) {
-      if (abortTarget !== null) return;
+      if (abortTarget !== null) { onInputUnavailable(); return; }
       if (answerTarget !== null) questionAnswer.switchToFreeText(answerTarget);
     }
-    if (!registering.current && pending !== null && session.getPendingSummary()?.revision === pending.revision) {
-      summaryApproval.dismiss(pending);
-    }
-    edit(applyEditorKey(editorRef.current, { kind: 'insert', text }));
+    editDraft(applyEditorKey(editorRef.current, { kind: 'insert', text }));
   };
   usePaste(insertText);
   useInput((input, key) => {
@@ -62,6 +76,7 @@ export function useManagerInput({
       return;
     }
     if (!registering.current && active.current === null && abortTarget !== null) {
+      if (input !== '' && !key.ctrl && !key.meta && !key.return && !key.escape) onInputUnavailable();
       abortConfirmation.handleInput(abortTarget, key, abortGoal);
       return;
     }
@@ -74,12 +89,15 @@ export function useManagerInput({
     if (!registering.current && active.current === null && answerTarget !== null) {
       if (questionAnswer.handleInput(answerTarget, key, submitInput, editorRef, edit, saveAnswer)) return;
     }
-    if (!registering.current && pending !== null && session.getPendingSummary()?.revision === pending.revision) {
+    if (!registering.current && pending !== null && session.getPendingSummary()?.revision === pending.revision
+      && (key.escape || (editorRef.current.text === ''
+        && (key.upArrow || key.downArrow || (editKey === null && !key.return)
+          || (key.return && !key.shift && !key.meta))))) {
       if (summaryApproval.handleInput(pending, key, register)) return;
     }
     if (submitInput) {
       if (key.shift || key.meta) {
-        edit(applyEditorKey(editorRef.current, { kind: 'newline' }));
+        editDraft(applyEditorKey(editorRef.current, { kind: 'newline' }));
       } else if (editorRef.current.text.trim() !== '') {
         const text = editorRef.current.text;
         edit(commitEditorInput(editorRef.current, text));
@@ -87,6 +105,9 @@ export function useManagerInput({
       }
       return;
     }
-    if (editKey !== null) edit(applyEditorKey(editorRef.current, editKey));
+    if (editKey !== null) {
+      if (editKey.kind === 'insert') insertText(editKey.text);
+      else editDraft(applyEditorKey(editorRef.current, editKey));
+    }
   });
 }

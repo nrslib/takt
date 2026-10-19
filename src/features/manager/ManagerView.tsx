@@ -1,7 +1,7 @@
 import { useManagerAbortConfirmation } from './useManagerAbortConfirmation.js';
 import { useManagerQuestionAnswer, type PendingQuestion } from './useManagerQuestionAnswer.js';
 import { useManagerSummaryApproval } from './useManagerSummaryApproval.js';
-import { useManagerInput } from './useManagerInput.js';
+import { classifyManagerGoInput, useManagerInput } from './useManagerInput.js';
 import { ManagerQueuedMessages } from './ManagerQueuedMessages.js';
 import { ManagerAbortedGoals } from './ManagerAbortedGoals.js';
 import { ManagerPausedGoals } from './ManagerPausedGoals.js';
@@ -156,12 +156,21 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
     return () => clearInterval(timer);
   }, []);
   const submit = async (text: string): Promise<void> => {
+    setEntries((previous) => [...previous, { role: 'user', content: toDisplayText(text) }]);
+    const go = classifyManagerGoInput(text);
+    if (go === 'arguments') {
+      append(getLabel('manager.goUsage', lang));
+      return;
+    }
+    if (go === 'command') {
+      const summary = session.getPendingSummary();
+      if (summary !== null) { await register(summary.revision); return; }
+    }
     const controller = new AbortController();
     active.current = controller;
     setBusy(true);
     setPending(null);
     resetChoice();
-    setEntries((previous) => [...previous, { role: 'user', content: toDisplayText(text) }]);
     try {
       const savedQuestions = await refreshEvents();
       const command = !/[\r\n]/u.test(text) ? /^\/(pause|resume|abort)(?:[\t ]+(.*))?$/u.exec(text) : null;
@@ -194,10 +203,15 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
         else beginAnswer(target);
         return;
       }
-      const result = await session.handleUserMessage({ text, abortSignal: controller.signal, onNotification: append });
+      const result = await session.handleUserMessage({
+        text: go === 'command' ? getLabel('manager.goSummaryRequest', lang) : text,
+        abortSignal: controller.signal, onNotification: append,
+      });
       if (active.current !== controller || !mounted.current) return;
       await appendResult(result, controller.signal);
-      setPending(session.getPendingSummary());
+      const summary = session.getPendingSummary();
+      setPending(summary);
+      if (go === 'command' && result.kind === 'reply' && summary === null) append(getLabel('manager.goSummaryUnavailable', lang));
       await refreshEvents();
     } catch (error) {
       if (!controller.signal.aborted) await reportFailure(error);
@@ -275,6 +289,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   useManagerInput({
     exiting, active, registering, editorRef, edit, setQueued, onExit, contentWidth, session,
     abortConfirmation, questionAnswer, summaryApproval, abortGoal, saveAnswer, register,
+    onInputUnavailable: () => append(getLabel('manager.inputUnavailableDuringAbort', lang)),
   });
   return (
     <Box flexDirection="column">
@@ -297,7 +312,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
       <PromptInput text={editor.text} cursor={editor.cursor} contentWidth={contentWidth}
         placeholder={answerTarget === null ? (ja ? 'ゴールを相談してください' : 'Discuss your goal') : (ja ? '回答を入力してください' : 'Enter your answer')}
         hint="Enter: send / Shift+Enter: newline / Esc: interrupt / Ctrl+C: exit"
-        completions={[]} completionIndex={0} disabled={pending !== null || abortTarget !== null} />
+        completions={[]} completionIndex={0} disabled={abortTarget !== null || (pending !== null && editor.text === '')} />
     </Box>
   );
 }

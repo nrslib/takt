@@ -408,6 +408,11 @@ tui:
     exceededStart: "Saved stopping position: {start} (iteration {iteration})"
 
 manager:
+  goHelp: "/go: Request a summary of the current conversation, or approve and register an existing summary (no arguments)."
+  goUsage: "Usage: /go (takes no arguments)"
+  goSummaryRequest: "Summarize the current conversation for goal registration. Return the objective, out-of-scope items, acceptance criteria, and work constraints in the structured response's summary. If there is insufficient material to summarize, explain why in message and return summary: null."
+  goSummaryUnavailable: "Could not create a summary for registration because there is insufficient material. Please continue the conversation."
+  inputUnavailableDuringAbort: "Cannot enter input during abort confirmation. Finish the confirmation before typing."
   toolPermission:
     agentDenied: "{toolName}: The manager is not allowed to launch another AI agent."
     bashDenied: "Bash: Launching another AI command-line agent is not allowed."
