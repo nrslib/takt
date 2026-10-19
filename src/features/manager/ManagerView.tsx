@@ -303,8 +303,8 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
       {queued.length > 0 && <ManagerQueuedMessages queued={queued} ja={ja} />}
       {goals.some((goal) => goal.executionStatus === 'aborted') && <ManagerAbortedGoals goals={goals} lang={lang} />}
       {goals.some(isGoalPaused) && <ManagerPausedGoals goals={goals} lang={lang} />}
-      {questions.length > 0 && <ManagerPendingQuestions questions={questions} ja={ja} />}
-      {answerTarget !== null && <ManagerAnswerDialog answerTarget={answerTarget} ja={ja} />}
+      {questions.length > 0 && <ManagerPendingQuestions questions={questions} lang={lang} />}
+      {answerTarget !== null && <ManagerAnswerDialog answerTarget={answerTarget} lang={lang} />}
       {abortTarget !== null && <ManagerAbortDialog abortTarget={abortTarget} approve={approve} lang={lang} />}
       {pending !== null && <ManagerSummaryDialog pending={pending} approve={approve} ja={ja} />}
       <ManagerHelp lang={lang} />

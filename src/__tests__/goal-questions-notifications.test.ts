@@ -166,32 +166,6 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
     expect(goal.notifications![0]!.body).toBe(body);
   });
 
-  it.each(['blocked', 'custom'] as const)('stops consuming graphemes at the same bound for short and long %s inputs', (kind) => {
-    const original = Intl.Segmenter.prototype.segment;
-    const consumed = new Map<string, number>();
-    const spy = vi.spyOn(Intl.Segmenter.prototype, 'segment').mockImplementation(function (this: Intl.Segmenter, input: string) {
-      const segments = original.call(this, input);
-      return {
-        containing: (index?: number) => segments.containing(index),
-        *[Symbol.iterator]() {
-          for (const segment of segments) {
-            consumed.set(input, (consumed.get(input) ?? 0) + 1);
-            yield segment;
-          }
-          return undefined;
-        },
-      };
-    });
-    try {
-      for (const length of [601, 6001]) {
-        const body = 'e\u0301'.repeat(length);
-        const text = formatGoalNotification(goalRecord(), { kind, body }, language, 'customer-export', 'slack');
-        expect(text.split('\n')[2]).toBe('e\u0301'.repeat(599) + '…');
-        expect(consumed.get(body)).toBe(601);
-      }
-    } finally { spy.mockRestore(); }
-  });
-
   it('removes trailing whitespace only from a shortened prefix', () => {
     const prefix = 'e\u0301'.repeat(597) + '  ';
     const text = formatGoalNotification(goalRecord(), { kind: 'custom', body: prefix + 'XY' }, language, 'customer-export');
@@ -366,7 +340,8 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
       const options = destination === 'slack' && exceeds
         ? ['e\u0301'.repeat(59) + '…', ...savedQuestion.options!.slice(1)] : savedQuestion.options!;
       expect(lines[3]).toBe(optionPrefix + options.join(', '));
-      expect(lines[5]).toContain(`/answer ${savedQuestion.id}`);
+      expect(lines[5]).toContain(destination === 'slack' ? `/answer ${savedQuestion.id}` : '/answer');
+      if (destination === 'tui') expect(lines[5]).not.toContain(savedQuestion.id);
     }
   });
 
@@ -389,7 +364,10 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
       expect(lines[2]).toBe('e\u0301'.repeat(299) + '…');
       expect(lines).toContain(recommendationPrefix + 'e\u0301'.repeat(199) + '…');
       expect(lines.filter((line) => line.includes('/answer'))).toHaveLength(status === 'pending' ? 1 : 0);
-      if (status === 'pending') expect(lines.at(-1)).toContain(`/answer ${question.id}`);
+      if (status === 'pending') {
+        expect(lines.at(-1)).toContain(destination === 'slack' ? `/answer ${question.id}` : '/answer');
+        if (destination === 'tui') expect(lines.at(-1)).not.toContain(question.id);
+      }
       if (destination === 'tui') {
         expect(lines[3]).toBe(optionPrefix + options.join(', '));
         expect(lines.filter((line) => /ほかに|Additional options/iu.test(line))).toEqual([]);

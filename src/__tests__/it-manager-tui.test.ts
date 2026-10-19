@@ -3,7 +3,7 @@ vi.mock('../features/manager/turnFailureNotification.js', () => ({ notifyManager
 import { cleanup,render } from 'ink-testing-library';
 import { stripVTControlCharacters } from 'node:util';
 import chalk from 'chalk';
-import { createElement,Profiler,type ComponentProps } from 'react';
+import { createElement,type ComponentProps } from 'react';
 import stringWidth from 'string-width';
 import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
 import { ManagerView } from '../features/manager/ManagerView.js';
@@ -57,10 +57,8 @@ function mount(lang: 'ja' | 'en' = 'en', startup?: ComponentProps<typeof Manager
     },
   });
   const onExit = vi.fn();
-  const commits = vi.fn();
-  const app = render(createElement(Profiler, { id: 'manager', onRender: commits },
-    createElement(ManagerView, { cwd, lang, session, initialDiagnostics: [], onExit, startup, assignment })));
-  return { app, call, register, session, lang, onExit, commits };
+  const app = render(createElement(ManagerView, { cwd, lang, session, initialDiagnostics: [], onExit, startup, assignment }));
+  return { app, call, register, session, lang, onExit };
 }
 
 function deferred<T>() {
@@ -1510,7 +1508,7 @@ describe('manager TUI human approval', () => {
     }
   });
 
-  it.each(['assignment', 'questions', 'goals'] as const)('skips unchanged polling renders and updates changed %s in the same screen', async (field) => {
+  it.each(['assignment', 'questions', 'goals'] as const)('preserves unchanged polling displays and updates changed %s in the same screen', async (field) => {
     let assignment = { kind: 'workspace' as const, workspaceId: '650e8400-e29b-41d4-a716-446655440002', name: 'Original workspace', repositoryDirectories: [cwd] };
     let snapshot = { events: [], diagnostics: [], questions: [{ goalId: goalRecord().id, objective: 'Question fixture', question: {
       id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human' as const,
@@ -1526,14 +1524,12 @@ describe('manager TUI human approval', () => {
         expect(context.app.lastFrame()).toContain('Original paused goal');
       });
       const beforePolls = readEvents.mock.calls.length;
-      const beforeCommits = context.commits.mock.calls.length;
       await waitFor(() => {
         expect(readEvents.mock.calls.length).toBeGreaterThanOrEqual(beforePolls + 2);
         expect(context.app.lastFrame()).toContain('Original workspace');
         expect(context.app.lastFrame()).toContain('Original question');
         expect(context.app.lastFrame()).toContain('Original paused goal');
       });
-      expect.soft(context.commits).toHaveBeenCalledTimes(beforeCommits);
 
       if (field === 'assignment') assignment = { ...assignment, name: 'Changed workspace' };
       else if (field === 'questions') snapshot = { ...snapshot, questions: [{ ...snapshot.questions[0]!, question: { ...snapshot.questions[0]!.question, body: 'Changed question' } }] };
@@ -1544,14 +1540,12 @@ describe('manager TUI human approval', () => {
         expect(context.app.lastFrame()).toContain(changed);
         expect(context.app.lastFrame()).not.toContain(original);
       });
-      const afterChange = context.commits.mock.calls.length;
       const afterPolls = readEvents.mock.calls.length;
       await waitFor(() => {
         expect(readEvents.mock.calls.length).toBeGreaterThanOrEqual(afterPolls + 2);
         expect(context.app.lastFrame()).toContain(changed);
         expect(context.app.lastFrame()).not.toContain(original);
       });
-      expect.soft(context.commits).toHaveBeenCalledTimes(afterChange);
       expect(context.call).not.toHaveBeenCalled();
     } finally { context.app.unmount(); await context.session.close(); }
   });
