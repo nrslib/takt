@@ -430,16 +430,30 @@ manager:
   turnFailureNotification: |-
     The manager failed to process an event. Unprocessed events remain.
     Review the logs and configuration to resolve the event processing failure.
-    For a paused goal, run /resume {goalId} in the TUI to resume it. An aborted goal cannot be resumed.
+    For a paused goal, enter /resume in the TUI and select it from the list. An aborted goal cannot be resumed.
     Reason: {reason}
-  goalExecutionUsage: "Pause: /pause <goalId> / Resume: /resume <goalId> / Abort: /abort <goalId> (goal ID required)"
-  invalidGoalId: "Invalid goal ID format."
+  goalExecutionUsage: "Select goal: /pause / /resume / /abort (no arguments)"
+  answerHelp: "/answer: Select a pending inquiry from the list to answer (no arguments)."
+  selectionArguments: "/{command} now uses list selection. Enter /{command} without arguments and select a target."
+  selectionTitles:
+    answer: "Select an inquiry to answer"
+    pause: "Select a goal to pause"
+    resume: "Select a goal to resume"
+    abort: "Select a goal to abort"
+  selectionHint: "↑↓ Choose / Enter Select / Esc Close"
+  selectionEmpty:
+    answer: "No pending inquiries to answer."
+    pause: "No active goals to pause."
+    resume: "No paused goals to resume."
+    abort: "No unfinished goals to abort."
+  goalRegistered: "Goal registered: {name} ({id})\n{branch}"
   sessionUnavailable: "The manager session is currently unavailable."
   goalPaused: "Goal paused: {goalId}"
   goalResumed: "Goal resumed: {goalId}"
   goalExecutionFailed: "Could not change the goal execution state: {reason}"
   pausedGoals: "Paused goals"
   goalStates:
+    active: "Active"
     paused: "Paused"
     aborted: "Aborted"
   resumeHint: "Resume: /resume"
@@ -453,9 +467,11 @@ manager:
   answerChoiceHint: "↑↓ Choose / Enter Select / Esc Back"
   answerPrompt: "Enter your answer"
   goalAborted: "Goal aborted: {goalId}"
-  completedGoalCannotAbort: "A completed goal cannot be aborted: {goalId}"
   abortedGoals: "Aborted goals"
   abortConfirmation: "Confirm goal abort"
+  abortRetryWarning: "The abort operation failed. Retry the same goal to finish abort processing."
+  retryAbort: "Retry abort processing"
+  selectionChanged: "The selected goal is no longer eligible. The candidate list has been updated."
   abortWarning: "Aborting cannot be undone. Pending tasks are invalidated and running tasks belonging to this goal are interrupted. Branches, sub-PRs and records are retained."
   confirmAbort: "Abort goal"
   cancelAbort: "Cancel"
@@ -480,7 +496,7 @@ manager:
   notificationOptions: "Options: {options}"
   notificationMoreOptions: "Additional options: {count}. View all options in the TUI."
   notificationRecommendation: "Recommendation: {recommendation}"
-  notificationAnswer: "Open takt manager in {project} and enter /answer {id} in the TUI to answer."
+  notificationAnswer: "Open takt manager in {project}, enter /answer in the TUI and select an inquiry from the list to answer."
   notificationMerge: "Review the changes and merge them into the {branch} branch."
   notificationMergeRepository: "Run the following commands in order in a clean worktree of the {project} repository where you can switch branches."
   notificationMergeWorktree: "Check the state of the worktree at {directory}, then run the following commands in order."
