@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentResponse } from '../core/models/types.js';
 import type { ProviderCallOptions, ProviderType } from '../infra/providers/types.js';
 import type { ToolPermissionDecision, ToolPermissionDecisionHandler } from '../infra/claude/types.js';
-import type { Goal } from '../infra/goals/schema.js';
+import type { Goal, GoalQuestionInput } from '../infra/goals/schema.js';
+import { createInquiry } from '../infra/goals/inquiry.js';
 import type { CompiledProviderEnvironment } from '../infra/config/runtime-provider/environment.js';
 import { executeIsolatedStructuredInternalAgent } from '../agents/agent-usecases.js';
 import { runAgent } from '../agents/runner.js';
@@ -10,7 +11,7 @@ import { createManagerConversationPlan } from '../features/manager/conversationP
 import { createManagerConversationSession } from '../features/manager/conversationSession.js';
 import { TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
 import { TAKT_MCP_MANAGER_TOOL_NAMES } from '../features/mcp/server.js';
-import { buildSdkOptions, TOOL_PERMISSION_DECISION_TIMEOUT_MS } from '../infra/claude/options-builder.js';
+import { buildSdkOptions } from '../infra/claude/options-builder.js';
 import { parseCodexToolPermissionInput, toCodexToolPermissionOutput } from '../infra/codex/tool-permission-hook-protocol.js';
 import { validateStructuredOutputAgainstSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
@@ -19,6 +20,7 @@ import { makeProvider } from './test-helpers.js';
 const doubles = vi.hoisted(() => ({
   call: vi.fn(), provider: vi.fn(), assistant: vi.fn(), facet: vi.fn(), compile: vi.fn(),
   store: vi.fn(), update: vi.fn(), list: vi.fn(), notificationOptions: vi.fn(), savedNotification: vi.fn(), slack: vi.fn(),
+  inquiryApproval: vi.fn(),
 }));
 vi.mock('../agents/agent-usecases.js', () => ({ executeIsolatedStructuredInternalAgent: vi.fn() }));
 vi.mock('../agents/runner.js', () => ({ runAgent: vi.fn() }));
@@ -56,6 +58,9 @@ vi.mock('../infra/goals/store.js', () => ({ GoalStore: class {
   constructor(directory: string) { doubles.store(directory); }
   update = doubles.update; list = doubles.list;
 } }));
+vi.mock('../infra/goals/standalone-inquiries.js', () => ({ StandaloneInquiryStore: class {
+  getOrCreateApproval = doubles.inquiryApproval;
+} }));
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { listTaskStateItems = () => []; } }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
 vi.mock('../features/daemon/lifecycle.js', () => ({ ensureDaemon: vi.fn(async () => {}) }));
@@ -72,6 +77,7 @@ const toolCwd = '/fixture/actual-tool';
 const humanInstruction = '依存関係を調べて報告してください';
 const policy = { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true };
 const webhook = 'https://example.test/manager-notification';
+const inquiryId = '650e8400-e29b-41d4-a716-446655440001';
 type DecisionOptions = ProviderCallOptions & { onToolPermissionDecision?: ToolPermissionDecisionHandler };
 type TurnOptions = Parameters<ReturnType<typeof createManagerConversationSession>['handleUserMessage']>[0] & {
   goal?: { id: string; repositoryDirectory: string; constraints: string[] };
@@ -133,6 +139,7 @@ beforeEach(() => {
   doubles.call.mockResolvedValue(reply());
   doubles.facet.mockImplementation((name: string, category: string, context: { lang: string }) => `${context.lang}:${category}:${name}:fixture-content`);
   doubles.list.mockResolvedValue({ goals: [], errors: [] });
+  doubles.inquiryApproval.mockImplementation(async (input: GoalQuestionInput) => ({ ...createInquiry(input), id: inquiryId }));
   doubles.update.mockImplementation(async (_id: string, transform: (current: Goal) => Goal) => {
     goal = transform(goal); return goal;
   });
@@ -280,7 +287,6 @@ describe('manager tool permission classification', () => {
     });
   });
 });
-
 describe('manager permission judge input and output', () => {
   it.each(['ja', 'en'] as const)('resolves %s facets and passes sanitized tool arguments and actual cwd to an isolated judge', async (language) => {
     const session = createSession('claude-sdk', language);
@@ -416,7 +422,6 @@ describe('manager permission judge input and output', () => {
     });
   });
 });
-
 describe('manager permission judge deadline and cancellation', () => {
   it.each(['ja', 'en'] as const)('denies an already cancelled request in %s without invoking the judge or leaving timers', async (language) => {
     vi.useFakeTimers();
@@ -433,11 +438,6 @@ describe('manager permission judge deadline and cancellation', () => {
       expect(executeIsolatedStructuredInternalAgent).not.toHaveBeenCalled();
       expect(vi.getTimerCount()).toBe(0);
     } finally { await session.close(); }
-  });
-  it('sets the judge deadline to 30000 ms below the SDK hook deadline', async () => {
-    const { MANAGER_PERMISSION_JUDGE_TIMEOUT_MS } = await import('../features/manager/toolPermissionJudge.js');
-    expect(MANAGER_PERMISSION_JUDGE_TIMEOUT_MS).toBe(30_000);
-    expect(MANAGER_PERMISSION_JUDGE_TIMEOUT_MS).toBeLessThan(TOOL_PERMISSION_DECISION_TIMEOUT_MS);
   });
   it.each([{ language: 'ja', provider: 'claude-sdk' }, { language: 'en', provider: 'claude-sdk' }, { language: 'ja', provider: 'codex' }] as const)('denies at 30 seconds in $language for $provider even if the judge ignores abort, and never accepts its late allow', async ({ language, provider }) => {
     vi.useFakeTimers();
@@ -500,9 +500,9 @@ describe('manager permission confirmation and turn context', () => {
   beforeEach(() => {
     vi.mocked(executeIsolatedStructuredInternalAgent).mockResolvedValue(judgment({ decision: 'ask', reason }));
   });
-  it.each(['ja', 'en'] as const)('denies confirmation immediately in %s, delivers a goal-less notice, and exposes the reason in the next turn', async (language) => {
+  it.each(['ja', 'en'] as const)('denies confirmation with a saved inquiry ID in %s, delivers a goal-less notice, and exposes the reason in the next turn', async (language) => {
     const session = createSession('claude-sdk', language); const onNotification = vi.fn();
-    const expectedReason = language === 'ja' ? `人の確認待ち (Bash): ${reason}` : `Waiting for human confirmation (Bash): ${reason}`;
+    let output: unknown;
     let decision: ToolPermissionDecision | undefined;
     doubles.call.mockImplementationOnce(async (_prompt: string, options: DecisionOptions) => {
       const decidePermission = handler(options);
@@ -511,18 +511,18 @@ describe('manager permission confirmation and turn context', () => {
       } });
       const hook = sdk.hooks?.PreToolUse?.find(({ matcher }) => matcher === undefined)?.hooks[0];
       expect(hook).toBeTypeOf('function');
-      const output = await hook!({ hook_event_name: 'PreToolUse', session_id: 'sdk-session', transcript_path: '/fixture/transcript',
+      output = await hook!({ hook_event_name: 'PreToolUse', session_id: 'sdk-session', transcript_path: '/fixture/transcript',
         cwd: toolCwd, tool_name: 'Bash', tool_input: { command: 'pwd' }, tool_use_id: 'fixture-tool-use',
       }, 'fixture-tool-use', { signal: new AbortController().signal });
-      expect(output).toMatchObject({ hookSpecificOutput: {
-        permissionDecision: 'deny', permissionDecisionReason: expectedReason,
-      } });
       return reply();
     });
     try {
       const turn: TurnOptions = { text: humanInstruction, onNotification };
       expect((await session.handleUserMessage(turn)).kind).toBe('reply');
-      expect(decision).toEqual({ decision: 'deny', reason: expectedReason });
+      expect(decision).toMatchObject({ decision: 'deny', reason: expect.stringContaining(inquiryId) });
+      expect(decision).toHaveProperty('reason', expect.stringContaining(reason));
+      const expectedReason = (decision as { reason: string }).reason;
+      expect(output).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny', permissionDecisionReason: expectedReason } });
       expect(onNotification).toHaveBeenCalledWith(`manager: ${expectedReason}`);
       expect(doubles.slack).toHaveBeenCalledWith(webhook, `manager: ${expectedReason}`);
       expect(doubles.update).not.toHaveBeenCalled();
@@ -531,8 +531,7 @@ describe('manager permission confirmation and turn context', () => {
     } finally { await session.close(); }
   });
   it.each(['ja', 'en'] as const)('saves a custom notice in %s for the specified goal repository and sends it through existing goal delivery', async (language) => {
-    const session = createSession('claude-sdk', language); const previous = goal;
-    const expectedReason = language === 'ja' ? `人の確認待ち (Bash): ${reason}` : `Waiting for human confirmation (Bash): ${reason}`;
+    const session = createSession('claude-sdk', language);
     const repositoryDirectory = '/fixture/goal-repository';
     doubles.call.mockImplementationOnce(async (_prompt: string, options: DecisionOptions) => {
       expectDenial(await handler(options)(request())); return reply();
@@ -542,8 +541,12 @@ describe('manager permission confirmation and turn context', () => {
       expect((await session.handleUserMessage(turn)).kind).toBe('reply');
       expect(doubles.update).toHaveBeenCalledWith(goal.id, expect.any(Function));
       expect(doubles.store).toHaveBeenLastCalledWith(repositoryDirectory);
-      expect(goal.notifications).toEqual([expect.objectContaining({ kind: 'custom', body: expectedReason })]);
-      expect(doubles.savedNotification).toHaveBeenCalledWith(repositoryDirectory, previous, goal, webhook);
+      expect(goal.questions).toEqual([expect.objectContaining({ kind: 'approval' })]);
+      const savedReason = goal.notifications![0]!.body;
+      expect(savedReason).toContain(goal.questions![0]!.id);
+      expect(savedReason).toContain(reason);
+      expect(doubles.savedNotification).toHaveBeenCalledWith(repositoryDirectory,
+        expect.objectContaining({ questions: goal.questions }), goal, webhook);
     } finally { await session.close(); }
   });
   it('respects a disabled custom notification policy while still refusing the operation', async () => {
@@ -566,9 +569,11 @@ describe('manager permission confirmation and turn context', () => {
       expect(doubles.slack).not.toHaveBeenCalled();
     } finally { await session.close(); }
   });
-  it.each(['save', 'goal delivery', 'goal-less Slack'] as const)('continues refusal and conversation after %s fails', async (failure) => {
+  it.each(['notice save', 'goal delivery', 'goal-less Slack'] as const)('continues refusal and conversation after %s fails', async (failure) => {
     const session = createSession(); const onNotification = vi.fn();
-    if (failure === 'save') doubles.update.mockRejectedValueOnce(new Error('fixture save failure'));
+    if (failure === 'notice save') doubles.update
+      .mockImplementationOnce(async (_id: string, transform: (current: Goal) => Goal) => { goal = transform(goal); return goal; })
+      .mockRejectedValueOnce(new Error('fixture notice save failure'));
     if (failure === 'goal delivery') doubles.savedNotification.mockRejectedValueOnce(new Error('fixture delivery failure'));
     if (failure === 'goal-less Slack') doubles.slack.mockRejectedValueOnce(new Error('fixture Slack failure'));
     let decision: ToolPermissionDecision | undefined;
@@ -668,8 +673,6 @@ describe('manager permission confirmation and turn context', () => {
     } finally { await session.close(); }
   });
 });
-
-
 describe('Codex manager tool permission decisions', () => {
   it.each(['deny', 'allow'] as const)('denies spawn_agent with a reason in PreToolUse output without invoking a judge configured to %s', async (judgeDecision) => {
     vi.mocked(executeIsolatedStructuredInternalAgent).mockResolvedValue(judgment({

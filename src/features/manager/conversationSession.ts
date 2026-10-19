@@ -235,6 +235,10 @@ export function createManagerConversationSession(input: {
           if (usesPermissionJudge && plan.permissionJudge === undefined) throw new Error('Manager permission judge plan is missing');
           const onToolPermissionDecision = usesPermissionJudge ? createManagerToolPermissionHandler({
             plan: plan.permissionJudge!, provider: plan.ctx.providerType, cwd, instruction: options.text, goal: options.goal,
+            configDirectory: getGlobalConfigDir(),
+            get owner() {
+              return assignmentIdentity ?? { kind: 'repository', repositoryDirectory: cwd };
+            },
             abortSignal: controller.signal, onNotification: options.onNotification,
             onDenial: (reason) => { if (turn === generation && !controller.signal.aborted) denialReasons.push(reason); },
           }) : undefined;
