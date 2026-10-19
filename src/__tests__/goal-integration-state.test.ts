@@ -1,8 +1,13 @@
-import { beforeEach,expect,it,vi } from 'vitest';
+import { afterEach,beforeEach,expect,it,vi } from 'vitest';
 import { checkGoalCompletion,completeGoal,integrateGoalTask,reopenGoal } from '../infra/goals/integration.js';
-import type { Goal } from '../infra/goals/schema.js';
+import type { Goal,GoalQuestion } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 const doubles = vi.hoisted(() => ({ get: vi.fn(), getSync: vi.fn(), list: vi.fn(), update: vi.fn(), tasks: vi.fn(), merge: vi.fn(), sha: vi.fn(), included: vi.fn(), contentIncluded: vi.fn(), worktrees: vi.fn(), diff: vi.fn(), environment: vi.fn(), gitSync: vi.fn() }));
+const standalone = vi.hoisted(() => ({ construct: vi.fn(), create: vi.fn(), answer: vi.fn(), withdraw: vi.fn() }));
+vi.mock('../infra/goals/standalone-inquiries.js', () => ({ StandaloneInquiryStore: class {
+  constructor() { standalone.construct(); }
+  create = standalone.create; answer = standalone.answer; withdraw = standalone.withdraw;
+} }));
 vi.mock('node:child_process', async (original) => ({ ...await original<typeof import('node:child_process')>(), spawnSync: doubles.gitSync }));
 vi.mock('../infra/task/git-environment.js', () => ({ buildSafeGitEnvironment: doubles.environment }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.get; getSync = doubles.getSync; list = doubles.list; update = doubles.update; } }));
@@ -16,9 +21,44 @@ vi.mock('../infra/goals/diff-summary.js', () => ({ readGoalDiffSummary: doubles.
 const sourceSha = 'a'.repeat(40);
 const targetSha = 'b'.repeat(40);
 const policy = { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true };
+const now = '2026-10-19T03:00:00.000Z';
+const earlier = '2026-10-19T01:00:00.000Z';
+const completionReason = expect.stringMatching(/^(?!.*\b(?:not|never)\b)(?=.*\bgoal\b).*\bcomplet(?:e|ed)\b/i);
+
+it.each(['Goal was completed', 'Goal was successfully completed', 'This goal is complete.'])(
+  'accepts an affirmative completion reason: %s', (reason) => {
+    expect(reason).toEqual(completionReason);
+  },
+);
+it.each(['Goal was not completed', 'Goal was never completed', 'Goal was aborted', '', undefined])(
+  'rejects a reason that does not affirm completion: %s', (reason) => {
+    expect(reason).not.toEqual(completionReason);
+  },
+);
+
+function pendingInquiry(id: string, kind: NonNullable<GoalQuestion['kind']>): GoalQuestion {
+  return { id, kind, recipient: 'human', body: '確認してください', status: 'pending', createdAt: earlier,
+    options: ['続行', '中止'], recommendation: '続行', targetSha: sourceSha,
+    ...(kind === 'approval' ? { operation: {
+      toolName: 'Bash', args: '{"command":"git status"}', cwd: '/project', argsDigest: 'c'.repeat(64),
+    } } : {}),
+  };
+}
+function completionInquiries(): GoalQuestion[] {
+  return [
+    pendingInquiry('650e8400-e29b-41d4-a716-446655440001', 'question'),
+    pendingInquiry('650e8400-e29b-41d4-a716-446655440002', 'approval'),
+    pendingInquiry('650e8400-e29b-41d4-a716-446655440003', 'operation_request'),
+    { ...pendingInquiry('650e8400-e29b-41d4-a716-446655440004', 'approval'), status: 'answered',
+      answer: { text: '確認済み', decision: 'allow', scope: 'goal', source: 'slack', answeredAt: earlier }, consumedAt: earlier },
+    { ...pendingInquiry('650e8400-e29b-41d4-a716-446655440005', 'question'), status: 'withdrawn',
+      withdrawalReason: 'No longer needed', withdrawnAt: earlier },
+  ];
+}
 let goal: Goal;
 beforeEach(() => {
   vi.resetAllMocks(); goal = goalRecord();
+  vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(now);
   doubles.get.mockImplementation(async () => structuredClone(goal));
   doubles.getSync.mockImplementation(() => structuredClone(goal));
   doubles.list.mockImplementation(async () => ({ goals: [goal], errors: [] }));
@@ -34,6 +74,7 @@ beforeEach(() => {
     status: args.includes('--is-ancestor') ? 1 : 0, signal: null,
   }));
 });
+afterEach(() => vi.useRealTimers());
 it('integrates reviewed task work and records it only in the shared work log', async () => {
   doubles.contentIncluded.mockResolvedValue(true);
   expect(await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja')).toMatchObject({ status: 'merged', sha: targetSha });
@@ -61,8 +102,11 @@ it.each(['conflict', 'checked_out'] as const)('leaves work unrecorded after a %s
   expect(doubles.update).not.toHaveBeenCalled();
 });
 it('waits for the target branch to contain the saved goal SHA before completing', async () => {
+  goal = { ...goal, questions: completionInquiries() };
+  const originalQuestions = structuredClone(goal.questions!);
   expect(await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy)).toMatchObject({ status: 'awaiting_merge' });
   expect(goal.status).toBe('awaiting_merge'); expect(doubles.merge).not.toHaveBeenCalled();
+  expect(goal.questions).toEqual(originalQuestions);
   const waiting = structuredClone(goal);
   doubles.update.mockClear();
   expect(await checkGoalCompletion('/project', goal.id, undefined, policy)).toMatchObject({ included: false });
@@ -75,6 +119,11 @@ it('waits for the target branch to contain the saved goal SHA before completing'
     expect.objectContaining({ kind: 'awaiting_merge' }), expect.objectContaining({ kind: 'completed', body: 'evidence' }),
   ]);
   expect(doubles.contentIncluded).toHaveBeenLastCalledWith('/project', sourceSha, targetSha, undefined);
+  expect(goal.questions).toEqual([
+    ...originalQuestions.slice(0, 3).map((question) => ({ ...question, status: 'withdrawn',
+      withdrawalReason: completionReason, withdrawnAt: now })),
+    ...originalQuestions.slice(3),
+  ]);
 });
 it('recognizes included content without ancestry in a checked-out target without changing Git', async () => {
   doubles.contentIncluded.mockResolvedValue(true);
@@ -281,10 +330,209 @@ it('automatically completes only after a successful target merge and does not re
   expect(doubles.merge).toHaveBeenCalledOnce(); expect(goal.notifications).toHaveLength(1);
 });
 it('preserves awaiting-merge evidence on repeated completion requests', async () => {
+  goal = { ...goal, questions: completionInquiries() };
   await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy);
   const before = structuredClone(goal);
   await completeGoal('/project', goal.id, sourceSha, 'repeated', 'approve', undefined, policy);
   expect(goal).toEqual(before); expect(doubles.diff).toHaveBeenCalledOnce();
+});
+
+it.each((['auto merge', 'included content', 'awaiting merge included content', 'awaiting merge auto merge', 'completion check'] as const).flatMap((path) =>
+  [false, true].map((paused) => ({ path, paused })),
+))('checks the latest pause state via $path with paused=$paused', async ({ path, paused }) => {
+  goal = { ...goal, questions: completionInquiries() };
+  if (path === 'completion check' || path === 'awaiting merge included content' || path === 'awaiting merge auto merge') {
+    await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy);
+    expect(goal).toMatchObject({ status: 'awaiting_merge', completion: { goalSha: sourceSha } });
+  }
+  const autoMerge = path === 'auto merge' || path === 'awaiting merge auto merge';
+  const expectedSha = path === 'awaiting merge auto merge' ? 'c'.repeat(40) : sourceSha;
+  doubles.sha.mockImplementation(async (_cwd: string, branch: string) => branch === goal.branch ? expectedSha : targetSha);
+  doubles.contentIncluded.mockResolvedValue(!autoMerge);
+  doubles.contentIncluded.mockClear();
+  doubles.merge.mockClear();
+  doubles.update.mockClear();
+  const observed: Goal[] = [];
+  const update = doubles.update.getMockImplementation()!;
+  doubles.update.mockImplementation(async (id: string, transform: (current: Goal) => Goal) => update(id, (current: Goal) => {
+    observed.push(structuredClone(current));
+    return transform(current);
+  }));
+  let started!: () => void;
+  let release!: () => void;
+  const starting = new Promise<void>((resolve) => { started = resolve; });
+  const waiting = new Promise<void>((resolve) => { release = resolve; });
+  if (autoMerge) {
+    doubles.merge.mockImplementationOnce(async () => {
+      started();
+      await waiting;
+      return { status: 'merged', sha: targetSha };
+    });
+  } else {
+    doubles.contentIncluded.mockImplementationOnce(async () => {
+      started();
+      await waiting;
+      return true;
+    });
+  }
+  const complete = () => path === 'completion check' ? checkGoalCompletion('/project', goal.id, undefined, policy)
+    : completeGoal('/project', goal.id, expectedSha, 'evidence', autoMerge ? 'auto' : 'approve', undefined, policy);
+  expect(goal.executionStatus).toBe('active');
+  const completing = complete();
+  await Promise.race([starting, completing]);
+  expect(doubles.contentIncluded).toHaveBeenCalledExactlyOnceWith('/project', expectedSha, targetSha, undefined);
+  if (autoMerge) expect(doubles.merge).toHaveBeenCalledExactlyOnceWith('/project', expectedSha, goal.integrationBranch, undefined);
+  else expect(doubles.merge).not.toHaveBeenCalled();
+  expect(doubles.update).not.toHaveBeenCalled();
+  if (paused) goal = { ...goal, executionStatus: 'paused' };
+  const before = structuredClone(goal);
+  release();
+
+  if (paused) {
+    await expect(completing).rejects.toThrow();
+    expect(goal).toEqual(before);
+    expect(observed).toEqual([before]);
+    goal = { ...goal, executionStatus: 'active' };
+    await complete();
+  } else {
+    expect(await completing).toMatchObject({ goal: { status: 'completed' } });
+    expect(observed).toEqual([before]);
+  }
+  expect(goal).toMatchObject({ status: 'completed', executionStatus: 'active', completion: { goalSha: expectedSha, targetSha } });
+  expect(goal.questions).toEqual([
+    ...before.questions!.slice(0, 3).map((question) => ({ ...question, status: 'withdrawn',
+      withdrawalReason: completionReason, withdrawnAt: now })),
+    ...before.questions!.slice(3),
+  ]);
+  expect(goal.notifications).toEqual([...before.notifications ?? [], expect.objectContaining({ kind: 'completed' })]);
+});
+
+it.each(['auto merge', 'included content', 'completion check'] as const)(
+  'closes only pending inquiries in one saved completion via %s', async (path) => {
+    goal = { ...goal, questions: completionInquiries() };
+    if (path === 'completion check') await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy);
+    const before = structuredClone(goal);
+    doubles.update.mockClear();
+    doubles.sha.mockImplementation(async (_cwd: string, branch: string) => branch === goal.branch ? sourceSha : targetSha);
+    doubles.contentIncluded.mockResolvedValue(path !== 'auto merge');
+
+    const result = path === 'completion check' ? await checkGoalCompletion('/project', goal.id, undefined, policy)
+      : await completeGoal('/project', goal.id, sourceSha, 'evidence', path === 'auto merge' ? 'auto' : 'approve', undefined, policy);
+
+    expect(result).toMatchObject({ goal: { id: before.id, status: 'completed', completion: { targetSha } } });
+    expect(doubles.update).toHaveBeenCalledOnce();
+    expect(goal.questions?.slice(3)).toEqual(before.questions?.slice(3));
+    expect(standalone.construct).not.toHaveBeenCalled();
+    expect(standalone.create).not.toHaveBeenCalled();
+    expect(standalone.answer).not.toHaveBeenCalled();
+    expect(standalone.withdraw).not.toHaveBeenCalled();
+    expect(goal.questions).toEqual([
+      ...before.questions!.slice(0, 3).map((question) => ({ ...question, status: 'withdrawn',
+        withdrawalReason: completionReason, withdrawnAt: now })),
+      ...before.questions!.slice(3),
+    ]);
+    expect(result.goal).toEqual(goal);
+  },
+);
+
+it.each(['completeGoal', 'checkGoalCompletion'] as const)(
+  'closes pending inquiries even when completion notifications are disabled in %s', async (path) => {
+    goal = { ...goal, questions: completionInquiries() };
+    const quietPolicy = { ...policy, completed: false };
+    if (path === 'checkGoalCompletion') await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, quietPolicy);
+    const before = structuredClone(goal);
+    doubles.update.mockClear(); doubles.contentIncluded.mockResolvedValue(true);
+
+    const result = path === 'checkGoalCompletion' ? await checkGoalCompletion('/project', goal.id, undefined, quietPolicy)
+      : await completeGoal('/project', goal.id, sourceSha, 'evidence', 'auto', undefined, quietPolicy);
+
+    expect(goal.status).toBe('completed');
+    expect(goal.notifications).toEqual(before.notifications);
+    expect(doubles.update).toHaveBeenCalledOnce();
+    expect(goal.questions?.slice(0, 3)).toEqual(before.questions!.slice(0, 3).map((question) => ({
+      ...question, status: 'withdrawn', withdrawalReason: completionReason, withdrawnAt: now,
+    })));
+    expect(result.goal).toEqual(goal);
+  },
+);
+
+it.each(['completeGoal', 'checkGoalCompletion'] as const)(
+  'closes newly added inquiries and preserves the latest answers at the update boundary in %s', async (path) => {
+    goal = { ...goal, questions: completionInquiries() };
+    if (path === 'checkGoalCompletion') await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy);
+    doubles.contentIncluded.mockResolvedValue(true); doubles.update.mockClear();
+    const answered: GoalQuestion = { ...goal.questions![0]!, status: 'answered',
+      answer: { text: '続行', source: 'tui', answeredAt: now } };
+    const added = pendingInquiry('650e8400-e29b-41d4-a716-446655440006', 'operation_request');
+    const update = doubles.update.getMockImplementation()!;
+    doubles.update.mockImplementationOnce(async (id: string, transform: (current: Goal) => Goal) => {
+      goal = { ...goal, questions: [answered, ...goal.questions!.slice(1), added] };
+      return update(id, transform);
+    });
+
+    const result = path === 'checkGoalCompletion' ? await checkGoalCompletion('/project', goal.id, undefined, policy)
+      : await completeGoal('/project', goal.id, sourceSha, 'evidence', 'auto', undefined, policy);
+
+    expect(goal.status).toBe('completed');
+    expect(goal.questions?.[0]).toEqual(answered);
+    expect(goal.questions?.at(-1)).toEqual({ ...added, status: 'withdrawn',
+      withdrawalReason: completionReason, withdrawnAt: now });
+    expect(doubles.update).toHaveBeenCalledOnce();
+    expect(result.goal).toEqual(goal);
+  },
+);
+
+it.each(['completeGoal', 'checkGoalCompletion'] as const)(
+  'keeps inquiries unchanged after a failed completion save and closes them on retry in %s', async (path) => {
+    goal = { ...goal, questions: completionInquiries() };
+    if (path === 'checkGoalCompletion') await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy);
+    const before = structuredClone(goal);
+    doubles.contentIncluded.mockResolvedValue(true); doubles.update.mockClear();
+    doubles.update.mockImplementationOnce(async (_id: string, transform: (current: Goal) => Goal) => {
+      transform(goal);
+      throw new Error('save failed');
+    });
+    const complete = () => path === 'checkGoalCompletion' ? checkGoalCompletion('/project', goal.id, undefined, policy)
+      : completeGoal('/project', goal.id, sourceSha, 'evidence', 'auto', undefined, policy);
+
+    await expect(complete()).rejects.toThrow('save failed');
+    expect(goal).toEqual(before);
+    doubles.update.mockClear();
+    const result = await complete();
+
+    expect(goal.status).toBe('completed');
+    expect(doubles.update).toHaveBeenCalledOnce();
+    expect(goal.questions).toEqual([
+      ...before.questions!.slice(0, 3).map((question) => ({ ...question, status: 'withdrawn',
+        withdrawalReason: completionReason, withdrawnAt: now })),
+      ...before.questions!.slice(3),
+    ]);
+    expect(result.goal).toEqual(goal);
+  },
+);
+
+it.each(['approve', 'checked_out'] as const)('preserves every inquiry when completion waits for %s', async (path) => {
+  goal = { ...goal, questions: completionInquiries() };
+  const before = structuredClone(goal.questions);
+  if (path === 'checked_out') doubles.merge.mockResolvedValue({ status: 'checked_out', worktrees: ['/target-worktree'] });
+
+  const result = await completeGoal('/project', goal.id, sourceSha, 'evidence', path === 'approve' ? 'approve' : 'auto', undefined, policy);
+
+  expect(goal.status).toBe('awaiting_merge');
+  expect(goal.questions).toEqual(before);
+  expect(result.goal).toEqual(goal);
+});
+
+it('preserves every inquiry when the automatic completion merge conflicts', async () => {
+  goal = { ...goal, questions: completionInquiries() };
+  const before = structuredClone(goal);
+  doubles.merge.mockResolvedValue({ status: 'conflict', conflicts: ['file'] });
+
+  expect(await completeGoal('/project', goal.id, sourceSha, 'evidence', 'auto', undefined, policy))
+    .toMatchObject({ status: 'conflict' });
+
+  expect(goal).toEqual(before);
+  expect(doubles.update).not.toHaveBeenCalled();
 });
 
 it('lets the manager integrate reviewed useful work from a failed task', async () => {

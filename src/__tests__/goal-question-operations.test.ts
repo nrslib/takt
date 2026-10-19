@@ -169,6 +169,56 @@ it('reuses a pending question from the update without adding a duplicate notific
   expect(goal.notifications).toBeUndefined();
 });
 
+it.each((['question', 'operation_request'] as const).flatMap((kind) =>
+  (['before request', 'before update', 'awaiting merge'] as const).map((timing) => ({ kind, timing })),
+))('checks completion before saving a $kind inquiry: $timing', async ({ kind, timing }) => {
+  goal = GoalSchema.parse({
+    ...goal, status: timing === 'before request' ? 'completed' : 'awaiting_merge',
+    completion: {
+      goalBranch: goal.branch, goalSha: 'a'.repeat(40), targetBranch: goal.integrationBranch,
+      targetSha: 'b'.repeat(40), summary: 'evidence', instructions: [],
+      changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+    },
+    questions: [{
+      id: '650e8400-e29b-41d4-a716-446655440001', body: '確認してください', kind,
+      recipient: 'human', status: 'withdrawn', withdrawalReason: 'Goal was completed', withdrawnAt: '2026-10-19T03:00:00.000Z',
+    }],
+  });
+  const initial = structuredClone(goal);
+  const latest = GoalSchema.parse({ ...goal, status: timing === 'awaiting merge' ? 'awaiting_merge' : 'completed' });
+  const observed: Goal[] = [];
+  const update = doubles.update.getMockImplementation()!;
+  doubles.update.mockImplementationOnce(async (id: string, transform: (current: Goal) => Goal) => {
+    goal = structuredClone(latest);
+    return update(id, (current: Goal) => {
+      observed.push(structuredClone(current));
+      return GoalSchema.parse(transform(current));
+    });
+  });
+
+  const result = await askTaktGoalQuestion({ ...input, body: '確認してください', kind }, {}, signal);
+
+  expect(await doubles.get.mock.results[0]!.value).toEqual(initial);
+  expect(observed).toEqual([latest]);
+  if (timing === 'awaiting merge') {
+    expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+    expect(goal.questions).toEqual([...latest.questions!, expect.objectContaining({ kind, status: 'pending' })]);
+    expect(goal.notifications).toHaveLength(1);
+    expect(doubles.send).toHaveBeenCalledOnce();
+  } else {
+    expect(result.isError).toBe(true);
+    expect(goal).toEqual(latest);
+    expect(doubles.send).not.toHaveBeenCalled();
+  }
+  const listed = await listTaktGoalQuestions(input, {});
+  expect(listed.isError, firstTextContent(listed.content)).toBeUndefined();
+  expect(JSON.parse(firstTextContent(listed.content))).toMatchObject({ questions: [
+    ...(timing === 'awaiting merge' ? [expect.objectContaining({
+      id: goal.questions!.at(-1)!.id, body: '確認してください', kind, status: 'pending',
+    })] : []), ...latest.questions!,
+  ], totalCount: timing === 'awaiting merge' ? 2 : 1 });
+});
+
 it('returns read and write errors for missing questions and persistence failure', async () => {
   expect((await getTaktGoalQuestion({ ...input, questionId: 'missing' }, {})).isError).toBe(true);
   expect((await withdrawTaktGoalQuestion({ ...input, questionId: 'missing' }, {}, signal)).isError).toBe(true);

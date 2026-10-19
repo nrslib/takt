@@ -10,6 +10,7 @@ import {
 import { GOAL_DIFF_MAX_FILES, readGoalDiffSummary } from './diff-summary.js';
 import { appendGoalNotification, formatIntegratedWorkNotification, type GoalNotificationPolicy } from './notifications.js';
 import { appendGoalWorkLog } from './workLog.js';
+import { withdrawPendingGoalQuestions } from './questions.js';
 import type { Language } from '../../core/models/types.js';
 
 export async function getGoalTaskSource(cwd: string, goal: Goal, taskName: string): Promise<string> {
@@ -91,6 +92,13 @@ function assertCompletionUnchanged(current: Goal, previous: Goal): void {
   }
 }
 
+function assertCompletionAllowed(current: Goal, previous: Goal): void {
+  assertCompletionUnchanged(current, previous);
+  if (current.executionStatus === 'paused') {
+    throw new Error('Goal is paused. Resume it in the manager TUI before completing it.');
+  }
+}
+
 export async function completeGoal(
   cwd: string, goalId: string, expectedSha: string, summary: string,
   mainMerge: 'auto' | 'approve', signal: AbortSignal | undefined,
@@ -115,10 +123,10 @@ export async function completeGoal(
   if (result?.status === 'conflict') return result;
   if (result?.status === 'merged') {
     const saved = await store.update(goalId, (current) => {
-      assertCompletionUnchanged(current, goal);
-      return appendGoalNotification({
+      assertCompletionAllowed(current, goal);
+      return appendGoalNotification(withdrawPendingGoalQuestions({
         ...current, status: 'completed', completion: { ...completion, targetSha: result.sha },
-      }, { kind: 'completed', body: summary }, notifications);
+      }, 'Goal was completed', new Date().toISOString()), { kind: 'completed', body: summary }, notifications);
     });
     return { ...result, completion: saved.completion, goal: saved };
   }
@@ -185,11 +193,11 @@ export async function checkGoalCompletion(
     return { included: false, goal: current };
   }
   const saved = await store.update(goalId, (current) => {
-    assertCompletionUnchanged(current, goal);
+    assertCompletionAllowed(current, goal);
     const completion = { ...current.completion!, targetBranch: current.integrationBranch, targetSha };
-    return appendGoalNotification({
+    return appendGoalNotification(withdrawPendingGoalQuestions({
       ...current, status: 'completed', completion,
-    }, { kind: 'completed', body: completion.summary }, notifications);
+    }, 'Goal was completed', new Date().toISOString()), { kind: 'completed', body: completion.summary }, notifications);
   });
   return { included: true, targetSha, goal: saved };
 }
