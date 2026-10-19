@@ -9,7 +9,7 @@ import { parse } from 'yaml';
 import { expandFacetIncludes } from 'faceted-prompting/cli/facet-includes';
 import { selectPromptEvalSuites, promptEvalPrepareTargets } from '../suite-registry.mjs';
 import { PREPARE_TARGET_IDS } from '../scripts/prepare.mjs';
-import { loadWorkflowByIdentifier } from '../../dist/infra/config/index.js';
+import { loadWorkflowByIdentifier, resolveWorkflowCallTarget } from '../../dist/infra/config/index.js';
 import { InstructionBuilder } from '../../dist/core/workflow/instruction/InstructionBuilder.js';
 import { getAllParallelSubSteps } from '../../dist/core/models/index.js';
 
@@ -31,6 +31,24 @@ function temporaryDirectory(t) {
 
 function fixtureModule(caseId, name) {
   return import(pathToFileURL(join(fixtures, caseId, 'src', `${name}.mjs`)).href);
+}
+
+function expandedPolicy(language, name) {
+  const root = join(repoRoot, 'builtins', language, 'facets');
+  return expandFacetIncludes({
+    body: fs.readFileSync(join(root, 'policies', `${name}.md`), 'utf8'),
+    facetsRoots: [root], repertoireDirs: [], allowedRoots: [root],
+  }).body;
+}
+
+function firstTableDataRow(policy) {
+  const lines = policy.split('\n');
+  const separator = lines.findIndex(line => /^\|(?:\s*:?-{3,}:?\s*\|)+\s*$/.test(line));
+  assert.ok(separator > 0, 'policy must have a table header and separator');
+  assert.match(lines[separator - 1], /^\|.+\|$/);
+  const row = lines[separator + 1];
+  assert.match(row, /^\|.+\|$/);
+  return row;
 }
 
 test('suite binds all 17 prompts, tasks, snapshots and fixtures to its own cases', () => {
@@ -99,24 +117,6 @@ test('adjudication seeds use the production report filenames and preserve the re
         assert.match(seed, /status: new/);
       }
     }
-  }
-});
-
-test('adjudication premise row stays wholly inside the production 2000 character excerpt in both languages', () => {
-  for (const language of ['ja', 'en']) {
-    const root = join(repoRoot, 'builtins', language, 'facets');
-    const policy = expandFacetIncludes({
-      body: fs.readFileSync(join(root, 'policies/review-adjudication.md'), 'utf8'),
-      facetsRoots: [root], repertoireDirs: [], allowedRoots: [root],
-    }).body;
-    const row = policy.split('\n').find(line => line.startsWith(
-      language === 'ja' ? '| 指摘が「反例に使う入力の適用範囲」に入らない入力' : '| The finding assumes inputs',
-    ));
-    assert.ok(row);
-    const processPolicy = fs.readFileSync(join(root, 'policies/process-deviation.md'), 'utf8');
-    const combined = `${processPolicy}\n\n---\n\n${policy}`;
-    assert.ok(combined.indexOf(row) + row.length <= 2000, language);
-    assert.ok(combined.slice(0, 2000).includes(processPolicy), language);
   }
 });
 
@@ -199,8 +199,7 @@ test('process policy comes first once, only in the selected Japanese and English
 
 test('prepared prompts carry the new instructions, inline adjudication row and complete process policy once', () => {
   const processPolicy = read('builtins/ja/facets/policies/process-deviation.md').trim();
-  const adjudicationRow = read('builtins/ja/facets/policies/review-adjudication.md')
-    .split('\n').find(line => line.startsWith('| 指摘が「反例に使う入力の適用範囲」に入らない入力'));
+  const adjudicationRow = firstTableDataRow(expandedPolicy('ja', 'review-adjudication'));
   const adjudicationProcedure = read('builtins/ja/facets/instructions/adjudicate-review-findings.md')
     .split('\n\n').find(paragraph => paragraph.startsWith('指摘を修正対象にする前'));
   const reviewProcedure = read('builtins/ja/facets/partials/instructions/review-path-check.md')
@@ -235,19 +234,22 @@ test('prepared prompts carry the new instructions, inline adjudication row and c
   }
 });
 
-test('resolved Japanese and English remediation and final steps receive the entire process policy once', t => {
+test('resolved Japanese and English steps put process policy first once and keep the adjudication premise row inside the production 2000 character excerpt', t => {
   const root = temporaryDirectory(t);
   for (const language of ['ja', 'en']) {
     const project = join(root, language);
     fs.mkdirSync(join(project, '.takt'), { recursive: true });
     fs.writeFileSync(join(project, '.takt/config.yaml'), `language: ${language}\n`);
     const processPolicy = read(`builtins/${language}/facets/policies/process-deviation.md`);
+    const adjudicationPolicy = expandedPolicy(language, 'review-adjudication');
+    const adjudicationRow = firstTableDataRow(adjudicationPolicy);
     const procedure = read(`builtins/${language}/facets/instructions/verify-fix.md`).split('\n\n')
       .find(paragraph => paragraph.startsWith(language === 'ja'
         ? '指示された作業の進め方' : 'If you find a past action'));
     assert.ok(procedure);
-    for (const [name, stepNames] of [
+    for (const [name, stepNames, callStepName] of [
       ['peer-review', ['review-adjudication', 'final-gate']],
+      ['peer-review', ['fix-verifier', 'verification-replan'], 'remediation'],
       ['review-remediation', ['fix-plan', 'fix-replan', 'verification-replan', 'fix-verifier']],
       ['development-remediation', ['fix-plan', 'fix-replan', 'verification-replan', 'fix-verifier']],
       ['development-remediation-dynamic', ['fix-plan', 'fix-replan', 'verification-replan', 'fix-verifier']],
@@ -262,8 +264,14 @@ test('resolved Japanese and English remediation and final steps receive the enti
       ['simple', ['supervise']],
       ['terraform', ['supervise', 'final-supervise']],
     ]) {
-      const workflow = loadWorkflowByIdentifier(name, project);
+      let workflow = loadWorkflowByIdentifier(name, project);
       assert.ok(workflow, name);
+      if (callStepName) {
+        const callStep = workflow.steps.find(step => step.name === callStepName);
+        assert.equal(callStep?.kind, 'workflow_call', `${name}/${callStepName}`);
+        workflow = resolveWorkflowCallTarget(workflow, callStep, project);
+        assert.ok(workflow, `${name}/${callStepName}`);
+      }
       for (const stepName of stepNames) {
         const index = workflow.steps.findIndex(step => step.name === stepName
           || (step.parallel && getAllParallelSubSteps(step.parallel).some(child => child.name === stepName)));
@@ -271,6 +279,7 @@ test('resolved Japanese and English remediation and final steps receive the enti
         const parent = workflow.steps[index];
         const step = parent.name === stepName ? parent
           : getAllParallelSubSteps(parent.parallel).find(child => child.name === stepName);
+        assert.equal(step.policyContents[0].content, processPolicy, `${language}/${name}/${stepName}`);
         const combined = step.policyContents.map(({ content }) => content).join('\n\n---\n\n');
         assert.equal(combined.indexOf(processPolicy), 0, `${language}/${name}/${stepName}`);
         assert.ok(combined.slice(0, 2000).includes(processPolicy), `${language}/${name}/${stepName}`);
@@ -288,11 +297,13 @@ test('resolved Japanese and English remediation and final steps receive the enti
           assert.ok(prepared.text.includes(procedure), `${language}/${name}/${stepName}`);
         }
         if (stepName === 'review-adjudication') {
-          const row = read(`builtins/${language}/facets/policies/review-adjudication.md`)
-            .split('\n').find(line => line.startsWith(language === 'ja'
-              ? '| 指摘が「反例に使う入力の適用範囲」に入らない入力' : '| The finding assumes inputs'));
-          assert.ok(row && prepared.text.includes(row), `${language}/${name}/${stepName}`);
-          assert.ok(combined.slice(0, 2000).includes(row), `${language}/${name}/${stepName}`);
+          assert.ok(step.policyContents.some(({ content }) => content === adjudicationPolicy),
+            `${language}/${name}/${stepName}`);
+          const excerpt = combined.slice(0, 2000);
+          const omittedMarker = language === 'ja' ? '...（以下省略）...' : '...TRUNCATED...';
+          assert.ok(combined.length > 2000, `${language}/${name}/${stepName}`);
+          assert.ok(prepared.text.includes(`${excerpt}\n${omittedMarker}`), `${language}/${name}/${stepName}`);
+          assert.ok(excerpt.includes(adjudicationRow), `${language}/${name}/${stepName}`);
         }
       }
     }
