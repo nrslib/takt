@@ -5,13 +5,17 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockSpawn, debugSpy } = vi.hoisted(() => ({
+const { mockSpawn, mockExecFileSync, debugSpy } = vi.hoisted(() => ({
   mockSpawn: vi.fn(),
+  // `ps -eo pid=,ppid=,pgid=` for the descendant-process-group sweep; empty
+  // table by default.
+  mockExecFileSync: vi.fn((..._args: unknown[]) => ''),
   debugSpy: vi.fn(),
 }));
 
 vi.mock('node:child_process', () => ({
   spawn: mockSpawn,
+  execFileSync: mockExecFileSync,
 }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
@@ -38,6 +42,7 @@ interface WireMessage {
 }
 
 type MockAcpChild = EventEmitter & {
+  pid: number;
   stdin: PassThrough;
   stdout: PassThrough;
   stderr: PassThrough;
@@ -177,8 +182,13 @@ function defaultHandlers(scenario: AcpScenario): Record<string, AcpRequestHandle
   };
 }
 
+// Fake pids above Linux pid_max, so the process-group kill path
+// (`process.kill(-pid, ...)`) can never hit a real process group.
+let nextFakePid = 2_100_000_000;
+
 function createAcpChild(): MockAcpChild {
   const child = new EventEmitter() as MockAcpChild;
+  child.pid = nextFakePid++;
   child.stdin = new PassThrough();
   child.stdout = new PassThrough();
   child.stderr = new PassThrough();
@@ -305,17 +315,57 @@ function requestsOf(server: MockAcpServer, method: string): WireMessage[] {
   return server.requests.filter((request) => request.method === method);
 }
 
-function spawnCall(index: number): [string, string[], { cwd?: string; env?: NodeJS.ProcessEnv; stdio?: unknown; shell?: boolean }] {
-  return mockSpawn.mock.calls[index] as [string, string[], { cwd?: string; env?: NodeJS.ProcessEnv; stdio?: unknown; shell?: boolean }];
+/**
+ * Mock ACP server whose leader process dies mid-prompt. `endStdout`
+ * reproduces the real failure shape: stdout EOFs first (which makes the SDK
+ * reject in-flight requests with "ACP connection closed") and `exit`/`close`
+ * land right after.
+ */
+function mockChildExitAfterPrompt(exitCode: number, stderrText: string, endStdout = true): void {
+  mockSpawn.mockImplementation((...call: unknown[]) => {
+    recordConfigArg(call);
+    const child = createAcpChild();
+    attachAcpServer(child, {
+      initialize: () => ({ protocolVersion: 1, agentCapabilities: {}, agentInfo: { name: 'x', version: '0' } }),
+      'session/new': () => ({ sessionId: 'keen-otter', modes: DEFAULT_MODES, configOptions: [] }),
+      'session/prompt': (_params, _api, _id) => {
+        queueMicrotask(() => {
+          if (stderrText.length > 0) {
+            child.stderr.write(stderrText);
+          }
+          if (endStdout) {
+            child.stdout.end();
+          }
+          child.emit('exit', exitCode, null);
+          queueMicrotask(() => child.emit('close', exitCode, null));
+        });
+        return undefined;
+      },
+    });
+    return child;
+  });
 }
 
-function mainSpawnCall(): [string, string[], { cwd?: string; env?: NodeJS.ProcessEnv; stdio?: unknown; shell?: boolean }] {
+interface SpawnOptions {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  stdio?: unknown;
+  shell?: boolean;
+  detached?: boolean;
+}
+
+function spawnCall(index: number): [string, string[], SpawnOptions] {
+  return mockSpawn.mock.calls[index] as [string, string[], SpawnOptions];
+}
+
+function mainSpawnCall(): [string, string[], SpawnOptions] {
   expect(mockSpawn).toHaveBeenCalledTimes(1);
   return spawnCall(0);
 }
 
 const restoredEnvKeys = [
   'ALL_PROXY',
+  'DEVIN_API_URL',
   'DEVIN_MODEL',
   'GITHUB_TOKEN',
   'HTTP_PROXY',
@@ -554,6 +604,7 @@ describe('callDevin', () => {
   it('Given env vars outside the allowlist, When called, Then only the Devin child env allowlist is passed', async () => {
     process.env.GITHUB_TOKEN = 'github-token';
     process.env.SERVICE_SECRET = 'service-secret';
+    process.env.DEVIN_API_URL = 'https://devin.example.test';
     process.env.DEVIN_MODEL = 'swe-2-high';
     process.env.WINDSURF_API_KEY = 'windsurf-key';
     process.env.XDG_DATA_HOME = '/xdg/data';
@@ -565,6 +616,7 @@ describe('callDevin', () => {
     expect(options.env).not.toBe(process.env);
     expect(options.env?.GITHUB_TOKEN).toBeUndefined();
     expect(options.env?.SERVICE_SECRET).toBeUndefined();
+    expect(options.env?.DEVIN_API_URL).toBe('https://devin.example.test');
     expect(options.env?.DEVIN_MODEL).toBe('swe-2-high');
     expect(options.env?.WINDSURF_API_KEY).toBe('windsurf-key');
     expect(options.env?.XDG_DATA_HOME).toBe('/xdg/data');
@@ -1034,6 +1086,75 @@ describe('callDevin', () => {
     expect(result.error).toContain('something exploded');
   });
 
+  it('Given stdout EOFs before the exit settles, When the process dies mid-prompt, Then the exit error wins over the connection close', async () => {
+    mockChildExitAfterPrompt(2, 'fatal: could not load config\n');
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo' });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('Devin CLI exited with code 2');
+    expect(result.error).toContain('fatal: could not load config');
+    expect(result.error).not.toContain('ACP connection closed');
+  });
+
+  it('Given a dead process breaks stdin, When called, Then the exit error still wins over the stream error', async () => {
+    mockSpawn.mockImplementation((...call: unknown[]) => {
+      recordConfigArg(call);
+      const child = createAcpChild();
+      // Die before the ACP handshake; the initialize write hits EPIPE.
+      queueMicrotask(() => {
+        child.stderr.write('fatal: could not load config\n');
+        child.stdin.destroy(new Error('write EPIPE'));
+        child.emit('exit', 2, null);
+        queueMicrotask(() => child.emit('close', 2, null));
+      });
+      return child;
+    });
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo' });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('Devin CLI exited with code 2');
+    expect(result.error).toContain('fatal: could not load config');
+    expect(result.error).not.toContain('EPIPE');
+  });
+
+  it('Given verbose stderr, When the process exits, Then the error keeps the tail with the reason', async () => {
+    const head = Array.from({ length: 40 }, (_, i) => `INFO boot-${i} ${'x'.repeat(80)}`).join('\n');
+    mockChildExitAfterPrompt(2, `${head}\nfatal: could not load config\n`);
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo' });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('fatal: could not load config');
+    expect(result.error).not.toContain('boot-0 ');
+    expect(result.error).not.toContain('boot-1 ');
+  });
+
+  it('Given a clean exit racing an app-level error, When called, Then the app error is kept over the exit', async () => {
+    mockSpawn.mockImplementation((...call: unknown[]) => {
+      recordConfigArg(call);
+      const child = createAcpChild();
+      attachAcpServer(child, {
+        initialize: () => ({ protocolVersion: 1, agentCapabilities: {}, agentInfo: { name: 'x', version: '0' } }),
+        'session/new': () => ({ sessionId: 'keen-otter', modes: DEFAULT_MODES, configOptions: DEFAULT_CONFIG_OPTIONS }),
+        'session/set_mode': () => ({}),
+      });
+      // Like the real devin: when the client hangs up after the model check
+      // throws, stdin EOFs and the process exits 0.
+      child.stdin.on('close', () => {
+        child.emit('exit', 0, null);
+        child.emit('close', 0, null);
+      });
+      return child;
+    });
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo', model: 'swe-2-max' });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toContain("Devin model 'swe-2-max' is not available");
+  });
+
   it('Given ENOENT, When called, Then reports the missing devin binary', async () => {
     mockSpawn.mockImplementation(() => {
       const child = createAcpChild();
@@ -1049,9 +1170,12 @@ describe('callDevin', () => {
     expect(result.error).toContain('devin binary not found');
   });
 
-  it('Given an authentication failure, When called, Then reports the login requirement', async () => {
+  it('Given the real unauthenticated JSON-RPC error, When called, Then reports the login requirement', async () => {
     mockAcpServer({
-      promptError: { code: -32000, message: 'authentication required: not logged in' },
+      promptError: {
+        code: -32000,
+        message: "Please log in to use Devin. Use '/login' to authenticate again.",
+      },
     });
 
     const result = await callDevin('coder', 'implement', { cwd: '/repo' });
@@ -1060,47 +1184,131 @@ describe('callDevin', () => {
     expect(result.error).toContain('devin auth login');
   });
 
-  it('Given an abort signal, When called, Then cancels the session and returns the aborted error', async () => {
-    const abortController = new AbortController();
-    let killSignal: string | undefined;
-    mockSpawn.mockImplementation(() => {
-      const child = createAcpChild();
-      child.kill = vi.fn((signal?: string) => {
-        killSignal = signal;
-        queueMicrotask(() => child.emit('close', null, signal ?? 'SIGTERM'));
-        return true;
-      });
-      attachAcpServer(child, {
-        initialize: () => ({ protocolVersion: 1, agentCapabilities: {}, agentInfo: { name: 'x', version: '0' } }),
-        'session/new': (_params, api, id) => {
-          api.respond(id, { sessionId: 'keen-otter', modes: DEFAULT_MODES, configOptions: [] });
-          queueMicrotask(() => abortController.abort());
-          return undefined;
+  it.each(['auth_required', 'unauthenticated'] as const)(
+    'Given an auth errorKind %s, When called, Then reports the login requirement',
+    async (errorKind) => {
+      mockAcpServer({
+        promptError: {
+          code: -32000,
+          message: 'request failed',
+          data: { 'cognition.ai/errorKind': errorKind },
         },
       });
-      return child;
-    });
 
-    const result = await callDevin('coder', 'implement', {
-      cwd: '/repo',
-      abortSignal: abortController.signal,
-    });
+      const result = await callDevin('coder', 'implement', { cwd: '/repo' });
 
-    expect(result.status).toBe('error');
-    expect(result.error).toBe('Devin execution aborted');
-    expect(killSignal).toBe('SIGTERM');
-  });
+      expect(result.status).toBe('error');
+      expect(result.error).toContain('devin auth login');
+    },
+  );
 
-  it('Given a rate limit response, When called, Then returns a rate_limited response', async () => {
-    mockAcpServer({
-      updates: [
-        { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'too many requests' } },
-      ],
-    });
+  it('Given Devin prints Authentication required on stderr and exits, When called, Then reports the login requirement', async () => {
+    mockChildExitAfterPrompt(1, 'WARN affogato::acp Authentication required\n');
 
     const result = await callDevin('coder', 'implement', { cwd: '/repo' });
 
-    expect(result.status).toBe('rate_limited');
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('devin auth login');
+  });
+
+  it('Given unrelated stderr mentioning an api key, When the process exits, Then the real stderr is reported instead of an auth error', async () => {
+    mockChildExitAfterPrompt(1, 'ERROR mcp-server-filesystem failed: invalid api key provided\n');
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo' });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('Devin CLI exited with code 1');
+    expect(result.error).toContain('invalid api key provided');
+    expect(result.error).not.toContain('devin auth login');
+  });
+
+  it('Given an abort signal, When called, Then kills the whole process group and returns the aborted error', async () => {
+    const abortController = new AbortController();
+    const groupKills: { pid: number; signal: unknown }[] = [];
+    let spawned: MockAcpChild | undefined;
+    const realKill = process.kill.bind(process);
+    // Intercept only process-group signals (negative pid): record them and
+    // simulate the leader dying on SIGTERM.
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: string | number) => {
+      if (pid < 0) {
+        if (signal === undefined || signal === 0) {
+          const missing = new Error('kill ESRCH') as NodeJS.ErrnoException;
+          missing.code = 'ESRCH';
+          throw missing;
+        }
+        groupKills.push({ pid, signal });
+        queueMicrotask(() => {
+          spawned?.emit('exit', null, signal as NodeJS.Signals);
+          spawned?.emit('close', null, signal as NodeJS.Signals);
+        });
+        return true;
+      }
+      return realKill(pid, signal as NodeJS.Signals);
+    }) as typeof process.kill);
+    // A descendant the leader spawned with setsid — own process group, which
+    // is how devin's exec tool daemonizes commands.
+    const descendantPid = nextFakePid + 500_000;
+    mockExecFileSync.mockImplementation((command: unknown, args?: unknown) => {
+      if (command === 'ps' && Array.isArray(args) && args.includes('pid=,ppid=,pgid=')) {
+        const leader = spawned!.pid;
+        return `${leader} 1 ${leader}\n${descendantPid} ${leader} ${descendantPid}\n`;
+      }
+      return '';
+    });
+    try {
+      mockSpawn.mockImplementation((...call: unknown[]) => {
+        recordConfigArg(call);
+        const child = createAcpChild();
+        spawned = child;
+        attachAcpServer(child, {
+          initialize: () => ({ protocolVersion: 1, agentCapabilities: {}, agentInfo: { name: 'x', version: '0' } }),
+          'session/new': (_params, api, id) => {
+            api.respond(id, { sessionId: 'keen-otter', modes: DEFAULT_MODES, configOptions: [] });
+            queueMicrotask(() => abortController.abort());
+            return undefined;
+          },
+        });
+        return child;
+      });
+
+      const result = await callDevin('coder', 'implement', {
+        cwd: '/repo',
+        abortSignal: abortController.signal,
+      });
+
+      expect(result.status).toBe('error');
+      expect(result.error).toBe('Devin execution aborted');
+      // Process-tree termination: spawn detached as a group leader and signal
+      // the group (negative pid), not just the devin leader — plus the
+      // detached descendant's own group.
+      const [, , options] = mainSpawnCall();
+      expect(options.detached).toBe(true);
+      expect(groupKills).toContainEqual({ pid: -spawned!.pid, signal: 'SIGTERM' });
+      expect(groupKills).toContainEqual({ pid: -descendantPid, signal: 'SIGTERM' });
+    } finally {
+      killSpy.mockRestore();
+      mockExecFileSync.mockImplementation(() => '');
+    }
+  });
+
+  it('Given an answer that discusses rate limits, When called, Then the text is returned as a normal response', async () => {
+    mockAcpServer({
+      updates: [
+        {
+          sessionUpdate: 'agent_message_chunk',
+          content: {
+            type: 'text',
+            text: 'The API returned HTTP 429 (too many requests); retry with exponential backoff.',
+          },
+        },
+      ],
+    });
+
+    const result = await callDevin('coder', 'explain rate limits', { cwd: '/repo' });
+
+    expect(result.status).toBe('done');
+    expect(result.content).toContain('HTTP 429');
+    expect(result.content).toContain('too many requests');
   });
 
   it('Given a rate limit error from the agent, When called, Then returns a rate_limited response', async () => {
@@ -1111,6 +1319,79 @@ describe('callDevin', () => {
     const result = await callDevin('coder', 'implement', { cwd: '/repo' });
 
     expect(result.status).toBe('rate_limited');
+  });
+
+  it.each([
+    'resource_exhausted',
+    'quota_exhausted',
+    'subscription_limit_reached',
+    'rate_limited',
+  ] as const)(
+    'Given a JSON-RPC quota error with errorKind %s, When called, Then returns a rate_limited response',
+    async (errorKind) => {
+      mockAcpServer({
+        promptError: {
+          code: -32011,
+          message: 'Quota exhausted.',
+          data: { 'cognition.ai/errorKind': errorKind, 'cognition.ai/retryable': true },
+        },
+      });
+
+      const result = await callDevin('coder', 'implement', { cwd: '/repo' });
+
+      expect(result.status).toBe('rate_limited');
+      expect(result.errorKind).toBe('rate_limit');
+      expect(result.error).toContain('Quota exhausted');
+      expect(result.sessionId).toBe('keen-otter');
+    },
+  );
+
+  it.each(['Usage limit reached', 'Organization usage limit reached'] as const)(
+    'Given the quota message "%s" without errorKind, When called, Then returns a rate_limited response',
+    async (message) => {
+      mockAcpServer({
+        promptError: { code: -32011, message },
+      });
+
+      const result = await callDevin('coder', 'implement', { cwd: '/repo' });
+
+      expect(result.status).toBe('rate_limited');
+    },
+  );
+
+  it('Given a non-quota errorKind, When called, Then returns a generic error', async () => {
+    mockAcpServer({
+      promptError: {
+        code: -32010,
+        message: 'engine stalled',
+        data: { 'cognition.ai/errorKind': 'unavailable' },
+      },
+    });
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo' });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('engine stalled');
+  });
+
+  it('Given a prompt failure after session/new, When called, Then the created session id is still reported', async () => {
+    const onStream = vi.fn();
+    mockAcpServer({
+      sessionId: 'fresh-otter',
+      promptError: { code: -32603, message: 'engine exploded' },
+    });
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo', onStream });
+
+    expect(result.status).toBe('error');
+    expect(result.sessionId).toBe('fresh-otter');
+    const resultEvent = onStream.mock.calls.at(-1)?.[0] as {
+      type: string;
+      data: { sessionId: string; success: boolean };
+    };
+    expect(resultEvent.type).toBe('result');
+    expect(resultEvent.data.sessionId).toBe('fresh-otter');
+    expect(resultEvent.data.success).toBe(false);
   });
 
   it('Given a prompt response with usage, When called, Then reports provider token usage for this turn', async () => {

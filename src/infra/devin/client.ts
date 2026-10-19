@@ -52,41 +52,71 @@ function buildArgs(configFilePath: string, options: DevinCallOptions): string[] 
   return args;
 }
 
+// Devin writes verbose startup logging to stderr and prints the actual
+// failure reason at the END, so the tail carries the detail — not the head.
 function trimDetail(value: string | undefined): string {
   const normalized = (value ?? '').trim();
   if (!normalized) {
     return '';
   }
   return normalized.length > DEVIN_ERROR_DETAIL_MAX_LENGTH
-    ? `${normalized.slice(0, DEVIN_ERROR_DETAIL_MAX_LENGTH)}...`
+    ? `...${normalized.slice(-DEVIN_ERROR_DETAIL_MAX_LENGTH)}`
     : normalized;
 }
 
 function selectErrorDetail(error: DevinExecError): string {
   const stderr = trimDetail(error.stderr);
   if (stderr) {
-    return error.stderr ?? '';
+    return stderr;
   }
 
   return getErrorMessage(error);
 }
 
-function isAuthenticationError(error: DevinExecError): boolean {
-  const message = [
-    trimDetail(error.message),
-    trimDetail(error.stderr),
-  ].join('\n').toLowerCase();
+// The real unauthenticated failure is a JSON-RPC `-32000` error whose
+// message starts with "Please log in to use Devin" (optionally carrying an
+// auth `errorKind`), or Devin's own `Authentication required` stderr line.
+// Generic substrings like `api key`/`unauthorized` would misreport unrelated
+// stderr — e.g. an MCP server rejecting its own credentials — as a Devin
+// login problem.
+const DEVIN_AUTH_ERROR_KINDS = new Set(['auth_required', 'unauthenticated']);
+const DEVIN_AUTH_PATTERNS = [
+  /please log in to use devin/i,
+  /authentication required/i,
+  // Devin logs this on session creation when no stored credentials exist.
+  /without credentials/i,
+];
 
-  const patterns = [
-    'authentication',
-    'unauthorized',
-    'forbidden',
-    'not logged in',
-    'login required',
-    'invalid credentials',
-    'api key',
-  ];
-  return patterns.some((pattern) => message.includes(pattern));
+function isAuthenticationError(error: DevinExecError): boolean {
+  if (error.errorKind !== undefined && DEVIN_AUTH_ERROR_KINDS.has(error.errorKind)) {
+    return true;
+  }
+  const text = `${error.message}\n${error.stderr ?? ''}`;
+  return DEVIN_AUTH_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+// Real quota/rate failures arrive as JSON-RPC errors with
+// `data['cognition.ai/errorKind']` — e.g. `resource_exhausted` on
+// -32011 "Quota exhausted." — kept on the error by normalizeAcpError. The
+// message/UI strings ("Usage limit reached", "Organization usage limit
+// reached") match none of the shared text patterns, so they are matched
+// here — but only ever against error channels (JSON-RPC error text, stderr),
+// never the agent's answer.
+const DEVIN_RATE_LIMIT_ERROR_KINDS = new Set([
+  'quota_exhausted',
+  'rate_limited',
+  'resource_exhausted',
+  'subscription_limit_reached',
+]);
+const DEVIN_RATE_LIMIT_PATTERNS = [
+  /quota\s+(?:has\s+been\s+)?exhausted/i,
+  /\b(?:organization\s+)?usage limit reached\b/i,
+];
+
+function isRateLimitFailure(error: DevinExecError, combined: string): boolean {
+  return (error.errorKind !== undefined && DEVIN_RATE_LIMIT_ERROR_KINDS.has(error.errorKind))
+    || DEVIN_RATE_LIMIT_PATTERNS.some((pattern) => pattern.test(combined))
+    || containsRateLimitError(combined);
 }
 
 function classifyExecutionError(error: DevinExecError, options: DevinCallOptions): string {
@@ -107,7 +137,7 @@ function classifyExecutionError(error: DevinExecError, options: DevinCallOptions
   }
 
   if (typeof error.code === 'number') {
-    const detail = trimDetail(selectErrorDetail(error));
+    const detail = selectErrorDetail(error);
     return `Devin CLI exited with code ${error.code}: ${detail}`;
   }
 
@@ -161,7 +191,7 @@ export class DevinClient {
       const { sessionId, providerUsage } = outcome;
 
       if (outcome.stopReason === 'cancelled' || options.abortSignal?.aborted) {
-        throw createExecError(DEVIN_ABORTED_MESSAGE, { name: 'AbortError' });
+        throw createExecError(DEVIN_ABORTED_MESSAGE, { name: 'AbortError', sessionId });
       }
 
       const content = outcome.content.trim();
@@ -178,18 +208,6 @@ export class DevinClient {
           timestamp: new Date(),
           sessionId,
           providerUsage,
-        };
-      }
-
-      if (containsRateLimitError(content)) {
-        const rateLimitedFields = buildRateLimitedResponseFields('devin', 'error_text', content);
-        emitResult(options, '', false, rateLimitedFields.error, sessionId);
-        return {
-          persona: agentType,
-          timestamp: new Date(),
-          sessionId,
-          providerUsage,
-          ...rateLimitedFields,
         };
       }
 
@@ -224,28 +242,32 @@ export class DevinClient {
       };
     } catch (rawError) {
       const error = rawError as DevinExecError;
+      // `runDevinAcpPrompt` attaches the session resolved mid-call (from
+      // session/new) to the thrown error, so a failed turn can still be
+      // resumed or inspected.
+      const sessionId = error.sessionId ?? options.sessionId;
       const combined = `${error.stderr ?? ''}\n${error.stdout ?? ''}\n${getErrorMessage(error)}`;
       const aborted = options.abortSignal?.aborted || error.name === 'AbortError';
-      if (!aborted && containsRateLimitError(combined)) {
+      if (!aborted && isRateLimitFailure(error, combined)) {
         const rateLimitedFields = buildRateLimitedResponseFields('devin', 'error_text', trimDetail(combined));
-        emitResult(options, '', false, rateLimitedFields.error, options.sessionId);
+        emitResult(options, '', false, rateLimitedFields.error, sessionId);
         return {
           persona: agentType,
           timestamp: new Date(),
-          sessionId: options.sessionId,
+          sessionId,
           providerUsage: usageMissingSnapshot(),
           ...rateLimitedFields,
         };
       }
       const message = classifyExecutionError(error, options);
-      emitResult(options, '', false, message, options.sessionId);
+      emitResult(options, '', false, message, sessionId);
       return {
         persona: agentType,
         status: 'error',
         content: message,
         error: message,
         timestamp: new Date(),
-        sessionId: options.sessionId,
+        sessionId,
         providerUsage: usageMissingSnapshot(),
       };
     } finally {

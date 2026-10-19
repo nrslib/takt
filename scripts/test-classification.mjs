@@ -238,6 +238,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/deepseek-harness-error-mapping.test.ts',
   'src/__tests__/deploySkill.test.ts',
   'src/__tests__/deploySkillCodex.test.ts',
+  'src/__tests__/devin-client.test.ts',
   'src/__tests__/directRunFinder.test.ts',
   'src/__tests__/directRunResume.test.ts',
   'src/__tests__/entrypoint.test.ts',

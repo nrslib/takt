@@ -1,5 +1,6 @@
 import { Readable, Writable } from 'node:stream';
 import type { ReadableStream, WritableStream } from 'node:stream/web';
+import { setTimeout as delay } from 'node:timers/promises';
 import {
   client,
   MessageTooLargeError,
@@ -35,6 +36,17 @@ const log = createLogger('devin-acp');
 
 // Devin reports the underlying tool name on tool calls under this key.
 const INFERENCE_TOOL_NAME_META_KEY = 'cognition.ai/inferenceToolName';
+// JSON-RPC errors carry Devin's failure taxonomy in
+// `data['cognition.ai/errorKind']` (e.g. `resource_exhausted` on
+// -32011 "Quota exhausted."). Kept structured on the exec error so the
+// client can classify without re-parsing the message.
+const DEVIN_ERROR_KIND_META_KEY = 'cognition.ai/errorKind';
+// How long to wait for `exit`/`close` once a turn has already failed — the
+// events land a few ticks after the stdout EOF or stdin EPIPE that produced
+// the generic failure. Short enough to keep error paths responsive when the
+// leader is still alive.
+const PROCESS_EXIT_PROBE_MS = 100;
+const PROCESS_EXIT_POLL_MS = 5;
 
 export interface DevinAcpTurnOutcome {
   content: string;
@@ -319,7 +331,10 @@ function normalizeAcpError(error: unknown, proc: DevinAcpProcess): DevinExecErro
   const stderr = proc.stderrText();
   if (error instanceof RequestError) {
     const data = error.data === undefined ? '' : ` ${JSON.stringify(error.data)}`;
-    return createExecError(`devin acp error ${error.code}: ${error.message}${data}`, { stderr });
+    const errorKind = isRecord(error.data) && typeof error.data[DEVIN_ERROR_KIND_META_KEY] === 'string'
+      ? error.data[DEVIN_ERROR_KIND_META_KEY]
+      : undefined;
+    return createExecError(`devin acp error ${error.code}: ${error.message}${data}`, { stderr, errorKind });
   }
   if (error instanceof MessageTooLargeError) {
     return createExecError('devin acp message exceeded buffer limit', {
@@ -328,10 +343,45 @@ function normalizeAcpError(error: unknown, proc: DevinAcpProcess): DevinExecErro
     });
   }
   const execError = error as DevinExecError;
-  if (execError instanceof Error && execError.stderr !== undefined) {
+  if (execError instanceof Error) {
+    // Internal errors (e.g. the model check) are raised without stderr; the
+    // captured diagnostics still explain why the turn failed downstream.
+    execError.stderr ??= stderr;
     return execError;
   }
   return createExecError(getErrorMessage(error), { stderr });
+}
+
+// Transport-level failures that carry no diagnostic of their own — when the
+// process is gone, the exit code plus stderr explain them better.
+const TRANSPORT_FAILURE_PATTERN = /ACP connection closed|stream error|EPIPE|ECONNRESET/i;
+
+// A dying process makes the SDK reject in-flight requests with a generic
+// "ACP connection closed" — or the stdin write EPIPEs — because the pipes
+// break before `exit`/`close` settle. Structured JSON-RPC errors keep their
+// own detail; for anything else, when the process is already gone the exit
+// code/signal plus captured stderr explain the failure far better than the
+// connection-close fallback. A clean exit racing an application-level error
+// (e.g. the model check aborting the session) is a consequence, not the
+// cause, so the original error stands.
+async function normalizeAcpFailure(error: unknown, proc: DevinAcpProcess): Promise<DevinExecError> {
+  if (error instanceof RequestError || error instanceof MessageTooLargeError) {
+    return normalizeAcpError(error, proc);
+  }
+  const normalized = normalizeAcpError(error, proc);
+  const deadline = Date.now() + PROCESS_EXIT_PROBE_MS;
+  let exit = proc.exitInfo();
+  while (exit === undefined && Date.now() < deadline) {
+    await delay(PROCESS_EXIT_POLL_MS);
+    exit = proc.exitInfo();
+  }
+  if (exit === undefined) {
+    return normalized;
+  }
+  const abnormalExit = exit.signal !== null || (exit.code ?? 0) !== 0;
+  return abnormalExit || TRANSPORT_FAILURE_PATTERN.test(normalized.message)
+    ? acpExitError(exit, proc)
+    : normalized;
 }
 
 // Runs one Devin turn over `devin acp` JSON-RPC: initialize -> session/new or
@@ -479,7 +529,11 @@ export async function runDevinAcpPrompt(
       exitFailure,
     ]);
   } catch (error) {
-    throw normalizeAcpError(error, proc);
+    const normalized = await normalizeAcpFailure(error, proc);
+    // The session may already exist (session/new resolved) even though the
+    // turn failed — report it so the caller can resume or inspect it.
+    normalized.sessionId = sessionId;
+    throw normalized;
   } finally {
     options.abortSignal?.removeEventListener('abort', onAbort);
     proc.terminate();
