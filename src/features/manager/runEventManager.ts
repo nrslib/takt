@@ -93,7 +93,7 @@ export function createRunEventManager(cwd: string) {
             abortSignal: turnSignal,
             goal: { id: goal.id, repositoryDirectory: cwd, constraints: goal.constraints },
           });
-          turnSignal.throwIfAborted();
+          if (signal.aborted) return false;
           if (result.kind === 'error') throw new Error(result.message);
           const summary = manager.getPendingSummary();
           if (summary !== null) {

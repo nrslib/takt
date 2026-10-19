@@ -452,7 +452,9 @@ it('shares the timeout across preflight and the message, then gives the next eve
   const finishes: Array<() => void> = [];
   doubles.turn.mockImplementation(({ abortSignal }: { abortSignal: AbortSignal }) => new Promise((resolve) => {
     signals.push(abortSignal);
-    finishes.push(() => resolve({ kind: 'reply', message: '処理完了' }));
+    finishes.push(() => resolve(abortSignal.aborted
+      ? { kind: 'error', message: 'Conversation interrupted' }
+      : { kind: 'reply', message: '処理完了' }));
   }));
   const manager = createRunEventManager('/project');
   const processing = manager.processPending(new AbortController().signal, 2);
