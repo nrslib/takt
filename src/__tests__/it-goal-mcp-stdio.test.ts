@@ -375,7 +375,9 @@ describe('manager questions, answers and notifications through production bounda
     const display = await readManagerDisplayEvents(cwd);
     expect(display.questions).toEqual([expect.objectContaining({ goalId, question: expect.objectContaining(question) })]);
     expect(display.events).toHaveLength(1);
-    expect(display.events[0]!.message).toContain(`/answer ${question.id}`);
+    const guidance = display.events[0]!.message.split('\n').filter((line) => line.includes('/answer'));
+    expect(guidance).toHaveLength(1);
+    expect(guidance[0]).not.toContain(question.id);
     expect(JSON.stringify(display)).not.toContain(webhook);
     expect((await enqueue('export')).isError).not.toBe(true);
     expect(new TaskRunner(cwd).listPendingTaskItems()).toHaveLength(1);
@@ -404,7 +406,9 @@ describe('manager questions, answers and notifications through production bounda
       return;
     }
     const branch = goalRecord().branch;
-    const sha = git(['commit-tree', `${branch}^{tree}`, '-p', branch, '-m', 'completed work fixture']);
+    const blob = git(['hash-object', '-w', '--stdin'], 'validated output\n');
+    const tree = git(['mktree'], `100644 blob ${blob}\toutput.txt\n`);
+    const sha = git(['commit-tree', tree, '-p', branch, '-m', 'completed work fixture']);
     if (kind === 'progress') {
       const source = 'takt/question-fixture-work';
       git(['update-ref', `refs/heads/${source}`, sha]);

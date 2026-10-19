@@ -86,7 +86,6 @@ async function mountGoalControls(lang: 'ja' | 'en', goal: Goal) {
   });
   const provider = new MockProvider();
   vi.spyOn(provider, 'setup').mockReturnValue({ call });
-  const callTool = vi.fn();
   session = createManagerConversationSession({
     cwd,
     plan: { ctx: { providerType: 'mock', model: undefined, lang, provider },
@@ -99,7 +98,7 @@ async function mountGoalControls(lang: 'ja' | 'en', goal: Goal) {
     await vi.waitFor(() => expect(app!.lastFrame()).toContain(text.split('\n')[0]!));
     app!.stdin.write('\r');
   };
-  return { store, call, callTool, send };
+  return { store, call, send };
 }
 
 function expectGoalMemory(memory: string, goal: Goal): void {
@@ -150,7 +149,7 @@ it.each([
       instructions: ['git merge reviewed SHA'],
     },
   };
-  const { store, call, callTool, send } = await mountGoalControls(lang, saved);
+  const { store, call, send } = await mountGoalControls(lang, saved);
   const abort = vi.spyOn(session!, 'abortGoal');
   const runner = new TaskRunner(cwd);
   runner.addTask('preserve pending work', { goal_id: saved.id });
@@ -172,7 +171,6 @@ it.each([
   expect(await store.get(saved.id)).toEqual(saved);
   expect(new TaskStore(cwd).read()).toEqual(before);
   expect(call).not.toHaveBeenCalled();
-  expect(callTool).not.toHaveBeenCalled();
 });
 
 it.each([
@@ -183,13 +181,12 @@ it.each([
 ])('aborts a $executionStatus goal only after human confirmation and refreshes the same $lang TUI', async ({ lang, executionStatus }) => {
   const saved: Goal = { ...goalRecord(), executionStatus, objective: 'Abort target',
   };
-  const { store, call, callTool, send } = await mountGoalControls(lang, saved);
-  if (executionStatus === 'paused') await vi.waitFor(() => expect(app!.lastFrame()).toContain(`/resume ${saved.id}`));
+  const { store, call, send } = await mountGoalControls(lang, saved);
+  if (executionStatus === 'paused') await vi.waitFor(() => expect(app!.lastFrame()).toContain(saved.objective));
   await send(`/abort ${saved.id}`);
   await expectAbortConfirmation(saved);
   expect(await store.get(saved.id)).toEqual(saved);
   expect(call).not.toHaveBeenCalled();
-  expect(callTool).not.toHaveBeenCalled();
   confirmAbort();
   await vi.waitFor(async () => expect((await store.get(saved.id)).executionStatus).toBe('aborted'));
   expect(await store.get(saved.id)).toEqual({ ...saved, executionStatus: 'aborted' });
@@ -198,11 +195,10 @@ it.each([
     const index = rows.findIndex((row) => row.includes(saved.objective));
     expect(index).toBeGreaterThanOrEqual(0);
     expect(rows.slice(Math.max(0, index - 2), index + 3).join('\n')).toMatch(lang === 'ja' ? /中止/u : /abort/iu);
-    expect(rows.filter((row) => row.includes(`/resume ${saved.id}`))).toEqual([]);
+    expect(rows.filter((row) => /一時停止中のゴール|Paused goals/u.test(row))).toEqual([]);
   };
   await vi.waitFor(expectAbortedGoal);
   expect(call).not.toHaveBeenCalled();
-  expect(callTool).not.toHaveBeenCalled();
   await send(`/resume ${saved.id}`);
   await vi.waitFor(() => expect(app!.lastFrame()).toMatch(/再開.*でき|cannot.*resum|中止|abort/iu));
   expect((await store.get(saved.id)).executionStatus).toBe('aborted');
@@ -213,14 +209,13 @@ it.each([
 
 it.each(['default', 'escape'] as const)('cancels abort with %s without changing saved state or calling the agent', async (choice) => {
   const saved = { ...goalRecord(), objective: 'Abort target' };
-  const { store, call, callTool, send } = await mountGoalControls('ja', saved);
+  const { store, call, send } = await mountGoalControls('ja', saved);
   await send(`/abort ${saved.id}`);
   await expectAbortConfirmation(saved);
   app!.stdin.write(choice === 'default' ? '\r' : '\x1b[27u');
   await vi.waitFor(() => expect(app!.lastFrame()!.replace(/\s+/gu, ' ')).not.toMatch(irreversibleWarning));
   expect(await store.get(saved.id)).toEqual(saved);
   expect(call).not.toHaveBeenCalled();
-  expect(callTool).not.toHaveBeenCalled();
   await send('Continue conversation');
   await vi.waitFor(() => expect(call).toHaveBeenCalledOnce());
   expect(await store.get(saved.id)).toEqual(saved);
@@ -233,7 +228,7 @@ it.each([
   `説明\n/abort ${goalId}`,
 ])('keeps abort examples as conversation text without opening confirmation: %s', async (text) => {
   const saved = goalRecord();
-  const { store, call, callTool, send } = await mountGoalControls('ja', saved);
+  const { store, call, send } = await mountGoalControls('ja', saved);
   await send(text);
   await vi.waitFor(() => expect(call).toHaveBeenCalledOnce());
   const [conversation, memory] = call.mock.calls[0]![0].split('\n\nGoal memory (including run manager results): ');
@@ -241,7 +236,6 @@ it.each([
   expectGoalMemory(memory!, saved);
   expect(await store.get(saved.id)).toEqual(saved);
   expect(app!.lastFrame()!.replace(/\s+/gu, ' ')).not.toMatch(irreversibleWarning);
-  expect(callTool).not.toHaveBeenCalled();
 });
 
 it('invalidates only pending work belonging to the confirmed goal and preserves running and terminal records', async () => {
@@ -314,7 +308,7 @@ it('invalidates only pending work belonging to the confirmed goal and preserves 
 
 it('keeps a failed pending invalidation visible and retries it without reopening the aborted goal', async () => {
   const saved = { ...goalRecord(), objective: 'Abort target' };
-  const { store, send, call, callTool } = await mountGoalControls('en', saved);
+  const { store, send, call } = await mountGoalControls('en', saved);
   const runner = new TaskRunner(cwd);
   const pending = runner.addTask('pending abort retry', { goal_id: saved.id });
   await send(`/abort ${saved.id}`);
@@ -334,7 +328,6 @@ it('keeps a failed pending invalidation visible and retries it without reopening
   expect(runner.claimNextTasks(1)).toEqual([]);
   expect((await store.get(saved.id)).executionStatus).toBe('aborted');
   expect(call).not.toHaveBeenCalled();
-  expect(callTool).not.toHaveBeenCalled();
 });
 
 it('exposes manager work tools without exposing a goal abort tool to the agent', async () => {
@@ -407,7 +400,7 @@ it.each(['ja', 'en'] as const)('pauses and resumes an awaiting-merge goal from c
       instructions: ['git merge --ff-only goal-branch'],
     },
   };
-  const { store, call, callTool, send } = await mountGoalControls(lang, saved);
+  const { store, call, send } = await mountGoalControls(lang, saved);
   await send(`/pause ${goalId}`);
   await vi.waitFor(async () => expect((await store.get(goalId)).executionStatus).toBe('paused'));
   expect(await store.get(goalId)).toEqual({ ...saved, executionStatus: 'paused' });
@@ -418,7 +411,6 @@ it.each(['ja', 'en'] as const)('pauses and resumes an awaiting-merge goal from c
     expect(rows.slice(Math.max(0, goalRow - 1), goalRow + 3).join('\n')).toMatch(lang === 'ja' ? /一時停止|停止中/u : /paused/iu);
   });
   expect(call).not.toHaveBeenCalled();
-  expect(callTool).not.toHaveBeenCalled();
   await send(`/resume ${goalId}`);
   await vi.waitFor(async () => expect((await store.get(goalId)).executionStatus).toBe('active'));
   expect(await store.get(goalId)).toEqual(saved);
@@ -428,7 +420,6 @@ it.each(['ja', 'en'] as const)('pauses and resumes an awaiting-merge goal from c
     if (goalRow !== -1) expect(rows.slice(Math.max(0, goalRow - 1), goalRow + 3).join('\n')).not.toMatch(lang === 'ja' ? /一時停止|停止中/u : /paused/iu);
   });
   expect(call).not.toHaveBeenCalled();
-  expect(callTool).not.toHaveBeenCalled();
 });
 
 it.each([
@@ -447,7 +438,7 @@ it.each([
   expect(await store.get(goalId)).toEqual(saved);
 });
 
-it('shows pending questions and their answer commands when question notifications are disabled, excluding withdrawn questions on reopening', async () => {
+it('shows compact pending questions and an ID-free answer hint when notifications are disabled, excluding withdrawn questions on reopening', async () => {
   const input = { body: '出力形式はどれですか', options: ['CSV', 'JSON'], recommendation: 'CSV' };
   const added = addGoalQuestion(goalRecord(), input);
   const remaining = addGoalQuestion(added.goal, { body: '保存先はどこですか' });
@@ -471,13 +462,16 @@ it('shows pending questions and their answer commands when question notification
   app = render(createElement(ManagerView, { cwd, lang: 'ja', session, initialDiagnostics: [], onExit: vi.fn() }));
 
   await vi.waitFor(() => {
-    const frame = app!.lastFrame();
-    expect(frame).toContain(`${goalId}: ${saved.objective}`);
-    expect(frame).toContain(`${added.questionId}: ${input.body}`);
-    expect(frame).toContain('CSV / JSON');
-    expect(frame).toContain(`推奨: ${input.recommendation}`);
-    expect(frame).toContain(`/answer ${added.questionId}`);
-    expect(frame).toContain(`/answer ${remaining.questionId}`);
+    const frame = app!.lastFrame()!;
+    const rows = frame.split('\n');
+    expect(rows.find((row) => row.includes(input.body))).toContain(saved.objective);
+    expect(rows.find((row) => row.includes(input.body))).toContain('質問');
+    expect(frame).toContain('保存先はどこですか');
+    expect(frame).toContain('/answer');
+    for (const row of rows) {
+      for (const id of [goalId, added.questionId, remaining.questionId]) expect(row).not.toContain(id);
+      for (const option of input.options) expect(row).not.toContain(option);
+    }
   });
 
   app.unmount();
@@ -490,7 +484,8 @@ it('shows pending questions and their answer commands when question notification
 
   await vi.waitFor(() => {
     const frame = app!.lastFrame();
-    expect(frame).toContain(`/answer ${remaining.questionId}`);
+    expect(frame).toContain('保存先はどこですか');
+    expect(frame).toContain('/answer');
     expect(frame).not.toContain(added.questionId);
     expect(frame).not.toContain(input.body);
   });
@@ -518,9 +513,15 @@ it.each([true, false])('shows human questions and their saved automatic notifica
   });
   app = render(createElement(ManagerView, { cwd, lang: 'ja', session, initialDiagnostics: [], onExit: vi.fn() }));
   await vi.waitFor(() => {
-    const frame = app!.lastFrame();
-    expect(frame).toContain(`/answer ${human.questionId}`);
-    expect(frame).toContain(`/answer ${second.questionId}`);
+    const frame = app!.lastFrame()!;
+    expect(frame).toContain('出力形式はどれですか');
+    expect(frame).toContain('出力先はどこですか');
+    const guidance = frame.split('\n').filter((row) => row.includes('/answer'));
+    expect(guidance.length).toBeGreaterThan(0);
+    for (const row of guidance) {
+      expect(row).not.toContain(human.questionId);
+      expect(row).not.toContain(second.questionId);
+    }
     expect(frame).toContain(`${second.questionId}: 一般通知`);
   });
 });
@@ -532,7 +533,7 @@ it.each(['ja', 'en'] as const)('renders saved notification text in the %s TUI la
     id: '650e8400-e29b-41d4-a716-446655440001', kind: 'completed', body: 'Acceptance checks passed',
     recordedAt: '2026-10-08T00:00:00Z',
   }] };
-  const { store, call, callTool } = await mountGoalControls(lang, saved);
+  const { store, call } = await mountGoalControls(lang, saved);
 
   await vi.waitFor(() => {
     const frame = app!.lastFrame()!;
@@ -547,7 +548,6 @@ it.each(['ja', 'en'] as const)('renders saved notification text in the %s TUI la
   });
   expect(await store.get(saved.id)).toEqual(saved);
   expect(call).not.toHaveBeenCalled();
-  expect(callTool).not.toHaveBeenCalled();
 });
 
 it.each([
@@ -561,7 +561,7 @@ it.each([
   const saved: Goal = { ...goalRecord(), objective: 'Customer export checks', notifications: [{
     id: '650e8400-e29b-41d4-a716-446655440001', kind, body, recordedAt: '2026-10-08T00:00:00Z',
   }] };
-  const { store, call, callTool } = await mountGoalControls(lang, saved);
+  const { store, call } = await mountGoalControls(lang, saved);
   const display = await readManagerDisplayEvents(cwd, lang);
   expect(display.diagnostics).toEqual([]);
   expect(display.events).toHaveLength(1);
@@ -569,7 +569,6 @@ it.each([
   expect.soft(display.events[0]!.message.split('\n').slice(2, 2 + body.split('\n').length).join('\n')).toBe(body);
   expect(await store.get(saved.id)).toEqual(saved);
   expect(call).not.toHaveBeenCalled();
-  expect(callTool).not.toHaveBeenCalled();
 
   await vi.waitFor(() => {
     const frame = app!.lastFrame()!;
@@ -588,7 +587,7 @@ it.each([
     id: '650e8400-e29b-41d4-a716-446655440001', kind: 'custom', body: 'warning',
     ...(severity === undefined ? {} : { severity }), recordedAt: '2026-10-08T00:00:00Z',
   }] };
-  const { store, call, callTool } = await mountGoalControls(lang, saved);
+  const { store, call } = await mountGoalControls(lang, saved);
   const prefix = lang === 'ja' ? '重要度: ' : 'Severity: ';
   const expected = prefix + (lang === 'ja' ? '警告' : 'Warning');
   await vi.waitFor(() => {
@@ -603,7 +602,6 @@ it.each([
   });
   expect(await store.get(saved.id)).toEqual(saved);
   expect(call).not.toHaveBeenCalled();
-  expect(callTool).not.toHaveBeenCalled();
 });
 
 it.each(['ja', 'en'] as const)('renders old saved merge instructions once in the %s TUI without migrating the record', async (lang) => {
@@ -618,7 +616,7 @@ it.each(['ja', 'en'] as const)('renders old saved merge instructions once in the
     changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
   }, notifications: [{ id: '650e8400-e29b-41d4-a716-446655440001', kind: 'awaiting_merge', body,
     recordedAt: '2026-10-08T00:00:00Z' }] };
-  const { store, call, callTool } = await mountGoalControls(lang, saved);
+  const { store, call } = await mountGoalControls(lang, saved);
   const display = await readManagerDisplayEvents(cwd, lang);
   expect(display.diagnostics).toEqual([]);
   expect(display.events).toHaveLength(1);
@@ -640,7 +638,6 @@ it.each(['ja', 'en'] as const)('renders old saved merge instructions once in the
   });
   expect(await store.get(saved.id)).toEqual(saved);
   expect(call).not.toHaveBeenCalled();
-  expect(callTool).not.toHaveBeenCalled();
 });
 
 it.each(['ja', 'en'] as const)('reopens the %s TUI with withdrawn question details and notification history without answer guidance', async (lang) => {
@@ -652,8 +649,8 @@ it.each(['ja', 'en'] as const)('reopens the %s TUI with withdrawn question detai
     id: '650e8400-e29b-41d4-a716-446655440002', kind: 'question',
     body: formatGoalQuestionNotification(question, lang === 'ja' ? 'en' : 'ja'), recordedAt: '2026-10-08T00:00:00Z',
   }] };
-  const { store, call, callTool } = await mountGoalControls(lang, saved);
-  await vi.waitFor(() => expect(app!.lastFrame()).toContain(`/answer ${question.id}`));
+  const { store, call } = await mountGoalControls(lang, saved);
+  await vi.waitFor(() => expect(app!.lastFrame()).toContain('/answer'));
   app!.unmount();
   const withdrawn = await store.update(saved.id, (goal) => withdrawGoalQuestion(goal, question.id));
   expect(withdrawn.questions).toEqual([{
@@ -678,7 +675,6 @@ it.each(['ja', 'en'] as const)('reopens the %s TUI with withdrawn question detai
   });
   expect(await store.get(saved.id)).toEqual(withdrawn);
   expect(call).not.toHaveBeenCalled();
-  expect(callTool).not.toHaveBeenCalled();
 });
 
 it.each(['question', 'awaiting_merge', 'completed', 'progress', 'blocked', 'custom'] as const)(

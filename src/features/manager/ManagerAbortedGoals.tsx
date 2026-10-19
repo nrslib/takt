@@ -1,6 +1,6 @@
 import { Box, Text } from 'ink';
 import type { ReactElement } from 'react';
-import { toDisplayText } from '../tui/displayText.js';
+import { formatGoalName } from './goalDisplay.js';
 import type { ManagerDisplayGoal } from './savedEvents.js';
 import { getLabel } from '../../shared/i18n/index.js';
 
@@ -11,7 +11,7 @@ export function ManagerAbortedGoals({ goals, lang }: {
     <Box borderStyle="round" flexDirection="column">
       <Text bold>{getLabel('manager.abortedGoals', lang)}</Text>
       {goals.filter((goal) => goal.executionStatus === 'aborted').map((goal) => (
-        <Text key={goal.id}>{toDisplayText(`${goal.id}: ${goal.objective}`)}</Text>
+        <Text key={goal.id} wrap="truncate-end">{`${getLabel('manager.goalStates.aborted', lang)}: ${formatGoalName(goal.objective)}`}</Text>
       ))}
     </Box>
   );
