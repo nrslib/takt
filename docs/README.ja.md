@@ -290,7 +290,7 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 | `takt run` | 積まれたタスクをまとめて実行します |
 | `takt watch` | タスクキューを監視し、pending タスクを自動実行します（常駐プロセス） |
 | `takt ui` | 実験的な Viewer 中心の Web UI を `http://127.0.0.1:20525` で起動します |
-| `takt manager` | 実験的なゴール相談 TUI を起動します。動作・設定・保存するデータの形式は予告なく変わることがあります。自動でタスクを投入・実行するため、provider の API の費用がかかります。claude（claude-sdk）または codex では、道具の実行前に AI が審査します。起動時に daemon が自動で起動し、イベント処理と巡回を行います。`takt daemon stop` で daemon を停止できます |
+| `takt manager` | 実験的なゴール相談 TUI を起動します。引数なしの `/go` で現在の会話から要約を依頼し、要約があれば作り直さずに承認・登録します。動作・設定・保存するデータの形式は予告なく変わることがあります。自動でタスクを投入・実行するため、provider の API の費用がかかります。claude（claude-sdk）または codex では、道具の実行前に AI が審査します。起動時に daemon が自動で起動し、イベント処理と巡回を行います。`takt daemon stop` で daemon を停止できます |
 | `takt list` | タスクブランチを管理します（マージ、リトライ、リキュー、強制失敗、追加指示、削除） |
 | `takt #N` | GitHub Issue を初期入力としてタスク化します |
 | `takt merge` | workflow で PR のレビュー・修正・マージを行います |
