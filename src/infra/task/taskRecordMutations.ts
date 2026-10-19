@@ -39,7 +39,7 @@ interface RetryTaskRecordOptions {
   resumePoint?: WorkflowResumePoint;
   workflow?: string;
   taskDir?: string;
-  resumeSource: RunResumeSource;
+  resumeSource?: RunResumeSource;
   restartPoint?: WorkflowRestartPoint;
 }
 
@@ -126,10 +126,10 @@ export function buildRetryTaskRecord(
     owner_start_time: status === 'running' ? getSelfTaskProcessIdentity()?.startTime ?? null : null,
     run_slug: undefined,
     completion: undefined,
-    ...(options.resumeSource.sourceRunSlug
+    ...(options.resumeSource?.sourceRunSlug
       ? { source_run_slug: options.resumeSource.sourceRunSlug }
       : {}),
-    resume_mode: options.resumeSource.resumeMode,
+    resume_mode: options.resumeSource?.resumeMode,
     failure: undefined,
     start_step: options.startStep,
     retry_note: options.retryNote,

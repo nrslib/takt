@@ -42,6 +42,13 @@ export const TaskExecutionConfigObjectSchema = z.object({
   source: z.enum(['pr_review', 'issue', 'manual']).optional(),
   pr_number: positiveSafeIntegerSchema.optional(),
   context_pr_number: positiveSafeIntegerSchema.optional(),
+  caccia_execution_source: z.literal('from_pr').optional(),
+  caccia_pushed_head: z.object({
+    headSha: z.string().regex(/^[0-9a-f]{40}$/u),
+    baseBranch: z.string().refine((value) => getLocalBranchNameError(value) === undefined),
+    headRepositoryUrl: z.string().min(1),
+    headRepositoryPushUrls: z.array(z.string().min(1)).nonempty(),
+  }).strict().optional(),
   merge_task: z.boolean().optional(),
   merge_method: z.enum(['squash', 'merge', 'rebase']).optional(),
   merge_threat_check_max_diff_bytes: z.number().int().nonnegative().optional(),
@@ -49,12 +56,9 @@ export const TaskExecutionConfigObjectSchema = z.object({
   merge_head_repository_push_urls: z.array(z.string().min(1)).nonempty().optional(),
   merge_initial_head_sha: z.string().regex(/^[0-9a-f]{40}$/u).optional(),
   merge_clone_prepared: z.boolean().optional(),
-  merge_caccia_required: z.boolean().optional(),
   merge_pushed_head_sha: z.string().regex(/^[0-9a-f]{40}$/u).optional(),
   merge_push_base_head_sha: z.string().regex(/^[0-9a-f]{40}$/u).optional(),
-  merge_skip_caccia_if_no_activity: z.boolean().optional(),
-  merge_caccia_approved_head_sha: z.string().regex(/^[0-9a-f]{40}$/u).optional(),
-  merge_caccia_skipped_head_sha: z.string().regex(/^[0-9a-f]{40}$/u).optional(),
+  merge_push_source: z.enum(['caccia', 'manual']).optional(),
   resume_point: WorkflowResumePointCodecSchema.optional(),
   [TASK_RESTART_POINT_KEY]: WorkflowRestartPointSchema.optional(),
 }).superRefine((data, ctx) => {
@@ -93,45 +97,36 @@ export const TaskExecutionConfigObjectSchema = z.object({
       path: ['pr_number'],
     });
   }
+  if (data.caccia_execution_source !== undefined && data.source !== 'pr_review') {
+    ctx.addIssue({ code: z.ZodIssueCode.custom,
+      message: 'Caccia execution source requires a PR review task',
+      path: ['caccia_execution_source'] });
+  }
+  if (data.caccia_pushed_head !== undefined
+    && (data.caccia_execution_source !== 'from_pr' || data.merge_task === true)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom,
+      message: 'Caccia pushed head requires a from_pr task', path: ['caccia_pushed_head'] });
+  }
   if (data.merge_task === true && (data.source !== 'pr_review' || data.pr_number === undefined
     || data.branch === undefined || data.base_branch === undefined || data.worktree !== true
     || data.merge_method === undefined || data.merge_head_repository_url === undefined
     || data.merge_head_repository_push_urls === undefined || data.merge_initial_head_sha === undefined
-    || data.merge_threat_check_max_diff_bytes === undefined || data.merge_caccia_required === undefined
+    || data.merge_threat_check_max_diff_bytes === undefined
     || data.merge_clone_prepared === undefined)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom,
       message: 'Merge task requires saved PR identity, worktree, method, repository, and initial head SHA',
       path: ['merge_task'] });
-  }
-  if (data.merge_caccia_approved_head_sha !== undefined && data.merge_pushed_head_sha === undefined) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom,
-      message: 'Caccia-approved merge head requires a recorded pushed head',
-      path: ['merge_caccia_approved_head_sha'] });
-  }
-  if (data.merge_caccia_skipped_head_sha !== undefined && data.merge_pushed_head_sha === undefined) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom,
-      message: 'Caccia-skipped merge head requires a recorded pushed head',
-      path: ['merge_caccia_skipped_head_sha'] });
-  }
-  if (data.merge_caccia_approved_head_sha !== undefined && data.merge_caccia_skipped_head_sha !== undefined) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom,
-      message: 'A PR merge head cannot be both Caccia-approved and Caccia-skipped',
-      path: ['merge_caccia_skipped_head_sha'] });
   }
   if (data.merge_push_base_head_sha !== undefined && data.merge_pushed_head_sha === undefined) {
     ctx.addIssue({ code: z.ZodIssueCode.custom,
       message: 'PR merge push base requires a recorded pushed head',
       path: ['merge_push_base_head_sha'] });
   }
-  if (data.merge_skip_caccia_if_no_activity === true && data.merge_pushed_head_sha === undefined) {
+  if (data.merge_push_source !== undefined
+    && (data.merge_pushed_head_sha === undefined || data.merge_push_base_head_sha === undefined)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom,
-      message: 'Caccia activity skip requires a recorded pushed head',
-      path: ['merge_skip_caccia_if_no_activity'] });
-  }
-  if (data.merge_skip_caccia_if_no_activity === true && data.merge_push_base_head_sha === undefined) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom,
-      message: 'Caccia activity skip requires a recorded push base head',
-      path: ['merge_skip_caccia_if_no_activity'] });
+      message: 'PR merge push source requires the pushed head and its previous remote head',
+      path: ['merge_push_source'] });
   }
   if (data.source === 'pr_review' && data.branch === undefined) {
     ctx.addIssue({

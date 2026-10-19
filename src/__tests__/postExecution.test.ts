@@ -21,7 +21,7 @@ const {
   mockStripTaktManagedPrMarker,
   mockReadPrivateFileState,
   mockWritePrivateFile,
-  mockRunLinkedCacciaSafely,
+  mockRunCaccia,
   mockRunLinkedMergeSafely,
 } =
   vi.hoisted(() => ({
@@ -37,7 +37,7 @@ const {
     mockCreatePullRequestSafely: vi.fn(),
     mockReadPrivateFileState: vi.fn(),
     mockWritePrivateFile: vi.fn(),
-    mockRunLinkedCacciaSafely: vi.fn(),
+    mockRunCaccia: vi.fn(),
     mockRunLinkedMergeSafely: vi.fn(),
     mockStripTaktManagedPrMarker: vi.fn((body: string) => body
       .split('<!-- takt:managed -->')
@@ -52,7 +52,7 @@ vi.mock('../shared/utils/private-file.js', () => ({
 }));
 
 vi.mock('../features/caccia/index.js', () => ({
-  runLinkedCacciaSafely: (...args: unknown[]) => mockRunLinkedCacciaSafely(...args),
+  runCaccia: (...args: unknown[]) => mockRunCaccia(...args),
 }));
 
 vi.mock('../features/merge/index.js', () => ({
@@ -131,7 +131,7 @@ function createDeferred() {
 describe('postExecutionFlow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockRunLinkedCacciaSafely.mockReset();
+    mockRunCaccia.mockReset();
     mockRunLinkedMergeSafely.mockReset();
     mockAutoCommitAndPush.mockReturnValue({ success: true, commitHash: 'abc123', publishedHead: 'abc123'.padEnd(40, '0') });
     mockPushBranch.mockReturnValue(undefined);
@@ -191,7 +191,7 @@ describe('postExecutionFlow', () => {
     expect(mockFindExistingPr).not.toHaveBeenCalled();
     expect(mockCommentOnPr).not.toHaveBeenCalled();
     expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
-    expect(mockRunLinkedCacciaSafely).not.toHaveBeenCalled();
+    expect(mockRunCaccia).not.toHaveBeenCalled();
     expect(mockRunLinkedMergeSafely).not.toHaveBeenCalled();
   });
 
@@ -232,7 +232,7 @@ describe('postExecutionFlow', () => {
     { existing: false, goalId: '550e8400-e29b-41d4-a716-446655440000' },
     { existing: true, goalId: undefined },
     { existing: false, goalId: undefined },
-  ])('controls linked Caccia and merge by goal ownership after successful PR handling: %j', async ({ existing, goalId }) => {
+  ])('preserves linked merge ownership after successful PR handling: %j', async ({ existing, goalId }) => {
     const url = `https://github.com/org/repo/pull/${existing ? 42 : 1}`;
     mockFindExistingPr.mockReturnValue(existing ? { number: 42, url } : undefined);
     mockCreatePullRequest.mockReturnValue({ success: true, url });
@@ -241,13 +241,11 @@ describe('postExecutionFlow', () => {
     const result = await postExecutionFlow(options);
 
     expect(result).toEqual({ prUrl: url });
+    expect(mockRunCaccia).not.toHaveBeenCalled();
     if (goalId !== undefined) {
-      expect(mockRunLinkedCacciaSafely).not.toHaveBeenCalled();
       expect(mockRunLinkedMergeSafely).not.toHaveBeenCalled();
     } else {
-      expect(mockRunLinkedCacciaSafely).toHaveBeenCalledExactlyOnceWith('/project', url, undefined, expect.objectContaining({ outputMode: 'terminal' }));
       expect(mockRunLinkedMergeSafely).toHaveBeenCalledExactlyOnceWith('/project', url, undefined, expect.objectContaining({ outputMode: 'terminal' }), undefined);
-      expect(mockRunLinkedCacciaSafely.mock.invocationCallOrder[0]).toBeLessThan(mockRunLinkedMergeSafely.mock.invocationCallOrder[0]!);
     }
   });
 
@@ -333,11 +331,12 @@ describe('postExecutionFlow', () => {
     expect(commentBody).toBeTruthy();
     expect(commentBody).not.toContain(TAKT_MANAGED_PR_MARKER);
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
-    expect(mockRunLinkedCacciaSafely).toHaveBeenCalledWith(
+    expect(mockRunLinkedMergeSafely).toHaveBeenCalledWith(
       '/project',
       'https://github.com/org/repo/pull/42',
       undefined,
       expect.objectContaining({ outputMode: 'terminal' }),
+      undefined,
     );
     expect(mockBuildTaktManagedPrOptions).not.toHaveBeenCalled();
   });
@@ -840,7 +839,7 @@ describe('postExecutionFlow', () => {
     expect(result.prFailed).toBe(true);
     expect(result.prError).toContain('--repo is not supported with GitLab provider. Use cwd context instead.');
     expect(result.prUrl).toBeUndefined();
-    expect(mockRunLinkedCacciaSafely).not.toHaveBeenCalled();
+    expect(mockRunCaccia).not.toHaveBeenCalled();
   });
 
   it('PRコメント失敗時に prFailed: true を返す', async () => {
@@ -852,7 +851,7 @@ describe('postExecutionFlow', () => {
     expect(result.prFailed).toBe(true);
     expect(result.prError).toMatch(/\S/u);
     expect(result.prUrl).toBeUndefined();
-    expect(mockRunLinkedCacciaSafely).not.toHaveBeenCalled();
+    expect(mockRunCaccia).not.toHaveBeenCalled();
   });
 
   it('outputMode が silent の場合は PR コメント失敗時も通常 UI ログを出力しない', async () => {
@@ -896,15 +895,16 @@ describe('postExecutionFlow', () => {
 
     expect(result.prFailed).toBeUndefined();
     expect(result.prUrl).toBe('https://github.com/org/repo/pull/1');
-    expect(mockRunLinkedCacciaSafely).toHaveBeenCalledWith(
+    expect(mockRunLinkedMergeSafely).toHaveBeenCalledWith(
       '/project',
       'https://github.com/org/repo/pull/1',
       undefined,
       expect.objectContaining({ outputMode: 'terminal' }),
+      undefined,
     );
   });
 
-  it('passes the task abort signal to linked Caccia after PR creation', async () => {
+  it('passes the task abort signal to linked merge after PR creation', async () => {
     const controller = new AbortController();
 
     await postExecutionFlow({
@@ -912,21 +912,22 @@ describe('postExecutionFlow', () => {
       abortSignal: controller.signal,
     });
 
-    expect(mockRunLinkedCacciaSafely).toHaveBeenCalledWith(
+    expect(mockRunLinkedMergeSafely).toHaveBeenCalledWith(
       '/project',
       'https://github.com/org/repo/pull/1',
       controller.signal,
       expect.objectContaining({ outputMode: 'terminal' }),
+      undefined,
     );
   });
 
-  it.each(['created', 'updated'] as const)('passes the parent display to linked Caccia after a PR is %s and waits for completion', async (operation) => {
+  it.each(['created', 'updated'] as const)('passes the parent display to linked merge after a PR is %s and waits for completion', async (operation) => {
     const url = 'https://github.com/org/repo/pull/42';
     mockFindExistingPr.mockReturnValue(operation === 'updated' ? { number: 42, url } : undefined);
     mockCreatePullRequest.mockReturnValue({ success: true, url });
     const completion = createDeferred();
     const started = createDeferred();
-    mockRunLinkedCacciaSafely.mockImplementationOnce(() => {
+    mockRunLinkedMergeSafely.mockImplementationOnce(() => {
       started.resolve();
       return completion.promise;
     });
@@ -939,7 +940,8 @@ describe('postExecutionFlow', () => {
       await started.promise;
       expect(completed).toBe(false);
       expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining(url));
-      expect(mockRunLinkedCacciaSafely).toHaveBeenCalledWith('/project', url, controller.signal, expect.objectContaining(display));
+      expect(mockRunLinkedMergeSafely).toHaveBeenCalledWith('/project', url, controller.signal, expect.objectContaining(display), undefined);
+      expect(mockRunCaccia).not.toHaveBeenCalled();
     } finally { completion.resolve(); await pending; }
     expect(await pending).toEqual({ prUrl: url });
     expect(completed).toBe(true);
@@ -958,9 +960,10 @@ describe('postExecutionFlow', () => {
     expect(mockInfo).not.toHaveBeenCalled();
     expect(mockError).not.toHaveBeenCalled();
     expect(mockSuccess).not.toHaveBeenCalled();
-    expect(mockRunLinkedCacciaSafely).toHaveBeenCalledWith(
+    expect(mockRunLinkedMergeSafely).toHaveBeenCalledWith(
       '/project', 'https://github.com/org/repo/pull/1', undefined,
       expect.objectContaining({ outputMode: 'silent' }),
+      undefined,
     );
   });
 

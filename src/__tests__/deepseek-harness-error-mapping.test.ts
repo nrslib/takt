@@ -37,6 +37,45 @@ const runtimeStateBehavior = vi.hoisted(() => ({
   failBarrierPublication: false,
   failPatchDisposal: false,
 }));
+const pluginResolutionBehavior = vi.hoisted(() => ({
+  failureStage: undefined as 'source' | 'install' | 'entrypoint' | undefined,
+  failFirstPluginDisposal: false,
+  pluginResolutionCount: 0,
+}));
+
+vi.mock('../infra/deepseek-harness/plugin-resolution.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../infra/deepseek-harness/plugin-resolution.js')>();
+  return {
+    ...actual,
+    resolveDeepSeekHarnessPlugins: async (...args: Parameters<typeof actual.resolveDeepSeekHarnessPlugins>) => {
+      if (pluginResolutionBehavior.failureStage !== undefined) {
+        const { DeepSeekHarnessNpmPluginResolutionError } = await import('../infra/deepseek-harness/npm-plugin.js');
+        throw new DeepSeekHarnessNpmPluginResolutionError(pluginResolutionBehavior.failureStage);
+      }
+      const [options] = args;
+      if (pluginResolutionBehavior.failFirstPluginDisposal
+        && options?.some((plugin) => typeof plugin === 'string' || plugin.source.startsWith('npm:'))) {
+        const failDisposal = pluginResolutionBehavior.pluginResolutionCount === 0;
+        pluginResolutionBehavior.pluginResolutionCount += 1;
+        return {
+          plugins: options.map((plugin, index) => ({
+            ...(typeof plugin === 'string' || plugin.id === undefined ? {} : { id: plugin.id }),
+            name: index === 0
+              ? 'file:///tmp/takt-deepseek-git-plugin/index.js'
+              : 'file:///tmp/takt-deepseek-npm-plugin/index.js',
+            ...(typeof plugin !== 'string' && plugin.config !== undefined ? { config: plugin.config } : {}),
+          })),
+          npmPluginEntrypoints: ['file:///tmp/takt-deepseek-npm-plugin/index.js'],
+          cleanupPaths: ['/tmp/takt-deepseek-git-plugin', '/tmp/takt-deepseek-npm-plugin'],
+          dispose: async (): Promise<void> => {
+            if (failDisposal) throw new Error('temporary plugin cleanup failed');
+          },
+        };
+      }
+      return actual.resolveDeepSeekHarnessPlugins(...args);
+    },
+  };
+});
 
 vi.mock('@deepseek-ai/dsh-sdk-client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@deepseek-ai/dsh-sdk-client')>();
@@ -254,6 +293,9 @@ describe('DeepSeek Harness SDK error mapping', () => {
     runtimeBehavior.cleanupReceipts.length = 0;
     runtimeBehavior.runGate = undefined;
     runtimeBehavior.onClose = undefined;
+    pluginResolutionBehavior.failureStage = undefined;
+    pluginResolutionBehavior.failFirstPluginDisposal = false;
+    pluginResolutionBehavior.pluginResolutionCount = 0;
   });
 
   afterEach(cleanupTestResources);
@@ -310,9 +352,17 @@ describe('DeepSeek Harness SDK error mapping', () => {
     ],
     [
       'transport closure errors',
-      new TransportClosedError(`runtime closed; stderr ${RAW_FAILURE_SENTINEL}`),
+      new TransportClosedError(
+        `runtime closed; dsh: startup failed: 1 required plugins did not activate; stderr ${RAW_FAILURE_SENTINEL}`,
+      ),
       AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
       'DeepSeek Harness runtime connection closed. Verify the runtime installation and retry. Upstream error details are withheld.',
+    ],
+    [
+      'official Cordis npm plugin load diagnostics',
+      new TransportClosedError('runtime closed; TAKT_DSH_CORDIS_NPM_PLUGIN_LOAD_FAILURE'),
+      AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+      'DeepSeek Harness npm plugin failed to load. Check the package entrypoint and configuration, then retry. Upstream error details are withheld.',
     ],
     [
       'request timeout errors',
@@ -334,6 +384,36 @@ describe('DeepSeek Harness SDK error mapping', () => {
       data: { success: false, error: expected, result: expected, failureCategory: category },
     });
     expect(JSON.stringify({ response, events })).not.toContain(RAW_FAILURE_SENTINEL);
+  });
+
+  it.each([
+    [
+      'source',
+      'DeepSeek Harness npm plugin source acquisition failed. Verify the package spec and registry access, then retry.',
+    ],
+    [
+      'install',
+      'DeepSeek Harness npm plugin installation failed. Check package dependencies and npm configuration, then retry.',
+    ],
+    [
+      'entrypoint',
+      'DeepSeek Harness npm plugin entrypoint could not be resolved. Add a valid exports or main entrypoint, then retry.',
+    ],
+  ] as const)('reports an actionable npm plugin %s failure', async (stage, expected) => {
+    pluginResolutionBehavior.failureStage = stage;
+    const response = await callDeepSeekHarness('worker', 'trigger an npm plugin failure', {
+      cwd: temporaryRoot,
+      providerOptions: { plugins: ['npm:fixture-plugin@1.0.0'] },
+    });
+
+    expect(response).toMatchObject({
+      status: 'error',
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+      content: expected,
+      error: expected,
+    });
+    expect(runtimeBehavior.startCount).toBe(0);
+    expect(runtimeBehavior.runCount).toBe(0);
   });
 
   it('classifies the SDK duplicate-session response as unsupported continuation', async () => {
@@ -482,6 +562,36 @@ describe('DeepSeek Harness SDK error mapping', () => {
     });
     expect(runtimeBehavior.startCount).toBe(1);
     expect(runtimeBehavior.runCount).toBe(1);
+  });
+
+  it('reports a generic plugin cleanup failure when the combined Git and npm resolution is disposed', async () => {
+    runtimeBehavior.uniqueSessions = true;
+    runtimeBehavior.confirmedExit = true;
+    pluginResolutionBehavior.failFirstPluginDisposal = true;
+    const providerOptions = {
+      plugins: [
+        { id: 'git-fixture', source: 'git:file:///unused/git-fixture.git' },
+        'npm:fixture-plugin@1.0.0',
+      ],
+    };
+    let response: Awaited<ReturnType<typeof callDeepSeekHarness>> | undefined;
+    for (let index = 0; index < 9; index += 1) {
+      response = await callDeepSeekHarness('worker', `create runtime ${index}`, {
+        cwd: temporaryRoot,
+        providerOptions,
+      });
+    }
+
+    const expected = 'DeepSeek Harness plugin cleanup failed. Verify temporary storage access and retry. Upstream error details are withheld.';
+    expect(response).toMatchObject({
+      status: 'error',
+      failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+      content: expected,
+      error: expected,
+    });
+    expect(runtimeBehavior.startCount).toBe(9);
+    expect(runtimeBehavior.runCount).toBe(9);
+    expect(JSON.stringify(response)).not.toContain('Git plugin cleanup failed');
   });
 
   it('fails closed with a fixed diagnostic when shared runtime state cannot be read', async () => {

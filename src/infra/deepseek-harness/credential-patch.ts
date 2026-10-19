@@ -8,7 +8,7 @@ import {
   writeNewPrivateFileWithMode,
 } from '../../shared/utils/private-file.js';
 import type { DeepSeekCredentialBinding } from './credential-binding.js';
-import type { ResolvedDeepSeekHarnessPlugin } from './git-plugin.js';
+import type { ResolvedDeepSeekHarnessPlugin } from './plugin-types.js';
 
 const PATCH_FILE_NAME = 'credentials.patch.yml';
 const PATCH_DIRECTORY_PREFIX = 'takt-deepseek-credentials-';

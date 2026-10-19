@@ -264,14 +264,12 @@ describe('loadWorkflowByIdentifier', () => {
 
       const implementationStep = findAgentWorkflowStep(implementation, 'implement');
       const fixStep = findAgentWorkflowStep(remediation, 'fix');
-      const retryStep = findAgentWorkflowStep(remediation, 'fix-retry');
 
       expect(implementationStep.companion).toEqual({
         fixed: ['ai-antipattern-review-companion'],
         pool: [],
       });
       expect(fixStep.companion).toEqual({ fixed: ['testing-review-companion'], pool: [] });
-      expect(retryStep.companion).toEqual({ fixed: ['testing-review-companion'], pool: [] });
     }
   });
 

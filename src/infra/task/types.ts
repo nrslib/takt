@@ -121,6 +121,7 @@ export interface TaskState {
   branch?: string;
   worktree?: boolean | string;
   worktreePath?: string;
+  mergeTask?: boolean;
   workflow?: string;
   prUrl?: string;
   failure?: TaskFailure;

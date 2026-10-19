@@ -223,7 +223,7 @@ The base commit is taken from the merge-base against the first existing ref amon
 
 ### Report reference lookup
 
-`{report:filename}` searches the current workflow namespace first, then the resume snapshot's exact mapping for the consumer and reference name (when available), then the immediate parent, further ancestors, and finally the run's reports root. The first matching scope wins: a report in a nearer scope shadows a report of the same name farther away. Sibling and descendant workflow namespaces are never searched.
+For a report selected by the step's `input_reports`, `{report:filename}` uses that declared producer's completed report. Other report references search the current workflow namespace first, then the resume snapshot's exact mapping for the consumer and reference name (when available), then the immediate parent, further ancestors, and finally the run's reports root. The first matching scope wins for those other references: a report in a nearer scope shadows one of the same name farther away. Sibling and descendant workflow namespaces are never searched.
 
 Parent and ancestor reports, including the run root, are read-only references. Reports are always written to the current workflow's own `reportDir`; resolving a parent reference does not change the write destination. If no report exists, the reference becomes an explicit missing-report sentence. Invalid paths, reserved names, symlinks, and non-missing I/O errors remain errors.
 
@@ -791,7 +791,7 @@ A system step is executed by the TAKT engine itself — no agent runs. Declare i
         next: plan_from_existing_pr
 ```
 
-`effects` executes engine-side actions: `enqueue_task`, `comment_pr`, `sync_with_root`, `resolve_conflicts_with_ai`, `merge_pr`, `close_pr`. Each effect type may appear at most once per step, and results route via `when(effect.<step>.<type>.<field>)`:
+`effects` executes engine-side actions: `commit_and_push`, `caccia`, `enqueue_task`, `comment_pr`, `sync_with_root`, `resolve_conflicts_with_ai`, `merge_pr`, `close_pr`. Each effect type may appear at most once per step, and results route via `when(effect.<step>.<type>.<field>)`:
 
 ```yaml
   - name: prepare_merge
@@ -849,6 +849,23 @@ Every report entry requires `name` and `format`. Two optional fields refine beha
 
 - `use_judge` (default `true`) — whether the report is fed into the Phase 3 status judgment. Set `use_judge: false` for reports that should be written but not used as judgment evidence. A step whose rules need judgment must keep at least one `use_judge` report.
 - `order` — a report-format facet reference (resolved like `format`) whose content replaces the default report-writing instruction in Phase 2. Use it when the agent needs custom directions for producing the report beyond the format template itself.
+
+An agent step, `workflow_call`, or parallel parent/sub-step can declare report inputs from another step in the same workflow:
+
+```yaml
+- name: follow-up-review
+  input_reports:
+    from_step: remediation
+    reports: [fix-plan.md, fix-report.md]
+  persona: reviewer
+  instruction: |
+    Review the completed repair against this plan:
+    {report:fix-plan.md}
+    And this result:
+    {report:fix-report.md}
+```
+
+`reports: all` selects all reports produced by the source's completed execution, including selected parallel reviewers and nested calls. An explicit list selects those public report file names and rejects missing or ambiguous matches. `{report:filename}` inserts a selected report's body at that position, even when another report with the same name exists in the consumer's local or ancestor scope. If `reports: all` selects several reports with that name, a single `{report:filename}` is ambiguous and fails. Selected reports without a placeholder are appended to the agent's Phase 1 instruction; reports sharing a name are shown separately with their logical producers. A `workflow_call` passes the same selected inputs to its child agents, including through nested calls. A parallel parent's declaration applies to its children unless a child declares its own inputs. A missing, incomplete, or unrelated report fails the step; TAKT does not search neighboring report directories. Use `optional_if_unrun: true` only when a valid route reaches the consumer before its source has executed. Before the source runs, its contracted report names are reserved, so `{report:filename}` cannot fall back to an unrelated local or ancestor report of the same name. Once the source starts, its reports are required.
 
 ## Runtime provider promotion
 
@@ -1192,6 +1209,33 @@ The `commit_and_push` effect accepts `pr`, commits changes in the PR clone, and 
 
 The merge command checks fork threats before starting the workflow, whether a PR number is given or discovered. It skips that check for a same-repository PR. When a threat is detected or cannot be assessed, TAKT comments with the reason and does not start the workflow. Git fetch and push and provider tools use the normal configuration.
 
-`merge-review` runs `review` and comments on the PR with CI results and its assessment. `merge-review-fix` synchronizes and resolves conflicts, runs `review-fix`, pushes fixes, checks CI and review state, then merges. A failed review or CI result stops the merge and is reported in a comment.
+`merge-review` runs `review` and the Caccia effect and comments on the PR with CI results and its assessment. `merge-review-fix` synchronizes and resolves conflicts, runs `review-fix`, pushes fixes, runs the Caccia effect, checks CI and review state, then merges. A failed review or CI result stops the merge and is reported in a comment.
 
-The default `takt merge` workflow, `merge-review-fix-simple`, synchronizes the PR with its base branch and resolves conflicts when needed before running `review-fix-simple`. After gathering context, one read-only reviewer uses facets suited to the changes. Separate steps adjudicate findings, plan and apply fixes, verify completion, and review again. Once the final requirement check completes, TAKT pushes fixes, checks CI and GitHub review and mergeability on that head, then merges. An aborted child workflow or failed CI stops the merge and produces a PR comment. Select `merge-review-fix` for parallel specialist reviews.
+The default `takt merge` workflow, `merge-review-fix-simple`, synchronizes the PR with its base branch and resolves conflicts when needed before running `review-fix-simple`. After gathering context, one read-only reviewer uses facets suited to the changes. Separate steps adjudicate findings, plan and apply fixes, verify completion, and review again. Once the final requirement check completes, TAKT pushes fixes, runs the Caccia effect, checks CI and GitHub review and mergeability on its returned head, then merges. An aborted child workflow or failed CI stops the merge and produces a PR comment. Select `merge-review-fix` for parallel specialist reviews.
+
+### Caccia system effect
+
+The effect requires a matching isolated PR execution context from `takt merge` or an `enqueue_task mode: from_pr` task. `pr` accepts a positive integer or a full template reference; it cannot be an embedded string. The effect reads the existing `caccia.enabled`, `wait_timeout_ms`, `max_iterations`, and `workflow` settings. Disabled or unset configuration returns immediately without waiting. Standalone `takt caccia <PR>` remains available regardless of `enabled`.
+
+```yaml
+  - name: caccia
+    mode: system
+    effects:
+      - type: caccia
+        pr: "{context:identify.pr.number}"
+    rules:
+      - condition: when(effect.caccia.caccia.success == false)
+        next: error_comment
+      - condition: when(effect.caccia.caccia.outcome == "limit")
+        next: limit_comment
+      - condition: when(true)
+        next: wait_ci
+```
+
+Normal results include `success: true`, `failed: false`, `outcome` (`success`, `skipped`, or `limit`), `headSha`, `unresolvedCount`, `skipReason`, and `reason`. Unused reason fields are `null`. Read them through `effect.<step>.caccia.*` in conditions or `{effect:<step>.caccia.<field>}` in templates. Skip reasons are `config_disabled`, `github_unavailable`, `initial_review_unavailable`, `review_rate_limited`, and `review_skipped`. Failures return `success: false`, `failed: true`, and `error`; no head is guaranteed on failure. Check failure before reading normal fields.
+
+After a repair push, the same clone is synchronized with a verified fast-forward. CI should compare PR status head with `effect.caccia.caccia.headSha`; merge uses the clone's current head as its expected SHA. Historical push effect results remain unchanged.
+
+GitLab also provides MR details and CI status, so `skipped` with `github_unavailable` continues to CI on the returned head. Merge methods and head constraints remain unsupported; `merge_pr` fails when either is supplied.
+
+The merge builtins execute Caccia explicitly: `merge-review` runs `review → caccia → wait_ci → evaluation comment`, while `merge-review-fix` and `merge-review-fix-simple` run `review/fix → commit_and_push → caccia → wait_ci → merge_pr`. `success` and `skipped` continue to CI on the returned head. `limit` comments with the unresolved thread count and ends COMPLETE without merging. An effect error comments with `error` and ends ABORT. Push, task post-processing, and Pipeline no longer start Caccia implicitly. With `merge.auto_start: true`, PR publication starts the merge workflow, whose explicit effect owns Caccia.

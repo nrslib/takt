@@ -87,6 +87,8 @@ function makeNormalDeps(cwd: string, runPaths: RunPaths): StepExecutorDeps {
     getTask: () => 'task',
     getWorkflowDescription: () => undefined,
     getWorkflowRules: () => undefined,
+    getInheritedReportInputs: () => undefined,
+    resolveDeclaredReportInputs: () => undefined,
     getRetryNote: () => undefined,
     getReviewScope: () => ({ kind: 'not_a_git_repository' } as const),
     structuredOutputNormalizers: createStructuredOutputNormalizerRegistry([]),

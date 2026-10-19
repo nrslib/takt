@@ -250,17 +250,17 @@ assistant:
 
 ```yaml
 caccia:
-  enabled: false          # 任务创建或更新 PR 后启用自动关联
+  enabled: false          # 允许 caccia effect 等待 CodeRabbit
   wait_timeout_ms: 1800000 # 等待初次审查和每次推送提交审查的上限（毫秒）
   max_iterations: 3       # 修复和复审的最大轮数
   workflow: caccia        # 用于判断和修复每组线程的 workflow
 ```
 
-只有 `enabled: true` 时才运行自动关联。无论该开关为何值，都可以手动运行 `takt caccia <PR-number>`。默认值为关闭、1,800,000 毫秒、3 轮和 workflow `caccia`。如果项目中存在 `caccia` 配置块，它整体优先于全局块；所选配置块中省略的字段使用上述默认值。将 `workflow` 设置为 workflow 标识符即可替换 builtin workflow。
+`caccia` effect 只有在 `enabled: true` 时等待 CodeRabbit；关闭时立即返回 `skipped` 和 `skipReason: config_disabled`。无论该开关为何值，都可以手动运行 `takt caccia <PR-number>`。默认值为关闭、1,800,000 毫秒、3 轮和 workflow `caccia`。如果项目中存在 `caccia` 配置块，它整体优先于全局块；所选配置块中省略的字段使用上述默认值。将 `workflow` 设置为 workflow 标识符即可替换 builtin workflow。
 
-`wait_timeout_ms` 规定初次审查和每次推送后复审的等待期限，重新请求审查也包含在内。若审查限额通知给出的可重试时间早于期限，Caccia 会在该时间到达时请求一次审查；若可重试时间为期限或更晚，则立即跳过。收到限额通知后，审查到期限仍未完成时也会跳过。未收到限额通知时，初次等待超时会跳过，推送后的等待超时会记录为错误。单独命令在跳过或出错时以非零状态退出；自动关联路径保留已完成的任务结果。
+`wait_timeout_ms` 规定初次审查和每次推送后复审的等待期限，重新请求审查也包含在内。若审查限额通知给出的可重试时间早于期限，Caccia 会在该时间到达时请求一次审查；若可重试时间为期限或更晚，则立即跳过。收到限额通知后，审查到期限仍未完成时也会跳过。未收到限额通知时，初次等待超时会跳过，推送后的等待超时会记录为错误。单独命令在跳过或出错时以非零状态退出；system effect 在跳过时返回 `success: true` 与 `outcome: 'skipped'`，出错时返回 `success: false` 和 `error`，供 workflow 分支使用。
 
-自动关联的进度、workflow 输出、结果和失败信息继承父任务的显示模式和任务名前缀。silent 模式的父任务不会产生 Caccia 屏幕输出。
+effect 的进度、workflow 输出、结果和失败信息继承父任务的显示模式和任务名前缀。silent 模式的父任务不会产生 Caccia 屏幕输出。
 
 ## 项目配置
 
@@ -1027,6 +1027,11 @@ provider_options:
     request_timeout_ms: 3600000
     shutdown_timeout_ms: 1000
     plugins:
+      - npm:@example/cordis-plugin@1.2.3
+      - source: npm:another-cordis-plugin@2.0.0
+        id: another-plugin
+        config:
+          enabled: true
       - id: example-plugin
         source: git:https://github.com/example/plugin.git
         ref: v1.2.3
@@ -1036,7 +1041,11 @@ provider_options:
 
 请在 global config（`~/.takt/config.yaml`）或可信的 global runtime profile 中配置 `plugins`，不要在 project/workflow config 中指定。也可以通过用户管理的 `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PLUGINS` JSON 数组配置。project 定义的 plugin 会被拒绝，但允许使用空数组禁用 plugin。plugin 以 runtime 的权限执行，可能访问认证信息，因此只应加载可信代码。plugin 的 `config` 值在 preview、session log 和 telemetry 中会被隐藏，传给 runtime 的值保持不变。
 
-DeepSeek Harness plugin 可以从 Git HTTPS 或 SSH 仓库加载。明文 `http://` 和 `git://` source 会被拒绝。可按需在 Git URL 前添加 `git:`，并通过 `ref` 指定 tag、branch 或 commit。建议固定 tag 或 commit 来选择 Git source revision，但仅固定 ref 并不能保证依赖解析的可复现性：仓库包含 `package.json` 时，TAKT 使用 `npm install --package-lock=false` 安装依赖，因此每次运行解析出的依赖版本可能不同。省略 `ref` 时会使用仓库的默认 revision 并显示警告。不会执行 lifecycle script，不支持 npm package source。私有仓库使用现有 SSH 密钥或 Git credential helper 认证；SSH source 可以使用惯例中的 `git` 用户名，但不得嵌入 password、token 或 secret。其他包含 credential 的 URL 会在运行 Git 前被拒绝。Git 和 askpass prompt 被禁用，默认 SSH 使用 batch mode。运行 TAKT 前请配置有效认证信息和可信 host key。已有的自定义 SSH command/executable 会保留。
+DeepSeek Harness plugin 可以从 npm package 或 Git HTTPS/SSH 仓库加载。npm plugin 可以使用字符串 `npm:<package-spec>`，也可以使用包含 `source` 的对象；对象中的 `id` 和 `config` 均可省略。TAKT 将 npm package 安装到临时目录，不执行 lifecycle script，通过 package 的 `exports` 或 `main` 解析入口，并在 runtime 结束时删除临时文件。npm plugin 以 runtime 的权限执行，可能访问认证信息，因此只应使用代码可信的 package。固定 package 版本可以固定顶层 package tarball，但仅凭这一点并不能保证依赖解析的可复现性。TAKT 使用 `--package-lock=false` 安装依赖，因此除非发布的 package 包含适当的 `npm-shrinkwrap.json`，否则范围指定的间接依赖版本仍可能在不同运行之间变化。包含认证信息或敏感 query parameter 的 URL 会在 npm 启动前被拒绝；请通过受保护的 npm 配置进行认证。
+
+如果官方 runtime 报告配置的 npm plugin 未激活，TAKT 会停止该次 provider 调用，提示检查入口和配置，不会转发 plugin 的原始诊断信息。
+
+Git source 的既有行为保持不变：明文 `http://` 和 `git://` source 会被拒绝。可按需在 Git URL 前添加 `git:`，并通过 `ref` 指定 tag、branch 或 commit。建议固定 tag 或 commit 来选择 Git source revision，但仅固定 ref 并不能保证依赖解析的可复现性：仓库包含 `package.json` 时，TAKT 使用 `npm install --package-lock=false` 安装依赖，因此每次运行解析出的依赖版本可能不同。省略 `ref` 时会使用仓库的默认 revision 并显示警告。不会执行 lifecycle script。私有仓库使用现有 SSH 密钥或 Git credential helper 认证；SSH source 可以使用惯例中的 `git` 用户名，但不得嵌入 password、token 或 secret。其他包含 credential 的 URL 会在运行 Git 前被拒绝。Git 和 askpass prompt 被禁用，默认 SSH 使用 batch mode。运行 TAKT 前请配置有效认证信息和可信 host key。已有的自定义 SSH command/executable 会保留。
 
 `runtime_mode` 和 Python/uv 专用选项已删除，作为未知配置拒绝。`base_url` 的环境变量覆盖项是 `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL`；provider 原生 endpoint 设置为 `DEEPSEEK_BASE_URL`。非 loopback endpoint 只能在 global config 或用户管理的 TAKT 环境变量中设置，project 配置仅允许 loopback；workflow YAML 不接受 `provider_options`。
 
@@ -1358,6 +1367,8 @@ takt update codex     # 仅更新指定提供者
 容量约为Claude SDK 250 MB、Codex 340 MB、OpenCode 60 MB、Pi 52 MB、DeepSeek Harness 510 MB（macOS arm64实测），因操作系统和架构而异。Claude和Codex也托管CLI二进制文件。保留`TAKT_CLAUDE_CLI_PATH`及`TAKT_CODEX_CLI_PATH`显式覆盖，不自动使用PATH上的同名CLI。OpenCode外部CLI需要单独安装。可使用`takt install <provider> --force`重新安装；更新失败时保留原有完整版本。
 
 ## PR 合并设置
+
+GitLab 支持 MR 详情、CI 状态获取和批量选择。启用 Caccia 时，在 `takt merge` 和 `from_pr` 任务中，Caccia effect 返回原因是 `github_unavailable` 的 `skipped`，然后等待返回 head 的 CI。合并结果 pipeline 通过合并提交的第二个父提交与 source head 的一致性进行验证。没有 pipeline 或 pipeline 对应旧 head 时不会通过 CI。指定合并方式和限制 head 仍不受支持，传入这些参数的 `merge_pr` 会失败。CI 等待完成不代表合并成功。
 
 默认的 `merge.workflow` 是 `merge-review-fix-simple`：由一个只读审查代理审查，再由独立步骤裁定问题、规划和实施修复、验证并重新审查。设置为 `merge-review-fix` 可使用并行审查；命令行 `--workflow` 优先于该设置。
 

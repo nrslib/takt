@@ -8,9 +8,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Removed
+## [0.71.0] - 2026-10-15
 
-- Removed session-state persistence for workflow results and the previous-result notice shown on the next interactive startup. The TUI now shows a fixed notice for the selected operation after dispatch.
+### Added
+
+- `takt merge [pr-number]` runs a review, fix, and merge workflow for pull requests (#1704). Without a number, it selects open PRs with `--author`, `--label`, `--base`, `--head`, `--managed-by-takt`, `--include-forks`, and `--include-draft`, or with the `merge.where` setting; drafts and forks are excluded by default, and fork PRs go through a threat check. The default workflow is `merge-review-fix-simple` (one read-only reviewer, then separate adjudication, fix, and verification steps); use `--workflow merge-review-fix` for parallel review. Two PRs run at a time by default (`merge.concurrency`, `--concurrency`), and the merge method defaults to `squash` (`merge.method`). Each PR is recorded as a task in `takt list` and runs in an isolated clone; a failed task can be resumed with Requeue or Retry. When `caccia.enabled` is true, CodeRabbit and Caccia run after each push. The command exits with code 1 if any processed PR remains unmerged.
+- `takt update [provider]` updates installed provider SDKs to the versions pinned by TAKT. Without a provider, it updates only installed providers whose version differs.
+- The DeepSeek Harness provider can load Git plugins with `provider_options.deepseek_harness.plugins` (`id`, `source`, `ref`, `config`). Plugins are cloned into a temporary runtime over HTTPS or SSH. They can be defined only in the global config, a trusted global runtime profile, or `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PLUGINS`; plugins defined by a project are rejected, lifecycle scripts are not run, and `config` values are hidden from logs.
+- The TUI status line shows progress while the AI selects a task or prepares an instruction for `/tell`, `/retry`, `/requeue`, and instruction revision.
+
+### Changed
+
+- BREAKING: The Claude Agent SDK, Codex SDK, OpenCode SDK, and Pi SDK are no longer installed with TAKT (#1738). Run `takt install <provider>` (`claude-sdk`, `codex`, `opencode`, or `pi`) once before using the provider; `claude-sdk` is the default provider, so most users need `takt install claude-sdk`. The SDK is installed under the TAKT config directory with the versions pinned by TAKT. In a terminal, TAKT asks whether to install a missing SDK before running; in CI, pipeline mode, `takt watch`, and other non-interactive runs it stops with ``Run `takt install <provider>` ``, so install the SDK in the job beforehand. OpenCode still also requires its CLI. `claude-headless`, `claude-terminal`, `cursor`, `copilot`, and `kiro` are not affected.
+- The pinned provider SDKs are Claude Agent SDK 0.3.300 and Codex SDK 0.162.1.
+- DeepSeek Harness SDK and runtime are updated to 0.2.1-alpha.2 (#1755). Uploading session logs to the API is disabled along with local JSONL session storage. Run `takt update deepseek-harness` to update an existing installation.
+- The Pi provider enables the SDK's `codemode` tool by default (#1744). Tools called through `codemode` follow the same permission mode and `allowed_tools` as other tools; `codemode` stays disabled when an explicit `allowed_tools` list omits it.
+- After `/go`, `/tell`, `/retry`, and `/requeue`, the TUI shows the actual result (the saved task, the created Issue number, or whether execution succeeded and why it failed) and records it in the conversation, so the next AI turn and `/go` know what happened. This replaces the notice of the previous result shown at the next interactive startup, which is removed together with the saved session state.
+- The `/go` menu now lists Save as Task, Create Issue, Execute here now, and Continue editing in that order, with Save as Task selected first. Create Issue asks whether to also save the task (default Yes), Execute here now asks for confirmation because the TUI is unavailable until the workflow finishes (default No), and Escape returns to the menu. PR mode does not show the Issue item.
+- `takt run` and `takt watch` refuse to start while another of them is running for the same project (`TAKT run is already running for this project (PID N)`).
+- AI conflict resolution in `takt list` Sync with root and the `sync_with_root` workflow step now only edits files; TAKT checks that no conflict markers remain (including diff3 markers) before staging and committing. Binary conflicts, unrelated tracked changes, and untracked files are rejected. Related source, test, and lockfile updates are allowed, and existing unstaged user edits are kept. The AI output is streamed while it works.
+- Adding a task for an Issue or PR that already has an active task is allowed again when the user adds it; only tasks added automatically by a workflow are still deduplicated. The `Issue: #N` line in an instruction is added only when the work handles that Issue.
+- Retry and requeue now stop before the first step when the run or reports they inherit from cannot be found, instead of warning and continuing. Inherited entries other than regular files and symlinks are skipped with a warning.
+- When a CodeRabbit rate-limit notice gives a retry time before the wait deadline, `takt caccia` posts `@coderabbitai review` once at that time and keeps waiting.
+- Builtin review and fix prompts no longer use inputs that cannot be shown to be in scope, or design decisions written only in a plan, as reasons to reject or widen a fix. Status judgment no longer re-examines material outside its input to overturn a conclusion.
+
+### Fixed
+
+- `takt caccia` no longer waits until the deadline when CodeRabbit explicitly skips a review, and matches review completion and rate-limit notices to the reviewed commit.
+- Status judgment now uses the builtin `conductor` persona instead of the bare name as its system prompt.
+- Resizing the terminal no longer leaves a duplicated input box or thinking indicator in the TUI (#1721).
+- Japanese IME composition text is shown at the cursor instead of the bottom of the screen (#1773).
+- Long TUI sessions no longer print `MaxListenersExceededWarning` for `beforeExit`.
+- Generated branch names avoid names that already exist locally, on the remote, or in a saved clone, and names that conflict as Git ref parents or children.
+- Remote checks work when the `GIT_SSH` path contains spaces or quotes.
+- `takt install deepseek-harness` no longer fails its integrity check when the TAKT config directory path contains a symlink, such as macOS `/var`.
+
+### Internal
+
+- `npm run check:release` synchronizes dependencies first and runs real global-install and managed-provider install checks (`test:global-install`, `test:managed-install`).
+- Real-provider E2E installs the managed SDK once per run.
+- The `tasks.yaml` lock is a single file lock.
+- Fixed flaky waits and process identification in CI tests.
 
 ## [0.70.0] - 2026-10-09
 

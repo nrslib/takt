@@ -33,7 +33,7 @@ if (
   || headSha === undefined
   || reportPath === undefined
   || timeoutMarkerPath === undefined
-  || (route !== 'worker-pool' && route !== 'standalone' && route !== 'pipeline')
+  || (route !== 'worker-pool' && route !== 'standalone' && route !== 'linked')
 ) {
   throw new Error('Caccia forced-exit child is missing fixture configuration');
 }
@@ -114,7 +114,7 @@ mock.module(workflowModule, {
   },
 });
 
-const { runCaccia, runLinkedCacciaSafely } = await import(
+const { runCaccia, resolveCacciaSettings } = await import(
   pathToFileURL(join(sourceRoot, 'src/features/caccia/index.ts')).href
 );
 if (route === 'worker-pool') {
@@ -125,7 +125,8 @@ if (route === 'worker-pool') {
     }, { once: true });
     await Promise.all(Array.from(
       { length: cloneCount },
-      () => runLinkedCacciaSafely(projectCwd, 'https://github.com/org/repo/pull/42', workerContext.abortSignal),
+      () => runCaccia({ entry: 'linked', projectCwd, prNumber: 42,
+        settings: resolveCacciaSettings({ enabled: true }), abortSignal: workerContext.abortSignal }),
     ));
     return true;
   };
@@ -175,6 +176,7 @@ if (route === 'worker-pool') {
       settings: { enabled: true, waitTimeoutMs: 1_000, maxIterations: 1, workflow: 'caccia' },
     });
   } else {
-    await runLinkedCacciaSafely(projectCwd, 'https://github.com/org/repo/pull/42');
+    await runCaccia({ entry: 'linked', projectCwd, prNumber: 42,
+      settings: resolveCacciaSettings({ enabled: true }) });
   }
 }

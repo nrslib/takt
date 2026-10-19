@@ -48,7 +48,11 @@ import {
   type ManagedDeepSeekHarnessModules,
 } from './managed-package.js';
 import { parseDeepSeekHarnessModelReference } from './model-reference.js';
-import { resolveDeepSeekHarnessGitPlugins, type DeepSeekHarnessPluginResolution } from './git-plugin.js';
+import { DeepSeekHarnessNpmPluginResolutionError } from './npm-plugin.js';
+import {
+  resolveDeepSeekHarnessPlugins,
+  type ResolvedDeepSeekHarnessPlugins,
+} from './plugin-resolution.js';
 import { type DeepSeekCredentialHomeOrigin } from './credential-home.js';
 import { resolveConfiguredDeepSeekEndpoint } from './endpoint-consistency.js';
 import {
@@ -96,6 +100,9 @@ const DEEPSEEK_HARNESS_MAX_ERROR_BYTES = 8 * 1024;
 const DEEPSEEK_HARNESS_MAX_PENDING_RESPONSE_LENGTH = 10_000;
 const DEEPSEEK_HARNESS_MAX_NODE_TIMER_MS = 2_147_483_647;
 const DEEPSEEK_HARNESS_RUNTIME_ENV_NAMES = ['PATH'] as const;
+const DEEPSEEK_HARNESS_NPM_PLUGIN_LOAD_FAILURE_MARKER = 'TAKT_DSH_CORDIS_NPM_PLUGIN_LOAD_FAILURE';
+const DEEPSEEK_HARNESS_NPM_PLUGIN_LOAD_FAILURE_MESSAGE =
+  'DeepSeek Harness npm plugin failed to load';
 
 interface HarnessRunResult {
   sessionId: string;
@@ -1010,7 +1017,7 @@ class DeepSeekHarnessProcess {
     private readonly configuration: ResolvedDeepSeekConfiguration,
     private readonly environment: ProcessEnvironmentResolution,
     private readonly credentialPatch: DeepSeekCredentialPatch,
-    private readonly pluginResolution: DeepSeekHarnessPluginResolution,
+    private readonly pluginResolution: ResolvedDeepSeekHarnessPlugins,
     readonly identity: string,
     readonly credentialFingerprint: string,
     private readonly modules: ManagedDeepSeekHarnessModules,
@@ -1034,6 +1041,7 @@ class DeepSeekHarnessProcess {
         patchDirectory,
         ...pluginResolution.cleanupPaths,
       ]),
+      TAKT_DSH_NPM_PLUGIN_ENTRYPOINTS: JSON.stringify(pluginResolution.npmPluginEntrypoints),
       TAKT_DSH_MANAGED_PACKAGE_DIRECTORY: modules.directory,
     };
     this.harness = new modules.sdk.DeepSeekHarness({
@@ -1248,8 +1256,9 @@ class DeepSeekHarnessProcess {
       }
       if (pluginResult.status === 'rejected') {
         throw new DeepSeekHarnessTransportError(
-          'DeepSeek Harness Git plugin cleanup failed.',
-          'git-plugin-cleanup-failed',
+          'DeepSeek Harness plugin cleanup failed.',
+          'plugin-cleanup-failed',
+          'DeepSeek Harness plugin cleanup failed',
         );
       }
     })();
@@ -1334,6 +1343,13 @@ function mapSdkError(error: unknown, sdk: ManagedDeepSeekHarnessModules['sdk']):
     return new DeepSeekHarnessProtocolError('DeepSeek Harness SDK protocol validation failed');
   }
   if (error instanceof sdk.TransportClosedError) {
+    if (error.message.includes(DEEPSEEK_HARNESS_NPM_PLUGIN_LOAD_FAILURE_MARKER)) {
+      return new DeepSeekHarnessTransportError(
+        `${DEEPSEEK_HARNESS_NPM_PLUGIN_LOAD_FAILURE_MESSAGE}. Check the package entrypoint and configuration, then retry.`,
+        'npm-plugin-load-failed',
+        DEEPSEEK_HARNESS_NPM_PLUGIN_LOAD_FAILURE_MESSAGE,
+      );
+    }
     return new DeepSeekHarnessTransportError(
       'DeepSeek Harness runtime connection closed. Upstream error details are withheld.',
       'transport-closed',
@@ -1469,7 +1485,7 @@ async function getOrCreateProcess(
 
   await assertDeepSeekRuntimeCreationAllowed();
   const managedModules = await loadManagedDeepSeekHarnessModules();
-  const pluginResolution = await resolveDeepSeekHarnessGitPlugins(providerOptions?.plugins, options.abortSignal);
+  const pluginResolution = await resolveDeepSeekHarnessPlugins(providerOptions?.plugins, options.abortSignal);
   let credentialPatch: DeepSeekCredentialPatch | undefined;
   let processRecord: DeepSeekHarnessProcess | undefined;
   try {
@@ -1589,6 +1605,14 @@ function failureDetail(
   }
   if (error instanceof DeepSeekHarnessContinuationError) {
     return createSessionContinuationUnsupportedFailure(deepSeekContinuationMessage());
+  }
+  if (error instanceof DeepSeekHarnessNpmPluginResolutionError) {
+    const diagnostic = {
+      source: 'DeepSeek Harness npm plugin source acquisition failed. Verify the package spec and registry access, then retry.',
+      install: 'DeepSeek Harness npm plugin installation failed. Check package dependencies and npm configuration, then retry.',
+      entrypoint: 'DeepSeek Harness npm plugin entrypoint could not be resolved. Add a valid exports or main entrypoint, then retry.',
+    }[error.stage];
+    return createProviderErrorFailure(diagnostic);
   }
   if (error instanceof DeepSeekCredentialDiagnosticError) {
     const diagnostic = credentialDiagnosticDetail(

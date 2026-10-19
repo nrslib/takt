@@ -15,6 +15,10 @@ interface ThreatCheckOptions {
 
 type ThreatCheckResult = { passed: true } | { passed: false; comment: string };
 
+export function toPublicThreatCheckComment(comment: string): string {
+  return comment.replaceAll('@', '＠');
+}
+
 const decisionSchema = z.object({
   suspicious: z.boolean(),
   reason: z.string().trim().min(1),

@@ -265,7 +265,7 @@ export interface PipelineConfig {
 
 /** CodeRabbit review-loop settings shared by project and global configuration. */
 export interface CacciaSettings {
-  /** Automatically run after a task creates or updates a pull request. */
+  /** Allow the caccia system effect to wait for CodeRabbit reviews. */
   enabled: boolean;
   /** Maximum time to wait for a CodeRabbit review, in milliseconds. */
   waitTimeoutMs: number;

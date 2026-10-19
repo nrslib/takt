@@ -5,7 +5,6 @@ import { resolveConfigValue } from '../../infra/config/index.js';
 import {
   fetchCacciaPullRequestDetails,
   fetchCacciaPullRequestHeadSha,
-  fetchCodeRabbitCommitActivity,
   fetchCodeRabbitReviewStatus,
   fetchCodeRabbitReviewThreads,
   requestCodeRabbitReview,
@@ -18,7 +17,6 @@ import {
 import { resolveAutoCommitOptions } from '../../infra/task/autoCommit.js';
 import { buildSafeGitEnvironment } from '../../infra/task/git-environment.js';
 import { stageAndCommit } from '../../infra/task/git.js';
-import { runWorkflowExecution } from '../tasks/execute/workflowExecutionApi.js';
 import { DEFAULT_CACCIA_SETTINGS } from '../../core/models/schemas.js';
 import type { CacciaConfig, CacciaSettings } from '../../core/models/config-types.js';
 import { createCacciaAbortScope } from './abortSignal.js';
@@ -27,7 +25,6 @@ import { createLogger, getErrorMessage, getSlackWebhookUrl, sendSlackNotificatio
 import { forceExitAfterOpenCodeCleanup } from '../tasks/execute/forceShutdown.js';
 import { toLocalBranchRef } from '../../shared/utils/gitBranchValidation.js';
 import { createCacciaCloneGitOperations, type CacciaGitOperations } from '../../infra/workflow/system/caccia-clone-git.js';
-import type { Language } from '../../core/models/types.js';
 import { createCacciaOutput, type CacciaDisplayOptions, type CacciaOutput } from './output.js';
 
 const log = createLogger('caccia');
@@ -111,7 +108,7 @@ export interface CacciaResult {
   headSha?: string;
   exitCode?: number;
   reason?: string;
-  skipReason?: 'no_coderabbit_activity' | 'initial_review_unavailable' | 'review_rate_limited' | 'review_skipped';
+  skipReason?: 'github_unavailable' | 'initial_review_unavailable' | 'review_rate_limited' | 'review_skipped';
 }
 
 interface CacciaInputBase extends CacciaDisplayOptions {
@@ -120,19 +117,20 @@ interface CacciaInputBase extends CacciaDisplayOptions {
   abortSignal?: AbortSignal;
 }
 
+type CacciaPushedHeadListener = (headSha: string) => void;
+
 export type CacciaInput = CacciaInputBase & (
   | { entry: 'standalone'; prNumber: number }
-  | { entry: 'linked'; prNumber?: number; prUrl?: string; expectedInitialHeadSha?: string;
-      skipIfNoCodeRabbitActivity?: boolean; onPushedHead?: (headSha: string) => void }
+  | { entry: 'linked'; prNumber: number; expectedInitialHeadSha?: string;
+      onPushedHead?: CacciaPushedHeadListener }
 );
 
 export interface CacciaReviewWaitOptions {
   timeoutMs: number;
   afterHeadSha?: string;
-  allowNoActivitySkip?: boolean;
 }
 
-export type CacciaReviewWaitResult = { headSha: string; noActivity?: boolean; reviewSkipped?: boolean };
+export type CacciaReviewWaitResult = { headSha: string; reviewSkipped?: boolean };
 
 export interface CacciaDependencies {
   detectVcsProvider(projectCwd: string): string | undefined;
@@ -154,7 +152,7 @@ export interface CacciaDependencies {
     projectCwd: string;
     task: string;
   }): Promise<{ reportPath: string; decisions: CacciaWorkflowDecision[] }>;
-  commitAndPush(cwd: string): Promise<{ headSha: string; pushed: boolean }>;
+  commitAndPush(cwd: string, onPushedHead: CacciaPushedHeadListener | undefined): Promise<{ headSha: string; pushed: boolean }>;
   fetchCurrentPullRequestHeadSha(
     prNumber: number,
     projectCwd: string,
@@ -250,17 +248,6 @@ async function waitForCodeRabbitReview(
       && status.reviewedHeadShas.includes(options.afterHeadSha)
     ) {
       return { headSha: options.afterHeadSha };
-    }
-    if (options.allowNoActivitySkip && options.afterHeadSha !== undefined
-      && status.headSha === options.afterHeadSha && !status.hasCodeRabbitPost
-      && !status.hasCodeRabbitReviewActivity && !status.hasCodeRabbitThreadReplyActivity
-      && !status.hasUnknownCodeRabbitThreadActivity && !status.hasUnknownCodeRabbitPostActivity) {
-      const activity = await fetchCodeRabbitCommitActivity(
-        prNumber, projectCwd, options.afterHeadSha, deadline, signal,
-      );
-      assertNotAborted(signal);
-      if (activity === undefined || deadline - Date.now() <= 0) return undefined;
-      if (!activity.detected) return { headSha: activity.headSha, noActivity: true };
     }
 
     const remainingMs = deadline - Date.now();
@@ -438,6 +425,7 @@ async function executeCacciaWorkflow(
   },
 ): Promise<{ reportPath: string; decisions: CacciaWorkflowDecision[] }> {
   assertNotAborted(input.abortSignal);
+  const { runWorkflowExecution } = await import('../tasks/execute/workflowExecutionApi.js');
   const result = await runWorkflowExecution({
     task: options.task,
     cwd: options.cwd,
@@ -458,13 +446,25 @@ async function executeCacciaWorkflow(
   return { reportPath, decisions };
 }
 
-async function commitAndPush(cwd: string, projectCwd: string, signal: AbortSignal | undefined, operations: CacciaGitOperations): Promise<{ headSha: string; pushed: boolean }> {
+async function commitAndPush(
+  cwd: string,
+  projectCwd: string,
+  signal: AbortSignal | undefined,
+  operations: CacciaGitOperations,
+  onPushedHead: CacciaPushedHeadListener | undefined,
+): Promise<{ headSha: string; pushed: boolean }> {
   assertNotAborted(signal);
   const commitHash = await stageAndCommit(cwd, 'fix: address CodeRabbit review', resolveAutoCommitOptions(projectCwd));
   const headSha = (await runGitCommandAbortable(cwd, ['rev-parse', 'HEAD'], signal)).stdout.trim();
   if (commitHash !== undefined) {
     const branch = (await runGitCommandAbortable(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'], signal)).stdout.trim();
-    await operations.push(`HEAD:${toLocalBranchRef(branch)}`);
+    let notified = false;
+    await operations.push(`HEAD:${toLocalBranchRef(branch)}`, () => {
+      if (!notified) {
+        onPushedHead?.(headSha);
+        notified = true;
+      }
+    });
   }
   return { headSha, pushed: commitHash !== undefined };
 }
@@ -487,10 +487,10 @@ function createProductionDependencies(
       return { cwd: clone.cwd };
     },
     executeWorkflow: (options) => executeCacciaWorkflow(input, display, options),
-    commitAndPush: (cwd) => {
+    commitAndPush: (cwd, onPushedHead) => {
       const operations = gitOperations.get(cwd);
       if (operations === undefined) throw new Error('Caccia Git operations are missing for the temporary clone');
-      return commitAndPush(cwd, input.projectCwd, input.abortSignal, operations);
+      return commitAndPush(cwd, input.projectCwd, input.abortSignal, operations, onPushedHead);
     },
     fetchCurrentPullRequestHeadSha: (prNumber, projectCwd, signal, deadlineAt) =>
       fetchCacciaPullRequestHeadSha(prNumber, projectCwd, signal, deadlineAt),
@@ -600,24 +600,16 @@ async function runCacciaWithDependencies(
   out: CacciaOutput,
 ): Promise<CacciaResult> {
   if (dependencies.detectVcsProvider(input.projectCwd) !== 'github') {
-    return finishResult(input, createResult(input, 'skipped', 0, 'GitHub is not the configured or detected provider'), dependencies, out);
+    return finishResult(input, createResult(input, 'skipped', 0, 'GitHub is not the configured or detected provider', undefined, 'github_unavailable'), dependencies, out);
   }
 
-  const prNumber = input.prNumber
-    ?? (input.entry === 'linked' && input.prUrl !== undefined
-      ? getPullRequestNumberFromUrl(input.prUrl)
-      : undefined);
-  if (prNumber === undefined) {
-    throw new Error('A pull request number or GitHub pull request URL is required');
-  }
+  const prNumber = input.prNumber;
 
   out.waitingForReview();
   const initialReview = await dependencies.waitForCodeRabbitReview(prNumber, {
     timeoutMs: input.settings.waitTimeoutMs,
     ...(input.entry === 'linked' && input.expectedInitialHeadSha !== undefined
       ? { afterHeadSha: input.expectedInitialHeadSha } : {}),
-    ...(input.entry === 'linked' && input.skipIfNoCodeRabbitActivity === true
-      ? { allowNoActivitySkip: true } : {}),
   });
   if (initialReview === undefined) {
     return finishResult(input, createResult(input, 'skipped', 0,
@@ -634,16 +626,6 @@ async function runCacciaWithDependencies(
   if (initialReview.reviewSkipped) {
     return finishResult(input, createResult(input, 'skipped', 0,
       'CodeRabbit skipped the review', initialReview.headSha, 'review_skipped'), dependencies, out);
-  }
-  if (initialReview.noActivity) {
-    if (input.entry !== 'linked' || !input.skipIfNoCodeRabbitActivity
-      || input.expectedInitialHeadSha === undefined) {
-      throw new Error('Unexpected CodeRabbit activity result outside the linked merge wait');
-    }
-    return finishResult(input, {
-      ...createResult(input, 'skipped', 0, 'No CodeRabbit activity was detected on this pull request', initialReview.headSha),
-      skipReason: 'no_coderabbit_activity',
-    }, dependencies, out);
   }
 
   let reviewedHeadSha = initialReview.headSha;
@@ -674,9 +656,9 @@ async function runCacciaWithDependencies(
         });
         assertNotAborted(input.abortSignal);
         assertEveryThreadWasDecided(threads, workflowResult.decisions);
-        const pushResult = await dependencies.commitAndPush(clone.cwd);
+        const pushResult = await dependencies.commitAndPush(clone.cwd,
+          input.entry === 'linked' ? input.onPushedHead : undefined);
         if (pushResult.pushed) {
-          if (input.entry === 'linked') input.onPushedHead?.(pushResult.headSha);
           out.pushed(pushResult.headSha);
         }
         if (
@@ -751,45 +733,4 @@ async function runCacciaWithDependencies(
 
 export function resolveCacciaSettings(settings: CacciaConfig | undefined): CacciaSettings {
   return { ...DEFAULT_CACCIA_SETTINGS, ...settings };
-}
-
-export function getPullRequestNumberFromUrl(prUrl: string): number {
-  const match = /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/(\d+)\/?$/u.exec(prUrl);
-  const prNumber = Number(match?.[1]);
-  if (!Number.isSafeInteger(prNumber) || prNumber < 1) {
-    throw new Error(`Invalid GitHub pull request URL: ${prUrl}`);
-  }
-  return prNumber;
-}
-
-export async function runLinkedCacciaSafely(
-  projectCwd: string,
-  prUrl: string,
-  abortSignal?: AbortSignal,
-  displayOptions?: CacciaDisplayOptions,
-): Promise<void> {
-  const display = { ...displayOptions, outputMode: displayOptions?.outputMode ?? 'terminal' };
-  let language: Language | undefined;
-  let out: CacciaOutput | undefined;
-  try {
-    const settings = resolveCacciaSettings(resolveConfigValue(projectCwd, 'caccia'));
-    if (!settings.enabled) {
-      return;
-    }
-    language = resolveConfigValue(projectCwd, 'language');
-    out = createCacciaOutput(display, language);
-    await executeCaccia({
-      entry: 'linked',
-      prUrl,
-      projectCwd,
-      settings,
-      ...(abortSignal === undefined ? {} : { abortSignal }),
-    }, display, out);
-  } catch (error) {
-    log.error('Linked Caccia execution failed; the completed task result is unchanged', {
-      error: getErrorMessage(error),
-      prUrl,
-    });
-    (out ?? createCacciaOutput(display, language)).failed(getErrorMessage(error));
-  }
 }

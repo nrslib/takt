@@ -99,6 +99,30 @@ test('prepare targets are resolved from the same suite registry', () => {
   );
 });
 
+test('review adjudication retains A1-A4 applicability cases and provider conditions', () => {
+  const suite = selectPromptEvalSuites({ names: ['review-adjudication-applicable-inputs'] })[0];
+  assert.equal(suite.tier, 'active');
+  assert.equal(suite.execution.defaultEligible, false);
+  assert.deepEqual(promptEvalPrepareTargets([suite]),
+    ['a1', 'a2', 'a3', 'a4'].map(id => `review-adjudication-applicable-inputs-${id}`));
+
+  const current = parse(readFileSync(new URL(`./${suite.config}`, import.meta.url), 'utf8'));
+  const historical = parse(readFileSync(
+    new URL('./agents/fix-verifier/fix-verification-applicable-inputs.yaml', import.meta.url), 'utf8'));
+  assert.deepEqual(current.providers, historical.providers);
+  assert.deepEqual(current.defaultTest, historical.defaultTest);
+  assert.deepEqual(current.evaluateOptions, historical.evaluateOptions);
+  assert.deepEqual(current.prompts.map(prompt => prompt.label), ['a1', 'a2', 'a3', 'a4']);
+  for (const id of ['a1', 'a2', 'a3', 'a4']) {
+    const currentCase = current.tests.find(entry => entry.description === id.toUpperCase());
+    const historicalCase = historical.tests.find(entry => entry.description === id.toUpperCase());
+    assert.deepEqual(currentCase.vars, historicalCase.vars);
+    assert.equal(currentCase.assert[0].value, historicalCase.assert[0].value);
+    assert.equal(current.prompts.find(prompt => prompt.label === id).config.working_dir,
+      historical.prompts.find(prompt => prompt.label === id).config.working_dir);
+  }
+});
+
 test('frontend suite prompts bind to their matching prepared run directories', () => {
   for (const configName of ['frontend.yaml', 'frontend-opus.yaml']) {
     const source = readFileSync(
@@ -138,7 +162,6 @@ test('every registered prepare target resolves to an actual prepare target', () 
 test('agent cases bind each task to its own isolated fixture', () => {
   for (const [suite, directory, cases] of [
     ['security-threat-model', 'security-review', ['a1', 'a2', 'a3', 'a4', 'a5']],
-    ['fix-verification-applicable-inputs', 'fix-verifier', ['f1', 'f2', 'f3', 'r1', 'r2', 'n1', 'n2', 'n3', 'n4', 'n5', 'a1', 'a2', 'a3', 'a4']],
     ['secondary-platform-adjudication', 'review-adjudication',
       [...Array.from({ length: 13 }, (_, index) => `b${index + 1}`), 'c1']],
   ]) {

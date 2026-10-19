@@ -25,7 +25,7 @@ export async function createPrCloneGitOperations(options: PrCloneGitOptions): Pr
     operations: {
       async fetch(remote, refspec) {
         const env = await buildSafeGitEnvironment(options.cwd, { ...options, allowGitFilters: false });
-        await runGitCommandAbortable(options.cwd, ['fetch', '--force', remote, refspec], options.abortSignal, env);
+        await runGitCommandAbortable(options.cwd, ['fetch', '--force', remote === 'origin' ? options.headRepositoryUrl : options.baseRepositoryUrl, refspec], options.abortSignal, env);
       },
       async push(refspec) {
         const env = await buildSafeGitEnvironment(options.cwd, options);

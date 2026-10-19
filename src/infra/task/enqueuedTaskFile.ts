@@ -41,6 +41,9 @@ function buildValidatedTaskConfig(options?: SaveEnqueuedTaskFileOptions): Omit<T
     ...(options?.contextPrNumber !== undefined && {
       context_pr_number: options.contextPrNumber,
     }),
+    ...(options?.cacciaExecutionSource !== undefined && {
+      caccia_execution_source: options.cacciaExecutionSource,
+    }),
   });
 }
 

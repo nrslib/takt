@@ -50,6 +50,7 @@ import {
   resolveWorkflowStepReportNamesWithDiagnostics,
 } from '../review-report-discovery.js';
 import { DynamicParallelSelectionStore } from '../dynamic-parallel/selection-store.js';
+import { ReportGenerationIndex } from '../report-generation-index.js';
 import {
   restoreWorkflowCallInvocationEvidence,
   snapshotWorkflowCallInvocationEvidence,
@@ -57,6 +58,7 @@ import {
 } from '../workflow-call-invocation-index.js';
 import { SelectorInputReader } from '../dynamic-parallel/selector-input-reader.js';
 import { restoreWorkflowStepParticipationIndex } from '../workflow-step-participation-index.js';
+import { resolveDeclaredReportInputs } from '../instruction/declared-report-inputs.js';
 import {
   createWorkflowStepAbortSignalContext,
   recordWorkflowStepProviderActivity,
@@ -150,6 +152,7 @@ export function createSharedRuntime(
     dynamicFacetSelectionStore: new DynamicFacetSelectionStore(new Map()),
     workflowCallInvocationEvidence: restoreWorkflowCallInvocationEvidence(resumePoint),
     workflowStepParticipationIndex: restoreWorkflowStepParticipationIndex(resumePoint),
+    reportGenerationIndex: new ReportGenerationIndex(resumePoint?.missing_report_generations),
   };
 }
 
@@ -291,14 +294,26 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getProjectCwd: () => params.projectCwd,
     getReportDir: params.getReportDir,
     getRunPaths: params.getRunPaths,
+    reportGenerationIndex: params.sharedRuntime.reportGenerationIndex,
     getLanguage: () => params.options.language,
     getInteractive: () => params.options.interactive === true,
-    getWorkflowSteps: () => params.config.steps.map((step) => ({ name: step.name, description: step.description })),
+    getWorkflowSteps: () => params.config.steps,
     getWorkflowName: () => params.config.name,
     getTask: () => params.task,
     getWorkflowDescription: () => params.config.description,
     getWorkflowRules: () => workflowRules,
     getWorkflowCallVars: () => params.options.workflowCallVars,
+    getInheritedReportInputs: () => params.options.inheritedReportInputs,
+    resolveDeclaredReportInputs: (step, state, reportDir) => resolveDeclaredReportInputs(step, {
+      workflow: params.config,
+      state,
+      sharedRuntime: params.sharedRuntime,
+      workflowCallResolver: params.options.workflowCallResolver,
+      projectCwd: params.projectCwd,
+      lookupCwd: params.getCwd(),
+      reportDir,
+      resumeStackPrefix: params.resumeStackPrefix,
+    }),
     getRetryNote: () => params.options.retryNote,
     getPrContext: () => params.options.prContext,
     getReviewScope,

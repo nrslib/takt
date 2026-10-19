@@ -41,6 +41,7 @@ import type {
 } from '../types.js';
 import { restoreWorkflowCallInvocationEvidence } from '../workflow-call-invocation-index.js';
 import { mergeWorkflowWideRules } from './workflow-wide-rule-merge.js';
+import { resolveDeclaredReportInputs } from '../instruction/declared-report-inputs.js';
 import type { LiveInterventionChannel } from '../live-intervention/types.js';
 
 const PENDING_WORKFLOW_CALL_SITE_DIGEST = '0'.repeat(64);
@@ -130,12 +131,7 @@ interface WorkflowCallExecutorDeps {
     options: WorkflowEngineOptions,
   ) => WorkflowCallChildEngine;
   emit: (event: string, ...args: unknown[]) => void;
-  state: {
-    iteration: number;
-    personaSessions: Map<string, string>;
-    stepIterations: Map<string, number>;
-    userInputs: string[];
-  };
+  state: WorkflowState;
   setActiveResumePoint: (
     step: WorkflowCallStep,
     iteration: number,
@@ -326,6 +322,12 @@ export class WorkflowCallExecutor {
     const index = this.deps.sharedRuntime.workflowCallInvocationEvidence!.index;
     const existing = index.get(parentConfig, step.name, resumeStackPrefix);
     if (existing?.call_instance === occurrence) {
+      if (existing.completed === true) {
+        index.replace(parentConfig, step.name, resumeStackPrefix, {
+          call_instance: existing.call_instance,
+          report_namespace_segment: existing.report_namespace_segment,
+        });
+      }
       return;
     }
     index.record(parentConfig, step.name, resumeStackPrefix, {
@@ -335,6 +337,22 @@ export class WorkflowCallExecutor {
         step.call,
         occurrence,
       )}--site-${PENDING_WORKFLOW_CALL_SITE_DIGEST}`,
+    });
+  }
+
+  markCompletedInvocation(prepared: PreparedWorkflowCallExecution): void {
+    const index = this.deps.sharedRuntime.workflowCallInvocationEvidence!.index;
+    const parentConfig = this.deps.getConfig();
+    const current = index.get(parentConfig, prepared.stepName, prepared.resumeStackPrefix);
+    if (
+      current?.call_instance !== prepared.occurrence
+      || current.report_namespace_segment !== prepared.invocation.report_namespace_segment
+    ) {
+      throw new Error(`workflow_call step "${prepared.stepName}" completion does not match its invocation`);
+    }
+    index.replace(parentConfig, prepared.stepName, prepared.resumeStackPrefix, {
+      ...current,
+      completed: true,
     });
   }
 
@@ -509,6 +527,7 @@ export class WorkflowCallExecutor {
     const inheritedOptions = { ...options };
     delete inheritedOptions.maxStepsOverride;
     delete inheritedOptions.restartPoint;
+    delete inheritedOptions.inheritedReportInputs;
     const parentConfig = this.deps.getConfig();
     const prepared = request.preparedExecution;
     if (
@@ -520,6 +539,9 @@ export class WorkflowCallExecutor {
     const childWorkflow = prepared.childWorkflow;
     const occurrence = prepared.occurrence;
     const resumeStackPrefix = prepared.resumeStackPrefix;
+    const reportInputScope = resumeStackPrefix.at(-1)?.kind === 'parallel'
+      ? resumeStackPrefix.slice(0, -1)
+      : resumeStackPrefix;
     const stepIterationIdentity = buildWorkflowStackStepIterationIdentity(
       parentConfig,
       request.step.name,
@@ -573,6 +595,18 @@ export class WorkflowCallExecutor {
     const inheritedEstimatorSource = options.autoRoutingEstimatorSource;
     const childOptions: WorkflowEngineOptions = {
       ...inheritedOptions,
+      inheritedReportInputs: request.step.inputReports === undefined
+        ? options.inheritedReportInputs
+        : resolveDeclaredReportInputs(request.step, {
+            workflow: parentConfig,
+            state: this.deps.state,
+            sharedRuntime: this.deps.sharedRuntime,
+            workflowCallResolver: this.deps.resolveWorkflowCall,
+            projectCwd: this.deps.projectCwd,
+            lookupCwd: this.deps.getCwd(),
+            reportDir: this.deps.runPaths.reportsAbs,
+            resumeStackPrefix: reportInputScope,
+          }),
       abortSignal: this.deps.getAbortSignal?.() ?? options.abortSignal,
       maxStepsOverride: this.deps.sharedRuntime.maxSteps ?? this.deps.getMaxSteps(),
       initialSessions: Object.fromEntries(this.deps.state.personaSessions),

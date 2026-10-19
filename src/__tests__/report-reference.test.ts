@@ -170,6 +170,107 @@ describe('resolveReportReferenceDetailed', () => {
     expect(prepared.text).not.toContain(`REVIEW-${sibling}`);
   });
 
+  it('inlines a declared producer report ahead of same-name local and ancestor reports', () => {
+    const reports = join(makeTemporaryDirectory(), 'reports');
+    const child = join(reports, 'subworkflows', 'child');
+    mkdirSync(child, { recursive: true });
+    writeFileSync(join(reports, 'fix-plan.md'), 'ANCESTOR-PLAN');
+    writeFileSync(join(child, 'fix-plan.md'), 'LOCAL-PLAN');
+    const step = makeStep({
+      instruction: 'Plan starts\n{report:fix-plan.md}\nPlan ends',
+      outputContracts: [{ name: 'result.md', format: '# Result' }],
+    });
+    const context = makeInstructionContext({
+      reportDir: child,
+      reportsRootDir: reports,
+      declaredReportInputs: [{
+        declaredNames: ['fix-plan.md'],
+        reports: [{ reference: 'fix-plan.md', scope: 'declared-producer', content: 'SELECTED-PLAN' }],
+      }],
+    });
+    const prepared = new InstructionBuilder(step, context).prepare();
+
+    expect(prepared.text).toContain('Plan starts\nSELECTED-PLAN\nPlan ends');
+    expect(prepared.text).not.toContain('## Declared report inputs');
+    expect(prepared.text).not.toContain('LOCAL-PLAN');
+    expect(prepared.text).not.toContain('ANCESTOR-PLAN');
+    expect(prepared.injectedReports).toEqual([{
+      reference: 'fix-plan.md', scope: 'declared-producer', content: 'SELECTED-PLAN',
+    }]);
+    const phase2 = new ReportInstructionBuilder(step, {
+      cwd: context.cwd,
+      reportDir: child,
+      stepIteration: 1,
+      injectedReports: prepared.injectedReports,
+    }).build();
+    expect(phase2).toContain('"scope":"declared-producer"');
+    expect(phase2).toContain('SELECTED-PLAN');
+    expect(phase2).not.toContain('LOCAL-PLAN');
+  });
+
+  it('appends unreferenced selected reports and reserves an optional unrun reference', () => {
+    const reports = join(makeTemporaryDirectory(), 'reports');
+    mkdirSync(reports);
+    writeFileSync(join(reports, 'review-resolution.md'), 'STALE-LOCAL-DECISION');
+    const step = makeStep({ instruction: 'Decision: {report:review-resolution.md}' });
+    const optional = new InstructionBuilder(step, makeInstructionContext({
+      reportDir: reports,
+      declaredReportInputs: [{ declaredNames: ['review-resolution.md'], reports: [] }],
+    })).prepare();
+    expect(optional.text).toContain(formatMissingReportReference('review-resolution.md'));
+    expect(optional.text).not.toContain('STALE-LOCAL-DECISION');
+
+    const unreferenced = new InstructionBuilder(
+      { ...step, instruction: 'Check every selected report.' },
+      makeInstructionContext({
+        reportDir: reports,
+        declaredReportInputs: [{
+          declaredNames: ['review-resolution.md'],
+          reports: [{ reference: 'review-resolution.md', scope: 'declared-producer', content: 'CURRENT-DECISION' }],
+        }],
+      }),
+    ).prepare();
+    expect(unreferenced.text).toContain('## Declared report inputs\n### review-resolution.md\nCURRENT-DECISION');
+    expect(unreferenced.injectedReports).toEqual([{
+      reference: 'review-resolution.md', scope: 'declared-producer', content: 'CURRENT-DECISION',
+    }]);
+  });
+
+  it('aggregates unreferenced same-name inputs with their producers and rejects one ambiguous reference', () => {
+    const reports = join(makeTemporaryDirectory(), 'reports');
+    mkdirSync(reports);
+    const step = makeStep({ instruction: '{report:review.md}' });
+    const context = makeInstructionContext({
+      reportDir: reports,
+      declaredReportInputs: [
+        { declaredNames: ['review.md'], reports: [{ reference: 'review.md', scope: 'declared-producer', content: 'A', producer: 'reviewers / alpha' }] },
+        { declaredNames: ['review.md'], reports: [{ reference: 'review.md', scope: 'declared-producer', content: 'B', producer: 'reviewers / beta' }] },
+      ],
+    });
+    expect(() => new InstructionBuilder(step, context).prepare()).toThrow(/ambiguous declared inputs/);
+    const aggregateStep = makeStep({
+      instruction: 'Compare both reviews.',
+      outputContracts: [{ name: 'summary.md', format: '# Summary' }],
+    });
+    const prepared = new InstructionBuilder(aggregateStep, context).prepare();
+    expect(prepared.text).toContain('### reviewers / alpha: review.md\nA');
+    expect(prepared.text).toContain('### reviewers / beta: review.md\nB');
+    expect(prepared.injectedReports).toEqual([
+      { reference: 'review.md', scope: 'declared-producer', content: 'A', producer: 'reviewers / alpha' },
+      { reference: 'review.md', scope: 'declared-producer', content: 'B', producer: 'reviewers / beta' },
+    ]);
+    const phase2 = new ReportInstructionBuilder(aggregateStep, {
+      cwd: context.cwd,
+      reportDir: reports,
+      stepIteration: 1,
+      injectedReports: prepared.injectedReports,
+    }).build();
+    expect(phase2).toContain('"producer":"reviewers / alpha"');
+    expect(phase2).toContain('"producer":"reviewers / beta"');
+    expect(phase2).toContain('"content":"A"');
+    expect(phase2).toContain('"content":"B"');
+  });
+
   it('leaves future report references literal during evidence preparation without injecting their bodies', () => {
     const reports = join(makeTemporaryDirectory(), 'reports');
     mkdirSync(reports);

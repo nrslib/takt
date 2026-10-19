@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, readFile, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
-import { basename, dirname, join, relative, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 
 interface ManagedGenerationOptions {
   platform: NodeJS.Platform;
@@ -77,7 +77,8 @@ export async function publishManagedGeneration(root: string, generationDirectory
   const journalPath = join(root, JOURNAL);
   let published = false;
   try {
-    await symlink(options.platform === 'win32' ? directory : relative(root, directory), pending,
+    // validateGeneration guarantees the generation sits directly under the real root.
+    await symlink(options.platform === 'win32' ? directory : basename(directory), pending,
       options.platform === 'win32' ? 'junction' : 'dir');
     await writeFile(journalPath, JSON.stringify({ pending: pendingName }), { flag: 'wx', mode: 0o600 });
     options.signal?.throwIfAborted();

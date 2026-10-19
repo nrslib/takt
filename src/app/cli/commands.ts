@@ -51,6 +51,12 @@ export function parseMergeConcurrency(value: string): number {
   return concurrency;
 }
 
+function parseMergeArgument(value: string): number | string {
+  if (/^\d+$/u.test(value)) return parsePullRequestNumber(value);
+  if (value.trim().length === 0) throw new InvalidArgumentError('PR selection text must not be empty');
+  return value;
+}
+
 program
   .command('daemon')
   .description('Run the manager daemon (started automatically by takt manager; use takt daemon stop to stop it)')
@@ -225,7 +231,8 @@ program
 program
   .command('merge')
   .description('Run a merge workflow for a pull request or one batch of open pull requests')
-  .argument('[pr-number]', 'Pull request number (ignores selection conditions)', parsePullRequestNumber)
+  .argument('[pr-number-or-text]', 'Pull request number (ignores selection conditions) or AI selection text', parseMergeArgument)
+  .allowExcessArguments(false)
   .option('--author <login>', 'Filter by author')
   .option('--label <label>', 'Require every specified label', (value: string, previous: string[]) => [...previous, value], [])
   .option('--base <branch>', 'Filter by base branch')
@@ -235,7 +242,7 @@ program
   .option('--include-draft', 'Include draft pull requests')
   .option('--workflow <name-or-path>', 'Workflow to execute')
   .option('--concurrency <count>', 'Maximum concurrent pull request workflows', parseMergeConcurrency)
-  .action(async (prNumber: number | undefined, opts) => {
+  .action(async (prNumberOrText: number | string | undefined, opts) => {
     const { getCliExecutionContext } = await import('./initialization.js');
     const { resolveConfigValue } = await import('../../infra/config/index.js');
     const { runMerge, resolveMergeSettings } = await import('../../features/merge/index.js');
@@ -252,7 +259,18 @@ program
     try {
       const settings = resolveMergeSettings(resolveConfigValue(projectCwd, 'merge'));
       const result = await runMerge({
-        projectCwd, prNumber, settings,
+        projectCwd, settings,
+        prNumber: typeof prNumberOrText === 'number' ? prNumberOrText : undefined,
+        ...(typeof prNumberOrText === 'string' ? {
+          selectionText: prNumberOrText,
+          onSelectionResult: (results: readonly import('../../features/merge/selection.js').PrSelectionResult[]) => {
+            for (const result of results) {
+              info(result.selected
+                ? `Selected PR #${result.number}: ${sanitizeTerminalText(result.reason)}`
+                : `Excluded PR #${result.number}`);
+            }
+          },
+        } : {}),
         concurrency: opts.concurrency ?? settings.concurrency,
         workflow: opts.workflow, includeDraft: opts.includeDraft, includeForks: opts.includeForks,
         ...(Object.keys(where).length === 0 ? {} : { where }),

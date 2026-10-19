@@ -483,8 +483,15 @@ function validateCompletionRetryOptIn(
   }
 }
 
+const WorkflowReportInputRawSchema = z.object({
+  from_step: WorkflowStepNameSchema,
+  reports: z.union([z.literal('all'), z.array(z.string().min(1)).min(1)]),
+  optional_if_unrun: z.literal(true).optional(),
+}).strict();
+
 const AgentParallelSubStepRawObjectSchema = z.object({
   name: WorkflowStepNameSchema,
+  input_reports: WorkflowReportInputRawSchema.optional(),
   description: z.never().optional(),
   kind: z.never().optional(),
   mode: z.never().optional(),
@@ -555,6 +562,7 @@ const AgentParallelSubStepRawSchema = AgentParallelSubStepRawObjectSchema.superR
 
 const WorkflowCallParallelSubStepRawSchema = z.object({
   name: WorkflowStepNameSchema,
+  input_reports: WorkflowReportInputRawSchema.optional(),
   kind: z.literal('workflow_call').optional(),
   mode: z.never().optional(),
   call: WorkflowReferenceOrParamSchema,
@@ -670,6 +678,7 @@ const WorkflowSubworkflowRawSchema = z.object({
 function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: boolean }) {
   return z.object({
     name: WorkflowStepNameSchema,
+    input_reports: WorkflowReportInputRawSchema.optional(),
     description: z.string().optional(),
     session_key: z.string().trim().min(1).optional(),
     kind: WorkflowStepKindSchema.optional(),
@@ -741,6 +750,13 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     }
 
     const stepKind = getWorkflowStepKind(data);
+    if (stepKind === 'system' && data.input_reports !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['input_reports'],
+        message: 'input_reports is only supported on agent and workflow_call steps',
+      });
+    }
     if (data.completion_retry !== undefined && stepKind !== 'agent') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

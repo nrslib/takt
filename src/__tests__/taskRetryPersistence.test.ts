@@ -127,6 +127,26 @@ describe('persistFailedTaskRetry', () => {
     expect(mockRequeueTask).toHaveBeenCalledOnce();
   });
 
+  it('checks project providers and queues a fresh clone retry without a worktree path', async () => {
+    const task: TaskListItem = {
+      ...failedTask, worktreePath: undefined,
+      data: { task: 'old order', worktree: true, workflow: 'default' },
+    };
+    await persistFailedTaskRetry({
+      ...retryOptions, task, worktreePath: undefined, freshStart: true,
+      sourceRunSlug: null, startStep: undefined, restartPoint: undefined,
+      taskDir: task.taskDir,
+    });
+    expect(mockAssertReusableWorktreePath).not.toHaveBeenCalled();
+    expect(checkQueuedTaskProviders).toHaveBeenCalledWith(
+      '/project', { ...task, kind: 'pending' }, {}, undefined, undefined,
+      { workflow: undefined, worktreePath: undefined },
+    );
+    expect(mockRequeueTask).toHaveBeenCalledWith('task-a', ['failed'], expect.objectContaining({
+      freshStart: true, taskDir: '.takt/tasks/task-a', sourceRunSlug: undefined,
+    }));
+  });
+
   it('persists a revised order before requeueing and rolls it back if task state fails', async () => {
     const revision = createRevision();
     mockPersistRevision.mockImplementation(() => {

@@ -1,5 +1,5 @@
 name: development-core
-description: 計画・テスト・実装・ピアレビュー・裁定・検証付き修正・要件確認のコンテキストを注入できる共有開発フロー。
+description: 計画・テスト・実装・ピアレビュー・裁定済み指摘の修正・要件確認を組み合わせる共有開発フロー。
 all_steps:
   rules:
     - ref: findings-handling
@@ -178,6 +178,11 @@ steps:
         next: ABORT
 
   - name: replan
+    input_reports:
+      from_step: peer-review
+      reports:
+        - review-resolution.md
+      optional_if_unrun: true
     tags:
       - plan
     edit: false

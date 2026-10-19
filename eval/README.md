@@ -10,8 +10,25 @@ ChatGPT plan), so runs consume subscription quota, not API billing. Provider
 requirements and high-cost exceptions are recorded separately from suite tier
 in `eval/suite-registry.mjs`.
 
+`review-artifact-input-handoff` は #1803 の日本語4ケースで、固定した旧版
+`946a0283d` と現在の成果物受け渡しを比較する。`npm run build` の後に
+`npm run eval:prompts:review-artifact-input-handoff` を実行する。
+準備スクリプトは宣言した元ステップの完了記録、実行参加記録、出力契約、実ファイルを通して
+現在版の Phase 1 入力を作り、旧版には同じ fixture を与える。
+`eval/prompts/review-artifact-input-handoff/receipts.json` に入力とプロンプトの
+ハッシュを記録する。モデルは両版とも `gpt-6.1-sol`、reasoning effort は high。
+旧版で異なる4行は `eval/fixtures/review-artifact-input-handoff/baseline-lines.json` に
+元コミットとともに固定しており、準備時に Git 履歴を取得する必要はない。
+レビュー統合ケースでは `gather` が同じ報告スコープに作る `review-target.md` も用意する。
+`follow-up` は完了済み呼び出しの記録と `incomplete` の検証報告を意図的に
+組み合わせた異常入力への堅牢性診断である。通常の `review-remediation` は
+`incomplete` から `fix-retry` に戻るため、この組合せから後続レビューへ進まない。
+このケースの結果を通常経路での後続レビュー品質の根拠にはしない。
+日英すべての配線、通常経路の検証後の受け渡し、実行時の欠落拒否は
+ワークフローのテストで検証する。
+
 `phase3-follow-input` は Phase 3 の入力に書かれた結論の対応づけを測る。
-8ケースを自然な日本語・英語で用意し、同じスイート内で `variant` によって
+現行のレビュー・最終判定・ループ判定について6ケースを日本語・英語で用意し、同じスイート内で `variant` によって
 baseline（固定した40桁の `baseline_revision` のテンプレートと文字列 `conductor`）と
 candidate（作業ツリーのテンプレートと conductor persona）を比較する。
 system は両版とも本番の `buildWrappedSystemPrompt` で生成し、candidate は
@@ -26,12 +43,12 @@ fixture ごとに provider を定義し、ケースの `providers` で対応す�
 上位モデルの揺れを見るため、スイートの既定では各行を3回流す（`repeat: 3`）。
 `maxConcurrency` は3に固定する。
 build 後の `npm run eval:prompts:contracts` はモデルを呼ばずにハーネス・採点・fixture を検証する。
-ケース1（拒否応答）、2（返金）、7（会員登録の最終確認）、8（在庫同期のループ判定）は、
+ケース2（返金）、7（会員登録の最終確認）、8（在庫同期のループ判定）は、
 入力が確認範囲をすべて網羅したと結論し、fixture を読むと確認漏れや規則との不一致が見つかる構造である。
 ケース7は default → development-core → peer-review の `final-gate`（supervise 系）の rules、
 ケース8は development-remediation-dynamic の最初の loop monitor の judge rules を使う。
 ケース3は取り込み要件を満たす打開手段がないという応答、4は設定の上書き順に未解消の指摘があるレビュー、
-5は結論と未解消の指摘が矛盾するレビュー、6は結果見出しのない検証レポートである。
+5は結論と未解消の指摘が矛盾するレビューである。旧 verifier に依存したケース1と6は現行スイートから除外した。
 入力内の結論を守るかと、入力内の矛盾を扱えるかを baseline / candidate で比較し、
 ルールの正否（`phase3-follow-input/rule`）と、Codex が入力の外を調べなかったか
 （`phase3-follow-input/no-external-read`）を分けて確認する。Codex は応答の raw の
@@ -211,46 +228,15 @@ parsing with Markdown decoration and conflicting-label rejection. These are indi
 not an end-to-end review loop. See [the experiment record](experiments/review-proof-boundary.md)
 for baseline conditions and the limits of comparative claims.
 
-The `remediation-evidence` suite checks five fixed-input completion decisions:
-an effective alternative guard, a guard after prohibited effects, an explicit
-method requirement, absent optional execution records, and a missing required
-regression test. Run `npm run eval:prompts -- remediation-evidence --no-cache`.
-It uses Codex Sol High and live builtin facets in a reduced desk-review
-prompt, not a full remediation loop. The assertion checks one exact result
-heading and one nonempty dedicated non-blocking unknown section; inspect the
-reasoning and section contents too. These are regression examples, not evidence
-of improved production convergence. Run repeated trials for comparative claims.
-Both suites default to Japanese facets. Add `--var language=en` to evaluate
-English facets against the same Japanese case inputs and evaluation wrapper.
-
-The `fix-verifier-model-matrix` command checks two separate responsibilities on
-Claude Opus 5, Codex Sol High, Codex Luna Max, and Kimi K3: Phase 1 derives and
-records source-backed state and path gaps, while Phase 3 applies workflow-owned
-routing when plan defects coexist with implementation or evidence gaps. It
-requires Claude, Codex, and opencode logins and is excluded from the default
-suite run. Invoke it explicitly with
-`npm run eval:prompts:fix-verifier-model-matrix`. The corresponding
-`fix-verifier-state-closure` and `fix-verifier-state-routing` suites keep
-single-provider regressions in the default prompt gate. The Codex and opencode
-eval providers have no total wall-clock limit. They terminate only after 15
-minutes with no JSON or diagnostic event; override those inactivity windows
-with `CODEX_REVIEW_IDLE_TIMEOUT_SECONDS` and
-`OPENCODE_REVIEW_IDLE_TIMEOUT_SECONDS` when needed.
+`fix-verification-applicable-inputs` は完了検証7ケース、再計画3ケース、レビュー裁定4ケースを、隔離したfixtureと現在のファセットで評価します。`npm run eval:prompts:fix-verification-applicable-inputs` で明示実行します。レビュー裁定A1〜A4だけの評価は `npm run eval:prompts:review-adjudication-applicable-inputs` で実行できます。専用verifierの状態・経路を測る `fix-verifier-family-boundary`、`fix-verifier-state-closure`、`fix-verifier-state-routing` と複数モデル比較の設定も登録されています。これらは各stepの評価であり、修正ループ全体の収束は測りません。
 
 `finding-premise-scope` はレビュー担当4ケースと再計画2ケースを、ケースごとの隔離 fixture と現在のファセットから生成したプロンプトで評価します。Codex gpt-6-sol low、Claude Opus 5、Codex gpt-6-luna max を使い、判定役は gpt-6-sol low です。両 CLI の認証が必要なためデフォルト実行から除外し、`npm run eval:prompts:finding-premise-scope` で明示実行します。rv1 は計画の設計判断（秘密値を写さない）を受入条件として指摘にしないこと、rv2 は前回の裁定が広げた取引先 CSV の形式外の金額表記を理由に persists にしないことを測ります。rn1 は契約が定める円記号付きの金額を persists とし、rn2 は外部の提出者が付けたファイル名による保存先の外への書き込みを blocking の指摘にすることを測ります。pl1 は裁定が広げた形式外の表記を再計画の作業にしないこと、pn1 は契約が定める表記を作業にすることを測ります。
-
-`fix-verification-applicable-inputs` は完了検証7ケース・再計画3ケース・レビュー裁定4ケースを、ケースごとの隔離 fixture と現在のファセットから生成したプロンプトで評価します。Codex gpt-6-sol low、Claude Opus 5、Codex gpt-6-luna max を使い、判定役は gpt-6-sol low です。両 CLI の認証が必要なためデフォルト実行から除外し、`npm run eval:prompts:fix-verification-applicable-inputs` で明示実行します。f1/f2/f3 はそれぞれ組の選択、請求明細、バッチ設定を使い、根拠のない入力を理由に差し戻さないことを測ります。r1/r2 は前回の根拠のない反例を条件に取り込まないことを測ります。n1/n2/n3/n5 は長いパスの表示衝突・下限処理・端末制御列・CSV 契約の小数金額の衝突を検出し、n4 は根拠のある反例を再計画に取り込む対照です。a1/a2 は音声変換 CLI の外部コマンド検索を題材に、相対要素だけの PATH を変更前の文書が約束するかによって、同じレビュー指摘を修正対象にするかを測ります。a3 は連携先の課題タイトルをシェルのコマンド文字列に埋め込む変更の指摘を修正対象にする対照です。a4 は利用者自身のプロジェクトで、PATH の相対要素から悪意のある実行ファイルを起動する指摘を扱います。変更前の文書には利用者の環境の改ざんを防御対象にしない方針があります。a4 は main の既存の脅威モデル規則でも修正対象から外れる可能性があるため、旧版との比較結果を確認する必要があります。fixture のテスト成功は評価の準備確認であり、対照ケースの修正完了を意味しません。これは seed レポートを使う各 step の評価で、修正ループ全体の収束や所要時間は測定しません。
-
-The `fix-verifier-family-boundary` suite checks that source discovery keeps
-implementation/evidence gaps separate from omitted family paths and excludes a
-neighboring contract. Invoke it with
-`npm run eval:prompts:fix-verifier-family-boundary`.
 
 The `instruction-research-handoff` suite evaluates the instruction-summary,
 plan, report, and routing boundaries from the instruction-research handoff
 regression. It contains ten fixed cases (five summary cases and five
 downstream cases), uses the production prompt builders, and runs the four
-model matrix from `fix-verifier-model-matrix`: Claude Opus 5, Codex Sol High,
+historical four-model matrix: Claude Opus 5, Codex Sol High,
 Codex Luna Max, and Kimi K3. The semantic rubric is judged by Codex Luna Max;
 the generator receives only the role-separated case history and the isolated
 fixture, while the judge receives the rubric and fixture evidence separately.
@@ -473,13 +459,9 @@ remain excluded.
 | `rescan` | peer-review / arch-review (round 2) | inventory-es | re-scan evidence + recall on 4 planted defects after previous findings were resolved |
 | `frontend-coder` | frontend / implement | frontend-app (work copy) | artifact checks on the implemented change |
 | `cqrs-coder` | backend-cqrs / implement | backend-cqrs (work copy) | artifact checks on the implemented change |
-| `fix-closure` | review-remediation / fix-retry | fix-closure (work copy) | whether verifier-return remediation closes every falsifiable obligation across multiple fix units and hierarchical projections instead of patching only the latest verifier example or relying on broad test success |
+| `fix-closure` | review-remediation / fix | fix-closure (work copy) | whether implementation closes the planned obligations across fix units and hierarchical projections |
 | `fix-self-scan` | peer-review / fix | fix-self-scan (work copy) | whether the coder's post-edit self-scan removes change-induced dead code, keeps the declared layer direction, and consolidates duplicated override semantics instead of shipping a plan-complete but messy fix |
 | `fix-loop-convergence` | development-remediation / fix, loop-monitor | inline scenario fixtures (`cases/fix-loop-convergence/`) | whether the monitor distinguishes structural replanning from executable repair progress, and whether the established-invariant scan detects a newly introduced violation, measured on Claude Opus, Codex Luna Max, and Codex Sol High |
-| `fix-verifier-family-boundary` | review-remediation / fix-verifier | fix-verifier-family-boundary | whether verification keeps implementation/evidence gaps separate from an omitted family path and excludes an adjacent contract |
-| `fix-verifier-state-closure` | review-remediation / fix-verifier | fix-verifier-state-closure | whether verification derives every applicable terminal state from the source of truth, separates a plan omission from an implementation gap, retains both findings, and excludes an adjacent contract |
-| `fix-verifier-state-routing` | review-remediation / fix-verifier status judgement | fix-verifier-state-closure | whether workflow-owned rules route a report containing both a plan defect and an implementation gap to fix-plan |
-| `fix-verifier-model-matrix` | review-remediation / fix-verifier | fix-verifier-state-closure | source-derived state closure and workflow-owned mixed-gap routing measured separately on Claude Opus 5, Codex Sol High, Codex Luna Max, and Kimi K3 |
 | `fix-plan-cause-check` | peer-review / fix-plan | fix-plan-cause-check | whether fix-plan distinguishes a duplicate review update from possible causes and declines to serialize parallel execution until the cause is confirmed, measured on Claude Opus, Codex Luna Max, and Codex Sol High |
 | `fix-plan-blocker-absorption` | peer-review / fix-replan（旧版比較時のみ fix-plan） | fix-plan-blocker-absorption | 改修後の計画・記録契約の回帰ガード。3モデル×3回で Phase 1 は赤9/9・緑8/9、Phase 2 は改修後7/9。上位モデルでは改修前後を弁別せず、改善効果の証拠とはしない |
 | `fix-plan-bounded-proof` | peer-review / fix-plan | fix-plan-bounded-proof | whether Opus 5, Luna Max, and Sol High turn broad format, consumer, and boundary claims into source-backed concrete rows for report variants, helper limits, absence states, branch identity, and locale consumers |
@@ -514,6 +496,9 @@ remain excluded.
 | `follow-up-review-repair-regression` | peer-review / follow-up coding-review | follow-up-review-repair-regression | whether follow-up review independently falsifies completion claims, distinguishes repair-induced defects from adjacent omissions, and enumerates distinct reachable terminal outcomes; measured on Opus, Luna Max, and Sol High |
 | `follow-up-testing-review-repair-regression` | peer-review / follow-up testing-review -> review-adjudication | follow-up-review-repair-regression | whether review-adjudication recovers in-perspective omissions, verifies reviewer evidence, keeps regression detection within the selected repair scope, and excludes adjacent or structure-freezing test expansion; measured on Opus 5, Luna Max, and Sol High |
 | `review-adjudication` | peer-review / review-adjudication | review-adjudication | whether adjudication separates technical validity from the current remediation scope, keeps required same-cause paths and diff-induced regressions in scope, and excludes even severe horizontal improvements from the fix plan |
+| `review-adjudication-applicable-inputs` | peer-review / review-adjudication | fix-verification-applicable-inputs/a1-a4 | whether adjudication applies the documented input scope to four existing findings; explicit three-model comparison |
+| `fix-verification-applicable-inputs` | review-remediation / fix-verifier and verification-replan; peer-review / review-adjudication | fix-verification-applicable-inputs | whether independent verification and replanning distinguish supported counterexamples from unsupported input extensions |
+| `fix-verifier-state-closure` / `fix-verifier-state-routing` | review-remediation / fix-verifier | fix-verifier-state-closure | source-backed completion obligations and workflow-owned routing |
 | `review-adjudication-binding` | peer-review / follow-up security-review | review-adjudication-binding | whether Opus 5, Luna Max, and Sol High keep three out-of-scope findings non-blocking, reopen only with an allowed basis, and distinguish bare ESC or unconstrained repository-owned rules from a reproduced OSC terminal effect |
 | `security-review-method` | peer-review / initial security-review | security-review-method | whether Opus 5, Luna Max, and Sol High approve unchanged boundaries and bound SQL, reject verified SQL injection, authorization bypass, credential exposure, and helper-mediated command injection, and keep repository-author-controlled size alone non-blocking |
 | `task-instruction-gherkin` | interactive task summarization | direct English and Japanese conversations | whether implementation details and abstraction intent remain in Markdown while focused Gherkin captures only externally observable behavior, and whether formal-spec mode keeps complete Quint and Alloy requirements independently understandable through adjacent meaning comments in each notation |
@@ -521,10 +506,6 @@ remain excluded.
 | `final-readiness-preservation` | final-gate / supervise Phase 2 | final-readiness-supervision | whether the supervisor preserves the unresolved finding and does not reopen a previously excluded documentation request |
 | `final-readiness-precision` | final-gate / supervise | final-readiness-precision | three cases: APPROVE when every code requirement is fulfilled despite an absent mock E2E record, REJECT for an unmet code requirement, and BLOCKED for an external decision that task-scope code changes cannot provide |
 | `finding-premise-scope` | peer-review / coding-review (RV1 initial, RV2・RN1 follow-up), security-review (RN2 initial); development-core / replan (PL1, PN1) | finding-premise-scope (6 independent cases) | 計画の設計判断や前回の裁定が広げた形式外の入力を指摘・作業にせず、契約が定める入力と外部入力による保存先の外への書き込みは指摘・作業にする |
-| `fix-verification-applicable-inputs` | review-remediation / fix-verifier (F1–F3, N1–N3, N5), verification-replan (R1–R2, N4); peer-review / review-adjudication (A1–A4) | fix-verification-applicable-inputs (14 independent cases) | 入力元と契約に裏付けられた反例だけで差し戻し・再計画し、長いパスの衝突、明示された下限、端末制御列、CSV 契約の小数金額の衝突を取りこぼさない |
-| `fix-verification-scope` | review-remediation / fix-verifier | fix-verification-scope | whether completion verification accepts satisfied planned conditions while recording, but not selecting for repair, a broad-gate failure with no causal connection to the current change |
-| `fix-verification-current-diff-regression` | review-remediation / fix-verifier | fix-verification-current-diff-regression | whether completion verification marks a broad-gate failure incomplete when the current diff caused the regression |
-| `fix-verification-preserved-condition` | review-remediation / fix-verifier | fix-verification-preserved-condition | whether completion verification marks a repair incomplete when it breaks an existing condition that the plan requires preserving |
 
 GUI設計の比較例、採点、旧・新比較の手順は [frontend-design.md](frontend-design.md) を参照。
 
@@ -715,11 +696,12 @@ npm run eval:prompts:scope-discipline
 npm run eval:prompts:implement-contract-traceability
 npm run eval:prompts:follow-up-review-repair-regression
 npm run eval:prompts:follow-up-testing-review-repair-regression
+npm run eval:prompts:review-adjudication
+npm run eval:prompts:fix-verification-applicable-inputs
 npm run eval:prompts:fix-verifier-family-boundary
 npm run eval:prompts:fix-verifier-state-closure
 npm run eval:prompts:fix-verifier-state-routing
 npm run eval:prompts:fix-verifier-model-matrix
-npm run eval:prompts:review-adjudication
 npm run eval:prompts:security-review-method
 npm run eval:prompts:task-instruction-gherkin
 npm run eval:prompts:final-readiness-supervision

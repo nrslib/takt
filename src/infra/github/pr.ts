@@ -5,6 +5,7 @@
  */
 
 import { execFile, execFileSync } from 'node:child_process';
+import { z } from 'zod';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { fetchPaginatedApi } from '../git/paginated-api.js';
 import { isTaktManagedPrBody } from '../git/format.js';
@@ -17,6 +18,7 @@ import type {
   CommentResult,
   MergeResult,
   PrListItem,
+  PrSelectionData,
   ListOpenPrsOptions,
   PrReviewData,
   PrReviewComment,
@@ -74,9 +76,6 @@ const REVIEW_THREADS_PER_PAGE = 100;
 const REVIEW_THREAD_COMMENTS_PER_PAGE = 100;
 const COMMIT_STATUSES_PER_PAGE = 100;
 const COMMIT_STATUS_PAGINATION_HARD_CAP = 100;
-const CHECK_RUNS_PER_PAGE = 100;
-const CHECK_RUN_PAGINATION_HARD_CAP = 100;
-const CHECK_RUN_RESULT_LIMIT = 1_000;
 const GRAPHQL_PAGINATION_HARD_CAP = 100;
 // 100 bodies × 65,536 UTF-16 code units × 6 escaped JSON bytes is about 37.5 MiB.
 const GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
@@ -108,11 +107,6 @@ export interface CodeRabbitReviewStatus {
   reviewedHeadShas: string[];
   reviewRateLimit?: { retryAt?: number };
   reviewSkipped?: true;
-}
-
-export interface CodeRabbitActivity {
-  headSha: string;
-  detected: boolean;
 }
 
 export interface CacciaPullRequestDetails {
@@ -178,6 +172,38 @@ export function fetchPrListItem(prNumber: number, cwd: string): PrListItem | und
     throw new Error(`Invalid pull request #${prNumber} details`);
   }
   return response.state === 'open' ? toPrListItem(response) : undefined;
+}
+
+const prSelectionDetailsSchema = z.object({
+  number: z.number().int().positive().safe(),
+  title: z.string().min(1),
+  body: z.string().nullable(),
+  changed_files: z.number().int().nonnegative().safe(),
+});
+const prSelectionFilesSchema = z.array(z.object({ filename: z.string().min(1) }));
+
+export function fetchPrSelectionData(prNumber: number, cwd: string): PrSelectionData {
+  if (!Number.isSafeInteger(prNumber) || prNumber < 1) {
+    throw new Error('PR number must be a positive safe integer');
+  }
+  const repo = resolveRepositoryNameWithOwner(cwd);
+  const endpoint = `repos/${repo}/pulls/${prNumber}`;
+  const raw = execFileSync('gh', ['api', endpoint], {
+    cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'],
+    maxBuffer: GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES,
+  });
+  const details = prSelectionDetailsSchema.parse(JSON.parse(raw) as unknown);
+  if (details.number !== prNumber) throw new Error('PR selection metadata refers to a different PR');
+  const files = Array.from(fetchPaginatedApi<string>({
+    command: 'gh', cwd, context: `pull request #${prNumber} files`, allPages: true,
+    maxBuffer: GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES,
+    initialEndpoint: `${endpoint}/files?per_page=${OPEN_PRS_PER_PAGE}&page=1`,
+    parsePage: (body) => prSelectionFilesSchema.parse(JSON.parse(body) as unknown).map((file) => file.filename),
+  }));
+  if (files.length !== details.changed_files || new Set(files).size !== files.length) {
+    throw new Error(`Incomplete file list for pull request #${prNumber}`);
+  }
+  return { number: details.number, title: details.title, body: details.body ?? '', files };
 }
 
 export function listOpenPrs(cwd: string, options?: { readonly allPages?: false }): PrListItem[];
@@ -1330,111 +1356,6 @@ async function fetchCodeRabbitCommitStatus(
   throw new Error(
     `Pagination limit exceeded while fetching commit statuses for pull request head ${locator.headSha} (>${COMMIT_STATUS_PAGINATION_HARD_CAP} pages)`,
   );
-}
-
-async function fetchCodeRabbitCommitActivityForSha(
-  locator: PullRequestLocator,
-  cwd: string,
-  commitSha: string,
-  deadlineAt: number | undefined,
-  signal: AbortSignal | undefined,
-): Promise<CodeRabbitActivity> {
-  let fetchedCount = 0;
-  for (let page = 1; page <= COMMIT_STATUS_PAGINATION_HARD_CAP; page += 1) {
-    const raw = await runGhCommand([
-      'api', `repos/${locator.owner}/${locator.repo}/commits/${commitSha}/status?per_page=${COMMIT_STATUSES_PER_PAGE}&page=${page}`,
-    ], cwd, deadlineAt, signal);
-    const response = JSON.parse(raw) as { statuses?: Array<{ context?: unknown }>; total_count?: unknown };
-    if (!Array.isArray(response.statuses)
-      || !Number.isSafeInteger(response.total_count)
-      || (response.total_count as number) < 0
-      || !response.statuses.every((status) => typeof status?.context === 'string')) {
-      throw new Error(`Invalid commit statuses for pull request commit ${commitSha}`);
-    }
-    if (response.statuses.some((status) => (status.context as string).toLowerCase().includes('coderabbit'))) {
-      return { headSha: commitSha, detected: true };
-    }
-    fetchedCount += response.statuses.length;
-    if ((response.total_count as number) < fetchedCount) {
-      throw new Error(`Invalid commit status count for pull request commit ${commitSha}`);
-    }
-    const hasNextPage = fetchedCount < (response.total_count as number);
-    if (!hasNextPage) break;
-    if (page === COMMIT_STATUS_PAGINATION_HARD_CAP) {
-      throw new Error(`Pagination limit exceeded while checking commit statuses for pull request commit ${commitSha}`);
-    }
-  }
-
-  fetchedCount = 0;
-  for (let page = 1; page <= CHECK_RUN_PAGINATION_HARD_CAP; page += 1) {
-    const raw = await runGhCommand([
-      'api', `repos/${locator.owner}/${locator.repo}/commits/${commitSha}/check-runs?filter=all&per_page=${CHECK_RUNS_PER_PAGE}&page=${page}`,
-    ], cwd, deadlineAt, signal);
-    const response = JSON.parse(raw) as {
-      check_runs?: Array<{ name?: unknown; app?: { slug?: unknown } | null }>;
-      total_count?: unknown;
-    };
-    if (!Array.isArray(response.check_runs)
-      || !Number.isSafeInteger(response.total_count)
-      || (response.total_count as number) < 0
-      || !response.check_runs.every((check) => typeof check?.name === 'string'
-        && (check.app === null || (typeof check.app === 'object' && typeof check.app?.slug === 'string')))) {
-      throw new Error(`Invalid check runs for pull request commit ${commitSha}`);
-    }
-    if (response.check_runs.some((check) =>
-      (check.app?.slug as string | undefined)?.toLowerCase().includes('coderabbit')
-      || (check.name as string).toLowerCase().includes('coderabbit'))) {
-      return { headSha: commitSha, detected: true };
-    }
-    fetchedCount += response.check_runs.length;
-    if (fetchedCount > (response.total_count as number)) {
-      throw new Error(`Invalid check run count for pull request commit ${commitSha}`);
-    }
-    if (fetchedCount >= CHECK_RUN_RESULT_LIMIT) {
-      throw new Error(`Check run result limit reached for pull request commit ${commitSha}`);
-    }
-    if (fetchedCount >= (response.total_count as number)) {
-      return { headSha: commitSha, detected: false };
-    }
-  }
-  throw new Error(`Pagination limit exceeded while checking check runs for pull request commit ${commitSha}`);
-}
-
-/** Checks status contexts and check runs on the exact PR head, including pending and failed results. */
-export async function fetchCodeRabbitCommitActivity(
-  prNumber: number,
-  cwd: string,
-  expectedHeadSha: string,
-  deadlineAt?: number,
-  signal?: AbortSignal,
-): Promise<CodeRabbitActivity | undefined> {
-  try {
-    const locator = await fetchPullRequestLocatorAsync(prNumber, cwd, deadlineAt, signal);
-    if (locator.headSha !== expectedHeadSha) {
-      throw new Error(`Pull request #${prNumber} head changed while checking CodeRabbit activity`);
-    }
-    return await fetchCodeRabbitCommitActivityForSha(locator, cwd, expectedHeadSha, deadlineAt, signal);
-  } catch (error) {
-    if (error instanceof ReviewStatusDeadlineExceededError) return undefined;
-    throw error;
-  }
-}
-
-/** Checks activity on a specified PR commit, which may no longer be the current head. */
-export async function fetchCodeRabbitCommitActivityForCommit(
-  prNumber: number,
-  cwd: string,
-  commitSha: string,
-  deadlineAt?: number,
-  signal?: AbortSignal,
-): Promise<CodeRabbitActivity | undefined> {
-  try {
-    const locator = await fetchPullRequestLocatorAsync(prNumber, cwd, deadlineAt, signal);
-    return await fetchCodeRabbitCommitActivityForSha(locator, cwd, commitSha, deadlineAt, signal);
-  } catch (error) {
-    if (error instanceof ReviewStatusDeadlineExceededError) return undefined;
-    throw error;
-  }
 }
 
 /** Returns CodeRabbit review events, commit status and post coverage for wait and re-review checks. */

@@ -136,6 +136,67 @@ describe('prepareFailedTaskRetry', () => {
     expect(mockFindRunForTask).not.toHaveBeenCalled();
   });
 
+  it('prepares a clone failure without execution history from the project and canonical order', () => {
+    const task: TaskListItem = {
+      ...failedTask, worktreePath: undefined, runSlug: undefined, sourceRunSlug: undefined,
+      failure: { error: 'Git clone failed' }, data: { task: failedTask.content, worktree: true, workflow: 'default' },
+    };
+
+    const preparation = prepareFailedTaskRetry(task, '/project');
+
+    expect(preparation).toMatchObject({
+      freshStart: true, worktreePath: undefined, interactionCwd: '/project', runsBaseDir: '/project',
+      matchedRunSlug: null, previousOrderContent: 'Canonical order',
+    });
+    expect(mockFindRunForTask).not.toHaveBeenCalled();
+    expect(mockAssertReusableWorktreePath).not.toHaveBeenCalled();
+  });
+
+  it('prefers the saved initial start step when a clone fails before execution', () => {
+    const task: TaskListItem = {
+      ...failedTask, worktreePath: undefined, runSlug: undefined,
+      failure: { error: 'Git clone failed' },
+      data: { task: failedTask.content, worktree: true, workflow: 'default', start_step: 'implement' },
+    };
+    const preparation = prepareFailedTaskRetry(task, '/project');
+    const context = buildFailedTaskRetryStartContext(preparation, '/project', 'default');
+
+    expect(preparation.failedStep).toBeUndefined();
+    expect(preparation.previousStartStep).toBe('implement');
+    expect(context.options.preferredRootStep).toBe('implement');
+    expect(resolveFailedTaskRetryStart(context, context.startOptions.defaultId).restartPoint?.stack[0]?.step)
+      .toBe('implement');
+  });
+
+  it.each([
+    { runSlug: 'earlier-run' },
+    { runSlug: '' },
+    { sourceRunSlug: 'earlier-run' },
+    { failure: { step: 'plan', error: 'plan failed' } },
+    { data: { task: 'task text', worktree: true, merge_task: true } },
+  ])('refuses a missing worktree when retry history or merge ownership exists: %j', (change) => {
+    const task: TaskListItem = {
+      ...failedTask, worktreePath: undefined, runSlug: undefined,
+      failure: { error: 'Git clone failed' },
+      data: { task: failedTask.content, worktree: true, workflow: 'default' },
+      ...change,
+    };
+    expect(() => prepareFailedTaskRetry(task, '/project')).toThrow('Worktree path is not set');
+  });
+
+  it('does not treat an empty saved worktree path as an uncreated clone', () => {
+    mockAssertReusableWorktreePath.mockImplementationOnce(() => {
+      throw new Error('Worktree path is invalid');
+    });
+    const task: TaskListItem = {
+      ...failedTask, worktreePath: '', runSlug: undefined,
+      failure: { error: 'Git clone failed' },
+      data: { task: failedTask.content, worktree: true, workflow: 'default' },
+    };
+    expect(() => prepareFailedTaskRetry(task, '/project')).toThrow('Worktree path is invalid');
+    expect(mockAssertReusableWorktreePath).toHaveBeenCalledWith('/project', '');
+  });
+
   it('未準備のmerge cloneでは会話をproject rootで行いrun履歴もrootから読む', () => {
     const task: TaskListItem = { ...failedTask, data: { ...failedTask.data, task: failedTask.content, merge_task: true,
       merge_clone_prepared: false } };

@@ -58,6 +58,42 @@ describe('WorkflowCallInvocationIndex', () => {
     });
   });
 
+  it('removes only older invocations of a repeated static parallel parent', () => {
+    const outer = makeWorkflow('outer');
+    const workflow = makeWorkflow('parent');
+    const outerCall = buildWorkflowResumePointEntry(outer, 'delegate', 'workflow_call', 1, undefined, 1);
+    const firstParent = buildWorkflowResumePointEntry(workflow, 'reviewers', 'parallel', 1);
+    const secondParent = buildWorkflowResumePointEntry(workflow, 'reviewers', 'parallel', 2);
+    const otherParent = buildWorkflowResumePointEntry(workflow, 'other', 'parallel', 1);
+    const index = new WorkflowCallInvocationIndex(new Map());
+    index.record(outer, 'delegate', [], {
+      call_instance: 1,
+      report_namespace_segment: 'iteration-1--step-delegate--workflow-parent',
+      completed: true,
+    });
+    index.record(workflow, 'child', [outerCall, firstParent], {
+      call_instance: 1,
+      report_namespace_segment: 'iteration-1--step-child--workflow-review',
+      completed: true,
+    });
+    index.record(workflow, 'child', [outerCall, secondParent], {
+      call_instance: 2,
+      report_namespace_segment: 'iteration-2--step-child--workflow-review',
+    });
+    index.record(workflow, 'other-child', [outerCall, otherParent], {
+      call_instance: 1,
+      report_namespace_segment: 'iteration-1--step-other-child--workflow-review',
+      completed: true,
+    });
+
+    index.clearPreviousParallelChildInvocations(workflow, 'reviewers', ['child'], [outerCall], 2);
+
+    expect(index.get(workflow, 'child', [outerCall, firstParent])).toBeUndefined();
+    expect(index.get(workflow, 'child', [outerCall, secondParent])).toMatchObject({ call_instance: 2 });
+    expect(index.get(workflow, 'other-child', [outerCall, otherParent])).toMatchObject({ completed: true });
+    expect(index.get(outer, 'delegate', [])).toMatchObject({ completed: true });
+  });
+
   it('should reject a persisted invocation that disagrees with the resume stack', () => {
     const parent = makeWorkflow('parent');
     const identity = buildWorkflowCallInvocationIdentity('parent', 'delegate', []);

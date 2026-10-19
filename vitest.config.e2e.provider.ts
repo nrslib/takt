@@ -31,6 +31,7 @@ const providerSpecificTests: Record<string, string[]> = {
 export default defineConfig({
   test: {
     ...e2eBaseTestConfig,
+    globalSetup: ['e2e/helpers/managed-sdk-setup.ts'],
     include: [
       ...commonTests,
       ...(providerSpecificTests[provider] ?? []),
