@@ -1,12 +1,14 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { rmSync, existsSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
-import { cleanupOrphanedClone } from '../../../infra/task/index.js';
+import { rmSync, existsSync, readFileSync, unlinkSync } from 'node:fs';
+import { join, relative, resolve } from 'node:path';
+import { cleanupOrphanedClone, resolveCloneBaseDir } from '../../../infra/task/index.js';
+import { TaskStore } from '../../../infra/task/store.js';
 import { getCloneMetaPath } from '../../../infra/task/clone-meta.js';
 import { encodeWorktreePath } from '../../../infra/config/project/sessionStore.js';
 import { info, success, error as logError, warn } from '../../../shared/ui/index.js';
-import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
+import { createLogger, getErrorMessage, isPathInside, isRealPathInside } from '../../../shared/utils/index.js';
 import { lstatOrUndefined } from '../../../shared/utils/private-path-identity.js';
+import { assertReusableWorktreePath } from '../execute/reusedWorktree.js';
 import {
   type BranchActionTarget,
   ensureRootBranchReady,
@@ -132,6 +134,63 @@ export function mergeBranch(projectDir: string, target: BranchActionTarget): boo
 
 export interface DeleteBranchOptions { quiet?: boolean; resume?: boolean; requireCleanupSuccess?: boolean }
 
+function assertUntrackedCloneResource(projectDir: string, filePath: string): void {
+  const resourcePath = relative(projectDir, filePath);
+  const indexed = execFileSync('git', ['ls-files', '--cached', '--', resourcePath], {
+    cwd: projectDir,
+    encoding: 'utf-8',
+    stdio: 'pipe',
+  }).trim();
+  if (indexed) throw new Error(`Clone resource is tracked in the Git index: ${resourcePath}`);
+  // HEAD still identifies repository-supplied records after a staged deletion.
+  const committed = execFileSync('git', ['ls-tree', '--name-only', 'HEAD', '--', resourcePath], {
+    cwd: projectDir,
+    encoding: 'utf-8',
+    stdio: 'pipe',
+  }).trim();
+  if (committed) throw new Error(`Clone resource is tracked in HEAD: ${resourcePath}`);
+}
+
+function inspectCloneOwnership(projectDir: string, worktreePath: string, branch: string): {
+  exists: boolean;
+  metaExists: boolean;
+  worktreeBaseDirectory?: string;
+} {
+  assertUntrackedCloneResource(projectDir, new TaskStore(projectDir).getTasksFilePath());
+  const exists = lstatOrUndefined(worktreePath) !== undefined;
+  const metaPath = getCloneMetaPath(projectDir, branch);
+  const metaStat = lstatOrUndefined(metaPath);
+  if (metaStat === undefined) {
+    if (exists) throw new Error('Clone ownership metadata is missing');
+    return { exists: false, metaExists: false };
+  }
+  if (metaStat.isSymbolicLink() || !metaStat.isFile()) {
+    throw new Error('Clone ownership metadata is not a regular file');
+  }
+  assertUntrackedCloneResource(projectDir, metaPath);
+  const meta: unknown = JSON.parse(readFileSync(metaPath, 'utf-8'));
+  if (typeof meta !== 'object' || meta === null
+    || !('branch' in meta) || meta.branch !== branch
+    || !('clonePath' in meta) || typeof meta.clonePath !== 'string' || !meta.clonePath
+    || resolve(meta.clonePath) !== worktreePath) {
+    throw new Error('Clone ownership metadata does not match the task');
+  }
+  if (exists) assertReusableWorktreePath(projectDir, worktreePath);
+  const worktreeBaseDirectory = [resolveCloneBaseDir(projectDir), join(projectDir, '.takt', 'worktrees')]
+    .find((root) => (isPathInside(root, worktreePath) || isRealPathInside(root, worktreePath))
+      && !isRealPathInside(worktreePath, root));
+  if (worktreeBaseDirectory === undefined) {
+    throw new Error('Clone path is outside the clone base directory or is the base itself');
+  }
+  if (exists) {
+    const stat = lstatOrUndefined(join(worktreePath, '.git'));
+    if (stat === undefined || stat.isSymbolicLink() || !stat.isDirectory()) {
+      throw new Error('Clone does not have an independent .git directory');
+    }
+  }
+  return { exists, metaExists: true, worktreeBaseDirectory };
+}
+
 export function deleteBranch(projectDir: string, target: BranchActionTarget, options?: DeleteBranchOptions): boolean {
   const branch = resolveTargetBranch(target);
   const worktreePath = resolveTargetWorktreePath(target);
@@ -139,8 +198,17 @@ export function deleteBranch(projectDir: string, target: BranchActionTarget, opt
 
   try {
     if (worktreePath) {
-      if (options?.resume === true ? lstatOrUndefined(worktreePath) !== undefined : existsSync(worktreePath)) {
-        rmSync(worktreePath, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+      const clonePath = resolve(worktreePath);
+      let ownership: ReturnType<typeof inspectCloneOwnership>;
+      try {
+        ownership = inspectCloneOwnership(projectDir, clonePath, branch);
+      } catch (err) {
+        if (options?.quiet !== true) warn(`Could not verify clone ownership for ${branch}. Task resources and record are retained.`);
+        log.error('Could not verify clone ownership', { branch, worktreePath, reason: getErrorMessage(err) });
+        return false;
+      }
+      if (ownership.exists) {
+        rmSync(clonePath, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
         log.info('Removed worktree directory', { worktreePath });
       }
 
@@ -151,11 +219,38 @@ export function deleteBranch(projectDir: string, target: BranchActionTarget, opt
         log.info('Removed worktree-session file', { sessionFile });
       }
 
-      if (options?.resume !== true || lstatOrUndefined(getCloneMetaPath(projectDir, branch)) !== undefined) {
-        cleanupOrphanedClone(projectDir, branch, ...cleanupOptions);
+      if (ownership.metaExists) {
+        cleanupOrphanedClone(projectDir, branch, {
+          worktreeBaseDirectory: ownership.worktreeBaseDirectory,
+          ...(options?.requireCleanupSuccess === true ? { throwOnError: true } : {}),
+        });
+      }
+      const branchExists = execFileSync('git', [
+        'for-each-ref', '--format=%(refname)', `refs/heads/${branch}`,
+      ], { cwd: projectDir, encoding: 'utf-8', stdio: 'pipe' }).split('\n').includes(`refs/heads/${branch}`);
+      if (branchExists) {
+        try {
+          execFileSync('git', ['branch', '-d', branch], {
+            cwd: projectDir,
+            encoding: 'utf-8',
+            stdio: 'pipe',
+          });
+        } catch (err) {
+          if (options?.quiet !== true) warn(`Could not delete branch ${branch}. You may delete it manually.`);
+          log.error('Failed to delete clone task branch', {
+            branch,
+            error: getErrorMessage(err),
+          });
+        }
       }
       if (options?.quiet !== true) success(`Deleted worktree ${branch}`);
       log.info('Worktree branch deleted', { branch, worktreePath });
+      return true;
+    }
+
+    if ('kind' in target && target.data?.worktree) {
+      if (options?.quiet !== true) warn(`Could not verify clone ownership for ${branch} without a worktree path. The branch is retained; you may delete it manually.`);
+      log.error('Could not verify clone task branch', { branch, reason: 'Worktree path is not recorded' });
       return true;
     }
 
