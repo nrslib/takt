@@ -656,7 +656,9 @@ it.each(['ja', 'en'] as const)('reopens the %s TUI with withdrawn question detai
   await vi.waitFor(() => expect(app!.lastFrame()).toContain(`/answer ${question.id}`));
   app!.unmount();
   const withdrawn = await store.update(saved.id, (goal) => withdrawGoalQuestion(goal, question.id));
-  expect(withdrawn.questions).toEqual([{ ...question, status: 'withdrawn' }]);
+  expect(withdrawn.questions).toEqual([{
+    ...question, kind: 'question', status: 'withdrawn', withdrawnAt: expect.any(String),
+  }]);
   expect(withdrawn.notifications).toEqual(saved.notifications);
   const display = await readManagerDisplayEvents(cwd, lang);
   expect(display.questions).toEqual([]);

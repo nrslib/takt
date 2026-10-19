@@ -102,13 +102,13 @@ describe('goal execution state and question participants', () => {
 
   it.each(['human'])('preserves the %s question recipient', (recipient) => {
     const question = { id: '650e8400-e29b-41d4-a716-446655440001', body: 'Which format?', status: 'pending', recipient };
-    expect(GoalQuestionSchema.parse(question)).toEqual(question);
+    expect(GoalQuestionSchema.parse(question)).toEqual({ ...question, kind: 'question' });
   });
 
   it.each(['tui', 'slack'])('preserves an answer from %s', (source) => {
     const question = { id: '650e8400-e29b-41d4-a716-446655440001', body: 'Which format?', status: 'answered', recipient: 'human',
       answer: { source, text: 'JSON', answeredAt: '2026-10-08T00:00:00Z' } };
-    expect(GoalQuestionSchema.parse(question)).toEqual(question);
+    expect(GoalQuestionSchema.parse(question)).toEqual({ ...question, kind: 'question' });
   });
 
   it.each([
@@ -119,5 +119,39 @@ describe('goal execution state and question participants', () => {
     { questions: [{ id: '650e8400-e29b-41d4-a716-446655440001', body: 'question', recipient: 'director', status: 'pending' }] },
   ])('rejects removed goal fields %#', (fields) => {
     expect(GoalSchema.safeParse({ ...goalRecord(), ...fields }).success).toBe(false);
+  });
+});
+
+describe('saved inquiry validation', () => {
+  const question = {
+    id: '650e8400-e29b-41d4-a716-446655440001',
+    recipient: 'human', body: '形式を選んでください', status: 'pending',
+  };
+
+  it.each(['question', 'operation_request'])('accepts %s without an operation target', (kind) => {
+    expect(GoalQuestionSchema.parse({ ...question, kind })).toEqual({ ...question, kind });
+  });
+
+  it('rejects an unknown inquiry kind', () => {
+    expect(GoalQuestionSchema.safeParse({ ...question, kind: 'unknown' }).success).toBe(false);
+  });
+
+  it('requires an operation target for approval', () => {
+    expect(GoalQuestionSchema.safeParse({ ...question, kind: 'approval' }).success).toBe(false);
+  });
+
+  it.each([
+    { status: 'answered' },
+    { status: 'pending', answer: { text: 'CSV', source: 'tui', answeredAt: '2026-10-19T00:00:00Z' } },
+    { status: 'withdrawn', answer: { text: 'CSV', source: 'tui', answeredAt: '2026-10-19T00:00:00Z' } },
+  ])('keeps answer presence consistent with status %#', (fields) => {
+    expect(GoalQuestionSchema.safeParse({ ...question, ...fields }).success).toBe(false);
+  });
+
+  it('rejects blank free-text answers after adding structured answers', () => {
+    expect(GoalQuestionSchema.safeParse({
+      ...question, status: 'answered',
+      answer: { text: '  ', source: 'tui', answeredAt: '2026-10-19T00:00:00Z' },
+    }).success).toBe(false);
   });
 });
