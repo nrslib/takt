@@ -11,7 +11,10 @@ const { execFileMock, execFileSyncMock, endMock } = vi.hoisted(() => ({
     args: string[],
     options: ExecFileOptionsWithStringEncoding,
     callback: Completion,
-  ) => { stdin: { end: (input?: string) => void } }>(),
+  ) => { stdin: {
+    on: (event: 'error', listener: (error: NodeJS.ErrnoException) => void) => void;
+    end: (input?: string) => void;
+  } }>(),
   execFileSyncMock: vi.fn(),
   endMock: vi.fn(),
 }));
@@ -34,7 +37,7 @@ describe('runTaktAsync', () => {
     vi.stubEnv('TAKT_E2E_PROVIDER', 'mock');
     execFileMock.mockImplementation((_file, _args, _options, callback) => {
       complete = callback;
-      return { stdin: { end: endMock } };
+      return { stdin: { on: vi.fn(), end: endMock } };
     });
   });
 
