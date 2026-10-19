@@ -3,7 +3,7 @@ import { z } from 'zod/v4';
 import { PR_STATUS_TIMEOUT_MS, PrStatusTimeoutError,
   type PrDetails, type PrStatus, type PrStatusFetchOptions } from '../../core/workflow/system/pr-execution-context.js';
 import { isTaktManagedPrBody } from '../git/format.js';
-import type { PrListItem } from '../git/types.js';
+import type { PrListItem, PrSelectionData } from '../git/types.js';
 
 const Id = z.number().int().positive().safe();
 const Sha = z.string().regex(/^[0-9a-f]{40}$/u);
@@ -25,6 +25,11 @@ const MrListItem = MrIdentity.omit({ sha: true }).extend({
   author: z.object({ username: z.string().min(1) }), description: z.string().nullable(),
   labels: z.array(z.string()), draft: z.boolean(), updated_at: z.string().min(1),
 });
+const MrSelectionData = MrIdentity.pick({ iid: true, project_id: true, target_project_id: true }).extend({
+  title: z.string(), description: z.string().nullable(),
+  changes_count: z.string().regex(/^\d+$/u).transform(Number).pipe(z.number().int().nonnegative().safe()),
+});
+const MrDiffs = z.array(z.object({ new_path: z.string().min(1) }));
 const Project = z.object({ id: Id, path_with_namespace: ProjectPath });
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 
@@ -201,4 +206,25 @@ export function fetchMrListItem(number: number, cwd: string): PrListItem | undef
   return { number: mr.iid, author: mr.author.username, base_branch: mr.target_branch, head_branch: mr.source_branch,
     managed_by_takt: isTaktManagedPrBody(mr.description), labels: mr.labels,
     same_repository: mr.source_project_id === mr.target_project_id, draft: mr.draft, updated_at: mr.updated_at };
+}
+
+export function fetchMrSelectionData(number: number, cwd: string): PrSelectionData {
+  const origin = readOriginSync(cwd);
+  const endpoint = mrEndpoint(origin, number);
+  const mr = MrSelectionData.parse(JSON.parse(execFileSync('glab', apiArgs(origin, endpoint),
+    { cwd, encoding: 'utf-8', maxBuffer: MAX_RESPONSE_BYTES })));
+  assertMrIdentity(mr, number);
+  const files = new Set<string>();
+  for (let page = 1; ; page += 1) {
+    const diffs = MrDiffs.parse(JSON.parse(execFileSync('glab', apiArgs(origin, `${endpoint}/diffs?per_page=100&page=${page}`),
+      { cwd, encoding: 'utf-8', maxBuffer: MAX_RESPONSE_BYTES })));
+    for (const diff of diffs) {
+      if (files.has(diff.new_path)) throw new Error('GitLab returned duplicate merge request file paths');
+      files.add(diff.new_path);
+    }
+    if (files.size > mr.changes_count) throw new Error('GitLab merge request file count does not match changes_count');
+    if (diffs.length < 100) break;
+  }
+  if (files.size !== mr.changes_count) throw new Error('GitLab merge request file list is incomplete');
+  return { number: mr.iid, title: mr.title, body: mr.description ?? '', files: [...files] };
 }

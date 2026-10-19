@@ -168,6 +168,7 @@
     "src/__tests__/github-pr.test.ts",
     "src/__tests__/github-provider.test.ts",
     "src/__tests__/gitlab-issue.test.ts",
+    "src/__tests__/gitlab-merge-selection.test.ts",
     "src/__tests__/gitlab-pr-execution.test.ts",
     "src/__tests__/gitlab-provider.test.ts",
     "src/__tests__/globalConfig-defaults.test.ts",
