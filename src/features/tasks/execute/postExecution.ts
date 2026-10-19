@@ -20,7 +20,6 @@ import type { ExistingPr, Issue, CreatePrResult, GitProvider } from '../../../in
 import type { ExecuteTaskOptions } from './types.js';
 import { readPrivateFileState, writePrivateFile } from '../../../shared/utils/private-file.js';
 import { prepareLoopAnalysisReportForPublication } from './loopAnalysisReportPublication.js';
-import { runLinkedCacciaSafely } from '../../caccia/index.js';
 import { runLinkedMergeSafely } from '../../merge/index.js';
 
 const log = createLogger('postExecution');
@@ -195,7 +194,6 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
           success(`PR updated with comment: ${existingPr.url}`);
         }
         if (options.goalId === undefined) {
-          await runLinkedCacciaSafely(projectCwd, existingPr.url, abortSignal, display);
           await runLinkedMergeSafely(projectCwd, existingPr.url, abortSignal, display, options.parentTaskName);
         }
         return { prUrl: existingPr.url };
@@ -231,7 +229,6 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
           success(`PR created: ${prResult.url}`);
         }
         if (prResult.url && options.goalId === undefined) {
-          await runLinkedCacciaSafely(projectCwd, prResult.url, abortSignal, display);
           await runLinkedMergeSafely(projectCwd, prResult.url, abortSignal, display, options.parentTaskName);
         }
         return { prUrl: prResult.url };

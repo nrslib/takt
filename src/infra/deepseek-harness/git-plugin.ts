@@ -4,7 +4,11 @@ import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { devNull, tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type { DeepSeekHarnessPluginOption } from '../../core/models/workflow-provider-options.js';
+import type { DeepSeekHarnessGitPluginOption } from '../../core/models/workflow-provider-options.js';
+import type {
+  DeepSeekHarnessPluginResolution,
+  ResolvedDeepSeekHarnessPlugin,
+} from './plugin-types.js';
 
 const execFile = promisify(execFileCallback);
 const PLUGIN_DIRECTORY_PREFIX = 'takt-deepseek-plugin-';
@@ -22,18 +26,6 @@ export class DeepSeekHarnessPluginResolutionError extends Error {
     super(`DeepSeek Harness Git plugin ${stage} failed`);
     this.name = 'DeepSeekHarnessPluginResolutionError';
   }
-}
-
-export interface ResolvedDeepSeekHarnessPlugin {
-  id: string;
-  name: string;
-  config?: Record<string, unknown>;
-}
-
-export interface DeepSeekHarnessPluginResolution {
-  plugins: ResolvedDeepSeekHarnessPlugin[];
-  cleanupPaths: string[];
-  dispose(): Promise<void>;
 }
 
 interface ParsedGitSource {
@@ -184,7 +176,7 @@ async function installDependencies(directory: string, signal?: AbortSignal): Pro
 
 /** Resolve plugins into temporary Cordis entrypoints; callers own successful clones until disposal. */
 export async function resolveDeepSeekHarnessGitPlugins(
-  options: readonly DeepSeekHarnessPluginOption[] | undefined,
+  options: readonly DeepSeekHarnessGitPluginOption[] | undefined,
   signal?: AbortSignal,
 ): Promise<DeepSeekHarnessPluginResolution> {
   if (options === undefined || options.length === 0) {

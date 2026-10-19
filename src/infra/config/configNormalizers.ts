@@ -907,7 +907,9 @@ export function denormalizeProviderOptions(
         ? { shutdown_timeout_ms: providerOptions.deepseekHarness.shutdownTimeoutMs }
         : {}),
       ...(providerOptions.deepseekHarness.plugins !== undefined
-        ? { plugins: providerOptions.deepseekHarness.plugins.map((plugin) => ({ ...plugin })) }
+        ? { plugins: providerOptions.deepseekHarness.plugins.map((plugin) => (
+            typeof plugin === 'string' ? plugin : { ...plugin }
+          )) }
         : {}),
     };
     if (Object.keys(deepseekHarness).length > 0) {

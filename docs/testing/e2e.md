@@ -219,6 +219,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
   - 目的: 高優先度ユースケース（異常終了したrunningタスクのfailed化、並列実行、初期化〜add〜run）をまとめて確認。
   - LLM: 呼び出さない（`--provider mock` 固定）
   - 手順（ユーザー行動/コマンド）:
+    - `takt --version` に2 MiBの標準入力を送り、stdin の EPIPE 後も終了コード0とバージョン出力が返ることを確認する。
     - 異常終了したrunningタスクのfailed化:
       - `.takt/tasks.yaml` に pending タスク2件を投入し、`takt run --provider mock` 実行中にプロセスを強制終了する。
       - 再度 `takt run --provider mock` を実行し、`Marked 1 interrupted running task(s) as failed.` が出力されることを確認する。

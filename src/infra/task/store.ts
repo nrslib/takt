@@ -2,6 +2,7 @@ import * as path from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { withFileLock } from '../fs/file-lock.js';
 import { TasksFileSchema, serializeTasksFileData, type TasksFileData } from './schema.js';
+import { normalizePersistedTasksFile } from './taskConfigSerialization.js';
 import { createLogger } from '../../shared/utils/index.js';
 import {
   ensurePrivateDirectory,
@@ -56,7 +57,7 @@ export class TaskStore {
 
     try {
       const parsed = parseYaml(raw) as unknown;
-      return TasksFileSchema.parse(parsed);
+      return TasksFileSchema.parse(normalizePersistedTasksFile(parsed));
     } catch (err) {
       log.error('tasks.yaml is broken. Keeping file untouched.', { file: this.tasksFile, error: String(err) });
       const reason = err instanceof Error ? err.message : String(err);

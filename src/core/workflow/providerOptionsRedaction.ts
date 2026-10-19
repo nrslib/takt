@@ -21,7 +21,7 @@ function redactExtensionSource(source: string): string {
       } catch {
         // Keep the raw key when percent-encoding is malformed.
       }
-      return /api[_-]?key|token|password|passwd|auth|secret|credential/iu.test(key)
+      return /api[_-]?key|token|password|passwd|auth|secret|credential|signature|key[-_]?pair[-_]?id|expires|^sig$|^policy$/iu.test(key)
         ? `${delimiter}${rawKey}=${CONFIGURED_PROVIDER_OPTION_VALUE}`
         : parameter;
     },
@@ -58,17 +58,21 @@ export function redactProviderOptions(
         ...(providerOptions.deepseekHarness.plugins === undefined
           ? {}
           : {
-              plugins: providerOptions.deepseekHarness.plugins.map((plugin) => ({
-                ...plugin,
-                source: redactExtensionSource(plugin.source),
-                ...(plugin.config === undefined
-                  ? {}
+              plugins: providerOptions.deepseekHarness.plugins.map((plugin) => (
+                typeof plugin === 'string'
+                  ? redactExtensionSource(plugin)
                   : {
-                      config: Object.fromEntries(
-                        Object.keys(plugin.config).map((key) => [key, CONFIGURED_PROVIDER_OPTION_VALUE]),
-                      ),
-                    }),
-              })),
+                      ...plugin,
+                      source: redactExtensionSource(plugin.source),
+                      ...(plugin.config === undefined
+                        ? {}
+                        : {
+                            config: Object.fromEntries(
+                              Object.keys(plugin.config).map((key) => [key, CONFIGURED_PROVIDER_OPTION_VALUE]),
+                            ),
+                          }),
+                    }
+              )),
             }),
       };
   return {

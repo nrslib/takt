@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { injectProviderArgs } from './takt-runner.js';
 import { createTerminalOutput } from './terminal-output.js';
 import { waitFor } from './wait.js';
+import { withNotificationSilenceEnv } from '../../scripts/test-notification-silence.cjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -129,7 +130,7 @@ export function startTaktPty(options: TaktPtyOptions): TaktPtySession {
     cols: options.cols ?? DEFAULT_COLS,
     rows: options.rows ?? DEFAULT_ROWS,
     cwd: options.cwd,
-    env: toPtyEnv(options.env),
+    env: toPtyEnv(withNotificationSilenceEnv(options.env)),
   });
 
   // Serialized: the emulator applies writes asynchronously, so chunks must be

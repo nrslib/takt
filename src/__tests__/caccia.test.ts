@@ -18,7 +18,6 @@ import * as gitDetection from '../infra/git/detect.js';
 import * as taskClone from '../infra/task/clone-exec.js';
 import type { CacciaDependencies, CacciaInput, CacciaReviewThread } from '../features/caccia/index.js';
 import {
-  getPullRequestNumberFromUrl,
   resolveCacciaSettings,
   runCaccia,
 } from '../features/caccia/index.js';
@@ -72,10 +71,11 @@ function createHarness(threadPages: CacciaReviewThread[][] = [[]]) {
         })),
       };
     }),
-    commitAndPush: vi.fn(async (cwd) => {
+    commitAndPush: vi.fn<CacciaDependencies['commitAndPush']>(async (cwd, onPushedHead) => {
       pushNumber += 1;
       events.push(`push:${cwd}`);
       currentHeadSha = `pushed-head-${pushNumber}`;
+      onPushedHead?.(currentHeadSha);
       return { headSha: currentHeadSha, pushed: true };
     }),
     fetchCurrentPullRequestHeadSha: vi.fn(async () => {
@@ -133,6 +133,33 @@ function createDeferred<T>() {
 }
 
 describe('linked Caccia pushed head handoff', () => {
+  it('propagates a recording failure before reviewing or waiting again', async () => {
+    const { dependencies } = createHarness([[thread('finding')]]);
+    const failure = new Error('storage failed');
+    const onPushedHead = vi.fn(() => { throw failure; });
+    await expect(runCaccia({
+      entry: 'linked', prNumber: 42, projectCwd: '/project',
+      settings: { ...DEFAULT_CACCIA_SETTINGS, enabled: true }, onPushedHead,
+    }, dependencies)).rejects.toBe(failure);
+    expect(onPushedHead).toHaveBeenCalledExactlyOnceWith('pushed-head-1');
+    expect(dependencies.resolveReviewThread).not.toHaveBeenCalled();
+    expect(dependencies.waitForCodeRabbitReview).toHaveBeenCalledOnce();
+    expect(dependencies.removeTemporaryClone).toHaveBeenCalledOnce();
+  });
+
+  it('does not record a head when there is no new commit', async () => {
+    const { dependencies } = createHarness([[thread('finding')], []]);
+    vi.mocked(dependencies.executeWorkflow).mockResolvedValue({ reportPath: '/report',
+      decisions: [{ threadId: 'finding', valid: false, reason: 'Intentional behavior' }] });
+    vi.mocked(dependencies.commitAndPush).mockResolvedValue({ headSha: 'reviewed-head', pushed: false });
+    const onPushedHead = vi.fn();
+    expect(await runCaccia({
+      entry: 'linked', prNumber: 42, projectCwd: '/project',
+      settings: { ...DEFAULT_CACCIA_SETTINGS, enabled: true }, onPushedHead,
+    }, dependencies)).toMatchObject({ outcome: 'success', headSha: 'reviewed-head' });
+    expect(onPushedHead).not.toHaveBeenCalled();
+  });
+
   it('records its own pushed head before a later review-thread operation fails', async () => {
     const { dependencies } = createHarness([[thread('finding')]]);
     const onPushedHead = vi.fn();
@@ -447,24 +474,6 @@ describe('Caccia configuration defaults', () => {
   });
 });
 
-describe('Caccia PR URL parsing', () => {
-  it.each([
-    ['https://github.com/org/repo/pull/42', 42],
-    ['https://github.com/org/repo/pull/42/', 42],
-  ])('extracts PR number from %s', (url, expected) => {
-    expect(getPullRequestNumberFromUrl(url)).toBe(expected);
-  });
-
-  it.each([
-    'https://gitlab.com/org/repo/-/merge_requests/42',
-    'https://github.com/org/repo/issues/42',
-    'https://github.com/org/repo/pull/0',
-    'https://github.com/org/repo/pull/9007199254740992',
-  ])('rejects invalid pull request URL %s', (url) => {
-    expect(() => getPullRequestNumberFromUrl(url)).toThrow(/Invalid GitHub pull request URL/u);
-  });
-});
-
 describe('Caccia abort scope', () => {
   it('converts one SIGINT to an abort signal and removes the listener after execution', () => {
     const runtime = new EventEmitter();
@@ -556,62 +565,6 @@ describe('Caccia loop', () => {
     expect(dependencies.fetchCodeRabbitReviewThreads).not.toHaveBeenCalled();
   });
 
-  it('linked mergeで確認済みの活動不在だけを構造化して返す', async () => {
-    const { dependencies } = createHarness();
-    vi.mocked(dependencies.waitForCodeRabbitReview)
-      .mockResolvedValue({ headSha: 'pushed-head', noActivity: true });
-    const input: CacciaInput = {
-      entry: 'linked', prNumber: 42, projectCwd: '/project',
-      settings: { ...standaloneInput().settings, enabled: true },
-      expectedInitialHeadSha: 'pushed-head', skipIfNoCodeRabbitActivity: true,
-    };
-    expect(await runCaccia(input, dependencies)).toMatchObject({
-      outcome: 'skipped', skipReason: 'no_coderabbit_activity', headSha: 'pushed-head',
-    });
-    expect(dependencies.waitForCodeRabbitReview).toHaveBeenCalledWith(42, {
-      timeoutMs: 100, afterHeadSha: 'pushed-head', allowNoActivitySkip: true,
-    });
-    expect(dependencies.fetchCodeRabbitReviewThreads).not.toHaveBeenCalled();
-
-    await expect(runCaccia({ ...input, skipIfNoCodeRabbitActivity: false }, dependencies))
-      .rejects.toThrow('Unexpected CodeRabbit activity result');
-  });
-
-  it('linked mergeでも別headの活動不在を受け入れない', async () => {
-    const { dependencies } = createHarness();
-    vi.mocked(dependencies.waitForCodeRabbitReview)
-      .mockResolvedValue({ headSha: 'external-head', noActivity: true });
-    await expect(runCaccia({
-      entry: 'linked', prNumber: 42, projectCwd: '/project',
-      settings: { ...standaloneInput().settings, enabled: true },
-      expectedInitialHeadSha: 'pushed-head', skipIfNoCodeRabbitActivity: true,
-    }, dependencies)).rejects.toThrow('head changed before Caccia');
-  });
-
-  it('実際の待機経路で活動がなければlinked mergeだけを省略する', async () => {
-    const configSpy = vi.spyOn(config, 'resolveConfigValue').mockReturnValue(undefined);
-    const detectionSpy = vi.spyOn(gitDetection, 'detectVcsProvider').mockReturnValue('github');
-    const statusSpy = vi.spyOn(githubPr, 'fetchCodeRabbitReviewStatus').mockResolvedValue({
-      headSha: 'pushed-head', hasCodeRabbitPost: false, reviewedHeadShas: [],
-    });
-    const activitySpy = vi.spyOn(githubPr, 'fetchCodeRabbitCommitActivity').mockResolvedValue({
-      headSha: 'pushed-head', detected: false,
-    });
-    try {
-      expect(await runCaccia({
-        entry: 'linked', prNumber: 42, projectCwd: '/project',
-        settings: { ...standaloneInput().settings, enabled: true },
-        expectedInitialHeadSha: 'pushed-head', skipIfNoCodeRabbitActivity: true,
-      })).toMatchObject({ outcome: 'skipped', skipReason: 'no_coderabbit_activity', headSha: 'pushed-head' });
-      expect(activitySpy).toHaveBeenCalledWith(42, '/project', 'pushed-head', expect.any(Number), expect.any(AbortSignal));
-    } finally {
-      activitySpy.mockRestore();
-      statusSpy.mockRestore();
-      detectionSpy.mockRestore();
-      configSpy.mockRestore();
-    }
-  });
-
   it.each(['hasUnknownCodeRabbitThreadActivity', 'hasUnknownCodeRabbitPostActivity'] as const)(
     '%s が不明ならlinked mergeの待機省略をせずレビューを待つ', async (unknownActivity) => {
       vi.useFakeTimers({ now: 1_000 });
@@ -626,21 +579,19 @@ describe('Caccia loop', () => {
           headSha: 'pushed-head', hasCodeRabbitPost: true,
           [unknownActivity]: true, reviewedHeadShas: ['pushed-head'],
         });
-      const activitySpy = vi.spyOn(githubPr, 'fetchCodeRabbitCommitActivity');
+
       const threadsSpy = vi.spyOn(githubPr, 'fetchCodeRabbitReviewThreads').mockResolvedValue([]);
       try {
         const result = runCaccia({
           entry: 'linked', prNumber: 42, projectCwd: '/project',
           settings: { ...standaloneInput().settings, enabled: true, waitTimeoutMs: 10_000 },
-          expectedInitialHeadSha: 'pushed-head', skipIfNoCodeRabbitActivity: true,
+          expectedInitialHeadSha: 'pushed-head',
         });
         await vi.runAllTimersAsync();
         expect(await result).toMatchObject({ outcome: 'success', headSha: 'pushed-head' });
         expect(statusSpy).toHaveBeenCalledTimes(2);
-        expect(activitySpy).not.toHaveBeenCalled();
       } finally {
         threadsSpy.mockRestore();
-        activitySpy.mockRestore();
         statusSpy.mockRestore();
         detectionSpy.mockRestore();
         configSpy.mockRestore();
@@ -658,20 +609,17 @@ describe('Caccia loop', () => {
         headSha: 'pushed-head', hasCodeRabbitPost: reviewedHeadShas.length > 0,
         hasUnknownCodeRabbitPostActivity: true, reviewedHeadShas,
       });
-      const activitySpy = vi.spyOn(githubPr, 'fetchCodeRabbitCommitActivity')
-        .mockResolvedValue({ headSha: 'pushed-head', detected: false });
+
       try {
         const result = runCaccia({
           entry: 'linked', prNumber: 42, projectCwd: '/project',
           settings: { ...standaloneInput().settings, enabled: true, waitTimeoutMs: 10_000 },
-          expectedInitialHeadSha: 'pushed-head', skipIfNoCodeRabbitActivity: true,
+          expectedInitialHeadSha: 'pushed-head',
         });
         await vi.runAllTimersAsync();
         expect(await result).toMatchObject({ outcome: 'skipped', skipReason: 'initial_review_unavailable' });
         expect(statusSpy).toHaveBeenCalledTimes(2);
-        expect(activitySpy).not.toHaveBeenCalled();
       } finally {
-        activitySpy.mockRestore();
         statusSpy.mockRestore();
         detectionSpy.mockRestore();
         configSpy.mockRestore();
@@ -687,22 +635,19 @@ describe('Caccia loop', () => {
     const statusSpy = vi.spyOn(githubPr, 'fetchCodeRabbitReviewStatus')
       .mockResolvedValueOnce({ headSha: 'pushed-head', hasCodeRabbitPost: false, reviewedHeadShas: [] })
       .mockResolvedValueOnce({ headSha: 'pushed-head', hasCodeRabbitPost: false, reviewedHeadShas: ['pushed-head'] });
-    const activitySpy = vi.spyOn(githubPr, 'fetchCodeRabbitCommitActivity')
-      .mockResolvedValue({ headSha: 'pushed-head', detected: true });
+
     const threadsSpy = vi.spyOn(githubPr, 'fetchCodeRabbitReviewThreads').mockResolvedValue([]);
     try {
       const result = runCaccia({
         entry: 'linked', prNumber: 42, projectCwd: '/project',
         settings: { ...standaloneInput().settings, enabled: true, waitTimeoutMs: 10_000 },
-        expectedInitialHeadSha: 'pushed-head', skipIfNoCodeRabbitActivity: true,
+        expectedInitialHeadSha: 'pushed-head',
       });
       await vi.runAllTimersAsync();
       expect(await result).toMatchObject({ outcome: 'success', headSha: 'pushed-head' });
       expect(statusSpy).toHaveBeenCalledTimes(2);
-      expect(activitySpy).toHaveBeenCalledOnce();
     } finally {
       threadsSpy.mockRestore();
-      activitySpy.mockRestore();
       statusSpy.mockRestore();
       detectionSpy.mockRestore();
       configSpy.mockRestore();
@@ -722,21 +667,19 @@ describe('Caccia loop', () => {
       .mockResolvedValueOnce({
         headSha: 'pushed-head', hasCodeRabbitPost: false, reviewedHeadShas: ['pushed-head'],
       });
-    const activitySpy = vi.spyOn(githubPr, 'fetchCodeRabbitCommitActivity');
+
     const threadsSpy = vi.spyOn(githubPr, 'fetchCodeRabbitReviewThreads').mockResolvedValue([]);
     try {
       const result = runCaccia({
         entry: 'linked', prNumber: 42, projectCwd: '/project',
         settings: { ...standaloneInput().settings, enabled: true, waitTimeoutMs: 10_000 },
-        expectedInitialHeadSha: 'pushed-head', skipIfNoCodeRabbitActivity: true,
+        expectedInitialHeadSha: 'pushed-head',
       });
       await vi.runAllTimersAsync();
       expect(await result).toMatchObject({ outcome: 'success', headSha: 'pushed-head' });
       expect(statusSpy).toHaveBeenCalledTimes(2);
-      expect(activitySpy).not.toHaveBeenCalled();
     } finally {
       threadsSpy.mockRestore();
-      activitySpy.mockRestore();
       statusSpy.mockRestore();
       detectionSpy.mockRestore();
       configSpy.mockRestore();
@@ -846,8 +789,8 @@ describe('Caccia loop', () => {
       2,
       expect.objectContaining({ cwd: '/tmp/caccia-clone-2' }),
     );
-    expect(dependencies.commitAndPush).toHaveBeenNthCalledWith(1, '/tmp/caccia-clone-1');
-    expect(dependencies.commitAndPush).toHaveBeenNthCalledWith(2, '/tmp/caccia-clone-2');
+    expect(dependencies.commitAndPush).toHaveBeenNthCalledWith(1, '/tmp/caccia-clone-1', undefined);
+    expect(dependencies.commitAndPush).toHaveBeenNthCalledWith(2, '/tmp/caccia-clone-2', undefined);
     expect(dependencies.removeTemporaryClone).toHaveBeenNthCalledWith(1, '/tmp/caccia-clone-1');
     expect(dependencies.removeTemporaryClone).toHaveBeenNthCalledWith(2, '/tmp/caccia-clone-2');
     expect(dependencies.logResult).toHaveBeenCalledWith(result);
@@ -860,7 +803,7 @@ describe('Caccia loop', () => {
     const result = await runCaccia(standaloneInput(), dependencies);
 
     expect(result).toMatchObject({ outcome: 'skipped', exitCode: 1 });
-    expect(result.skipReason).toBeUndefined();
+    expect(result.skipReason).toBe('github_unavailable');
     expect(dependencies.waitForCodeRabbitReview).not.toHaveBeenCalled();
     expect(dependencies.createTemporaryClone).not.toHaveBeenCalled();
     expect(dependencies.executeWorkflow).not.toHaveBeenCalled();
@@ -927,7 +870,7 @@ describe('Caccia loop', () => {
       headSha: 'current-head', hasCodeRabbitPost: false, reviewedHeadShas: [], reviewSkipped: true,
     });
     const threadSpy = vi.spyOn(githubPr, 'fetchCodeRabbitReviewThreads');
-    const activitySpy = vi.spyOn(githubPr, 'fetchCodeRabbitCommitActivity');
+
     try {
       const result = await runCaccia({
         entry: 'linked', prNumber: 42, projectCwd: '/project',
@@ -939,9 +882,8 @@ describe('Caccia loop', () => {
       });
       expect(statusSpy).toHaveBeenCalledOnce();
       expect(threadSpy).not.toHaveBeenCalled();
-      expect(activitySpy).not.toHaveBeenCalled();
     } finally {
-      activitySpy.mockRestore(); threadSpy.mockRestore(); statusSpy.mockRestore();
+      threadSpy.mockRestore(); statusSpy.mockRestore();
       detectionSpy.mockRestore(); configSpy.mockRestore();
     }
   });
@@ -1235,12 +1177,14 @@ describe('Caccia loop', () => {
 
     const result = await runCaccia({
       entry: 'linked',
-      prUrl: 'https://gitlab.com/org/repo/-/merge_requests/42',
+      prNumber: 42,
       projectCwd: '/project',
       settings: { ...standaloneInput().settings, enabled: true },
     }, dependencies);
 
     expect(result.outcome).toBe('skipped');
+    expect(result).toMatchObject({ skipReason: 'github_unavailable', reason: expect.any(String) });
+    expect(dependencies.waitForCodeRabbitReview).not.toHaveBeenCalled();
     expect(result.exitCode).toBeUndefined();
     expect(dependencies.createTemporaryClone).not.toHaveBeenCalled();
     expect(dependencies.resolveReviewThread).not.toHaveBeenCalled();
@@ -1318,7 +1262,7 @@ describe('Caccia loop', () => {
       projectCwd: '/project',
       task: expect.stringContaining('"thread_id": "valid-finding"'),
     }));
-    expect(dependencies.commitAndPush).toHaveBeenCalledWith('/tmp/caccia-clone-1');
+    expect(dependencies.commitAndPush).toHaveBeenCalledWith('/tmp/caccia-clone-1', undefined);
     expect(dependencies.resolveReviewThread).toHaveBeenCalledTimes(2);
     expect(dependencies.resolveReviewThread).toHaveBeenCalledWith('valid-finding', '/project', expect.any(AbortSignal));
     expect(dependencies.resolveReviewThread).toHaveBeenCalledWith('invalid-finding', '/project', expect.any(AbortSignal));
@@ -1348,7 +1292,7 @@ describe('Caccia loop', () => {
 
     await expect(runCaccia(standaloneInput(), dependencies)).rejects.toThrow();
 
-    expect(dependencies.commitAndPush).toHaveBeenCalledWith('/tmp/caccia-clone-1');
+    expect(dependencies.commitAndPush).toHaveBeenCalledWith('/tmp/caccia-clone-1', undefined);
     expect(dependencies.resolveReviewThread).not.toHaveBeenCalled();
     expect(dependencies.waitForCodeRabbitReview).toHaveBeenCalledTimes(1);
     expect(dependencies.removeTemporaryClone).toHaveBeenCalledWith('/tmp/caccia-clone-1');
@@ -1533,7 +1477,7 @@ describe('Caccia loop', () => {
     await expect(runCaccia(standaloneInput(), dependencies))
       .rejects.toThrow('head changed before resolving review thread finding-1');
 
-    expect(dependencies.commitAndPush).toHaveBeenCalledWith('/tmp/caccia-clone-1');
+    expect(dependencies.commitAndPush).toHaveBeenCalledWith('/tmp/caccia-clone-1', undefined);
     expect(dependencies.fetchCurrentPullRequestHeadSha).toHaveBeenCalledTimes(1);
     expect(dependencies.resolveReviewThread).not.toHaveBeenCalled();
     expect(dependencies.waitForCodeRabbitReview).toHaveBeenCalledTimes(1);
@@ -1590,7 +1534,7 @@ describe('Caccia loop', () => {
 
     await expect(runCaccia(standaloneInput(), dependencies)).rejects.toThrow();
 
-    expect(dependencies.commitAndPush).toHaveBeenCalledWith('/tmp/caccia-clone-1');
+    expect(dependencies.commitAndPush).toHaveBeenCalledWith('/tmp/caccia-clone-1', undefined);
     expect(dependencies.resolveReviewThread).toHaveBeenNthCalledWith(1, 'finding-1', '/project', expect.any(AbortSignal));
     expect(dependencies.resolveReviewThread).toHaveBeenNthCalledWith(2, 'finding-2', '/project', expect.any(AbortSignal));
     expect(dependencies.waitForCodeRabbitReview).toHaveBeenCalledTimes(1);
@@ -1606,7 +1550,7 @@ describe('Caccia loop', () => {
       cwd: '/tmp/caccia-clone-1',
       projectCwd: '/project',
     }));
-    expect(dependencies.commitAndPush).toHaveBeenCalledWith('/tmp/caccia-clone-1');
+    expect(dependencies.commitAndPush).toHaveBeenCalledWith('/tmp/caccia-clone-1', undefined);
     expect(dependencies.removeTemporaryClone).toHaveBeenCalledWith('/tmp/caccia-clone-1');
     expect(events.indexOf('remove:/tmp/caccia-clone-1'))
       .toBeLessThan(events.indexOf('wait:pushed-head-1'));

@@ -33,4 +33,5 @@ copyFile('src/shared/i18n/labels_ja.yaml', 'dist/shared/i18n/labels_ja.yaml');
 copyMatchingFiles('src/core/runtime/presets', 'dist/core/runtime/presets', '.sh');
 copyFile('src/infra/deepseek-harness/runtime-state-lock.mjs', 'dist/infra/deepseek-harness/runtime-state-lock.mjs');
 copyFile('src/infra/deepseek-harness/runtime-supervisor.mjs', 'dist/infra/deepseek-harness/runtime-supervisor.mjs');
+copyFile('src/infra/deepseek-harness/runtime-diagnostic-observer.mjs', 'dist/infra/deepseek-harness/runtime-diagnostic-observer.mjs');
 copyFile('src/infra/deepseek-harness/system-prompt-plugin.mjs', 'dist/infra/deepseek-harness/system-prompt-plugin.mjs');

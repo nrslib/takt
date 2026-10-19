@@ -2014,7 +2014,7 @@ describe('WorkflowEngine live intervention integration', () => {
       headRepositoryUrl: 'https://example.com/owner/takt.git',
       headRepositoryPushUrls: ['https://example.com/owner/takt.git'],
       workflow: config.name, method: 'squash', worktreePath: cloneCwd,
-      threatCheckMaxDiffBytes: 100_000, cacciaRequired: false,
+      threatCheckMaxDiffBytes: 100_000,
     });
     runner.recordPrMergeClonePrepared(task.name);
     runner.updateRunningTaskExecution(task.name, { runSlug });
