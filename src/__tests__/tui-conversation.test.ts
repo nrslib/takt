@@ -233,7 +233,7 @@ describe('TUI conversation layer', () => {
         { type: 'thinking', data: { thinking: 'private reasoning' } },
         { type: 'tool_use', data: { id: 'read-1', tool: 'Read', input: { file_path: 'src/index.ts' } } },
         { type: 'tool_output', data: { id: 'read-1', tool: 'Read', output: 'partial output' } },
-        { type: 'tool_result', data: { id: 'read-1', content: 'file content', isError: false } },
+        { type: 'tool_result', data: { id: 'read-1', completedToolIds: ['read-1', 'read-2'], content: 'file content', isError: false } },
         { type: 'text', data: { text: 'answer chunk' } },
       ];
       let stream: StreamCallback | undefined;
@@ -262,6 +262,7 @@ describe('TUI conversation layer', () => {
       expect(lastCallOptions().outputMode).toBe('silent');
       stream?.({ type: 'thinking', data: { thinking: 'late reasoning' } });
       stream?.({ type: 'text', data: { text: 'late text' } });
+      stream?.(events[3]!);
       expect(onStreamEvent.mock.calls.map(([event]) => event)).toEqual(events);
       expect(onAssistantChunk.mock.calls).toEqual([['answer chunk']]);
     },
@@ -276,10 +277,12 @@ describe('TUI conversation layer', () => {
     const events: StreamEvent[] = [
       { type: 'thinking', data: { thinking: 'generation reasoning' } },
       { type: 'tool_use', data: { id: 'read-artifact', tool: 'Read', input: { file_path: 'spec.qnt' } } },
+      { type: 'tool_result', data: { id: 'read-artifact', completedToolIds: ['read-artifact', 'read-other'], content: 'spec contents', isError: false } },
     ];
     for (const [index, content] of ['```quint\nmodule agreement {}\n```', 'verification passed'].entries()) {
       mockCallAIWithRetry.mockImplementationOnce((...args: unknown[]) => {
         (args[5] as CallAIOptions).onStream?.(events[index]!);
+        if (index === 1) (args[5] as CallAIOptions).onStream?.(events[2]!);
         return Promise.resolve({ result: { content, success: true, sessionId: 'verify-session' }, sessionId: 'verify-session' });
       });
     }

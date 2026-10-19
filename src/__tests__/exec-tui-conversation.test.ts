@@ -65,7 +65,7 @@ describe('exec conversation on the TUI', () => {
       { type: 'thinking', data: { thinking: 'private reasoning' } },
       { type: 'tool_use', data: { id: 'bash-1', tool: 'Bash', input: { command: 'npm test' } } },
       { type: 'tool_output', data: { id: 'bash-1', tool: 'Bash', output: 'running tests' } },
-      { type: 'tool_result', data: { id: 'bash-1', content: 'passed', isError: false } },
+      { type: 'tool_result', data: { id: 'bash-1', completedToolIds: ['bash-1', 'bash-2'], content: 'passed', isError: false } },
       { type: 'text', data: { text: 'answer chunk' } },
     ];
     let stream: StreamCallback | undefined;
@@ -85,6 +85,7 @@ describe('exec conversation on the TUI', () => {
     expect(onAssistantChunk.mock.calls).toEqual([['answer chunk']]);
     stream?.({ type: 'thinking', data: { thinking: 'late reasoning' } });
     stream?.({ type: 'text', data: { text: 'late text' } });
+    stream?.(events[3]!);
     expect(onStreamEvent.mock.calls.map(([event]) => event)).toEqual(events);
     expect(onAssistantChunk.mock.calls).toEqual([['answer chunk']]);
   });

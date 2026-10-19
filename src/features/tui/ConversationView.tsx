@@ -467,7 +467,9 @@ export function ConversationView({
               break;
             case 'tool_result':
               setActivity((current) => current.kind === 'tool'
-                && (event.data.id === undefined || event.data.id === current.id)
+                && (event.data.completedToolIds !== undefined
+                  ? event.data.completedToolIds.includes(current.id)
+                  : event.data.id === undefined || event.data.id === current.id)
                 ? { kind: 'waiting' } : current);
               break;
           }

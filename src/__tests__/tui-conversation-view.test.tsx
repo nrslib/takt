@@ -5,6 +5,7 @@ import { render as renderInk, renderToString, Text, useCursor, useWindowSize } f
 import { Terminal } from '@xterm/headless';
 import { PassThrough } from 'node:stream';
 import type { ReactNode } from 'react';
+import { sdkMessageToStreamEvent } from '../infra/claude/stream-converter.js';
 import { describe, expect, it, vi } from 'vitest';
 import {
   ConversationView,
@@ -1708,6 +1709,51 @@ describe('ConversationView activity status', () => {
     }
   });
 
+  describe.each(['chat', 'summarize'] as const)('Claude tool results in %s mode', (submitMode) => {
+    it.each([
+      { name: 'A and B results', ids: ['A', 'B'], completed: true },
+      { name: 'B and A results', ids: ['B', 'A'], completed: true },
+      { name: 'only A with B in the result body', ids: ['A'], completed: false },
+    ])('should update the same status row after $name before another event arrives', async ({ ids, completed }) => {
+      const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+      const app = renderConversation(conversation, submitMode, vi.fn());
+      try {
+        await begin(app);
+        const input = (submitMode === 'chat' ? conversation.submitCalls : conversation.instructionCalls)[0];
+        emit(input, { type: 'tool_use', data: { id: 'A', tool: 'Read', input: { file_path: 'old.ts' } } });
+        emit(input, { type: 'tool_use', data: { id: 'B', tool: 'Edit', input: { file_path: 'current.ts' } } });
+        await flushFrames();
+        expect(status(app)).toContain('Edit');
+        expect(status(app)).toContain('current.ts');
+
+        sdkMessageToStreamEvent({
+          type: 'user',
+          message: {
+            role: 'user',
+            content: ids.map((id) => ({ type: 'tool_result', tool_use_id: id, content: id === 'A' ? 'B' : '完了' })),
+          },
+          tool_use_result: {},
+          session_id: 'session-1',
+          parent_tool_use_id: null,
+        }, (event) => emit(input, event), true);
+        await flushFrames();
+
+        if (completed) {
+          expect(status(app)).toContain(UI.thinking);
+          for (const forbidden of ['Edit', 'current.ts']) {
+            expect(status(app)).not.toContain(forbidden);
+          }
+        } else {
+          expect(status(app)).toContain('Edit');
+          expect(status(app)).toContain('current.ts');
+          expect(status(app)).not.toContain(UI.thinking);
+        }
+      } finally {
+        app.unmount();
+      }
+    });
+  });
+
   it('should keep the latest tool until its own result arrives, including a result without an id', async () => {
     const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
     const app = renderConversation(conversation, 'chat', vi.fn());
@@ -1892,7 +1938,7 @@ describe('ConversationView activity status', () => {
       for (const event of [
         { type: 'thinking', data: { thinking: 'PRIVATE_LATE_THOUGHT' } },
         { type: 'tool_use', data: { id: 'late', tool: 'Bash', input: { command: 'late command' } } },
-        { type: 'tool_result', data: { id: 'old', content: 'late result', isError: false } },
+        { type: 'tool_result', data: { id: 'old', completedToolIds: ['old', 'late'], content: 'late result', isError: false } },
       ] satisfies StreamEvent[]) {
         emit(interrupted, event);
         await flushFrames();
