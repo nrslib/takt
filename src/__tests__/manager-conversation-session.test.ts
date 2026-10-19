@@ -674,3 +674,56 @@ it.each([false, true])('calls the provider without a sessionId for each daemon e
   } finally { await manager.close(); }
   expect(dispose).toHaveBeenCalledOnce();
 });
+
+
+it('propagates the daemon turn timeout to the provider and awaits provider completion before reporting failure', async () => {
+  vi.useFakeTimers();
+  const { plan } = fixture();
+  vi.spyOn(conversationPlans, 'createManagerConversationPlan').mockReturnValue(plan);
+  const dispose = vi.fn(async () => {});
+  vi.spyOn(managerMcps, 'connectManagerMcp').mockResolvedValue({
+    client: new Client({ name: 'test', version: '1' }), servers: {}, dispose,
+  });
+  vi.spyOn(mcpAdapters, 'createMcpAdapter').mockReturnValue({
+    validate: vi.fn(), prepare: vi.fn(async () => ({ dispose: vi.fn(async () => {}) })),
+    classifyFailure: () => ({ category: 'provider_error' }),
+  });
+  events.read.mockReturnValue([{ filePath: '/inbox/task-a.json', event: {
+    kind: 'completion', goalId: goalRecord().id, createdAt: '2026-10-14T00:00:00Z',
+    taskName: 'task-a', runSlug: 'run-task-a', result: { success: true, interrupted: false },
+  } }]);
+  let providerSignal!: AbortSignal;
+  let finish!: () => void;
+  doubles.call.mockImplementationOnce((_prompt, options) => new Promise((resolve) => {
+    providerSignal = options.abortSignal!;
+    finish = () => resolve(response(null, '処理完了'));
+  }));
+  const manager = createRunEventManager(cwd);
+  let settled = false;
+  const processing = manager.processPending(new AbortController().signal, 1).then((handled) => {
+    settled = true;
+    return handled;
+  });
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(doubles.call).toHaveBeenCalledOnce();
+    expect(providerSignal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+    expect(providerSignal.aborted).toBe(true);
+    expect(settled).toBe(false);
+    expect(events.failure).not.toHaveBeenCalled();
+    finish();
+    expect(await processing).toBe(false);
+    expect(events.failure).toHaveBeenCalledExactlyOnceWith(cwd, goalRecord().id, expect.objectContaining({
+      message: expect.stringMatching(/timed out/i),
+    }));
+    expect(events.remove).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    finish();
+    await processing;
+    await manager.close();
+    vi.useRealTimers();
+  }
+  expect(dispose).toHaveBeenCalledOnce();
+});

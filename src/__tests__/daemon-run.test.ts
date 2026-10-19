@@ -25,7 +25,7 @@ beforeEach(() => {
   doubles.registerOwner.mockReturnValue(true);
   doubles.projects.mockResolvedValue(['/project-a', '/project-b']);
   doubles.work.mockResolvedValue(false);
-  doubles.delay.mockResolvedValue(undefined);
+  doubles.delay.mockImplementation(async () => { await new Promise(setImmediate); });
   doubles.config.mockReturnValue({ patrolInterval: 1800 });
 });
 afterEach(() => vi.restoreAllMocks());
@@ -43,7 +43,7 @@ it('exits without polling or removing ownership when another daemon is registere
   expect(process.rawListeners('SIGTERM')).toEqual(before);
 });
 
-it('processes projects sequentially with a fixed event limit, then checks run startup and remaining work', async () => {
+it('processes each project with a fixed event limit, then checks its run startup and remaining work', async () => {
   const calls: string[] = [];
   const managers = ['/project-a', '/project-b'].map((cwd) => ({
     processPending: vi.fn(async (signal: AbortSignal, limit: number) => {
@@ -63,10 +63,11 @@ it('processes projects sequentially with a fixed event limit, then checks run st
 
   await runDaemon();
 
-  expect(calls).toEqual([
-    'patrol:/project-a', 'events:/project-a', 'run:/project-a', 'work:/project-a',
-    'patrol:/project-b', 'events:/project-b', 'run:/project-b', 'work:/project-b',
-  ]);
+  for (const cwd of ['/project-a', '/project-b']) {
+    expect(calls.filter((call) => call.endsWith(cwd))).toEqual([
+      `patrol:${cwd}`, `events:${cwd}`, `run:${cwd}`, `work:${cwd}`,
+    ]);
+  }
   expect(doubles.create.mock.calls).toEqual([['/project-a'], ['/project-b']]);
   expect(doubles.ensure.mock.calls).toEqual([
     ['/project-a', { notifyOnFailure: false }], ['/project-b', { notifyOnFailure: false }],
@@ -88,21 +89,136 @@ it('keeps each project manager across polling rounds so failed events stay exclu
   expect(manager.close).toHaveBeenCalledOnce();
 });
 
-it('waits for one project turn to finish before processing the next project', async () => {
+it('keeps polling other and newly discovered projects without overlapping a pending project', async () => {
   let finish!: () => void;
   const first = { processPending: vi.fn(() => new Promise<void>((resolve) => { finish = resolve; })), close: vi.fn() };
   const second = { processPending: vi.fn(), close: vi.fn() };
-  doubles.create.mockReturnValueOnce(first).mockReturnValueOnce(second);
+  const third = { processPending: vi.fn(), close: vi.fn() };
+  doubles.create.mockReturnValueOnce(first).mockReturnValueOnce(second).mockReturnValueOnce(third);
+  let nextPoll!: () => void;
+  doubles.delay.mockImplementation(() => new Promise<void>((resolve) => { nextPoll = resolve; }));
+  let stopped = false;
+  const daemon = runDaemon().then(() => { stopped = true; });
+  try {
+    for (let round = 0; round < 3; round++) {
+      nextPoll();
+      await new Promise(setImmediate);
+    }
+    expect(second.processPending).toHaveBeenCalledTimes(3);
+    doubles.projects.mockResolvedValue(['/project-a', '/project-b', '/project-c']);
+    nextPoll();
+    await new Promise(setImmediate);
+    expect(third.processPending).toHaveBeenCalledOnce();
+    expect(first.processPending).toHaveBeenCalledOnce();
+    expect(first.close).not.toHaveBeenCalled();
+    expect(doubles.removeOwner).not.toHaveBeenCalled();
+    expect(stopped).toBe(false);
+    expect(doubles.work).toHaveBeenCalledWith('/project-b', expect.any(Function));
+    for (const [interval] of doubles.delay.mock.calls) expect(interval).toBe(500);
+  } finally {
+    finish();
+    await new Promise(setImmediate);
+    nextPoll();
+    await daemon;
+  }
+  expect(first.processPending).toHaveBeenCalledOnce();
+  for (const manager of [first, second, third]) expect(manager.close).toHaveBeenCalledOnce();
+});
+
+it('aborts all pending projects and waits for all turns before cleanup', async () => {
+  const before = process.rawListeners('SIGTERM');
+  const finishes: Array<() => void> = [];
+  const signals: AbortSignal[] = [];
+  const managers = ['/project-a', '/project-b'].map(() => ({
+    processPending: vi.fn((signal: AbortSignal) => new Promise<void>((resolve) => {
+      signals.push(signal);
+      finishes.push(resolve);
+    })),
+    close: vi.fn(),
+  }));
+  doubles.create.mockReturnValueOnce(managers[0]).mockReturnValueOnce(managers[1]);
   const daemon = runDaemon();
-  await vi.waitFor(() => expect(first.processPending).toHaveBeenCalledOnce());
-  expect(second.processPending).not.toHaveBeenCalled();
-  expect(doubles.ensure).not.toHaveBeenCalled();
-  finish();
-  await daemon;
-  expect(second.processPending).toHaveBeenCalledOnce();
-  expect(doubles.ensure.mock.calls).toEqual([
-    ['/project-a', { notifyOnFailure: false }], ['/project-b', { notifyOnFailure: false }],
-  ]);
+  try {
+    await new Promise(setImmediate);
+    expect(signals).toHaveLength(2);
+    const stop = process.rawListeners('SIGTERM').find((listener) => !before.includes(listener));
+    stop!.call(process, 'SIGTERM');
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+    finishes[0]!();
+    await new Promise(setImmediate);
+    for (const manager of managers) expect(manager.close).not.toHaveBeenCalled();
+    expect(doubles.removeOwner).not.toHaveBeenCalled();
+    expect(doubles.ensure).not.toHaveBeenCalled();
+  } finally {
+    for (const finish of finishes) finish();
+    await daemon;
+  }
+  for (const manager of managers) expect(manager.close).toHaveBeenCalledOnce();
+  expect(doubles.removeOwner).toHaveBeenCalledOnce();
+  expect(process.rawListeners('SIGTERM')).toEqual(before);
+});
+
+it('keeps running with remaining work after a notification spans polling rounds', async () => {
+  doubles.projects.mockResolvedValue(['/project']);
+  doubles.config.mockReturnValue({ patrolInterval: 1 });
+  const manager = { processPending: vi.fn(), close: vi.fn() };
+  doubles.create.mockReturnValue(manager);
+  const failure = new Error('polling failed');
+  doubles.ensure.mockRejectedValueOnce(failure).mockRejectedValueOnce(failure);
+  doubles.work.mockResolvedValue(true);
+  let now = 0;
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
+  let finishNotification!: () => void;
+  doubles.notify.mockReturnValueOnce(new Promise<void>((resolve) => { finishNotification = resolve; }));
+  let nextPoll!: () => void;
+  doubles.delay.mockImplementation(() => new Promise<void>((resolve) => { nextPoll = resolve; }));
+  let stopped = false;
+  const daemon = runDaemon().then(() => { stopped = true; });
+  try {
+    nextPoll();
+    await new Promise(setImmediate);
+    now = 1000;
+    nextPoll();
+    await new Promise(setImmediate);
+    expect(doubles.notify).toHaveBeenCalledExactlyOnceWith('/project', undefined, failure);
+    for (let round = 0; round < 2; round++) {
+      nextPoll();
+      await new Promise(setImmediate);
+    }
+    expect(doubles.work).toHaveBeenCalledTimes(2);
+    expect(stopped).toBe(false);
+    finishNotification();
+    await new Promise(setImmediate);
+    nextPoll();
+    await new Promise(setImmediate);
+    expect(stopped).toBe(false);
+    expect(doubles.work).toHaveBeenCalledTimes(3);
+    expect(manager.close).not.toHaveBeenCalled();
+    expect(doubles.removeOwner).not.toHaveBeenCalled();
+  } finally {
+    doubles.work.mockResolvedValue(false);
+    finishNotification();
+    await new Promise(setImmediate);
+    nextPoll();
+    await new Promise(setImmediate);
+    nextPoll();
+    await daemon;
+  }
+  expect(manager.close).toHaveBeenCalledOnce();
+  expect(doubles.removeOwner).toHaveBeenCalledOnce();
+});
+
+it('ignores remaining work from a project removed from the project list', async () => {
+  doubles.projects.mockResolvedValueOnce(['/project']).mockResolvedValue([]);
+  const manager = { processPending: vi.fn(), close: vi.fn() };
+  doubles.create.mockReturnValue(manager);
+  doubles.work.mockResolvedValue(true);
+
+  await runDaemon();
+
+  expect(doubles.work).toHaveBeenCalledOnce();
+  expect(manager.close).toHaveBeenCalledOnce();
+  expect(doubles.removeOwner).toHaveBeenCalledOnce();
 });
 
 it('continues other projects after a project error and inspects it again on the next poll', async () => {
@@ -161,6 +277,7 @@ it.each(['run', 'events', 'work', 'task-read'] as const)('reports repeated %s po
   let round = 0;
   vi.spyOn(Date, 'now').mockImplementation(() => round * 500);
   doubles.delay.mockImplementation(async () => {
+    await new Promise(setImmediate);
     // Before rounds 3 and 5, only the completed patrol intervals may have notified.
     expect(doubles.notify).toHaveBeenCalledTimes(round < 3 ? 0 : round < 5 ? 1 : 2);
     round++;
@@ -187,7 +304,7 @@ it.each(['run', 'events', 'work', 'task-read'] as const)('reports repeated %s po
 
   await runDaemon();
 
-  expect(round).toBe(6);
+  expect(round).toBe(7);
   expect(doubles.notify.mock.calls).toEqual([
     ['/project', undefined, failure], ['/project', undefined, failure],
   ]);
@@ -202,6 +319,7 @@ it('clears the failure start time on success before the first notification', asy
   let round = 0;
   vi.spyOn(Date, 'now').mockImplementation(() => round * 500);
   doubles.delay.mockImplementation(async () => {
+    await new Promise(setImmediate);
     expect(doubles.notify).toHaveBeenCalledTimes(round < 5 ? 0 : 1);
     round++;
   });
@@ -211,7 +329,7 @@ it('clears the failure start time on success before the first notification', asy
 
   await runDaemon();
 
-  expect(round).toBe(6);
+  expect(round).toBe(7);
   expect(doubles.notify).toHaveBeenCalledExactlyOnceWith('/project', undefined, failure);
 });
 
@@ -222,6 +340,7 @@ it('clears the last notification time on recovery and uses the latest error afte
   let round = 0;
   vi.spyOn(Date, 'now').mockImplementation(() => round * 500);
   doubles.delay.mockImplementation(async () => {
+    await new Promise(setImmediate);
     expect(doubles.notify).toHaveBeenCalledTimes(round < 3 ? 0 : round < 7 ? 1 : 2);
     round++;
   });
@@ -231,7 +350,7 @@ it('clears the last notification time on recovery and uses the latest error afte
 
   await runDaemon();
 
-  expect(round).toBe(8);
+  expect(round).toBe(9);
   expect(doubles.notify.mock.calls).toEqual([
     ['/project', undefined, failures[2]], ['/project', undefined, failures[6]],
   ]);
@@ -242,7 +361,7 @@ it('uses each project patrol interval independently', async () => {
   doubles.create.mockImplementation(() => ({ processPending: vi.fn(), close: vi.fn() }));
   let round = 0;
   vi.spyOn(Date, 'now').mockImplementation(() => round * 500);
-  doubles.delay.mockImplementation(async () => { round++; });
+  doubles.delay.mockImplementation(async () => { await new Promise(setImmediate); round++; });
   const failure = new Error('failed');
   doubles.ensure.mockImplementation(async () => { if (round < 6) throw failure; });
   doubles.work.mockImplementation(async () => round < 6);
@@ -270,7 +389,7 @@ it.each(['run', 'work', 'task-read'] as const)('exits when only %s errors remain
 
   await runDaemon();
 
-  expect(doubles.delay).toHaveBeenCalledOnce();
+  expect(doubles.delay).toHaveBeenCalledTimes(2);
   expect(doubles.work).toHaveBeenCalledOnce();
   expect(doubles.notify).toHaveBeenCalledExactlyOnceWith('/project', undefined, failure);
   expect(doubles.notify.mock.invocationCallOrder[0]).toBeLessThan(doubles.removeOwner.mock.invocationCallOrder[0]!);
@@ -284,14 +403,14 @@ it('does not repeat an already delivered notification when exiting with a contin
   doubles.create.mockReturnValue({ processPending: vi.fn(), close: vi.fn() });
   let round = 0;
   vi.spyOn(Date, 'now').mockImplementation(() => round * 500);
-  doubles.delay.mockImplementation(async () => { round++; });
+  doubles.delay.mockImplementation(async () => { await new Promise(setImmediate); round++; });
   const failure = new Error('failed');
   doubles.ensure.mockRejectedValue(failure);
   doubles.work.mockImplementation(async () => round < 4);
 
   await runDaemon();
 
-  expect(round).toBe(4);
+  expect(round).toBe(5);
   expect(doubles.notify).toHaveBeenCalledExactlyOnceWith('/project', undefined, failure);
 });
 
@@ -303,6 +422,7 @@ it('notifies an unreported polling failure when stopped before the patrol interv
   doubles.ensure.mockRejectedValue(failure);
   doubles.work.mockResolvedValue(true);
   doubles.delay.mockResolvedValueOnce(undefined).mockImplementation(async () => {
+    await new Promise(setImmediate);
     expect(doubles.notify).not.toHaveBeenCalled();
     const stop = process.rawListeners('SIGTERM').find((listener) => !before.includes(listener));
     stop!.call(process, 'SIGTERM');

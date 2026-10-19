@@ -40,6 +40,48 @@ export async function runDaemon(): Promise<void> {
   const controller = new AbortController();
   const managers = new Map<string, ReturnType<typeof createRunEventManager>>();
   const pollingFailures = new Map<string, PollingFailure>();
+  const inFlight = new Map<string, Promise<void>>();
+  const projectWork = new Map<string, boolean>();
+  const inspectProject = async (cwd: string): Promise<boolean> => {
+    const errors: Array<{ error: unknown; failedAt: number }> = [];
+    let hasWork = false;
+    let patrolInterval: number | undefined;
+    try {
+      patrolInterval = resolveManagerConfig(cwd).patrolInterval;
+      await enqueueDueGoalPatrols(cwd, patrolInterval);
+      if (controller.signal.aborted) return false;
+      let manager = managers.get(cwd);
+      if (manager === undefined) {
+        manager = createRunEventManager(cwd);
+        managers.set(cwd, manager);
+      }
+      await manager.processPending(controller.signal, EVENTS_PER_PROJECT);
+      if (controller.signal.aborted) return false;
+      await ensureManagerRun(cwd, { notifyOnFailure: false });
+    } catch (error) {
+      errors.push({ error, failedAt: Date.now() });
+      log.error('Cannot inspect daemon project', { cwd, error: sanitizeSensitiveText(getErrorMessage(error)) });
+    }
+    try {
+      hasWork = await hasDaemonProjectWork(cwd, (error) => { errors.push({ error, failedAt: Date.now() }); });
+    } catch (error) {
+      errors.push({ error, failedAt: Date.now() });
+      log.error('Cannot inspect daemon project work', { cwd, error: sanitizeSensitiveText(getErrorMessage(error)) });
+    }
+    if (errors.length === 0) {
+      pollingFailures.delete(cwd);
+      return hasWork;
+    }
+    const now = Date.now();
+    const lastError = errors[errors.length - 1]!.error;
+    const failure = pollingFailures.get(cwd) ?? { firstFailedAt: errors[0]!.failedAt, error: lastError };
+    failure.error = lastError;
+    pollingFailures.set(cwd, failure);
+    if (patrolInterval !== undefined && now - (failure.lastNotifiedAt ?? failure.firstFailedAt) >= patrolInterval * 1000) {
+      await notifyPollingFailure(cwd, failure);
+    }
+    return hasWork;
+  };
   const stop = (): void => { controller.abort(); };
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);
@@ -53,50 +95,27 @@ export async function runDaemon(): Promise<void> {
         if (!controller.signal.aborted) throw error;
         break;
       }
-      let hasWork = false;
       const projects = await listDaemonProjects(globalConfigDirectory);
       log.debug('Daemon projects', { projects });
+      for (const cwd of projectWork.keys()) {
+        if (!projects.includes(cwd)) projectWork.delete(cwd);
+      }
+      if (inFlight.size === 0 && projects.every((cwd) => projectWork.get(cwd) === false)) break;
       for (const cwd of projects) {
         if (controller.signal.aborted) break;
-        const errors: Array<{ error: unknown; failedAt: number }> = [];
-        let patrolInterval: number | undefined;
-        try {
-          patrolInterval = resolveManagerConfig(cwd).patrolInterval;
-          await enqueueDueGoalPatrols(cwd, patrolInterval);
-          let manager = managers.get(cwd);
-          if (manager === undefined) {
-            manager = createRunEventManager(cwd);
-            managers.set(cwd, manager);
-          }
-          await manager.processPending(controller.signal, EVENTS_PER_PROJECT);
-          if (controller.signal.aborted) break;
-          await ensureManagerRun(cwd, { notifyOnFailure: false });
-        } catch (error) {
-          errors.push({ error, failedAt: Date.now() });
-          log.error('Cannot inspect daemon project', { cwd, error: sanitizeSensitiveText(getErrorMessage(error)) });
-        }
-        try {
-          if (await hasDaemonProjectWork(cwd, (error) => { errors.push({ error, failedAt: Date.now() }); })) hasWork = true;
-        } catch (error) {
-          errors.push({ error, failedAt: Date.now() });
-          log.error('Cannot inspect daemon project work', { cwd, error: sanitizeSensitiveText(getErrorMessage(error)) });
-        }
-        if (errors.length === 0) {
-          pollingFailures.delete(cwd);
-          continue;
-        }
-        const now = Date.now();
-        const lastError = errors[errors.length - 1]!.error;
-        const failure = pollingFailures.get(cwd) ?? { firstFailedAt: errors[0]!.failedAt, error: lastError };
-        failure.error = lastError;
-        pollingFailures.set(cwd, failure);
-        if (patrolInterval !== undefined && now - (failure.lastNotifiedAt ?? failure.firstFailedAt) >= patrolInterval * 1000) {
-          await notifyPollingFailure(cwd, failure);
-        }
+        if (inFlight.has(cwd)) continue;
+        const processing = inspectProject(cwd)
+          .then((hasWork) => { projectWork.set(cwd, hasWork); })
+          .catch((error: unknown) => {
+            log.error('Cannot inspect daemon project', { cwd, error: sanitizeSensitiveText(getErrorMessage(error)) });
+          })
+          .finally(() => { inFlight.delete(cwd); });
+        inFlight.set(cwd, processing);
       }
-      if (!hasWork) break;
     }
   } finally {
+    controller.abort();
+    await Promise.all(inFlight.values());
     for (const [cwd, failure] of pollingFailures) {
       if (failure.lastNotifiedAt === undefined) await notifyPollingFailure(cwd, failure);
     }
