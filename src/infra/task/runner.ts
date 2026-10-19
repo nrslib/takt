@@ -13,6 +13,7 @@ import {
   type TaskRetryOptions,
 } from './taskRetryService.js';
 import type { MergeMethod } from '../../core/models/config-types.js';
+import type { PrExecutionContext } from '../../core/workflow/system/pr-execution-context.js';
 
 export type { TaskInfo, TaskResult, TaskListItem, TaskState };
 
@@ -69,7 +70,7 @@ export class TaskRunner {
     prNumber: number; headBranch: string; baseBranch: string; headSha: string;
     headRepositoryUrl: string; headRepositoryPushUrls: readonly string[];
     workflow: string; method: MergeMethod; worktreePath: string;
-    threatCheckMaxDiffBytes: number; cacciaRequired: boolean;
+    threatCheckMaxDiffBytes: number;
     parentTaskName?: string;
   }): TaskInfo {
     return this.lifecycle.startPrMergeTask(input);
@@ -84,13 +85,14 @@ export class TaskRunner {
   }
 
   recordPrMergePushedHead(
-    taskName: string, headSha: string, previousRemoteHeadSha: string, skipIfNoCodeRabbitActivity = false,
+    taskName: string, headSha: string, previousRemoteHeadSha: string,
+    source: NonNullable<TaskFileData['merge_push_source']>,
   ): void {
-    this.lifecycle.recordPrMergePushedHead(taskName, headSha, previousRemoteHeadSha, skipIfNoCodeRabbitActivity);
+    this.lifecycle.recordPrMergePushedHead(taskName, headSha, previousRemoteHeadSha, source);
   }
 
-  recordPrMergeCacciaHandoff(taskName: string, headSha: string, outcome: 'reviewed' | 'skipped'): void {
-    this.lifecycle.recordPrMergeCacciaHandoff(taskName, headSha, outcome);
+  recordCacciaPushedHead(taskName: string, headSha: string, context: PrExecutionContext): void {
+    this.lifecycle.recordCacciaPushedHead(taskName, headSha, context);
   }
 
   listTasks(): TaskInfo[] {

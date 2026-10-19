@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runAgent } from '../agents/runner.js';
 import type { CacciaDependencies } from '../features/caccia/index.js';
-import { runCaccia, runLinkedCacciaSafely } from '../features/caccia/index.js';
+import { runCaccia, resolveCacciaSettings } from '../features/caccia/index.js';
 import * as githubPr from '../infra/github/pr.js';
 import * as taskClone from '../infra/task/clone-exec.js';
 import * as taskGit from '../infra/task/git.js';
@@ -148,7 +148,7 @@ describe('Caccia report lifecycle', () => {
     { mode: 'prefixed other label', outputMode: 'terminal', taskPrefix: 'parent-task-name', taskDisplayLabel: 'other-label', taskColorIndex: 2 },
     { mode: 'prefixed other color', outputMode: 'terminal', taskPrefix: 'parent-task-name', taskDisplayLabel: 'parent-display-label', taskColorIndex: 1 },
     { mode: 'silent', outputMode: 'silent', taskPrefix: 'parent-task-name', taskDisplayLabel: 'parent-display-label', taskColorIndex: 2 },
-  ] as const)('inherits the parent $mode display for progress and the real workflow through a successful linked wrapper', async ({ outputMode, taskPrefix, taskDisplayLabel, taskColorIndex }) => {
+  ] as const)('inherits the parent $mode display for progress and the real workflow through a successful linked execution', async ({ outputMode, taskPrefix, taskDisplayLabel, taskColorIndex }) => {
     const projectCwd = mkdtempSync(join(tmpdir(), 'takt-caccia-linked-display-'));
     temporaryRoots.push(projectCwd);
     mkdirSync(join(projectCwd, '.takt'), { recursive: true });
@@ -211,7 +211,9 @@ describe('Caccia report lifecycle', () => {
       };
     });
     try {
-      await runLinkedCacciaSafely(projectCwd, 'https://github.com/org/repo/pull/42', undefined, {
+      await runCaccia({
+        entry: 'linked', projectCwd, prNumber: 42,
+        settings: resolveCacciaSettings({ enabled: true, maxIterations: 1 }),
         outputMode, taskPrefix, taskDisplayLabel, taskColorIndex,
       });
       expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(2);
@@ -311,7 +313,10 @@ describe('Caccia report lifecycle', () => {
       fetchCodeRabbitReviewThreads,
       createTemporaryClone: vi.fn(async () => ({ cwd: cloneCwd })),
       executeWorkflow,
-      commitAndPush: vi.fn(async () => ({ headSha: 'pushed-head', pushed: true })),
+      commitAndPush: vi.fn<CacciaDependencies['commitAndPush']>(async (_cwd, onPushedHead) => {
+        onPushedHead?.('pushed-head');
+        return { headSha: 'pushed-head', pushed: true };
+      }),
       fetchCurrentPullRequestHeadSha: vi.fn(async () => 'pushed-head'),
       resolveReviewThread: vi.fn(async () => undefined),
       removeTemporaryClone,

@@ -2173,6 +2173,7 @@ describe('DefaultSystemStepServices', () => {
       autoPr: false,
       shouldPublishBranchToOrigin: true,
       prNumber: 42,
+      cacciaExecutionSource: 'from_pr',
     });
     expect(mockResolveBaseBranch).toHaveBeenCalledWith('/repo', 'main');
     expect(result).toEqual({
@@ -2235,6 +2236,7 @@ describe('DefaultSystemStepServices', () => {
       autoPr: false,
       shouldPublishBranchToOrigin: true,
       prNumber: 42,
+      cacciaExecutionSource: 'from_pr',
     });
     expect(result).toEqual({
       success: true,
@@ -3467,24 +3469,23 @@ describe('DefaultSystemStepServices', () => {
     expect(result).toEqual({ success: true, failed: false });
   });
 
-  it('Caccia未承認のPR headはmerge_prで拒否する', async () => {
+  it('merge_prは初期headではなく現在のclone HEADをexpected SHAへ渡す', async () => {
     const headSha = 'b'.repeat(40);
     mockExecFileSync.mockReturnValue(headSha);
-    const assertMergeAllowed = vi.fn(() => { throw new Error('Caccia approval pending'); });
+    mockMergePr.mockReturnValue({ success: true });
     const services = new DefaultSystemStepServices({
       cwd: '/repo/clone', projectCwd: '/repo', task: 'Prepare merge',
       prExecutionContext: {
         prNumber: 42, headBranch: 'feature/pr', baseBranch: 'main', headSha: 'a'.repeat(40),
         headRepositoryUrl: '/repo', headRepositoryPushUrls: ['/repo'],
       },
-      prGitOperations: { fetch: vi.fn(), push: vi.fn(), assertMergeAllowed },
+      prGitOperations: { fetch: vi.fn(), push: vi.fn() },
     });
 
     const result = await services.executeEffect({ type: 'merge_pr', pr: 42 }, { pr: 42 }, {} as never);
 
-    expect(result).toMatchObject({ success: false, failed: true, error: expect.stringContaining('Caccia approval pending') });
-    expect(assertMergeAllowed).toHaveBeenCalledWith(headSha);
-    expect(mockMergePr).not.toHaveBeenCalled();
+    expect(result).toEqual({ success: true, failed: false });
+    expect(mockMergePr).toHaveBeenCalledWith(42, '/repo', undefined, headSha);
   });
 
   it('returns failed merge_pr effect results with provider errors', async () => {

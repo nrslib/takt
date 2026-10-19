@@ -147,6 +147,10 @@ export type WorkflowEffectScalarReference = WorkflowTemplateReference | number;
 
 export type WorkflowEffect =
   | {
+    type: 'caccia';
+    pr: WorkflowEffectScalarReference;
+  }
+  | {
     type: 'commit_and_push';
     pr: WorkflowEffectScalarReference;
   }

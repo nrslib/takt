@@ -1,0 +1,8 @@
+name: optional-production-webhook
+on: workflow_dispatch
+jobs:
+  production-webhook-check:
+    runs-on: production-payments
+    steps:
+      - uses: actions/checkout@v4
+      - run: payments-webhook-probe --types paid,refunded --replay --receiver ./app.mjs --output production-receipts.json

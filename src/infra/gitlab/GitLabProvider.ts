@@ -7,11 +7,29 @@
  */
 
 import { checkGlabCli } from './utils.js';
+import { fetchMrDetails, fetchMrStatus, listOpenMrNumbers, fetchMrListItem } from './pr-execution.js';
+import type { PrDetails, PrStatus, PrStatusFetchOptions } from '../../core/workflow/system/pr-execution-context.js';
 import { fetchIssue, listOpenIssues, createIssue, closeIssue, commentOnIssue } from './issue.js';
 import { findExistingMr, commentOnMr, closeMr, createMergeRequest, fetchMrReviewComments, listOpenMrs, mergeMr } from './pr.js';
 import type { GitProvider, CliStatus, Issue, ExistingPr, IssueListItem, PrListItem, CreateIssueOptions, CreateIssueResult, CloseIssueResult, CreatePrOptions, CreatePrResult, CommentResult, IssueCommentResult, MergeResult, PrReviewData } from '../git/types.js';
 
 export class GitLabProvider implements GitProvider {
+  fetchPrDetails(prNumber: number, cwd: string, signal?: AbortSignal): Promise<PrDetails> {
+    return fetchMrDetails(prNumber, cwd, signal);
+  }
+
+  fetchPrStatus(prNumber: number, cwd?: string, options?: PrStatusFetchOptions): Promise<PrStatus> {
+    return fetchMrStatus(prNumber, cwd ?? process.cwd(), options);
+  }
+
+  listOpenPrNumbers(cwd: string): number[] {
+    return listOpenMrNumbers(cwd);
+  }
+
+  fetchPrListItem(prNumber: number, cwd: string): PrListItem | undefined {
+    return fetchMrListItem(prNumber, cwd);
+  }
+
   checkCliStatus(cwd?: string): CliStatus {
     return checkGlabCli(cwd ?? process.cwd());
   }

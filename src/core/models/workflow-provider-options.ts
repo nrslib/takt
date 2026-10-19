@@ -146,12 +146,22 @@ export interface CursorProviderOptions {
 /** Configuration for the DeepSeek Harness TypeScript SDK. */
 export type DeepSeekReasoningEffort = 'off' | 'low' | 'high' | 'max';
 
-export interface DeepSeekHarnessPluginOption {
+export interface DeepSeekHarnessGitPluginOption {
   id: string;
   source: string;
   ref?: string;
   config?: Record<string, unknown>;
 }
+
+export interface DeepSeekHarnessNpmPluginOption {
+  source: string;
+  id?: string;
+  config?: Record<string, unknown>;
+}
+
+export type DeepSeekHarnessPluginOption = string
+  | DeepSeekHarnessGitPluginOption
+  | DeepSeekHarnessNpmPluginOption;
 
 export interface DeepSeekHarnessProviderOptions {
   baseUrl?: string;

@@ -12,7 +12,7 @@ interface CacciaCloneGitOptions {
 
 export interface CacciaGitOperations {
   fetch(refspec: string): Promise<void>;
-  push(refspec: string): Promise<void>;
+  push(refspec: string, onPushSucceeded?: () => void): Promise<void>;
 }
 
 export async function createCacciaCloneGitOperations(options: CacciaCloneGitOptions): Promise<{
@@ -28,17 +28,21 @@ export async function createCacciaCloneGitOperations(options: CacciaCloneGitOpti
         const env = await buildSafeGitEnvironment(options.cwd, { ...options, allowGitFilters: false });
         await runGitCommandAbortable(options.cwd, ['fetch', '--no-tags', 'origin', refspec], options.abortSignal, env);
       },
-      async push(refspec) {
+      async push(refspec, onPushSucceeded) {
         let firstFailure: unknown;
         const env = await buildSafeGitEnvironment(options.cwd, options);
         // git push origin と同じく、通常の拒否後も残りのpush先を試行する。
         for (const url of options.headRepositoryPushUrls) {
+          options.abortSignal?.throwIfAborted();
           try {
             await runGitCommandAbortable(options.cwd, ['push', url, refspec], options.abortSignal, env);
           } catch (error) {
             if (options.abortSignal?.aborted) throw error;
             firstFailure ??= error;
+            continue;
           }
+          onPushSucceeded?.();
+          options.abortSignal?.throwIfAborted();
         }
         if (firstFailure !== undefined) throw firstFailure;
       },

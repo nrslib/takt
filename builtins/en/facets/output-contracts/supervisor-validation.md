@@ -30,6 +30,7 @@
 - Select APPROVE only when every requirement is fulfilled and every preceding finding (or, when there is a review adjudication, every finding selected for repair in the latest adjudication) is resolved. Findings that adjudication treated as Outside this task or Unsupported, and criteria it removed for lack of a basis in the requirements or existing contracts, do not prevent APPROVE
 - Select REJECT only when an unfulfilled requirement or unresolved finding is recorded with evidence in Unresolved Problems
 - Select BLOCKED only when a required external decision or information cannot be obtained through task-scope code changes and the available evidence cannot decide the requirement
+- Do not mark a requirement Cannot determine because a confirmation not required by the acceptance criteria or existing contracts remains unverified. Record that unverified fact in the requirement table's Evidence column and proceed with ordinary judgment
 - Do not use the absence of test or build records alone as a reason for REJECT or BLOCKED
 
 - Omit Awaiting External Confirmation when there are no such items

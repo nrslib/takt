@@ -331,13 +331,13 @@ takt list --non-interactive --action try --branch takt/my-branch
 
 ## CodeRabbit 审查循环（`caccia`）
 
-任务后处理成功创建或更新 PR 后，TAKT 可以运行 Caccia 审查循环。该自动关联路径默认关闭，只有在项目或全局配置中设置 `caccia.enabled: true` 才会启动。Pipeline 模式在 `--auto-pr` 成功创建 PR 后也使用同一入口。
+合并 builtin 明确执行 Caccia：`merge-review` 按 `review → caccia → wait_ci → 评价评论` 执行，`merge-review-fix` 和 `merge-review-fix-simple` 按 `review/fix → commit_and_push → caccia → wait_ci → merge_pr` 执行。`success` 与 `skipped` 继续等待返回 head 的 CI。`limit` 评论未解决线程数后以 COMPLETE 结束，不合并；执行错误评论 `error` 后以 ABORT 结束。push、任务后处理和 Pipeline 不再隐式启动 Caccia。设置 `merge.auto_start: true` 时，PR 发布后启动合并 workflow，由其明确的 effect 执行 Caccia。
 
-Caccia 会等待 CodeRabbit 的审查，只处理由 `coderabbitai` 发起且尚未解决的线程。每轮都在临时克隆中运行指定 workflow，将判断报告保存在 `.takt/runs/`，推送修复后只解决本轮判断过的线程，再等待 CodeRabbit 审查已推送的 commit。由人工发起的线程会继续保持未解决。Caccia 不会回复审查评论。自动关联的 Caccia 结果不会改变已完成任务的结果；成功和达到迭代上限的结果会写入日志，并通过已配置的通知路径发送。
+Caccia 会等待 CodeRabbit 的审查，只处理由 `coderabbitai` 发起且尚未解决的线程。每轮都在临时克隆中运行指定 workflow，将判断报告保存在 `.takt/runs/`，推送修复后只解决本轮判断过的线程，再等待 CodeRabbit 审查已推送的 commit。由人工发起的线程会继续保持未解决。Caccia 不会回复审查评论。成功和达到迭代上限的结果会写入日志，并通过已配置的通知路径发送。
 
-`wait_timeout_ms` 规定初次审查和每次推送后复审的等待期限，重新请求审查也包含在内。若审查限额通知给出的可重试时间早于期限，Caccia 会在该时间到达时通过 `@coderabbitai review` 评论请求一次审查；若可重试时间为期限或更晚，则立即跳过。收到限额通知后，审查到期限仍未完成时也会跳过。未收到限额通知时，初次等待超时会跳过，推送后的等待超时会记录为错误。已完成的任务结果会保留；单独运行 `takt caccia` 时，跳过或出错都会以非零状态退出。
+`wait_timeout_ms` 规定初次审查和每次推送后复审的等待期限，重新请求审查也包含在内。若审查限额通知给出的可重试时间早于期限，Caccia 会在该时间到达时通过 `@coderabbitai review` 评论请求一次审查；若可重试时间为期限或更晚，则立即跳过。收到限额通知后，审查到期限仍未完成时也会跳过。未收到限额通知时，初次等待超时会跳过，推送后的等待超时会记录为错误。system effect 返回 `success: false` 与 `error`；单独运行 `takt caccia` 时，跳过或出错都会以非零状态退出。
 
-自动关联的进度、workflow 输出、结果和失败信息遵循父任务的显示模式。并行任务沿用相同的任务名前缀和颜色；silent 模式不向屏幕输出。父任务会等待 Caccia 结束后再完成。
+effect 的进度、workflow 输出、结果和失败信息遵循父任务的显示模式。并行任务沿用相同的任务名前缀和颜色；silent 模式不向屏幕输出。workflow 等待 effect 结果后进入下一步。
 
 也可以运行 `takt caccia <PR-number>` 手动处理现有 PR。命令结果和配置见[CLI 参考](./cli-reference.md#takt-caccia)与[配置参考](./configuration.zh-CN.md#caccia-review-loop)。
 

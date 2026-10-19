@@ -177,6 +177,64 @@ describe('TaskRunner (tasks.yaml)', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
+  it.each([undefined, 'from_pr'] as const)('preserves the execution source through failure, requeue and claim: %s', (source) => {
+    runner.addTask('Review PR', { source: 'pr_review', pr_number: 123,
+      branch: 'feature/pr', base_branch: 'main', caccia_execution_source: source });
+    const task = runner.claimNextTasks(1)[0]!;
+    runner.failTask({ task, success: false, response: 'Workflow failed', executionLog: [],
+      startedAt: new Date().toISOString(), completedAt: new Date().toISOString() });
+    expect(new TaskRunner(testDir).listFailedTasks()[0]!.data?.caccia_execution_source).toBe(source);
+    runner.requeueTask(task.name, ['failed']);
+    const claimed = new TaskRunner(testDir).claimNextTasks(1)[0]!;
+    expect(claimed.data?.caccia_execution_source).toBe(source);
+    expect(loadTasksFile(testDir).tasks[0]?.caccia_execution_source).toBe(source);
+  });
+
+  it('updates both push SHAs and their source together through failure and retry', () => {
+    const a = 'a'.repeat(40), b = 'b'.repeat(40), c = 'c'.repeat(40);
+    const task = runner.startPrMergeTask({ prNumber: 123, headBranch: 'feature/pr', baseBranch: 'main',
+      headSha: a, headRepositoryUrl: '/head', headRepositoryPushUrls: ['/head'], workflow: 'merge-review',
+      worktreePath: join(testDir, '.takt', 'worktrees', 'pr-123'), method: 'squash', threatCheckMaxDiffBytes: 1024 });
+    runner.recordPrMergePushedHead(task.name, b, a, 'manual');
+    runner.recordPrMergePushedHead(task.name, c, b, 'caccia');
+    runner.failTask({ task, success: false, response: 'After push', executionLog: [],
+      startedAt: new Date().toISOString(), completedAt: new Date().toISOString() });
+    runner.requeueTask(task.name, ['failed']);
+    const claimed = new TaskRunner(testDir).claimNextTasks(1)[0]!;
+    expect(claimed.data).toMatchObject({ merge_pushed_head_sha: c, merge_push_base_head_sha: b,
+      merge_push_source: 'caccia' });
+  });
+
+  it('persists the latest from_pr push identity through failure, requeue and claim', () => {
+    runner.addTask('Review PR', { source: 'pr_review', pr_number: 123, branch: 'feature/pr',
+      base_branch: 'review-base', caccia_execution_source: 'from_pr' });
+    const task = runner.claimNextTasks(1)[0]!;
+    const context = { prNumber: 123, headBranch: 'feature/pr', baseBranch: 'main', headSha: 'a'.repeat(40),
+      headRepositoryUrl: '/head', headRepositoryPushUrls: ['/push'] };
+    runner.recordCacciaPushedHead(task.name, 'b'.repeat(40), context);
+    runner.recordCacciaPushedHead(task.name, 'c'.repeat(40), context);
+    runner.failTask({ task, success: false, response: 'After push', executionLog: [],
+      startedAt: new Date().toISOString(), completedAt: new Date().toISOString() });
+    const expected = { headSha: 'c'.repeat(40), baseBranch: 'main', headRepositoryUrl: '/head',
+      headRepositoryPushUrls: ['/push'] };
+    expect(new TaskRunner(testDir).listFailedTasks()[0]!.data?.caccia_pushed_head).toEqual(expected);
+    runner.requeueTask(task.name, ['failed']);
+    expect(new TaskRunner(testDir).claimNextTasks(1)[0]!.data).toMatchObject({
+      base_branch: 'review-base', caccia_pushed_head: expected });
+    expect(loadTasksFile(testDir).tasks[0]?.caccia_pushed_head).toEqual(expected);
+  });
+
+  it.each(['number', 'branch', 'source'] as const)('rejects a from_pr push record with mismatched %s', (field) => {
+    runner.addTask('Review PR', { source: 'pr_review', pr_number: 123, branch: 'feature/pr',
+      ...(field === 'source' ? {} : { caccia_execution_source: 'from_pr' as const }) });
+    const task = runner.claimNextTasks(1)[0]!;
+    expect(() => runner.recordCacciaPushedHead(task.name, 'b'.repeat(40), {
+      prNumber: field === 'number' ? 456 : 123, headBranch: field === 'branch' ? 'other' : 'feature/pr',
+      baseBranch: 'main', headSha: 'a'.repeat(40), headRepositoryUrl: '/head', headRepositoryPushUrls: ['/head'],
+    })).toThrow();
+    expect(loadTasksFile(testDir).tasks[0]?.caccia_pushed_head).toBeUndefined();
+  });
+
   it('should add tasks to .takt/tasks.yaml', () => {
     const task = runner.addTask('Fix login flow', { workflow: 'default' });
     expect(task.name).toContain('fix-login-flow');
@@ -737,6 +795,50 @@ describe('TaskRunner (tasks.yaml)', () => {
     const tasksFilePath = join(testDir, '.takt', 'tasks.yaml');
     expect(() => runner.listTasks()).toThrow(/Invalid tasks\.yaml/);
     expect(existsSync(tasksFilePath)).toBe(true);
+  });
+
+  it.each([
+    { merge_caccia_required: false },
+    { merge_skip_caccia_if_no_activity: true },
+    { merge_caccia_approved_head_sha: 'b'.repeat(40) },
+    { merge_caccia_skipped_head_sha: 'b'.repeat(40) },
+    { merge_caccia_required: true, merge_skip_caccia_if_no_activity: true,
+      merge_caccia_skipped_head_sha: 'b'.repeat(40) },
+    { merge_caccia_required: true, merge_caccia_approved_head_sha: 'b'.repeat(40) },
+  ])('reads and updates saved tasks while removing only obsolete Caccia fields: %j', (legacy) => {
+    const mergeTask = createFailedRecord({ name: 'merge-pr-123', source: 'pr_review', pr_number: 123,
+      branch: 'feature/pr', base_branch: 'main', worktree: true, worktree_path: '/retained-clone',
+      workflow: 'merge-review', merge_task: true, merge_method: 'squash',
+      merge_head_repository_url: '/remote', merge_head_repository_push_urls: ['/remote'],
+      merge_initial_head_sha: 'a'.repeat(40), merge_clone_prepared: true,
+      merge_threat_check_max_diff_bytes: 1000,
+      merge_pushed_head_sha: 'b'.repeat(40), merge_push_base_head_sha: 'a'.repeat(40) });
+    const pendingTask = createPendingRecord({ name: 'normal', content: 'merge_caccia_required: false' });
+    writeTasksFile(testDir, [{ ...mergeTask, ...legacy }, pendingTask]);
+    const file = join(testDir, '.takt', 'tasks.yaml');
+    const original = readFileSync(file, 'utf8');
+
+    expect(runner.listAllTaskItems().map((task) => [task.name, task.content])).toEqual([
+      ['merge-pr-123', 'Do work'], ['normal', 'merge_caccia_required: false'],
+    ]);
+    expect(readFileSync(file, 'utf8')).toBe(original);
+    const claimed = runner.claimNextTasks(1)[0]!;
+    expect(claimed.name).toBe('normal');
+    expect(claimed.content).toBe('merge_caccia_required: false');
+    const saved = loadTasksFile(testDir).tasks;
+    expect(saved).toHaveLength(2);
+    expect(saved[0]).toEqual(mergeTask);
+    expect(saved[1]).toMatchObject({ name: 'normal', status: 'running', content: pendingTask.content });
+    expect(new TaskRunner(testDir).listAllTaskItems().map((task) => task.name)).toEqual(['merge-pr-123', 'normal']);
+  });
+
+  it('preserves unknown fields and rejects them even alongside obsolete Caccia state', () => {
+    writeTasksFile(testDir, [{ ...createPendingRecord({}), merge_caccia_required: false, unknown_field: true }]);
+    const file = join(testDir, '.takt', 'tasks.yaml');
+    const original = readFileSync(file, 'utf8');
+    expect(() => runner.listAllTaskItems()).toThrow();
+    expect(() => runner.claimNextTasks(1)).toThrow();
+    expect(readFileSync(file, 'utf8')).toBe(original);
   });
 
   it('should preserve tasks.yaml and throw when pending record has started_at', () => {
@@ -2368,18 +2470,18 @@ describe('failed PR merge task publication', () => {
       merge_head_repository_url: 'https://example.test/fork.git',
       merge_head_repository_push_urls: ['https://example.test/fork.git'],
       merge_initial_head_sha: oldHeadSha, merge_clone_prepared: true,
-      merge_threat_check_max_diff_bytes: 1024, merge_caccia_required: true,
+      merge_threat_check_max_diff_bytes: 1024,
       merge_pushed_head_sha: oldHeadSha, merge_push_base_head_sha: oldHeadSha,
-      merge_caccia_approved_head_sha: oldHeadSha,
+      merge_push_source: 'caccia',
     }));
     const store = new RecordingTaskStore({ tasks: [record] });
     const lifecycle = new TaskLifecycleService('/project', '/project/.takt/tasks.yaml', store);
 
-    lifecycle.recordPrMergePushedHead(record.name, newHeadSha, oldHeadSha);
+    lifecycle.recordPrMergePushedHead(record.name, newHeadSha, oldHeadSha, 'manual');
 
     expect(store.read().tasks[0]).toMatchObject({
       status: 'failed', merge_pushed_head_sha: newHeadSha, merge_push_base_head_sha: oldHeadSha,
+      merge_push_source: 'manual',
     });
-    expect(store.read().tasks[0]?.merge_caccia_approved_head_sha).toBeUndefined();
   });
 });

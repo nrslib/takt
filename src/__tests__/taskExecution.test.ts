@@ -1333,7 +1333,7 @@ describe('executeAndCompleteTask', () => {
     });
   });
 
-  it('should forward resolved PR prompt context through task execution to the workflow', async () => {
+  it.each([undefined, 'from_pr'] as const)('should select Caccia from the saved execution source: %s', async (executionSource) => {
     const prContext = {
       source: 'pr_review' as const,
       prNumber: 826,
@@ -1355,16 +1355,22 @@ describe('executeAndCompleteTask', () => {
       prContext,
     });
 
+    const task = createTask('task-with-pr-context');
+    task.data = { ...task.data!, source: 'pr_review', pr_number: 826,
+      branch: prContext.headBranch, base_branch: prContext.baseBranch,
+      caccia_execution_source: executionSource };
     await executeAndCompleteTaskWithoutWorkflow(
-      createTask('task-with-pr-context'),
+      task,
       createTaskRunnerMock() as never,
       '/project',
     );
 
     const workflowExecutionOptions = mockExecuteWorkflow.mock.calls[0]?.[3] as {
       prContext?: unknown;
+      cacciaExecutionSource?: string;
     };
     expect(workflowExecutionOptions.prContext).toEqual(prContext);
+    expect(workflowExecutionOptions.cacciaExecutionSource).toBe(executionSource);
   });
 
   it('should use saved summary for task_dir task trace metadata', async () => {
