@@ -610,7 +610,7 @@ Provider and model selection is owned by `runtime.yaml` when runtime mode is act
 
 **Kiro CLI** forwards `model` directly to `kiro-cli chat --model <model>`. If omitted, Kiro CLI default is used.
 
-**Devin CLI** forwards `model` directly to `devin -p --model <model>` (for example `swe-2-max`, `swe-2-high`, `swe-2-medium`). If omitted, Devin CLI default is used.
+**Devin CLI** passes `model` to `devin acp --model <model>` (for example `swe-2-max`, `swe-2-high`, `swe-2-medium`); the ACP session resolves the name into its `model` and `thought_level` options, and a name that cannot be resolved or applied fails fast instead of silently falling back. If omitted, the default model configured in the user's Devin config is used.
 
 ### Example
 
@@ -1131,11 +1131,11 @@ TAKT uses three provider-independent permission modes:
 
 | Mode | Description | Claude | Codex | OpenCode | Pi | DeepSeek Harness | Cursor Agent | Copilot | Kiro CLI | Devin CLI |
 |------|-------------|--------|-------|----------|----|-----------------|--------------|---------|----------|-----------|
-| `readonly` | Read-only access, no file modifications | `default` | `read-only` | `read-only` | `read`, `grep`, `find`, `ls`, `codemode` | Not exposed by this SDK | default flags (no `--force`) | no permission flags | `--trust-tools=read,grep` | `--permission-mode auto` + generated `--config` deny rules (`exec`, `edit`, `Write(**)`, `mcp__*`) |
-| `edit` | Allow file edits with confirmation | `acceptEdits` | `workspace-write` | `workspace-write` | `read`, `grep`, `find`, `ls`, `edit`, `write`, `bash`, `codemode` | Not exposed by this SDK | default flags (no `--force`) | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` | `--permission-mode accept-edits` |
-| `full` | Bypass all permission checks | `bypassPermissions` | `danger-full-access` | `danger-full-access` | all registered Pi tools | Not exposed by this SDK | `--force` | `--yolo` | `--trust-all-tools` | `--permission-mode dangerous` |
+| `readonly` | Read-only access, no file modifications | `default` | `read-only` | `read-only` | `read`, `grep`, `find`, `ls`, `codemode` | Not exposed by this SDK | default flags (no `--force`) | no permission flags | `--trust-tools=read,grep` | `ask` ACP session mode + generated `--config` deny rules (`exec`, `edit`, `Write(**)`, `mcp__*`) |
+| `edit` | Allow file edits with confirmation | `acceptEdits` | `workspace-write` | `workspace-write` | `read`, `grep`, `find`, `ls`, `edit`, `write`, `bash`, `codemode` | Not exposed by this SDK | default flags (no `--force`) | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` | `accept-edits` ACP session mode + generated `--config` allow rules (`exec`, `edit`, `Write(**)`) |
+| `full` | Bypass all permission checks | `bypassPermissions` | `danger-full-access` | `danger-full-access` | all registered Pi tools | Not exposed by this SDK | `--force` | `--yolo` | `--trust-all-tools` | `bypass` ACP session mode; permission requests answered `allow_once` |
 
-Devin CLI print mode (`-p`) cannot show approval prompts, so every permission mode effectively auto-approves at the CLI level; `readonly` is therefore enforced by a temporary `--config` file injecting deny rules rather than a permission-mode flag. `strict-readonly` internal-agent isolation additionally denies `Fetch(**)`.
+Devin runs through `devin acp` (Agent Client Protocol over stdio) rather than print mode, so permission modes are enforced in three layers: the ACP session mode set with `session/set_mode` (`ask` for `readonly`, `accept-edits` for `edit` and unset, `bypass` for `full`), permission rules appended to a generated `--config` file seeded from the user's own Devin config (`$XDG_CONFIG_HOME/devin/config.json`, default `~/.config/devin/config.json`; `%APPDATA%\devin\config.json` on Windows), and answers to `session/request_permission` — `allow_once` is selected only in `full` mode and `allow_always` is never selected because it would persist decisions into the Devin config. `strict-readonly` internal-agent isolation additionally denies `Fetch(**)`.
 
 Pi permission modes are SDK active-tool allowlists, not an operating-system sandbox, and TAKT does not add per-tool confirmation prompts for Pi. In particular, Pi `edit` enables `bash`, and Pi's file tools can accept absolute paths. Run Pi with trusted workflow input and extensions. If an internal-agent role needs narrower authority, configure capabilities and a permission mode on its Pi profile.
 
@@ -1731,7 +1731,8 @@ Companion reviewers, moderators, and selectors run in `readonly` permission mode
 | `mock` | Scenario-dependent |
 | `opencode` | Live |
 | `pi` | Live |
-| `cursor`, `copilot`, `kiro`, `devin` | Unavailable |
+| `devin` | Live |
+| `cursor`, `copilot`, `kiro` | Unavailable |
 
 When live tool events are unavailable, completion review and turn-boundary finding delivery still run.
 

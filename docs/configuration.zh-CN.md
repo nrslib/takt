@@ -543,7 +543,7 @@ devin_cli_path: /usr/local/bin/devin
 - **Cursor Agent** 将 model 原样传给 `cursor-agent --model <model>`。
 - **GitHub Copilot CLI** 将 model 原样传给 `copilot --model <model>`。
 - **Kiro CLI** 将 model 原样传给 `kiro-cli chat --model <model>`。
-- **Devin CLI** 将 model 原样传给 `devin -p --model <model>`（例如 `swe-2-max`、`swe-2-high`、`swe-2-medium`）。
+- **Devin CLI** 将 model 传给 `devin acp --model <model>`（例如 `swe-2-max`、`swe-2-high`、`swe-2-medium`）；ACP session 会把该名称解析为 `model` 与 `thought_level` 配置项，无法解析或应用的名称会立即报错，而不是静默回退到默认值。省略时使用用户 Devin config 中配置的默认 model。
 
 ### 示例
 
@@ -831,11 +831,13 @@ Provider profile 可以为不同 provider 设置默认权限模式和按 step �
 
 ### 权限模式
 
-| 模式 | 说明 | Claude | Codex | OpenCode | Pi | DeepSeek Harness | Cursor Agent | Copilot | Kiro CLI |
-|------|------|--------|-------|----------|----|------------------|--------------|---------|----------|
-| `readonly` | 只读，不修改文件 | `default` | `read-only` | `read-only` | `read`、`grep`、`find`、`ls`、`codemode` | 此 SDK 不提供 | 默认 flags（无 `--force`） | 无权限 flags | `--trust-tools=read,grep` |
-| `edit` | 允许带确认的文件编辑 | `acceptEdits` | `workspace-write` | `workspace-write` | `read`、`grep`、`find`、`ls`、`edit`、`write`、`bash`、`codemode` | 此 SDK 不提供 | 默认 flags（无 `--force`） | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` |
-| `full` | 绕过所有权限检查 | `bypassPermissions` | `danger-full-access` | `danger-full-access` | 所有注册 Pi 工具 | 此 SDK 不提供 | `--force` | `--yolo` | `--trust-all-tools` |
+| 模式 | 说明 | Claude | Codex | OpenCode | Pi | DeepSeek Harness | Cursor Agent | Copilot | Kiro CLI | Devin CLI |
+|------|------|--------|-------|----------|----|------------------|--------------|---------|----------|-----------|
+| `readonly` | 只读，不修改文件 | `default` | `read-only` | `read-only` | `read`、`grep`、`find`、`ls`、`codemode` | 此 SDK 不提供 | 默认 flags（无 `--force`） | 无权限 flags | `--trust-tools=read,grep` | `ask` ACP session mode + 生成的 `--config` deny 规则（`exec`、`edit`、`Write(**)`、`mcp__*`） |
+| `edit` | 允许带确认的文件编辑 | `acceptEdits` | `workspace-write` | `workspace-write` | `read`、`grep`、`find`、`ls`、`edit`、`write`、`bash`、`codemode` | 此 SDK 不提供 | 默认 flags（无 `--force`） | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` | `accept-edits` ACP session mode + 生成的 `--config` allow 规则（`exec`、`edit`、`Write(**)`） |
+| `full` | 绕过所有权限检查 | `bypassPermissions` | `danger-full-access` | `danger-full-access` | 所有注册 Pi 工具 | 此 SDK 不提供 | `--force` | `--yolo` | `--trust-all-tools` | `bypass` ACP session mode；permission 请求以 `allow_once` 应答 |
+
+Devin 通过 `devin acp`（基于 stdio 的 Agent Client Protocol）而不是 print 模式运行，因此权限模式分三层实施：用 `session/set_mode` 设置的 ACP session mode（`readonly` 对应 `ask`，`edit` 和未设置对应 `accept-edits`，`full` 对应 `bypass`）、追加到以用户 Devin 配置（`$XDG_CONFIG_HOME/devin/config.json`，默认 `~/.config/devin/config.json`；Windows 为 `%APPDATA%\devin\config.json`）为基础生成的 `--config` 中的 permission 规则，以及对 `session/request_permission` 的应答——只有 `full` 模式选择 `allow_once`，`allow_always` 因会把决定持久化到 Devin config 而从不被选择。`strict-readonly` 内部 agent 隔离还会额外 deny `Fetch(**)`。
 
 Pi 的权限模式是 SDK active-tool allowlist，而不是操作系统 sandbox；TAKT 不为 Pi 增加逐工具确认。使用 Pi 时请确保 workflow 输入和 extension 可信。
 
@@ -1348,7 +1350,8 @@ Companion 的 structured call 使用和其他 TAKT-owned structured agent 一样
 | `mock` | 取决于 scenario |
 | `opencode` | Live |
 | `pi` | Live |
-| `cursor`、`copilot`、`kiro`、`devin` | 不可用 |
+| `devin` | Live |
+| `cursor`、`copilot`、`kiro` | 不可用 |
 
 当 live tool event 不可用时，完成审查和 turn 边界的 finding 传递仍会运行。
 
