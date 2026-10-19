@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockSpawn, debugSpy } = vi.hoisted(() => ({
@@ -28,25 +29,300 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 import { callDevin } from '../infra/devin/client.js';
 
-type SpawnScenario = {
-  stdout?: string;
-  stderr?: string;
-  code?: number | null;
-  signal?: NodeJS.Signals | null;
-  error?: Partial<NodeJS.ErrnoException> & { message: string };
-  /** Raw content written to the `--export` path before the process closes; omitted = no export. */
-  exportContent?: string;
-};
+interface WireMessage {
+  id?: number;
+  method?: string;
+  params?: Record<string, unknown>;
+  result?: unknown;
+  error?: { code: number; message: string; data?: unknown };
+}
 
-type MockChildProcess = EventEmitter & {
-  stdin: EventEmitter & {
-    write: ReturnType<typeof vi.fn>;
-    end: ReturnType<typeof vi.fn>;
-  };
-  stdout: EventEmitter;
-  stderr: EventEmitter;
+type MockAcpChild = EventEmitter & {
+  stdin: PassThrough;
+  stdout: PassThrough;
+  stderr: PassThrough;
   kill: ReturnType<typeof vi.fn>;
 };
+
+interface AcpServerApi {
+  respond(id: number, result: unknown): void;
+  fail(id: number, code: number, message: string, data?: unknown): void;
+  notify(method: string, params: unknown): void;
+  sendRequest(method: string, params: unknown, onResponse: (msg: WireMessage) => void): number;
+}
+
+// Handler return value is written back as the JSON-RPC result. Returning
+// `undefined` defers the response — the handler must later call
+// `api.respond(id, ...)` / `api.fail(id, ...)` itself.
+type AcpRequestHandler = (
+  params: Record<string, unknown>,
+  api: AcpServerApi,
+  id: number,
+) => unknown;
+
+interface AcpScenario {
+  sessionId?: string;
+  configOptions?: unknown[];
+  modes?: unknown;
+  updates?: Record<string, unknown>[];
+  stopReason?: string;
+  usage?: Record<string, unknown> | null;
+  promptError?: { code: number; message: string; data?: unknown };
+  loadError?: { code: number; message: string; data?: unknown };
+  setModeError?: { code: number; message: string };
+  stderr?: string;
+}
+
+const DEFAULT_USAGE = {
+  totalTokens: 175,
+  inputTokens: 160,
+  outputTokens: 15,
+  cachedReadTokens: 52,
+};
+
+const DEFAULT_MODES = {
+  currentModeId: 'accept-edits',
+  availableModes: [
+    { id: 'accept-edits', name: 'Accept Edits' },
+    { id: 'smart', name: 'Smart' },
+    { id: 'ask', name: 'Ask' },
+    { id: 'plan', name: 'Plan' },
+    { id: 'bypass', name: 'Bypass' },
+  ],
+};
+
+const DEFAULT_CONFIG_OPTIONS = [
+  {
+    type: 'select',
+    id: 'model',
+    name: 'Model',
+    currentValue: 'swe-2-high',
+    options: [
+      { value: 'swe-2-high', name: 'SWE-2' },
+      { value: 'claude-opus-5-5-medium', name: 'Claude Opus 5.5' },
+      { value: 'swe-1-6', name: 'SWE-1.6' },
+    ],
+  },
+  {
+    type: 'select',
+    id: 'thought_level',
+    name: 'Thought Level',
+    currentValue: 'high',
+    options: [
+      { value: 'low', name: 'Low' },
+      { value: 'medium', name: 'Medium' },
+      { value: 'high', name: 'High' },
+      { value: 'xhigh', name: 'XHigh' },
+      { value: 'max', name: 'Max' },
+    ],
+  },
+];
+
+interface ConfigOptionState {
+  type: string;
+  id: string;
+  currentValue: unknown;
+  options: ({ value: string; name: string } | { options: { value: string }[] })[];
+}
+
+function defaultHandlers(scenario: AcpScenario): Record<string, AcpRequestHandler> {
+  const configState = JSON.parse(
+    JSON.stringify(scenario.configOptions ?? DEFAULT_CONFIG_OPTIONS),
+  ) as ConfigOptionState[];
+  return {
+    initialize: () => ({
+      protocolVersion: 1,
+      agentCapabilities: { loadSession: true },
+      authMethods: [{ id: 'devin-browser', name: 'Devin Browser' }],
+      agentInfo: { name: 'affogato', version: '0.0.0-test' },
+    }),
+    'session/new': () => ({
+      sessionId: scenario.sessionId ?? 'keen-otter',
+      modes: scenario.modes ?? DEFAULT_MODES,
+      configOptions: configState,
+    }),
+    'session/load': (_params, api, id) => {
+      if (scenario.loadError) {
+        api.fail(id, scenario.loadError.code, scenario.loadError.message, scenario.loadError.data);
+        return undefined;
+      }
+      return {
+        modes: scenario.modes ?? DEFAULT_MODES,
+        configOptions: configState,
+      };
+    },
+    'session/set_mode': (_params, api, id) => {
+      if (scenario.setModeError) {
+        api.fail(id, scenario.setModeError.code, scenario.setModeError.message);
+        return undefined;
+      }
+      return {};
+    },
+    'session/set_config_option': (params, api, id) => {
+      const option = configState.find((entry) => entry.id === params.configId);
+      const values = option?.options.flatMap((entry) => ('options' in entry ? entry.options : [entry]));
+      if (!option || !values?.some((value) => value.value === params.value)) {
+        api.fail(id, -32602, `Invalid value '${String(params.value)}' for config option '${String(params.configId)}'`);
+        return undefined;
+      }
+      option.currentValue = params.value;
+      return { configOptions: configState };
+    },
+    'session/prompt': (params, api, id) => {
+      const sid = params.sessionId as string;
+      for (const update of scenario.updates ?? [
+        { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'done' } },
+      ]) {
+        api.notify('session/update', { sessionId: sid, update });
+      }
+      if (scenario.promptError) {
+        api.fail(id, scenario.promptError.code, scenario.promptError.message, scenario.promptError.data);
+        return undefined;
+      }
+      return {
+        stopReason: scenario.stopReason ?? 'end_turn',
+        ...(scenario.usage === null ? {} : { usage: scenario.usage ?? DEFAULT_USAGE }),
+      };
+    },
+  };
+}
+
+function createAcpChild(): MockAcpChild {
+  const child = new EventEmitter() as MockAcpChild;
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.kill = vi.fn((signal?: string) => {
+    queueMicrotask(() => {
+      child.emit('close', null, signal ?? 'SIGTERM');
+    });
+    return true;
+  });
+  return child;
+}
+
+function attachAcpServer(
+  child: MockAcpChild,
+  handlers: Record<string, AcpRequestHandler>,
+): void {
+  const pendingServerRequests = new Map<number, (msg: WireMessage) => void>();
+  let nextServerRequestId = 10_000;
+  const write = (msg: Record<string, unknown>): void => {
+    child.stdout.write(`${JSON.stringify(msg)}\n`);
+  };
+  const api: AcpServerApi = {
+    respond: (id, result) => write({ jsonrpc: '2.0', id, result }),
+    fail: (id, code, message, data) =>
+      write({ jsonrpc: '2.0', id, error: { code, message, ...(data === undefined ? {} : { data }) } }),
+    notify: (method, params) => write({ jsonrpc: '2.0', method, params }),
+    sendRequest: (method, params, onResponse) => {
+      const id = nextServerRequestId++;
+      pendingServerRequests.set(id, onResponse);
+      write({ jsonrpc: '2.0', id, method, params });
+      return id;
+    },
+  };
+
+  let buffer = '';
+  child.stdin.on('data', (chunk: Buffer) => {
+    buffer += chunk.toString('utf-8');
+    for (;;) {
+      const newline = buffer.indexOf('\n');
+      if (newline < 0) {
+        break;
+      }
+      const line = buffer.slice(0, newline);
+      buffer = buffer.slice(newline + 1);
+      if (line.trim().length === 0) {
+        continue;
+      }
+      const msg = JSON.parse(line) as WireMessage;
+      if (msg.method === undefined) {
+        if (msg.id !== undefined) {
+          pendingServerRequests.get(msg.id)?.(msg);
+          pendingServerRequests.delete(msg.id);
+        }
+        continue;
+      }
+      if (msg.id === undefined) {
+        continue; // notification
+      }
+      const handler = handlers[msg.method];
+      if (!handler) {
+        api.fail(msg.id, -32601, `method not found: ${msg.method}`);
+        continue;
+      }
+      try {
+        const result = handler(msg.params ?? {}, api, msg.id);
+        if (result !== undefined) {
+          api.respond(msg.id, result);
+        }
+      } catch (error) {
+        api.fail(msg.id, -32603, error instanceof Error ? error.message : String(error));
+      }
+    }
+  });
+}
+
+/** Spawn-time file contents captured before the tmp dir is deleted. */
+const spawnFiles = new Map<string, string>();
+
+function recordConfigArg(call: unknown[]): void {
+  const args = call[1] as string[];
+  const index = args.indexOf('--config');
+  const path = index >= 0 ? args[index + 1] : undefined;
+  if (path === undefined) {
+    return;
+  }
+  try {
+    spawnFiles.set('config', readFileSync(path, 'utf-8'));
+  } catch {
+    // path may not exist in mocked envs
+  }
+}
+
+interface MockAcpServer {
+  requests: WireMessage[];
+  /** The most recently spawned child, for manual close/error simulation. */
+  lastChild: () => MockAcpChild;
+}
+
+function mockAcpServer(scenario: AcpScenario = {}, overrides: Record<string, AcpRequestHandler> = {}): MockAcpServer {
+  const requests: WireMessage[] = [];
+  const children: MockAcpChild[] = [];
+  mockSpawn.mockImplementation((...call: unknown[]) => {
+    recordConfigArg(call);
+    const child = createAcpChild();
+    children.push(child);
+    const handlers = { ...defaultHandlers(scenario), ...overrides };
+    const wrapped: Record<string, AcpRequestHandler> = {};
+    for (const [method, handler] of Object.entries(handlers)) {
+      wrapped[method] = (params, api, id) => {
+        requests.push({ id, method, params });
+        return handler(params, api, id);
+      };
+    }
+    attachAcpServer(child, wrapped);
+    if (scenario.stderr !== undefined) {
+      queueMicrotask(() => child.stderr.write(scenario.stderr!));
+    }
+    return child;
+  });
+  return { requests, lastChild: () => children[children.length - 1]! };
+}
+
+function requestsOf(server: MockAcpServer, method: string): WireMessage[] {
+  return server.requests.filter((request) => request.method === method);
+}
+
+function spawnCall(index: number): [string, string[], { cwd?: string; env?: NodeJS.ProcessEnv; stdio?: unknown; shell?: boolean }] {
+  return mockSpawn.mock.calls[index] as [string, string[], { cwd?: string; env?: NodeJS.ProcessEnv; stdio?: unknown; shell?: boolean }];
+}
+
+function mainSpawnCall(): [string, string[], { cwd?: string; env?: NodeJS.ProcessEnv; stdio?: unknown; shell?: boolean }] {
+  expect(mockSpawn).toHaveBeenCalledTimes(1);
+  return spawnCall(0);
+}
 
 const restoredEnvKeys = [
   'ALL_PROXY',
@@ -78,110 +354,6 @@ function restoreEnv(): void {
   }
 }
 
-function createMockChildProcess(): MockChildProcess {
-  const child = new EventEmitter() as MockChildProcess;
-  child.stdin = new EventEmitter() as EventEmitter & {
-    write: ReturnType<typeof vi.fn>;
-    end: ReturnType<typeof vi.fn>;
-  };
-  child.stdin.write = vi.fn();
-  child.stdin.end = vi.fn();
-  child.stdout = new EventEmitter();
-  child.stderr = new EventEmitter();
-  child.kill = vi.fn(() => true);
-  return child;
-}
-
-/** Capture of spawn-time file contents (tmp files are deleted after the call). */
-const spawnFiles = new Map<string, string>();
-
-function readArgFile(args: string[], flag: string): string | undefined {
-  const index = args.indexOf(flag);
-  if (index < 0) {
-    return undefined;
-  }
-  const path = args[index + 1];
-  if (path === undefined) {
-    return undefined;
-  }
-  try {
-    return readFileSync(path, 'utf-8');
-  } catch {
-    return undefined;
-  }
-}
-
-function recordInvocation(call: unknown[]): void {
-  const args = call[1] as string[];
-  const promptFile = readArgFile(args, '--prompt-file');
-  if (promptFile !== undefined) {
-    spawnFiles.set('prompt', promptFile);
-  }
-  const configFile = readArgFile(args, '--config');
-  if (configFile !== undefined) {
-    spawnFiles.set('config', configFile);
-  }
-}
-
-function writeExport(args: string[], content: string | undefined): void {
-  const index = args.indexOf('--export');
-  const path = index >= 0 ? args[index + 1] : undefined;
-  if (content !== undefined && path !== undefined) {
-    writeFileSync(path, content, 'utf-8');
-  }
-}
-
-function exportWithSession(sessionId: string): string {
-  return JSON.stringify({ schema_version: 'ATIF-v1.7', session_id: sessionId, steps: [] });
-}
-
-function exportWithUsage(sessionId: string, steps: unknown[]): string {
-  return JSON.stringify({ schema_version: 'ATIF-v1.7', session_id: sessionId, steps });
-}
-
-function userStep(stepId: number): Record<string, unknown> {
-  return { step_id: stepId, source: 'user' };
-}
-
-function agentStep(stepId: number, metrics: Record<string, number>): Record<string, unknown> {
-  return { step_id: stepId, source: 'agent', metrics };
-}
-
-function mockSpawnWithScenario(scenario: SpawnScenario): void {
-  mockSpawn.mockImplementation((...call: unknown[]) => {
-    recordInvocation(call);
-    const child = createMockChildProcess();
-    queueMicrotask(() => {
-      if (scenario.stdout) {
-        child.stdout.emit('data', Buffer.from(scenario.stdout, 'utf-8'));
-      }
-      if (scenario.stderr) {
-        child.stderr.emit('data', Buffer.from(scenario.stderr, 'utf-8'));
-      }
-      if (scenario.error) {
-        child.emit('error', Object.assign(new Error(scenario.error.message), scenario.error));
-        return;
-      }
-      writeExport(call[1] as string[], scenario.exportContent);
-      child.emit(
-        'close',
-        scenario.code === undefined ? 0 : scenario.code,
-        scenario.signal === undefined ? null : scenario.signal,
-      );
-    });
-    return child;
-  });
-}
-
-function spawnCall(index: number): [string, string[], { cwd?: string; env?: NodeJS.ProcessEnv; stdio?: unknown; shell?: boolean }] {
-  return mockSpawn.mock.calls[index] as [string, string[], { cwd?: string; env?: NodeJS.ProcessEnv; stdio?: unknown; shell?: boolean }];
-}
-
-function mainSpawnCall(): [string, string[], { cwd?: string; env?: NodeJS.ProcessEnv; stdio?: unknown; shell?: boolean }] {
-  expect(mockSpawn).toHaveBeenCalledTimes(1);
-  return spawnCall(0);
-}
-
 describe('callDevin', () => {
   let xdgConfigHome: string;
   const tmpDirs: string[] = [];
@@ -211,9 +383,9 @@ describe('callDevin', () => {
     }
   });
 
-  it('Given full permission and a session, When called, Then invokes devin print mode with dangerous mode and resume', async () => {
+  it('Given a session, When called, Then spawns devin acp with the merged config and loads the session', async () => {
     const onActivity = vi.fn();
-    mockSpawnWithScenario({ stdout: 'Implementation complete.', code: 0 });
+    const server = mockAcpServer();
 
     const result = await callDevin('coder', 'implement feature', {
       cwd: '/repo',
@@ -223,45 +395,408 @@ describe('callDevin', () => {
     });
 
     expect(result.status).toBe('done');
-    expect(result.content).toBe('Implementation complete.');
+    expect(result.content).toBe('done');
     expect(result.sessionId).toBe('rare-boater');
     expect(onActivity).toHaveBeenCalledOnce();
 
-    expect(mockSpawn).toHaveBeenCalledTimes(1);
-    const [command, args, options] = spawnCall(0);
+    const [command, args, options] = mainSpawnCall();
     expect(command).toBe('devin');
-    expect(args).toContain('-p');
-    expect(args).toContain('--prompt-file');
-    expect(args).toEqual(expect.arrayContaining(['--permission-mode', 'dangerous']));
+    expect(args).toContain('acp');
+    expect(args).not.toContain('-p');
+    expect(args).not.toContain('--prompt-file');
+    expect(args).not.toContain('--export');
+    expect(args).not.toContain('--permission-mode');
     expect(args).toEqual(expect.arrayContaining(['--respect-workspace-trust', 'false']));
-    expect(args).toEqual(expect.arrayContaining(['-r', 'rare-boater']));
-    expect(args).not.toContain('--model');
+    expect(args).toContain('--config');
     expect(options.cwd).toBe('/repo');
     expect(options.stdio).toEqual(['pipe', 'pipe', 'pipe']);
     expect(options.shell).toBeUndefined();
-    expect(spawnFiles.get('prompt')).toBe('implement feature');
+
+    expect(requestsOf(server, 'initialize')).toHaveLength(1);
+    expect(requestsOf(server, 'session/new')).toHaveLength(0);
+    const loads = requestsOf(server, 'session/load');
+    expect(loads).toHaveLength(1);
+    expect(loads[0]?.params).toEqual(
+      expect.objectContaining({ sessionId: 'rare-boater', cwd: '/repo' }),
+    );
+    const prompts = requestsOf(server, 'session/prompt');
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]?.params?.sessionId).toBe('rare-boater');
   });
 
-  it('Given edit permission, When called, Then maps to accept-edits mode and injects allow rules for exec through --config', async () => {
-    mockSpawnWithScenario({ stdout: 'done', code: 0 });
+  it('Given no session, When called, Then session/new returns the session ID', async () => {
+    const server = mockAcpServer({ sessionId: 'keen-otter' });
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo' });
+
+    expect(result.status).toBe('done');
+    expect(result.sessionId).toBe('keen-otter');
+    expect(requestsOf(server, 'session/new')).toHaveLength(1);
+    expect(requestsOf(server, 'session/load')).toHaveLength(0);
+  });
+
+  it('Given a prompt, When called, Then the prompt text is delivered through session/prompt without shell execution', async () => {
+    const server = mockAcpServer();
+
+    await callDevin('coder', 'inspect & whoami | cat', { cwd: '/repo' });
+
+    const [, args, options] = mainSpawnCall();
+    expect(args).not.toContain('inspect & whoami | cat');
+    expect(options.shell).toBeUndefined();
+    const prompt = requestsOf(server, 'session/prompt')[0]?.params;
+    expect(prompt?.prompt).toEqual([{ type: 'text', text: 'inspect & whoami | cat' }]);
+  });
+
+  it('Given system prompt, When called, Then prepends it to the prompt content', async () => {
+    const server = mockAcpServer();
+
+    await callDevin('reviewer', 'custom user prompt', {
+      cwd: '/repo',
+      systemPrompt: 'custom system prompt',
+    });
+
+    const prompt = requestsOf(server, 'session/prompt')[0]?.params;
+    expect(prompt?.prompt).toEqual([
+      { type: 'text', text: 'custom system prompt\n\ncustom user prompt' },
+    ]);
+  });
+
+  it('Given a large prompt, When called, Then it is sent over JSON-RPC instead of argv', async () => {
+    const server = mockAcpServer();
+    const largePrompt = 'x'.repeat(150 * 1024);
+
+    await callDevin('coder', largePrompt, { cwd: '/repo' });
+
+    const [, args] = mainSpawnCall();
+    expect(args).not.toContain(largePrompt);
+    const prompt = requestsOf(server, 'session/prompt')[0]?.params;
+    expect((prompt?.prompt as { text: string }[])[0]?.text).toBe(largePrompt);
+  });
+
+  it('Given a model option, When called, Then passes --model to devin acp', async () => {
+    mockAcpServer();
+
+    await callDevin('coder', 'implement', { cwd: '/repo', model: 'swe-2-max' });
+
+    const [, args] = mainSpawnCall();
+    const modelFlagIndex = args.indexOf('--model');
+    expect(modelFlagIndex).toBeGreaterThanOrEqual(0);
+    expect(args[modelFlagIndex + 1]).toBe('swe-2-max');
+  });
+
+  it('Given a tiered model name on a new session, When the session already resolved it, Then no correction is needed', async () => {
+    const onStream = vi.fn();
+    const resolvedOptions = JSON.parse(JSON.stringify(DEFAULT_CONFIG_OPTIONS)) as { id: string; currentValue: string }[];
+    resolvedOptions.find((option) => option.id === 'thought_level')!.currentValue = 'max';
+    const server = mockAcpServer({ configOptions: resolvedOptions });
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo', model: 'swe-2-max', onStream });
+
+    expect(result.status).toBe('done');
+    expect(requestsOf(server, 'session/set_config_option')).toHaveLength(0);
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'init',
+      data: { model: 'swe-2-high@max', sessionId: 'keen-otter' },
+    });
+  });
+
+  it('Given a tiered model name on a new session, When the session did not apply the level, Then set_config_option corrects it', async () => {
+    const server = mockAcpServer();
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo', model: 'swe-2-max' });
+
+    expect(result.status).toBe('done');
+    const sets = requestsOf(server, 'session/set_config_option');
+    expect(sets).toHaveLength(1);
+    expect(sets[0]?.params).toEqual(
+      expect.objectContaining({ configId: 'thought_level', value: 'max' }),
+    );
+  });
+
+  it('Given an unresolvable model on a new session, When the CLI silently defaulted, Then the call fails fast', async () => {
+    const server = mockAcpServer();
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo', model: 'garbage-name' });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toContain("Devin model 'garbage-name' is not available");
+    expect(requestsOf(server, 'session/prompt')).toHaveLength(0);
+  });
+
+  it('Given a fuzzy alias on a new session, When the CLI resolved it to a matching model, Then the call proceeds', async () => {
+    const resolvedOptions = JSON.parse(JSON.stringify(DEFAULT_CONFIG_OPTIONS)) as { id: string; currentValue: string }[];
+    resolvedOptions.find((option) => option.id === 'model')!.currentValue = 'claude-opus-5-5-medium';
+    resolvedOptions.find((option) => option.id === 'thought_level')!.currentValue = 'medium';
+    mockAcpServer({ configOptions: resolvedOptions });
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo', model: 'opus' });
+
+    expect(result.status).toBe('done');
+  });
+
+  it('Given a model override on a resumed session, When the option value is selectable, Then set_config_option applies it', async () => {
+    const server = mockAcpServer();
+
+    await callDevin('coder', 'implement', {
+      cwd: '/repo',
+      sessionId: 'rare-boater',
+      model: 'swe-1-6',
+    });
+
+    const sets = requestsOf(server, 'session/set_config_option');
+    expect(sets).toHaveLength(1);
+    expect(sets[0]?.params).toEqual(
+      expect.objectContaining({ sessionId: 'rare-boater', configId: 'model', value: 'swe-1-6' }),
+    );
+  });
+
+  it('Given a tiered model name on a resumed session, When loaded, Then model and thought level are applied', async () => {
+    const server = mockAcpServer();
+
+    const result = await callDevin('coder', 'implement', {
+      cwd: '/repo',
+      sessionId: 'rare-boater',
+      model: 'claude-opus-5-5-medium',
+    });
+
+    expect(result.status).toBe('done');
+    const sets = requestsOf(server, 'session/set_config_option');
+    expect(sets.map((request) => request.params)).toEqual([
+      expect.objectContaining({ sessionId: 'rare-boater', configId: 'model', value: 'claude-opus-5-5-medium' }),
+      expect.objectContaining({ sessionId: 'rare-boater', configId: 'thought_level', value: 'medium' }),
+    ]);
+  });
+
+  it('Given a level-only model difference on a resumed session, When loaded, Then only the thought level is applied', async () => {
+    const server = mockAcpServer();
+
+    const result = await callDevin('coder', 'implement', {
+      cwd: '/repo',
+      sessionId: 'rare-boater',
+      model: 'swe-2-max',
+    });
+
+    expect(result.status).toBe('done');
+    const sets = requestsOf(server, 'session/set_config_option');
+    expect(sets).toHaveLength(1);
+    expect(sets[0]?.params).toEqual(
+      expect.objectContaining({ sessionId: 'rare-boater', configId: 'thought_level', value: 'max' }),
+    );
+  });
+
+  it('Given an unresolvable model on a resumed session, When loaded, Then the call fails fast before prompting', async () => {
+    const server = mockAcpServer();
+
+    const result = await callDevin('coder', 'implement', {
+      cwd: '/repo',
+      sessionId: 'rare-boater',
+      model: 'garbage-name',
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toContain("Devin model 'garbage-name' is not available");
+    expect(requestsOf(server, 'session/prompt')).toHaveLength(0);
+  });
+
+  it('Given custom CLI path, When called, Then uses it as the executable', async () => {
+    mockAcpServer();
+
+    await callDevin('coder', 'implement', { cwd: '/repo', devinCliPath: '/custom/bin/devin' });
+
+    const [command] = mainSpawnCall();
+    expect(command).toBe('/custom/bin/devin');
+  });
+
+  it('Given env vars outside the allowlist, When called, Then only the Devin child env allowlist is passed', async () => {
+    process.env.GITHUB_TOKEN = 'github-token';
+    process.env.SERVICE_SECRET = 'service-secret';
+    process.env.DEVIN_MODEL = 'swe-2-high';
+    process.env.WINDSURF_API_KEY = 'windsurf-key';
+    process.env.XDG_DATA_HOME = '/xdg/data';
+    mockAcpServer();
+
+    await callDevin('coder', 'implement', { cwd: '/repo' });
+
+    const [, , options] = mainSpawnCall();
+    expect(options.env).not.toBe(process.env);
+    expect(options.env?.GITHUB_TOKEN).toBeUndefined();
+    expect(options.env?.SERVICE_SECRET).toBeUndefined();
+    expect(options.env?.DEVIN_MODEL).toBe('swe-2-high');
+    expect(options.env?.WINDSURF_API_KEY).toBe('windsurf-key');
+    expect(options.env?.XDG_DATA_HOME).toBe('/xdg/data');
+  });
+
+  it('Given streaming updates, When called, Then text deltas, thinking and tool events stream before the result', async () => {
+    const onStream = vi.fn();
+    mockAcpServer({
+      updates: [
+        { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'partial ' } },
+        { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'hmm' } },
+        {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'exec:0',
+          title: 'Ran npm',
+          kind: 'execute',
+          status: 'in_progress',
+          rawInput: { command: 'npm test' },
+          _meta: { 'cognition.ai/inferenceToolName': 'exec' },
+        },
+        {
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'exec:0',
+          status: 'in_progress',
+          content: [{ type: 'content', content: { type: 'text', text: 'running...' } }],
+        },
+        {
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'exec:0',
+          status: 'completed',
+          content: [{ type: 'content', content: { type: 'text', text: 'tests pass' } }],
+        },
+        { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'answer' } },
+      ],
+    });
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo', onStream });
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('partial answer');
+    const types = onStream.mock.calls.map((call) => (call[0] as { type: string }).type);
+    expect(types).toEqual(['init', 'text', 'thinking', 'tool_use', 'tool_output', 'tool_result', 'text', 'result']);
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'tool_use',
+      data: { id: 'exec:0', tool: 'exec', input: { command: 'npm test' } },
+    });
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'tool_result',
+      data: { id: 'exec:0', content: 'tests pass', isError: false },
+    });
+    const resultCall = onStream.mock.calls.at(-1)?.[0] as { data: { result: string; sessionId: string; success: boolean } };
+    expect(resultCall.data).toEqual({ result: 'partial answer', sessionId: 'keen-otter', success: true });
+  });
+
+  it('Given updates replayed during session/load, When called, Then history is not re-emitted', async () => {
+    const onStream = vi.fn();
+    mockAcpServer({}, {
+      'session/load': (_params, api, id) => {
+        api.notify('session/update', {
+          sessionId: 'rare-boater',
+          update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'old message' } },
+        });
+        api.respond(id, { modes: DEFAULT_MODES, configOptions: DEFAULT_CONFIG_OPTIONS });
+        return undefined;
+      },
+    });
+
+    const result = await callDevin('coder', 'implement', {
+      cwd: '/repo',
+      sessionId: 'rare-boater',
+      onStream,
+    });
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('done');
+    const texts = onStream.mock.calls
+      .map((call) => call[0] as { type: string; data?: { text?: string } })
+      .filter((event) => event.type === 'text')
+      .map((event) => event.data?.text);
+    expect(texts).toEqual(['done']);
+  });
+
+  it('Given full permission, When a permission request arrives, Then allow_once is selected', async () => {
+    let answered: WireMessage | undefined;
+    mockAcpServer({}, {
+      'session/prompt': (params, api, id) => {
+        api.sendRequest('session/request_permission', {
+          sessionId: params.sessionId,
+          toolCall: { toolCallId: 'exec:0', title: 'Ran rm', kind: 'execute' },
+          options: [
+            { optionId: 'allow_once', name: 'Allow once', kind: 'allow_once' },
+            { optionId: 'allow_always', name: 'Always allow', kind: 'allow_always' },
+            { optionId: 'reject_once', name: 'Reject', kind: 'reject_once' },
+          ],
+        }, (msg) => {
+          answered = msg;
+          api.respond(id, { stopReason: 'end_turn', usage: DEFAULT_USAGE });
+        });
+        api.notify('session/update', {
+          sessionId: params.sessionId,
+          update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'done' } },
+        });
+        return undefined;
+      },
+    });
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo', permissionMode: 'full' });
+
+    expect(result.status).toBe('done');
+    expect(answered?.result).toEqual({
+      outcome: { outcome: 'selected', optionId: 'allow_once' },
+    });
+  });
+
+  it('Given edit permission, When a permission request arrives, Then reject_once is selected', async () => {
+    let answered: WireMessage | undefined;
+    mockAcpServer({}, {
+      'session/prompt': (params, api, id) => {
+        api.sendRequest('session/request_permission', {
+          sessionId: params.sessionId,
+          toolCall: { toolCallId: 'webfetch:0', title: 'Fetch', kind: 'fetch' },
+          options: [
+            { optionId: 'allow_once', name: 'Allow once', kind: 'allow_once' },
+            { optionId: 'reject_once', name: 'Reject', kind: 'reject_once' },
+          ],
+        }, (msg) => {
+          answered = msg;
+          api.respond(id, { stopReason: 'end_turn', usage: DEFAULT_USAGE });
+        });
+        api.notify('session/update', {
+          sessionId: params.sessionId,
+          update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'done' } },
+        });
+        return undefined;
+      },
+    });
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo', permissionMode: 'edit' });
+
+    expect(result.status).toBe('done');
+    expect(answered?.result).toEqual({
+      outcome: { outcome: 'selected', optionId: 'reject_once' },
+    });
+  });
+
+  it.each([
+    ['readonly', 'ask'],
+    ['edit', 'accept-edits'],
+    ['full', 'bypass'],
+    [undefined, 'accept-edits'],
+  ] as const)('Given %s permission, When called, Then session mode %s is requested', async (permissionMode, expectedMode) => {
+    const server = mockAcpServer();
+
+    await callDevin('coder', 'implement', { cwd: '/repo', permissionMode });
+
+    const modes = requestsOf(server, 'session/set_mode');
+    expect(modes).toHaveLength(1);
+    expect(modes[0]?.params).toEqual(expect.objectContaining({ modeId: expectedMode }));
+  });
+
+  it('Given edit permission, When called, Then injects allow rules for exec through --config', async () => {
+    mockAcpServer();
 
     await callDevin('coder', 'implement', { cwd: '/repo', permissionMode: 'edit' });
 
     const [, args] = mainSpawnCall();
-    expect(args).toEqual(expect.arrayContaining(['--permission-mode', 'accept-edits']));
     expect(args).toContain('--config');
     const config = generatedConfig() as { permissions?: { allow?: string[] } };
     expect(config.permissions?.allow).toEqual(expect.arrayContaining(['exec', 'edit', 'Write(**)']));
   });
 
-  it('Given readonly permission, When called, Then maps to auto mode and injects deny rules through --config', async () => {
-    mockSpawnWithScenario({ stdout: 'done', code: 0 });
+  it('Given readonly permission, When called, Then injects deny rules through --config', async () => {
+    mockAcpServer();
 
     await callDevin('coder', 'inspect', { cwd: '/repo', permissionMode: 'readonly' });
 
-    const [, args] = mainSpawnCall();
-    expect(args).toEqual(expect.arrayContaining(['--permission-mode', 'auto']));
-    expect(args).toContain('--config');
     const config = generatedConfig() as { permissions?: { deny?: string[] }; shell?: { setup_complete?: boolean } };
     expect(config.permissions?.deny).toEqual(expect.arrayContaining(['exec', 'edit', 'Write(**)', 'mcp__*']));
     expect(config.permissions?.deny).not.toContain('Fetch(**)');
@@ -269,7 +804,7 @@ describe('callDevin', () => {
   });
 
   it('Given strict-readonly isolation, When called, Then deny rules also block fetch access', async () => {
-    mockSpawnWithScenario({ stdout: 'done', code: 0 });
+    mockAcpServer();
 
     await callDevin('verifier', 'inspect', {
       cwd: '/repo',
@@ -281,25 +816,22 @@ describe('callDevin', () => {
     expect(config.permissions?.deny).toContain('Fetch(**)');
   });
 
-  it('Given no permission mode, When called, Then defaults to auto mode and still passes the merged user config', async () => {
+  it('Given no permission mode, When called, Then the merged user config gains write deny rules', async () => {
     writeUserConfig(JSON.stringify({
       agent: { model: 'claude-opus-5-5-medium' },
       permissions: { allow: ['Exec(git)'], deny: ['Exec(sudo)'] },
     }));
-    mockSpawnWithScenario({ stdout: 'done', code: 0 });
+    mockAcpServer();
 
     await callDevin('coder', 'inspect', { cwd: '/repo' });
 
-    const [, args] = mainSpawnCall();
-    expect(args).toEqual(expect.arrayContaining(['--permission-mode', 'auto']));
-    expect(args).toContain('--config');
     const config = generatedConfig() as {
       agent?: { model?: string };
       permissions?: { allow?: string[]; deny?: string[] };
     };
     expect(config.agent?.model).toBe('claude-opus-5-5-medium');
     expect(config.permissions?.allow).toEqual(['Exec(git)']);
-    expect(config.permissions?.deny).toEqual(['Exec(sudo)']);
+    expect(config.permissions?.deny).toEqual(['Exec(sudo)', 'edit', 'Write(**)']);
   });
 
   it('Given full permission, When called, Then the generated config keeps user settings without added rules', async () => {
@@ -308,12 +840,10 @@ describe('callDevin', () => {
       permissions: { allow: ['Exec(git)'], ask: ['Write(.env*)'] },
       theme_mode: 'dark',
     }));
-    mockSpawnWithScenario({ stdout: 'done', code: 0 });
+    mockAcpServer();
 
     await callDevin('coder', 'implement', { cwd: '/repo', permissionMode: 'full' });
 
-    const [, args] = mainSpawnCall();
-    expect(args).toEqual(expect.arrayContaining(['--permission-mode', 'dangerous']));
     const config = generatedConfig() as {
       agent?: { model?: string };
       theme_mode?: string;
@@ -330,27 +860,13 @@ describe('callDevin', () => {
     writeUserConfig(JSON.stringify({
       permissions: { allow: ['Exec(git)'], deny: ['Fetch(domain:evil.example)'] },
     }));
-    mockSpawnWithScenario({ stdout: 'done', code: 0 });
+    mockAcpServer();
 
     await callDevin('coder', 'implement', { cwd: '/repo', permissionMode: 'edit' });
 
     const config = generatedConfig() as { permissions?: { allow?: string[]; deny?: string[] } };
     expect(config.permissions?.allow).toEqual(['Exec(git)', 'exec', 'edit', 'Write(**)']);
     expect(config.permissions?.deny).toEqual(['Fetch(domain:evil.example)']);
-  });
-
-  it('Given a user config with its own deny rules, When readonly mode runs, Then TAKT deny rules are appended after user rules', async () => {
-    writeUserConfig(JSON.stringify({
-      permissions: { deny: ['Exec(sudo)'] },
-    }));
-    mockSpawnWithScenario({ stdout: 'done', code: 0 });
-
-    await callDevin('coder', 'inspect', { cwd: '/repo', permissionMode: 'readonly' });
-
-    const config = generatedConfig() as { permissions?: { deny?: string[] } };
-    expect(config.permissions?.deny).toEqual([
-      'Exec(sudo)', 'exec', 'edit', 'Write(**)', 'mcp__*',
-    ]);
   });
 
   it('Given a user config with JSONC comments and trailing commas, When called, Then it is still merged', async () => {
@@ -361,7 +877,7 @@ describe('callDevin', () => {
         "allow": ["Fetch(https://api.example.com/*)"], // URL keeps its //
       },
     }`);
-    mockSpawnWithScenario({ stdout: 'done', code: 0 });
+    mockAcpServer();
 
     await callDevin('coder', 'inspect', { cwd: '/repo' });
 
@@ -375,7 +891,7 @@ describe('callDevin', () => {
 
   it('Given an unparseable user config, When called, Then the generated config falls back to defaults', async () => {
     writeUserConfig('not json at all {{{');
-    mockSpawnWithScenario({ stdout: 'done', code: 0 });
+    mockAcpServer();
 
     await callDevin('coder', 'inspect', { cwd: '/repo', permissionMode: 'readonly' });
 
@@ -389,100 +905,14 @@ describe('callDevin', () => {
     expect(config.permissions?.deny).toEqual(expect.arrayContaining(['exec', 'edit', 'Write(**)', 'mcp__*']));
   });
 
-  it('Given system prompt, When called, Then prepends it to the prompt file', async () => {
-    mockSpawnWithScenario({ stdout: 'reviewed', code: 0 });
-
-    await callDevin('reviewer', 'custom user prompt', {
-      cwd: '/repo',
-      systemPrompt: 'custom system prompt',
-    });
-
-    expect(spawnFiles.get('prompt')).toBe('custom system prompt\n\ncustom user prompt');
-  });
-
-  it('Given a model option, When called, Then adds --model with the given value', async () => {
-    mockSpawnWithScenario({ stdout: 'done', code: 0 });
-
-    await callDevin('coder', 'implement', { cwd: '/repo', model: 'swe-2-max' });
-
-    const [, args] = mainSpawnCall();
-    const modelFlagIndex = args.indexOf('--model');
-    expect(modelFlagIndex).toBeGreaterThanOrEqual(0);
-    expect(args[modelFlagIndex + 1]).toBe('swe-2-max');
-  });
-
-  it('Given custom CLI path, When called, Then uses it as the executable', async () => {
-    mockSpawnWithScenario({ stdout: 'done', code: 0 });
-
-    await callDevin('coder', 'implement', { cwd: '/repo', devinCliPath: '/custom/bin/devin' });
-
-    const [command] = mainSpawnCall();
-    expect(command).toBe('/custom/bin/devin');
-  });
-
-  it('Given env vars outside the allowlist, When called, Then only the Devin child env allowlist is passed', async () => {
-    process.env.GITHUB_TOKEN = 'github-token';
-    process.env.SERVICE_SECRET = 'service-secret';
-    process.env.DEVIN_MODEL = 'swe-2-high';
-    process.env.WINDSURF_API_KEY = 'windsurf-key';
-    process.env.XDG_DATA_HOME = '/xdg/data';
-    mockSpawnWithScenario({ stdout: 'done', code: 0 });
-
-    await callDevin('coder', 'implement', { cwd: '/repo' });
-
-    const [, , options] = mainSpawnCall();
-    expect(options.env).not.toBe(process.env);
-    expect(options.env?.GITHUB_TOKEN).toBeUndefined();
-    expect(options.env?.SERVICE_SECRET).toBeUndefined();
-    expect(options.env?.DEVIN_MODEL).toBe('swe-2-high');
-    expect(options.env?.WINDSURF_API_KEY).toBe('windsurf-key');
-    expect(options.env?.XDG_DATA_HOME).toBe('/xdg/data');
-  });
-
-  it('Given a prompt with shell metacharacters, When called, Then delivers it through the prompt file without shell execution', async () => {
-    mockSpawnWithScenario({ stdout: 'done', code: 0 });
-
-    await callDevin('coder', 'inspect & whoami | cat', { cwd: '/repo' });
-
-    const [, args, options] = mainSpawnCall();
-    expect(args).not.toContain('inspect & whoami | cat');
-    expect(options.shell).toBeUndefined();
-    expect(spawnFiles.get('prompt')).toBe('inspect & whoami | cat');
-  });
-
-  it('Given a prompt larger than the single-argument limit, When called, Then it is written to the prompt file instead of argv', async () => {
-    mockSpawnWithScenario({ stdout: 'done', code: 0 });
-
-    const largePrompt = 'x'.repeat(150 * 1024);
-    await callDevin('coder', largePrompt, { cwd: '/repo' });
-
-    const [, args] = mainSpawnCall();
-    expect(args).not.toContain(largePrompt);
-    expect(spawnFiles.get('prompt')).toBe(largePrompt);
-  });
-
-  it('Given no session, When called, Then resolves the new session ID from the --export transcript in a single spawn', async () => {
-    mockSpawnWithScenario({ stdout: 'first turn done', code: 0, exportContent: exportWithSession('keen-otter') });
-
-    const result = await callDevin('coder', 'implement', { cwd: '/repo' });
-
-    expect(result.status).toBe('done');
-    expect(result.sessionId).toBe('keen-otter');
-    const [, args] = mainSpawnCall();
-    expect(args).toContain('--export');
-  });
-
-  it('Given parallel calls in the same directory, When each finishes, Then each resolves only its own exported session', async () => {
+  it('Given parallel calls in the same directory, When each finishes, Then each resolves only its own session', async () => {
     let next = 0;
     const ids = ['session-a', 'session-b'];
     mockSpawn.mockImplementation((...call: unknown[]) => {
-      const child = createMockChildProcess();
+      recordConfigArg(call);
+      const child = createAcpChild();
       const id = ids[next++] ?? 'unexpected';
-      queueMicrotask(() => {
-        child.stdout.emit('data', Buffer.from(`done ${id}`, 'utf-8'));
-        writeExport(call[1] as string[], exportWithSession(id));
-        child.emit('close', 0, null);
-      });
+      attachAcpServer(child, defaultHandlers({ sessionId: id }));
       return child;
     });
 
@@ -491,47 +921,10 @@ describe('callDevin', () => {
       callDevin('coder', 'task b', { cwd: '/repo' }),
     ]);
 
-    expect(a.content).toBe('done session-a');
+    expect(a.content).toBe('done');
     expect(a.sessionId).toBe('session-a');
-    expect(b.content).toBe('done session-b');
+    expect(b.content).toBe('done');
     expect(b.sessionId).toBe('session-b');
-  });
-
-  it('Given a session, When called, Then keeps the given session ID', async () => {
-    mockSpawnWithScenario({ stdout: 'done', code: 0, exportContent: exportWithSession('rare-boater') });
-
-    const result = await callDevin('coder', 'implement', { cwd: '/repo', sessionId: 'rare-boater' });
-
-    expect(result.sessionId).toBe('rare-boater');
-    const [, args] = mainSpawnCall();
-    expect(args).toEqual(expect.arrayContaining(['-r', 'rare-boater']));
-  });
-
-  it('Given no export file was written, When called, Then still succeeds without a session ID', async () => {
-    mockSpawnWithScenario({ stdout: 'first turn done', code: 0 });
-
-    const result = await callDevin('coder', 'implement', { cwd: '/repo' });
-
-    expect(result.status).toBe('done');
-    expect(result.sessionId).toBeUndefined();
-  });
-
-  it('Given a malformed export, When called, Then still succeeds without a session ID', async () => {
-    mockSpawnWithScenario({ stdout: 'first turn done', code: 0, exportContent: 'not json' });
-
-    const result = await callDevin('coder', 'implement', { cwd: '/repo' });
-
-    expect(result.status).toBe('done');
-    expect(result.sessionId).toBeUndefined();
-  });
-
-  it('Given an export with an unsafe session ID, When called, Then rejects it', async () => {
-    mockSpawnWithScenario({ stdout: 'first turn done', code: 0, exportContent: exportWithSession('bad;rm -rf') });
-
-    const result = await callDevin('coder', 'implement', { cwd: '/repo' });
-
-    expect(result.status).toBe('done');
-    expect(result.sessionId).toBeUndefined();
   });
 
   it('Given an invalid session ID, When called, Then returns an error without spawning', async () => {
@@ -545,8 +938,19 @@ describe('callDevin', () => {
     expect(mockSpawn).not.toHaveBeenCalled();
   });
 
-  it('Given empty stdout, When called, Then returns an error response', async () => {
-    mockSpawnWithScenario({ stdout: '', code: 0 });
+  it('Given a session/load failure, When called, Then the JSON-RPC error surfaces', async () => {
+    mockAcpServer({
+      loadError: { code: -32016, message: 'Session not found', data: { 'cognition.ai/errorKind': 'session_not_found' } },
+    });
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo', sessionId: 'gone-session' });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('Session not found');
+  });
+
+  it('Given empty assistant output, When called, Then returns an error response', async () => {
+    mockAcpServer({ updates: [] });
 
     const result = await callDevin('coder', 'implement', { cwd: '/repo' });
 
@@ -554,8 +958,23 @@ describe('callDevin', () => {
     expect(result.error).toBe('devin returned empty output');
   });
 
-  it('Given non-zero exit, When called, Then returns an error with stderr detail', async () => {
-    mockSpawnWithScenario({ stdout: '', stderr: 'something exploded', code: 2 });
+  it('Given the process exits mid-turn, When called, Then returns an error with stderr detail', async () => {
+    mockSpawn.mockImplementation((...call: unknown[]) => {
+      recordConfigArg(call);
+      const child = createAcpChild();
+      attachAcpServer(child, {
+        initialize: () => ({ protocolVersion: 1, agentCapabilities: {}, agentInfo: { name: 'x', version: '0' } }),
+        'session/new': () => ({ sessionId: 'keen-otter', modes: DEFAULT_MODES, configOptions: [] }),
+        'session/prompt': (_params, _api, _id) => {
+          queueMicrotask(() => {
+            child.stderr.write('something exploded');
+            child.emit('close', 2, null);
+          });
+          return undefined;
+        },
+      });
+      return child;
+    });
 
     const result = await callDevin('coder', 'implement', { cwd: '/repo' });
 
@@ -565,8 +984,12 @@ describe('callDevin', () => {
   });
 
   it('Given ENOENT, When called, Then reports the missing devin binary', async () => {
-    mockSpawnWithScenario({
-      error: { message: 'spawn devin ENOENT', code: 'ENOENT' },
+    mockSpawn.mockImplementation(() => {
+      const child = createAcpChild();
+      queueMicrotask(() => {
+        child.emit('error', Object.assign(new Error('spawn devin ENOENT'), { code: 'ENOENT' }));
+      });
+      return child;
     });
 
     const result = await callDevin('coder', 'implement', { cwd: '/repo' });
@@ -576,7 +999,9 @@ describe('callDevin', () => {
   });
 
   it('Given an authentication failure, When called, Then reports the login requirement', async () => {
-    mockSpawnWithScenario({ stderr: 'Error: not logged in', code: 1 });
+    mockAcpServer({
+      promptError: { code: -32000, message: 'authentication required: not logged in' },
+    });
 
     const result = await callDevin('coder', 'implement', { cwd: '/repo' });
 
@@ -584,13 +1009,23 @@ describe('callDevin', () => {
     expect(result.error).toContain('devin auth login');
   });
 
-  it('Given an abort signal, When called, Then returns the aborted error', async () => {
+  it('Given an abort signal, When called, Then cancels the session and returns the aborted error', async () => {
     const abortController = new AbortController();
+    let killSignal: string | undefined;
     mockSpawn.mockImplementation(() => {
-      const child = createMockChildProcess();
-      queueMicrotask(() => {
-        abortController.abort();
-        child.emit('close', null, 'SIGTERM');
+      const child = createAcpChild();
+      child.kill = vi.fn((signal?: string) => {
+        killSignal = signal;
+        queueMicrotask(() => child.emit('close', null, signal ?? 'SIGTERM'));
+        return true;
+      });
+      attachAcpServer(child, {
+        initialize: () => ({ protocolVersion: 1, agentCapabilities: {}, agentInfo: { name: 'x', version: '0' } }),
+        'session/new': (_params, api, id) => {
+          api.respond(id, { sessionId: 'keen-otter', modes: DEFAULT_MODES, configOptions: [] });
+          queueMicrotask(() => abortController.abort());
+          return undefined;
+        },
       });
       return child;
     });
@@ -602,45 +1037,40 @@ describe('callDevin', () => {
 
     expect(result.status).toBe('error');
     expect(result.error).toBe('Devin execution aborted');
+    expect(killSignal).toBe('SIGTERM');
   });
 
-  it('Given a rate limit response in stdout, When called, Then returns a rate_limited response', async () => {
-    mockSpawnWithScenario({ stdout: 'too many requests', code: 0 });
+  it('Given a rate limit response, When called, Then returns a rate_limited response', async () => {
+    mockAcpServer({
+      updates: [
+        { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'too many requests' } },
+      ],
+    });
 
     const result = await callDevin('coder', 'implement', { cwd: '/repo' });
 
     expect(result.status).toBe('rate_limited');
   });
 
-  it('Given a rate limit failure in stderr, When called, Then returns a rate_limited response', async () => {
-    mockSpawnWithScenario({ stderr: 'HTTP status 429: rate limit exceeded', code: 1 });
+  it('Given a rate limit error from the agent, When called, Then returns a rate_limited response', async () => {
+    mockAcpServer({
+      promptError: { code: -32000, message: 'HTTP status 429: rate limit exceeded' },
+    });
 
     const result = await callDevin('coder', 'implement', { cwd: '/repo' });
 
     expect(result.status).toBe('rate_limited');
   });
 
-  it('Given stream callback, When called, Then emits text and result events', async () => {
-    const onStream = vi.fn();
-    mockSpawnWithScenario({ stdout: 'streamed answer', code: 0 });
-
-    await callDevin('coder', 'implement', { cwd: '/repo', sessionId: 's-1', onStream });
-
-    const eventTypes = onStream.mock.calls.map((call) => (call[0] as { type: string }).type);
-    expect(eventTypes).toEqual(['text', 'result']);
-    expect(onStream).toHaveBeenCalledWith({ type: 'text', data: { text: 'streamed answer' } });
-  });
-
-  it('Given an export with agent metrics, When called, Then reports provider token usage for this turn', async () => {
-    mockSpawnWithScenario({
-      stdout: 'done',
-      code: 0,
-      exportContent: exportWithUsage('keen-otter', [
-        { step_id: 1, source: 'system' },
-        userStep(2),
-        agentStep(3, { prompt_tokens: 100, completion_tokens: 10, cached_tokens: 40 }),
-        agentStep(4, { prompt_tokens: 60, completion_tokens: 5, cached_tokens: 12 }),
-      ]),
+  it('Given a prompt response with usage, When called, Then reports provider token usage for this turn', async () => {
+    mockAcpServer({
+      usage: {
+        totalTokens: 175,
+        inputTokens: 160,
+        outputTokens: 15,
+        cachedReadTokens: 40,
+        cachedWriteTokens: 12,
+      },
     });
 
     const result = await callDevin('coder', 'implement', { cwd: '/repo' });
@@ -651,42 +1081,15 @@ describe('callDevin', () => {
       outputTokens: 15,
       totalTokens: 175,
       cachedInputTokens: 52,
+      cacheReadInputTokens: 40,
+      cacheCreationInputTokens: 12,
       usageMissing: false,
     });
   });
 
-  it('Given a resumed-session export, When called, Then only steps after the last user step count toward usage', async () => {
-    mockSpawnWithScenario({
-      stdout: 'done',
-      code: 0,
-      exportContent: exportWithUsage('rare-boater', [
-        userStep(1),
-        agentStep(2, { prompt_tokens: 500, completion_tokens: 50, cached_tokens: 100 }),
-        { step_id: 3, source: 'system' },
-        userStep(4),
-        agentStep(5, { prompt_tokens: 30, completion_tokens: 3, cached_tokens: 7 }),
-      ]),
-    });
-
-    const result = await callDevin('coder', 'implement', { cwd: '/repo', sessionId: 'rare-boater' });
-
-    expect(result.providerUsage).toEqual({
-      inputTokens: 30,
-      outputTokens: 3,
-      totalTokens: 33,
-      cachedInputTokens: 7,
-      usageMissing: false,
-    });
-  });
-
-  it('Given an agent step without cached tokens, When called, Then cachedInputTokens is omitted', async () => {
-    mockSpawnWithScenario({
-      stdout: 'done',
-      code: 0,
-      exportContent: exportWithUsage('keen-otter', [
-        userStep(1),
-        agentStep(2, { prompt_tokens: 10, completion_tokens: 2 }),
-      ]),
+  it('Given a prompt response without cached tokens, When called, Then cached fields are omitted', async () => {
+    mockAcpServer({
+      usage: { totalTokens: 12, inputTokens: 10, outputTokens: 2 },
     });
 
     const result = await callDevin('coder', 'implement', { cwd: '/repo' });
@@ -699,25 +1102,17 @@ describe('callDevin', () => {
     });
   });
 
-  it('Given an export without agent metrics, When called, Then providerUsage is marked missing', async () => {
-    mockSpawnWithScenario({ stdout: 'done', code: 0, exportContent: exportWithSession('keen-otter') });
+  it('Given a prompt response without usage, When called, Then providerUsage is marked missing', async () => {
+    mockAcpServer({ usage: null });
 
     const result = await callDevin('coder', 'implement', { cwd: '/repo' });
 
     expect(result.status).toBe('done');
-    expect(result.providerUsage).toEqual({ usageMissing: true, reason: 'usage_tokens_missing' });
-  });
-
-  it('Given a malformed export, When called, Then providerUsage is marked missing', async () => {
-    mockSpawnWithScenario({ stdout: 'done', code: 0, exportContent: 'not json' });
-
-    const result = await callDevin('coder', 'implement', { cwd: '/repo' });
-
     expect(result.providerUsage).toEqual({ usageMissing: true, reason: 'usage_not_available' });
   });
 
-  it('Given a non-zero exit, When called, Then providerUsage is marked missing', async () => {
-    mockSpawnWithScenario({ stdout: '', stderr: 'boom', code: 2 });
+  it('Given a process error, When called, Then providerUsage is marked missing', async () => {
+    mockAcpServer({ promptError: { code: -32603, message: 'boom' } });
 
     const result = await callDevin('coder', 'implement', { cwd: '/repo' });
 

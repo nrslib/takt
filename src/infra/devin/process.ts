@@ -1,3 +1,4 @@
+import type { ChildProcess } from 'node:child_process';
 import { crossSpawn, guardChildProcessStreams } from '../../shared/utils/index.js';
 import { pickNestedObservabilityEnv } from '../../shared/telemetry/index.js';
 import type { DevinCallOptions } from './types.js';
@@ -39,17 +40,29 @@ const DEVIN_ENV_ALLOWLIST = [
   'WINDSURF_API_KEY',
 ];
 
-export type DevinExecResult = {
-  stdout: string;
-  stderr: string;
-};
-
 export type DevinExecError = Error & {
   code?: string | number;
   stdout?: string;
   stderr?: string;
   signal?: NodeJS.Signals | null;
 };
+
+export interface DevinProcessExit {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+}
+
+export interface DevinAcpProcess {
+  readonly child: ChildProcess;
+  /**
+   * Settles when the child exits. Resolves with the exit info on `close`;
+   * rejects when spawning the process or one of its stdio streams fails.
+   */
+  readonly exited: Promise<DevinProcessExit>;
+  stderrText(): string;
+  stderrOverflowed(): boolean;
+  terminate(): void;
+}
 
 function buildEnv(
   childProcessEnv: Readonly<Record<string, string>> | undefined,
@@ -65,7 +78,7 @@ function buildEnv(
   return env;
 }
 
-function createExecError(
+export function createExecError(
   message: string,
   params: {
     code?: string | number;
@@ -86,7 +99,7 @@ function createExecError(
   return error;
 }
 
-function buildCloseErrorMessage(code: number | null, signal: NodeJS.Signals | null): string {
+export function buildCloseErrorMessage(code: number | null, signal: NodeJS.Signals | null): string {
   if (signal !== null) {
     return `devin terminated by signal ${signal}`;
   }
@@ -96,177 +109,88 @@ function buildCloseErrorMessage(code: number | null, signal: NodeJS.Signals | nu
   return 'devin closed without exit code or signal';
 }
 
-export function execDevin(
-  args: string[],
-  options: DevinCallOptions,
-  stdinInput?: string,
-): Promise<DevinExecResult> {
-  return new Promise<DevinExecResult>((resolve, reject) => {
-    const child = crossSpawn(options.devinCliPath ?? DEVIN_COMMAND, args, {
-      cwd: options.cwd,
-      env: buildEnv(options.childProcessEnv),
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
+// `devin acp` keeps stdout for JSON-RPC protocol frames and stderr for
+// diagnostics. Stderr is still collected with the same bound as print mode so
+// a chatty process cannot exhaust memory; stdout needs no byte bound here
+// because the SDK consumes it incrementally and rejects oversized frames.
+export function spawnDevinAcp(args: string[], options: DevinCallOptions): DevinAcpProcess {
+  const child = crossSpawn(options.devinCliPath ?? DEVIN_COMMAND, args, {
+    cwd: options.cwd,
+    env: buildEnv(options.childProcessEnv),
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
 
-    let stdout = '';
-    let stderr = '';
-    let stdoutBytes = 0;
-    let stderrBytes = 0;
-    let settled = false;
-    let terminationTimer: ReturnType<typeof setTimeout> | undefined;
-    let childClosed = false;
+  let stderr = '';
+  let stderrBytes = 0;
+  let stderrOverflowed = false;
+  let childClosed = false;
+  let terminationTimer: ReturnType<typeof setTimeout> | undefined;
 
-    const clearTerminationTimer = (): void => {
-      if (terminationTimer !== undefined) {
-        clearTimeout(terminationTimer);
+  const clearTerminationTimer = (): void => {
+    if (terminationTimer !== undefined) {
+      clearTimeout(terminationTimer);
+      terminationTimer = undefined;
+    }
+  };
+
+  const scheduleForceKill = (): void => {
+    if (terminationTimer === undefined) {
+      terminationTimer = setTimeout(() => {
+        if (!childClosed) {
+          child.kill('SIGKILL');
+        }
         terminationTimer = undefined;
-      }
-    };
+      }, DEVIN_FORCE_KILL_DELAY_MS_DEFAULT);
+      terminationTimer.unref?.();
+    }
+  };
 
-    const scheduleForceKill = (): void => {
-      if (terminationTimer === undefined) {
-        terminationTimer = setTimeout(() => {
-          if (!childClosed) {
-            child.kill('SIGKILL');
-          }
-          terminationTimer = undefined;
-        }, DEVIN_FORCE_KILL_DELAY_MS_DEFAULT);
-        terminationTimer.unref?.();
-      }
-    };
-
-    const terminateChild = (): void => {
+  const terminate = (): void => {
+    if (!childClosed) {
       child.kill('SIGTERM');
       scheduleForceKill();
-    };
+    }
+  };
 
-    const abortHandler = (): void => {
-      if (settled) return;
-      terminateChild();
-    };
+  child.stderr?.on('data', (chunk: Buffer | string) => {
+    const text = typeof chunk === 'string' ? chunk : chunk.toString('utf-8');
+    stderrBytes += Buffer.byteLength(text);
+    if (stderrBytes > DEVIN_MAX_BUFFER_BYTES) {
+      stderrOverflowed = true;
+      terminate();
+      return;
+    }
+    stderr += text;
+  });
 
-    const cleanup = (): void => {
-      if (childClosed) {
-        clearTerminationTimer();
-      }
-      if (options.abortSignal) {
-        options.abortSignal.removeEventListener('abort', abortHandler);
-      }
-      guardTeardown();
-    };
-
-    const rejectOnce = (error: DevinExecError): void => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(error);
-    };
-
-    const rejectAfterTermination = (error: DevinExecError): void => {
-      if (settled) return;
-      settled = true;
-      terminateChild();
-      cleanup();
-      reject(error);
-    };
-
-    const resolveOnce = (result: DevinExecResult): void => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve(result);
-    };
-
-    const appendChunk = (target: 'stdout' | 'stderr', chunk: Buffer | string): void => {
-      const text = typeof chunk === 'string' ? chunk : chunk.toString('utf-8');
-      const byteLength = Buffer.byteLength(text);
-
-      if (target === 'stdout') {
-        stdoutBytes += byteLength;
-        if (stdoutBytes > DEVIN_MAX_BUFFER_BYTES) {
-          rejectAfterTermination(createExecError('devin stdout exceeded buffer limit', {
-            code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
-            stdout,
-            stderr,
-          }));
-          return;
-        }
-        stdout += text;
-        return;
-      }
-
-      stderrBytes += byteLength;
-      if (stderrBytes > DEVIN_MAX_BUFFER_BYTES) {
-        rejectAfterTermination(createExecError('devin stderr exceeded buffer limit', {
-          code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
-          stdout,
-          stderr,
-        }));
-        return;
-      }
-      stderr += text;
-    };
-
-    child.stdout?.on('data', (chunk: Buffer | string) => appendChunk('stdout', chunk));
-    child.stderr?.on('data', (chunk: Buffer | string) => appendChunk('stderr', chunk));
-
-    const guardTeardown = guardChildProcessStreams(child, (error, source) => {
-      if (source === 'process') {
-        rejectOnce(createExecError(error.message, {
-          code: (error as NodeJS.ErrnoException).code,
-          stdout,
-          stderr,
-        }));
-        return;
-      }
-      rejectAfterTermination(createExecError(`devin ${source} stream error: ${error.message}`, {
-        stdout,
-        stderr,
-      }));
-    });
-
+  const exited = new Promise<DevinProcessExit>((resolve, reject) => {
     child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
       childClosed = true;
       clearTerminationTimer();
-      if (settled) return;
+      resolve({ code, signal });
+    });
 
-      if (options.abortSignal?.aborted) {
-        rejectOnce(createExecError('Devin execution aborted', {
-          name: 'AbortError',
-          stdout,
+    guardChildProcessStreams(child, (error, source) => {
+      if (source === 'process') {
+        reject(createExecError(error.message, {
+          code: (error as NodeJS.ErrnoException).code,
           stderr,
-          signal,
         }));
         return;
       }
-
-      if (code === 0) {
-        resolveOnce({ stdout, stderr });
-        return;
-      }
-
-      rejectOnce(createExecError(
-        buildCloseErrorMessage(code, signal),
-        {
-          code: code === null ? undefined : code,
-          stdout,
-          stderr,
-          signal,
-        },
-      ));
+      reject(createExecError(`devin ${source} stream error: ${error.message}`, { stderr }));
+      terminate();
     });
-
-    if (options.abortSignal) {
-      if (options.abortSignal.aborted) {
-        abortHandler();
-      } else {
-        options.abortSignal.addEventListener('abort', abortHandler, { once: true });
-      }
-    }
-
-    if (stdinInput !== undefined) {
-      child.stdin?.write(stdinInput);
-    }
-    child.stdin?.end();
   });
+  // The caller always races `exited`, but a late rejection after the turn has
+  // already settled must not surface as an unhandled rejection.
+  exited.catch(() => {});
+
+  return {
+    child,
+    exited,
+    stderrText: () => stderr,
+    stderrOverflowed: () => stderrOverflowed,
+    terminate,
+  };
 }

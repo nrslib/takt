@@ -6,15 +6,16 @@ import type { DevinCallOptions } from './types.js';
 
 const log = createLogger('devin-config');
 
-// Print mode cannot show approval prompts, and a mode that would prompt in a
-// TUI instead auto-denies the action: `accept-edits` still denies `exec`, and
-// `auto` approves read-only tools only. Permission enforcement is therefore
-// done through `--config` permission rules — `allow` rules grant `exec` for
-// TAKT's `edit` mode (which, per the kiro/cursor mapping, means file edits
-// plus shell), while `deny` rules enforce `readonly`.
+// Permission enforcement is done through `--config` permission rules plus the
+// ACP session mode / client-side request answers — `allow` rules grant `exec`
+// for TAKT's `edit` mode (which, per the kiro/cursor mapping, means file edits
+// plus shell), while `deny` rules enforce `readonly`. The ACP session has no
+// `auto` mode, so unset mode runs under `accept-edits` and gets write denies
+// to match print mode's read-only auto-approval.
 const READONLY_DENY_RULES = ['exec', 'edit', 'Write(**)', 'mcp__*'] as const;
 const STRICT_READONLY_EXTRA_DENY_RULES = ['Fetch(**)'] as const;
 const EDIT_ALLOW_RULES = ['exec', 'edit', 'Write(**)'] as const;
+const UNSET_DENY_RULES = ['edit', 'Write(**)'] as const;
 
 function buildReadonlyDenyRules(options: DevinCallOptions): readonly string[] {
   return options.internalAgentIsolation === 'strict-readonly'
@@ -131,10 +132,8 @@ async function loadUserConfig(): Promise<Record<string, unknown>> {
 }
 
 // `shell.setup_complete` suppresses the first-run setup banner that Devin
-// otherwise prints to stdout when handed a fresh `--config` file, which would
-// pollute the captured response (and break JSON output contracts). TAKT's
-// rules are appended to the user's own `permissions` lists; for `full` and
-// unset modes no rules are added.
+// otherwise prints when handed a fresh `--config` file. TAKT's rules are
+// appended to the user's own `permissions` lists; `full` mode adds none.
 export async function writeGeneratedConfig(dir: string, options: DevinCallOptions): Promise<string> {
   const userConfig = await loadUserConfig();
   const userPermissions = isRecord(userConfig.permissions) ? userConfig.permissions : {};
@@ -143,6 +142,8 @@ export async function writeGeneratedConfig(dir: string, options: DevinCallOption
     permissions.allow = [...asStringList(userPermissions.allow), ...EDIT_ALLOW_RULES];
   } else if (options.permissionMode === 'readonly') {
     permissions.deny = [...asStringList(userPermissions.deny), ...buildReadonlyDenyRules(options)];
+  } else if (options.permissionMode === undefined) {
+    permissions.deny = [...asStringList(userPermissions.deny), ...UNSET_DENY_RULES];
   }
   const config: Record<string, unknown> = {
     ...userConfig,

@@ -1,12 +1,12 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { USAGE_MISSING_REASONS } from '../../core/logging/contracts.js';
 import type { AgentResponse, ProviderUsageSnapshot } from '../../core/models/index.js';
-import { createLogger, ensureCurrentTmpDirExists, getErrorMessage, stripAnsi } from '../../shared/utils/index.js';
+import { createLogger, ensureCurrentTmpDirExists, getErrorMessage } from '../../shared/utils/index.js';
 import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
+import { runDevinAcpPrompt } from './acp.js';
 import { writeGeneratedConfig } from './config.js';
-import { DEVIN_SESSION_ID_PATTERN, readDevinExport } from './export.js';
-import { execDevin, type DevinExecError } from './process.js';
+import { createExecError, spawnDevinAcp, type DevinExecError } from './process.js';
 import type { DevinCallOptions } from './types.js';
 
 export type { DevinCallOptions } from './types.js';
@@ -15,6 +15,7 @@ const log = createLogger('devin-client');
 
 const DEVIN_ABORTED_MESSAGE = 'Devin execution aborted';
 const DEVIN_ERROR_DETAIL_MAX_LENGTH = 400;
+const DEVIN_SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]+$/;
 
 function buildPrompt(prompt: string, systemPrompt?: string): string {
   if (!systemPrompt) {
@@ -23,48 +24,26 @@ function buildPrompt(prompt: string, systemPrompt?: string): string {
   return `${systemPrompt}\n\n${prompt}`;
 }
 
-function buildPermissionModeArg(options: DevinCallOptions): string {
-  if (options.permissionMode === 'full') {
-    return 'dangerous';
-  }
-  if (options.permissionMode === 'edit') {
-    return 'accept-edits';
-  }
-  return 'auto';
-}
-
 function validateSessionId(sessionId: string): void {
   if (!DEVIN_SESSION_ID_PATTERN.test(sessionId)) {
     throw new Error('Invalid Devin session ID. Only letters, numbers, dot, underscore, colon, and hyphen are allowed.');
   }
 }
 
-interface DevinInvocation {
-  promptFilePath: string;
-  exportFilePath: string;
-  configFilePath: string;
-}
-
-function buildArgs(invocation: DevinInvocation, options: DevinCallOptions): string[] {
+function buildArgs(configFilePath: string, options: DevinCallOptions): string[] {
   const args = [
-    '-p',
-    '--prompt-file', invocation.promptFilePath,
-    '--permission-mode', buildPermissionModeArg(options),
-    // Non-interactive print mode cannot show the workspace trust prompt and
-    // fails outright in an untrusted directory. TAKT manages its own working
-    // directories (including worktree clones), so the check is skipped.
+    '--config', configFilePath,
+    // TAKT manages its own working directories (including worktree clones), so
+    // the workspace trust check is skipped. The flag is global; `devin acp`
+    // has no `--config` / `--permission-mode` options of its own — permission
+    // rules still apply to ACP sessions, and uncovered actions are answered
+    // through session/request_permission.
     '--respect-workspace-trust', 'false',
-    '--export', invocation.exportFilePath,
-    '--config', invocation.configFilePath,
+    'acp',
   ];
 
   if (options.model) {
     args.push('--model', options.model);
-  }
-
-  if (options.sessionId) {
-    validateSessionId(options.sessionId);
-    args.push('-r', options.sessionId);
   }
 
   return args;
@@ -86,11 +65,6 @@ function selectErrorDetail(error: DevinExecError): string {
     return error.stderr ?? '';
   }
 
-  const stdout = trimDetail(error.stdout);
-  if (stdout) {
-    return error.stdout ?? '';
-  }
-
   return getErrorMessage(error);
 }
 
@@ -98,7 +72,6 @@ function isAuthenticationError(error: DevinExecError): boolean {
   const message = [
     trimDetail(error.message),
     trimDetail(error.stderr),
-    trimDetail(error.stdout),
   ].join('\n').toLowerCase();
 
   const patterns = [
@@ -138,10 +111,6 @@ function classifyExecutionError(error: DevinExecError, options: DevinCallOptions
   return getErrorMessage(error);
 }
 
-function cleanDevinOutput(raw: string): string {
-  return stripAnsi(raw).trim();
-}
-
 function usageMissingSnapshot(): ProviderUsageSnapshot {
   return { usageMissing: true, reason: USAGE_MISSING_REASONS.NOT_AVAILABLE };
 }
@@ -168,69 +137,70 @@ export class DevinClient {
   async call(agentType: string, prompt: string, options: DevinCallOptions): Promise<AgentResponse> {
     let tmpDir: string | undefined;
     try {
+      if (options.sessionId) {
+        validateSessionId(options.sessionId);
+      }
       tmpDir = await mkdtemp(join(ensureCurrentTmpDirExists(), 'takt-devin-'));
-      const promptFilePath = join(tmpDir, 'prompt.txt');
-      const promptText = buildPrompt(prompt, options.systemPrompt);
-      await writeFile(promptFilePath, promptText, 'utf-8');
 
       // Every call gets a generated `--config` seeded from the user's own
       // config file: the flag replaces that file entirely, so merging it keeps
       // model selection and user settings identical across permission modes
-      // while TAKT's permission rules are layered on top.
-      const invocation: DevinInvocation = {
-        promptFilePath,
-        exportFilePath: join(tmpDir, 'export.json'),
-        configFilePath: await writeGeneratedConfig(tmpDir, options),
-      };
+      // while TAKT's permission rules are layered on top. The rules apply to
+      // ACP sessions exactly as they did in print mode.
+      const configFilePath = await writeGeneratedConfig(tmpDir, options);
+      const args = buildArgs(configFilePath, options);
 
-      const args = buildArgs(invocation, options);
       options.onActivity?.({ kind: 'attempt_started' });
-      const { stdout } = await execDevin(args, options);
-      const exportData = await readDevinExport(invocation.exportFilePath);
-      const providerUsage = exportData?.providerUsage ?? usageMissingSnapshot();
-      const content = cleanDevinOutput(stdout);
+      const proc = spawnDevinAcp(args, options);
+      const outcome = await runDevinAcpPrompt(proc, buildPrompt(prompt, options.systemPrompt), options);
+      const { sessionId, providerUsage } = outcome;
+
+      if (outcome.stopReason === 'cancelled' || options.abortSignal?.aborted) {
+        throw createExecError(DEVIN_ABORTED_MESSAGE, { name: 'AbortError' });
+      }
+
+      const content = outcome.content.trim();
       if (content.length === 0) {
-        const emptyError = 'devin returned empty output';
-        emitResult(options, '', false, emptyError, options.sessionId);
+        const emptyError = outcome.stopReason === 'end_turn'
+          ? 'devin returned empty output'
+          : `devin returned empty output (stop reason: ${outcome.stopReason})`;
+        emitResult(options, '', false, emptyError, sessionId);
         return {
           persona: agentType,
           status: 'error',
           content: emptyError,
           error: emptyError,
           timestamp: new Date(),
-          sessionId: options.sessionId,
+          sessionId,
           providerUsage,
         };
       }
 
       if (containsRateLimitError(content)) {
         const rateLimitedFields = buildRateLimitedResponseFields('devin', 'error_text', content);
-        emitResult(options, '', false, rateLimitedFields.error, options.sessionId);
+        emitResult(options, '', false, rateLimitedFields.error, sessionId);
         return {
           persona: agentType,
           timestamp: new Date(),
-          sessionId: options.sessionId,
+          sessionId,
           providerUsage,
           ...rateLimitedFields,
         };
       }
 
-      const resolvedSessionId = options.sessionId ?? exportData?.sessionId;
-
-      options.onStream?.({ type: 'text', data: { text: content } });
-      emitResult(options, content, true, undefined, resolvedSessionId);
+      emitResult(options, content, true, undefined, sessionId);
 
       return {
         persona: agentType,
         status: 'done',
         content,
         timestamp: new Date(),
-        sessionId: resolvedSessionId,
+        sessionId,
         providerUsage,
       };
     } catch (rawError) {
       const error = rawError as DevinExecError;
-      const combined = `${error.stdout ?? ''}\n${error.stderr ?? ''}`;
+      const combined = `${error.stderr ?? ''}\n${error.stdout ?? ''}\n${getErrorMessage(error)}`;
       const aborted = options.abortSignal?.aborted || error.name === 'AbortError';
       if (!aborted && containsRateLimitError(combined)) {
         const rateLimitedFields = buildRateLimitedResponseFields('devin', 'error_text', trimDetail(combined));
