@@ -4,6 +4,7 @@ import { z } from 'zod/v4';
 import { projectIdForCanonicalDirectory } from '../config/global/projectRegistry.js';
 import { writeFileAtomic } from '../config/project/sessionStore.js';
 import { createInquiry, answerInquiry, withdrawInquiry } from './inquiry.js';
+import { isSameGoalOperation } from './questions.js';
 import { GoalQuestionSchema, type GoalAnswerInput, type GoalQuestion, type GoalQuestionInput } from './schema.js';
 
 export type InquiryOwner =
@@ -24,16 +25,32 @@ export class StandaloneInquiryStore {
     const question = createInquiry(input);
     const directory = await this.directory();
     const path = join(directory, `${question.id}.json`);
-    let exists = true;
-    try { await access(path); }
-    catch (error) {
-      if (!isMissing(error)) throw error;
-      exists = false;
-    }
-    if (exists) throw new Error('Question ID already exists');
+    await this.assertUnusedId(path);
     await mkdir(directory, { recursive: true, mode: 0o700 });
     this.write(path, question);
     return question;
+  }
+
+  async getOrCreateApproval(input: GoalQuestionInput & { kind: 'approval' }): Promise<GoalQuestion> {
+    const candidate = createInquiry(input);
+    const directory = await this.directory();
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    let existing: { name: string; question: GoalQuestion } | undefined;
+    const entries = await opendir(directory);
+    for await (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+      const id = IdSchema.parse(entry.name.slice(0, -'.json'.length));
+      const question = await this.read(join(directory, entry.name), id);
+      if (question.kind === 'approval' && question.status === 'pending' && isSameGoalOperation(question, candidate)
+        && (existing === undefined || entry.name.localeCompare(existing.name) < 0)) {
+        existing = { name: entry.name, question };
+      }
+    }
+    if (existing !== undefined) return existing.question;
+    const path = join(directory, `${candidate.id}.json`);
+    await this.assertUnusedId(path);
+    this.write(path, candidate);
+    return candidate;
   }
 
   async list(): Promise<GoalQuestion[]> {
@@ -97,6 +114,15 @@ export class StandaloneInquiryStore {
     const question = GoalQuestionSchema.parse(JSON.parse(await readFile(path, 'utf8')));
     if (question.id !== id) throw new Error('Saved question ID differs from its filename');
     return question;
+  }
+
+  private async assertUnusedId(path: string): Promise<void> {
+    try { await access(path); }
+    catch (error) {
+      if (!isMissing(error)) throw error;
+      return;
+    }
+    throw new Error('Question ID already exists');
   }
 
   private write(path: string, question: GoalQuestion): void {

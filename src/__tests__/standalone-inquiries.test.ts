@@ -276,6 +276,172 @@ describe('standalone pending inquiry reads', () => {
   });
 });
 
+describe('standalone approval retrieval and creation', () => {
+  const input = { kind: 'approval' as const, body: '出力先を確認してください',
+    operation: { toolName: 'Write', args: '{"content":"hello"}', cwd: '/operation' } };
+
+  it.each([workspace, repository])('reuses the saved ID for sequential $kind requests and after reopening', async (owner) => {
+    const store = new StandaloneInquiryStore(config, owner);
+    const first = await store.getOrCreateApproval(input);
+    const second = await store.getOrCreateApproval(input);
+    expect(first.id).toBe(firstId);
+    expect(first.id).toBe(second.id);
+    expect(files.size).toBe(1);
+    expect(await new StandaloneInquiryStore(config, owner).getOrCreateApproval({ ...input, body: '再確認してください' })).toEqual(first);
+    expect(await store.listPending()).toEqual([first]);
+    expect(io.write).toHaveBeenCalledOnce();
+  });
+
+  it.each(['toolName', 'args', 'cwd', 'targetSha'] as const)('creates a distinct approval when %s differs', async (field) => {
+    const store = new StandaloneInquiryStore(config, workspace);
+    const first = await store.getOrCreateApproval(input);
+    const changed = field === 'targetSha' ? { ...input, targetSha: 'a'.repeat(40) }
+      : { ...input, operation: { ...input.operation, [field]: field === 'toolName' ? 'Edit' : field === 'args' ? '{}' : '/other' } };
+    const second = await store.getOrCreateApproval(changed);
+    expect(second.id).not.toBe(first.id);
+    expect(await store.listPending()).toEqual([first, second]);
+  });
+
+  it.each([secondId, firstId] as const)('preserves another operation when the candidate ID is %s', async (candidateId) => {
+    const store = new StandaloneInquiryStore(config, workspace);
+    const previous = await store.create({ ...input, operation: { ...input.operation, args: '{"content":"previous"}' } });
+    const before = new Map(files);
+    vi.mocked(crypto.randomUUID).mockReset().mockReturnValue(candidateId);
+
+    if (candidateId === firstId) {
+      await expect(store.getOrCreateApproval(input)).rejects.toThrow();
+      expect(files).toEqual(before);
+      expect(await store.list()).toEqual([previous]);
+    } else {
+      const created = await store.getOrCreateApproval(input);
+      expect(created).toMatchObject({ id: secondId, kind: 'approval', status: 'pending',
+        operation: { ...input.operation, argsDigest: crypto.createHash('sha256').update(input.operation.args).digest('hex') } });
+      expect(files.get(workspaceFile(firstId))).toBe(before.get(workspaceFile(firstId)));
+      expect(await store.list()).toEqual([previous, created]);
+    }
+  });
+
+  it.each(['pending', 'answered', 'withdrawn'] as const)('handles a candidate ID matching a %s approval without replacing it', async (status) => {
+    const store = new StandaloneInquiryStore(config, workspace);
+    const previous = await store.create(input);
+    const saved = status === 'answered' ? await store.answer(previous.id, { decision: 'allow' })
+      : status === 'withdrawn' ? await store.withdraw(previous.id) : previous;
+    const before = new Map(files);
+    vi.mocked(crypto.randomUUID).mockReset().mockReturnValue(firstId);
+
+    if (status === 'pending') expect(await store.getOrCreateApproval(input)).toEqual(saved);
+    else await expect(store.getOrCreateApproval(input)).rejects.toThrow();
+
+    expect(files).toEqual(before);
+    expect(await store.list()).toEqual([saved]);
+  });
+
+  it('selects the first matching filename regardless of directory enumeration order and validates all records', async () => {
+    const store = new StandaloneInquiryStore(config, workspace);
+    vi.mocked(crypto.randomUUID).mockReset().mockReturnValueOnce(secondId).mockReturnValue(firstId);
+    await store.create(input);
+    const first = await store.create({ ...input, body: '以前の確認' });
+    expect(await store.getOrCreateApproval(input)).toEqual(first);
+    expect(io.read).toHaveBeenCalledTimes(2);
+    expect(io.close).toHaveBeenCalledOnce();
+    expect(files.size).toBe(2);
+    expect(io.write).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['answered', 'withdrawn', 'question', 'operation_request'] as const)('does not reuse a matching %s inquiry', async (state) => {
+    const store = new StandaloneInquiryStore(config, workspace);
+    const previous = await store.create({ ...input, kind: state === 'question' || state === 'operation_request' ? state : 'approval' });
+    if (state === 'answered') await store.answer(previous.id, { decision: 'allow' });
+    if (state === 'withdrawn') await store.withdraw(previous.id);
+    const created = await store.getOrCreateApproval(input);
+    expect(created.id).not.toBe(previous.id);
+    expect(files.size).toBe(2);
+    expect(created).toMatchObject({ kind: 'approval', status: 'pending' });
+  });
+
+  it.each(['{', JSON.stringify({ id: firstId, status: 'answered' }),
+    JSON.stringify({ id: secondId, recipient: 'human', body: '別のID', status: 'pending' })])('rejects invalid saved data without saving: %s', async (serialized) => {
+    files.set(workspaceFile(firstId), serialized);
+    const before = new Map(files);
+    await expect(new StandaloneInquiryStore(config, workspace).getOrCreateApproval(input)).rejects.toThrow();
+    expect(files).toEqual(before);
+    expect(io.write).not.toHaveBeenCalled();
+  });
+
+  it('validates history even after finding a matching approval', async () => {
+    const store = new StandaloneInquiryStore(config, workspace);
+    await store.getOrCreateApproval(input);
+    files.set(workspaceFile(secondId), '{');
+    await expect(store.getOrCreateApproval(input)).rejects.toThrow();
+    expect(io.write).toHaveBeenCalledOnce();
+  });
+
+  it('rejects invalid filenames before saving a new approval', async () => {
+    files.set(workspaceFile('invalid'), '{}');
+    await expect(new StandaloneInquiryStore(config, workspace).getOrCreateApproval(input)).rejects.toThrow();
+    expect(io.read).not.toHaveBeenCalled();
+    expect(io.write).not.toHaveBeenCalled();
+  });
+
+  it.each(['directory creation', 'directory read', 'file read', 'ID access', 'save'] as const)(
+    'propagates %s failure and preserves saved records', async (stage) => {
+      const store = new StandaloneInquiryStore(config, workspace);
+      const previous = await store.create({ body: '既存の相談' });
+      const before = new Map(files);
+      const failure = Object.assign(new Error('storage failed'), { code: 'EACCES' });
+      if (stage === 'directory creation') io.mkdir.mockRejectedValueOnce(failure);
+      if (stage === 'directory read') io.opendir.mockRejectedValueOnce(failure);
+      if (stage === 'file read') io.read.mockRejectedValueOnce(failure);
+      if (stage === 'ID access') io.access.mockRejectedValueOnce(failure);
+      if (stage === 'save') io.write.mockImplementationOnce(() => { throw failure; });
+      await expect(store.getOrCreateApproval(input)).rejects.toBe(failure);
+      expect(files).toEqual(before);
+      expect(await store.list()).toEqual([previous]);
+    },
+  );
+
+  it.each([true, false])('propagates iteration failure after a matching approval is %s and closes without saving', async (matching) => {
+    const store = new StandaloneInquiryStore(config, workspace);
+    await store.create(matching ? input : { body: '既存の相談' });
+    const before = new Map(files);
+    const failure = Object.assign(new Error('iteration failed'), { code: 'EACCES' });
+    io.opendir.mockResolvedValueOnce((async function* () {
+      try {
+        yield { name: `${firstId}.json`, isFile: () => true };
+        throw failure;
+      } finally {
+        io.close();
+      }
+    })());
+
+    await expect(store.getOrCreateApproval(input)).rejects.toBe(failure);
+    expect(files).toEqual(before);
+    expect(io.write).toHaveBeenCalledOnce();
+    expect(io.read).toHaveBeenCalledOnce();
+    expect(io.close).toHaveBeenCalledOnce();
+  });
+
+  it.each(['answered', 'withdrawn'] as const)('creates a fresh approval after a %s approval', async (status) => {
+    const store = new StandaloneInquiryStore(config, workspace);
+    const previous = await store.getOrCreateApproval(input);
+    const terminal = status === 'answered' ? await store.answer(previous.id, { decision: 'allow' }) : await store.withdraw(previous.id);
+    const original = files.get(workspaceFile(previous.id));
+    const next = await store.getOrCreateApproval(input);
+    expect(next.id).not.toBe(previous.id);
+    expect(await store.getOrCreateApproval({ ...input, body: '再確認' })).toEqual(next);
+    expect(files.get(workspaceFile(previous.id))).toBe(original);
+    expect(await store.list()).toEqual(expect.arrayContaining([terminal, next]));
+    expect(await store.listPending()).toEqual([next]);
+  });
+
+  it('reuses pending approvals created with random IDs', async () => {
+    const store = new StandaloneInquiryStore(config, workspace);
+    const previous = await store.create(input);
+    expect(await store.getOrCreateApproval({ ...input, body: '再確認' })).toEqual(previous);
+    expect(files.size).toBe(1);
+  });
+});
+
 describe('standalone inquiry updates', () => {
   it.each([
     { kind: 'question' as const, answer: 'JSON', expected: { text: 'JSON' } },
