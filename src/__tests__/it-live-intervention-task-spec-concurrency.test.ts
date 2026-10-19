@@ -12,6 +12,36 @@ import { resolveTaskSpecForExecution, stageTaskSpecForExecution } from '../featu
 import { issueTellableRunningTask } from '../features/tasks/liveIntervention.js';
 import { LiveInterventionFileStore } from '../infra/workflow/live-intervention-store.js';
 
+function monitorChildMessages(child: ChildProcess): (type: string) => Promise<void> {
+  const messages: Array<Record<string, unknown>> = [];
+  const waiters = new Map<string, () => void>();
+  let stderr = '';
+  child.stderr!.setEncoding('utf8');
+  child.stderr!.on('data', (chunk: string) => { stderr += chunk; });
+  let rejectChild!: (error: Error) => void;
+  const childFailure = new Promise<never>((_resolve, reject) => { rejectChild = reject; });
+  // Observe failures between waits without consuming the rejection used by waitFor.
+  void childFailure.catch(() => undefined);
+  child.on('error', rejectChild);
+  child.on('close', (code, signal) => {
+    rejectChild(new Error(`Child closed before expected message (code: ${code}, signal: ${signal})\nstderr:\n${stderr}`));
+  });
+  child.on('message', (message: Record<string, unknown>) => {
+    messages.push(message);
+    if (message.type === 'error') rejectChild(new Error(String(message.message)));
+    const type = String(message.type);
+    waiters.get(type)?.();
+    waiters.delete(type);
+  });
+  return (type: string) => {
+    if (messages.some((message) => message.type === type)) return Promise.resolve();
+    return Promise.race([
+      new Promise<void>((resolveMessage) => { waiters.set(type, resolveMessage); }),
+      childFailure,
+    ]);
+  };
+}
+
 describe('tell persistence across processes', () => {
   let project: string | undefined;
   let child: ChildProcess | undefined;
@@ -23,6 +53,37 @@ describe('tell persistence across processes', () => {
     }
     if (project !== undefined) rmSync(project, { recursive: true, force: true });
   });
+
+  it.each([0, 1])('rejects a pending message wait with stderr when the child exits with code %s', async (code) => {
+    child = spawn(process.execPath, ['--eval', `process.stderr.write('child startup failure', () => process.exit(${code}));`], {
+      stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+    });
+    const waitFor = monitorChildMessages(child);
+
+    await expect(waitFor('ready')).rejects.toThrow(`code: ${code}, signal: null)\nstderr:\nchild startup failure`);
+  }, 5_000);
+
+  it('reports the signal and stderr when the child terminates before ready', async () => {
+    child = spawn(process.execPath, ['--eval', "process.stderr.write('terminated during startup', () => process.kill(process.pid, 'SIGTERM'));"], {
+      stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+    });
+    const waitFor = monitorChildMessages(child);
+
+    await expect(waitFor('ready')).rejects.toThrow('code: null, signal: SIGTERM)\nstderr:\nterminated during startup');
+  }, 5_000);
+
+  it('preserves received messages and rejects missing messages when waiting starts after close', async () => {
+    child = spawn(process.execPath, ['--eval', "process.send({ type: 'ready' }, () => process.stderr.write('closed after ready', () => process.exit(1)));"], {
+      stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+    });
+    const waitFor = monitorChildMessages(child);
+    await once(child, 'close');
+    // Give Node a turn to report an unhandled rejection before starting any message wait.
+    await new Promise<void>((resolveTurn) => setImmediate(resolveTurn));
+
+    await expect(waitFor('ready')).resolves.toBeUndefined();
+    await expect(waitFor('issued')).rejects.toThrow('code: 1, signal: null)\nstderr:\nclosed after ready');
+  }, 5_000);
 
   it.each([false, true])('retains all delivered instructions when issuing overlaps publication: %s', async (overlap) => {
     project = mkdtempSync(join(tmpdir(), 'takt-tell-concurrency-'));
@@ -73,21 +134,7 @@ describe('tell persistence across processes', () => {
       });
     `], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
     const processChild = child;
-    const messages: Array<Record<string, unknown>> = [];
-    const waiters = new Map<string, () => void>();
-    let rejectChild!: (error: Error) => void;
-    const childFailure = new Promise<never>((_resolve, reject) => { rejectChild = reject; });
-    processChild.on('error', rejectChild);
-    processChild.on('message', (message: Record<string, unknown>) => {
-      messages.push(message);
-      if (message.type === 'error') rejectChild(new Error(String(message.message)));
-      waiters.get(String(message.type))?.();
-    });
-    const waitFor = (type: string) => Promise.race([
-      messages.some((message) => message.type === type) ? Promise.resolve()
-        : new Promise<void>((resolveMessage) => { waiters.set(type, resolveMessage); }),
-      childFailure,
-    ]);
+    const waitFor = monitorChildMessages(processChild);
     await waitFor('ready');
     await issueTellableRunningTask(project, slug, 'first instruction');
     let release!: () => void;

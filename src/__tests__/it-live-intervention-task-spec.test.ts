@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -212,6 +212,33 @@ describe('MCP tell task specification persistence', () => {
     ]);
     expect(staged).toContain(`確認を追加する: \`${attachmentRel}\``);
     expect(fs.readFileSync(join(fixture.execCwd, attachmentRel), 'utf8')).toBe('original-image');
+  });
+
+  it.each([false, true])('publishes attachments added after initial staging in the same run (merge=%s)', async (mergeTask) => {
+    const fixture = await createFixture(mergeTask);
+    const initialAttachmentPath = join(fixture.runPaths.contextTaskAbs, 'attachments/a.png');
+    const notesPath = join(fixture.runPaths.contextTaskAbs, 'agent-notes.txt');
+    const extraAttachmentPath = join(fixture.runPaths.contextTaskAbs, 'attachments/agent.txt');
+    expect(fs.readFileSync(fixture.runPaths.contextTaskOrderAbs, 'utf8')).toBe(ORIGINAL_ORDER);
+    expect(fs.readFileSync(initialAttachmentPath, 'utf8')).toBe('original-image');
+    fs.writeFileSync(notesPath, 'existing agent notes');
+    fs.writeFileSync(extraAttachmentPath, 'agent attachment');
+    fs.mkdirSync(join(projectCwd, TASK_DIR, 'attachments/nested'));
+    fs.writeFileSync(join(projectCwd, TASK_DIR, 'attachments/nested/new.png'), 'new-image');
+
+    const result = await fixture.tell('追加画像を確認する: `attachments/nested/new.png`');
+    expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+    await fixture.deliver();
+
+    const staged = fs.readFileSync(fixture.runPaths.contextTaskOrderAbs, 'utf8');
+    expect(staged.startsWith(ORIGINAL_ORDER)).toBe(true);
+    const attachmentRef = staged.match(/`([^`]+\/nested\/new.png)`/)![1]!;
+    expect(resolve(fixture.execCwd, attachmentRef)).toBe(join(fixture.runPaths.contextTaskAbs, 'attachments/nested/new.png'));
+    expect(fs.readFileSync(resolve(fixture.execCwd, attachmentRef), 'utf8')).toBe('new-image');
+    expect(fs.readFileSync(initialAttachmentPath, 'utf8')).toBe('original-image');
+    expect(fs.readFileSync(notesPath, 'utf8')).toBe('existing agent notes');
+    expect(fs.readFileSync(extraAttachmentPath, 'utf8')).toBe('agent attachment');
+    expect(fixture.store.read()).toMatchObject({ issuedTotal: 1, pending: 0, deliveredNextStep: 1 });
   });
 
   it('returns MCP success and preserves delivery when the source order cannot be appended', async () => {

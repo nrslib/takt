@@ -317,6 +317,63 @@ describe('stageTaskSpecForExecution', () => {
 });
 
 describe('restageTaskSpecForExecution', () => {
+  it('publishes newly added attachments for the same run while retaining existing context files', () => {
+    const projectCwd = createTempProjectDir();
+    const taskDir = '.takt/tasks/spec-task';
+    const sourceTaskDir = path.join(projectCwd, taskDir);
+    const runSlug = 'added-attachment';
+    const runPaths = buildRunPaths(projectCwd, runSlug);
+    fs.mkdirSync(path.join(sourceTaskDir, 'attachments'), { recursive: true });
+    fs.writeFileSync(path.join(sourceTaskDir, 'order.md'), 'Read `attachments/input.txt`.');
+    fs.writeFileSync(path.join(sourceTaskDir, 'attachments/input.txt'), 'original attachment');
+    resolveAndStageTaskSpec(projectCwd, projectCwd, taskDir, runSlug);
+    const initialOrder = fs.readFileSync(runPaths.contextTaskOrderAbs, 'utf8');
+    const initialRef = initialOrder.match(/`([^`]+)`/)![1]!;
+    expect(fs.readFileSync(path.resolve(projectCwd, initialRef), 'utf8')).toBe('original attachment');
+    const notesPath = path.join(runPaths.contextTaskAbs, 'notes.txt');
+    const extraAttachmentPath = path.join(runPaths.contextTaskAbs, 'attachments/agent.txt');
+    fs.writeFileSync(notesPath, 'agent notes');
+    fs.writeFileSync(extraAttachmentPath, 'agent attachment');
+
+    fs.mkdirSync(path.join(sourceTaskDir, 'attachments/nested'));
+    fs.writeFileSync(path.join(sourceTaskDir, 'attachments/nested/added.txt'), 'added attachment');
+    fs.appendFileSync(path.join(sourceTaskDir, 'order.md'), '\nRead `attachments/nested/added.txt`.');
+    const taskSpec = resolveTaskSpecForExecution(projectCwd, projectCwd, taskDir, runSlug);
+    restageTaskSpecForExecution(taskSpec, runPaths);
+
+    const updatedOrder = fs.readFileSync(runPaths.contextTaskOrderAbs, 'utf8');
+    expect(updatedOrder.startsWith(initialOrder)).toBe(true);
+    const addedRef = updatedOrder.match(/`([^`]+\/nested\/added.txt)`/)![1]!;
+    expect(path.resolve(projectCwd, addedRef)).toBe(path.join(runPaths.contextTaskAbs, 'attachments/nested/added.txt'));
+    expect(fs.readFileSync(path.resolve(projectCwd, addedRef), 'utf8')).toBe('added attachment');
+    expect(fs.readFileSync(path.resolve(projectCwd, initialRef), 'utf8')).toBe('original attachment');
+    expect(fs.readFileSync(notesPath, 'utf8')).toBe('agent notes');
+    expect(fs.readFileSync(extraAttachmentPath, 'utf8')).toBe('agent attachment');
+    expect(fs.readdirSync(runPaths.contextAbs)).toEqual(['task']);
+  });
+
+  it('retains published attachments when the refreshed source has no attachments', () => {
+    const projectCwd = createTempProjectDir();
+    const taskDir = '.takt/tasks/spec-task';
+    const sourceTaskDir = path.join(projectCwd, taskDir);
+    const runSlug = 'empty-attachment-manifest';
+    const runPaths = buildRunPaths(projectCwd, runSlug);
+    fs.mkdirSync(path.join(sourceTaskDir, 'attachments'), { recursive: true });
+    fs.writeFileSync(path.join(sourceTaskDir, 'order.md'), 'Original instruction.');
+    fs.writeFileSync(path.join(sourceTaskDir, 'attachments/input.txt'), 'original attachment');
+    resolveAndStageTaskSpec(projectCwd, projectCwd, taskDir, runSlug);
+    const attachmentPath = path.join(runPaths.contextTaskAbs, 'attachments/input.txt');
+    expect(fs.readFileSync(attachmentPath, 'utf8')).toBe('original attachment');
+    fs.rmSync(path.join(sourceTaskDir, 'attachments'), { recursive: true });
+    fs.writeFileSync(path.join(sourceTaskDir, 'order.md'), 'Updated instruction.');
+
+    restageTaskSpecForExecution(resolveTaskSpecForExecution(projectCwd, projectCwd, taskDir, runSlug), runPaths);
+
+    expect(fs.readFileSync(runPaths.contextTaskOrderAbs, 'utf8')).toBe('Updated instruction.');
+    expect(fs.readFileSync(attachmentPath, 'utf8')).toBe('original attachment');
+    expect(fs.readdirSync(runPaths.contextAbs)).toEqual(['task']);
+  });
+
   it('updates the existing order while retaining published attachments and other context files', () => {
     const projectCwd = createTempProjectDir();
     const taskDir = '.takt/tasks/spec-task';

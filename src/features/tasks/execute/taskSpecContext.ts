@@ -127,6 +127,13 @@ export function restageTaskSpecForExecution(
       contextTaskAbs: temporaryTaskDir,
       contextTaskOrderAbs: temporaryOrderPath,
     });
+    const temporaryAttachmentsDir = path.join(temporaryTaskDir, 'attachments');
+    if (fs.existsSync(temporaryAttachmentsDir)) {
+      fs.cpSync(temporaryAttachmentsDir, path.join(runPaths.contextTaskAbs, 'attachments'), {
+        recursive: true,
+        force: false,
+      });
+    }
     fs.renameSync(temporaryOrderPath, runPaths.contextTaskOrderAbs);
   } finally {
     fs.rmSync(temporaryRoot, { recursive: true, force: true });
