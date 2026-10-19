@@ -14,6 +14,8 @@ import { buildGoalTurnContext } from './turnContext.js';
 import { notifyManagerTurnFailure } from './turnFailureNotification.js';
 import { isGoalPatrolDue } from './patrol.js';
 
+const MANAGER_TURN_TIMEOUT_MS = 30 * 60 * 1000;
+
 export function createRunEventManager(cwd: string) {
   // Failed events remain in the inbox; polling does not retry them.
   const failedEvents = new Set<string>();
@@ -70,31 +72,44 @@ export function createRunEventManager(cwd: string) {
           }
         }
         if (signal.aborted) return false;
-        const manager = await getSession(signal);
-        if (patrol) {
-          goal = await store.get(saved.event.goalId);
-          if (!canProcessPatrol(goal, saved)) {
-            deleteManagerEvent(saved);
-            return true;
+        const timeout = new AbortController();
+        const timer = setTimeout(() => {
+          timeout.abort(new Error('Manager provider turn timed out after 30 minutes'));
+        }, MANAGER_TURN_TIMEOUT_MS);
+        const turnSignal = AbortSignal.any([signal, timeout.signal]);
+        try {
+          const manager = await getSession(turnSignal);
+          turnSignal.throwIfAborted();
+          if (patrol) {
+            goal = await store.get(saved.event.goalId);
+            if (!canProcessPatrol(goal, saved)) {
+              deleteManagerEvent(saved);
+              return true;
+            }
           }
+          manager.resetConversation();
+          const result = await manager.handleUserMessage({
+            text: buildGoalTurnContext(cwd, goal, saved.event, new TaskRunner(cwd).listTaskStateItems()),
+            abortSignal: turnSignal,
+            goal: { id: goal.id, repositoryDirectory: cwd, constraints: goal.constraints },
+          });
+          if (signal.aborted) return false;
+          if (result.kind === 'error') throw new Error(result.message);
+          const summary = manager.getPendingSummary();
+          if (summary !== null) {
+            manager.dismissSummary(summary.revision);
+            throw new Error('Event processing requires actions for the existing goal, not a registration summary');
+          }
+          await store.update(goal.id, (current) => ({
+            ...appendGoalWorkLog(current, { summary: result.message, ...(patrol ? { kind: 'patrol' as const } : {}) }),
+            ...(patrol ? { lastPatrolCompletedAt: new Date().toISOString() } : {}),
+          }));
+        } catch (error) {
+          if (turnSignal.aborted) throw turnSignal.reason;
+          throw error;
+        } finally {
+          clearTimeout(timer);
         }
-        manager.resetConversation();
-        const result = await manager.handleUserMessage({
-          text: buildGoalTurnContext(cwd, goal, saved.event, new TaskRunner(cwd).listTaskStateItems()),
-          abortSignal: signal,
-          goal: { id: goal.id, repositoryDirectory: cwd, constraints: goal.constraints },
-        });
-        if (signal.aborted) return false;
-        if (result.kind === 'error') throw new Error(result.message);
-        const summary = manager.getPendingSummary();
-        if (summary !== null) {
-          manager.dismissSummary(summary.revision);
-          throw new Error('Event processing requires actions for the existing goal, not a registration summary');
-        }
-        await store.update(goal.id, (current) => ({
-          ...appendGoalWorkLog(current, { summary: result.message, ...(patrol ? { kind: 'patrol' as const } : {}) }),
-          ...(patrol ? { lastPatrolCompletedAt: new Date().toISOString() } : {}),
-        }));
       }
       deleteManagerEvent(saved);
       failedEvents.delete(saved.filePath);
