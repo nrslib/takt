@@ -1,3 +1,5 @@
+import { cacciaEffect } from '../../caccia/system-effect.js';
+import { resolveTaskPrExecutionContext } from './prExecutionContext.js';
 import { WorkflowEngine, createDenyAskUserQuestionHandler } from '../../../core/workflow/index.js';
 import { ManagedProviderInstallRequiredError } from '../../../infra/managed-providers/loader.js';
 import { join } from 'node:path';
@@ -220,6 +222,9 @@ async function executeWorkflowInternal(
   const executionOptions = prContext === undefined
     ? options
     : { ...options, prContext };
+  const prExecution = options.cacciaExecutionSource === undefined
+    ? { prExecutionContext: options.prExecutionContext, prGitOperations: options.prGitOperations }
+    : await resolveTaskPrExecutionContext({ ...options, cwd, prContext, gitProvider: runContext?.gitProvider });
   const parentRunPid = process.pid;
   const liveWorkflowCallResolver = createWorkflowCallResolver(
     createWorkflowExecutionContext(
@@ -425,7 +430,7 @@ async function executeWorkflowInternal(
         bootstrap.observability,
         buildChildProcessEnv(),
       );
-      const gitSafety = options.prExecutionContext
+      const gitSafety = prExecution.prExecutionContext
         ? resolveConfigValues(options.projectCwd, ['allowGitHooks', 'allowGitFilters'])
         : {};
       engine = new WorkflowEngine(bootstrap.effectiveWorkflowConfig, cwd, task, {
@@ -513,13 +518,22 @@ async function executeWorkflowInternal(
         currentTask: resolveCurrentTaskContext(options, bootstrap.runSlug),
         traceTaskMetadata: options.traceTaskMetadata,
         prContext,
-        prExecutionContext: options.prExecutionContext,
+        prExecutionContext: prExecution.prExecutionContext,
         mergeMethod: options.mergeMethod,
-        prGitOperations: options.prGitOperations,
+        prGitOperations: prExecution.prGitOperations,
         phase1ProcessSafetyByStep,
         systemStepServicesFactory: (serviceOptions) => createDefaultSystemStepServices({
           ...serviceOptions,
           ...gitSafety,
+          ...(options.cacciaExecutionSource === undefined ? {} : { cacciaService: {
+            execute: (prNumber) => cacciaEffect({
+              ...serviceOptions, ...gitSafety, prContext,
+              prMergePushRecorder: options.prMergePushRecorder,
+              gitProvider: runContext?.gitProvider,
+              outputMode: options.outputMode, taskPrefix: options.taskPrefix,
+              taskColorIndex: options.taskColorIndex, taskDisplayLabel: options.taskDisplayLabel,
+            }, prNumber),
+          } }),
           ...(runContext?.gitProvider !== undefined ? { gitProvider: runContext.gitProvider } : {}),
         }),
         workflowCallResolver,

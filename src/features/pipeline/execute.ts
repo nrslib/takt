@@ -29,7 +29,6 @@ import {
   createLoopAnalysisPublicationCoordinator,
   settleLoopAnalysisPublication,
 } from '../tasks/execute/loopAnalysisPublication.js';
-import { runLinkedCacciaSafely } from '../caccia/index.js';
 import { runLinkedMergeSafely } from '../merge/index.js';
 
 export type { PipelineExecutionOptions };
@@ -136,7 +135,6 @@ async function runPipeline(options: PipelineExecutionOptions): Promise<PipelineO
         taskColorIndex: options.taskColorIndex,
         taskDisplayLabel: options.taskDisplayLabel,
       };
-      await runLinkedCacciaSafely(cwd, prUrl, undefined, display);
       await runLinkedMergeSafely(cwd, prUrl, undefined, display);
     } else if (autoPr && skipGit) {
       info('--auto-pr is ignored when --skip-git is specified (no push was performed)');

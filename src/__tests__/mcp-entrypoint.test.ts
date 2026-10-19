@@ -1032,6 +1032,55 @@ describe('MCP package entrypoint', () => {
     }
   });
 
+  it('sends an MCP tell to a merge run using project-side metadata', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-mcp-tell-merge-'));
+    const cloneCwd = join(cwd, '.takt', 'worktrees', 'merge');
+    const runSlug = 'mcp-merge-run';
+    mkdirSync(cloneCwd, { recursive: true });
+    const { interventionPath } = writeRunFixture(cwd, runSlug, 'review');
+    writeFileSync(join(cwd, '.takt', 'tasks.yaml'), stringifyYaml({
+      tasks: [{
+        name: 'merge-pr-1805', status: 'running', summary: 'Merge PR #1805',
+        content_file: '/definitely-not-readable/merge-task.md',
+        source: 'pr_review', pr_number: 1805, merge_task: true,
+        base_branch: 'main', merge_method: 'squash',
+        merge_head_repository_url: 'https://example.com/owner/takt.git',
+        merge_head_repository_push_urls: ['https://example.com/owner/takt.git'],
+        merge_initial_head_sha: 'a'.repeat(40), merge_threat_check_max_diff_bytes: 100_000,
+        merge_caccia_required: false, merge_clone_prepared: true,
+        workflow: 'default', worktree: true, worktree_path: cloneCwd, auto_pr: false,
+        branch: 'feature/tell-merge', run_slug: runSlug,
+        created_at: '2026-09-09T00:00:00.000Z', started_at: '2026-09-09T00:00:00.000Z', completed_at: null,
+      }],
+    }), 'utf8');
+    const server = createTaktMcpServer({}, { allowedProjectRoot: cwd });
+    const client = new Client({ name: 'takt-mcp-tell-merge-client', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+
+      const written = await client.callTool({
+        name: 'takt_tell_run',
+        arguments: { cwd, runSlug, content: 'Keep the agreed merge scope.' },
+      });
+
+      expect(written.isError, firstTextContent(written.content)).toBeUndefined();
+      expect(JSON.parse(firstTextContent(written.content))).toMatchObject({
+        runSlug, instructionId: 1,
+        target: { name: 'merge-pr-1805', runSlug, currentStep: 'review' },
+      });
+      expect(JSON.parse(readFileSync(interventionPath, 'utf8'))).toMatchObject({
+        type: 'issued', instructionId: 1, content: 'Keep the agreed merge scope.',
+      });
+      expect(existsSync(join(cloneCwd, '.takt', 'runs', runSlug, 'interventions.jsonl'))).toBe(false);
+    } finally {
+      await client.close();
+      await server.close();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('writes only to a running clone and rejects terminal, missing, and non-clone targets', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'takt-mcp-tell-'));
     const cloneCwd = join(cwd, '.takt', 'worktrees', 'active');

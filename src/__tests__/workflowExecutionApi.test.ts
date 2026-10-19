@@ -60,6 +60,9 @@ describe('runWorkflowExecution', () => {
           mcpServers: request.mcpServers,
           provider: request.agentOverrides?.provider,
           model: request.agentOverrides?.model,
+          cacciaExecutionSource: request.cacciaExecutionSource,
+          cacciaPushedHead: request.cacciaPushedHead,
+          prMergePushRecorder: request.prMergePushRecorder,
           ...(request.loopAnalysisPublication === undefined
             ? {}
             : { loopAnalysisPublication: request.loopAnalysisPublication }),

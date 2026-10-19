@@ -356,6 +356,7 @@ describe('worktree reference resolution', () => {
     expect(cloneCalls).toHaveLength(1);
     expect(cloneCalls[0]).not.toContain('--reference');
     expect(cloneCalls[0]).not.toContain('--dissociate');
+    expect(cloneCalls[0]).toContain('--no-local');
     expect(cloneCalls[0]).toContain(linkedWorktreePath);
     expect(serializedCloneLogs()).not.toContain(mainRepoPath);
   });
@@ -418,6 +419,7 @@ describe('worktree reference resolution', () => {
     expect(cloneCalls).toHaveLength(1);
     expect(cloneCalls[0]).not.toContain('--reference');
     expect(cloneCalls[0]).not.toContain('--dissociate');
+    expect(cloneCalls[0]).toContain('--no-local');
     expect(cloneCalls[0]).toContain(linkedWorktreePath);
     expect(serializedCloneLogs()).not.toContain(mainRepoPath);
   });
@@ -2382,10 +2384,12 @@ describe('shallow clone fallback', () => {
     // First attempt includes --reference and --dissociate
     expect(cloneCalls[0]).toContain('--reference');
     expect(cloneCalls[0]).toContain('--dissociate');
+    expect(cloneCalls[0]).toContain('--no-local');
 
     // Second attempt (fallback) does not include --reference or --dissociate
     expect(cloneCalls[1]).not.toContain('--reference');
     expect(cloneCalls[1]).not.toContain('--dissociate');
+    expect(cloneCalls[1]).toContain('--no-local');
 
     // Both attempts target the same clone path
     expect(cloneCalls[0][cloneCalls[0].length - 1]).toBe('/tmp/shallow-test');
@@ -2406,8 +2410,10 @@ describe('shallow clone fallback', () => {
     expect(cloneCalls).toHaveLength(2);
     expect(cloneCalls[0]).toContain('--reference');
     expect(cloneCalls[0]).toContain('--dissociate');
+    expect(cloneCalls[0]).toContain('--no-local');
     expect(cloneCalls[1]).not.toContain('--reference');
     expect(cloneCalls[1]).not.toContain('--dissociate');
+    expect(cloneCalls[1]).toContain('--no-local');
     expect(serializedCloneLogs()).not.toContain(hiddenMainRepoPath);
   });
 
@@ -2415,7 +2421,7 @@ describe('shallow clone fallback', () => {
     const hiddenClonePath = '/tmp/sanitized-sync-clone';
     const { cloneCalls } = setupShallowCloneMock({
       shallowError: false,
-      otherError: `fatal: repository '${hiddenMainRepoPath}' does not exist while cloning ${hiddenClonePath}`,
+      otherError: `fatal: failed to copy file to '${hiddenClonePath}/.git/objects/ab/cd' from ${hiddenMainRepoPath}: No such file or directory`,
     });
 
     let thrown: Error | undefined;
@@ -2434,6 +2440,10 @@ describe('shallow clone fallback', () => {
     expect(thrown?.message).not.toContain(hiddenMainRepoPath);
     expect(thrown?.message).not.toContain(hiddenClonePath);
     expect(serializedCloneLogs()).not.toContain(hiddenMainRepoPath);
+    expect(JSON.stringify(mockLogError.mock.calls)).not.toContain(hiddenClonePath);
+    expect(mockLogError).toHaveBeenCalledWith('Git clone failed', {
+      attempt: 'reference', reason: 'object-copy-failed',
+    });
   });
 
   it('should sanitize abortable non-shallow clone errors before throwing', async () => {
@@ -2459,6 +2469,10 @@ describe('shallow clone fallback', () => {
     expect(thrown?.message).not.toContain(hiddenMainRepoPath);
     expect(thrown?.message).not.toContain(hiddenClonePath);
     expect(serializedCloneLogs()).not.toContain(hiddenMainRepoPath);
+    expect(JSON.stringify(mockLogError.mock.calls)).not.toContain(hiddenClonePath);
+    expect(mockLogError).toHaveBeenCalledWith('Git clone failed', {
+      attempt: 'reference', reason: 'other',
+    });
   });
 
   it('should not fall back on non-shallow clone errors', () => {
@@ -2489,6 +2503,7 @@ describe('shallow clone fallback', () => {
     // First (and only) attempt includes --reference and --dissociate
     expect(cloneCalls[0]).toContain('--reference');
     expect(cloneCalls[0]).toContain('--dissociate');
+    expect(cloneCalls[0]).toContain('--no-local');
   });
 });
 

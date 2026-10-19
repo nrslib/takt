@@ -292,7 +292,7 @@ describe('createIsolatedEnv', () => {
       iteration_limit: false,
       workflow_complete: false,
       workflow_abort: false,
-      run_complete: true,
+      run_complete: false,
       run_abort: false,
     });
     expect(config.provider_options).toEqual({
@@ -330,7 +330,7 @@ describe('createIsolatedEnv', () => {
       iteration_limit: false,
       workflow_complete: false,
       workflow_abort: false,
-      run_complete: true,
+      run_complete: false,
       run_abort: false,
     });
     expect(config.language).toBe('en');
@@ -342,7 +342,7 @@ describe('createIsolatedEnv', () => {
 
     updateIsolatedConfig(isolated.taktDir, {
       notification_sound_events: {
-        run_complete: false,
+        run_complete: true,
       },
     });
 
@@ -353,7 +353,7 @@ describe('createIsolatedEnv', () => {
       iteration_limit: false,
       workflow_complete: false,
       workflow_abort: false,
-      run_complete: false,
+      run_complete: true,
       run_abort: false,
     });
   });

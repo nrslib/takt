@@ -20,7 +20,11 @@ interface PackResult {
   readonly filename?: string;
 }
 
-const deepSeekHarnessAssetNames = ['runtime-state-lock.mjs', 'runtime-supervisor.mjs'] as const;
+const deepSeekHarnessAssetNames = [
+  'runtime-state-lock.mjs',
+  'runtime-supervisor.mjs',
+  'runtime-diagnostic-observer.mjs',
+] as const;
 
 const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
 const buildTimeoutMs = 60_000;

@@ -17,9 +17,25 @@ steps:
     call: review
     rules:
       - condition: COMPLETE
-        next: wait_ci
+        next: caccia
       - condition: ABORT
         next: review_failed
+  - name: caccia
+    mode: system
+    effects:
+      - type: caccia
+        pr: "{context:identify.pr.number}"
+    rules:
+      - condition: when(effect.caccia.caccia.success == false)
+        next: caccia_failed
+      - condition: when(effect.caccia.caccia.outcome == "success")
+        next: wait_ci
+      - condition: when(effect.caccia.caccia.outcome == "skipped")
+        next: wait_ci
+      - condition: when(effect.caccia.caccia.outcome == "limit")
+        next: caccia_limit
+      - condition: when(true)
+        next: ABORT
   - name: wait_ci
     mode: system
     system_inputs:
@@ -27,7 +43,7 @@ steps:
         source: current_pr
         as: status
     wait:
-      until: 'when(context.wait_ci.status.ci.finished == true)'
+      until: 'when(context.wait_ci.status.ci.finished == true && context.wait_ci.status.headSha == effect.caccia.caccia.headSha)'
       on_timeout: timeout
     rules:
       - condition: when(context.wait_ci.status.ci.passed == false)
@@ -112,5 +128,25 @@ steps:
     rules:
       - condition: when(effect.review_failed.comment_pr.success == true)
         next: COMPLETE
+      - condition: when(true)
+        next: ABORT
+  - name: caccia_limit
+    mode: system
+    effects:
+      - type: comment_pr
+        pr: "{context:identify.pr.number}"
+        body: "Caccia が反復上限に到達しました。未解決スレッド数: {effect:caccia.caccia.unresolvedCount}"
+    rules:
+      - condition: when(effect.caccia_limit.comment_pr.success == true)
+        next: COMPLETE
+      - condition: when(true)
+        next: ABORT
+  - name: caccia_failed
+    mode: system
+    effects:
+      - type: comment_pr
+        pr: "{context:identify.pr.number}"
+        body: "Caccia が失敗しました: {effect:caccia.caccia.error}"
+    rules:
       - condition: when(true)
         next: ABORT

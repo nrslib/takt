@@ -73,6 +73,40 @@ const invalidTaskIdValues = [
 ] as const;
 
 describe('TaskExecutionConfigSchema', () => {
+  it('validates from_pr push identity independently from the selected diff base', () => {
+    const saved = { headSha: 'b'.repeat(40), baseBranch: 'main', headRepositoryUrl: '/head',
+      headRepositoryPushUrls: ['/push'] };
+    const task = { source: 'pr_review', pr_number: 123, branch: 'feature/pr', base_branch: 'review-base',
+      caccia_execution_source: 'from_pr', caccia_pushed_head: saved };
+    expect(TaskExecutionConfigSchema.parse(task)).toEqual(task);
+    for (const changes of [{ caccia_execution_source: undefined }, { source: 'manual' },
+      { pr_number: undefined }, { branch: undefined }, { merge_task: true }]) {
+      expect(TaskExecutionConfigSchema.safeParse({ ...task, ...changes }).success).toBe(false);
+    }
+    for (const changes of [{ headSha: 'bad' }, { baseBranch: '../bad' }, { headRepositoryUrl: '' },
+      { headRepositoryPushUrls: [] }, { headRepositoryPushUrls: [''] }, { headSha: undefined }]) {
+      expect(TaskExecutionConfigSchema.safeParse({ ...task, caccia_pushed_head: { ...saved, ...changes } }).success).toBe(false);
+    }
+  });
+  it('accepts from_pr execution source only with the saved PR review identity', () => {
+    const identity = { source: 'pr_review', pr_number: 123, branch: 'feature/pr', base_branch: 'main' };
+    expect(TaskExecutionConfigSchema.parse({ ...identity, caccia_execution_source: 'from_pr' }))
+      .toMatchObject({ ...identity, caccia_execution_source: 'from_pr' });
+    for (const data of [{}, { ...identity, source: 'manual' }, { ...identity, pr_number: undefined },
+      { ...identity, branch: undefined }]) {
+      expect(TaskExecutionConfigSchema.safeParse({ ...data, caccia_execution_source: 'from_pr' }).success).toBe(false);
+    }
+    expect(TaskExecutionConfigSchema.safeParse({ ...identity, caccia_execution_source: 'merge' }).success).toBe(false);
+  });
+
+  it.each(['caccia', 'manual'])('requires both recorded SHAs for push source %s', (source) => {
+    const record = { merge_pushed_head_sha: 'b'.repeat(40), merge_push_base_head_sha: 'a'.repeat(40),
+      merge_push_source: source };
+    expect(TaskExecutionConfigSchema.parse(record)).toEqual(record);
+    expect(TaskExecutionConfigSchema.safeParse({ ...record, merge_pushed_head_sha: undefined }).success).toBe(false);
+    expect(TaskExecutionConfigSchema.safeParse({ ...record, merge_push_base_head_sha: undefined }).success).toBe(false);
+  });
+
   it('should accept valid config with all optional fields', () => {
     const config = {
       worktree: true,
@@ -103,13 +137,6 @@ describe('TaskExecutionConfigSchema', () => {
 
   it('should accept empty config (all fields optional)', () => {
     expect(() => TaskExecutionConfigSchema.parse({})).not.toThrow();
-  });
-
-  it('should require the push base when skipping Caccia for missing activity', () => {
-    expect(() => TaskExecutionConfigSchema.parse({
-      merge_pushed_head_sha: 'a'.repeat(40),
-      merge_skip_caccia_if_no_activity: true,
-    })).toThrow('Caccia activity skip requires a recorded push base head');
   });
 
   it('should accept worktree as string', () => {

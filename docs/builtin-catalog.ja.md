@@ -32,9 +32,9 @@ TAKT に同梱されるワークフローとペルソナの一覧です。まず
 | 🔍 レビュー | `review` | 変更内容に応じた複数の観点でレビューする。 |
 |  | `review-fix` | レビューの指摘を修正して再確認する。 |
 |  | `caccia` | CodeRabbit レビューの1反復。渡されたスレッドを判断し、妥当な指摘を修正して判断レポートを出力する。 |
-|  | `merge-review` | `review` を呼び、CI の決着後に評価を PR にコメントする。fork の脅威検査は呼び出し前に merge コマンドが行う。 |
-|  | `merge-review-fix` | `review-fix`、修正の commit/push、push 後の head の CI 待機、CHANGES_REQUESTED の確認を経て PR をマージし、結果をコメントする。 |
-|  | `merge-review-fix-simple` | `takt merge` の既定。1体の読み取り専用レビュアーと、裁定・修正計画・修正・完了検証・再レビューを別ステップで実行する。`merge-review-fix` と同期・競合解決・push・CI 待機・CHANGES_REQUESTED の確認・マージを共通化する。 |
+|  | `merge-review` | review と Caccia 効果の後、CI と評価をコメントして終了する。 |
+|  | `merge-review-fix` | review-fix → push → Caccia 効果 → 最新 head の CI・レビュー判定 → マージ。 |
+|  | `merge-review-fix-simple` | takt merge の既定。1体のレビューと別ステップの裁定・修正・検証後、push → Caccia 効果 → CI・レビュー判定 → マージ。 |
 |  | `audit-unit` | ユニットテストの全件監査。振る舞いとカバレッジ不足を棚卸しし、コード修正なしで Issue 直貼り可能なレポートを作成する |
 |  | `audit-e2e` | E2E の全件監査。ユーザーフローとカバレッジ不足を棚卸しし、コード修正なしで Issue 直貼り可能なレポートを作成する |
 |  | `audit-security` | セキュリティ全件監査。プロジェクトの全ファイルを1つずつ読んでセキュリティレビューする |
@@ -100,6 +100,8 @@ TAKT に同梱されるワークフローとペルソナの一覧です。まず
 workflow YAML 自体には provider/model/provider-options field はありません。
 
 `takt` を実行すると workflow をインタラクティブに選択できます。
+
+マージ用ビルトインは Caccia を明示的に実行します。`merge-review` は `review → caccia → wait_ci → 評価コメント`、`merge-review-fix` と `merge-review-fix-simple` は `review/fix → commit_and_push → caccia → wait_ci → merge_pr` の順です。`success` と `skipped` は返された head の CI 待ちへ進みます。`limit` は未解決件数をコメントして COMPLETE で終了し、マージしません。効果の失敗は `error` をコメントして ABORT で終了します。push、タスク後処理、Pipeline からの暗黙の Caccia は廃止しました。`merge.auto_start: true` では PR 公開後にマージ用 workflow が起動し、その明示効果が Caccia を実行します。
 
 ## ビルトイン Persona 一覧
 

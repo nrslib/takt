@@ -142,14 +142,14 @@ Issueを読み込んでいる場合は、最新のタスクが現在のIssueの�
 | `/model <value>` | この会話で使う任意の model 名を指定する。 |
 | `/effort <value>` | この会話で使う任意の推論強度を指定する。 |
 | `/tell [指示]` | 実行中の worktree clone タスクを選び、追加指示を確認してから送る。指示を省略すると、そのタスクに関する最新の話題から単独で理解できる追加指示本文を生成する。対話端末が必要で、確認できない場合は送信しない。 |
-| `/requeue [補足]` | assistant / grill-me 会話で、会話から失敗・exceeded タスクを決める。failed タスクは会話から開始位置を決める。exceeded タスクは添えた発話から保存位置での継続または指定位置からの再実行を決め、発話がなければ保存位置を引き継ぐ。対象情報を表示して Y/n で確認する。補足はタスク名ではなく判断の手掛かりとして扱う。 |
+| `/requeue [補足]` | assistant / grill-me 会話で failed または exceeded タスクを再投入する。補足を会話末尾のユーザー発話としてタスクと開始位置の判定に渡す。AI が決められない場合や判定に失敗した場合は候補一覧から人が選ぶ。対象情報を表示して Y/n で確認する。補足なしの exceeded は保存位置を引き継ぐ。 |
 | `/retry [補足]` | assistant / grill-me 会話で、会話から失敗タスクを決め、改訂後の order 全文を作成して「タスクにつむ」または「会話を続ける」で確認する。 |
 
 `/tell` は通常の CLI/TUI の `assistant`、`grill-me`、`persona` 会話で利用でき、これらのモード間を切り替えた後も利用できます。送信先を選ぶには、有効な TAKT 管理の worktree clone で実行中のタスクが必要です。Web UI はローカルの `/tell` handoff を実行せず、`/tell このタスクを確認` のような入力も通常のメッセージとして assistant に送ります。Retry と Instruct の専用会話では `/tell` を公開せず、それぞれのタスク操作を使用します。
 
 通常の CLI/TUI の `assistant`、`grill-me`、`persona` 会話では `/issue <番号>` または `/issue <番号> <番号> ...` を使い、設定済み VCS provider から Issue を取得して現在の Source Context を置き換えられます。番号は裸の数字と `#` 付きの両方を指定できます。会話履歴と AI session は維持され、次の発言と `/go` には置換後の内容が使われます。指定した Issue の取得に失敗した場合は現在の context を維持します。このコマンドは `takt exec` では利用できません。
 
-`/requeue` と `/retry` は CLI/TUI の `assistant` と `grill-me` 会話で使います。`/requeue` は失敗または実行上限に達したタスクを確認して再投入し、`/retry` は失敗タスクの指示書を改訂してから再投入します。対象と開始位置が曖昧な場合は通知して操作を止めます。どちらも確認後にタスクを `pending` に戻し、その場では実行しません。実行上限に達したタスクで再開位置を変えたい場合は `/requeue` に補足を添えてください。Web UI からの再投入は各タスクの操作を使います。
+`/requeue` と `/retry` は CLI/TUI の `assistant` と `grill-me` 会話で使います。`/requeue` は失敗または実行上限に達したタスクを確認して再投入し、`/retry` は失敗タスクの指示書を改訂してから再投入します。`/requeue` では AI が対象や開始位置を決められない場合や判定に失敗した場合に、人が候補から選べます。補足は会話の最後のユーザー発話として両方の判定に渡し、候補名との機械的な照合は行いません。`/retry` は従来どおり曖昧なら通知して終了します。選択や確認を取りやめた場合は変更せず、その結果を会話に残します。どちらも確認後にタスクを `pending` に戻し、その場では実行しません。対話端末がなければ選択も変更も行いません。実行上限に達したタスクで再開位置を変えたい場合は `/requeue` に補足を添えてください。Web UI からの再投入は各タスクの操作を使います。
 
 選択内容は一時的で永続化されません。workflow、mode、provider、model の変更は、次の通常メッセージまたは `/go` で新しい AI session を作り、以前の会話履歴を参照情報として1回だけ渡します。effort だけの変更は現在の session の次回呼び出しへ適用されます。provider を変更すると、一時的な model と effort は消去されます。次の入力までに同じ設定コマンドを複数回実行した場合は、各設定で最後に選択した値だけが適用されます。これらの会話用 override は workflow 実行には影響しません。
 
@@ -697,11 +697,13 @@ takt merge "プロンプト変更以外"
 
 `--author`、繰り返し指定可能な `--label`（すべて一致）、`--base`、`--head`（`*` ワイルドカード）、`--managed-by-takt`、`--include-draft`、`--include-forks` を使用できます。既定では draft と fork を除外します。`--include-draft` は draft を、`--include-forks` は fork を含めます。CLI 条件が一つでもあれば設定の条件全体を置き換えます。`--workflow` だけの指定では設定条件を保持します。
 
-workflow は CLI、`merge.workflow`、`merge-review-fix-simple` の順に選びます。既定では gather の後に1体の読み取り専用レビュアーが動的ファセットで確認し、別ステップで指摘の裁定・修正・完了検証・再レビューを行います。`merge-review-fix` と同様に同期、必要なコンフリクト解消、push 後の head の CI 待機、CHANGES_REQUESTED の確認、マージを行います。並列レビューを使う場合は `--workflow merge-review-fix` を指定します。
+workflow は CLI、`merge.workflow`、`merge-review-fix-simple` の順に選びます。既定では gather の後に1体の読み取り専用レビュアーが動的ファセットで確認し、別ステップで指摘の裁定・修正・完了検証・再レビューを行います。`merge-review-fix` と同様に同期、必要なコンフリクト解消、明示的な Caccia 効果と返された head の CI 待機、CHANGES_REQUESTED の確認、マージを行います。並列レビューを使う場合は `--workflow merge-review-fix` を指定します。
 
 PR ごとに隔離クローンを作り、一括処理では既定で2件を同時実行します。`merge.concurrency` で変更でき、CLI の `--concurrency` が優先します。番号指定時は1件だけを処理します。
 
-`caccia.enabled: true` の場合、workflow が PR に push した後に CodeRabbit のレビューと Caccia の処理を待ち、最新の head で CI 判定とマージを進めます。workflow の push 前後とも CodeRabbit の活動がないと確認できた場合だけ、連結 Caccia の待機を省略して通常の CI 判定とマージを続けます。レビュー、スレッド、コメント、commit status、check run に CodeRabbit の活動がある場合や活動状況を確認できない場合は省略しません。初回レビューを待機期限内に確認できない場合は連結 Caccia をスキップとして記録し、マージを停止します。レビュー制限通知の再試行時刻が待機期限以降なら連結 Caccia を直ちにスキップし、通常の CI 判定とマージに進みます。期限より前なら時刻到来時に `@coderabbitai review` を一度だけ依頼します。初回レビュー中または Caccia が修正を push した後に制限通知を確認し、期限までにレビューが完了しなければ連結 Caccia をスキップとして記録して通常の CI 判定とマージに進みます。CodeRabbit が明示的にレビューをスキップした場合も同様です。Caccia が修正を push した後、制限通知がないまま再レビュー待機期限に達した場合もマージを停止します。続行前に最新の head と PR の識別情報を照合し、fork は脅威を再検査します。保存済みのスキップ結果は再開時に再確認し、その結果で続行を判断します。各 PR の失敗で他の PR を中止しません。レポートは元リポジトリの `.takt/runs` に残ります。
+GitLab でも MR の番号指定・一括選定から実行し、Caccia の `github_unavailable` による `skipped` 後に返された head の CI を待てます。マージ方式の指定と head 一致制約には未対応なので、これらを使うマージ操作は失敗します。CI 待機だけではマージ成功になりません。
+
+マージ用ビルトインは Caccia を明示的に実行します。`merge-review` は `review → caccia → wait_ci → 評価コメント`、`merge-review-fix` と `merge-review-fix-simple` は `review/fix → commit_and_push → caccia → wait_ci → merge_pr` の順です。`success` と `skipped` は返された head の CI 待ちへ進みます。`limit` は未解決件数をコメントして COMPLETE で終了し、マージしません。効果の失敗は `error` をコメントして ABORT で終了します。push、タスク後処理、Pipeline からの暗黙の Caccia は廃止しました。`merge.auto_start: true` では PR 公開後にマージ用 workflow が起動し、その明示効果が Caccia を実行します。各 PR の失敗で他の PR を中止しません。レポートは元リポジトリの `.takt/runs` に残ります。
 
 マージ処理は `takt list` にタスクとして記録します。隔離クローンの配置には通常タスクと同じ `worktree_dir` を使います。既定は `../takt-worktrees` で、親ディレクトリに書き込めない場合は既存の代替先 `.takt/worktrees` を使います。失敗や競合で停止した場合はクローンと Git のマージ状態を残します。`takt merge` を再実行すると新しいタスクと隔離クローンを作り、失敗したタスクとクローンは保持します。既存のタスクを再開するには `takt list` の **Requeue** を使い、指示を直して再開するには **Retry** を使います。再開時には保存した PR の識別情報と fork の脅威を再確認します。同じ PR のマージタスクが実行中または保留中なら、新しい起動と失敗タスクの再開を拒否します。PR のマージ完了を確認した後にクローンを削除します。AI が競合に関連するソース、テスト、lockfile を変更した場合も TAKT がその差分を stage し、作業開始前からある未stageや未追跡の利用者の変更を保持します。
 

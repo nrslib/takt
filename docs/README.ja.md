@@ -86,7 +86,7 @@ takt list
 
 ## CodeRabbit レビューループ
 
-GitHub PR に対して `takt caccia <PR番号>` を実行すると、CodeRabbit のレビューを待ち、隔離クローンで未解決の bot スレッドに対応し、反復ごとの判断レポートを保存します。`caccia.enabled` を有効にすると、TAKT が PR を作成・更新した後にも同じループを連結できます。連結経路はデフォルトで無効です。[CLI リファレンス](./cli-reference.ja.md#takt-caccia)と[設定ガイド](./configuration.ja.md)を参照してください。
+GitHub PR に対して `takt caccia <PR番号>` を実行すると、CodeRabbit のレビューを待ち、隔離クローンで未解決の bot スレッドに対応し、反復ごとの判断レポートを保存します。マージ用 workflow は明示的な `caccia` 効果で同じループを実行します。`caccia.enabled` は効果が CodeRabbit を待つかを制御し、既定は無効です。push や PR 公開からの暗黙の実行はありません。[CLI リファレンス](./cli-reference.ja.md#takt-caccia)と[設定ガイド](./configuration.ja.md)を参照してください。
 
 ### 動画チュートリアル
 

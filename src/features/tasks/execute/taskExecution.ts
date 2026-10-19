@@ -268,6 +268,12 @@ export async function executeTaskAndCompleteWithDetails(
         prNumber,
       }),
       ...(prContext ? { prContext } : {}),
+      cacciaExecutionSource: task.data?.caccia_execution_source,
+      cacciaPushedHead: task.data?.caccia_pushed_head,
+      ...(task.data?.caccia_execution_source === 'from_pr' ? { prMergePushRecorder: {
+        record: (headSha, _previousRemoteHeadSha, context) =>
+          taskRunner.recordCacciaPushedHead(task.name, headSha, context),
+      } } : {}),
       ...(loopAnalysisPublication === undefined
         ? {}
         : { loopAnalysisPublication }),

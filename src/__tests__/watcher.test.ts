@@ -251,7 +251,7 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
       prNumber: 123, headBranch: 'feature/pr', baseBranch: 'main', headSha: 'a'.repeat(40),
       headRepositoryUrl: '/fork.git', headRepositoryPushUrls: ['/fork.git'],
       workflow: 'merge-review', method: 'squash' as const,
-      threatCheckMaxDiffBytes: 1000, cacciaRequired: false,
+      threatCheckMaxDiffBytes: 1000,
     };
     const old = runner.startPrMergeTask({ ...mergeInput, worktreePath: join(projectDir, 'old-clone') });
     runner.forceFailRunningTask(old.name, { step: 'review', error: 'Manually marked as failed' });
@@ -273,7 +273,7 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
       prNumber: 123, headBranch: 'feature/pr', baseBranch: 'main', headSha: 'a'.repeat(40),
       headRepositoryUrl: '/fork.git', headRepositoryPushUrls: ['/fork.git'],
       workflow: 'missing-old-workflow', method: 'squash' as const,
-      threatCheckMaxDiffBytes: 1000, cacciaRequired: false,
+      threatCheckMaxDiffBytes: 1000,
     };
     const old = runner.startPrMergeTask({ ...mergeInput, worktreePath: join(projectDir, 'old-clone') });
     runner.forceFailRunningTask(old.name, { step: 'review', error: 'Manually marked as failed' });

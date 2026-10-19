@@ -139,6 +139,10 @@ const EnqueueTaskEffectBaseSchema = z.object({
 
 export const WorkflowEffectRawSchema = z.discriminatedUnion('type', [
   z.object({
+    type: z.literal('caccia'),
+    pr: EffectReferenceScalarSchema,
+  }).strict(),
+  z.object({
     type: z.literal('commit_and_push'),
     pr: EffectReferenceScalarSchema,
   }).strict(),

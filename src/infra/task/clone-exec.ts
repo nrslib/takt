@@ -87,7 +87,12 @@ function isShallowReferenceError(message: string): boolean {
   return message.includes('reference repository is shallow');
 }
 
-function cloneFailedError(): Error {
+function cloneFailedError(error: unknown, attempt: 'reference' | 'direct'): Error {
+  const stderr = getExecErrorStderr(error) || getErrorMessage(error);
+  const reason = stderr.includes('failed to copy file to ')
+    ? 'object-copy-failed'
+    : 'other';
+  log.error('Git clone failed', { attempt, reason });
   return new Error(CLONE_FAILED_MESSAGE);
 }
 
@@ -279,6 +284,7 @@ export function cloneAndIsolate(
 
   const branchArgs = branch ? ['--branch', branch] : [];
   const commonArgs: string[] = [
+    '--no-local',
     ...(deferSubmodules ? [] : cloneSubmoduleOptions.args),
     ...branchArgs,
     projectDir,
@@ -299,11 +305,11 @@ export function cloneAndIsolate(
       cleanupPartialClone(clonePath);
       try {
         runIsolatedGitCommandSync(projectDir, fallbackCloneArgs);
-      } catch {
-        throw cloneFailedError();
+      } catch (fallbackErr) {
+        throw cloneFailedError(fallbackErr, 'direct');
       }
     } else {
-      throw cloneFailedError();
+      throw cloneFailedError(err, useReferenceClone ? 'reference' : 'direct');
     }
   }
 
@@ -488,6 +494,7 @@ export async function cloneAndIsolateAbortable(
 
   const branchArgs = branch ? ['--branch', branch] : [];
   const commonArgs: string[] = [
+    '--no-local',
     ...(deferSubmodules ? [] : cloneSubmoduleOptions.args),
     ...branchArgs,
     projectDir,
@@ -516,10 +523,10 @@ export async function cloneAndIsolateAbortable(
         if (isTaskAbortError(fallbackErr)) {
           throw fallbackErr;
         }
-        throw cloneFailedError();
+        throw cloneFailedError(fallbackErr, 'direct');
       }
     } else {
-      throw cloneFailedError();
+      throw cloneFailedError(err, useReferenceClone ? 'reference' : 'direct');
     }
   }
 

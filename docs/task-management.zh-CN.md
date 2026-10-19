@@ -218,7 +218,7 @@ takt list
 | **Create PR** | 将失败 run 的修改提交并 push，创建 pull request |
 | **Delete** | 删除失败任务记录 |
 
-在 CLI/TUI 的 assistant 和 grill-me 对话中，`/requeue [补充说明]` 根据对话确定 failed 任务和起点，显示任务名称、摘要、workflow 和起点后请求 Y/n 确认。确认后会将任务置为 `pending`，不修改 `order.md`。`/retry [补充说明]` 根据对话确定 failed 任务，显示完整修订 order，并让用户选择 **Save task** 或 **Continue**。Save task 会归档旧版并将任务置为 `pending`；Continue 不修改任务并返回对话。补充说明仅作为对话判断的参考，不直接指定任务。目标含糊或没有候选时会返回提示，不显示确认界面。两种命令都需要交互式终端，也不会立即启动 workflow。在 persona 对话和 Web UI 中，这些命令文本作为普通消息处理。`takt resume` 中面向直接 run 的 `/retry` 保持独立。
+在 CLI/TUI 的 assistant 和 grill-me 对话中，`/requeue [补充说明]` 根据对话确定 failed 或 exceeded 任务。补充说明作为对话最后的用户发言传给任务选择和起点选择，不会与任务名称进行机械匹配。AI 无法确定目标或判断失败时，会显示候选任务列表供用户选择；无法确定起点时，也会显示可用起点列表。显示任务名称、摘要、workflow 和起点后请求 Y/n 确认。确认后将任务置为 `pending`，不修改 `order.md`。取消选择或确认不会修改任务，结果会记录在对话中；重新排队成功的结果也会连同任务名称记录下来。`/retry [补充说明]` 保持原有行为：根据对话确定 failed 任务，显示完整修订 order，并让用户选择 **Save task** 或 **Continue**。Save task 会归档旧版并将任务置为 `pending`；Continue 不修改任务并返回对话。`/retry` 的目标或起点不明确时会返回提示；两种命令都在没有候选时返回提示。两种命令都需要交互式终端，没有 TTY 时不会显示选择或修改任务，也不会立即启动 workflow。在 persona 对话和 Web UI 中，这些命令文本作为普通消息处理。`takt resume` 中面向直接 run 的 `/retry` 保持独立。
 
 ### Pending 任务的操作
 
@@ -234,6 +234,8 @@ takt list
 
 选择带有 worktree clone 的运行中任务后，会打开普通 assistant 对话，并将该任务作为 `/tell` 的初始目标。对话中可以查看其他任务或讨论新任务。`/tell` 在确认后再次检查目标，只向确认时选中的任务写入；已完成、已删除、slug 不匹配或非 clone 的 run 不会成为候选，也不会接收指令。
 
+由 `takt merge` 启动的合并任务，以及 requeue 或 retry 后由 `takt run` / `takt watch` 执行的合并任务，只要仍在运行且具有 worktree clone，也可作为 `/tell` 的目标。CLI/TUI 对话、从 `takt list` 打开的对话和 MCP 的 `takt_tell_run` 使用相同的目标解析。合并 run 的元数据和介入记录保存在原项目的 `.takt/runs/<slug>/` 中。指令会在下一个 agent step 送达，包括子 workflow 内的 agent step；system step 不会消费这些指令。
+
 ### Exceeded 任务的操作
 
 | 操作 | 说明 |
@@ -241,7 +243,7 @@ takt list
 | **Requeue** | 返回 `pending`，从停止处继续 |
 | **Delete** | 永久删除任务 |
 
-会话中的 `/requeue` 也可以处理 exceeded 任务。确认已停止的位置后，它会保留已有恢复信息并将任务置为 `pending`，不提供起点选择，也不会启动 worker。
+会话中的 `/requeue` 也可以处理 exceeded 任务。补充说明用于判断继续已保存的执行或从指定步骤（包括子 workflow 的步骤）重新执行，确认界面会显示操作和位置。继续会保留已有执行信息，重新执行会清除旧 checkpoint 和 iteration limit 信息。指定位置不可用或 AI 无法确定起点时，会显示可用起点供用户选择。没有补充说明时保留已保存的停止位置。不修改指示书，也不会启动 worker。任务列表中的 **Requeue** 仍使用已保存的停止位置。
 
 ### PR-Failed 任务的操作
 
@@ -329,13 +331,13 @@ takt list --non-interactive --action try --branch takt/my-branch
 
 ## CodeRabbit 审查循环（`caccia`）
 
-任务后处理成功创建或更新 PR 后，TAKT 可以运行 Caccia 审查循环。该自动关联路径默认关闭，只有在项目或全局配置中设置 `caccia.enabled: true` 才会启动。Pipeline 模式在 `--auto-pr` 成功创建 PR 后也使用同一入口。
+合并 builtin 明确执行 Caccia：`merge-review` 按 `review → caccia → wait_ci → 评价评论` 执行，`merge-review-fix` 和 `merge-review-fix-simple` 按 `review/fix → commit_and_push → caccia → wait_ci → merge_pr` 执行。`success` 与 `skipped` 继续等待返回 head 的 CI。`limit` 评论未解决线程数后以 COMPLETE 结束，不合并；执行错误评论 `error` 后以 ABORT 结束。push、任务后处理和 Pipeline 不再隐式启动 Caccia。设置 `merge.auto_start: true` 时，PR 发布后启动合并 workflow，由其明确的 effect 执行 Caccia。
 
-Caccia 会等待 CodeRabbit 的审查，只处理由 `coderabbitai` 发起且尚未解决的线程。每轮都在临时克隆中运行指定 workflow，将判断报告保存在 `.takt/runs/`，推送修复后只解决本轮判断过的线程，再等待 CodeRabbit 审查已推送的 commit。由人工发起的线程会继续保持未解决。Caccia 不会回复审查评论。自动关联的 Caccia 结果不会改变已完成任务的结果；成功和达到迭代上限的结果会写入日志，并通过已配置的通知路径发送。
+Caccia 会等待 CodeRabbit 的审查，只处理由 `coderabbitai` 发起且尚未解决的线程。每轮都在临时克隆中运行指定 workflow，将判断报告保存在 `.takt/runs/`，推送修复后只解决本轮判断过的线程，再等待 CodeRabbit 审查已推送的 commit。由人工发起的线程会继续保持未解决。Caccia 不会回复审查评论。成功和达到迭代上限的结果会写入日志，并通过已配置的通知路径发送。
 
-`wait_timeout_ms` 规定初次审查和每次推送后复审的等待期限，重新请求审查也包含在内。若审查限额通知给出的可重试时间早于期限，Caccia 会在该时间到达时通过 `@coderabbitai review` 评论请求一次审查；若可重试时间为期限或更晚，则立即跳过。收到限额通知后，审查到期限仍未完成时也会跳过。未收到限额通知时，初次等待超时会跳过，推送后的等待超时会记录为错误。已完成的任务结果会保留；单独运行 `takt caccia` 时，跳过或出错都会以非零状态退出。
+`wait_timeout_ms` 规定初次审查和每次推送后复审的等待期限，重新请求审查也包含在内。若审查限额通知给出的可重试时间早于期限，Caccia 会在该时间到达时通过 `@coderabbitai review` 评论请求一次审查；若可重试时间为期限或更晚，则立即跳过。收到限额通知后，审查到期限仍未完成时也会跳过。未收到限额通知时，初次等待超时会跳过，推送后的等待超时会记录为错误。system effect 返回 `success: false` 与 `error`；单独运行 `takt caccia` 时，跳过或出错都会以非零状态退出。
 
-自动关联的进度、workflow 输出、结果和失败信息遵循父任务的显示模式。并行任务沿用相同的任务名前缀和颜色；silent 模式不向屏幕输出。父任务会等待 Caccia 结束后再完成。
+effect 的进度、workflow 输出、结果和失败信息遵循父任务的显示模式。并行任务沿用相同的任务名前缀和颜色；silent 模式不向屏幕输出。workflow 等待 effect 结果后进入下一步。
 
 也可以运行 `takt caccia <PR-number>` 手动处理现有 PR。命令结果和配置见[CLI 参考](./cli-reference.md#takt-caccia)与[配置参考](./configuration.zh-CN.md#caccia-review-loop)。
 

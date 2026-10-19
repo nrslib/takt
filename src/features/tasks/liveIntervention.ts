@@ -2,6 +2,7 @@ import { readRunMetaBySlug, type RunMeta } from '../../core/workflow/run/run-met
 import { LiveInterventionFileStore } from '../../infra/workflow/live-intervention-store.js';
 import { TaskRunner, type TaskState } from '../../infra/task/index.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
+import { assertReusableWorktreePath } from './execute/reusedWorktree.js';
 import { assertTaskStateWorktreeOwnership } from './taskStateWorktreeOwnership.js';
 
 export interface TellableRunningTask {
@@ -46,15 +47,20 @@ function resolveTellableTaskFromTask(
     throw new Error(`Tell target run is not a worktree clone: ${runSlug}`);
   }
   const worktreePath = task.worktreePath!;
+  const isMergeTask = task.mergeTask === true;
   try {
-    assertTaskStateWorktreeOwnership(projectCwd, task);
+    if (isMergeTask) {
+      assertReusableWorktreePath(projectCwd, worktreePath);
+    } else {
+      assertTaskStateWorktreeOwnership(projectCwd, task);
+    }
   } catch (error) {
     throw new Error(`Tell target run is not a valid worktree clone: ${runSlug}`, { cause: error });
   }
 
   let meta: RunMeta | null;
   try {
-    meta = readRunMetaBySlug(worktreePath, runSlug);
+    meta = readRunMetaBySlug(isMergeTask ? projectCwd : worktreePath, runSlug);
   } catch (error) {
     throw new Error(`Tell target run slug mismatch: ${runSlug}`, { cause: error });
   }

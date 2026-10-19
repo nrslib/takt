@@ -642,15 +642,18 @@ const PREPARE_TARGET_OVERRIDES = {
     'review-external-confirmation-code-failure',
     'review-external-confirmation-ungrounded',
     'review-external-confirmation-service-outage',
+    'review-external-confirmation-basis-not-applicable',
   ],
   'supervise-external-confirmation': [
     'supervise-external-confirmation-generic',
     'supervise-external-confirmation-peer',
     'supervise-external-confirmation-missing-basis',
     'supervise-external-confirmation-incomplete-verification',
+    'supervise-external-confirmation-basis-not-applicable',
   ],
   'replan-external-confirmation': [
     'replan-external-confirmation-handoff',
+    'replan-external-confirmation-basis-not-applicable',
   ],
   'interactive-topic-boundary': [],
   'completion-scope-structured': [],

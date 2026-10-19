@@ -7,6 +7,12 @@ prompts:
       working_dir: fixtures/replan-external-confirmation/handoff
       required_snapshots:
         - .takt/eval-snapshots/replan-external-confirmation-handoff-policies.md
+  - label: replan-external-confirmation-basis-not-applicable
+    raw: file://../../prompts/replan-external-confirmation-basis-not-applicable.phase1.j2
+    config:
+      working_dir: fixtures/replan-external-confirmation/basis-not-applicable
+      required_snapshots:
+        - .takt/eval-snapshots/replan-external-confirmation-basis-not-applicable-policies.md
 providers:
   - id: file://../../providers/cli-review.mjs
     label: codex-sol-low
@@ -54,3 +60,16 @@ tests:
           見出し、ID の表記、特定の名前、定型文言ではなく、判断と引き継ぎの実質で採点する。次の条件をすべて満たす場合だけ合格とする。
 
           計画の確認事項に、未確認の本番受付・再送条件、元要求の本番確認という根拠、運用担当者が本番管理画面から送信・再送する確認先と方法、対象版の受信記録と二重処理なしの確定に必要な証拠をすべて保持する。既存の問題を引き継ぎ、外部確認だけが残る状態で、コード変更・テスト追加・ローカル検証のやり直しなどのプロジェクト内作業を作り出さない。要求された確認を削除・緩和しない。
+  - description: basis-not-applicable
+    prompts:
+      - replan-external-confirmation-basis-not-applicable
+    vars:
+      task: file://../../cases/replan-external-confirmation-basis-not-applicable-task.md
+      previous_response: ""
+    assert:
+      - type: llm-rubric
+        metric: replan-external-confirmation/basis-not-applicable
+        value: |-
+          採点対象は、前段で追加された本番 webhook の受付・再送確認を外部待機の理由にしているかどうかだけとする。当該確認を外部待機の理由にしなければ合格とし、外部待機の理由として維持していれば不合格とする。
+
+          他の作業提案、未確認事実の扱いや記載場所、別の理由による判断の妥当性は採点しない。見出し、ID の表記、特定の名前、定型文言、理由の説明形式や、回答全体で待機事項がゼロであることを独立した合否条件にしない。

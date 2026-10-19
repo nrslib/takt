@@ -27,7 +27,8 @@ import {
 } from './list/taskRetryStartSelection.js';
 
 export interface FailedTaskRetryPreparation {
-  readonly worktreePath: string;
+  readonly worktreePath: string | undefined;
+  readonly freshStart: boolean;
   readonly interactionCwd: string;
   readonly runsBaseDir: string;
   readonly failure: TaskFailure;
@@ -35,6 +36,7 @@ export interface FailedTaskRetryPreparation {
   readonly matchedRunSlug: string | null;
   readonly runMeta: RunMeta | null;
   readonly previousWorkflow: string | undefined;
+  readonly previousStartStep?: string;
   readonly previousOrderContent: string;
   readonly resumePoint: WorkflowResumePoint | undefined;
 }
@@ -64,8 +66,21 @@ function requireFailedTaskFailure(task: TaskListItem): TaskFailure {
   return task.failure;
 }
 
-function resolveWorktreePath(projectDir: string, task: TaskListItem): string {
-  if (!task.worktreePath) {
+function isFreshCloneRetryCandidate(task: TaskListItem): boolean {
+  const data = task.data;
+  return data !== undefined
+    && Boolean(data.worktree)
+    && data.merge_task !== true
+    && task.worktreePath === undefined
+    && task.runSlug === undefined
+    && task.sourceRunSlug === undefined
+    && !task.failure?.step?.trim()
+    && data.resume_point === undefined;
+}
+
+function resolveWorktreePath(projectDir: string, task: TaskListItem): string | undefined {
+  if (task.worktreePath === undefined) {
+    if (isFreshCloneRetryCandidate(task)) return undefined;
     throw new Error(`Worktree path is not set for task: ${task.name}`);
   }
   if (task.data?.merge_task === true) {
@@ -126,15 +141,16 @@ export function prepareFailedTaskRetry(
 
   const failure = requireFailedTaskFailure(task);
   const worktreePath = resolveWorktreePath(projectDir, task);
-  const interactionCwd = task.data?.merge_task === true && task.data.merge_clone_prepared === false
+  const freshStart = worktreePath === undefined;
+  const interactionCwd = freshStart || task.data?.merge_task === true && task.data.merge_clone_prepared === false
     ? projectDir : worktreePath;
-  const runsBaseDir = task.data?.merge_task === true ? projectDir : worktreePath;
+  const runsBaseDir = freshStart || task.data?.merge_task === true ? projectDir : worktreePath;
   const previousOrderContent = resolveTaskOrderContent(
     projectDir,
     task.taskDir,
     task.data?.task ?? task.content,
   );
-  const matchedRunSlug = resolveRetryRunSlug(task, runsBaseDir);
+  const matchedRunSlug = freshStart ? null : resolveRetryRunSlug(task, runsBaseDir);
   const runMeta = readRetryRunMeta(runsBaseDir, matchedRunSlug);
   const resumePoint = resolveRetryResumePoint(task, runMeta);
   const previousWorkflow = task.data
@@ -143,6 +159,7 @@ export function prepareFailedTaskRetry(
 
   return {
     worktreePath,
+    freshStart,
     interactionCwd,
     runsBaseDir,
     failure,
@@ -150,6 +167,7 @@ export function prepareFailedTaskRetry(
     matchedRunSlug,
     runMeta,
     previousWorkflow,
+    previousStartStep: task.data?.start_step,
     previousOrderContent,
     resumePoint,
   };
@@ -189,7 +207,7 @@ export function buildFailedTaskRetryStartContext(
     workflowConfig,
     preparation.failure,
     preparation.resumePoint,
-  );
+  ) ?? (preparation.freshStart ? preparation.previousStartStep : undefined);
   const options: SelectTaskRetryStartOptions = {
     projectCwd: projectDir,
     lookupCwd: preparation.interactionCwd,

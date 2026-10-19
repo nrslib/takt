@@ -173,18 +173,43 @@ const DeepSeekReasoningEffortSchema = z.enum(['off', 'low', 'high', 'max'], {
   error: (issue) => `Invalid DeepSeek reasoning_effort ${JSON.stringify(issue.input)}; expected off, low, high, or max`,
 });
 
+/** Require an explicit npm prefix and a nonempty package spec for string plugin options. */
+function hasNpmPackageSpec(source: string): boolean {
+  return source.startsWith('npm:') && source.slice('npm:'.length).trim().length > 0;
+}
+
+const DeepSeekHarnessPluginObjectSchema = z.object({
+  id: z.string().min(1).optional(),
+  source: z.string().min(1),
+  ref: z.string().min(1).optional(),
+  config: z.record(z.string(), z.unknown()).optional(),
+}).strict().superRefine((plugin, ctx) => {
+  if (plugin.source.startsWith('npm:')) {
+    if (!hasNpmPackageSpec(plugin.source)) {
+      ctx.addIssue({ code: 'custom', path: ['source'], message: 'npm plugins require a package spec.' });
+    }
+    if (plugin.ref !== undefined) {
+      ctx.addIssue({ code: 'custom', path: ['ref'], message: 'npm plugins do not support ref.' });
+    }
+    return;
+  }
+  if (plugin.id === undefined) {
+    ctx.addIssue({ code: 'custom', path: ['id'], message: 'Git plugins require an id.' });
+  }
+});
+
 const DeepSeekHarnessProviderOptionsSchema = z.object({
   base_url: z.string().min(1).optional(),
   max_tokens: z.number().int().positive().safe().optional(),
   request_timeout_ms: z.number().int().positive().safe().max(2_147_483_647).optional(),
   shutdown_timeout_ms: z.number().int().positive().safe().max(2_147_483_647).optional(),
   reasoning_effort: DeepSeekReasoningEffortSchema.optional(),
-  plugins: z.array(z.object({
-    id: z.string().min(1),
-    source: z.string().min(1),
-    ref: z.string().min(1).optional(),
-    config: z.record(z.string(), z.unknown()).optional(),
-  }).strict()).optional(),
+  plugins: z.array(z.union([
+    z.string().min(1).refine(hasNpmPackageSpec, {
+      message: 'Plugin string sources must use npm:<package-spec>.',
+    }),
+    DeepSeekHarnessPluginObjectSchema,
+  ])).optional(),
 }).strict();
 
 const PiProviderOptionsSchema = z.object({
@@ -685,12 +710,12 @@ const NormalizedStepProviderOptionsSchema = z.object({
     requestTimeoutMs: z.number().int().positive().safe().max(2_147_483_647).optional(),
     shutdownTimeoutMs: z.number().int().positive().safe().max(2_147_483_647).optional(),
     reasoningEffort: DeepSeekReasoningEffortSchema.optional(),
-    plugins: z.array(z.object({
-      id: z.string().min(1),
-      source: z.string().min(1),
-      ref: z.string().min(1).optional(),
-      config: z.record(z.string(), z.unknown()).optional(),
-    }).strict()).optional(),
+    plugins: z.array(z.union([
+      z.string().min(1).refine(hasNpmPackageSpec, {
+        message: 'Plugin string sources must use npm:<package-spec>.',
+      }),
+      DeepSeekHarnessPluginObjectSchema,
+    ])).optional(),
   }).strict().optional(),
   pi: z.object({
     guards: z.object({

@@ -121,10 +121,10 @@ takt hello
 | `/model <value>` | 为当前会话指定任意 model 名称。 |
 | `/effort <value>` | 为当前会话指定任意推理强度。 |
 | `/tell [指令]` | 选择一个正在运行的 worktree clone 任务，确认追加指令后发送。省略指令时只根据与该任务相关的最新话题生成可独立理解的追加指令正文。需要交互式终端；无法确认时不会发送指令。 |
-| `/requeue [补充说明]` | 在 assistant 或 grill-me 对话中，根据对话确定 failed 或 exceeded 任务。failed 任务根据对话选择起点；exceeded 任务根据附加说明决定继续已保存的执行，或从指定位置重新执行；没有附加说明时保留已保存的停止位置。显示任务信息后请求 Y/n 确认。补充说明用于辅助判断，不是任务名称。 |
+| `/requeue [补充说明]` | 在 assistant 或 grill-me 对话中重新排队 failed 或 exceeded 任务。补充说明作为最后的用户发言传给任务和起点的判断。AI 无法决定或判断失败时，由用户从候选列表中选择。显示任务信息后请求 Y/n 确认。没有补充说明的 exceeded 任务保留已保存的停止位置。 |
 | `/retry [补充说明]` | 在 assistant 或 grill-me 对话中，根据对话确定 failed 任务，生成完整的修订 order，并通过 Save task / Continue 确认。 |
 
-`/requeue` 和 assistant 对话中的 `/retry` 仅在 CLI/TUI 的 `assistant` 与 `grill-me` 模式可用。`/requeue` 可处理 failed 和 exceeded；`/retry` 只处理 failed。assistant 根据对话选择任务和起点。对于 exceeded 任务，附加说明用于选择继续已保存的执行或从指定步骤（包括子 workflow 的步骤）重新执行。如果指定位置不明确或不可用，则提示并停止重新排队；没有附加说明时保留已保存的停止位置。没有候选或无法唯一确定目标时，只返回提示，不显示确认界面。`/requeue` 显示任务名称、摘要、workflow 和起点，经 Y/n 批准后将任务置为 `pending`，不修改 `order.md`。`/retry` 显示同样的任务信息和完整修订 order；选择 **Save task** 会归档旧版并将任务置为 `pending`，选择 **Continue** 则不修改任务并返回对话。两种操作都不会立即启动 workflow，且需要交互式终端。在 persona 对话和 Web UI 中，这些命令文本作为普通消息处理。`takt resume` 专用 retry 对话中的现有 `/retry` 属于独立路径。 在 Workflow Maker（`takt make`）中，这些字符串不会执行任务操作，而是作为普通对话消息发送给 provider。
+`/requeue` 和 assistant 对话中的 `/retry` 仅在 CLI/TUI 的 `assistant` 与 `grill-me` 模式可用。`/requeue` 可处理 failed 和 exceeded；`/retry` 只处理 failed。`/requeue` 的补充说明会作为对话最后的用户发言传给任务选择和起点选择，不会与候选名称进行机械匹配。AI 无法确定目标或起点、返回无效结果或判断失败时，会显示可用候选供用户选择。对于 exceeded 任务，附加说明用于选择继续已保存的执行或从指定步骤（包括子 workflow 的步骤）重新执行；没有附加说明时保留已保存的停止位置。`/retry` 保持原有行为，无法唯一确定目标或起点时只返回提示。两种命令都在没有候选时返回提示。`/requeue` 显示任务名称、摘要、workflow 和起点，经 Y/n 批准后将任务置为 `pending`，不修改 `order.md`。取消选择或确认不会修改任务，结果会记录在对话中。`/retry` 显示同样的任务信息和完整修订 order；选择 **Save task** 会归档旧版并将任务置为 `pending`，选择 **Continue** 则不修改任务并返回对话。两种操作都不会立即启动 workflow，且需要交互式终端；没有 TTY 时不会显示选择或修改任务。在 persona 对话和 Web UI 中，这些命令文本作为普通消息处理。`takt resume` 专用 retry 对话中的现有 `/retry` 属于独立路径。在 Workflow Maker（`takt make`）中，这些字符串不会执行任务操作，而是作为普通对话消息发送给 provider。
 
 这些选择只在当前会话中有效，不会持久化。workflow、mode、provider 或 model 的更改会在下一条普通消息或 `/go` 时创建新的 AI session，并只将之前的对话作为参考上下文传递一次。仅更改 effort 时，会应用到当前 session 的下一次调用。更改 provider 会清除临时 model 和 effort。在下一次输入前执行多个设置命令时，每项设置只应用最后一次选择的值。会话 override 不影响 workflow 执行。
 
@@ -611,7 +611,9 @@ takt purge --retention-days 14
 
 所有候选均返回有效的结构化判断后，显示选中的 PR 编号及理由和排除的 PR 编号，无需确认即可执行选中的 PR workflow。判断缺失或无效、提供商错误、材料获取失败或文件列表不完整时，不启动任何 PR workflow，并以非零退出码结束。候选或选中结果为空时，处理数和合并数均为 0，退出码为 0。处理数和实际合并数的显示保持原有含义。
 
-默认使用 `merge-review-fix-simple` workflow：由一个只读审查代理进行审查，再由独立步骤裁定问题、规划和实施修复、验证并重新审查。需要并行审查时，可指定 `--workflow merge-review-fix`。不指定 PR 编号时，默认同时处理 2 个 PR；`merge.concurrency` 可更改默认值，`--concurrency` 可覆盖本次运行。指定编号时只处理该 PR。如果启用了 `caccia.enabled`，workflow 推送 PR 后会等待 CodeRabbit 审查和 Caccia 处理，再根据最新的 head 进行 CI 判断和合并。仅当 workflow 推送前后均确认没有 CodeRabbit 活动时，才会跳过关联的 Caccia 等待并继续正常的 CI 判断与合并。审查、线程、评论、提交状态或检查运行中有 CodeRabbit 活动，或者活动状态不明时，不会跳过等待。如果在等待期限内无法确认首次审查，关联的 Caccia 会记录为已跳过，并停止合并。审查限额通知给出的重试时间达到或超过等待期限时，关联的 Caccia 会立即跳过，然后继续正常的 CI 判断与合并；若早于期限，则在该时间到达时只发送一次 `@coderabbitai review` 评论。首次审查或 Caccia 推送修复后的等待中收到限额通知后，审查到期限仍未完成时会记录为已跳过，然后继续正常的 CI 判断与合并。CodeRabbit 明确跳过审查时同样如此。Caccia 推送修复后若未收到限额通知且再审查超时，也会停止合并。继续前会核对最新的 head 和 PR 身份，并重新检查 fork 风险。继续执行保存有跳过结果的任务时，会重新确认并根据结果决定是否继续合并。
+默认使用 `merge-review-fix-simple` workflow：由一个只读审查代理进行审查，再由独立步骤裁定问题、规划和实施修复、验证并重新审查。需要并行审查时，可指定 `--workflow merge-review-fix`。不指定 PR 编号时，默认同时处理 2 个 PR；`merge.concurrency` 可更改默认值，`--concurrency` 可覆盖本次运行。指定编号时只处理该 PR。合并 builtin 明确执行 Caccia：`merge-review` 按 `review → caccia → wait_ci → 评价评论` 执行，`merge-review-fix` 和 `merge-review-fix-simple` 按 `review/fix → commit_and_push → caccia → wait_ci → merge_pr` 执行。`success` 与 `skipped` 继续等待返回 head 的 CI。`limit` 评论未解决线程数后以 COMPLETE 结束，不合并；执行错误评论 `error` 后以 ABORT 结束。push、任务后处理和 Pipeline 不再隐式启动 Caccia。设置 `merge.auto_start: true` 时，PR 发布后启动合并 workflow，由其明确的 effect 执行 Caccia。
+
+GitLab 支持指定 MR 编号和批量选择。Caccia 返回原因是 `github_unavailable` 的 `skipped`，然后 workflow 等待返回 head 的 CI。合并方式和 head 限制仍不受支持，使用这些参数的合并操作会失败。仅完成 CI 等待不计为合并成功。
 
 每个 PR 的合并任务都会显示在 `takt list`。隔离克隆与普通任务使用相同的 `worktree_dir`：默认位于 `../takt-worktrees`，父目录不可写时使用现有的 `.takt/worktrees` 后备位置。失败或冲突时会保留克隆及 Git 合并状态，以便检查。再次运行 `takt merge` 会创建新任务和隔离克隆，并保留失败的任务及克隆。要继续原有任务，请在 `takt list` 中使用 **Requeue**；要修改指令后继续，请使用 **Retry**。继续执行时会重新核对 PR 身份和 fork 风险。同一 PR 的合并任务正在运行或等待执行时，会阻止新任务启动及失败任务继续执行。确认 PR 已合并后才删除克隆。AI 可修改与冲突相关的源码、测试和 lockfile；TAKT 暂存本次修改，并保留此前未暂存或未跟踪的用户改动。
 

@@ -225,7 +225,7 @@ describe('Merge PR persistent clone ownership', () => {
       prNumber: number, headBranch: 'main', baseBranch: 'main', headSha: prHead,
       headRepositoryUrl: repository, headRepositoryPushUrls: [repository],
       workflow: 'merge-review', method: 'squash', worktreePath: join(root, `clone-${number}-${repository.length}`),
-      threatCheckMaxDiffBytes: 1000, cacciaRequired: false,
+      threatCheckMaxDiffBytes: 1000,
     });
     start(123, '/fork-one');
     expect(() => start(124, '/fork-two')).not.toThrow();
@@ -241,7 +241,7 @@ describe('Merge PR persistent clone ownership', () => {
       prNumber: 123, headBranch: 'feature/pr', baseBranch: 'main', headSha: prHead,
       headRepositoryUrl: fork, headRepositoryPushUrls: [fork],
       workflow: 'merge-review', method: 'squash', worktreePath: join(root, 'active-clone'),
-      threatCheckMaxDiffBytes: 1000, cacciaRequired: false,
+      threatCheckMaxDiffBytes: 1000,
     });
     expect(() => runner.requeueTask(failed.name, ['failed']))
       .toThrow('Active task target already exists');
@@ -467,9 +467,10 @@ describe('Merge PR persistent clone ownership', () => {
     expect(existsSync(paths[0]!)).toBe(true);
   });
 
-  it('番号指定のforkで累積指示・CI変更をコメントし本体開始前にcloneを保持する', async () => {
+  it.each(['test.yml', '@org/team'])('番号指定のforkで累積指示・CI変更%sを安全にコメントし本体を停止する', async (fileName) => {
     const author = join(root, 'author');
-    for (const file of ['CLAUDE.md', '.github/workflows/test.yml']) {
+    const workflowPath = `.github/workflows/${fileName}`;
+    for (const file of ['CLAUDE.md', workflowPath]) {
       mkdirSync(join(author, file, '..'), { recursive: true });
       writeFileSync(join(author, file), 'untrusted instructions\n');
       git(author, 'add', file); git(author, 'commit', '-m', `add ${file}`);
@@ -483,7 +484,8 @@ describe('Merge PR persistent clone ownership', () => {
     expect(mocks.comment).toHaveBeenCalledOnce();
     const [number, comment, cwd] = mocks.comment.mock.calls[0]!;
     expect(number).toBe(123); expect(cwd).toBe(project);
-    expect(comment).toContain('CLAUDE.md'); expect(comment).toContain('.github/workflows/test.yml');
+    expect(comment).toContain('CLAUDE.md'); expect(comment).toContain(workflowPath.replaceAll('@', '＠'));
+    expect(comment).not.toContain('@');
     expect(mocks.agent).not.toHaveBeenCalled(); expect(mocks.workflow).not.toHaveBeenCalled();
     expect(paths).toHaveLength(1); expect(existsSync(paths[0]!)).toBe(true);
   });
