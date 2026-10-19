@@ -8,7 +8,7 @@ For findings about threats explicitly excluded from protection and the part of a
 
 | Situation | Treatment |
 |-----------|-----------|
-| The finding assumes inputs, states, or quantities outside “Scope of inputs used for counterexamples” below, or asks only for measures against those premises (locks, mutual exclusion, validation against tampering, new limits, etc.) | Unnecessary expansion. If the same finding also establishes a violation under applicable premises, judge only that part |
+| The finding assumes inputs, states, or quantities outside “Scope of inputs used for counterexamples”. Or it asks only for measures against those premises (locks, mutual exclusion, validation against tampering, new limits, etc.) | Unnecessary expansion. If the same finding also establishes a violation under applicable premises, judge only that violation |
 | For a repaired problem, repairs to current code and in-environment verification needed to close its acceptance criteria are complete; the only unmet criteria are confirmations grounded in the requirements or existing project contracts that cannot be observed in this execution environment (another execution environment, an external service, a physical device, human confirmation, etc.) | Awaiting external confirmation (not a repair target) |
 | Direct violation of the original requirement or acceptance criteria | Repair |
 | Regression introduced by the current diff or repair | Repair |

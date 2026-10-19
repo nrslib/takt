@@ -110,7 +110,7 @@ test('adjudication premise row stays wholly inside the production 2000 character
       facetsRoots: [root], repertoireDirs: [], allowedRoots: [root],
     }).body;
     const row = policy.split('\n').find(line => line.startsWith(
-      language === 'ja' ? '| 指摘の前提にする入力' : '| The finding assumes inputs',
+      language === 'ja' ? '| 指摘が「反例に使う入力の適用範囲」に入らない入力' : '| The finding assumes inputs',
     ));
     assert.ok(row);
     const processPolicy = fs.readFileSync(join(root, 'policies/process-deviation.md'), 'utf8');
@@ -200,7 +200,9 @@ test('process policy comes first once, only in the selected Japanese and English
 test('prepared prompts carry the new instructions, inline adjudication row and complete process policy once', () => {
   const processPolicy = read('builtins/ja/facets/policies/process-deviation.md').trim();
   const adjudicationRow = read('builtins/ja/facets/policies/review-adjudication.md')
-    .split('\n').find(line => line.startsWith('| 指摘の前提にする入力'));
+    .split('\n').find(line => line.startsWith('| 指摘が「反例に使う入力の適用範囲」に入らない入力'));
+  const adjudicationProcedure = read('builtins/ja/facets/instructions/adjudicate-review-findings.md')
+    .split('\n\n').find(paragraph => paragraph.startsWith('指摘を修正対象にする前'));
   const reviewProcedure = read('builtins/ja/facets/partials/instructions/review-path-check.md')
     .split('\n\n').find(paragraph => paragraph.startsWith('指摘にする前に'));
   const verificationProcedure = read('builtins/ja/facets/instructions/verify-fix.md')
@@ -215,7 +217,7 @@ test('prepared prompts carry the new instructions, inline adjudication row and c
       assert.ok(prompt.includes(reviewProcedure), id);
       assert.ok(!prompt.includes(processPolicy), id);
       if (['rt', 'ne'].includes(id)) {
-        assert.match(policySnapshot, /その入力が信頼境界の外から来ることを、値を決められる主体/);
+        assert.match(policySnapshot, /誰が値を決められ、どの処理がその値を読むかを示して、その入力が信頼境界の外から来ることを説明できる/);
       }
     } else {
       assert.ok(policySnapshot.slice(0, 2000).includes(processPolicy), id);
@@ -225,6 +227,7 @@ test('prepared prompts carry the new instructions, inline adjudication row and c
         assert.ok(start >= 0, id);
         const excerpt = prompt.slice(start, prompt.indexOf('...（以下省略）...', start));
         assert.ok(excerpt.includes(adjudicationRow), id);
+        assert.ok(prompt.includes(adjudicationProcedure), id);
       } else {
         assert.ok(prompt.includes(verificationProcedure), id);
       }
@@ -287,7 +290,7 @@ test('resolved Japanese and English remediation and final steps receive the enti
         if (stepName === 'review-adjudication') {
           const row = read(`builtins/${language}/facets/policies/review-adjudication.md`)
             .split('\n').find(line => line.startsWith(language === 'ja'
-              ? '| 指摘の前提にする入力' : '| The finding assumes inputs'));
+              ? '| 指摘が「反例に使う入力の適用範囲」に入らない入力' : '| The finding assumes inputs'));
           assert.ok(row && prepared.text.includes(row), `${language}/${name}/${stepName}`);
           assert.ok(combined.slice(0, 2000).includes(row), `${language}/${name}/${stepName}`);
         }

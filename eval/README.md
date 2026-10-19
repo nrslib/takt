@@ -180,7 +180,21 @@ for baseline conditions and the limits of comparative claims.
 
 `finding-premise-scope` はレビュー担当4ケースと再計画2ケースを、ケースごとの隔離 fixture と現在のファセットから生成したプロンプトで評価します。Codex gpt-6-sol low、Claude Opus 5、Codex gpt-6-luna max を使い、判定役は gpt-6-sol low です。両 CLI の認証が必要なためデフォルト実行から除外し、`npm run eval:prompts:finding-premise-scope` で明示実行します。rv1 は計画の設計判断（秘密値を写さない）を受入条件として指摘にしないこと、rv2 は前回の裁定が広げた取引先 CSV の形式外の金額表記を理由に persists にしないことを測ります。rn1 は契約が定める円記号付きの金額を persists とし、rn2 は外部の提出者が付けたファイル名による保存先の外への書き込みを blocking の指摘にすることを測ります。pl1 は裁定が広げた形式外の表記を再計画の作業にしないこと、pn1 は契約が定める表記を作業にすることを測ります。
 
-`finding-realistic-premise` はレビュー6ケース、裁定6ケース、修正完了検証4ケース、検証後の再計画1ケースの計17ケースを評価します。ローカル状態の書き換え、手動操作の競合、通常量を超える入力を根拠なく修正対象にせず、共有アーカイブのパス、製品自身の並行処理、文書が定める大量データは問題として扱うかを対で測ります。過去のテスト実行・文書生成と、成果物に残る変更・共有DBへの書き込みも区別します。ケースごとの隔離 fixture と現在のファセットを使い、Codex gpt-6-sol low / Claude Opus 5 / Codex gpt-6-luna max、判定役 gpt-6-sol low で比較します。両CLI認証が必要なためデフォルト実行から除外し、`npm run eval:prompts:finding-realistic-premise` でキャッシュなしの明示実行を行います。固定入力での各役割の判断を測るもので、ループ全体の収束や改善効果は別途実測が必要です。
+`finding-realistic-premise` は、レビュー6ケース、裁定6ケース、修正完了の検証4ケース、検証後の再計画1ケースの計17ケースで、各役割の判断を評価します。
+
+レビューと裁定では、問題として扱うべきかを次の組み合わせで測ります。
+
+- ローカル状態を書き換えるという仮定だけでは修正対象にせず、共有アーカイブのパスによって展開先の外へ書き込める問題は修正対象にする。
+- 人が別々に始めた操作が重なるという仮定だけでは修正対象にせず、製品自身が並行に動かす処理で起きる問題は修正対象にする。
+- 根拠のない大量入力を修正対象にせず、文書が定める量のデータで起きる問題は修正対象にする。
+
+修正完了の検証と再計画では、過去にテストや文書生成を実行したことと、成果物に残る変更や共有DBへの書き込みを区別するかを測ります。
+
+各ケースには、独立した fixture と現在のファセットから生成したプロンプトを使います。
+Codex gpt-6-sol low、Claude Opus 5、Codex gpt-6-luna max の結果を、判定役の gpt-6-sol low で比較します。
+両CLIの認証が必要なため、デフォルトの実行対象には含めません。
+`npm run eval:prompts:finding-realistic-premise` で、キャッシュを使わずに明示的に実行します。
+固定入力に対する各役割の判断を測る評価であり、ループ全体が収束するか、変更によって改善したかは別途実測する必要があります。
 
 The `instruction-research-handoff` suite evaluates the instruction-summary,
 plan, report, and routing boundaries from the instruction-research handoff
@@ -455,7 +469,7 @@ remain excluded.
 | `final-readiness-preservation` | final-gate / supervise Phase 2 | final-readiness-supervision | whether the supervisor preserves the unresolved finding and does not reopen a previously excluded documentation request |
 | `final-readiness-precision` | final-gate / supervise | final-readiness-precision | three cases: APPROVE when every code requirement is fulfilled despite an absent mock E2E record, REJECT for an unmet code requirement, and BLOCKED for an external decision that task-scope code changes cannot provide |
 | `finding-premise-scope` | peer-review / coding-review (RV1 initial, RV2・RN1 follow-up), security-review (RN2 initial); development-core / replan (PL1, PN1) | finding-premise-scope (6 independent cases) | 計画の設計判断や前回の裁定が広げた形式外の入力を指摘・作業にせず、契約が定める入力と外部入力による保存先の外への書き込みは指摘・作業にする |
-| `finding-realistic-premise` | peer-review / initial-reviewers, review-adjudication; review-remediation / fix-verifier, verification-replan | finding-realistic-premise (17 independent cases) | 入力の主体・並行処理・量の根拠と、取り消せない過去の工程逸脱と現在も残る影響を区別する |
+| `finding-realistic-premise` | peer-review / initial-reviewers, review-adjudication; review-remediation / fix-verifier, verification-replan | finding-realistic-premise (17 independent cases) | 誰が入力を決めるか、操作が同時に起きるか、想定した量が作られるかを根拠で判断し、過去の行動と現在も残る影響を区別する |
 
 GUI設計の比較例、採点、旧・新比較の手順は [frontend-design.md](frontend-design.md) を参照。
 

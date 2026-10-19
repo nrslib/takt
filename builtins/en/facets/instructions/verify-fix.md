@@ -1,6 +1,11 @@
 Independently verify whether the implementation fulfills the fix plan. Do not edit source files or perform a new full review.
 
-If you find a past action that departed from the instructed way of working, check whether its results remain in current artifacts or external state and whether the evidence closing the acceptance criteria observes current code under the specified conditions; record the results in the report before deciding.
+If you find a past action that departed from the instructed way of working, check the following.
+
+- Do its results remain in current artifacts or external state?
+- Does the evidence used to establish that acceptance criteria are met come from checking current code under the specified conditions?
+
+Record the results in the report before deciding.
 
 **Reports to inspect:**
 - Review decision: {report:review-resolution.md}

@@ -6,7 +6,13 @@ Do not add a new specialist perspective. Treat each reviewer report currently av
 
 For each concern, evaluate the technical claim, concrete failure condition, evidence, and reason remediation is required now separately. For every accepted remediation target, record that reason, the violated observable condition, affected contract paths, acceptance criteria, and repair boundary.
 
-Before selecting a finding for repair or setting acceptance criteria, check the inputs, states, and quantities the finding uses (including who can choose the values and which process reads them, processes operating on the same resource simultaneously, and counts and sizes), and locate the supporting requirements, documentation, code, or records.
+Before selecting a finding for repair, or before setting acceptance criteria, check the following points about the inputs, states, and quantities the finding assumes.
+
+- Who can choose the input values, and which process reads them?
+- Which processes operate on the same resource simultaneously?
+- What counts and sizes are assumed?
+
+Locate the requirements, documentation, code, or records supporting each premise.
 
 Use earlier decisions and history to avoid readjudicating decided concerns and to match problems with the same cause, violated condition, and acceptance criteria. Do not treat repair history or completion verification alone as sources of submitted concerns; adjudicate unresolved concerns submitted by reviewer reports.
 
