@@ -79,7 +79,9 @@ it('allows withdrawing and reading an existing question for an aborted goal', as
 
   expect(result.isError).toBeUndefined();
   expect(goal.executionStatus).toBe('aborted');
-  expect(goal.questions).toEqual([{ id: questionId, body: '形式はどれですか', recipient: 'human', status: 'withdrawn' }]);
+  expect(goal.questions).toEqual([expect.objectContaining({
+    id: questionId, body: '形式はどれですか', recipient: 'human', status: 'withdrawn', withdrawnAt: expect.any(String),
+  })]);
   expect(JSON.parse(firstTextContent((await getTaktGoalQuestion({ ...input, questionId }, {})).content)))
     .toEqual({ question: goal.questions[0] });
   expect(JSON.parse(firstTextContent((await listTaktGoalQuestions(input, {})).content)))
