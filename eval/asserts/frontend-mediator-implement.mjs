@@ -149,9 +149,6 @@ function inspectSource(path, text, allowedPackages) {
     }
   };
   function visit(node) {
-    if (production && ts.isIdentifier(node) && /mediator/i.test(node.text)) {
-      failures.push(`${path}: mediator identifier ${node.text}`);
-    }
     if (production && (ts.isClassDeclaration(node) || ts.isClassExpression(node)) && !isReactClass(node, bases)
       && hasInstanceState(node)) {
       failures.push(`${path}: non-React class holding mutable UI state`);
@@ -185,7 +182,6 @@ export function inspectFrontendArtifacts(directory) {
   }
   for (const path of changedPaths) {
     if (after[path] === undefined) continue;
-    if (!testPattern.test(path) && /mediator/i.test(path)) failures.push(`${path}: mediator filename`);
     if (sourcePattern.test(path)) failures.push(...inspectSource(path, after[path], allowedPackages));
   }
   return {

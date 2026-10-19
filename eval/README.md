@@ -645,11 +645,12 @@ lockfile、source map、tsbuildinfo、minified JS を除外する。ルートの
 各種 `*.config.*` などの設定変更は含める。削除は `deletedPaths` に記録する。
 JSON 全体の上限は200,000文字とし、超過時は切り捨てず `Rubric input exceeds ... characters` で失敗させる。
 
-artifact assert は新規・変更ファイルについて Mediator を含むファイル名・AST 識別子、
-状態と購読・通知のメンバーを併せ持つ非 React クラス、fixture の package.json にない既知の状態管理ライブラリの
-import / re-export / dynamic import / require を拒否する。クラスと Mediator 名の検査は本番コードだけに適用し、
+artifact assert は新規・変更ファイルについて、状態と購読・通知のメンバーを併せ持つ非 React クラスと、
+fixture の package.json にない既知の状態管理ライブラリの import / re-export / dynamic import / require を拒否する。
+クラスの検査は本番コードだけに適用し、
 `*.test.*`、`*.spec.*`、`__tests__`、`test-setup` 等のテスト専用コードは除外する。
 状態管理ライブラリの import 検査はテストでも継続する。コメントと単なる文字列内の名称は無視する。
+識別子名やファイル名だけでは拒否せず、状態所有と操作処理の構造は rubric で判定する。
 ライブラリを生成先の package.json に追記しても許容条件は変わらない。
 未実装のまま合格しないよう、ページの存在とソース変更も要求する。
 ライブラリ検知は assert 内の列挙集合に限る。補助 rubric は「状態の所有」と「操作の処理の開始」を

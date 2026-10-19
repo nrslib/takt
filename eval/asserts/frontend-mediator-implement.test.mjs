@@ -85,9 +85,14 @@ function mutation(t, files) {
   return directory;
 }
 
-test('accepts page-owned state and save guards for both operation entrances', t => {
-  assert.equal(inspectFrontendArtifacts(mutation(t, { [pagePath]: pageOwned })).pass, true);
-});
+for (const name of ['OrderEditPage', 'OrderEditMediatorPage']) {
+  test(`accepts page-owned state and save guards for both operation entrances in ${name}`, t => {
+    const source = pageOwned.replace('OrderEditPage', name);
+    const result = inspectFrontendArtifacts(mutation(t, { [pagePath]: source }));
+    assert.equal(result.pass, true, result.reason);
+    assert.equal(result.score, 1);
+  });
+}
 
 for (const path of [
   'src/routes/order-edit.test.tsx', 'src/features/orders/api.spec.ts',
@@ -165,19 +170,27 @@ test('rubric overflow fails explicitly while preserving the project artifact', a
   assert.ok(existsSync(join(result.metadata.artifactDirectory, 'project/src/large.ts')));
 });
 
-test('accepts a page-specific custom hook called once directly by the page', t => {
-  const hook = pageOwned.replace('export function OrderEditPage', 'export function useOrderEditor')
-    .replace(/  return <main>[\s\S]*$/, '  return { order, saving, dirty, message, save };\n}');
-  const directory = mutation(t, {
-    'src/routes/use-order-editor.ts': hook,
-    [pagePath]: `import { useOrderEditor } from './use-order-editor';
+for (const [name, file] of [
+  ['useOrderEditor', 'use-order-editor'],
+  ['useOrderMediator', 'use-order-editor'],
+  ['useOrderEditor', 'use-order-mediator'],
+]) {
+  test(`accepts a page-specific custom hook ${name} in ${file}.ts`, t => {
+    const hook = pageOwned.replace('export function OrderEditPage', `export function ${name}`)
+      .replace(/  return <main>[\s\S]*$/, '  return { order, saving, dirty, message, save };\n}');
+    const directory = mutation(t, {
+      [`src/routes/${file}.ts`]: hook,
+      [pagePath]: `import { ${name} } from './${file}';
 export function OrderEditPage({ orderId }: { orderId: string }) {
-  const { save, saving, dirty } = useOrderEditor({ orderId });
+  const { save, saving, dirty } = ${name}({ orderId });
   return <button disabled={saving || !dirty} onClick={() => void save()}>保存</button>;
 }`,
+    });
+    const result = inspectFrontendArtifacts(directory);
+    assert.equal(result.pass, true, result.reason);
+    assert.equal(result.score, 1);
   });
-  assert.equal(inspectFrontendArtifacts(directory).pass, true);
-});
+}
 
 test('accepts useReducer with state and operation acceptance inside the page', t => {
   const directory = mutation(t, { [pagePath]: `import { useReducer } from 'react';
@@ -270,7 +283,7 @@ export function FormattedAmount({ amount }: { amount: number }) {
   assert.equal(inspectFrontendArtifacts(directory).pass, true);
 });
 
-test('rejects a separate Mediator class with a delegating page', t => {
+test('defers a separate Mediator class with a delegating page to the structural rubric', t => {
   const directory = mutation(t, {
     'src/features/orders/order-actions.ts': `export class OrderMediator {
   saving = false; dirty = true;
@@ -281,25 +294,36 @@ const order = new OrderMediator();
 export function OrderEditPage() { return <button onClick={() => order.save()}>保存</button>; }`,
   });
   const result = inspectFrontendArtifacts(directory);
-  assert.equal(result.pass, false);
-  assert.match(result.reason, /mediator identifier/);
+  assert.equal(result.pass, true, result.reason);
+  assert.equal(result.score, 1);
 });
 
-test('rejects useOrderMediator with a page that only delegates', t => {
+test('defers a generic useOrderMediator with a delegating page to the structural rubric', t => {
   const directory = mutation(t, {
-    'src/features/orders/use-order-actions.ts': `import { useState } from 'react';
-export function useOrderMediator() {
+    'src/routes/use-order-mediator.ts': `import { useState } from 'react';
+export function useOrderMediator<T>({ operation, value, persist }: {
+  operation: string; value: T; persist: (operation: string, value: T) => Promise<T>;
+}) {
   const [saving, setSaving] = useState(false);
-  return { saving, save() { if (!saving) setSaving(true); } };
+  return { saving, async save() {
+    if (saving) return;
+    setSaving(true);
+    try { await persist(operation, value); }
+    finally { setSaving(false); }
+  } };
 }`,
-    [pagePath]: `import { useOrderMediator } from '../features/orders/use-order-actions';
-export function OrderEditPage() {
-  const actions = useOrderMediator();
+    [pagePath]: `import { useOrderMediator } from './use-order-mediator';
+import { saveOrder } from '../features/orders/api';
+import type { Order } from '../features/orders/types';
+export function OrderEditPage({ order }: { order: Order }) {
+  const actions = useOrderMediator({ operation: 'save', value: order,
+    persist: (_operation, value) => saveOrder(value) });
   return <button onClick={actions.save}>保存</button>;
 }`,
   });
-  assert.equal(inspectFrontendArtifacts(directory).pass, false);
-  assert.match(inspectFrontendArtifacts(directory).reason, /mediator identifier useOrderMediator/);
+  const result = inspectFrontendArtifacts(directory);
+  assert.equal(result.pass, true, result.reason);
+  assert.equal(result.score, 1);
 });
 
 for (const [label, source] of [
@@ -384,10 +408,10 @@ for (const [label, source] of [
   });
 }
 
-test('rejects a Mediator filename even without a matching identifier', t => {
+test('accepts a Mediator filename without inferring ownership from the path', t => {
   const result = inspectFrontendArtifacts(mutation(t, { 'src/features/orders/order-mediator.ts': 'export const value = 1;' }));
-  assert.equal(result.pass, false);
-  assert.match(result.reason, /mediator filename/);
+  assert.equal(result.pass, true, result.reason);
+  assert.equal(result.score, 1);
 });
 
 for (const source of [
@@ -395,10 +419,10 @@ for (const source of [
   'export const useOrder\\u004dediator = () => ({});',
   'export interface OrderMediator { save(): void; }',
 ]) {
-  test(`rejects Mediator identifiers parsed from code: ${source}`, t => {
+  test(`defers Mediator identifiers parsed from code to the structural rubric: ${source}`, t => {
     const result = inspectFrontendArtifacts(mutation(t, { 'src/features/orders/actions.ts': source }));
-    assert.equal(result.pass, false);
-    assert.match(result.reason, /mediator identifier/);
+    assert.equal(result.pass, true, result.reason);
+    assert.equal(result.score, 1);
   });
 }
 
@@ -432,13 +456,23 @@ test('fails closed on unchanged fixture or missing page', t => {
 });
 
 test('reads artifacts from provider metadata instead of trusting the chat output', t => {
-  const project = mutation(t, { 'src/features/orders/order-actions.ts': 'export class OrderMediator { save() {} }' });
+  const project = mutation(t, { [pagePath]: pageOwned });
   const root = mkdtempSync(join(tmpdir(), 'takt-frontend-artifact-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   cpSync(project, join(root, 'project'), { recursive: true });
-  assert.equal(assertArtifacts('everything passed', {
+  const context = {
     providerResponse: { metadata: { artifactDirectory: root } },
-  }).pass, false);
+  };
+  const output = 'everything passed';
+  const accepted = assertArtifacts(output, context);
+  assert.equal(accepted.pass, true, accepted.reason);
+  assert.equal(accepted.score, 1);
+  writeFileSync(join(root, 'project/src/features/orders/order-actions.ts'),
+    'export class OrderSession { saving = false; subscribe(listener) { return attach(listener); } }');
+  const rejected = assertArtifacts(output, context);
+  assert.equal(rejected.pass, false);
+  assert.equal(rejected.score, 0);
+  assert.match(rejected.reason, /non-React class/);
   assert.equal(assertArtifacts('{}', { providerResponse: {} }).pass, false);
   assert.equal(assertArtifacts('{}', {
     providerResponse: { metadata: { artifactDirectory: join(root, 'missing') } },
