@@ -198,6 +198,9 @@ test('process policy comes first once, only in the selected Japanese and English
 });
 
 test('prepared prompts carry the new instructions, inline adjudication row and complete process policy once', () => {
+  execFileSync(process.execPath, [
+    'eval/scripts/prepare.mjs', ...cases.map(id => `${suiteName}-${id}`),
+  ], { cwd: repoRoot });
   const processPolicy = read('builtins/ja/facets/policies/process-deviation.md').trim();
   const adjudicationRow = firstTableDataRow(expandedPolicy('ja', 'review-adjudication'));
   const adjudicationProcedure = read('builtins/ja/facets/instructions/adjudicate-review-findings.md')
