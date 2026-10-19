@@ -1,7 +1,7 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stringify } from 'yaml';
 import { Command } from 'commander';
@@ -15,7 +15,7 @@ import { invalidateAllResolvedConfigCache, invalidateGlobalConfigCache } from '.
 import * as i18n from '../shared/i18n/index.js';
 import * as taskActions from '../features/tasks/list/taskActions.js';
 
-const output = vi.hoisted(() => ({ info: vi.fn(), success: vi.fn(), error: vi.fn() }));
+const output = vi.hoisted(() => ({ info: vi.fn(), success: vi.fn(), error: vi.fn(), warn: vi.fn() }));
 vi.mock('../shared/ui/index.js', () => output);
 
 const goalId = '550e8400-e29b-41d4-a716-446655440000';
@@ -114,9 +114,45 @@ afterEach(async () => {
 });
 
 describe('non-interactive filtered deletion with real task resources', () => {
+  it.each([
+    { tracked: false, relativePath: false },
+    { tracked: true, relativePath: false },
+    { tracked: false, relativePath: true },
+    { tracked: true, relativePath: true },
+  ])('preserves an unrelated directory selected by task records (%j)', async ({ tracked, relativePath }) => {
+    const resources = cloneResources(project, 'feature/invalid-path');
+    const protectedDir = join(project, '.takt', 'runs');
+    const report = join(protectedDir, 'report.md');
+    mkdirSync(protectedDir, { recursive: true });
+    writeFileSync(report, 'keep this report');
+    saveRecords(project, [record('invalid-path', 'failed', {
+      branch: 'feature/invalid-path',
+      worktree_path: relativePath ? relative(process.cwd(), protectedDir) : protectedDir,
+    })]);
+    if (tracked) git(project, ['add', '--', '.takt/tasks.yaml']);
+    const originalRecord = readFileSync(join(project, '.takt', 'tasks.yaml'), 'utf8');
+    const originalHead = git(project, ['rev-parse', 'feature/invalid-path']);
+
+    const result = await listTasksNonInteractive(project, { enabled: true, action: 'delete',
+      status: ['failed'], yes: true }).catch((error: unknown) => error);
+
+    expect(readFileSync(report, 'utf8')).toBe('keep this report');
+    for (const file of Object.values(resources)) expect(existsSync(file)).toBe(true);
+    expect(readFileSync(join(project, '.takt', 'tasks.yaml'), 'utf8')).toBe(originalRecord);
+    expect(git(project, ['rev-parse', 'feature/invalid-path'])).toBe(originalHead);
+    expect(output.warn).not.toHaveBeenCalled();
+    expect(output.info).toHaveBeenCalledWith(i18n.getLabel('taskDeletion.failed', 'en', { name: 'invalid-path' }));
+    expect(output.success).not.toHaveBeenCalled();
+    expect(process.exit).toHaveBeenCalledWith(1);
+    expect(result).toBeInstanceOf(Error);
+  });
+
   it.each(['delete', 'claim'] as const)('coordinates cleanup and claim when %s goes first', async (first) => {
     const clone = join(project, '.takt', 'worktrees', 'race');
-    mkdirSync(clone, { recursive: true });
+    mkdirSync(dirname(clone), { recursive: true });
+    git(project, ['branch', 'feature/race']);
+    git(project, ['clone', '--no-hardlinks', '--branch', 'feature/race', project, clone]);
+    saveCloneMeta(project, 'feature/race', clone);
     writeFileSync(join(clone, 'sentinel'), 'keep');
     saveRecords(project, [record('race', first === 'delete' ? 'completed' : 'pending', { goal_id: undefined,
       branch: 'feature/race', worktree_path: clone }),
@@ -180,7 +216,7 @@ describe('non-interactive filtered deletion with real task resources', () => {
       expect(runner.listAllTaskItems().map((task) => task.kind)).toEqual(claim ? ['running'] : []);
     });
   });
-  it('cleans up the session, metadata and record for a missing clone within the allowed base', async () => {
+  it('deletes the root branch, session, metadata and record for a missing clone within the allowed base', async () => {
     const resources = cloneResources(project, 'feature/missing');
     rmSync(resources.clone, { recursive: true });
     saveRecords(project, [record('missing', 'completed', { branch: 'feature/missing', worktree_path: resources.clone })]);
@@ -189,6 +225,8 @@ describe('non-interactive filtered deletion with real task resources', () => {
 
     for (const file of Object.values(resources)) expect(existsSync(file)).toBe(false);
     expect(names(project)).toEqual([]);
+    expect(git(project, ['for-each-ref', '--format=%(refname)', 'refs/heads/feature/missing'])).toBe('');
+    expect(output.warn).not.toHaveBeenCalled();
   });
   it('preserves clones, sessions, metadata, Git branches, and records during preview', async () => {
     const resources = cloneResources(project, 'feature/preview');
@@ -241,6 +279,36 @@ describe('non-interactive filtered deletion with real task resources', () => {
     expect(git(project, ['branch', '--format=%(refname:short)']).split('\n')).toEqual(['main']);
     expect(names(project)).toEqual([]);
   });
+
+  it.each([undefined, true, '/custom/path'])(
+    'deletes a pending record without a clone path and preserves its branch only when worktree is enabled (%s)',
+    async (worktree) => {
+      const branch = 'feature/fix-auth-bug';
+      const ref = `refs/heads/${branch}`;
+      git(project, ['branch', branch]);
+      const originalHead = git(project, ['rev-parse', '--verify', ref]);
+      expect(git(project, ['symbolic-ref', 'HEAD'])).toBe('refs/heads/main');
+      saveRecords(project, [record('pending-review', 'pending', { branch, worktree })]);
+      const task = new TaskRunner(project).listAllTaskItems()[0]!;
+      expect(task.data?.worktree).toBe(worktree);
+      expect(task.worktreePath).toBeUndefined();
+
+      await listTasksNonInteractive(project, { enabled: true, action: 'delete',
+        status: ['pending'], yes: true });
+
+      const refs = git(project, ['for-each-ref', '--format=%(refname)', ref]).split('\n');
+      if (worktree) {
+        expect(refs).toContain(ref);
+        expect(git(project, ['rev-parse', '--verify', ref])).toBe(originalHead);
+      } else {
+        expect(refs).not.toContain(ref);
+      }
+      expect(output.warn).not.toHaveBeenCalled();
+      expect(names(project)).toEqual([]);
+      expect(output.info).toHaveBeenCalledWith(i18n.getLabel('taskDeletion.deleted', 'en', { name: 'pending-review' }));
+      expect(process.exit).not.toHaveBeenCalled();
+    },
+  );
 
   it('removes a merge task clone and record while retaining its root branch', async () => {
     const clone = join(project, '.takt', 'worktrees', 'merge-pr');

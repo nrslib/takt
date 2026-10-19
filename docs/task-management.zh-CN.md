@@ -325,7 +325,7 @@ takt list --non-interactive --action try --branch takt/my-branch
 
 必须至少指定 `--status`、`--goal` 或 `--branch` 中的一个。不指定筛选条件时，命令报错退出且不删除任何内容。省略 `--yes` 时，显示匹配任务的名称、状态、分支和目标列表，然后正常退出，不执行删除。只有指定 `--yes` 才会删除。配合 `--format json` 可返回 JSON 格式的预览列表，JSON 输出包含 `goal_id`。
 
-删除范围与交互列表中的删除相同，包括任务的工作 clone、worktree 会话文件、clone 元数据、分支和 `.takt/tasks.yaml` 中的记录。
+删除范围与交互列表中的删除相同，包括任务的工作 clone、worktree 会话文件、clone 元数据、分支和 `.takt/tasks.yaml` 中的记录。删除现有 clone 前，TAKT 会确认任务记录和元数据在 Git index 与当前 HEAD 树中均未被跟踪，元数据中的分支和 clone 路径与任务一致，并且该路径是 clone 基础目录下具有独立 `.git` 目录的真实目录。如果无法确认所有权，则发出警告并中止删除，保留任务的全部资源、分支和记录。确认所有权并完成清理后，无论 clone 当前的 HEAD 或 clone 是否仍然存在，只要原仓库中存在同名分支的完全匹配 ref，就使用 `git branch -d` 删除。如果 Git 因分支尚未完全合并等原因拒绝删除，则保留分支并发出警告，但完成资源和任务记录的删除。clone 不存在时不执行递归删除；仍可删除剩余会话文件、路径一致的元数据和任务记录，并在存在同名分支的完全匹配 ref 时使用 `git branch -d` 删除原仓库分支。clone 和元数据均不存在时不要求新增元数据。但是，如果原仓库中的 ref 查询本身失败，任务删除将失败，并保留任务记录。
 
 ```bash
 # 先确认匹配列表，再执行删除
