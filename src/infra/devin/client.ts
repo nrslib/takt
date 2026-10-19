@@ -2,6 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { USAGE_MISSING_REASONS } from '../../core/logging/contracts.js';
 import type { AgentResponse, ProviderUsageSnapshot } from '../../core/models/index.js';
+import { AGENT_FAILURE_CATEGORIES, type AgentFailureCategory } from '../../shared/types/agent-failure.js';
 import { createLogger, ensureCurrentTmpDirExists, getErrorMessage } from '../../shared/utils/index.js';
 import { buildRateLimitedResponseFields, containsRateLimitError } from '../rate-limit/detection.js';
 import { runDevinAcpPrompt } from './acp.js';
@@ -42,7 +43,9 @@ function buildArgs(configFilePath: string, options: DevinCallOptions): string[] 
     'acp',
   ];
 
-  if (options.model) {
+  // `--model` only applies to session creation; a resumed session keeps the
+  // model it was created with, so the flag is omitted when resuming.
+  if (options.model && !options.sessionId) {
     args.push('--model', options.model);
   }
 
@@ -121,6 +124,7 @@ function emitResult(
   success: boolean,
   error: string | undefined,
   sessionId: string | undefined,
+  failureCategory?: AgentFailureCategory,
 ): void {
   options.onStream?.({
     type: 'result',
@@ -129,6 +133,7 @@ function emitResult(
       success,
       error,
       sessionId: sessionId ?? '',
+      failureCategory,
     },
   });
 }
@@ -185,6 +190,25 @@ export class DevinClient {
           sessionId,
           providerUsage,
           ...rateLimitedFields,
+        };
+      }
+
+      // A turn that stopped for a reason other than `end_turn` (`max_tokens`,
+      // `max_turn_requests`, `refusal`) produced incomplete output; the
+      // partial text is kept in content but must not reach the judge as a
+      // completed step. `cancelled` is handled above.
+      if (outcome.stopReason !== 'end_turn') {
+        const stopError = `devin returned incomplete output (stop reason: ${outcome.stopReason})`;
+        emitResult(options, content, false, stopError, sessionId, AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR);
+        return {
+          persona: agentType,
+          status: 'error',
+          content,
+          error: stopError,
+          failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+          timestamp: new Date(),
+          sessionId,
+          providerUsage,
         };
       }
 

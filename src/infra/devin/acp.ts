@@ -212,9 +212,6 @@ function acpModeIdFor(permissionMode: PermissionMode | undefined): string {
 
 const MODEL_OPTION_ID = 'model';
 const THOUGHT_LEVEL_OPTION_ID = 'thought_level';
-// Used to split `<family>-<level>` model names when the session does not
-// advertise a `thought_level` option to enumerate levels from.
-const FALLBACK_THOUGHT_LEVELS = ['xhigh', 'medium', 'high', 'low', 'max'];
 
 function selectOptionValues(option: SessionConfigOption): SessionConfigSelectOption[] {
   if (option.type !== 'select') {
@@ -246,93 +243,38 @@ function normalizeModelName(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
-function thoughtLevelSuffix(normalized: string, levels: string[]): string | undefined {
-  return levels.find(
-    (level) => normalized.endsWith(`-${level}`) && normalized.length > level.length + 1,
-  );
-}
-
-function modelValueStem(value: string, levels: string[]): string {
-  const normalized = normalizeModelName(value);
-  const suffix = thoughtLevelSuffix(normalized, levels);
-  return suffix === undefined ? normalized : normalized.slice(0, -suffix.length - 1);
-}
-
-interface ResolvedModelRequest {
-  modelValue: string;
-  thoughtLevel?: string;
-}
-
-// Devin splits a display model name such as "SWE-2 Max" into the `model`
-// config option (the family, e.g. value 'swe-2-high') plus the
-// `thought_level` option ('max'). `devin acp --model swe-2-max` resolves to
-// exactly that pair, while `session/set_config_option` accepts exact option
-// values only — so the same split is reproduced here to verify new sessions
-// and to apply overrides on resumed ones.
-function resolveRequestedModel(
+// `devin acp --model` resolves fuzzy names (family slug, alias, or partial
+// name) at session creation, but silently falls back to the configured
+// default for names it cannot resolve. The session's config options show
+// what was actually selected, so a requested name that matches none of the
+// resolved identities means the CLI fell back. Candidates cover the
+// '<name>-<level>' spelling too: 'swe-2-max' resolves to model 'swe-2-high'
+// (display name 'SWE-2') + thought_level 'max'.
+function requestedModelReflected(
   configOptions: SessionConfigOption[],
   requested: string,
-): ResolvedModelRequest | undefined {
-  const option = configSelectOption(configOptions, MODEL_OPTION_ID);
-  if (!option) {
-    return undefined;
+): boolean {
+  const modelOption = configSelectOption(configOptions, MODEL_OPTION_ID);
+  const current = selectCurrentValue(modelOption);
+  if (!modelOption || current === undefined) {
+    return false;
   }
-  const levelOption = configSelectOption(configOptions, THOUGHT_LEVEL_OPTION_ID);
-  const levelValues = levelOption ? selectOptionValues(levelOption).map((entry) => entry.value) : [];
-  const levels = levelValues.length > 0 ? levelValues : FALLBACK_THOUGHT_LEVELS;
-  const values = selectOptionValues(option);
-  const normalized = normalizeModelName(requested);
-
-  const direct = values.find(
-    (entry) =>
-      normalizeModelName(entry.value) === normalized
-      || normalizeModelName(entry.name) === normalized,
-  );
-  if (direct) {
-    return {
-      modelValue: direct.value,
-      thoughtLevel: thoughtLevelSuffix(normalizeModelName(direct.value), levels),
-    };
+  const entry = selectOptionValues(modelOption).find((value) => value.value === current);
+  const level = selectCurrentValue(configSelectOption(configOptions, THOUGHT_LEVEL_OPTION_ID));
+  const candidates = [current, entry?.name ?? ''];
+  if (entry?.name !== undefined && level !== undefined) {
+    candidates.push(`${entry.name}-${level}`);
   }
-
-  const requestedLevel = thoughtLevelSuffix(normalized, levels);
-  const stem = requestedLevel === undefined
-    ? normalized
-    : normalized.slice(0, -requestedLevel.length - 1);
-  const byStem = values.find(
-    (entry) =>
-      modelValueStem(entry.value, levels) === stem
-      || normalizeModelName(entry.name) === stem,
-  );
-  if (!byStem) {
-    return undefined;
-  }
-  return {
-    modelValue: byStem.value,
-    thoughtLevel: requestedLevel ?? thoughtLevelSuffix(normalizeModelName(byStem.value), levels),
-  };
-}
-
-// `devin acp --model <alias>` resolves fuzzy aliases (e.g. 'opus') to a
-// catalog model, but silently falls back to the configured default for names
-// it cannot resolve. This check accepts the former and rejects the latter:
-// a requested name the CLI actually resolved still shows up in the resolved
-// option value or its display name.
-function modelSelectionReflects(option: SessionConfigOption, requested: string): boolean {
   const needle = normalizeModelName(requested);
-  const current = selectCurrentValue(option) ?? '';
-  const entry = selectOptionValues(option).find((value) => value.value === current);
   // Very short names are too loose for a substring check — fail them instead.
   return needle.length >= 3
-    && [current, entry?.name ?? '']
-      .some((candidate) => normalizeModelName(candidate).includes(needle));
+    && candidates.some((candidate) => normalizeModelName(candidate).includes(needle));
 }
 
-function unavailableModelError(requested: string, option: SessionConfigOption): DevinExecError {
-  const current = selectCurrentValue(option) ?? 'unknown';
+function unavailableModelError(requested: string, sessionModel: string | undefined): DevinExecError {
   return createExecError(
     `Requested Devin model '${requested}' is not available for this session `
-    + `(session model: '${current}'). Pass an exact model option value `
+    + `(session model: '${sessionModel ?? 'unknown'}'). Pass an exact model option value `
     + `or a '<family>-<level>' name such as 'swe-2-max'.`,
   );
 }
@@ -495,63 +437,24 @@ export async function runDevinAcpPrompt(
           log.debug('Devin ACP session mode could not be set', { error: getErrorMessage(error) });
         }
 
-        // `--model` on the process only applies to session creation; on a
-        // resumed session the override goes through set_config_option. On a
-        // new session the resolved state is verified because `devin acp`
+        // `--model` is only passed on session creation; a resumed session
+        // keeps the model it was created with (a TAKT step never switches
+        // model mid-flight), so nothing is applied here on resume. On a new
+        // session the resolved options are verified because `devin acp`
         // silently falls back to the configured default for names it cannot
         // resolve (unlike `devin -p`, which errors with "Unknown model").
-        if (options.model) {
-          const modelOption = configSelectOption(configOptions, MODEL_OPTION_ID);
-          if (modelOption) {
-            const resolution = resolveRequestedModel(configOptions, options.model);
-            if (resolution === undefined) {
-              if (options.sessionId || !modelSelectionReflects(modelOption, options.model)) {
-                throw unavailableModelError(options.model, modelOption);
-              }
-            } else {
-              // Set the model before the level: selecting a model resets the
-              // thought level to that model's default tier.
-              if (selectCurrentValue(modelOption) !== resolution.modelValue) {
-                const updated = await ctx.request(methods.agent.session.setConfigOption, {
-                  sessionId: activeSessionId,
-                  configId: MODEL_OPTION_ID,
-                  value: resolution.modelValue,
-                });
-                configOptions = updated.configOptions;
-              }
-              const levelOption = configSelectOption(configOptions, THOUGHT_LEVEL_OPTION_ID);
-              if (
-                resolution.thoughtLevel !== undefined
-                && levelOption
-                && selectCurrentValue(levelOption) !== resolution.thoughtLevel
-              ) {
-                const updated = await ctx.request(methods.agent.session.setConfigOption, {
-                  sessionId: activeSessionId,
-                  configId: THOUGHT_LEVEL_OPTION_ID,
-                  value: resolution.thoughtLevel,
-                });
-                configOptions = updated.configOptions;
-              }
-              const appliedModel = selectCurrentValue(configSelectOption(configOptions, MODEL_OPTION_ID));
-              const appliedLevel = selectCurrentValue(configSelectOption(configOptions, THOUGHT_LEVEL_OPTION_ID));
-              const modelOk = appliedModel === resolution.modelValue;
-              const levelOk = resolution.thoughtLevel === undefined
-                || !levelOption
-                || appliedLevel === resolution.thoughtLevel;
-              if (!modelOk || !levelOk) {
-                throw createExecError(
-                  `Devin session did not apply requested model '${options.model}' `
-                  + `(session model: '${appliedModel ?? 'unknown'}', thought level: '${appliedLevel ?? 'unknown'}')`,
-                );
-              }
-            }
-          }
+        if (options.model && options.sessionId === undefined
+          && !requestedModelReflected(configOptions, options.model)) {
+          throw unavailableModelError(
+            options.model,
+            selectCurrentValue(configSelectOption(configOptions, MODEL_OPTION_ID)),
+          );
         }
 
         const sessionModel = selectCurrentValue(configSelectOption(configOptions, MODEL_OPTION_ID));
         const sessionLevel = selectCurrentValue(configSelectOption(configOptions, THOUGHT_LEVEL_OPTION_ID));
         const model = sessionModel === undefined
-          ? options.model ?? 'unknown'
+          ? 'unknown'
           : sessionLevel === undefined ? sessionModel : `${sessionModel}@${sessionLevel}`;
         options.onStream?.({ type: 'init', data: { model, sessionId: activeSessionId } });
 

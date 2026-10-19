@@ -158,16 +158,6 @@ function defaultHandlers(scenario: AcpScenario): Record<string, AcpRequestHandle
       }
       return {};
     },
-    'session/set_config_option': (params, api, id) => {
-      const option = configState.find((entry) => entry.id === params.configId);
-      const values = option?.options.flatMap((entry) => ('options' in entry ? entry.options : [entry]));
-      if (!option || !values?.some((value) => value.value === params.value)) {
-        api.fail(id, -32602, `Invalid value '${String(params.value)}' for config option '${String(params.configId)}'`);
-        return undefined;
-      }
-      option.currentValue = params.value;
-      return { configOptions: configState };
-    },
     'session/prompt': (params, api, id) => {
       const sid = params.sessionId as string;
       for (const update of scenario.updates ?? [
@@ -484,7 +474,7 @@ describe('callDevin', () => {
     expect(args[modelFlagIndex + 1]).toBe('swe-2-max');
   });
 
-  it('Given a tiered model name on a new session, When the session already resolved it, Then no correction is needed', async () => {
+  it('Given a tiered model name on a new session, When the session resolved it, Then the call proceeds', async () => {
     const onStream = vi.fn();
     const resolvedOptions = JSON.parse(JSON.stringify(DEFAULT_CONFIG_OPTIONS)) as { id: string; currentValue: string }[];
     resolvedOptions.find((option) => option.id === 'thought_level')!.currentValue = 'max';
@@ -500,17 +490,14 @@ describe('callDevin', () => {
     });
   });
 
-  it('Given a tiered model name on a new session, When the session did not apply the level, Then set_config_option corrects it', async () => {
+  it('Given a tiered model name the session did not resolve, When called, Then the call fails fast without prompting', async () => {
     const server = mockAcpServer();
 
     const result = await callDevin('coder', 'implement', { cwd: '/repo', model: 'swe-2-max' });
 
-    expect(result.status).toBe('done');
-    const sets = requestsOf(server, 'session/set_config_option');
-    expect(sets).toHaveLength(1);
-    expect(sets[0]?.params).toEqual(
-      expect.objectContaining({ configId: 'thought_level', value: 'max' }),
-    );
+    expect(result.status).toBe('error');
+    expect(result.error).toContain("Devin model 'swe-2-max' is not available");
+    expect(requestsOf(server, 'session/prompt')).toHaveLength(0);
   });
 
   it('Given an unresolvable model on a new session, When the CLI silently defaulted, Then the call fails fast', async () => {
@@ -534,68 +521,25 @@ describe('callDevin', () => {
     expect(result.status).toBe('done');
   });
 
-  it('Given a model override on a resumed session, When the option value is selectable, Then set_config_option applies it', async () => {
+  it('Given a model on a resumed session, When called, Then the session keeps its model and reports it', async () => {
+    const onStream = vi.fn();
     const server = mockAcpServer();
 
-    await callDevin('coder', 'implement', {
+    const result = await callDevin('coder', 'implement', {
       cwd: '/repo',
       sessionId: 'rare-boater',
       model: 'swe-1-6',
-    });
-
-    const sets = requestsOf(server, 'session/set_config_option');
-    expect(sets).toHaveLength(1);
-    expect(sets[0]?.params).toEqual(
-      expect.objectContaining({ sessionId: 'rare-boater', configId: 'model', value: 'swe-1-6' }),
-    );
-  });
-
-  it('Given a tiered model name on a resumed session, When loaded, Then model and thought level are applied', async () => {
-    const server = mockAcpServer();
-
-    const result = await callDevin('coder', 'implement', {
-      cwd: '/repo',
-      sessionId: 'rare-boater',
-      model: 'claude-opus-5-5-medium',
+      onStream,
     });
 
     expect(result.status).toBe('done');
-    const sets = requestsOf(server, 'session/set_config_option');
-    expect(sets.map((request) => request.params)).toEqual([
-      expect.objectContaining({ sessionId: 'rare-boater', configId: 'model', value: 'claude-opus-5-5-medium' }),
-      expect.objectContaining({ sessionId: 'rare-boater', configId: 'thought_level', value: 'medium' }),
-    ]);
-  });
-
-  it('Given a level-only model difference on a resumed session, When loaded, Then only the thought level is applied', async () => {
-    const server = mockAcpServer();
-
-    const result = await callDevin('coder', 'implement', {
-      cwd: '/repo',
-      sessionId: 'rare-boater',
-      model: 'swe-2-max',
+    const [, args] = mainSpawnCall();
+    expect(args).not.toContain('--model');
+    expect(requestsOf(server, 'session/prompt')).toHaveLength(1);
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'init',
+      data: { model: 'swe-2-high@high', sessionId: 'rare-boater' },
     });
-
-    expect(result.status).toBe('done');
-    const sets = requestsOf(server, 'session/set_config_option');
-    expect(sets).toHaveLength(1);
-    expect(sets[0]?.params).toEqual(
-      expect.objectContaining({ sessionId: 'rare-boater', configId: 'thought_level', value: 'max' }),
-    );
-  });
-
-  it('Given an unresolvable model on a resumed session, When loaded, Then the call fails fast before prompting', async () => {
-    const server = mockAcpServer();
-
-    const result = await callDevin('coder', 'implement', {
-      cwd: '/repo',
-      sessionId: 'rare-boater',
-      model: 'garbage-name',
-    });
-
-    expect(result.status).toBe('error');
-    expect(result.error).toContain("Devin model 'garbage-name' is not available");
-    expect(requestsOf(server, 'session/prompt')).toHaveLength(0);
   });
 
   it('Given custom CLI path, When called, Then uses it as the executable', async () => {
@@ -1045,6 +989,25 @@ describe('callDevin', () => {
     expect(result.status).toBe('error');
     expect(result.error).toBe('devin returned empty output');
   });
+
+  it.each(['max_tokens', 'max_turn_requests', 'refusal'] as const)(
+    'Given a %s stop reason with partial output, When called, Then returns an error naming the reason without treating the turn as done',
+    async (stopReason) => {
+      mockAcpServer({
+        stopReason,
+        updates: [
+          { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'partial answer' } },
+        ],
+      });
+
+      const result = await callDevin('coder', 'implement', { cwd: '/repo' });
+
+      expect(result.status).toBe('error');
+      expect(result.error).toBe(`devin returned incomplete output (stop reason: ${stopReason})`);
+      expect(result.content).toBe('partial answer');
+      expect(result.failureCategory).toBe('provider_error');
+    },
+  );
 
   it('Given the process exits mid-turn, When called, Then returns an error with stderr detail', async () => {
     mockSpawn.mockImplementation((...call: unknown[]) => {
