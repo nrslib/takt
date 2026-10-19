@@ -1117,6 +1117,7 @@ describe('providerOptionsContract', () => {
       'provider_options.deepseek_harness.shutdown_timeout_ms',
       'provider_options.deepseek_harness.reasoning_effort',
       'provider_options.deepseek_harness.plugins',
+      'provider_options.devin.guards.call_timeout_ms',
       'provider_options.pi.extensions',
       'provider_options.pi.thinking_level',
       'provider_options.pi.system_prompt_mode',

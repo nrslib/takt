@@ -892,6 +892,15 @@ export function denormalizeProviderOptions(
       },
     };
   }
+  if (providerOptions.devin?.guards?.callTimeoutMs !== undefined) {
+    raw.devin = {
+      guards: {
+        ...(providerOptions.devin.guards.callTimeoutMs !== undefined
+          ? { call_timeout_ms: providerOptions.devin.guards.callTimeoutMs }
+          : {}),
+      },
+    };
+  }
   if (providerOptions.deepseekHarness !== undefined) {
     const deepseekHarness = {
       ...(providerOptions.deepseekHarness.baseUrl !== undefined

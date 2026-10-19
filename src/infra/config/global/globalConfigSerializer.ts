@@ -124,6 +124,9 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   if (config.kiroCliPath) {
     raw.kiro_cli_path = config.kiroCliPath;
   }
+  if (config.devinCliPath) {
+    raw.devin_cli_path = config.devinCliPath;
+  }
   if (config.copilotGithubToken) {
     raw.copilot_github_token = config.copilotGithubToken;
   }
