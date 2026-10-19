@@ -1,31 +1,36 @@
+import { useManagerAbortConfirmation } from './useManagerAbortConfirmation.js';
+import { useManagerQuestionAnswer, type PendingQuestion } from './useManagerQuestionAnswer.js';
+import { useManagerSummaryApproval } from './useManagerSummaryApproval.js';
+import { useManagerInput } from './useManagerInput.js';
+import { ManagerQueuedMessages } from './ManagerQueuedMessages.js';
+import { ManagerAbortedGoals } from './ManagerAbortedGoals.js';
+import { ManagerPausedGoals } from './ManagerPausedGoals.js';
+import { ManagerPendingQuestions } from './ManagerPendingQuestions.js';
+import { ManagerAnswerDialog } from './ManagerAnswerDialog.js';
+import { ManagerAbortDialog } from './ManagerAbortDialog.js';
+import { ManagerSummaryDialog } from './ManagerSummaryDialog.js';
+import { ManagerHelp } from './ManagerHelp.js';
 import { basename } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { findAssignedGoalRepository } from './assignment.js';
 import type { ManagerAssignment } from './startupResolution.js';
-import { Box, Text, useApp, useInput, usePaste, useStdout } from 'ink';
+import { Box, Text, useApp, useStdout } from 'ink';
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { PromptInput } from '../tui/PromptInput.js';
 import { TranscriptView, type TranscriptEntry } from '../tui/TranscriptEntryView.js';
 import { StatusLine } from '../tui/StatusLine.js';
-import { applyEditorKey, commitEditorInput, createEditorState, type EditorState } from '../tui/editorState.js';
-import { resolveEditorKey } from '../tui/editorKeys.js';
+import { createEditorState, type EditorState } from '../tui/editorState.js';
 import { FALLBACK_USER_MESSAGE_COLORS } from '../tui/terminalColors.js';
 import { toDisplayText } from '../tui/displayText.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
-import type { ManagerConversationSession, PendingManagerSummary } from './conversationSession.js';
+import type { ManagerConversationSession } from './conversationSession.js';
 import { readManagerDisplayEvents, type ManagerDisplayGoal } from './savedEvents.js';
-import { GoalIdSchema, type GoalQuestion } from '../../infra/goals/schema.js';
+import { GoalIdSchema } from '../../infra/goals/schema.js';
 import { isGoalPaused } from '../../infra/goals/state.js';
 import { GoalStore } from '../../infra/goals/store.js';
 import { notifyManagerTurnFailure } from './turnFailureNotification.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
-
-type PendingQuestion = { goalId: string; objective: string; question: GoalQuestion };
-
-function toDisplayBullet(item: string): string {
-  return `- ${toDisplayText(item).replace(/\n/g, '\n  ')}`;
-}
 
 export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, startup, assignment }: {
   assignment?: ManagerAssignment;
@@ -40,19 +45,15 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   const [entries, setEntries] = useState<TranscriptEntry[]>(() => initialDiagnostics.map((content) => ({
     role: 'assistant', content: toDisplayText(content),
   })));
-  const [pending, setPending] = useState<PendingManagerSummary | null>(null);
   const [approve, setApprove] = useState(false);
   const [busy, setBusy] = useState(startup !== undefined);
   const [questions, setQuestions] = useState<PendingQuestion[]>([]);
   const [goals, setGoals] = useState<ManagerDisplayGoal[]>([]);
   const displaySnapshot = useRef({ assignment: currentAssignment, questions, goals });
-  const [abortTarget, setAbortTarget] = useState<ManagerDisplayGoal | null>(null);
-  const [answerTarget, setAnswerTarget] = useState<{ pending: PendingQuestion; choice: number | null } | null>(null);
   const active = useRef<AbortController | null>(null);
   const polling = useRef(false);
   const registering = useRef(false);
   const selected = useRef(false);
-  const answerChoice = useRef<number | null>(null);
   const mounted = useRef(true);
   const starting = useRef(startup !== undefined);
   const exiting = useRef(false);
@@ -62,6 +63,13 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   const { stdout } = useStdout();
   const contentWidth = Math.max(1, (stdout.columns ?? 80) - 6);
   const ja = lang === 'ja';
+  const resetChoice = (): void => { selected.current = false; setApprove(false); };
+  const abortConfirmation = useManagerAbortConfirmation({ selected, setApprove, resetChoice });
+  const { abortTarget, setAbortTarget } = abortConfirmation;
+  const questionAnswer = useManagerQuestionAnswer();
+  const { answerTarget, setAnswerTarget, beginAnswer } = questionAnswer;
+  const summaryApproval = useManagerSummaryApproval({ selected, setApprove, resetChoice, session });
+  const { pending, setPending } = summaryApproval;
   const edit = (next: EditorState): void => {
     editorRef.current = next;
     setEditor(next);
@@ -147,7 +155,6 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
     }, 500);
     return () => clearInterval(timer);
   }, []);
-  const resetChoice = (): void => { selected.current = false; setApprove(false); };
   const submit = async (text: string): Promise<void> => {
     const controller = new AbortController();
     active.current = controller;
@@ -184,10 +191,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
         const questionId = text.slice('/answer '.length).trim();
         const target = savedQuestions.find((saved) => saved.question.id === questionId);
         if (target === undefined) append(ja ? '回答待ちの質問が見つかりません' : 'Pending question not found');
-        else {
-          answerChoice.current = target.question.options === undefined ? null : 0;
-          setAnswerTarget({ pending: target, choice: answerChoice.current });
-        }
+        else beginAnswer(target);
         return;
       }
       const result = await session.handleUserMessage({ text, abortSignal: controller.signal, onNotification: append });
@@ -268,114 +272,9 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
       if (mounted.current) setBusy(active.current !== null);
     }
   };
-  const insertText = (text: string): void => {
-    if (exiting.current) return;
-    if (!registering.current && active.current === null) {
-      if (abortTarget !== null) return;
-      if (answerTarget !== null && answerChoice.current !== null) {
-        answerChoice.current = null;
-        setAnswerTarget({ ...answerTarget, choice: null });
-      }
-    }
-    if (!registering.current && pending !== null && session.getPendingSummary()?.revision === pending.revision) {
-      session.dismissSummary(pending.revision);
-      setPending(null);
-      resetChoice();
-    }
-    edit(applyEditorKey(editorRef.current, { kind: 'insert', text }));
-  };
-  usePaste(insertText);
-  useInput((input, key) => {
-    if (exiting.current) return;
-    if (key.ctrl && input === 'c') {
-      exiting.current = true;
-      active.current?.abort();
-      setQueued([]);
-      onExit();
-      return;
-    }
-    if (active.current !== null && key.escape) {
-      active.current.abort();
-      setQueued([]);
-      setPending(null);
-      return;
-    }
-    if (registering.current && key.escape) {
-      setQueued([]);
-      return;
-    }
-    if (!registering.current && active.current === null && abortTarget !== null) {
-      if (key.escape) { setAbortTarget(null); resetChoice(); return; }
-      if (key.upArrow || key.downArrow) {
-        selected.current = key.upArrow;
-        setApprove(selected.current);
-      } else if (key.return) {
-        if (selected.current) void abortGoal(abortTarget.id);
-        else { setAbortTarget(null); resetChoice(); }
-      }
-      return;
-    }
-    const editKey = resolveEditorKey(input, key, contentWidth);
-    // Ink は本文と同じチャンクに入った CR/LF を Enter と分類しない。
-    const trailingEnter = !key.return && !(key.shift || key.meta)
-      && editKey?.kind === 'insert' && /[\r\n]$/u.test(input);
-    if (trailingEnter) insertText(input.replace(/(?:\r\n|\r|\n)$/u, ''));
-    const submitInput = key.return || trailingEnter;
-    if (!registering.current && active.current === null && answerTarget !== null) {
-      if (key.escape) { setAnswerTarget(null); return; }
-      const options = answerTarget.pending.question.options ?? [];
-      if (answerChoice.current !== null && (key.upArrow || key.downArrow)) {
-        const next = answerChoice.current + (key.upArrow ? -1 : 1);
-        answerChoice.current = Math.max(0, Math.min(options.length, next));
-        setAnswerTarget({ ...answerTarget, choice: answerChoice.current });
-        return;
-      }
-      if (key.return && answerChoice.current !== null) {
-        if (answerChoice.current === options.length) {
-          answerChoice.current = null;
-          setAnswerTarget({ ...answerTarget, choice: null });
-        } else void saveAnswer(answerTarget.pending, options[answerChoice.current]!);
-        return;
-      }
-      if (submitInput && !(key.shift || key.meta) && editorRef.current.text.trim() !== '') {
-        const text = editorRef.current.text;
-        edit(commitEditorInput(editorRef.current, text));
-        void saveAnswer(answerTarget.pending, text);
-        return;
-      }
-      if (answerChoice.current !== null) {
-        answerChoice.current = null;
-        setAnswerTarget({ ...answerTarget, choice: null });
-      }
-    }
-    if (!registering.current && pending !== null && session.getPendingSummary()?.revision === pending.revision) {
-      if (key.upArrow || key.downArrow) {
-        selected.current = key.upArrow;
-        setApprove(selected.current);
-        return;
-      }
-      if (key.return) {
-        if (selected.current) void register(pending.revision);
-        else { session.dismissSummary(pending.revision); setPending(null); resetChoice(); }
-        return;
-      }
-      if (key.escape) { session.dismissSummary(pending.revision); setPending(null); resetChoice(); return; }
-      // Typing resumes conversation and leaves the summary unavailable to UI approval.
-      session.dismissSummary(pending.revision);
-      setPending(null);
-      resetChoice();
-    }
-    if (submitInput) {
-      if (key.shift || key.meta) {
-        edit(applyEditorKey(editorRef.current, { kind: 'newline' }));
-      } else if (editorRef.current.text.trim() !== '') {
-        const text = editorRef.current.text;
-        edit(commitEditorInput(editorRef.current, text));
-        setQueued((previous) => [...previous, text]);
-      }
-      return;
-    }
-    if (editKey !== null) edit(applyEditorKey(editorRef.current, editKey));
+  useManagerInput({
+    exiting, active, registering, editorRef, edit, setQueued, onExit, contentWidth, session,
+    abortConfirmation, questionAnswer, summaryApproval, abortGoal, saveAnswer, register,
   });
   return (
     <Box flexDirection="column">
@@ -386,93 +285,14 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
           ? `${assignment.name} (${assignment.repositoryDirectories.length})` : basename(cwd))}</Text>
       <Text dimColor>{toDisplayText(cwd)}</Text>
       <TranscriptView entries={entries} userMessageColors={FALLBACK_USER_MESSAGE_COLORS} />
-      {queued.length > 0 && (
-        <Box borderStyle="round" flexDirection="column">
-          <Text bold>{`${ja ? '送信待ち' : 'Queued messages'}: ${queued.length}`}</Text>
-          {queued.map((text, index) => <Text key={index}>{toDisplayText(text)}</Text>)}
-        </Box>
-      )}
-      {goals.some((goal) => goal.executionStatus === 'aborted') && (
-        <Box borderStyle="round" flexDirection="column">
-          <Text bold>{getLabel('manager.abortedGoals', lang)}</Text>
-          {goals.filter((goal) => goal.executionStatus === 'aborted').map((goal) => (
-            <Text key={goal.id}>{toDisplayText(`${goal.id}: ${goal.objective}`)}</Text>
-          ))}
-        </Box>
-      )}
-      {goals.some(isGoalPaused) && (
-        <Box borderStyle="round" flexDirection="column">
-          <Text bold>{getLabel('manager.pausedGoals', lang)}</Text>
-          {goals.filter(isGoalPaused).map((goal) => (
-            <Box key={goal.id} flexDirection="column">
-              <Text>{toDisplayText(`${goal.id}: ${goal.objective}`)}</Text>
-              <Text dimColor>{`/resume ${goal.id}`}</Text>
-            </Box>
-          ))}
-        </Box>
-      )}
-      {questions.length > 0 && (
-        <Box borderStyle="round" flexDirection="column">
-          <Text bold>{ja ? '回答待ちの質問' : 'Pending questions'}</Text>
-          {questions.map(({ goalId, objective, question }) => (
-            <Box key={JSON.stringify([goalId, question.id])} flexDirection="column">
-              <Text>{toDisplayText(`${goalId}: ${objective}\n${question.id}: ${question.body}`)}</Text>
-              {question.options !== undefined && <Text>{toDisplayText(question.options.join(' / '))}</Text>}
-              {question.recommendation !== undefined && <Text>{`${ja ? '推奨' : 'Recommendation'}: ${toDisplayText(question.recommendation)}`}</Text>}
-              <Text dimColor>{toDisplayText(`/answer ${question.id}`)}</Text>
-            </Box>
-          ))}
-        </Box>
-      )}
-      {answerTarget !== null && (
-        <Box borderStyle="round" flexDirection="column">
-          <Text bold>{toDisplayText(answerTarget.pending.question.body)}</Text>
-          {answerTarget.choice !== null ? (
-            <>
-              {answerTarget.pending.question.options?.map((option, index) => (
-                <Text key={index} inverse={answerTarget.choice === index}>{toDisplayText(option)}</Text>
-              ))}
-              <Text inverse={answerTarget.choice === answerTarget.pending.question.options?.length}>
-                {ja ? '自由記述' : 'Free text'}
-              </Text>
-              <Text dimColor>{ja ? '↑↓ 選択 / Enter 決定 / Esc 戻る' : '↑↓ Choose / Enter Select / Esc Back'}</Text>
-            </>
-          ) : <Text>{ja ? '回答を入力してください' : 'Enter your answer'}</Text>}
-        </Box>
-      )}
-      {abortTarget !== null && (
-        <Box borderStyle="round" flexDirection="column">
-          <Text bold>{getLabel('manager.abortConfirmation', lang)}</Text>
-          <Text>{toDisplayText(`${abortTarget.id}: ${abortTarget.objective}`)}</Text>
-          <Text>{getLabel('manager.abortWarning', lang)}</Text>
-          <Text inverse={approve}>{getLabel('manager.confirmAbort', lang)}</Text>
-          <Text inverse={!approve}>{getLabel('manager.cancelAbort', lang)}</Text>
-          <Text dimColor>{getLabel('manager.abortChoiceHint', lang)}</Text>
-        </Box>
-      )}
-      {pending !== null && (
-        <Box borderStyle="round" flexDirection="column">
-          <Text bold>{ja ? '登録する要約' : 'Summary to register'}</Text>
-          {pending.repositoryDirectory !== undefined && <Text>{toDisplayText(pending.repositoryDirectory)}</Text>}
-          <Text>{toDisplayText(pending.summary.objective)}</Text>
-          <Text>{`${ja ? '範囲外' : 'Out of scope'}:`}</Text>
-          {pending.summary.outOfScope.map((item, index) => <Text key={index}>{toDisplayBullet(item)}</Text>)}
-          <Text>{`${ja ? '受け入れ条件' : 'Acceptance criteria'}:`}</Text>
-          {pending.summary.acceptanceCriteria.map((item, index) => <Text key={index}>{toDisplayBullet(item)}</Text>)}
-          <Text>{`${ja ? '作業の制約' : 'Work constraints'}:`}</Text>
-          {pending.summary.constraints.map((item, index) => <Text key={index}>{toDisplayBullet(item)}</Text>)}
-          {pending.summary.startBranch !== undefined && <Text>{`startBranch: ${toDisplayText(pending.summary.startBranch)}`}</Text>}
-          {pending.summary.integrationBranch !== undefined && <Text>{`integrationBranch: ${toDisplayText(pending.summary.integrationBranch)}`}</Text>}
-          <Text inverse={approve}>{ja ? '登録を承認' : 'Approve registration'}</Text>
-          <Text inverse={!approve}>{ja ? '会話を続ける' : 'Continue conversation'}</Text>
-          <Text dimColor>{ja ? '↑ 承認 / ↓ 続行 / Enter 決定' : '↑ Approve / ↓ Continue / Enter Select'}</Text>
-        </Box>
-      )}
-      <Box flexDirection="column" flexShrink={0}>
-        <Text dimColor>{getLabel('manager.goalExecutionUsage', lang)}</Text>
-        <Text color="yellow">{getLabel('manager.experimentalNotice', lang)}</Text>
-        <Text color="yellow">{getLabel('manager.costNotice', lang)}</Text>
-      </Box>
+      {queued.length > 0 && <ManagerQueuedMessages queued={queued} ja={ja} />}
+      {goals.some((goal) => goal.executionStatus === 'aborted') && <ManagerAbortedGoals goals={goals} lang={lang} />}
+      {goals.some(isGoalPaused) && <ManagerPausedGoals goals={goals} lang={lang} />}
+      {questions.length > 0 && <ManagerPendingQuestions questions={questions} ja={ja} />}
+      {answerTarget !== null && <ManagerAnswerDialog answerTarget={answerTarget} ja={ja} />}
+      {abortTarget !== null && <ManagerAbortDialog abortTarget={abortTarget} approve={approve} lang={lang} />}
+      {pending !== null && <ManagerSummaryDialog pending={pending} approve={approve} ja={ja} />}
+      <ManagerHelp lang={lang} />
       <StatusLine busy={busy} label={ja ? '処理中' : 'Working'} streamed="" />
       <PromptInput text={editor.text} cursor={editor.cursor} contentWidth={contentWidth}
         placeholder={answerTarget === null ? (ja ? 'ゴールを相談してください' : 'Discuss your goal') : (ja ? '回答を入力してください' : 'Enter your answer')}
