@@ -2,7 +2,7 @@ import * as crypto from 'node:crypto';
 import { beforeEach,expect,it,vi } from 'vitest';
 import { notifyTaktGoal } from '../features/mcp/goalNotificationOperations.js';
 import { askTaktGoalQuestion,getTaktGoalQuestion,listTaktGoalQuestions,withdrawTaktGoalQuestion } from '../features/mcp/goalQuestionOperations.js';
-import { GoalSchema,type Goal } from '../infra/goals/schema.js';
+import { GoalQuestionSchema,GoalSchema,type Goal } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 import { listTaktGoalRecords, recordTaktGoalWorkLog } from '../features/mcp/goalWorkLogOperations.js';
@@ -13,7 +13,7 @@ vi.mock('node:crypto', async (original) => {
   return { ...actual, randomUUID: vi.fn(actual.randomUUID) };
 });
 const doubles = vi.hoisted(() => ({
-  get: vi.fn(), update: vi.fn(), lock: vi.fn(), allowed: vi.fn(), resolve: vi.fn(), send: vi.fn(), language: vi.fn(),
+  get: vi.fn(), update: vi.fn(), allowed: vi.fn(), resolve: vi.fn(), send: vi.fn(), language: vi.fn(),
 }));
 vi.mock('../infra/config/resolveConfigValue.js', async (original) => ({
   ...await original<typeof import('../infra/config/resolveConfigValue.js')>(), resolveConfigValue: doubles.language,
@@ -37,7 +37,6 @@ beforeEach(() => {
   doubles.update.mockImplementation(async (_id: string, transform: (current: Goal) => Goal) => {
     goal = transform(structuredClone(goal)); return structuredClone(goal);
   });
-  doubles.lock.mockImplementation(async (_cwd: string, _ids: string[], action: () => Promise<unknown>) => action());
   doubles.resolve.mockReturnValue({ policy, webhookUrl: undefined, mainMerge: 'approve' });
   doubles.language.mockReturnValue('ja');
 });
@@ -186,7 +185,6 @@ it('rejects a root outside the MCP scope before reading or saving', async () => 
   expect((await notifyTaktGoal({ ...input, kind: 'custom', body: '通知' }, {}, signal)).isError).toBe(true);
   expect(doubles.get).not.toHaveBeenCalled();
   expect(doubles.update).not.toHaveBeenCalled();
-  expect(doubles.lock).not.toHaveBeenCalled();
 });
 
 it('bounds question reads, creation, withdrawal, notifications and work-log writes with large saved histories', async () => {
@@ -250,4 +248,93 @@ it('puts pending questions first and retrieves the next pending question with it
   const next = JSON.parse(firstTextContent((await listTaktGoalQuestions({ ...input, limit: 1, offset: page.nextOffset }, {})).content));
   expect(next.questions[0]).toEqual(third);
   expect(JSON.parse(firstTextContent((await getTaktGoalQuestion({ ...input, questionId: next.questions[0].id }, {})).content)).question).toEqual(third);
+});
+
+it.each([undefined, 'question', 'operation_request'] as const)('saves kind %s and target SHA through the question operation', async (kind) => {
+  const details = { ...input, body: '認証を確認してください', ...(kind === undefined ? {} : { kind }), targetSha: 'a'.repeat(40) };
+  const result = await askTaktGoalQuestion(details, {}, signal);
+  expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+  const { questionId } = JSON.parse(firstTextContent(result.content));
+  const read = await getTaktGoalQuestion({ ...input, questionId }, {});
+  expect(JSON.parse(firstTextContent(read.content)).question).toMatchObject({
+    id: questionId, body: details.body, kind: kind ?? 'question', targetSha: details.targetSha, status: 'pending',
+  });
+});
+
+it('rejects approval creation before saving or delivering a notification', async () => {
+  const details = { ...input, body: '操作を許可しますか', kind: 'approval' } as unknown as Parameters<typeof askTaktGoalQuestion>[0];
+  const result = await askTaktGoalQuestion(details, {}, signal);
+  expect(result.isError).toBe(true);
+  expect(firstTextContent(result.content)).toMatch(/approval|承認/iu);
+  expect(doubles.update).not.toHaveBeenCalled();
+  expect(doubles.send).not.toHaveBeenCalled();
+  expect(goal.questions).toBeUndefined();
+});
+
+it.each(['question', 'operation_request'] as const)('creates a separate %s inquiry and returns its ID when another kind has the same body', async (kind) => {
+  const old = GoalQuestionSchema.parse({
+    id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human', status: 'pending',
+    body: '確認してください', kind: kind === 'question' ? 'operation_request' : 'question',
+  });
+  goal.questions = [old];
+  const details = { ...input, body: old.body, kind };
+  const result = await askTaktGoalQuestion(details, {}, signal);
+  expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+  expect(goal.questions).toHaveLength(2);
+  const created = goal.questions![1]!;
+  expect(created).toMatchObject({ body: old.body, kind, status: 'pending' });
+  expect(JSON.parse(firstTextContent(result.content))).toEqual({ questionId: created.id });
+  expect(created.id).not.toBe(old.id);
+  expect(goal.notifications).toHaveLength(1);
+});
+
+it('reuses the matching kind when a different kind appears first with the same body', async () => {
+  goal.questions = [
+    GoalQuestionSchema.parse({ id: '650e8400-e29b-41d4-a716-446655440001', body: '確認してください', status: 'pending', kind: 'question' }),
+    GoalQuestionSchema.parse({ id: '650e8400-e29b-41d4-a716-446655440002', body: '確認してください', status: 'pending', kind: 'operation_request' }),
+  ];
+  const before = structuredClone(goal.questions);
+  const details = { ...input, body: '確認してください', kind: 'operation_request' as const };
+  const result = await askTaktGoalQuestion(details, {}, signal);
+  expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+  expect(JSON.parse(firstTextContent(result.content))).toEqual({ questionId: before[1]!.id });
+  expect(goal.questions).toEqual(before);
+  expect(goal.notifications).toBeUndefined();
+});
+
+it.each([undefined, '  別の方法で解決しました\n'])('saves withdrawal time and optional reason %j through MCP operations', async (reason) => {
+  const question = GoalQuestionSchema.parse({ id: '650e8400-e29b-41d4-a716-446655440001', body: '確認してください', status: 'pending' });
+  goal.questions = [question];
+  const before = Date.now();
+  const details = { ...input, questionId: question.id, ...(reason === undefined ? {} : { reason }) };
+  const result = await withdrawTaktGoalQuestion(details, {}, signal);
+  expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+  const saved = goal.questions![0]!;
+  expect(saved).toMatchObject({ id: question.id, status: 'withdrawn' });
+  expect(saved.withdrawalReason).toBe(reason);
+  expect(Date.parse(saved.withdrawnAt!)).toBeGreaterThanOrEqual(before);
+  expect(Date.parse(saved.withdrawnAt!)).toBeLessThanOrEqual(Date.now());
+  const read = await getTaktGoalQuestion({ ...input, questionId: question.id }, {});
+  expect(JSON.parse(firstTextContent(read.content)).question).toEqual(saved);
+});
+
+it('returns structured answers, withdrawal details and consumed approval state from both reads', async () => {
+  const now = '2026-10-19T01:00:00.000Z';
+  const base = { recipient: 'human', body: '確認してください', createdAt: now };
+  const records = [
+    { ...base, id: '650e8400-e29b-41d4-a716-446655440001', kind: 'question', status: 'pending' },
+    { ...base, id: '650e8400-e29b-41d4-a716-446655440002', kind: 'operation_request', status: 'answered',
+      answer: { text: '', report: 'unable', source: 'tui', answeredAt: now } },
+    { ...base, id: '650e8400-e29b-41d4-a716-446655440003', kind: 'approval', status: 'answered', consumedAt: now,
+      operation: { toolName: 'Bash', args: '{}', cwd: '/project', argsDigest: 'a'.repeat(64) },
+      answer: { text: '', decision: 'allow', scope: 'workspace', source: 'tui', answeredAt: now } },
+    { ...base, id: '650e8400-e29b-41d4-a716-446655440004', kind: 'question', status: 'withdrawn', withdrawalReason: '不要です', withdrawnAt: now },
+  ].map((record) => GoalQuestionSchema.parse(record));
+  goal.questions = records;
+  const listed = await listTaktGoalQuestions(input, {});
+  expect(JSON.parse(firstTextContent(listed.content))).toMatchObject({ questions: records, totalCount: records.length });
+  for (const record of records) {
+    const result = await getTaktGoalQuestion({ ...input, questionId: record.id }, {});
+    expect(JSON.parse(firstTextContent(result.content))).toEqual({ question: record });
+  }
 });

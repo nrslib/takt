@@ -8,22 +8,27 @@ import type { AskGoalQuestionInput, GetGoalQuestionInput, listGoalQuestionsInput
 import type { z } from 'zod/v4';
 import { goalValuePage, selectGoalValue } from './goalResponse.js';
 import { pagedResult } from './response.js';
+import type { GoalQuestion } from '../../infra/goals/schema.js';
 
 export function askTaktGoalQuestion(input: AskGoalQuestionInput, deps: McpOperationDependencies, signal: AbortSignal) {
   return goalWrite(input, deps, signal, async (policy) => {
+    const kind = input.kind ?? 'question';
+    const matches = (question: GoalQuestion) => question.body === input.body
+      && question.status === 'pending' && (question.kind ?? 'question') === kind;
     const store = new GoalStore(input.cwd);
     const saved = await store.update(input.goalId, (current) => {
-      const existing = current.questions?.find((question) => question.body === input.body && question.status === 'pending');
+      const existing = current.questions?.find(matches);
       if (existing !== undefined) return current;
       const added = addGoalQuestion(current, {
         body: input.body, options: input.options, recommendation: input.recommendation, recipient: input.recipient,
+        kind, targetSha: input.targetSha,
       });
       const question = added.goal.questions!.at(-1)!;
       return appendGoalNotification(added.goal, {
         kind: 'question', body: formatGoalQuestionNotification(question, resolveConfigValue(input.cwd, 'language')),
       }, policy);
     });
-    const question = saved.questions!.find((candidate) => candidate.body === input.body && candidate.status === 'pending')!;
+    const question = saved.questions!.find(matches)!;
     return { questionId: question.id };
   }, 'Goal question failed', 'question');
 }
@@ -50,7 +55,7 @@ export async function getTaktGoalQuestion(input: GetGoalQuestionInput, deps: Mcp
 
 export function withdrawTaktGoalQuestion(input: z.infer<typeof withdrawGoalQuestionInputSchema>, deps: McpOperationDependencies, signal: AbortSignal) {
   return goalWrite(input, deps, signal, async () => {
-    const goal = await new GoalStore(input.cwd).update(input.goalId, (current) => withdrawGoalQuestion(current, input.questionId));
+    const goal = await new GoalStore(input.cwd).update(input.goalId, (current) => withdrawGoalQuestion(current, input.questionId, input.reason));
     return { goalId: goal.id, status: goal.status, questionId: input.questionId,
       questionStatus: goal.questions!.find((question) => question.id === input.questionId)!.status };
   }, 'Goal question withdrawal failed', 'withdraw_question');

@@ -176,19 +176,19 @@ export function createTaktMcpServer(
       title: 'Read manager work', description: 'Read recent manager work in reverse saved order with optional limit (1-50) and offset. Read full entries with takt_get_goal path workLog, recordId, and a text field path. Responses fit 64 KiB, with explicit truncation.', inputSchema: listGoalRecordsInputSchema,
     }, (input) => operation(input.cwd, 'Goal work log read failed', (deps) => listTaktGoalRecords(projectInput(input, deps), deps), false));
     server.registerTool('takt_ask_goal_question', {
-      title: 'Ask a goal question', description: 'Save a pending question, optional choices and recommendation. Returns the saved question ID. Responses fit 64 KiB. Read saved content with takt_get_goal_question and questionId.',
+      title: 'Ask a goal question', description: 'Save a pending inquiry with kind question (default) or operation_request, optional choices, recommendation and targetSha. Approval creation is not allowed for managers; approvals are created through the judgment path. Pending inquiries with the same body and kind reuse the saved question ID. Responses fit 64 KiB. Read saved content with takt_get_goal_question and questionId.',
       inputSchema: askGoalQuestionInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal question failed', (deps) => askTaktGoalQuestion(projectInput(input, deps), deps, extra.signal)));
     server.registerTool('takt_list_goal_questions', {
-      title: 'List goal questions', description: 'Read pending questions first, then other saved questions, with offset/limit. Retrieve one question by questionId with takt_get_goal_question. Responses fit 64 KiB, with explicit truncation.',
+      title: 'List goal questions', description: 'Read pending inquiries first, then other saved inquiries, with offset/limit. Records include kind, structured answer decision/report/scope, withdrawalReason, withdrawnAt and approval consumedAt when saved. Retrieve one inquiry by questionId with takt_get_goal_question. Responses fit 64 KiB, with explicit truncation.',
       inputSchema: listGoalQuestionsInputSchema,
     }, (input) => operation(input.cwd, 'Goal question list failed', (deps) => listTaktGoalQuestions(projectInput(input, deps), deps), false));
     server.registerTool('takt_get_goal_question', {
-      title: 'Read a goal question', description: 'Read a question and answer by questionId. Select path body, recommendation, answer.text or options.N and textOffset/maxBytes to retrieve omitted text. Responses fit 64 KiB, with explicit truncation.',
+      title: 'Read a goal question', description: 'Read an inquiry by questionId, including kind, structured answer decision/report/scope, withdrawalReason, withdrawnAt and approval consumedAt when saved. Select path body, recommendation, answer.text, options.N or withdrawalReason and textOffset/maxBytes to retrieve omitted text. Responses fit 64 KiB, with explicit truncation.',
       inputSchema: getGoalQuestionInputSchema,
     }, (input) => operation(input.cwd, 'Goal question read failed', (deps) => getTaktGoalQuestion(projectInput(input, deps), deps), false));
     server.registerTool('takt_withdraw_goal_question', {
-      title: 'Withdraw a goal question', description: 'Withdraw a pending question when it is resolved without a human answer. Returns saved state and IDs within 64 KiB. Read the saved question with takt_get_goal_question and questionId.',
+      title: 'Withdraw a goal question', description: 'Withdraw a pending inquiry when it is resolved without a human answer, saving the withdrawal time and an optional reason. Returns saved state and IDs within 64 KiB. Read withdrawalReason and withdrawnAt with takt_get_goal_question and questionId.',
       inputSchema: withdrawGoalQuestionInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal question withdrawal failed', (deps) => withdrawTaktGoalQuestion(projectInput(input, deps), deps, extra.signal)));
     server.registerTool('takt_notify_goal', {
