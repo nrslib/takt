@@ -33,7 +33,6 @@ describe('Goal Git registration with saved branches and real commits', () => {
     cwd = join(root, 'project');
     mkdirSync(cwd);
     mkdirSync(join(cwd, '.takt'));
-    vi.stubEnv('TAKT_CONFIG_DIR', join(root, 'global'));
     vi.stubEnv('TAKT_BASE_BRANCH', undefined);
     git(['init', '--initial-branch=main']);
     const tree = git(['hash-object', '-w', '-t', 'tree', '--stdin'], '');
@@ -48,8 +47,152 @@ describe('Goal Git registration with saved branches and real commits', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllEnvs();
     rmSync(root, { recursive: true, force: true });
+  });
+
+  it('fetches the origin tip before creating the saved goal branch from an older local default', async () => {
+    configureBaseBranch(undefined);
+    const origin = join(root, 'origin.git');
+    git(['init', '--bare', '--initial-branch=main', origin]);
+    git(['remote', 'add', 'origin', origin]);
+    git(['push', 'origin', 'main']);
+    const originTip = commits['release']!;
+    git(['push', 'origin', `${originTip}:refs/heads/main`]);
+    git(['update-ref', 'refs/remotes/origin/main', commits.main!]);
+    expect(git(['rev-parse', 'refs/heads/main'])).toBe(commits.main);
+    expect(git(['rev-parse', 'refs/remotes/origin/main'])).toBe(commits.main);
+    expect(git(['--git-dir', origin, 'rev-parse', 'refs/heads/main'])).toBe(originTip);
+
+    await createGoal({ cwd, id: goalId, ...goalInput() });
+
+    const saved = await new GoalStore(cwd).get(goalId);
+    expect(saved).toMatchObject({ startBranch: 'main', integrationBranch: 'main' });
+    expect(git(['rev-parse', '--verify', `refs/heads/${saved.branch}^{commit}`])).toBe(originTip);
+    expect(git(['rev-parse', 'refs/remotes/origin/main'])).toBe(originTip);
+    expect(git(['rev-parse', 'refs/heads/main'])).toBe(commits.main);
+  });
+
+  it('registers from the local default when origin has no matching branch', async () => {
+    configureBaseBranch(undefined);
+    const origin = join(root, 'origin.git');
+    git(['init', '--bare', '--initial-branch=other', origin]);
+    git(['remote', 'add', 'origin', origin]);
+    git(['push', 'origin', 'release:refs/heads/other']);
+
+    await createGoal({ cwd, id: goalId, ...goalInput() });
+
+    const saved = await new GoalStore(cwd).get(goalId);
+    expect(git(['rev-parse', '--verify', `refs/heads/${saved.branch}^{commit}`])).toBe(commits.main);
+    expect(git(['for-each-ref', '--format=%(refname)', 'refs/remotes/origin/main'])).toBe('');
+  });
+
+  it('registers from the local default when fetching origin fails', async () => {
+    configureBaseBranch(undefined);
+    git(['remote', 'add', 'origin', join(root, 'unreachable.git')]);
+    expect(git(['for-each-ref', '--format=%(refname)', 'refs/remotes/origin/main'])).toBe('');
+
+    await createGoal({ cwd, id: goalId, ...goalInput() });
+
+    const saved = await new GoalStore(cwd).get(goalId);
+    expect(git(['rev-parse', '--verify', `refs/heads/${saved.branch}^{commit}`])).toBe(commits.main);
+  });
+
+  it.each([16, 1024 * 1024 + 1])('registers from the local default with one %i-byte origin child name after a failed fetch', async (childLength) => {
+    configureBaseBranch(undefined);
+    git(['remote', 'add', 'origin', join(root, 'unreachable.git')]);
+    const prefix = 'refs/remotes/origin/main';
+    const childRef = `${prefix}/${'x'.repeat(childLength)}`;
+    writeFileSync(join(cwd, '.git', 'packed-refs'), `${commits.release!} ${childRef}\n`);
+    // fixture の照会が正常終了することと出力量を、本番の保持上限とは別に確認する。
+    const output = execFileSync('git', ['for-each-ref', '--format=%(refname)', '--count=1', prefix], {
+      cwd, maxBuffer: 2 * 1024 * 1024,
+    });
+    expect(output.equals(Buffer.from(`${childRef}\n`))).toBe(true);
+    expect(output.length).toBe(Buffer.byteLength(childRef) + 1);
+    if (childLength > 1024 * 1024) expect(output.length).toBeGreaterThan(1024 * 1024);
+
+    await createGoal({ cwd, id: goalId, ...goalInput() });
+
+    const saved = await new GoalStore(cwd).get(goalId);
+    expect(saved).toMatchObject({ startBranch: 'main', integrationBranch: 'main' });
+    expect(git(['rev-parse', '--verify', `refs/heads/${saved.branch}^{commit}`])).toBe(commits.main);
+  });
+
+  it.each([
+    { fetch: 'succeeds', childCount: 2 },
+    { fetch: 'succeeds', childCount: 5000 },
+    { fetch: 'fails', childCount: 2 },
+    { fetch: 'fails', childCount: 5000 },
+  ])('registers from the local default with $childCount origin child references when fetch $fetch', async ({ fetch, childCount }) => {
+    configureBaseBranch(undefined);
+    const origin = join(root, 'origin.git');
+    git(['remote', 'add', 'origin', origin]);
+    const sourceArgs = fetch === 'succeeds' ? ['--git-dir', origin] : [];
+    const prefix = fetch === 'succeeds' ? 'refs/heads/main' : 'refs/remotes/origin/main';
+    if (fetch === 'succeeds') {
+      git(['init', '--bare', '--initial-branch=other', origin]);
+      git(['push', 'origin', 'release:refs/heads/other']);
+    }
+    const childRefs = Array.from({ length: childCount }, (_, index) =>
+      `${prefix}/feature-${String(index).padStart(5, '0')}-${'x'.repeat(190)}`);
+    git([...sourceArgs, 'update-ref', '--stdin'], childRefs.map((ref) => `create ${ref} ${commits.release!}\n`).join(''));
+    git([...sourceArgs, 'pack-refs', '--all']);
+    // 全件出力量の計測だけに容量を与え、本番の上限は変更しない。
+    const output = execFileSync('git', [...sourceArgs, 'for-each-ref', '--format=%(refname)', prefix], {
+      cwd, maxBuffer: 2 * 1024 * 1024,
+    });
+    expect(output.toString('utf8').trim().split('\n')).toEqual(childRefs);
+    if (childCount === 5000) expect(output.length).toBeGreaterThan(1024 * 1024);
+    else expect(output.length).toBeLessThan(1024 * 1024);
+
+    await createGoal({ cwd, id: goalId, ...goalInput() });
+
+    const saved = await new GoalStore(cwd).get(goalId);
+    expect(saved).toMatchObject({ startBranch: 'main', integrationBranch: 'main' });
+    expect(git(['rev-parse', '--verify', `refs/heads/${saved.branch}^{commit}`])).toBe(commits.main);
+    expect(git(['for-each-ref', '--count=1', '--format=%(refname)', 'refs/remotes/origin/main']))
+      .toBe(childRefs[0]!.replace('refs/heads/', 'refs/remotes/origin/'));
+  });
+
+  it('rejects a local child reference without saving a goal or creating its branch', async () => {
+    configureBaseBranch(undefined);
+    git(['symbolic-ref', 'HEAD', 'refs/heads/feature/start']);
+    git(['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main']);
+    git(['update-ref', '-d', 'refs/heads/main']);
+    git(['update-ref', 'refs/heads/main/feature', commits.main!]);
+    const refsBefore = git(['for-each-ref', '--format=%(refname) %(objectname)']);
+
+    await expect(createGoal({ cwd, id: goalId, ...goalInput() })).rejects.toThrow();
+
+    expect(await new GoalStore(cwd).list()).toEqual({ goals: [], errors: [] });
+    expect(git(['for-each-ref', '--format=%(refname) %(objectname)'])).toBe(refsBefore);
+  });
+
+  it('creates the saved branch with the existing timestamp and goal ID format', async () => {
+    configureBaseBranch(undefined);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-18T12:04:00Z'));
+
+    await createGoal({ cwd, id: goalId, ...goalInput() });
+
+    const saved = await new GoalStore(cwd).get(goalId);
+    expect(saved.branch).toBe('takt/20261018T1204-goal-550e8400');
+    expect(git(['rev-parse', '--verify', `refs/heads/${saved.branch}^{commit}`])).toBe(commits.main);
+  });
+
+  it('preserves an existing goal branch when the generated name collides', async () => {
+    configureBaseBranch(undefined);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-18T12:04:00Z'));
+    const branchRef = 'refs/heads/takt/20261018T1204-goal-550e8400';
+    git(['update-ref', branchRef, commits.release!]);
+
+    await expect(createGoal({ cwd, id: goalId, ...goalInput() })).rejects.toThrow();
+
+    expect(git(['rev-parse', '--verify', `${branchRef}^{commit}`])).toBe(commits.release);
+    expect(await new GoalStore(cwd).list()).toEqual({ goals: [], errors: [] });
   });
 
   it.each([

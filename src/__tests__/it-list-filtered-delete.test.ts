@@ -15,7 +15,7 @@ import { invalidateAllResolvedConfigCache, invalidateGlobalConfigCache } from '.
 import * as i18n from '../shared/i18n/index.js';
 import * as taskActions from '../features/tasks/list/taskActions.js';
 
-const output = vi.hoisted(() => ({ info: vi.fn(), success: vi.fn(), error: vi.fn() }));
+const output = vi.hoisted(() => ({ info: vi.fn(), success: vi.fn(), error: vi.fn(), warn: vi.fn() }));
 vi.mock('../shared/ui/index.js', () => output);
 
 const goalId = '550e8400-e29b-41d4-a716-446655440000';
@@ -180,7 +180,7 @@ describe('non-interactive filtered deletion with real task resources', () => {
       expect(runner.listAllTaskItems().map((task) => task.kind)).toEqual(claim ? ['running'] : []);
     });
   });
-  it('cleans up the session, metadata and record for a missing clone within the allowed base', async () => {
+  it('deletes the root branch, session, metadata and record for a missing clone within the allowed base', async () => {
     const resources = cloneResources(project, 'feature/missing');
     rmSync(resources.clone, { recursive: true });
     saveRecords(project, [record('missing', 'completed', { branch: 'feature/missing', worktree_path: resources.clone })]);
@@ -189,6 +189,8 @@ describe('non-interactive filtered deletion with real task resources', () => {
 
     for (const file of Object.values(resources)) expect(existsSync(file)).toBe(false);
     expect(names(project)).toEqual([]);
+    expect(git(project, ['for-each-ref', '--format=%(refname)', 'refs/heads/feature/missing'])).toBe('');
+    expect(output.warn).not.toHaveBeenCalled();
   });
   it('preserves clones, sessions, metadata, Git branches, and records during preview', async () => {
     const resources = cloneResources(project, 'feature/preview');

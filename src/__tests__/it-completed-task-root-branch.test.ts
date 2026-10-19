@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
+import { stringify } from 'yaml';
 import type { TaskListItem } from '../infra/task/types.js';
 
 const {
@@ -40,6 +41,11 @@ import { autoCommitAndPush } from '../infra/task/autoCommit.js';
 import { deleteBranch, mergeBranch, tryMergeBranch } from '../features/tasks/list/taskBranchLifecycleActions.js';
 import { showDiffAndPromptActionForTask } from '../features/tasks/list/taskDiffActions.js';
 import { listTaktBranches } from '../infra/task/branchList.js';
+import { deleteTaskResources } from '../features/tasks/list/taskDeleteActions.js';
+import { TaskRunner } from '../infra/task/runner.js';
+import { getCloneMetaPath, saveCloneMeta } from '../infra/task/clone-meta.js';
+import { getWorktreeSessionPath } from '../infra/config/project/sessionStore.js';
+import { invalidateGlobalConfigCache } from '../infra/config/index.js';
 
 interface RepoFixture {
   rootDir: string;
@@ -59,8 +65,13 @@ function git(cwd: string, args: string[], encoding: BufferEncoding = 'utf-8'): s
 function setupRepoFixture(): RepoFixture {
   const sandboxDir = mkdtempSync(join(tmpdir(), 'takt-it-root-branch-'));
   const rootDir = join(sandboxDir, 'root');
-  const worktreeDir = join(sandboxDir, 'task-worktree');
+  const worktreeBaseDir = join(sandboxDir, 'worktrees');
+  const worktreeDir = join(worktreeBaseDir, 'root', 'task-worktree');
   const branch = 'takt/it-completed-action';
+  const configDir = process.env.TAKT_CONFIG_DIR;
+  if (configDir === undefined) throw new Error('TAKT_CONFIG_DIR must be set by test setup');
+  writeFileSync(join(configDir, 'config.yaml'), stringify({ worktree_dir: worktreeBaseDir }));
+  invalidateGlobalConfigCache();
 
   execFileSync('git', ['init', rootDir, '--initial-branch=main'], { stdio: 'pipe' });
   git(rootDir, ['config', 'user.email', 'test@example.com']);
@@ -69,6 +80,7 @@ function setupRepoFixture(): RepoFixture {
   execFileSync('git', ['add', 'README.md'], { cwd: rootDir, stdio: 'pipe' });
   execFileSync('git', ['commit', '-m', 'init'], { cwd: rootDir, stdio: 'pipe' });
 
+  mkdirSync(dirname(worktreeDir), { recursive: true });
   execFileSync('git', ['clone', rootDir, worktreeDir], { stdio: 'pipe' });
   git(worktreeDir, ['config', 'user.email', 'test@example.com']);
   git(worktreeDir, ['config', 'user.name', 'Test User']);
@@ -81,6 +93,7 @@ function setupRepoFixture(): RepoFixture {
     worktreeDir,
     branch,
     cleanup: () => {
+      invalidateGlobalConfigCache();
       rmSync(sandboxDir, { recursive: true, force: true });
     },
   };
@@ -96,6 +109,22 @@ function makeCompletedTask(fixture: RepoFixture): TaskListItem {
     branch: fixture.branch,
     worktreePath: fixture.worktreeDir,
   };
+}
+
+function saveCompletedTaskResources(fixture: RepoFixture) {
+  const tasksFile = join(fixture.rootDir, '.takt', 'tasks.yaml');
+  mkdirSync(dirname(tasksFile), { recursive: true });
+  writeFileSync(tasksFile, stringify({ tasks: [{
+    name: 'completed-task', status: 'completed', content: 'update slides deck',
+    branch: fixture.branch, worktree_path: fixture.worktreeDir,
+    created_at: '2026-04-09T08:56:35.617Z', started_at: '2026-04-09T08:57:00.000Z',
+    completed_at: '2026-04-09T08:58:00.000Z',
+  }] }));
+  saveCloneMeta(fixture.rootDir, fixture.branch, fixture.worktreeDir);
+  const session = getWorktreeSessionPath(fixture.rootDir, fixture.worktreeDir);
+  mkdirSync(dirname(session), { recursive: true });
+  writeFileSync(session, JSON.stringify({ personaSessions: { coder: 'fixture-session' } }));
+  return { session, meta: getCloneMetaPath(fixture.rootDir, fixture.branch) };
 }
 
 describe('completed task actions with root branch materialized on completion', () => {
@@ -262,6 +291,91 @@ describe('branch deletion', () => {
 
   afterEach(() => {
     fixture.cleanup();
+  });
+
+  it('deletes a merged published root branch and all clone task resources', async () => {
+    const published = await autoCommitAndPush(fixture.worktreeDir, 'update slides deck', fixture.rootDir, fixture.branch);
+    expect(published.success).toBe(true);
+    expect(git(fixture.rootDir, ['rev-parse', fixture.branch])).toBe(published.publishedHead);
+    git(fixture.rootDir, ['merge', '--ff-only', fixture.branch]);
+    git(fixture.worktreeDir, ['remote', 'remove', 'origin']);
+    expect(git(fixture.worktreeDir, ['remote'])).toBe('');
+    const resources = saveCompletedTaskResources(fixture);
+    const runner = new TaskRunner(fixture.rootDir);
+    const task = runner.listAllTaskItems()[0]!;
+    expect(task).toMatchObject({ kind: 'completed', branch: fixture.branch, worktreePath: fixture.worktreeDir });
+    for (const path of [fixture.worktreeDir, ...Object.values(resources)]) expect(existsSync(path)).toBe(true);
+
+    const result = deleteTaskResources(task);
+
+    expect(result).toBe(true);
+    for (const path of [fixture.worktreeDir, ...Object.values(resources)]) expect(existsSync(path)).toBe(false);
+    expect(runner.listAllTaskItems()).toEqual([]);
+    expect(git(fixture.rootDir, ['for-each-ref', '--format=%(refname)', `refs/heads/${fixture.branch}`])).toBe('');
+    expect(mockWarn).not.toHaveBeenCalled();
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['matching', true], ['matching', false],
+    ['different', true], ['different', false],
+    ['detached', true], ['detached', false],
+  ] as const)('deletes a saved task and only deletes its root ref when merged (clone HEAD: %s, merged: %s)', async (head, merged) => {
+    const published = await autoCommitAndPush(fixture.worktreeDir, 'update slides deck', fixture.rootDir, fixture.branch);
+    expect(published.success).toBe(true);
+    if (merged) git(fixture.rootDir, ['merge', '--ff-only', fixture.branch]);
+    const recordedBranch = 'feature/unrelated';
+    git(fixture.rootDir, ['branch', recordedBranch, fixture.branch]);
+    const originalHead = git(fixture.rootDir, ['rev-parse', recordedBranch]);
+    expect(originalHead).toBe(git(fixture.worktreeDir, ['rev-parse', 'HEAD']));
+    expect(git(fixture.rootDir, ['rev-list', '--count', `HEAD..${recordedBranch}`])).toBe(merged ? '0' : '1');
+    if (head === 'matching') git(fixture.worktreeDir, ['checkout', '-b', recordedBranch]);
+    if (head === 'detached') git(fixture.worktreeDir, ['checkout', '--detach']);
+    const resources = saveCompletedTaskResources({ ...fixture, branch: recordedBranch });
+    const runner = new TaskRunner(fixture.rootDir);
+    const task = runner.listAllTaskItems()[0]!;
+    expect(task).toMatchObject({ branch: recordedBranch, worktreePath: fixture.worktreeDir });
+    expect(git(fixture.worktreeDir, ['branch', '--show-current']))
+      .toBe(head === 'detached' ? '' : head === 'matching' ? recordedBranch : fixture.branch);
+    for (const path of [fixture.worktreeDir, ...Object.values(resources)]) expect(existsSync(path)).toBe(true);
+
+    expect(deleteTaskResources(task)).toBe(true);
+
+    for (const path of [fixture.worktreeDir, ...Object.values(resources)]) expect(existsSync(path)).toBe(false);
+    expect(runner.listAllTaskItems()).toEqual([]);
+    expect(git(fixture.rootDir, ['rev-parse', fixture.branch])).toBe(originalHead);
+    const remainingRef = git(fixture.rootDir, ['for-each-ref', '--format=%(refname)', `refs/heads/${recordedBranch}`]);
+    if (merged) {
+      expect(remainingRef).toBe('');
+      expect(mockWarn).not.toHaveBeenCalled();
+    } else {
+      expect(remainingRef).toBe(`refs/heads/${recordedBranch}`);
+      expect(git(fixture.rootDir, ['rev-parse', recordedBranch])).toBe(originalHead);
+      expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining(recordedBranch));
+    }
+    expect(mockError).not.toHaveBeenCalled();
+  });
+
+  it('retains an unmerged published root branch while deleting clone resources and the task record', async () => {
+    const published = await autoCommitAndPush(fixture.worktreeDir, 'update slides deck', fixture.rootDir, fixture.branch);
+    expect(published.success).toBe(true);
+    const publishedHead = git(fixture.rootDir, ['rev-parse', fixture.branch]);
+    expect(publishedHead).toBe(published.publishedHead);
+    expect(git(fixture.rootDir, ['rev-list', '--count', `HEAD..${fixture.branch}`])).toBe('1');
+    const resources = saveCompletedTaskResources(fixture);
+    const runner = new TaskRunner(fixture.rootDir);
+    const task = runner.listAllTaskItems()[0]!;
+    expect(task).toMatchObject({ kind: 'completed', branch: fixture.branch, worktreePath: fixture.worktreeDir });
+    for (const path of [fixture.worktreeDir, ...Object.values(resources)]) expect(existsSync(path)).toBe(true);
+
+    const result = deleteTaskResources(task);
+
+    expect(result).toBe(true);
+    for (const path of [fixture.worktreeDir, ...Object.values(resources)]) expect(existsSync(path)).toBe(false);
+    expect(runner.listAllTaskItems()).toEqual([]);
+    expect(git(fixture.rootDir, ['rev-parse', fixture.branch])).toBe(publishedHead);
+    expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining(fixture.branch));
+    expect(mockError).not.toHaveBeenCalled();
   });
 
   it('should delete regular branches normally', () => {

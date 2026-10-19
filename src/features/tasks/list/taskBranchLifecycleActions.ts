@@ -154,6 +154,24 @@ export function deleteBranch(projectDir: string, target: BranchActionTarget, opt
       if (options?.resume !== true || lstatOrUndefined(getCloneMetaPath(projectDir, branch)) !== undefined) {
         cleanupOrphanedClone(projectDir, branch, ...cleanupOptions);
       }
+      const branchExists = execFileSync('git', [
+        'for-each-ref', '--format=%(refname)', `refs/heads/${branch}`,
+      ], { cwd: projectDir, encoding: 'utf-8', stdio: 'pipe' }).split('\n').includes(`refs/heads/${branch}`);
+      if (branchExists) {
+        try {
+          execFileSync('git', ['branch', '-d', branch], {
+            cwd: projectDir,
+            encoding: 'utf-8',
+            stdio: 'pipe',
+          });
+        } catch (err) {
+          if (options?.quiet !== true) warn(`Could not delete branch ${branch}. You may delete it manually.`);
+          log.error('Failed to delete clone task branch', {
+            branch,
+            error: getErrorMessage(err),
+          });
+        }
+      }
       if (options?.quiet !== true) success(`Deleted worktree ${branch}`);
       log.info('Worktree branch deleted', { branch, worktreePath });
       return true;

@@ -344,7 +344,7 @@ takt list --non-interactive --action try --branch takt/my-branch
 
 `--status`、`--goal`、`--branch` のいずれか1つ以上が必須です。無指定では何も削除せず、エラーで終了します。`--yes` を省略すると対象のタスク名・状態・ブランチ・ゴールの一覧を表示し、削除せず正常終了します。削除は `--yes` を指定した場合だけ行います。`--format json` を併せると対象一覧を JSON で取得でき、JSON 出力には `goal_id` が含まれます。
 
-削除する範囲は対話の一覧からの削除と同じで、タスクの作業場所の clone、worktree セッションのファイル、clone のメタ情報、ブランチ、`.takt/tasks.yaml` の記録です。
+削除する範囲は対話の一覧からの削除と同じで、タスクの作業場所の clone、worktree セッションのファイル、clone のメタ情報、ブランチ、`.takt/tasks.yaml` の記録です。clone のタスクでも、後片付けのあとに元のリポジトリの同名ブランチを `git branch -d` で削除します。未取り込みなどで Git が削除を拒否した場合は、ブランチを残して警告し、clone とタスクの記録の削除は成功します。
 
 ```bash
 # 対象一覧を確認してから削除します
