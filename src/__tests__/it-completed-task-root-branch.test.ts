@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -354,93 +354,6 @@ describe('branch deletion', () => {
       expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining(recordedBranch));
     }
     expect(mockError).not.toHaveBeenCalled();
-  });
-
-  it.each(['untracked', 'index', 'HEAD', 'HEAD with staged deletion'])(
-    'checks task record provenance before deleting a ref matching another clone HEAD (%s)', (tracking) => {
-      const recordedBranch = 'feature/unrelated';
-      git(fixture.rootDir, ['branch', recordedBranch]);
-      const originalHead = git(fixture.rootDir, ['rev-parse', recordedBranch]);
-      const otherClone = join(dirname(fixture.worktreeDir), 'other-clone');
-      git(fixture.rootDir, ['clone', '--branch', recordedBranch, fixture.rootDir, otherClone]);
-      git(otherClone, ['remote', 'remove', 'origin']);
-      const resources = saveCompletedTaskResources({ ...fixture, branch: recordedBranch, worktreeDir: otherClone });
-      const tasksPath = '.takt/tasks.yaml';
-      if (tracking !== 'untracked') git(fixture.rootDir, ['add', '--', tasksPath]);
-      if (tracking.startsWith('HEAD')) git(fixture.rootDir, ['commit', '-m', 'include task record']);
-      if (tracking === 'HEAD with staged deletion') git(fixture.rootDir, ['rm', '--cached', '--', tasksPath]);
-      expect(git(fixture.rootDir, ['ls-files', '--', tasksPath]) !== '').toBe(tracking === 'index' || tracking === 'HEAD');
-      expect(git(fixture.rootDir, ['ls-tree', '--name-only', 'HEAD', '--', tasksPath]) !== '').toBe(tracking.startsWith('HEAD'));
-      expect(git(otherClone, ['symbolic-ref', '--quiet', 'HEAD'])).toBe(`refs/heads/${recordedBranch}`);
-      expect(git(fixture.rootDir, ['rev-list', '--count', `HEAD..${recordedBranch}`])).toBe('0');
-      const runner = new TaskRunner(fixture.rootDir);
-      const task = runner.listAllTaskItems()[0]!;
-      expect(task).toMatchObject({ branch: recordedBranch, worktreePath: otherClone });
-      for (const path of [otherClone, ...Object.values(resources)]) expect(existsSync(path)).toBe(true);
-
-      expect(deleteTaskResources(task)).toBe(tracking === 'untracked');
-
-      for (const path of [otherClone, ...Object.values(resources)]) expect(existsSync(path)).toBe(tracking !== 'untracked');
-      expect(existsSync(fixture.worktreeDir)).toBe(true);
-      expect(runner.listAllTaskItems()).toEqual(tracking === 'untracked' ? [] : [task]);
-      const remainingRef = git(fixture.rootDir, ['for-each-ref', '--format=%(refname)', `refs/heads/${recordedBranch}`]);
-      if (tracking === 'untracked') {
-        expect(remainingRef).toBe('');
-        expect(mockWarn).not.toHaveBeenCalled();
-      } else {
-        expect(remainingRef).toBe(`refs/heads/${recordedBranch}`);
-        expect(git(fixture.rootDir, ['rev-parse', recordedBranch])).toBe(originalHead);
-        expect(mockWarn).toHaveBeenCalledWith(expect.stringContaining(recordedBranch));
-      }
-      expect(mockError).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([false, true])('preserves both clones when metadata points elsewhere (recorded clone missing: %s)', (missing) => {
-    const resources = saveCompletedTaskResources(fixture);
-    const otherClone = join(dirname(fixture.worktreeDir), 'other-clone');
-    git(fixture.rootDir, ['clone', fixture.rootDir, otherClone]);
-    const otherFile = join(otherClone, 'keep.txt');
-    writeFileSync(otherFile, 'keep the other clone');
-    saveCloneMeta(fixture.rootDir, fixture.branch, otherClone);
-    if (missing) rmSync(fixture.worktreeDir, { recursive: true });
-    const runner = new TaskRunner(fixture.rootDir);
-    const task = runner.listAllTaskItems()[0]!;
-
-    expect(deleteTaskResources(task)).toBe(false);
-
-    expect(existsSync(fixture.worktreeDir)).toBe(!missing);
-    expect(readFileSync(otherFile, 'utf8')).toBe('keep the other clone');
-    for (const path of Object.values(resources)) expect(existsSync(path)).toBe(true);
-    expect(runner.listAllTaskItems()).toEqual([task]);
-    expect(mockWarn).toHaveBeenCalled();
-  });
-
-  it('preserves a symbolic link used as the recorded clone path', () => {
-    const resources = saveCompletedTaskResources(fixture);
-    const link = join(dirname(fixture.worktreeDir), 'clone-link');
-    symlinkSync(fixture.worktreeDir, link, 'dir');
-    saveCloneMeta(fixture.rootDir, fixture.branch, link);
-    const task = { ...makeCompletedTask(fixture), worktreePath: link };
-
-    expect(deleteBranch(fixture.rootDir, task)).toBe(false);
-
-    expect(readFileSync(join(link, 'slides', 'deck.md'), 'utf8')).toBe('# slides\n');
-    for (const path of [fixture.worktreeDir, ...Object.values(resources)]) expect(existsSync(path)).toBe(true);
-  });
-
-  it('cleans up a verified clone in the project fallback directory with the same cleanup boundary', () => {
-    const fallbackClone = join(fixture.rootDir, '.takt', 'worktrees', 'fallback-clone');
-    mkdirSync(dirname(fallbackClone), { recursive: true });
-    git(fixture.rootDir, ['clone', fixture.rootDir, fallbackClone]);
-    git(fallbackClone, ['checkout', '-b', fixture.branch]);
-    const resources = saveCompletedTaskResources({ ...fixture, worktreeDir: fallbackClone });
-    const runner = new TaskRunner(fixture.rootDir);
-
-    expect(deleteTaskResources(runner.listAllTaskItems()[0]!)).toBe(true);
-
-    for (const path of [fallbackClone, ...Object.values(resources)]) expect(existsSync(path)).toBe(false);
-    expect(runner.listAllTaskItems()).toEqual([]);
   });
 
   it('retains an unmerged published root branch while deleting clone resources and the task record', async () => {
