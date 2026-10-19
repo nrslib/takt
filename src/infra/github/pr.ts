@@ -200,7 +200,7 @@ export function fetchPrSelectionData(prNumber: number, cwd: string): PrSelection
     initialEndpoint: `${endpoint}/files?per_page=${OPEN_PRS_PER_PAGE}&page=1`,
     parsePage: (body) => prSelectionFilesSchema.parse(JSON.parse(body) as unknown).map((file) => file.filename),
   }));
-  if (files.length !== details.changed_files) {
+  if (files.length !== details.changed_files || new Set(files).size !== files.length) {
     throw new Error(`Incomplete file list for pull request #${prNumber}`);
   }
   return { number: details.number, title: details.title, body: details.body ?? '', files };

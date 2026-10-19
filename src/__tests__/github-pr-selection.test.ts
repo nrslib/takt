@@ -81,6 +81,11 @@ describe('GitHub PR selection data', () => {
     await expect(async () => fetchPrSelectionData(10, '/project')).rejects.toThrow();
   });
 
+  it('ページをまたいで重複した変更パスを含む一覧を判定材料にしない', async () => {
+    serve({ pages: [[{ filename: 'docs/first.md' }], [{ filename: 'docs/first.md' }]] });
+    await expect(async () => fetchPrSelectionData(10, '/project')).rejects.toThrow();
+  });
+
   it.each([null, {}, [{ filename: 12 }], [{ patch: '+missing filename' }]])('不正なファイルページ%jを空一覧として扱わない', async (page) => {
     serve({ pages: [page] });
     await expect(async () => fetchPrSelectionData(10, '/project')).rejects.toThrow();
