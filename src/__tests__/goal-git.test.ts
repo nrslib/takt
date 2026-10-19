@@ -56,7 +56,7 @@ describe('Goal Git registration', () => {
     doubles.fetch.mockReturnValue(new Promise<string>((resolve) => { finishFetch = resolve; }));
     const prepared = prepareGoalBranch('/project', goalId, undefined, undefined);
     try {
-      expect(doubles.fetch).toHaveBeenCalledExactlyOnceWith('/project', ['fetch', 'origin'], undefined);
+      expect(doubles.fetch).toHaveBeenCalledExactlyOnceWith('/project', ['fetch', 'origin'], expect.any(AbortSignal));
       expect(doubles.exec).not.toHaveBeenCalled();
       expect(doubles.run).not.toHaveBeenCalled();
     } finally {
@@ -130,16 +130,59 @@ describe('Goal Git registration', () => {
     const prepared = await prepareGoalBranch('/project', goalId, undefined, undefined);
     createGoalBranch('/project', prepared.branch, prepared.commit);
     expect(prepared.commit).toBe(localCommit);
-    expect(doubles.fetch).toHaveBeenCalledExactlyOnceWith('/project', ['fetch', 'origin'], undefined);
+    expect(doubles.fetch).toHaveBeenCalledExactlyOnceWith('/project', ['fetch', 'origin'], expect.any(AbortSignal));
     expect(doubles.info).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ error: String(error) }));
     expect(doubles.exec).toHaveBeenLastCalledWith('git', ['update-ref', `refs/heads/${prepared.branch}`, localCommit, ''], expect.any(Object));
   });
 
-  it('keeps origin priority when a failed fetch leaves an exact remote tracking reference', async () => {
+  it('prefers the local commit when a failed fetch leaves an exact remote tracking reference', async () => {
     doubles.fetch.mockRejectedValue(new Error('offline'));
     references.set('refs/remotes/origin/main', 'refs/remotes/origin/main\n');
     commits.set('refs/remotes/origin/main^{commit}', remoteCommit);
-    expect(await prepareGoalBranch('/project', goalId, undefined, undefined)).toMatchObject({ commit: remoteCommit });
+    const prepared = await prepareGoalBranch('/project', goalId, undefined, undefined);
+    createGoalBranch('/project', prepared.branch, prepared.commit);
+    expect(prepared.commit).toBe(localCommit);
+    expect(doubles.exec).toHaveBeenLastCalledWith('git', ['update-ref', `refs/heads/${prepared.branch}`, localCommit, ''], expect.any(Object));
+  });
+
+  it('uses the remote tracking commit after a failed fetch when the local branch is absent', async () => {
+    doubles.fetch.mockRejectedValue(new Error('offline'));
+    references.delete('refs/heads/main');
+    commits.delete('refs/heads/main^{commit}');
+    references.set('refs/remotes/origin/main', 'refs/remotes/origin/main\n');
+    commits.set('refs/remotes/origin/main^{commit}', remoteCommit);
+    const prepared = await prepareGoalBranch('/project', goalId, undefined, undefined);
+    createGoalBranch('/project', prepared.branch, prepared.commit);
+    expect(prepared.commit).toBe(remoteCommit);
+    expect(doubles.exec).toHaveBeenLastCalledWith('git', ['update-ref', `refs/heads/${prepared.branch}`, remoteCommit, ''], expect.any(Object));
+  });
+
+  it('bounds fetch to 30 seconds and logs a timeout before creating the branch from the local commit', async () => {
+    const controller = new AbortController();
+    const error = new DOMException('fetch timed out', 'TimeoutError');
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(controller.signal);
+    references.set('refs/remotes/origin/main', 'refs/remotes/origin/main\n');
+    commits.set('refs/remotes/origin/main^{commit}', remoteCommit);
+    doubles.fetch.mockImplementation((_cwd: string, _args: readonly string[], signal: AbortSignal) =>
+      new Promise<string>((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      }));
+    try {
+      const pending = prepareGoalBranch('/project', goalId, undefined, undefined);
+      controller.abort(error);
+      const prepared = await pending;
+      createGoalBranch('/project', prepared.branch, prepared.commit);
+      expect(timeout).toHaveBeenCalledExactlyOnceWith(30_000);
+      expect(doubles.fetch).toHaveBeenCalledExactlyOnceWith('/project', ['fetch', 'origin'], controller.signal);
+      expect(doubles.info).toHaveBeenCalledWith('Failed to fetch from remote, continuing with local state', {
+        startBranch: 'main', error: String(error),
+      });
+      expect(prepared.commit).toBe(localCommit);
+      expect(doubles.run).toHaveBeenCalledExactlyOnceWith('/project', ['for-each-ref', '--format=%(refname)', '--count=1', 'refs/heads/main'], Buffer.byteLength('refs/heads/main\n'), undefined);
+      expect(doubles.exec).toHaveBeenLastCalledWith('git', ['update-ref', `refs/heads/${prepared.branch}`, localCommit, ''], expect.any(Object));
+    } finally {
+      timeout.mockRestore();
+    }
   });
 
   it('uses explicit branches without detecting a default', async () => {
@@ -151,6 +194,7 @@ describe('Goal Git registration', () => {
     });
     expect(doubles.detect).not.toHaveBeenCalled();
     expect(doubles.config).not.toHaveBeenCalled();
+    expect(doubles.fetch).not.toHaveBeenCalled();
     expect(doubles.run).not.toHaveBeenCalled();
     expect(doubles.exec.mock.calls.map((call) => call[1])).toEqual([
       ['rev-parse', '--verify', 'refs/heads/release^{commit}'],

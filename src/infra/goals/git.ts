@@ -8,6 +8,7 @@ import { goalGitText, runGoalGit } from './git-command.js';
 import { GoalIdSchema } from './schema.js';
 
 const log = createLogger('goals');
+const GOAL_FETCH_TIMEOUT_MS = 30_000;
 
 function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: 'pipe' }).trim();
@@ -19,9 +20,9 @@ async function hasExactRef(cwd: string, ref: string): Promise<boolean> {
   return !result.truncated && result.output.equals(expected);
 }
 
-async function resolveDefaultBranchRef(cwd: string, branch: string): Promise<string> {
+async function resolveDefaultBranchRef(cwd: string, branch: string, fetchSucceeded: boolean): Promise<string> {
   const remoteRef = toRemoteTrackingBranchRef(branch);
-  if (await hasExactRef(cwd, remoteRef)) return remoteRef;
+  if (fetchSucceeded && await hasExactRef(cwd, remoteRef)) return remoteRef;
   const localRef = toLocalBranchRef(branch);
   return await hasExactRef(cwd, localRef) ? localRef : remoteRef;
 }
@@ -34,13 +35,17 @@ export async function prepareGoalBranch(cwd: string, id: string, requestedStart:
   const integrationBranch = configuredIntegration ?? startBranch;
   assertValidLocalBranchName(startBranch);
   assertValidLocalBranchName(integrationBranch);
-  try {
-    await goalGitText(cwd, ['fetch', 'origin'], undefined);
-  } catch (error) {
-    log.info('Failed to fetch from remote, continuing with local state', { startBranch, error: String(error) });
+  let fetchSucceeded = false;
+  if (requestedStart === undefined) {
+    try {
+      await goalGitText(cwd, ['fetch', 'origin'], AbortSignal.timeout(GOAL_FETCH_TIMEOUT_MS));
+      fetchSucceeded = true;
+    } catch (error) {
+      log.info('Failed to fetch from remote, continuing with local state', { startBranch, error: String(error) });
+    }
   }
   const startRef = requestedStart === undefined
-    ? await resolveDefaultBranchRef(cwd, startBranch)
+    ? await resolveDefaultBranchRef(cwd, startBranch, fetchSucceeded)
     : toLocalBranchRef(startBranch);
   const commit = git(cwd, ['rev-parse', '--verify', `${startRef}^{commit}`]);
   if (configuredIntegration !== undefined) {
