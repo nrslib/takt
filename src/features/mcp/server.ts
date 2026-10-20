@@ -15,6 +15,7 @@ import {
   mergeGoalTaskInputSchema,
   completeGoalInputSchema,
   reopenGoalInputSchema,
+  abortGoalInputSchema,
   goalDiffInputSchema,
   goalHistoryInputSchema,
   askGoalQuestionInputSchema,
@@ -42,6 +43,7 @@ import { tellTaktGoalRun } from './goalTellOperations.js';
 import { askTaktGoalQuestion, listTaktGoalQuestions, getTaktGoalQuestion, withdrawTaktGoalQuestion } from './goalQuestionOperations.js';
 import { notifyTaktGoal } from './goalNotificationOperations.js';
 import { recordTaktGoalWorkLog, listTaktGoalRecords } from './goalWorkLogOperations.js';
+import { pauseTaktGoal, resumeTaktGoal, abortTaktGoal } from './goalExecutionOperations.js';
 import { mergeTaktGoalTask, completeTaktGoal, checkTaktGoalCompletion, reopenTaktGoal } from './goalIntegrationOperations.js';
 import { getTaktGoalDiff, getTaktGoalHistory, getTaktGoalRelation } from './goalReadOperations.js';
 import { assertCwdAllowedByMcpRoot, errorResult } from './operations.js';
@@ -54,6 +56,7 @@ import { z } from 'zod';
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
 import { resolveAssignedProjectRoot, resolveCurrentManagerAssignment, type ManagerAssignmentIdentity } from '../manager/assignment.js';
 import { addManagerRepository, removeManagerRepository, renameManagerWorkspace } from '../manager/workspaceOperations.js';
+import type { ManagerMcpConnection } from '../manager/managerMcpConnection.js';
 
 
 export type TaktMcpToolSet = 'all' | 'read-only' | 'manager';
@@ -90,6 +93,7 @@ export interface TaktMcpServerOptions {
   allowedProjectRoot?: string;
   toolSet?: TaktMcpToolSet;
   includeReferenceMarkers?: boolean;
+  goalExecutionConnection?: ManagerMcpConnection;
 }
 
 function buildMcpOperationDependencies(
@@ -143,6 +147,29 @@ export function createTaktMcpServer(
   };
   const workspaceRetrieval = 'Responses fit 64 KiB, with explicit truncation. Managers can read the current workspace with takt_list_tasks view workspace and offset/limit (1-50), or path name or repositoryDirectories.N (saved index) and textOffset/maxBytes for text. cwd must be absolute and does not select the workspace.';
   if (options.toolSet === 'manager') {
+    const connection = options.goalExecutionConnection;
+    if (connection !== undefined) {
+      const goalOperation = (cwd: string, errorContext: string, action: (deps: McpOperationDependencies) => Promise<CallToolResult>) =>
+        operation(cwd, errorContext, async (deps) => {
+          await connection.assertConnected();
+          return action(deps);
+        }, false);
+      server.registerTool('takt_pause_goal', {
+        title: 'Pause goal execution',
+        description: 'Pause the selected goal after human confirmation through the permission judge. Running work continues; pending work waits. Use takt_list_goals to identify the target and ask the human if it is ambiguous.',
+        inputSchema: goalWriteInputSchema,
+      }, (input, extra) => goalOperation(input.cwd, 'Goal pause failed', (deps) => pauseTaktGoal(projectInput(input, deps), deps, extra.signal)));
+      server.registerTool('takt_resume_goal', {
+        title: 'Resume goal execution',
+        description: 'Resume the selected paused goal after human confirmation through the permission judge. Aborted goals cannot resume. Use takt_list_goals to identify the target and ask the human if it is ambiguous.',
+        inputSchema: goalWriteInputSchema,
+      }, (input, extra) => goalOperation(input.cwd, 'Goal resume failed', (deps) => resumeTaktGoal(projectInput(input, deps), deps, extra.signal)));
+      server.registerTool('takt_abort_goal', {
+        title: 'Abort goal execution',
+        description: 'Abort the selected goal with a required reason after human confirmation through the permission judge. Before execution, confirm that abort cannot be undone and that goal records and branches remain. Pending work is invalidated and running work is interrupted. Use takt_list_goals to identify the target and ask the human if it is ambiguous.',
+        inputSchema: abortGoalInputSchema,
+      }, (input, extra) => goalOperation(input.cwd, 'Goal abort failed', (deps) => abortTaktGoal(projectInput(input, deps), deps, extra.signal)));
+    }
     server.registerTool('takt_tell_run', {
       title: 'Send an instruction to running goal work',
       description: 'Send an additional instruction to the running task selected by goalId and taskName, and save its original text in the goal work log. Responses fit 64 KiB, with explicit truncation. Read saved instructions with takt_get_run, runSlug and view instructions using offset/limit (1-50), or select instructionId and offset/maxBytes for forward UTF-8 text. Follow nextOffset for continuation. Read the saved work log with takt_get_goal path workLog.summary, recordId and textOffset/maxBytes.',
