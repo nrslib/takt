@@ -1,5 +1,8 @@
 import { useManagerAbortConfirmation, type ManagerAbortTarget } from './useManagerAbortConfirmation.js';
-import { useManagerQuestionAnswer, type PendingQuestion } from './useManagerQuestionAnswer.js';
+import { useManagerQuestionAnswer, type SaveManagerAnswer } from './useManagerQuestionAnswer.js';
+import type { AppendManagerAnswerPermission, PendingQuestion } from './inquiryAnswer.js';
+import { appendScopedPermission } from './scopedPermissionStorage.js';
+import { resolveAssignedProjectRoot } from './assignment.js';
 import { useManagerSummaryApproval } from './useManagerSummaryApproval.js';
 import { classifyManagerGoInput, useManagerInput } from './useManagerInput.js';
 import { ManagerQueuedMessages } from './ManagerQueuedMessages.js';
@@ -67,7 +70,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   const abortConfirmation = useManagerAbortConfirmation({ selected, setApprove, resetChoice });
   const { abortTarget, setAbortTarget } = abortConfirmation;
   const questionAnswer = useManagerQuestionAnswer();
-  const { answerTarget, setAnswerTarget, beginAnswer } = questionAnswer;
+  const { answerTarget, clearAnswer, beginAnswer } = questionAnswer;
   const selection = useManagerSelection();
   const summaryApproval = useManagerSummaryApproval({ selected, setApprove, resetChoice, session });
   const { pending, setPending } = summaryApproval;
@@ -124,11 +127,9 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   };
   const refreshEvents = async (): Promise<{ questions: PendingQuestion[]; goals: ManagerDisplayGoal[] }> => {
     const resolved = await session.getAssignment();
-    const snapshots = await Promise.all((resolved?.repositoryDirectories ?? [cwd]).map(async (directory) => ({
-      directory, snapshot: await readManagerDisplayEvents(directory, lang),
-    })));
-    const savedQuestions = snapshots.flatMap(({ snapshot }) => snapshot.questions);
-    const savedGoals = snapshots.flatMap(({ snapshot }) => snapshot.goals);
+    const snapshot = await readManagerDisplayEvents(cwd, lang, resolved);
+    const savedQuestions = snapshot.questions;
+    const savedGoals = snapshot.goals;
     if (mounted.current) {
       const previous = displaySnapshot.current;
       if (!isDeepStrictEqual(previous.assignment, resolved)) setCurrentAssignment(resolved);
@@ -136,13 +137,11 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
       if (!isDeepStrictEqual(previous.goals, savedGoals)) setGoals(savedGoals);
       displaySnapshot.current = { assignment: resolved, questions: savedQuestions, goals: savedGoals };
     }
-    for (const { directory, snapshot } of snapshots) {
-      for (const event of [...snapshot.events, ...snapshot.diagnostics]) {
-        const id = JSON.stringify([directory, event.id]);
-        if (displayed.current.has(id) || !mounted.current) continue;
-        displayed.current.add(id);
-        append(event.message);
-      }
+    for (const event of [...snapshot.events, ...snapshot.diagnostics]) {
+      const id = JSON.stringify([cwd, event.id]);
+      if (displayed.current.has(id) || !mounted.current) continue;
+      displayed.current.add(id);
+      append(event.message);
     }
     lastRefreshError.current = undefined;
     return { questions: savedQuestions, goals: savedGoals };
@@ -250,20 +249,41 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
     }
   };
   const selectTarget = (selected: ManagerSelectedTarget): void => {
-    if (selected.kind === 'answer') beginAnswer(selected.target);
+    if (selected.kind === 'answer') beginAnswer(selected.target,
+      displaySnapshot.current.assignment ?? { kind: 'repository', repositoryDirectory: cwd, repositoryDirectories: [cwd] });
     else void changeGoal(selected.kind, selected.target, 'select');
   };
   const abortGoal = (target: ManagerAbortTarget): Promise<void> => changeGoal('abort', target.goal, target.retry ? 'retry' : 'confirm');
-  const saveAnswer = async (target: PendingQuestion, text: string): Promise<void> => {
+  const saveAnswer: SaveManagerAnswer = async (target, answer, permission): Promise<void> => {
+    if (active.current !== null) return;
     const controller = new AbortController();
     active.current = controller;
     setBusy(true);
-    setAnswerTarget(null);
-    setEntries((previous) => [...previous, { role: 'user', content: toDisplayText(text) }]);
     try {
+      const appendPermission: AppendManagerAnswerPermission | undefined = permission === undefined ? undefined : async (assignment) => {
+        let scope = permission.scope;
+        if (scope.kind === 'project') {
+          scope = { kind: 'project', projectDirectory: await resolveAssignedProjectRoot(scope.projectDirectory, assignment) };
+        }
+        controller.signal.throwIfAborted();
+        try {
+          await appendScopedPermission({ scope, heading: '許可', sentence: permission.sentence });
+        } catch (error) {
+          throw new Error(getLabel('manager.permissionAppendFailed', lang, { reason: getErrorMessage(error) }), { cause: error });
+        }
+      };
+      controller.signal.throwIfAborted();
       const result = await session.answerQuestion({
-        goalId: target.goalId, questionId: target.question.id, text, abortSignal: controller.signal,
+        ...(target.goalId === null ? { goalId: null, owner: target.owner }
+          : { goalId: target.goalId, repositoryDirectory: target.repositoryDirectory }),
+        questionId: target.question.id, answer, abortSignal: controller.signal,
+        ...(appendPermission === undefined ? {} : { appendPermission }),
       });
+      if (result.answerSaved) {
+        clearAnswer();
+        edit(createEditorState(''));
+        setEntries((previous) => [...previous, { role: 'user', content: toDisplayText(answer.text ?? '') }]);
+      }
       await appendResult(result, controller.signal);
       await refreshEvents();
     } catch (error) { if (!controller.signal.aborted) await reportFailure(error); }

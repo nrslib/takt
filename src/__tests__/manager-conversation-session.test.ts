@@ -9,7 +9,7 @@ import type { ManagerConversationPlan } from '../features/manager/conversationPl
 import { createManagerConversationSession } from '../features/manager/conversationSession.js';
 import { ensureDaemon } from '../features/daemon/lifecycle.js';
 import { ensureManagerRun } from '../features/manager/autoRun.js';
-import type { Goal } from '../infra/goals/schema.js';
+import type { Goal, GoalAnswerInput, GoalQuestionInput } from '../infra/goals/schema.js';
 import { GoalCreateInputSchema } from '../infra/goals/schema.js';
 import { createGoal } from '../infra/goals/service.js';
 import * as mcpAdapters from '../infra/providers/mcp/index.js';
@@ -67,7 +67,11 @@ beforeEach(() => {
   doubles.setup.mockReturnValue({ call: doubles.call });
   doubles.call.mockImplementation(async (prompt) => response(prompt.includes('goalRegistered') ? null : summaryA));
   events.read.mockReset().mockReturnValue([]); events.failure.mockResolvedValue(undefined);
-  answerDoubles.update.mockReset().mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => transform(goalRecord()));
+  answerDoubles.update.mockReset().mockImplementation(async (_id: string, transform: (goal: Goal) => Goal, onSaved?: () => void) => {
+    const saved = transform(goalRecord());
+    onSaved?.();
+    return saved;
+  });
   answerDoubles.list.mockReset().mockResolvedValue({ goals: [], errors: [] });
   answerDoubles.get.mockReset().mockResolvedValue(goalRecord());
   answerDoubles.invalidatePending.mockReset();
@@ -494,11 +498,25 @@ describe('manager conversation approval', () => {
 });
 
 
-it('saves a human answer as an inbox event without calling a second agent', async () => {
+it.each<{ inquiry: GoalQuestionInput; answer: GoalAnswerInput }>([
+  { inquiry: { body: '形式はどれですか' }, answer: { text: 'CSV' } },
+  { inquiry: { kind: 'approval', body: '出力を許可しますか', operation: { toolName: 'Write', args: '{}', cwd } },
+    answer: { decision: 'allow', scope: 'project', text: '出力先のみ' } },
+  { inquiry: { kind: 'approval', body: '出力を許可しますか', operation: { toolName: 'Write', args: '{}', cwd } },
+    answer: { decision: 'deny', text: '' } },
+  { inquiry: { kind: 'operation_request', body: '接続を確認してください' }, answer: { report: 'unable', text: '認証待ち' } },
+])('saves a typed human answer $answer as an inbox event without calling a second agent', async ({ inquiry, answer }) => {
   const { session } = fixture(); const questionId = '550e8400-e29b-41d4-a716-446655440003';
-  answerDoubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => transform({ ...goalRecord(), questions: [{ id: questionId, recipient: 'human', status: 'pending', body: '形式はどれですか' }] }));
-  expect((await session.answerQuestion({ goalId: goalRecord().id, questionId, text: 'CSV' })).kind).toBe('reply');
-  expect(events.save).toHaveBeenCalledWith(cwd, expect.objectContaining({ kind: 'answer', questionId, answer: expect.objectContaining({ text: 'CSV', source: 'tui' }) }));
+  answerDoubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal, onSaved?: () => void) => {
+    const saved = transform({
+      ...goalRecord(), questions: [{ ...inquiry, id: questionId, recipient: 'human', status: 'pending',
+        operation: inquiry.operation === undefined ? undefined : { ...inquiry.operation, argsDigest: '0'.repeat(64) } }],
+    });
+    onSaved?.();
+    return saved;
+  });
+  expect((await session.answerQuestion({ goalId: goalRecord().id, repositoryDirectory: cwd, questionId, answer })).kind).toBe('reply');
+  expect(events.save).toHaveBeenCalledWith(cwd, expect.objectContaining({ kind: 'answer', questionId, answer: expect.objectContaining({ ...answer, source: 'tui' }) }));
   expect(ensureDaemon).toHaveBeenCalledOnce();
   expect(ensureManagerRun).toHaveBeenCalledExactlyOnceWith(cwd);
   expect(events.save.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(ensureDaemon).mock.invocationCallOrder[0]!);

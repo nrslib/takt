@@ -4,7 +4,7 @@ import { applyEditorKey, commitEditorInput, type EditorState } from '../tui/edit
 import { resolveEditorKey } from '../tui/editorKeys.js';
 import type { ManagerConversationSession } from './conversationSession.js';
 import type { ManagerAbortTarget, useManagerAbortConfirmation } from './useManagerAbortConfirmation.js';
-import type { PendingQuestion, useManagerQuestionAnswer } from './useManagerQuestionAnswer.js';
+import type { SaveManagerAnswer, useManagerQuestionAnswer } from './useManagerQuestionAnswer.js';
 import type { useManagerSummaryApproval } from './useManagerSummaryApproval.js';
 import type { ManagerSelectedTarget, useManagerSelection } from './useManagerSelection.js';
 import { SlashCommand } from '../../shared/constants.js';
@@ -36,7 +36,7 @@ export function useManagerInput({
   selection: ReturnType<typeof useManagerSelection>;
   selectTarget: (target: ManagerSelectedTarget) => void;
   abortGoal: (target: ManagerAbortTarget) => Promise<void>;
-  saveAnswer: (target: PendingQuestion, text: string) => Promise<void>;
+  saveAnswer: SaveManagerAnswer;
   register: (revision: number) => Promise<void>;
   onInputUnavailable: () => void;
 }): void {
@@ -51,11 +51,11 @@ export function useManagerInput({
     edit(next);
   };
   const insertText = (text: string): void => {
-    if (exiting.current) return;
+    if (exiting.current || (answerTarget !== null && active.current !== null)) return;
     if (!registering.current && active.current === null) {
       if (selection.selection !== null) return;
       if (abortTarget !== null) { onInputUnavailable(); return; }
-      if (answerTarget !== null) questionAnswer.switchToFreeText(answerTarget);
+      if (answerTarget !== null) questionAnswer.switchToFreeText();
     }
     editDraft(applyEditorKey(editorRef.current, { kind: 'insert', text }));
   };
@@ -79,6 +79,7 @@ export function useManagerInput({
       setQueued([]);
       return;
     }
+    if (answerTarget !== null && active.current !== null) return;
     if (!registering.current && active.current === null && abortTarget !== null) {
       if (input !== '' && !key.ctrl && !key.meta && !key.return && !key.escape) onInputUnavailable();
       abortConfirmation.handleInput(abortTarget, key, abortGoal);
@@ -95,7 +96,7 @@ export function useManagerInput({
     if (trailingEnter) insertText(input.replace(/(?:\r\n|\r|\n)$/u, ''));
     const submitInput = key.return || trailingEnter;
     if (!registering.current && active.current === null && answerTarget !== null) {
-      if (questionAnswer.handleInput(answerTarget, key, submitInput, editorRef, edit, saveAnswer)) return;
+      if (questionAnswer.handleInput(key, submitInput, editorRef, edit, saveAnswer)) return;
     }
     if (!registering.current && pending !== null && session.getPendingSummary()?.revision === pending.revision
       && (key.escape || (editorRef.current.text === ''

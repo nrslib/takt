@@ -11,6 +11,7 @@ import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import type { ManagerPermissionGoal } from './toolPermissionJudge.js';
 import { readScopedPermissions, type ScopedPermissionFile } from './scopedPermissionStorage.js';
+import { createPermissionProposal } from './inquiryAnswer.js';
 
 export interface ManagerPermissionContext {
   candidate?: GoalQuestion;
@@ -112,6 +113,7 @@ export async function saveManagerToolPermissionInquiry(input: {
     operation: operationInput(input.request),
     ...(input.targetSha === undefined ? {} : { targetSha: input.targetSha }),
   };
+  inquiry.permissionProposal = createPermissionProposal(inquiry.operation!);
   if (input.goal !== undefined) {
     const candidate = createInquiry(inquiry);
     const matches = (question: GoalQuestion): boolean => question.kind === 'approval'

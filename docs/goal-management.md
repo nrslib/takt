@@ -74,7 +74,7 @@ Enter each command on its own line in the TUI.
 | Command | Behavior |
 |---------|----------|
 | `/go` | Request a summary of the current conversation, or approve and register an existing summary. Takes no arguments. |
-| `/answer` | Select a pending inquiry from the list, then answer with an option or free text. |
+| `/answer` | Select a pending inquiry with or without a goal, then answer a question, allow or deny an approval, or report an operation result. |
 | `/pause` | Select an active goal to stop new submissions and integrations. Running tasks continue and results are deferred. |
 | `/resume` | Select a paused goal to resume deferred events and tasks. |
 | `/abort` | Select an unfinished goal, then confirm the irreversible abort, interrupting its running tasks and invalidating unstarted tasks. |
@@ -82,6 +82,14 @@ Enter each command on its own line in the TUI.
 These commands take no arguments. Use ↑/↓ to choose, Enter to select, or Esc to close the list without making changes. If there are no eligible targets, the TUI shows a notice instead of opening a list.
 
 Aborting is irreversible. Goal records and branches remain. Answers are saved for the run manager's next decision. Receiving answers from Slack is not implemented.
+
+### /answer
+
+Each list row shows the kind, short goal name ("No goal" for standalone approvals), and summary. The body, options and recommendation appear after selection. Questions accept an option or free text. Approvals require explicit Allow or Deny with an optional comment, including denial without a comment. Operation requests display the procedure and offer Completed or Unable with an optional comment. Comments alone never imply approval or completion.
+
+Approval defaults to this time only. Other scopes are this goal, project, manager (workspace), and global. Standalone approvals omit this goal. With one repository, project and manager share one choice saved as project scope; adding a repository later does not expand existing permissions.
+
+For project, workspace and global scopes, edit and confirm the proposed permission sentence. When no proposal is saved, the TUI initializes it from the tool, target and execution directory. Only the confirmed sentence is appended to permission Markdown by the TUI, before saving the answer. An append failure retains the pending inquiry and edited sentence; resolve the cause and press Enter to retry. Standalone approvals persist and can be answered after opening a new TUI.
 
 ## Integration and completion
 
