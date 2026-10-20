@@ -52,10 +52,10 @@ export function withManagerReadScope(provider: Provider, managerDirectory: strin
               if (handler === undefined) return agent.call(prompt, options);
               const server = options.mcpServers?.[TAKT_MANAGER_MCP_SERVER_NAME];
               const rawAssignment = server !== undefined && isStdioServer(server) ? server.env?.[MANAGER_ASSIGNMENT_ENV] : undefined;
-              const scope = await resolveReadScope(managerDirectory, configDirectory, sensitivePaths, rawAssignment);
               return agent.call(prompt, {
                 ...options,
-                onToolPermissionDecision: (request) => {
+                onToolPermissionDecision: async (request) => {
+                  const scope = await resolveReadScope(managerDirectory, configDirectory, sensitivePaths, rawAssignment);
                   const scoped: ScopedReadRequest = { ...request, [managerReadScope]: scope };
                   return handler(scoped);
                 },

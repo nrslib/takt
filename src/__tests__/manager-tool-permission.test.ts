@@ -3,12 +3,13 @@ import type { AgentResponse } from '../core/models/types.js';
 import type { ProviderCallOptions, ProviderType } from '../infra/providers/types.js';
 import type { ToolPermissionDecision, ToolPermissionDecisionHandler } from '../infra/claude/types.js';
 import type { Goal, GoalQuestionInput } from '../infra/goals/schema.js';
-import { createInquiry } from '../infra/goals/inquiry.js';
+import { answerInquiry, createInquiry, isGoalApprovalUsable } from '../infra/goals/inquiry.js';
 import type { CompiledProviderEnvironment } from '../infra/config/runtime-provider/environment.js';
 import { executeIsolatedStructuredInternalAgent } from '../agents/agent-usecases.js';
 import { runAgent } from '../agents/runner.js';
 import { createManagerConversationPlan } from '../features/manager/conversationPlan.js';
 import { createManagerConversationSession } from '../features/manager/conversationSession.js';
+import * as permissionInquiry from '../features/manager/toolPermissionInquiry.js';
 import { TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
 import { TAKT_MCP_MANAGER_TOOL_NAMES } from '../features/mcp/server.js';
 import { buildSdkOptions } from '../infra/claude/options-builder.js';
@@ -183,6 +184,343 @@ describe('manager tool permission classification', () => {
     expectDenial(await decide(name));
     expect(executeIsolatedStructuredInternalAgent).not.toHaveBeenCalled();
   });
+  it.each([
+    'npm exec -- codex exec', 'npm exec --package=@openai/codex -- codex exec',
+    'npm exec --package @openai/codex -- codex exec',
+    'npm exec --yes --package=@openai/codex -- codex exec',
+    'pnpm dlx --package @openai/codex codex', 'yarn dlx --package=@openai/codex codex',
+    'npm exec -- codex exec; npm test', 'npm test; pnpm exec codex',
+    'pnpm exec codex', 'pnpm dlx codex', 'yarn dlx codex', 'npx claude', 'bunx codex',
+    "npm exec -- 'co'dex exec", 'pnpm exec co"de"x', 'yarn dlx co\\dex',
+    "bash -c 'npm exec -- codex exec'",
+  ])('denies an agent launched through a package runner without a judge: %s', async (command) => {
+    expectDenial(await decide('Bash', { command }));
+    expect(executeIsolatedStructuredInternalAgent).not.toHaveBeenCalled();
+  });
+  it.each([
+    "printf '%s' 'npm exec -- codex exec'", '# pnpm dlx codex',
+    "cat <<'EOF'\nyarn dlx codex\nEOF", "printf 'npm exec -- codex exec",
+    'npm exec --package=codex -- printf codex', 'npm exec --package codex -- printf codex',
+    'pnpm exec printf codex', 'pnpm dlx eslint', 'yarn dlx eslint',
+    'npm run inspect', 'npm test', 'npm install', 'npm exec', 'pnpm exec', 'yarn dlx',
+    'npm exec --package', 'npm exec --package -- codex', 'npm exec --package=@openai/codex --',
+    'npm exec --unknown codex', 'pnpm exec --unknown codex', 'yarn run codex',
+  ])('returns the judge decision for package runner text or an unconfirmed agent launch: %s', async (command) => {
+    vi.mocked(executeIsolatedStructuredInternalAgent).mockResolvedValue(judgment({ decision: 'deny', reason: 'judge examined command' }));
+    expect(await decide('Bash', { command })).toEqual({ decision: 'deny', reason: 'judge examined command' });
+    expect(executeIsolatedStructuredInternalAgent).toHaveBeenCalledOnce();
+  });
+  it('denies a package runner agent launch even with a matching usable saved approval', async () => {
+    const command = 'npm exec --package=@openai/codex -- codex exec';
+    goal.questions = [answerInquiry(createInquiry({
+      kind: 'approval', body: 'fixture approval', targetSha: 'a'.repeat(40),
+      operation: { toolName: 'Bash', args: JSON.stringify({ command }), cwd: toolCwd },
+    }), { text: '承認します', decision: 'allow', scope: 'goal' })];
+    const session = createSession();
+    let decision: ToolPermissionDecision | undefined;
+    doubles.call.mockImplementationOnce(async (_prompt: string, options: DecisionOptions) => {
+      decision = await handler(options)(request('Bash', { command }));
+      return reply();
+    });
+    try {
+      expect((await session.handleUserMessage({ text: humanInstruction,
+        goal: { id: goal.id, repositoryDirectory: cwd, constraints: goal.constraints },
+      })).kind).toBe('reply');
+      expect(executeIsolatedStructuredInternalAgent).not.toHaveBeenCalled();
+      expectDenial(decision!);
+    } finally { await session.close(); }
+  });
+  describe.each([false, true])('package runner options with saved approval %s', (approved) => {
+    const shellRunners = [
+      'npm exec --package=@openai/codex --call', 'npm exec --package=@openai/codex -c',
+      'pnpm dlx --package @openai/codex -c', 'pnpm dlx --package @openai/codex --shell-mode',
+      'npx --package=@openai/codex -c', 'npx --package=@openai/codex --call',
+      'npm exec --package=@openai/codex --call=', 'npx --package=@openai/codex --call=',
+      'npm x --package=@openai/codex -c', 'npm x --package=@openai/codex --call',
+      'npm x --package=@openai/codex --call=',
+      'bash -c', 'sh -c', 'zsh -c',
+    ];
+    const longOptions = ['--par', '--parseable', '--porcelain'].flatMap((option) => [
+      option, `${option}=true`, `${option}=false`, `${option} true`, `${option} false`,
+      option.replace('--', '--no-'),
+    ]);
+    const workspaceOptions = [
+      '--workspace=packages/a', '--workspace packages/a', '-w packages/a', '-w=packages/a',
+      '-w packages/a -w packages/b', '--workspace=packages/a --workspace=packages/b',
+      '--workspace=codex', '--workspace codex', '-w codex',
+      ...['--workspaces', '--ws', '--include-workspace-root', '--iwr'].flatMap((option) => [
+        option, `${option}=true`, `${option}=false`, `${option} true`, `${option} false`,
+      ]),
+      '--no-workspaces', '--no-include-workspace-root',
+      '-w packages/a --include-workspace-root --', '-w packages/a --iwr --',
+    ];
+    const includeWorkspaceAbbreviations = [
+      '--include-w', '--include-wo', '--include-wor', '--include-work', '--include-works',
+      '--include-worksp', '--include-workspa', '--include-workspac', '--include-workspace',
+      '--include-workspace-', '--include-workspace-r', '--include-workspace-ro', '--include-workspace-roo',
+    ];
+    const abbreviatedWorkspaceRunners = [
+      ...includeWorkspaceAbbreviations.map((option) => `npm exec ${option} --`),
+      ...[
+        '--include-workspace=true', '--include-workspace=false',
+        '--include-workspace true', '--include-workspace false',
+        '--no-include-workspace', '--no-include-workspace=false',
+      ].map((option) => `npm exec --workspace=packages/a ${option} --`),
+      'npm x --workspace=packages/a --include-workspace --',
+      'npx --workspace=packages/a --include-workspace --package=@openai/codex',
+      'npm --workspace=packages/a --include-workspace exec --',
+      'npm --workspace=packages/a --include-workspace x --',
+      'npm --include-w false exec --', 'npm --no-include-workspace x --',
+      'npm exec --include-workspace', 'npm exec --no-include-workspace',
+    ];
+    const runners = [
+      ...abbreviatedWorkspaceRunners,
+      ...workspaceOptions.map((option) => `npm exec ${option}`),
+      'npm x --workspace=packages/a --package=@openai/codex --',
+      'npx --workspace=packages/a --package=@openai/codex',
+      'npm --workspace=packages/a exec --', 'npm -w packages/a exec --',
+      'npm --workspace=packages/a x --', 'npm -w packages/a x --',
+      'npm --ws exec --', 'npm --iwr x --',
+      'npm --workspaces true exec --', 'npm --include-workspace-root=false x --',
+      'npm -w packages/a exec -w packages/b --',
+      ...['-p', '-p=true', '-p=false', '-p true', '-p false', ...longOptions]
+        .map((option) => `npm exec ${option}`),
+      'npm exec -p --package=@openai/codex --',
+      'npm exec --parseable --package=@openai/codex --',
+      'npm exec --porcelain --package=@openai/codex --',
+      'npm exec -p --',
+      ...longOptions.map((option) => `npx ${option} --package=@openai/codex`),
+      'npx -p @openai/codex',
+      'npm x --package=@openai/codex --', 'npm x --par --',
+    ];
+    const commands = [
+      { command: 'npm exec --workspace=packages/a --package=@openai/codex -- codex exec', expected: 'deny' },
+      { command: 'npm exec --workspace=packages/a --package=@openai/codex -- printf codex exec', expected: 'allow' },
+      { command: 'npm exec --workspace=packages/a --include-workspace-root --package=@openai/codex -- codex exec', expected: 'deny' },
+      { command: 'npm exec --workspace=packages/a --include-workspace-root --package=@openai/codex -- printf codex exec', expected: 'allow' },
+      { command: 'npm exec --workspace=packages/a --include-workspace --package=@openai/codex -- codex exec', expected: 'deny' },
+      { command: 'npm exec --workspace=packages/a --include-workspace --package=@openai/codex -- printf codex exec', expected: 'allow' },
+      { command: "npm exec --package=@openai/codex -c 'printf ${HOME}; codex exec'", expected: 'allow' },
+      { command: "npm exec --package=@openai/codex -c 'printf `codex exec`'", expected: 'deny' },
+      { command: 'npm exec --package=@openai/codex -c \'printf `printf "codex exec"`\'', expected: 'allow' },
+      { command: "npm exec --package=@openai/codex -c 'printf $(printf $?; codex exec)'", expected: 'deny' },
+      { command: 'npm exec --package=@openai/codex -c \'printf $(printf $?; printf "codex exec")\'', expected: 'allow' },
+      { command: 'npm x --package=@openai/codex -- codex exec', expected: 'deny' },
+      { command: 'npm x --package=@openai/codex -- printf codex exec', expected: 'allow' },
+      { command: "npm exec --package=@openai/codex -c 'printf $(codex exec)'", expected: 'deny' },
+      { command: 'npm exec --par -- @openai/codex exec', expected: 'deny' },
+      { command: 'npm exec --par -- printf @openai/codex exec', expected: 'allow' },
+      ...[
+        { body: 'printf $(codex exec)', expected: 'deny' },
+        { body: 'printf $(printf "codex exec")', expected: 'allow' },
+        { body: 'printf `codex exec`', expected: 'deny' },
+        { body: 'printf `printf "codex exec"`', expected: 'allow' },
+        { body: 'printf $(printf $?; codex exec)', expected: 'deny' },
+        { body: 'printf $(printf $?; printf "codex exec")', expected: 'allow' },
+      ].flatMap(({ body, expected }) => [
+        { command: body, expected },
+        ...shellRunners.map((runner) => ({ command: `${runner}${runner.endsWith('=') ? '' : ' '}'${body}'`, expected })),
+      ]),
+      ...[
+        { body: 'codex exec', expected: 'deny' }, { body: 'printf codex', expected: 'allow' },
+      ].flatMap(({ body, expected }) => [
+        ...[
+          'npm exec -w packages/a -c', 'npm exec -w packages/a --call',
+          'npm exec -w packages/a --call=', 'npm x --ws --call',
+          'npx --workspace=packages/a --call=', 'npm -w packages/a exec -c',
+          'npm exec -w packages/a --include-workspace -c',
+          'npm exec -w packages/a --include-workspace --call',
+          'npm exec -w packages/a --include-workspace --call=',
+          'npm x --include-workspace --call', 'npx --include-workspace --call=',
+          'npm --include-workspace exec -c',
+        ].map((runner) => ({ command: `${runner}${runner.endsWith('=') ? '' : ' '}'${body}'`, expected })),
+        ...shellRunners.map((runner) => ({ command: `${runner}${runner.endsWith('=') ? '' : ' '}'${body}'`, expected })),
+        ...runners.map((runner) => ({ command: `${runner} ${body}`, expected })),
+      ]),
+      { command: 'npm exec -p @openai/codex', expected: 'deny' },
+      { command: 'npx -p @openai/codex', expected: 'allow' },
+      { command: 'npm exec --workspace=codex -- printf done', expected: 'allow' },
+      { command: 'npm exec --workspace=codex --include-workspace -- codex exec', expected: 'deny' },
+      { command: 'npm exec --workspace=codex --include-workspace -- printf done', expected: 'allow' },
+      { command: 'npm exec --workspace codex --include-workspace -- printf done', expected: 'allow' },
+      { command: 'npm exec -- printf --include-workspace codex exec', expected: 'allow' },
+      { command: "npm exec --call='printf --include-workspace codex exec'", expected: 'allow' },
+      { command: 'npm exec -- printf --workspace=packages/a codex exec', expected: 'allow' },
+    ];
+    it.each(commands)('returns $expected before approval lookup or judgment: $command', async ({ command, expected }) => {
+      const target = { id: goal.id, repositoryDirectory: cwd, constraints: goal.constraints };
+      if (approved) {
+        const approval = answerInquiry(createInquiry({
+          kind: 'approval', body: 'fixture approval', targetSha: 'a'.repeat(40),
+          operation: { toolName: 'Bash', args: JSON.stringify({ command }), cwd: toolCwd },
+        }), { text: '承認します', decision: 'allow', scope: 'goal' });
+        goal.questions = [approval];
+        const context = await permissionInquiry.resolveManagerPermissionContext({
+          request: request('Bash', { command }), configDirectory: '/fixture/global',
+          owner: { kind: 'repository', repositoryDirectory: cwd }, goal: target,
+          abortSignal: new AbortController().signal,
+        });
+        expect(context.readErrors).toEqual([]);
+        expect(context.relatedInquiries).toEqual([approval]);
+        expect(isGoalApprovalUsable(approval)).toBe(true);
+      }
+      const contextLookup = vi.spyOn(permissionInquiry, 'resolveManagerPermissionContext');
+      const session = createSession();
+      let decision: ToolPermissionDecision | undefined;
+      doubles.call.mockImplementationOnce(async (_prompt: string, options: DecisionOptions) => {
+        decision = await handler(options)(request('Bash', { command }));
+        return reply();
+      });
+      try {
+        expect((await session.handleUserMessage({ text: humanInstruction, goal: target })).kind).toBe('reply');
+        if (expected === 'deny') {
+          expectDenial(decision!);
+          expect(contextLookup).not.toHaveBeenCalled();
+          expect(executeIsolatedStructuredInternalAgent).not.toHaveBeenCalled();
+        } else {
+          expect(decision).toEqual({ decision: 'allow' });
+          expect(contextLookup).toHaveBeenCalledOnce();
+          expect(executeIsolatedStructuredInternalAgent).toHaveBeenCalledTimes(approved ? 0 : 1);
+        }
+      } finally { await session.close(); }
+    });
+  });
+  it.each([
+    "npm exec --call='codex exec'", "npx --call='codex exec'",
+    "npm exec -c 'codex exec' --package @openai/codex",
+    "pnpm dlx -c --package @openai/codex 'codex exec'",
+    "pnpm dlx --shell-mode --package=@openai/codex 'codex exec'",
+    "npm exec -c 'printf done; codex exec'", "npx -c 'printf done && codex exec'",
+    "pnpm dlx --package @openai/codex -c 'printf done; codex exec'",
+    "npm exec -c 'co\"de\"x exec'", "npx -c 'co\\dex exec'",
+    "pnpm dlx --package @openai/codex -c printf 'done; codex exec'",
+  ])('parses shell option values, boolean options and compound commands: %s', async (command) => {
+    expectDenial(await decide('Bash', { command }));
+    expect(executeIsolatedStructuredInternalAgent).not.toHaveBeenCalled();
+  });
+  it.each([
+    'npm exec --include- -- codex exec', 'npm exec --include -- codex exec',
+    'npm exec --include-unknown -- codex exec', 'npm exec --include-workspace-roots -- codex exec',
+    'npm exec --include-workspace= -- codex exec', 'npm exec --include-workspace=unknown -- codex exec',
+    'npm exec --include-workspace unknown -- codex exec', 'npm exec --include-workspace',
+    'npm exec --include-workspace --', 'npm exec --include-workspace false --',
+    'npm exec --no-include-workspace= -- codex exec', 'npm exec --no-include-workspace=unknown -- codex exec',
+    'npm --include- exec -- codex exec', 'npm --include exec -- codex exec',
+    'npm --include-workspace= exec -- codex exec', 'npm --include-workspace=unknown exec -- codex exec',
+    'npm --include-workspace exec --',
+    'npx --include- -- codex exec', 'npx --include-workspace= -- codex exec',
+    'npx --include-workspace=unknown -- codex exec', 'npx --include-workspace',
+    'npm exec -- --include-workspace codex exec', 'npx -- --include-workspace codex exec',
+    'pnpm exec --include-workspace codex exec', 'yarn dlx --include-workspace codex exec',
+    'bunx --include-workspace printf codex exec',
+    'npm exec -w', 'npm exec --workspace', 'npm exec --workspace=', 'npm exec -w=',
+    'npm exec -w -- codex exec', 'npm exec --workspace -- codex exec',
+    'npm exec --workspace= -- codex exec', "npm exec -w '' -- codex exec",
+    'npm -w -- exec -- codex exec', 'npm --workspace= exec -- codex exec',
+    'npm --workspace=packages/a', 'npm exec -w packages/a --',
+    'npx -w -- codex exec', 'npx --workspace=', 'npx -w packages/a',
+    'npm exec --workspaces=unknown -- codex exec',
+    'npm exec -w packages/a --unknown -- codex exec',
+    'npm --unknown exec --workspace=packages/a -- codex exec',
+    'npm exec -- --workspace=packages/a codex exec',
+    'npx -- --workspace=packages/a codex exec',
+    'pnpm exec --workspace=packages/a codex exec',
+    'yarn dlx --workspaces codex exec', 'bunx --iwr printf codex exec',
+    'npm exec -p', 'npm exec --par', 'npm exec --parseable', 'npm exec --porcelain',
+    'npm exec -- --par codex exec', 'npx -- --par codex exec',
+    'npm exec -- -p codex exec', 'npm exec -- --parseable codex exec',
+    'npx -- --porcelain codex exec', 'npx -p',
+    'pnpm exec --parseable codex', 'pnpm dlx --porcelain codex',
+    'yarn dlx --parseable codex', 'bunx --parseable printf codex',
+    'npm exec --call', 'npm exec -c', 'npx --call', 'npx -c',
+    'pnpm dlx --package @openai/codex --shell-mode', 'pnpm dlx --package @openai/codex -c',
+    "npm exec --call --package @openai/codex", "npx -c --package @openai/codex",
+    "pnpm dlx -c --package 'codex exec'",
+    "pnpm dlx -c --package @openai/codex 'printf codex'",
+    "npm exec --unknown -c 'codex exec'", "npx --unknown -c 'codex exec'",
+    "pnpm dlx --unknown -c 'codex exec'",
+    "npm exec -- --call 'codex exec'", "npx -- -c 'codex exec'",
+    "pnpm dlx -- --shell-mode 'codex exec'",
+    "npm exec --call='printf codex'", "npx --call='printf codex'",
+    "npm exec -c '# codex exec'", "npx -c 'printf \"codex exec\"'",
+    "pnpm dlx --package @openai/codex -c 'cat <<EOF\ncodex exec\nEOF'",
+    "npm exec -c 'printf \"codex'",
+    "bunx -c 'codex exec'", "bunx --call 'codex exec'",
+  ])('delegates missing, unknown or non-launch shell input to an allowing judge: %s', async (command) => {
+    expect(await decide('Bash', { command })).toEqual({ decision: 'allow' });
+    expect(executeIsolatedStructuredInternalAgent).toHaveBeenCalledOnce();
+  });
+  describe.each((['claude', 'claude-sdk', 'codex'] as const).flatMap((provider) =>
+    [false, true].map((approved) => ({ provider, approved })),
+  ))('package runner permission output for $provider with saved approval $approved', ({ provider, approved }) => {
+    it.each([
+      ...[
+        { body: 'codex exec', expected: 'deny' }, { body: 'printf codex', expected: 'allow' },
+        { body: 'printf $(codex exec)', expected: 'deny' },
+        { body: 'printf $(printf "codex exec")', expected: 'allow' },
+        { body: 'printf `codex exec`', expected: 'deny' },
+        { body: 'printf `printf "codex exec"`', expected: 'allow' },
+        { body: 'printf $(printf $?; codex exec)', expected: 'deny' },
+        { body: 'printf $(printf $?; printf "codex exec")', expected: 'allow' },
+      ].flatMap(({ body, expected }) => [
+        'npm exec --package=@openai/codex --call', 'pnpm dlx --package @openai/codex --shell-mode',
+        'npm exec --parseable --package=@openai/codex --call', 'npm exec --package=@openai/codex -c',
+      ].map((runner) => ({ command: `${runner} '${body}'`, expected }))),
+      { command: 'npm exec --par -- @openai/codex exec', expected: 'deny' },
+      { command: 'npm exec --par -- printf @openai/codex exec', expected: 'allow' },
+      { command: 'npm x --package=@openai/codex -- codex exec', expected: 'deny' },
+      { command: 'npm x --package=@openai/codex -- printf codex exec', expected: 'allow' },
+      { command: 'npm exec --workspace=packages/a --package=@openai/codex -- codex exec', expected: 'deny' },
+      { command: 'npm exec --workspace=packages/a --package=@openai/codex -- printf codex exec', expected: 'allow' },
+      { command: 'npm exec --workspace=packages/a --include-workspace --package=@openai/codex -- codex exec', expected: 'deny' },
+      { command: 'npm exec --workspace=packages/a --include-workspace --package=@openai/codex -- printf codex exec', expected: 'allow' },
+    ])(
+      'returns $expected in the provider permission output: $command', async ({ command, expected }) => {
+        const target = { id: goal.id, repositoryDirectory: cwd, constraints: goal.constraints };
+        if (approved) {
+          const approval = answerInquiry(createInquiry({
+            kind: 'approval', body: 'fixture approval', targetSha: 'a'.repeat(40),
+            operation: { toolName: 'Bash', args: JSON.stringify({ command }), cwd: toolCwd },
+          }), { text: '承認します', decision: 'allow', scope: 'goal' });
+          goal.questions = [approval];
+          const context = await permissionInquiry.resolveManagerPermissionContext({
+            request: request('Bash', { command }), configDirectory: '/fixture/global',
+            owner: { kind: 'repository', repositoryDirectory: cwd }, goal: target,
+            abortSignal: new AbortController().signal,
+          });
+          expect(context.readErrors).toEqual([]);
+          expect(context.relatedInquiries).toEqual([approval]);
+          expect(isGoalApprovalUsable(approval)).toBe(true);
+        }
+        const contextLookup = vi.spyOn(permissionInquiry, 'resolveManagerPermissionContext');
+        const session = createSession(provider);
+        let output: unknown;
+        doubles.call.mockImplementationOnce(async (_prompt: string, options: DecisionOptions) => {
+          const input = { hook_event_name: 'PreToolUse' as const, session_id: 'sdk-session',
+            transcript_path: '/fixture/transcript', cwd: toolCwd, tool_name: 'Bash',
+            tool_input: { command }, tool_use_id: 'fixture-tool-use' };
+          if (provider === 'codex') {
+            output = toCodexToolPermissionOutput(await handler(options)(parseCodexToolPermissionInput(input)));
+          } else {
+            const sdk = buildSdkOptions({ cwd, abortSignal: options.abortSignal, onToolPermissionDecision: handler(options) });
+            const hook = sdk.hooks?.PreToolUse?.find(({ matcher }) => matcher === undefined)?.hooks[0];
+            expect(hook).toBeTypeOf('function');
+            output = await hook!(input, 'fixture-tool-use', { signal: new AbortController().signal });
+          }
+          return reply();
+        });
+        try {
+          expect((await session.handleUserMessage({ text: humanInstruction, goal: target })).kind).toBe('reply');
+          expect(output).toMatchObject({ hookSpecificOutput: {
+            hookEventName: 'PreToolUse', permissionDecision: expected,
+            ...(expected === 'deny' ? { permissionDecisionReason: expect.stringMatching(/\S/u) } : {}),
+          } });
+          expect(contextLookup).toHaveBeenCalledTimes(expected === 'deny' ? 0 : 1);
+          expect(executeIsolatedStructuredInternalAgent).toHaveBeenCalledTimes(expected === 'deny' || approved ? 0 : 1);
+        } finally { await session.close(); }
+      },
+    );
+  });
   describe.each(['allow', 'deny'] as const)('command lookup with judge decision %s', (decision) => {
     it.each([
       'command -v codex', 'command -V codex',
@@ -243,6 +581,15 @@ describe('manager tool permission classification', () => {
     "sh -c 'printf $(pwd); codex exec inspect'", "zsh -c 'printf $(pwd); codex exec inspect'",
     'printf "$(printf "%s" "$(pwd)")"; codex exec inspect',
     'printf $(printf \\)); codex exec inspect',
+    'printf "$(codex exec)"', 'printf $(printf "$(codex exec)")',
+    'printf $(codex exec); printf $unknown', 'npm test; printf $(codex exec)',
+    'printf `codex exec`', 'printf "`codex exec`"',
+    'printf $(printf `codex exec`)', 'printf `printf $(codex exec)`',
+    'printf `printf \\`codex exec\\``', 'printf `co\\dex exec`',
+    'printf `printf $?; codex exec`', 'printf `printf \\$?; codex exec`',
+    'printf $?; codex exec', 'printf $unknown; codex exec',
+    'printf "$unknown"; codex exec', 'printf $(printf $unknown; codex exec)',
+    'codex exec; printf `unknown',
   ])('denies an AI CLI launch without a judge: %s', async (command) => {
     expectDenial(await decide('Bash', { command }));
     expect(executeIsolatedStructuredInternalAgent).not.toHaveBeenCalled();
@@ -272,6 +619,18 @@ describe('manager tool permission classification', () => {
     'printf $(pwd) "ignored; codex exec inspect"', 'printf $(pwd) \\; codex exec inspect',
     'printf $(pwd; codex exec inspect', 'printf "$(pwd); codex exec inspect',
     'env $(pwd) codex; printf done', 'printf $(pwd) # ; codex exec inspect',
+    "printf '$(codex exec)'", 'printf \\$(codex exec)', '# printf $(codex exec)',
+    'printf $(printf "codex exec")', 'printf $(printf "$(pwd)")',
+    'printf $(pwd # codex exec\n)', 'printf $(pwd # ) codex exec\n)',
+    'printf $(codex exec', 'printf $(printf "$(codex exec)"',
+    "printf '`codex exec`'", 'printf \\`codex exec\\`', 'printf "\\`codex exec\\`"',
+    '# printf `codex exec`', 'printf `printf "codex exec"`',
+    'printf `printf "$(printf "codex exec")"`',
+    'printf `printf \\`printf "codex exec"\\``',
+    'printf `pwd # codex exec\n`', 'printf `pwd # ) codex exec\n`',
+    'printf `codex exec', 'printf $(printf `codex exec`', 'printf `printf $(codex exec)',
+    'printf "$unknown; codex exec"', 'printf $(printf "$unknown; codex exec")',
+    'co${unknown}dex exec', 'co$unknown"dex" exec', 'co`printf de`x exec',
   ])('returns the judge allowance when unsupported syntax has no detected launch: %s', async (command) => {
     expect(await decide('Bash', { command })).toEqual({ decision: 'allow' });
     expect(executeIsolatedStructuredInternalAgent).toHaveBeenCalledOnce();
