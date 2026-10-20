@@ -14,6 +14,13 @@ export class PrStatusTimeoutError extends Error {
   }
 }
 
+export class PrHeadObservationMismatchError extends Error {
+  constructor(prNumber: number, readonly firstHeadSha: string, readonly lastHeadSha: string) {
+    super(`Pull request #${prNumber} head changed while reading its metadata`);
+    this.name = 'PrHeadObservationMismatchError';
+  }
+}
+
 export interface PrExecutionContext {
   readonly prNumber: number;
   readonly headBranch: string;
@@ -22,6 +29,7 @@ export interface PrExecutionContext {
   readonly headRepositoryUrl: string;
   readonly headRepositoryPushUrls: readonly string[];
   readonly preserveConflictState?: boolean;
+  readonly threatCheckMaxDiffBytes?: number;
 }
 
 export interface PrStatus {
@@ -40,13 +48,26 @@ export interface PrDetails extends Omit<PrExecutionContext, 'prNumber'> {
 }
 
 export interface PrMergeOptions {
+  readonly cacciaExecutionSource?: 'merge' | 'from_pr';
+  readonly cacciaPushedHead?: CacciaPushedHead;
+  readonly prMergePushRecorder?: PrMergePushRecorder;
   readonly prExecutionContext?: PrExecutionContext;
   readonly mergeMethod?: MergeMethod;
   readonly prGitOperations?: PrGitOperations;
 }
 
+export interface PrMergePushRecorder {
+  record(headSha: string, previousRemoteHeadSha: string, context: PrExecutionContext): void;
+}
+
+export interface CacciaPushedHead {
+  readonly headSha: string;
+  readonly baseBranch: string;
+  readonly headRepositoryUrl: string;
+  readonly headRepositoryPushUrls: readonly string[];
+}
+
 export interface PrGitOperations {
   fetch(remote: 'origin' | 'base', refspec: string): Promise<void>;
   push(refspec: string): Promise<void>;
-  assertMergeAllowed?(headSha: string): void;
 }

@@ -122,7 +122,7 @@ async function publishExistingPrMergeTask(
   });
   const env = await buildSafeGitEnvironment(task.worktreePath, autoCommitOptions);
   const pushedHeadSha = (await runGitCommandAbortable(task.worktreePath, ['rev-parse', 'HEAD'], undefined, env)).stdout.trim();
-  new TaskRunner(projectDir).recordPrMergePushedHead(task.name, pushedHeadSha, expectedDetails.headSha);
+  new TaskRunner(projectDir).recordPrMergePushedHead(task.name, pushedHeadSha, expectedDetails.headSha, 'manual');
   await cloneGit.operations.push(`${pushedHeadSha}:${toLocalBranchRef(task.branch)}`);
   const latest = await provider.fetchPrDetails(prNumber, projectDir);
   assertSavedPrMergeIdentity(data, latest, prNumber);

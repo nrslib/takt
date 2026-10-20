@@ -71,6 +71,8 @@ MCP clients can use the `takt-mcp` stdio server to save pending tasks, inspect t
 
 The ordinary assistant conversation receives only the read-only task-state tools when its provider supports MCP. Use `/go` for a new task, `/tell` to select, review, and confirm an additional instruction for a running worktree clone, or `/requeue` and `/retry` to return a failed task to the queue. A provider without MCP support keeps the conversation available but cannot look up task state.
 
+After delivery succeeds, instructions sent through `takt_tell_run` or CLI `/tell` are also appended to the task's source `order.md`, with their instruction ID and receipt time, and reflected in the active run's `context/task/order.md`. When persistence succeeds, later agents and resumed runs can read these instructions. Persistence failures produce a warning on standard error without preventing delivery or making tell fail.
+
 ## Task Directory Format
 
 TAKT stores task metadata in `.takt/tasks.yaml` and each task's detailed specification in `.takt/tasks/{slug}/`.
@@ -237,7 +239,7 @@ The list view shows all tasks organized by status (pending, running, completed, 
 | **Create PR** | Commit, push, and create a pull request from the failed run's changes |
 | **Delete** | Remove the failed task record |
 
-In CLI/TUI assistant and grill-me conversations, `/requeue [guidance]` resolves a failed task and start position from the conversation, shows the task name, summary, workflow, and start position, then asks for Y/n. Approval returns the task to `pending` without changing its `order.md`. `/retry [guidance]` resolves a failed task from the conversation and shows a complete revised order with **Save task** and **Continue** choices. **Save task** archives the previous order and returns the task to `pending`; **Continue** makes no task changes and returns to the conversation. Inline text is guidance for resolving the conversation, not a task name. Ambiguous targets and an empty candidate set return a notice without confirmation. Neither command starts a worker; both require an interactive terminal. Persona conversations and the Web UI treat these strings as ordinary messages. The direct-run `/retry` flow in `takt resume` remains separate.
+In CLI/TUI assistant and grill-me conversations, `/requeue [guidance]` resolves a failed or exceeded task from the conversation. The guidance is appended as the final user turn for both task and start-position selection, rather than mechanically matched to a task name. If the AI cannot identify a task or its selection fails, TAKT asks you to choose from the eligible tasks. If the start position cannot be determined, you can choose from the available positions. TAKT then shows the task name, summary, workflow, and start position and asks for Y/n confirmation. Approval returns the task to `pending` without changing its `order.md`. Cancelling selection or confirmation leaves the task unchanged and records that result in the conversation. Successful requeue results also remain in the conversation with the task name. `/retry [guidance]` retains its existing behavior: it resolves a failed task and shows a complete revised order with **Save task** and **Continue** choices. **Save task** archives the previous order and returns the task to `pending`; **Continue** makes no task changes and returns to the conversation. Ambiguous `/retry` targets or start positions, and an empty candidate set for either command, return a notice. Neither command starts a worker. Both require an interactive terminal; without a TTY, neither selection nor task changes occur. Persona conversations and the Web UI treat these strings as ordinary messages. The direct-run `/retry` flow in `takt resume` remains separate.
 
 ### Actions for Pending Tasks
 
@@ -253,6 +255,8 @@ In CLI/TUI assistant and grill-me conversations, `/requeue [guidance]` resolves 
 
 Selecting a running task with a worktree clone opens the ordinary assistant conversation with that task as the initial `/tell` target. The conversation can inspect other tasks or discuss a new task. `/tell` rechecks the selected task after confirmation and writes only to that task; completed, missing, mismatched, and non-clone runs are not candidates or recipients.
 
+Running merge tasks started by `takt merge`, or by `takt run` / `takt watch` after requeue or retry, are also `/tell` targets when they have a worktree clone. CLI/TUI conversations, conversations opened from `takt list`, and MCP's `takt_tell_run` use the same target resolution. Merge run metadata and interventions are stored in the original project's `.takt/runs/<slug>/`. Instructions are delivered at the next agent step, including agent steps inside a child workflow; system steps do not consume them.
+
 ### Actions for Exceeded Tasks
 
 | Action | Description |
@@ -260,7 +264,7 @@ Selecting a running task with a worktree clone opens the ordinary assistant conv
 | **Requeue** | Return the task to `pending`, resuming from where it stopped |
 | **Delete** | Remove the task permanently |
 
-`/requeue` can also target an exceeded task. Inline guidance selects either continuing the saved execution or restarting at a specified step, including a child workflow step. Confirmation shows that operation and position. Continuing retains the saved execution information; restarting clears the old checkpoint and iteration limit information. If an explicit position is unavailable or cannot be determined, the task is not requeued. Without inline guidance, the saved stopping position is preserved. The command does not revise the order or start a worker. The task-list **Requeue** action continues to use the saved stopping position.
+`/requeue` can also target an exceeded task. Inline guidance selects either continuing the saved execution or restarting at a specified step, including a child workflow step. Confirmation shows that operation and position. Continuing retains the saved execution information; restarting clears the old checkpoint and iteration limit information. If an explicit position is unavailable or cannot be determined by the AI, TAKT asks you to choose an available start position. Without inline guidance, the saved stopping position is preserved. The command does not revise the order or start a worker. The task-list **Requeue** action continues to use the saved stopping position.
 
 ### Actions for PR-Failed Tasks
 
@@ -348,13 +352,13 @@ The recommended end-to-end workflow:
 
 ## CodeRabbit review loop (`caccia`)
 
-When a task creates or updates a pull request, TAKT can run the Caccia review loop afterward. The linked path is disabled by default and requires `caccia.enabled: true` in project or global configuration. Pipeline mode uses the same linked path after `--auto-pr` successfully creates a pull request.
+The merge builtins execute Caccia explicitly: `merge-review` runs `review → caccia → wait_ci → evaluation comment`, while `merge-review-fix` and `merge-review-fix-simple` run `review/fix → commit_and_push → caccia → wait_ci → merge_pr`. `success` and `skipped` continue to CI on the returned head. `limit` comments with the unresolved thread count and ends COMPLETE without merging. An effect error comments with `error` and ends ABORT. Push, task post-processing, and Pipeline no longer start Caccia implicitly. With `merge.auto_start: true`, PR publication starts the merge workflow, whose explicit effect owns Caccia.
 
-Caccia waits for CodeRabbit, then processes only unresolved threads started by `coderabbitai`. Each iteration runs the configured workflow in a temporary clone, preserves its decision report under `.takt/runs/`, pushes successful fixes, resolves only the threads evaluated in that iteration, and waits for CodeRabbit to review the pushed commit. Human-started threads remain open. Caccia does not reply to reviews. A linked Caccia result does not change the completed task result. Successes and iteration-limit results are logged and sent through the configured notification path.
+Caccia waits for CodeRabbit, then processes only unresolved threads started by `coderabbitai`. Each iteration runs the configured workflow in a temporary clone, preserves its decision report under `.takt/runs/`, pushes successful fixes, resolves only the threads evaluated in that iteration, and waits for CodeRabbit to review the pushed commit. Human-started threads remain open. Caccia does not reply to reviews. Successes and iteration-limit results are logged and sent through the configured notification path.
 
-`wait_timeout_ms` bounds the initial review wait and each pushed-commit review wait, including a retry request. If a CodeRabbit rate-limit notice gives a retry time before the deadline, Caccia posts one `@coderabbitai review` request when that time arrives; a retry time at or beyond the deadline skips Caccia immediately. A review still incomplete at the deadline after a rate-limit notice also skips Caccia. Without a rate-limit notice, an initial timeout skips linked Caccia and a pushed-commit timeout is logged as an error. The completed task result is preserved; standalone `takt caccia` exits non-zero on a skip or error.
+`wait_timeout_ms` bounds the initial review wait and each pushed-commit review wait, including a retry request. If a CodeRabbit rate-limit notice gives a retry time before the deadline, Caccia posts one `@coderabbitai review` request when that time arrives; a retry time at or beyond the deadline skips Caccia immediately. A review still incomplete at the deadline after a rate-limit notice also skips Caccia. Without a rate-limit notice, an initial timeout returns skipped and a pushed-commit timeout returns an effect error; standalone `takt caccia` exits non-zero on a skip or error.
 
-Linked progress, workflow output, results, and failures follow the parent task's display mode. Parallel tasks keep the same task prefix and color; silent mode produces no screen output. The parent waits for Caccia to finish before completing.
+Effect progress, workflow output, results, and failures follow the parent task's display mode. Parallel tasks keep the same task prefix and color; silent mode produces no screen output. The workflow awaits the effect result before selecting its next step.
 
 Run the same feature manually with `takt caccia <PR-number>`. See the [CLI reference](./cli-reference.md#takt-caccia) and [configuration reference](./configuration.md#caccia-review-loop) for command results and settings.
 

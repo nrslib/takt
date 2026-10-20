@@ -45,6 +45,8 @@ function requireEffectScalarReference(
 
 function normalizeWorkflowEffect(effect: RawWorkflowEffect): WorkflowEffect {
   switch (effect.type) {
+  case 'caccia':
+    return { type: 'caccia', pr: requireEffectScalarReference(effect.pr, 'effects.pr') };
   case 'enqueue_task':
     return {
       type: 'enqueue_task',

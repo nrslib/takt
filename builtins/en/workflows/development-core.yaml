@@ -1,5 +1,5 @@
 name: development-core
-description: Shared development flow with injectable planning, testing, implementation, peer review, adjudication, verified remediation, and a final requirement check.
+description: Shared development flow with planning, testing, implementation, peer review, adjudicated repair, and a final requirement check.
 all_steps:
   rules:
     - ref: findings-handling
@@ -178,12 +178,18 @@ steps:
         next: ABORT
 
   - name: replan
+    input_reports:
+      from_step: peer-review
+      reports:
+        - review-resolution.md
+      optional_if_unrun: true
     tags:
       - plan
     edit: false
     capabilities: readonly
     persona: planner
     policy:
+      - process-deviation
       - contract-change
       - applicable-inputs
       - $param: plan_policy

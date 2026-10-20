@@ -8,11 +8,12 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import {
   DeepSeekHarnessPluginResolutionError,
   resolveDeepSeekHarnessGitPlugins,
-  type DeepSeekHarnessPluginResolution,
 } from '../infra/deepseek-harness/git-plugin.js';
+import type { DeepSeekHarnessPluginResolution } from '../infra/deepseek-harness/plugin-types.js';
 import { GlobalConfigSchema, ProjectConfigSchema } from '../core/models/config-schemas.js';
 import { WorkflowConfigRawSchema } from '../core/models/workflow-schemas.js';
 import { normalizeProviderOptions } from '../infra/config/providerOptions.js';
+import type { DeepSeekHarnessGitPluginOption } from '../core/models/workflow-provider-options.js';
 
 let root: string;
 let repository: string;
@@ -175,7 +176,17 @@ describe('DeepSeek Harness Git plugin resolution', () => {
         config: { enabled: true },
       }]);
 
-      const result = await resolveDeepSeekHarnessGitPlugins(plugins);
+      const gitPlugins = plugins?.filter((plugin): plugin is DeepSeekHarnessGitPluginOption => (
+        typeof plugin !== 'string' && !plugin.source.startsWith('npm:')
+      ));
+      expect(gitPlugins).toEqual([{
+        id: 'project-plugin',
+        source,
+        ref: 'v1.0.0',
+        config: { enabled: true },
+      }]);
+
+      const result = await resolveDeepSeekHarnessGitPlugins(gitPlugins);
       resolutions.push(result);
       expect(result.plugins).toEqual([
         expect.objectContaining({

@@ -112,6 +112,9 @@ export interface SystemStepGitProvider {
 }
 
 export interface SystemStepServicesOptions extends PrMergeOptions {
+  readonly cacciaService?: {
+    execute(prNumber: number): Promise<Record<string, unknown>>;
+  };
   readonly abortSignal?: AbortSignal;
   readonly createProviderStream?: (provider: ProviderType, model: string | undefined) => StreamCallback | undefined;
   readonly allowGitHooks?: boolean;

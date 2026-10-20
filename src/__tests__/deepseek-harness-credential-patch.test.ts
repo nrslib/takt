@@ -98,6 +98,10 @@ describe('DeepSeek Harness credential patch', () => {
     );
     try {
       const document = await readPatchDocument(patch.path) as Array<Record<string, unknown>>;
+      expect(document.slice(0, 2)).toEqual([
+        { id: 'credentials', config: { path: path.join(root, '.credentials.yaml') } },
+        { id: 'llm-deepseek', config: { apiKeyEnv: 'DEEPSEEK_API_KEY' } },
+      ]);
       expect(document.at(-1)).toEqual({
         insert: [{
           id: 'example-plugin',

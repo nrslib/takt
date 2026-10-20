@@ -116,7 +116,7 @@ steps:
 
       pool:
         - name: security-review
-          description: Do not select by default. Select only when (a) the change may affect secret or credential handling, external-input handling, process execution, filesystem operations, network or terminal boundaries, sandboxing, or permissions, or (b) the change is large enough that security impact cannot be confidently ruled out. Do not select for documentation-only, comment-only, or test-only changes, or small localized fixes.
+          description: Do not select by default. Select only when (a) the change may affect secret or credential handling, external-input handling, process execution, filesystem operations, network or terminal boundaries, sandboxing, or permissions, or (b) the change is large enough that security impact cannot be confidently ruled out. Even when the change is documentation-only, comment-only, test-only, or a small localized fix, select it if (a) or (b) applies. Do not select it if neither applies.
           capabilities: readonly
           tags:
             - review
@@ -253,6 +253,7 @@ steps:
     edit: false
     persona: supervisor
     policy:
+      - process-deviation
       - contract-change
       - review
     pass_previous_response: false

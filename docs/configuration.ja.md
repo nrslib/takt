@@ -259,15 +259,17 @@ Codex、Claude SDK、claude-headless、OpenCode、Copilotの一時的なHTTP 429
 
 ```yaml
 caccia:
-  enabled: false          # タスクが PR を作成・更新した後の自動連結を有効化
+  enabled: false          # caccia 効果による CodeRabbit の待機を有効化
   wait_timeout_ms: 1800000 # 初回レビューとPush後の各コミットのレビューを待つ上限（ミリ秒）
   max_iterations: 3       # 修正と再レビューの最大反復回数
   workflow: caccia        # 各スレッド群の判断と修正に使う workflow
 ```
 
-`enabled: true` の場合だけ連結経路を起動します。単独実行の `takt caccia <PR番号>` はこのフラグに関係なく利用できます。既定値は無効、1,800,000 ミリ秒、3 回、workflow `caccia` です。project に `caccia` ブロックがある場合は global のブロックより優先し、省略した項目には上記の既定値を適用します。`workflow` に workflow 識別子を指定するとビルトイン workflow を差し替えられます。
+`caccia` 効果は `enabled: true` の場合だけ CodeRabbit を待ちます。無効ならレビューを待たずに `outcome: skipped` と `skipReason: config_disabled` を返します。単独実行の `takt caccia <PR番号>` はこのフラグに関係なく利用できます。既定値は無効、1,800,000 ミリ秒、3 回、workflow `caccia` です。project に `caccia` ブロックがある場合は global のブロックより優先し、省略した項目には上記の既定値を適用します。`workflow` に workflow 識別子を指定するとビルトイン workflow を差し替えられます。
 
-`wait_timeout_ms` は初回と各 Push 後のレビュー待機期限で、再依頼もこの期限に含みます。レビュー制限通知の再試行時刻が期限より前なら到来時に一度だけレビューを依頼し、期限以降なら直ちにスキップします。制限通知を受けた後、レビューが期限までに完了しなければスキップします。制限通知を受けずに期限に達した場合は初回待機をスキップし、Push 後の待機をエラーとします。単独コマンドはいずれも非ゼロで終了し、連結実行では元のタスク結果を保持します。
+GitHub の PR head と開始時のクローン HEAD が不一致なら、効果は実行前に2秒間隔で PR 情報を再取得し、取得時間を含めて最大60秒待ちます。PR 情報の取得中に異なる head を観測した場合も同じ期限内で再取得します。期待 SHA と一致した場合だけ続行し、期限まで不一致なら期待 SHA と最後に観測した SHA を含む `error` を返します。最後の観測が不整合だった場合は食い違った両方の SHA も示します。認証失敗など他の取得例外、PR の識別情報変更、中断は直ちに失敗とします。実行文脈と push 記録先がある場合はスキップ記録前にも適用するため、無効・未設定でもこの照合を待つことがあります。この待機は固定値で、レビュー待機の `wait_timeout_ms` では変更されません。
+
+`wait_timeout_ms` は初回と各 Push 後のレビュー待機期限で、再依頼もこの期限に含みます。レビュー制限通知の再試行時刻が期限より前なら到来時に一度だけレビューを依頼し、期限以降なら直ちにスキップします。制限通知を受けた後、レビューが期限までに完了しなければスキップします。制限通知を受けずに期限に達した場合は初回待機をスキップし、Push 後の待機をエラーとします。単独コマンドはいずれも非ゼロで終了し、system 効果は失敗を `success: false` と `error` で返し、workflow のルールで分岐します。
 
 ## プロジェクト設定
 
@@ -1341,6 +1343,11 @@ provider_options:
     request_timeout_ms: 3600000
     shutdown_timeout_ms: 1000
     plugins:
+      - npm:@example/cordis-plugin@1.2.3
+      - source: npm:another-cordis-plugin@2.0.0
+        id: another-plugin
+        config:
+          enabled: true
       - id: example-plugin
         source: git:https://github.com/example/plugin.git
         ref: v1.2.3
@@ -1350,7 +1357,11 @@ provider_options:
 
 `plugins` は global config（`~/.takt/config.yaml`）または信頼された global runtime profile に設定してください。project/workflow config からの plugin 指定は拒否します。利用者が管理する `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PLUGINS` の JSON 配列でも指定できます。空の配列で plugin を無効化することは許可します。plugin は runtime と同じ権限で実行され、認証情報にもアクセスできるため、信頼するコードだけを読み込んでください。plugin の `config` 値は preview・session log・telemetry では秘匿され、runtime に渡す値は変更しません。
 
-DeepSeek Harness plugin は Git の HTTPS または SSH repository から読み込めます。平文の `http://` と `git://` source は拒否します。必要に応じて Git URL の前に `git:` を付け、`ref` に tag、branch、commit を指定してください。Git source revision の指定には tag または commit の固定を推奨します。ただし、固定 ref だけでは依存関係の解決の再現性は保証されません。repository に `package.json` がある場合、TAKT は `npm install --package-lock=false` で依存関係を導入するため、実行ごとに解決される依存バージョンが変わることがあります。`ref` を省略すると repository の既定 revision を使い、warning を表示します。lifecycle script は実行しません。npm package source は対応していません。private repository は既存の SSH 鍵または Git credential helper で認証してください。SSH source では標準の `git` username を使用できますが、password、token、secret は埋め込まないでください。それ以外の credential を含む URL は Git 実行前に拒否されます。Git と askpass の prompt は無効化し、既定の SSH は batch mode で実行します。TAKT 実行前に認証情報と信頼する host key を設定してください。既存の custom SSH command/executable は保持します。
+DeepSeek Harness plugin は npm package または Git の HTTPS / SSH repository から読み込めます。npm は文字列の `npm:<package-spec>`、または `source` を持つ object で指定できます。object の `id` と `config` は省略可能です。TAKT は npm package を一時 directory に導入し、package の `exports` または `main` から entrypoint を解決します。runtime 終了時に一時ファイルを削除し、lifecycle script は実行しません。npm plugin は runtime と同じ権限で動作し、認証情報にもアクセスできるため、信頼できる package だけを指定してください。package version を固定するとトップレベルの package tarball を固定できますが、それだけでは依存関係の解決の再現性は保証されません。TAKT は `--package-lock=false` で導入するため、公開 package に適切な `npm-shrinkwrap.json` が含まれていない場合、範囲指定された間接依存のバージョンは実行ごとに変わることがあります。認証情報や機密の query parameter を含む URL は npm の起動前に拒否します。認証には保護された npm 設定を使用してください。
+
+公式 runtime が設定された npm plugin の未ロードを報告した場合、TAKT はその provider 呼び出しを停止し、raw plugin 診断を転送せずに entrypoint/configuration の確認を促します。
+
+Git source の動作も引き続き利用できます。平文の `http://` と `git://` source は拒否します。必要に応じて Git URL の前に `git:` を付け、`ref` に tag、branch、commit を指定してください。Git source revision の指定には tag または commit の固定を推奨します。ただし、固定 ref だけでは依存関係の解決の再現性は保証されません。repository に `package.json` がある場合、TAKT は `npm install --package-lock=false` で依存関係を導入するため、実行ごとに解決される依存バージョンが変わることがあります。`ref` を省略すると repository の既定 revision を使い、warning を表示します。private repository は既存の SSH 鍵または Git credential helper で認証してください。SSH source では標準の `git` username を使用できますが、password、token、secret は埋め込まないでください。それ以外の credential を含む URL は Git 実行前に拒否されます。Git と askpass の prompt は無効化し、既定の SSH は batch mode で実行します。TAKT 実行前に認証情報と信頼する host key を設定してください。既存の custom SSH command/executable は保持します。
 
 `base_url` は省略できます。project config では loopback アドレスだけを指定でき、外部 endpoint は global config または `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_BASE_URL` で指定します。provider 固有の環境変数 `DEEPSEEK_BASE_URL` より TAKT の `base_url` 設定が優先されます。
 
@@ -1477,7 +1488,7 @@ provider_options:
 
 `enabled: false` の場合、`claude-sdk` と別名 `claude` には `skills: []` を渡し、`claude-headless` と `claude-terminal` には `--disable-slash-commands` を渡します。この CLI flag は custom Claude slash command も無効にします。`enabled: true` の場合、TAKT は Skill 用の option/flag を追加せず、Claude の標準探索を維持します。この値は通常の provider option leaf 優先順位と `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED` に従い、retry と resume でも維持されます。
 
-これは context filter であり sandbox ではありません。Skill file が Read/Bash から到達可能な場合は引き続き読めます。TAKT は `settingSources`、Claude settings、user/repository の Skill file を変更しません。管理導入する Agent SDK の固定版は `0.3.261` です。CLI session では `--disable-slash-commands` 対応が必要で、headless (`claude-headless`) と terminal (`claude-terminal`) の各 CLI session の開始前に確認し、非対応なら更新を促すエラーを返します。検証済みの Claude Code 最低 version は `2.1.220` です。
+これは context filter であり sandbox ではありません。Skill file が Read/Bash から到達可能な場合は引き続き読めます。TAKT は `settingSources`、Claude settings、user/repository の Skill file を変更しません。管理導入する Agent SDK の固定版は `0.3.300` です。CLI session では `--disable-slash-commands` 対応が必要で、headless (`claude-headless`) と terminal (`claude-terminal`) の各 CLI session の開始前に確認し、非対応なら更新を促すエラーを返します。検証済みの Claude Code 最低 version は `2.1.220` です。
 
 #### Claude Code の sandbox 制御 (`allow_unsandboxed_commands`)
 
@@ -1723,7 +1734,9 @@ merge:
     same_repository: true
 ```
 
-既定では `merge-review-fix-simple` が1体のレビュアーによるレビューと別ステップの裁定・修正・検証を行い、`squash` でマージします。並列レビューを使う場合は `workflow: merge-review-fix` を指定します。一括処理は既定で2件を同時実行し、draft と fork は除外します。`merge.concurrency` は正の安全な整数を受け付け、`takt run` / `takt watch` の `concurrency` とは独立しています。CLI の `--concurrency` が優先します。`method` は `squash`、`merge`、`rebase` から選べます。自動起動は既定で無効です。GitLab ではマージ方式の指定と新しい PR 状態取得には対応していません。
+既定では `merge-review-fix-simple` が1体のレビュアーによるレビューと別ステップの裁定・修正・検証を行い、`squash` でマージします。並列レビューを使う場合は `workflow: merge-review-fix` を指定します。一括処理は既定で2件を同時実行し、draft と fork は除外します。`merge.concurrency` は正の安全な整数を受け付け、`takt run` / `takt watch` の `concurrency` とは独立しています。CLI の `--concurrency` が優先します。`method` は `squash`、`merge`、`rebase` から選べます。自動起動は既定で無効です。
+
+GitLab は MR 詳細・CI 状態の取得と一括選定に対応します。Caccia が有効な場合、`takt merge` と `from_pr` タスクの Caccia 効果は `github_unavailable` の `skipped` を返し、その head の CI 待ちへ進みます。統合結果 pipeline は merge commit の第2親と source head の一致を確認します。pipeline がない場合や古い head に対応する場合は成功扱いにしません。マージ方式の指定と head 一致制約には未対応のため、これらを使う `merge_pr` は失敗します。CI 待機の完了はマージ成功を意味しません。
 
 `where` は既存 `pr_list` と同じ条件（`author`、`labels`、`base_branch`、`head_branch`、`managed_by_takt`、`same_repository`、`draft`）です。CLI 条件を指定すると `where`、`include_draft`、`include_forks` の設定全体を置き換えます。
 
@@ -1734,4 +1747,4 @@ fork の除外も `where` より先に適用します。fork を対象にする�
 
 `threat_check_max_diff_bytes` は fork の AI 評価へ渡す累積差分の上限で、正の整数（UTF-8 バイト数）です。既定は200,000です。上限超過では差分を切り詰めて判定せず、人間による確認を求める PR コメントを残して停止します。機械的検査で指示ファイル・CI 定義や危険な Git 設定を検出した場合、AI 評価と本体 workflow は実行しません。
 
-`auto_start: true` は workflow が PR を作成・更新した後、その PR を対象にマージ処理を起動します。Caccia も有効なら、その終了後に開始します。手動で作成した PR は自動起動の対象外です。
+`auto_start: true` は workflow が PR を作成・更新した後、その PR を対象にマージ処理を起動します。Caccia はマージ用 workflow 内の明示効果で実行します。手動で作成した PR は自動起動の対象外です。

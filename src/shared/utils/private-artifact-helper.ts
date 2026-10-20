@@ -5,6 +5,12 @@ import { resolveHelperSpawnCwd } from './spawnCwd.js';
 
 const ARTIFACT_HELPER_TIMEOUT_MS = 30_000;
 
+export class PrivateArtifactHelperError extends Error {
+  constructor(message: string, readonly code: string | undefined, readonly errno: number | undefined) {
+    super(message);
+  }
+}
+
 export interface SerializedPrivateArtifactIdentity {
   dev: string;
   ino: string;
@@ -46,7 +52,19 @@ export function runPrivateArtifactHelper(
   }
   if (result.status !== 0) {
     const message = result.stderr.trim();
-    throw new Error(message.length === 0 ? failureMessage : message);
+    let code: string | undefined;
+    let errno: number | undefined;
+    try {
+      const metadata: unknown = JSON.parse(result.stdout);
+      if (metadata !== null && typeof metadata === 'object') {
+        const fields = metadata as Record<string, unknown>;
+        if (typeof fields.code === 'string') code = fields.code;
+        if (typeof fields.errno === 'number' && Number.isInteger(fields.errno)) errno = fields.errno;
+      }
+    } catch {
+      // Older helpers and arbitrary scripts may report only a human-readable error.
+    }
+    throw new PrivateArtifactHelperError(message.length === 0 ? failureMessage : message, code, errno);
   }
   return result.stdout;
 }

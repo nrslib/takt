@@ -122,9 +122,8 @@ export class WorkflowStepParticipationIndex {
       workflowCallPath,
       parallelParentStepName,
     );
-    const previous = this.records.get(identity);
     this.records.set(identity, {
-      report_names: [...new Set([...(previous?.report_names ?? []), ...reportNames])],
+      report_names: [...new Set(reportNames)],
     });
   }
 

@@ -214,6 +214,7 @@ export interface WorkflowSharedRuntimeState {
   dynamicFacetSelectionStore?: import('./dynamic-facets/dynamicFacetSelectionStore.js').DynamicFacetSelectionStore;
   workflowCallInvocationEvidence?: WorkflowCallInvocationEvidence;
   workflowStepParticipationIndex?: WorkflowStepParticipationIndex;
+  reportGenerationIndex?: import('./report-generation-index.js').ReportGenerationIndex;
   resumeArtifactOccurrenceIndex?: import('./run/resume-artifact-occurrence-index.js').ResumeArtifactOccurrenceIndex;
 }
 
@@ -712,6 +713,8 @@ export interface WorkflowEngineOptions extends PrMergeOptions {
   inheritedWorkflowRules?: readonly WorkflowWideRule[];
   /** Scalar execution context inherited through nested workflow_call boundaries. */
   workflowCallVars?: Readonly<Record<string, string | number | boolean>>;
+  /** Verified report bodies passed by the owning workflow_call to this child. */
+  inheritedReportInputs?: import('./instruction/prepared-instruction.js').DeclaredReportInputs;
   /** Exact verified resource root for the run's workflow execution bundle. */
   workflowBundleResourceRoot?: string;
   /** Full resume-stack-derived identity for the workflow_call that owns this engine. */

@@ -37,6 +37,8 @@ import { getProviderValidationErrorSource, withProviderValidationErrorSource } f
 import { validateDynamicParallelContracts } from '../dynamic-parallel/validator.js';
 import { parseWorkflowRuleCondition } from '../../models/workflow-rule-condition.js';
 import { MAX_SYSTEM_WAIT_INTERVAL_MS } from '../../models/workflow-types.js';
+import { classifyReportRelativePath } from '../../models/reserved-report-names.js';
+import { getReportFiles } from '../output-contract-files.js';
 
 type ResolvedProviderInfo = ReturnType<typeof resolveStepProviderModel>;
 const withWorkflowStepErrorPath = withWorkflowConfigErrorPath;
@@ -293,6 +295,43 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
   for (const [stepIndex, step] of config.steps.entries()) {
     try {
       const stepPath = findWorkflowStepLocation(config, step) ?? ['steps', stepIndex];
+      const validateReportInput = (consumer: WorkflowStep, consumerPath: readonly PropertyKey[]) => {
+        const input = consumer.inputReports;
+        if (input === undefined) return;
+        const sourceIndex = config.steps.findIndex((candidate) => candidate.name === input.fromStep);
+        const source = config.steps[sourceIndex];
+        if (source === undefined || sourceIndex === stepIndex || source.kind === 'system') {
+          throw withWorkflowStepErrorPath(
+            new Error(`input_reports.from_step must name another report-producing step in this workflow: "${input.fromStep}"`),
+            [...consumerPath, 'input_reports', 'from_step'],
+          );
+        }
+        if (source.kind !== 'workflow_call'
+          && source.parallel === undefined
+          && getReportFiles(source.outputContracts).length === 0) {
+          throw withWorkflowStepErrorPath(
+            new Error(`input_reports.from_step "${input.fromStep}" has no report output contract`),
+            [...consumerPath, 'input_reports', 'from_step'],
+          );
+        }
+        if (input.reports !== 'all') {
+          for (const [reportIndex, report] of input.reports.entries()) {
+            if (classifyReportRelativePath(report).kind !== 'public' || report.includes('/')) {
+              throw withWorkflowStepErrorPath(
+                new Error(`input_reports.reports requires a public report file name: "${report}"`),
+                [...consumerPath, 'input_reports', 'reports', reportIndex],
+              );
+            }
+          }
+        }
+      };
+      if (step.kind === 'system' && step.inputReports !== undefined) {
+        throw withWorkflowStepErrorPath(
+          new Error('input_reports requires an executing agent or workflow_call step'),
+          [...stepPath, 'input_reports'],
+        );
+      }
+      validateReportInput(step, stepPath);
       try {
         validateSessionEntrypoint(step, `Configuration error: step "${step.name}"`);
       } catch (error) {
@@ -346,6 +385,7 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       for (const [subStepIndex, subStep] of subSteps.entries()) {
         const subStepPath = findWorkflowStepLocation(config, subStep)
           ?? ['steps', stepIndex, 'parallel', subStepIndex];
+        validateReportInput(subStep, subStepPath);
           validateAggregateRulePlacement(
             subStep.rules ?? [],
             false,

@@ -8,6 +8,16 @@ import type { WorkflowCallResolutionRequest } from '../core/workflow/types.js';
 import { loadWorkflowByIdentifier } from '../infra/config/loaders/workflowResolver.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 import { resolveWorkflowCallTarget } from '../infra/config/loaders/workflowCallResolver.js';
+import { cacciaEffect } from '../features/caccia/system-effect.js';
+
+const cacciaGit = vi.hoisted(() => vi.fn());
+vi.mock('../infra/task/clone-exec.js', async (original) => ({
+  ...await original<typeof import('../infra/task/clone-exec.js')>(), runGitCommandAbortable: cacciaGit,
+}));
+vi.mock('../infra/task/git-environment.js', async (original) => ({
+  ...await original<typeof import('../infra/task/git-environment.js')>(),
+  buildSafeGitEnvironment: vi.fn(async () => ({})),
+}));
 
 vi.mock('../agents/runner.js', () => ({ runAgent: vi.fn() }));
 vi.mock('../agents/structured-caller/transport.js', async (importOriginal) => ({
@@ -29,11 +39,12 @@ interface Scenario {
   pushFailed?: boolean;
   mergeFailed?: boolean;
   qualityFailed?: boolean;
-  requiredValidationMissing?: boolean;
   cannotRemediate?: boolean;
   gatherFailed?: boolean;
   prePushRemoteConflicting?: boolean;
   prePushRemoteHeadDiffers?: boolean;
+  caccia?: Record<string, unknown>;
+  cacciaError?: Error;
 }
 
 describe('Builtin PR merge workflow execution', () => {
@@ -95,13 +106,13 @@ describe('Builtin PR merge workflow execution', () => {
     const failures: string[] = [];
     const observedStatuses: Array<{ headSha: string; finished: boolean; mergeable: string }> = [];
     const childContexts: Array<{ cwd: string; projectCwd: string; prNumber: number | undefined }> = [];
+    const simpleReviewPrompts: string[] = [];
     const cloneCwd = join(project, 'clone');
     mkdirSync(cloneCwd);
     const reportDirectory = join(project, '.takt', 'runs', 'merge-workflow-report', 'reports');
     const decision = { approved: scenario.approved !== false,
       reason: scenario.reason ?? (scenario.approved === false ? 'AI denied this PR' : 'AI approved this PR') };
     let reviewCount = 0;
-    let verifierCount = 0;
     vi.mocked(executeStructuredAgent).mockResolvedValue({ persona: 'dynamic-facet-selector',
       status: 'done', content: '', timestamp: new Date(),
       structuredOutput: { selected_ids: ['backend'], rationale: 'Review the changed backend path.' } });
@@ -110,7 +121,8 @@ describe('Builtin PR merge workflow execution', () => {
       if (simple && options?.workflowMeta?.currentStep === 'gather') {
         return { persona: persona ?? 'planner', status: 'done', content: 'GATHERED_CONTEXT: backend change in PR.', timestamp: new Date() };
       }
-      if ((simple && options?.workflowMeta?.workflowName === 'single-review-suite') || (!simple && prompt.includes('review-summary.md'))) {
+      if ((simple && options?.workflowMeta?.workflowName === 'single-review-suite') || (!simple && options?.workflowMeta?.currentStep === 'write_report')) {
+        if (simple && options?.executionPhase === 1) simpleReviewPrompts.push(prompt);
         const reviewResult = simple && scenario.qualityFailed && reviewCount === 0 ? 'REJECT' : 'APPROVE';
         if (simple && options?.executionPhase === 1) reviewCount++;
         const reviewReason = reviewResult === 'REJECT' ? 'Concrete code defect' : 'No unresolved issues';
@@ -127,7 +139,11 @@ describe('Builtin PR merge workflow execution', () => {
         return { persona: persona ?? 'developer', status: 'done',
           content: 'Fix plan, implementation, and validation evidence.', timestamp: new Date() };
       }
-      expect(prompt).toContain(join(reportDirectory, 'subworkflows'));
+      expect(prompt).toContain('CHILD_REVIEW_REPORT');
+      if (name === 'merge-review') {
+        expect(prompt).toContain(`${language === 'ja' ? 'レビューサマリー' : 'Review summary'}: CHILD_REVIEW_REPORT`);
+        expect(prompt).not.toContain('{report:review-summary.md}');
+      }
       const childReports = join(reportDirectory, 'subworkflows');
       const report = readdirSync(childReports, { recursive: true, encoding: 'utf8' })
         .find((name) => name.endsWith('review-summary.md'));
@@ -164,6 +180,18 @@ describe('Builtin PR merge workflow execution', () => {
     });
     const executeEffect = vi.fn(async (effect: WorkflowEffect, payload: Record<string, unknown>) => {
       calls.push(effect.type);
+      if (String(effect.type) === 'caccia') {
+        if (scenario.cacciaError) {
+          cacciaGit.mockRejectedValueOnce(scenario.cacciaError);
+          return cacciaEffect({ cwd: cloneCwd, projectCwd: project, task: 'Review PR',
+            prExecutionContext: { prNumber, headBranch: 'feature/pr', baseBranch: 'main',
+              headSha, headRepositoryUrl: '/remote', headRepositoryPushUrls: ['/remote'] } }, prNumber);
+        }
+        const result = scenario.caccia ?? { success: true, failed: false, outcome: 'skipped',
+          headSha, unresolvedCount: 0, skipReason: 'config_disabled', reason: 'Caccia is disabled' };
+        if (typeof result.headSha === 'string') headSha = result.headSha;
+        return result;
+      }
       if (effect.type === 'comment_pr') comments.push(String(payload.body));
       const failed = (effect.type === 'sync_with_root' && scenario.syncFailed)
         || (effect.type === 'resolve_conflicts_with_ai' && scenario.conflictFailed)
@@ -198,8 +226,7 @@ describe('Builtin PR merge workflow execution', () => {
             : options.stepName === 'review-adjudication' && scenario.qualityFailed && reviewCount === 1 ? 0
               : options.stepName === 'review-adjudication' ? 1
                 : options.stepName === 'fix-plan' && scenario.cannotRemediate ? 2
-                  : options.stepName === 'fix-verifier' && scenario.requiredValidationMissing && verifierCount++ === 0 ? 2
-                    : 0;
+                  : 0;
           return { candidateIndex, method: 'structured_output' as const };
         }
         return {
@@ -220,8 +247,78 @@ describe('Builtin PR merge workflow execution', () => {
       }),
     });
     engine.on('workflow:abort', (_state, reason) => failures.push(reason));
-    return { engine, calls, judgedSteps, comments, failures, observedStatuses, childContexts, cloneCwd, executeEffect, finishCi: () => { ciFinished = true; } };
+    return { engine, calls, judgedSteps, comments, failures, observedStatuses, childContexts, cloneCwd, executeEffect, simpleReviewPrompts, finishCi: () => { ciFinished = true; } };
   }
+
+  describe.each(['ja', 'en'])('%sのCaccia結果による分岐', (language) => {
+    describe.each(['merge-review', 'merge-review-fix', 'merge-review-fix-simple'])('%s', (name) => {
+      it.each(['success', 'skipped'] as const)('%sのheadでCIを待って既存の終端まで進む', async (outcome) => {
+        const updatedHead = 'd'.repeat(40);
+        const h = harness(name, { ciRunning: true, caccia: {
+          success: true, failed: false, outcome, headSha: updatedHead, unresolvedCount: 0,
+          skipReason: outcome === 'skipped' ? 'review_rate_limited' : null,
+          reason: outcome === 'skipped' ? 'Review rate limited after push' : null,
+        } }, language);
+        const running = h.engine.run();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(h.calls.filter((call) => call === 'caccia')).toHaveLength(1);
+        expect(h.calls).not.toContain('merge_pr');
+        expect(h.comments).toEqual([]);
+        h.finishCi();
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect((await running).status).toBe('completed');
+        expect(h.failures).toEqual([]);
+        expect(h.observedStatuses.at(-1)?.headSha).toBe(updatedHead);
+        expect(h.calls.filter((call) => call === 'merge_pr')).toHaveLength(name === 'merge-review' ? 0 : 1);
+        if (name !== 'merge-review') {
+          expect(h.calls.indexOf('commit_and_push')).toBeLessThan(h.calls.indexOf('caccia'));
+          expect(h.calls.indexOf('caccia')).toBeLessThan(h.calls.indexOf('merge_pr'));
+        }
+        expect(h.judgedSteps).not.toContain('caccia');
+        expect(h.executeEffect.mock.calls.filter(([effect]) => String(effect.type) === 'caccia'))
+          .toEqual([[expect.objectContaining({ type: 'caccia' }), { type: 'caccia', pr: 123 }, expect.anything()]]);
+      });
+
+      it.each([3, 11])('上限到達では未解決%s件をPRへコメントしてマージせずCOMPLETEになる', async (unresolvedCount) => {
+        const h = harness(name, { caccia: { success: true, failed: false, outcome: 'limit',
+          unresolvedCount, headSha: 'b'.repeat(40), skipReason: null, reason: null } }, language);
+        const state = await h.engine.run();
+        expect(state.status).toBe('completed');
+        expect(h.calls.filter((call) => call === 'caccia')).toHaveLength(1);
+        expect(h.calls).not.toContain('merge_pr');
+        expect(h.comments).toHaveLength(1);
+        const counts = h.comments[0]!.match(/\d+/gu)?.map(Number);
+        expect(counts).toEqual([unresolvedCount]);
+        expect(h.executeEffect.mock.calls.filter(([effect]) => effect.type === 'comment_pr'))
+          .toEqual([[expect.anything(), expect.objectContaining({ pr: 123, body: h.comments[0] }), expect.anything()]]);
+      });
+
+      it.each(['feature/team', '@org/team'])('効果の公開エラーを安全なコメントへ渡す: %s', async (ref) => {
+        const h = harness(name, { cacciaError: new Error(`fatal: couldn't find remote ref ${ref}; contact @reviewer`) }, language);
+        const state = await h.engine.run();
+        expect(state.status).toBe('aborted');
+        expect(h.calls).not.toContain('merge_pr');
+        expect(h.comments).toHaveLength(1);
+        const body = h.comments[0]!;
+        expect(body).toContain('remote ref');
+        expect(body).toContain(ref.replaceAll('@', '＠'));
+        expect(body).not.toContain('@');
+      });
+
+      it('失敗内容をPRへコメントしてマージせずABORTになる', async () => {
+        const error = 'Pull request head changed during Caccia execution';
+        const h = harness(name, { caccia: { success: false, failed: true, error } }, language);
+        const state = await h.engine.run();
+        expect(state.status).toBe('aborted');
+        expect(h.calls.filter((call) => call === 'caccia')).toHaveLength(1);
+        expect(h.calls).not.toContain('merge_pr');
+        expect(h.comments).toHaveLength(1);
+        expect(h.comments[0]).toContain(error);
+        expect(h.executeEffect.mock.calls.filter(([effect]) => effect.type === 'comment_pr'))
+          .toEqual([[expect.anything(), expect.objectContaining({ pr: 123, body: h.comments[0] }), expect.anything()]]);
+      });
+    });
+  });
 
   it.each(['ja', 'en'] as const)('%sのsimpleは単体レビューと共通最終ゲートを経てpush後のCIを待ってmergeする', async (language) => {
     const h = harness('merge-review-fix-simple', { ciRunning: true, syncFailed: true }, language);
@@ -290,8 +387,8 @@ describe('Builtin PR merge workflow execution', () => {
     expect(h.comments[0]).toContain('child review workflow aborted');
   });
 
-  it.each(['ja', 'en'] as const)('%sのsimpleは指摘を裁定・修正・検証・再レビューしてからpushする', async (language) => {
-    const h = harness('merge-review-fix-simple', { qualityFailed: true, requiredValidationMissing: true }, language);
+  it.each(['ja', 'en'] as const)('%sのsimpleは指摘を裁定・修正・再レビューしてからpushする', async (language) => {
+    const h = harness('merge-review-fix-simple', { qualityFailed: true }, language);
     const result = await h.engine.run();
     expect(result.status).toBe('completed');
     expect(h.failures).toEqual([]);
@@ -303,12 +400,75 @@ describe('Builtin PR merge workflow execution', () => {
         .includes(options?.workflowMeta?.workflowName ?? ''))
       .map(([, , options]) => options?.workflowMeta?.currentStep);
     expect(simpleSteps).toEqual(expect.arrayContaining([
-      'review', 'review-adjudication', 'fix-plan', 'fix', 'fix-verifier', 'fix-retry', 'final-gate',
+      'review', 'review-adjudication', 'fix-plan', 'fix', 'fix-verifier', 'final-gate',
     ]));
-    expect(h.judgedSteps.filter((step) => step === 'fix-verifier')).toHaveLength(2);
+    expect(h.judgedSteps).toContain('fix-verifier');
+    expect(h.simpleReviewPrompts).toHaveLength(2);
+    expect(h.simpleReviewPrompts[0]).not.toContain('### remediation: fix-plan.md');
+    for (const reportName of ['fix-plan.md', 'fix-report.md', 'fix-verification.md']) {
+      expect(h.simpleReviewPrompts[1]).toContain(
+        `### remediation: ${reportName}\nFix plan, implementation, and validation evidence.`,
+      );
+    }
     expect(h.judgedSteps.filter((step) => step === 'review-adjudication')).toHaveLength(2);
     expect(h.calls).toContain('commit_and_push');
     expect(h.calls).toContain('merge_pr');
+  });
+
+  it.each(['ja', 'en'] as const)('%sの並列レビューは修正後に同親の報告を参照できる', async (language) => {
+    mkdirSync(join(project, '.takt'), { recursive: true });
+    writeFileSync(join(project, '.takt', 'config.yaml'), `language: ${language}\n`);
+    const workflow = loadWorkflowByIdentifier(
+      join(process.cwd(), 'builtins', language, 'workflows', 'review-fix-backend.yaml'), project,
+    );
+    if (!workflow) throw new Error('Missing review-fix-backend workflow');
+    const reviewCount = new Map<string, number>();
+    const parallelReviewPrompts: string[] = [];
+    vi.mocked(executeStructuredAgent).mockResolvedValue({
+      persona: 'dynamic-facet-selector', status: 'done', content: '', timestamp: new Date(),
+      structuredOutput: { selected_ids: [], rationale: 'No optional reviewer is needed.' },
+    });
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({ systemPrompt: persona ?? 'agent', userInstruction: prompt });
+      const step = options?.workflowMeta?.currentStep;
+      if (step === 'arch-review' && options?.executionPhase === 1) {
+        parallelReviewPrompts.push(prompt);
+        const count = reviewCount.get(step) ?? 0;
+        reviewCount.set(step, count + 1);
+      }
+      return { persona: persona ?? 'agent', status: 'done', content: `Report from ${step}`, timestamp: new Date() };
+    });
+    const engine = new WorkflowEngine(workflow, project, 'Review backend change', {
+      provider: 'mock', language, projectCwd: project, reportDirName: 'parallel-review-report',
+      selectorProvider: { provider: 'mock', model: 'mock' },
+      selectorGitCommandRunner: { isInsideWorkTree: async () => false,
+        run: async () => ({ output: Buffer.from(''), bytes: 0 }) },
+      runPathsDirectory: join(project, '.takt', 'runs'),
+      workflowCallResolver: (request) => resolveWorkflowCallTarget(
+        request.parentWorkflow, request.step, request.projectCwd, request.lookupCwd,
+      ),
+      structuredCaller: {
+        judgeStatus: vi.fn(async (instruction, _tagInstruction, _candidates, options) => {
+          options.onStructuredPromptResolved?.({ systemPrompt: 'conductor', userInstruction: instruction });
+          return {
+            candidateIndex: options.stepName === 'supervise' ? 1
+              : options.stepName === 'arch-review' && (reviewCount.get('arch-review') ?? 0) <= 2 ? 1 : 0,
+            method: 'structured_output' as const,
+          };
+        }),
+        evaluateCondition: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn(),
+      },
+    });
+    const abortReasons: string[] = [];
+    engine.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
+    expect((await engine.run()).status, `${abortReasons.join('; ')}; step=${engine.getState().currentStep}; reviews=${JSON.stringify([...reviewCount])}`).toBe('completed');
+    expect(reviewCount.get('arch-review')).toBe(3);
+    expect(parallelReviewPrompts[0]).not.toContain('### remediation: fix-plan.md');
+    for (const prompt of parallelReviewPrompts.slice(1)) {
+      expect(prompt).toContain('### remediation: fix-plan.md\nReport from fix-plan');
+      expect(prompt).toContain('### remediation: fix-report.md\nReport from fix');
+      expect(prompt).toContain('### remediation: fix-verification.md\nReport from fix-verifier');
+    }
   });
 
   it.each(['ja', 'en'] as const)('%sのsimpleは修正計画で対応不能ならpushしない', async (language) => {

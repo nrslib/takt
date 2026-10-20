@@ -1,0 +1,18 @@
+--- a/src/snippets.mjs
++++ b/src/snippets.mjs
+@@ -39,3 +39,15 @@
+   fs.writeFileSync(stateFile(root), JSON.stringify(remaining));
+   return remaining.length;
+ }
++
++export function importArchive(root, archive) {
++  const entries = JSON.parse(fs.readFileSync(archive, 'utf8'));
++  const destination = path.join(root, '.snip', 'imports');
++  fs.mkdirSync(destination, { recursive: true });
++  for (const entry of entries) {
++    const file = path.join(destination, entry.path);
++    fs.mkdirSync(path.dirname(file), { recursive: true });
++    fs.writeFileSync(file, entry.content);
++  }
++  return entries.length;
++}

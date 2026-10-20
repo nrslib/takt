@@ -24,8 +24,6 @@ const languages = ['ja', 'en'] as const;
 const originalPlan = 'Accepted contract: preserve the public API. Initial plan: inspect the failed boundary.';
 const revisedPlan = 'Accepted contract: preserve the public API. Revised plan: reproduce the boundary failure and verify the repair.';
 const blockedFix = 'The planned repair cannot proceed: the boundary assumption is invalid.';
-const invalidVerification = 'plan_invalid: the plan omits the state transition at the boundary.';
-const incompleteVerification = 'incomplete: the repair is sound, but the required boundary evidence is missing.';
 let directory: string;
 let engine: WorkflowEngine | undefined;
 
@@ -94,7 +92,7 @@ describe('fix-replan routes through the shipped WorkflowEngine graph with the mo
       { name: 'fix', ruleIndex: 1, report: blockedFix },
       { name: 'fix-replan', ruleIndex: 0, report: revisedPlan },
       { name: 'fix', ruleIndex: 0, report: 'Boundary repair completed.' },
-      { name: 'fix-verifier', ruleIndex: 0, report: 'verified' },
+      { name: 'fix-verifier', ruleIndex: 0, report: 'Verified boundary repair against the revised plan.' },
     ]);
 
     const state = await engine.run();
@@ -106,86 +104,35 @@ describe('fix-replan routes through the shipped WorkflowEngine graph with the mo
     expect(phase1Prompt(2)).toContain(originalPlan);
     expect(phase1Prompt(2)).toContain(blockedFix);
     expect(phase1Prompt(3)).toContain(revisedPlan);
+    expect(phase1Prompt(4)).toContain('Boundary repair completed.');
     expect(readFileSync(resolve(directory, '.takt/runs/reports/reports/fix-plan.md'), 'utf8')).toContain(revisedPlan);
+    expect(readFileSync(resolve(directory, '.takt/runs/reports/reports/fix-verification.md'), 'utf8'))
+      .toContain('Verified boundary repair against the revised plan.');
     expect(runAgent).toHaveBeenCalledTimes(10);
     expect(getScenarioQueue()?.remaining).toBe(0);
   });
 
-  it.each(languages)('%s: verifier plan_invalid returns through verification-replan to fix with verification evidence', async (language) => {
+  it.each(languages)('%s: completed fix ends remediation with test evidence for follow-up review', async (language) => {
     const config = load(language);
     const { engine, abort, started } = start(config, language, 'fix-plan');
     queueScenario(config, [
       { name: 'fix-plan', ruleIndex: 0, report: originalPlan },
-      { name: 'fix', ruleIndex: 0, report: 'Initial repair completed but the boundary remains unverified.' },
-      { name: 'fix-verifier', ruleIndex: 1, report: invalidVerification },
-      { name: 'verification-replan', ruleIndex: 0, report: revisedPlan },
-      { name: 'fix', ruleIndex: 0, report: 'Revised repair completed with boundary evidence.' },
-      { name: 'fix-verifier', ruleIndex: 0, report: 'verified' },
+      { name: 'fix', ruleIndex: 0, report: 'Boundary repair completed. npm test -- boundary.test.ts passed.' },
+      { name: 'fix-verifier', ruleIndex: 0, report: 'Verified boundary repair with passing test evidence.' },
     ]);
 
     const state = await engine.run();
 
-    expect(abort.mock.calls.map(call => call.slice(1))).toEqual([]);
+    expect(abort).not.toHaveBeenCalled();
     expect(state.status).toBe('completed');
-    expect(started.mock.calls.map(([step]) => step.name)).toEqual(['fix-plan', 'fix', 'fix-verifier', 'verification-replan', 'fix', 'fix-verifier']);
-    expect(phase1Prompt(3)).toContain(originalPlan);
-    expect(phase1Prompt(3)).toContain('Initial repair completed but the boundary remains unverified.');
-    expect(phase1Prompt(3)).toContain(invalidVerification);
-    expect(phase1Prompt(4)).toContain(revisedPlan);
-    expect(runAgent).toHaveBeenCalledTimes(12);
-    expect(getScenarioQueue()?.remaining).toBe(0);
-  });
-
-  it.each(languages)('%s: fix-retry sends plan revision to verification-replan with current verification evidence', async (language) => {
-    const config = load(language);
-    const { engine, abort, started } = start(config, language, 'fix-plan');
-    queueScenario(config, [
-      { name: 'fix-plan', ruleIndex: 0, report: originalPlan },
-      { name: 'fix', ruleIndex: 0, report: 'Initial repair completed.' },
-      { name: 'fix-verifier', ruleIndex: 2, report: incompleteVerification },
-      { name: 'fix-retry', ruleIndex: 1, report: 'The repair plan misses the evidence-producing action.' },
-      { name: 'verification-replan', ruleIndex: 0, report: revisedPlan },
-      { name: 'fix', ruleIndex: 0, report: 'Revised repair completed.' },
-      { name: 'fix-verifier', ruleIndex: 0, report: 'verified' },
-    ]);
-
-    const state = await engine.run();
-
-    expect(abort.mock.calls.map(call => call.slice(1))).toEqual([]);
-    expect(state.status).toBe('completed');
-    expect(started.mock.calls.map(([step]) => step.name)).toEqual([
-      'fix-plan', 'fix', 'fix-verifier', 'fix-retry', 'verification-replan', 'fix', 'fix-verifier',
-    ]);
-    expect(phase1Prompt(4)).toContain(incompleteVerification);
-    expect(runAgent).toHaveBeenCalledTimes(14);
-    expect(getScenarioQueue()?.remaining).toBe(0);
-  });
-
-  it.each(languages)('%s: fix-origin replan does not read an earlier verification report', async (language) => {
-    const config = load(language);
-    const { engine, abort, started } = start(config, language, 'fix-plan');
-    queueScenario(config, [
-      { name: 'fix-plan', ruleIndex: 0, report: originalPlan },
-      { name: 'fix', ruleIndex: 0, report: 'Initial repair completed.' },
-      { name: 'fix-verifier', ruleIndex: 1, report: invalidVerification },
-      { name: 'verification-replan', ruleIndex: 0, report: revisedPlan },
-      { name: 'fix', ruleIndex: 1, report: blockedFix },
-      { name: 'fix-replan', ruleIndex: 0, report: revisedPlan },
-      { name: 'fix', ruleIndex: 0, report: 'Final repair completed.' },
-      { name: 'fix-verifier', ruleIndex: 0, report: 'verified' },
-    ]);
-
-    const state = await engine.run();
-
-    expect(abort.mock.calls.map(call => call.slice(1))).toEqual([]);
-    expect(state.status).toBe('completed');
-    expect(started.mock.calls.map(([step]) => step.name)).toEqual([
-      'fix-plan', 'fix', 'fix-verifier', 'verification-replan', 'fix', 'fix-replan', 'fix', 'fix-verifier',
-    ]);
-    expect(phase1Prompt(3)).toContain(invalidVerification);
-    expect(phase1Prompt(5)).toContain(blockedFix);
-    expect(phase1Prompt(5)).not.toContain(invalidVerification);
-    expect(runAgent).toHaveBeenCalledTimes(16);
+    expect(started.mock.calls.map(([step]) => step.name)).toEqual(['fix-plan', 'fix', 'fix-verifier']);
+    expect(phase1Prompt(1)).toContain(originalPlan);
+    expect(phase1Prompt(2)).toContain('npm test -- boundary.test.ts passed');
+    expect(readFileSync(resolve(directory, '.takt/runs/reports/reports/fix-report.md'), 'utf8'))
+      .toContain('npm test -- boundary.test.ts passed');
+    expect(readFileSync(resolve(directory, '.takt/runs/reports/reports/fix-verification.md'), 'utf8'))
+      .toContain('Verified boundary repair with passing test evidence.');
+    expect(runAgent).toHaveBeenCalledTimes(6);
     expect(getScenarioQueue()?.remaining).toBe(0);
   });
 

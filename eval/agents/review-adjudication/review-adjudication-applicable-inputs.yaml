@@ -1,0 +1,101 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'レビュー裁定で採用する指摘の入力適用範囲を、既存のA1-A4ケースで評価する'
+prompts:
+  - label: a1
+    raw: file://../../prompts/review-adjudication-applicable-inputs-a1.phase1.j2
+    config:
+      working_dir: fixtures/fix-verification-applicable-inputs/a1
+      required_snapshots:
+        - .takt/eval-snapshots/review-adjudication-applicable-inputs-a1-policies.md
+  - label: a2
+    raw: file://../../prompts/review-adjudication-applicable-inputs-a2.phase1.j2
+    config:
+      working_dir: fixtures/fix-verification-applicable-inputs/a2
+      required_snapshots:
+        - .takt/eval-snapshots/review-adjudication-applicable-inputs-a2-policies.md
+  - label: a3
+    raw: file://../../prompts/review-adjudication-applicable-inputs-a3.phase1.j2
+    config:
+      working_dir: fixtures/fix-verification-applicable-inputs/a3
+      required_snapshots:
+        - .takt/eval-snapshots/review-adjudication-applicable-inputs-a3-policies.md
+  - label: a4
+    raw: file://../../prompts/review-adjudication-applicable-inputs-a4.phase1.j2
+    config:
+      working_dir: fixtures/fix-verification-applicable-inputs/a4
+      required_snapshots:
+        - .takt/eval-snapshots/review-adjudication-applicable-inputs-a4-policies.md
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-sol-low
+    config:
+      cli: codex
+      model: gpt-6-sol
+      reasoning_effort: low
+      isolate_working_dir: true
+  - id: file://../../providers/cli-review.mjs
+    label: claude-opus-5
+    config:
+      cli: claude
+      model: claude-opus-5
+      isolate_working_dir: true
+  - id: file://../../providers/cli-review.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-6-luna
+      reasoning_effort: max
+      isolate_working_dir: true
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model: gpt-6-sol
+        model_reasoning_effort: low
+evaluateOptions:
+  maxConcurrency: 3
+tests:
+  - description: A1
+    prompts: [a1]
+    vars:
+      task: file://../../cases/fix-verification-applicable-inputs-a1-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: review-adjudication-applicable-inputs/a1-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。相対要素だけの PATH で外部コマンドが見つからずエラーの文言が分かりにくいという CODE-1 の利用上の指摘を、修正対象または受入条件にしたら不合格。今回の範囲外、必要以上の拡張、または判定を変えない記録として扱ったら合格。対応する実装や回帰テストを求めた場合は、記録のみとは扱わない。扱いは出力契約の値または同じ意味の言い換えで判定する。
+  - description: A2
+    prompts: [a2]
+    vars:
+      task: file://../../cases/fix-verification-applicable-inputs-a2-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: review-adjudication-applicable-inputs/a2-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。変更前からの利用者向け文書が、相対要素だけの PATH を設定する環境でも動作すると明記している。その条件で外部コマンドが見つからず失敗する CODE-1 の指摘を、修正対象にしたら合格。今回の範囲外、または判定を変えない確認として扱ったら不合格。扱いは出力契約の値または同じ意味の言い換えで判定する。
+  - description: A3
+    prompts: [a3]
+    vars:
+      task: file://../../cases/fix-verification-applicable-inputs-a3-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: review-adjudication-applicable-inputs/a3-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。課題管理サービスから取得したタイトルが exec のコマンド文字列に埋め込まれ、シェルでコマンドを実行できるという SEC-1 の指摘を、修正対象または受入条件にしたら合格。今回の範囲外、必要以上の拡張、または判定を変えない記録として扱ったら不合格。扱いは出力契約の値または同じ意味の言い換えで判定する。
+  - description: A4
+    prompts: [a4]
+    vars:
+      task: file://../../cases/fix-verification-applicable-inputs-a4-task.md
+      previous_response: ''
+    assert:
+      - type: llm-rubric
+        metric: review-adjudication-applicable-inputs/a4-boundary
+        value: |-
+          見出し・ID・文言ではなく判断の実質で判定する。要求していない説明を合格条件にしない。利用者の PATH に相対要素があり、自身のプロジェクトの作業ディレクトリに悪意のある実行ファイルが置かれていると外部コマンドの代わりに実行されるという SEC-1 の指摘を、修正対象または受入条件にしたら不合格。今回の範囲外、必要以上の拡張、または判定を変えない記録として扱ったら合格。対応する実装や回帰テストを求めた場合は、記録のみとは扱わない。扱いは出力契約の値または同じ意味の言い換えで判定する。

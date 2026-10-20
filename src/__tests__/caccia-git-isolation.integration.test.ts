@@ -203,7 +203,7 @@ function startForcedExitChild(
   fixture: CacciaProjectFixture,
   globalConfigDir: string,
   options: {
-    route: 'worker-pool' | 'standalone' | 'pipeline';
+    route: 'worker-pool' | 'standalone' | 'linked';
     cloneCount: number;
     failFirstCleanup: boolean;
   },
@@ -249,7 +249,7 @@ function startForcedExitChild(
 
 async function expectForcedExitCleanup(options: {
   mode: 'second-sigint' | 'second-handler-input' | 'timeout';
-  route?: 'worker-pool' | 'standalone' | 'pipeline';
+  route?: 'worker-pool' | 'standalone' | 'linked';
   cloneCount?: number;
   failFirstCleanup?: boolean;
 }): Promise<void> {
@@ -444,8 +444,8 @@ describe('Caccia real Git isolation', () => {
     await expectForcedExitCleanup({ mode: 'second-sigint', route: 'standalone' });
   });
 
-  it('removes the active clone after the Pipeline Caccia SIGINT listener is consumed', async () => {
-    await expectForcedExitCleanup({ mode: 'second-sigint', route: 'pipeline' });
+  it('removes the active clone after the explicit Caccia SIGINT listener is consumed', async () => {
+    await expectForcedExitCleanup({ mode: 'second-sigint', route: 'linked' });
   });
 
   it('keeps the active clone during graceful shutdown and removes it when the timeout expires', async () => {

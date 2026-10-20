@@ -7,8 +7,28 @@ const evalDir = dirname(fileURLToPath(import.meta.url));
 const CLASSIFICATIONS = [
   {
     tier: 'active',
-    reason: '完了検証・再計画・レビュー裁定で反例に使う入力の根拠を確かめ、実在する欠陥を維持する境界を測る',
+    reason: 'ページに閉じた状態・操作判断の誤検知と、別の状態操作層への委譲の見逃しを測る',
+    suites: ['frontend-mediator-review'],
+  },
+  {
+    tier: 'active',
+    reason: 'frontend implement がページの操作判断を独立した Mediator 層へ委譲する生成と、表示部品での誤発火を測る',
+    suites: ['frontend-mediator-coder'],
+  },
+  {
+    tier: 'active',
+    reason: '入力の主体・並行処理・量の根拠と過去の工程逸脱を、発火する例としない例で測る',
+    suites: ['finding-realistic-premise'],
+  },
+  {
+    tier: 'active',
+    reason: '完了検証・再計画・レビュー裁定で反例に使う入力の根拠を確かめる',
     suites: ['fix-verification-applicable-inputs'],
+  },
+  {
+    tier: 'active',
+    reason: 'レビュー裁定が既存の入力適用範囲に沿って指摘を採用するか測る',
+    suites: ['review-adjudication-applicable-inputs'],
   },
   {
     tier: 'active',
@@ -51,8 +71,24 @@ const CLASSIFICATIONS = [
   },
   {
     tier: 'active',
+    reason: '復元した fix-verifier の状態閉包・経路判定・証拠境界を測る',
+    suites: [
+      'fix-verifier-family-boundary',
+      'fix-verifier-state-closure',
+      'fix-verifier-state-routing',
+      'fix-verifier-model-matrix',
+      'fix-verifier-routing-model-matrix',
+      'fix-verification-scope',
+      'fix-verification-current-diff-regression',
+      'fix-verification-preserved-condition',
+      'remediation-evidence',
+    ],
+  },
+  {
+    tier: 'active',
     reason: '現在の review architecture の探索範囲・証拠・裁定境界を横断して測る',
     suites: [
+      'review-artifact-input-handoff',
       'initial-review-contract-discovery',
       'testing-review-observable-evidence',
       'scope-architecture-search',
@@ -110,21 +146,6 @@ const CLASSIFICATIONS = [
       'state-after-event-plan-config',
       'state-after-event-write-tests',
       'state-after-event-testing-review',
-    ],
-  },
-  {
-    tier: 'active',
-    reason: '現在の fix-verifier の状態閉包・経路判定・証拠境界を測る',
-    suites: [
-      'fix-verifier-family-boundary',
-      'fix-verifier-state-closure',
-      'fix-verifier-state-routing',
-      'fix-verifier-model-matrix',
-      'fix-verifier-routing-model-matrix',
-      'fix-verification-scope',
-      'fix-verification-current-diff-regression',
-      'fix-verification-preserved-condition',
-      'remediation-evidence',
     ],
   },
   {
@@ -198,13 +219,29 @@ const CLASSIFICATIONS = [
 ];
 
 const EXECUTION_OVERRIDES = {
-  'finding-premise-scope': {
-    defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
-    reason: 'Sol Low、Opus 5、Luna Max の3モデルでレビューと再計画の指摘・作業の前提の範囲を比較する明示選択の評価',
+  'finding-realistic-premise': {
+    defaultEligible: false,
+    credentials: ['claude', 'codex'],
+    cost: 'high',
+    reason: '17ケースを隔離した3モデルで比較するため両CLI認証と大きな実行枠を要する',
   },
   'fix-verification-applicable-inputs': {
     defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
-    reason: 'Sol Low、Opus 5、Luna Max の3モデルで完了検証・再計画・レビュー裁定の入力範囲を比較する明示選択の評価',
+    reason: 'Sol Low、Opus 5、Luna Max の3モデルで完了検証・再計画・裁定の入力範囲を比較する',
+  },
+  'review-artifact-input-handoff': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'high',
+    reason: '成果物の受け渡しを4ケースの新旧プロンプトで比較する。follow-upは完了記録とincomplete検証報告の異常な組合せへの堅牢性診断',
+  },
+  'review-adjudication-applicable-inputs': {
+    defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
+    reason: 'Sol Low、Opus 5、Luna Max の3モデルでレビュー裁定の入力範囲を比較する明示選択の評価',
+  },
+  'finding-premise-scope': {
+    defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
+    reason: 'Sol Low、Opus 5、Luna Max の3モデルでレビューと再計画の指摘・作業の前提の範囲を比較する明示選択の評価',
   },
   'review-external-confirmation': {
     defaultEligible: false, credentials: ['codex', 'claude'], cost: 'high',
@@ -247,6 +284,18 @@ const EXECUTION_OVERRIDES = {
     credentials: ['claude'],
     cost: 'standard',
     reason: 'Lunaで検証したGUI設計ケースをOpusでも確認する',
+  },
+  'frontend-mediator-review': {
+    defaultEligible: false,
+    credentials: ['codex', 'claude'],
+    cost: 'high',
+    reason: 'Luna max と Opus の隔離レビューを固定した4実装と意味採点で比較する',
+  },
+  'frontend-mediator-coder': {
+    defaultEligible: false,
+    credentials: ['codex', 'claude'],
+    cost: 'high',
+    reason: '隔離した React アプリで Codex low と Claude Opus の実装を生成し、artifact と LLM rubric で構造を評価する',
   },
   'resource-flow-review': {
     defaultEligible: false,
@@ -387,10 +436,8 @@ const EXECUTION_OVERRIDES = {
     reason: '全シナリオを3モデルで測る production-condition suite である',
   },
   'remediation-evidence': {
-    defaultEligible: false,
-    credentials: ['codex'],
-    cost: 'standard',
-    reason: '共有 remediation 指示の変更時に実行する、固定証跡による判定比較である',
+    defaultEligible: false, credentials: ['codex'], cost: 'standard',
+    reason: '共有 remediation 指示の変更時に固定証跡で判定を比較する',
   },
   'fix-plan-cause-check': {
     defaultEligible: false,
@@ -453,15 +500,11 @@ const EXECUTION_OVERRIDES = {
     reason: '3モデル比較のため両CLI認証と大きな実行枠を要する',
   },
   'fix-verifier-model-matrix': {
-    defaultEligible: false,
-    credentials: ['claude', 'codex', 'opencode'],
-    cost: 'high',
+    defaultEligible: false, credentials: ['claude', 'codex', 'opencode'], cost: 'high',
     reason: 'Claude・Codex・opencode の複数モデル比較を要する',
   },
   'fix-verifier-routing-model-matrix': {
-    defaultEligible: false,
-    credentials: ['claude', 'codex', 'opencode'],
-    cost: 'high',
+    defaultEligible: false, credentials: ['claude', 'codex', 'opencode'], cost: 'high',
     reason: 'Claude・Codex・opencode の複数モデル比較を要する',
   },
   'review-impact-path-coverage': {
@@ -522,24 +565,6 @@ const EXECUTION_OVERRIDES = {
     cost: 'high',
     reason: '3モデル比較のため両CLI認証と大きな実行枠を要する',
   },
-  'fix-verification-scope': {
-    defaultEligible: false,
-    credentials: ['claude', 'codex'],
-    cost: 'high',
-    reason: '3モデル比較のため両CLI認証と大きな実行枠を要する',
-  },
-  'fix-verification-current-diff-regression': {
-    defaultEligible: false,
-    credentials: ['claude', 'codex'],
-    cost: 'high',
-    reason: '3モデル比較のため両CLI認証と大きな実行枠を要する',
-  },
-  'fix-verification-preserved-condition': {
-    defaultEligible: false,
-    credentials: ['claude', 'codex'],
-    cost: 'high',
-    reason: '3モデル比較のため両CLI認証と大きな実行枠を要する',
-  },
   'initial-review-external-identity-wiring': {
     defaultEligible: false,
     credentials: ['claude', 'codex'],
@@ -575,6 +600,18 @@ const EXECUTION_OVERRIDES = {
     credentials: ['claude', 'codex'],
     cost: 'high',
     reason: '3モデル比較のため両CLI認証と大きな実行枠を要する',
+  },
+  'fix-verification-scope': {
+    defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
+    reason: '独立検証で修正範囲と因果関係を比較する',
+  },
+  'fix-verification-current-diff-regression': {
+    defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
+    reason: '修正差分による退行を独立検証で比較する',
+  },
+  'fix-verification-preserved-condition': {
+    defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
+    reason: '既存契約保存の完了義務を独立検証で比較する',
   },
   'security-review-method': {
     defaultEligible: false,
@@ -615,10 +652,16 @@ const EXECUTION_OVERRIDES = {
 };
 
 const PREPARE_TARGET_OVERRIDES = {
-  'finding-premise-scope': ['rv1', 'rv2', 'rn1', 'rn2', 'pl1', 'pn1']
-    .map((caseId) => `finding-premise-scope-${caseId}`),
+  'finding-realistic-premise': [
+    'rt', 'rc', 'rq', 'ne', 'np', 'nb', 'at', 'ac', 'aq', 'ae', 'ap', 'ab',
+    'vd1', 'vd2', 'vn1', 'vn2', 'pd1',
+  ].map((caseId) => `finding-realistic-premise-${caseId}`),
   'fix-verification-applicable-inputs': ['f1', 'f2', 'f3', 'r1', 'r2', 'n1', 'n2', 'n3', 'n4', 'n5', 'a1', 'a2', 'a3', 'a4']
     .map((caseId) => `fix-verification-applicable-inputs-${caseId}`),
+  'review-adjudication-applicable-inputs': ['a1', 'a2', 'a3', 'a4']
+    .map((caseId) => `review-adjudication-applicable-inputs-${caseId}`),
+  'finding-premise-scope': ['rv1', 'rv2', 'rn1', 'rn2', 'pl1', 'pn1']
+    .map((caseId) => `finding-premise-scope-${caseId}`),
   'security-threat-model': ['a1', 'a2', 'a3', 'a4', 'a5']
     .map((caseId) => `security-threat-model-${caseId}`),
   'secondary-platform-adjudication': [
@@ -636,19 +679,25 @@ const PREPARE_TARGET_OVERRIDES = {
     'review-external-confirmation-code-failure',
     'review-external-confirmation-ungrounded',
     'review-external-confirmation-service-outage',
+    'review-external-confirmation-basis-not-applicable',
   ],
   'supervise-external-confirmation': [
     'supervise-external-confirmation-generic',
     'supervise-external-confirmation-peer',
     'supervise-external-confirmation-missing-basis',
     'supervise-external-confirmation-incomplete-verification',
+    'supervise-external-confirmation-basis-not-applicable',
   ],
   'replan-external-confirmation': [
     'replan-external-confirmation-handoff',
+    'replan-external-confirmation-basis-not-applicable',
   ],
   'interactive-topic-boundary': [],
   'completion-scope-structured': [],
   'phase3-follow-input': [],
+  'remediation-evidence': [],
+  'fix-verifier-model-matrix': ['fix-verifier-state-closure'],
+  'fix-verifier-routing-model-matrix': ['fix-verifier-state-routing'],
   'completion-scope-routing': [],
   'evidence-judgment': [],
   coding: ['coding-review'],
@@ -659,11 +708,10 @@ const PREPARE_TARGET_OVERRIDES = {
   'frontend-opus': ['frontend-review', 'frontend-review-react'],
   cqrs: ['cqrs-review'],
   'frontend-coder': ['frontend-implement'],
+  'frontend-mediator-review': ['good', 'bad', 'bad2', 'good-hook'].map(variant => `frontend-mediator-review-${variant}`),
+  'frontend-mediator-coder': ['frontend-mediator-implement'],
   'cqrs-coder': ['cqrs-implement'],
   'fix-loop-convergence': [],
-  'remediation-evidence': [],
-  'fix-verifier-model-matrix': ['fix-verifier-state-closure'],
-  'fix-verifier-routing-model-matrix': ['fix-verifier-state-routing'],
   'final-readiness-preservation': ['final-readiness-supervision-phase2'],
   'review-adjudication-report': ['review-adjudication-phase2'],
   'task-instruction-gherkin': [],

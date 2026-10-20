@@ -235,6 +235,7 @@ describe('handoff command progress on the released terminal', () => {
     mocks.requeueTask.mockReturnValue(task.name);
     const preparation: FailedTaskRetryPreparation = {
       worktreePath: task.worktreePath!, interactionCwd: task.worktreePath!,
+      freshStart: false,
       runsBaseDir: task.worktreePath!, failure: task.failure!, failedStep: 'implement',
       matchedRunSlug: 'failed-run', runMeta: null, previousWorkflow: 'development',
       previousOrderContent: '# Original order', resumePoint: undefined,

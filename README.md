@@ -69,6 +69,9 @@ From a Git repository with at least one commit:
 ```bash
 npm install -g takt
 
+# Install the SDK for the default provider (claude-sdk)
+takt install claude-sdk
+
 # Talk to AI, describe a task, use /go, then choose "Save as Task"
 takt
 
@@ -79,11 +82,11 @@ takt run
 takt list
 ```
 
-If this is your first run, configure a provider in `~/.takt/config.yaml` or use the API key environment variables listed in [Configuration](#configuration). SDK-based providers such as `claude-sdk`, `codex`, `pi`, and `deepseek-harness` run with Node.js. Run `takt install deepseek-harness` before using DeepSeek Harness. CLI-based providers require their external CLIs.
+If this is your first run, configure a provider in `~/.takt/config.yaml` or use the API key environment variables listed in [Configuration](#configuration). SDK-based providers (`claude-sdk`, `codex`, `opencode`, `pi`, and `deepseek-harness`) run with Node.js; run `takt install <provider>` once before using one. CLI-based providers require their external CLIs.
 
 ## CodeRabbit Review Loop
 
-On GitHub, run `takt caccia <PR-number>` to wait for CodeRabbit reviews, handle unresolved bot threads in isolated clones, and keep a decision report for each iteration. The same loop can run after TAKT creates or updates a PR when `caccia.enabled` is enabled; linked execution is disabled by default. See the [CLI reference](./docs/cli-reference.md#takt-caccia) and [configuration guide](./docs/configuration.md#caccia-review-loop).
+On GitHub, run `takt caccia <PR-number>` to wait for CodeRabbit reviews, handle unresolved bot threads in isolated clones, and keep a decision report for each iteration. Merge workflows call the loop through an explicit `caccia` effect. `caccia.enabled` controls whether that effect waits for CodeRabbit and defaults to false. Push and PR publication do not start Caccia implicitly. See the [CLI reference](./docs/cli-reference.md#takt-caccia) and [configuration guide](./docs/configuration.md#caccia-review-loop).
 
 ### Video Tutorial
 
@@ -115,7 +118,7 @@ The default provider is `claude-sdk` (Claude Agent SDK). `claude` is an alias fo
 
 To continue using the Claude Code CLI, select `claude-headless` in your provider configuration or pass `--provider claude-headless`. Move any provider permission profile to the selected provider name; the default is now `claude-sdk`, so an old `provider_profiles.claude` setting may no longer apply. Existing sessions labeled `claude` start fresh. See [permission resolution](./docs/configuration.md#permission-resolution-priority) for the migration details.
 
-These providers run via SDK (no CLI required, Node.js only):
+These providers run via SDK (no CLI required, Node.js only). The SDK is not bundled with TAKT; run `takt install <provider>` once before use, and `takt update` after upgrading TAKT. In a terminal, TAKT offers to install a missing SDK; in CI and other non-interactive runs, install it beforehand. See [Managed SDK installation and updates](./docs/cli-reference.md#managed-sdk-installation-and-updates).
 
 - `claude-sdk` — `@anthropic-ai/claude-agent-sdk`
 - `codex` — `@openai/codex-sdk`
@@ -125,7 +128,7 @@ The `deepseek-harness` provider uses the official TypeScript SDK and its runtime
 
 These providers require an external CLI:
 
-- `opencode` — [OpenCode](https://opencode.ai/) CLI. v2 is the default; select v1 explicitly ([migration settings](./docs/configuration.md#opencode-v1v2-selection)).
+- `opencode` — [OpenCode](https://opencode.ai/) CLI, plus `takt install opencode` for its SDK. v2 is the default; select v1 explicitly ([migration settings](./docs/configuration.md#opencode-v1v2-selection)).
 - `claude-headless` — [Claude Code](https://claude.ai/code)
 - `claude-terminal` — [Claude Code](https://claude.ai/code) driven in an interactive terminal session (also requires [`tmux`](https://github.com/tmux/tmux))
 - `copilot` — [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli)
@@ -146,6 +149,7 @@ Optional:
 
 ```bash
 npm install -g takt
+takt install claude-sdk   # or codex, opencode, pi, deepseek-harness
 ```
 
 With Nix flakes:
@@ -286,6 +290,9 @@ See the [Builtin Catalog](./docs/builtin-catalog.md) for all workflows and perso
 | `takt ui` | Open the experimental Viewer-first Web UI on `http://127.0.0.1:20525` |
 | `takt list` | Manage task branches (merge, retry, requeue, force-fail, instruct, delete) |
 | `takt #N` | Use a GitHub Issue as the initial input for a task |
+| `takt merge` | Review, fix, and merge pull requests with a workflow |
+| `takt install <provider>` | Install the SDK for an SDK-based provider |
+| `takt update` | Update installed provider SDKs to the versions pinned by TAKT |
 | `takt eject` | Copy builtin workflows/facets for customization |
 | `takt workflow init` | Create a new workflow scaffold |
 | `takt workflow doctor` | Validate workflow definitions |
@@ -328,7 +335,7 @@ state and reports.
 
 To select providers or models for individual steps, configure auto routing. Run `takt telemetry enable` to record routing decisions locally. See the [Configuration Guide](./docs/configuration.md) for details.
 
-Or use provider credentials directly (DeepSeek Harness requires `takt install deepseek-harness`; OpenCode also requires its CLI):
+Or use provider credentials directly (SDK-based providers require `takt install <provider>`; OpenCode also requires its CLI):
 
 ```bash
 export TAKT_ANTHROPIC_API_KEY=sk-ant-...   # Anthropic (Claude)

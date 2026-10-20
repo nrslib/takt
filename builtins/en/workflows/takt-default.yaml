@@ -1,5 +1,5 @@
 name: takt-default
-description: Inject TAKT-specific facets and implementation companions into the shared core's adjudicated, verified peer-review remediation loop and final check that requirements are met.
+description: Inject TAKT-specific facets and implementation companions into the shared core review, adjudication, repair, and final requirement check.
 max_steps: 51
 initial_step: develop
 

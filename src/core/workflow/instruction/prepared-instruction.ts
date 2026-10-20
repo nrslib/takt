@@ -9,7 +9,8 @@ export interface ReportReferenceConsumer {
 
 export interface ReportReferenceResolution {
   readonly reference: string;
-  readonly scope: ResolvedReportReferenceScope;
+  readonly scope: ResolvedReportReferenceScope | 'declared-producer';
+  readonly producer?: string;
 }
 
 export interface ReportReferenceObserver {
@@ -23,8 +24,14 @@ export interface ReportReferencesResolved {
 
 export interface InjectedReport {
   readonly reference: string;
-  readonly scope: ResolvedReportReferenceScope;
+  readonly scope: ResolvedReportReferenceScope | 'declared-producer';
   readonly content: string;
+  readonly producer?: string;
+}
+
+export interface DeclaredReportInputs {
+  readonly declaredNames: readonly string[];
+  readonly reports: readonly InjectedReport[];
 }
 
 export interface PreparedInstruction {

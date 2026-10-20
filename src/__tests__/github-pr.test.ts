@@ -1,11 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { PrHeadObservationMismatchError } from '../core/workflow/system/pr-execution-context.js';
 import {
   closePr,
   createPullRequest,
   fetchPrReviewComments,
   fetchCodeRabbitReviewStatus,
-  fetchCodeRabbitCommitActivity,
-  fetchCodeRabbitCommitActivityForCommit,
   fetchCodeRabbitReviewThreads,
   fetchCacciaPullRequestDetails,
   fetchPrDetails,
@@ -111,102 +110,6 @@ function queueCacciaPullRequestDetails(
   );
   asyncCommandResponses.push(originUrl, pushUrlOutput);
 }
-
-describe('CodeRabbit commit activity', () => {
-  beforeEach(() => {
-    execFile.mockReset();
-    asyncCommandResponses.length = 0;
-    execFile.mockImplementation((_command: string, _args: string[], _options: unknown, callback: Function) => {
-      const response = asyncCommandResponses.shift();
-      if (response instanceof Error) callback(response, '', '');
-      else callback(null, response, '');
-      return {};
-    });
-  });
-
-  const locator = { url: 'https://github.com/org/repo/pull/7', headRefOid: 'head-7' };
-
-  it.each(['pending', 'failure', 'error'])('detects a %s CodeRabbit status without a bot post', async (state) => {
-    queueAsyncGhResponses(locator, { statuses: [{ context: 'CodeRabbit', state }], total_count: 1 });
-    await expect(fetchCodeRabbitCommitActivity(7, '/project', 'head-7'))
-      .resolves.toEqual({ headSha: 'head-7', detected: true });
-    expect(execFile).toHaveBeenCalledTimes(2);
-  });
-
-  it('detects CodeRabbit status on a later page', async () => {
-    queueAsyncGhResponses(locator,
-      { statuses: Array.from({ length: 100 }, (_, index) => ({ context: `other-${index}` })), total_count: 101 },
-      { statuses: [{ context: 'CodeRabbit' }], total_count: 101 });
-    await expect(fetchCodeRabbitCommitActivity(7, '/project', 'head-7'))
-      .resolves.toEqual({ headSha: 'head-7', detected: true });
-    expect(execFile.mock.calls.at(-1)?.[1]).toEqual([
-      'api', 'repos/org/repo/commits/head-7/status?per_page=100&page=2',
-    ]);
-  });
-
-  it('detects a CodeRabbit check run on a later page', async () => {
-    queueAsyncGhResponses(locator, { statuses: [], total_count: 0 }, {
-      check_runs: Array.from({ length: 100 }, (_, index) => ({ name: `other-${index}`, app: { slug: 'other' } })),
-      total_count: 101,
-    }, {
-      check_runs: [{ name: 'Review', app: { slug: 'coderabbitai' } }], total_count: 101,
-    });
-    await expect(fetchCodeRabbitCommitActivity(7, '/project', 'head-7'))
-      .resolves.toEqual({ headSha: 'head-7', detected: true });
-    expect(execFile.mock.calls.at(-1)?.[1]).toEqual([
-      'api', 'repos/org/repo/commits/head-7/check-runs?filter=all&per_page=100&page=2',
-    ]);
-  });
-
-  it('returns no activity only after complete status and check-run responses', async () => {
-    queueAsyncGhResponses(locator, { statuses: [], total_count: 0 }, { check_runs: [], total_count: 0 });
-    await expect(fetchCodeRabbitCommitActivity(7, '/project', 'head-7'))
-      .resolves.toEqual({ headSha: 'head-7', detected: false });
-  });
-
-  it('checks status contexts and check runs for a prior commit when the PR head has moved', async () => {
-    const oldSha = 'old-head';
-    queueAsyncGhResponses(
-      { ...locator, headRefOid: 'new-head' },
-      { statuses: [], total_count: 0 },
-      { check_runs: [{ name: 'CodeRabbit Review', app: null }], total_count: 1 },
-    );
-    await expect(fetchCodeRabbitCommitActivityForCommit(7, '/project', oldSha))
-      .resolves.toEqual({ headSha: oldSha, detected: true });
-    expect(execFile.mock.calls.map((call) => call[1])).toEqual([
-      ['pr', 'view', '7', '--json', 'url,headRefOid'],
-      ['api', `repos/org/repo/commits/${oldSha}/status?per_page=100&page=1`],
-      ['api', `repos/org/repo/commits/${oldSha}/check-runs?filter=all&per_page=100&page=1`],
-    ]);
-  });
-
-  it('rejects missing check-run response fields and changed PR heads', async () => {
-    queueAsyncGhResponses(locator, { statuses: [] });
-    await expect(fetchCodeRabbitCommitActivity(7, '/project', 'head-7'))
-      .rejects.toThrow('Invalid commit statuses');
-    queueAsyncGhResponses(locator, { statuses: [], total_count: 0 }, { check_runs: [] });
-    await expect(fetchCodeRabbitCommitActivity(7, '/project', 'head-7'))
-      .rejects.toThrow('Invalid check runs');
-    queueAsyncGhResponses(locator);
-    await expect(fetchCodeRabbitCommitActivity(7, '/project', 'other-head'))
-      .rejects.toThrow('head changed');
-  });
-
-  it('keeps timeout and API failure distinct from confirmed absence', async () => {
-    queueAsyncGhResponses(Object.assign(new Error('gh timed out'), { code: 'ETIMEDOUT' }));
-    await expect(fetchCodeRabbitCommitActivity(7, '/project', 'head-7', Date.now() + 1_000))
-      .resolves.toBeUndefined();
-    queueAsyncGhResponses(locator, Object.assign(new Error('gh timed out'), { code: 'ETIMEDOUT' }));
-    await expect(fetchCodeRabbitCommitActivity(7, '/project', 'head-7', Date.now() + 1_000))
-      .resolves.toBeUndefined();
-    queueAsyncGhResponses(locator, new Error('API failed'));
-    await expect(fetchCodeRabbitCommitActivity(7, '/project', 'head-7'))
-      .rejects.toThrow('API failed');
-    queueAsyncGhResponses(locator, Object.assign(new Error('aborted'), { name: 'AbortError' }));
-    await expect(fetchCodeRabbitCommitActivity(7, '/project', 'head-7', undefined, new AbortController().signal))
-      .rejects.toThrow('aborted');
-  });
-});
 
 describe('GitHub open PR pagination', () => {
   beforeEach(() => {
@@ -1889,6 +1792,20 @@ describe('GitHub PR command boundary', () => {
       headRepositoryUrl: 'https://github.com/contributor/repo.git',
       headRepositoryPushUrls: ['git@github.com:contributor/repo.git'],
     });
+  });
+
+  it('取得中のhead不整合を両方の観測SHAを持つ専用エラーで返す', async () => {
+    queueAsyncGhResponses(
+      { url: 'https://github.com/org/repo/pull/7', headRefOid: 'head-a' },
+      { data: { repository: { pullRequest: {
+        number: 7, headRefName: 'feature', headRefOid: 'head-b', headRepository: { sshUrl: 'git@github.com:org/repo.git' },
+      } } } },
+    );
+
+    await expect(fetchPrDetails(7, '/project')).rejects.toMatchObject({
+      constructor: PrHeadObservationMismatchError, firstHeadSha: 'head-a', lastHeadSha: 'head-b',
+    });
+    expect(execFile).toHaveBeenCalledTimes(2);
   });
 
   it('base branchが欠損するmerge metadataを拒否する', async () => {

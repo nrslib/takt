@@ -211,6 +211,7 @@ export async function enqueueTaskEffect(
       autoPr: false,
       shouldPublishBranchToOrigin: true,
       prNumber: payload.pr,
+      cacciaExecutionSource: 'from_pr',
     });
     return { success: true, failed: false, ...created, prNumber: payload.pr };
   } catch (error) {

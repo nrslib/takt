@@ -6,7 +6,7 @@ import {
 } from '../../infra/task/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
 import { checkQueuedTaskProviders, terminalProviderConfirmation } from '../tasks/execute/providerPreflight.js';
-import { confirmWithCancel } from '../../shared/prompt/index.js';
+import { confirmWithCancel, selectOption, type SelectOptionItem } from '../../shared/prompt/index.js';
 import { resolveTtyPolicy } from '../../shared/prompt/tty.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
 import {
@@ -106,6 +106,9 @@ function generationPrompt(
     role: message.role,
     content: message.content,
   }));
+  if (options.command === 'requeue' && options.inlineText.trim()) {
+    conversation.push({ role: 'user', content: options.inlineText.trim() });
+  }
   return JSON.stringify({
     stage,
     command: options.command,
@@ -127,7 +130,10 @@ async function generateChoice(
     taskSelection: stage === 'task',
     startSelection: stage === 'start',
     choiceField: field,
-    inlineUtterance: formatInlineUtteranceSection(options.lang, options.command, options.inlineText),
+    requeue: options.command === 'requeue',
+    inlineUtterance: options.command === 'retry'
+      ? formatInlineUtteranceSection(options.lang, options.command, options.inlineText)
+      : '',
   });
   const context: SessionContext = {
     ...options.sessionContext,
@@ -277,12 +283,55 @@ function choiceNotice(choice: Exclude<ParsedChoice, { kind: 'value' }>, options:
   }
 }
 
-function resolveSelectedTask(
-  candidates: readonly TaskListItem[],
-  selectedName: string,
-): TaskListItem | undefined {
-  const matches = candidates.filter((task) => task.name === selectedName);
-  return matches.length === 1 ? matches[0] : undefined;
+async function resolveChoice(
+  choice: ParsedChoice,
+  candidates: SelectOptionItem<string>[],
+  prompt: string,
+  options: AssistantRetryCommandOptions,
+  resumeFailureReason: string | undefined,
+): Promise<
+  | { readonly kind: 'value'; readonly value: string }
+  | { readonly kind: 'notice'; readonly message: string }
+> {
+  const isCandidate = (value: string): boolean =>
+    candidates.filter((candidate) => candidate.value === value).length === 1;
+  if (choice.kind === 'value' && isCandidate(choice.value)) {
+    return choice;
+  }
+  if (options.command === 'retry') {
+    return {
+      kind: 'notice',
+      message: withResumeFailureReason(
+        choice.kind === 'value'
+          ? formatNotice('tui.errors.assistantRetryInvalidResult', options)
+          : choiceNotice(choice, options),
+        resumeFailureReason,
+        options,
+      ),
+    };
+  }
+
+  const selected = await selectOption(
+    withResumeFailureReason(prompt, resumeFailureReason, options),
+    candidates.map((candidate) => ({
+      ...candidate,
+      label: sanitizeTerminalText(candidate.label),
+      ...(candidate.description === undefined ? {} : { description: sanitizeTerminalText(candidate.description) }),
+    })),
+  );
+  if (selected === null) {
+    return {
+      kind: 'notice',
+      message: formatNotice('tui.errors.assistantRetryCancelled', options, undefined, resumeFailureReason),
+    };
+  }
+  if (!isCandidate(selected)) {
+    return {
+      kind: 'notice',
+      message: formatNotice('tui.errors.assistantRetryInvalidResult', options, undefined, resumeFailureReason),
+    };
+  }
+  return { kind: 'value', value: selected };
 }
 
 async function selectTask(
@@ -296,12 +345,21 @@ async function selectTask(
   const choice = await generateChoice(options, 'task', 'taskName', {
     candidates: candidates.map(candidateData),
   });
-  if (choice.kind !== 'value') {
-    return choiceNotice(choice, options);
+  const selected = await resolveChoice(
+    choice,
+    candidates.map((task) => ({
+      value: task.name,
+      label: displayTaskName(task),
+      description: displayTaskSummary(task),
+    })),
+    getLabel('tui.assistantRetry.selectTask', options.lang),
+    options,
+    undefined,
+  );
+  if (selected.kind === 'notice') {
+    return selected.message;
   }
-
-  const task = resolveSelectedTask(candidates, choice.value);
-  return task ?? formatNotice('tui.errors.assistantRetryInvalidResult', options);
+  return candidates.find((task) => task.name === selected.value)!;
 }
 
 async function resolveFailedStart(
@@ -341,14 +399,18 @@ async function resolveFailedStart(
         ...(description === undefined ? {} : { description }),
       })),
     });
-    if (choice.kind !== 'value') {
-      return { kind: 'notice', message: withResumeFailureReason(choiceNotice(choice, options), resumeFailureReason, options) };
-    }
-    if (!selectableOptions.some((option) => option.id === choice.value)) {
-      return { kind: 'notice', message: formatNotice('tui.errors.assistantRetryInvalidResult', options, undefined, resumeFailureReason) };
+    const selected = await resolveChoice(
+      choice,
+      selectableOptions.map(({ id, label, description }) => ({ value: id, label, description })),
+      getLabel('tui.assistantRetry.selectStart', options.lang),
+      options,
+      resumeFailureReason,
+    );
+    if (selected.kind === 'notice') {
+      return selected;
     }
 
-    const start = resolveFailedTaskRetryStart(startContext, choice.value);
+    const start = resolveFailedTaskRetryStart(startContext, selected.value);
     return {
       kind: 'resolved',
       preparation,
@@ -422,6 +484,7 @@ async function requeueFailedTask(
     task,
     projectDir,
     worktreePath: resolved.preparation.worktreePath,
+    freshStart: resolved.preparation.freshStart,
     startStep: resolved.start.startStep,
     retryNote,
     resumePoint: resolved.start.resumePoint,
@@ -439,7 +502,8 @@ async function requeueExceededTask(
   task: TaskListItem,
   options: AssistantRetryCommandOptions,
 ): Promise<string> {
-  if (options.inlineText.trim()) {
+  const startStep = task.data?.start_step?.trim();
+  if (options.inlineText.trim() || !startStep) {
     const resolved = await resolveExceededStart(task, options);
     if (resolved.kind === 'notice') {
       return resolved.message;
@@ -459,10 +523,6 @@ async function requeueExceededTask(
     return getLabel('tui.errors.assistantRetryRequeued', options.lang, {
       task: displayTaskName(task),
     });
-  }
-  const startStep = task.data?.start_step?.trim();
-  if (!startStep) {
-    return formatNotice('tui.errors.assistantRetryGenerationFailed', options, 'The exceeded task has no saved stopping position.');
   }
   const start = getLabel('tui.assistantRetry.exceededStart', options.lang, {
     start: sanitizeTerminalText(startStep),
@@ -541,21 +601,25 @@ async function resolveExceededStart(
     if (task.data?.resume_point === undefined && workflowConfig.steps.some((step) => step.name === savedStep)) {
       choices.unshift({ id: savedPositionId, label: `${options.lang === 'ja' ? '継続' : 'Continue'}: ${savedLabel}`, description: undefined, operation: { kind: 'saved' } });
     }
-    const choice = await generateChoice(options, 'start', 'startOptionId', {
+    const choice: ParsedChoice = options.inlineText.trim() ? await generateChoice(options, 'start', 'startOptionId', {
       task: candidateData(task),
       ...(resumeFailureReason === undefined ? {} : { resumeFailureReason }),
       startOptions: choices.map(({ id, label, description, operation }) => ({
         id, label, description,
         operation: operation.kind === 'saved' || operation.ownership.resumePoint !== undefined ? 'continue' : 'restart',
       })),
-    });
-    if (choice.kind !== 'value') {
-      return { kind: 'notice', message: withResumeFailureReason(choiceNotice(choice, options), resumeFailureReason, options) };
+    }) : { kind: 'unresolved' };
+    const selection = await resolveChoice(
+      choice,
+      choices.map(({ id, label, description }) => ({ value: id, label, description })),
+      getLabel('tui.assistantRetry.selectStart', options.lang),
+      options,
+      resumeFailureReason,
+    );
+    if (selection.kind === 'notice') {
+      return selection;
     }
-    const selected = choices.find((option) => option.id === choice.value);
-    if (selected === undefined) {
-      return { kind: 'notice', message: formatNotice('tui.errors.assistantRetryInvalidResult', options, undefined, resumeFailureReason) };
-    }
+    const selected = choices.find((option) => option.id === selection.value)!;
     return {
       kind: 'resolved',
       label: selected.label,
@@ -654,6 +718,7 @@ async function retryFailedTask(
       task,
       projectDir,
       worktreePath: resolved.preparation.worktreePath,
+      freshStart: resolved.preparation.freshStart,
       startStep: resolved.start.startStep,
       retryNote: undefined,
       resumePoint: resolved.start.resumePoint,

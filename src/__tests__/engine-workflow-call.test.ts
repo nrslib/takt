@@ -199,11 +199,11 @@ steps:
     const actual = await vi.importActual<typeof import('../core/workflow/phase-runner.js')>('../core/workflow/phase-runner.js');
     let parentReportPath = '';
     let reportingStep: string | undefined;
-    vi.mocked(runReportPhase).mockImplementation(async (step, iteration, context) => {
+    vi.mocked(runReportPhase).mockImplementation(async (step, iteration, context, onReportWritten) => {
       if (step.name === 'prepare') parentReportPath = join(context.reportDir, 'requirements.md');
       reportingStep = step.name;
       try {
-        return await actual.runReportPhase(step, iteration, context);
+        return await actual.runReportPhase(step, iteration, context, onReportWritten);
       } finally {
         reportingStep = undefined;
       }

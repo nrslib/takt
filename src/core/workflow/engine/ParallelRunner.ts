@@ -711,7 +711,9 @@ export class ParallelRunner {
               : undefined;
             subStepInstructionByName.set(subStep.name, '');
             return await this.runWorkflowCallSubStep(
-              subStep,
+              step.inputReports === undefined || subStep.inputReports !== undefined
+                ? subStep
+                : { ...subStep, inputReports: step.inputReports },
               state,
               runtime,
               startedAt,
@@ -740,7 +742,9 @@ export class ParallelRunner {
           }
           const { executableSubStep, subIteration } = preparedSubStep;
           const subInstruction = this.deps.stepExecutor.prepareInstruction(
-            executableSubStep,
+            step.inputReports === undefined || executableSubStep.inputReports !== undefined
+              ? executableSubStep
+              : { ...executableSubStep, inputReports: step.inputReports },
             subIteration,
             state,
             task,
@@ -1085,12 +1089,17 @@ export class ParallelRunner {
           const phaseCtx = completionRetryDiagnostic === undefined
             ? basePhaseContext
             : { ...basePhaseContext, completionRetryDiagnostic };
+          const writtenReportNames: string[] = [];
           if (subStep.outputContracts && subStep.outputContracts.length > 0) {
+            let reportGenerationError: ReportPhaseGenerationError | undefined;
             try {
               const reportResult = await runReportPhase(subStep, subIteration, {
                 ...phaseCtx,
                 injectedReports: subInstruction.injectedReports,
                 reportInputs: reportInputTracker.snapshot(),
+              }, (reportName) => {
+                writtenReportNames.push(reportName);
+                this.deps.stepExecutor.recordReportGeneration(phaseCtx.reportDir, reportName, true);
               });
               restartIfLiveInterventionPending();
               if (reportResult && 'blocked' in reportResult) {
@@ -1149,16 +1158,24 @@ export class ParallelRunner {
                   );
                 }
                 log.info(
-                  'Report phase failed for parallel sub-step, continuing to status judgment',
+                  'Report phase failed for parallel sub-step',
                   {
                     step: subStep.name,
                     error: getErrorMessage(reportError),
                   },
                 );
+                reportGenerationError = reportError;
               } else {
                 throw reportError;
               }
             }
+            this.deps.stepExecutor.finalizeReportGeneration(
+              subStep,
+              state,
+              phaseCtx.reportDir,
+              new Set(writtenReportNames),
+              reportGenerationError,
+            );
           }
           let match;
           let commandGates: 'required' | 'skip' = 'required';
@@ -1231,6 +1248,7 @@ export class ParallelRunner {
             stepIteration: subIteration,
             providerInfo: subPm,
           },
+          writtenReportNames,
         );
 
         return {
@@ -1285,8 +1303,6 @@ export class ParallelRunner {
         ...(isProviderStreamParseError(result.reason)
           ? { failureCategory: result.reason.failureCategory }
           : isAgentFailureError(result.reason)
-            && (result.reason.failureCategory === AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED
-              || result.reason.failureCategory === AGENT_FAILURE_CATEGORIES.CREDENTIAL_BINDING_CHANGED)
             ? { failureCategory: result.reason.failureCategory }
             : {}),
       };
@@ -1553,6 +1569,7 @@ export class ParallelRunner {
         stepIteration,
         providerInfo: parentPm,
       },
+      [],
     );
     const selectedFailure = this.selectFailureByDefinitionOrder(subResults);
     return {
