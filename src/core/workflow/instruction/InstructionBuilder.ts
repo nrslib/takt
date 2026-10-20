@@ -17,7 +17,7 @@ import { loadTemplate } from '../../../shared/prompts/index.js';
 import { renderFallbackNotice } from './fallback-notice.js';
 import {
   trimContextContent,
-} from 'faceted-prompting';
+} from '#faceted-prompting';
 import { renderPullRequestContext } from '../pr-context.js';
 import { isNormalOrTeamLeaderWorkflowStep } from '../../models/workflow-types.js';
 import { getCompanionInstructionCopy } from '../companion/evidence.js';
