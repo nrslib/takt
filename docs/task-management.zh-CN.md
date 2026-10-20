@@ -377,7 +377,7 @@ YAML 字段仍叫 `worktree` 是为了兼容；内部使用独立 clone，而不
 | `cwd`（clone 路径） | agent 运行位置和 report 写入位置 |
 | `projectCwd`（项目根目录） | 日志和 session 数据存储位置 |
 
-worktree 执行期间，report 写入 `cwd/.takt/runs/{slug}/reports/`，防止 agent 发现主仓库路径。当 `cwd !== projectCwd` 时跳过 session resume，以避免跨目录污染。
+worktree 执行期间，report 写入 `cwd/.takt/runs/{slug}/reports/`，防止 agent 发现主仓库路径。使用 `session: continue` 且未发生 provider fallback 时，同一 run 内的后续 step 会恢复与当前 clone 关联的相同 persona、provider 和 model 的已保存 session，不会使用其他 clone 或项目根目录的 session。通过 retry、requeue 或 instruct 在现有 clone 中开始新的尝试时，每个 persona 首次执行都创建新 session，后续 step 继续该 session。
 
 ## Session 日志
 

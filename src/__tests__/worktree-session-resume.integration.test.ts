@@ -2,10 +2,11 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { WorkflowConfig, WorkflowStep } from '../core/models/index.js';
+import type { NormalAgentWorkflowStep, WorkflowConfig, WorkflowStep } from '../core/models/index.js';
 import { buildSessionKey } from '../core/workflow/session-key.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import type { Provider, ProviderCompactSessionOptions } from '../infra/providers/types.js';
+import { DebugLogger } from '../shared/utils/debug.js';
 
 vi.mock('../agents/runner.js', () => ({ runAgent: vi.fn() }));
 
@@ -42,16 +43,17 @@ import {
 } from '../infra/config/project/sessionStore.js';
 import { makeRule, makeStep } from './test-helpers.js';
 
-function agentStep(name: string, persona: string, next: string, overrides: Partial<WorkflowStep> = {}): WorkflowStep {
-  return makeStep({
+function agentStep(name: string, persona: string, next: string, overrides: Partial<NormalAgentWorkflowStep> = {}): NormalAgentWorkflowStep {
+  return {
     name,
     persona,
     personaDisplayName: persona,
     engineSynthesized: true,
     instruction: name,
+    passPreviousResponse: false,
     rules: [makeRule('when(true)', next)],
     ...overrides,
-  });
+  };
 }
 
 function workflow(steps: WorkflowStep[]): WorkflowConfig {
@@ -99,11 +101,12 @@ describe('worktree session resume', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     for (const engine of engines.splice(0)) engine.removeAllListeners();
     rmSync(root, { recursive: true, force: true });
   });
 
-  function engineFor(config: WorkflowConfig, options: WorkflowEngineOptions = {}): WorkflowEngine {
+  function engineFor(config: WorkflowConfig, options: Omit<WorkflowEngineOptions, 'projectCwd'> = {}): WorkflowEngine {
     const engine = new WorkflowEngine(config, cloneA, 'test task', {
       projectCwd,
       provider: 'mock',
@@ -120,12 +123,19 @@ describe('worktree session resume', () => {
   }
 
   it('should resume each persona on its second step and persist the current clone sessions', async () => {
+    const debugLog = vi.spyOn(DebugLogger.getInstance(), 'writeLog');
     const result = await executeWorkflow(reviewAndFix(), 'test task', cloneA, {
       projectCwd, provider: 'mock', model: 'test-model', reportDirName: 'normal-run', outputMode: 'silent',
     });
 
     expect(result.success).toBe(true);
     expect(receivedSessions()).toEqual([undefined, undefined, 'session-1', 'session-2']);
+    expect(debugLog).toHaveBeenCalledWith('DEBUG', 'step-executor', 'Running step', expect.objectContaining({
+      step: 'review-again', sessionId: 'session-1',
+    }));
+    expect(debugLog).toHaveBeenCalledWith('DEBUG', 'step-executor', 'Running step', expect.objectContaining({
+      step: 'fix-again', sessionId: 'session-2',
+    }));
     expect(loadWorktreeSessions(projectCwd, cloneA, 'mock')).toMatchObject({
       '["reviewer","mock","test-model"]': 'session-3',
       '["coder","mock","test-model"]': 'session-4',
@@ -203,7 +213,10 @@ describe('worktree session resume', () => {
     };
     const parent = workflow([
       agentStep('review', 'reviewer', 'delegate'),
-      { name: 'delegate', kind: 'workflow_call', call: 'child', rules: [makeRule('COMPLETE', 'review-again')] },
+      {
+        name: 'delegate', kind: 'workflow_call', call: 'child', personaDisplayName: 'delegate', instruction: '',
+        rules: [makeRule('COMPLETE', 'review-again')],
+      },
       agentStep('review-again', 'reviewer', 'COMPLETE'),
     ]);
     const engine = engineFor(parent, { workflowCallResolver: () => child });
