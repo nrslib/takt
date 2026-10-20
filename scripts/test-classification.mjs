@@ -235,7 +235,6 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/deepseek-harness-credential-binding.test.ts',
   'src/__tests__/deepseek-harness-credential-patch.test.ts',
   'src/__tests__/deepseek-harness-credential-settings.test.ts',
-  'src/__tests__/deepseek-harness-error-mapping.test.ts',
   'src/__tests__/deploySkill.test.ts',
   'src/__tests__/deploySkillCodex.test.ts',
   'src/__tests__/directRunFinder.test.ts',
@@ -337,7 +336,6 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/team-leader-schema-loader.test.ts',
   'src/__tests__/tmpdir.test.ts',
   'src/__tests__/traceReport.test.ts',
-  'src/__tests__/tui-conversation-view.test.tsx',
   'src/__tests__/tui-live-intervention-status.test.tsx',
   'src/__tests__/tui-run.test.ts',
   'src/__tests__/usageEventLogger.test.ts',
@@ -382,12 +380,9 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-handoff-progress.test.ts',
   'src/__tests__/it-interactive-esc-menu-routes.test.ts',
   'src/__tests__/it-interactive-routes.test.ts',
-  'src/__tests__/it-issue-dispatch-notification.test.ts',
   'src/__tests__/it-list-esc-menu-routes.test.ts',
   'src/__tests__/it-live-intervention-task-spec.test.ts',
   'src/__tests__/it-manager-conversation-plan.test.ts',
-  'src/__tests__/it-manager-question-display.test.ts',
-  'src/__tests__/it-manager-tui.test.ts',
   'src/__tests__/it-opencode-task-state-mcp.test.ts',
   'src/__tests__/it-phase3-persona-prompts.test.ts',
   'src/__tests__/it-pipe-reader.test.ts',
@@ -400,7 +395,6 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-tui-esc-menu-routes.test.ts',
   'src/__tests__/it-web-ui-chat-tell.test.ts',
   'src/__tests__/it-workflow-loader.test.ts',
-  'src/__tests__/it-workflow-maker-retry-availability.test.ts',
   'src/__tests__/it-workflow-policy.test.ts',
   'src/__tests__/kiro-provider-integration.test.ts',
   'src/__tests__/merge-caccia.test.ts',
@@ -429,6 +423,13 @@ export const lightIntegrationTestFiles = Object.freeze([
 export const heavyParallelIntegrationTestFiles = Object.freeze([
   ...legacyParallelIntegrationTestFiles,
   ...auditedIntegrationBoundaryTestFiles,
+  // Measured slow suites dominate the serial light gate; CI shards this gate.
+  'src/__tests__/deepseek-harness-error-mapping.test.ts',
+  'src/__tests__/it-issue-dispatch-notification.test.ts',
+  'src/__tests__/it-manager-question-display.test.ts',
+  'src/__tests__/it-manager-tui.test.ts',
+  'src/__tests__/it-workflow-maker-retry-availability.test.ts',
+  'src/__tests__/tui-conversation-view.test.tsx',
 ]);
 
 export const parallelIntegrationTestFiles = Object.freeze([
