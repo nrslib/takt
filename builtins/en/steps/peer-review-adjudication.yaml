@@ -12,6 +12,7 @@ tags:
 edit: false
 persona: review-adjudicator
 policy:
+  - process-deviation
   - review-adjudication
   - architecture
   - takt

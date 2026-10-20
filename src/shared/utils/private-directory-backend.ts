@@ -94,6 +94,10 @@ try {
   }
 } catch (error) {
   process.stderr.write(error instanceof Error ? error.message : String(error));
+  const source = error?.code ? error : error?.cause;
+  if (typeof source?.code === 'string') {
+    process.stdout.write(JSON.stringify({ code: source.code, errno: source.errno }));
+  }
   process.exitCode = 1;
 } finally {
   for (const descriptor of [targetDescriptor, stagingDescriptor]) {
