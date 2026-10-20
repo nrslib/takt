@@ -41,7 +41,10 @@ describe('readline conversation confirmation to menu routes', () => {
       const tellInstruction = 'Keep the agreed scope.';
       const capture = fixture.provider([
         { content: 'Initial answer.' },
-        ...(route === 'failed requeue' ? [{ content: JSON.stringify({ startOptionId: startId }) }] : []),
+        ...(route === 'failed requeue' ? [
+          { content: 'Requeue menu-task from menu-workflow > implement.' },
+          { content: JSON.stringify({ startOptionId: startId }) },
+        ] : []),
         ...(route === 'tell' ? [{ content: tellInstruction }] : []),
         { content: 'Continued answer.' },
       ]);

@@ -182,17 +182,15 @@ const options: AssistantRetryCommandOptions = {
   lang: 'en',
   command: 'retry',
   inlineText: '',
-  history: [
-    { role: 'user', content: 'Fix the diagnostic parser.' },
-    { role: 'assistant', content: 'The failed task is fix-quint-diagnostics.' },
-  ],
+  history: [],
+  sourceContext: 'Repair the diagnostic parser.',
   sessionContext: {
     provider: {} as AssistantRetryCommandOptions['sessionContext']['provider'],
     providerType: 'mock',
     model: undefined,
     lang: 'en',
     personaName: 'assistant',
-    sessionId: 'conversation-session',
+    sessionId: undefined,
     mcpServers: { tasks: { command: 'task-mcp' } },
     taskStateMcpServers: { tasks: { command: 'task-mcp' } },
   },
@@ -208,25 +206,36 @@ function setStartResponse(content: string): void {
 
 function choiceFailures(field: 'taskName' | 'startOptionId') {
   return [
-    { failure: 'null choice', response: { result: { success: true, content: JSON.stringify({ [field]: null }) } } },
-    { failure: 'invalid JSON', response: { result: { success: true, content: 'invalid JSON' } } },
-    { failure: 'extra field', response: { result: { success: true, content: JSON.stringify({ [field]: 'unknown', extra: true }) } } },
-    { failure: 'unknown candidate', response: { result: { success: true, content: JSON.stringify({ [field]: 'unknown' }) } } },
-    { failure: 'missing result', response: { result: null, error: 'provider unavailable' } },
-    { failure: 'unsuccessful result', response: { result: { success: false, content: 'provider failed' } } },
-    { failure: 'thrown error', response: new Error('provider threw') },
+    { failure: 'null choice', reask: false, response: { result: { success: true, content: JSON.stringify({ [field]: null }) } } },
+    { failure: 'invalid JSON', reask: true, response: { result: { success: true, content: 'invalid JSON' } } },
+    { failure: 'extra field', reask: true, response: { result: { success: true, content: JSON.stringify({ [field]: 'unknown', extra: true }) } } },
+    { failure: 'unknown candidate', reask: true, response: { result: { success: true, content: JSON.stringify({ [field]: 'unknown' }) } } },
+    { failure: 'missing result', reask: false, response: { result: null, error: 'provider unavailable' } },
+    { failure: 'unsuccessful result', reask: false, response: { result: { success: false, content: 'provider failed' } } },
+    { failure: 'thrown error', reask: false, response: new Error('provider threw') },
   ];
 }
 
-function setChoiceFailure(response: ReturnType<typeof choiceFailures>[number]['response']): void {
+function setChoiceFailure(response: ReturnType<typeof choiceFailures>[number]['response'], reask: boolean): void {
   if (response instanceof Error) mocks.callAIWithRetry.mockRejectedValueOnce(response);
-  else mocks.callAIWithRetry.mockResolvedValueOnce(response);
+  else {
+    mocks.callAIWithRetry.mockResolvedValueOnce(response);
+    if (reask) {
+      mocks.callAIWithRetry.mockResolvedValueOnce(response);
+    }
+  }
 }
 
 function expectNoRequeue(): void {
   expect(mocks.persistFailedTaskRetry).not.toHaveBeenCalled();
   expect(mocks.requeueTask).not.toHaveBeenCalled();
   expect(mocks.requeueExceededTask).not.toHaveBeenCalled();
+}
+
+function expectChoiceExample(prompt: unknown, field: 'taskName' | 'startOptionId', candidates: readonly string[]): void {
+  const text = String(prompt).replaceAll('\\"', '"');
+  const examples = [...text.matchAll(/\{\s*"(taskName|startOptionId)"\s*:\s*"([^"\n]+)"\s*\}/gu)];
+  expect(examples.some((example) => example[1] === field && candidates.includes(example[2]!))).toBe(true);
 }
 
 function setPreparedStart(): void {
@@ -238,9 +247,9 @@ function setPreparedStart(): void {
     options: {},
     startOptions: {
       options: [
-        { id: 'resume-checkpoint', label: 'Resume from implement', selectable: true },
-        { id: 'heading:review', label: 'review:', selectable: false },
-        { id: 'restart:implement', label: 'Restart implement', selectable: true },
+        { id: 'resume-checkpoint', label: 'Resume from implement', path: '"development" > "implement"', selectable: true },
+        { id: 'heading:review', label: 'review:', path: '"development" > "review"', selectable: false },
+        { id: 'restart:implement', label: 'Restart implement', path: '"development" > "implement"', selectable: true },
       ],
       defaultId: 'resume-checkpoint',
     },
@@ -298,6 +307,493 @@ afterEach(() => {
 });
 
 describe('runAssistantRetryCommand', () => {
+  describe('provider selection constraints', () => {
+    beforeEach(() => {
+      mocks.buildFailedTaskRetryStartContext.mockReturnValue({
+        workflowName: 'development', workflowConfig: exceededWorkflow, options: {},
+        startOptions: buildTaskRetryStartOptions(exceededWorkflow, { projectCwd: options.cwd, lookupCwd: preparation.interactionCwd }),
+      });
+    });
+
+    describe.each(['mock', 'copilot'] as const)('%s', (providerType) => {
+      describe.each(['retry', 'requeue'] as const)('/%s', (command) => {
+        it.each([1, 2])('selects from %s tasks and saves the chosen start only after approval', async (count) => {
+          const other = { ...task, name: 'another-task' };
+          const selectedTask = count === 1 ? task : other;
+          mocks.listAllTaskItems.mockReturnValue(count === 1 ? [task] : [task, other]);
+          if (count > 1) setStartResponse(JSON.stringify({ taskName: other.name }));
+          setStartResponse('{"startOptionId":"restart:0"}');
+          if (command === 'retry') setStartResponse('# Revised order');
+          mocks.selectOption.mockImplementation(async (message, choices) => {
+            expectNoRequeue();
+            const values = (choices as Array<{ value: string }>).map(({ value }) => value);
+            if (values.includes('save_task')) {
+              expect(mocks.info.mock.calls.map(([text]) => String(text)).join('\n')).toContain('# Revised order');
+              return 'save_task';
+            }
+            throw new Error(`Unexpected manual selection: ${String(message)}`);
+          });
+          mocks.confirmWithCancel.mockImplementation(async () => {
+            expectNoRequeue();
+            return { kind: 'value', value: true };
+          });
+
+          const notice = await runAssistantRetryCommand({ ...options, command,
+            sessionContext: { ...options.sessionContext, providerType } });
+
+          const selectionCalls = count;
+          expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(selectionCalls + (command === 'retry' ? 1 : 0));
+          expect(mocks.selectOption).toHaveBeenCalledTimes(command === 'retry' ? 1 : 0);
+          expect(mocks.prepareFailedTaskRetry).toHaveBeenCalledExactlyOnceWith(selectedTask, options.cwd);
+          expect(mocks.resolveFailedTaskRetryStart).toHaveBeenCalledExactlyOnceWith(expect.anything(), 'restart:0');
+          expect(mocks.persistFailedTaskRetry).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+            task: selectedTask, startStep: undefined, resumePoint: undefined, restartPoint: implementRestartPoint,
+            ...(command === 'retry' ? { revisedOrder: { content: '# Revised order', lang: 'en' } } : {}),
+          }));
+          expect(mocks.confirmWithCancel).toHaveBeenCalledTimes(command === 'retry' ? 0 : 1);
+          expect(notice).toContain('pending');
+        });
+      });
+
+      it.each(['restart:0', 'continue-saved-position'])('preserves the exceeded operation %s', async (id) => {
+        mocks.listAllTaskItems.mockReturnValue([exceededTask]);
+        setStartResponse(JSON.stringify({ startOptionId: id }));
+        mocks.confirmWithCancel.mockImplementation(async () => {
+          expectNoRequeue();
+          return { kind: 'value', value: true };
+        });
+
+        const notice = await runAssistantRetryCommand({ ...options, command: 'requeue',
+          inlineText: 'Use the agreed start.', sessionContext: { ...options.sessionContext, providerType } });
+
+        expect(mocks.callAIWithRetry).toHaveBeenCalledOnce();
+        expect(mocks.selectOption).not.toHaveBeenCalled();
+        expect(mocks.confirmWithCancel).toHaveBeenCalledOnce();
+        if (id === 'continue-saved-position') {
+          expect(mocks.requeueExceededTask).toHaveBeenCalledExactlyOnceWith(exceededTask.name);
+          expect(mocks.requeueTask).not.toHaveBeenCalled();
+        } else {
+          expect(mocks.requeueTask).toHaveBeenCalledExactlyOnceWith(exceededTask.name, ['exceeded'], {
+            restartPoint: implementRestartPoint, retryNote: undefined,
+          });
+          expect(mocks.requeueExceededTask).not.toHaveBeenCalled();
+        }
+        expect(mocks.persistFailedTaskRetry).not.toHaveBeenCalled();
+        expect(notice).toContain('pending');
+      });
+    });
+
+    describe.each(['retry', 'requeue'] as const)('Copilot /%s cancellation', (command) => {
+      it.each(['task', 'start', 'confirmation'] as const)('leaves the task unchanged when %s is cancelled', async (stage) => {
+        if (stage === 'task') mocks.listAllTaskItems.mockReturnValue([task, { ...task, name: 'another-task' }]);
+        if (stage !== 'confirmation') {
+          const field = stage === 'task' ? 'taskName' : 'startOptionId';
+          setStartResponse(JSON.stringify({ [field]: 'unknown' }));
+          setStartResponse(JSON.stringify({ [field]: 'unknown' }));
+          mocks.selectOption.mockImplementationOnce(async () => {
+            expectNoRequeue();
+            expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(2);
+            return null;
+          });
+        }
+        if (stage === 'confirmation') {
+          setStartResponse('{"startOptionId":"restart:0"}');
+          if (command === 'retry') {
+            setStartResponse('# Revised order');
+            mocks.selectOption.mockImplementationOnce(async () => {
+              expectNoRequeue();
+              return 'continue';
+            });
+          } else {
+            mocks.confirmWithCancel.mockImplementationOnce(async () => {
+              expectNoRequeue();
+              return { kind: 'cancelled' };
+            });
+          }
+        }
+
+        const notice = await runAssistantRetryCommand({ ...options, command,
+          sessionContext: { ...options.sessionContext, providerType: 'copilot' } });
+
+        expectNoRequeue();
+        expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(stage === 'confirmation' ? (command === 'retry' ? 2 : 1) : 2);
+        expect(mocks.confirmWithCancel).toHaveBeenCalledTimes(stage === 'confirmation' && command === 'requeue' ? 1 : 0);
+        expect(notice).toContain('not changed');
+      });
+    });
+  });
+
+  describe.each(['retry', 'requeue'] as const)('/%s agreement extraction recovery', (command) => {
+    const history = [{ role: 'user' as const, content: 'Restart the failed task at implement.' }];
+
+    it.each([
+      { failure: 'missing result', response: { result: null, error: 'provider unavailable' }, single: false },
+      { failure: 'unsuccessful result', response: { result: { success: false, content: 'provider rejected' } }, single: false },
+      { failure: 'empty result', response: { result: { success: true, content: '   ' } }, single: true },
+      { failure: 'exception', response: new Error('provider threw'), single: false },
+    ])('selects manually after $failure and saves only after approval', async ({ response, single }) => {
+      const other = { ...task, name: 'another-task' };
+      mocks.listAllTaskItems.mockReturnValue(single ? [task] : [task, other]);
+      setChoiceFailure(response, false);
+      if (command === 'retry') setStartResponse('# Revised order');
+      mocks.selectOption.mockImplementation(async (message, choices) => {
+        expectNoRequeue();
+        const values = (choices as Array<{ value: string }>).map(({ value }) => value);
+        if (values.includes('save_task')) return 'save_task';
+        expect(mocks.callAIWithRetry).toHaveBeenCalledOnce();
+        expect(message).not.toContain(getLabel('tui.errors.assistantRetryFormatMismatch', 'en'));
+        if (values.includes(other.name)) return other.name;
+        expect(values).not.toContain('heading:review');
+        return 'restart:implement';
+      });
+      mocks.confirmWithCancel.mockImplementation(async () => {
+        expectNoRequeue();
+        return { kind: 'value', value: true };
+      });
+
+      const notice = await runAssistantRetryCommand({ ...options, command, history });
+
+      expect(notice).toContain('pending');
+      expect(mocks.selectOption).toHaveBeenCalledTimes((single ? 1 : 2) + (command === 'retry' ? 1 : 0));
+      expect(mocks.resolveFailedTaskRetryStart).toHaveBeenCalledExactlyOnceWith(expect.anything(), 'restart:implement');
+      expect(mocks.persistFailedTaskRetry).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        task: single ? task : other, restartPoint: implementRestartPoint,
+        ...(command === 'retry' ? { revisedOrder: { content: '# Revised order', lang: 'en' } } : {}),
+      }));
+      expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(command === 'retry' ? 2 : 1);
+      expect(JSON.parse(mocks.callAIWithRetry.mock.calls[0]![0]).conversation).toEqual(history);
+    });
+
+    it('recovers from a session-only extraction exception without adding a task menu', async () => {
+      mocks.callAIWithRetry.mockRejectedValueOnce(new Error('session extraction failed'));
+      mocks.selectOption.mockResolvedValueOnce('resume-checkpoint');
+      if (command === 'retry') setStartResponse('# Revised order');
+      const sessionContext = { ...options.sessionContext, sessionId: 'conversation-session' };
+
+      const notice = await runAssistantRetryCommand({ ...options, command, sessionContext });
+
+      expect(notice).toContain('pending');
+      expect(mocks.callAIWithRetry.mock.calls[0]![4].sessionId).toBe('conversation-session');
+      expect(JSON.parse(mocks.callAIWithRetry.mock.calls[0]![0]).conversation).toEqual([]);
+      expect(mocks.selectOption).toHaveBeenCalledTimes(command === 'retry' ? 2 : 1);
+      expect(mocks.resolveFailedTaskRetryStart).toHaveBeenCalledExactlyOnceWith(expect.anything(), 'resume-checkpoint');
+      expect(mocks.persistFailedTaskRetry).toHaveBeenCalledOnce();
+      expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(command === 'retry' ? 2 : 1);
+      expect(sessionContext.sessionId).toBe('conversation-session');
+    });
+
+    it.each(['task cancellation', 'start cancellation', 'confirmation cancellation', 'unknown task', 'heading ID'] as const)(
+      'does not change tasks after extraction failure and %s', async (failure) => {
+        const atTask = failure === 'task cancellation' || failure === 'unknown task';
+        if (atTask) mocks.listAllTaskItems.mockReturnValue([task, { ...task, name: 'another-task' }]);
+        mocks.callAIWithRetry.mockResolvedValueOnce({ result: null, error: 'extraction failed' });
+        mocks.selectOption.mockResolvedValueOnce(failure === 'unknown task' ? 'unknown-task'
+          : failure === 'heading ID' ? 'heading:review'
+          : failure === 'confirmation cancellation' ? 'restart:implement' : null);
+        if (failure === 'confirmation cancellation') {
+          if (command === 'retry') {
+            setStartResponse('# Revised order');
+            mocks.selectOption.mockResolvedValueOnce('continue');
+          } else mocks.confirmWithCancel.mockResolvedValueOnce({ kind: 'cancelled' });
+        }
+
+        const notice = await runAssistantRetryCommand({ ...options, command, history });
+
+        expect(notice).toBe(getLabel(failure === 'unknown task' || failure === 'heading ID'
+          ? 'tui.errors.assistantRetryInvalidResult' : 'tui.errors.assistantRetryCancelled', 'en'));
+        expectNoRequeue();
+        expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(failure === 'confirmation cancellation' && command === 'retry' ? 2 : 1);
+        if (failure !== 'confirmation cancellation') expect(mocks.confirmWithCancel).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  it.each(['restart:0', 'continue-saved-position'])('uses the selected exceeded operation %s after extraction failure', async (id) => {
+    mocks.listAllTaskItems.mockReturnValue([exceededTask]);
+    mocks.callAIWithRetry.mockRejectedValueOnce(new Error('extraction failed'));
+    mocks.selectOption.mockResolvedValueOnce(id);
+    mocks.confirmWithCancel.mockImplementation(async () => {
+      expectNoRequeue();
+      return { kind: 'value', value: true };
+    });
+
+    await runAssistantRetryCommand({ ...options, command: 'requeue', inlineText: 'Use the agreed start.',
+      history: [{ role: 'user', content: 'Choose the start.' }] });
+
+    expect(mocks.callAIWithRetry).toHaveBeenCalledOnce();
+    expect(mocks.selectOption).toHaveBeenCalledOnce();
+    if (id === 'continue-saved-position') {
+      expect(mocks.requeueExceededTask).toHaveBeenCalledExactlyOnceWith(exceededTask.name);
+      expect(mocks.requeueTask).not.toHaveBeenCalled();
+    } else {
+      expect(mocks.requeueTask).toHaveBeenCalledExactlyOnceWith(exceededTask.name, ['exceeded'], {
+        restartPoint: implementRestartPoint, retryNote: undefined,
+      });
+      expect(mocks.requeueExceededTask).not.toHaveBeenCalled();
+    }
+    expect(mocks.persistFailedTaskRetry).not.toHaveBeenCalled();
+  });
+
+  it.each(['leaf', 'call', 'renamed leaf'].flatMap((position) =>
+    [true, false].map((onHeading) => ({ position, onHeading }))))(
+    'projects authored headings to exceeded candidates: $position, heading=$onHeading', async ({ position, onHeading }) => {
+    const gateName = position === 'renamed leaf' ? 'final-gate-new' : 'final-gate';
+    const leaf = attachWorkflowOpaqueRef({ name: 'leaf', initialStep: gateName, maxSteps: 10,
+      subworkflow: { callable: true }, steps: [{ name: gateName, personaDisplayName: 'gate', instruction: 'Gate' }],
+    }, 'project:leaf');
+    const child = attachWorkflowOpaqueRef({ name: 'child', initialStep: 'review', maxSteps: 10,
+      subworkflow: { callable: true }, steps: [
+        { name: 'review', kind: 'workflow_call' as const, call: 'leaf', personaDisplayName: 'review', instruction: '',
+          ...(onHeading ? { description: 'Child review' } : {}) },
+      ],
+    }, 'project:child');
+    const root = attachWorkflowOpaqueRef({ name: 'development', initialStep: 'final-gate', maxSteps: 10, steps: [
+      { name: 'final-gate', personaDisplayName: 'gate', instruction: 'Gate', ...(!onHeading ? { description: 'Child review' } : {}) },
+      { name: 'delegate', kind: 'workflow_call' as const, call: 'child', personaDisplayName: 'delegate', instruction: '',
+        description: 'Root review' },
+    ] }, 'project:development');
+    const resumePoint: WorkflowResumePoint = { ...exceededResumePoint, stack: [
+      { workflow: 'development', workflow_ref: 'project:development', step: 'delegate', kind: 'workflow_call', occurrence: 1, call_instance: 1 },
+      { workflow: 'child', workflow_ref: 'project:child', step: 'review', kind: 'workflow_call', occurrence: 1, call_instance: 1 },
+      ...(position === 'call' ? [] : [{ workflow: 'leaf', workflow_ref: 'project:leaf', step: 'final-gate', kind: 'agent' as const, occurrence: 1 }]),
+    ] };
+    mocks.loadWorkflowByIdentifier.mockReturnValue(root);
+    mocks.resolveWorkflowCallTarget.mockImplementation((_parent, step) => step.call === 'child' ? child : leaf);
+    mocks.listAllTaskItems.mockReturnValue([{ ...exceededTask, data: { ...exceededTask.data!, resume_point: resumePoint } }]);
+    setStartResponse('not JSON');
+    setStartResponse('{"startOptionId":"resume-checkpoint"}');
+
+    await runAssistantRetryCommand({ ...options, command: 'requeue', inlineText: 'Restart child final-gate.' });
+
+    expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(2);
+    for (const [prompt] of mocks.callAIWithRetry.mock.calls) {
+      const payload = JSON.parse(prompt);
+      for (const id of ['restart:1.0.0', 'resume-checkpoint']) {
+        expect(payload.startOptions.find((option: { id: string }) => option.id === id)).toMatchObject({
+          path: id === 'resume-checkpoint' && position !== 'leaf'
+            ? '"development" > "delegate" → "child" > "review"'
+            : `"development" > "delegate" → "child" > "review" → "leaf" > "${gateName}"`,
+          operation: id === 'resume-checkpoint' ? 'continue' : 'restart',
+        });
+        expect(payload.startOptions.find((option: { id: string }) => option.id === id).headings).toEqual([
+          { path: '"development" > "delegate"', description: 'Root review' },
+          { path: '"development" > "delegate" → "child" > "review"', ...(onHeading ? { description: 'Child review' } : {}) },
+        ]);
+      }
+      expect(payload.startOptions.every((option: { id: string }) => !option.id.startsWith('heading:'))).toBe(true);
+    }
+    expect(mocks.requeueTask.mock.calls[0]![2].resumePoint).toEqual({ ...resumePoint,
+      stack: position === 'leaf' ? resumePoint.stack : resumePoint.stack.slice(0, 2) });
+    expect(mocks.requeueExceededTask).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('keeps single exceeded saved-position continuation without extraction: history=%s', async (hasHistory) => {
+    mocks.listAllTaskItems.mockReturnValue([exceededTask]);
+    await runAssistantRetryCommand({ ...options, command: 'requeue',
+      history: hasHistory ? [{ role: 'user', content: 'Continue.' }] : [] });
+    expect(mocks.callAIWithRetry).not.toHaveBeenCalled();
+    expect(mocks.selectOption).not.toHaveBeenCalled();
+    expect(mocks.requeueExceededTask).toHaveBeenCalledExactlyOnceWith(exceededTask.name);
+  });
+
+  describe.each(
+    (['mock', 'copilot'] as const).flatMap((providerType) =>
+      (['retry', 'requeue'] as const).map((command) => ({ providerType, command }))),
+  )('$providerType /$command independent selection', ({ providerType, command }) => {
+    const providerOptions = { ...options, sessionContext: { ...options.sessionContext, providerType } };
+    it('accepts a candidate ID in a single-property JSON response without a correction or manual start menu', async () => {
+      mocks.buildFailedTaskRetryStartContext.mockReturnValueOnce({
+        workflowName: 'development', workflowConfig: { steps: [] }, options: {},
+        startOptions: { options: [{ id: 'restart:0.4.3', label: 'Restart implement',
+          path: '"development" > "implement"', selectable: true }], defaultId: 'restart:0.4.3' },
+      });
+      setStartResponse('{"startOptionId":"restart:0.4.3"}');
+      if (command === 'retry') setStartResponse('# Revised order');
+
+      await runAssistantRetryCommand({ ...providerOptions, command });
+
+      expect(mocks.resolveFailedTaskRetryStart).toHaveBeenCalledWith(expect.anything(), 'restart:0.4.3');
+      expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(command === 'retry' ? 2 : 1);
+      expect(mocks.selectOption).toHaveBeenCalledTimes(command === 'retry' ? 1 : 0);
+      expect(mocks.persistFailedTaskRetry).toHaveBeenCalledWith(expect.objectContaining({ restartPoint: implementRestartPoint }));
+    });
+
+    it.each([
+      ['extra property', '{"startOptionId":"restart:implement","reason":"agreed"}'],
+      ['backtick fence', '```json\n{"startOptionId":"restart:implement"}\n```'],
+      ['tilde fence', '~~~json\n{"startOptionId":"restart:implement"}\n~~~'],
+      ['unclosed fence', '```json\n{"startOptionId":"restart:implement"}'],
+      ['nested fences', '```md\n~~~json\n{"startOptionId":"restart:implement"}\n~~~\n```'],
+      ['quote', '> {"startOptionId":"restart:implement"}'],
+      ['explanation', 'Choose this: {"startOptionId":"restart:implement"}'],
+      ['array', '[{"startOptionId":"restart:implement"}]'],
+      ['JSON string', '"{\\"startOptionId\\":\\"restart:implement\\"}"'],
+      ['wrong key', '{"start_step":"restart:implement"}'],
+      ['wrong type', '{"startOptionId":1}'],
+      ['empty value', '{"startOptionId":""}'],
+      ['unknown ID', '{"startOptionId":"restart:999"}'],
+      ['heading', '{"startOptionId":"heading:review"}'],
+    ])('corrects %s once before accepting the candidate', async (_name, response) => {
+      setStartResponse(response);
+      setStartResponse('{"startOptionId":"restart:implement"}');
+      if (command === 'retry') setStartResponse('# Revised order');
+
+      await runAssistantRetryCommand({ ...providerOptions, command });
+
+      expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(command === 'retry' ? 3 : 2);
+      expect(mocks.selectOption).toHaveBeenCalledTimes(command === 'retry' ? 1 : 0);
+      expect(mocks.resolveFailedTaskRetryStart).toHaveBeenCalledExactlyOnceWith(expect.anything(), 'restart:implement');
+      expect(mocks.persistFailedTaskRetry).toHaveBeenCalledWith(expect.objectContaining({ restartPoint: implementRestartPoint }));
+      const first = String(mocks.callAIWithRetry.mock.calls[0]![0]);
+      const correction = String(mocks.callAIWithRetry.mock.calls[1]![0]);
+      expect(correction).not.toBe(first);
+      for (const [prompt, , tools, , context, callOptions] of mocks.callAIWithRetry.mock.calls.slice(0, 2)) {
+        expectChoiceExample(prompt, 'startOptionId', ['resume-checkpoint', 'restart:implement']);
+        expect(tools).toEqual([]);
+        expect(context).toMatchObject({ sessionId: undefined, mcpServers: undefined, taskStateMcpServers: undefined, disableSessionRetry: true });
+        expect(callOptions).toMatchObject({ persistSession: false, permissionMode: 'readonly', internalAgentIsolation: 'strict-readonly' });
+      }
+    });
+
+    it('reasks each stage once then saves both manual choices only after approval', async () => {
+      const other = { ...task, name: 'another-task' };
+      mocks.listAllTaskItems.mockReturnValue([task, other]);
+      setStartResponse('not JSON');
+      setStartResponse('{"taskName":"missing-task"}');
+      setStartResponse('not JSON');
+      setStartResponse('{"startOptionId":"heading:review"}');
+      if (command === 'retry') setStartResponse('# Revised order');
+      mocks.selectOption.mockImplementation(async (_prompt, choices) => {
+        expectNoRequeue();
+        const values = (choices as Array<{ value: string }>).map((choice) => choice.value);
+        if (values.includes(other.name)) {
+          expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(2);
+          return other.name;
+        }
+        if (values.includes('restart:implement')) {
+          expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(4);
+          expect(values).not.toContain('heading:review');
+          return 'restart:implement';
+        }
+        return 'save_task';
+      });
+      mocks.confirmWithCancel.mockImplementation(async () => {
+        expectNoRequeue();
+        return { kind: 'value', value: true };
+      });
+
+      await runAssistantRetryCommand({ ...providerOptions, command });
+
+      expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(command === 'retry' ? 5 : 4);
+      expect(mocks.prepareFailedTaskRetry).toHaveBeenCalledWith(other, providerOptions.cwd);
+      expect(mocks.persistFailedTaskRetry).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ task: other, restartPoint: implementRestartPoint }));
+    });
+
+    it('accepts a corrected task name then gives start selection its own correction attempt', async () => {
+      const other = { ...task, name: 'another-task' };
+      mocks.listAllTaskItems.mockReturnValue([task, other]);
+      setStartResponse('{"taskName":"unknown"}');
+      setStartResponse('{"taskName":"another-task"}');
+      setStartResponse('not JSON');
+      setStartResponse('{"startOptionId":"restart:implement"}');
+      if (command === 'retry') setStartResponse('# Revised order');
+
+      await runAssistantRetryCommand({ ...providerOptions, command });
+
+      expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(command === 'retry' ? 5 : 4);
+      expect(mocks.selectOption).toHaveBeenCalledTimes(command === 'retry' ? 1 : 0);
+      expect(mocks.prepareFailedTaskRetry).toHaveBeenCalledWith(other, providerOptions.cwd);
+      expect(mocks.persistFailedTaskRetry).toHaveBeenCalledWith(expect.objectContaining({ task: other, restartPoint: implementRestartPoint }));
+      for (const [prompt] of mocks.callAIWithRetry.mock.calls.slice(0, 2)) {
+        expectChoiceExample(prompt, 'taskName', [task.name, other.name]);
+      }
+    });
+
+    it.each(['task', 'start', 'confirmation'] as const)('does not persist when the manual %s is cancelled', async (stage) => {
+      if (stage === 'task') mocks.listAllTaskItems.mockReturnValue([task, { ...task, name: 'another-task' }]);
+      const field = stage === 'task' ? 'taskName' : 'startOptionId';
+      setStartResponse(JSON.stringify({ [field]: 'unknown' }));
+      setStartResponse(JSON.stringify({ [field]: 'unknown' }));
+      mocks.selectOption.mockResolvedValueOnce(stage === 'confirmation' ? 'restart:implement' : null);
+      if (stage === 'confirmation') {
+        if (command === 'retry') {
+          setStartResponse('# Revised order');
+          mocks.selectOption.mockResolvedValueOnce('continue');
+        } else mocks.confirmWithCancel.mockResolvedValueOnce({ kind: 'cancelled' });
+      }
+
+      const notice = await runAssistantRetryCommand({ ...providerOptions, command });
+
+      expect(notice).toContain('not changed');
+      expectNoRequeue();
+      expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(stage === 'confirmation' && command === 'retry' ? 3 : 2);
+    });
+
+    it('passes one extracted agreement and inline guidance to every fresh selection and correction', async () => {
+      const history = Array.from({ length: 12 }, (_, index) => ({ role: 'user' as const, content: `Unrelated detail ${index}` }));
+      history.push({ role: 'user', content: 'Agreed: restart fix-quint-diagnostics at development > implement.' });
+      history.push({ role: 'user', content: 'Yes, use that position.' });
+      const digest = 'Restart fix-quint-diagnostics at development > implement.';
+      const context = { ...providerOptions.sessionContext, sessionId: 'existing-conversation' };
+      mocks.listAllTaskItems.mockReturnValue([task, { ...task, name: 'another-task' }]);
+      setStartResponse(digest);
+      setStartResponse('not JSON');
+      setStartResponse('{"taskName":"fix-quint-diagnostics"}');
+      setStartResponse('{"startOptionId":"unknown"}');
+      setStartResponse('{"startOptionId":"restart:implement"}');
+      if (command === 'retry') setStartResponse('# Revised order');
+
+      await runAssistantRetryCommand({ ...providerOptions, command, history, sessionContext: context,
+        inlineText: 'Preserve Android support.', sourceContext: 'SOURCE_CONTEXT_ONLY', promptContext: 'PROMPT_CONTEXT_ONLY' });
+
+      expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(command === 'retry' ? 6 : 5);
+      const extraction = String(mocks.callAIWithRetry.mock.calls[0]![0]);
+      for (const message of history) expect(extraction).toContain(message.content);
+      for (const [prompt, , tools, , selectedContext, selectedOptions] of mocks.callAIWithRetry.mock.calls.slice(1, 5)) {
+        const payload = JSON.parse(String(prompt)) as Record<string, unknown>;
+        const body = JSON.stringify(payload);
+        expect(body).toContain(digest);
+        expect(body).toContain('Preserve Android support.');
+        for (const forbidden of [...history.slice(0, 12).map((message) => message.content), 'SOURCE_CONTEXT_ONLY', 'PROMPT_CONTEXT_ONLY', preparation.previousOrderContent]) {
+          expect(body).not.toContain(forbidden);
+        }
+        expect(selectedContext.sessionId).toBeUndefined();
+        expect(tools).toEqual([]);
+        expect(selectedOptions).toMatchObject({ persistSession: false, permissionMode: 'readonly', internalAgentIsolation: 'strict-readonly' });
+        const field = payload.stage === 'task' ? 'taskName' : 'startOptionId';
+        expectChoiceExample(prompt, field, field === 'taskName'
+          ? [task.name, 'another-task'] : ['resume-checkpoint', 'restart:implement']);
+      }
+      expect(context.sessionId).toBe('existing-conversation');
+    });
+  });
+
+  describe.each(['en', 'ja'] as const)('selection failure reasons in %s', (lang) => {
+    it('distinguishes the last format failure, unknown task and unknown start in manual menu messages', async () => {
+      const messages: string[] = [];
+      for (const [stage, last, pattern] of [
+        ['task', 'not JSON', lang === 'ja' ? /形式|JSON/u : /format|JSON/iu],
+        ['task', '{"taskName":"missing"}', lang === 'ja' ? /タスク名/u : /task name/iu],
+        ['start', '{"startOptionId":"missing"}', lang === 'ja' ? /開始位置.*ID/u : /start.*ID/iu],
+      ] as const) {
+        mocks.listAllTaskItems.mockReturnValue(stage === 'task' ? [task, { ...task, name: 'other' }] : [task]);
+        setStartResponse(last === 'not JSON' ? '{"taskName":"missing-first"}' : 'not JSON');
+        setStartResponse(last);
+        mocks.selectOption.mockResolvedValueOnce(null);
+        const previous = mocks.selectOption.mock.calls.length;
+
+        await runAssistantRetryCommand({ ...options, command: 'retry', lang });
+
+        expect(mocks.selectOption.mock.calls).toHaveLength(previous + 1);
+        const message = String(mocks.selectOption.mock.calls.at(-1)![0]);
+        expect(message).toMatch(pattern);
+        messages.push(message);
+        expectNoRequeue();
+      }
+      expect(new Set(messages).size).toBe(3);
+    });
+  });
+
   it.each(['failed', 'exceeded'] as const)('should return from %s requeue confirmation on Escape without changing the task', async (kind) => {
     mocks.listAllTaskItems.mockReturnValue([kind === 'failed' ? task : exceededTask]);
     if (kind === 'failed') setStartResponse('{"startOptionId":"resume-checkpoint"}');
@@ -369,7 +865,7 @@ describe('runAssistantRetryCommand', () => {
         { result: null, error: 'provider unavailable' },
       ])('keeps the explanation when a start cannot be selected: %j', async (response) => {
         const reason = setInvalidSavedStart();
-        mocks.callAIWithRetry.mockResolvedValueOnce(response);
+        mocks.callAIWithRetry.mockResolvedValue(response);
         mocks.selectOption.mockResolvedValueOnce(null);
 
         const notice = await runAssistantRetryCommand({ ...options, lang, command });
@@ -377,8 +873,7 @@ describe('runAssistantRetryCommand', () => {
         expect(notice).toContain(getLabel('tui.assistantRetry.resumeUnavailable', lang, { reason }));
         expect(mocks.resolveFailedTaskRetryStart).not.toHaveBeenCalled();
         expect(mocks.confirmWithCancel).not.toHaveBeenCalled();
-        if (command === 'requeue') expect(mocks.selectOption).toHaveBeenCalledOnce();
-        else expect(mocks.selectOption).not.toHaveBeenCalled();
+        expect(mocks.selectOption).toHaveBeenCalledOnce();
         expect(mocks.persistFailedTaskRetry).not.toHaveBeenCalled();
       });
 
@@ -494,7 +989,7 @@ describe('runAssistantRetryCommand', () => {
     expect(mocks.selectOption).not.toHaveBeenCalled();
     const call = mocks.callAIWithRetry.mock.calls[0]!;
     expect(call[4]).toMatchObject({
-      sessionId: 'conversation-session',
+      sessionId: undefined,
       mcpServers: undefined,
       taskStateMcpServers: undefined,
       disableSessionRetry: true,
@@ -558,9 +1053,10 @@ describe('runAssistantRetryCommand', () => {
     );
   });
 
-  it('uses a resumed provider session when there is no local conversation history', async () => {
+  it('extracts agreement from an existing session and selects with fresh sessions when local history is absent', async () => {
     mocks.listAllTaskItems.mockReturnValue([task, { ...task, name: 'another-task' }]);
     mocks.callAIWithRetry
+      .mockResolvedValueOnce({ result: { success: true, content: 'Retry fix-quint-diagnostics from implement.' }, sessionId: 'digest-session' })
       .mockResolvedValueOnce({
         result: { success: true, content: '{"taskName":"fix-quint-diagnostics"}' },
         sessionId: 'resumed-session',
@@ -582,10 +1078,11 @@ describe('runAssistantRetryCommand', () => {
       sessionContext: { ...options.sessionContext, sessionId: 'resumed-session' },
     });
 
-    expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(3);
-    for (const call of mocks.callAIWithRetry.mock.calls) {
+    expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(4);
+    expect(mocks.callAIWithRetry.mock.calls[0]![4].sessionId).toBe('resumed-session');
+    for (const call of mocks.callAIWithRetry.mock.calls.slice(1, 3)) {
       expect(call[4]).toMatchObject({
-        sessionId: 'resumed-session',
+        sessionId: undefined,
         mcpServers: undefined,
         taskStateMcpServers: undefined,
         disableSessionRetry: true,
@@ -595,32 +1092,30 @@ describe('runAssistantRetryCommand', () => {
         permissionMode: 'readonly',
         internalAgentIsolation: 'strict-readonly',
       });
+      expect(String(call[0])).toContain('Retry fix-quint-diagnostics from implement.');
     }
-    for (const call of mocks.callAIWithRetry.mock.calls.slice(0, 2)) {
-      expect(JSON.parse(String(call[0]))).toMatchObject({
-        conversation: [],
-        noTranscriptNote: expect.any(String),
-      });
-    }
+    expect(mocks.callAIWithRetry.mock.calls[3]![4].sessionId).toBe('resumed-session');
   });
 
   it.each([
-    ['null task name', '{"taskName":null}', 'could not identify'],
-    ['an extra field', '{"taskName":"fix-quint-diagnostics","extra":true}', 'not available'],
-    ['a code fence', '```json\n{"taskName":"fix-quint-diagnostics"}\n```', 'not available'],
-    ['an unavailable task', '{"taskName":"not-a-candidate"}', 'not available'],
-  ])('keeps /retry unresolved notices when task selection returns %s', async (_name, response, expected) => {
+    ['null task name', '{"taskName":null}', 1],
+    ['an extra field', '{"taskName":"fix-quint-diagnostics","extra":true}', 2],
+    ['a code fence', '```json\n{"taskName":"fix-quint-diagnostics"}\n```', 2],
+    ['an unavailable task', '{"taskName":"not-a-candidate"}', 2],
+  ])('offers a manual /retry task choice after %s and leaves cancellation unchanged', async (_name, response, count) => {
     mocks.listAllTaskItems.mockReturnValue([task, { ...task, name: 'another-task' }]);
-    mocks.callAIWithRetry.mockResolvedValueOnce({
+    mocks.callAIWithRetry.mockResolvedValue({
       result: { success: true, content: response },
       sessionId: undefined,
     });
+    mocks.selectOption.mockResolvedValueOnce(null);
 
     const notice = await runAssistantRetryCommand(options);
 
-    expect(notice.toLowerCase()).toContain(expected);
+    expect(notice.toLowerCase()).toContain('not changed');
+    expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(count);
     expect(mocks.confirmWithCancel).not.toHaveBeenCalled();
-    expect(mocks.selectOption).not.toHaveBeenCalled();
+    expect(mocks.selectOption).toHaveBeenCalledOnce();
     expect(mocks.persistFailedTaskRetry).not.toHaveBeenCalled();
   });
 
@@ -665,8 +1160,9 @@ describe('runAssistantRetryCommand', () => {
     ])('keeps /retry guidance in selection and order revision when history=%s', async (hasHistory) => {
       const command = 'retry';
       const note = lang === 'ja' ? '訂正、Androidも対象にしてください' : 'Correction: include Android too.';
-      const history = hasHistory ? options.history : [];
+      const history = hasHistory ? [{ role: 'user' as const, content: 'Support iOS.' }] : [];
       mocks.listAllTaskItems.mockReturnValue([task, { ...task, name: 'another-task' }]);
+      if (hasHistory) setStartResponse('Support iOS.');
       mocks.callAIWithRetry.mockResolvedValueOnce({ result: { success: true, content: '{"taskName":"fix-quint-diagnostics"}' } });
       setStartResponse('{"startOptionId":"restart:implement"}');
       const revised = '# Revised order\n\nSupport iOS and Android.';
@@ -677,13 +1173,14 @@ describe('runAssistantRetryCommand', () => {
         sessionContext: { ...options.sessionContext, sessionId: hasHistory ? options.sessionContext.sessionId : undefined },
       });
 
-      expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(3);
-      for (const [prompt, system] of mocks.callAIWithRetry.mock.calls.slice(0, 2)) {
+      const offset = hasHistory ? 1 : 0;
+      expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(3 + offset);
+      for (const [prompt] of mocks.callAIWithRetry.mock.calls.slice(offset, offset + 2)) {
         const input = JSON.parse(String(prompt)) as Record<string, unknown>;
-        expect(input).toMatchObject({ command, conversation: history });
-        expect(String(system)).toContain(note);
+        expect(input.command).toBe(command);
+        expect(JSON.stringify(input)).toContain(note);
       }
-      const prompt = String(mocks.callAIWithRetry.mock.calls[2]?.[0]);
+      const prompt = String(mocks.callAIWithRetry.mock.calls[offset + 2]?.[0]);
       expect(prompt).toContain(preparation.previousOrderContent);
       expect(prompt).toContain(note);
       expect(mocks.persistFailedTaskRetry).toHaveBeenCalledWith(expect.objectContaining({ revisedOrder: { content: revised, lang } }));
@@ -691,40 +1188,47 @@ describe('runAssistantRetryCommand', () => {
     });
   });
 
-  it.each(['unknown-option', 'heading:review'])('keeps /retry rejection of unavailable start option %s without prompting', async (startOptionId) => {
+  it.each(['unknown-option', 'heading:review'])('reasks an unavailable /retry start %s before manual cancellation', async (startOptionId) => {
     setStartResponse(JSON.stringify({ startOptionId }));
+    setStartResponse(JSON.stringify({ startOptionId }));
+    mocks.selectOption.mockResolvedValueOnce(null);
 
     const notice = await runAssistantRetryCommand(options);
 
-    expect(notice).toContain('not available');
+    expect(notice).toContain('not changed');
+    expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(2);
     expect(mocks.confirmWithCancel).not.toHaveBeenCalled();
-    expect(mocks.selectOption).not.toHaveBeenCalled();
+    expect(mocks.selectOption).toHaveBeenCalledOnce();
     expect(mocks.persistFailedTaskRetry).not.toHaveBeenCalled();
   });
 
-  it('keeps /retry unresolved start notice without prompting', async () => {
+  it('offers manual selection for an unresolved /retry start without a format correction', async () => {
     setStartResponse('{"startOptionId":null}');
+    mocks.selectOption.mockResolvedValueOnce(null);
 
     const notice = await runAssistantRetryCommand(options);
 
-    expect(notice).toContain('could not identify');
+    expect(notice).toContain('not changed');
+    expect(mocks.callAIWithRetry).toHaveBeenCalledOnce();
     expect(mocks.confirmWithCancel).not.toHaveBeenCalled();
-    expect(mocks.selectOption).not.toHaveBeenCalled();
+    expect(mocks.selectOption).toHaveBeenCalledOnce();
     expect(mocks.persistFailedTaskRetry).not.toHaveBeenCalled();
   });
 
-  it('keeps /retry provider failure notice without prompting', async () => {
+  it('offers manual selection for a /retry provider failure without a format correction', async () => {
     mocks.callAIWithRetry.mockResolvedValueOnce({
       result: null,
       sessionId: undefined,
       error: 'provider unavailable',
     });
+    mocks.selectOption.mockResolvedValueOnce(null);
 
     const notice = await runAssistantRetryCommand(options);
 
-    expect(notice).toContain('provider unavailable');
+    expect(notice).toContain('not changed');
+    expect(mocks.callAIWithRetry).toHaveBeenCalledOnce();
     expect(mocks.confirmWithCancel).not.toHaveBeenCalled();
-    expect(mocks.selectOption).not.toHaveBeenCalled();
+    expect(mocks.selectOption).toHaveBeenCalledOnce();
     expect(mocks.persistFailedTaskRetry).not.toHaveBeenCalled();
   });
 
@@ -753,15 +1257,18 @@ describe('runAssistantRetryCommand', () => {
       expect(mocks.persistFailedTaskRetry).toHaveBeenCalledOnce();
     });
 
-    it.each(choiceFailures('taskName'))('offers eligible tasks after $failure and uses the human choice', async ({ response }) => {
+    it.each(choiceFailures('taskName'))('offers eligible tasks after $failure and uses the human choice', async ({ response, reask }) => {
       const otherTask = { ...task, name: 'another-task', summary: 'Repair another parser' };
       mocks.listAllTaskItems.mockReturnValue([
         task, otherTask, exceededTask,
         ...(['pending', 'running', 'completed'] as const).map((kind) => ({ ...task, kind, name: `${kind}-task` })),
       ]);
-      setChoiceFailure(response);
+      setChoiceFailure(response, reask);
       setStartResponse('{"startOptionId":"restart:implement"}');
-      mocks.selectOption.mockResolvedValueOnce(otherTask.name);
+      mocks.selectOption.mockImplementationOnce(async () => {
+        expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(reask ? 2 : 1);
+        return otherTask.name;
+      });
 
       const notice = await runAssistantRetryCommand({ ...options, command: 'requeue' });
 
@@ -770,7 +1277,7 @@ describe('runAssistantRetryCommand', () => {
       expect(choices.map((choice) => choice.value)).toEqual([task.name, otherTask.name, exceededTask.name]);
       expect(choices.find((choice) => choice.value === otherTask.name)?.label).toContain(otherTask.name);
       expect(mocks.prepareFailedTaskRetry).toHaveBeenCalledWith(otherTask, options.cwd);
-      expect(JSON.parse(mocks.callAIWithRetry.mock.calls[1]![0]).task.name).toBe(otherTask.name);
+      expect(JSON.parse(mocks.callAIWithRetry.mock.calls.at(-1)![0]).task.name).toBe(otherTask.name);
       expect(mocks.persistFailedTaskRetry).toHaveBeenCalledWith(expect.objectContaining({ task: otherTask }));
       expect(notice).toContain(otherTask.name);
       expect(notice).toContain('pending again');
@@ -817,10 +1324,13 @@ describe('runAssistantRetryCommand', () => {
 
     it.each([
       ...choiceFailures('startOptionId'),
-      { failure: 'non-selectable heading', response: { result: { success: true, content: '{"startOptionId":"heading:review"}' } } },
-    ])('offers only selectable failed-task starts after $failure and persists the chosen start after confirmation', async ({ response }) => {
-      setChoiceFailure(response);
-      mocks.selectOption.mockResolvedValueOnce('restart:implement');
+      { failure: 'non-selectable heading', reask: true, response: { result: { success: true, content: '{"startOptionId":"heading:review"}' } } },
+    ])('offers only selectable failed-task starts after $failure and persists the chosen start after confirmation', async ({ response, reask }) => {
+      setChoiceFailure(response, reask);
+      mocks.selectOption.mockImplementationOnce(async () => {
+        expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(reask ? 2 : 1);
+        return 'restart:implement';
+      });
       mocks.confirmWithCancel.mockImplementationOnce(async (message) => {
         expect(message).toContain('Restart implement');
         expectNoRequeue();
@@ -910,36 +1420,28 @@ describe('runAssistantRetryCommand', () => {
   });
 
   describe.each(['en', 'ja'] as const)('/requeue conversation guidance in %s', (lang) => {
-    it.each([true, false])('appends free text once to both AI queries without mutating history when history=%s', async (hasHistory) => {
-      const history = hasHistory ? options.history.map((message) => ({ ...message })) : [];
+    it.each([true, false])('passes free text with the agreement to both independent queries without mutating history when history=%s', async (hasHistory) => {
+      const history = hasHistory ? [{ role: 'user' as const, content: 'Use fix-quint-diagnostics.' }] : [];
       const originalHistory = structuredClone(history);
       const note = lang === 'ja' ? '前に話した件を見直してから再開して' : 'Revisit the earlier issue before resuming.';
       mocks.listAllTaskItems.mockReturnValue([task, { ...task, name: 'another-task' }]);
+      if (hasHistory) setStartResponse('Use fix-quint-diagnostics.');
       setStartResponse('{"taskName":"fix-quint-diagnostics"}');
       setStartResponse('{"startOptionId":"restart:implement"}');
 
       await runAssistantRetryCommand({ ...options, lang, command: 'requeue', inlineText: note, history });
 
-      expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(2);
-      for (const [prompt, system] of mocks.callAIWithRetry.mock.calls) {
-        expect(JSON.parse(prompt).conversation).toEqual([...originalHistory, { role: 'user', content: note }]);
-        expect(String(system)).not.toContain(note);
+      expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(hasHistory ? 3 : 2);
+      for (const [prompt, , , , context] of mocks.callAIWithRetry.mock.calls.slice(hasHistory ? 1 : 0)) {
+        expect(String(prompt)).toContain(note);
+        if (hasHistory) expect(String(prompt)).toContain('Use fix-quint-diagnostics.');
+        expect(context.sessionId).toBeUndefined();
       }
       expect(history).toEqual(originalHistory);
       expect(mocks.selectOption).not.toHaveBeenCalled();
       expect(mocks.persistFailedTaskRetry).toHaveBeenCalledOnce();
     });
 
-    it.each(['', '   '])('does not append an empty utterance for inline text %j', async (inlineText) => {
-      mocks.listAllTaskItems.mockReturnValue([task, { ...task, name: 'another-task' }]);
-      setStartResponse('{"taskName":"fix-quint-diagnostics"}');
-      setStartResponse('{"startOptionId":"resume-checkpoint"}');
-
-      await runAssistantRetryCommand({ ...options, lang, command: 'requeue', inlineText });
-
-      expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(2);
-      for (const [prompt] of mocks.callAIWithRetry.mock.calls) expect(JSON.parse(prompt).conversation).toEqual(options.history);
-    });
   });
 
   it('uses the AI decision even when free text exactly matches a different candidate name', async () => {
@@ -1223,10 +1725,31 @@ describe('runAssistantRetryCommand', () => {
     });
   });
 
-  describe('exceeded inline start selection', () => {
-    const inlineOptions = { ...options, command: 'requeue' as const, inlineText: 'Restart from implement.' };
+  describe.each(['mock', 'copilot'] as const)('%s exceeded inline start selection', (providerType) => {
+    const inlineOptions = { ...options, command: 'requeue' as const, inlineText: 'Restart from implement.',
+      sessionContext: { ...options.sessionContext, providerType } };
 
     beforeEach(() => mocks.listAllTaskItems.mockReturnValue([exceededTask]));
+
+    it('corrects an unknown exceeded start once and queues the valid restart without a manual menu', async () => {
+      setStartResponse('{"startOptionId":"restart:999"}');
+      setStartResponse('{"startOptionId":"restart:1"}');
+
+      await runAssistantRetryCommand(inlineOptions);
+
+      expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(2);
+      expect(mocks.selectOption).not.toHaveBeenCalled();
+      expect(mocks.requeueTask).toHaveBeenCalledWith(exceededTask.name, ['exceeded'], {
+        restartPoint: { stack: [{ workflow: 'development', workflow_ref: 'project:development', step: 'review', kind: 'agent' }] },
+        retryNote: undefined,
+      });
+      for (const [prompt, , , , context] of mocks.callAIWithRetry.mock.calls) {
+        expect(context.sessionId).toBeUndefined();
+        expect(JSON.parse(prompt).startOptions).toEqual(expect.arrayContaining([
+          expect.objectContaining({ id: 'restart:1', path: '"development" > "review"', operation: 'restart' }),
+        ]));
+      }
+    });
 
     it('confirms and queues the explicitly selected restart instead of the saved position', async () => {
       setStartResponse('{"startOptionId":"restart:0"}');
@@ -1292,9 +1815,12 @@ describe('runAssistantRetryCommand', () => {
       expect(mocks.requeueExceededTask).not.toHaveBeenCalled();
     });
 
-    it.each(choiceFailures('startOptionId'))('offers exceeded starts after $failure and queues the human-selected restart', async ({ response }) => {
-      setChoiceFailure(response);
-      mocks.selectOption.mockResolvedValueOnce('restart:1');
+    it.each(choiceFailures('startOptionId'))('offers exceeded starts after $failure and queues the human-selected restart', async ({ response, reask }) => {
+      setChoiceFailure(response, reask);
+      mocks.selectOption.mockImplementationOnce(async () => {
+        expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(reask ? 2 : 1);
+        return 'restart:1';
+      });
       const notice = await runAssistantRetryCommand(inlineOptions);
 
       expect(mocks.selectOption).toHaveBeenCalledOnce();

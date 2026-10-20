@@ -122,7 +122,7 @@ function createRetryContext(taskId = 'task-retry'): WebTaskActionContext {
     sourceRunId: 'run-1',
     retryStartOptions: {
       defaultId: 'restart:plan',
-      options: [{ id: 'restart:plan', label: 'plan', selectable: true }],
+      options: [{ id: 'restart:plan', label: 'plan', path: '"default" > "plan"', selectable: true }],
     },
     retryStartSelections: [{
       id: 'restart:plan',
@@ -230,7 +230,7 @@ describe('Web UI chat input', () => {
       sourceRunId: 'run-1',
       retryStartOptions: {
         defaultId: 'restart:plan',
-        options: [{ id: 'restart:plan', label: 'plan', selectable: true }],
+        options: [{ id: 'restart:plan', label: 'plan', path: '"default" > "plan"', selectable: true }],
       },
       retryStartSelections: [{
         id: 'restart:plan',
@@ -339,7 +339,7 @@ describe('Web UI chat input', () => {
         ...baseContext.retryStartOptions!,
         options: [
           ...baseContext.retryStartOptions!.options,
-          { id: 'restart:review', label: 'review', selectable: true },
+          { id: 'restart:review', label: 'review', path: '"default" > "review"', selectable: true },
         ],
       },
       retryStartSelections: [
@@ -381,7 +381,7 @@ describe('Web UI chat input', () => {
       sourceRunId: 'run-1',
       retryStartOptions: {
         defaultId: 'restart:plan',
-        options: [{ id: 'restart:plan', label: 'plan', selectable: true }],
+        options: [{ id: 'restart:plan', label: 'plan', path: '"default" > "plan"', selectable: true }],
       },
       retryStartSelections: [{
         id: 'restart:plan',
