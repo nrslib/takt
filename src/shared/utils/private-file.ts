@@ -49,6 +49,14 @@ interface ExistingFilePreparation {
 
 export { PrivateArtifactPublicationConflictError };
 
+export class PrivateArtifactContentWriteFailedError extends Error {
+  readonly code = 'ENOSPC';
+
+  constructor(message: string, readonly errno: number | undefined, options: ErrorOptions) {
+    super(message, options);
+  }
+}
+
 export interface PrivateDirectoryReadSnapshot {
   readonly path: string;
   readonly stat: Stats;
@@ -429,6 +437,16 @@ interface PrivateFileWriteResult {
   publishedStat?: Stats;
 }
 
+function rethrowContentWriteFailure(error: unknown): never {
+  const filesystemError = error as NodeJS.ErrnoException;
+  if (error instanceof Error && filesystemError.code === 'ENOSPC') {
+    throw new PrivateArtifactContentWriteFailedError(
+      filesystemError.message, filesystemError.errno, { cause: error },
+    );
+  }
+  throw error;
+}
+
 function writeTemporaryPrivateFileContent(
   temporaryPath: string,
   temporaryStat: Stats,
@@ -436,14 +454,23 @@ function writeTemporaryPrivateFileContent(
   content: string | Buffer,
   mode: number,
 ): void {
-  const descriptor = openTemporaryPrivateFile(temporaryPath, ancestorIdentities);
+  let descriptor: number;
+  try {
+    descriptor = openTemporaryPrivateFile(temporaryPath, ancestorIdentities);
+  } catch (error) {
+    rethrowContentWriteFailure(error);
+  }
   executeWithCleanup(
     () => {
       assertOpenedFileIdentity(descriptor, temporaryPath, temporaryStat);
       assertAncestorIdentities(ancestorIdentities);
-      fchmodSync(descriptor, mode);
-      ftruncateSync(descriptor, 0);
-      writeFileSync(descriptor, content, { encoding: 'utf-8' });
+      try {
+        fchmodSync(descriptor, mode);
+        ftruncateSync(descriptor, 0);
+        writeFileSync(descriptor, content, { encoding: 'utf-8' });
+      } catch (error) {
+        rethrowContentWriteFailure(error);
+      }
     },
     () => closeSync(descriptor),
     `Private artifact write and descriptor cleanup both failed: ${temporaryPath}`,

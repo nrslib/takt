@@ -23,7 +23,9 @@ import { TaskRunner, resolveCloneBaseDir } from '../../infra/task/index.js';
 import { createTaskClonePath } from '../../infra/task/clone-path.js';
 import type { TaskInfo } from '../../infra/task/index.js';
 import { assertReusableWorktreePath } from '../tasks/execute/reusedWorktree.js';
-import { generateReportDir } from '../../shared/utils/reportDir.js';
+import { generateExecutionReportDir } from '../../core/workflow/run/run-slug.js';
+import { buildRunPaths } from '../../core/workflow/run/run-paths.js';
+import { resolveTaskSpecForExecution } from '../tasks/execute/taskSpecContext.js';
 
 const log = createLogger('merge');
 
@@ -99,7 +101,7 @@ export async function executePersistedPrMergeTask(
     throw new Error(`Task ${task.name} is not a saved PR merge task`);
   }
   const startedAt = new Date().toISOString();
-  const runSlug = generateReportDir(task.content);
+  const runSlug = generateExecutionReportDir(projectCwd, task.name);
   const runningTask = runner.updateRunningTaskExecution(task.name, {
     runSlug, worktreePath: task.worktreePath, branch: data.branch,
   });
@@ -255,6 +257,10 @@ async function runPrMergeWorkflow(
       return { merged: false };
     }
   }
+  if (task.taskDir === undefined) throw new Error('PR merge task is missing taskDir');
+  const taskSpec = resolveTaskSpecForExecution(
+    request.projectCwd, cwd, task.taskDir, runSlug, buildRunPaths(request.projectCwd, runSlug),
+  );
   const result = await runWorkflowExecution({
     ...request.display,
     cwd, projectCwd: request.projectCwd,
@@ -263,7 +269,8 @@ async function runPrMergeWorkflow(
         ? resolve(homedir(), request.workflow.slice(1).replace(/^\//u, ''))
         : resolve(request.projectCwd, request.workflow)
       : request.workflow,
-    task: task.content,
+    task: taskSpec.taskPrompt,
+    taskSpec,
     reportDirName: runSlug,
     ...(data.start_step === undefined ? {} : { startStep: data.start_step }),
     ...(data.retry_note === undefined ? {} : { retryNote: data.retry_note }),

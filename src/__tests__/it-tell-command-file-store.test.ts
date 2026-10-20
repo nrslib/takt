@@ -37,6 +37,9 @@ vi.mock('../shared/prompt/index.js', async (importOriginal) => ({
 }));
 
 import { runTellCommand } from '../features/interactive/tellCommand.js';
+import { listTaktTasks } from '../features/mcp/operations.js';
+import { listTasks } from '../features/tasks/list/index.js';
+import { listTasksNonInteractive } from '../features/tasks/list/listNonInteractive.js';
 import { LiveInterventionFileStore } from '../infra/workflow/live-intervention-store.js';
 import { TaskRunner } from '../infra/task/index.js';
 import { saveGlobalConfig } from '../infra/config/index.js';
@@ -167,6 +170,75 @@ describe('tell command and live intervention file store', () => {
       delete process.env.TAKT_TEST_FLG_TOUCH_TTY;
     } else {
       process.env.TAKT_TEST_FLG_TOUCH_TTY = savedTouchTty;
+    }
+  });
+
+  it.each([
+    { source: 'content', summary: undefined },
+    { source: 'content_file', summary: undefined },
+    { source: 'content', summary: '運用用要約' },
+    { source: 'content_file', summary: '運用用要約' },
+  ] as const)('preserves list, MCP and tell descriptions across $source migration with summary=$summary', async ({ source, summary }) => {
+    const content = '元の作業\n詳細';
+    const expectedSummary = summary ?? '元の作業';
+    const cloneCwd = join(projectCwd, '.takt', 'worktrees', 'description');
+    const runSlug = 'description-run';
+    const taskName = 'description-task';
+    mkdirSync(cloneCwd, { recursive: true });
+    writeRunMeta(cloneCwd, runSlug, taskName);
+    writeFileSync(join(projectCwd, 'task.txt'), content, 'utf8');
+    writeFileSync(join(projectCwd, '.takt', 'tasks.yaml'), stringifyYaml({
+      tasks: [{
+        ...writeRunningTask(taskName, runSlug, cloneCwd, content),
+        content: source === 'content' ? content : undefined,
+        content_file: source === 'content_file' ? 'task.txt' : undefined,
+        summary,
+      }],
+    }), 'utf8');
+
+    for (const migrated of [false, true]) {
+      if (migrated) {
+        new TaskRunner(projectCwd).updateRunningTaskExecution(taskName, { runSlug, worktreePath: cloneCwd });
+      }
+
+      mockSelectOption.mockClear().mockResolvedValueOnce(null);
+      await listTasks(projectCwd);
+      expect(mockSelectOption).toHaveBeenCalledWith(expect.any(String), expect.arrayContaining([
+        expect.objectContaining({
+          label: expect.stringContaining(taskName),
+          description: expect.stringMatching(new RegExp(`^${expectedSummary} \\| `)),
+        }),
+      ]));
+
+      const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        await listTasksNonInteractive(projectCwd, { enabled: true });
+        const taskLines = output.mock.calls.map(([line]) => String(line)).filter((line) => line.includes(taskName));
+        expect(taskLines).toHaveLength(1);
+        expect(taskLines[0]).toContain(` - ${expectedSummary} (`);
+      } finally {
+        output.mockRestore();
+      }
+
+      if (source === 'content') {
+        const response = listTaktTasks({ cwd: projectCwd });
+        expect(response.isError).not.toBe(true);
+        const text = response.content.find((block) => block.type === 'text');
+        expect(text?.type).toBe('text');
+        if (text?.type !== 'text') throw new Error('Expected MCP task list text');
+        expect(JSON.parse(text.text)).toMatchObject({
+          tasks: [expect.objectContaining({ name: taskName, summary: expectedSummary })],
+        });
+
+        mockSelectOptionWithDefault.mockClear().mockResolvedValueOnce(null);
+        await runTellCommand({
+          cwd: projectCwd, lang: 'en', inlineText: 'Keep the scope.', history: [],
+          sessionContext: makeSessionContext(), preferredRunSlug: runSlug,
+        });
+        expect(mockSelectOptionWithDefault).toHaveBeenCalledWith(expect.any(String), [
+          expect.objectContaining({ value: runSlug, label: taskName, description: expectedSummary }),
+        ], runSlug);
+      }
     }
   });
 

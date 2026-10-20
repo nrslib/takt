@@ -71,6 +71,8 @@ MCP client は `takt-mcp` stdio server を使って、shell command を直接呼
 
 通常の assistant 会話には、MCP 対応 provider の場合だけ読み取り専用の task 状態 tool が渡されます。新しいタスクには `/go`、実行中 worktree clone への追加指示には `/tell` で対象を選び、内容を確認してから送ります。failed タスクの再投入には `/requeue` または `/retry` を使用できます。MCP 非対応 provider でも会話は利用できますが、task 状態の参照はできません。
 
+`takt_tell_run` または CLI の `/tell` で配送が成立した追加指示は、指示 ID・受信時刻とともにタスクの正本 `order.md` に追記され、実行中 run の `context/task/order.md` にも反映されます。保存に成功した場合は、後続の役と再開後の run が同じ追加指示を参照できます。保存に失敗した場合は標準エラーへ警告し、配送や tell の成功は妨げません。
+
 ## タスクディレクトリ形式
 
 TAKT はタスクのメタデータを `.takt/tasks.yaml` に、各タスクの詳細仕様を `.takt/tasks/{slug}/` に保存します。

@@ -278,6 +278,8 @@ MCP 可以加入任务队列、读取 task/run 状态，并向正在运行的 cl
 
 `takt_list_tasks` 在单个任务的 worktree 验证或 run 元数据读取失败时仍返回全部任务。仅有问题的条目会在已取得的基本信息旁增加已清理的 `error` 字符串，其他条目的内容保持不变。不会读取验证失败的 worktree 中的 run 信息。队列本身无法读取或 `cwd` 超出允许范围时，仍返回整个工具的错误，不返回任务数组。
 
+`takt_tell_run` 和 CLI 的 `/tell` 会在投递成功后将追加指令写入任务的源 `order.md`，并更新正在运行的 run 的 `context/task/order.md`。保存成功时，每次追加都会保留指令 ID 和接收时间，供后续 agent 和恢复后的 run 读取。如果保存失败，会向标准错误输出警告；已投递的指令不受影响，tell 仍然成功。
+
 ## 即时 Exec 模式
 
 `takt exec` 启动无需手写 workflow YAML 的交互式任务录入模式。Assistant agent 澄清需求，`/go` 将对话转换成生成的 workflow，Worker agent 实现任务，Review agent 审查结果，Replanning agent 在需要时询问用户方向，循环检测防止无效循环。

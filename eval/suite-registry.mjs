@@ -17,6 +17,11 @@ const CLASSIFICATIONS = [
   },
   {
     tier: 'active',
+    reason: '入力の主体・並行処理・量の根拠と過去の工程逸脱を、発火する例としない例で測る',
+    suites: ['finding-realistic-premise'],
+  },
+  {
+    tier: 'active',
     reason: '完了検証・再計画・レビュー裁定で反例に使う入力の根拠を確かめる',
     suites: ['fix-verification-applicable-inputs'],
   },
@@ -214,6 +219,12 @@ const CLASSIFICATIONS = [
 ];
 
 const EXECUTION_OVERRIDES = {
+  'finding-realistic-premise': {
+    defaultEligible: false,
+    credentials: ['claude', 'codex'],
+    cost: 'high',
+    reason: '17ケースを隔離した3モデルで比較するため両CLI認証と大きな実行枠を要する',
+  },
   'fix-verification-applicable-inputs': {
     defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
     reason: 'Sol Low、Opus 5、Luna Max の3モデルで完了検証・再計画・裁定の入力範囲を比較する',
@@ -641,6 +652,10 @@ const EXECUTION_OVERRIDES = {
 };
 
 const PREPARE_TARGET_OVERRIDES = {
+  'finding-realistic-premise': [
+    'rt', 'rc', 'rq', 'ne', 'np', 'nb', 'at', 'ac', 'aq', 'ae', 'ap', 'ab',
+    'vd1', 'vd2', 'vn1', 'vn2', 'pd1',
+  ].map((caseId) => `finding-realistic-premise-${caseId}`),
   'fix-verification-applicable-inputs': ['f1', 'f2', 'f3', 'r1', 'r2', 'n1', 'n2', 'n3', 'n4', 'n5', 'a1', 'a2', 'a3', 'a4']
     .map((caseId) => `fix-verification-applicable-inputs-${caseId}`),
   'review-adjudication-applicable-inputs': ['a1', 'a2', 'a3', 'a4']

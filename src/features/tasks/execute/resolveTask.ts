@@ -391,7 +391,7 @@ export async function resolveTaskExecution(
   assertPrReviewExecutionIdentity(task.name, prContext, branch, baseBranch);
 
   if (task.taskDir) {
-    reportDirName = generateExecutionReportDir(execCwd, task.content);
+    reportDirName = generateExecutionReportDir(execCwd, task.name);
     taskSpec = resolveTaskSpecForExecution(
       defaultCwd,
       execCwd,
