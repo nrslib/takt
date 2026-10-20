@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { unlinkSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { PrivateArtifactCreationFailedError } from './private-artifact-backend.js';
 import {
   ensurePrivateDirectory,
   PrivateArtifactPublicationConflictError,
@@ -14,6 +15,12 @@ const LOCK_MODE = 0o600;
 const LOCK_RETRY_DELAY_MS = 10;
 const LOCK_TIMEOUT_MS = 10_000;
 const lockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
+
+export class PrivateFileLockAcquisitionError extends Error {
+  constructor(message: string, readonly code: string, readonly errno: number | undefined, options: ErrorOptions) {
+    super(message, options);
+  }
+}
 
 export interface PrivateFileExclusiveAsyncOptions {
   timeoutMs?: number;
@@ -124,7 +131,15 @@ function tryAcquirePrivateFileLock(lockPath: string): AcquiredPrivateFileLock | 
   const holder: LockHolder = { pid: process.pid, token: randomUUID() };
   const content = JSON.stringify(holder);
   try {
-    writeNewPrivateFileWithMode(lockPath, content, LOCK_MODE);
+    try {
+      writeNewPrivateFileWithMode(lockPath, content, LOCK_MODE);
+    } catch (error) {
+      // A failed creation of the unpublished temporary artifact cannot have run the locked action.
+      if (error instanceof PrivateArtifactCreationFailedError && error.code === 'ENOSPC') {
+        throw new PrivateFileLockAcquisitionError(error.message, error.code, error.errno, { cause: error });
+      }
+      throw error;
+    }
     const acquired = readPrivateFileState(lockPath);
     if (!acquired.state.exists
       || !('content' in acquired)
