@@ -78,7 +78,6 @@ import {
   type AgentFailureCategory,
 } from '../../shared/types/agent-failure.js';
 import { buildRateLimitedResponseFields, classifyRateLimitError, type RateLimitClass } from '../rate-limit/detection.js';
-import { RATE_LIMIT_MAX_RETRIES, waitForRateLimitRetry } from '../rate-limit/retry.js';
 import {
   createSensitiveTextStreamRedactor,
   sanitizeSensitiveText,
@@ -720,7 +719,6 @@ interface OpenCodeCallState {
   recoveryState: ReturnType<typeof createStructuredOutputRecoveryState>;
   toolGuardRecovery: ReturnType<typeof createToolGuardRecoveryState>;
   maxAttempts: number;
-  rateLimitRetries: number;
 }
 
 const RETRY_ATTEMPT = Symbol('retry-open-code-attempt');
@@ -946,7 +944,6 @@ export class OpenCodeAttemptRunner {
         recoveryState: createStructuredOutputRecoveryState(options.outputSchema !== undefined),
         toolGuardRecovery: createToolGuardRecoveryState(activeGuardSuite.policy.toolGuard.editCorrectionLimit),
         maxAttempts: OPENCODE_RETRY_MAX_ATTEMPTS,
-        rateLimitRetries: 0,
       };
       for (let attempt = 1; attempt <= callState.maxAttempts; attempt++) {
         guardedOptions.onActivity?.({ kind: 'attempt_started' });
@@ -1145,10 +1142,8 @@ export class OpenCodeAttemptRunner {
   ): Promise<AgentResponse | typeof RETRY_ATTEMPT> => {
     throwIfCallAborted();
     throwIfServerInvalidated();
-    if (classification === 'Transient' && callState.rateLimitRetries < RATE_LIMIT_MAX_RETRIES) {
-      callState.rateLimitRetries += 1;
-      callState.maxAttempts += 1;
-      await waitForRateLimitRetry(callState.rateLimitRetries, options.abortSignal);
+    if (classification === 'Transient' && attempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
+      await this.waitForRetryDelay(attempt, options.abortSignal);
       throwIfCallAborted();
       throwIfServerInvalidated();
       return RETRY_ATTEMPT;
@@ -2123,15 +2118,14 @@ export class OpenCodeAttemptRunner {
       // 混同しない。
       const retriable = toolGuardFailure === undefined
         && this.isRetriableError(message, abortCause);
-      const standardAttempt = attempt - callState.rateLimitRetries;
-      if (retriable && standardAttempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
+      if (retriable && attempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
         throwIfCallAborted();
         log.info('Retrying OpenCode call after transient failure', {
           agentType,
           attempt,
           message: sanitizeAttemptError(message),
         });
-        await this.waitForRetryDelay(standardAttempt, options.abortSignal);
+        await this.waitForRetryDelay(attempt, options.abortSignal);
         throwIfCallAborted();
         throwIfServerInvalidated();
         return RETRY_ATTEMPT;
@@ -2275,15 +2269,14 @@ export class OpenCodeAttemptRunner {
 
     const retriable = (stopResult === undefined || stopResult.ok)
       && this.isRetriableError(errorMessage, abortCause);
-    const standardAttempt = attempt - callState.rateLimitRetries;
-    if (retriable && standardAttempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
+    if (retriable && attempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
       throwIfCallAborted();
       log.info('Retrying OpenCode call after transient exception', {
         agentType,
         attempt,
         errorMessage: sanitizeAttemptError(errorMessage),
       });
-      await this.waitForRetryDelay(standardAttempt, options.abortSignal);
+      await this.waitForRetryDelay(attempt, options.abortSignal);
       throwIfCallAborted();
       const invalidationAfterRetryDelay = currentServerInvalidationError();
       if (invalidationAfterRetryDelay !== undefined) {

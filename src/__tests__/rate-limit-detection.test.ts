@@ -29,6 +29,7 @@ describe('classifyRateLimitError', () => {
   it.each([
     "You've hit your usage limit", "You've hit your weekly limit", "You've hit your 5-hour limit",
     "You've hit your session limit", "You're out of extra usage", 'usage_limit_exceeded',
+    "You've reached your weekly rate limit",
     'Your workspace is out of credits. Add credits to continue.',
     'You hit your spend cap set in your workspace.',
     'Your spend cap has been reached.',
@@ -37,6 +38,7 @@ describe('classifyRateLimitError', () => {
     expect(classifyRateLimitError(`HTTP 429: ${message}`)).toBe('Exhausted');
     expect(classifyRateLimitError(`${message} HTTP 429`)).toBe('Exhausted');
     expect(classifyRateLimitError(message, 429)).toBe('Exhausted');
+    expect(classifyRateLimitError(message, '429')).toBe('Exhausted');
   });
   it.each([429, '429'] as const)('構造化statusCode=%sを分類する', (status) => {
     expect(classifyRateLimitError('request rejected', status)).toBe('Transient');
@@ -48,6 +50,8 @@ describe('classifyRateLimitError', () => {
     expect(classifyRateLimitError('permission denied')).toBe('NotRateLimit');
     expect(classifyRateLimitError('Permission denied while reading the spend cap setting')).toBe('NotRateLimit');
     expect(classifyRateLimitError('HTTP 429 while reading the spend cap setting')).toBe('Transient');
+    expect(classifyRateLimitError('Permission denied while reading the weekly rate limit setting')).toBe('NotRateLimit');
+    expect(classifyRateLimitError('HTTP 429 while reading the weekly rate limit setting')).toBe('Transient');
     expect(classifyRateLimitError(undefined)).toBe('NotRateLimit');
   });
 });

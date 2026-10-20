@@ -545,15 +545,80 @@ describe('callCopilot', () => {
     expect(mockSpawn).toHaveBeenCalledOnce();
   });
 
-  it('429の再試行中に使い切りを受けたら追加起動しない', async () => {
+  it.each([
+    { channel: 'session.error', exhausted: true },
+    { channel: 'session.error', exhausted: false },
+    { channel: 'stderr', exhausted: true },
+    { channel: 'stderr', exhausted: false },
+    { channel: 'combined', exhausted: true },
+    { channel: 'combined', exhausted: false },
+  ])('$channelの週次上限は即終了し一般的な429は再試行する (exhausted=$exhausted)', async ({ channel, exhausted }) => {
     vi.useFakeTimers();
-    mockSpawnWithScenario(['HTTP 429: Too Many Requests', 'HTTP 429: usage_limit_exceeded'].map((stderr) => ({ code: 1, stderr })));
-    const pending = callCopilot('coder', 'prompt', { cwd: '/repo' });
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(await pending).toMatchObject({ status: 'rate_limited', errorKind: 'rate_limit' });
-    await vi.advanceTimersByTimeAsync(121_000);
-    expect(mockSpawn).toHaveBeenCalledTimes(2);
+    const message = exhausted ? "You've reached your weekly rate limit" : 'request rejected';
+    const failure: SpawnScenario = {
+      code: 1,
+      stdout: channel === 'stderr' ? undefined : `${JSON.stringify({
+        type: 'session.error',
+        data: { errorType: 'rate_limit', statusCode: 429, message: channel === 'combined' ? 'request rejected' : message },
+      })}\n`,
+      stderr: channel === 'stderr' ? `HTTP 429: ${exhausted ? message : 'Too Many Requests'}`
+        : channel === 'combined' && exhausted ? message : undefined,
+    };
+    mockSpawnWithScenario([failure, { stdout: 'final answer' }]);
+    const onStream = vi.fn();
+
+    const pending = callCopilot('coder', 'prompt', { cwd: '/repo', onStream });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    if (exhausted) {
+      const results = onStream.mock.calls.filter(([event]) => event.type === 'result');
+      expect(results).toHaveLength(1);
+      expect(results[0]?.[0].data).toMatchObject({ success: false, result: '', error: expect.stringContaining(message) });
+      const result = await pending;
+      expect(result).toMatchObject({ status: 'rate_limited', content: '', errorKind: 'rate_limit' });
+      expect(result.error).toContain(message);
+      expect(mockRm).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(121_000);
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
+    } else {
+      await vi.advanceTimersByTimeAsync(999);
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
+      expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await pending;
+      expect(result).toMatchObject({ status: 'done', content: 'final answer' });
+      expect(result.errorKind).toBeUndefined();
+      expect(mockSpawn).toHaveBeenCalledTimes(2);
+      const results = onStream.mock.calls.filter(([event]) => event.type === 'result');
+      expect(results).toHaveLength(1);
+      expect(results[0]?.[0].data.success).toBe(true);
+    }
   });
+
+  it('成功したassistant.messageの週次上限文言を通常の本文として返す', async () => {
+    const content = "You've reached your weekly rate limit";
+    mockSpawnWithScenario({ code: 0, stdout: `${JSON.stringify({ type: 'assistant.message', data: { content } })}\n` });
+
+    const result = await callCopilot('coder', 'prompt', { cwd: '/repo' });
+
+    expect(result).toMatchObject({ status: 'done', content });
+    expect(result.errorKind).toBeUndefined();
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['usage_limit_exceeded', "You've reached your weekly rate limit"])(
+    '429の再試行中に使い切りを受けたら追加起動しない: %s', async (message) => {
+      vi.useFakeTimers();
+      mockSpawnWithScenario(['HTTP 429: Too Many Requests', `HTTP 429: ${message}`].map((stderr) => ({ code: 1, stderr })));
+      const onStream = vi.fn();
+      const pending = callCopilot('coder', 'prompt', { cwd: '/repo', onStream });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toHaveLength(1);
+      expect(await pending).toMatchObject({ status: 'rate_limited', errorKind: 'rate_limit' });
+      await vi.advanceTimersByTimeAsync(121_000);
+      expect(mockSpawn).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it('429の待機中に中断したら追加起動せず一時資源を解放する', async () => {
     vi.useFakeTimers();

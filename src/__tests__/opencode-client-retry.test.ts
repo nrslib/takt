@@ -424,9 +424,9 @@ describe('OpenCodeClient retry', () => {
     expect(promptAsync).not.toHaveBeenCalled();
   });
 
-  it('session.error の429は8回の待機後に rate_limited を返す', async () => {
+  it('session.error の429は250msと500msの待機後に rate_limited を返す', async () => {
     vi.useFakeTimers();
-    runPlans = Array.from({ length: 9 }, () => ({
+    runPlans = Array.from({ length: 3 }, () => ({
         type: 'events',
         events: [
           {
@@ -449,7 +449,7 @@ describe('OpenCodeClient retry', () => {
       onStream,
     });
     await vi.advanceTimersByTimeAsync(0);
-    for (const [index, delay] of [1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000].entries()) {
+    for (const [index, delay] of [250, 500].entries()) {
       await vi.advanceTimersByTimeAsync(delay - 1);
       expect(promptAsync).toHaveBeenCalledTimes(index + 1);
       expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toHaveLength(0);
@@ -459,19 +459,20 @@ describe('OpenCodeClient retry', () => {
     const result = await pending;
 
     expect(sessionCreate).toHaveBeenCalled();
-    expect(promptAsync).toHaveBeenCalledTimes(9);
-    expect(subscribe).toHaveBeenCalledTimes(9);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(promptAsync).toHaveBeenCalledTimes(3);
+    expect(subscribe).toHaveBeenCalledTimes(3);
     expect(result.status).toBe('rate_limited');
     expect(result.errorKind).toBe('rate_limit');
     expect(result.content).toBe('');
-    expect(result.retryCount).toBe(8);
+    expect(result.retryCount).toBe(2);
     expect(result.rateLimitInfo?.provider).toBe('opencode');
     expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toHaveLength(1);
   });
 
-  it('session.error の RateLimitError 名だけでも8回再試行する', async () => {
+  it('session.error の RateLimitError 名だけでも2回再試行する', async () => {
     vi.useFakeTimers();
-    runPlans = Array.from({ length: 9 }, () => ({
+    runPlans = Array.from({ length: 3 }, () => ({
         type: 'events',
         events: [
           {
@@ -491,12 +492,12 @@ describe('OpenCodeClient retry', () => {
       cwd: '/tmp',
       model: 'opencode/big-pickle',
     });
-    await vi.advanceTimersByTimeAsync(121_000);
+    await vi.advanceTimersByTimeAsync(750);
     const result = await pending;
 
     expect(sessionCreate).toHaveBeenCalled();
-    expect(promptAsync).toHaveBeenCalledTimes(9);
-    expect(subscribe).toHaveBeenCalledTimes(9);
+    expect(promptAsync).toHaveBeenCalledTimes(3);
+    expect(subscribe).toHaveBeenCalledTimes(3);
     expect(result.status).toBe('rate_limited');
     expect(result.error).toBe('RateLimitError');
     expect(result.errorKind).toBe('rate_limit');
@@ -520,15 +521,15 @@ describe('OpenCodeClient retry', () => {
         cwd: '/tmp', model: 'opencode/big-pickle', permissionMode: 'readonly',
         internalAgentIsolation: 'strict-readonly', allowReadonlyFileRead: true, allowedTools: ['Read'], systemPrompt: 'original system',
       });
-      await vi.advanceTimersByTimeAsync(999);
+      await vi.advanceTimersByTimeAsync(249);
       expect(promptAsync).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(1);
       expect(promptAsync).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(1999);
+      await vi.advanceTimersByTimeAsync(499);
       expect(promptAsync).toHaveBeenCalledTimes(2);
       await vi.advanceTimersByTimeAsync(1);
       const result = await pending;
-      expect(result).toMatchObject({ status: 'done', content: 'final answer' });
+      expect(result).toMatchObject({ status: 'done', content: 'final answer', retryCount: 2 });
       expect(result.errorKind).toBeUndefined();
       expect(promptAsync).toHaveBeenCalledTimes(3);
       for (const [request] of promptAsync.mock.calls) {
@@ -552,23 +553,29 @@ describe('OpenCodeClient retry', () => {
         failAttempt = onFailure;
         original.call(this, onFailure);
       });
-      runPlans = [{ type: 'stream', createStream: (signal) => (async function* () {
+      const failure: RunPlan = { type: 'stream', createStream: (signal) => (async function* () {
         if (failAttempt === undefined) throw new Error('Attempt guard callback is missing');
         failAttempt({ guardId: 'idle-timeout', verdict: { action: 'fail', reason: 'OpenCode attempt timed out' } });
         await waitForAbort(signal);
-      })() }, successfulRetryPlan()];
+      })() };
+      runPlans = [failure, failure, successfulRetryPlan()];
       const { promptAsync, messages } = installOpenCodeMock();
       messages.mockResolvedValue({ data: [{ info: {
         role: 'assistant', error: { name: 'APIError', data: { statusCode, message: 'request rejected' } },
       }, parts: [] }] });
       try {
         const pending = new OpenCodeClient().call('coder', 'prompt', { cwd: '/tmp', model: 'opencode/big-pickle' });
-        await vi.advanceTimersByTimeAsync(999);
+        await vi.advanceTimersByTimeAsync(249);
         expect(messages).toHaveBeenCalledOnce();
         expect(promptAsync).toHaveBeenCalledOnce();
         await vi.advanceTimersByTimeAsync(1);
-        expect(await pending).toMatchObject({ status: 'done', content: 'final answer' });
         expect(promptAsync).toHaveBeenCalledTimes(2);
+        expect(messages).toHaveBeenCalledTimes(2);
+        await vi.advanceTimersByTimeAsync(499);
+        expect(promptAsync).toHaveBeenCalledTimes(2);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(await pending).toMatchObject({ status: 'done', content: 'final answer', retryCount: 2 });
+        expect(promptAsync).toHaveBeenCalledTimes(3);
       } finally {
         spy.mockRestore();
       }
@@ -582,7 +589,7 @@ describe('OpenCodeClient retry', () => {
     } } }] }, successfulRetryPlan()];
     const { promptAsync } = installOpenCodeMock();
     const pending = new OpenCodeClient().call('coder', 'prompt', { cwd: '/tmp', model: 'opencode/big-pickle' });
-    await vi.advanceTimersByTimeAsync(999);
+    await vi.advanceTimersByTimeAsync(249);
     expect(promptAsync).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(1);
     expect(await pending).toMatchObject({ status: 'done', content: 'final answer' });
@@ -591,17 +598,23 @@ describe('OpenCodeClient retry', () => {
 
   it('promptAsyncの構造化429例外を再試行する', async () => {
     vi.useFakeTimers();
-    runPlans = [{ type: 'stream', createStream: (signal) => (async function* () {
+    const failure: RunPlan = { type: 'stream', createStream: (signal) => (async function* () {
       await waitForAbort(signal);
-    })() }, successfulRetryPlan()];
+    })() };
+    runPlans = [failure, failure, successfulRetryPlan()];
     const { promptAsync } = installOpenCodeMock();
-    promptAsync.mockRejectedValueOnce(Object.assign(new Error('request rejected'), { data: { statusCode: 429 } }));
+    const error = Object.assign(new Error('request rejected'), { data: { statusCode: 429 } });
+    promptAsync.mockRejectedValueOnce(error).mockRejectedValueOnce(error);
     const pending = new OpenCodeClient().call('coder', 'prompt', { cwd: '/tmp', model: 'opencode/big-pickle' });
-    await vi.advanceTimersByTimeAsync(999);
+    await vi.advanceTimersByTimeAsync(249);
     expect(promptAsync).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(1);
-    expect(await pending).toMatchObject({ status: 'done', content: 'final answer' });
     expect(promptAsync).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(499);
+    expect(promptAsync).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await pending).toMatchObject({ status: 'done', content: 'final answer', retryCount: 2 });
+    expect(promptAsync).toHaveBeenCalledTimes(3);
   });
 
   it.each([
@@ -621,15 +634,16 @@ describe('OpenCodeClient retry', () => {
     runPlans = [rateLimitPlan('HTTP 429: Too Many Requests'), rateLimitPlan('HTTP 429: usage_limit_exceeded')];
     const { promptAsync } = installOpenCodeMock();
     const pending = new OpenCodeClient().call('coder', 'prompt', { cwd: '/tmp', model: 'opencode/big-pickle' });
-    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(250);
     expect(await pending).toMatchObject({ status: 'rate_limited', errorKind: 'rate_limit' });
-    await vi.advanceTimersByTimeAsync(121_000);
+    await vi.advanceTimersByTimeAsync(1000);
     expect(promptAsync).toHaveBeenCalledTimes(2);
   });
 
-  it('429以外の一時障害は250msと500msで合計3試行に制限する', async () => {
+  it.each([true, false])('429以外の一時障害は250msと500msで合計3試行に制限する（最終成功: %s）', async (succeeds) => {
     vi.useFakeTimers();
-    runPlans = Array.from({ length: 3 }, () => rateLimitPlan('fetch failed'));
+    runPlans = [rateLimitPlan('fetch failed'), rateLimitPlan('fetch failed'),
+      succeeds ? successfulRetryPlan() : rateLimitPlan('fetch failed')];
     const { promptAsync } = installOpenCodeMock();
     const pending = new OpenCodeClient().call('coder', 'prompt', { cwd: '/tmp', model: 'opencode/big-pickle' });
     await vi.advanceTimersByTimeAsync(249);
@@ -639,21 +653,37 @@ describe('OpenCodeClient retry', () => {
     await vi.advanceTimersByTimeAsync(499);
     expect(promptAsync).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(1);
-    expect(await pending).toMatchObject({ status: 'error', retryCount: 2 });
-    await vi.advanceTimersByTimeAsync(121_000);
+    expect(await pending).toMatchObject({ status: succeeds ? 'done' : 'error', retryCount: 2 });
+    await vi.advanceTimersByTimeAsync(1000);
     expect(promptAsync).toHaveBeenCalledTimes(3);
   });
 
-  it('429の追加試行で429以外の再試行予算を補充しない', async () => {
+  it.each(['session.error', 'exception'] as const)('%s では通常障害と429が3試行の予算を共有する', async (channel) => {
     vi.useFakeTimers();
-    runPlans = [rateLimitPlan('fetch failed'), rateLimitPlan('fetch failed'),
-      rateLimitPlan('HTTP 429: Too Many Requests'), rateLimitPlan('fetch failed')];
+    const failure = (message: string): RunPlan => channel === 'session.error'
+      ? rateLimitPlan(message)
+      : { type: 'stream', createStream: async function* () { throw new Error(message); } };
+    runPlans = [failure('fetch failed'), failure('fetch failed'), failure('HTTP 429: Too Many Requests')];
     const { promptAsync } = installOpenCodeMock();
     const pending = new OpenCodeClient().call('coder', 'prompt', { cwd: '/tmp', model: 'opencode/big-pickle' });
-    await vi.advanceTimersByTimeAsync(250 + 500 + 1000);
-    expect(await pending).toMatchObject({ status: 'error' });
-    await vi.advanceTimersByTimeAsync(121_000);
-    expect(promptAsync).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(750);
+    expect(await pending).toMatchObject({ status: 'rate_limited', errorKind: 'rate_limit', retryCount: 2 });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(promptAsync).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(['session.error', 'exception'] as const)('%s では429によって通常障害の予算を補充しない', async (channel) => {
+    vi.useFakeTimers();
+    const failure = (message: string): RunPlan => channel === 'session.error'
+      ? rateLimitPlan(message)
+      : { type: 'stream', createStream: async function* () { throw new Error(message); } };
+    runPlans = [failure('HTTP 429: Too Many Requests'), failure('HTTP 429: Too Many Requests'), failure('fetch failed')];
+    const { promptAsync } = installOpenCodeMock();
+    const pending = new OpenCodeClient().call('coder', 'prompt', { cwd: '/tmp', model: 'opencode/big-pickle' });
+    await vi.advanceTimersByTimeAsync(750);
+    expect(await pending).toMatchObject({ status: 'error', retryCount: 2 });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(promptAsync).toHaveBeenCalledTimes(3);
   });
 
   it('429の待機中に中断したら次のpromptを送信しない', async () => {
@@ -662,9 +692,9 @@ describe('OpenCodeClient retry', () => {
     const { promptAsync, abort } = installOpenCodeMock();
     const controller = new AbortController();
     const pending = new OpenCodeClient().call('coder', 'prompt', { cwd: '/tmp', model: 'opencode/big-pickle', abortSignal: controller.signal });
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(249);
     controller.abort();
-    await vi.advanceTimersByTimeAsync(121_000);
+    await vi.advanceTimersByTimeAsync(1000);
     expect(await pending).toMatchObject({ status: 'error' });
     expect(promptAsync).toHaveBeenCalledOnce();
     expect(abort).toHaveBeenCalledOnce();

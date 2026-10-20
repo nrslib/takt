@@ -18,6 +18,7 @@ const RATE_LIMIT_ERROR_PATTERNS = [
 const RATE_LIMIT_EXHAUSTED_PATTERNS = [
   /\b(?:you['’]ve\s+)?hit\s+your\s+usage\s+limit\b/i,
   /\bhit\s+your\s+(?:weekly|5-hour|session)\s+limit\b/i,
+  /\breached\s+your\s+weekly\s+rate\s+limit\b/i,
   /\bout of extra usage\b/i,
   /\busage_limit_exceeded\b/i,
   /\bworkspace\b[^\n\r]*\bout of credits\b/i,
