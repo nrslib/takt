@@ -54,6 +54,21 @@ function resultFixture(repoRoot, suite = 'merge-ci-review') {
   }] } };
 }
 
+function runnerResultFixture(repoRoot, suite, repeat, pattern) {
+  const config = parse(readFileSync(new URL(`../agents/merge-ci-recovery/${suite}.yaml`, import.meta.url), 'utf8'));
+  const value = resultFixture(repoRoot, suite);
+  const row = value.results.results[0];
+  value.config = config;
+  value.runtimeOptions = { repeat };
+  value.results.results = config.tests.filter(({ description }) => !pattern || pattern.test(description))
+    .flatMap((entry) => Array.from({ length: repeat }, (_, index) => ({
+      ...structuredClone(row), id: `${entry.description}-${index}`, success: true,
+      testCase: entry, prompt: { ...row.prompt, label: entry.prompts[0] },
+    })));
+  value.results.stats = { successes: value.results.results.length, failures: 0 };
+  return value;
+}
+
 function preparationErrors(context, suite, repoRoot) {
   const config = parse(readFileSync(new URL(`../agents/merge-ci-recovery/${suite}.yaml`, import.meta.url), 'utf8'));
   const required = config.tests[0].options.required_snapshots;
@@ -183,7 +198,7 @@ const config = args[args.indexOf('-c') + 1];
 const suite = path.basename(config, '.yaml');
 const output = /^outputPath: (.+)$/m.exec(fs.readFileSync(config, 'utf8'))[1];
 const outputPath = path.resolve(output);
-fs.appendFileSync('calls.jsonl', JSON.stringify({ suite, existed: fs.existsSync(outputPath) }) + '\\n');
+fs.appendFileSync('calls.jsonl', JSON.stringify({ suite, args, existed: fs.existsSync(outputPath) }) + '\\n');
 const raw = JSON.parse(fs.readFileSync('input.json', 'utf8'));
 if (suite === 'arch' || !['missing', 'missing-success'].includes(process.env.PUBLICATION_MODE)) {
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
@@ -191,15 +206,78 @@ if (suite === 'arch' || !['missing', 'missing-success'].includes(process.env.PUB
     JSON.stringify(raw[suite]));
 }
 process.exit(suite === 'arch' ? process.env.PUBLICATION_MODE === 'arch-failure' ? 1 : 0
-  : ['success', 'missing-success', 'arch-failure'].includes(process.env.PUBLICATION_MODE) ? 0 : 1);
+  : ['failed-exit', 'failed-eval', 'missing', 'invalid-json', 'invalid-metadata'].includes(process.env.PUBLICATION_MODE)
+    || process.env.PUBLICATION_MODE.startsWith('preparation-') ? 1 : 0);
 `);
   chmodSync(binary, 0o755);
   const suites = [...MERGE_CI_TARGETS, 'arch'];
   const preparation = Object.fromEntries(MERGE_CI_TARGETS.map((suite) => [suite, preparationErrors(context, suite, repoRoot)]));
-  for (const mode of ['success', 'failed-exit', 'failed-eval', 'preparation-missing', 'preparation-directory', 'preparation-copy-failure',
-    'preparation-realpath-failure', 'missing', 'missing-success', 'invalid-json', 'invalid-metadata', 'arch-failure']) {
-    const raw = Object.fromEntries(MERGE_CI_TARGETS.map((suite) => [suite, resultFixture(repoRoot, suite)]));
+  const firstLabels = { 'merge-ci-investigation': 'ja-clock', 'merge-ci-review': 'ja-product-fix' };
+  const filteredLabels = { 'merge-ci-investigation': 'en-clock', 'merge-ci-review': 'en-clock-fix' };
+  const selectionCases = [
+    ...[['--filter-first-n', '1'], ['--filter-first-n=1'], ['-n', '1']].flatMap((flags) =>
+      ['selected', 'selected-missing', 'selected-extra'].map((mode) => ({ mode, flags, labels: firstLabels }))),
+    ...[
+      ['--filter-pattern', '^en-clock', '--filter-first-n', '1'],
+      ['--filter-first-n', '1', '--filter-pattern', '^en-clock'],
+    ].flatMap((flags) => ['selected', 'selected-wrong-label'].map((mode) => ({ mode, flags, labels: filteredLabels }))),
+    ...['12', '13'].flatMap((count) => ['selected', 'selected-missing'].map((mode) =>
+      ({ mode, flags: ['--filter-first-n', count] }))),
+    { mode: 'unselected', labels: firstLabels },
+    { mode: 'failed-exit', flags: ['--filter-first-n', '1'], labels: firstLabels },
+    ...['empty-selected', 'empty-unexpected', 'failed-exit'].map((mode) => ({
+      mode, flags: ['--filter-pattern', '^no-such-case$', '--filter-first-n', '1'], labels: firstLabels, empty: true,
+    })),
+    { mode: 'empty-missing-investigation', flags: ['--filter-pattern', '^ja-clock$', '--filter-first-n', '1'],
+      labels: firstLabels, empty: true },
+    { mode: 'empty-missing-review', flags: ['--filter-pattern', '^ja-product-fix$', '--filter-first-n', '1'],
+      labels: firstLabels, empty: true },
+  ];
+  const passingModes = ['success', 'repeat-two', 'partial', 'selected', 'empty-selected'];
+  const cases = ['success', 'failed-exit', 'failed-eval', 'preparation-missing', 'preparation-directory', 'preparation-copy-failure',
+    'preparation-realpath-failure', 'missing', 'missing-success', 'invalid-json', 'invalid-metadata', 'arch-failure',
+    'missing-clock', 'missing-investigation', 'biased-labels', 'missing-review', 'repeat-two', 'repeat-two-missing',
+    'partial', 'partial-missing'].map((mode) => ({ mode }));
+  for (const { mode, flags: selectionFlags, labels, empty } of [...cases, ...selectionCases]) {
+    const repeat = mode.startsWith('repeat-two') ? 2 : 3;
+    const partial = mode.startsWith('partial');
+    const flags = ['--repeat', String(repeat), ...(selectionFlags ?? (partial ? ['--filter-pattern', '^ja-clock'] : []))];
+    const raw = Object.fromEntries(MERGE_CI_TARGETS.map((suite) => [suite,
+      runnerResultFixture(repoRoot, suite, repeat, partial ? /^ja-clock/ : undefined)]));
+    for (const suite of MERGE_CI_TARGETS) {
+      const value = raw[suite];
+      if (labels) {
+        value.results.results = value.results.results.filter(({ prompt }) => prompt.label === labels[suite]);
+        assert.equal(value.results.results.length, repeat);
+        value.results.stats.successes = repeat;
+      }
+      const rows = value.results.results;
+      if (empty) {
+        rows.splice(mode === 'empty-unexpected' ? 1 : 0);
+        value.results.stats.successes = rows.length;
+      }
+      if (mode === 'selected-missing' || mode === 'repeat-two-missing') rows.shift();
+      if (mode === 'selected-extra') rows.push(structuredClone(rows[0]));
+      if (mode === 'selected-wrong-label') {
+        rows[0].prompt.label = suite === 'merge-ci-investigation' ? 'en-clock-main' : 'en-clock-relax';
+      }
+    }
     raw.arch = { response: { output: preparation[MERGE_CI_TARGETS[0]].missing.error } };
+    if (mode === 'missing-clock') {
+      raw['merge-ci-investigation'].results.results = raw['merge-ci-investigation'].results.results
+        .filter(({ prompt }) => !['ja-clock', 'ja-clock-main'].includes(prompt.label));
+    }
+    if (mode === 'biased-labels') {
+      for (const suite of MERGE_CI_TARGETS) {
+        const rows = raw[suite].results.results;
+        rows[0].prompt.label = rows.find(({ prompt }) => prompt.label.startsWith('en-')).prompt.label;
+      }
+    }
+    if (mode === 'missing-investigation') raw['merge-ci-investigation'].results.results.shift();
+    if (mode === 'missing-review') raw['merge-ci-review'].results.results.splice(0, 1);
+    if (mode === 'partial-missing') {
+      for (const suite of MERGE_CI_TARGETS) raw[suite].results.results.pop();
+    }
     if (mode.startsWith('preparation-')) {
       for (const suite of MERGE_CI_TARGETS) {
         raw[suite] = preparationFailureFixture(repoRoot, suite, preparation[suite][mode.slice('preparation-'.length)].error);
@@ -208,8 +286,9 @@ process.exit(suite === 'arch' ? process.env.PUBLICATION_MODE === 'arch-failure' 
     if (mode === 'failed-eval') {
       for (const suite of MERGE_CI_TARGETS) {
         const value = raw[suite];
-        value.results.stats = { successes: 0, failures: 1, errors: 1 };
+        value.results.stats = { successes: value.results.results.length - 1, failures: 1, errors: 1 };
         const row = value.results.results[0];
+        row.success = false;
         delete row.response.output;
         row.response.error = `${row.response.metadata.fixture.working_directory}/product.mjs: permission denied`;
         row.gradingResult.pass = false;
@@ -227,19 +306,20 @@ process.exit(suite === 'arch' ? process.env.PUBLICATION_MODE === 'arch-failure' 
       write(paths.raw, JSON.stringify({ stale: true }));
       write(paths.published, JSON.stringify({ previous: true }));
     }
-    const execution = spawnSync(process.execPath, ['eval/scripts/run-evals.mjs', ...suites], {
+    const execution = spawnSync(process.execPath, ['eval/scripts/run-evals.mjs', ...suites, ...flags], {
       cwd: repoRoot, encoding: 'utf8', timeout: 15_000,
       env: { ...process.env, PATH: join(repoRoot, 'bin') + delimiter + process.env.PATH, PUBLICATION_MODE: mode },
     });
     assert.equal(execution.error, undefined);
-    assert.equal(execution.status, mode === 'success' ? 0 : 1, execution.stdout + execution.stderr);
+    assert.equal(execution.status, passingModes.includes(mode) ? 0 : 1, execution.stdout + execution.stderr);
     const calls = readFileSync(join(repoRoot, 'calls.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
     assert.deepEqual(calls.map(({ suite }) => suite), suites);
+    assert.ok(calls.every(({ args }) => JSON.stringify(args.slice(-flags.length)) === JSON.stringify(flags)));
     assert.ok(calls.filter(({ suite }) => suite !== 'arch').every(({ existed }) => !existed));
     assert.ok(execution.stdout.includes(`${mode === 'arch-failure' ? 'FAIL' : 'PASS'}  arch`));
     for (const suite of MERGE_CI_TARGETS) {
       const published = JSON.parse(readFileSync(mergeCiResultPaths(suite, repoRoot).published, 'utf8'));
-      assert.deepEqual(published, ['success', 'failed-exit', 'failed-eval', 'arch-failure'].includes(mode) || mode.startsWith('preparation-')
+      assert.deepEqual(published, !['missing', 'missing-success', 'invalid-json', 'invalid-metadata'].includes(mode)
         ? normalizeMergeCiResults(raw[suite], repoRoot) : { previous: true });
       if (mode.startsWith('preparation-')) {
         const expected = preparationFailureFixture(repoRoot, suite,
@@ -250,10 +330,16 @@ process.exit(suite === 'arch' ? process.env.PUBLICATION_MODE === 'arch-failure' 
       if (mode === 'failed-eval') {
         assert.equal(published.results.results[0].response.error,
           `eval/.work/merge-ci-recovery/${suite}-ja-product-fix/product.mjs: permission denied`);
-        assert.deepEqual(published.results.stats, { successes: 0, failures: 1, errors: 1 });
+        assert.deepEqual(published.results.stats, { successes: published.results.results.length - 1, failures: 1, errors: 1 });
+        assert.equal(published.results.results[0].success, false);
         assert.equal(published.results.results[0].gradingResult.pass, false);
       }
-      assert.ok(execution.stdout.includes(`${['success', 'arch-failure'].includes(mode) ? 'PASS' : 'FAIL'}  ${suite}`));
+      const passed = passingModes.includes(mode) || mode === 'arch-failure'
+        || ['missing-clock', 'missing-investigation'].includes(mode) && suite === 'merge-ci-review'
+        || mode === 'missing-review' && suite === 'merge-ci-investigation'
+        || mode === 'empty-missing-investigation' && suite === 'merge-ci-review'
+        || mode === 'empty-missing-review' && suite === 'merge-ci-investigation';
+      assert.ok(execution.stdout.includes(`${passed ? 'PASS' : 'FAIL'}  ${suite}`), execution.stdout + execution.stderr);
     }
     assert.deepEqual(JSON.parse(readFileSync(join(repoRoot, 'eval/results/arch.json'), 'utf8')),
       raw.arch);

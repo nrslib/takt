@@ -12,7 +12,13 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mergeCiResultPaths, normalizeMergeCiResults } from './merge-ci-public-results.mjs';
+import { parse } from 'yaml';
+import {
+  mergeCiResultPaths,
+  normalizeMergeCiResults,
+  resolveMergeCiExpectedResults,
+  validateMergeCiResultCoverage,
+} from './merge-ci-public-results.mjs';
 import {
   PROMPT_EVAL_SUITES,
   PROMPT_EVAL_TIERS,
@@ -94,6 +100,8 @@ for (const suite of selected) {
   let code;
   try {
     const paths = mergeCiResultPaths(suite.name, repoRoot);
+    const expected = paths === undefined ? undefined
+      : resolveMergeCiExpectedResults(parse(readFileSync(config, 'utf8')), options.flags);
     if (paths !== undefined) {
       mkdirSync(dirname(paths.raw), { recursive: true });
       rmSync(paths.raw, { force: true });
@@ -111,6 +119,7 @@ for (const suite of selected) {
       const published = normalizeMergeCiResults(JSON.parse(readFileSync(paths.raw, 'utf8')), repoRoot);
       mkdirSync(dirname(paths.published), { recursive: true });
       writeFileSync(paths.published, `${JSON.stringify(published, null, 2)}\n`);
+      validateMergeCiResultCoverage(published, expected);
     }
   } catch (error) {
     console.error(`Failed to run or publish ${suite.name}: ${error.message}`);

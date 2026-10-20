@@ -2,6 +2,52 @@ import { isAbsolute, join, relative, sep } from 'node:path';
 
 const SUITES = new Set(['merge-ci-investigation', 'merge-ci-review']);
 
+export function resolveMergeCiExpectedResults(config, flags) {
+  let repeat = config.commandLineOptions?.repeat ?? config.evaluateOptions?.repeat ?? 1;
+  let pattern;
+  let firstN;
+  for (let index = 0; index < flags.length; index += 1) {
+    const [name, inline] = flags[index].split(/=(.*)/s);
+    if (name === '--repeat' || name === '--filter-pattern' || name === '--filter-first-n' || name === '-n') {
+      const value = inline ?? flags[++index];
+      if (name === '--repeat') repeat = Number(value);
+      else if (name === '--filter-pattern') pattern = new RegExp(value);
+      else {
+        firstN = Number.parseInt(value);
+        if (Number.isNaN(firstN)) throw new Error(`firstN must be a number, got: ${value}`);
+      }
+    }
+  }
+  if (!Number.isSafeInteger(repeat) || repeat < 1) repeat = 1;
+  let tests = config.tests;
+  if (pattern) tests = tests.filter((test) => test.description && pattern.test(test.description));
+  if (firstN !== undefined) tests = tests.slice(0, firstN);
+  const expected = new Map();
+  for (const test of tests) {
+    const testRepeat = test.options?.repeat ?? config.defaultTest?.options?.repeat ?? repeat;
+    for (const label of test.prompts) {
+      expected.set(label, (expected.get(label) ?? 0) + testRepeat);
+    }
+  }
+  return expected;
+}
+
+export function validateMergeCiResultCoverage(value, expected) {
+  const rows = value.results?.results;
+  if (!Array.isArray(rows)) throw new Error('Evaluation result rows are required');
+  const counts = new Map();
+  for (const row of rows) {
+    const label = row.prompt?.label;
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  const differences = [...new Set([...expected.keys(), ...counts.keys()])]
+    .filter((label) => (counts.get(label) ?? 0) !== (expected.get(label) ?? 0))
+    .map((label) => `${label}: expected ${expected.get(label) ?? 0}, got ${counts.get(label) ?? 0}`);
+  if (differences.length > 0) {
+    throw new Error(`Incomplete evaluation result coverage (${differences.join('; ')})`);
+  }
+}
+
 export function mergeCiResultPaths(suiteName, repoRoot) {
   if (!SUITES.has(suiteName)) return undefined;
   return {
