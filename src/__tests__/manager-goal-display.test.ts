@@ -32,10 +32,15 @@ describe('manager goal names', () => {
 });
 
 describe('manager inquiry summaries', () => {
+  it.each(['ja', 'en'] as const)('names a standalone approval without inventing a goal in %s', (lang) => {
+    const row = formatPendingQuestion({ goalId: null, owner: { kind: 'repository', repositoryDirectory: '/fixture' },
+      question: { id: 'standalone', kind: 'approval', recipient: 'human', status: 'pending', body: 'Write output' } }, lang);
+    expect(row).toBe(`${getLabel('manager.inquiryKinds.approval', lang)}: ${formatGoalName(getLabel('manager.inquiryNoGoal', lang))} — Write output`);
+  });
   it.each(['ja', 'en'] as const)('formats an inquiry row with the common name and summary in %s', (lang) => {
     const objective = '目的'.repeat(30);
     const body = '要点\n' + '本文'.repeat(40);
-    expect(formatPendingQuestion({ goalId: 'goal', objective, question: {
+    expect(formatPendingQuestion({ goalId: 'goal', repositoryDirectory: '/fixture', objective, question: {
       id: 'question', recipient: 'human', status: 'pending', kind: 'approval', body,
     } }, lang)).toBe(`${getLabel('manager.inquiryKinds.approval', lang)}: ${formatGoalName(objective)} — ${formatInquirySummary(body)}`);
   });

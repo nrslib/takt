@@ -7,9 +7,9 @@ import {
 } from '../infra/goals/questions.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
 
-const doubles = vi.hoisted(() => ({ read: vi.fn(), write: vi.fn(), lstat: vi.fn() }));
+const doubles = vi.hoisted(() => ({ read: vi.fn(), write: vi.fn(), lstat: vi.fn(), lock: vi.fn() }));
 vi.mock('node:fs', () => ({ readdirSync: vi.fn() }));
-vi.mock('../infra/fs/file-lock.js', () => ({ withFileLock: (_path: string, action: () => unknown) => action() }));
+vi.mock('../infra/fs/file-lock.js', () => ({ withFileLock: doubles.lock }));
 vi.mock('../shared/utils/private-file.js', () => ({
   readPrivateFileState: doubles.read, writePrivateFile: doubles.write, ensurePrivateDirectory: vi.fn(),
   capturePrivateDirectoryReadSnapshot: vi.fn(), assertPrivateDirectoryReadSnapshot: vi.fn(),
@@ -26,6 +26,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   files = new Map();
   doubles.lstat.mockReturnValue({});
+  doubles.lock.mockImplementation((_path: string, action: () => unknown) => action());
   doubles.read.mockImplementation((file: string) => {
     const content = files.get(file);
     return content === undefined ? { state: { exists: false } } : { content: Buffer.from(content) };
@@ -34,6 +35,69 @@ beforeEach(() => {
 });
 
 describe('inquiry persistence through GoalStore', () => {
+  it.each([false, true])('notifies after publishing the answer and before releasing the lock (release failure=%s)', async (failure) => {
+    const created = addGoalQuestion(goalRecord(), { body: 'Choose output format' });
+    const store = new GoalStore('/project');
+    await store.create(created.goal);
+    const onSaved = vi.fn(() => {
+      expect(JSON.parse(files.get(path)!).questions[0]).toMatchObject({
+        status: 'answered', answer: { text: 'CSV with headers', source: 'tui' },
+      });
+    });
+    const error = new Error('lock release failed');
+    doubles.lock.mockImplementationOnce((_path: string, action: () => unknown) => {
+      const saved = action();
+      expect(onSaved).toHaveBeenCalledOnce();
+      if (failure) throw error;
+      return saved;
+    });
+    const saving = store.update(goalId, (goal) => answerGoalQuestion(goal, created.questionId, { text: 'CSV with headers' }), onSaved);
+    if (failure) await expect(saving).rejects.toBe(error);
+    else expect(await saving).toEqual(await store.get(goalId));
+    expect(onSaved).toHaveBeenCalledOnce();
+    expect((await store.get(goalId)).questions![0]).toMatchObject({ status: 'answered' });
+  });
+
+  it.each(['validation', 'write'] as const)('does not notify or change the saved inquiry on %s failure before publication', async (failure) => {
+    const created = addGoalQuestion(goalRecord(), { body: 'Choose output format' });
+    const store = new GoalStore('/project');
+    await store.create(created.goal);
+    const before = files.get(path);
+    const onSaved = vi.fn();
+    if (failure === 'write') doubles.write.mockImplementationOnce(() => { throw new Error('write failed'); });
+    await expect(store.update(goalId, (goal) => failure === 'validation'
+      ? { ...goal, objective: '' } : answerGoalQuestion(goal, created.questionId, { text: 'CSV with headers' }), onSaved)).rejects.toThrow();
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(files.get(path)).toBe(before);
+    expect((await store.get(goalId)).questions![0]).toMatchObject({ status: 'pending' });
+  });
+
+  it.each(['write', 'release'] as const)('propagates %s failure to callers without a save notification', async (failure) => {
+    const store = new GoalStore('/project');
+    await store.create(goalRecord());
+    const error = new Error('update failed');
+    if (failure === 'write') doubles.write.mockImplementationOnce(() => { throw error; });
+    else doubles.lock.mockImplementationOnce((_path: string, action: () => unknown) => { action(); throw error; });
+    await expect(store.update(goalId, (goal) => ({ ...goal, objective: 'Updated objective' }))).rejects.toBe(error);
+    expect((await store.get(goalId)).objective).toBe(failure === 'write' ? goalRecord().objective : 'Updated objective');
+  });
+
+  it('writes and restores an optional permission proposal without mixing it with the inquiry body', async () => {
+    const input = { kind: 'approval' as const, body: 'この操作を許可しますか', operation,
+      permissionProposal: 'この作業場所でgit statusを実行することを許可する' };
+    const created = addGoalQuestion(goalRecord(), input);
+    const store = new GoalStore('/project');
+
+    await store.create(created.goal);
+    const restored = await store.get(goalId);
+
+    expect(restored.questions?.[0]).toMatchObject({ body: input.body, permissionProposal: input.permissionProposal });
+    expect(JSON.parse(files.get(path)!).questions[0]).toMatchObject({ permissionProposal: input.permissionProposal });
+    await store.update(goalId, (current) => answerGoalQuestion(current, created.questionId, { decision: 'allow', scope: 'project', text: '回答コメント' }));
+    expect((await store.get(goalId)).questions?.[0]).toMatchObject({ permissionProposal: input.permissionProposal,
+      answer: { decision: 'allow', scope: 'project', text: '回答コメント' } });
+  });
+
   it('reads legacy JSON without kind as questions while retaining answers and only writes explicit kinds on update', async () => {
     const pending = { id: questionId, recipient: 'human', body: '形式はどれですか', status: 'pending' };
     const answered = { ...pending, id: '650e8400-e29b-41d4-a716-446655440002', status: 'answered',

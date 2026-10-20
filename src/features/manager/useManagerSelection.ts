@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import type { Key } from 'ink';
 import type { ManagerDisplayGoal } from './savedEvents.js';
-import type { PendingQuestion } from './useManagerQuestionAnswer.js';
+import type { PendingQuestion } from './inquiryAnswer.js';
 
 type GoalOperation = 'pause' | 'resume' | 'abort';
 export type ManagerSelectionCommand = 'answer' | GoalOperation;

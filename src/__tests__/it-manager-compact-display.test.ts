@@ -12,7 +12,7 @@ import { ManagerPendingQuestions } from '../features/manager/ManagerPendingQuest
 import { ManagerView } from '../features/manager/ManagerView.js';
 import type { ManagerConversationSession } from '../features/manager/conversationSession.js';
 import * as savedEvents from '../features/manager/savedEvents.js';
-import type { PendingQuestion } from '../features/manager/useManagerQuestionAnswer.js';
+import type { PendingQuestion } from '../features/manager/inquiryAnswer.js';
 import { PromptInput } from '../features/tui/PromptInput.js';
 import { invalidateResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
 import type { GoalQuestion } from '../infra/goals/schema.js';
@@ -89,7 +89,7 @@ describe.each(['ja', 'en'] as const)('compact manager lists in %s', (lang) => {
   it('shows each inquiry kind, the common name, a short summary and the count without details', async () => {
     const kinds = ['question', 'approval', 'operation_request', undefined] as const;
     const questions: PendingQuestion[] = kinds.map((kind, index) => ({
-      goalId: goalRecord().id, objective,
+      goalId: goalRecord().id, repositoryDirectory: '/fixture', objective,
       question: question({ id: `650e8400-e29b-41d4-a716-44665544000${index + 1}`, kind,
         body: `要点${index}\n${'あ'.repeat(60)}本文の末尾` }),
     }));
@@ -110,7 +110,7 @@ describe.each(['ja', 'en'] as const)('compact manager lists in %s', (lang) => {
         expect(matching[0]).toContain(shortName);
         expect(matching[0]).toMatch(expectedKinds[index]!);
         for (const row of rows) {
-          expect(row).not.toContain(pending.goalId);
+          expect(row).not.toContain(pending.goalId!);
           expect(row).not.toContain(pending.question.id);
           expect(row).not.toContain('本文の末尾');
           for (const option of pending.question.options!) expect(row).not.toContain(option);
@@ -124,7 +124,7 @@ describe.each(['ja', 'en'] as const)('compact manager lists in %s', (lang) => {
   });
 
   it('keeps a Japanese inquiry with a long name and body on one row in a narrow terminal', async () => {
-    const questions = [{ goalId: goalRecord().id, objective, question: question({ kind: 'question' }) }];
+    const questions = [{ goalId: goalRecord().id, repositoryDirectory: '/fixture', objective, question: question({ kind: 'question' }) }];
     const app = render(createElement(Box, { width: 38 }, createElement(ManagerPendingQuestions, { questions, lang })));
     await waitFor(() => {
       const rows = contentRows(boxes(app.lastFrame()!)[0]!);
@@ -307,7 +307,7 @@ describe('manager polling and answer cancellation', () => {
     expect(readFileSync(file, 'utf8')).toBe(before);
     expect(await store.get(saved.id)).toEqual(saved);
     expect((await savedEvents.readManagerDisplayEvents(cwd, 'en')).questions).toEqual([
-      { goalId: saved.id, objective: saved.objective, question: saved.questions![0] },
+      { goalId: saved.id, repositoryDirectory: cwd, objective: saved.objective, question: saved.questions![0] },
     ]);
     const pending = boxes(app!.lastFrame()!).find((box) => box.includes('出力形式を選んでください。'))!;
     expect(contentRows(pending)[0]).toMatch(/1/u);

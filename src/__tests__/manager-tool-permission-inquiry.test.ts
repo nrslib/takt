@@ -109,14 +109,27 @@ describe('saveManagerToolPermissionInquiry', () => {
   it('sanitizes the confirmation and gives the store raw arguments for digest generation', async () => {
     const saved = await saveManagerToolPermissionInquiry(input);
     expect(doubles.store).toHaveBeenCalledWith(input.configDirectory, input.owner);
-    expect(doubles.approval).toHaveBeenCalledWith({ kind: 'approval',
+    expect(doubles.approval).toHaveBeenCalledWith(expect.objectContaining({ kind: 'approval',
       body: 'token=[REDACTED] の送信を確認してください',
       operation: { toolName: 'Write', args: '{"token":"alpha"}', cwd: '/operation' },
-    });
+    }));
     expect(saved).toMatchObject({ kind: 'approval', status: 'pending',
       body: expect.stringContaining('[REDACTED]'), operation: { args: expect.stringContaining('[REDACTED]') } });
     expect(saved.body).not.toContain('alpha');
     expect(saved.operation!.args).not.toContain('alpha');
+  });
+
+  it('saves a permission proposal describing the tool, target and execution directory without reintroducing secrets', async () => {
+    const request = { ...input.request, toolInput: { file_path: 'out/result.txt', token: 'alpha' } };
+
+    const saved = await saveManagerToolPermissionInquiry({ ...input, request });
+
+    for (const value of ['Write', 'out/result.txt', '/operation']) {
+      expect(saved).toHaveProperty('permissionProposal', expect.stringContaining(value));
+    }
+    expect(saved).toHaveProperty('permissionProposal', expect.not.stringContaining('alpha'));
+    expect(saved).toHaveProperty('permissionProposal', expect.not.stringMatching(/[\r\n]/u));
+    expect(saved.body).toBe('token=[REDACTED] の送信を確認してください');
   });
 
   it('returns the existing approval selected by the store', async () => {

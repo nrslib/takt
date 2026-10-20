@@ -297,13 +297,13 @@ describe('manager TUI input', () => {
   });
 
   it.each(['separate chunks', 'one unbracketed chunk', 'one bracketed paste chunk', 'bracketed body CR before separate Enter'] as const)('sends a long free-text answer once without sending it as conversation: %s', async (delivery) => {
-    const target = { goalId: goalRecord().id, objective: 'Answer fixture', question: {
+    const target = { goalId: goalRecord().id, repositoryDirectory: cwd, objective: 'Answer fixture', question: {
       id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human' as const,
       status: 'pending' as const, body: 'Where should the output go?',
     } };
     vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], goals: [goalRecord()], questions: [target] });
     const context = mount();
-    const answer = vi.spyOn(context.session, 'answerQuestion').mockResolvedValue({ kind: 'reply', message: 'Answer saved' });
+    const answer = vi.spyOn(context.session, 'answerQuestion').mockResolvedValue({ kind: 'reply', message: 'Answer saved', answerSaved: true });
     const text = `${'詳細な回答を保存してください。'.repeat(80)}回答の末尾`;
     try {
       await typeAndSubmit(context, '/answer');
@@ -329,7 +329,7 @@ describe('manager TUI input', () => {
       await waitFor(() => {
         expect(context.app.lastFrame()).toContain('回答の末尾');
         expect(answer).toHaveBeenCalledExactlyOnceWith({
-          goalId: target.goalId, questionId: target.question.id, text, abortSignal: expect.any(AbortSignal),
+          goalId: target.goalId, repositoryDirectory: cwd, questionId: target.question.id, answer: { text }, abortSignal: expect.any(AbortSignal),
         });
         expect(promptFrame(context)).toContain('Discuss your goal');
         expect(promptFrame(context)).not.toContain('回答の末尾');
@@ -539,14 +539,39 @@ describe('manager TUI input', () => {
     } finally { context.app.unmount(); await context.session.close(); }
   });
 
+  it('keeps vertical cursor movement in a free-text question answer', async () => {
+    const target = { goalId: goalRecord().id, repositoryDirectory: cwd, objective: 'Answer fixture', question: {
+      id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human' as const,
+      status: 'pending' as const, body: 'Where should the output go?',
+    } };
+    vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], goals: [goalRecord()], questions: [target] });
+    const context = mount();
+    const answer = vi.spyOn(context.session, 'answerQuestion').mockResolvedValue({ kind: 'reply', message: 'Answer saved', answerSaved: true });
+    try {
+      await typeAndSubmit(context, '/answer');
+      await enterSelection(context);
+      context.app.stdin.write('\x1b[200~first\nsecond\x1b[201~');
+      await waitFor(() => expect(promptFrame(context)).toContain('second'));
+      context.app.stdin.write(UP);
+      context.app.stdin.write('!');
+      await waitFor(() => expect(promptFrame(context)).toContain('first!'));
+      context.app.stdin.write(ENTER);
+      await waitFor(() => expect(answer).toHaveBeenCalledExactlyOnceWith({
+        goalId: target.goalId, repositoryDirectory: cwd, questionId: target.question.id,
+        answer: { text: 'first!\nsecond' }, abortSignal: expect.any(AbortSignal),
+      }));
+      expect(context.call).not.toHaveBeenCalled();
+    } finally { context.app.unmount(); await context.session.close(); }
+  });
+
   it.each(['selected option', 'plain text without Enter', 'one unbracketed chunk', 'bracketed paste containing CR'] as const)('routes selected options and pasted free text to the question: %s', async (delivery) => {
-    const target = { goalId: goalRecord().id, objective: 'Answer fixture', question: {
+    const target = { goalId: goalRecord().id, repositoryDirectory: cwd, objective: 'Answer fixture', question: {
       id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human' as const,
       status: 'pending' as const, body: 'Which output format?', options: ['CSV', 'JSON'],
     } };
     vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], goals: [goalRecord()], questions: [target] });
     const context = mount();
-    const answer = vi.spyOn(context.session, 'answerQuestion').mockResolvedValue({ kind: 'reply', message: 'Answer saved' });
+    const answer = vi.spyOn(context.session, 'answerQuestion').mockResolvedValue({ kind: 'reply', message: 'Answer saved', answerSaved: true });
     try {
       await typeAndSubmit(context, '/answer');
       await enterSelection(context);
@@ -568,8 +593,8 @@ describe('manager TUI input', () => {
 
       await waitFor(() => {
         expect(answer).toHaveBeenCalledExactlyOnceWith({
-          goalId: target.goalId, questionId: target.question.id,
-          text: delivery === 'selected option' ? 'CSV' : LONG_TEXT,
+          goalId: target.goalId, repositoryDirectory: cwd, questionId: target.question.id,
+          answer: { text: delivery === 'selected option' ? 'CSV' : LONG_TEXT },
           abortSignal: expect.any(AbortSignal),
         });
         expect(promptFrame(context)).toContain('Discuss your goal');
@@ -583,7 +608,7 @@ describe('manager TUI input', () => {
   });
 
   it.each(['abort', 'answer'] as const)('waits for human %s selection before sending the next queued conversation', async (selection) => {
-    const target = { goalId: goalRecord().id, objective: 'Selection fixture', question: {
+    const target = { goalId: goalRecord().id, repositoryDirectory: cwd, objective: 'Selection fixture', question: {
       id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human' as const,
       status: 'pending' as const, body: 'Which output format?', options: ['CSV', 'JSON'],
     } };
@@ -592,7 +617,7 @@ describe('manager TUI input', () => {
     const context = mount();
     context.call.mockReturnValueOnce(turn.promise).mockResolvedValue(response(null));
     const abort = vi.spyOn(context.session, 'abortGoal').mockResolvedValue({ kind: 'reply', message: 'Goal aborted' });
-    const answer = vi.spyOn(context.session, 'answerQuestion').mockResolvedValue({ kind: 'reply', message: 'Answer saved' });
+    const answer = vi.spyOn(context.session, 'answerQuestion').mockResolvedValue({ kind: 'reply', message: 'Answer saved', answerSaved: true });
     const command = selection === 'abort' ? '/abort' : '/answer';
     try {
       await typeAndSubmit(context, 'first request');
@@ -626,7 +651,7 @@ describe('manager TUI input', () => {
           expect(abort).toHaveBeenCalledExactlyOnceWith({ goalId: target.goalId, abortSignal: expect.any(AbortSignal) });
           expect(answer).not.toHaveBeenCalled();
         } else {
-          expect(answer).toHaveBeenCalledExactlyOnceWith({ goalId: target.goalId, questionId: target.question.id, text: 'JSON', abortSignal: expect.any(AbortSignal) });
+          expect(answer).toHaveBeenCalledExactlyOnceWith({ goalId: target.goalId, repositoryDirectory: cwd, questionId: target.question.id, answer: { text: 'JSON' }, abortSignal: expect.any(AbortSignal) });
           expect(abort).not.toHaveBeenCalled();
         }
         expect(context.call).toHaveBeenCalledTimes(2);

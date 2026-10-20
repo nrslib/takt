@@ -1,6 +1,6 @@
 import { toDisplayText } from '../tui/displayText.js';
 import { getLabel } from '../../shared/i18n/index.js';
-import type { PendingQuestion } from './useManagerQuestionAnswer.js';
+import type { PendingQuestion } from './inquiryAnswer.js';
 
 const GOAL_NAME_LIMIT = 24;
 const INQUIRY_SUMMARY_LIMIT = 40;
@@ -27,6 +27,8 @@ export function formatInquirySummary(body: string): string {
   return formatShortText(body, INQUIRY_SUMMARY_LIMIT);
 }
 
-export function formatPendingQuestion({ objective, question }: PendingQuestion, lang: 'en' | 'ja'): string {
+export function formatPendingQuestion(pending: PendingQuestion, lang: 'en' | 'ja'): string {
+  const { question } = pending;
+  const objective = pending.goalId === null ? getLabel('manager.inquiryNoGoal', lang) : pending.objective;
   return `${getLabel(`manager.inquiryKinds.${question.kind ?? 'question'}`, lang)}: ${formatGoalName(objective)} — ${formatInquirySummary(question.body)}`;
 }

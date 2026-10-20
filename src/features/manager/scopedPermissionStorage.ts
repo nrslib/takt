@@ -19,7 +19,7 @@ export type PermissionScope =
   | { readonly kind: 'global' }
   | { readonly kind: 'goal'; readonly repositoryDirectory: string; readonly goalId: string };
 
-type WritablePermissionScope = Exclude<PermissionScope, { kind: 'goal' }>;
+export type WritablePermissionScope = Exclude<PermissionScope, { kind: 'goal' }>;
 
 interface PermissionTarget {
   readonly scope: PermissionScope['kind'];

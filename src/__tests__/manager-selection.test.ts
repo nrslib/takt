@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { ManagerSelectionDialog } from '../features/manager/ManagerSelectionDialog.js';
 import { useManagerSelection, type ManagerSelectionCommand, type ManagerSelectedTarget } from '../features/manager/useManagerSelection.js';
 import type { ManagerDisplayGoal } from '../features/manager/savedEvents.js';
-import type { PendingQuestion } from '../features/manager/useManagerQuestionAnswer.js';
+import type { PendingQuestion } from '../features/manager/inquiryAnswer.js';
 import { getLabel } from '../shared/i18n/index.js';
 
 const goals: ManagerDisplayGoal[] = [
@@ -17,7 +17,7 @@ const goals: ManagerDisplayGoal[] = [
   { id: 'aborted', objective: 'Aborted', status: 'created', executionStatus: 'aborted' },
 ];
 const questions: PendingQuestion[] = [1, 2].map((index) => ({
-  goalId: `goal-${index}`, objective: `Inquiry goal ${index}`, question: {
+  goalId: `goal-${index}`, repositoryDirectory: '/fixture', objective: `Inquiry goal ${index}`, question: {
     id: 'shared-question-id', recipient: 'human', status: 'pending', body: `Inquiry ${index}`,
   },
 }));

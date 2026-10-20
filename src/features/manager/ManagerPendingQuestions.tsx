@@ -2,7 +2,7 @@ import { Box, Text } from 'ink';
 import type { ReactElement } from 'react';
 import { getLabel } from '../../shared/i18n/index.js';
 import { formatPendingQuestion } from './goalDisplay.js';
-import type { PendingQuestion } from './useManagerQuestionAnswer.js';
+import type { PendingQuestion } from './inquiryAnswer.js';
 
 export function ManagerPendingQuestions({ questions, lang }: {
   questions: readonly PendingQuestion[]; lang: 'en' | 'ja';
