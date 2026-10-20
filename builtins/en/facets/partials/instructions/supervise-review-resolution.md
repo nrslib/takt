@@ -1,5 +1,12 @@
 Determine requirement fulfillment and resolution of preceding concerns from current code and the current review decision.
 
+If you find a past action that departed from the instructed way of working, check the following.
+
+- Do its results remain in current artifacts or external state?
+- Does the evidence used to establish that acceptance criteria are met come from checking current code under the specified conditions?
+
+Record the results in the report before deciding.
+
 {{include:instructions/final-preservation-check}}
 
 **Current review resolution:**

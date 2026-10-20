@@ -7,6 +7,21 @@ const evalDir = dirname(fileURLToPath(import.meta.url));
 const CLASSIFICATIONS = [
   {
     tier: 'active',
+    reason: 'ページに閉じた状態・操作判断の誤検知と、別の状態操作層への委譲の見逃しを測る',
+    suites: ['frontend-mediator-review'],
+  },
+  {
+    tier: 'active',
+    reason: 'frontend implement がページの操作判断を独立した Mediator 層へ委譲する生成と、表示部品での誤発火を測る',
+    suites: ['frontend-mediator-coder'],
+  },
+  {
+    tier: 'active',
+    reason: '入力の主体・並行処理・量の根拠と過去の工程逸脱を、発火する例としない例で測る',
+    suites: ['finding-realistic-premise'],
+  },
+  {
+    tier: 'active',
     reason: '完了検証・再計画・レビュー裁定で反例に使う入力の根拠を確かめる',
     suites: ['fix-verification-applicable-inputs'],
   },
@@ -204,6 +219,12 @@ const CLASSIFICATIONS = [
 ];
 
 const EXECUTION_OVERRIDES = {
+  'finding-realistic-premise': {
+    defaultEligible: false,
+    credentials: ['claude', 'codex'],
+    cost: 'high',
+    reason: '17ケースを隔離した3モデルで比較するため両CLI認証と大きな実行枠を要する',
+  },
   'fix-verification-applicable-inputs': {
     defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
     reason: 'Sol Low、Opus 5、Luna Max の3モデルで完了検証・再計画・裁定の入力範囲を比較する',
@@ -263,6 +284,18 @@ const EXECUTION_OVERRIDES = {
     credentials: ['claude'],
     cost: 'standard',
     reason: 'Lunaで検証したGUI設計ケースをOpusでも確認する',
+  },
+  'frontend-mediator-review': {
+    defaultEligible: false,
+    credentials: ['codex', 'claude'],
+    cost: 'high',
+    reason: 'Luna max と Opus の隔離レビューを固定した4実装と意味採点で比較する',
+  },
+  'frontend-mediator-coder': {
+    defaultEligible: false,
+    credentials: ['codex', 'claude'],
+    cost: 'high',
+    reason: '隔離した React アプリで Codex low と Claude Opus の実装を生成し、artifact と LLM rubric で構造を評価する',
   },
   'resource-flow-review': {
     defaultEligible: false,
@@ -619,6 +652,10 @@ const EXECUTION_OVERRIDES = {
 };
 
 const PREPARE_TARGET_OVERRIDES = {
+  'finding-realistic-premise': [
+    'rt', 'rc', 'rq', 'ne', 'np', 'nb', 'at', 'ac', 'aq', 'ae', 'ap', 'ab',
+    'vd1', 'vd2', 'vn1', 'vn2', 'pd1',
+  ].map((caseId) => `finding-realistic-premise-${caseId}`),
   'fix-verification-applicable-inputs': ['f1', 'f2', 'f3', 'r1', 'r2', 'n1', 'n2', 'n3', 'n4', 'n5', 'a1', 'a2', 'a3', 'a4']
     .map((caseId) => `fix-verification-applicable-inputs-${caseId}`),
   'review-adjudication-applicable-inputs': ['a1', 'a2', 'a3', 'a4']
@@ -671,6 +708,8 @@ const PREPARE_TARGET_OVERRIDES = {
   'frontend-opus': ['frontend-review', 'frontend-review-react'],
   cqrs: ['cqrs-review'],
   'frontend-coder': ['frontend-implement'],
+  'frontend-mediator-review': ['good', 'bad', 'bad2', 'good-hook'].map(variant => `frontend-mediator-review-${variant}`),
+  'frontend-mediator-coder': ['frontend-mediator-implement'],
   'cqrs-coder': ['cqrs-implement'],
   'fix-loop-convergence': [],
   'final-readiness-preservation': ['final-readiness-supervision-phase2'],

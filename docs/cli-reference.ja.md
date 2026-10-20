@@ -311,6 +311,8 @@ MCP はタスクの enqueue、task/run 状態の確認、実行中 clone への�
 
 `takt_list_tasks` は個別タスクの worktree 検証や run メタデータ取得に失敗しても全件を返します。問題の項目には取得できた基本情報と sanitize 済みの `error` 文字列を付け、ほかの項目は従来どおり返します。検証に失敗した worktree から run 情報は読みません。キュー自体を読めない場合や `cwd` が許可範囲外の場合はツール全体のエラーとなり、タスク配列は返しません。
 
+`takt_tell_run` と CLI の `/tell` は、配送が成立した追加指示をタスクの正本 `order.md` に追記し、実行中 run の `context/task/order.md` も更新します。保存に成功した場合は、指示 ID と受信時刻を含む追記を後続の役や再開後の run も参照できます。保存に失敗した場合は標準エラーへ警告しますが、受け付けた指示の配送は妨げず、tell は成功します。
+
 ## Instant Exec モード
 
 `takt exec` はworkflow YAML を手で書かずに TAKT の対話型タスク入力モードを開始します。アシスタントエージェントが依頼を明確化し、`/go` で会話を生成 workflow に変換し、ワーカーエージェントが実装し、レビューエージェントが結果をレビューし、必要な場合だけ再計画エージェントがユーザーに方向性を確認し、ループ検知が不毛な反復を防ぎます。
@@ -688,7 +690,12 @@ takt merge 123 --workflow merge-review
 takt merge --author alice --label ready --label automation --base main --head 'takt/*'
 takt merge --managed-by-takt --include-forks --include-draft
 takt merge --concurrency 4
+takt merge "プロンプト変更以外"
 ```
+
+位置引数は一つです。数字列ならPR番号、それ以外ならAIによる選別テキストとして扱います。番号指定では選定条件とAI選別を適用しません。テキスト指定ではCLI条件または `merge.where` 設定とdraft・forkの除外を先に適用し、残った候補をAIが判定します。判断材料はタイトル、本文、ラベル、head・baseブランチ名、変更ファイルの全パスです。差分本文とレビューコメントは選別材料に含めません。テキストだけの指定では設定条件を保持します。
+
+全候補の有効な構造化判定がそろった後、選択したPRの番号と理由、除外したPRの番号を表示し、確認なしで選択PRだけを実行します。判定の欠落・不正、プロバイダーエラー、選別材料の取得失敗や不完全なファイル一覧では、どのPRのworkflowも起動せず非ゼロで終了します。候補または選択結果がゼロ件なら処理0件・マージ0件・終了コード0です。処理件数と実際のマージ件数の表示は従来どおりです。
 
 `--author`、繰り返し指定可能な `--label`（すべて一致）、`--base`、`--head`（`*` ワイルドカード）、`--managed-by-takt`、`--include-draft`、`--include-forks` を使用できます。既定では draft と fork を除外します。`--include-draft` は draft を、`--include-forks` は fork を含めます。CLI 条件が一つでもあれば設定の条件全体を置き換えます。`--workflow` だけの指定では設定条件を保持します。
 

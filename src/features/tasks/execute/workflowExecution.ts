@@ -73,6 +73,7 @@ import {
   reportWorkflowFailure,
 } from './workflowExecutionReporting.js';
 import { stageTaskSpecForExecution } from './taskSpecContext.js';
+import { persistDeliveredLiveInstructions } from './liveInterventionPersistence.js';
 import { GitSelectorCommandRunner } from '../../../infra/task/selector-git-command-runner.js';
 import { GitCompanionDiffReader } from '../../../infra/task/companion-git-diff-reader.js';
 import {
@@ -345,7 +346,9 @@ async function executeWorkflowInternal(
   );
   const liveIntervention = cwd === options.projectCwd
     ? undefined
-    : new LiveInterventionFileStore(options.projectCwd, bootstrap.runSlug);
+    : new LiveInterventionFileStore(options.projectCwd, bootstrap.runSlug, (instructions) => {
+      persistDeliveredLiveInstructions(options.projectCwd, cwd, options.taskSpec, activeRun.runPaths, instructions);
+    });
   const phase1ProcessSafetyByStep = resolvePhase1ProcessSafetyByStep(bootstrap.effectiveWorkflowConfig, parentRunPid);
   let engine: WorkflowEngine | null = null;
   let eventBridge: WorkflowExecutionEventBridge | undefined;

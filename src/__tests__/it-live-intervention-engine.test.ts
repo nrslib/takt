@@ -71,6 +71,8 @@ import type { LiveInterventionChannel } from '../core/workflow/live-intervention
 import { executeWorkflow } from '../features/tasks/execute/workflowExecution.js';
 import * as workflowExecutionBundle from '../features/tasks/execute/workflowExecutionBundle.js';
 import { issueTellableRunningTask } from '../features/tasks/liveIntervention.js';
+import { resolveTaskSpecForExecution } from '../features/tasks/execute/taskSpecContext.js';
+import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { TaskRunner } from '../infra/task/index.js';
 import { stringify as stringifyYaml } from 'yaml';
 import { LiveInterventionFileStore } from '../infra/workflow/live-intervention-store.js';
@@ -221,6 +223,7 @@ describe('WorkflowEngine live intervention integration', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
     if (engine !== undefined) {
       cleanupWorkflowEngine(engine);
@@ -229,6 +232,211 @@ describe('WorkflowEngine live intervention integration', () => {
     if (existsSync(projectCwd)) {
       rmSync(projectCwd, { recursive: true, force: true });
     }
+  });
+
+  function createTellTaskSpecFixture(runSlug: string, source: 'task_dir' | 'content' | 'content_file' = 'task_dir') {
+    const cloneCwd = join(projectCwd, '.takt', 'worktrees', 'tell-task');
+    const originalOrder = '# Task\n\nOriginal task instructions.\n';
+    const inputFile = join(projectCwd, 'task.txt');
+    mkdirSync(cloneCwd, { recursive: true });
+    if (source === 'task_dir') {
+      mkdirSync(join(projectCwd, '.takt/tasks/tell-task'), { recursive: true });
+      writeFileSync(join(projectCwd, '.takt/tasks/tell-task/order.md'), originalOrder, 'utf8');
+    } else if (source === 'content_file') {
+      writeFileSync(inputFile, originalOrder, 'utf8');
+    }
+    writeFileSync(join(projectCwd, '.takt', 'tasks.yaml'), stringifyYaml({
+      tasks: [{
+        name: 'tell-task', status: 'running', summary: 'Tell task',
+        ...(source === 'task_dir' ? { task_dir: '.takt/tasks/tell-task' }
+          : source === 'content' ? { content: originalOrder } : { content_file: 'task.txt' }),
+        workflow: 'live-intervention-engine', worktree: true, worktree_path: cloneCwd,
+        auto_pr: false, branch: 'feature/tell', run_slug: runSlug,
+        created_at: '2026-10-18T00:00:00.000Z', started_at: '2026-10-18T00:00:00.000Z',
+        completed_at: null,
+      }],
+    }), 'utf8');
+    const runner = new TaskRunner(projectCwd);
+    const running = runner.updateRunningTaskExecution('tell-task', { runSlug, worktreePath: cloneCwd });
+    expect(running.taskDir).toBeDefined();
+    const taskDir = running.taskDir!;
+    const sourceOrderPath = join(projectCwd, taskDir, 'order.md');
+    return {
+      cloneCwd, taskDir, sourceOrderPath, inputFile, originalOrder,
+      taskSpec: resolveTaskSpecForExecution(projectCwd, cloneCwd, taskDir, runSlug),
+      runPaths: buildRunPaths(cloneCwd, runSlug),
+      store: new LiveInterventionFileStore(projectCwd, runSlug),
+    };
+  }
+
+  it.each((['task_dir', 'content', 'content_file'] as const).flatMap((source) =>
+    (['same_session', 'next_step'] as const).map((mode) => ({ source, mode })),
+  ))('lets a later agent read $source instructions persisted after $mode delivery', async ({ source, mode }) => {
+    const runSlug = 'tell-persisted-workflow';
+    const fixture = createTellTaskSpecFixture(runSlug, source);
+    const content = '後続の役もこの追加指示を読む。';
+    const orderReads: string[] = [];
+    let issued = false;
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options.onPromptResolved?.({ systemPrompt: persona ?? '', userInstruction: instruction });
+      options.onDispatch?.(options.permissionMode);
+      orderReads.push(readFileSync(fixture.runPaths.contextTaskOrderAbs, 'utf8'));
+      if (!issued && mode === 'same_session') {
+        issued = true;
+        await issueTellableRunningTask(projectCwd, runSlug, content);
+        expect(readFileSync(fixture.sourceOrderPath, 'utf8')).not.toContain(content);
+        expect(readFileSync(fixture.runPaths.contextTaskOrderAbs, 'utf8')).not.toContain(content);
+      }
+      return makeResponse({ content: 'done', sessionId: 'tell-session' });
+    });
+    const config = buildSingleStepConfig([makeRule('done', 'fix')]);
+    if (mode === 'next_step') {
+      config.steps[0]!.outputContracts = [{ name: 'review.md', format: 'markdown' }];
+      vi.mocked(runReportPhase).mockImplementationOnce(async () => {
+        await issueTellableRunningTask(projectCwd, runSlug, content);
+        expect(readFileSync(fixture.sourceOrderPath, 'utf8')).not.toContain(content);
+        expect(readFileSync(fixture.runPaths.contextTaskOrderAbs, 'utf8')).not.toContain(content);
+      });
+    }
+
+    const result = await executeWorkflow(config, fixture.taskSpec.taskPrompt, fixture.cloneCwd, {
+      projectCwd, provider: 'mock', reportDirName: runSlug,
+      taskSpec: fixture.taskSpec, language: 'ja', outputMode: 'silent',
+    });
+
+    expect(result.success).toBe(true);
+    expect(orderReads).toHaveLength(mode === 'same_session' ? 3 : 2);
+    expect(orderReads[0]).toBe('# Task\n\nOriginal task instructions.\n');
+    expect(orderReads[1]).toContain(content);
+    expect(orderReads.at(-1)).toContain(content);
+    const calls = vi.mocked(runAgent).mock.calls;
+    if (mode === 'same_session') expect(calls[1]?.[2].sessionId).toBe('tell-session');
+    expect(calls.at(-1)?.[1]).toContain(fixture.runPaths.contextTaskOrderRel);
+    expect(fixture.store.read()).toMatchObject({ pending: 0,
+      deliveredSameSession: mode === 'same_session' ? 1 : 0,
+      deliveredNextStep: mode === 'next_step' ? 1 : 0 });
+    const delivered = fixture.store.read().instructions[0]!;
+    const original = readFileSync(fixture.sourceOrderPath, 'utf8');
+    expect(original.startsWith(fixture.originalOrder)).toBe(true);
+    for (const text of [content, `instructionId: ${delivered.instructionId}`, delivered.issuedAt]) {
+      expect(original).toContain(text);
+      expect(orderReads.at(-1)).toContain(text);
+    }
+    if (source === 'content_file') expect(readFileSync(fixture.inputFile, 'utf8')).toBe(fixture.originalOrder);
+  });
+
+  it.each(['same_session', 'next_step'] as const)(
+    'delivers an issued instruction through %s even when appending the source order fails',
+    async (mode) => {
+      const runSlug = `tell-append-failure-${mode.replaceAll('_', '-')}`;
+      const fixture = createTellTaskSpecFixture(runSlug);
+      const content = 'order.md の失敗で配送を止めない。';
+      const issueWithAppendFailure = async () => {
+        rmSync(fixture.sourceOrderPath);
+        mkdirSync(fixture.sourceOrderPath);
+        await expect(issueTellableRunningTask(projectCwd, runSlug, content)).resolves.toMatchObject({ instructionId: 1 });
+      };
+      vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      if (mode === 'next_step') {
+        vi.mocked(runReportPhase).mockImplementationOnce(issueWithAppendFailure);
+      }
+      let agentCalls = 0;
+      vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+        agentCalls += 1;
+        options.onPromptResolved?.({ systemPrompt: persona ?? '', userInstruction: instruction });
+        options.onDispatch?.(options.permissionMode);
+        if (mode === 'same_session' && agentCalls === 1) await issueWithAppendFailure();
+        return makeResponse({ content: 'done', sessionId: 'append-failure-session' });
+      });
+      const config = buildSingleStepConfig([makeRule('done', 'fix')]);
+      config.steps[0]!.outputContracts = [{ name: 'review.md', format: 'markdown' }];
+
+      const result = await executeWorkflow(config, fixture.taskSpec.taskPrompt, fixture.cloneCwd, {
+        projectCwd, provider: 'mock', reportDirName: runSlug,
+        taskSpec: fixture.taskSpec, language: 'ja', outputMode: 'silent',
+      });
+
+      expect(result.success).toBe(true);
+      const calls = vi.mocked(runAgent).mock.calls;
+      expect(calls).toHaveLength(mode === 'same_session' ? 3 : 2);
+      expect(calls[1]?.[1]).toContain(content);
+      if (mode === 'same_session') expect(calls[1]?.[2].sessionId).toBe('append-failure-session');
+      expect(fixture.store.read()).toMatchObject({
+        pending: 0,
+        deliveredSameSession: mode === 'same_session' ? 1 : 0,
+        deliveredNextStep: mode === 'next_step' ? 1 : 0,
+      });
+      const events = readFileSync(fixture.store.getFilePath(), 'utf8').trim().split('\n')
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(events.filter((event) => event.type === 'issued')).toEqual([
+        { type: 'issued', instructionId: 1, issuedAt: expect.any(String), content },
+      ]);
+      expect(events.find((event) => event.type === 'delivered')).toMatchObject({ mode, instructionIds: [1] });
+    },
+  );
+
+  it.each((['task_dir', 'content', 'content_file'] as const).flatMap((source) =>
+    [true, false].map((delivered) => ({ source, delivered })),
+  ))('restores only delivered instructions after requeue from $source (delivered=$delivered)', async ({ source, delivered }) => {
+    const runSlug = 'tell-before-resume';
+    const fixture = createTellTaskSpecFixture(runSlug, source);
+    const content = '再開後もこの追加指示を保持する。';
+    let issued = false;
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options.onPromptResolved?.({ systemPrompt: persona ?? '', userInstruction: instruction });
+      if (delivered) options.onDispatch?.(options.permissionMode);
+      if (!issued) {
+        issued = true;
+        await issueTellableRunningTask(projectCwd, runSlug, content);
+        expect(readFileSync(fixture.sourceOrderPath, 'utf8')).not.toContain(content);
+        if (delivered) return makeResponse({ content: 'done', sessionId: 'before-resume' });
+      }
+      return makeResponse({ status: 'error', error: 'deterministic failure before resume', content: 'failed' });
+    });
+    const config = buildSingleStepConfig([makeRule('done', 'COMPLETE')]);
+    const failed = await executeWorkflow(config, fixture.taskSpec.taskPrompt, fixture.cloneCwd, {
+      projectCwd, provider: 'mock', reportDirName: runSlug,
+      taskSpec: fixture.taskSpec, language: 'ja', outputMode: 'silent',
+    });
+    expect(failed.success).toBe(false);
+    expect(fixture.store.read().deliveredSameSession).toBe(delivered ? 1 : 0);
+    const expectedOrder = readFileSync(fixture.sourceOrderPath, 'utf8');
+    expect(expectedOrder.includes(content)).toBe(delivered);
+    expect(readFileSync(fixture.runPaths.contextTaskOrderAbs, 'utf8')).toBe(expectedOrder);
+    const runner = new TaskRunner(projectCwd);
+    runner.forceFailRunningTask('tell-task', { error: 'deterministic failure before resume', step: 'review' });
+    runner.requeueTask('tell-task', ['failed']);
+    const [claimed] = runner.claimNextTasks(1);
+    expect(claimed?.taskDir).toBe(fixture.taskDir);
+    const resumedSlug = 'tell-after-resume';
+    runner.updateRunningTaskExecution('tell-task', { runSlug: resumedSlug });
+    const resumedSpec = resolveTaskSpecForExecution(projectCwd, fixture.cloneCwd, claimed!.taskDir!, resumedSlug);
+    const resumedPaths = buildRunPaths(fixture.cloneCwd, resumedSlug);
+    const orderReads: string[] = [];
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      orderReads.push(readFileSync(resumedPaths.contextTaskOrderAbs, 'utf8'));
+      return dispatchMockResponse(persona, instruction, options, makeResponse({ content: 'resumed', sessionId: 'resumed-session' }));
+    });
+
+    const resumed = await executeWorkflow(config, resumedSpec.taskPrompt, fixture.cloneCwd, {
+      projectCwd, provider: 'mock', reportDirName: resumedSlug, taskSpec: resumedSpec,
+      resumeSource: { sourceRunSlug: runSlug, resumeMode: 'requeue' },
+      language: 'ja', outputMode: 'silent',
+    });
+
+    expect(resumed.success).toBe(true);
+    expect(orderReads).toHaveLength(1);
+    expect(orderReads[0]).toBe(expectedOrder);
+    expect(readFileSync(resumedPaths.contextTaskOrderAbs, 'utf8')).toBe(expectedOrder);
+    expect(expectedOrder.startsWith(fixture.originalOrder)).toBe(true);
+    if (delivered) {
+      const instruction = fixture.store.read().instructions[0]!;
+      expect(orderReads[0]).toContain(`instructionId: ${instruction.instructionId}`);
+      expect(orderReads[0]).toContain(instruction.issuedAt);
+    } else {
+      expect(expectedOrder).toBe(fixture.originalOrder);
+    }
+    if (source === 'content_file') expect(readFileSync(fixture.inputFile, 'utf8')).toBe(fixture.originalOrder);
   });
 
   it.each([
