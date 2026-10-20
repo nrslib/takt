@@ -525,7 +525,13 @@ it.each<{ inquiry: GoalQuestionInput; answer: GoalAnswerInput }>([
 
 it('ensures the daemon after saving a resumed goal', async () => {
   const { session } = fixture();
-  answerDoubles.get.mockResolvedValue({ ...goalRecord(), executionStatus: 'paused' });
+  const pausedGoal: Goal = { ...goalRecord(), executionStatus: 'paused' };
+  answerDoubles.get.mockResolvedValue(pausedGoal);
+  answerDoubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal, onSaved?: () => void) => {
+    const saved = transform(pausedGoal);
+    onSaved?.();
+    return saved;
+  });
   try {
     expect((await session.resumeGoal({ goalId: goalRecord().id })).kind).toBe('reply');
     expect(events.save).toHaveBeenCalledWith(cwd, { kind: 'resumed', goalId: goalRecord().id });
