@@ -14,6 +14,7 @@ import { buildSafeGitEnvironment } from '../../infra/task/git-environment.js';
 import { createPrCloneGitOperations } from '../../infra/workflow/system/pr-clone-git.js';
 import { assertPrMergeCloneIdentity, assertSavedPrMergeIdentity, resolvePrMergeBaseRepositoryUrl } from './pr-merge-identity.js';
 import { checkForkThreats, toPublicThreatCheckComment } from './threat-check.js';
+import { selectPullRequest, type PrSelectionResult } from './selection.js';
 import { toLocalBranchRef, toPullRequestBaseRef } from '../../shared/utils/gitBranchValidation.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { runWorkflowExecution } from '../tasks/execute/workflowExecutionApi.js';
@@ -22,7 +23,9 @@ import { TaskRunner, resolveCloneBaseDir } from '../../infra/task/index.js';
 import { createTaskClonePath } from '../../infra/task/clone-path.js';
 import type { TaskInfo } from '../../infra/task/index.js';
 import { assertReusableWorktreePath } from '../tasks/execute/reusedWorktree.js';
-import { generateReportDir } from '../../shared/utils/reportDir.js';
+import { generateExecutionReportDir } from '../../core/workflow/run/run-slug.js';
+import { buildRunPaths } from '../../core/workflow/run/run-paths.js';
+import { resolveTaskSpecForExecution } from '../tasks/execute/taskSpecContext.js';
 
 const log = createLogger('merge');
 
@@ -36,6 +39,8 @@ interface MergeOptions {
   readonly settings: MergeSettings;
   readonly concurrency: number;
   readonly prNumber?: number;
+  readonly selectionText?: string;
+  readonly onSelectionResult?: (results: readonly PrSelectionResult[]) => void;
   readonly workflow?: string;
   readonly where?: WorkflowPrListWhere;
   readonly includeDraft?: boolean;
@@ -96,7 +101,7 @@ export async function executePersistedPrMergeTask(
     throw new Error(`Task ${task.name} is not a saved PR merge task`);
   }
   const startedAt = new Date().toISOString();
-  const runSlug = generateReportDir(task.content);
+  const runSlug = generateExecutionReportDir(projectCwd, task.name);
   const runningTask = runner.updateRunningTaskExecution(task.name, {
     runSlug, worktreePath: task.worktreePath, branch: data.branch,
   });
@@ -252,6 +257,10 @@ async function runPrMergeWorkflow(
       return { merged: false };
     }
   }
+  if (task.taskDir === undefined) throw new Error('PR merge task is missing taskDir');
+  const taskSpec = resolveTaskSpecForExecution(
+    request.projectCwd, cwd, task.taskDir, runSlug, buildRunPaths(request.projectCwd, runSlug),
+  );
   const result = await runWorkflowExecution({
     ...request.display,
     cwd, projectCwd: request.projectCwd,
@@ -260,7 +269,8 @@ async function runPrMergeWorkflow(
         ? resolve(homedir(), request.workflow.slice(1).replace(/^\//u, ''))
         : resolve(request.projectCwd, request.workflow)
       : request.workflow,
-    task: task.content,
+    task: taskSpec.taskPrompt,
+    taskSpec,
     reportDirName: runSlug,
     ...(data.start_step === undefined ? {} : { startStep: data.start_step }),
     ...(data.retry_note === undefined ? {} : { retryNote: data.retry_note }),
@@ -322,8 +332,35 @@ export async function runMerge(
   const where = { ...(cliConditions ? options.where : options.settings.where) };
   const includeDraft = cliConditions ? options.includeDraft === true : options.settings.includeDraft;
   const includeForks = cliConditions ? options.includeForks === true : options.settings.includeForks;
-  const numbers = options.prNumber !== undefined ? [options.prNumber]
+  let numbers = options.prNumber !== undefined ? [options.prNumber]
     : dependencies.listOpenPrNumbers(options.projectCwd);
+  const matchesSelectionConditions = (pr: PrListItem): boolean => (includeDraft || !pr.draft)
+    && (includeForks || pr.same_repository === true) && matchesPrWhere(pr, where);
+  const selectionText = options.prNumber === undefined ? options.selectionText : undefined;
+  if (selectionText !== undefined) {
+    const results: PrSelectionResult[] = [];
+    for (const prNumber of numbers) {
+      options.abortSignal?.throwIfAborted();
+      const pr = dependencies.fetchPrListItem(prNumber, options.projectCwd);
+      if (pr === undefined || !matchesSelectionConditions(pr)) continue;
+      results.push(await selectPullRequest(pr, selectionText, options.projectCwd,
+        getGitProvider(), options.abortSignal));
+    }
+    numbers = results.filter((result) => result.selected).map((result) => result.number);
+
+    const eligibleNumbers: number[] = [];
+    for (const prNumber of numbers) {
+      options.abortSignal?.throwIfAborted();
+      const pr = dependencies.fetchPrListItem(prNumber, options.projectCwd);
+      if (pr !== undefined && matchesSelectionConditions(pr)) eligibleNumbers.push(prNumber);
+    }
+    numbers = eligibleNumbers;
+    const eligibleNumberSet = new Set(eligibleNumbers);
+    options.onSelectionResult?.(results.map((result) => ({
+      ...result,
+      selected: result.selected && eligibleNumberSet.has(result.number),
+    })));
+  }
   const workflow = options.workflow ?? options.settings.workflow;
   const running = new Set<Promise<void>>();
   let notifyCompletion: (() => void) | undefined;
@@ -347,7 +384,7 @@ export async function runMerge(
 
   try {
     for (const prNumber of numbers) {
-      if (options.prNumber === undefined) {
+      if (options.prNumber === undefined && selectionText === undefined) {
         let pr: PrListItem | undefined;
         try {
           pr = dependencies.fetchPrListItem(prNumber, options.projectCwd);
@@ -356,8 +393,7 @@ export async function runMerge(
           processedCount += 1;
           continue;
         }
-        if (pr === undefined || !((includeDraft || !pr.draft)
-          && (includeForks || pr.same_repository === true) && matchesPrWhere(pr, where))) continue;
+        if (pr === undefined || !matchesSelectionConditions(pr)) continue;
       }
       const execution = execute(prNumber).finally(() => {
         running.delete(execution);

@@ -1223,7 +1223,9 @@ For recovery, `pr_ci_failure` takes `source: current_pr` and a full `head_sha` s
 
 ### Caccia system effect
 
-The effect requires a matching isolated PR execution context from `takt merge` or an `enqueue_task mode: from_pr` task. `pr` accepts a positive integer or a full template reference; it cannot be an embedded string. The effect reads the existing `caccia.enabled`, `wait_timeout_ms`, `max_iterations`, and `workflow` settings. Disabled or unset configuration returns immediately without waiting. Standalone `takt caccia <PR>` remains available regardless of `enabled`.
+The effect requires a matching isolated PR execution context from `takt merge` or an `enqueue_task mode: from_pr` task. `pr` accepts a positive integer or a full template reference; it cannot be an embedded string. The effect reads the existing `caccia.enabled`, `wait_timeout_ms`, `max_iterations`, and `workflow` settings. Disabled or unset configuration skips the CodeRabbit review wait. Standalone `takt caccia <PR>` remains available regardless of `enabled`.
+
+Before execution on GitHub, the effect compares the PR head with the clone's starting HEAD. On a mismatch it fetches PR details every 2 seconds for up to 60 seconds, including fetch time. Inconsistent head observations within a PR details fetch also trigger a retry within the same deadline. It continues only when the expected SHA matches; a mismatch at the deadline returns an `error` containing the expected SHA and the last observed SHA. If the last observation was inconsistent, both conflicting SHAs are included. PR identity changes, other fetch errors including authentication failures, and cancellation fail immediately. When execution metadata and a push recorder are present, the same check runs before recording a skip, so disabled or unset configuration may still wait for GitHub head propagation. This fixed wait is separate from the review wait controlled by `wait_timeout_ms`. It does not apply to non-GitHub skip checks or head verification after execution.
 
 ```yaml
   - name: caccia

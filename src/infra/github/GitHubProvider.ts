@@ -12,7 +12,7 @@ import type { PrStatusFetchOptions } from '../../core/workflow/system/pr-executi
 import type { PrCiFailure } from '../../core/workflow/system/pr-ci.js';
 import { collectPrCiFailure, rerunPrCi } from './pr-ci.js';
 import type { ListOpenPrsOptions } from '../git/types.js';
-import { fetchPrStatus, fetchPrDetails, fetchPrListItem, findExistingPr, commentOnPr, closePr, createPullRequest, fetchPrReviewComments, listOpenPrNumbers, listOpenPrs, mergePr } from './pr.js';
+import { fetchPrStatus, fetchPrDetails, fetchPrListItem, fetchPrSelectionData, findExistingPr, commentOnPr, closePr, createPullRequest, fetchPrReviewComments, listOpenPrNumbers, listOpenPrs, mergePr } from './pr.js';
 import type { GitProvider, CliStatus, Issue, ExistingPr, IssueListItem, PrListItem, CreateIssueOptions, CreateIssueResult, CloseIssueResult, CreatePrOptions, CreatePrResult, CommentResult, IssueCommentResult, MergeResult, PrReviewData } from '../git/types.js';
 
 export class GitHubProvider implements GitProvider {
@@ -53,6 +53,10 @@ export class GitHubProvider implements GitProvider {
 
   fetchPrListItem(prNumber: number, cwd: string): PrListItem | undefined {
     return fetchPrListItem(prNumber, cwd);
+  }
+
+  fetchPrSelectionData(prNumber: number, cwd: string) {
+    return fetchPrSelectionData(prNumber, cwd);
   }
 
   findExistingPr(branch: string, cwd?: string): ExistingPr | undefined {

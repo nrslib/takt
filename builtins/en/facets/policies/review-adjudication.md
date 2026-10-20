@@ -2,20 +2,13 @@
 
 Decide separately whether a submitted finding is technically correct and whether the current change must repair it. Select only necessary repairs.
 
-## Decision Order
-
-Assess external confirmation last.
-
-1. When external failure results arrive, compare the same input and expected result with current code. If current code demonstrably violates the acceptance criterion, return it to repair targets under the existing problem ID. External failures where the request never reaches the application are not code-caused.
-2. Next, if necessary in-environment verification is missing, failed, or for older code, retain that verification or cause investigation as remaining work. Missing verification alone does not establish a code defect.
-3. Only when neither applies, necessary in-environment verification has succeeded on current code, and a grounded unmet criterion can only be observed externally, treat it as awaiting external confirmation.
-
 ## Decision Criteria
 
 For findings about threats explicitly excluded from protection and the part of a reported failure that occurs in a secondary environment, check the corresponding rows in the table first. If they do not apply, use the normal rows, including violations of the original requirement or acceptance criteria and regressions.
 
 | Situation | Treatment |
 |-----------|-----------|
+| The finding assumes inputs, states, or quantities outside “Scope of inputs used for counterexamples”. Or it asks only for measures against those premises (locks, mutual exclusion, validation against tampering, new limits, etc.) | Unnecessary expansion. If the same finding also establishes a violation under applicable premises, judge only that violation |
 | For a repaired problem, repairs to current code and in-environment verification needed to close its acceptance criteria are complete; the only unmet criteria are confirmations grounded in the requirements or existing project contracts that cannot be observed in this execution environment (another execution environment, an external service, a physical device, human confirmation, etc.) | Awaiting external confirmation (not a repair target) |
 | Direct violation of the original requirement or acceptance criteria | Repair |
 | Regression introduced by the current diff or repair | Repair |
@@ -28,6 +21,14 @@ For findings about threats explicitly excluded from protection and the part of a
 | Current code or evidence contradicts the finding | Unsupported, or no issue after verification |
 | A required external environment is unavailable and the implementation claim can be neither confirmed nor disproved | Cannot verify in this environment |
 
+## Decision Order
+
+Assess external confirmation last.
+
+1. When external failure results arrive, compare the same input and expected result with current code. If current code demonstrably violates the acceptance criterion, return it to repair targets under the existing problem ID. External failures where the request never reaches the application are not code-caused.
+2. Next, if necessary in-environment verification is missing, failed, or for older code, retain that verification or cause investigation as remaining work. Missing verification alone does not establish a code defect.
+3. Only when neither applies, necessary in-environment verification has succeeded on current code, and a grounded unmet criterion can only be observed externally, treat it as awaiting external confirmation.
+
 {{include:policies/applicable-inputs}}
 
 {{include:policies/finding-validity}}
@@ -36,7 +37,7 @@ For findings about threats explicitly excluded from protection and the part of a
 
 - Separate the judgment that a finding was valid (its ID and history) from whether current code still needs changes. Even for a previously accepted repair, once repairs to current code and necessary in-environment verification are complete, preserve the finding decision while removing it from repair targets and carry forward only the remaining confirmation as Awaiting external confirmation. This is not readjudication of a decided finding
 - Awaiting external confirmation is allowed only when all of the following hold
-  - The remaining criterion is grounded in requirements or existing project contracts. A verification method or the mere existence of a corresponding CI job does not elevate it to an acceptance criterion. Treat ungrounded criteria as Outside this task, neither awaiting external confirmation nor requiring repair
+  - The remaining confirmation criterion itself follows from the acceptance criteria or existing project contracts. The existence of a confirmation method or corresponding CI job, an implemented path, or the ability to observe the result after preparing an environment does not by itself elevate it to an acceptance criterion. Treat ungrounded criteria as Outside this task, neither awaiting external confirmation nor requiring repair
   - Verification required by the request or directly necessary to close this problem's acceptance criteria, which can be executed or consulted in this environment, has succeeded against current code (the commit or code state at that point). Missing, failed, or older-version results remain execution or repair targets instead of awaiting external confirmation. Missing verification alone does not establish a code defect. Remaining checks unrelated to the acceptance criteria (such as optional CI jobs) do not prevent awaiting external confirmation
   - A specific reason explains why the remaining confirmation can only be observed externally
 - Return an item to repair targets only when external results confirm that a violation of its acceptance criteria is caused by current code (handle as reopened). Failures caused by external service outages, confirmation equipment or CI infrastructure, rather than code, are not repair targets

@@ -1023,7 +1023,9 @@ follow-up 的错误、限流、blocked 或异常都不会由 Companion 处理再
 
 ### Caccia system effect
 
-此 effect 要求 `takt merge` 或 `enqueue_task mode: from_pr` 任务提供与目标 PR 一致的隔离 clone 执行上下文。`pr` 接受正整数或完整模板引用，不接受普通字符串中的嵌入引用。effect 使用既有 `caccia.enabled`、`wait_timeout_ms`、`max_iterations` 和 `workflow` 配置；关闭或未配置时立即返回，无需等待。独立命令 `takt caccia <PR>` 不受 `enabled` 限制。
+此 effect 要求 `takt merge` 或 `enqueue_task mode: from_pr` 任务提供与目标 PR 一致的隔离 clone 执行上下文。`pr` 接受正整数或完整模板引用，不接受普通字符串中的嵌入引用。effect 使用既有 `caccia.enabled`、`wait_timeout_ms`、`max_iterations` 和 `workflow` 配置；关闭或未配置时跳过 CodeRabbit 审查等待。独立命令 `takt caccia <PR>` 不受 `enabled` 限制。
+
+在 GitHub 上执行前，effect 将 PR head 与 clone 开始时的 HEAD 比较。不一致时每隔2秒重新获取 PR 信息，包含获取时间在内最多等待60秒。同一次 PR 信息获取中观测到不同 head 时，也在同一期限内重试。只有与预期 SHA 一致时才继续；到期仍不一致则返回包含预期 SHA 和最后观测到的 SHA 的 `error`。如果最后一次观测不一致，还会显示冲突的两个 SHA。PR 身份信息变化、认证失败等其他获取异常或取消都会立即导致失败。如果存在执行元数据和 push 记录器，记录跳过结果前也会执行相同检查，因此关闭或未配置时仍可能等待 GitHub head 更新。此固定等待独立于 `wait_timeout_ms` 控制的审查等待，不适用于非 GitHub 的跳过检查或执行结束后的 head 验证。
 
 ```yaml
   - name: caccia

@@ -9,7 +9,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { availableParallelism, tmpdir } from 'node:os';
 import { basename, dirname, join, relative } from 'node:path';
 import { Writable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
@@ -31,7 +31,7 @@ import {
   serialWorkflowTestFiles,
 } from '../../scripts/test-classification.mjs';
 import heavyParallelIntegrationConfig from '../../vitest.config.it.heavy.parallel.js';
-import lightIntegrationConfig from '../../vitest.config.it.parallel.js';
+import lightIntegrationConfig, { resolveLightItMaxWorkers } from '../../vitest.config.it.parallel.js';
 import serialGitConfig from '../../vitest.config.it.serial.git.js';
 import serialWorkflowConfig from '../../vitest.config.it.serial.workflow.js';
 import unitConfig from '../../vitest.config.unit.parallel.js';
@@ -652,6 +652,60 @@ describe('release verification wiring', () => {
     ]);
   });
 
+  it.each([
+    { cpuCount: 1, isCi: false, expected: 1 },
+    { cpuCount: 2, isCi: false, expected: 1 },
+    { cpuCount: 3, isCi: false, expected: 2 },
+    { cpuCount: 10, isCi: false, expected: 2 },
+    { cpuCount: 10, isCi: true, expected: 1 },
+  ])('should run light integration with $expected worker(s) on $cpuCount CPUs (CI: $isCi)', ({
+    cpuCount,
+    isCi,
+    expected,
+  }) => {
+    expect(resolveLightItMaxWorkers(cpuCount, isCi)).toBe(expected);
+  });
+
+  it('should apply the local or CI worker limit to the light integration gate', () => {
+    expect(lightIntegrationConfig.test?.maxWorkers).toBe(
+      resolveLightItMaxWorkers(availableParallelism(), Boolean(process.env.CI)),
+    );
+  });
+
+  it('should route the measured slow integration suites to the sharded heavy gate', () => {
+    const movedFiles = [
+      'src/__tests__/deepseek-harness-error-mapping.test.ts',
+      'src/__tests__/it-issue-dispatch-notification.test.ts',
+      'src/__tests__/it-manager-question-display.test.ts',
+      'src/__tests__/it-manager-tui.test.ts',
+      'src/__tests__/it-workflow-maker-retry-availability.test.ts',
+      'src/__tests__/tui-conversation-view.test.tsx',
+    ];
+
+    for (const testFile of movedFiles) {
+      expect(lightIntegrationTestFiles).not.toContain(testFile);
+      expect(heavyParallelIntegrationTestFiles).toContain(testFile);
+    }
+    expect(selectNpmTestRuns(movedFiles)).toEqual([
+      { npmArgs: ['run', 'test:it:heavy:parallel', '--', ...movedFiles] },
+    ]);
+  });
+
+  it('routes tell task specification persistence through the light integration gate', () => {
+    const testFile = 'src/__tests__/it-live-intervention-task-spec.test.ts';
+
+    expect(selectNpmTestRuns([testFile])).toEqual([
+      { npmArgs: ['run', 'test:it:light', '--', testFile] },
+    ]);
+  });
+
+  it('routes tell publication concurrency through the heavy integration gate', () => {
+    const testFile = 'src/__tests__/it-live-intervention-task-spec-concurrency.test.ts';
+    expect(selectNpmTestRuns([testFile])).toEqual([
+      { npmArgs: ['run', 'test:it:heavy:parallel', '--', testFile] },
+    ]);
+  });
+
   it('should type-check every test on the whitelist, and only tests that exist', () => {
     const testsConfigPath = new URL('../../tsconfig.tests.json', import.meta.url);
     // The file carries the rule as comments, which JSON.parse does not take.
@@ -663,6 +717,11 @@ describe('release verification wiring', () => {
 
     expect(listed.length).toBeGreaterThan(0);
     expect(listed).toContain('src/__tests__/initialization.test.ts');
+    expect(listed).toContain('src/__tests__/it-live-intervention-engine.test.ts');
+    expect(listed).toContain('src/__tests__/it-live-intervention-task-spec.test.ts');
+    expect(listed).toContain('src/__tests__/taskSpecContext.test.ts');
+    expect(listed).toContain('src/__tests__/it-live-intervention-task-spec-concurrency.test.ts');
+    expect(listed).toContain('src/__tests__/liveInterventionPersistence.test.ts');
     expect(listed, 'the list is read by people; keep it sorted').toEqual([...listed].sort());
     for (const entry of listed) {
       expect(existsSync(new URL(`../../${entry}`, import.meta.url)), entry).toBe(true);

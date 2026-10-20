@@ -25,6 +25,12 @@ prompts:
       working_dir: fixtures/supervise-external-confirmation/incomplete-verification
       required_snapshots:
         - .takt/eval-snapshots/supervise-external-confirmation-incomplete-verification-policies.md
+  - label: supervise-external-confirmation-basis-not-applicable
+    raw: file://../../prompts/supervise-external-confirmation-basis-not-applicable.phase1.j2
+    config:
+      working_dir: fixtures/supervise-external-confirmation/basis-not-applicable
+      required_snapshots:
+        - .takt/eval-snapshots/supervise-external-confirmation-basis-not-applicable-policies.md
 providers:
   - id: file://../../providers/cli-review.mjs
     label: codex-sol-low
@@ -111,3 +117,16 @@ tests:
           見出し、ID の表記、特定の名前、定型文言ではなく、判断と引き継ぎの実質で採点する。次の条件をすべて満たす場合だけ合格とする。
 
           裁定が当該問題の検証を未完了と記録しているため外部確認待ちとして扱わない。現在コードが refunded を拒否して元要求が未充足であることに基づき通常の REJECT とし、修正対象を記録する。テスト実行状況やログの審査を理由にせず、外部確認待ちというラベルだけで免除しない。
+  - description: basis-not-applicable
+    prompts:
+      - supervise-external-confirmation-basis-not-applicable
+    vars:
+      task: file://../../cases/supervise-external-confirmation-basis-not-applicable-task.md
+      previous_response: ""
+    assert:
+      - type: llm-rubric
+        metric: supervise-external-confirmation/basis-not-applicable
+        value: |-
+          見出し、ID の表記、特定の名前、定型文言ではなく、判断と引き継ぎの実質で採点する。次の条件をすべて満たす場合だけ合格とする。
+
+          受入条件または既存の契約が求めていない外部確認が未確認であることだけを理由に BLOCKED にせず、その未確認の事実を要件表の根拠欄に記録していることの両方を合否条件とする。BLOCKED にしないだけで未確認の事実を記録していない場合や、別の箇所にだけ記録している場合は不合格とする。他の理由による最終判定の妥当性や、無条件に APPROVE となることは採点しない。

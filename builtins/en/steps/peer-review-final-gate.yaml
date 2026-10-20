@@ -16,6 +16,7 @@ tags:
 edit: false
 persona: supervisor
 policy:
+  - process-deviation
   - contract-change
   - $param: final_gate_policy
 knowledge:

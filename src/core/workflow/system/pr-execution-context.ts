@@ -16,6 +16,13 @@ export class PrStatusTimeoutError extends Error {
   }
 }
 
+export class PrHeadObservationMismatchError extends Error {
+  constructor(prNumber: number, readonly firstHeadSha: string, readonly lastHeadSha: string) {
+    super(`Pull request #${prNumber} head changed while reading its metadata`);
+    this.name = 'PrHeadObservationMismatchError';
+  }
+}
+
 export interface PrExecutionContext {
   readonly prNumber: number;
   readonly headBranch: string;
