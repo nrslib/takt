@@ -9,6 +9,7 @@ The Security reviewer decides blocking vulnerability findings only from the cond
 Treat an issue as a Security blocking finding only when all of the following are verified in code or reproducible evidence:
 
 1. A concrete attacker or low-trust input control point exists
+   - When relying on a low-trust input control point, show who can choose its values and which process reads them to explain that the input comes from outside the trust boundary
 2. An existing trust boundary or explicit security contract is broken
 3. A realistic execution path reaches the defect after the change
 4. There is a concrete impact such as privilege escalation, code execution, authentication or authorization bypass, sensitive-data exposure, or data destruction

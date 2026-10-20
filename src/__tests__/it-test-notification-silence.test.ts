@@ -440,7 +440,7 @@ describe('test notification isolation', () => {
   it('should keep the manager user_interrupted workflow silent in a child test runner', async () => {
     const invocation = resolveNpmInvocation(process.execPath, process.env.npm_execpath);
     const child = spawn(invocation.executable, [
-      ...invocation.args, 'run', 'test:it:light', '--', 'src/__tests__/it-manager-question-display.test.ts',
+      ...invocation.args, 'run', 'test:it:heavy:parallel', '--', 'src/__tests__/it-manager-question-display.test.ts',
       '--testNamePattern', 'keeps SIGINT ownership when a single goal task receives its own signal without a worker pool',
     ], { cwd: process.cwd(), env, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';

@@ -47,6 +47,48 @@ export function assertRequiredFacetSnapshots(id, requiredFacetKinds, sourcePaths
 // id doubles as the prompt basename (normal targets use phase1; loop monitors use phase3).
 // mutable targets run in a disposable copy under eval/.work/<id>.
 const TARGETS = [
+  ...[
+    ['rt', 'security-review'],
+    ['rc', 'coding-review'],
+    ['rq', 'arch-review'],
+    ['ne', 'security-review'],
+    ['np', 'coding-review'],
+    ['nb', 'arch-review'],
+  ].map(([caseId, step]) => ({
+    id: `finding-realistic-premise-${caseId}`,
+    workflow: 'peer-review',
+    via: 'initial-reviewers',
+    step,
+    fixture: `eval/fixtures/finding-realistic-premise/${caseId}`,
+    projectFromFixture: true,
+    requiredFacetKinds: ['policies'],
+    promptExtension: 'j2',
+    ...(step === 'security-review' ? {
+      dynamicFacetSelection: {
+        sourceWorkflow: 'development-review',
+        pool: 'security-review-facets',
+        candidateIds: ['cli'],
+      },
+    } : {}),
+  })),
+  ...['at', 'ac', 'aq', 'ae', 'ap', 'ab'].map((caseId) => ({
+    id: `finding-realistic-premise-${caseId}`,
+    workflow: 'peer-review',
+    step: 'review-adjudication',
+    fixture: `eval/fixtures/finding-realistic-premise/${caseId}`,
+    projectFromFixture: true,
+    requiredFacetKinds: ['policies'],
+    promptExtension: 'j2',
+  })),
+  ...['vd1', 'vd2', 'vn1', 'vn2', 'pd1'].map((caseId) => ({
+    id: `finding-realistic-premise-${caseId}`,
+    workflow: 'review-remediation',
+    step: caseId === 'pd1' ? 'verification-replan' : 'fix-verifier',
+    fixture: `eval/fixtures/finding-realistic-premise/${caseId}`,
+    projectFromFixture: true,
+    requiredFacetKinds: ['policies'],
+    promptExtension: 'j2',
+  })),
   ...['a1', 'a2', 'a3', 'a4'].map((caseId) => ({
     id: `review-adjudication-applicable-inputs-${caseId}`,
     workflow: 'peer-review',
@@ -330,12 +372,23 @@ const TARGETS = [
     requiredFacetKinds: ['policies', 'knowledge'],
     promptExtension: 'j2',
   },
+  ...['good', 'bad', 'bad2', 'good-hook'].map(variant => ({
+    id: `frontend-mediator-review-${variant}`,
+    workflow: 'frontend',
+    step: 'frontend-review',
+    fixture: `eval/fixtures/frontend-mediator-review/${variant}`,
+    snapshotPrefix: 'frontend-review-context',
+    copyFixture: true,
+    requiredFacetKinds: ['policies', 'knowledge'],
+    promptExtension: 'j2',
+  })),
   { id: 'cqrs-review', workflow: 'review-backend-cqrs', step: 'cqrs-es-review', fixture: 'eval/fixtures/backend-cqrs' },
   // rescan は arch-review と同じ facet 構成だが fixture が異なるため、
   // 省略時に全文を確認できるスナップショットを inventory-es 側に生成する専用エントリが必要
   { id: 'rescan', workflow: 'peer-review', step: 'arch-review', fixture: 'eval/fixtures/inventory-es' },
   { id: 'rescan-coding', workflow: 'peer-review', step: 'coding-review', fixture: 'eval/fixtures/inventory-es' },
   { id: 'frontend-implement', workflow: 'frontend', step: 'implement', fixture: 'eval/fixtures/frontend-app', mutable: true },
+  { id: 'frontend-mediator-implement', workflow: 'frontend', step: 'implement', fixture: 'eval/fixtures/frontend-mediator', mutable: true, requiredFacetKinds: ['policies', 'knowledge'] },
   { id: 'cqrs-implement', workflow: 'backend-cqrs', step: 'implement', fixture: 'eval/fixtures/backend-cqrs', mutable: true },
   { id: 'fix-closure', workflow: 'review-remediation', step: 'fix-retry', fixture: 'eval/fixtures/fix-closure', mutable: true },
   { id: 'fix-self-scan', workflow: 'peer-review', step: 'fix', fixture: 'eval/fixtures/fix-self-scan', mutable: true },

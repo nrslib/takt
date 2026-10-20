@@ -124,6 +124,7 @@ steps:
         persona:
           $param: supervisor_persona
         policy:
+          - process-deviation
           - contract-change
         knowledge:
           $param: development_knowledge

@@ -12,6 +12,7 @@ tags:
 edit: false
 persona: coding-reviewer
 policy:
+  - process-deviation
   - contract-change
   - $param: verification_policy
 knowledge:

@@ -480,6 +480,7 @@
     "src/__tests__/task.test.ts",
     "src/__tests__/taskExecution.test.ts",
     "src/__tests__/taskForceFailActions.test.ts",
+    "src/__tests__/taskGit-auth.integration.test.ts",
     "src/__tests__/taskInstructionActions.test.ts",
     "src/__tests__/taskPullAction.test.ts",
     "src/__tests__/taskPullRequestActions.test.ts",

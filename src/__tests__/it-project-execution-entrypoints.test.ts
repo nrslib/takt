@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   claim: vi.fn(),
   requeue: vi.fn(),
   pool: vi.fn(),
+  executeTask: vi.fn(),
   config: vi.fn(),
   runner: vi.fn(),
   recover: vi.fn(),
@@ -38,6 +39,10 @@ vi.mock('../infra/task/index.js', () => ({
 vi.mock('../features/tasks/execute/parallelExecution.js', () => ({
   runWithWorkerPool: mocks.pool,
   requeueExistingFailedTasks: mocks.requeue,
+}));
+vi.mock('../features/tasks/execute/runTaskExecution.js', () => ({
+  executeRunTaskAndComplete: mocks.executeTask,
+  executeRunTaskAndCompleteWithDetails: vi.fn(),
 }));
 vi.mock('../features/tasks/execute/forceShutdown.js', () => ({
   forceExitAfterOpenCodeCleanup: vi.fn().mockResolvedValue(undefined),
@@ -72,6 +77,13 @@ const entrypoints = [
   { kind: 'watch', execute: watchTasks },
 ] as const;
 
+async function useActualWorkerPool(): Promise<void> {
+  const actual = await vi.importActual<typeof import('../features/tasks/execute/parallelExecution.js')>(
+    '../features/tasks/execute/parallelExecution.js',
+  );
+  mocks.pool.mockImplementation(actual.runWithWorkerPool);
+}
+
 describe('プロジェクト実行ロックの入口', () => {
   let listeners: ReturnType<typeof process.rawListeners>;
   let exitListeners: ReturnType<typeof process.rawListeners>;
@@ -93,6 +105,7 @@ describe('プロジェクト実行ロックの入口', () => {
     mocks.recover.mockResolvedValue(undefined);
     mocks.claim.mockReturnValue([task]);
     mocks.pool.mockResolvedValue({ success: 1, fail: 0, executedTaskNames: ['first'] });
+    mocks.executeTask.mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -166,16 +179,22 @@ describe('プロジェクト実行ロックの入口', () => {
     vi.spyOn(GoalStore.prototype, 'list').mockRejectedValue(failure);
     const actual = await vi.importActual<typeof import('../features/manager/completionTurn.js')>('../features/manager/completionTurn.js');
     mocks.recover.mockImplementation(actual.recoverManagerEvents);
+    if (execute === runAllTasks) {
+      await useActualWorkerPool();
+      mocks.claim.mockReturnValueOnce([task]).mockReturnValue([]);
+    }
 
     await expect(execute('/project')).resolves.toBeUndefined();
 
     expect(mocks.diagnostic).toHaveBeenCalledExactlyOnceWith('/project', failure);
     expect(mocks.pool).toHaveBeenCalledOnce();
     const [runner, initialTasks] = mocks.pool.mock.calls[0]!;
-    if (execute === runAllTasks) expect(initialTasks).toEqual([task]);
-    else {
-      expect(runner).toBeInstanceOf((await import('../infra/task/index.js')).TaskRunner);
-      expect(initialTasks).toEqual([]);
+    expect(runner).toBeInstanceOf((await import('../infra/task/index.js')).TaskRunner);
+    expect(initialTasks).toEqual([]);
+    if (execute === runAllTasks) {
+      expect(mocks.claim).toHaveBeenCalled();
+      expect(mocks.executeTask).toHaveBeenCalledExactlyOnceWith(task, runner, '/project', undefined,
+        expect.objectContaining({ abortSignal: expect.any(AbortSignal) }), undefined);
     }
     expect(mocks.release).toHaveBeenCalledOnce();
   });
@@ -193,10 +212,16 @@ describe('プロジェクト実行ロックの入口', () => {
   it.each(['initial processing', 'claim'] as const)('自動 run は取得前の $0 の失敗では再起動を判定しない', async (boundary) => {
     const failure = new Error('before claim');
     if (boundary === 'initial processing') mocks.failInterrupted.mockImplementation(() => { throw failure; });
-    else mocks.claim.mockImplementation(() => { throw failure; });
+    else {
+      await useActualWorkerPool();
+      mocks.claim.mockImplementation(() => { throw failure; });
+    }
     const run = runAllTasks('/project', { goalTasksOnly: true });
     await expect(run).rejects.toBe(failure);
-    expect(mocks.pool).not.toHaveBeenCalled();
+    if (boundary === 'claim') {
+      expect(mocks.pool).toHaveBeenCalledOnce();
+      expect(mocks.claim).toHaveBeenCalledOnce();
+    } else expect(mocks.pool).not.toHaveBeenCalled();
     expect(mocks.release).toHaveBeenCalledOnce();
     expect(mocks.ensure).not.toHaveBeenCalled();
   });
@@ -238,9 +263,11 @@ describe('プロジェクト実行ロックの入口', () => {
 
   it('run は通常タスクの読み取りエラーを実行元へ返す', async () => {
     const failure = new Error('unreadable ordinary task');
+    await useActualWorkerPool();
     mocks.claim.mockImplementation(() => { throw failure; });
     await expect(runAllTasks('/project')).rejects.toBe(failure);
-    expect(mocks.pool).not.toHaveBeenCalled();
+    expect(mocks.pool).toHaveBeenCalledOnce();
+    expect(mocks.claim).toHaveBeenCalledOnce();
     expect(mocks.release).toHaveBeenCalledOnce();
   });
 

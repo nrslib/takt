@@ -41,6 +41,7 @@ steps:
     persona:
       $param: supervisor_persona
     policy:
+      - process-deviation
       - review
       - $param: supervise_policy
     knowledge:

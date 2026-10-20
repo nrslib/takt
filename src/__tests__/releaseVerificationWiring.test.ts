@@ -9,7 +9,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { availableParallelism, tmpdir } from 'node:os';
 import { basename, dirname, join, relative } from 'node:path';
 import { Writable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
@@ -31,7 +31,7 @@ import {
   serialWorkflowTestFiles,
 } from '../../scripts/test-classification.mjs';
 import heavyParallelIntegrationConfig from '../../vitest.config.it.heavy.parallel.js';
-import lightIntegrationConfig from '../../vitest.config.it.parallel.js';
+import lightIntegrationConfig, { resolveLightItMaxWorkers } from '../../vitest.config.it.parallel.js';
 import serialGitConfig from '../../vitest.config.it.serial.git.js';
 import serialWorkflowConfig from '../../vitest.config.it.serial.workflow.js';
 import unitConfig from '../../vitest.config.unit.parallel.js';
@@ -700,6 +700,45 @@ describe('release verification wiring', () => {
       ...parallelIntegrationTestGlobs,
       ...parallelIntegrationTestFiles,
       ...serialFiles,
+    ]);
+  });
+
+  it.each([
+    { cpuCount: 1, isCi: false, expected: 1 },
+    { cpuCount: 2, isCi: false, expected: 1 },
+    { cpuCount: 3, isCi: false, expected: 2 },
+    { cpuCount: 10, isCi: false, expected: 2 },
+    { cpuCount: 10, isCi: true, expected: 1 },
+  ])('should run light integration with $expected worker(s) on $cpuCount CPUs (CI: $isCi)', ({
+    cpuCount,
+    isCi,
+    expected,
+  }) => {
+    expect(resolveLightItMaxWorkers(cpuCount, isCi)).toBe(expected);
+  });
+
+  it('should apply the local or CI worker limit to the light integration gate', () => {
+    expect(lightIntegrationConfig.test?.maxWorkers).toBe(
+      resolveLightItMaxWorkers(availableParallelism(), Boolean(process.env.CI)),
+    );
+  });
+
+  it('should route the measured slow integration suites to the sharded heavy gate', () => {
+    const movedFiles = [
+      'src/__tests__/deepseek-harness-error-mapping.test.ts',
+      'src/__tests__/it-issue-dispatch-notification.test.ts',
+      'src/__tests__/it-manager-question-display.test.ts',
+      'src/__tests__/it-manager-tui.test.ts',
+      'src/__tests__/it-workflow-maker-retry-availability.test.ts',
+      'src/__tests__/tui-conversation-view.test.tsx',
+    ];
+
+    for (const testFile of movedFiles) {
+      expect(lightIntegrationTestFiles).not.toContain(testFile);
+      expect(heavyParallelIntegrationTestFiles).toContain(testFile);
+    }
+    expect(selectNpmTestRuns(movedFiles)).toEqual([
+      { npmArgs: ['run', 'test:it:heavy:parallel', '--', ...movedFiles] },
     ]);
   });
 
