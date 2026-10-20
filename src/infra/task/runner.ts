@@ -4,7 +4,7 @@ import type { TaskStatus } from './schema.js';
 import { TaskStore } from './store.js';
 import { TaskLifecycleService } from './taskLifecycleService.js';
 import { TaskQueryService } from './taskQueryService.js';
-import { TaskDeletionService } from './taskDeletionService.js';
+import { TaskDeletionService, type TaskDeletionCleanup } from './taskDeletionService.js';
 import { TaskExceedService, type ExceedTaskOptions } from './taskExceedService.js';
 import type { RunResumeSource } from '../../core/workflow/run/run-meta.js';
 import {
@@ -195,8 +195,12 @@ export class TaskRunner {
     return this.retry.startReExecution(taskRef, allowedStatuses, resumeMode, options);
   }
 
-  deleteTask(name: string, kind: 'pending' | 'failed' | 'completed' | 'exceeded' | 'pr_failed'): void {
-    this.deletion.deleteTaskByNameAndStatus(name, kind);
+  deleteTask(
+    name: string,
+    kind: 'pending' | 'failed' | 'completed' | 'exceeded' | 'pr_failed',
+    cleanup?: TaskDeletionCleanup,
+  ): void {
+    this.deletion.deleteTaskByNameAndStatus(name, kind, cleanup);
   }
 
   exceedTask(taskName: string, options: ExceedTaskOptions): void {

@@ -461,6 +461,8 @@ takt list --non-interactive --format json
 
 In interactive mode, **Merge from root** merges the root repository HEAD into the worktree branch with AI-assisted conflict resolution.
 
+In interactive mode, **Delete selected…** opens a checkbox list of non-running tasks. Select tasks with Space and confirm the selection with Enter, then approve one confirmation showing the selected count. Empty selections, cancellation, or declining confirmation return to the menu without deleting anything. Each selected task uses the same cleanup as individual **Delete**, including branches and merge-task clones. Processing continues after a failure and ends with `Deleted M of N tasks.` showing the successful and selected counts. **All Delete** and individual **Delete** remain available with their existing behavior.
+
 #### Consult a running task
 
 Selecting a task in `takt list` opens its status-specific action menu. Existing actions such as Instruct and Requeue remain available for their respective task states. For a running task with a worktree clone, select **Interactive** to open the ordinary assistant conversation with that task as the initial `/tell` target. The conversation can inspect other tasks, discuss a new task, and use `/go` to execute or save it. `/tell` displays the task name, workflow, current step, and instruction, then writes only to the task selected at confirmation; `/cancel` closes the conversation or cancels the pending action. `/tell` requires an interactive terminal and sends nothing when confirmation cannot be obtained. **Mark as failed** remains available in the action menu.

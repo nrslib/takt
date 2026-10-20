@@ -390,6 +390,8 @@ takt list --non-interactive --format json
 
 `--action` 接受 `diff`、`sync`、`try`、`merge` 或 `delete`。非交互操作需要 `--branch`，`delete` 还需要 `--yes`。交互模式中的 **Merge from root** 会将根仓库 HEAD 合并到任务分支，并使用 AI 辅助解决冲突。
 
+在交互模式中，**Delete selected…** 会打开复选列表，只显示非运行中的任务。按 Space 切换选择，按 Enter 确定，然后只需进行一次显示所选数量的删除确认。未选择任务、取消选择或拒绝确认时不会删除任何任务，并返回菜单。每个任务使用与单独 **Delete** 相同的清理流程，包括分支和 merge 任务的克隆。某个任务删除失败后仍会继续处理其余任务，最后以 `Deleted M of N tasks.` 显示成功数和所选总数。**All Delete** 和单独 **Delete** 保持原有行为。
+
 #### 咨询运行中的任务
 
 在 `takt list` 中选择带有 worktree clone 的运行中任务后，会打开普通 assistant 对话，并将该任务作为 `/tell` 的初始目标。对话中可以查看其他任务、讨论新任务，并使用 `/go` 执行或保存。`/tell` 会显示任务名称、workflow、当前 step 和指令，确认后只向确认时选中的任务写入。没有交互式终端或无法取得确认时不会发送指令，并会显示原因；`/cancel` 会关闭对话或取消待处理操作。

@@ -23,7 +23,7 @@ import {
   syncBranchWithRoot,
   pullFromRemote,
 } from './taskActions.js';
-import { deleteTaskByKind, deleteAllTasks } from './taskDeleteActions.js';
+import { deleteTaskByKind, deleteAllTasks, deleteSelectedTasks } from './taskDeleteActions.js';
 import { forceFailRunningTask } from './taskForceFailActions.js';
 import * as taskRetryActions from './taskRetryActions.js';
 import { listTasksNonInteractive, type ListNonInteractiveOptions } from './listNonInteractive.js';
@@ -247,6 +247,7 @@ export async function listTasks(
         value: `${task.kind}:${idx}`,
         description: `${task.summary ?? task.content} | ${formatShortDate(task.createdAt)}`,
       })),
+      { label: 'Delete selected…', value: '__delete-selected__', description: 'Select tasks to delete' },
       { label: 'All Delete', value: '__all-delete__', description: 'Delete all tasks at once' },
     ];
 
@@ -257,6 +258,11 @@ export async function listTasks(
 
     if (selected === null) {
       return;
+    }
+
+    if (selected === '__delete-selected__') {
+      await deleteSelectedTasks(tasks);
+      continue;
     }
 
     if (selected === '__all-delete__') {

@@ -21,6 +21,7 @@ vi.mock('node:fs', async (importOriginal) => {
 
 vi.mock('../shared/prompt/index.js', () => ({
   confirm: vi.fn(),
+  selectMultipleOptions: vi.fn(),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -41,9 +42,12 @@ vi.mock('../features/tasks/list/taskActions.js', () => ({
   deleteBranch: (...args: unknown[]) => mockDeleteBranch(...args),
 }));
 
-import { confirm } from '../shared/prompt/index.js';
-import { error as logError } from '../shared/ui/index.js';
-import { deleteTaskByKind, deleteAllTasks } from '../features/tasks/list/taskDeleteActions.js';
+import { confirm, selectMultipleOptions } from '../shared/prompt/index.js';
+import { error as logError, success } from '../shared/ui/index.js';
+import { deleteTaskByKind, deleteAllTasks, deleteSelectedTasks } from '../features/tasks/list/taskDeleteActions.js';
+import { deleteBranch } from '../features/tasks/list/taskBranchLifecycleActions.js';
+import { TaskRunner } from '../infra/task/runner.js';
+import { encodeWorktreePath } from '../infra/config/project/sessionStore.js';
 import type { TaskListItem } from '../infra/task/types.js';
 
 const mockConfirm = vi.mocked(confirm);
@@ -256,6 +260,34 @@ describe('taskDeleteActions', () => {
     expect(raw).toContain('failed-task');
   });
 
+  it('does not clean a single task claimed while waiting for confirmation', async () => {
+    const runner = new TaskRunner(tmpDir);
+    const target = runner.addTask('single', { branch: 'takt/single' });
+    const task = runner.listAllTaskItems()[0]!;
+    mockConfirm.mockImplementationOnce(async () => {
+      expect(runner.claimNextTasks(1).map(({ name }) => name)).toEqual([target.name]);
+      return true;
+    });
+
+    expect(await deleteTaskByKind(task)).toBe(false);
+
+    expect(mockDeleteBranch).not.toHaveBeenCalled();
+    expect(runner.listAllTaskItems()).toMatchObject([{ name: target.name, kind: 'running' }]);
+  });
+
+  it('does not start cleanup when single-task confirmation is declined', async () => {
+    setupTasksFile(tmpDir);
+    const runner = new TaskRunner(tmpDir);
+    const task = runner.listAllTaskItems().find(({ kind }) => kind === 'completed')!;
+    const before = fs.readFileSync(runner.getTasksFilePath(), 'utf8');
+    mockConfirm.mockResolvedValueOnce(false);
+
+    expect(await deleteTaskByKind(task)).toBe(false);
+
+    expect(mockDeleteBranch).not.toHaveBeenCalled();
+    expect(fs.readFileSync(runner.getTasksFilePath(), 'utf8')).toBe(before);
+  });
+
   it('should return false when target task is missing', async () => {
     const tasksFile = setupTasksFile(tmpDir);
     const task: TaskListItem = {
@@ -451,5 +483,88 @@ describe('deleteAllTasks', () => {
     await deleteAllTasks(tasks);
 
     expect(mockDeleteBranch).toHaveBeenCalledWith(tmpDir, completedTask);
+  });
+});
+
+describe('deletion while a task is claimed', () => {
+  it.each([false, true])('preserves a worktree claimed during selection: %s', async (claim) => {
+    const runner = new TaskRunner(tmpDir);
+    const worktreePath = path.join(tmpDir, '.takt', 'worktrees', 'first');
+    fs.mkdirSync(worktreePath, { recursive: true });
+    const marker = path.join(worktreePath, 'work.txt');
+    fs.writeFileSync(marker, 'keep work');
+    const sessionFile = path.join(tmpDir, '.takt', 'worktree-sessions', `${encodeWorktreePath(worktreePath)}.json`);
+    fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+    fs.writeFileSync(sessionFile, '{}');
+    fs.writeFileSync(runner.getTasksFilePath(), stringifyYaml({ tasks: [
+      { name: 'first', status: 'pending', content: 'first', branch: 'takt/first', worktree_path: worktreePath,
+        created_at: '2026-10-20T00:00:00.000Z', started_at: null, completed_at: null },
+      { name: 'second', status: 'completed', content: 'second', created_at: '2026-10-20T00:00:00.000Z',
+        started_at: '2026-10-20T00:00:00.000Z', completed_at: '2026-10-20T00:00:00.000Z' },
+    ] }));
+    const tasks = runner.listAllTaskItems();
+    let select!: (values: string[]) => void;
+    vi.mocked(selectMultipleOptions).mockReturnValueOnce(new Promise<string[]>((resolve) => { select = resolve; }));
+    mockConfirm.mockResolvedValue(true);
+    mockDeleteBranch.mockImplementation(deleteBranch);
+
+    const operation = deleteSelectedTasks(tasks);
+    try {
+      expect(selectMultipleOptions).toHaveBeenCalledTimes(1);
+      expect(mockDeleteBranch).not.toHaveBeenCalled();
+      if (claim) expect(runner.claimNextTasks(1).map((task) => task.name)).toEqual(['first']);
+    } finally {
+      select(['0', '1']);
+    }
+    expect(await operation).toBe(true);
+
+    expect(fs.existsSync(marker)).toBe(claim);
+    expect(fs.existsSync(sessionFile)).toBe(claim);
+    expect(runner.listAllTaskItems().map(({ name, kind }) => ({ name, kind }))).toEqual(
+      claim ? [{ name: 'first', kind: 'running' }] : [],
+    );
+    expect(mockDeleteBranch).toHaveBeenCalledTimes(claim ? 0 : 1);
+    expect(success).toHaveBeenCalledWith(`Deleted ${claim ? 1 : 2} of 2 tasks.`);
+    expect(mockLogError).toHaveBeenCalledTimes(claim ? 1 : 0);
+  });
+
+  it.each([false, true])('preserves a merge clone requeued and claimed during confirmation: %s', async (claim) => {
+    const runner = new TaskRunner(tmpDir);
+    const worktreePath = path.join(tmpDir, '.takt', 'worktrees', 'merge-pr-123');
+    fs.mkdirSync(worktreePath, { recursive: true });
+    const marker = path.join(worktreePath, 'work.txt');
+    fs.writeFileSync(marker, 'keep clone');
+    const merge = runner.startPrMergeTask({
+      prNumber: 123, headBranch: 'main', baseBranch: 'release', headSha: 'a'.repeat(40),
+      headRepositoryUrl: 'https://github.com/example/repo.git',
+      headRepositoryPushUrls: ['https://github.com/example/repo.git'],
+      workflow: 'merge-review-fix-simple', method: 'merge', worktreePath, threatCheckMaxDiffBytes: 1000,
+    });
+    runner.forceFailRunningTask(merge.name, { error: 'retry' });
+    const tasks = runner.listAllTaskItems();
+    let approve!: (approved: boolean) => void;
+    vi.mocked(selectMultipleOptions).mockResolvedValueOnce(['0']);
+    mockConfirm.mockReturnValueOnce(new Promise<boolean>((resolve) => { approve = resolve; }));
+
+    const operation = deleteSelectedTasks(tasks);
+    try {
+      await vi.waitFor(() => expect(mockConfirm).toHaveBeenCalledTimes(1));
+      expect(fs.existsSync(marker)).toBe(true);
+      if (claim) {
+        runner.requeueFailedTask('merge-pr-123');
+        expect(runner.claimNextTasks(1)).toMatchObject([{ name: 'merge-pr-123', worktreePath }]);
+      }
+    } finally {
+      approve(true);
+    }
+    expect(await operation).toBe(!claim);
+
+    expect(fs.existsSync(marker)).toBe(claim);
+    expect(runner.listAllTaskItems().map(({ name, kind }) => ({ name, kind }))).toEqual(
+      claim ? [{ name: 'merge-pr-123', kind: 'running' }] : [],
+    );
+    expect(mockDeleteBranch).not.toHaveBeenCalled();
+    expect(success).toHaveBeenCalledWith(`Deleted ${claim ? 0 : 1} of 1 tasks.`);
+    expect(mockLogError).toHaveBeenCalledTimes(claim ? 1 : 0);
   });
 });
