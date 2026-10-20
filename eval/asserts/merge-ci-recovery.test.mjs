@@ -354,7 +354,14 @@ test('production preparation supplies state and reports without exposing unavail
     else process.env.TAKT_CONFIG_DIR = previousConfigDir;
   });
   process.env.TAKT_CONFIG_DIR = resolve('eval/config');
+  const staleCase = resolve('eval/.work/merge-ci-recovery/merge-ci-investigation-ja-clock');
+  const staleReport = join(staleCase, '.takt/runs/eval/reports/stale.md');
+  mkdirSync(dirname(staleReport), { recursive: true });
+  writeFileSync(join(staleCase, 'stale.txt'), 'stale log');
+  writeFileSync(staleReport, 'stale report');
   await prepareMergeCiRecovery(MERGE_CI_TARGETS);
+  assert.equal(existsSync(join(staleCase, 'stale.txt')), false);
+  assert.equal(existsSync(staleReport), false);
   for (const language of ['ja', 'en']) {
     const directory = (suite, id) => resolve(`eval/.work/merge-ci-recovery/${suite}-${language}-${id}`);
     const evidence = (id) => JSON.parse(readFileSync(`${directory('merge-ci-investigation', id)}/failure-evidence.json`, 'utf8'));

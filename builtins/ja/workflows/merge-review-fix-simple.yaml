@@ -212,7 +212,7 @@ steps:
       - type: comment_pr
         pr: "{context:identify.pr.number}"
         body_format: plain_text
-        body: "TAKTのCI回復を停止しました。修正回数: {context:collect_ci_failure.failure.fixRounds}、再実行回数: {context:collect_ci_failure.failure.rerunCount}。調査要点: {structured:investigate_ci.summary}。最後の失敗チェック・run・job・証拠不足: {context:collect_ci_failure.failure.details}. Push error: {effect:push_ci_fix.commit_and_push.error}"
+        body: "TAKTのCI回復を停止しました。修正回数: {context:collect_ci_failure.failure.fixRounds}、再実行回数: {context:collect_ci_failure.failure.rerunCount}。調査要点: {structured:investigate_ci.summary}。最後の失敗チェック・run・job・証拠不足: {context:collect_ci_failure.failure.details}。pushエラー: {effect:push_ci_fix.commit_and_push.error}"
     rules:
       - condition: when(true)
         next: ABORT

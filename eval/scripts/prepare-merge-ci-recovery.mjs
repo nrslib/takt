@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -26,6 +26,7 @@ export async function prepareMergeCiRecovery(targets) {
     for (const language of ['ja', 'en']) for (const spec of reviewing ? reviewCases : investigationCases) {
       const id = `${suite}-${language}-${spec.id}`;
       const project = join(repo, 'eval/.work/merge-ci-recovery', id);
+      rmSync(project, { recursive: true, force: true });
       mkdirSync(project, { recursive: true });
       for (const name of ['product.mjs', 'product.test.mjs', 'clock.mjs', 'clock.test.mjs', 'ci.yaml', 'contract.md', 'cumulative.diff']) {
         cpSync(join(repo, 'eval/fixtures/merge-ci-recovery/common', name), join(project, name));
