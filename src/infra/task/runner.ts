@@ -107,8 +107,8 @@ export class TaskRunner {
     return this.lifecycle.claimNextTasks(count);
   }
 
-  failInterruptedRunningTasks(goalId?: string): number {
-    return this.lifecycle.failInterruptedRunningTasks(goalId);
+  failInterruptedRunningTasks(goalId?: string, onRecovered?: (task: TaskState) => void): number {
+    return this.lifecycle.failInterruptedRunningTasks(goalId, onRecovered);
   }
 
   invalidatePendingGoalTasks(goalId: string): void {

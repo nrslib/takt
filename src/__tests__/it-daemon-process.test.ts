@@ -8,9 +8,13 @@ import { registerProject } from '../infra/config/global/projectRegistry.js';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { isDaemonOwnerRunning, readDaemonOwner, writeDaemonOwner } from '../infra/daemon/owner.js';
 import { GoalStore } from '../infra/goals/store.js';
-import { readManagerEvents, saveManagerEvent } from '../infra/goals/events.js';
+import { readManagerEvents, saveManagerEvent, type ManagerEvent } from '../infra/goals/events.js';
 import { readManagerDisplayEvents } from '../features/manager/savedEvents.js';
 import { isProcessAlive } from '../infra/task/process.js';
+import { getTaskProcessIdentity } from '../infra/task/taskProcessIdentity.js';
+import { TaskRecordSchema } from '../infra/task/schema.js';
+import { TaskStore } from '../infra/task/store.js';
+import type { TaskState } from '../infra/task/types.js';
 import { packageVersion } from '../shared/package-info.js';
 import { captureOwnedChild, captureOwnedProcess, terminateOwnedProcess, type OwnedProcess } from './helpers/owned-process.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
@@ -244,5 +248,74 @@ it('patrols an active goal without run, saves completion time and does not repea
   }, { timeout: 5_000 });
   const recorded = readFileSync(calls, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { event: string; personaName: string });
   expect(recorded.filter((call) => call.event === 'start' && call.personaName === 'manager')).toHaveLength(1);
+  expect(isDaemonOwnerRunning(owner)).toBe(true);
+});
+
+it('recovers an existing task after its owner exits while the same daemon keeps patrolling without pending work', async () => {
+  execFileSync('git', ['init', '-b', 'main'], { cwd, stdio: 'pipe' });
+  writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nlanguage: ja\nmanager:\n  patrol_interval: 1\n');
+  const goal = await keepWork();
+  await new GoalStore(cwd).update(goal.id, (current) => ({
+    ...current, createdAt: new Date(Date.now() - 3_600_000).toISOString(),
+  }));
+  const taskOwner = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', shell: false });
+  const captured = await captureOwnedChild(taskOwner);
+  expect(captured).toBeDefined();
+  owned.push(captured!);
+  const identity = getTaskProcessIdentity(captured!.pid);
+  expect(identity).toBeDefined();
+  const taskStore = new TaskStore(cwd);
+  const task = TaskRecordSchema.parse({
+    name: 'interrupted-goal-task', content: 'Recover this task', status: 'running',
+    goal_id: goal.id, run_slug: 'run-interrupted', created_at: '2026-10-06T00:00:00Z',
+    started_at: '2026-10-06T00:00:00Z', completed_at: null,
+    owner_pid: captured!.pid, owner_start_time: identity!.startTime,
+  });
+  taskStore.update(() => ({ tasks: [task, { ...task, name: 'interrupted-ordinary-task', goal_id: undefined }] }));
+  const scenario = join(root, 'recovery-scenario.json');
+  const prompts = join(root, 'recovery-prompts.jsonl');
+  writeFileSync(scenario, JSON.stringify(Array.from({ length: 20 }, () => ({
+    persona: 'manager', content: '', structured_output: { message: 'タスク状態を確認しました', summary: null },
+  }))));
+  vi.stubEnv('TAKT_MOCK_SCENARIO', scenario);
+  vi.stubEnv('TAKT_MOCK_PROMPT_LOG', prompts);
+  type Turn = { event: ManagerEvent; tasks: TaskState[]; goal: { taskStates: Record<string, number> } };
+  const readTurns = (): Turn[] => {
+    if (!existsSync(prompts)) return [];
+    return readFileSync(prompts, 'utf8').trim().split('\n')
+      .map((line) => JSON.parse(line) as { personaName: string; prompt: string })
+      .filter(({ personaName }) => personaName === 'manager')
+      .map(({ prompt }) => JSON.parse(prompt.split('\n\nGoal memory')[0]!) as Turn);
+  };
+  const owner = await start();
+  await vi.waitFor(() => {
+    const patrol = readTurns().find(({ event }) => event.kind === 'patrol');
+    expect(patrol?.tasks).toEqual([expect.objectContaining({ name: task.name, status: 'running', ownerPid: captured!.pid })]);
+    expect(patrol?.goal.taskStates).toEqual({ running: 1 });
+    expect(taskStore.read().tasks.map(({ status }) => status)).toEqual(['running', 'running']);
+  }, { timeout: 10_000 });
+
+  await terminateOwnedProcess(captured!, () => taskOwner.exitCode !== null || taskOwner.signalCode !== null);
+
+  await vi.waitFor(() => {
+    const saved = taskStore.read().tasks;
+    expect(saved.map(({ status }) => status)).toEqual(['failed', 'failed']);
+    expect(saved[0]).toMatchObject({ name: task.name, owner_pid: null, owner_start_time: null,
+      completion: { success: false, interrupted: true }, run_slug: 'run-interrupted' });
+    const patrol = readTurns().find(({ event, tasks }) => event.kind === 'patrol' && tasks[0]?.status === 'failed');
+    expect(patrol?.tasks).toEqual([expect.objectContaining({ name: task.name, status: 'failed',
+      completion: expect.objectContaining({ success: false, interrupted: true }) })]);
+    expect(patrol?.goal.taskStates).toEqual({ failed: 1 });
+  }, { timeout: 10_000 });
+
+  const patrolsBefore = readTurns().filter(({ event }) => event.kind === 'patrol').length;
+  await vi.waitFor(() => {
+    expect(readTurns().filter(({ event }) => event.kind === 'patrol').length).toBeGreaterThanOrEqual(patrolsBefore + 2);
+  }, { timeout: 10_000 });
+  const completions = readTurns().filter(({ event }) => event.kind === 'completion').map(({ event }) => event);
+  expect(completions).toEqual([expect.objectContaining({ kind: 'completion', goalId: goal.id,
+    taskName: task.name, runSlug: 'run-interrupted', result: expect.objectContaining({ success: false, interrupted: true }) })]);
+  expect(taskStore.read().tasks.some(({ status }) => status === 'pending')).toBe(false);
+  expect(readDaemonOwner(getGlobalConfigDir())).toEqual(owner);
   expect(isDaemonOwnerRunning(owner)).toBe(true);
 });

@@ -3,6 +3,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
 import { registerDaemonOwner, removeDaemonOwner } from '../../infra/daemon/owner.js';
 import { getSelfProcessIdentity } from '../../infra/task/process.js';
+import { TaskRunner } from '../../infra/task/runner.js';
 import { packageVersion } from '../../shared/package-info.js';
 import { resolveCliInvocation } from '../../shared/utils/cli-invocation.js';
 import { createLogger, initDebugLogger } from '../../shared/utils/debug.js';
@@ -14,6 +15,7 @@ import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
 import { enqueueDueGoalPatrols } from '../manager/patrol.js';
 import { notifyManagerTurnFailure } from '../manager/turnFailureNotification.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
+import { failInterruptedTasksWithGoalEvents } from '../tasks/execute/claimTasks.js';
 
 const POLL_INTERVAL_MS = 500;
 const EVENTS_PER_PROJECT = 10;
@@ -48,6 +50,14 @@ export async function runDaemon(): Promise<void> {
     let patrolInterval: number | undefined;
     try {
       patrolInterval = resolveManagerConfig(cwd).patrolInterval;
+      try {
+        failInterruptedTasksWithGoalEvents(new TaskRunner(cwd, {
+          onWarning: (warning) => log.warn('Daemon task recovery warning', { cwd, warning: sanitizeSensitiveText(warning) }),
+        }), cwd);
+      } catch (error) {
+        errors.push({ error, failedAt: Date.now() });
+        log.error('Cannot recover interrupted daemon project tasks', { cwd, error: sanitizeSensitiveText(getErrorMessage(error)) });
+      }
       await enqueueDueGoalPatrols(cwd, patrolInterval);
       if (controller.signal.aborted) return false;
       let manager = managers.get(cwd);
