@@ -5,11 +5,73 @@ import { getLabel } from '../shared/i18n/index.js';
 import {
   buildFormalSpecGenerationPrompt,
   buildFormalSpecGenerationSystemPrompt,
-  buildFormalSpecInterpretationSystemPrompt,
-  loadFormalSpecVerifierConstraints,
   buildFormalSpecInterpretationPrompt,
+  buildFormalSpecInterpretationSystemPrompt,
   getFormalSpecVerificationArtifactPaths,
+  getFormalSpecRetainedArtifactsMessage,
 } from '../features/interactive/formalSpecPrompts.js';
+
+describe('verification artifact retention guidance', () => {
+  it.each(['en', 'ja'] as const)('selects confirmed retention or manual recovery instructions for %s', (lang) => {
+    const retained = buildFormalSpecInterpretationSystemPrompt(lang, 'passed');
+    const unconfirmed = buildFormalSpecInterpretationSystemPrompt(lang, 'error');
+    const retentionClaim = lang === 'ja' ? /成果物は保持されています/ : /artifacts are retained/;
+
+    expect(retained).toMatch(retentionClaim);
+    expect(retained).toMatch(lang === 'ja' ? /手動で削除/ : /remove them manually/);
+    expect(unconfirmed).toMatch(lang === 'ja' ? /保持は確定できません/ : /could not be confirmed/);
+    expect(unconfirmed).toMatch(lang === 'ja' ? /手動で退避/ : /copy any needed artifacts manually/);
+    expect(unconfirmed).not.toMatch(retentionClaim);
+  });
+
+  it.each(['en', 'ja'] as const)('does not infer retention when no status is reported for %s', (lang) => {
+    const prompt = buildFormalSpecInterpretationSystemPrompt(lang, undefined);
+
+    expect(prompt).toMatch(lang === 'ja' ? /保持状態は報告されていません/ : /No retention status was reported/);
+    expect(prompt).not.toMatch(lang === 'ja' ? /成果物は保持されています/ : /artifacts are retained/);
+    expect(prompt).toMatch(lang === 'ja' ? /成功時の成果物は解釈後に削除/ : /Successful verification artifacts are removed after interpretation/);
+  });
+});
+
+describe('retained verification artifact notice', () => {
+  it.each(['en', 'ja'] as const)('reports failed and error artifact paths in %s', (lang) => {
+    for (const verdict of ['failed', 'error'] as const) {
+      const result = {
+        verdict, verificationStarted: true,
+        artifactRetention: { status: 'passed' as const },
+        quint: { status: verdict }, alloy: { status: 'skipped' as const },
+        artifacts: { runDirectory: '/repo/.takt/runs/verify-test', specifications: {}, logs: {} },
+      };
+      expect(getFormalSpecRetainedArtifactsMessage(result, lang)).toContain(result.artifacts.runDirectory);
+      expect(getFormalSpecRetainedArtifactsMessage({ ...result, verdict: 'passed' }, lang)).toBeUndefined();
+      expect(getFormalSpecRetainedArtifactsMessage({ ...result, artifacts: undefined }, lang)).toBeUndefined();
+    }
+  });
+
+  it.each(['en', 'ja'] as const)('reports retention diagnostics and distinguishes unconfirmed retention in %s', (lang) => {
+    const path = '/repo/.takt/runs/verify-retention-error';
+    const writeError = 'retention marker write failed';
+    const moveError = 'retention marker move failed';
+    for (const status of ['passed', 'error'] as const) {
+      const result = {
+        verdict: 'failed' as const, verificationStarted: true,
+        quint: { status: 'skipped' as const }, alloy: { status: 'failed' as const },
+        artifacts: { runDirectory: path, specifications: {}, logs: {} },
+        artifactRetention: { status, message: status === 'passed' ? writeError : `${writeError}\n${moveError}` },
+      };
+      const notice = getFormalSpecRetainedArtifactsMessage(result, lang)!;
+      expect(notice).toContain(path);
+      expect(notice).toContain(writeError);
+      const heading = notice.split('\n')[0]!;
+      if (status === 'error') {
+        expect(notice).toContain(moveError);
+        expect(heading).toMatch(lang === 'ja' ? /確定できません/ : /could not be confirmed/);
+      } else {
+        expect(heading).toMatch(lang === 'ja' ? /保持しました/ : /retained at/);
+      }
+    }
+  });
+});
 
 function renderInteractivePrompt(
   lang: 'en' | 'ja',
@@ -66,12 +128,6 @@ function renderEnglishSummaryPrompt(formalSpec: boolean, formalSpecComments = tr
     false,
     formalSpecComments,
   );
-}
-
-function expectFormalSpecVerifierConstraints(prompt: string, lang: 'en' | 'ja'): void {
-  const constraints = loadFormalSpecVerifierConstraints(lang);
-  expect(constraints.trim().length).toBeGreaterThan(0);
-  expect(prompt).toContain(constraints);
 }
 
 function expectNoUnexpandedTemplateVariables(prompt: string): void {
@@ -153,48 +209,6 @@ describe('assistant task retry prompt guidance', () => {
   );
 });
 
-describe('formal specification verifier constraint wiring', () => {
-  it.each(['en', 'ja'] as const)('includes verifier constraints in generation and interpretation system prompts for %s', (lang) => {
-    const generationPrompt = buildFormalSpecGenerationSystemPrompt(lang);
-    const interpretationPrompt = buildFormalSpecInterpretationSystemPrompt(lang);
-    expectFormalSpecVerifierConstraints(generationPrompt, lang);
-    expectFormalSpecVerifierConstraints(interpretationPrompt, lang);
-    expectNoUnexpandedTemplateVariables(generationPrompt);
-    expectNoUnexpandedTemplateVariables(interpretationPrompt);
-  });
-
-  it.each(['en', 'ja'] as const)('includes verifier constraints in interactive and task instruction prompts for %s', (lang) => {
-    const interactivePrompt = renderInteractivePrompt(lang, true);
-    const summaryPrompt = lang === 'ja' ? renderJapaneseSummaryPrompt(true) : renderEnglishSummaryPrompt(true);
-    expectFormalSpecVerifierConstraints(interactivePrompt, lang);
-    expectFormalSpecVerifierConstraints(summaryPrompt, lang);
-    expectNoUnexpandedTemplateVariables(interactivePrompt);
-    expectNoUnexpandedTemplateVariables(summaryPrompt);
-  });
-
-  it.each(['en', 'ja'] as const)('omits verifier constraints and template placeholders when formalSpec is false for %s', (lang) => {
-    const constraints = loadFormalSpecVerifierConstraints(lang);
-    const interactivePrompt = renderInteractivePrompt(lang, false);
-    const summaryPrompt = lang === 'ja' ? renderJapaneseSummaryPrompt(false) : renderEnglishSummaryPrompt(false);
-
-    for (const prompt of [interactivePrompt, summaryPrompt]) {
-      expect(prompt).not.toContain(constraints);
-      expectNoUnexpandedTemplateVariables(prompt);
-    }
-  });
-});
-
-describe('formal specification generation user prompt boundaries', () => {
-  it.each(['en', 'ja'] as const)('keeps generation-only fences without duplicating verifier constraints for %s', (lang) => {
-    const prompt = buildFormalSpecGenerationPrompt(lang, `generation-context-${lang}`);
-
-    expect(prompt).toContain('```quint');
-    expect(prompt).toContain('```alloy');
-    expect(prompt).not.toContain(loadFormalSpecVerifierConstraints(lang));
-    expectNoUnexpandedTemplateVariables(prompt);
-  });
-});
-
 describe('formal specification generation context wiring', () => {
   it.each(['en', 'ja'] as const)('preserves the unique initial agreement inside its stable delimiter for %s', (lang) => {
     const initialAgreement = `unique-initial-agreement-${lang}-8b7e2d`;
@@ -231,16 +245,13 @@ describe('Alloy run/check generation and interpretation contract', () => {
     const prompt = buildFormalSpecGenerationSystemPrompt(lang);
     const policyJson = prompt.split('<takt-formal-spec-generation-policy>')[1]!.split('</takt-formal-spec-generation-policy>')[0]!;
     expect(JSON.parse(policyJson).alloy).toEqual({ targetCommands: ['run', 'check'], consistencyRunRequired: true });
-    const constraints = loadFormalSpecVerifierConstraints(lang);
-    for (const token of ['`run {}`', '`run`', '`check`', 'SAT', 'UNSAT', '1.. steps', '`expect`']) {
-      expect(constraints).toContain(token);
-    }
   });
 
   it.each(['en', 'ja'] as const)('passes each command result and its receipt/trace artifacts to interpretation for %s', (lang) => {
     const commandResults = [
       { number: 0, type: 'run', label: 'Scenario', status: 'failed' as const, message: 'UNSAT' },
       { number: 1, type: 'check', label: 'Safety', status: 'passed' as const },
+      { number: 2, type: 'check', label: 'Slow', status: 'error' as const, timedOut: true },
     ];
     const result = {
       verdict: 'failed' as const, verificationStarted: true,

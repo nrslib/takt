@@ -157,7 +157,7 @@ export type TuiSubmission =
     notices?: readonly string[];
     commit?: () => void;
   }
-  | { kind: 'error'; message: string; notices?: readonly string[]; commit?: () => void };
+  | { kind: 'error'; message: string; retainedArtifactsMessage?: string; notices?: readonly string[]; commit?: () => void };
 
 /** Commands the TUI settles itself, without contacting the provider. */
 export type TuiLocalCommand =
@@ -418,6 +418,7 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
           return {
             kind: 'error',
             message: describeSessionError(result.code, result.message, ctx.lang),
+            ...(result.retainedArtifactsMessage === undefined ? {} : { retainedArtifactsMessage: result.retainedArtifactsMessage }),
             notices,
           };
       }

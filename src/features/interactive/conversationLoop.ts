@@ -67,6 +67,7 @@ import {
   buildFormalSpecInterpretationPrompt,
   buildFormalSpecInterpretationSystemPrompt,
   getFormalSpecVerificationArtifactPaths,
+  getFormalSpecRetainedArtifactsMessage,
 } from './formalSpecPrompts.js';
 
 export { type CallAIResult, type SessionContext, callAIWithRetry } from './aiCaller.js';
@@ -432,7 +433,7 @@ export async function runConversationLoop(
 
         const interpretationCall = await callConversationAI(
           buildFormalSpecInterpretationPrompt(verification, generated.content, ctx.lang),
-          buildFormalSpecInterpretationSystemPrompt(ctx.lang),
+          buildFormalSpecInterpretationSystemPrompt(ctx.lang, verification.artifactRetention?.status),
           ['Read'],
           {
             permissionMode: 'readonly',
@@ -467,6 +468,11 @@ export async function runConversationLoop(
         );
         blankLine();
       } finally {
+        const retainedArtifactsMessage = getFormalSpecRetainedArtifactsMessage(verification, ctx.lang);
+        if (retainedArtifactsMessage !== undefined) {
+          info(sanitizeTerminalText(retainedArtifactsMessage));
+          blankLine();
+        }
         cleanupFormalSpecVerificationArtifacts(verification);
       }
     }

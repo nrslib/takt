@@ -430,6 +430,30 @@ TAKT 观察实际收到的 provider event，不会合成 keepalive。OpenCode �
 
 `TAKT_AUTO_REQUEUE_MAX_ATTEMPTS` 必须解析为非负整数；非数字、负数和非整数会使配置验证失败。`TAKT_IGNORE_EXCEED` 只接受 `true` 或 `false`。
 
+## Alloy 并发与 JVM 设置
+
+以下环境变量在验证开始时读取一次，不是 YAML 配置键，也不适用于仅含 Quint 的验证。
+
+| 环境变量 | 默认值 | 格式 |
+|----------|--------|------|
+| `TAKT_ALLOY_CONCURRENCY` | `2` | 正安全整数；`1` 为顺序执行 |
+| `TAKT_ALLOY_HEAP` | `4g` | 正整数和小写单位 `k`、`m` 或 `g` |
+| `TAKT_ALLOY_STACK` | `64m` | 正整数和小写单位 `k`、`m` 或 `g` |
+
+仅未设置时使用默认值；空字符串或无效值会产生包含变量名的错误。一次验证期间设置保持不变。包括命令枚举在内的所有 Alloy JVM 默认接收 `-Xmx4g -Xss64m`。覆盖时只传入指定值，不重复传入默认参数。
+
+```bash
+TAKT_ALLOY_CONCURRENCY=1 TAKT_ALLOY_HEAP=2g TAKT_ALLOY_STACK=128m takt
+```
+
+内存不足时，请降低堆上限或将并发数设为 1。请使用这些 TAKT 专用设置修改 JVM 参数，不要仅依赖 `JAVA_TOOL_OPTIONS`。
+
+`assistant.formal_spec.model_check_timeout_seconds` 分别适用于每条 Alloy 命令（默认 900 秒），不设置整体超时。失败或超时不会阻止其余命令执行，有空闲位置时立即启动下一条命令。各命令结果通过 `timedOut: true` 标识超时。
+
+验证失败、错误或超时时，`.takt/runs/verify-*/` 中的规范与日志会保留，结果消息会显示目录路径。保留目录不参与自动清理，请在不再需要时手动删除。成功验证的产物在结果解读结束后删除。
+
+如果写入保留标记失败，TAKT 会将所有权标记移动为保留标记，并报告目录路径和写入错误。如果移动也失败，TAKT 会保留所有权标记，提示无法确认保留状态，并报告目录路径和两个错误。即使所属 Node 进程退出，剩余的所有权标记仍会保护目录，使其不被自动清理。请手动复制所需的产物。
+
 ## 环境变量覆盖
 
 大多数配置 key 都可以通过 `TAKT_` 加上大写、下划线连接的 key 路径覆盖：`logging.debug` 变成 `TAKT_LOGGING_DEBUG`，`telemetry.routing_decisions` 变成 `TAKT_TELEMETRY_ROUTING_DECISIONS`。常见例子包括 `TAKT_PROVIDER`、`TAKT_MODEL`、`TAKT_CONCURRENCY`、`TAKT_LOGGING_DEBUG`、`TAKT_TELEMETRY_ROUTING_DECISIONS` 和 `TAKT_OBSERVABILITY_ENABLED`。环境变量优先于对应文件值，并在拥有该 key 的配置层解析。

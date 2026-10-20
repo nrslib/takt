@@ -976,6 +976,23 @@ describe('TUI local commands', () => {
     expect(chunks).toEqual([]);
   });
 
+  it('passes retained artifact notification through an interrupted verification submission', async () => {
+    const plan = createPlan();
+    const conversation = createConversation({ plan: { ...plan, strategy: { ...plan.strategy, formalSpec: true } } });
+    const controller = new AbortController();
+    const runDirectory = '/repo/.takt/runs/verify-interrupted';
+    mockCallAIWithRetry.mockResolvedValueOnce({ result: { content: '```alloy\nrun Scenario for 3\n```', success: true } });
+    mockRunFormalSpecVerification.mockImplementationOnce(async () => {
+      controller.abort();
+      return { verdict: 'failed', verificationStarted: true, quint: { status: 'skipped' }, alloy: { status: 'failed' }, artifactRetention: { status: 'passed' }, artifacts: { runDirectory, specifications: {}, logs: {} } };
+    });
+
+    const outcome = await send(conversation, '/verify', [], controller.signal);
+
+    expect(outcome).toMatchObject({ kind: 'error', message: expect.stringContaining(runDirectory), retainedArtifactsMessage: expect.stringContaining(runDirectory) });
+    expect(mockCallAIWithRetry).toHaveBeenCalledTimes(1);
+  });
+
   it('should pass the plan model-check timeout to the TUI verifier', async () => {
     const plan = createPlan();
     const conversation = createConversation({

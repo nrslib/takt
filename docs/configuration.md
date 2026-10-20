@@ -431,6 +431,30 @@ number parsing. Non-numeric values, negative values, and non-integers fail confi
 validation. `TAKT_IGNORE_EXCEED` accepts only `true` or `false`; any other value
 fails config validation.
 
+## Alloy concurrency and JVM settings
+
+These environment variables are read once at the start of verification. They are not YAML keys and do not apply to Quint-only verification.
+
+| Environment variable | Default | Format |
+|----------------------|---------|--------|
+| `TAKT_ALLOY_CONCURRENCY` | `2` | Positive safe integer; `1` runs sequentially |
+| `TAKT_ALLOY_HEAP` | `4g` | Positive integer followed by lowercase `k`, `m`, or `g` |
+| `TAKT_ALLOY_STACK` | `64m` | Positive integer followed by lowercase `k`, `m`, or `g` |
+
+Only unset values use defaults; empty or invalid values produce an error naming the variable. Settings stay fixed for one verification. All Alloy JVM launches, including command enumeration, receive `-Xmx4g -Xss64m` by default. Overrides replace the defaults without duplicate arguments.
+
+```bash
+TAKT_ALLOY_CONCURRENCY=1 TAKT_ALLOY_HEAP=2g TAKT_ALLOY_STACK=128m takt
+```
+
+If memory is limited, lower the heap limit or set concurrency to 1. Use these TAKT-specific settings to change the JVM arguments instead of relying on `JAVA_TOOL_OPTIONS` alone.
+
+`assistant.formal_spec.model_check_timeout_seconds` applies separately to each Alloy command (default: 900 seconds). There is no overall timeout; failures and timeouts do not prevent the remaining commands from running. A free slot starts the next command immediately. Each command result identifies a timeout with `timedOut: true`.
+
+Failed, errored, or timed-out verification retains specifications and logs under `.takt/runs/verify-*/` and reports the directory in the result message. Retained directories are excluded from automatic cleanup; remove them manually when no longer needed. Successful verification artifacts are deleted after result interpretation.
+
+If writing the retention marker fails, TAKT moves the ownership marker to the retention marker and reports the directory and write error. If the move also fails, TAKT leaves the ownership marker in place and reports that retention could not be confirmed, together with the directory and both errors. The remaining ownership marker protects the directory from automatic cleanup even after the owner Node process exits. Copy any needed artifacts manually.
+
 ## Environment Variable Overrides
 
 Most config keys can be overridden with an environment variable named `TAKT_` plus the config key path, uppercased and joined with underscores: `logging.debug` becomes `TAKT_LOGGING_DEBUG`, `telemetry.routing_decisions` becomes `TAKT_TELEMETRY_ROUTING_DECISIONS`. Common examples: `TAKT_PROVIDER`, `TAKT_MODEL`, `TAKT_CONCURRENCY`, `TAKT_LOGGING_DEBUG`, `TAKT_TELEMETRY_ROUTING_DECISIONS`, `TAKT_OBSERVABILITY_ENABLED`. An environment value overrides the corresponding file value and is applied at the layer that owns the key: global-only keys (e.g. `logging`, `disabled_builtins`) resolve at the global `~/.takt/config.yaml` layer, while project-overridable keys (e.g. `concurrency`, `telemetry.routing_decisions`) also resolve at the project `.takt/config.yaml` layer.

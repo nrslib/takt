@@ -34,6 +34,7 @@ import {
   buildFormalSpecInterpretationPrompt,
   buildFormalSpecInterpretationSystemPrompt,
   getFormalSpecVerificationArtifactPaths,
+  getFormalSpecRetainedArtifactsMessage,
 } from './formalSpecPrompts.js';
 
 export interface ConversationSessionStrategy {
@@ -157,6 +158,7 @@ export type ConversationSessionResult =
       /** Absent when a producer only has human-readable text to offer. */
       code?: ConversationSessionErrorCode;
       message: string;
+      retainedArtifactsMessage?: string;
     };
 
 export interface ConversationSession {
@@ -474,10 +476,13 @@ export function createConversationSession(options: ConversationSessionOptions): 
       };
     }
     const isCurrentTurn = beginTurn(input.abortSignal);
-    const interrupted = (): ConversationSessionResult => ({
+    const interrupted = (retainedArtifactsMessage?: string): ConversationSessionResult => ({
       kind: 'error',
       code: 'provider_error',
-      message: 'Formal specification verification was interrupted.',
+      message: retainedArtifactsMessage === undefined
+        ? 'Formal specification verification was interrupted.'
+        : `Formal specification verification was interrupted.\n\n${retainedArtifactsMessage}`,
+      ...(retainedArtifactsMessage === undefined ? {} : { retainedArtifactsMessage }),
     });
     if (!isCurrentTurn()) {
       return interrupted();
@@ -539,9 +544,13 @@ export function createConversationSession(options: ConversationSessionOptions): 
       }
       return { kind: 'error', message: getErrorMessage(error) };
     }
+    const retainedArtifactsMessage = getFormalSpecRetainedArtifactsMessage(verification, ctx.lang);
+    const withArtifactsMessage = (message: string): string => retainedArtifactsMessage === undefined
+      ? message
+      : `${message}\n\n${retainedArtifactsMessage}`;
     try {
       if (!isCurrentTurn()) {
-        return interrupted();
+        return interrupted(retainedArtifactsMessage);
       }
       const generationSessionId = generation.sessionId ?? generation.result.sessionId;
       if (!verification.verificationStarted) {
@@ -568,12 +577,12 @@ export function createConversationSession(options: ConversationSessionOptions): 
       try {
         interpretationImageAttachments = options.resolveImageAttachments?.(interpretationPrompt);
       } catch (error) {
-        return { kind: 'error', code: 'provider_error', message: getErrorMessage(error) };
+        return { kind: 'error', code: 'provider_error', message: withArtifactsMessage(getErrorMessage(error)) };
       }
 
       const interpretation = await callAIWithRetry(
         interpretationPrompt,
-        buildFormalSpecInterpretationSystemPrompt(ctx.lang),
+        buildFormalSpecInterpretationSystemPrompt(ctx.lang, verification.artifactRetention?.status),
         ['Read'],
         options.cwd,
         { ...ctx, sessionId: generationSessionId, disableSessionRetry: true },
@@ -592,19 +601,19 @@ export function createConversationSession(options: ConversationSessionOptions): 
         },
       );
       if (!isCurrentTurn()) {
-        return interrupted();
+        return interrupted(retainedArtifactsMessage);
       }
 
       if (!interpretation.result) {
         return interpretation.error === undefined
-          ? { kind: 'error', code: 'empty_ai_response', message: 'AI response was empty' }
-          : { kind: 'error', code: 'provider_error', message: interpretation.error };
+          ? { kind: 'error', code: 'empty_ai_response', message: withArtifactsMessage('AI response was empty') }
+          : { kind: 'error', code: 'provider_error', message: withArtifactsMessage(interpretation.error) };
       }
       if (!interpretation.result.success) {
-        return { kind: 'error', code: 'provider_error', message: interpretation.result.content };
+        return { kind: 'error', code: 'provider_error', message: withArtifactsMessage(interpretation.result.content) };
       }
       if (!isCurrentTurn()) {
-        return interrupted();
+        return interrupted(retainedArtifactsMessage);
       }
 
       const finalSessionId = interpretation.sessionId
@@ -613,10 +622,11 @@ export function createConversationSession(options: ConversationSessionOptions): 
       consumeHandoffHistory(generationPrompt.handoffHistory);
       shouldSendInitialPromptContext = false;
       shouldSendSeededContext = false;
+      const interpretationContent = withArtifactsMessage(interpretation.result.content);
       history = [
         ...history,
         { role: 'assistant', content: generation.result.content },
-        { role: 'assistant', content: interpretation.result.content },
+        { role: 'assistant', content: interpretationContent },
       ];
       sessionId = finalSessionId;
       if (options.persistSession !== false && finalSessionId !== undefined) {
@@ -625,9 +635,12 @@ export function createConversationSession(options: ConversationSessionOptions): 
 
       return {
         kind: 'assistant_response',
-        content: `${generation.result.content}\n\n${interpretation.result.content}`,
+        content: `${generation.result.content}\n\n${interpretationContent}`,
         ...(finalSessionId === undefined ? {} : { sessionId: finalSessionId }),
       };
+    } catch (error) {
+      if (!isCurrentTurn()) return interrupted(retainedArtifactsMessage);
+      return { kind: 'error', code: 'provider_error', message: withArtifactsMessage(getErrorMessage(error)) };
     } finally {
       cleanupFormalSpecVerificationArtifacts(verification);
     }

@@ -50,6 +50,28 @@ For an Alloy block, TAKT runs the Alloy Analyzer independently of the Quint resu
 
 `parse`, `typecheck`, and `run` have a 60-second timeout. Model checking with `quint verify` and the Alloy Analyzer waits up to 15 minutes by default, adjustable with `assistant.formal_spec.model_check_timeout_seconds` (an integer from 1 to 86,400 seconds). If TLC is cut off on a specification with many states, raise this value or shrink the model.
 
+### Alloy concurrency and JVM settings
+
+These environment variables are read once at the start of verification. They are not YAML keys and do not apply to Quint-only verification.
+
+| Environment variable | Default | Format |
+|----------------------|---------|--------|
+| `TAKT_ALLOY_CONCURRENCY` | `2` | Positive safe integer; `1` runs sequentially |
+| `TAKT_ALLOY_HEAP` | `4g` | Positive integer followed by lowercase `k`, `m`, or `g` |
+| `TAKT_ALLOY_STACK` | `64m` | Positive integer followed by lowercase `k`, `m`, or `g` |
+
+Only unset values use defaults; empty or invalid values produce an error naming the variable. Settings stay fixed for one verification. All Alloy JVM launches, including command enumeration, receive `-Xmx4g -Xss64m` by default. Overrides replace the defaults without duplicate arguments.
+
+```bash
+TAKT_ALLOY_CONCURRENCY=1 TAKT_ALLOY_HEAP=2g TAKT_ALLOY_STACK=128m takt
+```
+
+If memory is limited, lower the heap limit or set concurrency to 1. Use these TAKT-specific settings to change the JVM arguments instead of relying on `JAVA_TOOL_OPTIONS` alone.
+
+`assistant.formal_spec.model_check_timeout_seconds` applies separately to each Alloy command (default: 900 seconds). There is no overall timeout; failures and timeouts do not prevent the remaining commands from running. A free slot starts the next command immediately. Each command result identifies a timeout with `timedOut: true`.
+
+Failed, errored, or timed-out verification retains specifications and logs under `.takt/runs/verify-*/` and reports the directory in the result message. Retained directories are excluded from automatic cleanup; remove them manually when no longer needed. Successful verification artifacts are deleted after result interpretation.
+
 ## How targets are selected
 
 Only conventionally named Quint definitions become verification targets.
@@ -89,4 +111,8 @@ If `quint verify` stops with "Parsing or semantic analysis failed" while Quint `
 
 If the Alloy JAR download fails, check your network and proxy settings, or supply a local JAR through `TAKT_ALLOY_JAR`. A downloaded JAR whose SHA-256 does not match is also treated as a failure.
 
-Temporary files created during verification live under `.takt/runs/verify-*/` and are removed when verification ends. If one is left behind by an abnormal exit, the next `/verify` cleans up directories older than one hour.
+A retention marker protects workspaces with completed failed, errored, or timed-out results from automatic cleanup. An ownership marker also protects workspaces unless deletion has explicitly been requested, regardless of whether the owner Node process is still running. This includes workspaces left by an abnormal exit before a result is finalized; remove them manually when no longer needed. If the ownership marker cannot be inspected, the workspace is not deleted. Successful workspaces are removed after interpretation; explicitly cancelled verification waits for its processes to stop, then removes its workspace.
+
+If writing the retention marker fails, TAKT moves the ownership marker to the retention marker and reports the directory and write error. If the move also fails, TAKT leaves the ownership marker in place and reports that retention could not be confirmed, together with both errors. The remaining ownership marker protects the workspace from automatic cleanup even after the owner exits. Follow the notice to copy any needed artifacts manually.
+
+Workspaces without either marker become eligible for cleanup after more than one hour of inactivity. When deletion following success or cancellation fails, TAKT records the pending deletion in the current process. The next `/verify` in that process retries deletion after more than one hour of inactivity, even if the ownership marker could not be removed.
