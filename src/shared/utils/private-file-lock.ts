@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 import { PrivateArtifactCreationFailedError } from './private-artifact-backend.js';
 import {
   ensurePrivateDirectory,
+  PrivateArtifactContentWriteFailedError,
   PrivateArtifactPublicationConflictError,
   readPrivateFileState,
   writeNewPrivateFileWithMode,
@@ -134,9 +135,10 @@ function tryAcquirePrivateFileLock(lockPath: string): AcquiredPrivateFileLock | 
     try {
       writeNewPrivateFileWithMode(lockPath, content, LOCK_MODE);
     } catch (error) {
-      // A failed creation of the unpublished temporary artifact cannot have run the locked action.
-      if (error instanceof PrivateArtifactCreationFailedError && error.code === 'ENOSPC') {
-        throw new PrivateFileLockAcquisitionError(error.message, error.code, error.errno, { cause: error });
+      // Only a failed unpublished temporary artifact is safe to retry.
+      if ((error instanceof PrivateArtifactCreationFailedError && error.code === 'ENOSPC')
+        || error instanceof PrivateArtifactContentWriteFailedError) {
+        throw new PrivateFileLockAcquisitionError(error.message, 'ENOSPC', error.errno, { cause: error });
       }
       throw error;
     }
