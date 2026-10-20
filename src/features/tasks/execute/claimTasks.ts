@@ -39,13 +39,10 @@ export function claimTasksWithGoalCompletions(
 }
 
 export function failInterruptedTasksWithGoalEvents(taskRunner: TaskRunner, cwd: string): number {
-  const running = new Set(taskRunner.listTaskStateItems().filter((task) => task.status === 'running').map((task) => task.name));
-  const failed = taskRunner.failInterruptedRunningTasks();
-  for (const task of taskRunner.listTaskStateItems()) {
-    if (running.has(task.name) && task.status === 'failed' && task.goalId !== undefined
+  return taskRunner.failInterruptedRunningTasks(undefined, (task) => {
+    if (task.goalId !== undefined
       && task.completion !== undefined && task.runSlug !== undefined) {
       saveManagerEvent(cwd, { kind: 'completion', goalId: task.goalId, taskName: task.name, runSlug: task.runSlug, result: task.completion });
     }
-  }
-  return failed;
+  });
 }

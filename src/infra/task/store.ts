@@ -37,12 +37,14 @@ export class TaskStore {
   }
 
   update(
-    mutator: (current: TasksFileData) => TasksFileData,
+    mutator: (current: TasksFileData) => TasksFileData | undefined,
     onAcquisitionError?: FileLockAcquisitionErrorHandler,
   ): TasksFileData {
     return this.withLock(() => {
       const current = this.readUnsafe();
-      const updated = TasksFileSchema.parse(mutator(current));
+      const mutation = mutator(current);
+      if (mutation === undefined) return current;
+      const updated = TasksFileSchema.parse(mutation);
       this.writeUnsafe(updated);
       return updated;
     }, onAcquisitionError);

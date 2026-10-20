@@ -49,6 +49,8 @@ Replace `command` with your server executable. No browser MCP server is bundled 
 
 ## Patrol
 
+Before processing each project's events, the daemon recovers interrupted tasks as `failed` and creates completion events for goal tasks. Recovery runs even without pending tasks, so restarting `takt run` is unnecessary. The manager reads the recovered task state when handling patrol events. Recovery failures are logged and passed to the existing patrol-interval and shutdown notification checks while subsequent processing continues. Tasks whose owning process is confirmed alive are left running.
+
 The daemon periodically inspects unfinished active goals. `manager.patrol_interval` is a positive integer in seconds, defaulting to `1800` (30 minutes); project settings override global settings. The first patrol for a new goal is measured from creation, and later patrols from the previous completion. It checks long-running work, repeated steps, stalled goals and unanswered questions, then resumes, retries or notifies as needed. Problems in running tasks are reported to a person. Failed patrols send `blocked` and are checked again after the interval. Ordinary failed events remaining in the inbox are also retried during patrol.
 
 ## Workspace
@@ -87,7 +89,7 @@ The default `approve` waits for a human merge and displays steps. After merging,
 
 Manager inspects reports and the working location, then chooses requeue, retry with revised instructions, new work or removal. If it cannot resolve the issue, it explains the reason, what it tried and the needed human action through a notification or question, and stops affected work and its dependents. Independent work continues.
 
-Notifications appear in the TUI and Slack and can be switched by kind in [notification settings](./configuration.md#manager-notification-settings). Failed event processing or TUI conversation sends `blocked`. Repeated failures still notify; no failure-state file is created. After resolving the cause, retry the conversation action or start `takt run`.
+Notifications appear in the TUI and Slack and can be switched by kind in [notification settings](./configuration.md#manager-notification-settings). Failed event processing or TUI conversation sends `blocked`. Repeated failures still notify; no failure-state file is created. After resolving the cause, retry the conversation action. Failed events are retried during patrol.
 
 Goal memory is saved in `.takt/goals/<UUID>/goal.json`: objective, scope exclusions, acceptance criteria, work constraints, questions and answers, and short records of submissions, integrations, cancellations and reasons. Workspaces are under `~/.takt/workspaces/`, and pending events under `~/.takt/manager-inbox/`. These use `TAKT_CONFIG_DIR` when set.
 

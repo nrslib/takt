@@ -1,6 +1,6 @@
 import { TaskRecordSchema, type TaskFileData, type TaskRecord, type TaskFailure } from './schema.js';
-import type { TaskInfo, TaskResult } from './types.js';
-import { resolveTaskContent, toTaskInfo } from './mapper.js';
+import type { TaskInfo, TaskResult, TaskState } from './types.js';
+import { resolveTaskContent, toTaskInfo, toTaskState } from './mapper.js';
 import { cleanupTaskSpecDirectory, prepareTaskSpecDirectory, type PreparedTaskSpecDirectory } from './enqueueService.js';
 import { TaskStore } from './store.js';
 import { firstLine, nowIso } from './naming.js';
@@ -253,16 +253,23 @@ export class TaskLifecycleService {
     }));
   }
 
-  failInterruptedRunningTasks(goalId?: string): number {
-    let failed = 0;
+  failInterruptedRunningTasks(goalId?: string, onRecovered?: (task: TaskState) => void): number {
+    const recovered: TaskRecord[] = [];
     this.store.update((current) => {
       const tasks = current.tasks.map((task) => {
         if (task.status !== 'running' || (this.goalTasksOnly === true && task.goal_id === undefined)
           || (goalId !== undefined && task.goal_id !== goalId) || !this.isRunningTaskStale(task)) {
           return task;
         }
-        failed++;
         const reason = 'Task was interrupted before this TAKT run started. Requeue it explicitly to run again.';
+        let retryMetadata: ResolvedTaskRetryMetadata;
+        try {
+          retryMetadata = this.readTerminalRetryMetadata(task);
+        } catch (error) {
+          // 補助情報の読込失敗で回復を止めず、保存済みの再試行情報を保持する。
+          retryMetadata = { preserveExisting: true };
+          this.onWarning?.(sanitizeSensitiveText(`Cannot read retry metadata for interrupted task ${task.name}: ${getErrorMessage(error)}`));
+        }
         const completed = buildTerminalTaskRecord(task, {
           status: 'failed',
           completed_at: nowIso(),
@@ -278,12 +285,14 @@ export class TaskLifecycleService {
               shaUnavailableReason: 'Execution process stopped before saving its result',
             },
           }),
-        }, this.readTerminalRetryMetadata(task));
+        }, retryMetadata);
+        recovered.push(completed);
         return completed;
       });
-      return { tasks };
+      return recovered.length === 0 ? undefined : { tasks };
     });
-    return failed;
+    for (const task of recovered) onRecovered?.(toTaskState(this.tasksFile, task));
+    return recovered.length;
   }
 
   private readTerminalRetryMetadata(task: TaskRecord): ResolvedTaskRetryMetadata {

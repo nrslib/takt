@@ -4,21 +4,174 @@ import { TaskRecordSchema,TasksFileSchema,type TasksFileData } from '../infra/ta
 import type { TaskStore } from '../infra/task/store.js';
 import { TaskExceedService } from '../infra/task/taskExceedService.js';
 import { TaskLifecycleService } from '../infra/task/taskLifecycleService.js';
+import type { TaskState } from '../infra/task/types.js';
 import { goalId,goalRecord } from './helpers/goal-fixtures.js';
-const goals = vi.hoisted(() => ({ get: vi.fn() }));
+const goals = vi.hoisted(() => ({ get: vi.fn(), stale: vi.fn(), retryMetadata: vi.fn() }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { getSync = goals.get; } }));
-vi.mock('../infra/task/process.js', () => ({ isStaleRunningTask: () => true }));
-vi.mock('../core/workflow/run/retry-metadata.js', () => ({ readRetryMetadataByRunSlug: () => ({}) }));
+vi.mock('../infra/task/process.js', () => ({ isStaleRunningTask: goals.stale }));
+vi.mock('../core/workflow/run/retry-metadata.js', () => ({ readRetryMetadataByRunSlug: goals.retryMetadata }));
 let state: TasksFileData;
-const store = { update: (action: (saved: TasksFileData) => TasksFileData) => { state = action(state); return state; } } as unknown as TaskStore;
+const save = vi.fn();
+const store = { update: (action: (saved: TasksFileData) => TasksFileData | undefined) => {
+  const next = action(state);
+  if (next !== undefined) {
+    state = TasksFileSchema.parse(next);
+    save();
+  }
+  return state;
+} } as unknown as TaskStore;
 beforeEach(() => {
   vi.resetAllMocks();
   goals.get.mockReturnValue(goalRecord());
+  goals.stale.mockReturnValue(true);
+  goals.retryMetadata.mockReturnValue({});
   state = { tasks: [TaskRecordSchema.parse({ name: 'task-a', status: 'running', content: 'Task', goal_id: goalId, created_at: '2026-10-06T00:00:00Z', started_at: '2026-10-06T00:00:00Z', completed_at: null, owner_pid: 10 })] };
 });
 
+it.each([
+  { selectedGoal: undefined, goalTasksOnly: false, recovered: ['task-a', 'other', 'ordinary'] },
+  { selectedGoal: goalId, goalTasksOnly: false, recovered: ['task-a'] },
+  { selectedGoal: undefined, goalTasksOnly: true, recovered: ['task-a', 'other'] },
+])('notifies only saved stale tasks in the selected scope: $selectedGoal / $goalTasksOnly', ({ selectedGoal, goalTasksOnly, recovered }) => {
+  const running = state.tasks[0]!;
+  const old = { ...running, name: 'old', status: 'failed' as const, owner_pid: null,
+    completed_at: '2026-10-06T00:01:00Z', failure: { error: 'previous failure' } };
+  state.tasks.push(
+    { ...running, name: 'other', goal_id: '650e8400-e29b-41d4-a716-446655440001' },
+    { ...running, name: 'ordinary', goal_id: undefined },
+    { ...running, name: 'live', owner_pid: 20 }, old,
+  );
+  goals.stale.mockImplementation((pid: number) => pid !== 20);
+  const lifecycle = new TaskLifecycleService('/project', '/project/.takt/tasks.yaml', store, undefined, goalTasksOnly);
+  const observed: TaskState[] = [];
+  const onRecovered = (task: TaskState) => {
+    expect(state.tasks.find(({ name }) => name === task.name)?.status).toBe('failed');
+    observed.push(task);
+  };
+
+  expect(lifecycle.failInterruptedRunningTasks(selectedGoal, onRecovered)).toBe(recovered.length);
+  expect(save).toHaveBeenCalledOnce();
+
+  expect(observed.map(({ name }) => name)).toEqual(recovered);
+  for (const task of observed) {
+    expect(task).toMatchObject({ status: 'failed', kind: 'failed', filePath: '/project/.takt/tasks.yaml' });
+    if (task.goalId !== undefined) expect(task.completion).toMatchObject({ success: false, interrupted: true });
+  }
+  expect(state.tasks.find(({ name }) => name === 'live')?.status).toBe('running');
+  expect(state.tasks.find(({ name }) => name === 'old')).toEqual(old);
+  expect(lifecycle.failInterruptedRunningTasks(selectedGoal, onRecovered)).toBe(0);
+  expect(observed.map(({ name }) => name)).toEqual(recovered);
+  expect(save).toHaveBeenCalledOnce();
+});
+
+it('notifies only after a successful save and retries a failed save without duplicate notifications', () => {
+  let saveFails = true;
+  const saveAttempt = vi.fn();
+  const publicationStore = { update(action: (saved: TasksFileData) => TasksFileData | undefined) {
+    const mutation = action(state);
+    if (mutation === undefined) return state;
+    const next = TasksFileSchema.parse(mutation);
+    saveAttempt();
+    if (saveFails) throw new Error('recovery save failed');
+    state = next;
+    return state;
+  } } as unknown as TaskStore;
+  const lifecycle = new TaskLifecycleService('/project', '/project/.takt/tasks.yaml', publicationStore);
+  const onRecovered = vi.fn((_task: TaskState) => expect(state.tasks[0]!.status).toBe('failed'));
+
+  expect(() => lifecycle.failInterruptedRunningTasks(undefined, onRecovered)).toThrow('recovery save failed');
+  expect(state.tasks[0]!.status).toBe('running');
+  expect(onRecovered).not.toHaveBeenCalled();
+  saveFails = false;
+  expect(lifecycle.failInterruptedRunningTasks(undefined, onRecovered)).toBe(1);
+  expect(onRecovered).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ name: 'task-a', status: 'failed' }));
+  saveFails = true;
+  expect(lifecycle.failInterruptedRunningTasks(undefined, onRecovered)).toBe(0);
+  expect(onRecovered).toHaveBeenCalledOnce();
+  expect(saveAttempt).toHaveBeenCalledTimes(2);
+});
+
+it.each([false, true])('does not save or notify tasks already recovered by another caller (own task: %s)', (hasOwnTask) => {
+  const running = state.tasks[0]!;
+  if (hasOwnTask) state.tasks.push({ ...running, name: 'own' });
+  const competingStore = { update(action: (saved: TasksFileData) => TasksFileData | undefined) {
+    state = { tasks: [{ ...running, status: 'failed', owner_pid: null,
+      completed_at: '2026-10-06T00:01:00Z', failure: { error: 'recovered elsewhere' } }, ...state.tasks.slice(1)] };
+    return store.update(action);
+  } } as unknown as TaskStore;
+  const onRecovered = vi.fn();
+  const lifecycle = new TaskLifecycleService('/project', '/project/.takt/tasks.yaml', competingStore);
+
+  expect(lifecycle.failInterruptedRunningTasks(undefined, onRecovered)).toBe(hasOwnTask ? 1 : 0);
+
+  expect(save).toHaveBeenCalledTimes(hasOwnTask ? 1 : 0);
+  if (hasOwnTask) {
+    expect(onRecovered).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ name: 'own', status: 'failed' }));
+  } else {
+    expect(onRecovered).not.toHaveBeenCalled();
+  }
+});
+
+it.each(['selected goal', 'goal tasks only'] as const)('skips saving excluded recovery tasks and recovers after changing %s', (scope) => {
+  const selectedGoal = scope === 'selected goal' ? '650e8400-e29b-41d4-a716-446655440001' : undefined;
+  if (scope === 'goal tasks only') delete state.tasks[0]!.goal_id;
+  const lifecycle = new TaskLifecycleService('/project', '/project/.takt/tasks.yaml', store, undefined, scope === 'goal tasks only');
+  const onRecovered = vi.fn();
+
+  expect(lifecycle.failInterruptedRunningTasks(selectedGoal, onRecovered)).toBe(0);
+
+  expect(state.tasks[0]!.status).toBe('running');
+  expect(save).not.toHaveBeenCalled();
+  expect(onRecovered).not.toHaveBeenCalled();
+  const unrestricted = new TaskLifecycleService('/project', '/project/.takt/tasks.yaml', store, undefined, false);
+  expect(unrestricted.failInterruptedRunningTasks(scope === 'selected goal' ? goalId : undefined, onRecovered)).toBe(1);
+  expect(save).toHaveBeenCalledOnce();
+  expect(onRecovered).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ name: 'task-a', status: 'failed' }));
+});
+
+it.each([false, true])('recovers every stale task and retains saved retry metadata when reading throws: %s', (readFails) => {
+  const resumePoint = { version: 2 as const,
+    stack: [{ workflow: 'default', workflow_ref: 'default', step: 'review', kind: 'agent' as const, occurrence: 1 }],
+    iteration: 4, elapsed_ms: 100, workflow_call_invocations: {}, workflow_step_participations: {} };
+  state.tasks[0] = { ...state.tasks[0]!, run_slug: 'run-a', start_step: 'review',
+    resume_point: resumePoint, exceeded_current_iteration: 4, exceeded_max_steps: 20 };
+  state.tasks.push({ ...state.tasks[0]!, name: 'other', run_slug: 'run-b' });
+  goals.retryMetadata.mockImplementation((_cwd: string, slug: string) => {
+    if (readFails && slug === 'run-a') throw new Error('metadata read failed');
+    return { startStep: 'fix', currentIteration: 5 };
+  });
+  const warning = vi.fn();
+  const lifecycle = new TaskLifecycleService('/project', '/project/.takt/tasks.yaml', store, warning);
+
+  expect(lifecycle.failInterruptedRunningTasks()).toBe(2);
+
+  expect(state.tasks[0]).toMatchObject({ status: 'failed', run_slug: 'run-a', owner_pid: null,
+    start_step: readFails ? 'review' : 'fix', exceeded_current_iteration: readFails ? 4 : 5,
+    completion: { success: false, interrupted: true } });
+  expect(state.tasks[0]!.resume_point).toEqual(readFails ? resumePoint : undefined);
+  expect(state.tasks[0]!.exceeded_max_steps).toBe(readFails ? 20 : undefined);
+  expect(state.tasks[1]).toMatchObject({ status: 'failed', start_step: 'fix', exceeded_current_iteration: 5 });
+  expect(warning).toHaveBeenCalledTimes(readFails ? 1 : 0);
+  if (readFails) {
+    expect(warning.mock.calls[0]![0]).toContain('task-a');
+    expect(warning.mock.calls[0]![0]).toContain('metadata read failed');
+  }
+});
+
+it('keeps retry metadata read errors visible for ordinary terminal failure', () => {
+  state.tasks[0]!.run_slug = 'run-a';
+  const failure = new Error('metadata read failed');
+  goals.retryMetadata.mockImplementation(() => { throw failure; });
+  const task = toTaskInfo('/project', '/project/.takt/tasks.yaml', state.tasks[0]!);
+  const lifecycle = new TaskLifecycleService('/project', '/project/.takt/tasks.yaml', store);
+
+  expect(() => lifecycle.failTask({ task, success: false, response: 'failed', executionLog: [],
+    startedAt: task.createdAt, completedAt: '2026-10-06T00:01:00Z' })).toThrow(failure);
+  expect(state.tasks[0]!.status).toBe('running');
+});
+
 it('keeps unreadable goal candidates pending and warns while claiming ordinary work', () => {
-  state.tasks[0]!.status = 'pending';
+  state.tasks[0] = { ...state.tasks[0]!, status: 'pending', started_at: null, owner_pid: null };
   state.tasks.push({ ...state.tasks[0]!, name: 'ordinary', goal_id: undefined });
   const warning = vi.fn();
   goals.get.mockImplementation(() => { throw new Error('goal is unreadable'); });

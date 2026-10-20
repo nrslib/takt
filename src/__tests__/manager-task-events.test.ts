@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TaskRunner } from '../infra/task/index.js';
+import type { TaskState } from '../infra/task/types.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 const save = vi.hoisted(() => vi.fn());
 vi.mock('../infra/goals/events.js', () => ({ saveManagerEvent: save }));
@@ -16,12 +17,70 @@ it('publishes task setup failures once when claiming changes their state', () =>
   claimTasksWithGoalCompletions(runner, 1, '/project', new AbortController().signal); expect(save).toHaveBeenCalledOnce();
 });
 it('publishes newly interrupted goal tasks while leaving older results untouched', () => {
-  let status = 'running';
+  let status: TaskState['status'] = 'running';
   const completion = { success: false, interrupted: true };
-  const runner = { listTaskStateItems: () => [{ name: 'task-a', goalId: goalRecord().id, status, runSlug: 'run-a', completion }, { name: 'old', goalId: goalRecord().id, status: 'failed', runSlug: 'old-run', completion }], failInterruptedRunningTasks: () => { const failed = status === 'running' ? 1 : 0; status = 'failed'; return failed; } } as unknown as TaskRunner;
+  const record = (): TaskState => ({ name: 'task-a', goalId: goalRecord().id, status, kind: status,
+    runSlug: 'run-a', completion, createdAt: '2026-10-06T00:00:00Z', filePath: '/project/.takt/tasks.yaml' });
+  const runner = {
+    listTaskStateItems: () => [record(), { ...record(), name: 'old', status: 'failed', kind: 'failed', runSlug: 'old-run' }],
+    failInterruptedRunningTasks: (_goalId?: string, onRecovered?: (task: TaskState) => void) => {
+      if (status !== 'running') return 0;
+      status = 'failed';
+      onRecovered?.(record());
+      return 1;
+    },
+  } as unknown as TaskRunner;
   expect(failInterruptedTasksWithGoalEvents(runner, '/project')).toBe(1);
   expect(save).toHaveBeenCalledExactlyOnceWith('/project', { kind: 'completion', goalId: goalRecord().id, taskName: 'task-a', runSlug: 'run-a', result: completion });
   expect(failInterruptedTasksWithGoalEvents(runner, '/project')).toBe(0); expect(save).toHaveBeenCalledOnce();
+});
+
+it.each([false, true])('publishes only its own saved recovery when another caller commits first (own task: %s)', (hasOwnTask) => {
+  const completion = { success: false, interrupted: true };
+  const record = (name: string, status: TaskState['status']): TaskState => ({
+    name, kind: status, status, goalId: goalRecord().id, runSlug: `run-${name}`, completion,
+    createdAt: '2026-10-06T00:00:00Z', filePath: '/project/.takt/tasks.yaml',
+  });
+  let tasks = [record('other-caller', 'running'), ...(hasOwnTask ? [record('own', 'running')] : [])];
+  const runner = {
+    listTaskStateItems: () => tasks,
+    failInterruptedRunningTasks: (_goalId?: string, onRecovered?: (task: TaskState) => void) => {
+      const own = tasks.find((task) => task.name === 'own' && task.status === 'running');
+      // 一覧取得と更新の間に、競合相手が other-caller を保存した状態を再現する。
+      tasks = tasks.map((task) => record(task.name, 'failed'));
+      if (own === undefined) return 0;
+      onRecovered?.(record(own.name, 'failed'));
+      return 1;
+    },
+  } as unknown as TaskRunner;
+
+  expect(failInterruptedTasksWithGoalEvents(runner, '/project')).toBe(hasOwnTask ? 1 : 0);
+
+  expect(save.mock.calls).toEqual(hasOwnTask ? [[
+    '/project', { kind: 'completion', goalId: goalRecord().id, taskName: 'own', runSlug: 'run-own', result: completion },
+  ]] : []);
+  expect(failInterruptedTasksWithGoalEvents(runner, '/project')).toBe(0);
+  expect(save).toHaveBeenCalledTimes(hasOwnTask ? 1 : 0);
+});
+
+it.each(['goalId', 'completion', 'runSlug'] as const)('does not publish a recovered task without %s', (missing) => {
+  const task: TaskState = { name: 'task-a', kind: 'failed', status: 'failed', goalId: goalRecord().id,
+    runSlug: 'run-a', completion: { success: false, interrupted: true },
+    createdAt: '2026-10-06T00:00:00Z', filePath: '/project/.takt/tasks.yaml' };
+  delete task[missing];
+  let recovered = false;
+  const runner = {
+    listTaskStateItems: () => [{ ...task, status: recovered ? 'failed' : 'running' }],
+    failInterruptedRunningTasks: (_goalId?: string, onRecovered?: (task: TaskState) => void) => {
+      recovered = true;
+      onRecovered?.(task);
+      return 1;
+    },
+  } as unknown as TaskRunner;
+
+  expect(failInterruptedTasksWithGoalEvents(runner, '/project')).toBe(1);
+
+  expect(save).not.toHaveBeenCalled();
 });
 
 describe.each(['private', 'task-store'] as const)('eligible pending tasks for %s acquisition failures', (source) => {
