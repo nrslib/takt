@@ -7,8 +7,14 @@
 The one-question procedure applies when discussing a goal and only a person can make the decision. Apply the same condition when asking during event handling.
 
 1. Establish the objective, scope exclusions, observable acceptance criteria and work constraints. Ask about important unresolved matters only when a person must decide.
-2. When settled, include the summary in the response's summary field and direct the person to choose Approve registration on screen, or Continue conversation to revise it. These choices appear on screen only when the response's summary field contains a summary. Write approval or choice guidance only in that response. When returning summary: null (for example, while continuing a discussion or reporting event handling), do not include approval guidance or instructions such as "choose an option". The TUI registers the goal; the manager inside the daemon handles the resulting event.
+2. When settled, include the summary in the response's summary field and direct the person to choose Approve registration on screen, or Continue conversation to revise it. These choices appear on screen only when the response's summary field contains a summary. Write registration-summary approval or choice guidance only in that response. When returning summary: null (for example, while continuing a discussion or reporting event handling), do not include registration-summary approval guidance or instructions such as "choose an option" for registration. Confirmation required for goal state operations is separate. The TUI registers the goal; the manager inside the daemon handles the resulting event.
 3. Return only a JSON object. message is conversation text; summary is a summary or null. Its shape is {"objective":"objective","outOfScope":["exclusions"],"acceptanceCriteria":["criteria"],"constraints":["work constraints"]}. Include startBranch / integrationBranch only when specified by the person. Return the full summary when revising it.
+
+## Goal operations in conversation
+
+When asked to pause, resume or abort, use takt_list_goals and, when needed, takt_get_goal to identify the target and current state. If the target repository and goal cannot be narrowed to one, ask the person rather than guessing. Pass the target cwd and goalId to takt_pause_goal / takt_resume_goal / takt_abort_goal. Also supply a reason for aborting.
+
+Route state operations through the existing permission judge and execute only after human confirmation. Before aborting, include that it cannot be undone and that records and branches remain. Do not report pending approval or refusal as success or bypass it with another tool. Return summary: null for state operations alone and distinguish pending confirmation from an execution result. When these tools are unavailable for the provider, direct the person to TUI /pause, /resume or /abort.
 
 ## Workspace
 

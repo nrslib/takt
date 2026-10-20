@@ -9,6 +9,7 @@ import { createManagerConversationPlan } from '../features/manager/conversationP
 import { createManagerConversationSession } from '../features/manager/conversationSession.js';
 import { TAKT_MCP_MANAGER_TOOL_NAMES } from '../features/mcp/server.js';
 import { TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
+import { MANAGER_ASSIGNMENT_HEADER } from '../features/manager/assignment.js';
 import { buildSdkOptions } from '../infra/claude/options-builder.js';
 import { callClaudeCustom } from '../infra/claude/client.js';
 import { resolveNonWorkflowProviderOptions } from '../infra/config/index.js';
@@ -136,7 +137,6 @@ describe('manager conversation configuration and provider boundary', () => {
       }
       expect(setup.mock.calls[0]?.[0].systemPrompt).not.toContain('{{include:');
       const prompt = setup.mock.calls[0]![0].systemPrompt!;
-
       const settings = prompt.split('\n').filter((line) => line.startsWith('Repository manager.main_merge: '));
       expect(settings).toEqual([`Repository manager.main_merge: ${JSON.stringify(mainMerge)}`]);
       expect(prompt?.split('\n').filter((line) => line.startsWith('Concurrency limit: '))).toEqual(['Concurrency limit: 3']);
@@ -343,9 +343,11 @@ describe('manager conversation configuration and provider boundary', () => {
       yield { type: 'turn.completed' };
     })() }) });
     const plan = createManagerConversationPlan(cwd, { provider: 'codex' });
+    const assignment = { kind: 'repository' as const, repositoryDirectory: cwd };
+    const managerHeaders = { authorization: 'Bearer manager-fixture', [MANAGER_ASSIGNMENT_HEADER]: Buffer.from(JSON.stringify(assignment)).toString('base64url') };
     const session = createManagerConversationSession({
-      cwd, plan: { ...plan, ctx: { ...plan.ctx, mcpServers: {
-        [TAKT_MANAGER_MCP_SERVER_NAME]: { command: 'node', args: ['unused-mcp.js'] },
+      cwd, assignment, plan: { ...plan, ctx: { ...plan.ctx, mcpServers: {
+        [TAKT_MANAGER_MCP_SERVER_NAME]: { type: 'http', url: 'http://127.0.0.1:12345/', headers: managerHeaders },
         browser: { command: '/browser-mcp' },
       } } },
     });
@@ -354,7 +356,7 @@ describe('manager conversation configuration and provider boundary', () => {
       expect(codex.constructor).toHaveBeenCalledTimes(1);
       const sdkOptions = codex.constructor.mock.calls[0]![0] as CodexOptions;
       expect(sdkOptions.config?.mcp_servers).toMatchObject({
-        [TAKT_MANAGER_MCP_SERVER_NAME]: { command: 'node' }, browser: { command: '/browser-mcp' },
+        [TAKT_MANAGER_MCP_SERVER_NAME]: { url: 'http://127.0.0.1:12345/', http_headers: managerHeaders }, browser: { command: '/browser-mcp' },
       });
       expect(codex.trust).toHaveBeenCalledOnce();
       expect(sdkOptions.config?.features).toMatchObject({ hooks: true });
@@ -441,18 +443,24 @@ describe('manager conversation configuration and provider boundary', () => {
     expect(optionsResolved?.codex).toMatchObject(expected);
   });
 
-  it('uses the existing Claude full-permission conversion and includes user MCP', async () => {
+  it.each(['claude', 'claude-sdk'] as const)('passes owned HTTP headers and the permission hook through the %s SDK adapter', async (provider) => {
     vi.mocked(callClaudeCustom).mockResolvedValue({
       persona: 'manager', status: 'done', timestamp: new Date(), content: JSON.stringify({ message: '確認', summary: null }),
     });
-    const plan = createManagerConversationPlan(cwd, { provider: 'claude' });
-    const servers = { browser: { type: 'stdio' as const, command: '/browser-mcp' } };
-    const session = createManagerConversationSession({ cwd, plan: { ...plan, ctx: { ...plan.ctx, mcpServers: servers } } });
+    const plan = createManagerConversationPlan(cwd, { provider });
+    const assignment = { kind: 'repository' as const, repositoryDirectory: cwd };
+    const headers = { authorization: 'Bearer manager-fixture', [MANAGER_ASSIGNMENT_HEADER]: Buffer.from(JSON.stringify(assignment)).toString('base64url') };
+    const servers = {
+      [TAKT_MANAGER_MCP_SERVER_NAME]: { type: 'http' as const, url: 'http://127.0.0.1:12345/', headers },
+      browser: { type: 'http' as const, url: 'https://example.test/mcp' },
+    };
+    const session = createManagerConversationSession({ cwd, assignment, plan: { ...plan, ctx: { ...plan.ctx, mcpServers: servers } } });
     try {
       expect((await session.handleUserMessage({ text: '確認' })).kind).toBe('reply');
       const options = buildSdkOptions(vi.mocked(callClaudeCustom).mock.calls[0]![3]);
       expect(options.permissionMode).toBe('bypassPermissions');
       expect(options.mcpServers).toEqual(servers);
+      expect(options.hooks?.PreToolUse?.some(({ hooks }) => hooks.length > 0)).toBe(true);
       expect(options.allowedTools).toBeUndefined();
     } finally { await session.close(); }
   });
