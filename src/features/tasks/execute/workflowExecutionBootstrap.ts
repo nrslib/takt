@@ -27,7 +27,6 @@ import { buildResumeReportSnapshotConsumerEntry } from '../../../core/workflow/r
 import { resolveRuntimeConfig } from '../../../core/runtime/runtime-environment.js';
 import {
   loadPersonaSessions,
-  loadWorktreeSessions,
   resolveWorkflowConfigValues,
   updatePersonaSession,
   updateWorktreeSession,
@@ -394,8 +393,8 @@ export async function createWorkflowExecutionBootstrap(
       || options.resumePoint
       || options.restartPoint,
   );
-  const shouldLoadSavedSessions = isRetry && options.restartPoint === undefined;
   const isWorktree = cwd !== projectCwd;
+  const shouldLoadSavedSessions = !isWorktree && isRetry && options.restartPoint === undefined;
   log.debug('Session mode', { isRetry, isWorktree });
 
   const { runSlug, runPaths } = runBootstrap;
@@ -680,13 +679,9 @@ export async function createWorkflowExecutionBootstrap(
   );
   const structuredCaller = new ProviderNeutralStructuredCaller();
   const savedSessions = shouldLoadSavedSessions
-    ? (isWorktree
-      ? options.sessionStorageDirectory === undefined
-        ? loadWorktreeSessions(projectCwd, cwd, currentProvider)
-        : loadWorktreeSessions(projectCwd, cwd, currentProvider, options.sessionStorageDirectory)
-      : options.sessionStorageDirectory === undefined
-        ? loadPersonaSessions(projectCwd, currentProvider)
-        : loadPersonaSessions(projectCwd, currentProvider, options.sessionStorageDirectory))
+    ? options.sessionStorageDirectory === undefined
+      ? loadPersonaSessions(projectCwd, currentProvider)
+      : loadPersonaSessions(projectCwd, currentProvider, options.sessionStorageDirectory)
     : {};
   const sessionUpdateHandler = isWorktree
     ? (personaName: string, personaSessionId: string | undefined) =>

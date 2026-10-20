@@ -729,7 +729,7 @@ steps:
 | `persona` | - | persona key 或裸 facet 名称 |
 | `persona_name` | - | 日志和 prompt 中的显示名，不影响 routing |
 | `session_key` | - | normal agent step 和 parallel 子 step 的显式 session key；provider 会追加到 runtime key |
-| `session` | `continue` | `continue` 恢复 session，`refresh` 不恢复，`compact` 恢复后在 Phase 1 前请求 provider 压缩 |
+| `session` | `continue` | 适用于 normal agent step 和 parallel 子 step。`continue` 在同一 run 内恢复相同 persona、provider 和 model 的 session，包括 worktree clone。不会使用其他 clone 或项目根目录的 session。通过 retry、requeue 或 instruct 在现有 clone 中开始新的尝试时，每个 persona 首次执行都创建新 session，后续 step 继续该新 session。provider fallback 不恢复已保存的 session。`refresh` 不恢复，`compact` 恢复后仅在 Phase 1 前请求 provider 压缩，不在 report 或 status phase 前压缩。不支持压缩的 provider 直接继续；压缩失败时不执行 Phase 1，并丢弃已保存的 session |
 | `requires_user_input` | `false` | 标记可等待用户输入的 normal agent step；需要交互模式和 input handler |
 | `tags` | - | 按顺序与配置中的 `provider_routing.tags` 匹配 |
 | `policy` | - | policy key 或数组 |
