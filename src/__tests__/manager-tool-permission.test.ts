@@ -16,13 +16,14 @@ import { parseCodexToolPermissionInput, toCodexToolPermissionOutput } from '../i
 import { validateStructuredOutputAgainstSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { makeProvider } from './test-helpers.js';
-
 const doubles = vi.hoisted(() => ({
   call: vi.fn(), provider: vi.fn(), assistant: vi.fn(), facet: vi.fn(), compile: vi.fn(),
   store: vi.fn(), update: vi.fn(), list: vi.fn(), notificationOptions: vi.fn(), savedNotification: vi.fn(), slack: vi.fn(),
   inquiryApproval: vi.fn(),
 }));
 vi.mock('../agents/agent-usecases.js', () => ({ executeIsolatedStructuredInternalAgent: vi.fn() }));
+vi.mock('../features/manager/scopedPermissionStorage.js', () => ({ readScopedPermissions: async () => ({ ok: true, files: [] }) }));
+vi.mock('../infra/goals/git-command.js', () => ({ resolveGoalBranchSha: async () => 'a'.repeat(40) }));
 vi.mock('../agents/runner.js', () => ({ runAgent: vi.fn() }));
 vi.mock('../infra/providers/index.js', () => ({ getProvider: doubles.provider }));
 vi.mock('../features/interactive/assistantConfig.js', () => ({ resolveAssistantProviderModel: doubles.assistant }));
@@ -56,10 +57,10 @@ vi.mock('../infra/config/loaders/resource-resolver.js', () => ({
 vi.mock('../infra/config/managerConfig.js', () => ({ resolveManagerConfig: () => ({ mainMerge: 'approve' }) }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class {
   constructor(directory: string) { doubles.store(directory); }
-  update = doubles.update; list = doubles.list;
+  update = doubles.update; list = doubles.list; get = async (id: string) => structuredClone(goal.id === id ? goal : { ...goalRecord(), id });
 } }));
 vi.mock('../infra/goals/standalone-inquiries.js', () => ({ StandaloneInquiryStore: class {
-  getOrCreateApproval = doubles.inquiryApproval;
+  getOrCreateApproval = doubles.inquiryApproval; list = async () => [];
 } }));
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { listTaskStateItems = () => []; } }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));

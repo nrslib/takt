@@ -5,13 +5,17 @@ import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
 import { GoalQuestionSchema } from '../infra/goals/schema.js';
 
 const io = vi.hoisted(() => ({
-  read: vi.fn(), readdir: vi.fn(), opendir: vi.fn(), close: vi.fn(), mkdir: vi.fn(), realpath: vi.fn(), access: vi.fn(), write: vi.fn(),
+  read: vi.fn(), syncRead: vi.fn(), readdir: vi.fn(), opendir: vi.fn(), close: vi.fn(), mkdir: vi.fn(), realpath: vi.fn(), access: vi.fn(), write: vi.fn(),
+}));
+vi.mock('node:fs', async (original) => ({
+  ...await original<typeof import('node:fs')>(), readFileSync: io.syncRead,
 }));
 vi.mock('node:fs/promises', async (original) => ({
   ...await original<typeof import('node:fs/promises')>(),
   readFile: io.read, readdir: io.readdir, opendir: io.opendir, mkdir: io.mkdir, realpath: io.realpath, access: io.access,
 }));
 vi.mock('../infra/config/project/sessionStore.js', () => ({ writeFileAtomic: io.write }));
+vi.mock('../infra/fs/file-lock.js', () => ({ withFileLock: (_path: string, action: () => unknown) => action() }));
 vi.mock('node:crypto', async (original) => {
   const actual = await original<typeof import('node:crypto')>();
   return { ...actual, randomUUID: vi.fn(actual.randomUUID) };
@@ -41,6 +45,11 @@ beforeEach(() => {
   vi.mocked(crypto.randomUUID).mockReturnValueOnce(firstId).mockReturnValue(secondId);
   io.realpath.mockImplementation(async (path: string) => path === '/links/app' ? repository.repositoryDirectory : path);
   io.read.mockImplementation(async (path: string) => {
+    const content = files.get(path);
+    if (content === undefined) throw missing();
+    return content;
+  });
+  io.syncRead.mockImplementation((path: string) => {
     const content = files.get(path);
     if (content === undefined) throw missing();
     return content;
@@ -494,5 +503,44 @@ describe('standalone inquiry updates', () => {
     io.write.mockImplementationOnce(() => { throw new Error('publication failed'); });
     await expect(store.create({ body: '新しい相談' })).rejects.toThrow('publication failed');
     expect(await store.list()).toEqual([first]);
+  });
+});
+
+describe('standalone approval consumption', () => {
+  const operation = { toolName: 'Write', args: '{}', cwd: '/project' };
+
+  it('reloads and consumes an approval once across concurrent store instances', async () => {
+    const store = new StandaloneInquiryStore(config, workspace);
+    const pending = await store.create({ kind: 'approval', body: '確認', operation });
+    const allowed = await store.answer(pending.id, { decision: 'allow', scope: 'once' });
+    const results = await Promise.allSettled([
+      store.consumeApproval(allowed, now),
+      new StandaloneInquiryStore(config, workspace).consumeApproval(allowed, now),
+    ]);
+    expect(results.map(({ status }) => status).sort()).toEqual(['fulfilled', 'rejected']);
+    expect(await store.list()).toEqual([{ ...allowed, consumedAt: now }]);
+    expect(allowed.consumedAt).toBeUndefined();
+  });
+
+  it('does not consume an approval whose persisted operation changed', async () => {
+    const store = new StandaloneInquiryStore(config, workspace);
+    const pending = await store.create({ kind: 'approval', body: '確認', operation });
+    const allowed = await store.answer(pending.id, { decision: 'allow' });
+    const changed = GoalQuestionSchema.parse({ ...allowed, operation: { ...allowed.operation, cwd: '/other' } });
+    files.set(workspaceFile(pending.id), JSON.stringify(changed));
+    io.write.mockClear();
+    await expect(store.consumeApproval(allowed, now)).rejects.toThrow();
+    expect(io.write).not.toHaveBeenCalled();
+    expect(await store.list()).toEqual([changed]);
+  });
+
+  it('leaves persisted approval available when publication fails', async () => {
+    const store = new StandaloneInquiryStore(config, workspace);
+    const pending = await store.create({ kind: 'approval', body: '確認', operation });
+    const allowed = await store.answer(pending.id, { decision: 'allow' });
+    io.write.mockImplementationOnce(() => { throw new Error('publication failed'); });
+    await expect(store.consumeApproval(allowed, now)).rejects.toThrow();
+    expect(await store.list()).toEqual([allowed]);
+    expect(await store.consumeApproval(allowed, now)).toMatchObject({ consumedAt: now });
   });
 });

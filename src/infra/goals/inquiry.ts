@@ -31,3 +31,13 @@ export function answerInquiry(question: GoalQuestion, answer: string | GoalAnswe
     },
   });
 }
+
+export function isGoalApprovalUsable(question: GoalQuestion): boolean {
+  return question.kind === 'approval' && question.status === 'answered'
+    && question.answer?.decision === 'allow' && question.consumedAt === undefined;
+}
+
+export function consumeInquiryApproval(question: GoalQuestion, consumedAt: string): GoalQuestion {
+  if (!isGoalApprovalUsable(question)) throw new Error('Approval is not usable');
+  return GoalQuestionSchema.parse({ ...question, consumedAt });
+}

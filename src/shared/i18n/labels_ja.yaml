@@ -414,6 +414,11 @@ manager:
   goSummaryUnavailable: "材料が不足しているため、登録用の要約を作成できませんでした。会話を続けてください。"
   inputUnavailableDuringAbort: "中止の確認中は文字を入力できません。確認を終えてから入力してください。"
   toolPermission:
+    savedDenial: "保存済みの承認回答で拒否されています。"
+    consumptionFailed: "承認の消費状態の保存に失敗したため拒否しました。"
+    contextReadFailed: "許可・承認情報の読み取りに失敗したため、人の確認が必要です。{reason}"
+    approvalConsumed: "今回だけの承認は消費済みです。再び人の確認が必要です。"
+    inquirySaveFailed: "承認問い合わせの保存に失敗しました。"
     agentDenied: "{toolName}: manager から別の AI エージェントを起動する操作は許可されていません。"
     bashDenied: "Bash: 別の AI コマンド行エージェントを起動する操作は許可されていません。"
     awaitingConfirmation: "人の確認待ち ({toolName}): {reason}"

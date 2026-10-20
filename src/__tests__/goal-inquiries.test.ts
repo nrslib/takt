@@ -5,6 +5,7 @@ import {
 } from '../infra/goals/questions.js';
 import { GoalQuestionSchema, type Goal, type GoalQuestion } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
+import { consumeInquiryApproval } from '../infra/goals/inquiry.js';
 
 const now = '2026-10-19T01:00:00.000Z';
 const later = '2026-10-19T02:00:00.000Z';
@@ -198,6 +199,7 @@ describe('withdrawal and approval consumption', () => {
 
     const consumed = consumeGoalApproval(allowed, created.questionId, now);
 
+    expect(consumeInquiryApproval(inquiry(allowed, created.questionId), now)).toEqual(inquiry(consumed, created.questionId));
     expect(inquiry(consumed, created.questionId).consumedAt).toBe(now);
     expect(isGoalApprovalUsable(inquiry(consumed, created.questionId))).toBe(false);
     expect(() => consumeGoalApproval(consumed, created.questionId, later)).toThrow();
@@ -215,6 +217,7 @@ describe('withdrawal and approval consumption', () => {
     const before = structuredClone(goal);
     expect(isGoalApprovalUsable(inquiry(goal, created.questionId))).toBe(false);
     expect(() => consumeGoalApproval(goal, created.questionId, now)).toThrow();
+    expect(() => consumeInquiryApproval(inquiry(goal, created.questionId), now)).toThrow();
     expect(goal).toEqual(before);
   });
 });

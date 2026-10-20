@@ -5,6 +5,7 @@ import { getGlobalConfigDir } from '../../infra/config/paths.js';
 import { projectIdForCanonicalDirectory } from '../../infra/config/global/projectRegistry.js';
 import { readWorkspace } from '../../infra/config/global/workspaceRegistry.js';
 import { writeFileAtomic } from '../../infra/config/project/sessionStore.js';
+import { GoalIdSchema, type Goal } from '../../infra/goals/schema.js';
 
 const MAX_FILE_BYTES = 8 * 1024;
 const MAX_TOTAL_BYTES = 32 * 1024;
@@ -15,7 +16,10 @@ export type PermissionHeading = '許可' | '毎回確認' | '拒否';
 export type PermissionScope =
   | { readonly kind: 'project'; readonly projectDirectory: string }
   | { readonly kind: 'workspace'; readonly workspaceId: string }
-  | { readonly kind: 'global' };
+  | { readonly kind: 'global' }
+  | { readonly kind: 'goal'; readonly repositoryDirectory: string; readonly goalId: string };
+
+type WritablePermissionScope = Exclude<PermissionScope, { kind: 'goal' }>;
 
 interface PermissionTarget {
   readonly scope: PermissionScope['kind'];
@@ -32,6 +36,7 @@ export interface PermissionSection {
 export interface ScopedPermissionFile extends PermissionTarget {
   readonly content: string;
   readonly sections: readonly PermissionSection[];
+  readonly inquiryId?: string;
 }
 
 export type ScopedPermissionsResult =
@@ -56,6 +61,8 @@ async function resolveTarget(globalDirectory: string, scope: PermissionScope): P
     }
     case 'global':
       return { scope: scope.kind, filePath: join(globalDirectory, PERMISSIONS_FILE_NAME) };
+    case 'goal':
+      return { scope: scope.kind, filePath: join(scope.repositoryDirectory, '.takt', 'goals', GoalIdSchema.parse(scope.goalId), 'goal.json') };
   }
 }
 
@@ -159,12 +166,16 @@ function parseSections(content: string): { sections: PermissionSection[]; unsafe
 }
 
 export async function readScopedPermissions(input: {
-  readonly projectDirectory: string;
+  readonly projectDirectory?: string;
   readonly workspaceId?: string;
+  readonly goal?: { readonly repositoryDirectory: string; readonly record: Goal };
 }): Promise<ScopedPermissionsResult> {
   try {
     const globalDirectory = getGlobalConfigDir();
-    const targets = [await resolveTarget(globalDirectory, { kind: 'project', projectDirectory: input.projectDirectory })];
+    const targets: PermissionTarget[] = [];
+    if (input.projectDirectory !== undefined) {
+      targets.push(await resolveTarget(globalDirectory, { kind: 'project', projectDirectory: input.projectDirectory }));
+    }
     if (input.workspaceId !== undefined) {
       targets.push(await resolveTarget(globalDirectory, { kind: 'workspace', workspaceId: input.workspaceId }));
     }
@@ -179,6 +190,25 @@ export async function readScopedPermissions(input: {
         throw new Error(`Cannot read ${target.scope} permissions: ${target.filePath}`, { cause });
       }
       if (content !== undefined) files.push({ ...target, content, sections: parseSections(content).sections });
+    }
+    if (input.goal !== undefined) {
+      const target = await resolveTarget(globalDirectory, {
+        kind: 'goal', repositoryDirectory: input.goal.repositoryDirectory, goalId: input.goal.record.id,
+      });
+      const goalFiles: ScopedPermissionFile[] = [];
+      for (const question of input.goal.record.questions ?? []) {
+        if (question.kind !== 'approval' || question.status !== 'answered'
+          || question.answer?.decision !== 'allow' || question.answer.scope !== 'goal') continue;
+        const content = question.answer.text;
+        const bytes = Buffer.byteLength(content);
+        const goalBytes = goalFiles.reduce((sum, file) => sum + Buffer.byteLength(file.content), 0);
+        const totalBytes = files.reduce((sum, file) => sum + Buffer.byteLength(file.content), 0) + goalBytes;
+        if (goalBytes + bytes > MAX_FILE_BYTES || totalBytes + bytes > MAX_TOTAL_BYTES) {
+          throw new Error(`Goal permissions exceed their byte budget: ${target.filePath}`);
+        }
+        goalFiles.push({ ...target, inquiryId: question.id, content, sections: [] });
+      }
+      files.push(...goalFiles);
     }
     return { ok: true, files };
   } catch (error) {
@@ -211,7 +241,7 @@ function insertSentence(content: string, heading: PermissionHeading, sentence: s
 
 /** TUIで人が確定した一文の保存用。AIのツール登録には接続しない。 */
 export async function appendScopedPermission(input: {
-  readonly scope: PermissionScope;
+  readonly scope: WritablePermissionScope;
   readonly heading: PermissionHeading;
   readonly sentence: string;
 }): Promise<void> {

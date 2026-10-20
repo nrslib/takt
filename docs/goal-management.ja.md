@@ -24,9 +24,17 @@ TUI と daemon の manager は、既存の provider 権限制御を通して `fu
 
 manager の provider が claude（claude-sdk）または codex の会話では、人が操作のたびに承認する代わりに、AI の判断役が道具の実行前に審査します。判断は許可、理由付きの拒否、人への確認のいずれかです。既定で有効になり、入切の設定はありません。
 
-claude（claude-sdk）で審査を通らずに実行できるのは、組み込みの読み取り道具 `Read`、`Glob`、`Grep`、`ToolSearch` と、manager 自身の TAKT MCP の道具だけです。Codex では、manager 自身の TAKT MCP の道具だけが審査を通らずに実行でき、組み込みの道具はすべて審査します。どちらの provider でも、それ以外は未知の道具や外部 MCP の道具も含めてすべて審査します。`Bash` などのシェルの実行は、内容が読み取りだけに見える場合も毎回審査します。`Task` や `Agent` による別のエージェントの起動は常に拒否し、`Bash` から別の AI コマンドラインエージェントを起動する指示も拒否します。Codex の `spawn_agent` も、判断役を通さず常に拒否します。
+claude（claude-sdk）で審査を通らずに実行できるのは、組み込みの読み取り道具 `Read`、`Glob`、`Grep`、`ToolSearch` と、manager 自身の TAKT MCP の道具だけです。Codex では、manager 自身の TAKT MCP の道具だけが審査を通らずに実行でき、組み込みの道具はすべて審査します。どちらの provider でも、それ以外は未知の道具や外部 MCP の道具も含め、保存済み承認が適用されない操作を審査します。`Bash` などのシェルの実行も、保存済み承認が適用されなければ、内容が読み取りだけに見える場合も毎回審査します。`Task` や `Agent` による別のエージェントの起動は常に拒否し、`Bash` から別の AI コマンドラインエージェントを起動する指示も拒否します。Codex の `spawn_agent` も、判断役を通さず常に拒否します。
 
 拒否理由は manager に返り、manager は次の発言でその理由を踏まえて動きます。人への確認と判定した場合も操作はいったん拒否し、人の確認待ちであることと理由を TUI と Slack に通知します。操作を保持したまま確認を待つことはありません。通知には既存の種類を使い、新しい種類は追加しません。
+
+保存済みの承認は、道具名・元の引数の digest・実行場所・対象 SHA が一致する操作だけに再利用します。ゴール付きの操作は、その時点のゴールブランチの SHA に結び付けます。使用可能な許可なら判断役を呼ばずに許可し、`once` は消費を保存してから1回だけ許可します。消費済みなら再確認し、消費の保存に失敗した場合は拒否します。保存済みの拒否は人の理由を返し、未回答なら同じ問い合わせ ID の確認待ちとして拒否します。回答・消費・担当先の変更は次の要求で読み直します。
+
+承認の正本は、ゴール指定時には対象リポジトリの `.takt/goals/<UUID>/goal.json`、未指定時には現在の担当先の `~/.takt/workspaces/<UUID>/inquiries/` または `~/.takt/projects/<project-id>/inquiries/` です。別ゴールや別担当先の回答は流用しません。
+
+判断役には、全体の `~/.takt/manager-permissions.md`、現在の workspace の `~/.takt/workspaces/<UUID>/manager-permissions.md`、対象プロジェクトの `~/.takt/manager-permissions/projects/<project-id>.md` と、対象ゴールの承認回答のうち `goal` 範囲の許可原文を、範囲・実際の保存元パス付きで毎回渡します。project-id は正規化済みリポジトリパスの SHA-256 です。`TAKT_CONFIG_DIR` 指定時はその下を使います。人が編集する Markdown は3段のままで、ゴール用 Markdown やリポジトリ内の許可ファイルは作りません。AI から許可ファイルを書き換える道具は提供しません。
+
+原文の読み取り失敗、UTF-8 の不正、1保存元8KiBまたは合計32KiBの上限超過は、理由を判断役へ渡して人への確認に回します。ゴールでは対象の許可回答本文を合計して上限に数え、他のゴール項目は数えません。原文を切り詰めて自動許可することはなく、保存済み許可でも読み取り失敗を迂回しません。既存の禁止・ゴール制約が優先し、その内側で拒否、毎回確認、許可の順に適用します。ゴールの一時停止・再開・中止を道具で要求する場合は原則として人へ確認し、中止は取り消せないことも確認します。
 
 判断役の provider と model は、`runtime.yaml` の `provider.targets.internal_agents.manager-permission-judge` で指定できます。他の内部 agent の seat と同じく `profile` または `ladder` を指定でき、`pool` は指定できません。未指定なら manager と同じ provider・model・provider options を使います。
 
