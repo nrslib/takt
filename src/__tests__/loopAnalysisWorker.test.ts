@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join, resolve, sep } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 
@@ -79,6 +79,8 @@ import {
 } from '../features/tasks/execute/loopAnalysisWorker.js';
 import type { LoopAnalysisJob } from '../features/tasks/execute/loopAnalysisJob.js';
 import type { CommentLoopAnalysisReportOptions } from '../features/tasks/execute/postExecution.js';
+import { RunProjectionError } from '../features/tasks/execute/workflowRunExecution.js';
+import * as privateFile from '../shared/utils/private-file.js';
 
 const baseJob = {
   version: 1 as const,
@@ -220,6 +222,59 @@ describe('loop analysis worker', () => {
     for (const directory of temporaryDirectories.splice(0)) {
       rmSync(directory, { recursive: true, force: true });
     }
+  });
+
+  it.each(['file', 'pr-comment'] as const)('preserves trace warnings in archived and published %s reports', async (output) => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-loop-trace-warning-'));
+    temporaryDirectories.push(root);
+    const context = await configureActualReportArtifacts(root, 'warning-run', '# Analysis\n', {
+      ...baseJob, output,
+      ...(output === 'file' ? {} : { branch: 'feature/warning', publicationMarkerPath: join(root, 'marker.json') }),
+    });
+    mockRunLoopAnalysisWorkflowExecution.mockResolvedValueOnce({
+      success: true, reportDirectory: dirname(context.reportPath),
+      finalizationIssues: [
+        new RunProjectionError('trace', new Error('trace rendering failed: /Users/jane/private/report.md api_key=secret-value')),
+        new RunProjectionError('meta', new Error('unrelated meta issue')),
+      ],
+    });
+    mockReadLoopAnalysisPublicationMarker.mockReturnValue('settled');
+    const posted: string[] = [];
+    mockCommentLoopAnalysisReportOnPr.mockImplementationOnce(async (options: CommentLoopAnalysisReportOptions) => {
+      posted.push(readFileSync(options.reportPath, 'utf8'));
+      return undefined;
+    });
+
+    await expect(executeLoopAnalysisJob(context.jobPath)).resolves.toBeUndefined();
+
+    const archived = readFileSync(context.archivedReportPath, 'utf8');
+    expect(archived).toContain('trace rendering failed');
+    expect(archived).not.toContain('unrelated meta issue');
+    const published = readFileSync(context.reportPath, 'utf8');
+    expect(published).toContain('trace rendering failed');
+    expect(published).not.toContain('/Users/jane/private/report.md');
+    expect(published).not.toContain('secret-value');
+    expect(published).toContain('source run: warning-run');
+    expect(posted).toEqual(output === 'file' ? [] : [published]);
+    expect(mockAppendLoopAnalysisWorkerFailure).not.toHaveBeenCalled();
+  });
+
+  it('records warning report write failures without undoing successful analysis or archiving', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'takt-loop-warning-write-'));
+    temporaryDirectories.push(root);
+    const context = await configureActualReportArtifacts(root, 'warning-write-run', '# Analysis\n', baseJob);
+    mockRunLoopAnalysisWorkflowExecution.mockResolvedValueOnce({
+      success: true, reportDirectory: dirname(context.reportPath),
+      finalizationIssues: [new RunProjectionError('trace', new Error('trace failed'))],
+    });
+    const failure = new Error('warning report write failed');
+    vi.spyOn(privateFile, 'writePrivateFile').mockImplementationOnce(() => { throw failure; });
+
+    await expect(runLoopAnalysisWorker(context.jobPath)).resolves.toBeUndefined();
+
+    expect(readFileSync(context.archivedReportPath, 'utf8')).toBe('# Analysis\n');
+    expect(readFileSync(context.failureLogPath, 'utf8')).toContain(failure.message);
+    expect(mockAppendLoopAnalysisWorkerFailure).toHaveBeenCalledExactlyOnceWith(context.jobPath, failure);
   });
 
   it('Given file output, When the worker runs, Then it saves the analysis report without PR operations', async () => {

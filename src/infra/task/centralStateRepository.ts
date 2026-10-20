@@ -130,6 +130,7 @@ export interface CentralTaskRecord {
   /** Latest run pointer retained so workers started before run history support can finish safely. */
   readonly runId?: string;
   readonly runIds: readonly string[];
+  readonly runWarnings?: readonly { readonly runId: string; readonly message: string }[];
   readonly prUrl?: string;
 }
 
@@ -268,6 +269,7 @@ function resetFailedTaskToPending(
     createdAt: task.createdAt,
     updatedAt: now,
     runIds: task.runIds,
+    ...(task.runWarnings === undefined ? {} : { runWarnings: task.runWarnings }),
     ...(executionRequest === undefined ? {} : { executionRequest }),
   };
   return reset;
@@ -753,6 +755,21 @@ async function withLock<T>(paths: StatePaths, action: () => Promise<T>): Promise
   }
 }
 
+function appendRunWarnings(
+  task: CentralTaskRecord,
+  runId: string,
+  warnings: readonly string[] | undefined,
+): CentralTaskRecord {
+  if (warnings === undefined || warnings.length === 0) return task;
+  return {
+    ...task,
+    runWarnings: [
+      ...task.runWarnings ?? [],
+      ...warnings.map((message) => ({ runId, message })),
+    ],
+  };
+}
+
 function normalizeTaskRunHistory(task: StoredCentralTaskRecord): CentralTaskRecord {
   if (task.runIds !== undefined && !Array.isArray(task.runIds)) {
     return task as CentralTaskRecord;
@@ -915,6 +932,17 @@ function validateTask(task: CentralTaskRecord): void {
   }
   if (task.runId !== undefined && task.runId !== task.runIds.at(-1)) {
     throw new CentralTaskCasError('Central task latest run does not match its run history');
+  }
+  if (task.runWarnings !== undefined && (
+    !Array.isArray(task.runWarnings)
+    || task.runWarnings.some((warning: unknown) => {
+      if (warning === null || typeof warning !== 'object' || Array.isArray(warning)) return true;
+      const entry = warning as Record<string, unknown>;
+      return typeof entry.runId !== 'string' || !task.runIds.includes(entry.runId)
+        || typeof entry.message !== 'string' || entry.message.length === 0;
+    })
+  )) {
+    throw new CentralTaskCasError('Central task run warnings are invalid');
   }
   assertIsoTimestamp(task.createdAt, 'task.createdAt');
   assertIsoTimestamp(task.updatedAt, 'task.updatedAt');
@@ -1884,6 +1912,7 @@ export class CentralTaskRepository {
     readonly status: 'completed' | 'failed';
     readonly failure?: { readonly code: string; readonly message: string };
     readonly prUrl?: string;
+    readonly warnings?: readonly string[];
   }): Promise<CentralTaskRecord> {
     return withLock(this.paths, async () => {
       const tasks = [...await this.readTasks()];
@@ -1901,6 +1930,7 @@ export class CentralTaskRepository {
           throw new CentralTaskCasError('Central task terminal compare-and-swap failed');
         }
         const now = new Date().toISOString();
+        const warnedTask = appendRunWarnings(task, draining.runId, input.warnings);
         await terminalizeCentralRunArtifact(
           this.paths,
           draining.runId,
@@ -1909,7 +1939,7 @@ export class CentralTaskRepository {
         );
         if (task.requeueAfterDrain !== undefined) {
           const pending = resetFailedTaskToPending(
-            task,
+            warnedTask,
             now,
             task.requeueAfterDrain.task,
             task.requeueAfterDrain.executionRequest,
@@ -1919,7 +1949,7 @@ export class CentralTaskRepository {
           return pending;
         }
         const acknowledged: CentralTaskRecord = {
-          ...task,
+          ...warnedTask,
           generation: task.generation + 1,
           updatedAt: now,
         };
@@ -1933,7 +1963,7 @@ export class CentralTaskRepository {
       }
       const now = new Date().toISOString();
       const terminal: CentralTaskRecord = {
-        ...task,
+        ...appendRunWarnings(task, task.activeExecution.runId, input.warnings),
         generation: task.generation + 1,
         status: input.status,
         updatedAt: now,

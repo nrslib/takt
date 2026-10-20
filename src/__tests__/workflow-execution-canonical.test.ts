@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import type { WorkflowConfig } from '../core/models/index.js';
 import type { SelectorProviderInfo } from '../core/workflow/types.js';
-import type { WorkflowExecutionOptions } from '../features/tasks/execute/types.js';
+import type { WorkflowExecutionEvent, WorkflowExecutionOptions } from '../features/tasks/execute/types.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 
 const workflowEngineError = new Error('workflow-engine-constructor-called');
@@ -286,11 +286,125 @@ vi.mock('../features/tasks/execute/traceReportRedaction.js', () => ({
   sanitizeTextForStorage: vi.fn((value: string) => value),
 }));
 
+async function prepareCompletedRunWithTraceIssue() {
+  const { RunProjectionError } = await import('../features/tasks/execute/workflowRunExecution.js');
+  const traceIssue = new RunProjectionError('trace', new Error('trace rendering failed'));
+  const lifecycleModule = await import('../features/tasks/execute/workflowRunLifecycle.js');
+  const createLifecycle = lifecycleModule.createWorkflowRunLifecycle;
+  vi.spyOn(lifecycleModule, 'createWorkflowRunLifecycle').mockImplementationOnce((input) => {
+    const composition = createLifecycle(input);
+    return {
+      ...composition,
+      lifecycle: {
+        beginRun: async (runInput) => {
+          const handle = await composition.lifecycle.beginRun(runInput);
+          return {
+            ...handle,
+            finish: async (outcome, payload) => {
+              const finalization = await handle.finish(outcome, payload);
+              return { ...finalization, issues: [...finalization.issues, traceIssue] };
+            },
+          };
+        },
+      },
+    };
+  });
+  mockWorkflowEngine.mockImplementationOnce(function CompletedWorkflowEngine() {
+    const engine = new EventEmitter() as EventEmitter & {
+      run: () => Promise<{ status: 'completed'; iteration: number }>;
+    };
+    engine.run = vi.fn(async () => {
+      const state = { status: 'completed' as const, iteration: 2 };
+      engine.emit('workflow:complete', state);
+      return state;
+    });
+    return engine;
+  });
+  const { executeWorkflow } = await import('../features/tasks/execute/workflowExecution.js');
+  const config: WorkflowConfig = {
+    name: 'default', initialStep: 'plan', maxSteps: 2,
+    steps: [{ name: 'plan', personaDisplayName: 'planner', instruction: 'Plan the work' }],
+  };
+  return { executeWorkflow, config, traceIssue };
+}
+
 describe('workflow execution canonical entrypoints', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockReportWarning.mockReset();
     vi.resetModules();
   });
+
+  it('should warn about a trace issue while preserving successful execution and terminal feedback', async () => {
+    const { executeWorkflow, config, traceIssue } = await prepareCompletedRunWithTraceIssue();
+    const eventSink = vi.fn<(event: WorkflowExecutionEvent) => Promise<void>>()
+      .mockResolvedValue(undefined);
+
+    const result = await executeWorkflow(config, 'task', '/tmp/project', {
+      projectCwd: '/tmp/project', provider: 'mock', eventSink,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.finalizationIssues).toEqual([traceIssue]);
+    expect(mockReportWarning).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/trace.*trace rendering failed/i));
+    expect(eventSink).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'progress', level: 'warn', message: expect.stringMatching(/trace.*trace rendering failed/i),
+    }));
+    expect(eventSink).toHaveBeenCalledWith(expect.objectContaining({ type: 'completed', success: true }));
+    const events = eventSink.mock.calls.map(([event]) => event);
+    expect(events.findIndex((event) => event.type === 'progress'))
+      .toBeLessThan(events.findIndex((event) => event.type === 'completed'));
+    expect(mockProjectTerminal).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ status: 'completed', iterations: 2 }));
+  });
+
+  it('should deliver a trace warning to the event sink when terminal output is silent', async () => {
+    const { executeWorkflow, config, traceIssue } = await prepareCompletedRunWithTraceIssue();
+    const outputModule = await import('../features/tasks/execute/outputFns.js');
+    const actualOutput = await vi.importActual<typeof outputModule>('../features/tasks/execute/outputFns.js');
+    vi.mocked(outputModule.createOutputFns)
+      .mockImplementationOnce(actualOutput.createOutputFns)
+      .mockImplementationOnce(actualOutput.createOutputFns);
+    const eventSink = vi.fn<(event: WorkflowExecutionEvent) => Promise<void>>()
+      .mockResolvedValue(undefined);
+
+    const result = await executeWorkflow(config, 'task', '/tmp/project', {
+      projectCwd: '/tmp/project', provider: 'mock', outputMode: 'silent', eventSink,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.finalizationIssues).toEqual([traceIssue]);
+    expect(eventSink).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'progress', level: 'warn', message: expect.stringMatching(/trace.*trace rendering failed/i),
+    }));
+    expect(eventSink).toHaveBeenCalledWith(expect.objectContaining({ type: 'completed', success: true }));
+    expect(mockReportWarning).not.toHaveBeenCalled();
+  });
+
+  it.each(['terminal', 'event sink'] as const)(
+    'should preserve success and report a delivery issue when the trace warning fails at the %s', async (boundary) => {
+      const { executeWorkflow, config, traceIssue } = await prepareCompletedRunWithTraceIssue();
+      const { RunLiveDeliveryError } = await import('../features/tasks/execute/workflowRunExecution.js');
+      const deliveryError = new Error('warning delivery failed');
+      if (boundary === 'terminal') {
+        mockReportWarning.mockImplementationOnce(() => { throw deliveryError; });
+      }
+      const eventSink = vi.fn(async (event: WorkflowExecutionEvent) => {
+        if (boundary === 'event sink' && event.type === 'progress') throw deliveryError;
+      });
+
+      const result = await executeWorkflow(config, 'task', '/tmp/project', {
+        projectCwd: '/tmp/project', provider: 'mock', eventSink,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.finalizationIssues).toEqual([
+        traceIssue,
+        expect.any(RunLiveDeliveryError),
+      ]);
+      expect(result.finalizationIssues?.[1]?.cause).toBe(deliveryError);
+      expect(eventSink).toHaveBeenCalledWith(expect.objectContaining({ type: 'completed', success: true }));
+    },
+  );
 
   it('should expose step-based transition APIs', async () => {
     // When
