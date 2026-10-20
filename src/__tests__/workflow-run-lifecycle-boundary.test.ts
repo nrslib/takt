@@ -16,6 +16,7 @@ import {
   type WorkflowRunHandle,
 } from '../features/tasks/execute/workflowRunLifecycle.js';
 import {
+  appendNdjsonLine,
   createSessionLog,
   initNdjsonLog,
 } from '../infra/fs/index.js';
@@ -23,6 +24,7 @@ import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js
 import {
   createWorkflowTerminalPayloadFactory,
 } from '../features/tasks/execute/workflowTerminalPayload.js';
+import { RunProjectionError } from '../features/tasks/execute/workflowRunExecution.js';
 
 const roots: string[] = [];
 
@@ -104,7 +106,95 @@ async function failRun(
   }, payload);
 }
 
+async function createTerminalRun(status: 'completed' | 'failed') {
+  const cwd = createRoot();
+  const task = 'trace failure task';
+  const handle = await createWorkflowRunLifecycle({ cwd }).lifecycle.beginRun({
+    workflowConfig: workflow,
+    task,
+    requestedRunSlug: 'trace-failure-run',
+  });
+  handle.bootstrap.publishRunMeta({
+    runPaths: handle.runPaths,
+    task,
+    workflowName: workflow.name,
+  });
+  const ndjsonLogPath = initNdjsonLog(handle.bootstrap.sessionId, task, workflow.name, {
+    logsDir: handle.runPaths.logsAbs,
+    startTime: handle.bootstrap.startedAt,
+  });
+  const failure = status === 'failed'
+    ? { step: 'done', error: 'provider unavailable', failureCategory: 'provider_error' as const }
+    : undefined;
+  const reason = failure?.error;
+  const payload = createWorkflowTerminalPayloadFactory({
+    runSlug: handle.runSlug,
+    projectCwd: cwd,
+    task,
+    workflowName: workflow.name,
+    sessionLog: createSessionLog(task, cwd, workflow.name, { startTime: handle.bootstrap.startedAt }),
+    sessionId: handle.bootstrap.sessionId,
+    ndjsonLogPath,
+    traceReportMode: 'redacted',
+  }).create({ status, reason, failure, iterations: 2, endTime: new Date().toISOString() });
+  return { handle, ndjsonLogPath, payload, outcome: { status, reason, iteration: 2 } };
+}
+
 describe('workflow run lifecycle boundary', () => {
+  it('should complete a run and report a trace issue when a phase completion record is missing', async () => {
+    const { handle, ndjsonLogPath, payload, outcome } = await createTerminalRun('completed');
+    appendNdjsonLine(ndjsonLogPath, {
+      type: 'step_start', step: 'done', persona: 'coder', iteration: 2,
+      timestamp: handle.bootstrap.startedAt,
+    });
+    appendNdjsonLine(ndjsonLogPath, {
+      type: 'phase_start', step: 'done', iteration: 2, phase: 1, phaseName: 'execute',
+      phaseExecutionId: 'done:2:1:1', instruction: 'finish task',
+      systemPrompt: 'system', userInstruction: 'finish task', timestamp: handle.bootstrap.startedAt,
+    });
+    appendNdjsonLine(ndjsonLogPath, {
+      type: 'step_complete', step: 'done', persona: 'coder', iteration: 2,
+      status: 'done', content: 'finished', instruction: 'finish task', timestamp: payload.endTime,
+    });
+
+    const finalization = await handle.finish(outcome, payload);
+
+    expect(finalization.receipt).toMatchObject({ runStatus: 'completed', iteration: 2 });
+    expect(finalization.issues).toHaveLength(1);
+    expect(finalization.issues[0]).toBeInstanceOf(RunProjectionError);
+    expect(finalization.issues[0]).toMatchObject({
+      stage: 'trace', cause: expect.objectContaining({ message: expect.stringContaining('missing status') }),
+    });
+    expect(JSON.parse(readFileSync(handle.runPaths.metaAbs, 'utf8'))).toMatchObject({
+      status: 'completed', iterations: 2, endTime: payload.endTime,
+    });
+    const records = readFileSync(ndjsonLogPath, 'utf8').trim().split('\n')
+      .map((line) => JSON.parse(line) as { type: string });
+    expect(records.filter((record) => record.type === 'workflow_complete')).toEqual([payload.sessionRecord]);
+  });
+
+  it.each(['completed', 'failed'] as const)(
+    'should preserve the committed %s result when saving the trace fails', async (status) => {
+      const { handle, ndjsonLogPath, payload, outcome } = await createTerminalRun(status);
+      mkdirSync(join(handle.runPaths.runRootAbs, 'trace.md'));
+
+      const finalization = await handle.finish(outcome, payload);
+
+      expect(finalization.receipt).toMatchObject({ runStatus: status, iteration: payload.iterations });
+      expect(finalization.issues).toHaveLength(1);
+      expect(finalization.issues[0]).toBeInstanceOf(RunProjectionError);
+      expect(finalization.issues[0]).toMatchObject({ stage: 'trace', cause: expect.any(Error) });
+      const meta = JSON.parse(readFileSync(handle.runPaths.metaAbs, 'utf8')) as Record<string, unknown>;
+      expect(meta).toMatchObject({ status, iterations: payload.iterations, endTime: payload.endTime });
+      expect(meta.reason).toEqual(payload.reason);
+      expect(meta.failure).toEqual(payload.failure);
+      const records = readFileSync(ndjsonLogPath, 'utf8').trim().split('\n')
+        .map((line) => JSON.parse(line) as { type: string });
+      expect(records.filter((record) => record.type === 'workflow_complete' || record.type === 'workflow_abort'))
+        .toEqual([payload.sessionRecord]);
+    },
+  );
+
   it.each([
     { status: 'completed', reason: undefined },
     { status: 'failed', reason: 'provider unavailable' },

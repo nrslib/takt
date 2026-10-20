@@ -28,6 +28,17 @@ function options(): Omit<SystemStepServicesOptions, 'gitProvider'> {
     prGitOperations: { fetch: vi.fn(async () => {}), push: vi.fn(async () => {}) } };
 }
 describe('Caccia effect result', () => {
+  it('passes the parent warning sink to linked Caccia without changing its result', async () => {
+    const eventSink = vi.fn();
+    mocks.run.mockImplementationOnce(async (input) => {
+      await input.eventSink?.({ type: 'progress', level: 'warn', message: 'Caccia trace failed' });
+      return { outcome: 'success', headSha: initial, unresolvedCount: 0 };
+    });
+    expect(await cacciaEffect({ ...options(), outputMode: 'silent', eventSink }, 123))
+      .toMatchObject({ success: true, outcome: 'success', unresolvedCount: 0 });
+    expect(eventSink).toHaveBeenCalledExactlyOnceWith({ type: 'progress', level: 'warn', message: 'Caccia trace failed' });
+  });
+
   afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     vi.resetAllMocks();

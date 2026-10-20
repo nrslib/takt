@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowExecutionRequest } from '../features/tasks/execute/workflowExecutionApi.js';
+import type { WorkflowExecutionEvent } from '../features/tasks/execute/types.js';
 
 const mocks = vi.hoisted(() => ({ details: vi.fn(), status: vi.fn(), workflow: vi.fn(), logError: vi.fn(), agent: vi.fn(), comment: vi.fn() }));
 vi.mock('../infra/git/index.js', async (importOriginal) => ({
@@ -112,6 +113,28 @@ describe('Merge PR persistent clone ownership', () => {
     return runMerge({ projectCwd: project, prNumber: 123, concurrency: 1,
       settings: resolveMergeSettings({ workflow: 'merge-review' }) });
   }
+  it('relays only child warning progress during a silent linked merge and preserves the merge result', async () => {
+    mkdirSync(join(project, '.takt'), { recursive: true });
+    writeFileSync(join(project, '.takt', 'config.yaml'), 'merge:\n  auto_start: true\n  workflow: merge-review\n');
+    const warning = { type: 'progress', level: 'warn', message: 'merge trace failed' } as const;
+    mocks.workflow.mockImplementationOnce(async (request: WorkflowExecutionRequest) => {
+      await request.eventSink?.({ type: 'run_started', runDirectory: request.cwd, reportDirectory: request.cwd, ndjsonLogPath: 'log' });
+      await request.eventSink?.({ type: 'output', outputType: 'text', message: warning.message });
+      await request.eventSink?.({ type: 'progress', message: 'ordinary progress' });
+      await request.eventSink?.(warning);
+      await request.eventSink?.({ type: 'completed', success: true });
+      return { success: true };
+    });
+    mocks.status.mockResolvedValue({ merged: true });
+    const events: WorkflowExecutionEvent[] = [];
+    await runLinkedMergeSafely(project, 'https://github.com/org/repo/pull/123', undefined, {
+      outputMode: 'silent', eventSink: (event) => { events.push(event); },
+    });
+    expect(mocks.workflow).toHaveBeenCalledOnce();
+    expect(events).toEqual([warning]);
+    expect(new TaskRunner(project).listAllTaskItems().filter((task) => task.kind === 'completed')).toHaveLength(1);
+  });
+
   it('同秒の再投入でもプロジェクト側の既存runを避け、保存値とtaskSpecを同じslugで実行する', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-02-16T01:02:03.000Z'));

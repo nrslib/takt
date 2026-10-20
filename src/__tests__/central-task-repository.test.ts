@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
-import { CentralTaskCasError, CentralTaskRepository } from '../infra/task/centralStateRepository.js';
+import { CentralTaskCasError, CentralTaskRepository, parseCentralTasks } from '../infra/task/centralStateRepository.js';
 import { MAX_PERSISTED_FAILURE_ERROR_BYTES } from '../shared/utils/persistedFailureText.js';
 import { saveCloneMeta } from '../infra/task/clone.js';
 import { launchTaktRun } from '../features/web-ui/launcher.js';
@@ -44,6 +44,16 @@ async function setup() {
 }
 
 describe('central task CAS repository', () => {
+  it.each([null, {}, [null], [{ runId: 'other-run', message: 'trace failed' }], (runId: string) => [{ runId, message: 1 }]])(
+    'rejects malformed persisted run warnings: %j', async (runWarnings) => {
+      const { repository } = await setup();
+      const handle = await repository.enqueueAndClaim({ task: 'warning shape', workflow: 'default', worktree: false });
+      const warnings = typeof runWarnings === 'function' ? runWarnings(handle.runId) : runWarnings;
+      expect(() => parseCentralTasks({ version: 1, tasks: [{ ...handle.task, runWarnings: warnings }] }))
+        .toThrow(CentralTaskCasError);
+    },
+  );
+
   it('keeps central directories private and state files owner-only', async () => {
     const { repository } = await setup();
     const [stateDirectory, stateFile, tasksFile] = await Promise.all([
@@ -190,6 +200,7 @@ describe('central task CAS repository', () => {
       ownerToken: started.ownerToken,
       status: 'failed',
       failure: { code: 'workflow_failed', message: 'failed' },
+      warnings: ['trace failed on the first run'],
     });
 
     const requeued = await repository.requeueFailedTask(started.task.taskId);
@@ -201,6 +212,7 @@ describe('central task CAS repository', () => {
       status: 'starting',
       attempt: 2,
       runIds: [started.runId, requeued.runId],
+      runWarnings: [{ runId: started.runId, message: 'trace failed on the first run' }],
       worktree: '/tmp/takt-worktrees',
       branch: 'feature/retry-me',
       baseBranch: 'main',

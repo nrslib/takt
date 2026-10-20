@@ -306,6 +306,37 @@ describe('traceReport', () => {
     )).toThrow('missing status');
   });
 
+  it('should fail fast when completed trace has phase status but no completion time', () => {
+    expect(() => renderTraceReportMarkdown(
+      {
+        tracePath: '/tmp/trace.md',
+        workflowName: 'test-workflow',
+        task: 'test task',
+        runSlug: 'run-1',
+        status: 'completed',
+        iterations: 1,
+        endTime: '2026-03-04T12:00:00.000Z',
+      },
+      '2026-03-04T11:59:00.000Z',
+      [{
+        step: 'plan',
+        persona: 'planner',
+        iteration: 1,
+        startedAt: '2026-03-04T11:59:01.000Z',
+        phases: [{
+          phaseExecutionId: 'plan:1:1',
+          phase: 1,
+          phaseName: 'execute',
+          instruction: 'instr',
+          systemPrompt: 'system',
+          userInstruction: 'user',
+          startedAt: '2026-03-04T11:59:02.000Z',
+          status: 'done',
+        }],
+      }],
+    )).toThrow('missing completedAt');
+  });
+
   it('should mask sensitive task and reason in redacted mode', () => {
     const dir = mkdtempSync(join(tmpdir(), 'trace-report-redact-'));
     const sessionPath = join(dir, 'session.jsonl');

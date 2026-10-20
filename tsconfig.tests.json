@@ -521,6 +521,7 @@
     "src/__tests__/tell-command.test.ts",
     "src/__tests__/tellEvalProvider.test.ts",
     "src/__tests__/test-notification-silence.test.ts",
+    "src/__tests__/traceReport.test.ts",
     "src/__tests__/tui-conversation-view.test.tsx",
     "src/__tests__/tui-conversation.test.ts",
     "src/__tests__/tui-dispatch-notice.test.ts",
