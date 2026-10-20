@@ -1,13 +1,19 @@
+import { realpathSync, statSync, type Stats } from 'node:fs';
 import { realpath } from 'node:fs/promises';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { readWorkspace, readWorkspaceRegistry } from '../infra/config/global/workspaceRegistry.js';
 import { MANAGER_ASSIGNMENT_ENV } from '../features/manager/assignment.js';
 import { TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
 import { withManagerReadScope } from '../features/manager/readScopeProvider.js';
+import { classifyManagerToolPermission } from '../features/manager/toolPermissionClassifier.js';
 import { managerReadScope, type ScopedReadRequest } from '../features/manager/readScope.js';
 import type { Provider, ProviderAgent, ProviderCallOptions } from '../infra/providers/types.js';
 import { makeProvider } from './test-helpers.js';
 
+vi.mock('node:fs', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:fs')>()),
+  accessSync: vi.fn(), realpathSync: Object.assign(vi.fn(), { native: vi.fn() }), statSync: vi.fn(),
+}));
 vi.mock('node:fs/promises', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:fs/promises')>()), realpath: vi.fn(),
 }));
@@ -27,6 +33,8 @@ describe('manager provider read assignment', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(realpath).mockImplementation(async (path) => String(path));
+    vi.mocked(realpathSync.native).mockImplementation((path) => String(path));
+    vi.mocked(statSync).mockReturnValue({ isFile: () => true, isDirectory: () => false } as Stats);
     vi.mocked(readWorkspaceRegistry).mockResolvedValue([]);
     call.mockResolvedValue(response);
     provider = makeProvider({ setup: () => ({ call }) });
@@ -61,6 +69,99 @@ describe('manager provider read assignment', () => {
       id: 'fixture-id', name: 'workspace', repositoryDirectories: ['/work/repo', '/work/second'],
     }]);
     expect(await invoke()).toEqual({ repositoryDirectories: ['/work/repo', '/work/second'], sensitivePaths: ['.env'] });
+  });
+
+  it.each(['explicit workspace', 'registry'] as const)(
+    'uses current members after removal within the same agent call through %s', async (source) => {
+      const workspace = { id: workspaceId, name: 'workspace', repositoryDirectories: ['/work/repo', '/work/second'] };
+      vi.mocked(readWorkspace).mockResolvedValue(workspace);
+      vi.mocked(readWorkspaceRegistry).mockResolvedValue([workspace]);
+      const original: ScopedReadRequest = { toolName: 'Read', toolInput: { file_path: '/work/second/public.txt' }, cwd: '/work/repo' };
+      const handler = vi.fn(async (request: ScopedReadRequest) => {
+        const result = classifyManagerToolPermission(request, 'ja', 'claude-sdk');
+        return result.decision === 'allow' ? { decision: 'allow' as const }
+          : { decision: 'deny' as const, reason: 'requires judge' };
+      });
+      call.mockImplementationOnce(async (_prompt, options) => {
+        const decide = options.onToolPermissionDecision!;
+        expect(await decide(original)).toEqual({ decision: 'allow' });
+        const updated = { ...workspace, repositoryDirectories: ['/work/repo'] };
+        vi.mocked(readWorkspace).mockResolvedValue(updated);
+        vi.mocked(readWorkspaceRegistry).mockResolvedValue([updated]);
+        expect(await decide(original)).toEqual({ decision: 'deny', reason: 'requires judge' });
+        return response;
+      });
+      const wrapped = withManagerReadScope(provider, '/work/repo', '/config', ['.env']);
+      expect(await wrapped.setup({ name: 'manager' }).call('prompt', {
+        cwd: '/work/repo', onToolPermissionDecision: handler,
+        ...(source === 'explicit workspace' ? { mcpServers: assignmentServer(JSON.stringify({ kind: 'workspace', workspaceId })) } : {}),
+      })).toEqual(response);
+      expect(handler.mock.calls.map(([request]) => request[managerReadScope])).toEqual([
+        { repositoryDirectories: ['/work/repo', '/work/second'], sensitivePaths: ['.env'] },
+        { repositoryDirectories: ['/work/repo'], sensitivePaths: ['.env'] },
+      ]);
+      expect(original[managerReadScope]).toBeUndefined();
+    },
+  );
+
+  it.each(['workspace', 'registry', 'realpath'] as const)(
+    'does not reuse a previous scope after a %s failure in the same agent call', async (failure) => {
+      const workspace = { id: workspaceId, name: 'workspace', repositoryDirectories: ['/work/repo'] };
+      vi.mocked(readWorkspace).mockResolvedValue(workspace);
+      const classifications: string[] = [];
+      const handler = vi.fn(async (request: ScopedReadRequest) => {
+        classifications.push(classifyManagerToolPermission(request, 'ja', 'claude-sdk').decision);
+        return { decision: 'allow' as const };
+      });
+      call.mockImplementationOnce(async (_prompt, options) => {
+        const decide = options.onToolPermissionDecision!;
+        const request = { toolName: 'Read', toolInput: { file_path: '/work/repo/public.txt' }, cwd: '/work/repo' };
+        await decide(request);
+        const error = new Error('fixture scope resolution failure');
+        if (failure === 'workspace') vi.mocked(readWorkspace).mockRejectedValue(error);
+        else if (failure === 'registry') vi.mocked(readWorkspaceRegistry).mockRejectedValue(error);
+        else vi.mocked(realpath).mockRejectedValue(error);
+        await decide(request);
+        return response;
+      });
+      const wrapped = withManagerReadScope(provider, '/work/repo', '/config', ['.env']);
+      expect(await wrapped.setup({ name: 'manager' }).call('prompt', {
+        cwd: '/work/repo', onToolPermissionDecision: handler,
+        ...(failure === 'workspace' ? { mcpServers: assignmentServer(JSON.stringify({ kind: 'workspace', workspaceId })) } : {}),
+      })).toEqual(response);
+      expect(handler.mock.calls.map(([request]) => request[managerReadScope])).toEqual([
+        { repositoryDirectories: ['/work/repo'], sensitivePaths: ['.env'] }, undefined,
+      ]);
+      expect(classifications).toEqual(['allow', 'judge']);
+    },
+  );
+
+  it('waits for each asynchronous scope resolution before invoking the handler', async () => {
+    const workspace = { id: workspaceId, name: 'workspace', repositoryDirectories: ['/work/repo'] };
+    vi.mocked(readWorkspace).mockResolvedValue(workspace);
+    const handler = vi.fn().mockResolvedValue({ decision: 'deny', reason: 'handler result' });
+    call.mockImplementationOnce(async (_prompt, options) => {
+      const decide = options.onToolPermissionDecision!;
+      const request = { toolName: 'Read', toolInput: { file_path: 'public.txt' }, cwd: '/work/repo' };
+      expect(await decide(request)).toEqual({ decision: 'deny', reason: 'handler result' });
+      const updated = { ...workspace, repositoryDirectories: [] };
+      let complete!: (value: typeof workspace) => void;
+      const pending = new Promise<typeof workspace>((resolve) => { complete = resolve; });
+      vi.mocked(readWorkspace).mockReturnValue(pending);
+      const decision = decide(request);
+      try {
+        await Promise.resolve();
+        expect(handler).toHaveBeenCalledOnce();
+      } finally { complete(updated); }
+      expect(await decision).toEqual({ decision: 'deny', reason: 'handler result' });
+      return response;
+    });
+    const wrapped = withManagerReadScope(provider, '/work/repo', '/config', ['.env']);
+    expect(await wrapped.setup({ name: 'manager' }).call('prompt', {
+      cwd: '/work/repo', onToolPermissionDecision: handler,
+      mcpServers: assignmentServer(JSON.stringify({ kind: 'workspace', workspaceId })),
+    })).toEqual(response);
+    expect(handler.mock.calls[1]![0][managerReadScope]).toEqual({ repositoryDirectories: [], sensitivePaths: ['.env'] });
   });
 
   it('does not fabricate a scope when registry resolution fails', async () => {
