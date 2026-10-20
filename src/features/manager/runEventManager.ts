@@ -24,7 +24,9 @@ export function createRunEventManager(cwd: string) {
   const getSession = async (signal: AbortSignal): Promise<ManagerConversationSession> => {
     if (session !== undefined) return session;
     const plan = createManagerConversationPlan(cwd, {});
-    mcp = await connectManagerMcp(cwd, undefined, plan.ctx.mcpServers);
+    mcp = await connectManagerMcp(cwd, undefined, plan.ctx.mcpServers, {
+      enableGoalExecutionTools: plan.ctx.providerType === 'claude' || plan.ctx.providerType === 'claude-sdk' || plan.ctx.providerType === 'codex',
+    });
     try {
       await plan.ctx.provider.preflight?.({
         cwd, abortSignal: signal, model: plan.ctx.model, providerOptions: plan.ctx.providerOptions,

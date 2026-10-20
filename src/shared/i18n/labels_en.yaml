@@ -435,7 +435,7 @@ manager:
   turnFailureNotification: |-
     The manager failed to process an event. Unprocessed events remain.
     Review the logs and configuration to resolve the event processing failure.
-    For a paused goal, enter /resume in the TUI and select it from the list. An aborted goal cannot be resumed.
+    For a paused goal, select it with /resume in the TUI, or request resumption in conversation with a supported provider and confirm the operation. An aborted goal cannot be resumed.
     Reason: {reason}
   goalExecutionUsage: "Select goal: /pause / /resume / /abort (no arguments)"
   answerHelp: "/answer: Select a pending inquiry from the list to answer (no arguments)."

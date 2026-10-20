@@ -85,6 +85,10 @@ export const listGoalsInputSchema = goalIdentityInputSchema.extend({
   errorOffset: readOffsetSchema.describe('Offset into individual saved-record errors; independent of the healthy goal offset.'),
 });
 export const goalWriteInputSchema = goalIdentityInputSchema.extend({ goalId: GoalIdSchema });
+export const abortGoalInputSchema = goalWriteInputSchema.extend({
+  reason: GoalWorkLogInputSchema.shape.summary.describe('Required reason for aborting the goal. Included in the operation submitted for human confirmation.'),
+});
+export type AbortGoalInput = z.infer<typeof abortGoalInputSchema>;
 export const reopenGoalInputSchema = goalWriteInputSchema.extend({
   reason: GoalWorkLogInputSchema.shape.summary.describe('Required reason for reopening the goal. Saved in the work log without trimming.'),
 });

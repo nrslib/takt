@@ -2,7 +2,6 @@ import { saveManagerEvent } from '../../infra/goals/events.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod/v4';
 import { GoalSummarySchema, type Goal, type ManagerGoalSummary } from '../../infra/goals/schema.js';
-import { isStdioServer } from '../../infra/providers/mcp/types.js';
 import { TAKT_MANAGER_MCP_SERVER_NAME } from './managerMcp.js';
 import { TAKT_MCP_MANAGER_TOOL_NAMES } from '../mcp/server.js';
 import { createMcpAdapter } from '../../infra/providers/mcp/index.js';
@@ -26,7 +25,7 @@ import { createManagerToolPermissionHandler } from './toolPermissionDecision.js'
 import type { ManagerPermissionGoal } from './toolPermissionJudge.js';
 
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
-import { MANAGER_ASSIGNMENT_ENV, findAssignedGoalRepository, resolveAssignedProjectRoot, resolveCurrentManagerAssignment, type ManagerAssignmentIdentity } from './assignment.js';
+import { withManagerAssignment, findAssignedGoalRepository, resolveAssignedProjectRoot, resolveCurrentManagerAssignment, type ManagerAssignmentIdentity } from './assignment.js';
 
 const summarySchema = GoalSummarySchema.extend({ repositoryDirectory: z.string().min(1).optional() })
   .refine((summary) => [
@@ -203,7 +202,7 @@ export function createManagerConversationSession(input: {
         try {
           const assignment = await getAssignment();
           const servers = plan.ctx.mcpServers === undefined ? undefined : Object.fromEntries(Object.entries(plan.ctx.mcpServers).map(([name, config]) => [
-            name, assignmentIdentity === undefined || name !== TAKT_MANAGER_MCP_SERVER_NAME || !isStdioServer(config) ? config : { ...config, env: { ...config.env, [MANAGER_ASSIGNMENT_ENV]: JSON.stringify(assignmentIdentity) } },
+            name, assignmentIdentity === undefined || name !== TAKT_MANAGER_MCP_SERVER_NAME ? config : withManagerAssignment(config, assignmentIdentity),
           ]));
           if (servers !== undefined) {
             const adapter = createMcpAdapter(plan.ctx.providerType);
