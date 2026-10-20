@@ -46,7 +46,9 @@ export async function runManager(input: { cwd: string; agentOverrides?: Assistan
   }
   await ensureDaemon();
   const plan = createManagerConversationPlan(cwd, input.agentOverrides ?? {});
-  const mcp = await connectManagerMcp(cwd, assignment, plan.ctx.mcpServers);
+  const mcp = await connectManagerMcp(cwd, assignment, plan.ctx.mcpServers, {
+    enableGoalExecutionTools: plan.ctx.providerType === 'claude' || plan.ctx.providerType === 'claude-sdk' || plan.ctx.providerType === 'codex',
+  });
   let session: ManagerConversationSession | undefined;
   let startupTask: Promise<readonly string[]> | undefined;
   try {

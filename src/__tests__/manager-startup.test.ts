@@ -106,9 +106,9 @@ describe('manager startup and teardown', () => {
       expect(doubles.connect).not.toHaveBeenCalled();
       expect(doubles.mount).not.toHaveBeenCalled();
     } else {
-      expect(doubles.connect).toHaveBeenCalledWith('/other/repository', {
+      expect(doubles.connect.mock.calls[0]?.slice(0, 3)).toEqual(['/other/repository', {
         kind: 'workspace', workspaceId: other.id, name: other.name, repositoryDirectories: other.repositoryDirectories,
-      }, undefined);
+      }, undefined]);
       expect(vi.mocked(selectOption).mock.invocationCallOrder[0]).toBeLessThan(doubles.mount.mock.invocationCallOrder[0]!);
     }
   });
@@ -118,6 +118,22 @@ describe('manager startup and teardown', () => {
     await expect(runManager({ cwd: '/repository' })).rejects.toThrow('interactive terminal');
     expect(doubles.plan).not.toHaveBeenCalled();
     expect(doubles.connect).not.toHaveBeenCalled();
+  });
+
+  it.each(['claude', 'claude-sdk', 'codex', 'opencode', 'mock'] as const)('exposes goal execution only when the %s conversation has a permission judge', async (providerType) => {
+    const usesJudge = providerType === 'claude' || providerType === 'claude-sdk' || providerType === 'codex';
+    doubles.plan.mockReturnValueOnce({
+      ctx: { lang: 'ja', providerType, provider: { preflight: doubles.preflight } },
+      strategy: { systemPrompt: 'manager fixture' },
+      ...(usesJudge ? { permissionJudge: { language: 'ja', systemPrompt: 'judge fixture',
+        managerPersona: 'manager fixture', managerPolicy: 'policy fixture',
+        resolution: { provider: providerType, model: undefined, providerOptions: {} } } } : {}),
+    });
+
+    await runManager({ cwd: '/repository' });
+
+    expect(doubles.connect.mock.calls[0]?.[3]?.enableGoalExecutionTools === true).toBe(usesJudge);
+    expect(doubles.mount).toHaveBeenCalledOnce();
   });
 
   it('preflights Codex with a strict conversation schema before opening the TUI', async () => {
@@ -169,7 +185,7 @@ describe('manager startup and teardown', () => {
     complete();
     await run;
     expect(doubles.mount).toHaveBeenCalledTimes(1);
-    expect(doubles.connect).toHaveBeenCalledWith('/canonical/repository', expect.objectContaining({ kind: 'repository' }), userServers);
+    expect(doubles.connect.mock.calls[0]?.slice(0, 3)).toEqual(['/canonical/repository', expect.objectContaining({ kind: 'repository' }), userServers]);
     expect(doubles.session).toHaveBeenCalledWith(expect.objectContaining({
       plan: expect.objectContaining({ ctx: expect.objectContaining({ mcpServers: servers }) }),
     }));
@@ -185,7 +201,7 @@ describe('manager startup and teardown', () => {
     });
     doubles.connect.mockResolvedValueOnce({ client: {}, servers, dispose });
     await runManager({ cwd: '/repository' });
-    expect(doubles.connect).toHaveBeenCalledWith('/canonical/repository', expect.objectContaining({ kind: 'repository' }), userServers);
+    expect(doubles.connect.mock.calls[0]?.slice(0, 3)).toEqual(['/canonical/repository', expect.objectContaining({ kind: 'repository' }), userServers]);
     expect(doubles.session).toHaveBeenCalledWith(expect.objectContaining({
       plan: expect.objectContaining({ ctx: expect.objectContaining({ mcpServers: servers, providerOptions }) }),
     }));

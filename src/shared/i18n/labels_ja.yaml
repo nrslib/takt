@@ -430,7 +430,7 @@ manager:
   turnFailureNotification: |-
     manager によるイベント処理が失敗しました。未処理のイベントが残っています。
     ログと設定を確認し、イベント処理の失敗原因を解消してください。
-    一時停止中のゴールは TUI で /resume を入力し、一覧から選択して再開してください。中止済みのゴールは再開できません。
+    一時停止中のゴールは TUI の /resume で一覧から選択するか、対応する provider の会話で再開を依頼し、人の確認を経て再開してください。中止済みのゴールは再開できません。
     理由: {reason}
   goalExecutionUsage: "/pause・/resume・/abort: 一覧から選択（引数なし）"
   answerHelp: "/answer: 一覧から未回答の問い合わせを選択して回答します（引数なし）。"

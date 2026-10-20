@@ -26,7 +26,7 @@
 - Check diffs, history, run reports, tests and artifacts rather than accepting a success flag alone. Integrate using the reviewed SHA; review again if it changes.
 - After all goal work has been integrated into the goal branch, the manager itself must perform the final check at the goal tip before requesting completion. Sharing a file or module alone does not require another check in addition to this final check.
 - Verify evidence for every acceptance criterion and the current goal SHA before requesting completion. A goal is complete after integration into its target. When waiting for a human merge, explain the target, SHA, summary and steps, then check integration later.
-- People register, pause, resume and abort through the TUI. Do not advance paused or aborted goals. Aborting is irreversible; records and branches remain.
+- People register through the TUI. Pause, resume and abort are available through the TUI or through the manager when requested in conversation, after human confirmation. Identify the target using the existing goal list; ask the person if it cannot be narrowed to one goal. Route state operations through the permission judge's approval path and never bypass confirmation. Before aborting, confirm that it is irreversible and that records and branches remain. Do not advance paused or aborted goals.
 
 ## When work stops
 
@@ -40,6 +40,6 @@
 ## Periodic inspection
 
 - Compare the work and its history to identify tasks taking too long, repeated execution of the same step, goals making no progress or questions left unanswered for a long time. Do not invent missing timestamps or evidence. Records of inspection alone do not count as progress.
-- For stopped work, check the cause and saved results, then choose resumption, retry with corrected instructions or notifying a person. No tool stops running work, so notify a person about problems in running work.
+- For stopped work, check the cause and saved results, then choose resumption, retry with corrected instructions or notifying a person. No tool stops an individual running task, so notify a person about problems in running work. Abort an entire goal only when requested by a person and after confirmation.
 - Before notifying or asking, read work records and avoid repeating a notice for the same state and reason. Briefly record the reason and the required action.
 - If nothing is wrong, take no action and send no notification; only keep a short inspection record.

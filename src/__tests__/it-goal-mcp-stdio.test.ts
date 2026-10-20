@@ -9,28 +9,234 @@ import { basename,join } from 'node:path';
 import { createElement } from 'react';
 import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
 import { z } from 'zod/v4';
+import { connectTaktMcpServerToStdio } from '../app/mcp/index.js';
+import { MANAGER_ASSIGNMENT_ENV } from '../features/manager/assignment.js';
 import { createManagerConversationPlan } from '../features/manager/conversationPlan.js';
 import { ensureDaemon } from '../features/daemon/lifecycle.js';
+import * as autoRun from '../features/manager/autoRun.js';
 import { createManagerConversationSession } from '../features/manager/conversationSession.js';
 import { connectManagerMcp } from '../features/manager/managerMcp.js';
+import { startManagerMcpConnection } from '../features/manager/managerMcpConnection.js';
 import { ManagerView } from '../features/manager/ManagerView.js';
 import { readManagerDisplayEvents } from '../features/manager/savedEvents.js';
 import { createTaktMcpServer,TAKT_MCP_MANAGER_TOOL_NAMES } from '../features/mcp/server.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 import { invalidateResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
 import { GoalStore } from '../infra/goals/store.js';
-import { readManagerEvents } from '../infra/goals/events.js';
+import { readManagerEvents, saveManagerEvent } from '../infra/goals/events.js';
+import { GoalAbortMonitor, GoalAbortedError } from '../features/tasks/execute/goalAbortMonitor.js';
 import { resetScenario,setMockScenario } from '../infra/mock/index.js';
 import { TaskRunner } from '../infra/task/runner.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 import { goalId,goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 
+const stdioTransport = vi.hoisted(() => vi.fn());
+vi.mock('@modelcontextprotocol/sdk/server/stdio.js', () => ({ StdioServerTransport: stdioTransport }));
+
 vi.mock('../features/daemon/lifecycle.js', () => ({ ensureDaemon: vi.fn(async () => {}) }));
 
 vi.mock('node:crypto', async (importOriginal) => {
   const original = await importOriginal<typeof import('node:crypto')>();
   return { ...original, randomUUID: vi.fn(original.randomUUID) };
+});
+
+describe('manager goal execution tools through MCP', () => {
+  const names = ['takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal'];
+  let cwd: string;
+  let store: GoalStore;
+  let client: Client;
+  let server: ReturnType<typeof createTaktMcpServer>;
+  let confirmation: Awaited<ReturnType<typeof startManagerMcpConnection>>;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.stubEnv('TAKT_NOTIFY_WEBHOOK', undefined);
+    const root = join(process.cwd(), '.tmp');
+    mkdirSync(root, { recursive: true });
+    cwd = realpathSync(mkdtempSync(join(root, 'goal-execution-mcp-')));
+    initializeGitFixture(cwd, []);
+    mkdirSync(join(cwd, '.takt'));
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nmanager:\n  auto_run: false\n');
+    execFileSync('git', ['branch', goalRecord().branch], { cwd, stdio: 'pipe' });
+    store = new GoalStore(cwd);
+    await store.create(goalRecord());
+    vi.spyOn(autoRun, 'ensureManagerRun').mockResolvedValue(undefined);
+    confirmation = await startManagerMcpConnection(cwd);
+    const goalExecutionConnection = confirmation;
+    const options = { toolSet: 'manager' as const, allowedProjectRoot: cwd, goalExecutionConnection };
+    server = createTaktMcpServer({}, options);
+    client = new Client({ name: 'goal-execution-test', version: '1' });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await server.connect(b);
+    await client.connect(a);
+  });
+  afterEach(async () => {
+    try { await client.close(); }
+    finally {
+      try { await server.close(); } finally { await confirmation.dispose(); }
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+      invalidateResolvedConfigCache(cwd);
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('exposes all three state operations to the manager without adding approval passthroughs', async () => {
+    const tools = (await client.listTools()).tools;
+    expect(tools.map(({ name }) => name)).toEqual(expect.arrayContaining(names));
+    for (const name of names) expect(TAKT_MCP_MANAGER_TOOL_NAMES.some((allowed) => allowed === name)).toBe(false);
+  });
+
+  it.each([false, true])('transfers goal execution exposure to the actual MCP child: %s', async (enableGoalExecutionTools) => {
+    const connect: (
+      cwd: string,
+      assignment: Parameters<typeof connectManagerMcp>[1],
+      servers: Parameters<typeof connectManagerMcp>[2],
+      options: { enableGoalExecutionTools: boolean },
+    ) => ReturnType<typeof connectManagerMcp> = connectManagerMcp;
+    const connection = await connect(cwd, undefined, undefined, { enableGoalExecutionTools });
+    try {
+      const tools = (await connection.client.listTools()).tools.map(({ name }) => name);
+      for (const name of names) expect(tools.includes(name)).toBe(enableGoalExecutionTools);
+      expect(tools).toContain('takt_list_goals');
+    } finally { await connection.dispose(); }
+  }, 30_000);
+
+  it.each([
+    { name: 'takt_pause_goal', executionStatus: 'active' },
+    { name: 'takt_resume_goal', executionStatus: 'paused' },
+    { name: 'takt_abort_goal', executionStatus: 'active' },
+  ] as const)('rejects $name through the public entrypoint despite the former enable flag', async ({ name, executionStatus }) => {
+    await store.update(goalId, (goal) => ({ ...goal, executionStatus }));
+    vi.stubEnv(MANAGER_ASSIGNMENT_ENV, JSON.stringify({ kind: 'repository', repositoryDirectory: cwd }));
+    const originalArgv = process.argv;
+    const reader = new Client({ name: 'public-goal-execution-test', version: '1' });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    stdioTransport.mockReturnValueOnce(b);
+    try {
+      process.argv = [...originalArgv.slice(0, 2), '--tool-set', 'manager', '--enable-goal-execution-tools'];
+      await connectTaktMcpServerToStdio();
+      await reader.connect(a);
+      const tools = (await reader.listTools()).tools.map(({ name }) => name);
+      expect(tools).toContain('takt_list_goals');
+      const goals = await reader.callTool({ name: 'takt_list_goals', arguments: { cwd } });
+      expect(goals.isError).not.toBe(true);
+      for (const operation of names) expect(tools).not.toContain(operation);
+      const result = await reader.callTool({ name, arguments: {
+        cwd, goalId, ...(name === 'takt_abort_goal' ? { reason: '作業を取りやめます' } : {}),
+      } });
+      expect(result.isError).toBe(true);
+      expect((await store.get(goalId)).executionStatus).toBe(executionStatus);
+      expect(ensureDaemon).not.toHaveBeenCalled();
+    } finally {
+      process.argv = originalArgv;
+      try { await reader.close(); } finally { await b.close(); }
+    }
+  });
+
+  it.each([
+    { toolSet: 'all', connected: false },
+    { toolSet: 'all', connected: true },
+    { toolSet: 'read-only', connected: false },
+    { toolSet: 'read-only', connected: true },
+    { toolSet: 'manager', connected: false },
+  ] as const)('keeps goal execution unavailable for $toolSet connection (connected: $connected)', async ({ toolSet, connected }) => {
+    const goalExecutionConnection = connected ? confirmation : undefined;
+    const options = { toolSet, allowedProjectRoot: cwd, goalExecutionConnection };
+    const restricted = createTaktMcpServer({}, options);
+    const reader = new Client({ name: 'restricted-goal-execution-test', version: '1' });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    try {
+      await restricted.connect(b);
+      await reader.connect(a);
+      const tools = (await reader.listTools()).tools.map(({ name }) => name);
+      for (const name of names) {
+        expect(tools).not.toContain(name);
+        const result = await reader.callTool({ name, arguments: { cwd, goalId, reason: '中止します' } });
+        expect(result.isError).toBe(true);
+      }
+      expect((await store.get(goalId)).executionStatus).toBe('active');
+    } finally { try { await reader.close(); } finally { await restricted.close(); } }
+  });
+
+  it('pauses, resumes and aborts the same goal while preserving its records and branch', async () => {
+    const question = { id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human' as const, kind: 'question' as const,
+      body: '出力形式を選んでください', status: 'pending' as const };
+    await store.update(goalId, (goal) => ({ ...goal, questions: [question] }));
+    const runner = new TaskRunner(cwd);
+    const task = runner.addTask('未実行の作業', { workflow: 'default', worktree: false, goal_id: goalId,
+      goal_purpose: '結果を確認する', branch: goalRecord().branch });
+    const unrelated = runner.addTask('別の作業', { workflow: 'default', worktree: false });
+    const before = await store.get(goalId);
+    const branchSha = () => execFileSync('git', ['rev-parse', goalRecord().branch], { cwd, encoding: 'utf8' }).trim();
+    const sha = branchSha();
+    const controller = new AbortController();
+    const monitor = new GoalAbortMonitor(cwd, goalId, controller);
+    const invoke = async (name: string, extra: Record<string, unknown> = {}) => {
+      const result = await client.callTool({ name, arguments: { cwd, goalId, ...extra } });
+      expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+      return JSON.parse(firstTextContent(result.content)) as Record<string, unknown>;
+    };
+    try {
+      expect((await store.get(goalId)).executionStatus).toBe('active');
+      saveManagerEvent(cwd, { kind: 'registered', goalId });
+      await invoke('takt_pause_goal');
+      expect(await store.get(goalId)).toMatchObject({ id: goalId, executionStatus: 'paused', questions: [question] });
+      expect(runner.listPendingTaskItems().map(({ name }) => name)).toContain(task.name);
+      expect(readManagerEvents(cwd).map(({ event }) => event.goalId)).toContain(goalId);
+      monitor.check();
+      expect(controller.signal.aborted).toBe(false);
+      expect(autoRun.ensureManagerRun).not.toHaveBeenCalled();
+
+      await invoke('takt_resume_goal');
+      expect((await store.get(goalId)).executionStatus).toBe('active');
+      expect(readManagerEvents(cwd).map(({ event }) => event)).toContainEqual(expect.objectContaining({ kind: 'resumed', goalId }));
+      expect(ensureDaemon).toHaveBeenCalledExactlyOnceWith();
+      expect(autoRun.ensureManagerRun).toHaveBeenCalledExactlyOnceWith(cwd);
+      expect((await store.get(goalId)).questions).toEqual([question]);
+      monitor.check();
+      expect(controller.signal.aborted).toBe(false);
+
+      await invoke('takt_abort_goal', { reason: '要件の変更により中止します' });
+      const aborted = await store.get(goalId);
+      expect(aborted).toMatchObject({ id: goalId, executionStatus: 'aborted', objective: before.objective,
+        branch: before.branch, workLog: before.workLog, acceptanceCriteria: before.acceptanceCriteria });
+      expect(aborted.questions).toEqual([expect.objectContaining({ id: question.id, status: 'withdrawn' })]);
+      expect(readManagerEvents(cwd).filter(({ event }) => event.goalId === goalId)).toEqual([]);
+      expect(runner.listTaskStateItems()).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: task.name, status: 'failed' }),
+        expect.objectContaining({ name: unrelated.name, status: 'pending' }),
+      ]));
+      expect(branchSha()).toBe(sha);
+      await vi.waitFor(() => expect(controller.signal.reason).toBeInstanceOf(GoalAbortedError), { timeout: 3000 });
+      const result = await client.callTool({ name: 'takt_resume_goal', arguments: { cwd, goalId } });
+      expect(result.isError).toBe(true);
+      expect(await store.get(goalId)).toEqual(aborted);
+      expect(ensureDaemon).toHaveBeenCalledTimes(1);
+      expect(autoRun.ensureManagerRun).toHaveBeenCalledTimes(1);
+    } finally { monitor.stop(); }
+  });
+
+  it('rejects a goal operation outside the current assignment without changing either goal', async () => {
+    const outside = realpathSync(mkdtempSync(join(process.cwd(), '.tmp', 'outside-goal-execution-')));
+    try {
+      initializeGitFixture(outside, []);
+      const outsideStore = new GoalStore(outside);
+      await outsideStore.create(goalRecord());
+      expect((await client.listTools()).tools.map(({ name }) => name)).toEqual(expect.arrayContaining(names));
+      for (const name of names) {
+        const result = await client.callTool({ name, arguments: {
+          cwd: outside, goalId, ...(name === 'takt_abort_goal' ? { reason: '中止します' } : {}),
+        } });
+        expect(result.isError).toBe(true);
+      }
+      expect((await store.get(goalId)).executionStatus).toBe('active');
+      expect((await outsideStore.get(goalId)).executionStatus).toBe('active');
+      expect(ensureDaemon).not.toHaveBeenCalled();
+      expect(autoRun.ensureManagerRun).not.toHaveBeenCalled();
+    } finally { rmSync(outside, { recursive: true, force: true }); }
+  });
 });
 
 it('keeps the workspace assignment after removing the original repository in the same MCP session', async () => {

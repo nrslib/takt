@@ -75,6 +75,14 @@ These commands take no arguments. Use ↑/↓ to choose, Enter to select, or Esc
 
 Aborting is irreversible. Goal records and branches remain. Answers are saved for the run manager's next decision. Receiving answers from Slack is not implemented.
 
+## Goal operations in conversation
+
+With a Claude (claude-sdk) or Codex manager, ask to pause the previous goal, resume a particular goal, or abort it with a reason, such as changed requirements. The manager identifies the target through the existing list and asks if it cannot be narrowed to one goal. Registration remains in the TUI.
+
+Pause, resume and abort go through the permission judge and execute after human confirmation. Pending confirmation does not execute the operation. Before aborting, confirm that it cannot be undone and that goal records and branches remain. Running tasks continue while paused; resuming advances deferred work. Aborting interrupts running tasks and invalidates unstarted tasks. An aborted goal cannot resume.
+
+Providers without the permission judge do not expose conversation state tools. TUI `/pause`, `/resume` and `/abort` remain available.
+
 ## Integration and completion
 
 Manager splits work into independently checkable results. Work that does not need each other's results or share change targets runs in parallel within specified ordering and concurrency limits. Human constraints carry into each instruction, with one owner for checks performed once per goal.
