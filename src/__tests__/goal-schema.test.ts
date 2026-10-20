@@ -63,11 +63,39 @@ describe('goal execution state and question participants', () => {
     expect(resumed).toEqual(waiting);
   });
 
-  it.each(['active', 'paused'] as const)('permits abort from %s and rejects subsequent resume', async (executionStatus) => {
+  it('pauses and resumes the same active goal while preserving its progress', () => {
+    const goal = goalRecord();
+    const paused = transitionGoalExecution(goal, 'paused');
+    expect(paused).toEqual({ ...goal, executionStatus: 'paused' });
+    expect(transitionGoalExecution(paused, 'active')).toEqual(goal);
+  });
+
+  it.each(['active', 'paused'] as const)('rejects a repeated %s execution transition', (executionStatus) => {
+    const goal = { ...goalRecord(), executionStatus };
+    expect(() => transitionGoalExecution(goal, executionStatus)).toThrow(Error);
+  });
+
+  it.each([
+    { executionStatus: 'active', target: 'paused' },
+    { executionStatus: 'paused', target: 'active' },
+  ] as const)('rejects changing a completed goal from $executionStatus to $target', ({ executionStatus, target }) => {
+    const completed = GoalSchema.parse({
+      ...goalRecord(), status: 'completed', executionStatus,
+      completion: {
+        goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', targetSha: 'b'.repeat(40),
+        summary: 'Completion evidence',
+        changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+        instructions: ['git merge reviewed SHA'],
+      },
+    });
+    expect(() => transitionGoalExecution(completed, target)).toThrow(Error);
+  });
+
+  it.each(['active', 'paused', 'aborted'] as const)('permits abort from %s and rejects subsequent pause and resume', async (executionStatus) => {
     const aborted = transitionGoalExecution({ ...goalRecord(), executionStatus }, 'aborted');
     expect(aborted).toMatchObject({ status: 'created', executionStatus: 'aborted' });
-    expect(() => transitionGoalExecution(aborted, 'active')).toThrow();
-    expect(() => transitionGoalExecution(aborted, 'paused')).toThrow();
+    expect(() => transitionGoalExecution(aborted, 'active')).toThrow(new Error('An aborted goal cannot resume'));
+    expect(() => transitionGoalExecution(aborted, 'paused')).toThrow(new Error('An aborted goal cannot resume'));
   });
 
   it.each(['active', 'paused', 'aborted'] as const)('rejects abort of a completed %s goal except for an already aborted retry', (executionStatus) => {
@@ -81,8 +109,11 @@ describe('goal execution state and question participants', () => {
       },
     });
     const before = structuredClone(completed);
-    if (executionStatus === 'aborted') expect(transitionGoalExecution(completed, 'aborted')).toEqual(before);
-    else expect(() => transitionGoalExecution(completed, 'aborted')).toThrow(/completed/iu);
+    if (executionStatus === 'aborted') {
+      expect(transitionGoalExecution(completed, 'aborted')).toEqual(before);
+      expect(() => transitionGoalExecution(completed, 'active')).toThrow(new Error('An aborted goal cannot resume'));
+      expect(() => transitionGoalExecution(completed, 'paused')).toThrow(new Error('An aborted goal cannot resume'));
+    } else expect(() => transitionGoalExecution(completed, 'aborted')).toThrow(new Error('A completed goal cannot be aborted'));
     expect(completed).toEqual(before);
   });
 

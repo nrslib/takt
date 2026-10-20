@@ -95,7 +95,7 @@ For project, workspace and global scopes, edit and confirm the proposed permissi
 
 With a Claude (claude-sdk) or Codex manager, ask to pause the previous goal, resume a particular goal, or abort it with a reason, such as changed requirements. The manager identifies the target through the existing list and asks if it cannot be narrowed to one goal. Registration remains in the TUI.
 
-Pause, resume and abort go through the permission judge and execute after human confirmation. Pending confirmation does not execute the operation. Before aborting, confirm that it cannot be undone and that goal records and branches remain. Running tasks continue while paused; resuming advances deferred work. Aborting interrupts running tasks and invalidates unstarted tasks. An aborted goal cannot resume.
+Pause, resume and abort go through the permission judge and execute after human confirmation. Pending confirmation does not execute the operation. Before aborting, confirm that it cannot be undone and that goal records and branches remain. Running tasks continue while paused; resuming advances deferred work. Aborting interrupts running tasks and invalidates unstarted tasks. An aborted goal cannot resume. Completed goals cannot be paused or resumed; only active goals can be paused, and only paused goals can resume.
 
 Providers without the permission judge do not expose conversation state tools. TUI `/pause`, `/resume` and `/abort` remain available.
 
