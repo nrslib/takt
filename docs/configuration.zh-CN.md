@@ -258,7 +258,7 @@ caccia:
 
 `caccia` effect 只有在 `enabled: true` 时等待 CodeRabbit；关闭时跳过审查等待并返回 `skipped` 和 `skipReason: config_disabled`。无论该开关为何值，都可以手动运行 `takt caccia <PR-number>`。默认值为关闭、1,800,000 毫秒、3 轮和 workflow `caccia`。如果项目中存在 `caccia` 配置块，它整体优先于全局块；所选配置块中省略的字段使用上述默认值。将 `workflow` 设置为 workflow 标识符即可替换 builtin workflow。
 
-如果 GitHub PR head 与 clone 开始时的 HEAD 不一致，effect 会在执行前每隔2秒重新获取 PR 信息，包含获取时间在内最多等待60秒。只有与预期 SHA 一致时才继续；到期仍不一致则返回包含预期 SHA 和最后获取的 SHA 的 `error`。存在执行元数据和 push 记录器时，记录跳过结果前也会执行此检查，因此关闭或未配置时仍可能等待。此等待为固定值，独立于审查设置 `wait_timeout_ms`。
+如果 GitHub PR head 与 clone 开始时的 HEAD 不一致，effect 会在执行前每隔2秒重新获取 PR 信息，包含获取时间在内最多等待60秒。同一次 PR 信息获取中观测到不同 head 时，也在同一期限内重试。只有与预期 SHA 一致时才继续；到期仍不一致则返回包含预期 SHA 和最后观测到的 SHA 的 `error`。如果最后一次观测不一致，还会显示冲突的两个 SHA。认证失败等其他获取异常、PR 身份信息变化或取消都会立即导致失败。存在执行元数据和 push 记录器时，记录跳过结果前也会执行此检查，因此关闭或未配置时仍可能等待。此等待为固定值，独立于审查设置 `wait_timeout_ms`。
 
 `wait_timeout_ms` 规定初次审查和每次推送后复审的等待期限，重新请求审查也包含在内。若审查限额通知给出的可重试时间早于期限，Caccia 会在该时间到达时请求一次审查；若可重试时间为期限或更晚，则立即跳过。收到限额通知后，审查到期限仍未完成时也会跳过。未收到限额通知时，初次等待超时会跳过，推送后的等待超时会记录为错误。单独命令在跳过或出错时以非零状态退出；system effect 在跳过时返回 `success: true` 与 `outcome: 'skipped'`，出错时返回 `success: false` 和 `error`，供 workflow 分支使用。
 

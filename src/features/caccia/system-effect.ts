@@ -1,7 +1,7 @@
 import type { SystemStepServicesOptions } from '../../core/workflow/system/system-step-services.js';
 import type { PullRequestContext } from '../../core/workflow/pr-context.js';
 import { detectVcsProvider } from '../../infra/git/detect.js';
-import type { PrDetails, PrExecutionContext } from '../../core/workflow/system/pr-execution-context.js';
+import { PrHeadObservationMismatchError, type PrDetails, type PrExecutionContext } from '../../core/workflow/system/pr-execution-context.js';
 import { getGitProvider, type GitProvider } from '../../infra/git/index.js';
 import { resolveConfigValue } from '../../infra/config/index.js';
 import { runGitCommandAbortable } from '../../infra/task/clone-exec.js';
@@ -44,21 +44,29 @@ async function waitForExpectedPrHead(
   const deadline = Date.now() + HEAD_WAIT_MS;
   const controller = new AbortController();
   const signal = callerSignal === undefined ? controller.signal : AbortSignal.any([callerSignal, controller.signal]);
-  let lastObservedHeadSha: string | undefined;
+  let lastObservedHead: string | undefined;
   const timeoutError = (): Error => new Error(
-    `${failureMessage} (expected ${expectedHeadSha}, ${lastObservedHeadSha === undefined
-      ? 'no PR head was fetched' : `last observed ${lastObservedHeadSha}`})`,
+    `${failureMessage} (expected ${expectedHeadSha}, ${lastObservedHead === undefined
+      ? 'no PR head was fetched' : `last observed ${lastObservedHead}`})`,
   );
   const timeout = setTimeout(() => controller.abort(timeoutError()), HEAD_WAIT_MS);
   try {
     while (true) {
       signal.throwIfAborted();
-      const details = await provider.fetchPrDetails(context.prNumber, projectCwd, signal);
+      let headMatches = false;
+      try {
+        const details = await provider.fetchPrDetails(context.prNumber, projectCwd, signal);
+        signal.throwIfAborted();
+        assertPrIdentity(context, details);
+        lastObservedHead = details.headSha;
+        headMatches = details.headSha === expectedHeadSha;
+      } catch (error) {
+        if (!(error instanceof PrHeadObservationMismatchError)) throw error;
+        lastObservedHead = `${error.lastHeadSha} (inconsistent with ${error.firstHeadSha})`;
+      }
       signal.throwIfAborted();
-      assertPrIdentity(context, details);
-      lastObservedHeadSha = details.headSha;
       if (Date.now() >= deadline) throw timeoutError();
-      if (lastObservedHeadSha === expectedHeadSha) return;
+      if (headMatches) return;
       await new Promise<void>((resolve, reject) => {
         const abort = (): void => {
           clearTimeout(pollTimer);
