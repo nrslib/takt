@@ -245,7 +245,7 @@ describe('manager TUI startup and polling', () => {
 
   it.each(['assignment', 'questions', 'goals'] as const)('preserves unchanged polling displays and updates changed %s in the same screen', async (field) => {
     let assignment = { kind: 'workspace' as const, workspaceId: '650e8400-e29b-41d4-a716-446655440002', name: 'Original workspace', repositoryDirectories: [cwd] };
-    let snapshot = { events: [], diagnostics: [], questions: [{ goalId: goalRecord().id, objective: 'Question fixture', question: {
+    let snapshot = { events: [], diagnostics: [], questions: [{ goalId: goalRecord().id, repositoryDirectory: cwd, objective: 'Question fixture', question: {
       id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human' as const,
       status: 'pending' as const, body: 'Original question',
     } }], goals: [{ id: goalRecord().id, objective: 'Original paused goal', status: 'created' as const, executionStatus: 'paused' as const }] };
@@ -323,7 +323,7 @@ describe('manager TUI startup and polling', () => {
     const readEvents = vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], questions: [], goals: [] });
     const context = mount('en', undefined, repository);
     try {
-      await waitFor(() => expect(readEvents).toHaveBeenCalledWith(cwd, 'en'));
+      await waitFor(() => expect(readEvents).toHaveBeenCalledWith(cwd, 'en', repository));
       context.call.mockImplementationOnce(async (_prompt, options) => {
         options.onStream?.({ type: 'tool_use', data: { id: 'add-b', tool: 'takt_add_workspace_repository', input: { repositoryDirectory: repositoryB } } });
         savedWorkspace = workspace;
@@ -336,8 +336,10 @@ describe('manager TUI startup and polling', () => {
       await waitFor(() => expect(promptFrame(context)).toContain('add B and remove A'));
       context.app.stdin.write(ENTER);
       await waitFor(() => expect(context.app.lastFrame()).toContain('A + B (1)'));
-      expect(readEvents).toHaveBeenCalledWith(repositoryB, 'en');
-      expect(readEvents.mock.calls.every(([directory, language]) => directory === repositoryB && language === 'en')).toBe(true);
+      expect(readEvents).toHaveBeenCalledWith(cwd, 'en', expect.objectContaining({ repositoryDirectories: [repositoryB] }));
+      expect(readEvents.mock.calls.every(([directory, language, assignment]) =>
+        directory === cwd && language === 'en' && assignment?.repositoryDirectories.length === 1
+        && assignment.repositoryDirectories[0] === repositoryB)).toBe(true);
       expect(await context.session.getAssignment()).toMatchObject({ kind: 'workspace', workspaceId: workspace.id, repositoryDirectories: [repositoryB] });
     } finally { context.app.unmount(); await context.session.close(); }
   });

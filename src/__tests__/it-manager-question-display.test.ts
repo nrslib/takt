@@ -1,6 +1,14 @@
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>();
+  return { ...actual, unlinkSync: vi.fn(actual.unlinkSync) };
+});
 vi.mock('../infra/goals/events.js', async (original) => ({ ...await original<typeof import('../infra/goals/events.js')>(), saveManagerEvent: vi.fn() }));
 vi.mock('../features/daemon/lifecycle.js', () => ({ ensureDaemon: vi.fn(async () => {}) }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
+vi.mock('../features/tui/PromptInput.js', async (original) => {
+  const actual = await original<typeof import('../features/tui/PromptInput.js')>();
+  return { ...actual, PromptInput: vi.fn(actual.PromptInput) };
+});
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { cleanup,render } from 'ink-testing-library';
@@ -34,6 +42,9 @@ import { TaskRunner } from '../infra/task/runner.js';
 import { TaskStore } from '../infra/task/store.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { goalId,goalRecord } from './helpers/goal-fixtures.js';
+import { registerManagerTypedAnswerTests } from './helpers/manager-typed-answers.js';
+
+registerManagerTypedAnswerTests();
 
 vi.mock('node:child_process', async (original) => {
   const actual = await original<typeof import('node:child_process')>();
@@ -65,7 +76,6 @@ beforeEach(() => {
   invalidateGlobalConfigCache();
   invalidateResolvedConfigCache(cwd);
 });
-
 afterEach(async () => {
   app?.unmount();
   app = undefined;
@@ -152,6 +162,7 @@ it.each(['choice', 'free text'] as const)('persists only the selected inquiry th
   const other = await store.create({ ...saved, id: '550e8400-e29b-41d4-a716-446655440001' });
   const candidates = (await readManagerDisplayEvents(cwd, 'en')).questions;
   const selected = candidates[1]!;
+  if (selected.goalId === null) throw new Error('Expected a goal inquiry');
   const untouched = await store.get(selected.goalId === saved.id ? other.id : saved.id);
   await send('/answer');
   await vi.waitFor(() => {
@@ -548,7 +559,6 @@ it('shows compact pending questions and an ID-free answer hint when notification
   expect(saved.questions).toEqual(expect.arrayContaining([
     expect.objectContaining({ id: added.questionId, ...input, status: 'pending' }),
   ]));
-
   session = createManagerConversationSession({
     cwd,
     plan: {
@@ -557,7 +567,6 @@ it('shows compact pending questions and an ID-free answer hint when notification
     },
   });
   app = render(createElement(ManagerView, { cwd, lang: 'ja', session, initialDiagnostics: [], onExit: vi.fn() }));
-
   await vi.waitFor(() => {
     const frame = app!.lastFrame()!;
     const rows = frame.split('\n');
@@ -570,7 +579,6 @@ it('shows compact pending questions and an ID-free answer hint when notification
       for (const option of input.options) expect(row).not.toContain(option);
     }
   });
-
   app.unmount();
   await store.update(goalId, (goal) => withdrawGoalQuestion(goal, added.questionId));
   const display = await readManagerDisplayEvents(cwd);
@@ -578,7 +586,6 @@ it('shows compact pending questions and an ID-free answer hint when notification
   expect(display.diagnostics).toEqual([]);
   expect(display.questions.map(({ question }) => question.id)).toEqual([remaining.questionId]);
   app = render(createElement(ManagerView, { cwd, lang: 'ja', session, initialDiagnostics: [], onExit: vi.fn() }));
-
   await vi.waitFor(() => {
     const frame = app!.lastFrame();
     expect(frame).toContain('保存先はどこですか');
@@ -601,7 +608,7 @@ it.each([true, false])('shows human questions and their saved automatic notifica
   saved = appendGoalNotification(saved, { kind: 'question', body: `関連質問 ${second.questionId}: 本文中のID` }, policy);
   await new GoalStore(cwd).create(saved);
   const display = await readManagerDisplayEvents(cwd);
-  expect(display.questions.map(({ question }) => question.id)).toEqual([human.questionId, second.questionId]);
+  expect(display.questions.map(({ question }) => question.id).sort()).toEqual([human.questionId, second.questionId].sort());
   expect(display.events.map(({ id }) => JSON.parse(id)[2])).toEqual(saved.notifications!.filter(({ kind }) => enabled || kind !== 'question').map(({ id }) => id));
   session = createManagerConversationSession({
     cwd,
@@ -631,7 +638,6 @@ it.each(['ja', 'en'] as const)('renders saved notification text in the %s TUI la
     recordedAt: '2026-10-08T00:00:00Z',
   }] };
   const { store, call } = await mountGoalControls(lang, saved);
-
   await vi.waitFor(() => {
     const frame = app!.lastFrame()!;
     const rows = frame.split('\n');
@@ -666,7 +672,6 @@ it.each([
   expect.soft(display.events[0]!.message.split('\n').slice(2, 2 + body.split('\n').length).join('\n')).toBe(body);
   expect(await store.get(saved.id)).toEqual(saved);
   expect(call).not.toHaveBeenCalled();
-
   await vi.waitFor(() => {
     const frame = app!.lastFrame()!;
     expect(frame.normalize('NFC').replace(/\s+/gu, '')).toContain(body.normalize('NFC').replace(/\s+/gu, ''));

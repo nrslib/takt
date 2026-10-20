@@ -277,13 +277,13 @@ describe('manager TUI /go', () => {
   });
 
   it.each(['typed', 'pasted'] as const)('saves /go as a free-text answer without executing the command: %s', async (delivery) => {
-    const target = { goalId: goalRecord().id, objective: 'Answer fixture', question: {
+    const target = { goalId: goalRecord().id, repositoryDirectory: cwd, objective: 'Answer fixture', question: {
       id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human' as const,
       status: 'pending' as const, body: 'Which output format?', options: ['CSV', 'JSON'],
     } };
     vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], goals: [goalRecord()], questions: [target] });
     const context = mount();
-    const answer = vi.spyOn(context.session, 'answerQuestion').mockResolvedValue({ kind: 'reply', message: 'Answer saved' });
+    const answer = vi.spyOn(context.session, 'answerQuestion').mockResolvedValue({ kind: 'reply', message: 'Answer saved', answerSaved: true });
     try {
       await typeAndSubmit(context, '/answer');
       await enterSelection(context);
@@ -294,7 +294,7 @@ describe('manager TUI /go', () => {
       context.app.stdin.write(ENTER);
       await waitFor(() => {
         expect(answer).toHaveBeenCalledExactlyOnceWith({
-          goalId: target.goalId, questionId: target.question.id, text: '/go', abortSignal: expect.any(AbortSignal),
+          goalId: target.goalId, repositoryDirectory: cwd, questionId: target.question.id, answer: { text: '/go' }, abortSignal: expect.any(AbortSignal),
         });
         expect(context.app.lastFrame()).toContain('Answer saved');
       });

@@ -1,4 +1,5 @@
-import { selectionFrame, enterSelection, ENTER, UP, response, mount, deferred, promptFrame, queuedFrame, waitFor, typeAndSubmit } from './manager-tui-fixtures.js';
+import { selectionFrame, enterSelection, cwd, ENTER, UP, response, mount, deferred, promptFrame, queuedFrame, waitFor, typeAndSubmit } from './manager-tui-fixtures.js';
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import * as savedEvents from '../../features/manager/savedEvents.js';
 import { formatGoalName } from '../../features/manager/goalDisplay.js';
@@ -17,7 +18,7 @@ function snapshot(goals: Goal[]) {
   return { events: [], diagnostics: [], goals,
     questions: goals.flatMap((goal) => (goal.questions ?? [])
       .filter((question) => question.status === 'pending' && question.recipient === 'human')
-      .map((question) => ({ goalId: goal.id, objective: goal.objective, question }))),
+      .map((question) => ({ goalId: goal.id, repositoryDirectory: cwd, objective: goal.objective, question }))),
   };
 }
 
@@ -31,7 +32,7 @@ function operations(context: ReturnType<typeof mount>) {
     pause: vi.spyOn(context.session, 'pauseGoal').mockResolvedValue({ kind: 'reply', message: 'Pause completed' }),
     resume: vi.spyOn(context.session, 'resumeGoal').mockResolvedValue({ kind: 'reply', message: 'Resume completed' }),
     abort: vi.spyOn(context.session, 'abortGoal').mockResolvedValue({ kind: 'reply', message: 'Abort completed' }),
-    answer: vi.spyOn(context.session, 'answerQuestion').mockResolvedValue({ kind: 'reply', message: 'Answer completed' }),
+    answer: vi.spyOn(context.session, 'answerQuestion').mockResolvedValue({ kind: 'reply', message: 'Answer completed', answerSaved: true }),
   };
 }
 
@@ -147,7 +148,9 @@ describe('manager command selection', () => {
   it('opens details only for the selected inquiry and preserves identity when short names and question IDs collide', async () => {
     const objective = 'A shared goal name that is deliberately longer than the display limit';
     const goals: Goal[] = [1, 2].map((index) => ({ ...goalRecord(), id: id(index), objective: `${objective} ${index}`,
-      questions: [inquiry(10, { kind: index === 1 ? 'question' : 'approval', body: `Summary ${index}\n${'details '.repeat(10)}DETAIL ${index}`,
+      questions: [inquiry(10, { kind: index === 1 ? 'approval' : 'question', body: `Summary ${index}\n${'details '.repeat(10)}DETAIL ${index}`,
+        operation: index === 1 ? { toolName: 'Write', args: '{}', cwd: '/test/manager-repository',
+          argsDigest: createHash('sha256').update('{}').digest('hex') } : undefined,
         options: [`Option ${index}`, `Other ${index}`], recommendation: `Recommendation ${index}` })],
     }));
     vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue(snapshot(goals));
@@ -175,7 +178,7 @@ describe('manager command selection', () => {
       expect(calls.answer).not.toHaveBeenCalled();
       context.app.stdin.write(ENTER);
       await vi.waitFor(() => expect(calls.answer).toHaveBeenCalledExactlyOnceWith({
-        goalId: id(2), questionId: id(10), text: 'Option 2', abortSignal: expect.any(AbortSignal),
+        goalId: id(2), repositoryDirectory: cwd, questionId: id(10), answer: { text: 'Option 2' }, abortSignal: expect.any(AbortSignal),
       }));
       expect(context.call).not.toHaveBeenCalled();
     } finally { context.app.unmount(); await context.session.close(); }
@@ -278,7 +281,7 @@ describe('manager command selection', () => {
       await vi.waitFor(() => expect(promptFrame(context)).toContain(text));
       context.app.stdin.write(ENTER);
       await vi.waitFor(() => expect(calls.answer).toHaveBeenCalledExactlyOnceWith({
-        goalId: goal.id, questionId: id(1), text, abortSignal: expect.any(AbortSignal),
+        goalId: goal.id, repositoryDirectory: cwd, questionId: id(1), answer: { text }, abortSignal: expect.any(AbortSignal),
       }));
       expect(calls.pause).not.toHaveBeenCalled();
       expect(context.call).not.toHaveBeenCalled();
@@ -319,7 +322,7 @@ describe('manager command selection', () => {
       context.app.stdin.write('Selected answer');
       context.app.stdin.write(ENTER);
       await vi.waitFor(() => expect(calls.answer).toHaveBeenCalledExactlyOnceWith({
-        goalId: goals[0]!.id, questionId: id(2), text: 'Selected answer', abortSignal: expect.any(AbortSignal),
+        goalId: goals[0]!.id, repositoryDirectory: cwd, questionId: id(2), answer: { text: 'Selected answer' }, abortSignal: expect.any(AbortSignal),
       }));
     } finally { context.app.unmount(); await context.session.close(); }
   });

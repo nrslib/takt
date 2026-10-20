@@ -22,6 +22,7 @@ export const GoalInquiryInputSchema = GoalQuestionInputSchema.extend({
   kind: z.enum(['question', 'approval', 'operation_request']).default('question'),
   operation: GoalOperationInputSchema.optional(),
   targetSha: goalSha.optional(),
+  permissionProposal: goalText.optional(),
 });
 const goalAnswerFields = {
   text: z.string().max(128 * 1024).default(''),

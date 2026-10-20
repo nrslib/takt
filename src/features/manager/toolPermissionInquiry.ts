@@ -6,6 +6,7 @@ import { StandaloneInquiryStore, type InquiryOwner } from '../../infra/goals/sta
 import { GoalStore } from '../../infra/goals/store.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import type { ManagerPermissionGoal } from './toolPermissionJudge.js';
+import { createPermissionProposal } from './inquiryAnswer.js';
 
 export async function saveManagerToolPermissionInquiry(input: {
   request: ToolPermissionDecisionRequest;
@@ -23,6 +24,7 @@ export async function saveManagerToolPermissionInquiry(input: {
       cwd: input.request.cwd,
     },
   };
+  inquiry.permissionProposal = createPermissionProposal(inquiry.operation!);
   if (input.goal !== undefined) {
     const candidate = createInquiry(inquiry);
     const matches = (question: GoalQuestion): boolean => question.kind === 'approval'

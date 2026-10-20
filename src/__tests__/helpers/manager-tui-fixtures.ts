@@ -15,7 +15,18 @@ import { makeProvider } from '../test-helpers.js';
 vi.mock('../../infra/task/runner.js', () => ({ TaskRunner: class { listTaskStateItems() { return []; } } }));
 vi.mock('../../infra/goals/service.js', () => ({ createGoal: vi.fn() }));
 const memory = vi.hoisted(() => ({ goals: vi.fn(() => [] as Goal[]) }));
-vi.mock('../../infra/goals/store.js', () => ({ GoalStore: class { async list() { return { goals: memory.goals(), errors: [] }; } async get(id: string) { return { ...goalRecord(), id }; } } }));
+vi.mock('../../infra/goals/store.js', () => ({ GoalStore: class {
+  async list<T = Goal>(project: (goal: Goal) => T | undefined = (goal) => goal as T) {
+    return { goals: memory.goals().map(project).filter((goal) => goal !== undefined), errors: [] };
+  }
+  async get(id: string) { return { ...goalRecord(), id }; }
+} }));
+vi.mock('../../infra/goals/standalone-inquiries.js', async (original) => {
+  const actual = await original<typeof import('../../infra/goals/standalone-inquiries.js')>();
+  return { ...actual, StandaloneInquiryStore: class extends actual.StandaloneInquiryStore {
+    async listPending() { return []; }
+  } };
+});
 const inbox = vi.hoisted(() => ({ read: vi.fn(() => [] as unknown[]), remove: vi.fn() }));
 vi.mock('../../infra/goals/events.js', () => ({ readManagerEvents: inbox.read, deleteManagerEvent: inbox.remove, saveManagerEvent: vi.fn(), deleteGoalEvents: vi.fn() }));
 vi.mock('../../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));

@@ -24,6 +24,8 @@ import type { ProviderType } from '../../infra/providers/index.js';
 import { toManagerOutputSchema, toStrictManagerOutputSchema } from './outputSchema.js';
 import { createManagerToolPermissionHandler } from './toolPermissionDecision.js';
 import type { ManagerPermissionGoal } from './toolPermissionJudge.js';
+import { StandaloneInquiryStore } from '../../infra/goals/standalone-inquiries.js';
+import type { ManagerAnswerOptions } from './inquiryAnswer.js';
 
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
 import { MANAGER_ASSIGNMENT_ENV, findAssignedGoalRepository, resolveAssignedProjectRoot, resolveCurrentManagerAssignment, type ManagerAssignmentIdentity } from './assignment.js';
@@ -80,6 +82,7 @@ interface ManagerTurnOptions {
 type ManagerTurnResult =
   | { kind: 'reply'; message: string }
   | { kind: 'error'; message: string };
+type ManagerAnswerResult = ManagerTurnResult & { answerSaved: boolean };
 type ManagerResult = ManagerTurnResult
   | { kind: 'goal_registered'; goal: Goal; turn: ManagerTurnResult };
 
@@ -147,25 +150,40 @@ export function createManagerConversationSession(input: {
     }
   };
   const session = {
-    async answerQuestion(options: { goalId: string; questionId: string; text: string; abortSignal?: AbortSignal }): Promise<ManagerTurnResult> {
-      if (closed || registering || active !== null) return { kind: 'error', message: 'Manager session is unavailable' };
+    async answerQuestion(options: ManagerAnswerOptions): Promise<ManagerAnswerResult> {
+      if (closed || registering || active !== null) return { kind: 'error', message: 'Manager session is unavailable', answerSaved: false };
       invalidate();
       const controller = new AbortController();
       active = controller;
       const cancel = (): void => { controller.abort(); };
       options.abortSignal?.addEventListener('abort', cancel, { once: true });
       if (options.abortSignal?.aborted) cancel();
+      let answerSaved = false;
       try {
-        const repository = await goalRepository(options.goalId);
         controller.signal.throwIfAborted();
-        const saved = await new GoalStore(repository).update(options.goalId, (goal) => answerGoalQuestion(goal, options.questionId, options.text));
+        const assignment = await getAssignment()
+          ?? { kind: 'repository' as const, repositoryDirectory: cwd, repositoryDirectories: [cwd] };
+        if (options.goalId !== null && !assignment.repositoryDirectories.includes(options.repositoryDirectory)) {
+          throw new Error(`Repository is not assigned to this manager: ${options.repositoryDirectory}`);
+        }
+        controller.signal.throwIfAborted();
+        await options.appendPermission?.(assignment);
+        controller.signal.throwIfAborted();
+        if (options.goalId === null) {
+          await new StandaloneInquiryStore(getGlobalConfigDir(), options.owner).answer(options.questionId, options.answer);
+          return { kind: 'reply', message: 'Answer saved', answerSaved: true };
+        }
+        const repository = options.repositoryDirectory;
+        const saved = await new GoalStore(repository).update(options.goalId,
+          (goal) => answerGoalQuestion(goal, options.questionId, options.answer),
+          () => { answerSaved = true; });
         const answer = saved.questions!.find((question) => question.id === options.questionId)!.answer!;
         saveManagerEvent(repository, { kind: 'answer', goalId: options.goalId, questionId: options.questionId, answer });
         await ensureDaemon();
         await ensureManagerRun(repository);
-        return { kind: 'reply', message: 'Answer saved' };
+        return { kind: 'reply', message: 'Answer saved', answerSaved };
       } catch (error) {
-        return { kind: 'error', message: getErrorMessage(error) };
+        return { kind: 'error', message: getErrorMessage(error), answerSaved };
       } finally {
         options.abortSignal?.removeEventListener('abort', cancel);
         if (active === controller) active = null;
@@ -349,7 +367,7 @@ export function createManagerConversationSession(input: {
     },
     handleUserMessage: (options: ManagerTurnOptions) => track(session.handleUserMessage(options)),
     approveSummary: (revision: number) => track(session.approveSummary(revision)),
-    answerQuestion: (options: { goalId: string; questionId: string; text: string; abortSignal?: AbortSignal }) => track(session.answerQuestion(options)),
+    answerQuestion: (options: ManagerAnswerOptions) => track(session.answerQuestion(options)),
     pauseGoal: (options: { goalId: string; abortSignal?: AbortSignal }) => track(changeGoalExecution(options, 'paused')),
     resumeGoal: (options: { goalId: string; abortSignal?: AbortSignal }) => track(changeGoalExecution(options, 'active')),
     abortGoal: (options: { goalId: string; abortSignal?: AbortSignal }) => track(changeGoalExecution(options, 'aborted')),
