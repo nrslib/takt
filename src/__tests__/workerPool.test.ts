@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import chalk from 'chalk';
 import type { AutoRequeueResult, TaskInfo } from '../infra/task/index.js';
 import type { executeRunTaskAndComplete as ExecuteRunTask } from '../features/tasks/execute/runTaskExecution.js';
+import { PrivateFileLockAcquisitionError } from '../shared/utils/private-file-lock.js';
 
 const { executeRunTaskAndComplete, executeWithDetails, saveEvent } = vi.hoisted(() => ({
   executeRunTaskAndComplete: vi.fn(),
@@ -22,7 +23,7 @@ vi.mock('../shared/exitCodes.js', () => ({ EXIT_SIGINT: 130 }));
 vi.mock('../shared/i18n/index.js', () => ({ getLabel: vi.fn((key: string) => key) }));
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  createLogger: () => ({ trace: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() }),
+  createLogger: () => ({ trace: vi.fn(), info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() }),
 }));
 vi.mock('../features/tasks/execute/runTaskExecution.js', () => ({
   executeRunTaskAndComplete,
@@ -90,6 +91,167 @@ afterEach(() => {
 });
 
 describe('runWithWorkerPool', () => {
+  it('ロック作成のENOSPCから同じrun内で復旧してpendingを一度だけ実行する', async () => {
+    vi.useFakeTimers();
+    const task = createTask('pending');
+    const runner = createRunner();
+    runner.listTaskStateItems.mockReturnValue([{
+      name: task.name, status: 'pending', goalId: undefined,
+    }] as never);
+    runner.claimNextTasks
+      .mockImplementationOnce(() => { throw new PrivateFileLockAcquisitionError('disk full', 'ENOSPC', undefined, {}); })
+      .mockReturnValueOnce([task])
+      .mockReturnValue([]);
+    const output = vi.mocked(console.log);
+    const pool = runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 100, 'run');
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runner.claimNextTasks).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(executeRunTaskAndComplete).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(pool).resolves.toEqual({ success: 1, fail: 0, executedTaskNames: ['pending'] });
+    expect(executeRunTaskAndComplete).toHaveBeenCalledTimes(1);
+    expect(runner.claimNextTasks).toHaveBeenCalledTimes(3);
+    expect(output.mock.calls.filter(([message]) => String(message).includes('[WARN]'))).toHaveLength(1);
+    expect(output.mock.calls.filter(([message]) => String(message).includes('Task claiming resumed'))).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('ENOSPC再試行時の入力待ちを見送り、解除後も次の期限までpollを連打しない', async () => {
+    vi.useFakeTimers();
+    const task = createTask('pending');
+    const runner = createRunner();
+    runner.listTaskStateItems.mockReturnValue([{
+      name: task.name, status: 'pending', goalId: undefined,
+    }] as never);
+    runner.claimNextTasks
+      .mockImplementationOnce(() => { throw new PrivateFileLockAcquisitionError('disk full', 'ENOSPC', undefined, {}); })
+      .mockReturnValueOnce([task])
+      .mockReturnValue([]);
+    const output = vi.mocked(console.log);
+    const pool = runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 100, 'run');
+
+    await vi.advanceTimersByTimeAsync(0);
+    vi.mocked(isInputWaiting).mockReturnValueOnce(true).mockReturnValue(false);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(runner.claimNextTasks).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(runner.claimNextTasks).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(pool).resolves.toEqual({ success: 1, fail: 0, executedTaskNames: ['pending'] });
+    expect(executeRunTaskAndComplete).toHaveBeenCalledTimes(1);
+    expect(output.mock.calls.filter(([message]) => String(message).includes('[WARN]'))).toHaveLength(1);
+    expect(output.mock.calls.filter(([message]) => String(message).includes('Task claiming resumed'))).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('既存のactive完了後も復旧を待ち、新しいpendingを実行する', async () => {
+    vi.useFakeTimers();
+    let finishActive!: (value: boolean) => void;
+    executeRunTaskAndComplete.mockImplementationOnce(() => new Promise<boolean>((resolve) => {
+      finishActive = resolve;
+    }));
+    const runner = createRunner();
+    runner.listTaskStateItems.mockReturnValue([{
+      name: 'later', status: 'pending', goalId: undefined,
+    }] as never);
+    runner.claimNextTasks
+      .mockImplementationOnce(() => { throw new PrivateFileLockAcquisitionError('disk full', 'ENOSPC', undefined, {}); })
+      .mockReturnValueOnce([createTask('later')])
+      .mockReturnValue([]);
+    const pool = runWithWorkerPool(runner as never, [createTask('active')], 2,
+      '/cwd', undefined, undefined, 100, 'run');
+    let settled = false;
+    void pool.then(() => { settled = true; });
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(runner.claimNextTasks).toHaveBeenCalledTimes(1);
+    finishActive(true);
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(settled).toBe(false);
+    expect(executeRunTaskAndComplete).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(pool).resolves.toEqual({ success: 2, fail: 0, executedTaskNames: ['active', 'later'] });
+    expect(executeRunTaskAndComplete).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['run', 'watch'] as const)('持続するENOSPCの復旧待ちは%sのabortで即時終了し、警告を連打しない', async (mode) => {
+    vi.useFakeTimers();
+    const runner = createRunner();
+    runner.listTaskStateItems.mockReturnValue([{
+      name: 'pending', status: 'pending', goalId: undefined,
+    }] as never);
+    runner.claimNextTasks.mockImplementation(() => {
+      throw new PrivateFileLockAcquisitionError('disk full', 'ENOSPC', undefined, {});
+    });
+    const scheduling = new AbortController();
+    const task = new AbortController();
+    const output = vi.mocked(console.log);
+    const pool = runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 100, mode, {
+      schedulingSignal: scheduling.signal, taskAbortSignal: task.signal,
+    });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(runner.claimNextTasks).toHaveBeenCalledTimes(3);
+    scheduling.abort();
+    await expect(pool).resolves.toEqual({ success: 0, fail: 0, executedTaskNames: [] });
+    expect(output.mock.calls.filter(([message]) => String(message).includes('[WARN]'))).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('claim後のENOSPCは再試行せず、非再試行エラーとして即時通知する', async () => {
+    const runner = createRunner();
+    runner.listTaskStateItems.mockReturnValue([{
+      name: 'pending', status: 'pending', goalId: undefined,
+    }] as never);
+    const error = Object.assign(new Error('claim persistence failed'), { code: 'ENOSPC' });
+    runner.claimNextTasks.mockImplementation(() => { throw error; });
+    const output = vi.mocked(console.log);
+
+    await expect(runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 100))
+      .rejects.toBe(error);
+    expect(runner.claimNextTasks).toHaveBeenCalledTimes(1);
+    expect(output.mock.calls.filter(([message]) => String(message).includes('[WARN]'))).toHaveLength(1);
+  });
+
+  it('pendingがないロック作成失敗では復旧待ちを始めない', async () => {
+    const runner = createRunner();
+    const error = new PrivateFileLockAcquisitionError('disk full', 'ENOSPC', undefined, {});
+    runner.claimNextTasks.mockImplementation(() => { throw error; });
+
+    await expect(runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 100))
+      .rejects.toBe(error);
+    expect(runner.claimNextTasks).toHaveBeenCalledTimes(1);
+  });
+
+  it('goal限定poolは通常タスクのpendingだけではENOSPCの復旧待ちを始めない', async () => {
+    const runner = createRunner();
+    runner.listTaskStateItems.mockReturnValue([{ name: 'ordinary', status: 'pending' }] as never);
+    const failure = new PrivateFileLockAcquisitionError('disk full', 'ENOSPC', undefined, {});
+    runner.claimNextTasks.mockImplementation(() => { throw failure; });
+
+    await expect(runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 100, 'run', undefined, true))
+      .rejects.toBe(failure);
+    expect(runner.claimNextTasks).toHaveBeenCalledOnce();
+    expect(executeRunTaskAndComplete).not.toHaveBeenCalled();
+    expect(checkPendingTaskProviders).toHaveBeenCalledWith(runner, '/cwd', {}, undefined, [], expect.any(AbortSignal), true);
+  });
+
+  it('provider preflightのENOSPCは取得処理として再試行しない', async () => {
+    const runner = createRunner();
+    const error = Object.assign(new Error('provider preparation failed'), { code: 'ENOSPC' });
+    vi.mocked(checkPendingTaskProviders).mockRejectedValueOnce(error);
+
+    await expect(runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 100))
+      .rejects.toBe(error);
+    expect(runner.claimNextTasks).not.toHaveBeenCalled();
+  });
+
   it.each((['run', 'watch'] as const).flatMap((mode) =>
     [false, true].flatMap((externalSignals) =>
       ([true, false, 'reject'] as const).map((remainingResult) => ({ mode, externalSignals, remainingResult }))),

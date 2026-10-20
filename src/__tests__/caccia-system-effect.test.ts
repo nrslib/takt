@@ -2,9 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DebugLogger } from '../shared/utils/debug.js';
 import type { CacciaInput, CacciaResult } from '../features/caccia/index.js';
 import type { SystemStepServicesOptions } from '../core/workflow/system/system-step-services.js';
+import { PrHeadObservationMismatchError, type PrDetails } from '../core/workflow/system/pr-execution-context.js';
+import { GitHubProvider } from '../infra/github/GitHubProvider.js';
 const mocks = vi.hoisted(() => ({
   run: vi.fn<(input: CacciaInput) => Promise<CacciaResult>>(),
-  config: vi.fn(), git: vi.fn(), details: vi.fn(), threat: vi.fn(), detect: vi.fn(), comment: vi.fn(),
+  config: vi.fn(), git: vi.fn(), details: vi.fn(), threat: vi.fn(), detect: vi.fn(), comment: vi.fn(), execFile: vi.fn(),
+}));
+vi.mock('node:child_process', async (original) => ({
+  ...await original<typeof import('node:child_process')>(), execFile: mocks.execFile,
 }));
 vi.mock('../features/caccia/index.js', async (original) => ({
   ...await original<typeof import('../features/caccia/index.js')>(), runCaccia: mocks.run,
@@ -27,6 +32,9 @@ function options(): Omit<SystemStepServicesOptions, 'gitProvider'> {
       headSha: initial, headRepositoryUrl: '/remote', headRepositoryPushUrls: ['/remote'] },
     prGitOperations: { fetch: vi.fn(async () => {}), push: vi.fn(async () => {}) } };
 }
+function details(overrides: Partial<PrDetails>): PrDetails {
+  return { ...options().prExecutionContext!, number: 123, sameRepository: true, ...overrides };
+}
 describe('Caccia effect result', () => {
   it('passes the parent warning sink to linked Caccia without changing its result', async () => {
     const eventSink = vi.fn();
@@ -39,9 +47,13 @@ describe('Caccia effect result', () => {
     expect(eventSink).toHaveBeenCalledExactlyOnceWith({ type: 'progress', level: 'warn', message: 'Caccia trace failed' });
   });
 
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.useFakeTimers({ now: 0 });
     mocks.detect.mockReturnValue('github');
     mocks.config.mockImplementation((_cwd, key) => key === 'caccia'
       ? { enabled: true, waitTimeoutMs: 17, maxIterations: 2, workflow: 'custom' } : undefined);
@@ -96,7 +108,9 @@ describe('Caccia effect result', () => {
   it.each(['config_disabled', 'provider_unavailable', 'github_unavailable'] as const)(
     'validates and records the current head before an early skip: %s', async (source) => {
       const record = vi.fn();
-      if (source === 'config_disabled') mocks.config.mockReturnValue({ enabled: false });
+      if (source === 'config_disabled') {
+        mocks.config.mockImplementation((_cwd, key) => key === 'caccia' ? { enabled: false } : undefined);
+      }
       else if (source === 'provider_unavailable') mocks.detect.mockReturnValue('gitlab');
       else mocks.run.mockResolvedValue({ outcome: 'skipped', unresolvedCount: 0, skipReason: source });
       mocks.git.mockImplementation(async (_cwd, args) => ({
@@ -108,7 +122,7 @@ describe('Caccia effect result', () => {
         skipReason: source === 'config_disabled' ? source : 'github_unavailable',
       });
       expect(record).toHaveBeenCalledExactlyOnceWith(updated, updated, options().prExecutionContext);
-      expect(mocks.details).toHaveBeenCalledWith(123, '/project', undefined);
+      expect(mocks.details.mock.calls[0]?.slice(0, 2)).toEqual([123, '/project']);
       expect(mocks.run).toHaveBeenCalledTimes(source === 'github_unavailable' ? 1 : 0);
     });
   it.each([
@@ -116,7 +130,9 @@ describe('Caccia effect result', () => {
     ['provider_unavailable', 'fetch'], ['github_unavailable', 'head'],
   ] as const)('fails an early skip on validation or storage failure: %s %s', async (source, failure) => {
     const record = vi.fn(() => { if (failure === 'record') throw new Error('Storage failed'); });
-    if (source === 'config_disabled') mocks.config.mockReturnValue({ enabled: false });
+    if (source === 'config_disabled') {
+      mocks.config.mockImplementation((_cwd, key) => key === 'caccia' ? { enabled: false } : undefined);
+    }
     else if (source === 'provider_unavailable') mocks.detect.mockReturnValue('gitlab');
     else mocks.run.mockResolvedValue({ outcome: 'skipped', unresolvedCount: 0, skipReason: source });
     const changed = { ...options().prExecutionContext,
@@ -125,11 +141,365 @@ describe('Caccia effect result', () => {
       mocks.details.mockResolvedValueOnce({ ...options().prExecutionContext, number: 123 }).mockResolvedValue(changed);
     } else mocks.details.mockResolvedValue(changed);
     if (failure === 'fetch') mocks.details.mockRejectedValue(new Error('Metadata unavailable'));
-    expect(await cacciaEffect({ ...options(), prMergePushRecorder: { record } }, 123))
+    const running = cacciaEffect({ ...options(), prMergePushRecorder: { record } }, 123);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(await running)
       .toMatchObject({ success: false, failed: true });
     expect(record).toHaveBeenCalledTimes(failure === 'record' ? 1 : 0);
     expect(mocks.run).toHaveBeenCalledTimes(source === 'github_unavailable' ? 1 : 0);
   });
+  it('初回のheadが一致したら待機せずCacciaを実行する', async () => {
+    const completed = vi.fn();
+    const running = cacciaEffect(options(), 123).then((result) => {
+      completed(result);
+      return result;
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(completed).toHaveBeenCalledOnce();
+    expect(await running).toMatchObject({ success: true, failed: false, headSha: initial });
+    expect(mocks.run).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ expectedInitialHeadSha: initial }));
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('Provider内部のhead観測が食い違っても安定した期待SHAを取得してから続行する', async () => {
+    const remote = 'https://github.com/org/repo.git';
+    const locator = (headSha: string) => ({ url: 'https://github.com/org/repo/pull/123', headRefOid: headSha });
+    const graphql = { data: { repository: { pullRequest: {
+      number: 123, headRefName: 'feature', headRefOid: updated,
+      headRepository: { sshUrl: 'git@github.com:org/repo.git' },
+    } } } };
+    const stable = [locator(updated), graphql, remote, remote, { baseRefName: 'main', isCrossRepository: false }];
+    const responses = [locator(initial), graphql, ...stable, ...stable];
+    mocks.execFile.mockImplementation((_command: string, _args: string[], _options: unknown,
+      callback: (error: Error | null, stdout: string) => void) => {
+      const response = responses.shift();
+      if (response === undefined) throw new Error('Unexpected metadata request');
+      callback(null, typeof response === 'string' ? response : JSON.stringify(response));
+    });
+    mocks.git.mockImplementation(async (_cwd, args) => ({
+      stdout: args[0] === 'symbolic-ref' ? 'feature' : updated, stderr: '',
+    }));
+    mocks.run.mockResolvedValue({ outcome: 'success', headSha: updated, unresolvedCount: 0 });
+    const input = options();
+    const record = vi.fn();
+    const completed = vi.fn();
+    const running = cacciaEffect({ ...input, gitProvider: new GitHubProvider(), prMergePushRecorder: { record },
+      prExecutionContext: { ...input.prExecutionContext!, headRepositoryUrl: remote, headRepositoryPushUrls: [remote] } }, 123)
+      .then((result) => {
+        completed(result);
+        return result;
+      });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(completed).not.toHaveBeenCalled();
+    expect(mocks.run).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(completed).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(await running).toMatchObject({ success: true, failed: false, headSha: updated });
+    expect(mocks.run).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ expectedInitialHeadSha: updated }));
+    expect(record).toHaveBeenCalledExactlyOnceWith(updated, updated, expect.any(Object));
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([false, true])('取得中の不整合が続いても期限を延長せず最後の観測を返す: priorConsistent=%s', async (priorConsistent) => {
+    const record = vi.fn();
+    const completed = vi.fn();
+    const lastHead = 'c'.repeat(40);
+    if (priorConsistent) mocks.details.mockResolvedValueOnce(details({ headSha: updated }));
+    mocks.details.mockRejectedValue(new PrHeadObservationMismatchError(123, updated, lastHead));
+    const running = cacciaEffect({ ...options(), prMergePushRecorder: { record } }, 123).then((result) => {
+      completed(result);
+      return result;
+    });
+
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(completed).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+
+    const result = await running;
+    expect(result).toMatchObject({ success: false, failed: true });
+    expect(result.error).toContain(`expected ${initial}`);
+    expect(result.error).toContain(`last observed ${lastHead} (inconsistent with ${updated})`);
+    expect(mocks.run).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([
+    'Authentication failed', 'Metadata unavailable',
+    'Pull request #123 head changed while reading its metadata',
+  ])('型で識別した不整合以外の取得エラーは直ちに失敗する: %s', async (message) => {
+    const record = vi.fn();
+    const completed = vi.fn();
+    mocks.details.mockRejectedValueOnce(new Error(message)).mockResolvedValue(details({}));
+    const running = cacciaEffect({ ...options(), prMergePushRecorder: { record } }, 123).then((result) => {
+      completed(result);
+      return result;
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(completed).toHaveBeenCalledOnce();
+    expect(await running).toMatchObject({ success: false, failed: true, error: message });
+    expect(mocks.details).toHaveBeenCalledOnce();
+    expect(mocks.run).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['enabled', 'config_disabled', 'github_unavailable'] as const)(
+    '古いheadを複数回取得しても一致するまで処理や記録を進めない: %s', async (source) => {
+      const record = vi.fn();
+      const completed = vi.fn();
+      if (source === 'config_disabled') {
+        mocks.config.mockImplementation((_cwd, key) => key === 'caccia' ? { enabled: false } : undefined);
+      }
+      if (source === 'github_unavailable') {
+        mocks.run.mockResolvedValue({ outcome: 'skipped', unresolvedCount: 0, skipReason: source });
+        mocks.details.mockResolvedValueOnce(details({}));
+      }
+      mocks.details
+        .mockResolvedValueOnce(details({ headSha: updated }))
+        .mockResolvedValueOnce(details({ headSha: updated }))
+        .mockResolvedValue(details({}));
+      const input = { ...options(), prMergePushRecorder: { record } };
+      const running = cacciaEffect(input, 123).then((result) => {
+        completed(result);
+        return result;
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(completed).not.toHaveBeenCalled();
+      expect(record).not.toHaveBeenCalled();
+      expect(mocks.run).toHaveBeenCalledTimes(source === 'github_unavailable' ? 1 : 0);
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(completed).not.toHaveBeenCalled();
+      expect(record).not.toHaveBeenCalled();
+      expect(mocks.run).toHaveBeenCalledTimes(source === 'github_unavailable' ? 1 : 0);
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(completed).toHaveBeenCalledOnce();
+      expect(await running).toMatchObject({ success: true, failed: false, headSha: initial,
+        outcome: source === 'enabled' ? 'success' : 'skipped' });
+      expect(record).toHaveBeenCalledExactlyOnceWith(initial, initial, input.prExecutionContext);
+      expect(mocks.run).toHaveBeenCalledTimes(source === 'config_disabled' ? 0 : 1);
+      if (source !== 'config_disabled') {
+        expect(mocks.run).toHaveBeenCalledWith(expect.objectContaining({ expectedInitialHeadSha: initial }));
+      }
+    });
+
+  it('GitHub明示設定でCacciaが無効でもhead一致後にスキップ結果を記録する', async () => {
+    const record = vi.fn();
+    const completed = vi.fn();
+    mocks.detect.mockReturnValue(undefined);
+    mocks.config.mockImplementation((_cwd, key) => key === 'vcsProvider' ? 'github'
+      : key === 'caccia' ? { enabled: false } : undefined);
+    mocks.details
+      .mockResolvedValueOnce(details({ headSha: updated }))
+      .mockResolvedValueOnce(details({ headSha: updated }))
+      .mockResolvedValue(details({}));
+    const input = { ...options(), prMergePushRecorder: { record } };
+    const running = cacciaEffect(input, 123).then((result) => {
+      completed(result);
+      return result;
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(completed).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+    expect(mocks.run).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(completed).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+    expect(mocks.run).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(completed).toHaveBeenCalledOnce();
+    expect(await running).toMatchObject({
+      success: true, failed: false, outcome: 'skipped', skipReason: 'config_disabled',
+      headSha: initial, unresolvedCount: 0,
+    });
+    expect(record).toHaveBeenCalledExactlyOnceWith(initial, initial, input.prExecutionContext);
+    expect(mocks.run).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { source: 'enabled', lastHead: updated },
+    { source: 'enabled', lastHead: 'c'.repeat(40) },
+    { source: 'config_disabled', lastHead: 'c'.repeat(40) },
+    { source: 'github_unavailable', lastHead: 'c'.repeat(40) },
+  ] as const)('不一致が続けば固定の期限で失敗し期待SHAと最後のSHAを返す: $source $lastHead', async ({ source, lastHead }) => {
+    const record = vi.fn();
+    const completed = vi.fn();
+    if (source === 'config_disabled') {
+      mocks.config.mockImplementation((_cwd, key) => key === 'caccia' ? { enabled: false } : undefined);
+    }
+    if (source === 'github_unavailable') {
+      mocks.run.mockResolvedValue({ outcome: 'skipped', unresolvedCount: 0, skipReason: source });
+      mocks.details.mockResolvedValueOnce(details({}));
+    }
+    let observedHead = updated;
+    mocks.details.mockImplementation(async () => details({ headSha: observedHead }));
+    const input = { ...options(), prMergePushRecorder: { record } };
+    const running = cacciaEffect(input, 123).then((result) => {
+      completed(result);
+      return result;
+    });
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect.soft(completed).not.toHaveBeenCalled();
+    observedHead = lastHead;
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect.soft(completed).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+    expect(mocks.run).toHaveBeenCalledTimes(source === 'github_unavailable' ? 1 : 0);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(completed).toHaveBeenCalledOnce();
+    const result = await running;
+    expect(result).toMatchObject({ success: false, failed: true });
+    expect.soft(result.error).toEqual(expect.stringContaining(initial));
+    expect.soft(result.error).toEqual(expect.stringContaining(lastHead));
+    expect(record).not.toHaveBeenCalled();
+    expect(mocks.run).toHaveBeenCalledTimes(source === 'github_unavailable' ? 1 : 0);
+    expect(input.prGitOperations!.fetch).not.toHaveBeenCalled();
+    expect(input.prGitOperations!.push).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { number: 456 }, { headBranch: 'another' }, { baseBranch: 'another' },
+    { headRepositoryUrl: '/other' }, { headRepositoryPushUrls: ['/other'] },
+  ] satisfies Partial<PrDetails>[])(
+    '再取得でPR識別情報が変わったらheadが一致しても実行しない: %j', async (identity) => {
+      const record = vi.fn();
+      const completed = vi.fn();
+      mocks.details.mockResolvedValueOnce(details({ headSha: updated }))
+        .mockResolvedValue(details(identity));
+      const running = cacciaEffect({ ...options(), prMergePushRecorder: { record } }, 123).then((result) => {
+        completed(result);
+        return result;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(completed).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(completed).toHaveBeenCalledOnce();
+      expect(await running).toMatchObject({ success: false, failed: true });
+      expect(mocks.run).not.toHaveBeenCalled();
+      expect(record).not.toHaveBeenCalled();
+    });
+
+  it('再取得の例外を再試行や成功へ変換しない', async () => {
+    const record = vi.fn();
+    const failure = new Error('Metadata unavailable');
+    mocks.details.mockResolvedValueOnce(details({ headSha: updated })).mockRejectedValueOnce(failure)
+      .mockResolvedValue(details({}));
+    const running = cacciaEffect({ ...options(), prMergePushRecorder: { record } }, 123);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(await running).toMatchObject({ success: false, failed: true, error: failure.message });
+    expect(mocks.run).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('headの反映待ち中に中断されたら処理も記録も行わない: enabled=%s', async (enabled) => {
+    const controller = new AbortController();
+    const record = vi.fn();
+    const completed = vi.fn();
+    mocks.config.mockImplementation((_cwd, key) => key === 'caccia' ? { enabled } : undefined);
+    mocks.details.mockResolvedValue(details({ headSha: updated }));
+    const running = cacciaEffect({ ...options(), abortSignal: controller.signal, prMergePushRecorder: { record } }, 123)
+      .then((result) => {
+        completed(result);
+        return result;
+      });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(completed).not.toHaveBeenCalled();
+
+    controller.abort(new Error('Caller interrupted'));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(completed).toHaveBeenCalledOnce();
+    expect(await running).toMatchObject({ success: false, failed: true });
+    expect(mocks.run).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+    const fetchCount = mocks.details.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(mocks.details).toHaveBeenCalledTimes(fetchCount);
+  });
+
+  it.each(['caller', 'deadline'] as const)('再取得中にも中断と固定の期限が効く: %s', async (source) => {
+    const controller = new AbortController();
+    const record = vi.fn();
+    const completed = vi.fn();
+    let fetchSignal: AbortSignal | undefined;
+    mocks.details.mockResolvedValueOnce(details({ headSha: updated }))
+      .mockImplementation((_number: number, _cwd: string, signal?: AbortSignal) => {
+        fetchSignal = signal;
+        return new Promise<PrDetails>((_resolve, reject) => {
+          if (signal?.aborted) reject(new DOMException('The operation was aborted', 'AbortError'));
+          else signal?.addEventListener('abort', () => reject(new DOMException('The operation was aborted', 'AbortError')), { once: true });
+        });
+      });
+    const running = cacciaEffect({ ...options(), abortSignal: controller.signal, prMergePushRecorder: { record } }, 123)
+      .then((result) => {
+        completed(result);
+        return result;
+      });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(completed).not.toHaveBeenCalled();
+    expect(fetchSignal).toBeInstanceOf(AbortSignal);
+
+    if (source === 'caller') controller.abort(new Error('Caller interrupted'));
+    else {
+      await vi.advanceTimersByTimeAsync(57_999);
+      expect(completed).not.toHaveBeenCalled();
+    }
+    await vi.advanceTimersByTimeAsync(source === 'caller' ? 0 : 1);
+
+    expect(completed).toHaveBeenCalledOnce();
+    expect(fetchSignal?.aborted).toBe(true);
+    const result = await running;
+    expect(result).toMatchObject({ success: false, failed: true });
+    if (source === 'deadline') {
+      expect(result.error).toEqual(expect.stringContaining(initial));
+      expect(result.error).toEqual(expect.stringContaining(updated));
+    } else {
+      expect(result.error).toBe('Caller interrupted');
+    }
+    expect(mocks.run).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('非GitHubのスキップ照合にはheadの反映待ちを追加しない', async () => {
+    const record = vi.fn();
+    const completed = vi.fn();
+    mocks.detect.mockReturnValue('gitlab');
+    mocks.details.mockResolvedValue(details({ headSha: updated }));
+    const running = cacciaEffect({ ...options(), prMergePushRecorder: { record } }, 123).then((result) => {
+      completed(result);
+      return result;
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(completed).toHaveBeenCalledOnce();
+    expect(await running).toMatchObject({ success: false, failed: true });
+    expect(record).not.toHaveBeenCalled();
+    expect(mocks.run).not.toHaveBeenCalled();
+  });
+
   it('uses the explicit VCS setting before remote detection', async () => {
     mocks.detect.mockReturnValue(undefined);
     mocks.config.mockImplementation((_cwd, key) => key === 'vcsProvider' ? 'github'
