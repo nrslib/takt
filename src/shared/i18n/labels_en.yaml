@@ -414,6 +414,11 @@ manager:
   goSummaryUnavailable: "Could not create a summary for registration because there is insufficient material. Please continue the conversation."
   inputUnavailableDuringAbort: "Cannot enter input during abort confirmation. Finish the confirmation before typing."
   toolPermission:
+    savedDenial: "Denied by the saved approval answer."
+    consumptionFailed: "Denied because approval consumption could not be saved."
+    contextReadFailed: "Human confirmation is required because permission or approval information could not be read. {reason}"
+    approvalConsumed: "The once approval has been consumed. Human confirmation is required again."
+    inquirySaveFailed: "Failed to save the approval inquiry."
     agentDenied: "{toolName}: The manager is not allowed to launch another AI agent."
     bashDenied: "Bash: Launching another AI command-line agent is not allowed."
     awaitingConfirmation: "Waiting for human confirmation ({toolName}): {reason}"

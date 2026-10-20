@@ -10,6 +10,8 @@ import {
   appendScopedPermission,
   readScopedPermissions,
 } from '../features/manager/scopedPermissionStorage.js';
+import { answerInquiry, createInquiry } from '../infra/goals/inquiry.js';
+import { goalRecord } from './helpers/goal-fixtures.js';
 
 vi.mock('node:fs', async (importOriginal) => ({ ...await importOriginal<typeof fsSync>() }));
 vi.mock('node:fs/promises', async (importOriginal) => ({ ...await importOriginal<typeof fs>() }));
@@ -83,6 +85,43 @@ beforeEach(async () => {
 });
 
 afterEach(() => vi.restoreAllMocks());
+
+describe('goal permission source text', () => {
+  function goalWithPermission(text: string) {
+    const question = createInquiry({ kind: 'approval', body: '確認',
+      operation: { toolName: 'Write', args: '{}', cwd: projectDirectory } });
+    return { ...goalRecord(), objective: '長い目的'.repeat(10000),
+      questions: [answerInquiry(question, { decision: 'allow', scope: 'goal', text })] };
+  }
+
+  it('keeps the complete goal answer at the byte boundary without counting unrelated goal fields', async () => {
+    const content = 'あ'.repeat(2730) + '  ';
+    const record = goalWithPermission(content);
+    const result = await readScopedPermissions({ goal: { repositoryDirectory: projectDirectory, record } });
+    expect(Buffer.byteLength(content)).toBe(8192);
+    expect(result).toEqual({ ok: true, files: [{
+      scope: 'goal', filePath: join(projectDirectory, '.takt', 'goals', record.id, 'goal.json'),
+      inquiryId: record.questions[0]!.id, content, sections: [],
+    }] });
+  });
+
+  it('rejects the combined goal answer source over the limit without returning partial permissions', async () => {
+    const record = goalWithPermission('a'.repeat(8192));
+    record.questions.push(...goalWithPermission('b').questions);
+    const result = await readScopedPermissions({ goal: { repositoryDirectory: projectDirectory, record } });
+    expect(result).toMatchObject({ ok: false, error: expect.any(Error) });
+    expect(result).not.toHaveProperty('files');
+  });
+
+  it('does not turn question answers or other approval scopes into goal permission text', async () => {
+    const record = goalWithPermission('原文');
+    const other = goalWithPermission('別範囲').questions[0]!;
+    record.questions.push({ ...other, answer: { ...other.answer!, scope: 'once' } },
+      answerInquiry(createInquiry({ body: '形式は何ですか' }), '質問への回答'));
+    const result = await readScopedPermissions({ goal: { repositoryDirectory: projectDirectory, record } });
+    expect(result).toMatchObject({ ok: true, files: [{ content: '原文', inquiryId: record.questions[0]!.id }] });
+  });
+});
 
 describe('scoped permission storage locations and isolation', () => {
   it('stores all three scopes under the configured global directory', async () => {

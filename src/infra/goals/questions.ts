@@ -1,5 +1,7 @@
 import { GoalQuestionSchema, type Goal, type GoalAnswerInput, type GoalQuestion, type GoalQuestionInput } from './schema.js';
-import { createInquiry, withdrawInquiry, answerInquiry } from './inquiry.js';
+import { createInquiry, withdrawInquiry, answerInquiry, consumeInquiryApproval } from './inquiry.js';
+
+export { isGoalApprovalUsable } from './inquiry.js';
 
 export function addGoalQuestion(goal: Goal, input: GoalQuestionInput): { goal: Goal; questionId: string } {
   const question = createInquiry(input);
@@ -33,16 +35,10 @@ export function isSameGoalOperation(left: GoalQuestion, right: GoalQuestion): bo
     && left.targetSha === right.targetSha;
 }
 
-export function isGoalApprovalUsable(question: GoalQuestion): boolean {
-  return question.kind === 'approval' && question.status === 'answered'
-    && question.answer?.decision === 'allow' && question.consumedAt === undefined;
-}
-
 export function consumeGoalApproval(goal: Goal, questionId: string, consumedAt: string): Goal {
   const question = goal.questions?.find((candidate) => candidate.id === questionId);
   if (question === undefined) throw new Error('Question does not exist');
-  if (!isGoalApprovalUsable(question)) throw new Error('Approval is not usable');
-  const consumed = GoalQuestionSchema.parse({ ...question, consumedAt });
+  const consumed = consumeInquiryApproval(question, consumedAt);
   return { ...goal, questions: goal.questions?.map((candidate) => candidate.id === questionId ? consumed : candidate) };
 }
 

@@ -1,15 +1,16 @@
 import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentResponse } from '../core/models/types.js';
 import type { ToolPermissionDecision, ToolPermissionDecisionRequest } from '../core/workflow/types.js';
 import { createManagerConversationSession, type ManagerConversationSession } from '../features/manager/conversationSession.js';
 import type { ManagerConversationPlan } from '../features/manager/conversationPlan.js';
+import { createManagerToolPermissionHandler } from '../features/manager/toolPermissionDecision.js';
 import { addManagerRepository } from '../features/manager/workspaceOperations.js';
 import { projectIdForCanonicalDirectory } from '../infra/config/global/projectRegistry.js';
 import { listPendingInquiries } from '../infra/goals/pending-inquiries.js';
-import { addGoalQuestion, answerGoalQuestion, withdrawGoalQuestion } from '../infra/goals/questions.js';
-import type { GoalQuestionInput } from '../infra/goals/schema.js';
+import { addGoalQuestion, answerGoalQuestion, consumeGoalApproval, withdrawGoalQuestion } from '../infra/goals/questions.js';
+import type { GoalAnswerInput, GoalQuestionInput } from '../infra/goals/schema.js';
 import { StandaloneInquiryStore, type InquiryOwner } from '../infra/goals/standalone-inquiries.js';
 import { GoalStore } from '../infra/goals/store.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
@@ -18,11 +19,14 @@ import { prepareCodexToolPermissionHook } from '../infra/codex/tool-permission-h
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { makeProvider } from './test-helpers.js';
 
-const doubles = vi.hoisted(() => ({ judge: vi.fn(), notificationOptions: vi.fn(), slack: vi.fn() }));
+const doubles = vi.hoisted(() => ({ judge: vi.fn(), notificationOptions: vi.fn(), slack: vi.fn(), sha: vi.fn(), repository: vi.fn() }));
 vi.mock('../agents/agent-usecases.js', () => ({ executeIsolatedStructuredInternalAgent: doubles.judge }));
+vi.mock('../infra/goals/git-command.js', async (original) => ({
+  ...await original<typeof import('../infra/goals/git-command.js')>(), resolveGoalBranchSha: doubles.sha,
+}));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { listTaskStateItems = () => []; } }));
-vi.mock('../infra/task/repositoryDirectory.js', () => ({ resolveGitRepositoryDirectory: (directory: string) => realpath(directory) }));
+vi.mock('../infra/task/repositoryDirectory.js', () => ({ resolveGitRepositoryDirectory: doubles.repository }));
 vi.mock('../features/manager/notifications.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../features/manager/notifications.js')>(),
   resolveManagerNotificationOptions: doubles.notificationOptions,
@@ -44,7 +48,383 @@ function judgment(decision: 'allow' | 'deny' | 'ask', confirmation: string | nul
 beforeEach(async () => {
   vi.resetAllMocks();
   doubles.judge.mockResolvedValue(judgment('ask', reason));
+  doubles.sha.mockResolvedValue('a'.repeat(40));
   doubles.notificationOptions.mockReturnValue({ policy, webhookUrl: undefined, mainMerge: 'approve' });
+});
+
+function liveHandler(target: Awaited<ReturnType<typeof fixture>>) {
+  const onDenial = vi.fn();
+  const handler = createManagerToolPermissionHandler({
+    plan: target.plan.permissionJudge!, provider: target.plan.ctx.providerType, cwd: target.cwd,
+    configDirectory: target.config, owner: target.owner, goal: target.goal, instruction: '操作を確認する',
+    abortSignal: new AbortController().signal, onDenial,
+  });
+  return { handler, onDenial };
+}
+
+function approvalInput(request: ToolPermissionDecisionRequest): GoalQuestionInput {
+  return { kind: 'approval', body: reason,
+    operation: { toolName: request.toolName, args: JSON.stringify(request.toolInput), cwd: request.cwd } };
+}
+
+function judgeRecords(): Record<string, unknown>[] {
+  const instruction = doubles.judge.mock.calls.at(-1)?.[1];
+  expect(instruction).toBeTypeOf('string');
+  const records: Record<string, unknown>[] = [];
+  const visit = (value: unknown): void => {
+    if (value === null || typeof value !== 'object') return;
+    if (Array.isArray(value)) { value.forEach(visit); return; }
+    const record = value as Record<string, unknown>;
+    records.push(record);
+    Object.values(record).forEach(visit);
+  };
+  visit(JSON.parse(instruction));
+  return records;
+}
+
+describe('manager saved approval decisions', () => {
+  it.each(['goal', 'workspace', 'repository'] as const)('allows a %s approval once after an external answer and persists consumption before returning', async (origin) => {
+    const target = await fixture(origin);
+    const { handler } = liveHandler(target);
+    expect(await handler(target.request)).toMatchObject({ decision: 'deny' });
+    const [pending] = await target.all();
+    expect(pending).toMatchObject({ status: 'pending' });
+    await target.answer(pending!.id, { decision: 'allow', scope: 'once' });
+    doubles.judge.mockClear().mockResolvedValue(judgment('allow', null));
+
+    expect(await handler(target.request)).toEqual({ decision: 'allow' });
+    expect(doubles.judge).not.toHaveBeenCalled();
+    const consumed = (await target.all()).find(({ id }) => id === pending!.id)!;
+    expect(consumed).toMatchObject({ consumedAt: expect.any(String), answer: { decision: 'allow', scope: 'once' } });
+    const saved = JSON.parse(await target.readSavedFile(pending!.id));
+    expect(origin === 'goal' ? saved.questions : [saved]).toContainEqual(consumed);
+
+    expect(await handler(target.request)).toMatchObject({ decision: 'deny' });
+    const next = (await target.all()).filter(({ status }) => status === 'pending');
+    expect(next).toHaveLength(1);
+    expect(next[0]!.id).not.toBe(pending!.id);
+    await target.answer(next[0]!.id, { decision: 'allow', scope: 'once' });
+    doubles.judge.mockClear();
+    expect(await handler(target.request)).toEqual({ decision: 'allow' });
+    expect(doubles.judge).not.toHaveBeenCalled();
+  });
+
+  it.each(['goal', 'project', 'workspace', 'global'] as const)('reuses a matching %s approval without consuming it', async (scope) => {
+    const target = await fixture('goal');
+    const previous = await target.seed(approvalInput(target.request));
+    await target.answer(previous.id, { decision: 'allow', scope });
+    const { handler } = liveHandler(target);
+    expect(await handler(target.request)).toEqual({ decision: 'allow' });
+    expect(await handler(target.request)).toEqual({ decision: 'allow' });
+    expect(doubles.judge).not.toHaveBeenCalled();
+    expect((await target.all()).find(({ id }) => id === previous.id)?.consumedAt).toBeUndefined();
+  });
+
+  it.each(['goal', 'workspace', 'repository'] as const)('returns a saved %s denial and the human reason to the hook and manager', async (origin) => {
+    const target = await fixture(origin);
+    const previous = await target.seed(approvalInput(target.request));
+    const humanReason = 'この出力先は使わないでください';
+    await target.answer(previous.id, { decision: 'deny', text: humanReason });
+    doubles.judge.mockResolvedValue(judgment('allow', null));
+    const { handler, onDenial } = liveHandler(target);
+    const decision = await handler(target.request);
+    expect(decision).toMatchObject({ decision: 'deny', reason: expect.stringContaining(humanReason) });
+    expect(toCodexToolPermissionOutput(decision).hookSpecificOutput.permissionDecisionReason).toContain(humanReason);
+    expect(onDenial).toHaveBeenCalledWith(expect.stringContaining(humanReason));
+    expect(doubles.judge).not.toHaveBeenCalled();
+    expect(await target.all()).toHaveLength(1);
+  });
+
+  it.each(['tool name', 'arguments', 'cwd', 'secret value'] as const)('does not reuse a saved approval after changing %s on the same handler', async (difference) => {
+    const target = await fixture('goal');
+    const original = difference === 'secret value' ? { ...target.request, toolInput: { token: 'alpha' } } : target.request;
+    const previous = await target.seed(approvalInput(original));
+    await target.answer(previous.id, { decision: 'allow', scope: 'goal' });
+    const { handler } = liveHandler(target);
+    expect(await handler(original)).toEqual({ decision: 'allow' });
+    const changed = { ...original, ...(difference === 'tool name' ? { toolName: 'Edit' }
+      : difference === 'cwd' ? { cwd: target.repository }
+        : { toolInput: difference === 'secret value' ? { token: 'bravo' } : { content: 'changed' } }) };
+    expect(await handler(changed)).toMatchObject({ decision: 'deny' });
+    expect(doubles.judge).toHaveBeenCalledOnce();
+    expect((await target.all()).find(({ id }) => id === previous.id)?.consumedAt).toBeUndefined();
+  });
+
+  it('binds inquiries to the current goal branch SHA and invalidates approval when it changes', async () => {
+    const target = await fixture('goal');
+    const { handler } = liveHandler(target);
+    await handler(target.request);
+    const [pending] = await target.all();
+    expect(pending!.targetSha).toBe('a'.repeat(40));
+    await target.answer(pending!.id, { decision: 'allow', scope: 'goal' });
+    expect(await handler(target.request)).toEqual({ decision: 'allow' });
+    doubles.sha.mockResolvedValue('b'.repeat(40));
+    expect(await handler(target.request)).toMatchObject({ decision: 'deny' });
+    const next = (await target.all()).find(({ status }) => status === 'pending');
+    expect(next!.targetSha).toBe('b'.repeat(40));
+    expect(next!.id).not.toBe(pending!.id);
+  });
+
+  it('does not allow an approved operation if saving its consumption fails', async () => {
+    const target = await fixture('goal');
+    const previous = await target.seed(approvalInput(target.request));
+    await target.answer(previous.id, { decision: 'allow', scope: 'once' });
+    const { handler } = liveHandler(target);
+    const update = vi.spyOn(GoalStore.prototype, 'update').mockRejectedValueOnce(new Error('consumption save failed'));
+    doubles.judge.mockResolvedValue(judgment('allow', null));
+    expect(await handler(target.request)).toMatchObject({ decision: 'deny' });
+    update.mockRestore();
+    expect((await target.all())[0]!.consumedAt).toBeUndefined();
+    expect(await handler(target.request)).toEqual({ decision: 'allow' });
+  });
+
+  it('does not reuse an approval without a target SHA when the goal branch SHA cannot be resolved', async () => {
+    const target = await fixture('goal');
+    const previous = await target.seed({ ...approvalInput(target.request), targetSha: undefined });
+    await target.answer(previous.id, { decision: 'allow', scope: 'once' });
+    doubles.sha.mockRejectedValue(new Error('goal branch unavailable'));
+    doubles.judge.mockResolvedValue(judgment('allow', null));
+    const { handler } = liveHandler(target);
+
+    expect(await handler(target.request)).toMatchObject({ decision: 'deny' });
+    expect((await target.all()).find(({ id }) => id === previous.id)?.consumedAt).toBeUndefined();
+  });
+
+  it.each(['goal', 'workspace'] as const)('denies a %s approval when interrupted during consumption persistence', async (origin) => {
+    const target = await fixture(origin);
+    const previous = await target.seed(approvalInput(target.request));
+    await target.answer(previous.id, { decision: 'allow', scope: 'once' });
+    const controller = new AbortController();
+    if (origin === 'goal') {
+      const update = GoalStore.prototype.update;
+      vi.spyOn(GoalStore.prototype, 'update').mockImplementationOnce(async function (this: GoalStore, id, transform) {
+        const saved = await update.call(this, id, transform);
+        controller.abort();
+        return saved;
+      });
+    } else {
+      const consume = StandaloneInquiryStore.prototype.consumeApproval;
+      vi.spyOn(StandaloneInquiryStore.prototype, 'consumeApproval').mockImplementationOnce(async function (this: StandaloneInquiryStore, approval, consumedAt) {
+        const saved = await consume.call(this, approval, consumedAt);
+        controller.abort();
+        return saved;
+      });
+    }
+    const onDenial = vi.fn();
+    const handler = createManagerToolPermissionHandler({
+      plan: target.plan.permissionJudge!, provider: 'claude-sdk', cwd: target.cwd,
+      configDirectory: target.config, owner: target.owner, goal: target.goal, instruction: '操作を確認する',
+      abortSignal: controller.signal, onDenial,
+    });
+    const result = await handler(target.request);
+    expect(result).toMatchObject({ decision: 'deny' });
+    expect(onDenial).toHaveBeenCalledWith(result.decision === 'deny' ? result.reason : undefined);
+    expect(doubles.judge).not.toHaveBeenCalled();
+    expect((await target.all()).find(({ id }) => id === previous.id)?.consumedAt).toEqual(expect.any(String));
+  });
+
+  it('keeps a saved denial effective when a matching allowed answer also exists', async () => {
+    const target = await fixture('goal');
+    const denied = await target.seed(approvalInput(target.request));
+    await target.answer(denied.id, { decision: 'deny', text: '人が拒否しました' });
+    const allowed = await target.seed(approvalInput(target.request));
+    await target.answer(allowed.id, { decision: 'allow', scope: 'once' });
+    const { handler } = liveHandler(target);
+    expect(await handler(target.request)).toMatchObject({ decision: 'deny', reason: expect.stringContaining('人が拒否しました') });
+    expect(doubles.judge).not.toHaveBeenCalled();
+    expect((await target.all()).find(({ id }) => id === allowed.id)?.consumedAt).toBeUndefined();
+  });
+
+  it('preserves classifier refusal even when the operation has a saved approval', async () => {
+    const target = await fixture('workspace');
+    const request = { ...target.request, toolName: 'Agent' };
+    const previous = await target.seed(approvalInput(request));
+    await target.answer(previous.id, { decision: 'allow', scope: 'once' });
+    const { handler } = liveHandler(target);
+    expect(await handler(request)).toMatchObject({ decision: 'deny' });
+    expect(doubles.judge).not.toHaveBeenCalled();
+    expect((await target.all())[0]!.consumedAt).toBeUndefined();
+  });
+});
+
+async function putPermission(path: string, content: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, content);
+}
+
+async function permissionSources(target: Awaited<ReturnType<typeof fixture>>) {
+  const project = join(target.config, 'manager-permissions', 'projects',
+    `${projectIdForCanonicalDirectory(await realpath(target.goalRepository))}.md`);
+  return [
+    { scope: 'global', filePath: join(target.config, 'manager-permissions.md'), content: '## 許可\r\n- 全体の原文  \r\n' },
+    { scope: 'workspace', filePath: join(target.config, 'workspaces', workspaceId, 'manager-permissions.md'), content: '## 毎回確認\n- 担当の原文\n' },
+    { scope: 'project', filePath: project, content: '## 拒否\n- 対象プロジェクトの原文\n' },
+  ];
+}
+
+describe('manager permission judge persisted context', () => {
+  it('selects the project from the tool cwd and reloads workspace permissions after assignment changes', async () => {
+    const target = await fixture('workspace');
+    const sources = await permissionSources(target);
+    await Promise.all(sources.map(({ filePath, content }) => putPermission(filePath, content)));
+    const otherWorkspaceFile = join(target.config, 'workspaces', otherWorkspaceId, 'manager-permissions.md');
+    await putPermission(join(dirname(otherWorkspaceFile), 'workspace.json'), JSON.stringify({
+      id: otherWorkspaceId, name: '切替先', repositoryDirectories: [target.repository, target.goalRepository],
+    }));
+    await putPermission(otherWorkspaceFile, '## 拒否\n- 切替先の担当原文\n');
+    const wrongProjectFile = join(target.config, 'manager-permissions', 'projects',
+      `${projectIdForCanonicalDirectory(await realpath(target.repository))}.md`);
+    await putPermission(wrongProjectFile, '## 許可\n- 先頭プロジェクトの許可\n');
+    let owner = target.owner;
+    const handler = createManagerToolPermissionHandler({
+      plan: target.plan.permissionJudge!, provider: 'claude-sdk', cwd: target.cwd, configDirectory: target.config,
+      get owner() { return owner; }, instruction: '操作を確認する', abortSignal: new AbortController().signal, onDenial: vi.fn(),
+    });
+    const cwd = join(target.goalRepository, 'src');
+    await mkdir(cwd);
+    doubles.judge.mockResolvedValue(judgment('deny', '入力を確認しました'));
+    await handler({ ...target.request, cwd });
+    let files = judgeRecords().filter(({ filePath }) => typeof filePath === 'string');
+    expect(files).toContainEqual(expect.objectContaining(sources[2]!));
+    expect(files).toContainEqual(expect.objectContaining(sources[1]!));
+    expect(files.map(({ filePath }) => filePath)).not.toContain(wrongProjectFile);
+    owner = { kind: 'workspace', workspaceId: otherWorkspaceId };
+    await handler({ ...target.request, cwd });
+    files = judgeRecords().filter(({ filePath }) => typeof filePath === 'string');
+    expect(files).toContainEqual(expect.objectContaining({ scope: 'workspace', filePath: otherWorkspaceFile, content: '## 拒否\n- 切替先の担当原文\n' }));
+    expect(files.map(({ filePath }) => filePath)).not.toContain(sources[1]!.filePath);
+    expect(files).toContainEqual(expect.objectContaining(sources[2]!));
+  });
+
+  it('passes current scoped original text with source paths and excludes unrelated projects and goals', async () => {
+    const target = await fixture('goal');
+    const sources = await permissionSources(target);
+    await Promise.all(sources.map(({ filePath, content }) => putPermission(filePath, content)));
+    const otherProject = join(target.config, 'manager-permissions', 'projects',
+      `${projectIdForCanonicalDirectory(await realpath(target.repository))}.md`);
+    await putPermission(otherProject, '## 許可\n- 他プロジェクトの許可\n');
+    const goalText = '  対象ゴールだけの許可原文\n二行目  ';
+    const previous = await target.seed(approvalInput({ ...target.request, toolInput: { content: '別操作' } }));
+    await target.answer(previous.id, { decision: 'allow', scope: 'goal', text: goalText });
+    const otherGoal = { ...goalRecord(), id: otherWorkspaceId };
+    const unrelated = addGoalQuestion(otherGoal, approvalInput(target.request));
+    await target.goalStore.create(answerGoalQuestion(unrelated.goal, unrelated.questionId,
+      { decision: 'allow', scope: 'goal', text: '他ゴールの許可' }));
+    const { handler } = liveHandler(target);
+    doubles.judge.mockResolvedValue(judgment('deny', '入力を確認しました'));
+    await handler(target.request);
+    const files = judgeRecords().filter((entry) => typeof entry.filePath === 'string' && typeof entry.content === 'string');
+    for (const source of sources) expect(files).toContainEqual(expect.objectContaining(source));
+    expect(files).toContainEqual(expect.objectContaining({ scope: 'goal',
+      filePath: join(target.goalRepository, '.takt', 'goals', target.goal!.id, 'goal.json'),
+      content: expect.stringContaining(goalText) }));
+    expect(files.map(({ filePath }) => filePath)).not.toContain(otherProject);
+    expect(new Set(files.filter(({ scope }) => scope === 'goal').map(({ filePath }) => filePath)))
+      .toEqual(new Set([join(target.goalRepository, '.takt', 'goals', target.goal!.id, 'goal.json')]));
+    for (const { content } of files) expect(content).not.toMatch(/他ゴール|他プロジェクト/u);
+    const changed = sources[0]!.content + '- 追記された許可原文\n';
+    await putPermission(sources[0]!.filePath, changed);
+    await handler(target.request);
+    expect(judgeRecords()).toContainEqual(expect.objectContaining({ ...sources[0], content: changed }));
+  });
+
+  it('passes only the goal-scoped answer when project and goal answers have identical text', async () => {
+    const target = await fixture('goal');
+    const text = 'ログの確認を許可する';
+    const otherOperation = approvalInput({ ...target.request, toolInput: { content: '別操作' } });
+    const goalApproval = await target.seed(otherOperation);
+    await target.answer(goalApproval.id, { decision: 'allow', scope: 'goal', text });
+    const projectApproval = await target.seed(otherOperation);
+    await target.answer(projectApproval.id, { decision: 'allow', scope: 'project', text });
+    const { handler } = liveHandler(target);
+    doubles.judge.mockResolvedValue(judgment('deny', '入力を確認しました'));
+
+    await handler(target.request);
+
+    expect(doubles.judge).toHaveBeenCalledOnce();
+    const input = JSON.parse(doubles.judge.mock.calls[0]![1]) as {
+      scopedPermissions: { scope: string; filePath: string; content: string; inquiryId?: string }[];
+    };
+    expect(input.scopedPermissions).toContainEqual(expect.objectContaining({
+      scope: 'goal', filePath: join(target.goalRepository, '.takt', 'goals', target.goal!.id, 'goal.json'),
+      content: text, inquiryId: goalApproval.id,
+    }));
+    expect(input.scopedPermissions.map(({ inquiryId }) => inquiryId)).not.toContain(projectApproval.id);
+  });
+
+  it('passes matching withdrawn and consumed answers without mixing in another operation', async () => {
+    const target = await fixture('goal');
+    const consumed = await target.seed(approvalInput(target.request));
+    await target.answer(consumed.id, { decision: 'allow', scope: 'once', text: '一度だけの回答' });
+    await target.goalStore.update(target.goal!.id, (current) => consumeGoalApproval(current, consumed.id, '2026-10-19T01:00:00.000Z'));
+    const withdrawn = await target.seed(approvalInput(target.request));
+    await target.goalStore.update(target.goal!.id, (current) => withdrawGoalQuestion(current, withdrawn.id, '取り下げ理由'));
+    const other = await target.seed(approvalInput({ ...target.request, toolInput: { content: '無関係な操作' } }));
+    const { handler } = liveHandler(target);
+    await handler(target.request);
+    const records = judgeRecords().filter(({ id }) => typeof id === 'string');
+    const expected = (await target.all()).filter(({ id }) => id === consumed.id || id === withdrawn.id);
+    for (const question of expected) expect(records).toContainEqual(expect.objectContaining(question));
+    expect(records.map(({ id }) => id)).not.toContain(other.id);
+  });
+
+  it.each(['non-regular source', 'oversized file', 'oversized UTF-8 file'] as const)('asks a human on %s even when the judge allows', async (failure) => {
+    const target = await fixture('workspace');
+    const path = join(target.config, 'manager-permissions.md');
+    if (failure === 'non-regular source') await mkdir(path);
+    else await writeFile(path, failure === 'oversized UTF-8 file' ? 'あ'.repeat(2731) : 'a'.repeat(8193));
+    doubles.judge.mockResolvedValue(judgment('allow', null));
+    const { handler, onDenial } = liveHandler(target);
+    const decision = await handler(target.request);
+    expect(decision).toMatchObject({ decision: 'deny' });
+    const [pending] = await target.all();
+    expect(pending).toMatchObject({ kind: 'approval', status: 'pending' });
+    expect(decision).toHaveProperty('reason', expect.stringContaining(pending!.id));
+    expect(onDenial).toHaveBeenCalledWith(expect.stringContaining(pending!.id));
+    const values = judgeRecords().flatMap((record) => Object.values(record)).filter((value): value is string => typeof value === 'string');
+    expect(values.some((value) => value.includes(path))).toBe(true);
+    expect(values.some((value) => /read|regular|budget|exceed|読|上限/iu.test(value))).toBe(true);
+  });
+
+  it('does not bypass a permission read failure with a previously allowed approval', async () => {
+    const target = await fixture('goal');
+    const previous = await target.seed(approvalInput(target.request));
+    await target.answer(previous.id, { decision: 'allow', scope: 'once' });
+    await mkdir(join(target.config, 'manager-permissions.md'));
+    doubles.judge.mockResolvedValue(judgment('allow', null));
+    const { handler } = liveHandler(target);
+    expect(await handler(target.request)).toMatchObject({ decision: 'deny' });
+    expect((await target.all()).find(({ id }) => id === previous.id)?.consumedAt).toBeUndefined();
+  });
+
+  it('passes a file at exactly 8192 bytes without truncating its original text', async () => {
+    const target = await fixture('workspace');
+    const filePath = join(target.config, 'manager-permissions.md');
+    const content = 'a'.repeat(8192);
+    await writeFile(filePath, content);
+    doubles.judge.mockResolvedValue(judgment('allow', null));
+    const { handler } = liveHandler(target);
+    expect(await handler(target.request)).toEqual({ decision: 'allow' });
+    expect(judgeRecords()).toContainEqual(expect.objectContaining({ scope: 'global', filePath, content }));
+  });
+
+  it('includes goal permission text in the byte budget and asks instead of using partial permissions', async () => {
+    const target = await fixture('goal');
+    const sources = await permissionSources(target);
+    await Promise.all(sources.map(({ filePath }) => putPermission(filePath, 'a'.repeat(8192))));
+    for (let index = 0; index < 2; index++) {
+      const previous = await target.seed(approvalInput({ ...target.request, toolInput: { index } }));
+      await target.answer(previous.id, { decision: 'allow', scope: 'goal', text: 'b'.repeat(5000) });
+    }
+    doubles.judge.mockResolvedValue(judgment('allow', null));
+    const { handler } = liveHandler(target);
+    const decision = await handler(target.request);
+    expect(decision).toMatchObject({ decision: 'deny' });
+    expect((await target.all()).filter(({ status }) => status === 'pending')).toHaveLength(1);
+    expect(doubles.judge).toHaveBeenCalledOnce();
+    const values = judgeRecords().flatMap((record) => Object.values(record)).filter((value): value is string => typeof value === 'string');
+    expect(values.some((value) => /budget|exceed|limit|上限|制限/iu.test(value))).toBe(true);
+  });
 });
 afterEach(async () => {
   await Promise.all(sessions.splice(0).map((session) => session.close()));
@@ -56,8 +436,14 @@ async function fixture(origin: Origin, providerType: 'claude-sdk' | 'codex' = 'c
   const repository = join(config, 'repository-a');
   const goalRepository = join(config, 'repository-b');
   const cwd = join(config, 'conversation');
-  const toolCwd = join(config, 'tool-directory');
+  const toolCwd = join(goalRepository, 'tool-directory');
   await Promise.all([repository, goalRepository, cwd, toolCwd].map((directory) => mkdir(directory, { recursive: true })));
+  doubles.repository.mockImplementation(async (directory: string) => {
+    const canonical = await realpath(directory);
+    const root = [repository, goalRepository].find((candidate) => canonical === candidate || canonical.startsWith(`${candidate}${sep}`));
+    if (root === undefined) throw new Error(`Not a repository fixture: ${directory}`);
+    return root;
+  });
   const owner: InquiryOwner = origin === 'repository'
     ? { kind: 'repository', repositoryDirectory: repository }
     : { kind: 'workspace', workspaceId };
@@ -97,14 +483,18 @@ async function fixture(origin: Origin, providerType: 'claude-sdk' | 'codex' = 'c
     if (origin !== 'goal') return standalone.create(input);
     let id: string | undefined;
     const saved = await goalStore.update(goal!.id, (current) => {
-      const added = addGoalQuestion(current, input);
+      const added = addGoalQuestion(current, { targetSha: 'a'.repeat(40), ...input });
       id = added.questionId;
       return added.goal;
     });
     return saved.questions!.find((question) => question.id === id)!;
   };
   return {
-    config, repository, goalRepository, cwd, goal, request, goalStore, standalone, pending, all, seed, call,
+    config, repository, goalRepository, cwd, goal, owner, plan, request, goalStore, standalone, pending, all, seed, call,
+    async answer(id: string, answer: GoalAnswerInput) {
+      if (origin === 'goal') await goalStore.update(goal!.id, (current) => answerGoalQuestion(current, id, answer));
+      else await standalone.answer(id, answer);
+    },
     get session() { return session; },
     async reopen() { await session.close(); session = createSession(); },
     async decide(operation = request) {
@@ -285,7 +675,6 @@ describe('manager approval inquiry persistence', () => {
       expect(pendingAtDelivery).toEqual([result]);
     } else {
       expect(doubles.slack).not.toHaveBeenCalled();
-      expect(GoalStore.prototype.update).toHaveBeenCalledTimes(2);
     }
   });
 
@@ -325,13 +714,14 @@ describe('manager approval inquiry persistence', () => {
     const saved = await target.all();
     expect(saved).toHaveLength(1);
     await target.reopen();
-    doubles.judge.mockResolvedValue(judgment('ask', 'もう一度出力先を確認してください'));
+    doubles.judge.mockResolvedValue(judgment('allow', null));
     const second = await target.decide();
     const after = await target.all();
     expect(after).toHaveLength(1);
     expect(after[0]!.id).toBe(saved[0]!.id);
     for (const decision of [first, second]) expect(decision).toHaveProperty('reason', expect.stringContaining(saved[0]!.id));
-    expect(second).toMatchObject({ decision: 'deny', reason: expect.stringContaining('もう一度出力先を確認してください') });
+    expect(second).toMatchObject({ decision: 'deny' });
+    expect(doubles.judge).toHaveBeenCalledOnce();
   });
 
   describe.each(['goal', 'workspace'] as const)('%s duplicate matching', (origin) => {
@@ -351,14 +741,12 @@ describe('manager approval inquiry persistence', () => {
       expect(decision).toHaveProperty('reason', expect.stringContaining(latest.id));
     });
 
-    it.each(['answered', 'withdrawn', 'question'] as const)('does not reuse a matching %s inquiry', async (state) => {
+    it.each(['withdrawn', 'question'] as const)('does not reuse a matching %s inquiry', async (state) => {
       const target = await fixture(origin);
       const previous = await target.seed({ kind: state === 'question' ? 'question' : 'approval', body: reason,
         operation: { toolName: target.request.toolName, args: JSON.stringify(target.request.toolInput), cwd: target.request.cwd } });
       if (state !== 'question') {
-        if (origin === 'goal') await target.goalStore.update(target.goal!.id, (current) => state === 'answered'
-          ? answerGoalQuestion(current, previous.id, { decision: 'allow' }) : withdrawGoalQuestion(current, previous.id));
-        else if (state === 'answered') await target.standalone.answer(previous.id, { decision: 'allow' });
+        if (origin === 'goal') await target.goalStore.update(target.goal!.id, (current) => withdrawGoalQuestion(current, previous.id));
         else await target.standalone.withdraw(previous.id);
       }
       const decision = await target.decide();
