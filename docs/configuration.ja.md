@@ -433,6 +433,21 @@ validation に失敗します。
 
 設定キー上書きとは別に、`TAKT_NOTIFY_WEBHOOK` には Slack Incoming Webhook URL を設定できます。設定すると、pipeline 完了時と `takt run` のタスクバッチ完了時（run summary）に Slack へ通知が送信されます。manager の有効なゴール通知にも同じ Webhook を使用します。
 
+## manager の秘密ファイル設定
+
+グローバル `~/.takt/config.yaml` またはプロジェクト `.takt/config.yaml` の `manager.sensitive_paths` で、担当リポジトリ内でも判断役へ渡すファイルとディレクトリを追加できます。
+
+```yaml
+manager:
+  sensitive_paths:
+    - private
+    - config/credentials.json
+```
+
+既定は `.env`、`.env.*`、`id_rsa`、`id_dsa`、`id_ecdsa`、`id_ed25519`、`*.key`、`*.pem`、`*.crt`、`*.cer`、`*.p12`、`*.pfx` です。両設定の一覧を既定に追加し、省略や空配列でも既定を削除できません。単独の名前は任意の深さで適用し、ディレクトリ成分を含む相対パスは各担当リポジトリを基準にします。絶対パスと `~/` も指定できます。ディレクトリ指定は配下を含みます。名前には先頭または末尾の単一の `*` を使えます。許可ルールを定義する設定ではありません。
+
+Claude の `Read`、`Glob`、`Grep` は、パスとシンボリックリンクを解決した対象が担当内の読み取り可能な通常対象だけの場合に判断役を通りません。検索候補は秘密の本文を読まず、パスとメタデータで確認します。検索指定は `*`、`**`、`?` の単純な形式に対応し、除外、波括弧展開、文字クラス、エスケープや範囲を確定できない指定は判断役へ渡します。隠しパス、走査するディレクトリやリンクは保守的に確認するため、絞り込んだ検索でも審査する場合があります。Codex の組み込み道具は引き続き審査します。
+
 ## manager の通知設定
 
 プロジェクト `.takt/config.yaml` とグローバル `~/.takt/config.yaml` の

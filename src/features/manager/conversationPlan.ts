@@ -11,6 +11,7 @@ import type { Provider, ProviderType } from '../../infra/providers/index.js';
 import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
 import { resolveRuntimeManagerPermissionJudgeProvider } from '../../infra/config/runtime-provider/internal-agents.js';
 import type { ManagerPermissionJudgePlan } from './toolPermissionJudge.js';
+import { withManagerReadScope } from './readScopeProvider.js';
 
 export interface ManagerConversationContext {
   provider: Provider;
@@ -79,7 +80,8 @@ export function createManagerConversationPlan(
   return {
     ...(permissionJudge === undefined ? {} : { permissionJudge }),
     ctx: {
-      provider, providerType: resolved.provider, model: resolved.model, lang,
+      provider: withManagerReadScope(provider, cwd, getGlobalConfigDir(), managerConfig.sensitivePaths),
+      providerType: resolved.provider, model: resolved.model, lang,
       providerOptions: configured, mcpServers: servers,
     },
     strategy: {
