@@ -54,7 +54,7 @@ vi.mock('../infra/config/loaders/resource-resolver.js', () => ({
   resolveFacetByNameWithSource: () => ({ path: '/fixture/instruction.md', content: 'instruction' }),
   resolveRefToContent: () => 'fixture instruction',
 }));
-vi.mock('../infra/config/managerConfig.js', () => ({ resolveManagerConfig: () => ({ mainMerge: 'approve' }) }));
+vi.mock('../infra/config/managerConfig.js', () => ({ resolveManagerConfig: () => ({ mainMerge: 'approve', sensitivePaths: [] }) }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class {
   constructor(directory: string) { doubles.store(directory); }
   update = doubles.update; list = doubles.list; get = async (id: string) => structuredClone(goal.id === id ? goal : { ...goalRecord(), id });
@@ -150,7 +150,7 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe('manager tool permission classification', () => {
-  it.each(['Read', 'Glob', 'Grep', 'ToolSearch'])('allows only the exact built-in %s without a judge', async (name) => {
+  it.each(['ToolSearch'])('allows only the exact built-in %s without a judge', async (name) => {
     expect(await decide(name)).toEqual({ decision: 'allow' });
     expect(executeIsolatedStructuredInternalAgent).not.toHaveBeenCalled();
   });

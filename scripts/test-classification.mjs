@@ -273,6 +273,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/lstatIfExists.test.ts',
   'src/__tests__/managed-provider-retry-preflight.test.ts',
   'src/__tests__/managed-sdk-version-alignment.test.ts',
+  'src/__tests__/manager-read-scope.integration.test.ts',
   'src/__tests__/manager-scoped-permission-storage.test.ts',
   'src/__tests__/mcp-entrypoint.test.ts',
   'src/__tests__/mock-scenario.test.ts',
