@@ -55,6 +55,7 @@ import {
 import {
   RunCleanupError,
   RunLiveDeliveryError,
+  RunProjectionError,
   type RunFinalizationIssue,
   type WorkflowRunExecutionControl,
   type WorkflowRunExecutionHandle,
@@ -534,6 +535,7 @@ async function executeWorkflowInternal(
               prMergePushRecorder: options.prMergePushRecorder,
               gitProvider: runContext?.gitProvider,
               outputMode: options.outputMode, taskPrefix: options.taskPrefix,
+              eventSink: options.eventSink,
               taskColorIndex: options.taskColorIndex, taskDisplayLabel: options.taskDisplayLabel,
             }, prNumber),
           } }),
@@ -914,6 +916,24 @@ async function publishTerminalLiveFeedback(input: {
   readonly shouldNotifyWorkflowAbort: boolean;
   readonly issues: RunFinalizationIssue[];
 }): Promise<void> {
+  const traceIssues = input.issues.filter(
+    (issue) => issue instanceof RunProjectionError && issue.stage === 'trace',
+  );
+  for (const issue of traceIssues) {
+    const message = sanitizeTerminalText(
+      `Run result was committed, but trace finalization failed: ${getErrorMessage(issue)}`,
+    );
+    try {
+      input.out.warn(message);
+    } catch (error) {
+      input.issues.push(new RunLiveDeliveryError(error));
+    }
+    try {
+      input.eventBridge.emitTerminalFeedback({ type: 'progress', level: 'warn', message });
+    } catch (error) {
+      input.issues.push(new RunLiveDeliveryError(error));
+    }
+  }
   try {
     if (input.payload.status === 'completed') {
       reportWorkflowCompletion(

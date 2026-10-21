@@ -13,19 +13,21 @@
 
 import type { AutoRequeueResult, AutoRequeueSkipReason, TaskRunner, TaskInfo, TaskListItem } from '../../../infra/task/index.js';
 import { ActiveTaskTargetConflictError } from '../../../infra/task/activeTaskTarget.js';
-import { info, blankLine } from '../../../shared/ui/index.js';
+import { info, warn, blankLine } from '../../../shared/ui/index.js';
 import { TaskPrefixWriter } from '../../../shared/ui/TaskPrefixWriter.js';
-import { createLogger } from '../../../shared/utils/index.js';
+import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
+import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
 import { executeRunTaskAndComplete, executeRunTaskAndCompleteWithDetails } from './runTaskExecution.js';
 import { ShutdownManager } from './shutdownManager.js';
 import { forceExitAfterOpenCodeCleanup } from './forceShutdown.js';
 import { isInputWaiting } from './inputWait.js';
 import type { TaskExecutionOptions } from './types.js';
-import { claimTasksWithGoalCompletions } from './claimTasks.js';
+import { claimTasksWithGoalCompletions, TaskClaimLockUnavailableError } from './claimTasks.js';
 import { checkQueuedTaskProviders, checkPendingTaskProviders } from './providerPreflight.js';
 
 const log = createLogger('worker-pool');
+const CLAIM_RETRY_INTERVAL_MS = 5_000;
 
 export interface WorkerPoolResult {
   success: number;
@@ -41,6 +43,7 @@ interface RunWorkerOptions {
 export interface WorkerPoolShutdownSignals {
   readonly schedulingSignal: AbortSignal;
   readonly taskAbortSignal: AbortSignal;
+  readonly onTasksClaimed?: () => void;
 }
 
 type RaceResult =
@@ -141,14 +144,41 @@ export async function runWithWorkerPool(
   const active = new Map<Promise<boolean>, TaskInfo>();
   const colorCounter = { value: 0 };
   let preparationFailure: { error: unknown } | undefined;
+  let claimRetryAt: number | undefined;
+
+  const reportPreparationFailure = (error: unknown): void => {
+    preparationFailure = { error };
+    const detail = sanitizeSensitiveText(getErrorMessage(error));
+    warn(`Cannot prepare pending tasks: ${detail}`);
+    log.error('Task preparation failed', { error: detail });
+  };
 
   const claimPreparedTasks = async (): Promise<void> => {
-    if (preparationFailure !== undefined) return;
+    if (schedulingSignal.aborted || preparationFailure !== undefined
+      || (claimRetryAt !== undefined && Date.now() < claimRetryAt)) return;
     try {
-      await claimAvailableTasks(taskRunner, queue, active.size, concurrency, schedulingSignal,
+      const attempted = await claimAvailableTasks(taskRunner, queue, active.size, concurrency, schedulingSignal,
         cwd, taskExecutionOptions, goalTasksOnly);
+      if (claimRetryAt !== undefined) {
+        if (attempted) {
+          claimRetryAt = undefined;
+          info('Task claiming resumed after disk space became available.');
+          log.info('Task claiming resumed after ENOSPC');
+        } else {
+          claimRetryAt = Date.now() + CLAIM_RETRY_INTERVAL_MS;
+        }
+      }
     } catch (error) {
-      if (!schedulingSignal.aborted || error !== schedulingSignal.reason) preparationFailure = { error };
+      if (schedulingSignal.aborted && error === schedulingSignal.reason) return;
+      if (error instanceof TaskClaimLockUnavailableError) {
+        if (claimRetryAt === undefined) {
+          warn('Cannot claim pending tasks because the disk is full. Waiting to retry.');
+          log.warn('Task claim lock creation failed with ENOSPC; waiting to retry');
+        }
+        claimRetryAt = Date.now() + CLAIM_RETRY_INTERVAL_MS;
+      } else {
+        reportPreparationFailure(error);
+      }
     }
   };
 
@@ -162,9 +192,12 @@ export async function runWithWorkerPool(
       }
       requeueExistingFailedTasks(taskRunner, maxAttempts, schedulingSignal, failedTasks);
       await claimPreparedTasks();
+    } else if (initialTasks.length === 0) {
+      await claimPreparedTasks();
     }
-    while (true) {
+    while (mode === 'watch' || queue.length > 0 || active.size > 0 || claimRetryAt !== undefined) {
       if (!schedulingSignal.aborted && preparationFailure === undefined) {
+        if (queue.length > 0) shutdownSignals?.onTasksClaimed?.();
         fillSlots(queue, active, concurrency, taskRunner, cwd, taskExecutionOptions, runOptions,
           schedulingSignal, taskAbortSignal, colorCounter);
         if ((selfSigintOnce || selfSigintTwice) && !selfSigintInjected && active.size > 0) {
@@ -178,12 +211,9 @@ export async function runWithWorkerPool(
         }
       }
 
-      await claimPreparedTasks();
-      if (!schedulingSignal.aborted && preparationFailure === undefined
-        && queue.length > 0 && active.size < concurrency) continue;
-
       if (active.size === 0
-        && (schedulingSignal.aborted || preparationFailure !== undefined || mode === 'run')) {
+        && (schedulingSignal.aborted || preparationFailure !== undefined
+          || (mode === 'run' && claimRetryAt === undefined && queue.length === 0))) {
         break;
       }
 
@@ -198,7 +228,8 @@ export async function runWithWorkerPool(
         // Graceful shutdown: stop scheduling new work but wait for in-flight tasks to settle.
         settled = await Promise.race(completionPromises);
       } else {
-        const pollTimer = createPollTimer(pollIntervalMs, schedulingSignal);
+        const waitMs = claimRetryAt === undefined ? pollIntervalMs : Math.max(0, claimRetryAt - Date.now());
+        const pollTimer = createPollTimer(waitMs, schedulingSignal);
         try {
           settled = await Promise.race([...completionPromises, pollTimer.promise]);
         } finally {
@@ -229,7 +260,7 @@ export async function runWithWorkerPool(
               };
               await checkRequeueProviders(cwd, failedTask, taskExecutionOptions, schedulingSignal);
             } catch (error) {
-              preparationFailure = { error };
+              reportPreparationFailure(error);
             }
           }
           const failed = !settled.result
@@ -242,6 +273,8 @@ export async function runWithWorkerPool(
           }
         }
       }
+
+      await claimPreparedTasks();
     }
   } finally {
     // The caller owns the project lock until every task has finished saving.
@@ -276,13 +309,15 @@ async function claimAvailableTasks(
   cwd: string,
   overrides: TaskExecutionOptions | undefined,
   goalTasksOnly: boolean,
-): Promise<void> {
-  if (signal.aborted || isInputWaiting()) return;
+): Promise<boolean> {
+  if (signal.aborted || isInputWaiting()) return false;
   const freeSlots = concurrency - activeCount - queue.length;
-  if (freeSlots <= 0) return;
+  if (freeSlots <= 0) return false;
   await checkPendingTaskProviders(taskRunner, cwd, overrides ?? {}, undefined, [], signal, goalTasksOnly);
-  if (signal.aborted || isInputWaiting()) return;
-  const { tasks: newTasks } = claimTasksWithGoalCompletions(taskRunner, freeSlots, cwd, signal);
+  if (signal.aborted || isInputWaiting()) return false;
+  const { tasks: newTasks } = claimTasksWithGoalCompletions(
+    taskRunner, freeSlots, cwd, signal, goalTasksOnly,
+  );
   log.trace('poll_tick', { active: activeCount, queued: queue.length, freeSlots });
   if (newTasks.length > 0) {
     log.debug('poll_new_tasks', { count: newTasks.length });
@@ -290,6 +325,7 @@ async function claimAvailableTasks(
   } else {
     log.trace('no_new_tasks');
   }
+  return true;
 }
 
 export function requeueExistingFailedTasks(

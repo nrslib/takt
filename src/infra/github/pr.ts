@@ -6,6 +6,7 @@
 
 import { execFile, execFileSync } from 'node:child_process';
 import { z } from 'zod';
+import { PrHeadObservationMismatchError } from '../../core/workflow/system/pr-execution-context.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { fetchPaginatedApi } from '../git/paginated-api.js';
 import { isTaktManagedPrBody } from '../git/format.js';
@@ -1545,7 +1546,7 @@ export async function fetchCacciaPullRequestDetails(
     throw new Error(`Missing pull request head repository for pull request #${prNumber}`);
   }
   if (pullRequest.headRefOid !== locator.headSha) {
-    throw new Error(`Pull request #${prNumber} head changed while reading its metadata`);
+    throw new PrHeadObservationMismatchError(prNumber, locator.headSha, pullRequest.headRefOid);
   }
   const headRepositorySshUrl = pullRequest.headRepository.sshUrl;
   const originUrl = await readCacciaOriginUrlOutput(cwd, 'fetch', signal);
