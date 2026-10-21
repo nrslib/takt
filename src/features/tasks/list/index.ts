@@ -25,6 +25,7 @@ import {
 } from './taskActions.js';
 import { deleteTaskByKind, deleteAllTasks } from './taskDeleteActions.js';
 import { forceFailRunningTask } from './taskForceFailActions.js';
+import { stopRunningTask } from './taskStopActions.js';
 import * as taskRetryActions from './taskRetryActions.js';
 import { listTasksNonInteractive, type ListNonInteractiveOptions } from './listNonInteractive.js';
 import { formatTaskStatusLabel, formatShortDate } from './taskStatusLabel.js';
@@ -54,7 +55,7 @@ export {
 
 type PendingTaskAction = 'delete';
 type ExceededTaskAction = 'requeue' | 'delete';
-type RunningTaskAction = 'force_fail' | 'interactive';
+type RunningTaskAction = 'stop' | 'force_fail' | 'interactive';
 type FailedTaskAction = 'requeue' | 'retry' | 'create_pr' | 'delete';
 type PrFailedTaskAction = ListAction;
 type CompletedTaskAction = ListAction;
@@ -93,7 +94,7 @@ async function showPendingTaskAndPromptAction(task: TaskListItem): Promise<Pendi
   );
 }
 
-async function showRunningTaskAndPromptAction(task: TaskListItem): Promise<RunningTaskAction | null> {
+async function showRunningTaskAndPromptAction(task: TaskListItem, lang: 'en' | 'ja'): Promise<RunningTaskAction | null> {
   header(formatTaskStatusLabel(task));
   info(`  Created: ${task.createdAt}`);
   if (task.content) {
@@ -108,6 +109,7 @@ async function showRunningTaskAndPromptAction(task: TaskListItem): Promise<Runni
       ...(task.runSlug !== undefined && task.worktreePath !== undefined && task.data?.worktree !== false
         ? [{ label: 'Interactive', value: 'interactive' as const, description: 'Consult the running task and propose additional instructions' }]
         : []),
+      { label: getLabel('taskStop.label', lang), value: 'stop', description: getLabel('taskStop.description', lang) },
     ],
   );
 }
@@ -280,13 +282,14 @@ export async function listTasks(
     } else if (type === 'running') {
       const task = tasks[idx];
       if (!task) continue;
-      const taskAction = await showRunningTaskAndPromptAction(task);
+      const config = resolveConfigValues(cwd, ['language', 'interactivePreviewSteps']);
+      const lang = config.language === 'ja' ? 'ja' : 'en';
+      const taskAction = await showRunningTaskAndPromptAction(task, lang);
       if (taskAction === 'interactive' && task.runSlug !== undefined) {
         try {
-          const config = resolveConfigValues(cwd, ['language', 'interactivePreviewSteps']);
           await runTui({
             cwd,
-            lang: config.language === 'ja' ? 'ja' : 'en',
+            lang,
             previewCount: config.interactivePreviewSteps,
             ...(options === undefined ? {} : { agentOverrides: options }),
             taskHistory: [],
@@ -299,12 +302,14 @@ export async function listTasks(
               runSlug: task.runSlug,
             },
             dispatch: async (workflowId, result) => {
-              return dispatchListConversation(cwd, config.language === 'ja' ? 'ja' : 'en', workflowId, result, options);
+              return dispatchListConversation(cwd, lang, workflowId, result, options);
             },
           });
         } catch (error) {
           info(getErrorMessage(error));
         }
+      } else if (taskAction === 'stop') {
+        await stopRunningTask(task, cwd, lang);
       } else if (taskAction === 'force_fail') {
         await forceFailRunningTask(task, cwd);
       }

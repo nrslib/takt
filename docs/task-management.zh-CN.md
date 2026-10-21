@@ -236,7 +236,8 @@ takt list
 
 | 操作 | 说明 |
 |------|------|
-| **Mark as failed** | 将卡住的 `running` 任务标记为 `failed` |
+| **Stop** | 请求停止一个运行中的任务；worker 自行中断并决定最终状态 |
+| **Mark as failed** | 将卡住的 `running` 任务标记为 `failed`；不会停止 worker |
 
 选择带有 worktree clone 的运行中任务后，会打开普通 assistant 对话，并将该任务作为 `/tell` 的初始目标。对话中可以查看其他任务或讨论新任务。`/tell` 在确认后再次检查目标，只向确认时选中的任务写入；已完成、已删除、slug 不匹配或非 clone 的 run 不会成为候选，也不会接收指令。
 

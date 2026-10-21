@@ -5,6 +5,7 @@ import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import type { ExceededInfo, WorkflowExecutionResult } from './types.js';
 import type { GoalTaskResult } from '../../../infra/goals/schema.js';
+import { TaskStoppedError } from '../../../infra/task/taskStop.js';
 
 interface BuildTaskResultParams {
   task: TaskInfo;
@@ -156,6 +157,7 @@ export function persistTaskError(
     task,
     success: false,
     response: `${responsePrefix}${getErrorMessage(err)}`,
+    ...(err instanceof TaskStoppedError ? { failureRetryable: false } : {}),
     executionLog: [],
     startedAt,
     completedAt,

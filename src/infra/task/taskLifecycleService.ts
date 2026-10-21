@@ -1,11 +1,11 @@
 import { TaskRecordSchema, type TaskFileData, type TaskRecord, type TaskFailure } from './schema.js';
-import type { TaskInfo, TaskResult } from './types.js';
-import { resolveTaskContent, toTaskInfo } from './mapper.js';
+import type { TaskInfo, TaskResult, TaskState } from './types.js';
+import { resolveTaskContent, toTaskInfo, toTaskState } from './mapper.js';
 import { cleanupTaskSpecDirectory, prepareTaskSpecDirectory, type PreparedTaskSpecDirectory } from './enqueueService.js';
 import { TaskStore } from './store.js';
 import { firstLine, nowIso } from './naming.js';
 import { slugify } from '../../shared/utils/slug.js';
-import { isStaleRunningTask } from './process.js';
+import { isProcessAlive, isStaleRunningTask } from './process.js';
 import { readRetryMetadataByRunSlug } from '../../core/workflow/run/retry-metadata.js';
 import {
   buildClaimedTaskRecord,
@@ -23,7 +23,8 @@ import type { Goal } from '../goals/schema.js';
 import { isGoalPaused } from '../goals/state.js';
 import type { MergeMethod } from '../../core/models/config-types.js';
 import type { PrExecutionContext } from '../../core/workflow/system/pr-execution-context.js';
-import { getSelfTaskProcessIdentity } from './taskProcessIdentity.js';
+import { getSelfTaskProcessIdentity, getTaskProcessIdentity } from './taskProcessIdentity.js';
+import { assertTaskStopHandled } from './taskStop.js';
 
 export class TaskClaimLockAcquisitionError extends Error {}
 
@@ -253,16 +254,33 @@ export class TaskLifecycleService {
     }));
   }
 
-  failInterruptedRunningTasks(goalId?: string): number {
-    let failed = 0;
+  failInterruptedRunningTasks(goalId?: string, onRecovered?: (task: TaskState) => void): number {
+    const snapshot = this.store.read();
+    const candidates = new Map(snapshot.tasks
+      .filter((task) => task.status === 'running'
+        && (this.goalTasksOnly !== true || task.goal_id !== undefined)
+        && (goalId === undefined || task.goal_id === goalId)
+        && this.isRunningTaskStale(task))
+      .map((task) => [task.name, task]));
+    if (candidates.size === 0) return 0;
+
+    const recovered: TaskRecord[] = [];
     this.store.update((current) => {
       const tasks = current.tasks.map((task) => {
-        if (task.status !== 'running' || (this.goalTasksOnly === true && task.goal_id === undefined)
-          || (goalId !== undefined && task.goal_id !== goalId) || !this.isRunningTaskStale(task)) {
+        const candidate = candidates.get(task.name);
+        if (candidate === undefined || task.status !== candidate.status
+          || task.owner_pid !== candidate.owner_pid || task.owner_start_time !== candidate.owner_start_time) {
           return task;
         }
-        failed++;
         const reason = 'Task was interrupted before this TAKT run started. Requeue it explicitly to run again.';
+        let retryMetadata: ResolvedTaskRetryMetadata;
+        try {
+          retryMetadata = this.readTerminalRetryMetadata(task);
+        } catch (error) {
+          // 補助情報の読込失敗で回復を止めず、保存済みの再試行情報を保持する。
+          retryMetadata = { preserveExisting: true };
+          this.onWarning?.(sanitizeSensitiveText(`Cannot read retry metadata for interrupted task ${task.name}: ${getErrorMessage(error)}`));
+        }
         const completed = buildTerminalTaskRecord(task, {
           status: 'failed',
           completed_at: nowIso(),
@@ -278,12 +296,14 @@ export class TaskLifecycleService {
               shaUnavailableReason: 'Execution process stopped before saving its result',
             },
           }),
-        }, this.readTerminalRetryMetadata(task));
+        }, retryMetadata);
+        recovered.push(completed);
         return completed;
       });
-      return { tasks };
+      return recovered.length === 0 ? undefined : { tasks };
     });
-    return failed;
+    for (const task of recovered) onRecovered?.(toTaskState(this.tasksFile, task));
+    return recovered.length;
   }
 
   private readTerminalRetryMetadata(task: TaskRecord): ResolvedTaskRetryMetadata {
@@ -320,6 +340,34 @@ export class TaskLifecycleService {
     return {};
   }
 
+  requestTaskStop(goalId: string | undefined, taskName: string, executionId: string): NonNullable<TaskRecord['stop_request']> {
+    const state = this.store.update((current) => {
+      const index = current.tasks.findIndex((task) => task.name === taskName);
+      const task = current.tasks[index];
+      if (task === undefined) throw new Error(`Task name does not match a saved task: ${taskName}`);
+      if (task.goal_id !== goalId) throw new Error('Task does not belong to this goal');
+      if (task.execution_id !== executionId) throw new Error('Task executionId does not match the saved execution');
+      if (task.status !== 'running') throw new Error(`Task is not running: ${task.status}`);
+      if (task.owner_pid == null || !isProcessAlive(task.owner_pid)) {
+        throw new Error('Task execution has ended: its owner is not alive');
+      }
+      if (task.owner_start_time != null) {
+        const ownerIdentity = getTaskProcessIdentity(task.owner_pid);
+        if (ownerIdentity === undefined) {
+          throw new Error('Cannot verify task execution owner: current owner start time is unavailable');
+        }
+        if (ownerIdentity.startTime !== task.owner_start_time) {
+          throw new Error('Task execution has ended or its owner no longer matches');
+        }
+      }
+      if (task.stop_request?.execution_id === executionId) return undefined;
+      const tasks = [...current.tasks];
+      tasks[index] = { ...task, stop_request: { execution_id: executionId, requested_at: nowIso() } };
+      return { tasks };
+    });
+    return state.tasks.find((task) => task.name === taskName)!.stop_request!;
+  }
+
   completeTask(result: TaskResult): string {
     if (!result.success) {
       throw new Error('Cannot complete a failed task. Use failTask() instead.');
@@ -332,6 +380,7 @@ export class TaskLifecycleService {
       }
 
       const target = current.tasks[index]!;
+      assertTaskStopHandled(target, result.completion);
       const updated = buildTerminalTaskRecord(target, {
         status: 'completed',
         started_at: result.startedAt,
@@ -365,6 +414,7 @@ export class TaskLifecycleService {
       }
 
       const target = current.tasks[index]!;
+      assertTaskStopHandled(target, result.completion);
       const updated = buildTerminalTaskRecord(target, {
         status: 'failed',
         started_at: result.startedAt,
@@ -468,6 +518,7 @@ export class TaskLifecycleService {
       }
 
       const target = current.tasks[index]!;
+      assertTaskStopHandled(target, result.completion);
       const updated = buildTerminalTaskRecord(target, {
         status: 'pr_failed',
         started_at: result.startedAt,

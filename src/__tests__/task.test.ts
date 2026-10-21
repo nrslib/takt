@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, writeFileSync, existsSync, rmSync, readFileSync, readdirSync, symlinkSync, utimesSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, existsSync, rmSync, readFileSync, readdirSync, symlinkSync, statSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
@@ -118,9 +118,10 @@ class RecordingTaskStore extends TaskStore {
     return this.state;
   }
 
-  override update(mutator: (current: TasksFileData) => TasksFileData): TasksFileData {
+  override update(mutator: (current: TasksFileData) => TasksFileData | undefined): TasksFileData {
     this.updateCalls += 1;
-    this.state = mutator(this.state);
+    const updated = mutator(this.state);
+    if (updated !== undefined) this.state = updated;
     return this.state;
   }
 }
@@ -587,6 +588,65 @@ describe('TaskRunner (tasks.yaml)', () => {
       worktreePath: join(testDir, '.takt', 'worktrees', 'task-a'),
       branch: 'feature/task-a',
     });
+  });
+
+  it('should leave a missing tasks file absent when recovery finds no tasks', () => {
+    const tasksFile = runner.getTasksFilePath();
+    const onRecovered = vi.fn();
+
+    expect(runner.failInterruptedRunningTasks(undefined, onRecovered)).toBe(0);
+    expect(runner.failInterruptedRunningTasks(undefined, onRecovered)).toBe(0);
+
+    expect(existsSync(tasksFile)).toBe(false);
+    expect(onRecovered).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { condition: 'empty', tasks: [] },
+    { condition: 'pending', tasks: [createPendingRecord({})] },
+    { condition: 'failed', tasks: [createFailedRecord({})] },
+    { condition: 'exceeded', tasks: [createExceededRecord({})] },
+    { condition: 'completed', tasks: [createFailedRecord({ status: 'completed', failure: undefined })] },
+    { condition: 'pr_failed', tasks: [createFailedRecord({ status: 'pr_failed' })] },
+    { condition: 'live running', tasks: [createPendingRecord({
+      status: 'running', started_at: '2026-02-09T00:01:00.000Z', owner_pid: process.pid,
+    })] },
+  ])('should not rewrite the tasks file when recovery finds only $condition tasks', ({ tasks }) => {
+    writeTasksFile(testDir, tasks);
+    const tasksFile = runner.getTasksFilePath();
+    const previousTime = new Date('2000-01-01T00:00:00.000Z');
+    utimesSync(tasksFile, previousTime, previousTime);
+    const before = readFileSync(tasksFile, 'utf8');
+    const modifiedAt = statSync(tasksFile).mtimeMs;
+    const onRecovered = vi.fn();
+
+    expect(runner.failInterruptedRunningTasks(undefined, onRecovered)).toBe(0);
+    expect(runner.failInterruptedRunningTasks(undefined, onRecovered)).toBe(0);
+
+    expect(statSync(tasksFile).mtimeMs).toBe(modifiedAt);
+    expect(readFileSync(tasksFile, 'utf8')).toBe(before);
+    expect(onRecovered).not.toHaveBeenCalled();
+  });
+
+  it('should save recovered tasks before notification and skip saving on repeated recovery', () => {
+    writeTasksFile(testDir, [createPendingRecord({
+      status: 'running', started_at: '2026-02-09T00:01:00.000Z', owner_pid: null,
+    })]);
+    const tasksFile = runner.getTasksFilePath();
+    const onRecovered = vi.fn(() => expect(loadTasksFile(testDir).tasks[0]?.status).toBe('failed'));
+
+    expect(runner.failInterruptedRunningTasks(undefined, onRecovered)).toBe(1);
+    expect(onRecovered).toHaveBeenCalledOnce();
+    const saved = readFileSync(tasksFile, 'utf8');
+    const previousTime = new Date('2000-01-01T00:00:00.000Z');
+    utimesSync(tasksFile, previousTime, previousTime);
+    const modifiedAt = statSync(tasksFile).mtimeMs;
+
+    expect(runner.failInterruptedRunningTasks(undefined, onRecovered)).toBe(0);
+
+    expect(statSync(tasksFile).mtimeMs).toBe(modifiedAt);
+    expect(readFileSync(tasksFile, 'utf8')).toBe(saved);
+    expect(onRecovered).toHaveBeenCalledOnce();
   });
 
   it('should fail interrupted running tasks', () => {

@@ -72,6 +72,13 @@ export function getManagerOutputSchema(providerType: ProviderType): Record<strin
   return providerType === 'codex' ? codexOutputSchema : managerOutputSchema;
 }
 
+function normalizeResponseContent(content: string): unknown {
+  const trimmed = content.trimStart();
+  const looksLikeArray = /^\[\s*(?:\]|\{|\[|"|-|\d|true\b|false\b|null\b|$)/u.test(trimmed);
+  if (trimmed.startsWith('{') || looksLikeArray) return JSON.parse(content);
+  return { message: content, summary: null };
+}
+
 export interface PendingManagerSummary { revision: number; summary: ManagerGoalSummary; repositoryDirectory?: string }
 interface ManagerTurnOptions {
   text: string;
@@ -299,7 +306,7 @@ export function createManagerConversationSession(input: {
             response = await callAgent();
           }
           if (turn !== generation || controller.signal.aborted) throw new Error('Conversation interrupted');
-          const raw: unknown = response.structuredOutput ?? JSON.parse(response.content);
+          const raw: unknown = response.structuredOutput ?? normalizeResponseContent(response.content);
           const parsed = (plan.ctx.providerType === 'codex' ? codexResponseSchema : responseSchema).parse(raw);
           sessionId = response.sessionId ?? sessionId;
           if (parsed.summary !== null) {

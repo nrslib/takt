@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { runDaemon } from '../features/daemon/runDaemon.js';
+import type { TaskRunnerOptions } from '../infra/task/runner.js';
 
 const doubles = vi.hoisted(() => ({
   projects: vi.fn(), work: vi.fn(), create: vi.fn(), ensure: vi.fn(),
   registerOwner: vi.fn(), removeOwner: vi.fn(), delay: vi.fn(),
   patrol: vi.fn(), config: vi.fn(), notify: vi.fn(), logError: vi.fn(),
+  runner: vi.fn(), recover: vi.fn(), logWarn: vi.fn(),
 }));
 vi.mock('../features/daemon/projects.js', () => ({ listDaemonProjects: doubles.projects, hasDaemonProjectWork: doubles.work }));
 vi.mock('../features/manager/runEventManager.js', () => ({ createRunEventManager: doubles.create }));
@@ -14,7 +16,11 @@ vi.mock('../infra/daemon/owner.js', () => ({
 }));
 vi.mock('../infra/task/process.js', () => ({ getSelfProcessIdentity: () => ({ startTime: 'test-start' }) }));
 vi.mock('../shared/utils/cli-invocation.js', () => ({ resolveCliInvocation: () => ({ cliPath: '/cli.js' }) }));
-vi.mock('../shared/utils/debug.js', () => ({ initDebugLogger: vi.fn(), createLogger: () => ({ info: vi.fn(), debug: vi.fn(), error: doubles.logError }) }));
+vi.mock('../shared/utils/debug.js', () => ({ initDebugLogger: vi.fn(), createLogger: () => ({ info: vi.fn(), debug: vi.fn(), error: doubles.logError, warn: doubles.logWarn }) }));
+vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class {
+  constructor(cwd: string, options?: TaskRunnerOptions) { doubles.runner(cwd, options); }
+} }));
+vi.mock('../features/tasks/execute/claimTasks.js', () => ({ failInterruptedTasksWithGoalEvents: doubles.recover }));
 vi.mock('node:timers/promises', () => ({ setTimeout: doubles.delay }));
 vi.mock('../features/manager/patrol.js', () => ({ enqueueDueGoalPatrols: doubles.patrol }));
 vi.mock('../infra/config/managerConfig.js', () => ({ resolveManagerConfig: doubles.config }));
@@ -27,6 +33,7 @@ beforeEach(() => {
   doubles.work.mockResolvedValue(false);
   doubles.delay.mockImplementation(async () => { await new Promise(setImmediate); });
   doubles.config.mockReturnValue({ patrolInterval: 1800 });
+  doubles.recover.mockReturnValue(0);
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -45,6 +52,7 @@ it('exits without polling or removing ownership when another daemon is registere
 
 it('processes each project with a fixed event limit, then checks its run startup and remaining work', async () => {
   const calls: string[] = [];
+  doubles.recover.mockImplementation((_runner: unknown, cwd: string) => { calls.push(`recover:${cwd}`); return 0; });
   const managers = ['/project-a', '/project-b'].map((cwd) => ({
     processPending: vi.fn(async (signal: AbortSignal, limit: number) => {
       expect(signal.aborted).toBe(false);
@@ -65,7 +73,7 @@ it('processes each project with a fixed event limit, then checks its run startup
 
   for (const cwd of ['/project-a', '/project-b']) {
     expect(calls.filter((call) => call.endsWith(cwd))).toEqual([
-      `patrol:${cwd}`, `events:${cwd}`, `run:${cwd}`, `work:${cwd}`,
+      `recover:${cwd}`, `patrol:${cwd}`, `events:${cwd}`, `run:${cwd}`, `work:${cwd}`,
     ]);
   }
   expect(doubles.create.mock.calls).toEqual([['/project-a'], ['/project-b']]);
@@ -74,6 +82,45 @@ it('processes each project with a fixed event limit, then checks its run startup
   ]);
   for (const manager of managers) expect(manager.close).toHaveBeenCalledOnce();
   expect(doubles.removeOwner).toHaveBeenCalledOnce();
+});
+
+it('continues patrol, events and auto run after a recovery failure and reports it before releasing ownership', async () => {
+  doubles.projects.mockResolvedValue(['/project']);
+  const failure = new Error('recovery save failed');
+  doubles.recover.mockImplementation(() => { throw failure; });
+  const manager = { processPending: vi.fn(), close: vi.fn() };
+  doubles.create.mockReturnValue(manager);
+
+  await runDaemon();
+
+  expect(doubles.logError).toHaveBeenCalledWith(expect.any(String), { cwd: '/project', error: failure.message });
+  expect(doubles.patrol).toHaveBeenCalledOnce();
+  expect(manager.processPending).toHaveBeenCalledOnce();
+  expect(doubles.ensure).toHaveBeenCalledExactlyOnceWith('/project', { notifyOnFailure: false });
+  expect(doubles.work).toHaveBeenCalledOnce();
+  expect(doubles.notify).toHaveBeenCalledExactlyOnceWith('/project', undefined, failure);
+  expect(doubles.notify.mock.invocationCallOrder[0]).toBeLessThan(doubles.removeOwner.mock.invocationCallOrder[0]!);
+});
+
+it('logs recovery warnings without exposing credentials or treating warnings as polling failures', async () => {
+  doubles.projects.mockResolvedValue(['/project']);
+  const manager = { processPending: vi.fn(), close: vi.fn() };
+  doubles.create.mockReturnValue(manager);
+  const warning = 'API_KEY=test-recovery-credential';
+  doubles.runner.mockImplementation((_cwd: string, options: TaskRunnerOptions) => {
+    expect(options.goalTasksOnly).not.toBe(true);
+    options.onWarning!(warning);
+  });
+
+  await runDaemon();
+
+  expect(doubles.logWarn).toHaveBeenCalledOnce();
+  const [, data] = doubles.logWarn.mock.calls[0]!;
+  expect(data.cwd).toBe('/project');
+  expect(data.warning).toContain('API_KEY');
+  expect(data.warning).not.toContain('test-recovery-credential');
+  expect(manager.processPending).toHaveBeenCalledOnce();
+  expect(doubles.notify).not.toHaveBeenCalled();
 });
 
 it('keeps each project manager across polling rounds so failed events stay excluded', async () => {
@@ -268,7 +315,7 @@ it('removes ownership and closes other sessions even when one session fails to c
   expect(doubles.removeOwner).toHaveBeenCalledOnce();
 });
 
-it.each(['run', 'events', 'work', 'task-read'] as const)('reports repeated %s polling failures only at patrol intervals', async (stage) => {
+it.each(['recovery', 'run', 'events', 'work', 'task-read'] as const)('reports repeated %s polling failures only at patrol intervals', async (stage) => {
   doubles.projects.mockResolvedValue(['/project']);
   doubles.config.mockReturnValue({ patrolInterval: 1 });
   const failure = new Error('polling failed');
@@ -283,6 +330,7 @@ it.each(['run', 'events', 'work', 'task-read'] as const)('reports repeated %s po
     round++;
   });
   if (stage === 'run') doubles.ensure.mockImplementation(async () => { if (round < 6) throw failure; });
+  if (stage === 'recovery') doubles.recover.mockImplementation(() => { if (round < 6) throw failure; return 0; });
   if (stage === 'events') manager.processPending.mockImplementation(async () => { if (round < 6) throw failure; });
   doubles.work.mockImplementation(async (_cwd: string, onReadError: (error: unknown) => void) => {
     if (round === 6) {
@@ -375,12 +423,13 @@ it('uses each project patrol interval independently', async () => {
   ]);
 });
 
-it.each(['run', 'work', 'task-read'] as const)('exits when only %s errors remain and notifies once before releasing ownership', async (stage) => {
+it.each(['recovery', 'run', 'work', 'task-read'] as const)('exits when only %s errors remain and notifies once before releasing ownership', async (stage) => {
   doubles.projects.mockResolvedValue(['/project']);
   const manager = { processPending: vi.fn(), close: vi.fn() };
   doubles.create.mockReturnValue(manager);
   const failure = new Error('invalid tasks.yaml');
   if (stage === 'run') doubles.ensure.mockRejectedValue(failure);
+  if (stage === 'recovery') doubles.recover.mockImplementation(() => { throw failure; });
   if (stage === 'work') doubles.work.mockRejectedValue(failure);
   if (stage === 'task-read') doubles.work.mockImplementation(async (_cwd: string, onReadError: (error: unknown) => void) => {
     onReadError(failure);

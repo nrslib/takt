@@ -89,6 +89,7 @@ export function toTaskInfo(projectDir: string, tasksFile: string, task: TaskReco
     name: task.name,
     slug: task.slug,
     runSlug: task.run_slug,
+    executionId: task.execution_id,
     sourceRunSlug: task.source_run_slug,
     resumeMode: task.resume_mode,
     summary: task.summary,
@@ -149,6 +150,7 @@ function toCompletedTaskItem(projectDir: string, tasksFile: string, task: TaskRe
 
 function toBaseTaskListItem(projectDir: string, tasksFile: string, task: TaskRecord): Omit<TaskListItem, 'kind' | 'failure' | 'exceededMaxSteps' | 'exceededCurrentIteration'> {
   return {
+    executionId: task.execution_id,
     goalId: task.goal_id,
     name: task.name,
     createdAt: task.created_at,
@@ -191,6 +193,7 @@ export function toTaskListItem(projectDir: string, tasksFile: string, task: Task
 
 export function toTaskState(tasksFile: string, task: TaskRecord): TaskState {
   return {
+    executionId: task.execution_id,
     ...(task.goal_id === undefined ? {} : { goalId: task.goal_id }),
     ...(task.goal_purpose === undefined ? {} : { goalPurpose: task.goal_purpose }),
     ...(task.goal_work_key === undefined ? {} : { goalWorkKey: task.goal_work_key }),

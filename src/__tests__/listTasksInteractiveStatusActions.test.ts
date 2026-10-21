@@ -19,6 +19,7 @@ const {
   mockDeleteCompletedTask,
   mockRequeueExceededTask,
   mockForceFailRunningTask,
+  mockStopRunningTask,
   mockRetryFailedTask,
   mockRequeueFailedTask,
   mockInstructBranch,
@@ -40,6 +41,7 @@ const {
   mockDeleteCompletedTask: vi.fn(),
   mockRequeueExceededTask: vi.fn(),
   mockForceFailRunningTask: vi.fn(),
+  mockStopRunningTask: vi.fn(),
   mockRetryFailedTask: vi.fn(),
   mockRequeueFailedTask: vi.fn(),
   mockInstructBranch: vi.fn(),
@@ -98,6 +100,8 @@ vi.mock('../features/tasks/list/taskRetryActions.js', () => ({
 vi.mock('../features/tasks/list/taskForceFailActions.js', () => ({
   forceFailRunningTask: mockForceFailRunningTask,
 }));
+
+vi.mock('../features/tasks/list/taskStopActions.js', () => ({ stopRunningTask: mockStopRunningTask }));
 
 vi.mock('../features/tui/index.js', () => ({
   runTui: (...args: unknown[]) => mockRunTui(...args),
@@ -259,8 +263,10 @@ describe('listTasks interactive status actions', () => {
         value: 'force_fail',
         description: expect.any(String),
       },
+      { label: 'Stop', value: 'stop', description: expect.any(String) },
     ]);
     expect(mockForceFailRunningTask).toHaveBeenCalledWith(runningTask, '/project');
+    expect(mockStopRunningTask).not.toHaveBeenCalled();
   });
 
   it('running タスクでキャンセル時は forceFailRunningTask を呼ばない', async () => {
@@ -278,7 +284,18 @@ describe('listTasks interactive status actions', () => {
         value: 'force_fail',
         description: expect.any(String),
       },
+      { label: 'Stop', value: 'stop', description: expect.any(String) },
     ]);
+    expect(mockForceFailRunningTask).not.toHaveBeenCalled();
+    expect(mockStopRunningTask).not.toHaveBeenCalled();
+  });
+
+  it('dispatches Stop with the selected execution identity and leaves force fail untouched', async () => {
+    const task = { ...runningTask, executionId: 'selected-execution' };
+    mockListAllTaskItems.mockReturnValue([task]);
+    mockSelectOption.mockResolvedValueOnce('running:0').mockResolvedValueOnce('stop').mockResolvedValueOnce(null);
+    await listTasks('/project');
+    expect(mockStopRunningTask).toHaveBeenCalledWith(task, '/project', 'en');
     expect(mockForceFailRunningTask).not.toHaveBeenCalled();
   });
 

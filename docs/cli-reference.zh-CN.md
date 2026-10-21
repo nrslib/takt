@@ -240,6 +240,10 @@ server 暴露以下工具：
 
 省略 `confirm` 或设为 `false` 时，只返回匹配列表，不删除任何内容。只有 `confirm: true` 才会删除，删除范围与 `takt list` 相同。此工具仅在 `all` 工具集中提供，不包含在 `read-only` 或 `manager` 中；`manager` 另有 `takt_remove_goal_task` 工具。
 
+`takt_stop_goal_task` 可在 `manager` 和 `all` 工具集中使用。传入绝对路径的 `cwd`。从 `takt_list_tasks` 返回的同一个任务条目中，将 `name` 的值作为 `taskName`，并使用该条目的 `goalId` 和 `executionId`。所属PID必须仍存活。已保存启动时间时，必须获取当前启动时间并确认一致。未保存启动时间时，只要 goalId、taskName、executionId 一致、任务仍在运行且所属PID存活，就接受请求。标识不匹配、任务未运行或所属进程已结束时，返回原因且不保存停止请求。已保存启动时间但无法获取当前值时，也会拒绝请求。工具只保存请求；worker 每500毫秒检查一次并自行中断，执行和清理结束前任务保持 `running`。结束后保存 `failed` 和任务停止原因，可与整个 goal 的中止区分。其他任务和 goal 继续运行。只有在评估重复请求时，同一执行仍为 `running` 且能够验证所属进程，才返回已保存的请求；重试使用新的执行ID。
+
+daemon 在处理每个项目的事件前，将中断的任务恢复为 `failed` 并创建 goal 任务完成事件，即使没有 pending 任务也会执行恢复。仅当所属PID缺失、已死亡，或已知保存的启动时间与当前启动时间不一致时，才进行恢复。如果PID仍存活，仅凭保存的或当前的启动时间不可用，不会恢复任务，而是保留 `running` 状态。
+
 每个工具的 `cwd` 都会通过 `realpath` 解析，且必须位于 MCP server 允许的项目根目录内。默认允许的根目录是启动 `takt-mcp` 的目录。
 
 如果客户端只应读取 task 状态，请使用 `--tool-set read-only`。此模式只公开 `takt_list_tasks` 和 `takt_get_run`，不会公开 `takt_enqueue_task` 或 `takt_tell_run`。普通 assistant 对话会自动使用这个只读工具集。不支持 MCP 的 provider 仍会继续对话，并提示 task 状态查询不可用。
@@ -411,6 +415,8 @@ takt list --non-interactive --action delete --status failed pr_failed --format j
 ```
 
 #### 咨询运行中的任务
+
+在 `takt list` 中，**Stop** 经确认后请求停止一个运行中的任务。worker 自行中断并决定最终状态。**Mark as failed** 只修改任务状态，不会停止 worker。
 
 在 `takt list` 中选择带有 worktree clone 的运行中任务后，会打开普通 assistant 对话，并将该任务作为 `/tell` 的初始目标。对话中可以查看其他任务、讨论新任务，并使用 `/go` 执行或保存。`/tell` 会显示任务名称、workflow、当前 step 和指令，确认后只向确认时选中的任务写入。没有交互式终端或无法取得确认时不会发送指令，并会显示原因；`/cancel` 会关闭对话或取消待处理操作。
 

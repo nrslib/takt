@@ -31,6 +31,12 @@ describe('CLI list deletion filters', () => {
     vi.clearAllMocks();
   });
 
+  it('routes list to the task list', async () => {
+    await parseList([]);
+    expect(doubles.listTasks).toHaveBeenCalledExactlyOnceWith('/project', undefined,
+      expect.objectContaining({ enabled: true }));
+  });
+
   it('passes all five deletion statuses and the goal through the real argument parser', async () => {
     const statuses = ['pending', 'completed', 'failed', 'exceeded', 'pr_failed'];
     const goalId = '550e8400-e29b-41d4-a716-446655440000';

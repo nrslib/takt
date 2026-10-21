@@ -201,9 +201,11 @@ takt run
 ### 管理结果
 
 ```bash
-# 查看任务分支，并进行合并、重试、重新排队、强制失败或删除
+# 查看任务分支，并进行合并、重试、重新排队、请求停止、强制失败或删除
 takt list
 ```
+
+**Stop** 请求停止一个运行中的任务，由 worker 自行中断并决定最终状态。**Mark as failed** 只修改状态，不会停止 worker。
 
 ## 工作原理
 
@@ -277,7 +279,7 @@ steps:
 | `takt watch` | 监视任务队列并自动执行待处理任务 |
 | `takt ui` | 在 `http://127.0.0.1:20525` 启动实验性的 Viewer 优先 Web UI |
 | `takt manager` | 启动实验性的目标对话 TUI。输入不带参数的 `/go`，从当前对话请求摘要；如果已有摘要，则直接批准并注册目标，不重新生成摘要。行为、设置和保存的数据格式可能会随时更改，恕不另行通知。自动将任务加入队列并执行，因此会产生 provider API 费用。使用 claude（claude-sdk）或 codex 时，AI 会在工具执行前进行审查。启动时 daemon 会自动启动，处理事件并进行巡查。使用 `takt daemon stop` 可停止 daemon |
-| `takt list` | 管理任务分支：合并、重试、重新排队、强制失败、指导或删除 |
+| `takt list` | 管理任务分支：合并、重试、重新排队、请求停止、强制失败、指导或删除 |
 | `takt #N` | 将 GitHub Issue 作为任务输入 |
 | `takt eject` | 复制 builtin workflow/facet 以便定制 |
 | `takt workflow init` | 创建 workflow scaffold |
@@ -307,6 +309,10 @@ TAKT 还提供两个客户端集成入口：`takt-acp` 通过 stdio JSON-RPC 作
 `takt_cleanup_tasks` 用于先查看筛选后的任务，再执行删除。必需输入为绝对路径的 `cwd` 和 `reason`。可选输入为 `statuses`（可指定一个或多个 `pending`、`completed`、`failed`、`exceeded`、`pr_failed`，不能指定 `running`）、`goalId`、`branch` 和 `confirm`（默认 `false`）。必须至少指定 `statuses`、`goalId` 或 `branch` 中的一个。
 
 省略 `confirm` 或设为 `false` 时，只返回匹配列表，不删除任何内容。只有 `confirm: true` 才会删除，删除范围与 `takt list` 相同。此工具仅在 `all` 工具集中提供，不包含在 `read-only` 或 `manager` 中；`manager` 另有 `takt_remove_goal_task` 工具。
+
+`takt_stop_goal_task` 可在 `manager` 和 `all` 工具集中使用。传入绝对路径的 `cwd`。从 `takt_list_tasks` 返回的同一个任务条目中，将 `name` 的值作为 `taskName`，并使用该条目的 `goalId` 和 `executionId`。所属PID必须仍存活。已保存启动时间时，必须获取当前启动时间并确认一致。未保存启动时间时，只要 goalId、taskName、executionId 一致、任务仍在运行且所属PID存活，就接受请求。标识不匹配、任务未运行或所属进程已结束时，返回原因且不保存停止请求。已保存启动时间但无法获取当前值时，也会拒绝请求。工具只保存请求；worker 每500毫秒检查一次并自行中断，执行和清理结束前任务保持 `running`。结束后保存 `failed` 和任务停止原因，可与整个 goal 的中止区分。其他任务和 goal 继续运行。只有在评估重复请求时，同一执行仍为 `running` 且能够验证所属进程，才返回已保存的请求；重试使用新的执行ID。
+
+daemon 在处理每个项目的事件前，将中断的任务恢复为 `failed` 并创建 goal 任务完成事件，即使没有 pending 任务也会执行恢复。仅当所属PID缺失、已死亡，或已知保存的启动时间与当前启动时间不一致时，才进行恢复。如果PID仍存活，仅凭保存的或当前的启动时间不可用，不会恢复任务，而是保留 `running` 状态。
 
 普通 `takt` assistant 对话在 provider 支持 MCP 时也可以只读查看相同的 task 状态。新任务使用 `/go`，向正在运行的 worktree clone 追加指令时使用 `/tell` 选择目标并确认后发送。
 

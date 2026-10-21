@@ -368,6 +368,7 @@ describe('running task-list conversation entry', () => {
     expect(mockSelectOption.mock.calls[1]?.[1]).toEqual([
       expect.objectContaining({ label: 'Mark as failed', value: 'force_fail' }),
       expect.objectContaining({ label: 'Interactive', value: 'interactive' }),
+      expect.objectContaining({ label: 'Stop（停止依頼）', value: 'stop' }),
     ]);
     expect(mockSelectOption.mock.calls[2]?.[0]).toBe('List Tasks');
     expect(mockRunTui).not.toHaveBeenCalled();
@@ -378,7 +379,7 @@ describe('running task-list conversation entry', () => {
     runningTask,
     { ...runningTask, runSlug: eligibleRunningTask.runSlug },
     { ...runningTask, worktreePath: eligibleRunningTask.worktreePath },
-  ])('keeps only force-fail when live-run metadata is incomplete: %j', async (task) => {
+  ])('keeps force-fail and Stop when live-run metadata is incomplete: %j', async (task) => {
     mockListAllTaskItems.mockReturnValue([task]);
     mockSelectOption
       .mockResolvedValueOnce('running:0')
@@ -388,6 +389,7 @@ describe('running task-list conversation entry', () => {
 
     expect(mockSelectOption.mock.calls[1]?.[1]).toEqual([
       expect.objectContaining({ value: 'force_fail' }),
+      expect.objectContaining({ value: 'stop' }),
     ]);
     expect(mockRunTui).not.toHaveBeenCalled();
     expect(mockForceFailRunningTask).toHaveBeenCalledWith(task, '/project');

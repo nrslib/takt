@@ -39,6 +39,8 @@ import { requeueTaktGoalTask, retryTaktGoalTask } from './goalTaskRetryOperation
 import { requeueGoalTaskInputSchema, retryGoalTaskInputSchema } from './goalTaskRetrySchemas.js';
 import { removeGoalTaskInputSchema } from './goalTaskRemovalSchemas.js';
 import { removeTaktGoalTask } from './goalTaskRemovalOperations.js';
+import { stopGoalTaskInputSchema } from './goalTaskStopSchemas.js';
+import { stopTaktGoalTask } from './goalTaskStopOperations.js';
 import { tellTaktGoalRun } from './goalTellOperations.js';
 import { askTaktGoalQuestion, listTaktGoalQuestions, getTaktGoalQuestion, withdrawTaktGoalQuestion } from './goalQuestionOperations.js';
 import { notifyTaktGoal } from './goalNotificationOperations.js';
@@ -79,6 +81,7 @@ export const TAKT_MCP_MANAGER_TOOL_NAMES = [
   'takt_enqueue_goal_task', 'takt_list_workflows',
   'takt_requeue_goal_task', 'takt_retry_goal_task',
   'takt_remove_goal_task',
+  'takt_stop_goal_task',
   'takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion',
   'takt_reopen_goal',
   'takt_tell_run',
@@ -238,6 +241,11 @@ export function createTaktMcpServer(
       title: 'Merge reviewed goal work', description: 'Merge a task result into its saved goal branch after checking ownership and the reviewed SHA. Returns conflicts or checked-out worktree locations without moving the target. Responses fit 64 KiB, with explicit truncation. Read saved completion fields with takt_get_goal path and textOffset/maxBytes.',
       inputSchema: mergeGoalTaskInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal merge failed', (deps) => mergeTaktGoalTask(projectInput(input, deps), deps, extra.signal), true));
+    server.registerTool('takt_stop_goal_task', {
+      title: 'Request a goal task stop',
+      description: 'Save a stop request for one running goal task. From one task item returned by takt_list_tasks, pass its name value as taskName and use its goalId and executionId. Requires a live owner PID. If an owner start time is saved, the current start time must be available and match it. Without a saved start time, matching goalId, taskName and executionId, running status, and a live owner PID are sufficient. Rejects mismatched or ended executions and unavailable current start time when a saved start time exists. The worker observes the request and aborts itself; running status is kept until it finishes and saves a failed result with the task stop reason.',
+      inputSchema: stopGoalTaskInputSchema,
+    }, (input, extra) => operation(input.cwd, 'Goal task stop failed', (deps) => stopTaktGoalTask(projectInput(input, deps), deps, extra.signal), false));
     server.registerTool('takt_remove_goal_task', {
       title: 'Remove goal work',
       description: 'Cancel pending goal work or clean up stopped or merged work with a required reason. Running and unmerged completed tasks are rejected. Responses fit 64 KiB, with explicit truncation. Read removal records with takt_list_goal_work_log offset/limit, and full reasons with takt_get_goal path workLog.summary, recordId and textOffset/maxBytes. Confirm task absence with takt_list_tasks offset/limit.',
