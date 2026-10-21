@@ -346,6 +346,8 @@ issue:
 tui:
   ui:
     thinking: "Thinking..."
+    extendedThinking: "Reasoning..."
+    responding: "Responding"
     selectTask: "Selecting a task..."
     selectStart: "Choosing a starting point..."
     reviseInstruction: "Revising the instruction..."
@@ -355,6 +357,8 @@ tui:
     queuedHint: "↑ to edit the queued line"
     queuedMore: "+{count} more queued"
     interruptHint: "(Esc to interrupt)"
+    interruptHintCompact: "(Esc: stop)"
+    interruptHintMinimal: "Esc"
     responseInterrupted: "Response interrupted."
     instructionInterrupted: "Instruction generation interrupted."
     runFinished: "The workflow run finished. Describe the next task, or /cancel to leave."

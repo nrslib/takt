@@ -6,9 +6,10 @@ import { appendNdjsonLine } from '../../../infra/fs/index.js';
 import {
   finalizeFileRunMeta,
 } from './runMeta.js';
-import type {
-  RunCommitFinalization,
-  WorkflowRunTerminalOutcome,
+import {
+  RunProjectionError,
+  type RunCommitFinalization,
+  type WorkflowRunTerminalOutcome,
 } from './workflowRunExecution.js';
 import type {
   WorkflowTerminalPublicationPayload,
@@ -54,7 +55,12 @@ export function createFileWorkflowRunTerminalPublisher(input: {
         payload.ndjsonLogFile,
       );
       appendNdjsonLine(ndjsonLogPath, payload.sessionRecord);
-      writeFileTrace(input.runPaths, ndjsonLogPath, payload);
+      const issues: RunProjectionError[] = [];
+      try {
+        writeFileTrace(input.runPaths, ndjsonLogPath, payload);
+      } catch (error) {
+        issues.push(new RunProjectionError('trace', error));
+      }
 
       return Object.freeze({
         receipt: Object.freeze({
@@ -64,7 +70,7 @@ export function createFileWorkflowRunTerminalPublisher(input: {
           iteration: outcome.iteration,
           payloadSha256,
         }),
-        issues: Object.freeze([]),
+        issues: Object.freeze(issues),
       });
     },
   });

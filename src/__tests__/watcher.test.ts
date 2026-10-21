@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import * as fs from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import chalk from 'chalk';
@@ -12,7 +13,17 @@ import type { executeRunTaskAndComplete as ExecuteRunTask } from '../features/ta
 const { executeRunTaskAndComplete } = vi.hoisted(() => ({
   executeRunTaskAndComplete: vi.fn<typeof ExecuteRunTask>(),
 }));
-vi.mock('../features/tasks/execute/runTaskExecution.js', () => ({ executeRunTaskAndComplete }));
+vi.mock('../features/tasks/execute/runTaskExecution.js', () => ({
+  executeRunTaskAndComplete,
+  executeRunTaskAndCompleteWithDetails: vi.fn(async (...args: Parameters<typeof ExecuteRunTask>) => {
+    const success = await executeRunTaskAndComplete(...args);
+    return { success, runSlug: 'test-run', completion: { success, interrupted: false } };
+  }),
+}));
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, openSync: vi.fn(actual.openSync), writeFileSync: vi.fn(actual.writeFileSync) };
+});
 vi.mock('../infra/task/process.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../infra/task/process.js')>()),
   getSelfProcessIdentity: () => ({ startTime: '2026-10-03T14:23:40.1234567Z' }),
@@ -27,6 +38,9 @@ import { attemptAutoRequeueTask, requeueExistingFailedTasks } from '../features/
 import * as providerPreflight from '../features/tasks/execute/providerPreflight.js';
 import { enterInputWait, leaveInputWait } from '../features/tasks/execute/inputWait.js';
 import { invalidateGlobalConfigCache } from '../infra/config/index.js';
+import * as privateFiles from '../shared/utils/private-file.js';
+import { GoalStore } from '../infra/goals/store.js';
+import { goalRecord } from './helpers/goal-fixtures.js';
 
 const taskNames = [
   { name: 'alpha', displayName: 'alpha' },
@@ -122,6 +136,46 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
     return added;
   }
 
+  async function injectClaimFailure(stage: 'create' | 'metadata' | 'persistence', failures: number) {
+    const nativeFs = await vi.importActual<typeof import('node:fs')>('node:fs');
+    const failure = Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+    const claimNextTasks = TaskRunner.prototype.claimNextTasks;
+    let claiming = false;
+    let lockDescriptor: number | undefined;
+    const claim = vi.spyOn(TaskRunner.prototype, 'claimNextTasks').mockImplementation(function (this: TaskRunner, count) {
+      claiming = true;
+      try {
+        return claimNextTasks.call(this, count);
+      } finally {
+        claiming = false;
+        lockDescriptor = undefined;
+      }
+    });
+    const fail = () => {
+      if (failures > 0) {
+        failures--;
+        throw failure;
+      }
+    };
+    vi.mocked(fs.openSync).mockImplementation((path, flags, mode) => {
+      const claimLock = claiming && path === `${runner.getTasksFilePath()}.lock` && flags === 'wx';
+      if (claimLock && stage === 'create') fail();
+      const descriptor = nativeFs.openSync(path, flags, mode);
+      if (claimLock) lockDescriptor = descriptor;
+      return descriptor;
+    });
+    vi.mocked(fs.writeFileSync).mockImplementation((file, data, options) => {
+      if (claiming && stage === 'metadata' && file === lockDescriptor) fail();
+      return nativeFs.writeFileSync(file, data, options);
+    });
+    const write = privateFiles.writePrivateFileWithMode;
+    vi.spyOn(privateFiles, 'writePrivateFileWithMode').mockImplementation((file, data, mode) => {
+      if (claiming && stage === 'persistence' && file === runner.getTasksFilePath()) fail();
+      return write(file, data, mode);
+    });
+    return { claim, failure };
+  }
+
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     mkdirSync(join(process.cwd(), '.takt'), { recursive: true });
@@ -165,6 +219,118 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
     });
     vi.spyOn(process.stdout, 'write').mockReturnValue(true);
     vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  it.each([
+    { mode: 'run', stage: 'create', goalTasksOnly: false },
+    { mode: 'run', stage: 'metadata', goalTasksOnly: false },
+    { mode: 'run', stage: 'create', goalTasksOnly: true },
+    { mode: 'watch', stage: 'create', goalTasksOnly: false },
+  ] as const)('$mode は実TaskStoreの $stage ENOSPCから同じ所有者で5秒後に回復する（goal限定=$goalTasksOnly）', async ({ mode, stage, goalTasksOnly }) => {
+    vi.useRealTimers();
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    if (goalTasksOnly) await new GoalStore(projectDir).create(goalRecord());
+    const task = runner.addTask('recover claim', goalTasksOnly ? { goal_id: goalRecord().id } : undefined);
+    const { claim } = await injectClaimFailure(stage, 1);
+    const entry = mode === 'run' ? runAllTasks(projectDir, { goalTasksOnly }) : watchTasks(projectDir);
+    const outcome = entry.then(() => undefined, (error: unknown) => error);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      const owner = executionOwner();
+      expect(claim).toHaveBeenCalledTimes(1);
+      expect(state(task.name)?.status).toBe('pending');
+      expect(existsSync(`${runner.getTasksFilePath()}.lock`)).toBe(false);
+      expect(executions).toHaveLength(0);
+      if (mode === 'run') {
+        expect(vi.mocked(console.log).mock.calls.some(([message]) => String(message).includes('Running tasks'))).toBe(false);
+      }
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(claim).toHaveBeenCalledTimes(1);
+      expect(executions).toHaveLength(0);
+      expect(executionOwner()).toEqual(owner);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(executions.map(({ task }) => task.name)).toEqual([task.name]);
+      expect(state(task.name)?.status).toBe('running');
+      expect(executionOwner()).toEqual(owner);
+      executions[0]!.finish(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(state(task.name)?.status).toBe('completed');
+      expect(executions).toHaveLength(1);
+      if (mode === 'watch') {
+        await vi.advanceTimersByTimeAsync(500);
+        expect(executionOwner()).toEqual(owner);
+        expect(executions).toHaveLength(1);
+        interrupt();
+      } else {
+        const messages = vi.mocked(console.log).mock.calls.map(([message]) => String(message));
+        expect(messages.filter((message) => message.includes('Running tasks'))).toHaveLength(1);
+        expect(messages.some((message) => message.includes('Tasks Summary'))).toBe(true);
+      }
+      expect(await outcome).toBeUndefined();
+      expect(existsSync(join(projectDir, '.takt', 'execution.lock'))).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      interrupt();
+      for (const execution of executions) execution.finish(true);
+      await outcome;
+    }
+  });
+
+  it.each([
+    { pending: false, goalTasksOnly: false },
+    { pending: true, goalTasksOnly: true },
+  ])('実取得ENOSPCでも対象pendingがなければ待たない（pending=$pending、goal限定=$goalTasksOnly）', async ({ pending, goalTasksOnly }) => {
+    vi.useRealTimers();
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    if (pending) runner.addTask('ordinary task');
+    const { claim, failure } = await injectClaimFailure('create', 1);
+
+    await expect(runAllTasks(projectDir, { goalTasksOnly })).rejects.toMatchObject({ cause: failure });
+
+    expect(claim).toHaveBeenCalledTimes(1);
+    expect(executions).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(existsSync(join(projectDir, '.takt', 'execution.lock'))).toBe(false);
+  });
+
+  it('実TaskStoreの取得後永続化ENOSPCは変換せずに伝播する', async () => {
+    vi.useRealTimers();
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    const task = runner.addTask('persistence failure');
+    const { claim, failure } = await injectClaimFailure('persistence', 1);
+
+    await expect(runAllTasks(projectDir)).rejects.toBe(failure);
+
+    expect(claim).toHaveBeenCalledTimes(1);
+    expect(state(task.name)?.status).toBe('pending');
+    expect(executions).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['run', 'watch'] as const)('%s の実取得ENOSPC待機中の中断は再取得せずタイマーを解除する', async (mode) => {
+    vi.useRealTimers();
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    const task = runner.addTask('interrupt claim wait');
+    const { claim } = await injectClaimFailure('create', Infinity);
+    const entry = mode === 'run' ? runAllTasks(projectDir) : watchTasks(projectDir);
+    const outcome = entry.then(() => undefined, (error: unknown) => error);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(claim).toHaveBeenCalledTimes(1);
+      expect(executionOwner()).toMatchObject({ kind: mode, state: 'running' });
+      interrupt();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await outcome).toBeUndefined();
+      expect(claim).toHaveBeenCalledTimes(1);
+      expect(state(task.name)?.status).toBe('pending');
+      expect(executions).toHaveLength(0);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(existsSync(join(projectDir, '.takt', 'execution.lock'))).toBe(false);
+    } finally {
+      interrupt();
+      await outcome;
+    }
   });
 
   it.each(taskNames)('watch 起動時に保存名 $displayName を安全に表示し、原名で再投入・完了する', async ({ name, displayName }) => {
@@ -303,6 +469,9 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
     for (const execution of executions) execution.finish(true);
     await vi.advanceTimersByTimeAsync(0);
     await watchPromise;
+    const nativeFs = await vi.importActual<typeof import('node:fs')>('node:fs');
+    vi.mocked(fs.openSync).mockImplementation(nativeFs.openSync);
+    vi.mocked(fs.writeFileSync).mockImplementation(nativeFs.writeFileSync);
     while (inputWaitCount > 0) resumeInput();
     vi.restoreAllMocks();
     vi.useRealTimers();

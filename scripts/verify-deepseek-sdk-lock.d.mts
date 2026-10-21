@@ -1,6 +1,7 @@
 interface StartupManifest {
   dependencies: Record<string, string>;
   bundleDependencies: string[];
+  overrides?: Record<string, string>;
 }
 
 interface StartupLock {
@@ -32,6 +33,6 @@ export function verifyDeepSeekManagedLock(
   constants: string,
 ): void;
 /** Require startup dependencies to be exactly pinned, locked, and bundled; throw on inconsistencies. */
-export function verifyStartupBundleLock(root: StartupManifest, lock: StartupLock): void;
+export function verifyStartupBundleLock(root: StartupManifest, lock: StartupLock, quint: { dependencies: Record<string, string> }): void;
 /** Verify managed assets and declared startup bundles are in the pack inventory; throw if missing. */
 export function verifyDeepSeekPackAssets(files: { path: string }[], root: StartupManifest): void;

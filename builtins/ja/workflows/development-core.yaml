@@ -189,6 +189,7 @@ steps:
     capabilities: readonly
     persona: planner
     policy:
+      - process-deviation
       - contract-change
       - applicable-inputs
       - $param: plan_policy

@@ -25,6 +25,8 @@ import type { MergeMethod } from '../../core/models/config-types.js';
 import type { PrExecutionContext } from '../../core/workflow/system/pr-execution-context.js';
 import { getSelfTaskProcessIdentity } from './taskProcessIdentity.js';
 
+export class TaskClaimLockAcquisitionError extends Error {}
+
 export class TaskLifecycleService {
   constructor(
     private readonly projectDir: string,
@@ -229,6 +231,11 @@ export class TaskLifecycleService {
         return task;
       });
       return { tasks };
+    }, (error) => {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOSPC') {
+        throw new TaskClaimLockAcquisitionError(error.message, { cause: error });
+      }
+      throw error;
     });
 
     return claimed;

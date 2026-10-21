@@ -17,7 +17,7 @@ import {
   stripTaktManagedPrMarker,
 } from '../../../infra/git/index.js';
 import type { ExistingPr, Issue, CreatePrResult, GitProvider } from '../../../infra/git/index.js';
-import type { ExecuteTaskOptions } from './types.js';
+import type { ExecuteTaskOptions, WorkflowExecutionEventSink } from './types.js';
 import { readPrivateFileState, writePrivateFile } from '../../../shared/utils/private-file.js';
 import { prepareLoopAnalysisReportForPublication } from './loopAnalysisReportPublication.js';
 import { runLinkedMergeSafely } from '../../merge/index.js';
@@ -48,6 +48,7 @@ export interface PostExecutionOptions {
   orderContent?: string;
   repo?: string;
   outputMode?: ExecuteTaskOptions['outputMode'];
+  eventSink?: WorkflowExecutionEventSink;
   taskPrefix?: ExecuteTaskOptions['taskPrefix'];
   taskColorIndex?: ExecuteTaskOptions['taskColorIndex'];
   taskDisplayLabel?: ExecuteTaskOptions['taskDisplayLabel'];
@@ -120,6 +121,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
   } = options;
   const emitStatusLog = outputMode !== 'silent';
   const display = {
+    ...(options.eventSink === undefined ? {} : { eventSink: options.eventSink }),
     outputMode: outputMode ?? 'terminal',
     taskPrefix: options.taskPrefix,
     taskColorIndex: options.taskColorIndex,

@@ -56,6 +56,52 @@ afterEach(() => {
 });
 
 describe('withFileLock', () => {
+  it.each(['create', 'metadata'] as const)('notifies only acquisition errors at %s and permits reacquisition', (stage) => {
+    const failure = Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+    const converted = new Error('acquisition failed', { cause: failure });
+    const onAcquisitionError = vi.fn((error: unknown): never => {
+      expect(error).toBe(failure);
+      throw converted;
+    });
+    if (stage === 'create') {
+      vi.mocked(fs.openSync).mockImplementationOnce(() => { throw failure; });
+    } else {
+      vi.mocked(fs.writeFileSync).mockImplementationOnce(() => { content = '{'; throw failure; });
+    }
+    const action = vi.fn();
+
+    expect(() => withFileLock(lockPath, action, { onAcquisitionError })).toThrow(converted);
+
+    expect(onAcquisitionError).toHaveBeenCalledExactlyOnceWith(failure);
+    expect(action).not.toHaveBeenCalled();
+    expect(content).toBeUndefined();
+    expect(withFileLock(lockPath, () => 'recovered')).toBe('recovered');
+  });
+
+  it.each(['owner', 'action', 'release'] as const)('does not notify acquisition failure for %s errors', (stage) => {
+    const failure = Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+    const onAcquisitionError = vi.fn((_error: unknown): never => { throw new Error('unexpected conversion'); });
+    if (stage === 'owner') {
+      vi.mocked(getSelfProcessIdentity).mockImplementationOnce(() => { throw failure; });
+    } else if (stage === 'release') {
+      vi.mocked(fs.unlinkSync).mockImplementationOnce(() => { throw failure; });
+    }
+    const action = vi.fn(() => {
+      if (stage === 'action') throw failure;
+    });
+
+    expect(() => withFileLock(lockPath, action, { onAcquisitionError })).toThrow(failure);
+
+    expect(onAcquisitionError).not.toHaveBeenCalled();
+    expect(action).toHaveBeenCalledTimes(stage === 'owner' ? 0 : 1);
+  });
+
+  it('preserves native acquisition ENOSPC when no handler is supplied', () => {
+    const failure = Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+    vi.mocked(fs.openSync).mockImplementationOnce(() => { throw failure; });
+    expect(() => withFileLock(lockPath, vi.fn())).toThrow(failure);
+  });
+
   it('writes the process identity with exclusive creation, returns the result, and releases', () => {
     expect(withFileLock(lockPath, () => {
       expect(content).toBe(selfContent);

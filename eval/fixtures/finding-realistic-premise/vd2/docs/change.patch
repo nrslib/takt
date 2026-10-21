@@ -1,0 +1,7 @@
+--- a/src/summary.mjs
++++ b/src/summary.mjs
+@@ -1,3 +1,3 @@
+ export function summarize(items) {
+-  return { count: items.length, labels: items.map(item => item.label) };
++  return { count: items.length, labels: items.map(item => item.label).sort() };
+ }
