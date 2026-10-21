@@ -314,9 +314,10 @@ export function ConversationView({
     displayedActivity = activityStart;
   }
   const requiredStatus = `${displayedActivity}${statusSuffix}`;
-  const inputSummary = activeTool !== undefined
+  const rawInputSummary = activeTool !== undefined
     ? truncateStatusText(activeTool.inputSummary, columns - 2 - stringWidth(requiredStatus) - 1)
     : '';
+  const inputSummary = rawInputSummary === '…' ? '' : rawInputSummary;
   const statusLabel = `${requiredStatus}${inputSummary === '' ? '' : ` ${inputSummary}`}`;
   // The model name comes from config or `--model`, so it crosses the display
   // boundary like any other outside text before it reaches a fixed-height row.
@@ -528,7 +529,7 @@ export function ConversationView({
                   if (event.data.id !== undefined) {
                     return tool.id !== event.data.id;
                   }
-                  return current.kind !== 'tool' || tool !== current.tools.at(-1);
+                  return tool !== current.tools.at(-1);
                 });
                 return {
                   kind: current.kind === 'tool' && tools.length === 0 ? 'waiting' : current.kind,

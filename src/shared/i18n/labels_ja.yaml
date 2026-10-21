@@ -334,7 +334,7 @@ issue:
 tui:
   ui:
     thinking: "考え中..."
-    extendedThinking: "思考中..."
+    extendedThinking: "推論中..."
     responding: "応答中"
     selectTask: "候補タスクを選択中..."
     selectStart: "開始位置を判断中..."

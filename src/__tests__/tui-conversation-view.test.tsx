@@ -1826,6 +1826,37 @@ describe('ConversationView activity status', () => {
     }
   });
 
+  it.each(['thinking', 'responding'] as const)('should remove the latest tool after an idless result while %s', async (kind) => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      await begin(app);
+      const input = conversation.submitCalls[0];
+      emit(input, { type: 'tool_use', data: { id: 'A', tool: 'Read', input: { file_path: 'a.ts' } } });
+      emit(input, { type: 'tool_use', data: { id: 'B', tool: 'Edit', input: { file_path: 'b.ts' } } });
+      if (kind === 'thinking') {
+        emit(input, { type: 'thinking', data: { thinking: 'PRIVATE_THOUGHT' } });
+      } else {
+        input!.onAssistantChunk('visible response tail');
+      }
+      await flushFrames();
+
+      emit(input, { type: 'tool_result', data: { content: 'done', isError: false } });
+      emit(input, { type: 'tool_use', data: { id: 'C', tool: 'Write', input: { file_path: 'c.ts' } } });
+      emit(input, { type: 'tool_result', data: { id: 'C', content: 'done', isError: false } });
+      await flushFrames();
+
+      expect(status(app)).toContain('Read');
+      expect(status(app)).toContain('a.ts');
+      expect(status(app)).not.toContain('Edit');
+      expect(status(app)).not.toContain('b.ts');
+      expect(status(app)).not.toContain('Write');
+      expect(status(app)).not.toContain('c.ts');
+    } finally {
+      app.unmount();
+    }
+  });
+
   it.each(['thinking', 'responding'] as const)('should retain %s while removing late tool results', async (kind) => {
     const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
     const app = renderConversation(conversation, 'chat', vi.fn());
@@ -2330,6 +2361,53 @@ describe('ConversationView activity status', () => {
       app?.cleanup();
       terminal.dispose();
       vi.useRealTimers();
+    }
+  });
+
+  it('should omit the input summary when only an ellipsis fits the status row', async () => {
+    const columns = 30;
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const stdout = new ResizableOutput(columns, 14);
+    const input = createTestInput();
+    const terminal = new Terminal({ allowProposedApi: true, cols: columns, rows: 14, convertEol: true });
+    let app: ReturnType<typeof renderInk> | undefined;
+    let processed = 0;
+    async function updateTerminal(): Promise<string> {
+      await app!.waitUntilRenderFlush();
+      await writeTerminalFrames(terminal, stdout.frames.slice(processed));
+      processed = stdout.frames.length;
+      return getTerminalText(terminal);
+    }
+    try {
+      app = renderInk(<ConversationView
+        ui={UI} lang="en" conversation={conversation} userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
+        initialEntries={[]} submitMode="chat" autoSubmit={false} initialHistory={[]}
+        initialDraft={undefined} initialQueue={[]} residentSession={false}
+        modelLabel={() => MODEL_LABEL} onExit={() => undefined}
+      />, {
+        stdout: stdout as unknown as NodeJS.WriteStream,
+        stderr: new PassThrough() as unknown as NodeJS.WriteStream,
+        stdin: input, exitOnCtrlC: false, interactive: true, patchConsole: false,
+      });
+      await flushFrames();
+      input.write('hello');
+      await flushFrames();
+      input.write(ENTER);
+      await flushFrames();
+      const submission = conversation.submitCalls[0];
+      emit(submission, { type: 'tool_use', data: { id: 'read', tool: 'Read', input: { file_path: 'a.ts' } } });
+      await flushFrames();
+
+      const row = statusRows(await updateTerminal())[0];
+      expect(row).toContain('Read');
+      expect(row).toContain(UI.interruptHint);
+      expect(row).not.toContain('a.ts');
+      expect(row).not.toContain('…');
+    } finally {
+      app?.unmount();
+      await app?.waitUntilExit();
+      app?.cleanup();
+      terminal.dispose();
     }
   });
 

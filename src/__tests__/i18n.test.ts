@@ -19,6 +19,10 @@ describe('getLabel', () => {
     expect(new Set(labels).size).toBe(3);
   });
 
+  it('uses a distinct Japanese label for extended thinking', () => {
+    expect(getLabel('tui.ui.extendedThinking', 'ja')).toBe('推論中...');
+  });
+
   it('returns a label by key (defaults to en)', () => {
     const result = getLabel('interactive.ui.intro');
     expect(result).toBeTypeOf('string');
