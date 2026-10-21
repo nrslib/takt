@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { Provider, ProviderAgent } from '../../infra/providers/types.js';
 import { isStdioServer } from '../../infra/providers/mcp/types.js';
 import { readWorkspace, readWorkspaceRegistry } from '../../infra/config/global/workspaceRegistry.js';
-import { MANAGER_ASSIGNMENT_ENV } from './assignment.js';
+import { MANAGER_ASSIGNMENT_ENV, MANAGER_ASSIGNMENT_HEADER } from './assignment.js';
 import { TAKT_MANAGER_MCP_SERVER_NAME } from './managerMcp.js';
 import { managerReadScope, type ManagerReadScope, type ScopedReadRequest } from './readScope.js';
 
@@ -13,8 +13,9 @@ const AssignmentIdentitySchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('workspace'), workspaceId: z.uuid() }),
 ]);
 
-async function resolveReadScope(managerDirectory: string, configDirectory: string, sensitivePaths: readonly string[], rawAssignment: string | undefined): Promise<ManagerReadScope | undefined> {
+async function resolveReadScope(managerDirectory: string, configDirectory: string, sensitivePaths: readonly string[], rawAssignment: string | undefined, assignmentRequired: boolean): Promise<ManagerReadScope | undefined> {
   try {
+    if (assignmentRequired && rawAssignment === undefined) return undefined;
     const identity = rawAssignment === undefined ? undefined : AssignmentIdentitySchema.parse(JSON.parse(rawAssignment));
     let roots: readonly string[];
     if (identity?.kind === 'workspace') {
@@ -51,11 +52,20 @@ export function withManagerReadScope(provider: Provider, managerDirectory: strin
               const handler = options.onToolPermissionDecision;
               if (handler === undefined) return agent.call(prompt, options);
               const server = options.mcpServers?.[TAKT_MANAGER_MCP_SERVER_NAME];
-              const rawAssignment = server !== undefined && isStdioServer(server) ? server.env?.[MANAGER_ASSIGNMENT_ENV] : undefined;
+              let rawAssignment = server !== undefined && isStdioServer(server) ? server.env?.[MANAGER_ASSIGNMENT_ENV] : undefined;
+              if (server?.type === 'http') {
+                try {
+                  const header = server.headers?.[MANAGER_ASSIGNMENT_HEADER];
+                  rawAssignment = header === undefined ? undefined : Buffer.from(header, 'base64url').toString('utf8');
+                } catch {
+                  // HTTP の割り当てを復号できない要求も、範囲未確定として判断役へ渡す。
+                  rawAssignment = undefined;
+                }
+              }
               return agent.call(prompt, {
                 ...options,
                 onToolPermissionDecision: async (request) => {
-                  const scope = await resolveReadScope(managerDirectory, configDirectory, sensitivePaths, rawAssignment);
+                  const scope = await resolveReadScope(managerDirectory, configDirectory, sensitivePaths, rawAssignment, server?.type === 'http');
                   const scoped: ScopedReadRequest = { ...request, [managerReadScope]: scope };
                   return handler(scoped);
                 },

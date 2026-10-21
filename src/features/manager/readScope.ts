@@ -6,6 +6,7 @@ import { expandHomePath } from '../../infra/config/pathExpansion.js';
 import { isPathInside } from '../../shared/utils/pathBoundary.js';
 
 export const managerReadScope = Symbol('managerReadScope');
+export const MANAGER_READ_SEARCH_ENTRY_LIMIT = 10_000;
 
 export interface ManagerReadScope {
   readonly repositoryDirectories: readonly string[];
@@ -75,19 +76,21 @@ function selectedByPattern(path: string, pattern: string): boolean {
     || (!pattern.includes('/') && matchesGlob(path.split(sep).at(-1)!, pattern));
 }
 
-function searchIsSafe(root: string, logicalRoot: string, searchRoot: string, pattern: string | undefined, scope: ManagerReadScope, ancestors: ReadonlySet<string>): boolean {
+function searchIsSafe(root: string, logicalRoot: string, searchRoot: string, pattern: string | undefined, scope: ManagerReadScope, ancestors: ReadonlySet<string>, budget: { entries: number }): boolean {
   const target = inspectTarget(root, scope);
   if (target === undefined || !target.directory || ancestors.has(target.realPath)) return false;
   const visited = new Set([...ancestors, target.realPath]);
   const directory = opendirSync(root, { bufferSize: 32 });
   try {
     for (let entry = directory.readSync(); entry !== null; entry = directory.readSync()) {
+      budget.entries += 1;
+      if (budget.entries >= MANAGER_READ_SEARCH_ENTRY_LIMIT) return false;
       const path = join(logicalRoot, entry.name);
       if (entry.isDirectory() || entry.isSymbolicLink()) {
         const child = inspectTarget(path, scope);
         if (child === undefined) return false;
         if (child.directory) {
-          if (!searchIsSafe(child.realPath, path, searchRoot, pattern, scope, visited)) return false;
+          if (!searchIsSafe(child.realPath, path, searchRoot, pattern, scope, visited, budget)) return false;
           continue;
         }
       }
@@ -118,7 +121,7 @@ export function isManagerReadAllowed(request: ScopedReadRequest): boolean {
     if (read) return !target.directory;
     if (request.toolName === 'Glob' && !target.directory) return false;
     if (!target.directory) return true;
-    return searchIsSafe(target.realPath, target.realPath, target.realPath, pattern as string | undefined, scope, new Set());
+    return searchIsSafe(target.realPath, target.realPath, target.realPath, pattern as string | undefined, scope, new Set(), { entries: 0 });
   } catch {
     // 解決・読取・検索範囲の確認に失敗した要求は既存の判断役が扱う。
     return false;
