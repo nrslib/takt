@@ -487,7 +487,7 @@ takt list --non-interactive --action delete --status failed pr_failed --format j
 
 #### 実行中タスクへの相談
 
-`takt list`（別名 `takt tasks`）の **Stop** は、確認後に実行中のタスク1件へ停止を依頼します。worker が自分で中断し、終端状態を決めます。**Mark as failed** は状態を付け直すだけで、worker を停止しません。
+`takt list` の **Stop** は、確認後に実行中のタスク1件へ停止を依頼します。worker が自分で中断し、終端状態を決めます。**Mark as failed** は状態を付け直すだけで、worker を停止しません。
 
 `takt list` でタスクを選ぶと、状態に応じたアクションメニューが開きます。Instruct、Requeue などの既存アクションは、それぞれ対応する状態で引き続き使用できます。ワークツリークローンを持つ実行中タスクでは、**Interactive** を選ぶと、そのタスクを `/tell` の初期対象にした通常の assistant 会話が開きます。会話中に別のタスクを確認したり、新しいタスクを相談したりでき、`/go` で実行・保存できます。`/tell` は確定画面でタスク名、workflow、現在 step、指示内容を表示し、確定時に選ばれたタスクにだけ書き込みます。対話端末で確認できない場合は送信せず、理由を通知します。`/cancel` で会話または保留中の操作を取り消します。**Mark as failed** もアクションメニューから引き続き使用できます。
 

@@ -10,12 +10,12 @@ vi.mock('../app/cli/initialization.js', () => ({
 vi.mock('../app/cli/updateCheck.js', () => ({ runUpdateCheck: vi.fn(async () => undefined) }));
 vi.mock('../features/tasks/list/index.js', () => ({ listTasks: doubles.listTasks }));
 
-async function parseList(args: string[], command: 'list' | 'tasks' = 'list'): Promise<void> {
+async function parseList(args: string[]): Promise<void> {
   const { program } = await import('../app/cli/program.js');
   await import('../app/cli/commands.js');
   program.exitOverride();
   program.configureOutput({ writeErr: vi.fn() });
-  await program.parseAsync(['node', 'takt', command, '--non-interactive', ...args]);
+  await program.parseAsync(['node', 'takt', 'list', '--non-interactive', ...args]);
 }
 
 async function expectStatusOptionRegistered(): Promise<void> {
@@ -31,8 +31,8 @@ describe('CLI list deletion filters', () => {
     vi.clearAllMocks();
   });
 
-  it.each(['list', 'tasks'] as const)('routes %s to the task list', async (command) => {
-    await parseList([], command);
+  it('routes list to the task list', async () => {
+    await parseList([]);
     expect(doubles.listTasks).toHaveBeenCalledExactlyOnceWith('/project', undefined,
       expect.objectContaining({ enabled: true }));
   });
