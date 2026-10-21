@@ -18,6 +18,7 @@ tags:
 edit: false
 persona: planner
 policy:
+  - process-deviation
   - contract-change
   - $param: plan_policy
 knowledge:

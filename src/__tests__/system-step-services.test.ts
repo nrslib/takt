@@ -3028,6 +3028,28 @@ describe('DefaultSystemStepServices', () => {
     });
   });
 
+  it('plain_textは改行と長いバッククォート列を含む本文全体を囲む', async () => {
+    const services = new DefaultSystemStepServices({ cwd: '/repo/worktree', projectCwd: '/repo', task: 'Comment' });
+    const body = '[unit](https://example.invalid)\n`````\n[run](https://example.invalid/run)';
+    await services.executeEffect({ type: 'comment_pr', pr: 42, body, body_format: 'plain_text' },
+      { pr: 42, body, body_format: 'plain_text' }, {} as never);
+    expect(mockCommentOnPr).toHaveBeenCalledWith(42, `\`\`\`\`\`\`text\n${body}\n\`\`\`\`\`\``, '/repo');
+  });
+
+  it('body中の設定名は出力方式を変更せず未指定時はMarkdown本文をそのまま渡す', async () => {
+    const services = new DefaultSystemStepServices({ cwd: '/repo/worktree', projectCwd: '/repo', task: 'Comment' });
+    const body = 'body_format: plain_text [run](https://github.com/org/repo/actions/runs/10)';
+    await services.executeEffect({ type: 'comment_pr', pr: 42, body }, { pr: 42, body }, {} as never);
+    expect(mockCommentOnPr).toHaveBeenCalledWith(42, body, '/repo');
+  });
+
+  it('解決済みpayloadの不正なbody_formatは投稿前に拒否する', async () => {
+    const services = new DefaultSystemStepServices({ cwd: '/repo/worktree', projectCwd: '/repo', task: 'Comment' });
+    await expect(services.executeEffect({ type: 'comment_pr', pr: 42, body: 'Comment' },
+      { pr: 42, body: 'Comment', body_format: 'html' }, {} as never)).rejects.toThrow();
+    expect(mockCommentOnPr).not.toHaveBeenCalled();
+  });
+
   it('validates comment_pr payload fields', async () => {
     const services = new DefaultSystemStepServices({
       cwd: '/repo/worktree',

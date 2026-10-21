@@ -414,7 +414,11 @@ describe('manager workspace storage and repository boundaries', () => {
         strategy: { systemPrompt: 'manager fixture' } } });
     const app = render(createElement(ManagerView, { cwd: repositoryA, assignment, lang: 'ja', session, initialDiagnostics: [], onExit: vi.fn() }));
     try {
-      await vi.waitFor(() => { expect(app.lastFrame()).toContain(`${workspace!.name} (2)`); expect(app.lastFrame()).toContain(goal.id); });
+      await vi.waitFor(() => {
+        expect(app.lastFrame()).toContain(`${workspace!.name} (2)`);
+        expect(app.lastFrame()).toContain(goal.objective);
+        expect(app.lastFrame()).toContain('一時停止');
+      });
       await renameManagerWorkspace(assignment, '新しい担当', globalDirectory);
       await addManagerRepository(assignment, repositoryC, globalDirectory);
       setMockScenario([{ persona: 'manager', status: 'done', content: JSON.stringify({ message: '担当を確認', summary: null }) }]);

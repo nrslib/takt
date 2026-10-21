@@ -1,4 +1,4 @@
-import { isScopeRef } from 'faceted-prompting';
+import { isScopeRef } from '#faceted-prompting';
 import { getAllParallelSubSteps, type WorkflowConfig, type WorkflowStep } from '../../core/models/index.js';
 import { isWorkflowPath, loadWorkflowByIdentifier, resolveWorkflowCallTarget } from '../../infra/config/index.js';
 import { getWorkflowSourcePath } from '../../infra/config/loaders/workflowSourceMetadata.js';

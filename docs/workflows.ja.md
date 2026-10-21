@@ -890,7 +890,7 @@ promotion は並列サブ step ではサポートされません。
 | `persona` | - | persona キー（section map、または bare 名で project → user → builtin の順に解決）またはファイルパス |
 | `persona_name` | - | ログやプロンプト用の表示名。`provider_routing.personas` には影響しない |
 | `session_key` | - | 通常の agent step と parallel sub-step の明示セッションキー。実行時キーには解決済み provider が付く。空文字・空白のみは無効 |
-| `session` | `continue` | 通常の agent step と parallel sub-step のセッション扱い。`continue` は保存済み persona session を resume し、`refresh` は resume せず開始し、`compact` は resume 後に Phase 1 前だけ provider へ圧縮を依頼する。report phase / status phase 前には圧縮しない。圧縮 capability がない provider ではそのまま続行し、圧縮失敗時は Phase 1 を実行せず、保存済み session を破棄する |
+| `session` | `continue` | 通常の agent step と parallel sub-step のセッション扱い。`continue` は worktree のクローンでも同一 run 内の同じ persona・provider・model の保存済み session を resume する。別クローンやプロジェクト直下の session は使わない。retry・requeue・instruct などで既存クローンの新しい試行を始める場合は各 persona を新規で開始し、その試行の後続 step では新しい session を継続する。provider fallback では保存済み session を resume しない。`refresh` は resume せず開始し、`compact` は resume 後に Phase 1 前だけ provider へ圧縮を依頼する。report phase / status phase 前には圧縮しない。圧縮 capability がない provider ではそのまま続行し、圧縮失敗時は Phase 1 を実行せず、保存済み session を破棄する |
 | `requires_user_input` | `false` | 通常の agent step がユーザー入力待ち可能であることを示す。system step、workflow-call step、parallel parent step では指定不可。`requires_user_input: true` の step は agent 実行前から interactive mode と user input handler が必須で、未設定の場合はその agent を実行せず workflow を abort する。実際の入力待ちは一致した rule 側の `requires_user_input: true` でのみ発生する |
 | `tags` | - | config の `provider_routing.tags` に一致させる順序付き routing tag |
 | `policy` | - | policy キーまたはキー配列（section map、または bare 名で project → user → builtin の順に解決） |
@@ -1193,13 +1193,23 @@ PR 状態の取得は1回あたり15秒で期限切れになります。`wait` �
 
 fork の脅威検査は merge コマンドが本体 workflow の前に実行します。番号指定と自動起動でも検査し、同一リポジトリの PR では省略します。機械的検出、AI の疑わしい判定、差分上限超過や未判定は理由を PR にコメントして本体を開始しません。Git の取得・push と provider のツールは通常の設定を使用します。
 
-`merge-review` は `review` と Caccia 効果を実行し、CI の結果と評価を PR にコメントします。`merge-review-fix` は同期と競合解決の後に `review-fix` を実行し、修正の push、Caccia 効果、CI とレビュー状態の確認、マージへ進みます。レビューや CI が失敗した場合は理由をコメントして停止します。
+`merge-review` は `review` と Caccia 効果を実行し、CI の結果と評価を PR にコメントします。`merge-review-fix` は同期と競合解決の後に `review-fix` を実行し、修正の push、Caccia 効果、CI とレビュー状態の確認、マージへ進みます。レビューが失敗した場合は理由をコメントして停止します。CI失敗では後述の回復処理へ進みます。
 
-`takt merge` の既定である `merge-review-fix-simple` は、PR と土台ブランチを同期し、必要なら競合を解消してから `review-fix-simple` を実行します。情報収集後は1体の読み取り専用レビュアーが変更に応じたファセットで確認します。指摘は別ステップで裁定し、修正計画・修正・完了検証を経て再レビューします。要件の最終確認が完了したら修正を push し、Caccia 効果が返す head の CI と GitHub のレビュー・マージ可能状態を確認してマージします。子 workflow の失敗や CI の失敗ではマージせず、結果を PR にコメントします。並列の専門レビューを使う場合は `merge-review-fix` を選べます。
+`takt merge` の既定である `merge-review-fix-simple` は、PR と土台ブランチを同期し、必要なら競合を解消してから `review-fix-simple` を実行します。情報収集後は1体の読み取り専用レビュアーが変更に応じたファセットで確認します。指摘は別ステップで裁定し、修正計画・修正・完了検証を経て再レビューします。要件の最終確認が完了したら修正を push し、Caccia 効果が返す head の CI と GitHub のレビュー・マージ可能状態を確認してマージします。子 workflow の失敗ではマージせず、結果を PR にコメントします。CI失敗では後述の回復処理へ進みます。並列の専門レビューを使う場合は `merge-review-fix` を選べます。
+
+### CI回復の入力と効果
+
+再実行直前に現在のPR HEADを取得し、証拠のHEADと異なる場合は再実行を拒否します。受付後にHEADが変わった場合も待機を抜け、元HEADの失敗チェックとログを保持して不一致理由をコメントしてからABORTします。`pr_status`のsystem inputは`rerunHeadChanged`と`rerunHeadChangeReason`を常に返します。通常のpollingでは`false`と空文字列になります。run・repository・attemptの検証は引き続き適用されます。
+
+`comment_pr`には任意の`body_format: plain_text`を指定できます。補間済みの本文全体をコードブロックで囲み、区切りのバッククォートは本文中の最長の連続列より長くします。CI回復の停止・push失敗コメントでこの形式を使い、チェック名・job名・調査要点・エラーを文字として表示します。未指定の場合は従来どおりMarkdown本文を渡します。
+
+回復用の`pr_ci_failure`は`source: current_pr`とHEADの完全なstate参照`head_sha`を受け取ります。`number`、`headSha`、`complete`、run・attempt・jobとログ本文を含む失敗`checks`、取得不能理由`unavailable`、`fixRounds`、`rerunCount`、コメント用の文字列`details`を返します。`rerun_ci` effectは`pr`と失敗証拠の完全参照`failure`を受け取り、証拠が揃っていて調査が外部要因と判断した場合だけ失敗runを重複なく1回再実行します。結果の`rerun`にはPR・HEAD・再実行前のattemptを保持します。その完全参照を`pr_status.rerun_from`へ渡すと新attemptを待機します。再実行stepの実行前はこの任意参照が通常のpollingを保持します。回数は同じworkflow実行が所有します。
 
 ### Caccia システム効果
 
-この効果は `takt merge` または `enqueue_task mode: from_pr` のタスクが持つ、対象 PR と一致した隔離クローンの実行文脈を必要とします。`pr` は正の整数または完全なテンプレート参照です。通常文字列に埋め込んだ参照は受理しません。既存の `caccia.enabled`、`wait_timeout_ms`、`max_iterations`、`workflow` を読みます。無効・未設定なら待たずに終了します。単独の `takt caccia <PR>` は `enabled` に関係なく利用できます。
+この効果は `takt merge` または `enqueue_task mode: from_pr` のタスクが持つ、対象 PR と一致した隔離クローンの実行文脈を必要とします。`pr` は正の整数または完全なテンプレート参照です。通常文字列に埋め込んだ参照は受理しません。既存の `caccia.enabled`、`wait_timeout_ms`、`max_iterations`、`workflow` を読みます。無効・未設定なら CodeRabbit のレビューを待たずにスキップします。単独の `takt caccia <PR>` は `enabled` に関係なく利用できます。
+
+GitHub での実行前には PR head と開始時のクローン HEAD を照合します。不一致なら2秒間隔で PR 情報を再取得し、取得時間を含めて最大60秒待ちます。PR 情報の取得中に異なる head を観測した場合も同じ期限内で再取得します。期待 SHA と一致した場合だけ続行し、期限まで不一致なら期待 SHA と最後に観測した SHA を含む `error` を返します。最後の観測が不整合だった場合は食い違った両方の SHA も示します。PR の識別情報変更、認証失敗など他の取得例外、中断は直ちに失敗とします。実行文脈と push 記録先がある場合はスキップ記録前にも同じ照合を行うため、無効・未設定でも GitHub head の反映を待つことがあります。この固定の反映待ちは `wait_timeout_ms` によるレビュー待機とは別です。非 GitHub のスキップ照合と実行終了後の head 検証には、この待機を追加しません。
 
 ```yaml
   - name: caccia
@@ -1223,3 +1233,5 @@ fork の脅威検査は merge コマンドが本体 workflow の前に実行し�
 GitLab でも MR の詳細と CI 状態を取得し、`github_unavailable` の `skipped` 後に返された head の CI を待ちます。マージ方式の指定と head 一致制約は未対応なので、これらを渡す `merge_pr` は失敗します。
 
 マージ用ビルトインは Caccia を明示的に実行します。`merge-review` は `review → caccia → wait_ci → 評価コメント`、`merge-review-fix` と `merge-review-fix-simple` は `review/fix → commit_and_push → caccia → wait_ci → merge_pr` の順です。`success` と `skipped` は返された head の CI 待ちへ進みます。`limit` は未解決件数をコメントして COMPLETE で終了し、マージしません。効果の失敗は `error` をコメントして ABORT で終了します。push、タスク後処理、Pipeline からの暗黙の Caccia は廃止しました。`merge.auto_start: true` では PR 公開後にマージ用 workflow が起動し、その明示効果が Caccia を実行します。
+
+`merge-review-fix` と `merge-review-fix-simple` はCI失敗が確定するたびに失敗チェック、run・attempt・jobの参照先、ログ本文、PRの累積差分、関連コードを調査します。フレークやmainでも失敗する欠陥はPRの作業ツリーで根本修正し、読み取り専用レビューを経てpush → Caccia → CI待ちへ戻ります。修正は最大2周です。外部要因を証拠で判断した場合だけ、修正回数とは独立してCIを1回再実行します。修正2周後も未使用なら再実行できます。同じHEADの新しいattemptを待ち、すべてのチェックと既存のマージ条件を再確認します。証拠不足、修正2周後も残る欠陥、修正レビューのREJECT、再実行後の失敗では回数・最後の失敗チェックと参照先・調査要点をPRへコメントしてABORTします。調査・修正レポートはrunに残ります。初回成功とCIのtimeoutの扱いは変わらず、`merge-review` はコメント専用のままです。GitHub Actionsのログ取得・再実行の権限不足や未対応Providerは明示します。

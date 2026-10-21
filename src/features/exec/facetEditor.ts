@@ -8,7 +8,7 @@ import {
   resolveFacetPath,
   resolveResourceContentWithSource,
 } from '../../infra/config/loaders/resource-resolver.js';
-import { isScopeRef } from 'faceted-prompting';
+import { isScopeRef } from '#faceted-prompting';
 import { getFacetDirs, scanFacets, type FacetLookupConfig, type FacetType } from '../catalog/catalogFacets.js';
 import { info } from '../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/index.js';

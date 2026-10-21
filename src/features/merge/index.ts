@@ -18,7 +18,7 @@ import { selectPullRequest, type PrSelectionResult } from './selection.js';
 import { toLocalBranchRef, toPullRequestBaseRef } from '../../shared/utils/gitBranchValidation.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { runWorkflowExecution } from '../tasks/execute/workflowExecutionApi.js';
-import type { ExecuteTaskOptions } from '../tasks/execute/types.js';
+import type { WorkflowExecutionOptions } from '../tasks/execute/types.js';
 import { TaskRunner, resolveCloneBaseDir } from '../../infra/task/index.js';
 import { createTaskClonePath } from '../../infra/task/clone-path.js';
 import type { TaskInfo } from '../../infra/task/index.js';
@@ -31,8 +31,8 @@ const log = createLogger('merge');
 
 export { resolveMergeSettings } from './settings.js';
 
-type MergeDisplayOptions = Pick<ExecuteTaskOptions,
-  'outputMode' | 'taskPrefix' | 'taskColorIndex' | 'taskDisplayLabel'>;
+type MergeDisplayOptions = Pick<WorkflowExecutionOptions,
+  'outputMode' | 'taskPrefix' | 'taskColorIndex' | 'taskDisplayLabel' | 'eventSink'>;
 
 interface MergeOptions {
   readonly projectCwd: string;
@@ -263,6 +263,11 @@ async function runPrMergeWorkflow(
   );
   const result = await runWorkflowExecution({
     ...request.display,
+    eventSink: (event) => {
+      if (event.type === 'progress' && event.level === 'warn') {
+        return request.display?.eventSink?.(event);
+      }
+    },
     cwd, projectCwd: request.projectCwd,
     workflowIdentifier: isWorkflowPath(request.workflow)
       ? request.workflow.startsWith('~')

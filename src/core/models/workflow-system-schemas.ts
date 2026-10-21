@@ -3,7 +3,7 @@ import { getWorkflowStepKind } from './workflow-step-kind.js';
 import {
   workflowPrListWhereEquals,
 } from './workflow-types.js';
-import type { WorkflowPrListWhere } from './workflow-types.js';
+import type { WorkflowPrListWhere, WorkflowTemplateReference } from './workflow-types.js';
 import {
   IssueListSystemInputRawSchema,
   IssueSelectionSystemInputRawSchema,
@@ -26,7 +26,7 @@ const EffectTemplateReferenceSchema = z.string().regex(
 const TemplateReferenceSchema = z.union([
   ScopedTemplateReferenceSchema,
   EffectTemplateReferenceSchema,
-]);
+]).transform((value) => value as WorkflowTemplateReference);
 
 const SystemInputBindingSchema = z.object({
   as: z.string().min(1),
@@ -46,6 +46,12 @@ export const SystemInputRawSchema = z.discriminatedUnion('type', [
   SystemInputBindingSchema.extend({
     type: z.literal('pr_status'),
     source: z.literal('current_pr'),
+    rerun_from: TemplateReferenceSchema.optional(),
+  }),
+  SystemInputBindingSchema.extend({
+    type: z.literal('pr_ci_failure'),
+    source: z.literal('current_pr'),
+    head_sha: TemplateReferenceSchema,
   }),
   SystemInputBindingSchema.extend({
     type: z.literal('task_context'),
@@ -139,6 +145,11 @@ const EnqueueTaskEffectBaseSchema = z.object({
 
 export const WorkflowEffectRawSchema = z.discriminatedUnion('type', [
   z.object({
+    type: z.literal('rerun_ci'),
+    pr: EffectReferenceScalarSchema,
+    failure: TemplateReferenceSchema,
+  }).strict(),
+  z.object({
     type: z.literal('caccia'),
     pr: EffectReferenceScalarSchema,
   }).strict(),
@@ -200,6 +211,7 @@ export const WorkflowEffectRawSchema = z.discriminatedUnion('type', [
     type: z.literal('comment_pr'),
     pr: EffectReferenceScalarSchema,
     body: z.string().min(1),
+    body_format: z.literal('plain_text').optional(),
   }).strict(),
   z.object({
     type: z.literal('sync_with_root'),

@@ -92,6 +92,21 @@ function git(cwd: string, ...args: string[]): string {
 }
 
 describe('Caccia effect through PR workflow execution', () => {
+  it('delivers a linked Caccia warning through the workflow parent sink while preserving success', async () => {
+    writeWorkflow();
+    const execute = mocks.caccia.getMockImplementation()!;
+    mocks.caccia.mockImplementationOnce(async (input) => {
+      await input.eventSink?.({ type: 'progress', level: 'warn', message: 'Caccia child trace failed' });
+      return execute(input);
+    });
+    const eventSink = vi.fn();
+    expect(await executePrWorkflow({ projectCwd: project, prNumber: 123, workflow: workflowFile,
+      settings: resolveMergeSettings(undefined), display: { outputMode: 'silent', eventSink } }))
+      .toEqual({ merged: true });
+    expect(eventSink).toHaveBeenCalledExactlyOnceWith({ type: 'progress', level: 'warn', message: 'Caccia child trace failed' });
+    expect(await mocks.execution.mock.calls[0]?.[0]).toMatchObject({ success: true });
+  });
+
   let root: string;
   let project: string;
   let remote: string;

@@ -31,19 +31,20 @@
 - After final checks, report completion in a table with scenario ID, result (passed / failed / unverified), and evidence (test names, logs, SHAs). Mark scenarios with no way to check them as unverified too, and do not request completion while any remain. Save lengthy progress explanations in work records.
 - Quint and Alloy are optional. Use them only when state transitions, concurrency, or invariants are central and model checking will actually be run. Prepare the tool when adopting it; do not add a new project dependency. Include the commands and results in the completion report. Do not use these tools when those concerns are not central, and never write a model that will not be run.
 - Verify evidence for every acceptance criterion and the current goal SHA before requesting completion. A goal is complete after integration into its target. When waiting for a human merge, explain the target, SHA, summary and steps, then check integration later.
-- People register, pause, resume and abort through the TUI. Do not advance paused or aborted goals. Aborting is irreversible; records and branches remain.
+- People register through the TUI. Pause, resume and abort are available through the TUI or through the manager when requested in conversation, after human confirmation. Identify the target using the existing goal list; ask the person if it cannot be narrowed to one goal. Route state operations through the permission judge's approval path and never bypass confirmation. Before aborting, confirm that it is irreversible and that records and branches remain. Do not advance paused or aborted goals.
 
 ## When work stops
 
-- Choose resumption, retry with revised instructions, new work or removal based on current state and cause. Do not repeat the same approach mechanically. Give conflict-resolution tasks the branches, SHAs, conflicting files and expected result.
-- Stop affected work and its dependents when revised retries still fail for the same reason, external conditions require human action, or only a person can decide. Send a blocked notification or human question explaining the reason, what you tried and the needed action. Continue independent work.
-- Resolve a first failure yourself when possible. Ask only for a real human choice, with one decision per question, options, a recommendation and its reason. Use a notification when only waiting for an action.
-- Read the answer before submitting work whose content depends on it; withdraw resolved questions. Decide whether to withhold submissions from current state.
+- Choose resumption, retry with revised instructions, new work or removal based on current state and cause. Resolve a first failure yourself when possible. Do not repeat the same approach mechanically. Give conflict-resolution tasks the branches, SHAs, conflicting files and expected result.
+- After a refusal or rejection, do not achieve the same effect by changing tools, wording or routes. If another method fully addresses the reason for the refusal, proceed with that method.
+- Stop affected work and its dependents when no alternative fully addresses the reason for a refusal or rejection, revised retries still fail for the same reason, external conditions require human action, or only a person can decide. Return only the remaining decisions to the person. Use a blocked notification or human inquiry to explain the reason, what you tried and the needed action. Continue independent work.
+- Refer inquiries (questions, approval requests and requests for human action) to a person only when the AI cannot decide. Do not ask about matters you can investigate and decide yourself, answers found in instructions or design documents, or decisions determined by acceptance criteria or constraints. Include one decision, the options, a recommendation and its reason in each inquiry. Use a notification when only waiting for an action.
+- Read the answer before submitting work whose content depends on it. Decide whether to withhold submissions from current state.
 - Questions, integrations and completion are notified automatically. Use notification tools for additional decisions or changes, never send externally yourself.
 
 ## Periodic inspection
 
 - Compare the work and its history to identify tasks taking too long, repeated execution of the same step, goals making no progress or questions left unanswered for a long time. Do not invent missing timestamps or evidence. Records of inspection alone do not count as progress.
-- For stopped work, check the cause and saved results, then choose resumption, retry with corrected instructions or notifying a person. No tool stops running work, so notify a person about problems in running work.
+- For stopped work, check the cause and saved results, then choose resumption, retry with corrected instructions or notifying a person. No tool stops an individual running task, so notify a person about problems in running work. Abort an entire goal only when requested by a person and after confirmation.
 - Before notifying or asking, read work records and avoid repeating a notice for the same state and reason. Briefly record the reason and the required action.
 - If nothing is wrong, take no action and send no notification; only keep a short inspection record.

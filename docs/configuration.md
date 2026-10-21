@@ -263,7 +263,9 @@ caccia:
   workflow: caccia        # Workflow used to judge and fix each set of threads
 ```
 
-The `caccia` effect waits for CodeRabbit only when `enabled` is `true`; otherwise it returns `skipped` with `skipReason: config_disabled` immediately. The standalone `takt caccia <PR-number>` command is available regardless of this flag. Defaults are disabled, 1,800,000 milliseconds, 3 iterations, and workflow `caccia`. A project `caccia` block takes precedence over the global block; omitted fields in the selected block receive these defaults. Set `workflow` to a workflow identifier to replace the builtin workflow.
+The `caccia` effect waits for CodeRabbit only when `enabled` is `true`; otherwise it skips the review wait and returns `skipped` with `skipReason: config_disabled`. The standalone `takt caccia <PR-number>` command is available regardless of this flag. Defaults are disabled, 1,800,000 milliseconds, 3 iterations, and workflow `caccia`. A project `caccia` block takes precedence over the global block; omitted fields in the selected block receive these defaults. Set `workflow` to a workflow identifier to replace the builtin workflow.
+
+If the GitHub PR head differs from the clone's starting HEAD, the effect fetches PR details every 2 seconds before execution for up to 60 seconds, including fetch time. Inconsistent head observations within a PR details fetch also trigger a retry within the same deadline. It continues only on the expected SHA; a mismatch at the deadline returns an `error` containing the expected SHA and the last observed SHA. If the last observation was inconsistent, both conflicting SHAs are included. Authentication failures and other fetch errors, PR identity changes, and cancellation fail immediately. This also applies before recording a skip when execution metadata and a push recorder are present, so disabled or unset configuration may still wait for this check. This wait is fixed and is independent of the review setting `wait_timeout_ms`.
 
 `wait_timeout_ms` bounds the initial review wait and each pushed-commit review wait, including a retry request. If a CodeRabbit rate-limit notice gives a retry time before the deadline, Caccia requests one review when that time arrives; a retry time at or beyond the deadline skips Caccia immediately. A review still incomplete at the deadline after a rate-limit notice also skips Caccia. Without a rate-limit notice, an initial timeout skips Caccia and a pushed-commit timeout is an error. The standalone command exits non-zero in either case; the system effect returns failures as `success: false` with `error` for workflow routing.
 
@@ -436,6 +438,21 @@ fails config validation.
 Most config keys can be overridden with an environment variable named `TAKT_` plus the config key path, uppercased and joined with underscores: `logging.debug` becomes `TAKT_LOGGING_DEBUG`, `telemetry.routing_decisions` becomes `TAKT_TELEMETRY_ROUTING_DECISIONS`. Common examples: `TAKT_PROVIDER`, `TAKT_MODEL`, `TAKT_CONCURRENCY`, `TAKT_LOGGING_DEBUG`, `TAKT_TELEMETRY_ROUTING_DECISIONS`, `TAKT_OBSERVABILITY_ENABLED`. An environment value overrides the corresponding file value and is applied at the layer that owns the key: global-only keys (e.g. `logging`, `disabled_builtins`) resolve at the global `~/.takt/config.yaml` layer, while project-overridable keys (e.g. `concurrency`, `telemetry.routing_decisions`) also resolve at the project `.takt/config.yaml` layer.
 
 Separately from config-key overrides, `TAKT_NOTIFY_WEBHOOK` sets a Slack Incoming Webhook URL. When it is set, TAKT posts a Slack notification on pipeline completion and when a `takt run` task batch finishes (run summary). Enabled manager goal notifications use the same webhook.
+
+## Manager sensitive read targets
+
+In global `~/.takt/config.yaml` or project `.takt/config.yaml`, `manager.sensitive_paths` adds files and directories that require the manager permission judge even inside assigned repositories:
+
+```yaml
+manager:
+  sensitive_paths:
+    - private
+    - config/credentials.json
+```
+
+Defaults are `.env`, `.env.*`, `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`, `*.key`, `*.pem`, `*.crt`, `*.cer`, `*.p12`, and `*.pfx`. Both configuration lists are added to the defaults; omission or an empty list cannot remove them. A bare name applies at any directory depth. Relative paths with a directory component are relative to each assigned repository; absolute paths and `~/` paths are also supported. A directory entry includes its descendants. Name patterns support a single leading or trailing `*`; this setting does not define allow rules.
+
+With Claude, `Read`, `Glob`, and `Grep` bypass the judge only for readable ordinary targets inside the assignment after path and symlink resolution. Search candidates are checked using paths and metadata, without reading sensitive contents. Simple search patterns with `*`, `**`, and `?` are supported; exclusion, brace expansion, character classes, escapes, or ranges that cannot be established go to the judge. Hidden paths and traversed directories or symlinks are checked conservatively, so an otherwise restrictive search can still require review. Codex built-in tools continue to require review.
 
 ## Manager Notification Settings
 

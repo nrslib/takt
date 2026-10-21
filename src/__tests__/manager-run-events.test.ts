@@ -46,6 +46,24 @@ function patrol(filePath = '/inbox/patrol.json'): SavedManagerEvent {
   return { filePath, event: { kind: 'patrol', goalId: goal.id, createdAt: new Date().toISOString() } };
 }
 
+it.each(['claude', 'claude-sdk', 'codex', 'opencode', 'mock'] as const)('exposes goal execution only when the %s event manager has a permission judge', async (providerType) => {
+  const usesJudge = providerType === 'claude' || providerType === 'claude-sdk' || providerType === 'codex';
+  doubles.plan.mockReturnValueOnce({
+    ctx: { provider: { preflight: doubles.preflight }, providerType, lang: 'ja' },
+    strategy: { systemPrompt: 'manager fixture' },
+    ...(usesJudge ? { permissionJudge: { language: 'ja', systemPrompt: 'judge fixture',
+      managerPersona: 'manager fixture', managerPolicy: 'policy fixture',
+      resolution: { provider: providerType, model: undefined, providerOptions: {} } } } : {}),
+  });
+  inbox = [saved('task-a')];
+  const manager = createRunEventManager('/project');
+  try {
+    expect(await manager.processPending(new AbortController().signal, 1)).toBe(true);
+    expect(doubles.connect.mock.calls[0]?.[3]?.enableGoalExecutionTools === true).toBe(usesJudge);
+    expect(doubles.turn).toHaveBeenCalledOnce();
+  } finally { await manager.close(); }
+});
+
 it('passes the event goal identity, repository and constraints separately from conversation text', async () => {
   goal = { ...goal, constraints: ['外部への送信は禁止'] };
   inbox = [saved('task-a')];
@@ -75,7 +93,8 @@ it('transfers user MCP servers to connection setup and the merged servers to pre
   const signal = new AbortController().signal;
   try {
     await expect(manager.processPending(signal, 10)).resolves.toBe(true);
-    expect(doubles.connect).toHaveBeenCalledExactlyOnceWith('/project', undefined, userServers);
+    expect(doubles.connect).toHaveBeenCalledOnce();
+    expect(doubles.connect.mock.calls[0]?.slice(0, 3)).toEqual(['/project', undefined, userServers]);
     expect(doubles.preflight).toHaveBeenCalledExactlyOnceWith({
       cwd: '/project', abortSignal: expect.any(AbortSignal), model: undefined, providerOptions,
       permissionMode: 'full', mcpServers: servers, outputSchema: { type: 'object' },

@@ -16,10 +16,10 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Language } from '../../core/models/types.js';
-import { renderTemplate } from 'faceted-prompting';
-import { expandFacetIncludes } from 'faceted-prompting/cli/facet-includes';
+import { renderTemplate } from '#faceted-prompting';
+import { expandFacetIncludes } from '#faceted-prompting/cli/facet-includes';
 
-export { renderTemplate } from 'faceted-prompting';
+export { renderTemplate } from '#faceted-prompting';
 
 /** Cached raw template text (before variable substitution) */
 const templateCache = new Map<string, string>();

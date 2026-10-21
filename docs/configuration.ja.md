@@ -263,7 +263,9 @@ caccia:
   workflow: caccia        # 各スレッド群の判断と修正に使う workflow
 ```
 
-`caccia` 効果は `enabled: true` の場合だけ CodeRabbit を待ちます。無効なら待たずに `outcome: skipped` と `skipReason: config_disabled` を返します。単独実行の `takt caccia <PR番号>` はこのフラグに関係なく利用できます。既定値は無効、1,800,000 ミリ秒、3 回、workflow `caccia` です。project に `caccia` ブロックがある場合は global のブロックより優先し、省略した項目には上記の既定値を適用します。`workflow` に workflow 識別子を指定するとビルトイン workflow を差し替えられます。
+`caccia` 効果は `enabled: true` の場合だけ CodeRabbit を待ちます。無効ならレビューを待たずに `outcome: skipped` と `skipReason: config_disabled` を返します。単独実行の `takt caccia <PR番号>` はこのフラグに関係なく利用できます。既定値は無効、1,800,000 ミリ秒、3 回、workflow `caccia` です。project に `caccia` ブロックがある場合は global のブロックより優先し、省略した項目には上記の既定値を適用します。`workflow` に workflow 識別子を指定するとビルトイン workflow を差し替えられます。
+
+GitHub の PR head と開始時のクローン HEAD が不一致なら、効果は実行前に2秒間隔で PR 情報を再取得し、取得時間を含めて最大60秒待ちます。PR 情報の取得中に異なる head を観測した場合も同じ期限内で再取得します。期待 SHA と一致した場合だけ続行し、期限まで不一致なら期待 SHA と最後に観測した SHA を含む `error` を返します。最後の観測が不整合だった場合は食い違った両方の SHA も示します。認証失敗など他の取得例外、PR の識別情報変更、中断は直ちに失敗とします。実行文脈と push 記録先がある場合はスキップ記録前にも適用するため、無効・未設定でもこの照合を待つことがあります。この待機は固定値で、レビュー待機の `wait_timeout_ms` では変更されません。
 
 `wait_timeout_ms` は初回と各 Push 後のレビュー待機期限で、再依頼もこの期限に含みます。レビュー制限通知の再試行時刻が期限より前なら到来時に一度だけレビューを依頼し、期限以降なら直ちにスキップします。制限通知を受けた後、レビューが期限までに完了しなければスキップします。制限通知を受けずに期限に達した場合は初回待機をスキップし、Push 後の待機をエラーとします。単独コマンドはいずれも非ゼロで終了し、system 効果は失敗を `success: false` と `error` で返し、workflow のルールで分岐します。
 
@@ -432,6 +434,21 @@ validation に失敗します。
 ほとんどの設定キーは `TAKT_` に設定キーパスをアンダースコア区切り・大文字化して続けた環境変数で上書きできます。`logging.debug` は `TAKT_LOGGING_DEBUG`、`telemetry.routing_decisions` は `TAKT_TELEMETRY_ROUTING_DECISIONS` になります。よく使う例: `TAKT_PROVIDER`、`TAKT_MODEL`、`TAKT_CONCURRENCY`、`TAKT_LOGGING_DEBUG`、`TAKT_TELEMETRY_ROUTING_DECISIONS`、`TAKT_OBSERVABILITY_ENABLED`。環境変数の値は対応するファイルの値を上書きし、キーを持つ層で適用されます。グローバル専用キー（例: `logging`、`disabled_builtins`）はグローバル `~/.takt/config.yaml` 層で、プロジェクト上書き可能キー（例: `concurrency`、`telemetry.routing_decisions`）はプロジェクト `.takt/config.yaml` 層でも解決されます。
 
 設定キー上書きとは別に、`TAKT_NOTIFY_WEBHOOK` には Slack Incoming Webhook URL を設定できます。設定すると、pipeline 完了時と `takt run` のタスクバッチ完了時（run summary）に Slack へ通知が送信されます。manager の有効なゴール通知にも同じ Webhook を使用します。
+
+## manager の秘密ファイル設定
+
+グローバル `~/.takt/config.yaml` またはプロジェクト `.takt/config.yaml` の `manager.sensitive_paths` で、担当リポジトリ内でも判断役へ渡すファイルとディレクトリを追加できます。
+
+```yaml
+manager:
+  sensitive_paths:
+    - private
+    - config/credentials.json
+```
+
+既定は `.env`、`.env.*`、`id_rsa`、`id_dsa`、`id_ecdsa`、`id_ed25519`、`*.key`、`*.pem`、`*.crt`、`*.cer`、`*.p12`、`*.pfx` です。両設定の一覧を既定に追加し、省略や空配列でも既定を削除できません。単独の名前は任意の深さで適用し、ディレクトリ成分を含む相対パスは各担当リポジトリを基準にします。絶対パスと `~/` も指定できます。ディレクトリ指定は配下を含みます。名前には先頭または末尾の単一の `*` を使えます。許可ルールを定義する設定ではありません。
+
+Claude の `Read`、`Glob`、`Grep` は、パスとシンボリックリンクを解決した対象が担当内の読み取り可能な通常対象だけの場合に判断役を通りません。検索候補は秘密の本文を読まず、パスとメタデータで確認します。検索指定は `*`、`**`、`?` の単純な形式に対応し、除外、波括弧展開、文字クラス、エスケープや範囲を確定できない指定は判断役へ渡します。隠しパス、走査するディレクトリやリンクは保守的に確認するため、絞り込んだ検索でも審査する場合があります。Codex の組み込み道具は引き続き審査します。
 
 ## manager の通知設定
 

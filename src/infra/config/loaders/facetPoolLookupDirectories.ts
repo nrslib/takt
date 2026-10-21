@@ -1,4 +1,4 @@
-import { isScopeRef, parseScopeRef } from 'faceted-prompting';
+import { isScopeRef, parseScopeRef } from '#faceted-prompting';
 import {
   getBuiltinLanguageFacetPoolsDir,
   getBuiltinSharedFacetPoolsDir,

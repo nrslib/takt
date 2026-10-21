@@ -76,6 +76,7 @@ export type WorkflowExecutionEvent =
     }
   | {
       type: 'progress';
+      level?: 'warn';
       message: string;
       step?: string;
     }

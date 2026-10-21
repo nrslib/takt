@@ -71,6 +71,12 @@ export type WorkflowSystemInput =
   | (WorkflowSystemBinding & {
     type: 'pr_status';
     source: 'current_pr';
+    rerun_from?: WorkflowTemplateReference;
+  })
+  | (WorkflowSystemBinding & {
+    type: 'pr_ci_failure';
+    source: 'current_pr';
+    head_sha: WorkflowTemplateReference;
   })
   | (WorkflowSystemBinding & {
     type: 'task_context';
@@ -147,6 +153,11 @@ export type WorkflowEffectScalarReference = WorkflowTemplateReference | number;
 
 export type WorkflowEffect =
   | {
+    type: 'rerun_ci';
+    pr: WorkflowEffectScalarReference;
+    failure: WorkflowTemplateReference;
+  }
+  | {
     type: 'caccia';
     pr: WorkflowEffectScalarReference;
   }
@@ -169,6 +180,7 @@ export type WorkflowEffect =
     type: 'comment_pr';
     pr: WorkflowEffectScalarReference;
     body: string;
+    body_format?: 'plain_text';
   }
   | {
     type: 'sync_with_root';

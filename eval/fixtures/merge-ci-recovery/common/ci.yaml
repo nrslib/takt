@@ -1,0 +1,12 @@
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - run: node --test product.test.mjs clock.test.mjs
+  deploy:
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - run: ./deploy.sh
+        env:
+          DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}

@@ -288,7 +288,7 @@ See the [Builtin Catalog](./docs/builtin-catalog.md) for all workflows and perso
 | `takt run` | Execute all pending tasks |
 | `takt watch` | Monitor the task queue and auto-execute pending tasks (resident process) |
 | `takt ui` | Open the experimental Viewer-first Web UI on `http://127.0.0.1:20525` |
-| `takt manager` | Open the experimental goal conversation TUI. Behavior, settings, and saved data formats may change without notice. Automatically queues and runs tasks, incurring provider API costs. With claude (claude-sdk) or codex, AI reviews tool use before execution. On startup, the daemon starts automatically to process events and perform patrols. Stop the daemon with `takt daemon stop` |
+| `takt manager` | Open the experimental goal conversation TUI. Enter `/go` without arguments to request a summary of the current conversation, or approve and register an existing summary without regenerating it. Behavior, settings, and saved data formats may change without notice. Automatically queues and runs tasks, incurring provider API costs. With claude (claude-sdk) or codex, AI reviews tool use before execution. On startup, the daemon starts automatically to process events and perform patrols. Stop the daemon with `takt daemon stop` |
 | `takt list` | Manage task branches (merge, retry, requeue, force-fail, instruct, delete) |
 | `takt #N` | Use a GitHub Issue as the initial input for a task |
 | `takt merge` | Review, fix, and merge pull requests with a workflow |
@@ -333,9 +333,18 @@ The ordinary `takt` assistant conversation has the same read-only task-state vie
 
 ### Manager tool permissions
 
+Add sensitive paths in global `~/.takt/config.yaml` or project `.takt/config.yaml`:
+
+```yaml
+manager:
+  sensitive_paths: [private, config/credentials.json]
+```
+
+Both lists extend the defaults, including when either list is empty. Entries name files or directories; see [sensitive read targets](./docs/configuration.md#manager-sensitive-read-targets).
+
 In `takt manager` conversations with the claude (claude-sdk) or codex provider, an AI permission judge reviews tool use before execution instead of asking a person to approve every operation. It decides to allow, deny with a reason, or ask a person. This review is enabled by default and has no on/off setting.
 
-With claude (claude-sdk), only the built-in read tools `Read`, `Glob`, `Grep`, and `ToolSearch`, and the manager's own TAKT MCP tools, run without this review. With Codex, only the manager's own TAKT MCP tools run without review; all built-in tools are reviewed. For both providers, all other tools are reviewed, including unknown tools and external MCP tools. Shell execution, including `Bash`, is reviewed every time, even when the command appears to be read-only. Launching another agent through `Task` or `Agent` is always denied, as are instructions to launch another AI command-line agent through `Bash`. With Codex, `spawn_agent` is also always denied without invoking the permission judge.
+With claude (claude-sdk), `Read` runs without review only when its resolved target is a readable, non-sensitive, ordinary file inside the manager's assigned repositories. `Glob` takes a directory as its search root and runs without review only when the candidate files, together with the directories and symlinks it walks, are inside the assignment, contain no sensitive target, and can be confirmed safe to search. `Grep` runs without review for searches over ordinary files that meet the same conditions as `Read`, and for directory searches that pass the same safety check as `Glob`. The assignment is the workspace member repositories, or the current repository when there is no workspace. Relative paths use the tool's actual working directory; `~`, `..`, and symlinks are resolved before comparison. Targets outside the assignment, sensitive files, and targets or search ranges that cannot be determined are sent to the judge. Sensitive defaults cover `.env`, `.env.*`, SSH private key names (`id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`), and `*.key`, `*.pem`, `*.crt`, `*.cer`, `*.p12`, `*.pfx`. Global and project `manager.sensitive_paths` add to these defaults and cannot remove them. `ToolSearch` and the manager's own TAKT MCP tools continue to run without review. With Codex, only the manager's own TAKT MCP tools run without review; all built-in tools are reviewed. For both providers, all other tools, including unknown tools and external MCP tools, are reviewed when no saved approval applies. Shell execution, including `Bash`, is reviewed every time no saved approval applies, even when the command appears to be read-only. Launching another agent through `Task` or `Agent` is always denied, as are instructions to launch another AI command-line agent through `Bash`. With Codex, `spawn_agent` is also always denied without invoking the permission judge.
 
 When an operation is denied, the reason returns to the manager, which takes it into account in its next response. An “ask a person” decision also denies the operation for now and notifies the TUI and Slack that human confirmation is pending, with the reason. The operation is not held open while waiting. These notifications use existing kinds; no new notification kind is added.
 

@@ -22,6 +22,8 @@ import {
   LOOP_ANALYSIS_WORKFLOW,
 } from './loopAnalysis.js';
 import { runLoopAnalysisWorkflowExecution } from './workflowExecutionApi.js';
+import { RunProjectionError } from './workflowRunExecution.js';
+import { readPrivateFileState, writePrivateFile } from '../../../shared/utils/private-file.js';
 
 const PUBLICATION_MARKER_POLL_INTERVAL_MS = 100;
 const PUBLICATION_MARKER_CONFLICT_RETRY_MS = 10;
@@ -58,6 +60,19 @@ export async function executeLoopAnalysisJob(jobPath: string): Promise<void> {
   const reportPath = join(result.reportDirectory, LOOP_ANALYSIS_REPORT_FILE);
   if (!lstatSync(reportPath, { throwIfNoEntry: false })?.isFile()) {
     throw new Error('Loop analysis completed without a report');
+  }
+  const traceIssues = result.finalizationIssues?.filter(
+    (issue) => issue instanceof RunProjectionError && issue.stage === 'trace',
+  ) ?? [];
+  if (traceIssues.length > 0) {
+    try {
+      const snapshot = readPrivateFileState(reportPath);
+      if (!('content' in snapshot)) throw new Error('Loop analysis report is no longer available');
+      const warnings = traceIssues.map((issue) => `- Trace finalization failed: ${issue.message}`);
+      writePrivateFile(reportPath, `${snapshot.content.toString('utf8')}\n## Warnings\n\n${warnings.join('\n')}\n`);
+    } catch (error) {
+      appendLoopAnalysisWorkerFailure(jobPath, error);
+    }
   }
   const archive = archiveLoopAnalysisReport({
     sourceRunDirectory,
