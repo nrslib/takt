@@ -85,8 +85,13 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
     mounted.current = true;
     void (async () => {
       try {
-        const resolved = await session.getAssignment();
-        startupBoundaries.current = new Map((resolved?.repositoryDirectories ?? [cwd]).map((directory) => [directory, startedAt]));
+        try {
+          const resolved = await session.getAssignment();
+          startupBoundaries.current = new Map((resolved?.repositoryDirectories ?? [cwd]).map((directory) => [directory, startedAt]));
+        } catch (error) {
+          startupBoundaries.current = new Map((assignment?.repositoryDirectories ?? [cwd]).map((directory) => [directory, startedAt]));
+          reportRefreshError(error);
+        }
         if (startup !== undefined) {
           const controller = new AbortController();
           active.current = controller;
