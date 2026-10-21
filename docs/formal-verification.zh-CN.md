@@ -70,6 +70,8 @@ TAKT_ALLOY_CONCURRENCY=1 TAKT_ALLOY_HEAP=2g TAKT_ALLOY_STACK=128m takt
 
 `assistant.formal_spec.model_check_timeout_seconds` 分别适用于每条 Alloy 命令（默认 900 秒），不设置整体超时。失败或超时不会阻止其余命令执行，有空闲位置时立即启动下一条命令。各命令结果通过 `timedOut: true` 标识超时。
 
+设 Alloy 命令数为 `N`、并发数上限为 `K`，则 Alloy 命令执行区间的理论上限为 `ceil(N / K) × model_check_timeout_seconds`，其中 `ceil` 表示向上取整。该区间从第一条 Alloy 命令开始执行，到最后一条 Alloy 命令执行结束。Java 的检测与检查、Alloy JAR 的获取与验证、命令枚举（解析 Alloy 规范）、Quint 验证、规范生成和结果解读（LLM 调用）均不计入此上限。
+
 验证失败、错误或超时时，`.takt/runs/verify-*/` 中的规范与日志会保留，结果消息会显示目录路径。保留目录不参与自动清理，请在不再需要时手动删除。成功验证的产物在结果解读结束后删除。
 
 ## 验证目标的选择
