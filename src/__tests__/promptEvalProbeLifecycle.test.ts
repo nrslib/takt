@@ -570,9 +570,14 @@ describe('prompt eval probe lifecycle', () => {
   });
 
   it('should terminate the complete Windows process tree with taskkill', async () => {
-    const executeFile = vi.fn(async (file: string) => (
-      file === 'powershell.exe' ? { stdout: '[]' } : undefined
-    ));
+    let queryCount = 0;
+    const executeFile = vi.fn(async (file: string) => {
+      if (file !== 'powershell.exe') return undefined;
+      queryCount += 1;
+      return { stdout: queryCount < 3
+        ? JSON.stringify({ ProcessId: 4321, ParentProcessId: 1000, CreationDate: 'created-root' })
+        : '[]' };
+    });
 
     await terminateWindowsProcessTree(4321, executeFile);
 
@@ -582,6 +587,125 @@ describe('prompt eval probe lifecycle', () => {
       expect.objectContaining({ timeout: expect.any(Number) }),
     );
     expectWindowsCommandTimeoutsWithinGrace(executeFile);
+  });
+
+  it('should request only process identity fields and verify only snapshotted PIDs', async () => {
+    const snapshot = JSON.stringify([
+      { ProcessId: 4321, ParentProcessId: 1000, CreationDate: 'created-root' },
+      { ProcessId: 5001, ParentProcessId: 4321, CreationDate: 'created-child' },
+    ]);
+    let queryCount = 0;
+    const executeFile = vi.fn(async (file: string, args: readonly string[]) => {
+      if (file !== 'powershell.exe') return undefined;
+      const command = args[3] ?? '';
+      if (!command.includes('SELECT ProcessId,ParentProcessId,CreationDate FROM Win32_Process')) {
+        throw new Error('Unprojected WMI query exceeded its deadline');
+      }
+      queryCount += 1;
+      return { stdout: queryCount < 4 ? snapshot : '[]' };
+    });
+
+    await expect(terminateWindowsProcessTree(4321, executeFile)).resolves.toBeUndefined();
+
+    const queries = executeFile.mock.calls
+      .filter(([file]) => file === 'powershell.exe')
+      .map(([, args]) => args[3] ?? '');
+    expect(queries[0]).not.toContain('WHERE');
+    expect(queries.slice(1)).toEqual([
+      expect.stringContaining('WHERE ProcessId = 4321'),
+      expect.stringContaining('WHERE ProcessId = 5001'),
+      expect.stringContaining('WHERE ProcessId = 4321 OR ProcessId = 5001'),
+    ]);
+  });
+
+  it('should not taskkill a root PID reused after the snapshot', async () => {
+    let queryCount = 0;
+    const executeFile = vi.fn(async (file: string) => {
+      if (file !== 'powershell.exe') return undefined;
+      queryCount += 1;
+      if (queryCount === 1) {
+        return { stdout: JSON.stringify([
+          { ProcessId: 4321, ParentProcessId: 1000, CreationDate: 'created-root' },
+          { ProcessId: 5001, ParentProcessId: 4321, CreationDate: 'created-child' },
+        ]) };
+      }
+      if (queryCount === 2) {
+        return { stdout: JSON.stringify([
+          { ProcessId: 4321, ParentProcessId: 9999, CreationDate: 'reused-root' },
+          { ProcessId: 5001, ParentProcessId: 4321, CreationDate: 'created-child' },
+        ]) };
+      }
+      if (queryCount === 3) {
+        return { stdout: JSON.stringify({
+          ProcessId: 5001, ParentProcessId: 4321, CreationDate: 'created-child',
+        }) };
+      }
+      return { stdout: '[]' };
+    });
+
+    await expect(terminateWindowsProcessTree(4321, executeFile)).resolves.toBeUndefined();
+
+    expect(executeFile.mock.calls.filter(([file, args]) => file === 'taskkill' && args[1] === '4321')).toHaveLength(0);
+    expect(executeFile).toHaveBeenCalledWith(
+      'taskkill',
+      ['/PID', '5001', '/T', '/F'],
+      expect.anything(),
+    );
+  });
+
+  it('should still terminate verified descendants when the root identity query fails', async () => {
+    let queryCount = 0;
+    const executeFile = vi.fn(async (file: string) => {
+      if (file === 'taskkill') return undefined;
+      queryCount += 1;
+      if (queryCount === 2) throw new Error('root identity query failed');
+      if (queryCount === 4) return { stdout: '[]' };
+      return { stdout: JSON.stringify([
+        { ProcessId: 4321, ParentProcessId: 1000, CreationDate: 'created-root' },
+        { ProcessId: 5001, ParentProcessId: 4321, CreationDate: 'created-child' },
+      ]) };
+    });
+    const warning = captureCleanupWarning(/WMI root identity query unavailable: root identity query failed/);
+
+    try {
+      await expectCleanupFailureAfterWarningFlush(
+        terminateWindowsProcessTree(4321, executeFile),
+        warning,
+        /WMI root identity query unavailable: root identity query failed/,
+        /WMI root identity query unavailable: root identity query failed/,
+      );
+    } finally {
+      warning.restore();
+    }
+
+    expect(executeFile.mock.calls.filter(([file, args]) => file === 'taskkill' && args[1] === '4321')).toHaveLength(0);
+    expect(executeFile).toHaveBeenCalledWith(
+      'taskkill',
+      ['/PID', '5001', '/T', '/F'],
+      expect.anything(),
+    );
+  });
+
+  it('should not taskkill a child PID reused after the root taskkill', async () => {
+    const snapshot = JSON.stringify([
+      { ProcessId: 4321, ParentProcessId: 1000, CreationDate: 'created-root' },
+      { ProcessId: 5001, ParentProcessId: 4321, CreationDate: 'created-child' },
+    ]);
+    let rootKilled = false;
+    const executeFile = vi.fn(async (file: string, args: readonly string[]) => {
+      if (file === 'taskkill') {
+        if (args[1] === '4321') rootKilled = true;
+        return undefined;
+      }
+      return { stdout: rootKilled
+        ? JSON.stringify({ ProcessId: 5001, ParentProcessId: 9999, CreationDate: 'reused-child' })
+        : snapshot };
+    });
+
+    await expect(terminateWindowsProcessTree(4321, executeFile)).resolves.toBeUndefined();
+
+    expect(executeFile).toHaveBeenCalledWith('taskkill', ['/PID', '4321', '/T', '/F'], expect.anything());
+    expect(executeFile.mock.calls.filter(([file, args]) => file === 'taskkill' && args.includes('5001'))).toHaveLength(0);
   });
 
   it('should reject process-tree cleanup failures after flushing the warning', async () => {
@@ -602,7 +726,7 @@ describe('prompt eval probe lifecycle', () => {
   it.each([
     ['PowerShell fails', () => { throw new Error('PowerShell failed'); }],
     ['PowerShell returns malformed JSON', () => ({ stdout: '{invalid' })],
-  ])('should warn after still taskkilling the root when %s during the initial snapshot', async (_scenario, query) => {
+  ])('should warn without taskkilling an unverified PID when %s during the initial snapshot', async (_scenario, query) => {
     const executeFile = vi.fn(async (file: string) => (
       file === 'powershell.exe' ? query() : undefined
     ));
@@ -619,22 +743,15 @@ describe('prompt eval probe lifecycle', () => {
       warning.restore();
     }
 
-    expect(executeFile).toHaveBeenCalledWith(
-      'taskkill',
-      ['/PID', '4321', '/T', '/F'],
-      expect.objectContaining({ timeout: expect.any(Number) }),
-    );
+    expect(executeFile.mock.calls.filter(([file]) => file === 'taskkill')).toHaveLength(0);
     expectWindowsCommandTimeoutsWithinGrace(executeFile);
   });
 
-  it('should invoke taskkill after the initial WMI deadline is exhausted', async () => {
+  it('should not taskkill an unverified PID after the initial WMI deadline is exhausted', async () => {
     const now = vi.spyOn(Date, 'now')
       .mockReturnValueOnce(0)
       .mockReturnValue(20_000);
-    const executeFile = vi.fn(async (file: string) => {
-      if (file === 'taskkill') return undefined;
-      throw new Error('WMI query should not start after the deadline');
-    });
+    const executeFile = vi.fn(async () => { throw new Error('No command should start after the deadline'); });
     const warning = captureCleanupWarning(/Warning: Process tree cleanup warning: .*WMI process snapshot deadline exceeded/);
 
     try {
@@ -649,30 +766,23 @@ describe('prompt eval probe lifecycle', () => {
       now.mockRestore();
     }
 
-    expect(executeFile).toHaveBeenCalledWith(
-      'taskkill',
-      ['/PID', '4321', '/T', '/F'],
-      expect.objectContaining({ timeout: 5_000 }),
-    );
+    expect(executeFile).not.toHaveBeenCalled();
   });
 
   it('should batch slow Windows identity queries without starving descendant termination', async () => {
     let clock = 0;
-    let fullSnapshot = 0;
+    let queryCount = 0;
     const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
     const descendants = Array.from({ length: 8 }, (_, index) => ({
       ProcessId: 5000 + index,
       ParentProcessId: 4321,
       CreationDate: `created-${index}`,
     }));
-    const executeFile = vi.fn(async (file: string, args: readonly string[]) => {
+    const executeFile = vi.fn(async (file: string) => {
       if (file !== 'powershell.exe') return undefined;
       clock += 2_000;
-      if (args[3]?.includes('-Filter')) {
-        return { stdout: JSON.stringify(descendants) };
-      }
-      fullSnapshot += 1;
-      return { stdout: JSON.stringify(fullSnapshot === 1 ? descendants : []) };
+      queryCount += 1;
+      return { stdout: JSON.stringify(queryCount < 3 ? descendants : []) };
     });
 
     try {
@@ -694,12 +804,20 @@ describe('prompt eval probe lifecycle', () => {
   });
 
   it.each(['descendant identity', 'final remaining-process'])(
-    'should warn after taskkill when the %s query returns malformed JSON',
+    'should warn when the %s query returns malformed JSON',
     async (failureStage) => {
-      let fullSnapshot = 0;
-      const executeFile = vi.fn(async (file: string, args: readonly string[]) => {
+      let queryCount = 0;
+      const executeFile = vi.fn(async (file: string) => {
         if (file !== 'powershell.exe') return undefined;
-        if (args[3]?.includes('-Filter')) {
+        queryCount += 1;
+        if (queryCount === 1) {
+          return { stdout: JSON.stringify({
+            ProcessId: 5001,
+            ParentProcessId: 4321,
+            CreationDate: 'created-5001',
+          }) };
+        }
+        if (queryCount === 2) {
           return failureStage === 'descendant identity'
             ? { stdout: '{invalid' }
             : { stdout: JSON.stringify({
@@ -707,14 +825,6 @@ describe('prompt eval probe lifecycle', () => {
               ParentProcessId: 4321,
               CreationDate: 'created-5001',
             }) };
-        }
-        fullSnapshot += 1;
-        if (fullSnapshot === 1) {
-          return { stdout: JSON.stringify({
-            ProcessId: 5001,
-            ParentProcessId: 4321,
-            CreationDate: 'created-5001',
-          }) };
         }
         return failureStage === 'final remaining-process'
           ? { stdout: '{invalid' }
@@ -747,17 +857,11 @@ describe('prompt eval probe lifecycle', () => {
   );
 
   it('should terminate recorded Windows descendants when the parent has already exited', async () => {
-    let fullSnapshot = 0;
+    let queryCount = 0;
     const executeFile = vi.fn(async (file: string, args: readonly string[]) => {
       if (file === 'powershell.exe') {
-        if (args[3]?.includes('-Filter')) {
-          return { stdout: JSON.stringify([
-            { ProcessId: 5001, ParentProcessId: 4321, CreationDate: 'created-5001' },
-            { ProcessId: 5002, ParentProcessId: 5001, CreationDate: 'created-5002' },
-          ]) };
-        }
-        fullSnapshot += 1;
-        return fullSnapshot === 1
+        queryCount += 1;
+        return queryCount < 3
           ? { stdout: JSON.stringify([
             { ProcessId: 5001, ParentProcessId: 4321, CreationDate: 'created-5001' },
             { ProcessId: 5002, ParentProcessId: 5001, CreationDate: 'created-5002' },
@@ -780,20 +884,13 @@ describe('prompt eval probe lifecycle', () => {
   });
 
   it('should warn about taskkill failure even when a descendant PID is later reused', async () => {
-    let fullSnapshot = 0;
+    let queryCount = 0;
     const executeFile = vi.fn(async (file: string, args: readonly string[]) => {
       if (file === 'taskkill' && args[1] === '5001') {
         throw new Error('taskkill failed');
       }
-      if (args[3]?.includes('-Filter')) {
-        return { stdout: JSON.stringify({
-          ProcessId: 5001,
-          ParentProcessId: 4321,
-          CreationDate: 'created-original',
-        }) };
-      }
-      fullSnapshot += 1;
-      return fullSnapshot === 1
+      queryCount += 1;
+      return queryCount < 3
         ? { stdout: JSON.stringify({
           ProcessId: 5001,
           ParentProcessId: 4321,
@@ -853,7 +950,7 @@ describe('prompt eval probe lifecycle', () => {
   });
 
   it('should wait for a Windows process tree to disappear after taskkill', async () => {
-    let fullSnapshot = 0;
+    let queryCount = 0;
     const processSnapshot = JSON.stringify({
       ProcessId: 4321,
       ParentProcessId: 1000,
@@ -861,12 +958,12 @@ describe('prompt eval probe lifecycle', () => {
     });
     const executeFile = vi.fn(async (file: string) => {
       if (file === 'taskkill') return undefined;
-      fullSnapshot += 1;
-      return { stdout: fullSnapshot <= 2 ? processSnapshot : '[]' };
+      queryCount += 1;
+      return { stdout: queryCount <= 3 ? processSnapshot : '[]' };
     });
 
     await expect(terminateWindowsProcessTree(4321, executeFile)).resolves.toBeUndefined();
-    expect(fullSnapshot).toBeGreaterThanOrEqual(3);
+    expect(queryCount).toBeGreaterThanOrEqual(4);
   });
 
   it('should stop the timed-out child and grandchild before removing the parent-owned workspace', async () => {
