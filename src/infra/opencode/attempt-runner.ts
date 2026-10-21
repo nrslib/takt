@@ -1784,8 +1784,9 @@ export class OpenCodeAttemptRunner {
             capturedStructuredOutput = info.structured as Record<string, unknown>;
           }
           const streamError = extractOpenCodeErrorMessage(info?.error);
-          rateLimitClass = classifyRateLimitError(streamError, extractStatusCode(info?.error));
-          if (streamError || rateLimitClass !== 'NotRateLimit') {
+          const streamClass = classifyRateLimitError(streamError, extractStatusCode(info?.error));
+          if (streamClass !== 'NotRateLimit') rateLimitClass = streamClass;
+          if (streamError || streamClass !== 'NotRateLimit') {
             success = false;
             failureMessage = streamError ?? `HTTP ${RATE_LIMIT_STATUS_CODE} Too Many Requests`;
             diag.onStreamError('message.updated', sanitizeAttemptError(failureMessage));
@@ -1811,8 +1812,9 @@ export class OpenCodeAttemptRunner {
             capturedStructuredOutput = info.structured as Record<string, unknown>;
           }
           const streamError = extractOpenCodeErrorMessage(info?.error);
-          rateLimitClass = classifyRateLimitError(streamError, extractStatusCode(info?.error));
-          if (streamError || rateLimitClass !== 'NotRateLimit') {
+          const streamClass = classifyRateLimitError(streamError, extractStatusCode(info?.error));
+          if (streamClass !== 'NotRateLimit') rateLimitClass = streamClass;
+          if (streamError || streamClass !== 'NotRateLimit') {
             success = false;
             failureMessage = streamError ?? `HTTP ${RATE_LIMIT_STATUS_CODE} Too Many Requests`;
             diag.onStreamError('message.completed', sanitizeAttemptError(failureMessage));

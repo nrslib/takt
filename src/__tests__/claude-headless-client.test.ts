@@ -897,7 +897,10 @@ describe('callClaudeHeadless', () => {
       expect(await pending).toMatchObject({ status: 'done', content: 'final answer', sessionId: 'final-session', structuredOutput: { ok: true } });
       expect(spawn).toHaveBeenCalledTimes(3);
       for (const [, argv] of vi.mocked(spawn).mock.calls) {
-        expect(argv).toEqual(expect.arrayContaining(['--model', 'sonnet', '--resume', 'original-session', '--allowed-tools', 'Read', '--json-schema', '{"type":"object"}', ...preparedMcp.args, '--', 'original prompt']));
+        const separatorIdx = argv.indexOf('--');
+        expect(separatorIdx).toBeGreaterThan(-1);
+        expect(argv.slice(0, separatorIdx)).toEqual(expect.arrayContaining(['--model', 'sonnet', '--resume', 'original-session', '--allowed-tools', 'Read', '--json-schema', '{"type":"object"}', ...preparedMcp.args]));
+        expect(argv.slice(separatorIdx)).toEqual(['--', 'original prompt']);
         expect(argv).not.toContain('--dangerously-skip-permissions');
       }
       expect(preparedMcp.dispose).toHaveBeenCalledOnce();
@@ -1806,6 +1809,11 @@ describe('callClaudeHeadless', () => {
     expect(argv[modelIdx + 1]).toBe('sonnet');
     expect(argv[toolsIdx + 1]).toBe('Read,Grep,Edit');
     expect(argv[effortIdx + 1]).toBe('high');
+    const separatorIdx = argv.indexOf('--');
+    expect(separatorIdx).toBeGreaterThan(-1);
+    expect(modelIdx).toBeLessThan(separatorIdx);
+    expect(toolsIdx).toBeLessThan(separatorIdx);
+    expect(effortIdx).toBeLessThan(separatorIdx);
   });
 
   it('passes anthropicApiKey to the child process as ANTHROPIC_API_KEY', async () => {

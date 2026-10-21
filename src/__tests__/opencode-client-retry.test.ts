@@ -645,6 +645,45 @@ describe('OpenCodeClient retry', () => {
     expect(promptAsync).toHaveBeenCalledTimes(3);
   });
 
+  it.each(['message.updated', 'message.completed'] as const)(
+    'promptAsyncの429とエラーのない%sが競合しても429分類を保持する', async (type) => {
+      vi.useFakeTimers();
+      let rejectPrompt: ((reason?: unknown) => void) | undefined;
+      runPlans = [
+        { type: 'stream', createStream: () => {
+          let emitted = false;
+          return {
+            [Symbol.asyncIterator](this: AsyncGenerator<MockStreamEvent, void, unknown>) { return this; },
+            next: vi.fn(() => {
+              if (emitted) return Promise.resolve({ done: true as const, value: undefined });
+              const reject = rejectPrompt;
+              if (!reject) throw new Error('promptAsync was not started');
+              emitted = true;
+              queueMicrotask(() => reject(Object.assign(new Error('request rejected'), { data: { statusCode: 429 } })));
+              return Promise.resolve({
+                done: false as const,
+                value: { type, properties: { info: { sessionID: 'session-1', role: 'assistant' } } },
+              });
+            }),
+            return: vi.fn(async () => ({ done: true as const, value: undefined })),
+            throw: vi.fn((error?: unknown) => Promise.reject(error)),
+          };
+        } },
+        successfulRetryPlan(),
+      ];
+      const { promptAsync } = installOpenCodeMock();
+      promptAsync.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectPrompt = reject; }));
+
+      const pending = new OpenCodeClient().call('coder', 'prompt', {
+        cwd: '/tmp', model: 'opencode/big-pickle',
+      });
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(await pending).toMatchObject({ status: 'done', content: 'final answer', retryCount: 1 });
+      expect(promptAsync).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it.each(['throw', 'timeout'] as const)(
     'promptAsyncの構造化429とiterator.returnの%sが重なっても保存した分類で再試行する', async (closeFailure) => {
       vi.useFakeTimers();
