@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { PrHeadObservationMismatchError } from '../core/workflow/system/pr-execution-context.js';
 import {
   closePr,
   createPullRequest,
@@ -1791,6 +1792,20 @@ describe('GitHub PR command boundary', () => {
       headRepositoryUrl: 'https://github.com/contributor/repo.git',
       headRepositoryPushUrls: ['git@github.com:contributor/repo.git'],
     });
+  });
+
+  it('取得中のhead不整合を両方の観測SHAを持つ専用エラーで返す', async () => {
+    queueAsyncGhResponses(
+      { url: 'https://github.com/org/repo/pull/7', headRefOid: 'head-a' },
+      { data: { repository: { pullRequest: {
+        number: 7, headRefName: 'feature', headRefOid: 'head-b', headRepository: { sshUrl: 'git@github.com:org/repo.git' },
+      } } } },
+    );
+
+    await expect(fetchPrDetails(7, '/project')).rejects.toMatchObject({
+      constructor: PrHeadObservationMismatchError, firstHeadSha: 'head-a', lastHeadSha: 'head-b',
+    });
+    expect(execFile).toHaveBeenCalledTimes(2);
   });
 
   it('base branchが欠損するmerge metadataを拒否する', async () => {

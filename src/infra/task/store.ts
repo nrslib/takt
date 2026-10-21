@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
-import { withFileLock } from '../fs/file-lock.js';
+import { withFileLock, type FileLockAcquisitionErrorHandler } from '../fs/file-lock.js';
 import { TasksFileSchema, serializeTasksFileData, type TasksFileData } from './schema.js';
 import { normalizePersistedTasksFile } from './taskConfigSerialization.js';
 import { createLogger } from '../../shared/utils/index.js';
@@ -36,13 +36,16 @@ export class TaskStore {
     return this.withLock(() => this.readUnsafe());
   }
 
-  update(mutator: (current: TasksFileData) => TasksFileData): TasksFileData {
+  update(
+    mutator: (current: TasksFileData) => TasksFileData,
+    onAcquisitionError?: FileLockAcquisitionErrorHandler,
+  ): TasksFileData {
     return this.withLock(() => {
       const current = this.readUnsafe();
       const updated = TasksFileSchema.parse(mutator(current));
       this.writeUnsafe(updated);
       return updated;
-    });
+    }, onAcquisitionError);
   }
 
   private readUnsafe(): TasksFileData {
@@ -73,14 +76,14 @@ export class TaskStore {
     writePrivateFileWithMode(this.tasksFile, yaml, 0o600);
   }
 
-  private withLock<T>(fn: () => T): T {
+  private withLock<T>(fn: () => T, onAcquisitionError?: FileLockAcquisitionErrorHandler): T {
     if (this.locked) {
       throw new Error('TaskStore: reentrant lock detected');
     }
     this.locked = true;
     try {
       this.ensureDirs();
-      return withFileLock(this.lockFile, fn);
+      return withFileLock(this.lockFile, fn, { onAcquisitionError });
     } finally {
       this.locked = false;
     }

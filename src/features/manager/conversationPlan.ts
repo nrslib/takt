@@ -11,6 +11,8 @@ import type { Provider, ProviderType } from '../../infra/providers/index.js';
 import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
 import { resolveRuntimeManagerPermissionJudgeProvider } from '../../infra/config/runtime-provider/internal-agents.js';
 import type { ManagerPermissionJudgePlan } from './toolPermissionJudge.js';
+import { withManagerReadScope } from './readScopeProvider.js';
+import { supportsManagerPermissionJudge } from './permissionJudgeSupport.js';
 
 export interface ManagerConversationContext {
   provider: Provider;
@@ -60,7 +62,7 @@ export function createManagerConversationPlan(
     : resolveRefToContent('manager', { manager: instructionSource }, cwd, 'instructions', context);
   if (persona === undefined || instruction === undefined || policy === undefined || knowledge === undefined) throw new Error('Manager facets are missing');
   let permissionJudge: ManagerPermissionJudgePlan | undefined;
-  if (resolved.provider === 'claude' || resolved.provider === 'claude-sdk' || resolved.provider === 'codex') {
+  if (supportsManagerPermissionJudge(resolved.provider)) {
     const seat = resolveRuntimeManagerPermissionJudgeProvider(cwd);
     const judgeProvider = seat === undefined ? resolved.provider : seat.provider;
     if (judgeProvider === undefined) throw new Error('Manager permission judge provider is not configured');
@@ -79,7 +81,8 @@ export function createManagerConversationPlan(
   return {
     ...(permissionJudge === undefined ? {} : { permissionJudge }),
     ctx: {
-      provider, providerType: resolved.provider, model: resolved.model, lang,
+      provider: withManagerReadScope(provider, cwd, getGlobalConfigDir(), managerConfig.sensitivePaths),
+      providerType: resolved.provider, model: resolved.model, lang,
       providerOptions: configured, mcpServers: servers,
     },
     strategy: {

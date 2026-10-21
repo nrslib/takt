@@ -93,6 +93,10 @@ export function validateSystemEffectPayload(
   effect: WorkflowEffect,
   payload: Record<string, unknown>,
 ): void {
+  if (effect.type === 'rerun_ci') {
+    requireNumber(payload.pr, 'pr');
+    requireObject(payload.failure, 'failure');
+  }
   if (effect.type === 'enqueue_task') {
     if (payload.mode !== undefined) requireString(payload.mode, 'mode');
     if (payload.workflow !== undefined) requireString(payload.workflow, 'workflow');
@@ -132,6 +136,9 @@ export function validateSystemEffectPayload(
   if (effect.type === 'comment_pr') {
     requireNumber(payload.pr, 'pr');
     requireString(payload.body, 'body');
+    if (payload.body_format !== undefined && payload.body_format !== 'plain_text') {
+      throw new Error('System effect requires body_format "plain_text"');
+    }
   }
   if (
     effect.type === 'caccia'

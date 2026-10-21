@@ -5,6 +5,7 @@ import { MANAGER_NOTIFICATION_KINDS } from '../../core/models/config-types.js';
 
 const goalText = z.string().max(128 * 1024).refine((value) => value.trim().length > 0);
 const goalBranch = z.string().refine(isValidLocalBranchName);
+const goalSha = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
 export const GoalIdSchema = z.uuid();
 export const GoalQuestionInputSchema = z.object({
   recipient: z.literal('human').default('human'),
@@ -12,16 +13,63 @@ export const GoalQuestionInputSchema = z.object({
   options: z.array(goalText).min(1).optional(),
   recommendation: goalText.optional(),
 }).strict();
-export const GoalAnswerSchema = z.object({
-  text: goalText, source: z.enum(['tui', 'slack']), answeredAt: z.iso.datetime(),
+const GoalOperationInputSchema = z.object({
+  toolName: goalText,
+  args: z.string(),
+  cwd: z.string().refine(isAbsolute),
 }).strict();
-export const GoalQuestionSchema = GoalQuestionInputSchema.extend({
+export const GoalInquiryInputSchema = GoalQuestionInputSchema.extend({
+  kind: z.enum(['question', 'approval', 'operation_request']).default('question'),
+  operation: GoalOperationInputSchema.optional(),
+  targetSha: goalSha.optional(),
+  permissionProposal: goalText.optional(),
+});
+const goalAnswerFields = {
+  text: z.string().max(128 * 1024).default(''),
+  decision: z.enum(['allow', 'deny']).optional(),
+  report: z.enum(['completed', 'unable']).optional(),
+  scope: z.enum(['once', 'goal', 'project', 'workspace', 'global']).optional(),
+};
+export const GoalAnswerSchema = z.object({
+  ...goalAnswerFields, source: z.enum(['tui', 'slack']), answeredAt: z.iso.datetime(),
+}).strict().superRefine((answer, ctx) => {
+  if (answer.text.trim().length === 0 && answer.decision === undefined && answer.report === undefined) {
+    ctx.addIssue({ code: 'custom', path: ['text'], message: 'An answer requires text or a structured response' });
+  }
+  if (answer.scope !== undefined && answer.decision !== 'allow') {
+    ctx.addIssue({ code: 'custom', path: ['scope'], message: 'Only allowed approvals have a scope' });
+  }
+}).transform((answer) => answer.decision === 'allow' ? { ...answer, scope: answer.scope ?? 'once' as const } : answer);
+export type GoalAnswerInput = z.input<z.ZodObject<typeof goalAnswerFields>>;
+export const GoalQuestionSchema = GoalInquiryInputSchema.extend({
+  operation: GoalOperationInputSchema.extend({ argsDigest: z.string().regex(/^[a-f0-9]{64}$/) }).optional(),
   id: z.uuid(), status: z.enum(['pending', 'answered', 'withdrawn']),
   createdAt: z.iso.datetime().optional(),
   answer: GoalAnswerSchema.optional(),
+  withdrawalReason: goalText.optional(),
+  withdrawnAt: z.iso.datetime().optional(),
+  consumedAt: z.iso.datetime().optional(),
 }).superRefine((question, ctx) => {
   if ((question.status === 'answered') !== (question.answer !== undefined)) {
     ctx.addIssue({ code: 'custom', path: ['answer'], message: 'Only answered questions require an answer' });
+  }
+  if (question.kind === 'approval' && question.operation === undefined) {
+    ctx.addIssue({ code: 'custom', path: ['operation'], message: 'An approval requires an operation' });
+  }
+  const answer = question.answer;
+  if (answer !== undefined) {
+    if (question.kind === 'question' && (answer.text.trim().length === 0 || answer.decision !== undefined || answer.report !== undefined)) {
+      ctx.addIssue({ code: 'custom', path: ['answer'], message: 'Questions require a text answer' });
+    }
+    if (question.kind === 'approval' && (answer.decision === undefined || answer.report !== undefined)) {
+      ctx.addIssue({ code: 'custom', path: ['answer'], message: 'Approvals require an explicit decision' });
+    }
+    if (question.kind === 'operation_request' && (answer.report === undefined || answer.decision !== undefined)) {
+      ctx.addIssue({ code: 'custom', path: ['answer'], message: 'Operation requests require a report' });
+    }
+  }
+  if (question.consumedAt !== undefined && (question.kind !== 'approval' || question.status !== 'answered' || answer?.decision !== 'allow')) {
+    ctx.addIssue({ code: 'custom', path: ['consumedAt'], message: 'Only allowed approvals can be consumed' });
   }
 });
 export const GoalNotificationInputSchema = z.object({
@@ -29,8 +77,11 @@ export const GoalNotificationInputSchema = z.object({
   body: z.string().refine((value) => value.trim().length > 0),
   severity: z.enum(['info', 'warning', 'error']).optional(),
 }).strict();
-export type GoalQuestion = z.infer<typeof GoalQuestionSchema>;
-export type GoalQuestionInput = z.input<typeof GoalQuestionInputSchema>;
+// Existing callers may construct questions without kind; parsing always supplies it.
+export type GoalQuestion = Omit<z.infer<typeof GoalQuestionSchema>, 'kind'> & {
+  kind?: z.infer<typeof GoalQuestionSchema>['kind'];
+};
+export type GoalQuestionInput = z.input<typeof GoalInquiryInputSchema>;
 export type GoalNotificationInput = z.infer<typeof GoalNotificationInputSchema>;
 
 export const GoalTaskResultSchema = z.object({
@@ -64,7 +115,6 @@ export const GoalCreateInputSchema = GoalSummarySchema.extend({
 
 export type ManagerGoalSummary = z.infer<typeof GoalSummarySchema>;
 
-const goalSha = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
 export const GoalCompletionSchema = z.object({
   goalBranch: goalBranch,
   goalSha,
@@ -124,5 +174,5 @@ export const GoalSchema = GoalRecordObjectSchema.superRefine((goal, ctx) => {
   }
 });
 
-export type Goal = z.infer<typeof GoalSchema>;
+export type Goal = Omit<z.infer<typeof GoalSchema>, 'questions'> & { questions?: GoalQuestion[] };
 export type GoalCreateInput = z.infer<typeof GoalCreateInputSchema>;

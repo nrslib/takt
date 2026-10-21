@@ -59,6 +59,95 @@ it.each(['auto', 'approve'] as const)('uses the configured %s completion policy'
   await completeTaktGoal({ ...input, expectedSha: 'a'.repeat(40), summary: 'evidence' }, {}, signal);
   expect(doubles.complete).toHaveBeenCalledExactlyOnceWith(input.cwd, input.goalId, 'a'.repeat(40), 'evidence', mainMerge, signal, policy);
 });
+it('returns the checked completion state and target SHA and notifies with the saved goal', async () => {
+  const previous = { ...goalRecord(), status: 'awaiting_merge' as const };
+  const targetSha = 'b'.repeat(40);
+  const saved = { ...previous, status: 'completed' as const, completion: {
+    goalBranch: previous.branch, goalSha: 'a'.repeat(40), targetBranch: previous.integrationBranch, targetSha,
+    summary: 'evidence', instructions: [],
+    changeSummary: { filesChanged: 1, additions: 1, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+  } };
+  doubles.get.mockResolvedValue(previous);
+  doubles.check.mockImplementation(async () => {
+    doubles.get.mockResolvedValue(saved);
+    return { included: true, targetSha, goal: saved };
+  });
+
+  const result = await checkTaktGoalCompletion(input, {}, signal);
+
+  expect(result.isError).toBeUndefined();
+  expect(doubles.check).toHaveBeenCalledExactlyOnceWith(input.cwd, input.goalId, signal, policy);
+  expect(doubles.notify).toHaveBeenCalledExactlyOnceWith(input.cwd, previous, saved, undefined);
+  expect(JSON.parse(firstTextContent(result.content))).toMatchObject({
+    included: true, targetSha, goal: { id: saved.id, status: 'completed', completion: { goalSha: 'a'.repeat(40), targetSha } },
+  });
+});
+it.each(['completed', 'awaiting_merge'] as const)('returns the saved %s completion request and notifies with that goal', async (status) => {
+  const previous = goalRecord();
+  const goalSha = 'a'.repeat(40);
+  const targetSha = 'b'.repeat(40);
+  const saved = { ...previous, status, completion: {
+    goalBranch: previous.branch, goalSha, targetBranch: previous.integrationBranch,
+    ...(status === 'completed' ? { targetSha } : {}),
+    summary: 'evidence', instructions: [],
+    changeSummary: { filesChanged: 1, additions: 1, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+  } };
+  doubles.get.mockResolvedValue(previous);
+  const operation = { status: status === 'completed' ? 'merged' : 'awaiting_merge',
+    ...(status === 'completed' ? { sha: targetSha } : {}), completion: saved.completion, goal: saved };
+  doubles.complete.mockImplementationOnce(async () => {
+    doubles.get.mockResolvedValue(saved);
+    return operation;
+  });
+
+  const result = await completeTaktGoal({ ...input, expectedSha: goalSha, summary: 'evidence' }, {}, signal);
+
+  expect(result.isError).toBeUndefined();
+  expect(JSON.parse(firstTextContent(result.content))).toMatchObject({
+    ...operation, goal: { id: saved.id, status, completion: saved.completion },
+  });
+  expect(doubles.notify).toHaveBeenCalledExactlyOnceWith(input.cwd, previous, saved, undefined);
+});
+
+it('returns an unincluded completion check with the saved approval', async () => {
+  const saved = { ...goalRecord(), status: 'awaiting_merge' as const, completion: {
+    goalBranch: goalRecord().branch, goalSha: 'c'.repeat(40), targetBranch: 'main',
+    summary: 'updated evidence', instructions: [],
+    changeSummary: { filesChanged: 1, additions: 1, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+  } };
+  doubles.get.mockResolvedValue(saved);
+  doubles.check.mockResolvedValueOnce({ included: false, goal: saved });
+
+  const result = await checkTaktGoalCompletion(input, {}, signal);
+
+  expect(result.isError).toBeUndefined();
+  expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ included: false, goal: {
+    id: saved.id, status: 'awaiting_merge', completion: saved.completion,
+  } });
+  expect(doubles.notify).toHaveBeenCalledExactlyOnceWith(input.cwd, saved, saved, undefined);
+});
+
+it('returns a completion request error without notifying when the approval changed', async () => {
+  doubles.complete.mockRejectedValueOnce(new Error('Approved goal SHA changed during the completion check.'));
+
+  const result = await completeTaktGoal({ ...input, expectedSha: 'a'.repeat(40), summary: 'evidence' }, {}, signal);
+
+  expect(result.isError).toBe(true);
+  expect(doubles.complete).toHaveBeenCalledExactlyOnceWith(input.cwd, input.goalId, 'a'.repeat(40), 'evidence', 'approve', signal, policy);
+  expect(doubles.notify).not.toHaveBeenCalled();
+  expect(doubles.get).toHaveBeenCalledOnce();
+});
+
+it('returns a completion check error without notifying when the approval changed', async () => {
+  doubles.check.mockRejectedValueOnce(new Error('Approved goal SHA changed during the completion check.'));
+
+  const result = await checkTaktGoalCompletion(input, {}, signal);
+
+  expect(result.isError).toBe(true);
+  expect(doubles.check).toHaveBeenCalledExactlyOnceWith(input.cwd, input.goalId, signal, policy);
+  expect(doubles.notify).not.toHaveBeenCalled();
+  expect(doubles.get).toHaveBeenCalledOnce();
+});
 it.each(['merge', 'complete', 'check'] as const)('bounds %s results while retaining saved state and completion instructions', async (kind) => {
   const completion = { goalBranch: 'goal', goalSha: 'a'.repeat(40), targetBranch: 'main',
     summary: '完成根拠'.repeat(20000), instructions: ['git merge ' + 'a'.repeat(40)], reason: 'human merge',

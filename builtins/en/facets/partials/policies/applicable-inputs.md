@@ -8,5 +8,35 @@
   - A record shows that the target program processed that input or state and failed in actual use. Actual use means user operations or operational use, or processing inputs or states established as applicable by another item in this list. Do not include failures caused by values constructed for verification or planning. The input and observed result must be identifiable. Rejecting an input is not a failure when rejection is the correct behavior.
 - A type, schema, argument definition, or entry-point validation not rejecting a value does not establish applicability. The ability to create it deliberately does not establish applicability either. The fact that an earlier review, adjudication, verification, or plan raised that input or state or adopted it as an acceptance criterion does not establish it either. Tests or judgments added in response, and records of values constructed for verification or planning, do not establish it either. Records showing inputs and results from actual use do establish it under the items above, even when collected later. The party returning the work based on a counterexample must establish its applicability. Do not carry forward counterexamples from earlier verification or plans without checking their basis.
 - A particular state of the operator's own environment variables, shell settings, local configuration files, or similar environment settings alone does not establish applicability either. An assumption that an attacker can already tamper with the operator's environment does not establish applicability when project policy excludes that tampering from protection. Even when external content is involved, a path may be exploitable only if the operator's environment variables, shell settings, or similar settings are in a particular state. Apply the rules above for the operator's environment to such paths as well. Follow the existing threat-model decision rules for threats explicitly excluded from protection.
-- Do not use a counterexample whose applicability cannot be established to mark a repair that satisfies its acceptance criteria as incomplete or its plan as invalid. Do not add it to acceptance criteria, regression conditions, or plan verification items. If retaining it as a concern, record it in one line as a check that does not change the judgment.
-- Do not exclude applicable inputs because they are infrequent. Include counts or lengths near their limits, empty sets that are actually produced, and variations in formats produced by the input source in successful examples and counterexamples as usual.
+- Do not decide whether input comes from outside a trust boundary by where it is stored or which process wrote it.
+  - Check who can choose the input values and who runs the process reading them with which permissions.
+  - Content received from outside and other users' input remain external input after the product stores, copies, or retrieves them.
+  - Treat state, settings, and records as inside the boundary when the operator manages them in their own environment and only processes run by that operator with the same permissions read them.
+  - Merely assuming that someone shares or distributes that state does not make it external input.
+  - When defaults such as ignore rules keep it unshared, merely assuming that someone overrides those defaults does not make it external input either.
+  - Treat inputs the product is intended to read from shared sources, such as repository-shared configuration or imported files, as external input.
+    - Show that the input is actually shared or distributed using the writing process, sharing defaults (ignore rules and whether synchronization or distribution occurs), user-facing documentation, or the import process.
+    - If that cannot be shown, treat it as inside the boundary.
+- Do not use a counterexample based on changing a value when the party able to change it can directly produce the same result with the same permissions without changing it.
+- Counterexamples assuming concurrency or races are applicable only when operations on the same resource overlap in actual use.
+  - Establish that operations overlap through at least one of the following.
+    - The product itself runs the processes concurrently.
+    - Requirements or documentation specify simultaneous use.
+    - Records show that operations overlapped and failed in actual use.
+  - Merely assuming that people happen to start their operations at nearly the same time does not establish overlap.
+- Choose counts, sizes, and lengths from limits established by requirements, existing contracts, or the input source, or from quantities that source produces in actual use.
+  - The ability to construct quantities exceeding technical limits, such as buffers or argument lengths, does not establish applicability.
+  - For input whose values can be chosen from outside the trust boundary, quantities that can be sent within the accepted contract are also applicable.
+- Treat counterexamples whose applicability cannot be established as follows.
+  - Do not use them to mark a repair that satisfies its acceptance criteria as incomplete.
+  - Do not use them to judge its plan invalid.
+  - Do not add them to acceptance criteria, regression conditions, or plan verification items.
+  - Do not require measures against those premises (locks, mutual exclusion, validation against tampering, new limits, etc.) as proposed repairs, acceptance criteria, or plan verification items.
+  - If retaining them as concerns, record each in one line as a check that does not change the judgment.
+- Do not exclude applicable inputs because they are infrequent.
+  - Include the following inputs and states in successful examples and counterexamples as well.
+    - Counts or lengths near limits established by requirements, contracts, or the input source
+    - Large data that the source actually produces
+    - Empty sets actually produced
+    - Variations in formats produced by the source
+    - Overlapping operations between processes run concurrently by the product itself

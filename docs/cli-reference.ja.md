@@ -80,6 +80,8 @@ takt update codex     # 指定対象だけを更新
 
 ## manager（実験的）
 
+manager の TUI で引数なしの `/go` を入力すると、現在の会話から要約を依頼します。返された要約は承認待ちになります。すでに要約が表示されていれば、`/go` は作り直さずに承認・登録します。材料不足の場合はその旨を表示し、会話を続けられます。TUI のコマンドは[ゴール管理ガイド](./goal-management.ja.md)を参照してください。
+
 `takt daemon stop` で manager 用のバックグラウンド daemon を停止できます。manager を開くときや TUI で回答・再開するときに、必要なら再び起動します。対象プロジェクトに未完了のゴール、処理待ちのイベント、待機中・実行中のタスクがなくなると自動で終了します。
 
 `takt manager` は対話端末でゴール相談の TUI を起動します。manager は実験的機能です。動作・設定・保存するデータの形式は予告なく変わることがあります。自動でタスクを投入・実行するため、provider の API の費用がかかります。起動するたびに入力欄の上にこの注意を表示し、`takt manager --help` にも言語設定（日本語・英語）に合わせて表示します。
@@ -728,6 +730,8 @@ PR ごとに隔離クローンを作り、一括処理では既定で2件を同�
 GitLab でも MR の番号指定・一括選定から実行し、Caccia の `github_unavailable` による `skipped` 後に返された head の CI を待てます。マージ方式の指定と head 一致制約には未対応なので、これらを使うマージ操作は失敗します。CI 待機だけではマージ成功になりません。
 
 マージ用ビルトインは Caccia を明示的に実行します。`merge-review` は `review → caccia → wait_ci → 評価コメント`、`merge-review-fix` と `merge-review-fix-simple` は `review/fix → commit_and_push → caccia → wait_ci → merge_pr` の順です。`success` と `skipped` は返された head の CI 待ちへ進みます。`limit` は未解決件数をコメントして COMPLETE で終了し、マージしません。効果の失敗は `error` をコメントして ABORT で終了します。push、タスク後処理、Pipeline からの暗黙の Caccia は廃止しました。`merge.auto_start: true` では PR 公開後にマージ用 workflow が起動し、その明示効果が Caccia を実行します。各 PR の失敗で他の PR を中止しません。レポートは元リポジトリの `.takt/runs` に残ります。
+
+`merge-review-fix` と `merge-review-fix-simple` はCI失敗が確定するたびに失敗チェック、run・attempt・jobの参照先、ログ本文、PRの累積差分、関連コードを調査します。フレークやmainでも失敗する欠陥はPRの作業ツリーで根本修正し、読み取り専用レビューを経てpush → Caccia → CI待ちへ戻ります。修正は最大2周です。外部要因を証拠で判断した場合だけ、修正回数とは独立してCIを1回再実行します。修正2周後も未使用なら再実行できます。同じHEADの新しいattemptを待ち、すべてのチェックと既存のマージ条件を再確認します。証拠不足、修正2周後も残る欠陥、修正レビューのREJECT、再実行後の失敗では回数・最後の失敗チェックと参照先・調査要点をPRへコメントしてABORTします。調査・修正レポートはrunに残ります。初回成功とCIのtimeoutの扱いは変わらず、`merge-review` はコメント専用のままです。GitHub Actionsのログ取得・再実行の権限不足や未対応Providerは明示します。
 
 マージ処理は `takt list` にタスクとして記録します。隔離クローンの配置には通常タスクと同じ `worktree_dir` を使います。既定は `../takt-worktrees` で、親ディレクトリに書き込めない場合は既存の代替先 `.takt/worktrees` を使います。失敗や競合で停止した場合はクローンと Git のマージ状態を残します。`takt merge` を再実行すると新しいタスクと隔離クローンを作り、失敗したタスクとクローンは保持します。既存のタスクを再開するには `takt list` の **Requeue** を使い、指示を直して再開するには **Retry** を使います。再開時には保存した PR の識別情報と fork の脅威を再確認します。同じ PR のマージタスクが実行中または保留中なら、新しい起動と失敗タスクの再開を拒否します。PR のマージ完了を確認した後にクローンを削除します。AI が競合に関連するソース、テスト、lockfile を変更した場合も TAKT がその差分を stage し、作業開始前からある未stageや未追跡の利用者の変更を保持します。
 

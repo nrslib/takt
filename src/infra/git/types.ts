@@ -177,6 +177,12 @@ export interface GitProvider {
 
   mergePr(prNumber: number, cwd?: string, method?: import('../../core/models/config-types.js').MergeMethod, expectedHeadSha?: string): MergeResult;
 
+  fetchPrCiFailure?(prNumber: number, headSha: string, cwd: string,
+    options?: import('../../core/workflow/system/pr-execution-context.js').PrStatusFetchOptions,
+  ): Promise<import('../../core/workflow/system/pr-ci.js').PrCiFailure>;
+  rerunPrCi?(failure: import('../../core/workflow/system/pr-ci.js').PrCiFailure, cwd: string,
+    options?: import('../../core/workflow/system/pr-execution-context.js').PrStatusFetchOptions,
+  ): Promise<import('../../core/workflow/system/pr-ci.js').PrCiRerunResult>;
   fetchPrStatus?(prNumber: number, cwd?: string,
     options?: import('../../core/workflow/system/pr-execution-context.js').PrStatusFetchOptions,
   ): Promise<import('../../core/workflow/system/pr-execution-context.js').PrStatus>;

@@ -36,7 +36,7 @@ for (const language of ['ja', 'en']) {
     assert.ok(go.endsWith(runtimeSummary), 'eval /go payload must equal the runtime builder output');
 
     const runtimeTellSystem = prependInteractiveTopicBoundary(
-      language, loadTemplate('score_tell_system_prompt', language),
+      language, loadTemplate('score_tell_system_prompt', language, { inlineUtterance: '' }),
     );
     for (const fixture of ['tell-separate', 'tell-prior-recipient']) {
       const tellFixturePath = new URL(`../cases/interactive-topic-boundary/${fixture}.yaml`, import.meta.url);
@@ -70,14 +70,27 @@ for (const language of ['ja', 'en']) {
   }
 }
 
-test('assistant and Grill Me branches both render from the source template', () => {
-  const vars = { language: 'en', scenario: 'continuation', fixture: 'separate' };
-  const assistant = buildPrompt({ vars: { ...vars, mode: 'assistant' } });
-  const grill = buildPrompt({ vars: { ...vars, mode: 'grill' } });
-  assert.match(assistant, /Interactive Mode Assistant/);
-  assert.match(grill, /Grill Me/);
-  assert.notEqual(assistant, grill);
-});
+for (const language of ['ja', 'en']) {
+  test(`${language} assistant and Grill Me branches both render from the source template`, () => {
+    const vars = { language, scenario: 'continuation', fixture: 'separate' };
+    const assistant = buildPrompt({ vars: { ...vars, mode: 'assistant' } });
+    const grill = buildPrompt({ vars: { ...vars, mode: 'grill' } });
+    const assistantSystem = assistant.split('SYSTEM:\n')[1].split('\n\nCONVERSATION:')[0];
+    const grillSystem = grill.split('SYSTEM:\n')[1].split('\n\nCONVERSATION:')[0];
+    assert.match(assistantSystem, language === 'ja' ? /対話モードアシスタント/ : /Interactive Mode Assistant/);
+    assert.match(grillSystem, /Grill Me/);
+    for (const name of ['decision-question-priority', 'one-question-interview']) {
+      const partialPath = new URL(`../../builtins/${language}/facets/partials/instructions/${name}.md`, import.meta.url);
+      const partial = readFileSync(partialPath, 'utf8').trim();
+      assert.ok(partial.length > 0);
+      assert.ok(grillSystem.includes(partial), `${language}/${name} must reach the Grill Me SYSTEM payload`);
+      for (const line of partial.split('\n').filter(line => line.trim().length > 0)) {
+        assert.ok(!assistantSystem.includes(line), `${language}/${name} must not reach the assistant SYSTEM payload`);
+      }
+    }
+    assert.notEqual(assistantSystem, grillSystem);
+  });
+}
 
 test('separate task assertions require B details and reject older A identifiers', () => {
   const context = { vars: { scenario: 'go', fixture: 'separate' } };

@@ -256,7 +256,9 @@ caccia:
   workflow: caccia        # 用于判断和修复每组线程的 workflow
 ```
 
-`caccia` effect 只有在 `enabled: true` 时等待 CodeRabbit；关闭时立即返回 `skipped` 和 `skipReason: config_disabled`。无论该开关为何值，都可以手动运行 `takt caccia <PR-number>`。默认值为关闭、1,800,000 毫秒、3 轮和 workflow `caccia`。如果项目中存在 `caccia` 配置块，它整体优先于全局块；所选配置块中省略的字段使用上述默认值。将 `workflow` 设置为 workflow 标识符即可替换 builtin workflow。
+`caccia` effect 只有在 `enabled: true` 时等待 CodeRabbit；关闭时跳过审查等待并返回 `skipped` 和 `skipReason: config_disabled`。无论该开关为何值，都可以手动运行 `takt caccia <PR-number>`。默认值为关闭、1,800,000 毫秒、3 轮和 workflow `caccia`。如果项目中存在 `caccia` 配置块，它整体优先于全局块；所选配置块中省略的字段使用上述默认值。将 `workflow` 设置为 workflow 标识符即可替换 builtin workflow。
+
+如果 GitHub PR head 与 clone 开始时的 HEAD 不一致，effect 会在执行前每隔2秒重新获取 PR 信息，包含获取时间在内最多等待60秒。同一次 PR 信息获取中观测到不同 head 时，也在同一期限内重试。只有与预期 SHA 一致时才继续；到期仍不一致则返回包含预期 SHA 和最后观测到的 SHA 的 `error`。如果最后一次观测不一致，还会显示冲突的两个 SHA。认证失败等其他获取异常、PR 身份信息变化或取消都会立即导致失败。存在执行元数据和 push 记录器时，记录跳过结果前也会执行此检查，因此关闭或未配置时仍可能等待。此等待为固定值，独立于审查设置 `wait_timeout_ms`。
 
 `wait_timeout_ms` 规定初次审查和每次推送后复审的等待期限，重新请求审查也包含在内。若审查限额通知给出的可重试时间早于期限，Caccia 会在该时间到达时请求一次审查；若可重试时间为期限或更晚，则立即跳过。收到限额通知后，审查到期限仍未完成时也会跳过。未收到限额通知时，初次等待超时会跳过，推送后的等待超时会记录为错误。单独命令在跳过或出错时以非零状态退出；system effect 在跳过时返回 `success: true` 与 `outcome: 'skipped'`，出错时返回 `success: false` 和 `error`，供 workflow 分支使用。
 
@@ -435,6 +437,21 @@ TAKT 观察实际收到的 provider event，不会合成 keepalive。OpenCode �
 大多数配置 key 都可以通过 `TAKT_` 加上大写、下划线连接的 key 路径覆盖：`logging.debug` 变成 `TAKT_LOGGING_DEBUG`，`telemetry.routing_decisions` 变成 `TAKT_TELEMETRY_ROUTING_DECISIONS`。常见例子包括 `TAKT_PROVIDER`、`TAKT_MODEL`、`TAKT_CONCURRENCY`、`TAKT_LOGGING_DEBUG`、`TAKT_TELEMETRY_ROUTING_DECISIONS` 和 `TAKT_OBSERVABILITY_ENABLED`。环境变量优先于对应文件值，并在拥有该 key 的配置层解析。
 
 除了配置 key 覆盖外，`TAKT_NOTIFY_WEBHOOK` 设置 Slack Incoming Webhook URL。设置后，TAKT 会在 pipeline 完成和 `takt run` 任务批次结束时发送 Slack 通知。
+
+## manager 敏感文件设置
+
+通过全局 `~/.takt/config.yaml` 或项目 `.takt/config.yaml` 中的 `manager.sensitive_paths`，可以添加即使位于负责仓库内也需要交给 manager 权限判断 agent 的文件和目录。
+
+```yaml
+manager:
+  sensitive_paths:
+    - private
+    - config/credentials.json
+```
+
+默认项为 `.env`、`.env.*`、`id_rsa`、`id_dsa`、`id_ecdsa`、`id_ed25519`、`*.key`、`*.pem`、`*.crt`、`*.cer`、`*.p12`、`*.pfx`。两个配置列表都会追加到默认项，省略或设置为空列表也不能删除默认项。单独的名称适用于任意目录深度。包含目录部分的相对路径以各个负责仓库为基准，也支持绝对路径和 `~/` 路径。目录项包含其所有下级文件和目录。名称模式支持在开头或末尾使用单个 `*`；此设置不用于定义允许规则。
+
+Claude 的 `Read`、`Glob` 和 `Grep` 只有在路径和符号链接解析后的目标全部是负责范围内可读取的普通目标时，才能跳过权限判断 agent。搜索候选通过路径和元数据检查，不会读取敏感文件的内容。搜索模式支持使用 `*`、`**` 和 `?` 的简单形式；排除、花括号展开、字符类、转义或无法确定范围的指定都会交给权限判断 agent。隐藏路径、遍历的目录和符号链接会被保守地检查，因此即使搜索条件较严格，也仍可能需要审查。Codex 的内置工具仍然需要审查。
 
 ## API Key 配置
 

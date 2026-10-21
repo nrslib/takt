@@ -16,7 +16,7 @@ import { getLabel } from '../../../shared/i18n/index.js';
 import type { RunAllTasksOptions, TaskExecutionOptions } from './types.js';
 import { requeueExistingFailedTasks, runWithWorkerPool } from './parallelExecution.js';
 import { toSlackTaskDetail } from './slackSummaryAdapter.js';
-import { claimTasksWithGoalCompletions, failInterruptedTasksWithGoalEvents } from './claimTasks.js';
+import { failInterruptedTasksWithGoalEvents } from './claimTasks.js';
 import { checkQueuedTaskProviders, checkPendingTaskProviders, terminalProviderConfirmation } from './providerPreflight.js';
 
 export async function runAllTasks(
@@ -86,19 +86,20 @@ export async function runAllTasks(
         pendingTasks, shutdownSignals.schedulingSignal, options?.goalTasksOnly === true);
     }
 
-    const { tasks: initialTasks } = claimTasksWithGoalCompletions(
-      taskRunner, concurrency, cwd, shutdownSignals.schedulingSignal,
-    );
     const runId = generateRunId();
     const startTime = Date.now();
 
-    if (initialTasks.length > 0) {
-      header('Running tasks');
-      if (concurrency > 1) {
-        info(`Concurrency: ${concurrency}`);
-      }
-      statusLine.start('Running tasks...');
-    }
+    let displayStarted = false;
+    const poolSignals = {
+      ...shutdownSignals,
+      onTasksClaimed: () => {
+        if (displayStarted) return;
+        displayStarted = true;
+        header('Running tasks');
+        if (concurrency > 1) info(`Concurrency: ${concurrency}`);
+        statusLine.start('Running tasks...');
+      },
+    };
 
     const sendSlackSummary = async (executedTaskNames: string[]): Promise<void> => {
       if (!slackWebhookUrl) return;
@@ -123,19 +124,19 @@ export async function runAllTasks(
     try {
       const result = await runWithWorkerPool(
         taskRunner,
-        initialTasks,
+        [],
         concurrency,
         cwd,
         agentOverrides,
         runOptions,
         globalConfig.taskPollIntervalMs,
         'run',
-        shutdownSignals,
+        poolSignals,
         options?.goalTasksOnly === true,
       );
 
       const totalCount = result.success + result.fail;
-      if (initialTasks.length === 0 && totalCount === 0) {
+      if (totalCount === 0) {
         info('No pending tasks in .takt/tasks.yaml');
         info('Use takt add to append tasks.');
         return;

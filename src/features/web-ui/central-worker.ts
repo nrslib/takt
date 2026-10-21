@@ -9,6 +9,7 @@ import {
   type CentralTaskRecord,
 } from '../../infra/task/centralStateRepository.js';
 import { assertCentralWorktreeOwnership } from '../../infra/task/centralWorktreeOwnership.js';
+import type { WorkflowExecutionEventSink } from '../tasks/execute/types.js';
 import {
   CENTRAL_EXECUTION_ID_ENV,
   CENTRAL_GENERATION_ENV,
@@ -176,6 +177,10 @@ async function executeAndCommit(
   ownerToken: string,
 ): Promise<void> {
   let terminalized = false;
+  const warnings: string[] = [];
+  const eventSink: WorkflowExecutionEventSink = (event) => {
+    if (event.type === 'progress' && event.level === 'warn') warnings.push(event.message);
+  };
   try {
     const runId = task.activeExecution?.runId;
     if (runId === undefined) throw new Error('Central task run id is missing');
@@ -253,6 +258,7 @@ async function executeAndCommit(
         },
       }),
       outputMode: 'silent',
+      eventSink,
       reportDirName: runId,
       runPathsDirectory: repository.paths.runsDirectory,
       sessionStorageDirectory: repository.paths.sessionsDirectory,
@@ -272,6 +278,7 @@ async function executeAndCommit(
         draftPr: task.draftPr === true,
         workflowIdentifier: task.workflow,
         outputMode: 'silent',
+        eventSink,
       });
       prUrl = postResult.prUrl;
       if (postResult.taskFailed) {
@@ -293,6 +300,7 @@ async function executeAndCommit(
       executionId: task.activeExecution!.executionId,
       ownerToken,
       status: succeeded ? 'completed' : 'failed',
+      warnings,
       ...(succeeded
         ? {}
         : {
@@ -312,6 +320,7 @@ async function executeAndCommit(
         executionId: task.activeExecution.executionId,
         ownerToken,
         status: 'failed',
+        warnings,
         failure: { code: 'worker_failed', message: error instanceof Error ? error.message : String(error) },
       }).catch(() => undefined);
     }

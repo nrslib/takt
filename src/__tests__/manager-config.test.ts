@@ -66,3 +66,38 @@ it.each(notificationKinds)('prioritizes explicit project false over global true 
   doubles.project.mockReturnValue({ manager: { notifications: { [kind]: true } } });
   expect(resolveManagerConfig('/project').notifications).toEqual(enabled);
 });
+
+it('provides sensitive file defaults without manager configuration', () => {
+  expect(resolveManagerConfig('/project')).toHaveProperty('sensitivePaths', expect.arrayContaining([
+    '.env', '.env.*', 'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519',
+    '*.key', '*.pem', '*.crt', '*.cer', '*.p12', '*.pfx',
+  ]));
+});
+
+it('adds both configuration layers to the sensitive defaults', () => {
+  doubles.global.mockReturnValue({ manager: { sensitivePaths: ['global-private'] } });
+  doubles.project.mockReturnValue({ manager: { sensitivePaths: ['project-private'] } });
+
+  expect(resolveManagerConfig('/project')).toHaveProperty('sensitivePaths', expect.arrayContaining([
+    '.env', '*.pem', 'global-private', 'project-private',
+  ]));
+});
+
+it('keeps sensitive defaults when both configuration layers specify empty lists', () => {
+  doubles.global.mockReturnValue({ manager: { sensitivePaths: [] } });
+  doubles.project.mockReturnValue({ manager: { sensitivePaths: [] } });
+
+  expect(resolveManagerConfig('/project')).toHaveProperty('sensitivePaths', expect.arrayContaining(['.env', '.env.*', '*.key', '*.crt']));
+});
+
+it.each([{ sensitive_paths: [] }, { sensitive_paths: ['private', 'config/credentials.json'] }])('accepts additional sensitive paths in both YAML schemas: $sensitive_paths', ({ sensitive_paths }) => {
+  const input = { manager: { sensitive_paths } };
+  expect(ProjectConfigSchema.parse(input)).toMatchObject(input);
+  expect(GlobalConfigSchema.parse(input)).toMatchObject(input);
+});
+
+it.each([null, 'private', [42], { path: 'private' }].map((sensitive_paths) => ({ sensitive_paths })))('rejects invalid sensitive path lists at both YAML boundaries: $sensitive_paths', ({ sensitive_paths }) => {
+  const input = { manager: { sensitive_paths } };
+  expect(ProjectConfigSchema.safeParse(input).success).toBe(false);
+  expect(GlobalConfigSchema.safeParse(input).success).toBe(false);
+});

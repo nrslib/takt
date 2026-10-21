@@ -10,6 +10,8 @@ import { waitForCentralWorkerStartup } from '../features/web-ui/central-worker-s
 import { runWorkflowExecution } from '../features/tasks/execute/workflowExecutionApi.js';
 import { createSharedCloneAbortable } from '../infra/task/clone.js';
 import { postExecutionFlow } from '../features/tasks/execute/postExecution.js';
+import { createWebUiServer, listenWebUiServer } from '../features/web-ui/server.js';
+import type { WorkflowExecutionEvent } from '../features/tasks/execute/types.js';
 
 vi.mock('../features/tasks/execute/workflowExecutionApi.js', () => ({
   runWorkflowExecution: vi.fn(async () => ({ success: true })),
@@ -53,6 +55,80 @@ async function withCentralConfig<T>(
 }
 
 describe('central Web UI worker', () => {
+  it.each(['warning', 'output', 'progress', 'none'] as const)(
+    'persists only structured warnings and exposes them in the completed run API: %s', async (kind) => {
+      const { globalConfigDirectory, project, repository } = await setupWorkerFixture();
+      const reserved = await repository.enqueueAndClaim({ task: 'trace warning', workflow: 'default', worktree: false });
+      const message = 'Run result was committed, but trace finalization failed: trace rendering failed';
+      vi.mocked(runWorkflowExecution).mockImplementationOnce(async (request) => {
+        const runRoot = join(repository.paths.runsDirectory, reserved.runId);
+        await mkdir(join(runRoot, 'reports'), { recursive: true });
+        await mkdir(join(runRoot, 'logs'), { recursive: true });
+        await writeFile(join(runRoot, 'meta.json'), JSON.stringify({
+          task: request.task, workflow: 'default', runSlug: reserved.runId,
+          runRoot: `runs/${reserved.runId}`, reportDirectory: `runs/${reserved.runId}/reports`,
+          contextDirectory: `runs/${reserved.runId}/context`, logsDirectory: `runs/${reserved.runId}/logs`,
+          status: 'completed', startTime: '2026-08-24T00:00:00.000Z',
+        }));
+        const events: WorkflowExecutionEvent[] = kind === 'none' ? [] : [kind === 'output'
+          ? { type: 'output', outputType: 'text', message }
+          : { type: 'progress', message, ...(kind === 'warning' ? { level: 'warn' as const } : {}) }];
+        for (const event of events) await request.eventSink?.(event);
+        await request.eventSink?.({ type: 'completed', success: true });
+        return { success: true };
+      });
+      await withCentralConfig(globalConfigDirectory, () => runCentralTask({
+        globalConfigDirectory, stateId: project.stateId, taskId: reserved.task.taskId,
+        generation: reserved.task.generation, executionId: reserved.executionId, ownerToken: reserved.ownerToken,
+      }));
+      const reopened = await CentralTaskRepository.openByState({ globalConfigDirectory, stateId: project.stateId });
+      const task = await reopened.readTask(reserved.task.taskId);
+      expect(task?.status).toBe('completed');
+      expect(task?.runWarnings ?? []).toEqual(kind === 'warning' ? [{ runId: reserved.runId, message }] : []);
+      const server = await createWebUiServer({
+        globalConfigDirectory,
+        launch: async () => ({ pid: 9001, disposition: 'started', mode: 'run' }),
+      });
+      try {
+        const origin = await listenWebUiServer(server, 0);
+        const response = await fetch(`${origin}/api/runs/${reserved.runId}?project=${project.id}`);
+        expect(response.status).toBe(200);
+        const detail = await response.json() as { meta: { status: string }; warnings: string[] };
+        expect(detail.meta.status).toBe('completed');
+        expect(detail.warnings.includes(message)).toBe(kind === 'warning');
+        if (kind === 'warning') {
+          const retry = await reopened.requeueTask(reserved.task.taskId);
+          if (retry.kind !== 'started' || retry.ownerToken === undefined || retry.executionId === undefined || retry.runId === undefined) {
+            throw new Error('Expected a new run');
+          }
+          const adopted = await reopened.adopt({ taskId: retry.task.taskId, generation: retry.task.generation,
+            executionId: retry.executionId, ownerToken: retry.ownerToken });
+          await reopened.terminal({ taskId: retry.task.taskId, generation: adopted.generation,
+            executionId: retry.executionId, ownerToken: retry.ownerToken, status: 'completed', warnings: ['second trace failed'] });
+          const previousMeta = JSON.parse(await readFile(join(repository.paths.runsDirectory, reserved.runId, 'meta.json'), 'utf8'));
+          const retryRoot = join(repository.paths.runsDirectory, retry.runId);
+          await mkdir(join(retryRoot, 'reports'), { recursive: true });
+          await mkdir(join(retryRoot, 'logs'), { recursive: true });
+          await writeFile(join(retryRoot, 'meta.json'), JSON.stringify({
+            ...previousMeta, runSlug: retry.runId, runRoot: `runs/${retry.runId}`,
+            reportDirectory: `runs/${retry.runId}/reports`, contextDirectory: `runs/${retry.runId}/context`,
+            logsDirectory: `runs/${retry.runId}/logs`,
+          }));
+          for (const [runId, expected, absent] of [[reserved.runId, message, 'second trace failed'], [retry.runId, 'second trace failed', message]]) {
+            const response = await fetch(`${origin}/api/runs/${runId}?project=${project.id}`);
+            expect(response.status, await response.clone().text()).toBe(200);
+            const detail = await response.json() as { meta: { status: string }; warnings: string[] };
+            expect(detail.meta.status).toBe('completed');
+            expect(detail.warnings).toContain(expected);
+            expect(detail.warnings).not.toContain(absent);
+          }
+        }
+      } finally {
+        await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      }
+    },
+  );
+
   it('terminalizes ledger failures from the worker execution boundary', async () => {
     const { globalConfigDirectory, project, repository } = await setupWorkerFixture();
     const reserved = await repository.enqueueAndClaim({ task: 'metadata failure', workflow: 'default', worktree: false });
@@ -109,7 +185,10 @@ describe('central Web UI worker', () => {
       path: worktreeDirectory,
       branch: 'feature/web-task',
     });
-    vi.mocked(postExecutionFlow).mockResolvedValueOnce({ prUrl: 'https://example.test/pull/1' });
+    vi.mocked(postExecutionFlow).mockImplementationOnce(async (options) => {
+      await options.eventSink?.({ type: 'progress', level: 'warn', message: 'merge trace failed' });
+      return { prUrl: 'https://example.test/pull/1' };
+    });
     const reserved = await repository.enqueueAndClaim({
       task: 'central PR task',
       workflow: 'default',
@@ -146,6 +225,7 @@ describe('central Web UI worker', () => {
     await expect(repository.readTask(reserved.task.taskId)).resolves.toMatchObject({
       status: 'completed',
       prUrl: 'https://example.test/pull/1',
+      runWarnings: [{ runId: reserved.runId, message: 'merge trace failed' }],
     });
   });
 

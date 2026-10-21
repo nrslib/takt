@@ -51,13 +51,14 @@ export class GoalStore {
     return goal;
   }
 
-  async update(id: string, transform: (goal: Goal) => Goal): Promise<Goal> {
+  async update(id: string, transform: (goal: Goal) => Goal, onSaved?: () => void): Promise<Goal> {
     const filePath = this.filePath(id);
     assertSafePath(filePath, false);
     return withFileLock(`${filePath}.lock`, () => {
       const goal = GoalSchema.parse(transform(this.getSync(id)));
       if (goal.id !== id) throw new Error('Goal update cannot change its ID');
       writePrivateFile(filePath, JSON.stringify(goal));
+      onSaved?.();
       return goal;
     });
   }

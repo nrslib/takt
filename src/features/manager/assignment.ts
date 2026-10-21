@@ -2,11 +2,27 @@ import { findWorkspaceForRepository, readWorkspace } from '../../infra/config/gl
 import { resolveGitRepositoryDirectory } from '../../infra/task/repositoryDirectory.js';
 import { GoalStore } from '../../infra/goals/store.js';
 import type { ManagerAssignment } from './startupResolution.js';
+import { z } from 'zod/v4';
+import type { McpServerConfig } from '../../core/models/index.js';
+import { isStdioServer } from '../../infra/providers/mcp/types.js';
 
 export type ManagerAssignmentIdentity =
   | { readonly kind: 'repository'; readonly repositoryDirectory: string }
   | { readonly kind: 'workspace'; readonly workspaceId: string };
 export const MANAGER_ASSIGNMENT_ENV = 'TAKT_MANAGER_ASSIGNMENT';
+export const MANAGER_ASSIGNMENT_HEADER = 'x-takt-manager-assignment';
+export const managerAssignmentSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('repository'), repositoryDirectory: z.string().min(1) }),
+  z.object({ kind: z.literal('workspace'), workspaceId: z.uuid() }),
+]);
+
+export function withManagerAssignment(config: McpServerConfig, assignment: ManagerAssignmentIdentity): McpServerConfig {
+  if (isStdioServer(config)) return { ...config, env: { ...config.env, [MANAGER_ASSIGNMENT_ENV]: JSON.stringify(assignment) } };
+  if (config.type === 'http' && config.headers?.[MANAGER_ASSIGNMENT_HEADER] !== undefined) {
+    return { ...config, headers: { ...config.headers, [MANAGER_ASSIGNMENT_HEADER]: Buffer.from(JSON.stringify(assignment), 'utf8').toString('base64url') } };
+  }
+  return config;
+}
 
 export async function resolveCurrentManagerAssignment(identity: ManagerAssignmentIdentity, globalConfigDirectory: string): Promise<ManagerAssignment> {
   const workspace = identity.kind === 'workspace'

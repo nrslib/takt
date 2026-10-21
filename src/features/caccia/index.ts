@@ -26,6 +26,7 @@ import { forceExitAfterOpenCodeCleanup } from '../tasks/execute/forceShutdown.js
 import { toLocalBranchRef } from '../../shared/utils/gitBranchValidation.js';
 import { createCacciaCloneGitOperations, type CacciaGitOperations } from '../../infra/workflow/system/caccia-clone-git.js';
 import { createCacciaOutput, type CacciaDisplayOptions, type CacciaOutput } from './output.js';
+import type { WorkflowExecutionEventSink } from '../tasks/execute/types.js';
 
 const log = createLogger('caccia');
 const REPORT_FILE_NAME = 'caccia-decisions.json';
@@ -112,6 +113,7 @@ export interface CacciaResult {
 }
 
 interface CacciaInputBase extends CacciaDisplayOptions {
+  eventSink?: WorkflowExecutionEventSink;
   projectCwd: string;
   settings: CacciaSettings;
   abortSignal?: AbortSignal;
@@ -433,6 +435,11 @@ async function executeCacciaWorkflow(
     workflowIdentifier: options.workflow,
     runPathsDirectory: join(options.projectCwd, '.takt', 'runs'),
     ...display,
+    eventSink: (event) => {
+      if (event.type === 'progress' && event.level === 'warn') {
+        return input.eventSink?.(event);
+      }
+    },
     abortSignal: input.abortSignal,
   });
   if (!result.success) {

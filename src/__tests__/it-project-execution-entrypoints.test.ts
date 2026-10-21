@@ -1,5 +1,7 @@
 import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
 import type { TaskInfo } from '../infra/task/types.js';
+import { GoalStore } from '../infra/goals/store.js';
+import { PrivateFileLockAcquisitionError } from '../shared/utils/private-file-lock.js';
 
 const mocks = vi.hoisted(() => ({
   acquire: vi.fn(),
@@ -7,13 +9,14 @@ const mocks = vi.hoisted(() => ({
   release: vi.fn(),
   failInterrupted: vi.fn(),
   claim: vi.fn(),
+  states: vi.fn(),
   requeue: vi.fn(),
   pool: vi.fn(),
+  executeTask: vi.fn(),
   config: vi.fn(),
   runner: vi.fn(),
 
   ensure: vi.fn(),
-  diagnostic: vi.fn(),
 }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: mocks.ensure }));
 vi.mock('../infra/task/project-execution-lock.js', async (original) => ({
@@ -29,12 +32,16 @@ vi.mock('../infra/task/index.js', () => ({
     listTasksForProviderPreflight(): never[] { return []; }
     listFailedTasks(): never[] { return []; }
     listAllTaskItems(): never[] { return []; }
-    listTaskStateItems(): never[] { return []; }
+    listTaskStateItems = mocks.states;
   },
 }));
 vi.mock('../features/tasks/execute/parallelExecution.js', () => ({
   runWithWorkerPool: mocks.pool,
   requeueExistingFailedTasks: mocks.requeue,
+}));
+vi.mock('../features/tasks/execute/runTaskExecution.js', () => ({
+  executeRunTaskAndComplete: mocks.executeTask,
+  executeRunTaskAndCompleteWithDetails: vi.fn(),
 }));
 vi.mock('../features/tasks/execute/forceShutdown.js', () => ({
   forceExitAfterOpenCodeCleanup: vi.fn().mockResolvedValue(undefined),
@@ -57,6 +64,8 @@ vi.mock('../shared/i18n/index.js', () => ({ getLabel: (key: string) => key }));
 import { runAllTasks } from '../features/tasks/execute/runAllTasks.js';
 import { watchTasks } from '../features/tasks/watch/index.js';
 import { ProjectExecutionAlreadyRunningError } from '../infra/task/project-execution-lock.js';
+import { header, info } from '../shared/ui/index.js';
+import { statusLine } from '../shared/ui/StatusLine.js';
 
 const task: TaskInfo = {
   name: 'first', content: 'first', filePath: '/project/.takt/tasks/first.yaml',
@@ -67,6 +76,13 @@ const entrypoints = [
   { kind: 'run', execute: runAllTasks },
   { kind: 'watch', execute: watchTasks },
 ] as const;
+
+async function useActualWorkerPool(): Promise<void> {
+  const actual = await vi.importActual<typeof import('../features/tasks/execute/parallelExecution.js')>(
+    '../features/tasks/execute/parallelExecution.js',
+  );
+  mocks.pool.mockImplementation(actual.runWithWorkerPool);
+}
 
 describe('プロジェクト実行ロックの入口', () => {
   let listeners: ReturnType<typeof process.rawListeners>;
@@ -87,10 +103,13 @@ describe('プロジェクト実行ロックの入口', () => {
     mocks.failInterrupted.mockReturnValue(0);
     mocks.requeue.mockReturnValue(0);
     mocks.claim.mockReturnValue([task]);
+    mocks.states.mockReturnValue([]);
     mocks.pool.mockResolvedValue({ success: 1, fail: 0, executedTaskNames: ['first'] });
+    mocks.executeTask.mockResolvedValue(true);
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     for (const listener of process.rawListeners('SIGINT')) {
       if (!listeners.includes(listener)) process.removeListener('SIGINT', listener as () => void);
     }
@@ -132,6 +151,8 @@ describe('プロジェクト実行ロックの入口', () => {
     expect(mocks.pool).toHaveBeenCalledOnce();
     expect(mocks.pool.mock.calls[0]![1]).toEqual([]);
     expect(mocks.release).toHaveBeenCalledOnce();
+    expect(header).not.toHaveBeenCalled();
+    expect(statusLine.start).not.toHaveBeenCalled();
   });
 
   it.each(entrypoints)('$kind は pool の完了までプロジェクトの所有権を保持する', async ({ execute }) => {
@@ -143,6 +164,29 @@ describe('プロジェクト実行ロックの入口', () => {
       await vi.waitFor(() => expect(mocks.pool).toHaveBeenCalledOnce());
       expect(mocks.release).not.toHaveBeenCalled();
     } finally { finish({ success: 0, fail: 0, executedTaskNames: [] }); await execution; }
+    expect(mocks.release).toHaveBeenCalledOnce();
+  });
+
+  it.each(entrypoints)('$kind はmanagerのゴール一覧を回収せず通常タスクの実行へ進む', async ({ execute }) => {
+    const failure = new Error('invalid goal directory');
+    const list = vi.spyOn(GoalStore.prototype, 'list').mockRejectedValue(failure);
+    if (execute === runAllTasks) {
+      await useActualWorkerPool();
+      mocks.claim.mockReturnValueOnce([task]).mockReturnValue([]);
+    }
+
+    await expect(execute('/project')).resolves.toBeUndefined();
+
+    expect(list).not.toHaveBeenCalled();
+    expect(mocks.pool).toHaveBeenCalledOnce();
+    const [runner, initialTasks] = mocks.pool.mock.calls[0]!;
+    expect(runner).toBeInstanceOf((await import('../infra/task/index.js')).TaskRunner);
+    expect(initialTasks).toEqual([]);
+    if (execute === runAllTasks) {
+      expect(mocks.claim).toHaveBeenCalled();
+      expect(mocks.executeTask).toHaveBeenCalledExactlyOnceWith(task, runner, '/project', undefined,
+        expect.objectContaining({ abortSignal: expect.any(AbortSignal) }), undefined);
+    }
     expect(mocks.release).toHaveBeenCalledOnce();
   });
 
@@ -159,10 +203,16 @@ describe('プロジェクト実行ロックの入口', () => {
   it.each(['initial processing', 'claim'] as const)('自動 run は取得前の $0 の失敗では再起動を判定しない', async (boundary) => {
     const failure = new Error('before claim');
     if (boundary === 'initial processing') mocks.failInterrupted.mockImplementation(() => { throw failure; });
-    else mocks.claim.mockImplementation(() => { throw failure; });
+    else {
+      await useActualWorkerPool();
+      mocks.claim.mockImplementation(() => { throw failure; });
+    }
     const run = runAllTasks('/project', { goalTasksOnly: true });
     await expect(run).rejects.toBe(failure);
-    expect(mocks.pool).not.toHaveBeenCalled();
+    if (boundary === 'claim') {
+      expect(mocks.pool).toHaveBeenCalledOnce();
+      expect(mocks.claim).toHaveBeenCalledOnce();
+    } else expect(mocks.pool).not.toHaveBeenCalled();
     expect(mocks.release).toHaveBeenCalledOnce();
     expect(mocks.ensure).not.toHaveBeenCalled();
   });
@@ -172,7 +222,72 @@ describe('プロジェクト実行ロックの入口', () => {
     expect(mocks.runner).toHaveBeenCalledWith('/project', expect.objectContaining({ goalTasksOnly: true }));
     expect(mocks.requeue).not.toHaveBeenCalled();
     expect(mocks.pool.mock.calls[0]![0]).toBeInstanceOf((await import('../infra/task/index.js')).TaskRunner);
+    expect(mocks.pool.mock.calls[0]![9]).toBe(true);
     expect(mocks.ensure).not.toHaveBeenCalled();
+  });
+
+  it('run はpoolの取得通知後に一度だけ表示を開始する', async () => {
+    mocks.pool.mockImplementationOnce(async (...args: Parameters<typeof import('../features/tasks/execute/parallelExecution.js').runWithWorkerPool>) => {
+      expect(args[1]).toEqual([]);
+      expect(mocks.claim).not.toHaveBeenCalled();
+      expect(header).not.toHaveBeenCalled();
+      expect(info).not.toHaveBeenCalledWith('Concurrency: 2');
+      expect(statusLine.start).not.toHaveBeenCalled();
+      args[8]!.onTasksClaimed!();
+      args[8]!.onTasksClaimed!();
+      expect(vi.mocked(header).mock.calls.filter(([value]) => value === 'Running tasks')).toHaveLength(1);
+      expect(vi.mocked(info).mock.calls.filter(([value]) => value === 'Concurrency: 2')).toHaveLength(1);
+      expect(statusLine.start).toHaveBeenCalledExactlyOnceWith('Running tasks...');
+      return { success: 1, fail: 0, executedTaskNames: ['first'] };
+    });
+
+    await runAllTasks('/project');
+
+    expect(info).not.toHaveBeenCalledWith('No pending tasks in .takt/tasks.yaml');
+    expect(statusLine.stop).toHaveBeenCalledOnce();
+  });
+
+  it('run はENOSPCの回復待ちから実行完了まで同じ所有権を保ち取得後に表示する', async () => {
+    vi.useFakeTimers();
+    await useActualWorkerPool();
+    mocks.states.mockReturnValue([{ name: task.name, status: 'pending' }]);
+    mocks.claim.mockImplementationOnce(() => {
+      throw new PrivateFileLockAcquisitionError('disk full', 'ENOSPC', undefined, {});
+    }).mockReturnValueOnce([task]).mockReturnValue([]);
+    let finish!: (success: boolean) => void;
+    mocks.executeTask.mockImplementationOnce(() => new Promise<boolean>((resolve) => { finish = resolve; }));
+    const running = runAllTasks('/project');
+
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(mocks.acquire).toHaveBeenCalledOnce();
+    expect(mocks.pool).toHaveBeenCalledOnce();
+    expect(mocks.release).not.toHaveBeenCalled();
+    expect(header).not.toHaveBeenCalled();
+    expect(statusLine.start).not.toHaveBeenCalled();
+    expect(mocks.executeTask).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mocks.executeTask).toHaveBeenCalledOnce();
+    expect(header).toHaveBeenCalledWith('Running tasks');
+    expect(statusLine.start).toHaveBeenCalledExactlyOnceWith('Running tasks...');
+    expect(mocks.release).not.toHaveBeenCalled();
+    finish(true);
+    await running;
+    expect(mocks.acquire).toHaveBeenCalledOnce();
+    expect(mocks.release).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('run は取得通知があっても最終件数がゼロなら空キューを案内する', async () => {
+    mocks.pool.mockImplementationOnce(async (...args: Parameters<typeof import('../features/tasks/execute/parallelExecution.js').runWithWorkerPool>) => {
+      args[8]!.onTasksClaimed!();
+      return { success: 0, fail: 0, executedTaskNames: [] };
+    });
+
+    await runAllTasks('/project');
+
+    expect(info).toHaveBeenCalledWith('No pending tasks in .takt/tasks.yaml');
+    expect(info).toHaveBeenCalledWith('Use takt add to append tasks.');
   });
 
   it('自動起動した run は生きている所有者がいれば設定もキューも読み込まずに終了する', async () => {
@@ -204,9 +319,11 @@ describe('プロジェクト実行ロックの入口', () => {
 
   it('run は通常タスクの読み取りエラーを実行元へ返す', async () => {
     const failure = new Error('unreadable ordinary task');
+    await useActualWorkerPool();
     mocks.claim.mockImplementation(() => { throw failure; });
     await expect(runAllTasks('/project')).rejects.toBe(failure);
-    expect(mocks.pool).not.toHaveBeenCalled();
+    expect(mocks.pool).toHaveBeenCalledOnce();
+    expect(mocks.claim).toHaveBeenCalledOnce();
     expect(mocks.release).toHaveBeenCalledOnce();
   });
 

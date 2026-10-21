@@ -1,0 +1,6 @@
+unit / node --test product.test.mjs
+FAIL normalizes tags and accepts missing optional tags
+TypeError: Cannot read properties of null (reading 'trim')
+    at normalizeTag (product.mjs:2)
+    at product.test.mjs:7
+Input: null; expected: ''; actual: TypeError.

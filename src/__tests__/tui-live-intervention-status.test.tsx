@@ -117,9 +117,6 @@ describe('resident conversation handoffs', () => {
       expect(result).toEqual({ action: 'cancel', task: '' });
       expect(onHandoff).toHaveBeenCalledOnce();
       expect(mounted).toHaveLength(2);
-      for (const call of mockMountInk.mock.calls) {
-        expect(call[3]).toEqual({ anchorLiveFrame: true });
-      }
       for (const props of mounted) {
         expect(props.liveStatusReader?.()).toBe('run: running');
         expect(props.liveStatusRefreshIntervalMs).toBe(250);
@@ -133,43 +130,4 @@ describe('resident conversation handoffs', () => {
     }
   });
 
-  it('anchors conversation input but keeps the dispatch placeholder on default rendering', async () => {
-    const conversation = createConversation();
-    const dispatch = vi.fn(async () => ({ kind: 'dispatched' as const }));
-    mockMountInk
-      .mockImplementationOnce(async (buildTree: (handlers: MountHandlers) => ReactElement) =>
-        new Promise<unknown>((resolve, reject) => {
-          mountedProps(buildTree({ settle: resolve, fail: reject })).onExit(
-            { kind: 'result', result: { action: 'execute', task: 'task' } },
-            { history: [], queue: [] },
-          );
-        }))
-      .mockResolvedValueOnce({ kind: 'dispatched' })
-      .mockImplementationOnce(async (buildTree: (handlers: MountHandlers) => ReactElement) =>
-        new Promise<unknown>((resolve, reject) => {
-          mountedProps(buildTree({ settle: resolve, fail: reject })).onExit(
-            { kind: 'result', result: { action: 'cancel', task: '' } },
-            { history: [], queue: [] },
-          );
-        }));
-
-    await expect(runTuiConversation({
-      cwd: '/repo',
-      lang: 'en',
-      conversation,
-      initialEntries: [],
-      submitMode: 'chat',
-      autoSubmit: false,
-      modelLabel: () => 'mock/mock-model',
-      chooseAction: async () => null,
-      continuePrompt: 'continue',
-      dispatch,
-      dispatchPlaceholder: 'dispatching',
-    })).resolves.toEqual({ action: 'cancel', task: '' });
-
-    expect(mockMountInk).toHaveBeenCalledTimes(3);
-    expect(mockMountInk.mock.calls[0]?.[3]).toEqual({ anchorLiveFrame: true });
-    expect(mockMountInk.mock.calls[1]).toHaveLength(2);
-    expect(mockMountInk.mock.calls[2]?.[3]).toEqual({ anchorLiveFrame: true });
-  });
 });

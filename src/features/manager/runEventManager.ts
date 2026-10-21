@@ -13,6 +13,7 @@ import { connectManagerMcp } from './managerMcp.js';
 import { buildGoalTurnContext } from './turnContext.js';
 import { notifyManagerTurnFailure } from './turnFailureNotification.js';
 import { isGoalPatrolDue } from './patrol.js';
+import { supportsManagerPermissionJudge } from './permissionJudgeSupport.js';
 
 const MANAGER_TURN_TIMEOUT_MS = 30 * 60 * 1000;
 
@@ -24,7 +25,9 @@ export function createRunEventManager(cwd: string) {
   const getSession = async (signal: AbortSignal): Promise<ManagerConversationSession> => {
     if (session !== undefined) return session;
     const plan = createManagerConversationPlan(cwd, {});
-    mcp = await connectManagerMcp(cwd, undefined, plan.ctx.mcpServers);
+    mcp = await connectManagerMcp(cwd, undefined, plan.ctx.mcpServers, {
+      enableGoalExecutionTools: supportsManagerPermissionJudge(plan.ctx.providerType),
+    });
     try {
       await plan.ctx.provider.preflight?.({
         cwd, abortSignal: signal, model: plan.ctx.model, providerOptions: plan.ctx.providerOptions,

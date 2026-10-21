@@ -2,7 +2,6 @@ import { saveManagerEvent } from '../../infra/goals/events.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod/v4';
 import { GoalSummarySchema, type Goal, type ManagerGoalSummary } from '../../infra/goals/schema.js';
-import { isStdioServer } from '../../infra/providers/mcp/types.js';
 import { TAKT_MANAGER_MCP_SERVER_NAME } from './managerMcp.js';
 import { TAKT_MCP_MANAGER_TOOL_NAMES } from '../mcp/server.js';
 import { createMcpAdapter } from '../../infra/providers/mcp/index.js';
@@ -24,9 +23,12 @@ import type { ProviderType } from '../../infra/providers/index.js';
 import { toManagerOutputSchema, toStrictManagerOutputSchema } from './outputSchema.js';
 import { createManagerToolPermissionHandler } from './toolPermissionDecision.js';
 import type { ManagerPermissionGoal } from './toolPermissionJudge.js';
+import { StandaloneInquiryStore } from '../../infra/goals/standalone-inquiries.js';
+import type { ManagerAnswerOptions } from './inquiryAnswer.js';
+import { supportsManagerPermissionJudge } from './permissionJudgeSupport.js';
 
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
-import { MANAGER_ASSIGNMENT_ENV, findAssignedGoalRepository, resolveAssignedProjectRoot, resolveCurrentManagerAssignment, type ManagerAssignmentIdentity } from './assignment.js';
+import { withManagerAssignment, findAssignedGoalRepository, resolveAssignedProjectRoot, resolveCurrentManagerAssignment, type ManagerAssignmentIdentity } from './assignment.js';
 
 const summarySchema = GoalSummarySchema.extend({ repositoryDirectory: z.string().min(1).optional() })
   .refine((summary) => [
@@ -80,6 +82,7 @@ interface ManagerTurnOptions {
 type ManagerTurnResult =
   | { kind: 'reply'; message: string }
   | { kind: 'error'; message: string };
+type ManagerAnswerResult = ManagerTurnResult & { answerSaved: boolean };
 type ManagerResult = ManagerTurnResult
   | { kind: 'goal_registered'; goal: Goal; turn: ManagerTurnResult };
 
@@ -147,25 +150,40 @@ export function createManagerConversationSession(input: {
     }
   };
   const session = {
-    async answerQuestion(options: { goalId: string; questionId: string; text: string; abortSignal?: AbortSignal }): Promise<ManagerTurnResult> {
-      if (closed || registering || active !== null) return { kind: 'error', message: 'Manager session is unavailable' };
+    async answerQuestion(options: ManagerAnswerOptions): Promise<ManagerAnswerResult> {
+      if (closed || registering || active !== null) return { kind: 'error', message: 'Manager session is unavailable', answerSaved: false };
       invalidate();
       const controller = new AbortController();
       active = controller;
       const cancel = (): void => { controller.abort(); };
       options.abortSignal?.addEventListener('abort', cancel, { once: true });
       if (options.abortSignal?.aborted) cancel();
+      let answerSaved = false;
       try {
-        const repository = await goalRepository(options.goalId);
         controller.signal.throwIfAborted();
-        const saved = await new GoalStore(repository).update(options.goalId, (goal) => answerGoalQuestion(goal, options.questionId, options.text));
+        const assignment = await getAssignment()
+          ?? { kind: 'repository' as const, repositoryDirectory: cwd, repositoryDirectories: [cwd] };
+        if (options.goalId !== null && !assignment.repositoryDirectories.includes(options.repositoryDirectory)) {
+          throw new Error(`Repository is not assigned to this manager: ${options.repositoryDirectory}`);
+        }
+        controller.signal.throwIfAborted();
+        await options.appendPermission?.(assignment);
+        controller.signal.throwIfAborted();
+        if (options.goalId === null) {
+          await new StandaloneInquiryStore(getGlobalConfigDir(), options.owner).answer(options.questionId, options.answer);
+          return { kind: 'reply', message: 'Answer saved', answerSaved: true };
+        }
+        const repository = options.repositoryDirectory;
+        const saved = await new GoalStore(repository).update(options.goalId,
+          (goal) => answerGoalQuestion(goal, options.questionId, options.answer),
+          () => { answerSaved = true; });
         const answer = saved.questions!.find((question) => question.id === options.questionId)!.answer!;
         saveManagerEvent(repository, { kind: 'answer', goalId: options.goalId, questionId: options.questionId, answer });
         await ensureDaemon();
         await ensureManagerRun(repository);
-        return { kind: 'reply', message: 'Answer saved' };
+        return { kind: 'reply', message: 'Answer saved', answerSaved };
       } catch (error) {
-        return { kind: 'error', message: getErrorMessage(error) };
+        return { kind: 'error', message: getErrorMessage(error), answerSaved };
       } finally {
         options.abortSignal?.removeEventListener('abort', cancel);
         if (active === controller) active = null;
@@ -203,7 +221,7 @@ export function createManagerConversationSession(input: {
         try {
           const assignment = await getAssignment();
           const servers = plan.ctx.mcpServers === undefined ? undefined : Object.fromEntries(Object.entries(plan.ctx.mcpServers).map(([name, config]) => [
-            name, assignmentIdentity === undefined || name !== TAKT_MANAGER_MCP_SERVER_NAME || !isStdioServer(config) ? config : { ...config, env: { ...config.env, [MANAGER_ASSIGNMENT_ENV]: JSON.stringify(assignmentIdentity) } },
+            name, assignmentIdentity === undefined || name !== TAKT_MANAGER_MCP_SERVER_NAME ? config : withManagerAssignment(config, assignmentIdentity),
           ]));
           if (servers !== undefined) {
             const adapter = createMcpAdapter(plan.ctx.providerType);
@@ -231,10 +249,14 @@ export function createManagerConversationSession(input: {
           const turnText = priorReasons === undefined || priorReasons.length === 0 ? text
             : `${text}\n\nPrevious tool permission denials: ${JSON.stringify(priorReasons)}`;
           const prompt = assignment === undefined ? turnText : `Current manager assignment: ${JSON.stringify(assignment)}\n\n${turnText}`;
-          const usesPermissionJudge = plan.ctx.providerType === 'claude' || plan.ctx.providerType === 'claude-sdk' || plan.ctx.providerType === 'codex';
+          const usesPermissionJudge = supportsManagerPermissionJudge(plan.ctx.providerType);
           if (usesPermissionJudge && plan.permissionJudge === undefined) throw new Error('Manager permission judge plan is missing');
           const onToolPermissionDecision = usesPermissionJudge ? createManagerToolPermissionHandler({
             plan: plan.permissionJudge!, provider: plan.ctx.providerType, cwd, instruction: options.text, goal: options.goal,
+            configDirectory: getGlobalConfigDir(),
+            get owner() {
+              return assignmentIdentity ?? { kind: 'repository', repositoryDirectory: cwd };
+            },
             abortSignal: controller.signal, onNotification: options.onNotification,
             onDenial: (reason) => { if (turn === generation && !controller.signal.aborted) denialReasons.push(reason); },
           }) : undefined;
@@ -345,7 +367,7 @@ export function createManagerConversationSession(input: {
     },
     handleUserMessage: (options: ManagerTurnOptions) => track(session.handleUserMessage(options)),
     approveSummary: (revision: number) => track(session.approveSummary(revision)),
-    answerQuestion: (options: { goalId: string; questionId: string; text: string; abortSignal?: AbortSignal }) => track(session.answerQuestion(options)),
+    answerQuestion: (options: ManagerAnswerOptions) => track(session.answerQuestion(options)),
     pauseGoal: (options: { goalId: string; abortSignal?: AbortSignal }) => track(changeGoalExecution(options, 'paused')),
     resumeGoal: (options: { goalId: string; abortSignal?: AbortSignal }) => track(changeGoalExecution(options, 'active')),
     abortGoal: (options: { goalId: string; abortSignal?: AbortSignal }) => track(changeGoalExecution(options, 'aborted')),
