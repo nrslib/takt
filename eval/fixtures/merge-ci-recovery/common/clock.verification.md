@@ -1,0 +1,2 @@
+Synthetic scenario verification record, shared unchanged across the clock repair candidates:
+Before repair, the scheduler trace resumes a 5 ms timer after 31 ms, violating the test's before-TTL assumption. After the proposed patch, the contributor reports repeated node --test clock.test.mjs runs with exit 0. Evaluate the exact patch against the original TTL assertions; repeated green runs alone do not establish preserved contracts or removal of the timing assumption.

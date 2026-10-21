@@ -15,6 +15,7 @@ vi.mock('../features/exec/assistantSession.js', () => ({
 
 import type { ConversationMessage } from '../features/interactive/interactive.js';
 import type { ExecSessionContext } from '../features/exec/assistantSession.js';
+import type { StreamCallback, StreamEvent } from '../shared/types/provider.js';
 import { makeSessionContext } from './test-helpers.js';
 import {
   createExecTuiConversation,
@@ -57,6 +58,36 @@ function createConversation() {
 describe('exec conversation on the TUI', () => {
   beforeEach(() => {
     mockAskExecAssistant.mockReset();
+  });
+
+  it('should forward activity and text once and close both sinks when the exec turn settles', async () => {
+    const events: StreamEvent[] = [
+      { type: 'thinking', data: { thinking: 'private reasoning' } },
+      { type: 'tool_use', data: { id: 'bash-1', tool: 'Bash', input: { command: 'npm test' } } },
+      { type: 'tool_output', data: { id: 'bash-1', tool: 'Bash', output: 'running tests' } },
+      { type: 'tool_result', data: { id: 'bash-1', completedToolIds: ['bash-1', 'bash-2'], content: 'passed', isError: false } },
+      { type: 'text', data: { text: 'answer chunk' } },
+    ];
+    let stream: StreamCallback | undefined;
+    mockAskExecAssistant.mockImplementationOnce((...args: unknown[]) => {
+      stream = (args[4] as { onStream?: StreamCallback }).onStream;
+      events.forEach((event) => stream?.(event));
+      return Promise.resolve({ content: 'completed', sessionId: 'exec-session' });
+    });
+    const { conversation } = createConversation();
+    const onStreamEvent = vi.fn<StreamCallback>();
+    const onAssistantChunk = vi.fn();
+    const input = { text: 'run tests', abortSignal: new AbortController().signal, onAssistantChunk, onStreamEvent };
+
+    await conversation.submit(input);
+
+    expect(onStreamEvent.mock.calls.map(([event]) => event)).toEqual(events);
+    expect(onAssistantChunk.mock.calls).toEqual([['answer chunk']]);
+    stream?.({ type: 'thinking', data: { thinking: 'late reasoning' } });
+    stream?.({ type: 'text', data: { text: 'late text' } });
+    stream?.(events[3]!);
+    expect(onStreamEvent.mock.calls.map(([event]) => event)).toEqual(events);
+    expect(onAssistantChunk.mock.calls).toEqual([['answer chunk']]);
   });
 
   it('should carry interrupted messages in order until an accepted answer completes', async () => {

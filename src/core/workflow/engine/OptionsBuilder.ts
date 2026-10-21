@@ -711,8 +711,7 @@ export class OptionsBuilder {
         resolvedProvider,
       );
 
-    // Skip session resume when cwd !== projectCwd (worktree execution) to avoid cross-directory contamination
-    const shouldResumeSession = !runtime?.fallback && step.session !== 'refresh' && this.getCwd() === this.getProjectCwd();
+    const shouldResumeSession = !runtime?.fallback && step.session !== 'refresh';
 
     const supportsStructuredOutput = providerSupportsStructuredOutput(resolvedProvider);
     const baseOptions = this.buildBaseOptions(step, mergedProviderOptions, runtime);

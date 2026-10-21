@@ -1,0 +1,5 @@
+unit / node --test clock.test.mjs
+FAIL retains entries before TTL and expires at TTL
+clock.test.mjs:9 assert.equal(cache.get('key'), 'value')
+Expected: 'value'; actual: undefined.
+Scheduler trace: setTimeout(5) callback resumed 31 ms after cache.put.

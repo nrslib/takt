@@ -396,6 +396,7 @@ export class CodexClient {
     const threadOptions = {
       ...(options.model ? { model: options.model } : {}),
       workingDirectory: options.cwd,
+      skipGitRepoCheck: true,
       ...(options.permissionControl === 'codex'
         ? {}
         : {

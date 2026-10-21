@@ -33,7 +33,7 @@ import { execFileSync } from 'node:child_process';
 import { statSync } from 'node:fs';
 import type { Language } from '../models/types.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
-import { escapeTemplateChars } from 'faceted-prompting';
+import { escapeTemplateChars } from '#faceted-prompting';
 import { toCloneBaseRef, toPullRequestBaseRef } from '../../shared/utils/gitBranchValidation.js';
 import { resolveMergeBase } from '../../infra/task/branchBaseCandidateResolver.js';
 import { resolveBranchEntryPointFromReflog } from '../../infra/task/branchEntryPointResolver.js';

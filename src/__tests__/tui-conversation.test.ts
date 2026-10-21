@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AssistantInteractiveMode, PermissionMode } from '../core/models/index.js';
 import { SlashCommand } from '../shared/constants.js';
 import { filterSlashCommands } from '../features/interactive/slashCommandRegistry.js';
-import type { StreamCallback } from '../shared/types/provider.js';
+import type { StreamCallback, StreamEvent } from '../shared/types/provider.js';
 import type { WorkflowContext } from '../features/interactive/interactive-summary-types.js';
 
 const {
@@ -226,6 +226,75 @@ beforeEach(() => {
 });
 
 describe('TUI conversation layer', () => {
+  it.each(['chat', 'go', 'instruction'] as const)(
+    'should forward activity events in order during %s without duplicating text or forwarding settled events',
+    async (route) => {
+      const events: StreamEvent[] = [
+        { type: 'thinking', data: { thinking: 'private reasoning' } },
+        { type: 'tool_use', data: { id: 'read-1', tool: 'Read', input: { file_path: 'src/index.ts' } } },
+        { type: 'tool_output', data: { id: 'read-1', tool: 'Read', output: 'partial output' } },
+        { type: 'tool_result', data: { id: 'read-1', completedToolIds: ['read-1', 'read-2'], content: 'file content', isError: false } },
+        { type: 'text', data: { text: 'answer chunk' } },
+      ];
+      let stream: StreamCallback | undefined;
+      mockCallAIWithRetry.mockImplementationOnce((...args: unknown[]) => {
+        stream = (args[5] as CallAIOptions).onStream;
+        events.forEach((event) => stream?.(event));
+        return Promise.resolve({
+          result: { content: 'completed', sessionId: 'session-1', success: true },
+          sessionId: 'session-1',
+        });
+      });
+      const conversation = createConversation({ userMessage: 'seeded task' });
+      const onStreamEvent = vi.fn<StreamCallback>();
+      const onAssistantChunk = vi.fn<(chunk: string) => void>();
+      const input = {
+        text: route === 'go' ? '/go' : 'hello',
+        abortSignal: new AbortController().signal,
+        onAssistantChunk,
+        onStreamEvent,
+      };
+
+      await (route === 'instruction' ? conversation.createInstruction(input) : conversation.submit(input));
+
+      expect(onStreamEvent.mock.calls.map(([event]) => event)).toEqual(events);
+      expect(onAssistantChunk.mock.calls).toEqual([['answer chunk']]);
+      expect(lastCallOptions().outputMode).toBe('silent');
+      stream?.({ type: 'thinking', data: { thinking: 'late reasoning' } });
+      stream?.({ type: 'text', data: { text: 'late text' } });
+      stream?.(events[3]!);
+      expect(onStreamEvent.mock.calls.map(([event]) => event)).toEqual(events);
+      expect(onAssistantChunk.mock.calls).toEqual([['answer chunk']]);
+    },
+  );
+
+  it('should forward activity from both verify calls through the same submission', async () => {
+    const plan = createPlan();
+    const conversation = createConversation({
+      plan: { ...plan, strategy: { ...plan.strategy, formalSpec: true } },
+      persistSession: false,
+    });
+    const events: StreamEvent[] = [
+      { type: 'thinking', data: { thinking: 'generation reasoning' } },
+      { type: 'tool_use', data: { id: 'read-artifact', tool: 'Read', input: { file_path: 'spec.qnt' } } },
+      { type: 'tool_result', data: { id: 'read-artifact', completedToolIds: ['read-artifact', 'read-other'], content: 'spec contents', isError: false } },
+    ];
+    for (const [index, content] of ['```quint\nmodule agreement {}\n```', 'verification passed'].entries()) {
+      mockCallAIWithRetry.mockImplementationOnce((...args: unknown[]) => {
+        (args[5] as CallAIOptions).onStream?.(events[index]!);
+        if (index === 1) (args[5] as CallAIOptions).onStream?.(events[2]!);
+        return Promise.resolve({ result: { content, success: true, sessionId: 'verify-session' }, sessionId: 'verify-session' });
+      });
+    }
+    const onStreamEvent = vi.fn<StreamCallback>();
+    const input = { text: '/verify', abortSignal: new AbortController().signal, onAssistantChunk: vi.fn(), onStreamEvent };
+
+    const outcome = await conversation.submit(input);
+
+    expect(outcome).toMatchObject({ kind: 'assistant_response', content: expect.stringContaining('verification passed') });
+    expect(onStreamEvent.mock.calls.map(([event]) => event)).toEqual(events);
+  });
+
   it('should run the provider in silent mode and forward text chunks to the caller', async () => {
     const chunks: string[] = [];
 

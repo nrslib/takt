@@ -177,11 +177,15 @@ export async function runTuiConversation(
       <ConversationView
         ui={{
           thinking: getLabel('tui.ui.thinking', options.lang),
+          extendedThinking: getLabel('tui.ui.extendedThinking', options.lang),
+          responding: getLabel('tui.ui.responding', options.lang),
           hint: getLabel('tui.ui.hint', options.lang),
           placeholder: getLabel('tui.ui.placeholder', options.lang),
           queuedHint: getLabel('tui.ui.queuedHint', options.lang),
           queuedMore: getLabel('tui.ui.queuedMore', options.lang),
           interruptHint: getLabel('tui.ui.interruptHint', options.lang),
+          interruptHintCompact: getLabel('tui.ui.interruptHintCompact', options.lang),
+          interruptHintMinimal: getLabel('tui.ui.interruptHintMinimal', options.lang),
           responseInterrupted: getLabel('tui.ui.responseInterrupted', options.lang),
           instructionInterrupted: getLabel('tui.ui.instructionInterrupted', options.lang),
         }}
