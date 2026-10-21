@@ -13,6 +13,7 @@ import { connectManagerMcp } from './managerMcp.js';
 import { buildGoalTurnContext } from './turnContext.js';
 import { notifyManagerTurnFailure } from './turnFailureNotification.js';
 import { isGoalPatrolDue } from './patrol.js';
+import { supportsManagerPermissionJudge } from './permissionJudgeSupport.js';
 
 const MANAGER_TURN_TIMEOUT_MS = 30 * 60 * 1000;
 
@@ -25,7 +26,7 @@ export function createRunEventManager(cwd: string) {
     if (session !== undefined) return session;
     const plan = createManagerConversationPlan(cwd, {});
     mcp = await connectManagerMcp(cwd, undefined, plan.ctx.mcpServers, {
-      enableGoalExecutionTools: plan.ctx.providerType === 'claude' || plan.ctx.providerType === 'claude-sdk' || plan.ctx.providerType === 'codex',
+      enableGoalExecutionTools: supportsManagerPermissionJudge(plan.ctx.providerType),
     });
     try {
       await plan.ctx.provider.preflight?.({

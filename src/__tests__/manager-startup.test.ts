@@ -120,7 +120,7 @@ describe('manager startup and teardown', () => {
     expect(doubles.connect).not.toHaveBeenCalled();
   });
 
-  it.each(['claude', 'claude-sdk', 'codex', 'opencode', 'mock'] as const)('exposes goal execution only when the %s conversation has a permission judge', async (providerType) => {
+  it.each(['claude', 'claude-sdk', 'codex', 'opencode', 'mock', 'claude-headless', 'claude-terminal', 'cursor', 'copilot', 'kiro', 'pi', 'deepseek-harness'] as const)('exposes goal execution only when the %s conversation has a permission judge', async (providerType) => {
     const usesJudge = providerType === 'claude' || providerType === 'claude-sdk' || providerType === 'codex';
     doubles.plan.mockReturnValueOnce({
       ctx: { lang: 'ja', providerType, provider: { preflight: doubles.preflight } },
