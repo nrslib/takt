@@ -10,15 +10,22 @@ import { listPendingInquiries } from '../../infra/goals/pending-inquiries.js';
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
 import type { ManagerAssignment } from './startupResolution.js';
 import type { PendingQuestion } from './inquiryAnswer.js';
+import { formatPatrolSummary } from './goalDisplay.js';
 
 export type ManagerDisplayGoal = Pick<Goal, 'id' | 'objective' | 'status' | 'executionStatus'>;
 
-async function readRepositoryDisplayEvents(cwd: string, language: Language): Promise<{
-  events: { id: string; message: string }[]; diagnostics: { id: string; message: string }[];
+interface ManagerDisplayEvent {
+  id: string;
+  message: string;
+  suppressInitialDisplay?: true;
+}
+
+async function readRepositoryDisplayEvents(cwd: string, language: Language, startedAt: number | undefined): Promise<{
+  events: ManagerDisplayEvent[]; diagnostics: ManagerDisplayEvent[];
   goals: ManagerDisplayGoal[];
 }> {
-  const events: { id: string; message: string }[] = [];
-  const diagnostics: { id: string; message: string }[] = [];
+  const events: ManagerDisplayEvent[] = [];
+  const diagnostics: ManagerDisplayEvent[] = [];
   const displayGoals: ManagerDisplayGoal[] = [];
   const project = basename(cwd);
   const { notifications: policy } = resolveManagerConfig(cwd);
@@ -28,7 +35,9 @@ async function readRepositoryDisplayEvents(cwd: string, language: Language): Pro
     for (const goal of goals) {
       events.push(...goal.workLog.map((record) => ({
         id: JSON.stringify([goal.id, 'work-log', record.id]),
-        message: `${goal.id}: ${record.summary}`,
+        message: `${goal.id}: ${record.kind === 'patrol' ? formatPatrolSummary(record.summary) : record.summary}`,
+        ...(startedAt !== undefined && Date.parse(record.recordedAt) < startedAt
+          ? { suppressInitialDisplay: true as const } : {}),
       })));
       events.push(...(goal.notifications ?? []).filter((notification) => policy[notification.kind]).map((notification) => ({
         id: JSON.stringify([goal.id, 'notification', notification.id]), message: formatGoalNotification(goal, notification, language, project, 'tui'),
@@ -46,11 +55,14 @@ async function readRepositoryDisplayEvents(cwd: string, language: Language): Pro
 }
 
 export async function readManagerDisplayEvents(cwd: string, language: Language = resolveConfigValue(cwd, 'language'),
-  assignment: ManagerAssignment = { kind: 'repository', repositoryDirectory: cwd, repositoryDirectories: [cwd] }): Promise<{
-    events: { id: string; message: string }[]; diagnostics: { id: string; message: string }[];
+  assignment: ManagerAssignment = { kind: 'repository', repositoryDirectory: cwd, repositoryDirectories: [cwd] },
+  startupBoundaries?: ReadonlyMap<string, number>): Promise<{
+    events: ManagerDisplayEvent[]; diagnostics: ManagerDisplayEvent[];
     questions: PendingQuestion[]; goals: ManagerDisplayGoal[];
   }> {
-  const snapshots = await Promise.all(assignment.repositoryDirectories.map((directory) => readRepositoryDisplayEvents(directory, language)));
+  const snapshots = await Promise.all(assignment.repositoryDirectories.map((directory) => readRepositoryDisplayEvents(
+    directory, language, startupBoundaries?.get(directory),
+  )));
   const diagnostics = snapshots.flatMap((snapshot) => snapshot.diagnostics);
   const questions: PendingQuestion[] = [];
   try {

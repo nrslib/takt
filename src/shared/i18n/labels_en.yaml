@@ -461,10 +461,14 @@ manager:
   goalResumed: "Goal resumed: {goalId}"
   goalExecutionFailed: "Could not change the goal execution state: {reason}"
   pausedGoals: "Paused goals"
+  goalStatuses: "Goal statuses"
+  goalPendingInquiries: "Pending: {count}"
   goalStates:
     active: "Active"
     paused: "Paused"
     aborted: "Aborted"
+    awaiting_merge: "Awaiting merge"
+    completed: "Completed"
   resumeHint: "Resume: /resume"
   pendingInquiries: "Pending inquiries: {count}"
   inquiryKinds:

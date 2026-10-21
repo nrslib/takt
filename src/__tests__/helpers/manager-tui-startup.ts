@@ -11,6 +11,36 @@ import { getLabel } from '../../shared/i18n/index.js';
 import { goalRecord } from './goal-fixtures.js';
 
 describe('manager TUI startup and polling', () => {
+  it.each([false, true])('waits for the initial display snapshot before submitting queued input with startup=%s', async (withStartup) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const startedAt = Date.parse('2026-10-21T10:00:00Z');
+    vi.setSystemTime(startedAt);
+    const snapshot = { events: [], diagnostics: [], questions: [], goals: [] };
+    const initial = deferred<Awaited<ReturnType<typeof savedEvents.readManagerDisplayEvents>>>();
+    const read = vi.spyOn(savedEvents, 'readManagerDisplayEvents')
+      .mockResolvedValue(snapshot).mockReturnValueOnce(initial.promise);
+    const startup = { run: vi.fn(async () => [] as string[]), fail: vi.fn() };
+    const context = mount('en', withStartup ? startup : undefined);
+    context.call.mockResolvedValue(response(null));
+    try {
+      await waitFor(() => expect(read).toHaveBeenCalledOnce());
+      const startupBoundary = read.mock.calls[0]![3];
+      expect(startupBoundary).toEqual(new Map([[cwd, startedAt]]));
+      await typeAndSubmit(context, 'request during initial display read');
+      await waitFor(() => expect(queuedFrame(context)).toContain('request during initial display read'));
+      expect(context.call).not.toHaveBeenCalled();
+      expect(read).toHaveBeenCalledOnce();
+      initial.resolve(snapshot);
+      await waitFor(() => expect(context.call).toHaveBeenCalledExactlyOnceWith('request during initial display read', expect.any(Object)));
+      for (const call of read.mock.calls.slice(1)) expect(call[3]).toEqual(startupBoundary);
+      expect(startup.fail).not.toHaveBeenCalled();
+    } finally {
+      initial.resolve(snapshot);
+      context.app.unmount();
+      await context.session.close();
+    }
+  });
+
   it('shows the draft and its cursor during startup recovery and keeps the draft after completion', async () => {
     const recovery = deferred<readonly string[]>();
     const startup = { run: vi.fn(() => recovery.promise), fail: vi.fn() };
@@ -323,7 +353,7 @@ describe('manager TUI startup and polling', () => {
     const readEvents = vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], questions: [], goals: [] });
     const context = mount('en', undefined, repository);
     try {
-      await waitFor(() => expect(readEvents).toHaveBeenCalledWith(cwd, 'en', repository));
+      await waitFor(() => expect(readEvents.mock.calls.map((call) => call.slice(0, 3))).toContainEqual([cwd, 'en', repository]));
       context.call.mockImplementationOnce(async (_prompt, options) => {
         options.onStream?.({ type: 'tool_use', data: { id: 'add-b', tool: 'takt_add_workspace_repository', input: { repositoryDirectory: repositoryB } } });
         savedWorkspace = workspace;
@@ -336,7 +366,9 @@ describe('manager TUI startup and polling', () => {
       await waitFor(() => expect(promptFrame(context)).toContain('add B and remove A'));
       context.app.stdin.write(ENTER);
       await waitFor(() => expect(context.app.lastFrame()).toContain('A + B (1)'));
-      expect(readEvents).toHaveBeenCalledWith(cwd, 'en', expect.objectContaining({ repositoryDirectories: [repositoryB] }));
+      expect(readEvents.mock.calls.map((call) => call.slice(0, 3))).toContainEqual([
+        cwd, 'en', expect.objectContaining({ repositoryDirectories: [repositoryB] }),
+      ]);
       expect(readEvents.mock.calls.every(([directory, language, assignment]) =>
         directory === cwd && language === 'en' && assignment?.repositoryDirectories.length === 1
         && assignment.repositoryDirectories[0] === repositoryB)).toBe(true);
@@ -523,11 +555,15 @@ describe('manager TUI startup and polling', () => {
 
 });
 it('displays run manager work records without processing inbox events and informs the next human turn', async () => {
+  const readEvents = vi.spyOn(savedEvents, 'readManagerDisplayEvents');
   const context = mount('ja');
   context.call.mockResolvedValue(response(null));
   try {
+    await waitFor(() => expect(readEvents).toHaveBeenCalled());
+    await readEvents.mock.results[0]!.value;
+    await waitFor(() => expect(context.app.lastFrame()).not.toContain('処理中'));
     inbox.read.mockReturnValue([{ filePath: '/inbox/1.json', event: { kind: 'registered', goalId: goalRecord().id, createdAt: '2026-10-14T00:00:00Z' } }]);
-    const record = { id: '550e8400-e29b-41d4-a716-446655440005', recordedAt: '2026-10-14T00:00:00Z', summary: 'task-X を取り込み、task-Y を投入しました' };
+    const record = { id: '550e8400-e29b-41d4-a716-446655440005', recordedAt: new Date().toISOString(), summary: 'task-X を取り込み、task-Y を投入しました' };
     memory.goals.mockReturnValue([{ ...goalRecord(), workLog: [record] }]);
     await waitFor(() => expect(context.app.lastFrame()).toContain(record.summary));
     expect(context.call).not.toHaveBeenCalled();

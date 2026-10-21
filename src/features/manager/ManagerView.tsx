@@ -9,6 +9,7 @@ import { ManagerQueuedMessages } from './ManagerQueuedMessages.js';
 import { ManagerAbortedGoals } from './ManagerAbortedGoals.js';
 import { ManagerPausedGoals } from './ManagerPausedGoals.js';
 import { ManagerPendingQuestions } from './ManagerPendingQuestions.js';
+import { ManagerGoalStatuses } from './ManagerGoalStatuses.js';
 import { ManagerAnswerDialog } from './ManagerAnswerDialog.js';
 import { ManagerAbortDialog } from './ManagerAbortDialog.js';
 import { ManagerSummaryDialog } from './ManagerSummaryDialog.js';
@@ -49,7 +50,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
     role: 'assistant', content: toDisplayText(content),
   })));
   const [approve, setApprove] = useState(false);
-  const [busy, setBusy] = useState(startup !== undefined);
+  const [busy, setBusy] = useState(true);
   const [questions, setQuestions] = useState<PendingQuestion[]>([]);
   const [goals, setGoals] = useState<ManagerDisplayGoal[]>([]);
   const displaySnapshot = useRef({ assignment: currentAssignment, questions, goals });
@@ -58,7 +59,9 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   const registering = useRef(false);
   const selected = useRef(false);
   const mounted = useRef(true);
-  const starting = useRef(startup !== undefined);
+  const starting = useRef(true);
+  const [startedAt] = useState(() => Date.now());
+  const startupBoundaries = useRef<ReadonlyMap<string, number>>(new Map());
   const exiting = useRef(false);
   const displayed = useRef(new Set<string>());
   const lastRefreshError = useRef<string | undefined>(undefined);
@@ -81,30 +84,35 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   useEffect(() => {
     mounted.current = true;
     void (async () => {
-      if (startup !== undefined) {
-        const controller = new AbortController();
-        active.current = controller;
-        try {
-          // Flush the experimental and cost notices before starting background work.
-          await waitUntilRenderFlush();
-          if (!mounted.current || controller.signal.aborted) return;
-          const diagnostics = await startup.run(controller.signal);
-          if (!mounted.current || controller.signal.aborted) return;
-          for (const diagnostic of diagnostics) append(diagnostic);
-        } catch (error) {
-          if (!controller.signal.aborted) {
-            exiting.current = true;
-            setQueued([]);
-            startup.fail(error);
+      try {
+        const resolved = await session.getAssignment();
+        startupBoundaries.current = new Map((resolved?.repositoryDirectories ?? [cwd]).map((directory) => [directory, startedAt]));
+        if (startup !== undefined) {
+          const controller = new AbortController();
+          active.current = controller;
+          try {
+            // Flush the experimental and cost notices before starting background work.
+            await waitUntilRenderFlush();
+            if (!mounted.current || controller.signal.aborted) return;
+            const diagnostics = await startup.run(controller.signal);
+            if (!mounted.current || controller.signal.aborted) return;
+            for (const diagnostic of diagnostics) append(diagnostic);
+          } catch (error) {
+            if (!controller.signal.aborted) {
+              exiting.current = true;
+              setQueued([]);
+              startup.fail(error);
+            }
+            return;
+          } finally {
+            if (active.current === controller) active.current = null;
           }
-          return;
-        } finally {
-          if (active.current === controller) active.current = null;
-          starting.current = false;
-          if (mounted.current) setBusy(false);
         }
+        await refreshEvents();
+      } finally {
+        starting.current = false;
+        if (mounted.current) setBusy(false);
       }
-      await refreshEvents();
     })().catch(reportRefreshError);
     return () => { mounted.current = false; active.current?.abort(); };
   }, []);
@@ -127,7 +135,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   };
   const refreshEvents = async (): Promise<{ questions: PendingQuestion[]; goals: ManagerDisplayGoal[] }> => {
     const resolved = await session.getAssignment();
-    const snapshot = await readManagerDisplayEvents(cwd, lang, resolved);
+    const snapshot = await readManagerDisplayEvents(cwd, lang, resolved, startupBoundaries.current);
     const savedQuestions = snapshot.questions;
     const savedGoals = snapshot.goals;
     if (mounted.current) {
@@ -141,7 +149,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
       const id = JSON.stringify([cwd, event.id]);
       if (displayed.current.has(id) || !mounted.current) continue;
       displayed.current.add(id);
-      append(event.message);
+      if (!event.suppressInitialDisplay) append(event.message);
     }
     lastRefreshError.current = undefined;
     return { questions: savedQuestions, goals: savedGoals };
@@ -328,6 +336,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
           ? `${assignment.name} (${assignment.repositoryDirectories.length})` : basename(cwd))}</Text>
       <Text dimColor>{toDisplayText(cwd)}</Text>
       <TranscriptView entries={entries} userMessageColors={FALLBACK_USER_MESSAGE_COLORS} />
+      <ManagerGoalStatuses goals={goals} questions={questions} lang={lang} />
       {queued.length > 0 && <ManagerQueuedMessages queued={queued} ja={ja} />}
       {goals.some((goal) => goal.executionStatus === 'aborted') && <ManagerAbortedGoals goals={goals} lang={lang} />}
       {goals.some(isGoalPaused) && <ManagerPausedGoals goals={goals} lang={lang} />}
