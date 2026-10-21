@@ -184,6 +184,8 @@ export async function runTuiConversation(
           queuedHint: getLabel('tui.ui.queuedHint', options.lang),
           queuedMore: getLabel('tui.ui.queuedMore', options.lang),
           interruptHint: getLabel('tui.ui.interruptHint', options.lang),
+          interruptHintCompact: getLabel('tui.ui.interruptHintCompact', options.lang),
+          interruptHintMinimal: getLabel('tui.ui.interruptHintMinimal', options.lang),
           responseInterrupted: getLabel('tui.ui.responseInterrupted', options.lang),
           instructionInterrupted: getLabel('tui.ui.instructionInterrupted', options.lang),
         }}

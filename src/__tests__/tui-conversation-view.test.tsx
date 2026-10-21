@@ -79,6 +79,8 @@ const UI: ConversationUiText = {
   extendedThinking: 'Reasoning...',
   responding: 'Responding',
   interruptHint: getLabel('tui.ui.interruptHint', 'en'),
+  interruptHintCompact: getLabel('tui.ui.interruptHintCompact', 'en'),
+  interruptHintMinimal: getLabel('tui.ui.interruptHintMinimal', 'en'),
   responseInterrupted: getLabel('tui.ui.responseInterrupted', 'en'),
   instructionInterrupted: getLabel('tui.ui.instructionInterrupted', 'en'),
   queuedHint: getLabel('tui.ui.queuedHint', 'en'),
@@ -766,7 +768,9 @@ describe('TranscriptEntryView', () => {
           expect(countOccurrences(buffer, '╰'), buffer).toBe(1);
           expect(statusRows(buffer), buffer).toHaveLength(busy ? 1 : 0);
           if (busy && columns >= 32) {
-            expect(statusRows(buffer)[0]).toContain(UI.interruptHint);
+            expect(statusRows(buffer)[0]).toContain(columns === 32 ? UI.interruptHintCompact : UI.interruptHint);
+            expect(statusRows(buffer)[0]).toContain(UI.thinking);
+            expect(statusRows(buffer)[0]).toMatch(/\b\d+s\b/);
           }
           expect(buffer).toContain('SHELL_MARKER');
           expect(buffer.replace(/\s/g, '')).toContain('committedhistorymarker');
@@ -1017,7 +1021,10 @@ describe('TranscriptEntryView', () => {
       expect(narrowScreen).toContain('↑ 1');
       expect(countOccurrences(narrowScreen, visiblePromptLine(pendingPrompt, pendingPrompt.length, narrowColumns))).toBe(1);
       expect(statusRows(narrowScreen)).toHaveLength(1);
-      expect(statusRows(narrowScreen)[0]).toContain(UI.interruptHint);
+      expect(statusRows(narrowScreen)[0]).toContain(UI.thinking);
+      expect(statusRows(narrowScreen)[0]).toMatch(/\b\d+s\b/);
+      expect(statusRows(narrowScreen)[0]).toContain(UI.interruptHintCompact);
+      expect(stringWidth(statusRows(narrowScreen)[0]!)).toBeLessThanOrEqual(narrowColumns);
       expect(statusRows(getTerminalText(terminal))).toHaveLength(1);
 
       terminal.resize(wideColumns, stdout.rows);
@@ -1033,6 +1040,8 @@ describe('TranscriptEntryView', () => {
       expect(countOccurrences(wideScreen, visiblePromptLine(pendingPrompt, pendingPrompt.length, wideColumns))).toBe(1);
       expect(wideScreen).not.toContain('↑ ');
       expect(countOccurrences(wideScreen, UI.thinking)).toBe(1);
+      expect(statusRows(wideScreen)[0]).toMatch(/\b\d+s\b/);
+      expect(statusRows(wideScreen)[0]).toContain(UI.interruptHint);
       expect(countOccurrences(getTerminalText(terminal), UI.thinking)).toBe(1);
 
       // A burst finishing at the original width must not draw intermediate frames
@@ -1709,6 +1718,47 @@ describe('ConversationView activity status', () => {
     }
   });
 
+  describe.each(['chat', 'summarize'] as const)('parallel tool results in %s mode', (submitMode) => {
+    it.each([
+      { first: 'A', remaining: 'B', tool: 'Edit', path: 'b.ts', isError: false, repetition: 1 },
+      { first: 'B', remaining: 'A', tool: 'Read', path: 'a.ts', isError: false, repetition: 1 },
+      { first: 'A', remaining: 'B', tool: 'Edit', path: 'b.ts', isError: false, repetition: 2 },
+      { first: 'B', remaining: 'A', tool: 'Read', path: 'a.ts', isError: false, repetition: 2 },
+      { first: 'B', remaining: 'A', tool: 'Read', path: 'a.ts', isError: true, repetition: 1 },
+    ])('should show the unfinished tool after $first completes (error=$isError, repetition=$repetition)', async ({ first, remaining, tool, path, isError }) => {
+      vi.useFakeTimers({ toFake: ['Date', 'performance', 'setInterval', 'clearInterval'] });
+      vi.setSystemTime(new Date('2026-10-16T00:00:00Z'));
+      const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+      const app = renderConversation(conversation, submitMode, vi.fn());
+      try {
+        await begin(app);
+        const input = (submitMode === 'chat' ? conversation.submitCalls : conversation.instructionCalls)[0];
+        emit(input, { type: 'tool_use', data: { id: 'A', tool: 'Read', input: { file_path: 'a.ts' } } });
+        await flushFrames();
+        expect(status(app)).toContain(`Read 0s ${UI.interruptHint} a.ts`);
+        emit(input, { type: 'tool_use', data: { id: 'B', tool: 'Edit', input: { file_path: 'b.ts' } } });
+        await flushFrames();
+        expect(status(app)).toContain(`Edit 0s ${UI.interruptHint} b.ts`);
+
+        emit(input, { type: 'tool_result', data: { id: first, content: 'PRIVATE_RESULT', isError } });
+        await flushFrames();
+        expect(status(app)).toContain(`${tool} 0s ${UI.interruptHint} ${path}`);
+        expect(status(app)).not.toContain(UI.thinking);
+        expect(status(app)).not.toContain('PRIVATE_RESULT');
+
+        emit(input, { type: 'tool_result', data: { id: remaining, content: 'done', isError: false } });
+        await flushFrames();
+        expect(status(app)).toContain(`${UI.thinking} 0s ${UI.interruptHint}`);
+        for (const finished of ['Read', 'Edit', 'a.ts', 'b.ts']) {
+          expect(status(app)).not.toContain(finished);
+        }
+      } finally {
+        app.unmount();
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe.each(['chat', 'summarize'] as const)('Claude tool results in %s mode', (submitMode) => {
     it.each([
       { name: 'A and B results', ids: ['A', 'B'], completed: true },
@@ -1752,6 +1802,66 @@ describe('ConversationView activity status', () => {
         app.unmount();
       }
     });
+  });
+
+  it('should complete only the displayed tool when a result has no id', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    try {
+      await begin(app);
+      const input = conversation.submitCalls[0];
+      emit(input, { type: 'tool_use', data: { id: 'A', tool: 'Read', input: { file_path: 'a.ts' } } });
+      emit(input, { type: 'tool_use', data: { id: 'B', tool: 'Edit', input: { file_path: 'b.ts' } } });
+      await flushFrames();
+      expect(status(app)).toContain('b.ts');
+      emit(input, { type: 'tool_result', data: { content: 'done', isError: false } });
+      await flushFrames();
+      expect(status(app)).toContain('Read');
+      expect(status(app)).toContain('a.ts');
+      emit(input, { type: 'tool_result', data: { id: 'A', content: 'done', isError: false } });
+      await flushFrames();
+      expect(status(app)).toContain(UI.thinking);
+    } finally {
+      app.unmount();
+    }
+  });
+
+  it.each(['thinking', 'responding'] as const)('should retain %s while removing late tool results', async (kind) => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    const expectedLabel = kind === 'thinking' ? UI.extendedThinking : UI.responding;
+    try {
+      await begin(app);
+      const input = conversation.submitCalls[0];
+      emit(input, { type: 'tool_use', data: { id: 'A', tool: 'Read', input: { file_path: 'a.ts' } } });
+      emit(input, { type: 'tool_use', data: { id: 'B', tool: 'Edit', input: { file_path: 'b.ts' } } });
+      if (kind === 'thinking') {
+        emit(input, { type: 'thinking', data: { thinking: 'PRIVATE_THOUGHT' } });
+      } else {
+        input!.onAssistantChunk('visible response tail');
+      }
+      await flushFrames();
+      expect(status(app)).toContain(expectedLabel);
+      emit(input, { type: 'tool_result', data: { id: 'B', content: 'PRIVATE_RESULT', isError: false } });
+      await flushFrames();
+      expect(status(app)).toContain(expectedLabel);
+      if (kind === 'responding') expect(status(app)).toContain('visible response tail');
+      for (const hidden of ['a.ts', 'b.ts', 'PRIVATE_THOUGHT', 'PRIVATE_RESULT']) {
+        expect(status(app)).not.toContain(hidden);
+      }
+
+      emit(input, { type: 'tool_use', data: { id: 'C', tool: 'Write', input: { file_path: 'c.ts' } } });
+      emit(input, { type: 'tool_result', data: { id: 'C', content: 'done', isError: false } });
+      await flushFrames();
+      expect(status(app)).toContain('Read');
+      expect(status(app)).toContain('a.ts');
+      expect(status(app)).not.toContain('b.ts');
+      emit(input, { type: 'tool_result', data: { id: 'A', content: 'done', isError: false } });
+      await flushFrames();
+      expect(status(app)).toContain(UI.thinking);
+    } finally {
+      app.unmount();
+    }
   });
 
   it('should keep the latest tool until its own result arrives, including a result without an id', async () => {
@@ -1932,6 +2042,13 @@ describe('ConversationView activity status', () => {
       app.stdin.write(ENTER);
       await flushFrames();
       const current = conversation.submitCalls[1];
+      expect(status(app)).toContain(UI.thinking);
+      expect(status(app)).toMatch(/\b0s\b/);
+      emit(current, { type: 'tool_use', data: { id: 'new', tool: 'Edit', input: { file_path: 'new.ts' } } });
+      emit(current, { type: 'tool_result', data: { id: 'new', content: 'done', isError: false } });
+      await flushFrames();
+      expect(status(app)).toContain(UI.thinking);
+      expect(status(app)).not.toContain('old.ts');
       current!.onAssistantChunk('accepted tail');
       await flushFrames();
       expect(status(app)).toContain(UI.responding);
@@ -1951,6 +2068,179 @@ describe('ConversationView activity status', () => {
     } finally {
       app.unmount();
     }
+  });
+
+  describe.each(['chat', 'summarize'] as const)('short tool activity width in %s mode', (submitMode) => {
+    it.each(['en', 'ja'] as const)('should preserve the tool name start, elapsed time and Esc across resizes in %s', async (lang) => {
+      vi.useFakeTimers({ toFake: ['Date', 'performance', 'setInterval', 'clearInterval'] });
+      const ui = {
+        ...UI,
+        interruptHint: getLabel('tui.ui.interruptHint', lang),
+        interruptHintCompact: getLabel('tui.ui.interruptHintCompact', lang),
+        interruptHintMinimal: getLabel('tui.ui.interruptHintMinimal', lang),
+      };
+      const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+      const stdout = new ResizableOutput(60, 14);
+      const input = createTestInput();
+      const terminal = new Terminal({ allowProposedApi: true, cols: 60, rows: 14, convertEol: true });
+      const app = renderInk(<ConversationView
+        ui={ui} lang={lang} conversation={conversation} userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
+        initialEntries={[]} submitMode={submitMode} autoSubmit={false} initialHistory={[]}
+        initialDraft={undefined} initialQueue={[]} residentSession={false}
+        modelLabel={() => MODEL_LABEL} onExit={() => undefined}
+      />, {
+        stdout: stdout as unknown as NodeJS.WriteStream,
+        stderr: new PassThrough() as unknown as NodeJS.WriteStream,
+        stdin: input, exitOnCtrlC: false, interactive: true, patchConsole: false,
+      });
+      let processed = 0;
+      async function currentStatus(): Promise<string> {
+        await app.waitUntilRenderFlush();
+        await writeTerminalFrames(terminal, stdout.frames.slice(processed));
+        processed = stdout.frames.length;
+        const rows = statusRows(getTerminalText(terminal));
+        expect(rows).toHaveLength(1);
+        expect(stringWidth(rows[0]!)).toBeLessThanOrEqual(stdout.columns);
+        return rows[0]!;
+      }
+      async function resize(columns: number): Promise<void> {
+        const offset = stdout.frames.length;
+        terminal.resize(columns, 14);
+        stdout.resize(columns);
+        await waitForOutput(stdout, () => stdout.frames.slice(offset).join('').includes('╰'), 'resized tool activity');
+      }
+      try {
+        await flushFrames();
+        input.write('hello');
+        await flushFrames();
+        input.write(ENTER);
+        await flushFrames();
+        const calls = submitMode === 'chat' ? conversation.submitCalls : conversation.instructionCalls;
+        const otherCalls = submitMode === 'chat' ? conversation.instructionCalls : conversation.submitCalls;
+        expect(calls).toHaveLength(1);
+        expect(otherCalls).toHaveLength(0);
+        const submission = calls[0];
+        emit(submission, { type: 'tool_use', data: { id: 'read', tool: 'Read', input: { file_path: 'a.ts' } } });
+        await flushFrames();
+        expect(await currentStatus()).toContain(`Read 0s ${ui.interruptHint} a.ts`);
+        emit(submission, { type: 'tool_use', data: { id: 'edit', tool: 'Edit', input: { file_path: 'b.ts' } } });
+        await flushFrames();
+        expect(await currentStatus()).toContain(`Edit 0s ${ui.interruptHint} b.ts`);
+        emit(submission, { type: 'tool_result', data: { id: 'edit', content: 'done', isError: false } });
+        await flushFrames();
+        expect(await currentStatus()).toContain(`Read 0s ${ui.interruptHint} a.ts`);
+        for (const columns of [21, 17, 14]) {
+          await resize(columns);
+          const row = await currentStatus();
+          expect(row).toMatch(/^\S R/u);
+          expect(row).toContain(' 0s ');
+          expect(row).toContain('Esc');
+          expect(row).not.toContain('a.ts');
+          if (columns === 21) expect(row).toContain(`0s ${ui.interruptHintCompact}`);
+        }
+        vi.advanceTimersByTime(62_000);
+        await flushFrames();
+        for (const columns of [14, 17]) {
+          if (stdout.columns !== columns) await resize(columns);
+          const row = await currentStatus();
+          expect(row).toMatch(/^\S R/u);
+          expect(row).toContain(' 1m02s ');
+          expect(row).toContain('Esc');
+          expect(row).not.toContain('a.ts');
+        }
+        await resize(60);
+        expect(await currentStatus()).toContain(`Read 1m02s ${ui.interruptHint} a.ts`);
+        expect(submission!.abortSignal.aborted).toBe(false);
+      } finally {
+        app.unmount();
+        await app.waitUntilExit();
+        app.cleanup();
+        terminal.dispose();
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  describe.each(['chat', 'summarize'] as const)('MCP activity width in %s mode', (submitMode) => {
+    it.each([
+      { tool: 'takt_takt_list_tasks', narrowName: 'takt_takt_list…', secondsName: 'takt_takt_lis…', minutesName: 'takt_takt_l…' },
+      { tool: 'takt_takt_get_run', narrowName: 'takt_takt_get_…', secondsName: 'takt_takt_get…', minutesName: 'takt_takt_g…' },
+    ])('should preserve the start of $tool, elapsed time and the complete hint across resizes', async ({ tool, narrowName, secondsName, minutesName }) => {
+      vi.useFakeTimers({ toFake: ['Date', 'performance', 'setInterval', 'clearInterval'] });
+      const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+      const stdout = new ResizableOutput(60, 14);
+      const input = createTestInput();
+      const terminal = new Terminal({ allowProposedApi: true, cols: 60, rows: 14, convertEol: true });
+      const app = renderInk(<ConversationView
+        ui={UI} lang="en" conversation={conversation} userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
+        initialEntries={[]} submitMode={submitMode} autoSubmit={false} initialHistory={[]}
+        initialDraft={undefined} initialQueue={[]} residentSession={false}
+        modelLabel={() => MODEL_LABEL} onExit={() => undefined}
+      />, {
+        stdout: stdout as unknown as NodeJS.WriteStream,
+        stderr: new PassThrough() as unknown as NodeJS.WriteStream,
+        stdin: input, exitOnCtrlC: false, interactive: true, patchConsole: false,
+      });
+      let processed = 0;
+      async function currentStatus(): Promise<string> {
+        await app.waitUntilRenderFlush();
+        await writeTerminalFrames(terminal, stdout.frames.slice(processed));
+        processed = stdout.frames.length;
+        const rows = statusRows(getTerminalText(terminal));
+        expect(rows).toHaveLength(1);
+        expect(stringWidth(rows[0]!)).toBeLessThanOrEqual(stdout.columns);
+        return rows[0]!;
+      }
+      try {
+        await flushFrames();
+        input.write('hello');
+        await flushFrames();
+        input.write(ENTER);
+        await flushFrames();
+        const submission = (submitMode === 'chat' ? conversation.submitCalls : conversation.instructionCalls)[0];
+        emit(submission, { type: 'tool_use', data: { id: 'mcp', tool, input: {} } });
+        await flushFrames();
+        expect(await currentStatus()).toContain(`${tool} 0s ${UI.interruptHint}`);
+        const fullWidth = stringWidth(`⠋ ${tool} 0s ${UI.interruptHint}`);
+        const compactWidth = stringWidth(`⠋ ${tool} 0s ${UI.interruptHintCompact}`);
+        for (const columns of [fullWidth, fullWidth - 1, compactWidth, compactWidth - 1, 32]) {
+          terminal.resize(columns, 14);
+          stdout.resize(columns);
+          await flushFrames();
+          const row = await currentStatus();
+          expect(row).toContain(`0s ${columns < fullWidth ? UI.interruptHintCompact : UI.interruptHint}`);
+          if (columns >= compactWidth) {
+            expect(row).toContain(tool);
+          } else {
+            const expectedName = columns === 32 ? narrowName : `${tool.slice(0, -2)}…`;
+            expect(row).toContain(`${expectedName} 0s ${UI.interruptHintCompact}`);
+          }
+        }
+        for (const [advance, elapsed] of [[58_000, '58s'], [4_000, '1m02s']] as const) {
+          vi.advanceTimersByTime(advance);
+          await flushFrames();
+          const row = await currentStatus();
+          expect(row).toContain(`${elapsed === '58s' ? secondsName : minutesName} ${elapsed} ${UI.interruptHintCompact}`);
+        }
+        terminal.resize(60, 14);
+        stdout.resize(60);
+        await flushFrames();
+        expect(await currentStatus()).toContain(`${tool} 1m02s ${UI.interruptHint}`);
+        expect(submission!.abortSignal.aborted).toBe(false);
+        input.write(ESC);
+        await flushFrames();
+        await app.waitUntilRenderFlush();
+        await writeTerminalFrames(terminal, stdout.frames.slice(processed));
+        expect(statusRows(getTerminalText(terminal))).toEqual([]);
+        expect(submission!.abortSignal.aborted).toBe(true);
+      } finally {
+        app.unmount();
+        await app.waitUntilExit();
+        app.cleanup();
+        terminal.dispose();
+        vi.useRealTimers();
+      }
+    });
   });
 
   it('should update a single terminal row without leaving activity or prompt residue in scrollback', async () => {
@@ -1989,6 +2279,7 @@ describe('ConversationView activity status', () => {
       expect(countOccurrences(buffer, UI.interruptHint)).toBe(1);
       const submission = conversation.submitCalls[0];
       const events: StreamEvent[] = [
+        { type: 'tool_use', data: { id: 'short-read', tool: 'Read', input: { file_path: 'a.ts' } } },
         { type: 'tool_use', data: { id: 'long-read', tool: 'Read\x1b[2J\n', input: { file_path: `日本語\n${'very-long-path/'.repeat(30)}END_OF_PATH` } } },
         { type: 'tool_result', data: { id: 'long-read', content: 'PRIVATE_RESULT', isError: false } },
         { type: 'thinking', data: { thinking: 'PRIVATE_THOUGHT' } },
@@ -2003,7 +2294,15 @@ describe('ConversationView activity status', () => {
         expect(countOccurrences(buffer, '│ ❯')).toBe(1);
         expect(statusRows(buffer)[0]).toContain(UI.interruptHint);
         if (event.type === 'tool_use') {
-          expect(statusRows(buffer)[0]).toContain('Read');
+          expect(statusRows(buffer)[0]).toMatch(/^\S Read \d+s /u);
+          const row = statusRows(buffer)[0]!;
+          expect(row.indexOf(UI.interruptHint)).toBeLessThan(row.indexOf(event.data.id === 'short-read' ? 'a.ts' : '日本語'));
+          expect(row).toContain(event.data.id === 'short-read' ? 'a.ts' : '日本語');
+          if (event.data.id === 'long-read') expect(row).toMatch(/…$/);
+        }
+        if (event.type === 'tool_result') {
+          expect(statusRows(buffer)[0]).toContain(`Read 3s ${UI.interruptHint} a.ts`);
+          expect(statusRows(buffer)[0]).not.toContain('日本語');
         }
         expect(stringWidth(statusRows(buffer)[0]!)).toBeLessThanOrEqual(48);
         for (const forbidden of ['END_OF_PATH', 'PRIVATE_RESULT', 'PRIVATE_THOUGHT']) {
@@ -2035,7 +2334,31 @@ describe('ConversationView activity status', () => {
   });
 
   it.each(['en', 'ja'] as const)('should render the resolved activity labels through the runner in %s', async (lang) => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setInterval', 'clearInterval'] });
     const terminal = installProcessPseudoTerminal(24);
+    terminal.stdout.resize(60);
+    const screen = new Terminal({ allowProposedApi: true, cols: 60, rows: 24, convertEol: true });
+    let processed = 0;
+    async function currentStatus(): Promise<string> {
+      await writeTerminalFrames(screen, terminal.stdout.frames.slice(processed));
+      processed = terminal.stdout.frames.length;
+      const rows = statusRows(getTerminalText(screen));
+      expect(rows).toHaveLength(1);
+      expect(stringWidth(rows[0]!)).toBeLessThanOrEqual(terminal.stdout.columns);
+      return rows[0]!;
+    }
+    async function resize(columns: number): Promise<void> {
+      const offset = terminal.stdout.frames.length;
+      screen.resize(columns, 24);
+      terminal.stdout.resize(columns);
+      await waitForOutput(terminal.stdout, () => terminal.stdout.frames.slice(offset).join('').includes('╰'), 'resized localized activity');
+    }
+    async function expectNarrowActivity(label: string, elapsed: string): Promise<void> {
+      const row = await currentStatus();
+      expect(row.slice(2).startsWith(label[0]!)).toBe(true);
+      expect(row).toContain(` ${elapsed} `);
+      expect(row).toContain('Esc');
+    }
     const cwd = mkdtempSync(join(tmpdir(), 'takt-activity-labels-'));
     const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
     const run = runTuiConversation({
@@ -2052,17 +2375,112 @@ describe('ConversationView activity status', () => {
       await flushFrames();
       terminal.stdin.write(ENTER);
       await flushFrames();
+      const thinking = getLabel('tui.ui.thinking', lang);
+      const hint = getLabel('tui.ui.interruptHint', lang);
+      const compactHint = getLabel('tui.ui.interruptHintCompact', lang);
+      expect(await currentStatus()).toContain(`${thinking} 0s ${hint}`);
+      const fullWidth = stringWidth(`⠋ ${thinking} 0s ${hint}`);
+      for (const columns of [fullWidth, fullWidth - 1, 32]) {
+        const offset = terminal.stdout.frames.length;
+        const expected = `${thinking} 0s ${columns < fullWidth ? compactHint : hint}`;
+        screen.resize(columns, 24);
+        terminal.stdout.resize(columns);
+        await waitForOutput(terminal.stdout, () => stripAnsi(terminal.stdout.frames.slice(offset).join(''))
+          .includes(expected), 'localized resized activity');
+        expect(await currentStatus()).toContain(expected);
+      }
+      for (const columns of [17, 14]) {
+        await resize(columns);
+        await expectNarrowActivity(thinking, '0s');
+      }
+      await resize(60);
+      expect(await currentStatus()).toContain(`${thinking} 0s ${hint}`);
+      await resize(14);
+      for (const [advance, elapsed] of [[58_000, '58s'], [4_000, '1m02s']] as const) {
+        vi.advanceTimersByTime(advance);
+        await flushFrames();
+        await expectNarrowActivity(thinking, elapsed);
+        if (elapsed === '58s') {
+          await resize(32);
+          expect(await currentStatus()).toContain(`${thinking} ${elapsed} ${lang === 'en' ? compactHint : hint}`);
+          await resize(14);
+          await expectNarrowActivity(thinking, elapsed);
+        }
+      }
+      await resize(32);
+      expect(await currentStatus()).toContain(`${thinking} 1m02s ${lang === 'en' ? compactHint : hint}`);
+      const wideOffset = terminal.stdout.frames.length;
+      screen.resize(60, 24);
+      terminal.stdout.resize(60);
+      await waitForOutput(terminal.stdout, () => stripAnsi(terminal.stdout.frames.slice(wideOffset).join(''))
+        .includes(`${thinking} 1m02s ${hint}`), 'wide localized activity');
+      expect(await currentStatus()).toContain(`${thinking} 1m02s ${hint}`);
       const offset = terminal.stdout.frames.length;
       emit(conversation.submitCalls[0], { type: 'thinking', data: { thinking: 'PRIVATE_THOUGHT' } });
       await flushFrames();
       expect(stripAnsi(terminal.stdout.frames.slice(offset).join(''))).toContain(getLabel('tui.ui.extendedThinking', lang));
+      expect(await currentStatus()).toContain(`${getLabel('tui.ui.extendedThinking', lang)} 1m02s ${hint}`);
+      await resize(14);
+      await expectNarrowActivity(getLabel('tui.ui.extendedThinking', lang), '1m02s');
+      await resize(60);
+      expect(await currentStatus()).toContain(`${getLabel('tui.ui.extendedThinking', lang)} 1m02s ${hint}`);
+      for (const [tool, truncatedName] of [['takt_takt_list_tasks', 'takt_takt_l…'], ['takt_takt_get_run', 'takt_takt_g…']] as const) {
+        emit(conversation.submitCalls[0], { type: 'tool_use', data: { id: tool, tool, input: {} } });
+        await flushFrames();
+        expect(await currentStatus()).toContain(`${tool} 1m02s ${hint}`);
+        const narrowOffset = terminal.stdout.frames.length;
+        screen.resize(32, 24);
+        terminal.stdout.resize(32);
+        await waitForOutput(terminal.stdout, () => stripAnsi(terminal.stdout.frames.slice(narrowOffset).join(''))
+          .includes(`1m02s ${compactHint}`), 'narrow localized tool activity');
+        const row = await currentStatus();
+        expect(row).toContain(`${truncatedName} 1m02s ${compactHint}`);
+        const restoredOffset = terminal.stdout.frames.length;
+        screen.resize(60, 24);
+        terminal.stdout.resize(60);
+        await waitForOutput(terminal.stdout, () => stripAnsi(terminal.stdout.frames.slice(restoredOffset).join(''))
+          .includes(`${tool} 1m02s ${hint}`), 'restored localized tool activity');
+        expect(await currentStatus()).toContain(`${tool} 1m02s ${hint}`);
+      }
+      const submission = conversation.submitCalls[0]!;
+      emit(submission, { type: 'tool_use', data: { id: 'read', tool: 'Read', input: { file_path: 'a.ts' } } });
+      await flushFrames();
+      emit(submission, { type: 'tool_result', data: { completedToolIds: ['read', 'takt_takt_list_tasks', 'takt_takt_get_run'], content: 'done', isError: false } });
+      await flushFrames();
+      expect(await currentStatus()).toContain(`${thinking} 1m02s ${hint}`);
+      await resize(14);
+      await expectNarrowActivity(thinking, '1m02s');
+      await resize(60);
+      expect(await currentStatus()).toContain(`${thinking} 1m02s ${hint}`);
       const responseOffset = terminal.stdout.frames.length;
       conversation.submitCalls[0]!.onAssistantChunk('visible response');
       await flushFrames();
       expect(stripAnsi(terminal.stdout.frames.slice(responseOffset).join(''))).toContain(getLabel('tui.ui.responding', lang));
+      expect(await currentStatus()).toContain('visible response');
+      await resize(14);
+      await expectNarrowActivity(getLabel('tui.ui.responding', lang), '1m02s');
+      await resize(60);
+      expect(await currentStatus()).toContain(`${getLabel('tui.ui.responding', lang)} 1m02s ${hint}`);
+      expect(await currentStatus()).toContain('visible response');
       expect(terminal.stdout.frames.join('')).not.toContain('PRIVATE_THOUGHT');
       conversation.resolveWith({ kind: 'assistant_response', content: 'confirmed' });
       await flushFrames();
+      terminal.stdin.write('next');
+      await flushFrames();
+      terminal.stdin.write(ENTER);
+      await flushFrames();
+      expect(await currentStatus()).toContain(`${thinking} 0s ${hint}`);
+      await resize(14);
+      await expectNarrowActivity(thinking, '0s');
+      const interruptedSubmission = conversation.submitCalls[1]!;
+      expect(interruptedSubmission.abortSignal.aborted).toBe(false);
+      terminal.stdin.write(ESC);
+      await flushFrames();
+      await writeTerminalFrames(screen, terminal.stdout.frames.slice(processed));
+      processed = terminal.stdout.frames.length;
+      expect(statusRows(getTerminalText(screen))).toEqual([]);
+      expect(interruptedSubmission.abortSignal.aborted).toBe(true);
+      conversation.resolveWith({ kind: 'assistant_response', content: 'late response' });
       terminal.stdin.write(CTRL_D);
       await run;
     } finally {
@@ -2070,6 +2488,8 @@ describe('ConversationView activity status', () => {
       terminal.stdin.write(CTRL_D);
       await run.catch(() => undefined);
       terminal.restore();
+      screen.dispose();
+      vi.useRealTimers();
       rmSync(cwd, { recursive: true, force: true });
     }
   });

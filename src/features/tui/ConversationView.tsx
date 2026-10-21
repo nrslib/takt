@@ -1,4 +1,5 @@
 import { Box, Text, useInput, useWindowSize } from 'ink';
+import stringWidth from 'string-width';
 import {
   useCallback,
   useEffect,
@@ -11,6 +12,7 @@ import {
 import type { InteractiveModeResult } from '../interactive/interactive.js';
 import type { StreamEvent } from '../../shared/types/provider.js';
 import { formatToolInput } from '../../shared/ui/toolInput.js';
+import { segmentGraphemes } from '../../shared/utils/grapheme.js';
 import { MAX_VISIBLE_ROWS, PromptInput } from './PromptInput.js';
 import { StatusLine } from './StatusLine.js';
 import { TranscriptView, type TranscriptEntry } from './TranscriptEntryView.js';
@@ -46,6 +48,9 @@ export interface ConversationUiText {
   queuedMore: string;
   /** Appended to the status row while a call can still be interrupted. */
   interruptHint: string;
+  /** Used when the activity, elapsed time and full hint exceed the row width. */
+  interruptHintCompact: string;
+  interruptHintMinimal: string;
   /** System line left behind when Esc stops an answer. */
   responseInterrupted: string;
   /** System line left behind when Esc stops `/go`. */
@@ -128,9 +133,31 @@ const CANCELLED: InteractiveModeResult = { action: 'cancel', task: '' };
 /** Queued lines shown below the prompt; the rest are counted in one row. */
 const MAX_QUEUE_ROWS = 3;
 
-type Activity =
-  | { readonly kind: 'waiting' | 'thinking' | 'responding' }
-  | { readonly kind: 'tool'; readonly id: string; readonly label: string };
+interface ToolActivity {
+  readonly id: string;
+  readonly name: string;
+  readonly inputSummary: string;
+}
+
+interface Activity {
+  readonly kind: 'waiting' | 'thinking' | 'responding' | 'tool';
+  readonly tools: readonly ToolActivity[];
+}
+
+function truncateStatusText(text: string, columns: number): string {
+  if (columns <= 0) return '';
+  if (stringWidth(text) <= columns) return text;
+  const graphemes = segmentGraphemes(text);
+  let result = '';
+  let width = stringWidth('…');
+  for (const grapheme of graphemes) {
+    const nextWidth = width + stringWidth(grapheme);
+    if (nextWidth > columns) break;
+    result += grapheme;
+    width = nextWidth;
+  }
+  return `${result}…`;
+}
 
 /** `/go` asks the session for a task instruction rather than for a reply. */
 function isInstructionRequest(text: string): boolean {
@@ -177,7 +204,7 @@ export function ConversationView({
   const [completionIndex, setCompletionIndex] = useState(0);
   const [streamingRaw, setStreamingRaw] = useState('');
   const [turn, setTurn] = useState<{ readonly id: number; readonly startedAt: number } | null>(null);
-  const [activity, setActivity] = useState<Activity>({ kind: 'waiting' });
+  const [activity, setActivity] = useState<Activity>({ kind: 'waiting', tools: [] });
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const isBusy = turn !== null;
   /**
@@ -267,9 +294,30 @@ export function ConversationView({
   const elapsed = elapsedSeconds < 60
     ? `${elapsedSeconds}s`
     : `${Math.floor(elapsedSeconds / 60)}m${String(elapsedSeconds % 60).padStart(2, '0')}s`;
-  const activityLabel = activity.kind === 'tool' ? activity.label
+  const activeTool = activity.kind === 'tool' ? activity.tools.at(-1) : undefined;
+  const activityLabel = activeTool !== undefined ? activeTool.name
     : activity.kind === 'thinking' ? ui.extendedThinking
     : activity.kind === 'responding' ? ui.responding : ui.thinking;
+  // Reserve the spinner and its following space before choosing the hint.
+  let interruptHint = stringWidth(`${activityLabel} ${elapsed} ${ui.interruptHint}`) + 2 > columns
+    ? ui.interruptHintCompact : ui.interruptHint;
+  const activityStart = segmentGraphemes(activityLabel).slice(0, 1).join('');
+  if (stringWidth(`${activityStart} ${elapsed} ${interruptHint}`) + 2 > columns) {
+    interruptHint = ui.interruptHintMinimal;
+  }
+  const statusSuffix = ` ${elapsed} ${interruptHint}`;
+  const activityColumns = columns - 2 - stringWidth(statusSuffix);
+  let displayedActivity = activityColumns > 0
+    ? truncateStatusText(activityLabel, activityColumns)
+    : activityLabel;
+  if (displayedActivity === '…' && stringWidth(activityStart) <= activityColumns) {
+    displayedActivity = activityStart;
+  }
+  const requiredStatus = `${displayedActivity}${statusSuffix}`;
+  const inputSummary = activeTool !== undefined
+    ? truncateStatusText(activeTool.inputSummary, columns - 2 - stringWidth(requiredStatus) - 1)
+    : '';
+  const statusLabel = `${requiredStatus}${inputSummary === '' ? '' : ` ${inputSummary}`}`;
   // The model name comes from config or `--model`, so it crosses the display
   // boundary like any other outside text before it reaches a fixed-height row.
   // A submission can lazily replace the session before this component renders
@@ -450,27 +498,43 @@ export function ConversationView({
             return;
           }
           setStreamingRaw((streamed) => streamed + chunk);
-          setActivity({ kind: 'responding' });
+          setActivity((current) => ({ ...current, kind: 'responding' }));
         },
         onStreamEvent: (event: StreamEvent) => {
           if (!isCurrent()) return;
           switch (event.type) {
             case 'thinking':
-              setActivity({ kind: 'thinking' });
+              setActivity((current) => ({ ...current, kind: 'thinking' }));
               break;
             case 'tool_use':
-              setActivity({
+              setActivity((current) => ({
                 kind: 'tool',
-                id: event.data.id,
-                label: toSingleLineText(`${toSingleLineText(event.data.tool)} ${formatToolInput(event.data.tool, event.data.input)}`),
-              });
+                tools: [
+                  ...current.tools.filter((tool) => tool.id !== event.data.id),
+                  {
+                    id: event.data.id,
+                    name: toSingleLineText(event.data.tool),
+                    inputSummary: toSingleLineText(formatToolInput(event.data.tool, event.data.input)),
+                  },
+                ],
+              }));
               break;
             case 'tool_result':
-              setActivity((current) => current.kind === 'tool'
-                && (event.data.completedToolIds !== undefined
-                  ? event.data.completedToolIds.includes(current.id)
-                  : event.data.id === undefined || event.data.id === current.id)
-                ? { kind: 'waiting' } : current);
+              setActivity((current) => {
+                const tools = current.tools.filter((tool) => {
+                  if (event.data.completedToolIds !== undefined) {
+                    return !event.data.completedToolIds.includes(tool.id);
+                  }
+                  if (event.data.id !== undefined) {
+                    return tool.id !== event.data.id;
+                  }
+                  return current.kind !== 'tool' || tool !== current.tools.at(-1);
+                });
+                return {
+                  kind: current.kind === 'tool' && tools.length === 0 ? 'waiting' : current.kind,
+                  tools,
+                };
+              });
               break;
           }
         },
@@ -543,7 +607,7 @@ export function ConversationView({
     const submissionId = submissionCountRef.current;
     setTurn({ id: submissionId, startedAt: performance.now() });
     setElapsedSeconds(0);
-    setActivity({ kind: 'waiting' });
+    setActivity({ kind: 'waiting', tools: [] });
     inFlightRef.current = {
       id: submissionId,
       controller,
@@ -932,8 +996,9 @@ export function ConversationView({
         {showStatusLine && (
           <StatusLine
             busy={isBusy}
-            label={`${elapsed} ${ui.interruptHint} ${activityLabel}`}
-            streamed={activity.kind === 'responding' ? streamingPreview : ''}
+            label={statusLabel}
+            streamed={activity.kind === 'responding' && stringWidth(statusLabel) + 2 < columns
+              ? streamingPreview : ''}
           />
         )}
         {showLiveStatus && (
