@@ -470,6 +470,34 @@ describe('OpenCodeClient retry', () => {
     expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toHaveLength(1);
   });
 
+  it.each(['pending', 'running', 'completed'] as const)(
+    'ツールの%sイベント後に429を受けても元のpromptを再送しない', async (status) => {
+      vi.useFakeTimers();
+      runPlans = [{ type: 'events', events: [
+        { type: 'message.part.updated', properties: {
+          sessionID: 'session-1',
+          part: {
+            id: 'edit-part', sessionID: 'session-1', type: 'tool', callID: 'edit-call', tool: 'edit',
+            state: { status, input: { filePath: '/tmp/example.ts' },
+              ...(status === 'completed' ? { output: 'edited', title: 'Edit file' } : {}) },
+          },
+        } },
+        { type: 'session.error', properties: {
+          sessionID: 'session-1', error: { name: 'RateLimitError', data: { message: 'HTTP 429: Too Many Requests' } },
+        } },
+      ] }, successfulRetryPlan()];
+      const { promptAsync, subscribe } = installOpenCodeMock();
+      const pending = new OpenCodeClient().call('coder', 'edit the file', {
+        cwd: '/tmp', model: 'opencode/big-pickle',
+      });
+
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(await pending).toMatchObject({ status: 'rate_limited', errorKind: 'rate_limit' });
+      expect(promptAsync).toHaveBeenCalledOnce();
+      expect(subscribe).toHaveBeenCalledOnce();
+    },
+  );
+
   it('session.error の RateLimitError 名だけでも2回再試行する', async () => {
     vi.useFakeTimers();
     runPlans = Array.from({ length: 3 }, () => ({

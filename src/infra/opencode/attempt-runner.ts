@@ -1000,6 +1000,7 @@ export class OpenCodeAttemptRunner {
   let finalizationInvalidationError: OpenCodeSharedServerInvalidationError | undefined;
   let attemptCleanupError: AggregateError | undefined;
   let rateLimitClass: RateLimitClass = 'NotRateLimit';
+  let toolExecutionObserved = false;
   const structuredAttemptPlan = planStructuredOutputAttempt(callState.recoveryState, hasInitialSessionId);
   // tool-guard fresh recovery 後の attempt は fresh session を強制する。
   // plan の sessionMode を実態に合わせないと、後段の
@@ -1142,7 +1143,7 @@ export class OpenCodeAttemptRunner {
   ): Promise<AgentResponse | typeof RETRY_ATTEMPT> => {
     throwIfCallAborted();
     throwIfServerInvalidated();
-    if (classification === 'Transient' && attempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
+    if (classification === 'Transient' && !toolExecutionObserved && attempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
       await this.waitForRetryDelay(attempt, options.abortSignal);
       throwIfCallAborted();
       throwIfServerInvalidated();
@@ -1543,6 +1544,7 @@ export class OpenCodeAttemptRunner {
         }
 
         if (part.type === 'tool') {
+          toolExecutionObserved = true;
           const toolPart = part as OpenCodeToolPart;
           const rejection = extractOpenCodeToolRejection(toolPart);
           // onStream（→ provider event logging 有効時は *-provider-events.jsonl
