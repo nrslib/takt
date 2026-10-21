@@ -6,7 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parse } from 'yaml';
-import { expandFacetIncludes } from 'faceted-prompting/cli/facet-includes';
+import { expandFacetIncludes } from '#faceted-prompting/cli/facet-includes';
 import { selectPromptEvalSuites, promptEvalPrepareTargets } from '../suite-registry.mjs';
 import { PREPARE_TARGET_IDS } from '../scripts/prepare.mjs';
 import { loadWorkflowByIdentifier, resolveWorkflowCallTarget } from '../../dist/infra/config/index.js';

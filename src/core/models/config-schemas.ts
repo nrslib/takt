@@ -153,6 +153,7 @@ const ProjectConfigObjectBaseSchema = z.object({
     auto_run: z.boolean().optional(),
     patrol_interval: z.number().int().positive().optional(),
     default_workflow: z.string().trim().min(1).optional(),
+    sensitive_paths: z.array(z.string().trim().min(1)).optional(),
     notifications: z.object({
       question: z.boolean().optional(),
       awaiting_merge: z.boolean().optional(),

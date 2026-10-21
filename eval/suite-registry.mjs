@@ -12,6 +12,11 @@ const CLASSIFICATIONS = [
   },
   {
     tier: 'active',
+    reason: 'CI回復の調査分類と根本修正レビューを本番ファセットで評価する',
+    suites: ['merge-ci-investigation', 'merge-ci-review'],
+  },
+  {
+    tier: 'active',
     reason: 'ページに閉じた状態・操作判断の誤検知と、別の状態操作層への委譲の見逃しを測る',
     suites: ['frontend-mediator-review'],
   },
@@ -227,6 +232,14 @@ const EXECUTION_OVERRIDES = {
   'manager-work-split': {
     defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
     reason: 'Sol Low、Opus 5、Luna Max で日英の操作選択と引数を比較する明示選択の評価',
+  },
+  'merge-ci-investigation': {
+    defaultEligible: false, credentials: ['codex'], cost: 'high',
+    reason: '日英6事例を各3回、指定モデルで明示実行する',
+  },
+  'merge-ci-review': {
+    defaultEligible: false, credentials: ['codex'], cost: 'high',
+    reason: '日英5事例を各3回、指定モデルで明示実行する',
   },
   'finding-realistic-premise': {
     defaultEligible: false,

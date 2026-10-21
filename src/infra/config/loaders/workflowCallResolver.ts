@@ -1,5 +1,5 @@
 import { dirname } from 'node:path';
-import { isScopeRef } from 'faceted-prompting';
+import { isScopeRef } from '#faceted-prompting';
 import type { WorkflowCallStep, WorkflowConfig } from '../../../core/models/index.js';
 import { getAttachedWorkflowTrustInfo, getWorkflowSourcePath } from './workflowSourceMetadata.js';
 import { validateWorkflowCallRulesAgainstChildReturns } from './workflowCallContracts.js';

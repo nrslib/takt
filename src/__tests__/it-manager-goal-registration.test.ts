@@ -158,7 +158,7 @@ it('keeps events while paused, handles the saved answer after resume, and discar
   try {
     await context.session.pauseGoal({ goalId: goal.id });
     saveManagerEvent(cwd, { kind: 'completion', goalId: goal.id, taskName: 'ended', runSlug: 'run-ended', result: { success: false, interrupted: true } });
-    await context.session.answerQuestion({ goalId: goal.id, questionId: asked.questionId as string, text: 'CSV' });
+    await context.session.answerQuestion({ goalId: goal.id, repositoryDirectory: cwd, questionId: asked.questionId as string, answer: { text: 'CSV' } });
     await manager.processPending(signal, 10); expect(call).not.toHaveBeenCalled(); expect(readManagerEvents(cwd)).toHaveLength(2);
     await context.session.resumeGoal({ goalId: goal.id });
     expect(readManagerEvents(cwd)).toHaveLength(3);

@@ -1,6 +1,7 @@
 import type { WorkflowEffect, WorkflowState, WorkflowStep } from '../../models/types.js';
 import type { MergeMethod } from '../../models/config-types.js';
 import type { PrMergeOptions, PrStatus, PrStatusFetchOptions } from './pr-execution-context.js';
+import type { PrCiFailure, PrCiRerunResult } from './pr-ci.js';
 import type { ProviderType, StreamCallback } from '../../../shared/types/provider.js';
 
 export interface SystemStepTaskContext {
@@ -109,6 +110,8 @@ export interface SystemStepGitProvider {
   closePr(prNumber: number, cwd?: string): SystemStepMergeResult;
   mergePr(prNumber: number, cwd?: string, method?: MergeMethod, expectedHeadSha?: string): SystemStepMergeResult;
   fetchPrStatus?(prNumber: number, cwd?: string, options?: PrStatusFetchOptions): Promise<PrStatus>;
+  fetchPrCiFailure?(prNumber: number, headSha: string, cwd: string, options?: PrStatusFetchOptions): Promise<PrCiFailure>;
+  rerunPrCi?(failure: PrCiFailure, cwd: string, options?: PrStatusFetchOptions): Promise<PrCiRerunResult>;
 }
 
 export interface SystemStepServicesOptions extends PrMergeOptions {

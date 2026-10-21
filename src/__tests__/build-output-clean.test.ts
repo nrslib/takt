@@ -42,6 +42,7 @@ const isolatedProjectEntries = [
   'tools/opencode-probe',
   'tsconfig.json',
   'tsconfig.opencode-probe.json',
+  'vendor',
 ] as const;
 
 function runNpm(

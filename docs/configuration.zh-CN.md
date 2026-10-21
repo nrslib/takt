@@ -438,6 +438,21 @@ TAKT 观察实际收到的 provider event，不会合成 keepalive。OpenCode �
 
 除了配置 key 覆盖外，`TAKT_NOTIFY_WEBHOOK` 设置 Slack Incoming Webhook URL。设置后，TAKT 会在 pipeline 完成和 `takt run` 任务批次结束时发送 Slack 通知。
 
+## manager 敏感文件设置
+
+通过全局 `~/.takt/config.yaml` 或项目 `.takt/config.yaml` 中的 `manager.sensitive_paths`，可以添加即使位于负责仓库内也需要交给 manager 权限判断 agent 的文件和目录。
+
+```yaml
+manager:
+  sensitive_paths:
+    - private
+    - config/credentials.json
+```
+
+默认项为 `.env`、`.env.*`、`id_rsa`、`id_dsa`、`id_ecdsa`、`id_ed25519`、`*.key`、`*.pem`、`*.crt`、`*.cer`、`*.p12`、`*.pfx`。两个配置列表都会追加到默认项，省略或设置为空列表也不能删除默认项。单独的名称适用于任意目录深度。包含目录部分的相对路径以各个负责仓库为基准，也支持绝对路径和 `~/` 路径。目录项包含其所有下级文件和目录。名称模式支持在开头或末尾使用单个 `*`；此设置不用于定义允许规则。
+
+Claude 的 `Read`、`Glob` 和 `Grep` 只有在路径和符号链接解析后的目标全部是负责范围内可读取的普通目标时，才能跳过权限判断 agent。搜索候选通过路径和元数据检查，不会读取敏感文件的内容。搜索模式支持使用 `*`、`**` 和 `?` 的简单形式；排除、花括号展开、字符类、转义或无法确定范围的指定都会交给权限判断 agent。隐藏路径、遍历的目录和符号链接会被保守地检查，因此即使搜索条件较严格，也仍可能需要审查。Codex 的内置工具仍然需要审查。
+
 ## API Key 配置
 
 TAKT 支持 Claude、Codex、OpenCode、Pi、官方 DeepSeek Harness SDK、Cursor、Copilot 和 Kiro provider。Claude/Codex/OpenCode 使用各自 SDK credential，Pi 使用 Pi SDK credential store 或 provider 原生环境变量，DeepSeek Harness 先通过 `takt install deepseek-harness` 安装 TypeScript SDK/runtime，再通过官方 credential store（`$DSH_HOME/.credentials.yaml`，默认 `~/.dsh/.credentials.yaml`）或 `DEEPSEEK_API_KEY` 认证，Cursor 支持 API key 或已有 `cursor-agent login` session，Copilot 使用 GitHub token，Kiro 使用 API key。

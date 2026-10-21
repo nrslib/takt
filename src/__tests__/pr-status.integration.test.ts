@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchPrStatus } from '../infra/github/pr-status.js';
 import { PrStatusTimeoutError } from '../core/workflow/system/pr-execution-context.js';
 import { GitHubProvider } from '../infra/github/GitHubProvider.js';
+import type { PrCiFailure } from '../core/workflow/system/pr-ci.js';
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 import { createDefaultSystemStepServices } from '../infra/workflow/system/DefaultSystemStepServices.js';
@@ -30,7 +31,7 @@ describe.skipIf(process.platform === 'win32')('PR status process deadline and ca
     writeFileSync(modesPath, JSON.stringify(['success']));
     const raw = { number: 123, headRefOid: headSha, state: 'OPEN', mergeable: 'MERGEABLE',
       mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED',
-      statusCheckRollup: [{ __typename: 'CheckRun', status: 'COMPLETED', conclusion: 'SUCCESS' }] };
+      statusCheckRollup: [{ __typename: 'CheckRun', name: 'unit', detailsUrl: null, status: 'COMPLETED', conclusion: 'SUCCESS' }] };
     writeFileSync(join(bin, 'gh'), `#!${process.execPath}
 const fs = require('node:fs');
 const callsPath = ${JSON.stringify(callsPath)};
@@ -181,6 +182,181 @@ if (mode === 'hang') { process.on('SIGTERM', () => {}); setInterval(() => {}, 10
     expect(calls()).toHaveLength(1);
     expect(h.mergePr).not.toHaveBeenCalled();
     expect(h.commentOnPr).not.toHaveBeenCalled();
+    assertStopped();
+  });
+});
+
+describe.skipIf(process.platform === 'win32')('CI failure evidence and rerun through gh', () => {
+  let root: string;
+  let callsPath: string;
+  let controlPath: string;
+  const headSha = 'a'.repeat(40);
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'takt-ci-recovery-'));
+    const bin = join(root, 'bin');
+    mkdirSync(bin);
+    callsPath = join(root, 'calls.json');
+    controlPath = join(root, 'control.json');
+    writeFileSync(controlPath, JSON.stringify({ mode: 'normal', rerun: false, poll: -1 }));
+    writeFileSync(join(bin, 'gh'), `#!${process.execPath}
+const fs = require('node:fs');
+const callsPath = ${JSON.stringify(callsPath)};
+const controlPath = ${JSON.stringify(controlPath)};
+const calls = fs.existsSync(callsPath) ? JSON.parse(fs.readFileSync(callsPath, 'utf8')) : [];
+const args = process.argv.slice(2);
+calls.push({ pid: process.pid, args, cwd: process.cwd() });
+fs.writeFileSync(callsPath, JSON.stringify(calls));
+const control = JSON.parse(fs.readFileSync(controlPath, 'utf8'));
+const headSha = ${JSON.stringify(headSha)};
+const url = 'https://github.com/org/repo/actions/runs/10';
+if (args[0] === 'pr') {
+  if (control.rerun) control.poll++;
+  fs.writeFileSync(controlPath, JSON.stringify(control));
+  const pending = control.rerun && control.poll === 1;
+  const passed = control.rerun && control.poll >= 2;
+  process.stdout.write(JSON.stringify({ number: 123, headRefOid: headSha, state: 'OPEN',
+    mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED',
+    statusCheckRollup: [{ __typename: 'CheckRun', name: 'unit',
+      status: pending ? 'IN_PROGRESS' : 'COMPLETED', conclusion: passed ? 'SUCCESS' : pending ? '' : 'FAILURE',
+      detailsUrl: url + '/job/20' }] }));
+} else if (args[0] === 'run' && args[1] === 'rerun') {
+  if (control.mode === 'rerun-denied') { process.stderr.write('HTTP 403: rerun denied'); process.exit(1); }
+  control.rerun = true;
+  fs.writeFileSync(controlPath, JSON.stringify(control));
+} else if (args.includes('--log') || args.includes('--log-failed')) {
+  if (control.mode === 'hang') { process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); }
+  else if (control.mode === 'denied') { process.stderr.write('HTTP 403: log access denied'); process.exit(1); }
+  else if (control.mode === 'overflow') process.stdout.write('x'.repeat(8 * 1024 * 1024) + 'TAIL: assertion failed');
+  else if (control.mode === 'blank-large') process.stdout.write(' '.repeat(8 * 1024 * 1024));
+  else if (control.mode === 'excessive') process.stdout.write('x'.repeat(65 * 1024 * 1024));
+  else if (control.mode !== 'empty') process.stdout.write('math.test.ts > adds\\nAssertionError: expected 2 to equal 3');
+} else if (args[0] === 'run' && args[1] === 'view') {
+  const attempt = control.rerun && control.poll >= 1 ? 2 : 1;
+  const pending = control.rerun && control.poll === 1;
+  const passed = control.rerun && control.poll >= 2 && control.mode !== 'rerun-failure-stale-rollup';
+  process.stdout.write(JSON.stringify({ databaseId: 10, url, headSha, attempt,
+    status: pending ? 'in_progress' : 'completed', conclusion: passed ? 'success' : pending ? '' : 'failure',
+    jobs: [{ databaseId: 20, name: 'unit', url: url + '/job/20',
+      status: pending ? 'in_progress' : 'completed', conclusion: passed ? 'success' : 'failure', steps: [] }] }));
+} else { process.stderr.write('Unexpected gh operation: ' + JSON.stringify(args)); process.exit(2); }
+`, { mode: 0o755 });
+    vi.stubEnv('PATH', bin + delimiter + process.env.PATH);
+    vi.stubEnv('HOME', root);
+    vi.stubEnv('GH_CONFIG_DIR', join(root, 'gh-config'));
+  });
+
+  function calls(): Array<{ pid: number; args: string[]; cwd: string }> {
+    return existsSync(callsPath) ? JSON.parse(readFileSync(callsPath, 'utf8')) : [];
+  }
+  function setMode(mode: string) {
+    writeFileSync(controlPath, JSON.stringify({ mode, rerun: false, poll: -1 }));
+  }
+  function evidence(provider: GitHubProvider, options: { timeoutMs: number; signal?: AbortSignal }) {
+    return provider.fetchPrCiFailure(123, headSha, root, options);
+  }
+  function rerun(provider: GitHubProvider, failure: PrCiFailure) {
+    return provider.rerunPrCi(failure, root, { timeoutMs: 1000 });
+  }
+  function assertStopped() {
+    for (const { pid } of calls()) expect(() => process.kill(pid, 0)).toThrow();
+  }
+  afterEach(() => {
+    for (const { pid } of calls()) {
+      try { process.kill(pid, 'SIGKILL'); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+    }
+    vi.unstubAllEnvs();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('本番Providerから失敗run・jobのログを取得して調査に必要なテスト名とアサーションを返す', async () => {
+    const result = await evidence(new GitHubProvider(), { timeoutMs: 1000 });
+    expect(result).toMatchObject({ number: 123, headSha, complete: true, checks: [
+      { name: 'unit', run: { id: 10, attempt: 1 },
+        jobs: [{ id: 20, log: expect.stringMatching(/math\.test\.ts > adds[\s\S]*expected 2 to equal 3/) }] },
+    ] });
+    expect(calls().every(({ cwd }) => cwd === root)).toBe(true);
+    expect(calls().some(({ args }) => args[0] === 'run' && (args.includes('--log-failed') || args.includes('--log')))).toBe(true);
+    assertStopped();
+  });
+
+  it('同じProviderとHEADで旧失敗から再実行受付・旧attempt・新attempt実行中・成功まで追従する', async () => {
+    const provider = new GitHubProvider();
+    expect(await provider.fetchPrStatus(123, root)).toMatchObject({ ci: { finished: true, passed: false } });
+    const failure = await evidence(provider, { timeoutMs: 1000 });
+    const accepted = await rerun(provider, failure);
+    expect(accepted).toMatchObject({ success: true, number: 123, headSha, runs: [{ id: 10, attempt: 1 }] });
+    const status = () => provider.fetchPrStatus(123, root, { timeoutMs: 1000, rerun: accepted });
+    expect(await status()).toMatchObject({ headSha, ci: { finished: false, passed: false } });
+    expect(await status()).toMatchObject({ headSha, ci: { finished: false, passed: false } });
+    expect(await status()).toMatchObject({ headSha, ci: { finished: true, passed: true } });
+    const reruns = calls().filter(({ args }) => args[0] === 'run' && args[1] === 'rerun');
+    expect(reruns).toHaveLength(1);
+    expect(reruns[0]?.args).toContain('10');
+    assertStopped();
+  });
+
+  it.each(['denied', 'empty', 'blank-large', 'excessive'])('ログ取得の%sを無言で切り捨てず証拠不足として返す', async (mode) => {
+    setMode(mode);
+    expect(await evidence(new GitHubProvider(), { timeoutMs: 5000 })).toMatchObject({ complete: false,
+      unavailable: expect.arrayContaining([expect.objectContaining({ reason: expect.any(String) })]) });
+    expect(calls().some(({ args }) => args.includes('--log-failed') || args.includes('--log'))).toBe(true);
+    assertStopped();
+  });
+
+  it('1 MiBを超える失敗ログの末尾だけを切り詰めた印とともに保持する', async () => {
+    setMode('overflow');
+    const result = await evidence(new GitHubProvider(), { timeoutMs: 5000 });
+    expect(result.complete).toBe(true);
+    const log = result.checks[0]?.jobs[0]?.log;
+    expect(log).toMatch(/^\[truncated: last 200000 characters\]\n/);
+    expect(log).toMatch(/TAIL: assertion failed$/);
+    expect(log?.length).toBeLessThan(201_000);
+    assertStopped();
+  });
+
+  it('再実行後のrollupが旧成功を返しても新attemptの失敗状態とログを調査へ渡す', async () => {
+    setMode('rerun-failure-stale-rollup');
+    const provider = new GitHubProvider();
+    const failure = await provider.fetchPrCiFailure(123, headSha, root, { timeoutMs: 1000 });
+    const accepted = await provider.rerunPrCi(failure, root, { timeoutMs: 1000 });
+    const options = { timeoutMs: 1000, rerun: accepted };
+    expect((await provider.fetchPrStatus(123, root, options)).ci.finished).toBe(false);
+    expect((await provider.fetchPrStatus(123, root, options)).ci.finished).toBe(false);
+    expect((await provider.fetchPrStatus(123, root, options)).ci).toMatchObject({ finished: true, passed: false });
+    const latest = await provider.fetchPrCiFailure(123, headSha, root, options);
+    expect(latest).toMatchObject({ complete: true, checks: [{ run: { id: 10, attempt: 2 },
+      jobs: [{ id: 20, log: expect.stringContaining('expected 2 to equal 3') }] }] });
+    const logCalls = calls().filter(({ args }) => args.includes('--log-failed'));
+    expect(logCalls.at(-1)?.args).toEqual(expect.arrayContaining(['--attempt', '2', '--job', '20']));
+    assertStopped();
+  });
+
+  it('失敗ログ取得の期限で子プロセスを終了して証拠不足を報告する', async () => {
+    setMode('hang');
+    expect(await evidence(new GitHubProvider(), { timeoutMs: 1000 })).toMatchObject({ complete: false,
+      unavailable: expect.arrayContaining([expect.objectContaining({ reason: expect.any(String) })]) });
+    expect(calls().some(({ args }) => args.includes('--log-failed') || args.includes('--log'))).toBe(true);
+    assertStopped();
+  });
+
+  it('失敗ログ取得中の中断を伝播して子プロセスを終了する', async () => {
+    setMode('hang');
+    const controller = new AbortController();
+    const running = evidence(new GitHubProvider(), { timeoutMs: 5000, signal: controller.signal });
+    const rejected = running.catch((error: unknown) => error);
+    await vi.waitFor(() => expect(calls().some(({ args }) => args.includes('--log-failed') || args.includes('--log'))).toBe(true));
+    controller.abort();
+    expect(await rejected).toBe(controller.signal.reason);
+    assertStopped();
+  });
+
+  it('再実行APIの権限不足を成功へ変換しない', async () => {
+    const provider = new GitHubProvider();
+    const failure = await evidence(provider, { timeoutMs: 1000 });
+    setMode('rerun-denied');
+    expect(await rerun(provider, failure)).toMatchObject({ success: false });
+    expect(calls().filter(({ args }) => args[0] === 'run' && args[1] === 'rerun')).toHaveLength(1);
     assertStopped();
   });
 });

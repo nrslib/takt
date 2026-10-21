@@ -78,7 +78,9 @@ export function formatGoalNotification(
   if (question !== undefined) {
     lines.push(formatQuestionDetails(question, language, true, destination === 'slack'));
     if (question.status === 'pending') {
-      lines.push(getLabel('manager.notificationAnswer', language, { project, id: question.id }));
+      lines.push(destination === 'tui'
+        ? getLabel('manager.answerHint', language)
+        : getLabel('manager.notificationAnswer', language, { project, id: question.id }));
     }
   } else {
     const freeform = notification.kind === 'blocked' || notification.kind === 'custom';

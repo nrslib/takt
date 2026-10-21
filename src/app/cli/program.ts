@@ -9,6 +9,7 @@ import { Command, InvalidArgumentError, Option } from 'commander';
 import { packageVersion } from '../../shared/package-info.js';
 import { PROVIDER_TYPES, type ProviderType } from '../../shared/types/provider.js';
 import { runUpdateCheck } from './updateCheck.js';
+import { UPDATE_NOTIFIER_DISABLED_ARG } from '../../shared/utils/updateNotifierProcess.js';
 
 const cliVersion = packageVersion;
 
@@ -59,6 +60,7 @@ program
   .option('--pipeline', 'Pipeline mode: non-interactive, no worktree, direct branch creation')
   .option('--skip-git', 'Skip branch creation, commit, and push (pipeline mode)')
   .option('-q, --quiet', 'Minimal output mode: suppress AI output (for CI)')
+  .option(UPDATE_NOTIFIER_DISABLED_ARG, 'Disable update notifications')
   .option('-c, --continue', 'Continue from the last assistant session')
   // Declared in this order so the default stays undefined: neither flag means
   // "TUI when a terminal is attached", which routing decides.
