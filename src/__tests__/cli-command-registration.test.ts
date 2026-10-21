@@ -4,9 +4,6 @@ import { parsePullRequestNumber, parseUiAction, parseUiPort } from '../app/cli/c
 import { resolveRemovedRootCommand } from '../app/cli/helpers.js';
 
 describe('CLI command registration', () => {
-  it('registers tasks as an alias of list', () => {
-    expect(program.commands.find((command) => command.name() === 'list')?.aliases()).toContain('tasks');
-  });
   it('registers manager as an experimental conversation command without a one-shot argument', () => {
     const manager = program.commands.find((command) => command.name() === 'manager');
 

@@ -416,7 +416,7 @@ takt list --non-interactive --action delete --status failed pr_failed --format j
 
 #### 咨询运行中的任务
 
-在 `takt list`（别名 `takt tasks`）中，**Stop** 经确认后请求停止一个运行中的任务。worker 自行中断并决定最终状态。**Mark as failed** 只修改任务状态，不会停止 worker。
+在 `takt list` 中，**Stop** 经确认后请求停止一个运行中的任务。worker 自行中断并决定最终状态。**Mark as failed** 只修改任务状态，不会停止 worker。
 
 在 `takt list` 中选择带有 worktree clone 的运行中任务后，会打开普通 assistant 对话，并将该任务作为 `/tell` 的初始目标。对话中可以查看其他任务、讨论新任务，并使用 `/go` 执行或保存。`/tell` 会显示任务名称、workflow、当前 step 和指令，确认后只向确认时选中的任务写入。没有交互式终端或无法取得确认时不会发送指令，并会显示原因；`/cancel` 会关闭对话或取消待处理操作。
 

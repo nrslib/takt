@@ -319,7 +319,6 @@ program
 
 program
   .command('list')
-  .alias('tasks')
   .description('List task branches (merge/delete)')
   .option('--non-interactive', 'Run list in non-interactive mode')
   .option('--action <action>', 'Non-interactive action (diff|sync|try|merge|delete)')
