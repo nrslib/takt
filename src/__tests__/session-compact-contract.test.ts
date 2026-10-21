@@ -136,8 +136,8 @@ describe('session: compact contract', () => {
     expect(options.sessionId).toBeUndefined();
   });
 
-  it('Given compact mode in a worktree cwd When Phase 1 options are built Then the project session is not resumed', () => {
-    const step = makeCompactStep();
+  it.each([undefined, 'continue', 'compact'] as const)('should resume the current worktree session with session mode %s', (session) => {
+    const step = makeCompactStep({ session });
     const getSessionId = vi.fn().mockReturnValue('saved-opencode-session');
     const builder = createOptionsBuilder(step, getSessionId, {
       cwd: '/repo-worktree',
@@ -146,7 +146,40 @@ describe('session: compact contract', () => {
 
     const options = builder.buildAgentOptions(step);
 
-    expect(getSessionId).not.toHaveBeenCalled();
+    expect(options.sessionId).toBe('saved-opencode-session');
+  });
+
+  it('should start refresh in a worktree without the saved session', () => {
+    const step = makeCompactStep({ session: 'refresh' });
+    const builder = createOptionsBuilder(step, () => 'saved-opencode-session', {
+      cwd: '/repo-worktree',
+    });
+
+    expect(builder.buildAgentOptions(step).sessionId).toBeUndefined();
+  });
+
+  it('should start provider fallback in a worktree without the fallback provider saved session', () => {
+    const step = makeCompactStep();
+    const builder = createOptionsBuilder(step, () => 'saved-opencode-session', {
+      cwd: '/repo-worktree',
+    });
+
+    const options = builder.buildAgentOptions(step, {
+      fallback: {
+        reason: 'rate_limited',
+        reasonDetail: 'Rate limit',
+        originalIteration: 1,
+        previousProvider: 'codex',
+        previousModel: 'gpt-5',
+        currentProvider: 'opencode',
+        currentModel: 'opencode/big-pickle',
+        stepName: step.name,
+        reportDir: '.takt/runs/test/reports',
+        origin: { stage: 'reviewer', reviewerStepName: step.name },
+      },
+    });
+
+    expect(options.resolvedProvider).toBe('opencode');
     expect(options.sessionId).toBeUndefined();
   });
 });

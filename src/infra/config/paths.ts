@@ -12,7 +12,7 @@ import type { Language } from '../../core/models/index.js';
 import { LanguageSchema } from '../../core/models/schema-base.js';
 import { getLanguageResourcesDir, getResourcesDir } from '../resources/index.js';
 
-import type { FacetKind } from 'faceted-prompting';
+import type { FacetKind } from '#faceted-prompting';
 import { REPERTOIRE_DIR_NAME } from './constants.js';
 import {
   getProjectConfigDir as resolveProjectConfigDir,
@@ -20,7 +20,7 @@ import {
 } from './project/projectConfigPaths.js';
 
 /** Facet types used in layer resolution */
-export type { FacetKind as FacetType } from 'faceted-prompting';
+export type { FacetKind as FacetType } from '#faceted-prompting';
 
 type FacetType = FacetKind;
 

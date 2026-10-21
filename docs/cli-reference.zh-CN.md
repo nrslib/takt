@@ -615,6 +615,8 @@ takt purge --retention-days 14
 
 默认使用 `merge-review-fix-simple` workflow：由一个只读审查代理进行审查，再由独立步骤裁定问题、规划和实施修复、验证并重新审查。需要并行审查时，可指定 `--workflow merge-review-fix`。不指定 PR 编号时，默认同时处理 2 个 PR；`merge.concurrency` 可更改默认值，`--concurrency` 可覆盖本次运行。指定编号时只处理该 PR。合并 builtin 明确执行 Caccia：`merge-review` 按 `review → caccia → wait_ci → 评价评论` 执行，`merge-review-fix` 和 `merge-review-fix-simple` 按 `review/fix → commit_and_push → caccia → wait_ci → merge_pr` 执行。`success` 与 `skipped` 继续等待返回 head 的 CI。`limit` 评论未解决线程数后以 COMPLETE 结束，不合并；执行错误评论 `error` 后以 ABORT 结束。push、任务后处理和 Pipeline 不再隐式启动 Caccia。设置 `merge.auto_start: true` 时，PR 发布后启动合并 workflow，由其明确的 effect 执行 Caccia。
 
+`merge-review-fix` 和 `merge-review-fix-simple` 在每次 CI 确定失败后，使用失败检查、run/attempt/job 引用、日志内容、PR 累计差异及相关代码进行调查。仓库缺陷（包括不稳定测试及 main 上也存在的失败）在当前 PR 工作树中根本修复，经只读审查后执行 push → Caccia → CI，最多两轮。只有证据证明是外部原因时才允许重跑一次；该预算独立于修复轮数，两轮修复后仍可使用。重跑后等待同一 HEAD 的新 attempt，并重新检查所有检查及既有合并条件。证据不足、两轮修复后仍有缺陷、修复审查 REJECT 或重跑失败时，将次数、最后失败的检查及引用、调查要点评论到 PR，然后 ABORT。调查和修复报告保留在 run 中。初次成功和 CI timeout 行为不变，`merge-review` 仍只发表评论。GitHub Actions 日志及重跑权限不足、Provider 不支持时会明确报告。
+
 GitLab 支持指定 MR 编号和批量选择。Caccia 返回原因是 `github_unavailable` 的 `skipped`，然后 workflow 等待返回 head 的 CI。合并方式和 head 限制仍不受支持，使用这些参数的合并操作会失败。仅完成 CI 等待不计为合并成功。
 
 每个 PR 的合并任务都会显示在 `takt list`。隔离克隆与普通任务使用相同的 `worktree_dir`：默认位于 `../takt-worktrees`，父目录不可写时使用现有的 `.takt/worktrees` 后备位置。失败或冲突时会保留克隆及 Git 合并状态，以便检查。再次运行 `takt merge` 会创建新任务和隔离克隆，并保留失败的任务及克隆。要继续原有任务，请在 `takt list` 中使用 **Requeue**；要修改指令后继续，请使用 **Retry**。继续执行时会重新核对 PR 身份和 fork 风险。同一 PR 的合并任务正在运行或等待执行时，会阻止新任务启动及失败任务继续执行。确认 PR 已合并后才删除克隆。AI 可修改与冲突相关的源码、测试和 lockfile；TAKT 暂存本次修改，并保留此前未暂存或未跟踪的用户改动。

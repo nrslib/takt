@@ -334,6 +334,8 @@ issue:
 tui:
   ui:
     thinking: "考え中..."
+    extendedThinking: "推論中..."
+    responding: "応答中"
     selectTask: "候補タスクを選択中..."
     selectStart: "開始位置を判断中..."
     extractRetryAgreement: "再投入についての合意を整理中..."
@@ -344,6 +346,8 @@ tui:
     queuedHint: "↑ でキューを編集"
     queuedMore: "他 {count} 件をキュー中"
     interruptHint: "(Esc で中断)"
+    interruptHintCompact: "(Esc: 中断)"
+    interruptHintMinimal: "Esc"
     responseInterrupted: "応答を中断しました。"
     instructionInterrupted: "指示書の生成を中断しました。"
     runFinished: "ワークフローの実行が完了しました。続けてタスクを入力するか、/cancel で終了できます。"

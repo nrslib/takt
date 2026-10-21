@@ -100,6 +100,27 @@ describe('System step wait schema', () => {
     expect(WorkflowStepRawSchema.parse({ ...rawStep, system_inputs: [input] })).toMatchObject({ system_inputs: [input] });
   });
 
+  it('CI失敗の取得対象HEADと再実行後の参照をraw入力から実行時設定まで保持する', () => {
+    const inputs = [
+      { type: 'pr_ci_failure', source: 'current_pr', as: 'failure', head_sha: '{context:wait.status.headSha}' },
+      { type: 'pr_status', source: 'current_pr', as: 'status', rerun_from: '{effect:retry.rerun_ci.rerun}' },
+    ];
+    const config = normalizeWorkflowConfig({ name: 'ci-evidence', initial_step: rawStep.name,
+      steps: [{ ...rawStep, system_inputs: inputs }],
+    }, process.cwd());
+    expect(config.steps[0]?.systemInputs).toEqual(inputs);
+    expect(() => validateWorkflowConfig(config, { projectCwd: '/project' })).not.toThrow();
+  });
+
+  it('失敗情報を参照するCI再実行effectを正規化して保持する', () => {
+    const effect = { type: 'rerun_ci', pr: '{context:identify.pr.number}', failure: '{context:evidence.failure}' };
+    const config = normalizeWorkflowConfig({ name: 'ci-retry', initial_step: rawStep.name,
+      steps: [{ ...rawStep, effects: [effect] }],
+    }, process.cwd());
+    expect(config.steps[0]?.effects).toEqual([effect]);
+    expect(() => validateWorkflowConfig(config, { projectCwd: '/project' })).not.toThrow();
+  });
+
   it.each([1, 15_000, 2_147_483_647, undefined])('有効な間隔%sを正規化と実行時検証で保持する', (interval_ms) => {
     const workflow = normalizeWorkflowConfig({ name: 'valid-interval', initial_step: rawStep.name,
       steps: [{ ...rawStep, wait: { until: 'when(false)', interval_ms, on_timeout: 'ABORT' } }],
@@ -124,6 +145,20 @@ describe('System step wait schema', () => {
   it('commitとpushのsystem effectを受理する', () => {
     const effect = { type: 'commit_and_push', pr: 123 };
     expect(WorkflowStepRawSchema.parse({ ...rawStep, effects: [effect] })).toMatchObject({ effects: [effect] });
+  });
+
+  it('comment_prの明示的なplain_text指定を実行時設定まで保持する', () => {
+    const effect = { type: 'comment_pr', pr: 123, body: '[unit](https://example.invalid)', body_format: 'plain_text' };
+    const config = normalizeWorkflowConfig({ name: 'plain-comment', initial_step: rawStep.name,
+      steps: [{ ...rawStep, effects: [effect] }],
+    }, process.cwd());
+    expect(config.steps[0]?.effects).toEqual([effect]);
+  });
+
+  it('未指定の出力形式を補完せず不正な出力形式は拒否する', () => {
+    const effect = { type: 'comment_pr', pr: 123, body: 'body_format: plain_text' };
+    expect(WorkflowStepRawSchema.parse({ ...rawStep, effects: [effect] }).effects).toEqual([effect]);
+    expect(WorkflowStepRawSchema.safeParse({ ...rawStep, effects: [{ ...effect, body_format: 'html' }] }).success).toBe(false);
   });
 
   it.each([0, 2, Number.MAX_SAFE_INTEGER, undefined])('有効な再試行上限%sをraw入力から実行時検証まで保持する', (max_retries) => {

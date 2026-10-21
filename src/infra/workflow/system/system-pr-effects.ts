@@ -4,10 +4,17 @@ import { execFileSync } from 'node:child_process';
 
 export function commentPrEffect(
   options: SystemStepServicesOptions,
-  payload: { pr: number; body: string },
+  payload: { pr: number; body: string; body_format?: 'plain_text' },
 ): Record<string, unknown> {
   const gitProvider = options.gitProvider ?? getGitProvider();
-  const result = gitProvider.commentOnPr(payload.pr, payload.body, options.projectCwd);
+  let body = payload.body;
+  if (payload.body_format === 'plain_text') {
+    let fenceLength = 3;
+    for (const match of body.matchAll(/`+/gu)) fenceLength = Math.max(fenceLength, match[0].length + 1);
+    const fence = '`'.repeat(fenceLength);
+    body = `${fence}text\n${body}\n${fence}`;
+  }
+  const result = gitProvider.commentOnPr(payload.pr, body, options.projectCwd);
   return {
     success: result.success,
     failed: result.success !== true,

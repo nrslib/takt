@@ -161,7 +161,7 @@ Provider errors propagate through: `AgentResponse.error` → session log → con
 
 ## Session Management
 
-Agent sessions are stored per-cwd and per-provider. Session resume is skipped during worktree/clone execution.
+Agent sessions are stored per-cwd and per-provider. In a worktree clone, steps with `session: continue` and no provider fallback resume a saved session for the same persona, provider, and model within the same run, without using sessions from another clone or the project root. A new attempt through retry, requeue, or instruct starts each persona with a fresh session in the existing clone; later steps resume that session.
 
 When a normal Phase 1 response merely omits `sessionId`, that alone is not a reason to discard the existing session. Paths that are allowed to continue the existing resume context should preserve the old sessionId.
 

@@ -29,6 +29,24 @@ try {
   const config = join(temporaryRoot, 'config');
   mkdirSync(project);
   mkdirSync(config);
+  const facetsRoot = join(temporaryRoot, 'facets');
+  mkdirSync(join(facetsRoot, 'partials', 'instructions'), { recursive: true });
+  writeFileSync(join(facetsRoot, 'partials', 'instructions', 'example.md'), 'installed facet');
+  // These library exports are ESM-only; resolve them from the installed package in ESM mode.
+  const libraryCheck = execFileSync(process.execPath, ['--input-type=module', '--eval', `
+    import assert from 'node:assert/strict';
+    import { compose } from '#faceted-prompting';
+    import { expandFacetIncludes } from '#faceted-prompting/cli/facet-includes';
+    const facetsRoot = process.argv[1];
+    assert.deepEqual(compose({ persona: { body: 'persona' }, instructions: [{ body: 'instruction' }] }, { contextMaxChars: 2000 }), {
+      systemPrompt: 'persona', userMessage: 'instruction',
+    });
+    assert.equal(expandFacetIncludes({
+      body: '{{include:instructions/example}}', facetsRoots: [facetsRoot], repertoireDirs: [], allowedRoots: [facetsRoot],
+    }).body, 'installed facet');
+    process.stdout.write('Installed library composition and facet resolution passed\\n');
+  `, facetsRoot], { cwd: installedRoot, encoding: 'utf8', timeout: 10000 });
+  process.stdout.write(libraryCheck);
   writeFileSync(join(config, 'config.yaml'), 'language: en\n');
   const options = {
     cwd: project,

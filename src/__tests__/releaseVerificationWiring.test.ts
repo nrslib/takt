@@ -67,6 +67,7 @@ interface CiWorkflowJob {
   strategy?: {
     matrix?: {
       os?: string[];
+      npm?: string[];
       shard?: number[];
       include?: Array<{
         group: string;
@@ -133,6 +134,9 @@ const autoTagWorkflow = parseYaml(
 ) as CiWorkflow;
 const prCommentWorkflow = parseYaml(
   readFileSync(new URL('../../.github/workflows/pr-comment-commands.yml', import.meta.url), 'utf8'),
+) as CiWorkflow;
+const globalInstallWorkflow = parseYaml(
+  readFileSync(new URL('../../.github/workflows/global-install.yml', import.meta.url), 'utf8'),
 ) as CiWorkflow;
 
 const integrationBoundaryNames = new Set([
@@ -287,6 +291,44 @@ if (command === process.env.TAKT_FAIL_COMMAND) {
 }
 
 describe('release verification wiring', () => {
+  it('should exclude removed notification dependencies and their obsolete versions from the manifest and lock', () => {
+    const lock = JSON.parse(readFileSync(new URL('../../package-lock.json', import.meta.url), 'utf8')) as {
+      packages: Record<string, { version?: string }>;
+    };
+    expect(manifest.dependencies['update-notifier']).toBeUndefined();
+    expect(manifest.dependencies.boxen).toBeUndefined();
+    const forbidden = Object.entries(lock.packages).filter(([path, record]) =>
+      /(?:^|\/)node_modules\/(?:update-notifier|boxen)$/.test(path)
+      || (/(?:^|\/)node_modules\/wrap-ansi$/.test(path) && record.version?.startsWith('9.'))
+      || (/(?:^|\/)node_modules\/widest-line$/.test(path) && record.version?.startsWith('5.')),
+    );
+    expect(forbidden.map(([path, record]) => `${path}@${record.version}`)).toEqual([]);
+  });
+
+  it.each([
+    { name: 'pull request', workflow: ciWorkflow },
+    { name: 'published release', workflow: globalInstallWorkflow },
+  ])('should wire $name global installation checks to the shared gate with Java 17 or later', ({ workflow }) => {
+    const job = workflow.jobs?.['global-install'];
+    const npmVersions = job?.strategy?.matrix?.npm ?? [];
+    expect(npmVersions).toEqual(expect.arrayContaining(['10.9.4', '11.16.0']));
+    expect(npmVersions.some((version) => /^12\.\d+\.\d+$/.test(version))).toBe(true);
+    const steps = job?.steps ?? [];
+    const gate = steps.find((step) => /global-install-check\.mjs|npm run test:global-install/.test(step.run ?? ''));
+    const command = gate?.run?.replace(/\\\r?\n/g, ' ').split(/\r?\n/)
+      .find((line) => /global-install-check\.mjs|npm run test:global-install/.test(line));
+    expect(command).toMatch(/--npm-versions\s+['"]?\$\{\{\s*matrix\.npm\s*\}\}['"]?(?:\s|$)/);
+    const java = steps.find((step) => step.uses?.startsWith('actions/setup-java@'));
+    expect(Number(java?.with?.['java-version'])).toBeGreaterThanOrEqual(17);
+  });
+
+  it('should pass the requested published version tarball to the common installation gate', () => {
+    const step = globalInstallWorkflow.jobs?.['global-install']?.steps?.find((entry) => entry.env?.TAKT_VERSION && entry.run?.includes('global-install-check.mjs'));
+    expect(step?.env?.TAKT_VERSION).toContain('inputs.version');
+    expect(step?.run).toContain('npm pack "takt@${TAKT_VERSION}"');
+    expect(step?.run).toContain('--tarball "$RUNNER_TEMP/$tarball"');
+  });
+
   describe.each([
     { fileName: 'ci.yml', workflow: ciWorkflow },
     { fileName: 'nix.yml', workflow: nixWorkflow },
@@ -375,6 +417,17 @@ describe('release verification wiring', () => {
       ['patches/ink+7.1.1.patch', 'node_modules/patch-package/index.js'],
       () => { throw new Error('Patch failed'); },
     )).toThrow('Patch failed');
+  });
+
+  it('should reapply the Quint dependency patch after rebuilding the Nix production tree', () => {
+    const source = readFileSync(new URL('../../flake.nix', import.meta.url), 'utf8');
+    const production = source.match(/preInstall = ''([\s\S]*?)'';/)?.[1];
+    expect(production).toBeDefined();
+    const install = production!.indexOf('npm ci --omit=dev --ignore-scripts');
+    expect(install).toBeGreaterThanOrEqual(0);
+    expect(production!.indexOf('patch -p1 < patches/@informalsystems+quint+0.32.0.patch'))
+      .toBeGreaterThan(install);
+    expect(manifest.scripts.prebuild).toBe('npm run patch:dependencies');
   });
 
   it('should ship the managed DeepSeek npm project and verify its lock contract in CI', () => {

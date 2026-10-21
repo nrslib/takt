@@ -3,6 +3,7 @@
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { satisfies } from 'semver';
 
 const sdkVersion = '0.2.1-alpha.2';
 const managedBase = 'managed/deepseek-harness/';
@@ -71,11 +72,15 @@ export function verifyDeepSeekManagedLock(root, rootLock, managed, lock, constan
  * Require CLI startup dependencies to be exactly pinned, locked, and bundled.
  * @throws {Error} If any required startup dependency violates the publish contract.
  */
-export function verifyStartupBundleLock(root, lock) {
-  // update-notifier is bundled because its boxen needs older wrap-ansi / widest-line than the bundled ink.
-  // Left unbundled, a global install plans those older versions over the bundled top-level copies and
-  // leaves empty nested directories, so startup fails to resolve string-width.
-  for (const name of ['@modelcontextprotocol/sdk', 'ink', 'react', 'update-notifier']) {
+export function verifyStartupBundleLock(root, lock, quint) {
+  for (const [path, entry] of Object.entries(lock.packages ?? {})) {
+    if (/(?:^|\/)node_modules\/(?:update-notifier|boxen)$/.test(path)
+      || (/(?:^|\/)node_modules\/wrap-ansi$/.test(path) && entry.version?.startsWith('9.'))
+      || (/(?:^|\/)node_modules\/widest-line$/.test(path) && entry.version?.startsWith('5.'))) {
+      throw new Error(`Removed notification dependency remains: ${path}@${entry.version}`);
+    }
+  }
+  for (const name of ['@modelcontextprotocol/sdk', 'ink', 'react', '@informalsystems/quint', 'wrap-ansi']) {
     const version = lock.packages?.[`node_modules/${name}`]?.version;
     if (!version
       || root.dependencies?.[name] !== version
@@ -83,6 +88,12 @@ export function verifyStartupBundleLock(root, lock) {
       || !root.bundleDependencies?.includes(name)) {
       throw new Error(`${name} must be explicitly pinned, locked and bundled`);
     }
+  }
+  const admZipRange = quint.dependencies?.['adm-zip'];
+  const admZipVersion = lock.packages?.['node_modules/adm-zip']?.version;
+  if (admZipRange !== root.overrides?.['adm-zip']
+    || !admZipVersion || !admZipRange || !satisfies(admZipVersion, admZipRange)) {
+    throw new Error('Bundled Quint must declare the shipped adm-zip version range');
   }
 }
 
@@ -112,8 +123,9 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
   const managed = JSON.parse(readFileSync(new URL('../managed/deepseek-harness/package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(readFileSync(new URL('../managed/deepseek-harness/package-lock.json', import.meta.url), 'utf8'));
   const constants = readFileSync(new URL('../src/infra/deepseek-harness/constants.ts', import.meta.url), 'utf8');
+  const quint = JSON.parse(readFileSync(new URL('../node_modules/@informalsystems/quint/package.json', import.meta.url), 'utf8'));
   verifyDeepSeekManagedLock(root, rootLock, managed, lock, constants);
-  verifyStartupBundleLock(root, rootLock);
+  verifyStartupBundleLock(root, rootLock, quint);
   for (const provider of ['claude-sdk', 'codex', 'opencode', 'pi']) {
     const manifest = JSON.parse(readFileSync(new URL(`../managed/${provider}/package.json`, import.meta.url), 'utf8'));
     const managedLock = JSON.parse(readFileSync(new URL(`../managed/${provider}/package-lock.json`, import.meta.url), 'utf8'));
