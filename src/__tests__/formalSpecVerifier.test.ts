@@ -581,6 +581,39 @@ describe('runFormalSpecVerification', () => {
     }
   });
 
+  it('continues Quint verification when Alloy execution settings are invalid', async () => {
+    vi.stubEnv('TAKT_ALLOY_CONCURRENCY', 'invalid');
+    const directory = createTestDirectory();
+    processResponses.push(
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0, stderr: 'openjdk version "17.0.1"' },
+      { code: 0 },
+    );
+
+    try {
+      const response = ['```quint', 'module verify {}', '```', validAlloyResponse()].join('\n');
+      const result = await runFormalSpecVerification(response, directory, { modelCheckTimeoutSeconds: 1 });
+
+      expect(result.quint).toMatchObject({
+        status: 'passed',
+        parse: { status: 'passed' },
+        typecheck: { status: 'passed' },
+        run: { status: 'passed' },
+        verify: { status: 'passed' },
+      });
+      expect(result.alloy).toMatchObject({
+        status: 'error',
+        message: expect.stringContaining('TAKT_ALLOY_CONCURRENCY'),
+      });
+      expect(spawnedProcesses.some(({ args }) => args.includes('verify'))).toBe(true);
+      expect(spawnedProcesses.some(({ args }) => args.includes('commands'))).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('collects later commands after one output directory cannot be created', async () => {
     const directory = createTestDirectory();
     installConfiguredAlloyJar(directory);

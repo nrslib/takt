@@ -545,6 +545,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
       return { kind: 'error', message: getErrorMessage(error) };
     }
     const retainedArtifactsMessage = getFormalSpecRetainedArtifactsMessage(verification, ctx.lang);
+    const retainedArtifacts = retainedArtifactsMessage === undefined ? {} : { retainedArtifactsMessage };
     const withArtifactsMessage = (message: string): string => retainedArtifactsMessage === undefined
       ? message
       : `${message}\n\n${retainedArtifactsMessage}`;
@@ -564,7 +565,8 @@ export function createConversationSession(options: ConversationSessionOptions): 
         }
         return {
           kind: 'error',
-          message: verification.message ?? 'Formal specification verification failed.',
+          message: withArtifactsMessage(verification.message ?? 'Formal specification verification failed.'),
+          ...retainedArtifacts,
         };
       }
 
@@ -577,7 +579,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
       try {
         interpretationImageAttachments = options.resolveImageAttachments?.(interpretationPrompt);
       } catch (error) {
-        return { kind: 'error', code: 'provider_error', message: withArtifactsMessage(getErrorMessage(error)) };
+        return { kind: 'error', code: 'provider_error', message: withArtifactsMessage(getErrorMessage(error)), ...retainedArtifacts };
       }
 
       const interpretation = await callAIWithRetry(
@@ -606,11 +608,11 @@ export function createConversationSession(options: ConversationSessionOptions): 
 
       if (!interpretation.result) {
         return interpretation.error === undefined
-          ? { kind: 'error', code: 'empty_ai_response', message: withArtifactsMessage('AI response was empty') }
-          : { kind: 'error', code: 'provider_error', message: withArtifactsMessage(interpretation.error) };
+          ? { kind: 'error', code: 'empty_ai_response', message: withArtifactsMessage('AI response was empty'), ...retainedArtifacts }
+          : { kind: 'error', code: 'provider_error', message: withArtifactsMessage(interpretation.error), ...retainedArtifacts };
       }
       if (!interpretation.result.success) {
-        return { kind: 'error', code: 'provider_error', message: withArtifactsMessage(interpretation.result.content) };
+        return { kind: 'error', code: 'provider_error', message: withArtifactsMessage(interpretation.result.content), ...retainedArtifacts };
       }
       if (!isCurrentTurn()) {
         return interrupted(retainedArtifactsMessage);
@@ -640,7 +642,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
       };
     } catch (error) {
       if (!isCurrentTurn()) return interrupted(retainedArtifactsMessage);
-      return { kind: 'error', code: 'provider_error', message: withArtifactsMessage(getErrorMessage(error)) };
+      return { kind: 'error', code: 'provider_error', message: withArtifactsMessage(getErrorMessage(error)), ...retainedArtifacts };
     } finally {
       cleanupFormalSpecVerificationArtifacts(verification);
     }

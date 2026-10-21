@@ -1212,7 +1212,15 @@ export async function runFormalSpecVerification(
       ? writeSpecification(runDirectory, 'spec.als', blocks.alloy)
       : undefined;
 
-    const alloySettings = alloySpecificationPath === undefined ? undefined : resolveAlloyExecutionSettings();
+    let alloySettings: AlloyExecutionSettings | undefined;
+    let alloySettingsError: string | undefined;
+    if (alloySpecificationPath !== undefined) {
+      try {
+        alloySettings = resolveAlloyExecutionSettings();
+      } catch (error) {
+        alloySettingsError = error instanceof Error ? error.message : String(error);
+      }
+    }
     const stages: FormalSpecStageResult[] = [];
     let quint: FormalSpecQuintResult;
     let targets: QuintVerificationTargets = { invariants: [], temporal: [] };
@@ -1381,8 +1389,14 @@ export async function runFormalSpecVerification(
     }
 
     let alloy: FormalSpecAlloyResult = skippedAlloyResult('Alloy verification was not run.');
-    if (!alloySpecificationPath || !alloySettings) {
+    if (!alloySpecificationPath) {
       alloy = skippedAlloyResult('No Alloy specification block was present.');
+      stages.push(alloy);
+    } else if (alloySettingsError !== undefined) {
+      alloy = errorStage(alloySettingsError);
+      stages.push(alloy);
+    } else if (!alloySettings) {
+      alloy = errorStage('Alloy execution settings were not resolved.');
       stages.push(alloy);
     } else if (!hasJava17) {
       alloy = skippedAlloyResult(javaSkipMessage);

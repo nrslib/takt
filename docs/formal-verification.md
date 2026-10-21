@@ -70,7 +70,7 @@ If memory is limited, lower the heap limit or set concurrency to 1. Use these TA
 
 `assistant.formal_spec.model_check_timeout_seconds` applies separately to each Alloy command (default: 900 seconds). There is no overall timeout; failures and timeouts do not prevent the remaining commands from running. A free slot starts the next command immediately. Each command result identifies a timeout with `timedOut: true`.
 
-For `N` Alloy commands and a concurrency limit of `K`, the theoretical upper bound for the Alloy command execution interval is `ceil(N / K) × model_check_timeout_seconds`, where `ceil` rounds up to the nearest integer. This interval runs from the start of the first Alloy command to the end of the last Alloy command. The bound excludes Java detection and checks, Alloy JAR retrieval and validation, command enumeration (parsing the Alloy specification), Quint verification, specification generation, and result interpretation (LLM calls).
+For `N` Alloy commands with at most `K` running concurrently, `ceil(N / K) × model_check_timeout_seconds` estimates the time spent waiting for model-checking processes (`ceil` rounds up). This is not a strict upper bound on elapsed time: workers process results and perform file operations after a process exits and before starting another command, and that work is outside each command's timeout.
 
 Failed, errored, or timed-out verification retains specifications and logs under `.takt/runs/verify-*/` and reports the directory in the result message. Retained directories are excluded from automatic cleanup; remove them manually when no longer needed. Successful verification artifacts are deleted after result interpretation.
 

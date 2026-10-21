@@ -1045,6 +1045,45 @@ describe('TUI local commands', () => {
     expect(chunks).toEqual([]);
   });
 
+  it('shows retained verification artifacts when the interpretation response is empty', async () => {
+    mockInitializeSession.mockReturnValueOnce({
+      provider: { setup: vi.fn(), getRuntimeInstructions: vi.fn(() => null) },
+      providerType: 'codex',
+      model: 'codex-model',
+      lang: 'en',
+      personaName: 'interactive',
+      sessionId: undefined,
+    });
+    const plan = createPlan();
+    const conversation = createConversation({
+      plan: { ...plan, strategy: { ...plan.strategy, formalSpec: true } },
+      persistSession: false,
+    });
+    const runDirectory = '/repo/.takt/runs/verify-empty-interpretation';
+    mockRunFormalSpecVerification.mockResolvedValueOnce({
+      verdict: 'failed',
+      verificationStarted: true,
+      quint: { status: 'passed' },
+      alloy: { status: 'failed' },
+      artifactRetention: { status: 'passed' },
+      artifacts: { runDirectory, specifications: {}, logs: {} },
+    });
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({
+        result: { content: '```alloy\nrun Scenario for 3\n```', sessionId: 'session-1', success: true },
+        sessionId: 'session-1',
+      })
+      .mockResolvedValueOnce({ result: null, sessionId: 'session-1' });
+
+    const outcome = await send(conversation, '/verify', []);
+
+    expect(outcome).toMatchObject({
+      kind: 'error',
+      message: `${getLabel('tui.errors.emptyAiResponse', 'en')}\n\nVerification specifications and logs retained at: ${runDirectory}\nRemove this directory manually when it is no longer needed.`,
+      retainedArtifactsMessage: expect.stringContaining(runDirectory),
+    });
+  });
+
   it('passes retained artifact notification through an interrupted verification submission', async () => {
     const plan = createPlan();
     const conversation = createConversation({ plan: { ...plan, strategy: { ...plan.strategy, formalSpec: true } } });

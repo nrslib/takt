@@ -108,11 +108,16 @@ function describeSessionError(
   code: ConversationSessionErrorCode | undefined,
   message: string,
   lang: 'en' | 'ja',
+  retainedArtifactsMessage?: string,
 ): string {
   // No code means the producer only had human-readable text to offer.
-  return code === undefined || code === 'provider_error'
-    ? message
-    : getLabel(SESSION_ERROR_LABEL_KEYS[code], lang);
+  if (code === undefined || code === 'provider_error') {
+    return message;
+  }
+  const label = getLabel(SESSION_ERROR_LABEL_KEYS[code], lang);
+  return retainedArtifactsMessage === undefined
+    ? label
+    : `${label}\n\n${retainedArtifactsMessage}`;
 }
 
 function createCommandAvailability(
@@ -421,7 +426,7 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
         case 'error':
           return {
             kind: 'error',
-            message: describeSessionError(result.code, result.message, ctx.lang),
+            message: describeSessionError(result.code, result.message, ctx.lang, result.retainedArtifactsMessage),
             ...(result.retainedArtifactsMessage === undefined ? {} : { retainedArtifactsMessage: result.retainedArtifactsMessage }),
             notices,
           };
