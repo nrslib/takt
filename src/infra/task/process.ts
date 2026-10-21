@@ -4,8 +4,8 @@
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { resolveWindowsPowerShellExecutablePath } from '../../shared/utils/executable-path.js';
 import { getTaskProcessIdentity } from './taskProcessIdentity.js';
+import { isWindowsProcessStartTime, readWindowsProcessIdentity } from './windowsProcessIdentity.js';
 
 /**
  * A process identity based on the operating system's process start time.
@@ -20,7 +20,6 @@ export interface ProcessIdentity {
 const DARWIN_START_TIME = /^darwin-start-v2:([1-9]\d*)$/;
 const BOOT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const LINUX_START_TIME = /^linux-start-v3:([0-9a-f-]{36}):(0|[1-9]\d*)$/;
-const WINDOWS_START_TIME = /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d\.\d{7}Z$/;
 
 function calendarDate(year: number, month: number, day: number): Date | undefined {
   const date = new Date(0);
@@ -37,10 +36,7 @@ function processIdentityFormat(identity: ProcessIdentity | undefined): 'darwin' 
   const linux = LINUX_START_TIME.exec(startTime);
   if (linux !== null && linux[0] === startTime && BOOT_ID.test(linux[1]!)
     && BigInt(linux[2]!) <= 0xffffffffffffffffn) return 'linux';
-  const match = WINDOWS_START_TIME.exec(startTime);
-  if (match === null || match[0] !== startTime) return undefined;
-  return calendarDate(Number(match[1]), Number(match[2]) - 1, Number(match[3])) !== undefined
-    ? 'windows' : undefined;
+  return isWindowsProcessStartTime(startTime) ? 'windows' : undefined;
 }
 
 let selfProcessIdentity: ProcessIdentity | undefined;
@@ -79,22 +75,7 @@ function readProcessIdentity(pid: number): ProcessIdentity | undefined {
   try {
     if (process.platform === 'darwin') return readDarwinProcessIdentity(pid);
     if (process.platform === 'linux') return readLinuxProcessIdentity(pid);
-    const output = execFileSync(
-      resolveWindowsPowerShellExecutablePath(),
-      [
-        '-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
-        `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().ToString('O')`,
-      ],
-      {
-        encoding: 'utf8',
-        shell: false,
-        timeout: 5_000,
-        stdio: ['ignore', 'pipe', 'ignore'],
-      },
-    );
-    const startTime = output.trim();
-    const identity = { startTime };
-    return processIdentityFormat(identity) === 'windows' ? identity : undefined;
+    return readWindowsProcessIdentity(pid);
   } catch {
     // An unavailable process inspector is treated as unknown by callers.
     return undefined;

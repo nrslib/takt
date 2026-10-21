@@ -172,7 +172,7 @@ describe('manager goal execution tools through MCP', () => {
     const branchSha = () => execFileSync('git', ['rev-parse', goalRecord().branch], { cwd, encoding: 'utf8' }).trim();
     const sha = branchSha();
     const controller = new AbortController();
-    const monitor = new GoalAbortMonitor(cwd, goalId, controller);
+    const monitor = new GoalAbortMonitor(cwd, goalId, controller, { taskName: task.name, executionId: 'unstarted-task' });
     const invoke = async (name: string, extra: Record<string, unknown> = {}) => {
       const result = await client.callTool({ name, arguments: { cwd, goalId, ...extra } });
       expect(result.isError, firstTextContent(result.content)).not.toBe(true);

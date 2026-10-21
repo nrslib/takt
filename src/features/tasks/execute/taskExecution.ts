@@ -21,6 +21,7 @@ import { resolveTaskExecution, resolveTaskIssue, type ResolveTaskExecutionOption
 import { buildTraceTaskMetadata } from './traceTaskMetadata.js';
 import { postExecutionFlow } from './postExecution.js';
 import { GoalAbortMonitor, GoalAbortedError } from './goalAbortMonitor.js';
+import { TaskStoppedError } from '../../../infra/task/taskStop.js';
 import {
   buildBooleanTaskResult,
   buildTaskResult,
@@ -187,7 +188,10 @@ export async function executeTaskAndCompleteWithDetails(
       taskForPersistence = taskRunner.updateRunningTaskExecution(task.name, { runSlug });
     }
     if (goalId !== undefined) {
-      goalAbortMonitor = new GoalAbortMonitor(cwd, goalId, taskAbortController);
+      if (taskForPersistence.executionId === undefined) throw new Error(`Goal task is missing executionId: ${task.name}`);
+      goalAbortMonitor = new GoalAbortMonitor(cwd, goalId, taskAbortController, {
+        taskName: task.name, executionId: taskForPersistence.executionId,
+      });
       taskAbortSignal?.throwIfAborted();
     }
     const emitStatusLog = parallelOptions?.outputMode !== 'silent';
@@ -220,7 +224,7 @@ export async function executeTaskAndCompleteWithDetails(
     executionCwd = execCwd;
     executionBranch = branch;
     goalAbortMonitor?.check();
-    if (taskAbortController.signal.reason instanceof GoalAbortedError) throw taskAbortController.signal.reason;
+    if (isManagedTaskInterruption(taskAbortController.signal.reason)) throw taskAbortController.signal.reason;
 
     runSlug = reportDirName;
     if (task.data?.goal_id !== undefined) taskForPersistence = { ...taskForPersistence, runSlug };
@@ -287,7 +291,7 @@ export async function executeTaskAndCompleteWithDetails(
         : { loopAnalysisPublication }),
     });
     goalAbortMonitor?.check();
-    if (taskAbortController.signal.reason instanceof GoalAbortedError) {
+    if (isManagedTaskInterruption(taskAbortController.signal.reason)) {
       taskRunResult = { ...taskRunResult, success: false, interrupted: true, reason: taskAbortController.signal.reason.message,
         exceeded: false, retryable: false };
     }
@@ -354,7 +358,7 @@ export async function executeTaskAndCompleteWithDetails(
     }
 
     goalAbortMonitor?.check();
-    if (taskRunResult.success && taskAbortController.signal.reason instanceof GoalAbortedError) throw taskAbortController.signal.reason;
+    if (taskRunResult.success && isManagedTaskInterruption(taskAbortController.signal.reason)) throw taskAbortController.signal.reason;
 
     if (postExecutionTaskError !== undefined) {
       const taskResult = buildBooleanTaskResult({
@@ -411,24 +415,30 @@ export async function executeTaskAndCompleteWithDetails(
       ...(completion === undefined ? {} : { completion, runSlug }),
     };
   } catch (err) {
-    const error = taskAbortController.signal.reason instanceof GoalAbortedError
-      ? taskAbortController.signal.reason : err;
-    if (error instanceof GoalAbortedError) {
-      if (workflowStarted) workflowResult = 'aborted';
-    }
-    interrupted ||= taskAbortSignal?.aborted === true;
+    const error = err instanceof TaskStoppedError ? err
+      : isManagedTaskInterruption(taskAbortController.signal.reason) ? taskAbortController.signal.reason : err;
     const completedAt = new Date().toISOString();
-    const failureReason = getErrorMessage(error);
-    const completion = snapshot(false, failureReason);
-    persistTaskError(taskRunner, taskForPersistence, startedAt, completedAt, error, {
-      emitStatusLog: parallelOptions?.outputMode !== 'silent',
-      ...(completion === undefined ? {} : { completion }),
-    });
-    return {
-      success: false,
-      failureReason,
-      ...(completion === undefined ? {} : { completion, runSlug }),
+    const saveFailure = (failure: unknown): TaskCompletionResult => {
+      if (isManagedTaskInterruption(failure)) {
+        interrupted = true;
+        if (workflowStarted) workflowResult = 'aborted';
+      }
+      interrupted ||= taskAbortSignal?.aborted === true;
+      const failureReason = getErrorMessage(failure);
+      const completion = snapshot(false, failureReason);
+      persistTaskError(taskRunner, taskForPersistence, startedAt, completedAt, failure, {
+        emitStatusLog: parallelOptions?.outputMode !== 'silent',
+        ...(completion === undefined ? {} : { completion }),
+      });
+      return { success: false, failureReason,
+        ...(completion === undefined ? {} : { completion, runSlug }) };
     };
+    try {
+      return saveFailure(error);
+    } catch (terminalError) {
+      if (!(terminalError instanceof TaskStoppedError)) throw terminalError;
+      return saveFailure(terminalError);
+    }
   } finally {
     goalAbortMonitor?.stop();
     settleLoopAnalysisPublication(loopAnalysisPublication);
@@ -436,6 +446,10 @@ export async function executeTaskAndCompleteWithDetails(
       externalAbortSignal.removeEventListener('abort', onExternalAbort);
     }
   }
+}
+
+function isManagedTaskInterruption(error: unknown): error is GoalAbortedError | TaskStoppedError {
+  return error instanceof GoalAbortedError || error instanceof TaskStoppedError;
 }
 
 function buildExceededFailureReason(exceeded: ExceededInfo): string {

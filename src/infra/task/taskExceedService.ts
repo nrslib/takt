@@ -2,6 +2,7 @@ import type { WorkflowResumePoint } from '../../core/models/index.js';
 import type { TaskRecord } from './schema.js';
 import { buildExceededTaskRecord } from './taskRecordMutations.js';
 import { TaskStore } from './store.js';
+import { assertTaskStopHandled } from './taskStop.js';
 
 export interface ExceedTaskOptions {
   completion?: import('../goals/schema.js').GoalTaskResult;
@@ -29,6 +30,7 @@ export class TaskExceedService {
         throw new Error(`Task not found: ${taskName} (running)`);
       }
 
+      assertTaskStopHandled(current.tasks[index]!, options.completion);
       const updated = buildExceededTaskRecord(current.tasks[index]!, options);
 
       const tasks = [...current.tasks];
@@ -50,6 +52,8 @@ export class TaskExceedService {
       const updated: TaskRecord = {
         ...target,
         status: 'pending',
+        execution_id: undefined,
+        stop_request: undefined,
         started_at: null,
         completed_at: null,
         owner_pid: null,

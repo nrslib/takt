@@ -112,6 +112,7 @@ function findRunReadCwd(cwd: string, runSlug: string): string {
 function taskSummary(cwd: string, task: ReturnType<TaskRunner['listTaskStateItems']>[number]): Record<string, unknown> {
   const summary: Record<string, unknown> = {
     name: task.name,
+    ...(task.executionId === undefined ? {} : { executionId: task.executionId }),
     ...(task.goalId === undefined ? {} : { goalId: task.goalId }),
     ...(task.summary === undefined ? {} : { summary: task.summary }),
     status: task.status,

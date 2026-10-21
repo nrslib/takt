@@ -9,6 +9,7 @@ import {
 } from './schemas.js';
 import { requeueGoalTaskInputSchema, retryGoalTaskInputSchema } from './goalTaskRetrySchemas.js';
 import { removeGoalTaskInputSchema } from './goalTaskRemovalSchemas.js';
+import { stopGoalTaskInputSchema } from './goalTaskStopSchemas.js';
 
 const inputSchemas = {
   enqueue: enqueueGoalTaskInputSchema, integrate: mergeGoalTaskInputSchema, complete: completeGoalInputSchema,
@@ -16,6 +17,7 @@ const inputSchemas = {
   withdraw_question: withdrawGoalQuestionInputSchema, check_completion: goalWriteInputSchema,
   requeue: requeueGoalTaskInputSchema, retry: retryGoalTaskInputSchema, remove: removeGoalTaskInputSchema,
   reopen: reopenGoalInputSchema, tell: tellGoalRunInputSchema,
+  stop: stopGoalTaskInputSchema,
 };
 
 export async function goalWrite(
