@@ -1,0 +1,4 @@
+Set up job
+GitHub hosted runner provisioning service: incident GH-RUNNER-42.
+Failed to provision VM: service capacity unavailable in runner region.
+No checkout, install, test, or deploy step started. Job failed before assigning a worker.

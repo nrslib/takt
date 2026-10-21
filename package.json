@@ -26,6 +26,8 @@
     "sync:nix-deps": "node scripts/sync-nix-deps.mjs",
     "analyze:usage": "node dist/commands/analyze-usage.js",
     "eval:prompts:prepare": "node eval/scripts/prepare.mjs",
+    "eval:prompts:merge-ci-recovery:contracts": "node --test eval/asserts/merge-ci-recovery.test.mjs eval/suite-registry.test.mjs",
+    "eval:prompts:merge-ci-recovery": "npm run eval:prompts:merge-ci-recovery:contracts && node eval/scripts/run-evals.mjs merge-ci-investigation merge-ci-review --prepare --no-cache --repeat 3",
     "eval:prompts:frontend-mediator-review": "node eval/scripts/run-evals.mjs --prepare frontend-mediator-review --no-cache",
     "eval:prompts:frontend-mediator-coder": "node eval/scripts/run-evals.mjs --prepare frontend-mediator-coder --no-cache",
     "eval:prompts:interactive-topic-boundary": "node --import tsx --test eval/asserts/interactive-topic-boundary.test.mjs eval/suite-registry.test.mjs && node eval/scripts/run-evals.mjs interactive-topic-boundary --no-cache --repeat 3",
@@ -257,7 +259,8 @@
     "@opencode-ai/sdk": "1.18.28",
     "@opencode/client": "2.0.18",
     "@earendil-works/pi-ai": "1.1.0",
-    "@earendil-works/pi-coding-agent": "1.1.0"
+    "@earendil-works/pi-coding-agent": "1.1.0",
+    "marked": "18.0.11"
   },
   "bundleDependencies": [
     "@modelcontextprotocol/sdk",
