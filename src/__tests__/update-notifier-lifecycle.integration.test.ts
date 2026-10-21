@@ -69,8 +69,8 @@ describe('update check process lifetime', () => {
     await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), { timeout: 4000 });
   });
 
-  it.each(['fetch', 'save'])('should preserve the command exit and existing cache after %s failure', async (failure) => {
-    const originalCache = JSON.parse(readFileSync(cache, 'utf8')) as unknown;
+  it.each(['fetch', 'save'])('should preserve the command exit and record the failed check after %s failure', async (failure) => {
+    const originalCache = JSON.parse(readFileSync(cache, 'utf8')) as { lastUpdateCheck: number };
     const parent = await runParent('../../dist/app/cli/updateCheck.js', failure);
 
     expect(parent.stdout).toContain('command completed');
@@ -81,6 +81,8 @@ describe('update check process lifetime', () => {
       expect(() => process.kill(pid, 0)).toThrow();
     }, { timeout: 4000 });
     if (failure === 'save') expect(existsSync(join(root, 'save-failed'))).toBe(true);
-    expect(JSON.parse(readFileSync(cache, 'utf8'))).toEqual(originalCache);
+    const failedCache = JSON.parse(readFileSync(cache, 'utf8')) as { lastUpdateCheck: number; update?: unknown };
+    expect(failedCache.lastUpdateCheck).toBeGreaterThan(originalCache.lastUpdateCheck);
+    expect(failedCache.update).toBeUndefined();
   });
 });

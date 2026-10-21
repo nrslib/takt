@@ -423,8 +423,10 @@ describe('release verification wiring', () => {
     const source = readFileSync(new URL('../../flake.nix', import.meta.url), 'utf8');
     const production = source.match(/preInstall = ''([\s\S]*?)'';/)?.[1];
     expect(production).toBeDefined();
+    const install = production!.indexOf('npm ci --omit=dev --ignore-scripts');
+    expect(install).toBeGreaterThanOrEqual(0);
     expect(production!.indexOf('patch -p1 < patches/@informalsystems+quint+0.32.0.patch'))
-      .toBeGreaterThan(production!.indexOf('npm ci --omit=dev --ignore-scripts'));
+      .toBeGreaterThan(install);
     expect(manifest.scripts.prebuild).toBe('npm run patch:dependencies');
   });
 

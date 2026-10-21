@@ -62,9 +62,16 @@ function inspect(name, command, args, cwd, env) {
 function installPublishedVersion(name, version, installArgs, installed, env) {
   const result = inspect(`${name}-install`, 'npx', [...installArgs, `takt@${version}`], workRoot, env);
   if (result.status !== 0) return false;
-  const manifest = readFileSync(join(installed, 'package.json'), 'utf8');
-  writeFileSync(join(logRoot, `${name}-manifest.json`), manifest);
-  if (JSON.parse(manifest).version !== version) throw new Error('Starting installation version mismatch');
+  try {
+    const manifest = readFileSync(join(installed, 'package.json'), 'utf8');
+    writeFileSync(join(logRoot, `${name}-manifest.json`), manifest);
+    const actual = JSON.parse(manifest).version;
+    if (actual !== version) throw new Error(`installed ${actual}, expected ${version}`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`[takt] ${name} (takt@${version}): ${message}\n`);
+    return false;
+  }
   writeFileSync(join(logRoot, `${name}-empty-directories.json`), JSON.stringify(findEmptyDirectories(join(installed, 'node_modules')), null, 2));
   return true;
 }

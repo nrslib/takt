@@ -45,6 +45,7 @@ describe('global installation gate', () => {
   let emptyDirectories: boolean;
   let resetPrefixes: string[];
   let failedTarget: string | undefined;
+  let manifestFailure: 'missing' | 'mismatch' | undefined;
 
   beforeEach(() => {
     vi.resetModules();
@@ -58,6 +59,7 @@ describe('global installation gate', () => {
     emptyDirectories = false;
     resetPrefixes = [];
     failedTarget = undefined;
+    manifestFailure = undefined;
     remove.mockImplementation((path: string) => {
       for (const entry of installations.filter((install) => install.target.startsWith('takt@'))) {
         if (entry.prefix.startsWith(`${path}/`) || entry.prefix === path) {
@@ -82,7 +84,11 @@ describe('global installation gate', () => {
     });
     readFile.mockImplementation((path: string) => {
       const target = [...installations].reverse().find((entry) => String(path).startsWith(entry.prefix))?.target;
-      return JSON.stringify({ name: 'takt', version: target?.startsWith('takt@') ? target.slice('takt@'.length) : '0.72.0' });
+      if (manifestFailure === 'missing' && target?.startsWith('takt@')) throw new Error('ENOENT: package.json');
+      const version = manifestFailure === 'mismatch' && target?.startsWith('takt@')
+        ? '0.70.0'
+        : target?.startsWith('takt@') ? target.slice('takt@'.length) : '0.72.0';
+      return JSON.stringify({ name: 'takt', version });
     });
     execute.mockImplementation((command: string, args: string[]) => {
       if (args.includes('view')) return '0.71.0\n';
@@ -203,6 +209,29 @@ describe('global installation gate', () => {
     failedTarget = 'takt@0.71.0';
     expect(await runGate()).toBe(1);
     expect(installations.map((entry) => entry.target)).toEqual(['takt@0.71.0']);
+  });
+
+  it.each([
+    { failure: 'missing', detail: 'ENOENT: package.json' },
+    { failure: 'mismatch', detail: 'installed 0.70.0, expected 0.71.0' },
+  ] as const)('should record a published manifest $failure and continue with the next npm version', async ({ failure, detail }) => {
+    manifestFailure = failure;
+    process.argv.push('--npm-versions', '10.9.4,11.16.0', '--route', 'overwrite');
+
+    expect(await runGate()).toBe(1);
+    expect(installations.map((entry) => entry.npm)).toEqual(['npm@10.9.4', 'npm@11.16.0']);
+    expect(diagnostics).toContain('npm-10.9.4-overwrite-initial (takt@0.71.0)');
+    expect(diagnostics).toContain(detail);
+  });
+
+  it('should report the requested history version and overwrite stage when its manifest mismatches', async () => {
+    manifestFailure = 'mismatch';
+    process.argv.push('--history-version', '0.69.1', '--npm-versions', '12.2.0', '--route', 'overwrite');
+
+    expect(await runGate()).toBe(1);
+    expect(installations.map((entry) => entry.target)).toEqual(['takt@0.69.1']);
+    expect(diagnostics).toContain('npm-12.2.0-overwrite-history (takt@0.69.1)');
+    expect(diagnostics).toContain('installed 0.70.0, expected 0.69.1');
   });
 
   it('should validate the history version before installing packages', async () => {

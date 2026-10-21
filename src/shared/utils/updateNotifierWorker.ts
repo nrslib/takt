@@ -9,10 +9,14 @@ const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 async function refreshUpdateCache(): Promise<void> {
   if ('NO_UPDATE_NOTIFIER' in process.env || process.argv.includes(UPDATE_NOTIFIER_DISABLED_ARG)) return;
+  if (process.env.NODE_ENV === 'test') return;
+  if (process.env.CI !== undefined && process.env.CI !== 'false' && process.env.CI !== '0') return;
   const cache = readUpdateCache();
   if (cache.optOut === true) return;
   if (typeof cache.lastUpdateCheck === 'number' && Number.isFinite(cache.lastUpdateCheck)
     && Date.now() - cache.lastUpdateCheck < CHECK_INTERVAL_MS) return;
+  const checkedCache = { ...cache, optOut: false, lastUpdateCheck: Date.now() };
+  saveUpdateCache(checkedCache);
   const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(pkg.name)}/latest`, {
     signal: AbortSignal.timeout(5000),
   });
@@ -23,9 +27,7 @@ async function refreshUpdateCache(): Promise<void> {
     throw new Error('Update registry returned an invalid version');
   }
   saveUpdateCache({
-    ...cache,
-    optOut: false,
-    lastUpdateCheck: Date.now(),
+    ...checkedCache,
     // The existing cache uses the dist-tag for identical versions, rather than null.
     update: { latest: value.version, current: pkg.version, name: pkg.name, type: semver.diff(pkg.version, value.version) ?? 'latest' },
   });
