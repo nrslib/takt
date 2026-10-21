@@ -273,6 +273,59 @@ describe('CodexClient retry', () => {
     },
   );
 
+  it.each([
+    { eventType: 'item.started', item: { id: 'command', type: 'command_execution', command: 'touch marker' } },
+    { eventType: 'item.updated', item: { id: 'file', type: 'file_change', changes: [{ path: 'file.ts', kind: 'update' }] } },
+    { eventType: 'item.completed', item: { id: 'mcp', type: 'mcp_tool_call', tool: 'write_file', arguments: { path: 'file.ts' } } },
+  ])('$eventType のツールイベント後に429を受けても同じ入力を再実行しない', async ({ eventType, item }) => {
+    runPlans = [{ type: 'events', events: [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: eventType, item },
+      { type: 'turn.failed', error: { message: 'HTTP 429: Too Many Requests' } },
+    ] }];
+    const onStream = vi.fn();
+
+    const result = await new CodexClient().call('coder', 'prompt', { cwd: '/tmp', onStream });
+
+    expect(result).toMatchObject({ status: 'rate_limited', errorKind: 'rate_limit', sessionId: 'thread-1' });
+    expect(result.retryCount).toBeUndefined();
+    expect(runPlanIndex).toBe(1);
+    expect(runStreamedInputs).toEqual(['prompt']);
+    expect(resumeThreadCalls).toHaveLength(0);
+    expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toHaveLength(1);
+  });
+
+  it('ツールイベント後に stream が429を投げても再実行しない', async () => {
+    runPlans = [{
+      type: 'stream',
+      createEvents: async function* () {
+        yield { type: 'thread.started', thread_id: 'thread-1' };
+        yield { type: 'item.started', item: { id: 'command', type: 'command_execution', command: 'touch marker' } };
+        throw new Error('HTTP 429: Too Many Requests');
+      },
+    }];
+
+    const result = await new CodexClient().call('coder', 'prompt', { cwd: '/tmp' });
+
+    expect(result).toMatchObject({ status: 'rate_limited', errorKind: 'rate_limit' });
+    expect(runPlanIndex).toBe(1);
+    expect(resumeThreadCalls).toHaveLength(0);
+  });
+
+  it('ツールイベント後に error event の429を受けても再実行しない', async () => {
+    runPlans = [{ type: 'events', events: [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'item.completed', item: { id: 'command', type: 'command_execution', command: 'touch marker', exit_code: 0 } },
+      { type: 'error', message: 'HTTP 429: Too Many Requests' },
+    ] }];
+
+    const result = await new CodexClient().call('coder', 'prompt', { cwd: '/tmp' });
+
+    expect(result).toMatchObject({ status: 'rate_limited', errorKind: 'rate_limit' });
+    expect(runPlanIndex).toBe(1);
+    expect(resumeThreadCalls).toHaveLength(0);
+  });
+
   it.each(['HTTP 429', 'Too Many Requests', 'rate limit exceeded', 'rate_limit_error'])(
     '使い切りを含まない失敗文言を再試行する: %s', async (message) => {
       vi.useFakeTimers();

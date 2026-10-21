@@ -588,7 +588,8 @@ export class CodexClient {
           if (
             failure.category === AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR
             && (rateLimitClass === 'Exhausted'
-              || (rateLimitClass === 'Transient' && standardRetryCount >= RATE_LIMIT_MAX_RETRIES))
+              || (rateLimitClass === 'Transient'
+                && (state.observedToolUse || standardRetryCount >= RATE_LIMIT_MAX_RETRIES)))
           ) {
             const rateLimitedResponse = this.buildRateLimitedResponse(
               agentType,
@@ -723,7 +724,8 @@ export class CodexClient {
         if (
           failure.category === AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR
           && (rateLimitClass === 'Exhausted'
-            || (rateLimitClass === 'Transient' && standardRetryCount >= RATE_LIMIT_MAX_RETRIES))
+            || (rateLimitClass === 'Transient'
+              && (state.observedToolUse || standardRetryCount >= RATE_LIMIT_MAX_RETRIES)))
         ) {
           const rateLimitedResponse = this.buildRateLimitedResponse(
             agentType,
