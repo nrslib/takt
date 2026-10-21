@@ -10,11 +10,11 @@ import {
   isScopeRef,
   parseScopeRef,
   resolveScopeRef,
-} from 'faceted-prompting';
+} from '#faceted-prompting';
 import {
   assertAllowedPersonaPath,
 } from './workflowPersonaPathPolicy.js';
-import { expandFacetIncludes } from 'faceted-prompting/cli/facet-includes';
+import { expandFacetIncludes } from '#faceted-prompting/cli/facet-includes';
 import {
   buildCandidateDirsWithPackage,
   buildFacetsRoots,
@@ -41,7 +41,7 @@ export {
   resolveSectionMap,
   extractPersonaDisplayName,
   isScopeRef,
-} from 'faceted-prompting';
+} from '#faceted-prompting';
 
 export type { FacetResolutionContext } from './workflowPackageScope.js';
 

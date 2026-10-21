@@ -12,7 +12,7 @@ import type { ProviderAgent } from '../infra/providers/types.js';
 import { TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
 import { runCodexMcpList } from '../infra/codex/mcp-list.js';
 import type { CodexOptions } from '@openai/codex-sdk';
-import { expandFacetIncludes } from 'faceted-prompting/cli/facet-includes';
+import { expandFacetIncludes } from '#faceted-prompting/cli/facet-includes';
 import { parse } from 'yaml';
 import { loadProjectConfig, saveProjectConfig } from '../infra/config/project/projectConfig.js';
 import { invalidateGlobalConfigCache, loadGlobalConfig, saveGlobalConfig } from '../infra/config/global/globalConfig.js';

@@ -163,14 +163,53 @@ describe('CodexClient retry', () => {
     tempRoots.clear();
   });
 
+  it.each([undefined, 'takt', 'codex'] as const)(
+    '新規・再開スレッドで Git repository check を省略する (permissionControl=%s)',
+    async (permissionControl) => {
+      runPlans = [
+        {
+          type: 'events',
+          events: [
+            { type: 'thread.started', thread_id: 'thread-1' },
+            { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+          ],
+        },
+        {
+          type: 'events',
+          events: [
+            { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+          ],
+        },
+      ];
+      const client = new CodexClient();
+
+      const first = await client.call('coder', 'prompt', { cwd: '/tmp', permissionControl });
+      const resumed = await client.call('coder', 'prompt', {
+        cwd: '/tmp',
+        permissionControl,
+        sessionId: first.sessionId,
+      });
+
+      expect(first.status).toBe('done');
+      expect(resumed.status).toBe('done');
+      expect(startThreadCalls).toHaveLength(1);
+      expect(startThreadCalls[0]).toMatchObject({ skipGitRepoCheck: true });
+      expect(resumeThreadCalls).toHaveLength(1);
+      expect(resumeThreadCalls[0]).toMatchObject({
+        threadId: 'thread-1',
+        options: { skipGitRepoCheck: true },
+      });
+    },
+  );
+
   it('turn.failed の429は8回の待機後に rate_limited を返す', async () => {
     vi.useFakeTimers();
     runPlans = Array.from({ length: 9 }, () => ({
-        type: 'events',
-        events: [
-          { type: 'turn.failed', error: { message: 'HTTP 429: rate limit exceeded' } },
-        ],
-      }));
+      type: 'events',
+      events: [
+        { type: 'turn.failed', error: { message: 'HTTP 429: rate limit exceeded' } },
+      ],
+    }));
 
     const client = new CodexClient();
 

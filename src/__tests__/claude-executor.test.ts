@@ -12,7 +12,7 @@ vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { delimiter, dirname } from 'node:path';
 import type { ClaudeSpawnOptions, StreamEvent } from '../infra/claude/types.js';
-import type { HookInput } from '@anthropic-ai/claude-agent-sdk';
+import type { HookInput, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 
 const {
   queryMock,
@@ -1219,6 +1219,59 @@ describe('QueryExecutor rate limit cause preservation', () => {
 });
 
 describe('sdkMessageToStreamEvent', () => {
+  it.each([
+    { name: 'multiple blocks', metadata: {}, ids: ['A', 'B'], expected: { id: 'A', completedToolIds: ['A', 'B'] } },
+    { name: 'reversed blocks', metadata: {}, ids: ['B', 'A'], expected: { id: 'B', completedToolIds: ['B', 'A'] } },
+    { name: 'metadata before blocks', metadata: { tool_use_id: 'C', toolUseId: 'ignored' }, ids: ['A', 'B'], expected: { id: 'C', completedToolIds: ['C', 'A', 'B'] } },
+    { name: 'camel case metadata', metadata: { toolUseId: 'B' }, ids: ['A', 'B'], expected: { id: 'B', completedToolIds: ['B', 'A'] } },
+    { name: 'duplicate ids', metadata: { tool_use_id: 'A' }, ids: ['A', 'A'], expected: { id: 'A' } },
+    { name: 'single block', metadata: {}, ids: ['A'], expected: { id: 'A' } },
+    { name: 'no ids', metadata: {}, ids: [], expected: {} },
+  ])('should preserve the result fields and emit one event for $name', ({ metadata, ids, expected }) => {
+    const callback = vi.fn<(event: StreamEvent) => void>();
+    const message: SDKUserMessage = {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: ids.map((id) => ({ type: 'tool_result', tool_use_id: id, content: 'B' })),
+      },
+      tool_use_result: { ...metadata, stdout: 'normal output', stderr: 'failed output', is_error: true },
+      session_id: 'session-1',
+      parent_tool_use_id: null,
+    };
+
+    sdkMessageToStreamEvent(message, callback, true);
+
+    expect(callback.mock.calls).toEqual([[{
+      type: 'tool_result',
+      data: { ...expected, content: 'failed output', isError: true },
+    }]]);
+  });
+
+  it.each([undefined, null, { content: 'result body' }])('should preserve tool_use_result presence and content handling for %j', (toolUseResult) => {
+    const callback = vi.fn<(event: StreamEvent) => void>();
+    const message: SDKUserMessage = {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 'A', content: 'first' },
+          { type: 'tool_result', tool_use_id: 'B', content: 'second' },
+        ],
+      },
+      tool_use_result: toolUseResult,
+      session_id: 'session-1',
+      parent_tool_use_id: null,
+    };
+
+    sdkMessageToStreamEvent(message, callback, true);
+
+    expect(callback.mock.calls).toEqual(toolUseResult === undefined ? [] : [[{
+      type: 'tool_result',
+      data: { id: 'A', completedToolIds: ['A', 'B'], content: toolUseResult === null ? '' : 'result body', isError: false },
+    }]]);
+  });
+
   it('assistant.error を assistant_error イベントとして流す', () => {
     const callback = vi.fn<(event: StreamEvent) => void>();
 

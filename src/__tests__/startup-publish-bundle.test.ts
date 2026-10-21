@@ -5,14 +5,16 @@ import {
   verifyStartupBundleLock,
 } from '../../scripts/verify-deepseek-sdk-lock.mjs';
 
-const dependencies = { '@modelcontextprotocol/sdk': '1.32.1', ink: '7.1.1', react: '19.2.8', 'update-notifier': '7.3.1' };
+const dependencies = { '@modelcontextprotocol/sdk': '1.32.1', ink: '7.1.1', react: '19.2.8', '@informalsystems/quint': '0.32.0', 'wrap-ansi': '10.0.2' };
+const quint = { dependencies: { 'adm-zip': '^0.6.1' } };
 
 /** Build independent manifest/lock copies so each startup-bundle rejection test can mutate its own fixture. */
 function createFixture() {
   return {
-    manifest: { dependencies: { ...dependencies }, bundleDependencies: Object.keys(dependencies) },
+    manifest: { dependencies: { ...dependencies }, bundleDependencies: Object.keys(dependencies), overrides: { 'adm-zip': '^0.6.1' } },
     lock: { packages: {
       '': { dependencies: { ...dependencies } },
+      'node_modules/adm-zip': { version: '0.6.1' },
       ...Object.fromEntries(Object.entries(dependencies).map(([name, version]) => [
         `node_modules/${name}`, { version, inBundle: true },
       ])),
@@ -93,18 +95,45 @@ function createDeepSeekFixture(): {
 }
 
 describe('CLI startup publish dependency bundle', () => {
+  it('rejects a pristine Quint manifest that does not accept the shipped adm-zip', () => {
+    const { manifest, lock } = createFixture();
+    expect(() => verifyStartupBundleLock(manifest, lock, quint)).not.toThrow();
+    expect(() => verifyStartupBundleLock(manifest, lock, {
+      dependencies: { 'adm-zip': '^0.5.16' },
+    })).toThrow();
+  });
+
+  it('rejects an adm-zip resolution outside the bundled Quint dependency range', () => {
+    const { manifest, lock } = createFixture();
+    expect(() => verifyStartupBundleLock(manifest, lock, quint)).not.toThrow();
+    lock.packages['node_modules/adm-zip'].version = '0.5.16';
+    expect(() => verifyStartupBundleLock(manifest, lock, quint)).toThrow();
+  });
+
   it('accepts pinned and bundled startup dependencies', () => {
     const { manifest, lock } = createFixture();
-    expect(() => verifyStartupBundleLock(manifest, lock)).not.toThrow();
+    expect(() => verifyStartupBundleLock(manifest, lock, quint)).not.toThrow();
+  });
+
+  it.each([
+    ['update-notifier', '7.3.1'],
+    ['boxen', '8.0.1'],
+    ['wrap-ansi', '9.0.2'],
+    ['widest-line', '5.0.0'],
+  ])('rejects the removed transitive dependency %s@%s', (name, version) => {
+    const { manifest, lock } = createFixture();
+    expect(() => verifyStartupBundleLock(manifest, lock, quint)).not.toThrow();
+    Object.assign(lock.packages, { [`node_modules/transitive/node_modules/${name}`]: { version, inBundle: true } });
+    expect(() => verifyStartupBundleLock(manifest, lock, quint)).toThrow();
   });
 
   it.each(Object.entries(dependencies))('rejects missing bundle declarations and unpinned versions for %s', (name, version) => {
     const { manifest, lock } = createFixture();
     manifest.bundleDependencies = manifest.bundleDependencies.filter((bundled) => bundled !== name);
-    expect(() => verifyStartupBundleLock(manifest, lock)).toThrow(name);
+    expect(() => verifyStartupBundleLock(manifest, lock, quint)).toThrow(name);
     manifest.bundleDependencies.push(name);
     Object.assign(manifest.dependencies, { [name]: `^${version}` });
-    expect(() => verifyStartupBundleLock(manifest, lock)).toThrow(name);
+    expect(() => verifyStartupBundleLock(manifest, lock, quint)).toThrow(name);
   });
 
   it('requires managed assets and every startup bundle in the npm pack inventory', () => {
