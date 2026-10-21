@@ -34,7 +34,7 @@ const WORK_REQUIREMENT_ESTIMATOR_TIMEOUT_MS = 30_000;
 export interface WorkRequirementEstimatorOptions {
   cwd: string;
   provider: AutoRoutingConfig['router']['provider'];
-  model: string;
+  model: AutoRoutingConfig['router']['model'];
   providerOptions?: StepProviderOptions;
   permissionMode?: PermissionMode;
   language?: RunAgentOptions['language'];

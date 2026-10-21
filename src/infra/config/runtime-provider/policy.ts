@@ -3,7 +3,7 @@
  *
  * `validateRuntimeProviderSection` takes a validated `provider` section, resolves every
  * `extends` chain, and validates all profile/pool references up front — unknown references,
- * cyclic `extends`, and profiles missing provider/model fail fast at compile time (before any
+ * cyclic `extends`, missing providers, and OpenCode profiles missing models fail fast (before any
  * agent runs), never via a silent fallback.
  *
  * Runtime-v1 resolution itself (defaults/personas/tags/steps → provider/model, plus the
@@ -18,6 +18,7 @@ import type {
   RuntimeProviderAssignment,
 } from './schema.js';
 import { hasActiveProviderContent } from './schema.js';
+import { validateProviderModelRequirements } from '../../../core/workflow/provider-model-requirements.js';
 
 export interface FlatProfile {
   provider?: string;
@@ -30,7 +31,7 @@ export interface FlatProfile {
 
 /**
  * Validate every profile/pool reference in the section up front. Throws on unknown
- * references, cyclic `extends`, and referenced profiles missing `provider`/`model`.
+ * references, cyclic `extends`, missing providers, and OpenCode profiles missing models.
  */
 export function validateRuntimeProviderSection(section: RuntimeProviderSection): void {
   if (hasActiveProviderContent(section) && section.defaults === undefined) {
@@ -106,10 +107,17 @@ function validateReferences(
     if (!profile) {
       throw new Error(`Unknown profile "${name}" referenced by ${referencedBy}`);
     }
-    if (!profile.provider || !profile.model) {
+    if (!profile.provider) {
       throw new Error(
-        `Profile "${name}" referenced by ${referencedBy} must define both \`provider\` and \`model\``,
+        `Profile "${name}" referenced by ${referencedBy} must define \`provider\``,
       );
+    }
+    if (profile.model === undefined) {
+      try {
+        validateProviderModelRequirements(profile.provider, profile.model);
+      } catch (error) {
+        throw new Error(`Profile "${name}" referenced by ${referencedBy}: ${(error as Error).message}`);
+      }
     }
   };
   const assertPool = (name: string, referencedBy: string): void => {

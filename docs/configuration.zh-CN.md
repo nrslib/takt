@@ -785,6 +785,15 @@ takt run --runtime-assignment personal
 
 `provider.profiles` 保存命名的 provider/model/options 定义。`provider.defaults` 必须在每个有效 provider section 中选择一个固定 `profile` 或有序 `ladder`；不能指定 `pool`。`provider.targets.personas`、`provider.targets.tags` 和 `provider.targets.steps` 可以选择固定 profile、有序 ladder 或显式 auto-routing pool；`internal_agents` 只能使用固定 profile 或 ladder；`companions` 必须使用固定 profile。
 
+继承解析后仍必须提供 `provider`。codex、claude、claude-sdk、claude-headless、claude-terminal、copilot、cursor、kiro、pi、deepseek-harness 和 mock 可以省略 `model`。子 profile 通过 `extends` 继承父 profile 的 model；继承后仍没有 model 时，TAKT 使用 provider 自身的默认模型，不从未选中的 defaults 或其他低优先级 profile 补全 model。显式 CLI `--model` 或环境变量 `TAKT_MODEL` 优先。opencode 是例外，必须提供 `provider/model` 格式的 `model`。
+
+```yaml
+provider:
+  profiles:
+    provider-default: { provider: codex }
+  defaults: { profile: provider-default }
+```
+
 provider target 的覆盖优先级为：
 
 ```text

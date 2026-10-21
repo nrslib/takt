@@ -74,6 +74,110 @@ describe('compileLegacyProviderEnvironment', () => {
 });
 
 describe('compileRuntimeProviderEnvironment (profile path)', () => {
+  it.each([
+    'codex', 'claude', 'claude-sdk', 'claude-headless', 'claude-terminal',
+    'copilot', 'cursor', 'kiro', 'pi', 'deepseek-harness', 'mock',
+  ] as const)('compiles %s defaults without a model', (provider) => {
+    const env = compileRuntimeProviderEnvironment({
+      defaults: { profile: 'selected' },
+      profiles: { selected: { provider } },
+    });
+
+    const resolved = resolveStepProviderModel({
+      ...env,
+      step: { name: 'review', provider: undefined, model: undefined, personaDisplayName: 'reviewer' },
+    });
+    expect(resolved.provider).toBe(provider);
+    expect(resolved.model).toBeUndefined();
+  });
+
+  it.each(['steps', 'tags', 'personas'] as const)(
+    'keeps an omitted model on a compiled %s target instead of borrowing a lower profile model',
+    (target) => {
+      const section: RuntimeProviderSection = {
+        defaults: { profile: 'base' },
+        profiles: {
+          base: { provider: 'codex', model: 'base-model' },
+          lower: { provider: 'codex', model: 'lower-model' },
+          selected: { provider: 'codex' },
+        },
+        targets: {
+          personas: { reviewer: { profile: target === 'personas' ? 'selected' : 'lower' } },
+          ...(target === 'personas' ? {} : {
+            tags: { review: { profile: target === 'tags' ? 'selected' : 'lower' } },
+          }),
+          ...(target === 'steps' ? { steps: { review: { profile: 'selected' } } } : {}),
+        },
+      };
+      const env = compileRuntimeProviderEnvironment(section);
+      const resolved = resolveStepProviderModel({
+        ...env,
+        step: {
+          name: 'review', provider: undefined, model: undefined,
+          personaDisplayName: 'reviewer', tags: ['review'],
+        },
+      });
+
+      expect(resolved.provider).toBe('codex');
+      expect(resolved.model).toBeUndefined();
+    },
+  );
+
+  it.each([undefined, 'inherited-model'])(
+    'resolves a child profile after inheriting parent model %s',
+    (model) => {
+      const env = compileRuntimeProviderEnvironment({
+        defaults: { profile: 'base' },
+        profiles: {
+          base: { provider: 'codex', model: 'unrelated-model' },
+          parent: { provider: 'codex', ...(model === undefined ? {} : { model }) },
+          child: { extends: 'parent' },
+        },
+        targets: { steps: { review: { profile: 'child' } } },
+      });
+      const resolved = resolveStepProviderModel({
+        ...env,
+        step: { name: 'review', provider: undefined, model: undefined, personaDisplayName: 'reviewer' },
+      });
+
+      expect(resolved.provider).toBe('codex');
+      expect(resolved.model).toBe(model);
+    },
+  );
+
+  it('keeps model omission on an auto-routing candidate and fallback', () => {
+    const env = compileRuntimeProviderEnvironment({
+      defaults: { profile: 'base' },
+      profiles: {
+        base: { provider: 'codex', model: 'unrelated-model' },
+        selected: { provider: 'codex' },
+        router: { provider: 'codex', model: 'router-model' },
+      },
+      targets: { steps: { review: { pool: 'review-pool' } } },
+      auto_routing: {
+        router_profile: 'router',
+        pools: {
+          'review-pool': { candidates: [{ profile: 'selected', tier: 'low' }], fallback_profile: 'selected' },
+        },
+      },
+    });
+    const resolved = resolveDeterministicAutoRoutingProviderInfo({
+      autoRouting: env.autoRouting!,
+      step: { name: 'review' },
+      currentProviderInfo: { provider: undefined, model: undefined },
+    });
+
+    expect(resolved?.provider).toBe('codex');
+    expect(resolved?.model).toBeUndefined();
+    const fallback = selectRoutingCandidate({
+      autoRouting: env.autoRouting!,
+      step: { name: 'review' },
+      estimatorFailure: new Error('router unavailable'),
+    });
+    expect(fallback.candidate.name).toBe('selected');
+    expect(fallback.candidate.model).toBeUndefined();
+  });
+
   it.each(['claude-sdk', 'claude', 'claude-headless'] as const)('compiles shared Claude options for %s', (provider) => {
     const env = compileRuntimeProviderEnvironment({
       defaults: { profile: 'default' },
