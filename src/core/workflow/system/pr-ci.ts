@@ -42,4 +42,3 @@ export interface PrCiRerunResult extends PrCiRerun {
   headChanged?: boolean;
   error?: string;
 }
-

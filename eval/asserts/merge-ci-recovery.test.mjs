@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { parse } from 'yaml';
@@ -98,8 +99,10 @@ function preparationErrors(context, suite, repoRoot) {
       if (state === 'present') throw error;
       const working = isolated?.cwd ?? destination;
       assert.ok(error.message.includes(working));
+      const canonicalWorking = working.replace(tmpdir(), realpathSync(tmpdir()));
+      const reportedWorking = error.message.includes(canonicalWorking) ? canonicalWorking : working;
       diagnostics[state] = { error: error.message,
-        expected: error.message.replaceAll(working, './project').replaceAll(repoRoot, '.') };
+        expected: error.message.replaceAll(reportedWorking, './project').replaceAll(repoRoot, '.') };
     } finally {
       isolated?.cleanup();
     }
