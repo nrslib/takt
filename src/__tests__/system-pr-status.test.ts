@@ -139,6 +139,14 @@ describe('CI failure system input and rerun effect', () => {
     expect(h.fetchPrCiFailure).toHaveBeenCalledWith(123, headSha, '/project', { signal: undefined, rerun });
   });
 
+  it('別名ステップの再実行結果も回数とエラーに反映する', async () => {
+    const h = fixture();
+    h.state.effectResults.set('retry_ci', { rerun_ci: { success: false, error: 'HTTP 403: rerun denied' } });
+    expect(await h.service.resolveSystemInput(input, h.state)).toMatchObject({
+      rerunCount: 1, recoveryError: 'HTTP 403: rerun denied',
+    });
+  });
+
   it('初期contextのHEADを使わず失敗した最新HEADと対象PRをProviderへ渡す', async () => {
     const h = fixture();
     const result = await h.service.resolveSystemInput(input, h.state, 'collect_ci_failure');
@@ -168,6 +176,29 @@ describe('CI failure system input and rerun effect', () => {
     expect(await h.service.executeEffect(effect, { type: 'rerun_ci', pr: 123, failure: failure() }, h.state))
       .toMatchObject({ success: true, rerun: { number: 123, headSha, runs: [{ id: 10, attempt: 1 }] } });
     expect(h.rerunPrCi).toHaveBeenCalledOnce();
+  });
+
+  it('別名ステップで再実行済みなら新しいattemptの証拠でも二度目を拒否する', async () => {
+    const h = fixture();
+    h.state.currentStep = 'retry_ci_again';
+    h.state.stepIterations.set('retry_ci_again', 1);
+    h.state.effectResults.set('retry_ci', { rerun_ci: { success: true,
+      rerun: { number: 123, headSha, runs: [{ id: 10, attempt: 1 }] } } });
+    const latestFailure = failure();
+    latestFailure.checks[0]!.run.attempt = 2;
+    expect(await h.service.executeEffect(effect, { type: 'rerun_ci', pr: 123, failure: latestFailure }, h.state))
+      .toMatchObject({ success: false, error: 'CI rerun budget is exhausted' });
+    expect(h.rerunPrCi).not.toHaveBeenCalled();
+    expect(h.fetchPrStatus).not.toHaveBeenCalled();
+  });
+
+  it('別名ステップの二周目は保存結果がなくても再実行しない', async () => {
+    const h = fixture();
+    h.state.currentStep = 'retry_ci';
+    h.state.stepIterations.set('retry_ci', 2);
+    expect(await h.service.executeEffect(effect, { type: 'rerun_ci', pr: 123, failure: failure() }, h.state))
+      .toMatchObject({ success: false, error: 'CI rerun budget is exhausted' });
+    expect(h.rerunPrCi).not.toHaveBeenCalled();
   });
 
   it('現在HEADが変わっていれば再実行前に拒否する', async () => {

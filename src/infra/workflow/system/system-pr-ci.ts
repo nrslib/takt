@@ -7,7 +7,6 @@ import { parseWorkflowStateReference } from '../../../core/models/workflow-state
 import { getGitProvider } from '../../git/index.js';
 
 const FIX_PUSH_STEP = 'push_ci_fix';
-const RERUN_STEP = 'rerun_ci';
 const INVESTIGATION_STEP = 'investigate_ci';
 
 function referenceValue(reference: string, state: WorkflowState): unknown {
@@ -39,8 +38,11 @@ export async function resolvePrCiFailure(
   const headSha = referenceValue(input.head_sha, state);
   if (typeof headSha !== 'string' || !/^[0-9a-f]{40}$/i.test(headSha)) throw new Error('CI failure target requires a HEAD SHA');
   const fixRounds = state.stepIterations.get(FIX_PUSH_STEP) ?? 0;
-  const rerunCount = state.stepIterations.get(RERUN_STEP) ?? 0;
-  const rerunResult = state.effectResults.get(RERUN_STEP)?.rerun_ci;
+  const rerunResults = [...state.effectResults.values()]
+    .filter((effects) => Object.hasOwn(effects, 'rerun_ci'))
+    .map((effects) => effects.rerun_ci);
+  const rerunCount = rerunResults.length;
+  const rerunResult = rerunResults.at(-1);
   const recoveryError = typeof rerunResult === 'object' && rerunResult !== null && 'error' in rerunResult
     ? rerunResult.error : undefined;
   const status = state.systemContexts.get('wait_ci')?.status;
@@ -94,7 +96,8 @@ export async function rerunCiEffect(
     if (state.structuredOutputs.get(INVESTIGATION_STEP)?.verdict !== 'external') {
       throw new Error('CI rerun requires an external cause established by investigation');
     }
-    if ((state.stepIterations.get(RERUN_STEP) ?? 0) > 1 || state.effectResults.has(RERUN_STEP)) {
+    const rerunAttempted = [...state.effectResults.values()].some((effects) => Object.hasOwn(effects, 'rerun_ci'));
+    if ((state.stepIterations.get(state.currentStep) ?? 0) > 1 || rerunAttempted) {
       throw new Error('CI rerun budget is exhausted');
     }
     const status = state.systemContexts.get('wait_ci')?.status;

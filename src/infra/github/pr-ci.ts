@@ -4,6 +4,9 @@ import { PrCiFailureSchema, PrCiRerunSchema,
   type PrCiFailure, type PrCiRerun, type PrCiRerunResult } from '../../core/workflow/system/pr-ci.js';
 import { runPrCommand } from './pr-command.js';
 
+const FAILED_LOG_MAX_BUFFER = 64 * 1024 * 1024;
+const MAX_FAILED_LOG_CHARS = 200_000;
+
 const RunSchema = z.object({
   databaseId: z.number().int().positive(),
   url: z.string().url(),
@@ -86,11 +89,15 @@ export async function collectPrCiFailure(
             pendingLog = runPrCommand([
               'run', 'view', String(run.databaseId),
               '--attempt', String(run.attempt), '--job', String(job.databaseId), '--log-failed',
-            ], cwd, options);
+            ], cwd, options, FAILED_LOG_MAX_BUFFER).then((text) => {
+              if (text.trim().length === 0) throw new Error(`Failed job ${job.databaseId} has no log content`);
+              return text.length > MAX_FAILED_LOG_CHARS
+                ? `[truncated: last ${MAX_FAILED_LOG_CHARS} characters]\n${text.slice(-MAX_FAILED_LOG_CHARS)}`
+                : text;
+            });
             logs.set(logKey, pendingLog);
           }
           const log = await pendingLog;
-          if (log.trim().length === 0) throw new Error(`Failed job ${job.databaseId} has no log content`);
           jobs.push({ ...details, log });
         } catch (error) {
           options?.signal?.throwIfAborted();

@@ -226,7 +226,9 @@ if (args[0] === 'pr') {
 } else if (args.includes('--log') || args.includes('--log-failed')) {
   if (control.mode === 'hang') { process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); }
   else if (control.mode === 'denied') { process.stderr.write('HTTP 403: log access denied'); process.exit(1); }
-  else if (control.mode === 'overflow') process.stdout.write('x'.repeat(8 * 1024 * 1024));
+  else if (control.mode === 'overflow') process.stdout.write('x'.repeat(8 * 1024 * 1024) + 'TAIL: assertion failed');
+  else if (control.mode === 'blank-large') process.stdout.write(' '.repeat(8 * 1024 * 1024));
+  else if (control.mode === 'excessive') process.stdout.write('x'.repeat(65 * 1024 * 1024));
   else if (control.mode !== 'empty') process.stdout.write('math.test.ts > adds\\nAssertionError: expected 2 to equal 3');
 } else if (args[0] === 'run' && args[1] === 'view') {
   const attempt = control.rerun && control.poll >= 1 ? 2 : 1;
@@ -294,11 +296,22 @@ if (args[0] === 'pr') {
     assertStopped();
   });
 
-  it.each(['denied', 'empty', 'overflow'])('ログ取得の%sを無言で切り捨てず証拠不足として返す', async (mode) => {
+  it.each(['denied', 'empty', 'blank-large', 'excessive'])('ログ取得の%sを無言で切り捨てず証拠不足として返す', async (mode) => {
     setMode(mode);
-    expect(await evidence(new GitHubProvider(), { timeoutMs: 1000 })).toMatchObject({ complete: false,
+    expect(await evidence(new GitHubProvider(), { timeoutMs: 5000 })).toMatchObject({ complete: false,
       unavailable: expect.arrayContaining([expect.objectContaining({ reason: expect.any(String) })]) });
     expect(calls().some(({ args }) => args.includes('--log-failed') || args.includes('--log'))).toBe(true);
+    assertStopped();
+  });
+
+  it('1 MiBを超える失敗ログの末尾だけを切り詰めた印とともに保持する', async () => {
+    setMode('overflow');
+    const result = await evidence(new GitHubProvider(), { timeoutMs: 5000 });
+    expect(result.complete).toBe(true);
+    const log = result.checks[0]?.jobs[0]?.log;
+    expect(log).toMatch(/^\[truncated: last 200000 characters\]\n/);
+    expect(log).toMatch(/TAIL: assertion failed$/);
+    expect(log?.length).toBeLessThan(201_000);
     assertStopped();
   });
 

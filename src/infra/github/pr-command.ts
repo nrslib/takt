@@ -2,12 +2,14 @@ import { execFile } from 'node:child_process';
 import { PR_STATUS_TIMEOUT_MS, PrStatusTimeoutError,
   type PrStatusFetchOptions } from '../../core/workflow/system/pr-execution-context.js';
 
-export async function runPrCommand(args: string[], cwd: string, options?: PrStatusFetchOptions): Promise<string> {
+export async function runPrCommand(
+  args: string[], cwd: string, options?: PrStatusFetchOptions, maxBuffer = 1024 * 1024,
+): Promise<string> {
   const signal = options?.signal;
   signal?.throwIfAborted();
   return new Promise<string>((resolve, reject) => {
     let terminationError: unknown;
-    const child = execFile('gh', args, { cwd, encoding: 'utf-8', maxBuffer: 1024 * 1024 }, (error, stdout) => {
+    const child = execFile('gh', args, { cwd, encoding: 'utf-8', maxBuffer }, (error, stdout) => {
       clearTimeout(timer);
       signal?.removeEventListener('abort', abort);
       if (terminationError !== undefined) reject(terminationError);
