@@ -255,11 +255,21 @@ export class TaskLifecycleService {
   }
 
   failInterruptedRunningTasks(goalId?: string, onRecovered?: (task: TaskState) => void): number {
+    const snapshot = this.store.read();
+    const candidates = new Map(snapshot.tasks
+      .filter((task) => task.status === 'running'
+        && (this.goalTasksOnly !== true || task.goal_id !== undefined)
+        && (goalId === undefined || task.goal_id === goalId)
+        && this.isRunningTaskStale(task))
+      .map((task) => [task.name, task]));
+    if (candidates.size === 0) return 0;
+
     const recovered: TaskRecord[] = [];
     this.store.update((current) => {
       const tasks = current.tasks.map((task) => {
-        if (task.status !== 'running' || (this.goalTasksOnly === true && task.goal_id === undefined)
-          || (goalId !== undefined && task.goal_id !== goalId) || !this.isRunningTaskStale(task)) {
+        const candidate = candidates.get(task.name);
+        if (candidate === undefined || task.status !== candidate.status
+          || task.owner_pid !== candidate.owner_pid || task.owner_start_time !== candidate.owner_start_time) {
           return task;
         }
         const reason = 'Task was interrupted before this TAKT run started. Requeue it explicitly to run again.';
