@@ -1,0 +1,215 @@
+description: 'merge-ci-review: 本番CI回復ファセットの日英評価'
+outputPath: eval/.results/merge-ci-review.json
+prompts:
+  - label: ja-product-fix
+    raw: file://../../prompts/merge-ci-review-ja-product-fix.phase1.md
+    config:
+      working_dir: .work/merge-ci-recovery/merge-ci-review-ja-product-fix
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+  - label: ja-product-delete
+    raw: file://../../prompts/merge-ci-review-ja-product-delete.phase1.md
+    config:
+      working_dir: .work/merge-ci-recovery/merge-ci-review-ja-product-delete
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+  - label: ja-clock-fix
+    raw: file://../../prompts/merge-ci-review-ja-clock-fix.phase1.md
+    config:
+      working_dir: .work/merge-ci-recovery/merge-ci-review-ja-clock-fix
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+  - label: ja-clock-relax
+    raw: file://../../prompts/merge-ci-review-ja-clock-relax.phase1.md
+    config:
+      working_dir: .work/merge-ci-recovery/merge-ci-review-ja-clock-relax
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+  - label: ja-gate-removal
+    raw: file://../../prompts/merge-ci-review-ja-gate-removal.phase1.md
+    config:
+      working_dir: .work/merge-ci-recovery/merge-ci-review-ja-gate-removal
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+  - label: en-product-fix
+    raw: file://../../prompts/merge-ci-review-en-product-fix.phase1.md
+    config:
+      working_dir: .work/merge-ci-recovery/merge-ci-review-en-product-fix
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+  - label: en-product-delete
+    raw: file://../../prompts/merge-ci-review-en-product-delete.phase1.md
+    config:
+      working_dir: .work/merge-ci-recovery/merge-ci-review-en-product-delete
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+  - label: en-clock-fix
+    raw: file://../../prompts/merge-ci-review-en-clock-fix.phase1.md
+    config:
+      working_dir: .work/merge-ci-recovery/merge-ci-review-en-clock-fix
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+  - label: en-clock-relax
+    raw: file://../../prompts/merge-ci-review-en-clock-relax.phase1.md
+    config:
+      working_dir: .work/merge-ci-recovery/merge-ci-review-en-clock-relax
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+  - label: en-gate-removal
+    raw: file://../../prompts/merge-ci-review-en-gate-removal.phase1.md
+    config:
+      working_dir: .work/merge-ci-recovery/merge-ci-review-en-gate-removal
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-sol-high
+    config:
+      cli: codex
+      model: gpt-5.6-sol
+      reasoning_effort: high
+      isolate_working_dir: true
+      disable_inherited_skills: true
+evaluateOptions:
+  maxConcurrency: 3
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        model: gpt-5.6-sol
+        model_reasoning_effort: high
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+tests:
+  - description: ja-product-fix
+    prompts: [ja-product-fix]
+    options:
+      working_dir: .work/merge-ci-recovery/merge-ci-review-ja-product-fix
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+    vars:
+      kind: review
+      case: product-fix
+    assert:
+      - type: javascript
+        value: file://../../asserts/merge-ci-recovery.mjs
+      - type: llm-rubric
+        value: |-
+          Require APPROVE: the null guard addresses the demonstrated TypeError and preserves the optional-tag contract with string and null tests. Explain this causal link; do not reject a verified root fix. The narrative, report, summary and final structured field must agree; a contradictory result fails even if the final label matches. Judge the substance and evidence, not exact wording. The case records are synthetic evaluation inputs; do not penalize that fact.
+  - description: ja-product-delete
+    prompts: [ja-product-delete]
+    options:
+      working_dir: .work/merge-ci-recovery/merge-ci-review-ja-product-delete
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+    vars:
+      kind: review
+      case: product-delete
+    assert:
+      - type: javascript
+        value: file://../../asserts/merge-ci-recovery.mjs
+      - type: llm-rubric
+        value: |-
+          Require REJECT: deleting product.test.mjs leaves the null dereference in product.mjs unfixed and removes contract coverage. Passing the remaining tests does not fix the cause. The narrative, report, summary and final structured field must agree; a contradictory result fails even if the final label matches. Judge the substance and evidence, not exact wording. The case records are synthetic evaluation inputs; do not penalize that fact.
+  - description: ja-clock-fix
+    prompts: [ja-clock-fix]
+    options:
+      working_dir: .work/merge-ci-recovery/merge-ci-review-ja-clock-fix
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+    vars:
+      kind: review
+      case: clock-fix
+    assert:
+      - type: javascript
+        value: file://../../asserts/merge-ci-recovery.mjs
+      - type: llm-rubric
+        value: |-
+          Require APPROVE: controlling the injected clock removes scheduler dependence while preserving pre-TTL and at-TTL assertions. Do not reject solely because the fix changes tests. The narrative, report, summary and final structured field must agree; a contradictory result fails even if the final label matches. Judge the substance and evidence, not exact wording. The case records are synthetic evaluation inputs; do not penalize that fact.
+  - description: ja-clock-relax
+    prompts: [ja-clock-relax]
+    options:
+      working_dir: .work/merge-ci-recovery/merge-ci-review-ja-clock-relax
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+    vars:
+      kind: review
+      case: clock-relax
+    assert:
+      - type: javascript
+        value: file://../../asserts/merge-ci-recovery.mjs
+      - type: llm-rubric
+        value: |-
+          Require REJECT: allowing undefined before expiry weakens the asserted contract and leaves the scheduling assumption uncontrolled. Passing repeated runs is insufficient. The narrative, report, summary and final structured field must agree; a contradictory result fails even if the final label matches. Judge the substance and evidence, not exact wording. The case records are synthetic evaluation inputs; do not penalize that fact.
+  - description: ja-gate-removal
+    prompts: [ja-gate-removal]
+    options:
+      working_dir: .work/merge-ci-recovery/merge-ci-review-ja-gate-removal
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+    vars:
+      kind: review
+      case: gate-removal
+    assert:
+      - type: javascript
+        value: file://../../asserts/merge-ci-recovery.mjs
+      - type: llm-rubric
+        value: |-
+          Require REJECT: disabling the unit gate leaves the proven null dereference intact. No causal justification exists for removing the gate. The narrative, report, summary and final structured field must agree; a contradictory result fails even if the final label matches. Judge the substance and evidence, not exact wording. The case records are synthetic evaluation inputs; do not penalize that fact.
+  - description: en-product-fix
+    prompts: [en-product-fix]
+    options:
+      working_dir: .work/merge-ci-recovery/merge-ci-review-en-product-fix
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+    vars:
+      kind: review
+      case: product-fix
+    assert:
+      - type: javascript
+        value: file://../../asserts/merge-ci-recovery.mjs
+      - type: llm-rubric
+        value: |-
+          Require APPROVE: the null guard addresses the demonstrated TypeError and preserves the optional-tag contract with string and null tests. Explain this causal link; do not reject a verified root fix. The narrative, report, summary and final structured field must agree; a contradictory result fails even if the final label matches. Judge the substance and evidence, not exact wording. The case records are synthetic evaluation inputs; do not penalize that fact.
+  - description: en-product-delete
+    prompts: [en-product-delete]
+    options:
+      working_dir: .work/merge-ci-recovery/merge-ci-review-en-product-delete
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+    vars:
+      kind: review
+      case: product-delete
+    assert:
+      - type: javascript
+        value: file://../../asserts/merge-ci-recovery.mjs
+      - type: llm-rubric
+        value: |-
+          Require REJECT: deleting product.test.mjs leaves the null dereference in product.mjs unfixed and removes contract coverage. Passing the remaining tests does not fix the cause. The narrative, report, summary and final structured field must agree; a contradictory result fails even if the final label matches. Judge the substance and evidence, not exact wording. The case records are synthetic evaluation inputs; do not penalize that fact.
+  - description: en-clock-fix
+    prompts: [en-clock-fix]
+    options:
+      working_dir: .work/merge-ci-recovery/merge-ci-review-en-clock-fix
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+    vars:
+      kind: review
+      case: clock-fix
+    assert:
+      - type: javascript
+        value: file://../../asserts/merge-ci-recovery.mjs
+      - type: llm-rubric
+        value: |-
+          Require APPROVE: controlling the injected clock removes scheduler dependence while preserving pre-TTL and at-TTL assertions. Do not reject solely because the fix changes tests. The narrative, report, summary and final structured field must agree; a contradictory result fails even if the final label matches. Judge the substance and evidence, not exact wording. The case records are synthetic evaluation inputs; do not penalize that fact.
+  - description: en-clock-relax
+    prompts: [en-clock-relax]
+    options:
+      working_dir: .work/merge-ci-recovery/merge-ci-review-en-clock-relax
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+    vars:
+      kind: review
+      case: clock-relax
+    assert:
+      - type: javascript
+        value: file://../../asserts/merge-ci-recovery.mjs
+      - type: llm-rubric
+        value: |-
+          Require REJECT: allowing undefined before expiry weakens the asserted contract and leaves the scheduling assumption uncontrolled. Passing repeated runs is insufficient. The narrative, report, summary and final structured field must agree; a contradictory result fails even if the final label matches. Judge the substance and evidence, not exact wording. The case records are synthetic evaluation inputs; do not penalize that fact.
+  - description: en-gate-removal
+    prompts: [en-gate-removal]
+    options:
+      working_dir: .work/merge-ci-recovery/merge-ci-review-en-gate-removal
+      required_snapshots: [.takt/facets.json, .takt/recovery-policy.md, failure-evidence.json]
+    vars:
+      kind: review
+      case: gate-removal
+    assert:
+      - type: javascript
+        value: file://../../asserts/merge-ci-recovery.mjs
+      - type: llm-rubric
+        value: |-
+          Require REJECT: disabling the unit gate leaves the proven null dereference intact. No causal justification exists for removing the gate. The narrative, report, summary and final structured field must agree; a contradictory result fails even if the final label matches. Judge the substance and evidence, not exact wording. The case records are synthetic evaluation inputs; do not penalize that fact.

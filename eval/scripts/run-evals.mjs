@@ -9,9 +9,16 @@
  * Example: npm run eval:prompts -- arch --repeat 3
  */
 import { spawnSync } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parse } from 'yaml';
+import {
+  mergeCiResultPaths,
+  normalizeMergeCiResults,
+  resolveMergeCiExpectedResults,
+  validateMergeCiResultCoverage,
+} from './merge-ci-public-results.mjs';
 import {
   PROMPT_EVAL_SUITES,
   PROMPT_EVAL_TIERS,
@@ -90,15 +97,35 @@ const summary = [];
 for (const suite of selected) {
   const config = join(evalDir, suite.config);
   console.log(`\n=== suite: ${suite.name} (${suite.config}) ===`);
-  const result = spawnSync('npx', ['promptfoo', 'eval', '-c', config, '--no-progress-bar', ...options.flags], {
-    stdio: 'inherit',
-    cwd: repoRoot,
-    env: {
-      ...process.env,
-      PROMPTFOO_CONFIG_DIR: promptfooConfigDir,
-    },
-  });
-  summary.push({ name: suite.name, code: result.status ?? 1 });
+  let code;
+  try {
+    const paths = mergeCiResultPaths(suite.name, repoRoot);
+    const expected = paths === undefined ? undefined
+      : resolveMergeCiExpectedResults(parse(readFileSync(config, 'utf8')), options.flags);
+    if (paths !== undefined) {
+      mkdirSync(dirname(paths.raw), { recursive: true });
+      rmSync(paths.raw, { force: true });
+    }
+    const result = spawnSync('npx', ['promptfoo', 'eval', '-c', config, '--no-progress-bar', ...options.flags], {
+      stdio: 'inherit',
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        PROMPTFOO_CONFIG_DIR: promptfooConfigDir,
+      },
+    });
+    code = result.status ?? 1;
+    if (paths !== undefined) {
+      const published = normalizeMergeCiResults(JSON.parse(readFileSync(paths.raw, 'utf8')), repoRoot);
+      mkdirSync(dirname(paths.published), { recursive: true });
+      writeFileSync(paths.published, `${JSON.stringify(published, null, 2)}\n`);
+      validateMergeCiResultCoverage(published, expected);
+    }
+  } catch (error) {
+    console.error(`Failed to run or publish ${suite.name}: ${error.message}`);
+    code = 1;
+  }
+  summary.push({ name: suite.name, code });
 }
 
 console.log('\n=== eval summary ===');

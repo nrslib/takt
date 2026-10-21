@@ -1,5 +1,24 @@
 # Prompt Quality Eval
 
+CI回復の実モデル評価はbuild後に`npm run eval:prompts:merge-ci-recovery`で明示実行します。
+調査6事例とレビュー5事例を日英で各3回、`gpt-5.6-sol`・reasoning effort `high`・生成キャッシュなしで評価します。
+調査はフレーク、mainの同一失敗、ランナー障害と403、外部シークレット欠落と空ログを比較します。
+レビューは製品コード・テストの根本修正と、テスト削除・アサーション緩和・ゲート無効化を比較します。
+専用prepareは本番workflowとInstructionBuilderへworkflow stateとレポートを渡します。
+入力と使用ファセットは`eval/prompts/merge-ci-*.phase1.md`と`eval/.work/merge-ci-recovery/*/.takt/facets.json`に保存します。
+生のモデル出力と採点はGit管理対象外の`eval/.results/merge-ci-investigation.json`と`eval/.results/merge-ci-review.json`に保存します。
+共通runnerはfixture metadataのソース・隔離作業ディレクトリと、それらを転載したプロンプト・回答・採点用プロンプトをリポジトリ相対パスへ正規化します。
+metadata設定前の準備エラーではProviderが生成する`takt-prompt-eval-fixture-`から始まる隔離ルートの絶対パスを`.`へ変換します。配下の`project`やsnapshot名、エラー理由は保持し、一般的な一時パスや接頭辞への本文中の言及は変更しません。
+公開用の結果は`eval/results/merge-ci-investigation.json`と`eval/results/merge-ci-review.json`に保存します。
+評価が失敗しても今回生成したJSONがあれば正規化します。今回のJSONがない場合や変換に失敗した場合はsuiteを失敗として記録し、以前の中間結果を公開せず後続suiteへ進みます。
+設定されたケースと有効な反復数から期待するラベル別件数を求め、実結果行の件数と照合します。終了コードが0でも欠落・過剰・件数の偏りがあればsuiteを失敗とし、今回のJSONは正規化して公開します。
+`--filter-pattern`と`--filter-first-n N`（`--filter-first-n=N`、`-n N`も同じ指定）による部分実行と、`--repeat`の指定を照合に反映します。フラグの記述順にかかわらず正規表現で絞ってから先頭Nケースを選び、そのケースの反復数から期待件数を求めます。
+例えば調査suiteに`--filter-first-n 1 --repeat 3`を渡した場合は`ja-clock`の3結果を要求します。選択指定がなければ12ラベル各3結果の36結果を要求します。部分実行の合格は全件評価の合格にはなりません。
+正規表現がどのケースにも一致しない場合は0件の部分実行です。実結果も0行でPromptfooの終了コードが0なら空の結果を公開してsuiteを合格としますが、全件評価の合格証拠にはなりません。選択外の結果行がある場合や終了コードが非0の場合も今回のJSONを正規化して公開し、suiteを失敗とします。ケースが選択されているのに実結果が0行なら欠落として失敗にします。
+本番schemaに適合する最終JSONのverdict/resultと、原因・根拠・結論の整合性を別々に採点します。
+調査36結果・レビュー30結果の全件合格を必要とし、平均点では相殺しません。
+`npm run eval:prompts:merge-ci-recovery:contracts`はモデルを呼ばずに構造化結果の読み取り・登録・公開用変換と保存経路を確認します。
+
 promptfoo-based quality evaluation for TAKT's faceted prompts. Unlike the mock
 E2E suite (which verifies engine mechanics), this measures whether the
 *content* of personas/policies/instructions actually produces good agent
