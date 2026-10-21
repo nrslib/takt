@@ -117,14 +117,15 @@ describe('manager conversation configuration and provider boundary', () => {
       facetsRoots: [facetsRoot], repertoireDirs: [], allowedRoots: [facetsRoot],
     });
     const provider = new MockProvider();
-    const call = vi.fn<ProviderAgent['call']>().mockResolvedValue({ persona: 'manager', status: 'done', timestamp: new Date('2026-10-05T12:00:00Z'), content: JSON.stringify({ message: 'question', summary: null }), structuredOutput: { message: 'question', summary: null } });
+    const call = vi.fn<ProviderAgent['call']>().mockResolvedValue({ persona: 'manager', status: 'done', timestamp: new Date('2026-10-05T12:00:00Z'), content: 'question' });
     const setup = vi.spyOn(provider, 'setup').mockReturnValue({ call });
     vi.spyOn(providers, 'getProvider').mockReturnValue(provider);
     const plan = createManagerConversationPlan(cwd, { language });
     const session = createManagerConversationSession({ cwd, plan,  });
 
     try {
-      expect(await session.handleUserMessage({ text: 'ゴールを相談したい' })).toMatchObject({ kind: 'reply' });
+      expect(await session.handleUserMessage({ text: 'ゴールを相談したい' })).toEqual({ kind: 'reply', message: 'question' });
+      expect(session.getPendingSummary()).toBeNull();
 
       expect(persona.trim().length).toBeGreaterThan(0);
       expect(instruction.trim().length).toBeGreaterThan(0);
