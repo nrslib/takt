@@ -25,6 +25,7 @@ import { createManagerToolPermissionHandler } from './toolPermissionDecision.js'
 import type { ManagerPermissionGoal } from './toolPermissionJudge.js';
 import { StandaloneInquiryStore } from '../../infra/goals/standalone-inquiries.js';
 import type { ManagerAnswerOptions } from './inquiryAnswer.js';
+import { supportsManagerPermissionJudge } from './permissionJudgeSupport.js';
 
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
 import { withManagerAssignment, findAssignedGoalRepository, resolveAssignedProjectRoot, resolveCurrentManagerAssignment, type ManagerAssignmentIdentity } from './assignment.js';
@@ -248,7 +249,7 @@ export function createManagerConversationSession(input: {
           const turnText = priorReasons === undefined || priorReasons.length === 0 ? text
             : `${text}\n\nPrevious tool permission denials: ${JSON.stringify(priorReasons)}`;
           const prompt = assignment === undefined ? turnText : `Current manager assignment: ${JSON.stringify(assignment)}\n\n${turnText}`;
-          const usesPermissionJudge = plan.ctx.providerType === 'claude' || plan.ctx.providerType === 'claude-sdk' || plan.ctx.providerType === 'codex';
+          const usesPermissionJudge = supportsManagerPermissionJudge(plan.ctx.providerType);
           if (usesPermissionJudge && plan.permissionJudge === undefined) throw new Error('Manager permission judge plan is missing');
           const onToolPermissionDecision = usesPermissionJudge ? createManagerToolPermissionHandler({
             plan: plan.permissionJudge!, provider: plan.ctx.providerType, cwd, instruction: options.text, goal: options.goal,

@@ -328,6 +328,7 @@
     "src/__tests__/manager-output-schema.test.ts",
     "src/__tests__/manager-patrol.test.ts",
     "src/__tests__/manager-permission-display.test.ts",
+    "src/__tests__/manager-permission-judge-support.test.ts",
     "src/__tests__/manager-permission-provider-wiring.test.ts",
     "src/__tests__/manager-project-owner.test.ts",
     "src/__tests__/manager-read-scope-provider.test.ts",

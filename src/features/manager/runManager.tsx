@@ -14,6 +14,7 @@ import { ensureManagerRun } from './autoRun.js';
 import { notifyManagerTurnFailure } from './turnFailureNotification.js';
 import { registerProject } from '../../infra/config/global/projectRegistry.js';
 import { ensureDaemon } from '../daemon/lifecycle.js';
+import { supportsManagerPermissionJudge } from './permissionJudgeSupport.js';
 
 export async function runManager(input: { cwd: string; agentOverrides?: AssistantCliOverrides }): Promise<void> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
@@ -47,7 +48,7 @@ export async function runManager(input: { cwd: string; agentOverrides?: Assistan
   await ensureDaemon();
   const plan = createManagerConversationPlan(cwd, input.agentOverrides ?? {});
   const mcp = await connectManagerMcp(cwd, assignment, plan.ctx.mcpServers, {
-    enableGoalExecutionTools: plan.ctx.providerType === 'claude' || plan.ctx.providerType === 'claude-sdk' || plan.ctx.providerType === 'codex',
+    enableGoalExecutionTools: supportsManagerPermissionJudge(plan.ctx.providerType),
   });
   let session: ManagerConversationSession | undefined;
   let startupTask: Promise<readonly string[]> | undefined;
