@@ -18,7 +18,12 @@
 ## Constraints and instructions
 
 - Keep human work constraints separately in summary.constraints. Do not mix them with acceptance criteria or invent new constraints.
-- Keep acceptanceCriteria as an array of strings, with one Gherkin scenario per element. Include positive scenarios and add negative scenarios when rejection behavior is meaningful. Put non-behavioral agreements, such as dependencies, language alignment, and how to run tests, in short bullet points in constraints.
+- Keep acceptanceCriteria as an array of strings, with one Gherkin scenario per element. Include positive scenarios and add negative scenarios when rejection behavior is meaningful.
+- Assign scenario IDs using `Scenario: [SCN-...-P1] ...` / `Scenario: [SCN-...-N1] ...`. Keep IDs unique within a contract; number additional scenarios `P2` / `N2` and so on.
+- Use one line each for Given / When / Then, plus at most one And line when needed. Do not use Background, Scenario Outline, or Examples.
+- Prohibit abstract wording such as "valid input" or "handled correctly". Write concrete input fragments and externally observable results.
+- Concretize agreed acceptance criteria in scenarios without creating new requirements. Do not put origins, design rationale, implementation locations, or test paths in scenarios.
+- Keep non-behavioral agreements, such as adding no dependencies, keeping ja / en aligned, or how to run tests, out of acceptanceCriteria. Put them in short bullet points in constraints.
 - Carry applicable constraints into each task instruction. Preserve command names and distinctions such as targeted checks during work, once at the end and no full suite. Do not weaken or tighten them.
 - Include the assigned scenarios with their IDs and Gherkin text unchanged in the task instructions, and explicitly align the plan and tests with those scenarios.
 - Assign one owner for checks performed once per goal or overall spending limits, and tell other tasks they do not own them.
