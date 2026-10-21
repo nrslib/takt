@@ -11,6 +11,174 @@ import { getLabel } from '../../shared/i18n/index.js';
 import { goalRecord } from './goal-fixtures.js';
 
 describe('manager TUI startup and polling', () => {
+  it('continues startup after the initial assignment read fails and suppresses historical records in the same screen', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const startedAt = Date.parse('2026-10-21T10:00:00Z');
+    vi.setSystemTime(startedAt);
+    const goals = ['First goal', 'Second goal'].map((objective, goalIndex) => ({
+      ...goalRecord(), id: `750e8400-e29b-41d4-a716-44665544000${goalIndex}`, objective,
+      workLog: Array.from({ length: 30 }, (_, index) => ({
+        id: `850e8400-e29b-41d4-a716-${String(goalIndex * 30 + index).padStart(12, '0')}`,
+        recordedAt: '2026-10-14T00:00:00Z', summary: `Historical record ${goalIndex}-${index}`,
+      })),
+      questions: [{ id: `650e8400-e29b-41d4-a716-44665544000${goalIndex}`,
+        recipient: 'human' as const, status: 'pending' as const, body: 'Which format?' }],
+    }));
+    memory.goals.mockReturnValue(goals);
+    const repository = { kind: 'repository' as const, repositoryDirectory: cwd, repositoryDirectories: [cwd] };
+    const lookup = vi.spyOn(workspaceRegistry, 'findWorkspaceForRepository')
+      .mockResolvedValue(undefined).mockRejectedValueOnce(new Error('initial assignment read failed'));
+    const read = vi.spyOn(savedEvents, 'readManagerDisplayEvents');
+    const recovery = deferred<readonly string[]>();
+    const newRecord = { id: '950e8400-e29b-41d4-a716-446655440001',
+      recordedAt: new Date(startedAt + 1000).toISOString(), summary: 'New work record' };
+    const startup = {
+      run: vi.fn(async () => {
+        await recovery.promise;
+        vi.setSystemTime(startedAt + 1000);
+        memory.goals.mockReturnValue(goals.map((goal, index) => index === 0
+          ? { ...goal, workLog: [...goal.workLog, newRecord] } : goal));
+        return [] as string[];
+      }),
+      fail: vi.fn(),
+    };
+    const context = mount('en', startup, repository);
+    try {
+      await waitFor(() => {
+        expect(startup.run).toHaveBeenCalledOnce();
+        expect(context.app.lastFrame()).toContain('initial assignment read failed');
+      });
+      expect(lookup).toHaveBeenCalledOnce();
+      expect(read).not.toHaveBeenCalled();
+      recovery.resolve([]);
+      await waitFor(() => {
+        expect(read).toHaveBeenCalled();
+        expect(context.app.lastFrame()).toContain(newRecord.summary);
+        expect(context.app.lastFrame()).not.toContain('Working');
+      });
+      expect(startup.run).toHaveBeenCalledOnce();
+      expect(startup.fail).not.toHaveBeenCalled();
+      expect(startup.run.mock.invocationCallOrder[0]).toBeLessThan(read.mock.invocationCallOrder[0]!);
+      expect(read.mock.calls[0]).toEqual([cwd, 'en', repository, new Map([[cwd, startedAt]])]);
+      const initial: Awaited<ReturnType<typeof savedEvents.readManagerDisplayEvents>> = await read.mock.results[0]!.value;
+      expect(initial.events).toHaveLength(61);
+      expect(initial.events.filter((event) => event.suppressInitialDisplay).map((event) => event.id))
+        .toEqual(goals.flatMap((goal) => goal.workLog.map((record) => JSON.stringify([goal.id, 'work-log', record.id]))));
+      expect(initial.events.filter((event) => !event.suppressInitialDisplay).map((event) => event.message))
+        .toEqual([`${goals[0]!.id}: ${newRecord.summary}`]);
+      const frame = context.app.lastFrame()!;
+      const statuses = frame.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu)
+        ?.find((box) => box.includes(getLabel('manager.goalStatuses', 'en')));
+      expect(statuses).toBeDefined();
+      for (const goal of goals) {
+        const rows = statuses!.split('\n').filter((line) => line.includes(goal.objective));
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toContain(getLabel('manager.goalStates.active', 'en'));
+        expect(rows[0]).toContain(getLabel('manager.goalPendingInquiries', 'en', { count: '1' }));
+      }
+      for (const rendered of context.app.frames) expect(rendered).not.toContain('Historical record');
+      expect(frame).toContain('initial assignment read failed');
+      expect(context.call).not.toHaveBeenCalled();
+    } finally {
+      context.app.unmount();
+      recovery.resolve([]);
+      await context.session.close();
+    }
+  });
+
+  it('suppresses history in every initial workspace repository after the initial assignment read fails', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const startedAt = Date.parse('2026-10-21T10:00:00Z');
+    vi.setSystemTime(startedAt);
+    const repositoryB = '/test/repository-b';
+    const workspace = { id: '650e8400-e29b-41d4-a716-446655440001', name: 'A + B', repositoryDirectories: [cwd, repositoryB] };
+    const assignment = { kind: 'workspace' as const, workspaceId: workspace.id,
+      name: workspace.name, repositoryDirectories: workspace.repositoryDirectories };
+    const goal = { ...goalRecord(), workLog: Array.from({ length: 30 }, (_, index) => ({
+      id: `850e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`,
+      recordedAt: '2026-10-14T00:00:00Z', summary: `Historical workspace record ${index}`,
+    })) };
+    memory.goals.mockReturnValue([goal]);
+    const lookup = vi.spyOn(workspaceRegistry, 'readWorkspace')
+      .mockResolvedValue(workspace).mockRejectedValueOnce(new Error('initial workspace assignment read failed'));
+    const read = vi.spyOn(savedEvents, 'readManagerDisplayEvents');
+    const recovery = deferred<readonly string[]>();
+    const newRecord = { id: '950e8400-e29b-41d4-a716-446655440001',
+      recordedAt: new Date(startedAt + 1000).toISOString(), summary: 'New workspace work record' };
+    const startup = {
+      run: vi.fn(async () => {
+        await recovery.promise;
+        vi.setSystemTime(startedAt + 1000);
+        memory.goals.mockReturnValue([{ ...goal, workLog: [...goal.workLog, newRecord] }]);
+        return [] as string[];
+      }),
+      fail: vi.fn(),
+    };
+    const context = mount('en', startup, assignment);
+    try {
+      await waitFor(() => {
+        expect(startup.run).toHaveBeenCalledOnce();
+        expect(context.app.lastFrame()).toContain('initial workspace assignment read failed');
+      });
+      expect(lookup).toHaveBeenCalledOnce();
+      expect(read).not.toHaveBeenCalled();
+      recovery.resolve([]);
+      await waitFor(() => {
+        expect(read).toHaveBeenCalled();
+        expect(context.app.lastFrame()).toContain(newRecord.summary);
+        expect(context.app.lastFrame()).not.toContain('Working');
+      });
+      expect(startup.run).toHaveBeenCalledOnce();
+      expect(startup.fail).not.toHaveBeenCalled();
+      expect(startup.run.mock.invocationCallOrder[0]).toBeLessThan(read.mock.invocationCallOrder[0]!);
+      expect(read.mock.calls[0]).toEqual([cwd, 'en', assignment,
+        new Map([[cwd, startedAt], [repositoryB, startedAt]])]);
+      const initial: Awaited<ReturnType<typeof savedEvents.readManagerDisplayEvents>> = await read.mock.results[0]!.value;
+      expect(initial.events).toHaveLength(62);
+      expect(initial.events.filter((event) => event.suppressInitialDisplay).map((event) => event.id))
+        .toEqual(workspace.repositoryDirectories.flatMap(() => goal.workLog.map((record) => JSON.stringify([goal.id, 'work-log', record.id]))));
+      expect(initial.events.filter((event) => !event.suppressInitialDisplay).map((event) => event.message))
+        .toEqual(workspace.repositoryDirectories.map(() => `${goal.id}: ${newRecord.summary}`));
+      for (const rendered of context.app.frames) expect(rendered).not.toContain('Historical workspace record');
+      expect(context.app.lastFrame()).toContain('initial workspace assignment read failed');
+      expect(context.call).not.toHaveBeenCalled();
+    } finally {
+      context.app.unmount();
+      recovery.resolve([]);
+      await context.session.close();
+    }
+  });
+
+  it.each([false, true])('waits for the initial display snapshot before submitting queued input with startup=%s', async (withStartup) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const startedAt = Date.parse('2026-10-21T10:00:00Z');
+    vi.setSystemTime(startedAt);
+    const snapshot = { events: [], diagnostics: [], questions: [], goals: [] };
+    const initial = deferred<Awaited<ReturnType<typeof savedEvents.readManagerDisplayEvents>>>();
+    const read = vi.spyOn(savedEvents, 'readManagerDisplayEvents')
+      .mockResolvedValue(snapshot).mockReturnValueOnce(initial.promise);
+    const startup = { run: vi.fn(async () => [] as string[]), fail: vi.fn() };
+    const context = mount('en', withStartup ? startup : undefined);
+    context.call.mockResolvedValue(response(null));
+    try {
+      await waitFor(() => expect(read).toHaveBeenCalledOnce());
+      const startupBoundary = read.mock.calls[0]![3];
+      expect(startupBoundary).toEqual(new Map([[cwd, startedAt]]));
+      await typeAndSubmit(context, 'request during initial display read');
+      await waitFor(() => expect(queuedFrame(context)).toContain('request during initial display read'));
+      expect(context.call).not.toHaveBeenCalled();
+      expect(read).toHaveBeenCalledOnce();
+      initial.resolve(snapshot);
+      await waitFor(() => expect(context.call).toHaveBeenCalledExactlyOnceWith('request during initial display read', expect.any(Object)));
+      for (const call of read.mock.calls.slice(1)) expect(call[3]).toEqual(startupBoundary);
+      expect(startup.fail).not.toHaveBeenCalled();
+    } finally {
+      initial.resolve(snapshot);
+      context.app.unmount();
+      await context.session.close();
+    }
+  });
+
   it('shows the draft and its cursor during startup recovery and keeps the draft after completion', async () => {
     const recovery = deferred<readonly string[]>();
     const startup = { run: vi.fn(() => recovery.promise), fail: vi.fn() };
@@ -323,7 +491,7 @@ describe('manager TUI startup and polling', () => {
     const readEvents = vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], questions: [], goals: [] });
     const context = mount('en', undefined, repository);
     try {
-      await waitFor(() => expect(readEvents).toHaveBeenCalledWith(cwd, 'en', repository));
+      await waitFor(() => expect(readEvents.mock.calls.map((call) => call.slice(0, 3))).toContainEqual([cwd, 'en', repository]));
       context.call.mockImplementationOnce(async (_prompt, options) => {
         options.onStream?.({ type: 'tool_use', data: { id: 'add-b', tool: 'takt_add_workspace_repository', input: { repositoryDirectory: repositoryB } } });
         savedWorkspace = workspace;
@@ -336,7 +504,9 @@ describe('manager TUI startup and polling', () => {
       await waitFor(() => expect(promptFrame(context)).toContain('add B and remove A'));
       context.app.stdin.write(ENTER);
       await waitFor(() => expect(context.app.lastFrame()).toContain('A + B (1)'));
-      expect(readEvents).toHaveBeenCalledWith(cwd, 'en', expect.objectContaining({ repositoryDirectories: [repositoryB] }));
+      expect(readEvents.mock.calls.map((call) => call.slice(0, 3))).toContainEqual([
+        cwd, 'en', expect.objectContaining({ repositoryDirectories: [repositoryB] }),
+      ]);
       expect(readEvents.mock.calls.every(([directory, language, assignment]) =>
         directory === cwd && language === 'en' && assignment?.repositoryDirectories.length === 1
         && assignment.repositoryDirectories[0] === repositoryB)).toBe(true);
@@ -523,11 +693,15 @@ describe('manager TUI startup and polling', () => {
 
 });
 it('displays run manager work records without processing inbox events and informs the next human turn', async () => {
+  const readEvents = vi.spyOn(savedEvents, 'readManagerDisplayEvents');
   const context = mount('ja');
   context.call.mockResolvedValue(response(null));
   try {
+    await waitFor(() => expect(readEvents).toHaveBeenCalled());
+    await readEvents.mock.results[0]!.value;
+    await waitFor(() => expect(context.app.lastFrame()).not.toContain('処理中'));
     inbox.read.mockReturnValue([{ filePath: '/inbox/1.json', event: { kind: 'registered', goalId: goalRecord().id, createdAt: '2026-10-14T00:00:00Z' } }]);
-    const record = { id: '550e8400-e29b-41d4-a716-446655440005', recordedAt: '2026-10-14T00:00:00Z', summary: 'task-X を取り込み、task-Y を投入しました' };
+    const record = { id: '550e8400-e29b-41d4-a716-446655440005', recordedAt: new Date().toISOString(), summary: 'task-X を取り込み、task-Y を投入しました' };
     memory.goals.mockReturnValue([{ ...goalRecord(), workLog: [record] }]);
     await waitFor(() => expect(context.app.lastFrame()).toContain(record.summary));
     expect(context.call).not.toHaveBeenCalled();

@@ -470,10 +470,14 @@ manager:
   goalResumed: "ゴールを再開しました: {goalId}"
   goalExecutionFailed: "ゴールの実行状態を変更できませんでした: {reason}"
   pausedGoals: "一時停止中のゴール"
+  goalStatuses: "ゴールの状態"
+  goalPendingInquiries: "未回答: {count}件"
   goalStates:
     active: "実行中"
     paused: "一時停止中"
     aborted: "中止済み"
+    awaiting_merge: "マージ待ち"
+    completed: "完了"
   resumeHint: "再開: /resume"
   pendingInquiries: "未回答: {count}件"
   inquiryKinds:
