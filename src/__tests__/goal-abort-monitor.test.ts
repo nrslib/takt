@@ -40,6 +40,22 @@ describe('GoalAbortMonitor', () => {
     expect(controller.signal.reason).toBeInstanceOf(GoalAbortedError);
   });
 
+  it('observes a later unowned task stop without reading goals and releases its timer', () => {
+    const controller = new AbortController();
+    monitor = new GoalAbortMonitor('/project', undefined, controller, { taskName: 'task-a', executionId: 'run-a' });
+    vi.advanceTimersByTime(500);
+    expect(controller.signal.aborted).toBe(false);
+    doubles.read.mockReturnValue({ tasks: [{ name: 'task-a', status: 'running',
+      execution_id: 'run-a', stop_request: { execution_id: 'run-a' } }] });
+    vi.advanceTimersByTime(500);
+    expect(controller.signal.reason).toBeInstanceOf(TaskStoppedError);
+    expect(doubles.get).not.toHaveBeenCalled();
+    monitor.stop();
+    const reads = doubles.read.mock.calls.length;
+    vi.advanceTimersByTime(1000);
+    expect(doubles.read).toHaveBeenCalledTimes(reads);
+  });
+
   it('diagnoses a read failure and retries without treating it as an abort', () => {
     doubles.get.mockImplementationOnce(() => { throw new Error('read unavailable'); });
     const controller = new AbortController();

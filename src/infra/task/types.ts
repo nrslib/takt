@@ -77,6 +77,7 @@ export interface SummarizeOptions {
 }
 
 export interface TaskListItem {
+  executionId?: string;
   goalId?: string;
   kind: 'pending' | 'running' | 'completed' | 'failed' | 'exceeded' | 'pr_failed';
   name: string;

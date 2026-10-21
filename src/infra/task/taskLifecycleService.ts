@@ -330,7 +330,7 @@ export class TaskLifecycleService {
     return {};
   }
 
-  requestTaskStop(goalId: string, taskName: string, executionId: string): NonNullable<TaskRecord['stop_request']> {
+  requestTaskStop(goalId: string | undefined, taskName: string, executionId: string): NonNullable<TaskRecord['stop_request']> {
     const state = this.store.update((current) => {
       const index = current.tasks.findIndex((task) => task.name === taskName);
       const task = current.tasks[index];

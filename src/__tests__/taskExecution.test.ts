@@ -308,20 +308,23 @@ describe('executeAndCompleteTask', () => {
     expect(mockPostExecutionFlow).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])('provides a task signal without an external controller only for goal work (owned=%s)', async (owned) => {
+  it.each(['goal', 'standalone', 'no execution'] as const)('provides a task signal for %s', async (kind) => {
     const task = createTask('single-task');
-    if (owned) task.data = { ...task.data!, goal_id: goalId };
+    if (kind === 'goal') task.data = { ...task.data!, goal_id: goalId };
+    if (kind === 'standalone') task.executionId = 'execution-a';
     const executor = vi.fn(async (_options: ExecuteTaskOptions) => ({ success: true }));
     await executeTaskAndCompleteWithDetails(task, createTaskRunnerMock() as never, '/project', executor);
     const signal = executor.mock.calls[0]![0].abortSignal;
-    expect(signal === undefined).toBe(!owned);
+    expect(signal === undefined).toBe(kind === 'no execution');
     expect(mockResolveTaskExecution.mock.calls[0]![2]).toBe(signal);
-    if (!owned) expect(goalDoubles.get).not.toHaveBeenCalled();
+    if (kind !== 'goal') expect(goalDoubles.get).not.toHaveBeenCalled();
   });
 
-  it.each(['setup', 'workflow', 'post execution'] as const)('preserves task stop through %s and waits for that operation to finish', async (phase) => {
+  it.each(([false, true] as const).flatMap((owned) =>
+    (['setup', 'workflow', 'post execution'] as const).map((phase) => ({ owned, phase }))))('preserves task stop through $phase (owned=$owned) and waits for that operation to finish', async ({ owned, phase }) => {
     const task = createTask('task-stop');
-    task.data = { ...task.data!, goal_id: goalId };
+    task.executionId = 'execution-a';
+    if (owned) task.data = { ...task.data!, goal_id: goalId };
     const update = mockUpdateRunningTaskExecution.getMockImplementation()!;
     mockUpdateRunningTaskExecution.mockImplementation((name, execution) => ({ ...update(name, execution), data: task.data }));
     const actual = await vi.importActual<typeof import('../features/tasks/execute/taskResultHandler.js')>('../features/tasks/execute/taskResultHandler.js');
@@ -348,7 +351,7 @@ describe('executeAndCompleteTask', () => {
     try {
       await vi.waitFor(() => expect(signal).toBeDefined());
       expect(signal!.aborted).toBe(false);
-      goalDoubles.tasks.mockReturnValue({ tasks: [{ name: task.name, goal_id: goalId, status: 'running',
+      goalDoubles.tasks.mockReturnValue({ tasks: [{ name: task.name, goal_id: owned ? goalId : undefined, status: 'running',
         execution_id: 'execution-a', stop_request: { execution_id: 'execution-a' } }] });
       await vi.waitFor(() => expect(signal!.aborted).toBe(true), { timeout: 2000 });
       expect(mockPersistTaskResult).not.toHaveBeenCalled();

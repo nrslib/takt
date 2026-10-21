@@ -5,6 +5,15 @@
 # Template variables use {variableName} syntax.
 # =============================================================================
 
+taskStop:
+  label: "Stop"
+  description: "Request a stop; the worker interrupts itself and determines the final state"
+  confirm: 'Request a stop for running task "{name}"? The worker will determine the final state.'
+  staleOwner: "Cannot request a stop because the owner is not alive. Use Mark as failed."
+  missingExecutionId: "Cannot request a stop because the execution ID is missing."
+  rejected: "Stop request rejected: {reason}"
+  requested: 'Stop requested for "{name}". The worker will interrupt itself and determine the final state.'
+
 taskDeletion:
   statusOption: "Filter deletion by status (pending|completed|failed|exceeded|pr_failed; multiple values allowed)"
   goalOption: "Filter deletion by goal ID"

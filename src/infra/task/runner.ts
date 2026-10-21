@@ -119,7 +119,7 @@ export class TaskRunner {
     return this.lifecycle.completeTask(result);
   }
 
-  requestTaskStop(goalId: string, taskName: string, executionId: string) {
+  requestTaskStop(goalId: string | undefined, taskName: string, executionId: string) {
     return this.lifecycle.requestTaskStop(goalId, taskName, executionId);
   }
 

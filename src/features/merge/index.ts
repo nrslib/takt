@@ -26,6 +26,8 @@ import { assertReusableWorktreePath } from '../tasks/execute/reusedWorktree.js';
 import { generateExecutionReportDir } from '../../core/workflow/run/run-slug.js';
 import { buildRunPaths } from '../../core/workflow/run/run-paths.js';
 import { resolveTaskSpecForExecution } from '../tasks/execute/taskSpecContext.js';
+import { GoalAbortMonitor } from '../tasks/execute/goalAbortMonitor.js';
+import { TaskStoppedError } from '../../infra/task/taskStop.js';
 
 const log = createLogger('merge');
 
@@ -105,14 +107,24 @@ export async function executePersistedPrMergeTask(
   const runningTask = runner.updateRunningTaskExecution(task.name, {
     runSlug, worktreePath: task.worktreePath, branch: data.branch,
   });
+  const controller = new AbortController();
+  const signal = runningTask.executionId === undefined ? abortSignal
+    : abortSignal === undefined ? controller.signal : AbortSignal.any([abortSignal, controller.signal]);
+  const monitor = runningTask.executionId === undefined ? undefined
+    : new GoalAbortMonitor(projectCwd, data.goal_id, controller, {
+      taskName: task.name, executionId: runningTask.executionId,
+    });
   try {
+    signal?.throwIfAborted();
     const settings = resolveMergeSettings(resolveConfigValue(projectCwd, 'merge'));
     const result = await runPrMergeWorkflow({
       projectCwd, prNumber: data.pr_number, workflow: data.workflow,
       settings: { ...settings, method: data.merge_method,
         threatCheckMaxDiffBytes: data.merge_threat_check_max_diff_bytes ?? settings.threatCheckMaxDiffBytes },
-      abortSignal, display,
+      abortSignal: signal, display,
     }, runningTask, runner, runSlug);
+    monitor?.check();
+    signal?.throwIfAborted();
     if (!result.merged) {
       runner.failTask({ task: runningTask, success: false,
         response: `PR #${data.pr_number} remains unmerged; inspect ${task.name} with takt list`,
@@ -133,14 +145,31 @@ export async function executePersistedPrMergeTask(
       });
     }
     return { merged: true };
-  } catch (error) {
+  } catch (caught) {
+    const error = caught instanceof TaskStoppedError ? caught
+      : controller.signal.aborted ? controller.signal.reason : caught;
     const current = runner.listAllTaskItems().find((item) => item.name === task.name);
     if (current?.kind === 'running') {
-      runner.failTask({ task: runningTask, success: false, response: getErrorMessage(error),
-        executionLog: [], startedAt, completedAt: new Date().toISOString(),
-        branch: data.branch, worktreePath: task.worktreePath });
+      const saveFailure = (failure: unknown): void => {
+        const reason = getErrorMessage(failure);
+        runner.failTask({ task: runningTask, success: false, response: reason,
+          executionLog: [], startedAt, completedAt: new Date().toISOString(),
+          branch: data.branch, worktreePath: task.worktreePath,
+          ...(failure instanceof TaskStoppedError ? { completion: {
+            success: false, interrupted: true, workflowResult: 'aborted', failureReason: reason,
+          } } : {}) });
+      };
+      try {
+        saveFailure(error);
+      } catch (terminalError) {
+        if (!(terminalError instanceof TaskStoppedError)) throw terminalError;
+        saveFailure(terminalError);
+        throw terminalError;
+      }
     }
     throw error;
+  } finally {
+    monitor?.stop();
   }
 }
 

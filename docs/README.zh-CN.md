@@ -201,9 +201,11 @@ takt run
 ### 管理结果
 
 ```bash
-# 查看任务分支，并进行合并、重试、重新排队、强制失败或删除
+# 查看任务分支，并进行合并、重试、重新排队、请求停止、强制失败或删除
 takt list
 ```
+
+**Stop** 请求停止一个运行中的任务，由 worker 自行中断并决定最终状态。**Mark as failed** 只修改状态，不会停止 worker。
 
 ## 工作原理
 
@@ -277,7 +279,7 @@ steps:
 | `takt watch` | 监视任务队列并自动执行待处理任务 |
 | `takt ui` | 在 `http://127.0.0.1:20525` 启动实验性的 Viewer 优先 Web UI |
 | `takt manager` | 启动实验性的目标对话 TUI。输入不带参数的 `/go`，从当前对话请求摘要；如果已有摘要，则直接批准并注册目标，不重新生成摘要。行为、设置和保存的数据格式可能会随时更改，恕不另行通知。自动将任务加入队列并执行，因此会产生 provider API 费用。使用 claude（claude-sdk）或 codex 时，AI 会在工具执行前进行审查。启动时 daemon 会自动启动，处理事件并进行巡查。使用 `takt daemon stop` 可停止 daemon |
-| `takt list` | 管理任务分支：合并、重试、重新排队、强制失败、指导或删除 |
+| `takt list` | 管理任务分支：合并、重试、重新排队、请求停止、强制失败、指导或删除 |
 | `takt #N` | 将 GitHub Issue 作为任务输入 |
 | `takt eject` | 复制 builtin workflow/facet 以便定制 |
 | `takt workflow init` | 创建 workflow scaffold |

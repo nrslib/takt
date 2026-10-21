@@ -138,7 +138,8 @@ export async function executeTaskAndCompleteWithDetails(
   const taskAbortController = new AbortController();
   const externalAbortSignal = parallelOptions?.abortSignal;
   const goalId = task.data?.goal_id;
-  const taskAbortSignal = externalAbortSignal || goalId !== undefined ? taskAbortController.signal : undefined;
+  const taskAbortSignal = externalAbortSignal || goalId !== undefined || task.executionId !== undefined
+    ? taskAbortController.signal : undefined;
   let goalAbortMonitor: GoalAbortMonitor | undefined;
   let workflowStarted = false;
   let loopAnalysisPublication: LoopAnalysisPublicationCoordinator | undefined;
@@ -146,9 +147,14 @@ export async function executeTaskAndCompleteWithDetails(
   let executionBranch: string | undefined;
   let workflowResult: GoalTaskResult['workflowResult'] = 'error';
   let interrupted = false;
+  let taskStopError: TaskStoppedError | undefined;
   let runSlug: string | undefined;
   const snapshot = (success: boolean, failureReason?: string): GoalTaskResult | undefined => {
-    if (task.data?.goal_id === undefined) return undefined;
+    if (task.data?.goal_id === undefined) {
+      return taskStopError !== undefined
+        ? { success, interrupted, workflowResult, failureReason }
+        : undefined;
+    }
     const completion: GoalTaskResult = {
       success,
       interrupted, workflowResult,
@@ -187,7 +193,7 @@ export async function executeTaskAndCompleteWithDetails(
       taskForPersistence = { ...taskForPersistence, runSlug };
       taskForPersistence = taskRunner.updateRunningTaskExecution(task.name, { runSlug });
     }
-    if (goalId !== undefined) {
+    if (goalId !== undefined || taskForPersistence.executionId !== undefined) {
       if (taskForPersistence.executionId === undefined) throw new Error(`Goal task is missing executionId: ${task.name}`);
       goalAbortMonitor = new GoalAbortMonitor(cwd, goalId, taskAbortController, {
         taskName: task.name, executionId: taskForPersistence.executionId,
@@ -292,6 +298,7 @@ export async function executeTaskAndCompleteWithDetails(
     });
     goalAbortMonitor?.check();
     if (isManagedTaskInterruption(taskAbortController.signal.reason)) {
+      if (taskAbortController.signal.reason instanceof TaskStoppedError) taskStopError = taskAbortController.signal.reason;
       taskRunResult = { ...taskRunResult, success: false, interrupted: true, reason: taskAbortController.signal.reason.message,
         exceeded: false, retryable: false };
     }
@@ -419,6 +426,7 @@ export async function executeTaskAndCompleteWithDetails(
       : isManagedTaskInterruption(taskAbortController.signal.reason) ? taskAbortController.signal.reason : err;
     const completedAt = new Date().toISOString();
     const saveFailure = (failure: unknown): TaskCompletionResult => {
+      if (failure instanceof TaskStoppedError) taskStopError = failure;
       if (isManagedTaskInterruption(failure)) {
         interrupted = true;
         if (workflowStarted) workflowResult = 'aborted';

@@ -211,9 +211,11 @@ takt run
 ### Manage results
 
 ```bash
-# List task branches — merge, retry, requeue, force-fail, or delete
+# List task branches — merge, retry, requeue, stop, force-fail, or delete
 takt list
 ```
+
+**Stop** requests a stop for one running task; the worker interrupts itself and determines the final state. **Mark as failed** only changes status and does not stop the worker.
 
 ## How It Works
 
@@ -289,7 +291,7 @@ See the [Builtin Catalog](./docs/builtin-catalog.md) for all workflows and perso
 | `takt watch` | Monitor the task queue and auto-execute pending tasks (resident process) |
 | `takt ui` | Open the experimental Viewer-first Web UI on `http://127.0.0.1:20525` |
 | `takt manager` | Open the experimental goal conversation TUI. Enter `/go` without arguments to request a summary of the current conversation, or approve and register an existing summary without regenerating it. Behavior, settings, and saved data formats may change without notice. Automatically queues and runs tasks, incurring provider API costs. With claude (claude-sdk) or codex, AI reviews tool use before execution. On startup, the daemon starts automatically to process events and perform patrols. Stop the daemon with `takt daemon stop` |
-| `takt list` | Manage task branches (merge, retry, requeue, force-fail, instruct, delete) |
+| `takt list` | Manage task branches (merge, retry, requeue, stop, force-fail, instruct, delete) |
 | `takt #N` | Use a GitHub Issue as the initial input for a task |
 | `takt merge` | Review, fix, and merge pull requests with a workflow |
 | `takt install <provider>` | Install the SDK for an SDK-based provider |
