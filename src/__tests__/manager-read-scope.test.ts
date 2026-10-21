@@ -2,7 +2,7 @@ import { accessSync, opendirSync, realpathSync, statSync, type Dir, type Dirent,
 import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { classifyManagerToolPermission } from '../features/manager/toolPermissionClassifier.js';
-import { isManagerReadAllowed, managerReadScope, type ScopedReadRequest } from '../features/manager/readScope.js';
+import { isManagerReadAllowed, managerReadScope, MANAGER_READ_SEARCH_ENTRY_LIMIT, type ScopedReadRequest } from '../features/manager/readScope.js';
 
 vi.mock('node:fs', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:fs')>()),
@@ -147,6 +147,54 @@ describe('manager read target classification', () => {
     expect(isManagerReadAllowed(request('Glob', { pattern: '**/*' }))).toBe(true);
     expect(supplied).toBe(3);
     expect(handle.closeSync).toHaveBeenCalledOnce();
+  });
+
+  it.each(['Glob', 'Grep'])('bounds nonmatching entries for %s at the search limit', (toolName) => {
+    vi.mocked(statSync).mockImplementation((path) => ({
+      isFile: () => String(path) !== '/work/repo/src',
+      isDirectory: () => String(path) === '/work/repo/src',
+    } as Stats));
+    const input = toolName === 'Glob' ? { pattern: '**/*.ts' } : { pattern: 'fixture', glob: '**/*.ts' };
+    for (const count of [MANAGER_READ_SEARCH_ENTRY_LIMIT - 1, MANAGER_READ_SEARCH_ENTRY_LIMIT, MANAGER_READ_SEARCH_ENTRY_LIMIT + 1]) {
+      let supplied = 0;
+      const handle = directory(() => supplied < count ? fileEntry(`file-${supplied++}.txt`) : null);
+      vi.mocked(opendirSync).mockReturnValue(handle as unknown as Dir);
+
+      expect(isManagerReadAllowed(request(toolName, input))).toBe(count < MANAGER_READ_SEARCH_ENTRY_LIMIT);
+      expect(handle.readSync).toHaveBeenCalledTimes(count < MANAGER_READ_SEARCH_ENTRY_LIMIT ? count + 1 : MANAGER_READ_SEARCH_ENTRY_LIMIT);
+      expect(handle.closeSync).toHaveBeenCalledOnce();
+    }
+  });
+
+  it.each(['Glob', 'Grep'])('shares the %s search limit across directories and closes both handles before the next request', (toolName) => {
+    const childPath = '/work/repo/src/nested';
+    vi.mocked(statSync).mockImplementation((path) => ({
+      isFile: () => !['/work/repo/src', childPath].includes(String(path)),
+      isDirectory: () => ['/work/repo/src', childPath].includes(String(path)),
+    } as Stats));
+    const parentCount = Math.floor(MANAGER_READ_SEARCH_ENTRY_LIMIT / 2);
+    let parentSupplied = 0;
+    const parent = directory(() => {
+      const index = parentSupplied++;
+      if (index < parentCount) return fileEntry('public.txt');
+      return index === parentCount ? { name: 'nested', isDirectory: () => true, isSymbolicLink: () => false } as Dirent : null;
+    });
+    let childSupplied = 0;
+    const child = directory(() => childSupplied++ < parentCount ? fileEntry('public.txt') : null);
+    vi.mocked(opendirSync).mockReturnValueOnce(parent as unknown as Dir).mockReturnValueOnce(child as unknown as Dir);
+    const input = { pattern: toolName === 'Glob' ? '**/*' : 'fixture' };
+
+    expect(classifyManagerToolPermission(request(toolName, input), 'ja', 'claude-sdk')).toEqual({ decision: 'judge' });
+    expect(parent.readSync).toHaveBeenCalledTimes(parentCount + 1);
+    expect(child.readSync).toHaveBeenCalledTimes(MANAGER_READ_SEARCH_ENTRY_LIMIT - parentCount - 1);
+    expect(parent.closeSync).toHaveBeenCalledOnce();
+    expect(child.closeSync).toHaveBeenCalledOnce();
+
+    const next = directory(() => null);
+    next.readSync.mockReturnValueOnce(fileEntry('public.txt'));
+    vi.mocked(opendirSync).mockReturnValueOnce(next as unknown as Dir);
+    expect(classifyManagerToolPermission(request(toolName, input), 'ja', 'claude-sdk')).toEqual({ decision: 'allow' });
+    expect(next.closeSync).toHaveBeenCalledOnce();
   });
 
   it('closes a directory immediately when a sensitive entry is found', () => {

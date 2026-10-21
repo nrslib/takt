@@ -2,7 +2,7 @@ import { realpathSync, statSync, type Stats } from 'node:fs';
 import { realpath } from 'node:fs/promises';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { readWorkspace, readWorkspaceRegistry } from '../infra/config/global/workspaceRegistry.js';
-import { MANAGER_ASSIGNMENT_ENV } from '../features/manager/assignment.js';
+import { MANAGER_ASSIGNMENT_ENV, MANAGER_ASSIGNMENT_HEADER } from '../features/manager/assignment.js';
 import { TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
 import { withManagerReadScope } from '../features/manager/readScopeProvider.js';
 import { classifyManagerToolPermission } from '../features/manager/toolPermissionClassifier.js';
@@ -27,6 +27,13 @@ describe('manager provider read assignment', () => {
   function assignmentServer(rawAssignment: string): NonNullable<ProviderCallOptions['mcpServers']> {
     return { [TAKT_MANAGER_MCP_SERVER_NAME]: {
       type: 'stdio', command: 'fixture', env: { [MANAGER_ASSIGNMENT_ENV]: rawAssignment },
+    } };
+  }
+
+  function httpAssignmentServer(header: string | undefined): NonNullable<ProviderCallOptions['mcpServers']> {
+    return { [TAKT_MANAGER_MCP_SERVER_NAME]: {
+      type: 'http', url: 'http://127.0.0.1:12345/',
+      ...(header === undefined ? {} : { headers: { [MANAGER_ASSIGNMENT_HEADER]: header } }),
     } };
   }
 
@@ -69,6 +76,45 @@ describe('manager provider read assignment', () => {
       id: 'fixture-id', name: 'workspace', repositoryDirectories: ['/work/repo', '/work/second'],
     }]);
     expect(await invoke()).toEqual({ repositoryDirectories: ['/work/repo', '/work/second'], sensitivePaths: ['.env'] });
+  });
+
+  it('uses the explicit HTTP workspace instead of the workspace inferred from the manager directory', async () => {
+    vi.mocked(readWorkspaceRegistry).mockResolvedValue([{
+      id: 'other-workspace', name: 'inferred', repositoryDirectories: ['/work/repo', '/work/unassigned'],
+    }]);
+    vi.mocked(readWorkspace).mockResolvedValue({
+      id: workspaceId, name: 'assigned', repositoryDirectories: ['/work/second', '/work/third'],
+    });
+    const header = Buffer.from(JSON.stringify({ kind: 'workspace', workspaceId }), 'utf8').toString('base64url');
+
+    expect(await invoke(httpAssignmentServer(header))).toEqual({
+      repositoryDirectories: ['/work/second', '/work/third'], sensitivePaths: ['.env'],
+    });
+    expect(readWorkspace).toHaveBeenCalledWith('/config', workspaceId);
+  });
+
+  it.each([
+    ['missing header', undefined],
+    ['empty header', ''],
+    ['invalid encoding', '%%%'],
+    ['decoding exception', 'fixture-encoded-assignment'],
+    ['invalid JSON', Buffer.from('{', 'utf8').toString('base64url')],
+    ['invalid assignment', Buffer.from('{"kind":"workspace","workspaceId":"invalid"}', 'utf8').toString('base64url')],
+  ])('judges HTTP reads with %s instead of inferring a scope from cwd', async (condition, header) => {
+    const decode = condition === 'decoding exception' ? vi.spyOn(Buffer, 'from').mockImplementationOnce(() => {
+      throw new Error('fixture decode failure');
+    }) : undefined;
+    let scope;
+    try {
+      scope = await invoke(httpAssignmentServer(header));
+    } finally {
+      decode?.mockRestore();
+    }
+
+    expect(scope).toBeUndefined();
+    expect(classifyManagerToolPermission({
+      toolName: 'Read', toolInput: { file_path: '/work/repo/public.txt' }, cwd: '/work/repo', [managerReadScope]: scope,
+    } as ScopedReadRequest, 'ja', 'claude-sdk')).toEqual({ decision: 'judge' });
   });
 
   it.each(['explicit workspace', 'registry'] as const)(
