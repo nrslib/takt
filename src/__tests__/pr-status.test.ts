@@ -99,18 +99,19 @@ describe('PR status acquisition', () => {
   });
 
   it.each([
-    { latestConclusion: 'success', latestStatus: 'completed', latestHead: 'a'.repeat(40), workflowId: 100, passed: true, finished: true, superseded: true },
-    { latestConclusion: 'failure', latestStatus: 'completed', latestHead: 'a'.repeat(40), workflowId: 100, passed: false, finished: true, superseded: true },
-    { latestConclusion: null, latestStatus: 'in_progress', latestHead: 'a'.repeat(40), workflowId: 100, passed: false, finished: false, superseded: true },
-    { latestConclusion: 'success', latestStatus: 'completed', latestHead: 'b'.repeat(40), workflowId: 100, passed: false, finished: true, superseded: false },
-    { latestConclusion: 'success', latestStatus: 'completed', latestHead: 'a'.repeat(40), workflowId: 200, passed: false, finished: true, superseded: false },
-  ])('同名jobを保持しつつ同一workflow・HEADの後続runだけを採用する: $latestConclusion/$latestStatus/$workflowId', async ({
-    latestConclusion, latestStatus, latestHead, workflowId, passed, finished, superseded,
+    { oldConclusion: 'cancelled', latestConclusion: 'success', latestStatus: 'completed', latestHead: 'a'.repeat(40), workflowId: 100, passed: true, finished: true, superseded: true },
+    { oldConclusion: 'cancelled', latestConclusion: 'failure', latestStatus: 'completed', latestHead: 'a'.repeat(40), workflowId: 100, passed: false, finished: true, superseded: true },
+    { oldConclusion: 'success', latestConclusion: 'cancelled', latestStatus: 'completed', latestHead: 'a'.repeat(40), workflowId: 100, passed: false, finished: true, superseded: true },
+    { oldConclusion: 'cancelled', latestConclusion: null, latestStatus: 'in_progress', latestHead: 'a'.repeat(40), workflowId: 100, passed: false, finished: false, superseded: true },
+    { oldConclusion: 'cancelled', latestConclusion: 'success', latestStatus: 'completed', latestHead: 'b'.repeat(40), workflowId: 100, passed: false, finished: true, superseded: false },
+    { oldConclusion: 'cancelled', latestConclusion: 'success', latestStatus: 'completed', latestHead: 'a'.repeat(40), workflowId: 200, passed: false, finished: true, superseded: false },
+  ])('同名jobを保持しつつ同一workflow・HEADの後続runだけを採用する: $oldConclusion/$latestConclusion/$latestStatus/$workflowId', async ({
+    oldConclusion, latestConclusion, latestStatus, latestHead, workflowId, passed, finished, superseded,
   }) => {
-    const old = (job: number) => ({ ...check('COMPLETED', 'CANCELLED'), workflowName: 'CI',
+    const old = (job: number) => ({ ...check('COMPLETED', oldConclusion.toUpperCase()), workflowName: 'CI',
       detailsUrl: `https://github.com/org/repo/actions/runs/10/job/${job}` });
     const latest = (job: number) => ({ ...check(latestStatus === 'completed' ? 'COMPLETED' : 'IN_PROGRESS',
-      latestConclusion === 'success' ? 'SUCCESS' : latestConclusion === 'failure' ? 'FAILURE' : ''),
+      latestConclusion?.toUpperCase() ?? ''),
     workflowName: 'CI', detailsUrl: `https://github.com/org/repo/actions/runs/11/job/${job}` });
     response.mockImplementation((args: string[]) => {
       if (args[0] === 'pr') return JSON.stringify(status([old(20), old(21), latest(30), latest(31)]));
@@ -119,7 +120,7 @@ describe('PR status acquisition', () => {
         headSha: id === 10 ? 'a'.repeat(40) : latestHead,
         workflowDatabaseId: id === 10 ? 100 : workflowId,
         createdAt: id === 10 ? '2026-10-05T12:00:00Z' : '2026-10-05T12:01:00Z',
-        status: id === 10 ? 'completed' : latestStatus, conclusion: id === 10 ? 'cancelled' : latestConclusion });
+        status: id === 10 ? 'completed' : latestStatus, conclusion: id === 10 ? oldConclusion : latestConclusion });
     });
 
     const result = await fetchPrStatus(123, '/project');
