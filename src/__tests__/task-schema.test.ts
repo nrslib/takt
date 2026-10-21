@@ -65,6 +65,19 @@ function makePrFailedRecord() {
 }
 
 const taskIdFields = ['issue', 'pr_number', 'context_pr_number'] as const;
+describe('task stop request persistence', () => {
+  it('round-trips execution identity and the saved request', () => {
+    const task = { ...makeRunningRecord(), execution_id: 'run-a',
+      stop_request: { execution_id: 'run-a', requested_at: '2026-10-21T00:00:00.000Z' } };
+    expect(TaskRecordSchema.parse(serializeTaskRecord(TaskRecordSchema.parse(task)))).toEqual(task);
+  });
+  it.each([
+    { execution_id: '' }, { stop_request: { execution_id: '', requested_at: '2026-10-21T00:00:00.000Z' } },
+    { stop_request: { execution_id: 'run-a' } }, { stop_request: { execution_id: 'run-a', requested_at: 'invalid' } },
+  ])('rejects malformed stop metadata: %j', (changes) => {
+    expect(TaskRecordSchema.safeParse({ ...makeRunningRecord(), ...changes }).success).toBe(false);
+  });
+});
 const invalidTaskIdValues = [
   ['zero', 0],
   ['negative', -1],

@@ -7,6 +7,7 @@ export interface TaskInfo {
   name: string;
   slug?: string;
   runSlug?: string;
+  executionId?: string;
   sourceRunSlug?: string;
   resumeMode?: RunResumeMode;
   summary?: string;
@@ -104,6 +105,7 @@ export interface TaskListItem {
 
 /** Task metadata used by state readers that must not resolve task content. */
 export interface TaskState {
+  executionId?: string;
   goalId?: string;
   goalPurpose?: string;
   goalWorkKey?: string;

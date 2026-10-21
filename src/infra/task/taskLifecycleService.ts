@@ -5,7 +5,7 @@ import { cleanupTaskSpecDirectory, prepareTaskSpecDirectory, type PreparedTaskSp
 import { TaskStore } from './store.js';
 import { firstLine, nowIso } from './naming.js';
 import { slugify } from '../../shared/utils/slug.js';
-import { isStaleRunningTask } from './process.js';
+import { isProcessAlive, isStaleRunningTask } from './process.js';
 import { readRetryMetadataByRunSlug } from '../../core/workflow/run/retry-metadata.js';
 import {
   buildClaimedTaskRecord,
@@ -23,7 +23,8 @@ import type { Goal } from '../goals/schema.js';
 import { isGoalPaused } from '../goals/state.js';
 import type { MergeMethod } from '../../core/models/config-types.js';
 import type { PrExecutionContext } from '../../core/workflow/system/pr-execution-context.js';
-import { getSelfTaskProcessIdentity } from './taskProcessIdentity.js';
+import { getSelfTaskProcessIdentity, getTaskProcessIdentity } from './taskProcessIdentity.js';
+import { assertTaskStopHandled } from './taskStop.js';
 
 export class TaskClaimLockAcquisitionError extends Error {}
 
@@ -329,6 +330,34 @@ export class TaskLifecycleService {
     return {};
   }
 
+  requestTaskStop(goalId: string, taskName: string, executionId: string): NonNullable<TaskRecord['stop_request']> {
+    const state = this.store.update((current) => {
+      const index = current.tasks.findIndex((task) => task.name === taskName);
+      const task = current.tasks[index];
+      if (task === undefined) throw new Error(`Task name does not match a saved task: ${taskName}`);
+      if (task.goal_id !== goalId) throw new Error('Task does not belong to this goal');
+      if (task.execution_id !== executionId) throw new Error('Task executionId does not match the saved execution');
+      if (task.status !== 'running') throw new Error(`Task is not running: ${task.status}`);
+      if (task.owner_pid == null || !isProcessAlive(task.owner_pid)) {
+        throw new Error('Task execution has ended: its owner is not alive');
+      }
+      if (task.owner_start_time != null) {
+        const ownerIdentity = getTaskProcessIdentity(task.owner_pid);
+        if (ownerIdentity === undefined) {
+          throw new Error('Cannot verify task execution owner: current owner start time is unavailable');
+        }
+        if (ownerIdentity.startTime !== task.owner_start_time) {
+          throw new Error('Task execution has ended or its owner no longer matches');
+        }
+      }
+      if (task.stop_request?.execution_id === executionId) return undefined;
+      const tasks = [...current.tasks];
+      tasks[index] = { ...task, stop_request: { execution_id: executionId, requested_at: nowIso() } };
+      return { tasks };
+    });
+    return state.tasks.find((task) => task.name === taskName)!.stop_request!;
+  }
+
   completeTask(result: TaskResult): string {
     if (!result.success) {
       throw new Error('Cannot complete a failed task. Use failTask() instead.');
@@ -341,6 +370,7 @@ export class TaskLifecycleService {
       }
 
       const target = current.tasks[index]!;
+      assertTaskStopHandled(target, result.completion);
       const updated = buildTerminalTaskRecord(target, {
         status: 'completed',
         started_at: result.startedAt,
@@ -374,6 +404,7 @@ export class TaskLifecycleService {
       }
 
       const target = current.tasks[index]!;
+      assertTaskStopHandled(target, result.completion);
       const updated = buildTerminalTaskRecord(target, {
         status: 'failed',
         started_at: result.startedAt,
@@ -477,6 +508,7 @@ export class TaskLifecycleService {
       }
 
       const target = current.tasks[index]!;
+      assertTaskStopHandled(target, result.completion);
       const updated = buildTerminalTaskRecord(target, {
         status: 'pr_failed',
         started_at: result.startedAt,
