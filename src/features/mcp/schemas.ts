@@ -1,6 +1,6 @@
 import { isAbsolute } from 'node:path';
 import { z } from 'zod/v4';
-import { GoalIdSchema, GoalQuestionInputSchema, GoalNotificationInputSchema, GoalWorkLogInputSchema } from '../../infra/goals/schema.js';
+import { GoalIdSchema, GoalQuestionInputSchema, GoalInquiryInputSchema, GoalQuestionSchema, GoalNotificationInputSchema, GoalWorkLogInputSchema } from '../../infra/goals/schema.js';
 import { MCP_TEXT_PAGE_BYTES } from './response.js';
 import {
   isValidTaskContextBranchName,
@@ -85,6 +85,10 @@ export const listGoalsInputSchema = goalIdentityInputSchema.extend({
   errorOffset: readOffsetSchema.describe('Offset into individual saved-record errors; independent of the healthy goal offset.'),
 });
 export const goalWriteInputSchema = goalIdentityInputSchema.extend({ goalId: GoalIdSchema });
+export const abortGoalInputSchema = goalWriteInputSchema.extend({
+  reason: GoalWorkLogInputSchema.shape.summary.describe('Required reason for aborting the goal. Included in the operation submitted for human confirmation.'),
+});
+export type AbortGoalInput = z.infer<typeof abortGoalInputSchema>;
 export const reopenGoalInputSchema = goalWriteInputSchema.extend({
   reason: GoalWorkLogInputSchema.shape.summary.describe('Required reason for reopening the goal. Saved in the work log without trimming.'),
 });
@@ -104,11 +108,19 @@ export const enqueueGoalTaskInputSchema = goalWriteInputSchema.extend({
   task: taskContentSchema.describe('Self-contained instructions for ready goal work. Do not request merging.'),
   workflow: workflowSchema.describe('Workflow selected by the manager using takt_list_workflows names and descriptions.'),
 });
-export const askGoalQuestionInputSchema = goalWriteInputSchema.extend(GoalQuestionInputSchema.shape);
+export const askGoalQuestionInputSchema = goalWriteInputSchema.extend({
+  ...GoalQuestionInputSchema.shape,
+  kind: z.enum(['question', 'operation_request'], {
+    error: 'Only question and operation_request are allowed. Approvals cannot be created by the manager; they are created through the judgment path.',
+  }).default('question'),
+  targetSha: GoalInquiryInputSchema.shape.targetSha,
+});
 export const getGoalQuestionInputSchema = goalWriteInputSchema.extend({ questionId: z.uuid(),
-  path: z.string().regex(/^(body|recommendation|answer\.text|options\.\d+)$/).optional(), ...textReadShape });
+  path: z.string().regex(/^(body|recommendation|answer\.text|options\.\d+|withdrawalReason)$/).optional(), ...textReadShape });
 export const listGoalQuestionsInputSchema = goalWriteInputSchema.extend({ limit: goalReadLimitSchema, offset: readOffsetSchema });
-export const withdrawGoalQuestionInputSchema = goalWriteInputSchema.extend({ questionId: z.uuid() });
+export const withdrawGoalQuestionInputSchema = goalWriteInputSchema.extend({
+  questionId: z.uuid(), reason: GoalQuestionSchema.shape.withdrawalReason,
+});
 export const notifyGoalInputSchema = goalWriteInputSchema.extend({
   ...GoalNotificationInputSchema.shape, kind: z.enum(['blocked', 'custom']),
 });

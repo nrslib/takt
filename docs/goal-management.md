@@ -6,6 +6,8 @@
 
 Start `takt manager` in an interactive terminal and describe the objective, scope exclusions, acceptance criteria and work constraints. Review the summary and choose Approve registration to let the TUI register the goal. Choose Continue conversation to revise it.
 
+Enter `/go` alone to request a summary of the current conversation. The returned summary waits for approval; enter `/go` again to approve and register it through the same registration process. If a summary is already displayed, `/go` registers it without regenerating it. If there is insufficient material, manager explains this and you can continue the conversation. Manager can also offer a summary without `/go`.
+
 After registration, the manager inside the daemon handles events, submits tasks, checks and integrates results, and selects next work. The TUI displays work records and lets you continue the conversation with a manager that receives those records. Closing the TUI leaves an already running run active.
 
 By default, required runs start automatically. Disable this to start `takt run` / `takt watch` yourself.
@@ -22,9 +24,17 @@ Both the TUI and daemon manager use `full` permissions through the existing prov
 
 In manager conversations with the claude (claude-sdk) or codex provider, an AI permission judge reviews tool use before execution instead of asking a person to approve every operation. It decides to allow, deny with a reason, or ask a person. This review is enabled by default and has no on/off setting.
 
-With claude (claude-sdk), only the built-in read tools `Read`, `Glob`, `Grep`, and `ToolSearch`, and the manager's own TAKT MCP tools, run without this review. With Codex, only the manager's own TAKT MCP tools run without review; all built-in tools are reviewed. For both providers, all other tools are reviewed, including unknown tools and external MCP tools. Shell execution, including `Bash`, is reviewed every time, even when the command appears to be read-only. Launching another agent through `Task` or `Agent` is always denied, as are instructions to launch another AI command-line agent through `Bash`. With Codex, `spawn_agent` is also always denied without invoking the permission judge.
+With claude (claude-sdk), `Read`, `Glob`, and `Grep` run without review only when their resolved targets are readable, ordinary files inside the manager's assigned repositories (the workspace members, or the current repository when it has no workspace). Relative paths use the tool's actual working directory; `~`, `..`, and symlinks are resolved before comparison. Targets outside the assignment, sensitive files, and targets or search ranges that cannot be determined are sent to the judge. Sensitive defaults cover `.env`, `.env.*`, SSH private key names (`id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`), and `*.key`, `*.pem`, `*.crt`, `*.cer`, `*.p12`, `*.pfx`. Global and project `manager.sensitive_paths` add to these defaults and cannot remove them. `ToolSearch` and the manager's own TAKT MCP tools continue to run without review. With Codex, only the manager's own TAKT MCP tools run without review; all built-in tools are reviewed. For both providers, all other tools, including unknown tools and external MCP tools, are reviewed when no saved approval applies. Shell execution, including `Bash`, is reviewed every time no saved approval applies, even when the command appears to be read-only. Launching another agent through `Task` or `Agent` is always denied, as are instructions to launch another AI command-line agent through `Bash`. With Codex, `spawn_agent` is also always denied without invoking the permission judge.
 
 When an operation is denied, the reason returns to the manager, which takes it into account in its next response. An “ask a person” decision also denies the operation for now and notifies the TUI and Slack that human confirmation is pending, with the reason. The operation is not held open while waiting. These notifications use existing kinds; no new notification kind is added.
+
+Saved approvals apply only when the tool name, digest of the original arguments, working directory and target SHA match. Goal operations are bound to the current goal branch SHA. A usable approval allows the operation without calling the judge. A `once` approval allows one use only after consumption is saved; subsequent uses require confirmation again, and a consumption save failure denies the operation. Saved denials return the human reason. Pending inquiries deny with the same inquiry ID. Answers, consumption and assignment changes are reloaded for each request.
+
+The source of approval records is the target repository's `.takt/goals/<UUID>/goal.json` for a goal, or the current assignment's `~/.takt/workspaces/<UUID>/inquiries/` or `~/.takt/projects/<project-id>/inquiries/` otherwise. Answers from other goals or assignments are not reused.
+
+Each judgment receives the original global `~/.takt/manager-permissions.md`, current workspace `~/.takt/workspaces/<UUID>/manager-permissions.md`, target project `~/.takt/manager-permissions/projects/<project-id>.md`, and allowed goal answers with scope `goal`, with their scope and actual source path. The project ID is the SHA-256 of the canonical repository path. These paths use `TAKT_CONFIG_DIR` when set. Human-edited Markdown remains limited to three scopes; no goal Markdown or repository permission file is added. No AI tool can edit permission files.
+
+Read failures, invalid UTF-8, or exceeding 8KiB per source or 32KiB in total are reported to the judge and require human confirmation. Goal limits count the selected permission answer texts together, excluding unrelated goal fields. Source text is not truncated to allow an operation, and saved approval cannot bypass read failures. Existing prohibitions and goal constraints take precedence, followed by denial, confirmation every time, then permission. Goal pause, resume and abort tool requests normally require human confirmation, including the irreversible nature of abort.
 
 Set the judge's provider and model through `provider.targets.internal_agents.manager-permission-judge` in `runtime.yaml`. Like other internal agent seats, it accepts `profile` or `ladder`, but not `pool`. If unassigned, it uses the same provider, model, and provider options as the manager.
 
@@ -65,12 +75,31 @@ Enter each command on its own line in the TUI.
 
 | Command | Behavior |
 |---------|----------|
-| `/answer <questionId>` | Answer with an option or free text. |
-| `/pause <goalId>` | Stop new submissions and integrations. Running tasks continue and results are deferred. |
-| `/resume <goalId>` | Resume deferred events and tasks. |
-| `/abort <goalId>` | Abort after confirmation, interrupting this goal's running tasks and invalidating unstarted tasks. |
+| `/go` | Request a summary of the current conversation, or approve and register an existing summary. Takes no arguments. |
+| `/answer` | Select a pending inquiry with or without a goal, then answer a question, allow or deny an approval, or report an operation result. |
+| `/pause` | Select an active goal to stop new submissions and integrations. Running tasks continue and results are deferred. |
+| `/resume` | Select a paused goal to resume deferred events and tasks. |
+| `/abort` | Select an unfinished goal, then confirm the irreversible abort, interrupting its running tasks and invalidating unstarted tasks. |
+
+These commands take no arguments. Use ↑/↓ to choose, Enter to select, or Esc to close the list without making changes. If there are no eligible targets, the TUI shows a notice instead of opening a list.
 
 Aborting is irreversible. Goal records and branches remain. Answers are saved for the run manager's next decision. Receiving answers from Slack is not implemented.
+
+### /answer
+
+Each list row shows the kind, short goal name ("No goal" for standalone approvals), and summary. The body, options and recommendation appear after selection. Questions accept an option or free text. Approvals require explicit Allow or Deny with an optional comment, including denial without a comment. Operation requests display the procedure and offer Completed or Unable with an optional comment. Comments alone never imply approval or completion.
+
+Approval defaults to this time only. Other scopes are this goal, project, manager (workspace), and global. Standalone approvals omit this goal. With one repository, project and manager share one choice saved as project scope; adding a repository later does not expand existing permissions.
+
+For project, workspace and global scopes, edit and confirm the proposed permission sentence. When no proposal is saved, the TUI initializes it from the tool, target and execution directory. Only the confirmed sentence is appended to permission Markdown by the TUI, before saving the answer. An append failure retains the pending inquiry and edited sentence; resolve the cause and press Enter to retry. Standalone approvals persist and can be answered after opening a new TUI.
+
+## Goal operations in conversation
+
+With a Claude (claude-sdk) or Codex manager, ask to pause the previous goal, resume a particular goal, or abort it with a reason, such as changed requirements. The manager identifies the target through the existing list and asks if it cannot be narrowed to one goal. Registration remains in the TUI.
+
+Pause, resume and abort go through the permission judge and execute after human confirmation. Pending confirmation does not execute the operation. Before aborting, confirm that it cannot be undone and that goal records and branches remain. Running tasks continue while paused; resuming advances deferred work. Aborting interrupts running tasks and invalidates unstarted tasks. An aborted goal cannot resume. Completed goals cannot be paused or resumed; only active goals can be paused, and only paused goals can resume.
+
+Providers without the permission judge do not expose conversation state tools. TUI `/pause`, `/resume` and `/abort` remain available.
 
 ## Integration and completion
 

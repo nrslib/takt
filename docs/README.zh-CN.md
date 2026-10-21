@@ -276,7 +276,7 @@ steps:
 | `takt run` | 执行所有待处理任务 |
 | `takt watch` | 监视任务队列并自动执行待处理任务 |
 | `takt ui` | 在 `http://127.0.0.1:20525` 启动实验性的 Viewer 优先 Web UI |
-| `takt manager` | 启动实验性的目标对话 TUI。行为、设置和保存的数据格式可能会随时更改，恕不另行通知。自动将任务加入队列并执行，因此会产生 provider API 费用。使用 claude（claude-sdk）或 codex 时，AI 会在工具执行前进行审查。启动时 daemon 会自动启动，处理事件并进行巡查。使用 `takt daemon stop` 可停止 daemon |
+| `takt manager` | 启动实验性的目标对话 TUI。输入不带参数的 `/go`，从当前对话请求摘要；如果已有摘要，则直接批准并注册目标，不重新生成摘要。行为、设置和保存的数据格式可能会随时更改，恕不另行通知。自动将任务加入队列并执行，因此会产生 provider API 费用。使用 claude（claude-sdk）或 codex 时，AI 会在工具执行前进行审查。启动时 daemon 会自动启动，处理事件并进行巡查。使用 `takt daemon stop` 可停止 daemon |
 | `takt list` | 管理任务分支：合并、重试、重新排队、强制失败、指导或删除 |
 | `takt #N` | 将 GitHub Issue 作为任务输入 |
 | `takt eject` | 复制 builtin workflow/facet 以便定制 |
@@ -312,9 +312,18 @@ TAKT 还提供两个客户端集成入口：`takt-acp` 通过 stdio JSON-RPC 作
 
 ### manager 工具执行前的权限审查
 
+可以在全局 `~/.takt/config.yaml` 或项目 `.takt/config.yaml` 中添加敏感文件或目录。
+
+```yaml
+manager:
+  sensitive_paths: [private, config/credentials.json]
+```
+
+两个列表都会在默认项的基础上追加，即使其中一个列表为空也不会改变默认项。每一项指定文件名或目录名。详情请参阅 [manager 敏感文件设置](./configuration.zh-CN.md#manager-敏感文件设置)。
+
 在 `takt manager` 使用 claude（claude-sdk）或 codex provider 的对话中，AI 权限判断 agent 会在工具执行前进行审查，代替每次都向用户请求批准。判断结果为允许、拒绝并附带理由，或请求人工确认。审查默认启用，没有开关设置。
 
-使用 claude（claude-sdk）时，只有内置只读工具 `Read`、`Glob`、`Grep`、`ToolSearch` 和 manager 自身的 TAKT MCP 工具可以跳过审查。使用 Codex 时，只有 manager 自身的 TAKT MCP 工具可以跳过审查，所有内置工具都需要审查。对于这两种 provider，其他所有工具都需要审查，包括未知工具和外部 MCP 工具。Shell 执行（包括 `Bash`）每次都需要审查，即使命令内容看起来只是读取操作。通过 `Task` 或 `Agent` 启动其他 agent 一律拒绝；通过 `Bash` 启动其他 AI 命令行 agent 的指令也会被拒绝。使用 Codex 时，`spawn_agent` 也一律拒绝，不经过权限判断 agent 审查。
+使用 claude（claude-sdk）时，`Read` 只有在解析后的目标是 manager 负责的仓库内非敏感且可读取的普通文件时，才能跳过审查。`Glob` 以目录为搜索根目录，只有确认搜索候选文件、遍历的目录和符号链接都在负责范围内、不涉及敏感目标且可以安全搜索时，才能跳过审查。`Grep` 对普通文件的搜索需满足与 `Read` 相同的条件，对目录的搜索需通过与 `Glob` 相同的安全检查，才能跳过审查。负责范围为 workspace 的成员仓库；没有 workspace 时则为当前仓库。相对路径以工具实际的工作目录为基准，`~`、`..` 和符号链接会在比较前解析。范围外的目标、敏感文件，以及无法确定目标或搜索范围的操作都会交给权限判断 agent。默认敏感文件包括 `.env`、`.env.*`、SSH 私钥名称（`id_rsa`、`id_dsa`、`id_ecdsa`、`id_ed25519`），以及 `*.key`、`*.pem`、`*.crt`、`*.cer`、`*.p12`、`*.pfx`。全局和项目的 `manager.sensitive_paths` 只能追加到这些默认项，不能删除默认项。`ToolSearch` 和 manager 自身的 TAKT MCP 工具仍然可以跳过审查。使用 Codex 时，只有 manager 自身的 TAKT MCP 工具可以跳过审查，所有内置工具都需要审查。对于这两种 provider，其他所有工具（包括未知工具和外部 MCP 工具）在没有适用的已保存批准时都需要审查。Shell 执行（包括 `Bash`）在没有适用的已保存批准时每次都需要审查，即使命令内容看起来只是读取操作。通过 `Task` 或 `Agent` 启动其他 agent 一律拒绝；通过 `Bash` 启动其他 AI 命令行 agent 的指令也会被拒绝。使用 Codex 时，`spawn_agent` 也一律拒绝，不经过权限判断 agent 审查。
 
 拒绝理由会返回给 manager，供其在下一次回复中考虑。判定为请求人工确认时，操作也会先被拒绝，并通过 TUI 和 Slack 通知正在等待人工确认及其理由。不会挂起工具操作来等待确认。通知使用现有类型，不增加新的通知类型。
 

@@ -4,6 +4,7 @@ import type { ToolPermissionDecisionRequest } from '../../core/workflow/types.js
 import { getLabel } from '../../shared/i18n/index.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { toStrictManagerOutputSchema } from './outputSchema.js';
+import type { ManagerPermissionContext } from './toolPermissionInquiry.js';
 
 export const MANAGER_PERMISSION_JUDGE_TIMEOUT_MS = 30_000;
 
@@ -27,12 +28,12 @@ export interface ManagerPermissionGoal {
   constraints: readonly string[];
 }
 
-type Judgment = { decision: 'allow' } | { decision: 'deny' | 'ask'; reason: string };
+export type Judgment = { decision: 'allow' } | { decision: 'deny' | 'ask'; reason: string };
 
 export async function judgeManagerToolPermission(
   plan: ManagerPermissionJudgePlan,
   request: ToolPermissionDecisionRequest,
-  turn: { instruction: string; goal?: ManagerPermissionGoal; abortSignal: AbortSignal },
+  turn: { instruction: string; goal?: ManagerPermissionGoal; abortSignal: AbortSignal; context: ManagerPermissionContext },
 ): Promise<Judgment> {
   const deadline = new AbortController();
   const signal = AbortSignal.any([turn.abortSignal, ...(request.abortSignal ? [request.abortSignal] : []), deadline.signal]);
@@ -47,6 +48,9 @@ export async function judgeManagerToolPermission(
       managerPersona: plan.managerPersona,
       managerPolicy: plan.managerPolicy,
       humanInstruction: turn.instruction,
+      scopedPermissions: turn.context.scopedPermissions,
+      relatedInquiries: turn.context.relatedInquiries,
+      readErrors: turn.context.readErrors.map((message) => ({ message })),
       ...(turn.goal === undefined ? {} : { goal: turn.goal }),
     });
     const interrupted = new Promise<never>((_resolve, reject) => {

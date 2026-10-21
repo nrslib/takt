@@ -439,6 +439,21 @@ Most config keys can be overridden with an environment variable named `TAKT_` pl
 
 Separately from config-key overrides, `TAKT_NOTIFY_WEBHOOK` sets a Slack Incoming Webhook URL. When it is set, TAKT posts a Slack notification on pipeline completion and when a `takt run` task batch finishes (run summary). Enabled manager goal notifications use the same webhook.
 
+## Manager sensitive read targets
+
+In global `~/.takt/config.yaml` or project `.takt/config.yaml`, `manager.sensitive_paths` adds files and directories that require the manager permission judge even inside assigned repositories:
+
+```yaml
+manager:
+  sensitive_paths:
+    - private
+    - config/credentials.json
+```
+
+Defaults are `.env`, `.env.*`, `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`, `*.key`, `*.pem`, `*.crt`, `*.cer`, `*.p12`, and `*.pfx`. Both configuration lists are added to the defaults; omission or an empty list cannot remove them. A bare name applies at any directory depth. Relative paths with a directory component are relative to each assigned repository; absolute paths and `~/` paths are also supported. A directory entry includes its descendants. Name patterns support a single leading or trailing `*`; this setting does not define allow rules.
+
+With Claude, `Read`, `Glob`, and `Grep` bypass the judge only for readable ordinary targets inside the assignment after path and symlink resolution. Search candidates are checked using paths and metadata, without reading sensitive contents. Simple search patterns with `*`, `**`, and `?` are supported; exclusion, brace expansion, character classes, escapes, or ranges that cannot be established go to the judge. Hidden paths and traversed directories or symlinks are checked conservatively, so an otherwise restrictive search can still require review. Codex built-in tools continue to require review.
+
 ## Manager Notification Settings
 
 Use `manager.notifications` in project `.takt/config.yaml` or global

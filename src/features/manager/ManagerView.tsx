@@ -1,31 +1,39 @@
+import { useManagerAbortConfirmation, type ManagerAbortTarget } from './useManagerAbortConfirmation.js';
+import { useManagerQuestionAnswer, type SaveManagerAnswer } from './useManagerQuestionAnswer.js';
+import type { AppendManagerAnswerPermission, PendingQuestion } from './inquiryAnswer.js';
+import { appendScopedPermission } from './scopedPermissionStorage.js';
+import { resolveAssignedProjectRoot } from './assignment.js';
+import { useManagerSummaryApproval } from './useManagerSummaryApproval.js';
+import { classifyManagerGoInput, useManagerInput } from './useManagerInput.js';
+import { ManagerQueuedMessages } from './ManagerQueuedMessages.js';
+import { ManagerAbortedGoals } from './ManagerAbortedGoals.js';
+import { ManagerPausedGoals } from './ManagerPausedGoals.js';
+import { ManagerPendingQuestions } from './ManagerPendingQuestions.js';
+import { ManagerAnswerDialog } from './ManagerAnswerDialog.js';
+import { ManagerAbortDialog } from './ManagerAbortDialog.js';
+import { ManagerSummaryDialog } from './ManagerSummaryDialog.js';
+import { ManagerHelp } from './ManagerHelp.js';
+import { ManagerSelectionDialog } from './ManagerSelectionDialog.js';
+import { isGoalSelectionCandidate, useManagerSelection, type ManagerSelectedTarget, type ManagerSelectionCommand } from './useManagerSelection.js';
+import { formatGoalName } from './goalDisplay.js';
 import { basename } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { findAssignedGoalRepository } from './assignment.js';
 import type { ManagerAssignment } from './startupResolution.js';
-import { Box, Text, useApp, useInput, usePaste, useStdout } from 'ink';
+import { Box, Text, useApp, useStdout } from 'ink';
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { PromptInput } from '../tui/PromptInput.js';
 import { TranscriptView, type TranscriptEntry } from '../tui/TranscriptEntryView.js';
 import { StatusLine } from '../tui/StatusLine.js';
-import { applyEditorKey, commitEditorInput, createEditorState, type EditorState } from '../tui/editorState.js';
-import { resolveEditorKey } from '../tui/editorKeys.js';
+import { createEditorState, type EditorState } from '../tui/editorState.js';
 import { FALLBACK_USER_MESSAGE_COLORS } from '../tui/terminalColors.js';
 import { toDisplayText } from '../tui/displayText.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
-import type { ManagerConversationSession, PendingManagerSummary } from './conversationSession.js';
+import type { ManagerConversationSession } from './conversationSession.js';
 import { readManagerDisplayEvents, type ManagerDisplayGoal } from './savedEvents.js';
-import { GoalIdSchema, type GoalQuestion } from '../../infra/goals/schema.js';
 import { isGoalPaused } from '../../infra/goals/state.js';
-import { GoalStore } from '../../infra/goals/store.js';
 import { notifyManagerTurnFailure } from './turnFailureNotification.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
-
-type PendingQuestion = { goalId: string; objective: string; question: GoalQuestion };
-
-function toDisplayBullet(item: string): string {
-  return `- ${toDisplayText(item).replace(/\n/g, '\n  ')}`;
-}
 
 export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, startup, assignment }: {
   assignment?: ManagerAssignment;
@@ -40,19 +48,15 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   const [entries, setEntries] = useState<TranscriptEntry[]>(() => initialDiagnostics.map((content) => ({
     role: 'assistant', content: toDisplayText(content),
   })));
-  const [pending, setPending] = useState<PendingManagerSummary | null>(null);
   const [approve, setApprove] = useState(false);
   const [busy, setBusy] = useState(startup !== undefined);
   const [questions, setQuestions] = useState<PendingQuestion[]>([]);
   const [goals, setGoals] = useState<ManagerDisplayGoal[]>([]);
   const displaySnapshot = useRef({ assignment: currentAssignment, questions, goals });
-  const [abortTarget, setAbortTarget] = useState<ManagerDisplayGoal | null>(null);
-  const [answerTarget, setAnswerTarget] = useState<{ pending: PendingQuestion; choice: number | null } | null>(null);
   const active = useRef<AbortController | null>(null);
   const polling = useRef(false);
   const registering = useRef(false);
   const selected = useRef(false);
-  const answerChoice = useRef<number | null>(null);
   const mounted = useRef(true);
   const starting = useRef(startup !== undefined);
   const exiting = useRef(false);
@@ -62,6 +66,14 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   const { stdout } = useStdout();
   const contentWidth = Math.max(1, (stdout.columns ?? 80) - 6);
   const ja = lang === 'ja';
+  const resetChoice = (): void => { selected.current = false; setApprove(false); };
+  const abortConfirmation = useManagerAbortConfirmation({ selected, setApprove, resetChoice });
+  const { abortTarget, setAbortTarget } = abortConfirmation;
+  const questionAnswer = useManagerQuestionAnswer();
+  const { answerTarget, clearAnswer, beginAnswer } = questionAnswer;
+  const selection = useManagerSelection();
+  const summaryApproval = useManagerSummaryApproval({ selected, setApprove, resetChoice, session });
+  const { pending, setPending } = summaryApproval;
   const edit = (next: EditorState): void => {
     editorRef.current = next;
     setEditor(next);
@@ -113,13 +125,11 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
     if (result.kind === 'error' && !signal?.aborted) await reportFailure(new Error(result.message));
     else append(result.message);
   };
-  const refreshEvents = async (): Promise<PendingQuestion[]> => {
+  const refreshEvents = async (): Promise<{ questions: PendingQuestion[]; goals: ManagerDisplayGoal[] }> => {
     const resolved = await session.getAssignment();
-    const snapshots = await Promise.all((resolved?.repositoryDirectories ?? [cwd]).map(async (directory) => ({
-      directory, snapshot: await readManagerDisplayEvents(directory, lang),
-    })));
-    const savedQuestions = snapshots.flatMap(({ snapshot }) => snapshot.questions);
-    const savedGoals = snapshots.flatMap(({ snapshot }) => snapshot.goals);
+    const snapshot = await readManagerDisplayEvents(cwd, lang, resolved);
+    const savedQuestions = snapshot.questions;
+    const savedGoals = snapshot.goals;
     if (mounted.current) {
       const previous = displaySnapshot.current;
       if (!isDeepStrictEqual(previous.assignment, resolved)) setCurrentAssignment(resolved);
@@ -127,16 +137,14 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
       if (!isDeepStrictEqual(previous.goals, savedGoals)) setGoals(savedGoals);
       displaySnapshot.current = { assignment: resolved, questions: savedQuestions, goals: savedGoals };
     }
-    for (const { directory, snapshot } of snapshots) {
-      for (const event of [...snapshot.events, ...snapshot.diagnostics]) {
-        const id = JSON.stringify([directory, event.id]);
-        if (displayed.current.has(id) || !mounted.current) continue;
-        displayed.current.add(id);
-        append(event.message);
-      }
+    for (const event of [...snapshot.events, ...snapshot.diagnostics]) {
+      const id = JSON.stringify([cwd, event.id]);
+      if (displayed.current.has(id) || !mounted.current) continue;
+      displayed.current.add(id);
+      append(event.message);
     }
     lastRefreshError.current = undefined;
-    return savedQuestions;
+    return { questions: savedQuestions, goals: savedGoals };
   };
   useEffect(() => {
     const timer = setInterval(() => {
@@ -147,53 +155,41 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
     }, 500);
     return () => clearInterval(timer);
   }, []);
-  const resetChoice = (): void => { selected.current = false; setApprove(false); };
   const submit = async (text: string): Promise<void> => {
+    setEntries((previous) => [...previous, { role: 'user', content: toDisplayText(text) }]);
+    const go = classifyManagerGoInput(text);
+    if (go === 'arguments') {
+      append(getLabel('manager.goUsage', lang));
+      return;
+    }
+    if (go === 'command') {
+      const summary = session.getPendingSummary();
+      if (summary !== null) { await register(summary.revision); return; }
+    }
     const controller = new AbortController();
     active.current = controller;
     setBusy(true);
     setPending(null);
     resetChoice();
-    setEntries((previous) => [...previous, { role: 'user', content: toDisplayText(text) }]);
     try {
-      const savedQuestions = await refreshEvents();
-      const command = !/[\r\n]/u.test(text) ? /^\/(pause|resume|abort)(?:[\t ]+(.*))?$/u.exec(text) : null;
+      const snapshot = await refreshEvents();
+      if (active.current !== controller || !mounted.current || controller.signal.aborted) return;
+      const command = !/[\r\n]/u.test(text) ? /^\/(answer|pause|resume|abort)(?:[\t ]+(.*))?$/u.exec(text.trim()) : null;
       if (command !== null) {
-        const goalId = command[2]?.trim();
-        if (goalId === undefined || goalId === '') append(getLabel('manager.goalExecutionUsage', lang));
-        else if (!GoalIdSchema.safeParse(goalId).success) append(getLabel('manager.invalidGoalId', lang));
-        else if (command[1] === 'abort') {
-          const resolved = await session.getAssignment();
-          const repository = resolved === undefined ? cwd : await findAssignedGoalRepository(goalId, resolved);
-          const goal = await new GoalStore(repository).get(goalId);
-          if (active.current !== controller || !mounted.current) return;
-          if (goal.status === 'completed' && goal.executionStatus !== 'aborted') {
-            append(getLabel('manager.completedGoalCannotAbort', lang, { goalId }));
-          } else setAbortTarget(goal);
-        }
-        else {
-          const options = { goalId, abortSignal: controller.signal };
-          const result = await (command[1] === 'pause' ? session.pauseGoal(options) : session.resumeGoal(options));
-          if (active.current !== controller || !mounted.current) return;
-          await appendResult(result, controller.signal);
-          await refreshEvents();
-        }
+        const kind = command[1] as ManagerSelectionCommand;
+        if (command[2] !== undefined) append(getLabel('manager.selectionArguments', lang, { command: kind }));
+        else if (!selection.open(kind, snapshot)) append(getLabel(`manager.selectionEmpty.${kind}`, lang));
         return;
       }
-      if (text.startsWith('/answer ')) {
-        const questionId = text.slice('/answer '.length).trim();
-        const target = savedQuestions.find((saved) => saved.question.id === questionId);
-        if (target === undefined) append(ja ? '回答待ちの質問が見つかりません' : 'Pending question not found');
-        else {
-          answerChoice.current = target.question.options === undefined ? null : 0;
-          setAnswerTarget({ pending: target, choice: answerChoice.current });
-        }
-        return;
-      }
-      const result = await session.handleUserMessage({ text, abortSignal: controller.signal, onNotification: append });
+      const result = await session.handleUserMessage({
+        text: go === 'command' ? getLabel('manager.goSummaryRequest', lang) : text,
+        abortSignal: controller.signal, onNotification: append,
+      });
       if (active.current !== controller || !mounted.current) return;
       await appendResult(result, controller.signal);
-      setPending(session.getPendingSummary());
+      const summary = session.getPendingSummary();
+      setPending(summary);
+      if (go === 'command' && result.kind === 'reply' && summary === null) append(getLabel('manager.goSummaryUnavailable', lang));
       await refreshEvents();
     } catch (error) {
       if (!controller.signal.aborted) await reportFailure(error);
@@ -206,21 +202,43 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   };
   useEffect(() => {
     if (!mounted.current || exiting.current || starting.current || registering.current
-      || active.current !== null || busy || abortTarget !== null || answerTarget !== null) return;
+      || active.current !== null || busy || abortTarget !== null || answerTarget !== null || selection.selection !== null) return;
     const text = queued[0];
     if (text === undefined) return;
     setQueued((previous) => previous.slice(1));
     void submit(text);
-  }, [queued, busy, abortTarget, answerTarget]);
-  const abortGoal = async (goalId: string): Promise<void> => {
+  }, [queued, busy, abortTarget, answerTarget, selection.selection]);
+  const changeGoal = async (kind: 'pause' | 'resume' | 'abort', target: ManagerDisplayGoal,
+    phase: 'select' | 'confirm' | 'retry'): Promise<void> => {
+    if (active.current !== null) return;
     const controller = new AbortController();
     active.current = controller;
     setBusy(true);
-    setAbortTarget(null);
     resetChoice();
     try {
-      const result = await session.abortGoal({ goalId, abortSignal: controller.signal });
-      await appendResult(result, controller.signal);
+      if (phase !== 'retry') {
+        const snapshot = await refreshEvents();
+        if (active.current !== controller || !mounted.current || controller.signal.aborted) return;
+        const latest = snapshot.goals.find((goal) => goal.id === target.id && isGoalSelectionCandidate(kind, goal));
+        if (latest === undefined) {
+          setAbortTarget(null);
+          append(getLabel('manager.selectionChanged', lang));
+          if (!selection.open(kind, snapshot)) append(getLabel(`manager.selectionEmpty.${kind}`, lang));
+          return;
+        }
+        target = latest;
+        if (kind === 'abort' && phase === 'select') {
+          setAbortTarget({ goal: target, retry: false });
+          return;
+        }
+      }
+      const options = { goalId: target.id, abortSignal: controller.signal };
+      const result = await (kind === 'pause' ? session.pauseGoal(options)
+        : kind === 'resume' ? session.resumeGoal(options) : session.abortGoal(options));
+      if (active.current !== controller || !mounted.current) return;
+      if (kind === 'abort') setAbortTarget(result.kind === 'error' ? { goal: target, retry: true } : null);
+      await appendResult(result.kind === 'reply'
+        ? { ...result, message: `${formatGoalName(target.objective)}\n${result.message}` } : result, controller.signal);
       await refreshEvents();
     } catch (error) { if (!controller.signal.aborted) await reportFailure(error); }
     finally {
@@ -230,16 +248,42 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
       }
     }
   };
-  const saveAnswer = async (target: PendingQuestion, text: string): Promise<void> => {
+  const selectTarget = (selected: ManagerSelectedTarget): void => {
+    if (selected.kind === 'answer') beginAnswer(selected.target,
+      displaySnapshot.current.assignment ?? { kind: 'repository', repositoryDirectory: cwd, repositoryDirectories: [cwd] });
+    else void changeGoal(selected.kind, selected.target, 'select');
+  };
+  const abortGoal = (target: ManagerAbortTarget): Promise<void> => changeGoal('abort', target.goal, target.retry ? 'retry' : 'confirm');
+  const saveAnswer: SaveManagerAnswer = async (target, answer, permission): Promise<void> => {
+    if (active.current !== null) return;
     const controller = new AbortController();
     active.current = controller;
     setBusy(true);
-    setAnswerTarget(null);
-    setEntries((previous) => [...previous, { role: 'user', content: toDisplayText(text) }]);
     try {
+      const appendPermission: AppendManagerAnswerPermission | undefined = permission === undefined ? undefined : async (assignment) => {
+        let scope = permission.scope;
+        if (scope.kind === 'project') {
+          scope = { kind: 'project', projectDirectory: await resolveAssignedProjectRoot(scope.projectDirectory, assignment) };
+        }
+        controller.signal.throwIfAborted();
+        try {
+          await appendScopedPermission({ scope, heading: '許可', sentence: permission.sentence });
+        } catch (error) {
+          throw new Error(getLabel('manager.permissionAppendFailed', lang, { reason: getErrorMessage(error) }), { cause: error });
+        }
+      };
+      controller.signal.throwIfAborted();
       const result = await session.answerQuestion({
-        goalId: target.goalId, questionId: target.question.id, text, abortSignal: controller.signal,
+        ...(target.goalId === null ? { goalId: null, owner: target.owner }
+          : { goalId: target.goalId, repositoryDirectory: target.repositoryDirectory }),
+        questionId: target.question.id, answer, abortSignal: controller.signal,
+        ...(appendPermission === undefined ? {} : { appendPermission }),
       });
+      if (result.answerSaved) {
+        clearAnswer();
+        edit(createEditorState(''));
+        setEntries((previous) => [...previous, { role: 'user', content: toDisplayText(answer.text ?? '') }]);
+      }
       await appendResult(result, controller.signal);
       await refreshEvents();
     } catch (error) { if (!controller.signal.aborted) await reportFailure(error); }
@@ -257,7 +301,9 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
     resetChoice();
     try {
       const result = await session.approveSummary(revision);
-      if (result.kind === 'goal_registered') append(`${ja ? 'ゴール登録完了' : 'Goal registered'}: ${result.goal.id}\n${result.goal.branch}`);
+      if (result.kind === 'goal_registered') append(getLabel('manager.goalRegistered', lang, {
+        name: formatGoalName(result.goal.objective), id: result.goal.id, branch: result.goal.branch,
+      }));
       else await appendResult(result);
       if (result.kind === 'goal_registered') append(result.turn.message);
       await refreshEvents();
@@ -268,114 +314,10 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
       if (mounted.current) setBusy(active.current !== null);
     }
   };
-  const insertText = (text: string): void => {
-    if (exiting.current) return;
-    if (!registering.current && active.current === null) {
-      if (abortTarget !== null) return;
-      if (answerTarget !== null && answerChoice.current !== null) {
-        answerChoice.current = null;
-        setAnswerTarget({ ...answerTarget, choice: null });
-      }
-    }
-    if (!registering.current && pending !== null && session.getPendingSummary()?.revision === pending.revision) {
-      session.dismissSummary(pending.revision);
-      setPending(null);
-      resetChoice();
-    }
-    edit(applyEditorKey(editorRef.current, { kind: 'insert', text }));
-  };
-  usePaste(insertText);
-  useInput((input, key) => {
-    if (exiting.current) return;
-    if (key.ctrl && input === 'c') {
-      exiting.current = true;
-      active.current?.abort();
-      setQueued([]);
-      onExit();
-      return;
-    }
-    if (active.current !== null && key.escape) {
-      active.current.abort();
-      setQueued([]);
-      setPending(null);
-      return;
-    }
-    if (registering.current && key.escape) {
-      setQueued([]);
-      return;
-    }
-    if (!registering.current && active.current === null && abortTarget !== null) {
-      if (key.escape) { setAbortTarget(null); resetChoice(); return; }
-      if (key.upArrow || key.downArrow) {
-        selected.current = key.upArrow;
-        setApprove(selected.current);
-      } else if (key.return) {
-        if (selected.current) void abortGoal(abortTarget.id);
-        else { setAbortTarget(null); resetChoice(); }
-      }
-      return;
-    }
-    const editKey = resolveEditorKey(input, key, contentWidth);
-    // Ink は本文と同じチャンクに入った CR/LF を Enter と分類しない。
-    const trailingEnter = !key.return && !(key.shift || key.meta)
-      && editKey?.kind === 'insert' && /[\r\n]$/u.test(input);
-    if (trailingEnter) insertText(input.replace(/(?:\r\n|\r|\n)$/u, ''));
-    const submitInput = key.return || trailingEnter;
-    if (!registering.current && active.current === null && answerTarget !== null) {
-      if (key.escape) { setAnswerTarget(null); return; }
-      const options = answerTarget.pending.question.options ?? [];
-      if (answerChoice.current !== null && (key.upArrow || key.downArrow)) {
-        const next = answerChoice.current + (key.upArrow ? -1 : 1);
-        answerChoice.current = Math.max(0, Math.min(options.length, next));
-        setAnswerTarget({ ...answerTarget, choice: answerChoice.current });
-        return;
-      }
-      if (key.return && answerChoice.current !== null) {
-        if (answerChoice.current === options.length) {
-          answerChoice.current = null;
-          setAnswerTarget({ ...answerTarget, choice: null });
-        } else void saveAnswer(answerTarget.pending, options[answerChoice.current]!);
-        return;
-      }
-      if (submitInput && !(key.shift || key.meta) && editorRef.current.text.trim() !== '') {
-        const text = editorRef.current.text;
-        edit(commitEditorInput(editorRef.current, text));
-        void saveAnswer(answerTarget.pending, text);
-        return;
-      }
-      if (answerChoice.current !== null) {
-        answerChoice.current = null;
-        setAnswerTarget({ ...answerTarget, choice: null });
-      }
-    }
-    if (!registering.current && pending !== null && session.getPendingSummary()?.revision === pending.revision) {
-      if (key.upArrow || key.downArrow) {
-        selected.current = key.upArrow;
-        setApprove(selected.current);
-        return;
-      }
-      if (key.return) {
-        if (selected.current) void register(pending.revision);
-        else { session.dismissSummary(pending.revision); setPending(null); resetChoice(); }
-        return;
-      }
-      if (key.escape) { session.dismissSummary(pending.revision); setPending(null); resetChoice(); return; }
-      // Typing resumes conversation and leaves the summary unavailable to UI approval.
-      session.dismissSummary(pending.revision);
-      setPending(null);
-      resetChoice();
-    }
-    if (submitInput) {
-      if (key.shift || key.meta) {
-        edit(applyEditorKey(editorRef.current, { kind: 'newline' }));
-      } else if (editorRef.current.text.trim() !== '') {
-        const text = editorRef.current.text;
-        edit(commitEditorInput(editorRef.current, text));
-        setQueued((previous) => [...previous, text]);
-      }
-      return;
-    }
-    if (editKey !== null) edit(applyEditorKey(editorRef.current, editKey));
+  useManagerInput({
+    exiting, active, registering, editorRef, edit, setQueued, onExit, contentWidth, session,
+    abortConfirmation, questionAnswer, summaryApproval, selection, selectTarget, abortGoal, saveAnswer, register,
+    onInputUnavailable: () => append(getLabel('manager.inputUnavailableDuringAbort', lang)),
   });
   return (
     <Box flexDirection="column">
@@ -386,98 +328,20 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
           ? `${assignment.name} (${assignment.repositoryDirectories.length})` : basename(cwd))}</Text>
       <Text dimColor>{toDisplayText(cwd)}</Text>
       <TranscriptView entries={entries} userMessageColors={FALLBACK_USER_MESSAGE_COLORS} />
-      {queued.length > 0 && (
-        <Box borderStyle="round" flexDirection="column">
-          <Text bold>{`${ja ? '送信待ち' : 'Queued messages'}: ${queued.length}`}</Text>
-          {queued.map((text, index) => <Text key={index}>{toDisplayText(text)}</Text>)}
-        </Box>
-      )}
-      {goals.some((goal) => goal.executionStatus === 'aborted') && (
-        <Box borderStyle="round" flexDirection="column">
-          <Text bold>{getLabel('manager.abortedGoals', lang)}</Text>
-          {goals.filter((goal) => goal.executionStatus === 'aborted').map((goal) => (
-            <Text key={goal.id}>{toDisplayText(`${goal.id}: ${goal.objective}`)}</Text>
-          ))}
-        </Box>
-      )}
-      {goals.some(isGoalPaused) && (
-        <Box borderStyle="round" flexDirection="column">
-          <Text bold>{getLabel('manager.pausedGoals', lang)}</Text>
-          {goals.filter(isGoalPaused).map((goal) => (
-            <Box key={goal.id} flexDirection="column">
-              <Text>{toDisplayText(`${goal.id}: ${goal.objective}`)}</Text>
-              <Text dimColor>{`/resume ${goal.id}`}</Text>
-            </Box>
-          ))}
-        </Box>
-      )}
-      {questions.length > 0 && (
-        <Box borderStyle="round" flexDirection="column">
-          <Text bold>{ja ? '回答待ちの質問' : 'Pending questions'}</Text>
-          {questions.map(({ goalId, objective, question }) => (
-            <Box key={JSON.stringify([goalId, question.id])} flexDirection="column">
-              <Text>{toDisplayText(`${goalId}: ${objective}\n${question.id}: ${question.body}`)}</Text>
-              {question.options !== undefined && <Text>{toDisplayText(question.options.join(' / '))}</Text>}
-              {question.recommendation !== undefined && <Text>{`${ja ? '推奨' : 'Recommendation'}: ${toDisplayText(question.recommendation)}`}</Text>}
-              <Text dimColor>{toDisplayText(`/answer ${question.id}`)}</Text>
-            </Box>
-          ))}
-        </Box>
-      )}
-      {answerTarget !== null && (
-        <Box borderStyle="round" flexDirection="column">
-          <Text bold>{toDisplayText(answerTarget.pending.question.body)}</Text>
-          {answerTarget.choice !== null ? (
-            <>
-              {answerTarget.pending.question.options?.map((option, index) => (
-                <Text key={index} inverse={answerTarget.choice === index}>{toDisplayText(option)}</Text>
-              ))}
-              <Text inverse={answerTarget.choice === answerTarget.pending.question.options?.length}>
-                {ja ? '自由記述' : 'Free text'}
-              </Text>
-              <Text dimColor>{ja ? '↑↓ 選択 / Enter 決定 / Esc 戻る' : '↑↓ Choose / Enter Select / Esc Back'}</Text>
-            </>
-          ) : <Text>{ja ? '回答を入力してください' : 'Enter your answer'}</Text>}
-        </Box>
-      )}
-      {abortTarget !== null && (
-        <Box borderStyle="round" flexDirection="column">
-          <Text bold>{getLabel('manager.abortConfirmation', lang)}</Text>
-          <Text>{toDisplayText(`${abortTarget.id}: ${abortTarget.objective}`)}</Text>
-          <Text>{getLabel('manager.abortWarning', lang)}</Text>
-          <Text inverse={approve}>{getLabel('manager.confirmAbort', lang)}</Text>
-          <Text inverse={!approve}>{getLabel('manager.cancelAbort', lang)}</Text>
-          <Text dimColor>{getLabel('manager.abortChoiceHint', lang)}</Text>
-        </Box>
-      )}
-      {pending !== null && (
-        <Box borderStyle="round" flexDirection="column">
-          <Text bold>{ja ? '登録する要約' : 'Summary to register'}</Text>
-          {pending.repositoryDirectory !== undefined && <Text>{toDisplayText(pending.repositoryDirectory)}</Text>}
-          <Text>{toDisplayText(pending.summary.objective)}</Text>
-          <Text>{`${ja ? '範囲外' : 'Out of scope'}:`}</Text>
-          {pending.summary.outOfScope.map((item, index) => <Text key={index}>{toDisplayBullet(item)}</Text>)}
-          <Text>{`${ja ? '受け入れ条件' : 'Acceptance criteria'}:`}</Text>
-          {pending.summary.acceptanceCriteria.map((item, index) => <Text key={index}>{toDisplayBullet(item)}</Text>)}
-          <Text>{`${ja ? '作業の制約' : 'Work constraints'}:`}</Text>
-          {pending.summary.constraints.map((item, index) => <Text key={index}>{toDisplayBullet(item)}</Text>)}
-          {pending.summary.startBranch !== undefined && <Text>{`startBranch: ${toDisplayText(pending.summary.startBranch)}`}</Text>}
-          {pending.summary.integrationBranch !== undefined && <Text>{`integrationBranch: ${toDisplayText(pending.summary.integrationBranch)}`}</Text>}
-          <Text inverse={approve}>{ja ? '登録を承認' : 'Approve registration'}</Text>
-          <Text inverse={!approve}>{ja ? '会話を続ける' : 'Continue conversation'}</Text>
-          <Text dimColor>{ja ? '↑ 承認 / ↓ 続行 / Enter 決定' : '↑ Approve / ↓ Continue / Enter Select'}</Text>
-        </Box>
-      )}
-      <Box flexDirection="column" flexShrink={0}>
-        <Text dimColor>{getLabel('manager.goalExecutionUsage', lang)}</Text>
-        <Text color="yellow">{getLabel('manager.experimentalNotice', lang)}</Text>
-        <Text color="yellow">{getLabel('manager.costNotice', lang)}</Text>
-      </Box>
+      {queued.length > 0 && <ManagerQueuedMessages queued={queued} ja={ja} />}
+      {goals.some((goal) => goal.executionStatus === 'aborted') && <ManagerAbortedGoals goals={goals} lang={lang} />}
+      {goals.some(isGoalPaused) && <ManagerPausedGoals goals={goals} lang={lang} />}
+      {questions.length > 0 && <ManagerPendingQuestions questions={questions} lang={lang} />}
+      {selection.selection !== null && <ManagerSelectionDialog selection={selection.selection} lang={lang} />}
+      {answerTarget !== null && <ManagerAnswerDialog answerTarget={answerTarget} lang={lang} />}
+      {abortTarget !== null && <ManagerAbortDialog abortTarget={abortTarget.goal} retry={abortTarget.retry} approve={approve} lang={lang} />}
+      {pending !== null && <ManagerSummaryDialog pending={pending} approve={approve} ja={ja} />}
+      <ManagerHelp lang={lang} />
       <StatusLine busy={busy} label={ja ? '処理中' : 'Working'} streamed="" />
       <PromptInput text={editor.text} cursor={editor.cursor} contentWidth={contentWidth}
         placeholder={answerTarget === null ? (ja ? 'ゴールを相談してください' : 'Discuss your goal') : (ja ? '回答を入力してください' : 'Enter your answer')}
         hint="Enter: send / Shift+Enter: newline / Esc: interrupt / Ctrl+C: exit"
-        completions={[]} completionIndex={0} disabled={pending !== null || abortTarget !== null} />
+        completions={[]} completionIndex={0} disabled={selection.selection !== null || abortTarget !== null || (pending !== null && editor.text === '')} />
     </Box>
   );
 }
