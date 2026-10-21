@@ -698,7 +698,7 @@ describe('prompt eval probe lifecycle', () => {
         return undefined;
       }
       return { stdout: rootKilled
-        ? JSON.stringify({ ProcessId: 5001, ParentProcessId: 9999, CreationDate: 'reused-child' })
+        ? JSON.stringify({ ProcessId: 5001, ParentProcessId: 4321, CreationDate: 'reused-child' })
         : snapshot };
     });
 
