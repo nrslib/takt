@@ -2246,7 +2246,8 @@ export class OpenCodeAttemptRunner {
       return buildAttemptErrorResponse(errorMessage);
     }
 
-    const exceptionClass = classifyRateLimitError(errorMessage, extractStatusCode(error));
+    const exceptionClass = rateLimitClass !== 'NotRateLimit'
+      ? rateLimitClass : classifyRateLimitError(errorMessage, extractStatusCode(error));
     if (!options.abortSignal.aborted && (stopResult === undefined || stopResult.ok)
       && exceptionClass !== 'NotRateLimit') {
       try {

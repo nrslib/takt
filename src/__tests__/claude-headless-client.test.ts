@@ -921,11 +921,52 @@ describe('callClaudeHeadless', () => {
     const first = vi.mocked(spawn).mock.calls[0]?.[1] as string[];
     const second = vi.mocked(spawn).mock.calls[1]?.[1] as string[];
     const firstId = first[first.indexOf('--session-id') + 1];
-    if (second.includes('--session-id')) {
-      expect(second[second.indexOf('--session-id') + 1]).not.toBe(firstId);
-    } else {
-      expect(second).toEqual(expect.arrayContaining(['--resume', firstId]));
-    }
+    expect(second).toContain('--session-id');
+    expect(second).not.toContain('--resume');
+    expect(second[second.indexOf('--session-id') + 1]).not.toBe(firstId);
+  });
+
+  it.each([
+    { event: 'tool_use', closeCode: 0 },
+    { event: 'tool_result', closeCode: 0 },
+    { event: 'tool_use', closeCode: 1 },
+    { event: 'tool_result', closeCode: 1 },
+  ] as const)('$event観測後の終了コード$closeCodeによる429では新規セッションで再実行しない', async ({ event, closeCode }) => {
+    vi.useFakeTimers();
+    const toolEvent = event === 'tool_use'
+      ? { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command: 'touch marker' } }] } }
+      : { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'done' }] } };
+    stubSpawn([
+      {
+        closeCode,
+        stdoutChunks: [`${JSON.stringify(toolEvent)}\n`, ...(closeCode === 0
+          ? [`${JSON.stringify({ type: 'result', subtype: 'error', errors: ['HTTP 429: Too Many Requests'] })}\n`]
+          : [])],
+        stderrChunks: closeCode === 1 ? ['HTTP 429: Too Many Requests'] : [],
+      },
+      { stdoutChunks: [`${JSON.stringify({ type: 'result', subtype: 'success', result: 'unexpected retry' })}\n`] },
+    ]);
+
+    const pending = callClaudeHeadless('agent', 'prompt', { cwd: '/tmp' });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await pending).toMatchObject({ status: 'rate_limited', content: '', errorKind: 'rate_limit' });
+    expect(spawn).toHaveBeenCalledOnce();
+  });
+
+  it('本文中のtool_use文字列だけなら429を再試行する', async () => {
+    vi.useFakeTimers();
+    stubSpawn([
+      { stdoutChunks: [
+        `${JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'The literal string tool_use appears here.' }] } })}\n`,
+        `${JSON.stringify({ type: 'result', subtype: 'error', errors: ['HTTP 429: Too Many Requests'] })}\n`,
+      ] },
+      { stdoutChunks: [`${JSON.stringify({ type: 'result', subtype: 'success', result: 'final answer' })}\n`] },
+    ]);
+
+    const pending = callClaudeHeadless('agent', 'prompt', { cwd: '/tmp' });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await pending).toMatchObject({ status: 'done', content: 'final answer' });
+    expect(spawn).toHaveBeenCalledTimes(2);
   });
 
   it.each([

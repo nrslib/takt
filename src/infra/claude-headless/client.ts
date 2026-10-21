@@ -20,6 +20,8 @@ import {
   aggregateResultFromStdout,
   extractSessionIdFromStdout,
   findRateLimitNoticeInStdout,
+  tryExtractToolResultFromStreamJsonLine,
+  tryExtractToolUseFromStreamJsonLine,
 } from './stream-json-lines.js';
 import { buildClaudeHeadlessResponse } from './result-response.js';
 import type { ClaudeHeadlessCallOptions } from './types.js';
@@ -54,6 +56,12 @@ function selectRateLimitOutcome(error: ExecError): HeadlessRateLimitOutcome | un
   }
 
   return undefined;
+}
+
+function hasToolExecutionEvent(stdout: string | undefined): boolean {
+  return stdout?.split('\n').some((line) =>
+    tryExtractToolUseFromStreamJsonLine(line).length > 0
+    || tryExtractToolResultFromStreamJsonLine(line).length > 0) ?? false;
 }
 
 function resolveCliPermissionMode(
@@ -264,8 +272,10 @@ export async function callClaudeHeadless(
       if (options.abortSignal?.aborted) throw new Error(HEADLESS_ABORTED_MESSAGE);
       const session = resolveSessionArgs(options);
       options.onActivity?.({ kind: 'attempt_started' });
+      let toolExecutionObserved = false;
       try {
         const { stdout, stderr } = await runHeadlessCli([...prepared.args, ...session.args, '--', prompt], options);
+        toolExecutionObserved = hasToolExecutionEvent(stdout);
         const parsed = aggregateResultFromStdout(stdout);
         response = buildClaudeHeadlessResponse({
           agentName, parsed, stdout, stderr,
@@ -275,10 +285,12 @@ export async function callClaudeHeadless(
         terminalContent = response.status === 'rate_limited' ? '' : parsed.content;
       } catch (raw) {
         terminalContent = '';
-        response = buildHeadlessErrorResponse(agentName, raw as ExecError, options);
+        const error = raw as ExecError;
+        toolExecutionObserved ||= hasToolExecutionEvent(error.stdout);
+        response = buildHeadlessErrorResponse(agentName, error, options);
       }
       if (response.status !== 'rate_limited' || classifyRateLimitError(response.error) !== 'Transient'
-        || retries >= RATE_LIMIT_MAX_RETRIES) break;
+        || toolExecutionObserved || retries >= RATE_LIMIT_MAX_RETRIES) break;
       await waitForRateLimitRetry(++retries, options.abortSignal);
     }
   } catch (raw) {

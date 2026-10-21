@@ -617,6 +617,45 @@ describe('OpenCodeClient retry', () => {
     expect(promptAsync).toHaveBeenCalledTimes(3);
   });
 
+  it.each(['throw', 'timeout'] as const)(
+    'promptAsyncの構造化429とiterator.returnの%sが重なっても保存した分類で再試行する', async (closeFailure) => {
+      vi.useFakeTimers();
+      const iteratorReturn = vi.fn(() => closeFailure === 'throw'
+        ? Promise.reject(new Error('iterator close failed'))
+        : new Promise<IteratorResult<MockStreamEvent>>(() => {}));
+      runPlans = [
+        { type: 'stream', createStream: (signal) => createAbortOnlyStream(signal, iteratorReturn) },
+        successfulRetryPlan(),
+      ];
+      const { promptAsync } = installOpenCodeMock();
+      promptAsync.mockRejectedValueOnce(Object.assign(new Error('request rejected'), { data: { statusCode: 429 } }));
+
+      const pending = new OpenCodeClient().call('coder', 'prompt', { cwd: '/tmp', model: 'opencode/big-pickle' });
+      await vi.advanceTimersByTimeAsync(closeFailure === 'timeout' ? 5_000 : 0);
+      expect(iteratorReturn).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(250);
+      expect(await pending).toMatchObject({ status: 'done', content: 'final answer', retryCount: 1 });
+      expect(promptAsync).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it('promptAsyncの構造化429でもセッション停止に失敗したら再試行しない', async () => {
+    runPlans = [{
+      type: 'stream',
+      createStream: (signal) => createAbortOnlyStream(signal, vi.fn(async () => {
+        throw new Error('iterator close failed');
+      })),
+    }];
+    const { promptAsync, abort } = installOpenCodeMock();
+    promptAsync.mockRejectedValueOnce(Object.assign(new Error('request rejected'), { data: { statusCode: 429 } }));
+    abort.mockRejectedValueOnce(new Error('session abort failed'));
+
+    const result = await new OpenCodeClient().call('coder', 'prompt', { cwd: '/tmp', model: 'opencode/big-pickle' });
+    expect(result.status).toBe('error');
+    expect(result.content).toContain('OpenCode server session abort failed');
+    expect(promptAsync).toHaveBeenCalledOnce();
+  });
+
   it.each([
     'usage_limit_exceeded',
     'HTTP 429: Your workspace is out of credits. Add credits to continue.',

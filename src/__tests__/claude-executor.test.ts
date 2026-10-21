@@ -650,6 +650,38 @@ describe('QueryExecutor transient throttling', () => {
     vi.useFakeTimers();
   });
 
+  it.each(['result', 'exception', 'assistant'] as const)(
+    'tool_use後の%sによる429では同じpromptを再実行しない', async (channel) => {
+      const toolUse = {
+        type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command: 'touch marker' } }] },
+        session_id: 'failed-session',
+      };
+      const failure = channel === 'result'
+        ? createMockQuery([toolUse, createResultMessage({ subtype: 'error_during_execution', is_error: true, errors: ['HTTP 429: Too Many Requests'] })])
+        : channel === 'exception'
+          ? createMockQuery([toolUse], new Error('HTTP 429: Too Many Requests'))
+          : createMockQuery([toolUse, createAssistantRateLimitMessage()]);
+      queryMock.mockReturnValueOnce(failure).mockReturnValue(createMockQuery([createResultMessage({ result: 'unexpected retry' })]));
+
+      const pending = new QueryExecutor().execute('prompt', { cwd: '/tmp/project' });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await pending).toMatchObject({ success: false, content: '', errorKind: 'rate_limit' });
+      expect(queryMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('本文中のtool_use文字列だけなら429を再試行する', async () => {
+    queryMock.mockReturnValueOnce(createMockQuery([
+      createAssistantTextMessage('The literal string tool_use appears here.'),
+      createAssistantRateLimitMessage(),
+    ])).mockReturnValueOnce(createMockQuery([createResultMessage({ result: 'final answer' })]));
+
+    const pending = new QueryExecutor().execute('prompt', { cwd: '/tmp/project' });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await pending).toMatchObject({ success: true, content: 'final answer' });
+    expect(queryMock).toHaveBeenCalledTimes(2);
+  });
+
   it.each(['exception', 'result', 'assistant', 'rate_limit_event'] as const)(
     '%s の429を2回再試行し実行制約と成功結果を保持する', async (channel) => {
       const makeFailure = () => {
@@ -1160,6 +1192,25 @@ describe('QueryExecutor rate limit cause preservation', () => {
     expect(
       (queryMock.mock.calls[1]?.[0] as { options?: { resume?: string } }).options?.resume,
     ).toBeUndefined();
+  });
+
+  it('tool_use後のexit code errorではsessionを外して同じpromptを再実行しない', async () => {
+    const toolUse = {
+      type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command: 'touch marker' } }] },
+      session_id: 'resume-session-1',
+    };
+    queryMock.mockReturnValueOnce(createMockQuery([toolUse], new Error(EXIT_CODE_MESSAGE)))
+      .mockImplementation(() => { throw new Error('unexpected retry'); });
+    const onActivity = vi.fn();
+
+    const result = await new QueryExecutor().execute('prompt', {
+      cwd: '/tmp/project', sessionId: 'resume-session-1', onActivity,
+    });
+
+    expect(result).toMatchObject({ success: false, content: '', error: EXIT_CODE_MESSAGE });
+    expect(queryMock).toHaveBeenCalledOnce();
+    expect(queryMock.mock.calls[0]?.[0].options.resume).toBe('resume-session-1');
+    expect(onActivity).toHaveBeenCalledOnce();
   });
 
   it('Skills 無効の resume 失敗を再試行するときも、SDK の空の Skill allowlist を維持する', async () => {

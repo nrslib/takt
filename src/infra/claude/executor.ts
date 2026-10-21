@@ -44,7 +44,7 @@ import type { StreamEvent } from '../../shared/types/provider.js';
 
 const log = createLogger('claude-sdk');
 const ABORT_CLEANUP_TIMEOUT_MS = 30_000;
-type QueryAttemptResult = ClaudeResult & { rateLimitClass?: RateLimitClass };
+type QueryAttemptResult = ClaudeResult & { rateLimitClass?: RateLimitClass; toolUseObserved?: boolean };
 
 async function awaitAbortCleanup(cleanup: Promise<void>, queryId: string): Promise<void> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -151,7 +151,7 @@ export class QueryExecutor {
           else executionOptions.onStream?.(event);
         },
       }, loaded.modules[0]);
-      if (result.rateLimitClass === 'Transient' && retries < RATE_LIMIT_MAX_RETRIES) {
+      if (result.rateLimitClass === 'Transient' && !result.toolUseObserved && retries < RATE_LIMIT_MAX_RETRIES) {
         try {
           await waitForRateLimitRetry(++retries, options.abortSignal);
         } catch {
@@ -162,7 +162,7 @@ export class QueryExecutor {
         continue;
       }
       if (result.errorKind === 'rate_limit' || result.interrupted) break;
-      if (!resumedWithoutSession && result.error && executionOptions.sessionId
+      if (!resumedWithoutSession && !result.toolUseObserved && result.error && executionOptions.sessionId
         && result.error.includes('exited with code') && !result.content) {
         log.info('Session resume may have failed, retrying without resume', {
           sessionId: executionOptions.sessionId, error: result.error,
@@ -174,6 +174,7 @@ export class QueryExecutor {
       break;
     }
     delete result.rateLimitClass;
+    delete result.toolUseObserved;
     let response: ClaudeResult = result;
     // callback内の代入はTypeScriptの制御フロー解析に反映されない。
     const observedTerminalEvent = terminalEvent as StreamEvent | undefined;
@@ -239,6 +240,7 @@ export class QueryExecutor {
     let rateLimitInfo: RateLimitInfo | undefined;
     let rateLimitMessage: string | undefined;
     let rateLimitClass: RateLimitClass = 'NotRateLimit';
+    let toolUseObserved = false;
     const applyAssistantMessage = (assistantMsg: SDKAssistantMessage): string => {
       let messageText = '';
       for (const block of assistantMsg.message.content) {
@@ -359,6 +361,11 @@ export class QueryExecutor {
           sessionId = message.session_id;
         }
 
+        if (message.type === 'assistant'
+          && message.message.content.some((block) => block.type === 'tool_use')) {
+          toolUseObserved = true;
+        }
+
         if (isRateLimitSignal(message)) {
           rateLimitInfo = buildRateLimitInfo('claude-sdk', 'sdk_error');
           rateLimitMessage = describeRateLimitSignal(message);
@@ -410,6 +417,7 @@ export class QueryExecutor {
           error: resolveRateLimitErrorMessage(rateLimitMessage || finalContent),
           errorKind: 'rate_limit',
           rateLimitClass,
+          toolUseObserved,
           rateLimitInfo: rateLimitInfo ?? buildRateLimitInfo('claude-sdk', 'stream_marker', finalContent),
         };
       }
@@ -448,6 +456,7 @@ export class QueryExecutor {
         rateLimitInfo,
         rateLimitMessage,
         rateLimitClass,
+        toolUseObserved,
         AbortError,
       );
     } finally {
@@ -484,6 +493,7 @@ export class QueryExecutor {
     rateLimitInfo: RateLimitInfo | undefined,
     rateLimitMessage: string | undefined,
     rateLimitClass: RateLimitClass,
+    toolUseObserved: boolean,
     AbortError: typeof import('@anthropic-ai/claude-agent-sdk')['AbortError'],
   ): QueryAttemptResult {
     if (error instanceof AbortError) {
@@ -493,6 +503,7 @@ export class QueryExecutor {
         content: '',
         error: 'Query interrupted',
         interrupted: true,
+        toolUseObserved,
       };
     }
 
@@ -509,6 +520,7 @@ export class QueryExecutor {
         content: (resultContent ?? '').trim(),
         sessionId,
         error: errorMessage,
+        toolUseObserved,
       };
     }
 
@@ -531,23 +543,24 @@ export class QueryExecutor {
         rateLimitClass: errorClassification === 'Exhausted' ? 'Exhausted'
           : rateLimitClass !== 'NotRateLimit' ? rateLimitClass
           : markerText !== undefined ? 'Exhausted' : errorClassification,
+        toolUseObserved,
         rateLimitInfo: rateLimitInfo ?? buildRateLimitInfo('claude-sdk', sdkRateLimitError ? 'sdk_error' : 'stream_marker', errorMessage || resultContent || assistantText),
       };
     }
 
     if (errorMessage.includes('authentication') || errorMessage.includes('unauthorized')) {
-      return { success: false, content: '', error: 'Authentication failed. Please check your API credentials.' };
+      return { success: false, content: '', error: 'Authentication failed. Please check your API credentials.', toolUseObserved };
     }
 
     if (errorMessage.includes('timeout')) {
-      return { success: false, content: '', error: 'Request timed out. Please try again.' };
+      return { success: false, content: '', error: 'Request timed out. Please try again.', toolUseObserved };
     }
 
     const stderrOutput = stderrChunks.join('').trim();
     const errorWithStderr = stderrOutput
       ? `${errorMessage}\nstderr: ${stderrOutput}`
       : errorMessage;
-    return { success: false, content: '', error: errorWithStderr };
+    return { success: false, content: '', error: errorWithStderr, toolUseObserved };
   }
 }
 

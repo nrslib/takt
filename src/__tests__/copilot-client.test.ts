@@ -526,6 +526,70 @@ describe('callCopilot', () => {
     ]);
   });
 
+  it('終了コード0の429でもstderrが利用枠の使い切りを示せば再試行しない', async () => {
+    vi.useFakeTimers();
+    mockSpawnWithScenario([
+      {
+        code: 0,
+        stdout: `${JSON.stringify({ type: 'session.error', data: { statusCode: 429, message: 'request rejected' } })}\n`,
+        stderr: 'Your workspace is out of credits. Add credits to continue.',
+      },
+      { stdout: 'unexpected retry' },
+    ]);
+
+    const pending = callCopilot('coder', 'prompt', { cwd: '/repo' });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await pending).toMatchObject({ status: 'rate_limited', content: '', errorKind: 'rate_limit' });
+    expect(mockSpawn).toHaveBeenCalledOnce();
+  });
+
+  it('成功時のstderrに利用枠の警告があっても回答を返す', async () => {
+    mockSpawnWithScenario({
+      code: 0,
+      stdout: `${JSON.stringify({ type: 'assistant.message', data: { content: 'final answer' } })}\n`,
+      stderr: 'Your workspace is out of credits. Add credits to continue.',
+    });
+
+    expect(await callCopilot('coder', 'prompt', { cwd: '/repo' })).toMatchObject({
+      status: 'done', content: 'final answer',
+    });
+    expect(mockSpawn).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { event: 'tool.execution_start', code: 0 },
+    { event: 'tool.execution_complete', code: 0 },
+    { event: 'tool.execution_start', code: 1 },
+    { event: 'tool.execution_complete', code: 1 },
+  ] as const)('$eventの後に終了コード$codeで429が起きたら同じ操作を再実行しない', async ({ event, code }) => {
+    vi.useFakeTimers();
+    const tool = JSON.stringify({ type: event, data: { toolCallId: 'write-1', toolName: 'write' } });
+    const throttled = JSON.stringify({ type: 'session.error', data: { statusCode: 429, message: 'request rejected' } });
+    mockSpawnWithScenario([
+      { code, stdout: `${tool}\n${throttled}\n` },
+      { stdout: 'duplicate operation' },
+    ]);
+
+    const pending = callCopilot('coder', 'edit file', { cwd: '/repo' });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await pending).toMatchObject({ status: 'rate_limited', errorKind: 'rate_limit' });
+    expect(mockSpawn).toHaveBeenCalledOnce();
+  });
+
+  it('改行前のツール実行イベントも異常終了時に保持して429の再試行を防ぐ', async () => {
+    vi.useFakeTimers();
+    const tool = JSON.stringify({ type: 'tool.execution_complete', data: { toolCallId: 'shell-1', toolName: 'shell' } });
+    mockSpawnWithScenario([
+      { code: 1, stdout: tool, stderr: 'HTTP 429: Too Many Requests' },
+      { stdout: 'duplicate operation' },
+    ]);
+
+    const pending = callCopilot('coder', 'run shell', { cwd: '/repo' });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await pending).toMatchObject({ status: 'rate_limited', errorKind: 'rate_limit' });
+    expect(mockSpawn).toHaveBeenCalledOnce();
+  });
+
   it('429で失敗した試行のshareセッションを成功結果へ混入させない', async () => {
     vi.useFakeTimers();
     const shareFiles = new Map<string, string>();

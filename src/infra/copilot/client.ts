@@ -356,7 +356,10 @@ function isAuthenticationError(error: CopilotExecError): boolean {
   return patterns.some((pattern) => message.includes(pattern));
 }
 
-function findRateLimitMessage(output: Pick<CopilotExecError, 'stdout' | 'stderr'>): { message: string; classification: RateLimitClass } | undefined {
+function findRateLimitMessage(
+  output: Pick<CopilotExecError, 'stdout' | 'stderr'>,
+  stderrFallback = true,
+): { message: string; classification: RateLimitClass } | undefined {
   for (const line of parseValidJsonLines(output.stdout ?? '')) {
     const root = toRecord(line);
     if (root?.type !== 'session.error') {
@@ -373,6 +376,7 @@ function findRateLimitMessage(output: Pick<CopilotExecError, 'stdout' | 'stderr'
       return { message: trimDetail(detail, 'Copilot rate limit exceeded'), classification };
     }
   }
+  if (!stderrFallback) return undefined;
   const stderr = output.stderr ?? '';
   const classification = classifyRateLimitError(stderr);
   return classification !== 'NotRateLimit' ? { message: trimDetail(stderr), classification } : undefined;
@@ -441,6 +445,11 @@ interface CopilotParsedOutput {
 
 function extractCopilotEventData(root: Record<string, unknown>): Record<string, unknown> {
   return toRecord(root.data) ?? root;
+}
+
+function isToolExecutionEvent(value: unknown): boolean {
+  const type = toRecord(value)?.type;
+  return type === 'tool.execution_start' || type === 'tool.execution_complete';
 }
 
 function parseCopilotOutput(stdout: string): CopilotParsedOutput | { error: string } {
@@ -554,6 +563,7 @@ interface CopilotCallOutcome {
   readonly sessionId?: string;
   readonly error?: string;
   readonly rateLimitClass?: RateLimitClass;
+  readonly toolExecutionObserved?: boolean;
 }
 
 function executionErrorOutcome(
@@ -574,6 +584,7 @@ async function executeCopilotCall(
   shareFilePath: string | undefined,
 ): Promise<CopilotCallOutcome> {
   const resumableSessionId = options.sessionId;
+  let toolExecutionObserved = false;
   try {
     const args = buildArgs(prompt, { ...options, shareFilePath });
     let pendingLine = '';
@@ -593,6 +604,7 @@ async function executeCopilotCall(
         // Plain-text CLI responses are handled by the final output parser.
         return;
       }
+      if (isToolExecutionEvent(value)) toolExecutionObserved = true;
       const parsed = collectCopilotOutput([value]);
       emitStructuredEvents(options.onStream, parsed.events);
       const root = toRecord(value);
@@ -602,7 +614,7 @@ async function executeCopilotCall(
         emitText(parsed.content);
       }
     };
-    const { stdout } = await execCopilot(args, options, (text) => {
+    const { stdout, stderr } = await execCopilot(args, options, (text) => {
       pendingLine += text;
       let newline: number;
       while ((newline = pendingLine.indexOf('\n')) !== -1) {
@@ -613,7 +625,7 @@ async function executeCopilotCall(
     if (pendingLine.trim().length > 0) {
       processLine(pendingLine);
     }
-    const rateLimitMessage = findRateLimitMessage({ stdout });
+    const rateLimitMessage = findRateLimitMessage({ stdout, stderr }, false);
     if (rateLimitMessage !== undefined) {
       return {
         status: 'rate_limited',
@@ -621,6 +633,7 @@ async function executeCopilotCall(
         error: rateLimitMessage.message,
         rateLimitClass: rateLimitMessage.classification,
         sessionId: resumableSessionId,
+        toolExecutionObserved,
       };
     }
     const parsed = parseCopilotOutput(stdout);
@@ -638,6 +651,9 @@ async function executeCopilotCall(
     };
   } catch (rawError) {
     const error = rawError as CopilotExecError;
+    if (!toolExecutionObserved && error.stdout !== undefined) {
+      toolExecutionObserved = parseValidJsonLines(error.stdout).some(isToolExecutionEvent);
+    }
     const aborted = options.abortSignal?.aborted || error.name === 'AbortError';
     const rateLimitMessage = aborted ? undefined : findRateLimitMessage(error);
     if (rateLimitMessage !== undefined) {
@@ -647,6 +663,7 @@ async function executeCopilotCall(
         error: rateLimitMessage.message,
         rateLimitClass: rateLimitMessage.classification,
         sessionId: resumableSessionId,
+        toolExecutionObserved,
       };
     }
     return executionErrorOutcome(classifyExecutionError(error, options), resumableSessionId);
@@ -714,7 +731,8 @@ export class CopilotClient {
       options.onActivity?.({ kind: 'attempt_started' });
       const executionOutcome = await executeCopilotCall(prompt, options, shareFilePath);
       outcome = await finalizeCopilotCall(executionOutcome, shareTmpDir);
-      if (outcome.rateLimitClass !== 'Transient' || retries >= RATE_LIMIT_MAX_RETRIES) break;
+      if (outcome.rateLimitClass !== 'Transient' || outcome.toolExecutionObserved
+        || retries >= RATE_LIMIT_MAX_RETRIES) break;
       try {
         await waitForRateLimitRetry(++retries, options.abortSignal);
       } catch {
