@@ -255,7 +255,8 @@ In CLI/TUI assistant and grill-me conversations, `/requeue [guidance]` resolves 
 
 | Action | Description |
 |--------|-------------|
-| **Mark as failed** | Mark a stuck `running` task as `failed` |
+| **Stop** | Request a stop for one running task; the worker interrupts itself and determines the final state |
+| **Mark as failed** | Mark a stuck `running` task as `failed`; does not stop the worker |
 
 Selecting a running task with a worktree clone opens the ordinary assistant conversation with that task as the initial `/tell` target. The conversation can inspect other tasks or discuss a new task. `/tell` rechecks the selected task after confirmation and writes only to that task; completed, missing, mismatched, and non-clone runs are not candidates or recipients.
 

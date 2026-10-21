@@ -68,10 +68,61 @@ describe('Merge workflows own Caccia execution', () => {
       return { success: true };
     });
   });
-  afterEach(() => rmSync(project, { recursive: true, force: true }));
+  afterEach(() => { vi.restoreAllMocks(); rmSync(project, { recursive: true, force: true }); });
 
   const run = () => executePrWorkflow({ projectCwd: project, prNumber: 123, workflow: 'custom-merge',
     settings: resolveMergeSettings(undefined) });
+
+  it('再キューされたマージ実行は停止を検知し、処理終了を待って停止理由付きで保存する', async () => {
+    mocks.workflow.mockRejectedValueOnce(new Error('initial failure'));
+    await expect(run()).rejects.toThrow('initial failure');
+    const runner = new TaskRunner(project);
+    const failed = runner.listFailedTasks()[0]!;
+    runner.requeueTask(failed.name, ['failed']);
+    const claimed = runner.claimNextTasks(1)[0]!;
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    mocks.workflow.mockImplementationOnce(async () => { await pending; return { success: true }; });
+    const execution = executePersistedPrMergeTask(claimed, runner, project);
+    const settled = execution.then(() => undefined, (error: unknown) => error);
+    try {
+      await vi.waitFor(() => expect(mocks.workflow).toHaveBeenCalledTimes(2));
+      const signal = mocks.workflow.mock.calls[1]![0].abortSignal as AbortSignal;
+      expect(signal.aborted).toBe(false);
+      runner.requestTaskStop(undefined, claimed.name, claimed.executionId!);
+      await vi.waitFor(() => expect(signal.aborted).toBe(true), { timeout: 3000 });
+      expect(runner.listAllTaskItems().find((task) => task.name === claimed.name)!.kind).toBe('running');
+      release();
+      const error = await settled;
+      expect(error).toBeInstanceOf(Error);
+      const saved = runner.listTaskStateItems().find((task) => task.name === claimed.name)!;
+      expect(saved).toMatchObject({ status: 'failed', ownerPid: undefined,
+        completion: { success: false, interrupted: true, workflowResult: 'aborted' } });
+      expect(saved.failure!.error).toContain('stopped by manager');
+      expect(saved.completion!.failureReason).toBe(saved.failure!.error);
+      expect((error as Error).message).toBe(saved.failure!.error);
+    } finally { release(); await settled; }
+  });
+
+  it.each([true, false])('マージ終端保存直前の停止を同じ停止理由で保存する (merged=%s)', async (merged) => {
+    mocks.workflow.mockRejectedValueOnce(new Error('initial failure'));
+    await expect(run()).rejects.toThrow('initial failure');
+    const runner = new TaskRunner(project);
+    runner.requeueTask(runner.listFailedTasks()[0]!.name, ['failed']);
+    const claimed = runner.claimNextTasks(1)[0]!;
+    mocks.workflow.mockResolvedValue({ success: true });
+    mocks.status.mockResolvedValue({ merged });
+    const method = merged ? 'completeTask' : 'failTask';
+    const save = runner[method].bind(runner);
+    vi.spyOn(runner, method).mockImplementationOnce((result) => {
+      runner.requestTaskStop(undefined, claimed.name, claimed.executionId!);
+      return save(result);
+    });
+    await expect(executePersistedPrMergeTask(claimed, runner, project)).rejects.toThrow(/stopped by manager/);
+    const saved = runner.listTaskStateItems().find((task) => task.name === claimed.name)!;
+    expect(saved.status).toBe('failed');
+    expect(saved.completion).toMatchObject({ success: false, interrupted: true, failureReason: saved.failure!.error });
+  });
 
   it('設定が有効でも効果のないworkflowは通常のpushだけを実行する', async () => {
     expect(await run()).toEqual({ merged: true });

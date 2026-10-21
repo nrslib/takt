@@ -150,6 +150,7 @@ function toCompletedTaskItem(projectDir: string, tasksFile: string, task: TaskRe
 
 function toBaseTaskListItem(projectDir: string, tasksFile: string, task: TaskRecord): Omit<TaskListItem, 'kind' | 'failure' | 'exceededMaxSteps' | 'exceededCurrentIteration'> {
   return {
+    executionId: task.execution_id,
     goalId: task.goal_id,
     name: task.name,
     createdAt: task.created_at,

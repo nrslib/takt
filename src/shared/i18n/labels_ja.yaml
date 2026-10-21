@@ -6,6 +6,15 @@
 # =============================================================================
 
 # ===== Interactive Mode UI =====
+taskStop:
+  label: "Stop（停止依頼）"
+  description: "停止を依頼します。worker が自分で中断し、終端状態を決めます"
+  confirm: '実行中のタスク「{name}」に停止を依頼しますか？ 終端状態は worker が決めます。'
+  staleOwner: "所有者が生きていないため停止を依頼できません。Mark as failed を使用してください。"
+  missingExecutionId: "実行IDがないため停止を依頼できません。"
+  rejected: "停止依頼が拒否されました: {reason}"
+  requested: '「{name}」に停止を依頼しました。worker が自分で中断し、終端状態を決めます。'
+
 taskDeletion:
   statusOption: "削除対象の状態で絞り込む（pending|completed|failed|exceeded|pr_failed、複数指定可）"
   goalOption: "削除対象のゴールIDで絞り込む"

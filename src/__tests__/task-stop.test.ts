@@ -46,7 +46,7 @@ describe('task stop at the terminal persistence boundary', () => {
   });
 });
 
-describe('TaskLifecycleService.requestTaskStop', () => {
+describe.each([goalId, undefined])('TaskLifecycleService.requestTaskStop (goalId=%s)', (goalId) => {
   const identity = { startTime: 'Mon Oct  5 12:00:00 2026' };
 
   beforeEach(() => {
@@ -67,6 +67,14 @@ describe('TaskLifecycleService.requestTaskStop', () => {
     return { service: new TaskLifecycleService('/project', '/project/.takt/tasks.yaml', store),
       state: () => state, writes: () => writes };
   }
+
+  it('does not treat an omitted goal as permission to stop a goal-owned task', () => {
+    const task = buildClaimedTaskRecord({ ...pending(), goal_id: 'saved-goal' });
+    const fixture = setup(task);
+    expect(() => fixture.service.requestTaskStop(undefined, task.name, task.execution_id!)).toThrow(/goal/i);
+    expect(fixture.state().tasks[0]).toEqual(task);
+    expect(fixture.writes()).toBe(0);
+  });
 
   it('saves only the request, preserves ownership and running status, and reuses duplicate requests', () => {
     const task = buildClaimedTaskRecord({ ...pending(), goal_id: goalId });
