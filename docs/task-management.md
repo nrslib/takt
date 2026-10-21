@@ -405,7 +405,7 @@ During worktree execution, TAKT maintains two directory references:
 | `cwd` (clone path) | Where agents run, where reports are written |
 | `projectCwd` (project root) | Where logs and session data are stored |
 
-Reports are written to `cwd/.takt/runs/{slug}/reports/` (inside the clone) to prevent agents from discovering the main repository path. Session resume is skipped when `cwd !== projectCwd` to avoid cross-directory contamination.
+Reports are written to `cwd/.takt/runs/{slug}/reports/` (inside the clone) to prevent agents from discovering the main repository path. With `session: continue` and no provider fallback, steps in the same run resume a saved session for the same persona, provider, and model associated with that clone. They do not use sessions from another clone or the project root. Retry, requeue, and instruct start each persona with a fresh session in an existing clone; later steps in the new attempt resume that session.
 
 ## Session Logs
 

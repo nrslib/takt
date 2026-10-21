@@ -15,9 +15,9 @@ import { formatMissingReportReference, REPORT_REFERENCE_PATTERN, resolveReportRe
 import { classifyReportRelativePath } from '../../models/reserved-report-names.js';
 import type { InjectedReport, PreparedInstruction } from './prepared-instruction.js';
 import { renderTaskReviewScope } from '../review-scope.js';
-import { escapeTemplateChars } from 'faceted-prompting';
+import { escapeTemplateChars } from '#faceted-prompting';
 
-export { escapeTemplateChars } from 'faceted-prompting';
+export { escapeTemplateChars } from '#faceted-prompting';
 
 /**
  * Replace supported placeholders in the resolved instruction body.

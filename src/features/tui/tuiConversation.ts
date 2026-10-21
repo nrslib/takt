@@ -8,6 +8,7 @@
  */
 
 import { SlashCommand } from '../../shared/constants.js';
+import type { StreamCallback } from '../../shared/types/provider.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import {
   isDisabledVerifyCommand,
@@ -139,6 +140,7 @@ export interface TuiSubmitInput {
   text: string;
   abortSignal: AbortSignal;
   onAssistantChunk: (chunk: string) => void;
+  onStreamEvent?: StreamCallback;
 }
 
 /**
@@ -395,7 +397,9 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
           abortSignal: input.abortSignal,
           confirmManagedProvider: input.confirmManagedProvider,
           onStream: (event) => {
-            if (!turnEnded && event.type === 'text') {
+            if (turnEnded) return;
+            input.onStreamEvent?.(event);
+            if (event.type === 'text') {
               input.onAssistantChunk(event.data.text);
             }
           },
@@ -433,7 +437,9 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
           abortSignal: input.abortSignal,
           confirmManagedProvider: input.confirmManagedProvider,
           onStream: (event) => {
-            if (!turnEnded && event.type === 'text') {
+            if (turnEnded) return;
+            input.onStreamEvent?.(event);
+            if (event.type === 'text') {
               input.onAssistantChunk(event.data.text);
             }
           },
