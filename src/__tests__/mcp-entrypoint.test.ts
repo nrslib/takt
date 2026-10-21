@@ -685,6 +685,80 @@ describe('MCP public description assertions', () => {
 });
 
 describe('MCP package entrypoint', () => {
+  it('advertises the inquiry input contract and retrieval fields through listTools', async () => {
+    const server = createTaktMcpServer();
+    const client = new Client({ name: 'inquiry-tools', version: '1' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const { tools } = await client.listTools();
+      const ask = tools.find(({ name }) => name === 'takt_ask_goal_question')!;
+      expect(ask.inputSchema.properties?.kind).toMatchObject({ enum: ['question', 'operation_request'], default: 'question' });
+      expect(ask.inputSchema.properties?.targetSha).toMatchObject({ type: 'string' });
+      expect(ask.inputSchema.required).not.toContain('kind');
+      expect(ask.description).toMatch(/question.*default|default.*question/iu);
+      expect(ask.description).toMatch(/operation_request/u);
+      expect(ask.description).toMatch(/approval.*(cannot|reject|not|judg)|(?:cannot|reject|not).*approval/iu);
+      expect(ask.description).toMatch(/targetSha/u);
+      const withdraw = tools.find(({ name }) => name === 'takt_withdraw_goal_question')!;
+      expect(withdraw.inputSchema.properties?.reason).toMatchObject({ type: 'string' });
+      expect(withdraw.inputSchema.required).not.toContain('reason');
+      expect(withdraw.description).toMatch(/reason/iu);
+      for (const name of ['takt_get_goal_question', 'takt_list_goal_questions']) {
+        const description = tools.find((tool) => tool.name === name)!.description;
+        expect(description, name).toMatch(/kind|question.*approval.*operation/iu);
+        expect(description, name).toMatch(/decision/iu);
+        expect(description, name).toMatch(/report/iu);
+        expect(description, name).toMatch(/scope/iu);
+        expect(description, name).toMatch(/withdraw/iu);
+        expect(description, name).toMatch(/consum/iu);
+      }
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it('saves an operation request through MCP and retrieves its target and complete withdrawal reason', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-mcp-inquiry-'));
+    const store = new GoalStore(cwd);
+    const goal = await store.create(goalRecord());
+    const server = createTaktMcpServer({}, { allowedProjectRoot: cwd });
+    const client = new Client({ name: 'inquiry-roundtrip', version: '1' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const call = async (name: string, args: Record<string, unknown>) => {
+        const result = await client.callTool({ name, arguments: { cwd, goalId: goal.id, ...args } });
+        expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+        expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
+        return JSON.parse(firstTextContent(result.content));
+      };
+      const input = { kind: 'operation_request', body: '認証を更新してください', targetSha: 'a'.repeat(40) };
+      const { questionId } = await call('takt_ask_goal_question', input);
+      expect((await call('takt_get_goal_question', { questionId })).question).toMatchObject({ ...input, id: questionId, status: 'pending' });
+      const reason = '  別の方法で解決しました\n' + '理由'.repeat(12000);
+      const before = Date.now();
+      await call('takt_withdraw_goal_question', { questionId, reason });
+      const saved = (await new GoalStore(cwd).get(goal.id)).questions!.find((question) => question.id === questionId)!;
+      expect(saved).toMatchObject({ ...input, status: 'withdrawn', withdrawalReason: reason });
+      expect(Date.parse(saved.withdrawnAt!)).toBeGreaterThanOrEqual(before);
+      expect(Date.parse(saved.withdrawnAt!)).toBeLessThanOrEqual(Date.now());
+      let restored = '';
+      let offset = 0;
+      for (;;) {
+        const page = await call('takt_get_goal_question', { questionId, path: 'withdrawalReason', textOffset: offset, maxBytes: 4096 });
+        restored += page.content;
+        if (page.nextOffset === null) break;
+        expect(page.nextOffset).toBeGreaterThan(offset);
+        offset = page.nextOffset;
+      }
+      expect(restored).toBe(reason);
+    } finally {
+      await client.close(); await server.close();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('declares the stdio binary and official MCP SDK', () => {
     const packageJson = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf-8')) as {
       bin?: Record<string, string>;

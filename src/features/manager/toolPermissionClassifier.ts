@@ -4,11 +4,12 @@ import type { ProviderType } from '../../shared/types/provider.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { TAKT_MCP_MANAGER_TOOL_NAMES } from '../mcp/server.js';
 import { TAKT_MANAGER_MCP_SERVER_NAME } from './managerMcp.js';
+import { isManagerReadAllowed } from './readScope.js';
 
 const codexPassthroughTools = new Set<string>([
   ...TAKT_MCP_MANAGER_TOOL_NAMES.map((name) => `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${name}`),
 ]);
-const claudePassthroughTools = new Set<string>(['Read', 'Glob', 'Grep', 'ToolSearch', ...codexPassthroughTools]);
+const claudePassthroughTools = new Set<string>(['ToolSearch', ...codexPassthroughTools]);
 const agentCommands = new Set(['claude', 'codex', 'cursor-agent', 'opencode', 'gemini', 'copilot', 'aider']);
 const prefixValueOptions: Record<string, readonly string[]> = {
   nohup: [],
@@ -25,8 +26,24 @@ const prefixValueOptions: Record<string, readonly string[]> = {
 type Classification = { decision: 'allow' } | { decision: 'deny'; reason: string } | { decision: 'judge' };
 type ShellQuote = "'" | '"' | undefined;
 
-function nextCommandBoundary(command: string, start: number, quote: ShellQuote): number | undefined {
-  const scopes: { quote: ShellQuote; depth: number; hasWord: boolean }[] = [{ quote, depth: 0, hasWord: true }];
+function backtickSubstitution(command: string, start: number): { body: string; end: number } | undefined {
+  let body = '';
+  for (let index = start + 1; index < command.length; index++) {
+    const char = command[index]!;
+    if (char === '`') return { body, end: index };
+    const next = command[index + 1];
+    // バッククォートでは、これら以外の文字の前のバックスラッシュは本文に残る。
+    if (char === '\\' && next !== undefined && ['$', '`', '\\', '\n'].includes(next)) {
+      index++;
+      if (next !== '\n') body += next;
+    } else body += char;
+  }
+  return undefined;
+}
+
+function nextCommandBoundary(command: string, start: number, quote: ShellQuote): { boundary?: number; substitutions: string[] } {
+  const substitutions: string[] = [];
+  const scopes: { quote: ShellQuote; depth: number; hasWord: boolean; start: number }[] = [{ quote, depth: 0, hasWord: true, start }];
   for (let index = start; index < command.length; index++) {
     const scope = scopes.at(-1)!;
     const char = command[index]!;
@@ -36,37 +53,54 @@ function nextCommandBoundary(command: string, start: number, quote: ShellQuote):
     }
     if (char === '\\') {
       const next = command[++index];
-      if (next === undefined) return undefined;
+      if (next === undefined) return { substitutions };
       if (next !== '\n') scope.hasWord = true;
       continue;
     }
     if (scope.quote === '"' && char === '"') { scope.quote = undefined; continue; }
     if (char === '$' && command[index + 1] === '(') {
       scope.hasWord = true;
-      scopes.push({ quote: undefined, depth: 1, hasWord: false });
+      scopes.push({ quote: undefined, depth: 1, hasWord: false, start: index + 2 });
       index++;
       continue;
     }
-    if (char === '$' || char === '`') return undefined;
+    if (char === '`') {
+      const substitution = backtickSubstitution(command, index);
+      if (substitution === undefined) return { substitutions };
+      if (scopes.length === 1) substitutions.push(substitution.body);
+      index = substitution.end;
+      scope.hasWord = true;
+      continue;
+    }
+    if (char === '$') {
+      const parameter = /^\$(?:[A-Za-z_][A-Za-z0-9_]*|[0-9@*#?$!-])/u.exec(command.slice(index));
+      if (parameter === null) return { substitutions };
+      index += parameter[0].length - 1;
+      scope.hasWord = true;
+      continue;
+    }
     if (scope.quote === '"') continue;
     if (char === "'" || char === '"') { scope.quote = char; scope.hasWord = true; continue; }
     if (char === '#' && !scope.hasWord) {
       while (index < command.length && command[index] !== '\n') index++;
-      if (scopes.length === 1) return index < command.length ? index : undefined;
+      if (scopes.length === 1) return { boundary: index < command.length ? index : undefined, substitutions };
       continue;
     }
     if (char === '(' || char === ')') {
-      if (scopes.length === 1) return undefined;
+      if (scopes.length === 1) return { substitutions };
       scope.depth += char === '(' ? 1 : -1;
-      if (scope.depth === 0) scopes.pop();
+      if (scope.depth === 0) {
+        scopes.pop();
+        if (scopes.length === 1) substitutions.push(command.slice(scope.start, index));
+      }
       scope.hasWord = false;
       continue;
     }
-    if ('<>'.includes(char)) return undefined;
-    if (';|&\n'.includes(char) && scopes.length === 1) return index;
+    if ('<>'.includes(char)) return { substitutions };
+    if (';|&\n'.includes(char) && scopes.length === 1) return { boundary: index, substitutions };
     scope.hasWord = !/[\s;|&]/u.test(char);
   }
-  return undefined;
+  return { substitutions };
 }
 
 // 未対応部分の単語は確定せず、外側の区切りが確認できたコマンドだけを追加する。
@@ -106,9 +140,10 @@ function commandWords(command: string): { commands: string[][]; complete: boolea
       }
       continue;
     }
-    if (char === '$' && command[index + 1] === '(') {
+    if (char === '$' || char === '`') {
       complete = false;
-      const boundary = nextCommandBoundary(command, index, quote);
+      const { boundary, substitutions } = nextCommandBoundary(command, index, quote);
+      for (const body of substitutions) commands.push(...commandWords(body).commands);
       if (boundary === undefined) return incompleteResult();
       if (words.length > 0) commands.push(words);
       words = []; word = ''; hasWord = false; quote = undefined;
@@ -117,12 +152,11 @@ function commandWords(command: string): { commands: string[][]; complete: boolea
     }
     if (quote === '"') {
       if (char === '"') quote = undefined;
-      else if (char === '$' || char === '`') return incompleteResult();
       else word += char;
       continue;
     }
     if (char === "'" || char === '"') { quote = char; hasWord = true; continue; }
-    if ('$`()<>'.includes(char)) return incompleteResult();
+    if ('()<>'.includes(char)) return incompleteResult();
     if (char === '#' && !hasWord) {
       while (index < command.length && command[index] !== '\n') index++;
       flushCommand();
@@ -144,6 +178,29 @@ function commandLaunchesAgent(command: string): boolean | undefined {
   return !complete || results.includes(undefined) ? undefined : false;
 }
 
+function normalizeNpmWorkspaceBooleanOption(name: string): string | undefined {
+  if (name === 'workspaces' || name === 'ws') return 'workspaces';
+  if (name === 'include-workspace-root' || name === 'iwr') return 'include-workspace-root';
+  // include と include-staged に衝突しない、一意な長形式省略だけを認識する。
+  if (name.startsWith('include-w') && 'include-workspace-root'.startsWith(name)) return 'include-workspace-root';
+  return undefined;
+}
+
+function npmWorkspaceOptionEnd(words: string[], index: number): number | undefined {
+  const option = words[index]!;
+  if (option === '--workspace' || option === '-w') {
+    const value = words[index + 1];
+    return value === undefined || value.length === 0 || value.startsWith('-') ? undefined : index + 2;
+  }
+  if (/^(?:--workspace|-w)=.+/u.test(option)) return index + 1;
+  const booleanOption = /^--(?:no-)?([^=]+)(?:=(?:true|false))?$/u.exec(option);
+  if (booleanOption !== null && normalizeNpmWorkspaceBooleanOption(booleanOption[1]!) !== undefined) {
+    return !option.includes('=') && (words[index + 1] === 'true' || words[index + 1] === 'false')
+      ? index + 2 : index + 1;
+  }
+  return undefined;
+}
+
 function launchesAgent(words: string[]): boolean | undefined {
   let index = 0;
   while (/^[A-Za-z_][A-Za-z0-9_]*=/u.test(words[index] ?? '')) index++;
@@ -158,11 +215,70 @@ function launchesAgent(words: string[]): boolean | undefined {
       }
       continue;
     }
-    if (executable === 'npx' || executable === 'bunx') {
+    if (executable === 'bunx') {
       while (words[index]?.startsWith('-')) {
         const option = words[index++]!;
         if (option === '-p' || option === '--package') index++;
       }
+      continue;
+    }
+    if (executable === 'npm' || executable === 'npx' || executable === 'pnpm' || executable === 'yarn') {
+      if (executable === 'npm') {
+        while (words[index]?.startsWith('-')) {
+          const end = npmWorkspaceOptionEnd(words, index);
+          if (end === undefined) return undefined;
+          index = end;
+        }
+      }
+      let subcommand = executable === 'npx' ? 'exec' : words[index++];
+      if (executable === 'npm' && subcommand === 'x') subcommand = 'exec';
+      const npmRunner = executable === 'npm' || executable === 'npx';
+      if (executable === 'npm' && subcommand === 'install') return false;
+      if (!((npmRunner || executable === 'pnpm') && subcommand === 'exec')
+        && !((executable === 'pnpm' || executable === 'yarn') && subcommand === 'dlx')) return undefined;
+      let shellCommand: string | undefined;
+      let shellMode = false;
+      while (words[index]?.startsWith('-')) {
+        if (npmRunner) {
+          const end = npmWorkspaceOptionEnd(words, index);
+          if (end !== undefined) { index = end; continue; }
+        }
+        const option = words[index++]!;
+        if (option === '--') break;
+        if (npmRunner && (/^--(?:no-)?(?:par|parseable|porcelain)(?:=(?:true|false))?$/u.test(option)
+          || (executable === 'npm' && /^-p(?:=(?:true|false))?$/u.test(option)))) {
+          if (!option.includes('=') && (words[index] === 'true' || words[index] === 'false')) index++;
+          continue;
+        }
+        if (npmRunner && (option === '-c' || option === '--call')) {
+          if (words[index] === undefined || words[index]!.startsWith('-')) return undefined;
+          shellCommand = words[index++];
+          continue;
+        }
+        if (npmRunner && option.startsWith('--call=')) {
+          shellCommand = option.slice('--call='.length);
+          continue;
+        }
+        if (executable === 'pnpm' && subcommand === 'dlx' && (option === '-c' || option === '--shell-mode')) {
+          shellMode = true;
+          continue;
+        }
+        if (npmRunner || subcommand === 'dlx') {
+          if ((executable !== 'npm' && option === '-p') || option === '--package') {
+            if (words[index] === undefined || words[index]!.startsWith('-')) return undefined;
+            index++;
+            continue;
+          }
+          if (/^--package=.+/u.test(option)) continue;
+        }
+        if (npmRunner && ['-y', '--yes', '--no'].includes(option)) continue;
+        return undefined;
+      }
+      if (shellCommand !== undefined) {
+        return shellCommand.trim().length === 0 || index < words.length ? undefined : commandLaunchesAgent(shellCommand);
+      }
+      if (index >= words.length) return undefined;
+      if (shellMode) return commandLaunchesAgent(words.slice(index).join(' '));
       continue;
     }
     if (Object.hasOwn(prefixValueOptions, executable)) {
@@ -203,6 +319,9 @@ function launchesAgent(words: string[]): boolean | undefined {
 export function classifyManagerToolPermission(request: ToolPermissionDecisionRequest, language: Language, provider: ProviderType): Classification {
   const passthroughTools = provider === 'codex' ? codexPassthroughTools : claudePassthroughTools;
   if (passthroughTools.has(request.toolName)) return { decision: 'allow' };
+  if (provider !== 'codex' && ['Read', 'Glob', 'Grep'].includes(request.toolName)) {
+    return { decision: isManagerReadAllowed(request) ? 'allow' : 'judge' };
+  }
   if (request.toolName === 'Task' || request.toolName === 'Agent'
     || (provider === 'codex' && request.toolName === 'spawn_agent')) {
     return { decision: 'deny', reason: getLabel('manager.toolPermission.agentDenied', language, { toolName: request.toolName }) };

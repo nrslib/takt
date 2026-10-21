@@ -3,9 +3,8 @@
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { createTaktMcpServer } from './server.js';
 import { isDirectEntrypoint } from '../../shared/utils/entrypoint.js';
-import { z } from 'zod/v4';
 
-import { MANAGER_ASSIGNMENT_ENV } from '../../features/manager/assignment.js';
+import { MANAGER_ASSIGNMENT_ENV, managerAssignmentSchema } from '../../features/manager/assignment.js';
 import { resolveGitRepositoryDirectory } from '../../infra/task/repositoryDirectory.js';
 
 function resolveToolSet(argv: readonly string[]): 'all' | 'read-only' | 'manager' {
@@ -31,10 +30,7 @@ export async function connectTaktMcpServerToStdio(): Promise<void> {
   const managerAssignment = toolSet !== 'manager' ? undefined
     : rawAssignment === undefined
       ? { kind: 'repository' as const, repositoryDirectory: await resolveGitRepositoryDirectory(process.cwd()) }
-      : z.discriminatedUnion('kind', [
-        z.object({ kind: z.literal('repository'), repositoryDirectory: z.string().min(1) }),
-        z.object({ kind: z.literal('workspace'), workspaceId: z.uuid() }),
-      ]).parse(JSON.parse(rawAssignment));
+      : managerAssignmentSchema.parse(JSON.parse(rawAssignment));
   const server = createTaktMcpServer({}, {
     toolSet, managerAssignment,
     includeReferenceMarkers: shouldIncludeReferenceMarkers(argv),

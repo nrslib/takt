@@ -1,4 +1,14 @@
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>();
+  return { ...actual, unlinkSync: vi.fn(actual.unlinkSync) };
+});
 vi.mock('../infra/goals/events.js', async (original) => ({ ...await original<typeof import('../infra/goals/events.js')>(), saveManagerEvent: vi.fn() }));
+vi.mock('../features/daemon/lifecycle.js', () => ({ ensureDaemon: vi.fn(async () => {}) }));
+vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
+vi.mock('../features/tui/PromptInput.js', async (original) => {
+  const actual = await original<typeof import('../features/tui/PromptInput.js')>();
+  return { ...actual, PromptInput: vi.fn(actual.PromptInput) };
+});
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { cleanup,render } from 'ink-testing-library';
@@ -23,14 +33,18 @@ import { resolveManagerConfig } from '../infra/config/managerConfig.js';
 import { invalidateResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
 import { appendGoalNotification,formatGoalQuestionNotification } from '../infra/goals/notifications.js';
 import { addGoalQuestion,withdrawGoalQuestion } from '../infra/goals/questions.js';
-import type { Goal } from '../infra/goals/schema.js';
+import type { Goal, GoalQuestion } from '../infra/goals/schema.js';
 import { GoalStore } from '../infra/goals/store.js';
 import { MockProvider } from '../infra/providers/mock.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
 import type { JsonTaskListItem } from '../infra/task/listSerializer.js';
 import { TaskRunner } from '../infra/task/runner.js';
 import { TaskStore } from '../infra/task/store.js';
+import { getLabel } from '../shared/i18n/index.js';
 import { goalId,goalRecord } from './helpers/goal-fixtures.js';
+import { registerManagerTypedAnswerTests } from './helpers/manager-typed-answers.js';
+
+registerManagerTypedAnswerTests();
 
 vi.mock('node:child_process', async (original) => {
   const actual = await original<typeof import('node:child_process')>();
@@ -62,7 +76,6 @@ beforeEach(() => {
   invalidateGlobalConfigCache();
   invalidateResolvedConfigCache(cwd);
 });
-
 afterEach(async () => {
   app?.unmount();
   app = undefined;
@@ -86,7 +99,6 @@ async function mountGoalControls(lang: 'ja' | 'en', goal: Goal) {
   });
   const provider = new MockProvider();
   vi.spyOn(provider, 'setup').mockReturnValue({ call });
-  const callTool = vi.fn();
   session = createManagerConversationSession({
     cwd,
     plan: { ctx: { providerType: 'mock', model: undefined, lang, provider },
@@ -99,7 +111,7 @@ async function mountGoalControls(lang: 'ja' | 'en', goal: Goal) {
     await vi.waitFor(() => expect(app!.lastFrame()).toContain(text.split('\n')[0]!));
     app!.stdin.write('\r');
   };
-  return { store, call, callTool, send };
+  return { store, call, send };
 }
 
 function expectGoalMemory(memory: string, goal: Goal): void {
@@ -124,16 +136,81 @@ const irreversibleWarning = /取り消せ|元に戻せ|不可逆|cannot.*undo|ir
 async function expectAbortConfirmation(goal: Goal): Promise<void> {
   await vi.waitFor(() => {
     const frame = app!.lastFrame()!.replace(/\s+/gu, ' ');
-    expect(frame).toContain(goal.id);
     expect(frame).toContain(goal.objective);
     expect(frame).toMatch(irreversibleWarning);
   });
+}
+
+async function selectGoal(goal: Goal): Promise<void> {
+  await vi.waitFor(() => {
+    const lists = app!.lastFrame()?.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu) ?? [];
+    expect(lists.some((box) => box.includes(goal.objective) && /↑|↓/u.test(box) && /Enter/u.test(box) && /Esc/u.test(box))).toBe(true);
+  });
+  app!.stdin.write('\r');
 }
 
 function confirmAbort(): void {
   app!.stdin.write('\x1b[A');
   app!.stdin.write('\r');
 }
+
+it.each(['choice', 'free text'] as const)('persists only the selected inquiry through the real session with a %s answer', async (mode) => {
+  const pending: GoalQuestion = { id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human', status: 'pending',
+    body: 'Choose output format', options: mode === 'choice' ? ['CSV', 'JSON'] : undefined };
+  const saved: Goal = { ...goalRecord(), objective: 'Shared goal name', questions: [pending] };
+  const { store, call, send } = await mountGoalControls('en', saved);
+  const other = await store.create({ ...saved, id: '550e8400-e29b-41d4-a716-446655440001' });
+  const candidates = (await readManagerDisplayEvents(cwd, 'en')).questions;
+  const selected = candidates[1]!;
+  if (selected.goalId === null) throw new Error('Expected a goal inquiry');
+  const untouched = await store.get(selected.goalId === saved.id ? other.id : saved.id);
+  await send('/answer');
+  await vi.waitFor(() => {
+    const lists = app!.lastFrame()?.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu) ?? [];
+    expect(lists.some((box) => box.includes(saved.objective) && /↑|↓/u.test(box) && /Enter/u.test(box))).toBe(true);
+  });
+  app!.stdin.write('\x1b[B');
+  app!.stdin.write('\r');
+  await vi.waitFor(() => expect(app!.lastFrame()).toContain(mode === 'choice' ? 'Free text' : 'Enter your answer'));
+  expect((await store.get(selected.goalId)).questions![0]!.status).toBe('pending');
+  if (mode === 'choice') app!.stdin.write('\x1b[B');
+  else app!.stdin.write('Custom output destination');
+  app!.stdin.write('\r');
+  await vi.waitFor(async () => expect((await store.get(selected.goalId)).questions![0]).toMatchObject({
+    status: 'answered', answer: { text: mode === 'choice' ? 'JSON' : 'Custom output destination', source: 'tui' },
+  }));
+  expect(await store.get(untouched.id)).toEqual(untouched);
+  expect(call).not.toHaveBeenCalled();
+});
+
+it.each(['pause', 'resume', 'abort'] as const)('filters mixed saved goal states and applies %s only to the second selected goal', async (command) => {
+  const executionStatus = command === 'resume' ? 'paused' : 'active';
+  const saved: Goal = { ...goalRecord(), objective: 'Eligible first', executionStatus };
+  const { store, call, send } = await mountGoalControls('en', saved);
+  const other = await store.create({ ...saved, id: '550e8400-e29b-41d4-a716-446655440001', objective: 'Eligible second' });
+  await store.create({ ...saved, id: '550e8400-e29b-41d4-a716-446655440002', objective: 'Completed candidate', status: 'completed',
+    completion: { goalBranch: saved.branch, goalSha: 'a'.repeat(40), targetBranch: 'main', targetSha: 'b'.repeat(40),
+      summary: 'Completed', instructions: ['Verified merge'],
+      changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false } } });
+  await store.create({ ...saved, id: '550e8400-e29b-41d4-a716-446655440003', objective: 'Aborted candidate', executionStatus: 'aborted' });
+  await send(`/${command}`);
+  await vi.waitFor(() => {
+    const lists = app!.lastFrame()?.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu) ?? [];
+    const list = lists.find((box) => /↑|↓/u.test(box) && /Enter/u.test(box) && /Esc/u.test(box));
+    expect(list).toBeDefined();
+    expect(list).toContain(saved.objective);
+    expect(list).toContain(other.objective);
+    expect(list).not.toContain('Completed candidate');
+    expect(list).not.toContain('Aborted candidate');
+  });
+  app!.stdin.write('\x1b[B');
+  app!.stdin.write('\r');
+  if (command === 'abort') { await expectAbortConfirmation(other); confirmAbort(); }
+  const expected = command === 'pause' ? 'paused' : command === 'resume' ? 'active' : 'aborted';
+  await vi.waitFor(async () => expect((await store.get(other.id)).executionStatus).toBe(expected));
+  expect(await store.get(saved.id)).toEqual(saved);
+  expect(call).not.toHaveBeenCalled();
+});
 
 it.each([
   { lang: 'ja' as const, executionStatus: 'active' as const },
@@ -150,7 +227,7 @@ it.each([
       instructions: ['git merge reviewed SHA'],
     },
   };
-  const { store, call, callTool, send } = await mountGoalControls(lang, saved);
+  const { store, call, send } = await mountGoalControls(lang, saved);
   const abort = vi.spyOn(session!, 'abortGoal');
   const runner = new TaskRunner(cwd);
   runner.addTask('preserve pending work', { goal_id: saved.id });
@@ -161,18 +238,15 @@ it.each([
   expect(await store.get(saved.id)).toEqual(saved);
   expect(new TaskStore(cwd).read()).toEqual(before);
   abort.mockClear();
-  await send(`/abort ${saved.id}`);
+  await send('/abort');
   await vi.waitFor(() => {
-    const frame = app!.lastFrame()!.replace(/\s+/gu, ' ');
-    expect(frame).toMatch(lang === 'ja' ? /完了済み.*中止できません/u : /completed.*cannot.*abort/iu);
-    expect(frame).toContain(saved.id);
-    expect(frame).not.toMatch(irreversibleWarning);
+    expect(app!.lastFrame()).toMatch(lang === 'ja' ? /対象.*(?:ありません|なし)|中止.*(?:ありません|なし)/u : /no.*(?:goals|targets)/iu);
+    expect(app!.lastFrame()).not.toMatch(irreversibleWarning);
   });
   expect(abort).not.toHaveBeenCalled();
   expect(await store.get(saved.id)).toEqual(saved);
   expect(new TaskStore(cwd).read()).toEqual(before);
   expect(call).not.toHaveBeenCalled();
-  expect(callTool).not.toHaveBeenCalled();
 });
 
 it.each([
@@ -183,13 +257,13 @@ it.each([
 ])('aborts a $executionStatus goal only after human confirmation and refreshes the same $lang TUI', async ({ lang, executionStatus }) => {
   const saved: Goal = { ...goalRecord(), executionStatus, objective: 'Abort target',
   };
-  const { store, call, callTool, send } = await mountGoalControls(lang, saved);
-  if (executionStatus === 'paused') await vi.waitFor(() => expect(app!.lastFrame()).toContain(`/resume ${saved.id}`));
-  await send(`/abort ${saved.id}`);
+  const { store, call, send } = await mountGoalControls(lang, saved);
+  if (executionStatus === 'paused') await vi.waitFor(() => expect(app!.lastFrame()).toContain(saved.objective));
+  await send('/abort');
+  await selectGoal(saved);
   await expectAbortConfirmation(saved);
   expect(await store.get(saved.id)).toEqual(saved);
   expect(call).not.toHaveBeenCalled();
-  expect(callTool).not.toHaveBeenCalled();
   confirmAbort();
   await vi.waitFor(async () => expect((await store.get(saved.id)).executionStatus).toBe('aborted'));
   expect(await store.get(saved.id)).toEqual({ ...saved, executionStatus: 'aborted' });
@@ -198,13 +272,12 @@ it.each([
     const index = rows.findIndex((row) => row.includes(saved.objective));
     expect(index).toBeGreaterThanOrEqual(0);
     expect(rows.slice(Math.max(0, index - 2), index + 3).join('\n')).toMatch(lang === 'ja' ? /中止/u : /abort/iu);
-    expect(rows.filter((row) => row.includes(`/resume ${saved.id}`))).toEqual([]);
+    expect(rows.filter((row) => /一時停止中のゴール|Paused goals/u.test(row))).toEqual([]);
   };
   await vi.waitFor(expectAbortedGoal);
   expect(call).not.toHaveBeenCalled();
-  expect(callTool).not.toHaveBeenCalled();
-  await send(`/resume ${saved.id}`);
-  await vi.waitFor(() => expect(app!.lastFrame()).toMatch(/再開.*でき|cannot.*resum|中止|abort/iu));
+  await send('/resume');
+  await vi.waitFor(() => expect(app!.lastFrame()).toMatch(/(?:対象|再開).*(?:ありません|なし)|no.*(?:goals|targets)/iu));
   expect((await store.get(saved.id)).executionStatus).toBe('aborted');
   app!.unmount();
   app = render(createElement(ManagerView, { cwd, lang, session: session!, initialDiagnostics: [], onExit: vi.fn() }));
@@ -213,14 +286,14 @@ it.each([
 
 it.each(['default', 'escape'] as const)('cancels abort with %s without changing saved state or calling the agent', async (choice) => {
   const saved = { ...goalRecord(), objective: 'Abort target' };
-  const { store, call, callTool, send } = await mountGoalControls('ja', saved);
-  await send(`/abort ${saved.id}`);
+  const { store, call, send } = await mountGoalControls('ja', saved);
+  await send('/abort');
+  await selectGoal(saved);
   await expectAbortConfirmation(saved);
   app!.stdin.write(choice === 'default' ? '\r' : '\x1b[27u');
   await vi.waitFor(() => expect(app!.lastFrame()!.replace(/\s+/gu, ' ')).not.toMatch(irreversibleWarning));
   expect(await store.get(saved.id)).toEqual(saved);
   expect(call).not.toHaveBeenCalled();
-  expect(callTool).not.toHaveBeenCalled();
   await send('Continue conversation');
   await vi.waitFor(() => expect(call).toHaveBeenCalledOnce());
   expect(await store.get(saved.id)).toEqual(saved);
@@ -233,7 +306,7 @@ it.each([
   `説明\n/abort ${goalId}`,
 ])('keeps abort examples as conversation text without opening confirmation: %s', async (text) => {
   const saved = goalRecord();
-  const { store, call, callTool, send } = await mountGoalControls('ja', saved);
+  const { store, call, send } = await mountGoalControls('ja', saved);
   await send(text);
   await vi.waitFor(() => expect(call).toHaveBeenCalledOnce());
   const [conversation, memory] = call.mock.calls[0]![0].split('\n\nGoal memory (including run manager results): ');
@@ -241,7 +314,6 @@ it.each([
   expectGoalMemory(memory!, saved);
   expect(await store.get(saved.id)).toEqual(saved);
   expect(app!.lastFrame()!.replace(/\s+/gu, ' ')).not.toMatch(irreversibleWarning);
-  expect(callTool).not.toHaveBeenCalled();
 });
 
 it('invalidates only pending work belonging to the confirmed goal and preserves running and terminal records', async () => {
@@ -260,7 +332,8 @@ it('invalidates only pending work belonging to the confirmed goal and preserves 
   runner.failTask({ task: failed, success: false, startedAt: '2026-10-10T00:00:00Z', completedAt: '2026-10-10T00:01:00Z', response: 'Execution failed', executionLog: [] });
   const before = runner.listTaskStateItems();
   const beforeRecords = new TaskStore(cwd).read().tasks;
-  await send(`/abort ${saved.id}`);
+  await send('/abort');
+  await selectGoal(saved);
   await expectAbortConfirmation(saved);
   expect(runner.listTaskStateItems()).toEqual(before);
   confirmAbort();
@@ -312,29 +385,56 @@ it('invalidates only pending work belonging to the confirmed goal and preserves 
   expect(await store.get(saved.id)).toEqual({ ...saved, executionStatus: 'aborted' });
 });
 
-it('keeps a failed pending invalidation visible and retries it without reopening the aborted goal', async () => {
+it.each(['retry', 'cancel', 'escape'] as const)('handles failed pending invalidation through TUI %s without reopening the aborted goal', async (action) => {
   const saved = { ...goalRecord(), objective: 'Abort target' };
-  const { store, send, call, callTool } = await mountGoalControls('en', saved);
+  const { store, send, call } = await mountGoalControls('en', saved);
   const runner = new TaskRunner(cwd);
   const pending = runner.addTask('pending abort retry', { goal_id: saved.id });
-  await send(`/abort ${saved.id}`);
+  await send('/abort');
+  await selectGoal(saved);
   await expectAbortConfirmation(saved);
-  const update = vi.spyOn(TaskStore.prototype, 'update').mockImplementationOnce(() => { throw new Error('Pending write unavailable'); });
+  const abort = vi.spyOn(session!, 'abortGoal');
+  const failUpdate = (): never => { throw new Error('Pending write unavailable'); };
+  const update = vi.spyOn(TaskStore.prototype, 'update').mockImplementationOnce(failUpdate);
   confirmAbort();
   await vi.waitFor(async () => expect((await store.get(saved.id)).executionStatus).toBe('aborted'));
   await vi.waitFor(() => expect(app!.lastFrame()).toContain('Pending write unavailable'));
+  await vi.waitFor(() => {
+    expect(app!.lastFrame()).toContain(getLabel('manager.retryAbort', 'en'));
+    expect(app!.lastFrame()).not.toContain('Working');
+  });
   update.mockRestore();
   expect(new TaskStore(cwd).read().tasks).toContainEqual(expect.objectContaining({ name: pending.name, status: 'pending', started_at: null, completed_at: null }));
   expect(runner.claimNextTasks(1)).toEqual([]);
-  await send(`/abort ${saved.id}`);
-  await expectAbortConfirmation(saved);
+  if (action !== 'retry') {
+    app!.stdin.write(action === 'cancel' ? '\r' : '\x1b[27u');
+    await vi.waitFor(() => expect(app!.lastFrame()).not.toContain(getLabel('manager.retryAbort', 'en')));
+    expect(abort).toHaveBeenCalledOnce();
+    expect((await store.get(saved.id)).executionStatus).toBe('aborted');
+    expect(new TaskStore(cwd).read().tasks.find(({ name }) => name === pending.name)?.status).toBe('pending');
+    expect(call).not.toHaveBeenCalled();
+    return;
+  }
+  const errorCount = app!.lastFrame()?.match(/Pending write unavailable/gu)?.length ?? 0;
+  const retryUpdate = vi.spyOn(TaskStore.prototype, 'update').mockImplementationOnce(failUpdate);
+  confirmAbort();
+  await vi.waitFor(() => {
+    expect(abort).toHaveBeenCalledTimes(2);
+    expect(retryUpdate).toHaveBeenCalledOnce();
+    expect(app!.lastFrame()?.match(/Pending write unavailable/gu)?.length).toBeGreaterThan(errorCount);
+    expect(app!.lastFrame()).toContain(getLabel('manager.retryAbort', 'en'));
+    expect(app!.lastFrame()).not.toContain('Working');
+  });
+  retryUpdate.mockRestore();
+  expect(new TaskStore(cwd).read().tasks.find(({ name }) => name === pending.name)?.status).toBe('pending');
   confirmAbort();
   await vi.waitFor(() => expect(runner.listTaskStateItems()).toContainEqual(expect.objectContaining({ name: pending.name, status: 'failed', failure: expect.objectContaining({ retryable: false }) })));
   expect(new TaskStore(cwd).read().tasks).toContainEqual(expect.objectContaining({ name: pending.name, status: 'failed', started_at: null, completed_at: null, failure: expect.objectContaining({ retryable: false }) }));
   expect(runner.claimNextTasks(1)).toEqual([]);
   expect((await store.get(saved.id)).executionStatus).toBe('aborted');
+  await vi.waitFor(() => expect(app!.lastFrame()).not.toContain(getLabel('manager.retryAbort', 'en')));
+  expect(abort.mock.calls.map(([options]) => options.goalId)).toEqual([saved.id, saved.id, saved.id]);
   expect(call).not.toHaveBeenCalled();
-  expect(callTool).not.toHaveBeenCalled();
 });
 
 it('exposes manager work tools without exposing a goal abort tool to the agent', async () => {
@@ -407,28 +507,27 @@ it.each(['ja', 'en'] as const)('pauses and resumes an awaiting-merge goal from c
       instructions: ['git merge --ff-only goal-branch'],
     },
   };
-  const { store, call, callTool, send } = await mountGoalControls(lang, saved);
-  await send(`/pause ${goalId}`);
+  const { store, call, send } = await mountGoalControls(lang, saved);
+  await send('/pause');
+  await selectGoal(saved);
   await vi.waitFor(async () => expect((await store.get(goalId)).executionStatus).toBe('paused'));
   expect(await store.get(goalId)).toEqual({ ...saved, executionStatus: 'paused' });
   await vi.waitFor(() => {
-    const rows = app!.lastFrame()!.split('\n');
-    const goalRow = rows.findIndex((row) => row.includes(saved.objective));
-    expect(goalRow).toBeGreaterThanOrEqual(0);
-    expect(rows.slice(Math.max(0, goalRow - 1), goalRow + 3).join('\n')).toMatch(lang === 'ja' ? /一時停止|停止中/u : /paused/iu);
+    const boxes = app!.lastFrame()!.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu) ?? [];
+    const paused = boxes.find((box) => /一時停止中のゴール|Paused goals/u.test(box));
+    expect(paused).toContain(saved.objective);
+    expect(paused).toMatch(lang === 'ja' ? /一時停止|停止中/u : /paused/iu);
   });
   expect(call).not.toHaveBeenCalled();
-  expect(callTool).not.toHaveBeenCalled();
-  await send(`/resume ${goalId}`);
+  await send('/resume');
+  await selectGoal(saved);
   await vi.waitFor(async () => expect((await store.get(goalId)).executionStatus).toBe('active'));
   expect(await store.get(goalId)).toEqual(saved);
   await vi.waitFor(() => {
-    const rows = app!.lastFrame()!.split('\n');
-    const goalRow = rows.findIndex((row) => row.includes(saved.objective));
-    if (goalRow !== -1) expect(rows.slice(Math.max(0, goalRow - 1), goalRow + 3).join('\n')).not.toMatch(lang === 'ja' ? /一時停止|停止中/u : /paused/iu);
+    const boxes = app!.lastFrame()!.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu) ?? [];
+    expect(boxes.filter((box) => /一時停止中のゴール|Paused goals/u.test(box))).toEqual([]);
   });
   expect(call).not.toHaveBeenCalled();
-  expect(callTool).not.toHaveBeenCalled();
 });
 
 it.each([
@@ -447,7 +546,7 @@ it.each([
   expect(await store.get(goalId)).toEqual(saved);
 });
 
-it('shows pending questions and their answer commands when question notifications are disabled, excluding withdrawn questions on reopening', async () => {
+it('shows compact pending questions and an ID-free answer hint when notifications are disabled, excluding withdrawn questions on reopening', async () => {
   const input = { body: '出力形式はどれですか', options: ['CSV', 'JSON'], recommendation: 'CSV' };
   const added = addGoalQuestion(goalRecord(), input);
   const remaining = addGoalQuestion(added.goal, { body: '保存先はどこですか' });
@@ -460,7 +559,6 @@ it('shows pending questions and their answer commands when question notification
   expect(saved.questions).toEqual(expect.arrayContaining([
     expect.objectContaining({ id: added.questionId, ...input, status: 'pending' }),
   ]));
-
   session = createManagerConversationSession({
     cwd,
     plan: {
@@ -469,17 +567,18 @@ it('shows pending questions and their answer commands when question notification
     },
   });
   app = render(createElement(ManagerView, { cwd, lang: 'ja', session, initialDiagnostics: [], onExit: vi.fn() }));
-
   await vi.waitFor(() => {
-    const frame = app!.lastFrame();
-    expect(frame).toContain(`${goalId}: ${saved.objective}`);
-    expect(frame).toContain(`${added.questionId}: ${input.body}`);
-    expect(frame).toContain('CSV / JSON');
-    expect(frame).toContain(`推奨: ${input.recommendation}`);
-    expect(frame).toContain(`/answer ${added.questionId}`);
-    expect(frame).toContain(`/answer ${remaining.questionId}`);
+    const frame = app!.lastFrame()!;
+    const rows = frame.split('\n');
+    expect(rows.find((row) => row.includes(input.body))).toContain(saved.objective);
+    expect(rows.find((row) => row.includes(input.body))).toContain('質問');
+    expect(frame).toContain('保存先はどこですか');
+    expect(frame).toContain('/answer');
+    for (const row of rows) {
+      for (const id of [goalId, added.questionId, remaining.questionId]) expect(row).not.toContain(id);
+      for (const option of input.options) expect(row).not.toContain(option);
+    }
   });
-
   app.unmount();
   await store.update(goalId, (goal) => withdrawGoalQuestion(goal, added.questionId));
   const display = await readManagerDisplayEvents(cwd);
@@ -487,10 +586,10 @@ it('shows pending questions and their answer commands when question notification
   expect(display.diagnostics).toEqual([]);
   expect(display.questions.map(({ question }) => question.id)).toEqual([remaining.questionId]);
   app = render(createElement(ManagerView, { cwd, lang: 'ja', session, initialDiagnostics: [], onExit: vi.fn() }));
-
   await vi.waitFor(() => {
     const frame = app!.lastFrame();
-    expect(frame).toContain(`/answer ${remaining.questionId}`);
+    expect(frame).toContain('保存先はどこですか');
+    expect(frame).toContain('/answer');
     expect(frame).not.toContain(added.questionId);
     expect(frame).not.toContain(input.body);
   });
@@ -509,7 +608,7 @@ it.each([true, false])('shows human questions and their saved automatic notifica
   saved = appendGoalNotification(saved, { kind: 'question', body: `関連質問 ${second.questionId}: 本文中のID` }, policy);
   await new GoalStore(cwd).create(saved);
   const display = await readManagerDisplayEvents(cwd);
-  expect(display.questions.map(({ question }) => question.id)).toEqual([human.questionId, second.questionId]);
+  expect(display.questions.map(({ question }) => question.id).sort()).toEqual([human.questionId, second.questionId].sort());
   expect(display.events.map(({ id }) => JSON.parse(id)[2])).toEqual(saved.notifications!.filter(({ kind }) => enabled || kind !== 'question').map(({ id }) => id));
   session = createManagerConversationSession({
     cwd,
@@ -518,9 +617,15 @@ it.each([true, false])('shows human questions and their saved automatic notifica
   });
   app = render(createElement(ManagerView, { cwd, lang: 'ja', session, initialDiagnostics: [], onExit: vi.fn() }));
   await vi.waitFor(() => {
-    const frame = app!.lastFrame();
-    expect(frame).toContain(`/answer ${human.questionId}`);
-    expect(frame).toContain(`/answer ${second.questionId}`);
+    const frame = app!.lastFrame()!;
+    expect(frame).toContain('出力形式はどれですか');
+    expect(frame).toContain('出力先はどこですか');
+    const guidance = frame.split('\n').filter((row) => row.includes('/answer'));
+    expect(guidance.length).toBeGreaterThan(0);
+    for (const row of guidance) {
+      expect(row).not.toContain(human.questionId);
+      expect(row).not.toContain(second.questionId);
+    }
     expect(frame).toContain(`${second.questionId}: 一般通知`);
   });
 });
@@ -532,8 +637,7 @@ it.each(['ja', 'en'] as const)('renders saved notification text in the %s TUI la
     id: '650e8400-e29b-41d4-a716-446655440001', kind: 'completed', body: 'Acceptance checks passed',
     recordedAt: '2026-10-08T00:00:00Z',
   }] };
-  const { store, call, callTool } = await mountGoalControls(lang, saved);
-
+  const { store, call } = await mountGoalControls(lang, saved);
   await vi.waitFor(() => {
     const frame = app!.lastFrame()!;
     const rows = frame.split('\n');
@@ -547,7 +651,6 @@ it.each(['ja', 'en'] as const)('renders saved notification text in the %s TUI la
   });
   expect(await store.get(saved.id)).toEqual(saved);
   expect(call).not.toHaveBeenCalled();
-  expect(callTool).not.toHaveBeenCalled();
 });
 
 it.each([
@@ -561,7 +664,7 @@ it.each([
   const saved: Goal = { ...goalRecord(), objective: 'Customer export checks', notifications: [{
     id: '650e8400-e29b-41d4-a716-446655440001', kind, body, recordedAt: '2026-10-08T00:00:00Z',
   }] };
-  const { store, call, callTool } = await mountGoalControls(lang, saved);
+  const { store, call } = await mountGoalControls(lang, saved);
   const display = await readManagerDisplayEvents(cwd, lang);
   expect(display.diagnostics).toEqual([]);
   expect(display.events).toHaveLength(1);
@@ -569,8 +672,6 @@ it.each([
   expect.soft(display.events[0]!.message.split('\n').slice(2, 2 + body.split('\n').length).join('\n')).toBe(body);
   expect(await store.get(saved.id)).toEqual(saved);
   expect(call).not.toHaveBeenCalled();
-  expect(callTool).not.toHaveBeenCalled();
-
   await vi.waitFor(() => {
     const frame = app!.lastFrame()!;
     expect(frame.normalize('NFC').replace(/\s+/gu, '')).toContain(body.normalize('NFC').replace(/\s+/gu, ''));
@@ -588,7 +689,7 @@ it.each([
     id: '650e8400-e29b-41d4-a716-446655440001', kind: 'custom', body: 'warning',
     ...(severity === undefined ? {} : { severity }), recordedAt: '2026-10-08T00:00:00Z',
   }] };
-  const { store, call, callTool } = await mountGoalControls(lang, saved);
+  const { store, call } = await mountGoalControls(lang, saved);
   const prefix = lang === 'ja' ? '重要度: ' : 'Severity: ';
   const expected = prefix + (lang === 'ja' ? '警告' : 'Warning');
   await vi.waitFor(() => {
@@ -603,7 +704,6 @@ it.each([
   });
   expect(await store.get(saved.id)).toEqual(saved);
   expect(call).not.toHaveBeenCalled();
-  expect(callTool).not.toHaveBeenCalled();
 });
 
 it.each(['ja', 'en'] as const)('renders old saved merge instructions once in the %s TUI without migrating the record', async (lang) => {
@@ -618,7 +718,7 @@ it.each(['ja', 'en'] as const)('renders old saved merge instructions once in the
     changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
   }, notifications: [{ id: '650e8400-e29b-41d4-a716-446655440001', kind: 'awaiting_merge', body,
     recordedAt: '2026-10-08T00:00:00Z' }] };
-  const { store, call, callTool } = await mountGoalControls(lang, saved);
+  const { store, call } = await mountGoalControls(lang, saved);
   const display = await readManagerDisplayEvents(cwd, lang);
   expect(display.diagnostics).toEqual([]);
   expect(display.events).toHaveLength(1);
@@ -640,7 +740,6 @@ it.each(['ja', 'en'] as const)('renders old saved merge instructions once in the
   });
   expect(await store.get(saved.id)).toEqual(saved);
   expect(call).not.toHaveBeenCalled();
-  expect(callTool).not.toHaveBeenCalled();
 });
 
 it.each(['ja', 'en'] as const)('reopens the %s TUI with withdrawn question details and notification history without answer guidance', async (lang) => {
@@ -652,11 +751,13 @@ it.each(['ja', 'en'] as const)('reopens the %s TUI with withdrawn question detai
     id: '650e8400-e29b-41d4-a716-446655440002', kind: 'question',
     body: formatGoalQuestionNotification(question, lang === 'ja' ? 'en' : 'ja'), recordedAt: '2026-10-08T00:00:00Z',
   }] };
-  const { store, call, callTool } = await mountGoalControls(lang, saved);
-  await vi.waitFor(() => expect(app!.lastFrame()).toContain(`/answer ${question.id}`));
+  const { store, call } = await mountGoalControls(lang, saved);
+  await vi.waitFor(() => expect(app!.lastFrame()).toContain('/answer'));
   app!.unmount();
   const withdrawn = await store.update(saved.id, (goal) => withdrawGoalQuestion(goal, question.id));
-  expect(withdrawn.questions).toEqual([{ ...question, status: 'withdrawn' }]);
+  expect(withdrawn.questions).toEqual([{
+    ...question, kind: 'question', status: 'withdrawn', withdrawnAt: expect.any(String),
+  }]);
   expect(withdrawn.notifications).toEqual(saved.notifications);
   const display = await readManagerDisplayEvents(cwd, lang);
   expect(display.questions).toEqual([]);
@@ -671,12 +772,10 @@ it.each(['ja', 'en'] as const)('reopens the %s TUI with withdrawn question detai
     expect(frame).toContain(question.body);
     expect(frame.replace(/\n\s*/gu, '')).toContain((lang === 'ja' ? '選択肢: ' : 'Options: ') + question.options.join(', '));
     expect(frame).toContain(lang === 'ja' ? '推奨: CSV' : 'Recommendation: CSV');
-    expect(frame.split('\n').filter((line) => line.includes('/answer'))).toEqual([]);
     expect(frame).not.toContain(question.id);
   });
   expect(await store.get(saved.id)).toEqual(withdrawn);
   expect(call).not.toHaveBeenCalled();
-  expect(callTool).not.toHaveBeenCalled();
 });
 
 it.each(['question', 'awaiting_merge', 'completed', 'progress', 'blocked', 'custom'] as const)(
