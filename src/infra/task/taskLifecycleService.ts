@@ -191,7 +191,8 @@ export class TaskLifecycleService {
         const goalStore = new GoalStore(this.projectDir);
         const blockedByGoal = new Map<string, boolean>();
         const tasks = current.tasks.map((task) => {
-          if (remaining > 0 && task.status === 'pending' && (this.goalTasksOnly !== true || task.goal_id !== undefined)) {
+          if (remaining > 0 && task.status === 'pending' && task.deletion === undefined
+            && (this.goalTasksOnly !== true || task.goal_id !== undefined)) {
             if (task.goal_id !== undefined) {
               try {
                 let blocked = blockedByGoal.get(task.goal_id);

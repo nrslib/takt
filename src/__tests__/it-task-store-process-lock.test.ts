@@ -109,11 +109,14 @@ describe('TaskStore process lock', () => {
       if (first === 'delete') {
         await waitUntilAllWorkersReady([join(projectDir, 'cleanup-started')]);
         const lockFile = join(projectDir, '.takt', 'tasks.yaml.lock');
-        expect(JSON.parse(readFileSync(lockFile, 'utf8'))).toMatchObject({ pid: deletion.child.pid });
+        expect(existsSync(lockFile)).toBe(false);
         start('claim');
-        await waitUntilAllWorkersReady([join(projectDir, 'claim-attempt')]);
-        expect(JSON.parse(readFileSync(lockFile, 'utf8'))).toMatchObject({ pid: deletion.child.pid });
-        expect(existsSync(join(projectDir, 'claim-result'))).toBe(false);
+        await waitUntilAllWorkersReady([
+          join(projectDir, 'claim-attempt'),
+          join(projectDir, 'claim-result'),
+        ]);
+        expect(existsSync(lockFile)).toBe(false);
+        expect(JSON.parse(readFileSync(join(projectDir, 'claim-result'), 'utf8'))).toEqual([]);
         expect(parseYaml(readFileSync(runner.getTasksFilePath(), 'utf8'))).toMatchObject({
           tasks: [{ name: target.name, status: 'pending' }],
         });

@@ -147,6 +147,22 @@ describe('TaskRunner - deleteTask', () => {
     expect(loadTasksFile(testDir).tasks).toEqual([]);
   });
 
+  it('releases the tasks.yaml lock before running cleanup', () => {
+    const target = runner.addTask('Task A');
+    let siblingName: string | undefined;
+
+    runner.deleteTask(target.name, 'pending', () => {
+      siblingName = runner.addTask('Task B').name;
+      expect(loadTasksFile(testDir).tasks).toMatchObject([
+        { name: target.name, status: 'pending' },
+        { name: siblingName, status: 'pending' },
+      ]);
+    });
+
+    expect(siblingName).toBeDefined();
+    expect(loadTasksFile(testDir).tasks).toMatchObject([{ name: siblingName, status: 'pending' }]);
+  });
+
   it('does not run cleanup when the current status differs', () => {
     const target = runner.addTask('Task A');
     runner.claimNextTasks(1);
