@@ -305,15 +305,15 @@ export function ConversationView({
   if (stringWidth(`${activityStart} ${elapsed} ${interruptHint}`) + 2 > columns) {
     interruptHint = ui.interruptHintMinimal;
   }
-  const statusSuffix = ` ${elapsed} ${interruptHint}`;
-  const activityColumns = columns - 2 - stringWidth(statusSuffix);
+  const statusSuffix = `${elapsed} ${interruptHint}`;
+  const activityColumns = columns - 2 - stringWidth(statusSuffix) - 1;
   let displayedActivity = activityColumns > 0
     ? truncateStatusText(activityLabel, activityColumns)
     : '';
   if (displayedActivity === '…' && stringWidth(activityStart) <= activityColumns) {
     displayedActivity = activityStart;
   }
-  const requiredStatus = `${displayedActivity}${statusSuffix}`;
+  const requiredStatus = displayedActivity === '' ? statusSuffix : `${displayedActivity} ${statusSuffix}`;
   const rawInputSummary = activeTool !== undefined
     ? truncateStatusText(activeTool.inputSummary, columns - 2 - stringWidth(requiredStatus) - 1)
     : '';

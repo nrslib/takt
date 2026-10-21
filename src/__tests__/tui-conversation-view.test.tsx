@@ -2164,7 +2164,7 @@ describe('ConversationView activity status', () => {
           await resize(columns);
           const row = await currentStatus();
           if (columns === 9) {
-            expect(row).toMatch(/^\S  0s Esc$/u);
+            expect(row.trimEnd()).toMatch(/^\S 0s Esc$/u);
           } else {
             expect(row).toMatch(/^\S R/u);
             expect(row).toContain(' 0s ');
@@ -2173,7 +2173,13 @@ describe('ConversationView activity status', () => {
           expect(row).not.toContain('a.ts');
           if (columns === 21) expect(row).toContain(`0s ${ui.interruptHintCompact}`);
         }
-        vi.advanceTimersByTime(62_000);
+        vi.advanceTimersByTime(10_000);
+        await flushFrames();
+        const tenSecondRow = await currentStatus();
+        expect(tenSecondRow).toMatch(/^\S 10s Esc$/u);
+        expect(stringWidth(tenSecondRow)).toBe(9);
+
+        vi.advanceTimersByTime(52_000);
         await flushFrames();
         for (const columns of [14, 17]) {
           if (stdout.columns !== columns) await resize(columns);
