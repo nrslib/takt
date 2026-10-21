@@ -161,7 +161,7 @@ TAKT では Windows を副次プラットフォームとして扱う。主要な
 
 ## セッション管理
 
-エージェントセッションは cwd と provider ごとに保存される。worktree/clone 実行時はセッション再開をスキップする。
+エージェントセッションは cwd と provider ごとに保存される。worktree/clone 実行では provider fallback を除く `session: continue` の step が同一 run 内で同じクローンに紐づく同一 persona・provider・model の保存済み session を再開し、別クローンやプロジェクトルートの session は使わない。既存クローンで retry・requeue・instruct による新しい試行を始めると、各 persona は新規 session で開始し、後続 step でその session を継続する。
 
 通常の Phase 1 応答で `sessionId` が欠落しているだけなら、既存セッションを直ちに破棄する根拠にはならない。既存の resume context を継続してよい経路では、古い sessionId を維持する。
 

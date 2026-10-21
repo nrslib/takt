@@ -403,7 +403,7 @@ worktree 実行中、TAKT は2つのディレクトリ参照を管理します�
 | `cwd`（クローンパス） | エージェントの実行場所、レポートの書き込み先 |
 | `projectCwd`（プロジェクトルート） | ログとセッションデータの保存先 |
 
-レポートは `cwd/.takt/runs/{slug}/reports/`（クローン内）に書き込まれ、エージェントがメインリポジトリのパスを発見することを防ぎます。`cwd !== projectCwd` の場合、クロスディレクトリ汚染を避けるためセッション再開はスキップされます。
+レポートは `cwd/.takt/runs/{slug}/reports/`（クローン内）に書き込まれ、エージェントがメインリポジトリのパスを発見することを防ぎます。provider fallback を除く `session: continue` の step は同一 run 内で同じクローンに紐づく同一 persona・provider・model の保存済み session を再開します。別のクローンやプロジェクトルートの session は使いません。retry・requeue・instruct で既存クローンの新しい試行を始める場合、各 persona は新規 session で開始し、後続 step でその session を継続します。
 
 ## セッションログ
 

@@ -1,4 +1,4 @@
-import { parseScopeRef } from 'faceted-prompting';
+import { parseScopeRef } from '#faceted-prompting';
 import {
   getBuiltinProviderOptionsDir,
   getGlobalProviderOptionsDir,

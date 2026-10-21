@@ -1,6 +1,7 @@
 import type { Stats } from 'node:fs';
 import {
   assertPrivateArtifactImmediateChild,
+  PrivateArtifactHelperError,
   runPrivateArtifactHelper,
   serializePrivateArtifactIdentity,
   type SerializedPrivateArtifactIdentity,
@@ -48,6 +49,10 @@ try {
   process.stdout.write(JSON.stringify({ dev: String(created.dev), ino: String(created.ino) }));
 } catch (error) {
   process.stderr.write(error instanceof Error ? error.message : String(error));
+  const source = error?.code ? error : error?.cause;
+  if (typeof source?.code === 'string') {
+    process.stdout.write(JSON.stringify({ code: source.code, errno: source.errno }));
+  }
   process.exitCode = 1;
 }
 `;
@@ -168,6 +173,10 @@ try {
   }
 } catch (error) {
   process.stderr.write(error instanceof Error ? error.message : String(error));
+  const source = error?.code ? error : error?.cause;
+  if (typeof source?.code === 'string') {
+    process.stdout.write(JSON.stringify({ code: source.code, errno: source.errno }));
+  }
   process.exitCode = 1;
 } finally {
   try {
@@ -196,6 +205,12 @@ export class PrivateArtifactCreationConflictError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);
     this.name = 'PrivateArtifactCreationConflictError';
+  }
+}
+
+export class PrivateArtifactCreationFailedError extends Error {
+  constructor(message: string, readonly code: string, readonly errno: number | undefined, options: ErrorOptions) {
+    super(message, options);
   }
 }
 
@@ -238,6 +253,9 @@ export function createPrivateArtifact(
     const message = error instanceof Error ? error.message : String(error);
     if (message.startsWith('EEXIST:')) {
       throw new PrivateArtifactCreationConflictError(message, { cause: error });
+    }
+    if (error instanceof PrivateArtifactHelperError && error.code !== undefined) {
+      throw new PrivateArtifactCreationFailedError(message, error.code, error.errno, { cause: error });
     }
     throw error;
   }

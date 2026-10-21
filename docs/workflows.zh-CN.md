@@ -729,7 +729,7 @@ steps:
 | `persona` | - | persona key 或裸 facet 名称 |
 | `persona_name` | - | 日志和 prompt 中的显示名，不影响 routing |
 | `session_key` | - | normal agent step 和 parallel 子 step 的显式 session key；provider 会追加到 runtime key |
-| `session` | `continue` | `continue` 恢复 session，`refresh` 不恢复，`compact` 恢复后在 Phase 1 前请求 provider 压缩 |
+| `session` | `continue` | 适用于 normal agent step 和 parallel 子 step。`continue` 恢复已保存的 persona session；在 worktree clone 中，仅在同一 run 内恢复相同 persona、provider 和 model 的 session，不会使用其他 clone 或项目根目录的 session。通过 retry、requeue 或 instruct 在现有 clone 中开始新的尝试时，每个 persona 首次执行都创建新 session，后续 step 继续该新 session。provider fallback 不恢复已保存的 session。`refresh` 不恢复，`compact` 恢复后仅在 Phase 1 前请求 provider 压缩，不在 report 或 status phase 前压缩。不支持压缩的 provider 直接继续；压缩失败时不执行 Phase 1，并丢弃已保存的 session |
 | `requires_user_input` | `false` | 标记可等待用户输入的 normal agent step；需要交互模式和 input handler |
 | `tags` | - | 按顺序与配置中的 `provider_routing.tags` 匹配 |
 | `policy` | - | policy key 或数组 |
@@ -1015,7 +1015,9 @@ follow-up 的错误、限流、blocked 或异常都不会由 Companion 处理再
 
 ### Caccia system effect
 
-此 effect 要求 `takt merge` 或 `enqueue_task mode: from_pr` 任务提供与目标 PR 一致的隔离 clone 执行上下文。`pr` 接受正整数或完整模板引用，不接受普通字符串中的嵌入引用。effect 使用既有 `caccia.enabled`、`wait_timeout_ms`、`max_iterations` 和 `workflow` 配置；关闭或未配置时立即返回，无需等待。独立命令 `takt caccia <PR>` 不受 `enabled` 限制。
+此 effect 要求 `takt merge` 或 `enqueue_task mode: from_pr` 任务提供与目标 PR 一致的隔离 clone 执行上下文。`pr` 接受正整数或完整模板引用，不接受普通字符串中的嵌入引用。effect 使用既有 `caccia.enabled`、`wait_timeout_ms`、`max_iterations` 和 `workflow` 配置；关闭或未配置时跳过 CodeRabbit 审查等待。独立命令 `takt caccia <PR>` 不受 `enabled` 限制。
+
+在 GitHub 上执行前，effect 将 PR head 与 clone 开始时的 HEAD 比较。不一致时每隔2秒重新获取 PR 信息，包含获取时间在内最多等待60秒。同一次 PR 信息获取中观测到不同 head 时，也在同一期限内重试。只有与预期 SHA 一致时才继续；到期仍不一致则返回包含预期 SHA 和最后观测到的 SHA 的 `error`。如果最后一次观测不一致，还会显示冲突的两个 SHA。PR 身份信息变化、认证失败等其他获取异常或取消都会立即导致失败。如果存在执行元数据和 push 记录器，记录跳过结果前也会执行相同检查，因此关闭或未配置时仍可能等待 GitHub head 更新。此固定等待独立于 `wait_timeout_ms` 控制的审查等待，不适用于非 GitHub 的跳过检查或执行结束后的 head 验证。
 
 ```yaml
   - name: caccia
