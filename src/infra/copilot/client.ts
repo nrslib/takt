@@ -356,15 +356,15 @@ function isAuthenticationError(error: CopilotExecError): boolean {
   return patterns.some((pattern) => message.includes(pattern));
 }
 
-function findRateLimitMessage(error: CopilotExecError): { message: string; classification: RateLimitClass } | undefined {
-  for (const line of parseValidJsonLines(error.stdout ?? '')) {
+function findRateLimitMessage(output: Pick<CopilotExecError, 'stdout' | 'stderr'>): { message: string; classification: RateLimitClass } | undefined {
+  for (const line of parseValidJsonLines(output.stdout ?? '')) {
     const root = toRecord(line);
     if (root?.type !== 'session.error') {
       continue;
     }
     const data = extractCopilotEventData(root);
     const message = firstNonEmptyString([data.message]);
-    const detail = [message, error.stderr].filter((value) => value !== undefined).join('\n');
+    const detail = [message, output.stderr].filter((value) => value !== undefined).join('\n');
     const classification = classifyRateLimitError(detail, data.statusCode === 429 || data.statusCode === '429'
       || data.errorType === 'rate_limit' || data.errorCode === 'rate_limited' ? 429 : undefined);
     if (
@@ -373,7 +373,7 @@ function findRateLimitMessage(error: CopilotExecError): { message: string; class
       return { message: trimDetail(detail, 'Copilot rate limit exceeded'), classification };
     }
   }
-  const stderr = error.stderr ?? '';
+  const stderr = output.stderr ?? '';
   const classification = classifyRateLimitError(stderr);
   return classification !== 'NotRateLimit' ? { message: trimDetail(stderr), classification } : undefined;
 }
@@ -612,6 +612,16 @@ async function executeCopilotCall(
     });
     if (pendingLine.trim().length > 0) {
       processLine(pendingLine);
+    }
+    const rateLimitMessage = findRateLimitMessage({ stdout });
+    if (rateLimitMessage !== undefined) {
+      return {
+        status: 'rate_limited',
+        content: rateLimitMessage.message,
+        error: rateLimitMessage.message,
+        rateLimitClass: rateLimitMessage.classification,
+        sessionId: resumableSessionId,
+      };
     }
     const parsed = parseCopilotOutput(stdout);
     if ('error' in parsed) {

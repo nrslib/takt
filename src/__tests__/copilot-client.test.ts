@@ -504,6 +504,28 @@ describe('callCopilot', () => {
     },
   );
 
+  it('終了コード0でもsession.errorの429を部分回答より優先して再試行する', async () => {
+    vi.useFakeTimers();
+    const throttled = [
+      { type: 'assistant.message', data: { content: 'partial answer' } },
+      { type: 'session.error', data: { statusCode: 429, message: 'request rejected' } },
+    ].map((event) => JSON.stringify(event)).join('\n');
+    mockSpawnWithScenario([
+      { code: 0, stdout: `${throttled}\n` },
+      { code: 0, stdout: `${throttled}\n` },
+      { code: 0, stdout: 'final answer' },
+    ]);
+    const onStream = vi.fn();
+    const pending = callCopilot('coder', 'original prompt', { cwd: '/repo', onStream });
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(await pending).toMatchObject({ status: 'done', content: 'final answer' });
+    expect(mockSpawn).toHaveBeenCalledTimes(3);
+    expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toEqual([
+      [expect.objectContaining({ data: expect.objectContaining({ success: true, result: 'final answer' }) })],
+    ]);
+  });
+
   it('429で失敗した試行のshareセッションを成功結果へ混入させない', async () => {
     vi.useFakeTimers();
     const shareFiles = new Map<string, string>();
