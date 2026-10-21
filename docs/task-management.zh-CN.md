@@ -220,7 +220,7 @@ takt list
 | **Create PR** | 将失败 run 的修改提交并 push，创建 pull request |
 | **Delete** | 删除失败任务记录 |
 
-在 CLI/TUI 的 assistant 和 grill-me 对话中，`/requeue [补充说明]` 根据对话确定 failed 或 exceeded 任务。补充说明作为对话最后的用户发言传给任务选择和起点选择，不会与任务名称进行机械匹配。AI 无法确定目标或判断失败时，会显示候选任务列表供用户选择；无法确定起点时，也会显示可用起点列表。显示任务名称、摘要、workflow 和起点后请求 Y/n 确认。确认后将任务置为 `pending`，不修改 `order.md`。取消选择或确认不会修改任务，结果会记录在对话中；重新排队成功的结果也会连同任务名称记录下来。`/retry [补充说明]` 保持原有行为：根据对话确定 failed 任务，显示完整修订 order，并让用户选择 **Save task** 或 **Continue**。Save task 会归档旧版并将任务置为 `pending`；Continue 不修改任务并返回对话。`/retry` 的目标或起点不明确时会返回提示；两种命令都在没有候选时返回提示。两种命令都需要交互式终端，没有 TTY 时不会显示选择或修改任务，也不会立即启动 workflow。在 persona 对话和 Web UI 中，这些命令文本作为普通消息处理。`takt resume` 中面向直接 run 的 `/retry` 保持独立。
+在 CLI/TUI 的 assistant 和 grill-me 对话中，`/requeue [补充说明]` 根据对话确定 failed 或 exceeded 任务，`/retry [补充说明]` 根据对话确定 failed 任务。两种命令都使用独立于对话 session 的 AI 调用，传入最近达成的一致意见、补充说明、候选的完整路径和子 workflow 标题说明。补充说明按上下文解释。响应格式错误或值不在候选中时，每个选择阶段只重新询问一次；仍然无效时切换到手动菜单，并区分 JSON 格式错误、未知任务名称和未知起点 ID。无法判断或 provider 失败时直接进入手动选择。显示任务名称、摘要、workflow 和起点后请求 Y/n 确认。对于 `/requeue`，确认后将任务置为 `pending`，不修改 `order.md`。取消选择或确认不会修改任务，结果会记录在对话中；重新排队成功的结果也会连同任务名称记录下来。`/retry [补充说明]` 根据对话确定 failed 任务，显示完整修订 order，并让用户选择 **Save task** 或 **Continue**。Save task 会归档旧版并将任务置为 `pending`；Continue 不修改任务并返回对话。两种命令都在没有候选时返回提示。两种命令都需要交互式终端，没有 TTY 时不会显示选择或修改任务，也不会立即启动 workflow。在 persona 对话和 Web UI 中，这些命令文本作为普通消息处理。`takt resume` 中面向直接 run 的 `/retry` 保持独立。
 
 ### Pending 任务的操作
 
@@ -335,6 +335,8 @@ takt list --non-interactive --action try --branch takt/my-branch
 
 合并 builtin 明确执行 Caccia：`merge-review` 按 `review → caccia → wait_ci → 评价评论` 执行，`merge-review-fix` 和 `merge-review-fix-simple` 按 `review/fix → commit_and_push → caccia → wait_ci → merge_pr` 执行。`success` 与 `skipped` 继续等待返回 head 的 CI。`limit` 评论未解决线程数后以 COMPLETE 结束，不合并；执行错误评论 `error` 后以 ABORT 结束。push、任务后处理和 Pipeline 不再隐式启动 Caccia。设置 `merge.auto_start: true` 时，PR 发布后启动合并 workflow，由其明确的 effect 执行 Caccia。
 
+`merge-review-fix` 和 `merge-review-fix-simple` 在每次 CI 确定失败后，使用失败检查、run/attempt/job 引用、日志内容、PR 累计差异及相关代码进行调查。仓库缺陷（包括不稳定测试及 main 上也存在的失败）在当前 PR 工作树中根本修复，经只读审查后执行 push → Caccia → CI，最多两轮。只有证据证明是外部原因时才允许重跑一次；该预算独立于修复轮数，两轮修复后仍可使用。重跑后等待同一 HEAD 的新 attempt，并重新检查所有检查及既有合并条件。证据不足、两轮修复后仍有缺陷、修复审查 REJECT 或重跑失败时，将次数、最后失败的检查及引用、调查要点评论到 PR，然后 ABORT。调查和修复报告保留在 run 中。初次成功和 CI timeout 行为不变，`merge-review` 仍只发表评论。GitHub Actions 日志及重跑权限不足、Provider 不支持时会明确报告。
+
 Caccia 会等待 CodeRabbit 的审查，只处理由 `coderabbitai` 发起且尚未解决的线程。每轮都在临时克隆中运行指定 workflow，将判断报告保存在 `.takt/runs/`，推送修复后只解决本轮判断过的线程，再等待 CodeRabbit 审查已推送的 commit。由人工发起的线程会继续保持未解决。Caccia 不会回复审查评论。成功和达到迭代上限的结果会写入日志，并通过已配置的通知路径发送。
 
 `wait_timeout_ms` 规定初次审查和每次推送后复审的等待期限，重新请求审查也包含在内。若审查限额通知给出的可重试时间早于期限，Caccia 会在该时间到达时通过 `@coderabbitai review` 评论请求一次审查；若可重试时间为期限或更晚，则立即跳过。收到限额通知后，审查到期限仍未完成时也会跳过。未收到限额通知时，初次等待超时会跳过，推送后的等待超时会记录为错误。system effect 返回 `success: false` 与 `error`；单独运行 `takt caccia` 时，跳过或出错都会以非零状态退出。
@@ -377,7 +379,7 @@ YAML 字段仍叫 `worktree` 是为了兼容；内部使用独立 clone，而不
 | `cwd`（clone 路径） | agent 运行位置和 report 写入位置 |
 | `projectCwd`（项目根目录） | 日志和 session 数据存储位置 |
 
-worktree 执行期间，report 写入 `cwd/.takt/runs/{slug}/reports/`，防止 agent 发现主仓库路径。当 `cwd !== projectCwd` 时跳过 session resume，以避免跨目录污染。
+worktree 执行期间，report 写入 `cwd/.takt/runs/{slug}/reports/`，防止 agent 发现主仓库路径。使用 `session: continue` 且未发生 provider fallback 时，同一 run 内的后续 step 会恢复与当前 clone 关联的相同 persona、provider 和 model 的已保存 session，不会使用其他 clone 或项目根目录的 session。通过 retry、requeue 或 instruct 在现有 clone 中开始新的尝试时，每个 persona 首次执行都创建新 session，后续 step 继续该 session。
 
 ## Session 日志
 

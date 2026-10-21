@@ -251,6 +251,8 @@ Dynamic parallel and `dynamic_facets` selectors use read-only mode with only `Re
 | `sync_conflict_resolver` | object | `{ auto_approve_tools: false }` | Sync conflict resolver policy |
 | `observability` | object | disabled | Opt-in OpenTelemetry foundation. `enabled` initializes the SDK, `monitor` writes workflow metrics to `.takt/runs/<run>/monitor.json`, `session_log_exporter` writes a shadow session log from spans, and `usage_events_phase` writes phase-level usage events to `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl`. With `enabled: true` and `OTEL_EXPORTER_OTLP_ENDPOINT`, TAKT also sends spans and metrics through OTLP using standard `OTEL_EXPORTER_OTLP_*` environment variables; TAKT does not add an OTLP config key. |
 
+Codex, Claude SDK, claude-headless, and Copilot retry transient HTTP 429 failures with the same provider up to eight times, waiting 1, 2, 4, 8, 16, 30, 30, and 30 seconds. Codex, Claude SDK, claude-headless, Copilot, and OpenCode do not automatically retry a 429 after observing a tool execution event, so workspace operations are not repeated. OpenCode shares its attempt budget with other transient failures and retries up to twice (three attempts total), waiting 250ms and 500ms. A successful retry completes normally. Explicit usage, credit, or spend-cap exhaustion proceeds immediately to `rate_limit_fallback.switch_chain`; persistent throttling proceeds there after the retry budget is consumed. Exhaustion takes precedence when both occur in the same failure. Without a fallback provider, execution aborts as before. There are no retry configuration keys, and existing retry conditions for other failures remain unchanged.
+
 ## Caccia Review Loop
 
 The optional `caccia` object is accepted in both `~/.takt/config.yaml` and `.takt/config.yaml`:
@@ -432,6 +434,30 @@ same config resolution order as other env-backed task execution settings:
 number parsing. Non-numeric values, negative values, and non-integers fail config
 validation. `TAKT_IGNORE_EXCEED` accepts only `true` or `false`; any other value
 fails config validation.
+
+## Alloy concurrency and JVM settings
+
+These environment variables are read once at the start of verification. They are not YAML keys and do not apply to Quint-only verification.
+
+| Environment variable | Default | Format |
+|----------------------|---------|--------|
+| `TAKT_ALLOY_CONCURRENCY` | `2` | Positive safe integer; `1` runs sequentially |
+| `TAKT_ALLOY_HEAP` | `4g` | Positive integer followed by lowercase `k`, `m`, or `g` |
+| `TAKT_ALLOY_STACK` | `64m` | Positive integer followed by lowercase `k`, `m`, or `g` |
+
+Only unset values use defaults; empty or invalid values produce an error naming the variable. Settings stay fixed for one verification. All Alloy JVM launches, including command enumeration, receive `-Xmx4g -Xss64m` by default. Overrides replace the defaults without duplicate arguments.
+
+```bash
+TAKT_ALLOY_CONCURRENCY=1 TAKT_ALLOY_HEAP=2g TAKT_ALLOY_STACK=128m takt
+```
+
+If memory is limited, lower the heap limit or set concurrency to 1. Use these TAKT-specific settings to change the JVM arguments instead of relying on `JAVA_TOOL_OPTIONS` alone.
+
+`assistant.formal_spec.model_check_timeout_seconds` applies separately to each Alloy command (default: 900 seconds). There is no overall timeout; failures and timeouts do not prevent the remaining commands from running. A free slot starts the next command immediately. Each command result identifies a timeout with `timedOut: true`.
+
+Failed, errored, or timed-out verification retains specifications and logs under `.takt/runs/verify-*/` and reports the directory in the result message. Retained directories are excluded from automatic cleanup; remove them manually when no longer needed. Successful verification artifacts are deleted after result interpretation.
+
+If writing the retention marker fails, TAKT moves the ownership marker to the retention marker and reports the directory and write error. If the move also fails, TAKT leaves the ownership marker in place and reports that retention could not be confirmed, together with the directory and both errors. The remaining ownership marker protects the directory from automatic cleanup even after the owner Node process exits. Copy any needed artifacts manually.
 
 ## Environment Variable Overrides
 

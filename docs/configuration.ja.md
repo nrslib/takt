@@ -251,6 +251,8 @@ dynamic parallel と `dynamic_facets` の selector は読み取り専用で、`R
 | `sync_conflict_resolver` | object | `{ auto_approve_tools: false }` | sync conflict resolver ポリシー |
 | `observability` | object | 無効 | OpenTelemetry foundation の opt-in 設定。`enabled` で SDK を初期化し、`monitor` は workflow metric を `.takt/runs/<run>/monitor.json` に出力し、`session_log_exporter` は span 由来の shadow session log を出力します。`usage_events_phase` は phase 粒度の usage events を `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl` に出力します。`enabled: true` と `OTEL_EXPORTER_OTLP_ENDPOINT` が揃うと、TAKT は標準の `OTEL_EXPORTER_OTLP_*` 環境変数で span と metric も OTLP 送信します。TAKT 独自の OTLP config キーはありません。 |
 
+Codex、Claude SDK、claude-headless、Copilotの一時的なHTTP 429は同じproviderで最大8回再試行します。待機時間は1、2、4、8、16、30、30、30秒です。Codex、Claude SDK、claude-headless、Copilot、OpenCodeでツール実行イベントを観測した試行では429を受けても操作の重複を防ぐため自動再試行しません。OpenCodeは通常の一時障害と試行予算を共有し、250ms・500ms待機して最大2回再試行します（合計3試行）。再試行で成功すれば通常完了します。使用枠・クレジット・spend capの使い切り通知は再試行せず、直ちに`rate_limit_fallback.switch_chain`へ進みます。ツールイベントを観測せずに429が続く場合は再試行予算を消費してから同じ切り替え処理へ進みます。使い切りと429の両方を含む失敗は使い切りとして扱います。切り替え先がなければ従来どおり停止します。再試行の設定項目はありません。429以外の既存の再試行条件は維持します。
+
 ## Caccia レビューループ
 
 `caccia` は `~/.takt/config.yaml` と `.takt/config.yaml` のどちらにも設定できます。
@@ -428,6 +430,30 @@ OpenCode の `event_limit` は既定で 500,000、`text_byte_limit` は 1 MiB、
 数値でない値、負数、整数でない値は config validation に失敗します。
 `TAKT_IGNORE_EXCEED` は `true` または `false` のみ受け付け、それ以外の値は config
 validation に失敗します。
+
+## Alloyの並列実行とJVM設定
+
+次の環境変数を検証開始時に読み取ります。YAMLの設定キーではありません。Quintだけの検証には適用しません。
+
+| 環境変数 | 既定値 | 入力形式 |
+|----------|--------|----------|
+| `TAKT_ALLOY_CONCURRENCY` | `2` | 正の安全な整数。`1`で順次実行 |
+| `TAKT_ALLOY_HEAP` | `4g` | 正の整数と小文字の単位`k`・`m`・`g` |
+| `TAKT_ALLOY_STACK` | `64m` | 正の整数と小文字の単位`k`・`m`・`g` |
+
+未指定時だけ既定値を使い、空文字列や不正値は変数名を含むエラーになります。設定値は検証1回の間で固定されます。Alloyのコマンド列挙と各コマンドのJVMには、既定で`-Xmx4g -Xss64m`を渡します。上書きすると指定値だけを渡します。
+
+```bash
+TAKT_ALLOY_CONCURRENCY=1 TAKT_ALLOY_HEAP=2g TAKT_ALLOY_STACK=128m takt
+```
+
+メモリが不足する場合はヒープ上限を下げるか、同時実行数を1にしてください。上記のTAKT専用設定でJVM引数を変更できます。`JAVA_TOOL_OPTIONS`だけでこれらの値を上書きしないでください。
+
+`assistant.formal_spec.model_check_timeout_seconds`はAlloyの各コマンドに個別に適用されます（既定900秒）。全体の上限時間は設けず、時間切れや失敗があっても残りを実行します。空いた枠には次のコマンドをすぐに投入します。各コマンド結果の`timedOut: true`が時間切れを示します。
+
+検証の失敗・エラー・時間切れでは`.takt/runs/verify-*/`の仕様とログを保持し、保存先を結果メッセージに表示します。保持したディレクトリは自動掃除の対象外です。不要になったら手動で削除してください。成功時は結果の解釈が終わってから削除します。
+
+保持マーカーの書き込みに失敗した場合は所有権マーカーを保持マーカーへ移動し、保存先と書き込みエラーを通知します。移動にも失敗した場合は所有権マーカーを残し、保持を確定できない旨と保存先、両方のエラーを通知します。残った所有権マーカーは所有するNodeプロセスの終了後もディレクトリを自動掃除から保護します。必要な成果物を手動で退避してください。
 
 ## 環境変数上書き
 

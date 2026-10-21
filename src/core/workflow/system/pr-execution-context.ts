@@ -1,10 +1,12 @@
 import type { MergeMethod } from '../../models/config-types.js';
+import type { PrCiCheck, PrCiRerun } from './pr-ci.js';
 
 export const PR_STATUS_TIMEOUT_MS = 15_000;
 
 export interface PrStatusFetchOptions {
   readonly timeoutMs?: number;
   readonly signal?: AbortSignal;
+  readonly rerun?: PrCiRerun;
 }
 
 export class PrStatusTimeoutError extends Error {
@@ -35,7 +37,7 @@ export interface PrExecutionContext {
 export interface PrStatus {
   number: number;
   headSha: string;
-  ci: { finished: boolean; passed: boolean };
+  ci: { finished: boolean; passed: boolean; checks?: PrCiCheck[]; rerunHeadChange?: { reason: string } };
   mergeable: string;
   mergeStateStatus: string;
   reviewDecision: string;

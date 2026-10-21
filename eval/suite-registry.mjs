@@ -7,6 +7,21 @@ const evalDir = dirname(fileURLToPath(import.meta.url));
 const CLASSIFICATIONS = [
   {
     tier: 'active',
+    reason: 'CI回復の調査分類と根本修正レビューを本番ファセットで評価する',
+    suites: ['merge-ci-investigation', 'merge-ci-review'],
+  },
+  {
+    tier: 'active',
+    reason: 'ページに閉じた状態・操作判断の誤検知と、別の状態操作層への委譲の見逃しを測る',
+    suites: ['frontend-mediator-review'],
+  },
+  {
+    tier: 'active',
+    reason: 'frontend implement がページの操作判断を独立した Mediator 層へ委譲する生成と、表示部品での誤発火を測る',
+    suites: ['frontend-mediator-coder'],
+  },
+  {
+    tier: 'active',
     reason: '入力の主体・並行処理・量の根拠と過去の工程逸脱を、発火する例としない例で測る',
     suites: ['finding-realistic-premise'],
   },
@@ -209,6 +224,14 @@ const CLASSIFICATIONS = [
 ];
 
 const EXECUTION_OVERRIDES = {
+  'merge-ci-investigation': {
+    defaultEligible: false, credentials: ['codex'], cost: 'high',
+    reason: '日英6事例を各3回、指定モデルで明示実行する',
+  },
+  'merge-ci-review': {
+    defaultEligible: false, credentials: ['codex'], cost: 'high',
+    reason: '日英5事例を各3回、指定モデルで明示実行する',
+  },
   'finding-realistic-premise': {
     defaultEligible: false,
     credentials: ['claude', 'codex'],
@@ -274,6 +297,18 @@ const EXECUTION_OVERRIDES = {
     credentials: ['claude'],
     cost: 'standard',
     reason: 'Lunaで検証したGUI設計ケースをOpusでも確認する',
+  },
+  'frontend-mediator-review': {
+    defaultEligible: false,
+    credentials: ['codex', 'claude'],
+    cost: 'high',
+    reason: 'Luna max と Opus の隔離レビューを固定した4実装と意味採点で比較する',
+  },
+  'frontend-mediator-coder': {
+    defaultEligible: false,
+    credentials: ['codex', 'claude'],
+    cost: 'high',
+    reason: '隔離した React アプリで Codex low と Claude Opus の実装を生成し、artifact と LLM rubric で構造を評価する',
   },
   'resource-flow-review': {
     defaultEligible: false,
@@ -686,6 +721,8 @@ const PREPARE_TARGET_OVERRIDES = {
   'frontend-opus': ['frontend-review', 'frontend-review-react'],
   cqrs: ['cqrs-review'],
   'frontend-coder': ['frontend-implement'],
+  'frontend-mediator-review': ['good', 'bad', 'bad2', 'good-hook'].map(variant => `frontend-mediator-review-${variant}`),
+  'frontend-mediator-coder': ['frontend-mediator-implement'],
   'cqrs-coder': ['cqrs-implement'],
   'fix-loop-convergence': [],
   'final-readiness-preservation': ['final-readiness-supervision-phase2'],

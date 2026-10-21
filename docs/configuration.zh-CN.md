@@ -244,6 +244,8 @@ assistant:
 | `sync_conflict_resolver` | object | `{ auto_approve_tools: false }` | sync conflict resolver 策略 |
 | `observability` | object | disabled | opt-in OpenTelemetry 基础设施 |
 
+Codex、Claude SDK、claude-headless 和 Copilot 对临时 HTTP 429 错误使用同一 provider 最多重试 8 次，等待时间依次为 1、2、4、8、16、30、30、30 秒。Codex、Claude SDK、claude-headless、Copilot 和 OpenCode 在观察到工具执行事件后收到 429 时不会自动重试，以免重复执行工作区操作。OpenCode 与其他临时错误共享尝试预算，最多重试 2 次（共尝试 3 次），等待时间为 250ms 和 500ms。重试成功则正常完成。明确匹配已知额度耗尽信号的通知会立即进入 `rate_limit_fallback.switch_chain`；持续的临时限流会在重试预算耗尽后进入该流程。同一错误同时包含限流和额度耗尽时，以额度耗尽为准。未配置切换目标时仍会停止执行。没有与重试相关的配置项，其他错误的现有重试条件保持不变。
+
 ## Caccia Review Loop
 
 `caccia` 可以设置在 `~/.takt/config.yaml` 或 `.takt/config.yaml` 中：
@@ -431,6 +433,30 @@ TAKT 观察实际收到的 provider event，不会合成 keepalive。OpenCode �
 4. 默认值
 
 `TAKT_AUTO_REQUEUE_MAX_ATTEMPTS` 必须解析为非负整数；非数字、负数和非整数会使配置验证失败。`TAKT_IGNORE_EXCEED` 只接受 `true` 或 `false`。
+
+## Alloy 并发与 JVM 设置
+
+以下环境变量在验证开始时读取一次，不是 YAML 配置键，也不适用于仅含 Quint 的验证。
+
+| 环境变量 | 默认值 | 格式 |
+|----------|--------|------|
+| `TAKT_ALLOY_CONCURRENCY` | `2` | 正安全整数；`1` 为顺序执行 |
+| `TAKT_ALLOY_HEAP` | `4g` | 正整数和小写单位 `k`、`m` 或 `g` |
+| `TAKT_ALLOY_STACK` | `64m` | 正整数和小写单位 `k`、`m` 或 `g` |
+
+仅未设置时使用默认值；空字符串或无效值会产生包含变量名的错误。一次验证期间设置保持不变。包括命令枚举在内的所有 Alloy JVM 默认接收 `-Xmx4g -Xss64m`。覆盖时只传入指定值，不重复传入默认参数。
+
+```bash
+TAKT_ALLOY_CONCURRENCY=1 TAKT_ALLOY_HEAP=2g TAKT_ALLOY_STACK=128m takt
+```
+
+内存不足时，请降低堆上限或将并发数设为 1。请使用这些 TAKT 专用设置修改 JVM 参数，不要仅依赖 `JAVA_TOOL_OPTIONS`。
+
+`assistant.formal_spec.model_check_timeout_seconds` 分别适用于每条 Alloy 命令（默认 900 秒），不设置整体超时。失败或超时不会阻止其余命令执行，有空闲位置时立即启动下一条命令。各命令结果通过 `timedOut: true` 标识超时。
+
+验证失败、错误或超时时，`.takt/runs/verify-*/` 中的规范与日志会保留，结果消息会显示目录路径。保留目录不参与自动清理，请在不再需要时手动删除。成功验证的产物在结果解读结束后删除。
+
+如果写入保留标记失败，TAKT 会将所有权标记移动为保留标记，并报告目录路径和写入错误。如果移动也失败，TAKT 会保留所有权标记，提示无法确认保留状态，并报告目录路径和两个错误。即使所属 Node 进程退出，剩余的所有权标记仍会保护目录，使其不被自动清理。请手动复制所需的产物。
 
 ## 环境变量覆盖
 

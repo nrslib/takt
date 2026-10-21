@@ -15,11 +15,12 @@ jobs:
   global-install:
     name: Global install of packed TAKT (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-14]
+        npm: ['10.9.4', '11.16.0', '12.2.0']
     permissions:
       contents: read
     steps:
@@ -32,28 +33,23 @@ jobs:
       - run: npm install --global npm@11.16.0
       - run: npm ci
       - run: npm run build
-      - name: Pack the code under test
-        run: npm pack --pack-destination "$RUNNER_TEMP"
-      - name: Globally install the packed release with a fresh cache
-        working-directory: ${{ runner.temp }}
-        run: |
-          node --version
-          npm --version
-          npm install --global --prefix "$RUNNER_TEMP/takt-global" \
-            --cache "$RUNNER_TEMP/takt-global-npm-cache" \
-            "$RUNNER_TEMP"/takt-*.tgz --loglevel=verbose
-      - name: Verify globally installed CLI startup
-        working-directory: ${{ runner.temp }}
-        run: |
-          "$RUNNER_TEMP/takt-global/bin/takt" --version
-          node "$GITHUB_WORKSPACE/scripts/global-install-smoke.mjs" \
-            "$RUNNER_TEMP/takt-global/lib/node_modules/takt"
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Check fresh and overwrite global installations
+        env:
+          QUINT_HOME: ${{ runner.temp }}/takt-quint
+          npm_config_cache: ${{ runner.temp }}/takt-global-npm-cache
+        run: node scripts/global-install-check.mjs --npm-versions '${{ matrix.npm }}' --log-dir "$RUNNER_TEMP/takt-global-logs"
       - name: Upload npm logs on failure
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: global-install-pr-logs-${{ matrix.os }}
-          path: ${{ runner.temp }}/takt-global-npm-cache/_logs
+          name: global-install-pr-logs-${{ matrix.os }}-${{ matrix.npm }}
+          path: |
+            ${{ runner.temp }}/takt-global-npm-cache/_logs
+            ${{ runner.temp }}/takt-global-logs
 
   lint:
     runs-on: ubuntu-latest

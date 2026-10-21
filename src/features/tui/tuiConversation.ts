@@ -8,6 +8,7 @@
  */
 
 import { SlashCommand } from '../../shared/constants.js';
+import type { StreamCallback } from '../../shared/types/provider.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import {
   isDisabledVerifyCommand,
@@ -107,11 +108,16 @@ function describeSessionError(
   code: ConversationSessionErrorCode | undefined,
   message: string,
   lang: 'en' | 'ja',
+  retainedArtifactsMessage?: string,
 ): string {
   // No code means the producer only had human-readable text to offer.
-  return code === undefined || code === 'provider_error'
-    ? message
-    : getLabel(SESSION_ERROR_LABEL_KEYS[code], lang);
+  if (code === undefined || code === 'provider_error') {
+    return message;
+  }
+  const label = getLabel(SESSION_ERROR_LABEL_KEYS[code], lang);
+  return retainedArtifactsMessage === undefined
+    ? label
+    : `${label}\n\n${retainedArtifactsMessage}`;
 }
 
 function createCommandAvailability(
@@ -139,6 +145,7 @@ export interface TuiSubmitInput {
   text: string;
   abortSignal: AbortSignal;
   onAssistantChunk: (chunk: string) => void;
+  onStreamEvent?: StreamCallback;
 }
 
 /**
@@ -157,7 +164,7 @@ export type TuiSubmission =
     notices?: readonly string[];
     commit?: () => void;
   }
-  | { kind: 'error'; message: string; notices?: readonly string[]; commit?: () => void };
+  | { kind: 'error'; message: string; retainedArtifactsMessage?: string; notices?: readonly string[]; commit?: () => void };
 
 /** Commands the TUI settles itself, without contacting the provider. */
 export type TuiLocalCommand =
@@ -395,7 +402,9 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
           abortSignal: input.abortSignal,
           confirmManagedProvider: input.confirmManagedProvider,
           onStream: (event) => {
-            if (!turnEnded && event.type === 'text') {
+            if (turnEnded) return;
+            input.onStreamEvent?.(event);
+            if (event.type === 'text') {
               input.onAssistantChunk(event.data.text);
             }
           },
@@ -417,7 +426,8 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
         case 'error':
           return {
             kind: 'error',
-            message: describeSessionError(result.code, result.message, ctx.lang),
+            message: describeSessionError(result.code, result.message, ctx.lang, result.retainedArtifactsMessage),
+            ...(result.retainedArtifactsMessage === undefined ? {} : { retainedArtifactsMessage: result.retainedArtifactsMessage }),
             notices,
           };
       }
@@ -433,7 +443,9 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
           abortSignal: input.abortSignal,
           confirmManagedProvider: input.confirmManagedProvider,
           onStream: (event) => {
-            if (!turnEnded && event.type === 'text') {
+            if (turnEnded) return;
+            input.onStreamEvent?.(event);
+            if (event.type === 'text') {
               input.onAssistantChunk(event.data.text);
             }
           },

@@ -4,6 +4,8 @@ node_modules/
 
 # Build output
 dist/
+!vendor/faceted-prompting/dist/
+!vendor/faceted-prompting/dist/**
 *.tgz
 /result
 /result-*

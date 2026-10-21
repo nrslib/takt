@@ -20,10 +20,14 @@ import {
   aggregateResultFromStdout,
   extractSessionIdFromStdout,
   findRateLimitNoticeInStdout,
+  tryExtractToolResultFromStreamJsonLine,
+  tryExtractToolUseFromStreamJsonLine,
 } from './stream-json-lines.js';
 import { buildClaudeHeadlessResponse } from './result-response.js';
 import type { ClaudeHeadlessCallOptions } from './types.js';
-import { buildRateLimitedResponseFields, containsRateLimitError, findRateLimitMarkerNoticeLine } from '../rate-limit/detection.js';
+import { buildRateLimitedResponseFields, classifyRateLimitError, findRateLimitMarkerNoticeLine } from '../rate-limit/detection.js';
+import { RATE_LIMIT_MAX_RETRIES, waitForRateLimitRetry } from '../rate-limit/retry.js';
+import { parseValidJsonLines } from '../structured-cli-output.js';
 
 const log = createLogger('claude-headless');
 
@@ -32,18 +36,7 @@ type HeadlessRateLimitOutcome = {
   source: 'sdk_error' | 'stream_marker';
 };
 
-function findRateLimitErrorText(text: string | undefined): string | undefined {
-  if (!text) {
-    return undefined;
-  }
-
-  const parsed = aggregateResultFromStdout(text);
-  return [parsed.error, parsed.content, parsed.displayText, text.trim()].find(
-    (candidate): candidate is string => candidate !== undefined && containsRateLimitError(candidate),
-  );
-}
-
-function selectRateLimitOutcome(error: ExecError, message: string): HeadlessRateLimitOutcome | undefined {
+function selectRateLimitOutcome(error: ExecError): HeadlessRateLimitOutcome | undefined {
   // stdout は stream-json のイベント単位、stderr は 1 行単位で通知文を探す (#1674)。
   const streamMarkerText = findRateLimitNoticeInStdout(error.stdout)
     ?? findRateLimitMarkerNoticeLine(error.stderr);
@@ -51,14 +44,24 @@ function selectRateLimitOutcome(error: ExecError, message: string): HeadlessRate
     return { text: streamMarkerText, source: 'stream_marker' };
   }
 
-  const rateLimitText = [error.stderr, error.stdout, message]
-    .map((text) => findRateLimitErrorText(text))
-    .find((text): text is string => text !== undefined);
+  const parsed = aggregateResultFromStdout(error.stdout ?? '');
+  // 構造化stdoutのtool出力・成功本文を失敗原因へ混ぜない。
+  const candidates = [error.stderr, parsed.hasResult && !parsed.success ? parsed.error : undefined,
+    parseValidJsonLines(error.stdout ?? '').length === 0 ? error.stdout : undefined,
+    typeof error.code !== 'number' ? getErrorMessage(error) : undefined];
+  const rateLimitText = candidates.find((text) => classifyRateLimitError(text) === 'Exhausted')
+    ?? candidates.find((text) => classifyRateLimitError(text) === 'Transient');
   if (rateLimitText) {
     return { text: rateLimitText, source: 'sdk_error' };
   }
 
   return undefined;
+}
+
+function hasToolExecutionEvent(stdout: string | undefined): boolean {
+  return stdout?.split('\n').some((line) =>
+    tryExtractToolUseFromStreamJsonLine(line).length > 0
+    || tryExtractToolResultFromStreamJsonLine(line).length > 0) ?? false;
 }
 
 function resolveCliPermissionMode(
@@ -125,15 +128,13 @@ function buildSettingsArg(
  * explicitly authorized artifact paths.
  */
 async function buildSpawnArgs(
-  prompt: string,
   options: ClaudeHeadlessCallOptions,
-): Promise<{ args: string[]; expectedSessionId: string; cleanup: () => Promise<void> }> {
+): Promise<{ args: string[]; cleanup: () => Promise<void> }> {
   const isStrictReadonly = options.internalAgentIsolation === 'strict-readonly';
   const isToolIsolated = isStrictReadonly || options.allowedTools?.length === 0;
   const readonlyArtifactPaths = isStrictReadonly
     ? resolveReadonlyArtifactReadPaths(options)
     : [];
-  const session = resolveSessionArgs(options);
   // Runtime MCP adapter route (issue #1137): when the runner prepared MCP
   // material, consume `preparedMcp.args` (`--strict-mcp-config`/`--mcp-config`)
   // so temp-file ownership and cleanup live in the adapter. Fall back to the
@@ -188,8 +189,6 @@ async function buildSpawnArgs(
     args.push('--settings', settings);
   }
 
-  args.push(...session.args);
-  args.push('--', prompt);
   const cleanup = async () => {
     const results = await Promise.allSettled([
       legacyMcpConfig.cleanup(),
@@ -202,7 +201,6 @@ async function buildSpawnArgs(
   };
   return {
     args,
-    expectedSessionId: session.sessionId,
     cleanup,
   };
 }
@@ -258,6 +256,7 @@ export async function callClaudeHeadless(
     ? undefined
     : () => options.preparedMcp!.dispose();
   let response: AgentResponse;
+  let terminalContent = '';
 
   try {
     if (options.skillsEnabled === false) {
@@ -266,51 +265,37 @@ export async function callClaudeHeadless(
         options.abortSignal,
       );
     }
-    const prepared = await buildSpawnArgs(prompt, options);
+    const prepared = await buildSpawnArgs(options);
     cleanup = prepared.cleanup;
-    const { args, expectedSessionId } = prepared;
-    options.onActivity?.({ kind: 'attempt_started' });
-    const { stdout, stderr } = await runHeadlessCli(args, options);
-    const parsed = aggregateResultFromStdout(stdout);
-    const sessionId = extractSessionIdFromStdout(stdout) ?? expectedSessionId;
-    response = buildClaudeHeadlessResponse({
-      agentName,
-      parsed,
-      stdout,
-      stderr,
-      sessionId,
-      outputSchema: options.outputSchema,
-      onStream: options.onStream,
-    });
-  } catch (raw) {
-    const error = raw as ExecError;
-    const classifiedError = classifyError(error, options);
-    const rateLimitOutcome = classifiedError.allowRateLimitDetection
-      ? selectRateLimitOutcome(error, classifiedError.message)
-      : undefined;
-    if (options.onStream) {
-      options.onStream({
-        type: 'result',
-        data: {
-          result: '',
-          success: false,
-          error: rateLimitOutcome?.text ?? classifiedError.message,
-          sessionId: options.sessionId ?? '',
-        },
-      });
+    let retries = 0;
+    while (true) {
+      if (options.abortSignal?.aborted) throw new Error(HEADLESS_ABORTED_MESSAGE);
+      const session = resolveSessionArgs(options);
+      options.onActivity?.({ kind: 'attempt_started' });
+      let toolExecutionObserved = false;
+      try {
+        const { stdout, stderr } = await runHeadlessCli([...prepared.args, ...session.args, '--', prompt], options);
+        toolExecutionObserved = hasToolExecutionEvent(stdout);
+        const parsed = aggregateResultFromStdout(stdout);
+        response = buildClaudeHeadlessResponse({
+          agentName, parsed, stdout, stderr,
+          sessionId: extractSessionIdFromStdout(stdout) ?? session.sessionId,
+          outputSchema: options.outputSchema,
+        });
+        terminalContent = response.status === 'rate_limited' ? '' : parsed.content;
+      } catch (raw) {
+        terminalContent = '';
+        const error = raw as ExecError;
+        toolExecutionObserved ||= hasToolExecutionEvent(error.stdout);
+        response = buildHeadlessErrorResponse(agentName, error, options);
+      }
+      if (response.status !== 'rate_limited' || classifyRateLimitError(response.error) !== 'Transient'
+        || toolExecutionObserved || retries >= RATE_LIMIT_MAX_RETRIES) break;
+      await waitForRateLimitRetry(++retries, options.abortSignal);
     }
-    response = {
-      persona: agentName,
-      timestamp: new Date(),
-      sessionId: options.sessionId,
-      ...(rateLimitOutcome
-        ? buildRateLimitedResponseFields('claude-headless', rateLimitOutcome.source, rateLimitOutcome.text)
-        : {
-          status: 'error' as const,
-          content: classifiedError.message,
-          error: classifiedError.message,
-        }),
-    };
+  } catch (raw) {
+    terminalContent = '';
+    response = buildHeadlessErrorResponse(agentName, raw as ExecError, options);
   }
 
   try {
@@ -323,5 +308,23 @@ export async function callClaudeHeadless(
     });
   }
 
+  options.onStream?.({ type: 'result', data: {
+    result: terminalContent,
+    success: response.status === 'done',
+    sessionId: response.sessionId ?? '',
+    ...(response.error === undefined ? {} : { error: response.error }),
+  } });
   return response;
+}
+
+function buildHeadlessErrorResponse(agentName: string, error: ExecError, options: ClaudeHeadlessCallOptions): AgentResponse {
+  const classified = classifyError(error, options);
+  const outcome = classified.allowRateLimitDetection ? selectRateLimitOutcome(error) : undefined;
+  return {
+    persona: agentName,
+    timestamp: new Date(),
+    sessionId: options.sessionId,
+    ...(outcome ? buildRateLimitedResponseFields('claude-headless', outcome.source, outcome.text)
+      : { status: 'error' as const, content: classified.message, error: classified.message }),
+  };
 }

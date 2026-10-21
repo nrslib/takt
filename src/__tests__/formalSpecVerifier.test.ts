@@ -6,6 +6,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
@@ -37,12 +38,28 @@ const { mockSpawnManagedProcess } = vi.hoisted(() => ({
   mockSpawnManagedProcess: vi.fn(),
 }));
 
-const { failSpecsDirectoryCreation } = vi.hoisted(() => ({
-  failSpecsDirectoryCreation: { enabled: false },
+const { mockIsProcessAlive, mockGetProcessIdentity, retainMarkerFailure } = vi.hoisted(() => ({
+  mockIsProcessAlive: vi.fn(),
+  mockGetProcessIdentity: vi.fn(),
+  retainMarkerFailure: { enabled: false, move: false, cwd: undefined as string | undefined },
 }));
 
-const { failVerifyRunRemoval, processBoundaryControls, closeSyncControls, openSyncControls } = vi.hoisted(() => ({
+vi.mock('../infra/task/process.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/task/process.js')>()),
+  getSelfProcessIdentity: () => ({ startTime: 'darwin-start-v2:100' }),
+  getProcessIdentity: (...args: unknown[]) => mockGetProcessIdentity(...args),
+  isProcessAlive: (...args: unknown[]) => mockIsProcessAlive(...args),
+}));
+
+const { failSpecsDirectoryCreation, failAlloyDirectoryCreation } = vi.hoisted(() => ({
+  failSpecsDirectoryCreation: { enabled: false },
+  failAlloyDirectoryCreation: { enabled: false },
+}));
+
+const { failVerifyRunRemoval, failActiveMarkerRemoval, failActiveMarkerStat, processBoundaryControls, closeSyncControls, openSyncControls } = vi.hoisted(() => ({
   failVerifyRunRemoval: { enabled: false },
+  failActiveMarkerRemoval: { enabled: false },
+  failActiveMarkerStat: { enabled: false },
   processBoundaryControls: { throwOnSpawn: false },
   closeSyncControls: {
     failNext: false,
@@ -59,10 +76,33 @@ vi.mock('node:fs', async () => {
   const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
   return {
     ...actual,
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (retainMarkerFailure.enabled && retainMarkerFailure.cwd !== undefined
+        && String(args[0]).startsWith(retainMarkerFailure.cwd) && String(args[0]).endsWith('.retain')) {
+        throw new Error('retention marker write failed');
+      }
+      return actual.writeFileSync(...args);
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+      if (retainMarkerFailure.move && retainMarkerFailure.cwd !== undefined
+        && String(args[0]).startsWith(retainMarkerFailure.cwd) && String(args[1]).endsWith('.retain')) {
+        throw new Error('retention marker move failed');
+      }
+      return actual.renameSync(...args);
+    },
+    statSync: (...args: Parameters<typeof actual.statSync>) => {
+      if (failActiveMarkerStat.enabled && String(args[0]).endsWith('.active')) {
+        throw Object.assign(new Error('active marker stat failed'), { code: 'EACCES' });
+      }
+      return actual.statSync(...args);
+    },
     mkdirSync: (...args: Parameters<typeof actual.mkdirSync>) => {
       const target = String(args[0]);
       if (failSpecsDirectoryCreation.enabled && (target.endsWith('/specs') || target.endsWith('\\specs'))) {
         throw new Error('specs directory creation failed');
+      }
+      if (failAlloyDirectoryCreation.enabled && target.endsWith('alloy-run-0')) {
+        throw new Error('command output directory creation failed');
       }
       return actual.mkdirSync(...args);
     },
@@ -77,6 +117,9 @@ vi.mock('node:fs', async () => {
       return fileDescriptor;
     },
     rmSync: (...args: Parameters<typeof actual.rmSync>) => {
+      if (failActiveMarkerRemoval.enabled && String(args[0]).endsWith('.active')) {
+        throw new Error('active marker removal failed');
+      }
       const options = args[1];
       if (failVerifyRunRemoval.enabled
         && typeof options === 'object'
@@ -135,6 +178,7 @@ class MockStream extends EventEmitter {
 }
 
 const processResponses: MockProcessResponse[] = [];
+const alloyProcessEvents: Array<{ number: number; phase: 'start' | 'end'; time: number }> = [];
 const spawnedProcesses: Array<{
   readonly command: string;
   readonly args: readonly string[];
@@ -217,10 +261,20 @@ function mockProcessBoundary(): void {
         signal: response.signal ?? null,
       };
     };
+    const waitWithEvents = async () => {
+      if (!args.includes('exec')) return wait();
+      const number = Number(args[args.indexOf('--command') + 1]);
+      alloyProcessEvents.push({ number, phase: 'start', time: Date.now() });
+      try {
+        return await wait();
+      } finally {
+        alloyProcessEvents.push({ number, phase: 'end', time: Date.now() });
+      }
+    };
     return {
       child: { stdout, stderr },
-      wait,
-      waitForExit: wait,
+      wait: waitWithEvents,
+      waitForExit: waitWithEvents,
     };
   });
 }
@@ -255,8 +309,17 @@ function mockTlcVerification(response: MockProcessResponse): void {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockIsProcessAlive.mockReset().mockReturnValue(true);
+  mockGetProcessIdentity.mockReset().mockReturnValue({ startTime: 'darwin-start-v2:100' });
+  retainMarkerFailure.enabled = false;
+  retainMarkerFailure.move = false;
+  retainMarkerFailure.cwd = undefined;
   processResponses.length = 0;
   spawnedProcesses.length = 0;
+  alloyProcessEvents.length = 0;
+  vi.stubEnv('TAKT_ALLOY_CONCURRENCY', undefined);
+  vi.stubEnv('TAKT_ALLOY_HEAP', undefined);
+  vi.stubEnv('TAKT_ALLOY_STACK', undefined);
   parseResult = {
     modules: [{
       name: 'verify',
@@ -268,7 +331,10 @@ beforeEach(() => {
     }],
   };
   failSpecsDirectoryCreation.enabled = false;
+  failAlloyDirectoryCreation.enabled = false;
   failVerifyRunRemoval.enabled = false;
+  failActiveMarkerRemoval.enabled = false;
+  failActiveMarkerStat.enabled = false;
   processBoundaryControls.throwOnSpawn = false;
   closeSyncControls.failNext = false;
   closeSyncControls.attempts.length = 0;
@@ -281,8 +347,11 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  retainMarkerFailure.enabled = false;
+  failActiveMarkerRemoval.enabled = false;
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   failSpecsDirectoryCreation.enabled = false;
   alloyJarDigestOverride.value = undefined;
   if (originalAlloyJar === undefined) {
@@ -293,6 +362,276 @@ afterEach(() => {
 });
 
 describe('runFormalSpecVerification', () => {
+  function queueAlloyCommands(responses: readonly MockProcessResponse[], sameLabel = false): string {
+    const commands = responses.map((_, number) => {
+      const type = sameLabel || number % 2 === 0 ? 'run' : 'check';
+      const label = sameLabel || number === 0 ? 'Scenario' : number === 1 ? 'Safety' : `Command${number}`;
+      return { number, type, label };
+    });
+    processResponses.push(
+      { stderr: 'openjdk version "17.0.1"' },
+      { stdout: commands.map(({ number, type, label }) => `${number} . ${type} ${label} for 3`).join('\n') },
+      ...responses,
+    );
+    const definitions = sameLabel
+      ? ['pred Scenario { some A }']
+      : commands.map(({ type, label }) => `${type === 'run' ? 'pred' : 'assert'} ${label} { some A }`);
+    return ['```alloy', 'sig A {}', ...definitions, ...commands.map(({ type, label }, number) => `${type} ${label} for ${number + 3}`), '```'].join('\n');
+  }
+
+  it.each([
+    { setting: undefined, limit: 2 },
+    { setting: '1', limit: 1 },
+    { setting: '3', limit: 3 },
+  ])('executes all fifteen commands with concurrency $limit when configured as $setting', async ({ setting, limit }) => {
+    vi.useFakeTimers();
+    vi.stubEnv('TAKT_ALLOY_CONCURRENCY', setting);
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    const response = queueAlloyCommands(Array.from({ length: 15 }, () => ({
+      beforeExit: () => new Promise<void>((resolve) => setTimeout(resolve, 100)),
+    })));
+    try {
+      const verification = runFormalSpecVerification(response, directory, { modelCheckTimeoutSeconds: 1 });
+      await vi.runAllTimersAsync();
+      const result = await verification;
+      let running = 0;
+      let maximum = 0;
+      for (const event of alloyProcessEvents) {
+        running += event.phase === 'start' ? 1 : -1;
+        maximum = Math.max(maximum, running);
+        expect(running).toBeLessThanOrEqual(limit);
+      }
+      expect(maximum).toBe(limit);
+      expect(running).toBe(0);
+      expect(alloyProcessEvents.filter(({ phase }) => phase === 'start').map(({ number }) => number)).toEqual(Array.from({ length: 15 }, (_, i) => i));
+      expect(result.alloy.commandResults).toHaveLength(15);
+      expect(result.alloy.commandResults?.every(({ status }) => status === 'passed')).toBe(true);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('refills a free slot before the slower sibling finishes and preserves command artifact identity', async () => {
+    vi.useFakeTimers();
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    const response = queueAlloyCommands([1000, 100, 100].map((delay, number) => ({
+      stdout: `stdout-${number}`, stderr: `stderr-${number}`,
+      beforeExit: () => new Promise<void>((resolve) => setTimeout(resolve, delay)),
+    })));
+    try {
+      const verification = runFormalSpecVerification(response, directory, { modelCheckTimeoutSeconds: 2 });
+      await vi.runAllTimersAsync();
+      const result = await verification;
+      const startOfThird = alloyProcessEvents.find(({ number, phase }) => number === 2 && phase === 'start')!;
+      const endOfSecond = alloyProcessEvents.find(({ number, phase }) => number === 1 && phase === 'end')!;
+      const endOfFirst = alloyProcessEvents.find(({ number, phase }) => number === 0 && phase === 'end')!;
+      expect(startOfThird.time).toBe(endOfSecond.time);
+      expect(startOfThird.time).toBeLessThan(endOfFirst.time);
+      // stdout は SAT 判定の代用にしないため各コマンドの receipt も照合する。
+      expect(result.alloy.commandResults?.map(({ number }) => number)).toEqual([0, 1, 2]);
+      for (const command of result.alloy.commandResults!) {
+        const stage = `alloy-${command.type}-${command.number}`;
+        expect(readFileSync(result.artifacts!.logs[stage]!.stdout, 'utf8')).toBe(`stdout-${command.number}`);
+        expect(readFileSync(result.artifacts!.logs[stage]!.stderr, 'utf8')).toBe(`stderr-${command.number}`);
+        const receiptPath = result.artifacts!.alloyOutputs!.find((path) => path.endsWith(`${stage}/receipt.json`))!;
+        expect(JSON.parse(readFileSync(receiptPath, 'utf8')).commands[command.label]).toMatchObject({ type: command.type, name: command.label });
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps separate logs and receipts for repeated labels when the later command finishes first', async () => {
+    vi.useFakeTimers();
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    const response = queueAlloyCommands([1000, 100].map((delay, number) => ({
+      stdout: `run-${number}`,
+      alloyTrace: `instance-${number}`,
+      beforeExit: () => new Promise<void>((resolve) => setTimeout(resolve, delay)),
+    })), true);
+    try {
+      const verification = runFormalSpecVerification(response, directory, { modelCheckTimeoutSeconds: 2 });
+      await vi.runAllTimersAsync();
+      const result = await verification;
+      expect(alloyProcessEvents.filter(({ phase }) => phase === 'end').map(({ number }) => number)).toEqual([1, 0]);
+      expect(result.alloy.commandResults).toMatchObject([
+        { number: 0, label: 'Scenario', status: 'passed' },
+        { number: 1, label: 'Scenario', status: 'passed' },
+      ]);
+      for (const number of [0, 1]) {
+        const stage = `alloy-run-${number}`;
+        expect(readFileSync(result.artifacts!.logs[stage]!.stdout, 'utf8')).toBe(`run-${number}`);
+        const paths = result.artifacts!.alloyOutputs!.filter((path) => path.includes(`/${stage}/`));
+        expect(paths).toHaveLength(2);
+        expect(JSON.parse(readFileSync(paths.find((path) => path.endsWith('receipt.json'))!, 'utf8')).commands.Scenario.name).toBe('Scenario');
+        expect(readFileSync(paths.find((path) => path.endsWith('.txt'))!, 'utf8')).toBe(`instance-${number}`);
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('reports one timeout separately while collecting fourteen other success and failure results', async () => {
+    vi.useFakeTimers();
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    const response = queueAlloyCommands(Array.from({ length: 15 }, (_, number) => number === 0
+      ? { hang: true }
+      : { alloySolution: number === 1 || number % 2 === 0,
+        beforeExit: () => new Promise<void>((resolve) => setTimeout(resolve, 100)) }));
+    try {
+      const verification = runFormalSpecVerification(response, directory, { modelCheckTimeoutSeconds: 1 });
+      await vi.runAllTimersAsync();
+      const result = await verification;
+      expect(result.alloy.commandResults).toHaveLength(15);
+      expect(result.alloy.commandResults![0]).toMatchObject({ number: 0, status: 'error', timedOut: true });
+      expect(result.alloy.commandResults![1]).toMatchObject({ number: 1, status: 'failed' });
+      expect(result.alloy.commandResults?.slice(1).every((command) => !('timedOut' in command) || command.timedOut === false)).toBe(true);
+      expect(result.alloy.commandResults?.slice(2).every(({ status }) => status === 'passed')).toBe(true);
+      expect(alloyProcessEvents.filter(({ phase }) => phase === 'end')).toHaveLength(15);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('finishes fifteen timed out commands within eight individual deadlines without a global cutoff', async () => {
+    vi.useFakeTimers();
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    const response = queueAlloyCommands(Array.from({ length: 15 }, () => ({ hang: true })));
+    try {
+      const verification = runFormalSpecVerification(response, directory, { modelCheckTimeoutSeconds: 1 });
+      await vi.runAllTimersAsync();
+      const result = await verification;
+      expect(result.alloy.commandResults).toHaveLength(15);
+      for (let number = 0; number < 15; number++) {
+        expect(result.alloy.commandResults![number]).toMatchObject({ number, status: 'error', timedOut: true });
+        const start = alloyProcessEvents.find((event) => event.number === number && event.phase === 'start')!;
+        const end = alloyProcessEvents.find((event) => event.number === number && event.phase === 'end')!;
+        expect(end.time - start.time).toBe(1000);
+      }
+      expect(alloyProcessEvents.at(-1)!.time - alloyProcessEvents[0]!.time).toBeLessThanOrEqual(8000);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { heap: undefined, stack: undefined, expectedHeap: '-Xmx4g', expectedStack: '-Xss64m' },
+    { heap: '2g', stack: undefined, expectedHeap: '-Xmx2g', expectedStack: '-Xss64m' },
+    { heap: undefined, stack: '128m', expectedHeap: '-Xmx4g', expectedStack: '-Xss128m' },
+    { heap: '1536m', stack: '32768k', expectedHeap: '-Xmx1536m', expectedStack: '-Xss32768k' },
+  ])('applies heap $heap and stack $stack to enumeration and every execution', async ({ heap, stack, expectedHeap, expectedStack }) => {
+    vi.stubEnv('TAKT_ALLOY_HEAP', heap);
+    vi.stubEnv('TAKT_ALLOY_STACK', stack);
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    try {
+      const result = await runFormalSpecVerification(queueAlloyCommands([{}, {}]), directory, { modelCheckTimeoutSeconds: 1 });
+      expect(result.verdict).toBe('passed');
+      const launches = spawnedProcesses.filter(({ args }) => args.includes('-jar'));
+      expect(launches).toHaveLength(3);
+      for (const { args } of launches) {
+        expect(args.filter((arg) => arg.startsWith('-Xmx'))).toEqual([expectedHeap]);
+        expect(args.filter((arg) => arg.startsWith('-Xss'))).toEqual([expectedStack]);
+        expect(args.indexOf(expectedHeap)).toBeLessThan(args.indexOf('-jar'));
+        expect(args.indexOf(expectedStack)).toBeLessThan(args.indexOf('-jar'));
+      }
+      expect(spawnedProcesses.find(({ args }) => args.includes('-version'))!.args).toEqual(['-version']);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['TAKT_ALLOY_CONCURRENCY', '0'], ['TAKT_ALLOY_CONCURRENCY', '-1'],
+    ['TAKT_ALLOY_CONCURRENCY', '1.5'], ['TAKT_ALLOY_CONCURRENCY', 'abc'],
+    ['TAKT_ALLOY_CONCURRENCY', '9007199254740992'], ['TAKT_ALLOY_CONCURRENCY', ''],
+    ['TAKT_ALLOY_HEAP', '0g'], ['TAKT_ALLOY_HEAP', '4'],
+    ['TAKT_ALLOY_STACK', '-1m'], ['TAKT_ALLOY_STACK', '64m -jar other.jar'],
+  ])('rejects invalid %s=%j with a named configuration error', async (name, value) => {
+    vi.stubEnv(name, value);
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    try {
+      const result = await runFormalSpecVerification(queueAlloyCommands([{}]), directory, { modelCheckTimeoutSeconds: 1 });
+      expect(result.verdict).toBe('error');
+      expect([result.message, result.alloy.message].join('\n')).toContain(name);
+      expect(spawnedProcesses.filter(({ args }) => args.includes('exec'))).toEqual([]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores Alloy-only settings for a Quint-only response', async () => {
+    vi.stubEnv('TAKT_ALLOY_CONCURRENCY', 'invalid');
+    vi.stubEnv('TAKT_ALLOY_HEAP', 'invalid');
+    vi.stubEnv('TAKT_ALLOY_STACK', 'invalid');
+    const directory = createTestDirectory();
+    processResponses.push({}, {}, {}, { error: new Error('Java unavailable') });
+    try {
+      const result = await runFormalSpecVerification('```quint\nmodule verify {}\n```', directory, { modelCheckTimeoutSeconds: 1 });
+      expect(result.verdict).toBe('passed');
+      expect(result.quint.run?.status).toBe('passed');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('continues Quint verification when Alloy execution settings are invalid', async () => {
+    vi.stubEnv('TAKT_ALLOY_CONCURRENCY', 'invalid');
+    const directory = createTestDirectory();
+    processResponses.push(
+      { code: 0 },
+      { code: 0 },
+      { code: 0 },
+      { code: 0, stderr: 'openjdk version "17.0.1"' },
+      { code: 0 },
+    );
+
+    try {
+      const response = ['```quint', 'module verify {}', '```', validAlloyResponse()].join('\n');
+      const result = await runFormalSpecVerification(response, directory, { modelCheckTimeoutSeconds: 1 });
+
+      expect(result.quint).toMatchObject({
+        status: 'passed',
+        parse: { status: 'passed' },
+        typecheck: { status: 'passed' },
+        run: { status: 'passed' },
+        verify: { status: 'passed' },
+      });
+      expect(result.alloy).toMatchObject({
+        status: 'error',
+        message: expect.stringContaining('TAKT_ALLOY_CONCURRENCY'),
+      });
+      expect(spawnedProcesses.some(({ args }) => args.includes('verify'))).toBe(true);
+      expect(spawnedProcesses.some(({ args }) => args.includes('commands'))).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('collects later commands after one output directory cannot be created', async () => {
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    failAlloyDirectoryCreation.enabled = true;
+    try {
+      const result = await runFormalSpecVerification(queueAlloyCommands([{}, {}, {}]), directory, { modelCheckTimeoutSeconds: 1 });
+      expect(result.alloy.commandResults).toMatchObject([
+        { number: 0, status: 'error', message: expect.stringContaining('command output directory creation failed') },
+        { number: 1, status: 'passed' },
+        { number: 2, status: 'passed' },
+      ]);
+      expect(spawnedProcesses.filter(({ args }) => args.includes('exec')).map(({ args }) => args[args.indexOf('--command') + 1])).toEqual(['1', '2']);
+    } finally {
+      failAlloyDirectoryCreation.enabled = false;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('starts verification of closed Quint and Alloy fences from the current response', async () => {
     const directory = createTestDirectory();
     installConfiguredAlloyJar(directory);
@@ -386,7 +725,7 @@ describe('runFormalSpecVerification', () => {
     }
   });
 
-  it('should remove a partially created run workspace when specs creation fails', async () => {
+  it('should retain a partially created run workspace when specs creation fails', async () => {
     const directory = createTestDirectory();
     failSpecsDirectoryCreation.enabled = true;
 
@@ -400,14 +739,17 @@ describe('runFormalSpecVerification', () => {
         alloy: { status: 'skipped' },
       });
       expect(readdirSync(join(directory, '.takt', 'runs'))
-        .filter((name) => name.startsWith('verify-'))).toEqual([]);
+        .filter((name) => name.startsWith('verify-'))).toHaveLength(1);
+      expect(result.artifacts?.runDirectory).toBeDefined();
+      cleanupFormalSpecVerificationArtifacts(result);
+      expect(existsSync(result.artifacts!.runDirectory)).toBe(true);
     } finally {
       failSpecsDirectoryCreation.enabled = false;
       rmSync(directory, { recursive: true, force: true });
     }
   });
 
-  it('should retain a synchronous spawn failure workspace until the interpretation cleanup', async () => {
+  it('should retain a synchronous spawn failure workspace after the interpretation cleanup', async () => {
     const directory = createTestDirectory();
     processBoundaryControls.throwOnSpawn = true;
 
@@ -421,13 +763,106 @@ describe('runFormalSpecVerification', () => {
       expect(result.artifacts?.runDirectory).toBeDefined();
       cleanupFormalSpecVerificationArtifacts(result);
       expect(readdirSync(join(directory, '.takt', 'runs'))
-        .filter((name) => name.startsWith('verify-'))).toEqual([]);
+        .filter((name) => name.startsWith('verify-'))).toHaveLength(1);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
   });
 
-  it('should remove stale abandoned verify workspaces while retaining recent and unrelated entries', async () => {
+  it.each([false, true])('returns an initialization error and its retained directory when ownership release fails=%s', async (ownershipFailure) => {
+    const directory = createTestDirectory();
+    failSpecsDirectoryCreation.enabled = true;
+    failActiveMarkerRemoval.enabled = ownershipFailure;
+    try {
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
+      expect(result).toMatchObject({ verdict: 'error', verificationStarted: true, quint: { status: 'error' } });
+      const runDirectory = result.artifacts!.runDirectory;
+      expect(result.message).toContain(runDirectory);
+      expect(existsSync(join(runDirectory, '.retain'))).toBe(true);
+      expect(existsSync(join(runDirectory, '.active'))).toBe(ownershipFailure);
+      if (ownershipFailure) expect(result.message).toContain('active marker removal failed');
+      expect(mockSpawnManagedProcess).not.toHaveBeenCalled();
+    } finally {
+      failActiveMarkerRemoval.enabled = false;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each((['failed', 'error', 'timeout'] as const).flatMap((mode) =>
+    (['none', 'ownership', 'write', 'move'] as const).map((failure) => ({ mode, failure })),
+  ))('returns $mode results and readable logs with retention failure=$failure', async ({ mode, failure }) => {
+    vi.useFakeTimers();
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    processResponses.push(
+      { stderr: 'openjdk version "17.0.1"' },
+      { stdout: '0 . Check Safety for 1\n' },
+      {
+        stdout: 'verification output', stderr: 'verification diagnostic',
+        alloySolution: true,
+        ...(mode === 'error' ? { error: new Error('process failed') } : {}),
+        ...(mode === 'timeout' ? { hang: true } : {}),
+      },
+    );
+    const ownershipFailure = failure === 'ownership';
+    retainMarkerFailure.cwd = directory;
+    retainMarkerFailure.enabled = failure === 'write' || failure === 'move';
+    retainMarkerFailure.move = failure === 'move';
+    failActiveMarkerRemoval.enabled = ownershipFailure;
+    try {
+      const verification = runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 1 });
+      const [result] = await Promise.all([verification, vi.advanceTimersByTimeAsync(1000)]);
+      const verdict = mode === 'failed' ? 'failed' : 'error';
+      expect(result).toMatchObject({
+        verdict, verificationStarted: true,
+        quint: { status: 'skipped' },
+        alloy: { status: verdict, commandResults: [{ number: 0, status: verdict, timedOut: mode === 'timeout' }] },
+      });
+      const artifacts = result.artifacts!;
+      expect(result.message).toContain(artifacts.runDirectory);
+      expect(result.artifactRetention?.status).toBe(failure === 'move' ? 'error' : 'passed');
+      if (mode === 'error') expect(result.alloy.message).toContain('process failed');
+      if (mode === 'timeout') expect(result.alloy.message).toContain('timed out');
+      if (retainMarkerFailure.enabled) expect(result.artifactRetention?.message).toContain('retention marker write failed');
+      if (failure === 'move') {
+        expect(result.artifactRetention?.message).toContain('retention marker move failed');
+        expect(result.message).not.toMatch(/artifacts retained at/iu);
+      }
+      if (ownershipFailure) expect(result.message).toContain('active marker removal failed');
+      expect(existsSync(join(artifacts.runDirectory, '.retain'))).toBe(failure !== 'move');
+      expect(existsSync(join(artifacts.runDirectory, '.active'))).toBe(ownershipFailure || failure === 'move');
+      cleanupFormalSpecVerificationArtifacts(result);
+      failActiveMarkerRemoval.enabled = false;
+      const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      utimesSync(artifacts.runDirectory, old, old);
+      await runFormalSpecVerification('No specification.', directory, { modelCheckTimeoutSeconds: 1 });
+      expect(readFileSync(artifacts.specifications.alloy!, 'utf8')).toContain('check Safety');
+      expect(readFileSync(artifacts.logs['alloy-check-0']!.stdout, 'utf8')).toBe('verification output');
+      expect(readFileSync(artifacts.logs['alloy-check-0']!.stderr, 'utf8')).toBe('verification diagnostic');
+      mockIsProcessAlive.mockReturnValue(false);
+      await runFormalSpecVerification('No specification.', directory, { modelCheckTimeoutSeconds: 1 });
+      expect(readFileSync(artifacts.specifications.alloy!, 'utf8')).toContain('check Safety');
+      expect(readFileSync(artifacts.logs['alloy-check-0']!.stdout, 'utf8')).toBe('verification output');
+      expect(readFileSync(artifacts.logs['alloy-check-0']!.stderr, 'utf8')).toBe('verification diagnostic');
+      vi.resetModules();
+      const nextVerifier = await import('../features/interactive/formalSpecVerifier.js');
+      await nextVerifier.runFormalSpecVerification('No specification.', directory, { modelCheckTimeoutSeconds: 1 });
+      expect(readFileSync(artifacts.specifications.alloy!, 'utf8')).toContain('check Safety');
+      expect(readFileSync(artifacts.logs['alloy-check-0']!.stdout, 'utf8')).toBe('verification output');
+      expect(readFileSync(artifacts.logs['alloy-check-0']!.stderr, 'utf8')).toBe('verification diagnostic');
+    } finally {
+      failActiveMarkerRemoval.enabled = false;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { age: 60 * 60 * 1000 - 1, removed: false },
+    { age: 60 * 60 * 1000, removed: false },
+    { age: 60 * 60 * 1000 + 1, removed: true },
+    { age: 2 * 60 * 60 * 1000, removed: true },
+  ])('sweeps unmarked verify workspaces at age=$age while retaining recent and unrelated entries', async ({ age, removed }) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
     const directory = createTestDirectory();
     const runsDirectory = join(directory, '.takt', 'runs');
     const staleDirectory = join(runsDirectory, 'verify-stale');
@@ -436,13 +871,13 @@ describe('runFormalSpecVerification', () => {
     mkdirSync(staleDirectory, { recursive: true, mode: 0o700 });
     mkdirSync(recentDirectory, { recursive: true, mode: 0o700 });
     mkdirSync(unrelatedDirectory, { recursive: true, mode: 0o700 });
-    const staleTime = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    const staleTime = new Date(Date.now() - age);
     utimesSync(staleDirectory, staleTime, staleTime);
 
     try {
       await runFormalSpecVerification('No formal specification was generated.', directory, { modelCheckTimeoutSeconds: 300 });
 
-      expect(existsSync(staleDirectory)).toBe(false);
+      expect(existsSync(staleDirectory)).toBe(!removed);
       expect(existsSync(recentDirectory)).toBe(true);
       expect(existsSync(unrelatedDirectory)).toBe(true);
     } finally {
@@ -450,8 +885,113 @@ describe('runFormalSpecVerification', () => {
     }
   });
 
+  it.each([
+    { owner: 'dead', age: 60 * 60 * 1000 - 1 },
+    { owner: 'dead', age: 60 * 60 * 1000 },
+    { owner: 'dead', age: 60 * 60 * 1000 + 1 },
+    { owner: 'alive', age: 2 * 60 * 60 * 1000 },
+    { owner: 'reused', age: 2 * 60 * 60 * 1000 },
+    { owner: 'unknown', age: 2 * 60 * 60 * 1000 },
+    { owner: 'unavailable', age: 2 * 60 * 60 * 1000 },
+  ])('protects marked workspaces for owner=$owner age=$age until explicitly removed', async ({ owner, age }) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    const controller = new AbortController();
+    let observed = false;
+    processResponses.push({ code: 0, stderr: 'openjdk version "17.0.1"', beforeExit: async () => {
+      const activeWorkspace = spawnedProcesses.at(-1)!.options.cwd!;
+      const staleTime = new Date(Date.now() - age);
+      utimesSync(activeWorkspace, staleTime, staleTime);
+      await runFormalSpecVerification('No specification.', directory, { modelCheckTimeoutSeconds: 300 });
+      expect(existsSync(join(activeWorkspace, 'specs', 'spec.als'))).toBe(true);
+      mockIsProcessAlive.mockReturnValue(owner !== 'dead');
+      if (owner === 'reused') mockGetProcessIdentity.mockReturnValue({ startTime: 'darwin-start-v2:101' });
+      if (owner === 'unknown') mockGetProcessIdentity.mockReturnValue(undefined);
+      if (owner === 'unavailable') mockIsProcessAlive.mockImplementation(() => { throw new Error('process lookup unavailable'); });
+      await runFormalSpecVerification('No specification.', directory, { modelCheckTimeoutSeconds: 300 });
+      expect(existsSync(join(activeWorkspace, 'specs', 'spec.als'))).toBe(true);
+      observed = true;
+      controller.abort(new Error('test owner stopped'));
+    } });
+    try {
+      await expect(runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300, abortSignal: controller.signal }))
+        .rejects.toThrow('test owner stopped');
+      expect(observed).toBe(true);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('protects stale workspaces when the active marker cannot be inspected', async () => {
+    const directory = createTestDirectory();
+    const runDirectory = join(directory, '.takt', 'runs', 'verify-inaccessible');
+    mkdirSync(runDirectory, { recursive: true });
+    writeFileSync(join(runDirectory, '.active'), '{}');
+    writeFileSync(join(runDirectory, 'spec.als'), 'sig A {}');
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    utimesSync(runDirectory, old, old);
+    failActiveMarkerStat.enabled = true;
+    try {
+      await runFormalSpecVerification('No specification.', directory, { modelCheckTimeoutSeconds: 300 });
+      expect(readFileSync(join(runDirectory, 'spec.als'), 'utf8')).toBe('sig A {}');
+    } finally {
+      failActiveMarkerStat.enabled = false;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('protects successful artifacts until interpretation cleanup even after one hour', async () => {
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    processResponses.push({ code: 0, stderr: 'openjdk version "17.0.1"' }, { code: 0, stdout: '0 . Check Safety for 1' }, { code: 0 });
+    try {
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
+      expect(result.verdict).toBe('passed');
+      const runDirectory = result.artifacts!.runDirectory;
+      const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      utimesSync(runDirectory, old, old);
+      await runFormalSpecVerification('No specification.', directory, { modelCheckTimeoutSeconds: 300 });
+      expect(readFileSync(result.artifacts!.specifications.alloy!, 'utf8')).toContain('check');
+      cleanupFormalSpecVerificationArtifacts(result);
+      expect(existsSync(runDirectory)).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([false, true])('returns initialization errors and protects their directory when retention writing fails=%s', async (writeFailure) => {
+    const directory = createTestDirectory();
+    failSpecsDirectoryCreation.enabled = true;
+    retainMarkerFailure.enabled = writeFailure;
+    retainMarkerFailure.cwd = directory;
+    try {
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
+      expect(result).toMatchObject({ verdict: 'error', verificationStarted: true });
+      expect(result.artifactRetention?.status).toBe('passed');
+      const runDirectory = result.artifacts!.runDirectory;
+      expect(result.message).toContain('specs directory creation failed');
+      expect(result.message).toContain(runDirectory);
+      if (writeFailure) expect(result.message).toContain('retention marker write failed');
+      expect(result.artifacts!.specifications).toEqual({});
+      expect(result.artifacts!.logs).toEqual({});
+      expect(existsSync(join(runDirectory, '.retain'))).toBe(true);
+      expect(existsSync(join(runDirectory, '.active'))).toBe(false);
+      const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      utimesSync(runDirectory, old, old);
+      await runFormalSpecVerification('No specification.', directory, { modelCheckTimeoutSeconds: 300 });
+      expect(existsSync(runDirectory)).toBe(true);
+      mockIsProcessAlive.mockReturnValue(false);
+      await runFormalSpecVerification('No specification.', directory, { modelCheckTimeoutSeconds: 300 });
+      expect(existsSync(runDirectory)).toBe(true);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('should retain an active workspace when sequential Alloy checks outlive the stale threshold', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
+    vi.stubEnv('TAKT_ALLOY_CONCURRENCY', '1');
     const directory = createTestDirectory();
     installConfiguredAlloyJar(directory);
     const checkNumbers = Array.from({ length: 80 }, (_, index) => index);
@@ -485,28 +1025,65 @@ describe('runFormalSpecVerification', () => {
     }
   });
 
-  it('should preserve the verification result when run cleanup fails', async () => {
+  it.each([
+    { age: 60 * 60 * 1000 - 1, removed: false },
+    { age: 60 * 60 * 1000, removed: false },
+    { age: 60 * 60 * 1000 + 1, removed: true },
+    { age: 2 * 60 * 60 * 1000, removed: true },
+  ].flatMap((boundary) => [false, true].map((ownershipFailure) => ({ ...boundary, ownershipFailure }))))('retries failed successful-workspace cleanup at age=$age ownershipFailure=$ownershipFailure with the owner still alive', async ({ age, removed, ownershipFailure }) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
     const directory = createTestDirectory();
     installConfiguredAlloyJar(directory);
     processResponses.push(
       { code: 0, stderr: 'openjdk version "17.0.1"' },
       { code: 0, stdout: '0 . Check Safety for 1\n' },
-      { code: 1, stderr: 'counterexample' },
+      { code: 0 },
     );
     failVerifyRunRemoval.enabled = true;
 
     try {
       const result = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
 
-      expect(result.verdict).toBe('error');
-      expect(result.alloy).toMatchObject({ status: 'error', message: expect.stringContaining('counterexample') });
+      expect(result.verdict).toBe('passed');
+      expect(result.alloy.status).toBe('passed');
       expect(readdirSync(join(directory, '.takt', 'runs'))
         .filter((name) => name.startsWith('verify-'))).toHaveLength(1);
+      failActiveMarkerRemoval.enabled = ownershipFailure;
       cleanupFormalSpecVerificationArtifacts(result);
       expect(readdirSync(join(directory, '.takt', 'runs'))
         .filter((name) => name.startsWith('verify-'))).toHaveLength(1);
+
+      const runDirectory = result.artifacts!.runDirectory;
+      const releasedAt = statSync(runDirectory).mtimeMs;
+      failVerifyRunRemoval.enabled = false;
+      failActiveMarkerRemoval.enabled = false;
+      vi.setSystemTime(releasedAt + age);
+      await runFormalSpecVerification('No specification.', directory, { modelCheckTimeoutSeconds: 300 });
+      expect(existsSync(runDirectory)).toBe(!removed);
+      expect(result).toMatchObject({ verdict: 'passed', alloy: { status: 'passed' } });
     } finally {
       failVerifyRunRemoval.enabled = false;
+      failActiveMarkerRemoval.enabled = false;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('removes successful artifacts even when active ownership release fails', async () => {
+    const directory = createTestDirectory();
+    installConfiguredAlloyJar(directory);
+    processResponses.push(
+      { code: 0, stderr: 'openjdk version "17.0.1"' },
+      { code: 0, stdout: '0 . Check Safety for 1\n' },
+      { code: 0 },
+    );
+    try {
+      const result = await runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300 });
+      failActiveMarkerRemoval.enabled = true;
+      cleanupFormalSpecVerificationArtifacts(result);
+      expect(existsSync(result.artifacts!.runDirectory)).toBe(false);
+      expect(result).toMatchObject({ verdict: 'passed', alloy: { status: 'passed' } });
+    } finally {
+      failActiveMarkerRemoval.enabled = false;
       rmSync(directory, { recursive: true, force: true });
     }
   });
@@ -752,7 +1329,8 @@ describe('runFormalSpecVerification', () => {
       const result = await runFormalSpecVerification('```quint\nmodule verify {}\n```', directory, { modelCheckTimeoutSeconds: 300 });
 
       expect(result.quint.verify).toEqual({ status: 'failed', message: diagnostics });
-      expect(result.message).toBe(diagnostics);
+      expect(result.message).toContain(diagnostics);
+      expect(result.message).toContain(result.artifacts!.runDirectory);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -832,7 +1410,8 @@ describe('runFormalSpecVerification', () => {
       const result = await runFormalSpecVerification('```quint\nmodule verify {}\n```', directory, { modelCheckTimeoutSeconds: 300 });
 
       expect(result.quint.verify).toEqual({ status: 'failed', message: `${output.stderr}\n${output.stdout}` });
-      expect(result.message).toBe(result.quint.verify?.message);
+      expect(result.message).toContain(result.quint.verify?.message);
+      expect(result.message).toContain(result.artifacts!.runDirectory);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -881,7 +1460,8 @@ describe('runFormalSpecVerification', () => {
       expect(result.quint.verify).toMatchObject({ status: 'failed' });
       expect(result.quint.verify?.message).toMatch(/^TLC output[^\n]*capture limit[^\n]*diagnostics may be missing/);
       expect(result.quint.verify?.message).not.toContain('diagnostic beyond capture limit');
-      expect(result.message).toBe(result.quint.verify?.message);
+      expect(result.message).toContain(result.quint.verify?.message);
+      expect(result.message).toContain(result.artifacts!.runDirectory);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -1094,7 +1674,7 @@ describe('runFormalSpecVerification', () => {
     }
   });
 
-  it('should collect Alloy results after an independent Quint parse error and clean the run directory', async () => {
+  it('should collect Alloy results after an independent Quint parse error and retain the run directory', async () => {
     const directory = createTestDirectory();
     installConfiguredAlloyJar(directory);
     processResponses.push(
@@ -1121,7 +1701,8 @@ describe('runFormalSpecVerification', () => {
       expect(spawnedProcesses.every(({ options }) => options.env?.TMPDIR === options.cwd)).toBe(true);
       const runParent = join(directory, '.takt', 'runs');
       cleanupFormalSpecVerificationArtifacts(result);
-      expect(readdirSync(runParent).filter((name) => name.startsWith('verify-'))).toEqual([]);
+      expect(readdirSync(runParent).filter((name) => name.startsWith('verify-'))).toHaveLength(1);
+      expect(readFileSync(result.artifacts!.logs['quint-parse']!.stderr, 'utf8')).toBe('Quint parse failed');
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -1207,7 +1788,7 @@ describe('runFormalSpecVerification', () => {
         .map(({ args }) => args[args.indexOf('--command') + 1])).toEqual(['0', '1', '2']);
       expect(result.artifacts?.alloyOutputs?.filter((path) => path.endsWith('receipt.json'))).toHaveLength(3);
       cleanupFormalSpecVerificationArtifacts(result);
-      expect(existsSync(result.artifacts!.runDirectory)).toBe(false);
+      expect(existsSync(result.artifacts!.runDirectory)).toBe(verdict !== 'passed');
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -1368,22 +1949,37 @@ describe('runFormalSpecVerification', () => {
     }
   });
 
-  it('should clean all command artifacts when an Alloy run is cancelled', async () => {
+  it.each(['none', 'directory', 'ownership', 'both'] as const)('cleans cancelled Alloy artifacts with cleanup failure=%s', async (failure) => {
     const directory = createTestDirectory();
     installConfiguredAlloyJar(directory);
     const controller = new AbortController();
+    const reason = new Error('cancelled');
     processResponses.push(
       { stderr: 'openjdk version "17.0.1"' },
       { stdout: '0 . Run Scenario for 3\n' },
-      { beforeExit: async () => controller.abort(new Error('cancelled')) },
+      { beforeExit: async () => controller.abort(reason) },
     );
+    failVerifyRunRemoval.enabled = failure === 'directory' || failure === 'both';
+    failActiveMarkerRemoval.enabled = failure === 'ownership' || failure === 'both';
     try {
       await expect(runFormalSpecVerification(validAlloyResponse(), directory, {
         modelCheckTimeoutSeconds: 300, abortSignal: controller.signal,
-      })).rejects.toThrow('cancelled');
+      })).rejects.toBe(reason);
       expect(spawnedProcesses.at(-1)!.args).toContain('exec');
+      if (failure === 'directory' || failure === 'both') {
+        const runDirectory = spawnedProcesses.at(-1)!.options.cwd!;
+        expect(readFileSync(join(runDirectory, 'specs', 'spec.als'), 'utf8')).toContain('check');
+        failVerifyRunRemoval.enabled = false;
+        failActiveMarkerRemoval.enabled = false;
+        const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+        utimesSync(runDirectory, old, old);
+        await runFormalSpecVerification('No specification.', directory, { modelCheckTimeoutSeconds: 300 });
+        expect(existsSync(runDirectory)).toBe(false);
+      }
       expect(readdirSync(join(directory, '.takt', 'runs'))).toEqual([]);
     } finally {
+      failVerifyRunRemoval.enabled = false;
+      failActiveMarkerRemoval.enabled = false;
       rmSync(directory, { recursive: true, force: true });
     }
   });
@@ -1428,7 +2024,8 @@ describe('runFormalSpecVerification', () => {
 
       expect(result.alloy.status).toBe('passed');
       const alloyCalls = spawnedProcesses.filter(({ command }) => command === 'java');
-      expect(alloyCalls.at(-1)?.args[1]).toBe(jarPath);
+      const args = alloyCalls.at(-1)!.args;
+      expect(args[args.indexOf('-jar') + 1]).toBe(jarPath);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
