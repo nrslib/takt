@@ -12,7 +12,7 @@ vi.mock('../infra/task/process.js', () => ({ isStaleRunningTask: goals.stale }))
 vi.mock('../core/workflow/run/retry-metadata.js', () => ({ readRetryMetadataByRunSlug: goals.retryMetadata }));
 let state: TasksFileData;
 const save = vi.fn();
-const store = { update: (action: (saved: TasksFileData) => TasksFileData | undefined) => {
+const store = { read: () => structuredClone(state), update: (action: (saved: TasksFileData) => TasksFileData | undefined) => {
   const next = action(state);
   if (next !== undefined) {
     state = TasksFileSchema.parse(next);
@@ -67,7 +67,7 @@ it.each([
 it('notifies only after a successful save and retries a failed save without duplicate notifications', () => {
   let saveFails = true;
   const saveAttempt = vi.fn();
-  const publicationStore = { update(action: (saved: TasksFileData) => TasksFileData | undefined) {
+  const publicationStore = { read: () => structuredClone(state), update(action: (saved: TasksFileData) => TasksFileData | undefined) {
     const mutation = action(state);
     if (mutation === undefined) return state;
     const next = TasksFileSchema.parse(mutation);
@@ -94,7 +94,7 @@ it('notifies only after a successful save and retries a failed save without dupl
 it.each([false, true])('does not save or notify tasks already recovered by another caller (own task: %s)', (hasOwnTask) => {
   const running = state.tasks[0]!;
   if (hasOwnTask) state.tasks.push({ ...running, name: 'own' });
-  const competingStore = { update(action: (saved: TasksFileData) => TasksFileData | undefined) {
+  const competingStore = { read: () => structuredClone(state), update(action: (saved: TasksFileData) => TasksFileData | undefined) {
     state = { tasks: [{ ...running, status: 'failed', owner_pid: null,
       completed_at: '2026-10-06T00:01:00Z', failure: { error: 'recovered elsewhere' } }, ...state.tasks.slice(1)] };
     return store.update(action);

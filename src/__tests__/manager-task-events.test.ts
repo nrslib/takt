@@ -1,5 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { TaskRunner } from '../infra/task/index.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { TaskRunner } from '../infra/task/runner.js';
+import { TaskStore } from '../infra/task/store.js';
+import { TaskRecordSchema, TasksFileSchema, type TasksFileData } from '../infra/task/schema.js';
 import type { TaskState } from '../infra/task/types.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 const save = vi.hoisted(() => vi.fn());
@@ -8,6 +10,7 @@ import { claimTasksWithGoalCompletions, failInterruptedTasksWithGoalEvents, Task
 import { PrivateFileLockAcquisitionError } from '../shared/utils/private-file-lock.js';
 import { TaskClaimLockAcquisitionError } from '../infra/task/taskLifecycleService.js';
 beforeEach(() => save.mockReset());
+afterEach(() => vi.restoreAllMocks());
 it('publishes task setup failures once when claiming changes their state', () => {
   let status = 'pending';
   const record = () => ({ name: 'task-a', goalId: goalRecord().id, status, runSlug: 'setup-run', completion: { success: false, interrupted: false } });
@@ -33,6 +36,43 @@ it('publishes newly interrupted goal tasks while leaving older results untouched
   expect(failInterruptedTasksWithGoalEvents(runner, '/project')).toBe(1);
   expect(save).toHaveBeenCalledExactlyOnceWith('/project', { kind: 'completion', goalId: goalRecord().id, taskName: 'task-a', runSlug: 'run-a', result: completion });
   expect(failInterruptedTasksWithGoalEvents(runner, '/project')).toBe(0); expect(save).toHaveBeenCalledOnce();
+});
+
+it('publishes only goal tasks actually recovered and saved by the lifecycle', () => {
+  const running = TaskRecordSchema.parse({
+    name: 'recovered', content: 'Task', status: 'running', owner_pid: null, owner_start_time: null,
+    goal_id: goalRecord().id, created_at: '2026-10-06T00:00:00Z',
+    started_at: '2026-10-06T00:00:00Z', completed_at: null,
+  });
+  let state: TasksFileData = { tasks: [
+    running,
+    { ...running, name: 'changed-owner' },
+    { ...running, name: 'live', owner_pid: process.pid },
+    { ...running, name: 'ordinary', goal_id: undefined },
+    { ...running, name: 'old', status: 'failed' as const, completed_at: '2026-10-06T00:01:00Z', failure: { error: 'old failure' } },
+  ] };
+  vi.spyOn(TaskStore.prototype, 'read').mockImplementation(() => structuredClone(state));
+  vi.spyOn(TaskStore.prototype, 'update').mockImplementation((mutator) => {
+    state = { tasks: state.tasks.map((task) => task.name === 'changed-owner'
+      ? { ...task, owner_pid: process.pid } : { ...task, branch: 'latest-branch' }) };
+    const next = mutator(state);
+    if (next !== undefined) state = TasksFileSchema.parse(next);
+    return state;
+  });
+  save.mockImplementation(() => {
+    expect(state.tasks[0]?.status).toBe('failed');
+  });
+  const runner = new TaskRunner('/project');
+
+  expect(failInterruptedTasksWithGoalEvents(runner, '/project')).toBe(2);
+
+  expect(state.tasks.map(({ status }) => status)).toEqual(['failed', 'running', 'running', 'failed', 'failed']);
+  expect(save).toHaveBeenCalledExactlyOnceWith('/project', {
+    kind: 'completion', goalId: goalRecord().id, taskName: 'recovered', runSlug: expect.stringMatching(/^setup-/),
+    result: expect.objectContaining({ success: false, interrupted: true, workflowResult: 'error', branch: 'latest-branch' }),
+  });
+  expect(failInterruptedTasksWithGoalEvents(runner, '/project')).toBe(0);
+  expect(save).toHaveBeenCalledOnce();
 });
 
 it.each([false, true])('publishes only its own saved recovery when another caller commits first (own task: %s)', (hasOwnTask) => {
