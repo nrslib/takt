@@ -1370,6 +1370,30 @@ describe('runAssistantRetryCommand', () => {
       }));
     });
 
+    it('does not repeat a saved path in the failed-task start menu description', async () => {
+      const path = '"development" > "implement"';
+      mocks.buildFailedTaskRetryStartContext.mockReturnValue({
+        workflowName: 'development', workflowConfig: { steps: [] }, workflowOverride: undefined, options: {},
+        startOptions: {
+          options: [
+            { id: 'resume-checkpoint', label: 'Resume from implement', path, description: path, selectable: true },
+            { id: 'restart:implement', label: 'Restart implement', path, selectable: true },
+          ],
+          defaultId: 'resume-checkpoint',
+        },
+      });
+      setStartResponse('{"startOptionId":null}');
+      mocks.selectOption.mockImplementationOnce(async (_message, choices) => {
+        const resume = (choices as Array<{ value: string; description?: string }>).find(({ value }) => value === 'resume-checkpoint');
+        expect(resume?.description).toBe(path);
+        return null;
+      });
+
+      const notice = await runAssistantRetryCommand({ ...options, command: 'requeue' });
+
+      expect(notice).toContain('not changed');
+    });
+
     it.each(['task', 'failed start', 'exceeded start'] as const)('returns an unchanged notice and performs no confirmation or persistence when %s selection is cancelled', async (stage) => {
       if (stage === 'task') mocks.listAllTaskItems.mockReturnValue([task, exceededTask]);
       if (stage === 'exceeded start') mocks.listAllTaskItems.mockReturnValue([exceededTask]);
@@ -1660,6 +1684,22 @@ describe('runAssistantRetryCommand', () => {
       expect(mocks.callAIWithRetry).not.toHaveBeenCalled();
       expect(mocks.requeueExceededTask).not.toHaveBeenCalled();
       expect(notice).toContain('pending again');
+    });
+
+    it('does not repeat a saved path in the exceeded-task start menu description', async () => {
+      const path = '"development" > "review"';
+      mocks.listAllTaskItems.mockReturnValue([{ ...exceededTaskWithoutStart, data: {
+        ...exceededTaskWithoutStart.data!, resume_point: exceededResumePoint,
+      } }]);
+      mocks.selectOption.mockImplementationOnce(async (_message, choices) => {
+        const resume = (choices as Array<{ value: string; description?: string }>).find(({ value }) => value === 'resume-checkpoint');
+        expect(resume?.description).toBe(path);
+        return null;
+      });
+
+      const notice = await runAssistantRetryCommand({ ...options, command: 'requeue' });
+
+      expect(notice).toContain('not changed');
     });
 
     it.each(['start', 'confirmation'] as const)('keeps the task unchanged on %s cancellation', async (stage) => {

@@ -220,7 +220,7 @@ takt list
 | **Create PR** | 将失败 run 的修改提交并 push，创建 pull request |
 | **Delete** | 删除失败任务记录 |
 
-在 CLI/TUI 的 assistant 和 grill-me 对话中，`/requeue [补充说明]` 根据对话确定 failed 或 exceeded 任务。两种命令都使用独立于对话 session 的 AI 调用，传入最近达成的一致意见、补充说明、候选的完整路径和子 workflow 标题说明。补充说明按上下文解释。响应格式错误或值不在候选中时，每个选择阶段只重新询问一次；仍然无效时切换到手动菜单，并区分 JSON 格式错误、未知任务名称和未知起点 ID。无法判断或 provider 失败时直接进入手动选择。显示任务名称、摘要、workflow 和起点后请求 Y/n 确认。确认后将任务置为 `pending`，不修改 `order.md`。取消选择或确认不会修改任务，结果会记录在对话中；重新排队成功的结果也会连同任务名称记录下来。`/retry [补充说明]` 根据对话确定 failed 任务，显示完整修订 order，并让用户选择 **Save task** 或 **Continue**。Save task 会归档旧版并将任务置为 `pending`；Continue 不修改任务并返回对话。两种命令都在没有候选时返回提示。两种命令都需要交互式终端，没有 TTY 时不会显示选择或修改任务，也不会立即启动 workflow。在 persona 对话和 Web UI 中，这些命令文本作为普通消息处理。`takt resume` 中面向直接 run 的 `/retry` 保持独立。
+在 CLI/TUI 的 assistant 和 grill-me 对话中，`/requeue [补充说明]` 根据对话确定 failed 或 exceeded 任务，`/retry [补充说明]` 根据对话确定 failed 任务。两种命令都使用独立于对话 session 的 AI 调用，传入最近达成的一致意见、补充说明、候选的完整路径和子 workflow 标题说明。补充说明按上下文解释。响应格式错误或值不在候选中时，每个选择阶段只重新询问一次；仍然无效时切换到手动菜单，并区分 JSON 格式错误、未知任务名称和未知起点 ID。无法判断或 provider 失败时直接进入手动选择。显示任务名称、摘要、workflow 和起点后请求 Y/n 确认。确认后将任务置为 `pending`，不修改 `order.md`。取消选择或确认不会修改任务，结果会记录在对话中；重新排队成功的结果也会连同任务名称记录下来。`/retry [补充说明]` 根据对话确定 failed 任务，显示完整修订 order，并让用户选择 **Save task** 或 **Continue**。Save task 会归档旧版并将任务置为 `pending`；Continue 不修改任务并返回对话。两种命令都在没有候选时返回提示。两种命令都需要交互式终端，没有 TTY 时不会显示选择或修改任务，也不会立即启动 workflow。在 persona 对话和 Web UI 中，这些命令文本作为普通消息处理。`takt resume` 中面向直接 run 的 `/retry` 保持独立。
 
 ### Pending 任务的操作
 

@@ -405,7 +405,7 @@ async function resolveFailedStart(
       headings: startContext.startOptions.options.filter((option) => !option.selectable),
     };
     const selected = await resolveChoice(
-      selectableOptions.map(({ id, label, path, description }) => ({ value: id, label, description: [path, description].filter(Boolean).join('\n') })),
+      selectableOptions.map(({ id, label, path, description }) => ({ value: id, label, description: [path, description === path ? undefined : description].filter(Boolean).join('\n') })),
       getLabel('tui.assistantRetry.selectStart', options.lang),
       options,
       resumeFailureReason,
@@ -627,7 +627,7 @@ async function resolveExceededStart(
       headings: catalog.options.filter((option) => !option.selectable),
     };
     const selection = await resolveChoice(
-      choices.map(({ id, label, path, description }) => ({ value: id, label, description: [path, description].filter(Boolean).join('\n') })),
+      choices.map(({ id, label, path, description }) => ({ value: id, label, description: [path, description === path ? undefined : description].filter(Boolean).join('\n') })),
       getLabel('tui.assistantRetry.selectStart', options.lang),
       options,
       resumeFailureReason,
