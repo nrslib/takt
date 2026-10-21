@@ -59,6 +59,7 @@ function compileIsolatedPackage(): void {
   }
   cpSync(join(repositoryRoot, 'bin'), join(generatedPackage, 'bin'), { recursive: true });
   cpSync(join(repositoryRoot, 'builtins'), join(generatedPackage, 'builtins'), { recursive: true });
+  cpSync(join(repositoryRoot, 'vendor'), join(generatedPackage, 'vendor'), { recursive: true });
   for (const relativePath of [
     'shared/prompts/en',
     'shared/prompts/ja',

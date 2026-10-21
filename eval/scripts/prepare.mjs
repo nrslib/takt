@@ -29,6 +29,7 @@ import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { MERGE_CI_TARGETS, prepareMergeCiRecovery } from './prepare-merge-ci-recovery.mjs';
 
 const TASK_MARKER = '@@PROMPTFOO_TASK@@';
 const PREV_MARKER = '@@PROMPTFOO_PREVIOUS_RESPONSE@@';
@@ -797,6 +798,7 @@ const ARTIFACT_HANDOFF_TARGET = 'review-artifact-input-handoff';
 export const PREPARE_TARGET_IDS = Object.freeze([
   ...TARGETS.map(({ id }) => id),
   ARTIFACT_HANDOFF_TARGET,
+  ...MERGE_CI_TARGETS,
 ]);
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -1001,6 +1003,7 @@ async function main() {
       stdio: 'inherit',
     });
   }
+  await prepareMergeCiRecovery(requested.filter((id) => MERGE_CI_TARGETS.includes(id)));
   const targets = requested.length > 0 ? TARGETS.filter((t) => requested.includes(t.id)) : TARGETS;
 
   const preparedDirs = new Set();

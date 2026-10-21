@@ -1,5 +1,5 @@
 import type { CodexOptions } from '@openai/codex-sdk';
-import { expandFacetIncludes } from 'faceted-prompting/cli/facet-includes';
+import { expandFacetIncludes } from '#faceted-prompting/cli/facet-includes';
 import { mkdirSync,mkdtempSync,readFileSync,rmSync,writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';

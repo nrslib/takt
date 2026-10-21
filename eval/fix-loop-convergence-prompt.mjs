@@ -6,7 +6,7 @@
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { expandFacetIncludes } from 'faceted-prompting/cli/facet-includes';
+import { expandFacetIncludes } from '#faceted-prompting/cli/facet-includes';
 
 const EVAL_DIR = dirname(fileURLToPath(import.meta.url));
 const FACETS_ROOT = join(EVAL_DIR, '../builtins/ja/facets');
