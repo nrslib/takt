@@ -2160,11 +2160,15 @@ describe('ConversationView activity status', () => {
         emit(submission, { type: 'tool_result', data: { id: 'edit', content: 'done', isError: false } });
         await flushFrames();
         expect(await currentStatus()).toContain(`Read 0s ${ui.interruptHint} a.ts`);
-        for (const columns of [21, 17, 14]) {
+        for (const columns of [21, 17, 14, 9]) {
           await resize(columns);
           const row = await currentStatus();
-          expect(row).toMatch(/^\S R/u);
-          expect(row).toContain(' 0s ');
+          if (columns === 9) {
+            expect(row).toMatch(/^\S  0s Esc$/u);
+          } else {
+            expect(row).toMatch(/^\S R/u);
+            expect(row).toContain(' 0s ');
+          }
           expect(row).toContain('Esc');
           expect(row).not.toContain('a.ts');
           if (columns === 21) expect(row).toContain(`0s ${ui.interruptHintCompact}`);

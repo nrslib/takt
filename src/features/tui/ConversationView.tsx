@@ -309,7 +309,7 @@ export function ConversationView({
   const activityColumns = columns - 2 - stringWidth(statusSuffix);
   let displayedActivity = activityColumns > 0
     ? truncateStatusText(activityLabel, activityColumns)
-    : activityLabel;
+    : '';
   if (displayedActivity === '…' && stringWidth(activityStart) <= activityColumns) {
     displayedActivity = activityStart;
   }
