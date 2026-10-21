@@ -77,6 +77,98 @@ beforeEach(() => {
   answerDoubles.invalidatePending.mockReset();
 });
 
+describe.each(['mock', 'codex'] as const)('manager response normalization with %s', (providerType) => {
+  it.each([
+    '通常の返事です。',
+    '[進捗] 調査を続けます。',
+    '  \n[進捗] 調査を続けます。\n\t ',
+    '  \n相談を続けます。\n次の確認を行います。\t ',
+    `引用です。\n> ${JSON.stringify(summaryA)}\n\`\`\`json\n${JSON.stringify(summaryA)}\n\`\`\``,
+  ])('returns plain content unchanged without an approval target: %j', async (content) => {
+    const { session, register } = fixture(providerType);
+    try {
+      await session.handleUserMessage({ text: '要件を整理してください' });
+      const previous = session.getPendingSummary()!;
+      doubles.call.mockResolvedValueOnce({ ...response(null), content, structuredOutput: undefined });
+      expect(await session.handleUserMessage({ text: '相談を続けてください' })).toEqual({ kind: 'reply', message: content });
+      expect(session.getPendingSummary()).toBeNull();
+      expect((await session.approveSummary(previous.revision)).kind).toBe('error');
+      expect(register).not.toHaveBeenCalled();
+    } finally { await session.close(); }
+  });
+
+  it('accepts a JSON body with a validated summary', async () => {
+    doubles.call.mockResolvedValueOnce({ ...response(summaryA), structuredOutput: undefined });
+    const { session, register } = fixture(providerType);
+    try {
+      expect(await session.handleUserMessage({ text: '要件を整理してください' })).toEqual({ kind: 'reply', message: '要約を確認してください' });
+      expect(session.getPendingSummary()?.summary).toEqual(summaryA);
+      expect(register).not.toHaveBeenCalled();
+    } finally { await session.close(); }
+  });
+
+  it.each([
+    '{"message": "壊れたJSON", "summary": null,}',
+    ' \n{"message": "閉じ括弧がない"',
+    '[{"message": "閉じ括弧がない"}',
+    '[]',
+    '[ \n ]',
+    '[{"message":"確認","summary":null}]',
+    '["確認"]',
+    '[0]',
+    '[-1]',
+    '[true]',
+    '[false]',
+    '[null]',
+    '[[]]',
+    '[',
+    '[ \n',
+    '{}',
+    '{"message":"summaryがない"}',
+    JSON.stringify({ message: '不正な要約', summary: { ...summaryA, acceptanceCriteria: [] } }),
+  ])('rejects malformed or schema-invalid JSON content: %s', async (content) => {
+    doubles.call.mockResolvedValueOnce({ ...response(null), content, structuredOutput: undefined });
+    const { session, register } = fixture(providerType);
+    try {
+      expect((await session.handleUserMessage({ text: '要件を整理してください' })).kind).toBe('error');
+      expect(session.getPendingSummary()).toBeNull();
+      expect(register).not.toHaveBeenCalled();
+    } finally { await session.close(); }
+  });
+
+  it.each(['普通の文章', '[進捗] 調査を続けます。', '{broken JSON'])('prioritizes structured output over content: %s', async (content) => {
+    doubles.call.mockResolvedValueOnce({ ...response(summaryA, '構造化した返事'), content });
+    const { session, register } = fixture(providerType);
+    try {
+      expect(await session.handleUserMessage({ text: '要件を整理してください' })).toEqual({ kind: 'reply', message: '構造化した返事' });
+      expect(session.getPendingSummary()?.summary).toEqual(summaryA);
+      expect(register).not.toHaveBeenCalled();
+    } finally { await session.close(); }
+  });
+
+  it.each([{}, { message: '不正な要約', summary: { ...summaryA, objective: '' } }])(
+    'rejects invalid structured output without replacing it with valid content: %j', async (structuredOutput) => {
+      doubles.call.mockResolvedValueOnce({ ...response(summaryA), structuredOutput });
+      const { session, register } = fixture(providerType);
+      try {
+        expect((await session.handleUserMessage({ text: '要件を整理してください' })).kind).toBe('error');
+        expect(session.getPendingSummary()).toBeNull();
+        expect(register).not.toHaveBeenCalled();
+      } finally { await session.close(); }
+    },
+  );
+
+  it('rejects invalid structured output without replacing it with bracket-prefixed plain content', async () => {
+    doubles.call.mockResolvedValueOnce({ ...response(null), content: '[進捗] 調査を続けます。', structuredOutput: {} });
+    const { session, register } = fixture(providerType);
+    try {
+      expect((await session.handleUserMessage({ text: '調査を続けてください' })).kind).toBe('error');
+      expect(session.getPendingSummary()).toBeNull();
+      expect(register).not.toHaveBeenCalled();
+    } finally { await session.close(); }
+  });
+});
+
 describe('manager conversation approval', () => {
   it('prepares all MCP servers and calls the provider with full permissions and configured options', async () => {
     const dispose = vi.fn(async () => {});
