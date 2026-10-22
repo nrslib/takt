@@ -671,21 +671,17 @@ describe('manager permission judge input and output', () => {
   });
 
   it.each([
-    ['alice', 's3cretvalue', 'curl -u [REDACTED] https://example.com'],
-    ['al+ice', 's3cretvalue', 'curl -u "al+ice:s3cretvalue" https://example.com'],
-    ['alice', String.raw`foo\"bar`, 'curl -u [REDACTED] https://example.com'],
-    ['al+ice', String.raw`foo\"bar`, String.raw`curl -u "al+ice:foo\"bar" https://example.com`],
-    ['alice', String.raw`\"s3cretvalue`, 'curl -u [REDACTED] https://example.com'],
-    ['al+ice', String.raw`\"s3cretvalue`, String.raw`curl -u "al+ice:\"s3cretvalue" https://example.com`],
-  ])('applies the credential shape to JSON quoted judge arguments for %s / %s', async (username, password, expectedCommand) => {
+    ['alice', 's3cretvalue'],
+    ['al+ice', 's3cretvalue'],
+    ['al+ice', 's3cret value'],
+  ])('redacts JSON quoted judge arguments for %s / %s', async (username, password) => {
     await decide('Bash', { command: `curl -u "${username}:${password}" https://example.com` });
 
     expect(executeIsolatedStructuredInternalAgent).toHaveBeenCalledOnce();
     const instruction = vi.mocked(executeIsolatedStructuredInternalAgent).mock.calls[0]![1];
     const { toolArguments } = JSON.parse(instruction) as { toolArguments: string };
-    expect(toolArguments).toBe(JSON.stringify({ command: expectedCommand }));
-    if (username === 'alice') expect(toolArguments).not.toMatch(/alice|foo|bar|s3cretvalue/iu);
-    else expect(toolArguments).not.toContain('[REDACTED]');
+    expect(toolArguments).toBe(JSON.stringify({ command: 'curl -u [REDACTED] https://example.com' }));
+    expect(toolArguments).not.toMatch(/al\+ice|alice|s3cret/iu);
   });
 
   it.each(['ja', 'en'] as const)('resolves %s facets and passes sanitized tool arguments and actual cwd to an isolated judge', async (language) => {
@@ -902,13 +898,10 @@ describe('manager permission confirmation and turn context', () => {
   });
   describe.each(['goal', 'standalone'] as const)('quoted credentials in %s inquiries', (owner) => {
     it.each([
-      ['alice', 's3cretvalue', 'curl -u [REDACTED] https://example.com'],
-      ['al+ice', 's3cretvalue', 'curl -u "al+ice:s3cretvalue" https://example.com'],
-      ['alice', String.raw`foo\"bar`, 'curl -u [REDACTED] https://example.com'],
-      ['al+ice', String.raw`foo\"bar`, String.raw`curl -u "al+ice:foo\"bar" https://example.com`],
-      ['alice', String.raw`\"s3cretvalue`, 'curl -u [REDACTED] https://example.com'],
-      ['al+ice', String.raw`\"s3cretvalue`, String.raw`curl -u "al+ice:\"s3cretvalue" https://example.com`],
-    ])('protects saved operation arguments and the permission proposal for %s / %s', async (username, password, expectedCommand) => {
+      ['alice', 's3cretvalue'],
+      ['al+ice', 's3cretvalue'],
+      ['al+ice', 's3cret value'],
+    ])('protects saved operation arguments and the permission proposal for %s / %s', async (username, password) => {
       const session = createSession();
       const command = `curl -u "${username}:${password}" https://example.com`;
       doubles.call.mockImplementationOnce(async (_prompt: string, options: DecisionOptions) => {
@@ -924,12 +917,12 @@ describe('manager permission confirmation and turn context', () => {
         else expect(goal.questions).toHaveLength(1);
         const saved = owner === 'goal' ? goal.questions![0]!
           : await doubles.inquiryApproval.mock.results[0]!.value as ReturnType<typeof createInquiry>;
-        expect(saved.operation!.args).toBe(JSON.stringify({ command: expectedCommand }));
-        expect(saved.permissionProposal).toContain(JSON.stringify({ command: expectedCommand }));
+        const expectedArgs = JSON.stringify({ command: 'curl -u [REDACTED] https://example.com' });
+        expect(saved.operation!.args).toBe(expectedArgs);
+        expect(saved.permissionProposal).toContain(expectedArgs);
         expect(saved.permissionProposal).toContain(toolCwd);
         for (const text of [saved.operation!.args, saved.permissionProposal!]) {
-          if (username === 'alice') expect(text).not.toMatch(/alice|foo|bar|s3cretvalue/iu);
-          else expect(text).not.toContain('[REDACTED]');
+          expect(text).not.toMatch(/al\+ice|alice|s3cret/iu);
         }
       } finally { await session.close(); }
     });

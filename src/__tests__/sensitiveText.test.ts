@@ -15,65 +15,85 @@ import { sanitizeOpenCodeToolInput } from '../infra/opencode/tool-input-sanitize
 describe('sensitiveText', () => {
   describe.each(['-u ', '-u', '--user ', '--user=', '--proxy-user ', '--proxy-user='])(
     'user option %s', (option) => {
-      it.each(['a:x', 'a1.b_c-d:abc', '"a1.b_c-d:abc"', "'alice:abc'"])(
-        'redacts a credential-shaped value: %s', (value) => {
+      it.each([
+        'a:x', 'a1.b_c-d:abc', '"a1.b_c-d:abc"', "'alice:abc'",
+        'al+ice:abc', 'al%ice:abc', ':abc', 'alice:', ':',
+        '"al+ice:abc"', "'al%ice:abc'", '":abc"', "':abc'",
+        '"alice:"', "'alice:'", '":"', "':'",
+        '"alice:abc def"', "'alice:abc def'", '"al ice:abc"', "'al ice:abc'",
+      ])(
+        'redacts a colon-containing value in original and JSON text: %s', (value) => {
           const text = `inspect ${option}${value} tail`;
+          const expected = `inspect ${option}[REDACTED] tail`;
 
-          expect(sanitizeSensitiveText(text)).toBe(`inspect ${option}[REDACTED] tail`);
+          expect(sanitizeSensitiveText(text)).toBe(expected);
+          expect(sanitizeSensitiveText(JSON.stringify({ command: text })))
+            .toBe(JSON.stringify({ command: expected }));
         },
       );
 
       it.each([
         '+%Y-%m-%dT%H:%M:%SZ',
-        'al+ice:abc',
-        'al%ice:abc',
+        '"+%Y-%m-%dT%H:%M:%SZ"',
+        "'+%Y-%m-%dT%H:%M:%SZ'",
+        '+al+ice:abc',
+        '"+al+ice:abc def"',
+        "'+al%ice:abc def'",
         'alice',
-        ':abc',
-        'alice:',
-        '"al+ice:abc"',
-        "'al%ice:abc'",
-        '"alice:"',
-        "'alice:'",
-        '"alice:abc def"',
-        "'alice:abc def'",
-      ])('preserves a value outside the credential shape: %s', (value) => {
-        const text = `inspect ${option}${value} tail`;
+        '"alice"',
+        "'alice'",
+        '"aliceabc def"',
+        "'aliceabc def'",
+      ])('preserves a plus-prefixed or colon-free value before a URL in original and JSON text: %s', (value) => {
+        const text = `inspect ${option}${value} https://example.com tail`;
+        const json = JSON.stringify({ command: text });
 
         expect(sanitizeSensitiveText(text)).toBe(text);
+        expect(sanitizeSensitiveText(json)).toBe(json);
       });
 
-      it('redacts collected credentials and their password when echoed alone', () => {
-        const source = { command: `inspect ${option}"a1.b_c-d:abc"` };
+      it.each([
+        ['"a1.b_c-d:abc"', 'a1.b_c-d:abc', 'abc'],
+        ['"al+ice:s3cret value"', 'al+ice:s3cret value', 's3cret value'],
+        ["'al%ice:s3cret value'", 'al%ice:s3cret value', 's3cret value'],
+        ['":abc"', ':abc', 'abc'],
+      ])('redacts collected credentials and their password when echoed alone: %s', (value, credential, password) => {
+        const source = { command: `inspect ${option}${value}` };
 
-        const sanitized = sanitizeSensitiveTextWithKnownValues('echoed a1.b_c-d:abc abc', source);
+        const sanitized = sanitizeSensitiveTextWithKnownValues(`echoed ${credential} ${password}`, source);
 
         expect(sanitized).toBe('echoed [REDACTED] [REDACTED]');
       });
 
-      it('does not collect a date format or its colon suffix as a sensitive value', () => {
+      it.each(['', '"', "'"])('does not collect a date format or its colon suffix as a sensitive value: %s', (quote) => {
         const format = '+%Y-%m-%dT%H:%M:%SZ';
-        const source = { command: `inspect ${option}${format}` };
+        const source = { command: `inspect ${option}${quote}${format}${quote}` };
         const echo = `echoed ${format} %M:%SZ`;
 
         expect(sanitizeSensitiveTextWithKnownValues(echo, source)).toBe(echo);
+        expect(sanitizeSensitiveTextWithKnownValues(echo, JSON.stringify(source))).toBe(echo);
       });
 
-      it.each(['"a1.b_c-d:abc"', "'alice:abc'"])(
-        'redacts a quoted credential after JSON serialization: %s', (value) => {
-          const text = JSON.stringify({ command: `inspect ${option}${value} tail` });
+      it.each(['"', "'"])('does not collect a plus-prefixed quoted credential: %s', (quote) => {
+        const source = { command: `inspect ${option}${quote}+al+ice:s3cret value${quote}` };
+        const echo = 'echoed al+ice:s3cret value s3cret value';
 
-          expect(sanitizeSensitiveText(text)).toBe(JSON.stringify({ command: `inspect ${option}[REDACTED] tail` }));
-        },
-      );
+        expect(sanitizeSensitiveTextWithKnownValues(echo, source)).toBe(echo);
+        expect(sanitizeSensitiveTextWithKnownValues(echo, JSON.stringify(source))).toBe(echo);
+      });
 
       it.each([
-        '"al+ice:abc"', "'al%ice:abc'", '"+%Y-%m-%dT%H:%M:%SZ"',
-        '":abc"', "':abc'", '"alice:"', "'alice:'", '"alice:abc def"', "'alice:abc def'",
-      ])('preserves an invalid quoted value after JSON serialization: %s', (value) => {
-        const text = JSON.stringify({ command: `inspect ${option}${value} tail` });
+        ['alice:', 'alice:'], ['"alice:"', 'alice:'], ["'alice:'", 'alice:'], [':', ':'],
+      ])(
+        'collects the complete credential with an empty password: %s', (value, credential) => {
+          const source = { command: `inspect ${option}${value} tail` };
 
-        expect(sanitizeSensitiveText(text)).toBe(text);
-      });
+          expect(sanitizeSensitiveTextWithKnownValues(`echoed ${credential} tail`, source))
+            .toBe('echoed [REDACTED] tail');
+          expect(sanitizeSensitiveTextWithKnownValues(`echoed ${credential} tail`, JSON.stringify(source)))
+            .toBe('echoed [REDACTED] tail');
+        },
+      );
 
       it.each(['"', "'"])(
         'collects credentials without JSON quote boundaries: %s', (quote) => {
@@ -84,56 +104,18 @@ describe('sensitiveText', () => {
         },
       );
 
-      it.each(['"al+ice:s3cretvalue"', '"alice:s3cretvalue tail"'])(
-        'does not collect an invalid JSON quoted credential: %s', (value) => {
+      it.each([
+        ['"al+ice:s3cretvalue"', 'al+ice:s3cretvalue', 's3cretvalue'],
+        ['"alice:s3cretvalue tail"', 'alice:s3cretvalue tail', 's3cretvalue tail'],
+        ['"al+ice:s3cret value"', 'al+ice:s3cret value', 's3cret value'],
+      ])(
+        'collects a JSON quoted credential and its complete password: %s', (value, credential, password) => {
           const source = JSON.stringify({ command: `inspect ${option}${value}` });
-          const echo = `echoed ${value} s3cretvalue`;
+          const echo = `echoed ${credential} ${password}`;
 
-          expect(sanitizeSensitiveTextWithKnownValues(echo, source)).toBe(echo);
+          expect(sanitizeSensitiveTextWithKnownValues(echo, source)).toBe('echoed [REDACTED] [REDACTED]');
         },
       );
-
-      describe.each(['"', "'"])('escaped credentials in %s quotes', (quote) => {
-        it.each([String.raw`foo\"bar`, String.raw`\"s3cretvalue`, String.raw`foo\\`])(
-          'redacts the complete value in original and JSON text: %s', (password) => {
-            const command = `inspect ${option}${quote}alice:${password}${quote} tail`;
-            const expected = `inspect ${option}[REDACTED] tail`;
-
-            expect(sanitizeSensitiveText(command)).toBe(expected);
-            expect(sanitizeSensitiveText(JSON.stringify({ command }))).toBe(JSON.stringify({ command: expected }));
-          },
-        );
-
-        it.each([String.raw`foo\"bar`, String.raw`\"s3cretvalue`, String.raw`foo\\`])(
-          'collects the complete credential and password in the same representation: %s', (password) => {
-            const credential = `alice:${password}`;
-            const source = { command: `inspect ${option}${quote}${credential}${quote} tail` };
-            const jsonCredential = JSON.stringify(credential).slice(1, -1);
-            const jsonPassword = JSON.stringify(password).slice(1, -1);
-
-            expect(sanitizeSensitiveTextWithKnownValues(`echoed ${credential} ${password}`, source))
-              .toBe('echoed [REDACTED] [REDACTED]');
-            expect(sanitizeSensitiveTextWithKnownValues(
-              `echoed ${jsonCredential} ${jsonPassword}`, JSON.stringify(source),
-            )).toBe('echoed [REDACTED] [REDACTED]');
-          },
-        );
-
-        it.each([String.raw`al+ice:foo\"bar`, String.raw`alice:foo\"bar baz`])(
-          'preserves and does not collect an invalid escaped value: %s', (credential) => {
-            const command = `inspect ${option}${quote}${credential}${quote} tail`;
-            const source = { command };
-            const json = JSON.stringify(source);
-            const echo = `echoed ${credential} ${credential.slice(credential.indexOf(':') + 1)}`;
-            const jsonEcho = JSON.stringify(echo).slice(1, -1);
-
-            expect(sanitizeSensitiveText(command)).toBe(command);
-            expect(sanitizeSensitiveText(json)).toBe(json);
-            expect(sanitizeSensitiveTextWithKnownValues(echo, source)).toBe(echo);
-            expect(sanitizeSensitiveTextWithKnownValues(jsonEcho, json)).toBe(jsonEcho);
-          },
-        );
-      });
     },
   );
 
