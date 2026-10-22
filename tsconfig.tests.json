@@ -129,6 +129,7 @@
     "src/__tests__/engine-auto-routing.test.ts",
     "src/__tests__/engine-blocked.test.ts",
     "src/__tests__/engine-capabilities-provider-options.test.ts",
+    "src/__tests__/engine-completion-retry.test.ts",
     "src/__tests__/engine-error.test.ts",
     "src/__tests__/engine-loop-monitors.test.ts",
     "src/__tests__/engine-loop-phase3.integration.test.ts",

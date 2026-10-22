@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { executeStructuredAgent } from '../agents/structured-caller/transport.js';
-import type { WorkflowStep } from '../core/models/types.js';
+import type { WorkflowConfig, WorkflowStep } from '../core/models/types.js';
 import { CompanionStructuredCaller } from '../core/workflow/companion/structured-call.js';
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
 import {
@@ -8,6 +8,8 @@ import {
   createWorkflowStepDeadline,
 } from '../core/workflow/engine/step-deadline.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
+import { compileRuntimeProviderEnvironment } from '../infra/config/runtime-provider/environment.js';
+import { resolveWorkflowCompanions } from '../infra/config/workflowCompanionResolution.js';
 
 vi.mock('../agents/structured-caller/transport.js', () => ({
   executeStructuredAgent: vi.fn(),
@@ -101,6 +103,77 @@ describe('CompanionStructuredCaller', () => {
     expect(buildProviderCallCallbacks.mock.results.map(({ value }) => value.finish.mock.calls.length))
       .toEqual([1, 1]);
   });
+
+  it.each([undefined, 'selected-model'])(
+    'passes the selected companion profile model %s to the structured transport',
+    async (model) => {
+      const environment = compileRuntimeProviderEnvironment({
+        defaults: { profile: 'base' },
+        profiles: {
+          base: { provider: 'codex', model: 'base-model' },
+          selected: { provider: 'codex', ...(model === undefined ? {} : { model }) },
+        },
+        targets: { companions: { 'security-reviewer': { profile: 'selected' } } },
+      });
+      const workflow: WorkflowConfig = {
+        name: 'companion-model',
+        initialStep: 'implement',
+        maxSteps: 1,
+        companions: {
+          'security-reviewer': {
+            name: 'security-reviewer',
+            description: 'security review',
+            instructionRef: 'security-review',
+            instruction: 'review',
+            intervalMs: 15_000,
+          },
+        },
+        steps: [{
+          name: 'implement',
+          personaDisplayName: 'Implement',
+          instruction: 'implement',
+          companion: { fixed: ['security-reviewer'], pool: [] },
+        }],
+      };
+      const provider = resolveWorkflowCompanions(workflow, environment).get('security-reviewer');
+      expect(provider).toBeDefined();
+      vi.mocked(executeStructuredAgent).mockResolvedValue({
+        persona: 'security-reviewer',
+        status: 'done',
+        content: 'reviewed',
+        timestamp: new Date('2026-08-14T00:00:00.000Z'),
+        structuredOutput: { findings: [], updates: [] },
+      });
+      const caller = new CompanionStructuredCaller({
+        cwd: '/worktree',
+        projectCwd: '/project',
+        failureDir: '/project/.takt/runs/run/failures',
+        language: 'en',
+        buildProviderCallCallbacks: () => ({ finish: vi.fn() }),
+        recordUsage: vi.fn(),
+        recordCall: vi.fn(),
+      });
+
+      await caller.call({
+        purpose: 'reviewer',
+        agentName: 'security-reviewer',
+        provider: provider!,
+        systemPrompt: 'review system',
+        prompt: 'review prompt',
+        outputSchema: { type: 'object' },
+      });
+
+      expect(executeStructuredAgent).toHaveBeenCalledOnce();
+      const options = vi.mocked(executeStructuredAgent).mock.calls[0]![2];
+      expect(options.name).toBe('security-reviewer');
+      expect(options.resolution.provider).toBe('codex');
+      if (model === undefined) {
+        expect(options.resolution.model).toBeUndefined();
+      } else {
+        expect(options.resolution.model).toBe('selected-model');
+      }
+    },
+  );
 
   it('passes readonly permission without collapsing provider tools to an empty list', async () => {
     const successfulResponse = {
