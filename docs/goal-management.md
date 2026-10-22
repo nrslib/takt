@@ -107,6 +107,8 @@ Manager splits work into independently checkable results. Work that does not nee
 
 Results collect on the goal branch. Manager checks acceptance criteria through diffs, history and run reports, and checks combined results when needed. A goal is complete after integration into its target branch.
 
+Goal completion compares trees with `git merge-tree --write-tree`, which requires Git `>=2.38`; environments that do not meet this requirement receive an error stating the required version.
+
 ```yaml
 manager:
   main_merge: approve

@@ -110,7 +110,7 @@ Follow the [written tutorial](./docs/tutorial.md) with these hands-on walkthroug
 
 ## Requirements
 
-TAKT requires Node.js `>=22.22.0`.
+TAKT requires Node.js `>=22.22.0` and Git `>=2.38` (goal completion compares trees with `git merge-tree --write-tree`).
 
 The provider you choose determines whether you need to install an external CLI or can run on Node.js alone via a TypeScript SDK.
 

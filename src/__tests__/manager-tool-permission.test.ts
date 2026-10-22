@@ -648,6 +648,42 @@ describe('manager tool permission classification', () => {
   });
 });
 describe('manager permission judge input and output', () => {
+  it('passes the complete date command to the judge without redaction', async () => {
+    const command = 'date -u +%Y-%m-%dT%H:%M:%SZ; d=/tmp/x; ls -la $d';
+
+    await decide('Bash', { command });
+
+    expect(executeIsolatedStructuredInternalAgent).toHaveBeenCalledOnce();
+    const instruction = vi.mocked(executeIsolatedStructuredInternalAgent).mock.calls[0]![1];
+    const { toolArguments } = JSON.parse(instruction) as { toolArguments: string };
+    expect(toolArguments).toContain(command);
+    expect(toolArguments).not.toContain('[REDACTED]');
+  });
+
+  it('redacts curl credentials in the tool arguments passed to the judge', async () => {
+    await decide('Bash', { command: 'curl -u alice:s3cretvalue https://example.com' });
+
+    expect(executeIsolatedStructuredInternalAgent).toHaveBeenCalledOnce();
+    const instruction = vi.mocked(executeIsolatedStructuredInternalAgent).mock.calls[0]![1];
+    const { toolArguments } = JSON.parse(instruction) as { toolArguments: string };
+    expect(toolArguments).toBe(JSON.stringify({ command: 'curl -u [REDACTED] https://example.com' }));
+    expect(toolArguments).not.toMatch(/alice|s3cretvalue/iu);
+  });
+
+  it.each([
+    ['alice', 's3cretvalue'],
+    ['al+ice', 's3cretvalue'],
+    ['al+ice', 's3cret value'],
+  ])('redacts JSON quoted judge arguments for %s / %s', async (username, password) => {
+    await decide('Bash', { command: `curl -u "${username}:${password}" https://example.com` });
+
+    expect(executeIsolatedStructuredInternalAgent).toHaveBeenCalledOnce();
+    const instruction = vi.mocked(executeIsolatedStructuredInternalAgent).mock.calls[0]![1];
+    const { toolArguments } = JSON.parse(instruction) as { toolArguments: string };
+    expect(toolArguments).toBe(JSON.stringify({ command: 'curl -u [REDACTED] https://example.com' }));
+    expect(toolArguments).not.toMatch(/al\+ice|alice|s3cret/iu);
+  });
+
   it.each(['ja', 'en'] as const)('resolves %s facets and passes sanitized tool arguments and actual cwd to an isolated judge', async (language) => {
     const session = createSession('claude-sdk', language);
     const target = { id: goal.id, repositoryDirectory: '/fixture/goal-repository', constraints: goal.constraints };
@@ -859,6 +895,37 @@ describe('manager permission confirmation and turn context', () => {
   const reason = '送信先の選択には人の判断が必要です';
   beforeEach(() => {
     vi.mocked(executeIsolatedStructuredInternalAgent).mockResolvedValue(judgment({ decision: 'ask', reason }));
+  });
+  describe.each(['goal', 'standalone'] as const)('quoted credentials in %s inquiries', (owner) => {
+    it.each([
+      ['alice', 's3cretvalue'],
+      ['al+ice', 's3cretvalue'],
+      ['al+ice', 's3cret value'],
+    ])('protects saved operation arguments and the permission proposal for %s / %s', async (username, password) => {
+      const session = createSession();
+      const command = `curl -u "${username}:${password}" https://example.com`;
+      doubles.call.mockImplementationOnce(async (_prompt: string, options: DecisionOptions) => {
+        expectDenial(await handler(options)(request('Bash', { command })));
+        return reply();
+      });
+      try {
+        const turn: TurnOptions = { text: humanInstruction,
+          ...(owner === 'goal' ? { goal: { id: goal.id, repositoryDirectory: cwd, constraints: goal.constraints } } : {}),
+        };
+        expect((await session.handleUserMessage(turn)).kind).toBe('reply');
+        if (owner === 'standalone') expect(doubles.inquiryApproval).toHaveBeenCalledOnce();
+        else expect(goal.questions).toHaveLength(1);
+        const saved = owner === 'goal' ? goal.questions![0]!
+          : await doubles.inquiryApproval.mock.results[0]!.value as ReturnType<typeof createInquiry>;
+        const expectedArgs = JSON.stringify({ command: 'curl -u [REDACTED] https://example.com' });
+        expect(saved.operation!.args).toBe(expectedArgs);
+        expect(saved.permissionProposal).toContain(expectedArgs);
+        expect(saved.permissionProposal).toContain(toolCwd);
+        for (const text of [saved.operation!.args, saved.permissionProposal!]) {
+          expect(text).not.toMatch(/al\+ice|alice|s3cret/iu);
+        }
+      } finally { await session.close(); }
+    });
   });
   it.each(['ja', 'en'] as const)('denies confirmation with a saved inquiry ID in %s, delivers a goal-less notice, and exposes the reason in the next turn', async (language) => {
     const session = createSession('claude-sdk', language); const onNotification = vi.fn();
