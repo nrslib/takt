@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { locateWorkflowPromptStep, renderWorkflowPromptTree } from '../workflow-prompt-context.js';
+import { buildWorkflowPromptTree, locateWorkflowPromptStep, renderWorkflowPromptTree } from '../workflow-prompt-context.js';
 import { buildScopedStepIterationIdentity } from '../step-iteration-identity.js';
 import { findWorkflowStepLocation } from '../workflow-step-location.js';
 import { formatWorkflowRuleCondition } from '../../models/workflow-rule-condition.js';
@@ -210,6 +210,10 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getPrContext: () => params.options.prContext,
   });
   const failureDir = join(params.runPaths.runRootAbs, 'failures');
+  const sharedTree = params.sharedRuntime.workflowPromptTree;
+  // Direct engine callers have no bundle; describe the current definition without resolving calls.
+  const promptTree = sharedTree ?? buildWorkflowPromptTree(params.config, undefined, params.projectCwd, params.getCwd());
+  const promptPrefix = sharedTree === undefined ? [] : params.resumeStackPrefix;
 
   const optionsBuilder = new OptionsBuilder(
     params.options,
@@ -230,7 +234,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       const internalStep = step.internalPromptContext;
       if (step.engineSynthesized && internalStep === undefined) return undefined;
       const definitionStepName = internalStep?.ownerStepName ?? step.name;
-      const tree = params.sharedRuntime.workflowPromptTree!;
+      const tree = promptTree;
       const activeStep = params.config.steps.find((entry) => entry.name === params.state.currentStep);
       if (activeStep === undefined) throw new Error(`Missing active step "${params.state.currentStep}"`);
       const definition = activeStep.parallel !== undefined && step.parallel === undefined
@@ -240,7 +244,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
       if (definition?.name !== definitionStepName) throw new Error(`Missing definition owner for "${step.name}"`);
       const stepPath = findWorkflowStepLocation(params.config, definition);
       if (stepPath === undefined) throw new Error(`Missing definition path for "${step.name}"`);
-      const location = locateWorkflowPromptStep(tree, params.resumeStackPrefix, stepPath);
+      const location = locateWorkflowPromptStep(tree, promptPrefix, stepPath);
       const language = params.options.language ?? 'en';
       const identity = internalStep === undefined
         ? buildScopedStepIterationIdentity(step.name,

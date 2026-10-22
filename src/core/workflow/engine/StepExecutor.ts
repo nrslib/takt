@@ -8,7 +8,7 @@
 
 import { existsSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join } from 'node:path';
-import { renderPhaseContext } from '../../../shared/prompts/phase-context.js';
+import { renderPhaseContext, stripPhaseContext } from '../../../shared/prompts/phase-context.js';
 import type {
   AgentWorkflowStep,
   WorkflowStep,
@@ -357,9 +357,8 @@ export class StepExecutor {
     const language = this.deps.getLanguage() ?? 'en';
     const assignment = workflowMeta.context?.assignment;
     const phase1Context = assignment === undefined ? undefined : renderPhaseContext(assignment, 1, language).trimStart();
-    const instructionBody = input.originalInstruction.trimStart();
-    const reviewRequirements = phase1Context !== undefined && instructionBody.startsWith(phase1Context)
-      ? instructionBody.slice(phase1Context.length).trimStart()
+    const reviewRequirements = phase1Context !== undefined
+      ? stripPhaseContext(input.originalInstruction, phase1Context)
       : input.originalInstruction;
     const priorJudgeGapPaths = new Set<string>();
     const result = await runCompletionRetryEpisode({
@@ -419,8 +418,7 @@ export class StepExecutor {
           );
           const judgeOptions = this.deps.optionsBuilder.buildAgentOptions(judgeStep);
           const judgeInstruction = assignment === undefined ? prompt.instruction : [
-            renderPhaseContext(assignment, 3, language),
-            `## ${language === 'ja' ? '判定基準' : 'Criteria'}`,
+            renderPhaseContext(assignment, 3, language, false),
             prompt.instruction,
           ].join('\n\n');
           this.deps.emitEvent('review_completion:judge:start', {
@@ -1662,7 +1660,12 @@ export class StepExecutor {
         const reportResult = await runReportPhase(
           step,
           stepIteration,
-          { ...phaseCtx, injectedReports, reportInputs },
+          {
+            ...phaseCtx,
+            lastStructuredOutput: nextResponse.structuredOutput,
+            injectedReports,
+            reportInputs,
+          },
           (reportName) => {
             writtenReports.add(reportName);
             this.recordReportGeneration(phaseCtx.reportDir, reportName, true);

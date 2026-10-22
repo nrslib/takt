@@ -124,6 +124,25 @@ describe('workflow prompt definition tree', () => {
     expect(resolver.mock.calls).toHaveLength(2);
   });
 
+  it.each(['missing resolver', 'missing target', 'resolver error'] as const)('keeps unresolved calls as leaves without changing execution errors (%s)', (failure) => {
+    const root = workflow('root', [{ name: 'delegate', kind: 'workflow_call', instruction: '', personaDisplayName: 'call', call: 'child', rules: [] }]);
+    const resolver = failure === 'missing resolver' ? undefined : vi.fn(() => {
+      if (failure === 'resolver error') throw new Error('resolution failed');
+      return null;
+    });
+    const tree = buildWorkflowPromptTree(root, resolver, '/project', '/work');
+    const location = locateWorkflowPromptStep(tree, [], ['steps', 0]);
+    expect(renderWorkflowPromptTree(tree, location.route, 'en')).toBe('- root (workflow)\n  - delegate ← current');
+  });
+
+  it('stops expanding an active workflow reference even when the resolver returns fresh objects', () => {
+    const call: WorkflowStep = { name: 'delegate', kind: 'workflow_call', instruction: '', personaDisplayName: 'call', call: 'root', rules: [] };
+    const resolver = vi.fn(() => workflow('root', [structuredClone(call)]));
+    const tree = buildWorkflowPromptTree(workflow('root', [call]), resolver, '/project', '/work');
+    expect(renderWorkflowPromptTree(tree, [['steps', 0]], 'en')).toBe('- root (workflow)\n  - delegate ← current');
+    expect(resolver).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects a definition that makes the current marker ambiguous', () => {
     const tree = buildWorkflowPromptTree(workflow('root', [makeStep({ description: '← 現在' })]), undefined, '/project', '/work');
     expect(() => renderWorkflowPromptTree(tree, [['steps', 0]], 'ja')).toThrow(/exactly one/);

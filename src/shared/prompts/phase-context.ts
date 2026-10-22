@@ -31,9 +31,17 @@ export function renderPhaseContext(
   assignment: Pick<WorkflowAssignment, 'stepName' | 'parallelParent' | 'internalStep' | 'stepIteration'>,
   phase: 1 | 2 | 3,
   language: Language,
+  selectRule = true,
 ): string {
   return loadTemplate(`parts/phase${phase}_context`, language, {
     stepName: assignmentStepName(assignment, language),
     stepIteration: String(assignment.stepIteration),
+    selectRule,
   });
+}
+
+export function stripPhaseContext(instruction: string, phaseContext: string): string {
+  const body = instruction.trimStart();
+  const prefix = phaseContext.trimStart();
+  return body.startsWith(prefix) ? body.slice(prefix.length).trimStart() : instruction;
 }

@@ -1110,6 +1110,7 @@ export class ParallelRunner {
             try {
               const reportResult = await runReportPhase(subStep, subIteration, {
                 ...phaseCtx,
+                lastStructuredOutput: subResponse.structuredOutput,
                 injectedReports: subInstruction.injectedReports,
                 reportInputs: reportInputTracker.snapshot(),
               }, (reportName) => {

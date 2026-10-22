@@ -1,7 +1,7 @@
 import type { Language, WorkflowConfig, WorkflowResumePointEntry, WorkflowStep } from '../models/types.js';
 import { isDynamicParallelSubSteps } from '../models/types.js';
 import type { WorkflowCallResolver } from './types.js';
-import { workflowEntryMatchesWorkflow } from './workflow-reference.js';
+import { getWorkflowReference, workflowEntryMatchesWorkflow } from './workflow-reference.js';
 import { isWorkflowCallStep } from './step-kind.js';
 
 type StepPath = readonly (string | number)[];
@@ -66,7 +66,10 @@ export function buildWorkflowPromptTree(
   lookupCwd: string,
 ): WorkflowPromptTree {
   const rows: WorkflowTreeRow[] = [];
+  const activeWorkflows = new Set<string>();
   function workflow(config: WorkflowConfig, depth: number, route: WorkflowStepRoute): WorkflowTreeNode {
+    const reference = getWorkflowReference(config);
+    activeWorkflows.add(reference);
     rows.push(treeRow(depth, config.name, config.description, true, false));
     function steps(
       definitions: readonly WorkflowStep[],
@@ -79,11 +82,17 @@ export function buildWorkflowPromptTree(
         const stepPath = [...path, index];
         rows.push(treeRow(depth, step.name, stepDescription(step), false, optional, [...route, stepPath]));
         let child: WorkflowTreeNode | undefined;
-        if (isWorkflowCallStep(step)) {
-          if (resolveCall === undefined) throw new Error(`Workflow prompt tree requires a resolver for "${step.name}"`);
-          const resolved = resolveCall({ parentWorkflow: config, step, projectCwd, lookupCwd });
-          if (resolved === null) throw new Error(`Workflow prompt tree could not resolve "${step.name}"`);
-          child = workflow(resolved, depth + 1, [...route, stepPath]);
+        if (isWorkflowCallStep(step) && resolveCall !== undefined) {
+          let resolved: WorkflowConfig | null;
+          try {
+            resolved = resolveCall({ parentWorkflow: config, step, projectCwd, lookupCwd });
+          } catch {
+            // Prompt discovery must leave call failures to the execution boundary.
+            resolved = null;
+          }
+          if (resolved !== null && !activeWorkflows.has(getWorkflowReference(resolved))) {
+            child = workflow(resolved, depth + 1, [...route, stepPath]);
+          }
         }
         const entry: WorkflowTreeStep = { step, path: stepPath, parent, child };
         if (step.parallel === undefined) return [entry];
@@ -97,7 +106,9 @@ export function buildWorkflowPromptTree(
         return [entry, ...nested];
       });
     }
-    return { config, steps: steps(config.steps, ['steps'], depth + 1, false) };
+    const entries = steps(config.steps, ['steps'], depth + 1, false);
+    activeWorkflows.delete(reference);
+    return { config, steps: entries };
   }
   return { root: workflow(config, 0, []), rows };
 }

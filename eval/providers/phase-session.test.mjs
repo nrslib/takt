@@ -309,6 +309,27 @@ for (const command of ['cp docs/requirements.md /dev/stdout', 'head -n 4 docs/re
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
+test('red/green CLI requires an explicit red dist before preparing or invoking providers', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'phase-red-dist-'));
+  try {
+    for (const flag of [[], ['--plan']]) {
+      const result = spawnSync(process.execPath, [
+        fileURLToPath(new URL('../scripts/phase-awareness-redgreen.mjs', import.meta.url)),
+        '--output-dir', join(directory, 'results'), ...flag,
+      ], { encoding: 'utf8' });
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /--red-dist is required/);
+      assert.equal(existsSync(join(directory, 'results')), false);
+    }
+    const plan = spawnSync(process.execPath, [
+      fileURLToPath(new URL('../scripts/phase-awareness-redgreen.mjs', import.meta.url)),
+      '--plan', '--red-dist', '/explicit/main/dist',
+    ], { encoding: 'utf8' });
+    assert.equal(plan.status, 0, plan.stderr);
+    assert.ok(JSON.parse(plan.stdout).filter((row) => row.variant === 'red').every((row) => row.dist === '/explicit/main/dist'));
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
 test('matrix fixes full repeat counts, green-only missing result, smoke count and improvement threshold', () => {
   const full = redGreenPlan({ smoke: false, redDist: '/red', greenDist: '/green' });
   assert.equal(full.find((row) => row.provider.id === 'luna-max' && row.entry.id === '1' && row.variant === 'red').count, 10);

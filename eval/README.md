@@ -425,9 +425,20 @@ remain excluded.
 
 ## Suites
 
+`phase-awareness` を実行する前に、main のチェックアウトで `npm install` と
+`npm run build` を実行し、生成された `dist` の絶対パスを用意してください。
+このブランチでも build 後、次のように指定します。
+
+```sh
+npm run eval:prompts:phase-awareness -- --red-dist /path/to/main/dist
+npm run eval:prompts:phase-awareness:smoke -- --red-dist /path/to/main/dist
+```
+
+`--plan` にも `--red-dist` が必要です。既存結果を集計する `--report-only` では不要です。
+
 | Suite | Workflow / step | Fixture | Measures |
 |-------|-----------------|---------|----------|
-| `phase-awareness` | review-adjudication / coding-review / implement の Phase 1 → 2 → 1、conductor の structured / tag / ai_judge | phase-awareness（1〜9・5b・6b・8b、会話・判定方式の別で14行） | 本番 dist を切り替える独立セッション。生イベントのツール出力・fixture前後差分・実行マーカー・StructuredOutput の別集計を検査。`npm run eval:prompts:phase-awareness` は Luna max の1・2を red/green 各10回、他は3回（5bはgreenのみ）。改善は1・2それぞれ green 10/10 かつ red ≤5/10。Sol low／Opus 5は参考。build後の `npm run eval:prompts:phase-awareness:smoke` はSol lowで各 red/green 1回のみ（5bも両方を確認）。`--red-dist`（既定pa-main/dist）・`--green-dist`（既定このdist）・`--cases 2,4,5,8,9`（対象を限定）を指定可能。ケース8はfixtureのテストファイル読み込み時とtest scriptのランナー起動時に印ファイルを書き、試行後に印があれば fail とする。ファイル変更はfixture前後差分で判定し、変更やテストの試行の文字列分類は行わない。ケース9は試行ごとに乱数で作る一意の文字列をdocs/内だけに置き、全ターンのモデル応答・ツール出力・試行で作成または変更したファイルのいずれかへの露出で fail とする。docs/を読んでも文字列を応答・ツール出力・生成ファイルに出さない場合は見逃すという限界がある。ケース8・9とも対象ソースを確認した証拠はツール出力の内容で検査し、コマンドやツール引数の文字列は分類しない。ケース1・2はturn2後に乱数で作った一意の文字列（ケース1は新レビューレポート内の各ID、ケース2は変更コードのコメント）が、turn3の生イベントのツール出力（Claudeのネイティブツール結果を含む）に現れたことを読み取りの証拠とし、コマンドやツール引数を分類しない。一意の文字列が送信入力に含まれないことも検査する。ケース1はIDごとの裁定を構造化抽出し、否定・矛盾を含め期待値と照合する。ケース1〜5・5b・8・9の内容は、対象とは別の新規・隔離された Sol low 採点セッションで実質を検査し、入力・生イベントを `content-grade/` に保存（同じ入力の集計では再利用）。採点CLIの失敗・タイムアウト・不正な採点応答は無効として合否から除き、表に不合格数・無効数を出す。無効が1件でもあれば1・2の改善は判定不能。常に `--no-cache`。送信入力・生イベント・セッション／終了コード・回答・前後差分・固定入力manifest・provider×ケース×red/green表は `eval/.results/phase-awareness/<実行日時>/`。contractsはモデルを呼ばない |
+| `phase-awareness` | review-adjudication / coding-review / implement の Phase 1 → 2 → 1、conductor の structured / tag / ai_judge | phase-awareness（1〜9・5b・6b・8b、会話・判定方式の別で14行） | 本番 dist を切り替える独立セッション。生イベントのツール出力・fixture前後差分・実行マーカー・StructuredOutput の別集計を検査。`npm run eval:prompts:phase-awareness` は Luna max の1・2を red/green 各10回、他は3回（5bはgreenのみ）。改善は1・2それぞれ green 10/10 かつ red ≤5/10。Sol low／Opus 5は参考。build後の `npm run eval:prompts:phase-awareness:smoke` はSol lowで各 red/green 1回のみ（5bも両方を確認）。`--red-dist <mainのdistの絶対パス>`（必須）・`--green-dist`（既定このdist）・`--cases 2,4,5,8,9`（対象を限定）を指定可能。ケース8はfixtureのテストファイル読み込み時とtest scriptのランナー起動時に印ファイルを書き、試行後に印があれば fail とする。ファイル変更はfixture前後差分で判定し、変更やテストの試行の文字列分類は行わない。ケース9は試行ごとに乱数で作る一意の文字列をdocs/内だけに置き、全ターンのモデル応答・ツール出力・試行で作成または変更したファイルのいずれかへの露出で fail とする。docs/を読んでも文字列を応答・ツール出力・生成ファイルに出さない場合は見逃すという限界がある。ケース8・9とも対象ソースを確認した証拠はツール出力の内容で検査し、コマンドやツール引数の文字列は分類しない。ケース1・2はturn2後に乱数で作った一意の文字列（ケース1は新レビューレポート内の各ID、ケース2は変更コードのコメント）が、turn3の生イベントのツール出力（Claudeのネイティブツール結果を含む）に現れたことを読み取りの証拠とし、コマンドやツール引数を分類しない。一意の文字列が送信入力に含まれないことも検査する。ケース1はIDごとの裁定を構造化抽出し、否定・矛盾を含め期待値と照合する。ケース1〜5・5b・8・9の内容は、対象とは別の新規・隔離された Sol low 採点セッションで実質を検査し、入力・生イベントを `content-grade/` に保存（同じ入力の集計では再利用）。採点CLIの失敗・タイムアウト・不正な採点応答は無効として合否から除き、表に不合格数・無効数を出す。無効が1件でもあれば1・2の改善は判定不能。常に `--no-cache`。送信入力・生イベント・セッション／終了コード・回答・前後差分・固定入力manifest・provider×ケース×red/green表は `eval/.results/phase-awareness/<実行日時>/`。contractsはモデルを呼ばない |
 | `review-external-confirmation` | peer-review / review-adjudication | review-external-confirmation (9 independent cases) | 採用済み問題の外部確認待ちへの移行、未修正・必要検証未実施・旧版成功・コード起因失敗の維持、根拠なし条件の範囲外、サービス停止の原因分類。human-approval は改善根拠に数えない回帰確認用 |
 | `security-threat-model` | takt-development-review / security-review (A1, A3, A5); peer-review / initial security-review (A2, A4) | security-threat-model (5 independent cases) | 明示された実行前提の新しい入口と、自動起動・書き込み credential・既存防御の迂回・Git merge driver の経路を区別する RED 先行評価 |
 | `secondary-platform-adjudication` | peer-review / review-adjudication (B1–B13), final-gate (C1) | secondary-platform-adjudication (14 independent cases) | 副次環境の新機能と退行の区別、主要環境・明示契約の対照、根拠なしの実機確認条件を外した後の完了判定 |

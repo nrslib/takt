@@ -10,6 +10,7 @@ import { preparePhaseAwareness } from './prepare-phase-awareness.mjs';
 const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
 
 export function redGreenPlan({ smoke, redDist, greenDist }) {
+  if (!redDist) throw new Error('--red-dist is required; specify the main build dist directory');
   return ['red', 'green'].flatMap((variant) => PHASE_PROVIDERS.flatMap((provider) => PHASE_CASES.map((entry) => ({
     provider, entry, variant, count: trialCount(entry, provider, variant, smoke),
     dist: variant === 'red' ? redDist : greenDist,
@@ -166,7 +167,7 @@ export async function summarizeRedGreen(plan, runDir, executions, smoke, gradeTr
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   const options = {
-    smoke: false, redDist: '/Users/nrs/work/git/takt3-worktrees/pa-main/dist', greenDist: join(repoRoot, 'dist'),
+    smoke: false, greenDist: join(repoRoot, 'dist'),
     outputDir: join(repoRoot, 'eval/.results/phase-awareness', new Date().toISOString().replaceAll(':', '-')),
   };
   let planOnly = false;

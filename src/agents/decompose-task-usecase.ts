@@ -9,7 +9,7 @@ import type { ProviderUsageSnapshot } from '../core/models/response.js';
 import type { ProviderType } from '../core/workflow/types.js';
 import type { RunAgentOptions, StreamCallback } from './runner.js';
 import type { StepProviderOptions } from '../core/models/workflow-types.js';
-import { renderPhaseContext } from '../shared/prompts/phase-context.js';
+import { renderPhaseContext, stripPhaseContext } from '../shared/prompts/phase-context.js';
 import {
   executeStructuredAgent,
   requireStructuredAgentProvider,
@@ -106,12 +106,9 @@ function prepareTeamLeaderTask(instruction: string, options: DecomposeTaskOption
   const assignment = options.workflowMeta?.context?.assignment;
   if (assignment === undefined) return { phaseContext: '', taskInstruction: instruction };
   const phaseContext = renderPhaseContext(assignment, 1, options.language ?? 'en').trimStart();
-  const trimmedInstruction = instruction.trimStart();
   return {
     phaseContext,
-    taskInstruction: trimmedInstruction.startsWith(phaseContext)
-      ? trimmedInstruction.slice(phaseContext.length).trimStart()
-      : instruction,
+    taskInstruction: stripPhaseContext(instruction, phaseContext),
   };
 }
 

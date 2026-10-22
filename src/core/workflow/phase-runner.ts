@@ -105,6 +105,7 @@ export interface BasePhaseRunnerContext {
 }
 
 export interface ReportPhaseRunnerContext extends BasePhaseRunnerContext {
+  lastStructuredOutput?: Record<string, unknown>;
   injectedReports?: readonly InjectedReport[];
   reportInputs?: Phase1ReportInputs;
   userInputs?: readonly string[];

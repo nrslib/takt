@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AgentResponse, Language, WorkflowConfig } from '../core/models/types.js';
+import type { AgentResponse, Language, WorkflowConfig, WorkflowStep } from '../core/models/types.js';
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { ProviderNeutralStructuredCaller } from '../agents/structured-caller.js';
 import { MockProvider } from '../infra/providers/mock.js';
@@ -244,15 +244,16 @@ describe('phase awareness review regressions', () => {
       ? `## 担当とフェーズ\n\n今は ${label} ステップの判定フェーズ（Phase 3）です（Step Iteration: 3）。`
       : `## Assignment and phase\n\nYou are now in the judgment phase (Phase 3) of step ${label} (Step Iteration: 3).`;
     for (const call of judgments) {
-      expectPhase(call.instruction, language, label, 3, 3);
       const payload = JSON.parse(call.instruction.slice(call.instruction.indexOf('\n{') + 1)) as {
         review_requirements: string;
       };
       expect(payload.review_requirements).toContain('Review the work');
       expect(payload.review_requirements).not.toContain(language === 'ja' ? '## 担当とフェーズ' : '## Assignment and phase');
       expect(payload.review_requirements).not.toContain(phaseBodies[language][1]);
-      expect(call.instruction.startsWith(`${phaseContext}\n${phaseBodies[language][3]}\n\n`)).toBe(true);
-      expect(call.instruction).toContain(language === 'ja' ? '## 判定基準\n' : '## Criteria\n');
+      const judgmentRestrictions = phaseBodies[language][3].split('\n')[1];
+      expect(call.instruction.startsWith(`${phaseContext}\n${judgmentRestrictions}\n\n`)).toBe(true);
+      expect(call.instruction).not.toContain(phaseBodies[language][3].split('\n')[0]);
+      expect(call.instruction).not.toContain(language === 'ja' ? '## 判定基準\n' : '## Criteria\n');
       const assignment = section(call.system, language === 'ja' ? '担当' : 'Assignment');
       expect(assignment).toBe(language === 'ja'
         ? `- ステップ: ${label}\n- Step Iteration: 3\n- Iteration: 1/5\n- フェーズ: 判定フェーズ（Phase 3）`
@@ -315,6 +316,47 @@ describe('phase awareness review regressions', () => {
       expect(tree.slice(tree.indexOf(root))).toBe(`${root}\n  - review\n  - fix${language === 'ja' ? ' ← 現在' : ' ← current'}${parallel ? '\n    - fix' : ''}`);
       expect(section(call.system, language === 'ja' ? '_loop_judge_review_fix の rules' : 'Rules for _loop_judge_review_fix')).toBe('- stop → COMPLETE\n- continue → review');
     }
+  });
+
+  it.each([
+    ['ja', false, false], ['en', false, false], ['ja', true, false], ['en', true, false],
+    ['ja', false, true], ['en', false, true], ['ja', true, true], ['en', true, true],
+  ] as const)('passes structured-only work results into reports (%s, session=%s, parallel=%s)', async (language, hasSession, parallel) => {
+    const workResult = { status: 'verified', paths: ['src/work.ts'] };
+    const report = '# Report\nVerified src/work.ts';
+    vi.spyOn(MockProvider.prototype, 'setup').mockImplementation((setup) => ({
+      call: async (instruction, options) => {
+        recordCall(setup.systemPrompt ?? '', instruction);
+        if (Object.hasOwn(options.outputSchema?.properties ?? {}, 'status')) {
+          return { ...done('', workResult), sessionId: hasSession ? 'work-session' : undefined };
+        }
+        const resultSection = section(instruction, language === 'ja' ? '作業結果' : 'Work Results');
+        expect(JSON.parse(resultSection.slice(resultSection.indexOf('{')))).toEqual(workResult);
+        return done(report, Object.hasOwn(options.outputSchema?.properties ?? {}, 'content') ? { content: report } : undefined);
+      },
+    }));
+    const work: WorkflowStep = {
+      name: 'work', instruction: 'Verify the paths', personaDisplayName: 'Reviewer',
+      structuredOutput: { schemaRef: 'work-result', schema: {
+        type: 'object', properties: { status: { type: 'string' }, paths: { type: 'array', items: { type: 'string' } } },
+        required: ['status', 'paths'], additionalProperties: false,
+      } },
+      outputContracts: [{ name: 'work.md', format: '# Report' }],
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
+    };
+    const engine = new WorkflowEngine({
+      name: 'structured-work', maxSteps: 5, initialStep: 'work',
+      steps: [parallel ? {
+        name: 'work', instruction: '', personaDisplayName: 'Parent', parallel: [work],
+        rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })],
+      } : work],
+    }, directory, 'verify task', {
+      projectCwd: directory, provider: 'mock', language, reportDirName: 'structured-work',
+      structuredCaller: new ProviderNeutralStructuredCaller(),
+    });
+    expect((await engine.run()).status).toBe('completed');
+    expect(providerCalls).toHaveLength(2);
+    expect(readFileSync(join(directory, '.takt/runs/structured-work/reports/work.md'), 'utf8')).toBe(report);
   });
 
   it.each(['ja', 'en'] as const)('checks complete phase text exactly once through all three judgment stages (%s)', async (language) => {

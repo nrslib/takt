@@ -130,7 +130,10 @@ async function executeReportPhase(
 ): Promise<ReportPhaseBlockedResult | ReportPhaseRateLimitedResult | void> {
   const primarySessionKey = ctx.resolveSessionKey(step);
   let currentSessionId = ctx.getSessionId(primarySessionKey);
-  const hasLastResponse = ctx.lastResponse != null && ctx.lastResponse.trim().length > 0;
+  const lastResponse = ctx.lastStructuredOutput !== undefined && !ctx.lastResponse?.trim()
+    ? JSON.stringify(ctx.lastStructuredOutput, null, 2)
+    : ctx.lastResponse;
+  const hasLastResponse = lastResponse != null && lastResponse.trim().length > 0;
 
   log.debug('Running report phase', {
     step: step.name,
@@ -170,7 +173,7 @@ async function executeReportPhase(
       stepIteration,
       language: ctx.language,
       targetFile: fileName,
-      lastResponse: ctx.lastResponse,
+      lastResponse,
       injectedReports: ctx.injectedReports,
       completionRetryDiagnostic: ctx.completionRetryDiagnostic,
     }).build();
@@ -246,7 +249,7 @@ async function executeReportPhase(
       stepIteration,
       language: ctx.language,
       targetFile: fileName,
-      lastResponse: ctx.lastResponse,
+      lastResponse,
       injectedReports: ctx.injectedReports,
       completionRetryDiagnostic: ctx.completionRetryDiagnostic,
     }).build();

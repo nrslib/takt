@@ -71,7 +71,7 @@ import {
 } from '../review-report-discovery.js';
 import { getRemoteRepositoryIdentifiers } from '../../../infra/git/detect.js';
 import { WorkflowResumeContinuation } from './workflow-resume-continuation.js';
-import { inheritWorkflowConfigMetadata, translateWorkflowConfigError } from '../../../shared/workflowConfigMetadata.js';
+import { getAttachedWorkflowBundleNodeId, inheritWorkflowConfigMetadata, translateWorkflowConfigError } from '../../../shared/workflowConfigMetadata.js';
 import { WorkflowRestartNavigator } from './WorkflowRestartNavigator.js';
 import { withWorkflowTargetContext } from '../provider-target-resolution.js';
 import { readResumeReportSnapshotManifest } from '../run/resume-report-snapshot.js';
@@ -304,9 +304,12 @@ export class WorkflowEngine extends EventEmitter {
       throw translateWorkflowConfigError(this.config, error);
     }
 
-    this.sharedRuntime.workflowPromptTree ??= buildWorkflowPromptTree(
-      this.config, this.options.workflowCallResolver, this.projectCwd, this.cwd,
-    );
+    // Only bundle resolvers read already resolved definitions without invoking live calls.
+    if (this.resumeStackPrefix.length === 0 && getAttachedWorkflowBundleNodeId(this.config) !== undefined) {
+      this.sharedRuntime.workflowPromptTree ??= buildWorkflowPromptTree(
+        this.config, this.options.workflowCallResolver, this.projectCwd, this.cwd,
+      );
+    }
     this.state = createInitialState(this.config, this.options);
     this.resumeContinuation = new WorkflowResumeContinuation(
       this.config,
