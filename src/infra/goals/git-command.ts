@@ -9,6 +9,11 @@ export interface GoalGitOutput {
   code: number;
 }
 
+function mergeTreeFailure(message: string, version: string | undefined): Error {
+  const detected = version?.trim();
+  return new Error(`Git >= 2.38 is required for git merge-tree --write-tree.${detected ? ` Detected Git: ${detected}.` : ''} ${message}`);
+}
+
 export async function runGoalGit(
   cwd: string, args: readonly string[], limit: number, signal: AbortSignal | undefined,
   acceptedCodes: readonly number[] = [0],
@@ -45,7 +50,13 @@ export async function runGoalGit(
   });
   const result = await managed.wait();
   if (result.signal !== null || result.code === null || !acceptedCodes.includes(result.code)) {
-    throw new Error(`Goal Git ${args[0]} failed (${result.signal ?? result.code}): ${Buffer.concat(errors).toString('utf8').trim()}`);
+    const message = `Goal Git ${args[0]} failed (${result.signal ?? result.code}): ${Buffer.concat(errors).toString('utf8').trim()}`;
+    if (result.signal === null && result.code !== null && args[0] === 'merge-tree' && args[1] === '--write-tree') {
+      // Version diagnostics must not replace the original merge failure.
+      const version = await goalGitText(cwd, ['--version'], signal).catch(() => undefined);
+      throw mergeTreeFailure(message, version);
+    }
+    throw new Error(message);
   }
   return { output: Buffer.concat(chunks), truncated, code: result.code };
 }
@@ -103,7 +114,17 @@ function runGoalGitSync(
   });
   if (result.error !== undefined) throw result.error;
   if (result.signal !== null || result.status === null || !acceptedCodes.includes(result.status)) {
-    throw new Error(`Goal Git ${args[0]} failed (${result.signal ?? result.status}): ${result.stderr.toString('utf8').trim()}`);
+    const message = `Goal Git ${args[0]} failed (${result.signal ?? result.status}): ${result.stderr.toString('utf8').trim()}`;
+    if (result.signal === null && result.status !== null && args[0] === 'merge-tree' && args[1] === '--write-tree') {
+      let version: string | undefined;
+      try {
+        version = runGoalGitSync(cwd, ['--version'], env, [0]).stdout.toString('utf8');
+      } catch {
+        // Version diagnostics must not replace the original merge failure.
+      }
+      throw mergeTreeFailure(message, version);
+    }
+    throw new Error(message);
   }
   return result;
 }

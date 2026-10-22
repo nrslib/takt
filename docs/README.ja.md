@@ -110,7 +110,7 @@ GitHub PR に対して `takt caccia <PR番号>` を実行すると、CodeRabbit 
 
 ## 必要なもの
 
-TAKT の実行には Node.js `>=22.22.0` が必要です。
+TAKT の実行には Node.js `>=22.22.0` と Git `>=2.38` が必要です（ゴールの完成判定が `git merge-tree --write-tree` で tree を比べます）。
 
 利用するプロバイダーに応じて、外部 CLI のインストール要否が変わります。
 
