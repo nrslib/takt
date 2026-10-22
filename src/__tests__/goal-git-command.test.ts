@@ -95,8 +95,15 @@ it('does not save completion after an ancestry check fails', async () => {
 });
 
 interface GitResponse { output: string; code: number }
-function contentGit(merge: GitResponse, targetTree: string): void {
+function contentGit(
+  merge: GitResponse, targetTree: string,
+  version: GitResponse | Error = { output: 'git version 2.37.3\n', code: 0 },
+): void {
   const respond = (args: string[]): GitResponse => {
+    if (args.includes('--version')) {
+      if (version instanceof Error) throw version;
+      return version;
+    }
     if (args.includes('--is-ancestor')) return { output: '', code: 1 };
     if (args.includes('merge-tree')) return merge;
     if (args.includes('rev-parse')) return { output: `${args.includes(`${targetSha}^{tree}`) ? targetTree : targetSha}\n`, code: 0 };
@@ -131,24 +138,54 @@ describe.each(['async', 'sync'] as const)('%s content inclusion', (mode) => {
     const mergeArgs = commands().find((args) => args.includes('merge-tree'))!;
     expect(mergeArgs.slice(mergeArgs.indexOf('merge-tree'))).toEqual(['merge-tree', '--write-tree', targetSha, sourceSha]);
     expect(commands().some((args) => args.includes('rev-parse') && args.includes(`${targetSha}^{tree}`))).toBe(true);
+    expect(commands().some((args) => args.includes('--version'))).toBe(false);
   });
 
   it('returns false when the clean merge produces a different tree', async () => {
     contentGit({ output: `${'d'.repeat(40)}\n`, code: 0 }, 'e'.repeat(40));
     expect(await include()).toBe(false);
     expectMergeAttempt();
+    expect(commands().some((args) => args.includes('--version'))).toBe(false);
   });
 
   it('returns false without throwing when the three-way merge conflicts', async () => {
     contentGit({ output: `${'d'.repeat(40)}\nCONFLICT (content): src/a.ts\n`, code: 1 }, 'd'.repeat(40));
     expect(await include()).toBe(false);
     expectMergeAttempt();
+    expect(commands().some((args) => args.includes('--version'))).toBe(false);
   });
 
   it.each([2, 128])('propagates merge exit code %i instead of reporting non-inclusion', async (code) => {
     contentGit({ output: `${'d'.repeat(40)}\n`, code }, 'd'.repeat(40));
-    await expect(include()).rejects.toThrow();
+    await expect(include()).rejects.toThrow(
+      `Git >= 2.38 is required for git merge-tree --write-tree. Detected Git: git version 2.37.3. Goal Git merge-tree failed (${code}): fixture Git failure`,
+    );
     expectMergeAttempt();
+    expect(commands().map((args) => args.slice(4))).toEqual([
+      ['merge-base', '--is-ancestor', sourceSha, targetSha],
+      ['merge-tree', '--write-tree', targetSha, sourceSha],
+      ['--version'],
+    ]);
+    const calls = (mode === 'async' ? doubles.spawn : doubles.spawnSync).mock.calls;
+    expect(calls.at(-1)![2]).toMatchObject({ cwd: '/project', env: { GIT_LITERAL_PATHSPECS: '1' } });
+  });
+
+  it.each([
+    { name: 'a failed command', version: { output: 'git version 2.37.3\n', code: 128 } },
+    { name: 'a process error', version: new Error('version unavailable') },
+    { name: 'empty output', version: { output: '', code: 0 } },
+    { name: 'whitespace output', version: { output: ' \n', code: 0 } },
+  ])('preserves the merge failure without a version after $name', async ({ version }) => {
+    contentGit({ output: '', code: 128 }, 'd'.repeat(40), version);
+
+    await expect(include()).rejects.toThrow(
+      'Git >= 2.38 is required for git merge-tree --write-tree. Goal Git merge-tree failed (128): fixture Git failure',
+    );
+    expect(commands().map((args) => args.slice(4))).toEqual([
+      ['merge-base', '--is-ancestor', sourceSha, targetSha],
+      ['merge-tree', '--write-tree', targetSha, sourceSha],
+      ['--version'],
+    ]);
   });
 
   it.each([
