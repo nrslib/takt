@@ -5,6 +5,7 @@ initial_step: develop
 
 steps:
   - name: develop
+    description: TAKTの実装と修正をTeam Leaderで進め、計画・テスト・レビューと要件確認を実施する
     kind: workflow_call
     call: development-core
     args:

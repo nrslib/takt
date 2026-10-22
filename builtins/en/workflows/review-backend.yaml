@@ -23,11 +23,13 @@ steps:
         next: ABORT
 
   - name: reviewers
+    description: Review architecture and code in parallel, check vulnerabilities when needed, and determine whether fixes are needed.
     tags:
       - review
     parallel:
       fixed:
         - name: arch-review
+          description: Check backend structure, responsibilities, and dependencies, and report design issues and proposed fixes.
           capabilities: readonly
           tags:
             - review
@@ -51,6 +53,7 @@ steps:
             - condition: needs_fix
 
         - name: coding-review
+          description: Check the diff for bugs, issues in existing behavior, security risks, and missing tests, and report evidence and proposed fixes.
           capabilities: readonly
           tags:
             - review
@@ -71,7 +74,8 @@ steps:
 
       pool:
         - name: security-review
-          description: Do not select by default. Select only when (a) the change may affect secret or credential handling, external-input handling, process execution, filesystem operations, network or terminal boundaries, sandboxing, or permissions, or (b) the change is large enough that security impact cannot be confidently ruled out. Even when the change is documentation-only, comment-only, test-only, or a small localized fix, select it if (a) or (b) applies. Do not select it if neither applies.
+          description: Review changes involving secrets, external input, permissions, and external boundaries for security issues.
+          selection_hint: Do not select by default. Select only when (a) the change may affect secret or credential handling, external-input handling, process execution, filesystem operations, network or terminal boundaries, sandboxing, or permissions, or (b) the change is large enough that security impact cannot be confidently ruled out. Even when the change is documentation-only, comment-only, test-only, or a small localized fix, select it if (a) or (b) applies. Do not select it if neither applies.
           capabilities: readonly
           tags:
             - review

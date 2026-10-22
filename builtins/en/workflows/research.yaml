@@ -5,6 +5,7 @@ max_steps: 10
 initial_step: plan
 steps:
   - name: plan
+    description: Break down the research request and create a plan defining research items, candidate sources, and priorities.
     tags:
       - plan
     persona: research-planner
@@ -17,6 +18,7 @@ steps:
       - condition: Insufficient information to create a plan
         next: ABORT
   - name: dig
+    description: Split the plan into independent subtasks, investigate in parallel, and report sourced data, analysis, and conclusions.
     tags:
       - plan
     persona: research-digger
@@ -29,6 +31,7 @@ steps:
       - condition: Unable to conduct research
         next: ABORT
   - name: supervise
+    description: Check research coverage, evidence, and analytical depth to determine whether the request is adequately answered or replanning is needed.
     tags:
       - review
       - supervise

@@ -27,11 +27,13 @@ steps:
           - {Question 2}
 
   - name: reviewers
+    description: Review TAKT changes from multiple specialist perspectives in parallel to determine whether fixes are needed.
     tags:
       - review
     parallel:
       fixed:
         - name: arch-review
+          description: Check structure, responsibilities, dependencies, and call paths, and report design problems.
           capabilities: readonly
           tags:
             - review
@@ -55,6 +57,7 @@ steps:
             - condition: needs_fix
 
         - name: testing-review
+          description: Compare test plans with implemented tests and report problems in coverage, independence, and verification methods.
           capabilities: readonly
           tags:
             - review
@@ -77,6 +80,7 @@ steps:
             - condition: needs_fix
 
         - name: ai-antipattern-review-2nd
+          description: Check assumptions and API existence, and report AI-specific problems such as overengineering.
           capabilities: readonly
           tags:
             - review
@@ -96,6 +100,7 @@ steps:
             - condition: needs_fix
 
         - name: coding-review
+          description: Compare the diff against requirements and report bugs, regressions, security risks, and missing tests.
           capabilities: readonly
           tags:
             - review
@@ -116,7 +121,8 @@ steps:
 
       pool:
         - name: security-review
-          description: Do not select by default. Select only when (a) the change may affect secret or credential handling, external-input handling, process execution, filesystem operations, network or terminal boundaries, sandboxing, or permissions, or (b) the change is large enough that security impact cannot be confidently ruled out. Even when the change is documentation-only, comment-only, test-only, or a small localized fix, select it if (a) or (b) applies. Do not select it if neither applies.
+          description: Review changes involving secrets, external input, permissions, and external boundaries for security issues.
+          selection_hint: Do not select by default. Select only when (a) the change may affect secret or credential handling, external-input handling, process execution, filesystem operations, network or terminal boundaries, sandboxing, or permissions, or (b) the change is large enough that security impact cannot be confidently ruled out. Even when the change is documentation-only, comment-only, test-only, or a small localized fix, select it if (a) or (b) applies. Do not select it if neither applies.
           capabilities: readonly
           tags:
             - review
@@ -156,6 +162,7 @@ steps:
         next: supervise
 
   - name: review-synthesis
+    description: Consolidate review results and findings into an overall verdict and final summary.
     capabilities: readonly
     tags:
       - review
@@ -246,6 +253,7 @@ steps:
             ```
 
   - name: supervise
+    description: Consolidate review results and findings into an overall verdict and final summary.
     capabilities: readonly
     tags:
       - review

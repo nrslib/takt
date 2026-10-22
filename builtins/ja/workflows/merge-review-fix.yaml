@@ -4,6 +4,7 @@ max_steps: 75
 initial_step: identify
 steps:
   - name: identify
+    description: 対象PRの番号と現在の状態を取得する
     mode: system
     system_inputs:
       - type: pr_status
@@ -13,6 +14,7 @@ steps:
       - condition: when(true)
         next: sync
   - name: sync
+    description: 対象PRにベースブランチの変更を取り込んでプッシュし、同期結果を確認する
     mode: system
     effects:
       - type: sync_with_root
@@ -25,6 +27,7 @@ steps:
       - condition: when(true)
         next: sync_failed
   - name: resolve_conflicts
+    description: ベースブランチとの競合をAIで解消してプッシュし、解消結果を確認する
     mode: system
     effects:
       - type: resolve_conflicts_with_ai
@@ -35,6 +38,7 @@ steps:
       - condition: when(true)
         next: conflict_failed
   - name: review
+    description: 複数の観点でPRをレビューし、指摘の裁定・修正・検証と要件確認を実施する
     kind: workflow_call
     call: review-fix
     rules:
@@ -43,6 +47,7 @@ steps:
       - condition: ABORT
         next: review_failed
   - name: push
+    description: レビュー後の変更をコミットして対象PRへプッシュする
     mode: system
     effects:
       - type: commit_and_push
@@ -53,6 +58,7 @@ steps:
       - condition: when(true)
         next: push_failed
   - name: caccia
+    description: CacciaでCodeRabbitの指摘に対応し、対応結果を確認する
     mode: system
     effects:
       - type: caccia
@@ -69,6 +75,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: wait_ci
+    description: 対象コミットのCI完了を待ち、CIとPRの状態から次の処理を判定する
     mode: system
     system_inputs:
       - type: pr_status
@@ -90,6 +97,7 @@ steps:
       - condition: when(true)
         next: merge
   - name: merge
+    description: 対象PRをマージし、成功したかを確認する
     mode: system
     effects:
       - type: merge_pr
@@ -100,6 +108,7 @@ steps:
       - condition: when(true)
         next: merge_failed
   - name: changes_requested
+    description: 変更を求めるGitHubレビューが残っていることをPRにコメントする
     mode: system
     effects:
       - type: comment_pr
@@ -111,6 +120,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: collect_ci_failure
+    description: 対象コミットで失敗したCIのログと実行情報、回復の試行回数を収集する
     mode: system
     system_inputs:
       - type: pr_ci_failure
@@ -121,6 +131,7 @@ steps:
       - condition: when(true)
         next: investigate_ci
   - name: investigate_ci
+    description: CIの失敗証拠とPR差分を調べ、原因と所在、根本修正の妥当性を判定する
     capabilities: readonly
     edit: false
     persona: planner
@@ -136,6 +147,7 @@ steps:
       - condition: when(true)
         next: refresh_ci
   - name: refresh_ci
+    description: CIと対象コミットの最新状態を取得し、調査結果と試行回数から待機・修正・再実行・停止を判定する
     mode: system
     system_inputs:
       - type: pr_status
@@ -158,6 +170,7 @@ steps:
       - condition: when(true)
         next: ci_stopped
   - name: fix_ci
+    description: 調査で裏付けられたCI失敗の根本原因を修正し、テストとビルドで検証する
     capabilities: edit
     edit: true
     persona: coder
@@ -173,6 +186,7 @@ steps:
       - condition: 裏付けられた原因を安全に修正または検証できない
         next: ci_stopped
   - name: review_ci_fix
+    description: CI修正の差分と検証証拠から、根本原因の解消と既存契約の維持を確認して承認可否を判定する
     capabilities: readonly
     edit: false
     persona: coding-reviewer
@@ -190,6 +204,7 @@ steps:
       - condition: when(true)
         next: ci_stopped
   - name: push_ci_fix
+    description: 承認されたCI修正をコミットして対象PRへプッシュする
     mode: system
     effects:
       - type: commit_and_push
@@ -200,6 +215,7 @@ steps:
       - condition: when(true)
         next: ci_push_failed
   - name: rerun_ci
+    description: 外部要因と判定したCI失敗について、対象のチェックを再実行する
     mode: system
     effects:
       - type: rerun_ci
@@ -211,6 +227,7 @@ steps:
       - condition: when(true)
         next: collect_ci_failure
   - name: ci_stopped
+    description: CI回復を停止した理由と調査結果、試行回数、残る証拠不足をPRにコメントする
     mode: system
     effects:
       - type: comment_pr
@@ -221,6 +238,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: ci_push_failed
+    description: CI修正のプッシュ失敗と調査結果、試行回数、残る証拠不足をPRにコメントする
     mode: system
     effects:
       - type: comment_pr
@@ -231,6 +249,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: timeout
+    description: CI待機が制限時間を超えたことをPRにコメントする
     mode: system
     effects:
       - type: comment_pr
@@ -242,6 +261,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: unmergeable
+    description: PRをマージできない状態であることをPRにコメントする
     mode: system
     effects:
       - type: comment_pr
@@ -253,6 +273,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: review_failed
+    description: 呼び出したレビューワークフローが中断したことをPRにコメントする
     mode: system
     effects:
       - type: comment_pr
@@ -264,6 +285,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: merged
+    description: レビューとCIを経てPRをマージしたことをPRにコメントする
     mode: system
     effects:
       - type: comment_pr
@@ -275,6 +297,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: sync_failed
+    description: ベースブランチとの同期に失敗したこととエラーをPRにコメントする
     mode: system
     effects:
       - type: comment_pr
@@ -286,6 +309,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: conflict_failed
+    description: AIによる競合解消に失敗したこととエラーをPRにコメントする
     mode: system
     effects:
       - type: comment_pr
@@ -297,6 +321,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: push_failed
+    description: 変更のコミットまたはプッシュに失敗したこととエラーをPRにコメントする
     mode: system
     effects:
       - type: comment_pr
@@ -308,6 +333,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: merge_failed
+    description: PRのマージに失敗したこととエラーをPRにコメントする
     mode: system
     effects:
       - type: comment_pr
@@ -319,6 +345,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: caccia_limit
+    description: Cacciaが反復上限に達したことと未解決スレッド数をPRにコメントする
     mode: system
     effects:
       - type: comment_pr
@@ -330,6 +357,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: caccia_failed
+    description: Cacciaが失敗したこととエラーをPRにコメントする
     mode: system
     effects:
       - type: comment_pr

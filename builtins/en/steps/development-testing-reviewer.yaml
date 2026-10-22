@@ -7,7 +7,7 @@ params:
     facet_kind: knowledge
   testing_review_instruction: { type: facet_ref, facet_kind: instruction }
 name: testing-review
-description: Review test coverage, test design, integration boundaries, and E2E boundaries.
+description: Compare implemented tests with the requirements and report verification gaps and test design problems.
 capabilities: readonly
 tags: [review]
 edit: false

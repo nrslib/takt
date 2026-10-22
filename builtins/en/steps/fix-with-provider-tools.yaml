@@ -5,6 +5,7 @@ params:
   fix_knowledge:
     type: facet_ref[]
     facet_kind: knowledge
+description: Check and fix the latest review findings and report the results and any unresolved problems.
 tags:
   - coding
 edit: true

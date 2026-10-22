@@ -4,6 +4,7 @@ max_steps: 21
 initial_step: develop
 steps:
   - name: develop
+    description: フロントエンドとCQRS・イベントソーシングのバックエンドを計画・実装し、レビューと修正を実施する
     kind: workflow_call
     call: mini-core
     args:

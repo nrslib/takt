@@ -127,7 +127,11 @@ export class DynamicParallelSelectorCoordinator {
       report_directory: inputs.reportDirectory,
       report_names: inputs.reportNames,
       changed_paths: inputs.changedPaths,
-      candidates: step.parallel.pool.map(({ name, description }) => ({ name, description })),
+      candidates: step.parallel.pool.map(({ name, description, selectionHint }) => ({
+        name,
+        description,
+        selectionHint,
+      })),
     });
     const redact = (text: string): string =>
       sanitizeSensitiveTextWithKnownValues(text, sensitiveValues);

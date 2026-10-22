@@ -4,6 +4,7 @@ max_steps: 30
 initial_step: develop
 steps:
   - name: develop
+    description: Select relevant skills and carry out planning, test-first implementation, review, fixes, and final confirmation of requirement fulfillment.
     kind: workflow_call
     call: simple-core
     args:

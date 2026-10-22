@@ -545,6 +545,7 @@
     "src/__tests__/workflow-call-abort-resume.test.ts",
     "src/__tests__/workflow-call-lifecycle.test.ts",
     "src/__tests__/workflow-call-schema.test.ts",
+    "src/__tests__/workflow-description-schema-loader.test.ts",
     "src/__tests__/workflow-doctor.test.ts",
     "src/__tests__/workflow-engine-single-iteration-span.test.ts",
     "src/__tests__/workflow-execution-bundle.test.ts",

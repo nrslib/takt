@@ -1,4 +1,5 @@
 name: gather
+description: レビュー対象の差分と要求を収集し、レビュアー向けのレポートを作成する
 capabilities: readonly
 tags:
   - plan

@@ -4,6 +4,7 @@ max_steps: 15
 initial_step: plan
 steps:
   - name: plan
+    description: Break down the research request and create a plan with research items, candidate sources, and priorities.
     capabilities: readonly
     tags:
       - plan
@@ -17,6 +18,7 @@ steps:
       - condition: Insufficient information to create a plan
         next: ABORT
   - name: dig
+    description: Assign research items to independent parts, investigate in parallel, and save data with sources and retrieval dates.
     capabilities: edit
     tags:
       - plan
@@ -43,6 +45,7 @@ steps:
       - condition: Unable to conduct research
         next: ABORT
   - name: analyze
+    description: Analyze and save findings and gaps from the research, then create additional research instructions or an overall summary.
     capabilities: edit
     tags:
       - plan
@@ -57,6 +60,7 @@ steps:
       - condition: Sufficiently investigated
         next: supervise
   - name: supervise
+    description: Evaluate whether the research adequately answers the original request, decide whether to complete or replan, and create the research report.
     capabilities: readonly
     tags:
       - review

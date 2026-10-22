@@ -8,6 +8,7 @@ params:
   review_instruction:
     type: facet_ref
     facet_kind: instruction
+description: 要求と差分を照合し、不具合や既存動作への影響、検証の不足を報告する
 tags:
   - review
 edit: false

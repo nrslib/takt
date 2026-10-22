@@ -7,6 +7,7 @@ params:
     facet_kind: knowledge
   coding_review_instruction: { type: facet_ref, facet_kind: instruction }
 name: coding-review
+description: 要求と差分を照合し、実装の不具合や既存動作への影響を報告する
 capabilities: readonly
 tags: [review]
 edit: false

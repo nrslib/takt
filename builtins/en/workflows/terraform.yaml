@@ -11,6 +11,7 @@ max_steps: 15
 initial_step: plan
 steps:
   - name: plan
+    description: Investigate requirements and existing code to produce a Terraform implementation approach and change plan.
     capabilities: readonly
     tags:
       - plan
@@ -33,6 +34,7 @@ steps:
         - name: plan.md
           format: plan
   - name: implement
+    description: Implement Terraform code and verify formatting, syntax, and planned changes with fmt, validate, and plan.
     capabilities: edit
     tags:
       - coding
@@ -63,10 +65,12 @@ steps:
         - name: coder-decisions.md
           format: coder-decisions
   - name: reviewers
+    description: Check Terraform conventions, AI-specific problems, and code defects in parallel to determine whether fixes are needed.
     tags:
       - review
     parallel:
       - name: tf_review
+        description: Check Terraform conventions, security, costs, and resource protection, and report violations.
         capabilities: readonly
         tags:
           - review
@@ -86,6 +90,7 @@ steps:
             - name: terraform-review.md
               format: terraform-review
       - name: ai-antipattern-review-2nd
+        description: Check assumptions and API existence, and report AI-specific problems such as overengineering.
         capabilities: readonly
         tags:
           - review
@@ -104,6 +109,7 @@ steps:
             - name: ai-antipattern-review.md
               format: ai-antipattern-review
       - name: coding-review
+        description: Compare the diff against requirements and report bugs, regressions, security risks, and missing tests.
         capabilities: readonly
         tags:
           - review
@@ -129,6 +135,7 @@ steps:
       - condition: any("Convention violations found", "AI-specific issues found", "needs_fix")
         next: supervise
   - name: final-supervise
+    description: Compare current Terraform code against requirements and preceding findings to decide completion, repair, or waiting for external confirmation.
     capabilities: readonly
     tags:
       - review
@@ -155,6 +162,7 @@ steps:
           format: supervisor-summary
 
   - name: supervise
+    description: Compare current Terraform code against requirements and preceding findings to decide completion, repair, or waiting for external confirmation.
     capabilities: readonly
     tags:
       - review
@@ -182,10 +190,12 @@ steps:
         - name: summary.md
           format: supervisor-summary
   - name: fix_both
+    description: Fix AI-specific problems and supervisor findings in parallel, and determine whether the work can proceed to another review.
     tags:
       - coding
     parallel:
       - name: ai-antipattern-fix-parallel
+        description: Check the flagged files and specifications, then fix and verify confirmed AI-specific problems.
         capabilities: edit
         tags:
           - coding
@@ -206,6 +216,7 @@ steps:
             - name: ai-antipattern-fix-report.md
               format: fix-report
       - name: supervise_fix_parallel
+        description: Trace supervisor findings to their root causes and affected paths, then fix and verify them in priority order.
         capabilities: edit
         tags:
           - coding
@@ -226,6 +237,7 @@ steps:
       - condition: any("No fix needed (target file/spec verified)", "Cannot determine, insufficient info", "Cannot proceed with fix")
         next: implement
   - name: ai-antipattern-fix
+    description: Check the flagged files and specifications, then fix and verify confirmed AI-specific problems.
     capabilities: edit
     tags:
       - coding
@@ -250,6 +262,7 @@ steps:
         - name: ai-antipattern-fix-report.md
           format: fix-report
   - name: supervise_fix
+    description: Trace supervisor findings to their root causes and affected paths, then fix and verify them in priority order.
     capabilities: edit
     tags:
       - coding

@@ -12,6 +12,7 @@ params:
     type: facet_ref
     facet_kind: report_format
 name: fix-plan
+description: Compare the accepted issues with the current code and create an actionable fix plan.
 capabilities: readonly
 tags:
   - plan

@@ -11,6 +11,7 @@ params:
   fix_knowledge:
     type: facet_ref[]
     facet_kind: knowledge
+description: Run the review remediation workflow from adjudication through fix planning, implementation, and completion verification.
 kind: workflow_call
 call: review-remediation
 args:

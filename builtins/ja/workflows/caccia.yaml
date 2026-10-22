@@ -5,6 +5,7 @@ initial_step: address
 
 steps:
   - name: address
+    description: CodeRabbit の全スレッドを検証して妥当な指摘を修正し、各スレッドの判断と根拠を記録する
     tags:
       - implementation
     capabilities: edit

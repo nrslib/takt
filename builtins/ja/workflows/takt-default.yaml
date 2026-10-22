@@ -5,6 +5,7 @@ initial_step: develop
 
 steps:
   - name: develop
+    description: TAKTの計画・テストから実装中のレビューと指摘修正まで進め、要件充足を確認する
     kind: workflow_call
     call: development-core
     args:

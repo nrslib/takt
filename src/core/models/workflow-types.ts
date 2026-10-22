@@ -379,6 +379,7 @@ export type DynamicParallelFixedSubStep = NormalAgentWorkflowStep;
 
 export interface DynamicParallelPoolSubStep extends NormalAgentWorkflowStep {
   readonly description: string;
+  readonly selectionHint?: string;
 }
 
 export interface DynamicParallelSubSteps {

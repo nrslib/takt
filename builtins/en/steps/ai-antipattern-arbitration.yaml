@@ -1,4 +1,5 @@
 name: ai-antipattern-no-fix
+description: Check the review findings and the arguments against fixing them to decide whether fixes are needed.
 tags:
   - review
 edit: false

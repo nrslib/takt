@@ -9,7 +9,8 @@ params:
     type: facet_pool_ref
   security_review_instruction: { type: facet_ref, facet_kind: instruction }
 name: security-review
-description: Do not select by default. Select only when (a) the change may affect secret or credential handling, external-input handling, process execution, filesystem operations, network or terminal boundaries, sandboxing, or permissions, or (b) the change is large enough that security impact cannot be confidently ruled out. Even when the change is documentation-only, comment-only, test-only, or a small localized fix, select it if (a) or (b) applies. Do not select it if neither applies.
+description: Review changes involving secrets, external input, permissions, and external boundaries for security issues.
+selection_hint: Do not select by default. Select only when (a) the change may affect secret or credential handling, external-input handling, process execution, filesystem operations, network or terminal boundaries, sandboxing, or permissions, or (b) the change is large enough that security impact cannot be confidently ruled out. Even when the change is documentation-only, comment-only, test-only, or a small localized fix, select it if (a) or (b) applies. Do not select it if neither applies.
 capabilities: readonly
 tags: [review]
 edit: false

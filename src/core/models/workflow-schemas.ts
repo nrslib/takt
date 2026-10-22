@@ -492,7 +492,8 @@ const WorkflowReportInputRawSchema = z.object({
 const AgentParallelSubStepRawObjectSchema = z.object({
   name: WorkflowStepNameSchema,
   input_reports: WorkflowReportInputRawSchema.optional(),
-  description: z.never().optional(),
+  description: z.string().optional(),
+  selection_hint: z.never().optional(),
   kind: z.never().optional(),
   mode: z.never().optional(),
   call: z.never().optional(),
@@ -570,6 +571,7 @@ const WorkflowCallParallelSubStepRawSchema = z.object({
   args: WorkflowCallArgsRawSchema.optional(),
   vars: WorkflowCallVarsRawSchema.optional(),
   description: z.string().optional(),
+  selection_hint: z.never().optional(),
   session_key: z.never().optional(),
   session: z.never().optional(),
   persona: z.never().optional(),
@@ -619,6 +621,7 @@ export const ParallelSubStepRawSchema = z.union([
 
 const DynamicParallelPoolSubStepRawSchema = AgentParallelSubStepRawObjectSchema.extend({
   description: z.string().trim().min(1),
+  selection_hint: z.string().trim().min(1).optional(),
 }).superRefine(validateAgentParallelSubStepRules);
 
 const DynamicParallelRawSchema = z.object({
@@ -680,6 +683,7 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     name: WorkflowStepNameSchema,
     input_reports: WorkflowReportInputRawSchema.optional(),
     description: z.string().optional(),
+    selection_hint: z.never().optional(),
     session_key: z.string().trim().min(1).optional(),
     kind: WorkflowStepKindSchema.optional(),
     mode: z.literal('system').optional(),

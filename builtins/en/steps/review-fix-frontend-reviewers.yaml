@@ -11,11 +11,13 @@ params:
   security_review_instruction:
     type: facet_ref
     facet_kind: instruction
+description: Review frontend design and code in parallel and decide whether fixes are needed.
 tags:
   - review
 parallel:
   fixed:
     - name: arch-review
+      description: Check structure, responsibilities, dependencies, and call paths and report design problems.
       capabilities: readonly
       tags:
         - review
@@ -37,6 +39,7 @@ parallel:
             format: architecture-review
 
     - name: frontend-review
+      description: Check the UI implementation and its fidelity to the design and report frontend problems.
       capabilities: readonly
       tags:
         - review
@@ -56,6 +59,7 @@ parallel:
             format: frontend-review
 
     - name: coding-review
+      description: Compare the changes with the requirements and report implementation defects and regressions.
       capabilities: readonly
       tags:
         - review
@@ -74,7 +78,8 @@ parallel:
 
   pool:
     - name: security-review
-      description: Do not select by default. Select only when (a) the change may affect secret or credential handling, external-input handling, process execution, filesystem operations, network or terminal boundaries, sandboxing, or permissions, or (b) the change is large enough that security impact cannot be confidently ruled out. Even when the change is documentation-only, comment-only, test-only, or a small localized fix, select it if (a) or (b) applies. Do not select it if neither applies.
+      description: Review changes involving secrets, external input, permissions, and external boundaries for security issues.
+      selection_hint: Do not select by default. Select only when (a) the change may affect secret or credential handling, external-input handling, process execution, filesystem operations, network or terminal boundaries, sandboxing, or permissions, or (b) the change is large enough that security impact cannot be confidently ruled out. Even when the change is documentation-only, comment-only, test-only, or a small localized fix, select it if (a) or (b) applies. Do not select it if neither applies.
       capabilities: readonly
       tags:
         - review
