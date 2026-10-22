@@ -160,6 +160,7 @@ async function executeReportPhase(
     log.debug('Generating report file', { step: step.name, fileName });
 
     const firstAttemptInstruction = new ReportInstructionBuilder(step, {
+      workflowAssignment: ctx.workflowMeta?.context?.assignment,
       cwd: ctx.cwd,
       task: ctx.task,
       userInputs: ctx.userInputs,
@@ -235,6 +236,7 @@ async function executeReportPhase(
     }
 
     const baseRetryInstruction = new ReportInstructionBuilder(step, {
+      workflowAssignment: ctx.workflowMeta?.context?.assignment,
       cwd: ctx.cwd,
       task: ctx.task,
       userInputs: ctx.userInputs,

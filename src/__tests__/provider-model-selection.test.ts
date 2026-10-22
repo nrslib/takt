@@ -32,9 +32,7 @@ function createOptionsBuilder(engineOptions: WorkflowEngineOptions): OptionsBuil
     () => undefined,
     () => '.takt/runs/provider-model-selection/reports',
     () => 'en',
-    () => [{ name: 'plan' }],
     () => 'provider-model-selection',
-    () => 'Provider model selection test',
   );
 }
 

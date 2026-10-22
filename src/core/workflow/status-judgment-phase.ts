@@ -94,14 +94,18 @@ export async function runStatusJudgmentPhase(
     throw new Error(`Status judgment requires report or lastResponse for step "${step.name}"`);
   }
 
-  const structuredInstruction = new StatusJudgmentBuilder(step, {
+  const structuredBuilder = new StatusJudgmentBuilder(step, {
     ...baseContext,
+    workflowAssignment: ctx.workflowMeta?.context?.assignment,
     semanticCandidates,
     structuredOutput: true,
-  }).build();
+  });
+  const structuredInstruction = structuredBuilder.build();
+  const judgmentInput = structuredBuilder.buildJudgmentInput();
 
   const tagInstruction = new StatusJudgmentBuilder(step, {
     ...baseContext,
+    workflowAssignment: ctx.workflowMeta?.context?.assignment,
     semanticCandidates,
   }).build();
   if (!ctx.iteration || !Number.isInteger(ctx.iteration) || ctx.iteration <= 0) {
@@ -145,9 +149,11 @@ export async function runStatusJudgmentPhase(
       },
       async () => {
         const judgeResult = await ctx.structuredCaller.judgeStatus(structuredInstruction, tagInstruction, semanticCandidates, {
+        judgmentInput,
         cwd: ctx.cwd,
         projectCwd: ctx.projectCwd,
         stepName: step.name,
+        workflowMeta: ctx.workflowMeta,
         executionPhase: 3,
         provider: resolvedStepProvider.provider,
         resolvedProvider: resolvedStepProvider.provider,

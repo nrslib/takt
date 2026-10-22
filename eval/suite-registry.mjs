@@ -7,6 +7,11 @@ const evalDir = dirname(fileURLToPath(import.meta.url));
 const CLASSIFICATIONS = [
   {
     tier: 'active',
+    reason: 'フェーズを跨ぐ会話での読み取り再開、現在の結果への追従、ユーザー制約の維持を本番 dist と生イベントで測る',
+    suites: ['phase-awareness'],
+  },
+  {
+    tier: 'active',
     reason: 'CI回復の調査分類と根本修正レビューを本番ファセットで評価する',
     suites: ['merge-ci-investigation', 'merge-ci-review'],
   },
@@ -224,6 +229,10 @@ const CLASSIFICATIONS = [
 ];
 
 const EXECUTION_OVERRIDES = {
+  'phase-awareness': {
+    defaultEligible: false, credentials: ['codex', 'claude'], cost: 'high',
+    reason: '固定の red/green 実行表と複数 CLI 認証を要するため専用 runner で明示実行する',
+  },
   'merge-ci-investigation': {
     defaultEligible: false, credentials: ['codex'], cost: 'high',
     reason: '日英6事例を各3回、指定モデルで明示実行する',

@@ -38,7 +38,7 @@
     "eval:prompts:review-external-confirmation": "node eval/scripts/run-evals.mjs review-external-confirmation --prepare",
     "eval:prompts:supervise-external-confirmation": "node eval/scripts/run-evals.mjs supervise-external-confirmation --prepare",
     "eval:prompts:replan-external-confirmation": "node eval/scripts/run-evals.mjs replan-external-confirmation --prepare",
-    "eval:prompts:contracts": "node --test eval/providers/cli-plan-report.test.mjs eval/suite-registry.test.mjs eval/asserts/fix-loop-convergence.test.mjs eval/asserts/remediation-evidence.test.mjs eval/asserts/evidence-judgment.test.mjs eval/asserts/review-proof-boundary.test.mjs eval/asserts/external-confirmation.test.mjs eval/asserts/finding-realistic-premise.test.mjs eval/phase3-judgment-prompt.test.mjs eval/asserts/phase3-judgment.test.mjs eval/scripts/prepare-review-artifact-input-handoff.test.mjs",
+    "eval:prompts:contracts": "node --test eval/providers/cli-plan-report.test.mjs eval/suite-registry.test.mjs eval/asserts/fix-loop-convergence.test.mjs eval/asserts/remediation-evidence.test.mjs eval/asserts/evidence-judgment.test.mjs eval/asserts/review-proof-boundary.test.mjs eval/asserts/external-confirmation.test.mjs eval/asserts/finding-realistic-premise.test.mjs eval/phase3-judgment-prompt.test.mjs eval/asserts/phase3-judgment.test.mjs eval/scripts/prepare-review-artifact-input-handoff.test.mjs eval/providers/phase-session.test.mjs eval/asserts/phase-awareness.test.mjs",
     "eval:prompts:review-artifact-input-handoff": "node eval/scripts/run-evals.mjs review-artifact-input-handoff --prepare --no-cache --repeat 3 --filter-providers codex-sol-high",
     "eval:prompts:phase3-follow-input": "node eval/scripts/run-evals.mjs phase3-follow-input --no-cache",
     "eval:prompts:coding": "node --test eval/asserts/coding-review-metrics.test.mjs && node eval/scripts/prepare.mjs coding-review && node eval/scripts/run-evals.mjs coding",
@@ -138,7 +138,10 @@
     "postinstall": "node -e \"const fs = require('node:fs'); if (fs.existsSync('patches/ink+7.1.1.patch') && fs.existsSync('node_modules/patch-package/index.js')) require('node:child_process').execSync('npm run patch:dependencies', {stdio: 'inherit'});\"",
     "canary:coder": "node scripts/canary-coder.mjs",
     "eval:prompts:resource-boundary:contracts": "node --test eval/asserts/resource-flow-fixture.test.mjs",
-    "eval:prompts:resource-boundary": "npm run eval:prompts:resource-boundary:contracts && node eval/scripts/run-evals.mjs --prepare resource-flow-review resource-flow-adjudication --no-cache"
+    "eval:prompts:resource-boundary": "npm run eval:prompts:resource-boundary:contracts && node eval/scripts/run-evals.mjs --prepare resource-flow-review resource-flow-adjudication --no-cache",
+    "eval:prompts:phase-awareness:contracts": "node --test eval/providers/phase-session.test.mjs eval/asserts/phase-awareness.test.mjs",
+    "eval:prompts:phase-awareness": "node eval/scripts/prepare.mjs phase-awareness && node eval/scripts/phase-awareness-redgreen.mjs --no-cache",
+    "eval:prompts:phase-awareness:smoke": "node eval/scripts/prepare.mjs phase-awareness && node eval/scripts/phase-awareness-redgreen.mjs --smoke --no-cache"
   },
   "keywords": [
     "ai",

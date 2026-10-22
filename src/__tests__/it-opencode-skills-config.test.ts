@@ -23,7 +23,7 @@ function invalidate(): void {
 
 function builder(options: Omit<WorkflowEngineOptions, 'projectCwd'>, steps: WorkflowStep[]): OptionsBuilder {
   return new OptionsBuilder({ ...options, projectCwd: projectDir }, () => projectDir, () => projectDir, () => undefined,
-    () => join(projectDir, 'reports'), () => 'en', () => steps, () => 'workflow', () => undefined);
+    () => join(projectDir, 'reports'), () => 'en', () => 'workflow',);
 }
 
 beforeEach(() => {

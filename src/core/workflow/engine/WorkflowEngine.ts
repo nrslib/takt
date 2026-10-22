@@ -1,3 +1,4 @@
+import { buildWorkflowPromptTree } from '../workflow-prompt-context.js';
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import { ProviderNeutralStructuredCaller, type StructuredCaller } from '../../../agents/structured-caller.js';
@@ -303,6 +304,9 @@ export class WorkflowEngine extends EventEmitter {
       throw translateWorkflowConfigError(this.config, error);
     }
 
+    this.sharedRuntime.workflowPromptTree ??= buildWorkflowPromptTree(
+      this.config, this.options.workflowCallResolver, this.projectCwd, this.cwd,
+    );
     this.state = createInitialState(this.config, this.options);
     this.resumeContinuation = new WorkflowResumeContinuation(
       this.config,
@@ -440,6 +444,7 @@ export class WorkflowEngine extends EventEmitter {
           prepareNormalStepExecution: this.stepCoordinator.prepareNormalStepExecution.bind(this.stepCoordinator),
           resolveStepProviderModel: (step, runtime) => this.optionsBuilder.resolveStepProviderModel(step, runtime),
           resolveStepProviderModelBeforeAutoRouting: (step, runtime) => this.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(step, runtime),
+          buildWorkflowMeta: (step, runtime) => this.optionsBuilder.buildWorkflowMeta(step, runtime),
           resolveRuntimeForStep: this.stepCoordinator.resolveRuntimeForStep.bind(this.stepCoordinator),
           claimStepOccurrence: (step) => (
             this.claimStepOccurrence(step, this.resumeStackPrefix)
@@ -967,6 +972,7 @@ export class WorkflowEngine extends EventEmitter {
           prepareNormalStepExecution: this.stepCoordinator.prepareNormalStepExecution.bind(this.stepCoordinator),
           resolveStepProviderModel: (step, runtime) => this.optionsBuilder.resolveStepProviderModel(step, runtime),
           resolveStepProviderModelBeforeAutoRouting: (step, runtime) => this.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(step, runtime),
+          buildWorkflowMeta: (step, runtime) => this.optionsBuilder.buildWorkflowMeta(step, runtime),
           resolveRuntimeForStep: this.stepCoordinator.resolveRuntimeForStep.bind(this.stepCoordinator),
           claimStepOccurrence: (step) => (
             this.claimStepOccurrence(step, this.resumeStackPrefix)

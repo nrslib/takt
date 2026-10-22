@@ -199,6 +199,7 @@ export interface TeamLeaderPartRuntimeResolution {
 }
 
 export interface RuntimeStepResolution {
+  workflowAssignment?: import('./workflow-prompt-context.js').WorkflowAssignment;
   providerInfo?: StepProviderInfo;
   providerInfoResolution?: 'fully_resolved';
   fallback?: FallbackContext;
@@ -206,6 +207,7 @@ export interface RuntimeStepResolution {
 }
 
 export interface WorkflowSharedRuntimeState {
+  workflowPromptTree?: import('./workflow-prompt-context.js').WorkflowPromptTree;
   startedAtMs: number;
   activeResumePoint?: WorkflowResumePoint;
   maxSteps?: WorkflowMaxSteps;

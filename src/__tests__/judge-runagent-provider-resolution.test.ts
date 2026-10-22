@@ -61,6 +61,7 @@ function expectPhase3Isolation(options: unknown): void {
 
 describe('judge runAgent provider/model resolution (#556)', () => {
   const judgeBase: JudgeStatusOptions & WithResolved = {
+    judgmentInput: 'work result',
     cwd: '/repo',
     projectCwd: '/original-project',
     language: 'ja',
@@ -218,6 +219,7 @@ describe('judge runAgent provider/model resolution (#556)', () => {
         { label: 'a' },
         { label: 'b' },
       ], {
+        judgmentInput: 'work result',
         cwd: '/repo',
         stepName: 'review',
         resolvedProvider: 'claude',

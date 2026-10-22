@@ -9,6 +9,7 @@ import type { ProviderUsageSnapshot } from '../core/models/response.js';
 import type { ProviderType } from '../core/workflow/types.js';
 import type { RunAgentOptions, StreamCallback } from './runner.js';
 import type { StepProviderOptions } from '../core/models/workflow-types.js';
+import { renderPhaseContext } from '../shared/prompts/phase-context.js';
 import {
   executeStructuredAgent,
   requireStructuredAgentProvider,
@@ -98,24 +99,39 @@ export interface DecomposeTaskResponse {
   providerUsage?: ProviderUsageSnapshot;
 }
 
+function prepareTeamLeaderTask(instruction: string, options: DecomposeTaskOptions): {
+  phaseContext: string;
+  taskInstruction: string;
+} {
+  const assignment = options.workflowMeta?.context?.assignment;
+  if (assignment === undefined) return { phaseContext: '', taskInstruction: instruction };
+  const phaseContext = renderPhaseContext(assignment, 1, options.language ?? 'en').trimStart();
+  const trimmedInstruction = instruction.trimStart();
+  return {
+    phaseContext,
+    taskInstruction: trimmedInstruction.startsWith(phaseContext)
+      ? trimmedInstruction.slice(phaseContext.length).trimStart()
+      : instruction,
+  };
+}
+
 export async function requestDecompositionRawResponse(
   instruction: string,
   maxInitialParts: number | undefined,
   options: DecomposeTaskOptions,
   rejectedDecomposition?: RejectedTeamLeaderDecomposition,
 ): Promise<AgentResponse> {
+  const { phaseContext, taskInstruction } = prepareTeamLeaderTask(instruction, options);
+  const prompt = [phaseContext, buildDecomposePrompt(taskInstruction, {
+    maxInitialParts,
+    language: options.language,
+    inspectTools: options.inspectTools,
+    inspectGuidance: options.inspectGuidance === true,
+    rejectedDecomposition,
+  })].filter((part) => part.length > 0).join('\n\n');
   let response: AgentResponse;
   try {
-    response = await executeStructuredAgent<Record<string, unknown>>(buildDecomposePrompt(
-      instruction,
-      {
-        maxInitialParts,
-        language: options.language,
-        inspectTools: options.inspectTools,
-        inspectGuidance: options.inspectGuidance === true,
-        rejectedDecomposition,
-      },
-    ), loadDecompositionSchema(maxInitialParts), {
+    response = await executeStructuredAgent<Record<string, unknown>>(prompt, loadDecompositionSchema(maxInitialParts), {
       name: 'team-leader-decomposer',
       persona: options.persona,
       cwd: options.cwd,
@@ -136,6 +152,7 @@ export async function requestDecompositionRawResponse(
       onStream: createPublicationGuardedStreamCallback(options.onStream, options.abortSignal),
       onActivity: options.onActivity,
       workflowMeta: options.workflowMeta,
+      executionPhase: 1,
       childProcessEnv: options.childProcessEnv,
       abortSignal: options.abortSignal,
       failureDir: options.failureDir,
@@ -210,8 +227,9 @@ export async function requestMorePartsRawResponse(
   existingIds: string[],
   options: MorePartsOptions,
 ): Promise<AgentResponse> {
-  const prompt = buildMorePartsPrompt(
-    originalInstruction,
+  const { phaseContext, taskInstruction } = prepareTeamLeaderTask(originalInstruction, options);
+  const prompt = [phaseContext, buildMorePartsPrompt(
+    taskInstruction,
     allResults,
     existingIds,
     options.language,
@@ -219,7 +237,7 @@ export async function requestMorePartsRawResponse(
     options.inspectTools,
     options.inspectGuidance === true,
     options.companionFindings,
-  );
+  )].filter((part) => part.length > 0).join('\n\n');
 
   let response: AgentResponse;
   try {
@@ -244,6 +262,7 @@ export async function requestMorePartsRawResponse(
       onStream: createPublicationGuardedStreamCallback(options.onStream, options.abortSignal),
       onActivity: options.onActivity,
       workflowMeta: options.workflowMeta,
+      executionPhase: 1,
       childProcessEnv: options.childProcessEnv,
       abortSignal: options.abortSignal,
       failureDir: options.failureDir,

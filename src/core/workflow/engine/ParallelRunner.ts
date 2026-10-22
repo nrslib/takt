@@ -487,6 +487,7 @@ export class ParallelRunner {
         requestRestart(parentOccurrence);
       }
     };
+    const stepIteration = activeStepIteration ?? incrementStepIteration(state, step.name);
     const selectorProvider = this.deps.engineOptions.selectorProvider;
     const selectorDeadline = isDynamicParallelSubSteps(step.parallel) && selectorProvider !== undefined
       ? executionDeadlineContext?.begin('parallel-selector', selectorProvider)
@@ -499,7 +500,6 @@ export class ParallelRunner {
         )
       : step.parallel;
     this.resolveAbortSignal()?.throwIfAborted();
-    const stepIteration = activeStepIteration ?? incrementStepIteration(state, step.name);
     log.debug('Running parallel step', {
       step: step.name,
       subSteps: subSteps.map(s => s.name),
@@ -548,6 +548,7 @@ export class ParallelRunner {
           concurrency: step.concurrency,
           items: agentSubSteps.map((subStep) => ({
             id: subStep.name,
+            workflowMeta: this.deps.optionsBuilder.buildWorkflowMeta(step, runtime),
             scope: createRoutingScope({
               workflow: this.deps.getWorkflowName(),
               parentStep: step.name,
@@ -770,7 +771,17 @@ export class ParallelRunner {
           };
 
         // Phase 1: main execution (Write excluded if sub-step has report)
-        const baseOptions = this.deps.optionsBuilder.buildAgentOptions(executableSubStep, subRuntime);
+        const subExecutionRuntime = {
+          ...subRuntime,
+          workflowAssignment: {
+            stepName: subStep.name,
+            parallelParent: step.name,
+            stepIteration: subIteration,
+            iteration: parentIteration,
+            maxSteps,
+          },
+        };
+        const baseOptions = this.deps.optionsBuilder.buildAgentOptions(executableSubStep, subExecutionRuntime);
         // Session key uses the same resolved provider as Phase 1 options and resume phases.
         const subSessionKey = buildSessionKey(executableSubStep, {
           provider: subPm.provider,
@@ -809,6 +820,8 @@ export class ParallelRunner {
             };
         const promptResolvedAttempts = new Set<number>();
         const phase1Result = await runPhase1WithEmptyRecovery({
+          workflowMeta: agentOptions.workflowMeta,
+          language: agentOptions.language,
           instruction: phase1Instruction,
           initialSessionId: agentOptions.sessionId,
           execute: async (attempt) => {
@@ -962,6 +975,8 @@ export class ParallelRunner {
                 return created;
               };
               const retry = await runPhase1WithEmptyRecovery({
+                workflowMeta: agentOptions.workflowMeta,
+                language: agentOptions.language,
                 instruction,
                 initialSessionId: sessionId,
                 execute: async (attempt) => {
@@ -1070,7 +1085,7 @@ export class ParallelRunner {
             this.deps.onPhaseComplete,
             this.deps.onJudgeStage,
             parentIteration,
-            subRuntime,
+            subExecutionRuntime,
             (
               providerInfo: NonNullable<StepRunResult['providerInfo']>,
               success: boolean,

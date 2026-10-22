@@ -2,14 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
 import { ParallelSubStepRawSchema, WorkflowStepRawSchema } from '../core/models/index.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
-import type { WorkflowStep } from '../core/models/types.js';
+import type { NormalAgentWorkflowStep, WorkflowStep } from '../core/models/types.js';
 import { makeStep } from './test-helpers.js';
 
 type BuilderOverrides = Partial<WorkflowEngineOptions> & {
   cwd?: string;
 };
 
-function makeCompactStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
+function makeCompactStep(overrides: Partial<NormalAgentWorkflowStep> = {}): WorkflowStep {
   return makeStep({
     name: 'review',
     persona: 'reviewer',
@@ -39,9 +39,7 @@ function createOptionsBuilder(
     getSessionId,
     () => '.takt/runs/test/reports',
     () => undefined,
-    () => [{ name: step.name }],
     () => 'test-workflow',
-    () => undefined,
   );
 }
 

@@ -37,12 +37,15 @@ import type {
 } from '../../../shared/types/provider.js';
 import { resolveSelectorPermissionMode } from '../selector-permission-resolution.js';
 import { resolveInternalAgentMcpServers } from '../../../infra/config/runtime-provider/mcp-assignment.js';
+import type { WorkflowMeta } from '../../../agents/types.js';
+import { renderPhaseContext } from '../../../shared/prompts/phase-context.js';
 
 const log = createLogger('dynamic-parallel-selector');
 const SELECTOR_RATIONALE_LOG_MAX_BYTES = 1024;
 
 export interface DynamicParallelSelectorCoordinatorDeps {
   readonly engineOptions: WorkflowEngineOptions;
+  readonly getWorkflowMeta?: (step: WorkflowStep) => WorkflowMeta;
   readonly getAbortSignal?: () => AbortSignal | undefined;
   readonly onStream?: StreamCallback;
   readonly onActivity?: ProviderActivityCallback;
@@ -141,9 +144,15 @@ export class DynamicParallelSelectorCoordinator {
     let snapshot: DynamicParallelSelectionSnapshot;
     let participants: WorkflowStep[];
     try {
+      const workflowMeta = this.deps.getWorkflowMeta?.(step);
+      const assignment = workflowMeta?.context?.assignment;
+      const phaseInstruction = assignment === undefined ? instruction : [
+        renderPhaseContext(assignment, 1, this.deps.engineOptions.language ?? 'en'),
+        instruction,
+      ].join('\n\n');
       const mcp = resolveInternalAgentMcpServers(this.deps.engineOptions.mcpAssignment);
       response = await executeStructuredAgent(
-        instruction,
+        phaseInstruction,
         selectorContract.providerSchema,
         {
           name: 'dynamic-parallel-selector',
@@ -156,6 +165,8 @@ export class DynamicParallelSelectorCoordinator {
           onStream: this.deps.onStream,
           onActivity: this.deps.onActivity,
           language: this.deps.engineOptions.language,
+          workflowMeta,
+          executionPhase: 1,
           failureDir: this.deps.failureDir,
           personaPath: step.parallel.selection.selector?.personaPath,
           allowedTools: [...SELECTOR_READ_ONLY_TOOLS],

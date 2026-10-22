@@ -79,9 +79,7 @@ describe('CompiledProviderEnvironment mcpAssignment field (MCP-ENGINE-WIRING)', 
       () => undefined,
       () => '/tmp/report',
       () => undefined,
-      () => [{ name: 'execute' }],
       () => 'leaf',
-      () => undefined,
     );
     const step: WorkflowStep = {
       name: 'execute',
@@ -101,9 +99,7 @@ describe('CompiledProviderEnvironment mcpAssignment field (MCP-ENGINE-WIRING)', 
       () => undefined,
       () => '/tmp/report',
       () => undefined,
-      () => [{ name: 'execute' }],
       () => 'leaf',
-      () => undefined,
     );
     const step: WorkflowStep = {
       name: 'execute',
@@ -130,9 +126,7 @@ describe('CompiledProviderEnvironment mcpAssignment field (MCP-ENGINE-WIRING)', 
       () => undefined,
       () => '/tmp/report',
       () => undefined,
-      () => [{ name: 'execute' }],
       () => 'leaf',
-      () => undefined,
     );
     const step: WorkflowStep = {
       name: 'execute',
@@ -189,9 +183,7 @@ describe('OptionsBuilder.resolveMcpServersForStep: runtime MCP mode + step.mcpSe
       () => undefined,
       () => '/tmp/report',
       () => undefined,
-      () => [{ name: 'execute' }],
       () => workflowName,
-      () => undefined,
       workflowStack !== undefined
         ? () => workflowStack as never
         : undefined,

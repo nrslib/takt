@@ -25,7 +25,7 @@ vi.mock('../core/workflow/phase-runner.js', () => ({
 import type { AgentResponse, WorkflowConfig, WorkflowState, WorkflowStep } from '../core/models/index.js';
 import { createInitialState } from '../core/workflow/engine/state-manager.js';
 import { runSingleWorkflowIteration, runWorkflowToCompletion } from '../core/workflow/engine/WorkflowRunLoop.js';
-import type { QualityGateRunResult, RunQualityGatesOptions } from '../core/workflow/quality-gates/types.js';
+import type { QualityGateRunResult } from '../core/workflow/quality-gates/types.js';
 import { makeResponse, makeRule, makeStep, mockRunAgentSequence } from './engine-test-helpers.js';
 import { collectMetricPoints, metricPoint } from './observability-metrics-test-helpers.js';
 import { WorkflowEngineStepCoordinator } from '../core/workflow/engine/WorkflowEngineStepCoordinator.js';
@@ -48,7 +48,8 @@ import { createWorkflowRunLoopTestContract } from './test-helpers.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 
 type CommandGateRunResult = QualityGateRunResult;
-type RunQualityGatesFn = (options: RunQualityGatesOptions) => Promise<QualityGateRunResult>;
+type LoopDeps = Parameters<typeof runWorkflowToCompletion>[0];
+type RunQualityGatesFn = LoopDeps['runQualityGates'];
 
 function makeConfig(step: WorkflowStep): WorkflowConfig {
   return {
@@ -101,7 +102,7 @@ function makeDeps(
   const config = makeConfig(step);
   return {
     state,
-    options: {},
+    options: { projectCwd: cwd } as WorkflowEngineOptions,
     getWorkflowName: () => 'command-gate-workflow',
     getCwd: () => cwd,
     getMaxSteps: () => 5,
@@ -111,7 +112,7 @@ function makeDeps(
     applyRuntimeEnvironment: vi.fn(),
     loopDetectorCheck: () => ({ count: 1, isLoop: false }),
     cycleDetectorRecordAndCheck: () => ({ triggered: false, cycleCount: 0 }),
-    resolveDoneTransition: vi.fn(() => ({ nextStep: 'COMPLETE', commandGates: 'required' as const })),
+    resolveDoneTransition: vi.fn<LoopDeps['resolveDoneTransition']>(() => ({ nextStep: 'COMPLETE', commandGates: 'required' })),
     runLoopMonitorJudge: vi.fn(),
     runStep,
     runQualityGates,
@@ -121,7 +122,8 @@ function makeDeps(
     }),
     buildPhase1Instruction: vi.fn((_step: WorkflowStep, instruction: string) => instruction),
     prepareNormalStepExecution: vi.fn(async () => undefined),
-    resolveStepProviderModel: vi.fn(() => ({
+    resolveStepProviderModelBeforeAutoRouting: vi.fn<LoopDeps['resolveStepProviderModelBeforeAutoRouting']>(() => ({ provider: undefined, model: undefined })),
+    resolveStepProviderModel: vi.fn<LoopDeps['resolveStepProviderModel']>(() => ({
       provider: undefined,
       model: undefined,
     })),
@@ -569,7 +571,7 @@ describe('WorkflowRunLoop command quality gates', () => {
     }));
     const deps = makeDeps(state, step, runStep, runQualityGates);
     deps.resolveDoneTransition.mockReturnValue(transition);
-    deps.options = { onUserInput: vi.fn(async () => 'continue') };
+    deps.options = { projectCwd: '/worktree', onUserInput: vi.fn(async () => 'continue') };
 
     const result = await runSingleWorkflowIteration(deps);
 
@@ -626,7 +628,7 @@ describe('WorkflowRunLoop command quality gates', () => {
       abortRequested = true;
       return 'details';
     });
-    deps.options = { onUserInput };
+    deps.options = { projectCwd: '/worktree', onUserInput };
 
     await run(deps);
 
@@ -668,7 +670,7 @@ describe('WorkflowRunLoop command quality gates', () => {
       return { requiresUserInput: true, commandGates: 'required' };
     });
     const onUserInput = vi.fn(async () => 'details');
-    deps.options = { onUserInput };
+    deps.options = { projectCwd: '/worktree', onUserInput };
 
     await run(deps);
 
@@ -755,6 +757,7 @@ describe('WorkflowRunLoop command quality gates', () => {
         qualityGates: step.qualityGates,
         projectRoot: tmpDir,
         step,
+        observabilityEnabled: false,
       });
       expect(failureResult.ok).toBe(false);
       const instructions: string[] = [];
@@ -882,6 +885,7 @@ describe('WorkflowRunLoop command quality gates', () => {
         qualityGates: step.qualityGates,
         projectRoot: tmpDir,
         step,
+        observabilityEnabled: false,
       });
       expect(failureResult.ok).toBe(false);
       const runStep = vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => {
@@ -961,7 +965,7 @@ describe('WorkflowRunLoop command quality gates', () => {
       .mockResolvedValue({ ok: true });
     const deps = makeDeps(state, step, runStep, runQualityGates);
     deps.options = {
-      observability: { enabled: false },
+      observability: { enabled: false, monitor: false, sessionLogExporter: false, usageEventsPhase: false },
       observabilityRunId: 'run-1',
       projectCwd: '/worktree',
     };
@@ -990,7 +994,7 @@ describe('WorkflowRunLoop command quality gates', () => {
       .mockResolvedValue({ ok: true });
     const deps = makeDeps(state, step, runStep, runQualityGates);
     deps.options = {
-      observability: { enabled: true },
+      observability: { enabled: true, monitor: false, sessionLogExporter: false, usageEventsPhase: false },
       observabilityRunId: 'run-1',
       projectCwd: '/worktree',
     };
@@ -1023,7 +1027,7 @@ describe('WorkflowRunLoop command quality gates', () => {
       .mockResolvedValue({ ok: true });
     const deps = makeDeps(state, step, runStep, runQualityGates);
     deps.options = {
-      observability: { enabled: true },
+      observability: { enabled: true, monitor: false, sessionLogExporter: false, usageEventsPhase: false },
       observabilityRunId: 'run-1',
       projectCwd: '/worktree',
     };
@@ -1063,7 +1067,7 @@ describe('WorkflowRunLoop command quality gates', () => {
       const deps = makeDeps(state, step, runStep, runActualQualityGates);
       deps.getCwd = () => tmpDir;
       deps.options = {
-        observability: { enabled: true },
+        observability: { enabled: true, monitor: false, sessionLogExporter: false, usageEventsPhase: false },
         observabilityRunId: 'run-1',
         projectCwd: tmpDir,
       };
@@ -1107,7 +1111,7 @@ describe('WorkflowRunLoop command quality gates', () => {
       const deps = makeDeps(state, step, runStep, runActualQualityGates);
       deps.getCwd = () => tmpDir;
       deps.options = {
-        observability: { enabled: true },
+        observability: { enabled: true, monitor: false, sessionLogExporter: false, usageEventsPhase: false },
         observabilityRunId: 'run-1',
         projectCwd: tmpDir,
       };
@@ -1151,7 +1155,7 @@ describe('WorkflowRunLoop command quality gates', () => {
       const deps = makeDeps(state, step, runStep, runActualQualityGates);
       deps.getCwd = () => tmpDir;
       deps.options = {
-        observability: { enabled: true },
+        observability: { enabled: true, monitor: false, sessionLogExporter: false, usageEventsPhase: false },
         observabilityRunId: 'run-1',
         projectCwd: tmpDir,
       };
@@ -1188,7 +1192,7 @@ describe('WorkflowRunLoop command quality gates', () => {
       .mockResolvedValue({ ok: true });
     const deps = makeDeps(state, step, runStep, runQualityGates);
     deps.options = {
-      observability: { enabled: false },
+      observability: { enabled: false, monitor: false, sessionLogExporter: false, usageEventsPhase: false },
       observabilityRunId: 'run-1',
       projectCwd: '/worktree',
     };
@@ -1229,7 +1233,7 @@ describe('WorkflowRunLoop command quality gates', () => {
       .mockResolvedValue({ ok: true });
     const deps = makeDeps(state, step, runStep, runQualityGates);
     deps.options = {
-      observability: { enabled: true },
+      observability: { enabled: true, monitor: false, sessionLogExporter: false, usageEventsPhase: false },
       observabilityRunId: 'run-1',
       projectCwd: '/worktree',
     };
@@ -1403,9 +1407,7 @@ function makeDeadlineCoordinator(
     () => undefined,
     () => '/worktree/.takt/runs/test/reports',
     () => undefined,
-    () => [{ name: step.name }],
     () => 'workflow-step-deadline-test',
-    () => undefined,
     undefined,
     () => 'deadline test task',
     undefined,
@@ -1433,7 +1435,6 @@ function makeDeadlineDeps(
     state,
     options,
     getWorkflowName: () => config.name,
-    getTask: () => 'deadline test task',
     getCwd: () => '/worktree',
     getMaxSteps: () => config.maxSteps,
     getReportDir: () => '/worktree/.takt/runs/test/reports',
@@ -1447,16 +1448,16 @@ function makeDeadlineDeps(
     applyRuntimeEnvironment: vi.fn(),
     loopDetectorCheck: () => ({ count: 1, isLoop: false }),
     cycleDetectorRecordAndCheck: () => ({ triggered: false, cycleCount: 0 }),
-    resolveDoneTransition: vi.fn(() => ({ nextStep: 'COMPLETE', commandGates: 'required' as const })),
+    resolveDoneTransition: vi.fn<LoopDeps['resolveDoneTransition']>(() => ({ nextStep: 'COMPLETE', commandGates: 'required' })),
     runLoopMonitorJudge: vi.fn(),
     prepareInstruction: vi.fn((_step: WorkflowStep, stepIteration: number) => ({ text: `instruction ${stepIteration}`, injectedReports: [] })),
     buildPhase1Instruction: vi.fn((_step: WorkflowStep, instruction: string) => instruction),
     prepareNormalStepExecution: vi.fn(async () => undefined),
-    resolveStepProviderModel: vi.fn((_step: WorkflowStep, runtime?: { fallback?: { currentProvider: 'claude' | 'codex' } }) => ({
+    resolveStepProviderModel: vi.fn((_step: WorkflowStep, runtime?: import('../core/workflow/types.js').RuntimeStepResolution) => ({
       provider: runtime?.fallback?.currentProvider ?? 'claude',
       model: 'test-model',
     })),
-    resolveStepProviderModelBeforeAutoRouting: vi.fn(() => ({ provider: 'claude', model: 'test-model' })),
+    resolveStepProviderModelBeforeAutoRouting: vi.fn<LoopDeps['resolveStepProviderModelBeforeAutoRouting']>(() => ({ provider: 'claude', model: 'test-model' })),
     resolveRuntimeForStep: vi.fn(),
     runStep: vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => ({
       response: makeResponse(),

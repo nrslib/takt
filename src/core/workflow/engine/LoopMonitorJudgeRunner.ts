@@ -68,7 +68,7 @@ export class LoopMonitorJudgeRunner {
     fallbackNextStep: string,
   ): Promise<string> {
     const resolvedRuntime = this.resolveJudgeRuntime(monitor, cycleCount, triggeringStep, triggeringRuntime);
-    const judgeStep = this.createJudgeStep(monitor, cycleCount);
+    const judgeStep = this.createJudgeStep(monitor, cycleCount, triggeringStep);
     log.info('Running loop monitor judge', {
       cycle: monitor.cycle,
       cycleCount,
@@ -154,12 +154,14 @@ export class LoopMonitorJudgeRunner {
   private createJudgeStep(
     monitor: LoopMonitorConfig,
     cycleCount: number,
+    triggeringStep: WorkflowStep,
   ): WorkflowStep {
     const instruction = (monitor.judge.instruction ?? this.buildDefaultInstruction(monitor, cycleCount))
       .replace(/\{cycle_count\}/g, String(cycleCount));
     return {
       name: loopJudgeStepName(monitor.cycle),
       engineSynthesized: true,
+      internalPromptContext: { kind: 'loop_monitor', ownerStepName: triggeringStep.name },
       internalFreshSession: true,
       persona: monitor.judge.persona,
       personaPath: monitor.judge.personaPath,
@@ -195,7 +197,7 @@ export class LoopMonitorJudgeRunner {
     triggeringStep: WorkflowStep,
     triggeringRuntime?: RuntimeStepResolution,
   ): RuntimeStepResolution {
-    const draftJudgeStep = this.createJudgeStep(monitor, cycleCount);
+    const draftJudgeStep = this.createJudgeStep(monitor, cycleCount, triggeringStep);
     const judgeProviderInfo = this.deps.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(draftJudgeStep);
     const triggeringProviderInfo = this.deps.optionsBuilder.resolveStepProviderModel(
       triggeringStep,

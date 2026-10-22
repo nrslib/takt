@@ -8,6 +8,7 @@
 
 import { existsSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join } from 'node:path';
+import { renderPhaseContext } from '../../../shared/prompts/phase-context.js';
 import type {
   AgentWorkflowStep,
   WorkflowStep,
@@ -205,7 +206,7 @@ export interface StepExecutorDeps {
   }>;
   readonly getWorkflowName: () => string;
   readonly getTask: () => string;
-  readonly getWorkflowDescription: () => string | undefined;
+  readonly getWorkflowAssignment?: (step: WorkflowStep) => import('../workflow-prompt-context.js').WorkflowAssignment | undefined;
   readonly getWorkflowRules: () => readonly WorkflowWideRule[] | undefined;
   readonly getWorkflowCallVars?: () => Readonly<Record<string, string | number | boolean>> | undefined;
   readonly resolveDeclaredReportInputs: (
@@ -352,6 +353,14 @@ export class StepExecutor {
         reviewerSessionId: input.initialResponse.sessionId,
       };
     }
+    const workflowMeta = this.deps.optionsBuilder.buildWorkflowMeta(input.step);
+    const language = this.deps.getLanguage() ?? 'en';
+    const assignment = workflowMeta.context?.assignment;
+    const phase1Context = assignment === undefined ? undefined : renderPhaseContext(assignment, 1, language).trimStart();
+    const instructionBody = input.originalInstruction.trimStart();
+    const reviewRequirements = phase1Context !== undefined && instructionBody.startsWith(phase1Context)
+      ? instructionBody.slice(phase1Context.length).trimStart()
+      : input.originalInstruction;
     const priorJudgeGapPaths = new Set<string>();
     const result = await runCompletionRetryEpisode({
       config,
@@ -391,7 +400,7 @@ export class StepExecutor {
         const prompt = buildCompletionRetryJudgePrompt({
           language: this.deps.getLanguage(),
           task: this.deps.getTask(),
-          reviewerInstruction: input.originalInstruction,
+          reviewerInstruction: reviewRequirements,
           reviewScope,
           evidence: collectCompletionRetryEvidence({
             cwd: this.deps.getCwd(),
@@ -409,6 +418,11 @@ export class StepExecutor {
             COMPLETION_RETRY_JUDGE_NAME,
           );
           const judgeOptions = this.deps.optionsBuilder.buildAgentOptions(judgeStep);
+          const judgeInstruction = assignment === undefined ? prompt.instruction : [
+            renderPhaseContext(assignment, 3, language),
+            `## ${language === 'ja' ? '判定基準' : 'Criteria'}`,
+            prompt.instruction,
+          ].join('\n\n');
           this.deps.emitEvent('review_completion:judge:start', {
             step: input.step.name,
             attempt: attemptIndex,
@@ -425,7 +439,7 @@ export class StepExecutor {
               providerInfo: judgeProviderInfo,
             },
             () => executeStructuredAgent(
-              prompt.instruction,
+              judgeInstruction,
               judgeStep.structuredOutput!.schema,
               {
                 name: COMPLETION_RETRY_JUDGE_NAME,
@@ -433,6 +447,8 @@ export class StepExecutor {
                 projectCwd: this.deps.getProjectCwd(),
                 systemPrompt: prompt.systemPrompt,
                 language: this.deps.getLanguage(),
+                workflowMeta,
+                executionPhase: 3,
                 abortSignal: this.resolveAbortSignal(),
                 childProcessEnv: judgeOptions.childProcessEnv,
                 failureDir: judgeOptions.failureDir,
@@ -706,7 +722,9 @@ export class StepExecutor {
           return created;
         };
         const recovery = await runPhase1WithEmptyRecovery({
-          instruction: attempt.instruction,
+          workflowMeta: attempt.options.workflowMeta,
+          language: attempt.options.language,
+          instruction: this.buildPhase1FollowUpInstruction(attempt.instruction, attempt.options),
           initialSessionId: attempt.sessionId,
           execute: async (recoveryAttempt) => {
             const phaseAttempt = resolvePhaseAttempt(recoveryAttempt);
@@ -929,6 +947,7 @@ export class StepExecutor {
     const companionDefinitions = this.deps.companionDefinitions;
     const companionProviders = this.deps.companionProviders;
     const companionDiffReader = this.deps.companionDiffReader;
+    const workflowMeta = this.deps.optionsBuilder.buildWorkflowMeta(step);
     const runtimeAbortSignal = abortSignal ?? this.resolveAbortSignal();
     state.companion = {
       completionSettled: false,
@@ -951,6 +970,7 @@ export class StepExecutor {
         runPathNamespace: this.deps.getRunPathNamespace(),
         language: this.deps.getLanguage() ?? 'en',
         task,
+        workflowMeta,
         step,
         definitions: companionDefinitions,
         providers: companionProviders,
@@ -1109,6 +1129,14 @@ export class StepExecutor {
     const sourcePath = this.writeSnapshot(content, directory, fileName);
     this.writeSnapshot(content, directory, 'latest.md');
     state.previousResponseSourcePath = sourcePath;
+  }
+
+  private buildPhase1FollowUpInstruction(instruction: string, options: RunAgentOptions): string {
+    const assignment = options.workflowMeta?.context?.assignment;
+    return assignment === undefined ? instruction : [
+      renderPhaseContext(assignment, 1, options.language ?? 'en'),
+      instruction,
+    ].join('\n\n');
   }
 
   buildPhase1Instruction(
@@ -1494,7 +1522,6 @@ export class StepExecutor {
       step.knowledgeContents,
       transaction,
     );
-    const workflowSteps = this.deps.getWorkflowSteps();
     const reportDir = resolveReportDirectory(this.deps.getCwd(), this.deps.getReportDir());
     // workflow_call の子（subworkflows 名前空間）の {report:X} が親成果物へ
     // read-only フォールバックするための reports ルート。engine の runPaths から
@@ -1521,10 +1548,7 @@ export class StepExecutor {
       resumeReportConsumerKey,
       language: this.deps.getLanguage(),
       interactive: this.deps.getInteractive(),
-      workflowSteps,
-      currentStepIndex: workflowSteps.findIndex(s => s.name === step.name),
-      workflowName: this.deps.getWorkflowName(),
-      workflowDescription: this.deps.getWorkflowDescription(),
+      workflowAssignment: this.deps.getWorkflowAssignment?.(step),
       workflowCallVars: this.deps.getWorkflowCallVars?.(),
       declaredReportInputs,
       unavailableLocalReports: this.deps.reportGenerationIndex?.missingNames(reportsRootDir, reportDir),
@@ -1867,6 +1891,8 @@ export class StepExecutor {
     let phase1Result: Awaited<ReturnType<typeof runPhase1WithEmptyRecovery>>;
     try {
       phase1Result = await runPhase1WithEmptyRecovery({
+        workflowMeta: agentOptions.workflowMeta,
+        language: agentOptions.language,
         instruction: phase1Instruction,
         initialSessionId: executableStep.internalFreshSession === true
           ? undefined
@@ -1912,6 +1938,7 @@ export class StepExecutor {
                     onPromptResolved,
                     onDispatch: agentOptions.onDispatch,
                     workflowMeta: agentOptions.workflowMeta,
+                    executionPhase: agentOptions.executionPhase,
                     mcpServers: agentOptions.mcpServers,
                     mcpAssignment: agentOptions.mcpAssignment,
                     mcpServerIdentity: agentOptions.mcpServerIdentity,
@@ -2054,7 +2081,7 @@ export class StepExecutor {
           );
         }
         const liveInstruction = this.buildPhase1Instruction(
-          sameSessionDelivery.prompt,
+          this.buildPhase1FollowUpInstruction(sameSessionDelivery.prompt, agentOptions),
           executableStep,
           executionRuntime,
         );
@@ -2215,6 +2242,8 @@ export class StepExecutor {
             return created;
           };
           const retryResponse = await runPhase1WithEmptyRecovery({
+            workflowMeta: agentOptions.workflowMeta,
+            language: agentOptions.language,
             instruction: retryInstruction,
             initialSessionId: retrySessionId,
             execute: async (attempt) => {
