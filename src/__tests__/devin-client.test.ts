@@ -1342,6 +1342,80 @@ describe('callDevin', () => {
     }
   });
 
+  it('Given an abort and EPERM failures signalling the process group, When called, Then the abort result is preserved', async () => {
+    const abortController = new AbortController();
+    let spawned: MockAcpChild | undefined;
+    const realKill = process.kill.bind(process);
+    // Every process-group signal fails with EPERM (non-ESRCH): the descendant
+    // sweep and managed termination must degrade to a logged failure instead
+    // of masking the abort result or surfacing an unhandled rejection.
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: string | number) => {
+      if (pid < 0) {
+        const denied = new Error(`kill ${String(signal ?? 0)} EPERM`) as NodeJS.ErrnoException;
+        denied.code = 'EPERM';
+        throw denied;
+      }
+      return realKill(pid, signal as NodeJS.Signals);
+    }) as typeof process.kill);
+    const descendantPid = nextFakePid + 500_000;
+    mockExecFileSync.mockImplementation((command: unknown, args?: unknown) => {
+      if (command === 'ps' && Array.isArray(args) && args.includes('pid=,ppid=,pgid=')) {
+        const leader = spawned!.pid;
+        return `${leader} 1 ${leader}\n${descendantPid} ${leader} ${descendantPid}\n`;
+      }
+      return '';
+    });
+    try {
+      mockSpawn.mockImplementation((...call: unknown[]) => {
+        recordConfigArg(call);
+        const child = createAcpChild();
+        spawned = child;
+        attachAcpServer(child, {
+          initialize: () => ({ protocolVersion: 1, agentCapabilities: {}, agentInfo: { name: 'x', version: '0' } }),
+          'session/new': () => ({ sessionId: 'keen-otter', modes: DEFAULT_MODES, configOptions: [] }),
+          'session/prompt': (_params, _api, _id) => {
+            queueMicrotask(() => abortController.abort());
+            return undefined;
+          },
+        });
+        // The group signal cannot reach the leader, so it exits itself once
+        // the session/cancel notification arrives on the wire.
+        child.stdin.on('data', (chunk: Buffer) => {
+          if (chunk.toString('utf-8').includes('session/cancel')) {
+            queueMicrotask(() => {
+              child.emit('exit', null, 'SIGTERM');
+              child.emit('close', null, 'SIGTERM');
+            });
+          }
+        });
+        return child;
+      });
+
+      const result = await callDevin('coder', 'implement', {
+        cwd: '/repo',
+        abortSignal: abortController.signal,
+      });
+
+      expect(result.status).toBe('error');
+      expect(result.error).toBe('Devin execution aborted');
+      // The descendant sweep saw the EPERM and logged it rather than throwing.
+      expect(debugSpy).toHaveBeenCalledWith(
+        'Devin descendant process group signal failed',
+        expect.objectContaining({ pgid: descendantPid, signal: 'SIGTERM' }),
+      );
+      // managed.terminate() rejects on the same EPERM (SIGTERM grace is
+      // 250ms); the failure must land in the log, not an unhandled rejection.
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      expect(debugSpy).toHaveBeenCalledWith(
+        'Devin process termination failed',
+        expect.objectContaining({ error: expect.stringContaining('EPERM') }),
+      );
+    } finally {
+      killSpy.mockRestore();
+      mockExecFileSync.mockImplementation(() => '');
+    }
+  });
+
   it('Given an answer that discusses rate limits, When called, Then the text is returned as a normal response', async () => {
     mockAcpServer({
       updates: [
