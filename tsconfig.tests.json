@@ -497,6 +497,7 @@
     "src/__tests__/selectAndExecute-workflowApiBridge.test.ts",
     "src/__tests__/selector-guidance-resolution.test.ts",
     "src/__tests__/selector-provider-resolution.test.ts",
+    "src/__tests__/sensitiveText.test.ts",
     "src/__tests__/server-pool-forced-shutdown.test.ts",
     "src/__tests__/session-compaction-wiring.test.ts",
     "src/__tests__/session-compaction.test.ts",
