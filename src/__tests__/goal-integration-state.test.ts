@@ -56,6 +56,23 @@ function completionInquiries(): GoalQuestion[] {
   ];
 }
 let goal: Goal;
+function syncGitResult(args: string[], target: string, included: boolean) {
+  const tree = 'f'.repeat(40);
+  let output: string;
+  let status = 0;
+  if (args.includes('--is-ancestor')) {
+    output = ''; status = 1;
+  } else if (args.includes('merge-tree')) {
+    output = `${included ? tree : 'e'.repeat(40)}\n`;
+  } else if (args.includes('rev-parse')) {
+    output = `${args.some((arg) => arg.endsWith('^{tree}')) ? tree : target}\n`;
+  } else {
+    throw new Error(`Unexpected Git command: ${args.join(' ')}`);
+  }
+  const stdout = Buffer.from(output);
+  const stderr = Buffer.alloc(0);
+  return { pid: 1, output: [null, stdout, stderr], stdout, stderr, status, signal: null };
+}
 beforeEach(() => {
   vi.resetAllMocks(); goal = goalRecord();
   vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(now);
@@ -68,11 +85,7 @@ beforeEach(() => {
   doubles.merge.mockResolvedValue({ status: 'merged', sha: targetSha }); doubles.worktrees.mockResolvedValue([]);
   doubles.diff.mockResolvedValue({ filesChanged: 1, additions: 2, deletions: 1, files: [], truncated: false, totalsTruncated: false });
   doubles.environment.mockResolvedValue({});
-  doubles.gitSync.mockImplementation((_command: string, args: string[]) => ({
-    pid: 1, output: [null, Buffer.alloc(0), Buffer.alloc(0)], stdout: Buffer.from(args.includes('rev-parse') ? `${targetSha}\n`
-      : args.includes('--is-ancestor') ? '' : args.includes('merge-base') ? `${'c'.repeat(40)}\n` : 'pending.txt\0'), stderr: Buffer.alloc(0),
-    status: args.includes('--is-ancestor') ? 1 : 0, signal: null,
-  }));
+  doubles.gitSync.mockImplementation((_command: string, args: string[]) => syncGitResult(args, targetSha, false));
 });
 afterEach(() => vi.useRealTimers());
 it('integrates reviewed task work and records it only in the shared work log', async () => {
@@ -671,12 +684,7 @@ it.each([
     currentTarget = finalTarget;
     return update(id, transform);
   });
-  doubles.gitSync.mockImplementation((_command: string, args: string[]) => ({
-    pid: 1, output: [null, Buffer.alloc(0), Buffer.alloc(0)], stdout: Buffer.from(args.includes('rev-parse') ? `${currentTarget}\n`
-      : args.includes('--is-ancestor') ? '' : args.includes('merge-base') ? `${'e'.repeat(40)}\n`
-        : args.includes(sourceSha) && args.includes(finalTarget) && included ? 'unrelated.txt\0' : 'pending.txt\0'), stderr: Buffer.alloc(0),
-    status: args.includes('--is-ancestor') ? 1 : 0, signal: null,
-  }));
+  doubles.gitSync.mockImplementation((_command: string, args: string[]) => syncGitResult(args, currentTarget, included));
 
   const reopening = reopenGoal('/project', goal.id, reason, undefined);
   await Promise.race([checking, reopening]);
@@ -699,7 +707,7 @@ it.each([
   ]), expect.objectContaining({ cwd: '/project' }));
 });
 
-it.each(['environment', 'spawn', 'rev-parse exit', 'merge-base exit', 'signal', 'missing status', 'incomplete SHA', 'buffer limit', 'content merge-base exit', 'content diff exit'])(
+it.each(['environment', 'spawn', 'rev-parse exit', 'merge-base exit', 'signal', 'missing status', 'incomplete SHA', 'buffer limit', 'merge-tree exit'])(
   'preserves the saved goal when the final Git check fails: %s', async (failure) => {
     await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy);
     const before = structuredClone(goal);
@@ -709,8 +717,7 @@ it.each(['environment', 'spawn', 'rev-parse exit', 'merge-base exit', 'signal', 
       doubles.gitSync.mockImplementation((command: string, args: string[]) => {
         const result = git(command, args);
         if (failure === 'merge-base exit' && args.includes('rev-parse')) return result;
-        if (failure === 'content merge-base exit' && (args.includes('rev-parse') || args.includes('--is-ancestor'))) return result;
-        if (failure === 'content diff exit' && !args.includes('diff')) return result;
+        if (failure === 'merge-tree exit' && !args.includes('merge-tree')) return result;
         if (failure === 'spawn' || failure === 'buffer limit') return { ...result, status: null,
           error: Object.assign(new Error(failure), { code: failure === 'spawn' ? 'ENOENT' : 'ENOBUFS' }) };
         if (failure === 'signal') return { ...result, status: null, signal: 'SIGTERM' };
