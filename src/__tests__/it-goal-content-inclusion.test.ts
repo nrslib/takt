@@ -1,10 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { checkGoalCompletion, completeGoal, reopenGoal } from '../infra/goals/integration.js';
-import { isGoalCommitIncluded } from '../infra/goals/git-command.js';
+import { isGoalCommitIncluded, isGoalContentIncluded, isGoalContentIncludedSync } from '../infra/goals/git-command.js';
+import { buildSafeGitEnvironment } from '../infra/task/git-environment.js';
 import { GoalStore } from '../infra/goals/store.js';
 import type { Goal } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
@@ -16,6 +17,10 @@ let goal: Goal;
 let baseSha: string;
 let sourceSha: string;
 let firstSha: string;
+
+const baseContent = Array.from({ length: 30 }, (_, index) => `export const value${index} = 0;\n`).join('');
+const goalContent = baseContent.replace('value1 = 0', 'value1 = 1');
+const advancedContent = goalContent.replace('value25 = 0', 'value25 = 2');
 
 function git(args: string[]): string {
   return execFileSync('git', ['-c', 'commit.gpgSign=false', '-c', 'merge.gpgSign=false', ...args], {
@@ -45,10 +50,11 @@ function squash(): string {
 beforeEach(async () => {
   cwd = realpathSync(mkdtempSync(join(tmpdir(), 'takt-goal-content-')));
   git(['init', '--initial-branch=main']);
-  baseSha = commitFiles({ 'first.txt': 'base first\n', 'second.txt': 'base second\n' }, 'base');
+  mkdirSync(join(cwd, 'src'));
+  baseSha = commitFiles({ 'src/a.ts': baseContent, 'second.txt': 'base second\n' }, 'base');
   goal = { ...goalRecord(), status: 'awaiting_merge' };
   git(['switch', '--create', goal.branch]);
-  firstSha = commitFiles({ 'first.txt': 'goal first\n' }, 'first goal change');
+  firstSha = commitFiles({ 'src/a.ts': goalContent }, 'first goal change');
   sourceSha = commitFiles({ 'second.txt': 'goal second\n' }, 'second goal change');
   git(['switch', 'main']);
   goal = { ...goal, completion: {
@@ -68,8 +74,13 @@ const histories = [
   { name: 'ordinary merge', included: true, ancestor: true },
   { name: 'squash merge', included: true, ancestor: false },
   { name: 'squash followed by unrelated work', included: true, ancestor: false },
+  // SCN-INCLUDE-P1
+  { name: 'squash followed by same-file work', included: true, ancestor: false },
+  // SCN-INCLUDE-N2
+  { name: 'conflicting work', included: false, ancestor: false },
   { name: 'partial inclusion', included: false, ancestor: false },
   { name: 'reverted squash', included: false, ancestor: false },
+  // SCN-INCLUDE-N1
   { name: 'no inclusion', included: false, ancestor: false },
   { name: 'reverted ordinary merge', included: true, ancestor: true },
   { name: 'cherry-picked work', included: true, ancestor: false },
@@ -89,8 +100,15 @@ function prepareHistory(name: typeof histories[number]['name']): string {
       squash();
       commitFiles({ 'unrelated.txt': 'target-only change\n' }, 'target advances');
       break;
+    case 'squash followed by same-file work':
+      squash();
+      commitFiles({ 'src/a.ts': advancedContent }, 'target advances in the same file');
+      break;
+    case 'conflicting work':
+      commitFiles({ 'src/a.ts': baseContent.replace('value1 = 0', 'value1 = 3') }, 'conflicting target work');
+      break;
     case 'partial inclusion':
-      commitFiles({ 'first.txt': 'goal first\n' }, 'only the first change');
+      commitFiles({ 'src/a.ts': goalContent }, 'only the first change');
       break;
     case 'reverted squash':
       squash();
@@ -130,12 +148,49 @@ it.each(histories)('checks completion against real Git history: $name', async ({
   }
 });
 
+// SCN-INCLUDE-P3
+it.each([
+  { name: 'squash followed by same-file work', included: true },
+  { name: 'no inclusion', included: false },
+  { name: 'conflicting work', included: false },
+] as const)('returns the same synchronous and asynchronous inclusion for $name', async ({ name, included }) => {
+  const targetSha = prepareHistory(name);
+  const env = await buildSafeGitEnvironment(cwd, { allowGitHooks: false, allowGitFilters: false });
+
+  const asyncIncluded = await isGoalContentIncluded(cwd, sourceSha, targetSha, undefined);
+  const syncIncluded = isGoalContentIncludedSync(cwd, sourceSha, targetSha, env);
+  expect({ asyncIncluded, syncIncluded }).toEqual({ asyncIncluded: included, syncIncluded: included });
+});
+
+// SCN-INCLUDE-P2
+it.each(['async', 'sync'] as const)('preserves staged, unstaged and untracked work, index and HEAD in the %s check', async (mode) => {
+  const targetSha = prepareHistory('squash followed by same-file work');
+  writeFileSync(join(cwd, 'second.txt'), 'staged local work\n');
+  git(['add', 'second.txt']);
+  writeFileSync(join(cwd, 'second.txt'), 'unstaged local work\n');
+  writeFileSync(join(cwd, 'src/a.ts'), 'uncommitted source work\n');
+  writeFileSync(join(cwd, 'untracked.txt'), 'untracked local work\n');
+  const env = await buildSafeGitEnvironment(cwd, { allowGitHooks: false, allowGitFilters: false });
+  const snapshot = () => ({
+    status: git(['status', '--porcelain']), head: git(['rev-parse', 'HEAD']),
+    index: readFileSync(join(cwd, git(['rev-parse', '--git-path', 'index']))),
+    files: ['src/a.ts', 'second.txt', 'untracked.txt'].map((path) => readFileSync(join(cwd, path))),
+  });
+  const before = snapshot();
+
+  const included = mode === 'async' ? await isGoalContentIncluded(cwd, sourceSha, targetSha, undefined)
+    : isGoalContentIncludedSync(cwd, sourceSha, targetSha, env);
+
+  expect(snapshot()).toEqual(before);
+  expect(included).toBe(true);
+});
+
 it('completes the same saved waiting goal after an external squash and target advance', async () => {
   expect(await checkGoalCompletion(cwd, goal.id, undefined, policy)).toMatchObject({ included: false });
   expect(await store.get(goal.id)).toEqual(goal);
 
   squash();
-  const targetSha = commitFiles({ 'unrelated.txt': 'later target work\n' }, 'target advances');
+  const targetSha = commitFiles({ 'src/a.ts': advancedContent }, 'target advances in the same file');
   expect(await isGoalCommitIncluded(cwd, sourceSha, targetSha, undefined)).toBe(false);
 
   expect(await checkGoalCompletion(cwd, goal.id, undefined, policy)).toMatchObject({ included: true, targetSha });
@@ -145,7 +200,7 @@ it('completes the same saved waiting goal after an external squash and target ad
 });
 
 it('completes already squashed work through the reviewed completion entry', async () => {
-  const targetSha = squash();
+  const targetSha = prepareHistory('squash followed by same-file work');
 
   expect(await completeGoal(cwd, goal.id, sourceSha, 'evidence', 'approve', undefined, policy))
     .toMatchObject({ status: 'merged', sha: targetSha });
@@ -154,12 +209,12 @@ it('completes already squashed work through the reviewed completion entry', asyn
 
 it.each(['delete', 'rename'] as const)('does not complete when the target retains a path the goal would %s', async (operation) => {
   git(['switch', goal.branch]);
-  git(operation === 'delete' ? ['rm', 'first.txt'] : ['mv', 'first.txt', 'renamed.txt']);
+  git(operation === 'delete' ? ['rm', 'src/a.ts'] : ['mv', 'src/a.ts', 'renamed.txt']);
   git(['commit', '-m', `${operation} goal file`]);
   sourceSha = git(['rev-parse', 'HEAD']);
   await store.update(goal.id, (current) => ({ ...current, completion: { ...current.completion!, goalSha: sourceSha } }));
   git(['switch', 'main']);
-  commitFiles({ 'second.txt': 'goal second\n', ...(operation === 'rename' ? { 'renamed.txt': 'goal first\n' } : {}) }, 'partial goal work');
+  commitFiles({ 'second.txt': 'goal second\n', ...(operation === 'rename' ? { 'renamed.txt': goalContent } : {}) }, 'partial goal work');
   const before = await store.get(goal.id);
 
   expect(await checkGoalCompletion(cwd, goal.id, undefined, policy)).toMatchObject({ included: false });
@@ -173,7 +228,7 @@ it('does not ignore missing changes beyond the displayed diff summary', async ()
   await store.update(goal.id, (current) => ({ ...current, completion: { ...current.completion!, goalSha: sourceSha } }));
   git(['switch', 'main']);
   const partial = Object.fromEntries(Object.entries(files).filter(([path]) => path !== 'part-59.txt'));
-  commitFiles({ ...partial, 'first.txt': 'goal first\n', 'second.txt': 'goal second\n' }, 'all but the last goal file');
+  commitFiles({ ...partial, 'src/a.ts': goalContent, 'second.txt': 'goal second\n' }, 'all but the last goal file');
   const before = await store.get(goal.id);
 
   expect(await checkGoalCompletion(cwd, goal.id, undefined, policy)).toMatchObject({ included: false });
@@ -241,9 +296,6 @@ it.each([false, true])('checks completion with ignored submodules and recorded g
   const targetSha = included ? includedTarget : missingTarget;
   git(['update-ref', 'refs/heads/main', targetSha]);
   expect(await isGoalCommitIncluded(cwd, sourceSha, targetSha, undefined)).toBe(false);
-  expect(git(['diff', '--name-only', baseSha, sourceSha, '--'])).toBe('');
-  expect(git(['diff', '--name-only', '--ignore-submodules=dirty', baseSha, sourceSha, '--'])).toBe('dependency');
-  expect(git(['diff', '--name-only', '--ignore-submodules=dirty', sourceSha, targetSha, '--'])).toBe(included ? '' : 'dependency');
   const before = await store.get(goal.id);
 
   expect(await checkGoalCompletion(cwd, goal.id, undefined, policy)).toMatchObject({ included });
