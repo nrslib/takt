@@ -23,7 +23,14 @@ export function prCiStatusOptions(
   const reference = input.rerun_from.slice(1, -1).replace(':', '.');
   const parsed = parseWorkflowStateReference(reference);
   // Before the optional rerun step has executed, ordinary polling still applies.
-  if (parsed.root === 'effect' && !state.effectResults.has(parsed.scope!)) return options;
+  if (parsed.root === 'effect') {
+    const effects = state.effectResults.get(parsed.scope!);
+    if (!effects) return options;
+    const result = effects[parsed.path[0]!];
+    if (typeof result === 'object' && result !== null && 'success' in result && result.success === false) {
+      return options;
+    }
+  }
   return { ...options, rerun: PrCiRerunSchema.parse(referenceValue(input.rerun_from, state)) };
 }
 
