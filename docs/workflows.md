@@ -320,6 +320,7 @@ Sub-steps execute concurrently, and the parent aggregates sub-step matches via `
 - `all("X")`: true if ALL sub-steps matched condition X
 - `any("X")`: true if ANY sub-steps matched condition X
 - Sub-step `rules` define possible outcomes; `next` is optional (parent handles routing)
+- Sub-steps accept an optional `description` that explains what the step does.
 - Parallel sub-steps do not support `promotion`
 - The parent step accepts an optional `concurrency: <N>` (minimum 1) to bound how many sub-steps run at the same time; without it, all sub-steps start together
 
@@ -339,6 +340,7 @@ Sub-steps execute concurrently, and the parent aggregates sub-step matches via `
         - name: frontend
           persona: frontend-reviewer
           description: Review frontend and UI changes
+          selection_hint: Select when changes affect user-facing behavior or presentation
           instruction: Review frontend
           rules: [{ condition: approved }]
         - name: backend
@@ -353,7 +355,8 @@ Sub-steps execute concurrently, and the parent aggregates sub-step matches via `
         next: COMPLETE
 ```
 
-- `pool` must be non-empty and every pool item must have a non-empty `description`.
+- `pool` must be non-empty and every candidate must have a non-empty `description` that explains its role.
+- Add `selection_hint` when a candidate's role alone does not make clear when to select it. This optional field is allowed only on `pool` candidates and must be a non-empty string when specified. The selector uses both `description` and `selection_hint`. Existing YAML without `selection_hint` continues to use only `description` for selection. Setting `selection_hint` on any other step or sub-step causes a load-time error.
 - A `fixed` or `pool` item that declares `uses` owns its `rules` at that call site. The referenced fragment must not define them.
 - `fixed` always runs. The selector can select only expanded `pool` step names, and execution follows YAML order.
 - `replace` (the default) replaces a previous pool selection on a new round. `cumulative` retains every pool item selected in earlier rounds.
@@ -361,7 +364,7 @@ Sub-steps execute concurrently, and the parent aggregates sub-step matches via `
 - `all()` and `any()` aggregate only the fixed and selected pool items of the current round. Dynamic parallel rejects position-dependent aggregate expressions.
 - Invalid selector output or an unknown selection fails before a fixed or pool agent starts; there is no all-pool fallback.
 - Loading fails before execution when `pool` is missing or empty, a pool description is empty, a fragment cannot expand, an expanded name is duplicated, a fixed/pool item is not an agent sub-step, `selection.mode` is not `replace` or `cumulative`, or an aggregate label is not defined by every candidate. Selector execution also fails before reviewer startup when the provider is unresolved, its strict output is invalid, or fixed plus selected pool items is empty. Resume points containing the removed dynamic selection fields are not supported.
-- The selector input contains the task, the Report Directory path, the target report names (including names from `selection.reports`), the changed file paths against `HEAD`, candidate IDs and descriptions, the previous selection for `cumulative`, and whether this is an initial entry or a new round. The selector resolves report references through the current workflow scope, exact resume snapshot, and parent workflow scope before passing the resulting paths. It is configured with a tool allowlist of `Read`, `Glob`, and `Grep` for reading referenced files and reports; providers that honor the allowlist permit only those tools. Its output must be a completed JSON object with only `selected_ids` and `rationale`; non-arrays, non-string IDs, duplicate IDs, and extra properties are rejected.
+- The selector input contains the task, the Report Directory path, the target report names (including names from `selection.reports`), the changed file paths against `HEAD`, candidate IDs with `description` (role) and `selection_hint` (selection criteria, when specified), the previous selection for `cumulative`, and whether this is an initial entry or a new round. The selector resolves report references through the current workflow scope, exact resume snapshot, and parent workflow scope before passing the resulting paths. It is configured with a tool allowlist of `Read`, `Glob`, and `Grep` for reading referenced files and reports; providers that honor the allowlist permit only those tools. Its output must be a completed JSON object with only `selected_ids` and `rationale`; non-arrays, non-string IDs, duplicate IDs, and extra properties are rejected.
 - The changed path list includes staged, unstaged, deleted, and untracked names against `HEAD`; `.takt/runs/` paths are excluded. Report references are resolved through the existing report-reference rules before they are passed as paths; report contents are read by the selector when needed.
 - Changes committed during a run are no longer different from `HEAD` and are not guaranteed to remain in later selector path lists; prior reports remain available through their report references. A non-Git directory or an unavailable Git command produces an empty changed-path list or fails according to the Git boundary.
 - The saved participant manifest is keyed by the workflow invocation path, workflow-call instance path, and parallel step. Report inheritance and aggregate evaluation use that manifest, so a reviewer removed by `replace` cannot contribute stale reports or findings to the current round.
@@ -890,7 +893,8 @@ Promotion is not supported on parallel sub-steps.
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `description` | - | Free-form step description. Also used as the selection description for dynamic parallel `pool` items, where it is required |
+| `description` | - | Free-form description of what the step does. Optional for normal steps, `workflow_call`, and static `parallel` sub-steps. Required for dynamic parallel `pool` candidates and passed to the selector as the candidate's role |
+| `selection_hint` | - | Optional field allowed only on dynamic parallel `pool` candidates. Describes selection criteria when the candidate's role alone does not make clear when to select it. The selector uses both `description` and `selection_hint`. Setting it on any other step or sub-step causes a load-time error |
 | `persona` | - | Persona key (section map, or bare facet name resolved project → user → builtin) or file path |
 | `persona_name` | - | Display name for logs and prompts. It does not affect `provider_routing.personas` |
 | `session_key` | - | Explicit session key for normal agent steps and parallel sub-steps. The resolved provider is appended to the runtime key; empty and whitespace-only values are invalid |
