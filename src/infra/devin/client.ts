@@ -64,15 +64,6 @@ function trimDetail(value: string | undefined): string {
     : normalized;
 }
 
-function selectErrorDetail(error: DevinExecError): string {
-  const stderr = trimDetail(error.stderr);
-  if (stderr) {
-    return stderr;
-  }
-
-  return getErrorMessage(error);
-}
-
 // The real unauthenticated failure is a JSON-RPC `-32000` error whose
 // message starts with "Please log in to use Devin" (optionally carrying an
 // auth `errorKind`), or Devin's own `Authentication required` stderr line.
@@ -136,9 +127,14 @@ function classifyExecutionError(error: DevinExecError, options: DevinCallOptions
     return 'Devin CLI authentication failed. Run `devin auth login`.';
   }
 
+  // A numeric code only ever means "the devin process exited with this code",
+  // so the generic error.message would just repeat the code — only the stderr
+  // tail carries extra detail worth appending.
   if (typeof error.code === 'number') {
-    const detail = selectErrorDetail(error);
-    return `Devin CLI exited with code ${error.code}: ${detail}`;
+    const detail = trimDetail(error.stderr);
+    return detail
+      ? `Devin CLI exited with code ${error.code}: ${detail}`
+      : `Devin CLI exited with code ${error.code}`;
   }
 
   return getErrorMessage(error);
@@ -246,7 +242,7 @@ export class DevinClient {
       // session/new) to the thrown error, so a failed turn can still be
       // resumed or inspected.
       const sessionId = error.sessionId ?? options.sessionId;
-      const combined = `${error.stderr ?? ''}\n${error.stdout ?? ''}\n${getErrorMessage(error)}`;
+      const combined = `${error.stderr ?? ''}\n${getErrorMessage(error)}`;
       const aborted = options.abortSignal?.aborted || error.name === 'AbortError';
       if (!aborted && isRateLimitFailure(error, combined)) {
         const rateLimitedFields = buildRateLimitedResponseFields('devin', 'error_text', trimDetail(combined));

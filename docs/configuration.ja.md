@@ -548,7 +548,7 @@ kiro_api_key: ...              # Kiro CLI 用
 - DeepSeek credential は公式 runtime に渡します。TAKT は保存済み credential 値を読みません。
 - Copilot provider は `copilot` CLI のインストールが必要です。GitHub トークンは認証に使用されます。
 - Kiro provider は `kiro-cli` CLI のインストールが必要です。`TAKT_KIRO_API_KEY` / `kiro_api_key` は子プロセスの `KIRO_API_KEY` として渡されます。どちらも未設定の場合は公式の `KIRO_API_KEY` 環境変数を使用します。
-- Devin provider は `devin` CLI のインストールと `devin auth login` による認証が必要です。TAKT は子プロセスにクレデンシャルを渡しません。
+- Devin provider は `devin` CLI のインストールと `devin auth login` による認証が必要です。TAKT は子プロセスにクレデンシャルを渡しませんが、例外として `WINDSURF_API_KEY` が設定されている場合はその値を子プロセスの環境へ引き継ぎます。
 
 ### CLI パス上書き
 

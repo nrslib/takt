@@ -505,7 +505,7 @@ kiro_api_key: ...              # Kiro CLI
 
 ### 安全
 
-TAKT 不读取、复制或改写保存的 DeepSeek credential 值。DeepSeek Harness TypeScript SDK/runtime 支持 glibc >= 2.28 的 Linux x64/arm64 和 macOS arm64 >= 14.0。Cursor 已有 `cursor-agent login` session 时可以不设置 API key；Copilot、Kiro 和 Devin 仍需各自的 CLI。
+TAKT 不读取、复制或改写保存的 DeepSeek credential 值。DeepSeek Harness TypeScript SDK/runtime 支持 glibc >= 2.28 的 Linux x64/arm64 和 macOS arm64 >= 14.0。Cursor 已有 `cursor-agent login` session 时可以不设置 API key；Copilot、Kiro 和 Devin 仍需各自的 CLI。Devin provider 需要安装 `devin` CLI 并通过 `devin auth login` 认证；TAKT 不向子进程传递凭据，但 `WINDSURF_API_KEY` 环境变量在已设置时会转发给子进程。
 
 ### CLI 路径覆盖
 

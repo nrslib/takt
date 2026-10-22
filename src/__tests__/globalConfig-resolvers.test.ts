@@ -56,6 +56,7 @@ const {
   resolveCursorCliPath,
   resolveCopilotCliPath,
   resolveCopilotGithubToken,
+  resolveDevinCliPath,
   resolveOpencodeApiKey,
   resolveCursorApiKey,
   validateCliPath,
@@ -841,6 +842,82 @@ describe('resolveCopilotCliPath', () => {
   it('should throw when env path is invalid', () => {
     process.env['TAKT_COPILOT_CLI_PATH'] = join(testDir, 'missing-copilot');
     expect(() => resolveCopilotCliPath()).toThrow(/does not exist/i);
+  });
+});
+
+describe('resolveDevinCliPath', () => {
+  const originalEnv = process.env['TAKT_DEVIN_CLI_PATH'];
+
+  beforeEach(() => {
+    invalidateGlobalConfigCache();
+    mkdirSync(taktDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    if (originalEnv !== undefined) {
+      process.env['TAKT_DEVIN_CLI_PATH'] = originalEnv;
+    } else {
+      delete process.env['TAKT_DEVIN_CLI_PATH'];
+    }
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('should return env var path when set (highest priority)', () => {
+    const envPath = createExecutableFile('env-devin');
+    const configPath2 = createExecutableFile('config-devin');
+    process.env['TAKT_DEVIN_CLI_PATH'] = envPath;
+    const yaml = [
+      'language: en',
+      'provider: devin',
+      `devin_cli_path: ${configPath2}`,
+    ].join('\n');
+    writeFileSync(configPath, yaml, 'utf-8');
+
+    const path = resolveDevinCliPath();
+    expect(path).toBe(envPath);
+  });
+
+  it('should use global config when env var is not set', () => {
+    delete process.env['TAKT_DEVIN_CLI_PATH'];
+    const globalPath = createExecutableFile('global-devin');
+    const yaml = [
+      'language: en',
+      'provider: devin',
+      `devin_cli_path: ${globalPath}`,
+    ].join('\n');
+    writeFileSync(configPath, yaml, 'utf-8');
+
+    const path = resolveDevinCliPath();
+    expect(path).toBe(globalPath);
+  });
+
+  it('should return undefined when nothing is set', () => {
+    delete process.env['TAKT_DEVIN_CLI_PATH'];
+    const yaml = [
+      'language: en',
+      'provider: devin',
+    ].join('\n');
+    writeFileSync(configPath, yaml, 'utf-8');
+
+    const path = resolveDevinCliPath();
+    expect(path).toBeUndefined();
+  });
+
+  it('should throw when env path is invalid', () => {
+    process.env['TAKT_DEVIN_CLI_PATH'] = join(testDir, 'missing-devin');
+    expect(() => resolveDevinCliPath()).toThrow(/does not exist/i);
+  });
+
+  it('should throw when global config path is invalid', () => {
+    delete process.env['TAKT_DEVIN_CLI_PATH'];
+    const yaml = [
+      'language: en',
+      'provider: devin',
+      `devin_cli_path: ${join(testDir, 'missing-devin')}`,
+    ].join('\n');
+    writeFileSync(configPath, yaml, 'utf-8');
+
+    expect(() => resolveDevinCliPath()).toThrow(/does not exist/i);
   });
 });
 

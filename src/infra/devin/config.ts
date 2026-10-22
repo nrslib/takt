@@ -35,7 +35,14 @@ function asStringList(value: unknown): string[] {
 
 // Mirrors the CLI's own resolution: %APPDATA%\devin\config.json on Windows,
 // $XDG_CONFIG_HOME/devin/config.json elsewhere, defaulting to ~/.config.
+// runtime.prepare rewrites XDG_CONFIG_HOME after it starts, so it also
+// injects TAKT_DEVIN_CONFIG_DIR with the config dir resolved from the
+// original environment; honor that first so the seed is not silently lost.
 function resolveDevinUserConfigPath(): string {
+  const preservedDir = process.env.TAKT_DEVIN_CONFIG_DIR;
+  if (preservedDir) {
+    return join(preservedDir, 'config.json');
+  }
   if (process.platform === 'win32') {
     const appData = process.env.APPDATA ?? join(homedir(), 'AppData', 'Roaming');
     return join(appData, 'devin', 'config.json');

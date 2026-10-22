@@ -56,7 +56,6 @@ export type DevinExecError = Error & {
   errorKind?: string;
   /** Session resolved during the call; lets error paths report it for resume. */
   sessionId?: string;
-  stdout?: string;
   stderr?: string;
   signal?: NodeJS.Signals | null;
 };
@@ -103,7 +102,6 @@ export function createExecError(
     code?: string | number;
     errorKind?: string;
     sessionId?: string;
-    stdout?: string;
     stderr?: string;
     signal?: NodeJS.Signals | null;
     name?: string;
@@ -116,7 +114,6 @@ export function createExecError(
   error.code = params.code;
   error.errorKind = params.errorKind;
   error.sessionId = params.sessionId;
-  error.stdout = params.stdout;
   error.stderr = params.stderr;
   error.signal = params.signal;
   return error;
@@ -132,12 +129,20 @@ export function buildCloseErrorMessage(code: number | null, signal: NodeJS.Signa
   return 'devin closed without exit code or signal';
 }
 
+// ESRCH means the group is already gone. EPERM can surface when a descendant
+// was reparented mid-sweep or drops privileges; the callers treat signaling as
+// best-effort, so non-ESRCH failures are logged rather than thrown — a throw
+// here would mask the termination result or surface as an uncaught exception.
 function signalProcessGroup(pgid: number, signal: NodeJS.Signals): void {
   try {
     process.kill(-pgid, signal);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
-      throw error;
+      log.debug('Devin descendant process group signal failed', {
+        pgid,
+        signal,
+        error: getErrorMessage(error),
+      });
     }
   }
 }
@@ -241,6 +246,8 @@ export function spawnDevinAcp(args: string[], options: DevinCallOptions): DevinA
         for (const pgid of descendantGroups) {
           signalProcessGroup(pgid, 'SIGKILL');
         }
+      }).catch((error: unknown) => {
+        log.debug('Devin descendant SIGKILL sweep failed', { error: getErrorMessage(error) });
       });
     }
     void managed.terminate().catch((error: unknown) => {

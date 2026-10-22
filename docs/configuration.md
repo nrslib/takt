@@ -554,7 +554,7 @@ Environment variables take precedence over `config.yaml` settings.
 - TAKT passes the selected DeepSeek credential reference to the official runtime and never reads, copies, or rewrites saved credential values.
 - Copilot provider requires the `copilot` CLI to be installed. The GitHub token is used for authentication.
 - Kiro provider requires the `kiro-cli` CLI to be installed. `TAKT_KIRO_API_KEY` / `kiro_api_key` is passed to the child process as `KIRO_API_KEY`; if neither is set, TAKT uses the official `KIRO_API_KEY` environment variable.
-- Devin provider requires the `devin` CLI to be installed and authenticated with `devin auth login`; TAKT passes no credentials to the child process.
+- Devin provider requires the `devin` CLI to be installed and authenticated with `devin auth login`; TAKT passes no credentials to the child process beyond `WINDSURF_API_KEY`, which is forwarded to the Devin child environment when set.
 
 ### CLI Path Overrides
 

@@ -372,6 +372,7 @@ const restoredEnvKeys = [
   'HTTPS_PROXY',
   'NO_PROXY',
   'SERVICE_SECRET',
+  'TAKT_DEVIN_CONFIG_DIR',
   'WINDSURF_API_KEY',
   'XDG_CONFIG_HOME',
   'XDG_DATA_HOME',
@@ -865,6 +866,20 @@ describe('callDevin', () => {
     expect(modes[0]?.params).toEqual(expect.objectContaining({ modeId: expectedMode }));
   });
 
+  it('Given session/set_mode fails, When called, Then the prompt turn still completes', async () => {
+    const server = mockAcpServer({
+      setModeError: { code: -32603, message: 'mode not supported' },
+    });
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo', permissionMode: 'edit' });
+
+    expect(result.status).toBe('done');
+    expect(result.content).toBe('done');
+    expect(result.sessionId).toBe('keen-otter');
+    expect(requestsOf(server, 'session/set_mode')).toHaveLength(1);
+    expect(requestsOf(server, 'session/prompt')).toHaveLength(1);
+  });
+
   it('Given edit permission, When called, Then injects allow rules for exec through --config', async () => {
     mockAcpServer();
 
@@ -971,6 +986,33 @@ describe('callDevin', () => {
     };
     expect(config.agent?.model).toBe('claude-opus-5-5-medium');
     expect(config.permissions?.allow).toEqual(['Fetch(https://api.example.com/*)']);
+  });
+
+  it('Given runtime.prepare redirected XDG_CONFIG_HOME, When called, Then the generated config still seeds from the original user config', async () => {
+    writeUserConfig(JSON.stringify({
+      agent: { model: 'swe-2-max' },
+      permissions: { allow: ['Exec(git)'], deny: ['Exec(sudo)'] },
+    }));
+    // runtime.prepare rewrites XDG_CONFIG_HOME to the worktree's runtime dir
+    // and injects TAKT_DEVIN_CONFIG_DIR with the config dir resolved from the
+    // original environment.
+    process.env.TAKT_DEVIN_CONFIG_DIR = join(xdgConfigHome, 'devin');
+    const runtimeConfigHome = mkdtempSync(join(tmpdir(), 'takt-devin-runtime-'));
+    tmpDirs.push(runtimeConfigHome);
+    process.env.XDG_CONFIG_HOME = runtimeConfigHome;
+    mockAcpServer();
+
+    await callDevin('coder', 'inspect', { cwd: '/repo', permissionMode: 'readonly' });
+
+    const config = generatedConfig() as {
+      agent?: { model?: string };
+      permissions?: { allow?: string[]; deny?: string[] };
+    };
+    expect(config.agent?.model).toBe('swe-2-max');
+    expect(config.permissions?.allow).toEqual(['Exec(git)']);
+    expect(config.permissions?.deny).toEqual(
+      expect.arrayContaining(['Exec(sudo)', 'exec', 'edit', 'Write(**)', 'mcp__*']),
+    );
   });
 
   it('Given an unparseable user config, When called, Then the generated config falls back to defaults', async () => {
@@ -1129,6 +1171,15 @@ describe('callDevin', () => {
     expect(result.error).toContain('fatal: could not load config');
     expect(result.error).not.toContain('boot-0 ');
     expect(result.error).not.toContain('boot-1 ');
+  });
+
+  it('Given an exit with empty stderr, When the process dies mid-prompt, Then the error does not repeat the exit code', async () => {
+    mockChildExitAfterPrompt(2, '');
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo' });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toBe('Devin CLI exited with code 2');
   });
 
   it('Given a clean exit racing an app-level error, When called, Then the app error is kept over the exit', async () => {
@@ -1450,5 +1501,31 @@ describe('callDevin', () => {
 
     expect(result.status).toBe('error');
     expect(result.providerUsage).toEqual({ usageMissing: true, reason: 'usage_not_available' });
+  });
+
+  it('Given preparedMcp, When the call succeeds, Then dispose runs during cleanup', async () => {
+    const dispose = vi.fn(async () => {});
+    mockAcpServer();
+
+    const result = await callDevin('coder', 'implement', {
+      cwd: '/repo',
+      preparedMcp: { dispose },
+    });
+
+    expect(result.status).toBe('done');
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it('Given preparedMcp, When the call fails, Then dispose still runs during cleanup', async () => {
+    const dispose = vi.fn(async () => {});
+    mockAcpServer({ promptError: { code: -32603, message: 'boom' } });
+
+    const result = await callDevin('coder', 'implement', {
+      cwd: '/repo',
+      preparedMcp: { dispose },
+    });
+
+    expect(result.status).toBe('error');
+    expect(dispose).toHaveBeenCalledOnce();
   });
 });
