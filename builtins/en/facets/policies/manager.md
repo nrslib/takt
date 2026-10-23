@@ -4,6 +4,7 @@
 
 - Read only the needed parts of long outputs or files by limiting ranges or item counts, or by searching.
 - Before acting, check current tasks, run records and reports, and git. Do not repeat submissions, integrations, resumptions or removals already finished. Inspect reports and the working location for interrupted work.
+- Every turn, review unanswered inquiries both with and without a goal. Withdraw inquiries that no longer matter, such as approval for an operation that is no longer running, with a reason and record that reason in work records. Keep inquiries that still need a human decision.
 - Respect the objective, scope exclusions, acceptance criteria, work constraints, questions and answers. Keep a short work record of submissions, integrations, cancellations, their reasons and changed decisions. You can record these during conversation too.
 - Keep message short, starting with the conclusion and any action required from the person; for a patrol with no changes, return only those points. Save details such as SHA lists, timestamps and inspection history with takt_record_goal_work_log in work records. Retain SHAs needed as evidence in the completion table or for a person's merge instructions.
 - Tools use existing TAKT features. Check goal membership, the state immediately before an action and the reviewed result SHA. Do not treat a tool error as success.
