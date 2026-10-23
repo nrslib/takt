@@ -12,6 +12,11 @@ const CLASSIFICATIONS = [
   },
   {
     tier: 'active',
+    reason: 'フェーズを跨ぐ会話での読み取り再開、現在の結果への追従、ユーザー制約の維持を本番 dist と生イベントで測る',
+    suites: ['phase-awareness'],
+  },
+  {
+    tier: 'active',
     reason: 'CI回復の調査分類と根本修正レビューを本番ファセットで評価する',
     suites: ['merge-ci-investigation', 'merge-ci-review'],
   },
@@ -232,6 +237,10 @@ const EXECUTION_OVERRIDES = {
   'manager-work-split': {
     defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
     reason: 'Sol Low、Opus 5、Luna Max で日英の操作選択と引数を比較する明示選択の評価',
+  },
+  'phase-awareness': {
+    defaultEligible: false, credentials: ['codex', 'claude'], cost: 'high',
+    reason: '固定の red/green 実行表と複数 CLI 認証を要するため専用 runner で明示実行する',
   },
   'merge-ci-investigation': {
     defaultEligible: false, credentials: ['codex'], cost: 'high',

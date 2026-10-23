@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
-import type { AgentResponse, WorkflowConfig, WorkflowStep } from '../core/models/index.js';
+import type { AgentResponse, NormalAgentWorkflowStep, WorkflowConfig, WorkflowStep } from '../core/models/index.js';
 import type { ReportPhaseRunnerContext } from '../core/workflow/phase-runner.js';
 import type { LegacyProviderEnvironmentInput } from '../infra/config/runtime-provider/environment.js';
 
@@ -47,7 +47,7 @@ const completion = {
   retryInstruction: 'Recheck the identified gaps.',
 };
 
-function reviewStep(name: string, overrides: Partial<WorkflowStep> = {}): WorkflowStep {
+function reviewStep(name: string, overrides: Partial<NormalAgentWorkflowStep> = {}): WorkflowStep {
   return makeStep(name, {
     completionRetry: completion,
     outputContracts: [{ name: `${name}.md`, format: name, useJudge: false }],
@@ -218,6 +218,68 @@ describe('WorkflowEngine completion retry wiring', () => {
 
     await expect(engine.run()).resolves.toMatchObject({ status: 'completed' });
   });
+
+  it.each([undefined, 'selected-model'])(
+    'preserves the selected review-completion judge profile model %s through execution',
+    async (model) => {
+      const step = reviewStep('reviewer', {
+        provider: 'mock',
+        providerSpecified: true,
+        completionRetry: { ...completion, maxRetry: 0 },
+      });
+      mkdirSync(join(cwd, '.takt'), { recursive: true });
+      writeFileSync(join(cwd, '.takt', 'runtime.yaml'), stringifyYaml({
+        version: 1,
+        provider: {
+          defaults: { profile: 'base' },
+          profiles: {
+            base: { provider: 'codex', model: 'base-model' },
+            selected: { provider: 'codex', ...(model === undefined ? {} : { model }) },
+          },
+          targets: { internal_agents: { 'review-completion-judge': { profile: 'selected' } } },
+        },
+      }));
+      const environment = resolveCompiledProviderEnvironment({
+        projectCwd: cwd,
+        legacySignals: [],
+        legacy: {
+          provider: undefined, providerSource: 'default', model: undefined, modelSource: 'default',
+          personaProviders: undefined, providerRouting: undefined, autoRouting: undefined,
+          providerOptions: undefined,
+        },
+      });
+      expect(environment.internalAgents?.completionRetryJudge).toBeDefined();
+      engine = new WorkflowEngine(normalConfig(step), cwd, 'task', {
+        projectCwd: cwd,
+        provider: environment.provider,
+        providerSource: environment.providerSource,
+        model: environment.model,
+        modelSource: environment.modelSource,
+        internalAgentSeats: environment.internalAgents,
+      });
+      vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+        if (options.internalAgentName === 'review-completion-judge') {
+          return judgeResponse(true);
+        }
+        options.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: instruction });
+        return reviewerResponse(String(persona), 'review', 'review-session');
+      });
+
+      await expect(engine.run()).resolves.toMatchObject({ status: 'completed' });
+
+      const judgeCalls = vi.mocked(runAgent).mock.calls.filter(([, , options]) => (
+        options.internalAgentName === 'review-completion-judge'
+      ));
+      expect(judgeCalls).toHaveLength(1);
+      const options = judgeCalls[0]![2];
+      expect(options.resolvedExecution).toMatchObject({ provider: 'codex' });
+      if (model === undefined) {
+        expect(options.resolvedExecution?.model).toBeUndefined();
+      } else {
+        expect(options.resolvedExecution?.model).toBe('selected-model');
+      }
+    },
+  );
 
   it('clears the normal reviewer session after double-empty recovery succeeds fresh without one', async () => {
     const step = reviewStep('reviewer');
@@ -483,7 +545,7 @@ describe('WorkflowEngine completion retry wiring', () => {
     expect(state.status).toBe('completed');
     const phase2 = vi.mocked(runReportPhase).mock.calls[0]![2] as ReportPhaseRunnerContext;
     expect(phase2.completionRetryDiagnostic).toContain('judge_unavailable');
-    const phase3 = vi.mocked(runStatusJudgmentPhase).mock.calls[0]![1] as Record<string, unknown>;
+    const phase3 = vi.mocked(runStatusJudgmentPhase).mock.calls[0]![1];
     expect(phase3).not.toHaveProperty('completionRetryDiagnostic');
     expect(state.stepOutputs.get(step.name)?.content).toBe('authoritative report');
     expect(vi.mocked(runAgent).mock.calls.filter(([, , options]) => (
@@ -499,7 +561,7 @@ describe('WorkflowEngine completion retry wiring', () => {
     const resolveStepProviderModel = OptionsBuilder.prototype.resolveStepProviderModel;
     const providerResolution = vi
       .spyOn(OptionsBuilder.prototype, 'resolveStepProviderModel')
-      .mockImplementation(function (candidate, runtime) {
+      .mockImplementation(function (this: OptionsBuilder, candidate, runtime) {
         if (candidate.providerRoutingPersonaKey === COMPLETION_RETRY_JUDGE_NAME) {
           throw new Error('judge provider resolution failed');
         }

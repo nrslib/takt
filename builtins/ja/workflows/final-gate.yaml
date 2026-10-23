@@ -33,6 +33,7 @@ capabilities: readonly
 initial_step: supervise
 steps:
   - name: supervise
+    description: 要件と前段の指摘を現在のコードで確認し、完了・修正・再計画のいずれが必要か判定する
     tags:
       - review
       - final-gate

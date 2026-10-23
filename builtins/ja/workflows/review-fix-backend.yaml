@@ -71,6 +71,7 @@ steps:
           - condition: needs_fix
 
   - name: final-gate
+    description: 現在のコードと前段の報告から要件充足と指摘の解消を確認し、完了・修正・再計画を判定する
     input_reports:
       from_step: remediation
       reports:

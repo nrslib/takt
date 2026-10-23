@@ -30,6 +30,7 @@ type TaskRetryPathSegment = string | { callStep: string; workflow: string };
 
 export interface ResolvedTaskRetryPath {
   segments: TaskRetryPathSegment[];
+  headings: readonly { readonly path: string; readonly description?: string }[];
 }
 
 export type TaskRetryPathResolution = ResolvedTaskRetryPath | { reason: string };
@@ -37,6 +38,7 @@ export type TaskRetryPathResolution = ResolvedTaskRetryPath | { reason: string }
 /** A selectable authored leaf step in the restart tree. */
 export interface TaskRetryRestartTreeLeaf {
   kind: 'leaf';
+  path: string;
   step: WorkflowStep;
   /** Nesting depth (root steps are 0, children of a workflow_call are +1). */
   depth: number;
@@ -48,6 +50,7 @@ export interface TaskRetryRestartTreeLeaf {
 /** A non-selectable workflow_call heading that expands its child steps. */
 export interface TaskRetryRestartTreeHeading {
   kind: 'heading';
+  path: string;
   step: WorkflowStep;
   depth: number;
   id: string;
@@ -129,6 +132,7 @@ export function formatTaskRetryPath(segments: readonly TaskRetryPathSegment[]): 
 
 interface TaskRetryTreeLevelContext {
   workflow: WorkflowConfig;
+  segments: readonly TaskRetryPathSegment[];
   stack: readonly WorkflowRestartPointEntry[];
   ancestors: readonly string[];
   depth: number;
@@ -150,6 +154,7 @@ export function buildTaskRetryRestartTree(
   return buildTaskRetryTreeLevel(
     {
       workflow: rootWorkflow,
+      segments: [rootWorkflow.name],
       stack: [],
       ancestors: [getWorkflowReference(rootWorkflow)],
       depth: 0,
@@ -179,6 +184,7 @@ function buildTaskRetryTreeLevel(
     }
     nodes.push({
       kind: 'leaf',
+      path: formatTaskRetryPath([...level.segments, step.name]),
       step,
       depth: level.depth,
       id,
@@ -203,6 +209,7 @@ function buildTaskRetryHeadingNode(
     children = buildTaskRetryTreeLevel(
       {
         workflow: child,
+        segments: [...level.segments, { callStep: step.name, workflow: child.name }],
         stack: [...level.stack, entry],
         ancestors: [...level.ancestors, getWorkflowReference(child)],
         depth: level.depth + 1,
@@ -218,6 +225,7 @@ function buildTaskRetryHeadingNode(
   }
   return {
     kind: 'heading',
+    path: formatTaskRetryPath([...level.segments, step.name]),
     step,
     depth: level.depth,
     id,
@@ -236,6 +244,7 @@ function resolveTaskRetryStackPathWithOptions(
   let steps = rootWorkflow.steps;
   const ancestors = [getWorkflowReference(rootWorkflow)];
   const segments: TaskRetryPathSegment[] = [rootWorkflow.name];
+  const headings: { path: string; description?: string }[] = [];
   for (let index = 0; index < stack.length; index += 1) {
     const entry = stack[index]!;
     const reason = options.requireRestartIdentity
@@ -262,9 +271,13 @@ function resolveTaskRetryStackPathWithOptions(
       } catch (error) {
         return { reason: `Saved resume position ${formatTaskRetryPath(segments)} cannot resolve child workflow: ${error instanceof Error ? error.message : String(error)}` };
       }
+      headings.push({
+        path: formatTaskRetryPath([...segments, step.name]),
+        ...(step.description === undefined ? {} : { description: step.description }),
+      });
       if (isTerminalEntry) {
         segments.push(step.name);
-        return { segments };
+        return { segments, headings };
       }
       segments.push({ callStep: step.name, workflow: child.name });
       workflow = child;
@@ -274,7 +287,7 @@ function resolveTaskRetryStackPathWithOptions(
     }
     segments.push(step.name);
     if (isTerminalEntry) {
-      return { segments };
+      return { segments, headings };
     }
     if (
       !options.allowParallelEntries

@@ -826,6 +826,16 @@ describe('release verification wiring', () => {
       normalized: 'src/__tests__/statusLine.test.ts',
     },
     {
+      target: 'src/__tests__/taskDeleteActions.test.ts',
+      script: 'test:it:heavy:parallel',
+      normalized: 'src/__tests__/taskDeleteActions.test.ts',
+    },
+    {
+      target: 'taskDeleteActions.test.ts',
+      script: 'test:it:heavy:parallel',
+      normalized: 'src/__tests__/taskDeleteActions.test.ts',
+    },
+    {
       target: 'src/__tests__/it-web-ui-retry-dom.test.ts',
       script: 'test:it:heavy:parallel',
       normalized: 'src/__tests__/it-web-ui-retry-dom.test.ts',

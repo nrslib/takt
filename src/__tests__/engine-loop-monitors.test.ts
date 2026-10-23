@@ -45,6 +45,7 @@ import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
 import { runReportPhase } from '../core/workflow/phase-runner.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+import { compileRuntimeProviderEnvironment } from '../infra/config/runtime-provider/environment.js';
 import {
   makeResponse,
   makeStep,
@@ -688,7 +689,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       expect(runAgent).not.toHaveBeenCalled();
     });
 
-    it('should emit loop monitor judge providerInfo when the runtime seat omits its model', async () => {
+    it.each([undefined, 'selected-model'])('should preserve compiled loop judge profile model %s in providerInfo and execution', async (model) => {
       const config = buildConfigWithLoopMonitor(1, {
         judge: {
           persona: 'supervisor',
@@ -696,10 +697,21 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
         },
       } as Partial<LoopMonitorConfig>);
 
+      const environment = compileRuntimeProviderEnvironment({
+        defaults: { profile: 'base' },
+        profiles: {
+          base: { provider: 'codex', model: 'base-model' },
+          selected: { provider: 'codex', ...(model === undefined ? {} : { model }) },
+        },
+        targets: { internal_agents: { 'loop-judge': { profile: 'selected' } } },
+      });
+      expect(environment.internalAgents?.loopJudge).toBeDefined();
       engine = new WorkflowEngine(config, tmpDir, 'test task', {
         projectCwd: tmpDir,
-        provider: 'codex',
-        model: 'configured-model',
+        provider: environment.provider,
+        providerSource: environment.providerSource,
+        model: environment.model,
+        modelSource: environment.modelSource,
         providerRouting: {
           steps: {
             ai_fix: {
@@ -708,11 +720,7 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
             },
           },
         },
-        internalAgentSeats: {
-          loopJudge: {
-            provider: 'codex',
-          },
-        },
+        internalAgentSeats: environment.internalAgents,
       });
 
       mockRunAgentSequence([
@@ -747,14 +755,20 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
       expect(startedJudgeProviderInfo).toEqual([
         expect.objectContaining({
           provider: 'codex',
-          model: undefined,
+          model,
           modelSource: 'step',
         }),
       ]);
       const judgeCall = vi.mocked(runAgent).mock.calls.find((call) => call[0] === 'supervisor');
+      expect(judgeCall).toBeDefined();
       expect(judgeCall?.[2]).toEqual(expect.objectContaining({
-        resolvedExecution: expect.objectContaining({ provider: 'codex', model: undefined }),
+        resolvedExecution: expect.objectContaining({ provider: 'codex' }),
       }));
+      if (model === undefined) {
+        expect(judgeCall![2].resolvedExecution?.model).toBeUndefined();
+      } else {
+        expect(judgeCall![2].resolvedExecution?.model).toBe('selected-model');
+      }
     });
 
     it('should use fallback provider and model for loop monitor judge after rate limit fallback reaches threshold', async () => {

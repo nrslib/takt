@@ -23,7 +23,7 @@ export interface AutoRoutingCandidate {
   name: string;
   description?: string;
   provider: ProviderType;
-  model: string;
+  model: string | undefined;
   routingTier: RoutingTier;
   providerOptions?: StepProviderOptions;
   permissionMode?: PermissionMode;
@@ -35,7 +35,7 @@ export interface AutoRoutingConfig {
   strategy: AutoRoutingStrategy;
   router: {
     provider: ProviderType;
-    model: string;
+    model: string | undefined;
     providerOptions?: StepProviderOptions;
     permissionMode?: PermissionMode;
   };
@@ -61,6 +61,8 @@ export interface AutoRoutingConfig {
 export interface PersonaProviderEntry {
   provider?: ProviderType;
   model?: string;
+  /** A compiled runtime profile with no model stops lower-priority model lookup. */
+  modelSpecified?: boolean;
   providerOptions?: StepProviderOptions;
   /** Exact permission mode declared by the resolved runtime profile. */
   permissionMode?: PermissionMode;

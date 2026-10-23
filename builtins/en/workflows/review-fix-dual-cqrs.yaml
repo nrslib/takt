@@ -79,6 +79,7 @@ steps:
           - condition: needs_fix
 
   - name: final-gate
+    description: Check requirement fulfillment and finding resolution against current code and preceding reports to decide whether to complete, repair, or replan.
     input_reports:
       from_step: remediation
       reports:

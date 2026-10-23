@@ -38,7 +38,9 @@ function resolveConductorPersonaPath(options: Pick<JudgeStatusOptions, 'cwd' | '
 }
 
 export interface JudgeStatusOptions {
+  judgmentInput: string;
   cwd: string;
+  workflowMeta?: RunAgentOptions['workflowMeta'];
   executionPhase?: RunAgentOptions['executionPhase'];
   stepName: string;
   allowDefaultModel?: boolean;
@@ -77,6 +79,7 @@ type JudgeResponseEntry = Pick<JudgeStageLogEntry, 'instruction' | 'status' | 'r
 
 export interface TagJudgeRunOptions {
   cwd: string;
+  workflowMeta?: RunAgentOptions['workflowMeta'];
   executionPhase?: RunAgentOptions['executionPhase'];
   allowDefaultModel?: boolean;
   provider?: ProviderType;
@@ -127,6 +130,7 @@ export async function runTagJudgeStage(
       childProcessEnv: runOptions.childProcessEnv,
       allowedTools: [],
       executionPhase: runOptions.executionPhase,
+      workflowMeta: runOptions.workflowMeta,
       abortSignal: runOptions.abortSignal,
       failureDir: runOptions.failureDir,
       onPromptResolved: runOptions.onPromptResolved,
@@ -176,7 +180,9 @@ export function isValidCandidateIndex(index: number, candidates: SemanticRuleCan
 }
 
 export interface EvaluateConditionOptions {
+  language?: Language;
   cwd: string;
+  workflowMeta?: RunAgentOptions['workflowMeta'];
   executionPhase?: RunAgentOptions['executionPhase'];
   allowDefaultModel?: boolean;
   provider?: ProviderType;
@@ -226,7 +232,7 @@ export async function evaluateCondition(
   options: EvaluateConditionOptions,
 ): Promise<number> {
   options.abortSignal?.throwIfAborted();
-  const prompt = buildJudgePrompt(agentOutput, conditions);
+  const prompt = buildJudgePrompt(agentOutput, conditions, options.language ?? 'en', options.workflowMeta?.context?.assignment);
   const evaluationSchema = loadEvaluationSchema();
   assertStructuredOutputSchema(evaluationSchema);
   let response: AgentResponse;
@@ -245,9 +251,11 @@ export async function evaluateCondition(
         providerOptions: options.resolvedProviderOptions,
         permissionMode: options.permissionMode,
       },
+      language: options.language,
       childProcessEnv: options.childProcessEnv,
       allowedTools: [],
       executionPhase: options.executionPhase,
+      workflowMeta: options.workflowMeta,
       abortSignal: options.abortSignal,
       failureDir: options.failureDir,
       onStream: options.onStream,
@@ -317,7 +325,6 @@ type JudgeConditionEvaluator = (
 ) => Promise<number>;
 
 async function runAiJudgeStage(
-  structuredInstruction: string,
   candidates: SemanticRuleCandidate[],
   options: JudgeStatusOptions,
   evaluate: JudgeConditionEvaluator,
@@ -326,9 +333,10 @@ async function runAiJudgeStage(
   const stage3 = createJudgeStageRecorder();
   let candidateIndex: number;
   try {
-    candidateIndex = await evaluate(structuredInstruction, conditions, {
+    candidateIndex = await evaluate(options.judgmentInput, conditions, {
       cwd: options.cwd,
       executionPhase: options.executionPhase,
+      workflowMeta: options.workflowMeta,
       provider: options.provider,
       resolvedProvider: options.resolvedProvider,
       resolvedModel: options.resolvedModel,
@@ -336,6 +344,7 @@ async function runAiJudgeStage(
       resolvedProviderOptions: options.resolvedProviderOptions,
       permissionMode: options.permissionMode,
       projectCwd: options.projectCwd,
+      language: options.language,
       childProcessEnv: options.childProcessEnv,
       abortSignal: options.abortSignal,
       failureDir: options.failureDir,
@@ -350,7 +359,7 @@ async function runAiJudgeStage(
           stage: 3,
           method: 'ai_judge',
           status: 'error',
-          instruction: structuredInstruction,
+          instruction: buildJudgePrompt(options.judgmentInput, conditions, options.language ?? 'en', options.workflowMeta?.context?.assignment),
           response: getErrorMessage(error),
         }
       : entry);
@@ -364,7 +373,6 @@ async function runAiJudgeStage(
 }
 
 export async function runJudgeFallbackStages(
-  structuredInstruction: string,
   tagInstruction: string,
   candidates: SemanticRuleCandidate[],
   options: JudgeStatusOptions,
@@ -377,6 +385,7 @@ export async function runJudgeFallbackStages(
     {
       cwd: options.cwd,
       executionPhase: options.executionPhase,
+      workflowMeta: options.workflowMeta,
       allowDefaultModel: options.allowDefaultModel,
       provider: options.provider,
       resolvedProvider: options.resolvedProvider,
@@ -400,7 +409,6 @@ export async function runJudgeFallbackStages(
   }
 
   const aiJudgeResult = await runAiJudgeStage(
-    structuredInstruction,
     candidates,
     options,
     evaluate,
@@ -454,6 +462,7 @@ export async function judgeStatus(
         childProcessEnv: options.childProcessEnv,
         allowedTools: [],
         executionPhase: options.executionPhase,
+        workflowMeta: options.workflowMeta,
         abortSignal: options.abortSignal,
         failureDir: options.failureDir,
         onPromptResolved: options.onStructuredPromptResolved,
@@ -474,7 +483,6 @@ export async function judgeStatus(
       providerUsage: failedResponse?.providerUsage,
     });
     return runJudgeFallbackStages(
-      structuredInstruction,
       tagInstruction,
       candidates,
       options,
@@ -507,7 +515,6 @@ export async function judgeStatus(
   }
 
   return runJudgeFallbackStages(
-    structuredInstruction,
     tagInstruction,
     candidates,
     options,

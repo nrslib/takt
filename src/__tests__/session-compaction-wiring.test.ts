@@ -201,7 +201,6 @@ function makeNormalDeps(
     getWorkflowSteps: () => [{ name: 'review' }],
     getWorkflowName: () => 'test-workflow',
     getTask: () => 'task',
-    getWorkflowDescription: () => undefined,
     getWorkflowRules: () => undefined,
     getInheritedReportInputs: () => undefined,
     resolveDeclaredReportInputs: () => undefined,

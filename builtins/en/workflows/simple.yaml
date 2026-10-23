@@ -173,6 +173,7 @@ steps:
         next: ABORT
 
   - name: supervise
+    description: Compare current code against requirements and preceding findings to decide completion, repair, or waiting for external confirmation.
     input_reports:
       from_step: remediation
       reports:

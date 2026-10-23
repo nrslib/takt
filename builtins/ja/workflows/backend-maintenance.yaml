@@ -4,6 +4,7 @@ max_steps: 51
 initial_step: develop
 steps:
   - name: develop
+    description: 既存契約を保ってバックエンドの変更を計画・テスト・実装し、レビューと修正で要件充足を確認する
     kind: workflow_call
     call: development-core
     args:

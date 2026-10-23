@@ -119,6 +119,16 @@ describe('CI failure system input and rerun effect', () => {
     expect(h.fetchPrStatus).toHaveBeenLastCalledWith(123, '/project', { signal: undefined, rerun });
   });
 
+  it('再実行が失敗して結果にrerunがない場合も現在のPR状態を取得する', async () => {
+    const h = fixture();
+    h.state.effectResults.set('rerun_ci', { rerun_ci: { success: false, failed: true, headChanged: true } });
+    const statusInput: WorkflowSystemInput = { type: 'pr_status', source: 'current_pr', as: 'status',
+      rerun_from: '{effect:rerun_ci.rerun_ci.rerun}' };
+
+    expect(await h.service.resolveSystemInput(statusInput, h.state)).toMatchObject({ number: 123, headSha });
+    expect(h.fetchPrStatus).toHaveBeenCalledWith(123, '/project', { signal: undefined });
+  });
+
   it('停止コメント用の参照情報にログ全文を複製せず再実行エラーは調査へ渡す', async () => {
     const h = fixture();
     h.state.stepIterations.set('rerun_ci', 1);

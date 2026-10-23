@@ -15,12 +15,14 @@ import {
   renderReportOutputInstruction,
 } from './InstructionBuilder.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
+import { renderPhaseContext } from '../../../shared/prompts/phase-context.js';
 import type { InjectedReport, Phase1ReportInputs } from './prepared-instruction.js';
 
 /**
  * Context for building report phase instruction.
  */
 export interface ReportInstructionContext {
+  workflowAssignment?: import('../workflow-prompt-context.js').WorkflowAssignment;
   injectedReports?: readonly InjectedReport[];
   reportInputs?: Phase1ReportInputs;
   userInputs?: readonly string[];
@@ -112,6 +114,10 @@ export class ReportInstructionBuilder {
       hasOutputContract = true;
     }
     return loadTemplate('perform_phase2_message', language, {
+      phaseContext: renderPhaseContext(this.context.workflowAssignment ?? {
+        stepName: this.step.name,
+        stepIteration: this.context.stepIteration,
+      }, 2, language),
       workingDirectory: this.context.cwd,
       hasTask: this.context.task != null && this.context.task.trim().length > 0,
       task: this.context.task ?? '',
@@ -126,8 +132,9 @@ export class ReportInstructionBuilder {
       ).join('\n\n') ?? '',
       gitRules,
       reportContext,
-      hasLastResponse: this.context.lastResponse != null && this.context.lastResponse.trim().length > 0,
-      lastResponse: this.context.lastResponse ?? '',
+      lastResponse: this.context.lastResponse?.trim()
+        ? this.context.lastResponse
+        : language === 'ja' ? '今回の作業フェーズの回答を取得できませんでした。' : 'The response from the current work phase could not be retrieved.',
       hasCompletionRetryDiagnostic:
         this.context.completionRetryDiagnostic !== undefined,
       completionRetryDiagnostic: this.context.completionRetryDiagnostic ?? '',

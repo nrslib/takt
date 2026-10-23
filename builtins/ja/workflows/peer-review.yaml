@@ -241,6 +241,7 @@ steps:
       - condition: BLOCKED
         return: need_replan
   - name: remediation
+    description: 裁定で修正対象とした問題の修正計画を立て、実装と独立検証を繰り返して解消する
     kind: workflow_call
     call:
       $param: remediation_workflow

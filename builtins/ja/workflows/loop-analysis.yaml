@@ -9,6 +9,7 @@ initial_step: analyze
 
 steps:
   - name: analyze
+    description: 完了した実行の記録から回避可能なループの原因を調べ、ワークフローの改善案を作成する
     tags:
       - analysis
     capabilities: readonly
@@ -21,6 +22,7 @@ steps:
         next: review
 
   - name: review
+    description: 改善案の根拠と汎用性を確認し、採用できるかを判断して必要な修正を提示する
     tags:
       - review
     capabilities: readonly
@@ -38,6 +40,7 @@ steps:
         next: reanalyze
 
   - name: reanalyze
+    description: レビュー指摘を実行記録と照合し、改善案を修正して対応不能な案を除外する
     tags:
       - analysis
     capabilities: readonly

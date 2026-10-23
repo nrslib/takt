@@ -206,9 +206,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       () => undefined,
       () => '/tmp/project/.takt/runs/sample/reports',
       () => 'ja',
-      () => [{ name: 'implement', personaDisplayName: 'implement', instruction: 'implement' }],
       () => 'workflow',
-      () => undefined,
       undefined,
       undefined,
       undefined,
@@ -1384,9 +1382,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       () => undefined,
       () => '.takt/runs/sample/reports',
       () => 'ja',
-      () => [{ name: 'implement', personaDisplayName: 'implement', instruction: 'implement' }],
       () => 'workflow',
-      () => 'test workflow',
     );
     const runner = new TeamLeaderRunner({
       optionsBuilder,
@@ -1485,9 +1481,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       () => undefined,
       () => '.takt/runs/sample/reports',
       () => 'ja',
-      () => [{ name: 'implement', personaDisplayName: 'implement', instruction: 'implement' }],
       () => 'workflow',
-      () => 'test workflow',
     );
     const runner = new TeamLeaderRunner({
       optionsBuilder,
@@ -1997,8 +1991,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     const leaderWorkflowMeta = {
       workflowName: 'takt-default',
       currentStep: 'implement',
-      stepsList: [{ name: 'plan' }, { name: 'implement' }],
-      currentPosition: '2/2',
+
       processSafety: { protectedParentRunPid: 4242 },
     };
 
@@ -2009,8 +2002,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
           workflowMeta: {
             workflowName: 'takt-default',
             currentStep: 'implement',
-            stepsList: [{ name: 'plan' }, { name: 'implement' }],
-            currentPosition: '2/2',
+
           },
         }),
         buildPhase1WorkflowMeta: vi.fn().mockReturnValue(leaderWorkflowMeta),
@@ -2134,9 +2126,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       () => undefined,
       () => '.takt/runs/sample/reports',
       () => 'ja',
-      () => [{ name: 'reviewers' }],
       () => 'takt-default',
-      () => 'test workflow',
     );
 
     const runner = new TeamLeaderRunner({
@@ -2248,8 +2238,7 @@ describe('TeamLeaderRunner with structuredCaller', () => {
     const leaderWorkflowMeta = {
       workflowName: 'takt-default',
       currentStep: 'implement',
-      stepsList: [{ name: 'plan' }, { name: 'implement' }],
-      currentPosition: '2/2',
+
       processSafety: { protectedParentRunPid: 4242 },
     };
 

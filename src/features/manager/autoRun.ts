@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { TaskStore } from '../../infra/task/store.js';
 import { GoalStore } from '../../infra/goals/store.js';
 import { isGoalPaused } from '../../infra/goals/state.js';
+import { withGoalExecutionLock } from '../../infra/goals/execution-lock.js';
 import { resolveTaskContent } from '../../infra/task/mapper.js';
 import { getProjectExecutionOwner } from '../../infra/task/project-execution-lock.js';
 import { notifyManagerTurnFailure } from './turnFailureNotification.js';
@@ -48,10 +49,13 @@ export async function ensureManagerRun(cwd: string, options?: { notifyOnFailure:
     const { args } = resolveCliInvocation('run');
     const env = buildChildProcessEnv();
     env[MANAGER_GOAL_TASKS_ENV] = '1';
-    if (!hasRunnablePending(cwd) || getProjectExecutionOwner(cwd) !== undefined) return;
-    const child = spawn(process.execPath, args, {
-      cwd, detached: true, shell: false, stdio: ['ignore', descriptor, descriptor], env,
+    const child = withGoalExecutionLock(cwd, () => {
+      if (!hasRunnablePending(cwd) || getProjectExecutionOwner(cwd) !== undefined) return undefined;
+      return spawn(process.execPath, args, {
+        cwd, detached: true, shell: false, stdio: ['ignore', descriptor, descriptor], env,
+      });
     });
+    if (child === undefined) return;
     await new Promise<void>((resolve, reject) => {
       child.once('error', reject);
       child.once('spawn', () => { child.unref(); resolve(); });

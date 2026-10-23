@@ -88,6 +88,14 @@ test('individual suite selection preserves active and retained compatibility', (
   assert.deepEqual(selected.map(({ tier }) => tier), ['active', 'retained']);
 });
 
+test('manager work split and phase awareness remain selectable together', () => {
+  const names = ['manager-work-split', 'phase-awareness'];
+
+  const selected = selectPromptEvalSuites({ names });
+
+  assert.deepEqual(selected.map(({ name }) => name), names);
+});
+
 test('prepare targets are resolved from the same suite registry', () => {
   const selected = selectPromptEvalSuites({
     names: ['coding', 'final-readiness-preservation', 'fix-loop-convergence'],

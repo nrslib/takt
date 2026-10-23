@@ -241,6 +241,7 @@ steps:
       - condition: BLOCKED
         return: need_replan
   - name: remediation
+    description: Plan repairs for issues selected by adjudication and resolve them through repeated implementation and independent verification.
     kind: workflow_call
     call:
       $param: remediation_workflow

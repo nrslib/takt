@@ -4,6 +4,7 @@ max_steps: 51
 initial_step: develop
 steps:
   - name: develop
+    description: Plan, write tests, and implement using CQRS and event sourcing, then confirm requirements through specialist review and fixes.
     kind: workflow_call
     call: development-core
     args:

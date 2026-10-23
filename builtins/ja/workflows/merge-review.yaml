@@ -4,6 +4,7 @@ max_steps: 51
 initial_step: identify
 steps:
   - name: identify
+    description: 対象PRの番号と現在の状態を取得する
     mode: system
     system_inputs:
       - type: pr_status
@@ -13,6 +14,7 @@ steps:
       - condition: when(true)
         next: review
   - name: review
+    description: 変更内容に合うレビュアーでPRをレビューし、結果をサマリーに統合する
     kind: workflow_call
     call: review
     rules:
@@ -21,6 +23,7 @@ steps:
       - condition: ABORT
         next: review_failed
   - name: caccia
+    description: CacciaでCodeRabbitの指摘に対応し、対応結果を確認する
     mode: system
     effects:
       - type: caccia
@@ -37,6 +40,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: wait_ci
+    description: 対象コミットのCI完了を待ち、CIとPRの状態から次の処理を判定する
     mode: system
     system_inputs:
       - type: pr_status
@@ -53,6 +57,7 @@ steps:
       - condition: when(true)
         next: judge
   - name: judge
+    description: レビュー報告とCI・PRの状態を確認し、承認可否と理由を判定する
     input_reports:
       from_step: review
       reports: all
@@ -76,6 +81,7 @@ steps:
       - condition: when(true)
         next: comment_result
   - name: comment_result
+    description: PRの承認可否とその理由をPRにコメントする
     mode: system
     effects:
       - type: comment_pr
@@ -87,6 +93,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: ci_failed
+    description: 対象コミットのCIチェックが失敗したことをPRにコメントする
     mode: system
     effects:
       - type: comment_pr
@@ -98,6 +105,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: timeout
+    description: CI待機が制限時間を超えたことをPRにコメントする
     mode: system
     effects:
       - type: comment_pr
@@ -109,6 +117,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: unmergeable
+    description: PRをマージできない状態であることをPRにコメントする
     mode: system
     effects:
       - type: comment_pr
@@ -120,6 +129,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: review_failed
+    description: 呼び出したレビューワークフローが中断したことをPRにコメントする
     mode: system
     effects:
       - type: comment_pr
@@ -131,6 +141,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: caccia_limit
+    description: Cacciaが反復上限に達したことと未解決スレッド数をPRにコメントする
     mode: system
     effects:
       - type: comment_pr
@@ -142,6 +153,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: caccia_failed
+    description: Cacciaが失敗したこととエラーをPRにコメントする
     mode: system
     effects:
       - type: comment_pr

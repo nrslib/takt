@@ -453,6 +453,62 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(loadTasksFile(testDir)).toEqual(before);
   });
 
+  it.each([false, true])('returns current tasks without writing when the mutator returns undefined (existing file: %s)', (existingFile) => {
+    const store = new TaskStore(testDir);
+    const tasksFile = store.getTasksFilePath();
+    if (existingFile) {
+      writeTasksFile(testDir, [createPendingRecord({})]);
+      const previousTime = new Date('2000-01-01T00:00:00.000Z');
+      utimesSync(tasksFile, previousTime, previousTime);
+    }
+    const current = store.read();
+    const content = existingFile ? readFileSync(tasksFile, 'utf8') : undefined;
+    const modifiedAt = existingFile ? statSync(tasksFile).mtimeMs : undefined;
+
+    const result = store.update(() => undefined);
+
+    expect(result).toEqual(current);
+    expect(existsSync(tasksFile)).toBe(existingFile);
+    if (existingFile) {
+      expect(readFileSync(tasksFile, 'utf8')).toBe(content);
+      expect(statSync(tasksFile).mtimeMs).toBe(modifiedAt);
+    }
+  });
+
+  it.each([false, true])('returns current deletion state without writing when the mutator returns undefined (owner alive: %s)', (ownerAlive) => {
+    const store = new TaskStore(testDir);
+    const task = createPendingRecord({});
+    const deletion = {
+      id: '650e8400-e29b-41d4-a716-446655440000',
+      owner_pid: ownerAlive ? process.pid : 999999999,
+    };
+    writeTasksFile(testDir, [{ ...task, deletion }]);
+    const tasksFile = store.getTasksFilePath();
+    const previousTime = new Date('2000-01-01T00:00:00.000Z');
+    utimesSync(tasksFile, previousTime, previousTime);
+    const content = readFileSync(tasksFile, 'utf8');
+    const modifiedAt = statSync(tasksFile).mtimeMs;
+    const expected = { tasks: [ownerAlive ? { ...task, deletion } : task] };
+    const kill = process.kill.bind(process);
+    const inspect = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      if (pid === 999999999) throw Object.assign(new Error('No such process'), { code: 'ESRCH' });
+      return kill(pid, signal);
+    });
+
+    try {
+      const result = store.update((current) => {
+        expect(current).toEqual(expected);
+        return undefined;
+      });
+
+      expect(result).toEqual(expected);
+      expect(readFileSync(tasksFile, 'utf8')).toBe(content);
+      expect(statSync(tasksFile).mtimeMs).toBe(modifiedAt);
+    } finally {
+      inspect.mockRestore();
+    }
+  });
+
   it('should recover a stale process lock before updating tasks', () => {
     const store = new TaskStore(testDir);
     store.ensureDirs();

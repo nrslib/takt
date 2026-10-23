@@ -10,6 +10,7 @@ import { goalId, goalRecord } from './helpers/goal-fixtures.js';
 const doubles = vi.hoisted(() => ({ read: vi.fn(), write: vi.fn(), lstat: vi.fn(), lock: vi.fn() }));
 vi.mock('node:fs', () => ({ readdirSync: vi.fn() }));
 vi.mock('../infra/fs/file-lock.js', () => ({ withFileLock: doubles.lock }));
+vi.mock('../infra/goals/execution-lock.js', () => ({ withGoalExecutionLock: (_cwd: string, action: () => unknown) => action() }));
 vi.mock('../shared/utils/private-file.js', () => ({
   readPrivateFileState: doubles.read, writePrivateFile: doubles.write, ensurePrivateDirectory: vi.fn(),
   capturePrivateDirectoryReadSnapshot: vi.fn(), assertPrivateDirectoryReadSnapshot: vi.fn(),

@@ -81,9 +81,7 @@ function createBuilder(
     getSessionId,
     () => '.takt/runs/provider-routing/reports',
     () => 'ja',
-    () => [{ name: 'implement' }],
     () => 'provider-routing-test',
-    () => 'Provider routing test workflow',
   );
 }
 

@@ -51,7 +51,8 @@ import {
   emitCodexItemCompleted,
   emitCodexItemUpdate,
 } from './CodexStreamHandler.js';
-import { buildRateLimitedResponseFields, containsRateLimitError, isRateLimitNoticeResponse } from '../rate-limit/detection.js';
+import { buildRateLimitedResponseFields, classifyRateLimitError, isRateLimitNoticeResponse } from '../rate-limit/detection.js';
+import { RATE_LIMIT_MAX_RETRIES, waitForRateLimitRetry } from '../rate-limit/retry.js';
 import {
   boundCodexFailureMessage,
   type CodexFailureMessageOptions,
@@ -61,12 +62,8 @@ export type { CodexCallOptions } from './types.js';
 
 const log = createLogger('codex-sdk');
 const CODEX_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
-const CODEX_STREAM_ABORTED_MESSAGE = 'Codex execution aborted';
 const CODEX_TIMEOUT_MAX_RETRIES = 2;
 const CODEX_REFUSAL_MAX_RETRIES = 2;
-const CODEX_RETRY_MAX_RETRIES = 8;
-const CODEX_RETRY_BASE_DELAY_MS = 1000;
-const CODEX_RETRY_MAX_DELAY_MS = 30_000;
 const CODEX_ERROR_MATCH_PREFIX_BYTES = 4 * 1024;
 const CODEX_PARSE_FAILURE_PREFIX = 'Failed to parse item:';
 const CODEX_RECONNECT_ERROR_PATTERNS = [
@@ -175,6 +172,7 @@ function buildCodexInput(
  */
 export class CodexClient {
   private isRetriableError(message: string): boolean {
+    if (classifyRateLimitError(message) === 'Transient') return true;
     const lower = getCodexErrorMatchPrefix(message);
     return CODEX_RETRYABLE_ERROR_PATTERNS.some((pattern) => lower.includes(pattern));
   }
@@ -216,37 +214,6 @@ export class CodexClient {
     };
   }
 
-  private async waitForRetryDelay(attempt: number, signal?: AbortSignal): Promise<void> {
-    const delayMs = Math.min(
-      CODEX_RETRY_BASE_DELAY_MS * (2 ** Math.max(0, attempt - 1)),
-      CODEX_RETRY_MAX_DELAY_MS,
-    );
-    await new Promise<void>((resolve, reject) => {
-      const timeoutId = setTimeout(() => {
-        if (signal) {
-          signal.removeEventListener('abort', onAbort);
-        }
-        resolve();
-      }, delayMs);
-
-      const onAbort = (): void => {
-        clearTimeout(timeoutId);
-        if (signal) {
-          signal.removeEventListener('abort', onAbort);
-        }
-        reject(signal?.reason ?? new Error(CODEX_STREAM_ABORTED_MESSAGE));
-      };
-
-      if (signal) {
-        if (signal.aborted) {
-          onAbort();
-          return;
-        }
-        signal.addEventListener('abort', onAbort, { once: true });
-      }
-    });
-  }
-
   private resolveFailureDetail(
     message: string,
     streamSignal: AbortSignal,
@@ -283,7 +250,7 @@ export class CodexClient {
     if (failure.category !== AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR) {
       return false;
     }
-    return standardRetryCount < CODEX_RETRY_MAX_RETRIES && this.isRetriableError(failure.reason);
+    return standardRetryCount < RATE_LIMIT_MAX_RETRIES && this.isRetriableError(failure.reason);
   }
 
   private recordRetry(
@@ -675,9 +642,12 @@ export class CodexClient {
             abortCause,
             timeoutMessage,
           ));
+          const rateLimitClass = classifyRateLimitError(failureMessage);
           if (
-            failure.category !== AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR
-            && containsRateLimitError(failureMessage)
+            failure.category === AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR
+            && (rateLimitClass === 'Exhausted'
+              || (rateLimitClass === 'Transient'
+                && (state.observedToolUse || standardRetryCount >= RATE_LIMIT_MAX_RETRIES)))
           ) {
             const rateLimitedResponse = this.buildRateLimitedResponse(
               agentType,
@@ -690,7 +660,8 @@ export class CodexClient {
             return rateLimitedResponse;
           }
 
-          if (!failedAfterStreamError && this.shouldRetry(failure, standardRetryCount, timeoutRetryCount)) {
+          if ((!failedAfterStreamError || rateLimitClass === 'Transient')
+            && this.shouldRetry(failure, standardRetryCount, timeoutRetryCount)) {
             const boundedFailureMessage = boundCodexFailureMessage(failure.reason, options, true);
             log.info('Retrying Codex call after transient failure', {
               agentType,
@@ -701,7 +672,7 @@ export class CodexClient {
             const retryState = this.recordRetry(failure.category, standardRetryCount, timeoutRetryCount);
             standardRetryCount = retryState.standardRetryCount;
             timeoutRetryCount = retryState.timeoutRetryCount;
-            await this.waitForRetryDelay(retryState.retryAttempt, options.abortSignal);
+            await waitForRateLimitRetry(retryState.retryAttempt, options.abortSignal);
             continue;
           }
 
@@ -759,7 +730,7 @@ export class CodexClient {
             // 新セッションでやり直す。呼び出し元から渡された既存セッションは
             // 後続フェーズの継続に必要なので破棄せず、同一セッションで再試行する。
             threadId = options.sessionId;
-            await this.waitForRetryDelay(refusalRetryCount, options.abortSignal);
+            await waitForRateLimitRetry(refusalRetryCount, options.abortSignal);
             continue;
           }
           const failure = createProviderErrorFailure(
@@ -800,16 +771,19 @@ export class CodexClient {
         return response;
       } catch (error) {
         const rawErrorMessage = redact(getErrorMessage(error));
-        const failure = redactFailure(this.resolveFailureDetail(
+        let failure = redactFailure(this.resolveFailureDetail(
           rawErrorMessage,
           streamAbortController.signal,
           options.abortSignal,
           abortCause,
           timeoutMessage,
         ));
+        const rateLimitClass = classifyRateLimitError(rawErrorMessage);
         if (
-          failure.category !== AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR
-          && containsRateLimitError(rawErrorMessage)
+          failure.category === AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR
+          && (rateLimitClass === 'Exhausted'
+            || (rateLimitClass === 'Transient'
+              && (state.observedToolUse || standardRetryCount >= RATE_LIMIT_MAX_RETRIES)))
         ) {
           const rateLimitedResponse = this.buildRateLimitedResponse(
             agentType,
@@ -846,8 +820,13 @@ export class CodexClient {
           const retryState = this.recordRetry(failure.category, standardRetryCount, timeoutRetryCount);
           standardRetryCount = retryState.standardRetryCount;
           timeoutRetryCount = retryState.timeoutRetryCount;
-          await this.waitForRetryDelay(retryState.retryAttempt, options.abortSignal);
-          continue;
+          try {
+            await waitForRateLimitRetry(retryState.retryAttempt, options.abortSignal);
+            continue;
+          } catch (retryError) {
+            failure = redactFailure(this.resolveFailureDetail(redact(getErrorMessage(retryError)), streamAbortController.signal,
+              options.abortSignal, abortCause, timeoutMessage));
+          }
         }
 
         const finalFailure = this.withReconnectFailureDiagnostics(failure, state.activeTool);

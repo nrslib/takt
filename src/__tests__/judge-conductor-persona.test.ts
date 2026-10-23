@@ -43,6 +43,7 @@ describe('Phase 3 conductor persona resolution', () => {
 
       async function judge(options: Partial<JudgeStatusOptions> = {}) {
         const runOptions: JudgeStatusOptions = {
+          judgmentInput: 'work result',
           cwd: rootDir,
           stepName: 'review',
           resolvedProvider: 'mock',

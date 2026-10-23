@@ -430,7 +430,7 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
     const builder = new OptionsBuilder(
       { projectCwd: workspace, provider: 'deepseek-harness', reportFallbackProvider: { provider: 'deepseek-harness', model: 'deepseek-v4-flash' } },
       () => workspace, () => workspace, () => undefined, () => path.join(root, 'reports'),
-      () => 'en', () => [{ name: 'report' }], () => 'default', () => 'test workflow',
+      () => 'en', () => 'default',
     );
     const fallback = builder.buildFallbackReportOptions(step, { cwd: workspace, resolvedProvider: 'opencode' }, { allowedTools: [] });
     expect(fallback).toBeDefined();

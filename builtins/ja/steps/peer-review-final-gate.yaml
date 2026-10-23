@@ -9,6 +9,7 @@ params:
     type: facet_ref
     facet_kind: instruction
 name: final-gate
+description: 要求とレビュー裁定を現在のコードに照らし、完了か差し戻しかを判定する
 capabilities: readonly
 tags:
   - final-gate

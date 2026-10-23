@@ -67,8 +67,10 @@ subworkflow:
 initial_step: reviewers
 steps:
   - name: reviewers
+    description: 共通レビューとフロントエンドのレビューを並列に行い、修正要否を判定する
     parallel:
       - name: base-reviewers
+        description: 構造・テスト・コード・AI特有の問題をレビューし、必要に応じて脆弱性も確認して修正要否を判定する
         kind: workflow_call
         call: peer-review-suite-base
         args:

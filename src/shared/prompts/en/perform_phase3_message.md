@@ -2,11 +2,13 @@
 <!--
   template: perform_phase3_message
   phase: 3 (status judgment)
-  vars: reportContent, criteriaTable, outputList, hasAppendix, appendixContent, structuredOutput
+  vars: phaseContext, reportContent, criteriaTable, outputList, hasAppendix, appendixContent, structuredOutput
   builder: StatusJudgmentBuilder
 -->
+{{phaseContext}}
+
 {{#if structuredOutput}}
-**Map the judgment result stated in the input below to a rule number (1-based) in the decision criteria.**
+**Map the judgment result stated in the reports or responses being judged to a rule number (1-based) in the decision criteria.**
 {{else}}
 **Based on what is written in the input, output exactly one tag for the matching rule in the decision criteria.**
 
@@ -18,7 +20,7 @@
 
 {{reportContent}}
 
-## Decision Criteria
+## Criteria
 
 {{criteriaTable}}
 
@@ -26,7 +28,7 @@
 
 ## Task
 
-- Judge only what is written in the input above. Do not recheck whether its conclusion is correct, read files, code, or test results, or base your decision on problems absent from the input.
+- Judge only what is written in the inputs included in this instruction. Do not recheck whether its conclusion is correct, read files, code, or test results, or base your decision on problems absent from the input.
 - If the input explicitly states a conclusion, select the rule that matches it. A clear statement of the result in the body counts as a conclusion even without a heading.
 - If no conclusion is explicitly stated, select the rule that matches the facts written in the input.
 - If an explicit conclusion conflicts with statements in the same input (for example, approval despite unresolved findings), do not accept that conclusion as-is; select the rule that matches the stated facts.

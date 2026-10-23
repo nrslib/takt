@@ -1,5 +1,9 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { buildWorkflowPromptTree, locateWorkflowPromptStep, renderWorkflowPromptTree } from '../workflow-prompt-context.js';
+import { buildScopedStepIterationIdentity } from '../step-iteration-identity.js';
+import { findWorkflowStepLocation } from '../workflow-step-location.js';
+import { formatWorkflowRuleCondition } from '../../models/workflow-rule-condition.js';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import { DEFAULT_COMPANION_ENABLED } from '../../../shared/constants.js';
@@ -19,7 +23,7 @@ import type {
   WorkflowStep,
   WorkflowWideRule,
 } from '../../models/types.js';
-import { isDynamicParallelSubSteps } from '../../models/types.js';
+import { getAllParallelSubSteps, isDynamicParallelSubSteps } from '../../models/types.js';
 import { prepareRuntimeEnvironment } from '../../runtime/runtime-environment.js';
 import type { RunPaths } from '../run/run-paths.js';
 import type {
@@ -206,6 +210,10 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getPrContext: () => params.options.prContext,
   });
   const failureDir = join(params.runPaths.runRootAbs, 'failures');
+  const sharedTree = params.sharedRuntime.workflowPromptTree;
+  // Direct engine callers have no bundle; describe the current definition without resolving calls.
+  const promptTree = sharedTree ?? buildWorkflowPromptTree(params.config, undefined, params.projectCwd, params.getCwd());
+  const promptPrefix = sharedTree === undefined ? [] : params.resumeStackPrefix;
 
   const optionsBuilder = new OptionsBuilder(
     params.options,
@@ -214,9 +222,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     (persona) => params.state.personaSessions.get(persona),
     params.getReportDir,
     () => params.options.language,
-    () => params.config.steps.map((step) => ({ name: step.name, description: step.description })),
     () => params.config.name,
-    () => params.config.description,
     params.getCurrentWorkflowStack,
     () => params.task,
     getReviewScope,
@@ -224,10 +230,51 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     stepAbortSignalContext.getAbortSignal,
     stepAbortSignalContext.recordActivity,
     () => params.runPaths.reportsRootAbs,
+    (step, assignment) => {
+      const internalStep = step.internalPromptContext;
+      if (step.engineSynthesized && internalStep === undefined) return undefined;
+      const definitionStepName = internalStep?.ownerStepName ?? step.name;
+      const tree = promptTree;
+      const activeStep = params.config.steps.find((entry) => entry.name === params.state.currentStep);
+      if (activeStep === undefined) throw new Error(`Missing active step "${params.state.currentStep}"`);
+      const definition = activeStep.parallel !== undefined && step.parallel === undefined
+        && !(internalStep !== undefined && definitionStepName === activeStep.name)
+        ? getAllParallelSubSteps(activeStep.parallel).find((entry) => entry.name === definitionStepName)
+        : activeStep;
+      if (definition?.name !== definitionStepName) throw new Error(`Missing definition owner for "${step.name}"`);
+      const stepPath = findWorkflowStepLocation(params.config, definition);
+      if (stepPath === undefined) throw new Error(`Missing definition path for "${step.name}"`);
+      const location = locateWorkflowPromptStep(tree, promptPrefix, stepPath);
+      const language = params.options.language ?? 'en';
+      const identity = internalStep === undefined
+        ? buildScopedStepIterationIdentity(step.name,
+            location.parallelParent === undefined ? [] : [location.parallelParent])
+        : step.name;
+      const stepIteration = params.state.stepIterations.get(identity);
+      if (stepIteration === undefined) throw new Error(`Missing step iteration for "${step.name}"`);
+      return {
+        tree: renderWorkflowPromptTree(tree, location.route, language),
+        assignment: assignment ?? {
+          stepName: step.name,
+          parallelParent: location.parallelParent,
+          internalStep,
+          stepIteration,
+          iteration: params.state.iteration,
+          maxSteps: params.getMaxSteps(),
+        },
+        rules: (step.rules ?? []).map((rule) => {
+          const target = rule.next ?? (language === 'ja'
+            ? `${location.workflowName} を終えて ${rule.returnValue} を返す`
+            : `finish ${location.workflowName} and return ${rule.returnValue}`);
+          return `- ${formatWorkflowRuleCondition(rule.condition)} → ${target}`;
+        }).join('\n'),
+      };
+    },
   );
 
   const dynamicFacetSelector = new DynamicFacetSelectorCoordinator({
     engineOptions: params.options,
+    getWorkflowMeta: (step) => optionsBuilder.buildWorkflowMeta(step),
     getAbortSignal: stepAbortSignalContext.getAbortSignal,
     onStream: (event) => recordWorkflowStepProviderEventActivity(
       stepAbortSignalContext.recordActivity,
@@ -300,7 +347,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getWorkflowSteps: () => params.config.steps,
     getWorkflowName: () => params.config.name,
     getTask: () => params.task,
-    getWorkflowDescription: () => params.config.description,
+    getWorkflowAssignment: (step) => optionsBuilder.buildWorkflowMeta(step).context?.assignment,
     getWorkflowRules: () => workflowRules,
     getWorkflowCallVars: () => params.options.workflowCallVars,
     getInheritedReportInputs: () => params.options.inheritedReportInputs,
@@ -367,6 +414,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
 
   const dynamicParallelSelector = new DynamicParallelSelectorCoordinator({
     engineOptions: params.options,
+    getWorkflowMeta: (step) => optionsBuilder.buildWorkflowMeta(step),
     getAbortSignal: stepAbortSignalContext.getAbortSignal,
     onStream: (event) => recordWorkflowStepProviderEventActivity(
       stepAbortSignalContext.recordActivity,

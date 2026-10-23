@@ -9,6 +9,7 @@ params:
     type: facet_ref
     facet_kind: instruction
 name: fix
+description: 修正計画に沿って必要な修正と検証を行い、結果と残る不足を報告する
 capabilities: edit
 tags:
   - coding
