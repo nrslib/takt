@@ -67,15 +67,11 @@ describe('manager TUI startup and polling', () => {
       expect(initial.events.filter((event) => !event.suppressInitialDisplay).map((event) => event.message))
         .toEqual([`${goals[0]!.id}: ${newRecord.summary}`]);
       const frame = context.app.lastFrame()!;
-      const statuses = frame.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu)
-        ?.find((box) => box.includes(getLabel('manager.goalStatuses', 'en')));
-      expect(statuses).toBeDefined();
-      for (const goal of goals) {
-        const rows = statuses!.split('\n').filter((line) => line.includes(goal.objective));
-        expect(rows).toHaveLength(1);
-        expect(rows[0]).toContain(getLabel('manager.goalStates.active', 'en'));
-        expect(rows[0]).toContain(getLabel('manager.goalPendingInquiries', 'en', { count: '1' }));
-      }
+      const counts = frame.split('\n').find((row) => /\^R/u.test(row));
+      expect(counts).toBeDefined();
+      expect(counts).toMatch(/(?:in progress|ongoing|active)\s*:?\s*2/iu);
+      expect(counts).toMatch(/(?:pending|unanswered)\s*:?\s*2/iu);
+      expect(counts).toMatch(/\^R.*\^G.*\^O/u);
       for (const rendered of context.app.frames) expect(rendered).not.toContain('Historical record');
       expect(frame).toContain('initial assignment read failed');
       expect(context.call).not.toHaveBeenCalled();
@@ -423,31 +419,33 @@ describe('manager TUI startup and polling', () => {
     try {
       await waitFor(() => {
         expect(context.app.lastFrame()).toContain('Original workspace');
-        expect(context.app.lastFrame()).toContain('Original question');
-        expect(context.app.lastFrame()).toContain('Original paused goal');
+        expect(context.app.lastFrame()).toMatch(/(?:pending|unanswered)\s*:?\s*1/iu);
+        expect(context.app.lastFrame()).toMatch(/(?:in progress|ongoing|active)\s*:?\s*1/iu);
       });
       const beforePolls = readEvents.mock.calls.length;
       await waitFor(() => {
         expect(readEvents.mock.calls.length).toBeGreaterThanOrEqual(beforePolls + 2);
         expect(context.app.lastFrame()).toContain('Original workspace');
-        expect(context.app.lastFrame()).toContain('Original question');
-        expect(context.app.lastFrame()).toContain('Original paused goal');
+        expect(context.app.lastFrame()).toMatch(/(?:pending|unanswered)\s*:?\s*1/iu);
+        expect(context.app.lastFrame()).toMatch(/(?:in progress|ongoing|active)\s*:?\s*1/iu);
       });
 
       if (field === 'assignment') assignment = { ...assignment, name: 'Changed workspace' };
-      else if (field === 'questions') snapshot = { ...snapshot, questions: [{ ...snapshot.questions[0]!, question: { ...snapshot.questions[0]!.question, body: 'Changed question' } }] };
-      else snapshot = { ...snapshot, goals: [{ ...snapshot.goals[0]!, objective: 'Changed paused goal' }] };
-      const changed = field === 'assignment' ? 'Changed workspace' : field === 'questions' ? 'Changed question' : 'Changed paused goal';
-      const original = field === 'assignment' ? 'Original workspace' : field === 'questions' ? 'Original question' : 'Original paused goal';
+      else if (field === 'questions') snapshot = { ...snapshot, questions: [] };
+      else snapshot = { ...snapshot, goals: [] };
+      const changed = field === 'assignment' ? /Changed workspace/u : field === 'questions'
+        ? /(?:pending|unanswered)\s*:?\s*0/iu : /(?:in progress|ongoing|active)\s*:?\s*0/iu;
+      const original = field === 'assignment' ? /Original workspace/u : field === 'questions'
+        ? /(?:pending|unanswered)\s*:?\s*1/iu : /(?:in progress|ongoing|active)\s*:?\s*1/iu;
       await waitFor(() => {
-        expect(context.app.lastFrame()).toContain(changed);
-        expect(context.app.lastFrame()).not.toContain(original);
+        expect(context.app.lastFrame()).toMatch(changed);
+        expect(context.app.lastFrame()).not.toMatch(original);
       });
       const afterPolls = readEvents.mock.calls.length;
       await waitFor(() => {
         expect(readEvents.mock.calls.length).toBeGreaterThanOrEqual(afterPolls + 2);
-        expect(context.app.lastFrame()).toContain(changed);
-        expect(context.app.lastFrame()).not.toContain(original);
+        expect(context.app.lastFrame()).toMatch(changed);
+        expect(context.app.lastFrame()).not.toMatch(original);
       });
       expect(context.call).not.toHaveBeenCalled();
     } finally { context.app.unmount(); await context.session.close(); }
@@ -515,18 +513,18 @@ describe('manager TUI startup and polling', () => {
   });
 
   describe.each([
-    { lang: 'ja' as const, changes: /manager は実験的機能.*動作・設定・保存するデータの形式.*予告なく/u, costs: /自動でタスクを投入・実行.*provider の API の費用/u },
-    { lang: 'en' as const, changes: /manager is experimental.*behavior, settings, and saved data formats.*without notice/iu, costs: /automatically queues and runs tasks.*provider API costs/iu },
-  ])('experimental notices in $lang', ({ lang, changes, costs }) => {
-    function expectNotices(frame: string | undefined): void {
+    { lang: 'ja' as const, changes: /manager は実験的機能.*動作・設定・保存するデータの形式.*予告なく/u },
+    { lang: 'en' as const, changes: /manager is experimental.*behavior, settings, and saved data formats.*without notice/iu },
+  ])('experimental notices in $lang', ({ lang, changes }) => {
+    function expectNotices(frame: string | undefined, summary = false): void {
       const text = frame?.replace(/\s+/gu, ' ');
       expect(text).toMatch(changes);
-      expect(text).toMatch(costs);
-      expect(text).toContain('Enter: send');
-      expect(text!.search(costs)).toBeLessThan(text!.indexOf('Enter: send'));
+      const hint = summary ? (lang === 'ja' ? 'Enter 決定' : 'Enter Confirm') : (lang === 'ja' ? 'Enter 送信' : 'Enter Send');
+      expect(text).toContain(hint);
+      expect(text!.search(changes)).toBeLessThan(text!.lastIndexOf(hint));
     }
 
-    it('shows both notices on every startup without calling the provider', async () => {
+    it('shows the experimental notice on every startup without calling the provider', async () => {
       for (let startup = 0; startup < 2; startup++) {
         const context = mount(lang);
         await waitFor(() => expectNotices(context.app.lastFrame()));
@@ -537,7 +535,7 @@ describe('manager TUI startup and polling', () => {
       }
     });
 
-    it('displays both notices and waits for stdout before running startup recovery and automatic execution', async () => {
+    it('displays the experimental notice and waits for stdout before running startup recovery and automatic execution', async () => {
       let finishFlush!: () => void;
       startupDoubles.flush.mockReturnValueOnce(new Promise<void>((resolve) => { finishFlush = resolve; }));
       const startup = {
@@ -571,7 +569,7 @@ describe('manager TUI startup and polling', () => {
         context.app.stdin.write(ENTER);
         await waitFor(() => expect(context.session.getPendingSummary()?.summary).toEqual(summaryA));
         expect(context.call).toHaveBeenCalledExactlyOnceWith('startup draft', expect.any(Object));
-        expectNotices(context.app.lastFrame());
+        expectNotices(context.app.lastFrame(), true);
         expect(startup.run).toHaveBeenCalledTimes(1);
       } finally {
         context.app.unmount();
@@ -665,14 +663,14 @@ describe('manager TUI startup and polling', () => {
       await context.session.close();
     });
 
-    it('keeps both notices above the input after a conversation redraw and a summary', async () => {
+    it('keeps the experimental notice above the input after a conversation redraw and a summary', async () => {
       const context = mount(lang);
       await waitFor(() => expectNotices(context.app.lastFrame()));
       await send(context, 'CSV出力を追加したい', summaryA);
-      expectNotices(context.app.lastFrame());
+      expectNotices(context.app.lastFrame(), true);
     });
 
-    it.each([40, 80])('wraps both notices within a %i-column terminal', async (columns) => {
+    it.each([40, 80])('wraps the experimental notice within a %i-column terminal', async (columns) => {
       const context = mount(lang);
       vi.spyOn(context.app.stdout, 'columns', 'get').mockReturnValue(columns);
       context.app.rerender(createElement(ManagerView, {
@@ -682,9 +680,12 @@ describe('manager TUI startup and polling', () => {
       await waitFor(() => {
         const frame = context.app.lastFrame()!;
         const text = frame.replace(/\s+/gu, '');
-        for (const key of ['manager.experimentalNotice', 'manager.costNotice']) {
-          expect(text).toContain(getLabel(key, lang).replace(/\s+/gu, ''));
-        }
+        const notice = getLabel('manager.experimentalNotice', lang).replace(/\s+/gu, '');
+        const start = text.indexOf(notice.slice(0, 12));
+        expect(start).toBeGreaterThanOrEqual(0);
+        const visibleNotice = text.slice(start, start + notice.length);
+        expect(visibleNotice).toBe(notice);
+        expect(visibleNotice).not.toContain('…');
         for (const line of frame.split('\n')) expect(stringWidth(line)).toBeLessThanOrEqual(columns);
       });
       expect(context.call).not.toHaveBeenCalled();

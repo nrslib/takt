@@ -425,8 +425,10 @@ tui:
     exceededStart: "Saved stopping position: {start} (iteration {iteration})"
 
 manager:
-  goHelp: "/go: Request a summary of the current conversation, or approve and register an existing summary (no arguments)."
-  goUsage: "Usage: /go (takes no arguments)"
+  counts: "Ongoing {goals} / Pending {questions} / ^R Inquiries  ^G Goals  ^O Summary"
+  inputHint: "Enter Send / Shift+Enter Newline / Esc Interrupt / Ctrl+C Exit"
+  summaryHint: "^O Register the displayed summary"
+  summaryInputHint: "↑↓ Choose / Enter Confirm / Esc Continue conversation / Ctrl+C Exit"
   goSummaryRequest: "Summarize the current conversation for goal registration. Return the objective, out-of-scope items, acceptance criteria, and work constraints in the structured response's summary. If there is insufficient material to summarize, explain why in message and return summary: null."
   goSummaryUnavailable: "Could not create a summary for registration because there is insufficient material. Please continue the conversation."
   inputUnavailableDuringAbort: "Cannot enter input during abort confirmation. Finish the confirmation before typing."
@@ -452,43 +454,33 @@ manager:
   turnFailureNotification: |-
     The manager failed to process an event. Unprocessed events remain.
     Review the logs and configuration to resolve the event processing failure.
-    For a paused goal, select it with /resume in the TUI, or request resumption in conversation with a supported provider and confirm the operation. An aborted goal cannot be resumed.
+    For a paused goal, press Ctrl+G in the TUI, select the goal and resume it, or request resumption in conversation with a supported provider and confirm the operation. An aborted goal cannot be resumed.
     Reason: {reason}
-  goalExecutionUsage: "Select goal: /pause / /resume / /abort (no arguments)"
-  answerHelp: "/answer: Select a pending inquiry from the list to answer (no arguments)."
-  selectionArguments: "/{command} now uses list selection. Enter /{command} without arguments and select a target."
   selectionTitles:
     answer: "Select an inquiry to answer"
-    pause: "Select a goal to pause"
-    resume: "Select a goal to resume"
-    abort: "Select a goal to abort"
+    goal: "Select a goal"
+    action: "Select a goal operation"
+  goalActions:
+    pause: "Pause"
+    resume: "Resume"
+    abort: "Abort"
   selectionHint: "↑↓ Choose / Enter Select / Esc Close"
   selectionEmpty:
     answer: "No pending inquiries to answer."
-    pause: "No active goals to pause."
-    resume: "No paused goals to resume."
-    abort: "No unfinished goals to abort."
+    goal: "No ongoing goals to operate on."
   goalRegistered: "Goal registered: {name} ({id})\n{branch}"
   sessionUnavailable: "The manager session is currently unavailable."
   goalPaused: "Goal paused: {goalId}"
   goalResumed: "Goal resumed: {goalId}"
   goalExecutionFailed: "Could not change the goal execution state: {reason}"
-  pausedGoals: "Paused goals"
-  goalStatuses: "Goal statuses"
-  goalPendingInquiries: "Pending: {count}"
   goalStates:
     active: "Active"
     paused: "Paused"
-    aborted: "Aborted"
-    awaiting_merge: "Awaiting merge"
-    completed: "Completed"
-  resumeHint: "Resume: /resume"
-  pendingInquiries: "Pending inquiries: {count}"
   inquiryKinds:
     question: "Question"
     approval: "Approval"
     operation_request: "Operation request"
-  answerHint: "Answer: /answer"
+  answerHint: "Press Ctrl+R to select an inquiry and answer"
   answerFreeText: "Free text"
   answerChoiceHint: "↑↓ Choose / Enter Select / Esc Back"
   answerPrompt: "Enter your answer"
@@ -512,7 +504,6 @@ manager:
     workspace: "Manager (workspace)"
     global: "Global"
   goalAborted: "Goal aborted: {goalId}"
-  abortedGoals: "Aborted goals"
   abortConfirmation: "Confirm goal abort"
   abortRetryWarning: "The abort operation failed. Retry the same goal to finish abort processing."
   retryAbort: "Retry abort processing"
@@ -541,7 +532,7 @@ manager:
   notificationOptions: "Options: {options}"
   notificationMoreOptions: "Additional options: {count}. View all options in the TUI."
   notificationRecommendation: "Recommendation: {recommendation}"
-  notificationAnswer: "Open takt manager in {project}, enter /answer in the TUI and select an inquiry from the list to answer."
+  notificationAnswer: "Open takt manager in {project}, press Ctrl+R in the TUI and select an inquiry from the list to answer."
   notificationMerge: "Review the changes and merge them into the {branch} branch."
   notificationMergeRepository: "Run the following commands in order in a clean worktree of the {project} repository where you can switch branches."
   notificationMergeWorktree: "Check the state of the worktree at {directory}, then run the following commands in order."

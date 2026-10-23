@@ -7,19 +7,11 @@ import type { ManagerAbortTarget, useManagerAbortConfirmation } from './useManag
 import type { SaveManagerAnswer, useManagerQuestionAnswer } from './useManagerQuestionAnswer.js';
 import type { useManagerSummaryApproval } from './useManagerSummaryApproval.js';
 import type { ManagerSelectedTarget, useManagerSelection } from './useManagerSelection.js';
-import { SlashCommand } from '../../shared/constants.js';
-
-export function classifyManagerGoInput(text: string): 'command' | 'arguments' | 'draft' | null {
-  if (/[\r\n]/u.test(text)) return null;
-  const line = text.replace(/^[\t ]+|[\t ]+$/gu, '');
-  if (line === SlashCommand.Go) return 'command';
-  if (line.startsWith(`${SlashCommand.Go} `) || line.startsWith(`${SlashCommand.Go}\t`)) return 'arguments';
-  return SlashCommand.Go.startsWith(line) ? 'draft' : null;
-}
 
 export function useManagerInput({
   exiting, active, registering, editorRef, edit, setQueued, onExit, contentWidth, session,
   abortConfirmation, questionAnswer, summaryApproval, selection, selectTarget, abortGoal, saveAnswer, register, onInputUnavailable,
+  openMenu, summarize, cancelMenuRequest, cancelOperations,
 }: {
   exiting: RefObject<boolean>;
   active: RefObject<AbortController | null>;
@@ -39,24 +31,27 @@ export function useManagerInput({
   saveAnswer: SaveManagerAnswer;
   register: (revision: number) => Promise<void>;
   onInputUnavailable: () => void;
+  openMenu: (kind: 'answer' | 'goal') => void;
+  summarize: () => void;
+  cancelMenuRequest: () => void;
+  cancelOperations: () => void;
 }): void {
   const { abortTarget } = abortConfirmation;
   const { answerTarget } = questionAnswer;
   const { pending, setPending } = summaryApproval;
   const editDraft = (next: EditorState): void => {
     if (!registering.current && pending !== null && session.getPendingSummary()?.revision === pending.revision
-      && next.text !== editorRef.current.text && classifyManagerGoInput(next.text) === null) {
+      && answerTarget === null && selection.selection === null && abortTarget === null
+      && next.text !== editorRef.current.text) {
       summaryApproval.dismiss(pending);
     }
     edit(next);
   };
   const insertText = (text: string): void => {
     if (exiting.current || (answerTarget !== null && active.current !== null)) return;
-    if (!registering.current && active.current === null) {
-      if (selection.selection !== null) return;
-      if (abortTarget !== null) { onInputUnavailable(); return; }
-      if (answerTarget !== null) questionAnswer.switchToFreeText();
-    }
+    if (selection.selection !== null) return;
+    if (abortTarget !== null) { onInputUnavailable(); return; }
+    if (answerTarget !== null) questionAnswer.switchToFreeText();
     editDraft(applyEditorKey(editorRef.current, { kind: 'insert', text }));
   };
   usePaste(insertText);
@@ -66,9 +61,22 @@ export function useManagerInput({
       exiting.current = true;
       active.current?.abort();
       setQueued([]);
+      cancelOperations();
       onExit();
       return;
     }
+    if (key.ctrl && (input === 'r' || input === 'g' || input === 'o')) {
+      if (input === 'o') summarize();
+      else openMenu(input === 'r' ? 'answer' : 'goal');
+      return;
+    }
+    if (selection.selection !== null) {
+      if (key.escape) cancelMenuRequest();
+      selection.handleInput(key, selectTarget);
+      return;
+    }
+    if (questionAnswer.handleNavigation(key, editorRef)) return;
+    if (key.escape) cancelOperations();
     if (active.current !== null && key.escape) {
       active.current.abort();
       setQueued([]);
@@ -85,10 +93,6 @@ export function useManagerInput({
       abortConfirmation.handleInput(abortTarget, key, abortGoal);
       return;
     }
-    if (!registering.current && active.current === null && selection.selection !== null) {
-      selection.handleInput(key, selectTarget);
-      return;
-    }
     const editKey = resolveEditorKey(input, key, contentWidth);
     // Ink は本文と同じチャンクに入った CR/LF を Enter と分類しない。
     const trailingEnter = !key.return && !(key.shift || key.meta)
@@ -98,7 +102,7 @@ export function useManagerInput({
     if (!registering.current && active.current === null && answerTarget !== null) {
       if (questionAnswer.handleInput(key, submitInput, editorRef, edit, saveAnswer)) return;
     }
-    if (!registering.current && pending !== null && session.getPendingSummary()?.revision === pending.revision
+    if (!registering.current && answerTarget === null && pending !== null && session.getPendingSummary()?.revision === pending.revision
       && (key.escape || (editorRef.current.text === ''
         && (key.upArrow || key.downArrow || (editKey === null && !key.return)
           || (key.return && !key.shift && !key.meta))))) {

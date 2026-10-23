@@ -8,6 +8,13 @@ import { firstTextContent } from './helpers/mcp-content.js';
 import { listTaktGoalRecords, recordTaktGoalWorkLog } from '../features/mcp/goalWorkLogOperations.js';
 import { listGoalRecordsInputSchema } from '../features/mcp/schemas.js';
 import { responseBytes, MCP_RESPONSE_MAX_BYTES } from '../features/mcp/response.js';
+import { listTaktStandaloneInquiries, withdrawTaktStandaloneInquiry } from '../features/mcp/standaloneInquiryOperations.js';
+const standalone = vi.hoisted(() => ({ construct: vi.fn(), page: vi.fn(), withdraw: vi.fn() }));
+vi.mock('../infra/goals/standalone-inquiries.js', () => ({ StandaloneInquiryStore: class {
+  constructor(configDirectory: string, owner: unknown) { standalone.construct(configDirectory, owner); }
+  listPendingPage = standalone.page;
+  withdraw = standalone.withdraw;
+} }));
 vi.mock('node:crypto', async (original) => {
   const actual = await original<typeof import('node:crypto')>();
   return { ...actual, randomUUID: vi.fn(actual.randomUUID) };
@@ -387,4 +394,64 @@ it('returns structured answers, withdrawal details and consumed approval state f
     const result = await getTaktGoalQuestion({ ...input, questionId: record.id }, {});
     expect(JSON.parse(firstTextContent(result.content))).toEqual({ question: record });
   }
+});
+
+it.each([
+  { kind: 'repository' as const, repositoryDirectory: '/assigned' },
+  { kind: 'workspace' as const, workspaceId: '750e8400-e29b-41d4-a716-446655440001' },
+])('uses the resolved $kind owner and explicit paging for standalone reads', async (owner) => {
+  const inquiry = GoalQuestionSchema.parse({ id: '650e8400-e29b-41d4-a716-446655440001', body: '確認', status: 'pending' });
+  standalone.page.mockResolvedValue({ inquiries: [inquiry], totalCount: 4 });
+  const result = await listTaktStandaloneInquiries({ cwd: '/validated', offset: 2, limit: 1 }, '/config', owner);
+  expect(standalone.construct).toHaveBeenCalledWith('/config', owner);
+  expect(standalone.page).toHaveBeenCalledWith(2, 1);
+  expect(JSON.parse(firstTextContent(result.content))).toMatchObject({
+    inquiries: [{ ...inquiry, kind: 'question', createdAt: null }],
+    totalCount: 4, offset: 2, returnedCount: 1, nextOffset: 3,
+  });
+  expect(inquiry).not.toHaveProperty('createdAt');
+  expect(standalone.withdraw).not.toHaveBeenCalled();
+});
+
+it('defaults standalone paging and bounds response bytes without changing the store records', async () => {
+  const owner = { kind: 'repository' as const, repositoryDirectory: '/assigned' };
+  const inquiries = Array.from({ length: 3 }, (_, index) => GoalQuestionSchema.parse({
+    id: `650e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`,
+    body: '日本語\u0001'.repeat(10000), status: 'pending',
+  }));
+  const before = structuredClone(inquiries);
+  standalone.page.mockResolvedValue({ inquiries, totalCount: 3 });
+  const result = await listTaktStandaloneInquiries({ cwd: '/validated' }, '/config', owner);
+  expect(standalone.page).toHaveBeenCalledWith(0, 50);
+  const page = JSON.parse(firstTextContent(result.content));
+  expect(responseBytes(result)).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
+  expect(page.returnedCount).toBeGreaterThan(0);
+  expect(page.nextOffset).toBe(page.returnedCount);
+  expect(inquiries).toEqual(before);
+});
+
+it.each(['pending', 'answered', 'withdrawn'] as const)('returns the store result for standalone withdrawal from %s without duplicating the transition', async (status) => {
+  const owner = { kind: 'workspace' as const, workspaceId: '750e8400-e29b-41d4-a716-446655440001' };
+  const inquiry = GoalQuestionSchema.parse({
+    id: '650e8400-e29b-41d4-a716-446655440001', body: '確認', status: status === 'pending' ? 'withdrawn' : status,
+    ...(status === 'answered' ? { answer: { text: 'JSON', source: 'tui', answeredAt: '2026-10-19T01:00:00.000Z' } } : {}),
+  });
+  standalone.withdraw.mockResolvedValue(inquiry);
+  const reason = '  対象の操作は終了しました\n';
+  const result = await withdrawTaktStandaloneInquiry({ cwd: '/validated', id: inquiry.id, reason }, '/config', owner);
+  expect(standalone.construct).toHaveBeenCalledWith('/config', owner);
+  expect(standalone.withdraw).toHaveBeenCalledExactlyOnceWith(inquiry.id, reason);
+  expect(JSON.parse(firstTextContent(result.content))).toEqual({ inquiry });
+  expect(standalone.page).not.toHaveBeenCalled();
+});
+
+it('propagates standalone storage failures to the MCP server error boundary', async () => {
+  const owner = { kind: 'repository' as const, repositoryDirectory: '/assigned' };
+  const failure = new Error('storage failed');
+  standalone.page.mockRejectedValueOnce(failure);
+  standalone.withdraw.mockRejectedValueOnce(failure);
+  await expect(listTaktStandaloneInquiries({ cwd: '/validated' }, '/config', owner)).rejects.toBe(failure);
+  await expect(withdrawTaktStandaloneInquiry({
+    cwd: '/validated', id: '650e8400-e29b-41d4-a716-446655440001', reason: '不要',
+  }, '/config', owner)).rejects.toBe(failure);
 });

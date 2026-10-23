@@ -1,4 +1,4 @@
-import { selectionFrame, enterSelection, memory, cwd, summaryA, ENTER, UP, LONG_TEXT, response, mount, deferred, promptFrame, queuedFrame, waitFor, typeAndSubmit, send } from './manager-tui-fixtures.js';
+import { openMenu, chooseGoalAction, selectionFrame, enterSelection, memory, cwd, summaryA, ENTER, UP, LONG_TEXT, response, mount, deferred, promptFrame, queuedFrame, waitFor, typeAndSubmit, send } from './manager-tui-fixtures.js';
 import { stripVTControlCharacters } from 'node:util';
 import chalk from 'chalk';
 import { describe, expect, it, vi } from 'vitest';
@@ -306,7 +306,7 @@ describe('manager TUI input', () => {
     const answer = vi.spyOn(context.session, 'answerQuestion').mockResolvedValue({ kind: 'reply', message: 'Answer saved', answerSaved: true });
     const text = `${'詳細な回答を保存してください。'.repeat(80)}回答の末尾`;
     try {
-      await typeAndSubmit(context, '/answer');
+      await openMenu(context, 'answer');
       await enterSelection(context);
       await waitFor(() => {
         expect(context.app.lastFrame()).toContain('Enter your answer');
@@ -389,31 +389,28 @@ describe('manager TUI input', () => {
     } finally { context.app.unmount(); await context.session.close(); }
   });
 
-  it('does not execute a pasted pause command before a separate Enter', async () => {
+  it('sends pasted slash text as conversation only after a separate Enter', async () => {
     const context = mount();
     memory.goals.mockReturnValue([goalRecord()]);
-    const pause = vi.spyOn(context.session, 'pauseGoal').mockResolvedValue({ kind: 'reply', message: 'Goal paused' });
-    const command = '/pause';
+    context.call.mockResolvedValue(response(null));
+    const pause = vi.spyOn(context.session, 'pauseGoal');
+    const message = vi.spyOn(context.session, 'handleUserMessage');
+    const text = '/pause';
     try {
-      await waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
-      context.app.stdin.write(`\x1b[200~${command}\r\x1b[201~`);
-      await waitFor(() => expect(promptFrame(context)).toContain(command));
+      await waitFor(() => expect(context.app.lastFrame()).not.toContain('Working'));
+      context.app.stdin.write(`\x1b[200~${text}\r\x1b[201~`);
+      await waitFor(() => expect(promptFrame(context)).toContain(text));
       expect(pause).not.toHaveBeenCalled();
       expect(context.call).not.toHaveBeenCalled();
       expect(queuedFrame(context)).toBeUndefined();
-
       context.app.stdin.write(ENTER);
-      await waitFor(() => expect(selectionFrame(context)).toBeDefined());
-      expect(pause).not.toHaveBeenCalled();
-      await enterSelection(context);
       await waitFor(() => {
-        expect(promptFrame(context)).toContain('Discuss your goal');
-        expect(context.app.lastFrame()).toContain('Goal paused');
+        expect(message).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ text }));
         expect(context.app.lastFrame()).not.toContain('Working');
+        expect(queuedFrame(context)).toBeUndefined();
       });
-      expect(pause).toHaveBeenCalledExactlyOnceWith({ goalId: goalRecord().id, abortSignal: expect.any(AbortSignal) });
-      expect(context.call).not.toHaveBeenCalled();
-      expect(queuedFrame(context)).toBeUndefined();
+      expect(pause).not.toHaveBeenCalled();
+      expect(selectionFrame(context)).toBeUndefined();
     } finally { context.app.unmount(); await context.session.close(); }
   });
 
@@ -512,8 +509,9 @@ describe('manager TUI input', () => {
     const context = mount();
     const abort = vi.spyOn(context.session, 'abortGoal').mockResolvedValue({ kind: 'reply', message: 'Goal aborted' });
     try {
-      await typeAndSubmit(context, '/abort');
+      await openMenu(context, 'goal');
       await enterSelection(context);
+      await chooseGoalAction(context, 'abort');
       await waitFor(() => {
         expect(context.app.lastFrame()).toContain(getLabel('manager.abortConfirmation', 'en'));
         expect(context.app.lastFrame()).not.toContain('Working');
@@ -548,7 +546,7 @@ describe('manager TUI input', () => {
     const context = mount();
     const answer = vi.spyOn(context.session, 'answerQuestion').mockResolvedValue({ kind: 'reply', message: 'Answer saved', answerSaved: true });
     try {
-      await typeAndSubmit(context, '/answer');
+      await openMenu(context, 'answer');
       await enterSelection(context);
       context.app.stdin.write('\x1b[200~first\nsecond\x1b[201~');
       await waitFor(() => expect(promptFrame(context)).toContain('second'));
@@ -573,7 +571,7 @@ describe('manager TUI input', () => {
     const context = mount();
     const answer = vi.spyOn(context.session, 'answerQuestion').mockResolvedValue({ kind: 'reply', message: 'Answer saved', answerSaved: true });
     try {
-      await typeAndSubmit(context, '/answer');
+      await openMenu(context, 'answer');
       await enterSelection(context);
       await waitFor(() => {
         expect(context.app.lastFrame()).toContain('Free text');
@@ -618,20 +616,19 @@ describe('manager TUI input', () => {
     context.call.mockReturnValueOnce(turn.promise).mockResolvedValue(response(null));
     const abort = vi.spyOn(context.session, 'abortGoal').mockResolvedValue({ kind: 'reply', message: 'Goal aborted' });
     const answer = vi.spyOn(context.session, 'answerQuestion').mockResolvedValue({ kind: 'reply', message: 'Answer saved', answerSaved: true });
-    const command = selection === 'abort' ? '/abort' : '/answer';
     try {
       await typeAndSubmit(context, 'first request');
       await waitFor(() => expect(context.call).toHaveBeenCalledOnce());
-      await typeAndSubmit(context, command);
       await typeAndSubmit(context, 'continue after selection');
       await waitFor(() => {
-        expect(queuedFrame(context)).toContain('Queued messages: 2');
-        expect(queuedFrame(context)).toContain(command);
+        expect(queuedFrame(context)).toContain('Queued messages: 1');
         expect(queuedFrame(context)).toContain('continue after selection');
         expect(promptFrame(context)).toContain('Discuss your goal');
       });
-      turn.resolve(response(null));
+      await openMenu(context, selection === 'abort' ? 'goal' : 'answer');
       await enterSelection(context);
+      if (selection === 'abort') await chooseGoalAction(context, 'abort');
+      turn.resolve(response(null));
       await waitFor(() => {
         const frame = context.app.lastFrame()!.replace(/[│\s]+/gu, ' ');
         expect(frame).toContain(selection === 'abort' ? getLabel('manager.abortWarning', 'en') : 'Free text');

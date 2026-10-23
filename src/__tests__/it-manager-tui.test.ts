@@ -1,29 +1,244 @@
-import { enterSelection, memory, failureNotice, cwd, summaryA, summaryB, ENTER, UP, response, mount, deferred, promptFrame, queuedFrame, waitFor, typeAndSubmit, send, approve } from './helpers/manager-tui-fixtures.js';
+import { QUESTION_MENU, SUMMARY_MENU, selectionFrame, openMenu, chooseGoalAction, enterSelection, memory, failureNotice, cwd, summaryA, summaryB, ENTER, UP, response, mount, deferred, promptFrame, queuedFrame, waitFor, typeAndSubmit, send, approve } from './helpers/manager-tui-fixtures.js';
 import './helpers/manager-tui-input.js';
 import './helpers/manager-tui-startup.js';
 import './helpers/manager-tui-selection.js';
 import { stripVTControlCharacters } from 'node:util';
 import chalk from 'chalk';
 import { describe, expect, it, vi } from 'vitest';
-import { classifyManagerGoInput } from '../features/manager/useManagerInput.js';
 import * as savedEvents from '../features/manager/savedEvents.js';
 import { toDisplayText } from '../features/tui/displayText.js';
 import { createGoal } from '../infra/goals/service.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 
-describe('manager TUI /go', () => {
-  it.each([
-    ['/go', 'command'], [' \t/go\t ', 'command'],
-    ['/go extra', 'arguments'], ['/go\textra', 'arguments'],
-    ['', 'draft'], [' ', 'draft'], ['/', 'draft'], ['/g', 'draft'],
-    ['/go ', 'command'], ['/goal', null], ['`/go`', null], ['> /go', null],
-    ['text /go', null], ['/go\n', null], ['/go\r', null], ['```\n/go\n```', null],
-  ] as const)('classifies manager command input %j as %j', (text, expected) => {
-    expect(classifyManagerGoInput(text)).toBe(expected);
+describe('manager inquiry windows and detail navigation', () => {
+  it('shows ten inquiries and opens the eleventh after ten down arrows in the same screen', async () => {
+    const questions = Array.from({ length: 12 }, (_, index) => ({
+      goalId: goalRecord().id, repositoryDirectory: cwd, objective: 'Window fixture', question: {
+        id: `650e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`,
+        recipient: 'human' as const, status: 'pending' as const,
+        body: `Inquiry ${String(index + 1).padStart(2, '0')}\nDetail ${String(index + 1).padStart(2, '0')}`,
+      },
+    }));
+    vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], goals: [goalRecord()], questions });
+    const context = mount();
+    const answer = vi.spyOn(context.session, 'answerQuestion');
+    const rows = (): string[] => selectionFrame(context)!.split('\n').filter((row) => row.includes('Window fixture'));
+    try {
+      await openMenu(context, 'answer');
+      await vi.waitFor(() => expect(selectionFrame(context)).toBeDefined());
+      expect(rows()).toHaveLength(10);
+      for (let index = 1; index <= 10; index++) expect(rows()[index - 1]).toContain(`Inquiry ${String(index).padStart(2, '0')}`);
+      for (let move = 0; move < 10; move++) context.app.stdin.write('\x1b[B');
+      await vi.waitFor(() => {
+        expect(rows()).toHaveLength(10);
+        expect(rows().some((row) => row.includes('Inquiry 11'))).toBe(true);
+        expect(rows().some((row) => row.includes('Inquiry 01'))).toBe(false);
+      });
+      context.app.stdin.write(ENTER);
+      await vi.waitFor(() => {
+        expect(context.app.lastFrame()).toContain('Detail 11');
+        expect(promptFrame(context)).toContain('Enter your answer');
+        expect(selectionFrame(context)).toBeUndefined();
+      });
+      context.app.stdin.write('\x1b[27u');
+      await vi.waitFor(() => {
+        expect(selectionFrame(context)).toBeDefined();
+        expect(rows()).toHaveLength(10);
+        expect(rows().some((row) => row.includes('Inquiry 11'))).toBe(true);
+        expect(rows().some((row) => row.includes('Inquiry 01'))).toBe(false);
+      });
+      context.app.stdin.write(ENTER);
+      await vi.waitFor(() => expect(context.app.lastFrame()).toContain('Detail 11'));
+      expect(answer).not.toHaveBeenCalled();
+      expect(context.call).not.toHaveBeenCalled();
+    } finally { context.app.unmount(); await context.session.close(); }
   });
 
-  it.each(['ja', 'en'] as const)('requests a summary in the existing %s conversation and waits for approval', async (lang) => {
+  it.each([false, true])('scrolls detail text and returns to the selected inquiry without saving during a turn=%s', async (busy) => {
+    const lines = Array.from({ length: 30 }, (_, index) => `Body line ${String(index + 1).padStart(2, '0')}`);
+    const questions = [0, 1].map((index) => ({
+      goalId: goalRecord().id, repositoryDirectory: cwd, objective: `Detail fixture ${index}`, question: {
+        id: `650e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`,
+        recipient: 'human' as const, status: 'pending' as const, body: index === 0 ? 'Other inquiry' : lines.join('\n'),
+      },
+    }));
+    vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], goals: [goalRecord()], questions });
+    const turn = deferred<ReturnType<typeof response>>();
+    const context = mount();
+    const answer = vi.spyOn(context.session, 'answerQuestion');
+    if (busy) context.call.mockReturnValueOnce(turn.promise);
+    const detail = (): string => context.app.lastFrame()!.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu)!
+      .find((box) => box.includes(getLabel('manager.answerPrompt', 'en')))!;
+    try {
+      if (busy) {
+        await typeAndSubmit(context, 'Continue working');
+        await vi.waitFor(() => expect(context.call).toHaveBeenCalledOnce());
+      }
+      await openMenu(context, 'answer');
+      await vi.waitFor(() => expect(selectionFrame(context)).toBeDefined());
+      context.app.stdin.write('\x1b[B');
+      context.app.stdin.write(ENTER);
+      await vi.waitFor(() => expect(detail()).toContain(lines[0]!));
+      const initial = detail();
+      const visible = lines.filter((line) => initial.includes(line));
+      expect(visible.length).toBeGreaterThan(0);
+      expect(visible.length).toBeLessThan(lines.length);
+      context.app.stdin.write('\x1b[B');
+      await vi.waitFor(() => {
+        expect(detail()).toContain(lines[visible.length]!);
+        expect(detail()).not.toContain(lines[0]!);
+      });
+      context.app.stdin.write('\x1b[27u');
+      await vi.waitFor(() => {
+        expect(selectionFrame(context)).toContain('Detail fixture 0');
+        expect(selectionFrame(context)).toContain('Detail fixture 1');
+        expect(promptFrame(context)).toContain('Discuss your goal');
+      });
+      if (busy) expect(context.call.mock.calls[0]![1].abortSignal!.aborted).toBe(false);
+      context.app.stdin.write(ENTER);
+      await vi.waitFor(() => expect(detail()).toContain(lines[0]!));
+      expect(detail()).not.toContain(lines.at(-1)!);
+      expect(answer).not.toHaveBeenCalled();
+      expect(context.call).toHaveBeenCalledTimes(busy ? 1 : 0);
+    } finally { context.app.unmount(); turn.resolve(response(null)); await context.session.close(); }
+  });
+
+  it('keeps cursor movement ahead of body scrolling when a free-text answer contains text', async () => {
+    const target = { goalId: goalRecord().id, repositoryDirectory: cwd, objective: 'Cursor fixture', question: {
+      id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human' as const, status: 'pending' as const,
+      body: Array.from({ length: 30 }, (_, index) => `Cursor body ${index}`).join('\n'),
+    } };
+    vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], goals: [goalRecord()], questions: [target] });
+    const context = mount();
+    const answer = vi.spyOn(context.session, 'answerQuestion').mockResolvedValue({ kind: 'reply', message: 'Answer saved', answerSaved: true });
+    try {
+      await openMenu(context, 'answer');
+      await enterSelection(context);
+      await vi.waitFor(() => expect(promptFrame(context)).toContain('Enter your answer'));
+      context.app.stdin.write('\x1b[200~first\nsecond\x1b[201~');
+      await vi.waitFor(() => expect(promptFrame(context)).toContain('second'));
+      context.app.stdin.write(UP);
+      context.app.stdin.write('!');
+      context.app.stdin.write(ENTER);
+      await vi.waitFor(() => expect(answer).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        questionId: target.question.id, answer: { text: 'first!\nsecond' },
+      })));
+    } finally { context.app.unmount(); await context.session.close(); }
+  });
+});
+
+describe('manager TUI summary menu and conversation input', () => {
+  it.each(['request', 'register'] as const)('keeps a queued summary %s on menu Esc and discards it on ordinary Esc', async (operation) => {
+    for (const closeMenu of [false, true]) {
+      const empty = { events: [], diagnostics: [], goals: [goalRecord()], questions: [] };
+      const read = vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue(empty);
+      const turn = deferred<ReturnType<typeof response>>();
+      const refresh = deferred<typeof empty>();
+      const context = mount();
+      const approval = vi.spyOn(context.session, 'approveSummary');
+      context.call.mockImplementationOnce(async () => {
+        await turn.promise;
+        if (operation === 'register') read.mockReturnValueOnce(refresh.promise);
+        return response(operation === 'register' ? summaryA : null);
+      }).mockResolvedValue(response(summaryB));
+      try {
+        await typeAndSubmit(context, 'First conversation');
+        await waitFor(() => expect(context.call).toHaveBeenCalledOnce());
+        const signal = context.call.mock.calls[0]![1].abortSignal!;
+        if (operation === 'register') {
+          turn.resolve(response(summaryA));
+          await waitFor(() => expect(context.app.lastFrame()).toContain('Summary to register'));
+        }
+        const revision = context.session.getPendingSummary()?.revision;
+        context.app.stdin.write(SUMMARY_MENU);
+        if (closeMenu) {
+          await openMenu(context, 'goal');
+          await waitFor(() => expect(selectionFrame(context)).toBeDefined());
+        }
+        context.app.stdin.write('\x1b[27u');
+        await waitFor(() => {
+          expect(selectionFrame(context)).toBeUndefined();
+          if (operation === 'request' || closeMenu) expect(signal.aborted).toBe(!closeMenu);
+        });
+        turn.resolve(response(null));
+        refresh.resolve(empty);
+        await waitFor(() => expect(context.app.lastFrame()).not.toContain('Working'));
+        if (!closeMenu) {
+          expect(context.call).toHaveBeenCalledOnce();
+          expect(approval).not.toHaveBeenCalled();
+        } else if (operation === 'request') {
+          await waitFor(() => expect(context.session.getPendingSummary()?.summary).toEqual(summaryB));
+          expect(context.call).toHaveBeenCalledTimes(2);
+          expect(context.call.mock.calls[1]![0]).toBe(getLabel('manager.goSummaryRequest', 'en'));
+          expect(approval).not.toHaveBeenCalled();
+        } else {
+          await waitFor(() => expect(approval).toHaveBeenCalledExactlyOnceWith(revision));
+          expect(context.register).toHaveBeenCalledOnce();
+          expect(context.call).toHaveBeenCalledOnce();
+        }
+      } finally { context.app.unmount(); turn.resolve(response(null)); refresh.resolve(empty); await context.session.close(); read.mockRestore(); }
+    }
+  });
+
+  it.each([false, true])('checks registration again when the inquiry snapshot arrives (registration finished=%s)', async (finished) => {
+    const target = { goalId: goalRecord().id, repositoryDirectory: cwd, objective: 'Answer fixture', question: {
+      id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human' as const, status: 'pending' as const, body: 'Choose output',
+    } };
+    const snapshot = { events: [], diagnostics: [], goals: [goalRecord()], questions: [target] };
+    const menuSnapshot = { ...snapshot, questions: [target, { ...target, question: { ...target.question, id: '650e8400-e29b-41d4-a716-446655440002' } }] };
+    const read = vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue(snapshot);
+    const refresh = deferred<typeof snapshot>();
+    const registration = deferred<Awaited<ReturnType<typeof createGoal>>>();
+    const context = mount();
+    context.register.mockReturnValueOnce(registration.promise);
+    try {
+      await send(context, 'CSV export', summaryA);
+      await waitFor(() => expect(context.app.lastFrame()).not.toContain('Working'));
+      read.mockReturnValueOnce(refresh.promise);
+      const before = read.mock.calls.length;
+      context.app.stdin.write(QUESTION_MENU);
+      await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(before));
+      context.app.stdin.write(SUMMARY_MENU);
+      await waitFor(() => expect(context.register).toHaveBeenCalledOnce());
+      context.app.stdin.write('kept draft');
+      await waitFor(() => expect(promptFrame(context)).toContain('kept draft'));
+      if (finished) {
+        registration.resolve(goalRecord());
+        await waitFor(() => expect(context.app.lastFrame()).not.toContain('Working'));
+      }
+      read.mockResolvedValue(menuSnapshot);
+      refresh.resolve(menuSnapshot);
+      await waitFor(() => {
+        expect(context.app.lastFrame()).toContain('Pending 2');
+        expect(selectionFrame(context) !== undefined).toBe(finished);
+        expect(promptFrame(context)).toContain('kept draft');
+      });
+      expect(context.call).toHaveBeenCalledOnce();
+    } finally { context.app.unmount(); registration.resolve(goalRecord()); refresh.resolve(snapshot); await context.session.close(); }
+  });
+
+  it.each(['ja', 'en'] as const)('switches the input hint with summary selection and conversation in the same %s screen', async (lang) => {
+    const context = mount(lang);
+    const sendHint = lang === 'ja' ? 'Enter 送信' : 'Enter Send';
+    const selectHint = lang === 'ja' ? /Enter.*決定/u : /Enter.*(?:Select|Confirm)/iu;
+    try {
+      await waitFor(() => expect(promptFrame(context)).toContain(sendHint));
+      await send(context, 'CSV export', summaryA);
+      await waitFor(() => {
+        expect(promptFrame(context)).toMatch(selectHint);
+        expect(promptFrame(context)).not.toContain(sendHint);
+      });
+      context.app.stdin.write(ENTER);
+      await waitFor(() => {
+        expect(context.session.getPendingSummary()).toBeNull();
+        expect(promptFrame(context)).toContain(sendHint);
+      });
+      expect(context.register).not.toHaveBeenCalled();
+    } finally { context.app.unmount(); await context.session.close(); }
+  });
+
+  it.each(['ja', 'en'] as const)('requests a summary through Ctrl+O in the existing %s conversation', async (lang) => {
     const context = mount(lang);
     context.call.mockResolvedValueOnce({ ...response(null), sessionId: 'manager-conversation' })
       .mockResolvedValueOnce(response(summaryB));
@@ -33,124 +248,111 @@ describe('manager TUI /go', () => {
         expect(context.call).toHaveBeenCalledOnce();
         expect(context.app.lastFrame()).not.toContain(lang === 'ja' ? '処理中' : 'Working');
       });
-      await typeAndSubmit(context, '/go');
+      context.app.stdin.write(SUMMARY_MENU);
       await waitFor(() => {
         expect(context.call).toHaveBeenCalledTimes(2);
         expect(context.app.lastFrame()).toContain(lang === 'ja' ? '登録する要約' : 'Summary to register');
         expect(context.app.lastFrame()).toContain(summaryB.objective);
+        expect(context.app.lastFrame()).not.toContain(lang === 'ja' ? '処理中' : 'Working');
       });
       const [request, options] = context.call.mock.calls[1]!;
-      expect(request).not.toBe('/go');
-      expect(request).toMatch(lang === 'ja' ? /要約/u : /summar/iu);
+      expect(request).toBe(getLabel('manager.goSummaryRequest', lang));
       expect(options.sessionId).toBe('manager-conversation');
-      expect(context.app.lastFrame()).toContain('JSON出力について相談したい');
       expect(context.session.getPendingSummary()?.summary).toEqual(summaryB);
       expect(context.register).not.toHaveBeenCalled();
     } finally { context.app.unmount(); await context.session.close(); }
   });
 
-  it.each(['/go', '  /go  ', '\t/go\t'])('accepts a standalone command with surrounding whitespace: %j', async (command) => {
-    const context = mount();
-    try {
-      await waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
-      context.app.stdin.write(`\x1b[200~${command}\x1b[201~`);
-      await waitFor(() => expect(promptFrame(context)).toContain('/go'));
-      expect(context.call).not.toHaveBeenCalled();
-      context.app.stdin.write(ENTER);
-      await waitFor(() => expect(context.app.lastFrame()).toContain('Summary to register'));
-      expect(context.call).toHaveBeenCalledOnce();
-      expect(context.call.mock.calls[0]![0]).toMatch(/summar/iu);
-      expect(context.register).not.toHaveBeenCalled();
-    } finally { context.app.unmount(); await context.session.close(); }
-  });
-
-  it.each([
-    '/goal', '`/go`', '> /go', '説明 /go',
-    '```\n/go\n```', '~~~\n/go\n~~~', '> > /go',
-    '```\n/go', '~~~\n/go', '/go\n続き',
-  ])('sends non-command text unchanged as conversation: %j', async (text) => {
-    const context = mount();
-    context.call.mockResolvedValue(response(null));
-    try {
-      await waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
-      context.app.stdin.write(`\x1b[200~${text}\x1b[201~`);
-      await waitFor(() => expect(promptFrame(context)).toContain(text.split('\n')[0]!));
-      expect(context.call).not.toHaveBeenCalled();
-      context.app.stdin.write(ENTER);
-      await waitFor(() => {
-        expect(context.call).toHaveBeenCalledExactlyOnceWith(text, expect.any(Object));
-        expect(context.app.lastFrame()).not.toContain('Working');
-      });
-      expect(context.register).not.toHaveBeenCalled();
-    } finally { context.app.unmount(); await context.session.close(); }
-  });
-
-  describe.each([false, true])('extra arguments with pending summary=%s', (pending) => {
-    it.each(['/go extra', '/go\textra'])('shows usage without sending or registering: %j', async (text) => {
-      const context = mount();
-      try {
-        if (pending) await send(context, 'CSV出力を追加したい', summaryA);
-        const before = context.call.mock.calls.length;
-        const summary = context.session.getPendingSummary();
-        context.app.stdin.write(`\x1b[200~${text}\x1b[201~`);
-        await waitFor(() => expect(promptFrame(context).replace(/\s+/gu, ' ')).toContain('/go extra'));
-        context.app.stdin.write(ENTER);
-        await waitFor(() => {
-          const lines = context.app.lastFrame()!.split('\n').filter((line) => /usage|takes no arguments|no arguments|使い方|引数/iu.test(line));
-          expect(lines.join('\n')).toContain('/go');
-          expect(context.app.lastFrame()).not.toContain('Working');
-          expect(queuedFrame(context)).toBeUndefined();
-        });
-        expect(context.call).toHaveBeenCalledTimes(before);
-        expect(context.register).not.toHaveBeenCalled();
-        expect(context.session.getPendingSummary()).toEqual(summary);
-        if (pending) await approve(context, summaryA);
-      } finally { context.app.unmount(); await context.session.close(); }
-    });
-  });
-
-  it.each(['characters', 'plain chunk', 'bracketed paste', 'body with CR', 'body with LF'] as const)('approves the displayed summary once without regenerating it: %s', async (delivery) => {
-    const context = mount();
+  it.each(['ja', 'en'] as const)('registers the displayed summary through Ctrl+O without regenerating it in %s', async (lang) => {
+    const context = mount(lang);
     const approval = vi.spyOn(context.session, 'approveSummary');
     try {
       context.call.mockResolvedValueOnce(response(summaryB));
       await send(context, 'JSONを出力したい', summaryB);
+      await waitFor(() => expect(context.app.lastFrame()).not.toContain(lang === 'ja' ? '処理中' : 'Working'));
       const revision = context.session.getPendingSummary()!.revision;
-      if (delivery === 'characters') {
-        for (const text of ['/', 'g', 'o']) {
-          context.app.stdin.write(text);
-          await waitFor(() => expect(context.app.lastFrame()).toContain('Summary to register'));
-          expect(context.session.getPendingSummary()?.revision).toBe(revision);
-        }
-      } else if (delivery === 'bracketed paste') context.app.stdin.write('\x1b[200~/go\x1b[201~');
-      else if (delivery === 'plain chunk') context.app.stdin.write('/go');
-      if (delivery === 'body with CR' || delivery === 'body with LF') {
-        context.app.stdin.write(`/go${delivery === 'body with CR' ? ENTER : '\n'}`);
-      } else {
-        await waitFor(() => expect(promptFrame(context)).toContain('/go'));
-        expect(context.register).not.toHaveBeenCalled();
-        expect(context.call).toHaveBeenCalledOnce();
-        context.app.stdin.write(ENTER);
-      }
+      context.app.stdin.write(SUMMARY_MENU);
       await waitFor(() => {
         expect(context.register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cwd, ...summaryB }));
-        expect(context.app.lastFrame()).toContain('Goal registered');
-        expect(context.app.lastFrame()).toContain(goalRecord().branch);
-        expect(context.app.lastFrame()).not.toContain('Working');
+        expect(context.app.lastFrame()).not.toContain(lang === 'ja' ? '処理中' : 'Working');
       });
+      const goal = await context.register.mock.results[0]!.value;
+      expect(context.app.lastFrame()).toContain(summaryB.objective);
+      expect(context.app.lastFrame()).toContain(goal.id);
+      expect(context.app.lastFrame()).toContain(goal.branch);
       expect(approval).toHaveBeenCalledExactlyOnceWith(revision);
       expect(context.call).toHaveBeenCalledOnce();
       expect(context.session.getPendingSummary()).toBeNull();
     } finally { context.app.unmount(); await context.session.close(); }
   });
 
-  it('keeps the summary and a visible cursor while editing the command', async () => {
-    const originalChalkLevel = chalk.level;
-    chalk.level = 1;
+  it.each([
+    '/go', '  /go  ', '\t/go\t', '/go extra', '/go\textra',
+    '/answer', '/answer 進捗を教えて', '/pause', '/pause ID', '/resume', '/resume ID', '/abort', '/abort ID',
+    '/goal', '`/go`', '> /go', '説明 /go', '```\n/go\n```', '/go\n続き',
+  ])('sends slash-prefixed or quoted text unchanged as conversation: %j', async (text) => {
+    const context = mount();
+    context.call.mockResolvedValue(response(null));
+    const message = vi.spyOn(context.session, 'handleUserMessage');
+    try {
+      await waitFor(() => expect(context.app.lastFrame()).not.toContain('Working'));
+      context.app.stdin.write(`\x1b[200~${text}\x1b[201~`);
+      await waitFor(() => expect(promptFrame(context)).toContain(text.split('\n')[0]!.replace(/\t/gu, ' ')));
+      context.app.stdin.write(ENTER);
+      await waitFor(() => {
+        expect(message).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ text }));
+        expect(context.call).toHaveBeenCalledExactlyOnceWith(text, expect.any(Object));
+        expect(context.app.lastFrame()).not.toContain('Working');
+        expect(queuedFrame(context)).toBeUndefined();
+      });
+      expect(context.register).not.toHaveBeenCalled();
+      expect(context.app.lastFrame()).not.toContain(getLabel('manager.selectionHint', 'en'));
+    } finally { context.app.unmount(); await context.session.close(); }
+  });
+
+  it('sends /go as conversation after a summary is displayed without registering a goal', async () => {
     const context = mount();
     try {
-      await send(context, 'CSV出力を追加したい', summaryA);
-      const pending = context.session.getPendingSummary();
+      await send(context, 'CSVを出力したい', summaryA);
+      context.call.mockResolvedValueOnce(response(null));
+      context.app.stdin.write('/go');
+      await waitFor(() => {
+        expect(promptFrame(context)).toContain('/go');
+        expect(context.session.getPendingSummary()).toBeNull();
+      });
+      context.app.stdin.write(ENTER);
+      await waitFor(() => expect(context.call).toHaveBeenLastCalledWith('/go', expect.any(Object)));
+      expect(context.register).not.toHaveBeenCalled();
+    } finally { context.app.unmount(); await context.session.close(); }
+  });
+
+  it.each([
+    { label: 'ordinary text', input: '修正', newline: false },
+    { label: 'slash text', input: '/g', newline: false },
+    { label: 'shift newline', input: '\x1b[13;2u', newline: true },
+    { label: 'meta newline', input: '\x1b[13;3u', newline: true },
+  ])('dismisses the summary when editing $label', async ({ input, newline }) => {
+    const context = mount();
+    try {
+      await send(context, 'CSVを出力したい', summaryA);
+      if (newline) context.app.stdin.write(UP);
+      context.app.stdin.write(input);
+      await waitFor(() => {
+        expect(context.session.getPendingSummary()).toBeNull();
+        expect(context.app.lastFrame()).not.toContain('Summary to register');
+      });
+      expect(context.register).not.toHaveBeenCalled();
+      expect(context.call).toHaveBeenCalledOnce();
+    } finally { context.app.unmount(); await context.session.close(); }
+  });
+
+  it('keeps the ordinary cursor editing behavior for slash-prefixed text', async () => {
+    const level = chalk.level;
+    chalk.level = 1;
+    const context = mount();
+    context.call.mockResolvedValue(response(null));
+    try {
+      await waitFor(() => expect(context.app.lastFrame()).not.toContain('Working'));
       context.app.stdin.write('/go');
       await waitFor(() => expect(promptFrame(context)).toContain('/go\x1b[7m \x1b[27m'));
       context.app.stdin.write('\x1b[D');
@@ -158,122 +360,98 @@ describe('manager TUI /go', () => {
       context.app.stdin.write('\x1b[C');
       context.app.stdin.write('\x7f');
       await waitFor(() => expect(stripVTControlCharacters(promptFrame(context))).toContain('/g'));
-      expect(context.session.getPendingSummary()).toEqual(pending);
       context.app.stdin.write('o');
       context.app.stdin.write(ENTER);
-      await waitFor(() => expect(context.register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cwd, ...summaryA })));
-      expect(context.call).toHaveBeenCalledOnce();
-    } finally { context.app.unmount(); await context.session.close(); chalk.level = originalChalkLevel; }
-  });
-
-  it.each(['ordinary text', 'newline'] as const)('dismisses the summary when the command draft becomes %s', async (change) => {
-    const context = mount();
-    try {
-      await send(context, 'CSV出力を追加したい', summaryA);
-      context.app.stdin.write('/g');
-      await waitFor(() => expect(promptFrame(context)).toContain('/g'));
-      expect(context.session.getPendingSummary()).not.toBeNull();
-      context.app.stdin.write(change === 'ordinary text' ? 'oal' : '\x1b[13;2u');
-      await waitFor(() => {
-        expect(context.session.getPendingSummary()).toBeNull();
-        expect(context.app.lastFrame()).not.toContain('Summary to register');
-      });
-      expect(context.call).toHaveBeenCalledOnce();
+      await waitFor(() => expect(context.call).toHaveBeenCalledExactlyOnceWith('/go', expect.any(Object)));
       expect(context.register).not.toHaveBeenCalled();
-    } finally { context.app.unmount(); await context.session.close(); }
+    } finally { context.app.unmount(); await context.session.close(); chalk.level = level; }
   });
 
-  it.each(['\x1b[13;2u', '\x1b[13;3u'])('inserts a newline instead of approving a summary from an empty draft: %j', async (key) => {
-    const context = mount();
-    try {
-      await send(context, 'CSV出力を追加したい', summaryA);
-      context.app.stdin.write(UP);
-      context.app.stdin.write(key);
-      await waitFor(() => {
-        expect(context.session.getPendingSummary()).toBeNull();
-        expect(context.app.lastFrame()).not.toContain('Summary to register');
-      });
-      expect(context.register).not.toHaveBeenCalled();
-      expect(context.call).toHaveBeenCalledOnce();
-    } finally { context.app.unmount(); await context.session.close(); }
-  });
-
-  it.each([false, true])('processes queued /go using the summary present after the active turn: %s', async (hasSummary) => {
+  it.each([false, true])('queues a summary request during a turn without approving the arriving summary=%s', async (hasSummary) => {
     const turn = deferred<ReturnType<typeof response>>();
     const context = mount();
     context.call.mockReturnValueOnce(turn.promise).mockResolvedValue(response(summaryB));
     try {
       await typeAndSubmit(context, 'first request');
       await waitFor(() => expect(context.call).toHaveBeenCalledOnce());
-      await typeAndSubmit(context, '/go');
-      await waitFor(() => expect(queuedFrame(context)).toContain('/go'));
+      context.app.stdin.write('あとで');
+      await waitFor(() => expect(promptFrame(context)).toContain('あとで'));
+      context.app.stdin.write(SUMMARY_MENU);
       expect(context.call).toHaveBeenCalledOnce();
       expect(context.register).not.toHaveBeenCalled();
       turn.resolve(response(hasSummary ? summaryA : null));
       await waitFor(() => {
-        expect(queuedFrame(context)).toBeUndefined();
+        expect(context.call).toHaveBeenCalledTimes(2);
+        expect(context.session.getPendingSummary()?.summary).toEqual(summaryB);
+        expect(promptFrame(context)).toContain('あとで');
         expect(context.app.lastFrame()).not.toContain('Working');
-        if (hasSummary) {
-          expect(context.register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cwd, ...summaryA }));
-          expect(context.app.lastFrame()).toContain('Goal registered');
-        } else {
-          expect(context.call).toHaveBeenCalledTimes(2);
-          expect(context.app.lastFrame()).toContain('Summary to register');
-          expect(context.session.getPendingSummary()?.summary).toEqual(summaryB);
-        }
       });
-      expect(context.call).toHaveBeenCalledTimes(hasSummary ? 1 : 2);
-      if (!hasSummary) {
-        expect(context.call.mock.calls[1]![0]).toMatch(/summar/iu);
-        expect(context.register).not.toHaveBeenCalled();
-      }
+      expect(context.call.mock.calls[1]![0]).toBe(getLabel('manager.goSummaryRequest', 'en'));
+      expect(context.register).not.toHaveBeenCalled();
     } finally { context.app.unmount(); turn.resolve(response(null)); await context.session.close(); }
   });
 
-  it('queues /go during registration and never registers the consumed summary twice', async () => {
-    const registration = deferred<Awaited<ReturnType<typeof createGoal>>>();
-    const context = mount();
-    context.register.mockReturnValueOnce(registration.promise);
-    try {
-      await send(context, 'CSV出力を追加したい', summaryA);
-      context.app.stdin.write(UP);
-      context.app.stdin.write(ENTER);
-      await waitFor(() => expect(context.register).toHaveBeenCalledOnce());
-      context.call.mockResolvedValue(response(summaryB));
-      await typeAndSubmit(context, '/go');
-      await waitFor(() => expect(queuedFrame(context)).toContain('/go'));
-      expect(context.call).toHaveBeenCalledOnce();
-      registration.resolve(goalRecord());
-      await waitFor(() => {
-        expect(context.call).toHaveBeenCalledTimes(2);
-        expect(context.call.mock.calls[1]![0]).toMatch(/summar/iu);
-        expect(context.app.lastFrame()).toContain('Summary to register');
-        expect(context.session.getPendingSummary()?.summary).toEqual(summaryB);
-        expect(queuedFrame(context)).toBeUndefined();
-        expect(context.app.lastFrame()).not.toContain('Working');
-      });
-      expect(context.register).toHaveBeenCalledOnce();
-    } finally { context.app.unmount(); registration.resolve(goalRecord()); await context.session.close(); }
-  });
-
-  it('waits for startup before processing queued /go', async () => {
+  it('waits for startup before processing a summary menu request', async () => {
     const recovery = deferred<readonly string[]>();
     const startup = { run: vi.fn(() => recovery.promise), fail: vi.fn() };
     const context = mount('en', startup);
     try {
       await waitFor(() => expect(startup.run).toHaveBeenCalledOnce());
-      await typeAndSubmit(context, '/go');
-      await waitFor(() => expect(queuedFrame(context)).toContain('/go'));
+      context.app.stdin.write(SUMMARY_MENU);
+      context.app.stdin.write('startup draft');
+      await waitFor(() => expect(promptFrame(context)).toContain('startup draft'));
       expect(context.call).not.toHaveBeenCalled();
       recovery.resolve([]);
       await waitFor(() => {
-        expect(context.call).toHaveBeenCalledOnce();
-        expect(context.call.mock.calls[0]![0]).toMatch(/summar/iu);
-        expect(context.app.lastFrame()).toContain('Summary to register');
-        expect(queuedFrame(context)).toBeUndefined();
+        expect(context.call).toHaveBeenCalledExactlyOnceWith(getLabel('manager.goSummaryRequest', 'en'), expect.any(Object));
+        expect(context.session.getPendingSummary()?.summary).toEqual(summaryA);
+        expect(promptFrame(context)).toContain('startup draft');
       });
       expect(context.register).not.toHaveBeenCalled();
     } finally { context.app.unmount(); recovery.resolve([]); await context.session.close(); }
+  });
+
+  it('queues a new summary request during registration without registering the consumed summary twice', async () => {
+    const registration = deferred<Awaited<ReturnType<typeof createGoal>>>();
+    const context = mount();
+    context.register.mockReturnValueOnce(registration.promise);
+    try {
+      await send(context, 'CSVを出力したい', summaryA);
+      context.app.stdin.write(SUMMARY_MENU);
+      await waitFor(() => expect(context.register).toHaveBeenCalledOnce());
+      context.call.mockResolvedValueOnce(response(summaryB));
+      context.app.stdin.write(SUMMARY_MENU);
+      context.app.stdin.write('registration draft');
+      await waitFor(() => expect(promptFrame(context)).toContain('registration draft'));
+      expect(context.call).toHaveBeenCalledOnce();
+      registration.resolve(goalRecord());
+      await waitFor(() => {
+        expect(context.call).toHaveBeenCalledTimes(2);
+        expect(context.call.mock.calls[1]![0]).toBe(getLabel('manager.goSummaryRequest', 'en'));
+        expect(context.session.getPendingSummary()?.summary).toEqual(summaryB);
+        expect(promptFrame(context)).toContain('registration draft');
+      });
+      expect(context.register).toHaveBeenCalledOnce();
+    } finally { context.app.unmount(); registration.resolve(goalRecord()); await context.session.close(); }
+  });
+
+  it.each(['escape', 'exit', 'unmount'] as const)('discards a waiting summary request on %s', async (action) => {
+    const turn = deferred<ReturnType<typeof response>>();
+    const context = mount();
+    context.call.mockReturnValueOnce(turn.promise);
+    try {
+      await typeAndSubmit(context, 'first request');
+      await waitFor(() => expect(context.call).toHaveBeenCalledOnce());
+      context.app.stdin.write(SUMMARY_MENU);
+      if (action === 'unmount') context.app.unmount();
+      else context.app.stdin.write(action === 'exit' ? '\x03' : '\x1b[27u');
+      await waitFor(() => expect(context.call.mock.calls[0]![1].abortSignal!.aborted).toBe(true));
+      turn.resolve(response(null));
+      await context.session.close();
+      expect(context.call).toHaveBeenCalledOnce();
+      expect(context.register).not.toHaveBeenCalled();
+      if (action === 'exit') expect(context.onExit).toHaveBeenCalledOnce();
+    } finally { context.app.unmount(); turn.resolve(response(null)); await context.session.close(); }
   });
 
   it.each(['typed', 'pasted'] as const)('saves /go as a free-text answer without executing the command: %s', async (delivery) => {
@@ -285,7 +463,7 @@ describe('manager TUI /go', () => {
     const context = mount();
     const answer = vi.spyOn(context.session, 'answerQuestion').mockResolvedValue({ kind: 'reply', message: 'Answer saved', answerSaved: true });
     try {
-      await typeAndSubmit(context, '/answer');
+      await openMenu(context, 'answer');
       await enterSelection(context);
       await waitFor(() => expect(context.app.lastFrame()).toContain('Free text'));
       if (delivery === 'typed') for (const character of '/go') context.app.stdin.write(character);
@@ -308,8 +486,9 @@ describe('manager TUI /go', () => {
     const context = mount();
     const abort = vi.spyOn(context.session, 'abortGoal').mockResolvedValue({ kind: 'reply', message: 'Goal aborted' });
     try {
-      await typeAndSubmit(context, '/abort');
+      await openMenu(context, 'goal');
       await enterSelection(context);
+      await chooseGoalAction(context, 'abort');
       await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.abortConfirmation', 'en')));
       context.app.stdin.write('\x1b[200~/go\x1b[201~');
       await waitFor(() => {
@@ -331,7 +510,7 @@ describe('manager TUI /go', () => {
     context.call.mockResolvedValueOnce({ ...response(null), structuredOutput })
       .mockResolvedValueOnce(response(null));
     try {
-      await typeAndSubmit(context, '/go');
+      context.app.stdin.write(SUMMARY_MENU);
       await waitFor(() => {
         expect(context.app.lastFrame()).toContain(structuredOutput.message);
         expect(context.app.lastFrame()).toMatch(lang === 'ja'
@@ -348,21 +527,8 @@ describe('manager TUI /go', () => {
     } finally { context.app.unmount(); await context.session.close(); }
   });
 
-  it.each(['ja', 'en'] as const)('shows localized /go help for requesting and approving a summary in %s', async (lang) => {
-    const context = mount(lang);
-    try {
-      await waitFor(() => {
-        const help = context.app.lastFrame()!.replace(/\s+/gu, ' ');
-        expect(help).toContain('/go');
-        expect(help).toMatch(lang === 'ja' ? /要約/u : /summar/iu);
-        expect(help).toMatch(lang === 'ja' ? /承認|登録/u : /approv|register/iu);
-      });
-      expect(context.call).not.toHaveBeenCalled();
-      expect(context.register).not.toHaveBeenCalled();
-    } finally { context.app.unmount(); await context.session.close(); }
-  });
-});
 
+});
 
 describe('manager TUI human approval', () => {
   it.each(['complete arrow', 'split arrow'] as const)('approves the displayed summary 400ms after an up arrow: %s', async (delivery) => {

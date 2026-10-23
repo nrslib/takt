@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { renderToString } from 'ink';
-import { createElement } from 'react';
 import { formatGoalName, formatInquirySummary, formatPatrolSummary, formatPendingQuestion } from '../features/manager/goalDisplay.js';
-import { ManagerGoalStatuses } from '../features/manager/ManagerGoalStatuses.js';
 import { getLabel } from '../shared/i18n/index.js';
 
 describe('manager patrol summaries', () => {
@@ -13,22 +10,6 @@ describe('manager patrol summaries', () => {
   it('normalizes whitespace and shortens without splitting graphemes', () => {
     expect(formatPatrolSummary(' 変化なし\r\n\t' + 'e\u0301👩‍💻'.repeat(30)))
       .toBe('変化なし ' + 'e\u0301👩‍💻'.repeat(17) + '…');
-  });
-});
-
-describe('manager goal status priority', () => {
-  it.each(['ja', 'en'] as const)('prioritizes paused and aborted execution over completion in %s', (lang) => {
-    const output = renderToString(createElement(ManagerGoalStatuses, {
-      lang, questions: [], goals: [
-        { id: 'paused', objective: '停止対象', status: 'completed', executionStatus: 'paused' },
-        { id: 'aborted', objective: '中止対象', status: 'awaiting_merge', executionStatus: 'aborted' },
-      ],
-    }), { columns: 160 });
-    const rows = output.split('\n');
-    expect(rows.find((row) => row.includes('停止対象'))).toContain(getLabel('manager.goalStates.paused', lang));
-    expect(rows.find((row) => row.includes('中止対象'))).toContain(getLabel('manager.goalStates.aborted', lang));
-    expect(output).not.toContain(getLabel('manager.goalStates.completed', lang));
-    expect(output).not.toContain(getLabel('manager.goalStates.awaiting_merge', lang));
   });
 });
 

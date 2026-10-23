@@ -39,7 +39,7 @@ async function readRepositoryDisplayEvents(cwd: string, language: Language, star
         ...(startedAt !== undefined && Date.parse(record.recordedAt) < startedAt
           ? { suppressInitialDisplay: true as const } : {}),
       })));
-      events.push(...(goal.notifications ?? []).filter((notification) => policy[notification.kind]).map((notification) => ({
+      events.push(...(goal.notifications ?? []).filter((notification) => notification.kind !== 'question' && policy[notification.kind]).map((notification) => ({
         id: JSON.stringify([goal.id, 'notification', notification.id]), message: formatGoalNotification(goal, notification, language, project, 'tui'),
       })));
     }

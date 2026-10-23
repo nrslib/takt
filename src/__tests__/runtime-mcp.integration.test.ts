@@ -317,6 +317,8 @@ describe('deterministic stdio MCP server fixture (MCP-INTEGRATION-TESTS)', () =>
         'takt_list_goal_questions',
         'takt_get_goal_question',
         'takt_withdraw_goal_question',
+        'takt_list_standalone_inquiries',
+        'takt_withdraw_standalone_inquiry',
         'takt_notify_goal',
         'takt_record_goal_work_log',
         'takt_list_goal_work_log',
