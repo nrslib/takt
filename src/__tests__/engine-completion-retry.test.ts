@@ -328,6 +328,9 @@ describe('WorkflowEngine completion retry wiring', () => {
 
   it('includes bounded repository source and diff in the judge prompt without relying on tools', async () => {
     execFileSync('git', ['init'], { cwd });
+    // Match the runtime-data exclusion in a configured TAKT repository.
+    mkdirSync(`${cwd}/.git/info`, { recursive: true });
+    writeFileSync(`${cwd}/.git/info/exclude`, '.takt/runs/\n');
     execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd });
     execFileSync('git', ['config', 'user.name', 'Test User'], { cwd });
     writeFileSync(`${cwd}/review-target.ts`, 'export const version = 1;\n');
@@ -362,6 +365,8 @@ describe('WorkflowEngine completion retry wiring', () => {
 
   it('validates and adds a prior judge gap path to the next attempt evidence', async () => {
     execFileSync('git', ['init'], { cwd });
+    mkdirSync(`${cwd}/.git/info`, { recursive: true });
+    writeFileSync(`${cwd}/.git/info/exclude`, '.takt/runs/\n');
     execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd });
     execFileSync('git', ['config', 'user.name', 'Test User'], { cwd });
     writeFileSync(`${cwd}/review-target.ts`, 'export const version = 1;\n');
@@ -404,6 +409,8 @@ describe('WorkflowEngine completion retry wiring', () => {
 
   it('retries a reviewer with no findings when metadata exposes an unvisited consumer', async () => {
     execFileSync('git', ['init'], { cwd });
+    mkdirSync(`${cwd}/.git/info`, { recursive: true });
+    writeFileSync(`${cwd}/.git/info/exclude`, '.takt/runs/\n');
     execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd });
     execFileSync('git', ['config', 'user.name', 'Test User'], { cwd });
     writeFileSync(`${cwd}/review-target.ts`, 'export const stableContract = 1;\n');

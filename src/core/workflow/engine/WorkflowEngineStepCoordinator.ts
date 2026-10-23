@@ -34,6 +34,8 @@ import {
 import type { OptionsBuilder } from './OptionsBuilder.js';
 
 interface WorkflowEngineStepCoordinatorDeps {
+  beginReportExecution?: (step: WorkflowStep) => string | undefined;
+  finishReportExecution?: (id: string, completed: boolean) => void;
   config: {
     steps: WorkflowStep[];
   };
@@ -342,84 +344,90 @@ export class WorkflowEngineStepCoordinator {
     const updateSession = this.deps.updatePersonaSession;
     const executionDeadlineContext = this.createExecutionDeadlineContext(step, stepIteration);
     let result: StepRunResult;
-
-    if (step.parallel && getAllParallelSubSteps(step.parallel).length > 0) {
-      result = await this.deps.parallelRunner.runParallelStep(
-        step,
-        this.deps.state,
-        this.deps.task,
-        this.deps.getMaxSteps(),
-        updateSession,
-        runtime,
-        stepIteration,
-        executionDeadlineContext,
-      );
-    } else if (step.arpeggio) {
-      result = await this.deps.arpeggioRunner.runArpeggioStep(
-        step,
-        this.deps.state,
-        runtime,
-        stepIteration,
-      );
-    } else if (step.teamLeader) {
-      result = await this.deps.teamLeaderRunner.runTeamLeaderStep(
-        step,
-        this.deps.state,
-        this.deps.task,
-        this.deps.getMaxSteps(),
-        updateSession,
-        runtime,
-        stepIteration,
-        executionDeadlineContext,
-      );
-    } else if (isSystemWorkflowStep(step)) {
-      result = {
-        response: await this.deps.systemStepExecutor.run(step, this.deps.state, runtime),
-        instruction: '',
-      };
-    } else if (isWorkflowCallStep(step)) {
-      if (workflowCallExecution === undefined) {
-        throw new Error(`workflow_call step "${step.name}" execution was not activated`);
+    const reportExecution = this.deps.beginReportExecution?.(step);
+    let completed = false;
+    try {
+      if (step.parallel && getAllParallelSubSteps(step.parallel).length > 0) {
+        result = await this.deps.parallelRunner.runParallelStep(
+          step,
+          this.deps.state,
+          this.deps.task,
+          this.deps.getMaxSteps(),
+          updateSession,
+          runtime,
+          stepIteration,
+          executionDeadlineContext,
+        );
+      } else if (step.arpeggio) {
+        result = await this.deps.arpeggioRunner.runArpeggioStep(
+          step,
+          this.deps.state,
+          runtime,
+          stepIteration,
+        );
+      } else if (step.teamLeader) {
+        result = await this.deps.teamLeaderRunner.runTeamLeaderStep(
+          step,
+          this.deps.state,
+          this.deps.task,
+          this.deps.getMaxSteps(),
+          updateSession,
+          runtime,
+          stepIteration,
+          executionDeadlineContext,
+        );
+      } else if (isSystemWorkflowStep(step)) {
+        result = {
+          response: await this.deps.systemStepExecutor.run(step, this.deps.state, runtime),
+          instruction: '',
+        };
+      } else if (isWorkflowCallStep(step)) {
+        if (workflowCallExecution === undefined) {
+          throw new Error(`workflow_call step "${step.name}" execution was not activated`);
+        }
+        result = await this.deps.workflowCallRunner.run(step, workflowCallExecution, runtime);
+      } else {
+        result = await this.deps.stepExecutor.runNormalStep(
+          step,
+          this.deps.state,
+          this.deps.task,
+          this.deps.getMaxSteps(),
+          updateSession,
+          prebuiltInstruction,
+          runtime,
+          preparedExecution,
+        );
       }
-      result = await this.deps.workflowCallRunner.run(step, workflowCallExecution, runtime);
-    } else {
-      result = await this.deps.stepExecutor.runNormalStep(
-        step,
-        this.deps.state,
-        this.deps.task,
-        this.deps.getMaxSteps(),
-        updateSession,
-        prebuiltInstruction,
-        runtime,
-        preparedExecution,
-      );
-    }
 
-    const reports = this.deps.stepExecutor.drainReportFiles();
-    for (const { step: reportedStep, filePath, fileName, context } of reports) {
-      this.deps.emitReport(reportedStep, filePath, fileName, context);
+      const reports = this.deps.stepExecutor.drainReportFiles();
+      for (const { step: reportedStep, filePath, fileName, context } of reports) {
+        this.deps.emitReport(reportedStep, filePath, fileName, context);
+      }
+      const reportedSteps = new Set<WorkflowStep>([
+        step,
+        ...reports.map(({ step: reportedStep }) => reportedStep),
+        ...(step.parallel !== undefined && !isDynamicParallelSubSteps(step.parallel)
+          ? getAllParallelSubSteps(step.parallel)
+          : []),
+      ]);
+      for (const participatedStep of reportedSteps) {
+        const parallelParentStepName = step.parallel !== undefined
+          && getAllParallelSubSteps(step.parallel).some((subStep) => subStep === participatedStep)
+          ? step.name
+          : undefined;
+        this.deps.recordParticipation(
+          participatedStep,
+          reports
+            .filter((report) => report.step === participatedStep)
+            .map((report) => report.fileName),
+          parallelParentStepName,
+        );
+      }
+      completed = result.response.status === 'done';
+      return result;
+    } finally {
+      if (reportExecution !== undefined) this.deps.finishReportExecution?.(reportExecution, completed);
     }
-    const reportedSteps = new Set<WorkflowStep>([
-      step,
-      ...reports.map(({ step: reportedStep }) => reportedStep),
-      ...(step.parallel !== undefined && !isDynamicParallelSubSteps(step.parallel)
-        ? getAllParallelSubSteps(step.parallel)
-        : []),
-    ]);
-    for (const participatedStep of reportedSteps) {
-      const parallelParentStepName = step.parallel !== undefined
-        && getAllParallelSubSteps(step.parallel).some((subStep) => subStep === participatedStep)
-        ? step.name
-        : undefined;
-      this.deps.recordParticipation(
-        participatedStep,
-        reports
-          .filter((report) => report.step === participatedStep)
-          .map((report) => report.fileName),
-        parallelParentStepName,
-      );
-    }
-    return result;
   }
 
   resolveNextStepFromDone(step: WorkflowStep, response: AgentResponse): string {

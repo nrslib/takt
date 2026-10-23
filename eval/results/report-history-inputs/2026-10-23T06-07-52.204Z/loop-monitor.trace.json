@@ -1,0 +1,58 @@
+{
+  "model": "gpt-6.1-sol",
+  "effort": "high",
+  "sandbox": "read-only",
+  "approvalPolicy": "never",
+  "observedTurnContexts": 1,
+  "startedFresh": true,
+  "networkAccessEnabled": false,
+  "webSearchMode": "disabled",
+  "executedPromptHash": "04acc6694906767b68d25963c5efbff41dff871c8a95766579963b86240c0c22",
+  "executedResponseHash": "269cbeb4d7d111faaf796884d9c80a4d3a3448babc7898371b5dbe1584801f2b",
+  "promptHash": "a4c31156d616331c06c77981b7b9159648e4734880b98718de611f910bd5c2d8",
+  "responseHash": "87c895011b92ae3cd9bbe9db04e49438ca7eb2c3bc78270b1b25a66180b4f70f",
+  "commands": [
+    {
+      "version": "prior",
+      "path": "loop-monitor/project/reports/.takt-report-internal/executions/versions/61bd966a-0738-4fe2-bd62-51c465a64d48/fix-report.md",
+      "marker": "PRIOR_de5dc563-7a1d-4662-b8c8-7c05612e6ff1",
+      "cwd": "loop-monitor/project",
+      "command": "/bin/zsh -lc 'cat reports/.takt-report-internal/executions/versions/61bd966a-0738-4fe2-bd62-51c465a64d48/fix-report.md'",
+      "exitCode": 0,
+      "status": "completed",
+      "commandExcerpt": false,
+      "recordedCommandHash": "f621f87425f60a21941e01ce2ce42ce3ebeda62132a658632e59e4e608e39984",
+      "exitCodeScope": "recorded command",
+      "output": "前回の修正報告。照合証拠: PRIOR_de5dc563-7a1d-4662-b8c8-7c05612e6ff1",
+      "artifactHash": "b8280524e8cdf162f8fde8945ddce6a811f56310de56882ff13ac54a071bf06d"
+    },
+    {
+      "version": "current",
+      "path": "loop-monitor/project/reports/.takt-report-internal/executions/versions/57175643-365b-4676-a8aa-5404094ebcc5/fix-report.md",
+      "marker": "CURRENT_edcc0761-a5c3-45e7-bb68-7e5e9d94c07c",
+      "cwd": "loop-monitor/project",
+      "command": "/bin/zsh -lc \"sed -n '801,1200p' reports/.takt-report-internal/executions/versions/57175643-365b-4676-a8aa-5404094ebcc5/fix-report.md\"",
+      "exitCode": 0,
+      "status": "completed",
+      "commandExcerpt": false,
+      "recordedCommandHash": "85557b63a43355ac7495fb19b100155a35ffebb3ee5a9f3769a87200488de48b",
+      "exitCodeScope": "recorded command",
+      "output": "照合証拠: CURRENT_edcc0761-a5c3-45e7-bb68-7e5e9d94c07c",
+      "artifactHash": "758734e6b97f510be7536473b71add44a805cf4a8a3d59b84a92b352a4711244"
+    }
+  ],
+  "toolCount": 11,
+  "toolTypes": [
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution"
+  ]
+}

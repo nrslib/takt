@@ -19,6 +19,13 @@ loop_monitors:
       - remediation
     threshold: 3
     judge:
+      input_reports:
+        - from_step: reviewers
+          reports: all
+          history: {previous: 2}
+        - from_step: remediation
+          reports: [review-resolution.md, fix-plan.md, fix-report.md, fix-verification.md]
+          history: {previous: 2}
       persona: supervisor
       instruction: loop-monitor-reviewers-fix
       rules:
@@ -98,6 +105,10 @@ steps:
       - condition: ABORT
         next: ABORT
   - name: remediation
+    input_reports:
+      - from_step: reviewers
+        reports: all
+        history: {previous: 2}
     uses: review-remediation
     with:
       plan_policy:
