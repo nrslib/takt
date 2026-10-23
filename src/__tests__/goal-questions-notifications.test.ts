@@ -14,11 +14,12 @@ vi.mock('node:crypto', async (original) => {
 afterEach(() => vi.mocked(crypto.randomUUID).mockReset()
   .mockImplementation(() => '650e8400-e29b-41d4-a716-446655440001'));
 const policy = { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true };
+const answerMenuKey = /(?:Ctrl\+R|\^R)\b/iu;
 
 function expectAnswerSelectionGuidance(text: string, questionId: string): void {
-  const guidance = text.split('\n').filter((line) => line.includes('/answer'));
+  const guidance = text.split('\n').filter((line) => answerMenuKey.test(line));
   expect(guidance).toHaveLength(1);
-  expect(guidance[0]).toMatch(/\/answer\b/u);
+  expect(guidance[0]).toMatch(answerMenuKey);
   expect(guidance[0]).not.toContain(questionId);
 }
 
@@ -369,7 +370,7 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
       const lines = formatGoalNotification(goal, notification, language, 'customer-export', destination).split('\n');
       expect(lines[2]).toBe('e\u0301'.repeat(299) + '…');
       expect(lines).toContain(recommendationPrefix + 'e\u0301'.repeat(199) + '…');
-      expect(lines.filter((line) => line.includes('/answer'))).toHaveLength(status === 'pending' ? 1 : 0);
+      expect(lines.filter((line) => answerMenuKey.test(line))).toHaveLength(status === 'pending' ? 1 : 0);
       if (status === 'pending') {
         expectAnswerSelectionGuidance(lines.at(-1)!, question.id);
       }
@@ -412,7 +413,7 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
     expect(body.split('\n').filter((line) => remainderPattern.test(line))).toEqual([]);
   });
 
-  it('shows saved question details and a usable TUI answer command', () => {
+  it('shows saved question details and a usable TUI inquiry menu key', () => {
     const goal = { ...goalRecord(), questions: [question] };
     const body = formatGoalQuestionNotification(question, language);
     const text = formatGoalNotification(goal, { kind: 'question', body }, language, 'customer-export');
@@ -440,7 +441,7 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
     expect(lines).toContain(question.body);
     expect(lines).toContain(language === 'ja' ? '選択肢: CSV, JSON' : 'Options: CSV, JSON');
     expect(lines).toContain(language === 'ja' ? '推奨: CSV' : 'Recommendation: CSV');
-    const guidance = lines.filter((line) => line.includes('/answer'));
+    const guidance = lines.filter((line) => answerMenuKey.test(line));
     if (status === 'pending') {
       expect(guidance).toHaveLength(1);
       expectAnswerSelectionGuidance(text, question.id);
@@ -459,11 +460,11 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
     const text = formatGoalNotification({ ...goalRecord(), questions: [question] }, notification, language, 'customer-export');
     const lines = text.split('\n');
     expect(lines).toContain(notification.body);
-    expect(lines.filter((line) => line.includes('/answer'))).toEqual([]);
+    expect(lines.filter((line) => answerMenuKey.test(line))).toEqual([]);
     expect(lines.filter((line) => /選択肢:|Options:|推奨:|Recommendation:/u.test(line))).toEqual([]);
   });
 
-  it('shortens question details while retaining the complete answer command', () => {
+  it('shortens question details while retaining the complete inquiry menu key', () => {
     const savedQuestion: GoalQuestion = { ...question, body: 'Which output format? '.repeat(1000),
       options: ['CSV '.repeat(1000), 'JSON '.repeat(1000)], recommendation: 'CSV is preferred. '.repeat(1000) };
     const body = formatGoalQuestionNotification(savedQuestion, language);

@@ -4,10 +4,11 @@ import type { ManagerDisplayGoal } from './savedEvents.js';
 import type { PendingQuestion } from './inquiryAnswer.js';
 
 type GoalOperation = 'pause' | 'resume' | 'abort';
-export type ManagerSelectionCommand = 'answer' | GoalOperation;
+export type ManagerSelectionCommand = 'answer' | 'goal';
 export type ManagerSelection =
   | { kind: 'answer'; candidates: readonly PendingQuestion[]; index: number }
-  | { kind: GoalOperation; candidates: readonly ManagerDisplayGoal[]; index: number };
+  | { kind: 'goal'; candidates: readonly ManagerDisplayGoal[]; index: number }
+  | { kind: 'action'; target: ManagerDisplayGoal; candidates: readonly GoalOperation[]; index: number };
 export type ManagerSelectedTarget =
   | { kind: 'answer'; target: PendingQuestion }
   | { kind: GoalOperation; target: ManagerDisplayGoal };
@@ -28,10 +29,10 @@ export function useManagerSelection() {
     questions: readonly PendingQuestion[]; goals: readonly ManagerDisplayGoal[];
   }): boolean => {
     if (kind === 'answer') {
-      if (snapshot.questions.length === 0) return false;
+      if (snapshot.questions.length === 0) { update(null); return false; }
       update({ kind, candidates: snapshot.questions, index: 0 });
     } else {
-      const candidates = snapshot.goals.filter((goal) => isGoalSelectionCandidate(kind, goal));
+      const candidates = snapshot.goals.filter((goal) => isGoalSelectionCandidate('abort', goal));
       if (candidates.length === 0) { update(null); return false; }
       update({ kind, candidates, index: 0 });
     }
@@ -45,9 +46,13 @@ export function useManagerSelection() {
       update({ ...target, index: Math.max(0, Math.min(target.candidates.length - 1,
         target.index + (key.upArrow ? -1 : 1))) });
     } else if (key.return) {
-      update(null);
       if (target.kind === 'answer') onSelect({ kind: target.kind, target: target.candidates[target.index]! });
-      else onSelect({ kind: target.kind, target: target.candidates[target.index]! });
+      else if (target.kind === 'goal') {
+        const goal = target.candidates[target.index]!;
+        update({ kind: 'action', target: goal, candidates: [goal.executionStatus === 'active' ? 'pause' : 'resume', 'abort'], index: 0 });
+        return;
+      } else onSelect({ kind: target.candidates[target.index]!, target: target.target });
+      update(null);
     }
   };
   return { selection, open, handleInput };

@@ -141,12 +141,37 @@ async function expectAbortConfirmation(goal: Goal): Promise<void> {
   });
 }
 
-async function selectGoal(goal: Goal): Promise<void> {
+async function selectGoal(goal: Goal, action: 'pause' | 'resume' | 'abort'): Promise<void> {
   await vi.waitFor(() => {
     const lists = app!.lastFrame()?.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu) ?? [];
     expect(lists.some((box) => box.includes(goal.objective) && /↑|↓/u.test(box) && /Enter/u.test(box) && /Esc/u.test(box))).toBe(true);
   });
   app!.stdin.write('\r');
+  await selectGoalAction(action);
+}
+
+async function selectGoalAction(action: 'pause' | 'resume' | 'abort'): Promise<void> {
+  const patterns = { pause: /一時停止|pause/iu, resume: /再開|resume/iu, abort: /中止|abort/iu };
+  const rows = (): string[] => {
+    const boxes = app!.lastFrame()!.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu) ?? [];
+    const menu = boxes.find((box) => /↑|↓/u.test(box) && /Enter/u.test(box) && /Esc/u.test(box));
+    return menu === undefined ? [] : menu.split('\n').slice(2, -2)
+      .filter((row) => Object.values(patterns).some((pattern) => pattern.test(row)));
+  };
+  await vi.waitFor(() => {
+    expect(rows()).toHaveLength(2);
+    expect(rows().some((row) => patterns[action].test(row))).toBe(true);
+  });
+  const index = rows().findIndex((row) => patterns[action].test(row));
+  app!.stdin.write('\x1b[A');
+  app!.stdin.write('\x1b[A');
+  for (let move = 0; move < index; move++) app!.stdin.write('\x1b[B');
+  app!.stdin.write('\r');
+}
+
+async function openMenu(kind: 'answer' | 'goal'): Promise<void> {
+  await vi.waitFor(() => expect(app!.lastFrame()).not.toMatch(/処理中|Working/u));
+  app!.stdin.write(kind === 'answer' ? '\x12' : '\x07');
 }
 
 function confirmAbort(): void {
@@ -158,13 +183,13 @@ it.each(['choice', 'free text'] as const)('persists only the selected inquiry th
   const pending: GoalQuestion = { id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human', status: 'pending',
     body: 'Choose output format', options: mode === 'choice' ? ['CSV', 'JSON'] : undefined };
   const saved: Goal = { ...goalRecord(), objective: 'Shared goal name', questions: [pending] };
-  const { store, call, send } = await mountGoalControls('en', saved);
+  const { store, call } = await mountGoalControls('en', saved);
   const other = await store.create({ ...saved, id: '550e8400-e29b-41d4-a716-446655440001' });
   const candidates = (await readManagerDisplayEvents(cwd, 'en')).questions;
   const selected = candidates[1]!;
   if (selected.goalId === null) throw new Error('Expected a goal inquiry');
   const untouched = await store.get(selected.goalId === saved.id ? other.id : saved.id);
-  await send('/answer');
+  await openMenu('answer');
   await vi.waitFor(() => {
     const lists = app!.lastFrame()?.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu) ?? [];
     expect(lists.some((box) => box.includes(saved.objective) && /↑|↓/u.test(box) && /Enter/u.test(box))).toBe(true);
@@ -183,17 +208,74 @@ it.each(['choice', 'free text'] as const)('persists only the selected inquiry th
   expect(call).not.toHaveBeenCalled();
 });
 
+it.each(['enter', 'escape'] as const)('blocks inquiry entry during registration then handles a real answer with %s', async (confirm) => {
+  const question: GoalQuestion = { id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human', status: 'pending', body: 'Choose output format' };
+  const goal = { ...goalRecord(), questions: [question] };
+  const { store, call, send } = await mountGoalControls('en', goal);
+  const beforeAnswer = await store.get(goal.id);
+  const summary = { objective: 'Export data', outOfScope: [], acceptanceCriteria: ['Output saved'], constraints: [] };
+  call.mockResolvedValueOnce({ persona: 'manager', status: 'done', timestamp: new Date(), content: '',
+    structuredOutput: { message: 'Summary ready', summary } });
+  await send('Prepare export');
+  await vi.waitFor(() => expect(app!.lastFrame()).toContain('Summary to register'));
+  let finish!: () => void;
+  const registration = new Promise<void>((resolve) => { finish = resolve; });
+  const approval = vi.spyOn(session!, 'approveSummary').mockImplementation(async (revision) => {
+    await registration;
+    session!.dismissSummary(revision);
+    return { kind: 'reply', message: 'Registration finished' };
+  });
+  const answer = vi.spyOn(session!, 'answerQuestion');
+  try {
+    app!.stdin.write('\x0f');
+    await vi.waitFor(() => expect(approval).toHaveBeenCalledOnce());
+    app!.stdin.write('会話の下書き');
+    await vi.waitFor(() => expect(app!.lastFrame()).toContain('会話の下書き'));
+    app!.stdin.write('\x12');
+    app!.stdin.write('保持');
+    await vi.waitFor(() => {
+      expect(app!.lastFrame()).toContain('会話の下書き保持');
+      expect(app!.lastFrame()).not.toContain('Enter your answer');
+      expect(app!.lastFrame()).not.toContain(getLabel('manager.selectionHint', 'en'));
+    });
+    expect(answer).not.toHaveBeenCalled();
+    finish();
+    await vi.waitFor(() => expect(app!.lastFrame()).not.toContain('Working'));
+    await openMenu('answer');
+    await vi.waitFor(() => expect(app!.lastFrame()).toContain(getLabel('manager.selectionHint', 'en')));
+    app!.stdin.write('\r');
+    await vi.waitFor(() => expect(app!.lastFrame()).toContain('Enter your answer'));
+    app!.stdin.write('CSVで保存');
+    await vi.waitFor(() => expect(app!.lastFrame()).toContain('CSVで保存'));
+    app!.stdin.write(confirm === 'enter' ? '\r' : '\x1b[27u');
+    await vi.waitFor(() => expect(app!.lastFrame()).not.toContain('Enter your answer'));
+    const saved = await store.get(goal.id);
+    if (confirm === 'enter') {
+      await vi.waitFor(async () => expect((await store.get(goal.id)).questions![0]).toMatchObject({
+        status: 'answered', answer: { text: 'CSVで保存', source: 'tui' },
+      }));
+      expect(answer).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ goalId: goal.id, questionId: question.id, answer: { text: 'CSVで保存' } }));
+    } else {
+      expect(saved.questions).toEqual(beforeAnswer.questions);
+      expect(answer).not.toHaveBeenCalled();
+    }
+    expect(call.mock.calls.map(([text]) => text)).not.toContain('CSVで保存');
+    expect(call).toHaveBeenCalledOnce();
+    expect(app!.lastFrame()).toContain('会話の下書き保持');
+  } finally { finish(); }
+});
+
 it.each(['pause', 'resume', 'abort'] as const)('filters mixed saved goal states and applies %s only to the second selected goal', async (command) => {
   const executionStatus = command === 'resume' ? 'paused' : 'active';
   const saved: Goal = { ...goalRecord(), objective: 'Eligible first', executionStatus };
-  const { store, call, send } = await mountGoalControls('en', saved);
+  const { store, call } = await mountGoalControls('en', saved);
   const other = await store.create({ ...saved, id: '550e8400-e29b-41d4-a716-446655440001', objective: 'Eligible second' });
   await store.create({ ...saved, id: '550e8400-e29b-41d4-a716-446655440002', objective: 'Completed candidate', status: 'completed',
     completion: { goalBranch: saved.branch, goalSha: 'a'.repeat(40), targetBranch: 'main', targetSha: 'b'.repeat(40),
       summary: 'Completed', instructions: ['Verified merge'],
       changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false } } });
   await store.create({ ...saved, id: '550e8400-e29b-41d4-a716-446655440003', objective: 'Aborted candidate', executionStatus: 'aborted' });
-  await send(`/${command}`);
+  await openMenu('goal');
   await vi.waitFor(() => {
     const lists = app!.lastFrame()?.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu) ?? [];
     const list = lists.find((box) => /↑|↓/u.test(box) && /Enter/u.test(box) && /Esc/u.test(box));
@@ -205,6 +287,7 @@ it.each(['pause', 'resume', 'abort'] as const)('filters mixed saved goal states 
   });
   app!.stdin.write('\x1b[B');
   app!.stdin.write('\r');
+  await selectGoalAction(command);
   if (command === 'abort') { await expectAbortConfirmation(other); confirmAbort(); }
   const expected = command === 'pause' ? 'paused' : command === 'resume' ? 'active' : 'aborted';
   await vi.waitFor(async () => expect((await store.get(other.id)).executionStatus).toBe(expected));
@@ -227,7 +310,7 @@ it.each([
       instructions: ['git merge reviewed SHA'],
     },
   };
-  const { store, call, send } = await mountGoalControls(lang, saved);
+  const { store, call } = await mountGoalControls(lang, saved);
   const abort = vi.spyOn(session!, 'abortGoal');
   const runner = new TaskRunner(cwd);
   runner.addTask('preserve pending work', { goal_id: saved.id });
@@ -238,9 +321,9 @@ it.each([
   expect(await store.get(saved.id)).toEqual(saved);
   expect(new TaskStore(cwd).read()).toEqual(before);
   abort.mockClear();
-  await send('/abort');
+  await openMenu('goal');
   await vi.waitFor(() => {
-    expect(app!.lastFrame()).toMatch(lang === 'ja' ? /対象.*(?:ありません|なし)|中止.*(?:ありません|なし)/u : /no.*(?:goals|targets)/iu);
+    expect(app!.lastFrame()).toMatch(lang === 'ja' ? /(?:対象|ゴール).*(?:ありません|なし)/u : /no.*(?:goals|targets)/iu);
     expect(app!.lastFrame()).not.toMatch(irreversibleWarning);
   });
   expect(abort).not.toHaveBeenCalled();
@@ -257,10 +340,9 @@ it.each([
 ])('aborts a $executionStatus goal only after human confirmation and refreshes the same $lang TUI', async ({ lang, executionStatus }) => {
   const saved: Goal = { ...goalRecord(), executionStatus, objective: 'Abort target',
   };
-  const { store, call, send } = await mountGoalControls(lang, saved);
-  if (executionStatus === 'paused') await vi.waitFor(() => expect(app!.lastFrame()).toContain(saved.objective));
-  await send('/abort');
-  await selectGoal(saved);
+  const { store, call } = await mountGoalControls(lang, saved);
+  await openMenu('goal');
+  await selectGoal(saved, 'abort');
   await expectAbortConfirmation(saved);
   expect(await store.get(saved.id)).toEqual(saved);
   expect(call).not.toHaveBeenCalled();
@@ -268,16 +350,13 @@ it.each([
   await vi.waitFor(async () => expect((await store.get(saved.id)).executionStatus).toBe('aborted'));
   expect(await store.get(saved.id)).toEqual({ ...saved, executionStatus: 'aborted' });
   const expectAbortedGoal = (): void => {
-    const rows = app!.lastFrame()!.split('\n');
-    const index = rows.findIndex((row) => row.includes(saved.objective));
-    expect(index).toBeGreaterThanOrEqual(0);
-    expect(rows.slice(Math.max(0, index - 2), index + 3).join('\n')).toMatch(lang === 'ja' ? /中止/u : /abort/iu);
-    expect(rows.filter((row) => /一時停止中のゴール|Paused goals/u.test(row))).toEqual([]);
+    expect(app!.lastFrame()!.split('\n').find((row) => /\^R/u.test(row))).toMatch(lang === 'ja'
+      ? /進行中\s*0/u : /(?:in progress|ongoing|active)\s*:?\s*0/iu);
   };
   await vi.waitFor(expectAbortedGoal);
   expect(call).not.toHaveBeenCalled();
-  await send('/resume');
-  await vi.waitFor(() => expect(app!.lastFrame()).toMatch(/(?:対象|再開).*(?:ありません|なし)|no.*(?:goals|targets)/iu));
+  await openMenu('goal');
+  await vi.waitFor(() => expect(app!.lastFrame()).toMatch(/(?:対象|ゴール).*(?:ありません|なし)|no.*(?:goals|targets)/iu));
   expect((await store.get(saved.id)).executionStatus).toBe('aborted');
   app!.unmount();
   app = render(createElement(ManagerView, { cwd, lang, session: session!, initialDiagnostics: [], onExit: vi.fn() }));
@@ -287,8 +366,8 @@ it.each([
 it.each(['default', 'escape'] as const)('cancels abort with %s without changing saved state or calling the agent', async (choice) => {
   const saved = { ...goalRecord(), objective: 'Abort target' };
   const { store, call, send } = await mountGoalControls('ja', saved);
-  await send('/abort');
-  await selectGoal(saved);
+  await openMenu('goal');
+  await selectGoal(saved, 'abort');
   await expectAbortConfirmation(saved);
   app!.stdin.write(choice === 'default' ? '\r' : '\x1b[27u');
   await vi.waitFor(() => expect(app!.lastFrame()!.replace(/\s+/gu, ' ')).not.toMatch(irreversibleWarning));
@@ -318,7 +397,7 @@ it.each([
 
 it('invalidates only pending work belonging to the confirmed goal and preserves running and terminal records', async () => {
   const saved = { ...goalRecord(), objective: 'Abort target' };
-  const { store, send } = await mountGoalControls('en', saved);
+  const { store } = await mountGoalControls('en', saved);
   const other = await store.create({ ...goalRecord(), id: '550e8400-e29b-41d4-a716-446655440001' });
   const runner = new TaskRunner(cwd);
   const running = runner.addTask('in-flight work', { goal_id: saved.id });
@@ -332,8 +411,8 @@ it('invalidates only pending work belonging to the confirmed goal and preserves 
   runner.failTask({ task: failed, success: false, startedAt: '2026-10-10T00:00:00Z', completedAt: '2026-10-10T00:01:00Z', response: 'Execution failed', executionLog: [] });
   const before = runner.listTaskStateItems();
   const beforeRecords = new TaskStore(cwd).read().tasks;
-  await send('/abort');
-  await selectGoal(saved);
+  await openMenu('goal');
+  await selectGoal(saved, 'abort');
   await expectAbortConfirmation(saved);
   expect(runner.listTaskStateItems()).toEqual(before);
   confirmAbort();
@@ -387,11 +466,11 @@ it('invalidates only pending work belonging to the confirmed goal and preserves 
 
 it.each(['retry', 'cancel', 'escape'] as const)('handles failed pending invalidation through TUI %s without reopening the aborted goal', async (action) => {
   const saved = { ...goalRecord(), objective: 'Abort target' };
-  const { store, send, call } = await mountGoalControls('en', saved);
+  const { store, call } = await mountGoalControls('en', saved);
   const runner = new TaskRunner(cwd);
   const pending = runner.addTask('pending abort retry', { goal_id: saved.id });
-  await send('/abort');
-  await selectGoal(saved);
+  await openMenu('goal');
+  await selectGoal(saved, 'abort');
   await expectAbortConfirmation(saved);
   const abort = vi.spyOn(session!, 'abortGoal');
   const failUpdate = (): never => { throw new Error('Pending write unavailable'); };
@@ -507,25 +586,28 @@ it.each(['ja', 'en'] as const)('pauses and resumes an awaiting-merge goal from c
       instructions: ['git merge --ff-only goal-branch'],
     },
   };
-  const { store, call, send } = await mountGoalControls(lang, saved);
-  await send('/pause');
-  await selectGoal(saved);
+  const { store, call } = await mountGoalControls(lang, saved);
+  await openMenu('goal');
+  await selectGoal(saved, 'pause');
   await vi.waitFor(async () => expect((await store.get(goalId)).executionStatus).toBe('paused'));
   expect(await store.get(goalId)).toEqual({ ...saved, executionStatus: 'paused' });
+  await openMenu('goal');
   await vi.waitFor(() => {
     const boxes = app!.lastFrame()!.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu) ?? [];
-    const paused = boxes.find((box) => /一時停止中のゴール|Paused goals/u.test(box));
-    expect(paused).toContain(saved.objective);
-    expect(paused).toMatch(lang === 'ja' ? /一時停止|停止中/u : /paused/iu);
+    const list = boxes.find((box) => /↑|↓/u.test(box) && /Enter/u.test(box));
+    expect(list).toContain(saved.objective);
+    expect(list).toMatch(lang === 'ja' ? /一時停止|停止中/u : /paused/iu);
   });
   expect(call).not.toHaveBeenCalled();
-  await send('/resume');
-  await selectGoal(saved);
+  await selectGoal(saved, 'resume');
   await vi.waitFor(async () => expect((await store.get(goalId)).executionStatus).toBe('active'));
   expect(await store.get(goalId)).toEqual(saved);
+  await openMenu('goal');
   await vi.waitFor(() => {
     const boxes = app!.lastFrame()!.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu) ?? [];
-    expect(boxes.filter((box) => /一時停止中のゴール|Paused goals/u.test(box))).toEqual([]);
+    const list = boxes.find((box) => /↑|↓/u.test(box) && /Enter/u.test(box));
+    expect(list).toContain(saved.objective);
+    expect(list).toContain(getLabel('manager.goalStates.active', lang));
   });
   expect(call).not.toHaveBeenCalled();
 });
@@ -567,13 +649,14 @@ it('shows compact pending questions and an ID-free answer hint when notification
     },
   });
   app = render(createElement(ManagerView, { cwd, lang: 'ja', session, initialDiagnostics: [], onExit: vi.fn() }));
+  await openMenu('answer');
   await vi.waitFor(() => {
     const frame = app!.lastFrame()!;
     const rows = frame.split('\n');
     expect(rows.find((row) => row.includes(input.body))).toContain(saved.objective);
     expect(rows.find((row) => row.includes(input.body))).toContain('質問');
     expect(frame).toContain('保存先はどこですか');
-    expect(frame).toContain('/answer');
+    expect(frame).toContain('^R');
     for (const row of rows) {
       for (const id of [goalId, added.questionId, remaining.questionId]) expect(row).not.toContain(id);
       for (const option of input.options) expect(row).not.toContain(option);
@@ -586,16 +669,73 @@ it('shows compact pending questions and an ID-free answer hint when notification
   expect(display.diagnostics).toEqual([]);
   expect(display.questions.map(({ question }) => question.id)).toEqual([remaining.questionId]);
   app = render(createElement(ManagerView, { cwd, lang: 'ja', session, initialDiagnostics: [], onExit: vi.fn() }));
+  await openMenu('answer');
   await vi.waitFor(() => {
     const frame = app!.lastFrame();
     expect(frame).toContain('保存先はどこですか');
-    expect(frame).toContain('/answer');
+    expect(frame).toContain('^R');
     expect(frame).not.toContain(added.questionId);
     expect(frame).not.toContain(input.body);
   });
 });
 
-it.each([true, false])('shows human questions and their saved automatic notifications in the TUI (notifications=%s)', async (enabled) => {
+it.each(['startup', 'polling'] as const)('hides default question notifications on %s while preserving details, records and custom notifications', async (phase) => {
+  const childProcess = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+  childProcess.execFileSync('git', ['init', '-b', 'main'], { cwd, stdio: 'pipe' });
+  writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nmanager:\n  auto_run: false\n');
+  invalidateResolvedConfigCache(cwd);
+  expect(resolveManagerConfig(cwd).notifications.question).toBe(true);
+  const { store, call } = await mountGoalControls('ja', goalRecord());
+  await vi.waitFor(() => expect(app!.lastFrame()).not.toContain('処理中'));
+  if (phase === 'startup') app!.unmount();
+  const server = createTaktMcpServer({}, { toolSet: 'manager', allowedProjectRoot: cwd });
+  const client = new Client({ name: 'manager-question-display-test', version: '1.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  try {
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    const input = { body: '出力形式を選んでください', options: ['CSV', 'JSON'], recommendation: 'CSVを推奨します' };
+    const result = await client.callTool({ name: 'takt_ask_goal_question', arguments: { cwd, goalId, ...input } });
+    expect(result.isError, JSON.stringify(result)).not.toBe(true);
+    const saved = await store.get(goalId);
+    expect(saved.questions![0]).toMatchObject(input);
+    expect(saved.notifications).toEqual([expect.objectContaining({ kind: 'question' })]);
+    const display = await readManagerDisplayEvents(cwd, 'ja');
+    expect(display.questions).toHaveLength(1);
+    expect(display.events).toEqual([]);
+    if (phase === 'startup') app = render(createElement(ManagerView, { cwd, lang: 'ja', session: session!, initialDiagnostics: [], onExit: vi.fn() }));
+    await vi.waitFor(() => expect(app!.lastFrame()).toContain('未回答 1'));
+    const transcript = (): string => app!.lastFrame()!.split(/進行中\s+\d/u)[0]!;
+    for (const value of [input.body, ...input.options, input.recommendation]) expect(transcript()).not.toContain(value);
+    await openMenu('answer');
+    await vi.waitFor(() => expect(app!.lastFrame()).toContain(getLabel('manager.selectionHint', 'ja')));
+    app!.stdin.write('\x1b[27u');
+    await vi.waitFor(() => expect(app!.lastFrame()).not.toContain(getLabel('manager.selectionHint', 'ja')));
+    for (const value of [input.body, ...input.options, input.recommendation]) expect(transcript()).not.toContain(value);
+    await openMenu('answer');
+    await vi.waitFor(() => expect(app!.lastFrame()).toContain(getLabel('manager.selectionHint', 'ja')));
+    app!.stdin.write('\r');
+    await vi.waitFor(() => {
+      for (const value of [input.body, ...input.options, input.recommendation]) expect(app!.lastFrame()).toContain(value);
+    });
+    expect(await store.get(goalId)).toEqual(saved);
+    app!.stdin.write('\x1b[27u');
+    await vi.waitFor(() => expect(app!.lastFrame()).not.toContain('回答を入力してください'));
+    // 同じ本文でも種別が custom の通知は従来どおり表示する。
+    const custom = { ...saved, notifications: saved.notifications!.map((notification) => ({ ...notification, kind: 'custom' as const })) };
+    await store.update(goalId, () => custom);
+    const customDisplay = await readManagerDisplayEvents(cwd, 'ja');
+    expect(customDisplay.events).toHaveLength(1);
+    for (const value of [input.body, ...input.options, input.recommendation]) expect(customDisplay.events[0]!.message).toContain(value);
+    await vi.waitFor(() => {
+      for (const value of [input.body, ...input.options, input.recommendation]) expect(transcript()).toContain(value);
+    });
+    expect(await store.get(goalId)).toEqual(custom);
+    expect(call).not.toHaveBeenCalled();
+  } finally { await client.close(); await server.close(); }
+});
+
+it.each([true, false])('keeps human inquiries and custom notifications without projecting question notices into the TUI (notifications=%s)', async (enabled) => {
   writeFileSync(join(cwd, '.takt', 'config.yaml'), `provider: mock\nmanager:\n  auto_run: false\n  notifications:\n    question: ${enabled}\n`);
   invalidateResolvedConfigCache(cwd);
   const human = addGoalQuestion(goalRecord(), { recipient: 'human', body: '出力形式はどれですか' });
@@ -609,18 +749,19 @@ it.each([true, false])('shows human questions and their saved automatic notifica
   await new GoalStore(cwd).create(saved);
   const display = await readManagerDisplayEvents(cwd);
   expect(display.questions.map(({ question }) => question.id).sort()).toEqual([human.questionId, second.questionId].sort());
-  expect(display.events.map(({ id }) => JSON.parse(id)[2])).toEqual(saved.notifications!.filter(({ kind }) => enabled || kind !== 'question').map(({ id }) => id));
+  expect(display.events.map(({ id }) => JSON.parse(id)[2])).toEqual(saved.notifications!.filter(({ kind }) => kind !== 'question').map(({ id }) => id));
   session = createManagerConversationSession({
     cwd,
     plan: { ctx: { providerType: 'mock', model: undefined, lang: 'ja', provider: new MockProvider() },
       strategy: { systemPrompt: 'manager fixture' } },
   });
   app = render(createElement(ManagerView, { cwd, lang: 'ja', session, initialDiagnostics: [], onExit: vi.fn() }));
+  await openMenu('answer');
   await vi.waitFor(() => {
     const frame = app!.lastFrame()!;
     expect(frame).toContain('出力形式はどれですか');
     expect(frame).toContain('出力先はどこですか');
-    const guidance = frame.split('\n').filter((row) => row.includes('/answer'));
+    const guidance = frame.split('\n').filter((row) => /\^R|Ctrl\+R/u.test(row));
     expect(guidance.length).toBeGreaterThan(0);
     for (const row of guidance) {
       expect(row).not.toContain(human.questionId);
@@ -742,7 +883,7 @@ it.each(['ja', 'en'] as const)('renders old saved merge instructions once in the
   expect(call).not.toHaveBeenCalled();
 });
 
-it.each(['ja', 'en'] as const)('reopens the %s TUI with withdrawn question details and notification history without answer guidance', async (lang) => {
+it.each(['ja', 'en'] as const)('reopens the %s TUI without withdrawn question details while retaining saved notification history', async (lang) => {
   writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nmanager:\n  auto_run: false\n  notifications:\n    question: true\n');
   invalidateResolvedConfigCache(cwd);
   const question = { id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human' as const, status: 'pending' as const,
@@ -752,7 +893,7 @@ it.each(['ja', 'en'] as const)('reopens the %s TUI with withdrawn question detai
     body: formatGoalQuestionNotification(question, lang === 'ja' ? 'en' : 'ja'), recordedAt: '2026-10-08T00:00:00Z',
   }] };
   const { store, call } = await mountGoalControls(lang, saved);
-  await vi.waitFor(() => expect(app!.lastFrame()).toContain('/answer'));
+  await vi.waitFor(() => expect(app!.lastFrame()).toContain('^R'));
   app!.unmount();
   const withdrawn = await store.update(saved.id, (goal) => withdrawGoalQuestion(goal, question.id));
   expect(withdrawn.questions).toEqual([{
@@ -761,17 +902,12 @@ it.each(['ja', 'en'] as const)('reopens the %s TUI with withdrawn question detai
   expect(withdrawn.notifications).toEqual(saved.notifications);
   const display = await readManagerDisplayEvents(cwd, lang);
   expect(display.questions).toEqual([]);
-  expect(display.events).toEqual([{
-    id: JSON.stringify([saved.id, 'notification', saved.notifications![0]!.id]), message: expect.stringContaining(question.body),
-  }]);
-  expect(display.events[0]!.message.split('\n').filter((line) => line.includes('/answer'))).toEqual([]);
-  expect(display.events[0]!.message.split('\n')).toContain((lang === 'ja' ? '選択肢: ' : 'Options: ') + question.options.join(', '));
+  expect(display.events).toEqual([]);
   app = render(createElement(ManagerView, { cwd, lang, session: session!, initialDiagnostics: [], onExit: vi.fn() }));
   await vi.waitFor(() => {
     const frame = app!.lastFrame()!;
-    expect(frame).toContain(question.body);
-    expect(frame.replace(/\n\s*/gu, '')).toContain((lang === 'ja' ? '選択肢: ' : 'Options: ') + question.options.join(', '));
-    expect(frame).toContain(lang === 'ja' ? '推奨: CSV' : 'Recommendation: CSV');
+    expect(frame).toContain(lang === 'ja' ? '未回答 0' : 'Pending 0');
+    for (const value of [question.body, ...question.options]) expect(frame).not.toContain(value);
     expect(frame).not.toContain(question.id);
   });
   expect(await store.get(saved.id)).toEqual(withdrawn);
@@ -793,7 +929,7 @@ it.each(['question', 'awaiting_merge', 'completed', 'progress', 'blocked', 'cust
     const display = await readManagerDisplayEvents(cwd);
     expect(display.questions.map(({ question: saved }) => saved.id)).toEqual([question.questionId]);
     expect(display.events.map(({ id }) => JSON.parse(id)[2])).toEqual([
-      goal.workLog[0]!.id, ...goal.notifications!.filter((notice) => notice.kind !== kind).map(({ id }) => id),
+      goal.workLog[0]!.id, ...goal.notifications!.filter((notice) => notice.kind !== 'question' && notice.kind !== kind).map(({ id }) => id),
     ]);
     expect((await new GoalStore(cwd).get(goal.id)).notifications).toEqual(goal.notifications);
   },

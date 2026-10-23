@@ -596,9 +596,9 @@ const askedQuestion = {
 };
 
 function expectAnswerSelectionGuidance(text: string, questionId: string): void {
-  const guidance = text.split('\n').filter((line) => line.includes('/answer'));
+  const guidance = text.split('\n').filter((line) => /Ctrl\+R|\^R/u.test(line));
   expect(guidance).toHaveLength(1);
-  expect(guidance[0]).toMatch(/\/answer\b.*(?:list|select|choose)|(?:list|select|choose).*\/answer\b/iu);
+  expect(guidance[0]).toMatch(/list|select|choose/iu);
   expect(guidance[0]).not.toContain(questionId);
 }
 
@@ -822,7 +822,8 @@ describe('manager questions, answers and notifications through production bounda
     expectAnswerSelectionGuidance(requests[0]!.text, question.id);
     expect(requests[0]!.text).not.toContain(goalId);
     const displayed = await readManagerDisplayEvents(cwd);
-    expect(displayed.events).toEqual(expect.arrayContaining([expect.objectContaining({ message: expect.stringContaining(askedQuestion.body) })]));
+    expect(displayed.events).toEqual([]);
+    expect(displayed.questions).toEqual([expect.objectContaining({ question: expect.objectContaining(question) })]);
     expect(JSON.stringify((await invoke('takt_get_goal')).goal)).not.toContain(webhook);
     expect(JSON.stringify(displayed)).not.toContain(webhook);
   });
@@ -862,12 +863,14 @@ describe('manager questions, answers and notifications through production bounda
     expect(display.events[0]!.message.split('\n')[2]).toBe(severity);
   });
 
-  it('persists question state and a TUI event without sending Slack when the webhook is unset', async () => {
+  it('persists question state for the inquiry menu without sending Slack when the webhook is unset', async () => {
     vi.stubEnv('TAKT_NOTIFY_WEBHOOK', undefined);
     const question = await ask();
     expect(question.status).toBe('pending');
     expect(requests).toEqual([]);
-    expect((await readManagerDisplayEvents(cwd)).events).toEqual(expect.arrayContaining([expect.objectContaining({ message: expect.stringContaining(question.body) })]));
+    const display = await readManagerDisplayEvents(cwd);
+    expect(display.events).toEqual([]);
+    expect(display.questions).toEqual([expect.objectContaining({ question: expect.objectContaining(question) })]);
   });
 
   it.each(['HTTP error', 'connection error'] as const)('keeps the question usable and work running while reporting a Slack %s to stderr', async (failure) => {
@@ -882,10 +885,7 @@ describe('manager questions, answers and notifications through production bounda
     expect(stderr.mock.calls.flat().join('')).not.toContain(webhook);
     const display = await readManagerDisplayEvents(cwd);
     expect(display.questions).toEqual([expect.objectContaining({ goalId, question: expect.objectContaining(question) })]);
-    expect(display.events).toHaveLength(1);
-    const guidance = display.events[0]!.message.split('\n').filter((line) => line.includes('/answer'));
-    expect(guidance).toHaveLength(1);
-    expect(guidance[0]).not.toContain(question.id);
+    expect(display.events).toEqual([]);
     expect(JSON.stringify(display)).not.toContain(webhook);
     expect((await enqueue('export')).isError).not.toBe(true);
     expect(new TaskRunner(cwd).listPendingTaskItems()).toHaveLength(1);
@@ -1039,7 +1039,8 @@ describe('manager questions, answers and notifications through production bounda
     const daemonStartup = new Promise<void>((resolve) => { confirmDaemonStartup = resolve; });
     vi.mocked(ensureDaemon).mockImplementationOnce(() => daemonStartup);
     try {
-      await send('/answer');
+      await vi.waitFor(() => expect(app!.lastFrame()).not.toContain('Working'));
+      app!.stdin.write('\x12');
       await vi.waitFor(() => {
         const lists = app!.lastFrame()?.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu) ?? [];
         expect(lists.some((box) => box.includes(question.body) && /↑|↓/u.test(box) && /Enter/u.test(box) && /Esc/u.test(box))).toBe(true);
