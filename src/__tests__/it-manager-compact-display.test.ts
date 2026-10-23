@@ -1,4 +1,3 @@
-import { Box } from 'ink';
 import { cleanup, render } from 'ink-testing-library';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -6,14 +5,9 @@ import { join } from 'node:path';
 import { createElement } from 'react';
 import stringWidth from 'string-width';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ManagerAbortedGoals } from '../features/manager/ManagerAbortedGoals.js';
-import { ManagerPausedGoals } from '../features/manager/ManagerPausedGoals.js';
-import { ManagerPendingQuestions } from '../features/manager/ManagerPendingQuestions.js';
 import { ManagerView } from '../features/manager/ManagerView.js';
 import type { ManagerConversationSession } from '../features/manager/conversationSession.js';
-import { formatGoalName } from '../features/manager/goalDisplay.js';
 import * as savedEvents from '../features/manager/savedEvents.js';
-import type { PendingQuestion } from '../features/manager/inquiryAnswer.js';
 import { PromptInput } from '../features/tui/PromptInput.js';
 import { TranscriptView } from '../features/tui/TranscriptEntryView.js';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
@@ -63,92 +57,6 @@ afterEach(() => {
   cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.mocked(PromptInput).mockClear(); vi.mocked(TranscriptView).mockClear();
 });
 
-describe.each(['ja', 'en'] as const)('compact manager lists in %s', (lang) => {
-  it.each([160, 38])('renders only paused and aborted goals with one row per goal at width %i', async (width) => {
-    const goals = [
-      { ...goalRecord(), objective, executionStatus: 'paused' as const },
-      { ...goalRecord(), id: nextQuestionId, objective: '二つ目の停止対象', executionStatus: 'paused' as const },
-      { ...goalRecord(), id: questionId, objective, executionStatus: 'aborted' as const },
-      { ...goalRecord(), id: '650e8400-e29b-41d4-a716-446655440003', objective: '実行中の対象', executionStatus: 'active' as const },
-    ];
-    const app = render(createElement(Box, { width, flexDirection: 'column' },
-      createElement(ManagerPausedGoals, { goals, lang }), createElement(ManagerAbortedGoals, { goals, lang })));
-
-    await waitFor(() => {
-      const frames = boxes(app.lastFrame()!);
-      expect(frames).toHaveLength(2);
-      const paused = contentRows(frames[0]!);
-      const aborted = contentRows(frames[1]!);
-      expect(paused.filter((row) => row.includes('共通のゴール'))).toHaveLength(1);
-      expect(paused.filter((row) => row.includes('二つ目の停止対象'))).toHaveLength(1);
-      expect(aborted.filter((row) => row.includes('共通のゴール'))).toHaveLength(1);
-      expect(paused).toHaveLength(4);
-      expect(aborted).toHaveLength(2);
-      if (width === 160) {
-        expect(paused.find((row) => row.includes(shortName))).toMatch(lang === 'ja' ? /一時停止|停止中/u : /paused/iu);
-        expect(aborted.find((row) => row.includes(shortName))).toMatch(lang === 'ja' ? /中止/u : /aborted/iu);
-      }
-      const resume = paused.filter((row) => row.includes('/resume'));
-      expect(resume).toHaveLength(1);
-      expect(resume[0]).toMatch(/\/resume(?!\s+[\da-f-]{8})/iu);
-      for (const row of [...paused, ...aborted]) {
-        for (const goal of goals) expect(row).not.toContain(goal.id);
-        expect(row).not.toContain('実行中の対象');
-        expect(row).not.toContain(objective);
-      }
-      for (const line of app.lastFrame()!.split('\n')) expect(stringWidth(line)).toBeLessThanOrEqual(width);
-    });
-  });
-
-  it('shows each inquiry kind, the common name, a short summary and the count without details', async () => {
-    const kinds = ['question', 'approval', 'operation_request', undefined] as const;
-    const questions: PendingQuestion[] = kinds.map((kind, index) => ({
-      goalId: goalRecord().id, repositoryDirectory: '/fixture', objective,
-      question: question({ id: `650e8400-e29b-41d4-a716-44665544000${index + 1}`, kind,
-        body: `要点${index}\n${'あ'.repeat(60)}本文の末尾` }),
-    }));
-    const app = render(createElement(Box, { width: 160 }, createElement(ManagerPendingQuestions, { questions, lang })));
-
-    await waitFor(() => {
-      const frames = boxes(app.lastFrame()!);
-      expect(frames).toHaveLength(1);
-      const rows = contentRows(frames[0]!);
-      expect(rows[0]).toMatch(/4/u);
-      expect(rows).toHaveLength(6);
-      const expectedKinds = lang === 'ja' ? [/質問/u, /承認/u, /操作依頼/u, /質問/u]
-        : [/question/iu, /approval/iu, /operation request/iu, /question/iu];
-      for (const [index, pending] of questions.entries()) {
-        const summary = `要点${index} ` + 'あ'.repeat(35) + '…';
-        const matching = rows.filter((row) => row.includes(summary));
-        expect(matching).toHaveLength(1);
-        expect(matching[0]).toContain(shortName);
-        expect(matching[0]).toMatch(expectedKinds[index]!);
-        for (const row of rows) {
-          expect(row).not.toContain(pending.goalId!);
-          expect(row).not.toContain(pending.question.id);
-          expect(row).not.toContain('本文の末尾');
-          for (const option of pending.question.options!) expect(row).not.toContain(option);
-          expect(row).not.toContain(pending.question.recommendation!);
-        }
-      }
-      const guidance = rows.filter((row) => row.includes('/answer'));
-      expect(guidance).toHaveLength(1);
-      expect(guidance[0]).toMatch(/\/answer\b/u);
-    });
-  });
-
-  it('keeps a Japanese inquiry with a long name and body on one row in a narrow terminal', async () => {
-    const questions = [{ goalId: goalRecord().id, repositoryDirectory: '/fixture', objective, question: question({ kind: 'question' }) }];
-    const app = render(createElement(Box, { width: 38 }, createElement(ManagerPendingQuestions, { questions, lang })));
-    await waitFor(() => {
-      const rows = contentRows(boxes(app.lastFrame()!)[0]!);
-      expect(rows).toHaveLength(3);
-      expect(rows[1]).toMatch(lang === 'ja' ? /質問/u : /question/iu);
-      for (const line of app.lastFrame()!.split('\n')) expect(stringWidth(line)).toBeLessThanOrEqual(38);
-    });
-  });
-});
-
 describe('manager polling and answer cancellation', () => {
   let cwd: string;
   let store: GoalStore;
@@ -193,9 +101,7 @@ describe('manager polling and answer cancellation', () => {
     && /Free text|Enter your answer|自由記述|回答を入力してください/u.test(box));
 
   async function openAnswer(): Promise<void> {
-    app!.stdin.write('/answer');
-    await waitFor(() => expect(prompt().text).toBe('/answer'));
-    app!.stdin.write('\r');
+    app!.stdin.write('\x12');
     await waitFor(() => expect(boxes(app!.lastFrame()!).some((box) => /↑|↓/u.test(box) && /Enter/u.test(box) && /Esc/u.test(box))).toBe(true));
     app!.stdin.write('\r');
     await waitFor(() => {
@@ -374,87 +280,77 @@ describe('manager polling and answer cancellation', () => {
     for (const goal of goals) expect((await store.get(goal.id)).workLog.slice(0, 30)).toEqual(goal.workLog);
   });
 
-  describe.each(['ja', 'en'] as const)('goal status overview in %s', (lang) => {
-    it.each([160, 38])('shows one row per goal with its status and pending count at width %i', async (columns) => {
-      const history = await createGoalsWithHistory();
-      const completion = { goalBranch: 'goal', goalSha: 'a'.repeat(40), targetBranch: 'main',
-        targetSha: 'b'.repeat(40), summary: '完成の根拠',
-        changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
-        instructions: [] };
-      const states = [
-        { status: 'created' as const, executionStatus: 'active' as const, name: objective, count: 2,
-          label: getLabel('manager.goalStates.active', lang) },
-        { status: 'created' as const, executionStatus: 'paused' as const, name: `一時停止する${objective}`, count: 1,
-          label: getLabel('manager.goalStates.paused', lang) },
-        { status: 'created' as const, executionStatus: 'aborted' as const, name: '中止対象', count: 0,
-          label: getLabel('manager.goalStates.aborted', lang) },
-        { status: 'awaiting_merge' as const, executionStatus: 'active' as const, name: 'マージ対象', count: 0,
-          label: getLabel('manager.goalStates.awaiting_merge', lang) },
-        { status: 'completed' as const, executionStatus: 'active' as const, name: '完了対象', count: 0,
-          label: getLabel('manager.goalStates.completed', lang) },
-      ];
-      for (const [index, state] of states.entries()) {
-        const goal = { ...goalRecord(), id: history[index]?.id ?? randomUUID(), objective: state.name,
-          status: state.status, executionStatus: state.executionStatus,
-          ...(state.status === 'created' ? {} : { completion }),
-          workLog: history[index]?.workLog ?? [],
-          questions: [
-            ...Array.from({ length: state.count }, () => question({ id: randomUUID(), body: '未回答の問い合わせ' })),
-            question({ id: randomUUID(), status: 'withdrawn', body: '取り下げた問い合わせ' }),
-          ] };
-        if (index < history.length) await store.update(goal.id, () => goal);
-        else await store.create(goal);
-      }
-      await new StandaloneInquiryStore(getGlobalConfigDir(), { kind: 'repository', repositoryDirectory: cwd })
-        .create({ body: 'ゴールに所属しない問い合わせ' });
-      mount(lang);
-      vi.spyOn(app!.stdout, 'columns', 'get').mockReturnValue(columns);
-      const countLabel = (count: number) => getLabel('manager.goalPendingInquiries', lang, { count: String(count) });
+  const countLine = (lang: 'ja' | 'en'): string => {
+    const rows = app!.lastFrame()!.split('\n')
+      .filter((row) => (lang === 'ja' ? /進行中/u : /in progress|ongoing|active/iu).test(row) && /\^R/u.test(row));
+    expect(rows).toHaveLength(1);
+    return rows[0]!;
+  };
 
-      await waitFor(() => {
-        const panels = boxes(app!.lastFrame()!).filter((box) =>
-          contentRows(box)[0] === getLabel('manager.goalStatuses', lang));
-        expect(panels).toHaveLength(1);
-        const rows = contentRows(panels[0]).slice(1);
-        expect(rows).toHaveLength(states.length);
-        expect(rows.filter((row) => row.includes(countLabel(0)))).toHaveLength(3);
-        expect(rows.filter((row) => row.includes(countLabel(1)))).toHaveLength(1);
-        expect(rows.filter((row) => row.includes(countLabel(2)))).toHaveLength(1);
-        for (const state of states) {
-          const matching = rows.filter((row) => row.includes(`${state.label}: `) && row.includes(countLabel(state.count)));
-          expect(matching).toHaveLength(1);
-          const visibleName = matching[0]!.split(`${state.label}: `)[1];
-          expect(visibleName).toContain(columns === 160 ? formatGoalName(state.name) : state.name.slice(0, 2));
-        }
-        if (columns === 160) {
-          expect(panels[0]).not.toContain(objective);
-          expect(panels[0]).toContain(shortName);
-        }
-        for (const line of panels[0]!.split('\n')) expect(stringWidth(line)).toBeLessThanOrEqual(columns);
-      });
+  it.each(['ja', 'en'] as const)('shows two ongoing goals and four inquiries with all menu keys on one line in %s', async (lang) => {
+    await store.create({ ...goalRecord(), questions: [question({}), question({ id: nextQuestionId })] });
+    await store.create({ ...goalRecord(), id: randomUUID(), executionStatus: 'paused',
+      questions: [question({ id: randomUUID() })] });
+    await new StandaloneInquiryStore(getGlobalConfigDir(), { kind: 'repository', repositoryDirectory: cwd })
+      .create({ body: 'ゴールなしの問い合わせ' });
+    mount(lang);
+    await waitFor(() => {
+      const line = countLine(lang);
+      expect(line).toMatch(lang === 'ja' ? /進行中\s*2/u : /(?:in progress|ongoing|active)\s*:?\s*2/iu);
+      expect(line).toMatch(lang === 'ja' ? /未回答\s*4/u : /(?:pending|unanswered)\s*:?\s*4/iu);
+      expect(line).toMatch(/\^R.*\^G.*\^O/u);
+      expect(line).toMatch(lang === 'ja' ? /問い合わせ.*ゴール.*要約/u : /inquir|question/iu);
+      if (lang === 'en') expect(line).toMatch(/goal.*summary/iu);
     });
+  });
 
-    it('updates the existing goal row after its status and inquiries change', async () => {
-      const saved = await store.create({ ...goalRecord(), objective: '更新対象', questions: [question({ body: '更新前の質問' })] });
-      mount(lang);
-      const countLabel = (count: number) => getLabel('manager.goalPendingInquiries', lang, { count: String(count) });
-      const goalRow = () => boxes(app!.lastFrame()!)
-        .filter((box) => contentRows(box)[0] === getLabel('manager.goalStatuses', lang))
-        .flatMap(contentRows).filter((row) => row.includes(saved.objective));
-      await waitFor(() => {
-        expect(goalRow()).toHaveLength(1);
-        expect(goalRow()[0]).toContain(countLabel(1));
-        expect(goalRow()[0]).toMatch(lang === 'ja' ? /実行中|作業中/u : /active|working|in progress/iu);
-      });
-      await store.update(saved.id, (goal) => ({ ...goal, executionStatus: 'paused', questions: [
-        ...goal.questions!, question({ id: nextQuestionId, body: '更新後の質問' }),
-      ] }));
-      await waitFor(() => {
-        expect(goalRow()).toHaveLength(1);
-        expect(goalRow()[0]).toContain(countLabel(2));
-        expect(goalRow()[0]).toMatch(lang === 'ja' ? /一時停止/u : /paused/iu);
-      });
+  it.each(['ja', 'en'] as const)('keeps the count and menu line visible when both counts are zero in %s', async (lang) => {
+    mount(lang);
+    await waitFor(() => {
+      expect(countLine(lang)).toMatch(lang === 'ja' ? /進行中\s*0.*未回答\s*0/u
+        : /(?:in progress|ongoing|active)\s*:?\s*0.*(?:pending|unanswered)\s*:?\s*0/iu);
+      expect(countLine(lang)).toMatch(/\^R.*\^G.*\^O/u);
     });
+  });
+
+  it.each(['ja', 'en'] as const)('replaces fixed goal and inquiry panels with counts and key guidance in %s', async (lang) => {
+    const completion = { goalBranch: 'goal', goalSha: 'a'.repeat(40), targetBranch: 'main',
+      targetSha: 'b'.repeat(40), summary: '完成の根拠', instructions: [],
+      changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false } };
+    const names = ['完成した名前', '中止した名前', '進行中の名前'];
+    for (const [index, name] of names.entries()) await store.create({
+      ...goalRecord(), id: randomUUID(), objective: name,
+      status: index === 0 ? 'completed' : 'created', executionStatus: index === 0 ? 'paused' : index === 1 ? 'aborted' : 'active',
+      ...(index === 0 ? { completion } : {}),
+      questions: index === 2 ? [question({ body: '画面へ固定表示しない問い合わせ本文' })] : [],
+    });
+    mount(lang);
+    await waitFor(() => expect(countLine(lang)).toMatch(lang === 'ja' ? /進行中\s*1.*未回答\s*1/u
+      : /(?:in progress|ongoing|active)\s*:?\s*1.*(?:pending|unanswered)\s*:?\s*1/iu));
+    const rows = app!.lastFrame()!.split('\n');
+    for (const row of rows) {
+      for (const name of names) expect(row).not.toContain(name);
+      expect(row).not.toContain('画面へ固定表示しない問い合わせ本文');
+      expect(row).not.toMatch(/\/(?:go|answer|pause|resume|abort)\b/u);
+      expect(row).not.toMatch(/全ゴール|ゴールの状態|中止済みのゴール|一時停止中のゴール|Goal statuses|Aborted goals|Paused goals/iu);
+      expect(row).not.toMatch(/provider.*API|API.*(?:費用|cost)/iu);
+    }
+    expect(rows.join('').replace(/\s+/gu, '')).not.toContain(getLabel('manager.costNotice', lang).replace(/\s+/gu, ''));
+    expect(app!.lastFrame()!.replace(/\s+/gu, '')).toContain(getLabel('manager.experimentalNotice', lang).replace(/\s+/gu, ''));
+  });
+
+  it.each(['ja', 'en'] as const)('refreshes counts after status and inquiry changes in the same %s screen', async (lang) => {
+    const saved = await store.create({ ...goalRecord(), questions: [question({})] });
+    mount(lang);
+    await waitFor(() => expect(countLine(lang)).toMatch(lang === 'ja' ? /進行中\s*1.*未回答\s*1/u
+      : /(?:in progress|ongoing|active)\s*:?\s*1.*(?:pending|unanswered)\s*:?\s*1/iu));
+    await store.update(saved.id, (goal) => ({ ...goal, executionStatus: 'paused',
+      questions: [...goal.questions!, question({ id: nextQuestionId })] }));
+    await waitFor(() => expect(countLine(lang)).toMatch(lang === 'ja' ? /進行中\s*1.*未回答\s*2/u
+      : /(?:in progress|ongoing|active)\s*:?\s*1.*(?:pending|unanswered)\s*:?\s*2/iu));
+    await store.update(saved.id, (goal) => ({ ...goal, executionStatus: 'aborted' }));
+    await waitFor(() => expect(countLine(lang)).toMatch(lang === 'ja' ? /進行中\s*0.*未回答\s*2/u
+      : /(?:in progress|ongoing|active)\s*:?\s*0.*(?:pending|unanswered)\s*:?\s*2/iu));
   });
 
   it.each(['ja', 'en'] as const)('shows only a single-line patrol summary and preserves full ordinary records in %s', async (lang) => {
@@ -485,18 +381,16 @@ describe('manager polling and answer cancellation', () => {
 
   describe.each(['ja', 'en'] as const)('selection lists in %s', (lang) => {
     describe.each([38, 160])('terminal width %i', (columns) => {
-      it.each(['answer', 'pause', 'resume', 'abort'] as const)('renders compact %s candidates outside the log and Esc leaves the store unchanged', async (command) => {
+      it.each(['answer', 'goal'] as const)('renders compact %s candidates outside the log and Esc leaves the store unchanged', async (command) => {
         const saved = await store.create({ ...goalRecord(), objective,
-          executionStatus: command === 'resume' ? 'paused' : 'active', questions: [question({ kind: 'approval', operation: {
+          executionStatus: 'paused', questions: [question({ kind: 'approval', operation: {
             toolName: 'Bash', args: '{}', cwd, argsDigest: createHash('sha256').update('{}').digest('hex'),
           } })] });
         const file = join(cwd, '.takt', 'goals', saved.id, 'goal.json');
         const before = readFileSync(file, 'utf8');
         const calls = mount(lang);
         vi.spyOn(app!.stdout, 'columns', 'get').mockReturnValue(columns);
-        app!.stdin.write(`/${command}`);
-        await waitFor(() => expect(prompt().text).toBe(`/${command}`));
-        app!.stdin.write('\r');
+        app!.stdin.write(command === 'answer' ? '\x12' : '\x07');
         const list = () => boxes(app!.lastFrame()!).find((box) => /↑|↓/u.test(box) && /Enter/u.test(box) && /Esc/u.test(box));
         await waitFor(() => expect(list()).toBeDefined());
         const selectedBox = list()!;
@@ -526,7 +420,7 @@ describe('manager polling and answer cancellation', () => {
     const file = join(cwd, '.takt', 'goals', saved.id, 'goal.json');
     const before = readFileSync(file, 'utf8');
     mount(lang);
-    await waitFor(() => expect(app!.lastFrame()).toContain('出力形式を選んでください。'));
+    await waitFor(() => expect(countLine(lang)).toBeDefined());
     const initialFrame = app!.lastFrame()!;
     await openAnswer();
     const detail = answerDialogs()[0]!;
@@ -540,30 +434,10 @@ describe('manager polling and answer cancellation', () => {
     expect(await store.get(saved.id)).toEqual(saved);
   });
 
-  it('updates the count and list outside the existing conversation log in the same screen', async () => {
-    const saved = await store.create({ ...goalRecord(), objective, questions: [question({ body: '最初の問い合わせ' })] });
-    const { read } = mount('ja');
-    const pendingBox = () => boxes(app!.lastFrame()!).find((box) => box.includes('最初の問い合わせ'))!;
-    await waitFor(() => expect(contentRows(pendingBox())[0]).toMatch(/1/u));
-    const polls = read.mock.calls.length;
-    await store.update(saved.id, (goal) => ({ ...goal, questions: [...goal.questions!, question({ id: nextQuestionId, body: '次の問い合わせ' })] }));
-    await waitFor(() => {
-      expect(read.mock.calls.length).toBeGreaterThan(polls);
-      const box = pendingBox();
-      expect(contentRows(box)[0]).toMatch(/2/u);
-      expect(box).toContain('最初の問い合わせ');
-      expect(box).toContain('次の問い合わせ');
-      const frame = app!.lastFrame()!;
-      expect(frame).toContain('会話ログの目印');
-      expect(frame.indexOf('会話ログの目印')).toBeLessThan(frame.indexOf(box));
-      expect(frame.slice(0, frame.indexOf(box))).not.toContain('次の問い合わせ');
-    });
-  });
-
   it.each([false, true])('keeps the prompt and answer target when another inquiry arrives with an open dialog=%s', async (open) => {
     const saved = await store.create({ ...goalRecord(), questions: [question({})] });
     const { read, answerQuestion } = mount('en');
-    await waitFor(() => expect(app!.lastFrame()).toContain('出力形式を選んでください。'));
+    await waitFor(() => expect(countLine('en')).toBeDefined());
     if (open) await openAnswer();
     app!.stdin.write('unsent draft');
     await waitFor(() => expect(prompt().text).toBe('unsent draft'));
@@ -573,7 +447,7 @@ describe('manager polling and answer cancellation', () => {
     await store.update(saved.id, (goal) => ({ ...goal, questions: [...goal.questions!, question({ id: nextQuestionId, body: '新着の問い合わせ' })] }));
     await waitFor(() => {
       expect(read.mock.calls.length).toBeGreaterThan(polls);
-      expect(app!.lastFrame()).toContain('新着の問い合わせ');
+      expect(countLine('en')).toMatch(/(?:pending|unanswered)\s*:?\s*2/iu);
       expect(prompt()).toMatchObject({ ...before, text: 'unsent draft' });
       const dialogs = answerDialogs();
       expect(dialogs).toHaveLength(open ? 1 : 0);
@@ -588,7 +462,7 @@ describe('manager polling and answer cancellation', () => {
     const file = join(cwd, '.takt', 'goals', saved.id, 'goal.json');
     const before = readFileSync(file, 'utf8');
     const { read, answerQuestion } = mount('en');
-    await waitFor(() => expect(app!.lastFrame()).toContain('出力形式を選んでください。'));
+    await waitFor(() => expect(countLine('en')).toBeDefined());
     await openAnswer();
     app!.stdin.write('\x1b[27u');
     await waitFor(() => {
@@ -603,8 +477,7 @@ describe('manager polling and answer cancellation', () => {
     expect((await savedEvents.readManagerDisplayEvents(cwd, 'en')).questions).toEqual([
       { goalId: saved.id, repositoryDirectory: cwd, objective: saved.objective, question: saved.questions![0] },
     ]);
-    const pending = boxes(app!.lastFrame()!).find((box) => box.includes('出力形式を選んでください。'))!;
-    expect(contentRows(pending)[0]).toMatch(/1/u);
+    expect(countLine('en')).toMatch(/(?:pending|unanswered)\s*:?\s*1/iu);
     await openAnswer();
     expect(answerQuestion).not.toHaveBeenCalled();
   });

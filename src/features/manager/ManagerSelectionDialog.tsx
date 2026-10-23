@@ -11,7 +11,9 @@ export function ManagerSelectionDialog({ selection, lang }: {
     ? selection.candidates.map((pending) => ({
       key: JSON.stringify([pending.goalId, pending.question.id]), text: formatPendingQuestion(pending, lang),
     }))
-    : selection.candidates.map((goal) => ({
+    : selection.kind === 'action' ? selection.candidates.map((action) => ({
+      key: action, text: getLabel(`manager.goalActions.${action}`, lang),
+    })) : selection.candidates.map((goal) => ({
       key: goal.id,
       text: `${formatGoalName(goal.objective)} — ${getLabel(`manager.goalStates.${goal.executionStatus}`, lang)}`,
     }));

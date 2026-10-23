@@ -416,9 +416,15 @@ describe('manager workspace storage and repository boundaries', () => {
     try {
       await vi.waitFor(() => {
         expect(app.lastFrame()).toContain(`${workspace!.name} (2)`);
+        expect(app.lastFrame()).toMatch(/進行中\s*1/u);
+      });
+      app.stdin.write('\x07');
+      await vi.waitFor(() => {
         expect(app.lastFrame()).toContain(goal.objective);
         expect(app.lastFrame()).toContain('一時停止');
       });
+      app.stdin.write('\x1b[27u');
+      await vi.waitFor(() => expect(app.lastFrame()).not.toContain(goal.objective));
       await renameManagerWorkspace(assignment, '新しい担当', globalDirectory);
       await addManagerRepository(assignment, repositoryC, globalDirectory);
       setMockScenario([{ persona: 'manager', status: 'done', content: JSON.stringify({ message: '担当を確認', summary: null }) }]);

@@ -43,6 +43,10 @@ export const summaryA = { objective: 'CSVを出力する', outOfScope: ['JSON出
 export const summaryB = { objective: 'JSONを出力する', outOfScope: ['CSV出力', '通知'], acceptanceCriteria: ['JSONを取得できる', '列名を含む'], startBranch: 'release', integrationBranch: 'main', constraints: [], };
 export const ENTER = '\r';
 export const UP = '\x1b[A';
+const DOWN = '\x1b[B';
+export const QUESTION_MENU = '\x12';
+export const GOAL_MENU = '\x07';
+export const SUMMARY_MENU = '\x0f';
 export const LONG_TEXT = `${'長い貼り付け本文を確認してください。'.repeat(80)}末尾の確認`;
 
 export function response(summary: typeof summaryA | null) {
@@ -100,6 +104,30 @@ export function selectionFrame(context: ReturnType<typeof mount>): string | unde
 
 export async function enterSelection(context: ReturnType<typeof mount>): Promise<void> {
   await vi.waitFor(() => expect(selectionFrame(context)).toBeDefined(), { timeout: 1500 });
+  context.app.stdin.write(ENTER);
+}
+
+export async function openMenu(context: ReturnType<typeof mount>, kind: 'answer' | 'goal'): Promise<void> {
+  await waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
+  context.app.stdin.write(kind === 'answer' ? QUESTION_MENU : GOAL_MENU);
+}
+
+export async function chooseGoalAction(context: ReturnType<typeof mount>, action: 'pause' | 'resume' | 'abort'): Promise<void> {
+  const patterns = { pause: /一時停止|pause/iu, resume: /再開|resume/iu, abort: /中止|abort/iu };
+  const actionRows = (): string[] => selectionFrame(context)!.split('\n').slice(2, -2)
+    .filter((row) => Object.values(patterns).some((pattern) => pattern.test(row)));
+  await waitFor(() => {
+    const list = selectionFrame(context);
+    expect(list).toBeDefined();
+    expect(actionRows()).toHaveLength(2);
+    expect(actionRows().some((row) => patterns[action].test(row))).toBe(true);
+  });
+  const rows = actionRows();
+  const index = rows.findIndex((row) => patterns[action].test(row));
+  expect(index).toBeGreaterThanOrEqual(0);
+  context.app.stdin.write(UP);
+  context.app.stdin.write(UP);
+  for (let move = 0; move < index; move++) context.app.stdin.write(DOWN);
   context.app.stdin.write(ENTER);
 }
 

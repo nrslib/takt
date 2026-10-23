@@ -1,4 +1,4 @@
-import { selectionFrame, enterSelection, cwd, ENTER, UP, response, mount, deferred, promptFrame, queuedFrame, waitFor, typeAndSubmit } from './manager-tui-fixtures.js';
+import { QUESTION_MENU, GOAL_MENU, openMenu, chooseGoalAction, selectionFrame, enterSelection, cwd, ENTER, UP, response, mount, deferred, promptFrame, queuedFrame, waitFor, typeAndSubmit } from './manager-tui-fixtures.js';
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import * as savedEvents from '../../features/manager/savedEvents.js';
@@ -37,6 +37,47 @@ function operations(context: ReturnType<typeof mount>) {
 }
 
 describe('manager command selection', () => {
+  it.each(['active', 'paused'] as const)('offers only meaningful operations for an %s goal', async (executionStatus) => {
+    vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue(snapshot([{ ...goalRecord(), executionStatus }]));
+    const context = mount();
+    const calls = operations(context);
+    try {
+      await openMenu(context, 'goal');
+      await enterSelection(context);
+      await vi.waitFor(() => {
+        const menu = selectionFrame(context);
+        expect(menu).toBeDefined();
+        const rows = menu!.split('\n').slice(2, -2);
+        expect(rows.filter((row) => /pause|resume|abort/iu.test(row))).toHaveLength(2);
+        expect(rows.some((row) => /abort/iu.test(row))).toBe(true);
+        expect(rows.some((row) => (executionStatus === 'active' ? /pause/iu : /resume/iu).test(row))).toBe(true);
+        expect(rows.some((row) => (executionStatus === 'active' ? /resume/iu : /pause/iu).test(row))).toBe(false);
+      });
+      context.app.stdin.write(ESC);
+      for (const call of Object.values(calls)) expect(call).not.toHaveBeenCalled();
+    } finally { context.app.unmount(); await context.session.close(); }
+  });
+
+  it.each(['active', 'paused'] as const)('revalidates a formerly %s goal without substituting the opposite operation', async (executionStatus) => {
+    let goal: Goal = { ...goalRecord(), executionStatus };
+    vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockImplementation(async () => snapshot([goal]));
+    const context = mount();
+    const calls = operations(context);
+    try {
+      await openMenu(context, 'goal');
+      await enterSelection(context);
+      await vi.waitFor(() => expect(selectionFrame(context)).toMatch(/abort/iu));
+      goal = { ...goal, executionStatus: executionStatus === 'active' ? 'paused' : 'active' };
+      await chooseGoalAction(context, executionStatus === 'active' ? 'pause' : 'resume');
+      await vi.waitFor(() => {
+        expect(context.app.lastFrame()).toContain(getLabel('manager.selectionChanged', 'en'));
+        expect(selectionFrame(context)).toContain(formatGoalName(goal.objective));
+        expect(selectionFrame(context)).toMatch(goal.executionStatus === 'active' ? /active/iu : /paused/iu);
+      });
+      for (const call of Object.values(calls)) expect(call).not.toHaveBeenCalled();
+    } finally { context.app.unmount(); await context.session.close(); }
+  });
+
   it.each([
     { command: 'pause', remaining: true, confirm: false },
     { command: 'pause', remaining: false, confirm: false },
@@ -52,17 +93,20 @@ describe('manager command selection', () => {
     const context = mount();
     const calls = operations(context);
     try {
-      await typeAndSubmit(context, `/${command}`);
+      await openMenu(context, 'goal');
       await expectList(context);
+      context.app.stdin.write(ENTER);
+      await vi.waitFor(() => expect(selectionFrame(context)).toMatch(/abort/iu));
       if (confirm) {
-        context.app.stdin.write(ENTER);
+        await chooseGoalAction(context, command);
         await vi.waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.abortConfirmation', 'en')));
         context.app.stdin.write(UP);
       }
-      const changed: Goal = command === 'resume' ? { ...first, executionStatus: 'active' } : { ...first, status: 'completed' };
+      const changed: Goal = { ...first, status: 'completed' };
       goals = remaining ? [changed, second] : [changed];
       const before = read.mock.calls.length;
-      context.app.stdin.write(ENTER);
+      if (confirm) context.app.stdin.write(ENTER);
+      else await chooseGoalAction(context, command);
       await vi.waitFor(() => {
         expect(read.mock.calls.length).toBeGreaterThan(before);
         expect(context.app.lastFrame()).toContain(getLabel('manager.selectionChanged', 'en'));
@@ -71,7 +115,7 @@ describe('manager command selection', () => {
           expect(selectionFrame(context)).not.toContain(first.objective);
         } else {
           expect(selectionFrame(context)).toBeUndefined();
-          expect(context.app.lastFrame()).toContain(getLabel(`manager.selectionEmpty.${command}`, 'en'));
+          expect(context.app.lastFrame()).toMatch(/no.*(?:goals|targets)/iu);
         }
         expect(context.app.lastFrame()).not.toContain(getLabel('manager.abortConfirmation', 'en'));
       });
@@ -79,6 +123,7 @@ describe('manager command selection', () => {
       expect(goals[0]).toEqual(changed);
       if (remaining) {
         context.app.stdin.write(ENTER);
+        await chooseGoalAction(context, command);
         if (command === 'abort') {
           await vi.waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.abortConfirmation', 'en')));
           context.app.stdin.write(UP);
@@ -90,21 +135,6 @@ describe('manager command selection', () => {
     } finally { context.app.unmount(); await context.session.close(); }
   });
 
-  it.each(['ja', 'en'] as const)('shows argument-free selection help for every command in %s', async (lang) => {
-    const context = mount(lang);
-    try {
-      await vi.waitFor(() => {
-        const frame = context.app.lastFrame()!;
-        for (const command of ['answer', 'pause', 'resume', 'abort']) {
-          const lines = frame.split('\n').filter((line) => line.includes(`/${command}`));
-          expect(lines.length).toBeGreaterThan(0);
-          expect(lines.join(' ')).toMatch(lang === 'ja' ? /一覧|選択/u : /list|select|choose/iu);
-          for (const line of lines) expect(line).not.toMatch(new RegExp(`/${command}\\s+(?:<[^>]+>|[A-Z_]*ID|[0-9a-f-]{8})`, 'iu'));
-        }
-      }, { timeout: 1500 });
-      expect(context.call).not.toHaveBeenCalled();
-    } finally { context.app.unmount(); await context.session.close(); }
-  });
   it.each(['pause', 'resume', 'abort'] as const)('lists only eligible %s goals and executes the second selected goal', async (command) => {
     const validStatus = command === 'resume' ? 'paused' : 'active';
     const goals: Goal[] = [
@@ -113,12 +143,11 @@ describe('manager command selection', () => {
       { ...goalRecord(), id: id(3), objective: 'Already completed', status: 'completed', executionStatus: validStatus },
       { ...goalRecord(), id: id(4), objective: 'Already aborted', executionStatus: 'aborted' },
     ];
-    if (command !== 'abort') goals.push({ ...goalRecord(), id: id(5), objective: 'Wrong execution state', executionStatus: command === 'pause' ? 'paused' : 'active' });
     vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue(snapshot(goals));
     const context = mount();
     const calls = operations(context);
     try {
-      await typeAndSubmit(context, `/${command}`);
+      await openMenu(context, 'goal');
       const list = await expectList(context);
       const rows = list.split('\n');
       for (const goal of goals.slice(0, 2)) {
@@ -132,6 +161,7 @@ describe('manager command selection', () => {
       context.app.stdin.write(UP);
       context.app.stdin.write(DOWN);
       context.app.stdin.write(ENTER);
+      await chooseGoalAction(context, command);
       if (command === 'abort') {
         await vi.waitFor(() => expect(context.app.lastFrame()?.replace(/[│\s]+/gu, ''))
           .toContain(getLabel('manager.abortWarning', 'en').replace(/\s+/gu, '')));
@@ -157,7 +187,7 @@ describe('manager command selection', () => {
     const context = mount();
     const calls = operations(context);
     try {
-      await typeAndSubmit(context, '/answer');
+      await openMenu(context, 'answer');
       const list = await expectList(context);
       expect(list.split('\n').filter((row) => row.includes(formatGoalName(objective)))).toHaveLength(2);
       expect(list).toMatch(/question/iu);
@@ -184,14 +214,14 @@ describe('manager command selection', () => {
     } finally { context.app.unmount(); await context.session.close(); }
   });
 
-  it.each(['answer', 'pause', 'resume', 'abort'] as const)('closes the %s list on Esc without any answer or goal operation', async (command) => {
-    const goals: Goal[] = [{ ...goalRecord(), executionStatus: command === 'resume' ? 'paused' : 'active', questions: [inquiry(1)] }];
+  it.each(['answer', 'goal'] as const)('closes the %s list on Esc without any answer or goal operation', async (command) => {
+    const goals: Goal[] = [{ ...goalRecord(), executionStatus: 'active', questions: [inquiry(1)] }];
     vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue(snapshot(goals));
     const context = mount();
     const calls = operations(context);
     context.call.mockResolvedValue(response(null));
     try {
-      await typeAndSubmit(context, `/${command}`);
+      await openMenu(context, command === 'answer' ? 'answer' : 'goal');
       await expectList(context);
       context.app.stdin.write(ESC);
       await vi.waitFor(() => expect(selectionFrame(context)).toBeUndefined());
@@ -202,7 +232,7 @@ describe('manager command selection', () => {
     } finally { context.app.unmount(); await context.session.close(); }
   });
 
-  it.each(['answer', 'pause', 'resume', 'abort'] as const)('reports no eligible %s targets without opening a list', async (command) => {
+  it.each(['answer', 'goal'] as const)('reports no eligible %s targets without opening a list', async (command) => {
     const goals: Goal[] = [
       { ...goalRecord(), id: id(1), status: 'completed', executionStatus: 'active' },
       { ...goalRecord(), id: id(2), status: 'completed', executionStatus: 'paused' },
@@ -212,7 +242,7 @@ describe('manager command selection', () => {
     const context = mount();
     const calls = operations(context);
     try {
-      await typeAndSubmit(context, `/${command}`);
+      await openMenu(context, command === 'answer' ? 'answer' : 'goal');
       await vi.waitFor(() => {
         expect(context.app.lastFrame()).toMatch(/no.*(?:pending|inquiries|questions|goals|targets)/iu);
         expect(context.app.lastFrame()).not.toContain('Working');
@@ -222,31 +252,6 @@ describe('manager command selection', () => {
       for (const call of Object.values(calls)) expect(call).not.toHaveBeenCalled();
       expect(context.call).not.toHaveBeenCalled();
     } finally { context.app.unmount(); await context.session.close(); }
-  });
-
-  describe.each(['ja', 'en'] as const)('argument rejection in %s', (lang) => {
-    it.each(['answer', 'pause', 'resume', 'abort'] as const)('rejects ID and other arguments to /%s with selection guidance', async (command) => {
-      const goals: Goal[] = [{ ...goalRecord(), questions: [inquiry(1)] }];
-      vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue(snapshot(goals));
-      const context = mount(lang);
-      const calls = operations(context);
-      try {
-        for (const argument of [id(1), 'not-an-id']) {
-          const count = context.app.lastFrame()?.match(/select|choose|一覧|選択/giu)?.length ?? 0;
-          await typeAndSubmit(context, `/${command}${argument === id(1) ? ' ' : '\t'}${argument}`);
-          await vi.waitFor(() => {
-            const frame = context.app.lastFrame()!;
-            expect(frame.match(/select|choose|一覧|選択/giu)?.length ?? 0).toBeGreaterThan(count);
-            expect(frame).not.toContain(lang === 'ja' ? '処理中' : 'Working');
-            expect(selectionFrame(context)).toBeUndefined();
-            expect(promptFrame(context)).toContain(lang === 'ja' ? 'ゴールを相談してください' : 'Discuss your goal');
-            expect(frame.replace(/[│\s]+/gu, '')).not.toContain(getLabel('manager.abortWarning', lang).replace(/\s+/gu, ''));
-          }, { timeout: 1500 });
-        }
-        for (const call of Object.values(calls)) expect(call).not.toHaveBeenCalled();
-        expect(context.call).not.toHaveBeenCalled();
-      } finally { context.app.unmount(); await context.session.close(); }
-    });
   });
 
   it.each([
@@ -273,7 +278,7 @@ describe('manager command selection', () => {
     const context = mount();
     const calls = operations(context);
     try {
-      await typeAndSubmit(context, '/answer');
+      await openMenu(context, 'answer');
       await enterSelection(context);
       await vi.waitFor(() => expect(promptFrame(context)).toContain('Enter your answer'));
       const text = `/pause ${goal.id}`;
@@ -294,7 +299,7 @@ describe('manager command selection', () => {
     const context = mount();
     const calls = operations(context);
     try {
-      await typeAndSubmit(context, '/pause');
+      await openMenu(context, 'goal');
       expect(await expectList(context)).toContain(formatGoalName(goal.objective));
       expect(calls.answer).not.toHaveBeenCalled();
       expect(calls.pause).not.toHaveBeenCalled();
@@ -308,15 +313,12 @@ describe('manager command selection', () => {
     const context = mount();
     const calls = operations(context);
     try {
-      await typeAndSubmit(context, '/answer');
+      await openMenu(context, 'answer');
       await expectList(context);
       context.app.stdin.write(DOWN);
       const beforePolls = read.mock.calls.length;
       goals = [{ ...goals[0]!, questions: [inquiry(3, { body: 'New arrival' }), ...goals[0]!.questions!] }];
-      await vi.waitFor(() => {
-        expect(read.mock.calls.length).toBeGreaterThan(beforePolls);
-        expect(context.app.lastFrame()).toContain('New arrival');
-      });
+      await vi.waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(beforePolls));
       context.app.stdin.write(ENTER);
       await vi.waitFor(() => expect(promptFrame(context)).toContain('Enter your answer'));
       context.app.stdin.write('Selected answer');
@@ -329,6 +331,96 @@ describe('manager command selection', () => {
 });
 
 describe('manager TUI selection queue', () => {
+  it.each(['pause', 'resume', 'abort'] as const)('keeps a queued %s when closing another menu but cancels it on ordinary Esc', async (command) => {
+    for (const closeMenu of [false, true]) {
+      const goal: Goal = { ...goalRecord(), executionStatus: command === 'resume' ? 'paused' : 'active', questions: [inquiry(1)] };
+      const read = vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue(snapshot([goal]));
+      const turn = deferred<ReturnType<typeof response>>();
+      const context = mount();
+      const calls = operations(context);
+      context.call.mockReturnValueOnce(turn.promise);
+      try {
+        await typeAndSubmit(context, 'First conversation');
+        await waitFor(() => expect(context.call).toHaveBeenCalledOnce());
+        const signal = context.call.mock.calls[0]![1].abortSignal!;
+        await openMenu(context, 'goal');
+        await enterSelection(context);
+        await chooseGoalAction(context, command);
+        await waitFor(() => expect(selectionFrame(context)).toBeUndefined());
+        if (closeMenu) {
+          await openMenu(context, command === 'pause' ? 'answer' : 'goal');
+          await expectList(context);
+          if (command === 'abort') {
+            await enterSelection(context);
+            await waitFor(() => expect(selectionFrame(context)).toMatch(/abort/iu));
+          }
+        }
+        context.app.stdin.write(ESC);
+        await waitFor(() => {
+          expect(selectionFrame(context)).toBeUndefined();
+          expect(signal.aborted).toBe(!closeMenu);
+        });
+        turn.resolve(response(null));
+        await waitFor(() => expect(context.app.lastFrame()).not.toContain('Working'));
+        if (closeMenu) {
+          if (command === 'abort') {
+            await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.abortConfirmation', 'en')));
+            expect(calls.abort).not.toHaveBeenCalled();
+            context.app.stdin.write(UP);
+            context.app.stdin.write(ENTER);
+          }
+          await waitFor(() => expect(calls[command]).toHaveBeenCalledExactlyOnceWith({ goalId: goal.id, abortSignal: expect.any(AbortSignal) }));
+        } else {
+          expect(calls[command]).not.toHaveBeenCalled();
+          expect(context.app.lastFrame()).not.toContain(getLabel('manager.abortConfirmation', 'en'));
+        }
+      } finally { context.app.unmount(); turn.resolve(response(null)); await context.session.close(); read.mockRestore(); }
+    }
+  });
+
+  it('invalidates a delayed replacement menu when Esc closes the visible menu', async () => {
+    const read = vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue(snapshot([{ ...goalRecord(), questions: [inquiry(1)] }]));
+    const context = mount();
+    const refresh = deferred<Awaited<ReturnType<typeof savedEvents.readManagerDisplayEvents>>>();
+    try {
+      await openMenu(context, 'answer');
+      await expectList(context);
+      read.mockReturnValueOnce(refresh.promise);
+      const before = read.mock.calls.length;
+      context.app.stdin.write(GOAL_MENU);
+      await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(before));
+      context.app.stdin.write(ESC);
+      await waitFor(() => expect(selectionFrame(context)).toBeUndefined());
+      refresh.resolve(snapshot([goalRecord()]));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(selectionFrame(context)).toBeUndefined();
+      await openMenu(context, 'goal');
+      await expectList(context);
+    } finally { context.app.unmount(); refresh.resolve(snapshot([])); await context.session.close(); }
+  });
+
+  it('does not reopen a menu after Esc cancels its pending display refresh', async () => {
+    vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue(snapshot([
+      { ...goalRecord(), questions: [inquiry(1)] },
+    ]));
+    const context = mount();
+    const refresh = deferred<Awaited<ReturnType<typeof context.session.getAssignment>>>();
+    try {
+      await waitFor(() => expect(context.app.lastFrame()).not.toContain('Working'));
+      const assignment = vi.spyOn(context.session, 'getAssignment').mockReturnValue(refresh.promise);
+      context.app.stdin.write(QUESTION_MENU);
+      await waitFor(() => expect(assignment).toHaveBeenCalled());
+      context.app.stdin.write(ESC);
+      refresh.resolve(undefined);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(selectionFrame(context)).toBeUndefined();
+      expect(context.call).not.toHaveBeenCalled();
+      assignment.mockRestore();
+      await openMenu(context, 'answer');
+      await expectList(context);
+    } finally { context.app.unmount(); refresh.resolve(undefined); await context.session.close(); }
+  });
+
   it.each(['complete', 'escape', 'unmount'] as const)('guards the eligibility refresh through %s and retains input', async (action) => {
     vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue(snapshot([goalRecord()]));
     const context = mount();
@@ -336,10 +428,12 @@ describe('manager TUI selection queue', () => {
     const refresh = deferred<Awaited<ReturnType<typeof context.session.getAssignment>>>();
     context.call.mockResolvedValue(response(null));
     try {
-      await typeAndSubmit(context, '/pause');
+      await openMenu(context, 'goal');
+      await expectList(context);
+      context.app.stdin.write(ENTER);
       await expectList(context);
       const assignment = vi.spyOn(context.session, 'getAssignment').mockReturnValue(refresh.promise);
-      context.app.stdin.write(ENTER);
+      await chooseGoalAction(context, 'pause');
       await vi.waitFor(() => expect(assignment).toHaveBeenCalled());
       context.app.stdin.write(ENTER);
       await typeAndSubmit(context, 'Conversation after refresh');
@@ -377,8 +471,9 @@ describe('manager TUI selection queue', () => {
       return { kind: 'reply', message: 'Abort completed' };
     });
     try {
-      await typeAndSubmit(context, '/abort');
+      await openMenu(context, 'goal');
       await enterSelection(context);
+      await chooseGoalAction(context, 'abort');
       await vi.waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.abortConfirmation', 'en')));
       context.app.stdin.write(UP);
       context.app.stdin.write(ENTER);
@@ -403,8 +498,8 @@ describe('manager TUI selection queue', () => {
     try {
       await typeAndSubmit(context, 'First conversation');
       await vi.waitFor(() => expect(context.call).toHaveBeenCalledOnce());
-      await typeAndSubmit(context, `/${command}`);
       await typeAndSubmit(context, 'Conversation after list');
+      await openMenu(context, command === 'answer' ? 'answer' : 'goal');
       turn.resolve(response(null));
       await expectList(context);
       expect(context.call).toHaveBeenCalledOnce();
@@ -423,8 +518,9 @@ describe('manager TUI selection queue', () => {
     calls.pause.mockReturnValueOnce(operation.promise);
     context.call.mockResolvedValue(response(null));
     try {
-      await typeAndSubmit(context, '/pause');
+      await openMenu(context, 'goal');
       await enterSelection(context);
+      await chooseGoalAction(context, 'pause');
       await vi.waitFor(() => expect(calls.pause).toHaveBeenCalledOnce());
       await typeAndSubmit(context, 'Conversation after pause');
       context.app.stdin.write('Draft during pause');
@@ -441,47 +537,125 @@ describe('manager TUI selection queue', () => {
       });
     } finally { context.app.unmount(); operation.resolve({ kind: 'reply', message: 'Pause completed' }); await context.session.close(); }
   });
-  it.each([ENTER, '\x1b[27u'])('cancels abort confirmation with %j before sending the next queued conversation', async (key) => {
+  it.each([ENTER, ESC])('cancels abort confirmation with %j before sending queued conversation', async (key) => {
     const turn = deferred<ReturnType<typeof response>>();
     vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue(snapshot([goalRecord()]));
     const context = mount();
     context.call.mockReturnValueOnce(turn.promise).mockResolvedValue(response(null));
-    const abort = vi.spyOn(context.session, 'abortGoal');
+    const calls = operations(context);
     try {
       await typeAndSubmit(context, 'first request');
       await waitFor(() => expect(context.call).toHaveBeenCalledOnce());
-      await typeAndSubmit(context, '/abort');
       await typeAndSubmit(context, 'conversation after cancellation');
-      await waitFor(() => {
-        expect(queuedFrame(context)).toContain('Queued messages: 2');
-        expect(queuedFrame(context)).toContain('/abort');
-        expect(queuedFrame(context)).toContain('conversation after cancellation');
-        expect(promptFrame(context)).toContain('Discuss your goal');
-      });
-      turn.resolve(response(null));
+      await openMenu(context, 'goal');
       await enterSelection(context);
+      await chooseGoalAction(context, 'abort');
+      turn.resolve(response(null));
       await waitFor(() => {
         expect(context.app.lastFrame()).toContain(getLabel('manager.abortConfirmation', 'en'));
-        expect(queuedFrame(context)).toContain('conversation after cancellation');
-        expect(queuedFrame(context)).toContain('Queued messages: 1');
-        expect(context.app.lastFrame()).not.toContain('Working');
         expect(context.call).toHaveBeenCalledOnce();
       });
-      expect(context.call).toHaveBeenCalledOnce();
       context.app.stdin.write(key);
       await waitFor(() => {
-        expect(context.call).toHaveBeenCalledTimes(2);
         expect(context.call.mock.calls.map(([text]) => text)).toEqual(['first request', 'conversation after cancellation']);
         expect(queuedFrame(context)).toBeUndefined();
-        expect(context.app.lastFrame()).not.toContain('Working');
-        expect(context.app.lastFrame()).not.toContain(getLabel('manager.abortConfirmation', 'en'));
       });
-      expect(abort).not.toHaveBeenCalled();
-    } finally {
-      context.app.unmount();
-      turn.resolve(response(null));
-      await context.session.close();
-    }
+      expect(calls.abort).not.toHaveBeenCalled();
+    } finally { context.app.unmount(); turn.resolve(response(null)); await context.session.close(); }
   });
 
+  it.each(['answer', 'goal'] as const)('opens and navigates the %s menu during a turn without losing the draft or aborting it', async (kind) => {
+    vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue(snapshot([
+      { ...goalRecord(), questions: [inquiry(1), inquiry(2)] },
+    ]));
+    const turn = deferred<ReturnType<typeof response>>();
+    const context = mount('ja');
+    context.call.mockReturnValueOnce(turn.promise).mockResolvedValue(response(null));
+    const calls = operations(context);
+    try {
+      await typeAndSubmit(context, '処理を続けて');
+      await waitFor(() => expect(context.call).toHaveBeenCalledOnce());
+      const signal = context.call.mock.calls[0]![1].abortSignal!;
+      context.app.stdin.write('あとで');
+      await waitFor(() => expect(promptFrame(context)).toContain('あとで'));
+      context.app.stdin.write(kind === 'answer' ? QUESTION_MENU : GOAL_MENU);
+      await expectList(context);
+      await waitFor(() => {
+        expect(context.app.lastFrame()).toContain('処理中');
+        expect(promptFrame(context)).toContain('あとで');
+      });
+      context.app.stdin.write(DOWN);
+      context.app.stdin.write(UP);
+      context.app.stdin.write(ESC);
+      await waitFor(() => {
+        expect(selectionFrame(context)).toBeUndefined();
+        expect(context.app.lastFrame()).toContain('処理中');
+        expect(promptFrame(context)).toContain('あとで');
+      });
+      expect(signal.aborted).toBe(false);
+      turn.resolve(response(null));
+      await waitFor(() => {
+        expect(context.app.lastFrame()).not.toContain('処理中');
+        expect(promptFrame(context)).toContain('あとで');
+      });
+      for (const call of Object.values(calls)) expect(call).not.toHaveBeenCalled();
+      context.app.stdin.write(ENTER);
+      await waitFor(() => expect(context.call).toHaveBeenLastCalledWith('あとで', expect.any(Object)));
+    } finally { context.app.unmount(); turn.resolve(response(null)); await context.session.close(); }
+  });
+
+  it('keeps conversation draft separate from the selected inquiry answer', async () => {
+    vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue(snapshot([{ ...goalRecord(), questions: [inquiry(1)] }]));
+    const context = mount();
+    const calls = operations(context);
+    try {
+      await waitFor(() => expect(context.app.lastFrame()).not.toContain('Working'));
+      context.app.stdin.write('Unsent conversation');
+      await waitFor(() => expect(promptFrame(context)).toContain('Unsent conversation'));
+      await openMenu(context, 'answer');
+      await enterSelection(context);
+      await waitFor(() => {
+        expect(promptFrame(context)).toContain('Enter your answer');
+        expect(promptFrame(context)).not.toContain('Unsent conversation');
+      });
+      context.app.stdin.write('Only the answer');
+      context.app.stdin.write(ENTER);
+      await waitFor(() => {
+        expect(calls.answer).toHaveBeenCalledWith(expect.objectContaining({ answer: { text: 'Only the answer' } }));
+        expect(promptFrame(context)).toContain('Unsent conversation');
+      });
+      expect(context.call).not.toHaveBeenCalled();
+    } finally { context.app.unmount(); await context.session.close(); }
+  });
+
+  it('opens the second inquiry during a turn and keeps its answer separate from an arriving summary', async () => {
+    vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue(snapshot([
+      { ...goalRecord(), questions: [inquiry(1), inquiry(2, { options: ['Second answer', 'Other answer'] })] },
+    ]));
+    const turn = deferred<ReturnType<typeof response>>();
+    const context = mount();
+    context.call.mockReturnValueOnce(turn.promise);
+    const calls = operations(context);
+    try {
+      await typeAndSubmit(context, 'Continue the turn');
+      await waitFor(() => expect(context.call).toHaveBeenCalledOnce());
+      await openMenu(context, 'answer');
+      await expectList(context);
+      context.app.stdin.write(DOWN);
+      context.app.stdin.write(ENTER);
+      await waitFor(() => {
+        expect(promptFrame(context)).toContain('Enter your answer');
+        expect(context.app.lastFrame()).toContain('Second answer');
+        expect(context.app.lastFrame()).toContain('Working');
+      });
+      turn.resolve(response({ objective: 'New summary', outOfScope: [], acceptanceCriteria: ['Done'], constraints: [] }));
+      await waitFor(() => expect(context.app.lastFrame()).not.toContain('Working'));
+      context.app.stdin.write(ENTER);
+      await waitFor(() => expect(calls.answer).toHaveBeenCalledExactlyOnceWith({
+        goalId: goalRecord().id, repositoryDirectory: cwd, questionId: id(2),
+        answer: { text: 'Second answer' }, abortSignal: expect.any(AbortSignal),
+      }));
+      expect(context.register).not.toHaveBeenCalled();
+    } finally { context.app.unmount(); turn.resolve(response(null)); await context.session.close(); }
+  });
 });

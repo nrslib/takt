@@ -65,9 +65,9 @@ it('delivers the saved human question with localized details and its ID-free ans
   expect(text).toContain(question.body);
   expect(text).toMatch(/選択肢:\s*CSV.*JSON/u);
   expect(text).toMatch(/推奨:\s*CSV/u);
-  const guidance = text.split('\n').filter((line) => line.includes('/answer'));
+  const guidance = text.split('\n').filter((line) => /Ctrl\+R|\^R/u.test(line));
   expect(guidance).toHaveLength(1);
-  expect(guidance[0]).toMatch(/\/answer\b/u);
+  expect(guidance[0]).toMatch(/Ctrl\+R|\^R/u);
   expect(guidance[0]).not.toContain(question.id);
   expect(guidance[0]).toMatch(/一覧|選択/u);
   expect(text).toContain('takt manager');
@@ -96,10 +96,10 @@ it.each([
     ? 'ほかに1件の選択肢があります。すべての選択肢はTUIで確認できます。'
     : 'Additional options: 1. View all options in the TUI.');
   expect(lines[4]).toContain('TUI');
-  const guidance = lines.filter((line) => line.includes('/answer'));
+  const guidance = lines.filter((line) => /Ctrl\+R|\^R/u.test(line));
   expect(guidance).toHaveLength(status === 'pending' ? 1 : 0);
   if (status === 'pending') {
-    expect(guidance[0]).toMatch(/\/answer\b/u);
+    expect(guidance[0]).toMatch(/Ctrl\+R|\^R/u);
     expect(guidance[0]).not.toContain(question.id);
     expect(guidance[0]).toMatch(language === 'ja' ? /一覧|選択/u : /list|select|choose/iu);
   }

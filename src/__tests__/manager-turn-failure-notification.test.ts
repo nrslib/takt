@@ -31,6 +31,23 @@ beforeEach(() => {
 });
 
 describe('notifyManagerTurnFailure', () => {
+  it.each(['ja', 'en'] as const)('saves the real %s recovery guidance for the goal menu', async (language) => {
+    const { getLabel } = await vi.importActual<typeof import('../shared/i18n/index.js')>('../shared/i18n/index.js');
+    doubles.label.mockImplementation(getLabel);
+    doubles.language.mockReturnValue(language);
+
+    await notifyManagerTurnFailure('/project', goal.id, new Error('capacity exhausted'));
+
+    const lines = goal.notifications![0]!.body.split('\n');
+    const guidance = lines.filter((line) => /Ctrl\+G|\^G/u.test(line));
+    expect(guidance).toHaveLength(1);
+    expect(guidance[0]).toMatch(language === 'ja' ? /再開/u : /resume/iu);
+    expect(guidance[0]).toContain('TUI');
+    for (const line of lines) expect(line).not.toMatch(/\/(?:resume|pause|abort)\b/u);
+    expect(lines.join('\n')).toContain('capacity exhausted');
+    expect(doubles.send).toHaveBeenCalledOnce();
+  });
+
   it('saves a sanitized blocked notification before awaiting delivery', async () => {
     const previous = goal;
     let finishDelivery!: () => void;

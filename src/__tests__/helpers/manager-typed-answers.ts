@@ -108,9 +108,8 @@ export function registerManagerTypedAnswerTests(): void {
     const savedQuestion = async (): Promise<GoalQuestion> => (await new GoalStore(cwd).get(goalId)).questions![0]!;
 
     async function openAnswer(summary: string): Promise<void> {
-      press('/answer');
-      await waitFor(() => expect(prompt()).toContain('/answer'));
-      press(ENTER);
+      await waitFor(() => expect(frame()).not.toMatch(/処理中|Working/u));
+      press('\x12');
       await waitFor(() => expect(boxes().some((box) => box.includes(summary) && /↑|↓/u.test(box))).toBe(true));
       press(ENTER);
       await waitFor(() => {
@@ -593,7 +592,7 @@ export function registerManagerTypedAnswerTests(): void {
         : { kind: 'repository' as const, repositoryDirectory: cwd };
       const question = await new StandaloneInquiryStore(configDirectory, owner).create(approval());
       await mount('en', ownerKind === 'workspace');
-      await waitFor(() => expect(frame()).toContain('Confirm writing the selected output'));
+      await waitFor(() => expect(frame()).toMatch(/Pending\s+1/u));
       app!.unmount();
       await session!.close();
       await mount('en', ownerKind === 'workspace');
@@ -650,6 +649,8 @@ export function registerManagerTypedAnswerTests(): void {
       const secondStore = new GoalStore(second);
       await secondStore.create({ ...goalRecord(), objective: 'Second repository goal', questions: [question] });
       await mount('en', true);
+      await waitFor(() => expect(frame()).not.toMatch(/処理中|Working/u));
+      press('\x12');
       await waitFor(() => {
         const rows = frame().split('\n').filter((row) => row.includes(question.body));
         expect(rows).toHaveLength(1);
@@ -657,7 +658,8 @@ export function registerManagerTypedAnswerTests(): void {
         expect(rows[0]).toContain('Second repository goal');
       });
       expect((await secondStore.get(goalId)).questions![0]).toMatchObject({ status: 'pending' });
-      await openAnswer(question.body);
+      press(ENTER);
+      await waitFor(() => expect(vi.mocked(PromptInput).mock.calls.at(-1)![0].placeholder).toBe('Enter your answer'));
       press('CSV with headers');
       await waitFor(() => expect(vi.mocked(PromptInput).mock.calls.at(-1)![0].text).toBe('CSV with headers'));
       press(ENTER);
@@ -682,9 +684,8 @@ export function registerManagerTypedAnswerTests(): void {
         ...approval(), body: 'Standalone summary\nSTANDALONE_DETAIL', options: ['STANDALONE_OPTION'], recommendation: 'STANDALONE_RECOMMENDATION',
       });
       await mount('en', true);
-      press('/answer');
-      await waitFor(() => expect(prompt()).toContain('/answer'));
-      press(ENTER);
+      await waitFor(() => expect(frame()).not.toMatch(/処理中|Working/u));
+      press('\x12');
       await waitFor(() => {
         const list = boxes().find((box) => /↑|↓/u.test(box) && box.includes('Standalone summary'))!;
         expect(list).toBeDefined();
