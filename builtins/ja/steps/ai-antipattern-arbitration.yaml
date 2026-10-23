@@ -1,4 +1,5 @@
 name: ai-antipattern-no-fix
+description: レビューの指摘と修正不要の反論を確かめ、修正の要否を判定する
 tags:
   - review
 edit: false

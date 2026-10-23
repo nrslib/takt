@@ -1,15 +1,16 @@
+import { assignmentStepName, phaseName } from '../shared/prompts/phase-context.js';
 import { loadTemplate } from '../shared/prompts/index.js';
 import { buildProviderRuntimeSystemPrompt } from '../infra/providers/runtimeSystemPrompt.js';
 import type { RunAgentOptions } from './types.js';
 
-type WrappedPromptOptions = Pick<RunAgentOptions, 'language' | 'workflowMeta' | 'personaPath'> & {
+type WrappedPromptOptions = Pick<RunAgentOptions, 'language' | 'workflowMeta' | 'personaPath' | 'executionPhase'> & {
   providerRuntimeInstructions: string | null;
 };
 
 function shouldRenderWorkflowContext(
   options: Pick<WrappedPromptOptions, 'personaPath' | 'workflowMeta'>,
 ): boolean {
-  return options.personaPath !== undefined || options.workflowMeta?.processSafety !== undefined;
+  return options.personaPath !== undefined || options.workflowMeta !== undefined;
 }
 
 function buildRuntimeOnlySystemPrompt(
@@ -36,13 +37,24 @@ export function buildWrappedSystemPrompt(
     providerRuntimeInstructions: options.providerRuntimeInstructions,
   };
   if (options.workflowMeta) {
-    templateVars.workflowName = options.workflowMeta.workflowName;
-    templateVars.workflowDescription = options.workflowMeta.workflowDescription ?? '';
-    templateVars.currentStep = options.workflowMeta.currentStep;
-    templateVars.stepsList = options.workflowMeta.stepsList
-      .map((step, index) => `${index + 1}. ${step.name}${step.description ? ` - ${step.description}` : ''}`)
-      .join('\n');
-    templateVars.currentPosition = options.workflowMeta.currentPosition;
+    const context = options.workflowMeta.context;
+    const language = options.language ?? 'en';
+    templateVars.hasWorkflowContext = context !== undefined;
+    if (context !== undefined) {
+      if (options.executionPhase === undefined) throw new Error('Workflow prompt requires executionPhase');
+      const assignment = context.assignment;
+      const stepName = assignmentStepName(assignment, language);
+      templateVars.workflowTree = context.tree;
+      templateVars.currentStep = assignment.stepName;
+      templateVars.assignment = [
+        `- ${language === 'ja' ? 'ステップ' : 'Step'}: ${stepName}`,
+        `- Step Iteration: ${assignment.stepIteration}`,
+        `- Iteration: ${assignment.iteration}/${assignment.maxSteps}`,
+        `- ${language === 'ja' ? 'フェーズ' : 'Phase'}: ${phaseName(options.executionPhase, language)}`,
+      ].join('\n');
+      templateVars.hasRules = context.rules.length > 0;
+      templateVars.rules = context.rules;
+    }
     templateVars.hasProcessSafety = options.workflowMeta.processSafety !== undefined;
     if (options.workflowMeta.processSafety) {
       templateVars.protectedParentRunPid = String(options.workflowMeta.processSafety.protectedParentRunPid);

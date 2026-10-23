@@ -9,6 +9,7 @@ params:
     type: facet_ref
     facet_kind: instruction
 name: cqrs-es-review
+description: CQRSとイベントソーシングの境界を調べ、設計や実装の問題を報告する
 capabilities: readonly
 tags:
   - review

@@ -86,9 +86,7 @@ function createBuilder(cwd: string, step: WorkflowStep): OptionsBuilder {
     () => undefined,
     () => REPORT_DIR_REL,
     () => 'en',
-    () => [{ name: step.name }],
     () => 'structured-report-repro',
-    () => 'reproduction workflow',
   );
 }
 

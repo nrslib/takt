@@ -39,6 +39,7 @@ import type { InstructionContext } from '../instruction/instruction-context.js';
 import { preparePreviousResponseContent } from '../instruction/InstructionBuilder.js';
 import { renderFallbackNotice } from '../instruction/fallback-notice.js';
 import { renderWorkflowWideRules } from '../instruction/workflow-wide-rules.js';
+import { renderPhaseContext } from '../../../shared/prompts/phase-context.js';
 import { buildResumeReportConsumerKeyFromStack } from '../run/resume-report-consumer.js';
 import { resolveReportDirectory } from '../run/run-paths.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
@@ -293,6 +294,9 @@ function buildArpeggioPrompt(
   additionalPrompt?: string,
 ): string {
   const prompt = expandTemplate(template, batch);
+  const phaseContext = instructionContext.workflowAssignment === undefined
+    ? ''
+    : renderPhaseContext(instructionContext.workflowAssignment, 1, language);
   const gitRules = buildGitRules(allowGitCommit, language, 'phase1');
   const fallbackNotice = runtime?.fallback
     ? renderFallbackNotice(runtime.fallback, language)
@@ -304,6 +308,7 @@ function buildArpeggioPrompt(
     instructionContext,
   );
   return [
+    phaseContext,
     gitRules,
     renderedRules.noticeAfterExecutionRules,
     renderedRules.afterExecutionRules,
@@ -374,6 +379,7 @@ export class ArpeggioRunner {
         )
       : undefined;
     const instructionContext: InstructionContext = {
+      workflowAssignment: agentOptions.workflowMeta?.context?.assignment,
       task: this.deps.getTask(),
       iteration: state.iteration,
       maxSteps: this.deps.getMaxSteps(),
@@ -391,7 +397,6 @@ export class ArpeggioRunner {
       ),
       language: agentOptions.language ?? 'en',
       interactive: this.deps.getInteractive(),
-      workflowName: this.deps.getWorkflowName(),
       reviewScope: this.deps.getReviewScope(),
       workflowState: state,
       workflowRules: this.deps.getWorkflowRules(),

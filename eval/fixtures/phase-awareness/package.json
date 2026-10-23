@@ -1,0 +1,6 @@
+{
+  "name": "phase-awareness-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node run-tests.mjs" }
+}

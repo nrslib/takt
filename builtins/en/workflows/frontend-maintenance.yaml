@@ -4,6 +4,7 @@ max_steps: 51
 initial_step: develop
 steps:
   - name: develop
+    description: Modify the frontend while respecting existing screens and contracts, then verify requirement fulfillment through tests, reviews, and fixes.
     kind: workflow_call
     call: development-core
     args:

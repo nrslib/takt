@@ -6,6 +6,7 @@ params:
     type: facet_ref[]
     facet_kind: knowledge
 name: fix-verifier
+description: Check the fix plan acceptance criteria against the current code and evidence to verify completion.
 capabilities: readonly
 tags:
   - verification

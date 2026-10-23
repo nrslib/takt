@@ -26,6 +26,7 @@ loop_monitors:
 
 steps:
   - name: plan
+    description: 本番コードの振る舞いと既存の単体テストを対応付け、監査対象と不足テストの優先順位を整理する
     tags:
       - plan
     edit: false
@@ -51,6 +52,7 @@ steps:
         next: ABORT
 
   - name: audit
+    description: 対象の本番コードと単体テストを分担して並列に監査し、カバー済みと未カバーの振る舞いを記録する
     tags:
       - review
     edit: false
@@ -77,6 +79,7 @@ steps:
         next: supervise
 
   - name: supervise
+    description: 単体テスト監査の網羅性・根拠・Issue 化できる具体性を確認し、完了か再監査かを判定する
     tags:
       - review
       - supervise
@@ -97,6 +100,7 @@ steps:
         next: review
 
   - name: review
+    description: 未監査または根拠不足のコードと振る舞いを再監査し、既存レポートへ結果を統合する
     tags:
       - review
     edit: false

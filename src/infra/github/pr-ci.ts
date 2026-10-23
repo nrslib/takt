@@ -26,7 +26,7 @@ const PrHeadSchema = z.object({
   headRefOid: z.string().regex(/^[0-9a-f]{40}$/i),
 });
 
-function actionsReference(value: string) {
+export function actionsReference(value: string) {
   const url = new URL(value);
   const match = /^\/([^/]+)\/([^/]+)\/actions\/runs\/(\d+)(?:\/attempts\/\d+)?(?:\/jobs?\/\d+)?\/?$/.exec(url.pathname);
   if (url.protocol !== 'https:' || !match) throw new Error('Unsupported Actions check URL');
@@ -159,6 +159,7 @@ export async function rerunPrCi(failure: PrCiFailure, cwd: string, options?: PrS
 
 export async function readCiRerunStatus(
   status: PrStatus, value: PrCiRerun, cwd: string, options?: PrStatusFetchOptions,
+  supersededRuns: ReadonlyMap<number, string> = new Map(),
 ): Promise<PrStatus['ci']> {
   const rerun = PrCiRerunSchema.parse(value);
   if (rerun.number !== status.number) throw new Error('CI rerun target no longer matches the PR');
@@ -169,7 +170,15 @@ export async function readCiRerunStatus(
   let checks = status.ci.checks ?? [];
   let finished = true;
   let passed = true;
+  let pendingTargets = 0;
   for (const target of rerun.runs) {
+    if (target.url) {
+      let reference: ReturnType<typeof actionsReference> | undefined;
+      try { reference = actionsReference(target.url); }
+      catch { /* Invalid references remain subject to the normal rerun validation. */ }
+      if (reference?.id === target.id && supersededRuns.get(target.id) === reference.repository) continue;
+    }
+    pendingTargets++;
     const run = await readRun(target.id, cwd, options, target.url);
     if (run.headSha !== status.headSha) throw new Error('CI rerun HEAD does not match the PR');
     const completed = run.attempt > target.attempt && run.status === 'completed';
@@ -185,6 +194,7 @@ export async function readCiRerunStatus(
     finished = finished && completed;
     passed = passed && succeeded;
   }
+  if (pendingTargets === 0) return status.ci;
   finished = finished && checks.length > 0 && checks.every((check) => check.finished);
   return { finished, passed: finished && passed && checks.every((check) => check.passed), checks };
 }

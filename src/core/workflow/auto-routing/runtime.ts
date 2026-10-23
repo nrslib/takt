@@ -9,6 +9,7 @@ import {
 } from './normalizer.js';
 import { maxRoutingTier, promoteRoutingTier, selectRoutingCandidate } from './selector.js';
 import { isProviderStreamParseError } from '../../../shared/types/agent-failure.js';
+import type { WorkflowMeta } from '../../../agents/types.js';
 
 type PreviousResolution = {
   fingerprint: string;
@@ -27,6 +28,7 @@ export class RoutingRuntime {
   async resolve(input: {
     scope: string;
     snapshot: RoutingWorkSnapshot;
+    workflowMeta?: WorkflowMeta;
     abortSignal?: AbortSignal;
     onStream?: StreamCallback;
     onActivity?: ProviderActivityCallback;
@@ -46,6 +48,7 @@ export class RoutingRuntime {
         estimate = cachedEstimate;
       } else {
         estimate = await this.options.estimator.estimate(modelInput, {
+          workflowMeta: input.workflowMeta,
           abortSignal: input.abortSignal,
           onStream: input.onStream,
           onActivity: input.onActivity,

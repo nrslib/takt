@@ -11,6 +11,7 @@ max_steps: 15
 initial_step: plan
 steps:
   - name: plan
+    description: 要求と既存コードを調査し、Terraformの実装方針と変更計画を作成する
     capabilities: readonly
     tags:
       - plan
@@ -33,6 +34,7 @@ steps:
         - name: plan.md
           format: plan
   - name: implement
+    description: Terraformコードを実装し、fmt・validate・planで書式・構文と変更内容を検証する
     capabilities: edit
     tags:
       - coding
@@ -63,10 +65,12 @@ steps:
         - name: coder-decisions.md
           format: coder-decisions
   - name: reviewers
+    description: Terraformの規約・AI特有の問題・コードの不具合を並列に確認し、修正の要否を判定する
     tags:
       - review
     parallel:
       - name: tf_review
+        description: Terraformの規約・安全性・コストとリソース保護を確認し、違反を報告する
         capabilities: readonly
         tags:
           - review
@@ -86,6 +90,7 @@ steps:
             - name: terraform-review.md
               format: terraform-review
       - name: ai-antipattern-review-2nd
+        description: 仮定の妥当性やAPIの実在性を確認し、過剰実装などAI特有の問題を報告する
         capabilities: readonly
         tags:
           - review
@@ -104,6 +109,7 @@ steps:
             - name: ai-antipattern-review.md
               format: ai-antipattern-review
       - name: coding-review
+        description: 変更差分を要求と照合し、バグや既存動作の破壊、安全性やテストの不足を指摘する
         capabilities: readonly
         tags:
           - review
@@ -129,6 +135,7 @@ steps:
       - condition: any("規約違反あり", "AI特有の問題あり", "needs_fix")
         next: supervise
   - name: final-supervise
+    description: 現在のTerraformコードを要件と前段の指摘に照合し、完了・修正・外部確認待ちを判定する
     capabilities: readonly
     tags:
       - review
@@ -155,6 +162,7 @@ steps:
           format: supervisor-summary
 
   - name: supervise
+    description: 現在のTerraformコードを要件と前段の指摘に照合し、完了・修正・外部確認待ちを判定する
     capabilities: readonly
     tags:
       - review
@@ -182,10 +190,12 @@ steps:
         - name: summary.md
           format: supervisor-summary
   - name: fix_both
+    description: AI特有の問題と監督者の指摘を並列に修正し、再レビューに進めるかを判定する
     tags:
       - coding
     parallel:
       - name: ai-antipattern-fix-parallel
+        description: 指摘されたファイルと仕様を確認し、実在するAI特有の問題を修正・検証する
         capabilities: edit
         tags:
           - coding
@@ -206,6 +216,7 @@ steps:
             - name: ai-antipattern-fix-report.md
               format: fix-report
       - name: supervise_fix_parallel
+        description: 監督者の指摘を根本原因と関係する経路まで確認し、優先度順に修正・検証する
         capabilities: edit
         tags:
           - coding
@@ -226,6 +237,7 @@ steps:
       - condition: any("修正不要（指摘対象ファイル/仕様の確認済み）", "判断できない、情報不足", "修正を進行できない")
         next: implement
   - name: ai-antipattern-fix
+    description: 指摘されたファイルと仕様を確認し、実在するAI特有の問題を修正・検証する
     capabilities: edit
     tags:
       - coding
@@ -250,6 +262,7 @@ steps:
         - name: ai-antipattern-fix-report.md
           format: fix-report
   - name: supervise_fix
+    description: 監督者の指摘を根本原因と関係する経路まで確認し、優先度順に修正・検証する
     capabilities: edit
     tags:
       - coding

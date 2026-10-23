@@ -3606,6 +3606,42 @@ describe('ConversationView', () => {
       app.unmount();
     });
 
+    it('displays only retained artifact notification from an interrupted turn while preserving the next turn', async () => {
+      const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+      let finishInterrupted!: (submission: TuiSubmission) => void;
+      vi.spyOn(conversation, 'submit').mockImplementationOnce(() => new Promise((resolve) => {
+        finishInterrupted = resolve;
+      }));
+      const app = renderConversation(conversation, 'chat', vi.fn());
+      await flushFrames();
+      app.stdin.write('/verify');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+      app.stdin.write(ESC);
+      await flushFrames();
+      app.stdin.write('next turn');
+      await flushFrames();
+      app.stdin.write(ENTER);
+      await flushFrames();
+      app.stdin.write('draft');
+      await flushFrames();
+      const commit = vi.fn();
+      const retainedArtifactsMessage = 'Verification artifacts: /repo/.takt/runs/verify-interrupted';
+      finishInterrupted({ kind: 'error', message: 'obsolete response', retainedArtifactsMessage, commit });
+      await flushFrames();
+
+      const frame = app.lastFrame() ?? '';
+      expect(frame).toContain('/repo/.takt/runs/verify-interrupted');
+      expect(frame).toContain(UI.responseInterrupted);
+      expect(frame).toContain(UI.thinking);
+      expect(frame).toContain('draft');
+      expect(frame).not.toContain('obsolete response');
+      expect(commit).not.toHaveBeenCalled();
+      expect(conversation.submitCalls[0]?.abortSignal.aborted).toBe(false);
+      app.unmount();
+    });
+
     it('should commit an answer the view accepts', async () => {
       const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
       const app = renderConversation(conversation, 'chat', vi.fn());

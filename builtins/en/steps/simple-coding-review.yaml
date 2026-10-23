@@ -8,6 +8,7 @@ params:
   review_instruction:
     type: facet_ref
     facet_kind: instruction
+description: Compare the changes with the requirements and report defects, regressions, and verification gaps.
 tags:
   - review
 edit: false

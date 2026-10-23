@@ -2,11 +2,13 @@
 <!--
   template: perform_phase2_message
   phase: 2 (report output)
-  vars: workingDirectory, hasTask, task, hasGitRules, gitRules, reportContext, hasLastResponse, lastResponse,
+  vars: phaseContext, workingDirectory, hasTask, task, hasGitRules, gitRules, reportContext, lastResponse,
         hasReportOutput, reportOutput, hasOutputContract, outputContract, hasInjectedReports, injectedReports,
         hasUserInputs, userInputs, hasPreviousResponse, previousResponse
   builder: ReportInstructionBuilder
 -->
+{{phaseContext}}
+
 ## 実行コンテキスト
 - 作業ディレクトリ: {{workingDirectory}}
 
@@ -16,7 +18,7 @@
 - **プロジェクトのソースファイルを変更しないでください。**
 - **レポート内容のみを回答してください。**
 - **TAKT があなたの回答本文をレポートファイルに保存します。** 自分でレポートファイルを書き込まないでください。
-- **この入力または既に提供された会話に含まれる本文だけを使用してください。** Report Directoryは保存先の情報です。そこや他のディレクトリのファイルを検索・読み取りせず、未提供の本文は推測しないでください。
+- Report Directory はレポートの保存先です。
 
 ## 実行情報
 {{reportContext}}
@@ -52,14 +54,12 @@
 
 {{injectedReports}}
 {{/if}}
-{{#if hasLastResponse}}
 
 ## 作業結果
 
 以下の作業結果をレポート作成に使用してください:
 
 {{lastResponse}}
-{{/if}}
 {{#if hasCompletionRetryDiagnostic}}
 
 ## 見落とし確認の補助情報
@@ -71,7 +71,7 @@
 
 ## 出力内容
 
-上の作業結果を所定の形式でレポートとして回答してください。**この回答ではツールを使わず、レポート内容をテキストとして直接回答してください。**
+「作業結果」の節の内容を所定の形式でレポートとして回答してください。**この回答ではツールを使わず、レポート内容をテキストとして直接回答してください。**
 **レポート本文のみを回答してください（ステータスタグやコメントは禁止）。Writeツールやその他のツールは使用できません。**
 {{#if hasReportOutput}}
 

@@ -178,6 +178,7 @@ steps:
         next: ABORT
 
   - name: replan
+    description: Assess implementation and verification gaps and constraints, and decide whether to continue implementation, proceed to independent review, or stop.
     input_reports:
       from_step: peer-review
       reports:
@@ -260,6 +261,7 @@ steps:
         interactive_only: true
 
   - name: implement
+    description: Implement the plan and run required verification, addressing gaps or reporting the need to replan.
     kind: workflow_call
     call:
       $param: implementation_workflow
@@ -287,6 +289,7 @@ steps:
         next: replan
 
   - name: peer-review
+    description: Adjudicate specialist review findings, fix and verify them, then assess requirement fulfillment to decide whether to complete or replan.
     kind: workflow_call
     call:
       $param: peer_review_workflow

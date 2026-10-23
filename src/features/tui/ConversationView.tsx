@@ -544,8 +544,9 @@ export function ConversationView({
         ? await conversation.createInstruction(submitInput)
         : await conversation.submit(submitInput);
       if (!isCurrent()) {
-        // Interrupted: the user is back at the prompt, and this answer is theirs
-        // to ask for again.
+        if (!exitedRef.current && outcome.kind === 'error' && outcome.retainedArtifactsMessage !== undefined) {
+          appendTranscript(transcriptEntry('system', outcome.retainedArtifactsMessage));
+        }
         return;
       }
       inFlightRef.current = null;

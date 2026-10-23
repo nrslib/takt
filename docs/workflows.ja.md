@@ -321,6 +321,7 @@ TAKT は Normal / Parallel / Dynamic Parallel / Arpeggio / Team Leader / Workflo
 - `all("X")`: すべてのサブ step が条件 X にマッチしたら true
 - `any("X")`: いずれかのサブ step が条件 X にマッチしたら true
 - サブ step の `rules` は取りうる結果を定義し、`next` は省略可能（親がルーティングを担当）
+- サブ step には、その step が何をするかを説明する `description` を任意で指定できます。
 - 並列サブ step は `promotion` をサポートしません
 - 親 step には任意の `concurrency: <N>`（最小 1）を指定でき、同時実行するサブ step 数を制限できます。未指定時は全サブ step が同時に開始します
 
@@ -340,6 +341,7 @@ TAKT は Normal / Parallel / Dynamic Parallel / Arpeggio / Team Leader / Workflo
         - name: frontend
           persona: frontend-reviewer
           description: Review frontend and UI changes
+          selection_hint: Select when changes affect user-facing behavior or presentation
           instruction: Review frontend
           rules: [{ condition: approved }]
         - name: backend
@@ -354,7 +356,8 @@ TAKT は Normal / Parallel / Dynamic Parallel / Arpeggio / Team Leader / Workflo
         next: COMPLETE
 ```
 
-- `pool` は 1 件以上必要で、各候補には空でない `description` が必要です。
+- `pool` は 1 件以上必要で、各候補には、その候補の役目を説明する空でない `description` が必要です。
+- 役目だけでは選び方が決まらない候補には、選ぶ基準を `selection_hint` に書けます。`selection_hint` は `pool` の候補だけに指定できる任意項目で、指定する場合は空でない文字列が必要です。selector は `description` と `selection_hint` の両方を見て選びます。`selection_hint` がない既存の YAML も、今までどおり `description` だけで選びます。ほかの step やサブ step に `selection_hint` を書くとロード時にエラーになります。
 - `fixed` または `pool` の項目で `uses` を宣言する場合、`rules` はその呼び出し箇所に定義します。参照先 fragment には定義できません。
 - `fixed` は必ず実行されます。selector は展開後の `pool` step 名だけを選べ、実行順は YAML の定義順です。
 - `replace`（既定）は新しい round で以前の pool 選択を置き換えます。`cumulative` は過去の round で選んだ候補を維持します。
@@ -362,7 +365,7 @@ TAKT は Normal / Parallel / Dynamic Parallel / Arpeggio / Team Leader / Workflo
 - `all()` と `any()` は当該 round で実行する fixed と選択済み pool だけを集約します。固定位置に依存する aggregate 式は dynamic parallel では使えません。
 - 不正な selector 出力や pool 外の ID は fixed/pool agent の起動前に失敗します。全 pool を実行する fallback はありません。
 - ロード時には`pool` の未指定・空配列、pool の空 `description`、fragment 展開失敗、展開後の名前重複、agent sub-step 以外の fixed/pool、無効な `selection.mode`、または全候補が定義しない aggregate 結果ラベルを検出して実行前に失敗します。selector の provider 未解決・strict 出力不正、fixed と選択済み pool を結合した実行対象の空集合も reviewer 起動前に失敗します。削除された dynamic selection fields を含む resume point はサポートしません。
-- selector にはタスク、Report Directory のパス、対象レポート名（`selection.reports` の指定を含む）、`HEAD` に対する変更ファイルのパス一覧、候補 ID と説明、`cumulative` の過去の選択、および初回か新しい round かを渡します。selector は既存の report-reference の探索順（現在の workflow scope、exact resume snapshot、親 workflow scope）でレポート参照を解決してからパスを受け取ります。参照先のファイルとレポートを読むために `Read`・`Glob`・`Grep` のツール許可リストが設定され、許可リストを尊重する provider ではそれらの tool のみが許可されます。出力は `selected_ids` と `rationale` だけを持つ完了済み JSON object でなければならず、非配列・非文字列 ID・重複 ID・追加プロパティは拒否します。
+- selector にはタスク、Report Directory のパス、対象レポート名（`selection.reports` の指定を含む）、`HEAD` に対する変更ファイルのパス一覧、候補 ID と `description`（役目）および `selection_hint`（指定されていれば選ぶ基準）、`cumulative` の過去の選択、および初回か新しい round かを渡します。selector は既存の report-reference の探索順（現在の workflow scope、exact resume snapshot、親 workflow scope）でレポート参照を解決してからパスを受け取ります。参照先のファイルとレポートを読むために `Read`・`Glob`・`Grep` のツール許可リストが設定され、許可リストを尊重する provider ではそれらの tool のみが許可されます。出力は `selected_ids` と `rationale` だけを持つ完了済み JSON object でなければならず、非配列・非文字列 ID・重複 ID・追加プロパティは拒否します。
 - 変更パス一覧には `HEAD` に対する staged・unstaged・削除・未追跡のファイル名が含まれ、`.takt/runs/` 配下は除外します。レポート参照は既存の report-reference ルールで解決されたパスとして渡し、本文の読み取りは selector が必要に応じて行います。
 - run 中に commit された変更は `HEAD` との差分ではなくなるため、後続 selector のパス一覧に残ることを保証しません。前段レポートはレポート参照を通じて引き続き利用できます。非 Git directory や Git command の取得失敗は、Git 境界の規則に従って空の変更パス一覧または失敗になります。
 - 保存する参加者 manifest のキーには workflow invocation path、workflow-call instance path、parallel step を含めます。report 継承と aggregate 評価はこの manifest を使用するため、`replace` により外れた reviewer の古い report や finding は現在 round に混入しません。
@@ -886,7 +889,8 @@ promotion は並列サブ step ではサポートされません。
 
 | オプション | デフォルト | 説明 |
 |--------|---------|------|
-| `description` | - | 自由記述の step 説明。dynamic parallel の `pool` 項目では選択用の説明として使われ、必須になる |
+| `description` | - | その step が何をするかを書く自由記述の説明。通常の step、`workflow_call`、静的な `parallel` のサブ step では任意。dynamic parallel の `pool` の候補では必須で、候補の役目として selector に渡す |
+| `selection_hint` | - | dynamic parallel の `pool` の候補だけに指定できる任意項目。役目だけでは選び方が決まらない候補に、選ぶ基準を書く。selector は `description` と `selection_hint` の両方を見る。ほかの step やサブ step に書くとロード時にエラーになる |
 | `persona` | - | persona キー（section map、または bare 名で project → user → builtin の順に解決）またはファイルパス |
 | `persona_name` | - | ログやプロンプト用の表示名。`provider_routing.personas` には影響しない |
 | `session_key` | - | 通常の agent step と parallel sub-step の明示セッションキー。実行時キーには解決済み provider が付く。空文字・空白のみは無効 |

@@ -2106,6 +2106,7 @@ describe('TAKT ACP agent adapter', () => {
   it('should abort an active conversation turn on session/cancel', async () => {
     let receivedSignal: AbortSignal | undefined;
     let resolveMessage: ((value: ConversationSessionResult) => void) | undefined;
+    const sendSessionUpdate = vi.fn();
     const handleUserMessage = vi.fn((input: {
       text: string;
       abortSignal?: AbortSignal;
@@ -2118,7 +2119,7 @@ describe('TAKT ACP agent adapter', () => {
     const agent = createTaktAcpAgent({
       createConversationSession: vi.fn(() => ({ handleUserMessage, createTaskInstruction: vi.fn() })),
       runWorkflowExecution: vi.fn(),
-      sendSessionUpdate: vi.fn(),
+      sendSessionUpdate,
     });
     const { sessionId } = await agent.handleSessionNew(newSessionParams());
 
@@ -2134,6 +2135,31 @@ describe('TAKT ACP agent adapter', () => {
     expect(result).toEqual({
       stopReason: 'cancelled',
     });
+    expect(sendSessionUpdate).not.toHaveBeenCalled();
+  });
+
+  it('sends retained artifact notification before completing a cancelled verification', async () => {
+    let finishMessage!: (result: ConversationSessionResult) => void;
+    let finishUpdate!: () => void;
+    const handleUserMessage = vi.fn(() => new Promise<ConversationSessionResult>((resolve) => { finishMessage = resolve; }));
+    const sendSessionUpdate = vi.fn(() => new Promise<void>((resolve) => { finishUpdate = resolve; }));
+    const agent = createTaktAcpAgent({
+      createConversationSession: vi.fn(() => ({ handleUserMessage, createTaskInstruction: vi.fn() })),
+      runWorkflowExecution: vi.fn(),
+      sendSessionUpdate,
+    });
+    const { sessionId } = await agent.handleSessionNew(newSessionParams());
+    const prompt = agent.handleSessionPrompt({ sessionId, prompt: [{ type: 'text', text: '/verify' }] });
+    await agent.handleSessionCancel({ sessionId });
+    const retainedArtifactsMessage = 'Verification artifacts: /repo/.takt/runs/verify-cancelled';
+    finishMessage({ kind: 'error', message: 'interrupted verification', retainedArtifactsMessage });
+    let completed = false;
+    void prompt.then(() => { completed = true; });
+    await vi.waitFor(() => expect(sendSessionUpdate).toHaveBeenCalledWith(sessionId, { kind: 'agent_message', text: retainedArtifactsMessage }));
+    expect(completed).toBe(false);
+    expect(sendSessionUpdate).toHaveBeenCalledTimes(1);
+    finishUpdate();
+    expect(await prompt).toEqual({ stopReason: 'cancelled' });
   });
 
   it('should carry idle session/cancel into the next prompt', async () => {

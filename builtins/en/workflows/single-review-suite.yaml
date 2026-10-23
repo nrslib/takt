@@ -67,6 +67,7 @@ facet_pools:
 initial_step: review
 steps:
   - name: review
+    description: Review code using knowledge relevant to the change and report whether any problems need fixing.
     capabilities: readonly
     tags: [review]
     edit: false

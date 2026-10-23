@@ -150,6 +150,7 @@ interface WorkflowRunLoopDeps {
     runtime?: RuntimeStepResolution,
   ) => Promise<PreparedNormalStepExecution | undefined>;
   resolveStepProviderModel: (step: WorkflowStep, runtime?: RuntimeStepResolution) => StepProviderInfo;
+  buildWorkflowMeta?: (step: WorkflowStep, runtime?: RuntimeStepResolution) => import('../../../agents/types.js').WorkflowMeta;
   /** auto-routing ルーター・promotion 評価への入力専用（補完前の解決）。 */
   resolveStepProviderModelBeforeAutoRouting: (
     step: WorkflowStep,
@@ -237,6 +238,7 @@ async function resolveStepAutoRoutingRuntime(
 
   const currentProviderInfo = deps.resolveStepProviderModelBeforeAutoRouting(step, runtime);
   const autoRuntime = await resolveAutoRoutingRuntime({
+    workflowMeta: deps.buildWorkflowMeta?.(step, runtime),
     autoRouting: deps.options.autoRouting,
     scope: createRoutingScope({
       workflow: deps.getWorkflowName(),

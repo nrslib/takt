@@ -789,6 +789,52 @@ describe('providerLadders end-to-end from runtime.yaml (issue #1208)', () => {
     rmSync(engineTmpDir, { recursive: true, force: true });
   });
 
+  it('clears the previous model when promotion selects a ladder profile with no model', async () => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        defaults: { profile: 'base' },
+        profiles: {
+          base: { provider: 'codex', model: 'fixed' },
+          selected: { provider: 'codex' },
+        },
+        targets: { steps: { fix: { ladder: ['base', 'selected'] } } },
+      },
+    });
+    const env = resolveCompiledProviderEnvironment({
+      projectCwd: ladderProjectCwd, legacy: legacyInput, legacySignals: [],
+    });
+    const config: WorkflowConfig = {
+      name: 'ladder-model-omission', initialStep: 'fix', maxSteps: 2,
+      steps: [withPromotion(makeStep('fix', {
+        rules: [makeRule('again', 'fix'), makeRule('done', 'COMPLETE')],
+      }), [{ at: 2 }])],
+    };
+    mockRunAgentSequence([
+      makeResponse({ persona: 'fix', content: 'again' }),
+      makeResponse({ persona: 'fix', content: 'done' }),
+    ]);
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' }, { index: 1, method: 'phase3_tag' },
+    ]);
+    engine = new WorkflowEngine(config, engineTmpDir, 'test task', {
+      projectCwd: engineTmpDir,
+      provider: env.provider, providerSource: env.providerSource,
+      model: env.model, modelSource: env.modelSource,
+      providerRouting: env.providerRouting, providerLadders: env.providerLadders,
+      providerRoutingTagConflictPolicy: env.tagConflictPolicy,
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(runAgent).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]?.resolvedModel).toBe('fixed');
+    const promoted = vi.mocked(runAgent).mock.calls[1]?.[2];
+    expect(promoted?.resolvedProvider).toBe('codex');
+    expect(promoted?.resolvedModel).toBeUndefined();
+  });
+
   it('should surface every ladder stage and the stage-0 routing entry when a real runtime.yaml declares a ladder', () => {
     const env = resolveCompiledProviderEnvironment({
       projectCwd: ladderProjectCwd,
@@ -1088,6 +1134,124 @@ describe('runtime provider options through workflow execution', () => {
       provider_options: { codex: { config_profile: 'automation-review' } },
     }), 'utf-8');
   }
+
+  function writeModelOmissionRuntime(provider: string, targetName: string): void {
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        defaults: { profile: 'base' },
+        profiles: {
+          base: { provider, model: provider === 'opencode' ? 'vendor/fixed' : 'fixed' },
+          selected: { provider },
+        },
+        targets: { steps: { [targetName]: { profile: 'selected' } } },
+      },
+    });
+  }
+
+  it.each([
+    'codex', 'claude', 'claude-sdk', 'claude-headless', 'claude-terminal',
+    'copilot', 'cursor', 'kiro', 'pi', 'deepseek-harness', 'mock',
+  ] as const)('executes a selected %s profile without sending the defaults profile model', async (provider) => {
+    writeModelOmissionRuntime(provider, 'runtime-provider-handoff/plan');
+    mockRunAgentSequence([makeResponse({ persona: 'planner', content: 'done' })]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+    const result = await runWorkflowExecution({
+      task: 'runtime profile model omission',
+      cwd: workflowProjectCwd,
+      projectCwd: workflowProjectCwd,
+      workflowIdentifier: 'runtime-provider-handoff',
+      outputMode: 'silent',
+    });
+
+    expect(result.success).toBe(true);
+    expect(runAgent).toHaveBeenCalledTimes(1);
+    const options = vi.mocked(runAgent).mock.calls[0]?.[2];
+    expect(options?.resolvedProvider).toBe(provider);
+    expect(options?.resolvedModel).toBeUndefined();
+  });
+
+  it('keeps the defaults model when the omitted profile targets another step', async () => {
+    writeModelOmissionRuntime('codex', 'runtime-provider-handoff/other');
+    mockRunAgentSequence([makeResponse({ persona: 'planner', content: 'done' })]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+    const result = await runWorkflowExecution({
+      task: 'unmatched omitted profile',
+      cwd: workflowProjectCwd,
+      projectCwd: workflowProjectCwd,
+      workflowIdentifier: 'runtime-provider-handoff',
+      outputMode: 'silent',
+    });
+
+    expect(result.success).toBe(true);
+    expect(runAgent).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]).toMatchObject({
+      resolvedProvider: 'codex', resolvedModel: 'fixed',
+    });
+  });
+
+  it.each(['cli', 'env'] as const)('prioritizes an explicit %s model over a selected omitted profile', async (source) => {
+    writeModelOmissionRuntime('codex', 'runtime-provider-handoff/plan');
+    if (source === 'env') {
+      process.env.TAKT_MODEL = 'explicit-model';
+    }
+    invalidateAllResolvedConfigCache();
+    invalidateGlobalConfigCache();
+    mockRunAgentSequence([makeResponse({ persona: 'planner', content: 'done' })]);
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
+
+    const result = await runWorkflowExecution({
+      task: 'explicit model with omitted profile',
+      cwd: workflowProjectCwd,
+      projectCwd: workflowProjectCwd,
+      workflowIdentifier: 'runtime-provider-handoff',
+      ...(source === 'cli' ? { agentOverrides: { model: 'explicit-model', modelSource: 'cli' as const } } : {}),
+      outputMode: 'silent',
+    });
+
+    expect(result.success).toBe(true);
+    expect(runAgent).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runAgent).mock.calls[0]?.[2]).toMatchObject({
+      resolvedProvider: 'codex', resolvedModel: 'explicit-model',
+    });
+  });
+
+  it('rejects an omitted OpenCode model at configuration loading before starting an agent', async () => {
+    writeModelOmissionRuntime('opencode', 'runtime-provider-handoff/plan');
+    expect(() => resolveRuntimeEnvironment({
+      projectCwd: workflowProjectCwd, legacy: legacyInput, legacySignals: [],
+    })).toThrow(/provider 'opencode' requires model in 'provider\/model' format/i);
+
+    await expect(runWorkflowExecution({
+      task: 'OpenCode requires a profile model',
+      cwd: workflowProjectCwd,
+      projectCwd: workflowProjectCwd,
+      workflowIdentifier: 'runtime-provider-handoff',
+      outputMode: 'silent',
+    })).rejects.toThrow(/provider 'opencode' requires model in 'provider\/model' format/i);
+    expect(runAgent).not.toHaveBeenCalled();
+  });
+
+  it.each(['project', 'global'] as const)('rejects a %s config model instead of filling an omitted profile', async (scope) => {
+    writeModelOmissionRuntime('codex', 'runtime-provider-handoff/plan');
+    const configPath = scope === 'project'
+      ? join(workflowProjectCwd, '.takt', 'config.yaml')
+      : getGlobalConfigPath();
+    writeFileSync(configPath, stringifyYaml({ model: 'legacy-model' }));
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    await expect(runWorkflowExecution({
+      task: 'mixed config model and runtime provider',
+      cwd: workflowProjectCwd,
+      projectCwd: workflowProjectCwd,
+      workflowIdentifier: 'runtime-provider-handoff',
+      outputMode: 'silent',
+    })).rejects.toThrow(/Mixed provider configuration[\s\S]*config\.yaml:model/);
+    expect(runAgent).not.toHaveBeenCalled();
+  });
 
   it.each([
     [false, true],

@@ -27,10 +27,8 @@ export interface WorkflowProcessSafetyMeta {
 
 export interface WorkflowMeta {
   workflowName: string;
-  workflowDescription?: string;
   currentStep: string;
-  stepsList: ReadonlyArray<{ name: string; description?: string }>;
-  currentPosition: string;
+  context?: import('../core/workflow/workflow-prompt-context.js').WorkflowPromptContext;
   processSafety?: WorkflowProcessSafetyMeta;
 }
 

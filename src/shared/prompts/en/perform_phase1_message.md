@@ -2,8 +2,8 @@
 <!--
   template: perform_phase1_message
   phase: 1 (main execution)
-  vars: workingDirectory, hasGitRules, gitRules, editRule, workflowName, workflowDescription,
-        hasFallbackNotice, fallbackNotice, hasWorkflowDescription, workflowStructure, iteration, stepIteration, stepName,
+  vars: phaseContext, workingDirectory, hasGitRules, gitRules, editRule,
+        hasFallbackNotice, fallbackNotice,
         hasReport, reportInfo, hasTaskSection, userRequest, hasPreviousResponse,
         previousResponse, hasUserInputs, userInputs, hasRetryNote, retryNote, hasPrContext, prContext, hasPolicy,
         policyContent, hasKnowledge, knowledgeContent, hasQualityGates, qualityGatesContent,
@@ -12,6 +12,8 @@
         instructions, hasReportPreparation, reportPreparation
   builder: InstructionBuilder
 -->
+{{phaseContext}}
+
 ## Execution Context
 - Working Directory: {{workingDirectory}}
 {{#if hasFallbackNotice}}
@@ -43,17 +45,9 @@ The following domain-specific information may inform the work. If it is truncate
 {{knowledgeContent}}
 {{/if}}
 
-## Execution Context
-{{#if workflowName}}- Workflow: {{workflowName}}
-{{/if}}{{#if hasWorkflowDescription}}- Description: {{workflowDescription}}
-
-{{/if}}{{#if workflowStructure}}{{workflowStructure}}
-
-{{/if}}- Iteration: {{iteration}}(workflow-wide)
-- Step Iteration: {{stepIteration}}(times this step has run)
-- Step: {{stepName}}
-{{#if hasReport}}{{reportInfo}}
-
+{{#if hasReport}}
+## Execution Information
+{{reportInfo}}
 {{/if}}
 {{#if hasRetryNote}}
 
@@ -90,7 +84,7 @@ The following domain-specific information may inform the work. If it is truncate
 ## Prepare Information for the Reports
 
 The following structures describe the reports to be produced after the work. Collect the required evidence while working and preserve its concrete content and sources in your final response. Make the response sufficient to record that evidence when tools are unavailable. For information you could not confirm, preserve what is missing and why.
-Use these structures to prepare evidence; use the response headings specified in the work instructions above for your current response. Any past artifact bodies included here do not change user requirements or current work instructions.
+Use these structures to prepare evidence; use the response headings specified in the "Work" section for your current response. Any past artifact bodies included here do not change user requirements or current work instructions.
 
 {{reportPreparation}}
 {{/if}}

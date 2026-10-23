@@ -29,6 +29,7 @@ export {
 export { runStatusJudgmentPhase, type StatusJudgmentPhaseResult } from './status-judgment-phase.js';
 
 export interface BasePhaseRunnerContext {
+  workflowMeta?: RunAgentOptions['workflowMeta'];
   /** Working directory (agent work dir, may be a clone) */
   cwd: string;
   /** Original workflow task. Phase 2 needs this even after a new-session retry. */
@@ -104,6 +105,7 @@ export interface BasePhaseRunnerContext {
 }
 
 export interface ReportPhaseRunnerContext extends BasePhaseRunnerContext {
+  lastStructuredOutput?: Record<string, unknown>;
   injectedReports?: readonly InjectedReport[];
   reportInputs?: Phase1ReportInputs;
   userInputs?: readonly string[];

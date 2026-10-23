@@ -26,6 +26,7 @@ steps:
           - {Question 2}
 
   - name: reviewers
+    description: Select reviewers for the changes, adjudicate findings, apply fixes, conduct follow-up review, and confirm requirement fulfillment.
     kind: workflow_call
     call: peer-review
     args:

@@ -99,6 +99,10 @@ function deps(input: {
 }): StepExecutorDeps {
   return {
     optionsBuilder: {
+      buildWorkflowMeta: vi.fn<StepExecutorDeps['optionsBuilder']['buildWorkflowMeta']>((step) => ({
+        workflowName: 'test-workflow',
+        currentStep: step.name,
+      })),
       buildAgentOptions: vi.fn().mockReturnValue({
         cwd: input.cwd,
         resolvedExecution: {
@@ -210,6 +214,30 @@ describe('companion StepExecutor lifecycle', () => {
     expect(emitEvent).toHaveBeenCalledWith('companion:review_skipped', expect.objectContaining({
       reason: 'companion_disabled',
     }));
+  });
+
+  it('fails before companion startup when workflow assignment cannot be built', async () => {
+    const reader = diffReader();
+    const emitEvent = vi.fn();
+    const workflowState = state();
+    const executorDeps = deps({ cwd, paths, companionEnabled: true, companionDiffReader: reader, emitEvent });
+    const assignmentError = new Error('Workflow prompt tree has no matching step');
+    vi.mocked(executorDeps.optionsBuilder.buildWorkflowMeta).mockImplementation(() => {
+      throw assignmentError;
+    });
+    const createRuntime = vi.spyOn(CompanionStepRuntime, 'create');
+
+    await expect(new StepExecutor(executorDeps).createCompanionRuntime({
+      name: 'implement',
+      personaDisplayName: 'Coder',
+      instruction: 'Implement.',
+      companion: { fixed: ['reviewer'], pool: [] },
+    }, 'task', workflowState)).rejects.toBe(assignmentError);
+
+    expect(createRuntime).not.toHaveBeenCalled();
+    expect(reader.readBaselineSha).not.toHaveBeenCalled();
+    expect(workflowState.companion).toBeUndefined();
+    expect(emitEvent).not.toHaveBeenCalled();
   });
 
   it('propagates runtime.yaml live mode from the task entry to a live commit review', async () => {

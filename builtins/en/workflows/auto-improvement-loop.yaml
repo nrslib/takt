@@ -8,6 +8,7 @@ schemas:
   pr-followup-task: pr-followup-task
 steps:
   - name: route_context
+    description: Read the task queue and target PR and issue, and choose between waiting, PR handling, and improvement planning.
     mode: system
     system_inputs:
       - type: task_context
@@ -56,6 +57,7 @@ steps:
         next: plan_fresh_improvement
 
   - name: plan_from_issue
+    description: Inspect the issue and code and plan one improvement task that does not duplicate existing PRs or other issues.
     tags:
       - plan
     persona: supervisor
@@ -120,6 +122,7 @@ steps:
         next: wait_before_next_scan
 
   - name: enqueue_from_issue
+    description: Enqueue the issue-based improvement task with a dedicated worktree and PR creation.
     mode: system
     effects:
       - type: enqueue_task
@@ -145,6 +148,7 @@ steps:
         next: wait_before_next_scan
 
   - name: plan_fresh_improvement
+    description: Inspect the code for an improvement with user value and plan one task that does not duplicate existing PRs or issues.
     tags:
       - plan
     persona: supervisor
@@ -198,6 +202,7 @@ steps:
         next: wait_before_next_scan
 
   - name: enqueue_fresh
+    description: Enqueue the fresh improvement task with issue, dedicated worktree, and PR creation.
     mode: system
     effects:
       - type: enqueue_task
@@ -222,6 +227,7 @@ steps:
         next: wait_before_next_scan
 
   - name: plan_from_existing_pr
+    description: Inspect PR requirement fulfillment, diff, validation, and reviews, and choose remediation, merging, closing, or waiting.
     tags:
       - plan
     persona: supervisor
@@ -289,6 +295,7 @@ steps:
         next: wait_before_next_scan
 
   - name: reject_pr
+    description: Close the target PR that was judged unsalvageable.
     mode: system
     effects:
       - type: close_pr
@@ -298,6 +305,7 @@ steps:
         next: wait_before_next_scan
 
   - name: enqueue_from_pr
+    description: Enqueue a task to fix the identified problems by continuing the target PR.
     mode: system
     effects:
       - type: enqueue_task
@@ -317,6 +325,7 @@ steps:
         next: wait_before_next_scan
 
   - name: prepare_merge
+    description: Merge the base branch into the PR branch to prepare for merging the PR.
     mode: system
     effects:
       - type: sync_with_root
@@ -328,6 +337,7 @@ steps:
         next: resolve_conflicts
 
   - name: resolve_conflicts
+    description: Use AI to resolve conflicts from incorporating the base branch and make the PR ready to merge.
     mode: system
     effects:
       - type: resolve_conflicts_with_ai
@@ -339,6 +349,7 @@ steps:
         next: enqueue_conflict_resolution_task
 
   - name: enqueue_conflict_resolution_task
+    description: Enqueue a task to resolve the PR conflicts that could not be resolved automatically.
     mode: system
     effects:
       - type: enqueue_task
@@ -360,6 +371,7 @@ steps:
         next: wait_before_next_scan
 
   - name: merge_pr
+    description: Merge the target PR once it is ready.
     mode: system
     effects:
       - type: merge_pr
@@ -369,6 +381,7 @@ steps:
         next: wait_before_next_scan
 
   - name: wait_before_next_scan
+    description: Check other pending and running tasks every 60 seconds and wait until the queue is empty.
     mode: system
     delay_before_ms: 60000
     system_inputs:

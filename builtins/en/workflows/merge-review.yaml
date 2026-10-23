@@ -4,6 +4,7 @@ max_steps: 51
 initial_step: identify
 steps:
   - name: identify
+    description: Retrieve the target PR number and its current status.
     mode: system
     system_inputs:
       - type: pr_status
@@ -13,6 +14,7 @@ steps:
       - condition: when(true)
         next: review
   - name: review
+    description: Review the PR with reviewers suited to the changes and consolidate their results into a summary.
     kind: workflow_call
     call: review
     rules:
@@ -21,6 +23,7 @@ steps:
       - condition: ABORT
         next: review_failed
   - name: caccia
+    description: Address CodeRabbit findings through Caccia and check the outcome.
     mode: system
     effects:
       - type: caccia
@@ -37,6 +40,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: wait_ci
+    description: Wait for CI to finish for the target commit and determine the next action from the CI and PR status.
     mode: system
     system_inputs:
       - type: pr_status
@@ -53,6 +57,7 @@ steps:
       - condition: when(true)
         next: judge
   - name: judge
+    description: Inspect review reports and CI and PR status to determine approval and its rationale.
     input_reports:
       from_step: review
       reports: all
@@ -76,6 +81,7 @@ steps:
       - condition: when(true)
         next: comment_result
   - name: comment_result
+    description: Comment on the PR with the approval decision and its rationale.
     mode: system
     effects:
       - type: comment_pr
@@ -87,6 +93,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: ci_failed
+    description: Comment on the PR that CI checks failed for the target commit.
     mode: system
     effects:
       - type: comment_pr
@@ -98,6 +105,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: timeout
+    description: Comment on the PR that waiting for CI exceeded the time limit.
     mode: system
     effects:
       - type: comment_pr
@@ -109,6 +117,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: unmergeable
+    description: Comment on the PR that its current state prevents merging.
     mode: system
     effects:
       - type: comment_pr
@@ -120,6 +129,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: review_failed
+    description: Comment on the PR that the called review workflow aborted.
     mode: system
     effects:
       - type: comment_pr
@@ -131,6 +141,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: caccia_limit
+    description: Comment on the PR that Caccia reached its iteration limit and report the unresolved thread count.
     mode: system
     effects:
       - type: comment_pr
@@ -142,6 +153,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: caccia_failed
+    description: Comment on the PR with the Caccia failure and its error.
     mode: system
     effects:
       - type: comment_pr

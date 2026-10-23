@@ -20,6 +20,7 @@ report_formats:
 
 steps:
   - name: create
+    description: Create or revise the workflow bundle to meet the request and report doctor-equivalent validation results.
     capabilities: edit
     edit: true
     persona: maker
@@ -35,6 +36,7 @@ steps:
         next: review
 
   - name: review
+    description: Compare the artifact and doctor-equivalent validation report against the request to decide approval or repair.
     capabilities: readonly
     edit: false
     persona: reviewer
@@ -53,6 +55,7 @@ steps:
         next: fix
 
   - name: fix
+    description: Fix the defects identified in review and report repeated doctor-equivalent validation results.
     capabilities: edit
     edit: true
     persona: maker

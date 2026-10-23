@@ -9,7 +9,7 @@ vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-
  * - sdkMessageToStreamEvent — SDK message → stream event conversion
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { delimiter, dirname } from 'node:path';
 import type { ClaudeSpawnOptions, StreamEvent } from '../infra/claude/types.js';
 import type { HookInput, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
@@ -56,6 +56,11 @@ import { buildSdkOptions } from '../infra/claude/options-builder.js';
 import { getActiveQueryCount } from '../infra/claude/query-manager.js';
 import { sdkMessageToStreamEvent } from '../infra/claude/stream-converter.js';
 import { ClaudeProvider } from '../infra/providers/claude.js';
+
+afterEach(() => {
+  vi.clearAllTimers();
+  vi.useRealTimers();
+});
 
 describe('strict manager tool restrictions', () => {
   beforeEach(() => { vi.clearAllMocks(); });
@@ -642,12 +647,215 @@ describe('QueryExecutor abortSignal wiring', () => {
   });
 });
 
+describe('QueryExecutor transient throttling', () => {
+  beforeEach(() => {
+    queryMock.mockReset();
+    vi.useFakeTimers();
+  });
+
+  it.each(['result', 'exception', 'assistant'] as const)(
+    'tool_use後の%sによる429では同じpromptを再実行しない', async (channel) => {
+      const toolUse = {
+        type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command: 'touch marker' } }] },
+        session_id: 'failed-session',
+      };
+      const failure = channel === 'result'
+        ? createMockQuery([toolUse, createResultMessage({ subtype: 'error_during_execution', is_error: true, errors: ['HTTP 429: Too Many Requests'] })])
+        : channel === 'exception'
+          ? createMockQuery([toolUse], new Error('HTTP 429: Too Many Requests'))
+          : createMockQuery([toolUse, createAssistantRateLimitMessage()]);
+      queryMock.mockReturnValueOnce(failure).mockReturnValue(createMockQuery([createResultMessage({ result: 'unexpected retry' })]));
+
+      const pending = new QueryExecutor().execute('prompt', { cwd: '/tmp/project' });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await pending).toMatchObject({ success: false, content: '', errorKind: 'rate_limit' });
+      expect(queryMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('本文中のtool_use文字列だけなら429を再試行する', async () => {
+    queryMock.mockReturnValueOnce(createMockQuery([
+      createAssistantTextMessage('The literal string tool_use appears here.'),
+      createAssistantRateLimitMessage(),
+    ])).mockReturnValueOnce(createMockQuery([createResultMessage({ result: 'final answer' })]));
+
+    const pending = new QueryExecutor().execute('prompt', { cwd: '/tmp/project' });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await pending).toMatchObject({ success: true, content: 'final answer' });
+    expect(queryMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['exception', 'result', 'assistant', 'rate_limit_event'] as const)(
+    '%s の429を2回再試行し実行制約と成功結果を保持する', async (channel) => {
+      const makeFailure = () => {
+        if (channel === 'exception') return createMockQuery([], new Error('HTTP 429: Too Many Requests'));
+        if (channel === 'result') return createMockQuery([createResultMessage({
+          subtype: 'error_during_execution', is_error: true, errors: ['HTTP 429: Too Many Requests'],
+        })]);
+        if (channel === 'assistant') return createMockQuery([createAssistantRateLimitMessage()]);
+        return createMockQuery([{
+          type: 'rate_limit_event', session_id: 'failed-session', uuid: 'throttled',
+          rate_limit_info: { status: 'rejected' },
+        }]);
+      };
+      queryMock.mockReturnValueOnce(makeFailure()).mockReturnValueOnce(makeFailure()).mockReturnValueOnce(
+        createMockQuery([createAssistantTextMessage('final answer'), createResultMessage({
+          result: 'final answer', session_id: 'final-session', structured_output: { ok: true },
+        })]),
+      );
+      const activeBefore = getActiveQueryCount();
+      const onStream = vi.fn();
+      const options: ClaudeSpawnOptions = {
+        cwd: '/tmp/project', model: 'sonnet', sessionId: 'original-session',
+        permissionMode: 'readonly', allowedTools: ['Read'], skillsEnabled: false,
+        outputSchema: { type: 'object' }, mcpServers: { test: { command: 'node', args: ['mcp.js'] } },
+        onStream,
+      };
+      const pending = new QueryExecutor().execute('original prompt', options);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(queryMock).toHaveBeenCalledTimes(1);
+      expect(getActiveQueryCount()).toBe(activeBefore);
+      expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(queryMock).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(queryMock).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await pending).toMatchObject({
+        success: true, content: 'final answer', sessionId: 'final-session', structuredOutput: { ok: true },
+      });
+      expect(queryMock).toHaveBeenCalledTimes(3);
+      expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toHaveLength(1);
+      expect(getActiveQueryCount()).toBe(activeBefore);
+      for (const [request] of queryMock.mock.calls) {
+        expect(request.prompt).toBe('original prompt');
+        expect(request.options).toMatchObject({
+          cwd: '/tmp/project', model: 'sonnet', resume: 'original-session',
+          allowedTools: ['Read'], skills: [], outputFormat: { type: 'json_schema', schema: options.outputSchema },
+          mcpServers: options.mcpServers,
+        });
+        expect(request.options.permissionMode).not.toBe('bypassPermissions');
+      }
+    },
+  );
+
+  it.each([
+    'usage_limit_exceeded',
+    'HTTP 429: Your workspace is out of credits. Add credits to continue.',
+    'You hit your spend cap set in your workspace. Increase your spend cap to continue. HTTP 429',
+  ])('失敗resultの使い切りは再試行しない: %s', async (message) => {
+    queryMock.mockReturnValue(createMockQuery([createResultMessage({
+      subtype: 'error_during_execution', is_error: true, errors: [message],
+    })]));
+    const result = await new QueryExecutor().execute('prompt', { cwd: '/tmp/project', sessionId: 'resume' });
+    expect(result).toMatchObject({ success: false, content: '', errorKind: 'rate_limit' });
+    expect(queryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('429の再試行中に使い切りを受けたら追加queryを作らない', async () => {
+    queryMock.mockReturnValueOnce(createMockQuery([], new Error('HTTP 429: Too Many Requests')))
+      .mockReturnValue(createMockQuery([createRateLimitEventMessage({ status: 'rejected' })]));
+    const pending = new QueryExecutor().execute('prompt', { cwd: '/tmp/project' });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await pending).toMatchObject({ success: false, errorKind: 'rate_limit' });
+    await vi.advanceTimersByTimeAsync(121_000);
+    expect(queryMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('429の待機中に中断したらqueryを追加せず登録を解放する', async () => {
+    queryMock.mockReturnValue(createMockQuery([], new Error('HTTP 429: Too Many Requests')));
+    const controller = new AbortController();
+    const activeBefore = getActiveQueryCount();
+    const pending = new QueryExecutor().execute('prompt', { cwd: '/tmp/project', abortSignal: controller.signal });
+    await vi.advanceTimersByTimeAsync(500);
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(121_000);
+    expect(await pending).toMatchObject({ success: false, interrupted: true });
+    expect(queryMock).toHaveBeenCalledTimes(1);
+    expect(getActiveQueryCount()).toBe(activeBefore);
+  });
+});
+
 describe('QueryExecutor rate limit cause preservation', () => {
+  it('通常のis_error resultに含まれる既存の構造化出力を保持する', async () => {
+    queryMock.mockReturnValue(createMockQuery([createResultMessage({
+      is_error: true, result: 'partial answer', structured_output: { partial: true },
+    })]));
+    const result = await new QueryExecutor().execute('prompt', { cwd: '/tmp/project' });
+    expect(result).toMatchObject({ success: false, content: 'partial answer', structuredOutput: { partial: true } });
+    expect(result.errorKind).toBeUndefined();
+    expect(queryMock).toHaveBeenCalledOnce();
+  });
+
+  it('is_error resultの429は予算後の終端イベントでも失敗として返す', async () => {
+    vi.useFakeTimers();
+    queryMock.mockReturnValue(createMockQuery([createResultMessage({ is_error: true, result: 'HTTP 429: Too Many Requests' })]));
+    const onStream = vi.fn();
+    const pending = new QueryExecutor().execute('prompt', { cwd: '/tmp/project', onStream });
+    await vi.advanceTimersByTimeAsync(121_000);
+    expect(await pending).toMatchObject({ success: false, content: '', errorKind: 'rate_limit' });
+    expect(queryMock).toHaveBeenCalledTimes(9);
+    expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toHaveLength(1);
+    expect(onStream).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'result', data: expect.objectContaining({
+      result: '', success: false, error: 'HTTP 429: Too Many Requests',
+    }) }));
+    vi.useRealTimers();
+  });
+
+  it('api_error_statusだけの429を再試行して成功する', async () => {
+    vi.useFakeTimers();
+    queryMock.mockReturnValueOnce(createMockQuery([createResultMessage({ is_error: true, api_error_status: 429, result: 'request rejected' })]))
+      .mockReturnValueOnce(createMockQuery([createResultMessage({ result: 'final answer' })]));
+    const pending = new QueryExecutor().execute('prompt', { cwd: '/tmp/project' });
+    await vi.advanceTimersByTimeAsync(999);
+    expect(queryMock).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await pending).toMatchObject({ success: true, content: 'final answer' });
+    expect(queryMock).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it('api_error_statusの429に使い切りが伴う場合は即終了する', async () => {
+    queryMock.mockReturnValue(createMockQuery([createResultMessage({ is_error: true, api_error_status: 429, result: 'usage_limit_exceeded' })]));
+    expect(await new QueryExecutor().execute('prompt', { cwd: '/tmp/project' })).toMatchObject({ success: false, errorKind: 'rate_limit' });
+    expect(queryMock).toHaveBeenCalledOnce();
+  });
+
+  it('成功resultのapi_error_statusは失敗入力として分類しない', async () => {
+    queryMock.mockReturnValue(createMockQuery([createResultMessage({ is_error: false, api_error_status: 429, result: 'final answer' })]));
+    expect(await new QueryExecutor().execute('prompt', { cwd: '/tmp/project' })).toMatchObject({ success: true, content: 'final answer' });
+    expect(queryMock).toHaveBeenCalledOnce();
+  });
+
+  it('本文の引用と後続の空のrate_limit属性を混同せず再試行する', async () => {
+    vi.useFakeTimers();
+    queryMock.mockReturnValueOnce(createMockQuery([
+      createAssistantTextMessage('説明: usage_limit_exceeded'), createAssistantRateLimitMessage(),
+    ])).mockReturnValueOnce(createMockQuery([createResultMessage({ result: 'final answer' })]));
+    const pending = new QueryExecutor().execute('prompt', { cwd: '/tmp/project' });
+    await vi.advanceTimersByTimeAsync(999);
+    expect(queryMock).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await pending).toMatchObject({ success: true, content: 'final answer' });
+    expect(queryMock).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+  it('最終result callbackの失敗を応答に保持してquery登録を解放する', async () => {
+    const activeBefore = getActiveQueryCount();
+    queryMock.mockReturnValue(createMockQuery([createResultMessage({ result: 'done' })]));
+    const result = await new QueryExecutor().execute('prompt', { cwd: '/tmp/project', onStream: (event) => {
+      if (event.type === 'result') throw new Error('stream callback failed');
+    } });
+    expect(result).toMatchObject({ success: false, error: 'stream callback failed' });
+    expect(queryMock).toHaveBeenCalledOnce();
+    expect(getActiveQueryCount()).toBe(activeBefore);
+  });
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('assistant.error が rate_limit の場合は exit code 1 より優先して RateLimit 文言を返す', async () => {
+  it('assistant.error の rate_limit は8回再試行後に exit code 1 より優先する', async () => {
+    vi.useFakeTimers();
     // Given
     queryMock.mockReturnValue(
       createMockQuery([createAssistantRateLimitMessage()], new Error(EXIT_CODE_MESSAGE)),
@@ -655,13 +863,15 @@ describe('QueryExecutor rate limit cause preservation', () => {
     const executor = new QueryExecutor();
 
     // When
-    const result = await executor.execute('test prompt', { cwd: '/tmp/project' });
+    const pending = executor.execute('test prompt', { cwd: '/tmp/project' });
+    await vi.advanceTimersByTimeAsync(121_000);
+    const result = await pending;
 
     // Then
     expect(result.success).toBe(false);
     expect(result.error).toBe(RATE_LIMIT_MESSAGE);
     expect(result.errorKind).toBe('rate_limit');
-    expect(queryMock).toHaveBeenCalledTimes(1);
+    expect(queryMock).toHaveBeenCalledTimes(9);
   });
 
   it('rate_limit_event が観測された場合は SDK event の詳細を返す', async () => {
@@ -756,7 +966,8 @@ describe('QueryExecutor rate limit cause preservation', () => {
     expect(queryMock).toHaveBeenCalledTimes(1);
   });
 
-  it('Claude SDK の HTTP 429 エラーは sdk_error の rate_limited として返す', async () => {
+  it('Claude SDK の HTTP 429 は8回の待機後に sdk_error の rate_limited を返す', async () => {
+    vi.useFakeTimers();
     // Given
     queryMock.mockReturnValue(
       createMockQuery([], new Error('HTTP 429: rate limit exceeded')),
@@ -764,7 +975,15 @@ describe('QueryExecutor rate limit cause preservation', () => {
     const executor = new QueryExecutor();
 
     // When
-    const result = await executor.execute('test prompt', { cwd: '/tmp/project' });
+    const pending = executor.execute('test prompt', { cwd: '/tmp/project' });
+    await vi.advanceTimersByTimeAsync(0);
+    for (const [index, delay] of [1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000].entries()) {
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(queryMock).toHaveBeenCalledTimes(index + 1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(queryMock).toHaveBeenCalledTimes(index + 2);
+    }
+    const result = await pending;
 
     // Then
     expect(result.success).toBe(false);
@@ -772,7 +991,7 @@ describe('QueryExecutor rate limit cause preservation', () => {
     expect(result.error).toBe('HTTP 429: rate limit exceeded');
     expect(result.errorKind).toBe('rate_limit');
     expect(result.rateLimitInfo?.source).toBe('sdk_error');
-    expect(queryMock).toHaveBeenCalledTimes(1);
+    expect(queryMock).toHaveBeenCalledTimes(9);
   });
 
   it('assistant text のみで rate limit が示された場合はその文面を返す', async () => {
@@ -899,7 +1118,8 @@ describe('QueryExecutor rate limit cause preservation', () => {
     expect(queryMock).toHaveBeenCalledTimes(1);
   });
 
-  it('sessionId 付き実行で RateLimit を観測した場合は no-resume retry を行わない', async () => {
+  it('sessionId 付きの一時的な RateLimit は resume を保持して8回再試行する', async () => {
+    vi.useFakeTimers();
     // Given
     queryMock.mockImplementation(() => (
       createMockQuery([createAssistantRateLimitMessage()], new Error(EXIT_CODE_MESSAGE))
@@ -907,18 +1127,20 @@ describe('QueryExecutor rate limit cause preservation', () => {
     const executor = new QueryExecutor();
 
     // When
-    const result = await executor.execute('test prompt', {
+    const pending = executor.execute('test prompt', {
       cwd: '/tmp/project',
       sessionId: 'resume-session-1',
     });
+    await vi.advanceTimersByTimeAsync(121_000);
+    const result = await pending;
 
     // Then
     expect(result.error).toBe(RATE_LIMIT_MESSAGE);
     expect(result.errorKind).toBe('rate_limit');
-    expect(queryMock).toHaveBeenCalledTimes(1);
-    expect(
-      (queryMock.mock.calls[0]?.[0] as { options?: { resume?: string } }).options?.resume,
-    ).toBe('resume-session-1');
+    expect(queryMock).toHaveBeenCalledTimes(9);
+    for (const [request] of queryMock.mock.calls) {
+      expect(request.options.resume).toBe('resume-session-1');
+    }
   });
 
   it('sessionId 付き実行で rejected の rate_limit_event を観測した場合も no-resume retry を行わない', async () => {
@@ -973,6 +1195,25 @@ describe('QueryExecutor rate limit cause preservation', () => {
     expect(
       (queryMock.mock.calls[1]?.[0] as { options?: { resume?: string } }).options?.resume,
     ).toBeUndefined();
+  });
+
+  it('tool_use後のexit code errorではsessionを外して同じpromptを再実行しない', async () => {
+    const toolUse = {
+      type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command: 'touch marker' } }] },
+      session_id: 'resume-session-1',
+    };
+    queryMock.mockReturnValueOnce(createMockQuery([toolUse], new Error(EXIT_CODE_MESSAGE)))
+      .mockImplementation(() => { throw new Error('unexpected retry'); });
+    const onActivity = vi.fn();
+
+    const result = await new QueryExecutor().execute('prompt', {
+      cwd: '/tmp/project', sessionId: 'resume-session-1', onActivity,
+    });
+
+    expect(result).toMatchObject({ success: false, content: '', error: EXIT_CODE_MESSAGE });
+    expect(queryMock).toHaveBeenCalledOnce();
+    expect(queryMock.mock.calls[0]?.[0].options.resume).toBe('resume-session-1');
+    expect(onActivity).toHaveBeenCalledOnce();
   });
 
   it('Skills 無効の resume 失敗を再試行するときも、SDK の空の Skill allowlist を維持する', async () => {

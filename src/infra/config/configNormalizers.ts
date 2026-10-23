@@ -231,6 +231,9 @@ export function denormalizeAutoRoutingConfig(
   if (config.defaultPool === undefined) {
     throw new Error('Cannot serialize auto routing without a default pool');
   }
+  if (config.router.model === undefined) {
+    throw new Error('Cannot serialize legacy auto_routing.router without a model');
+  }
   return {
     strategy: config.strategy,
     router: {
@@ -239,6 +242,9 @@ export function denormalizeAutoRoutingConfig(
     },
     candidates: config.candidates.map((candidate, index) => {
       const path = `auto_routing.candidates[${index}]`;
+      if (candidate.model === undefined) {
+        throw new Error(`Cannot serialize legacy ${path} without a model`);
+      }
       const rawProviderOptions = denormalizeProviderOptions(candidate.providerOptions);
       if (candidate.providerOptions !== undefined) {
         assertNormalizedProviderOptions(path, rawProviderOptions);

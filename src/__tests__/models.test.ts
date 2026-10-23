@@ -377,6 +377,14 @@ describe('WorkflowConfigRawSchema', () => {
     expect(() => WorkflowConfigRawSchema.parse(config as unknown)).toThrow(/runtime\.yaml/);
   });
 
+  it('should reject the removed workflow_config.model field', () => {
+    expect(() => WorkflowConfigRawSchema.parse({
+      name: 'test-workflow',
+      workflow_config: { model: 'fixed' },
+      steps: [{ name: 'review', instruction: '{task}' }],
+    })).toThrow(/model/);
+  });
+
   it('should reject workflow-level provider_options with runtime.yaml guidance', () => {
     const config = {
       name: 'test-workflow',

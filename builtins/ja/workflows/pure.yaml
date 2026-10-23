@@ -4,6 +4,7 @@ max_steps: 30
 initial_step: develop
 steps:
   - name: develop
+    description: 関連するSKILLを選び、計画・テスト先行の実装・レビュー・修正・要件充足の最終確認を実行する
     kind: workflow_call
     call: simple-core
     args:
