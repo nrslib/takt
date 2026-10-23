@@ -218,6 +218,28 @@ describe('formal specification generation context wiring', () => {
   });
 });
 
+describe('Quint scenario result interpretation', () => {
+  it.each(['en', 'ja'] as const)('transfers the test stage and its diagnostic artifact paths for %s', (lang) => {
+    const test = { status: 'failed' as const, message: 'runBad: expectation failed' };
+    const result = {
+      verdict: 'failed' as const, verificationStarted: true,
+      quint: { status: 'failed' as const, test },
+      alloy: { status: 'skipped' as const },
+      artifacts: {
+        runDirectory: '/verify', specifications: { quint: '/verify/specs/spec.qnt' },
+        logs: { 'quint-test': { stdout: '/verify/logs/quint-test.stdout.log', stderr: '/verify/logs/quint-test.stderr.log' } },
+      },
+    };
+
+    const prompt = buildFormalSpecInterpretationPrompt(result, 'generated model', lang);
+    const json = prompt.split('<verification-result>')[1]!.split('</verification-result>')[0]!;
+    const paths = prompt.split('<verification-artifact-paths>')[1]!.split('</verification-artifact-paths>')[0]!.trim().split('\n');
+
+    expect(JSON.parse(json).quint.test).toEqual(test);
+    expect(paths).toEqual(expect.arrayContaining(Object.values(result.artifacts.logs['quint-test'])));
+  });
+});
+
 describe('task instruction formal specification prompt template wiring', () => {
   it.each([
     ['en', renderEnglishSummaryPrompt],
