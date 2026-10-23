@@ -4,9 +4,11 @@
 
 ## Discussion and registration
 
-Start `takt manager` in an interactive terminal and describe the objective, scope exclusions, acceptance criteria and work constraints. Review the summary and choose Approve registration to let the TUI register the goal. Choose Continue conversation to revise it.
+Start `takt manager` in an interactive terminal and describe the objective, scope exclusions, acceptance criteria and work constraints. Review the displayed summary and approve it with `Ctrl+O` to let the TUI register the goal. Choose Continue conversation to revise it.
 
-Enter `/go` alone to request a summary of the current conversation. The returned summary waits for approval; enter `/go` again to approve and register it through the same registration process. If a summary is already displayed, `/go` registers it without regenerating it. If there is insufficient material, manager explains this and you can continue the conversation. Manager can also offer a summary without `/go`.
+Press `Ctrl+O` to open the summary menu. If no summary is awaiting approval, it requests a summary of the current conversation. If a summary is already displayed, it approves and registers it without regenerating it. If there is insufficient material, manager explains this and you can continue the conversation. Manager can also offer a summary itself.
+
+The normal screen shows the count of ongoing goals (active and paused), the count of unanswered inquiries, and hints for `Ctrl+R`, `Ctrl+G`, and `Ctrl+O` on the same single line. It does not list completed or aborted goals or inquiry bodies. The input box is only for conversation with manager; text starting with `/` is sent as a regular message too. All three menu keys remain available while manager is processing.
 
 After registration, the manager inside the daemon handles events, submits tasks, checks and integrates results, and selects next work. The TUI displays work records and lets you continue the conversation with a manager that receives those records. Closing the TUI leaves an already running run active.
 
@@ -19,6 +21,15 @@ manager:
 ```
 
 Manager supports Claude, Codex and OpenCode. Its tools use existing TAKT features for submission, requeue, retry, removal, run inspection, diffs, history, integration and completion checks. Before acting, it checks tasks, run records and reports, and git, without repeating finished actions.
+
+Use these tools for inquiries that do not belong to a goal.
+
+| Tool | Purpose |
+|------|---------|
+| `takt_list_standalone_inquiries` | Read unanswered inquiries without a goal saved under the current assignment, including their id, kind, body and creation time. |
+| `takt_withdraw_standalone_inquiry` | Withdraw an unanswered inquiry without a goal by passing its id and a reason. An inquiry that is no longer unanswered keeps both its state and saved answer unchanged. |
+
+Every turn, manager reviews unanswered inquiries both with and without a goal. It withdraws inquiries that no longer matter, such as approval for an operation that is no longer running, with a reason and records that reason in work records. It keeps inquiries that still need a human decision.
 
 Both the TUI and daemon manager use `full` permissions through the existing provider permission controls. Manager can use the provider's normal tools and user MCP servers, subject to the tool review for claude (claude-sdk) or codex described here. Configured provider options are preserved.
 
@@ -71,23 +82,23 @@ Removing an assignment does not delete the repository or its goals. Repositories
 
 ## Answers, pause and abort
 
-Enter each command on its own line in the TUI.
+Open menus with the following keys, including while manager is processing.
 
-| Command | Behavior |
-|---------|----------|
-| `/go` | Request a summary of the current conversation, or approve and register an existing summary. Takes no arguments. |
-| `/answer` | Select a pending inquiry with or without a goal, then answer a question, allow or deny an approval, or report an operation result. |
-| `/pause` | Select an active goal to stop new submissions and integrations. Running tasks continue and results are deferred. |
-| `/resume` | Select a paused goal to resume deferred events and tasks. |
-| `/abort` | Select an unfinished goal, then confirm the irreversible abort, interrupting its running tasks and invalidating unstarted tasks. |
+| Key | Behavior |
+|-----|----------|
+| `Ctrl+R` | List unanswered inquiries with and without a goal together, then answer the selected inquiry. |
+| `Ctrl+G` | List only ongoing goals (active and paused) by short name and state. Use `↑↓` to select a goal and `Enter` to choose pause, resume or abort. |
+| `Ctrl+O` | Request a summary of the current conversation if none is awaiting approval, or approve and register the displayed summary without regenerating it. Continue the conversation if material is insufficient. |
 
-These commands take no arguments. Use ↑/↓ to choose, Enter to select, or Esc to close the list without making changes. If there are no eligible targets, the TUI shows a notice instead of opening a list.
+Pausing stops new submissions and integrations while running tasks continue and results are deferred. Resuming advances deferred events and tasks. Before aborting, confirm that the operation is irreversible and that records and branches remain; aborting interrupts the goal's running tasks and invalidates unstarted tasks. `Esc` closes the list without making changes. If there are no eligible targets, the TUI shows a notice instead of opening a list.
 
 Aborting is irreversible. Goal records and branches remain. Answers are saved for the run manager's next decision. Receiving answers from Slack is not implemented.
 
-### /answer
+### Answering inquiries
 
-Each list row shows the kind, short goal name ("No goal" for standalone approvals), and summary. The body, options and recommendation appear after selection. Questions accept an option or free text. Approvals require explicit Allow or Deny with an optional comment, including denial without a comment. Operation requests display the procedure and offer Completed or Unable with an optional comment. Comments alone never imply approval or completion.
+Press `Ctrl+R` to open unanswered inquiries with and without a goal together. Use `↑↓` to select an inquiry and `Enter` to open its details and answer. The list shows up to 10 inquiries at a time; the visible range shifts with the arrow keys for additional items. Use the arrow keys to scroll details that do not fit on screen. `Esc` in the details returns to the list; `Esc` in the list closes it without saving an answer.
+
+Each list row shows the kind, short goal name ("No goal" for inquiries without a goal), and summary. The body, options and recommendation appear after selection. Questions accept an option or free text. Approvals require explicit Allow or Deny with an optional comment, including denial without a comment. Operation requests display the procedure and offer Completed or Unable with an optional comment. Comments alone never imply approval or completion.
 
 Approval defaults to this time only. Other scopes are this goal, project, manager (workspace), and global. Standalone approvals omit this goal. With one repository, project and manager share one choice saved as project scope; adding a repository later does not expand existing permissions.
 
@@ -99,7 +110,7 @@ With a Claude (claude-sdk) or Codex manager, ask to pause the previous goal, res
 
 Pause, resume and abort go through the permission judge and execute after human confirmation. Pending confirmation does not execute the operation. Before aborting, confirm that it cannot be undone and that goal records and branches remain. Running tasks continue while paused; resuming advances deferred work. Aborting interrupts running tasks and invalidates unstarted tasks. An aborted goal cannot resume. Completed goals cannot be paused or resumed; only active goals can be paused, and only paused goals can resume.
 
-Providers without the permission judge do not expose conversation state tools. TUI `/pause`, `/resume` and `/abort` remain available.
+Providers without the permission judge do not expose conversation state tools. Open the TUI goal menu with `Ctrl+G` to choose pause, resume or abort.
 
 ## Integration and completion
 
