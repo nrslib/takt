@@ -21,6 +21,8 @@ import {
   askGoalQuestionInputSchema,
   getGoalQuestionInputSchema,
   listGoalQuestionsInputSchema,
+  listStandaloneInquiriesInputSchema,
+  withdrawStandaloneInquiryInputSchema,
   notifyGoalInputSchema,
   goalWriteInputSchema, withdrawGoalQuestionInputSchema, recordGoalWorkLogInputSchema, listGoalRecordsInputSchema,
 } from './schemas.js';
@@ -43,6 +45,8 @@ import { stopGoalTaskInputSchema } from './goalTaskStopSchemas.js';
 import { stopTaktGoalTask } from './goalTaskStopOperations.js';
 import { tellTaktGoalRun } from './goalTellOperations.js';
 import { askTaktGoalQuestion, listTaktGoalQuestions, getTaktGoalQuestion, withdrawTaktGoalQuestion } from './goalQuestionOperations.js';
+import { listTaktStandaloneInquiries, withdrawTaktStandaloneInquiry } from './standaloneInquiryOperations.js';
+import type { InquiryOwner } from '../../infra/goals/standalone-inquiries.js';
 import { notifyTaktGoal } from './goalNotificationOperations.js';
 import { recordTaktGoalWorkLog, listTaktGoalRecords } from './goalWorkLogOperations.js';
 import { pauseTaktGoal, resumeTaktGoal, abortTaktGoal } from './goalExecutionOperations.js';
@@ -88,6 +92,7 @@ export const TAKT_MCP_MANAGER_TOOL_NAMES = [
   'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation',
   'takt_ask_goal_question', 'takt_list_goal_questions', 'takt_get_goal_question',
   'takt_withdraw_goal_question', 'takt_notify_goal',
+  'takt_list_standalone_inquiries', 'takt_withdraw_standalone_inquiry',
   'takt_record_goal_work_log', 'takt_list_goal_work_log',
 ] as const;
 
@@ -121,14 +126,15 @@ export function createTaktMcpServer(
   const currentAssignment = () => resolveCurrentManagerAssignment(managerIdentity, globalConfigDirectory);
   const projectInput = <T extends { cwd: string }>(input: T, currentDeps: McpOperationDependencies): T =>
     options.toolSet === 'manager' ? { ...input, cwd: currentDeps.allowedProjectRoot! } : input;
-  const operation = async (cwd: string, errorContext: string, action: (deps: McpOperationDependencies) => CallToolResult | Promise<CallToolResult>, launchAfterOperation = true): Promise<CallToolResult> => {
+  const operation = async (cwd: string, errorContext: string, action: (deps: McpOperationDependencies, assignment: InquiryOwner | undefined) => CallToolResult | Promise<CallToolResult>, launchAfterOperation = true): Promise<CallToolResult> => {
     try {
-      const currentDeps = options.toolSet === 'manager'
-        ? { ...operationDeps, allowedProjectRoot: await resolveAssignedProjectRoot(cwd, await currentAssignment()) }
+      const assignment = options.toolSet === 'manager' ? await currentAssignment() : undefined;
+      const currentDeps = assignment !== undefined
+        ? { ...operationDeps, allowedProjectRoot: await resolveAssignedProjectRoot(cwd, assignment) }
         : operationDeps;
       assertCwdAllowedByMcpRoot(cwd, currentDeps.allowedProjectRoot);
       const projectCwd = projectInput({ cwd }, currentDeps).cwd;
-      try { return await action(currentDeps); }
+      try { return await action(currentDeps, assignment); }
       finally {
         if (launchAfterOperation && operationDeps.readOnly !== true) {
           const { ensureManagerRun } = await import('../manager/autoRun.js');
@@ -199,6 +205,18 @@ export function createTaktMcpServer(
     title: 'List workflows', description: 'Read workflow names and descriptions. Responses fit 64 KiB, with explicit truncation. Use offset/limit for continuation.', inputSchema: listGoalsInputSchema.omit({ errorOffset: true }),
   }, (input) => operation(input.cwd, 'Workflow list failed', (deps) => listTaktWorkflows(projectInput(input, deps), deps)));
   if (options.toolSet !== 'read-only') {
+    server.registerTool('takt_list_standalone_inquiries', {
+      title: 'List standalone inquiries',
+      description: 'Read only pending standalone inquiries owned by the current manager assignment. Includes id, kind, body and creation time without changing saved state. Use offset/limit (1-50) and nextOffset for continuation. Responses fit 64 KiB, with explicit truncation.',
+      inputSchema: listStandaloneInquiriesInputSchema,
+    }, (input) => operation(input.cwd, 'Standalone inquiry list failed', async (_deps, assignment) =>
+      listTaktStandaloneInquiries(input, globalConfigDirectory, assignment ?? await currentAssignment()), false));
+    server.registerTool('takt_withdraw_standalone_inquiry', {
+      title: 'Withdraw a standalone inquiry',
+      description: 'Withdraw an obsolete pending standalone inquiry in the current manager assignment by id and required reason. Saves the reason and withdrawal time. Other states and saved answers remain unchanged and the current state is returned. Unknown IDs are errors. Responses fit 64 KiB.',
+      inputSchema: withdrawStandaloneInquiryInputSchema,
+    }, (input) => operation(input.cwd, 'Standalone inquiry withdrawal failed', async (_deps, assignment) =>
+      withdrawTaktStandaloneInquiry(input, globalConfigDirectory, assignment ?? await currentAssignment()), false));
     server.registerTool('takt_record_goal_work_log', {
       title: 'Record manager work', description: 'Append a short account of submitted, integrated or abandoned work and its reasons. Available in conversation and event turns. Returns the saved entry and count within 64 KiB, with explicit truncation. Read the entry with takt_get_goal path workLog.summary, recordId and textOffset/maxBytes.', inputSchema: recordGoalWorkLogInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal work log failed', (deps) => recordTaktGoalWorkLog(projectInput(input, deps), deps, extra.signal), false));

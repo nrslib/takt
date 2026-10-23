@@ -6,7 +6,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stringify as stringifyYaml } from 'yaml';
-import { createTaktMcpServer } from '../app/mcp/server.js';
+import { createTaktMcpServer, TAKT_MCP_MANAGER_TOOL_NAMES } from '../app/mcp/server.js';
 import type { SessionContext } from '../features/interactive/aiCaller.js';
 import { createConversationSession } from '../features/interactive/conversationSession.js';
 import { getTaktRun, listTaktTasks } from '../features/mcp/operations.js';
@@ -685,6 +685,79 @@ describe('MCP public description assertions', () => {
 });
 
 describe('MCP package entrypoint', () => {
+  it.each([
+    { name: 'takt_list_standalone_inquiries', extra: { cwd: 'relative' } },
+    { name: 'takt_list_standalone_inquiries', extra: { offset: -1 } },
+    { name: 'takt_list_standalone_inquiries', extra: { offset: 1.5 } },
+    { name: 'takt_list_standalone_inquiries', extra: { offset: Number.MAX_SAFE_INTEGER + 1 } },
+    { name: 'takt_list_standalone_inquiries', extra: { limit: 0 } },
+    { name: 'takt_list_standalone_inquiries', extra: { limit: 51 } },
+    { name: 'takt_list_standalone_inquiries', extra: { limit: 1.5 } },
+    { name: 'takt_list_standalone_inquiries', extra: { owner: { kind: 'repository', repositoryDirectory: '/other' } } },
+    { name: 'takt_withdraw_standalone_inquiry', extra: { cwd: 'relative', reason: '不要です' } },
+    { name: 'takt_withdraw_standalone_inquiry', extra: {} },
+    { name: 'takt_withdraw_standalone_inquiry', extra: { reason: '' } },
+    { name: 'takt_withdraw_standalone_inquiry', extra: { reason: ' \n\t ' } },
+    { name: 'takt_withdraw_standalone_inquiry', extra: { reason: 'x'.repeat(128 * 1024 + 1) } },
+    { name: 'takt_withdraw_standalone_inquiry', extra: { id: 'not-a-uuid', reason: '不要です' } },
+    { name: 'takt_withdraw_standalone_inquiry', extra: { owner: { kind: 'workspace', workspaceId: '750e8400-e29b-41d4-a716-446655440001' }, reason: '不要です' } },
+  ])('rejects invalid standalone input before accessing storage: $name case %#', async ({ name, extra }) => {
+    const server = createTaktMcpServer({}, { toolSet: 'all' });
+    const client = new Client({ name: 'standalone-input-validation', version: '1' });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    vi.mocked(ensureManagerRun).mockClear();
+    try {
+      await server.connect(b);
+      await client.connect(a);
+      expect((await client.listTools()).tools.map(({ name }) => name)).toContain(name);
+      const result = await client.callTool({ name, arguments: {
+        cwd: process.cwd(), ...(name === 'takt_withdraw_standalone_inquiry' ? { id: '650e8400-e29b-41d4-a716-446655440001' } : {}), ...extra,
+      } });
+      expect(result.isError).toBe(true);
+      expect(firstTextContent(result.content)).toContain('Input validation error');
+      expect(ensureManagerRun).not.toHaveBeenCalled();
+    } finally { await client.close(); await server.close(); }
+  });
+
+  it.each(['manager', 'all', 'read-only', undefined] as const)('exposes standalone inquiry tools and schemas for tool set %s', async (toolSet) => {
+    const names = ['takt_list_standalone_inquiries', 'takt_withdraw_standalone_inquiry'];
+    const server = createTaktMcpServer({}, { toolSet });
+    const client = new Client({ name: 'standalone-inquiry-schema', version: '1' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const tools = (await client.listTools()).tools;
+      const standalone = tools.filter(({ name }) => names.includes(name));
+      if (toolSet === 'read-only') {
+        expect(standalone).toEqual([]);
+        for (const name of names) {
+          expect((await client.callTool({ name, arguments: {
+            cwd: process.cwd(), id: '650e8400-e29b-41d4-a716-446655440001', reason: '不要になりました',
+          } })).isError).toBe(true);
+        }
+        return;
+      }
+      expect(TAKT_MCP_MANAGER_TOOL_NAMES).toEqual(expect.arrayContaining(names));
+      expect(standalone.map(({ name }) => name).sort()).toEqual([...names].sort());
+      const list = standalone.find(({ name }) => name === names[0])!;
+      expect(list.inputSchema.required).toEqual(['cwd']);
+      expect(list.inputSchema.properties).toMatchObject({
+        cwd: { type: 'string' },
+        offset: { type: 'integer', minimum: 0 },
+        limit: { type: 'integer', minimum: 1, maximum: 50 },
+      });
+      const withdraw = standalone.find(({ name }) => name === names[1])!;
+      expect(withdraw.inputSchema.required?.slice().sort()).toEqual(['cwd', 'id', 'reason']);
+      expect(withdraw.inputSchema.properties).toMatchObject({
+        cwd: { type: 'string' }, id: { type: 'string', format: 'uuid' },
+        reason: { type: 'string', maxLength: 128 * 1024 },
+      });
+      expect(list.inputSchema.additionalProperties).toBe(false);
+      expect(withdraw.inputSchema.additionalProperties).toBe(false);
+    } finally { await client.close(); await server.close(); }
+  });
+
   it('advertises the inquiry input contract and retrieval fields through listTools', async () => {
     const server = createTaktMcpServer();
     const client = new Client({ name: 'inquiry-tools', version: '1' });

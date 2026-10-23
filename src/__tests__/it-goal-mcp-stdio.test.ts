@@ -3,7 +3,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { cleanup,render } from 'ink-testing-library';
 import { execFileSync } from 'node:child_process';
 import * as crypto from 'node:crypto';
-import { mkdirSync,mkdtempSync,realpathSync,rmSync,writeFileSync } from 'node:fs';
+import { mkdirSync,mkdtempSync,readFileSync,realpathSync,rmSync,writeFileSync } from 'node:fs';
 import { createServer,type Server } from 'node:http';
 import { basename,join } from 'node:path';
 import { createElement } from 'react';
@@ -22,6 +22,8 @@ import { readManagerDisplayEvents } from '../features/manager/savedEvents.js';
 import { createTaktMcpServer,TAKT_MCP_MANAGER_TOOL_NAMES } from '../features/mcp/server.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 import { invalidateResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
+import { createWorkspace } from '../infra/config/global/workspaceRegistry.js';
+import { StandaloneInquiryStore, type InquiryOwner } from '../infra/goals/standalone-inquiries.js';
 import { GoalStore } from '../infra/goals/store.js';
 import { readManagerEvents, saveManagerEvent } from '../infra/goals/events.js';
 import { GoalAbortMonitor, GoalAbortedError } from '../features/tasks/execute/goalAbortMonitor.js';
@@ -30,6 +32,7 @@ import { TaskRunner } from '../infra/task/runner.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 import { goalId,goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
+import { MCP_RESPONSE_MAX_BYTES } from '../features/mcp/response.js';
 
 const stdioTransport = vi.hoisted(() => vi.fn());
 vi.mock('@modelcontextprotocol/sdk/server/stdio.js', () => ({ StdioServerTransport: stdioTransport }));
@@ -39,6 +42,307 @@ vi.mock('../features/daemon/lifecycle.js', () => ({ ensureDaemon: vi.fn(async ()
 vi.mock('node:crypto', async (importOriginal) => {
   const original = await importOriginal<typeof import('node:crypto')>();
   return { ...original, randomUUID: vi.fn(original.randomUUID) };
+});
+
+const standaloneItemSchema = z.object({
+  id: z.uuid(), kind: z.enum(['question', 'approval', 'operation_request']),
+  body: z.string(), createdAt: z.iso.datetime().nullable(),
+});
+
+describe('standalone inquiries through manager MCP tools', () => {
+  let root: string;
+  let cwd: string;
+  let outside: string;
+  let configDirectory: string;
+  let owner: InquiryOwner;
+  let client: Client;
+  let server: ReturnType<typeof createTaktMcpServer>;
+
+  beforeEach(() => {
+    vi.spyOn(autoRun, 'ensureManagerRun').mockResolvedValue(undefined);
+    configDirectory = process.env.TAKT_CONFIG_DIR!;
+    const temporaryRoot = join(process.cwd(), '.tmp');
+    mkdirSync(temporaryRoot, { recursive: true });
+    root = realpathSync(mkdtempSync(join(temporaryRoot, 'standalone-mcp-')));
+    cwd = join(root, 'assigned');
+    outside = join(root, 'outside');
+    for (const directory of [cwd, outside]) {
+      mkdirSync(directory);
+      initializeGitFixture(directory, []);
+    }
+    owner = { kind: 'repository', repositoryDirectory: cwd };
+  });
+
+  afterEach(async () => {
+    try { await client?.close(); }
+    finally {
+      try { await server?.close(); }
+      finally {
+        vi.restoreAllMocks();
+        invalidateResolvedConfigCache(cwd);
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  async function connect(toolSet: 'manager' | 'all') {
+    server = createTaktMcpServer({}, { toolSet, allowedProjectRoot: cwd, managerAssignment: owner });
+    client = new Client({ name: 'standalone-inquiry-test', version: '1' });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await server.connect(b);
+    await client.connect(a);
+  }
+
+  async function list(extra: Record<string, unknown> = {}) {
+    const result = await client.callTool({ name: 'takt_list_standalone_inquiries', arguments: { cwd, ...extra } });
+    expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
+    const value: Record<string, unknown> = JSON.parse(firstTextContent(result.content));
+    const page = z.object({
+      collection: z.string(), totalCount: z.number().int(), returnedCount: z.number().int(),
+      offset: z.number().int(), nextOffset: z.number().int().nullable(),
+    }).parse(value);
+    const inquiries = z.array(standaloneItemSchema).parse(value[page.collection]);
+    expect(page.returnedCount).toBe(inquiries.length);
+    return { ...page, inquiries };
+  }
+
+  async function withdraw(id: string, reason: string) {
+    const result = await client.callTool({ name: 'takt_withdraw_standalone_inquiry', arguments: { cwd, id, reason } });
+    expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
+    return firstTextContent(result.content);
+  }
+
+  it('reads only pending standalone inquiries with approval identity, kind, body and creation time without saving', async () => {
+    const store = new StandaloneInquiryStore(configDirectory, owner);
+    const approval = await store.create({ kind: 'approval', body: '終了した操作の承認を確認してください',
+      operation: { toolName: 'Write', args: '{}', cwd } });
+    const answered = await store.create({ body: '回答済みの相談' });
+    await store.answer(answered.id, 'JSON');
+    const withdrawn = await store.create({ body: '取り下げ済みの相談' });
+    await store.withdraw(withdrawn.id, '解決済みです');
+    const goalQuestion = { ...approval, id: crypto.webcrypto.randomUUID() };
+    await new GoalStore(cwd).create({ ...goalRecord(), questions: [goalQuestion] });
+    const before = await store.list();
+    await connect('manager');
+
+    const page = await list();
+
+    expect(page.inquiries).toEqual([{ id: approval.id, kind: 'approval', body: approval.body, createdAt: approval.createdAt }]);
+    expect(page.totalCount).toBe(1);
+    expect(await new StandaloneInquiryStore(configDirectory, owner).list()).toEqual(before);
+    expect(autoRun.ensureManagerRun).not.toHaveBeenCalled();
+  });
+
+  it('withdraws an obsolete approval with its original reason and timestamp and reduces pending data in the same session', async () => {
+    const store = new StandaloneInquiryStore(configDirectory, owner);
+    const approval = await store.create({ kind: 'approval', body: '終了した操作の承認',
+      operation: { toolName: 'Write', args: '{}', cwd } });
+    await connect('manager');
+    expect((await list()).inquiries.map(({ id }) => id)).toEqual([approval.id]);
+    const reason = '  対象の操作は終了しました\n' + '理由'.repeat(12000);
+    const before = Date.now();
+
+    expect(await withdraw(approval.id, reason)).toMatch(/withdrawn/u);
+
+    const restored = new StandaloneInquiryStore(configDirectory, owner);
+    const [saved] = await restored.list();
+    expect(saved).toMatchObject({ ...approval, status: 'withdrawn', withdrawalReason: reason });
+    expect(Date.parse(saved!.withdrawnAt!)).toBeGreaterThanOrEqual(before);
+    expect(Date.parse(saved!.withdrawnAt!)).toBeLessThanOrEqual(Date.now());
+    expect(await restored.listPending()).toEqual([]);
+    expect(await list()).toMatchObject({ inquiries: [], totalCount: 0, nextOffset: null });
+    expect(autoRun.ensureManagerRun).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { kind: 'question' as const, answer: { text: 'JSON' } },
+    { kind: 'operation_request' as const, answer: { report: 'completed' as const, text: '実施しました' } },
+    { kind: 'approval' as const, answer: { decision: 'allow' as const, scope: 'project' as const } },
+  ])('returns answered status without replacing a saved $kind answer', async ({ kind, answer }) => {
+    const store = new StandaloneInquiryStore(configDirectory, owner);
+    const pending = await store.create({ kind, body: '確認してください',
+      ...(kind === 'approval' ? { operation: { toolName: 'Write', args: '{}', cwd } } : {}) });
+    const answered = await store.answer(pending.id, answer);
+    await connect('manager');
+
+    expect(await withdraw(pending.id, 'もう不要です')).toMatch(/answered/u);
+
+    expect(await new StandaloneInquiryStore(configDirectory, owner).list()).toEqual([answered]);
+    expect((await list()).inquiries).toEqual([]);
+  });
+
+  it('keeps the first withdrawal reason and time when the tool is called again', async () => {
+    const store = new StandaloneInquiryStore(configDirectory, owner);
+    const pending = await store.create({ body: '確認してください' });
+    const original = await store.withdraw(pending.id, '最初の理由');
+    await connect('manager');
+
+    expect(await withdraw(pending.id, '別の理由')).toMatch(/withdrawn/u);
+
+    expect(await new StandaloneInquiryStore(configDirectory, owner).list()).toEqual([original]);
+  });
+
+  it.each(['manager', 'all'] as const)('reads and withdraws only the assigned repository with %s tools', async (toolSet) => {
+    const store = new StandaloneInquiryStore(configDirectory, owner);
+    const local = await store.create({ body: '現在の担当先の相談' });
+    const otherStore = new StandaloneInquiryStore(configDirectory, { kind: 'repository', repositoryDirectory: outside });
+    const other = await otherStore.create({ body: '別の担当先の相談' });
+    await connect(toolSet);
+
+    expect((await list()).inquiries.map(({ id }) => id)).toEqual([local.id]);
+    for (const args of [{ cwd, id: other.id }, { cwd: outside, id: other.id }]) {
+      const result = await client.callTool({ name: 'takt_withdraw_standalone_inquiry', arguments: { ...args, reason: '不要です' } });
+      expect(result.isError).toBe(true);
+    }
+    const denied = await client.callTool({ name: 'takt_list_standalone_inquiries', arguments: { cwd: outside } });
+    expect(denied.isError).toBe(true);
+    expect(await otherStore.list()).toEqual([other]);
+    await withdraw(local.id, '現在の担当先で解決しました');
+    expect(await otherStore.list()).toEqual([other]);
+  });
+
+  it.each(['manager', 'all'] as const)('uses workspace ownership without reading project inquiries with %s tools', async (toolSet) => {
+    const workspace = await createWorkspace({ globalConfigDirectory: configDirectory, name: '担当 workspace', repositoryDirectories: [cwd, outside] });
+    owner = { kind: 'workspace', workspaceId: workspace.id };
+    const store = new StandaloneInquiryStore(configDirectory, owner);
+    const shared = await store.create({ body: 'workspace の相談' });
+    const localStore = new StandaloneInquiryStore(configDirectory, { kind: 'repository', repositoryDirectory: outside });
+    const local = await localStore.create({ body: 'project の相談' });
+    const otherWorkspace = await createWorkspace({ globalConfigDirectory: configDirectory, name: '別の workspace', repositoryDirectories: [] });
+    const otherStore = new StandaloneInquiryStore(configDirectory, { kind: 'workspace', workspaceId: otherWorkspace.id });
+    const other = await otherStore.create({ body: '別の workspace の相談' });
+    await connect(toolSet);
+
+    for (const directory of toolSet === 'manager' ? [cwd, outside] : [cwd]) {
+      expect((await list({ cwd: directory })).inquiries.map(({ id }) => id)).toEqual([shared.id]);
+    }
+    const requestCwd = toolSet === 'manager' ? outside : cwd;
+    for (const id of [local.id, other.id]) {
+      const result = await client.callTool({ name: 'takt_withdraw_standalone_inquiry', arguments: { cwd: requestCwd, id, reason: '不要です' } });
+      expect(result.isError).toBe(true);
+    }
+    const result = await client.callTool({ name: 'takt_withdraw_standalone_inquiry', arguments: { cwd: requestCwd, id: shared.id, reason: '解決済みです' } });
+    expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+    expect(await new StandaloneInquiryStore(configDirectory, owner).listPending()).toEqual([]);
+    expect(await localStore.list()).toEqual([local]);
+    expect(await otherStore.list()).toEqual([other]);
+  });
+
+  it('resolves the new workspace owner after adding a repository in the same MCP session', async () => {
+    const store = new StandaloneInquiryStore(configDirectory, owner);
+    const local = await store.create({ body: 'project の相談' });
+    await connect('manager');
+    expect((await list()).inquiries.map(({ id }) => id)).toEqual([local.id]);
+    const result = await client.callTool({ name: 'takt_add_workspace_repository', arguments: { repositoryDirectory: outside } });
+    expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+    const workspace = z.object({ workspace: z.object({ id: z.uuid() }) }).parse(JSON.parse(firstTextContent(result.content))).workspace;
+    const workspaceStore = new StandaloneInquiryStore(configDirectory, { kind: 'workspace', workspaceId: workspace.id });
+    const shared = await workspaceStore.create({ body: '新しい workspace の相談' });
+
+    expect((await list()).inquiries.map(({ id }) => id)).toEqual([shared.id]);
+    await withdraw(shared.id, 'workspace で解決しました');
+    expect(await workspaceStore.listPending()).toEqual([]);
+    expect(await store.list()).toEqual([local]);
+  });
+
+  it('returns every pending inquiry once through continuation offsets and handles empty and exhausted pages', async () => {
+    await connect('manager');
+    expect(await list()).toMatchObject({ inquiries: [], totalCount: 0, nextOffset: null });
+    const store = new StandaloneInquiryStore(configDirectory, owner);
+    const expected = [];
+    for (let index = 0; index < 5; index++) expected.push(await store.create({ body: `未回答 ${index}` }));
+    const answered = await store.create({ body: '回答済み' });
+    await store.answer(answered.id, 'JSON');
+    const ids: string[] = [];
+    let offset = 0;
+    for (let index = 0; index < 3; index++) {
+      const page = await list({ offset, limit: 2 });
+      expect(page.offset).toBe(offset);
+      expect(page.totalCount).toBe(5);
+      expect(page.inquiries).toHaveLength(index < 2 ? 2 : 1);
+      ids.push(...page.inquiries.map(({ id }) => id));
+      if (index < 2) {
+        expect(page.nextOffset).toBe(offset + page.inquiries.length);
+        offset = page.nextOffset!;
+      } else expect(page.nextOffset).toBeNull();
+    }
+    expect(ids.sort()).toEqual(expected.map(({ id }) => id).sort());
+    expect(await list({ offset: 10, limit: 2 })).toMatchObject({ inquiries: [], totalCount: 5, offset: 10, nextOffset: null });
+  });
+
+  it('keeps continuation offsets aligned with byte-bounded pages without truncating saved bodies', async () => {
+    const store = new StandaloneInquiryStore(configDirectory, owner);
+    const body = '日本語\u0001\n"\\'.repeat(8000);
+    const saved = [];
+    for (let index = 0; index < 3; index++) saved.push(await store.create({ body: `${index}: ${body}` }));
+    await connect('manager');
+    const ids: string[] = [];
+    let offset = 0;
+    for (let index = 0; index < 3; index++) {
+      const page = await list({ offset, limit: 50 });
+      expect(page.totalCount).toBe(3);
+      expect(page.inquiries.length).toBeGreaterThan(0);
+      for (const inquiry of page.inquiries) {
+        expect(inquiry.body.length).toBeLessThan(body.length);
+        expect(inquiry.body).not.toContain('\uFFFD');
+        ids.push(inquiry.id);
+      }
+      const nextOffset = offset + page.inquiries.length;
+      expect(page.nextOffset).toBe(nextOffset < page.totalCount ? nextOffset : null);
+      if (page.nextOffset === null) break;
+      offset = page.nextOffset;
+    }
+    expect(ids.sort()).toEqual(saved.map(({ id }) => id).sort());
+    expect(await new StandaloneInquiryStore(configDirectory, owner).list()).toEqual(expect.arrayContaining(saved));
+  });
+
+  it('defaults a saved missing kind without inventing a creation time or rewriting the file', async () => {
+    const workspace = await createWorkspace({ globalConfigDirectory: configDirectory, name: '時刻なし', repositoryDirectories: [cwd] });
+    owner = { kind: 'workspace', workspaceId: workspace.id };
+    const id = crypto.webcrypto.randomUUID();
+    const directory = join(configDirectory, 'workspaces', workspace.id, 'inquiries');
+    mkdirSync(directory, { recursive: true });
+    const path = join(directory, `${id}.json`);
+    const serialized = JSON.stringify({ id, body: '保存済みの相談', recipient: 'human', status: 'pending' });
+    writeFileSync(path, serialized);
+    await connect('manager');
+
+    expect((await list()).inquiries).toEqual([{ id, body: '保存済みの相談', kind: 'question', createdAt: null }]);
+    expect(readFileSync(path, 'utf8')).toBe(serialized);
+  });
+
+  it('reports an unknown inquiry ID as an error without changing the saved inquiries', async () => {
+    const store = new StandaloneInquiryStore(configDirectory, owner);
+    const saved = await store.create({ body: '現在の相談' });
+    await connect('manager');
+    expect((await client.listTools()).tools.map(({ name }) => name)).toContain('takt_withdraw_standalone_inquiry');
+    const result = await client.callTool({ name: 'takt_withdraw_standalone_inquiry', arguments: {
+      cwd, id: crypto.webcrypto.randomUUID(), reason: '不要です',
+    } });
+    expect(result.isError).toBe(true);
+    expect(await store.list()).toEqual([saved]);
+  });
+
+  it('reports an invalid saved inquiry instead of returning a successful partial page', async () => {
+    const workspace = await createWorkspace({ globalConfigDirectory: configDirectory, name: '保存エラー', repositoryDirectories: [cwd] });
+    owner = { kind: 'workspace', workspaceId: workspace.id };
+    const directory = join(configDirectory, 'workspaces', workspace.id, 'inquiries');
+    mkdirSync(directory, { recursive: true });
+    const records = [
+      { id: '650e8400-e29b-41d4-a716-446655440001', body: '未回答', recipient: 'human', status: 'pending' },
+      { id: '650e8400-e29b-41d4-a716-446655440002', body: '回答の欠落', recipient: 'human', status: 'answered' },
+    ];
+    for (const record of records) writeFileSync(join(directory, `${record.id}.json`), JSON.stringify(record));
+    await connect('manager');
+    expect((await client.listTools()).tools.map(({ name }) => name)).toContain('takt_list_standalone_inquiries');
+
+    const result = await client.callTool({ name: 'takt_list_standalone_inquiries', arguments: { cwd, limit: 1 } });
+
+    expect(result.isError).toBe(true);
+    for (const record of records) expect(JSON.parse(readFileSync(join(directory, `${record.id}.json`), 'utf8'))).toEqual(record);
+  });
 });
 
 describe('manager goal execution tools through MCP', () => {
