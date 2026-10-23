@@ -122,7 +122,7 @@ function createRetryContext(taskId = 'task-retry'): WebTaskActionContext {
     sourceRunId: 'run-1',
     retryStartOptions: {
       defaultId: 'restart:plan',
-      options: [{ id: 'restart:plan', label: 'plan', selectable: true }],
+      options: [{ id: 'restart:plan', label: 'plan', path: '"default" > "plan"', selectable: true }],
     },
     retryStartSelections: [{
       id: 'restart:plan',
@@ -203,6 +203,20 @@ describe('Web UI chat input', () => {
     }));
   });
 
+  it.each(['verify-first', 'verify-second'])('preserves the artifact directory in an error reply for %s', async (directory) => {
+    const session = createSessionDouble();
+    const message = `interpretation failed\nVerification specifications and logs retained at: /repo/.takt/runs/${directory}\nRemove this directory manually when it is no longer needed.`;
+    session.handleUserMessage.mockResolvedValue({ kind: 'error', code: 'provider_error', message });
+    mockCreateConversationSession.mockReturnValue(session);
+    const service = createWebChatService();
+    const created = service.create('/repo', { workflow: 'default', mode: 'assistant' });
+
+    const reply = await service.send(created.id, '/verify');
+
+    expect(session.handleUserMessage).toHaveBeenCalledWith({ text: '/verify' });
+    expect(reply).toEqual({ kind: 'error', message });
+  });
+
   it('keeps a Retry task-action conversation available after showing a revised order', async () => {
     const session = createSessionDouble();
     session.handleUserMessage
@@ -230,7 +244,7 @@ describe('Web UI chat input', () => {
       sourceRunId: 'run-1',
       retryStartOptions: {
         defaultId: 'restart:plan',
-        options: [{ id: 'restart:plan', label: 'plan', selectable: true }],
+        options: [{ id: 'restart:plan', label: 'plan', path: '"default" > "plan"', selectable: true }],
       },
       retryStartSelections: [{
         id: 'restart:plan',
@@ -339,7 +353,7 @@ describe('Web UI chat input', () => {
         ...baseContext.retryStartOptions!,
         options: [
           ...baseContext.retryStartOptions!.options,
-          { id: 'restart:review', label: 'review', selectable: true },
+          { id: 'restart:review', label: 'review', path: '"default" > "review"', selectable: true },
         ],
       },
       retryStartSelections: [
@@ -381,7 +395,7 @@ describe('Web UI chat input', () => {
       sourceRunId: 'run-1',
       retryStartOptions: {
         defaultId: 'restart:plan',
-        options: [{ id: 'restart:plan', label: 'plan', selectable: true }],
+        options: [{ id: 'restart:plan', label: 'plan', path: '"default" > "plan"', selectable: true }],
       },
       retryStartSelections: [{
         id: 'restart:plan',

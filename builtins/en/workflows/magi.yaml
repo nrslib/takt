@@ -5,6 +5,7 @@ max_steps: 5
 initial_step: melchior
 steps:
   - name: melchior
+    description: Analyze the matter from a scientist and engineer's perspective and decide whether to approve, reject, or conditionally approve it.
     tags:
       - review
     persona: melchior
@@ -37,6 +38,7 @@ steps:
       - condition: Judgment completed
         next: balthasar
   - name: balthasar
+    description: Analyze the matter's impact on people and sustainability, then independently decide whether to approve, reject, or conditionally approve it.
     tags:
       - review
     persona: balthasar
@@ -73,6 +75,7 @@ steps:
       - condition: Judgment completed
         next: casper
   - name: casper
+    description: Judge the matter from a practical and realistic perspective and determine the final conclusion by majority vote among all three.
     tags:
       - review
     persona: casper

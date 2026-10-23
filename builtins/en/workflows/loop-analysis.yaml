@@ -9,6 +9,7 @@ initial_step: analyze
 
 steps:
   - name: analyze
+    description: Investigate avoidable loop causes in completed run records and produce workflow improvement proposals.
     tags:
       - analysis
     capabilities: readonly
@@ -21,6 +22,7 @@ steps:
         next: review
 
   - name: review
+    description: Check the evidence and general applicability of the proposals, decide whether they can be accepted, and state any required corrections.
     tags:
       - review
     capabilities: readonly
@@ -38,6 +40,7 @@ steps:
         next: reanalyze
 
   - name: reanalyze
+    description: Check review findings against run records, revise the proposals, and exclude proposals whose findings cannot be addressed.
     tags:
       - analysis
     capabilities: readonly

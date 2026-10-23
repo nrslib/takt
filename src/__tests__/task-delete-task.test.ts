@@ -11,7 +11,7 @@
  * - Sibling tasks are not affected
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -132,6 +132,57 @@ describe('TaskRunner - deleteTask', () => {
     // When: deleteTask is called with wrong kind ('failed' instead of 'pending')
     // Then: throws because no running task with that name exists under 'failed' status
     expect(() => runner.deleteTask(taskName, 'failed')).toThrow(/not found/i);
+    expect(loadTasksFile(testDir).tasks).toMatchObject([{ name: taskName, status: 'pending' }]);
+  });
+
+  it('runs cleanup before removing the record', () => {
+    const target = runner.addTask('Task A');
+    const cleanup = vi.fn(() => {
+      expect(loadTasksFile(testDir).tasks).toMatchObject([{ name: target.name, status: 'pending' }]);
+    });
+
+    expect(runner.deleteTask(target.name, 'pending', cleanup)).toBeUndefined();
+
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(loadTasksFile(testDir).tasks).toEqual([]);
+  });
+
+  it('releases the tasks.yaml lock before running cleanup', () => {
+    const target = runner.addTask('Task A');
+    let siblingName: string | undefined;
+
+    runner.deleteTask(target.name, 'pending', () => {
+      siblingName = runner.addTask('Task B').name;
+      expect(loadTasksFile(testDir).tasks).toMatchObject([
+        { name: target.name, status: 'pending' },
+        { name: siblingName, status: 'pending' },
+      ]);
+    });
+
+    expect(siblingName).toBeDefined();
+    expect(loadTasksFile(testDir).tasks).toMatchObject([{ name: siblingName, status: 'pending' }]);
+  });
+
+  it('does not run cleanup when the current status differs', () => {
+    const target = runner.addTask('Task A');
+    runner.claimNextTasks(1);
+    const cleanup = vi.fn();
+
+    expect(() => runner.deleteTask(target.name, 'pending', cleanup)).toThrow(/not found/i);
+
+    expect(cleanup).not.toHaveBeenCalled();
+    expect(loadTasksFile(testDir).tasks).toMatchObject([{ name: target.name, status: 'running' }]);
+  });
+
+  it('keeps the record and releases the lock if cleanup throws', () => {
+    const target = runner.addTask('Task A');
+    const before = readFileSync(runner.getTasksFilePath(), 'utf8');
+    const failure = new Error('cleanup failed');
+
+    expect(() => runner.deleteTask(target.name, 'pending', () => { throw failure; })).toThrow(failure);
+
+    expect(readFileSync(runner.getTasksFilePath(), 'utf8')).toBe(before);
+    expect(runner.claimNextTasks(1)).toMatchObject([{ name: target.name, status: 'running' }]);
   });
 
   it('should not affect sibling tasks when deleting one task', () => {

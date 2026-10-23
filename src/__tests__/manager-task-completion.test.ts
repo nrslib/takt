@@ -8,6 +8,7 @@ import type { TaskState } from '../infra/task/types.js';
 import { goalId,goalRecord } from './helpers/goal-fixtures.js';
 const goals = vi.hoisted(() => ({ get: vi.fn(), stale: vi.fn(), retryMetadata: vi.fn() }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { getSync = goals.get; } }));
+vi.mock('../infra/goals/execution-lock.js', () => ({ withGoalExecutionLock: (_cwd: string, action: () => unknown) => action() }));
 vi.mock('../infra/task/process.js', () => ({ isStaleRunningTask: goals.stale }));
 vi.mock('../core/workflow/run/retry-metadata.js', () => ({ readRetryMetadataByRunSlug: goals.retryMetadata }));
 let state: TasksFileData;

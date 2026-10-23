@@ -26,6 +26,7 @@ steps:
           - {質問2}
 
   - name: reviewers
+    description: 1体のレビュアーによるレビューから指摘の裁定・修正・再レビューを進め、要件充足を最終確認する
     kind: workflow_call
     call: peer-review
     args:

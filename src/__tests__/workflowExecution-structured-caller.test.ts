@@ -574,6 +574,7 @@ steps:
         { label: 'needs_fix' },
       ],
       {
+        judgmentInput: 'work result',
         cwd: projectCwd,
         stepName: 'implement',
         provider: 'cursor',
@@ -636,6 +637,7 @@ steps:
         { label: 'needs_fix' },
       ],
       {
+        judgmentInput: 'work result',
         cwd: projectCwd,
         stepName: 'implement',
         provider: 'claude',

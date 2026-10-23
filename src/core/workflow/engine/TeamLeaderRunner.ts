@@ -1311,6 +1311,7 @@ export class TeamLeaderRunner {
       executionDeadlineContext,
       routingDeadline,
       () => resolveAutoRoutingRuntime({
+        workflowMeta: this.deps.optionsBuilder.buildWorkflowMeta(leaderStep, runtime),
         autoRouting,
         scope: createRoutingScope({
           workflow: this.deps.getWorkflowName(),
@@ -1386,6 +1387,7 @@ export class TeamLeaderRunner {
     const partCompanionState: WorkflowState = { ...state };
     let initialResponseRecorded = false;
     let companionPhaseSequence = 2;
+    const partIteration = incrementStepIteration(state, `${step.name}.${part.id}`);
     const result = await runTeamLeaderPart(
       this.deps.optionsBuilder,
       step,
@@ -1404,7 +1406,6 @@ export class TeamLeaderRunner {
         sanitizeText: this.deps.sanitizeObservabilityText,
       },
       (partStep) => {
-        const partIteration = incrementStepIteration(state, partStep.name);
         return this.deps.stepExecutor.buildInstruction(
           partStep,
           partIteration,
@@ -1630,6 +1631,7 @@ export class TeamLeaderRunner {
         const partResolutionRuntime = this.getPartProviderResolutionRuntime(runtime);
         return {
           id: part.id,
+          workflowMeta: this.deps.optionsBuilder.buildWorkflowMeta(step, runtime),
           scope: createRoutingScope({
             workflow: this.deps.getWorkflowName(),
             parentStep: step.name,

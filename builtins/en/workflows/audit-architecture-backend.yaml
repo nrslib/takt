@@ -25,6 +25,7 @@ loop_monitors:
 
 steps:
   - name: plan
+    description: Inventory backend modules and boundaries, and organize the audit scope and priorities.
     tags:
       - plan
     persona: planner
@@ -48,6 +49,7 @@ steps:
         next: ABORT
 
   - name: audit
+    description: Assign backend modules to separate groups, audit their structure, dependencies, and wiring in parallel, and record the results.
     tags:
       - review
     persona: architecture-reviewer
@@ -74,6 +76,7 @@ steps:
         next: supervise
 
   - name: supervise
+    description: Check the coverage and evidence of the backend audit and decide whether to complete or re-audit.
     tags:
       - review
       - supervise
@@ -96,6 +99,7 @@ steps:
         next: review
 
   - name: review
+    description: Re-audit unaudited or insufficiently evidenced backend areas and integrate the results into the existing report.
     tags:
       - review
     persona: architecture-reviewer

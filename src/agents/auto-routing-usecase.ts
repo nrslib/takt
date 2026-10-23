@@ -11,6 +11,7 @@ import type { RunAgentOptions } from './runner.js';
 import type { PermissionMode } from '../core/models/types.js';
 import type { StepProviderOptions } from '../core/models/workflow-types.js';
 import { executeStructuredAgent } from './structured-caller/transport.js';
+import { renderPhaseContext } from '../shared/prompts/phase-context.js';
 
 const OUTPUT_SCHEMA = {
   type: 'object',
@@ -34,7 +35,7 @@ const WORK_REQUIREMENT_ESTIMATOR_TIMEOUT_MS = 30_000;
 export interface WorkRequirementEstimatorOptions {
   cwd: string;
   provider: AutoRoutingConfig['router']['provider'];
-  model: string;
+  model: AutoRoutingConfig['router']['model'];
   providerOptions?: StepProviderOptions;
   permissionMode?: PermissionMode;
   language?: RunAgentOptions['language'];
@@ -143,8 +144,13 @@ export function createWorkRequirementEstimator(options: WorkRequirementEstimator
         estimateOptions?.abortSignal,
       ]);
       try {
+        const assignment = estimateOptions?.workflowMeta?.context?.assignment;
+        const instruction = assignment === undefined ? buildPrompt(input) : [
+          renderPhaseContext(assignment, 1, options.language ?? 'en'),
+          buildPrompt(input),
+        ].join('\n\n');
         const response = await Promise.race([
-          executeStructuredAgent<Record<string, unknown>>(buildPrompt(input), OUTPUT_SCHEMA, {
+          executeStructuredAgent<Record<string, unknown>>(instruction, OUTPUT_SCHEMA, {
             name: 'auto-router',
             persona: 'auto-router',
             cwd: options.cwd,
@@ -158,6 +164,8 @@ export function createWorkRequirementEstimator(options: WorkRequirementEstimator
             onStream: estimateOptions?.onStream,
             onActivity: estimateOptions?.onActivity,
             language: options.language,
+            workflowMeta: estimateOptions?.workflowMeta,
+            executionPhase: 1,
             childProcessEnv: options.childProcessEnv,
             failureDir: options.failureDir,
           }),

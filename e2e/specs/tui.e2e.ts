@@ -1814,10 +1814,13 @@ steps:
 
     // Far wider than the PTY, so it can only be shown by wrapping it.
     tui.write(`${'wide '.repeat(120)}TAIL`);
-    await tui.waitForOutput('TAIL');
-
-    const screen = await tui.visibleScreen();
-    const rendered = screen.join('\n');
+    const rendered = await tui.waitForScreen('the folded draft in one completed input box', (screen) => {
+      const lines = screen.split('\n');
+      return compactScreen(lines).includes('TAIL')
+        && screen.includes('↑ 3')
+        && lines.filter((line) => line.startsWith('╭')).length === 1
+        && lines.filter((line) => line.startsWith('╰')).length === 1;
+    });
     // The caret row stays first and the previous display rows are folded.
     expect(rendered).toContain('TAIL');
     expect(rendered).toContain('↑ 3');

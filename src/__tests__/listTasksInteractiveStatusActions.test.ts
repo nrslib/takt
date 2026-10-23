@@ -17,6 +17,8 @@ const {
   mockShowDiffAndPromptActionForTask,
   mockMergeBranch,
   mockDeleteCompletedTask,
+  mockDeleteAllTasks,
+  mockDeleteSelectedTasks,
   mockRequeueExceededTask,
   mockForceFailRunningTask,
   mockStopRunningTask,
@@ -39,6 +41,8 @@ const {
   mockShowDiffAndPromptActionForTask: vi.fn(),
   mockMergeBranch: vi.fn(),
   mockDeleteCompletedTask: vi.fn(),
+  mockDeleteAllTasks: vi.fn(),
+  mockDeleteSelectedTasks: vi.fn(),
   mockRequeueExceededTask: vi.fn(),
   mockForceFailRunningTask: vi.fn(),
   mockStopRunningTask: vi.fn(),
@@ -89,7 +93,8 @@ vi.mock('../features/tasks/list/taskActions.js', () => ({
 
 vi.mock('../features/tasks/list/taskDeleteActions.js', () => ({
   deleteTaskByKind: mockDeleteCompletedTask,
-  deleteAllTasks: vi.fn(),
+  deleteAllTasks: mockDeleteAllTasks,
+  deleteSelectedTasks: mockDeleteSelectedTasks,
 }));
 
 vi.mock('../features/tasks/list/taskRetryActions.js', () => ({
@@ -183,7 +188,68 @@ describe('listTasks interactive status actions', () => {
     mockSelectAndExecuteTask.mockResolvedValue({ success: true });
     mockSaveTaskFromInteractive.mockResolvedValue({ taskName: 'saved-task', tasksFile: '/project/.takt/tasks.yaml' });
     vi.clearAllMocks();
+    mockSelectOption.mockReset();
     mockCheckTaskProviders.mockResolvedValue(undefined);
+    mockDeleteSelectedTasks.mockReset();
+  });
+
+  it('shows Delete selected… alongside All Delete and the task entries', async () => {
+    mockListAllTaskItems.mockReturnValue([completedTaskWithBranch, failedTask]);
+    mockSelectOption.mockResolvedValueOnce(null);
+
+    await listTasks('/project');
+
+    const options = mockSelectOption.mock.calls[0]![1] as Array<{ label: string }>;
+    expect(options.map((option) => option.label)).toEqual(expect.arrayContaining([
+      '[completed] completed-task (takt/completed-task)',
+      '[failed] failed-task (takt/failed-task)', 'Delete selected…', 'All Delete',
+    ]));
+    expect(mockDeleteSelectedTasks).not.toHaveBeenCalled();
+    expect(mockDeleteAllTasks).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('returns to the same list and allows individual deletion after selected deletion returns %s', async (result) => {
+    const tasks = [completedTaskWithBranch, failedTask];
+    mockListAllTaskItems.mockReturnValue(tasks);
+    mockDeleteSelectedTasks.mockResolvedValueOnce(result);
+    mockSelectOption
+      .mockImplementationOnce(async (_message: string, options: Array<{ label: string; value: string }>) => {
+        const selected = options.find((option) => option.label === 'Delete selected…');
+        expect(selected).toBeDefined();
+        return selected!.value;
+      })
+      .mockResolvedValueOnce('failed:1')
+      .mockResolvedValueOnce('delete')
+      .mockResolvedValueOnce(null);
+
+    await listTasks('/project');
+
+    expect(mockDeleteSelectedTasks).toHaveBeenCalledExactlyOnceWith(tasks);
+    expect(mockDeleteCompletedTask).toHaveBeenCalledExactlyOnceWith(failedTask);
+    expect(mockDeleteAllTasks).not.toHaveBeenCalled();
+    expect(mockListAllTaskItems).toHaveBeenCalledTimes(3);
+    expect(mockSelectOption.mock.calls.map(([message]) => message)).toEqual([
+      'List Tasks', 'List Tasks', 'Action for failed-task:', 'List Tasks',
+    ]);
+  });
+
+  it('keeps All Delete routed directly to deletion and returns to the list', async () => {
+    const tasks = [runningTask, completedTaskWithBranch];
+    mockListAllTaskItems.mockReturnValue(tasks);
+    mockSelectOption
+      .mockImplementationOnce(async (_message: string, options: Array<{ label: string; value: string }>) => {
+        const selected = options.find((option) => option.label === 'All Delete');
+        expect(selected).toBeDefined();
+        return selected!.value;
+      })
+      .mockResolvedValueOnce(null);
+
+    await listTasks('/project');
+
+    expect(mockDeleteAllTasks).toHaveBeenCalledExactlyOnceWith(tasks);
+    expect(mockDeleteSelectedTasks).not.toHaveBeenCalled();
+    expect(mockDeleteCompletedTask).not.toHaveBeenCalled();
+    expect(mockSelectOption.mock.calls.map(([message]) => message)).toEqual(['List Tasks', 'List Tasks']);
   });
 
   it('should accept a different action in the same task list after instruction cancellation', async () => {

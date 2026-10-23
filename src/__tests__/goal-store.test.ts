@@ -9,6 +9,7 @@ const doubles = vi.hoisted(() => ({
 }));
 vi.mock('node:fs', () => ({ readdirSync: doubles.readdir }));
 vi.mock('../infra/fs/file-lock.js', () => ({ withFileLock: (_path: string, action: () => unknown) => action() }));
+vi.mock('../infra/goals/execution-lock.js', () => ({ withGoalExecutionLock: (_cwd: string, action: () => unknown) => action() }));
 vi.mock('../shared/utils/private-file.js', () => ({
   readPrivateFileState: doubles.read, writePrivateFile: doubles.write, ensurePrivateDirectory: vi.fn(),
   capturePrivateDirectoryReadSnapshot: doubles.capture, assertPrivateDirectoryReadSnapshot: doubles.assertSnapshot,
@@ -46,6 +47,24 @@ describe('GoalStore validation and publication', () => {
   it('rejects a saved ID that differs from its directory', async () => {
     doubles.read.mockReturnValue({ content: Buffer.from(JSON.stringify({ ...goalRecord(), id: '550e8400-e29b-41d4-a716-446655440001' })) });
     await expect(new GoalStore('/project').get(goalId)).rejects.toThrow();
+  });
+  it.each([false, true])('notifies only after saving and permits retry after a save failure: %s', async (saveFails) => {
+    const saved = goalRecord();
+    doubles.read.mockReturnValue({ content: Buffer.from(JSON.stringify(saved)) });
+    const failure = new Error('goal save failed');
+    if (saveFails) doubles.write.mockImplementationOnce(() => { throw failure; });
+    const onSaved = vi.fn(() => {
+      expect(JSON.parse(doubles.write.mock.calls.at(-1)![1]).executionStatus).toBe('paused');
+      expect(doubles.write.mock.invocationCallOrder.at(-1)).toBeLessThan(onSaved.mock.invocationCallOrder.at(-1)!);
+    });
+    const update = () => new GoalStore('/project').update(goalId,
+      (goal) => ({ ...goal, executionStatus: 'paused' }), onSaved);
+    if (saveFails) {
+      await expect(update()).rejects.toBe(failure);
+      expect(onSaved).not.toHaveBeenCalled();
+    }
+    await expect(update()).resolves.toMatchObject({ executionStatus: 'paused' });
+    expect(onSaved).toHaveBeenCalledOnce();
   });
   it('reads the latest execution state synchronously through the same store without writing', () => {
     const store = new GoalStore('/project');

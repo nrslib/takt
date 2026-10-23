@@ -32,9 +32,7 @@ function createOptionsBuilder(engineOptions: WorkflowEngineOptions): OptionsBuil
     () => undefined,
     () => '.takt/runs/provider-model-selection/reports',
     () => 'en',
-    () => [{ name: 'plan' }],
     () => 'provider-model-selection',
-    () => 'Provider model selection test',
   );
 }
 
@@ -52,6 +50,43 @@ function createPlanStep(overrides: Partial<NormalAgentWorkflowStep> = {}): Norma
 }
 
 describe('workflow step model selection', () => {
+  it.each(['steps', 'tags', 'personas', 'personaProviders'] as const)(
+    'stops model lookup at an explicit omission in %s',
+    (target) => {
+      const omitted = { provider: 'codex' as const, modelSpecified: true };
+      const result = resolveStepProviderModel({
+        step: createStep(['review'], { providerRoutingPersonaKey: 'coder' }),
+        provider: 'codex',
+        providerSource: 'runtime-v1',
+        model: 'default-profile-model',
+        modelSource: 'runtime-v1',
+        modelProvider: 'codex',
+        providerRouting: {
+          ...(target === 'steps' ? { steps: { plan: omitted } } : {}),
+          ...(target === 'tags' ? { tags: { review: omitted } } : {}),
+          ...(target === 'personas' ? { personas: { coder: omitted } } : {}),
+        },
+        personaProviders: { coder: target === 'personaProviders' ? omitted : { provider: 'codex', model: 'persona-model' } },
+      });
+
+      expect(result.provider).toBe('codex');
+      expect(result.model).toBeUndefined();
+    },
+  );
+
+  it('retains model lookup for a legacy provider-only route with the same provider', () => {
+    const result = resolveStepProviderModel({
+      step: createStep(['review']),
+      providerRouting: {
+        steps: { plan: { provider: 'codex' } },
+        tags: { review: { provider: 'codex', model: 'legacy-tag-model' } },
+      },
+    });
+
+    expect(result.provider).toBe('codex');
+    expect(result.model).toBe('legacy-tag-model');
+  });
+
   it('Given a tag model owned by another provider, When the CLI selects Copilot, Then it drops the tag model', () => {
     const result = resolveStepProviderModel({
       step: createStep(['plan']),

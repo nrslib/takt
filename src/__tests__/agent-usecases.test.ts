@@ -2,7 +2,7 @@ import { buildDecomposePrompt, buildMorePartsPrompt } from '../agents/team-leade
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { runAgent } from '../agents/runner.js';
 import { parseParts } from '../core/workflow/engine/task-decomposer.js';
-import { detectJudgeIndex } from '../agents/judge-utils.js';
+import { buildJudgePrompt, detectJudgeIndex } from '../agents/judge-utils.js';
 import {
   executeAgent,
   executeIsolatedStructuredInternalAgent,
@@ -73,7 +73,7 @@ function doneResponse(content: string, structuredOutput?: Record<string, unknown
   };
 }
 
-const judgeOptions = { cwd: '/repo', stepName: 'review' };
+const judgeOptions = { cwd: '/repo', stepName: 'review', judgmentInput: 'work result' };
 
 const withResolvedMockProvider = <T extends { provider?: unknown; resolvedProvider?: unknown }>(
   options: T,
@@ -981,6 +981,10 @@ describe('agent-usecases', () => {
     );
 
     expect(result).toEqual({ candidateIndex: 1, method: 'ai_judge' });
+    expect(buildJudgePrompt).toHaveBeenCalledWith('work result', [
+      { index: 0, text: 'done' },
+      { index: 1, text: 'fix' },
+    ], 'en', undefined);
   });
 
   it('judgeStatus は全ての判定に失敗したらエラー', async () => {
@@ -1368,8 +1372,7 @@ describe('agent-usecases', () => {
     const workflowMeta = {
       workflowName: 'takt-default',
       currentStep: 'implement',
-      stepsList: [{ name: 'plan' }, { name: 'implement' }],
-      currentPosition: '2/2',
+
       processSafety: {
         protectedParentRunPid: 4242,
       },
@@ -1634,8 +1637,7 @@ describe('agent-usecases', () => {
     const workflowMeta = {
       workflowName: 'takt-default',
       currentStep: 'implement',
-      stepsList: [{ name: 'plan' }, { name: 'implement' }],
-      currentPosition: '2/2',
+
       processSafety: {
         protectedParentRunPid: 4242,
       },

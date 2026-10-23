@@ -15,6 +15,7 @@ steps:
           - {質問1}
           - {質問2}
   - name: develop
+    description: TAKT固有の規約を適用し、計画・テスト・実装・レビュー・指摘の修正・要件充足の最終確認を実行する
     kind: workflow_call
     call: development-core
     args:

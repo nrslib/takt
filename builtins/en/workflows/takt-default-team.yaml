@@ -5,6 +5,7 @@ initial_step: develop
 
 steps:
   - name: develop
+    description: Use Team Leader for TAKT implementation and repair, with planning, testing, review, and requirement confirmation.
     kind: workflow_call
     call: development-core
     args:

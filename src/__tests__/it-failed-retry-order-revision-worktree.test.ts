@@ -160,6 +160,7 @@ function addFailedTask(
   taskDirRelative: string,
   runSlug: string,
   orderContent: string,
+  resumePoint?: WorkflowResumePoint,
 ): { runner: TaskRunner; task: ReturnType<TaskRunner['listAllTaskItems']>[number] } {
   const runner = new TaskRunner(projectDir);
   mkdirSync(join(projectDir, taskDirRelative), { recursive: true });
@@ -182,12 +183,12 @@ function addFailedTask(
     success: false,
     response: 'initial provider failure',
     executionLog: ['initial provider failure'],
-    failureStep: 'fix',
+    failureStep: resumePoint === undefined ? 'fix' : resumePoint.stack[0]!.step,
     startedAt: '2026-08-15T00:00:00.000Z',
     completedAt: '2026-08-15T00:01:00.000Z',
   });
 
-  writeSourceRun(worktreePath, taskName, 'failed-retry-it', runSlug);
+  writeSourceRun(worktreePath, taskName, 'failed-retry-it', runSlug, resumePoint);
 
   return { runner, task: runner.listAllTaskItems()[0]! };
 }
@@ -200,7 +201,7 @@ describe('IT: failed retry order revision queueing in terminal worktree', () => 
     invalidateGlobalConfigCache();
     resetScenario();
     vi.mocked(confirmWithCancel).mockClear();
-    vi.mocked(selectOption).mockClear();
+    vi.mocked(selectOption).mockReset().mockImplementation(async (_message, choices) => choices[0]?.value ?? null);
     mockHasInteractiveTerminal.mockReturnValue(false);
     mockUseTty.mockImplementation(() => process.stdin.isTTY === true);
   });
@@ -213,6 +214,171 @@ describe('IT: failed retry order revision queueing in terminal worktree', () => 
     if (environment && existsSync(environment.root)) {
       rmSync(environment.root, { recursive: true, force: true });
     }
+  });
+
+  describe.each(['retry', 'requeue'] as const)('assistant /%s nested selection recovery', (command) => {
+    it.each([
+      { mode: 'correction', onHeading: true, position: 'leaf' },
+      { mode: 'correction', onHeading: false, position: 'leaf' },
+      { mode: 'manual', onHeading: true, position: 'leaf' },
+      { mode: 'correction', onHeading: true, position: 'call' },
+      { mode: 'correction', onHeading: false, position: 'call' },
+      { mode: 'correction', onHeading: true, position: 'renamed leaf' },
+      { mode: 'correction', onHeading: false, position: 'renamed leaf' },
+    ])('persists and executes the agreed nested final-gate after $mode with $position and heading description=$onHeading', async ({ mode, onHeading, position }) => {
+      const rootYaml = [
+        'name: failed-retry-it', 'initial_step: fix', 'max_steps: 10', 'steps:',
+        '  - name: fix', '    persona: ./personas/fixer.md', '    instruction: Fix',
+        '    rules:', '      - condition: when(true)', '        next: COMPLETE',
+        '  - name: final-gate', '    persona: ./personas/root-gate.md', '    instruction: Root gate',
+        ...(!onHeading ? ['    description: 最終確認'] : []),
+        '    rules:', '      - condition: when(true)', '        next: COMPLETE',
+        '  - name: develop', '    kind: workflow_call', '    call: development-core',
+        '    description: 再レビュー',
+        '    rules:', '      - condition: COMPLETE', '        next: COMPLETE',
+      ].join('\n');
+      const coreYaml = [
+        'name: development-core', 'subworkflow:', '  callable: true', 'initial_step: review', 'steps:',
+        '  - name: review', '    persona: ./personas/fixer.md', '    instruction: Review',
+        '    rules:', '      - condition: when(true)', '        next: COMPLETE',
+        '  - name: peer-review', '    kind: workflow_call', '    call: review-suite',
+        ...(onHeading ? ['    description: 最終確認'] : []),
+        '    rules:', '      - condition: COMPLETE', '        next: COMPLETE',
+        '  - name: unavailable', '    kind: workflow_call', '    call: missing-workflow',
+        '    rules:', '      - condition: COMPLETE', '        next: COMPLETE',
+      ].join('\n');
+      const suiteYaml = [
+        'name: review-suite', 'subworkflow:', '  callable: true', 'initial_step: review', 'steps:',
+        '  - name: review', '    persona: ./personas/fixer.md', '    instruction: Review',
+        '    rules:', '      - condition: when(true)', '        next: final-gate',
+        '  - name: final-gate', '    persona: ./personas/nested-gate.md', '    instruction: Final gate',
+        '    rules:', '      - condition: when(true)', '        next: COMPLETE',
+      ].join('\n');
+      for (const cwd of [environment.projectDir, environment.worktreePath]) {
+        for (const [name, yaml] of [['failed-retry-it', rootYaml], ['development-core', coreYaml], ['review-suite', suiteYaml]]) {
+          writeFileSync(join(cwd, `.takt/workflows/${name}.yaml`), yaml!);
+        }
+        for (const persona of ['root-gate', 'nested-gate']) {
+          writeFileSync(join(cwd, `.takt/workflows/personas/${persona}.md`), `You are ${persona}.`);
+        }
+      }
+      invalidateAllResolvedConfigCache();
+      const original = '# Canonical repair order';
+      const revised = '# Revised repair order';
+      const taskDir = '.takt/tasks/nested-recovery';
+      const workflows = ['failed-retry-it', 'development-core', 'review-suite'].map((name) => {
+        const workflow = loadWorkflowByIdentifier(name, environment.projectDir, { lookupCwd: environment.worktreePath });
+        if (workflow === null) throw new Error(`Expected nested workflow: ${name}`);
+        return workflow;
+      });
+      const failedPosition: WorkflowResumePoint = {
+        version: 2,
+        stack: [
+          buildWorkflowResumePointEntry(workflows[0]!, 'develop', 'workflow_call', 1, undefined, 1),
+          buildWorkflowResumePointEntry(workflows[1]!, 'peer-review', 'workflow_call', 1, undefined, 1),
+          buildWorkflowResumePointEntry(workflows[2]!, 'final-gate', 'agent', 1),
+        ],
+        iteration: 3, elapsed_ms: 1000, workflow_call_invocations: {}, workflow_step_participations: {},
+      };
+      if (position === 'call') failedPosition.stack = failedPosition.stack.slice(0, 2);
+      const { runner, task } = addFailedTask(environment.projectDir, environment.worktreePath,
+        'nested-recovery', taskDir, 'nested-source', original, failedPosition);
+      const gateName = position === 'renamed leaf' ? 'final-gate-new' : 'final-gate';
+      if (position === 'renamed leaf') {
+        for (const cwd of [environment.projectDir, environment.worktreePath]) {
+          writeFileSync(join(cwd, '.takt/workflows/review-suite.yaml'), suiteYaml.replaceAll('final-gate', gateName));
+        }
+        invalidateAllResolvedConfigCache();
+      }
+      const preparation = prepareFailedTaskRetry(task, environment.projectDir);
+      expect(preparation.resumePoint).toEqual(failedPosition);
+      const context = buildFailedTaskRetryStartContext(preparation, environment.projectDir, preparation.previousWorkflow!);
+      const chosenId = 'restart:2.1.1';
+      const expected = resolveFailedTaskRetryStart(context, chosenId);
+      const digest = 'Restart nested-recovery at failed-retry-it > develop → development-core > peer-review → review-suite > final-gate.';
+      const { provider, capture } = createMockProvider([
+        digest,
+        '{"startOptionId":"restart:2.1.1","reason":"agreed"}',
+        JSON.stringify({ startOptionId: mode === 'correction' ? chosenId : 'restart:999' }),
+        ...(command === 'retry' ? [revised] : []),
+      ]);
+      vi.mocked(selectOption).mockImplementation(async (_message, choices) => {
+        expect(runner.listAllTaskItems()[0]?.kind).toBe('failed');
+        return choices.find((choice) => choice.value === chosenId)?.value
+          ?? choices.find((choice) => choice.value === 'save_task')?.value ?? null;
+      });
+      mockHasInteractiveTerminal.mockReturnValue(true);
+      mockUseTty.mockReturnValue(true);
+
+      const notice = await runAssistantRetryCommand({
+        cwd: environment.projectDir, lang: 'en', command, formalSpec: false,
+        history: [{ role: 'user', content: 'OLD_UNRELATED_DETAIL' }, { role: 'assistant', content: digest }, { role: 'user', content: 'Yes, that final-gate.' }],
+        inlineText: 'Keep the agreed path.',
+        sessionContext: { provider: provider as SessionContext['provider'], providerType: 'mock',
+          model: undefined, lang: 'en', personaName: 'assistant', sessionId: 'conversation-session' },
+      });
+
+      expect(notice).toContain('pending');
+      for (const prompt of capture.prompts.slice(1, 3)) {
+        const payload = JSON.parse(prompt) as { startOptions: Array<{ id: string; path?: string; headings?: unknown[] }> };
+        expect(payload.startOptions).toEqual(expect.arrayContaining([
+          expect.objectContaining({ id: 'restart:0', path: '"failed-retry-it" > "fix"' }),
+          expect.objectContaining({ id: 'restart:1', path: '"failed-retry-it" > "final-gate"' }),
+          expect.objectContaining({ id: 'restart:2.0', path: '"failed-retry-it" > "develop" → "development-core" > "review"' }),
+          expect.objectContaining({ id: 'restart:2.1.0', path: '"failed-retry-it" > "develop" → "development-core" > "peer-review" → "review-suite" > "review"' }),
+          expect.objectContaining({ id: chosenId, path: `"failed-retry-it" > "develop" → "development-core" > "peer-review" → "review-suite" > "${gateName}"` }),
+        ]));
+        const expectedHeadings = [
+          { path: '"failed-retry-it" > "develop"', description: '再レビュー' },
+          { path: '"failed-retry-it" > "develop" → "development-core" > "peer-review"', ...(onHeading ? { description: '最終確認' } : {}) },
+        ];
+        for (const id of [chosenId, 'resume-checkpoint']) {
+          expect(payload.startOptions.find((option) => option.id === id)).toMatchObject({
+            path: id === 'resume-checkpoint' && position !== 'leaf'
+              ? '"failed-retry-it" > "develop" → "development-core" > "peer-review"'
+              : `"failed-retry-it" > "develop" → "development-core" > "peer-review" → "review-suite" > "${gateName}"`,
+          });
+          expect(payload.startOptions.find((option) => option.id === id)?.headings).toEqual(expectedHeadings);
+        }
+        expect(payload.startOptions.every((option) => !option.id.startsWith('heading:'))).toBe(true);
+        const heading = context.startOptions.options.find((option) => option.id === 'heading:2.2')!;
+        expect(heading.description).toBeTruthy();
+        expect(prompt).toContain(JSON.stringify(heading.description));
+        expect(prompt).toContain(digest);
+        expect(prompt).not.toContain('OLD_UNRELATED_DETAIL');
+      }
+      expect(capture.sessionIds.slice(1, 3)).toEqual([undefined, undefined]);
+      expect(capture.callCount).toBe(command === 'retry' ? 4 : 3);
+      expect(vi.mocked(selectOption)).toHaveBeenCalledTimes((mode === 'manual' ? 1 : 0) + (command === 'retry' ? 1 : 0));
+      const pending = runner.listTasks()[0]!;
+      expect(pending.data?.restart_point).toEqual(expected.restartPoint);
+      expect(pending.data?.resume_point).toBeUndefined();
+      expect(pending.sourceRunSlug).toBe('nested-source');
+      expect(readFileSync(join(environment.projectDir, taskDir, 'order.md'), 'utf-8')).toBe(command === 'retry' ? revised : original);
+      const saved = parse(readFileSync(join(environment.projectDir, '.takt/tasks.yaml'), 'utf-8')) as { tasks: Array<Record<string, unknown>> };
+      expect(saved.tasks[0]).toMatchObject({ status: 'pending', restart_point: expected.restartPoint });
+      // Candidate selection retains unresolved-branch diagnostics, while execution
+      // requires every workflow call in the bundle to resolve.
+      for (const cwd of [environment.projectDir, environment.worktreePath]) {
+        writeFileSync(join(cwd, '.takt/workflows/missing-workflow.yaml'), [
+          'name: missing-workflow', 'subworkflow:', '  callable: true', 'initial_step: unused', 'steps:',
+          '  - name: unused', '    persona: ./personas/fixer.md', '    instruction: Unused branch',
+          '    rules:', '      - condition: when(true)', '        next: COMPLETE',
+        ].join('\n'));
+      }
+      invalidateAllResolvedConfigCache();
+      const logPath = join(environment.root, 'nested-calls.ndjson');
+      vi.stubEnv('TAKT_MOCK_CALL_LOG', logPath);
+      setMockScenario([{ persona: 'nested-gate', status: 'done', content: 'Complete.' }]);
+
+      const succeeded = await executeAndCompleteTask(runner.claimNextTasks(1)[0]!, runner, environment.projectDir,
+        { provider: 'mock' }, { outputMode: 'silent' });
+      expect(succeeded, JSON.stringify(runner.listAllTaskItems().map((item) => item.failure))).toBe(true);
+
+      const starts = readFileSync(logPath, 'utf-8').trim().split('\n')
+        .map((line) => JSON.parse(line) as { event: string; personaName: string }).filter((entry) => entry.event === 'start');
+      expect(starts.map((entry) => entry.personaName)).toEqual(['nested-gate']);
+    });
   });
 
   it.each(['restart implement', 'continue checkpoint', 'restart review', 'continue saved', 'restart child'] as const)(
@@ -423,6 +589,7 @@ describe('IT: failed retry order revision queueing in terminal worktree', () => 
     expect(startOption).toBeDefined();
     const expectedStart = resolveFailedTaskRetryStart(startContext, startOption!.id);
     const { provider, capture } = createMockProvider([
+      'Apply the parser repair from the selected failed position.',
       JSON.stringify({ startOptionId: startOption!.id }),
       revisedOrder,
     ]);
@@ -459,11 +626,11 @@ describe('IT: failed retry order revision queueing in terminal worktree', () => 
     expect(finalTask.data?.resume_point).toEqual(expectedStart.resumePoint);
     expect(finalTask.data?.restart_point).toEqual(expectedStart.restartPoint);
     expect(finalTask.sourceRunSlug).toBe(runSlug);
-    expect(capture.callCount).toBe(2);
-    expect(capture.prompts[1]).toContain(originalOrder);
-    expect(capture.prompts[1]).toContain('Apply the repair described in this conversation.');
-    expect(capture.allowedTools).toEqual([[], []]);
-    expect(capture.sessionIds).toEqual([undefined, undefined]);
+    expect(capture.callCount).toBe(3);
+    expect(capture.prompts[2]).toContain(originalOrder);
+    expect(capture.prompts[2]).toContain('Apply the repair described in this conversation.');
+    expect(capture.allowedTools).toEqual([[], [], []]);
+    expect(capture.sessionIds).toEqual([undefined, undefined, undefined]);
     expect(readdirSync(join(environment.worktreePath, '.takt', 'runs'))).toEqual([runSlug]);
   });
 
@@ -489,6 +656,7 @@ describe('IT: failed retry order revision queueing in terminal worktree', () => 
     expect(startOption).toBeDefined();
     const expectedStart = resolveFailedTaskRetryStart(startContext, startOption!.id);
     const { provider, capture } = createMockProvider([
+      'Resume the failed task from the agreed position.',
       JSON.stringify({ startOptionId: startOption!.id }),
     ]);
     setupRawStdin(toRawInputs([]));
@@ -523,7 +691,7 @@ describe('IT: failed retry order revision queueing in terminal worktree', () => 
     expect(finalTask.data?.restart_point).toEqual(expectedStart.restartPoint);
     expect(finalTask.data?.retry_note).toContain('[Auto-requeue]');
     expect(finalTask.sourceRunSlug).toBe(runSlug);
-    expect(capture.callCount).toBe(1);
+    expect(capture.callCount).toBe(2);
     expect(vi.mocked(confirmWithCancel)).toHaveBeenCalledWith(expect.stringContaining(expectedStart.label), false);
     expect(vi.mocked(selectOption)).not.toHaveBeenCalled();
     expect(existsSync(join(environment.worktreePath, '.takt', 'runs', 'new-run'))).toBe(false);
@@ -612,6 +780,7 @@ describe('IT: failed retry order revision queueing in terminal worktree', () => 
     const startOption = startContext.startOptions.options.find((option) => option.selectable);
     expect(startOption).toBeDefined();
     const { provider } = createMockProvider([
+      'Revise the task from the agreed position.',
       JSON.stringify({ startOptionId: startOption!.id }),
       revisedOrder,
     ]);

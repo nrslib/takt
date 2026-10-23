@@ -118,18 +118,22 @@ async function assertOversizedRateLimitResponseIsBounded(
   createPlan: (message: string) => RunPlan,
 ): Promise<void> {
   const failureMessage = `HTTP 429: ${'x'.repeat(10000)}`;
-  runPlans = [createPlan(failureMessage)];
+  vi.useFakeTimers();
+  runPlans = Array.from({ length: 9 }, () => createPlan(failureMessage));
 
-  const result = await new CodexClient().call('coder', 'prompt', createFailureOptions());
+  const pending = new CodexClient().call('coder', 'prompt', createFailureOptions());
+  await vi.advanceTimersByTimeAsync(121_000);
+  const result = await pending;
 
+  expect(runPlanIndex).toBe(9);
   expect(result.status).toBe('rate_limited');
   expect(result.error).toContain('HTTP 429:');
   expect(result.error).toMatch(/\[TRUNCATED: \d+ bytes, full text:/);
   expect(Buffer.byteLength(result.content, 'utf8')).toBeLessThanOrEqual(MAX_AGENT_FAILURE_MESSAGE_BYTES);
   expect(Buffer.byteLength(result.error ?? '', 'utf8')).toBeLessThanOrEqual(MAX_AGENT_FAILURE_MESSAGE_BYTES);
   expect(ensurePrivateDirectoryMock).toHaveBeenCalledWith(FAILURE_DIR);
-  expect(writeNewPrivateFileWithModeMock).toHaveBeenCalledOnce();
-  expect(writeNewPrivateFileWithModeMock.mock.calls[0]?.[1]).toBe(failureMessage);
+  expect(writeNewPrivateFileWithModeMock).toHaveBeenCalled();
+  expect(writeNewPrivateFileWithModeMock.mock.calls.at(-1)?.[1]).toBe(failureMessage);
 }
 
 describe('CodexClient failure handling', () => {

@@ -5,6 +5,7 @@ import { MANAGER_GOAL_TASKS_ENV } from '../shared/constants.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 const doubles = vi.hoisted(() => ({ config: vi.fn(), owner: vi.fn(), pending: vi.fn(), spawn: vi.fn(), exists: vi.fn(), open: vi.fn(), close: vi.fn(), resolve: vi.fn(), diagnostic: vi.fn(), goal: vi.fn(), events: vi.fn() }));
 vi.mock('../infra/goals/events.js', () => ({ readManagerEvents: doubles.events }));
+vi.mock('../infra/goals/execution-lock.js', () => ({ withGoalExecutionLock: (_cwd: string, action: () => unknown) => action() }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class {
   getSync = doubles.goal;
   async get(id: string) { return doubles.goal(id); }

@@ -3,7 +3,7 @@ import type { StreamCallback } from '../../shared/types/provider.js';
 import { statusLine } from '../../shared/ui/StatusLine.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
 
-type HandoffStage = 'selectTask' | 'selectStart' | 'reviseInstruction' | 'composeTell';
+type HandoffStage = 'selectTask' | 'selectStart' | 'extractRetryAgreement' | 'reviseInstruction' | 'composeTell';
 
 export async function withHandoffProgress<T>(
   enabled: boolean,
@@ -16,7 +16,7 @@ export async function withHandoffProgress<T>(
   const label = getLabel(`tui.ui.${stage}`, lang);
   let active = true;
   let streamed = '';
-  const onStream: StreamCallback | undefined = stage === 'selectTask' || stage === 'selectStart'
+  const onStream: StreamCallback | undefined = stage === 'selectTask' || stage === 'selectStart' || stage === 'extractRetryAgreement'
     ? undefined
     : (event) => {
       if (!active || event.type !== 'text') return;

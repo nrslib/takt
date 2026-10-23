@@ -174,6 +174,7 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   // These task-persistence suites use real store transitions and synchronous private-artifact subprocesses.
   'src/__tests__/task-exceed-service.test.ts',
   'src/__tests__/task.test.ts',
+  'src/__tests__/taskDeleteActions.test.ts',
   'src/__tests__/taskForceFailActions.test.ts',
   'src/__tests__/traced-config-boundary.test.ts',
   'src/__tests__/traced-config-runtime-bridge-cache.test.ts',
@@ -337,7 +338,6 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/standalone-inquiries.integration.test.ts',
   'src/__tests__/statusLine.test.ts',
   'src/__tests__/task-delete-task.test.ts',
-  'src/__tests__/taskDeleteActions.test.ts',
   'src/__tests__/taskResultHandler.test.ts',
   'src/__tests__/taskSpecContext.test.ts',
   'src/__tests__/team-leader-schema-loader.test.ts',

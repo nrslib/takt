@@ -300,6 +300,7 @@ TAKT 支持 Normal、Parallel、Dynamic Parallel、Arpeggio、Team Leader、Work
 - `all("X")`：所有子 step 都匹配 X 时为真
 - `any("X")`：任意子 step 匹配 X 时为真
 - 子 step 的 `rules` 定义可能结果；`next` 可省略，由 parent 路由
+- 子 step 可以指定可选的 `description`，说明该 step 做什么。
 - parallel 子 step 不支持 `promotion`
 - parent 可设置 `concurrency: <N>`（最小 1）限制并发数；省略时全部同时启动
 
@@ -319,6 +320,7 @@ TAKT 支持 Normal、Parallel、Dynamic Parallel、Arpeggio、Team Leader、Work
         - name: frontend
           persona: frontend-reviewer
           description: Review frontend and UI changes
+          selection_hint: Select when changes affect user-facing behavior or presentation
           instruction: Review frontend
           rules: [{ condition: approved }]
         - name: backend
@@ -333,9 +335,11 @@ TAKT 支持 Normal、Parallel、Dynamic Parallel、Arpeggio、Team Leader、Work
         next: COMPLETE
 ```
 
-`pool` 必须非空，且每个 pool item 都需要非空 `description`。`fixed` 总是运行，selector 只能选择展开后的 pool step name。`replace`（默认）在新 round 替换上一轮 pool selection；`cumulative` 保留之前选中的 item。恢复运行不会恢复保存的 selection，而是针对当前 pool 再次调用 selector。
+`pool` 必须非空，且每个候选项都需要非空 `description`，说明该候选项的职责。如果仅凭职责无法确定何时选择候选项，可以用 `selection_hint` 编写选择标准。`selection_hint` 是仅允许用于 `pool` 候选项的可选字段，指定时必须是非空字符串。selector 同时参考 `description` 和 `selection_hint`。没有 `selection_hint` 的现有 YAML 仍按原有方式，仅根据 `description` 选择。在其他 step 或子 step 中设置 `selection_hint` 会导致加载错误。
 
-`all()` 和 `any()` 只聚合当前 round 的 fixed 与 selected pool item。selector 输出无效或选择未知项时，在任何 agent 启动前失败；没有 all-pool fallback。缺失/空 pool、重复展开名称、非 agent 子 step、无效 selection mode、provider 未解析、严格 structured output 无效或 fixed 加 selected 为空都会在执行前失败。Selector 输入包括任务、Report Directory 路径、目标 report 名称、相对 `HEAD` 的变更文件路径、candidate ID/description、`cumulative` 的上一轮 selection 以及是否首次进入/新 round。报告引用按当前 scope、resume snapshot 和父 scope 解析；读取工具只允许 `Read`、`Glob` 和 `Grep`。
+`fixed` 总是运行，selector 只能选择展开后的 pool step name。`replace`（默认）在新 round 替换上一轮 pool selection；`cumulative` 保留之前选中的 item。恢复运行不会恢复保存的 selection，而是针对当前 pool 再次调用 selector。
+
+`all()` 和 `any()` 只聚合当前 round 的 fixed 与 selected pool item。selector 输出无效或选择未知项时，在任何 agent 启动前失败；没有 all-pool fallback。缺失/空 pool、重复展开名称、非 agent 子 step、无效 selection mode、provider 未解析、严格 structured output 无效或 fixed 加 selected 为空都会在执行前失败。Selector 输入包括任务、Report Directory 路径、目标 report 名称、相对 `HEAD` 的变更文件路径、候选项 ID 及其 `description`（职责）和 `selection_hint`（若指定，则为选择标准）、`cumulative` 的上一轮 selection 以及是否首次进入/新 round。报告引用按当前 scope、resume snapshot 和父 scope 解析；读取工具只允许 `Read`、`Glob` 和 `Grep`。
 
 ### Dynamic Facet Selection（Facet Pool）
 
@@ -725,7 +729,8 @@ steps:
 
 | 选项 | 默认值 | 说明 |
 |------|--------|------|
-| `description` | - | step 描述；dynamic parallel pool item 必须使用非空值 |
+| `description` | - | 自由编写的描述，说明该 step 做什么。normal step、`workflow_call` 和静态 `parallel` 子 step 中可选；dynamic parallel 的 `pool` 候选项中必填，作为候选项的职责传给 selector |
+| `selection_hint` | - | 仅允许用于 dynamic parallel 的 `pool` 候选项的可选字段。当仅凭职责无法确定何时选择候选项时，编写选择标准。selector 同时参考 `description` 和 `selection_hint`。在其他 step 或子 step 中设置会导致加载错误 |
 | `persona` | - | persona key 或裸 facet 名称 |
 | `persona_name` | - | 日志和 prompt 中的显示名，不影响 routing |
 | `session_key` | - | normal agent step 和 parallel 子 step 的显式 session key；provider 会追加到 runtime key |

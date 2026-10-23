@@ -1,6 +1,7 @@
 import * as path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
-import { withFileLock, type FileLockAcquisitionErrorHandler } from '../fs/file-lock.js';
+import { isRecordedProcessAlive, withFileLock, type FileLockAcquisitionErrorHandler } from '../fs/file-lock.js';
 import { TasksFileSchema, serializeTasksFileData, type TasksFileData } from './schema.js';
 import { normalizePersistedTasksFile } from './taskConfigSerialization.js';
 import { createLogger } from '../../shared/utils/index.js';
@@ -38,16 +39,54 @@ export class TaskStore {
 
   update(
     mutator: (current: TasksFileData) => TasksFileData | undefined,
-    onAcquisitionError?: FileLockAcquisitionErrorHandler,
+    options?: { deletionId?: string; onAcquisitionError?: FileLockAcquisitionErrorHandler },
   ): TasksFileData {
     return this.withLock(() => {
-      const current = this.readUnsafe();
+      const current = this.clearStaleDeletions(this.readUnsafe());
       const mutation = mutator(current);
       if (mutation === undefined) return current;
       const updated = TasksFileSchema.parse(mutation);
+      this.assertDeletionsUnchanged(current, updated, options?.deletionId);
       this.writeUnsafe(updated);
       return updated;
-    }, onAcquisitionError);
+    }, options?.onAcquisitionError);
+  }
+
+  private clearStaleDeletions(state: TasksFileData): TasksFileData {
+    let changed = false;
+    const tasks = state.tasks.map((task) => {
+      const deletion = task.deletion;
+      if (!deletion || isRecordedProcessAlive(
+        deletion.owner_pid,
+        deletion.owner_start_time === undefined ? undefined : { startTime: deletion.owner_start_time },
+      )) {
+        return task;
+      }
+
+      changed = true;
+      const restored = { ...task };
+      delete restored.deletion;
+      return restored;
+    });
+    return changed ? { tasks } : state;
+  }
+
+  private assertDeletionsUnchanged(
+    current: TasksFileData,
+    updated: TasksFileData,
+    deletionId: string | undefined,
+  ): void {
+    const deletionIds = new Set(current.tasks
+      .map((task) => task.deletion?.id)
+      .filter((id): id is string => id !== undefined && id !== deletionId));
+
+    for (const id of deletionIds) {
+      const currentTasks = current.tasks.filter((task) => task.deletion?.id === id);
+      const updatedTasks = updated.tasks.filter((task) => task.deletion?.id === id);
+      if (!isDeepStrictEqual(currentTasks, updatedTasks)) {
+        throw new Error('Cannot update a task while its deletion is in progress.');
+      }
+    }
   }
 
   private readUnsafe(): TasksFileData {

@@ -390,7 +390,7 @@ function createProcessSafetyByStep(parentRunPid: number): WorkflowEngineOptions[
 function createBuilder(
   step: WorkflowStep,
   engineOverrides: BuilderEngineOverrides = {},
-  recordActivity: NonNullable<ConstructorParameters<typeof OptionsBuilder>[14]> = () => {},
+  recordActivity: NonNullable<ConstructorParameters<typeof OptionsBuilder>[12]> = () => {},
   phaseContextSources: PhaseContextSources = {},
 ): OptionsBuilder {
   const currentWorkflowStack = phaseContextSources.currentWorkflowStack;
@@ -414,9 +414,7 @@ function createBuilder(
     () => undefined,
     () => '.takt/runs/sample/reports',
     () => 'ja',
-    () => [{ name: step.name }],
     () => engineOverrides.workflowName ?? 'default',
-    () => 'test workflow',
     currentWorkflowStack === undefined
       ? undefined
       : () => [...currentWorkflowStack],
@@ -972,7 +970,6 @@ describe('OptionsBuilder.buildBaseOptions', () => {
     const options = builder.buildBaseOptions(step);
 
     expect(options.workflowMeta).toEqual(expect.objectContaining({
-      workflowName: 'takt-default',
       currentStep: 'implement',
     }));
     expect(options.workflowMeta?.processSafety).toBeUndefined();
@@ -988,7 +985,6 @@ describe('OptionsBuilder.buildBaseOptions', () => {
     const options = builder.buildAgentOptions(step);
 
     expect(options.workflowMeta).toEqual(expect.objectContaining({
-      workflowName: 'takt-default',
       currentStep: 'implement',
       processSafety: { protectedParentRunPid: 4242 },
     }));
@@ -1012,7 +1008,6 @@ describe('OptionsBuilder.buildBaseOptions', () => {
     });
 
     expect(options.workflowMeta).toEqual(expect.objectContaining({
-      workflowName: 'takt-default',
       currentStep: 'implement.part-1',
       processSafety: { protectedParentRunPid: 4242 },
     }));

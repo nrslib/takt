@@ -26,6 +26,7 @@ export interface StreamTrackingState {
   textOffsets: Map<string, number>;
   thinkingOffsets: Map<string, number>;
   anonymousItemIds: Map<string, string>;
+  observedToolUse: boolean;
   activeTool?: StreamToolUseEventData;
 }
 
@@ -36,6 +37,7 @@ export function createStreamTrackingState(): StreamTrackingState {
     textOffsets: new Map<string, number>(),
     thinkingOffsets: new Map<string, number>(),
     anonymousItemIds: new Map<string, string>(),
+    observedToolUse: false,
   };
 }
 
@@ -89,6 +91,7 @@ function recordToolUse(
   input: Record<string, unknown>,
   id: string,
 ): void {
+  state.observedToolUse = true;
   state.activeTool = { tool, input, id };
 }
 

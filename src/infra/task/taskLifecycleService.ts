@@ -19,8 +19,8 @@ import { randomUUID } from 'node:crypto';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { GoalStore } from '../goals/store.js';
-import type { Goal } from '../goals/schema.js';
 import { isGoalPaused } from '../goals/state.js';
+import { withGoalExecutionLock } from '../goals/execution-lock.js';
 import type { MergeMethod } from '../../core/models/config-types.js';
 import type { PrExecutionContext } from '../../core/workflow/system/pr-execution-context.js';
 import { getSelfTaskProcessIdentity, getTaskProcessIdentity } from './taskProcessIdentity.js';
@@ -188,20 +188,22 @@ export class TaskLifecycleService {
 
     const claimed: TaskInfo[] = [];
 
-    this.store.update((current) => {
+    withGoalExecutionLock(this.projectDir, () => this.store.update((current) => {
       let remaining = count;
       const goalStore = new GoalStore(this.projectDir);
-      const goals = new Map<string, Goal>();
+      const blockedByGoal = new Map<string, boolean>();
       const tasks = current.tasks.map((task) => {
-        if (remaining > 0 && task.status === 'pending' && (this.goalTasksOnly !== true || task.goal_id !== undefined)) {
+        if (remaining > 0 && task.status === 'pending' && task.deletion === undefined
+          && (this.goalTasksOnly !== true || task.goal_id !== undefined)) {
           if (task.goal_id !== undefined) {
             try {
-              let goal = goals.get(task.goal_id);
-              if (goal === undefined) {
-                goal = goalStore.getSync(task.goal_id);
-                goals.set(task.goal_id, goal);
+              let blocked = blockedByGoal.get(task.goal_id);
+              if (blocked === undefined) {
+                const goal = goalStore.getSync(task.goal_id);
+                blocked = isGoalPaused(goal) || goal.executionStatus === 'aborted';
+                blockedByGoal.set(task.goal_id, blocked);
               }
-              if (isGoalPaused(goal) || goal.executionStatus === 'aborted') return task;
+              if (blocked) return task;
             } catch (error) {
               this.onWarning?.(`Cannot read goal for task ${task.name}: ${sanitizeSensitiveText(getErrorMessage(error))}`);
               return task;
@@ -232,18 +234,20 @@ export class TaskLifecycleService {
         return task;
       });
       return { tasks };
-    }, (error) => {
-      if (error instanceof Error && 'code' in error && error.code === 'ENOSPC') {
-        throw new TaskClaimLockAcquisitionError(error.message, { cause: error });
-      }
-      throw error;
-    });
+    }, {
+      onAcquisitionError: (error) => {
+        if (error instanceof Error && 'code' in error && error.code === 'ENOSPC') {
+          throw new TaskClaimLockAcquisitionError(error.message, { cause: error });
+        }
+        throw error;
+      },
+    }));
 
     return claimed;
   }
 
   invalidatePendingGoalTasks(goalId: string): void {
-    this.store.update((current) => ({
+    withGoalExecutionLock(this.projectDir, () => this.store.update((current) => ({
       tasks: current.tasks.map((task) => {
         if (task.status !== 'pending' || task.goal_id !== goalId) return task;
         return buildTerminalTaskRecord(task, {
@@ -251,7 +255,7 @@ export class TaskLifecycleService {
           failure: { error: `Goal ${goalId} was aborted`, retryable: false },
         });
       }),
-    }));
+    })));
   }
 
   failInterruptedRunningTasks(goalId?: string, onRecovered?: (task: TaskState) => void): number {

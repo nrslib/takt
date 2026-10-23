@@ -60,6 +60,7 @@ interface Scenario {
   commentFails?: boolean;
   recoveredMergeable?: string;
   headChangesDuringInvestigation?: boolean;
+  ciSucceedsDuringInvestigation?: boolean;
   headChangesDuringRunValidation?: boolean;
   recoveryPushFails?: boolean;
   ciName?: { field: 'check' | 'job' | 'unavailable'; value: string };
@@ -117,6 +118,7 @@ describe('Builtin PR merge workflow execution', () => {
     const workflow = loadWorkflowByIdentifier(join(process.cwd(), 'builtins', language, 'workflows', `${name}.yaml`), project);
     if (!workflow) throw new Error(`Missing builtin workflow: ${name}`);
     let ciFinished = scenario.ciRunning !== true || name !== 'merge-review';
+    let ciRecovered = false;
     let headSha = 'a'.repeat(40);
     let conflictsResolved = false;
     let pushes = 0;
@@ -153,6 +155,7 @@ describe('Builtin PR merge workflow execution', () => {
         if (options?.executionPhase === 1) {
           calls.push(`agent:${step}`);
           if (step === 'investigate_ci' && scenario.headChangesDuringInvestigation) remoteHeadOverride = 'f'.repeat(40);
+          if (step === 'investigate_ci' && scenario.ciSucceedsDuringInvestigation) ciRecovered = true;
           recoveryPrompts.push({ step: step!, prompt,
             requiredPermissionMode: options.permissionResolution?.requiredPermissionMode, cwd: options.cwd });
         }
@@ -223,7 +226,7 @@ describe('Builtin PR merge workflow execution', () => {
       observedStatuses.push({ headSha: remoteHeadSha, finished: ciFinished, mergeable });
       return { exists: true, number: prNumber, headSha: remoteHeadSha, branch: 'feature/pr', baseBranch: 'main',
         ci: { finished: ciFinished,
-          passed: ciFinished && scenario.ciPassed !== false && (scenario.ciFailures === undefined
+          passed: ciFinished && scenario.ciPassed !== false && (ciRecovered || scenario.ciFailures === undefined
             || (reruns > 0 ? rerunConclusion === 'success' : pushes > scenario.ciFailures.length)) },
         mergeable: pushes > 1 && scenario.recoveredMergeable ? scenario.recoveredMergeable : mergeable, mergeStateStatus: 'CLEAN',
         reviewDecision: scenario.reviewDecision ?? 'APPROVED', merged: false };
@@ -918,6 +921,17 @@ describe('Builtin PR merge workflow execution', () => {
       expect(reports(h.reportDirectory).some((report) => report.includes(summary))).toBe(true);
       expect(h.comments[0]).toContain(summary);
       expect(h.rerunPrCi).not.toHaveBeenCalled();
+    });
+
+    it('調査中に同じHEADのCIが成功したら古い証拠不足で停止せず通常のマージ判定へ戻る', async () => {
+      const h = await runRecovery({ ciFailures: [{ verdict: 'insufficient_evidence',
+        summary: 'Cancelled run has no failed job logs' }], ciSucceedsDuringInvestigation: true });
+      expect(h.state.status).toBe('completed');
+      expect(h.calls.filter((call) => call === 'fetch_ci_failure')).toHaveLength(1);
+      expect(h.calls.filter((call) => call === 'agent:investigate_ci')).toHaveLength(1);
+      expect(h.calls.filter((call) => call === 'commit_and_push')).toHaveLength(1);
+      expect(h.rerunPrCi).not.toHaveBeenCalled();
+      expect(h.calls.filter((call) => call === 'merge_pr')).toHaveLength(1);
     });
 
     it('根本修正のレビューがREJECTならその変更をpushせずマージしない', async () => {

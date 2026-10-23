@@ -14,6 +14,7 @@ import { buildEditRule, buildGitRules } from './instruction-context.js';
 import { escapeTemplateChars, prepareTemplatePlaceholders, replaceTemplatePlaceholders } from './escape.js';
 import type { PreparedInstruction } from './prepared-instruction.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
+import { renderPhaseContext } from '../../../shared/prompts/phase-context.js';
 import { renderFallbackNotice } from './fallback-notice.js';
 import {
   trimContextContent,
@@ -107,9 +108,6 @@ export class InstructionBuilder {
       : '';
     const hasFallbackNotice = fallbackNotice.length > 0;
 
-    // Workflow structure (loop expansion done in code)
-    const workflowStructure = this.buildWorkflowStructure(language);
-
     // Report info (from output contracts)
     const hasReport = !!(this.step.outputContracts && this.step.outputContracts.length > 0 && this.context.reportDir);
     let reportInfo = '';
@@ -200,11 +198,6 @@ export class InstructionBuilder {
       })}`];
     }).join('\n\n') ?? '';
 
-    // Workflow name and description
-    const workflowName = this.context.workflowName ?? '';
-    const workflowDescription = this.context.workflowDescription ?? '';
-    const hasWorkflowDescription = !!workflowDescription;
-
     // Retry note
     const hasRetryNote = !!this.context.retryNote;
     const retryNote = hasRetryNote ? escapeTemplateChars(this.context.retryNote!) : '';
@@ -239,19 +232,16 @@ export class InstructionBuilder {
       : '';
 
     const text = loadTemplate('perform_phase1_message', language, {
+      phaseContext: renderPhaseContext(this.context.workflowAssignment ?? {
+        stepName: this.step.name,
+        stepIteration: this.context.stepIteration,
+      }, 1, language),
       workingDirectory: this.context.cwd,
       hasGitRules,
       gitRules,
       editRule,
       hasFallbackNotice,
       fallbackNotice,
-      workflowName,
-      workflowDescription,
-      hasWorkflowDescription,
-      workflowStructure,
-      iteration: `${this.context.iteration}/${this.context.maxSteps}`,
-      stepIteration: String(this.context.stepIteration),
-      stepName: this.step.name,
       hasReport,
       reportInfo,
       hasTaskSection,
@@ -291,28 +281,6 @@ export class InstructionBuilder {
         ...(previousResponsePrepared ? { previousResponse: previousResponsePrepared } : {}),
       },
     };
-  }
-
-  /**
-   * Build the workflow structure display string.
-   * Returns empty string if no workflow steps are available.
-   */
-  private buildWorkflowStructure(language: Language): string {
-    if (!this.context.workflowSteps || this.context.workflowSteps.length === 0) {
-      return '';
-    }
-
-    const currentStepMarker = language === 'ja' ? '現在' : 'current';
-    const structureHeader = language === 'ja'
-      ? `このワークフローは${this.context.workflowSteps.length}ステップで構成されています:`
-      : `This workflow consists of ${this.context.workflowSteps.length} steps:`;
-    const stepLines = this.context.workflowSteps.map((ws, index) => {
-      const isCurrent = index === this.context.currentStepIndex;
-      const marker = isCurrent ? ` ← ${currentStepMarker}` : '';
-      const desc = ws.description ? `（${ws.description}）` : '';
-      return `- Step ${index + 1}: ${ws.name}${desc}${marker}`;
-    });
-    return [structureHeader, ...stepLines].join('\n');
   }
 
   private appendCompanionInstruction(instructions: string): string {

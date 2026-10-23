@@ -4,6 +4,7 @@ max_steps: 21
 initial_step: develop
 steps:
   - name: develop
+    description: バックエンドを計画に沿って実装し、並列レビューと指摘修正で要件充足を確認する
     kind: workflow_call
     call: mini-core
     args:

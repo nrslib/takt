@@ -5,6 +5,7 @@ initial_step: develop
 
 steps:
   - name: develop
+    description: Carry TAKT work through planning, testing, review during implementation, and fixes for findings, then confirm requirement fulfillment.
     kind: workflow_call
     call: development-core
     args:

@@ -212,6 +212,7 @@ steps:
         next: ABORT
 
   - name: supervise
+    description: 現在のコードを要件と前段の指摘に照合し、完了・修正・外部確認待ちを判定する
     input_reports:
       from_step: remediation
       reports:

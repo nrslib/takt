@@ -49,10 +49,16 @@ function renderList(values: readonly string[]): string {
 }
 
 export function buildDynamicSelectorInstruction(input: DynamicSelectorInput): string {
-  const candidates = input.pool.map((subStep) => `- ${subStep.name}: ${subStep.description}`).join('\n');
+  const candidates = input.pool.map((subStep) => {
+    const candidate = `- ${subStep.name}: ${subStep.description}`;
+    return subStep.selectionHint === undefined
+      ? candidate
+      : `${candidate}\n  Selection hint: ${subStep.selectionHint}`;
+  }).join('\n');
   return [
     'Select the pool reviewer IDs that are required for this task.',
     'Return only the requested structured output.',
+    'Each candidate line states what the reviewer does. When a candidate has a "Selection hint", follow it to decide whether to select that candidate; otherwise decide from what the reviewer does.',
     ...buildSelectorGuidanceLines(input.selectorInstruction),
     '',
     `Task:\n${input.task}`,

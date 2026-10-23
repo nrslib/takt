@@ -1,4 +1,5 @@
 name: supervise
+description: Compare the requirements with the current code and decide whether the task is complete or needs fixes.
 capabilities: readonly
 tags:
   - supervise

@@ -10,6 +10,7 @@ import {
 import { assertSafePath, lstatOrUndefined } from '../../shared/utils/private-path-identity.js';
 import { withFileLock } from '../fs/file-lock.js';
 import { GoalIdSchema, GoalSchema, type Goal } from './schema.js';
+import { withGoalExecutionLock } from './execution-lock.js';
 
 const GOAL_FILE_NAME = 'goal.json';
 
@@ -23,7 +24,7 @@ interface GoalListResult<T = Goal> {
 export class GoalStore {
   private readonly root: string;
 
-  constructor(cwd: string) {
+  constructor(private readonly cwd: string) {
     this.root = join(cwd, '.takt', 'goals');
   }
 
@@ -54,13 +55,13 @@ export class GoalStore {
   async update(id: string, transform: (goal: Goal) => Goal, onSaved?: () => void): Promise<Goal> {
     const filePath = this.filePath(id);
     assertSafePath(filePath, false);
-    return withFileLock(`${filePath}.lock`, () => {
+    return withFileLock(`${filePath}.lock`, () => withGoalExecutionLock(this.cwd, () => {
       const goal = GoalSchema.parse(transform(this.getSync(id)));
       if (goal.id !== id) throw new Error('Goal update cannot change its ID');
       writePrivateFile(filePath, JSON.stringify(goal));
       onSaved?.();
       return goal;
-    });
+    }));
   }
 
   async list(): Promise<GoalListResult>;

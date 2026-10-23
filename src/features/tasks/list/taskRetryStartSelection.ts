@@ -11,6 +11,7 @@ import {
   buildTaskRetryRestartTree,
   formatTaskRetryPath,
   resolveTaskRetryStackPath,
+  type ResolvedTaskRetryPath,
   type TaskRetryRestartTreeNode,
   type TaskRetryStartPathContext,
 } from '../taskRetryStartPath.js';
@@ -52,6 +53,8 @@ export interface SelectTaskRetryStartOptions extends TaskRetryStartPathContext {
 /** Public, opaque choices shared by CLI and Web UI. */
 export interface TaskRetryStartOption {
   readonly id: string;
+  readonly path: string;
+  readonly headings?: ResolvedTaskRetryPath['headings'];
   readonly label: string;
   readonly selectable: boolean;
   readonly description?: string;
@@ -87,6 +90,8 @@ export function resolveTaskRetryStartOwnership(
 
 interface ResumeOption {
   value: string;
+  path: string;
+  headings: ResolvedTaskRetryPath['headings'];
   label: string;
   description: string;
   selection: Extract<TaskRetryStartSelection, { kind: 'resume' }>;
@@ -125,6 +130,8 @@ function createResumeOption(
   const resolvedPath = formatTaskRetryPath(resolved.segments);
   return {
     value: RESUME_SELECTION_VALUE,
+    path: resolvedPath,
+    headings: resolved.headings,
     label: `${RESUME_LABEL_PREFIX}${formatTaskRetryPath([stack.at(-1)!.step])}`,
     description: truncationReason === undefined
       ? resolvedPath
@@ -135,6 +142,7 @@ function createResumeOption(
 
 interface FlattenedTree {
   promptOptions: SelectOptionItem<string>[];
+  paths: Map<string, Pick<TaskRetryStartOption, 'path' | 'headings'>>;
   selections: Map<string, TaskRetryStartSelection>;
   /** Value -> concise (unindented) label used for the confirmation log. */
   resultLabels: Map<string, string>;
@@ -152,12 +160,17 @@ function flattenRestartTree(
   preferredRootStep: string | undefined,
 ): FlattenedTree {
   const promptOptions: SelectOptionItem<string>[] = [];
+  const paths = new Map<string, Pick<TaskRetryStartOption, 'path' | 'headings'>>();
   const selections = new Map<string, TaskRetryStartSelection>();
   const resultLabels = new Map<string, string>();
   let firstLeafValue: string | undefined;
   let preferredLeafValue: string | undefined;
 
-  const visit = (nodes: TaskRetryRestartTreeNode[], rootStepName: string | undefined): void => {
+  const visit = (
+    nodes: TaskRetryRestartTreeNode[],
+    rootStepName: string | undefined,
+    headings: NonNullable<TaskRetryStartOption['headings']>,
+  ): void => {
     for (const node of nodes) {
       const indent = TREE_INDENT.repeat(node.depth);
       // The authored step name is serialized so control characters stay
@@ -165,16 +178,19 @@ function flattenRestartTree(
       const stepLabel = formatTaskRetryPath([node.step.name]);
       const currentRoot = node.depth === 0 ? node.step.name : rootStepName;
       if (node.kind === 'heading') {
+        const heading = { path: node.path, ...(node.step.description === undefined ? {} : { description: node.step.description }) };
+        paths.set(`${HEADING_VALUE_PREFIX}${node.id}`, { path: node.path, headings });
         promptOptions.push({
           label: `${indent}${stepLabel}:`,
           value: `${HEADING_VALUE_PREFIX}${node.id}`,
           selectable: false,
           ...(node.note === undefined ? {} : { description: node.note }),
         });
-        visit(node.children, currentRoot);
+        visit(node.children, currentRoot, [...headings, heading]);
         continue;
       }
       const value = `${RESTART_VALUE_PREFIX}${node.id}`;
+      paths.set(value, { path: node.path, headings });
       promptOptions.push({ label: `${indent}${stepLabel}`, value });
       selections.set(value, { kind: 'restart', restartPoint: node.restartPoint });
       resultLabels.set(value, stepLabel);
@@ -193,9 +209,9 @@ function flattenRestartTree(
       }
     }
   };
-  visit(tree, undefined);
+  visit(tree, undefined, []);
 
-  return { promptOptions, selections, resultLabels, firstLeafValue, preferredLeafValue };
+  return { promptOptions, paths, selections, resultLabels, firstLeafValue, preferredLeafValue };
 }
 
 function buildTaskRetryStartCatalog(
@@ -234,6 +250,9 @@ function buildTaskRetryStartCatalog(
   return {
     options: promptOptions.map((option) => ({
       id: option.value,
+      ...(option.value === resumeOption?.value
+        ? { path: resumeOption.path, headings: resumeOption.headings }
+        : flattened.paths.get(option.value)!),
       label: option.label,
       selectable: option.selectable !== false,
       ...(option.description === undefined ? {} : { description: option.description }),

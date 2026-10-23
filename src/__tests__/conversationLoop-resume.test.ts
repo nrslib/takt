@@ -151,9 +151,9 @@ vi.mock('../features/interactive/assistantRetryCommand.js', () => ({
   runAssistantRetryCommand: (...args: unknown[]) => mockRunAssistantRetryCommand(...args),
 }));
 
-vi.mock('../features/interactive/formalSpecVerification.js', () => ({
+vi.mock('../features/interactive/formalSpecVerification.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../features/interactive/formalSpecVerification.js')>()),
   runFormalSpecVerification: (...args: unknown[]) => mockRunFormalSpecVerification(...args),
-  cleanupFormalSpecVerificationArtifacts: vi.fn(),
 }));
 
 vi.mock('../shared/i18n/index.js', async (importOriginal) => {
@@ -196,6 +196,50 @@ const mockGetProvider = vi.mocked(getProvider);
 const mockSelectOption = vi.mocked(selectOption);
 const mockLogInfo = vi.mocked(logInfo);
 const mockLogError = vi.mocked(logError);
+
+const { verificationIoFailure } = vi.hoisted(() => ({
+  verificationIoFailure: { cwd: undefined as string | undefined, ownership: false, retention: false, move: false },
+}));
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      const target = String(args[0]);
+      if (verificationIoFailure.cwd !== undefined && target.startsWith(verificationIoFailure.cwd)
+        && verificationIoFailure.retention && target.endsWith('.retain')) {
+        throw new Error('retention marker write failed');
+      }
+      return actual.writeFileSync(...args);
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+      if (verificationIoFailure.cwd !== undefined && String(args[0]).startsWith(verificationIoFailure.cwd)
+        && verificationIoFailure.move && String(args[1]).endsWith('.retain')) {
+        throw new Error('retention marker move failed');
+      }
+      return actual.renameSync(...args);
+    },
+    mkdirSync: (...args: Parameters<typeof actual.mkdirSync>) => {
+      const target = String(args[0]);
+      if (verificationIoFailure.cwd !== undefined
+        && target.startsWith(verificationIoFailure.cwd)
+        && target.endsWith('specs')) {
+        throw new Error('specification setup failed');
+      }
+      return actual.mkdirSync(...args);
+    },
+    rmSync: (...args: Parameters<typeof actual.rmSync>) => {
+      const target = String(args[0]);
+      if (verificationIoFailure.cwd !== undefined
+        && target.startsWith(verificationIoFailure.cwd)
+        && verificationIoFailure.ownership && target.endsWith('.active')) {
+        throw new Error('ownership release failed');
+      }
+      return actual.rmSync(...args);
+    },
+  };
+});
 
 // --- Helpers ---
 
@@ -1135,6 +1179,102 @@ describe('/issue command', () => {
 // /verify command: seeded initial input handling
 // =================================================================
 describe('/verify command', () => {
+  it.each(['none', 'ownership', 'write', 'move'] as const)('prints the real directory and diagnostics after an initialization error with retention failure=%s', async (failure) => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-loop-retained-'));
+    const actual = await vi.importActual<typeof import('../features/interactive/formalSpecVerification.js')>(
+      '../features/interactive/formalSpecVerification.js',
+    );
+    mockRunFormalSpecVerification.mockImplementationOnce(actual.runFormalSpecVerification);
+    setupRawStdin(toRawInputs(['/verify', '/cancel']));
+    const { provider, capture } = createScenarioProvider([
+      { content: '```alloy\nrun {} for 3\n```' },
+      { content: 'interpretation without a path' },
+    ]);
+    verificationIoFailure.cwd = cwd;
+    const ownershipFailure = failure === 'ownership';
+    verificationIoFailure.ownership = ownershipFailure;
+    verificationIoFailure.retention = failure === 'write' || failure === 'move';
+    verificationIoFailure.move = failure === 'move';
+    try {
+      await runConversationLoop(cwd, createSessionContext({
+        provider: provider as SessionContext['provider'], providerType: 'codex',
+      }), { ...defaultStrategy, formalSpec: true }, undefined, undefined);
+      const verification = await (mockRunFormalSpecVerification.mock.results[0]!.value as ReturnType<typeof actual.runFormalSpecVerification>);
+      const runDirectory = verification.artifacts!.runDirectory;
+      expect(verification).toMatchObject({ verdict: 'error', verificationStarted: true });
+      expect(capture.callCount).toBe(2);
+      expect(capture.prompts[1]).toContain(runDirectory);
+      const systemPrompt = capture.systemPrompts[1]!;
+      if (failure === 'move') {
+        expect(systemPrompt).toMatch(/could not be confirmed/);
+        expect(systemPrompt).toMatch(/copy any needed artifacts manually/);
+        expect(systemPrompt).not.toMatch(/artifacts are retained/);
+      } else {
+        expect(systemPrompt).toMatch(/artifacts are retained/);
+        expect(systemPrompt).toMatch(/remove them manually/);
+      }
+      expect(mockLogInfo.mock.calls.some(([message]) => String(message).includes(runDirectory))).toBe(true);
+      const notice = mockLogInfo.mock.calls.map(([message]) => String(message)).find((message) => message.includes(runDirectory))!;
+      if (verificationIoFailure.retention) expect(notice).toContain('retention marker write failed');
+      if (failure === 'move') {
+        expect(notice).toContain('retention marker move failed');
+        expect(verification.artifactRetention?.status).toBe('error');
+      }
+      expect(fs.existsSync(path.join(runDirectory, '.retain'))).toBe(failure !== 'move');
+      expect(fs.existsSync(path.join(runDirectory, '.active'))).toBe(ownershipFailure || failure === 'move');
+    } finally {
+      verificationIoFailure.cwd = undefined;
+      verificationIoFailure.ownership = false;
+      verificationIoFailure.retention = false;
+      verificationIoFailure.move = false;
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { verdict: 'passed', interpretationFails: false },
+    { verdict: 'failed', interpretationFails: false },
+    { verdict: 'error', interpretationFails: false },
+    { verdict: 'failed', interpretationFails: true },
+  ] as const)('keeps artifacts readable during interpretation and reports their path for $verdict with interpretationFails=$interpretationFails', async ({ verdict, interpretationFails }) => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-loop-verify-'));
+    const runDirectory = path.join(cwd, '.takt', 'runs', 'verify-current');
+    fs.mkdirSync(runDirectory, { recursive: true });
+    const specificationPath = path.join(runDirectory, 'spec.als');
+    fs.writeFileSync(specificationPath, 'run Scenario for 3');
+    setupRawStdin(toRawInputs(['/verify', '/cancel']));
+    const { provider } = createMockProvider([]);
+    let calls = 0;
+    provider._call.mockImplementation(async () => {
+      calls++;
+      if (calls === 2) expect(fs.readFileSync(specificationPath, 'utf8')).toBe('run Scenario for 3');
+      return {
+        persona: 'test', status: calls === 2 && interpretationFails ? 'error' : 'done',
+        content: calls === 1 ? '```alloy\nrun Scenario for 3\n```' : 'interpretation without a path',
+        sessionId: 'verification-session', timestamp: new Date(),
+      };
+    });
+    mockRunFormalSpecVerification.mockResolvedValueOnce({
+      verdict, verificationStarted: true,
+      quint: { status: 'skipped' }, alloy: { status: verdict },
+      ...(verdict === 'passed' ? {} : { artifactRetention: { status: 'passed' } }),
+      artifacts: { runDirectory, specifications: { alloy: specificationPath }, logs: {} },
+    });
+    try {
+      await runConversationLoop(cwd, createSessionContext({
+        provider: provider as SessionContext['provider'], providerType: 'codex',
+      }), { ...defaultStrategy, formalSpec: true }, undefined, undefined);
+      expect(calls).toBe(2);
+      expect(fs.existsSync(runDirectory)).toBe(verdict !== 'passed');
+      if (verdict !== 'passed') {
+        const messages = [...mockLogInfo.mock.calls, ...mockLogError.mock.calls].map(([message]) => String(message));
+        expect(messages.some((message) => message.includes(runDirectory))).toBe(true);
+      }
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     { verificationStarted: false, expectedCalls: 2 },
     { verificationStarted: true, expectedCalls: 3 },

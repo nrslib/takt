@@ -310,6 +310,10 @@ interface WorkflowStepBase {
    * schema has no such field.
    */
   engineSynthesized?: true;
+  /** Definition owner and runtime role of a step that has no tree row of its own. */
+  internalPromptContext?:
+    | { readonly kind: 'team_part'; readonly ownerStepName: string; readonly partName: string }
+    | { readonly kind: 'loop_monitor'; readonly ownerStepName: string };
   /** Engine-owned provider identity. Workflow YAML cannot set these fields. */
   provider?: ProviderType;
   providerSpecified?: boolean;
@@ -379,6 +383,7 @@ export type DynamicParallelFixedSubStep = NormalAgentWorkflowStep;
 
 export interface DynamicParallelPoolSubStep extends NormalAgentWorkflowStep {
   readonly description: string;
+  readonly selectionHint?: string;
 }
 
 export interface DynamicParallelSubSteps {

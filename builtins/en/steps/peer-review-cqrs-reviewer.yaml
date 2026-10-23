@@ -9,6 +9,7 @@ params:
     type: facet_ref
     facet_kind: instruction
 name: cqrs-es-review
+description: Examine CQRS and event sourcing boundaries and report design and implementation problems.
 capabilities: readonly
 tags:
   - review
