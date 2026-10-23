@@ -96,6 +96,7 @@ function buildArgs(prompt: string, options: CursorCallOptions): string[] {
 
 function buildEnv(options: CursorCallOptions): NodeJS.ProcessEnv {
   const env = buildEnvWithNestedObservabilitySnapshot(process.env, options.childProcessEnv);
+  Object.assign(env, options.preparedMcp?.env);
   if (options.cursorApiKey) {
     env.CURSOR_API_KEY = options.cursorApiKey;
   }

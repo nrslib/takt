@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Runtime MCP HTTP/SSE headers accept `${env:NAME}` provider environment references without copying secret values into startup materials. Codex supports bearer tokens and complete header values, including MCP-only execution, and excludes referenced variables from its tool shell. Verified OpenCode v1/v2 support native header references; unverified providers and unrepresentable Codex headers warn and exclude only the affected server. Undefined variables fail before startup; `${NAME}` retains its existing interpolation behavior.
+
 ### Changed
 
 - The English and Japanese `merge-review-fix` and `merge-review-fix-simple` workflows now investigate CI failures using failed job logs, the cumulative PR diff and related code. Repository defects, including flaky tests and failures also present on main, receive at most two reviewed root-fix rounds. An evidenced external cause permits one independent rerun, including after both fix rounds; the new attempt must pass existing merge checks. Insufficient evidence or exhausted recovery posts counts, the last failed checks and investigation summary, then aborts.

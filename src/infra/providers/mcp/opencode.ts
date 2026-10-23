@@ -6,6 +6,7 @@
  * values so the shared server pool does not mix them (order.md:191-195).
  */
 
+import { filterMcpHeaderEnvServers } from './header-env.js';
 import type {
   ProviderMcpAdapter,
   ProviderMcpContext,
@@ -14,6 +15,7 @@ import type {
   McpServerConfig,
 } from './types.js';
 import { isStdioServer } from './types.js';
+import { getMcpHeaderEnvRefs } from '../../config/runtime-provider/mcp-header-env.js';
 import { validateTransports, noopDispose, classifyMcpFailure } from './adapter.js';
 
 export function createOpenCodeMcpAdapter(): ProviderMcpAdapter {
@@ -25,6 +27,7 @@ export function createOpenCodeMcpAdapter(): ProviderMcpAdapter {
       servers: ResolvedMcpServers,
       _context: ProviderMcpContext,
     ): Promise<PreparedProviderMcp> {
+      servers = filterMcpHeaderEnvServers('opencode', servers, true);
       if (!servers.enabled || Object.keys(servers.servers).length === 0) {
         return { dispose: noopDispose };
       }
@@ -32,7 +35,16 @@ export function createOpenCodeMcpAdapter(): ProviderMcpAdapter {
       return {
         dispose: noopDispose,
         serverConfig,
-        identity: servers.identity,
+        identity: JSON.stringify([
+          servers.identity,
+          Object.keys(servers.servers).sort().map((serverName) => {
+            const refs = getMcpHeaderEnvRefs(servers.servers[serverName]!);
+            return [serverName, Object.keys(refs).sort().map((headerName) => [
+              headerName,
+              refs[headerName]!.filter((part) => typeof part !== 'string').map((part) => part.env),
+            ])];
+          }),
+        ]),
       };
     },
     classifyFailure(error) {
@@ -59,9 +71,13 @@ function toOpenCodeServer(server: McpServerConfig): unknown {
       ...(server.env !== undefined ? { environment: server.env } : {}),
     };
   }
+  const headers = { ...server.headers };
+  for (const [name, parts] of Object.entries(getMcpHeaderEnvRefs(server))) {
+    headers[name] = parts.map((part) => typeof part === 'string' ? part : `{env:${part.env}}`).join('');
+  }
   return {
     type: 'remote',
     url: server.url,
-    ...(server.headers !== undefined ? { headers: server.headers } : {}),
+    ...(server.headers !== undefined ? { headers } : {}),
   };
 }

@@ -13,7 +13,7 @@ vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CodexOptions, ThreadOptions, TurnOptions } from '@openai/codex-sdk';
 import type { CodexCallOptions } from '../infra/codex/types.js';
-import { runCodexMcpList } from '../infra/codex/mcp-list.js';
+import { hasCodexMcpServer, runCodexMcpList } from '../infra/codex/mcp-list.js';
 
 const {
   mockBuildCodexSkillConfig,
@@ -76,7 +76,7 @@ vi.mock('@openai/codex-sdk', () => {
 vi.mock('../infra/codex/skill-config.js', () => ({
   buildCodexSkillConfig: mockBuildCodexSkillConfig,
 }));
-vi.mock('../infra/codex/mcp-list.js', () => ({ runCodexMcpList: vi.fn() }));
+vi.mock('../infra/codex/mcp-list.js', () => ({ runCodexMcpList: vi.fn(), hasCodexMcpServer: vi.fn() }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../shared/utils/index.js')>()),
@@ -97,6 +97,20 @@ describe('CodexClient — structuredOutput 抽出', () => {
     delete process.env.TAKT_OBSERVABILITY;
     delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
     vi.mocked(runCodexMcpList).mockReset();
+    vi.mocked(hasCodexMcpServer).mockReset();
+  });
+
+  it.each([[true, undefined], [false, undefined], [true, 'review']] as const)('applies exclusions only to existing native servers in the normal SDK route (ambient=%s, profile=%s)', async (ambient, configProfile) => {
+    vi.mocked(hasCodexMcpServer).mockResolvedValue(ambient);
+    mockEvents = [{ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } }];
+    const preparedMcp = { dispose: async () => {}, excludedServerNames: ['datadog'], config: {
+      shell_environment_policy: { filters: { MCP_HEADER_ACCESS: 'exclude' as const } },
+    } };
+    const result = await new CodexClient().call('coder', 'prompt', { cwd: '/repo', preparedMcp, configProfile });
+    expect(result.status).toBe('done');
+    expect(vi.mocked(hasCodexMcpServer).mock.calls[0]?.[0]).toMatchObject({ serverName: 'datadog', configProfile });
+    expect(lastCodexConstructorOptions?.configOverrides).toEqual(ambient ? ['mcp_servers.datadog.enabled=false'] : undefined);
+    expect(lastCodexConstructorOptions?.config).toMatchObject({ shell_environment_policy: { filters: { MCP_HEADER_ACCESS: 'exclude' } } });
   });
 
   it('MCP-only の一覧取得とセッションに同じ CLI・環境・設定を渡し、既存 MCP をすべて無効にする', async () => {
