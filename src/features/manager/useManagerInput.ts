@@ -75,6 +75,7 @@ export function useManagerInput({
       selection.handleInput(key, selectTarget);
       return;
     }
+    if (questionAnswer.handleNavigation(key, editorRef)) return;
     if (key.escape) cancelOperations();
     if (active.current !== null && key.escape) {
       active.current.abort();

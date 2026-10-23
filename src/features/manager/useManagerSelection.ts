@@ -5,12 +5,13 @@ import type { PendingQuestion } from './inquiryAnswer.js';
 
 type GoalOperation = 'pause' | 'resume' | 'abort';
 export type ManagerSelectionCommand = 'answer' | 'goal';
-export type ManagerSelection =
+export const MANAGER_SELECTION_PAGE_SIZE = 10;
+export type ManagerSelection = { start: number } & (
   | { kind: 'answer'; candidates: readonly PendingQuestion[]; index: number }
   | { kind: 'goal'; candidates: readonly ManagerDisplayGoal[]; index: number }
-  | { kind: 'action'; target: ManagerDisplayGoal; candidates: readonly GoalOperation[]; index: number };
+  | { kind: 'action'; target: ManagerDisplayGoal; candidates: readonly GoalOperation[]; index: number });
 export type ManagerSelectedTarget =
-  | { kind: 'answer'; target: PendingQuestion }
+  | { kind: 'answer'; target: PendingQuestion; onCancel: () => void }
   | { kind: GoalOperation; target: ManagerDisplayGoal };
 
 export function isGoalSelectionCandidate(kind: GoalOperation, goal: ManagerDisplayGoal): boolean {
@@ -30,11 +31,11 @@ export function useManagerSelection() {
   }): boolean => {
     if (kind === 'answer') {
       if (snapshot.questions.length === 0) { update(null); return false; }
-      update({ kind, candidates: snapshot.questions, index: 0 });
+      update({ kind, candidates: snapshot.questions, index: 0, start: 0 });
     } else {
       const candidates = snapshot.goals.filter((goal) => isGoalSelectionCandidate('abort', goal));
       if (candidates.length === 0) { update(null); return false; }
-      update({ kind, candidates, index: 0 });
+      update({ kind, candidates, index: 0, start: 0 });
     }
     return true;
   };
@@ -43,13 +44,15 @@ export function useManagerSelection() {
     if (target === null) return;
     if (key.escape) update(null);
     else if (key.upArrow || key.downArrow) {
-      update({ ...target, index: Math.max(0, Math.min(target.candidates.length - 1,
-        target.index + (key.upArrow ? -1 : 1))) });
+      const index = Math.max(0, Math.min(target.candidates.length - 1,
+        target.index + (key.upArrow ? -1 : 1)));
+      const start = index < target.start ? index : Math.max(target.start, index - MANAGER_SELECTION_PAGE_SIZE + 1);
+      update({ ...target, index, start });
     } else if (key.return) {
-      if (target.kind === 'answer') onSelect({ kind: target.kind, target: target.candidates[target.index]! });
+      if (target.kind === 'answer') onSelect({ kind: target.kind, target: target.candidates[target.index]!, onCancel: () => update(target) });
       else if (target.kind === 'goal') {
         const goal = target.candidates[target.index]!;
-        update({ kind: 'action', target: goal, candidates: [goal.executionStatus === 'active' ? 'pause' : 'resume', 'abort'], index: 0 });
+        update({ kind: 'action', target: goal, candidates: [goal.executionStatus === 'active' ? 'pause' : 'resume', 'abort'], index: 0, start: 0 });
         return;
       } else onSelect({ kind: target.candidates[target.index]!, target: target.target });
       update(null);

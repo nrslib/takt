@@ -6,6 +6,9 @@ import { approvalScopeChoices, createPermissionProposal, type ApprovalScopeChoic
 import type { WritablePermissionScope } from './scopedPermissionStorage.js';
 import type { ManagerAssignment } from './startupResolution.js';
 import { toDisplayText } from '../tui/displayText.js';
+import { layoutQuestionBody } from './questionBodyLayout.js';
+
+const BODY_VIEW_ROWS = 8;
 
 export interface AnswerTarget {
   readonly pending: PendingQuestion;
@@ -14,48 +17,63 @@ export interface AnswerTarget {
   readonly scopes: readonly ApprovalScopeChoice[];
   readonly answer: GoalAnswerInput;
   readonly permission?: WritablePermissionScope;
+  readonly bodyOffset: number;
+  readonly onCancel?: () => void;
 }
 
 export type SaveManagerAnswer = (target: PendingQuestion, answer: GoalAnswerInput,
   permission?: { scope: WritablePermissionScope; sentence: string }) => Promise<void>;
 
-export function useManagerQuestionAnswer() {
+export function useManagerQuestionAnswer(bodyWidth: number) {
   const [answerTarget, setAnswerTarget] = useState<AnswerTarget | null>(null);
   const current = useRef<AnswerTarget | null>(null);
   const update = (next: AnswerTarget | null): void => {
     current.current = next;
     setAnswerTarget(next);
   };
-  const beginAnswer = (target: PendingQuestion, assignment: ManagerAssignment): void => {
+  const beginAnswer = (target: PendingQuestion, assignment: ManagerAssignment, onCancel?: () => void): void => {
     const kind = target.question.kind ?? 'question';
     update({
       pending: target, stage: kind === 'approval' ? 'decision' : kind === 'operation_request' ? 'report' : 'question',
       choice: kind !== 'question' || target.question.options !== undefined ? 0 : null,
-      scopes: kind === 'approval' ? approvalScopeChoices(target, assignment) : [], answer: {},
+      scopes: kind === 'approval' ? approvalScopeChoices(target, assignment) : [], answer: {}, bodyOffset: 0, onCancel,
     });
   };
   const switchToFreeText = (): void => {
     const target = current.current;
     if (target !== null && target.choice !== null && target.stage !== 'scope') update({ ...target, choice: null });
   };
-  const handleInput = (key: Key, submitInput: boolean, editorRef: RefObject<EditorState>,
-    edit: (next: EditorState) => void, saveAnswer: SaveManagerAnswer): boolean => {
-    const target = current.current!;
+  const handleNavigation = (key: Key, editorRef: RefObject<EditorState>): boolean => {
+    const target = current.current;
+    if (target === null) return false;
     if (key.escape) {
       update(null);
+      target.onCancel?.();
       return true;
     }
+    if (!key.upArrow && !key.downArrow) return false;
     const options = target.stage === 'scope' ? target.scopes
       : target.stage === 'decision' || target.stage === 'report' ? [0, 1] : target.pending.question.options ?? [];
     const selecting = target.stage === 'question' || target.stage === 'decision' || target.stage === 'report' || target.stage === 'scope';
-    if (selecting && (target.stage !== 'question' || target.choice !== null) && (key.upArrow || key.downArrow)) {
+    if (selecting && (target.stage !== 'question' || target.choice !== null)) {
       const last = target.stage === 'question' ? options.length : options.length - 1;
       update({ ...target, choice: target.choice === null ? 0 : Math.max(0, Math.min(last, target.choice + (key.upArrow ? -1 : 1))) });
       return true;
     }
+    if (editorRef.current.text !== '') return false;
+    const last = Math.max(0, layoutQuestionBody(target.pending.question.body, bodyWidth).length - BODY_VIEW_ROWS);
+    if (last === 0) return false;
+    const offset = Math.min(target.bodyOffset, last);
+    update({ ...target, bodyOffset: Math.max(0, Math.min(last, offset + (key.upArrow ? -1 : 1))) });
+    return true;
+  };
+  const handleInput = (key: Key, submitInput: boolean, editorRef: RefObject<EditorState>,
+    edit: (next: EditorState) => void, saveAnswer: SaveManagerAnswer): boolean => {
+    const target = current.current!;
     if (!submitInput || key.shift || key.meta) return false;
     const text = editorRef.current.text;
     if (target.stage === 'question') {
+      const options = target.pending.question.options ?? [];
       if (target.choice !== null) {
         if (target.choice === options.length) {
           update({ ...target, choice: null });
@@ -92,5 +110,8 @@ export function useManagerQuestionAnswer() {
     return true;
   };
 
-  return { answerTarget, clearAnswer: () => update(null), beginAnswer, switchToFreeText, handleInput };
+  const rows = answerTarget === null ? [] : layoutQuestionBody(answerTarget.pending.question.body, bodyWidth);
+  const start = Math.min(answerTarget?.bodyOffset ?? 0, Math.max(0, rows.length - BODY_VIEW_ROWS));
+  const bodyText = rows.slice(start, start + BODY_VIEW_ROWS).join('\n');
+  return { answerTarget, bodyText, clearAnswer: () => update(null), beginAnswer, switchToFreeText, handleNavigation, handleInput };
 }
