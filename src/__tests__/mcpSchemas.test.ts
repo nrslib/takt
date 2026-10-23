@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod/v4';
 import {
   askGoalQuestionInputSchema, enqueueTaskInputSchema, getGoalQuestionInputSchema, withdrawGoalQuestionInputSchema,
+  listStandaloneInquiriesInputSchema, withdrawStandaloneInquiryInputSchema,
 } from '../features/mcp/schemas.js';
 import { goalId } from './helpers/goal-fixtures.js';
 
@@ -136,6 +137,32 @@ describe('MCP tool input schema', () => {
         { type: 'object', required: ['create'], additionalProperties: false },
       ],
     });
+  });
+});
+
+describe('MCP standalone inquiry inputs', () => {
+  const identity = { cwd: '/repo', id: '650e8400-e29b-41d4-a716-446655440001' };
+
+  it('accepts paging without an owner override and preserves the required withdrawal reason', () => {
+    expect(listStandaloneInquiriesInputSchema.parse({ cwd: '/repo', offset: 3, limit: 2 }))
+      .toEqual({ cwd: '/repo', offset: 3, limit: 2 });
+    expect(listStandaloneInquiriesInputSchema.parse({ cwd: '/repo' })).toEqual({ cwd: '/repo' });
+    const input = { ...identity, reason: '  不要になりました\n' };
+    expect(withdrawStandaloneInquiryInputSchema.parse(input)).toEqual(input);
+    expect(withdrawStandaloneInquiryInputSchema.parse({ ...identity, reason: 'x'.repeat(128 * 1024) }).reason)
+      .toHaveLength(128 * 1024);
+  });
+
+  it.each([undefined, '', ' \n\t ', 'x'.repeat(128 * 1024 + 1)])('rejects a missing, blank or oversized standalone withdrawal reason %#', (reason) => {
+    expect(withdrawStandaloneInquiryInputSchema.safeParse({ ...identity, reason }).success).toBe(false);
+  });
+
+  it('keeps standalone owner selection outside the input and rejects invalid identity and paging', () => {
+    for (const extra of [{ cwd: 'relative' }, { owner: {} }, { offset: -1 }, { offset: 0.5 }, { offset: Number.MAX_SAFE_INTEGER + 1 }, { limit: 0 }, { limit: 51 }]) {
+      expect(listStandaloneInquiriesInputSchema.safeParse({ cwd: '/repo', ...extra }).success).toBe(false);
+    }
+    expect(withdrawStandaloneInquiryInputSchema.safeParse({ ...identity, id: 'unknown', reason: '不要' }).success).toBe(false);
+    expect(withdrawStandaloneInquiryInputSchema.safeParse({ ...identity, owner: {}, reason: '不要' }).success).toBe(false);
   });
 });
 

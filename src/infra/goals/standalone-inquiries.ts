@@ -90,6 +90,37 @@ export class StandaloneInquiryStore {
     return questions;
   }
 
+  async listPendingPage(offset: number, limit: number): Promise<{ inquiries: GoalQuestion[]; totalCount: number }> {
+    const directory = await this.directory();
+    let entries;
+    try { entries = await opendir(directory); }
+    catch (error) {
+      if (isMissing(error)) return { inquiries: [], totalCount: 0 };
+      throw error;
+    }
+    const candidates: GoalQuestion[] = [];
+    const capacity = offset + limit;
+    let totalCount = 0;
+    for await (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+      const id = IdSchema.parse(entry.name.slice(0, -'.json'.length));
+      const question = await this.read(join(directory, entry.name), id);
+      if (question.status !== 'pending') continue;
+      totalCount++;
+      let position = 0;
+      let end = candidates.length;
+      while (position < end) {
+        const middle = Math.floor((position + end) / 2);
+        if (candidates[middle]!.id.localeCompare(id) < 0) position = middle + 1;
+        else end = middle;
+      }
+      if (position >= capacity) continue;
+      if (candidates.length === capacity) candidates.pop();
+      candidates.splice(position, 0, question);
+    }
+    return { inquiries: candidates.slice(offset), totalCount };
+  }
+
   async answer(id: string, answer: string | GoalAnswerInput): Promise<GoalQuestion> {
     const path = join(await this.directory(), `${IdSchema.parse(id)}.json`);
     const answered = answerInquiry(await this.read(path, id), answer);

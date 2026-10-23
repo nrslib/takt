@@ -285,6 +285,154 @@ describe('standalone pending inquiry reads', () => {
   });
 });
 
+describe('standalone pending inquiry pages', () => {
+  it.each([workspace, repository])('pages pending records in ID order for $kind without changing saved data', async (owner) => {
+    const store = new StandaloneInquiryStore(config, owner);
+    vi.mocked(crypto.randomUUID).mockReset().mockReturnValueOnce(secondId).mockReturnValueOnce(firstId);
+    const second = await store.create({ body: '後のID' });
+    const first = await store.create({ body: '先のID' });
+    const before = new Map(files);
+    io.write.mockClear();
+
+    expect(await store.listPendingPage(0, 1)).toEqual({ inquiries: [first], totalCount: 2 });
+    expect(await store.listPendingPage(1, 1)).toEqual({ inquiries: [second], totalCount: 2 });
+    expect(await store.listPendingPage(10, 1)).toEqual({ inquiries: [], totalCount: 2 });
+    expect(files).toEqual(before);
+    expect(io.write).not.toHaveBeenCalled();
+  });
+
+  it('counts the entire validated history while returning only the selected page', async () => {
+    for (const index of [5, 3, 1, 4, 2, 0]) {
+      const id = `650e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`;
+      files.set(workspaceFile(id), JSON.stringify(GoalQuestionSchema.parse({
+        id, body: '本文'.repeat(1000), status: index === 4 ? 'withdrawn' : 'pending',
+      })));
+    }
+    const page = await new StandaloneInquiryStore(config, workspace).listPendingPage(1, 2);
+    expect(page.totalCount).toBe(5);
+    expect(page.inquiries.map(({ id }) => id)).toEqual([
+      '650e8400-e29b-41d4-a716-000000000001', '650e8400-e29b-41d4-a716-000000000002',
+    ]);
+    expect(io.close).toHaveBeenCalledOnce();
+    expect(io.readdir).not.toHaveBeenCalled();
+  });
+
+  it.each([1, 2, 3].flatMap((attempt) =>
+    (['none', 'during', 'before'] as const).map((withdrawal) => ({ attempt, withdrawal })),
+  ))('keeps page records and counts consistent with $withdrawal withdrawal, attempt $attempt', async ({ withdrawal }) => {
+    const store = new StandaloneInquiryStore(config, workspace);
+    const pending = await store.create({ body: '確認してください' });
+    const events: string[] = [];
+    const withdraw = async () => {
+      await store.withdraw(pending.id, '不要になりました');
+      events.push('withdrawal completed');
+    };
+    if (withdrawal === 'before') await withdraw();
+
+    let resume!: () => void;
+    let scanned!: () => void;
+    const paused = new Promise<void>((resolve) => { scanned = resolve; });
+    const resumed = new Promise<void>((resolve) => { resume = resolve; });
+    io.opendir.mockResolvedValueOnce((async function* () {
+      try {
+        yield { name: `${firstId}.json`, isFile: () => true };
+        events.push('record processed');
+        scanned();
+        await resumed;
+      } finally { io.close(); }
+    })());
+
+    const listing = store.listPendingPage(0, 1);
+    await paused;
+    try {
+      if (withdrawal === 'during') await withdraw();
+    } finally { resume(); }
+    const page = await listing;
+    events.push('listing completed');
+    const nextPage = await store.listPendingPage(0, 1);
+
+    expect(events).toEqual(withdrawal === 'before'
+      ? ['withdrawal completed', 'record processed', 'listing completed']
+      : withdrawal === 'during'
+        ? ['record processed', 'withdrawal completed', 'listing completed']
+        : ['record processed', 'listing completed']);
+    expect(nextPage).toEqual(withdrawal === 'none'
+      ? { inquiries: [pending], totalCount: 1 } : { inquiries: [], totalCount: 0 });
+    if (withdrawal === 'during') {
+      expect([{ inquiries: [pending], totalCount: 1 }, { inquiries: [], totalCount: 0 }]).toContainEqual(page);
+    } else {
+      expect(page).toEqual(nextPage);
+    }
+    expect(JSON.parse(files.get(workspaceFile(firstId))!)).toEqual(withdrawal === 'none' ? pending : {
+      ...pending, status: 'withdrawn', withdrawalReason: '不要になりました', withdrawnAt: now,
+    });
+  });
+
+  it('returns an empty page for an empty or missing directory but propagates other open failures', async () => {
+    const store = new StandaloneInquiryStore(config, workspace);
+    expect(await store.listPendingPage(0, 1)).toEqual({ inquiries: [], totalCount: 0 });
+    expect(io.close).toHaveBeenCalledOnce();
+    io.opendir.mockRejectedValueOnce(missing());
+    expect(await store.listPendingPage(0, 1)).toEqual({ inquiries: [], totalCount: 0 });
+    const failure = Object.assign(new Error('denied'), { code: 'EACCES' });
+    io.opendir.mockRejectedValueOnce(failure);
+    await expect(store.listPendingPage(0, 1)).rejects.toBe(failure);
+  });
+
+  it.each([
+    { id: secondId, body: '別のID', status: 'pending' },
+    { id: firstId, body: '回答欠落', status: 'answered' },
+  ])('rejects invalid saved records even outside the selected page: $status', async (record) => {
+    files.set(workspaceFile(firstId), JSON.stringify(record));
+    await expect(new StandaloneInquiryStore(config, workspace).listPendingPage(10, 1)).rejects.toThrow();
+    expect(io.close).toHaveBeenCalledOnce();
+    expect(io.write).not.toHaveBeenCalled();
+  });
+
+  it('validates records after the page is full instead of returning partial success', async () => {
+    const store = new StandaloneInquiryStore(config, workspace);
+    await store.create({ body: '有効な相談' });
+    files.set(workspaceFile(secondId), '{');
+    await expect(store.listPendingPage(0, 1)).rejects.toThrow();
+    expect(io.close).toHaveBeenCalledOnce();
+  });
+
+  it('ignores non-record entries but rejects invalid JSON filenames', async () => {
+    io.opendir.mockResolvedValueOnce((async function* () {
+      yield { name: `${firstId}.json`, isFile: () => false };
+      yield { name: 'temporary.tmp', isFile: () => true };
+    })());
+    const store = new StandaloneInquiryStore(config, workspace);
+    expect(await store.listPendingPage(0, 1)).toEqual({ inquiries: [], totalCount: 0 });
+    files.set(workspaceFile('invalid'), '{}');
+    await expect(store.listPendingPage(0, 1)).rejects.toThrow();
+    expect(io.read).not.toHaveBeenCalled();
+  });
+
+  it.each(['ENOENT', 'EACCES'])('propagates %s while reading a saved page and closes the directory', async (code) => {
+    const store = new StandaloneInquiryStore(config, workspace);
+    await store.create({ body: '相談' });
+    const failure = Object.assign(new Error('read failed'), { code });
+    io.read.mockRejectedValueOnce(failure);
+    await expect(store.listPendingPage(0, 1)).rejects.toBe(failure);
+    expect(io.close).toHaveBeenCalledOnce();
+  });
+
+  it('propagates iteration failures and closes the directory', async () => {
+    const store = new StandaloneInquiryStore(config, workspace);
+    await store.create({ body: '相談' });
+    const failure = new Error('iteration failed');
+    io.opendir.mockResolvedValueOnce((async function* () {
+      try {
+        yield { name: `${firstId}.json`, isFile: () => true };
+        throw failure;
+      } finally { io.close(); }
+    })());
+    await expect(store.listPendingPage(0, 1)).rejects.toBe(failure);
+    expect(io.close).toHaveBeenCalledOnce();
+  });
+});
+
 describe('standalone approval retrieval and creation', () => {
   const input = { kind: 'approval' as const, body: '出力先を確認してください',
     operation: { toolName: 'Write', args: '{"content":"hello"}', cwd: '/operation' } };

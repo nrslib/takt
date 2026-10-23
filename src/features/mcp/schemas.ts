@@ -121,6 +121,19 @@ export const listGoalQuestionsInputSchema = goalWriteInputSchema.extend({ limit:
 export const withdrawGoalQuestionInputSchema = goalWriteInputSchema.extend({
   questionId: z.uuid(), reason: GoalQuestionSchema.shape.withdrawalReason,
 });
+const standaloneInquiryIdentityInputSchema = z.object({
+  cwd: absolutePathSchema.describe('Absolute project path within the MCP scope. The current manager assignment selects the standalone inquiry owner.'),
+}).strict();
+export const listStandaloneInquiriesInputSchema = standaloneInquiryIdentityInputSchema.extend({
+  limit: goalReadLimitSchema, offset: readOffsetSchema,
+});
+export const withdrawStandaloneInquiryInputSchema = standaloneInquiryIdentityInputSchema.extend({
+  id: z.uuid(),
+  reason: GoalQuestionSchema.shape.withdrawalReason.unwrap()
+    .describe('Required reason for withdrawing an obsolete pending inquiry. Original whitespace is preserved.'),
+});
+export type ListStandaloneInquiriesInput = z.infer<typeof listStandaloneInquiriesInputSchema>;
+export type WithdrawStandaloneInquiryInput = z.infer<typeof withdrawStandaloneInquiryInputSchema>;
 export const notifyGoalInputSchema = goalWriteInputSchema.extend({
   ...GoalNotificationInputSchema.shape, kind: z.enum(['blocked', 'custom']),
 });
