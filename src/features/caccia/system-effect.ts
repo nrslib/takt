@@ -14,6 +14,7 @@ import { checkForkThreats, toPublicThreatCheckComment } from '../merge/threat-ch
 import { resolveMergeSettings } from '../merge/settings.js';
 import { resolveCacciaSettings, runCaccia } from './index.js';
 import type { CacciaDisplayOptions } from './output.js';
+import { parseGitHubPullRequestTarget } from '../../infra/github/pull-request-target.js';
 
 const log = createLogger('caccia-effect');
 const HEAD_WAIT_MS = 60_000;
@@ -140,6 +141,7 @@ export async function cacciaEffect(
     let expectedHeadSha = initialHeadSha;
     const result = await runCaccia({
       entry: 'linked', prNumber, projectCwd: options.projectCwd, settings,
+      ...(context.prUrl === undefined ? {} : { pullRequest: parseGitHubPullRequestTarget(context.prUrl) }),
       expectedInitialHeadSha: initialHeadSha, abortSignal: options.abortSignal,
       onPushedHead: (headSha) => {
         options.prMergePushRecorder?.record(headSha, expectedHeadSha, context);

@@ -71,12 +71,34 @@ import { getGitProvider } from '../infra/git/index.js';
 import type { CommentResult, IssueCommentResult, PrReviewData } from '../infra/git/index.js';
 import type { PrListItem } from '../infra/git/types.js';
 import { createIssueSuccess } from './helpers/createIssueResult.js';
+import { parseGitHubPullRequestTarget } from '../infra/github/pull-request-target.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
 describe('GitHubProvider', () => {
+  it('binds merge PR operations to one published target without changing the default provider', async () => {
+    const target = parseGitHubPullRequestTarget('https://ghe.example.test/acme/target/pull/123');
+    const defaultProvider = getGitProvider();
+    const provider = new GitHubProvider(target);
+    await provider.fetchPrDetails(123, '/source');
+    await provider.fetchPrStatus(123, '/source');
+    provider.fetchPrReviewComments(123, '/source');
+    provider.commentOnPr(123, 'reviewed', '/source');
+    provider.mergePr(123, '/source', 'squash', 'head');
+    provider.closePr(123, '/source');
+    expect(mockFetchPrDetails).toHaveBeenCalledWith(123, '/source', undefined, target);
+    expect(mockFetchPrStatus).toHaveBeenCalledWith(123, '/source', undefined, target);
+    expect(mockFetchPrReviewComments).toHaveBeenCalledWith(123, '/source', target);
+    expect(mockCommentOnPr).toHaveBeenCalledWith(123, 'reviewed', '/source', target);
+    expect(mockMergePr).toHaveBeenCalledWith(123, '/source', 'squash', 'head', target);
+    expect(mockClosePr).toHaveBeenCalledWith(123, '/source', target);
+    expect(getGitProvider()).toBe(defaultProvider);
+    expect(() => provider.mergePr(456, '/source')).toThrow('does not match');
+    expect(mockMergePr).toHaveBeenCalledOnce();
+  });
+
   it('選別材料取得を指定番号とcwdで委譲し取得結果を返す', async () => {
     const data = { number: 10, title: 'Guide', body: 'Instructions', files: ['docs/guide.md'] };
     mockFetchPrSelectionData.mockReturnValue(data);

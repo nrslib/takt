@@ -14,6 +14,10 @@ vi.mock('../infra/git/index.js', async (importOriginal) => ({
 vi.mock('../infra/github/pr.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()), fetchPrDetails: mocks.details, fetchPrStatus: mocks.status,
 }));
+vi.mock('../infra/github/issue.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/github/issue.js')>()),
+  checkGhCli: () => ({ available: true }),
+}));
 vi.mock('../agents/agent-usecases.js', () => ({ executeAgent: mocks.agent }));
 vi.mock('../agents/runner.js', () => ({ runAgent: vi.fn() }));
 vi.mock('../features/tasks/execute/workflowExecutionApi.js', () => ({ runWorkflowExecution: mocks.workflow }));
@@ -56,6 +60,10 @@ describe('Merge PR persistent clone ownership', () => {
     root = mkdtempSync(join(tmpdir(), 'takt-merge-clone-'));
     project = join(root, 'project');
     fork = join(root, 'fork.git');
+    const gitConfig = join(root, 'gitconfig');
+    writeFileSync(gitConfig, '');
+    vi.stubEnv('GIT_CONFIG_GLOBAL', gitConfig);
+    vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1');
     git(root, 'init', '--initial-branch=main', project);
     git(project, 'config', 'user.name', 'Merge Test');
     git(project, 'config', 'user.email', 'merge@example.com');
@@ -63,6 +71,7 @@ describe('Merge PR persistent clone ownership', () => {
     git(project, 'add', 'code.txt');
     git(project, 'commit', '-m', 'base');
     baseHead = git(project, 'rev-parse', 'HEAD');
+    git(root, 'config', '--file', gitConfig, `url.file://${project}.insteadOf`, 'git@github.com:org/repo.git');
     git(root, 'clone', '--bare', project, fork);
     const author = join(root, 'author');
     git(root, 'clone', fork, author);

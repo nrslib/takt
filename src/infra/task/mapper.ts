@@ -98,6 +98,7 @@ export function toTaskInfo(projectDir: string, tasksFile: string, task: TaskReco
     createdAt: task.created_at,
     status: task.status,
     worktreePath: task.worktree_path,
+    ...(task.pr_url === undefined ? {} : { prUrl: task.pr_url }),
     data: buildTaskFileData(task, content),
   };
 }

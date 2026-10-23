@@ -263,6 +263,7 @@ async function executeAndCommit(
     if (result.success && task.worktree !== false) {
       const { postExecutionFlow } = await import('../tasks/execute/postExecution.js');
       const postResult = await postExecutionFlow({
+        workflowHasCaccia: result.workflowHasCaccia,
         execCwd: executionCwd,
         projectCwd: repository.locations.projectDirectory,
         task: task.task,

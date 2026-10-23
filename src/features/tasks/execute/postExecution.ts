@@ -21,6 +21,7 @@ import type { ExecuteTaskOptions } from './types.js';
 import { readPrivateFileState, writePrivateFile } from '../../../shared/utils/private-file.js';
 import { prepareLoopAnalysisReportForPublication } from './loopAnalysisReportPublication.js';
 import { runLinkedMergeSafely } from '../../merge/index.js';
+import { runLinkedCacciaSafely } from '../../caccia/linked.js';
 
 const log = createLogger('postExecution');
 
@@ -32,6 +33,7 @@ const PR_CREATION_FAILURE_MESSAGE = 'Failed to create pull request.';
 
 
 export interface PostExecutionOptions {
+  workflowHasCaccia?: boolean;
   goalId?: string;
   execCwd: string;
   projectCwd: string;
@@ -194,6 +196,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
           success(`PR updated with comment: ${existingPr.url}`);
         }
         if (options.goalId === undefined) {
+          await runLinkedCacciaSafely(projectCwd, existingPr.url, options.workflowHasCaccia, abortSignal, display);
           await runLinkedMergeSafely(projectCwd, existingPr.url, abortSignal, display, options.parentTaskName);
         }
         return { prUrl: existingPr.url };
@@ -229,6 +232,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
           success(`PR created: ${prResult.url}`);
         }
         if (prResult.url && options.goalId === undefined) {
+          await runLinkedCacciaSafely(projectCwd, prResult.url, options.workflowHasCaccia, abortSignal, display);
           await runLinkedMergeSafely(projectCwd, prResult.url, abortSignal, display, options.parentTaskName);
         }
         return { prUrl: prResult.url };

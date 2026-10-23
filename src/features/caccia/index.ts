@@ -21,6 +21,7 @@ import { DEFAULT_CACCIA_SETTINGS } from '../../core/models/schemas.js';
 import type { CacciaConfig, CacciaSettings } from '../../core/models/config-types.js';
 import { createCacciaAbortScope } from './abortSignal.js';
 import { detectVcsProvider } from '../../infra/git/detect.js';
+import type { GitHubPullRequestTarget } from '../../infra/github/pull-request-target.js';
 import { createLogger, getErrorMessage, getSlackWebhookUrl, sendSlackNotification } from '../../shared/utils/index.js';
 import { forceExitAfterOpenCodeCleanup } from '../tasks/execute/forceShutdown.js';
 import { toLocalBranchRef } from '../../shared/utils/gitBranchValidation.js';
@@ -121,7 +122,7 @@ type CacciaPushedHeadListener = (headSha: string) => void;
 
 export type CacciaInput = CacciaInputBase & (
   | { entry: 'standalone'; prNumber: number }
-  | { entry: 'linked'; prNumber: number; expectedInitialHeadSha?: string;
+  | { entry: 'linked'; prNumber: number; pullRequest?: GitHubPullRequestTarget; expectedInitialHeadSha?: string;
       onPushedHead?: CacciaPushedHeadListener }
 );
 
@@ -193,7 +194,9 @@ async function waitForCodeRabbitReview(
   options: CacciaReviewWaitOptions,
   signal: AbortSignal | undefined,
   out: CacciaOutput,
+  target?: GitHubPullRequestTarget,
 ): Promise<CacciaReviewWaitResult | { rateLimited: true; headSha: string } | undefined> {
+  const targetArguments = target === undefined ? [] as const : [target] as const;
   const deadline = Date.now() + options.timeoutMs;
   let rateLimitedHeadSha: string | undefined;
   let requestedReview = false;
@@ -204,7 +207,7 @@ async function waitForCodeRabbitReview(
     }
     let status: Awaited<ReturnType<typeof fetchCodeRabbitReviewStatus>>;
     try {
-      status = await fetchCodeRabbitReviewStatus(prNumber, projectCwd, deadline, signal);
+      status = await fetchCodeRabbitReviewStatus(prNumber, projectCwd, deadline, signal, ...targetArguments);
     } catch (error) {
       assertNotAborted(signal);
       throw error;
@@ -223,7 +226,7 @@ async function waitForCodeRabbitReview(
       }
       if (retryAt !== undefined && retryAt <= Date.now() && !requestedReview) {
         requestedReview = true;
-        if (!await requestCodeRabbitReview(prNumber, projectCwd, deadline, signal)) {
+        if (!await requestCodeRabbitReview(prNumber, projectCwd, deadline, signal, ...targetArguments)) {
           return { rateLimited: true, headSha: status.headSha };
         }
         continue;
@@ -318,7 +321,8 @@ async function createTemporaryClone(
   releaseGitOperations: (cwd: string) => void,
 ): Promise<{ cwd: string; operations: CacciaGitOperations }> {
   assertNotAborted(input.abortSignal);
-  const pullRequest = await fetchCacciaPullRequestDetails(prNumber, input.projectCwd, input.abortSignal);
+  const targetArguments = input.entry === 'linked' && input.pullRequest !== undefined ? [input.pullRequest] as const : [] as const;
+  const pullRequest = await fetchCacciaPullRequestDetails(prNumber, input.projectCwd, input.abortSignal, ...targetArguments);
   if (pullRequest.headSha !== expectedHeadSha) {
     throw new Error(`Pull request #${prNumber} head changed before creating its temporary clone`);
   }
@@ -475,12 +479,14 @@ function createProductionDependencies(
   out: CacciaOutput,
 ): CacciaDependencies {
   const gitOperations = new Map<string, CacciaGitOperations>();
+  const target = input.entry === 'linked' ? input.pullRequest : undefined;
+  const targetArguments = target === undefined ? [] as const : [target] as const;
   return {
     detectVcsProvider: (projectCwd) => resolveConfigValue(projectCwd, 'vcsProvider') ?? detectVcsProvider(projectCwd),
     waitForCodeRabbitReview: (prNumber, options) =>
-      waitForCodeRabbitReview(prNumber, input.projectCwd, options, input.abortSignal, out),
+      waitForCodeRabbitReview(prNumber, input.projectCwd, options, input.abortSignal, out, target),
     fetchCodeRabbitReviewThreads: (prNumber, projectCwd, expectedHeadSha, signal) =>
-      fetchCodeRabbitReviewThreads(prNumber, projectCwd, expectedHeadSha, signal),
+      fetchCodeRabbitReviewThreads(prNumber, projectCwd, expectedHeadSha, signal, ...targetArguments),
     createTemporaryClone: async (prNumber, expectedHeadSha) => {
       const clone = await createTemporaryClone(input, prNumber, expectedHeadSha, (cwd) => { gitOperations.delete(cwd); });
       gitOperations.set(clone.cwd, clone.operations);
@@ -493,8 +499,8 @@ function createProductionDependencies(
       return commitAndPush(cwd, input.projectCwd, input.abortSignal, operations, onPushedHead);
     },
     fetchCurrentPullRequestHeadSha: (prNumber, projectCwd, signal, deadlineAt) =>
-      fetchCacciaPullRequestHeadSha(prNumber, projectCwd, signal, deadlineAt),
-    resolveReviewThread: (threadId, projectCwd, signal) => resolveReviewThread(threadId, projectCwd, signal),
+      fetchCacciaPullRequestHeadSha(prNumber, projectCwd, signal, deadlineAt, ...targetArguments),
+    resolveReviewThread: (threadId, projectCwd, signal) => resolveReviewThread(threadId, projectCwd, signal, ...targetArguments),
     removeTemporaryClone: async (cwd) => removeOwnedTemporaryClone(cwd, false),
     logResult: logCacciaResult,
     notifyResult: notifyCacciaResult,

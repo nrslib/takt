@@ -7,6 +7,9 @@ import type { WorkflowPrListWhere } from '../../core/models/workflow-system-inpu
 import { matchesPrWhere } from '../../core/workflow/system/pr-matcher.js';
 import { createPullRequestContext } from '../../core/workflow/pr-context.js';
 import { getGitProvider } from '../../infra/git/index.js';
+import { detectVcsProvider } from '../../infra/git/detect.js';
+import { GitHubProvider } from '../../infra/github/GitHubProvider.js';
+import { parseGitHubPullRequestTarget, type GitHubPullRequestTarget } from '../../infra/github/pull-request-target.js';
 import type { PrListItem } from '../../infra/git/types.js';
 import { isWorkflowPath, resolveConfigValue } from '../../infra/config/index.js';
 import { cloneAndIsolateAbortable, runGitCommandAbortable } from '../../infra/task/clone-exec.js';
@@ -39,6 +42,7 @@ interface MergeOptions {
   readonly settings: MergeSettings;
   readonly concurrency: number;
   readonly prNumber?: number;
+  readonly pullRequest?: GitHubPullRequestTarget;
   readonly selectionText?: string;
   readonly onSelectionResult?: (results: readonly PrSelectionResult[]) => void;
   readonly workflow?: string;
@@ -53,6 +57,7 @@ interface MergeOptions {
 interface PrWorkflowRequest {
   readonly projectCwd: string;
   readonly prNumber: number;
+  readonly pullRequest?: GitHubPullRequestTarget;
   readonly workflow: string;
   readonly settings: MergeSettings;
   readonly abortSignal?: AbortSignal;
@@ -67,7 +72,7 @@ interface MergeDependencies {
 }
 
 export async function executePrWorkflow(request: PrWorkflowRequest): Promise<{ merged: boolean }> {
-  const provider = getGitProvider();
+  const provider = request.pullRequest === undefined ? getGitProvider() : new GitHubProvider(request.pullRequest);
   const cli = provider.checkCliStatus(request.projectCwd);
   if (!cli.available) throw new Error(cli.error);
   if (!provider.fetchPrDetails || !provider.fetchPrStatus) {
@@ -81,6 +86,7 @@ export async function executePrWorkflow(request: PrWorkflowRequest): Promise<{ m
     undefined, `merge-pr-${request.prNumber}`);
   const runner = new TaskRunner(request.projectCwd);
   const task = runner.startPrMergeTask({
+    ...(request.pullRequest === undefined ? {} : { prUrl: request.pullRequest.url }),
     prNumber: request.prNumber, headBranch: details.headBranch, baseBranch: details.baseBranch,
     headSha: details.headSha, headRepositoryUrl: details.headRepositoryUrl,
     headRepositoryPushUrls: details.headRepositoryPushUrls,
@@ -109,6 +115,7 @@ export async function executePersistedPrMergeTask(
     const settings = resolveMergeSettings(resolveConfigValue(projectCwd, 'merge'));
     const result = await runPrMergeWorkflow({
       projectCwd, prNumber: data.pr_number, workflow: data.workflow,
+      ...(task.prUrl === undefined ? {} : { pullRequest: parseGitHubPullRequestTarget(task.prUrl) }),
       settings: { ...settings, method: data.merge_method,
         threatCheckMaxDiffBytes: data.merge_threat_check_max_diff_bytes ?? settings.threatCheckMaxDiffBytes },
       abortSignal, display,
@@ -147,7 +154,7 @@ export async function executePersistedPrMergeTask(
 async function runPrMergeWorkflow(
   request: PrWorkflowRequest, task: TaskInfo, runner: TaskRunner, runSlug: string,
 ): Promise<{ merged: boolean }> {
-  const provider = getGitProvider();
+  const provider = request.pullRequest === undefined ? getGitProvider() : new GitHubProvider(request.pullRequest);
   if (!provider.fetchPrDetails || !provider.fetchPrStatus) throw new Error('The VCS provider does not support PR merge workflow execution');
   const details = await provider.fetchPrDetails(request.prNumber, request.projectCwd, request.abortSignal);
   const data = task.data;
@@ -200,7 +207,7 @@ async function runPrMergeWorkflow(
     allowGitHooks: gitSafety, allowGitFilters: false,
   });
   const git = (args: string[]) => runGitCommandAbortable(cwd, args, request.abortSignal, env);
-  const baseUrl = await resolvePrMergeBaseRepositoryUrl(request.projectCwd, request.abortSignal);
+  const baseUrl = await resolvePrMergeBaseRepositoryUrl(request.projectCwd, request.abortSignal, request.pullRequest);
   const cloneGit = await createPrCloneGitOperations({
     cwd,
     headRepositoryUrl: details.headRepositoryUrl, headRepositoryPushUrls: details.headRepositoryPushUrls,
@@ -219,8 +226,9 @@ async function runPrMergeWorkflow(
     await cloneGit.operations.fetch('base', `${toLocalBranchRef(details.baseBranch)}:${prContext.baseDiffRef}`);
   } else {
     const branch = (await git(['symbolic-ref', '--short', 'HEAD'])).stdout.trim();
-    const originUrl = (await git(['remote', 'get-url', 'origin'])).stdout.trim();
-    const baseRemoteUrl = (await git(['remote', 'get-url', 'base'])).stdout.trim();
+    // Compare the configured identities before Git applies transport URL rewrites.
+    const originUrl = (await git(['config', '--get', 'remote.origin.url'])).stdout.trim();
+    const baseRemoteUrl = (await git(['config', '--get', 'remote.base.url'])).stdout.trim();
     assertPrMergeCloneIdentity(
       { branch, originUrl, baseUrl: baseRemoteUrl },
       { branch: details.headBranch, originUrl: cloneGit.headRepositoryUrl, baseUrl: cloneGit.baseRepositoryUrl },
@@ -282,6 +290,7 @@ async function runPrMergeWorkflow(
     } }),
     prContext, prExecutionContext: {
       prNumber: request.prNumber, headBranch: details.headBranch, baseBranch: details.baseBranch,
+      ...(request.pullRequest === undefined ? {} : { prUrl: request.pullRequest.url }),
       headSha,
       headRepositoryUrl: cloneGit.headRepositoryUrl, headRepositoryPushUrls: cloneGit.headRepositoryPushUrls,
       preserveConflictState: true,
@@ -296,7 +305,7 @@ async function runPrMergeWorkflow(
     mergeMethod: request.settings.method, abortSignal: request.abortSignal,
     runPathsDirectory: join(request.projectCwd, '.takt', 'runs'),
     skipWorktreeRuntimeProtection: true,
-  });
+  }, ...(request.pullRequest === undefined ? [] : [{ gitProvider: provider }]));
   if (!result.success) log.error('PR workflow failed', { prNumber: request.prNumber });
   return { merged: (await provider.fetchPrStatus(request.prNumber, request.projectCwd,
     { signal: request.abortSignal })).merged };
@@ -371,6 +380,7 @@ export async function runMerge(
     try {
       const result = await dependencies.executePrWorkflow({
         projectCwd: options.projectCwd, prNumber, settings: options.settings,
+        ...(options.pullRequest === undefined ? {} : { pullRequest: options.pullRequest }),
         workflow, abortSignal: options.abortSignal,
         display: options.display,
         parentTaskName: options.parentTaskName,
@@ -421,11 +431,10 @@ export async function runLinkedMergeSafely(
   try {
     const settings = resolveMergeSettings(resolveConfigValue(projectCwd, 'merge'));
     if (!settings.autoStart) return;
-    const match = /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/(\d+)\/?$/u.exec(prUrl);
-    const prNumber = Number(match?.[1]);
-    if (!Number.isSafeInteger(prNumber) || prNumber < 1) throw new Error('Invalid GitHub PR URL');
+    if ((resolveConfigValue(projectCwd, 'vcsProvider') ?? detectVcsProvider(projectCwd) ?? 'github') !== 'github') return;
+    const pullRequest = parseGitHubPullRequestTarget(prUrl);
     const result = await runMerge({
-      projectCwd, prNumber, settings, concurrency: settings.concurrency, abortSignal, display, parentTaskName,
+      projectCwd, prNumber: pullRequest.number, pullRequest, settings, concurrency: settings.concurrency, abortSignal, display, parentTaskName,
     });
     if (result.exitCode !== 0) log.error('Linked merge workflow left the PR unmerged', { prUrl });
   } catch (error) {

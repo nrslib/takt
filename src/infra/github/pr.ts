@@ -12,6 +12,7 @@ import { fetchPaginatedApi } from '../git/paginated-api.js';
 import { isTaktManagedPrBody } from '../git/format.js';
 import { checkGhCli } from './issue.js';
 import { resolveRepositoryNameWithOwner } from './repository.js';
+import { assertGitHubPullRequestTarget, resolvePublishedPrRepositoryUrl, type GitHubPullRequestTarget } from './pull-request-target.js';
 import type {
   CreatePrOptions,
   CreatePrResult,
@@ -248,14 +249,14 @@ function toPrListItem(pr: GhPrListResponseItem): PrListItem {
   };
 }
 
-export function commentOnPr(prNumber: number, body: string, cwd: string): CommentResult {
+export function commentOnPr(prNumber: number, body: string, cwd: string, target?: GitHubPullRequestTarget): CommentResult {
   const ghStatus = checkGhCli(cwd);
   if (!ghStatus.available) {
     return { success: false, error: ghStatus.error };
   }
 
   try {
-    execFileSync('gh', ['pr', 'comment', String(prNumber), '--body', body], {
+    execFileSync('gh', ['pr', 'comment', target?.url ?? String(prNumber), '--body', body], {
       cwd,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -684,6 +685,7 @@ async function fetchCodeRabbitReviewThreadReplies(
   cwd: string,
   prNumber: number,
   signal: AbortSignal | undefined,
+  hostname?: string,
 ): Promise<Array<{ author: string; body: string }>> {
   if (!initialEndCursor) {
     throw new Error(`Missing starter comment cursor for review thread ${threadId} in pull request #${prNumber}`);
@@ -698,6 +700,7 @@ async function fetchCodeRabbitReviewThreadReplies(
       undefined,
       signal,
       GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES,
+      hostname,
     );
     const response = parseCodeRabbitReviewThreadRepliesResponse(raw, threadId, prNumber);
     replies.push(...response.nodes.map((comment) => ({
@@ -720,6 +723,7 @@ function fetchReviewThreadComments(
   thread: GhGraphqlReviewThread,
   prNumber: number,
   cwd: string,
+  hostname?: string,
 ): GhGraphqlReviewThreadComment[] {
   const comments = [...thread.comments.nodes];
   let pageInfo = thread.comments.pageInfo;
@@ -731,7 +735,8 @@ function fetchReviewThreadComments(
 
     const raw = execFileSync(
       'gh',
-      buildReviewThreadCommentsGraphqlArgs(thread.id, pageInfo.endCursor),
+      [...buildReviewThreadCommentsGraphqlArgs(thread.id, pageInfo.endCursor),
+        ...(hostname === undefined ? [] : ['--hostname', hostname])],
       { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES },
     );
     const nextComments = parseReviewThreadCommentsResponse(raw);
@@ -768,7 +773,7 @@ function mapReviewThreadComments(
   });
 }
 
-function fetchPrReviewThreads(owner: string, repo: string, prNumber: number, cwd: string): PrReviewComment[] {
+function fetchPrReviewThreads(owner: string, repo: string, prNumber: number, cwd: string, hostname?: string): PrReviewComment[] {
   try {
     const comments: PrReviewComment[] = [];
     let endCursor: string | undefined;
@@ -776,13 +781,14 @@ function fetchPrReviewThreads(owner: string, repo: string, prNumber: number, cwd
     for (let page = 1; page <= GRAPHQL_PAGINATION_HARD_CAP; page += 1) {
       const raw = execFileSync(
         'gh',
-        buildReviewThreadsGraphqlArgs(owner, repo, prNumber, endCursor),
+        [...buildReviewThreadsGraphqlArgs(owner, repo, prNumber, endCursor),
+          ...(hostname === undefined ? [] : ['--hostname', hostname])],
         { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES },
       );
       const reviewThreads = parseReviewThreadsResponse(raw);
 
       for (const thread of reviewThreads.nodes) {
-        const threadComments = fetchReviewThreadComments(thread, prNumber, cwd);
+        const threadComments = fetchReviewThreadComments(thread, prNumber, cwd, hostname);
         comments.push(...mapReviewThreadComments(thread, threadComments));
       }
 
@@ -823,6 +829,7 @@ interface PullRequestLocator {
   owner: string;
   repo: string;
   headSha: string;
+  hostname?: string;
 }
 
 class ReviewStatusDeadlineExceededError extends Error {}
@@ -846,6 +853,7 @@ function runGhCommand(
   deadlineAt: number | undefined,
   signal: AbortSignal | undefined,
   maxBuffer?: number,
+  hostname?: string,
 ): Promise<string> {
   const timeout = deadlineAt === undefined ? undefined : deadlineAt - Date.now();
   if (timeout !== undefined && timeout <= 0) {
@@ -860,7 +868,8 @@ function runGhCommand(
     ...(signal !== undefined ? { signal } : {}),
   };
   return new Promise((resolve, reject) => {
-    execFile('gh', args, options, (error, stdout) => {
+    const commandArgs = hostname === undefined ? args : [...args, '--hostname', hostname];
+    execFile('gh', commandArgs, options, (error, stdout) => {
       if (error) {
         if (deadlineAt !== undefined && isCommandTimeoutError(error)) {
           reject(new ReviewStatusDeadlineExceededError());
@@ -879,9 +888,10 @@ export async function requestCodeRabbitReview(
   cwd: string,
   deadlineAt: number,
   signal?: AbortSignal,
+  target?: GitHubPullRequestTarget,
 ): Promise<boolean> {
   try {
-    await runGhCommand(['pr', 'comment', String(prNumber), '--body', '@coderabbitai review'],
+    await runGhCommand(['pr', 'comment', target?.url ?? String(prNumber), '--body', '@coderabbitai review'],
       cwd, deadlineAt, signal);
     return true;
   } catch (error) {
@@ -890,10 +900,17 @@ export async function requestCodeRabbitReview(
   }
 }
 
-function parsePullRequestLocator(raw: string, prNumber: number): PullRequestLocator {
+function parsePullRequestLocator(raw: string, prNumber: number, target?: GitHubPullRequestTarget): PullRequestLocator {
   const response = JSON.parse(raw) as { url?: unknown; headRefOid?: unknown };
   if (typeof response.url !== 'string' || typeof response.headRefOid !== 'string' || !response.headRefOid) {
     throw new Error(`Missing pull request URL or head SHA for pull request #${prNumber}`);
+  }
+  if (target !== undefined) {
+    assertGitHubPullRequestTarget(response.url, target);
+    if (target.number !== prNumber) {
+      throw new Error('GitHub returned a different pull request than the published target');
+    }
+    return { owner: target.owner, repo: target.repo, hostname: target.hostname, headSha: response.headRefOid };
   }
   return { ...parseRepositoryFromPrUrl(response.url), headSha: response.headRefOid };
 }
@@ -903,14 +920,15 @@ async function fetchPullRequestLocatorAsync(
   cwd: string,
   deadlineAt?: number,
   signal?: AbortSignal,
+  target?: GitHubPullRequestTarget,
 ): Promise<PullRequestLocator> {
   const raw = await runGhCommand(
-    ['pr', 'view', String(prNumber), '--json', 'url,headRefOid'],
+    ['pr', 'view', target?.url ?? String(prNumber), '--json', 'url,headRefOid'],
     cwd,
     deadlineAt,
     signal,
   );
-  return parsePullRequestLocator(raw, prNumber);
+  return parsePullRequestLocator(raw, prNumber, target);
 }
 
 function buildCodeRabbitGraphqlArgs(
@@ -980,6 +998,8 @@ async function fetchCodeRabbitReviews(
       cwd,
       deadlineAt,
       signal,
+      undefined,
+      locator.hostname,
     );
     const response = parseCodeRabbitReviewPage(raw, prNumber);
     reviews.push(...response.nodes);
@@ -1034,13 +1054,14 @@ async function fetchCodeRabbitReplyActivityInThread(
   cwd: string,
   deadlineAt: number | undefined,
   signal: AbortSignal | undefined,
+  hostname?: string,
 ): Promise<{ hasReply: boolean; hasUnknownActivity: boolean }> {
   let endCursor = initialEndCursor;
   let hasUnknownActivity = false;
   for (let page = 1; page <= GRAPHQL_PAGINATION_HARD_CAP; page += 1) {
     const raw = await runGhCommand(
       buildCodeRabbitReviewThreadRepliesGraphqlArgs(threadId, endCursor),
-      cwd, deadlineAt, signal, GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES,
+      cwd, deadlineAt, signal, GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES, hostname,
     );
     const response = parseCodeRabbitReviewThreadRepliesResponse(raw, threadId, prNumber);
     if (!Array.isArray(response.nodes) || typeof response.pageInfo?.hasNextPage !== 'boolean'
@@ -1078,6 +1099,8 @@ async function fetchCodeRabbitThreadActivity(
       cwd,
       deadlineAt,
       signal,
+      undefined,
+      locator.hostname,
     );
     const response = parseCodeRabbitThreadStarterPage(raw, prNumber);
     for (const thread of response.nodes) {
@@ -1102,7 +1125,7 @@ async function fetchCodeRabbitThreadActivity(
           throw new Error(`Missing starter comment cursor for review thread ${thread.id} in pull request #${prNumber}`);
         }
         const replyActivity = await fetchCodeRabbitReplyActivityInThread(
-          thread.id, thread.comments.pageInfo.endCursor, prNumber, cwd, deadlineAt, signal,
+          thread.id, thread.comments.pageInfo.endCursor, prNumber, cwd, deadlineAt, signal, locator.hostname,
         );
         hasReply ||= replyActivity.hasReply;
         hasUnknownActivity ||= replyActivity.hasUnknownActivity;
@@ -1165,6 +1188,7 @@ async function fetchCodeRabbitIssueComments(
       deadlineAt,
       signal,
       GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES,
+      locator.hostname,
     );
     const response = parseCodeRabbitIssueCommentPage(raw, prNumber);
     comments.push(...response.nodes);
@@ -1235,8 +1259,9 @@ export async function fetchCodeRabbitReviewThreads(
   cwd: string,
   expectedHeadSha: string,
   signal?: AbortSignal,
+  target?: GitHubPullRequestTarget,
 ): Promise<CodeRabbitReviewThread[]> {
-  const locator = await fetchPullRequestLocatorAsync(prNumber, cwd, undefined, signal);
+  const locator = await fetchPullRequestLocatorAsync(prNumber, cwd, undefined, signal, target);
   if (locator.headSha !== expectedHeadSha) {
     throw new Error(`Pull request #${prNumber} head changed before reading review threads`);
   }
@@ -1250,6 +1275,7 @@ export async function fetchCodeRabbitReviewThreads(
       undefined,
       signal,
       GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES,
+      locator.hostname,
     );
     const response = parseCodeRabbitReviewThreadsResponse(raw, prNumber, expectedHeadSha);
     for (const thread of response.nodes) {
@@ -1275,6 +1301,7 @@ export async function fetchCodeRabbitReviewThreads(
             cwd,
             prNumber,
             signal,
+            locator.hostname,
           )
           : [],
         path: starter.path,
@@ -1317,6 +1344,8 @@ async function fetchCodeRabbitCommitStatus(
       cwd,
       deadlineAt,
       signal,
+      undefined,
+      locator.hostname,
     );
     const response = JSON.parse(raw) as {
       statuses?: Array<{ context: string; state: string; description?: string; updated_at?: string }>;
@@ -1365,6 +1394,7 @@ export async function fetchCodeRabbitReviewStatus(
   cwd: string,
   deadlineAt?: number,
   signal?: AbortSignal,
+  target?: GitHubPullRequestTarget,
 ): Promise<CodeRabbitReviewStatus | undefined> {
   let locator: PullRequestLocator;
   let reviews: CodeRabbitReviewNode[];
@@ -1379,7 +1409,7 @@ export async function fetchCodeRabbitReviewStatus(
     skippedAt?: number;
   };
   try {
-    locator = await fetchPullRequestLocatorAsync(prNumber, cwd, deadlineAt, signal);
+    locator = await fetchPullRequestLocatorAsync(prNumber, cwd, deadlineAt, signal, target);
     reviews = await fetchCodeRabbitReviews(locator, prNumber, cwd, deadlineAt, signal);
     threadActivity = await fetchCodeRabbitThreadActivity(locator, prNumber, cwd, deadlineAt, signal);
     issueComments = await fetchCodeRabbitIssueComments(locator, prNumber, cwd, deadlineAt, signal);
@@ -1460,7 +1490,11 @@ function resolveCacciaHeadRepositoryUrl(
   headRepositorySshUrl: string,
   locator: PullRequestLocator,
   prNumber: number,
+  target?: GitHubPullRequestTarget,
 ): string {
+  if (target !== undefined) {
+    return resolvePublishedPrRepositoryUrl(originUrl, headRepositorySshUrl, target);
+  }
   const headMatch = /^git@github\.com:([A-Za-z0-9-]+\/[A-Za-z0-9_.-]+)\.git$/u.exec(headRepositorySshUrl);
   if (!headMatch?.[1]) {
     throw new Error(`Invalid GitHub SSH URL for pull request #${prNumber}`);
@@ -1517,13 +1551,16 @@ export async function fetchCacciaPullRequestDetails(
   prNumber: number,
   cwd: string,
   signal?: AbortSignal,
+  target?: GitHubPullRequestTarget,
 ): Promise<CacciaPullRequestDetails> {
-  const locator = await fetchPullRequestLocatorAsync(prNumber, cwd, undefined, signal);
+  const locator = await fetchPullRequestLocatorAsync(prNumber, cwd, undefined, signal, target);
   const raw = await runGhCommand(
     buildCodeRabbitGraphqlArgs(locator.owner, locator.repo, prNumber, CACCIA_PULL_REQUEST_QUERY, undefined),
     cwd,
     undefined,
     signal,
+    undefined,
+    locator.hostname,
   );
   const parsed = JSON.parse(raw) as {
     data?: {
@@ -1551,11 +1588,11 @@ export async function fetchCacciaPullRequestDetails(
   const headRepositorySshUrl = pullRequest.headRepository.sshUrl;
   const originUrl = await readCacciaOriginUrlOutput(cwd, 'fetch', signal);
   const headRepositoryUrl = resolveCacciaHeadRepositoryUrl(
-    originUrl, headRepositorySshUrl, locator, prNumber,
+    originUrl, headRepositorySshUrl, locator, prNumber, target,
   );
   const pushUrlOutput = await readCacciaOriginUrlOutput(cwd, 'push', signal);
   const headRepositoryPushUrls = pushUrlOutput.split(/\r?\n/u).map((pushUrl) => (
-    resolveCacciaHeadRepositoryUrl(pushUrl, headRepositorySshUrl, locator, prNumber)
+    resolveCacciaHeadRepositoryUrl(pushUrl, headRepositorySshUrl, locator, prNumber, target)
   ));
   return {
     number: pullRequest.number,
@@ -1566,14 +1603,19 @@ export async function fetchCacciaPullRequestDetails(
   };
 }
 
-export async function fetchPrDetails(prNumber: number, cwd: string, signal?: AbortSignal) {
-  const head = await fetchCacciaPullRequestDetails(prNumber, cwd, signal);
-  const raw = await runGhCommand(['pr', 'view', String(prNumber), '--json', 'baseRefName,isCrossRepository'], cwd, undefined, signal);
+export async function fetchPrDetails(prNumber: number, cwd: string, signal?: AbortSignal, target?: GitHubPullRequestTarget) {
+  const head = await fetchCacciaPullRequestDetails(prNumber, cwd, signal, target);
+  const raw = await runGhCommand(['pr', 'view', target?.url ?? String(prNumber), '--json',
+    target === undefined ? 'baseRefName,isCrossRepository' : 'url,baseRefName,isCrossRepository'], cwd, undefined, signal);
   const parsed: unknown = JSON.parse(raw);
   if (typeof parsed !== 'object' || parsed === null || !('baseRefName' in parsed)
     || typeof parsed.baseRefName !== 'string' || parsed.baseRefName.length === 0
     || !('isCrossRepository' in parsed) || typeof parsed.isCrossRepository !== 'boolean') {
     throw new Error('Missing PR base branch');
+  }
+  if (target !== undefined) {
+    if (!('url' in parsed) || typeof parsed.url !== 'string') throw new Error('Missing PR URL');
+    assertGitHubPullRequestTarget(parsed.url, target);
   }
   return { ...head, baseBranch: parsed.baseRefName, sameRepository: !parsed.isCrossRepository };
 }
@@ -1584,18 +1626,23 @@ export async function fetchCacciaPullRequestHeadSha(
   cwd: string,
   signal?: AbortSignal,
   deadlineAt?: number,
+  target?: GitHubPullRequestTarget,
 ): Promise<string> {
-  const locator = await fetchPullRequestLocatorAsync(prNumber, cwd, deadlineAt, signal);
+  const locator = await fetchPullRequestLocatorAsync(prNumber, cwd, deadlineAt, signal, target);
   return locator.headSha;
 }
 
 /** Resolves the supplied GitHub review thread through its GraphQL thread ID. */
-export async function resolveReviewThread(threadId: string, cwd: string, signal?: AbortSignal): Promise<void> {
+export async function resolveReviewThread(
+  threadId: string, cwd: string, signal?: AbortSignal, target?: GitHubPullRequestTarget,
+): Promise<void> {
   const raw = await runGhCommand(
     ['api', 'graphql', '-f', `threadId=${threadId}`, '-f', `query=${RESOLVE_REVIEW_THREAD_MUTATION}`],
     cwd,
     undefined,
     signal,
+    undefined,
+    target?.hostname,
   );
   const parsed = JSON.parse(raw) as {
     data?: { resolveReviewThread?: { thread?: { id: string; isResolved: boolean } | null } | null };
@@ -1614,18 +1661,19 @@ export async function resolveReviewThread(threadId: string, cwd: string, signal?
  * Fetch PR review comments and metadata via `gh pr view`.
  * Throws on failure (PR not found, network error, etc.).
  */
-export function fetchPrReviewComments(prNumber: number, cwd: string): PrReviewData {
+export function fetchPrReviewComments(prNumber: number, cwd: string, target?: GitHubPullRequestTarget): PrReviewData {
   log.debug('Fetching PR review comments', { prNumber });
 
   const raw = execFileSync(
     'gh',
-    ['pr', 'view', String(prNumber), '--json', PR_REVIEW_JSON_FIELDS],
+    ['pr', 'view', target?.url ?? String(prNumber), '--json', PR_REVIEW_JSON_FIELDS],
     { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: GITHUB_LARGE_RESPONSE_MAX_BUFFER_BYTES },
   );
 
   const data = JSON.parse(raw) as GhPrViewReviewResponse;
+  if (target !== undefined) assertGitHubPullRequestTarget(data.url, target);
   const { owner, repo } = parseRepositoryFromPrUrl(data.url);
-  const threadReviewComments = fetchPrReviewThreads(owner, repo, prNumber, cwd);
+  const threadReviewComments = fetchPrReviewThreads(owner, repo, prNumber, cwd, target?.hostname);
 
   const comments: PrReviewComment[] = data.comments.map((c) => ({
     author: c.author.login,
@@ -1702,14 +1750,14 @@ export function createPullRequest(options: CreatePrOptions, cwd: string): Create
   }
 }
 
-export function mergePr(prNumber: number, cwd: string, method: import('../../core/models/config-types.js').MergeMethod = 'merge', expectedHeadSha?: string): MergeResult {
+export function mergePr(prNumber: number, cwd: string, method: import('../../core/models/config-types.js').MergeMethod = 'merge', expectedHeadSha?: string, target?: GitHubPullRequestTarget): MergeResult {
   const ghStatus = checkGhCli(cwd);
   if (!ghStatus.available) {
     return { success: false, error: ghStatus.error };
   }
 
   try {
-    execFileSync('gh', ['pr', 'merge', String(prNumber), `--${method}`, '--delete-branch',
+    execFileSync('gh', ['pr', 'merge', target?.url ?? String(prNumber), `--${method}`, '--delete-branch',
       ...(expectedHeadSha === undefined ? [] : ['--match-head-commit', expectedHeadSha])], {
       cwd,
       encoding: 'utf-8',
@@ -1723,14 +1771,14 @@ export function mergePr(prNumber: number, cwd: string, method: import('../../cor
   }
 }
 
-export function closePr(prNumber: number, cwd: string): MergeResult {
+export function closePr(prNumber: number, cwd: string, target?: GitHubPullRequestTarget): MergeResult {
   const ghStatus = checkGhCli(cwd);
   if (!ghStatus.available) {
     return { success: false, error: ghStatus.error };
   }
 
   try {
-    execFileSync('gh', ['pr', 'close', String(prNumber)], {
+    execFileSync('gh', ['pr', 'close', target?.url ?? String(prNumber)], {
       cwd,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],

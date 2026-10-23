@@ -259,7 +259,7 @@ The optional `caccia` object is accepted in both `~/.takt/config.yaml` and `.tak
 
 ```yaml
 caccia:
-  enabled: false          # Allow the caccia effect to wait for CodeRabbit
+  enabled: false          # Enable post-PR Caccia and CodeRabbit waits in explicit effects
   wait_timeout_ms: 1800000 # Maximum wait for the initial review and each pushed commit review, in milliseconds
   max_iterations: 3       # Maximum fix-and-review iterations
   workflow: caccia        # Workflow used to judge and fix each set of threads
@@ -267,13 +267,15 @@ caccia:
 
 The `caccia` effect waits for CodeRabbit only when `enabled` is `true`; otherwise it skips the review wait and returns `skipped` with `skipReason: config_disabled`. The standalone `takt caccia <PR-number>` command is available regardless of this flag. Defaults are disabled, 1,800,000 milliseconds, 3 iterations, and workflow `caccia`. A project `caccia` block takes precedence over the global block; omitted fields in the selected block receive these defaults. Set `workflow` to a workflow identifier to replace the builtin workflow.
 
+The same `enabled` flag also enables automatic Caccia after successful PR creation or update by worktree tasks with `auto_pr` and Pipeline with `--auto-pr`. Failed publication, missing PRs, goal-managed tasks, and non-GitHub providers do not run post-processing Caccia. It is suppressed when the executed workflow contains a `caccia` system effect, including in a called workflow, or when `merge.auto_start: true` selects a merge workflow containing such an effect. Otherwise Caccia finishes before the linked merge workflow starts. Step names and instruction text do not count as effects.
+
 If the GitHub PR head differs from the clone's starting HEAD, the effect fetches PR details every 2 seconds before execution for up to 60 seconds, including fetch time. Inconsistent head observations within a PR details fetch also trigger a retry within the same deadline. It continues only on the expected SHA; a mismatch at the deadline returns an `error` containing the expected SHA and the last observed SHA. If the last observation was inconsistent, both conflicting SHAs are included. Authentication failures and other fetch errors, PR identity changes, and cancellation fail immediately. This also applies before recording a skip when execution metadata and a push recorder are present, so disabled or unset configuration may still wait for this check. This wait is fixed and is independent of the review setting `wait_timeout_ms`.
 
 `wait_timeout_ms` bounds the initial review wait and each pushed-commit review wait, including a retry request. If a CodeRabbit rate-limit notice gives a retry time before the deadline, Caccia requests one review when that time arrives; a retry time at or beyond the deadline skips Caccia immediately. A review still incomplete at the deadline after a rate-limit notice also skips Caccia. Without a rate-limit notice, an initial timeout skips Caccia and a pushed-commit timeout is an error. The standalone command exits non-zero in either case; the system effect returns failures as `success: false` with `error` for workflow routing.
 
 Effect progress, workflow output, results, and failures inherit the parent task's display mode and task prefix. Silent parents produce no Caccia screen output.
 
-The merge builtins execute Caccia explicitly: `merge-review` runs `review → caccia → wait_ci → evaluation comment`, while `merge-review-fix` and `merge-review-fix-simple` run `review/fix → commit_and_push → caccia → wait_ci → merge_pr`. `success` and `skipped` continue to CI on the returned head. `limit` comments with the unresolved thread count and ends COMPLETE without merging. An effect error comments with `error` and ends ABORT. Push, task post-processing, and Pipeline no longer start Caccia implicitly. With `merge.auto_start: true`, PR publication starts the merge workflow, whose explicit effect owns Caccia.
+The merge builtins execute Caccia explicitly: `merge-review` runs `review → caccia → wait_ci → evaluation comment`, while `merge-review-fix` and `merge-review-fix-simple` run `review/fix → commit_and_push → caccia → wait_ci → merge_pr`. `success` and `skipped` continue to CI on the returned head. `limit` comments with the unresolved thread count and ends COMPLETE without merging. An effect error comments with `error` and ends ABORT. Git push itself does not start Caccia; `takt merge` uses these explicit effects. Automatic post-PR execution follows the exclusion and ordering rules above.
 
 ## Project Configuration
 

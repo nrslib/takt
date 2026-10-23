@@ -302,7 +302,8 @@ describe('Builtin PR merge workflow execution', () => {
           log: complete ? `round-${pushes}.test.ts > adds\nexpected ${pushes} to equal 3` : '' }] }],
         unavailable: complete ? [] : [{ name: scenario.ciName?.field === 'unavailable' ? scenario.ciName.value : `unit-round-${pushes}`, reason: 'HTTP 403: cannot read logs' }] };
     });
-    const rerunPrCi = vi.fn(new GitHubProvider().rerunPrCi);
+    const githubProvider = new GitHubProvider();
+    const rerunPrCi = vi.fn(githubProvider.rerunPrCi.bind(githubProvider));
     const recoveryServices = createDefaultSystemStepServices({ cwd: cloneCwd, projectCwd: project, task: 'Review PR',
       prExecutionContext: { prNumber, headBranch: 'feature/pr', baseBranch: 'main', headSha: 'a'.repeat(40),
         headRepositoryUrl: '/remote', headRepositoryPushUrls: ['/remote'] },
@@ -312,7 +313,7 @@ describe('Builtin PR merge workflow execution', () => {
           comments.push(body);
           return scenario.commentFails ? { success: false, error: 'comment denied' } : { success: true };
         }), closePr: vi.fn(), mergePr: vi.fn(), ...{ fetchPrCiFailure, rerunPrCi },
-        fetchPrStatus: new GitHubProvider().fetchPrStatus,
+        fetchPrStatus: githubProvider.fetchPrStatus.bind(githubProvider),
       },
     });
     const engine = new WorkflowEngine(workflow, cloneCwd, `Review PR ${prNumber}`, {

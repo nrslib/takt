@@ -2,6 +2,7 @@ import { z } from 'zod/v4';
 import { type PrStatus, type PrStatusFetchOptions } from '../../core/workflow/system/pr-execution-context.js';
 import { runPrCommand } from './pr-command.js';
 import { actionsReference, readCiRerunStatus } from './pr-ci.js';
+import { assertGitHubPullRequestTarget, type GitHubPullRequestTarget } from './pull-request-target.js';
 
 const CheckSchema = z.discriminatedUnion('__typename', [
   z.object({ __typename: z.literal('CheckRun'), name: z.string(), detailsUrl: z.string().nullish(),
@@ -33,6 +34,7 @@ const RunIdentitySchema = z.object({
 
 async function currentCheckRuns(
   checks: RawCheck[], headSha: string, cwd: string, options?: PrStatusFetchOptions,
+  target?: GitHubPullRequestTarget,
 ): Promise<{ checks: RawCheck[]; currentRuns: Array<z.infer<typeof RunIdentitySchema>>;
   supersededRuns: ReadonlyMap<number, string> }> {
   const byWorkflowName = new Map<string, Set<number>>();
@@ -68,6 +70,7 @@ async function currentCheckRuns(
     const run = RunIdentitySchema.parse(JSON.parse(await runPrCommand([
       'run', 'view', String(id), '--json',
       'databaseId,url,headSha,workflowDatabaseId,createdAt,status,conclusion',
+      ...(target === undefined ? [] : ['--repo', `${target.hostname}/${target.owner}/${target.repo}`]),
     ], cwd, options)));
     const reference = actionsReference(run.url);
     if (run.databaseId !== id || reference.id !== id || reference.repository !== repositories.get(id)) {
@@ -102,14 +105,15 @@ async function currentCheckRuns(
   }), currentRuns, supersededRuns };
 }
 
-export async function fetchPrStatus(prNumber: number, cwd: string, options?: PrStatusFetchOptions): Promise<PrStatus> {
+export async function fetchPrStatus(prNumber: number, cwd: string, options?: PrStatusFetchOptions, target?: GitHubPullRequestTarget): Promise<PrStatus> {
   const output = await runPrCommand([
-    'pr', 'view', String(prNumber), '--json',
-    'number,headRefOid,state,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup',
+    'pr', 'view', target?.url ?? String(prNumber), '--json',
+    'number,headRefOid,state,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup' + (target === undefined ? '' : ',url'),
   ], cwd, options);
+  if (target !== undefined) assertGitHubPullRequestTarget(JSON.parse(output).url, target);
   const raw = PrStatusSchema.parse(JSON.parse(output));
   if (raw.number !== prNumber) throw new Error('PR status response does not match the requested PR');
-  const current = await currentCheckRuns(raw.statusCheckRollup, raw.headRefOid, cwd, options);
+  const current = await currentCheckRuns(raw.statusCheckRollup, raw.headRefOid, cwd, options, target);
   const checks = current.checks.map((check) => {
     if (check.__typename === 'StatusContext') {
       return {
@@ -141,7 +145,7 @@ export async function fetchPrStatus(prNumber: number, cwd: string, options?: PrS
     merged: raw.state === 'MERGED',
   };
   if (options?.rerun !== undefined) {
-    status.ci = await readCiRerunStatus(status, options.rerun, cwd, options, current.supersededRuns);
+    status.ci = await readCiRerunStatus(status, options.rerun, cwd, options, current.supersededRuns, target);
     status.ci.finished = status.ci.finished && current.currentRuns.every((run) => run.status === 'completed');
     status.ci.passed = status.ci.passed && status.ci.finished
       && current.currentRuns.every((run) => ['success', 'neutral', 'skipped'].includes(run.conclusion ?? ''));

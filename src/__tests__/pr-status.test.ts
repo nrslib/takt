@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchPrStatus } from '../infra/github/pr.js';
 import { GitHubProvider } from '../infra/github/GitHubProvider.js';
 import type { PrCiFailure } from '../core/workflow/system/pr-ci.js';
+import { parseGitHubPullRequestTarget } from '../infra/github/pull-request-target.js';
 
 const { response, execFile, checkGhCli } = vi.hoisted(() => ({ response: vi.fn(), execFile: vi.fn(), checkGhCli: vi.fn() }));
 vi.mock('node:child_process', () => ({ execFileSync: vi.fn(), execFile }));
@@ -29,6 +30,69 @@ describe('PR status acquisition', () => {
       });
       return { kill: vi.fn() };
     });
+  });
+
+  it.each(['github.com', 'ghe.example.test'])('keeps %s PR and Actions targets through investigation, rerun and polling', async (hostname) => {
+    const target = parseGitHubPullRequestTarget(`https://${hostname}/acme/target/pull/123`);
+    const runUrl = `https://${hostname}/acme/target/actions/runs/10`;
+    const headSha = 'a'.repeat(40);
+    let rerun = false;
+    response.mockImplementation((args: string[]) => {
+      if (args[0] === 'pr') return JSON.stringify(status([
+        { ...check('COMPLETED', rerun ? 'SUCCESS' : 'FAILURE'), detailsUrl: runUrl + '/job/20' },
+      ], { url: target.url }));
+      if (args[1] === 'rerun') { rerun = true; return ''; }
+      if (args.includes('--log-failed')) return 'failed job log';
+      return JSON.stringify({ databaseId: 10, url: runUrl, headSha, attempt: rerun ? 2 : 1,
+        status: 'completed', conclusion: rerun ? 'success' : 'failure', jobs: [{ databaseId: 20,
+          name: 'unit', url: runUrl + '/job/20', status: 'completed', conclusion: 'failure' }] });
+    });
+    const provider = new GitHubProvider(target);
+    const evidence = await provider.fetchPrCiFailure(123, headSha, '/source');
+    expect(evidence).toMatchObject({ complete: true, checks: [{ jobs: [{ log: 'failed job log' }] }] });
+    const accepted = await provider.rerunPrCi(evidence, '/source');
+    expect(accepted).toMatchObject({ success: true });
+    expect(await provider.fetchPrStatus(123, '/source', { rerun: accepted })).toMatchObject({ ci: { finished: true, passed: true } });
+    for (const [, args] of execFile.mock.calls) {
+      if (args[0] === 'pr') expect(args[2]).toBe(target.url);
+      else expect(args.slice(-2)).toEqual(['--repo', `${hostname}/acme/target`]);
+    }
+  });
+
+  it('uses the published repository for superseded Actions run acquisition', async () => {
+    const target = parseGitHubPullRequestTarget('https://ghe.example.test/acme/target/pull/123');
+    response.mockImplementation((args: string[]) => {
+      if (args[0] === 'pr') return JSON.stringify(status([10, 11].map((id) => ({
+        ...check('COMPLETED', id === 10 ? 'CANCELLED' : 'SUCCESS'), workflowName: 'CI',
+        detailsUrl: `https://ghe.example.test/acme/target/actions/runs/${id}/job/${id + 10}`,
+      })), { url: target.url }));
+      const id = Number(args[2]);
+      return JSON.stringify({ databaseId: id, url: `https://ghe.example.test/acme/target/actions/runs/${id}`,
+        headSha: 'a'.repeat(40), workflowDatabaseId: 100,
+        createdAt: id === 10 ? '2026-10-05T12:00:00Z' : '2026-10-05T12:01:00Z',
+        status: 'completed', conclusion: id === 10 ? 'cancelled' : 'success' });
+    });
+    expect(await new GitHubProvider(target).fetchPrStatus(123, '/source')).toMatchObject({ ci: { passed: true } });
+    for (const [, args] of execFile.mock.calls.filter(([, args]) => args[0] === 'run')) {
+      expect(args.slice(-2)).toEqual(['--repo', 'ghe.example.test/acme/target']);
+    }
+  });
+
+  it('keeps the published Actions repository and rejects another repository in a check reference', async () => {
+    const target = parseGitHubPullRequestTarget('https://ghe.example.test/acme/target/pull/123');
+    const headSha = 'a'.repeat(40);
+    response.mockImplementation((args: string[]) => args[0] === 'pr'
+      ? JSON.stringify(status([{ ...check('COMPLETED', 'FAILURE'),
+        detailsUrl: 'https://other.example.test/acme/source/actions/runs/10/job/20' }], { url: target.url }))
+      : JSON.stringify({ databaseId: 10, url: 'https://ghe.example.test/acme/target/actions/runs/10',
+        headSha, attempt: 1, status: 'completed', conclusion: 'failure', jobs: [] }));
+    const result = await new GitHubProvider(target).fetchPrCiFailure(123, headSha, '/source');
+    expect(result).toMatchObject({ complete: false, checks: [], unavailable: [
+      { reason: 'Actions run repository does not match the failed check' },
+    ] });
+    const runs = execFile.mock.calls.filter(([, args]) => args[0] === 'run');
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.[1].slice(-2)).toEqual(['--repo', 'ghe.example.test/acme/target']);
   });
 
   it('指定PRの現在head・CI結果・マージ可否・承認状況を取得する', async () => {

@@ -259,13 +259,15 @@ Codex、Claude SDK、claude-headless、Copilotの一時的なHTTP 429は同じpr
 
 ```yaml
 caccia:
-  enabled: false          # caccia 効果による CodeRabbit の待機を有効化
+  enabled: false          # PR 公開後の自動 Caccia と明示効果のレビュー待機を有効化
   wait_timeout_ms: 1800000 # 初回レビューとPush後の各コミットのレビューを待つ上限（ミリ秒）
   max_iterations: 3       # 修正と再レビューの最大反復回数
   workflow: caccia        # 各スレッド群の判断と修正に使う workflow
 ```
 
 `caccia` 効果は `enabled: true` の場合だけ CodeRabbit を待ちます。無効ならレビューを待たずに `outcome: skipped` と `skipReason: config_disabled` を返します。単独実行の `takt caccia <PR番号>` はこのフラグに関係なく利用できます。既定値は無効、1,800,000 ミリ秒、3 回、workflow `caccia` です。project に `caccia` ブロックがある場合は global のブロックより優先し、省略した項目には上記の既定値を適用します。`workflow` に workflow 識別子を指定するとビルトイン workflow を差し替えられます。
+
+同じ `enabled` は worktree タスクの `auto_pr` と Pipeline の `--auto-pr` による PR 作成・更新成功後の自動 Caccia も制御します。PR 公開失敗、PR がない場合、goal 管理タスク、GitHub 以外では後処理の Caccia を実行しません。実行した workflow に呼び出し先も含めて `caccia` system 効果がある場合、または `merge.auto_start: true` で選択されたマージ用 workflow に同じ効果がある場合も後処理を抑止します。それ以外は Caccia が完了してからマージ用 workflow を起動します。step 名や指示文の文字列は効果として扱いません。
 
 GitHub の PR head と開始時のクローン HEAD が不一致なら、効果は実行前に2秒間隔で PR 情報を再取得し、取得時間を含めて最大60秒待ちます。PR 情報の取得中に異なる head を観測した場合も同じ期限内で再取得します。期待 SHA と一致した場合だけ続行し、期限まで不一致なら期待 SHA と最後に観測した SHA を含む `error` を返します。最後の観測が不整合だった場合は食い違った両方の SHA も示します。認証失敗など他の取得例外、PR の識別情報変更、中断は直ちに失敗とします。実行文脈と push 記録先がある場合はスキップ記録前にも適用するため、無効・未設定でもこの照合を待つことがあります。この待機は固定値で、レビュー待機の `wait_timeout_ms` では変更されません。
 
@@ -1780,4 +1782,4 @@ fork の除外も `where` より先に適用します。fork を対象にする�
 
 `threat_check_max_diff_bytes` は fork の AI 評価へ渡す累積差分の上限で、正の整数（UTF-8 バイト数）です。既定は200,000です。上限超過では差分を切り詰めて判定せず、人間による確認を求める PR コメントを残して停止します。機械的検査で指示ファイル・CI 定義や危険な Git 設定を検出した場合、AI 評価と本体 workflow は実行しません。
 
-`auto_start: true` は workflow が PR を作成・更新した後、その PR を対象にマージ処理を起動します。Caccia はマージ用 workflow 内の明示効果で実行します。手動で作成した PR は自動起動の対象外です。
+`auto_start: true` は workflow が PR を作成・更新した後、その PR を対象にマージ処理を起動します。マージ用 workflow に明示の Caccia 効果があれば後処理の Caccia を抑止します。実行した workflow とマージ用 workflow のどちらにも効果がなければ、有効設定時の後処理の Caccia が完了してからマージ処理を起動します。手動で作成した PR は自動起動の対象外です。

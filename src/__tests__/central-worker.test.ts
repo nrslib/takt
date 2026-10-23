@@ -102,7 +102,7 @@ describe('central Web UI worker', () => {
     }));
   });
 
-  it('applies saved worktree and pull-request settings after a successful run', async () => {
+  it.each([false, true])('applies saved publication settings and the executed workflow Caccia decision (%s)', async (workflowHasCaccia) => {
     const { globalConfigDirectory, projectDirectory, project, repository } = await setupWorkerFixture();
     const worktreeDirectory = await mkdtemp(join(tmpdir(), 'takt-central-worker-worktree-'));
     vi.mocked(createSharedCloneAbortable).mockResolvedValueOnce({
@@ -110,6 +110,8 @@ describe('central Web UI worker', () => {
       branch: 'feature/web-task',
     });
     vi.mocked(postExecutionFlow).mockResolvedValueOnce({ prUrl: 'https://example.test/pull/1' });
+    const executionResult = { success: true, workflowHasCaccia };
+    vi.mocked(runWorkflowExecution).mockResolvedValueOnce(executionResult);
     const reserved = await repository.enqueueAndClaim({
       task: 'central PR task',
       workflow: 'default',
@@ -142,6 +144,7 @@ describe('central Web UI worker', () => {
       baseBranch: 'main',
       shouldCreatePr: true,
       draftPr: true,
+      workflowHasCaccia,
     }));
     await expect(repository.readTask(reserved.task.taskId)).resolves.toMatchObject({
       status: 'completed',
