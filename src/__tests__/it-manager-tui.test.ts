@@ -11,6 +11,123 @@ import { createGoal } from '../infra/goals/service.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 
+describe('manager inquiry windows and detail navigation', () => {
+  it('shows ten inquiries and opens the eleventh after ten down arrows in the same screen', async () => {
+    const questions = Array.from({ length: 12 }, (_, index) => ({
+      goalId: goalRecord().id, repositoryDirectory: cwd, objective: 'Window fixture', question: {
+        id: `650e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`,
+        recipient: 'human' as const, status: 'pending' as const,
+        body: `Inquiry ${String(index + 1).padStart(2, '0')}\nDetail ${String(index + 1).padStart(2, '0')}`,
+      },
+    }));
+    vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], goals: [goalRecord()], questions });
+    const context = mount();
+    const answer = vi.spyOn(context.session, 'answerQuestion');
+    const rows = (): string[] => selectionFrame(context)!.split('\n').filter((row) => row.includes('Window fixture'));
+    try {
+      await openMenu(context, 'answer');
+      await vi.waitFor(() => expect(selectionFrame(context)).toBeDefined());
+      expect(rows()).toHaveLength(10);
+      for (let index = 1; index <= 10; index++) expect(rows()[index - 1]).toContain(`Inquiry ${String(index).padStart(2, '0')}`);
+      for (let move = 0; move < 10; move++) context.app.stdin.write('\x1b[B');
+      await vi.waitFor(() => {
+        expect(rows()).toHaveLength(10);
+        expect(rows().some((row) => row.includes('Inquiry 11'))).toBe(true);
+        expect(rows().some((row) => row.includes('Inquiry 01'))).toBe(false);
+      });
+      context.app.stdin.write(ENTER);
+      await vi.waitFor(() => {
+        expect(context.app.lastFrame()).toContain('Detail 11');
+        expect(promptFrame(context)).toContain('Enter your answer');
+        expect(selectionFrame(context)).toBeUndefined();
+      });
+      context.app.stdin.write('\x1b[27u');
+      await vi.waitFor(() => {
+        expect(selectionFrame(context)).toBeDefined();
+        expect(rows()).toHaveLength(10);
+        expect(rows().some((row) => row.includes('Inquiry 11'))).toBe(true);
+        expect(rows().some((row) => row.includes('Inquiry 01'))).toBe(false);
+      });
+      context.app.stdin.write(ENTER);
+      await vi.waitFor(() => expect(context.app.lastFrame()).toContain('Detail 11'));
+      expect(answer).not.toHaveBeenCalled();
+      expect(context.call).not.toHaveBeenCalled();
+    } finally { context.app.unmount(); await context.session.close(); }
+  });
+
+  it.each([false, true])('scrolls detail text and returns to the selected inquiry without saving during a turn=%s', async (busy) => {
+    const lines = Array.from({ length: 30 }, (_, index) => `Body line ${String(index + 1).padStart(2, '0')}`);
+    const questions = [0, 1].map((index) => ({
+      goalId: goalRecord().id, repositoryDirectory: cwd, objective: `Detail fixture ${index}`, question: {
+        id: `650e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`,
+        recipient: 'human' as const, status: 'pending' as const, body: index === 0 ? 'Other inquiry' : lines.join('\n'),
+      },
+    }));
+    vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], goals: [goalRecord()], questions });
+    const turn = deferred<ReturnType<typeof response>>();
+    const context = mount();
+    const answer = vi.spyOn(context.session, 'answerQuestion');
+    if (busy) context.call.mockReturnValueOnce(turn.promise);
+    const detail = (): string => context.app.lastFrame()!.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu)!
+      .find((box) => box.includes(getLabel('manager.answerPrompt', 'en')))!;
+    try {
+      if (busy) {
+        await typeAndSubmit(context, 'Continue working');
+        await vi.waitFor(() => expect(context.call).toHaveBeenCalledOnce());
+      }
+      await openMenu(context, 'answer');
+      await vi.waitFor(() => expect(selectionFrame(context)).toBeDefined());
+      context.app.stdin.write('\x1b[B');
+      context.app.stdin.write(ENTER);
+      await vi.waitFor(() => expect(detail()).toContain(lines[0]!));
+      const initial = detail();
+      const visible = lines.filter((line) => initial.includes(line));
+      expect(visible.length).toBeGreaterThan(0);
+      expect(visible.length).toBeLessThan(lines.length);
+      context.app.stdin.write('\x1b[B');
+      await vi.waitFor(() => {
+        expect(detail()).toContain(lines[visible.length]!);
+        expect(detail()).not.toContain(lines[0]!);
+      });
+      context.app.stdin.write('\x1b[27u');
+      await vi.waitFor(() => {
+        expect(selectionFrame(context)).toContain('Detail fixture 0');
+        expect(selectionFrame(context)).toContain('Detail fixture 1');
+        expect(promptFrame(context)).toContain('Discuss your goal');
+      });
+      if (busy) expect(context.call.mock.calls[0]![1].abortSignal!.aborted).toBe(false);
+      context.app.stdin.write(ENTER);
+      await vi.waitFor(() => expect(detail()).toContain(lines[0]!));
+      expect(detail()).not.toContain(lines.at(-1)!);
+      expect(answer).not.toHaveBeenCalled();
+      expect(context.call).toHaveBeenCalledTimes(busy ? 1 : 0);
+    } finally { context.app.unmount(); turn.resolve(response(null)); await context.session.close(); }
+  });
+
+  it('keeps cursor movement ahead of body scrolling when a free-text answer contains text', async () => {
+    const target = { goalId: goalRecord().id, repositoryDirectory: cwd, objective: 'Cursor fixture', question: {
+      id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human' as const, status: 'pending' as const,
+      body: Array.from({ length: 30 }, (_, index) => `Cursor body ${index}`).join('\n'),
+    } };
+    vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], goals: [goalRecord()], questions: [target] });
+    const context = mount();
+    const answer = vi.spyOn(context.session, 'answerQuestion').mockResolvedValue({ kind: 'reply', message: 'Answer saved', answerSaved: true });
+    try {
+      await openMenu(context, 'answer');
+      await enterSelection(context);
+      await vi.waitFor(() => expect(promptFrame(context)).toContain('Enter your answer'));
+      context.app.stdin.write('\x1b[200~first\nsecond\x1b[201~');
+      await vi.waitFor(() => expect(promptFrame(context)).toContain('second'));
+      context.app.stdin.write(UP);
+      context.app.stdin.write('!');
+      context.app.stdin.write(ENTER);
+      await vi.waitFor(() => expect(answer).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        questionId: target.question.id, answer: { text: 'first!\nsecond' },
+      })));
+    } finally { context.app.unmount(); await context.session.close(); }
+  });
+});
+
 describe('manager TUI summary menu and conversation input', () => {
   it.each(['request', 'register'] as const)('keeps a queued summary %s on menu Esc and discards it on ordinary Esc', async (operation) => {
     for (const closeMenu of [false, true]) {

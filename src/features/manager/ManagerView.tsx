@@ -72,11 +72,12 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   const { waitUntilRenderFlush } = useApp();
   const { stdout } = useStdout();
   const contentWidth = Math.max(1, (stdout.columns ?? 80) - 6);
+  const bodyWidth = Math.max(1, (stdout.columns ?? 80) - 2);
   const ja = lang === 'ja';
   const resetChoice = (): void => { selected.current = false; setApprove(false); };
   const abortConfirmation = useManagerAbortConfirmation({ selected, setApprove, resetChoice });
   const { abortTarget, setAbortTarget } = abortConfirmation;
-  const questionAnswer = useManagerQuestionAnswer();
+  const questionAnswer = useManagerQuestionAnswer(bodyWidth);
   const { answerTarget, clearAnswer, beginAnswer } = questionAnswer;
   const selection = useManagerSelection();
   const summaryApproval = useManagerSummaryApproval({ selected, setApprove, resetChoice, session });
@@ -266,7 +267,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
     if (selected.kind === 'answer') {
       editAnswer(createEditorState(''));
       beginAnswer(selected.target,
-        displaySnapshot.current.assignment ?? { kind: 'repository', repositoryDirectory: cwd, repositoryDirectories: [cwd] });
+        displaySnapshot.current.assignment ?? { kind: 'repository', repositoryDirectory: cwd, repositoryDirectories: [cwd] }, selected.onCancel);
     } else setOperations((previous) => [...previous, { kind: 'goal', operation: selected.kind, target: selected.target }]);
   };
   const abortGoal = (target: ManagerAbortTarget): Promise<void> => changeGoal('abort', target.goal, target.retry ? 'retry' : 'confirm');
@@ -380,7 +381,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
       })}</Text>
       {queued.length > 0 && <ManagerQueuedMessages queued={queued} ja={ja} />}
       {selection.selection !== null && <ManagerSelectionDialog selection={selection.selection} lang={lang} />}
-      {answerTarget !== null && <ManagerAnswerDialog answerTarget={answerTarget} lang={lang} />}
+      {answerTarget !== null && <ManagerAnswerDialog answerTarget={answerTarget} bodyText={questionAnswer.bodyText} lang={lang} />}
       {abortTarget !== null && <ManagerAbortDialog abortTarget={abortTarget.goal} retry={abortTarget.retry} approve={approve} lang={lang} />}
       {summaryVisible && <>
         <ManagerSummaryDialog pending={pending} approve={approve} ja={ja} />

@@ -4,15 +4,15 @@ import { toDisplayText } from '../tui/displayText.js';
 import type { AnswerTarget } from './useManagerQuestionAnswer.js';
 import { getLabel } from '../../shared/i18n/index.js';
 
-export function ManagerAnswerDialog({ answerTarget, lang }: {
-  answerTarget: AnswerTarget; lang: 'en' | 'ja';
+export function ManagerAnswerDialog({ answerTarget, bodyText, lang }: {
+  answerTarget: AnswerTarget; bodyText: string; lang: 'en' | 'ja';
 }): ReactElement {
   const choices = answerTarget.stage === 'decision' ? ['allow', 'deny']
     : answerTarget.stage === 'report' ? ['completed', 'unable']
     : answerTarget.stage === 'scope' ? answerTarget.scopes.map((scope) => scope.label) : null;
   return (
     <Box borderStyle="round" flexDirection="column">
-      <Text bold>{toDisplayText(answerTarget.pending.question.body)}</Text>
+      <Text bold>{bodyText}</Text>
       {answerTarget.pending.question.recommendation !== undefined && (
         <Text>{getLabel('manager.notificationRecommendation', lang, {
           recommendation: toDisplayText(answerTarget.pending.question.recommendation),

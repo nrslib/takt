@@ -380,7 +380,7 @@ describe('manager polling and answer cancellation', () => {
   });
 
   describe.each(['ja', 'en'] as const)('selection lists in %s', (lang) => {
-    describe.each([38, 160])('terminal width %i', (columns) => {
+    describe.each([38, 40, 160])('terminal width %i', (columns) => {
       it.each(['answer', 'goal'] as const)('renders compact %s candidates outside the log and Esc leaves the store unchanged', async (command) => {
         const saved = await store.create({ ...goalRecord(), objective,
           executionStatus: 'paused', questions: [question({ kind: 'approval', operation: {
@@ -400,6 +400,12 @@ describe('manager polling and answer cancellation', () => {
           expect(rows[0]).toMatch(command === 'answer'
             ? (lang === 'ja' ? /承認/u : /approval/iu)
             : (lang === 'ja' ? /実行|一時停止|停止中/u : /active|paused/iu));
+        }
+        if (columns === 40) {
+          const prefix = command === 'goal' ? objective.slice(0, 6) : lang === 'ja' ? '承認' : 'Approval';
+          const rows = contentRows(selectedBox).filter((row) => row.startsWith(prefix));
+          expect(rows).toHaveLength(1);
+          expect(rows[0]).toMatch(/…$/u);
         }
         expect(selectedBox).not.toContain(saved.id);
         expect(selectedBox).not.toContain('本文の末尾');
@@ -456,7 +462,7 @@ describe('manager polling and answer cancellation', () => {
     expect(answerQuestion).not.toHaveBeenCalled();
   });
 
-  it.each([true, false])('closes only the answer dialog on Esc and keeps the stored inquiry pending with options=%s', async (withOptions) => {
+  it.each([true, false])('returns from answer details to the list on Esc and keeps the stored inquiry pending with options=%s', async (withOptions) => {
     const inquiry = question(withOptions ? {} : { options: undefined });
     const saved = await store.create({ ...goalRecord(), questions: [inquiry] });
     const file = join(cwd, '.takt', 'goals', saved.id, 'goal.json');
@@ -465,10 +471,7 @@ describe('manager polling and answer cancellation', () => {
     await waitFor(() => expect(countLine('en')).toBeDefined());
     await openAnswer();
     app!.stdin.write('\x1b[27u');
-    await waitFor(() => {
-      expect(prompt()).toMatchObject({ disabled: false, placeholder: 'Discuss your goal' });
-      expect(answerDialogs()).toEqual([]);
-    });
+    await waitFor(() => expect(answerDialogs()).toEqual([]));
     const polls = read.mock.calls.length;
     await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(polls));
     expect(answerQuestion).not.toHaveBeenCalled();
@@ -478,7 +481,12 @@ describe('manager polling and answer cancellation', () => {
       { goalId: saved.id, repositoryDirectory: cwd, objective: saved.objective, question: saved.questions![0] },
     ]);
     expect(countLine('en')).toMatch(/(?:pending|unanswered)\s*:?\s*1/iu);
-    await openAnswer();
+    expect(prompt()).toMatchObject({ disabled: true, placeholder: 'Discuss your goal' });
+    const list = boxes(app!.lastFrame()!).find((box) => box.includes(getLabel('manager.selectionTitles.answer', 'en')));
+    expect(list).toBeDefined();
+    expect(list).toContain('出力形式を選んでください。');
+    app!.stdin.write('\r');
+    await waitFor(() => expect(answerDialogs()).toHaveLength(1));
     expect(answerQuestion).not.toHaveBeenCalled();
   });
 });

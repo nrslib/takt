@@ -208,6 +208,44 @@ it.each(['choice', 'free text'] as const)('persists only the selected inquiry th
   expect(call).not.toHaveBeenCalled();
 });
 
+it.each(['multiline', 'wrapped'] as const)('scrolls a %s inquiry and returns to its list without changing the saved record', async (layout) => {
+  const start = '本文開始';
+  const end = '本文終了';
+  const body = layout === 'multiline'
+    ? [start, ...Array.from({ length: 30 }, (_, index) => `本文の続き ${index}`), end].join('\n')
+    : `${start}${'日本語e\u0301👩‍💻'.repeat(50)}${end}`;
+  const pending: GoalQuestion = { id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human', status: 'pending', body };
+  const goal: Goal = { ...goalRecord(), objective: 'Scroll persistence fixture', questions: [pending] };
+  const { store, call } = await mountGoalControls('en', goal);
+  vi.spyOn(app!.stdout, 'columns', 'get').mockReturnValue(40);
+  const answer = vi.spyOn(session!, 'answerQuestion');
+  const file = join(cwd, '.takt', 'goals', goal.id, 'goal.json');
+  const before = readFileSync(file, 'utf8');
+  const saved = await store.get(goal.id);
+  const detail = (): string | undefined => app!.lastFrame()!.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu)
+    ?.find((box) => box.includes(getLabel('manager.answerPrompt', 'en')));
+  const visibleText = (): string | undefined => detail()?.replace(/[│\s]/gu, '');
+  await openMenu('answer');
+  await vi.waitFor(() => expect(app!.lastFrame()).toContain(getLabel('manager.selectionHint', 'en')));
+  app!.stdin.write('\r');
+  await vi.waitFor(() => expect(visibleText()).toContain(start));
+  expect(visibleText()).not.toContain(end);
+  for (let move = 0; move < 100; move++) app!.stdin.write('\x1b[B');
+  await vi.waitFor(() => {
+    expect(visibleText()).toContain(end);
+    expect(visibleText()).not.toContain(start);
+  });
+  app!.stdin.write('\x1b[27u');
+  await vi.waitFor(() => {
+    expect(app!.lastFrame()).toContain(getLabel('manager.selectionTitles.answer', 'en'));
+    expect(detail()).toBeUndefined();
+  });
+  expect(answer).not.toHaveBeenCalled();
+  expect(call).not.toHaveBeenCalled();
+  expect(readFileSync(file, 'utf8')).toBe(before);
+  expect(await store.get(goal.id)).toEqual(saved);
+});
+
 it.each(['enter', 'escape'] as const)('blocks inquiry entry during registration then handles a real answer with %s', async (confirm) => {
   const question: GoalQuestion = { id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human', status: 'pending', body: 'Choose output format' };
   const goal = { ...goalRecord(), questions: [question] };
