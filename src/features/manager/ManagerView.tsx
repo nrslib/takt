@@ -71,8 +71,14 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   const lastRefreshError = useRef<string | undefined>(undefined);
   const { waitUntilRenderFlush } = useApp();
   const { stdout } = useStdout();
-  const contentWidth = Math.max(1, (stdout.columns ?? 80) - 6);
-  const bodyWidth = Math.max(1, (stdout.columns ?? 80) - 2);
+  const [columns, setColumns] = useState(() => stdout.columns);
+  useEffect(() => {
+    const handleResize = (): void => { setColumns(stdout.columns); };
+    stdout.on('resize', handleResize);
+    return () => { stdout.off('resize', handleResize); };
+  }, [stdout]);
+  const contentWidth = Math.max(1, (columns ?? 80) - 6);
+  const bodyWidth = Math.max(1, (columns ?? 80) - 2);
   const ja = lang === 'ja';
   const resetChoice = (): void => { selected.current = false; setApprove(false); };
   const abortConfirmation = useManagerAbortConfirmation({ selected, setApprove, resetChoice });

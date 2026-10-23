@@ -218,6 +218,7 @@ it.each(['multiline', 'wrapped'] as const)('scrolls a %s inquiry and returns to 
   const goal: Goal = { ...goalRecord(), objective: 'Scroll persistence fixture', questions: [pending] };
   const { store, call } = await mountGoalControls('en', goal);
   vi.spyOn(app!.stdout, 'columns', 'get').mockReturnValue(40);
+  app!.stdout.emit('resize');
   const answer = vi.spyOn(session!, 'answerQuestion');
   const file = join(cwd, '.takt', 'goals', goal.id, 'goal.json');
   const before = readFileSync(file, 'utf8');
@@ -244,6 +245,51 @@ it.each(['multiline', 'wrapped'] as const)('scrolls a %s inquiry and returns to 
   expect(call).not.toHaveBeenCalled();
   expect(readFileSync(file, 'utf8')).toBe(before);
   expect(await store.get(goal.id)).toEqual(saved);
+});
+
+it('updates an open inquiry on terminal resize and uses the new scroll bounds without reopening it', async () => {
+  const lines = Array.from({ length: 10 }, (_, index) =>
+    `Left${index}`.padEnd(40, 'a') + `Right${index}`.padEnd(40, 'b'));
+  const wrapped = lines.flatMap((line) => [line.slice(0, 40), line.slice(40)]);
+  const pending: GoalQuestion = { id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human', status: 'pending',
+    body: lines.join('\n') };
+  const goal: Goal = { ...goalRecord(), objective: 'Resize inquiry fixture', questions: [pending] };
+  const { store, call } = await mountGoalControls('en', goal);
+  const saved = await store.get(goal.id);
+  const columns = vi.spyOn(app!.stdout, 'columns', 'get').mockReturnValue(82);
+  app!.stdout.emit('resize');
+  const answer = vi.spyOn(session!, 'answerQuestion');
+  const bodyRows = (): string[] | undefined => app!.lastFrame()!.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu)
+    ?.find((box) => box.includes(getLabel('manager.answerPrompt', 'en')))
+    ?.split('\n').slice(1, -2).map((row) => row.slice(1, -1).trimEnd());
+  await openMenu('answer');
+  await vi.waitFor(() => expect(app!.lastFrame()).toContain(getLabel('manager.selectionHint', 'en')));
+  app!.stdin.write('\r');
+  await vi.waitFor(() => expect(bodyRows()).toEqual(lines.slice(0, 8)));
+  for (let move = 0; move < 20; move++) app!.stdin.write('\x1b[B');
+  await vi.waitFor(() => expect(bodyRows()).toEqual(lines.slice(2)));
+
+  columns.mockReturnValue(42);
+  app!.stdout.emit('resize');
+  await vi.waitFor(() => expect(bodyRows()).toEqual(wrapped.slice(2, 10)));
+  for (let move = 0; move < 20; move++) app!.stdin.write('\x1b[B');
+  await vi.waitFor(() => expect(bodyRows()).toEqual(wrapped.slice(12)));
+  app!.stdin.write('\x1b[B');
+  app!.stdin.write('\x1b[A');
+  await vi.waitFor(() => expect(bodyRows()).toEqual(wrapped.slice(11, 19)));
+  app!.stdin.write('\x1b[B');
+  await vi.waitFor(() => expect(bodyRows()).toEqual(wrapped.slice(12)));
+
+  columns.mockReturnValue(82);
+  app!.stdout.emit('resize');
+  await vi.waitFor(() => expect(bodyRows()).toEqual(lines.slice(2)));
+  app!.stdin.write('\x1b[A');
+  await vi.waitFor(() => expect(bodyRows()).toEqual(lines.slice(1, 9)));
+  app!.stdin.write('\x1b[B');
+  await vi.waitFor(() => expect(bodyRows()).toEqual(lines.slice(2)));
+  expect(await store.get(goal.id)).toEqual(saved);
+  expect(answer).not.toHaveBeenCalled();
+  expect(call).not.toHaveBeenCalled();
 });
 
 it.each(['enter', 'escape'] as const)('blocks inquiry entry during registration then handles a real answer with %s', async (confirm) => {
