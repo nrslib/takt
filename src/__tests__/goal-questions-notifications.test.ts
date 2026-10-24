@@ -190,10 +190,10 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
     const text = formatGoalNotification(goalRecord(), { kind, body }, language, 'customer-export');
 
     expect(text.split('\n').slice(2, 5).join('\n')).toBe(body);
-    expect(text.split('\n').slice(5).join('\n')).not.toMatch(language === 'ja' ? /全文|出来事/u : /full message|events/iu);
+    expect(text.split('\n').slice(5).join('\n')).not.toMatch(language === 'ja' ? /全文|Ctrl\+N/u : /full message|Ctrl\+N/iu);
   });
 
-  it.each(['blocked', 'custom'] as const)('shortens only the tail of a long %s body and points to the full TUI event', (kind) => {
+  it.each(['blocked', 'custom'] as const)('shortens only the tail of a long %s body and points to the full TUI notice', (kind) => {
     const reason = language === 'ja' ? '認証に失敗しました。' : 'Authentication failed.';
     const action = language === 'ja' ? '検証用の認証情報を更新してください。' : 'Update test credentials.';
     const body = `${reason}\n${'x'.repeat(620)}\n${action}`;
@@ -206,7 +206,7 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
 
     expect(visibleBody).toBe(`${reason}\n${'x'.repeat(599 - reason.length - 1)}…`);
     expect(guidance).toMatch(language === 'ja' ? /全文/u : /full message/iu);
-    expect(guidance).toMatch(language === 'ja' ? /出来事/u : /events/iu);
+    expect(guidance).toMatch(/Ctrl\+N/u);
     expect(guidance).toContain('TUI');
     expect(guidance).toContain('takt manager');
     expect(guidance).toContain('customer-export');
@@ -223,7 +223,7 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
     const text = formatGoalNotification(goalRecord(), { kind, body }, language, 'customer-export');
 
     expect(text.split('\n')[2]).toBe('e\u0301'.repeat(599) + '…');
-    expect(text.split('\n').slice(3).join('\n')).toMatch(language === 'ja' ? /全文.*出来事/u : /full message.*events/iu);
+    expect(text.split('\n').slice(3)).toContain(getLabel('manager.notificationFullMessage', language, { project: 'customer-export' }));
   });
 
   it.each([

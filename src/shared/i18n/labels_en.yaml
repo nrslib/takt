@@ -539,7 +539,7 @@ manager:
   notificationMergeRepository: "Run the following commands in order in a clean worktree of the {project} repository where you can switch branches."
   notificationMergeWorktree: "Check the state of the worktree at {directory}, then run the following commands in order."
   notificationBlockedAction: "Check the reason and required action above. For full details, open takt manager in {project} and follow up in the TUI."
-  notificationFullMessage: "To read the full message, open takt manager in {project} and view the events in the TUI."
+  notificationFullMessage: "Open takt manager in {project}, press Ctrl+N in the TUI and select a notice from the list, then press Enter to read the full message."
   notificationDigestHint: "Remaining body lines omitted. Press Ctrl+N to read the full message."
 
 caccia:
