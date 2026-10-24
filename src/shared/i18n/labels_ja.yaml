@@ -472,6 +472,7 @@ manager:
   repositorySelectionHint: "↑↓ 移動 / Esc 閉じる"
   noticeDetailHint: "↑↓ スクロール / Esc 一覧へ戻る"
   selectionEmpty:
+    notice: "知らせはありません。"
     repository: "担当のリポジトリはありません。"
     answer: "未回答の問い合わせはありません。"
     goal: "操作できる進行中のゴールはありません。"
