@@ -301,7 +301,7 @@ describe('manager TUI input', () => {
       id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human' as const,
       status: 'pending' as const, body: 'Where should the output go?',
     } };
-    vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], goals: [goalRecord()], questions: [target] });
+    vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], notices: [], goals: [goalRecord()], questions: [target] });
     const context = mount();
     const answer = vi.spyOn(context.session, 'answerQuestion').mockResolvedValue({ kind: 'reply', message: 'Answer saved', answerSaved: true });
     const text = `${'詳細な回答を保存してください。'.repeat(80)}回答の末尾`;
@@ -542,7 +542,7 @@ describe('manager TUI input', () => {
       id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human' as const,
       status: 'pending' as const, body: 'Where should the output go?',
     } };
-    vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], goals: [goalRecord()], questions: [target] });
+    vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], notices: [], goals: [goalRecord()], questions: [target] });
     const context = mount();
     const answer = vi.spyOn(context.session, 'answerQuestion').mockResolvedValue({ kind: 'reply', message: 'Answer saved', answerSaved: true });
     try {
@@ -567,7 +567,7 @@ describe('manager TUI input', () => {
       id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human' as const,
       status: 'pending' as const, body: 'Which output format?', options: ['CSV', 'JSON'],
     } };
-    vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], goals: [goalRecord()], questions: [target] });
+    vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], notices: [], goals: [goalRecord()], questions: [target] });
     const context = mount();
     const answer = vi.spyOn(context.session, 'answerQuestion').mockResolvedValue({ kind: 'reply', message: 'Answer saved', answerSaved: true });
     try {
@@ -610,7 +610,7 @@ describe('manager TUI input', () => {
       id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human' as const,
       status: 'pending' as const, body: 'Which output format?', options: ['CSV', 'JSON'],
     } };
-    vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], goals: [goalRecord()], questions: [target] });
+    vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], notices: [], goals: [goalRecord()], questions: [target] });
     const turn = deferred<ReturnType<typeof response>>();
     const context = mount();
     context.call.mockReturnValueOnce(turn.promise).mockResolvedValue(response(null));

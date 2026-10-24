@@ -27,15 +27,15 @@ function mount(snapshot = { goals, questions }, lang: 'en' | 'ja' = 'en') {
   const selected = vi.fn<(target: ManagerSelectedTarget) => void>();
   const opened = vi.fn<(result: boolean) => void>();
   function Probe() {
-    const selection = useManagerSelection();
+    const selection = useManagerSelection(118);
     useInput((input, key) => {
-      if (input === 'o') opened(selection.open('answer', snapshot));
-      else if (input === 'g') opened(selection.open('goal', snapshot));
+      if (input === 'o') opened(selection.open('answer', { ...snapshot, notices: [] }));
+      else if (input === 'g') opened(selection.open('goal', { ...snapshot, notices: [] }));
       else selection.handleInput(key, selected);
     });
     return createElement(Box, { flexDirection: 'column', width: 120 },
       createElement(Text, {}, 'Selection probe'),
-      selection.selection === null ? null : createElement(ManagerSelectionDialog, { selection: selection.selection, lang }));
+      selection.selection === null ? null : createElement(ManagerSelectionDialog, { selection: selection.selection, bodyText: selection.bodyText, lang }));
   }
   return { app: render(createElement(Probe)), selected, opened };
 }

@@ -14,10 +14,11 @@ import { goalRecord } from './goal-fixtures.js';
 import { makeProvider } from '../test-helpers.js';
 vi.mock('../../infra/task/runner.js', () => ({ TaskRunner: class { listTaskStateItems() { return []; } } }));
 vi.mock('../../infra/goals/service.js', () => ({ createGoal: vi.fn() }));
-const memory = vi.hoisted(() => ({ goals: vi.fn(() => [] as Goal[]) }));
+const memory = vi.hoisted(() => ({ goals: vi.fn((_directory: string) => [] as Goal[]) }));
 vi.mock('../../infra/goals/store.js', () => ({ GoalStore: class {
+  constructor(private readonly directory: string) {}
   async list<T = Goal>(project: (goal: Goal) => T | undefined = (goal) => goal as T) {
-    return { goals: memory.goals().map(project).filter((goal) => goal !== undefined), errors: [] };
+    return { goals: memory.goals(this.directory).map(project).filter((goal) => goal !== undefined), errors: [] };
   }
   async get(id: string) { return { ...goalRecord(), id }; }
 } }));

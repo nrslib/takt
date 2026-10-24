@@ -114,6 +114,16 @@ async function mountGoalControls(lang: 'ja' | 'en', goal: Goal) {
   return { store, call, send };
 }
 
+async function mountNewNoticeControls(lang: 'ja' | 'en', goal: Goal) {
+  const controls = await mountGoalControls(lang, { ...goal, notifications: [] });
+  await vi.waitFor(() => expect(app!.lastFrame()).not.toMatch(/処理中|Working/u));
+  const recordedAt = new Date(Date.now() + 1).toISOString();
+  const saved = await controls.store.update(goal.id, () => ({ ...goal,
+    notifications: goal.notifications!.map((notification) => ({ ...notification, recordedAt })),
+  }));
+  return { ...controls, saved };
+}
+
 function expectGoalMemory(memory: string, goal: Goal): void {
   expect(JSON.parse(memory)).toEqual({
     repositoryCount: 1, truncated: false, retrieval: expect.any(String),
@@ -805,8 +815,9 @@ it.each(['startup', 'polling'] as const)('hides default question notifications o
     expect(await store.get(goalId)).toEqual(saved);
     app!.stdin.write('\x1b[27u');
     await vi.waitFor(() => expect(app!.lastFrame()).not.toContain('回答を入力してください'));
-    // 同じ本文でも種別が custom の通知は従来どおり表示する。
-    const custom = { ...saved, notifications: saved.notifications!.map((notification) => ({ ...notification, kind: 'custom' as const })) };
+    const custom = { ...saved, notifications: saved.notifications!.map((notification) => ({
+      ...notification, kind: 'custom' as const, recordedAt: new Date(Date.now() + 1).toISOString(),
+    })) };
     await store.update(goalId, () => custom);
     const customDisplay = await readManagerDisplayEvents(cwd, 'ja');
     expect(customDisplay.events).toHaveLength(1);
@@ -851,18 +862,18 @@ it.each([true, false])('keeps human inquiries and custom notifications without p
       expect(row).not.toContain(human.questionId);
       expect(row).not.toContain(second.questionId);
     }
-    expect(frame).toContain(`${second.questionId}: 一般通知`);
+    expect(frame).not.toContain(`${second.questionId}: 一般通知`);
   });
 });
 
 it.each(['ja', 'en'] as const)('renders saved notification text in the %s TUI language with the project name and short goal reference', async (lang) => {
   writeFileSync(join(cwd, '.takt', 'config.yaml'), `provider: mock\nlanguage: ${lang === 'ja' ? 'en' : 'ja'}\nmanager:\n  auto_run: false\n`);
   invalidateResolvedConfigCache(cwd);
-  const saved: Goal = { ...goalRecord(), objective: 'Customer export checks', notifications: [{
+  const initial: Goal = { ...goalRecord(), objective: 'Customer export checks', notifications: [{
     id: '650e8400-e29b-41d4-a716-446655440001', kind: 'completed', body: 'Acceptance checks passed',
     recordedAt: '2026-10-08T00:00:00Z',
   }] };
-  const { store, call } = await mountGoalControls(lang, saved);
+  const { store, call, saved } = await mountNewNoticeControls(lang, initial);
   await vi.waitFor(() => {
     const frame = app!.lastFrame()!;
     const rows = frame.split('\n');
@@ -881,25 +892,30 @@ it.each(['ja', 'en'] as const)('renders saved notification text in the %s TUI la
 it.each([
   { lang: 'ja' as const, kind: 'blocked' as const }, { lang: 'en' as const, kind: 'blocked' as const },
   { lang: 'ja' as const, kind: 'custom' as const }, { lang: 'en' as const, kind: 'custom' as const },
-])('renders the complete long $kind body from saved events in the $lang TUI', async ({ lang, kind }) => {
+])('renders the long $kind body digest from saved events in the $lang TUI', async ({ lang, kind }) => {
   const reason = lang === 'ja' ? '認証に失敗しました。' : 'Authentication failed.';
   const action = lang === 'ja' ? '検証用の認証情報を更新してください。' : 'Update test credentials.';
   const details = Array.from({ length: 20 }, (_, index) => `Detail ${index}: ${'x'.repeat(40)}.`).join('\n');
   const body = `${reason}\ne\u0301\n${details}\n${action}  `;
-  const saved: Goal = { ...goalRecord(), objective: 'Customer export checks', notifications: [{
+  const initial: Goal = { ...goalRecord(), objective: 'Customer export checks', notifications: [{
     id: '650e8400-e29b-41d4-a716-446655440001', kind, body, recordedAt: '2026-10-08T00:00:00Z',
   }] };
-  const { store, call } = await mountGoalControls(lang, saved);
+  const { store, call, saved } = await mountNewNoticeControls(lang, initial);
   const display = await readManagerDisplayEvents(cwd, lang);
   expect(display.diagnostics).toEqual([]);
   expect(display.events).toHaveLength(1);
   expect(display.events[0]!.id).toBe(JSON.stringify([saved.id, 'notification', saved.notifications![0]!.id]));
-  expect.soft(display.events[0]!.message.split('\n').slice(2, 2 + body.split('\n').length).join('\n')).toBe(body);
+  expect(display.events[0]!.message.split('\n').slice(2, 5)).toEqual(body.split('\n').slice(0, 3));
+  expect(display.events[0]!.message.split('\n')[5]).toMatch(/Ctrl\+N|\^N/u);
+  expect(display).toMatchObject({ notices: [{ message: expect.stringContaining(body) }] });
   expect(await store.get(saved.id)).toEqual(saved);
   expect(call).not.toHaveBeenCalled();
   await vi.waitFor(() => {
     const frame = app!.lastFrame()!;
-    expect(frame.normalize('NFC').replace(/\s+/gu, '')).toContain(body.normalize('NFC').replace(/\s+/gu, ''));
+    const visible = frame.normalize('NFC').replace(/\s+/gu, '');
+    expect(visible).toContain(body.split('\n').slice(0, 3).join('').normalize('NFC').replace(/\s+/gu, ''));
+    expect(visible).not.toContain('Detail3:');
+    expect(visible).not.toContain(action.replace(/\s+/gu, ''));
     expect(frame).toMatch(lang === 'ja' ? (kind === 'blocked' ? /進められません/u : /お知らせ/u)
       : (kind === 'blocked' ? /cannot proceed/iu : /notification/iu));
     expect(frame).toContain(saved.id.slice(0, 8));
@@ -910,11 +926,11 @@ it.each([
   { lang: 'ja' as const, severity: 'warning' as const }, { lang: 'en' as const, severity: 'warning' as const },
   { lang: 'ja' as const, severity: undefined }, { lang: 'en' as const, severity: undefined },
 ])('renders only specified notification severity in the $lang TUI (severity=$severity)', async ({ lang, severity }) => {
-  const saved: Goal = { ...goalRecord(), notifications: [{
+  const initial: Goal = { ...goalRecord(), notifications: [{
     id: '650e8400-e29b-41d4-a716-446655440001', kind: 'custom', body: 'warning',
     ...(severity === undefined ? {} : { severity }), recordedAt: '2026-10-08T00:00:00Z',
   }] };
-  const { store, call } = await mountGoalControls(lang, saved);
+  const { store, call, saved } = await mountNewNoticeControls(lang, initial);
   const prefix = lang === 'ja' ? '重要度: ' : 'Severity: ';
   const expected = prefix + (lang === 'ja' ? '警告' : 'Warning');
   await vi.waitFor(() => {
@@ -938,12 +954,12 @@ it.each(['ja', 'en'] as const)('renders old saved merge instructions once in the
   const instructions = ['Run in a clean worktree of this repository where switching branches is possible.', ...commands];
   const body = `${summary}\nrelease: ${goalSha}\n${instructions.join('\n')}`;
   expect(body.length).toBeLessThan(600);
-  const saved: Goal = { ...goalRecord(), status: 'awaiting_merge', completion: {
+  const initial: Goal = { ...goalRecord(), status: 'awaiting_merge', completion: {
     goalBranch: goalRecord().branch, goalSha, targetBranch: 'release', summary, instructions,
     changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
   }, notifications: [{ id: '650e8400-e29b-41d4-a716-446655440001', kind: 'awaiting_merge', body,
     recordedAt: '2026-10-08T00:00:00Z' }] };
-  const { store, call } = await mountGoalControls(lang, saved);
+  const { store, call, saved } = await mountNewNoticeControls(lang, initial);
   const display = await readManagerDisplayEvents(cwd, lang);
   expect(display.diagnostics).toEqual([]);
   expect(display.events).toHaveLength(1);

@@ -63,6 +63,7 @@ export function formatIntegratedWorkNotification(purpose: string, language: Lang
 export function formatGoalNotification(
   goal: Goal, notification: GoalNotificationInput, language: Language, project: string,
   destination: 'slack' | 'tui' = 'slack',
+  presentation: 'digest' | 'full' = 'digest',
 ): string {
   const lines = [
     getLabel(`manager.notificationHeadings.${notification.kind}`, language, { project }),
@@ -86,10 +87,18 @@ export function formatGoalNotification(
     const freeform = notification.kind === 'blocked' || notification.kind === 'custom';
     const source = notification.kind === 'awaiting_merge' && goal.completion !== undefined
       ? goal.completion.summary : notification.body;
-    const body = freeform && destination === 'tui' ? source : shortenText(source, BODY_LIMIT);
-    lines.push(body);
-    if (freeform && body !== source) {
-      lines.push(getLabel('manager.notificationFullMessage', language, { project }));
+    if (destination === 'tui' && notification.kind !== 'question') {
+      const bodyLines = source.split('\n');
+      lines.push(presentation === 'full' ? source : bodyLines.slice(0, 3).join('\n'));
+      if (presentation === 'digest' && bodyLines.length > 3) {
+        lines.push(getLabel('manager.notificationDigestHint', language));
+      }
+    } else {
+      const body = shortenText(source, BODY_LIMIT);
+      lines.push(body);
+      if (freeform && body !== source) {
+        lines.push(getLabel('manager.notificationFullMessage', language, { project }));
+      }
     }
     if (notification.kind === 'blocked') {
       lines.push(getLabel('manager.notificationBlockedAction', language, { project }));

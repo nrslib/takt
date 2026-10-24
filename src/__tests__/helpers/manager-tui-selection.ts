@@ -15,7 +15,7 @@ const inquiry = (index: number, overrides: Partial<GoalQuestion> = {}): GoalQues
 });
 
 function snapshot(goals: Goal[]) {
-  return { events: [], diagnostics: [], goals,
+  return { events: [], diagnostics: [], notices: [], goals,
     questions: goals.flatMap((goal) => (goal.questions ?? [])
       .filter((question) => question.status === 'pending' && question.recipient === 'human')
       .map((question) => ({ goalId: goal.id, repositoryDirectory: cwd, objective: goal.objective, question }))),

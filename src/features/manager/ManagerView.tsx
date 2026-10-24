@@ -27,7 +27,7 @@ import { toDisplayText } from '../tui/displayText.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import type { ManagerConversationSession } from './conversationSession.js';
-import { readManagerDisplayEvents, type ManagerDisplayGoal } from './savedEvents.js';
+import { readManagerDisplayEvents, type ManagerDisplayGoal, type ManagerDisplayNotice } from './savedEvents.js';
 import { notifyManagerTurnFailure } from './turnFailureNotification.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 
@@ -56,7 +56,8 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   const [busy, setBusy] = useState(true);
   const [questions, setQuestions] = useState<PendingQuestion[]>([]);
   const [goals, setGoals] = useState<ManagerDisplayGoal[]>([]);
-  const displaySnapshot = useRef({ assignment: currentAssignment, questions, goals });
+  const [notices, setNotices] = useState<ManagerDisplayNotice[]>([]);
+  const displaySnapshot = useRef({ assignment: currentAssignment, questions, goals, notices });
   const active = useRef<AbortController | null>(null);
   const polling = useRef(false);
   const registering = useRef(false);
@@ -85,7 +86,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   const { abortTarget, setAbortTarget } = abortConfirmation;
   const questionAnswer = useManagerQuestionAnswer(bodyWidth);
   const { answerTarget, clearAnswer, beginAnswer } = questionAnswer;
-  const selection = useManagerSelection();
+  const selection = useManagerSelection(bodyWidth);
   const summaryApproval = useManagerSummaryApproval({ selected, setApprove, resetChoice, session });
   const { pending, setPending } = summaryApproval;
   const edit = (next: EditorState): void => {
@@ -153,17 +154,19 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
     if (result.kind === 'error' && !signal?.aborted) await reportFailure(new Error(result.message));
     else append(result.message);
   };
-  const refreshEvents = async (): Promise<{ questions: PendingQuestion[]; goals: ManagerDisplayGoal[] }> => {
+  const refreshEvents = async (): Promise<{ questions: PendingQuestion[]; goals: ManagerDisplayGoal[]; notices: ManagerDisplayNotice[] }> => {
     const resolved = await session.getAssignment();
-    const snapshot = await readManagerDisplayEvents(cwd, lang, resolved, startupBoundaries.current);
+    const snapshot = await readManagerDisplayEvents(cwd, lang, resolved, startupBoundaries.current, startedAt);
     const savedQuestions = snapshot.questions;
     const savedGoals = snapshot.goals;
+    const savedNotices = snapshot.notices;
     if (mounted.current) {
       const previous = displaySnapshot.current;
       if (!isDeepStrictEqual(previous.assignment, resolved)) setCurrentAssignment(resolved);
       if (!isDeepStrictEqual(previous.questions, savedQuestions)) setQuestions(savedQuestions);
       if (!isDeepStrictEqual(previous.goals, savedGoals)) setGoals(savedGoals);
-      displaySnapshot.current = { assignment: resolved, questions: savedQuestions, goals: savedGoals };
+      if (!isDeepStrictEqual(previous.notices, savedNotices)) setNotices(savedNotices);
+      displaySnapshot.current = { assignment: resolved, questions: savedQuestions, goals: savedGoals, notices: savedNotices };
     }
     for (const event of [...snapshot.events, ...snapshot.diagnostics]) {
       const id = JSON.stringify([cwd, event.id]);
@@ -172,7 +175,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
       if (!event.suppressInitialDisplay) append(event.message);
     }
     lastRefreshError.current = undefined;
-    return { questions: savedQuestions, goals: savedGoals };
+    return { questions: savedQuestions, goals: savedGoals, notices: savedNotices };
   };
   useEffect(() => {
     const timer = setInterval(() => {
@@ -342,12 +345,20 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   const openMenu = (kind: ManagerSelectionCommand): void => {
     if (kind === 'answer' && registering.current) return;
     const request = ++menuRequest.current;
-    clearAnswer();
-    setAbortTarget(null);
-    resetChoice();
+    if (kind !== 'notice') {
+      clearAnswer();
+      setAbortTarget(null);
+      resetChoice();
+    }
     void refreshEvents().then((snapshot) => {
       if (!mounted.current || exiting.current || request !== menuRequest.current || (kind === 'answer' && registering.current)) return;
-      if (!selection.open(kind, snapshot)) append(getLabel(`manager.selectionEmpty.${kind}`, lang));
+      if (kind === 'notice') {
+        if (snapshot.notices.length === 0) return;
+        clearAnswer();
+        setAbortTarget(null);
+        resetChoice();
+      }
+      if (!selection.open(kind, snapshot) && kind !== 'notice') append(getLabel(`manager.selectionEmpty.${kind}`, lang));
     }).catch(reportRefreshError);
   };
   const queueRegistration = async (revision: number): Promise<void> => {
@@ -386,7 +397,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
         questions: String(questions.length),
       })}</Text>
       {queued.length > 0 && <ManagerQueuedMessages queued={queued} ja={ja} />}
-      {selection.selection !== null && <ManagerSelectionDialog selection={selection.selection} lang={lang} />}
+      {selection.selection !== null && <ManagerSelectionDialog selection={selection.selection} bodyText={selection.bodyText} lang={lang} />}
       {answerTarget !== null && <ManagerAnswerDialog answerTarget={answerTarget} bodyText={questionAnswer.bodyText} lang={lang} />}
       {abortTarget !== null && <ManagerAbortDialog abortTarget={abortTarget.goal} retry={abortTarget.retry} approve={approve} lang={lang} />}
       {summaryVisible && <>
