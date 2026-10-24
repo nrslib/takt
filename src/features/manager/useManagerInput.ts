@@ -6,7 +6,7 @@ import type { ManagerConversationSession } from './conversationSession.js';
 import type { ManagerAbortTarget, useManagerAbortConfirmation } from './useManagerAbortConfirmation.js';
 import type { SaveManagerAnswer, useManagerQuestionAnswer } from './useManagerQuestionAnswer.js';
 import type { useManagerSummaryApproval } from './useManagerSummaryApproval.js';
-import type { ManagerSelectedTarget, useManagerSelection } from './useManagerSelection.js';
+import type { ManagerSelectedTarget, ManagerSelectionCommand, useManagerSelection } from './useManagerSelection.js';
 
 export function useManagerInput({
   exiting, active, registering, editorRef, edit, setQueued, onExit, contentWidth, session,
@@ -31,7 +31,7 @@ export function useManagerInput({
   saveAnswer: SaveManagerAnswer;
   register: (revision: number) => Promise<void>;
   onInputUnavailable: () => void;
-  openMenu: (kind: 'answer' | 'goal') => void;
+  openMenu: (kind: ManagerSelectionCommand) => void;
   summarize: () => void;
   cancelMenuRequest: () => void;
   cancelOperations: () => void;
@@ -65,8 +65,9 @@ export function useManagerInput({
       onExit();
       return;
     }
-    if (key.ctrl && (input === 'r' || input === 'g' || input === 'o')) {
+    if (key.ctrl && (input === 'r' || input === 'g' || input === 'o' || input === 'n')) {
       if (input === 'o') summarize();
+      else if (input === 'n') openMenu('notice');
       else openMenu(input === 'r' ? 'answer' : 'goal');
       return;
     }
@@ -75,7 +76,10 @@ export function useManagerInput({
       selection.handleInput(key, selectTarget);
       return;
     }
-    if (questionAnswer.handleNavigation(key, editorRef)) return;
+    if (questionAnswer.handleNavigation(key, editorRef)) {
+      if (key.escape) cancelMenuRequest();
+      return;
+    }
     if (key.escape) cancelOperations();
     if (active.current !== null && key.escape) {
       active.current.abort();

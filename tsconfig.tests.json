@@ -339,6 +339,7 @@
     "src/__tests__/manager-inquiry-answer.test.ts",
     "src/__tests__/manager-mcp-connection.test.ts",
     "src/__tests__/manager-mcp-lifecycle.test.ts",
+    "src/__tests__/manager-notices.test.ts",
     "src/__tests__/manager-notifications.test.ts",
     "src/__tests__/manager-output-schema.test.ts",
     "src/__tests__/manager-patrol.test.ts",
