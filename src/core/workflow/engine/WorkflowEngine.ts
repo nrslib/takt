@@ -26,6 +26,10 @@ import {
 } from '../workflow-call-invocation-index.js';
 import { restoreWorkflowStepParticipationIndex } from '../workflow-step-participation-index.js';
 import { ReportGenerationIndex } from '../report-generation-index.js';
+import { ReportExecutionStore } from '../report-execution-store.js';
+import { buildWorkflowStepParticipationIdentity } from '../workflow-step-participation-index.js';
+import { getWorkflowReference } from '../workflow-reference.js';
+import { getReportFiles } from '../output-contract-files.js';
 import { buildRunPaths, buildRunPathsFromRunsDirectory, type RunPaths } from '../run/run-paths.js';
 import { createRunFailure } from '../run/run-failure.js';
 import type {
@@ -116,6 +120,7 @@ function getWorkflowRunExecutor(engine: WorkflowEngine): () => Promise<WorkflowR
 }
 
 export class WorkflowEngine extends EventEmitter {
+  private reportExecutionResumePending = true;
   private state: WorkflowState;
   private config: WorkflowConfig;
   private projectCwd: string;
@@ -247,6 +252,8 @@ export class WorkflowEngine extends EventEmitter {
       this.options.resumePoint,
       initialMaxSteps,
     );
+    this.sharedRuntime.reportExecutions ??= new ReportExecutionStore(runPaths.reportsRootAbs);
+    this.options.sharedRuntime = this.sharedRuntime;
     if (restartNavigator !== undefined) {
       if (this.sharedRuntime.restartNavigator !== undefined) {
         throw new Error('Workflow restart navigator is already initialized');
@@ -373,6 +380,17 @@ export class WorkflowEngine extends EventEmitter {
     this.workflowCallRunner = services.workflowCallRunner;
     this.stepAbortSignalContext = services.stepAbortSignalContext;
     this.stepCoordinator = new WorkflowEngineStepCoordinator({
+      beginReportExecution: (step) => {
+        const resume = this.reportExecutionResumePending && this.options.resumePoint !== undefined;
+        this.reportExecutionResumePending = false;
+        const names = [...getReportFiles(step.outputContracts), ...(step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel).flatMap((child) => getReportFiles(child.outputContracts)))];
+        if (names.length === 0 && step.kind !== 'workflow_call' && step.parallel === undefined) return undefined;
+        return this.sharedRuntime.reportExecutions!.begin(
+          buildWorkflowStepParticipationIdentity(getWorkflowReference(this.config), step.name, this.resumeStackPrefix),
+          step.name, this.runPaths.reportsAbs, names, resume,
+        );
+      },
+      finishReportExecution: (id, completed) => this.sharedRuntime.reportExecutions!.finish(id, completed),
       config: this.config,
       state: this.state,
       task: this.task,

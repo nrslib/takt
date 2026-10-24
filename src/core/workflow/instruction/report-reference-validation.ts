@@ -1,3 +1,5 @@
+import { reportInputEntries } from '../../models/workflow-report-input.js';
+import { basename } from 'node:path';
 import type { WorkflowConfig, WorkflowStep } from '../../models/types.js';
 import type { WorkflowReportInput } from '../../models/workflow-types.js';
 import { getAllParallelSubSteps } from '../../models/types.js';
@@ -209,9 +211,7 @@ interface AncestorReportScope {
   readonly optional: ReadonlySet<string>;
 }
 
-function declaredReportNames(node: WorkflowNode, declaration: WorkflowReportInput | undefined): ReadonlySet<string> {
-  if (declaration === undefined) return new Set();
-  if (declaration.reports !== 'all') return new Set(declaration.reports);
+function declaredReportEntryNames(node: WorkflowNode, declaration: WorkflowReportInput): ReadonlySet<string> {
   const source = node.workflow.steps.find((step) => step.name === declaration.fromStep);
   if (source === undefined) return new Set();
   const names = new Set<string>();
@@ -226,7 +226,11 @@ function declaredReportNames(node: WorkflowNode, declaration: WorkflowReportInpu
   for (const call of node.calls) {
     if (call.stepPath[0] === source.name) collectChild(call.child);
   }
-  return names;
+  const publicNames = new Set([...names].map((name) => basename(name)));
+  return declaration.reports === 'all' ? publicNames : new Set(declaration.reports.filter((name) => publicNames.has(name)));
+}
+function declaredReportNames(node: WorkflowNode, declaration: WorkflowStep['inputReports']): ReadonlySet<string> {
+  return new Set(reportInputEntries(declaration).flatMap((entry) => [...declaredReportEntryNames(node, entry)]));
 }
 
 function validateReferences(
@@ -323,7 +327,7 @@ function validateReferences(
         ...(availability.optionalProduced.get(name) ?? []),
       ])),
       [loopJudgeStepName(monitor.cycle)],
-      new Set(),
+      declaredReportNames(node, monitor.judge.inputReports),
     );
   }
 }

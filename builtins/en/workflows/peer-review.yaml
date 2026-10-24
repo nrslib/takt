@@ -120,6 +120,13 @@ loop_monitors:
       - remediation
     threshold: 3
     judge:
+      input_reports:
+        - from_step: remediation
+          reports: [fix-plan.md, fix-report.md, fix-verification.md]
+          history: {previous: 2}
+        - from_step: review-adjudication
+          reports: [review-resolution.md]
+          history: {previous: 2}
       persona: supervisor
       instruction: loop-monitor-reviewers-fix
       rules:
@@ -138,6 +145,13 @@ loop_monitors:
       - remediation
     threshold: 3
     judge:
+      input_reports:
+        - from_step: remediation
+          reports: [fix-plan.md, fix-report.md, fix-verification.md]
+          history: {previous: 2}
+        - from_step: review-adjudication
+          reports: [review-resolution.md]
+          history: {previous: 2}
       persona: supervisor
       instruction: loop-monitor-reviewers-fix
       rules:
@@ -211,6 +225,11 @@ steps:
       - condition: needs_fix
         next: review-adjudication
   - name: review-adjudication
+    input_reports:
+      - from_step: remediation
+        reports: [fix-plan.md, fix-report.md, fix-verification.md]
+        optional_if_unrun: true
+        history: {previous: 2}
     uses: peer-review-adjudication
     with:
       review_policy_additions:
@@ -241,6 +260,10 @@ steps:
       - condition: BLOCKED
         return: need_replan
   - name: remediation
+    input_reports:
+      - from_step: review-adjudication
+        reports: [review-resolution.md]
+        history: {previous: 2}
     description: Plan repairs for issues selected by adjudication and resolve them through repeated implementation and independent verification.
     kind: workflow_call
     call:
