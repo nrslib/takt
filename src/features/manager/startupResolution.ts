@@ -6,7 +6,10 @@ import { isGitRepository, resolveGitRepositoryDirectory } from '../../infra/task
 export type ManagerAssignment =
   | { readonly kind: 'repository'; readonly repositoryDirectory: string; readonly repositoryDirectories: readonly string[] }
   | { readonly kind: 'workspace'; readonly workspaceId: string; readonly name: string; readonly repositoryDirectories: readonly string[] };
-export interface ManagerExecutionContext { readonly assignment: ManagerAssignment; readonly cwd: string }
+export interface ManagerExecutionContext {
+  readonly assignment: ManagerAssignment & { readonly startupRepositoryDirectory?: string };
+  readonly cwd: string;
+}
 export type ManagerStartupResolution =
   | { readonly kind: 'ready'; readonly context: ManagerExecutionContext }
   | { readonly kind: 'selection'; readonly workspaces: readonly Workspace[] };
@@ -23,10 +26,13 @@ export async function resolveManagerStartup(startupDirectory: string, globalConf
   if (!await isGitRepository(directory)) return { kind: 'selection', workspaces: await readWorkspaceRegistry(globalConfigDirectory) };
   const repositoryDirectory = await resolveGitRepositoryDirectory(directory);
   const workspace = await findWorkspaceForRepository(globalConfigDirectory, repositoryDirectory);
+  if (workspace === undefined) return {
+    kind: 'ready',
+    context: { cwd: repositoryDirectory, assignment: { kind: 'repository', repositoryDirectory, repositoryDirectories: [repositoryDirectory] } },
+  };
+  const context = createWorkspaceManagerContext(workspace, globalConfigDirectory);
   return {
     kind: 'ready',
-    context: workspace === undefined
-      ? { cwd: repositoryDirectory, assignment: { kind: 'repository', repositoryDirectory, repositoryDirectories: [repositoryDirectory] } }
-      : createWorkspaceManagerContext(workspace, globalConfigDirectory),
+    context: { ...context, assignment: { ...context.assignment, startupRepositoryDirectory: repositoryDirectory } },
   };
 }

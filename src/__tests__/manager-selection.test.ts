@@ -23,14 +23,15 @@ const questions: PendingQuestion[] = [1, 2].map((index) => ({
   },
 }));
 
-function mount(snapshot = { goals, questions }, lang: 'en' | 'ja' = 'en') {
+function mount(snapshot = { goals, questions }, lang: 'en' | 'ja' = 'en', repositoryDirectories: readonly string[] = []) {
   const selected = vi.fn<(target: ManagerSelectedTarget) => void>();
   const opened = vi.fn<(result: boolean) => void>();
   function Probe() {
     const selection = useManagerSelection(118);
     useInput((input, key) => {
-      if (input === 'o') opened(selection.open('answer', { ...snapshot, notices: [] }));
-      else if (input === 'g') opened(selection.open('goal', { ...snapshot, notices: [] }));
+      if (input === 'o') opened(selection.open('answer', { ...snapshot, notices: [], repositoryDirectories }));
+      else if (input === 'g') opened(selection.open('goal', { ...snapshot, notices: [], repositoryDirectories }));
+      else if (input === 'p') opened(selection.open('repository', { ...snapshot, notices: [], repositoryDirectories }));
       else selection.handleInput(key, selected);
     });
     return createElement(Box, { flexDirection: 'column', width: 120 },
@@ -176,4 +177,36 @@ it.each([1, 10])('keeps all %i inquiry rows visible when they fit in the window'
     expect(app.lastFrame()).toContain(getLabel('manager.selectionTitles.answer', 'en'));
     expect(app.lastFrame()).toContain(getLabel('manager.selectionHint', 'en'));
   });
+});
+
+it('keeps repository browsing read-only on Enter and closes it on Esc', async () => {
+  chalk.level = 1;
+  const { app, selected, opened } = mount({ goals, questions }, 'en', ['/fixture/first', '/fixture/second']);
+  app.stdin.write('p');
+  await vi.waitFor(() => expect(app.lastFrame()).toContain('first — /fixture/first'));
+  expect(opened).toHaveBeenCalledWith(true);
+  app.stdin.write('\r');
+  app.stdin.write('\x1b[B');
+  await vi.waitFor(() => expect(app.lastFrame()).toMatch(/\x1b\[7m[^\n]*second — \/fixture\/second/u));
+  expect(selected).not.toHaveBeenCalled();
+  app.stdin.write('\x1b[27u');
+  await vi.waitFor(() => expect(app.lastFrame()).toBe('Selection probe'));
+  expect(selected).not.toHaveBeenCalled();
+});
+
+it('does not replace an empty repository assignment with another menu or repository', async () => {
+  const { app, selected, opened } = mount();
+  app.stdin.write('p');
+  await vi.waitFor(() => expect(opened).toHaveBeenCalledWith(false));
+  expect(app.lastFrame()).toBe('Selection probe');
+  expect(selected).not.toHaveBeenCalled();
+});
+
+it('renders repository names and paths containing line breaks and terminal codes on one row', async () => {
+  const { app } = mount({ goals, questions }, 'en', ['/fixture/repo\nline\tname\x1b[31m']);
+  app.stdin.write('p');
+  await vi.waitFor(() => expect(app.lastFrame()).toContain('repo line name — /fixture/repo line name'));
+  const rows = app.lastFrame()!.split('\n').filter((row) => row.includes('/fixture/'));
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).not.toMatch(/[\r\t\x1b]/u);
 });
