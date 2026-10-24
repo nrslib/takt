@@ -12,6 +12,7 @@ import { toDisplayText } from '../features/tui/displayText.js';
 import type { Goal } from '../infra/goals/schema.js';
 import { createGoal } from '../infra/goals/service.js';
 import { getLabel } from '../shared/i18n/index.js';
+import { measureWidth } from '../shared/utils/grapheme.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 
 const NOTICE_MENU = '\x0e';
@@ -26,6 +27,12 @@ const noticeDialog = (context: ReturnType<typeof mount>): string | undefined => 
   ?.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu)?.find((box) => /Esc/u.test(box) && /↑|↓/u.test(box));
 const noticeRows = (context: ReturnType<typeof mount>): string[] => noticeDialog(context)!.split('\n')
   .slice(2, -2).map((line) => stripVTControlCharacters(line).replace(/^│\s*|\s*│$/gu, ''));
+const inputHintRows = (context: ReturnType<typeof mount>): string[] => {
+  const rows = stripVTControlCharacters(context.app.lastFrame()!).split('\n');
+  const bottom = rows.map((line) => line.startsWith('╰')).lastIndexOf(true);
+  expect(bottom).toBeGreaterThanOrEqual(0);
+  return rows.slice(bottom + 1).map((line) => line.trimEnd()).filter((line) => line !== '');
+};
 
 describe('manager saved notice menu', () => {
   describe.each(['repository', 'workspace'] as const)('notices after adding a repository to a %s assignment', (kind) => {
@@ -409,18 +416,63 @@ describe('manager saved notice menu', () => {
     } finally { context.app.unmount(); await context.session.close(); }
   });
 
-  it.each(['ja', 'en'] as const)('shows all menu keys below the input instead of on the counts line in %s', async (lang) => {
-    const context = mount(lang);
-    try {
-      await waitFor(() => {
-        const frame = context.app.lastFrame()!;
-        const rows = frame.split('\n');
-        expect(rows[1]).not.toMatch(/\^|Enter|Esc|Ctrl/u);
-        const hint = rows.slice(rows.map((line) => line.startsWith('╰')).lastIndexOf(true) + 1).join(' ');
-        expect(hint).toMatch(lang === 'ja' ? /\^R 問い合わせ.*\^G ゴール.*\^O 要約.*\^N 知らせ.*\^P 担当.*\^C 終了/u
-          : /\^R.*(?:inquir|question).*\^G.*goal.*\^O.*summary.*\^N.*(?:notice|notification).*\^P.*\^C/iu);
-      });
-    } finally { context.app.unmount(); await context.session.close(); }
+  describe.each(['ja', 'en'] as const)('input hint wrapping in %s', (lang) => {
+    it.each([40, 80])('[SCN-HINT-P2/P3] keeps every item together below the input at width %i', async (width) => {
+      const context = mount(lang);
+      const columns = vi.spyOn(context.app.stdout, 'columns', 'get').mockReturnValue(width);
+      context.app.stdout.emit('resize');
+      const hint = getLabel('manager.inputHint', lang);
+      try {
+        await waitFor(() => {
+          const rows = inputHintRows(context);
+          expect(rows.length).toBeGreaterThan(1);
+          for (const item of hint.split('  ')) expect(rows.filter((row) => row.includes(item))).toHaveLength(1);
+          for (const row of rows) expect(measureWidth(row)).toBeLessThanOrEqual(width);
+          expect(context.app.lastFrame()!.split('\n')[1]).not.toMatch(/\^|Enter|Esc|Ctrl/u);
+        });
+        if (width === 80) {
+          columns.mockReturnValue(200);
+          context.app.stdout.emit('resize');
+          await waitFor(() => expect(inputHintRows(context)).toEqual([hint]));
+        }
+      } finally { context.app.unmount(); await context.session.close(); }
+    });
+
+    it.each([40, 80])('[HINT-SUMMARY] keeps every summary item together at width %i and preserves separators at width 200', async (width) => {
+      const context = mount(lang);
+      const columns = vi.spyOn(context.app.stdout, 'columns', 'get').mockReturnValue(width);
+      context.app.stdout.emit('resize');
+      const hint = getLabel('manager.summaryInputHint', lang);
+      try {
+        await send(context, 'CSV export', summaryA);
+        await waitFor(() => {
+          const rows = inputHintRows(context);
+          for (const item of hint.split(' / ')) expect(rows.filter((row) => row.includes(item))).toHaveLength(1);
+          for (const row of rows) expect(measureWidth(row)).toBeLessThanOrEqual(width);
+          if (width === 40) expect(rows.length).toBeGreaterThan(1);
+        });
+        columns.mockReturnValue(200);
+        context.app.stdout.emit('resize');
+        await waitFor(() => expect(inputHintRows(context)).toEqual([hint]));
+      } finally { context.app.unmount(); await context.session.close(); }
+    });
+
+    it.each([false, true])('[HINT-OVERSIZE] finishes rendering items wider than the screen with summary selection=%s', async (summary) => {
+      const context = mount(lang);
+      try {
+        if (summary) await send(context, 'CSV export', summaryA);
+        const hint = getLabel(summary ? 'manager.summaryInputHint' : 'manager.inputHint', lang);
+        const items = hint.split(summary ? ' / ' : '  ');
+        expect(items.some((item) => measureWidth(item) > 8)).toBe(true);
+        vi.spyOn(context.app.stdout, 'columns', 'get').mockReturnValue(8);
+        context.app.stdout.emit('resize');
+        await waitFor(() => {
+          const rows = inputHintRows(context);
+          expect(rows.length).toBeGreaterThan(1);
+          expect(rows.at(-1)).toContain(summary ? 'Ctrl+C' : items.at(-1)!);
+        });
+      } finally { context.app.unmount(); await context.session.close(); }
+    });
   });
 });
 
