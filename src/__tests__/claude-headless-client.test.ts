@@ -69,6 +69,9 @@ import {
   runHeadlessCli,
 } from '../infra/claude-headless/headless-spawn.js';
 import type { ClaudeHeadlessCallOptions } from '../infra/claude-headless/types.js';
+import { createManagerTurnExecutor } from '../features/manager/turnExecutor.js';
+import { ClaudeHeadlessProvider } from '../infra/providers/claude-headless.js';
+import { createMcpAdapter } from '../infra/providers/mcp/index.js';
 
 describe('callClaudeHeadless', () => {
   let lastArgv: string[] = [];
@@ -77,6 +80,7 @@ describe('callClaudeHeadless', () => {
   let capturedMcpConfigContent: string | undefined;
   let capturedMcpConfigMode: number | undefined;
   let capturedMcpConfigPath: string | undefined;
+  let mcpConfigReads: Array<{ path: string; exists: boolean }> = [];
 
   beforeEach(() => {
     vi.mocked(spawn).mockReset();
@@ -110,6 +114,7 @@ describe('callClaudeHeadless', () => {
     capturedMcpConfigContent = undefined;
     capturedMcpConfigMode = undefined;
     capturedMcpConfigPath = undefined;
+    mcpConfigReads = [];
     delete process.env.TAKT_OBSERVABILITY;
     delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
   });
@@ -138,6 +143,7 @@ describe('callClaudeHeadless', () => {
       const mcpIndex = lastArgv.indexOf('--mcp-config');
       if (mcpIndex >= 0) {
         capturedMcpConfigPath = lastArgv[mcpIndex + 1];
+        mcpConfigReads.push({ path: capturedMcpConfigPath!, exists: existsSync(capturedMcpConfigPath!) });
         capturedMcpConfigContent = readFileSync(capturedMcpConfigPath!, 'utf-8');
         capturedMcpConfigMode = statSync(capturedMcpConfigPath!).mode & 0o777;
       }
@@ -170,6 +176,126 @@ describe('callClaudeHeadless', () => {
       return proc as ChildProcess;
     });
   }
+
+  it.each([0, 1])('classifies an explicit missing resume from a failed result with exit %i', async (closeCode) => {
+    const sessionId = '00000000-0000-4000-8000-000000000099';
+    const error = `No conversation found with session ID: ${sessionId}`;
+    stubSpawn({ closeCode, stdoutChunks: [JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true,
+      session_id: sessionId, errors: [error] }) + '\n'] });
+    const result = await callClaudeHeadless('manager', 'continue', { cwd: '/tmp', sessionId, callerManagedSession: true });
+    expect(result).toMatchObject({ status: 'error', failureCategory: 'session_continuation_unsupported' });
+    expect(spawn).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true].flatMap((tools) => [false, true].map((withMcp) => ({ tools, withMcp }))))('reconstructs through the headless adapter only before tools ran (tools: $tools, MCP: $withMcp)', async ({ tools, withMcp }) => {
+    const sessionId = '00000000-0000-4000-8000-000000000099';
+    stubSpawn([
+      { closeCode: 1, stdoutChunks: [
+        ...(tools ? [JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool', name: 'Read', input: {} }] } }) + '\n'] : []),
+        JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, errors: [`No conversation found with session ID: ${sessionId}`] }) + '\n',
+      ] },
+      { stdoutChunks: [JSON.stringify({ type: 'result', subtype: 'success', session_id: 'fresh-session', structured_output: { message: 'fresh reply', summary: null } }) + '\n'] },
+    ]);
+    const invalidateSession = vi.fn(async () => {});
+    const executor = createManagerTurnExecutor('/tmp', { ctx: { providerType: 'claude-headless', provider: new ClaudeHeadlessProvider(), model: undefined, lang: 'en',
+      ...(withMcp ? { mcpServers: { context: { command: 'manager-context-server' } } } : {}) },
+      strategy: { systemPrompt: 'manager' } });
+    const input = { prompt: 'continue', instruction: 'continue', sessionId, abortSignal: new AbortController().signal,
+      assignment: { kind: 'repository' as const, repositoryDirectory: '/tmp' }, configDirectory: '/tmp/config',
+      recovery: { context: 'pending revision 4; current goals', invalidateSession } };
+    let result: Awaited<ReturnType<typeof executor.execute>> | undefined;
+    let failure: unknown;
+    try { result = await executor.execute(input); } catch (error) { failure = error; }
+    if (withMcp) {
+      expect(mcpConfigReads).toEqual(Array.from({ length: tools ? 1 : 2 }, () => ({ path: mcpConfigReads[0]!.path, exists: true })));
+      expect(existsSync(mcpConfigReads[0]!.path)).toBe(false);
+    }
+    if (tools) expect(failure).toMatchObject({ failureCategory: 'session_continuation_unsupported' });
+    else {
+      expect(failure).toBeUndefined();
+      expect(result).toMatchObject({ message: 'fresh reply', sessionId: 'fresh-session' });
+      expect(lastArgv).not.toContain('--resume');
+      expect(lastArgv.at(-1)).toContain(input.recovery.context);
+    }
+    expect(invalidateSession).toHaveBeenCalledOnce();
+    expect(spawn).toHaveBeenCalledTimes(tools ? 1 : 2);
+  });
+
+  it.each([false, true])('keeps MCP through overflow without session recovery ownership (tools: %s)', async (tools) => {
+    stubSpawn([
+      { closeCode: 1, stderrChunks: ['prompt is too long'], stdoutChunks: [
+        ...(tools ? [JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool', name: 'Read', input: {} }] } }) + '\n'] : []),
+        JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['prompt is too long'] }) + '\n',
+      ] },
+      { stdoutChunks: [JSON.stringify({ type: 'result', subtype: 'success', session_id: 'fresh-session', structured_output: { message: 'fresh reply', summary: null } }) + '\n'] },
+    ]);
+    const executor = createManagerTurnExecutor('/tmp', { ctx: { providerType: 'claude-headless', provider: new ClaudeHeadlessProvider(), model: undefined, lang: 'en',
+      mcpServers: { context: { command: 'manager-context-server' } } }, strategy: { systemPrompt: 'manager' } });
+    const running = executor.execute({ prompt: 'continue', instruction: 'continue', sessionId: 'saved-session',
+      abortSignal: new AbortController().signal, assignment: undefined, configDirectory: '/tmp/config' });
+    if (tools) await expect(running).rejects.toThrow();
+    else expect(await running).toMatchObject({ message: 'fresh reply', sessionId: 'fresh-session' });
+    expect(spawn).toHaveBeenCalledTimes(tools ? 1 : 2);
+    expect(mcpConfigReads).toEqual(Array.from({ length: tools ? 1 : 2 }, () => ({ path: mcpConfigReads[0]!.path, exists: true })));
+    expect(existsSync(mcpConfigReads[0]!.path)).toBe(false);
+  });
+
+  it.each([undefined, true] as const)('respects MCP ownership before argument construction fails (%s)', async (callerManagedMcp) => {
+    const prepared = await createMcpAdapter('claude-headless').prepare({ enabled: true, servers: { docs: { command: 'docs-mcp' } }, serverNames: ['docs'], identity: 'docs' }, { cwd: '/tmp' });
+    assertClaudeSkillsDisableSupportedMock.mockRejectedValueOnce(new Error('capability unavailable'));
+    try {
+      expect(await callClaudeHeadless('manager', 'prompt', { cwd: '/tmp', skillsEnabled: false, preparedMcp: prepared, callerManagedMcp })).toMatchObject({ status: 'error' });
+      expect(spawn).not.toHaveBeenCalled();
+      expect(existsSync(prepared.path!)).toBe(callerManagedMcp === true);
+    } finally { await prepared.dispose(); }
+    expect(existsSync(prepared.path!)).toBe(false);
+  });
+
+  it.each(['running', 'between-attempts'] as const)('removes caller-owned MCP after an abort %s without another attempt', async (when) => {
+    const sessionId = 'saved-session';
+    stubSpawn(when === 'running' ? { keepOpen: true } : { closeCode: 1, stdoutChunks: [JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true,
+      errors: [`No conversation found with session ID: ${sessionId}`] }) + '\n'] });
+    const controller = new AbortController();
+    let release!: () => void;
+    const invalidation = new Promise<void>((resolve) => { release = resolve; });
+    const invalidateSession = vi.fn(() => invalidation);
+    const executor = createManagerTurnExecutor('/tmp', { ctx: { providerType: 'claude-headless', provider: new ClaudeHeadlessProvider(), model: undefined, lang: 'en',
+      mcpServers: { context: { command: 'manager-context-server' } } }, strategy: { systemPrompt: 'manager' } });
+    const running = executor.execute({ prompt: 'continue', instruction: 'continue', sessionId, abortSignal: controller.signal, assignment: undefined,
+      configDirectory: '/tmp/config', recovery: { context: 'pending revision 4', invalidateSession } });
+    const observed = expect(running).rejects.toThrow();
+    try {
+      await vi.waitFor(() => expect(when === 'running' ? spawn : invalidateSession).toHaveBeenCalledOnce());
+      expect(readFileSync(mcpConfigReads[0]!.path, 'utf8')).toContain('manager-context-server');
+      if (when === 'running') lastKill!.mockImplementationOnce(() => {
+        queueMicrotask(() => vi.mocked(spawn).mock.results[0]!.value.emit('close', null, 'SIGTERM'));
+        return true;
+      });
+      controller.abort();
+    } finally { release(); }
+    await observed;
+    expect(spawn).toHaveBeenCalledOnce();
+    expect(existsSync(mcpConfigReads[0]!.path)).toBe(false);
+  });
+
+  it('classifies a missing resume reported on stderr when the CLI exits before a result', async () => {
+    const sessionId = '00000000-0000-4000-8000-000000000099';
+    stubSpawn({ closeCode: 1, stderrChunks: [`No conversation found with session ID: ${sessionId}\n`] });
+    expect(await callClaudeHeadless('manager', 'continue', { cwd: '/tmp', sessionId, callerManagedSession: true }))
+      .toMatchObject({ status: 'error', failureCategory: 'session_continuation_unsupported' });
+  });
+
+  it.each(['success', 'tool', 'authentication', 'network', 'other-session'] as const)('does not classify %s output as a rejected resume', async (kind) => {
+    const sessionId = '00000000-0000-4000-8000-000000000099';
+    const text = `No conversation found with session ID: ${sessionId}`;
+    stubSpawn(kind === 'success' ? { stdoutChunks: [JSON.stringify({ type: 'result', subtype: 'success', result: text }) + '\n'] }
+      : kind === 'tool' ? { closeCode: 1, stdoutChunks: [JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool', content: text }] } }) + '\n'] }
+        : { closeCode: 1, stderrChunks: [kind === 'other-session' ? 'No conversation found with session ID: another-session\n' : `${kind} failed\n`] });
+    const response = await callClaudeHeadless('manager', 'continue', { cwd: '/tmp', sessionId, callerManagedSession: true });
+    expect(response.failureCategory).toBeUndefined();
+    expect(response.status).toBe(kind === 'success' ? 'done' : 'error');
+    expect(spawn).toHaveBeenCalledOnce();
+  });
 
   it('passes --disable-slash-commands for disabled Skills on a new headless session', async () => {
     stubSpawn({
@@ -833,6 +959,12 @@ describe('callClaudeHeadless', () => {
         resetAtRaw: 'Aug 16 at 1am (Asia/Tokyo)',
       },
     });
+  });
+
+  it('does not replay a caller-owned conversation after a transient CLI failure', async () => {
+    stubSpawn({ stderrChunks: ['HTTP 429: Too Many Requests'], closeCode: 1 });
+    const result = await callClaudeHeadless('manager', 'private text', { cwd: '/tmp', callerManagedSession: true });
+    expect(result.status).toBe('rate_limited'); expect(spawn).toHaveBeenCalledOnce();
   });
 
   it('失敗resultの429は8回の待機後に error_text source で返す', async () => {
@@ -1504,7 +1636,7 @@ describe('callClaudeHeadless', () => {
     expect(second.content).toBe('second');
   });
 
-  it('passes mcpServers as --mcp-config temp file and removes it after execution', async () => {
+  it.each([undefined, true] as const)('cleans client-created MCP independently of prepared MCP ownership (%s)', async (callerManagedMcp) => {
     stubSpawn({
       stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'x' })}\n`],
       closeCode: 0,
@@ -1512,6 +1644,7 @@ describe('callClaudeHeadless', () => {
 
     await callClaudeHeadless('agent', 'p', {
       cwd: '/tmp',
+      callerManagedMcp,
       mcpServers: {
         local: {
           command: 'node',

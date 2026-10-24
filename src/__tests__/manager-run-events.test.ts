@@ -7,16 +7,15 @@ import type { SavedManagerEvent } from '../infra/goals/events.js';
 const doubles = vi.hoisted(() => ({
   read: vi.fn(), remove: vi.fn(), get: vi.fn(), update: vi.fn(),
   plan: vi.fn(), connect: vi.fn(), dispose: vi.fn(), preflight: vi.fn(),
-  turn: vi.fn(), reset: vi.fn(), close: vi.fn(), createSession: vi.fn(), notify: vi.fn(),
+  turn: vi.fn(), createExecutor: vi.fn(), notify: vi.fn(),
 }));
 vi.mock('../infra/goals/events.js', () => ({ readManagerEvents: doubles.read, deleteManagerEvent: doubles.remove }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.get; update = doubles.update; } }));
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { listTaskStateItems() { return []; } } }));
 vi.mock('../features/manager/conversationPlan.js', () => ({ createManagerConversationPlan: doubles.plan }));
 vi.mock('../features/manager/managerMcp.js', () => ({ connectManagerMcp: doubles.connect }));
-vi.mock('../features/manager/conversationSession.js', () => ({
-  createManagerConversationSession: doubles.createSession, getManagerOutputSchema: () => ({ type: 'object' }),
-}));
+vi.mock('../features/manager/turnResponse.js', () => ({ getManagerOutputSchema: () => ({ type: 'object' }) }));
+vi.mock('../features/manager/turnExecutor.js', () => ({ createManagerTurnExecutor: doubles.createExecutor }));
 vi.mock('../features/manager/turnFailureNotification.js', () => ({ notifyManagerTurnFailure: doubles.notify }));
 vi.mock('../infra/config/managerConfig.js', () => ({ resolveManagerConfig: () => ({ patrolInterval: 1800 }) }));
 
@@ -37,7 +36,11 @@ beforeEach(() => {
   doubles.update.mockImplementation(async (_id: string, transform: (value: Goal) => Goal) => { goal = transform(goal); return goal; });
   doubles.plan.mockReturnValue({ ctx: { provider: { preflight: doubles.preflight }, providerType: 'mock', model: undefined, lang: 'ja' }, strategy: { systemPrompt: 'manager fixture' } });
   doubles.connect.mockResolvedValue({ servers: {}, dispose: doubles.dispose });
-  doubles.createSession.mockReturnValue({ handleUserMessage: doubles.turn, resetConversation: doubles.reset, getPendingSummary: () => null, close: doubles.close });
+  doubles.createExecutor.mockReturnValue({ execute: async (input: { prompt: string; abortSignal: AbortSignal; goal: unknown }) => {
+    const result = await doubles.turn({ text: input.prompt, abortSignal: input.abortSignal, goal: input.goal });
+    if (result.kind === 'error') throw new Error(result.message);
+    return { message: result.message, summary: null, sessionId: undefined };
+  } });
   doubles.turn.mockResolvedValue({ kind: 'reply', message: 'task-X を取り込み、task-Y を投入しました' });
 });
 afterEach(() => vi.useRealTimers());
@@ -99,8 +102,8 @@ it('transfers user MCP servers to connection setup and the merged servers to pre
       cwd: '/project', abortSignal: expect.any(AbortSignal), model: undefined, providerOptions,
       permissionMode: 'full', mcpServers: servers, outputSchema: { type: 'object' },
     });
-    expect(doubles.createSession).toHaveBeenCalledWith(expect.objectContaining({
-      plan: expect.objectContaining({ ctx: expect.objectContaining({ mcpServers: servers, providerOptions }) }),
+    expect(doubles.createExecutor).toHaveBeenCalledWith('/project', expect.objectContaining({
+      ctx: expect.objectContaining({ mcpServers: servers, providerOptions }),
     }));
   } finally { await manager.close(); }
 });
@@ -220,7 +223,7 @@ it('includes failed-event retries in the polling limit and retains paused failur
   expect(doubles.turn).toHaveBeenCalledTimes(5);
   await manager.close();
 });
-it('resets conversation history for each event and awaits each event before starting the next', async () => {
+it('awaits each event before starting the next and saves each result in order', async () => {
   inbox = [saved('task-a'), saved('task-b')];
   let finish!: () => void;
   doubles.turn.mockImplementationOnce(() => new Promise((resolve) => { finish = () => resolve({ kind: 'reply', message: 'task-a を取り込みました' }); }));
@@ -234,16 +237,11 @@ it('resets conversation history for each event and awaits each event before star
   expect(doubles.turn.mock.calls[1]![0].text).toContain('task-b');
   expect(goal.workLog.map((record) => record.summary)).toEqual(['task-a を取り込みました', 'task-X を取り込み、task-Y を投入しました']);
   expect(inbox).toEqual([]);
-  expect(doubles.reset).toHaveBeenCalledTimes(2);
-  for (let index = 0; index < 2; index++) {
-    expect(doubles.reset.mock.invocationCallOrder[index]).toBeLessThan(doubles.turn.mock.invocationCallOrder[index]!);
-  }
-  expect(doubles.createSession).toHaveBeenCalledOnce();
   expect(doubles.connect).toHaveBeenCalledOnce();
   expect(doubles.preflight).toHaveBeenCalledOnce();
   expect(doubles.preflight).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: 'full', mcpServers: {} }));
   await manager.close();
-  expect(doubles.close).toHaveBeenCalledOnce(); expect(doubles.dispose).toHaveBeenCalledOnce();
+  expect(doubles.dispose).toHaveBeenCalledOnce();
 });
 it.each(['provider', 'startup', 'memory'] as const)('retains a failed event and emits blocked after %s failure', async (failure) => {
   inbox = [saved('task-a')];
@@ -306,10 +304,10 @@ it('leaves paused events and does not create a manager for an empty or paused in
   await manager.processPending(new AbortController().signal, 10);
   inbox = [saved('task-a')]; goal = { ...goal, executionStatus: 'paused' };
   await manager.processPending(new AbortController().signal, 10);
-  expect(inbox).toHaveLength(1); expect(doubles.createSession).not.toHaveBeenCalled();
+  expect(inbox).toHaveLength(1); expect(doubles.createExecutor).not.toHaveBeenCalled();
   goal = { ...goal, executionStatus: 'aborted' };
   await manager.processPending(new AbortController().signal, 10);
-  expect(inbox).toEqual([]); expect(doubles.createSession).not.toHaveBeenCalled();
+  expect(inbox).toEqual([]); expect(doubles.createExecutor).not.toHaveBeenCalled();
   await manager.close();
 });
 it('keeps an interrupted event without blocked notification', async () => {
@@ -481,9 +479,11 @@ it('shares the timeout across preflight and the message, then gives the next eve
     await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
     finishPreflight();
     await vi.advanceTimersByTimeAsync(0);
-    expect(signals[0]).toBe(preflightSignal);
+    expect(preflightSignal.aborted).toBe(false);
+    expect(signals[0]!.aborted).toBe(false);
     await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
     expect(signals[0]!.aborted).toBe(true);
+    expect(preflightSignal.aborted).toBe(true);
     finishes[0]!();
     await vi.advanceTimersByTimeAsync(0);
     expect(signals).toHaveLength(2);

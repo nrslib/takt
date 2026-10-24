@@ -7,7 +7,12 @@ const doubles = vi.hoisted(() => ({
   registerOwner: vi.fn(), removeOwner: vi.fn(), delay: vi.fn(),
   patrol: vi.fn(), config: vi.fn(), notify: vi.fn(), logError: vi.fn(),
   runner: vi.fn(), recover: vi.fn(), logWarn: vi.fn(),
+  conversationService: vi.fn(), ipc: vi.fn(), runtime: vi.fn(),
 }));
+vi.mock('../infra/daemon/ipcEndpoint.js', () => ({ resolveDaemonConfigDirectory: () => process.env.TAKT_CONFIG_DIR }));
+vi.mock('../features/manager/conversationService.js', () => ({ createConversationService: doubles.conversationService }));
+vi.mock('../features/manager/conversationRuntime.js', () => ({ createConversationRuntime: doubles.runtime }));
+vi.mock('../features/daemon/conversationIpcServer.js', () => ({ createConversationIpcServer: doubles.ipc }));
 vi.mock('../features/daemon/projects.js', () => ({ listDaemonProjects: doubles.projects, hasDaemonProjectWork: doubles.work }));
 vi.mock('../features/manager/runEventManager.js', () => ({ createRunEventManager: doubles.create }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: doubles.ensure }));
@@ -34,6 +39,8 @@ beforeEach(() => {
   doubles.delay.mockImplementation(async () => { await new Promise(setImmediate); });
   doubles.config.mockReturnValue({ patrolInterval: 1800 });
   doubles.recover.mockReturnValue(0);
+  doubles.conversationService.mockReturnValue({ attachmentCount: 0, activeOperationCount: 0, stopAccepting: vi.fn(), close: vi.fn() });
+  doubles.ipc.mockReturnValue({ initializingCount: 0, stopAccepting: vi.fn(), close: vi.fn() });
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -48,6 +55,25 @@ it('exits without polling or removing ownership when another daemon is registere
   expect(doubles.projects).not.toHaveBeenCalled();
   expect(doubles.removeOwner).not.toHaveBeenCalled();
   expect(process.rawListeners('SIGTERM')).toEqual(before);
+});
+
+it('keeps the same daemon alive through attachment changes, detached work and terminal cleanup', async () => {
+  doubles.projects.mockResolvedValue([]);
+  const conversation = { attachmentCount: 1, activeOperationCount: 0, stopAccepting: vi.fn(), close: vi.fn() };
+  doubles.conversationService.mockReturnValue(conversation);
+  let round = 0;
+  doubles.delay.mockImplementation(async () => {
+    await new Promise(setImmediate);
+    expect(doubles.removeOwner).not.toHaveBeenCalled();
+    round++;
+    if (round === 2) conversation.attachmentCount = 2;
+    if (round === 3) conversation.attachmentCount = 1;
+    if (round === 4) { conversation.activeOperationCount = 1; conversation.attachmentCount = 0; }
+    if (round === 6) conversation.activeOperationCount = 0;
+  });
+  await runDaemon();
+  expect(round).toBe(6); expect(conversation.close).toHaveBeenCalledOnce(); expect(doubles.removeOwner).toHaveBeenCalledOnce();
+  expect(conversation.close.mock.invocationCallOrder[0]).toBeLessThan(doubles.removeOwner.mock.invocationCallOrder[0]!);
 });
 
 it('processes each project with a fixed event limit, then checks its run startup and remaining work', async () => {
@@ -147,6 +173,7 @@ it('keeps polling other and newly discovered projects without overlapping a pend
   let stopped = false;
   const daemon = runDaemon().then(() => { stopped = true; });
   try {
+    await vi.waitFor(() => expect(nextPoll).toBeTypeOf('function'));
     for (let round = 0; round < 3; round++) {
       nextPoll();
       await new Promise(setImmediate);
@@ -186,8 +213,7 @@ it('aborts all pending projects and waits for all turns before cleanup', async (
   doubles.create.mockReturnValueOnce(managers[0]).mockReturnValueOnce(managers[1]);
   const daemon = runDaemon();
   try {
-    await new Promise(setImmediate);
-    expect(signals).toHaveLength(2);
+    await vi.waitFor(() => expect(signals).toHaveLength(2));
     const stop = process.rawListeners('SIGTERM').find((listener) => !before.includes(listener));
     stop!.call(process, 'SIGTERM');
     expect(signals.every((signal) => signal.aborted)).toBe(true);
@@ -197,6 +223,8 @@ it('aborts all pending projects and waits for all turns before cleanup', async (
     expect(doubles.removeOwner).not.toHaveBeenCalled();
     expect(doubles.ensure).not.toHaveBeenCalled();
   } finally {
+    const stop = process.rawListeners('SIGTERM').find((listener) => !before.includes(listener));
+    stop?.call(process, 'SIGTERM');
     for (const finish of finishes) finish();
     await daemon;
   }
@@ -222,6 +250,7 @@ it('keeps running with remaining work after a notification spans polling rounds'
   let stopped = false;
   const daemon = runDaemon().then(() => { stopped = true; });
   try {
+    await vi.waitFor(() => expect(nextPoll).toBeTypeOf('function'));
     nextPoll();
     await new Promise(setImmediate);
     now = 1000;

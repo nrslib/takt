@@ -28,6 +28,7 @@ export function buildManagerGoalSummary(cwd: string, goal: Goal, tasks: readonly
 export function buildGoalMemory(repositories: readonly {
   repositoryDirectory: string;
   goals: ReturnType<typeof buildManagerGoalSummary>[] | undefined;
+  goalCount?: number;
   diagnostics: { goalId?: string; message: string }[];
 }[]): string {
   const memory: typeof repositories[number][] = [];
@@ -39,7 +40,7 @@ export function buildGoalMemory(repositories: readonly {
       diagnostics: repository.diagnostics.slice(0, 3).map((diagnostic) => ({
         ...diagnostic, message: truncateUtf8(diagnostic.message, 256).value,
       })),
-      goalCount: repository.goals?.length, diagnosticCount: repository.diagnostics.length,
+      goalCount: repository.goalCount ?? repository.goals?.length, diagnosticCount: repository.diagnostics.length,
     };
     memory.push(entry);
     if (Buffer.byteLength(serialize()) > GOAL_MEMORY_MAX_BYTES) {
@@ -56,6 +57,7 @@ export function buildGoalMemory(repositories: readonly {
       }
     }
     if (repository.diagnostics.length > entry.diagnostics.length) truncated = true;
+    if (repository.goalCount !== undefined && repository.goalCount > (repository.goals?.length ?? 0)) truncated = true;
   }
   return serialize();
 }

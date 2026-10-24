@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { USAGE_MISSING_REASONS } from '../core/logging/contracts.js';
 import { callClaudeTerminal } from '../infra/claude-terminal/client.js';
+import { createMcpAdapter } from '../infra/providers/mcp/index.js';
 import { initDebugLogger, resetDebugLogger } from '../shared/utils/index.js';
 
 const {
@@ -84,6 +85,38 @@ describe('Claude terminal client', () => {
     defaultTerminalBackend.start.mockReset();
     defaultTerminalBackend.pasteText.mockReset();
     defaultTerminalBackend.stop.mockReset();
+  });
+
+  it.each([undefined, true] as const)('keeps caller-owned prepared MCP and still stops the terminal (%s)', async (callerManagedMcp) => {
+    const prepared = await createMcpAdapter('claude-terminal').prepare({ enabled: true, servers: { docs: { command: 'docs-mcp' } }, serverNames: ['docs'], identity: 'docs' }, { cwd: '/tmp' });
+    const backend = createBackend();
+    backend.start.mockImplementation(async (options) => {
+      const index = options.command.args.indexOf('--mcp-config');
+      expect(JSON.parse(await readFile(options.command.args[index + 1], 'utf8'))).toEqual({ mcpServers: { docs: { command: 'docs-mcp' } } });
+      return { id: 'tmux-session', name: 'takt-claude-terminal' };
+    });
+    try {
+      const result = await callClaudeTerminal('manager', 'prompt', { cwd: '/tmp', preparedMcp: prepared, callerManagedMcp,
+        terminalBackend: backend, transcriptReader: createTranscriptReader({ sessionId: 'session', assistantText: 'reply', events: [] }) });
+      expect(result).toMatchObject({ status: 'done', content: 'reply' });
+      expect(backend.stop).toHaveBeenCalledOnce();
+      if (callerManagedMcp) await expect(readFile(prepared.path!, 'utf8')).resolves.toBeDefined();
+      else await expect(access(prepared.path!)).rejects.toThrow();
+    } finally { await prepared.dispose(); }
+    await expect(access(prepared.path!)).rejects.toThrow();
+  });
+
+  it.each([undefined, true] as const)('respects MCP ownership when capability validation fails before argument preparation (%s)', async (callerManagedMcp) => {
+    const prepared = await createMcpAdapter('claude-terminal').prepare({ enabled: true, servers: { docs: { command: 'docs-mcp' } }, serverNames: ['docs'], identity: 'docs' }, { cwd: '/tmp' });
+    assertClaudeSkillsDisableSupportedMock.mockRejectedValueOnce(new Error('capability unavailable'));
+    try {
+      const result = await callClaudeTerminal('manager', 'prompt', { cwd: '/tmp', preparedMcp: prepared, callerManagedMcp, skillsEnabled: false });
+      expect(result.status).toBe('error');
+      expect(defaultTerminalBackend.start).not.toHaveBeenCalled();
+      if (callerManagedMcp) await expect(readFile(prepared.path!, 'utf8')).resolves.toBeDefined();
+      else await expect(access(prepared.path!)).rejects.toThrow();
+    } finally { await prepared.dispose(); }
+    await expect(access(prepared.path!)).rejects.toThrow();
   });
 
   it('Given mock terminal backend, When call succeeds, Then prompt is pasted and session is stopped by default', async () => {
@@ -456,7 +489,7 @@ describe('Claude terminal client', () => {
     expect(result.status).toBe('done');
   });
 
-  it('Given mcpServers, When call succeeds, Then Claude command receives a temporary mcp config and cleanup removes it', async () => {
+  it.each([undefined, true] as const)('cleans client-created MCP independently of prepared MCP ownership (%s)', async (callerManagedMcp) => {
     const backend = createBackend();
     let mcpConfigPath = '';
     let mcpConfigJson = '';
@@ -475,6 +508,7 @@ describe('Claude terminal client', () => {
     await callClaudeTerminal('coder', 'implement task', {
       cwd: '/tmp/worktree',
       backend: 'tmux',
+      callerManagedMcp,
       mcpServers: {
         docs: { type: 'stdio', command: 'docs-mcp', args: ['serve'] },
       },

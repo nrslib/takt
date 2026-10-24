@@ -1,13 +1,7 @@
 import { saveManagerEvent } from '../../infra/goals/events.js';
 import { randomUUID } from 'node:crypto';
-import { z } from 'zod/v4';
-import { GoalSummarySchema, type Goal, type ManagerGoalSummary } from '../../infra/goals/schema.js';
-import { TAKT_MANAGER_MCP_SERVER_NAME } from './managerMcp.js';
-import { TAKT_MCP_MANAGER_TOOL_NAMES } from '../mcp/server.js';
-import { createMcpAdapter } from '../../infra/providers/mcp/index.js';
-import { buildMcpServerSetIdentity } from '../../infra/config/runtime-provider/mcp-schema.js';
+import { type Goal, type ManagerGoalSummary } from '../../infra/goals/schema.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
-import { toDisplayText } from '../tui/displayText.js';
 import type { ManagerConversationPlan } from './conversationPlan.js';
 import { createGoal } from '../../infra/goals/service.js';
 import { ensureManagerRun } from './autoRun.js';
@@ -19,65 +13,15 @@ import { setGoalExecutionStatus } from '../../infra/goals/execution.js';
 import { TaskRunner } from '../../infra/task/runner.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
-import type { ProviderType } from '../../infra/providers/index.js';
-import { toManagerOutputSchema, toStrictManagerOutputSchema } from './outputSchema.js';
-import { createManagerToolPermissionHandler } from './toolPermissionDecision.js';
 import type { ManagerPermissionGoal } from './toolPermissionJudge.js';
 import { StandaloneInquiryStore } from '../../infra/goals/standalone-inquiries.js';
 import type { ManagerAnswerOptions } from './inquiryAnswer.js';
-import { supportsManagerPermissionJudge } from './permissionJudgeSupport.js';
 
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
-import { withManagerAssignment, findAssignedGoalRepository, resolveAssignedProjectRoot, resolveCurrentManagerAssignment, type ManagerAssignmentIdentity } from './assignment.js';
+import { findAssignedGoalRepository, resolveAssignedProjectRoot, resolveCurrentManagerAssignment, type ManagerAssignmentIdentity } from './assignment.js';
 
-const summarySchema = GoalSummarySchema.extend({ repositoryDirectory: z.string().min(1).optional() })
-  .refine((summary) => [
-    summary.objective, ...summary.outOfScope, ...summary.acceptanceCriteria, ...summary.constraints,
-    ...(summary.repositoryDirectory === undefined ? [] : [summary.repositoryDirectory]),
-    ...(summary.startBranch === undefined ? [] : [summary.startBranch]),
-    ...(summary.integrationBranch === undefined ? [] : [summary.integrationBranch]),
-  ].every((value) => toDisplayText(value) === value), 'Summary contains unsafe display characters');
-const responseSchema = z.object({ message: z.string().min(1), summary: summarySchema.nullable() }).strict();
-const addRepositoryToolNames = new Set([
-  'takt_add_workspace_repository',
-  `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__takt_add_workspace_repository`,
-  `${TAKT_MANAGER_MCP_SERVER_NAME}__takt_add_workspace_repository`,
-  `${TAKT_MANAGER_MCP_SERVER_NAME}_takt_add_workspace_repository`,
-]);
-export const managerOutputSchema = toManagerOutputSchema(responseSchema);
-const codexOutputSchema = toStrictManagerOutputSchema(z.object({
-  message: z.string(),
-  summary: z.object({
-    repositoryDirectory: z.string().nullable(),
-    objective: z.string(),
-    outOfScope: z.array(z.string()),
-    acceptanceCriteria: z.array(z.string()),
-    constraints: z.array(z.string()),
-    startBranch: z.string().nullable(),
-    integrationBranch: z.string().nullable(),
-  }).strict().nullable(),
-}).strict());
-const codexResponseSchema = responseSchema.extend({
-  summary: z.preprocess((value) => {
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) return value;
-    const summary = { ...value } as Record<string, unknown>;
-    if (summary.repositoryDirectory === null) delete summary.repositoryDirectory;
-    if (summary.startBranch === null) delete summary.startBranch;
-    if (summary.integrationBranch === null) delete summary.integrationBranch;
-    return summary;
-  }, summarySchema.nullable()),
-});
-
-export function getManagerOutputSchema(providerType: ProviderType): Record<string, unknown> {
-  return providerType === 'codex' ? codexOutputSchema : managerOutputSchema;
-}
-
-function normalizeResponseContent(content: string): unknown {
-  const trimmed = content.trimStart();
-  const looksLikeArray = /^\[\s*(?:\]|\{|\[|"|-|\d|true\b|false\b|null\b|$)/u.test(trimmed);
-  if (trimmed.startsWith('{') || looksLikeArray) return JSON.parse(content);
-  return { message: content, summary: null };
-}
+import { createManagerTurnExecutor } from './turnExecutor.js';
+export { getManagerOutputSchema, managerOutputSchema } from './turnResponse.js';
 
 export interface PendingManagerSummary { revision: number; summary: ManagerGoalSummary; repositoryDirectory?: string }
 interface ManagerTurnOptions {
@@ -100,7 +44,7 @@ export function createManagerConversationSession(input: {
   agentOverrides?: AssistantCliOverrides;
 }) {
   const { cwd, plan } = input;
-  const agent = plan.ctx.provider.setup({ name: 'manager', systemPrompt: plan.strategy.systemPrompt });
+  const executor = createManagerTurnExecutor(cwd, plan);
   let generation = 0;
   let pending: PendingManagerSummary | null = null;
   let active: AbortController | null = null;
@@ -221,110 +165,47 @@ export function createManagerConversationSession(input: {
       };
       options.abortSignal?.addEventListener('abort', cancel, { once: true });
       if (options.abortSignal?.aborted) cancel();
-      let prepared: Awaited<ReturnType<ReturnType<typeof createMcpAdapter>['prepare']>> | undefined;
       let result: ManagerTurnResult;
       try {
-        if (controller.signal.aborted) throw new Error('Conversation interrupted');
-        try {
-          const assignment = await getAssignment();
-          const servers = plan.ctx.mcpServers === undefined ? undefined : Object.fromEntries(Object.entries(plan.ctx.mcpServers).map(([name, config]) => [
-            name, assignmentIdentity === undefined || name !== TAKT_MANAGER_MCP_SERVER_NAME ? config : withManagerAssignment(config, assignmentIdentity),
-          ]));
-          if (servers !== undefined) {
-            const adapter = createMcpAdapter(plan.ctx.providerType);
-            const resolved = { enabled: true, servers, serverNames: Object.keys(servers).sort(), identity: buildMcpServerSetIdentity(servers) };
-            adapter.validate(resolved);
-            prepared = await adapter.prepare(resolved, {
-              cwd, abortSignal: controller.signal, permissionMode: 'full',
-              ...(plan.ctx.providerType === 'codex' ? {
-                toolApprovalAllowlist: { [TAKT_MANAGER_MCP_SERVER_NAME]: TAKT_MCP_MANAGER_TOOL_NAMES },
-              } : {}),
-            });
-          }
-          if (controller.signal.aborted) throw new Error('Conversation interrupted');
-          const memories = await Promise.all((assignment?.repositoryDirectories ?? [cwd]).map(async (repositoryDirectory) => {
-            try {
-              const { goals, errors } = await new GoalStore(repositoryDirectory).list();
-              const tasks = new TaskRunner(repositoryDirectory).listTaskStateItems();
-              return { repositoryDirectory, goals: goals.map((goal) => buildManagerGoalSummary(repositoryDirectory, goal, tasks)), diagnostics: errors.map(({ goalId, error }) => ({ goalId, message: getErrorMessage(error) })) };
-            } catch (error) {
-              return { repositoryDirectory, goals: undefined, diagnostics: [{ message: getErrorMessage(error) }] };
-            }
-          }));
-          const text = memories.some(({ goals, diagnostics }) => (goals !== undefined && goals.length > 0) || diagnostics.length > 0)
-            ? `${options.text}\n\nGoal memory (including run manager results): ${buildGoalMemory(memories)}` : options.text;
-          const turnText = priorReasons === undefined || priorReasons.length === 0 ? text
-            : `${text}\n\nPrevious tool permission denials: ${JSON.stringify(priorReasons)}`;
-          const prompt = assignment === undefined ? turnText : `Current manager assignment: ${JSON.stringify(assignment)}\n\n${turnText}`;
-          const usesPermissionJudge = supportsManagerPermissionJudge(plan.ctx.providerType);
-          if (usesPermissionJudge && plan.permissionJudge === undefined) throw new Error('Manager permission judge plan is missing');
-          const onToolPermissionDecision = usesPermissionJudge ? createManagerToolPermissionHandler({
-            plan: plan.permissionJudge!, provider: plan.ctx.providerType, cwd, instruction: options.text, goal: options.goal,
-            configDirectory: getGlobalConfigDir(),
-            get owner() {
-              return assignmentIdentity ?? { kind: 'repository', repositoryDirectory: cwd };
-            },
-            abortSignal: controller.signal, onNotification: options.onNotification,
-            onDenial: (reason) => { if (turn === generation && !controller.signal.aborted) denialReasons.push(reason); },
-          }) : undefined;
-          const repositoryAdditionIds = new Set<string>();
-          let usedTools = false;
-          const callAgent = async () => {
-            const response = await agent.call(prompt, {
-              cwd, model: plan.ctx.model, sessionId, abortSignal: controller.signal,
-              providerOptions: plan.ctx.providerOptions,
-              permissionMode: 'full', outputSchema: getManagerOutputSchema(plan.ctx.providerType), language: plan.ctx.lang,
-              mcpServers: servers, preparedMcp: prepared,
-              ...(onToolPermissionDecision === undefined ? {} : { onToolPermissionDecision }),
-              onStream: (event) => {
-                if (event.type === 'tool_use') usedTools = true;
-                if (event.type === 'tool_use' && addRepositoryToolNames.has(event.data.tool)) {
-                  repositoryAdditionIds.add(event.data.id);
-                }
-                if (event.type === 'tool_result' && event.data.id !== undefined
-                  && repositoryAdditionIds.delete(event.data.id) && !event.data.isError) {
-                  try {
-                    const content: unknown = JSON.parse(event.data.content);
-                    const result = (Array.isArray(content)
-                      ? JSON.parse(content.find((block) => block.type === 'text')?.text)
-                      : content) as { workspace?: { id?: string } } | null;
-                    if (result?.workspace?.id) assignmentIdentity = { kind: 'workspace', workspaceId: result.workspace.id };
-                  } catch { return; }
-                }
-              },
-            });
-            if (response.status !== 'done') throw new Error(response.error ?? 'Manager provider failed');
-            return response;
-          };
-          let response;
+        controller.signal.throwIfAborted();
+        const assignment = await getAssignment();
+        const memories = await Promise.all((assignment?.repositoryDirectories ?? [cwd]).map(async (repositoryDirectory) => {
           try {
-            response = await callAgent();
+            const { goals, errors } = await new GoalStore(repositoryDirectory).list();
+            const tasks = new TaskRunner(repositoryDirectory).listTaskStateItems();
+            return { repositoryDirectory, goals: goals.map((goal) => buildManagerGoalSummary(repositoryDirectory, goal, tasks)), diagnostics: errors.map(({ goalId, error }) => ({ goalId, message: getErrorMessage(error) })) };
           } catch (error) {
-            // A fresh session cannot see operations the failed attempt already ran, so retry only before any tool use.
-            if (usedTools || !/prompt is too long/i.test(getErrorMessage(error)) || controller.signal.aborted || turn !== generation) throw error;
-            sessionId = undefined;
-            response = await callAgent();
+            return { repositoryDirectory, goals: undefined, diagnostics: [{ message: getErrorMessage(error) }] };
           }
+        }));
+        const text = memories.some(({ goals, diagnostics }) => (goals !== undefined && goals.length > 0) || diagnostics.length > 0)
+          ? `${options.text}\n\nGoal memory (including run manager results): ${buildGoalMemory(memories)}` : options.text;
+        const turnText = priorReasons === undefined || priorReasons.length === 0 ? text
+          : `${text}\n\nPrevious tool permission denials: ${JSON.stringify(priorReasons)}`;
+        const prompt = assignment === undefined ? turnText : `Current manager assignment: ${JSON.stringify(assignment)}\n\n${turnText}`;
+        const parsed = await executor.execute({
+          prompt, instruction: options.text, sessionId, abortSignal: controller.signal,
+          assignment: assignmentIdentity, configDirectory: getGlobalConfigDir(), goal: options.goal,
+          onNotification: options.onNotification,
+          onDenial: (reason) => { if (turn === generation && !controller.signal.aborted) denialReasons.push(reason); },
+        });
+        if (turn !== generation || controller.signal.aborted) throw new Error('Conversation interrupted');
+        assignmentIdentity = parsed.assignment;
+        sessionId = parsed.sessionId;
+        if (parsed.summary !== null) {
+          const { repositoryDirectory: requested, ...summary } = parsed.summary;
+          const summaryAssignment = await getAssignment();
+          if (summaryAssignment?.kind === 'workspace' && requested === undefined) throw new Error('Choose one assigned repository for the goal summary');
+          const repositoryDirectory = summaryAssignment === undefined ? requested
+            : await resolveAssignedProjectRoot(requested ?? cwd, summaryAssignment);
           if (turn !== generation || controller.signal.aborted) throw new Error('Conversation interrupted');
-          const raw: unknown = response.structuredOutput ?? normalizeResponseContent(response.content);
-          const parsed = (plan.ctx.providerType === 'codex' ? codexResponseSchema : responseSchema).parse(raw);
-          sessionId = response.sessionId ?? sessionId;
-          if (parsed.summary !== null) {
-            const { repositoryDirectory: requested, ...summary } = parsed.summary;
-            const summaryAssignment = await getAssignment();
-            if (summaryAssignment?.kind === 'workspace' && requested === undefined) throw new Error('Choose one assigned repository for the goal summary');
-            const repositoryDirectory = summaryAssignment === undefined ? requested
-              : await resolveAssignedProjectRoot(requested ?? cwd, summaryAssignment);
-            if (turn !== generation || controller.signal.aborted) throw new Error('Conversation interrupted');
-            pending = { revision: turn, summary, ...(repositoryDirectory === undefined ? {} : { repositoryDirectory }) };
-          }
-          result = { kind: 'reply', message: parsed.message };
-        } finally {
-          await prepared?.dispose();
+          pending = { revision: turn, summary, ...(repositoryDirectory === undefined ? {} : { repositoryDirectory }) };
         }
+        result = { kind: 'reply', message: parsed.message };
       } catch (error) {
+        const interrupted = controller.signal.aborted || turn !== generation;
         if (turn === generation) invalidate();
-        result = { kind: 'error', message: getErrorMessage(error) };
+        result = { kind: 'error', message: interrupted ? 'Conversation interrupted' : getErrorMessage(error) };
       } finally {
         if (!closed && !controller.signal.aborted) previousDenials = { goalKey, reasons: denialReasons };
         try {

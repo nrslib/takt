@@ -31,7 +31,13 @@ function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function compareInquiries(left: PendingInquiry, right: PendingInquiry): number {
+interface InquiryPosition {
+  question: { id: string; createdAt?: string };
+  repositoryDirectory?: string;
+  goalId: string | null;
+}
+
+function compareInquiries(left: InquiryPosition, right: InquiryPosition): number {
   const leftTime = left.question.createdAt === undefined ? Infinity : Date.parse(left.question.createdAt);
   const rightTime = right.question.createdAt === undefined ? Infinity : Date.parse(right.question.createdAt);
   if (leftTime !== rightTime) return leftTime < rightTime ? -1 : 1;
@@ -59,4 +65,33 @@ export async function listPendingInquiries(configDirectory: string, assignment: 
     inquiries: inquiries.sort(compareInquiries),
     errors: errors.sort((left, right) => compareText(left.repositoryDirectory, right.repositoryDirectory) || compareText(left.goalId, right.goalId)),
   };
+}
+
+export async function* iteratePendingInquiries(configDirectory: string, assignment: InquiryAssignment): AsyncGenerator<PendingInquiry> {
+  let cursor: InquiryPosition | undefined;
+  const scan = async function* (): AsyncGenerator<PendingInquiry> {
+    for (const repositoryDirectory of assignment.repositoryDirectories) {
+      for await (const goal of new GoalStore(repositoryDirectory).iterate()) {
+        for (const question of goal.questions ?? []) {
+          if (question.status !== 'pending' || question.recipient !== 'human') continue;
+          yield { question, kind: question.kind ?? 'question', summary: truncateUtf8(question.body, SUMMARY_MAX_BYTES).value,
+            goalId: goal.id, repositoryDirectory, objective: goal.objective };
+        }
+      }
+    }
+    for await (const question of new StandaloneInquiryStore(configDirectory, assignment).iteratePending()) {
+      yield { question, kind: question.kind ?? 'question', summary: truncateUtf8(question.body, SUMMARY_MAX_BYTES).value, goalId: null };
+    }
+  };
+  while (true) {
+    let candidate: PendingInquiry | undefined;
+    for await (const inquiry of scan()) {
+      if ((cursor === undefined || compareInquiries(inquiry, cursor) > 0)
+        && (candidate === undefined || compareInquiries(inquiry, candidate) < 0)) candidate = inquiry;
+    }
+    if (candidate === undefined) return;
+    cursor = { question: { id: candidate.question.id, createdAt: candidate.question.createdAt },
+      goalId: candidate.goalId, repositoryDirectory: candidate.repositoryDirectory };
+    yield candidate;
+  }
 }

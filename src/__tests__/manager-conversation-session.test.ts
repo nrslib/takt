@@ -460,17 +460,44 @@ describe('manager conversation approval', () => {
     }
   });
 
-  it('does not create an approval target from quoted JSON or code fences in conversation text', async () => {
-    const quoted = JSON.stringify(summaryA);
-    const message = [quoted, `> ${quoted}`, `\`\`\`json\n${quoted}\n\`\`\``, `~~~json\n${quoted}\n~~~`, `> > ${quoted}`, `\`\`\`json\n${quoted}`].join('\n');
-    doubles.call.mockResolvedValueOnce(response(null, message));
+  it.each([
+    JSON.stringify(summaryA),
+    `> ${JSON.stringify(summaryA)}`,
+    `\`\`\`json\n${JSON.stringify(summaryA)}\n\`\`\``,
+    `~~~json\n${JSON.stringify(summaryA)}\n~~~`,
+    `> > ${JSON.stringify(summaryA)}`,
+    `\`\`\`json\n${JSON.stringify(summaryA)}`,
+  ])('does not create an approval target from summary JSON in the message: %s', async (message) => {
     const { session, register } = fixture();
+    try {
+      await session.handleUserMessage({ text: 'CSV出力を相談したい' });
+      const previous = session.getPendingSummary()!;
+      doubles.call.mockResolvedValueOnce(response(null, message));
 
-    await session.handleUserMessage({ text: '引用を確認してください' });
+      expect(await session.handleUserMessage({ text: '引用を確認してください' })).toEqual({ kind: 'reply', message });
 
-    expect(session.getPendingSummary()).toBeNull();
-    expect((await session.approveSummary(0)).kind).toBe('error');
-    expect(register).not.toHaveBeenCalled();
+      expect(session.getPendingSummary()).toBeNull();
+      expect((await session.approveSummary(previous.revision)).kind).toBe('error');
+      expect(register).not.toHaveBeenCalled();
+    } finally { await session.close(); }
+  });
+
+  it.each([7, 9])('preserves every constraint in a summary with %i large constraints through approval', async (count) => {
+    const summary = { ...summaryA, constraints: Array.from({ length: count }, (_, index) =>
+      `${String(index).padStart(8, '0')}${'a'.repeat(128 * 1024 - 8)}`) };
+    const { session, register } = fixture();
+    doubles.call.mockResolvedValueOnce(response(summary));
+    try {
+      expect((await session.handleUserMessage({ text: '要約を作ってください' })).kind).toBe('reply');
+      const pending = session.getPendingSummary()!;
+      expect(pending.summary).toEqual(summary);
+      expect(register).not.toHaveBeenCalled();
+
+      expect(await session.approveSummary(pending.revision)).toMatchObject({ kind: 'goal_registered', goal: summary });
+
+      expect(register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cwd, ...summary }));
+      expect(session.getPendingSummary()).toBeNull();
+    } finally { await session.close(); }
   });
 
   it('reports a provider failure without leaving a previous summary available for approval', async () => {
@@ -712,6 +739,9 @@ it.each(['result', 'throw'] as const)('retries prompt overflow from a provider %
     expect(doubles.call.mock.calls[2]![1].sessionId).toBeUndefined();
     expect(doubles.call.mock.calls[2]![0]).toBe(doubles.call.mock.calls[1]![0]);
     expect(doubles.call.mock.calls[2]![1].preparedMcp).toBe(doubles.call.mock.calls[1]![1].preparedMcp);
+    expect(doubles.call.mock.calls[1]![1].callerManagedMcp).toBe(true);
+    expect(doubles.call.mock.calls[2]![1].callerManagedMcp).toBe(true);
+    expect(doubles.call.mock.calls[2]![1].callerManagedSession).toBeUndefined();
     expect(prepare).toHaveBeenCalledTimes(2);
     expect(dispose).toHaveBeenCalledTimes(2);
     expect(session.getPendingSummary()?.summary).toEqual(summaryB);
@@ -767,8 +797,13 @@ it.each([false, true])('calls the provider without a sessionId for each daemon e
   vi.spyOn(conversationPlans, 'createManagerConversationPlan').mockReturnValue(plan);
   const dispose = vi.fn(async () => {});
   const connect = vi.spyOn(managerMcps, 'connectManagerMcp').mockResolvedValue({ client: new Client({ name: 'test', version: '1' }), servers: {}, dispose });
+  const disposals: Array<ReturnType<typeof vi.fn>> = [];
   vi.spyOn(mcpAdapters, 'createMcpAdapter').mockReturnValue({
-    validate: vi.fn(), prepare: vi.fn(async () => ({ dispose: vi.fn(async () => {}) })),
+    validate: vi.fn(), prepare: vi.fn(async () => {
+      const dispose = vi.fn(async () => {});
+      disposals.push(dispose);
+      return { dispose };
+    }),
     classifyFailure: () => ({ category: 'provider_error' }),
   });
   events.read.mockReturnValue(['task-a', 'task-b'].map((taskName) => ({ filePath: `/inbox/${taskName}.json`, event: {
@@ -781,7 +816,15 @@ it.each([false, true])('calls the provider without a sessionId for each daemon e
   try {
     expect(await manager.processPending(new AbortController().signal, 2)).toBe(true);
     expect(doubles.call).toHaveBeenCalledTimes(overflow ? 3 : 2);
-    for (const [, options] of doubles.call.mock.calls) expect(options.sessionId).toBeUndefined();
+    for (const [, options] of doubles.call.mock.calls) {
+      expect(options).toMatchObject({ sessionId: undefined, callerManagedMcp: true });
+      expect(options.callerManagedSession).toBeUndefined();
+    }
+    expect(disposals).toHaveLength(2);
+    for (const dispose of disposals) expect(dispose).toHaveBeenCalledOnce();
+    const firstPrepared = doubles.call.mock.calls[0]![1].preparedMcp;
+    if (overflow) expect(doubles.call.mock.calls[1]![1].preparedMcp).toBe(firstPrepared);
+    expect(doubles.call.mock.calls.at(-1)![1].preparedMcp).not.toBe(firstPrepared);
     expect(JSON.parse(doubles.call.mock.calls[0]![0]).event.taskName).toBe('task-a');
     expect(JSON.parse(doubles.call.mock.calls.at(-1)![0]).event.taskName).toBe('task-b');
     expect(connect).toHaveBeenCalledOnce();
@@ -791,6 +834,77 @@ it.each([false, true])('calls the provider without a sessionId for each daemon e
   expect(dispose).toHaveBeenCalledOnce();
 });
 
+
+it.each(['reply', 'provider_error', 'summary'] as const)(
+  'keeps the same human session and revision approvable across a daemon event returning %s', async (outcome) => {
+    const { session, plan, register } = fixture();
+    let eventGoal: Goal = goalRecord();
+    answerDoubles.get.mockImplementation(async () => eventGoal);
+    answerDoubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal, onSaved?: () => void) => {
+      eventGoal = transform(eventGoal);
+      onSaved?.();
+      return eventGoal;
+    });
+    const preflight = vi.fn(async () => {});
+    plan.ctx.provider.preflight = preflight;
+    vi.spyOn(conversationPlans, 'createManagerConversationPlan').mockReturnValue(plan);
+    const dispose = vi.fn(async () => {});
+    vi.spyOn(managerMcps, 'connectManagerMcp').mockResolvedValue({
+      client: new Client({ name: 'test', version: '1' }), servers: {}, dispose,
+    });
+    vi.spyOn(mcpAdapters, 'createMcpAdapter').mockReturnValue({
+      validate: vi.fn(), prepare: vi.fn(async () => ({ dispose: vi.fn(async () => {}) })),
+      classifyFailure: () => ({ category: 'provider_error' }),
+    });
+    const event = {
+      kind: 'completion' as const, goalId: eventGoal.id, createdAt: '2026-10-14T00:00:00Z',
+      taskName: 'event-task', runSlug: 'run-event-task', result: { success: true, interrupted: false },
+    };
+    const savedEvent = { filePath: '/inbox/event-task.json', event };
+    const manager = createRunEventManager(cwd);
+    try {
+      doubles.call.mockResolvedValue({ ...response(summaryA, '人の相談への返答'), sessionId: 'human-session' });
+      for (let turn = 0; turn < 4; turn++) {
+        expect((await session.handleUserMessage({ text: `人の相談 ${turn}` })).kind).toBe('reply');
+      }
+      const pending = session.getPendingSummary()!;
+      expect(pending).toMatchObject({ revision: 4, summary: summaryA });
+      expect(register).not.toHaveBeenCalled();
+      events.read.mockReturnValue([savedEvent]);
+      const eventResponse = { ...response(outcome === 'summary' ? summaryB : null, 'イベントの作業結果'), sessionId: 'event-session' };
+      doubles.call.mockResolvedValueOnce(outcome === 'provider_error'
+        ? { ...eventResponse, status: 'error', error: 'event provider failure' } : eventResponse);
+
+      expect(await manager.processPending(new AbortController().signal, 1)).toBe(outcome === 'reply');
+
+      const [eventPrompt, eventOptions] = doubles.call.mock.calls[4]!;
+      expect(JSON.parse(eventPrompt)).toMatchObject({ repositoryDirectory: cwd, event, goal: { id: eventGoal.id } });
+      expect(eventOptions.sessionId).toBeUndefined();
+      expect(session.getPendingSummary()).toEqual(pending);
+      expect(register).not.toHaveBeenCalled();
+      if (outcome === 'reply') {
+        expect(eventGoal.workLog.map(({ summary }) => summary)).toEqual(['イベントの作業結果']);
+        expect(events.remove).toHaveBeenCalledExactlyOnceWith(savedEvent);
+        expect(events.failure).not.toHaveBeenCalled();
+      } else {
+        expect(eventGoal.workLog).toEqual([]);
+        expect(events.remove).not.toHaveBeenCalled();
+        expect(events.failure).toHaveBeenCalledExactlyOnceWith(cwd, eventGoal.id, expect.any(Error));
+      }
+
+      expect(await session.approveSummary(pending.revision)).toMatchObject({ kind: 'goal_registered', goal: summaryA });
+      expect(register).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cwd, ...summaryA }));
+      doubles.call.mockResolvedValueOnce(response(null, '相談を続けます'));
+      expect((await session.handleUserMessage({ text: '人の会話を続ける' })).kind).toBe('reply');
+      expect(doubles.call.mock.calls[5]![1].sessionId).toBe('human-session');
+      expect(preflight).toHaveBeenCalledOnce();
+    } finally {
+      await manager.close();
+      await session.close();
+    }
+    expect(dispose).toHaveBeenCalledOnce();
+  },
+);
 
 it('propagates the daemon turn timeout to the provider and awaits provider completion before reporting failure', async () => {
   vi.useFakeTimers();

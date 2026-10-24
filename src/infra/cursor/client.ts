@@ -688,7 +688,7 @@ export class CursorClient {
       }
     } finally {
       try {
-        await options.preparedMcp?.dispose?.();
+        if (!options.callerManagedMcp) await options.preparedMcp?.dispose?.();
       } catch (error) {
         log.error('Failed to clean up Cursor MCP config', {
           error: getErrorMessage(error),

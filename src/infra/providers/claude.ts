@@ -21,6 +21,7 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
     : options.providerOptions?.claude?.skills?.enabled;
   return {
     cwd: options.cwd,
+    callerManagedSession: options.callerManagedSession,
     strictToolAllowlist: options.strictToolAllowlist,
     mcpOnlySideEffects: options.mcpOnlySideEffects,
     abortSignal: options.abortSignal,

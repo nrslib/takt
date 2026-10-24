@@ -111,3 +111,34 @@ export async function readManagerDisplayEvents(cwd: string, language: Language =
     notices: snapshots.flatMap((snapshot) => snapshot.notices)
       .sort((first, second) => Date.parse(second.recordedAt) - Date.parse(first.recordedAt)) };
 }
+
+export async function* iterateManagerNotices(assignment: ManagerAssignment, language: Language): AsyncGenerator<ManagerDisplayNotice> {
+  interface Position { time: number; repository: number; goalId: string; index: number }
+  const compare = (left: Position, right: Position): number => right.time - left.time
+    || left.repository - right.repository || left.goalId.localeCompare(right.goalId) || left.index - right.index;
+  let cursor: Position | undefined;
+  while (true) {
+    let candidate: { position: Position; notice: ManagerDisplayNotice } | undefined;
+    for (const [repository, directory] of assignment.repositoryDirectories.entries()) {
+      const project = basename(directory);
+      const { notifications: policy } = resolveManagerConfig(directory);
+      for await (const goal of new GoalStore(directory).iterate()) {
+        for (const [index, notification] of (goal.notifications ?? []).entries()) {
+          if (notification.kind === 'question' || !policy[notification.kind]) continue;
+          const position = { time: Date.parse(notification.recordedAt), repository, goalId: goal.id, index };
+          if ((cursor === undefined || compare(position, cursor) > 0)
+            && (candidate === undefined || compare(position, candidate.position) < 0)) {
+            candidate = { position, notice: {
+              id: notification.id, repositoryDirectory: directory, project, goalId: goal.id,
+              objective: goal.objective, kind: notification.kind, recordedAt: notification.recordedAt,
+              message: formatGoalNotification(goal, notification, language, project, 'tui', 'full'),
+            } };
+          }
+        }
+      }
+    }
+    if (candidate === undefined) return;
+    cursor = candidate.position;
+    yield candidate.notice;
+  }
+}

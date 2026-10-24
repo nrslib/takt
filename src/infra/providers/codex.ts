@@ -27,6 +27,7 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
   assertCodexConfigProfilePermissionControl(providerCodexOptions);
   return {
     cwd: options.cwd,
+    callerManagedSession: options.callerManagedSession,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
     model: options.model,
