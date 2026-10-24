@@ -251,9 +251,9 @@ describe('manager polling and answer cancellation', () => {
     expect(bounded.events.filter((event) => event.suppressInitialDisplay)).toHaveLength(60);
   });
 
-  it.each(['ja', 'en'] as const)('suppresses historical work records but keeps notices, diagnostics and new records in the same screen in %s', async (lang) => {
+  it.each(['ja', 'en'] as const)('suppresses historical work records and notices but keeps diagnostics and new records in the same screen in %s', async (lang) => {
     const goals = await createGoalsWithHistory();
-    const notice = '初回にも表示する通知';
+    const notice = '起動前に保存した通知';
     await store.update(goals[0]!.id, (goal) => ({ ...goal, notifications: [{
       id: randomUUID(), recordedAt: '2026-10-14T00:00:00Z', kind: 'custom', body: notice,
     }] }));
@@ -262,7 +262,7 @@ describe('manager polling and answer cancellation', () => {
     writeFileSync(brokenFile, '{}');
     const { read } = mount(lang);
     await waitFor(() => {
-      expect(transcript().some((entry) => entry.content.includes(notice))).toBe(true);
+      expect(transcript().filter((entry) => entry.content.includes(notice))).toEqual([]);
       expect(transcript().some((entry) => entry.content.includes(brokenFile))).toBe(true);
     });
 
@@ -275,7 +275,10 @@ describe('manager polling and answer cancellation', () => {
     for (const [props] of vi.mocked(TranscriptView).mock.calls) {
       for (const entry of props.entries) expect(entry.content).not.toContain('起動前の記録');
     }
-    expect(transcript().filter((entry) => entry.content.includes(notice))).toHaveLength(1);
+    expect(transcript().filter((entry) => entry.content.includes(notice))).toEqual([]);
+    expect((await store.get(goals[0]!.id)).notifications).toEqual([{
+      id: expect.any(String), recordedAt: '2026-10-14T00:00:00Z', kind: 'custom', body: notice,
+    }]);
     expect(transcript().filter((entry) => entry.content === `${goals[1]!.id}: ${newSummary}`)).toHaveLength(1);
     for (const goal of goals) expect((await store.get(goal.id)).workLog.slice(0, 30)).toEqual(goal.workLog);
   });

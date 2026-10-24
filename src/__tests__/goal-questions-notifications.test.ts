@@ -161,14 +161,14 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
       : `Integrated the work on “${purpose}”.`);
   });
 
-  it.each([600, 601])('shortens a saved %s-grapheme progress body only for display', (length) => {
+  it.each([600, 601])('shortens a saved %s-grapheme progress body only for Slack display', (length) => {
     const body = 'e\u0301'.repeat(length);
     const goal = appendGoalNotification(goalRecord(), { kind: 'progress', body }, policy);
     const saved = structuredClone(goal);
     const notification = goal.notifications![0]!;
     for (const destination of ['slack', 'tui'] as const) {
       const lines = formatGoalNotification(goal, notification, language, 'customer-export', destination).split('\n');
-      expect(lines[2]).toBe(length === 600 ? body : 'e\u0301'.repeat(599) + '…');
+      expect(lines[2]).toBe(destination === 'tui' || length === 600 ? body : 'e\u0301'.repeat(599) + '…');
     }
     expect(goal).toEqual(saved);
     expect(goal.notifications![0]!.body).toBe(body);
@@ -190,10 +190,10 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
     const text = formatGoalNotification(goalRecord(), { kind, body }, language, 'customer-export');
 
     expect(text.split('\n').slice(2, 5).join('\n')).toBe(body);
-    expect(text.split('\n').slice(5).join('\n')).not.toMatch(language === 'ja' ? /全文|出来事/u : /full message|events/iu);
+    expect(text.split('\n').slice(5).join('\n')).not.toMatch(language === 'ja' ? /全文|Ctrl\+N/u : /full message|Ctrl\+N/iu);
   });
 
-  it.each(['blocked', 'custom'] as const)('shortens only the tail of a long %s body and points to the full TUI event', (kind) => {
+  it.each(['blocked', 'custom'] as const)('shortens only the tail of a long %s body and points to the full TUI notice', (kind) => {
     const reason = language === 'ja' ? '認証に失敗しました。' : 'Authentication failed.';
     const action = language === 'ja' ? '検証用の認証情報を更新してください。' : 'Update test credentials.';
     const body = `${reason}\n${'x'.repeat(620)}\n${action}`;
@@ -206,7 +206,7 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
 
     expect(visibleBody).toBe(`${reason}\n${'x'.repeat(599 - reason.length - 1)}…`);
     expect(guidance).toMatch(language === 'ja' ? /全文/u : /full message/iu);
-    expect(guidance).toMatch(language === 'ja' ? /出来事/u : /events/iu);
+    expect(guidance).toMatch(/Ctrl\+N/u);
     expect(guidance).toContain('TUI');
     expect(guidance).toContain('takt manager');
     expect(guidance).toContain('customer-export');
@@ -223,7 +223,7 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
     const text = formatGoalNotification(goalRecord(), { kind, body }, language, 'customer-export');
 
     expect(text.split('\n')[2]).toBe('e\u0301'.repeat(599) + '…');
-    expect(text.split('\n').slice(3).join('\n')).toMatch(language === 'ja' ? /全文.*出来事/u : /full message.*events/iu);
+    expect(text.split('\n').slice(3)).toContain(getLabel('manager.notificationFullMessage', language, { project: 'customer-export' }));
   });
 
   it.each([
@@ -320,9 +320,17 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
       expect(lines.filter((line) => line.includes('release') && !line.startsWith('git'))).toHaveLength(1);
       expect(lines[4]).toContain(withWorktree ? directory : 'customer-export');
       const custom = formatGoalNotification(goal, { kind: 'custom', body: oldBody }, language, 'customer-export', destination);
-      expect(custom.split('\n').slice(2).join('\n')).toBe(oldBody);
+      if (destination === 'slack') expect(custom.split('\n').slice(2).join('\n')).toBe(oldBody);
+      else {
+        expect(custom.split('\n').slice(2, 5)).toEqual(oldBody.split('\n').slice(0, 3));
+        expect(custom.split('\n')[5]).toMatch(/Ctrl\+N|\^N/u);
+      }
       const withoutCompletion = formatGoalNotification(goalRecord(), { kind: 'awaiting_merge', body: oldBody }, language, 'customer-export', destination);
-      expect(withoutCompletion.split('\n').slice(2).join('\n')).toBe(oldBody);
+      if (destination === 'slack') expect(withoutCompletion.split('\n').slice(2).join('\n')).toBe(oldBody);
+      else {
+        expect(withoutCompletion.split('\n').slice(2, 5)).toEqual(oldBody.split('\n').slice(0, 3));
+        expect(withoutCompletion.split('\n')[5]).toMatch(/Ctrl\+N|\^N/u);
+      }
     }
     expect(goal).toEqual(before);
   });

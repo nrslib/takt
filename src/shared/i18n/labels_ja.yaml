@@ -425,7 +425,7 @@ tui:
     exceededStart: "保存済みの停止位置: {start}（iteration {iteration}）"
 
 manager:
-  counts: "進行中 {goals} ／ 未回答 {questions} ／ ^R 問い合わせ  ^G ゴール  ^O 要約"
+  counts: "進行中 {goals} ／ 未回答 {questions} ／ ^R 問い合わせ  ^G ゴール  ^O 要約  ^N 知らせ"
   inputHint: "Enter 送信 / Shift+Enter 改行 / Esc 中断 / Ctrl+C 終了"
   summaryHint: "^O 表示中の要約を登録"
   summaryInputHint: "↑↓ 選択 / Enter 決定 / Esc 会話を続ける / Ctrl+C 終了"
@@ -460,11 +460,13 @@ manager:
     answer: "回答する問い合わせを選択"
     goal: "操作するゴールを選択"
     action: "ゴールの操作を選択"
+    notice: "読む知らせを選択"
   goalActions:
     pause: "一時停止"
     resume: "再開"
     abort: "中止"
   selectionHint: "↑↓ 選択 / Enter 決定 / Esc 閉じる"
+  noticeDetailHint: "↑↓ スクロール / Esc 一覧へ戻る"
   selectionEmpty:
     answer: "未回答の問い合わせはありません。"
     goal: "操作できる進行中のゴールはありません。"
@@ -513,7 +515,7 @@ manager:
   cancelAbort: "キャンセル"
   abortChoiceHint: "↑ 中止 / ↓ キャンセル / Enter 決定 / Esc 戻る"
   description: "実験的な manager の会話 TUI を起動します"
-  experimentalNotice: "manager は実験的機能です。動作・設定・保存するデータの形式は予告なく変わることがあります。"
+  experimentalNotice: "manager\u00A0は実験的機能です。動作・設定・保存するデータの形式は予告なく変わることがあります。"
   costNotice: "manager は自動でタスクを投入・実行するため、provider の API の費用がかかります。"
   notificationHeadings:
     progress: "進捗をお知らせします — {project}"
@@ -537,7 +539,8 @@ manager:
   notificationMergeRepository: "{project}リポジトリの、ブランチを切り替えられる未コミットの変更がない作業ツリーで、次のコマンドを順に実行してください。"
   notificationMergeWorktree: "作業ツリー {directory} の状態を確認し、次のコマンドを順に実行してください。"
   notificationBlockedAction: "上記の理由と必要な操作を確認してください。詳しい内容は{project}で takt manager を開き、TUIで確認・対応してください。"
-  notificationFullMessage: "全文は、{project}で takt manager を開き、TUIの「出来事」で確認できます。"
+  notificationFullMessage: "{project}で takt manager を開き、TUIで Ctrl+N を押し、一覧から知らせを選択して Enter で全文を確認してください。"
+  notificationDigestHint: "本文の続きは省略しています。Ctrl+N で全文を確認できます。"
 
 caccia:
   waitingForReview: "Caccia: CodeRabbit のレビュー待ちに入ります。"

@@ -83,7 +83,7 @@ Approximate sizes are 250 MB for Claude SDK, 340 MB for Codex, 60 MB for OpenCod
 
 ## Manager (experimental)
 
-In the manager TUI, `Ctrl+R` opens inquiries, `Ctrl+G` opens ongoing goals, and `Ctrl+O` opens the summary menu. All three keys work while manager is processing. If no summary is awaiting approval, `Ctrl+O` requests one from the current conversation. If a summary is already displayed, it approves and registers it without regenerating it. Insufficient material is reported so you can continue the conversation. The input box is only for conversation; text starting with `/` is sent as a regular message too. See [Managing goals](./goal-management.md) for menu operations.
+In the manager TUI, `Ctrl+R` opens inquiries, `Ctrl+G` opens ongoing goals, `Ctrl+O` opens the summary menu, and `Ctrl+N` opens the saved notification list to read their full text. All four keys work while manager is processing. If no summary is awaiting approval, `Ctrl+O` requests one from the current conversation. If a summary is already displayed, it approves and registers it without regenerating it. Insufficient material is reported so you can continue the conversation. The input box is only for conversation; text starting with `/` is sent as a regular message too. See [Managing goals](./goal-management.md) for menu operations.
 
 Use `takt daemon stop` to stop the manager background daemon. Opening manager or answering a question or resuming a goal in its TUI starts the daemon again when needed. It exits automatically when its projects have no unfinished goals, pending events, or pending/running tasks.
 

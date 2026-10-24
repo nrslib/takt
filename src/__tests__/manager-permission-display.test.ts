@@ -35,7 +35,7 @@ it.each(['ja', 'en'] as const)('shows a saved custom permission notice in %s for
 });
 
 it.each(['ja', 'en'] as const)('displays a goal-less permission notice in %s during a successful conversation and accepts the next message', async (language) => {
-  vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], questions: [], goals: [] });
+  vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], notices: [], questions: [], goals: [] });
   const notice = language === 'ja' ? '人の確認待ち (Bash): 外部送信先の選択が必要です'
     : 'Waiting for human confirmation (Bash): Choose an external destination';
   const unusedOperation = async (): Promise<never> => { throw new Error('unused manager operation'); };

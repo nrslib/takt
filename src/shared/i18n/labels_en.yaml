@@ -425,7 +425,7 @@ tui:
     exceededStart: "Saved stopping position: {start} (iteration {iteration})"
 
 manager:
-  counts: "Ongoing {goals} / Pending {questions} / ^R Inquiries  ^G Goals  ^O Summary"
+  counts: "Ongoing {goals} / Pending {questions} / ^R Inquiries  ^G Goals  ^O Summary  ^N Notices"
   inputHint: "Enter Send / Shift+Enter Newline / Esc Interrupt / Ctrl+C Exit"
   summaryHint: "^O Register the displayed summary"
   summaryInputHint: "↑↓ Choose / Enter Confirm / Esc Continue conversation / Ctrl+C Exit"
@@ -460,11 +460,13 @@ manager:
     answer: "Select an inquiry to answer"
     goal: "Select a goal"
     action: "Select a goal operation"
+    notice: "Select a notice to read"
   goalActions:
     pause: "Pause"
     resume: "Resume"
     abort: "Abort"
   selectionHint: "↑↓ Choose / Enter Select / Esc Close"
+  noticeDetailHint: "↑↓ Scroll / Esc Back to list"
   selectionEmpty:
     answer: "No pending inquiries to answer."
     goal: "No ongoing goals to operate on."
@@ -537,7 +539,8 @@ manager:
   notificationMergeRepository: "Run the following commands in order in a clean worktree of the {project} repository where you can switch branches."
   notificationMergeWorktree: "Check the state of the worktree at {directory}, then run the following commands in order."
   notificationBlockedAction: "Check the reason and required action above. For full details, open takt manager in {project} and follow up in the TUI."
-  notificationFullMessage: "To read the full message, open takt manager in {project} and view the events in the TUI."
+  notificationFullMessage: "Open takt manager in {project}, press Ctrl+N in the TUI and select a notice from the list, then press Enter to read the full message."
+  notificationDigestHint: "Remaining body lines omitted. Press Ctrl+N to read the full message."
 
 caccia:
   waitingForReview: "Caccia: Waiting for a CodeRabbit review."

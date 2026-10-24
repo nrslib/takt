@@ -59,7 +59,7 @@ describe('manager TUI startup and polling', () => {
       expect(startup.run).toHaveBeenCalledOnce();
       expect(startup.fail).not.toHaveBeenCalled();
       expect(startup.run.mock.invocationCallOrder[0]).toBeLessThan(read.mock.invocationCallOrder[0]!);
-      expect(read.mock.calls[0]).toEqual([cwd, 'en', repository, new Map([[cwd, startedAt]])]);
+      expect(read.mock.calls[0]).toEqual([cwd, 'en', repository, new Map([[cwd, startedAt]]), startedAt]);
       const initial: Awaited<ReturnType<typeof savedEvents.readManagerDisplayEvents>> = await read.mock.results[0]!.value;
       expect(initial.events).toHaveLength(61);
       expect(initial.events.filter((event) => event.suppressInitialDisplay).map((event) => event.id))
@@ -128,7 +128,7 @@ describe('manager TUI startup and polling', () => {
       expect(startup.fail).not.toHaveBeenCalled();
       expect(startup.run.mock.invocationCallOrder[0]).toBeLessThan(read.mock.invocationCallOrder[0]!);
       expect(read.mock.calls[0]).toEqual([cwd, 'en', assignment,
-        new Map([[cwd, startedAt], [repositoryB, startedAt]])]);
+        new Map([[cwd, startedAt], [repositoryB, startedAt]]), startedAt]);
       const initial: Awaited<ReturnType<typeof savedEvents.readManagerDisplayEvents>> = await read.mock.results[0]!.value;
       expect(initial.events).toHaveLength(62);
       expect(initial.events.filter((event) => event.suppressInitialDisplay).map((event) => event.id))
@@ -149,7 +149,7 @@ describe('manager TUI startup and polling', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     const startedAt = Date.parse('2026-10-21T10:00:00Z');
     vi.setSystemTime(startedAt);
-    const snapshot = { events: [], diagnostics: [], questions: [], goals: [] };
+    const snapshot = { events: [], diagnostics: [], notices: [], questions: [], goals: [] };
     const initial = deferred<Awaited<ReturnType<typeof savedEvents.readManagerDisplayEvents>>>();
     const read = vi.spyOn(savedEvents, 'readManagerDisplayEvents')
       .mockResolvedValue(snapshot).mockReturnValueOnce(initial.promise);
@@ -409,7 +409,7 @@ describe('manager TUI startup and polling', () => {
 
   it.each(['assignment', 'questions', 'goals'] as const)('preserves unchanged polling displays and updates changed %s in the same screen', async (field) => {
     let assignment = { kind: 'workspace' as const, workspaceId: '650e8400-e29b-41d4-a716-446655440002', name: 'Original workspace', repositoryDirectories: [cwd] };
-    let snapshot = { events: [], diagnostics: [], questions: [{ goalId: goalRecord().id, repositoryDirectory: cwd, objective: 'Question fixture', question: {
+    let snapshot = { events: [], diagnostics: [], notices: [], questions: [{ goalId: goalRecord().id, repositoryDirectory: cwd, objective: 'Question fixture', question: {
       id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human' as const,
       status: 'pending' as const, body: 'Original question',
     } }], goals: [{ id: goalRecord().id, objective: 'Original paused goal', status: 'created' as const, executionStatus: 'paused' as const }] };
@@ -467,7 +467,7 @@ describe('manager TUI startup and polling', () => {
         expect(context.app.lastFrame()?.match(/refresh error B/gu)).toHaveLength(1);
       });
 
-      readEvents.mockResolvedValue({ events: [], diagnostics: [], questions: [], goals: [] });
+      readEvents.mockResolvedValue({ events: [], diagnostics: [], notices: [], questions: [], goals: [] });
       const beforeRecovery = readEvents.mock.calls.length;
       await waitFor(() => expect(readEvents.mock.calls.length).toBeGreaterThan(beforeRecovery));
       readEvents.mockRejectedValue(new Error('refresh error A'));
@@ -486,7 +486,7 @@ describe('manager TUI startup and polling', () => {
       savedWorkspace?.repositoryDirectories.includes(directory) ? savedWorkspace : undefined);
     vi.spyOn(workspaceRegistry, 'readWorkspace').mockImplementation(async (_globalConfigDirectory, id) =>
       savedWorkspace?.id === id ? savedWorkspace : undefined);
-    const readEvents = vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], questions: [], goals: [] });
+    const readEvents = vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], notices: [], questions: [], goals: [] });
     const context = mount('en', undefined, repository);
     try {
       await waitFor(() => expect(readEvents.mock.calls.map((call) => call.slice(0, 3))).toContainEqual([cwd, 'en', repository]));

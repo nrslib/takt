@@ -6,10 +6,419 @@ import { stripVTControlCharacters } from 'node:util';
 import chalk from 'chalk';
 import { describe, expect, it, vi } from 'vitest';
 import * as savedEvents from '../features/manager/savedEvents.js';
+import * as workspaceRegistry from '../infra/config/global/workspaceRegistry.js';
+import { formatGoalName } from '../features/manager/goalDisplay.js';
 import { toDisplayText } from '../features/tui/displayText.js';
+import type { Goal } from '../infra/goals/schema.js';
 import { createGoal } from '../infra/goals/service.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
+
+const NOTICE_MENU = '\x0e';
+const NOTICE_DOWN = '\x1b[B';
+const NOTICE_ESCAPE = '\x1b[27u';
+const noticeStartedAt = Date.parse('2026-10-24T00:00:00Z');
+const noticeRecord = (index: number, overrides: Partial<NonNullable<Goal['notifications']>[number]> = {}) => ({
+  id: `650e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`, kind: 'completed' as const,
+  body: `Private notice body ${index}`, recordedAt: new Date(noticeStartedAt - index - 1).toISOString(), ...overrides,
+});
+const noticeDialog = (context: ReturnType<typeof mount>): string | undefined => context.app.lastFrame()
+  ?.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu)?.find((box) => /Esc/u.test(box) && /↑|↓/u.test(box));
+const noticeRows = (context: ReturnType<typeof mount>): string[] => noticeDialog(context)!.split('\n')
+  .slice(2, -2).map((line) => stripVTControlCharacters(line).replace(/^│\s*|\s*│$/gu, ''));
+
+describe('manager saved notice menu', () => {
+  describe.each(['repository', 'workspace'] as const)('notices after adding a repository to a %s assignment', (kind) => {
+    it.each([-1, 1])('uses the manager startup boundary for an added repository notice at offset %i', async (offset) => {
+      vi.spyOn(Date, 'now').mockReturnValue(noticeStartedAt);
+      const repositoryB = '/test/repository-b';
+      const workspace = { id: '650e8400-e29b-41d4-a716-446655440001', name: 'A + B', repositoryDirectories: [cwd, repositoryB] };
+      let savedWorkspace: workspaceRegistry.Workspace | undefined = kind === 'workspace'
+        ? { ...workspace, repositoryDirectories: [cwd] } : undefined;
+      vi.spyOn(workspaceRegistry, 'findWorkspaceForRepository').mockImplementation(async (_config, directory) =>
+        savedWorkspace?.repositoryDirectories.includes(directory) ? savedWorkspace : undefined);
+      vi.spyOn(workspaceRegistry, 'readWorkspace').mockImplementation(async (_config, id) =>
+        savedWorkspace?.id === id ? savedWorkspace : undefined);
+      const assignment = kind === 'repository'
+        ? { kind, repositoryDirectory: cwd, repositoryDirectories: [cwd] }
+        : { kind, workspaceId: workspace.id, name: workspace.name, repositoryDirectories: [cwd] };
+      const goal: Goal = { ...goalRecord(), objective: 'Added goal', notifications: [noticeRecord(1, {
+        body: 'Added repository notice', recordedAt: new Date(noticeStartedAt + offset).toISOString(),
+      })] };
+      const original = structuredClone(goal);
+      memory.goals.mockImplementation((directory) => directory === repositoryB ? [goal] : []);
+      const context = mount('en', undefined, assignment);
+      try {
+        await waitFor(() => {
+          expect(context.app.lastFrame()).toContain(cwd);
+          expect(context.app.lastFrame()).not.toContain('Working');
+        });
+        expect(await context.session.getAssignment()).toEqual(assignment);
+        context.call.mockImplementationOnce(async (_prompt, options) => {
+          options.onStream?.({ type: 'tool_use', data: { id: 'add-b', tool: 'takt_add_workspace_repository', input: { repositoryDirectory: repositoryB } } });
+          savedWorkspace = workspace;
+          options.onStream?.({ type: 'tool_result', data: { id: 'add-b', isError: false, content: JSON.stringify({ workspace }) } });
+          return response(null);
+        });
+        await typeAndSubmit(context, 'Add repository B');
+        await waitFor(() => {
+          expect(context.app.lastFrame()).toContain('A + B (2)');
+          expect(context.app.lastFrame()).not.toContain('Working');
+        });
+        const heading = getLabel('manager.notificationHeadings.completed', 'en', { project: 'repository-b' });
+        const notificationRows = context.app.lastFrame()!.split('\n').filter((line) =>
+          line.includes(heading) || line.includes(goal.objective) || line.includes(goal.notifications![0]!.body));
+        if (offset < 0) expect(notificationRows).toEqual([]);
+        else {
+          expect(notificationRows).toHaveLength(3);
+          expect(notificationRows[0]).toContain(heading);
+          expect(notificationRows[1]).toContain(goal.objective);
+          expect(notificationRows[2]).toContain(goal.notifications![0]!.body);
+        }
+        context.app.stdin.write(NOTICE_MENU);
+        await waitFor(() => expect(noticeDialog(context)).toContain(goal.objective));
+        expect(noticeRows(context)).toHaveLength(1);
+        context.app.stdin.write(ENTER);
+        await waitFor(() => expect(noticeDialog(context)).toContain(goal.notifications![0]!.body));
+        expect(goal).toEqual(original);
+      } finally { context.app.unmount(); await context.session.close(); }
+    });
+  });
+
+  it.each([0, 1])('retains the answer draft for an empty notice list and opens a nonempty list with %i notices', async (count) => {
+    vi.spyOn(Date, 'now').mockReturnValue(noticeStartedAt);
+    memory.goals.mockReturnValue([{ ...goalRecord(), objective: 'Inquiry and notice',
+      notifications: count === 0 ? [] : [noticeRecord(1)], questions: [{
+        id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human', status: 'pending', body: 'Choose CSV or JSON',
+      }] }]);
+    const context = mount();
+    const read = vi.spyOn(savedEvents, 'readManagerDisplayEvents');
+    const answer = vi.spyOn(context.session, 'answerQuestion');
+    try {
+      await openMenu(context, 'answer');
+      await enterSelection(context);
+      await waitFor(() => expect(promptFrame(context)).toContain('Enter your answer'));
+      context.app.stdin.write('CSVで出力する');
+      await waitFor(() => expect(promptFrame(context)).toContain('CSVで出力する'));
+      const beforeFrame = context.app.lastFrame();
+      const beforeRead = read.mock.calls.length;
+      context.app.stdin.write(NOTICE_MENU);
+      await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(beforeRead));
+      await read.mock.results.at(-1)!.value;
+      if (count === 0) {
+        const completed = read.mock.calls.length;
+        await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(completed));
+        await waitFor(() => expect(context.app.lastFrame()).toBe(beforeFrame));
+        expect(promptFrame(context)).toContain('CSVで出力する');
+        expect(selectionFrame(context)).toBeUndefined();
+      } else {
+        await waitFor(() => expect(noticeDialog(context)).toContain(getLabel('manager.selectionTitles.notice', 'en')));
+        expect(noticeRows(context)).toHaveLength(1);
+        expect(noticeRows(context)[0]).toContain('Inquiry and notice');
+      }
+      expect(answer).not.toHaveBeenCalled();
+      expect(context.call).not.toHaveBeenCalled();
+    } finally { context.app.unmount(); await context.session.close(); }
+  });
+
+  it.each([true, false])('handles a delayed notice read from the answer screen with Esc cancellation=%s', async (cancel) => {
+    vi.spyOn(Date, 'now').mockReturnValue(noticeStartedAt);
+    memory.goals.mockReturnValue([{ ...goalRecord(), objective: 'Inquiry and notice', notifications: [noticeRecord(1)], questions: [{
+      id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human', status: 'pending', body: 'Choose CSV or JSON',
+    }] }]);
+    const context = mount();
+    const refresh = deferred<Awaited<ReturnType<typeof context.session.getAssignment>>>();
+    const read = vi.spyOn(savedEvents, 'readManagerDisplayEvents');
+    const answer = vi.spyOn(context.session, 'answerQuestion');
+    try {
+      await openMenu(context, 'answer');
+      await enterSelection(context);
+      await waitFor(() => expect(promptFrame(context)).toContain('Enter your answer'));
+      context.app.stdin.write('CSVで出力する');
+      await waitFor(() => expect(promptFrame(context)).toContain('CSVで出力する'));
+      const assignment = vi.spyOn(context.session, 'getAssignment').mockReturnValue(refresh.promise);
+      context.app.stdin.write(NOTICE_MENU);
+      await waitFor(() => expect(assignment).toHaveBeenCalled());
+      if (cancel) {
+        context.app.stdin.write(NOTICE_ESCAPE);
+        await waitFor(() => expect(selectionFrame(context)).toContain(getLabel('manager.selectionTitles.answer', 'en')));
+      }
+      const beforeRead = read.mock.calls.length;
+      refresh.resolve(undefined);
+      await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(beforeRead));
+      await read.mock.results.at(-1)!.value;
+      if (cancel) {
+        const completed = read.mock.calls.length;
+        await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(completed));
+        expect(selectionFrame(context)).toContain(getLabel('manager.selectionTitles.answer', 'en'));
+        expect(noticeRows(context)).toHaveLength(1);
+        expect(noticeRows(context)[0]).toContain('Choose CSV or JSON');
+      } else {
+        await waitFor(() => expect(noticeDialog(context)).toContain(getLabel('manager.selectionTitles.notice', 'en')));
+        expect(noticeRows(context)).toHaveLength(1);
+        expect(noticeRows(context)[0]).toContain('Inquiry and notice');
+      }
+      expect(answer).not.toHaveBeenCalled();
+      expect(context.call).not.toHaveBeenCalled();
+    } finally { context.app.unmount(); refresh.resolve(undefined); await context.session.close(); }
+  });
+
+  it('hides startup history but retains it for Ctrl+N and displays a later completion on the same screen', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(noticeStartedAt);
+    const goal: Goal = { ...goalRecord(), status: 'completed', objective: 'Historical completion',
+      completion: {
+        goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', targetSha: 'b'.repeat(40),
+        summary: 'Historical completion summary', instructions: [],
+        changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+      },
+      notifications: [noticeRecord(1, { kind: 'awaiting_merge' }), noticeRecord(2)], questions: [{
+        id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human', status: 'pending', body: 'Pending inquiry',
+      }] };
+    memory.goals.mockReturnValue([goal]);
+    const context = mount('ja');
+    const read = vi.spyOn(savedEvents, 'readManagerDisplayEvents');
+    const headings = ['awaiting_merge', 'completed'] as const;
+    try {
+      await waitFor(() => {
+        expect(context.app.lastFrame()).toContain('進行中 0');
+        expect(context.app.lastFrame()).toContain('未回答 1');
+        expect(context.app.lastFrame()).not.toContain('処理中');
+      });
+      for (const kind of headings) expect(context.app.lastFrame()!.split('\n').filter((line) =>
+        line.includes(getLabel(`manager.notificationHeadings.${kind}`, 'ja', { project: 'manager-repository' })))).toEqual([]);
+      context.app.stdin.write(NOTICE_MENU);
+      await waitFor(() => expect(noticeDialog(context)).toBeDefined());
+      expect(noticeRows(context)).toHaveLength(2);
+      context.app.stdin.write(NOTICE_ESCAPE);
+      await waitFor(() => expect(noticeDialog(context)).toBeUndefined());
+      const updated: Goal = { ...goal, notifications: [...goal.notifications!, noticeRecord(3, {
+        body: 'New completion after startup', recordedAt: new Date(noticeStartedAt + 1).toISOString(),
+      })] };
+      memory.goals.mockReturnValue([updated]);
+      await waitFor(() => {
+        const frame = context.app.lastFrame()!;
+        expect(frame).toContain('New completion after startup');
+        expect(frame).toContain(getLabel('manager.notificationHeadings.completed', 'ja', { project: 'manager-repository' }));
+        expect(frame).toContain(`ゴール: ${goal.objective}`);
+      });
+      const polls = read.mock.calls.length;
+      await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(polls));
+      expect(context.app.lastFrame()!.split('\n').filter((line) => line.includes('New completion after startup'))).toHaveLength(1);
+      for (const old of goal.notifications!) expect(context.app.lastFrame()).not.toContain(old.body);
+      context.app.stdin.write(NOTICE_MENU);
+      await waitFor(() => expect(noticeDialog(context)).toBeDefined());
+      expect(noticeRows(context)).toHaveLength(3);
+      context.app.stdin.write(ENTER);
+      await waitFor(() => expect(noticeDialog(context)).toContain('New completion after startup'));
+      expect(updated.notifications!.slice(0, 2)).toEqual(goal.notifications);
+    } finally { context.app.unmount(); await context.session.close(); }
+  });
+
+  it('displays three summary lines from a new 7000-character merge notice and the complete merge command', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(noticeStartedAt);
+    const context = mount('ja');
+    const command = "git -C '/Users/nrs/work/git/takt3' merge --no-ff --no-edit b89dc7274403152da8933cda80a76a4751c7901d";
+    const summary = ['First summary', 'Second summary', 'Third summary', 'Hidden summary ' + 'x'.repeat(6942)].join('\n');
+    expect(summary).toHaveLength(7000);
+    try {
+      await waitFor(() => expect(context.app.lastFrame()).not.toContain('処理中'));
+      const goal: Goal = { ...goalRecord(), objective: 'Merge digest fixture', completion: {
+        goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', summary,
+        worktrees: ['/Users/nrs/work/git/takt3'], instructions: [command],
+        changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+      }, notifications: [noticeRecord(1, { kind: 'awaiting_merge', body: 'Unused merge body', recordedAt: new Date(noticeStartedAt + 1).toISOString() })] };
+      memory.goals.mockReturnValue([goal]);
+      await waitFor(() => expect(context.app.lastFrame()).toContain('First summary'));
+      const frame = context.app.lastFrame()!;
+      expect(frame).toContain(getLabel('manager.notificationHeadings.awaiting_merge', 'ja', { project: 'manager-repository' }));
+      expect(frame).toContain(`ゴール: ${goal.objective}`);
+      for (const line of summary.split('\n').slice(0, 3)) expect(frame).toContain(line);
+      const bodyRows = frame.split('\n').filter((line) => /summary/u.test(line));
+      expect(bodyRows.map((line) => line.replace(/^\s*│?\s*/u, '').trimEnd())).toEqual(summary.split('\n').slice(0, 3));
+      expect(frame.split('\n').filter((line) => /Ctrl\+N|\^N/u.test(line) && /全文/u.test(line))).toHaveLength(1);
+      const normalized = frame.split('\n').map((line) => line.replace(/^\s*│?\s*|\s*│?\s*$/gu, '')).join('');
+      expect(normalized).toContain(command);
+      expect(normalized).not.toContain(command + '…');
+    } finally { context.app.unmount(); await context.session.close(); }
+  });
+
+  it('opens ten heading-and-goal rows and selects the eleventh after ten down arrows', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(noticeStartedAt);
+    const goals: Goal[] = Array.from({ length: 12 }, (_, index) => ({ ...goalRecord(),
+      id: `550e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`,
+      objective: `Notice ${String(index + 1).padStart(2, '0')} ` + 'long objective '.repeat(8), notifications: [noticeRecord(index)],
+    }));
+    memory.goals.mockReturnValue(goals);
+    const context = mount();
+    const previousLevel = chalk.level;
+    chalk.level = 1;
+    try {
+      await waitFor(() => expect(context.app.lastFrame()).not.toContain('Working'));
+      context.app.stdin.write(NOTICE_MENU);
+      await waitFor(() => expect(noticeDialog(context)).toBeDefined());
+      const heading = getLabel('manager.notificationHeadings.completed', 'en', { project: 'manager-repository' });
+      expect(noticeRows(context)).toHaveLength(10);
+      for (const [index, goal] of goals.slice(0, 10).entries()) {
+        const row = noticeRows(context)[index]!;
+        expect(row).toContain(heading);
+        expect(row).toContain(formatGoalName(goal.objective));
+        expect(row.replace(heading, '').replace(formatGoalName(goal.objective), '')).toMatch(/^[\p{P}\p{S}\s]*$/u);
+      }
+      for (const goal of goals) expect(noticeDialog(context)).not.toContain(goal.notifications![0]!.body);
+      for (let move = 0; move < 10; move++) context.app.stdin.write(NOTICE_DOWN);
+      await waitFor(() => {
+        expect(noticeRows(context)).toHaveLength(10);
+        expect(noticeRows(context).some((row) => row.includes('Notice 11'))).toBe(true);
+        expect(noticeRows(context).some((row) => row.includes('Notice 01'))).toBe(false);
+        expect(noticeDialog(context)).toMatch(/\x1b\[7m[^\n]*Notice 11/u);
+      });
+      context.app.stdin.write(ENTER);
+      await waitFor(() => expect(noticeDialog(context)).toContain('Private notice body 10'));
+      context.app.stdin.write(NOTICE_ESCAPE);
+      await waitFor(() => {
+        expect(noticeRows(context)).toHaveLength(10);
+        expect(noticeDialog(context)).toMatch(/\x1b\[7m[^\n]*Notice 11/u);
+      });
+      context.app.stdin.write(NOTICE_ESCAPE);
+      await waitFor(() => expect(noticeDialog(context)).toBeUndefined());
+      expect(context.call).not.toHaveBeenCalled();
+    } finally { context.app.unmount(); chalk.level = previousLevel; await context.session.close(); }
+  });
+
+  it.each([false, true])('reads all 7000 body characters by scrolling and returns to the list during a turn=%s', async (busy) => {
+    vi.spyOn(Date, 'now').mockReturnValue(noticeStartedAt);
+    const lines = Array.from({ length: 100 }, (_, index) => `Body ${String(index).padStart(3, '0')}: ` + 'x'.repeat(59));
+    lines[99] += 'Z';
+    const body = lines.join('\n');
+    expect(body).toHaveLength(7000);
+    memory.goals.mockReturnValue([{ ...goalRecord(), objective: 'Full notice', notifications: [noticeRecord(1, { body })] }]);
+    const turn = deferred<ReturnType<typeof response>>();
+    const context = mount();
+    const answer = vi.spyOn(context.session, 'answerQuestion');
+    if (busy) context.call.mockReturnValueOnce(turn.promise);
+    try {
+      await waitFor(() => expect(context.app.lastFrame()).not.toContain('Working'));
+      if (busy) {
+        await typeAndSubmit(context, 'Continue the current work');
+        await waitFor(() => expect(context.call).toHaveBeenCalledOnce());
+      }
+      context.app.stdin.write(NOTICE_MENU);
+      await waitFor(() => expect(noticeDialog(context)).toContain('Full notice'));
+      context.app.stdin.write(ENTER);
+      await waitFor(() => expect(noticeDialog(context)).toContain(lines[0]!));
+      const observed = new Set<string>();
+      const collect = (): void => {
+        const rows = noticeDialog(context)!.split('\n').slice(1, -1)
+          .map((line) => stripVTControlCharacters(line).replace(/^│\s*|\s*│$/gu, ''))
+          .filter((row) => row.startsWith('Body '));
+        for (const row of rows) observed.add(row);
+        expect(noticeDialog(context)).not.toContain('…');
+      };
+      collect();
+      for (let move = 0; move < 110 && !observed.has(lines[99]!); move++) {
+        const before = noticeDialog(context);
+        context.app.stdin.write(NOTICE_DOWN);
+        await waitFor(() => expect(noticeDialog(context)).not.toBe(before));
+        collect();
+      }
+      expect([...observed]).toEqual(lines);
+      for (let move = 0; move < 110; move++) context.app.stdin.write(UP);
+      await waitFor(() => expect(noticeDialog(context)).toContain(lines[0]!));
+      context.app.stdin.write(NOTICE_ESCAPE);
+      await waitFor(() => {
+        expect(noticeDialog(context)).toContain('Full notice');
+        expect(noticeDialog(context)).not.toContain('Body 000:');
+      });
+      context.app.stdin.write(NOTICE_ESCAPE);
+      await waitFor(() => expect(noticeDialog(context)).toBeUndefined());
+      if (busy) expect(context.call.mock.calls[0]![1].abortSignal!.aborted).toBe(false);
+      expect(answer).not.toHaveBeenCalled();
+      expect(context.call).toHaveBeenCalledTimes(busy ? 1 : 0);
+    } finally { context.app.unmount(); turn.resolve(response(null)); await context.session.close(); }
+  });
+
+  it('leaves the normal screen unchanged when Ctrl+N refreshes an empty notice list', async () => {
+    const context = mount();
+    const read = vi.spyOn(savedEvents, 'readManagerDisplayEvents');
+    try {
+      await waitFor(() => expect(context.app.lastFrame()).not.toContain('Working'));
+      context.app.stdin.write('Unsent draft');
+      await waitFor(() => expect(promptFrame(context)).toContain('Unsent draft'));
+      const frame = context.app.lastFrame();
+      const before = read.mock.calls.length;
+      context.app.stdin.write(NOTICE_MENU);
+      await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(before));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(noticeDialog(context)).toBeUndefined();
+      expect(context.app.lastFrame()).toBe(frame);
+      expect(context.call).not.toHaveBeenCalled();
+    } finally { context.app.unmount(); await context.session.close(); }
+  });
+
+  it('refreshes saved notices before opening Ctrl+N on the same screen', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(noticeStartedAt);
+    const context = mount();
+    try {
+      await waitFor(() => expect(context.app.lastFrame()).not.toContain('Working'));
+      memory.goals.mockReturnValue([{ ...goalRecord(), objective: 'Saved after initial read', notifications: [noticeRecord(1)] }]);
+      context.app.stdin.write(NOTICE_MENU);
+      await waitFor(() => expect(noticeDialog(context)).toContain('Saved after initial read'));
+      expect(noticeRows(context)).toHaveLength(1);
+    } finally { context.app.unmount(); await context.session.close(); }
+  });
+
+  it('wraps a single-line notice at the terminal width and scrolls to its end', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(noticeStartedAt);
+    const body = '本文開始' + 'あ'.repeat(7000) + '本文終了';
+    memory.goals.mockReturnValue([{ ...goalRecord(), objective: 'Wrapped notice', notifications: [noticeRecord(1, { body })] }]);
+    const context = mount();
+    vi.spyOn(context.app.stdout, 'columns', 'get').mockReturnValue(40);
+    context.app.stdout.emit('resize');
+    try {
+      await waitFor(() => expect(context.app.lastFrame()).not.toContain('Working'));
+      context.app.stdin.write(NOTICE_MENU);
+      await waitFor(() => expect(noticeDialog(context)).toContain(getLabel('manager.selectionTitles.notice', 'en')));
+      context.app.stdin.write(ENTER);
+      await waitFor(() => expect(noticeDialog(context)).toContain('本文開始'));
+      expect(noticeDialog(context)).not.toContain('本文終了');
+      for (let move = 0; move < 400; move++) context.app.stdin.write(NOTICE_DOWN);
+      await waitFor(() => expect(noticeDialog(context)).toContain('本文終了'));
+      expect(noticeDialog(context)).not.toContain('本文開始');
+      expect(noticeDialog(context)).not.toContain('…');
+      expect(context.call).not.toHaveBeenCalled();
+    } finally { context.app.unmount(); await context.session.close(); }
+  });
+
+  it('keeps Ctrl+R on inquiries when a saved notice is also present', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(noticeStartedAt);
+    memory.goals.mockReturnValue([{ ...goalRecord(), objective: 'Inquiry and notice', notifications: [noticeRecord(1)], questions: [{
+      id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human', status: 'pending', body: 'Choose CSV or JSON',
+    }] }]);
+    const context = mount();
+    try {
+      await openMenu(context, 'answer');
+      await waitFor(() => expect(selectionFrame(context)).toContain(getLabel('manager.selectionTitles.answer', 'en')));
+      expect(noticeRows(context)).toHaveLength(1);
+      expect(noticeRows(context)[0]).toContain('Choose CSV or JSON');
+      expect(noticeDialog(context)).not.toContain('Private notice body');
+      context.app.stdin.write(ENTER);
+      await waitFor(() => expect(promptFrame(context)).toContain('Enter your answer'));
+      expect(context.call).not.toHaveBeenCalled();
+    } finally { context.app.unmount(); await context.session.close(); }
+  });
+
+  it.each(['ja', 'en'] as const)('shows all four menu keys on the counts line in %s', async (lang) => {
+    const context = mount(lang);
+    try {
+      await waitFor(() => {
+        const rows = context.app.lastFrame()!.split('\n').filter((line) => /\^R/u.test(line));
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatch(lang === 'ja' ? /\^R 問い合わせ.*\^G ゴール.*\^O 要約.*\^N 知らせ/u
+          : /\^R.*(?:inquir|question).*\^G.*goal.*\^O.*summary.*\^N.*(?:notice|notification)/iu);
+      });
+    } finally { context.app.unmount(); await context.session.close(); }
+  });
+});
 
 describe('manager inquiry windows and detail navigation', () => {
   it('shows ten inquiries and opens the eleventh after ten down arrows in the same screen', async () => {
@@ -20,7 +429,7 @@ describe('manager inquiry windows and detail navigation', () => {
         body: `Inquiry ${String(index + 1).padStart(2, '0')}\nDetail ${String(index + 1).padStart(2, '0')}`,
       },
     }));
-    vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], goals: [goalRecord()], questions });
+    vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], notices: [], goals: [goalRecord()], questions });
     const context = mount();
     const answer = vi.spyOn(context.session, 'answerQuestion');
     const rows = (): string[] => selectionFrame(context)!.split('\n').filter((row) => row.includes('Window fixture'));
@@ -63,7 +472,7 @@ describe('manager inquiry windows and detail navigation', () => {
         recipient: 'human' as const, status: 'pending' as const, body: index === 0 ? 'Other inquiry' : lines.join('\n'),
       },
     }));
-    vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], goals: [goalRecord()], questions });
+    vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], notices: [], goals: [goalRecord()], questions });
     const turn = deferred<ReturnType<typeof response>>();
     const context = mount();
     const answer = vi.spyOn(context.session, 'answerQuestion');
@@ -109,7 +518,7 @@ describe('manager inquiry windows and detail navigation', () => {
       id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human' as const, status: 'pending' as const,
       body: Array.from({ length: 30 }, (_, index) => `Cursor body ${index}`).join('\n'),
     } };
-    vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], goals: [goalRecord()], questions: [target] });
+    vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], notices: [], goals: [goalRecord()], questions: [target] });
     const context = mount();
     const answer = vi.spyOn(context.session, 'answerQuestion').mockResolvedValue({ kind: 'reply', message: 'Answer saved', answerSaved: true });
     try {
@@ -131,7 +540,7 @@ describe('manager inquiry windows and detail navigation', () => {
 describe('manager TUI summary menu and conversation input', () => {
   it.each(['request', 'register'] as const)('keeps a queued summary %s on menu Esc and discards it on ordinary Esc', async (operation) => {
     for (const closeMenu of [false, true]) {
-      const empty = { events: [], diagnostics: [], goals: [goalRecord()], questions: [] };
+      const empty = { events: [], diagnostics: [], notices: [], goals: [goalRecord()], questions: [] };
       const read = vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue(empty);
       const turn = deferred<ReturnType<typeof response>>();
       const refresh = deferred<typeof empty>();
@@ -185,7 +594,7 @@ describe('manager TUI summary menu and conversation input', () => {
     const target = { goalId: goalRecord().id, repositoryDirectory: cwd, objective: 'Answer fixture', question: {
       id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human' as const, status: 'pending' as const, body: 'Choose output',
     } };
-    const snapshot = { events: [], diagnostics: [], goals: [goalRecord()], questions: [target] };
+    const snapshot = { events: [], diagnostics: [], notices: [], goals: [goalRecord()], questions: [target] };
     const menuSnapshot = { ...snapshot, questions: [target, { ...target, question: { ...target.question, id: '650e8400-e29b-41d4-a716-446655440002' } }] };
     const read = vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue(snapshot);
     const refresh = deferred<typeof snapshot>();
@@ -459,7 +868,7 @@ describe('manager TUI summary menu and conversation input', () => {
       id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human' as const,
       status: 'pending' as const, body: 'Which output format?', options: ['CSV', 'JSON'],
     } };
-    vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], goals: [goalRecord()], questions: [target] });
+    vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], notices: [], goals: [goalRecord()], questions: [target] });
     const context = mount();
     const answer = vi.spyOn(context.session, 'answerQuestion').mockResolvedValue({ kind: 'reply', message: 'Answer saved', answerSaved: true });
     try {
@@ -549,7 +958,7 @@ describe('manager TUI human approval', () => {
   });
 
   it.each([0, 800])('approves with an up arrow and Enter 400ms apart when the post-turn display refresh is slow, waiting %ims before the arrow', async (beforeArrow) => {
-    const emptySnapshot = { events: [], diagnostics: [], questions: [], goals: [] };
+    const emptySnapshot = { events: [], diagnostics: [], notices: [], questions: [], goals: [] };
     const readEvents = vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue(emptySnapshot);
     const context = mount();
     try {
