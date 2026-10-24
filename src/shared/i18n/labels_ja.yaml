@@ -539,7 +539,7 @@ manager:
   notificationMergeRepository: "{project}リポジトリの、ブランチを切り替えられる未コミットの変更がない作業ツリーで、次のコマンドを順に実行してください。"
   notificationMergeWorktree: "作業ツリー {directory} の状態を確認し、次のコマンドを順に実行してください。"
   notificationBlockedAction: "上記の理由と必要な操作を確認してください。詳しい内容は{project}で takt manager を開き、TUIで確認・対応してください。"
-  notificationFullMessage: "全文は、{project}で takt manager を開き、TUIの「出来事」で確認できます。"
+  notificationFullMessage: "{project}で takt manager を開き、TUIで Ctrl+N を押し、一覧から知らせを選択して Enter で全文を確認してください。"
   notificationDigestHint: "本文の続きは省略しています。Ctrl+N で全文を確認できます。"
 
 caccia:
