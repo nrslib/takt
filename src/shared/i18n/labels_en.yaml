@@ -425,8 +425,10 @@ tui:
     exceededStart: "Saved stopping position: {start} (iteration {iteration})"
 
 manager:
-  counts: "Ongoing {goals} / Pending {questions} / ^R Inquiries  ^G Goals  ^O Summary  ^N Notices"
-  inputHint: "Enter Send / Shift+Enter Newline / Esc Interrupt / Ctrl+C Exit"
+  assignmentHeading: "Assignment: {name}"
+  assignmentHeadingMultiple: "Assignment: {name} + {count} more"
+  counts: "Ongoing {goals} / Pending {questions}"
+  inputHint: "Enter Send  Shift+Enter Newline  Esc Interrupt  ^R Inquiries  ^G Goals  ^O Summary  ^N Notices  ^P Repositories  ^C Exit"
   summaryHint: "^O Register the displayed summary"
   summaryInputHint: "↑↓ Choose / Enter Confirm / Esc Continue conversation / Ctrl+C Exit"
   goSummaryRequest: "Summarize the current conversation for goal registration. Return the objective, out-of-scope items, acceptance criteria, and work constraints in the structured response's summary. If there is insufficient material to summarize, explain why in message and return summary: null."
@@ -457,6 +459,7 @@ manager:
     For a paused goal, press Ctrl+G in the TUI, select the goal and resume it, or request resumption in conversation with a supported provider and confirm the operation. An aborted goal cannot be resumed.
     Reason: {reason}
   selectionTitles:
+    repository: "Assigned repositories"
     answer: "Select an inquiry to answer"
     goal: "Select a goal"
     action: "Select a goal operation"
@@ -466,8 +469,10 @@ manager:
     resume: "Resume"
     abort: "Abort"
   selectionHint: "↑↓ Choose / Enter Select / Esc Close"
+  repositorySelectionHint: "↑↓ Move / Esc Close"
   noticeDetailHint: "↑↓ Scroll / Esc Back to list"
   selectionEmpty:
+    repository: "No assigned repositories."
     answer: "No pending inquiries to answer."
     goal: "No ongoing goals to operate on."
   goalRegistered: "Goal registered: {name} ({id})\n{branch}"

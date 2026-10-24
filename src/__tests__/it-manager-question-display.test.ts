@@ -105,7 +105,7 @@ async function mountGoalControls(lang: 'ja' | 'en', goal: Goal) {
       strategy: { systemPrompt: 'manager fixture' } },
   });
   app = render(createElement(ManagerView, { cwd, lang, session, initialDiagnostics: [], onExit: vi.fn() }));
-  await vi.waitFor(() => expect(app!.lastFrame()!.replace(/\n/gu, '')).toContain(cwd));
+  await vi.waitFor(() => expect(app!.lastFrame()).toContain(basename(cwd)));
   const send = async (text: string): Promise<void> => {
     app!.stdin.write(text);
     await vi.waitFor(() => expect(app!.lastFrame()).toContain(text.split('\n')[0]!));
@@ -444,7 +444,7 @@ it.each([
   await vi.waitFor(async () => expect((await store.get(saved.id)).executionStatus).toBe('aborted'));
   expect(await store.get(saved.id)).toEqual({ ...saved, executionStatus: 'aborted' });
   const expectAbortedGoal = (): void => {
-    expect(app!.lastFrame()!.split('\n').find((row) => /\^R/u.test(row))).toMatch(lang === 'ja'
+    expect(app!.lastFrame()!.split('\n').find((row) => /^(?:進行中|in progress|ongoing|active)/iu.test(row))).toMatch(lang === 'ja'
       ? /進行中\s*0/u : /(?:in progress|ongoing|active)\s*:?\s*0/iu);
   };
   await vi.waitFor(expectAbortedGoal);

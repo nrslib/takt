@@ -15,7 +15,7 @@ import { isGoalSelectionCandidate, useManagerSelection, type ManagerSelectedTarg
 import { formatGoalName } from './goalDisplay.js';
 import { basename } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import type { ManagerAssignment } from './startupResolution.js';
+import type { ManagerAssignment, ManagerExecutionContext } from './startupResolution.js';
 import { Box, Text, useApp, useStdout } from 'ink';
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { PromptInput } from '../tui/PromptInput.js';
@@ -23,7 +23,7 @@ import { TranscriptView, type TranscriptEntry } from '../tui/TranscriptEntryView
 import { StatusLine } from '../tui/StatusLine.js';
 import { createEditorState, type EditorState } from '../tui/editorState.js';
 import { FALLBACK_USER_MESSAGE_COLORS } from '../tui/terminalColors.js';
-import { toDisplayText } from '../tui/displayText.js';
+import { toDisplayText, toSingleLineText } from '../tui/displayText.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import type { ManagerConversationSession } from './conversationSession.js';
@@ -37,7 +37,7 @@ type PendingOperation =
   | { kind: 'goal'; operation: 'pause' | 'resume' | 'abort'; target: ManagerDisplayGoal };
 
 export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, startup, assignment }: {
-  assignment?: ManagerAssignment;
+  assignment?: ManagerExecutionContext['assignment'];
   cwd: string; lang: 'en' | 'ja'; session: ManagerConversationSession; onExit: () => void;
   initialDiagnostics: readonly string[];
   startup?: { run: (signal: AbortSignal) => Promise<readonly string[]>; fail: (error: unknown) => void };
@@ -154,7 +154,9 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
     if (result.kind === 'error' && !signal?.aborted) await reportFailure(new Error(result.message));
     else append(result.message);
   };
-  const refreshEvents = async (): Promise<{ questions: PendingQuestion[]; goals: ManagerDisplayGoal[]; notices: ManagerDisplayNotice[] }> => {
+  const refreshEvents = async (): Promise<{
+    questions: PendingQuestion[]; goals: ManagerDisplayGoal[]; notices: ManagerDisplayNotice[]; repositoryDirectories: readonly string[];
+  }> => {
     const resolved = await session.getAssignment();
     const snapshot = await readManagerDisplayEvents(cwd, lang, resolved, startupBoundaries.current, startedAt);
     const savedQuestions = snapshot.questions;
@@ -175,7 +177,10 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
       if (!event.suppressInitialDisplay) append(event.message);
     }
     lastRefreshError.current = undefined;
-    return { questions: savedQuestions, goals: savedGoals, notices: savedNotices };
+    return {
+      questions: savedQuestions, goals: savedGoals, notices: savedNotices,
+      repositoryDirectories: (resolved ?? assignment)?.repositoryDirectories ?? [cwd],
+    };
   };
   useEffect(() => {
     const timer = setInterval(() => {
@@ -374,6 +379,19 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   const visibleEditor = answerTarget === null ? editor : answerEditor;
   const summaryVisible = pending !== null && selection.selection === null && answerTarget === null && abortTarget === null;
   const selectingSummary = summaryVisible && editor.text === '';
+  const repositoryDirectories = (currentAssignment ?? assignment)?.repositoryDirectories ?? [cwd];
+  let assignmentHeading: string;
+  if (repositoryDirectories.length === 0) {
+    assignmentHeading = getLabel('manager.selectionEmpty.repository', lang);
+  } else {
+    const startupRepositoryDirectory = assignment?.startupRepositoryDirectory ?? cwd;
+    const headingRepository = repositoryDirectories.includes(startupRepositoryDirectory)
+      ? startupRepositoryDirectory : repositoryDirectories[0]!;
+    assignmentHeading = getLabel(repositoryDirectories.length > 1 ? 'manager.assignmentHeadingMultiple' : 'manager.assignmentHeading', lang, {
+      name: toSingleLineText(basename(headingRepository)), count: String(repositoryDirectories.length - 1),
+    });
+  }
+  const inputHint = getLabel(selectingSummary ? 'manager.summaryInputHint' : 'manager.inputHint', lang);
   const cancelMenuRequest = (): void => { menuRequest.current += 1; };
   useManagerInput({
     exiting, active, registering, editorRef: answerTarget === null ? editorRef : answerEditorRef,
@@ -385,17 +403,12 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   });
   return (
     <Box flexDirection="column">
-      <Text bold>{`manager — ${ja ? '実験的機能' : 'Experimental'}`}</Text>
-      <Text>{toDisplayText(currentAssignment?.kind === 'workspace'
-        ? `${currentAssignment.name} (${currentAssignment.repositoryDirectories.length})`
-        : assignment?.kind === 'workspace'
-          ? `${assignment.name} (${assignment.repositoryDirectories.length})` : basename(cwd))}</Text>
-      <Text dimColor>{toDisplayText(cwd)}</Text>
-      <TranscriptView entries={entries} userMessageColors={FALLBACK_USER_MESSAGE_COLORS} />
+      <Text bold wrap="truncate-middle">{assignmentHeading}</Text>
       <Text>{getLabel('manager.counts', lang, {
         goals: String(goals.filter((goal) => isGoalSelectionCandidate('abort', goal)).length),
         questions: String(questions.length),
       })}</Text>
+      <TranscriptView entries={entries} userMessageColors={FALLBACK_USER_MESSAGE_COLORS} />
       {queued.length > 0 && <ManagerQueuedMessages queued={queued} ja={ja} />}
       {selection.selection !== null && <ManagerSelectionDialog selection={selection.selection} bodyText={selection.bodyText} lang={lang} />}
       {answerTarget !== null && <ManagerAnswerDialog answerTarget={answerTarget} bodyText={questionAnswer.bodyText} lang={lang} />}
@@ -408,8 +421,9 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
       <StatusLine busy={busy} label={ja ? '処理中' : 'Working'} streamed="" />
       <PromptInput text={visibleEditor.text} cursor={visibleEditor.cursor} contentWidth={contentWidth}
         placeholder={answerTarget === null ? (ja ? 'ゴールを相談してください' : 'Discuss your goal') : (ja ? '回答を入力してください' : 'Enter your answer')}
-        hint={getLabel(selectingSummary ? 'manager.summaryInputHint' : 'manager.inputHint', lang)}
+        hint={inputHint} showHint={false}
         completions={[]} completionIndex={0} disabled={selection.selection !== null || abortTarget !== null || selectingSummary} />
+      <Text dimColor wrap="wrap">{inputHint}</Text>
     </Box>
   );
 }

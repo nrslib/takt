@@ -65,9 +65,10 @@ export function useManagerInput({
       onExit();
       return;
     }
-    if (key.ctrl && (input === 'r' || input === 'g' || input === 'o' || input === 'n')) {
+    if (key.ctrl && (input === 'r' || input === 'g' || input === 'o' || input === 'n' || input === 'p')) {
       if (input === 'o') summarize();
       else if (input === 'n') openMenu('notice');
+      else if (input === 'p') openMenu('repository');
       else openMenu(input === 'r' ? 'answer' : 'goal');
       return;
     }
