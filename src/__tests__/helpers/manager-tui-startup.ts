@@ -67,11 +67,14 @@ describe('manager TUI startup and polling', () => {
       expect(initial.events.filter((event) => !event.suppressInitialDisplay).map((event) => event.message))
         .toEqual([`${goals[0]!.id}: ${newRecord.summary}`]);
       const frame = context.app.lastFrame()!;
-      const counts = frame.split('\n').find((row) => /\^R/u.test(row));
+      const rows = frame.split('\n');
+      const countIndex = rows.findIndex((row) => /^(?:in progress|ongoing|active)\b/iu.test(row));
+      const counts = rows[countIndex];
+      expect(rows[countIndex - 1]).toMatch(/manager-repository/u);
       expect(counts).toBeDefined();
       expect(counts).toMatch(/(?:in progress|ongoing|active)\s*:?\s*2/iu);
       expect(counts).toMatch(/(?:pending|unanswered)\s*:?\s*2/iu);
-      expect(counts).toMatch(/\^R.*\^G.*\^O/u);
+      expect(counts).not.toMatch(/\^|Enter|Esc|Ctrl/u);
       for (const rendered of context.app.frames) expect(rendered).not.toContain('Historical record');
       expect(frame).toContain('initial assignment read failed');
       expect(context.call).not.toHaveBeenCalled();
@@ -418,24 +421,24 @@ describe('manager TUI startup and polling', () => {
     vi.spyOn(context.session, 'getAssignment').mockImplementation(async () => structuredClone(assignment));
     try {
       await waitFor(() => {
-        expect(context.app.lastFrame()).toContain('Original workspace');
+        expect(context.app.lastFrame()!.split('\n')[0]).toMatch(/manager-repository/u);
         expect(context.app.lastFrame()).toMatch(/(?:pending|unanswered)\s*:?\s*1/iu);
         expect(context.app.lastFrame()).toMatch(/(?:in progress|ongoing|active)\s*:?\s*1/iu);
       });
       const beforePolls = readEvents.mock.calls.length;
       await waitFor(() => {
         expect(readEvents.mock.calls.length).toBeGreaterThanOrEqual(beforePolls + 2);
-        expect(context.app.lastFrame()).toContain('Original workspace');
+        expect(context.app.lastFrame()!.split('\n')[0]).toMatch(/manager-repository/u);
         expect(context.app.lastFrame()).toMatch(/(?:pending|unanswered)\s*:?\s*1/iu);
         expect(context.app.lastFrame()).toMatch(/(?:in progress|ongoing|active)\s*:?\s*1/iu);
       });
 
-      if (field === 'assignment') assignment = { ...assignment, name: 'Changed workspace' };
+      if (field === 'assignment') assignment = { ...assignment, repositoryDirectories: [cwd, '/test/added-repository'] };
       else if (field === 'questions') snapshot = { ...snapshot, questions: [] };
       else snapshot = { ...snapshot, goals: [] };
-      const changed = field === 'assignment' ? /Changed workspace/u : field === 'questions'
+      const changed = field === 'assignment' ? /manager-repository.*1/u : field === 'questions'
         ? /(?:pending|unanswered)\s*:?\s*0/iu : /(?:in progress|ongoing|active)\s*:?\s*0/iu;
-      const original = field === 'assignment' ? /Original workspace/u : field === 'questions'
+      const original = field === 'assignment' ? /^.*manager-repository\s*$/mu : field === 'questions'
         ? /(?:pending|unanswered)\s*:?\s*1/iu : /(?:in progress|ongoing|active)\s*:?\s*1/iu;
       await waitFor(() => {
         expect(context.app.lastFrame()).toMatch(changed);
@@ -501,7 +504,7 @@ describe('manager TUI startup and polling', () => {
       context.app.stdin.write('add B and remove A');
       await waitFor(() => expect(promptFrame(context)).toContain('add B and remove A'));
       context.app.stdin.write(ENTER);
-      await waitFor(() => expect(context.app.lastFrame()).toContain('A + B (1)'));
+      await waitFor(() => expect(context.app.lastFrame()).toMatch(/^[A-Za-z][^:\n]*: repository-b$/mu));
       expect(readEvents.mock.calls.map((call) => call.slice(0, 3))).toContainEqual([
         cwd, 'en', expect.objectContaining({ repositoryDirectories: [repositoryB] }),
       ]);
@@ -522,6 +525,9 @@ describe('manager TUI startup and polling', () => {
       const hint = summary ? (lang === 'ja' ? 'Enter 決定' : 'Enter Confirm') : (lang === 'ja' ? 'Enter 送信' : 'Enter Send');
       expect(text).toContain(hint);
       expect(text!.search(changes)).toBeLessThan(text!.lastIndexOf(hint));
+      const rows = frame!.split('\n');
+      const promptEnd = rows.map((row) => row.startsWith('╰')).lastIndexOf(true);
+      expect(rows.slice(promptEnd + 1).join(' ')).toContain(hint);
     }
 
     it('shows the experimental notice on every startup without calling the provider', async () => {

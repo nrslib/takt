@@ -425,8 +425,10 @@ tui:
     exceededStart: "保存済みの停止位置: {start}（iteration {iteration}）"
 
 manager:
-  counts: "進行中 {goals} ／ 未回答 {questions} ／ ^R 問い合わせ  ^G ゴール  ^O 要約  ^N 知らせ"
-  inputHint: "Enter 送信 / Shift+Enter 改行 / Esc 中断 / Ctrl+C 終了"
+  assignmentHeading: "担当: {name}"
+  assignmentHeadingMultiple: "担当: {name} ほか {count} 件"
+  counts: "進行中 {goals} ／ 未回答 {questions}"
+  inputHint: "Enter 送信  Shift+Enter 改行  Esc 中断  ^R 問い合わせ  ^G ゴール  ^O 要約  ^N 知らせ  ^P 担当  ^C 終了"
   summaryHint: "^O 表示中の要約を登録"
   summaryInputHint: "↑↓ 選択 / Enter 決定 / Esc 会話を続ける / Ctrl+C 終了"
   goSummaryRequest: "現在の会話から、ゴール登録用の要約を作成してください。目的、範囲外、受け入れ条件、作業の制約を含む構造化応答の summary を返してください。材料が不足して要約できない場合は、理由を message で説明し、summary は null にしてください。"
@@ -457,6 +459,7 @@ manager:
     一時停止中のゴールは TUI で Ctrl+G を押し、一覧から選択して再開するか、対応する provider の会話で再開を依頼し、人の確認を経て再開してください。中止済みのゴールは再開できません。
     理由: {reason}
   selectionTitles:
+    repository: "担当リポジトリ"
     answer: "回答する問い合わせを選択"
     goal: "操作するゴールを選択"
     action: "ゴールの操作を選択"
@@ -466,8 +469,10 @@ manager:
     resume: "再開"
     abort: "中止"
   selectionHint: "↑↓ 選択 / Enter 決定 / Esc 閉じる"
+  repositorySelectionHint: "↑↓ 移動 / Esc 閉じる"
   noticeDetailHint: "↑↓ スクロール / Esc 一覧へ戻る"
   selectionEmpty:
+    repository: "担当のリポジトリはありません。"
     answer: "未回答の問い合わせはありません。"
     goal: "操作できる進行中のゴールはありません。"
   goalRegistered: "ゴール登録完了: {name} ({id})\n{branch}"
@@ -478,6 +483,7 @@ manager:
   goalStates:
     active: "実行中"
     paused: "一時停止中"
+    awaiting_merge: "マージ待ち"
   inquiryKinds:
     question: "質問"
     approval: "承認"

@@ -275,7 +275,7 @@ describe('manager TUI input', () => {
     context.call.mockResolvedValue(response(null));
     const text = LONG_TEXT;
     try {
-      await waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
+      await waitFor(() => expect(context.app.lastFrame()).toContain('manager-repository'));
       if (delivery === 'separate chunks') {
         context.app.stdin.write(text);
         context.app.stdin.write(ENTER);
@@ -346,7 +346,7 @@ describe('manager TUI input', () => {
     const text = delivery === 'unbracketed body containing internal CR' ? `${LONG_TEXT}続き`
       : delivery === 'unbracketed body containing internal LF' ? `${LONG_TEXT}\n続き` : LONG_TEXT;
     try {
-      await waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
+      await waitFor(() => expect(context.app.lastFrame()).toContain('manager-repository'));
       context.app.stdin.write(delivery === 'plain text without Enter' ? LONG_TEXT
         : delivery === 'unbracketed body containing internal CR' ? `${LONG_TEXT}\r続き`
           : delivery === 'unbracketed body containing internal LF' ? text : `\x1b[200~${LONG_TEXT}\r\x1b[201~`);
@@ -369,7 +369,7 @@ describe('manager TUI input', () => {
     const context = mount();
     context.call.mockResolvedValue(response(null));
     try {
-      await waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
+      await waitFor(() => expect(context.app.lastFrame()).toContain('manager-repository'));
       context.app.stdin.write('\x1b[200~確認\x1b[201~');
       await waitFor(() => expect(promptFrame(context)).toContain('確認'));
       expect(context.call).not.toHaveBeenCalled();
