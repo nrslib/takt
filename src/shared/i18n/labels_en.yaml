@@ -483,6 +483,7 @@ manager:
   goalStates:
     active: "Active"
     paused: "Paused"
+    awaiting_merge: "Awaiting merge"
   inquiryKinds:
     question: "Question"
     approval: "Approval"
