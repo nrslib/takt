@@ -94,36 +94,32 @@ describe('manager saved notice menu', () => {
     });
   });
 
-  it.each([0, 1])('retains the answer draft for an empty notice list and opens a nonempty list with %i notices', async (count) => {
+  it.each([0, 1])('[SCN-NOTICE-N2/P1] retains the answer draft for an empty notice list and opens a nonempty list with %i notices', async (count) => {
     vi.spyOn(Date, 'now').mockReturnValue(noticeStartedAt);
     memory.goals.mockReturnValue([{ ...goalRecord(), objective: 'Inquiry and notice',
       notifications: count === 0 ? [] : [noticeRecord(1)], questions: [{
         id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human', status: 'pending', body: 'Choose CSV or JSON',
       }] }]);
-    const context = mount();
-    const read = vi.spyOn(savedEvents, 'readManagerDisplayEvents');
+    const context = mount('ja');
     const answer = vi.spyOn(context.session, 'answerQuestion');
     try {
       await openMenu(context, 'answer');
       await enterSelection(context);
-      await waitFor(() => expect(promptFrame(context)).toContain('Enter your answer'));
+      await waitFor(() => expect(promptFrame(context)).toContain('回答を入力してください'));
       context.app.stdin.write('CSVで出力する');
       await waitFor(() => expect(promptFrame(context)).toContain('CSVで出力する'));
-      const beforeFrame = context.app.lastFrame();
-      const beforeRead = read.mock.calls.length;
       context.app.stdin.write(NOTICE_MENU);
-      await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(beforeRead));
-      await read.mock.results.at(-1)!.value;
       if (count === 0) {
-        const completed = read.mock.calls.length;
-        await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(completed));
-        await waitFor(() => expect(context.app.lastFrame()).toBe(beforeFrame));
+        await waitFor(() => expect(context.app.lastFrame()).toContain('知らせはありません。'));
+        expect(context.app.lastFrame()).toContain(getLabel('manager.answerPrompt', 'ja'));
+        expect(context.app.lastFrame()).toContain('Choose CSV or JSON');
         expect(promptFrame(context)).toContain('CSVで出力する');
         expect(selectionFrame(context)).toBeUndefined();
       } else {
-        await waitFor(() => expect(noticeDialog(context)).toContain(getLabel('manager.selectionTitles.notice', 'en')));
+        await waitFor(() => expect(noticeDialog(context)).toContain('読む知らせを選択'));
         expect(noticeRows(context)).toHaveLength(1);
         expect(noticeRows(context)[0]).toContain('Inquiry and notice');
+        expect(context.app.lastFrame()).not.toContain('知らせはありません。');
       }
       expect(answer).not.toHaveBeenCalled();
       expect(context.call).not.toHaveBeenCalled();
@@ -346,22 +342,47 @@ describe('manager saved notice menu', () => {
     } finally { context.app.unmount(); turn.resolve(response(null)); await context.session.close(); }
   });
 
-  it('leaves the normal screen unchanged when Ctrl+N refreshes an empty notice list', async () => {
-    const context = mount();
-    const read = vi.spyOn(savedEvents, 'readManagerDisplayEvents');
+  it.each([
+    ['ja', '知らせはありません。'],
+    ['en', 'No notices to read.'],
+  ] as const)('[SCN-NOTICE-N1/P2] shows the empty notice message in %s while retaining the unsent draft', async (lang, message) => {
+    const context = mount(lang);
     try {
-      await waitFor(() => expect(context.app.lastFrame()).not.toContain('Working'));
+      await waitFor(() => expect(context.app.lastFrame()).not.toContain(lang === 'ja' ? '処理中' : 'Working'));
       context.app.stdin.write('Unsent draft');
       await waitFor(() => expect(promptFrame(context)).toContain('Unsent draft'));
-      const frame = context.app.lastFrame();
-      const before = read.mock.calls.length;
       context.app.stdin.write(NOTICE_MENU);
-      await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(before));
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await waitFor(() => expect(context.app.lastFrame()).toContain(message));
       expect(noticeDialog(context)).toBeUndefined();
-      expect(context.app.lastFrame()).toBe(frame);
+      expect(promptFrame(context)).toContain('Unsent draft');
       expect(context.call).not.toHaveBeenCalled();
     } finally { context.app.unmount(); await context.session.close(); }
+  });
+
+  it('keeps the abort confirmation and selected choice when Ctrl+N finds no notices', async () => {
+    memory.goals.mockReturnValue([{ ...goalRecord(), objective: 'Abort fixture' }]);
+    const level = chalk.level;
+    chalk.level = 1;
+    const context = mount();
+    const abort = vi.spyOn(context.session, 'abortGoal').mockResolvedValue({ kind: 'reply', message: 'Goal aborted' });
+    const confirm = getLabel('manager.confirmAbort', 'en');
+    try {
+      await openMenu(context, 'goal');
+      await enterSelection(context);
+      await chooseGoalAction(context, 'abort');
+      await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.abortConfirmation', 'en')));
+      context.app.stdin.write(UP);
+      await waitFor(() => expect(context.app.lastFrame()).toContain(`\x1b[7m${confirm}\x1b[27m`));
+
+      context.app.stdin.write(NOTICE_MENU);
+      await waitFor(() => expect(context.app.lastFrame()).toContain('No notices to read.'));
+      expect(context.app.lastFrame()).toContain(getLabel('manager.abortConfirmation', 'en'));
+      expect(context.app.lastFrame()).toContain('Abort fixture');
+      expect(context.app.lastFrame()).toContain(`\x1b[7m${confirm}\x1b[27m`);
+      expect(selectionFrame(context)).toBeUndefined();
+      expect(abort).not.toHaveBeenCalled();
+      expect(context.call).not.toHaveBeenCalled();
+    } finally { context.app.unmount(); chalk.level = level; await context.session.close(); }
   });
 
   it('refreshes saved notices before opening Ctrl+N on the same screen', async () => {

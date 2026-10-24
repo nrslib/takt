@@ -359,7 +359,10 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
     void refreshEvents().then((snapshot) => {
       if (!mounted.current || exiting.current || request !== menuRequest.current || (kind === 'answer' && registering.current)) return;
       if (kind === 'notice') {
-        if (snapshot.notices.length === 0) return;
+        if (snapshot.notices.length === 0) {
+          append(getLabel('manager.selectionEmpty.notice', lang));
+          return;
+        }
         clearAnswer();
         setAbortTarget(null);
         resetChoice();
