@@ -425,6 +425,19 @@ tui:
     exceededStart: "Saved stopping position: {start} (iteration {iteration})"
 
 manager:
+  conversation:
+    assignment_changed: 'The assignment has changed. Reopen the conversation for the current assignment.'
+    busy: "An operation is running. Submit again after it finishes."
+    stale_summary: "The summary has changed. Review the latest summary."
+    invalid_assignment: "The assignment changed or the target is outside it. Reopen the conversation."
+    unavailable_attachment: "The conversation is disconnected. Reopen it."
+    registration_recovery: "Goal registration needs recovery. Inspect the saved reservation and goal state."
+    storage_error: "Conversation state could not be saved. Check storage and reconnect."
+    shutting_down: "The daemon is shutting down. Connect again."
+    invalid_input: "The operation input is invalid."
+    operation_failed: "The conversation operation failed. Inspect its current state."
+    dismissed: "Summary dismissed."
+    answer_saved: "Answer saved."
   counts: "Ongoing {goals} / Pending {questions} / ^R Inquiries  ^G Goals  ^O Summary  ^N Notices"
   inputHint: "Enter Send / Shift+Enter Newline / Esc Interrupt / Ctrl+C Exit"
   summaryHint: "^O Register the displayed summary"

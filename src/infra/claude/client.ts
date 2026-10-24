@@ -36,6 +36,7 @@ export class ClaudeClient {
   private static toSpawnOptions(options: ClaudeCallOptions): ClaudeSpawnOptions {
     return {
       cwd: options.cwd,
+      callerManagedSession: options.callerManagedSession,
       strictToolAllowlist: options.strictToolAllowlist,
       mcpOnlySideEffects: options.mcpOnlySideEffects,
       abortSignal: options.abortSignal,
@@ -93,6 +94,7 @@ export class ClaudeClient {
       sessionId: result.sessionId,
       error: result.error,
       errorKind: result.errorKind,
+      failureCategory: result.failureCategory,
       rateLimitInfo: result.rateLimitInfo,
       structuredOutput: result.structuredOutput,
       providerUsage: result.providerUsage,
@@ -125,6 +127,7 @@ export class ClaudeClient {
       sessionId: result.sessionId,
       error: result.error,
       errorKind: result.errorKind,
+      failureCategory: result.failureCategory,
       rateLimitInfo: result.rateLimitInfo,
       structuredOutput: result.structuredOutput,
       providerUsage: result.providerUsage,

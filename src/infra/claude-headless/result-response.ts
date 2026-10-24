@@ -2,6 +2,7 @@ import type { AgentResponse } from '../../core/models/index.js';
 import { parseStructuredOutput } from '../../shared/utils/index.js';
 import { buildRateLimitedResponseFields, classifyRateLimitError } from '../rate-limit/detection.js';
 import { findRateLimitNoticeInStdout, type StreamJsonStdoutResult } from './stream-json-lines.js';
+import { isClaudeSessionMissing } from '../claude/session-resume.js';
 
 type ClaudeHeadlessResponseInput = {
   agentName: string;
@@ -9,6 +10,7 @@ type ClaudeHeadlessResponseInput = {
   stdout: string;
   stderr: string;
   sessionId: string | undefined;
+  resumeSessionId?: string;
   outputSchema: Record<string, unknown> | undefined;
 };
 
@@ -68,6 +70,8 @@ export function buildClaudeHeadlessResponse(input: ClaudeHeadlessResponseInput):
       timestamp: new Date(),
       sessionId,
       error: message,
+      ...(isClaudeSessionMissing(input.resumeSessionId, parsed.error)
+        ? { failureCategory: 'session_continuation_unsupported' as const } : {}),
     };
   }
 

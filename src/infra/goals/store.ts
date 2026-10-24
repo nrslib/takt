@@ -1,4 +1,5 @@
 import { readdirSync } from 'node:fs';
+import { opendir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
   assertPrivateDirectoryReadSnapshot,
@@ -44,6 +45,31 @@ export class GoalStore {
 
   async get(id: string): Promise<Goal> {
     return this.getSync(id);
+  }
+
+  find(id: string): Goal | undefined {
+    return this.read(id);
+  }
+
+  async *iterate(): AsyncGenerator<Goal> {
+    assertSafePath(this.root, true);
+    if (lstatOrUndefined(this.root) === undefined) return;
+    const snapshot = capturePrivateDirectoryReadSnapshot(this.root);
+    let cursor: string | undefined;
+    while (true) {
+      assertPrivateDirectoryReadSnapshot(snapshot);
+      let next: string | undefined;
+      for await (const entry of await opendir(this.root)) {
+        const id = GoalIdSchema.parse(entry.name);
+        if ((cursor === undefined || id.localeCompare(cursor) > 0)
+          && (next === undefined || id.localeCompare(next) < 0)) next = id;
+      }
+      if (next === undefined) return;
+      cursor = next;
+      const goal = this.read(next);
+      assertPrivateDirectoryReadSnapshot(snapshot);
+      if (goal !== undefined) yield goal;
+    }
   }
 
   getSync(id: string): Goal {

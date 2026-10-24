@@ -14,21 +14,22 @@ function git(cwd: string, args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: 'pipe' }).trim();
 }
 
-async function hasExactRef(cwd: string, ref: string): Promise<boolean> {
+async function hasExactRef(cwd: string, ref: string, signal: AbortSignal | undefined): Promise<boolean> {
   const expected = Buffer.from(`${ref}\n`);
-  const result = await runGoalGit(cwd, ['for-each-ref', '--format=%(refname)', '--count=1', ref], expected.length, undefined);
+  const result = await runGoalGit(cwd, ['for-each-ref', '--format=%(refname)', '--count=1', ref], expected.length, signal);
   return !result.truncated && result.output.equals(expected);
 }
 
-async function resolveDefaultBranchRef(cwd: string, branch: string, fetchSucceeded: boolean): Promise<string> {
+async function resolveDefaultBranchRef(cwd: string, branch: string, fetchSucceeded: boolean, signal: AbortSignal | undefined): Promise<string> {
   const remoteRef = toRemoteTrackingBranchRef(branch);
-  if (fetchSucceeded && await hasExactRef(cwd, remoteRef)) return remoteRef;
+  if (fetchSucceeded && await hasExactRef(cwd, remoteRef, signal)) return remoteRef;
   const localRef = toLocalBranchRef(branch);
-  return await hasExactRef(cwd, localRef) ? localRef : remoteRef;
+  return await hasExactRef(cwd, localRef, signal) ? localRef : remoteRef;
 }
 
 export async function prepareGoalBranch(cwd: string, id: string, requestedStart: string | undefined,
-  requestedIntegration: string | undefined) {
+  requestedIntegration: string | undefined, signal?: AbortSignal) {
+  signal?.throwIfAborted();
   GoalIdSchema.parse(id);
   const configuredIntegration = requestedIntegration ?? resolveConfigValue(cwd, 'baseBranch');
   const startBranch = requestedStart ?? configuredIntegration ?? detectDefaultBranch(cwd);
@@ -38,15 +39,18 @@ export async function prepareGoalBranch(cwd: string, id: string, requestedStart:
   let fetchSucceeded = false;
   if (requestedStart === undefined) {
     try {
-      await goalGitText(cwd, ['fetch', 'origin'], AbortSignal.timeout(GOAL_FETCH_TIMEOUT_MS));
+      const timeout = AbortSignal.timeout(GOAL_FETCH_TIMEOUT_MS);
+      await goalGitText(cwd, ['fetch', 'origin'], signal === undefined ? timeout : AbortSignal.any([signal, timeout]));
       fetchSucceeded = true;
     } catch (error) {
+      signal?.throwIfAborted();
       log.info('Failed to fetch from remote, continuing with local state', { startBranch, error: String(error) });
     }
   }
   const startRef = requestedStart === undefined
-    ? await resolveDefaultBranchRef(cwd, startBranch, fetchSucceeded)
+    ? await resolveDefaultBranchRef(cwd, startBranch, fetchSucceeded, signal)
     : toLocalBranchRef(startBranch);
+  signal?.throwIfAborted();
   const commit = git(cwd, ['rev-parse', '--verify', `${startRef}^{commit}`]);
   if (configuredIntegration !== undefined) {
     git(cwd, ['rev-parse', '--verify', `${toLocalBranchRef(configuredIntegration)}^{commit}`]);

@@ -28,6 +28,7 @@ import type { ClaudeHeadlessCallOptions } from './types.js';
 import { buildRateLimitedResponseFields, classifyRateLimitError, findRateLimitMarkerNoticeLine } from '../rate-limit/detection.js';
 import { RATE_LIMIT_MAX_RETRIES, waitForRateLimitRetry } from '../rate-limit/retry.js';
 import { parseValidJsonLines } from '../structured-cli-output.js';
+import { isClaudeSessionMissing } from '../claude/session-resume.js';
 
 const log = createLogger('claude-headless');
 
@@ -192,7 +193,7 @@ async function buildSpawnArgs(
   const cleanup = async () => {
     const results = await Promise.allSettled([
       legacyMcpConfig.cleanup(),
-      ...(preparedMcp === undefined ? [] : [preparedMcp.dispose()]),
+      ...(preparedMcp === undefined || options.callerManagedMcp ? [] : [preparedMcp.dispose()]),
     ]);
     const failed = results.find((result) => result.status === 'rejected');
     if (failed?.status === 'rejected') {
@@ -252,7 +253,7 @@ export async function callClaudeHeadless(
 ): Promise<AgentResponse> {
   // Keep adapter disposal reachable even when argument construction fails
   // before buildSpawnArgs can return its combined cleanup callback.
-  let cleanup: (() => Promise<void>) | undefined = options.preparedMcp === undefined
+  let cleanup: (() => Promise<void>) | undefined = options.preparedMcp === undefined || options.callerManagedMcp
     ? undefined
     : () => options.preparedMcp!.dispose();
   let response: AgentResponse;
@@ -280,6 +281,7 @@ export async function callClaudeHeadless(
         response = buildClaudeHeadlessResponse({
           agentName, parsed, stdout, stderr,
           sessionId: extractSessionIdFromStdout(stdout) ?? session.sessionId,
+          resumeSessionId: options.sessionId,
           outputSchema: options.outputSchema,
         });
         terminalContent = response.status === 'rate_limited' ? '' : parsed.content;
@@ -289,7 +291,7 @@ export async function callClaudeHeadless(
         toolExecutionObserved ||= hasToolExecutionEvent(error.stdout);
         response = buildHeadlessErrorResponse(agentName, error, options);
       }
-      if (response.status !== 'rate_limited' || classifyRateLimitError(response.error) !== 'Transient'
+      if (options.callerManagedSession || response.status !== 'rate_limited' || classifyRateLimitError(response.error) !== 'Transient'
         || toolExecutionObserved || retries >= RATE_LIMIT_MAX_RETRIES) break;
       await waitForRateLimitRetry(++retries, options.abortSignal);
     }
@@ -320,11 +322,16 @@ export async function callClaudeHeadless(
 function buildHeadlessErrorResponse(agentName: string, error: ExecError, options: ClaudeHeadlessCallOptions): AgentResponse {
   const classified = classifyError(error, options);
   const outcome = classified.allowRateLimitDetection ? selectRateLimitOutcome(error) : undefined;
+  const parsed = aggregateResultFromStdout(error.stdout ?? '');
+  const rejectedResume = classified.allowRateLimitDetection && (
+    isClaudeSessionMissing(options.sessionId, error.stderr)
+    || parsed.hasResult && !parsed.success && isClaudeSessionMissing(options.sessionId, parsed.error));
   return {
     persona: agentName,
     timestamp: new Date(),
     sessionId: options.sessionId,
     ...(outcome ? buildRateLimitedResponseFields('claude-headless', outcome.source, outcome.text)
-      : { status: 'error' as const, content: classified.message, error: classified.message }),
+      : { status: 'error' as const, content: classified.message, error: classified.message,
+        ...(rejectedResume ? { failureCategory: 'session_continuation_unsupported' as const } : {}) }),
   };
 }

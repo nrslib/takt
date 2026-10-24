@@ -425,6 +425,19 @@ tui:
     exceededStart: "保存済みの停止位置: {start}（iteration {iteration}）"
 
 manager:
+  conversation:
+    assignment_changed: '担当が変わりました。現在の担当で会話を開き直してください。'
+    busy: "処理中です。完了してからもう一度送信してください。"
+    stale_summary: "表示中の要約は更新されています。最新の要約を確認してください。"
+    invalid_assignment: "担当が変わったか、操作対象が担当の範囲外です。会話を開き直してください。"
+    unavailable_attachment: "会話の接続がありません。開き直してください。"
+    registration_recovery: "ゴール登録の復旧が必要です。保存済みの予約と登録状況を確認してください。"
+    storage_error: "会話の状態を保存できませんでした。保存先を確認してから再接続してください。"
+    shutting_down: "daemonは終了処理中です。もう一度接続してください。"
+    invalid_input: "操作の入力が正しくありません。"
+    operation_failed: "会話の操作を完了できませんでした。現在の状態を確認してください。"
+    dismissed: "要約を取り下げました。"
+    answer_saved: "回答を保存しました。"
   counts: "進行中 {goals} ／ 未回答 {questions} ／ ^R 問い合わせ  ^G ゴール  ^O 要約  ^N 知らせ"
   inputHint: "Enter 送信 / Shift+Enter 改行 / Esc 中断 / Ctrl+C 終了"
   summaryHint: "^O 表示中の要約を登録"

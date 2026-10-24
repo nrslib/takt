@@ -90,6 +90,26 @@ export class StandaloneInquiryStore {
     return questions;
   }
 
+  async *iteratePending(): AsyncGenerator<GoalQuestion> {
+    const directory = await this.directory();
+    let entries;
+    try { entries = await opendir(directory); }
+    catch (error) {
+      if (isMissing(error)) return;
+      throw error;
+    }
+    for await (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+      const id = IdSchema.parse(entry.name.slice(0, -'.json'.length));
+      const question = await this.read(join(directory, entry.name), id);
+      if (question.status === 'pending' && question.recipient === 'human') yield question;
+    }
+  }
+
+  async get(id: string): Promise<GoalQuestion> {
+    return this.read(join(await this.directory(), `${IdSchema.parse(id)}.json`), id);
+  }
+
   async listPendingPage(offset: number, limit: number): Promise<{ inquiries: GoalQuestion[]; totalCount: number }> {
     const directory = await this.directory();
     let entries;

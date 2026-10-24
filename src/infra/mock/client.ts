@@ -13,6 +13,7 @@ import type { PreparedProviderMcp } from '../providers/mcp/types.js';
 import type { StreamCallback, StreamEvent } from '../../shared/types/provider.js';
 import { appendPrivateFile } from '../../shared/utils/private-file.js';
 import { getScenarioQueue } from './scenario.js';
+import { diagnosticLoggingSuppressed } from '../../shared/utils/diagnostic-context.js';
 import type { MockCallOptions, ScenarioEntry } from './types.js';
 import { assertPathSegmentsAreSafe } from '../../shared/utils/pathBoundary.js';
 import { executeMockMcpCalls } from './mcp.js';
@@ -237,6 +238,7 @@ async function streamTextChunks(
  * and nothing but a test sets it.
  */
 function recordMockPrompt(personaName: string, prompt: string): void {
+  if (diagnosticLoggingSuppressed()) return;
   const logPath = process.env.TAKT_MOCK_PROMPT_LOG;
   if (!logPath) {
     return;
