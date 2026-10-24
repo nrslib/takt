@@ -29,6 +29,7 @@ import { readManagerEvents, saveManagerEvent } from '../infra/goals/events.js';
 import { GoalAbortMonitor, GoalAbortedError } from '../features/tasks/execute/goalAbortMonitor.js';
 import { resetScenario,setMockScenario } from '../infra/mock/index.js';
 import { TaskRunner } from '../infra/task/runner.js';
+import { getLabel } from '../shared/i18n/index.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 import { goalId,goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
@@ -1071,25 +1072,71 @@ describe('manager questions, answers and notifications through production bounda
     ]));
   });
 
-  it('shows saved notifications on reopening and on the next message in the same mounted TUI', async () => {
-    const first = '保存済みの進捗を確認してください';
-    const second = '次の取り込みを待っています';
-    await invoke('takt_notify_goal', { kind: 'custom', body: first, severity: 'info' });
+  it('shows new notifications in the same mounted TUI and reads saved notifications with Ctrl+N without replaying them on reopening', async () => {
+    const first = ['保存済みの進捗', '保存済みの確認事項', '保存済みの次の作業', '保存済みの詳細末尾'];
+    const second = ['新着の停止理由', '新着の確認事項', '新着の次の作業', '新着の詳細末尾'];
+    const counts = getLabel('manager.counts', 'en', { goals: '1', questions: '0' }).replace(/\s+/gu, ' ');
+    const project = basename(cwd);
+    const customHeading = getLabel('manager.notificationHeadings.custom', 'en', { project });
+    const blockedHeading = getLabel('manager.notificationHeadings.blocked', 'en', { project });
+    const goalLine = getLabel('manager.notificationGoal', 'en', { objective: goalRecord().objective, id: goalId.slice(0, 8) });
+    await invoke('takt_notify_goal', { kind: 'custom', body: first.join('\n'), severity: 'info' });
+    const saved = await new GoalStore(cwd).get(goalId);
+    await vi.waitFor(() => expect(Date.now()).toBeGreaterThan(Date.parse(saved.notifications![0]!.recordedAt)));
     await mountManager();
-    await vi.waitFor(() => expect(app!.lastFrame()).toContain(first));
-    await invoke('takt_notify_goal', { kind: 'blocked', body: second, severity: 'warning' });
+    await vi.waitFor(() => {
+      const frame = app!.lastFrame()!;
+      expect(frame.replace(/\s+/gu, ' ')).toContain(counts);
+      expect(frame).not.toContain('Working');
+      for (const line of first) expect(frame).not.toContain(line);
+      expect(frame).not.toContain(customHeading);
+    });
+    await invoke('takt_notify_goal', { kind: 'blocked', body: second.join('\n'), severity: 'warning' });
     setMockScenario([{ persona: 'manager', status: 'done', content: JSON.stringify({ message: '状況を確認しました', summary: null }) }]);
     await send('状況を教えてください');
     await vi.waitFor(() => {
-      expect(app!.lastFrame()).toContain(first);
-      expect(app!.lastFrame()).toContain(second);
-      expect(app!.lastFrame()).toContain('状況を確認しました');
+      const frame = app!.lastFrame()!;
+      const text = frame.replace(/\s+/gu, ' ');
+      expect(text).toContain(blockedHeading);
+      expect(text).toContain(goalLine);
+      expect(text).toContain(getLabel('manager.notificationSeverity', 'en', {
+        severity: getLabel('manager.notificationSeverities.warning', 'en'),
+      }));
+      for (const line of second.slice(0, 3)) expect(frame).toContain(line);
+      expect(frame).not.toContain(second[3]);
+      expect(text).toContain(getLabel('manager.notificationDigestHint', 'en'));
+      expect(text).toContain(getLabel('manager.notificationBlockedAction', 'en', { project }));
+      for (const line of first) expect(frame).not.toContain(line);
+      expect(frame).not.toContain(customHeading);
+      expect(frame).toContain('状況を確認しました');
+      expect(frame).not.toContain('Working');
     });
     app!.unmount();
     app = render(createElement(ManagerView, { cwd, lang: 'en', session: session!, initialDiagnostics: [], onExit: vi.fn() }));
     await vi.waitFor(() => {
-      expect(app!.lastFrame()).toContain(first);
-      expect(app!.lastFrame()).toContain(second);
+      const frame = app!.lastFrame()!;
+      expect(frame.replace(/\s+/gu, ' ')).toContain(counts);
+      expect(frame).not.toContain('Working');
+      for (const line of [...first, ...second]) expect(frame).not.toContain(line);
+      expect(frame).not.toContain(customHeading);
+      expect(frame).not.toContain(blockedHeading);
+    });
+    app!.stdin.write('\x0e');
+    await vi.waitFor(() => {
+      const text = app!.lastFrame()!.replace(/[│\s]+/gu, ' ');
+      expect(text).toContain(getLabel('manager.selectionTitles.notice', 'en'));
+      expect(text).toContain(`${blockedHeading} — ${goalRecord().objective}`);
+      expect(text).toContain(`${customHeading} — ${goalRecord().objective}`);
+    });
+    app!.stdin.write('\x1b[B');
+    app!.stdin.write('\r');
+    await vi.waitFor(() => {
+      const frame = app!.lastFrame()!;
+      const text = frame.replace(/[│\s]+/gu, ' ');
+      expect(text).toContain(getLabel('manager.noticeDetailHint', 'en'));
+      expect(text).toContain(customHeading);
+      expect(text).toContain(goalLine);
+      for (const line of first) expect(frame).toContain(line);
     });
   }, 30_000);
 });
