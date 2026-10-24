@@ -4,7 +4,9 @@
 
 The TUI handles discussion, summary approval, answers, pause, resume, abort and display. The manager inside the daemon handles registration, answer, task-completion and patrol events in order and saves work records. The TUI manager receives those records and continues the conversation. If automatic execution is disabled, a person starts run / watch.
 
-The input box is only for conversation; text starting with / is a regular message too. Ctrl+R opens unanswered inquiries, Ctrl+G opens ongoing goals (active and paused), and Ctrl+O opens the summary menu. All three keys work while manager is processing. Ctrl+O requests a summary of the current conversation if none is awaiting approval, or approves and registers the displayed summary without regenerating it. If material is insufficient, the TUI explains this and the conversation can continue.
+The input box is only for conversation; text starting with / is a regular message too. Ctrl+R opens unanswered inquiries, Ctrl+G opens ongoing goals (active and paused), Ctrl+O opens the summary menu, and Ctrl+N opens the saved notification list to read their full text. All four keys work while manager is processing. Ctrl+O requests a summary of the current conversation if none is awaiting approval, or approves and registers the displayed summary without regenerating it. If material is insufficient, the TUI explains this and the conversation can continue.
+
+Ctrl+N shows saved notifications in a list, with full text in the selected notification's details. Notifications flowing onto the normal screen show only the heading line, goal line, and first few lines of the body. Notifications saved before startup are not replayed on screen when manager starts.
 
 Registration stays in the TUI. Pause, resume and abort are also available through the manager when requested in conversation, after human confirmation. Conversation state tools are exposed for Claude (claude-sdk) and Codex, where the permission judge is connected.
 

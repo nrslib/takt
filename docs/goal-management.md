@@ -8,7 +8,7 @@ Start `takt manager` in an interactive terminal and describe the objective, scop
 
 Press `Ctrl+O` to open the summary menu. If no summary is awaiting approval, it requests a summary of the current conversation. If a summary is already displayed, it approves and registers it without regenerating it. If there is insufficient material, manager explains this and you can continue the conversation. Manager can also offer a summary itself.
 
-The normal screen shows the count of ongoing goals (active and paused), the count of unanswered inquiries, and hints for `Ctrl+R`, `Ctrl+G`, and `Ctrl+O` on the same single line. It does not list completed or aborted goals or inquiry bodies. The input box is only for conversation with manager; text starting with `/` is sent as a regular message too. All three menu keys remain available while manager is processing.
+The normal screen shows the count of ongoing goals (active and paused), the count of unanswered inquiries, and hints for `Ctrl+R`, `Ctrl+G`, `Ctrl+O`, and `Ctrl+N` (`^N Notifications`) on the same single line. It does not list completed or aborted goals or inquiry bodies. The input box is only for conversation with manager; text starting with `/` is sent as a regular message too. All four menu keys remain available while manager is processing.
 
 After registration, the manager inside the daemon handles events, submits tasks, checks and integrates results, and selects next work. The TUI displays work records and lets you continue the conversation with a manager that receives those records. Closing the TUI leaves an already running run active.
 
@@ -89,6 +89,7 @@ Open menus with the following keys, including while manager is processing.
 | `Ctrl+R` | List unanswered inquiries with and without a goal together, then answer the selected inquiry. |
 | `Ctrl+G` | List only ongoing goals (active and paused) by short name and state. Use `↑↓` to select a goal and `Enter` to choose pause, resume or abort. |
 | `Ctrl+O` | Request a summary of the current conversation if none is awaiting approval, or approve and register the displayed summary without regenerating it. Continue the conversation if material is insufficient. |
+| `Ctrl+N` | Open saved notifications and select one to read its full text. |
 
 Pausing stops new submissions and integrations while running tasks continue and results are deferred. Resuming advances deferred events and tasks. Before aborting, confirm that the operation is irreversible and that records and branches remain; aborting interrupts the goal's running tasks and invalidates unstarted tasks. `Esc` closes the list without making changes. If there are no eligible targets, the TUI shows a notice instead of opening a list.
 
@@ -103,6 +104,12 @@ Each list row shows the kind, short goal name ("No goal" for inquiries without a
 Approval defaults to this time only. Other scopes are this goal, project, manager (workspace), and global. Standalone approvals omit this goal. With one repository, project and manager share one choice saved as project scope; adding a repository later does not expand existing permissions.
 
 For project, workspace and global scopes, edit and confirm the proposed permission sentence. When no proposal is saved, the TUI initializes it from the tool, target and execution directory. Only the confirmed sentence is appended to permission Markdown by the TUI, before saving the answer. An append failure retains the pending inquiry and edited sentence; resolve the cause and press Enter to retry. Standalone approvals persist and can be answered after opening a new TUI.
+
+### Reading notifications
+
+Press `Ctrl+N` to open saved notifications. As with the inquiry and goal lists, each page shows up to 10 items, one per row. Use `↑↓` to select a notification and `Enter` to open its details. Each row shows only the heading and short goal name, without the body. The details show the full body without truncation. `Esc` in the details returns to the list; `Esc` in the list closes it. If there are no saved notifications, the list does not open.
+
+Notifications flowing onto the normal screen show only the key points: the heading line, goal line, and first few lines of the body. Read the full text in the `Ctrl+N` details. Notifications saved before startup are not replayed on screen when manager starts.
 
 ## Goal operations in conversation
 
