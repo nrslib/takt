@@ -483,6 +483,7 @@ manager:
   goalStates:
     active: "実行中"
     paused: "一時停止中"
+    awaiting_merge: "マージ待ち"
   inquiryKinds:
     question: "質問"
     approval: "承認"

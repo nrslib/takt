@@ -30,10 +30,14 @@ export function ManagerSelectionDialog({ selection, bodyText, lang }: {
     })) : selection.kind === 'repository' ? selection.candidates.slice(selection.start, end).map((directory) => ({
       key: directory,
       text: toSingleLineText(`${basename(directory)} — ${directory}`),
-    })) : selection.candidates.slice(selection.start, end).map((goal) => ({
-      key: goal.id,
-      text: `${formatGoalName(goal.objective)} — ${getLabel(`manager.goalStates.${goal.executionStatus}`, lang)}`,
-    }));
+    })) : selection.candidates.slice(selection.start, end).map((goal) => {
+      const state = goal.executionStatus === 'paused' ? 'paused'
+        : goal.status === 'awaiting_merge' ? 'awaiting_merge' : 'active';
+      return {
+        key: goal.id,
+        text: `${formatGoalName(goal.objective)} — ${getLabel(`manager.goalStates.${state}`, lang)}`,
+      };
+    });
   return (
     <Box borderStyle="round" flexDirection="column">
       <Text bold>{getLabel(`manager.selectionTitles.${selection.kind}`, lang)}</Text>
