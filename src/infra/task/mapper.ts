@@ -68,6 +68,7 @@ function buildTaskFileData(task: TaskRecord, content: string): TaskFileData {
     caccia_pushed_head: task.caccia_pushed_head,
     merge_task: task.merge_task,
     merge_method: task.merge_method,
+    merge_concurrency: task.merge_concurrency,
     merge_threat_check_max_diff_bytes: task.merge_threat_check_max_diff_bytes,
     merge_head_repository_url: task.merge_head_repository_url,
     merge_head_repository_push_urls: task.merge_head_repository_push_urls,

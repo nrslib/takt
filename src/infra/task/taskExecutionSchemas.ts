@@ -52,6 +52,7 @@ export const TaskExecutionConfigObjectSchema = z.object({
   }).strict().optional(),
   merge_task: z.boolean().optional(),
   merge_method: z.enum(['squash', 'merge', 'rebase']).optional(),
+  merge_concurrency: positiveSafeIntegerSchema.optional(),
   merge_threat_check_max_diff_bytes: z.number().int().nonnegative().optional(),
   merge_head_repository_url: z.string().min(1).optional(),
   merge_head_repository_push_urls: z.array(z.string().min(1)).nonempty().optional(),

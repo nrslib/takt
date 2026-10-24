@@ -10,6 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `merge-review-fix` and `merge-review-fix-simple` now resynchronize PRs that become `CONFLICTING` after CI, then push, run Caccia and wait for CI on the new HEAD without repeating the initial review. Resynchronizations are limited to `max(2, runtime concurrency - 1)`, excluding initial synchronization; CLI concurrency overrides persist through Requeue and Retry. Persistent conflicts at the limit produce a comment and end COMPLETE without merging. PRs that are only `BEHIND` proceed to the existing merge conditions. Used CI recovery budgets remain unchanged.
+
 - Restored automatic Caccia after successful PR creation or update by worktree `auto_pr` tasks and Pipeline `--auto-pr` when `caccia.enabled` is true. Explicit Caccia effects in the executed workflow or an automatically started merge workflow suppress post-processing Caccia; otherwise it finishes before merge starts. Git push itself does not start Caccia.
 
 ## [0.72.0] - 2026-10-23

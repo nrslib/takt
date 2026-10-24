@@ -40,6 +40,7 @@ export class TaskLifecycleService {
     headRepositoryUrl: string; headRepositoryPushUrls: readonly string[];
     workflow: string; method: MergeMethod; worktreePath: string;
     threatCheckMaxDiffBytes: number;
+    concurrency?: number;
     parentTaskName?: string;
   }): TaskInfo {
     const content = `Evaluate pull request #${input.prNumber} using this workflow. Review the cumulative PR diff and record the outcome on the PR.`;
@@ -66,6 +67,7 @@ export class TaskLifecycleService {
         base_branch: input.baseBranch, workflow: input.workflow,
         merge_task: true, merge_method: input.method,
         merge_threat_check_max_diff_bytes: input.threatCheckMaxDiffBytes,
+        merge_concurrency: input.concurrency,
         merge_head_repository_url: input.headRepositoryUrl,
         merge_head_repository_push_urls: input.headRepositoryPushUrls,
         merge_initial_head_sha: input.headSha,
