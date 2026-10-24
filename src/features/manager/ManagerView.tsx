@@ -351,7 +351,7 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
   const openMenu = (kind: ManagerSelectionCommand): void => {
     if (kind === 'answer' && registering.current) return;
     const request = ++menuRequest.current;
-    if (kind !== 'notice') {
+    if (kind !== 'notice' && kind !== 'repository') {
       clearAnswer();
       setAbortTarget(null);
       resetChoice();

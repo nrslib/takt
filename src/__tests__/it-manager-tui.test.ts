@@ -969,6 +969,88 @@ describe('manager TUI summary menu and conversation input', () => {
     } finally { context.app.unmount(); await context.session.close(); }
   });
 
+  it('keeps the answer target and unsent draft after opening and closing the repository list', async () => {
+    memory.goals.mockReturnValue([{ ...goalRecord(), objective: 'Answer fixture', questions: [{
+      id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human', status: 'pending', body: 'Choose CSV or JSON',
+    }] }]);
+    const context = mount();
+    try {
+      await openMenu(context, 'answer');
+      await enterSelection(context);
+      await waitFor(() => expect(promptFrame(context)).toContain('Enter your answer'));
+      context.app.stdin.write('CSV answer draft');
+      await waitFor(() => expect(promptFrame(context)).toContain('CSV answer draft'));
+
+      context.app.stdin.write('\x10');
+      await waitFor(() => {
+        expect(context.app.lastFrame()).toContain(getLabel('manager.selectionTitles.repository', 'en'));
+        expect(context.app.lastFrame()).toContain(cwd);
+        expect(context.app.lastFrame()).toContain(getLabel('manager.answerPrompt', 'en'));
+        expect(promptFrame(context)).toContain('CSV answer draft');
+      });
+      context.app.stdin.write('\x1b[27u');
+      await waitFor(() => {
+        expect(context.app.lastFrame()).not.toContain(getLabel('manager.selectionTitles.repository', 'en'));
+        expect(context.app.lastFrame()).toContain(getLabel('manager.answerPrompt', 'en'));
+        expect(promptFrame(context)).toContain('CSV answer draft');
+        expect(context.app.lastFrame()).toContain('Choose CSV or JSON');
+      });
+    } finally { context.app.unmount(); await context.session.close(); }
+  });
+
+  it('keeps the abort confirmation and selected choice after opening and closing the repository list', async () => {
+    memory.goals.mockReturnValue([{ ...goalRecord(), objective: 'Abort fixture' }]);
+    const context = mount();
+    const abort = vi.spyOn(context.session, 'abortGoal').mockResolvedValue({ kind: 'reply', message: 'Goal aborted' });
+    try {
+      await openMenu(context, 'goal');
+      await enterSelection(context);
+      await chooseGoalAction(context, 'abort');
+      await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.abortConfirmation', 'en')));
+      context.app.stdin.write(UP);
+
+      context.app.stdin.write('\x10');
+      await waitFor(() => {
+        expect(context.app.lastFrame()).toContain(getLabel('manager.selectionTitles.repository', 'en'));
+        expect(context.app.lastFrame()).toContain(cwd);
+        expect(context.app.lastFrame()).toContain(getLabel('manager.abortConfirmation', 'en'));
+      });
+      context.app.stdin.write('\x1b[27u');
+      await waitFor(() => {
+        expect(context.app.lastFrame()).not.toContain(getLabel('manager.selectionTitles.repository', 'en'));
+        expect(context.app.lastFrame()).toContain(getLabel('manager.abortConfirmation', 'en'));
+        expect(context.app.lastFrame()).toContain('Abort fixture');
+      });
+
+      context.app.stdin.write(ENTER);
+      await waitFor(() => expect(abort).toHaveBeenCalledOnce());
+    } finally { context.app.unmount(); await context.session.close(); }
+  });
+
+  it('keeps the abort confirmation when Ctrl+P finds no assigned repositories', async () => {
+    memory.goals.mockReturnValue([{ ...goalRecord(), objective: 'Abort fixture' }]);
+    const workspace = { id: '650e8400-e29b-41d4-a716-446655440003',
+      name: 'Empty assignment fixture', repositoryDirectories: [cwd] };
+    const assignment = { kind: 'workspace' as const, workspaceId: workspace.id, name: workspace.name,
+      repositoryDirectories: workspace.repositoryDirectories };
+    const readWorkspace = vi.spyOn(workspaceRegistry, 'readWorkspace').mockResolvedValue(workspace);
+    const context = mount('en', undefined, assignment);
+    const abort = vi.spyOn(context.session, 'abortGoal').mockResolvedValue({ kind: 'reply', message: 'Goal aborted' });
+    try {
+      await openMenu(context, 'goal');
+      await enterSelection(context);
+      await chooseGoalAction(context, 'abort');
+      await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.abortConfirmation', 'en')));
+      readWorkspace.mockResolvedValue({ ...workspace, repositoryDirectories: [] });
+
+      context.app.stdin.write('\x10');
+      await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.selectionEmpty.repository', 'en')));
+      expect(selectionFrame(context)).toBeUndefined();
+      expect(context.app.lastFrame()).toContain(getLabel('manager.abortConfirmation', 'en'));
+      expect(abort).not.toHaveBeenCalled();
+    } finally { context.app.unmount(); await context.session.close(); }
+  });
+
   it.each(['ja', 'en'] as const)('shows insufficient material in %s and accepts the next conversation', async (lang) => {
     const context = mount(lang);
     const structuredOutput = { message: lang === 'ja' ? '作業の目的を教えてください。' : 'Please describe the objective.', summary: null };
