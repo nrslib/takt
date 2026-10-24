@@ -335,6 +335,7 @@
     "src/__tests__/manager-goal-execution-permission.test.ts",
     "src/__tests__/manager-goal-operations.test.ts",
     "src/__tests__/manager-goal-workflow.test.ts",
+    "src/__tests__/manager-help-wrap.test.ts",
     "src/__tests__/manager-inquiry-answer.test.ts",
     "src/__tests__/manager-mcp-connection.test.ts",
     "src/__tests__/manager-mcp-lifecycle.test.ts",

@@ -513,7 +513,7 @@ manager:
   cancelAbort: "キャンセル"
   abortChoiceHint: "↑ 中止 / ↓ キャンセル / Enter 決定 / Esc 戻る"
   description: "実験的な manager の会話 TUI を起動します"
-  experimentalNotice: "manager は実験的機能です。動作・設定・保存するデータの形式は予告なく変わることがあります。"
+  experimentalNotice: "manager\u00A0は実験的機能です。動作・設定・保存するデータの形式は予告なく変わることがあります。"
   costNotice: "manager は自動でタスクを投入・実行するため、provider の API の費用がかかります。"
   notificationHeadings:
     progress: "進捗をお知らせします — {project}"
