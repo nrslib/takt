@@ -472,6 +472,7 @@ manager:
   repositorySelectionHint: "↑↓ Move / Esc Close"
   noticeDetailHint: "↑↓ Scroll / Esc Back to list"
   selectionEmpty:
+    notice: "No notices to read."
     repository: "No assigned repositories."
     answer: "No pending inquiries to answer."
     goal: "No ongoing goals to operate on."
