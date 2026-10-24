@@ -217,6 +217,24 @@ describe('Codex runtime header environment references', () => {
     }
   });
 
+  it('excludes Codex servers whose header names differ only by case', async () => {
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const servers = runtimeServers({ 'X-Key': '${env:MCP_HEADER_KEY}', 'x-key': 'literal' });
+    const prepared = await createMcpAdapter('codex').prepare(servers, baseContext());
+
+    try {
+      expect(prepared.config?.mcp_servers?.datadog).toBeUndefined();
+      expect(prepared.config?.mcp_servers?.github).toEqual({ command: 'github-mcp' });
+      expect(prepared.excludedServerNames).toEqual(['datadog']);
+      expect(prepared.config?.shell_environment_policy?.filters).toEqual({ MCP_HEADER_KEY: 'exclude' });
+      const messages = [...output.mock.calls, ...warnings.mock.calls].map((args) => args.join(' '));
+      expect(messages.some((message) => message.includes('header names that differ only by case'))).toBe(true);
+    } finally {
+      await prepared.dispose();
+    }
+  });
+
   it('keeps literal and legacy headers unchanged when no provider reference is present', async () => {
     const prepared = await createMcpAdapter('codex').prepare(runtimeServers({
       'X-Tenant': '${MCP_HEADER_TENANT}', 'X-Static': 'fixed',

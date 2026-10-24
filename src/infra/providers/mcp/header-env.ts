@@ -16,9 +16,22 @@ export function getCodexHeaderEnvRef(parts: McpHeaderPart[]): { name: string; be
 
 function unsupportedReason(provider: ProviderType, server: McpServerConfig): string | undefined {
   const refs = Object.entries(getMcpHeaderEnvRefs(server));
-  if (refs.length === 0) return undefined;
   if (provider === 'opencode') return undefined;
-  if (provider !== 'codex') return 'provider header environment references have not been verified for this execution path';
+  if (provider !== 'codex') {
+    return refs.length === 0
+      ? undefined
+      : 'provider header environment references have not been verified for this execution path';
+  }
+  const seenHeaders = new Set<string>();
+  const headerNames = 'headers' in server ? Object.keys(server.headers ?? {}) : [];
+  for (const header of headerNames) {
+    const normalized = header.toLowerCase();
+    if (seenHeaders.has(normalized)) {
+      return 'header names that differ only by case cannot be represented by Codex';
+    }
+    seenHeaders.add(normalized);
+  }
+  if (refs.length === 0) return undefined;
   for (const [header, parts] of refs) {
     const ref = getCodexHeaderEnvRef(parts);
     if (ref === undefined || (ref.bearer && header.toLowerCase() !== 'authorization')) {

@@ -113,6 +113,47 @@ describe('CodexClient — structuredOutput 抽出', () => {
     expect(lastCodexConstructorOptions?.config).toMatchObject({ shell_environment_policy: { filters: { MCP_HEADER_ACCESS: 'exclude' } } });
   });
 
+  it('returns MCP exclusion preparation failures as provider errors', async () => {
+    vi.mocked(hasCodexMcpServer).mockRejectedValue(new Error('Codex MCP configuration is invalid'));
+    const onStream = vi.fn();
+
+    const result = await new CodexClient().call('coder', 'prompt', {
+      cwd: '/repo', onStream,
+      preparedMcp: { dispose: async () => {}, excludedServerNames: ['datadog'] },
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.failureCategory).toBe('provider_error');
+    expect(result.error).toContain('Codex MCP configuration is invalid');
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'result',
+      data: expect.objectContaining({ success: false, failureCategory: 'provider_error' }),
+    });
+    expect(mockStartThread).not.toHaveBeenCalled();
+  });
+
+  it('keeps configured MCP transports in the table override used for dotted exclusions', async () => {
+    vi.mocked(hasCodexMcpServer).mockResolvedValue(true);
+    mockEvents = [{ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } }];
+
+    const result = await new CodexClient().call('coder', 'prompt', {
+      cwd: '/repo',
+      preparedMcp: {
+        dispose: async () => {},
+        excludedServerNames: ['name.with.dots'],
+        config: { mcp_servers: {
+          retained: { command: 'node', args: ['retained.js'] },
+          'name.with.dots': { url: 'https://example.com/mcp', http_headers: { 'X-Key': 'value' } },
+        } },
+      },
+    });
+
+    expect(result.status).toBe('done');
+    expect(lastCodexConstructorOptions?.configOverrides).toEqual([
+      'mcp_servers={"retained" = {"command" = "node", "args" = ["retained.js"]}, "name.with.dots" = {"url" = "https://example.com/mcp", "http_headers" = {"X-Key" = "value"}, "enabled" = false}}',
+    ]);
+  });
+
   it('MCP-only の一覧取得とセッションに同じ CLI・環境・設定を渡し、既存 MCP をすべて無効にする', async () => {
     mockEvents = [{ type: 'turn.completed' }];
     mockBuildCodexSkillConfig.mockReturnValue({ skills: { config: [{ path: '/skills/a', enabled: false }] } });

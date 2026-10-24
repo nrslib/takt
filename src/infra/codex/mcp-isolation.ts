@@ -29,8 +29,22 @@ export async function prepareCodexMcpExclusions(
   }
   // A disabled entry still needs an existing transport in Codex's merged schema.
   // Do not invent entries for excluded names absent from the effective config.
-  const disabled = Object.fromEntries(existingNames.map((name) => [name, { enabled: false }]));
-  return Object.keys(disabled).length === 0 ? [] : serializeCodexConfig({ mcp_servers: disabled });
+  if (existingNames.length === 0) return [];
+
+  const configuredServers = config.mcp_servers as Record<string, unknown> | undefined;
+  const disabledNames = new Set(existingNames);
+  const mcpServers = Object.fromEntries([
+    ...Object.entries(configuredServers ?? {}).map(([name, existing]) => {
+      if (!disabledNames.has(name)) return [name, existing];
+      const existingEntry = existing !== null && typeof existing === 'object' && !Array.isArray(existing)
+        ? existing as Record<string, unknown>
+        : {};
+      return [name, { ...existingEntry, enabled: false }];
+    }),
+    ...existingNames.filter((name) => !Object.hasOwn(configuredServers ?? {}, name))
+      .map((name) => [name, { enabled: false }]),
+  ]);
+  return Object.keys(mcpServers).length === 0 ? [] : serializeCodexConfig({ mcp_servers: mcpServers });
 }
 
 function tomlValue(value: unknown): string {
@@ -121,7 +135,7 @@ export async function prepareCodexMcpIsolation(
   };
   const sessionOverrides = [
     ...serializeCodexConfig(isolationConfig),
-    ...await prepareCodexMcpExclusions(options, codexConfig, codexEnvironment),
+    ...await prepareCodexMcpExclusions(options, ambientConfig, codexEnvironment),
   ];
   const json = await runCodexMcpList({
     executablePath: codexPathOverride, cwd: options.cwd, env: codexEnvironment,
