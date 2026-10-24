@@ -385,25 +385,26 @@ export class CodexClient {
     }
     const { config: codexConfig, env: codexEnvironment } = sessionConfig;
 
-    const isolation = options.mcpOnlySideEffects
-      ? await prepareCodexMcpIsolation(options, codexConfig, codexEnvironment)
-      : undefined;
+    let isolation: Awaited<ReturnType<typeof prepareCodexMcpIsolation>> | undefined;
     let mcpExclusions: string[] = [];
-    if (isolation === undefined) {
-      try {
+    try {
+      isolation = options.mcpOnlySideEffects
+        ? await prepareCodexMcpIsolation(options, codexConfig, codexEnvironment)
+        : undefined;
+      if (isolation === undefined) {
         mcpExclusions = await prepareCodexMcpExclusions(options, codexConfig, codexEnvironment);
-      } catch (error) {
-        const failure = createProviderErrorFailure(getErrorMessage(error));
-        const errorResponse = this.buildErrorResponse(agentType, threadId, failure, options, 0);
-        emitResult(
-          options.onStream,
-          false,
-          errorResponse.error ?? errorResponse.content,
-          threadId,
-          failure.category,
-        );
-        return errorResponse;
       }
+    } catch (error) {
+      const failure = createProviderErrorFailure(getErrorMessage(error));
+      const errorResponse = this.buildErrorResponse(agentType, threadId, failure, options, 0);
+      emitResult(
+        options.onStream,
+        false,
+        errorResponse.error ?? errorResponse.content,
+        threadId,
+        failure.category,
+      );
+      return errorResponse;
     }
 
     while (true) {

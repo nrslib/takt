@@ -196,10 +196,13 @@ describe('CodexClient — structuredOutput 抽出', () => {
 
   it.each([true, false])('MCP-only の同名サーバーが enabled=%s の場合、SDK セッション開始前に失敗する', async (enabled) => {
     vi.mocked(runCodexMcpList).mockResolvedValue(JSON.stringify([{ name: 'unique_manager', enabled }]));
-    await expect(new CodexClient().call('manager', 'prompt', {
+    const result = await new CodexClient().call('manager', 'prompt', {
       cwd: '/tmp', codexPathOverride: '/opt/codex', mcpOnlySideEffects: true,
       preparedMcp: { dispose: async () => {}, config: { mcp_servers: { unique_manager: { command: 'node' } } } },
-    })).rejects.toThrow();
+    });
+    expect(result.status).toBe('error');
+    expect(result.failureCategory).toBe('provider_error');
+    expect(result.error).toContain('TAKT MCP server name conflicts');
     expect(lastCodexConstructorOptions).toBeUndefined();
     expect(mockStartThread).not.toHaveBeenCalled();
   });
@@ -207,18 +210,30 @@ describe('CodexClient — structuredOutput 抽出', () => {
   it.each(['not-json', '{}', '[{"name":"extra"}]', '[{"enabled":true}]', '[{"name":"extra","enabled":"true"}]', '[null]'])
   ('MCP-only の一覧が不正な場合、SDK セッション開始前に失敗する: %s', async (json) => {
     vi.mocked(runCodexMcpList).mockResolvedValue(json);
-    await expect(new CodexClient().call('manager', 'prompt', {
+    const result = await new CodexClient().call('manager', 'prompt', {
       cwd: '/tmp', codexPathOverride: '/opt/codex', mcpOnlySideEffects: true,
-    })).rejects.toThrow();
+    });
+    expect(result.status).toBe('error');
+    expect(result.failureCategory).toBe('provider_error');
     expect(lastCodexConstructorOptions).toBeUndefined();
     expect(mockStartThread).not.toHaveBeenCalled();
   });
 
-  it('MCP-only の一覧取得が失敗した場合、SDK セッション開始前に失敗する', async () => {
+  it('MCP-only の一覧取得が失敗した場合、provider error を返して SDK セッションを開始しない', async () => {
     vi.mocked(runCodexMcpList).mockRejectedValue(new Error('list failed'));
-    await expect(new CodexClient().call('manager', 'prompt', {
-      cwd: '/tmp', codexPathOverride: '/opt/codex', mcpOnlySideEffects: true,
-    })).rejects.toThrow();
+    const onStream = vi.fn();
+
+    const result = await new CodexClient().call('manager', 'prompt', {
+      cwd: '/tmp', codexPathOverride: '/opt/codex', mcpOnlySideEffects: true, onStream,
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.failureCategory).toBe('provider_error');
+    expect(result.error).toContain('list failed');
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'result',
+      data: expect.objectContaining({ success: false, failureCategory: 'provider_error' }),
+    });
     expect(lastCodexConstructorOptions).toBeUndefined();
     expect(mockStartThread).not.toHaveBeenCalled();
   });
