@@ -278,6 +278,9 @@ steps:
 | `takt ui` | 在 `http://127.0.0.1:20525` 启动实验性的 Viewer 优先 Web UI |
 | `takt list` | 管理任务分支：合并、重试、重新排队、强制失败、指导或删除 |
 | `takt #N` | 将 GitHub Issue 作为任务输入 |
+| `takt merge` | 使用 workflow 审查、修复并合并 PR |
+| `takt install <provider>` | 安装基于 SDK 的 provider 所需的 SDK |
+| `takt update` | 将已安装的 provider SDK 更新到 TAKT 固定的版本 |
 | `takt eject` | 复制 builtin workflow/facet 以便定制 |
 | `takt workflow init` | 创建 workflow scaffold |
 | `takt workflow doctor` | 验证 workflow 定义 |
