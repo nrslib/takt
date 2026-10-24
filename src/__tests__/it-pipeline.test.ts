@@ -464,7 +464,7 @@ describe('Pipeline Integration Tests', () => {
       expect(exitCode).toBe(0);
       expect(await execution.mock.results[0]!.value).toMatchObject({ success: true, workflowHasCaccia: false });
       expect(caccia).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-        entry: 'linked', projectCwd: testDir, prNumber: 123,
+        entry: 'linked', projectCwd: testDir, prUrl: 'https://github.com/org/repo/pull/123',
       }));
     });
 

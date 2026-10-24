@@ -34,6 +34,24 @@ import { TaskRunner } from '../infra/task/index.js';
 import { executePersistedPrMergeTask } from '../features/merge/index.js';
 import { setMockScenario, resetScenario } from '../infra/mock/index.js';
 import { WorkflowEngine } from '../core/workflow/engine/WorkflowEngine.js';
+import { getLabel } from '../shared/i18n/index.js';
+import { stripAnsi } from '../shared/utils/text.js';
+
+const fakeGlab = `#!/usr/bin/env node
+import fs from 'node:fs';
+const state = JSON.parse(fs.readFileSync(process.env.TAKT_TEST_PUBLISHED_PR_STATE, 'utf8'));
+const args = process.argv.slice(2);
+fs.appendFileSync(state.log, JSON.stringify(args) + String.fromCharCode(10));
+if (args[0] === 'auth') process.exit(0);
+if (args[0] === 'mr' && args[1] === 'list') {
+  console.log(JSON.stringify(state.existing ? [{iid:123,web_url:state.url}] : [])); process.exit(0);
+}
+if (args[0] === 'mr' && args[1] === 'create' && !args.includes('--repo')) {
+  console.log(state.url); process.exit(0);
+}
+if (args[0] === 'mr' && args[1] === 'note' && args[2] === '123') process.exit(0);
+process.exit(1);
+`;
 
 const fakeGh = `#!/usr/bin/env node
 import fs from 'node:fs';
@@ -149,6 +167,7 @@ describe('Published PR identity through production Caccia', () => {
     git(root, 'clone', '--branch', 'feature/pr', remotes.source!, project);
     const bin = join(root, 'bin'); mkdirSync(bin);
     writeFileSync(join(bin, 'gh'), fakeGh, { mode: 0o755 });
+    writeFileSync(join(bin, 'glab'), fakeGlab, { mode: 0o755 });
     vi.stubEnv('PATH', bin + delimiter + process.env.PATH);
     vi.stubEnv('TAKT_TEST_PUBLISHED_PR_STATE', statePath);
     vi.mocked(runWorkflowExecution).mockReset().mockImplementation(async (request, context) => {
@@ -185,12 +204,13 @@ describe('Published PR identity through production Caccia', () => {
   });
 
   function configure(hostname: string, provider: 'github' | 'gitlab', repo: string, existing = false,
-    failure?: 'failTarget' | 'mismatch') {
+    failure?: 'failTarget' | 'mismatch', enabled = true) {
     mkdirSync(join(project, '.takt'), { recursive: true });
     writeFileSync(join(project, '.takt', 'config.yaml'), stringify({ vcs_provider: provider,
-      caccia: { enabled: true, wait_timeout_ms: 5000, max_iterations: 1 } }));
+      language: 'en', caccia: { enabled, wait_timeout_ms: 5000, max_iterations: 1 } }));
     invalidateAllResolvedConfigCache(); initGitProvider(project);
-    const url = 'https://' + hostname + '/acme/' + repo + '/pull/123';
+    const url = 'https://' + hostname + '/acme/' + repo
+      + (provider === 'github' ? '/pull/123' : '/-/merge_requests/123');
     const state = { hostname, url, sourceUrl: 'https://' + hostname + '/acme/source/pull/123',
       repo, remotes, existing, resolved: [], log: join(root, 'requests.jsonl'), [failure ?? 'none']: true };
     writeFileSync(statePath, JSON.stringify(state));
@@ -207,11 +227,11 @@ describe('Published PR identity through production Caccia', () => {
     return readFileSync(join(root, 'requests.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as string[]);
   }
 
-  async function publish(entry: 'create' | 'update' | 'pipeline', repo: string) {
+  async function publish(entry: 'create' | 'update' | 'pipeline', repo?: string, outputMode: 'terminal' | 'silent' = 'silent') {
     if (entry === 'pipeline') return executePipeline({ cwd: project, task: 'Publish development', workflow: 'development',
-      repo, autoPr: true, outputMode: 'silent' });
+      repo, autoPr: true, outputMode });
     return postExecutionFlow({ projectCwd: project, execCwd: project, task: 'Publish development', branch: 'feature/pr',
-      shouldCreatePr: true, draftPr: false, repo, workflowHasCaccia: false, outputMode: 'silent' });
+      shouldCreatePr: true, draftPr: false, repo, workflowHasCaccia: false, outputMode });
   }
 
   function configureMerge(effect: boolean, autoStart = true) {
@@ -328,28 +348,39 @@ describe('Published PR identity through production Caccia', () => {
     }
   });
 
-  it.each(['create', 'update', 'pipeline'] as const)('%s handles a self-hosted GitHub PR and skips it for GitLab', async (entry) => {
-    for (const provider of ['github', 'gitlab'] as const) {
-      // Publication is already successful for the provider comparison.
-      const url = configure('ghe.example.test', provider, 'target', entry === 'update');
-      const { GitHubProvider } = await import('../infra/github/GitHubProvider.js');
-      const { getGitProvider } = await import('../infra/git/index.js');
-      const publicProvider = new GitHubProvider();
-      const create = vi.spyOn(getGitProvider(), 'createPullRequest').mockImplementation((...args) => publicProvider.createPullRequest(...args));
-      const find = vi.spyOn(getGitProvider(), 'findExistingPr').mockImplementation((...args) => publicProvider.findExistingPr(...args));
-      const comment = vi.spyOn(getGitProvider(), 'commentOnPr').mockReturnValue({ success: true });
-      vi.mocked(runWorkflowExecution).mockClear();
-      await publish(entry, 'ghe.example.test/acme/target');
-      expect(runWorkflowExecution).toHaveBeenCalledTimes(provider === 'github' ? 1 : 0);
-      const api = requests().filter((args) => args[0] === 'api');
-      if (provider === 'github') {
-        expect(api.length).toBeGreaterThan(0);
-        for (const args of api) expect(args.slice(-2)).toEqual(['--hostname', 'ghe.example.test']);
-        expect(requests().some((args) => args[0] === 'pr' && args[1] === 'view' && args[2] === url)).toBe(true);
-      } else expect(api).toHaveLength(0);
-      create.mockRestore(); find.mockRestore(); comment.mockRestore();
-      writeFileSync(join(root, 'requests.jsonl'), '');
-    }
+  const gitlabCases = (['create', 'update', 'pipeline'] as const).flatMap((entry) =>
+    [true, false].map((enabled) => ({ entry, enabled })));
+  it.each(gitlabCases)('$entry preserves a published GitLab MR with Caccia enabled=$enabled', async ({ entry, enabled }) => {
+    const url = configure('gitlab.com', 'gitlab', 'target', entry === 'update', undefined, enabled);
+    const screen: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { screen.push(args.join(' ')); });
+    vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => { screen.push(args.join(' ')); });
+    vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => { screen.push(args.join(' ')); });
+
+    expect(await publish(entry, undefined, 'terminal')).toEqual(entry === 'pipeline' ? 0 : { prUrl: url });
+
+    expect(runWorkflowExecution).not.toHaveBeenCalled();
+    expect(clonePaths).toEqual([]);
+    expect(JSON.parse(readFileSync(statePath, 'utf8')).resolved).toEqual([]);
+    const calls = requests();
+    expect(calls.filter((args) => args[0] === 'pr' || args[0] === 'api')).toEqual([]);
+    expect(calls.filter((args) => args[0] === 'mr' && args[1] === (entry === 'update' ? 'note' : 'create'))).toHaveLength(1);
+    const skipped = getLabel('caccia.skipped', 'en', { reason: 'GitHub is not the configured or detected provider' });
+    expect(screen.map(stripAnsi).filter((line) => line.includes(skipped))).toHaveLength(enabled ? 1 : 0);
+  });
+
+  it('preserves the published MR result when the GitHub provider rejects its URL', async () => {
+    configure('gitlab.com', 'github', 'target', true);
+    const prUrl = 'https://gitlab.com/acme/target/-/merge_requests/123';
+    const state = JSON.parse(readFileSync(statePath, 'utf8'));
+    writeFileSync(statePath, JSON.stringify({ ...state, url: prUrl }));
+
+    expect(await publish('update')).toEqual({ prUrl });
+
+    expect(runWorkflowExecution).not.toHaveBeenCalled();
+    expect(JSON.parse(readFileSync(statePath, 'utf8')).resolved).toEqual([]);
+    expect(requests().filter((args) => args[1] === 'comment')).toHaveLength(1);
+    expect(requests().filter((args) => args[1] === 'view' || args[0] === 'api')).toEqual([]);
   });
 
   it.each(['target', 'source'])('keeps the published %s PR identity through fetch, push and Resolve', async (repo) => {

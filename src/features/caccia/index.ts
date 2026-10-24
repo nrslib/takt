@@ -21,7 +21,7 @@ import { DEFAULT_CACCIA_SETTINGS } from '../../core/models/schemas.js';
 import type { CacciaConfig, CacciaSettings } from '../../core/models/config-types.js';
 import { createCacciaAbortScope } from './abortSignal.js';
 import { detectVcsProvider } from '../../infra/git/detect.js';
-import type { GitHubPullRequestTarget } from '../../infra/github/pull-request-target.js';
+import { parseGitHubPullRequestTarget, type GitHubPullRequestTarget } from '../../infra/github/pull-request-target.js';
 import { createLogger, getErrorMessage, getSlackWebhookUrl, sendSlackNotification } from '../../shared/utils/index.js';
 import { forceExitAfterOpenCodeCleanup } from '../tasks/execute/forceShutdown.js';
 import { toLocalBranchRef } from '../../shared/utils/gitBranchValidation.js';
@@ -120,11 +120,18 @@ interface CacciaInputBase extends CacciaDisplayOptions {
 
 type CacciaPushedHeadListener = (headSha: string) => void;
 
-export type CacciaInput = CacciaInputBase & (
+interface CacciaLinkedOptions {
+  entry: 'linked';
+  expectedInitialHeadSha?: string;
+  onPushedHead?: CacciaPushedHeadListener;
+}
+
+type CacciaNumberInput = CacciaInputBase & (
   | { entry: 'standalone'; prNumber: number }
-  | { entry: 'linked'; prNumber: number; pullRequest?: GitHubPullRequestTarget; expectedInitialHeadSha?: string;
-      onPushedHead?: CacciaPushedHeadListener }
+  | (CacciaLinkedOptions & { prNumber: number; pullRequest?: GitHubPullRequestTarget })
 );
+
+export type CacciaInput = CacciaNumberInput | (CacciaInputBase & CacciaLinkedOptions & { prUrl: string });
 
 export interface CacciaReviewWaitOptions {
   timeoutMs: number;
@@ -165,6 +172,8 @@ export interface CacciaDependencies {
   logResult(result: CacciaResult): void;
   notifyResult(result: CacciaResult): Promise<void>;
 }
+
+type CacciaExecutionDependencies = Omit<CacciaDependencies, 'detectVcsProvider'>;
 
 function assertNotAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) {
@@ -264,7 +273,7 @@ async function waitForCodeRabbitReview(
 }
 
 async function waitForPushedPullRequestHead(
-  dependencies: CacciaDependencies,
+  dependencies: CacciaExecutionDependencies,
   prNumber: number,
   projectCwd: string,
   reviewedHeadSha: string,
@@ -315,7 +324,7 @@ async function waitForPushedPullRequestHead(
 }
 
 async function createTemporaryClone(
-  input: CacciaInput,
+  input: CacciaNumberInput,
   prNumber: number,
   expectedHeadSha: string,
   releaseGitOperations: (cwd: string) => void,
@@ -418,7 +427,7 @@ function assertEveryThreadWasDecided(
 }
 
 async function executeCacciaWorkflow(
-  input: CacciaInput,
+  input: CacciaNumberInput,
   display: CacciaDisplayOptions & { outputMode: 'terminal' | 'silent' },
   options: {
     prNumber: number;
@@ -474,15 +483,14 @@ async function commitAndPush(
 }
 
 function createProductionDependencies(
-  input: CacciaInput,
+  input: CacciaNumberInput,
   display: CacciaDisplayOptions & { outputMode: 'terminal' | 'silent' },
   out: CacciaOutput,
-): CacciaDependencies {
+): CacciaExecutionDependencies {
   const gitOperations = new Map<string, CacciaGitOperations>();
   const target = input.entry === 'linked' ? input.pullRequest : undefined;
   const targetArguments = target === undefined ? [] as const : [target] as const;
   return {
-    detectVcsProvider: (projectCwd) => resolveConfigValue(projectCwd, 'vcsProvider') ?? detectVcsProvider(projectCwd),
     waitForCodeRabbitReview: (prNumber, options) =>
       waitForCodeRabbitReview(prNumber, input.projectCwd, options, input.abortSignal, out, target),
     fetchCodeRabbitReviewThreads: (prNumber, projectCwd, expectedHeadSha, signal) =>
@@ -545,7 +553,7 @@ async function notifyCacciaResult(result: CacciaResult): Promise<void> {
 async function finishResult(
   input: CacciaInput,
   result: CacciaResult,
-  dependencies: CacciaDependencies,
+  dependencies: Pick<CacciaDependencies, 'logResult' | 'notifyResult'>,
   out: CacciaOutput,
 ): Promise<CacciaResult> {
   if (input.entry === 'linked') {
@@ -592,23 +600,36 @@ async function executeCaccia(
     input.abortSignal === undefined ? forceExitAfterRepeatedSigint : undefined,
   );
   const scopedInput: CacciaInput = { ...input, abortSignal: abortScope.signal };
-  const resolvedDependencies = dependencies ?? createProductionDependencies(scopedInput, display, out);
   try {
-    return await runCacciaWithDependencies(scopedInput, resolvedDependencies, out);
+    const provider = dependencies === undefined
+      ? resolveConfigValue(input.projectCwd, 'vcsProvider') ?? detectVcsProvider(input.projectCwd)
+      : dependencies.detectVcsProvider(input.projectCwd);
+    if (provider !== 'github') {
+      const result = createResult(scopedInput, 'skipped', 0,
+        'GitHub is not the configured or detected provider', undefined, 'github_unavailable');
+      return await finishResult(scopedInput, result,
+        dependencies ?? { logResult: logCacciaResult, notifyResult: notifyCacciaResult }, out);
+    }
+    const resolvedInput = resolveCacciaInput(scopedInput);
+    const resolvedDependencies = dependencies ?? createProductionDependencies(resolvedInput, display, out);
+    return await runCacciaWithDependencies(resolvedInput, resolvedDependencies, out);
   } finally {
     abortScope.dispose();
   }
 }
 
+function resolveCacciaInput(input: CacciaInput): CacciaNumberInput {
+  if (!('prUrl' in input)) return input;
+  const { prUrl, ...options } = input;
+  const pullRequest = parseGitHubPullRequestTarget(prUrl);
+  return { ...options, prNumber: pullRequest.number, pullRequest };
+}
+
 async function runCacciaWithDependencies(
-  input: CacciaInput,
-  dependencies: CacciaDependencies,
+  input: CacciaNumberInput,
+  dependencies: CacciaExecutionDependencies,
   out: CacciaOutput,
 ): Promise<CacciaResult> {
-  if (dependencies.detectVcsProvider(input.projectCwd) !== 'github') {
-    return finishResult(input, createResult(input, 'skipped', 0, 'GitHub is not the configured or detected provider', undefined, 'github_unavailable'), dependencies, out);
-  }
-
   const prNumber = input.prNumber;
 
   out.waitingForReview();

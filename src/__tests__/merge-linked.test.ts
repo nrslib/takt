@@ -115,7 +115,7 @@ describe('Merge launch after PR creation', () => {
     it.each(entries)('%s runs Caccia once for the published PR without merge configuration', async (_name, execute) => {
       await execute();
       expect(mocks.caccia).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-        entry: 'linked', projectCwd: '/project', prNumber: 123, settings: expect.objectContaining({ enabled: true }),
+        entry: 'linked', projectCwd: '/project', prUrl, settings: expect.objectContaining({ enabled: true }),
       }));
     });
 
@@ -124,7 +124,7 @@ describe('Merge launch after PR creation', () => {
       expect(await postExecutionFlow(postOptions)).toEqual({ prUrl });
       expect(mocks.comment).toHaveBeenCalledOnce();
       expect(mocks.createPr).not.toHaveBeenCalled();
-      expect(mocks.caccia).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ prNumber: 123, entry: 'linked' }));
+      expect(mocks.caccia).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ prUrl, entry: 'linked' }));
     });
 
     it.each(entries)('%s does not run Caccia when publication fails', async (_name, execute) => {
@@ -214,7 +214,7 @@ describe('Merge launch after PR creation', () => {
       const display = { outputMode, taskPrefix: 'parent', taskColorIndex: 2, taskDisplayLabel: 'parent label' };
       await postExecutionFlow({ ...postOptions, ...display, abortSignal: controller.signal });
       expect(mocks.caccia).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-        ...display, abortSignal: controller.signal, projectCwd: '/project', prNumber: 123,
+        ...display, abortSignal: controller.signal, projectCwd: '/project', prUrl,
       }));
     });
 
@@ -252,7 +252,7 @@ describe('Merge launch after PR creation', () => {
     it.each(entries)('%s does not treat a merge instruction or step name as a Caccia effect', async (_name, execute) => {
       autoMerge(mergeWorkflow([agentStep]), true);
       await execute();
-      expect(mocks.caccia).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ prNumber: 123 }));
+      expect(mocks.caccia).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ prUrl }));
       expect(mocks.merge).toHaveBeenCalledOnce();
       expect(mocks.caccia.mock.invocationCallOrder[0]).toBeLessThan(mocks.merge.mock.invocationCallOrder[0]!);
     });
@@ -260,7 +260,7 @@ describe('Merge launch after PR creation', () => {
     it('does not suppress Caccia for a merge workflow that will not auto-start', async () => {
       autoMerge(mergeWorkflow([systemStep]), false);
       await postExecutionFlow(postOptions);
-      expect(mocks.caccia).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ prNumber: 123 }));
+      expect(mocks.caccia).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ prUrl }));
       expect(mocks.loadWorkflow).not.toHaveBeenCalled();
     });
 
@@ -269,10 +269,11 @@ describe('Merge launch after PR creation', () => {
       expect(mocks.caccia).not.toHaveBeenCalled();
     });
 
-    it('does not start automatic Caccia for a non-GitHub PR', async () => {
-      mocks.createPr.mockReturnValue({ success: true, url: 'https://gitlab.com/org/repo/-/merge_requests/123' });
-      await postExecutionFlow(postOptions);
-      expect(mocks.caccia).not.toHaveBeenCalled();
+    it('passes a published GitLab MR URL to the Caccia provider boundary', async () => {
+      const mrUrl = 'https://gitlab.com/org/repo/-/merge_requests/123';
+      mocks.createPr.mockReturnValue({ success: true, url: mrUrl });
+      expect(await postExecutionFlow(postOptions)).toEqual({ prUrl: mrUrl });
+      expect(mocks.caccia).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ entry: 'linked', prUrl: mrUrl }));
     });
 
     it('does not start automatic Caccia without a published PR URL', async () => {

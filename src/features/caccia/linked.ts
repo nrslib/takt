@@ -3,7 +3,6 @@ import { collectWorkflowCallSteps, hasCacciaEffect } from '../../core/workflow/w
 import { resolveConfigValue } from '../../infra/config/index.js';
 import { loadWorkflowByIdentifier } from '../../infra/config/loaders/workflowResolver.js';
 import { resolveWorkflowCallTarget } from '../../infra/config/loaders/workflowCallResolver.js';
-import { parseGitHubPullRequestTarget } from '../../infra/github/pull-request-target.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { resolveMergeSettings } from '../merge/settings.js';
 import { resolveCacciaSettings, runCaccia, type CacciaInput } from './index.js';
@@ -31,15 +30,13 @@ export async function runLinkedCacciaSafely(
     const settings = resolveCacciaSettings(resolveConfigValue(projectCwd, 'caccia'));
     if (!settings.enabled || workflowHasCaccia === true) return;
     if (workflowHasCaccia === undefined) throw new Error('Executed workflow Caccia decision is missing');
-    const pullRequest = parseGitHubPullRequestTarget(prUrl);
-
     const merge = resolveMergeSettings(resolveConfigValue(projectCwd, 'merge'));
     if (merge.autoStart) {
       const workflow = loadWorkflowByIdentifier(merge.workflow, projectCwd);
       if (workflow === null) throw new Error(`Cannot resolve merge workflow: ${merge.workflow}`);
       if (workflowHasCacciaEffect(workflow, projectCwd)) return;
     }
-    await runCaccia({ entry: 'linked', projectCwd, prNumber: pullRequest.number, pullRequest,
+    await runCaccia({ entry: 'linked', projectCwd, prUrl,
       settings, abortSignal, ...display });
   } catch (error) {
     log.error('Linked Caccia failed', { prUrl, error: getErrorMessage(error) });
