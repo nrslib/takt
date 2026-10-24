@@ -1,7 +1,7 @@
 import type { CodexOptions } from '@openai/codex-sdk';
 import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/index.js';
 import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
-import { CODEX_CONFIG_PROFILE_ENV, type CodexCallOptions } from './types.js';
+import { CODEX_CONFIG_PROFILE_ENV, CODEX_SPAWN_PROFILE, type CodexCallOptions, type CodexSpawnEnvironment } from './types.js';
 import { buildCodexSkillConfig } from './skill-config.js';
 
 function removeCodexConfigProfileMarker(environment: Record<string, string>): void {
@@ -41,12 +41,30 @@ export function buildCodexSessionConfig(options: CodexCallOptions): {
   const codexEnvironment = buildEnvWithNestedObservabilitySnapshot(
     buildChildProcessEnv(),
     options.childProcessEnv,
-  ) as Record<string, string>;
-  removeCodexConfigProfileMarker(codexEnvironment);
-  if (options.configProfile !== undefined) {
-    codexEnvironment[CODEX_CONFIG_PROFILE_ENV] = options.configProfile;
+  ) as CodexSpawnEnvironment;
+  const headerFilters = preparedMcpConfig?.shell_environment_policy?.filters;
+  for (const name of Object.keys(headerFilters ?? {})) {
+    const value = options.childProcessEnv?.[name];
+    if (value !== undefined) codexEnvironment[name] = value;
+  }
+  const referencesProfileEnv = Object.keys(headerFilters ?? {})
+    .some((name) => name.toLowerCase() === CODEX_CONFIG_PROFILE_ENV.toLowerCase());
+  if (referencesProfileEnv) {
+    codexEnvironment[CODEX_SPAWN_PROFILE] = {
+      ...(options.configProfile === undefined ? {} : { configProfile: options.configProfile }),
+    };
+  } else {
+    removeCodexConfigProfileMarker(codexEnvironment);
+    if (options.configProfile !== undefined) {
+      codexEnvironment[CODEX_CONFIG_PROFILE_ENV] = options.configProfile;
+    }
   }
   const shellPath = codexEnvironment.PATH;
+  const excludesPath = Object.keys(headerFilters ?? {}).some((name) => name.toLowerCase() === 'path');
+  const shellPolicy = {
+    ...(shellPath === undefined || excludesPath ? {} : { set: { PATH: shellPath } }),
+    ...(headerFilters === undefined ? {} : { filters: headerFilters }),
+  };
   const codexConfig: CodexOptions['config'] = {
     ...(codexSkillConfig ?? {}),
     ...(options.reasoningEffort === undefined
@@ -56,12 +74,10 @@ export function buildCodexSessionConfig(options: CodexCallOptions): {
       ? {}
       : { features: { fast_mode: options.fastMode } }),
     model_reasoning_summary: 'auto',
-    ...(shellPath === undefined
+    ...(Object.keys(shellPolicy).length === 0
       ? {}
       : {
-          shell_environment_policy: {
-            set: { PATH: shellPath },
-          },
+          shell_environment_policy: shellPolicy,
         }),
   };
   return { config: codexConfig, env: codexEnvironment };

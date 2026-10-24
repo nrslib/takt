@@ -9,6 +9,7 @@
 
 import { mkdtemp, rm, writeFile, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
+import { filterMcpHeaderEnvServers } from './header-env.js';
 import type {
   ProviderMcpAdapter,
   ProviderMcpContext,
@@ -30,8 +31,11 @@ export function createCopilotMcpAdapter(): ProviderMcpAdapter {
       servers: ResolvedMcpServers,
       context: ProviderMcpContext,
     ): Promise<PreparedProviderMcp> {
+      const selected = filterMcpHeaderEnvServers('copilot', servers, true);
+      servers = selected;
+      const disabledArgs = (selected.excludedServerNames ?? []).flatMap((name) => ['--disable-mcp-server', name]);
       if (!servers.enabled || Object.keys(servers.servers).length === 0) {
-        return { dispose: noopDispose, args: [] };
+        return { dispose: noopDispose, args: disabledArgs };
       }
       // MCP tool approval must not contradict TAKT's permission mode
       // (order.md:220). A readonly execution must not enable MCP servers
@@ -55,7 +59,7 @@ export function createCopilotMcpAdapter(): ProviderMcpAdapter {
         throw error;
       }
       return {
-        args: [`--additional-mcp-config=@${configPath}`],
+        args: [...disabledArgs, `--additional-mcp-config=@${configPath}`],
         path: configPath,
         dispose: onceDispose(async () => {
           await rm(tempDir, { recursive: true, force: true });

@@ -233,6 +233,20 @@ function createResultMessage(
 }
 
 describe('SdkOptionsBuilder — outputFormat 変換', () => {
+  it('does not restore original servers after the prepared MCP set has excluded every server', () => {
+    const sdkOptions = buildSdkOptions({
+      cwd: '/tmp',
+      mcpServers: { datadog: {
+        type: 'http', url: 'https://example.com/mcp',
+        headers: { Authorization: 'Bearer ${env:MCP_HEADER_ACCESS}' },
+      } },
+      preparedMcp: { dispose: async () => {}, sdkOptions: { mcpServers: {}, strictMcpConfig: true } },
+    });
+
+    expect(sdkOptions.strictMcpConfig).toBe(true);
+    expect(Object.keys(sdkOptions.mcpServers ?? {})).toEqual([]);
+  });
+
   it('effort が SDK options に直接反映される', () => {
     const sdkOptions = buildSdkOptions({ cwd: '/tmp', effort: 'medium' });
 
