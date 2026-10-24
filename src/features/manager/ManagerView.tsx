@@ -30,6 +30,7 @@ import type { ManagerConversationSession } from './conversationSession.js';
 import { readManagerDisplayEvents, type ManagerDisplayGoal, type ManagerDisplayNotice } from './savedEvents.js';
 import { notifyManagerTurnFailure } from './turnFailureNotification.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
+import { measureWidth } from '../../shared/utils/grapheme.js';
 
 type PendingOperation =
   | { kind: 'summary' }
@@ -392,6 +393,8 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
     });
   }
   const inputHint = getLabel(selectingSummary ? 'manager.summaryInputHint' : 'manager.inputHint', lang);
+  const hintSeparator = selectingSummary ? ' / ' : '  ';
+  const hintItems = inputHint.split(hintSeparator);
   const cancelMenuRequest = (): void => { menuRequest.current += 1; };
   useManagerInput({
     exiting, active, registering, editorRef: answerTarget === null ? editorRef : answerEditorRef,
@@ -423,7 +426,14 @@ export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, st
         placeholder={answerTarget === null ? (ja ? 'ゴールを相談してください' : 'Discuss your goal') : (ja ? '回答を入力してください' : 'Enter your answer')}
         hint={inputHint} showHint={false}
         completions={[]} completionIndex={0} disabled={selection.selection !== null || abortTarget !== null || selectingSummary} />
-      <Text dimColor wrap="wrap">{inputHint}</Text>
+      <Box flexWrap="wrap">
+        {hintItems.map((item, index) => {
+          const text = item + (index < hintItems.length - 1 ? hintSeparator : '');
+          return <Box key={item} width={measureWidth(text)} flexShrink={0}>
+            <Text dimColor>{text}</Text>
+          </Box>;
+        })}
+      </Box>
     </Box>
   );
 }
