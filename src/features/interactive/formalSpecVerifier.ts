@@ -23,6 +23,7 @@ import { getSelfProcessIdentity } from '../../infra/task/process.js';
 const require = createRequire(import.meta.url);
 
 const QUINT_TIMEOUT_MS = 60_000;
+const QUINT_TEST_MAX_SAMPLES = 100;
 const ALLOY_VERSION = '6.2.0';
 const ALLOY_JAR_URL = `https://repo1.maven.org/maven2/org/alloytools/org.alloytools.alloy.dist/${ALLOY_VERSION}/org.alloytools.alloy.dist-${ALLOY_VERSION}.jar`;
 const ALLOY_JAR_SHA256 = '6037cbeee0e8423c1c468447ed10f5fcf2f2743a2ffc39cb1c81f2905c0fdb9d';
@@ -52,6 +53,7 @@ export interface FormalSpecQuintResult extends FormalSpecStageResult {
   readonly parse?: FormalSpecStageResult;
   readonly typecheck?: FormalSpecStageResult;
   readonly run?: FormalSpecStageResult;
+  readonly test?: FormalSpecStageResult;
   readonly verify?: FormalSpecStageResult;
   readonly invariants?: readonly string[];
   readonly temporal?: readonly string[];
@@ -104,6 +106,7 @@ export interface FormalSpecBlocks {
 export interface QuintVerificationTargets {
   readonly invariants: readonly QuintVerificationTarget[];
   readonly temporal: readonly QuintVerificationTarget[];
+  readonly runs: readonly QuintVerificationTarget[];
 }
 
 export interface QuintVerificationTarget {
@@ -262,12 +265,13 @@ export function detectJavaMajorVersion(output: string): number | undefined {
   return first;
 }
 
-/** Select every conventionally named Quint invariant and temporal property. */
+/** Select conventionally named Quint properties and every run declaration. */
 export function selectQuintVerificationTargets(parseResult: unknown): QuintVerificationTargets {
   const invariants: QuintVerificationTarget[] = [];
   const temporal: QuintVerificationTarget[] = [];
+  const runs: QuintVerificationTarget[] = [];
   if (!isRecord(parseResult) || !Array.isArray(parseResult.modules)) {
-    return { invariants, temporal };
+    return { invariants, temporal, runs };
   }
 
   for (const module of parseResult.modules) {
@@ -284,10 +288,13 @@ export function selectQuintVerificationTargets(parseResult: unknown): QuintVerif
       if (declaration.qualifier === 'temporal' && declaration.name.startsWith('prop')) {
         temporal.push({ moduleName: module.name, name: declaration.name });
       }
+      if (declaration.qualifier === 'run') {
+        runs.push({ moduleName: module.name, name: declaration.name });
+      }
     }
   }
 
-  return { invariants, temporal };
+  return { invariants, temporal, runs };
 }
 
 const QUINT_MAIN_REQUIRED_MESSAGE = 'Quint verification requires a module with action init and action step.';
@@ -300,7 +307,7 @@ function quintTargetsOutsideMainModule(
   targets: QuintVerificationTargets,
   mainModule: string,
 ): QuintVerificationTarget[] {
-  return [...targets.invariants, ...targets.temporal]
+  return [...targets.invariants, ...targets.temporal, ...targets.runs]
     .filter((target) => target.moduleName !== mainModule);
 }
 
@@ -668,6 +675,41 @@ function verificationProcessStage(
   return result.outcome === 'exit' && result.status !== null
     ? { status: 'failed', message }
     : errorStage(message);
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function quintTestStage(
+  result: ProcessResult,
+  outputPath: string,
+  runNames: readonly string[],
+): FormalSpecStageResult {
+  const processStage = verificationProcessStage(result, 'typescript');
+  if (result.outcome !== 'exit' || result.status === null || result.artifactWriteError !== undefined) {
+    return processStage;
+  }
+
+  let output: unknown;
+  try {
+    output = JSON.parse(readFileSync(outputPath, 'utf8')) as unknown;
+  } catch (error) {
+    return errorStage(`Quint test output could not be read: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!isRecord(output)
+    || !isStringArray(output.passed)
+    || !isStringArray(output.failed)
+    || !isStringArray(output.ignored)) {
+    return errorStage('Quint test output must contain passed, failed, and ignored arrays of declaration names.');
+  }
+
+  const passed = new Set(output.passed);
+  const failed = new Set(output.failed);
+  const unsuccessful = runNames.filter((name) => failed.has(name) || !passed.has(name));
+  return unsuccessful.length === 0
+    ? passedStage()
+    : { status: 'failed', message: truncateFailureMessage(`Quint run declarations did not pass: ${unsuccessful.join(', ')}.`) };
 }
 
 function selectPrimaryStage(stages: readonly FormalSpecStageResult[]): FormalSpecStageResult {
@@ -1139,6 +1181,7 @@ interface QuintStageSet {
   readonly parse?: FormalSpecStageResult;
   readonly typecheck?: FormalSpecStageResult;
   readonly run?: FormalSpecStageResult;
+  readonly test?: FormalSpecStageResult;
   readonly verify?: FormalSpecStageResult;
 }
 
@@ -1146,7 +1189,7 @@ function quintResultFromStages(
   stageSet: QuintStageSet,
   targets: QuintVerificationTargets,
 ): FormalSpecQuintResult {
-  const stages = [stageSet.parse, stageSet.typecheck, stageSet.run, stageSet.verify]
+  const stages = [stageSet.parse, stageSet.typecheck, stageSet.run, stageSet.test, stageSet.verify]
     .filter((stage): stage is FormalSpecStageResult => stage !== undefined);
   const primary = aggregateStageResult(stages, 'No Quint verification stage was executed.');
   return {
@@ -1155,6 +1198,7 @@ function quintResultFromStages(
     ...(stageSet.parse ? { parse: stageSet.parse } : {}),
     ...(stageSet.typecheck ? { typecheck: stageSet.typecheck } : {}),
     ...(stageSet.run ? { run: stageSet.run } : {}),
+    ...(stageSet.test ? { test: stageSet.test } : {}),
     ...(stageSet.verify ? { verify: stageSet.verify } : {}),
     invariants: targets.invariants.map(({ name }) => name),
     temporal: targets.temporal.map(({ name }) => name),
@@ -1223,7 +1267,7 @@ export async function runFormalSpecVerification(
     }
     const stages: FormalSpecStageResult[] = [];
     let quint: FormalSpecQuintResult;
-    let targets: QuintVerificationTargets = { invariants: [], temporal: [] };
+    let targets: QuintVerificationTargets = { invariants: [], temporal: [], runs: [] };
     let mainModule: string | undefined;
     let targetScopeError: string | undefined;
     let quintStageSet: QuintStageSet = {};
@@ -1255,23 +1299,27 @@ export async function runFormalSpecVerification(
       }
 
       let parseResult: unknown;
-      if (parse.status === 'passed') {
-        try {
-          parseResult = JSON.parse(readFileSync(parseJsonPath, 'utf8')) as unknown;
-        } catch (error) {
+      // Failed parses can still report declarations; unavailable JSON must not replace the original failure.
+      try {
+        parseResult = JSON.parse(readFileSync(parseJsonPath, 'utf8')) as unknown;
+      } catch (error) {
+        if (parse.status === 'passed') {
           const message = `Quint parse output could not be read: ${error instanceof Error ? error.message : String(error)}`;
           parse = errorStage(message);
         }
       }
+      const parsedTargets = selectQuintVerificationTargets(parseResult);
+      targets = parse.status === 'passed'
+        ? parsedTargets
+        : { invariants: [], temporal: [], runs: parsedTargets.runs };
+      mainModule = selectQuintMainModule(parseResult);
+      targetScopeError = mainModule === undefined
+        ? undefined
+        : quintTargetScopeError(targets, mainModule);
 
       let typecheck: FormalSpecStageResult = skippedStage('Quint typechecking was skipped because parsing did not pass.');
       let run: FormalSpecStageResult = skippedStage('Quint simulation was skipped because typechecking did not pass.');
       if (parse.status === 'passed') {
-        targets = selectQuintVerificationTargets(parseResult);
-        mainModule = selectQuintMainModule(parseResult);
-        targetScopeError = mainModule === undefined
-          ? undefined
-          : quintTargetScopeError(targets, mainModule);
         typecheck = specificationProcessStage(
           await runQuintCommand(
             quintCli,
@@ -1318,7 +1366,34 @@ export async function runFormalSpecVerification(
           );
         }
       }
-      quintStageSet = { parse, typecheck, run };
+      const runNames = targets.runs
+        .filter((target) => target.moduleName === mainModule)
+        .map(({ name }) => name);
+      let test: FormalSpecStageResult | undefined;
+      if (runNames.length > 0) {
+        test = skippedStage('Quint scenario testing was skipped because an earlier Quint stage did not pass.');
+        if (run.status === 'passed' && mainModule !== undefined) {
+          const testOutputPath = join(specsDirectory, 'test.json');
+          writeFileSync(testOutputPath, '', { encoding: 'utf8', mode: 0o600 });
+          const match = `^(${runNames.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})$`;
+          const testProcess = await runQuintCommand(
+            quintCli,
+            [
+              'test', quintSpecificationPath, '--main', mainModule, '--backend', 'typescript',
+              '--max-samples', String(QUINT_TEST_MAX_SAMPLES), '--match', match, '--out', testOutputPath,
+            ],
+            runDirectory,
+            QUINT_TIMEOUT_MS,
+            abortSignal,
+            createProcessLogPaths(logsDirectory, 'quint-test', processLogs),
+          );
+          if (existsSync(testOutputPath)) {
+            chmodSync(testOutputPath, 0o600);
+          }
+          test = quintTestStage(testProcess, testOutputPath, runNames);
+        }
+      }
+      quintStageSet = { parse, typecheck, run, ...(test === undefined ? {} : { test }) };
       quint = quintResultFromStages(quintStageSet, targets);
     }
 
@@ -1326,7 +1401,8 @@ export async function runFormalSpecVerification(
       && mainModule !== undefined
       && quint.parse?.status === 'passed'
       && quint.typecheck?.status === 'passed'
-      && quint.run?.status === 'passed';
+      && quint.run?.status === 'passed'
+      && (quint.test === undefined || quint.test.status === 'passed');
     const javaDetectionRan = alloySpecificationPath !== undefined || canRunQuintVerify;
     const detectedJavaMajorVersion = javaDetectionRan
       ? await javaVersion(
@@ -1383,7 +1459,7 @@ export async function runFormalSpecVerification(
     }
     if (quintSpecificationPath) {
       stages.push(
-        ...[quintStageSet.parse, quintStageSet.typecheck, quintStageSet.run, quintStageSet.verify]
+        ...[quintStageSet.parse, quintStageSet.typecheck, quintStageSet.run, quintStageSet.test, quintStageSet.verify]
           .filter((stage): stage is FormalSpecStageResult => stage !== undefined),
       );
     }
