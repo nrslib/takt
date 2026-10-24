@@ -32,11 +32,11 @@ function transport(): ManagedOpenCodeTransport {
   };
 }
 
-async function prepare(reference: string) {
+async function prepare(headers: Record<string, string>) {
   const section = McpSectionSchema.parse({
     servers: { datadog: {
       type: 'http', url: 'https://example.com/mcp',
-      headers: { Authorization: `Bearer \${env:${reference}}` },
+      headers,
     } },
     defaults: { servers: ['datadog'] },
   });
@@ -70,8 +70,8 @@ describe.each(['v1', 'v2'] as const)('OpenCode %s MCP pool identity', (generatio
     ['PROJECT_A_TOKEN', true],
     ['PROJECT_B_TOKEN', false],
   ] as const)('selects %s after releasing A (reuse=%s)', async (reference, reuse) => {
-    const preparedA = await prepare('PROJECT_A_TOKEN');
-    const preparedB = await prepare(reference);
+    const preparedA = await prepare({ Authorization: 'Bearer ${env:PROJECT_A_TOKEN}' });
+    const preparedB = await prepare({ Authorization: `Bearer \${env:${reference}}` });
     try {
       const a = await acquireOpenCodeClient('opencode/model', undefined, undefined, undefined, undefined, preparedA);
       a.release();
@@ -91,5 +91,30 @@ describe.each(['v1', 'v2'] as const)('OpenCode %s MCP pool identity', (generatio
       await preparedA.dispose();
       await preparedB.dispose();
     }
+  });
+
+  it.each([
+    ['same headers in reverse order', { 'X-Tenant': 'tenant-a', Authorization: 'Bearer ${env:PROJECT_A_TOKEN}' }, true],
+    ['different fixed tenant', { Authorization: 'Bearer ${env:PROJECT_A_TOKEN}', 'X-Tenant': 'tenant-b' }, false],
+    ['different reference prefix', { Authorization: 'Token ${env:PROJECT_A_TOKEN}', 'X-Tenant': 'tenant-a' }, false],
+    ['different reference position', { Authorization: '${env:PROJECT_A_TOKEN} Bearer', 'X-Tenant': 'tenant-a' }, false],
+  ] as const)('applies %s after releasing A', async (_name, headers, reuse) => {
+    const preparedA = await prepare({ Authorization: 'Bearer ${env:PROJECT_A_TOKEN}', 'X-Tenant': 'tenant-a' });
+    const preparedB = await prepare(headers);
+    try {
+      const a = await acquireOpenCodeClient('opencode/model', undefined, undefined, undefined, undefined, preparedA);
+      a.release();
+      const b = await acquireOpenCodeClient('opencode/model', undefined, undefined, undefined, undefined, preparedB);
+      try {
+        expect(b.client === a.client).toBe(reuse);
+        expect(startOpenCodeServer).toHaveBeenCalledTimes(reuse ? 1 : 2);
+        const startup = vi.mocked(startOpenCodeServer).mock.calls.at(-1)![0];
+        const mcp = startup.config.mcp as Record<string, unknown>;
+        const servers = (generation === 'v1' ? mcp : mcp.servers) as Record<string, unknown>;
+        expect(servers.datadog).toMatchObject(preparedB.serverConfig!.datadog!);
+        expect(preparedB.identity).not.toContain('tenant-');
+        expect(preparedB.identity).not.toContain('synthetic-project-a');
+      } finally { b.release(); }
+    } finally { await preparedA.dispose(); await preparedB.dispose(); }
   });
 });

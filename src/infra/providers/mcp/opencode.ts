@@ -6,6 +6,7 @@
  * values so the shared server pool does not mix them (order.md:191-195).
  */
 
+import { createHash } from 'node:crypto';
 import { filterMcpHeaderEnvServers } from './header-env.js';
 import type {
   ProviderMcpAdapter,
@@ -37,13 +38,7 @@ export function createOpenCodeMcpAdapter(): ProviderMcpAdapter {
         serverConfig,
         identity: JSON.stringify([
           servers.identity,
-          Object.keys(servers.servers).sort().map((serverName) => {
-            const refs = getMcpHeaderEnvRefs(servers.servers[serverName]!);
-            return [serverName, Object.keys(refs).sort().map((headerName) => [
-              headerName,
-              refs[headerName]!.filter((part) => typeof part !== 'string').map((part) => part.env),
-            ])];
-          }),
+          hashOpenCodeHeaders(serverConfig),
         ]),
       };
     },
@@ -53,20 +48,30 @@ export function createOpenCodeMcpAdapter(): ProviderMcpAdapter {
   };
 }
 
+function hashOpenCodeHeaders(servers: Record<string, ReturnType<typeof toOpenCodeServer>>): string {
+  const headers = Object.keys(servers).sort().flatMap((serverName) => {
+    const server = servers[serverName]!;
+    if (server.type !== 'remote') return [];
+    const values = server.headers ?? {};
+    return [[serverName, Object.keys(values).sort().map((name) => [name, values[name]])]];
+  });
+  return createHash('sha256').update(JSON.stringify(headers)).digest('hex');
+}
+
 function toOpenCodeServerConfig(
   servers: Record<string, ResolvedMcpServers['servers'][string]>,
-): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
+): Record<string, ReturnType<typeof toOpenCodeServer>> {
+  const result: Record<string, ReturnType<typeof toOpenCodeServer>> = {};
   for (const [name, server] of Object.entries(servers)) {
     result[name] = toOpenCodeServer(server);
   }
   return result;
 }
 
-function toOpenCodeServer(server: McpServerConfig): unknown {
+function toOpenCodeServer(server: McpServerConfig) {
   if (isStdioServer(server)) {
     return {
-      type: 'local',
+      type: 'local' as const,
       command: [server.command, ...(server.args ?? [])],
       ...(server.env !== undefined ? { environment: server.env } : {}),
     };
@@ -76,7 +81,7 @@ function toOpenCodeServer(server: McpServerConfig): unknown {
     headers[name] = parts.map((part) => typeof part === 'string' ? part : `{env:${part.env}}`).join('');
   }
   return {
-    type: 'remote',
+    type: 'remote' as const,
     url: server.url,
     ...(server.headers !== undefined ? { headers } : {}),
   };

@@ -262,35 +262,59 @@ describe('Codex runtime header environment references', () => {
     } finally { await prepared.dispose(); }
   });
 
-  it('keeps OpenCode identity independent of reference values and interpolated header text', async () => {
+  it('keeps OpenCode identity independent of provider reference values', async () => {
     const adapter = createMcpAdapter('opencode');
     const headers = { Authorization: '${MCP_HEADER_TENANT} ${env:MCP_HEADER_ACCESS}' };
     const a = await adapter.prepare(runtimeServers(headers), baseContext());
     vi.stubEnv('MCP_HEADER_ACCESS', 'rotated-secret-fragment');
-    vi.stubEnv('MCP_HEADER_TENANT', 'rotated-legacy-fragment');
     const b = await adapter.prepare(runtimeServers(headers), baseContext());
     try {
       expect(a.identity).toBe(b.identity);
       expect(b.serverConfig?.datadog).toMatchObject({ headers: {
-        Authorization: 'rotated-legacy-fragment {env:MCP_HEADER_ACCESS}',
+        Authorization: 'tenant-a {env:MCP_HEADER_ACCESS}',
       } });
       expectNoSecretValues([a.identity, b.identity]);
-      for (const fragment of ['tenant-a', 'rotated-secret-fragment', 'rotated-legacy-fragment']) {
+      for (const fragment of ['tenant-a', 'rotated-secret-fragment']) {
         expect(a.identity).not.toContain(fragment);
         expect(b.identity).not.toContain(fragment);
       }
     } finally { await a.dispose(); await b.dispose(); }
   });
 
-  it('does not add legacy interpolation output to OpenCode reference identity', async () => {
+  it('distinguishes legacy interpolation changes without exposing the expanded value', async () => {
+    const adapter = createMcpAdapter('opencode');
+    const headers = { Authorization: 'Bearer ${env:MCP_HEADER_ACCESS}', 'X-Tenant': '${MCP_HEADER_TENANT}' };
+    const a = await adapter.prepare(runtimeServers(headers), baseContext());
+    vi.stubEnv('MCP_HEADER_TENANT', 'tenant-b');
+    const b = await adapter.prepare(runtimeServers(headers), baseContext());
+    try {
+      expect(a.identity).not.toBe(b.identity);
+      expect(b.serverConfig?.datadog).toMatchObject({ headers: { 'X-Tenant': 'tenant-b' } });
+      expect(a.identity).not.toContain('tenant-a');
+      expect(b.identity).not.toContain('tenant-b');
+    } finally { await a.dispose(); await b.dispose(); }
+  });
+
+  it('preserves legacy interpolation output as literal header text', async () => {
     const adapter = createMcpAdapter('opencode');
     vi.stubEnv('MCP_HEADER_TEXT', '${env:MCP_HEADER_ACCESS}');
     const a = await adapter.prepare(runtimeServers({ 'X-Text': '${MCP_HEADER_TEXT}' }), baseContext());
     const b = await adapter.prepare(runtimeServers({ 'X-Text': 'fixed' }), baseContext());
     try {
       expect(a.serverConfig?.datadog).toMatchObject({ headers: { 'X-Text': '${env:MCP_HEADER_ACCESS}' } });
-      expect(a.identity).toBe(b.identity);
+      expect(a.identity).not.toBe(b.identity);
       expect(a.identity).not.toContain('MCP_HEADER_ACCESS');
+    } finally { await a.dispose(); await b.dispose(); }
+  });
+
+  it('distinguishes fixed headers even without provider references', async () => {
+    const adapter = createMcpAdapter('opencode');
+    const a = await adapter.prepare(runtimeServers({ 'X-Tenant': 'tenant-a' }), baseContext());
+    const b = await adapter.prepare(runtimeServers({ 'X-Tenant': 'tenant-b' }), baseContext());
+    try {
+      expect(a.identity).not.toBe(b.identity);
+      expect(a.identity).not.toContain('tenant-a');
+      expect(b.identity).not.toContain('tenant-b');
     } finally { await a.dispose(); await b.dispose(); }
   });
 

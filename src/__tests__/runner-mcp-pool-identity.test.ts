@@ -14,7 +14,7 @@ import type { AgentResponse } from '../core/models/index.js';
  * the `ResolvedMcpServers.identity` the adapter receives. This verifies
  * `RunAgentOptions.mcpServerIdentity` → `prepareMcpAdapter` →
  * `ResolvedMcpServers.identity`. The OpenCode adapter combines `servers.identity`
- * with header reference names, and the pool incorporates that prepared
+ * with a hash of the effective headers, and the pool incorporates that prepared
  * identity into its key. The actual adapter and pool selection are covered
  * separately in `opencode-mcp-pool-identity.test.ts`.
  */
