@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
 import type { ReactElement } from 'react';
 import { cleanup, render } from 'ink-testing-library';
@@ -101,7 +101,7 @@ describe('manager startup logging with global debug configuration', () => {
       app = render(buildTree({ settle: () => {}, fail: (error) => { startupFailure = error; } }));
       await vi.waitFor(() => {
         expect(startupFailure).toBeUndefined();
-        expect(app!.lastFrame()).toContain('manager — Experimental');
+        expect(app!.lastFrame()).toContain(`Assignment: ${basename(cwd)}`);
         expect(app!.lastFrame()).toContain('Discuss your goal');
         expect(app!.lastFrame()).not.toContain('Working');
         expect(doubles.autoRun).toHaveBeenCalledWith(cwd);
