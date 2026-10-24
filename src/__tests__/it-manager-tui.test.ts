@@ -1042,9 +1042,15 @@ describe('manager TUI summary menu and conversation input', () => {
       await chooseGoalAction(context, 'abort');
       await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.abortConfirmation', 'en')));
       readWorkspace.mockResolvedValue({ ...workspace, repositoryDirectories: [] });
+      const emptyMessage = getLabel('manager.selectionEmpty.repository', 'en');
+      expect(stripVTControlCharacters(context.app.lastFrame()!).split('\n')).not.toContain(`● ${emptyMessage}`);
 
       context.app.stdin.write('\x10');
-      await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.selectionEmpty.repository', 'en')));
+      await waitFor(() => {
+        const rows = stripVTControlCharacters(context.app.lastFrame()!).split('\n').map((row) => row.trimEnd());
+        expect(rows).toContain(emptyMessage);
+        expect(rows).toContain(`● ${emptyMessage}`);
+      });
       expect(selectionFrame(context)).toBeUndefined();
       expect(context.app.lastFrame()).toContain(getLabel('manager.abortConfirmation', 'en'));
       expect(abort).not.toHaveBeenCalled();
