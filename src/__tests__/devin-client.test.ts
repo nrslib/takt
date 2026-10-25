@@ -1204,6 +1204,59 @@ describe('callDevin', () => {
     expect(result.error).toContain('Devin CLI exited with code 1');
   });
 
+  it('Given a detached descendant reparents after the leader exits, When terminate runs, Then the recorded group is still signaled', async () => {
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    let leaderPid = 0;
+    let leaderAlive = true;
+    // A setsid'd exec child (own pgid) exists only while the leader lives;
+    // after the exit it reports ppid=1, so a post-death scan cannot find it.
+    mockExecFileSync.mockImplementation((command: unknown) => {
+      if (command !== 'ps' || leaderPid === 0) {
+        return '';
+      }
+      return leaderAlive
+        ? `${leaderPid} 1 ${leaderPid}\n${leaderPid + 1} ${leaderPid} ${leaderPid + 1}\n`
+        : `${leaderPid + 1} 1 ${leaderPid + 1}\n`;
+    });
+    let spawned: MockAcpChild | undefined;
+    mockSpawn.mockImplementation((...call: unknown[]) => {
+      recordConfigArg(call);
+      const child = createAcpChild();
+      spawned = child;
+      leaderPid = child.pid!;
+      attachAcpServer(child, {
+        initialize: () => ({ protocolVersion: 1, agentCapabilities: {}, agentInfo: { name: 'x', version: '0' } }),
+        'session/new': () => ({ sessionId: 'keen-otter', modes: DEFAULT_MODES, configOptions: [] }),
+        'session/prompt': (_params, api, _id) => {
+          queueMicrotask(() => {
+            api.notify('session/update', {
+              sessionId: 'keen-otter',
+              update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'working' } },
+            });
+          });
+          return undefined;
+        },
+      });
+      return child;
+    });
+
+    const result = await callDevin('coder', 'implement', {
+      cwd: '/repo',
+      // The text event means the update was processed and the descendant
+      // snapshot is taken (init arrives before the snapshot). Kill the
+      // leader now; the reparented descendant escapes a fresh scan.
+      onStream: (event) => {
+        if (event.type !== 'text') return;
+        leaderAlive = false;
+        spawned!.emit('exit', 1, null); // no close — descendant holds the pipes
+      },
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('Devin CLI exited with code 1');
+    expect(killSpy).toHaveBeenCalledWith(-(leaderPid + 1), 'SIGTERM');
+  });
+
   it('Given an exit with empty stderr, When the process dies mid-prompt, Then the error does not repeat the exit code', async () => {
     mockChildExitAfterPrompt(2, '');
 

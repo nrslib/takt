@@ -423,6 +423,10 @@ export async function runDevinAcpPrompt(
         return;
       }
       const update = params.update;
+      // Session updates cluster around tool activity — exactly when exec
+      // children spawn. Keep the detached-descendant snapshot fresh so a
+      // leader exit can still find them after reparenting.
+      proc.refreshDescendants();
       if (update.sessionUpdate === 'agent_message_chunk' && update.content.type === 'text') {
         textParts.push(update.content.text);
       }

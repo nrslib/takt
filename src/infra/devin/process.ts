@@ -10,6 +10,7 @@ const log = createLogger('devin-process');
 // between SIGTERM and SIGKILL.
 const DESCENDANT_KILL_GRACE_MS = 250;
 const DESCENDANT_SCAN_TIMEOUT_MS = 5_000;
+const DESCENDANT_SNAPSHOT_INTERVAL_MS = 500;
 
 const DEVIN_COMMAND = 'devin';
 const DEVIN_MAX_BUFFER_BYTES = 10 * 1024 * 1024;
@@ -88,6 +89,11 @@ export interface DevinAcpProcess {
    * whichever arrives first.
    */
   exitInfo(): DevinProcessExit | undefined;
+  /**
+   * Refresh the recorded detached-descendant process groups. Must be called
+   * while the leader is alive; throttled internally.
+   */
+  refreshDescendants(): void;
   terminate(): void;
 }
 
@@ -237,16 +243,40 @@ export function spawnDevinAcp(args: string[], options: DevinCallOptions): DevinA
   let stderrOverflowed = false;
   let exit: DevinProcessExit | undefined;
 
+  // Detached descendants must be discovered while the leader is alive —
+  // once it dies they are reparented and their PPID chain no longer roots at
+  // the leader, so a scan taken afterwards cannot find them. Refresh the
+  // recorded groups on stdio activity (when setsid'd exec children are being
+  // spawned), throttled to bound the synchronous `ps` scans, and stop once
+  // the leader's exit is observed.
+  let recordedDescendantGroups = new Set<number>();
+  let lastDescendantScanAt = 0;
+  const refreshDescendantSnapshot = (): void => {
+    if (process.platform === 'win32' || child.pid === undefined || exit !== undefined) {
+      return;
+    }
+    const now = Date.now();
+    if (now - lastDescendantScanAt < DESCENDANT_SNAPSHOT_INTERVAL_MS) {
+      return;
+    }
+    lastDescendantScanAt = now;
+    recordedDescendantGroups = collectDescendantProcessGroups(child.pid);
+  };
+  child.stderr?.on('data', refreshDescendantSnapshot);
+
   let terminateRequested = false;
   const terminate = (): void => {
     if (terminateRequested) return;
     terminateRequested = true;
-    // On POSIX, sweep the detached (setsid'd) descendant groups first — their
-    // ancestry is still intact while the leader lives. Windows' taskkill /T
-    // already follows the whole tree.
-    const descendantGroups = process.platform === 'win32' || child.pid === undefined
-      ? new Set<number>()
-      : collectDescendantProcessGroups(child.pid);
+    // On POSIX, sweep the detached (setsid'd) descendant groups first —
+    // groups recorded while the leader lived plus a fresh scan in case it
+    // still lives. Windows' taskkill /T already follows the whole tree.
+    const descendantGroups = new Set(recordedDescendantGroups);
+    if (process.platform !== 'win32' && child.pid !== undefined) {
+      for (const pgid of collectDescendantProcessGroups(child.pid)) {
+        descendantGroups.add(pgid);
+      }
+    }
     for (const pgid of descendantGroups) {
       signalProcessGroup(pgid, 'SIGTERM');
     }
@@ -318,6 +348,7 @@ export function spawnDevinAcp(args: string[], options: DevinCallOptions): DevinA
     stderrText: () => stderr,
     stderrOverflowed: () => stderrOverflowed,
     exitInfo: () => exit,
+    refreshDescendants: refreshDescendantSnapshot,
     terminate,
   };
 }
