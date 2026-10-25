@@ -18,6 +18,7 @@ let runStreamedInputs: unknown[] = [];
 let codexConstructorCalls: Array<Record<string, unknown> | undefined> = [];
 let attemptOrder: string[] = [];
 const tempRoots = new Set<string>();
+let projectDirectory: string;
 const CODEX_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const CODEX_RECONNECT_FAILURE_MESSAGE = 'Reconnecting... 2/5 (timeout waiting for child process to exit)';
 const CODEX_RETRY_MAX_DELAY_MS = 30_000;
@@ -152,6 +153,8 @@ describe('CodexClient retry', () => {
     runStreamedInputs = [];
     codexConstructorCalls = [];
     attemptOrder = [];
+    projectDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-codex-retry-'));
+    tempRoots.add(projectDirectory);
   });
 
   afterEach(() => {
@@ -173,7 +176,7 @@ describe('CodexClient retry', () => {
         : { type: 'events', events: [source === 'error' ? { type: 'error', message: diagnostic } : { type: 'turn.failed', error: { message: diagnostic } }] });
       const onStream = vi.fn();
       const response = await new CodexProvider().setup({ name: 'manager', systemPrompt }).call('continue', {
-        cwd: '/tmp/project', sessionId, callerManagedSession: true, onStream,
+        cwd: projectDirectory, sessionId, callerManagedSession: true, onStream,
       });
       expect(response).toMatchObject({ status: 'error', failureCategory: 'session_continuation_unsupported', sessionId });
       expect(onStream).toHaveBeenCalledWith(expect.objectContaining({ type: 'result', data: expect.objectContaining({
@@ -189,7 +192,7 @@ describe('CodexClient retry', () => {
     'Error: thread/resume: thread/resume failed: no rollout found for thread id another-session (code -32600)'])
   ('keeps general failures separate from rejected resumes (%s)', async (message) => {
     runPlans = [{ type: 'events', events: [{ type: 'turn.failed', error: { message } }] }];
-    const response = await new CodexClient().call('manager', 'continue', { cwd: '/tmp/project', sessionId: 'saved-session', callerManagedSession: true });
+    const response = await new CodexClient().call('manager', 'continue', { cwd: projectDirectory, sessionId: 'saved-session', callerManagedSession: true });
     expect(response.failureCategory).toBe('provider_error');
     expect(runPlanIndex).toBe(1);
   });
@@ -202,7 +205,7 @@ describe('CodexClient retry', () => {
       { type: 'item.completed', item: { id: 'reply', type: 'agent_message', text: JSON.stringify({ message: 'session_continuation_unsupported', summary: null }) } },
       { type: 'turn.completed' },
     ] }];
-    const response = await new CodexProvider().setup({ name: 'manager' }).call('continue', { cwd: '/tmp/project', sessionId: 'saved-session', callerManagedSession: true, outputSchema: { type: 'object' } });
+    const response = await new CodexProvider().setup({ name: 'manager' }).call('continue', { cwd: projectDirectory, sessionId: 'saved-session', callerManagedSession: true, outputSchema: { type: 'object' } });
     expect(response).toMatchObject({ status: 'done', sessionId: 'saved-session', structuredOutput: { message: 'session_continuation_unsupported', summary: null } });
     expect(response.failureCategory).toBeUndefined();
     expect(runPlanIndex).toBe(1);

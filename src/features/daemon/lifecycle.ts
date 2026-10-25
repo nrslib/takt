@@ -32,7 +32,7 @@ export async function stopDaemon(): Promise<void> {
       await delay(PROCESS_POLL_MS);
     }
   }
-  removeDaemonOwner(directory, owner.pid);
+  removeDaemonOwner(directory, owner);
   log.info('Daemon exit confirmed', { pid: owner.pid });
 }
 
@@ -44,12 +44,17 @@ export async function ensureDaemon(): Promise<void> {
     if (owner.version === packageVersion && owner.cliPath === cliPath) {
       const deadline = Date.now() + PROCESS_WAIT_MS;
       while (Date.now() < deadline) {
+        if (!isDaemonOwnerRunning(owner)) {
+          removeDaemonOwner(directory, owner);
+          break;
+        }
         if (await isConversationIpcReady(directory, owner)) return;
         await delay(PROCESS_POLL_MS);
       }
-      throw new Error('Daemon IPC readiness was not confirmed');
+      if (isDaemonOwnerRunning(owner)) throw new Error('Daemon IPC readiness was not confirmed');
+    } else {
+      await stopDaemon();
     }
-    await stopDaemon();
   }
   const logs = join(directory, 'logs');
   ensurePrivateDirectory(logs);

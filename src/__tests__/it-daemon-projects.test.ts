@@ -191,13 +191,26 @@ it('stores one private owner file and verifies PID reuse and unknown identity', 
   expect(() => isDaemonOwnerRunning(owner)).toThrow();
   processes.alive.mockReturnValue(false);
   expect(isDaemonOwnerRunning(owner)).toBe(false);
-  removeDaemonOwner(directory, owner.pid + 1);
+  removeDaemonOwner(directory, { ...owner, pid: owner.pid + 1 });
   expect(readDaemonOwner(directory)).toEqual(owner);
-  removeDaemonOwner(directory, owner.pid);
+  removeDaemonOwner(directory, owner);
   expect(readDaemonOwner(directory)).toBeUndefined();
 });
 
 it('rejects a malformed owner record instead of using its PID', () => {
   writeFileSync(join(getGlobalConfigDir(), 'daemon.json'), JSON.stringify({ pid: -1 }));
   expect(() => readDaemonOwner(getGlobalConfigDir())).toThrow();
+});
+
+it('retains a newly registered daemon with the same PID and a different start time', () => {
+  const directory = getGlobalConfigDir();
+  const previous = { pid: 1234, identity: { startTime: 'darwin-start-v2:12345' }, version: 'test', cliPath: '/test/cli.js' };
+  const replacement = { ...previous, identity: { startTime: 'darwin-start-v2:12346' } };
+  writeDaemonOwner(directory, previous);
+  writeDaemonOwner(directory, replacement);
+
+  removeDaemonOwner(directory, previous);
+  expect(readDaemonOwner(directory)).toEqual(replacement);
+  removeDaemonOwner(directory, replacement);
+  expect(readDaemonOwner(directory)).toBeUndefined();
 });

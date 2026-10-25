@@ -1,12 +1,15 @@
+import { randomUUID } from 'node:crypto';
+import * as privateFiles from '../shared/utils/private-file.js';
+import { createInquiry } from '../infra/goals/inquiry.js';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { createConversationService } from '../features/manager/conversationService.js';
 import { ConversationStore } from '../infra/conversations/store.js';
 import { conversationRecord } from './helpers/conversation-fixtures.js';
 import type { ConversationRecord } from '../infra/conversations/schema.js';
-import type { ConversationDelivery, PortOutput, SnapshotRead } from '../features/manager/conversationPort.js';
+import type { ConversationDelivery, PortOutput, SnapshotRead, SnapshotItem } from '../features/manager/conversationPort.js';
 import type { PreparedConversationRuntime } from '../features/manager/conversationRuntime.js';
 import type { ManagerAssignment } from '../features/manager/startupResolution.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
@@ -717,5 +720,33 @@ it.each(([
     expect(attempts).toBe(outcome === 'second-failure' ? 2 : 1);
     expect(persisted.sessionId).toBe(outcome === 'tool' || outcome === 'second-failure' ? null : savedId);
     expect(outputs.some((output) => output.kind === 'result' && output.result.kind === 'error')).toBe(true);
+  }
+});
+
+it.each([1, 4])('reads each goal once per snapshot with %i inquiries and notices per goal', async (count) => {
+  const goals = [5, 6, 7].map((prefix) => ({ ...goalRecord(), id: `${prefix}50e8400-e29b-41d4-a716-446655440000`,
+    questions: Array.from({ length: count }, (_, index) => ({ ...createInquiry({ body: `Question ${prefix}/${index}` }),
+      createdAt: `2026-10-24T00:00:0${index}.000Z` })),
+    notifications: Array.from({ length: count }, (_, index) => ({ id: randomUUID(), kind: 'progress' as const,
+      body: `Notice ${prefix}/${index}\nComplete detail`, recordedAt: `2026-10-24T00:00:0${index}.000Z` })),
+    workLog: [{ id: randomUUID(), summary: `Work ${prefix}`, recordedAt: '2026-10-24T00:00:00.000Z' }],
+  }));
+  for (const goal of goals) await new GoalStore(repository).create(goal);
+  const reads = vi.spyOn(privateFiles, 'readPrivateFileState');
+  const opened = await open();
+  for (const read of [opened.read, await service.snapshot(opened.attachmentId)]) {
+    reads.mockClear();
+    const items: SnapshotItem[] = [];
+    for await (const item of read.items) items.push(item);
+    expect(reads.mock.calls.map(([path]) => path).filter((path) => basename(path) === 'goal.json').sort())
+      .toEqual(goals.map((goal) => join(repository, '.takt', 'goals', goal.id, 'goal.json')).sort());
+    expect(items.flatMap((item) => item.kind === 'goal' ? [item.goal.id] : [])).toEqual(goals.map((goal) => goal.id));
+    expect(items.flatMap((item) => item.kind === 'inquiry' ? [item.inquiry.question.id] : []))
+      .toEqual(Array.from({ length: count }, (_, index) => goals.map((goal) => goal.questions[index]!.id)).flat());
+    expect(items.flatMap((item) => item.kind === 'notice' ? [item.notice.id] : []))
+      .toEqual(Array.from({ length: count }, (_, index) => goals.map((goal) => goal.notifications[count - index - 1]!.id)).flat());
+    expect(items.flatMap((item) => item.kind === 'display_event' ? [item.event.id] : []))
+      .toEqual(goals.flatMap((goal) => [JSON.stringify([goal.id, 'work-log', goal.workLog[0]!.id]),
+        ...goal.notifications.map((notification) => JSON.stringify([goal.id, 'notification', notification.id]))]));
   }
 });

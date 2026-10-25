@@ -25,55 +25,54 @@ export interface ManagerDisplayEvent {
   suppressInitialDisplay?: true;
 }
 
+export function* projectManagerDisplayEvents(goal: Goal, directory: string, language: Language,
+  startupBoundary: number | undefined, notificationStartedAt: number): Generator<ManagerDisplayEvent> {
+  const project = basename(directory);
+  const { notifications: policy } = resolveManagerConfig(directory);
+  for (const record of goal.workLog) {
+    yield { id: JSON.stringify([goal.id, 'work-log', record.id]),
+      message: `${goal.id}: ${record.kind === 'patrol' ? formatPatrolSummary(record.summary) : record.summary}`,
+      ...(startupBoundary !== undefined && Date.parse(record.recordedAt) < startupBoundary ? { suppressInitialDisplay: true as const } : {}) };
+  }
+  for (const notification of goal.notifications ?? []) {
+    if (notification.kind === 'question' || !policy[notification.kind]) continue;
+    yield { id: JSON.stringify([goal.id, 'notification', notification.id]),
+      message: formatGoalNotification(goal, notification, language, project, 'tui'),
+      ...(Date.parse(notification.recordedAt) < notificationStartedAt ? { suppressInitialDisplay: true as const } : {}) };
+  }
+}
+
+export function* projectManagerNotices(goal: Goal, directory: string, language: Language): Generator<ManagerDisplayNotice> {
+  const project = basename(directory);
+  const { notifications: policy } = resolveManagerConfig(directory);
+  for (const notification of goal.notifications ?? []) {
+    if (notification.kind === 'question' || !policy[notification.kind]) continue;
+    yield { id: notification.id, repositoryDirectory: directory, project, goalId: goal.id,
+      objective: goal.objective, kind: notification.kind, recordedAt: notification.recordedAt,
+      message: formatGoalNotification(goal, notification, language, project, 'tui', 'full') };
+  }
+}
+
+export function compareManagerNotices(left: ManagerDisplayNotice, right: ManagerDisplayNotice): number {
+  // Stable sorting retains repository, goal ID and source-index order for equal timestamps.
+  return Date.parse(right.recordedAt) - Date.parse(left.recordedAt);
+}
+
 export async function* iterateManagerDisplayEvents(assignment: ManagerAssignment, language: Language,
   startupBoundaries: ReadonlyMap<string, number>, notificationStartedAt: number): AsyncGenerator<ManagerDisplayEvent> {
   for (const directory of assignment.repositoryDirectories) {
-    const project = basename(directory);
-    const { notifications: policy } = resolveManagerConfig(directory);
-    const boundary = startupBoundaries.get(directory);
     for await (const goal of new GoalStore(directory).iterate()) {
-      for (const record of goal.workLog) {
-        yield { id: JSON.stringify([goal.id, 'work-log', record.id]),
-          message: `${goal.id}: ${record.kind === 'patrol' ? formatPatrolSummary(record.summary) : record.summary}`,
-          ...(boundary !== undefined && Date.parse(record.recordedAt) < boundary ? { suppressInitialDisplay: true as const } : {}) };
-      }
-      for (const notification of goal.notifications ?? []) {
-        if (notification.kind === 'question' || !policy[notification.kind]) continue;
-        yield { id: JSON.stringify([goal.id, 'notification', notification.id]),
-          message: formatGoalNotification(goal, notification, language, project, 'tui'),
-          ...(Date.parse(notification.recordedAt) < notificationStartedAt ? { suppressInitialDisplay: true as const } : {}) };
-      }
+      yield* projectManagerDisplayEvents(goal, directory, language, startupBoundaries.get(directory), notificationStartedAt);
     }
   }
 }
 
 export async function* iterateManagerNotices(assignment: ManagerAssignment, language: Language): AsyncGenerator<ManagerDisplayNotice> {
-  interface Position { time: number; repository: number; goalId: string; index: number }
-  const compare = (left: Position, right: Position): number => right.time - left.time
-    || left.repository - right.repository || left.goalId.localeCompare(right.goalId) || left.index - right.index;
-  let cursor: Position | undefined;
-  while (true) {
-    let candidate: { position: Position; notice: ManagerDisplayNotice } | undefined;
-    for (const [repository, directory] of assignment.repositoryDirectories.entries()) {
-      const project = basename(directory);
-      const { notifications: policy } = resolveManagerConfig(directory);
-      for await (const goal of new GoalStore(directory).iterate()) {
-        for (const [index, notification] of (goal.notifications ?? []).entries()) {
-          if (notification.kind === 'question' || !policy[notification.kind]) continue;
-          const position = { time: Date.parse(notification.recordedAt), repository, goalId: goal.id, index };
-          if ((cursor === undefined || compare(position, cursor) > 0)
-            && (candidate === undefined || compare(position, candidate.position) < 0)) {
-            candidate = { position, notice: {
-              id: notification.id, repositoryDirectory: directory, project, goalId: goal.id,
-              objective: goal.objective, kind: notification.kind, recordedAt: notification.recordedAt,
-              message: formatGoalNotification(goal, notification, language, project, 'tui', 'full'),
-            } };
-          }
-        }
-      }
+  const notices: ManagerDisplayNotice[] = [];
+  for (const directory of assignment.repositoryDirectories) {
+    for await (const goal of new GoalStore(directory).iterate()) {
+      for (const notice of projectManagerNotices(goal, directory, language)) notices.push(notice);
     }
-    if (candidate === undefined) return;
-    cursor = candidate.position;
-    yield candidate.notice;
   }
+  yield* notices.sort(compareManagerNotices);
 }

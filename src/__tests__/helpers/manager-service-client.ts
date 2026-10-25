@@ -18,6 +18,8 @@ export class ManagerServiceClient {
   private attachmentId: string | undefined;
   private closed = false;
   private admissions = 0;
+  private reading: Promise<void> | undefined;
+  private readGeneration = 0;
   private stateSequence = -1;
   private pendingOutputs: Array<{ output: Exclude<PortOutput, { kind: 'snapshot' }>; version?: OutputVersion }> = [];
   readonly results: OperationResult[] = [];
@@ -60,7 +62,7 @@ export class ManagerServiceClient {
     this.service = service;
     this.delivery = { deliver: async (_id: string, output: PortOutput, version: OutputVersion) => {
       if (this.closed) return { kind: 'unavailable' as const, reason: 'closed' };
-      if (output.kind === 'snapshot') await this.read(output.read);
+      if (output.kind === 'snapshot') await this.read(() => Promise.resolve(output.read));
       else {
         this.deliver(output, version);
       }
@@ -71,37 +73,55 @@ export class ManagerServiceClient {
       error: error instanceof Error ? error.message : String(error) }));
   }
   private async open(): Promise<void> {
+    const generation = ++this.readGeneration;
+    this.reading = undefined;
     if (this.attachmentId !== undefined) this.service.detach(this.attachmentId);
+    this.attachmentId = undefined;
     this.update({ connection: 'connecting', readStatus: 'reading' });
     const { cwd, assignment, plan } = this.options;
     const resolved = await createTuiConversationPort(this.configDirectory, this.delivery).resolve(assignment
       ?? { kind: 'repository', repositoryDirectory: cwd });
+    if (this.closed || generation !== this.readGeneration) return;
     const opened = await this.service.open({ ...resolved, agentOverrides: { provider: plan.ctx.providerType, model: plan.ctx.model } }, this.delivery);
+    if (this.closed || generation !== this.readGeneration) { this.service.detach(opened.attachmentId); return; }
     this.attachmentId = opened.attachmentId;
     // A failed transfer leaves the attachment connected and can be refreshed.
-    await this.read(opened.read).catch(() => {});
-    this.update({ connection: 'connected' });
+    await this.read(() => Promise.resolve(opened.read)).catch(() => {});
+    if (!this.closed && generation === this.readGeneration) this.update({ connection: 'connected' });
   }
   private update(change: Partial<ConversationClientSnapshot>): void {
     this.view = { ...this.view, ...change };
     for (const listener of this.listeners) listener();
   }
-  private async read(read: SnapshotRead): Promise<void> {
-    this.update({ readStatus: 'reading' });
+  private read(load: () => Promise<SnapshotRead>): Promise<void> {
+    if (this.reading !== undefined) return this.reading;
+    const generation = this.readGeneration;
+    const tracked = load().then((snapshot) => this.consumeRead(snapshot, generation)).finally(() => {
+      if (this.reading === tracked) this.reading = undefined;
+    });
+    this.reading = tracked;
+    return tracked;
+  }
+  private async consumeRead(read: SnapshotRead, generation: number): Promise<void> {
+    if (generation !== this.readGeneration) return;
+    if (this.view.readStatus !== 'complete') this.update({ readStatus: 'reading' });
     const items: ConversationClientSnapshot['items'][number][] = [];
     try {
       for await (const item of read.items) {
+        if (generation !== this.readGeneration) return;
         if (item.kind === 'state') {
           if (item.state.conversationId !== this.view.state?.conversationId || read.stateSequence > this.stateSequence) {
             this.stateSequence = read.stateSequence;
             this.update({ state: item.state });
           }
         }
-        else { items.push(item); this.update({ items: [...items] }); }
+        else items.push(item);
       }
+      if (generation !== this.readGeneration) return;
       this.update({ items, readStatus: 'complete', error: null });
     } catch (error) {
-      this.update({ readStatus: 'incomplete' });
+      if (generation !== this.readGeneration) return;
+      this.update({ items, readStatus: 'incomplete' });
       throw error;
     }
   }
@@ -123,14 +143,28 @@ export class ManagerServiceClient {
   async refresh(): Promise<void> {
     await this.ready;
     if (this.closed || this.attachmentId === undefined) return;
-    try { await this.read(await this.service.snapshot(this.attachmentId)).catch(() => {}); }
-    catch (error) {
+    if (this.reading !== undefined) {
+      await this.reading.catch(() => {});
+      return;
+    }
+    const generation = this.readGeneration;
+    const attachmentId = this.attachmentId;
+    let loadFailed = false;
+    try {
+      await this.read(() => this.service.snapshot(attachmentId).catch((error: unknown) => {
+        loadFailed = true;
+        throw error;
+      }));
+    } catch (error) {
+      if (generation !== this.readGeneration || !loadFailed) return;
       if (error instanceof ConversationError && error.code === 'invalid_assignment') await this.open();
       else throw error;
     }
   }
   close(): void {
     this.closed = true;
+    this.readGeneration++;
+    this.reading = undefined;
     if (this.attachmentId !== undefined) this.service.detach(this.attachmentId);
   }
   async dispose(): Promise<void> {

@@ -53,6 +53,8 @@ interface ActiveRead {
 }
 
 const INPUT_BATCH_BYTES = 16 * 1024;
+// Keep a short burst of notifications without retaining an unbounded backlog for a slow TUI.
+const OUTPUT_QUEUE_CAPACITY = 16;
 
 function attachConnection(socket: Socket, service: ConversationInput, configDirectory: string, capability: string, owner: DaemonOwner,
   onInitializingChange: (difference: number) => void) {
@@ -67,7 +69,8 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
   let snapshot: ActiveRead | undefined;
   let control: { value: unknown; resolve(): void; reject(error: unknown): void } | undefined;
   let state: { conversationId: string; output: PortOutput; version: OutputVersion } | undefined;
-  let output: { iterator: ReturnType<typeof conversationTransferFrames>; resolve(result: { kind: 'delivered' } | { kind: 'unavailable'; reason: string }): void } | undefined;
+  const outputs: Array<{ iterator: ReturnType<typeof conversationTransferFrames>;
+    resolve(result: { kind: 'delivered' } | { kind: 'unavailable'; reason: string }): void }> = [];
   const cancelRead = (): void => {
     const old = snapshot;
     snapshot = undefined;
@@ -78,7 +81,7 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
     wakeWriter?.();
     cancelRead();
     control?.reject(new Error('IPC receiver unavailable')); control = undefined;
-    output?.resolve({ kind: 'unavailable', reason: 'disconnected' }); output = undefined;
+    for (const queued of outputs.splice(0)) queued.resolve({ kind: 'unavailable', reason: 'disconnected' });
     state = undefined;
     for (const id of owned) service.detach(id);
     owned.clear();
@@ -115,10 +118,10 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
           }
           continue;
         }
-        if (output !== undefined) {
-          const current = output;
+        if (outputs.length > 0) {
+          const current = outputs[0]!;
           const next = await current.iterator.next();
-          if (next.done) { if (output === current) output = undefined; current.resolve({ kind: 'delivered' }); }
+          if (next.done) { outputs.shift(); current.resolve({ kind: 'delivered' }); }
           else await writeConversationFrame(socket, next.value.frame);
           continue;
         }
@@ -171,10 +174,13 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
         void pump();
         return { kind: 'delivered' };
       }
-      if (output !== undefined) { fail(); return { kind: 'unavailable', reason: 'output capacity unavailable' }; }
+      if (outputs.length >= OUTPUT_QUEUE_CAPACITY) {
+        fail();
+        return { kind: 'unavailable', reason: 'output capacity unavailable' };
+      }
       return new Promise((resolve) => {
-        output = { iterator: conversationTransferFrames(conversationId, { ...version, transferId: randomUUID() },
-          'output', (async function* () { yield value; })()), resolve };
+        outputs.push({ iterator: conversationTransferFrames(conversationId, { ...version, transferId: randomUUID() },
+          'output', (async function* () { yield value; })()), resolve });
         wakeWriter?.();
         void pump();
       });

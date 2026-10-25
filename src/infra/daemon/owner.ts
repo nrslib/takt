@@ -39,10 +39,13 @@ export function registerDaemonOwner(globalConfigDirectory: string, owner: Daemon
 }
 
 /** Removes the owner record only when it still names the given process, so a newer daemon keeps its record. */
-export function removeDaemonOwner(globalConfigDirectory: string, pid: number): void {
-  const owner = readDaemonOwner(globalConfigDirectory);
-  if (owner !== undefined && owner.pid !== pid) return;
-  rmSync(ownerPath(globalConfigDirectory), { force: true });
+export function removeDaemonOwner(globalConfigDirectory: string, expected: DaemonOwner): void {
+  if (readDaemonOwner(globalConfigDirectory) === undefined) return;
+  withFileLock(`${ownerPath(globalConfigDirectory)}.lock`, () => {
+    const owner = readDaemonOwner(globalConfigDirectory);
+    if (owner === undefined || owner.pid !== expected.pid || owner.identity.startTime !== expected.identity.startTime) return;
+    rmSync(ownerPath(globalConfigDirectory), { force: true });
+  });
 }
 
 export function isDaemonOwnerRunning(owner: DaemonOwner): boolean {

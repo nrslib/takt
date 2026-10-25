@@ -1,3 +1,4 @@
+import * as privateFiles from '../shared/utils/private-file.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
@@ -94,4 +95,21 @@ it('projects work logs and notifications sequentially with the existing IDs, for
   expect(list).not.toHaveBeenCalled();
   const addedRepository = await collect(iterateManagerDisplayEvents(assignment(), 'en', new Map(), boundary));
   expect(addedRepository[0]).not.toHaveProperty('suppressInitialDisplay');
+});
+
+it('reads each goal once when independently ordering multiple inquiries or notices', async () => {
+  const goals = [5, 6].map((prefix) => ({ ...goalRecord(), id: `${prefix}50e8400-e29b-41d4-a716-446655440000`,
+    questions: Array.from({ length: 4 }, (_, index) => createInquiry({ body: `Question ${prefix}/${index}` })),
+    notifications: Array.from({ length: 4 }, (_, index) => ({ id: `${prefix}50e8400-e29b-41d4-a716-44665544000${index}`,
+      kind: 'progress' as const, body: `Notice ${index}`, recordedAt: '2026-10-24T00:00:00.000Z' })),
+  }));
+  for (const goal of goals) save(goal);
+  const reads = vi.spyOn(privateFiles, 'readPrivateFileState');
+  for (const source of [iteratePendingInquiries(directory, assignment()), iterateManagerNotices(assignment(), 'en')]) {
+    reads.mockClear();
+    const items = await collect<unknown>(source);
+    expect(items).toHaveLength(8);
+    expect(reads.mock.calls.map(([path]) => path).filter((path) => basename(path) === 'goal.json').sort())
+      .toEqual(goals.map((goal) => join(repository, '.takt', 'goals', goal.id, 'goal.json')).sort());
+  }
 });

@@ -55,18 +55,12 @@ export class GoalStore {
     assertSafePath(this.root, true);
     if (lstatOrUndefined(this.root) === undefined) return;
     const snapshot = capturePrivateDirectoryReadSnapshot(this.root);
-    let cursor: string | undefined;
-    while (true) {
-      assertPrivateDirectoryReadSnapshot(snapshot);
-      let next: string | undefined;
-      for await (const entry of await opendir(this.root)) {
-        const id = GoalIdSchema.parse(entry.name);
-        if ((cursor === undefined || id.localeCompare(cursor) > 0)
-          && (next === undefined || id.localeCompare(next) < 0)) next = id;
-      }
-      if (next === undefined) return;
-      cursor = next;
-      const goal = this.read(next);
+    const ids: string[] = [];
+    for await (const entry of await opendir(this.root)) ids.push(GoalIdSchema.parse(entry.name));
+    ids.sort((left, right) => left.localeCompare(right));
+    assertPrivateDirectoryReadSnapshot(snapshot);
+    for (const id of ids) {
+      const goal = this.read(id);
       assertPrivateDirectoryReadSnapshot(snapshot);
       if (goal !== undefined) yield goal;
     }

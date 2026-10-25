@@ -1,7 +1,7 @@
 import { truncateUtf8 } from '../../shared/utils/utf8.js';
 import { StandaloneInquiryStore, type InquiryOwner } from './standalone-inquiries.js';
 import { GoalStore } from './store.js';
-import type { GoalQuestion } from './schema.js';
+import type { Goal, GoalQuestion } from './schema.js';
 
 type InquiryAssignment = InquiryOwner & { readonly repositoryDirectories: readonly string[] };
 
@@ -37,7 +37,7 @@ interface InquiryPosition {
   goalId: string | null;
 }
 
-function compareInquiries(left: InquiryPosition, right: InquiryPosition): number {
+export function compareInquiries(left: InquiryPosition, right: InquiryPosition): number {
   const leftTime = left.question.createdAt === undefined ? Infinity : Date.parse(left.question.createdAt);
   const rightTime = right.question.createdAt === undefined ? Infinity : Date.parse(right.question.createdAt);
   if (leftTime !== rightTime) return leftTime < rightTime ? -1 : 1;
@@ -67,31 +67,27 @@ export async function listPendingInquiries(configDirectory: string, assignment: 
   };
 }
 
-export async function* iteratePendingInquiries(configDirectory: string, assignment: InquiryAssignment): AsyncGenerator<PendingInquiry> {
-  let cursor: InquiryPosition | undefined;
-  const scan = async function* (): AsyncGenerator<PendingInquiry> {
-    for (const repositoryDirectory of assignment.repositoryDirectories) {
-      for await (const goal of new GoalStore(repositoryDirectory).iterate()) {
-        for (const question of goal.questions ?? []) {
-          if (question.status !== 'pending' || question.recipient !== 'human') continue;
-          yield { question, kind: question.kind ?? 'question', summary: truncateUtf8(question.body, SUMMARY_MAX_BYTES).value,
-            goalId: goal.id, repositoryDirectory, objective: goal.objective };
-        }
-      }
-    }
-    for await (const question of new StandaloneInquiryStore(configDirectory, assignment).iteratePending()) {
-      yield { question, kind: question.kind ?? 'question', summary: truncateUtf8(question.body, SUMMARY_MAX_BYTES).value, goalId: null };
-    }
-  };
-  while (true) {
-    let candidate: PendingInquiry | undefined;
-    for await (const inquiry of scan()) {
-      if ((cursor === undefined || compareInquiries(inquiry, cursor) > 0)
-        && (candidate === undefined || compareInquiries(inquiry, candidate) < 0)) candidate = inquiry;
-    }
-    if (candidate === undefined) return;
-    cursor = { question: { id: candidate.question.id, createdAt: candidate.question.createdAt },
-      goalId: candidate.goalId, repositoryDirectory: candidate.repositoryDirectory };
-    yield candidate;
+export function* projectPendingGoalInquiries(goal: Goal, repositoryDirectory: string): Generator<PendingInquiry> {
+  for (const question of goal.questions ?? []) {
+    if (question.status !== 'pending' || question.recipient !== 'human') continue;
+    yield { question, kind: question.kind ?? 'question', summary: truncateUtf8(question.body, SUMMARY_MAX_BYTES).value,
+      goalId: goal.id, repositoryDirectory, objective: goal.objective };
   }
+}
+
+export async function* iterateStandalonePendingInquiries(configDirectory: string, assignment: InquiryAssignment): AsyncGenerator<PendingInquiry> {
+  for await (const question of new StandaloneInquiryStore(configDirectory, assignment).iteratePending()) {
+    yield { question, kind: question.kind ?? 'question', summary: truncateUtf8(question.body, SUMMARY_MAX_BYTES).value, goalId: null };
+  }
+}
+
+export async function* iteratePendingInquiries(configDirectory: string, assignment: InquiryAssignment): AsyncGenerator<PendingInquiry> {
+  const inquiries: PendingInquiry[] = [];
+  for (const repositoryDirectory of assignment.repositoryDirectories) {
+    for await (const goal of new GoalStore(repositoryDirectory).iterate()) {
+      for (const inquiry of projectPendingGoalInquiries(goal, repositoryDirectory)) inquiries.push(inquiry);
+    }
+  }
+  for await (const inquiry of iterateStandalonePendingInquiries(configDirectory, assignment)) inquiries.push(inquiry);
+  yield* inquiries.sort(compareInquiries);
 }

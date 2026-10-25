@@ -1,6 +1,11 @@
 import { createConnection } from 'node:net';
 import type { DaemonOwner } from '../../infra/daemon/owner.js';
-import { conversationIpcEndpoint, ipcStateMatchesOwner, readDaemonIpcState } from '../../infra/daemon/ipcEndpoint.js';
+import {
+  conversationIpcEndpoint,
+  ipcStateMatchesOwner,
+  readDaemonIpcState,
+  type DaemonIpcState,
+} from '../../infra/daemon/ipcEndpoint.js';
 import { ConversationFrameDecoder, encodeConversationFrame } from './conversationFrames.js';
 import { z } from 'zod/v4';
 
@@ -8,7 +13,9 @@ const helloResponse = z.object({ protocolVersion: z.literal(1), type: z.literal(
   result: z.object({ owner: z.object({ pid: z.number(), identity: z.object({ startTime: z.string() }), version: z.string(), cliPath: z.string() }) }) });
 
 export async function isConversationIpcReady(configDirectory: string, owner: DaemonOwner): Promise<boolean> {
-  const state = readDaemonIpcState(configDirectory);
+  let state: DaemonIpcState | undefined;
+  try { state = readDaemonIpcState(configDirectory); }
+  catch { return false; }
   if (state === undefined || !ipcStateMatchesOwner(state, owner)
     || state.endpoint !== conversationIpcEndpoint(configDirectory, process.platform, process.getuid?.() ?? 0)) return false;
   return new Promise((resolve) => {

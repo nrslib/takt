@@ -6,13 +6,13 @@ import { ConversationStore } from '../../infra/conversations/store.js';
 import type { DaemonOwner } from '../../infra/daemon/owner.js';
 import { GoalStore } from '../../infra/goals/store.js';
 import { registerReservedGoal } from '../../infra/goals/service.js';
-import { iteratePendingInquiries } from '../../infra/goals/pending-inquiries.js';
+import { compareInquiries, iterateStandalonePendingInquiries, projectPendingGoalInquiries, type PendingInquiry } from '../../infra/goals/pending-inquiries.js';
 import { TaskRunner } from '../../infra/task/runner.js';
 import { resolveGitRepositoryDirectory } from '../../infra/task/repositoryDirectory.js';
 import { resolveCurrentManagerAssignment, resolveAssignedProjectRoot } from './assignment.js';
 import { createWorkspaceManagerContext, type ManagerAssignment } from './startupResolution.js';
 import { buildGoalMemory, buildManagerGoalSummary } from './turnContext.js';
-import { iterateManagerNotices, iterateManagerDisplayEvents } from './savedEvents.js';
+import { compareManagerNotices, projectManagerNotices, projectManagerDisplayEvents, type ManagerDisplayNotice, type ManagerDisplayEvent } from './savedEvents.js';
 import type { ConversationRuntime } from './conversationRuntime.js';
 import type { ConversationCommand, ConversationDelivery, ConversationInput, ConversationOpen, ConversationState,
   OperationResult, OutputVersion, PortOutput, SnapshotItem, SnapshotRead, Submission } from './conversationPort.js';
@@ -128,22 +128,28 @@ export function createConversationService(input: {
       yield { kind: 'state', state };
       yield { kind: 'assignment', assignment };
       try {
+        const inquiries: PendingInquiry[] = [];
+        const notices: ManagerDisplayNotice[] = [];
+        const events: ManagerDisplayEvent[] = [];
         for (const repositoryDirectory of assignment.repositoryDirectories) {
           for await (const goal of new GoalStore(repositoryDirectory).iterate()) {
             yield { kind: 'goal', goal: { id: goal.id, objective: goal.objective, status: goal.status,
               executionStatus: goal.executionStatus, repositoryDirectory } };
+            for (const inquiry of projectPendingGoalInquiries(goal, repositoryDirectory)) inquiries.push(inquiry);
+            for (const notice of projectManagerNotices(goal, repositoryDirectory, language)) notices.push(notice);
+            for (const event of projectManagerDisplayEvents(goal, repositoryDirectory, language,
+              attachment.startupBoundaries.get(repositoryDirectory), attachment.startedAt)) events.push(event);
           }
         }
-        for await (const inquiry of iteratePendingInquiries(input.configDirectory, assignment)) {
+        for await (const inquiry of iterateStandalonePendingInquiries(input.configDirectory, assignment)) inquiries.push(inquiry);
+        for (const inquiry of inquiries.sort(compareInquiries)) {
           yield { kind: 'inquiry', inquiry: { target: inquiry.goalId === null
             ? { goalId: null, owner: identityOf(assignment) }
             : { goalId: inquiry.goalId, repositoryDirectory: inquiry.repositoryDirectory }, question: inquiry.question,
             ...(inquiry.goalId === null ? {} : { objective: inquiry.objective }) } };
         }
-        for await (const notice of iterateManagerNotices(assignment, language)) yield { kind: 'notice', notice };
-        for await (const event of iterateManagerDisplayEvents(assignment, language, attachment.startupBoundaries, attachment.startedAt)) {
-          yield { kind: 'display_event', event };
-        }
+        for (const notice of notices.sort(compareManagerNotices)) yield { kind: 'notice', notice };
+        for (const event of events) yield { kind: 'display_event', event };
       } catch (error) {
         const message = sanitizeSensitiveText(getErrorMessage(error));
         yield { kind: 'display_event', event: { id: JSON.stringify(['diagnostic', message]), message } };

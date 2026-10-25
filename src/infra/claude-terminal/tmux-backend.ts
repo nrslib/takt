@@ -213,7 +213,7 @@ export class TmuxTerminalBackend implements TerminalBackend {
     // Install pane retention before exec so a fast startup rejection cannot disappear.
     const launch = options.resumeSessionId === undefined ? command : [
       '/bin/sh', '-c',
-      'tmux set-option -p -t "$TMUX_PANE" remain-on-exit on && tmux set-option -p -t "$TMUX_PANE" remain-on-exit-format "" && exec "$@"',
+      'tmux set-option -p -t "$TMUX_PANE" remain-on-exit on && exec "$@"',
       'takt-claude-terminal', ...command,
     ];
     await runTmux([

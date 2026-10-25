@@ -445,11 +445,11 @@ export async function callAIWithRetry(
     const response = firstAttempt.response;
     display?.flush();
     const success = response.status !== 'blocked' && response.status !== 'error';
-    const rejectedCodexSession = !success && sessionId !== undefined
-      && ctx.providerType === 'codex'
+    const rejectedSession = !success && sessionId !== undefined
+      && ctx.providerType !== 'deepseek-harness'
       && response.failureCategory === AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED;
     const canRetrySession = Boolean(sessionId);
-    if (rejectedCodexSession) {
+    if (rejectedSession) {
       sessionId = undefined;
       if (shouldPersistSession()) {
         updatePersonaSession(cwd, ctx.personaName, undefined, ctx.providerType);
@@ -464,7 +464,7 @@ export async function callAIWithRetry(
       // constraint without an ID cannot make that same constraint supported.
       && ctx.providerType !== 'deepseek-harness'
       && (response.failureCategory !== AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED
-        || (rejectedCodexSession && !firstAttempt.usedTools))
+        || (rejectedSession && !firstAttempt.usedTools))
       && ctx.effort === undefined
       && ctx.disableSessionRetry !== true) {
       log.info('Session invalid, retrying without session');
@@ -509,7 +509,7 @@ export async function callAIWithRetry(
       if (shouldPersistSession()) {
         updatePersonaSession(cwd, ctx.personaName, undefined, ctx.providerType);
       }
-    } else if (!rejectedCodexSession && response.sessionId) {
+    } else if (!rejectedSession && response.sessionId) {
       sessionId = response.sessionId;
       if (shouldPersistSession()) {
         updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
@@ -521,7 +521,7 @@ export async function callAIWithRetry(
           + (startFreshNextTurn
             ? '\nThe next turn will start a new SDK session without the previous history; SDK history restoration is not supported yet.'
             : ''),
-        sessionId: startFreshNextTurn || rejectedCodexSession ? undefined : response.sessionId,
+        sessionId: startFreshNextTurn || rejectedSession ? undefined : response.sessionId,
         success,
         ...(success && firstAttempt.referenceRunSlug === undefined
           ? {}

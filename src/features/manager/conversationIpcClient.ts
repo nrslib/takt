@@ -1,5 +1,6 @@
 import { createConnection, type Socket } from 'node:net';
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod/v4';
 import { conversationIpcEndpoint, DaemonIpcStateSchema, ipcStateMatchesOwner, readDaemonIpcState,
   resolveDaemonConfigDirectory } from '../../infra/daemon/ipcEndpoint.js';
@@ -79,7 +80,10 @@ export class ConversationIpcClient {
       if (submission.kind === 'accepted') onAccepted?.(submission.operationId);
       return submission;
     });
-    if (result.kind === 'error' && result.code === 'stale_summary') void this.refresh().catch((error: Error) => this.update({ error: error.message }));
+    if (result.kind === 'error' && result.code === 'stale_summary') {
+      this.update({ readStatus: 'reading' });
+      void this.refresh().catch((error: Error) => this.update({ error: error.message }));
+    }
     if (result.kind === 'error' && result.code === 'invalid_assignment') await this.reopen();
     return result;
   }
@@ -131,6 +135,7 @@ export class ConversationIpcClient {
           if (this.readItems.some((current) => this.itemKey(current) === key)) throw new Error('Repeated display item');
           this.readItems.push(item);
           const index = this.view.items.findIndex((current) => this.itemKey(current) === key);
+          if (index >= 0 && isDeepStrictEqual(this.view.items[index], item)) return;
           const items = [...this.view.items];
           if (index < 0) items.push(item); else items[index] = item;
           this.update({ items });
@@ -145,8 +150,9 @@ export class ConversationIpcClient {
             this.read.transferId = undefined;
             if (this.read.response === undefined) this.read = undefined;
           }
+          if (readStatus === 'reading' && this.view.readStatus === 'complete') return;
           this.update({
-            readStatus: readStatus === 'reading' && this.view.readStatus === 'complete' ? 'complete' : readStatus,
+            readStatus,
             ...(readStatus === 'complete' ? { items: this.readItems } : {}),
           });
         },

@@ -81,7 +81,7 @@ export function useManagerSelection(bodyWidth: number) {
         && notice.repositoryDirectory === selected.repositoryDirectory);
     } else retained = snapshot.repositoryDirectories.indexOf(target.candidates[target.index]!);
     const index = retained < 0 ? Math.min(target.index, candidates.length - 1) : retained;
-    const start = Math.min(target.start, index);
+    const start = Math.min(index, Math.max(target.start, index - MANAGER_SELECTION_PAGE_SIZE + 1));
     if (target.kind === 'answer') update({ ...target, index, start, candidates: snapshot.questions });
     else if (target.kind === 'notice') update({ ...target, index, start, candidates: snapshot.notices });
     else if (target.kind === 'repository') update({ ...target, index, start, candidates: snapshot.repositoryDirectories });

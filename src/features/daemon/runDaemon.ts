@@ -155,7 +155,7 @@ export async function runDaemon(): Promise<void> {
     }
     try { await ipc?.close(); }
     finally {
-      removeDaemonOwner(globalConfigDirectory, process.pid);
+      removeDaemonOwner(globalConfigDirectory, owner);
       process.removeListener('SIGTERM', stop);
       process.removeListener('SIGINT', stop);
       log.info('Daemon stopped', { pid: process.pid });
