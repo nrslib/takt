@@ -7,7 +7,7 @@ import type { SavedManagerEvent } from '../infra/goals/events.js';
 const doubles = vi.hoisted(() => ({
   read: vi.fn(), remove: vi.fn(), get: vi.fn(), update: vi.fn(),
   plan: vi.fn(), connect: vi.fn(), dispose: vi.fn(), preflight: vi.fn(),
-  turn: vi.fn(), createExecutor: vi.fn(), notify: vi.fn(),
+  turn: vi.fn(), createExecutor: vi.fn(), notify: vi.fn(), logError: vi.fn(),
 }));
 vi.mock('../infra/goals/events.js', () => ({ readManagerEvents: doubles.read, deleteManagerEvent: doubles.remove }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.get; update = doubles.update; } }));
@@ -18,6 +18,9 @@ vi.mock('../features/manager/turnResponse.js', () => ({ getManagerOutputSchema: 
 vi.mock('../features/manager/turnExecutor.js', () => ({ createManagerTurnExecutor: doubles.createExecutor }));
 vi.mock('../features/manager/turnFailureNotification.js', () => ({ notifyManagerTurnFailure: doubles.notify }));
 vi.mock('../infra/config/managerConfig.js', () => ({ resolveManagerConfig: () => ({ patrolInterval: 1800 }) }));
+vi.mock('../shared/ui/index.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../shared/ui/index.js')>(), error: doubles.logError,
+}));
 
 let inbox: SavedManagerEvent[];
 let goal: Goal;
@@ -36,8 +39,11 @@ beforeEach(() => {
   doubles.update.mockImplementation(async (_id: string, transform: (value: Goal) => Goal) => { goal = transform(goal); return goal; });
   doubles.plan.mockReturnValue({ ctx: { provider: { preflight: doubles.preflight }, providerType: 'mock', model: undefined, lang: 'ja' }, strategy: { systemPrompt: 'manager fixture' } });
   doubles.connect.mockResolvedValue({ servers: {}, dispose: doubles.dispose });
-  doubles.createExecutor.mockReturnValue({ execute: async (input: { prompt: string; abortSignal: AbortSignal; goal: unknown }) => {
-    const result = await doubles.turn({ text: input.prompt, abortSignal: input.abortSignal, goal: input.goal });
+  doubles.createExecutor.mockReturnValue({ execute: async (input: {
+    prompt: string; abortSignal: AbortSignal; goal: unknown; onProviderOutput?: () => void;
+  }) => {
+    const result = await doubles.turn({ text: input.prompt, abortSignal: input.abortSignal, goal: input.goal,
+      onProviderOutput: input.onProviderOutput });
     if (result.kind === 'error') throw new Error(result.message);
     return { message: result.message, summary: null, sessionId: undefined };
   } });
@@ -48,6 +54,100 @@ afterEach(() => vi.useRealTimers());
 function patrol(filePath = '/inbox/patrol.json'): SavedManagerEvent {
   return { filePath, event: { kind: 'patrol', goalId: goal.id, createdAt: new Date().toISOString() } };
 }
+
+function holdTurn() {
+  let signal!: AbortSignal;
+  let output: (() => void) | undefined;
+  let finish!: () => void;
+  doubles.turn.mockImplementationOnce((input: { abortSignal: AbortSignal; onProviderOutput?: () => void }) => new Promise((resolve) => {
+    signal = input.abortSignal;
+    output = input.onProviderOutput;
+    finish = () => resolve(signal.aborted
+      ? { kind: 'error', message: 'provider interrupted' }
+      : { kind: 'reply', message: '処理完了' });
+  }));
+  return { get signal() { return signal; }, output: () => output?.(), finish: () => finish() };
+}
+
+it('keeps a turn alive for fifty minutes of repeated provider output and records its completion once', async () => {
+  vi.useFakeTimers();
+  inbox = [saved('task-a')];
+  const previousRecords = goal.workLog.length;
+  const turn = holdTurn();
+  const manager = createRunEventManager('/project');
+  const processing = manager.processPending(new AbortController().signal, 1);
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(turn.signal.aborted).toBe(false);
+    for (let minute = 10; minute <= 50; minute += 10) {
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+      expect(turn.signal.aborted).toBe(false);
+      turn.output();
+    }
+    turn.finish();
+    expect(await processing).toBe(true);
+    expect(inbox).toEqual([]);
+    expect(goal.workLog).toHaveLength(previousRecords + 1);
+    expect(goal.workLog.at(-1)?.summary).toBe('処理完了');
+    expect(doubles.notify).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+    turn.output();
+    await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+    expect(turn.signal.aborted).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { turn.finish(); await processing; await manager.close(); }
+});
+
+it('aborts thirty minutes after the last provider output and reports the idle failure', async () => {
+  vi.useFakeTimers();
+  const event = saved('task-a'); inbox = [event];
+  const turn = holdTurn();
+  const signal = new AbortController().signal;
+  const manager = createRunEventManager('/project');
+  const processing = manager.processPending(signal, 1);
+  try {
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+    expect(turn.signal.aborted).toBe(false);
+    turn.output();
+    await vi.advanceTimersByTimeAsync(30 * 60 * 1000 - 1);
+    expect(turn.signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(turn.signal.aborted).toBe(true);
+    expect(signal.aborted).toBe(false);
+    turn.output();
+    expect(vi.getTimerCount()).toBe(0);
+    turn.finish();
+    expect(await processing).toBe(false);
+    expect(inbox).toEqual([event]);
+    expect(goal.workLog).toEqual([]);
+    expect(doubles.notify).toHaveBeenCalledExactlyOnceWith('/project', goal.id, expect.objectContaining({
+      message: expect.stringMatching(/no output for 30 minutes/i),
+    }));
+    expect(doubles.logError).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(
+      `Manager could not handle completion event for goal ${goal.id}: Manager provider produced no output for 30 minutes`,
+    ));
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { turn.finish(); await processing; await manager.close(); }
+});
+
+it('does not abort at forty-nine minutes when the provider last produced output at twenty minutes', async () => {
+  vi.useFakeTimers();
+  inbox = [saved('task-a')];
+  const turn = holdTurn();
+  const manager = createRunEventManager('/project');
+  const processing = manager.processPending(new AbortController().signal, 1);
+  try {
+    await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
+    expect(turn.signal.aborted).toBe(false);
+    turn.output();
+    await vi.advanceTimersByTimeAsync(29 * 60 * 1000);
+    expect(turn.signal.aborted).toBe(false);
+    turn.finish();
+    expect(await processing).toBe(true);
+    expect(doubles.notify).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { turn.finish(); await processing; await manager.close(); }
+});
 
 it.each(['claude', 'claude-sdk', 'codex', 'opencode', 'mock'] as const)('exposes goal execution only when the %s event manager has a permission judge', async (providerType) => {
   const usesJudge = providerType === 'claude' || providerType === 'claude-sdk' || providerType === 'codex';
@@ -375,7 +475,7 @@ it.each(['preflight', 'turn'] as const)('retains a timed-out event during %s, sk
     finish();
     expect(await processing).toBe(false);
     expect(doubles.notify).toHaveBeenCalledExactlyOnceWith('/project', goal.id, expect.objectContaining({
-      message: expect.stringMatching(/timed out/i),
+      message: expect.stringMatching(/no output for 30 minutes/i),
     }));
     expect(vi.getTimerCount()).toBe(0);
     const attempts = doubles[stage].mock.calls.length;
@@ -408,7 +508,7 @@ it.each(['preflight', 'turn'] as const)('notifies a timed-out patrol during %s a
     expect(goal.lastPatrolCompletedAt).toBe('2026-10-14T01:30:00.000Z');
     expect(goal.workLog).toEqual([]);
     expect(doubles.notify).toHaveBeenCalledExactlyOnceWith('/project', goal.id, expect.objectContaining({
-      message: expect.stringMatching(/timed out/i),
+      message: expect.stringMatching(/no output for 30 minutes/i),
     }));
     const attempts = doubles[stage].mock.calls.length;
     inbox.push(patrol());

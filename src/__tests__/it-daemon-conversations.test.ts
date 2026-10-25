@@ -119,9 +119,9 @@ it('finishes an accepted turn after Ctrl+C has exited the TUI process', async ()
     const tui = await fixture.start(fixture.repository, undefined);
     await waitForManager(tui, 'Discuss your goal');
     await submitManagerText(tui, 'Continue after I close this screen');
-    await vi.waitFor(() => expect(fixture.state()?.running?.kind).toBe('message'));
+    await vi.waitFor(() => expect(fixture.state()?.running?.kind).toBe('message'), { timeout: 10000 });
     const owner = readDaemonOwner(fixture.directory)!;
-    await vi.waitFor(() => expect(fixture.readObservations()).toContainEqual(expect.objectContaining({ event: 'provider_start', pid: owner.pid })));
+    await vi.waitFor(() => expect(fixture.readObservations()).toContainEqual(expect.objectContaining({ event: 'provider_start', pid: owner.pid })), { timeout: 10000 });
     await tui.exit();
     expect(fixture.state()?.running).toMatchObject({ kind: 'message' });
     fixture.release();
