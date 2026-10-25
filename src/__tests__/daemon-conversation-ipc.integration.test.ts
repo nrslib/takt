@@ -180,7 +180,7 @@ it.each([7, 9])('transfers all %i large options created through the real goal-qu
   const value = await authenticated(); const result = await opened(value);
   const items = (await value.items(result.read.transferId)) as Array<{ kind: string; inquiry: unknown }>;
   expect(items.filter(({ kind }) => kind === 'inquiry').map(({ inquiry }) => inquiry)).toEqual([
-    { target: { goalId: goal.id, repositoryDirectory: repository }, question: saved },
+    { target: { goalId: goal.id, repositoryDirectory: repository }, question: saved, objective: goal.objective },
   ]);
   expect(saved.options).toEqual(options);
   expect(value.sizes.every((bytes) => bytes <= MAX_CONVERSATION_FRAME_BYTES)).toBe(true);
@@ -193,7 +193,9 @@ it.each([7, 9])('transfers a single full notice containing %i large blocks', asy
   const value = await authenticated(); const result = await opened(value);
   const items = (await value.items(result.read.transferId)) as Array<{ kind: string; notice: unknown }>;
   expect(items.filter(({ kind }) => kind === 'notice').map(({ notice }) => notice)).toEqual([
-    { id: notification.id, message: formatGoalNotification(goal, notification, 'en', 'repository', 'tui', 'full') },
+    { id: notification.id, repositoryDirectory: repository, project: 'repository', goalId: goal.id, objective: goal.objective,
+      kind: notification.kind, recordedAt: notification.recordedAt,
+      message: formatGoalNotification(goal, notification, 'en', 'repository', 'tui', 'full') },
   ]);
   expect(value.sizes.every((bytes) => bytes <= MAX_CONVERSATION_FRAME_BYTES)).toBe(true);
 });

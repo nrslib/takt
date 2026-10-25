@@ -34,6 +34,7 @@ export async function answerConversationInquiry(
     answerInquiry(question, command.answer);
     const permission = command.permission;
     if (permission !== undefined) {
+      let scope = permission.scope;
       if (question.kind !== 'approval' || command.answer.decision !== 'allow'
         || command.answer.scope !== permission.scope.kind || permission.sentence.trim().length === 0
         || /\p{Cc}/u.test(permission.sentence)) throw new ConversationError('invalid_input');
@@ -41,11 +42,12 @@ export async function answerConversationInquiry(
         const root = await resolveAssignedProjectRoot(permission.scope.projectDirectory, assignment);
         const operationRoot = await resolveAssignedProjectRoot(question.operation!.cwd, assignment);
         if (root !== operationRoot) throw new ConversationError('invalid_assignment');
+        scope = { kind: 'project', projectDirectory: root };
       }
       if (permission.scope.kind === 'workspace'
         && (assignment.kind !== 'workspace' || permission.scope.workspaceId !== assignment.workspaceId)) throw new ConversationError('invalid_assignment');
       signal.throwIfAborted();
-      await appendScopedPermission({ scope: permission.scope, heading: '許可', sentence: permission.sentence });
+      await appendScopedPermission({ scope, heading: '許可', sentence: permission.sentence });
       permissionAppended = true;
     }
     signal.throwIfAborted();

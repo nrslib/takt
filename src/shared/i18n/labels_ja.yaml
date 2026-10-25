@@ -426,6 +426,11 @@ tui:
 
 manager:
   conversation:
+    reading: "会話の情報を読み出しています。完了するまで要約を承認できません。"
+    disconnected: "daemon に再接続しています。"
+    incomplete: "読み出しが不完全です。再読み込みが完了するまで要約を承認できません。"
+    interrupted: "前の処理は中断されました。新しい発言を送信できます。"
+    permission_appended: "許可文を追記しました。回答の保存結果を確認してください。"
     assignment_changed: '担当が変わりました。現在の担当で会話を開き直してください。'
     busy: "処理中です。完了してからもう一度送信してください。"
     stale_summary: "表示中の要約は更新されています。最新の要約を確認してください。"
@@ -446,6 +451,7 @@ manager:
   summaryInputHint: "↑↓ 選択 / Enter 決定 / Esc 会話を続ける / Ctrl+C 終了"
   goSummaryRequest: "現在の会話から、ゴール登録用の要約を作成してください。目的、範囲外、受け入れ条件、作業の制約を含む構造化応答の summary を返してください。材料が不足して要約できない場合は、理由を message で説明し、summary は null にしてください。"
   goSummaryUnavailable: "材料が不足しているため、登録用の要約を作成できませんでした。会話を続けてください。"
+  summaryWorking: "要約を作っています"
   inputUnavailableDuringAbort: "中止の確認中は文字を入力できません。確認を終えてから入力してください。"
   toolPermission:
     savedDenial: "保存済みの承認回答で拒否されています。"

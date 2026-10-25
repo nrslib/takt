@@ -1,0 +1,237 @@
+import { createConnection, type Socket } from 'node:net';
+import { randomUUID } from 'node:crypto';
+import { z } from 'zod/v4';
+import { conversationIpcEndpoint, DaemonIpcStateSchema, ipcStateMatchesOwner, readDaemonIpcState,
+  resolveDaemonConfigDirectory } from '../../infra/daemon/ipcEndpoint.js';
+import { isDaemonOwnerRunning, readDaemonOwner } from '../../infra/daemon/owner.js';
+import type { ConversationAssignment } from '../../infra/conversations/schema.js';
+import { ConversationFrameDecoder, encodeConversationFrame, MAX_CONVERSATION_FRAME_BYTES } from '../daemon/conversationFrames.js';
+import { ensureDaemon } from '../daemon/lifecycle.js';
+import { createTuiConversationPort } from './tuiConversationPort.js';
+import type { ConversationCommand, ConversationOpen, ConversationState, PortOutput, SnapshotItem, Submission } from './conversationPort.js';
+import { ConversationReadMetadataSchema, ConversationTransferReceiver } from './conversationTransferReceiver.js';
+import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
+
+const responseSchema = z.object({ protocolVersion: z.literal(1), type: z.literal('response'), requestId: z.string(),
+  result: z.unknown().optional(), error: z.object({ kind: z.literal('error'), code: z.string(), message: z.string() }).strict().optional() }).strict()
+  .refine((response) => Object.hasOwn(response, 'result') !== (response.error !== undefined));
+const submissionSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('accepted'), operationId: z.uuid() }).strict(),
+  z.object({ kind: z.literal('busy'), operationId: z.uuid() }).strict(),
+  z.object({ kind: z.literal('error'), code: z.string(), message: z.string() }).strict(),
+]);
+export interface ConversationClientSnapshot {
+  connection: 'connecting' | 'connected' | 'disconnected';
+  readStatus: 'reading' | 'complete' | 'incomplete';
+  state: ConversationState | null;
+  items: readonly Exclude<SnapshotItem, { kind: 'state' }>[];
+  error: string | null;
+}
+type Output = Exclude<PortOutput, { kind: 'snapshot' }>;
+type DisplayItem = Exclude<SnapshotItem, { kind: 'state' }>;
+type Request = { resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> };
+
+export class ConversationIpcClient {
+  private socket: Socket | undefined;
+  private requests = new Map<string, Request>();
+  private listeners = new Set<() => void>();
+  private outputs = new Set<(output: Output) => void>();
+  private receiver: ConversationTransferReceiver | undefined;
+  private resolved: ConversationOpen | undefined;
+  private attachmentId: string | undefined;
+  private closed = false;
+  private connecting: Promise<void> | undefined;
+  private refreshing: Promise<void> | undefined;
+  private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  private readItems: DisplayItem[] = [];
+  private view: ConversationClientSnapshot = { connection: 'connecting', readStatus: 'reading', state: null, items: [], error: null };
+  private configDirectory = resolveDaemonConfigDirectory();
+
+  constructor(private readonly assignment: ConversationAssignment, private readonly agentOverrides?: AssistantCliOverrides) {}
+
+  getSnapshot = (): ConversationClientSnapshot => this.view;
+  subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
+  onOutput(listener: (output: Output) => void): () => void { this.outputs.add(listener); return () => { this.outputs.delete(listener); }; }
+
+  connect(): Promise<void> {
+    if (this.closed) return Promise.reject(new Error('Conversation client is closed'));
+    if (this.view.connection === 'connected') return Promise.resolve();
+    if (this.connecting !== undefined) return this.connecting;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = undefined;
+    this.connecting = this.open().catch((error: unknown) => {
+      this.socket?.destroy();
+      const failure = error instanceof Error ? error : new Error('Conversation connection failed');
+      this.disconnect(failure);
+      throw failure;
+    }).finally(() => { this.connecting = undefined; });
+    return this.connecting;
+  }
+
+  async submit(command: ConversationCommand, onAccepted?: (operationId: string) => void): Promise<Submission> {
+    if (this.view.connection !== 'connected' || this.attachmentId === undefined || this.resolved === undefined) {
+      return { kind: 'error', code: 'unavailable_attachment', message: 'Conversation is disconnected' };
+    }
+    const result = await this.request('submit', { attachmentId: this.attachmentId, speaker: this.resolved.speaker, command }, (value) => {
+      const submission = submissionSchema.parse(value);
+      // 後続の result が同じ socket chunk に入っていても、先に要求と対応付ける。
+      if (submission.kind === 'accepted') onAccepted?.(submission.operationId);
+      return submission;
+    });
+    if (result.kind === 'error' && result.code === 'stale_summary') void this.refresh().catch((error: Error) => this.update({ error: error.message }));
+    if (result.kind === 'error' && result.code === 'invalid_assignment') await this.reopen();
+    return result;
+  }
+
+  refresh(): Promise<void> {
+    if (this.refreshing !== undefined) return this.refreshing;
+    if (this.attachmentId === undefined || this.view.connection !== 'connected') return Promise.reject(new Error('Conversation is disconnected'));
+    this.update({ readStatus: 'reading' });
+    this.refreshing = this.request('snapshot', { attachmentId: this.attachmentId }, (value) => {
+      const result = z.object({ read: ConversationReadMetadataSchema }).strict().parse(value);
+      this.receiver!.expectRead(result.read);
+    }).catch(async (error: unknown) => {
+      if (error instanceof Error && error.cause === 'invalid_assignment') {
+        await this.reopen();
+        return;
+      }
+      this.update({ readStatus: 'incomplete', error: error instanceof Error ? error.message : 'Read failed' });
+      throw error;
+    }).finally(() => { this.refreshing = undefined; });
+    return this.refreshing;
+  }
+
+  close(): void {
+    this.closed = true;
+    clearTimeout(this.reconnectTimer);
+    this.socket?.destroy();
+    this.disconnect(new Error('Conversation client closed'));
+  }
+
+  private async reopen(): Promise<void> {
+    this.socket?.destroy();
+    this.disconnect(new Error('Conversation assignment changed'));
+    await this.connect();
+  }
+
+  private update(change: Partial<ConversationClientSnapshot>): void {
+    this.view = { ...this.view, ...change };
+    for (const listener of this.listeners) listener();
+  }
+
+  private async open(): Promise<void> {
+    this.update({ connection: 'connecting', readStatus: 'reading' });
+    await ensureDaemon();
+    if (this.closed) return;
+    const owner = readDaemonOwner(this.configDirectory);
+    const state = readDaemonIpcState(this.configDirectory);
+    if (owner === undefined || state === undefined || !isDaemonOwnerRunning(owner) || !ipcStateMatchesOwner(state, owner)
+      || state.endpoint !== conversationIpcEndpoint(this.configDirectory, process.platform, process.getuid?.() ?? 0)) throw new Error('Daemon IPC identity mismatch');
+    const port = createTuiConversationPort(this.configDirectory, { deliver: async () => ({ kind: 'unavailable', reason: 'IPC delivery only' }) });
+    const resolved = await port.resolve(this.assignment);
+    if (this.closed) return;
+    if (this.resolved?.conversationId !== resolved.conversationId) {
+      this.update({ state: null, items: [] });
+      this.receiver = new ConversationTransferReceiver(resolved.conversationId, {
+        state: (next) => this.update({ state: next }),
+        item: (item) => {
+          const key = this.itemKey(item);
+          if (this.readItems.some((current) => this.itemKey(current) === key)) throw new Error('Repeated display item');
+          this.readItems.push(item);
+          const index = this.view.items.findIndex((current) => this.itemKey(current) === key);
+          const items = [...this.view.items];
+          if (index < 0) items.push(item); else items[index] = item;
+          this.update({ items });
+        },
+        output: (output) => { for (const listener of this.outputs) listener(output); },
+        read: (readStatus) => {
+          if (readStatus === 'reading') this.readItems = [];
+          this.update({ readStatus, ...(readStatus === 'complete' ? { items: this.readItems } : {}) });
+        },
+      });
+    }
+    this.resolved = resolved;
+    const socket = createConnection(state.endpoint);
+    this.socket = socket;
+    const decoder = new ConversationFrameDecoder();
+    let authenticated = false;
+    socket.on('data', (chunk: Buffer) => {
+      if (this.socket !== socket || socket.destroyed) return;
+      try {
+        for (const value of decoder.decode(chunk)) {
+          const response = responseSchema.safeParse(value);
+          if (response.success) {
+            const pending = this.requests.get(response.data.requestId);
+            if (pending === undefined) throw new Error('Unknown IPC response');
+            this.requests.delete(response.data.requestId);
+            clearTimeout(pending.timer);
+            if (response.data.error !== undefined) pending.reject(new Error(response.data.error.message, { cause: response.data.error.code }));
+            else {
+              try { pending.resolve(response.data.result); }
+              catch (error) { pending.reject(error instanceof Error ? error : new Error('Invalid IPC response')); throw error; }
+            }
+          } else {
+            if (!authenticated) throw new Error('IPC event before authentication');
+            this.receiver!.receive(value);
+          }
+        }
+      } catch (error) { this.disconnect(error instanceof Error ? error : new Error('Invalid IPC response')); socket.destroy(); }
+    });
+    socket.on('error', (error) => { if (this.socket === socket) this.disconnect(error); });
+    socket.once('close', () => { if (this.socket === socket) this.disconnect(new Error('Daemon disconnected')); });
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => { socket.destroy(); reject(new Error('IPC connection timed out')); }, 5_000);
+      socket.once('connect', () => { clearTimeout(timer); resolve(); });
+      socket.once('error', (error) => { clearTimeout(timer); reject(error); });
+    });
+    await this.request('hello', { capability: state.capability }, (value) => {
+      const hello = z.object({ owner: DaemonIpcStateSchema.shape.owner }).strict().parse(value);
+      if (!ipcStateMatchesOwner({ ...state, owner: hello.owner }, owner)) throw new Error('Daemon hello identity mismatch');
+      this.receiver!.authenticated();
+      authenticated = true;
+    });
+    await this.request('open', { ...resolved, ...(this.agentOverrides === undefined ? {} : { agentOverrides: this.agentOverrides }) }, (value) => {
+      const result = z.object({ attachmentId: z.uuid(), read: ConversationReadMetadataSchema }).strict().parse(value);
+      this.attachmentId = result.attachmentId;
+      this.receiver!.expectRead(result.read);
+    });
+    this.update({ connection: 'connected', error: null });
+  }
+
+  private request<T>(method: string, params: unknown, parse: (value: unknown) => T): Promise<T> {
+    const socket = this.socket;
+    if (socket === undefined || socket.destroyed) return Promise.reject(new Error('Conversation is disconnected'));
+    const requestId = randomUUID();
+    const bytes = encodeConversationFrame({ protocolVersion: 1, type: 'request', requestId, method, params });
+    if (socket.writableLength + bytes.length > MAX_CONVERSATION_FRAME_BYTES) return Promise.reject(new Error('IPC output capacity exceeded'));
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { this.disconnect(new Error('IPC request timed out')); socket.destroy(); }, 5_000);
+      this.requests.set(requestId, { resolve: (value) => resolve(parse(value)), reject, timer });
+      socket.write(bytes, (error) => { if (error) { this.disconnect(error); socket.destroy(); } });
+    });
+  }
+
+  private itemKey(item: DisplayItem): string {
+    switch (item.kind) {
+      case 'assignment': return 'assignment';
+      case 'goal': return JSON.stringify(['goal', item.goal.repositoryDirectory, item.goal.id]);
+      case 'inquiry': return JSON.stringify(['inquiry', item.inquiry.target, item.inquiry.question.id]);
+      case 'notice': return JSON.stringify(['notice', item.notice.repositoryDirectory, item.notice.goalId, item.notice.id]);
+      case 'display_event': return JSON.stringify(['display_event', item.event.id]);
+    }
+  }
+
+  private disconnect(error: Error): void {
+    for (const pending of this.requests.values()) { clearTimeout(pending.timer); pending.reject(error); }
+    this.requests.clear();
+    this.attachmentId = undefined;
+    this.receiver?.disconnect();
+    this.update({ connection: 'disconnected', readStatus: 'incomplete', error: error.message });
+    if (!this.closed && this.reconnectTimer === undefined) {
+      this.reconnectTimer = setTimeout(() => {
+        this.reconnectTimer = undefined;
+        void this.connect().catch((next: Error) => this.disconnect(next));
+      }, 500);
+    }
+  }
+}

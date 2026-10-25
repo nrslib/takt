@@ -8,7 +8,8 @@ import { cleanup, render } from 'ink-testing-library';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { program } from '../app/cli/program.js';
 import '../app/cli/commands.js';
-import type { ManagerConversationSession } from '../features/manager/conversationSession.js';
+import type { ConversationClientSnapshot } from '../features/manager/conversationIpcClient.js';
+import { ensureDaemon } from '../features/daemon/lifecycle.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 import { isVerboseMode } from '../infra/config/project/resolvedSettings.js';
 import { invalidateResolvedConfigCache, resolveConfigValue } from '../infra/config/resolveConfigValue.js';
@@ -19,8 +20,8 @@ import { setLogLevel } from '../shared/ui/LogManager.js';
 import { resetDebugLogger } from '../shared/utils/debug.js';
 
 const doubles = vi.hoisted(() => ({
-  spawn: vi.fn(), readOwner: vi.fn(), startup: vi.fn(), plan: vi.fn(), session: vi.fn(),
-  mount: vi.fn(), autoRun: vi.fn(), list: vi.fn(), ready: vi.fn(),
+  spawn: vi.fn(), readOwner: vi.fn(), startup: vi.fn(), session: vi.fn(),
+  mount: vi.fn(), list: vi.fn(), ready: vi.fn(),
 }));
 
 vi.mock('node:child_process', async (original) => ({
@@ -37,14 +38,11 @@ vi.mock('../app/cli/updateCheck.js', () => ({ runUpdateCheck: vi.fn() }));
 vi.mock('../infra/git/index.js', () => ({ initGitProvider: vi.fn() }));
 vi.mock('../infra/config/global/projectRegistry.js', () => ({ registerProject: vi.fn() }));
 vi.mock('../features/manager/startupResolution.js', () => ({ resolveManagerStartup: doubles.startup }));
-vi.mock('../features/manager/conversationPlan.js', () => ({ createManagerConversationPlan: doubles.plan }));
-vi.mock('../features/manager/conversationSession.js', () => ({
-  createManagerConversationSession: doubles.session, getManagerOutputSchema: () => undefined,
+vi.mock('../features/manager/conversationIpcClient.js', () => ({
+  ConversationIpcClient: class {
+    constructor() { Object.assign(this, doubles.session()); }
+  },
 }));
-vi.mock('../features/manager/managerMcp.js', () => ({
-  connectManagerMcp: async () => ({ servers: {}, dispose: async () => {} }),
-}));
-vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: doubles.autoRun }));
 vi.mock('../features/tui/inkMount.js', () => ({ mountInk: doubles.mount }));
 vi.mock('../features/tasks/list/index.js', () => ({ listTasks: doubles.list }));
 
@@ -75,16 +73,12 @@ describe('manager startup logging with global debug configuration', () => {
 
     const assignment = { kind: 'repository' as const, repositoryDirectory: cwd, repositoryDirectories: [cwd] };
     doubles.startup.mockResolvedValue({ kind: 'ready', context: { cwd, assignment } });
-    doubles.plan.mockReturnValue({ ctx: { lang: 'en', providerType: 'mock', provider: {} }, strategy: {} });
-    const unused = async (): Promise<never> => { throw new Error('Unexpected manager operation'); };
-    const session: ManagerConversationSession = {
-      getAssignment: async () => assignment, getPendingSummary: () => null,
-      resetConversation: () => {}, dismissSummary: () => {}, handleUserMessage: unused,
-      approveSummary: unused, answerQuestion: unused, pauseGoal: unused,
-      resumeGoal: unused, abortGoal: unused, close: async () => {},
-    };
-    doubles.session.mockReturnValue(session);
-    doubles.autoRun.mockResolvedValue(undefined);
+    const snapshot: ConversationClientSnapshot = { connection: 'connected', readStatus: 'complete', state: null, items: [], error: null };
+    doubles.session.mockReturnValue({
+      connect: async () => { await ensureDaemon(); },
+      getSnapshot: () => snapshot, subscribe: () => () => {}, onOutput: () => () => {},
+      submit: vi.fn(), refresh: async () => {}, close: () => {},
+    });
     const owner: DaemonOwner = {
       pid: 4321, identity: { startTime: 'darwin-start-v2:12345' },
       version: packageVersion, cliPath: '/test/cli.js',
@@ -106,7 +100,6 @@ describe('manager startup logging with global debug configuration', () => {
         expect(app!.lastFrame()).toContain(`Assignment: ${basename(cwd)}`);
         expect(app!.lastFrame()).toContain('Discuss your goal');
         expect(app!.lastFrame()).not.toContain('Working');
-        expect(doubles.autoRun).toHaveBeenCalledWith(cwd);
       });
       app.unmount();
     });

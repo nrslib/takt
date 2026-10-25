@@ -69,6 +69,41 @@ it('does not retain a rejected session ID when fresh success omits a new ID', as
   expect((await executor.execute(input)).sessionId).toBeUndefined();
 });
 
+it.each(['result', 'throw'] as const)('retries prompt overflow from a provider %s once without a conversation facade', async (failure) => {
+  const { call, executor, input } = fixture();
+  if (failure === 'throw') call.mockRejectedValueOnce(new Error('Prompt is too long'));
+  else call.mockResolvedValueOnce({ ...success, status: 'error', error: 'Prompt is too long' });
+  call.mockResolvedValueOnce(success);
+  expect(await executor.execute({ ...input, recovery: undefined })).toMatchObject({ sessionId: 'fresh-session', message: 'reply' });
+  expect(call).toHaveBeenCalledTimes(2);
+  expect(call.mock.calls[0]![1].sessionId).toBe('prior-session');
+  expect(call.mock.calls[1]![1].sessionId).toBeUndefined();
+  expect(call.mock.calls[1]![0]).toBe(call.mock.calls[0]![0]);
+  expect(call.mock.calls[1]![1].callerManagedSession).toBeUndefined();
+});
+
+it.each(['result', 'throw'] as const)('returns a second overflow %s failure without a third attempt', async (failure) => {
+  const { call, executor, input } = fixture();
+  if (failure === 'throw') call.mockRejectedValue(new Error('Prompt is too long'));
+  else call.mockResolvedValue({ ...success, status: 'error', error: 'Prompt is too long' });
+  await expect(executor.execute(input)).rejects.toThrow('Prompt is too long');
+  expect(call).toHaveBeenCalledTimes(2);
+});
+
+it('never retries overflow after using a tool or after cancellation', async () => {
+  const { call, executor, input } = fixture();
+  call.mockImplementationOnce(async (_prompt, options) => {
+    options.onStream?.({ type: 'tool_use', data: { tool: 'Bash', id: 'tool-1', input: {} } });
+    throw new Error('Prompt is too long');
+  });
+  await expect(executor.execute(input)).rejects.toThrow('Prompt is too long');
+  expect(call).toHaveBeenCalledOnce();
+  const controller = new AbortController();
+  call.mockImplementationOnce(async () => { controller.abort(); throw new Error('Prompt is too long'); });
+  await expect(executor.execute({ ...input, abortSignal: controller.signal })).rejects.toThrow();
+  expect(call).toHaveBeenCalledTimes(2);
+});
+
 it('suppresses diagnostics only within the private async call while another call remains observable', async () => {
   const { call, executor, input } = fixture();
   let release!: () => void;

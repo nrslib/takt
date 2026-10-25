@@ -9,18 +9,6 @@ export type PendingQuestion = { readonly question: GoalQuestion } & (
   | { readonly goalId: null; readonly owner: InquiryOwner }
 );
 
-export type ManagerAnswerOptions = {
-  readonly questionId: string;
-  readonly answer: GoalAnswerInput;
-  readonly abortSignal?: AbortSignal;
-  readonly appendPermission?: AppendManagerAnswerPermission;
-} & (
-  | { readonly goalId: string; readonly repositoryDirectory: string }
-  | { readonly goalId: null; readonly owner: InquiryOwner }
-);
-
-export type AppendManagerAnswerPermission = (assignment: ManagerAssignment) => Promise<void>;
-
 export interface ApprovalScopeChoice {
   readonly value: NonNullable<GoalAnswerInput['scope']>;
   readonly label: string;

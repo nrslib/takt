@@ -8,7 +8,7 @@ import type { PermissionMode } from '../core/models/index.js';
 import { callAIWithRetry } from '../features/interactive/aiCaller.js';
 import { createAssistantConversationPlan } from '../features/interactive/conversationPlan.js';
 import { createManagerConversationPlan } from '../features/manager/conversationPlan.js';
-import { createManagerConversationSession } from '../features/manager/conversationSession.js';
+import { createManagerTurnExecutor } from '../features/manager/turnExecutor.js';
 import { connectManagerMcp } from '../features/manager/managerMcp.js';
 import { OpenCodeProvider } from '../infra/providers/opencode.js';
 import { createOpenCodeServerStartMock } from './helpers/opencode-server-process-test-helpers.js';
@@ -209,13 +209,12 @@ describe('OpenCode task-state MCP integration', () => {
       sessionId, ['bash', 'edit', 'webfetch'], { message: 'What is your goal?', summary: null },
     );
     const plan = createManagerConversationPlan(projectCwd, { language: 'en' });
-    const session = createManagerConversationSession({
-      cwd: projectCwd, plan: { ...plan, ctx: { ...plan.ctx, mcpServers: connection.servers } },
-
-    });
+    const executor = createManagerTurnExecutor(projectCwd, { ...plan, ctx: { ...plan.ctx, mcpServers: connection.servers } });
     try {
       expect(plan.ctx.provider).toBeInstanceOf(OpenCodeProvider);
-      expect(await session.handleUserMessage({ text: 'ゴールを相談したい' })).toEqual({ kind: 'reply', message: 'What is your goal?' });
+      expect(await executor.execute({ prompt: 'ゴールを相談したい', instruction: 'ゴールを相談したい', sessionId: undefined,
+        assignment: undefined, configDirectory: process.env.TAKT_CONFIG_DIR!, abortSignal: new AbortController().signal }))
+        .toMatchObject({ message: 'What is your goal?', summary: null });
 
       expect(getFirstOpenCodeStartConfig().mcp).toEqual({
         [serverName]: {
@@ -235,7 +234,6 @@ describe('OpenCode task-state MCP integration', () => {
       expect(permissionReply.mock.calls.map(([request]) => request.reply)).toEqual(['always', 'always', 'always']);
       expect(managerMcp.callTool).not.toHaveBeenCalled();
     } finally {
-      await session.close();
       await connection.dispose();
     }
     expect(managerMcp.close).toHaveBeenCalledTimes(1);

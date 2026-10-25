@@ -3,7 +3,8 @@ import { dirname, join, sep } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentResponse } from '../core/models/types.js';
 import type { ToolPermissionDecision, ToolPermissionDecisionRequest } from '../core/workflow/types.js';
-import { createManagerConversationSession, type ManagerConversationSession } from '../features/manager/conversationSession.js';
+import { createManagerTurnExecutor, type ManagerTurnInput } from '../features/manager/turnExecutor.js';
+import { resolveCurrentManagerAssignment } from '../features/manager/assignment.js';
 import type { ManagerConversationPlan } from '../features/manager/conversationPlan.js';
 import { createManagerToolPermissionHandler } from '../features/manager/toolPermissionDecision.js';
 import { addManagerRepository } from '../features/manager/workspaceOperations.js';
@@ -38,7 +39,6 @@ const workspaceId = '750e8400-e29b-41d4-a716-446655440001';
 const otherWorkspaceId = '750e8400-e29b-41d4-a716-446655440002';
 const reason = '出力先を確認してください';
 const policy = { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: false };
-const sessions: ManagerConversationSession[] = [];
 
 function judgment(decision: 'allow' | 'deny' | 'ask', confirmation: string | null): AgentResponse {
   return { persona: 'manager-permission-judge', status: 'done', timestamp: new Date(), content: '',
@@ -426,8 +426,7 @@ describe('manager permission judge persisted context', () => {
     expect(values.some((value) => /budget|exceed|limit|上限|制限/iu.test(value))).toBe(true);
   });
 });
-afterEach(async () => {
-  await Promise.all(sessions.splice(0).map((session) => session.close()));
+afterEach(() => {
   vi.restoreAllMocks();
 });
 
@@ -471,12 +470,9 @@ async function fixture(origin: Origin, providerType: 'claude-sdk' | 'codex' = 'c
       language: 'ja', systemPrompt: 'judge fixture', managerPersona: 'manager fixture', managerPolicy: 'manager policy',
     },
   };
-  const createSession = () => {
-    const session = createManagerConversationSession({ cwd, assignment: owner, plan });
-    sessions.push(session);
-    return session;
-  };
-  let session = createSession();
+  let executor = createManagerTurnExecutor(cwd, plan);
+  const input: ManagerTurnInput = { prompt: 'ファイルの出力先を確認する', instruction: 'ファイルの出力先を確認する',
+    sessionId: undefined, assignment: owner, configDirectory: config, abortSignal: new AbortController().signal, goal };
   const pending = () => listPendingInquiries(config, { ...owner, repositoryDirectories });
   const all = async () => origin === 'goal' ? (await goalStore.get(goal!.id)).questions ?? [] : standalone.list();
   const seed = async (input: GoalQuestionInput) => {
@@ -495,8 +491,8 @@ async function fixture(origin: Origin, providerType: 'claude-sdk' | 'codex' = 'c
       if (origin === 'goal') await goalStore.update(goal!.id, (current) => answerGoalQuestion(current, id, answer));
       else await standalone.answer(id, answer);
     },
-    get session() { return session; },
-    async reopen() { await session.close(); session = createSession(); },
+    get executor() { return executor; }, input,
+    async reopen() { executor = createManagerTurnExecutor(cwd, plan); },
     async decide(operation = request) {
       let decision: ToolPermissionDecision | undefined;
       call.mockImplementationOnce(async (_prompt, options) => {
@@ -505,7 +501,7 @@ async function fixture(origin: Origin, providerType: 'claude-sdk' | 'codex' = 'c
         return { persona: 'manager', status: 'done', timestamp: new Date(), content: '',
           structuredOutput: { message: '確認待ちです', summary: null } };
       });
-      expect(await session.handleUserMessage({ text: 'ファイルの出力先を確認する', goal })).toMatchObject({ kind: 'reply' });
+      expect(await executor.execute(input)).toMatchObject({ message: '確認待ちです', summary: null });
       expect(decision).toBeDefined();
       return decision!;
     },
@@ -551,7 +547,7 @@ describe('manager approval inquiry persistence', () => {
         return { persona: 'manager', status: 'done', timestamp: new Date(), content: '',
           structuredOutput: { message: '確認待ちです', summary: null } };
       });
-      expect(await target.session.handleUserMessage({ text: 'ファイルの出力先を確認する' })).toMatchObject({ kind: 'reply' });
+      expect(await target.executor.execute(target.input)).toMatchObject({ message: '確認待ちです', summary: null });
       saveSpy.mockRestore();
       const saved = (await target.pending()).inquiries;
       expect(saved).toHaveLength(mode === 'different operation' ? 2 : 1);
@@ -627,7 +623,8 @@ describe('manager approval inquiry persistence', () => {
       return { persona: 'manager', status: 'done', timestamp: new Date(), content: '',
         structuredOutput: { message: '確認待ちです', summary: null } };
     });
-    expect(await target.session.handleUserMessage({ text: '担当を追加して出力先を確認する' })).toMatchObject({ kind: 'reply' });
+    const turnResult = await target.executor.execute({ ...target.input, prompt: '担当を追加して出力先を確認する', instruction: '担当を追加して出力先を確認する' });
+    expect(turnResult).toMatchObject({ message: '確認待ちです', summary: null });
     const owner: InquiryOwner = timing === 'before approval' ? { kind: 'workspace', workspaceId: workspace!.id } : initial;
     const result = await listPendingInquiries(target.config, { ...owner, repositoryDirectories: [target.repository, target.goalRepository] });
     expect(result.errors).toEqual([]);
@@ -641,7 +638,7 @@ describe('manager approval inquiry persistence', () => {
     if (workspace !== undefined) {
       const other: InquiryOwner = owner.kind === 'workspace' ? initial : { kind: 'workspace', workspaceId: workspace.id };
       expect(await new StandaloneInquiryStore(target.config, other).list()).toEqual([]);
-    } else expect(await target.session.getAssignment()).toEqual(initial);
+    } else expect(await resolveCurrentManagerAssignment(turnResult.assignment!, target.config)).toEqual(initial);
   });
 
   it.each(['notification update', 'delivery'] as const)('keeps the Goal approval and its ID when %s fails', async (failure) => {

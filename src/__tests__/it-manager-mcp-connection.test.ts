@@ -21,7 +21,7 @@ import { initializeGitFixture } from './helpers/git-fixture.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 import { makeProvider } from './test-helpers.js';
-import { createManagerConversationSession } from '../features/manager/conversationSession.js';
+import { createManagerTurnExecutor } from '../features/manager/turnExecutor.js';
 import type { ManagerAssignmentIdentity } from '../features/manager/assignment.js';
 
 vi.mock('../features/daemon/lifecycle.js', () => ({ ensureDaemon: vi.fn(async () => {}) }));
@@ -197,18 +197,22 @@ describe('manager MCP connection confirmation', () => {
       } finally { try { await reader.close(); } finally { await transport.close(); } }
       return { persona: 'manager', status: 'done', timestamp: new Date(), content: JSON.stringify({ message: '担当を更新しました', summary: null }) };
     } }) });
-    const session = createManagerConversationSession({ cwd, assignment, plan: {
+    const executor = createManagerTurnExecutor(cwd, {
       ctx: { provider, providerType: 'claude', lang: 'ja', model: undefined, mcpServers: connection.servers },
       strategy: { systemPrompt: 'manager fixture' },
       permissionJudge: { resolution: { provider: 'mock', model: undefined, providerOptions: {} }, language: 'ja',
         systemPrompt: 'judge fixture', managerPersona: 'manager fixture', managerPolicy: 'policy fixture' },
-    } });
+    });
     try {
-      expect(await session.handleUserMessage({ text: '担当を追加' })).toMatchObject({ kind: 'reply' });
-      expect(await session.handleUserMessage({ text: '担当を確認' })).toMatchObject({ kind: 'reply' });
+      const input = { prompt: '担当を追加', instruction: '担当を追加', assignment, sessionId: undefined,
+        configDirectory: getGlobalConfigDir(), abortSignal: new AbortController().signal };
+      const first = await executor.execute(input);
+      expect(first.message).toBe('担当を更新しました');
+      expect(await executor.execute({ ...input, assignment: first.assignment, prompt: '担当を確認', instruction: '担当を確認' }))
+        .toMatchObject({ message: '担当を更新しました' });
       const workspace = (await readWorkspaceRegistry(getGlobalConfigDir()))[0]!;
       expect(observed).toEqual([assignment, { kind: 'workspace', workspaceId: workspace.id }]);
-    } finally { try { await session.close(); } finally { await connection.dispose(); invalidateResolvedConfigCache(other); } }
+    } finally { await connection.dispose(); invalidateResolvedConfigCache(other); }
   });
 
   describe.each([false, true])('standalone manager with caller endpoint: %s', (fakeEndpoint) => {

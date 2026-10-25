@@ -6,7 +6,9 @@ import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
 import { parse } from 'yaml';
 import { resolveAssistantProviderModel } from '../features/interactive/assistantConfig.js';
 import { createManagerConversationPlan } from '../features/manager/conversationPlan.js';
-import { createManagerConversationSession } from '../features/manager/conversationSession.js';
+import { createManagerTurnExecutor } from '../features/manager/turnExecutor.js';
+import { getGlobalConfigDir } from '../infra/config/paths.js';
+import type { ManagerAssignmentIdentity } from '../features/manager/assignment.js';
 import { TAKT_MCP_MANAGER_TOOL_NAMES } from '../features/mcp/server.js';
 import { TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
 import { MANAGER_ASSIGNMENT_HEADER } from '../features/manager/assignment.js';
@@ -36,6 +38,12 @@ vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
 }));
 vi.mock('../infra/codex/mcp-list.js', () => ({ runCodexMcpList: vi.fn() }));
 vi.mock('../infra/claude/client.js', () => ({ callClaude: vi.fn(), callClaudeCustom: vi.fn() }));
+
+
+async function executeTurn(executor: ReturnType<typeof createManagerTurnExecutor>, input: { text: string; onNotification?: (message: string) => void }, assignment?: ManagerAssignmentIdentity) {
+  return executor.execute({ prompt: input.text, instruction: input.text, sessionId: undefined, assignment,
+    abortSignal: new AbortController().signal, configDirectory: getGlobalConfigDir(), onNotification: input.onNotification });
+}
 
 describe('manager conversation configuration and provider boundary', () => {
   let cwd: string;
@@ -121,11 +129,10 @@ describe('manager conversation configuration and provider boundary', () => {
     const setup = vi.spyOn(provider, 'setup').mockReturnValue({ call });
     vi.spyOn(providers, 'getProvider').mockReturnValue(provider);
     const plan = createManagerConversationPlan(cwd, { language });
-    const session = createManagerConversationSession({ cwd, plan,  });
+    const session = createManagerTurnExecutor(cwd, plan);
 
-    try {
-      expect(await session.handleUserMessage({ text: 'ゴールを相談したい' })).toEqual({ kind: 'reply', message: 'question' });
-      expect(session.getPendingSummary()).toBeNull();
+    {
+      expect(await executeTurn(session, { text: 'ゴールを相談したい' })).toMatchObject({ message: 'question', summary: null });
 
       expect(persona.trim().length).toBeGreaterThan(0);
       expect(instruction.trim().length).toBeGreaterThan(0);
@@ -142,10 +149,7 @@ describe('manager conversation configuration and provider boundary', () => {
       expect(settings).toEqual([`Repository manager.main_merge: ${JSON.stringify(mainMerge)}`]);
       expect(prompt?.split('\n').filter((line) => line.startsWith('Concurrency limit: '))).toEqual(['Concurrency limit: 3']);
       expect(call).toHaveBeenCalledTimes(1);
-    } finally {
-      await session.close();
     }
-    expect(await session.handleUserMessage({ text: '終了後の呼び出し' })).toMatchObject({ kind: 'error' });
     expect(call).toHaveBeenCalledTimes(1);
   });
 
@@ -155,9 +159,9 @@ describe('manager conversation configuration and provider boundary', () => {
     vi.spyOn(provider, 'setup').mockReturnValue({ call });
     vi.spyOn(providers, 'getProvider').mockReturnValue(provider);
     const plan = createManagerConversationPlan(cwd, { language: 'en' });
-    const session = createManagerConversationSession({ cwd, plan,  });
+    const session = createManagerTurnExecutor(cwd, plan);
 
-    await session.handleUserMessage({ text: 'ソースを読み、既存のゴールを確認してください' });
+    await executeTurn(session, { text: 'ソースを読み、既存のゴールを確認してください' });
 
     expect(call).toHaveBeenCalledTimes(1);
     const options = call.mock.calls[0]![1];
@@ -182,17 +186,12 @@ describe('manager conversation configuration and provider boundary', () => {
     });
     const setup = vi.spyOn(provider, 'setup').mockReturnValue({ call });
     vi.spyOn(providers, 'getProvider').mockReturnValue(provider);
-    const session = createManagerConversationSession({
-      cwd, plan: createManagerConversationPlan(cwd, { language }),
-
-    });
-    try {
-      await session.handleUserMessage({ text: '次の作業を判断してください' });
+    const session = createManagerTurnExecutor(cwd, createManagerConversationPlan(cwd, { language }));
+    {
+      await executeTurn(session, { text: '次の作業を判断してください' });
       const prompt = setup.mock.calls[0]![0].systemPrompt;
       expect(prompt).toContain(`fixture-${language}-policies`);
       expect(prompt).toContain(`fixture-${language}-knowledge`);
-    } finally {
-      await session.close();
     }
   });
 
@@ -213,16 +212,11 @@ describe('manager conversation configuration and provider boundary', () => {
     });
     const setup = vi.spyOn(provider, 'setup').mockReturnValue({ call });
     vi.spyOn(providers, 'getProvider').mockReturnValue(provider);
-    const session = createManagerConversationSession({
-      cwd, plan: createManagerConversationPlan(cwd, {}),
-
-    });
-    try {
-      expect((await session.handleUserMessage({ text: 'workflowを選んでください' })).kind).toBe('reply');
+    const session = createManagerTurnExecutor(cwd, createManagerConversationPlan(cwd, {}));
+    {
+      expect((await executeTurn(session, { text: 'workflowを選んでください' })).message).toBeTypeOf('string');
       expect(`${setup.mock.calls[0]![0].systemPrompt}\n${call.mock.calls[0]![0]}`)
         .toContain('fixture-fallback-workflow');
-    } finally {
-      await session.close();
     }
   });
 
@@ -346,14 +340,12 @@ describe('manager conversation configuration and provider boundary', () => {
     const plan = createManagerConversationPlan(cwd, { provider: 'codex' });
     const assignment = { kind: 'repository' as const, repositoryDirectory: cwd };
     const managerHeaders = { authorization: 'Bearer manager-fixture', [MANAGER_ASSIGNMENT_HEADER]: Buffer.from(JSON.stringify(assignment)).toString('base64url') };
-    const session = createManagerConversationSession({
-      cwd, assignment, plan: { ...plan, ctx: { ...plan.ctx, mcpServers: {
+    const session = createManagerTurnExecutor(cwd, { ...plan, ctx: { ...plan.ctx, mcpServers: {
         [TAKT_MANAGER_MCP_SERVER_NAME]: { type: 'http', url: 'http://127.0.0.1:12345/', headers: managerHeaders },
         browser: { command: '/browser-mcp' },
-      } } },
-    });
-    try {
-      expect(await session.handleUserMessage({ text: '相談' })).toMatchObject({ kind: 'reply' });
+      } } });
+    {
+      expect(await executeTurn(session, { text: '相談' }, assignment)).toMatchObject({ summary: null });
       expect(codex.constructor).toHaveBeenCalledTimes(1);
       const sdkOptions = codex.constructor.mock.calls[0]![0] as CodexOptions;
       expect(sdkOptions.config?.mcp_servers).toMatchObject({
@@ -385,7 +377,7 @@ describe('manager conversation configuration and provider boundary', () => {
       expect(codex.startThread.mock.calls[0]![0].networkAccessEnabled).toBeUndefined();
       expect(codex.startThread.mock.calls[0]![0].webSearchMode).toBeUndefined();
       expect(runCodexMcpList).not.toHaveBeenCalled();
-    } finally { await session.close(); }
+    }
     expect(readFileSync(configPath, 'utf8')).toBe(config);
     expect(readFileSync(authPath, 'utf8')).toBe(auth);
   });
@@ -404,11 +396,13 @@ describe('manager conversation configuration and provider boundary', () => {
       throw new Error(`Codex Exec exited with code 1: fixture diagnostic ${command}`);
     } });
     const plan = createManagerConversationPlan(cwd, { provider: 'codex' });
-    const session = createManagerConversationSession({ cwd, plan: { ...plan, ctx: { ...plan.ctx, mcpServers: {} } } });
+    const session = createManagerTurnExecutor(cwd, { ...plan, ctx: { ...plan.ctx, mcpServers: {} } });
     const onNotification = vi.fn();
-    try {
-      const result = await session.handleUserMessage({ text: '相談', onNotification });
-      expect(result.kind).toBe('error');
+    {
+      let failure: unknown;
+      try { await executeTurn(session, { text: '相談', onNotification }); } catch (error) { failure = error; }
+      expect(failure).toBeInstanceOf(Error);
+      const result = { message: (failure as Error).message };
       expect('message' in result && result.message.includes('fixture diagnostic')).toBe(true);
       expect(onNotification).not.toHaveBeenCalled();
       for (const name of [CODEX_TOOL_PERMISSION_ENDPOINT_ENV, CODEX_TOOL_PERMISSION_TOKEN_ENV]) {
@@ -416,7 +410,7 @@ describe('manager conversation configuration and provider boundary', () => {
         expect(secret !== undefined).toBe(true);
         expect(JSON.stringify(result).includes(secret!)).toBe(false);
       }
-    } finally { await session.close(); }
+    }
   });
 
   it.each(['claude', 'codex', 'opencode'] as const)('accepts %s manager conversations', (provider) => {
@@ -455,15 +449,15 @@ describe('manager conversation configuration and provider boundary', () => {
       [TAKT_MANAGER_MCP_SERVER_NAME]: { type: 'http' as const, url: 'http://127.0.0.1:12345/', headers },
       browser: { type: 'http' as const, url: 'https://example.test/mcp' },
     };
-    const session = createManagerConversationSession({ cwd, assignment, plan: { ...plan, ctx: { ...plan.ctx, mcpServers: servers } } });
-    try {
-      expect((await session.handleUserMessage({ text: '確認' })).kind).toBe('reply');
+    const session = createManagerTurnExecutor(cwd, { ...plan, ctx: { ...plan.ctx, mcpServers: servers } });
+    {
+      expect((await executeTurn(session, { text: '確認' }, assignment)).message).toBeTypeOf('string');
       const options = buildSdkOptions(vi.mocked(callClaudeCustom).mock.calls[0]![3]);
       expect(options.permissionMode).toBe('bypassPermissions');
       expect(options.mcpServers).toEqual(servers);
       expect(options.hooks?.PreToolUse?.some(({ hooks }) => hooks.length > 0)).toBe(true);
       expect(options.allowedTools).toBeUndefined();
-    } finally { await session.close(); }
+    }
   });
 
   it.each([undefined, 'mcp: {}', 'mcp:\n  servers: {}\n  defaults:\n    servers: []'])('starts a manager turn without assigned user MCP: %s', async (section) => {
@@ -475,9 +469,8 @@ describe('manager conversation configuration and provider boundary', () => {
     vi.spyOn(providers, 'getProvider').mockReturnValue(provider);
     const plan = createManagerConversationPlan(cwd, {});
     expect(plan.ctx.mcpServers).toEqual({});
-    const session = createManagerConversationSession({ cwd, plan });
-    try { expect((await session.handleUserMessage({ text: '相談' })).kind).toBe('reply'); }
-    finally { await session.close(); }
+    const session = createManagerTurnExecutor(cwd, plan);
+    { expect((await executeTurn(session, { text: '相談' })).message).toBeTypeOf('string'); }
   });
 
   it('resolves defaults and manager persona additions with persona and internal exclusions', () => {

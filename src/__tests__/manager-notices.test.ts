@@ -1,18 +1,20 @@
+import { readManagerTestDisplay } from './helpers/manager-display-items.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { readManagerDisplayEvents } from '../features/manager/savedEvents.js';
+import { iterateManagerDisplayEvents } from '../features/manager/savedEvents.js';
 import { formatGoalNotification } from '../infra/goals/notifications.js';
 import type { Goal } from '../infra/goals/schema.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 
-const storage = vi.hoisted(() => ({ list: vi.fn(), config: vi.fn() }));
+const storage = vi.hoisted(() => ({ list: vi.fn(), config: vi.fn(), iterate: vi.fn<(_directory: string) => AsyncIterable<Goal>>() }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class {
   constructor(private readonly directory: string) {}
   list() { return storage.list(this.directory); }
+  iterate() { return storage.iterate(this.directory); }
 } }));
 vi.mock('../infra/config/managerConfig.js', () => ({ resolveManagerConfig: storage.config }));
 vi.mock('../infra/goals/pending-inquiries.js', () => ({
-  listPendingInquiries: vi.fn(async () => ({ inquiries: [], errors: [] })),
+  iteratePendingInquiries: async function* () {},
 }));
 
 const policy = { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true };
@@ -27,6 +29,24 @@ beforeEach(() => {
   vi.clearAllMocks();
   storage.list.mockResolvedValue({ goals: [], errors: [] });
   storage.config.mockReturnValue({ notifications: policy });
+  storage.iterate.mockImplementation(async function* (directory) { yield* (await storage.list(directory)).goals; });
+});
+
+it('projects sequential work logs and enabled notices with exact stable IDs and independent startup boundaries', async () => {
+  const record = { id: '850e8400-e29b-41d4-a716-446655440001', summary: 'Old work', recordedAt: new Date(startedAt - 1).toISOString() };
+  const goal: Goal = { ...goalRecord(), workLog: [record], notifications: [notice(1), notice(2, { kind: 'question' }), notice(3, { kind: 'custom' })] };
+  storage.iterate.mockImplementation(async function* (directory) { if (directory === '/second') yield goal; });
+  storage.config.mockReturnValue({ notifications: { ...policy, custom: false } });
+  const assignment = { kind: 'workspace' as const, workspaceId: 'fixture', name: 'Both', repositoryDirectories: ['/first', '/second'] };
+  const values = [];
+  for await (const event of iterateManagerDisplayEvents(assignment, 'en', new Map([['/first', startedAt]]), startedAt + 2)) values.push(event);
+  expect(values).toEqual([
+    { id: JSON.stringify([goal.id, 'work-log', record.id]), message: goal.id + ': Old work' },
+    { id: JSON.stringify([goal.id, 'notification', goal.notifications![0]!.id]),
+      message: formatGoalNotification(goal, goal.notifications![0]!, 'en', 'second', 'tui'), suppressInitialDisplay: true },
+  ]);
+  expect(storage.iterate.mock.calls.map(([directory]) => directory)).toEqual(['/first', '/second']);
+  expect(storage.list).not.toHaveBeenCalled();
 });
 
 describe.each(['ja', 'en'] as const)('TUI notice formatting in %s', (lang) => {
@@ -101,7 +121,7 @@ describe('saved manager notices', () => {
     const assignment = { kind: 'workspace' as const, workspaceId: 'fixture', name: 'A + B', repositoryDirectories: ['/first', '/second'] };
     const boundaries = new Map([['/first', startedAt]]);
 
-    const added = await readManagerDisplayEvents('/first', 'en', assignment, boundaries, startedAt);
+    const added = await readManagerTestDisplay('/first', 'en', assignment, boundaries, startedAt);
     expect(added.events).toEqual([
       { id: JSON.stringify([goal.id, 'work-log', record.id]), message: `${goal.id}: ${record.summary}` },
       { id: JSON.stringify([goal.id, 'notification', notification.id]),
@@ -111,7 +131,7 @@ describe('saved manager notices', () => {
       goalId: goal.id, objective: goal.objective, kind: notification.kind, recordedAt: notification.recordedAt,
       message: formatGoalNotification(goal, notification, 'en', 'second', 'tui', 'full') }]);
 
-    const initial = await readManagerDisplayEvents('/first', 'en', assignment, new Map([...boundaries, ['/second', startedAt]]), startedAt);
+    const initial = await readManagerTestDisplay('/first', 'en', assignment, new Map([...boundaries, ['/second', startedAt]]), startedAt);
     expect(initial.events).toEqual(added.events.map((event) => ({ ...event, suppressInitialDisplay: true })));
     expect(initial.notices).toEqual(added.notices);
     expect(goal).toEqual(original);
@@ -123,14 +143,14 @@ describe('saved manager notices', () => {
     const before = structuredClone(goal);
     storage.list.mockResolvedValue({ goals: [goal], errors: [] });
 
-    const result = await readManagerDisplayEvents('/fixture', 'en', undefined, new Map([['/fixture', startedAt]]));
+    const result = await readManagerTestDisplay('/fixture', 'en', undefined, new Map([['/fixture', startedAt]]), startedAt);
 
     expect(result.events.map((event) => event.suppressInitialDisplay)).toEqual([true, undefined, undefined]);
     expect(result).toMatchObject({ notices: [...notifications].reverse().map((notification) => ({
       goalId: goal.id, objective: goal.objective, kind: notification.kind, recordedAt: notification.recordedAt,
     })) });
     expect(goal).toEqual(before);
-    const unbounded = await readManagerDisplayEvents('/fixture', 'en');
+    const unbounded = await readManagerTestDisplay('/fixture', 'en');
     expect(unbounded.events.map((event) => event.suppressInitialDisplay)).toEqual([undefined, undefined, undefined]);
   });
 
@@ -145,9 +165,9 @@ describe('saved manager notices', () => {
     storage.config.mockImplementation((directory: string) => ({ notifications: { ...policy, custom: directory === '/first' } }));
     const before = structuredClone([first, second]);
 
-    const result = await readManagerDisplayEvents('/first', 'en', {
+    const result = await readManagerTestDisplay('/first', 'en', {
       kind: 'workspace', workspaceId: 'fixture', name: 'Workspace', repositoryDirectories: ['/first', '/second'],
-    }, new Map([['/first', startedAt + 100]]));
+    }, new Map([['/first', startedAt + 100]]), startedAt + 100);
 
     const expected = [[first, first.notifications![1]!], [second, second.notifications![0]!],
       [second, second.notifications![1]!], [first, first.notifications![0]!]] as const;
@@ -155,7 +175,7 @@ describe('saved manager notices', () => {
       goalId: goal.id, objective: goal.objective, kind: notification.kind, recordedAt: notification.recordedAt,
     })) });
     expect(result.events.map((event) => JSON.parse(event.id)[2]).sort()).toEqual(expected.map(([, notification]) => notification.id).sort());
-    expect(result.events.filter((event) => event.suppressInitialDisplay)).toHaveLength(2);
+    expect(result.events.filter((event) => event.suppressInitialDisplay)).toHaveLength(4);
     expect([first, second]).toEqual(before);
   });
 
@@ -171,7 +191,7 @@ describe('saved manager notices', () => {
     const before = structuredClone(goal);
     storage.list.mockResolvedValue({ goals: [goal], errors: [] });
 
-    const result = await readManagerDisplayEvents('/fixture', 'en');
+    const result = await readManagerTestDisplay('/fixture', 'en');
     const prefix = [getLabel(`manager.notificationHeadings.${kind}`, 'en', { project: 'fixture' }),
       getLabel('manager.notificationGoal', 'en', { objective: goal.objective, id: goal.id.slice(0, 8) }), body];
     if (kind === 'blocked') prefix.push(getLabel('manager.notificationBlockedAction', 'en', { project: 'fixture' }));

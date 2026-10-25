@@ -2,6 +2,9 @@ import type { Goal, GoalAnswerInput, GoalQuestion } from '../../infra/goals/sche
 import type { InquiryOwner } from '../../infra/goals/standalone-inquiries.js';
 import type { ConversationActor, ConversationAssignment, ConversationRecord, PortBinding } from '../../infra/conversations/schema.js';
 import type { WritablePermissionScope } from './scopedPermissionStorage.js';
+import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
+import type { ManagerAssignment } from './startupResolution.js';
+import type { ManagerDisplayEvent, ManagerDisplayNotice } from './savedEvents.js';
 
 export type ConversationCommand =
   | { kind: 'message'; text: string }
@@ -22,9 +25,11 @@ export interface ConversationState {
 }
 export type SnapshotItem =
   | { kind: 'state'; state: ConversationState }
+  | { kind: 'assignment'; assignment: ManagerAssignment }
   | { kind: 'goal'; goal: Pick<Goal, 'id' | 'objective' | 'status' | 'executionStatus'> & { repositoryDirectory: string } }
-  | { kind: 'inquiry'; inquiry: { target: QuestionTarget; question: GoalQuestion } }
-  | { kind: 'notice'; notice: { id: string; message: string } };
+  | { kind: 'inquiry'; inquiry: { target: QuestionTarget; question: GoalQuestion; objective?: string } }
+  | { kind: 'notice'; notice: ManagerDisplayNotice }
+  | { kind: 'display_event'; event: ManagerDisplayEvent };
 export interface OutputVersion { revision: number; stateSequence: number; operationId: string | null }
 export interface SnapshotRead extends OutputVersion {
   transferId: string;
@@ -53,6 +58,7 @@ export interface ConversationOpen {
   assignment: ConversationAssignment;
   binding: PortBinding;
   speaker: ConversationActor;
+  agentOverrides?: AssistantCliOverrides;
 }
 export interface ConversationInput {
   open(input: ConversationOpen, delivery: ConversationDelivery): Promise<{ attachmentId: string; read: SnapshotRead }>;

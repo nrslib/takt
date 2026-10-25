@@ -26,6 +26,18 @@ it('reuses compatible setup while resolving the current plan for every turn', as
   expect(doubles.plan).toHaveBeenCalledTimes(2); expect(doubles.connect).toHaveBeenCalledOnce(); expect(doubles.preflight).toHaveBeenCalledOnce();
 });
 
+it('passes the current attachment provider and model overrides to plan resolution for each turn', async () => {
+  const first = { provider: 'mock' as const, model: 'chosen-A' };
+  const second = { provider: 'codex' as const, model: 'chosen-B' };
+  await runtime.resolve(assignment, signal, first);
+  expect(doubles.plan).toHaveBeenLastCalledWith('/repository', first);
+  plan = { ...plan, ctx: { ...plan.ctx, providerType: 'codex', model: 'chosen-B' } };
+  const resolved = await runtime.resolve(assignment, signal, second);
+  expect(doubles.plan).toHaveBeenLastCalledWith('/repository', second);
+  expect(resolved).toMatchObject({ provider: 'codex', model: 'chosen-B' });
+  expect(doubles.dispose).toHaveBeenCalledOnce();
+});
+
 it.each(['model', 'prompt', 'mcp', 'language'] as const)('replaces setup and invalidates its context key when %s changes', async (change) => {
   const first = await runtime.resolve(assignment, signal);
   if (change === 'model') plan.ctx.model = 'model-B';

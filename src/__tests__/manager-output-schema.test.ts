@@ -40,28 +40,24 @@ describe('manager provider output schema', () => {
       persona: 'manager', status: 'done', timestamp: new Date(),
       content: JSON.stringify({ message: '相談', summary: null }), structuredOutput: { message: '相談', summary: null },
     });
-    let result: { kind: string; message: string } | undefined;
     let failure: unknown;
     try {
-      const { createManagerConversationSession } = await import('../features/manager/conversationSession.js');
-      const session = createManagerConversationSession({
-        cwd: '/test/manager-repository',
-        plan: { ctx: { providerType: 'codex', lang: 'ja', model: undefined,
+      const { createManagerTurnExecutor } = await import('../features/manager/turnExecutor.js');
+      const executor = createManagerTurnExecutor('/test/manager-repository', {
+        ctx: { providerType: 'codex', lang: 'ja', model: undefined,
           provider: makeProvider({ supportsStructuredOutput: true, setup: () => ({ call }) }) },
         strategy: { systemPrompt: 'manager fixture' },
         permissionJudge: {
           resolution: { provider: 'codex', model: undefined, providerOptions: {} },
           language: 'ja', systemPrompt: 'permission judge fixture',
           managerPersona: 'manager fixture', managerPolicy: 'manager policy fixture',
-        } },
-
+        },
       });
-      try { result = await session.handleUserMessage({ text: '相談' }); }
-      finally { await session.close(); }
+      await executor.execute({ prompt: '相談', instruction: '相談', sessionId: undefined,
+        assignment: undefined, abortSignal: new AbortController().signal, configDirectory: '/test/config' });
     } catch (error) { failure = error; }
     expect(conversion).toHaveBeenCalled();
-    if (failure !== undefined) expect(failure).toBeInstanceOf(StructuredOutputSchemaError);
-    else expect(result).toMatchObject({ kind: 'error' });
+    expect(failure).toBeInstanceOf(StructuredOutputSchemaError);
     expect(call).not.toHaveBeenCalled();
   });
 });
