@@ -11,6 +11,11 @@ const log = createLogger('devin-process');
 const DESCENDANT_KILL_GRACE_MS = 250;
 const DESCENDANT_SCAN_TIMEOUT_MS = 5_000;
 const DESCENDANT_SNAPSHOT_INTERVAL_MS = 500;
+// Shorter than the steady-state interval so late spawns still get detected
+// inside the leader's dying grace, but still throttled — a synchronous `ps`
+// scan on every stderr chunk could starve the event loop and delay the
+// scheduled SIGKILLs themselves.
+const DESCENDANT_SHUTDOWN_SCAN_INTERVAL_MS = 100;
 
 const DEVIN_COMMAND = 'devin';
 const DEVIN_MAX_BUFFER_BYTES = 10 * 1024 * 1024;
@@ -260,7 +265,10 @@ export function spawnDevinAcp(args: string[], options: DevinCallOptions): DevinA
       return;
     }
     const now = Date.now();
-    if (now - lastDescendantScanAt < DESCENDANT_SNAPSHOT_INTERVAL_MS) {
+    const scanInterval = terminateRequested
+      ? DESCENDANT_SHUTDOWN_SCAN_INTERVAL_MS
+      : DESCENDANT_SNAPSHOT_INTERVAL_MS;
+    if (now - lastDescendantScanAt < scanInterval) {
       return;
     }
     lastDescendantScanAt = now;

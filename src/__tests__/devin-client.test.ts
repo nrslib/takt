@@ -1373,6 +1373,7 @@ describe('callDevin', () => {
     expect(result.status).toBe('error');
     await vi.waitFor(() => {
       expect(killSpy).toHaveBeenCalledWith(-(leaderPid + 1), 'SIGTERM');
+      expect(killSpy).toHaveBeenCalledWith(-(leaderPid + 1), 'SIGKILL');
     });
   });
 
