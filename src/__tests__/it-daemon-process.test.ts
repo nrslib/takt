@@ -1,3 +1,4 @@
+import { readManagerTestDisplay } from './helpers/manager-display-items.js';
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -9,7 +10,6 @@ import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { isDaemonOwnerRunning, readDaemonOwner, writeDaemonOwner } from '../infra/daemon/owner.js';
 import { GoalStore } from '../infra/goals/store.js';
 import { readManagerEvents, saveManagerEvent, type ManagerEvent } from '../infra/goals/events.js';
-import { readManagerDisplayEvents } from '../features/manager/savedEvents.js';
 import { isProcessAlive } from '../infra/task/process.js';
 import { getTaskProcessIdentity } from '../infra/task/taskProcessIdentity.js';
 import { TaskRecordSchema } from '../infra/task/schema.js';
@@ -189,7 +189,7 @@ it('handles an inbox event without pending tasks or run and exposes its saved re
   const owner = await start();
   await vi.waitFor(async () => {
     expect(readManagerEvents(cwd), JSON.stringify((await new GoalStore(cwd).get(goal.id)).notifications)).toEqual([]);
-    expect((await readManagerDisplayEvents(cwd, 'ja')).events.map((event) => event.message))
+    expect((await readManagerTestDisplay(cwd, 'ja')).events.map((event) => event.message))
       .toContain(`${goal.id}: ${message}`);
   }, { timeout: 10_000 });
   expect(isDaemonOwnerRunning(owner)).toBe(true);

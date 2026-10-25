@@ -1,27 +1,27 @@
 import { useInput, usePaste } from 'ink';
-import type { Dispatch, RefObject, SetStateAction } from 'react';
+import type { RefObject } from 'react';
 import { applyEditorKey, commitEditorInput, type EditorState } from '../tui/editorState.js';
 import { resolveEditorKey } from '../tui/editorKeys.js';
-import type { ManagerConversationSession } from './conversationSession.js';
 import type { ManagerAbortTarget, useManagerAbortConfirmation } from './useManagerAbortConfirmation.js';
 import type { SaveManagerAnswer, useManagerQuestionAnswer } from './useManagerQuestionAnswer.js';
 import type { useManagerSummaryApproval } from './useManagerSummaryApproval.js';
 import type { ManagerSelectedTarget, ManagerSelectionCommand, useManagerSelection } from './useManagerSelection.js';
 
 export function useManagerInput({
-  exiting, active, registering, editorRef, edit, setQueued, onExit, contentWidth, session,
+  exiting, active, registering, editorRef, edit, submit, onExit, contentWidth, canApprove, abortTurn,
   abortConfirmation, questionAnswer, summaryApproval, selection, selectTarget, abortGoal, saveAnswer, register, onInputUnavailable,
-  openMenu, summarize, cancelMenuRequest, cancelOperations,
+  openMenu, summarize,
 }: {
   exiting: RefObject<boolean>;
-  active: RefObject<AbortController | null>;
+  active: RefObject<boolean>;
   registering: RefObject<boolean>;
   editorRef: RefObject<EditorState>;
   edit: (next: EditorState) => void;
-  setQueued: Dispatch<SetStateAction<string[]>>;
+  submit: (text: string) => void;
+  abortTurn: () => void;
   onExit: () => void;
   contentWidth: number;
-  session: Pick<ManagerConversationSession, 'getPendingSummary'>;
+  canApprove: boolean;
   abortConfirmation: ReturnType<typeof useManagerAbortConfirmation>;
   questionAnswer: ReturnType<typeof useManagerQuestionAnswer>;
   summaryApproval: ReturnType<typeof useManagerSummaryApproval>;
@@ -33,14 +33,12 @@ export function useManagerInput({
   onInputUnavailable: () => void;
   openMenu: (kind: ManagerSelectionCommand) => void;
   summarize: () => void;
-  cancelMenuRequest: () => void;
-  cancelOperations: () => void;
 }): void {
   const { abortTarget } = abortConfirmation;
   const { answerTarget } = questionAnswer;
   const { pending, setPending } = summaryApproval;
   const editDraft = (next: EditorState): void => {
-    if (!registering.current && pending !== null && session.getPendingSummary()?.revision === pending.revision
+    if (!registering.current && pending !== null
       && answerTarget === null && selection.selection === null && abortTarget === null
       && next.text !== editorRef.current.text) {
       summaryApproval.dismiss(pending);
@@ -48,7 +46,7 @@ export function useManagerInput({
     edit(next);
   };
   const insertText = (text: string): void => {
-    if (exiting.current || (answerTarget !== null && active.current !== null)) return;
+    if (exiting.current || (answerTarget !== null && active.current)) return;
     if (selection.selection !== null) return;
     if (abortTarget !== null) { onInputUnavailable(); return; }
     if (answerTarget !== null) questionAnswer.switchToFreeText();
@@ -59,9 +57,6 @@ export function useManagerInput({
     if (exiting.current) return;
     if (key.ctrl && input === 'c') {
       exiting.current = true;
-      active.current?.abort();
-      setQueued([]);
-      cancelOperations();
       onExit();
       return;
     }
@@ -73,27 +68,22 @@ export function useManagerInput({
       return;
     }
     if (selection.selection !== null) {
-      if (key.escape) cancelMenuRequest();
       selection.handleInput(key, selectTarget);
       return;
     }
     if (questionAnswer.handleNavigation(key, editorRef)) {
-      if (key.escape) cancelMenuRequest();
       return;
     }
-    if (key.escape) cancelOperations();
-    if (active.current !== null && key.escape) {
-      active.current.abort();
-      setQueued([]);
+    if (active.current && key.escape) {
+      abortTurn();
       setPending(null);
       return;
     }
     if (registering.current && key.escape) {
-      setQueued([]);
       return;
     }
-    if (answerTarget !== null && active.current !== null) return;
-    if (!registering.current && active.current === null && abortTarget !== null) {
+    if (answerTarget !== null && active.current) return;
+    if (!registering.current && !active.current && abortTarget !== null) {
       if (input !== '' && !key.ctrl && !key.meta && !key.return && !key.escape) onInputUnavailable();
       abortConfirmation.handleInput(abortTarget, key, abortGoal);
       return;
@@ -104,10 +94,10 @@ export function useManagerInput({
       && editKey?.kind === 'insert' && /[\r\n]$/u.test(input);
     if (trailingEnter) insertText(input.replace(/(?:\r\n|\r|\n)$/u, ''));
     const submitInput = key.return || trailingEnter;
-    if (!registering.current && active.current === null && answerTarget !== null) {
+    if (!registering.current && !active.current && answerTarget !== null) {
       if (questionAnswer.handleInput(key, submitInput, editorRef, edit, saveAnswer)) return;
     }
-    if (!registering.current && answerTarget === null && pending !== null && session.getPendingSummary()?.revision === pending.revision
+    if (!registering.current && canApprove && answerTarget === null && pending !== null
       && (key.escape || (editorRef.current.text === ''
         && (key.upArrow || key.downArrow || (editKey === null && !key.return)
           || (key.return && !key.shift && !key.meta))))) {
@@ -119,7 +109,7 @@ export function useManagerInput({
       } else if (editorRef.current.text.trim() !== '') {
         const text = editorRef.current.text;
         edit(commitEditorInput(editorRef.current, text));
-        setQueued((previous) => [...previous, text]);
+        submit(text);
       }
       return;
     }

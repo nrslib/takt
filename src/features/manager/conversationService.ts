@@ -12,7 +12,7 @@ import { resolveGitRepositoryDirectory } from '../../infra/task/repositoryDirect
 import { resolveCurrentManagerAssignment, resolveAssignedProjectRoot } from './assignment.js';
 import { createWorkspaceManagerContext, type ManagerAssignment } from './startupResolution.js';
 import { buildGoalMemory, buildManagerGoalSummary } from './turnContext.js';
-import { iterateManagerNotices } from './savedEvents.js';
+import { iterateManagerNotices, iterateManagerDisplayEvents } from './savedEvents.js';
 import type { ConversationRuntime } from './conversationRuntime.js';
 import type { ConversationCommand, ConversationDelivery, ConversationInput, ConversationOpen, ConversationState,
   OperationResult, OutputVersion, PortOutput, SnapshotItem, SnapshotRead, Submission } from './conversationPort.js';
@@ -26,6 +26,8 @@ import { resolveConfigValue } from '../../infra/config/resolveConfigValue.js';
 import { createManagerConversationPlan } from './conversationPlan.js';
 import { validateManagerSummary } from './turnResponse.js';
 import { ConversationCommandSchema } from './conversationCommands.js';
+import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
+import { notifyManagerTurnFailure } from './turnFailureNotification.js';
 
 interface Operation { id: string; controller: AbortController; cleanupComplete: boolean; completion?: Promise<void> }
 interface LoadedConversation {
@@ -36,8 +38,10 @@ interface LoadedConversation {
   active?: Operation;
   contextKey?: string;
   storageFailed: boolean;
+  denials?: string[];
 }
-interface Attachment { conversation: LoadedConversation; delivery: ConversationDelivery; speaker: ConversationOpen['speaker'] }
+interface Attachment { conversation: LoadedConversation; delivery: ConversationDelivery; speaker: ConversationOpen['speaker'];
+  agentOverrides: ConversationOpen['agentOverrides']; startedAt: number; startupBoundaries: ReadonlyMap<string, number> }
 
 function identityOf(assignment: ManagerAssignment): ConversationAssignment {
   return assignment.kind === 'workspace' ? { kind: 'workspace', workspaceId: assignment.workspaceId }
@@ -116,24 +120,35 @@ export function createConversationService(input: {
     if (attachment === undefined) throw new ConversationError('unavailable_attachment');
     return attachment;
   };
-  const readSnapshot = (conversation: LoadedConversation, assignment: ManagerAssignment): SnapshotRead => {
+  const readSnapshot = (conversation: LoadedConversation, assignment: ManagerAssignment, attachment: Attachment): SnapshotRead => {
     const state = capture(conversation);
     const capturedVersion = version(conversation, state.running?.operationId ?? null);
     const language = conversation.language;
     const items = async function* (): AsyncGenerator<SnapshotItem> {
       yield { kind: 'state', state };
-      for (const repositoryDirectory of assignment.repositoryDirectories) {
-        for await (const goal of new GoalStore(repositoryDirectory).iterate()) {
-          yield { kind: 'goal', goal: { id: goal.id, objective: goal.objective, status: goal.status,
-            executionStatus: goal.executionStatus, repositoryDirectory } };
+      yield { kind: 'assignment', assignment };
+      try {
+        for (const repositoryDirectory of assignment.repositoryDirectories) {
+          for await (const goal of new GoalStore(repositoryDirectory).iterate()) {
+            yield { kind: 'goal', goal: { id: goal.id, objective: goal.objective, status: goal.status,
+              executionStatus: goal.executionStatus, repositoryDirectory } };
+          }
         }
+        for await (const inquiry of iteratePendingInquiries(input.configDirectory, assignment)) {
+          yield { kind: 'inquiry', inquiry: { target: inquiry.goalId === null
+            ? { goalId: null, owner: identityOf(assignment) }
+            : { goalId: inquiry.goalId, repositoryDirectory: inquiry.repositoryDirectory }, question: inquiry.question,
+            ...(inquiry.goalId === null ? {} : { objective: inquiry.objective }) } };
+        }
+        for await (const notice of iterateManagerNotices(assignment, language)) yield { kind: 'notice', notice };
+        for await (const event of iterateManagerDisplayEvents(assignment, language, attachment.startupBoundaries, attachment.startedAt)) {
+          yield { kind: 'display_event', event };
+        }
+      } catch (error) {
+        const message = sanitizeSensitiveText(getErrorMessage(error));
+        yield { kind: 'display_event', event: { id: JSON.stringify(['diagnostic', message]), message } };
+        throw error;
       }
-      for await (const inquiry of iteratePendingInquiries(input.configDirectory, assignment)) {
-        yield { kind: 'inquiry', inquiry: { target: inquiry.goalId === null
-          ? { goalId: null, owner: identityOf(assignment) }
-          : { goalId: inquiry.goalId, repositoryDirectory: inquiry.repositoryDirectory }, question: inquiry.question } };
-      }
-      for await (const notice of iterateManagerNotices(assignment, language)) yield { kind: 'notice', notice: { id: notice.id, message: notice.message } };
     };
     return { ...capturedVersion, transferId: randomUUID(), conversationId: state.conversationId, items: items() };
   };
@@ -156,15 +171,18 @@ export function createConversationService(input: {
     return { kind: 'goal_registered', goal };
   };
   const execute = async (conversation: LoadedConversation, operation: Operation, command: Exclude<ConversationCommand, { kind: 'abort_turn' }>,
-    assignment: ManagerAssignment, priorPending: PendingSummary | null): Promise<void> => {
+    assignment: ManagerAssignment, priorPending: PendingSummary | null, agentOverrides: ConversationOpen['agentOverrides']): Promise<void> => {
     let result: OperationResult;
     let clearSessionOnFailure = false;
+    const denials: string[] = [];
     try {
       const signal = operation.controller.signal;
       signal.throwIfAborted();
       switch (command.kind) {
         case 'message': {
-          const runtime = await input.runtime.resolve(assignment, signal);
+          const previousDenials = conversation.denials;
+          conversation.denials = undefined;
+          const runtime = await input.runtime.resolve(assignment, signal, agentOverrides);
           const changed = conversation.record.provider !== runtime.provider || conversation.record.model !== runtime.model
             || (conversation.contextKey !== undefined && conversation.contextKey !== runtime.contextKey);
           if (changed) save(conversation, { ...conversation.record, provider: runtime.provider, model: runtime.model, sessionId: null });
@@ -188,13 +206,16 @@ export function createConversationService(input: {
           }
           const businessContext = JSON.stringify({ assignment, pending: priorPending, goals: JSON.parse(buildGoalMemory(memories)) as unknown });
           const output = await runtime.executor.execute({
-            prompt: command.text, instruction: command.text, sessionId: conversation.record.sessionId ?? undefined,
+            prompt: previousDenials === undefined || previousDenials.length === 0 ? command.text
+              : `${command.text}\n\nPrevious tool permission denials: ${JSON.stringify(previousDenials)}`,
+            instruction: command.text, sessionId: conversation.record.sessionId ?? undefined,
             assignment: conversation.record.assignment, abortSignal: signal, configDirectory: input.configDirectory,
             recovery: { context: businessContext, invalidateSession: async () => {
               clearSessionOnFailure = true;
               save(conversation, { ...conversation.record, sessionId: null });
             } },
             onNotification: (message) => { void publish(conversation, { kind: 'progress', operationId: operation.id, message }, version(conversation, operation.id)); },
+            onDenial: (reason) => { if (!signal.aborted) denials.push(reason); },
           });
           signal.throwIfAborted();
           const latest = await resolveAssignment(conversation.record.assignment);
@@ -242,11 +263,19 @@ export function createConversationService(input: {
       }
     } catch (error) {
       result = conversationErrorResult(error, conversation.language);
+      if (command.kind === 'message' && !operation.controller.signal.aborted) {
+        const cwd = assignment.kind === 'repository' ? assignment.repositoryDirectory
+          : createWorkspaceManagerContext({ id: assignment.workspaceId, name: assignment.name,
+            repositoryDirectories: assignment.repositoryDirectories }, input.configDirectory).cwd;
+        const message = await notifyManagerTurnFailure(cwd, undefined, error);
+        if (message !== undefined) await publish(conversation, { kind: 'notice', id: randomUUID(), message }, version(conversation, operation.id));
+      }
       if (command.kind === 'message' && conversation.record.approval?.state !== 'reserved') {
         conversation.record = { ...conversation.record, pending: null,
           ...(clearSessionOnFailure || operation.controller.signal.aborted ? { sessionId: null } : {}) };
       }
     }
+    if (command.kind === 'message') conversation.denials = operation.controller.signal.aborted ? undefined : denials;
     operation.cleanupComplete = true;
     try {
       save(conversation, { ...conversation.record, running: null });
@@ -281,7 +310,7 @@ export function createConversationService(input: {
           const restored = store.read(open.conversationId, identity);
           const cwd = assignment.kind === 'repository' ? assignment.repositoryDirectory
             : createWorkspaceManagerContext({ id: assignment.workspaceId, name: assignment.name, repositoryDirectories: assignment.repositoryDirectories }, input.configDirectory).cwd;
-          const plan = createManagerConversationPlan(cwd, {});
+          const plan = createManagerConversationPlan(cwd, open.agentOverrides ?? {});
           const record = restored ?? { schemaVersion: 1 as const, id: open.conversationId, agent: 'manager', assignment: identity,
             counterpart: binding.counterpart, lastSpeaker: null, provider: plan.ctx.providerType, model: plan.ctx.model ?? null, sessionId: null, bindings: [],
             revision: 0, pending: null, approval: null, running: null };
@@ -297,8 +326,11 @@ export function createConversationService(input: {
           save(conversation, { ...conversation.record, bindings: [...conversation.record.bindings, binding] });
         }
         const attachmentId = randomUUID();
-        attachments.set(attachmentId, { conversation, delivery, speaker });
-        return { attachmentId, read: readSnapshot(conversation, assignment) };
+        const startedAt = Date.now();
+        const attachment = { conversation, delivery, speaker, agentOverrides: open.agentOverrides, startedAt,
+          startupBoundaries: new Map(assignment.repositoryDirectories.map((directory) => [directory, startedAt])) };
+        attachments.set(attachmentId, attachment);
+        return { attachmentId, read: readSnapshot(conversation, assignment, attachment) };
       } finally { finishAdmission(); if (existing === undefined) initializing.delete(open.conversationId); }
     },
     async submit(request): Promise<Submission> {
@@ -359,7 +391,7 @@ export function createConversationService(input: {
         const owned = conversation;
         const accepted = operation;
         void publish(conversation, { kind: 'running', state: capture(conversation) }, version(conversation, operation.id));
-        operation.completion = Promise.resolve().then(() => execute(owned, accepted, command, assignment, priorPending));
+        operation.completion = Promise.resolve().then(() => execute(owned, accepted, command, assignment, priorPending, attachment.agentOverrides));
         return { kind: 'accepted', operationId: operation.id };
       } catch (error) {
         if (operation !== undefined) operation.cleanupComplete = true;
@@ -368,13 +400,14 @@ export function createConversationService(input: {
       } finally { finishAdmission(); }
     },
     async snapshot(attachmentId) {
-      const { conversation } = getAttachment(attachmentId);
+      const attachment = getAttachment(attachmentId);
+      const { conversation } = attachment;
       if (conversation.storageFailed) {
         if (conversation.active !== undefined && !conversation.active.cleanupComplete) throw new ConversationError('storage_error');
         save(conversation, { ...conversation.record, running: null });
         conversation.active = undefined;
       }
-      return readSnapshot(conversation, await currentAssignment(conversation));
+      return readSnapshot(conversation, await currentAssignment(conversation), attachment);
     },
     detach(attachmentId) { attachments.delete(attachmentId); },
   };

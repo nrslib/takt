@@ -1,3 +1,5 @@
+import { readManagerTestDisplay } from './manager-display-items.js';
+import * as managerAssignment from '../../features/manager/assignment.js';
 import chalk from 'chalk';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -10,14 +12,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ManagerView } from '../../features/manager/ManagerView.js';
 import { ensureDaemon } from '../../features/daemon/lifecycle.js';
 import { ensureManagerRun } from '../../features/manager/autoRun.js';
-import { createManagerConversationSession } from '../../features/manager/conversationSession.js';
-import { readManagerDisplayEvents } from '../../features/manager/savedEvents.js';
+import { ManagerServiceClient, spyConversationCommand } from './manager-service-client.js';
 import { saveManagerToolPermissionInquiry } from '../../features/manager/toolPermissionInquiry.js';
 import { createTaktMcpServer } from '../../features/mcp/server.js';
 import { PromptInput } from '../../features/tui/PromptInput.js';
 import { createHash } from 'node:crypto';
 import { readScopedPermissions } from '../../features/manager/scopedPermissionStorage.js';
+import * as permissionStorage from '../../features/manager/scopedPermissionStorage.js';
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
+import { invalidateResolvedConfigCache } from '../../infra/config/resolveConfigValue.js';
 import * as repositories from '../../infra/task/repositoryDirectory.js';
 import { createInquiry } from '../../infra/goals/inquiry.js';
 import { saveManagerEvent } from '../../infra/goals/events.js';
@@ -41,7 +44,7 @@ export function registerManagerTypedAnswerTests(): void {
     let cwd: string;
     let configDirectory: string;
     let app: ReturnType<typeof render> | undefined;
-    let session: ReturnType<typeof createManagerConversationSession> | undefined;
+    let session: ManagerServiceClient | undefined;
     let chalkLevel: typeof chalk.level;
     let language: 'ja' | 'en';
 
@@ -64,7 +67,7 @@ export function registerManagerTypedAnswerTests(): void {
     afterEach(async () => {
       app?.unmount();
       app = undefined;
-      try { await session?.close(); }
+      try { await session?.dispose(); }
       finally {
         session = undefined;
         chalk.level = chalkLevel;
@@ -81,13 +84,18 @@ export function registerManagerTypedAnswerTests(): void {
 
     async function mount(lang: 'ja' | 'en' = 'en', workspace = false): Promise<void> {
       language = lang;
-      session = createManagerConversationSession({
+      const config = join(cwd, '.takt', 'config.yaml');
+      const source = readFileSync(config, 'utf8');
+      writeFileSync(config, /^language:/mu.test(source) ? source.replace(/^language:.*$/mu, `language: ${lang}`) : `${source}\nlanguage: ${lang}\n`);
+      invalidateResolvedConfigCache(cwd);
+      session = new ManagerServiceClient({
         cwd,
         assignment: workspace ? { kind: 'workspace', workspaceId } : { kind: 'repository', repositoryDirectory: cwd },
         plan: { ctx: { providerType: 'mock', model: undefined, lang, provider: new MockProvider() },
           strategy: { systemPrompt: 'manager fixture' } },
       });
-      app = render(createElement(ManagerView, { cwd, lang, session, initialDiagnostics: [], onExit: vi.fn() }));
+      await session.ready;
+      app = render(createElement(ManagerView, { cwd, lang, client: session, assignment: { kind: 'repository', repositoryDirectory: cwd, repositoryDirectories: [cwd] }, initialDiagnostics: [], onExit: vi.fn() }));
       await waitFor(() => expect(frame()).toContain('manager'));
     }
 
@@ -108,6 +116,7 @@ export function registerManagerTypedAnswerTests(): void {
     const savedQuestion = async (): Promise<GoalQuestion> => (await new GoalStore(cwd).get(goalId)).questions![0]!;
 
     async function openAnswer(summary: string): Promise<void> {
+      await session!.refresh();
       await waitFor(() => expect(frame()).not.toMatch(/処理中|Working/u));
       press('\x12');
       await waitFor(() => expect(boxes().some((box) => box.includes(summary) && /↑|↓/u.test(box))).toBe(true));
@@ -170,17 +179,17 @@ export function registerManagerTypedAnswerTests(): void {
     it('closes the saved answer before reporting an event failure and cannot submit it again', async () => {
       const question = await putGoal(approval());
       await mount();
-      const save = vi.spyOn(session!, 'answerQuestion');
+      const save = vi.spyOn(session!, 'submit');
       vi.mocked(saveManagerEvent).mockImplementationOnce(() => { throw new Error('answer-event-write-failed'); });
       await openAnswer(question.body);
       await allow(/^This time only \(once\)$/u, 'saved comment');
       await waitFor(async () => {
         expect((await savedQuestion()).status).toBe('answered');
-        expect(frame()).toContain('answer-event-write-failed');
+        expect(frame()).toContain(getLabel('manager.conversation.operation_failed', language));
         expect(vi.mocked(PromptInput).mock.calls.at(-1)![0]).toMatchObject({ text: '', placeholder: 'Discuss your goal' });
         expect(frame()).not.toContain(question.body);
       });
-      expect(await save.mock.results[0]!.value).toMatchObject({ kind: 'error', answerSaved: true });
+      expect(session!.results.at(-1)).toMatchObject({ kind: 'error', code: 'operation_failed', answerSaved: true });
       press(ENTER);
       press(ENTER);
       await new Promise<void>((resolve) => setImmediate(resolve));
@@ -192,7 +201,7 @@ export function registerManagerTypedAnswerTests(): void {
     it.each([false, true])('closes a persisted answer even when releasing its file lock fails (failure=%s)', async (failure) => {
       const question = await putGoal({ body: 'Choose output format' });
       await mount();
-      const save = vi.spyOn(session!, 'answerQuestion');
+      const save = vi.spyOn(session!, 'submit');
       await openAnswer(question.body);
       press('CSV with headers');
       await waitFor(() => expect(vi.mocked(PromptInput).mock.calls.at(-1)![0].text).toBe('CSV with headers'));
@@ -209,11 +218,11 @@ export function registerManagerTypedAnswerTests(): void {
           status: 'answered', answer: { text: 'CSV with headers', source: 'tui' },
         }));
         await waitFor(() => {
-          if (failure) expect(frame()).toContain(error.message);
+          if (failure) expect(frame()).toContain(getLabel('manager.conversation.operation_failed', language));
           expect(vi.mocked(PromptInput).mock.calls.at(-1)![0]).toMatchObject({ text: '', placeholder: 'Discuss your goal' });
           expect(frame()).not.toContain(question.body);
         });
-        expect(await save.mock.results[0]!.value).toMatchObject({ kind: failure ? 'error' : 'reply', answerSaved: true });
+        expect(session!.results.at(-1)).toMatchObject({ kind: failure ? 'error' : 'answer_saved', answerSaved: true });
         if (failure) {
           for (const effect of [saveManagerEvent, ensureDaemon, ensureManagerRun]) expect(effect).not.toHaveBeenCalled();
         }
@@ -232,16 +241,16 @@ export function registerManagerTypedAnswerTests(): void {
       await openAnswer(question.body);
       press('CSV with headers');
       await waitFor(() => expect(vi.mocked(PromptInput).mock.calls.at(-1)![0].text).toBe('CSV with headers'));
-      const save = vi.spyOn(session!, 'answerQuestion');
+      const save = vi.spyOn(session!, 'submit');
       vi.spyOn(privateFiles, 'writePrivateFile').mockImplementationOnce(() => { throw new Error('answer-save-failed'); });
       press(ENTER);
       await waitFor(async () => {
-        expect(frame()).toContain('answer-save-failed');
+        expect(frame()).toContain(getLabel('manager.conversation.operation_failed', language));
         expect(frame()).not.toContain('Working');
         expect((await savedQuestion()).status).toBe('pending');
         expect(vi.mocked(PromptInput).mock.calls.at(-1)![0]).toMatchObject({ text: 'CSV with headers', placeholder: 'Enter your answer' });
       });
-      expect(await save.mock.results[0]!.value).toMatchObject({ kind: 'error', answerSaved: false });
+      expect(session!.results.at(-1)).toMatchObject({ kind: 'error', code: 'operation_failed', answerSaved: false });
       expect(saveManagerEvent).not.toHaveBeenCalled();
       expect(ensureDaemon).not.toHaveBeenCalled();
       expect(ensureManagerRun).not.toHaveBeenCalled();
@@ -272,10 +281,10 @@ export function registerManagerTypedAnswerTests(): void {
         const result = await client.callTool({ name: 'takt_remove_workspace_repository', arguments: { repositoryDirectory: cwd } });
         expect(result.isError).not.toBe(true);
       } finally { await client.close(); await server.close(); }
-      expect((await session!.getAssignment())!.repositoryDirectories).toEqual([second]);
+      expect((await managerAssignment.resolveCurrentManagerAssignment({ kind: 'workspace', workspaceId }, configDirectory))!.repositoryDirectories).toEqual([second]);
       await comment('');
       if (scope !== 'once') await editSentence(sentence);
-      await waitFor(() => expect(frame()).toContain('not assigned to this manager'));
+      await waitFor(() => expect(frame()).toContain(getLabel('manager.conversation.invalid_assignment', language)));
       expect(await new GoalStore(cwd).get(goalId)).toEqual(before);
       expect(await readScopedPermissions({ projectDirectory: cwd, workspaceId })).toEqual({ ok: true, files: [] });
       for (const effect of [saveManagerEvent, ensureDaemon, ensureManagerRun]) expect(effect).not.toHaveBeenCalled();
@@ -295,7 +304,7 @@ export function registerManagerTypedAnswerTests(): void {
         argsDigest: createHash('sha256').update(JSON.stringify(toolInput)).digest('hex') });
       expect(restored.permissionProposal!.length).toBeLessThanOrEqual(131072);
       for (const value of ['Write', 'out/result.txt', cwd, '…']) expect(restored.permissionProposal).toContain(value);
-      expect((await readManagerDisplayEvents(cwd, 'en')).questions.map(({ question: pending }) => pending.id)).toEqual([question.id]);
+      expect((await readManagerTestDisplay(cwd, 'en')).questions.map(({ question: pending }) => pending.id)).toEqual([question.id]);
       await mount();
       await openAnswer(question.body);
       await allow(/^(?:Global|All)$/u);
@@ -387,7 +396,7 @@ export function registerManagerTypedAnswerTests(): void {
     it.each(['typed', 'pasted'] as const)('does not interpret an %s OK comment as an approval decision', async (delivery) => {
       const question = await putGoal(approval());
       await mount();
-      const conversation = vi.spyOn(session!, 'handleUserMessage');
+      const conversation = spyConversationCommand(session!, 'message');
       await openAnswer(question.body);
       press(delivery === 'typed' ? 'OK' : '\x1b[200~OK\x1b[201~');
       press(ENTER);
@@ -419,7 +428,7 @@ export function registerManagerTypedAnswerTests(): void {
     it.each(['typed', 'pasted'] as const)('does not interpret %s report text as a completed operation', async (delivery) => {
       const question = await putGoal({ kind: 'operation_request', body: '1. 認証を更新する' });
       await mount();
-      const conversation = vi.spyOn(session!, 'handleUserMessage');
+      const conversation = spyConversationCommand(session!, 'message');
       await openAnswer(question.body);
       press(delivery === 'typed' ? '実施した' : '\x1b[200~実施した\x1b[201~');
       press(ENTER);
@@ -506,12 +515,12 @@ export function registerManagerTypedAnswerTests(): void {
       const path = join(configDirectory, 'manager-permissions.md');
       mkdirSync(path);
       await mount();
-      const save = vi.spyOn(session!, 'answerQuestion');
+      const save = vi.spyOn(session!, 'submit');
       await openAnswer(question.body);
       await allow(/^(?:Global|All)$/u, 'retry comment');
       await editSentence(sentence);
       await waitFor(() => {
-        expect(frame()).toMatch(/not a regular file|追記.*失敗|failed.*permission/iu);
+        expect(frame()).toContain(getLabel('manager.conversation.operation_failed', language));
         expect(prompt()).toContain(sentence);
         expect(frame()).not.toContain('Answer saved');
       });
@@ -526,14 +535,15 @@ export function registerManagerTypedAnswerTests(): void {
     it('does not enqueue another answer or edit the permission sentence while saving', async () => {
       const question = await putGoal(approval());
       await mount();
-      const original = session!.answerQuestion.bind(session);
+      const original = permissionStorage.appendScopedPermission;
       let finish!: () => void;
       const gate = new Promise<void>((resolve) => { finish = resolve; });
-      const save = vi.spyOn(session!, 'answerQuestion').mockImplementation(async (options) => {
+      vi.spyOn(permissionStorage, 'appendScopedPermission').mockImplementation(async (options) => {
         await gate;
         return original(options);
       });
-      const conversation = vi.spyOn(session!, 'handleUserMessage');
+      const save = spyConversationCommand(session!, 'answer_question');
+      const conversation = spyConversationCommand(session!, 'message');
       try {
         await openAnswer(question.body);
         await allow(/^(?:Global|All)$/u);
@@ -617,7 +627,7 @@ export function registerManagerTypedAnswerTests(): void {
       const store = new StandaloneInquiryStore(configDirectory, owner);
       const question = await store.create({ ...input, operation: { ...input.operation!, cwd: nested } });
       await mount();
-      const save = vi.spyOn(session!, 'answerQuestion');
+      const save = vi.spyOn(session!, 'submit');
       await openAnswer(question.body);
       await allow(/project/iu);
       await editSentence(sentence);
@@ -630,7 +640,7 @@ export function registerManagerTypedAnswerTests(): void {
           ok: true, files: [{ scope: 'project', content: `## 許可\n- ${sentence}\n` }],
         });
       } else {
-        await waitFor(() => expect(frame()).toContain('not assigned to this manager'));
+        await waitFor(() => expect(frame()).toContain(getLabel('manager.conversation.operation_failed', language)));
         expect(save).toHaveBeenCalledOnce();
         expect(await store.listPending()).toEqual([question]);
         expect(await readScopedPermissions({ projectDirectory: cwd })).toEqual({ ok: true, files: [] });

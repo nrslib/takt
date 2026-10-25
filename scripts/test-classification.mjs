@@ -417,6 +417,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-workflow-policy.test.ts',
   'src/__tests__/kiro-provider-integration.test.ts',
   'src/__tests__/manager-conversation-answers.integration.test.ts',
+  'src/__tests__/manager-conversation-client.integration.test.ts',
   'src/__tests__/manager-conversation-sequential-reads.integration.test.ts',
   'src/__tests__/manager-conversation-service.integration.test.ts',
   'src/__tests__/manager-tool-permission-inquiries.integration.test.ts',

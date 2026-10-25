@@ -1,21 +1,21 @@
 import { useState, type RefObject } from 'react';
 import type { Key } from 'ink';
-import type { ManagerConversationSession, PendingManagerSummary } from './conversationSession.js';
+import type { PendingSummary } from '../../infra/conversations/schema.js';
 
-export function useManagerSummaryApproval({ selected, setApprove, resetChoice, session }: {
+export function useManagerSummaryApproval({ selected, setApprove, resetChoice, dismissSummary }: {
   selected: RefObject<boolean>;
   setApprove: (approve: boolean) => void;
   resetChoice: () => void;
-  session: Pick<ManagerConversationSession, 'dismissSummary'>;
+  dismissSummary: (revision: number) => Promise<void>;
 }) {
-  const [pending, setPending] = useState<PendingManagerSummary | null>(null);
+  const [pending, setPending] = useState<PendingSummary | null>(null);
 
-  const dismiss = (target: PendingManagerSummary): void => {
-    session.dismissSummary(target.revision);
+  const dismiss = (target: PendingSummary): void => {
+    void dismissSummary(target.revision);
     setPending(null);
     resetChoice();
   };
-  const handleInput = (target: PendingManagerSummary, key: Key, register: (revision: number) => Promise<void>): boolean => {
+  const handleInput = (target: PendingSummary, key: Key, register: (revision: number) => Promise<void>): boolean => {
     if (key.upArrow || key.downArrow) {
       selected.current = key.upArrow;
       setApprove(selected.current);

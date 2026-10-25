@@ -9,6 +9,7 @@ import { getManagerOutputSchema } from './turnResponse.js';
 import { createManagerTurnExecutor } from './turnExecutor.js';
 import type { ProviderType } from '../../infra/providers/types.js';
 import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
+import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
 
 export interface PreparedConversationRuntime {
   provider: ProviderType;
@@ -18,20 +19,20 @@ export interface PreparedConversationRuntime {
   executor: ReturnType<typeof createManagerTurnExecutor>;
 }
 export interface ConversationRuntime {
-  resolve(assignment: ManagerAssignment, signal: AbortSignal): Promise<PreparedConversationRuntime>;
+  resolve(assignment: ManagerAssignment, signal: AbortSignal, agentOverrides?: AssistantCliOverrides): Promise<PreparedConversationRuntime>;
   close(): Promise<void>;
 }
 
 export function createConversationRuntime(configDirectory: string): ConversationRuntime {
   const entries = new Map<string, PreparedConversationRuntime & { dispose(): Promise<void> }>();
   return {
-    async resolve(assignment, signal) {
+    async resolve(assignment, signal, agentOverrides) {
       const identity: ConversationAssignment = assignment.kind === 'workspace'
         ? { kind: 'workspace', workspaceId: assignment.workspaceId }
         : { kind: 'repository', repositoryDirectory: assignment.repositoryDirectory };
       const cwd = assignment.kind === 'repository' ? assignment.repositoryDirectory
         : createWorkspaceManagerContext({ id: assignment.workspaceId, name: assignment.name, repositoryDirectories: assignment.repositoryDirectories }, configDirectory).cwd;
-      const plan = createManagerConversationPlan(cwd, {});
+      const plan = createManagerConversationPlan(cwd, agentOverrides ?? {});
       const contextKey = createHash('sha256').update(JSON.stringify({
         provider: plan.ctx.providerType, model: plan.ctx.model, options: plan.ctx.providerOptions,
         mcp: plan.ctx.mcpServers, prompt: plan.strategy.systemPrompt, assignment,

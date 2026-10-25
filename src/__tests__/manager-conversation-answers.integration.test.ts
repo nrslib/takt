@@ -12,6 +12,8 @@ import { goalRecord } from './helpers/goal-fixtures.js';
 import type { ConversationCommand } from '../features/manager/conversationPort.js';
 import type { GoalQuestion } from '../infra/goals/schema.js';
 import type { ManagerAssignment } from '../features/manager/startupResolution.js';
+import * as repositories from '../infra/task/repositoryDirectory.js';
+import { readScopedPermissions } from '../features/manager/scopedPermissionStorage.js';
 
 const doubles = vi.hoisted(() => ({ event: vi.fn(), run: vi.fn() }));
 vi.mock('../infra/goals/events.js', async (original) => ({ ...await original<typeof import('../infra/goals/events.js')>(), saveManagerEvent: doubles.event }));
@@ -49,6 +51,20 @@ it('saves a validated allow decision after its confirmed permission and publishe
   expect((await new GoalStore(repository).get(goalRecord().id)).questions![0]).toMatchObject({ status: 'answered', answer: { decision: 'allow', scope: 'global', source: 'tui' } });
   expect(doubles.event).toHaveBeenCalledExactlyOnceWith(repository, expect.objectContaining({ kind: 'answer', questionId: question.id }));
   expect(doubles.run).toHaveBeenCalledExactlyOnceWith(repository);
+});
+
+it('normalizes the operation subdirectory to its assigned repository before appending project permission', async () => {
+  const nested = join(repository, 'operation'); mkdirSync(nested);
+  vi.spyOn(repositories, 'resolveGitRepositoryDirectory').mockImplementation(async (path) => path === nested ? repository : path);
+  question = createInquiry({ kind: 'approval', body: 'Confirm this output',
+    operation: { toolName: 'Write', args: '{}', cwd: nested } });
+  saveQuestion(question);
+  command = { ...command, questionId: question.id, answer: { decision: 'allow', scope: 'project' },
+    permission: { scope: { kind: 'project', projectDirectory: nested }, sentence: 'Allow the selected output' } };
+  expect(await answer()).toMatchObject({ kind: 'answer_saved', answerSaved: true });
+  expect(await readScopedPermissions({ projectDirectory: repository })).toMatchObject({ ok: true,
+    files: [{ scope: 'project', content: '## 許可\n- Allow the selected output\n' }] });
+  expect(await readScopedPermissions({ projectDirectory: nested })).toEqual({ ok: true, files: [] });
 });
 
 it.each(['withdrawn', 'wrong-repository', 'wrong-owner', 'deny-with-permission', 'wrong-scope', 'multiline', 'report-for-approval'] as const)(

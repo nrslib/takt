@@ -1,3 +1,4 @@
+import { readManagerTestDisplay } from './helpers/manager-display-items.js';
 vi.mock('node:fs', async (original) => {
   const actual = await original<typeof import('node:fs')>();
   return { ...actual, unlinkSync: vi.fn(actual.unlinkSync) };
@@ -23,8 +24,7 @@ import type { WorkflowState } from '../core/models/index.js';
 import * as workflowCore from '../core/workflow/index.js';
 import { formatTaskHistorySummary } from '../features/interactive/interactive-summary.js';
 import { ManagerView } from '../features/manager/ManagerView.js';
-import { createManagerConversationSession } from '../features/manager/conversationSession.js';
-import { readManagerDisplayEvents } from '../features/manager/savedEvents.js';
+import { ManagerServiceClient, spyConversationCommand } from './helpers/manager-service-client.js';
 import { createTaktMcpServer } from '../features/mcp/server.js';
 import { executeTaskAndCompleteWithDetails,executeTaskWithResult } from '../features/tasks/execute/taskExecution.js';
 import { listTasksNonInteractive } from '../features/tasks/list/listNonInteractive.js';
@@ -40,6 +40,7 @@ import type { ProviderAgent } from '../infra/providers/types.js';
 import type { JsonTaskListItem } from '../infra/task/listSerializer.js';
 import { TaskRunner } from '../infra/task/runner.js';
 import { TaskStore } from '../infra/task/store.js';
+import * as repositories from '../infra/task/repositoryDirectory.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { goalId,goalRecord } from './helpers/goal-fixtures.js';
 import { registerManagerTypedAnswerTests } from './helpers/manager-typed-answers.js';
@@ -63,9 +64,10 @@ vi.mock('../infra/task/process.js', async (importOriginal) => ({
 
 let cwd: string;
 let app: ReturnType<typeof render> | undefined;
-let session: ReturnType<typeof createManagerConversationSession> | undefined;
+let session: ManagerServiceClient | undefined;
 
 beforeEach(() => {
+  vi.spyOn(repositories, 'resolveGitRepositoryDirectory').mockImplementation(async (directory) => realpathSync(directory));
   const root = join(process.cwd(), '.tmp');
   mkdirSync(root, { recursive: true });
   cwd = realpathSync(mkdtempSync(join(root, 'manager-question-display-')));
@@ -80,7 +82,7 @@ afterEach(async () => {
   app?.unmount();
   app = undefined;
   cleanup();
-  try { await session?.close(); }
+  try { await session?.dispose(); }
   finally {
     vi.restoreAllMocks();
     session = undefined;
@@ -91,6 +93,10 @@ afterEach(async () => {
 });
 
 async function mountGoalControls(lang: 'ja' | 'en', goal: Goal) {
+  const config = join(cwd, '.takt', 'config.yaml');
+  const source = readFileSync(config, 'utf8');
+  writeFileSync(config, /^language:/mu.test(source) ? source.replace(/^language:.*$/mu, `language: ${lang}`) : `${source}\nlanguage: ${lang}\n`);
+  invalidateResolvedConfigCache(cwd);
   const store = new GoalStore(cwd);
   await store.create(goal);
   const call = vi.fn<ProviderAgent['call']>().mockResolvedValue({
@@ -99,12 +105,13 @@ async function mountGoalControls(lang: 'ja' | 'en', goal: Goal) {
   });
   const provider = new MockProvider();
   vi.spyOn(provider, 'setup').mockReturnValue({ call });
-  session = createManagerConversationSession({
+  session = new ManagerServiceClient({
     cwd,
     plan: { ctx: { providerType: 'mock', model: undefined, lang, provider },
       strategy: { systemPrompt: 'manager fixture' } },
   });
-  app = render(createElement(ManagerView, { cwd, lang, session, initialDiagnostics: [], onExit: vi.fn() }));
+  await session.ready;
+  app = render(createElement(ManagerView, { cwd, lang, client: session, assignment: { kind: 'repository', repositoryDirectory: cwd, repositoryDirectories: [cwd] }, initialDiagnostics: [], onExit: vi.fn() }));
   await vi.waitFor(() => expect(app!.lastFrame()).toContain(basename(cwd)));
   const send = async (text: string): Promise<void> => {
     app!.stdin.write(text);
@@ -180,8 +187,20 @@ async function selectGoalAction(action: 'pause' | 'resume' | 'abort'): Promise<v
 }
 
 async function openMenu(kind: 'answer' | 'goal'): Promise<void> {
+  await session!.ready;
+  await session!.refresh();
   await vi.waitFor(() => expect(app!.lastFrame()).not.toMatch(/処理中|Working/u));
   app!.stdin.write(kind === 'answer' ? '\x12' : '\x07');
+}
+
+async function remount(lang: 'ja' | 'en'): Promise<void> {
+  const options = session!.options;
+  await session!.dispose();
+  session = new ManagerServiceClient(options);
+  await session.ready;
+  app = render(createElement(ManagerView, { cwd, lang, client: session,
+    assignment: { kind: 'repository', repositoryDirectory: cwd, repositoryDirectories: [cwd] },
+    initialDiagnostics: [], onExit: vi.fn() }));
 }
 
 function confirmAbort(): void {
@@ -195,7 +214,7 @@ it.each(['choice', 'free text'] as const)('persists only the selected inquiry th
   const saved: Goal = { ...goalRecord(), objective: 'Shared goal name', questions: [pending] };
   const { store, call } = await mountGoalControls('en', saved);
   const other = await store.create({ ...saved, id: '550e8400-e29b-41d4-a716-446655440001' });
-  const candidates = (await readManagerDisplayEvents(cwd, 'en')).questions;
+  const candidates = (await readManagerTestDisplay(cwd, 'en')).questions;
   const selected = candidates[1]!;
   if (selected.goalId === null) throw new Error('Expected a goal inquiry');
   const untouched = await store.get(selected.goalId === saved.id ? other.id : saved.id);
@@ -229,7 +248,7 @@ it.each(['multiline', 'wrapped'] as const)('scrolls a %s inquiry and returns to 
   const { store, call } = await mountGoalControls('en', goal);
   vi.spyOn(app!.stdout, 'columns', 'get').mockReturnValue(40);
   app!.stdout.emit('resize');
-  const answer = vi.spyOn(session!, 'answerQuestion');
+  const answer = spyConversationCommand(session!, 'answer_question');
   const file = join(cwd, '.takt', 'goals', goal.id, 'goal.json');
   const before = readFileSync(file, 'utf8');
   const saved = await store.get(goal.id);
@@ -268,7 +287,7 @@ it('updates an open inquiry on terminal resize and uses the new scroll bounds wi
   const saved = await store.get(goal.id);
   const columns = vi.spyOn(app!.stdout, 'columns', 'get').mockReturnValue(82);
   app!.stdout.emit('resize');
-  const answer = vi.spyOn(session!, 'answerQuestion');
+  const answer = spyConversationCommand(session!, 'answer_question');
   const bodyRows = (): string[] | undefined => app!.lastFrame()!.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu)
     ?.find((box) => box.includes(getLabel('manager.answerPrompt', 'en')))
     ?.split('\n').slice(1, -2).map((row) => row.slice(1, -1).trimEnd());
@@ -314,12 +333,13 @@ it.each(['enter', 'escape'] as const)('blocks inquiry entry during registration 
   await vi.waitFor(() => expect(app!.lastFrame()).toContain('Summary to register'));
   let finish!: () => void;
   const registration = new Promise<void>((resolve) => { finish = resolve; });
-  const approval = vi.spyOn(session!, 'approveSummary').mockImplementation(async (revision) => {
+  const approval = spyConversationCommand(session!, 'approve_summary').mockImplementation(async (command) => {
     await registration;
-    session!.dismissSummary(revision);
+    if (command.kind !== 'approve_summary') throw new Error('Expected approval');
+    await session!.submit({ kind: 'dismiss_summary', revision: command.revision });
     return { kind: 'reply', message: 'Registration finished' };
   });
-  const answer = vi.spyOn(session!, 'answerQuestion');
+  const answer = spyConversationCommand(session!, 'answer_question');
   try {
     app!.stdin.write('\x0f');
     await vi.waitFor(() => expect(approval).toHaveBeenCalledOnce());
@@ -348,7 +368,8 @@ it.each(['enter', 'escape'] as const)('blocks inquiry entry during registration 
       await vi.waitFor(async () => expect((await store.get(goal.id)).questions![0]).toMatchObject({
         status: 'answered', answer: { text: 'CSVで保存', source: 'tui' },
       }));
-      expect(answer).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ goalId: goal.id, questionId: question.id, answer: { text: 'CSVで保存' } }));
+      expect(answer).toHaveBeenCalledExactlyOnceWith({ kind: 'answer_question', target: { goalId: goal.id, repositoryDirectory: cwd },
+        questionId: question.id, answer: { text: 'CSVで保存' } });
     } else {
       expect(saved.questions).toEqual(beforeAnswer.questions);
       expect(answer).not.toHaveBeenCalled();
@@ -476,13 +497,12 @@ it.each([
     },
   };
   const { store, call } = await mountGoalControls(lang, saved);
-  const abort = vi.spyOn(session!, 'abortGoal');
+  const abort = vi.spyOn(session!, 'submit');
   const runner = new TaskRunner(cwd);
   runner.addTask('preserve pending work', { goal_id: saved.id });
   const before = new TaskStore(cwd).read();
-  expect(await session!.abortGoal({ goalId: saved.id })).toMatchObject({
-    kind: 'error', message: expect.stringMatching(/completed/iu),
-  });
+  expect(await session!.submit({ kind: 'abort_goal', goalId: saved.id })).toMatchObject({ kind: 'accepted' });
+  await vi.waitFor(() => expect(session!.results.at(-1)).toMatchObject({ kind: 'error', code: 'operation_failed' }));
   expect(await store.get(saved.id)).toEqual(saved);
   expect(new TaskStore(cwd).read()).toEqual(before);
   abort.mockClear();
@@ -524,7 +544,7 @@ it.each([
   await vi.waitFor(() => expect(app!.lastFrame()).toMatch(/(?:対象|ゴール).*(?:ありません|なし)|no.*(?:goals|targets)/iu));
   expect((await store.get(saved.id)).executionStatus).toBe('aborted');
   app!.unmount();
-  app = render(createElement(ManagerView, { cwd, lang, session: session!, initialDiagnostics: [], onExit: vi.fn() }));
+  await remount(lang);
   await vi.waitFor(expectAbortedGoal);
 });
 
@@ -553,9 +573,9 @@ it.each([
   const { store, call, send } = await mountGoalControls('ja', saved);
   await send(text);
   await vi.waitFor(() => expect(call).toHaveBeenCalledOnce());
-  const [conversation, memory] = call.mock.calls[0]![0].split('\n\nGoal memory (including run manager results): ');
+  const [conversation, context] = call.mock.calls[0]![0].split('\n\nBusiness context (not approval): ');
   expect(conversation).toBe(text);
-  expectGoalMemory(memory!, saved);
+  expectGoalMemory(JSON.stringify(JSON.parse(context!).goals), saved);
   expect(await store.get(saved.id)).toEqual(saved);
   expect(app!.lastFrame()!.replace(/\s+/gu, ' ')).not.toMatch(irreversibleWarning);
 });
@@ -637,12 +657,12 @@ it.each(['retry', 'cancel', 'escape'] as const)('handles failed pending invalida
   await openMenu('goal');
   await selectGoal(saved, 'abort');
   await expectAbortConfirmation(saved);
-  const abort = vi.spyOn(session!, 'abortGoal');
+  const abort = vi.spyOn(session!, 'submit');
   const failUpdate = (): never => { throw new Error('Pending write unavailable'); };
   const update = vi.spyOn(TaskStore.prototype, 'update').mockImplementationOnce(failUpdate);
   confirmAbort();
   await vi.waitFor(async () => expect((await store.get(saved.id)).executionStatus).toBe('aborted'));
-  await vi.waitFor(() => expect(app!.lastFrame()).toContain('Pending write unavailable'));
+  await vi.waitFor(() => expect(app!.lastFrame()).toContain(getLabel('manager.conversation.operation_failed', 'en')));
   await vi.waitFor(() => {
     expect(app!.lastFrame()).toContain(getLabel('manager.retryAbort', 'en'));
     expect(app!.lastFrame()).not.toContain('Working');
@@ -659,13 +679,13 @@ it.each(['retry', 'cancel', 'escape'] as const)('handles failed pending invalida
     expect(call).not.toHaveBeenCalled();
     return;
   }
-  const errorCount = app!.lastFrame()?.match(/Pending write unavailable/gu)?.length ?? 0;
+  const errorCount = app!.lastFrame()?.match(/The conversation operation failed/gu)?.length ?? 0;
   const retryUpdate = vi.spyOn(TaskStore.prototype, 'update').mockImplementationOnce(failUpdate);
   confirmAbort();
   await vi.waitFor(() => {
     expect(abort).toHaveBeenCalledTimes(2);
     expect(retryUpdate).toHaveBeenCalledOnce();
-    expect(app!.lastFrame()?.match(/Pending write unavailable/gu)?.length).toBeGreaterThan(errorCount);
+    expect(app!.lastFrame()?.match(/The conversation operation failed/gu)?.length).toBeGreaterThan(errorCount);
     expect(app!.lastFrame()).toContain(getLabel('manager.retryAbort', 'en'));
     expect(app!.lastFrame()).not.toContain('Working');
   });
@@ -677,7 +697,7 @@ it.each(['retry', 'cancel', 'escape'] as const)('handles failed pending invalida
   expect(runner.claimNextTasks(1)).toEqual([]);
   expect((await store.get(saved.id)).executionStatus).toBe('aborted');
   await vi.waitFor(() => expect(app!.lastFrame()).not.toContain(getLabel('manager.retryAbort', 'en')));
-  expect(abort.mock.calls.map(([options]) => options.goalId)).toEqual([saved.id, saved.id, saved.id]);
+  expect(abort.mock.calls.map(([command]) => 'goalId' in command ? command.goalId : null)).toEqual([saved.id, saved.id, saved.id]);
   expect(call).not.toHaveBeenCalled();
 });
 
@@ -789,9 +809,9 @@ it.each([
   const text = prefix.includes('GOAL') ? prefix.replace('GOAL', goalId) : `${prefix} ${goalId}`;
   await send(text);
   await vi.waitFor(() => expect(call).toHaveBeenCalledOnce());
-  const [conversation, memory] = call.mock.calls[0]![0].split('\n\nGoal memory (including run manager results): ');
+  const [conversation, context] = call.mock.calls[0]![0].split('\n\nBusiness context (not approval): ');
   expect(conversation).toBe(text);
-  expectGoalMemory(memory!, saved);
+  expectGoalMemory(JSON.stringify(JSON.parse(context!).goals), saved);
   expect(await store.get(goalId)).toEqual(saved);
 });
 
@@ -808,14 +828,14 @@ it('shows compact pending questions and an ID-free answer hint when notification
   expect(saved.questions).toEqual(expect.arrayContaining([
     expect.objectContaining({ id: added.questionId, ...input, status: 'pending' }),
   ]));
-  session = createManagerConversationSession({
+  session = new ManagerServiceClient({
     cwd,
     plan: {
       ctx: { providerType: 'mock', model: undefined, lang: 'ja', provider: new MockProvider() },
       strategy: { systemPrompt: 'manager fixture' },
     },
   });
-  app = render(createElement(ManagerView, { cwd, lang: 'ja', session, initialDiagnostics: [], onExit: vi.fn() }));
+  app = render(createElement(ManagerView, { cwd, lang: 'ja', client: session, assignment: { kind: 'repository', repositoryDirectory: cwd, repositoryDirectories: [cwd] }, initialDiagnostics: [], onExit: vi.fn() }));
   await openMenu('answer');
   await vi.waitFor(() => {
     const frame = app!.lastFrame()!;
@@ -831,11 +851,10 @@ it('shows compact pending questions and an ID-free answer hint when notification
   });
   app.unmount();
   await store.update(goalId, (goal) => withdrawGoalQuestion(goal, added.questionId));
-  const display = await readManagerDisplayEvents(cwd);
+  const display = await readManagerTestDisplay(cwd);
   expect(display.events).toEqual([]);
-  expect(display.diagnostics).toEqual([]);
   expect(display.questions.map(({ question }) => question.id)).toEqual([remaining.questionId]);
-  app = render(createElement(ManagerView, { cwd, lang: 'ja', session, initialDiagnostics: [], onExit: vi.fn() }));
+  await remount('ja');
   await openMenu('answer');
   await vi.waitFor(() => {
     const frame = app!.lastFrame();
@@ -867,10 +886,10 @@ it.each(['startup', 'polling'] as const)('hides default question notifications o
     const saved = await store.get(goalId);
     expect(saved.questions![0]).toMatchObject(input);
     expect(saved.notifications).toEqual([expect.objectContaining({ kind: 'question' })]);
-    const display = await readManagerDisplayEvents(cwd, 'ja');
+    const display = await readManagerTestDisplay(cwd, 'ja');
     expect(display.questions).toHaveLength(1);
     expect(display.events).toEqual([]);
-    if (phase === 'startup') app = render(createElement(ManagerView, { cwd, lang: 'ja', session: session!, initialDiagnostics: [], onExit: vi.fn() }));
+    if (phase === 'startup') await remount('ja');
     await vi.waitFor(() => expect(app!.lastFrame()).toContain('未回答 1'));
     const transcript = (): string => app!.lastFrame()!.split(/進行中\s+\d/u)[0]!;
     for (const value of [input.body, ...input.options, input.recommendation]) expect(transcript()).not.toContain(value);
@@ -892,7 +911,7 @@ it.each(['startup', 'polling'] as const)('hides default question notifications o
       ...notification, kind: 'custom' as const, recordedAt: new Date(Date.now() + 1).toISOString(),
     })) };
     await store.update(goalId, () => custom);
-    const customDisplay = await readManagerDisplayEvents(cwd, 'ja');
+    const customDisplay = await readManagerTestDisplay(cwd, 'ja');
     expect(customDisplay.events).toHaveLength(1);
     for (const value of [input.body, ...input.options, input.recommendation]) expect(customDisplay.events[0]!.message).toContain(value);
     await vi.waitFor(() => {
@@ -915,15 +934,15 @@ it.each([true, false])('keeps human inquiries and custom notifications without p
   saved = appendGoalNotification(saved, { kind: 'custom', body: `${second.questionId}: 一般通知` }, policy);
   saved = appendGoalNotification(saved, { kind: 'question', body: `関連質問 ${second.questionId}: 本文中のID` }, policy);
   await new GoalStore(cwd).create(saved);
-  const display = await readManagerDisplayEvents(cwd);
+  const display = await readManagerTestDisplay(cwd);
   expect(display.questions.map(({ question }) => question.id).sort()).toEqual([human.questionId, second.questionId].sort());
   expect(display.events.map(({ id }) => JSON.parse(id)[2])).toEqual(saved.notifications!.filter(({ kind }) => kind !== 'question').map(({ id }) => id));
-  session = createManagerConversationSession({
+  session = new ManagerServiceClient({
     cwd,
     plan: { ctx: { providerType: 'mock', model: undefined, lang: 'ja', provider: new MockProvider() },
       strategy: { systemPrompt: 'manager fixture' } },
   });
-  app = render(createElement(ManagerView, { cwd, lang: 'ja', session, initialDiagnostics: [], onExit: vi.fn() }));
+  app = render(createElement(ManagerView, { cwd, lang: 'ja', client: session, assignment: { kind: 'repository', repositoryDirectory: cwd, repositoryDirectories: [cwd] }, initialDiagnostics: [], onExit: vi.fn() }));
   await openMenu('answer');
   await vi.waitFor(() => {
     const frame = app!.lastFrame()!;
@@ -940,7 +959,7 @@ it.each([true, false])('keeps human inquiries and custom notifications without p
 });
 
 it.each(['ja', 'en'] as const)('renders saved notification text in the %s TUI language with the project name and short goal reference', async (lang) => {
-  writeFileSync(join(cwd, '.takt', 'config.yaml'), `provider: mock\nlanguage: ${lang === 'ja' ? 'en' : 'ja'}\nmanager:\n  auto_run: false\n`);
+  writeFileSync(join(cwd, '.takt', 'config.yaml'), `provider: mock\nlanguage: ${lang}\nmanager:\n  auto_run: false\n`);
   invalidateResolvedConfigCache(cwd);
   const initial: Goal = { ...goalRecord(), objective: 'Customer export checks', notifications: [{
     id: '650e8400-e29b-41d4-a716-446655440001', kind: 'completed', body: 'Acceptance checks passed',
@@ -974,8 +993,7 @@ it.each([
     id: '650e8400-e29b-41d4-a716-446655440001', kind, body, recordedAt: '2026-10-08T00:00:00Z',
   }] };
   const { store, call, saved } = await mountNewNoticeControls(lang, initial);
-  const display = await readManagerDisplayEvents(cwd, lang);
-  expect(display.diagnostics).toEqual([]);
+  const display = await readManagerTestDisplay(cwd, lang);
   expect(display.events).toHaveLength(1);
   expect(display.events[0]!.id).toBe(JSON.stringify([saved.id, 'notification', saved.notifications![0]!.id]));
   expect(display.events[0]!.message.split('\n').slice(2, 5)).toEqual(body.split('\n').slice(0, 3));
@@ -1033,8 +1051,7 @@ it.each(['ja', 'en'] as const)('renders old saved merge instructions once in the
   }, notifications: [{ id: '650e8400-e29b-41d4-a716-446655440001', kind: 'awaiting_merge', body,
     recordedAt: '2026-10-08T00:00:00Z' }] };
   const { store, call, saved } = await mountNewNoticeControls(lang, initial);
-  const display = await readManagerDisplayEvents(cwd, lang);
-  expect(display.diagnostics).toEqual([]);
+  const display = await readManagerTestDisplay(cwd, lang);
   expect(display.events).toHaveLength(1);
   expect(display.events[0]!.message.split('\n').filter((line) => line.startsWith('git'))).toEqual(commands);
   await vi.waitFor(() => {
@@ -1073,10 +1090,10 @@ it.each(['ja', 'en'] as const)('reopens the %s TUI without withdrawn question de
     ...question, kind: 'question', status: 'withdrawn', withdrawnAt: expect.any(String),
   }]);
   expect(withdrawn.notifications).toEqual(saved.notifications);
-  const display = await readManagerDisplayEvents(cwd, lang);
+  const display = await readManagerTestDisplay(cwd, lang);
   expect(display.questions).toEqual([]);
   expect(display.events).toEqual([]);
-  app = render(createElement(ManagerView, { cwd, lang, session: session!, initialDiagnostics: [], onExit: vi.fn() }));
+  await remount(lang);
   await vi.waitFor(() => {
     const frame = app!.lastFrame()!;
     expect(frame).toContain(lang === 'ja' ? '未回答 0' : 'Pending 0');
@@ -1099,7 +1116,7 @@ it.each(['question', 'awaiting_merge', 'completed', 'progress', 'blocked', 'cust
     await new GoalStore(cwd).create(goal);
     writeFileSync(join(cwd, '.takt', 'config.yaml'), `provider: mock\nmanager:\n  auto_run: false\n  notifications:\n    ${kind}: false\n`);
     invalidateResolvedConfigCache(cwd);
-    const display = await readManagerDisplayEvents(cwd);
+    const display = await readManagerTestDisplay(cwd);
     expect(display.questions.map(({ question: saved }) => saved.id)).toEqual([question.questionId]);
     expect(display.events.map(({ id }) => JSON.parse(id)[2])).toEqual([
       goal.workLog[0]!.id, ...goal.notifications!.filter((notice) => notice.kind !== 'question' && notice.kind !== kind).map(({ id }) => id),

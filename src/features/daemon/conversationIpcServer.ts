@@ -210,7 +210,6 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
           case 'submit': {
             const result = await service.submit({ ...request.params, requestId: request.requestId });
             await response(result);
-            if (result.kind === 'error' && result.code === 'stale_summary') beginRead(await service.snapshot(request.params.attachmentId));
             break;
           }
           case 'snapshot': {

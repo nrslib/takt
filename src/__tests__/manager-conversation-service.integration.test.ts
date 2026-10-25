@@ -21,7 +21,8 @@ import { ClaudeTerminalProvider } from '../infra/providers/claude-terminal.js';
 import type { TaskState } from '../infra/task/types.js';
 import { GoalSchema } from '../infra/goals/schema.js';
 
-const doubles = vi.hoisted(() => ({ assignment: vi.fn(), register: vi.fn(), codexRun: vi.fn(), tmux: vi.fn(), transcript: vi.fn(), pasteInput: vi.fn(), taskItems: vi.fn<() => TaskState[]>() }));
+const doubles = vi.hoisted(() => ({ assignment: vi.fn(), register: vi.fn(), notification: vi.fn(), codexRun: vi.fn(), tmux: vi.fn(), transcript: vi.fn(), pasteInput: vi.fn(), taskItems: vi.fn<() => TaskState[]>() }));
+vi.mock('../features/manager/turnFailureNotification.js', () => ({ notifyManagerTurnFailure: doubles.notification }));
 vi.mock('../infra/managed-providers/loader.js', () => ({ loadManagedSdk: async () => ({
   directory: process.cwd(), modules: [await import('@openai/codex-sdk')], stale: false,
 }) }));
@@ -106,6 +107,7 @@ function saveGoal(id: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  doubles.notification.mockReset().mockResolvedValue(undefined);
   doubles.taskItems.mockReset().mockReturnValue([]);
   directory = getGlobalConfigDir();
   repository = join(directory, 'repository');
@@ -149,6 +151,67 @@ it('captures a complete snapshot state before later conversation updates', async
   expect(await state(await service.snapshot(opened.attachmentId))).toMatchObject({ revision: 5, pending: null, running: null });
 });
 
+it.each([false, true])('retains permission denials only for the next human turn, including provider failure=%s, without persisting them', async (failed) => {
+  const opened = await open();
+  execute.mockImplementationOnce(async (input) => {
+    input.onDenial?.('The destination needs human confirmation');
+    if (failed) throw new Error('Provider failed after permission denial');
+    return { message: 'Waiting', summary: null, sessionId: 'human-session', assignment: record.assignment };
+  });
+  await submit(opened.attachmentId, { kind: 'message', text: 'First human request' }); await finished();
+  await submit(opened.attachmentId, { kind: 'message', text: 'Review the refusal' }); await finished();
+  expect(execute.mock.calls[1]![0].prompt).toContain('The destination needs human confirmation');
+  expect(execute.mock.calls[1]![0].instruction).toBe('Review the refusal');
+  await submit(opened.attachmentId, { kind: 'message', text: 'Continue independently' }); await finished();
+  expect(execute.mock.calls[2]![0].prompt).not.toContain('The destination needs human confirmation');
+  expect(readFileSync(join(directory, 'conversations', `${record.id}.json`), 'utf8')).not.toContain('The destination needs human confirmation');
+});
+
+it('publishes the configured conversation failure notice from the daemon and still terminates the failed operation', async () => {
+  const failure = new Error('Provider refused this operation');
+  execute.mockRejectedValueOnce(failure);
+  doubles.notification.mockResolvedValueOnce('Blocked conversation notice');
+  const opened = await open();
+  await submit(opened.attachmentId, { kind: 'message', text: 'Please continue' }); await finished();
+  expect(doubles.notification).toHaveBeenCalledExactlyOnceWith(repository, undefined, failure);
+  expect(outputs).toContainEqual({ kind: 'notice', id: expect.any(String), message: 'Blocked conversation notice' });
+  expect(store.read(record.id, record.assignment)?.running).toBeNull();
+});
+
+it('includes saved run results in the fresh human business context and bounds large goal memory', async () => {
+  record.sessionId = null; store.write(record);
+  const workLog = Array.from({ length: 100 }, (_, recordIndex) => ({
+    id: '650e8400-e29b-41d4-a716-' + String(recordIndex).padStart(12, '0'),
+    recordedAt: '2026-10-14T00:00:00Z', summary: 'task-X result ' + recordIndex + '詳細'.repeat(20000),
+  }));
+  const goals = Array.from({ length: 100 }, (_, index) => ({ ...goalRecord(),
+    id: '550e8400-e29b-41d4-a716-' + String(index).padStart(12, '0'), objective: '目的'.repeat(30000),
+    workLog,
+  }));
+  vi.spyOn(GoalStore.prototype, 'iterate').mockImplementation(async function* () { yield* goals; });
+  const opened = await open();
+  await submit(opened.attachmentId, { kind: 'message', text: 'Review current work' }); await finished();
+  const context = JSON.parse(execute.mock.calls[0]![0].recovery!.context);
+  expect(Buffer.byteLength(JSON.stringify(context.goals))).toBeLessThanOrEqual(64 * 1024);
+  expect(context.goals.repositories[0]).toMatchObject({ repositoryDirectory: repository, goalCount: 100 });
+  expect(context.goals.repositories[0].goals.length).toBeGreaterThan(0);
+  expect(context.goals.repositories[0].goals.length).toBeLessThan(100);
+  expect(context.goals.repositories[0].goals[0]).toMatchObject({ workLogCount: 100,
+    references: { goal: join(repository, '.takt', 'goals', goals[0]!.id, 'goal.json') } });
+  expect(context.goals.repositories[0].goals[0].workLog).toHaveLength(3);
+  expect(execute.mock.calls[0]![0].recovery!.context).toContain('task-X result');
+  expect(execute.mock.calls[0]![0].recovery!.context).not.toContain(goals[0]!.objective);
+});
+
+it('preserves an unreadable goal-memory diagnostic instead of inventing an empty successful read', async () => {
+  vi.spyOn(GoalStore.prototype, 'iterate').mockImplementation(async function* () { throw new Error('Goal directory cannot be listed'); });
+  const opened = await open();
+  await submit(opened.attachmentId, { kind: 'message', text: 'Review current work' }); await finished();
+  expect(execute.mock.calls[0]![0].recovery!.context).toContain('Goal directory cannot be listed');
+  expect(execute.mock.calls[0]![0].recovery!.context).toContain('diagnostics');
+  expect(outputs.at(-1)).toMatchObject({ kind: 'result', result: { kind: 'reply' } });
+});
+
 it('saves metadata and an unapproved summary without utterances, replies or a reserved goal ID', async () => {
   execute.mockResolvedValueOnce({ message: '返事の本文シマウマ', summary: { ...record.pending!.summary, repositoryDirectory: repository },
     sessionId: 'new-session', assignment: record.assignment });
@@ -170,6 +233,35 @@ it('rejects an old revision after a newer message without goal registration', as
   await submit(opened.attachmentId, { kind: 'message', text: 'revise the proposal' });
   await finished();
   expect(await submit(opened.attachmentId, { kind: 'approve_summary', revision: 4 })).toMatchObject({ kind: 'error', code: 'stale_summary' });
+  expect(doubles.register).not.toHaveBeenCalled();
+});
+
+it.each([7, 9])('registers all %i large constraints under the same reserved ID and returns that registration on repeated approval', async (count) => {
+  record.pending!.summary = { ...record.pending!.summary, startBranch: 'main', integrationBranch: 'release',
+    outOfScope: ['CSV; 通知', 'CSV","通知', 'CSV', 'CSV'],
+    constraints: Array.from({ length: count }, (_, index) => String(index).padEnd(128 * 1024, 'a')) };
+  store.write(record);
+  const opened = await open();
+  await submit(opened.attachmentId, { kind: 'approve_summary', revision: 4 }); await finished();
+  const reservation = store.read(record.id, record.assignment)!.approval!;
+  expect(doubles.register).toHaveBeenCalledExactlyOnceWith({ ...record.pending!.summary, cwd: repository, id: reservation.goalId }, expect.any(AbortSignal));
+  expect(new GoalStore(repository).find(reservation.goalId)).toMatchObject(record.pending!.summary);
+  await submit(opened.attachmentId, { kind: 'approve_summary', revision: 4 }); await finished();
+  expect(doubles.register).toHaveBeenCalledOnce();
+  expect(outputs.at(-1)).toMatchObject({ kind: 'result', result: { kind: 'goal_registered', goal: { id: reservation.goalId } } });
+});
+
+it('withdraws immediately and refuses an old withdrawal without clearing a newer proposal', async () => {
+  const opened = await open();
+  await submit(opened.attachmentId, { kind: 'dismiss_summary', revision: 4 }); await finished();
+  expect(store.read(record.id, record.assignment)?.pending).toBeNull();
+  expect(await submit(opened.attachmentId, { kind: 'approve_summary', revision: 4 })).toMatchObject({ kind: 'error', code: 'stale_summary' });
+  execute.mockResolvedValueOnce({ message: 'New proposal', summary: { ...record.pending!.summary, repositoryDirectory: repository },
+    sessionId: 'human-session', assignment: record.assignment });
+  await submit(opened.attachmentId, { kind: 'message', text: 'Replace the proposal' }); await finished();
+  const latest = store.read(record.id, record.assignment)!.pending;
+  expect(await submit(opened.attachmentId, { kind: 'dismiss_summary', revision: 4 })).toMatchObject({ kind: 'error', code: 'stale_summary' });
+  expect(store.read(record.id, record.assignment)?.pending).toEqual(latest);
   expect(doubles.register).not.toHaveBeenCalled();
 });
 
@@ -274,7 +366,14 @@ it('keeps an accepted operation running after detach and exposes its saved pendi
     const second = await open();
     const accepted = await submit(first.attachmentId, { kind: 'message', text: 'first' });
     await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
-    expect(await submit(second.attachmentId, { kind: 'message', text: 'rejected' })).toEqual({ kind: 'busy', operationId: 'operationId' in accepted ? accepted.operationId : '' });
+    const busyCommands: Parameters<typeof service.submit>[0]['command'][] = [
+      { kind: 'message', text: 'rejected' }, { kind: 'approve_summary', revision: 4 }, { kind: 'dismiss_summary', revision: 4 },
+      { kind: 'answer_question', target: { goalId: goalRecord().id, repositoryDirectory: repository },
+        questionId: '650e8400-e29b-41d4-a716-446655440001', answer: { text: 'CSV' } },
+      ...(['pause_goal', 'resume_goal', 'abort_goal'] as const).map((kind) => ({ kind, goalId: goalRecord().id })),
+    ];
+    for (const command of busyCommands) expect(await submit(second.attachmentId, command))
+      .toEqual({ kind: 'busy', operationId: 'operationId' in accepted ? accepted.operationId : '' });
     service.detach(first.attachmentId); service.detach(second.attachmentId);
     expect(execute.mock.calls[0]![0].abortSignal.aborted).toBe(false);
     expect(service.activeOperationCount).toBe(1);
@@ -283,6 +382,7 @@ it('keeps an accepted operation running after detach and exposes its saved pendi
     const reopened = await open();
     expect(await state(reopened.read)).toMatchObject({ conversationId: record.id, revision: 5, pending: { revision: 5, summary: record.pending!.summary }, running: null });
     expect(execute).toHaveBeenCalledOnce();
+    expect(doubles.register).not.toHaveBeenCalled();
   } finally {
     finish?.({ message: 'done', summary: null, sessionId: 'finished-session', assignment: record.assignment });
   }

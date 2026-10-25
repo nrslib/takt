@@ -1,19 +1,19 @@
 import { Box, Text } from 'ink';
 import type { ReactElement } from 'react';
 import { toDisplayText } from '../tui/displayText.js';
-import type { PendingManagerSummary } from './conversationSession.js';
+import type { PendingSummary } from '../../infra/conversations/schema.js';
 
 function toDisplayBullet(item: string): string {
   return `- ${toDisplayText(item).replace(/\n/g, '\n  ')}`;
 }
 
 export function ManagerSummaryDialog({ pending, approve, ja }: {
-  pending: PendingManagerSummary; approve: boolean; ja: boolean;
+  pending: PendingSummary; approve: boolean; ja: boolean;
 }): ReactElement {
   return (
     <Box borderStyle="round" flexDirection="column">
       <Text bold>{ja ? '登録する要約' : 'Summary to register'}</Text>
-      {pending.repositoryDirectory !== undefined && <Text>{toDisplayText(pending.repositoryDirectory)}</Text>}
+      <Text>{toDisplayText(pending.repositoryDirectory)}</Text>
       <Text>{toDisplayText(pending.summary.objective)}</Text>
       <Text>{`${ja ? '範囲外' : 'Out of scope'}:`}</Text>
       {pending.summary.outOfScope.map((item, index) => <Text key={index}>{toDisplayBullet(item)}</Text>)}
