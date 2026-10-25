@@ -5,6 +5,7 @@ import { ConversationActorSchema, ConversationAssignmentSchema, PortBindingSchem
 import { ConversationStore } from '../../infra/conversations/store.js';
 import type { DaemonOwner } from '../../infra/daemon/owner.js';
 import { GoalStore } from '../../infra/goals/store.js';
+import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
 import { registerReservedGoal } from '../../infra/goals/service.js';
 import { compareInquiries, iterateStandalonePendingInquiries, projectPendingGoalInquiries, type PendingInquiry } from '../../infra/goals/pending-inquiries.js';
 import { TaskRunner } from '../../infra/task/runner.js';
@@ -132,13 +133,14 @@ export function createConversationService(input: {
         const notices: ManagerDisplayNotice[] = [];
         const events: ManagerDisplayEvent[] = [];
         for (const repositoryDirectory of assignment.repositoryDirectories) {
+          const { notifications: policy } = resolveManagerConfig(repositoryDirectory);
           for await (const goal of new GoalStore(repositoryDirectory).iterate()) {
             yield { kind: 'goal', goal: { id: goal.id, objective: goal.objective, status: goal.status,
               executionStatus: goal.executionStatus, repositoryDirectory } };
             for (const inquiry of projectPendingGoalInquiries(goal, repositoryDirectory)) inquiries.push(inquiry);
-            for (const notice of projectManagerNotices(goal, repositoryDirectory, language)) notices.push(notice);
+            for (const notice of projectManagerNotices(goal, repositoryDirectory, language, policy)) notices.push(notice);
             for (const event of projectManagerDisplayEvents(goal, repositoryDirectory, language,
-              attachment.startupBoundaries.get(repositoryDirectory), attachment.startedAt)) events.push(event);
+              attachment.startupBoundaries.get(repositoryDirectory), attachment.startedAt, policy)) events.push(event);
           }
         }
         for await (const inquiry of iterateStandalonePendingInquiries(input.configDirectory, assignment)) inquiries.push(inquiry);

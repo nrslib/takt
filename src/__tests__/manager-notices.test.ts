@@ -1,6 +1,6 @@
 import { readManagerTestDisplay } from './helpers/manager-display-items.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { iterateManagerDisplayEvents } from '../features/manager/savedEvents.js';
+import { iterateManagerDisplayEvents, iterateManagerNotices } from '../features/manager/savedEvents.js';
 import { formatGoalNotification } from '../infra/goals/notifications.js';
 import type { Goal } from '../infra/goals/schema.js';
 import { getLabel } from '../shared/i18n/index.js';
@@ -30,6 +30,27 @@ beforeEach(() => {
   storage.list.mockResolvedValue({ goals: [], errors: [] });
   storage.config.mockReturnValue({ notifications: policy });
   storage.iterate.mockImplementation(async function* (directory) { yield* (await storage.list(directory)).goals; });
+});
+
+it.each(['events', 'notices'] as const)('resolves notification policy once per repository for multiple goals (%s)', async (kind) => {
+  const repositories = ['/first', '/second'];
+  const goals = [1, 2, 3].map((index) => ({ ...goalRecord(),
+    id: `550e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`, workLog: [],
+    notifications: [notice(index * 2), notice(index * 2 + 1, { kind: 'custom' })],
+  }));
+  storage.iterate.mockImplementation(async function* () { yield* goals; });
+  storage.config.mockImplementation((directory: string) => ({ notifications: { ...policy, custom: directory === '/first' } }));
+  const assignment = { kind: 'workspace' as const, workspaceId: 'fixture', name: 'Both', repositoryDirectories: repositories };
+  const source = kind === 'events'
+    ? iterateManagerDisplayEvents(assignment, 'en', new Map(), startedAt)
+    : iterateManagerNotices(assignment, 'en');
+  const ids = [];
+  for await (const item of source) ids.push(item.id);
+  const expected = repositories.flatMap((directory) => goals.flatMap((goal) => goal.notifications
+    .filter((notification) => notification.kind !== 'custom' || directory === '/first')
+    .map((notification) => kind === 'events' ? JSON.stringify([goal.id, 'notification', notification.id]) : notification.id)));
+  expect(ids.sort()).toEqual(expected.sort());
+  expect(storage.config.mock.calls).toEqual(repositories.map((directory) => [directory]));
 });
 
 it('projects sequential work logs and enabled notices with exact stable IDs and independent startup boundaries', async () => {

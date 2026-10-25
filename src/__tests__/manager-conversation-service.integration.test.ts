@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import * as privateFiles from '../shared/utils/private-file.js';
+import * as managerConfig from '../infra/config/managerConfig.js';
 import { createInquiry } from '../infra/goals/inquiry.js';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -733,11 +734,14 @@ it.each([1, 4])('reads each goal once per snapshot with %i inquiries and notices
   }));
   for (const goal of goals) await new GoalStore(repository).create(goal);
   const reads = vi.spyOn(privateFiles, 'readPrivateFileState');
+  const config = vi.spyOn(managerConfig, 'resolveManagerConfig');
   const opened = await open();
   for (const read of [opened.read, await service.snapshot(opened.attachmentId)]) {
     reads.mockClear();
+    config.mockClear();
     const items: SnapshotItem[] = [];
     for await (const item of read.items) items.push(item);
+    expect(config).toHaveBeenCalledExactlyOnceWith(repository);
     expect(reads.mock.calls.map(([path]) => path).filter((path) => basename(path) === 'goal.json').sort())
       .toEqual(goals.map((goal) => join(repository, '.takt', 'goals', goal.id, 'goal.json')).sort());
     expect(items.flatMap((item) => item.kind === 'goal' ? [item.goal.id] : [])).toEqual(goals.map((goal) => goal.id));

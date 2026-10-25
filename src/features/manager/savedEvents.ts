@@ -7,6 +7,8 @@ import type { Goal } from '../../infra/goals/schema.js';
 import type { ManagerAssignment } from './startupResolution.js';
 import { formatPatrolSummary } from './goalDisplay.js';
 
+type ManagerNotificationPolicy = Readonly<ReturnType<typeof resolveManagerConfig>['notifications']>;
+
 export type ManagerDisplayGoal = Pick<Goal, 'id' | 'objective' | 'status' | 'executionStatus'>;
 export interface ManagerDisplayNotice {
   id: string;
@@ -26,9 +28,8 @@ export interface ManagerDisplayEvent {
 }
 
 export function* projectManagerDisplayEvents(goal: Goal, directory: string, language: Language,
-  startupBoundary: number | undefined, notificationStartedAt: number): Generator<ManagerDisplayEvent> {
+  startupBoundary: number | undefined, notificationStartedAt: number, policy: ManagerNotificationPolicy): Generator<ManagerDisplayEvent> {
   const project = basename(directory);
-  const { notifications: policy } = resolveManagerConfig(directory);
   for (const record of goal.workLog) {
     yield { id: JSON.stringify([goal.id, 'work-log', record.id]),
       message: `${goal.id}: ${record.kind === 'patrol' ? formatPatrolSummary(record.summary) : record.summary}`,
@@ -42,9 +43,9 @@ export function* projectManagerDisplayEvents(goal: Goal, directory: string, lang
   }
 }
 
-export function* projectManagerNotices(goal: Goal, directory: string, language: Language): Generator<ManagerDisplayNotice> {
+export function* projectManagerNotices(goal: Goal, directory: string, language: Language,
+  policy: ManagerNotificationPolicy): Generator<ManagerDisplayNotice> {
   const project = basename(directory);
-  const { notifications: policy } = resolveManagerConfig(directory);
   for (const notification of goal.notifications ?? []) {
     if (notification.kind === 'question' || !policy[notification.kind]) continue;
     yield { id: notification.id, repositoryDirectory: directory, project, goalId: goal.id,
@@ -61,8 +62,9 @@ export function compareManagerNotices(left: ManagerDisplayNotice, right: Manager
 export async function* iterateManagerDisplayEvents(assignment: ManagerAssignment, language: Language,
   startupBoundaries: ReadonlyMap<string, number>, notificationStartedAt: number): AsyncGenerator<ManagerDisplayEvent> {
   for (const directory of assignment.repositoryDirectories) {
+    const { notifications: policy } = resolveManagerConfig(directory);
     for await (const goal of new GoalStore(directory).iterate()) {
-      yield* projectManagerDisplayEvents(goal, directory, language, startupBoundaries.get(directory), notificationStartedAt);
+      yield* projectManagerDisplayEvents(goal, directory, language, startupBoundaries.get(directory), notificationStartedAt, policy);
     }
   }
 }
@@ -70,8 +72,9 @@ export async function* iterateManagerDisplayEvents(assignment: ManagerAssignment
 export async function* iterateManagerNotices(assignment: ManagerAssignment, language: Language): AsyncGenerator<ManagerDisplayNotice> {
   const notices: ManagerDisplayNotice[] = [];
   for (const directory of assignment.repositoryDirectories) {
+    const { notifications: policy } = resolveManagerConfig(directory);
     for await (const goal of new GoalStore(directory).iterate()) {
-      for (const notice of projectManagerNotices(goal, directory, language)) notices.push(notice);
+      for (const notice of projectManagerNotices(goal, directory, language, policy)) notices.push(notice);
     }
   }
   yield* notices.sort(compareManagerNotices);
