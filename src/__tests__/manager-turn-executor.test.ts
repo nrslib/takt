@@ -1,11 +1,12 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { createManagerTurnExecutor, type ManagerTurnInput } from '../features/manager/turnExecutor.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
+import type { StreamEvent } from '../shared/types/provider.js';
 import { makeProvider } from './test-helpers.js';
 import { diagnosticLoggingSuppressed, withoutDiagnosticLogging } from '../shared/utils/diagnostic-context.js';
 import * as mcpAdapters from '../infra/providers/mcp/index.js';
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
 function fixture() {
   const call = vi.fn<ProviderAgent['call']>();
@@ -19,6 +20,76 @@ function fixture() {
 }
 const success = { persona: 'manager', status: 'done' as const, content: '', timestamp: new Date(),
   structuredOutput: { message: 'reply', summary: null }, sessionId: 'fresh-session' };
+
+it('reports each provider stream event including tool results that cannot be parsed', async () => {
+  const { call, executor, input } = fixture();
+  const onProviderOutput = vi.fn();
+  const events: StreamEvent[] = [
+    { type: 'text', data: { text: 'working' } },
+    { type: 'thinking', data: { thinking: 'planning' } },
+    { type: 'tool_use', data: { id: 'add', tool: 'takt_add_workspace_repository', input: {} } },
+    { type: 'tool_result', data: { id: 'add', content: 'invalid JSON', isError: false } },
+    { type: 'tool_output', data: { tool: 'Bash', output: 'running' } },
+  ];
+  call.mockImplementationOnce(async (_prompt, options) => {
+    for (const [index, event] of events.entries()) {
+      options.onStream!(event);
+      expect(onProviderOutput).toHaveBeenCalledTimes(index + 1);
+    }
+    return success;
+  });
+  const turnInput = { ...input, onProviderOutput };
+  expect(await executor.execute(turnInput)).toMatchObject({ message: 'reply' });
+});
+
+it('reports provider output on both the initial call and the overflow retry', async () => {
+  const { call, executor, input } = fixture();
+  const onProviderOutput = vi.fn();
+  call.mockImplementationOnce(async (_prompt, options) => {
+    options.onStream!({ type: 'text', data: { text: 'first attempt' } });
+    throw new Error('Prompt is too long');
+  });
+  call.mockImplementationOnce(async (_prompt, options) => {
+    options.onStream!({ type: 'text', data: { text: 'second attempt' } });
+    return success;
+  });
+  const turnInput = { ...input, onProviderOutput };
+  expect(await executor.execute(turnInput)).toMatchObject({ message: 'reply' });
+  expect(onProviderOutput).toHaveBeenCalledTimes(2);
+});
+
+it('propagates cancellation to the provider without retrying the aborted turn', async () => {
+  const { call, executor, input } = fixture();
+  const controller = new AbortController();
+  let providerSignal: AbortSignal | undefined;
+  call.mockImplementationOnce((_prompt, options) => new Promise((_resolve, reject) => {
+    providerSignal = options.abortSignal;
+    options.abortSignal!.addEventListener('abort', () => reject(new Error('provider interrupted')), { once: true });
+  }));
+  const running = executor.execute({ ...input, abortSignal: controller.signal });
+  const observed = expect(running).rejects.toThrow('provider interrupted');
+  controller.abort();
+  await observed;
+  expect(providerSignal?.aborted).toBe(true);
+  expect(call).toHaveBeenCalledOnce();
+});
+
+it('allows callers without an output callback to complete after thirty minutes', async () => {
+  vi.useFakeTimers();
+  const { call, executor, input } = fixture();
+  let finish!: () => void;
+  call.mockImplementationOnce((_prompt, options) => new Promise((resolve) => {
+    options.onStream!({ type: 'text', data: { text: 'conversation output' } });
+    finish = () => resolve(success);
+  }));
+  const running = executor.execute(input);
+  try {
+    await vi.advanceTimersByTimeAsync(31 * 60 * 1000);
+    expect(call.mock.calls[0]![1].abortSignal?.aborted).toBe(false);
+    finish();
+    expect(await running).toMatchObject({ message: 'reply', sessionId: 'fresh-session' });
+  } finally { finish(); await running; }
+});
 
 it('invalidates a rejected resume before one fresh call and preserves its business context', async () => {
   const { call, executor, input, invalidateSession } = fixture();

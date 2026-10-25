@@ -18,7 +18,7 @@ import { notifyManagerTurnFailure } from './turnFailureNotification.js';
 import { isGoalPatrolDue } from './patrol.js';
 import { supportsManagerPermissionJudge } from './permissionJudgeSupport.js';
 
-const MANAGER_TURN_TIMEOUT_MS = 30 * 60 * 1000;
+const MANAGER_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
 export function createRunEventManager(cwd: string) {
   // Failed events remain in the inbox; polling does not retry them.
@@ -77,9 +77,9 @@ export function createRunEventManager(cwd: string) {
         }
         if (signal.aborted) return false;
         const timeout = new AbortController();
-        const timer = setTimeout(() => {
-          timeout.abort(new Error('Manager provider turn timed out after 30 minutes'));
-        }, MANAGER_TURN_TIMEOUT_MS);
+        let timer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
+          timeout.abort(new Error('Manager provider produced no output for 30 minutes'));
+        }, MANAGER_IDLE_TIMEOUT_MS);
         const turnSignal = AbortSignal.any([signal, timeout.signal]);
         try {
           const runner = await getExecutor(turnSignal);
@@ -98,6 +98,7 @@ export function createRunEventManager(cwd: string) {
               prompt, instruction: prompt, sessionId: undefined, abortSignal: turnSignal,
               assignment: { kind: 'repository', repositoryDirectory: cwd }, configDirectory: getGlobalConfigDir(),
               goal: { id: goal.id, repositoryDirectory: cwd, constraints: goal.constraints },
+              onProviderOutput: () => { if (!turnSignal.aborted) timer?.refresh(); },
             });
           } finally { await ensureManagerRun(cwd); }
           if (signal.aborted) return false;
@@ -113,6 +114,7 @@ export function createRunEventManager(cwd: string) {
           throw error;
         } finally {
           clearTimeout(timer);
+          timer = undefined;
         }
       }
       deleteManagerEvent(saved);

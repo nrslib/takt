@@ -28,6 +28,7 @@ export interface ManagerTurnInput {
   assignment: ManagerAssignmentIdentity | undefined;
   configDirectory: string;
   goal?: ManagerPermissionGoal;
+  onProviderOutput?: () => void;
   onNotification?: (message: string) => void;
   onDenial?: (reason: string) => void;
   recovery?: { context: string; invalidateSession(): Promise<void> };
@@ -79,6 +80,7 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
               mcpServers: servers, preparedMcp: prepared, callerManagedMcp: true,
               ...(onToolPermissionDecision === undefined ? {} : { onToolPermissionDecision }),
               onStream: (event) => {
+                input.onProviderOutput?.();
                 if (event.type === 'tool_result' || event.type === 'tool_output') usedTools = true;
                 if (event.type === 'tool_use') {
                   usedTools = true;
