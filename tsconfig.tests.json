@@ -111,6 +111,7 @@
     "src/__tests__/copilot-provider.test.ts",
     "src/__tests__/cursor-client.test.ts",
     "src/__tests__/cycle-detector.test.ts",
+    "src/__tests__/daemon-conversation-events.integration.test.ts",
     "src/__tests__/daemon-conversation-ipc.integration.test.ts",
     "src/__tests__/daemon-lifecycle.test.ts",
     "src/__tests__/daemon-run.test.ts",
