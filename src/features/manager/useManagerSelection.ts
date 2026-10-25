@@ -5,13 +5,14 @@ import type { PendingQuestion } from './inquiryAnswer.js';
 import { layoutQuestionBody } from './questionBodyLayout.js';
 
 type GoalOperation = 'pause' | 'resume' | 'abort';
-export type ManagerSelectionCommand = 'answer' | 'goal' | 'notice';
+export type ManagerSelectionCommand = 'answer' | 'goal' | 'notice' | 'repository';
 export const MANAGER_SELECTION_PAGE_SIZE = 10;
 const BODY_VIEW_ROWS = 8;
 export type ManagerSelection = { start: number } & (
   | { kind: 'answer'; candidates: readonly PendingQuestion[]; index: number }
   | { kind: 'goal'; candidates: readonly ManagerDisplayGoal[]; index: number }
   | { kind: 'notice'; candidates: readonly ManagerDisplayNotice[]; index: number; bodyOffset: number | null }
+  | { kind: 'repository'; candidates: readonly string[]; index: number }
   | { kind: 'action'; target: ManagerDisplayGoal; candidates: readonly GoalOperation[]; index: number });
 export type ManagerSelectedTarget =
   | { kind: 'answer'; target: PendingQuestion; onCancel: () => void }
@@ -31,6 +32,7 @@ export function useManagerSelection(bodyWidth: number) {
   };
   const open = (kind: ManagerSelectionCommand, snapshot: {
     questions: readonly PendingQuestion[]; goals: readonly ManagerDisplayGoal[]; notices: readonly ManagerDisplayNotice[];
+    repositoryDirectories: readonly string[];
   }): boolean => {
     if (kind === 'answer') {
       if (snapshot.questions.length === 0) { update(null); return false; }
@@ -38,6 +40,9 @@ export function useManagerSelection(bodyWidth: number) {
     } else if (kind === 'notice') {
       if (snapshot.notices.length === 0) { update(null); return false; }
       update({ kind, candidates: snapshot.notices, index: 0, start: 0, bodyOffset: null });
+    } else if (kind === 'repository') {
+      if (snapshot.repositoryDirectories.length === 0) { update(null); return false; }
+      update({ kind, candidates: snapshot.repositoryDirectories, index: 0, start: 0 });
     } else {
       const candidates = snapshot.goals.filter((goal) => isGoalSelectionCandidate('abort', goal));
       if (candidates.length === 0) { update(null); return false; }
@@ -64,6 +69,7 @@ export function useManagerSelection(bodyWidth: number) {
       const start = index < target.start ? index : Math.max(target.start, index - MANAGER_SELECTION_PAGE_SIZE + 1);
       update({ ...target, index, start });
     } else if (key.return) {
+      if (target.kind === 'repository') return;
       if (target.kind === 'notice') {
         update({ ...target, bodyOffset: 0 });
         return;

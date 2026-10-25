@@ -12,6 +12,7 @@ import { toDisplayText } from '../features/tui/displayText.js';
 import type { Goal } from '../infra/goals/schema.js';
 import { createGoal } from '../infra/goals/service.js';
 import { getLabel } from '../shared/i18n/index.js';
+import { measureWidth } from '../shared/utils/grapheme.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 
 const NOTICE_MENU = '\x0e';
@@ -26,6 +27,12 @@ const noticeDialog = (context: ReturnType<typeof mount>): string | undefined => 
   ?.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu)?.find((box) => /Esc/u.test(box) && /↑|↓/u.test(box));
 const noticeRows = (context: ReturnType<typeof mount>): string[] => noticeDialog(context)!.split('\n')
   .slice(2, -2).map((line) => stripVTControlCharacters(line).replace(/^│\s*|\s*│$/gu, ''));
+const inputHintRows = (context: ReturnType<typeof mount>): string[] => {
+  const rows = stripVTControlCharacters(context.app.lastFrame()!).split('\n');
+  const bottom = rows.map((line) => line.startsWith('╰')).lastIndexOf(true);
+  expect(bottom).toBeGreaterThanOrEqual(0);
+  return rows.slice(bottom + 1).map((line) => line.trimEnd()).filter((line) => line !== '');
+};
 
 describe('manager saved notice menu', () => {
   describe.each(['repository', 'workspace'] as const)('notices after adding a repository to a %s assignment', (kind) => {
@@ -50,7 +57,7 @@ describe('manager saved notice menu', () => {
       const context = mount('en', undefined, assignment);
       try {
         await waitFor(() => {
-          expect(context.app.lastFrame()).toContain(cwd);
+          expect(context.app.lastFrame()).toContain('manager-repository');
           expect(context.app.lastFrame()).not.toContain('Working');
         });
         expect(await context.session.getAssignment()).toEqual(assignment);
@@ -62,7 +69,9 @@ describe('manager saved notice menu', () => {
         });
         await typeAndSubmit(context, 'Add repository B');
         await waitFor(() => {
-          expect(context.app.lastFrame()).toContain('A + B (2)');
+          expect(context.app.lastFrame()!.split('\n')).toContain(getLabel('manager.assignmentHeadingMultiple', 'en', {
+            name: 'manager-repository', count: '1',
+          }));
           expect(context.app.lastFrame()).not.toContain('Working');
         });
         const heading = getLabel('manager.notificationHeadings.completed', 'en', { project: 'repository-b' });
@@ -85,36 +94,32 @@ describe('manager saved notice menu', () => {
     });
   });
 
-  it.each([0, 1])('retains the answer draft for an empty notice list and opens a nonempty list with %i notices', async (count) => {
+  it.each([0, 1])('[SCN-NOTICE-N2/P1] retains the answer draft for an empty notice list and opens a nonempty list with %i notices', async (count) => {
     vi.spyOn(Date, 'now').mockReturnValue(noticeStartedAt);
     memory.goals.mockReturnValue([{ ...goalRecord(), objective: 'Inquiry and notice',
       notifications: count === 0 ? [] : [noticeRecord(1)], questions: [{
         id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human', status: 'pending', body: 'Choose CSV or JSON',
       }] }]);
-    const context = mount();
-    const read = vi.spyOn(savedEvents, 'readManagerDisplayEvents');
+    const context = mount('ja');
     const answer = vi.spyOn(context.session, 'answerQuestion');
     try {
       await openMenu(context, 'answer');
       await enterSelection(context);
-      await waitFor(() => expect(promptFrame(context)).toContain('Enter your answer'));
+      await waitFor(() => expect(promptFrame(context)).toContain('回答を入力してください'));
       context.app.stdin.write('CSVで出力する');
       await waitFor(() => expect(promptFrame(context)).toContain('CSVで出力する'));
-      const beforeFrame = context.app.lastFrame();
-      const beforeRead = read.mock.calls.length;
       context.app.stdin.write(NOTICE_MENU);
-      await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(beforeRead));
-      await read.mock.results.at(-1)!.value;
       if (count === 0) {
-        const completed = read.mock.calls.length;
-        await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(completed));
-        await waitFor(() => expect(context.app.lastFrame()).toBe(beforeFrame));
+        await waitFor(() => expect(context.app.lastFrame()).toContain('知らせはありません。'));
+        expect(context.app.lastFrame()).toContain(getLabel('manager.answerPrompt', 'ja'));
+        expect(context.app.lastFrame()).toContain('Choose CSV or JSON');
         expect(promptFrame(context)).toContain('CSVで出力する');
         expect(selectionFrame(context)).toBeUndefined();
       } else {
-        await waitFor(() => expect(noticeDialog(context)).toContain(getLabel('manager.selectionTitles.notice', 'en')));
+        await waitFor(() => expect(noticeDialog(context)).toContain('読む知らせを選択'));
         expect(noticeRows(context)).toHaveLength(1);
         expect(noticeRows(context)[0]).toContain('Inquiry and notice');
+        expect(context.app.lastFrame()).not.toContain('知らせはありません。');
       }
       expect(answer).not.toHaveBeenCalled();
       expect(context.call).not.toHaveBeenCalled();
@@ -337,22 +342,47 @@ describe('manager saved notice menu', () => {
     } finally { context.app.unmount(); turn.resolve(response(null)); await context.session.close(); }
   });
 
-  it('leaves the normal screen unchanged when Ctrl+N refreshes an empty notice list', async () => {
-    const context = mount();
-    const read = vi.spyOn(savedEvents, 'readManagerDisplayEvents');
+  it.each([
+    ['ja', '知らせはありません。'],
+    ['en', 'No notices to read.'],
+  ] as const)('[SCN-NOTICE-N1/P2] shows the empty notice message in %s while retaining the unsent draft', async (lang, message) => {
+    const context = mount(lang);
     try {
-      await waitFor(() => expect(context.app.lastFrame()).not.toContain('Working'));
+      await waitFor(() => expect(context.app.lastFrame()).not.toContain(lang === 'ja' ? '処理中' : 'Working'));
       context.app.stdin.write('Unsent draft');
       await waitFor(() => expect(promptFrame(context)).toContain('Unsent draft'));
-      const frame = context.app.lastFrame();
-      const before = read.mock.calls.length;
       context.app.stdin.write(NOTICE_MENU);
-      await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(before));
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await waitFor(() => expect(context.app.lastFrame()).toContain(message));
       expect(noticeDialog(context)).toBeUndefined();
-      expect(context.app.lastFrame()).toBe(frame);
+      expect(promptFrame(context)).toContain('Unsent draft');
       expect(context.call).not.toHaveBeenCalled();
     } finally { context.app.unmount(); await context.session.close(); }
+  });
+
+  it('keeps the abort confirmation and selected choice when Ctrl+N finds no notices', async () => {
+    memory.goals.mockReturnValue([{ ...goalRecord(), objective: 'Abort fixture' }]);
+    const level = chalk.level;
+    chalk.level = 1;
+    const context = mount();
+    const abort = vi.spyOn(context.session, 'abortGoal').mockResolvedValue({ kind: 'reply', message: 'Goal aborted' });
+    const confirm = getLabel('manager.confirmAbort', 'en');
+    try {
+      await openMenu(context, 'goal');
+      await enterSelection(context);
+      await chooseGoalAction(context, 'abort');
+      await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.abortConfirmation', 'en')));
+      context.app.stdin.write(UP);
+      await waitFor(() => expect(context.app.lastFrame()).toContain(`\x1b[7m${confirm}\x1b[27m`));
+
+      context.app.stdin.write(NOTICE_MENU);
+      await waitFor(() => expect(context.app.lastFrame()).toContain('No notices to read.'));
+      expect(context.app.lastFrame()).toContain(getLabel('manager.abortConfirmation', 'en'));
+      expect(context.app.lastFrame()).toContain('Abort fixture');
+      expect(context.app.lastFrame()).toContain(`\x1b[7m${confirm}\x1b[27m`);
+      expect(selectionFrame(context)).toBeUndefined();
+      expect(abort).not.toHaveBeenCalled();
+      expect(context.call).not.toHaveBeenCalled();
+    } finally { context.app.unmount(); chalk.level = level; await context.session.close(); }
   });
 
   it('refreshes saved notices before opening Ctrl+N on the same screen', async () => {
@@ -407,16 +437,63 @@ describe('manager saved notice menu', () => {
     } finally { context.app.unmount(); await context.session.close(); }
   });
 
-  it.each(['ja', 'en'] as const)('shows all four menu keys on the counts line in %s', async (lang) => {
-    const context = mount(lang);
-    try {
-      await waitFor(() => {
-        const rows = context.app.lastFrame()!.split('\n').filter((line) => /\^R/u.test(line));
-        expect(rows).toHaveLength(1);
-        expect(rows[0]).toMatch(lang === 'ja' ? /\^R 問い合わせ.*\^G ゴール.*\^O 要約.*\^N 知らせ/u
-          : /\^R.*(?:inquir|question).*\^G.*goal.*\^O.*summary.*\^N.*(?:notice|notification)/iu);
-      });
-    } finally { context.app.unmount(); await context.session.close(); }
+  describe.each(['ja', 'en'] as const)('input hint wrapping in %s', (lang) => {
+    it.each([40, 80])('[SCN-HINT-P2/P3] keeps every item together below the input at width %i', async (width) => {
+      const context = mount(lang);
+      const columns = vi.spyOn(context.app.stdout, 'columns', 'get').mockReturnValue(width);
+      context.app.stdout.emit('resize');
+      const hint = getLabel('manager.inputHint', lang);
+      try {
+        await waitFor(() => {
+          const rows = inputHintRows(context);
+          expect(rows.length).toBeGreaterThan(1);
+          for (const item of hint.split('  ')) expect(rows.filter((row) => row.includes(item))).toHaveLength(1);
+          for (const row of rows) expect(measureWidth(row)).toBeLessThanOrEqual(width);
+          expect(context.app.lastFrame()!.split('\n')[1]).not.toMatch(/\^|Enter|Esc|Ctrl/u);
+        });
+        if (width === 80) {
+          columns.mockReturnValue(200);
+          context.app.stdout.emit('resize');
+          await waitFor(() => expect(inputHintRows(context)).toEqual([hint]));
+        }
+      } finally { context.app.unmount(); await context.session.close(); }
+    });
+
+    it.each([40, 80])('[HINT-SUMMARY] keeps every summary item together at width %i and preserves separators at width 200', async (width) => {
+      const context = mount(lang);
+      const columns = vi.spyOn(context.app.stdout, 'columns', 'get').mockReturnValue(width);
+      context.app.stdout.emit('resize');
+      const hint = getLabel('manager.summaryInputHint', lang);
+      try {
+        await send(context, 'CSV export', summaryA);
+        await waitFor(() => {
+          const rows = inputHintRows(context);
+          for (const item of hint.split(' / ')) expect(rows.filter((row) => row.includes(item))).toHaveLength(1);
+          for (const row of rows) expect(measureWidth(row)).toBeLessThanOrEqual(width);
+          if (width === 40) expect(rows.length).toBeGreaterThan(1);
+        });
+        columns.mockReturnValue(200);
+        context.app.stdout.emit('resize');
+        await waitFor(() => expect(inputHintRows(context)).toEqual([hint]));
+      } finally { context.app.unmount(); await context.session.close(); }
+    });
+
+    it.each([false, true])('[HINT-OVERSIZE] finishes rendering items wider than the screen with summary selection=%s', async (summary) => {
+      const context = mount(lang);
+      try {
+        if (summary) await send(context, 'CSV export', summaryA);
+        const hint = getLabel(summary ? 'manager.summaryInputHint' : 'manager.inputHint', lang);
+        const items = hint.split(summary ? ' / ' : '  ');
+        expect(items.some((item) => measureWidth(item) > 8)).toBe(true);
+        vi.spyOn(context.app.stdout, 'columns', 'get').mockReturnValue(8);
+        context.app.stdout.emit('resize');
+        await waitFor(() => {
+          const rows = inputHintRows(context);
+          expect(rows.length).toBeGreaterThan(1);
+          expect(rows.at(-1)).toContain(summary ? 'Ctrl+C' : items.at(-1)!);
+        });
+      } finally { context.app.unmount(); await context.session.close(); }
+    });
   });
 });
 
@@ -913,6 +990,94 @@ describe('manager TUI summary menu and conversation input', () => {
     } finally { context.app.unmount(); await context.session.close(); }
   });
 
+  it('keeps the answer target and unsent draft after opening and closing the repository list', async () => {
+    memory.goals.mockReturnValue([{ ...goalRecord(), objective: 'Answer fixture', questions: [{
+      id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human', status: 'pending', body: 'Choose CSV or JSON',
+    }] }]);
+    const context = mount();
+    try {
+      await openMenu(context, 'answer');
+      await enterSelection(context);
+      await waitFor(() => expect(promptFrame(context)).toContain('Enter your answer'));
+      context.app.stdin.write('CSV answer draft');
+      await waitFor(() => expect(promptFrame(context)).toContain('CSV answer draft'));
+
+      context.app.stdin.write('\x10');
+      await waitFor(() => {
+        expect(context.app.lastFrame()).toContain(getLabel('manager.selectionTitles.repository', 'en'));
+        expect(context.app.lastFrame()).toContain(cwd);
+        expect(context.app.lastFrame()).toContain(getLabel('manager.answerPrompt', 'en'));
+        expect(promptFrame(context)).toContain('CSV answer draft');
+      });
+      context.app.stdin.write('\x1b[27u');
+      await waitFor(() => {
+        expect(context.app.lastFrame()).not.toContain(getLabel('manager.selectionTitles.repository', 'en'));
+        expect(context.app.lastFrame()).toContain(getLabel('manager.answerPrompt', 'en'));
+        expect(promptFrame(context)).toContain('CSV answer draft');
+        expect(context.app.lastFrame()).toContain('Choose CSV or JSON');
+      });
+    } finally { context.app.unmount(); await context.session.close(); }
+  });
+
+  it('keeps the abort confirmation and selected choice after opening and closing the repository list', async () => {
+    memory.goals.mockReturnValue([{ ...goalRecord(), objective: 'Abort fixture' }]);
+    const context = mount();
+    const abort = vi.spyOn(context.session, 'abortGoal').mockResolvedValue({ kind: 'reply', message: 'Goal aborted' });
+    try {
+      await openMenu(context, 'goal');
+      await enterSelection(context);
+      await chooseGoalAction(context, 'abort');
+      await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.abortConfirmation', 'en')));
+      context.app.stdin.write(UP);
+
+      context.app.stdin.write('\x10');
+      await waitFor(() => {
+        expect(context.app.lastFrame()).toContain(getLabel('manager.selectionTitles.repository', 'en'));
+        expect(context.app.lastFrame()).toContain(cwd);
+        expect(context.app.lastFrame()).toContain(getLabel('manager.abortConfirmation', 'en'));
+      });
+      context.app.stdin.write('\x1b[27u');
+      await waitFor(() => {
+        expect(context.app.lastFrame()).not.toContain(getLabel('manager.selectionTitles.repository', 'en'));
+        expect(context.app.lastFrame()).toContain(getLabel('manager.abortConfirmation', 'en'));
+        expect(context.app.lastFrame()).toContain('Abort fixture');
+      });
+
+      context.app.stdin.write(ENTER);
+      await waitFor(() => expect(abort).toHaveBeenCalledOnce());
+    } finally { context.app.unmount(); await context.session.close(); }
+  });
+
+  it('keeps the abort confirmation when Ctrl+P finds no assigned repositories', async () => {
+    memory.goals.mockReturnValue([{ ...goalRecord(), objective: 'Abort fixture' }]);
+    const workspace = { id: '650e8400-e29b-41d4-a716-446655440003',
+      name: 'Empty assignment fixture', repositoryDirectories: [cwd] };
+    const assignment = { kind: 'workspace' as const, workspaceId: workspace.id, name: workspace.name,
+      repositoryDirectories: workspace.repositoryDirectories };
+    const readWorkspace = vi.spyOn(workspaceRegistry, 'readWorkspace').mockResolvedValue(workspace);
+    const context = mount('en', undefined, assignment);
+    const abort = vi.spyOn(context.session, 'abortGoal').mockResolvedValue({ kind: 'reply', message: 'Goal aborted' });
+    try {
+      await openMenu(context, 'goal');
+      await enterSelection(context);
+      await chooseGoalAction(context, 'abort');
+      await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.abortConfirmation', 'en')));
+      readWorkspace.mockResolvedValue({ ...workspace, repositoryDirectories: [] });
+      const emptyMessage = getLabel('manager.selectionEmpty.repository', 'en');
+      expect(stripVTControlCharacters(context.app.lastFrame()!).split('\n')).not.toContain(`● ${emptyMessage}`);
+
+      context.app.stdin.write('\x10');
+      await waitFor(() => {
+        const rows = stripVTControlCharacters(context.app.lastFrame()!).split('\n').map((row) => row.trimEnd());
+        expect(rows).toContain(emptyMessage);
+        expect(rows).toContain(`● ${emptyMessage}`);
+      });
+      expect(selectionFrame(context)).toBeUndefined();
+      expect(context.app.lastFrame()).toContain(getLabel('manager.abortConfirmation', 'en'));
+      expect(abort).not.toHaveBeenCalled();
+    } finally { context.app.unmount(); await context.session.close(); }
+  });
+
   it.each(['ja', 'en'] as const)('shows insufficient material in %s and accepts the next conversation', async (lang) => {
     const context = mount(lang);
     const structuredOutput = { message: lang === 'ja' ? '作業の目的を教えてください。' : 'Please describe the objective.', summary: null };
@@ -1068,7 +1233,7 @@ describe('manager TUI human approval', () => {
     const { app, call, register, session } = context;
     const structuredOutput = { message: `Quoted summary: ${JSON.stringify(summaryA)}`, summary: null };
     call.mockResolvedValueOnce({ ...response(summaryA), content: JSON.stringify(structuredOutput), structuredOutput });
-    await waitFor(() => expect(app.lastFrame()).toContain(cwd));
+    await waitFor(() => expect(app.lastFrame()).toContain('manager-repository'));
     app.stdin.write('要件を相談したい');
     await waitFor(() => expect(promptFrame(context)).toContain('要件を相談したい'));
     app.stdin.write(ENTER);
@@ -1088,17 +1253,41 @@ describe('manager TUI human approval', () => {
 
     await waitFor(() => {
       expect(app.lastFrame()).toMatch(/manager/iu);
-      expect(app.lastFrame()).toContain(cwd);
+      expect(app.lastFrame()!.split('\n')[0]).toMatch(/manager-repository/u);
       expect(app.lastFrame()).toMatch(/experimental/iu);
     });
     expect(call).not.toHaveBeenCalled();
     expect(register).not.toHaveBeenCalled();
   });
 
+  it('keeps Ctrl+A, Ctrl+E and Ctrl+K editing the conversation draft', async () => {
+    const context = mount('ja');
+    context.call.mockResolvedValue(response(null));
+    try {
+      context.app.stdin.write('あいう');
+      await waitFor(() => expect(promptFrame(context)).toContain('あいう'));
+      context.app.stdin.write('\x01');
+      context.app.stdin.write('前');
+      await waitFor(() => expect(promptFrame(context)).toContain('前あいう'));
+      context.app.stdin.write('\x05');
+      context.app.stdin.write('後');
+      await waitFor(() => expect(promptFrame(context)).toContain('前あいう後'));
+      context.app.stdin.write('\x01');
+      context.app.stdin.write('\x1b[C');
+      context.app.stdin.write('\x0b');
+      await waitFor(() => {
+        expect(promptFrame(context)).toContain('前');
+        expect(promptFrame(context)).not.toContain('あいう後');
+      });
+      context.app.stdin.write(ENTER);
+      await waitFor(() => expect(context.call).toHaveBeenCalledExactlyOnceWith('前', expect.any(Object)));
+    } finally { context.app.unmount(); await context.session.close(); }
+  });
+
   it('continues conversation on the default confirmation choice without registering', async () => {
     const context = mount();
     const { app, register } = context;
-    await waitFor(() => expect(app.lastFrame()).toContain(cwd));
+    await waitFor(() => expect(app.lastFrame()).toContain('manager-repository'));
     await send(context, 'CSV出力を追加したい', summaryA);
 
     app.stdin.write(ENTER);
@@ -1111,7 +1300,7 @@ describe('manager TUI human approval', () => {
   it('approves the revised displayed summary only through the confirmation keys in the same mounted screen', async () => {
     const context = mount();
     const { app, call } = context;
-    await waitFor(() => expect(app.lastFrame()).toContain(cwd));
+    await waitFor(() => expect(app.lastFrame()).toContain('manager-repository'));
     await send(context, 'CSV出力を追加したい', summaryA);
     app.stdin.write(ENTER);
     call.mockResolvedValueOnce(response(summaryB));
@@ -1134,7 +1323,7 @@ describe('manager TUI human approval', () => {
           const summary = { objective: summaryA.objective, outOfScope: ['基準'], acceptanceCriteria: ['基準'], constraints: [], [field]: values, };
           const reply = response(summary);
           context.call.mockResolvedValueOnce({ ...reply, structuredOutput: format === 'content' ? undefined : reply.structuredOutput });
-          await waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
+          await waitFor(() => expect(context.app.lastFrame()).toContain('manager-repository'));
 
           await send(context, '要約を確認してください', summary);
 
@@ -1157,7 +1346,7 @@ describe('manager TUI human approval', () => {
           const summary = { ...summaryA, [field]: values };
           const reply = response(summary);
           context.call.mockResolvedValueOnce({ ...reply, structuredOutput: format === 'content' ? undefined : reply.structuredOutput });
-          await waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
+          await waitFor(() => expect(context.app.lastFrame()).toContain('manager-repository'));
 
           await send(context, '要約を確認してください', summary);
 
@@ -1175,7 +1364,7 @@ describe('manager TUI human approval', () => {
         const summary = { ...summaryA, outOfScope: [] };
         const reply = response(summary);
         context.call.mockResolvedValueOnce({ ...reply, structuredOutput: format === 'content' ? undefined : reply.structuredOutput });
-        await waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
+        await waitFor(() => expect(context.app.lastFrame()).toContain('manager-repository'));
 
         await send(context, '要約を確認してください', summary);
 
@@ -1188,7 +1377,7 @@ describe('manager TUI human approval', () => {
       const context = mount(lang);
       const summary = { ...summaryA, outOfScope: ['CSV\x1b[', '通知'], acceptanceCriteria: ['\x1b[31mCSVを取得できる\x1b[0m'] };
       vi.spyOn(context.session, 'getPendingSummary').mockReturnValue({ revision: 1, summary });
-      await waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
+      await waitFor(() => expect(context.app.lastFrame()).toContain('manager-repository'));
       context.app.stdin.write('要約を確認してください');
       await waitFor(() => expect(promptFrame(context)).toContain('要約を確認してください'));
       context.app.stdin.write(ENTER);

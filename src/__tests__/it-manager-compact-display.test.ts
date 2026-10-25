@@ -1,12 +1,13 @@
 import { cleanup, render } from 'ink-testing-library';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { createElement } from 'react';
 import stringWidth from 'string-width';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ManagerView } from '../features/manager/ManagerView.js';
 import type { ManagerConversationSession } from '../features/manager/conversationSession.js';
+import type { ManagerAssignment } from '../features/manager/startupResolution.js';
 import * as savedEvents from '../features/manager/savedEvents.js';
 import { PromptInput } from '../features/tui/PromptInput.js';
 import { TranscriptView } from '../features/tui/TranscriptEntryView.js';
@@ -79,19 +80,19 @@ describe('manager polling and answer cancellation', () => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
-  function mount(lang: 'ja' | 'en') {
+  function mount(lang: 'ja' | 'en', assignment?: ManagerAssignment, initialDiagnostics: readonly string[] = ['会話ログの目印']) {
     const unused = async (): Promise<never> => { throw new Error('Unexpected manager operation'); };
     const answerQuestion = vi.fn<ManagerConversationSession['answerQuestion']>(unused);
     const pauseGoal = vi.fn<ManagerConversationSession['pauseGoal']>(unused);
     const resumeGoal = vi.fn<ManagerConversationSession['resumeGoal']>(unused);
     const abortGoal = vi.fn<ManagerConversationSession['abortGoal']>(unused);
     const session: ManagerConversationSession = {
-      getAssignment: async () => undefined, getPendingSummary: () => null, resetConversation: () => {},
+      getAssignment: async () => assignment, getPendingSummary: () => null, resetConversation: () => {},
       dismissSummary: () => {}, handleUserMessage: unused, approveSummary: unused, answerQuestion,
       pauseGoal, resumeGoal, abortGoal, close: async () => {},
     };
     const read = vi.spyOn(savedEvents, 'readManagerDisplayEvents');
-    app = render(createElement(ManagerView, { cwd, lang, session, initialDiagnostics: ['会話ログの目印'], onExit: vi.fn() }));
+    app = render(createElement(ManagerView, { cwd, lang, session, assignment, initialDiagnostics, onExit: vi.fn() }));
     return { answerQuestion, pauseGoal, resumeGoal, abortGoal, read };
   }
 
@@ -285,35 +286,225 @@ describe('manager polling and answer cancellation', () => {
 
   const countLine = (lang: 'ja' | 'en'): string => {
     const rows = app!.lastFrame()!.split('\n')
-      .filter((row) => (lang === 'ja' ? /進行中/u : /in progress|ongoing|active/iu).test(row) && /\^R/u.test(row));
+      .filter((row) => (lang === 'ja' ? /^進行中/u : /^(?:in progress|ongoing|active)/iu).test(row));
     expect(rows).toHaveLength(1);
     return rows[0]!;
   };
 
-  it.each(['ja', 'en'] as const)('shows two ongoing goals and four inquiries with all menu keys on one line in %s', async (lang) => {
+  it.each(['ja', 'en'] as const)('shows two ongoing goals and four inquiries on the second line without key guidance in %s', async (lang) => {
     await store.create({ ...goalRecord(), questions: [question({}), question({ id: nextQuestionId })] });
     await store.create({ ...goalRecord(), id: randomUUID(), executionStatus: 'paused',
       questions: [question({ id: randomUUID() })] });
     await new StandaloneInquiryStore(getGlobalConfigDir(), { kind: 'repository', repositoryDirectory: cwd })
       .create({ body: 'ゴールなしの問い合わせ' });
-    mount(lang);
+    mount(lang, undefined, []);
     await waitFor(() => {
       const line = countLine(lang);
       expect(line).toMatch(lang === 'ja' ? /進行中\s*2/u : /(?:in progress|ongoing|active)\s*:?\s*2/iu);
       expect(line).toMatch(lang === 'ja' ? /未回答\s*4/u : /(?:pending|unanswered)\s*:?\s*4/iu);
-      expect(line).toMatch(/\^R.*\^G.*\^O/u);
-      expect(line).toMatch(lang === 'ja' ? /問い合わせ.*ゴール.*要約/u : /inquir|question/iu);
-      if (lang === 'en') expect(line).toMatch(/goal.*summary/iu);
+      expect(app!.lastFrame()!.split('\n')[1]).toBe(line);
+      expect(line).not.toMatch(/\^|Enter|Esc|Ctrl/u);
     });
   });
 
-  it.each(['ja', 'en'] as const)('keeps the count and menu line visible when both counts are zero in %s', async (lang) => {
-    mount(lang);
+  it.each(['ja', 'en'] as const)('keeps zero counts on the second line without key guidance in %s', async (lang) => {
+    mount(lang, undefined, []);
     await waitFor(() => {
       expect(countLine(lang)).toMatch(lang === 'ja' ? /進行中\s*0.*未回答\s*0/u
         : /(?:in progress|ongoing|active)\s*:?\s*0.*(?:pending|unanswered)\s*:?\s*0/iu);
-      expect(countLine(lang)).toMatch(/\^R.*\^G.*\^O/u);
+      expect(app!.lastFrame()!.split('\n')[1]).toBe(countLine(lang));
+      expect(countLine(lang)).not.toMatch(/\^|Enter|Esc|Ctrl/u);
     });
+  });
+
+  it('shows the single repository heading and counts as the first two lines at width 80', async () => {
+    mount('ja', undefined, []);
+    vi.spyOn(app!.stdout, 'columns', 'get').mockReturnValue(80);
+    app!.stdout.emit('resize');
+    await waitFor(() => {
+      const rows = app!.lastFrame()!.split('\n');
+      expect(rows.slice(0, 2)).toEqual([`担当: ${basename(cwd)}`, '進行中 0 ／ 未回答 0']);
+      expect(rows.join('')).not.toContain(cwd);
+      for (const row of rows) {
+        expect(row).not.toMatch(/^manager\s*—/u);
+      }
+    });
+  });
+
+  it('shows the repository name and remaining repository count instead of the workspace name', async () => {
+    const directories = [cwd, join(cwd, 'docs'), join(cwd, 'site')];
+    for (const directory of directories.slice(1)) mkdirSync(directory);
+    mount('ja', { kind: 'workspace', workspaceId: randomUUID(), name: '作業用workspace', repositoryDirectories: directories }, []);
+    await waitFor(() => {
+      expect(app!.lastFrame()!.split('\n')[0]).toBe(`担当: ${basename(cwd)} ほか 2 件`);
+    });
+  });
+
+  it.each([1, 3])('keeps short and long repository headings on one line for %i assigned repositories at width 80', async (count) => {
+    for (const name of ['開発-0-作業', `開発-0-${'作業'.repeat(30)}`]) {
+      const directories = [join(cwd, name), ...Array.from({ length: count - 1 }, (_, index) => join(cwd, `other-${index}`))];
+      for (const directory of directories) mkdirSync(directory, { recursive: true });
+      mount('ja', { kind: 'workspace', workspaceId: randomUUID(), name: '開発担当', repositoryDirectories: directories }, []);
+      vi.spyOn(app!.stdout, 'columns', 'get').mockReturnValue(80);
+      app!.stdout.emit('resize');
+      await waitFor(() => {
+        const rows = app!.lastFrame()!.split('\n');
+        expect(rows[0]).toMatch(/^担当: 開発-0-/u);
+        expect(stringWidth(rows[0]!)).toBeLessThanOrEqual(80);
+        if (count > 1) expect(rows[0]).toMatch(/ほか 2 件$/u);
+        if (name === '開発-0-作業') expect(rows[0]).toBe(`担当: ${name}${count > 1 ? ' ほか 2 件' : ''}`);
+        expect(rows[1]).toBe('進行中 0 ／ 未回答 0');
+      });
+      app!.unmount();
+    }
+  });
+
+  it.each(['ja', 'en'] as const)('shows an empty assignment instead of the working directory on initial render and refresh in %s', async (lang) => {
+    const assignment: ManagerAssignment = { kind: 'workspace', workspaceId: randomUUID(), name: '空のworkspace', repositoryDirectories: [] };
+    const { read } = mount(lang, assignment, []);
+    const checkHeading = () => {
+      const rows = app!.lastFrame()!.split('\n');
+      expect(rows[0]).toBe(getLabel('manager.selectionEmpty.repository', lang));
+      for (const value of [basename(cwd), assignment.workspaceId]) expect(rows[0]).not.toContain(value);
+      expect(rows[1]).toBe(getLabel('manager.counts', lang, { goals: '0', questions: '0' }));
+    };
+    checkHeading();
+    await waitFor(() => {
+      expect(read).toHaveBeenCalled();
+      expect(app!.lastFrame()).not.toContain(lang === 'ja' ? '処理中' : 'Working');
+      checkHeading();
+    });
+  });
+
+  describe.each([80, 40])('input guidance at width %i', (columns) => {
+    it('shows the complete Japanese key guidance below the input and keeps the notice above it', async () => {
+      mount('ja', undefined, []);
+      vi.spyOn(app!.stdout, 'columns', 'get').mockReturnValue(columns);
+      app!.stdout.emit('resize');
+      const expected = 'Enter 送信  Shift+Enter 改行  Esc 中断  ^R 問い合わせ  ^G ゴール  ^O 要約  ^N 知らせ  ^P 担当  ^C 終了';
+      await waitFor(() => {
+        const frame = app!.lastFrame()!;
+        const rows = frame.split('\n');
+        const promptEnd = rows.map((row) => row.startsWith('╰')).lastIndexOf(true);
+        expect(promptEnd).toBeGreaterThan(0);
+        const hintRows = rows.slice(promptEnd + 1).filter((row) => row.trim() !== '');
+        expect(hintRows.join('').replace(/\s+/gu, '')).toBe(expected.replace(/\s+/gu, ''));
+        expect(hintRows.length).toBeGreaterThan(1);
+        for (const row of rows) expect(stringWidth(row)).toBeLessThanOrEqual(columns);
+        expect(rows[1]).toBe('進行中 0 ／ 未回答 0');
+        const beforeInput = rows.slice(0, rows.map((row) => row.startsWith('╭')).lastIndexOf(true)).join('');
+        expect(beforeInput.replace(/\s+/gu, '')).toContain(getLabel('manager.experimentalNotice', 'ja').replace(/\s+/gu, ''));
+      });
+    });
+  });
+
+  it('shows an English assignment heading and all key guidance below the input at width 80', async () => {
+    mount('en', undefined, []);
+    vi.spyOn(app!.stdout, 'columns', 'get').mockReturnValue(80);
+    app!.stdout.emit('resize');
+    await waitFor(() => {
+      const rows = app!.lastFrame()!.split('\n');
+      expect(rows[0]).toMatch(/^[A-Za-z][^:]*: /u);
+      expect(rows[0]).toContain(basename(cwd));
+      const promptEnd = rows.map((row) => row.startsWith('╰')).lastIndexOf(true);
+      const hint = rows.slice(promptEnd + 1).join(' ');
+      expect(hint).toMatch(/Enter\s+Send.*Shift\+Enter\s+Newline.*Esc.*\^R.*\^G.*\^O.*\^N.*\^P.*\^C/iu);
+      expect(hint).toMatch(/\^P\s+(?:Assignment|Assigned|Repositories)/iu);
+      for (const row of [rows[0]!, ...rows.slice(promptEnd + 1)]) expect(row).not.toMatch(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u);
+      for (const row of rows) expect(stringWidth(row)).toBeLessThanOrEqual(80);
+    });
+  });
+
+  function repositoryAssignment(count: number): ManagerAssignment {
+    const directories = Array.from({ length: count }, (_, index) => join(cwd, `repository-${String(index + 1).padStart(2, '0')}`));
+    for (const directory of directories) mkdirSync(directory);
+    return { kind: 'workspace', workspaceId: randomUUID(), name: '担当リポジトリ', repositoryDirectories: directories };
+  }
+
+  const repositoryRows = (): string[] => boxes(app!.lastFrame()!).flatMap((box) => contentRows(box))
+    .filter((row) => /repository-\d{2}/u.test(row));
+
+  it.each(['ja', 'en'] as const)('opens assigned repositories with Ctrl+P as one name and path row per repository in %s', async (lang) => {
+    const assignment = repositoryAssignment(2);
+    mount(lang, assignment);
+    // 一時ディレクトリのパス全体が収まる幅で、行の内容を確認する。
+    vi.spyOn(app!.stdout, 'columns', 'get').mockReturnValue(200);
+    app!.stdout.emit('resize');
+    app!.stdin.write('\x10');
+    await waitFor(() => {
+      expect(repositoryRows()).toHaveLength(2);
+      for (const directory of assignment.repositoryDirectories) {
+        const row = repositoryRows().find((candidate) => candidate.includes(directory));
+        expect(row).toBeDefined();
+        expect(row!.replace(directory, '')).toContain(basename(directory));
+      }
+      const dialog = boxes(app!.lastFrame()!).find((box) => box.includes('repository-01'))!;
+      const instructions = contentRows(dialog)
+        .filter((row) => !assignment.repositoryDirectories.some((directory) => row.includes(directory)))
+        .join('\n');
+      expect(instructions).toMatch(/↑.*↓|↑↓/u);
+      expect(instructions).toContain('Esc');
+      expect(instructions).not.toMatch(/Enter|追加|削除|名前変更|\b(?:add|remove|rename)\b/iu);
+      if (lang === 'en') expect(dialog).not.toMatch(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u);
+    });
+  });
+
+  it('moves a ten-repository window down to the twelfth repository and back up', async () => {
+    mount('ja', repositoryAssignment(12));
+    app!.stdin.write('\x10');
+    await waitFor(() => {
+      expect(repositoryRows()).toHaveLength(10);
+      expect(repositoryRows()[0]).toContain('repository-01');
+      expect(repositoryRows().at(-1)).toContain('repository-10');
+    });
+    for (let move = 0; move < 11; move++) app!.stdin.write('\x1b[B');
+    await waitFor(() => {
+      expect(repositoryRows()).toHaveLength(10);
+      expect(repositoryRows()[0]).toContain('repository-03');
+      expect(repositoryRows().at(-1)).toContain('repository-12');
+    });
+    for (let move = 0; move < 11; move++) app!.stdin.write('\x1b[A');
+    await waitFor(() => {
+      expect(repositoryRows()).toHaveLength(10);
+      expect(repositoryRows()[0]).toContain('repository-01');
+      expect(repositoryRows().at(-1)).toContain('repository-10');
+    });
+  });
+
+  it('closes the repository list with Esc and keeps the same unsent Japanese draft', async () => {
+    const calls = mount('ja', repositoryAssignment(2));
+    app!.stdin.write('あいう');
+    await waitFor(() => {
+      expect(prompt().text).toBe('あいう');
+      expect(contentRows(boxes(app!.lastFrame()!).at(-1)).join('')).toContain('あいう');
+    });
+    app!.stdin.write('\x10');
+    await waitFor(() => {
+      expect(repositoryRows()).toHaveLength(2);
+      expect(prompt()).toMatchObject({ text: 'あいう', disabled: true });
+    });
+    app!.stdin.write('\x1b[27u');
+    await waitFor(() => {
+      expect(repositoryRows()).toHaveLength(0);
+      expect(prompt()).toMatchObject({ text: 'あいう', disabled: false, placeholder: 'ゴールを相談してください' });
+      expect(contentRows(boxes(app!.lastFrame()!).at(-1)).join('')).toContain('あいう');
+      expect(app!.lastFrame()).toContain('会話ログの目印');
+    });
+    for (const call of [calls.answerQuestion, calls.pauseGoal, calls.resumeGoal, calls.abortGoal]) expect(call).not.toHaveBeenCalled();
+  });
+
+  it('keeps the repository list read-only when Enter is pressed', async () => {
+    const assignment = repositoryAssignment(2);
+    const calls = mount('ja', assignment);
+    app!.stdin.write('\x10');
+    await waitFor(() => expect(repositoryRows()).toHaveLength(2));
+    app!.stdin.write('\r');
+    app!.stdin.write('\x1b[27u');
+    await waitFor(() => {
+      expect(repositoryRows()).toHaveLength(0);
+      expect(prompt().disabled).toBe(false);
+    });
+    for (const call of [calls.answerQuestion, calls.pauseGoal, calls.resumeGoal, calls.abortGoal]) expect(call).not.toHaveBeenCalled();
   });
 
   it.each(['ja', 'en'] as const)('replaces fixed goal and inquiry panels with counts and key guidance in %s', async (lang) => {
