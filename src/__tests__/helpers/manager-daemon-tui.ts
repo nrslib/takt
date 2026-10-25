@@ -14,7 +14,7 @@ const built = (path: string): string => pathToFileURL(join(process.cwd(), 'dist'
 const require = createRequire(import.meta.url);
 
 interface Observation {
-  event: 'write' | 'provider_start' | 'provider_complete' | 'request' | 'submit' | 'submit_result' | 'submit_error';
+  event: 'write' | 'provider_start' | 'provider_complete' | 'request' | 'response' | 'transfer' | 'submit' | 'submit_result' | 'submit_error';
   pid: number;
   conversationId?: string;
   revision?: number;
@@ -23,6 +23,10 @@ interface Observation {
   model?: string;
   summaryRequest?: boolean;
   method?: string;
+  requestId?: string;
+  transferId?: string;
+  frameKind?: string;
+  purpose?: 'snapshot' | 'output';
   command?: string;
   operationId?: string;
   connection?: 'connecting' | 'connected' | 'disconnected';
@@ -41,7 +45,7 @@ export interface ManagerTuiProcess {
   exit(): Promise<void>;
 }
 
-export function managerDaemonFixture(language: 'ja' | 'en') {
+export function managerDaemonFixture(language: 'ja' | 'en', replies?: readonly string[]) {
   const directory = getGlobalConfigDir();
   const repository = join(directory, 'team-a', 'takt3');
   const home = join(directory, 'home');
@@ -62,8 +66,10 @@ export function managerDaemonFixture(language: 'ja' | 'en') {
   const scenario = join(directory, 'scenario.json');
   const summary = { objective: 'Export CSV from the daemon', outOfScope: ['Remote upload'],
     acceptanceCriteria: ['CSV is available'], constraints: ['Keep the existing format'] };
-  writeFileSync(scenario, JSON.stringify(Array.from({ length: 8 }, () => ({ persona: 'manager', content: '',
-    structured_output: { message: 'The daemon completed this request.', summary: { ...summary, repositoryDirectory: repository } } }))));
+  const responses = replies === undefined
+    ? Array.from({ length: 8 }, () => ({ message: 'The daemon completed this request.', summary: { ...summary, repositoryDirectory: repository } }))
+    : replies.map((message) => ({ message, summary: null }));
+  writeFileSync(scenario, JSON.stringify(responses.map((structured_output) => ({ persona: 'manager', content: '', structured_output }))));
   const harness = join(directory, 'ink-harness.mjs');
   writeFileSync(harness, `
 import { render } from ${JSON.stringify(pathToFileURL(require.resolve('ink-testing-library')).href)};
@@ -94,6 +100,11 @@ export async function mountInk(buildTree) {
     }
   };
   const app = render(tree);
+  Object.defineProperties(app.stdout, {
+    columns: { configurable: true, value: 80 },
+    rows: { configurable: true, value: 24 },
+  });
+  app.stdout.emit('resize');
   const receive = (message) => {
     if (message.kind === 'key') app.stdin.write(message.input);
     if (message.kind === 'frame') process.send({ kind: 'frame', id: message.id, frame: app.lastFrame() ?? '' });
@@ -163,9 +174,15 @@ const write = Socket.prototype.write;
 Socket.prototype.write = function(chunk, ...args) {
   let value;
   try { value = JSON.parse(String(chunk)); } catch { /* 通信以外の標準出力も Socket を使う。 */ }
-  if (value?.type === 'request' && value.protocolVersion === 1) record({ event: 'request', method: value.method,
+  if (value?.type === 'request' && value.protocolVersion === 1) record({ event: 'request', method: value.method, requestId: value.requestId,
     conversationId: value.params?.conversationId, command: value.params?.command?.kind, revision: value.params?.command?.revision,
     operationId: value.params?.command?.operationId });
+  if (value?.type === 'response' && value.result?.read) record({ event: 'response', requestId: value.requestId,
+    conversationId: value.result.read.conversationId, transferId: value.result.read.transferId });
+  if (value?.type === 'event' && ['transfer_start', 'transfer_end', 'transfer_error'].includes(value.output?.kind)) {
+    record({ event: 'transfer', conversationId: value.conversationId, transferId: value.output.transferId,
+      frameKind: value.output.kind, purpose: value.output.purpose });
+  }
   return write.call(this, chunk, ...args);
 };
 registerHooks({ resolve(specifier, context, nextResolve) {

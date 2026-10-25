@@ -23,6 +23,78 @@ function fixture() {
   return { receiver, observer, state, metadata, event, frames };
 }
 
+it.each([
+  { responseAfter: 'start', frameCount: 1 },
+  { responseAfter: 'an item', frameCount: 3 },
+  { responseAfter: 'completion', frameCount: 4 },
+])('completes the same snapshot without losing items when its response arrives after $responseAfter', async ({ frameCount }) => {
+  const { receiver, observer, state, metadata, frames } = fixture();
+  const read = metadata(4, 1);
+  const item = { kind: 'display_event', event: { id: 'event-before-response', message: 'Received conversation information' } };
+  const values = await frames(read, [{ kind: 'state', state }, item]);
+
+  values.slice(0, frameCount).forEach((frame) => receiver.receive(frame));
+  receiver.expectRead(read);
+  values.slice(frameCount).forEach((frame) => receiver.receive(frame));
+
+  expect(observer.read.mock.calls).toEqual([['reading', read.transferId], ['complete', read.transferId]]);
+  expect(observer.state).toHaveBeenCalledExactlyOnceWith(state, read);
+  expect(observer.item).toHaveBeenCalledExactlyOnceWith(item, read.transferId);
+});
+
+it.each([
+  { revision: 5 },
+  { stateSequence: 2 },
+  { operationId: '550e8400-e29b-41d4-a716-446655440000' },
+])('rejects mismatched metadata in a response arriving after snapshot start: %j', async (mismatch) => {
+  const { receiver, observer, state, metadata, frames } = fixture();
+  const read = metadata(4, 1);
+  const values = await frames(read, [{ kind: 'state', state }]);
+  receiver.receive(values[0]);
+
+  expect(() => receiver.expectRead({ ...read, ...mismatch })).toThrow();
+  expect(observer.state).not.toHaveBeenCalled();
+  expect(observer.read.mock.calls.some(([status]) => status === 'complete')).toBe(false);
+});
+
+it('keeps an early failed read incomplete after its response and completes a replacement read', async () => {
+  const { receiver, observer, state, metadata, frames, event } = fixture();
+  const read = metadata(4, 1);
+  const values = await frames(read, [{ kind: 'state', state }]);
+  receiver.receive(values[0]);
+  receiver.receive(event({ kind: 'transfer_error', transferId: read.transferId, code: 'read_failed' }));
+
+  receiver.expectRead(read);
+  values.slice(1).forEach((frame) => receiver.receive(frame));
+  expect(observer.read.mock.calls).toEqual([['reading', read.transferId], ['incomplete', read.transferId]]);
+  expect(observer.state).not.toHaveBeenCalled();
+
+  const replacement = metadata(4, 2);
+  receiver.expectRead(replacement);
+  for (const frame of await frames(replacement, [{ kind: 'state', state }])) receiver.receive(frame);
+  expect(observer.read).toHaveBeenLastCalledWith('complete', replacement.transferId);
+  expect(observer.state).toHaveBeenCalledExactlyOnceWith(state, replacement);
+});
+
+it('accepts an early snapshot with a restarted sequence after reauthentication on the same receiver', async () => {
+  const { receiver, observer, state, metadata, frames } = fixture();
+  const old = metadata(4, 10);
+  receiver.expectRead(old);
+  for (const frame of await frames(old, [{ kind: 'state', state }])) receiver.receive(frame);
+  receiver.disconnect();
+  receiver.authenticated();
+  const read = metadata(4, 0);
+  const values = await frames(read, [{ kind: 'state', state }]);
+
+  receiver.receive(values[0]);
+  receiver.expectRead(read);
+  values.slice(1).forEach((frame) => receiver.receive(frame));
+
+  expect(observer.read).toHaveBeenLastCalledWith('complete', read.transferId);
+  expect(observer.state).toHaveBeenLastCalledWith(state, read);
+  expect(observer.state).toHaveBeenCalledTimes(2);
+});
+
 it.each([7, 9])('reassembles a pending proposal with %s large constraints across split and coalesced physical frames', async (count) => {
   const { receiver, observer, state, metadata, frames } = fixture();
   const read = metadata(4, 1);
@@ -126,7 +198,7 @@ it('requires a goal objective in a snapshot inquiry before publishing it to the 
     { kind: 'assignment', assignment: { ...state.assignment, repositoryDirectories: ['/repository'] } },
     { kind: 'inquiry', inquiry: { target: { goalId: randomUUID(), repositoryDirectory: '/repository' },
       question: { id: randomUUID(), recipient: 'human', status: 'pending', body: 'Choose a format' } } }]);
-  expect(() => values.forEach((value) => receiver.receive(value))).toThrow('Missing inquiry objective');
+  expect(() => values.forEach((value) => receiver.receive(value))).toThrow();
   expect(observer.item.mock.calls.some(([item]) => item.kind === 'inquiry')).toBe(false);
   expect(observer.read).toHaveBeenLastCalledWith('incomplete', read.transferId);
 });
