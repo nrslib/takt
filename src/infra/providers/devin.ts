@@ -1,6 +1,6 @@
 import { callDevin, type DevinCallOptions } from '../devin/index.js';
 import { resolveDevinCliPath } from '../config/index.js';
-import { createLogger } from '../../shared/utils/index.js';
+import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import type { AgentSetup, Provider, ProviderAgent, ProviderCallOptions } from './types.js';
 
@@ -57,7 +57,21 @@ export class DevinProvider implements Provider {
 
     return {
       call: async (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => {
-        return callDevin(name, prompt, toDevinOptions(options, systemPrompt));
+        // resolveDevinCliPath() throws for a configured-but-invalid path; a
+        // thrown exception bypasses AgentResponse entirely, so surface it as
+        // a standard provider error response instead.
+        try {
+          return await callDevin(name, prompt, toDevinOptions(options, systemPrompt));
+        } catch (error) {
+          const message = `Devin provider call failed: ${getErrorMessage(error)}`;
+          return {
+            persona: name,
+            status: 'error',
+            content: message,
+            error: message,
+            timestamp: new Date(),
+          };
+        }
       },
     };
   }

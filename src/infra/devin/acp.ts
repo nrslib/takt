@@ -66,10 +66,13 @@ function toolNameOf(call: {
   _meta?: { [key: string]: unknown } | null;
 }): string {
   const meta = call._meta?.[INFERENCE_TOOL_NAME_META_KEY];
-  if (typeof meta === 'string' && meta.length > 0) {
-    return meta;
-  }
-  return call.name ?? call.title ?? call.kind ?? 'tool';
+  const name = typeof meta === 'string' && meta.length > 0
+    ? meta
+    : call.name ?? call.title ?? call.kind ?? 'tool';
+  // Devin's shell tool is `exec`; TAKT canonicalizes shell calls as `Bash`
+  // (codex does the same) so companion commit-probing and mutation tracking
+  // see them like any other provider's shell commands.
+  return name === 'exec' ? 'Bash' : name;
 }
 
 function toolCallText(content: ToolCallContent[] | null | undefined): string {

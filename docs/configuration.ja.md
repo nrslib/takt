@@ -606,7 +606,7 @@ workflow の `promotion` entry は `runtime.yaml` で選択された target ladd
 
 **Kiro CLI** は `model` を `kiro-cli chat --model <model>` にそのまま渡します。省略時は Kiro CLI のデフォルトが使用されます。
 
-**Devin CLI** は `model` を `devin acp --model <model>` に渡します（例: `swe-2-max`、`swe-2-high`、`swe-2-medium`）。ACP session はその名前を `model` と `thought_level` の config option に解決し、解決・適用できない名前はデフォルトへフォールバックせずエラーになります。省略時はユーザーの Devin config に設定されたデフォルトモデルが使用されます。
+**Devin CLI** は `model` を `devin acp --model <model>` に渡します（例: `swe-2-max`、`swe-2-high`、`swe-2-medium`）。ACP session はその名前を `model` と `thought_level` の config option に解決し、解決・適用できない名前はデフォルトへフォールバックせずエラーになります。この検証は新規 session のみに適用され、再開 session は作成時のモデルを維持するため、指定された名前の再解決は行いません。省略時はユーザーの Devin config に設定されたデフォルトモデルが使用されます。
 
 ### 設定例
 

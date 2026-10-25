@@ -543,7 +543,7 @@ devin_cli_path: /usr/local/bin/devin
 - **Cursor Agent** 将 model 原样传给 `cursor-agent --model <model>`。
 - **GitHub Copilot CLI** 将 model 原样传给 `copilot --model <model>`。
 - **Kiro CLI** 将 model 原样传给 `kiro-cli chat --model <model>`。
-- **Devin CLI** 将 model 传给 `devin acp --model <model>`（例如 `swe-2-max`、`swe-2-high`、`swe-2-medium`）；ACP session 会把该名称解析为 `model` 与 `thought_level` 配置项，无法解析或应用的名称会立即报错，而不是静默回退到默认值。省略时使用用户 Devin config 中配置的默认 model。
+- **Devin CLI** 将 model 传给 `devin acp --model <model>`（例如 `swe-2-max`、`swe-2-high`、`swe-2-medium`）；ACP session 会把该名称解析为 `model` 与 `thought_level` 配置项，无法解析或应用的名称会立即报错，而不是静默回退到默认值。该校验仅适用于新建 session；恢复的 session 保留创建时使用的 model，不会重新解析所指定的名称。省略时使用用户 Devin config 中配置的默认 model。
 
 ### 示例
 

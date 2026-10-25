@@ -165,6 +165,21 @@ describe('DevinProvider', () => {
     expect(mockLogger.info).toHaveBeenCalled();
   });
 
+  it('Given an invalid configured CLI path, When agent is called, Then returns an error response instead of throwing', async () => {
+    mockResolveDevinCliPath.mockImplementation(() => {
+      throw new Error('Devin CLI path is not executable: /bad/devin');
+    });
+
+    const provider = new DevinProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    const result = await agent.call('implement', { cwd: '/tmp/work' });
+
+    expect(mockCallDevin).not.toHaveBeenCalled();
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('/bad/devin');
+  });
+
 });
 
 describe('ProviderRegistry with Devin', () => {

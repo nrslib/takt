@@ -610,7 +610,7 @@ Provider and model selection is owned by `runtime.yaml` when runtime mode is act
 
 **Kiro CLI** forwards `model` directly to `kiro-cli chat --model <model>`. If omitted, Kiro CLI default is used.
 
-**Devin CLI** passes `model` to `devin acp --model <model>` (for example `swe-2-max`, `swe-2-high`, `swe-2-medium`); the ACP session resolves the name into its `model` and `thought_level` options, and a name that cannot be resolved or applied fails fast instead of silently falling back. If omitted, the default model configured in the user's Devin config is used.
+**Devin CLI** passes `model` to `devin acp --model <model>` (for example `swe-2-max`, `swe-2-high`, `swe-2-medium`); the ACP session resolves the name into its `model` and `thought_level` options, and a name that cannot be resolved or applied fails fast instead of silently falling back. This validation applies to new sessions; a resumed session keeps the model it was created with and does not re-resolve the requested name. If omitted, the default model configured in the user's Devin config is used.
 
 ### Example
 

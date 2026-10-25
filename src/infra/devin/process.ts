@@ -16,9 +16,15 @@ const DEVIN_MAX_BUFFER_BYTES = 10 * 1024 * 1024;
 const DEVIN_ENV_ALLOWLIST = [
   'ALL_PROXY',
   'APPDATA',
+  'CI',
+  'CURSOR_CONFIG_DIR',
+  'GH_CONFIG_DIR',
+  'GLAB_CONFIG_DIR',
+  'GRADLE_USER_HOME',
   'HOME',
   'HTTP_PROXY',
   'HTTPS_PROXY',
+  'JAVA_TOOL_OPTIONS',
   'LANG',
   'LC_ALL',
   'LOCALAPPDATA',
@@ -42,6 +48,7 @@ const DEVIN_ENV_ALLOWLIST = [
   'http_proxy',
   'https_proxy',
   'no_proxy',
+  'npm_config_cache',
   'DEVIN_API_URL',
   'DEVIN_MODEL',
   'DEVIN_SANDBOX',
@@ -68,8 +75,10 @@ export interface DevinProcessExit {
 export interface DevinAcpProcess {
   readonly child: ChildProcess;
   /**
-   * Settles when the child exits. Resolves with the exit info on `close`;
-   * rejects when spawning the process or one of its stdio streams fails.
+   * Settles when the child exits. Resolves with the exit info on `exit` or
+   * `close`, whichever comes first (`close` also waits for stdio to drain,
+   * which a pipe-holding descendant can stall); rejects when spawning the
+   * process or one of its stdio streams fails.
    */
   readonly exited: Promise<DevinProcessExit>;
   stderrText(): string;
@@ -228,7 +237,10 @@ export function spawnDevinAcp(args: string[], options: DevinCallOptions): DevinA
   let stderrOverflowed = false;
   let exit: DevinProcessExit | undefined;
 
+  let terminateRequested = false;
   const terminate = (): void => {
+    if (terminateRequested) return;
+    terminateRequested = true;
     // On POSIX, sweep the detached (setsid'd) descendant groups first — their
     // ancestry is still intact while the leader lives. Windows' taskkill /T
     // already follows the whole tree.
@@ -273,6 +285,13 @@ export function spawnDevinAcp(args: string[], options: DevinCallOptions): DevinA
   child.once('close', recordExit);
 
   const exited = new Promise<DevinProcessExit>((resolve, reject) => {
+    // `close` waits for stdio to drain, which a descendant still holding the
+    // pipes can stall indefinitely after the leader is gone. `exit` fires as
+    // soon as the leader dies, so resolving on either unblocks the caller;
+    // the first event wins.
+    child.on('exit', (code: number | null, signal: NodeJS.Signals | null) => {
+      resolve({ code, signal });
+    });
     child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
       resolve({ code, signal });
     });

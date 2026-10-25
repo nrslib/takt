@@ -316,6 +316,28 @@ function requestsOf(server: MockAcpServer, method: string): WireMessage[] {
 }
 
 /**
+ * Mock ACP server whose leader dies mid-prompt while a detached descendant
+ * still holds the stdio pipes: `exit` fires but `close` and stdout EOF never
+ * arrive. The call must report the leader's exit rather than wait for a
+ * `close` that cannot come.
+ */
+function mockLeaderExitWithoutClose(exitCode: number): void {
+  mockSpawn.mockImplementation((...call: unknown[]) => {
+    recordConfigArg(call);
+    const child = createAcpChild();
+    attachAcpServer(child, {
+      initialize: () => ({ protocolVersion: 1, agentCapabilities: {}, agentInfo: { name: 'x', version: '0' } }),
+      'session/new': () => ({ sessionId: 'keen-otter', modes: DEFAULT_MODES, configOptions: [] }),
+      'session/prompt': (_params, _api, _id) => {
+        queueMicrotask(() => child.emit('exit', exitCode, null));
+        return undefined;
+      },
+    });
+    return child;
+  });
+}
+
+/**
  * Mock ACP server whose leader process dies mid-prompt. `endStdout`
  * reproduces the real failure shape: stdout EOFs first (which makes the SDK
  * reject in-flight requests with "ACP connection closed") and `exit`/`close`
@@ -663,7 +685,7 @@ describe('callDevin', () => {
     expect(types).toEqual(['init', 'text', 'thinking', 'tool_use', 'tool_output', 'tool_result', 'text', 'result']);
     expect(onStream).toHaveBeenCalledWith({
       type: 'tool_use',
-      data: { id: 'exec:0', tool: 'exec', input: { command: 'npm test' } },
+      data: { id: 'exec:0', tool: 'Bash', input: { command: 'npm test' } },
     });
     expect(onStream).toHaveBeenCalledWith({
       type: 'tool_result',
@@ -1171,6 +1193,15 @@ describe('callDevin', () => {
     expect(result.error).toContain('fatal: could not load config');
     expect(result.error).not.toContain('boot-0 ');
     expect(result.error).not.toContain('boot-1 ');
+  });
+
+  it('Given the leader exits while a descendant holds the pipes, When called, Then reports the exit instead of waiting for close', async () => {
+    mockLeaderExitWithoutClose(1);
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo' });
+
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('Devin CLI exited with code 1');
   });
 
   it('Given an exit with empty stderr, When the process dies mid-prompt, Then the error does not repeat the exit code', async () => {
