@@ -249,7 +249,10 @@ export function spawnDevinAcp(args: string[], options: DevinCallOptions): DevinA
   // recorded groups on stdio activity (when setsid'd exec children are being
   // spawned), throttled to bound the synchronous `ps` scans, and stop once
   // the leader's exit is observed.
-  let recordedDescendantGroups = new Set<number>();
+  // Union, never replace: an intermediate process can die while the leader
+  // is still alive, reparenting its descendants out of reach of later scans.
+  // Groups recorded earlier stay signaled even after a fresh scan loses them.
+  const recordedDescendantGroups = new Set<number>();
   let lastDescendantScanAt = 0;
   const refreshDescendantSnapshot = (): void => {
     if (process.platform === 'win32' || child.pid === undefined || exit !== undefined) {
@@ -260,7 +263,9 @@ export function spawnDevinAcp(args: string[], options: DevinCallOptions): DevinA
       return;
     }
     lastDescendantScanAt = now;
-    recordedDescendantGroups = collectDescendantProcessGroups(child.pid);
+    for (const pgid of collectDescendantProcessGroups(child.pid)) {
+      recordedDescendantGroups.add(pgid);
+    }
   };
   child.stderr?.on('data', refreshDescendantSnapshot);
 

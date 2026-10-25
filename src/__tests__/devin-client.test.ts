@@ -1257,6 +1257,81 @@ describe('callDevin', () => {
     expect(killSpy).toHaveBeenCalledWith(-(leaderPid + 1), 'SIGTERM');
   });
 
+  it('Given an intermediate process reparents a descendant while the leader lives, When terminate runs, Then earlier-recorded groups are still signaled', async () => {
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    const nowSpy = vi.spyOn(Date, 'now');
+    let nowTick = 0;
+    nowSpy.mockImplementation(() => (nowTick += 1_000));
+    let leaderPid = 0;
+    let midAlive = true;
+    // While mid lives: leader -> mid -> descendant (descendant has its own
+    // pgid). Once mid exits the descendant reports ppid=1, so later scans
+    // rooted at the leader can no longer reach it.
+    mockExecFileSync.mockImplementation((command: unknown) => {
+      if (command !== 'ps' || leaderPid === 0) {
+        return '';
+      }
+      const leaderRow = `${leaderPid} 1 ${leaderPid}\n`;
+      const descendantRow = `${leaderPid + 2} ${midAlive ? leaderPid + 1 : 1} ${leaderPid + 2}\n`;
+      return midAlive
+        ? `${leaderRow}${leaderPid + 1} ${leaderPid} ${leaderPid + 1}\n${descendantRow}`
+        : `${leaderRow}${descendantRow}`;
+    });
+    let spawned: MockAcpChild | undefined;
+    let serverApi: AcpServerApi | undefined;
+    mockSpawn.mockImplementation((...call: unknown[]) => {
+      recordConfigArg(call);
+      const child = createAcpChild();
+      spawned = child;
+      leaderPid = child.pid!;
+      const textUpdate = (text: string) => ({
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text },
+      });
+      attachAcpServer(child, {
+        initialize: () => ({ protocolVersion: 1, agentCapabilities: {}, agentInfo: { name: 'x', version: '0' } }),
+        'session/new': () => ({ sessionId: 'keen-otter', modes: DEFAULT_MODES, configOptions: [] }),
+        'session/prompt': (_params, api, _id) => {
+          serverApi = api;
+          queueMicrotask(() => {
+            api.notify('session/update', { sessionId: 'keen-otter', update: textUpdate('one') });
+          });
+          return undefined;
+        },
+      });
+      return child;
+    });
+
+    let updates = 0;
+    const result = await callDevin('coder', 'implement', {
+      cwd: '/repo',
+      onStream: (event) => {
+        if (event.type !== 'text') return;
+        updates += 1;
+        if (updates === 1) {
+          // First refresh recorded mid's subtree; now mid exits and the
+          // descendant reparents before the second refresh scans again.
+          midAlive = false;
+          queueMicrotask(() => {
+            serverApi?.notify('session/update', {
+              sessionId: 'keen-otter',
+              update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'two' } },
+            });
+          });
+          return;
+        }
+        // Second refresh ran with mid already gone; kill the leader so
+        // terminate() can only rely on the earlier recorded groups.
+        spawned!.emit('exit', 1, null);
+      },
+    });
+    nowSpy.mockRestore();
+
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('Devin CLI exited with code 1');
+    expect(killSpy).toHaveBeenCalledWith(-(leaderPid + 2), 'SIGTERM');
+  });
+
   it('Given an exit with empty stderr, When the process dies mid-prompt, Then the error does not repeat the exit code', async () => {
     mockChildExitAfterPrompt(2, '');
 
