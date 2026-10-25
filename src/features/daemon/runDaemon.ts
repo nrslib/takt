@@ -1,6 +1,5 @@
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { getGlobalConfigDir } from '../../infra/config/paths.js';
 import { registerDaemonOwner, removeDaemonOwner } from '../../infra/daemon/owner.js';
 import { getSelfProcessIdentity } from '../../infra/task/process.js';
 import { TaskRunner } from '../../infra/task/runner.js';
@@ -16,6 +15,10 @@ import { enqueueDueGoalPatrols } from '../manager/patrol.js';
 import { notifyManagerTurnFailure } from '../manager/turnFailureNotification.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { failInterruptedTasksWithGoalEvents } from '../tasks/execute/claimTasks.js';
+import { resolveDaemonConfigDirectory } from '../../infra/daemon/ipcEndpoint.js';
+import { createConversationService } from '../manager/conversationService.js';
+import { createConversationRuntime } from '../manager/conversationRuntime.js';
+import { createConversationIpcServer } from './conversationIpcServer.js';
 
 const POLL_INTERVAL_MS = 500;
 const EVENTS_PER_PROJECT = 10;
@@ -34,16 +37,21 @@ async function notifyPollingFailure(cwd: string, failure: PollingFailure): Promi
 }
 
 export async function runDaemon(): Promise<void> {
-  const globalConfigDirectory = resolve(getGlobalConfigDir());
+  const globalConfigDirectory = resolveDaemonConfigDirectory();
   const identity = getSelfProcessIdentity();
   if (identity === undefined) throw new Error('Cannot identify daemon process');
   const { cliPath } = resolveCliInvocation('daemon');
-  if (!registerDaemonOwner(globalConfigDirectory, { pid: process.pid, identity, version: packageVersion, cliPath })) return;
+  const owner = { pid: process.pid, identity, version: packageVersion, cliPath };
+  if (!registerDaemonOwner(globalConfigDirectory, owner)) return;
   const controller = new AbortController();
   const managers = new Map<string, ReturnType<typeof createRunEventManager>>();
   const pollingFailures = new Map<string, PollingFailure>();
   const inFlight = new Map<string, Promise<void>>();
   const projectWork = new Map<string, boolean>();
+  let domainGeneration = 0;
+  const conversations = createConversationService({ configDirectory: globalConfigDirectory, owner,
+    runtime: createConversationRuntime(globalConfigDirectory), onDomainChange: () => { domainGeneration++; projectWork.clear(); } });
+  let ipc: Awaited<ReturnType<typeof createConversationIpcServer>> | undefined;
   const inspectProject = async (cwd: string): Promise<boolean> => {
     const errors: Array<{ error: unknown; failedAt: number }> = [];
     let hasWork = false;
@@ -96,6 +104,7 @@ export async function runDaemon(): Promise<void> {
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);
   try {
+    ipc = await createConversationIpcServer(globalConfigDirectory, owner, conversations);
     initDebugLogger({ enabled: true, logFile: join(globalConfigDirectory, 'logs', 'daemon.log') });
     log.info('Daemon started', { pid: process.pid, version: packageVersion, cliPath });
     while (!controller.signal.aborted) {
@@ -110,12 +119,19 @@ export async function runDaemon(): Promise<void> {
       for (const cwd of projectWork.keys()) {
         if (!projects.includes(cwd)) projectWork.delete(cwd);
       }
-      if (inFlight.size === 0 && projects.every((cwd) => projectWork.get(cwd) === false)) break;
+      if (inFlight.size === 0 && projects.every((cwd) => projectWork.get(cwd) === false)
+        && conversations.attachmentCount === 0 && conversations.activeOperationCount === 0) {
+        if (ipc.initializingCount !== 0) continue;
+        conversations.stopAccepting();
+        ipc.stopAccepting();
+        break;
+      }
       for (const cwd of projects) {
         if (controller.signal.aborted) break;
         if (inFlight.has(cwd)) continue;
+        const inspectedGeneration = domainGeneration;
         const processing = inspectProject(cwd)
-          .then((hasWork) => { projectWork.set(cwd, hasWork); })
+          .then((hasWork) => { if (domainGeneration === inspectedGeneration) projectWork.set(cwd, hasWork); })
           .catch((error: unknown) => {
             log.error('Cannot inspect daemon project', { cwd, error: sanitizeSensitiveText(getErrorMessage(error)) });
           })
@@ -125,6 +141,10 @@ export async function runDaemon(): Promise<void> {
     }
   } finally {
     controller.abort();
+    conversations.stopAccepting();
+    ipc?.stopAccepting();
+    try { await conversations.close(); }
+    catch { log.error('Cannot close daemon conversations'); }
     await Promise.all(inFlight.values());
     for (const [cwd, failure] of pollingFailures) {
       if (failure.lastNotifiedAt === undefined) await notifyPollingFailure(cwd, failure);
@@ -133,9 +153,12 @@ export async function runDaemon(): Promise<void> {
       try { await manager.close(); }
       catch (error) { log.error('Cannot close daemon project manager', { cwd, error: getErrorMessage(error) }); }
     }
-    removeDaemonOwner(globalConfigDirectory, process.pid);
-    process.removeListener('SIGTERM', stop);
-    process.removeListener('SIGINT', stop);
-    log.info('Daemon stopped', { pid: process.pid });
+    try { await ipc?.close(); }
+    finally {
+      removeDaemonOwner(globalConfigDirectory, owner);
+      process.removeListener('SIGTERM', stop);
+      process.removeListener('SIGINT', stop);
+      log.info('Daemon stopped', { pid: process.pid });
+    }
   }
 }

@@ -202,6 +202,32 @@ describe('Goal Git registration', () => {
     ]);
   });
 
+  it('propagates caller cancellation during fetch instead of continuing from local state', async () => {
+    const controller = new AbortController();
+    const abort = new Error('cancel registration');
+    doubles.fetch.mockImplementation(async (_cwd: string, _args: string[], signal: AbortSignal) => {
+      expect(signal.aborted).toBe(false);
+      controller.abort(abort);
+      expect(signal.aborted).toBe(true);
+      throw abort;
+    });
+    await expect(prepareGoalBranch('/project', goalId, undefined, undefined, controller.signal)).rejects.toBe(abort);
+    expect(doubles.run).not.toHaveBeenCalled();
+    expect(doubles.exec).not.toHaveBeenCalled();
+    expect(doubles.info).not.toHaveBeenCalled();
+  });
+
+  it('passes cancellation to the reference query and stops before commit verification after cancellation', async () => {
+    const controller = new AbortController();
+    doubles.run.mockImplementationOnce(async (_cwd, _args, _limit, signal) => {
+      expect(signal).toBe(controller.signal);
+      controller.abort();
+      return { output: Buffer.alloc(0), truncated: false, code: 0 };
+    });
+    await expect(prepareGoalBranch('/project', goalId, undefined, undefined, controller.signal)).rejects.toThrow();
+    expect(doubles.exec).not.toHaveBeenCalled();
+  });
+
   it('uses the configured base branch as the default start and integration branch at registration', async () => {
     doubles.config.mockReturnValue('release');
     expect(await prepareGoalBranch('/project', goalId, undefined, undefined)).toMatchObject({

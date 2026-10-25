@@ -21,6 +21,7 @@ import {
   AGENT_FAILURE_CATEGORIES,
   classifyAbortSignalReason,
   createProviderErrorFailure,
+  createSessionContinuationUnsupportedFailure,
   createProviderStreamParseFailure,
   createStreamIdleTimeoutFailure,
   formatAgentFailure,
@@ -220,6 +221,7 @@ export class CodexClient {
     externalSignal: AbortSignal | undefined,
     abortCause: 'timeout' | 'external' | undefined,
     timeoutMessage: string,
+    resumedThreadId: string | undefined,
   ): AgentFailureDetail {
     if (abortCause === 'timeout') {
       return createStreamIdleTimeoutFailure(timeoutMessage);
@@ -232,6 +234,10 @@ export class CodexClient {
     }
     if (message.startsWith(CODEX_PARSE_FAILURE_PREFIX)) {
       return createProviderStreamParseFailure(message);
+    }
+    if (resumedThreadId !== undefined && message.split('\n').some((line) =>
+      line.trim() === `Error: thread/resume: thread/resume failed: no rollout found for thread id ${resumedThreadId} (code -32600)`)) {
+      return createSessionContinuationUnsupportedFailure('Codex rejected the saved session.');
     }
     return createProviderErrorFailure(message);
   }
@@ -641,6 +647,7 @@ export class CodexClient {
             options.abortSignal,
             abortCause,
             timeoutMessage,
+            threadId,
           ));
           const rateLimitClass = classifyRateLimitError(failureMessage);
           if (
@@ -660,7 +667,7 @@ export class CodexClient {
             return rateLimitedResponse;
           }
 
-          if ((!failedAfterStreamError || rateLimitClass === 'Transient')
+          if (!options.callerManagedSession && (!failedAfterStreamError || rateLimitClass === 'Transient')
             && this.shouldRetry(failure, standardRetryCount, timeoutRetryCount)) {
             const boundedFailureMessage = boundCodexFailureMessage(failure.reason, options, true);
             log.info('Retrying Codex call after transient failure', {
@@ -723,7 +730,7 @@ export class CodexClient {
           && (trimmed.startsWith('{') || trimmed.startsWith('```'));
         const refusalDetected = !looksLikePureStructuredOutput && isCodexSafetyRefusal(trimmed);
         if (refusalDetected) {
-          if (refusalRetryCount < CODEX_REFUSAL_MAX_RETRIES) {
+          if (!options.callerManagedSession && refusalRetryCount < CODEX_REFUSAL_MAX_RETRIES) {
             refusalRetryCount += 1;
             log.info('Retrying Codex call after safety-filter refusal', { agentType, attempt, refusalRetryCount });
             // 拒否文脈を持ち越さないため、この call がセッションを開始した場合は
@@ -777,6 +784,7 @@ export class CodexClient {
           options.abortSignal,
           abortCause,
           timeoutMessage,
+          threadId,
         ));
         const rateLimitClass = classifyRateLimitError(rawErrorMessage);
         if (
@@ -809,7 +817,7 @@ export class CodexClient {
           boundedErrorMessage,
         );
 
-        if (this.shouldRetry(failure, standardRetryCount, timeoutRetryCount)) {
+        if (!options.callerManagedSession && this.shouldRetry(failure, standardRetryCount, timeoutRetryCount)) {
           const retryErrorMessage = boundCodexFailureMessage(errorMessage, options, true);
           log.info('Retrying Codex call after transient exception', {
             agentType,
@@ -825,7 +833,7 @@ export class CodexClient {
             continue;
           } catch (retryError) {
             failure = redactFailure(this.resolveFailureDetail(redact(getErrorMessage(retryError)), streamAbortController.signal,
-              options.abortSignal, abortCause, timeoutMessage));
+              options.abortSignal, abortCause, timeoutMessage, threadId));
           }
         }
 

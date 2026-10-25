@@ -385,17 +385,17 @@ export async function callAIWithRetry(
       providerAgent: ReturnType<SessionContext['provider']['setup']>,
       activeSessionId: string | undefined,
       activeDisplay: StreamDisplay | undefined,
-    ): Promise<{ response: Awaited<ReturnType<typeof providerAgent.call>>; referenceRunSlug?: string }> => {
+    ): Promise<{ response: Awaited<ReturnType<typeof providerAgent.call>>; usedTools: boolean; referenceRunSlug?: string }> => {
       // Some provider clients dispose the prepared MCP material when their call
       // ends. Prepare per attempt so a stale-session retry gets a live config.
       const referenceTracker = createRunReferenceTracker();
       const stream = resolveStreamHandler(activeDisplay);
-      const trackedStream: StreamCallback | undefined = stream === undefined
-        ? undefined
-        : (event) => {
-          referenceTracker.observe(event);
-          stream(event);
-        };
+      let usedTools = false;
+      const trackedStream: StreamCallback = (event) => {
+        if (event.type === 'tool_use' || event.type === 'tool_output' || event.type === 'tool_result') usedTools = true;
+        if (stream !== undefined) referenceTracker.observe(event);
+        stream?.(event);
+      };
       const resolvedMcpServers = options.internalAgentIsolation === 'strict-readonly'
         ? undefined
         : resolveConversationMcpServers(ctx.mcpServers);
@@ -429,6 +429,7 @@ export async function callAIWithRetry(
         );
         return {
           response,
+          usedTools,
           ...(response.status !== 'blocked' && response.status !== 'error'
             && referenceTracker.getReferenceRunSlug() !== undefined
             ? { referenceRunSlug: referenceTracker.getReferenceRunSlug() }
@@ -444,15 +445,26 @@ export async function callAIWithRetry(
     const response = firstAttempt.response;
     display?.flush();
     const success = response.status !== 'blocked' && response.status !== 'error';
+    const rejectedSession = !success && sessionId !== undefined
+      && ctx.providerType !== 'deepseek-harness'
+      && response.failureCategory === AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED;
+    const canRetrySession = Boolean(sessionId);
+    if (rejectedSession) {
+      sessionId = undefined;
+      if (shouldPersistSession()) {
+        updatePersonaSession(cwd, ctx.personaName, undefined, ctx.providerType);
+      }
+    }
 
     if (!abortController.signal.aborted
       && !forceExitRequested
       && !success
-      && sessionId
+      && canRetrySession
       // DeepSeek has no stale-session recovery. Retrying an unsupported
       // constraint without an ID cannot make that same constraint supported.
       && ctx.providerType !== 'deepseek-harness'
-      && response.failureCategory !== AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED
+      && (response.failureCategory !== AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED
+        || (rejectedSession && !firstAttempt.usedTools))
       && ctx.effort === undefined
       && ctx.disableSessionRetry !== true) {
       log.info('Session invalid, retrying without session');
@@ -497,7 +509,7 @@ export async function callAIWithRetry(
       if (shouldPersistSession()) {
         updatePersonaSession(cwd, ctx.personaName, undefined, ctx.providerType);
       }
-    } else if (response.sessionId) {
+    } else if (!rejectedSession && response.sessionId) {
       sessionId = response.sessionId;
       if (shouldPersistSession()) {
         updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
@@ -509,7 +521,7 @@ export async function callAIWithRetry(
           + (startFreshNextTurn
             ? '\nThe next turn will start a new SDK session without the previous history; SDK history restoration is not supported yet.'
             : ''),
-        sessionId: startFreshNextTurn ? undefined : response.sessionId,
+        sessionId: startFreshNextTurn || rejectedSession ? undefined : response.sessionId,
         success,
         ...(success && firstAttempt.referenceRunSlug === undefined
           ? {}

@@ -164,14 +164,18 @@ MockProvider.prototype.setup = config => ({ call: async () => {
 } });
 `);
     const source = `
-import { createManagerConversationPlan } from ${JSON.stringify(moduleUrl('features/manager/conversationPlan.js'))};
-import { createManagerConversationSession } from ${JSON.stringify(moduleUrl('features/manager/conversationSession.js'))};
+${ownedProcessMarkerScript(moduleUrl('infra/task/process.js'))}
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { ensureManagerRun } from ${JSON.stringify(moduleUrl('features/manager/autoRun.js'))};
 const cwd = process.cwd();
-const session = createManagerConversationSession({ cwd, plan: createManagerConversationPlan(cwd, {}),  });
-try {
-  const result = await session.handleUserMessage({ text: 'Execute saved work' });
-  if (result.kind !== 'reply') throw new Error(JSON.stringify(result));
-} finally { await session.close(); }
+writeProcessMarker(join(cwd, 'ready-' + process.pid));
+const deadline = Date.now() + 20000;
+while (!existsSync(join(cwd, 'release-turns'))) {
+  if (Date.now() > deadline) throw new Error('Test did not release automatic run owners');
+  await new Promise(resolve => setTimeout(resolve, 20));
+}
+await ensureManagerRun(cwd);
 `;
     const done = Array.from({ length: 2 }, () => {
       const child = spawn(process.execPath, ['--input-type=module', '--eval', source], {

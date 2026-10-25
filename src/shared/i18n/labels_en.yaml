@@ -425,6 +425,24 @@ tui:
     exceededStart: "Saved stopping position: {start} (iteration {iteration})"
 
 manager:
+  conversation:
+    reading: "Reading conversation data. Summary approval is unavailable until it completes."
+    disconnected: "Reconnecting to the daemon."
+    incomplete: "The read is incomplete. Summary approval is unavailable until refresh completes."
+    interrupted: "The previous operation was interrupted. You can send a new message."
+    permission_appended: "The permission was appended. Check whether the answer was saved."
+    assignment_changed: 'The assignment has changed. Reopen the conversation for the current assignment.'
+    busy: "An operation is running. Submit again after it finishes."
+    stale_summary: "The summary has changed. Review the latest summary."
+    invalid_assignment: "The assignment changed or the target is outside it. Reopen the conversation."
+    unavailable_attachment: "The conversation is disconnected. Reopen it."
+    registration_recovery: "Goal registration needs recovery. Inspect the saved reservation and goal state."
+    storage_error: "Conversation state could not be saved. Check storage and reconnect."
+    shutting_down: "The daemon is shutting down. Connect again."
+    invalid_input: "The operation input is invalid."
+    operation_failed: "The conversation operation failed. Inspect its current state."
+    dismissed: "Summary dismissed."
+    answer_saved: "Answer saved."
   assignmentHeading: "Assignment: {name}"
   assignmentHeadingMultiple: "Assignment: {name} + {count} more"
   counts: "Ongoing {goals} / Pending {questions}"
@@ -433,6 +451,7 @@ manager:
   summaryInputHint: "↑↓ Choose / Enter Confirm / Esc Continue conversation / Ctrl+C Exit"
   goSummaryRequest: "Summarize the current conversation for goal registration. Return the objective, out-of-scope items, acceptance criteria, and work constraints in the structured response's summary. If there is insufficient material to summarize, explain why in message and return summary: null."
   goSummaryUnavailable: "Could not create a summary for registration because there is insufficient material. Please continue the conversation."
+  summaryWorking: "Preparing a summary"
   inputUnavailableDuringAbort: "Cannot enter input during abort confirmation. Finish the confirmation before typing."
   toolPermission:
     savedDenial: "Denied by the saved approval answer."

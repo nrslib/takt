@@ -10,6 +10,8 @@ import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
 import { resolveCliInvocation } from '../../shared/utils/cli-invocation.js';
 import { createLogger } from '../../shared/utils/debug.js';
 import { ensurePrivateDirectory } from '../../shared/utils/private-file.js';
+import { resolveDaemonConfigDirectory } from '../../infra/daemon/ipcEndpoint.js';
+import { isConversationIpcReady } from './conversationReadiness.js';
 
 const PROCESS_WAIT_MS = 5_000;
 const PROCESS_POLL_MS = 50;
@@ -30,17 +32,29 @@ export async function stopDaemon(): Promise<void> {
       await delay(PROCESS_POLL_MS);
     }
   }
-  removeDaemonOwner(directory, owner.pid);
+  removeDaemonOwner(directory, owner);
   log.info('Daemon exit confirmed', { pid: owner.pid });
 }
 
 export async function ensureDaemon(): Promise<void> {
-  const directory = resolve(getGlobalConfigDir());
+  const directory = resolveDaemonConfigDirectory();
   const { cliPath, args } = resolveCliInvocation('daemon');
   const owner = readDaemonOwner(directory);
   if (owner !== undefined && isDaemonOwnerRunning(owner)) {
-    if (owner.version === packageVersion && owner.cliPath === cliPath) return;
-    await stopDaemon();
+    if (owner.version === packageVersion && owner.cliPath === cliPath) {
+      const deadline = Date.now() + PROCESS_WAIT_MS;
+      while (Date.now() < deadline) {
+        if (!isDaemonOwnerRunning(owner)) {
+          removeDaemonOwner(directory, owner);
+          break;
+        }
+        if (await isConversationIpcReady(directory, owner)) return;
+        await delay(PROCESS_POLL_MS);
+      }
+      if (isDaemonOwnerRunning(owner)) throw new Error('Daemon IPC readiness was not confirmed');
+    } else {
+      await stopDaemon();
+    }
   }
   const logs = join(directory, 'logs');
   ensurePrivateDirectory(logs);
@@ -61,8 +75,10 @@ export async function ensureDaemon(): Promise<void> {
       // A concurrent caller may have started the same daemon first; the child then exits as the loser.
       if (started !== undefined && isDaemonOwnerRunning(started)
         && (started.pid === child.pid || (started.version === packageVersion && started.cliPath === cliPath))) {
-        log.info('Daemon startup confirmed', { pid: started.pid });
-        return;
+        if (await isConversationIpcReady(directory, started)) {
+          log.info('Daemon startup confirmed', { pid: started.pid });
+          return;
+        }
       }
       if (child.exitCode !== null || child.signalCode !== null) break;
       await delay(PROCESS_POLL_MS);

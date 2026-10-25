@@ -8,7 +8,10 @@ import { error as logError } from '../../shared/ui/index.js';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { createManagerConversationPlan } from './conversationPlan.js';
-import { createManagerConversationSession, getManagerOutputSchema, type ManagerConversationSession } from './conversationSession.js';
+import { getManagerOutputSchema } from './turnResponse.js';
+import { createManagerTurnExecutor } from './turnExecutor.js';
+import { getGlobalConfigDir } from '../../infra/config/paths.js';
+import { ensureManagerRun } from './autoRun.js';
 import { connectManagerMcp } from './managerMcp.js';
 import { buildGoalTurnContext } from './turnContext.js';
 import { notifyManagerTurnFailure } from './turnFailureNotification.js';
@@ -20,10 +23,10 @@ const MANAGER_TURN_TIMEOUT_MS = 30 * 60 * 1000;
 export function createRunEventManager(cwd: string) {
   // Failed events remain in the inbox; polling does not retry them.
   const failedEvents = new Set<string>();
-  let session: ManagerConversationSession | undefined;
+  let executor: ReturnType<typeof createManagerTurnExecutor> | undefined;
   let mcp: Awaited<ReturnType<typeof connectManagerMcp>> | undefined;
-  const getSession = async (signal: AbortSignal): Promise<ManagerConversationSession> => {
-    if (session !== undefined) return session;
+  const getExecutor = async (signal: AbortSignal) => {
+    if (executor !== undefined) return executor;
     const plan = createManagerConversationPlan(cwd, {});
     mcp = await connectManagerMcp(cwd, undefined, plan.ctx.mcpServers, {
       enableGoalExecutionTools: supportsManagerPermissionJudge(plan.ctx.providerType),
@@ -40,10 +43,8 @@ export function createRunEventManager(cwd: string) {
       await started.dispose();
       throw error;
     }
-    session = createManagerConversationSession({
-      cwd, plan: { ...plan, ctx: { ...plan.ctx, mcpServers: mcp.servers } },
-    });
-    return session;
+    executor = createManagerTurnExecutor(cwd, { ...plan, ctx: { ...plan.ctx, mcpServers: mcp.servers } });
+    return executor;
   };
   const canProcessPatrol = (goal: Goal, saved: SavedManagerEvent): boolean => {
     const { patrolInterval } = resolveManagerConfig(cwd);
@@ -81,7 +82,7 @@ export function createRunEventManager(cwd: string) {
         }, MANAGER_TURN_TIMEOUT_MS);
         const turnSignal = AbortSignal.any([signal, timeout.signal]);
         try {
-          const manager = await getSession(turnSignal);
+          const runner = await getExecutor(turnSignal);
           turnSignal.throwIfAborted();
           if (patrol) {
             goal = await store.get(saved.event.goalId);
@@ -90,17 +91,17 @@ export function createRunEventManager(cwd: string) {
               return true;
             }
           }
-          manager.resetConversation();
-          const result = await manager.handleUserMessage({
-            text: buildGoalTurnContext(cwd, goal, saved.event, new TaskRunner(cwd).listTaskStateItems()),
-            abortSignal: turnSignal,
-            goal: { id: goal.id, repositoryDirectory: cwd, constraints: goal.constraints },
-          });
+          const prompt = buildGoalTurnContext(cwd, goal, saved.event, new TaskRunner(cwd).listTaskStateItems());
+          let result;
+          try {
+            result = await runner.execute({
+              prompt, instruction: prompt, sessionId: undefined, abortSignal: turnSignal,
+              assignment: { kind: 'repository', repositoryDirectory: cwd }, configDirectory: getGlobalConfigDir(),
+              goal: { id: goal.id, repositoryDirectory: cwd, constraints: goal.constraints },
+            });
+          } finally { await ensureManagerRun(cwd); }
           if (signal.aborted) return false;
-          if (result.kind === 'error') throw new Error(result.message);
-          const summary = manager.getPendingSummary();
-          if (summary !== null) {
-            manager.dismissSummary(summary.revision);
+          if (result.summary !== null) {
             throw new Error('Event processing requires actions for the existing goal, not a registration summary');
           }
           await store.update(goal.id, (current) => ({
@@ -143,7 +144,7 @@ export function createRunEventManager(cwd: string) {
       return handled;
     },
     async close(): Promise<void> {
-      try { await session?.close(); } finally { await mcp?.dispose(); }
+      await mcp?.dispose();
     },
   };
 }

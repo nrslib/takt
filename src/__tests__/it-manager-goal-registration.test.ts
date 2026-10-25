@@ -1,3 +1,4 @@
+import { readManagerTestDisplay } from './helpers/manager-display-items.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { execFileSync } from 'node:child_process';
@@ -8,8 +9,7 @@ import { afterEach,beforeEach,expect,it,vi } from 'vitest';
 import * as conversationPlans from '../features/manager/conversationPlan.js';
 import * as managerMcp from '../features/manager/managerMcp.js';
 import { createRunEventManager } from '../features/manager/runEventManager.js';
-import { readManagerDisplayEvents } from '../features/manager/savedEvents.js';
-import { createManagerConversationSession } from '../features/manager/conversationSession.js';
+import { ManagerServiceClient, submitAndWait } from './helpers/manager-service-client.js';
 import { createTaktMcpServer } from '../features/mcp/server.js';
 import { runWithWorkerPool } from '../features/tasks/execute/parallelExecution.js';
 import * as runExecution from '../features/tasks/execute/runTaskExecution.js';
@@ -19,7 +19,10 @@ import { GoalStore } from '../infra/goals/store.js';
 import { MockProvider } from '../infra/providers/mock.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
 import { TaskRunner } from '../infra/task/runner.js';
-import { goalInput } from './helpers/goal-fixtures.js';
+import { goalInput, goalRecord } from './helpers/goal-fixtures.js';
+import { conversationRecord } from './helpers/conversation-fixtures.js';
+import { ConversationStore } from '../infra/conversations/store.js';
+import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 import { readProjectRegistry } from '../infra/config/global/projectRegistry.js';
 
@@ -44,7 +47,7 @@ function session(call: ProviderAgent['call']) {
   const plan = { ctx: { provider, providerType: 'mock' as const, model: undefined, lang: 'ja' as const }, strategy: { systemPrompt: 'manager fixture' } };
   vi.spyOn(conversationPlans, 'createManagerConversationPlan').mockReturnValue(plan);
   vi.spyOn(managerMcp, 'connectManagerMcp').mockResolvedValue({ client, servers: {}, dispose: async () => {} });
-  return { setup, session: createManagerConversationSession({ cwd, plan }) };
+  return { setup, session: new ManagerServiceClient({ cwd, plan }) };
 }
 beforeEach(async () => {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'takt-manager-events-'))); cwd = join(root, 'project'); mkdirSync(cwd);
@@ -59,6 +62,35 @@ beforeEach(async () => {
   await server.connect(serverTransport); await client.connect(clientTransport);
 });
 afterEach(async () => { await client?.close(); await server?.close(); vi.restoreAllMocks(); vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true }); });
+
+it.each(['reply', 'provider_error', 'summary'] as const)('preserves the same human conversation at revision four through an independent event %s and then approves that proposal', async (outcome) => {
+  const saved = conversationRecord(cwd);
+  const conversations = new ConversationStore(getGlobalConfigDir());
+  conversations.write(saved);
+  const existing = await new GoalStore(cwd).create(goalRecord());
+  saveManagerEvent(cwd, { kind: 'registered', goalId: existing.id });
+  const eventResponse = reply('Independent event result', outcome === 'summary' ? goalInput() : null);
+  const call = vi.fn<ProviderAgent['call']>().mockResolvedValue(outcome === 'provider_error'
+    ? { ...eventResponse, status: 'error', error: 'Event provider failed' } : eventResponse);
+  const context = session(call);
+  const manager = createRunEventManager(cwd);
+  try {
+    await context.session.ready;
+    const before = context.session.getSnapshot().state!;
+    expect(before).toMatchObject({ conversationId: saved.id, revision: 4, pending: saved.pending });
+    expect(await manager.processPending(new AbortController().signal, 1)).toBe(outcome === 'reply');
+    const workLog = (await new GoalStore(cwd).get(existing.id)).workLog;
+    if (outcome === 'reply') expect(workLog).toContainEqual(expect.objectContaining({ summary: 'Independent event result' }));
+    else expect(workLog).toEqual([]);
+    await context.session.refresh();
+    expect(context.session.getSnapshot().state).toMatchObject({ conversationId: saved.id, revision: 4, pending: saved.pending });
+    expect(call).toHaveBeenCalledOnce();
+    expect(call.mock.calls[0]![1].sessionId).toBeUndefined();
+    expect(await submitAndWait(context.session, { kind: 'approve_summary', revision: 4 })).toMatchObject({ kind: 'goal_registered' });
+    expect(conversations.read(saved.id, saved.assignment)).toMatchObject({ revision: 5, approval: { revision: 4, state: 'registered' }, pending: null });
+    expect(call).toHaveBeenCalledOnce();
+  } finally { await manager.close(); await context.session.dispose(); }
+});
 
 it('processes events separately from run and restores their saved records in the TUI', async () => {
   let goalId = '';
@@ -94,8 +126,8 @@ it('processes events separately from run and restores their saved records in the
   const manager = createRunEventManager(cwd);
   const signal = new AbortController().signal;
   try {
-    await context.session.handleUserMessage({ text: 'ゴールを相談します' });
-    const registered = await context.session.approveSummary(context.session.getPendingSummary()!.revision);
+    await submitAndWait(context.session, { kind: 'message', text: 'ゴールを相談します' });
+    const registered = await submitAndWait(context.session, { kind: 'approve_summary', revision: context.session.getSnapshot().state!.pending!.revision });
     expect(registered.kind).toBe('goal_registered'); expect(call).toHaveBeenCalledOnce();
     expect((await readProjectRegistry(process.env.TAKT_CONFIG_DIR!)).projects).toContainEqual(expect.objectContaining({
       canonicalDirectory: cwd, managerUsed: true,
@@ -129,22 +161,26 @@ it('processes events separately from run and restores their saved records in the
     expect(call).toHaveBeenCalledTimes(4);
     expect(readManagerEvents(cwd)).toEqual([]);
     expect((await new GoalStore(cwd).get(goalId)).workLog.map((record) => record.summary)).toContain('最初のタスクを投入しました');
-    const display = await readManagerDisplayEvents(cwd, 'ja');
+    const display = await readManagerTestDisplay(cwd, 'ja');
     expect(display.events.map(({ message }) => message)).toContain(`${goalId}: 最初のタスクを投入しました`);
     const waiting = await new GoalStore(cwd).get(goalId);
     expect(waiting.status).toBe('awaiting_merge'); expect(waiting.completion?.targetSha).toBeUndefined();
     git('merge', '--no-ff', '--no-edit', waiting.completion!.goalSha);
-    expect((await context.session.handleUserMessage({ text: '取り込みました' })).kind).toBe('reply');
+    expect((await submitAndWait(context.session, { kind: 'message', text: '取り込みました' })).kind).toBe('reply');
     expect((await new GoalStore(cwd).get(goalId)).status).toBe('completed');
     expect(git('show', 'main:result-0.txt')).toContain('入力'); expect(git('show', 'main:result-1.txt')).toContain('出力');
     expect(context.setup).toHaveBeenCalledTimes(2);
     // Daemon events (calls 1-3) each start a fresh session; the TUI conversation (calls 0 and 4) keeps its own.
     expect(call.mock.calls.slice(1, 4).map(([, options]) => options.sessionId)).toEqual([undefined, undefined, undefined]);
     expect(call.mock.calls[4]![1].sessionId).toBe('shared-conversation');
-    // The TUI turn receives the daemon's latest work records as a bounded summary, not the full log.
+    // Resumed provider sessions receive the request; current saved work is projected independently to the TUI.
     const latestWorkLog = (await new GoalStore(cwd).get(goalId)).workLog.filter((record) => record.kind !== 'patrol').at(-2)!.summary;
-    expect(call.mock.calls.at(-1)![0]).toContain(latestWorkLog);
-  } finally { await manager.close(); await context.session.close(); }
+    expect(call.mock.calls.at(-1)![0]).toBe('取り込みました');
+    await context.session.refresh();
+    expect(context.session.getSnapshot().items).toContainEqual(expect.objectContaining({
+      kind: 'display_event', event: expect.objectContaining({ message: expect.stringContaining(latestWorkLog) }),
+    }));
+  } finally { await manager.close(); await context.session.dispose(); }
 });
 it('keeps events while paused, handles the saved answer after resume, and discards them after abort', async () => {
   const call = vi.fn<ProviderAgent['call']>().mockResolvedValue(reply('処理しました'));
@@ -156,17 +192,17 @@ it('keeps events while paused, handles the saved answer after resume, and discar
   deleteManagerEvent(readManagerEvents(cwd)[0]!);
   const asked = await tool('takt_ask_goal_question', { goalId: goal.id, body: '形式はどれですか', options: ['CSV', 'JSON'] });
   try {
-    await context.session.pauseGoal({ goalId: goal.id });
+    await submitAndWait(context.session, { kind: 'pause_goal', goalId: goal.id });
     saveManagerEvent(cwd, { kind: 'completion', goalId: goal.id, taskName: 'ended', runSlug: 'run-ended', result: { success: false, interrupted: true } });
-    await context.session.answerQuestion({ goalId: goal.id, repositoryDirectory: cwd, questionId: asked.questionId as string, answer: { text: 'CSV' } });
+    await submitAndWait(context.session, { kind: 'answer_question', target: { goalId: goal.id, repositoryDirectory: cwd }, questionId: asked.questionId as string, answer: { text: 'CSV' } });
     await manager.processPending(signal, 10); expect(call).not.toHaveBeenCalled(); expect(readManagerEvents(cwd)).toHaveLength(2);
-    await context.session.resumeGoal({ goalId: goal.id });
+    await submitAndWait(context.session, { kind: 'resume_goal', goalId: goal.id });
     expect(readManagerEvents(cwd)).toHaveLength(3);
     await manager.processPending(signal, 10);
     expect(readManagerEvents(cwd)).toEqual([]); expect(call).toHaveBeenCalledTimes(3);
     saveManagerEvent(cwd, { kind: 'completion', goalId: goal.id, taskName: 'later', runSlug: 'run-later', result: { success: false, interrupted: false } });
-    await context.session.abortGoal({ goalId: goal.id }); expect(readManagerEvents(cwd)).toEqual([]);
+    await submitAndWait(context.session, { kind: 'abort_goal', goalId: goal.id }); expect(readManagerEvents(cwd)).toEqual([]);
     saveManagerEvent(cwd, { kind: 'completion', goalId: goal.id, taskName: 'stopped', runSlug: 'run-stopped', result: { success: false, interrupted: true } });
-    expect(readManagerEvents(cwd)).toEqual([]); expect((await context.session.resumeGoal({ goalId: goal.id })).kind).toBe('error');
-  } finally { await manager.close(); await context.session.close(); }
+    expect(readManagerEvents(cwd)).toEqual([]); expect((await submitAndWait(context.session, { kind: 'resume_goal', goalId: goal.id })).kind).toBe('error');
+  } finally { await manager.close(); await context.session.dispose(); }
 });

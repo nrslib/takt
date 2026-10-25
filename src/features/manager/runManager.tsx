@@ -5,16 +5,10 @@ import { selectOption } from '../../shared/prompt/index.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
 import { mountInk } from '../tui/inkMount.js';
 import { toSingleLineText } from '../tui/displayText.js';
-import { createManagerConversationPlan } from './conversationPlan.js';
-import { createManagerConversationSession, getManagerOutputSchema } from './conversationSession.js';
-import type { ManagerConversationSession } from './conversationSession.js';
-import { connectManagerMcp } from './managerMcp.js';
+import { ConversationIpcClient } from './conversationIpcClient.js';
 import { ManagerView } from './ManagerView.js';
-import { ensureManagerRun } from './autoRun.js';
 import { notifyManagerTurnFailure } from './turnFailureNotification.js';
 import { registerProject } from '../../infra/config/global/projectRegistry.js';
-import { ensureDaemon } from '../daemon/lifecycle.js';
-import { supportsManagerPermissionJudge } from './permissionJudgeSupport.js';
 
 export async function runManager(input: { cwd: string; agentOverrides?: AssistantCliOverrides }): Promise<void> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
@@ -45,52 +39,20 @@ export async function runManager(input: { cwd: string; agentOverrides?: Assistan
   for (const directory of assignment.repositoryDirectories) {
     await registerProject({ globalConfigDirectory, projectDirectory: directory, command: 'manager', managerUsed: true });
   }
-  await ensureDaemon();
-  const plan = createManagerConversationPlan(cwd, input.agentOverrides ?? {});
-  const mcp = await connectManagerMcp(cwd, assignment, plan.ctx.mcpServers, {
-    enableGoalExecutionTools: supportsManagerPermissionJudge(plan.ctx.providerType),
-  });
-  let session: ManagerConversationSession | undefined;
-  let startupTask: Promise<readonly string[]> | undefined;
+  const identity = assignment.kind === 'workspace' ? { kind: 'workspace' as const, workspaceId: assignment.workspaceId }
+    : { kind: 'repository' as const, repositoryDirectory: assignment.repositoryDirectory };
+  const client = new ConversationIpcClient(identity, input.agentOverrides);
   try {
-    await plan.ctx.provider.preflight?.({
-      cwd, model: plan.ctx.model, providerOptions: plan.ctx.providerOptions,
-      permissionMode: 'full', mcpServers: mcp.servers,
-      outputSchema: getManagerOutputSchema(plan.ctx.providerType),
-    });
-    session = createManagerConversationSession({
-      cwd, plan: { ...plan, ctx: { ...plan.ctx, mcpServers: mcp.servers } },
-      agentOverrides: input.agentOverrides, assignment,
-    });
-    const viewSession = session;
-    await mountInk<void>(({ settle, fail }) => (
-      <ManagerView cwd={cwd} assignment={assignment} lang={plan.ctx.lang} session={viewSession}
-        initialDiagnostics={[]} onExit={() => settle()} startup={{
-          run: (signal) => {
-            startupTask = (async () => {
-              const diagnostics: string[] = [];
-              if (signal.aborted) return [];
-              for (const directory of assignment.repositoryDirectories) await ensureManagerRun(directory);
-              return diagnostics;
-            })();
-            return startupTask;
-          },
-          fail,
-        }} />
+    await client.connect();
+    await mountInk<void>(({ settle }) => (
+      <ManagerView cwd={cwd} assignment={assignment} lang={resolveConfigValue(cwd, 'language')} client={client}
+        initialDiagnostics={[]} onExit={() => settle()} />
     ), 'Manager TUI exited before completing its session');
   } catch (error) {
     const notification = await notifyManagerTurnFailure(cwd, undefined, error);
-    if (notification !== undefined) process.stderr.write(`${notification}\n`);
+    if (notification !== undefined) process.stderr.write(notification + '\n');
     throw error;
   } finally {
-    try { await startupTask; }
-    finally {
-      try { await session?.close(); } finally {
-        try { await mcp.dispose(); } finally {
-          const current = await session?.getAssignment();
-          for (const directory of current?.repositoryDirectories ?? assignment.repositoryDirectories) await ensureManagerRun(directory);
-        }
-      }
-    }
+    client.close();
   }
 }

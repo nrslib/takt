@@ -290,7 +290,7 @@ See the [Builtin Catalog](./docs/builtin-catalog.md) for all workflows and perso
 | `takt run` | Execute all pending tasks |
 | `takt watch` | Monitor the task queue and auto-execute pending tasks (resident process) |
 | `takt ui` | Open the experimental Viewer-first Web UI on `http://127.0.0.1:20525` |
-| `takt manager` | Open the experimental goal conversation TUI. Use `Ctrl+R` for inquiries, `Ctrl+G` for ongoing goals, `Ctrl+O` for a summary, `Ctrl+N` for a list of saved notifications and their full text, and `Ctrl+P` for a read-only list of repositories managed by manager, showing their names and locations. These keys also work while manager is processing. To add, remove, or rename a managed repository, ask in the conversation. `Ctrl+O` requests a summary of the current conversation if none is awaiting approval, or approves and registers the displayed summary without regenerating it. If material is insufficient, continue the conversation. Behavior, settings, and saved data formats may change without notice. Automatically queues and runs tasks, incurring provider API costs. With claude (claude-sdk) or codex, AI reviews tool use before execution. On startup, the daemon starts automatically to process events and perform patrols. Stop the daemon with `takt daemon stop` |
+| `takt manager` | Open the experimental goal conversation TUI connected to the daemon. Use `Ctrl+R` for inquiries, `Ctrl+G` for ongoing goals, `Ctrl+O` for a summary, `Ctrl+N` for a list of saved notifications and their full text, and `Ctrl+P` for a read-only list of repositories managed by manager, showing their names and locations. These keys also work while manager is processing. To add, remove, or rename a managed repository, ask in the conversation. `Ctrl+O` requests a summary of the current conversation if none is awaiting approval, or approves and registers the displayed summary without regenerating it. If material is insufficient, continue the conversation. Behavior, settings, and saved data formats may change without notice. Automatically queues and runs tasks, incurring provider API costs. With claude (claude-sdk) or codex, AI reviews tool use before execution. On startup, manager starts the daemon if needed and waits until it is ready; the daemon runs conversations, processes events, and performs patrols. Stop the daemon with `takt daemon stop` |
 | `takt list` | Manage task branches (merge, retry, requeue, stop, force-fail, instruct, delete) |
 | `takt #N` | Use a GitHub Issue as the initial input for a task |
 | `takt merge` | Review, fix, and merge pull requests with a workflow |
@@ -301,6 +301,14 @@ See the [Builtin Catalog](./docs/builtin-catalog.md) for all workflows and perso
 | `takt workflow doctor` | Validate workflow definitions |
 | `takt workflow inspect` | Inspect a workflow's configuration and resolution sources |
 | `takt repertoire add` | Install a repertoire package from GitHub |
+
+Manager conversations run in the daemon; the TUI sends requests and displays results. Once a turn is accepted, it continues in the daemon even if you close the TUI. Reopening manager for the same repository or workspace, or opening a second TUI for that assignment, connects to the same conversation. Any summary awaiting approval is shown again and can be approved with `Ctrl+O`.
+
+Previous messages and replies are not redisplayed when you reopen the TUI. TAKT does not save the conversation text; conversation history is managed by the provider's session. Pending goal summaries and goal records are saved separately.
+
+If another message is submitted while the same conversation is processing, it is rejected as busy and will not run later. Submit it again after processing finishes. After a daemon restart, a turn that was running is treated as interrupted, and you can send a new message.
+
+The daemon does not exit automatically while a TUI is connected or an accepted conversation operation is running. To stop it explicitly, use `takt daemon stop`.
 
 See the [CLI Reference](./docs/cli-reference.md) for all commands and options.
 

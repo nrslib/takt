@@ -1,3 +1,5 @@
+import { createWorkspace } from '../infra/config/global/workspaceRegistry.js';
+import { readManagerTestDisplay } from './helpers/manager-display-items.js';
 import { cleanup, render } from 'ink-testing-library';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -6,9 +8,10 @@ import { createElement } from 'react';
 import stringWidth from 'string-width';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ManagerView } from '../features/manager/ManagerView.js';
-import type { ManagerConversationSession } from '../features/manager/conversationSession.js';
+import { ManagerServiceClient, spyConversationCommand } from './helpers/manager-service-client.js';
+import { MockProvider } from '../infra/providers/mock.js';
+import * as repositories from '../infra/task/repositoryDirectory.js';
 import type { ManagerAssignment } from '../features/manager/startupResolution.js';
-import * as savedEvents from '../features/manager/savedEvents.js';
 import { PromptInput } from '../features/tui/PromptInput.js';
 import { TranscriptView } from '../features/tui/TranscriptEntryView.js';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
@@ -73,27 +76,38 @@ describe('manager polling and answer cancellation', () => {
     store = new GoalStore(cwd);
   });
 
-  afterEach(() => {
+  const clients: ManagerServiceClient[] = [];
+  afterEach(async () => {
     app?.unmount();
+    await Promise.all(clients.splice(0).map((client) => client.dispose()));
     app = undefined;
     invalidateResolvedConfigCache(cwd);
     rmSync(cwd, { recursive: true, force: true });
   });
 
-  function mount(lang: 'ja' | 'en', assignment?: ManagerAssignment, initialDiagnostics: readonly string[] = ['会話ログの目印']) {
-    const unused = async (): Promise<never> => { throw new Error('Unexpected manager operation'); };
-    const answerQuestion = vi.fn<ManagerConversationSession['answerQuestion']>(unused);
-    const pauseGoal = vi.fn<ManagerConversationSession['pauseGoal']>(unused);
-    const resumeGoal = vi.fn<ManagerConversationSession['resumeGoal']>(unused);
-    const abortGoal = vi.fn<ManagerConversationSession['abortGoal']>(unused);
-    const session: ManagerConversationSession = {
-      getAssignment: async () => assignment, getPendingSummary: () => null, resetConversation: () => {},
-      dismissSummary: () => {}, handleUserMessage: unused, approveSummary: unused, answerQuestion,
-      pauseGoal, resumeGoal, abortGoal, close: async () => {},
-    };
-    const read = vi.spyOn(savedEvents, 'readManagerDisplayEvents');
-    app = render(createElement(ManagerView, { cwd, lang, session, assignment, initialDiagnostics, onExit: vi.fn() }));
-    return { answerQuestion, pauseGoal, resumeGoal, abortGoal, read };
+  async function mount(lang: 'ja' | 'en', assignment?: ManagerAssignment, initialDiagnostics: readonly string[] = ['会話ログの目印']) {
+    vi.spyOn(repositories, 'resolveGitRepositoryDirectory').mockImplementation(async (directory) => directory);
+    if (assignment?.kind === 'workspace') {
+      const path = join(getGlobalConfigDir(), 'workspaces', assignment.workspaceId);
+      mkdirSync(path, { recursive: true });
+      writeFileSync(join(path, 'workspace.json'), JSON.stringify({ id: assignment.workspaceId, name: assignment.name, repositoryDirectories: assignment.repositoryDirectories }));
+    }
+    const client = new ManagerServiceClient({ cwd, assignment, plan: {
+      ctx: { providerType: 'mock', model: undefined, lang, provider: new MockProvider() },
+      strategy: { systemPrompt: 'manager fixture' },
+    } });
+    const answerQuestion = spyConversationCommand(client, 'answer_question');
+    const pauseGoal = spyConversationCommand(client, 'pause_goal');
+    const resumeGoal = spyConversationCommand(client, 'resume_goal');
+    const abortGoal = spyConversationCommand(client, 'abort_goal');
+    clients.push(client);
+    const read = vi.spyOn(client, 'refresh');
+    await client.ready;
+    await client.refresh();
+    app = render(createElement(ManagerView, { cwd, lang, client,
+      assignment: assignment ?? { kind: 'repository', repositoryDirectory: cwd, repositoryDirectories: [cwd] },
+      initialDiagnostics, onExit: vi.fn() }));
+    return { client, answerQuestion, pauseGoal, resumeGoal, abortGoal, read };
   }
 
   const prompt = () => vi.mocked(PromptInput).mock.calls.at(-1)![0];
@@ -111,6 +125,61 @@ describe('manager polling and answer cancellation', () => {
     });
   }
 
+  it.each(['complete', 'error', 'loading'] as const)('discards an obsolete read after reopening into a workspace (%s)', async (outcome) => {
+    const goal = await store.create(goalRecord());
+    const { client } = await mount('en');
+    let release!: () => void;
+    let entered!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const iterate = GoalStore.prototype.iterate;
+    let holdNext = true;
+    if (outcome === 'loading') {
+      vi.mocked(repositories.resolveGitRepositoryDirectory).mockImplementationOnce(async (directory) => {
+        entered();
+        await held;
+        return directory;
+      });
+    } else vi.spyOn(GoalStore.prototype, 'iterate').mockImplementation(async function* (this: GoalStore) {
+      for await (const item of iterate.call(this)) {
+        if (holdNext) {
+          holdNext = false;
+          entered();
+          await held;
+          if (outcome === 'error') throw new Error('Obsolete read failed');
+          yield { ...item, objective: 'Obsolete goal' };
+        } else yield item;
+      }
+    });
+    const reading = client.refresh();
+    await started;
+    const resolutions = vi.mocked(repositories.resolveGitRepositoryDirectory).mock.calls.length;
+    const concurrentReading = client.refresh();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(repositories.resolveGitRepositoryDirectory).toHaveBeenCalledTimes(resolutions);
+    const workspace = await createWorkspace({ globalConfigDirectory: getGlobalConfigDir(), name: 'New workspace', repositoryDirectories: [cwd] });
+    const changing = client.submit({ kind: 'message', text: 'Do not replay this mutation' });
+    const connections: string[] = [];
+    const unsubscribe = client.subscribe(() => connections.push(client.getSnapshot().connection));
+    try {
+      await waitFor(() => {
+        expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete',
+          state: { assignment: { kind: 'workspace', workspaceId: workspace.id } } });
+        expect(client.getSnapshot().items).toContainEqual({ kind: 'assignment', assignment: {
+          kind: 'workspace', workspaceId: workspace.id, name: workspace.name, repositoryDirectories: [cwd],
+        } });
+      });
+      expect(await changing).toMatchObject({ kind: 'error', code: 'invalid_assignment' });
+      connections.length = 0;
+      release();
+      await reading;
+      expect(connections).not.toContain('connecting');
+      expect(client.getSnapshot()).toMatchObject({ readStatus: 'complete', state: { assignment: { kind: 'workspace', workspaceId: workspace.id } } });
+      expect(client.getSnapshot().items.flatMap((item) => item.kind === 'goal' ? [item.goal.objective] : [])).toEqual([goal.objective]);
+    } finally { release(); await Promise.allSettled([reading, concurrentReading, changing]); unsubscribe(); }
+  });
+
   async function createGoalsWithHistory() {
     return Promise.all(['最初のゴール', '次のゴール'].map((name, goalIndex) => store.create({
       ...goalRecord(), id: `750e8400-e29b-41d4-a716-44665544000${goalIndex}`, objective: name,
@@ -126,111 +195,63 @@ describe('manager polling and answer cancellation', () => {
     vi.setSystemTime(new Date('2026-10-21T10:00:00.000Z'));
     const goals = await createGoalsWithHistory();
     const goalFile = join(cwd, '.takt', 'goals', goals[1]!.id, 'goal.json');
-    const list = failure === 'repository'
-      ? vi.spyOn(GoalStore.prototype, 'list').mockRejectedValue(new Error('repository read failed')) : undefined;
+    const iterator = failure === 'repository'
+      ? vi.spyOn(GoalStore.prototype, 'iterate').mockImplementation(async function* () { throw new Error('repository read failed'); }) : undefined;
     if (failure === 'goal') writeFileSync(goalFile, '{}');
-    const { read } = mount('en');
-
-    await waitFor(() => expect(read).toHaveBeenCalled());
-    const initial: Awaited<ReturnType<typeof savedEvents.readManagerDisplayEvents>> = await read.mock.results[0]!.value;
-    expect(initial.diagnostics.length).toBeGreaterThan(0);
-    if (failure === 'goal') {
-      expect(initial.goals.map((goal) => goal.id)).toEqual([goals[0]!.id]);
-      expect(initial.diagnostics.some((event) => event.message.includes(goalFile))).toBe(true);
-    } else expect(initial.events).toEqual([]);
+    const { client, read } = await mount('en');
     await waitFor(() => {
-      for (const diagnostic of initial.diagnostics) {
-        expect(transcript().some((entry) => entry.content === diagnostic.message)).toBe(true);
-      }
+      expect(client.getSnapshot().readStatus).toBe('incomplete');
+      expect(transcript().some((entry) => entry.content.includes(failure === 'goal' ? goalFile : 'repository read failed'))).toBe(true);
     });
-
-    if (list !== undefined) list.mockRestore();
+    if (failure === 'goal') expect(client.getSnapshot().items.filter((item) => item.kind === 'goal')).toHaveLength(1);
+    if (iterator !== undefined) iterator.mockRestore();
     else writeFileSync(goalFile, JSON.stringify(goals[1]));
-    await waitFor(async () => {
-      const recovered: Awaited<ReturnType<typeof savedEvents.readManagerDisplayEvents>> = await read.mock.results.at(-1)!.value;
-      expect(recovered.diagnostics).toEqual([]);
-      expect(recovered.events).toHaveLength(60);
-      expect(recovered.goals.map((goal) => goal.id)).toEqual(expect.arrayContaining(goals.map((goal) => goal.id)));
+    await waitFor(() => {
+      expect(client.getSnapshot().readStatus).toBe('complete');
+      expect(client.getSnapshot().items.filter((item) => item.kind === 'display_event')).toHaveLength(60);
+      expect(client.getSnapshot().items.flatMap((item) => item.kind === 'goal' ? [item.goal.id] : []))
+        .toEqual(goals.map((goal) => goal.id));
     });
     const polls = read.mock.calls.length;
     await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(polls));
     for (const [props] of vi.mocked(TranscriptView).mock.calls) {
-      expect(props.entries.filter((entry) => goals.some((goal) => entry.content.startsWith(`${goal.id}: `)
-        && !initial.diagnostics.some((event) => event.message === entry.content)))).toEqual([]);
+      expect(props.entries.some((entry) => entry.content.includes('起動前の記録'))).toBe(false);
     }
-    for (const diagnostic of initial.diagnostics) {
-      expect(transcript().filter((entry) => entry.content === diagnostic.message))
-        .toHaveLength(initial.diagnostics.filter((event) => event.message === diagnostic.message).length);
-    }
+    expect(transcript().filter((entry) => entry.content.includes(failure === 'goal' ? goalFile : 'repository read failed'))).toHaveLength(1);
   });
 
-  it('displays a new record exactly once after the initial read rejects', async () => {
+  it.each([true, false])('displays new records once and suppresses pre-startup records after an initial read fails (saved before startup=%s)', async (beforeStartup) => {
     const goals = await createGoalsWithHistory();
-    const startedAt = Date.parse('2026-10-21T10:00:00.000Z');
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(startedAt);
-    const actualRead = savedEvents.readManagerDisplayEvents;
-    const { read } = mount('en');
-    read.mockRejectedValue(new Error('initial display read rejected'));
-    await waitFor(() => expect(transcript().some((entry) => entry.content === 'initial display read rejected')).toBe(true));
-
-    vi.setSystemTime(startedAt + 1000);
-    const summary = '拒否中に追加した通常記録\n' + '新着の詳細。'.repeat(30) + '新着末尾';
-    await store.update(goals[1]!.id, (goal) => appendGoalWorkLog(goal, { summary }));
-    vi.setSystemTime(startedAt + 5000);
-    read.mockImplementation(actualRead);
-    await waitFor(async () => {
-      const recovered: Awaited<ReturnType<typeof savedEvents.readManagerDisplayEvents>> = await read.mock.results.at(-1)!.value;
-      expect(recovered.events).toHaveLength(61);
-      expect(recovered.diagnostics).toEqual([]);
-    });
-    const polls = read.mock.calls.length;
-    await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(polls));
-    expect(transcript().filter((entry) => entry.content === `${goals[1]!.id}: ${summary}`)).toHaveLength(1);
-    for (const [props] of vi.mocked(TranscriptView).mock.calls) {
-      for (const entry of props.entries) {
-        expect(entry.content).not.toContain('起動前の記録');
-        if (goals.some((goal) => entry.content.startsWith(`${goal.id}: `))) {
-          expect(entry.content).toBe(`${goals[1]!.id}: ${summary}`);
-        }
-      }
-    }
-  });
-
-  it.each([true, false])('distinguishes the same record by saving before startup=%s after a rejected read', async (beforeStartup) => {
-    const goals = await createGoalsWithHistory();
+    const goalId = goals[0]!.id;
+    const summary = '作業報告\n詳細';
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-10-21T09:59:59Z'));
-    const goalId = goals[0]!.id;
-    const save = () => store.update(goalId, (goal) => appendGoalWorkLog(goal, { summary: '作業報告\n詳細' }));
+    const save = () => store.update(goalId, (goal) => appendGoalWorkLog(goal, { summary }));
     if (beforeStartup) await save();
     vi.setSystemTime(new Date('2026-10-21T10:00:00Z'));
-    const actualRead = savedEvents.readManagerDisplayEvents;
-    const { read } = mount('en');
-    read.mockRejectedValue(new Error('initial display read rejected'));
-    await waitFor(() => expect(transcript().some((entry) => entry.content === 'initial display read rejected')).toBe(true));
+    const iterator = vi.spyOn(GoalStore.prototype, 'iterate').mockImplementation(async function* () {
+      throw new Error('initial display read rejected');
+    });
+    const { client, read } = await mount('en');
+    await waitFor(() => expect(app!.lastFrame()).toContain('initial display read rejected'));
+    expect(client.getSnapshot().readStatus).toBe('incomplete');
     if (!beforeStartup) {
       vi.setSystemTime(new Date('2026-10-21T10:00:01Z'));
       await save();
     }
     vi.setSystemTime(new Date('2026-10-21T10:00:05Z'));
-    read.mockImplementation(actualRead);
-    await waitFor(async () => {
-      const recovered: Awaited<ReturnType<typeof savedEvents.readManagerDisplayEvents>> = await read.mock.results.at(-1)!.value;
-      expect(recovered.events).toHaveLength(61);
-      expect(recovered.diagnostics).toEqual([]);
-      expect(transcript().filter((entry) => entry.content.startsWith(`${goalId}: `)))
-        .toHaveLength(beforeStartup ? 0 : 1);
+    iterator.mockRestore();
+    await waitFor(() => {
+      expect(client.getSnapshot().readStatus).toBe('complete');
+      expect(client.getSnapshot().items.filter((item) => item.kind === 'display_event')).toHaveLength(61);
+      expect(transcript().filter((entry) => entry.content === `${goalId}: ${summary}`)).toHaveLength(beforeStartup ? 0 : 1);
     });
     const polls = read.mock.calls.length;
     await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(polls + 1));
     for (const [props] of vi.mocked(TranscriptView).mock.calls) {
-      const records = props.entries.filter((entry) => goals.some((goal) => entry.content.startsWith(`${goal.id}: `)));
-      expect(records.length).toBeLessThanOrEqual(beforeStartup ? 0 : 1);
-      for (const entry of records) expect(entry.content).toBe(`${goalId}: 作業報告\n詳細`);
+      expect(props.entries.some((entry) => entry.content.includes('起動前の記録'))).toBe(false);
+      expect(props.entries.filter((entry) => entry.content === `${goalId}: ${summary}`).length).toBeLessThanOrEqual(beforeStartup ? 0 : 1);
     }
-    expect(transcript().filter((entry) => entry.content === `${goalId}: 作業報告\n詳細`))
-      .toHaveLength(beforeStartup ? 0 : 1);
   });
 
   it('reads all work records without a startup boundary and limits suppression to startup repositories', async () => {
@@ -240,10 +261,10 @@ describe('manager polling and answer cancellation', () => {
     const addedGoal = await new GoalStore(added).create({ ...goalRecord(), id: randomUUID(), workLog: goals[0]!.workLog });
     const assignment = { kind: 'workspace' as const, workspaceId: randomUUID(), name: 'Startup workspace',
       repositoryDirectories: [cwd, added] };
-    const all = await savedEvents.readManagerDisplayEvents(cwd, 'en', assignment);
+    const all = await readManagerTestDisplay(cwd, 'en', assignment);
     expect(all.events).toHaveLength(90);
     for (const event of all.events) expect(event.suppressInitialDisplay).toBeUndefined();
-    const bounded = await savedEvents.readManagerDisplayEvents(cwd, 'en', assignment,
+    const bounded = await readManagerTestDisplay(cwd, 'en', assignment,
       new Map([[cwd, Date.now()]]));
     expect(bounded.events).toHaveLength(90);
     const addedEvents = bounded.events.filter((event) => event.message.startsWith(`${addedGoal.id}: `));
@@ -261,14 +282,16 @@ describe('manager polling and answer cancellation', () => {
     const broken = await store.create({ ...goalRecord(), id: randomUUID() });
     const brokenFile = join(cwd, '.takt', 'goals', broken.id, 'goal.json');
     writeFileSync(brokenFile, '{}');
-    const { read } = mount(lang);
+    const { client, read } = await mount(lang);
     await waitFor(() => {
+      expect(client.getSnapshot().readStatus).toBe('incomplete');
       expect(transcript().filter((entry) => entry.content.includes(notice))).toEqual([]);
       expect(transcript().some((entry) => entry.content.includes(brokenFile))).toBe(true);
     });
 
     const newSummary = '起動後に届いた作業の全文\n' + '新着の詳細。'.repeat(30) + '新着末尾';
     await store.update(goals[1]!.id, (goal) => appendGoalWorkLog(goal, { summary: newSummary }));
+    writeFileSync(brokenFile, JSON.stringify(broken));
     await waitFor(() => expect(transcript().filter((entry) => entry.content === `${goals[1]!.id}: ${newSummary}`)).toHaveLength(1));
     const polls = read.mock.calls.length;
     await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(polls));
@@ -297,7 +320,7 @@ describe('manager polling and answer cancellation', () => {
       questions: [question({ id: randomUUID() })] });
     await new StandaloneInquiryStore(getGlobalConfigDir(), { kind: 'repository', repositoryDirectory: cwd })
       .create({ body: 'ゴールなしの問い合わせ' });
-    mount(lang, undefined, []);
+    await mount(lang, undefined, []);
     await waitFor(() => {
       const line = countLine(lang);
       expect(line).toMatch(lang === 'ja' ? /進行中\s*2/u : /(?:in progress|ongoing|active)\s*:?\s*2/iu);
@@ -308,7 +331,7 @@ describe('manager polling and answer cancellation', () => {
   });
 
   it.each(['ja', 'en'] as const)('keeps zero counts on the second line without key guidance in %s', async (lang) => {
-    mount(lang, undefined, []);
+    await mount(lang, undefined, []);
     await waitFor(() => {
       expect(countLine(lang)).toMatch(lang === 'ja' ? /進行中\s*0.*未回答\s*0/u
         : /(?:in progress|ongoing|active)\s*:?\s*0.*(?:pending|unanswered)\s*:?\s*0/iu);
@@ -318,7 +341,7 @@ describe('manager polling and answer cancellation', () => {
   });
 
   it('shows the single repository heading and counts as the first two lines at width 80', async () => {
-    mount('ja', undefined, []);
+    await mount('ja', undefined, []);
     vi.spyOn(app!.stdout, 'columns', 'get').mockReturnValue(80);
     app!.stdout.emit('resize');
     await waitFor(() => {
@@ -334,7 +357,7 @@ describe('manager polling and answer cancellation', () => {
   it('shows the repository name and remaining repository count instead of the workspace name', async () => {
     const directories = [cwd, join(cwd, 'docs'), join(cwd, 'site')];
     for (const directory of directories.slice(1)) mkdirSync(directory);
-    mount('ja', { kind: 'workspace', workspaceId: randomUUID(), name: '作業用workspace', repositoryDirectories: directories }, []);
+    await mount('ja', { kind: 'workspace', workspaceId: randomUUID(), name: '作業用workspace', repositoryDirectories: directories }, []);
     await waitFor(() => {
       expect(app!.lastFrame()!.split('\n')[0]).toBe(`担当: ${basename(cwd)} ほか 2 件`);
     });
@@ -344,7 +367,7 @@ describe('manager polling and answer cancellation', () => {
     for (const name of ['開発-0-作業', `開発-0-${'作業'.repeat(30)}`]) {
       const directories = [join(cwd, name), ...Array.from({ length: count - 1 }, (_, index) => join(cwd, `other-${index}`))];
       for (const directory of directories) mkdirSync(directory, { recursive: true });
-      mount('ja', { kind: 'workspace', workspaceId: randomUUID(), name: '開発担当', repositoryDirectories: directories }, []);
+      await mount('ja', { kind: 'workspace', workspaceId: randomUUID(), name: '開発担当', repositoryDirectories: directories }, []);
       vi.spyOn(app!.stdout, 'columns', 'get').mockReturnValue(80);
       app!.stdout.emit('resize');
       await waitFor(() => {
@@ -361,7 +384,7 @@ describe('manager polling and answer cancellation', () => {
 
   it.each(['ja', 'en'] as const)('shows an empty assignment instead of the working directory on initial render and refresh in %s', async (lang) => {
     const assignment: ManagerAssignment = { kind: 'workspace', workspaceId: randomUUID(), name: '空のworkspace', repositoryDirectories: [] };
-    const { read } = mount(lang, assignment, []);
+    const { read } = await mount(lang, assignment, []);
     const checkHeading = () => {
       const rows = app!.lastFrame()!.split('\n');
       expect(rows[0]).toBe(getLabel('manager.selectionEmpty.repository', lang));
@@ -378,7 +401,7 @@ describe('manager polling and answer cancellation', () => {
 
   describe.each([80, 40])('input guidance at width %i', (columns) => {
     it('shows the complete Japanese key guidance below the input and keeps the notice above it', async () => {
-      mount('ja', undefined, []);
+      await mount('ja', undefined, []);
       vi.spyOn(app!.stdout, 'columns', 'get').mockReturnValue(columns);
       app!.stdout.emit('resize');
       const expected = 'Enter 送信  Shift+Enter 改行  Esc 中断  ^R 問い合わせ  ^G ゴール  ^O 要約  ^N 知らせ  ^P 担当  ^C 終了';
@@ -399,7 +422,7 @@ describe('manager polling and answer cancellation', () => {
   });
 
   it('shows an English assignment heading and all key guidance below the input at width 80', async () => {
-    mount('en', undefined, []);
+    await mount('en', undefined, []);
     vi.spyOn(app!.stdout, 'columns', 'get').mockReturnValue(80);
     app!.stdout.emit('resize');
     await waitFor(() => {
@@ -426,7 +449,7 @@ describe('manager polling and answer cancellation', () => {
 
   it.each(['ja', 'en'] as const)('opens assigned repositories with Ctrl+P as one name and path row per repository in %s', async (lang) => {
     const assignment = repositoryAssignment(2);
-    mount(lang, assignment);
+    await mount(lang, assignment);
     // 一時ディレクトリのパス全体が収まる幅で、行の内容を確認する。
     vi.spyOn(app!.stdout, 'columns', 'get').mockReturnValue(200);
     app!.stdout.emit('resize');
@@ -450,7 +473,7 @@ describe('manager polling and answer cancellation', () => {
   });
 
   it('moves a ten-repository window down to the twelfth repository and back up', async () => {
-    mount('ja', repositoryAssignment(12));
+    await mount('ja', repositoryAssignment(12));
     app!.stdin.write('\x10');
     await waitFor(() => {
       expect(repositoryRows()).toHaveLength(10);
@@ -472,7 +495,7 @@ describe('manager polling and answer cancellation', () => {
   });
 
   it('closes the repository list with Esc and keeps the same unsent Japanese draft', async () => {
-    const calls = mount('ja', repositoryAssignment(2));
+    const calls = await mount('ja', repositoryAssignment(2));
     app!.stdin.write('あいう');
     await waitFor(() => {
       expect(prompt().text).toBe('あいう');
@@ -495,7 +518,7 @@ describe('manager polling and answer cancellation', () => {
 
   it('keeps the repository list read-only when Enter is pressed', async () => {
     const assignment = repositoryAssignment(2);
-    const calls = mount('ja', assignment);
+    const calls = await mount('ja', assignment);
     app!.stdin.write('\x10');
     await waitFor(() => expect(repositoryRows()).toHaveLength(2));
     app!.stdin.write('\r');
@@ -518,7 +541,7 @@ describe('manager polling and answer cancellation', () => {
       ...(index === 0 ? { completion } : {}),
       questions: index === 2 ? [question({ body: '画面へ固定表示しない問い合わせ本文' })] : [],
     });
-    mount(lang);
+    await mount(lang);
     await waitFor(() => expect(countLine(lang)).toMatch(lang === 'ja' ? /進行中\s*1.*未回答\s*1/u
       : /(?:in progress|ongoing|active)\s*:?\s*1.*(?:pending|unanswered)\s*:?\s*1/iu));
     const rows = app!.lastFrame()!.split('\n');
@@ -535,7 +558,7 @@ describe('manager polling and answer cancellation', () => {
 
   it.each(['ja', 'en'] as const)('refreshes counts after status and inquiry changes in the same %s screen', async (lang) => {
     const saved = await store.create({ ...goalRecord(), questions: [question({})] });
-    mount(lang);
+    await mount(lang);
     await waitFor(() => expect(countLine(lang)).toMatch(lang === 'ja' ? /進行中\s*1.*未回答\s*1/u
       : /(?:in progress|ongoing|active)\s*:?\s*1.*(?:pending|unanswered)\s*:?\s*1/iu));
     await store.update(saved.id, (goal) => ({ ...goal, executionStatus: 'paused',
@@ -549,7 +572,7 @@ describe('manager polling and answer cancellation', () => {
 
   it.each(['ja', 'en'] as const)('shows only a single-line patrol summary and preserves full ordinary records in %s', async (lang) => {
     const saved = await store.create(goalRecord());
-    const { read } = mount(lang);
+    const { read } = await mount(lang);
     await waitFor(() => expect(read).toHaveBeenCalled());
     await read.mock.results[0]!.value;
     await waitFor(() => expect(transcript()).toHaveLength(1));
@@ -582,7 +605,7 @@ describe('manager polling and answer cancellation', () => {
           } })] });
         const file = join(cwd, '.takt', 'goals', saved.id, 'goal.json');
         const before = readFileSync(file, 'utf8');
-        const calls = mount(lang);
+        const calls = await mount(lang);
         vi.spyOn(app!.stdout, 'columns', 'get').mockReturnValue(columns);
         app!.stdin.write(command === 'answer' ? '\x12' : '\x07');
         const list = () => boxes(app!.lastFrame()!).find((box) => /↑|↓/u.test(box) && /Enter/u.test(box) && /Esc/u.test(box));
@@ -619,7 +642,7 @@ describe('manager polling and answer cancellation', () => {
     const saved = await store.create({ ...goalRecord(), objective, executionStatus: 'paused', questions: [question({})] });
     const file = join(cwd, '.takt', 'goals', saved.id, 'goal.json');
     const before = readFileSync(file, 'utf8');
-    mount(lang);
+    await mount(lang);
     await waitFor(() => expect(countLine(lang)).toBeDefined());
     const initialFrame = app!.lastFrame()!;
     await openAnswer();
@@ -636,7 +659,7 @@ describe('manager polling and answer cancellation', () => {
 
   it.each([false, true])('keeps the prompt and answer target when another inquiry arrives with an open dialog=%s', async (open) => {
     const saved = await store.create({ ...goalRecord(), questions: [question({})] });
-    const { read, answerQuestion } = mount('en');
+    const { read, answerQuestion } = await mount('en');
     await waitFor(() => expect(countLine('en')).toBeDefined());
     if (open) await openAnswer();
     app!.stdin.write('unsent draft');
@@ -661,7 +684,7 @@ describe('manager polling and answer cancellation', () => {
     const saved = await store.create({ ...goalRecord(), questions: [inquiry] });
     const file = join(cwd, '.takt', 'goals', saved.id, 'goal.json');
     const before = readFileSync(file, 'utf8');
-    const { read, answerQuestion } = mount('en');
+    const { read, answerQuestion } = await mount('en');
     await waitFor(() => expect(countLine('en')).toBeDefined());
     await openAnswer();
     app!.stdin.write('\x1b[27u');
@@ -671,7 +694,7 @@ describe('manager polling and answer cancellation', () => {
     expect(answerQuestion).not.toHaveBeenCalled();
     expect(readFileSync(file, 'utf8')).toBe(before);
     expect(await store.get(saved.id)).toEqual(saved);
-    expect((await savedEvents.readManagerDisplayEvents(cwd, 'en')).questions).toEqual([
+    expect((await readManagerTestDisplay(cwd, 'en')).questions).toEqual([
       { goalId: saved.id, repositoryDirectory: cwd, objective: saved.objective, question: saved.questions![0] },
     ]);
     expect(countLine('en')).toMatch(/(?:pending|unanswered)\s*:?\s*1/iu);

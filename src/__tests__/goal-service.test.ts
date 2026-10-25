@@ -1,21 +1,24 @@
 vi.mock('../infra/goals/events.js', () => ({ saveManagerEvent: vi.fn() }));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createGoal } from '../infra/goals/service.js';
+import { createGoal, registerReservedGoal } from '../infra/goals/service.js';
+import { saveManagerEvent } from '../infra/goals/events.js';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
 import type { prepareGoalBranch } from '../infra/goals/git.js';
 import { goalInput, goalRecord } from './helpers/goal-fixtures.js';
 
 const doubles = vi.hoisted(() => ({
-  assertAbsent: vi.fn(), create: vi.fn(),
-  prepare: vi.fn(), createBranch: vi.fn(), removeBranch: vi.fn(),
+  assertAbsent: vi.fn(), create: vi.fn(), find: vi.fn(), refs: vi.fn(),
+  prepare: vi.fn(), createBranch: vi.fn(), removeBranch: vi.fn(), project: vi.fn(),
 }));
-vi.mock('../infra/config/global/projectRegistry.js', () => ({ registerProject: vi.fn() }));
+vi.mock('../infra/config/global/projectRegistry.js', () => ({ registerProject: doubles.project }));
 vi.mock('../infra/goals/store.js', () => ({
   GoalStore: class {
     assertAbsent = doubles.assertAbsent;
     create = doubles.create;
+    find = doubles.find;
   },
 }));
+vi.mock('../infra/goals/git-command.js', () => ({ runGoalGit: doubles.refs }));
 vi.mock('../infra/goals/git.js', () => ({
   prepareGoalBranch: doubles.prepare,
   createGoalBranch: doubles.createBranch,
@@ -33,6 +36,7 @@ describe('Goal registration service', () => {
       branch: goalRecord().branch, startBranch: 'main', integrationBranch: 'main', commit: 'a'.repeat(40),
     });
     doubles.create.mockImplementation(async (goal: unknown) => goal);
+    doubles.refs.mockResolvedValue({ output: Buffer.alloc(0), truncated: false, code: 0 });
   });
 
   it('saves the approved record after creating its branch', async () => {
@@ -53,7 +57,7 @@ describe('Goal registration service', () => {
     }));
     const creating = createGoal(request()).then((goal) => ({ goal }), (error: unknown) => ({ error }));
     try {
-      await vi.waitFor(() => expect(doubles.prepare).toHaveBeenCalledExactlyOnceWith(cwd, goalRecord().id, undefined, undefined));
+      await vi.waitFor(() => expect(doubles.prepare).toHaveBeenCalledExactlyOnceWith(cwd, goalRecord().id, undefined, undefined, undefined));
       expect(doubles.createBranch).not.toHaveBeenCalled();
       expect(doubles.create).not.toHaveBeenCalled();
     } finally {
@@ -102,5 +106,37 @@ describe('Goal registration service', () => {
     await expect(createGoal(request())).rejects.toThrow();
     expect(doubles.removeBranch).toHaveBeenCalledWith(cwd, goalRecord().branch, 'a'.repeat(40));
     expect(await createGoal(request())).toEqual({ ...goalRecord(), createdAt: expect.any(String) });
+  });
+
+  it.each(['references', 'project', 'branch'] as const)('stops registration aborted during %s preparation before any branch, goal or event', async (boundary) => {
+    const controller = new AbortController();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const boundaryCall = boundary === 'references' ? doubles.refs : boundary === 'project' ? doubles.project : doubles.prepare;
+    if (boundary === 'references') doubles.refs.mockImplementationOnce(async () => { await gate; return { output: Buffer.alloc(0), truncated: false, code: 0 }; });
+    else if (boundary === 'project') doubles.project.mockImplementationOnce(async () => { await gate; });
+    else doubles.prepare.mockImplementationOnce(async () => { await gate; return { branch: goalRecord().branch, startBranch: 'main', integrationBranch: 'main', commit: 'a'.repeat(40) }; });
+    const abort = new Error('cancel registration');
+    const registering = registerReservedGoal(request(), controller.signal);
+    const rejected = expect(registering).rejects.toBe(abort);
+    try {
+      await vi.waitFor(() => expect(boundaryCall).toHaveBeenCalledOnce());
+      controller.abort(abort);
+    } finally { release(); }
+    await rejected;
+    expect(doubles.createBranch).not.toHaveBeenCalled();
+    expect(doubles.create).not.toHaveBeenCalled();
+    expect(saveManagerEvent).not.toHaveBeenCalled();
+    expect(doubles.removeBranch).not.toHaveBeenCalled();
+    if (boundary === 'references') expect(registerProject).not.toHaveBeenCalled();
+    if (boundary === 'project') expect(doubles.prepare).not.toHaveBeenCalled();
+  });
+
+  it('keeps a committed registration successful when cancellation arrives after goal publication', async () => {
+    const controller = new AbortController();
+    doubles.create.mockImplementationOnce(async () => { controller.abort(); });
+    expect(await createGoal(request(), controller.signal)).toEqual({ ...goalRecord(), createdAt: expect.any(String) });
+    expect(saveManagerEvent).toHaveBeenCalledExactlyOnceWith(cwd, { kind: 'registered', goalId: goalRecord().id });
+    expect(doubles.removeBranch).not.toHaveBeenCalled();
   });
 });

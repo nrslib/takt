@@ -10,6 +10,7 @@ import {
   pickNestedObservabilityEnv,
 } from '../../shared/telemetry/index.js';
 import { createClaudeTerminalSessionName } from './command.js';
+import { createAgentFailureError } from '../../shared/types/agent-failure.js';
 import type { TerminalBackend, TerminalSession, TerminalStartOptions } from './types.js';
 
 const log = createLogger('claude-terminal-tmux');
@@ -168,9 +169,20 @@ function isClaudeInputReady(capturedPane: string): boolean {
   return hasPrompt && !isBusy;
 }
 
-async function waitForClaudeInputReady(session: TerminalSession): Promise<void> {
+async function waitForClaudeInputReady(session: TerminalSession, resumeSessionId: string | undefined): Promise<void> {
   const deadline = Date.now() + CLAUDE_READY_TIMEOUT_MS;
   while (Date.now() < deadline) {
+    if (resumeSessionId !== undefined) {
+      const exit = await runTmux(['display-message', '-p', '-t', session.name, '#{pane_dead}:#{pane_dead_status}']);
+      if (exit.trim().startsWith('1:')) {
+        const diagnostic = await runTmux(['capture-pane', '-p', '-J', '-t', session.name]);
+        if (exit.trim() === '1:1'
+          && stripAnsi(diagnostic).trim() === `No conversation found with session ID: ${resumeSessionId}`) {
+          throw createAgentFailureError('session_continuation_unsupported', 'Claude terminal rejected the saved session.');
+        }
+        throw new Error('Claude terminal exited before accepting input.');
+      }
+    }
     const captured = await capturePane(session, 20);
     if (isClaudeInputReady(captured)) {
       return;
@@ -193,8 +205,17 @@ async function waitForPaneChange(session: TerminalSession, before: string): Prom
 }
 
 export class TmuxTerminalBackend implements TerminalBackend {
+  private readonly pendingResumes = new Map<string, string>();
+
   async start(options: TerminalStartOptions): Promise<TerminalSession> {
     const name = createClaudeTerminalSessionName();
+    const command = [options.command.executable, ...options.command.args];
+    // Install pane retention before exec so a fast startup rejection cannot disappear.
+    const launch = options.resumeSessionId === undefined ? command : [
+      '/bin/sh', '-c',
+      'tmux set-option -p -t "$TMUX_PANE" remain-on-exit on && { tmux set-option -p -t "$TMUX_PANE" remain-on-exit-format "" 2>/dev/null || true; } && exec "$@"',
+      'takt-claude-terminal', ...command,
+    ];
     await runTmux([
       'new-session',
       '-d',
@@ -203,15 +224,15 @@ export class TmuxTerminalBackend implements TerminalBackend {
       '-c',
       options.cwd,
       ...buildNewSessionEnvArgs(options.childProcessEnv),
-      options.command.executable,
-      ...options.command.args,
+      ...launch,
     ], { cwd: options.cwd, childProcessEnv: options.childProcessEnv });
+    if (options.resumeSessionId !== undefined) this.pendingResumes.set(name, options.resumeSessionId);
     return { id: name, name };
   }
 
   async pasteText(session: TerminalSession, text: string): Promise<void> {
     const bufferName = `${session.name}-prompt`;
-    await waitForClaudeInputReady(session);
+    await waitForClaudeInputReady(session, this.pendingResumes.get(session.name));
     const beforePaste = await capturePane(session, 40);
     await loadBuffer(bufferName, text);
     let pasteError: unknown;
@@ -219,6 +240,7 @@ export class TmuxTerminalBackend implements TerminalBackend {
       await runTmux(['paste-buffer', '-p', '-b', bufferName, '-t', session.name]);
       await waitForPaneChange(session, beforePaste);
       await runTmux(['send-keys', '-t', session.name, 'Enter']);
+      this.pendingResumes.delete(session.name);
     } catch (error) {
       pasteError = error;
     }
@@ -241,6 +263,7 @@ export class TmuxTerminalBackend implements TerminalBackend {
   }
 
   async stop(session: TerminalSession): Promise<void> {
+    this.pendingResumes.delete(session.name);
     await runTmux(['kill-session', '-t', session.name]);
   }
 }

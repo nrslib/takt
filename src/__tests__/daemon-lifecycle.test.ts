@@ -7,7 +7,10 @@ import { packageVersion } from '../shared/package-info.js';
 const doubles = vi.hoisted(() => ({
   read: vi.fn(), running: vi.fn(), remove: vi.fn(), spawn: vi.fn(),
   open: vi.fn(), close: vi.fn(), delay: vi.fn(), directory: vi.fn(),
+  ready: vi.fn(),
 }));
+vi.mock('../infra/daemon/ipcEndpoint.js', () => ({ resolveDaemonConfigDirectory: () => process.env.TAKT_CONFIG_DIR }));
+vi.mock('../features/daemon/conversationReadiness.js', () => ({ isConversationIpcReady: doubles.ready }));
 vi.mock('../infra/daemon/owner.js', () => ({
   readDaemonOwner: doubles.read, isDaemonOwnerRunning: doubles.running, removeDaemonOwner: doubles.remove,
 }));
@@ -28,6 +31,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   doubles.read.mockReset().mockReturnValue(undefined);
   doubles.running.mockReset().mockReturnValue(true);
+  doubles.ready.mockReset().mockResolvedValue(true);
   doubles.open.mockReturnValue(42);
   doubles.delay.mockReset().mockResolvedValue(undefined);
   child = Object.assign(new EventEmitter(), { pid: owner.pid, exitCode: null, signalCode: null, unref: vi.fn() });
@@ -40,6 +44,16 @@ beforeEach(() => {
 it('reuses the running daemon with the current version and CLI path', async () => {
   doubles.read.mockReturnValue(owner);
   await ensureDaemon();
+  expect(doubles.spawn).not.toHaveBeenCalled();
+  expect(doubles.ready).toHaveBeenCalledExactlyOnceWith(process.env.TAKT_CONFIG_DIR, owner);
+});
+
+it('waits for authenticated IPC readiness even when the matching owner is already running', async () => {
+  doubles.read.mockReturnValue(owner);
+  doubles.ready.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+  await ensureDaemon();
+  expect(doubles.ready).toHaveBeenCalledTimes(2);
+  expect(doubles.delay).toHaveBeenCalledExactlyOnceWith(50);
   expect(doubles.spawn).not.toHaveBeenCalled();
 });
 
@@ -63,6 +77,27 @@ it('starts detached and confirms its own owner record before returning', async (
   expect(doubles.close).toHaveBeenCalledWith(42);
 });
 
+it('waits for IPC readiness after its newly spawned daemon has published the owner', async () => {
+  let releasePoll!: () => void;
+  const poll = new Promise<void>((resolve) => { releasePoll = resolve; });
+  doubles.ready.mockResolvedValue(false);
+  doubles.delay.mockReturnValue(poll);
+  let returned = false;
+  const starting = ensureDaemon().then(() => { returned = true; });
+  try {
+    await vi.waitFor(() => expect(doubles.ready).toHaveBeenCalledExactlyOnceWith(process.env.TAKT_CONFIG_DIR, owner));
+    expect(doubles.running).toHaveBeenCalledWith(owner);
+    expect(doubles.delay).toHaveBeenCalledExactlyOnceWith(50);
+    expect(returned).toBe(false);
+    doubles.ready.mockResolvedValue(true);
+  } finally { releasePoll(); }
+  await starting;
+  expect(returned).toBe(true);
+  expect(doubles.ready).toHaveBeenCalledTimes(2);
+  expect(doubles.spawn).toHaveBeenCalledOnce();
+  expect(child.unref).toHaveBeenCalledOnce();
+});
+
 it.each([{ version: 'old-version' }, { cliPath: '/old/cli.js' }])('stops the old daemon before replacing a differing owner: %j', async (difference) => {
   const old = { ...owner, ...difference, pid: 1234 };
   doubles.read.mockReturnValue(old);
@@ -72,7 +107,7 @@ it.each([{ version: 'old-version' }, { cliPath: '/old/cli.js' }])('stops the old
   await ensureDaemon();
   expect(kill).toHaveBeenCalledExactlyOnceWith(old.pid, 'SIGTERM');
   expect(kill.mock.invocationCallOrder[0]).toBeLessThan(doubles.spawn.mock.invocationCallOrder[0]!);
-  expect(doubles.remove).toHaveBeenCalledWith(process.env.TAKT_CONFIG_DIR, old.pid);
+  expect(doubles.remove).toHaveBeenCalledWith(process.env.TAKT_CONFIG_DIR, old);
   expect(doubles.spawn).toHaveBeenCalledOnce();
 });
 

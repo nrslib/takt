@@ -30,6 +30,7 @@ function mount(snapshot = { goals, questions }, lang: 'en' | 'ja' = 'en', reposi
     const selection = useManagerSelection(118);
     useInput((input, key) => {
       if (input === 'o') opened(selection.open('answer', { ...snapshot, notices: [], repositoryDirectories }));
+      else if (input === 'f') selection.refresh({ ...snapshot, notices: [], repositoryDirectories });
       else if (input === 'g') opened(selection.open('goal', { ...snapshot, notices: [], repositoryDirectories }));
       else if (input === 'p') opened(selection.open('repository', { ...snapshot, notices: [], repositoryDirectories }));
       else selection.handleInput(key, selected);
@@ -38,7 +39,8 @@ function mount(snapshot = { goals, questions }, lang: 'en' | 'ja' = 'en', reposi
       createElement(Text, {}, 'Selection probe'),
       selection.selection === null ? null : createElement(ManagerSelectionDialog, { selection: selection.selection, bodyText: selection.bodyText, lang }));
   }
-  return { app: render(createElement(Probe)), selected, opened };
+  const app = render(createElement(Probe));
+  return { app, selected, opened, refresh(next: typeof snapshot) { snapshot = next; app.stdin.write('f'); } };
 }
 
 const chalkLevel = chalk.level;
@@ -54,6 +56,46 @@ it('selects the second inquiry with consecutive arrow and Enter input', async ()
   app.stdin.write('\r');
   await vi.waitFor(() => expect(selected).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ kind: 'answer', target: questions[1] })));
   await vi.waitFor(() => expect(app.lastFrame()).not.toContain(getLabel('manager.selectionHint', 'en')));
+});
+
+it('retains the selected inquiry by owner and ID when an earlier candidate disappears from the same list', async () => {
+  const { app, selected, refresh } = mount();
+  app.stdin.write('o');
+  await vi.waitFor(() => expect(app.lastFrame()).toContain('Inquiry 2'));
+  app.stdin.write('\x1b[B');
+  refresh({ goals, questions: [questions[1]!] });
+  await vi.waitFor(() => expect(app.lastFrame()).not.toContain('Inquiry 1'));
+  app.stdin.write('\r');
+  await vi.waitFor(() => expect(selected).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ target: questions[1] })));
+});
+
+it.each([false, true])('returns to the latest inquiry list after withdrawal rather than restoring the old candidates (empty=%s)', async (empty) => {
+  const { app, selected, refresh } = mount();
+  app.stdin.write('o');
+  await vi.waitFor(() => expect(app.lastFrame()).toContain('Inquiry 1'));
+  app.stdin.write('\r');
+  await vi.waitFor(() => expect(selected).toHaveBeenCalledOnce());
+  const target = selected.mock.calls[0]![0];
+  if (target.kind !== 'answer') throw new Error('Expected answer target');
+  refresh({ goals, questions: empty ? [] : [questions[1]!] });
+  target.onCancel();
+  await vi.waitFor(() => {
+    expect(app.lastFrame()).not.toContain('Inquiry 1');
+    if (empty) expect(app.lastFrame()).toBe('Selection probe');
+    else expect(app.lastFrame()).toContain('Inquiry 2');
+  });
+});
+
+it('closes an obsolete goal action without replacing pause with resume after the same goal changes state', async () => {
+  const { app, selected, refresh } = mount();
+  app.stdin.write('g');
+  await vi.waitFor(() => expect(app.lastFrame()).toContain('First active'));
+  app.stdin.write('\r');
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('manager.goalActions.pause', 'en')));
+  refresh({ goals: [{ ...goals[0]!, executionStatus: 'paused' }], questions });
+  await vi.waitFor(() => expect(app.lastFrame()).toBe('Selection probe'));
+  app.stdin.write('\r');
+  expect(selected).not.toHaveBeenCalled();
 });
 
 it.each(['ja', 'en'] as const)('renders a single row per inquiry with shared controls in %s and closes on Esc', async (lang) => {

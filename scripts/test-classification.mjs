@@ -11,6 +11,8 @@ export const parallelIntegrationTestGlobs = Object.freeze([
 // real child processes, or real Git boundaries.
 const legacyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-daemon-process.test.ts',
+  'src/__tests__/it-daemon-conversations.test.ts',
+  'src/__tests__/it-conversation-goal-registration.test.ts',
   'src/__tests__/projectLocalTaktSync.test.ts',
   'src/__tests__/mcp-entrypoint.integration.test.ts',
   'src/__tests__/it-goal-store.test.ts',
@@ -27,6 +29,7 @@ const legacyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/acp-entrypoint.test.ts',
   'src/__tests__/codex-spawn-guard.test.ts',
   'src/__tests__/it-codex-mcp-isolation.test.ts',
+  'src/__tests__/it-claude-terminal-startup-rejection.test.ts',
   'src/__tests__/runtime-provider-companion.integration.test.ts',
   'src/__tests__/dependency-versions.test.ts',
   'src/__tests__/deepseek-harness-client.test.ts',
@@ -231,6 +234,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/clipboardImage.test.ts',
   'src/__tests__/clone-metadata-central.test.ts',
   'src/__tests__/codex-client-retry.test.ts',
+  'src/__tests__/codex-interactive-session-recovery.integration.test.ts',
   'src/__tests__/codex-skill-config.test.ts',
   'src/__tests__/config-path-collision.test.ts',
   'src/__tests__/conversation-session-failure.test.ts',
@@ -376,6 +380,9 @@ export const lightContractIntegrationTestFiles = Object.freeze([
 // precedence over the broad filename globs so these stay in the normal light
 // IT gate instead of being promoted solely because of their names.
 export const lightNamedIntegrationTestFiles = Object.freeze([
+  'src/__tests__/conversation-store.integration.test.ts',
+  'src/__tests__/daemon-conversation-events.integration.test.ts',
+  'src/__tests__/daemon-conversation-ipc.integration.test.ts',
   'src/__tests__/deepseek-runtime-mode-input.integration.test.ts',
   'src/__tests__/exec-workflowRunner.integration.test.ts',
   'src/__tests__/facet-includes-integration.test.ts',
@@ -410,6 +417,10 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-workflow-loader.test.ts',
   'src/__tests__/it-workflow-policy.test.ts',
   'src/__tests__/kiro-provider-integration.test.ts',
+  'src/__tests__/manager-conversation-answers.integration.test.ts',
+  'src/__tests__/manager-conversation-client.integration.test.ts',
+  'src/__tests__/manager-conversation-sequential-reads.integration.test.ts',
+  'src/__tests__/manager-conversation-service.integration.test.ts',
   'src/__tests__/manager-tool-permission-inquiries.integration.test.ts',
   'src/__tests__/merge-caccia.test.ts',
   'src/__tests__/merge-pagination.integration.test.ts',

@@ -272,6 +272,63 @@ describe('OpenCodeClient retry', () => {
     vi.useRealTimers();
   });
 
+  it('does not replay a caller-owned conversation after a transient stream failure', async () => {
+    runPlans = [{ type: 'events', events: [{ type: 'session.error', properties: { sessionID: 'session-1',
+      error: { name: 'APIError', data: { message: 'HTTP 429: rate limit exceeded' } } } }] }];
+    const { promptAsync } = installOpenCodeMock();
+    const result = await new OpenCodeClient().call('manager', 'private text', {
+      cwd: '/tmp', model: 'opencode/test', callerManagedSession: true,
+    });
+    expect(result.status).not.toBe('done'); expect(promptAsync).toHaveBeenCalledOnce();
+    expect(result.retryCount).toBeUndefined();
+  });
+
+  it('preserves an explicit rejected resume from runtime model resolution without sending a prompt', async () => {
+    const { resolveModel, promptAsync, sessionCreate } = installOpenCodeMock();
+    resolveModel.mockRejectedValue({ _tag: 'SessionNotFoundError', sessionID: 'saved-session', message: 'missing session' });
+    const result = await new OpenCodeClient().call('manager', 'private text', {
+      cwd: '/tmp', allowDefaultModel: true, callerManagedSession: true, sessionId: 'saved-session',
+    });
+    expect(result).toMatchObject({ status: 'error', sessionId: 'saved-session',
+      failureCategory: AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED });
+    expect(resolveModel).toHaveBeenCalledOnce();
+    expect(promptAsync).not.toHaveBeenCalled();
+    expect(sessionCreate).not.toHaveBeenCalled();
+  });
+
+  it.each(['prompt', 'stream'] as const)('preserves an explicit rejected resume from the %s boundary without an internal replay', async (boundary) => {
+    const error = { _tag: 'SessionNotFoundError', sessionID: 'saved-session', message: 'missing session' };
+    runPlans = boundary === 'stream'
+      ? [{ type: 'events', events: [{ type: 'session.error', properties: { sessionID: 'saved-session', error } }] }]
+      : [{ type: 'stream', createStream: (signal) => (async function* () { await waitForAbort(signal); })() }];
+    const { promptAsync, setActiveSessionId, sessionCreate } = installOpenCodeMock();
+    setActiveSessionId('saved-session');
+    if (boundary === 'prompt') promptAsync.mockRejectedValueOnce(error);
+    const result = await new OpenCodeClient().call('manager', 'private text', {
+      cwd: '/tmp', model: 'opencode/test', callerManagedSession: true, sessionId: 'saved-session',
+    });
+    expect(result).toMatchObject({ status: 'error', sessionId: 'saved-session',
+      failureCategory: AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED });
+    expect(promptAsync).toHaveBeenCalledOnce();
+    expect(sessionCreate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { _tag: 'SessionNotFoundError', sessionID: 'another-session', message: 'missing session' },
+    { _tag: 'UnauthorizedError', message: 'authentication failed' },
+    new Error('SessionNotFoundError: missing session'),
+    new Error('connection reset'),
+  ])('does not infer a rejected resume from an unrelated or unclassified error: %j', async (error) => {
+    const { resolveModel } = installOpenCodeMock();
+    resolveModel.mockRejectedValue(error);
+    const result = await new OpenCodeClient().call('manager', 'private text', {
+      cwd: '/tmp', allowDefaultModel: true, callerManagedSession: true, sessionId: 'saved-session',
+    });
+    expect(result.status).toBe('error');
+    expect(result.failureCategory).toBeUndefined();
+    expect(resolveModel).toHaveBeenCalledOnce();
+  });
+
   it.each(['full', 'readonly', 'strict-readonly'] as const)('resolves the omitted model with the same role as the prompt in %s', async (mode) => {
     runPlans = [{
       type: 'events',

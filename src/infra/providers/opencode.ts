@@ -82,6 +82,7 @@ function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
 
   return {
     cwd: options.cwd,
+    callerManagedSession: options.callerManagedSession,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
     ...(model === undefined ? {} : { model }),

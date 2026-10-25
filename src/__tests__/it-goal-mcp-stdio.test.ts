@@ -1,3 +1,4 @@
+import { readManagerTestDisplay } from './helpers/manager-display-items.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { cleanup,render } from 'ink-testing-library';
@@ -14,11 +15,10 @@ import { MANAGER_ASSIGNMENT_ENV } from '../features/manager/assignment.js';
 import { createManagerConversationPlan } from '../features/manager/conversationPlan.js';
 import { ensureDaemon } from '../features/daemon/lifecycle.js';
 import * as autoRun from '../features/manager/autoRun.js';
-import { createManagerConversationSession } from '../features/manager/conversationSession.js';
+import { ManagerServiceClient } from './helpers/manager-service-client.js';
 import { connectManagerMcp } from '../features/manager/managerMcp.js';
 import { startManagerMcpConnection } from '../features/manager/managerMcpConnection.js';
 import { ManagerView } from '../features/manager/ManagerView.js';
-import { readManagerDisplayEvents } from '../features/manager/savedEvents.js';
 import { createTaktMcpServer,TAKT_MCP_MANAGER_TOOL_NAMES } from '../features/mcp/server.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
 import { invalidateResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
@@ -614,7 +614,7 @@ describe('manager questions, answers and notifications through production bounda
   let webhook: string;
   let requests: { method: string | undefined; contentType: string | undefined; text: string }[];
   let responseStatus: number;
-  let session: ReturnType<typeof createManagerConversationSession> | undefined;
+  let session: ManagerServiceClient | undefined;
   let app: ReturnType<typeof render> | undefined;
   let connection: Awaited<ReturnType<typeof connectManagerMcp>> | undefined;
 
@@ -697,7 +697,7 @@ describe('manager questions, answers and notifications through production bounda
     app?.unmount();
     app = undefined;
     cleanup();
-    try { await session?.close(); }
+    try { await session?.dispose(); }
     finally {
       session = undefined;
       try { await connection?.dispose(); }
@@ -740,9 +740,10 @@ describe('manager questions, answers and notifications through production bounda
   async function mountManager(): Promise<void> {
     connection = await connectManagerMcp(cwd);
     const plan = createManagerConversationPlan(cwd, {});
-    session = createManagerConversationSession({ cwd,
+    session = new ManagerServiceClient({ cwd,
       plan: { ...plan, ctx: { ...plan.ctx, mcpServers: connection.servers } } });
-    app = render(createElement(ManagerView, { cwd, lang: 'en', session, initialDiagnostics: [], onExit: vi.fn() }));
+    await session.ready;
+    app = render(createElement(ManagerView, { cwd, lang: 'en', client: session, assignment: { kind: 'repository', repositoryDirectory: cwd, repositoryDirectories: [cwd] }, initialDiagnostics: [], onExit: vi.fn() }));
     await vi.waitFor(() => expect(app!.lastFrame()?.replaceAll('\n', '')).toContain(basename(cwd)));
   }
 
@@ -822,7 +823,7 @@ describe('manager questions, answers and notifications through production bounda
     expect(requests[0]!.text.split('\n')[0]).toContain(basename(cwd));
     expectAnswerSelectionGuidance(requests[0]!.text, question.id);
     expect(requests[0]!.text).not.toContain(goalId);
-    const displayed = await readManagerDisplayEvents(cwd);
+    const displayed = await readManagerTestDisplay(cwd);
     expect(displayed.events).toEqual([]);
     expect(displayed.questions).toEqual([expect.objectContaining({ question: expect.objectContaining(question) })]);
     expect(JSON.stringify((await invoke('takt_get_goal')).goal)).not.toContain(webhook);
@@ -858,7 +859,7 @@ describe('manager questions, answers and notifications through production bounda
     expect(requests[0]!.text.split('\n')[2]).toBe(severity);
     const saved = await new GoalStore(cwd).get(goalId);
     expect(saved.notifications).toEqual([expect.objectContaining({ kind, body, severity: 'warning' })]);
-    const display = await readManagerDisplayEvents(cwd, language);
+    const display = await readManagerTestDisplay(cwd, language);
     expect(display.events).toHaveLength(1);
     expect(display.events[0]!.message.split('\n')).toContain(body);
     expect(display.events[0]!.message.split('\n')[2]).toBe(severity);
@@ -869,7 +870,7 @@ describe('manager questions, answers and notifications through production bounda
     const question = await ask();
     expect(question.status).toBe('pending');
     expect(requests).toEqual([]);
-    const display = await readManagerDisplayEvents(cwd);
+    const display = await readManagerTestDisplay(cwd);
     expect(display.events).toEqual([]);
     expect(display.questions).toEqual([expect.objectContaining({ question: expect.objectContaining(question) })]);
   });
@@ -884,7 +885,7 @@ describe('manager questions, answers and notifications through production bounda
     expect(stderr).toHaveBeenCalledWith(failure === 'HTTP error'
       ? 'Slack webhook failed: HTTP 503\n' : 'Slack webhook connection failed\n');
     expect(stderr.mock.calls.flat().join('')).not.toContain(webhook);
-    const display = await readManagerDisplayEvents(cwd);
+    const display = await readManagerTestDisplay(cwd);
     expect(display.questions).toEqual([expect.objectContaining({ goalId, question: expect.objectContaining(question) })]);
     expect(display.events).toEqual([]);
     expect(JSON.stringify(display)).not.toContain(webhook);
@@ -899,7 +900,7 @@ describe('manager questions, answers and notifications through production bounda
     const question = await ask();
     expect(question.status).toBe('pending');
     expect(requests).toEqual([]);
-    expect((await readManagerDisplayEvents(cwd)).events).toEqual([]);
+    expect((await readManagerTestDisplay(cwd)).events).toEqual([]);
     expect((await enqueue('export')).isError).not.toBe(true);
     expect(new TaskRunner(cwd).listPendingTaskItems()).toHaveLength(1);
     expect((await invoke('takt_get_goal_question', { questionId: question.id })).question).toMatchObject({ status: 'pending' });
@@ -945,7 +946,7 @@ describe('manager questions, answers and notifications through production bounda
     expect(requests[0]!.text).not.toContain(goalId);
     const saved = await new GoalStore(cwd).get(goalId);
     expect(saved.notifications?.map((notification) => notification.kind)).toEqual([kind]);
-    const display = await readManagerDisplayEvents(cwd);
+    const display = await readManagerTestDisplay(cwd);
     expect(display.events).toHaveLength(kind === 'progress' ? 2 : 1);
     expect(display.events).toContainEqual({
       id: JSON.stringify([goalId, 'notification', saved.notifications![0]!.id]), message: requests[0]!.text,
@@ -965,7 +966,7 @@ describe('manager questions, answers and notifications through production bounda
     expect(requests).toEqual([]);
     const saved = await new GoalStore(cwd).get(goalId);
     expect(saved.notifications).toBeUndefined();
-    expect((await readManagerDisplayEvents(cwd)).events).toEqual(kind === 'progress' ? [{
+    expect((await readManagerTestDisplay(cwd)).events).toEqual(kind === 'progress' ? [{
       id: JSON.stringify([goalId, 'work-log', saved.workLog[0]!.id]), message: `${goalId}: ${saved.workLog[0]!.summary}`,
     }] : []);
     const goal = (await invoke('takt_get_goal')).goal;
@@ -1003,7 +1004,7 @@ describe('manager questions, answers and notifications through production bounda
     expect(result.isError).toBe(true);
     expect((await new GoalStore(cwd).get(goalId)).status).toBe('created');
     expect(requests).toEqual([]);
-    expect((await readManagerDisplayEvents(cwd)).events).toEqual([]);
+    expect((await readManagerTestDisplay(cwd)).events).toEqual([]);
   });
 
   it('does not announce completion or human merge readiness after an actual merge conflict', async () => {
@@ -1023,7 +1024,7 @@ describe('manager questions, answers and notifications through production bounda
     expect(result).toMatchObject({ status: 'conflict' });
     expect((await new GoalStore(cwd).get(goalId)).status).toBe('created');
     expect(requests).toEqual([]);
-    expect((await readManagerDisplayEvents(cwd)).events).toEqual([]);
+    expect((await readManagerTestDisplay(cwd)).events).toEqual([]);
   });
 
   it('records a free-text TUI answer without treating an AI self-report as a human operation', async () => {
@@ -1036,9 +1037,9 @@ describe('manager questions, answers and notifications through production bounda
     expect((await invoke('takt_get_goal_question', { questionId: question.id })).question).toMatchObject({ status: 'pending' });
     expect(new TaskRunner(cwd).listTaskStateItems()).toEqual([]);
     expect(ensureDaemon).not.toHaveBeenCalled();
-    let confirmDaemonStartup!: () => void;
-    const daemonStartup = new Promise<void>((resolve) => { confirmDaemonStartup = resolve; });
-    vi.mocked(ensureDaemon).mockImplementationOnce(() => daemonStartup);
+    let finishAutoRun!: () => void;
+    const autoRunCompletion = new Promise<void>((resolve) => { finishAutoRun = resolve; });
+    const ensureRun = vi.spyOn(autoRun, 'ensureManagerRun').mockImplementationOnce(() => autoRunCompletion);
     try {
       await vi.waitFor(() => expect(app!.lastFrame()).not.toContain('Working'));
       app!.stdin.write('\x12');
@@ -1053,12 +1054,13 @@ describe('manager questions, answers and notifications through production bounda
         expect((await invoke('takt_get_goal_question', { questionId: question.id })).question)
           .toMatchObject({ status: 'answered', answer: { text: answer, source: 'tui' } });
       }, { timeout: 30_000 });
-      expect(ensureDaemon).toHaveBeenCalledExactlyOnceWith();
+      expect(ensureRun).toHaveBeenCalledExactlyOnceWith(cwd);
+      expect(ensureDaemon).not.toHaveBeenCalled();
       expect(app!.lastFrame()).not.toContain('Answer saved');
       expect(readManagerEvents(cwd).map(({ event }) => event)).toEqual([expect.objectContaining({
         kind: 'answer', goalId, questionId: question.id, answer: { text: answer, source: 'tui', answeredAt: expect.any(String) },
       })]);
-    } finally { confirmDaemonStartup(); }
+    } finally { finishAutoRun(); }
     await vi.waitFor(() => expect(app!.lastFrame()).toContain('Answer saved'));
     expect(new TaskRunner(cwd).listTaskStateItems()).toEqual([]);
     const pending = await ask({ body: '通知の宛先はどこですか' });
@@ -1110,9 +1112,13 @@ describe('manager questions, answers and notifications through production bounda
       expect(frame).not.toContain(customHeading);
       expect(frame).toContain('状況を確認しました');
       expect(frame).not.toContain('Working');
-    });
+    }, { timeout: 10000 });
     app!.unmount();
-    app = render(createElement(ManagerView, { cwd, lang: 'en', session: session!, initialDiagnostics: [], onExit: vi.fn() }));
+    const options = session!.options;
+    await session!.dispose();
+    session = new ManagerServiceClient(options);
+    await session.ready;
+    app = render(createElement(ManagerView, { cwd, lang: 'en', client: session!, assignment: { kind: 'repository', repositoryDirectory: cwd, repositoryDirectories: [cwd] }, initialDiagnostics: [], onExit: vi.fn() }));
     await vi.waitFor(() => {
       const frame = app!.lastFrame()!;
       expect(frame.replace(/\s+/gu, ' ')).toContain(counts);

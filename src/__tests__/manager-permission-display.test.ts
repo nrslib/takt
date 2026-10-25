@@ -1,14 +1,17 @@
+import { collectItems } from './helpers/manager-display-items.js';
 import { createElement } from 'react';
 import { cleanup, render } from 'ink-testing-library';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ManagerView } from '../features/manager/ManagerView.js';
-import type { ManagerConversationSession } from '../features/manager/conversationSession.js';
+import { randomUUID } from 'node:crypto';
+import type { ConversationClientSnapshot } from '../features/manager/conversationIpcClient.js';
+import type { ConversationCommand, PortOutput } from '../features/manager/conversationPort.js';
 import * as savedEvents from '../features/manager/savedEvents.js';
 import type { Goal } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 
-const doubles = vi.hoisted(() => ({ list: vi.fn(), failure: vi.fn() }));
-vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { list = doubles.list; } }));
+const doubles = vi.hoisted(() => ({ goals: [] as Goal[], failure: vi.fn() }));
+vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { async *iterate() { yield* doubles.goals; } } }));
 vi.mock('../infra/config/managerConfig.js', () => ({ resolveManagerConfig: () => ({
   notifications: { custom: true },
 }) }));
@@ -16,7 +19,7 @@ vi.mock('../features/manager/turnFailureNotification.js', () => ({ notifyManager
 
 beforeEach(() => {
   vi.resetAllMocks();
-  doubles.list.mockResolvedValue({ goals: [], errors: [] });
+  doubles.goals = [];
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -26,43 +29,47 @@ it.each(['ja', 'en'] as const)('shows a saved custom permission notice in %s for
   const goal: Goal = { ...goalRecord(), notifications: [{
     id: '650e8400-e29b-41d4-a716-446655440003', kind: 'custom', body, recordedAt: '2026-10-17T00:00:00Z',
   }] };
-  doubles.list.mockResolvedValueOnce({ goals: [goal], errors: [] });
+  doubles.goals = [goal];
 
-  const result = await savedEvents.readManagerDisplayEvents('/fixture/manager', language);
+  const events = await collectItems(savedEvents.iterateManagerDisplayEvents({ kind: 'repository', repositoryDirectory: '/fixture/manager', repositoryDirectories: ['/fixture/manager'] }, language, new Map(), -Infinity));
 
-  expect(result.events).toEqual([expect.objectContaining({ message: expect.stringContaining(body) })]);
-  expect(result.events[0]!.message).toContain(goal.id.slice(0, 8));
+  expect(events).toEqual([expect.objectContaining({ message: expect.stringContaining(body) })]);
+  expect(events[0]!.message).toContain(goal.id.slice(0, 8));
 });
 
 it.each(['ja', 'en'] as const)('displays a goal-less permission notice in %s during a successful conversation and accepts the next message', async (language) => {
-  vi.spyOn(savedEvents, 'readManagerDisplayEvents').mockResolvedValue({ events: [], diagnostics: [], notices: [], questions: [], goals: [] });
   const notice = language === 'ja' ? '人の確認待ち (Bash): 外部送信先の選択が必要です'
     : 'Waiting for human confirmation (Bash): Choose an external destination';
-  const unusedOperation = async (): Promise<never> => { throw new Error('unused manager operation'); };
-  type Turn = Parameters<ManagerConversationSession['handleUserMessage']>[0] & { onNotification?: (message: string) => void };
-  const handleUserMessage = vi.fn(async (options: Turn) => {
-    options.onNotification?.(notice);
-    return { kind: 'reply' as const, message: '会話を続けます' };
+  const snapshot: ConversationClientSnapshot = { connection: 'connected', readStatus: 'complete', state: null, items: [], error: null };
+  const listeners = new Set<(output: Exclude<PortOutput, { kind: 'snapshot' }>) => void>();
+  const submit = vi.fn(async (command: ConversationCommand, onAccepted?: (id: string) => void) => {
+    expect(command.kind).toBe('message');
+    const operationId = randomUUID();
+    onAccepted?.(operationId);
+    for (const listener of listeners) {
+      listener({ kind: 'progress', operationId, message: notice });
+      listener({ kind: 'result', operationId, result: { kind: 'reply', message: '会話を続けます' } });
+    }
+    return { kind: 'accepted' as const, operationId };
   });
-  const session: ManagerConversationSession = {
-    getAssignment: async () => undefined, resetConversation: () => {}, getPendingSummary: () => null,
-    dismissSummary: () => {}, handleUserMessage, approveSummary: unusedOperation,
-    answerQuestion: unusedOperation, pauseGoal: unusedOperation, resumeGoal: unusedOperation,
-    abortGoal: unusedOperation, close: async () => {},
+  const client = { getSnapshot: () => snapshot, subscribe: () => () => {},
+    onOutput: (listener: (output: Exclude<PortOutput, { kind: 'snapshot' }>) => void) => {
+      listeners.add(listener); return () => { listeners.delete(listener); };
+    }, submit, refresh: async () => {}, close: () => {},
   };
   const app = render(createElement(ManagerView, {
-    cwd: '/fixture/manager', lang: language, session, initialDiagnostics: [], onExit: vi.fn(),
+    cwd: '/fixture/manager', lang: language, client, assignment: { kind: 'repository', repositoryDirectory: '/fixture/manager', repositoryDirectories: ['/fixture/manager'] }, initialDiagnostics: [], onExit: vi.fn(),
   }));
   try {
     for (const text of ['最初の相談', '確認後の相談']) {
       app.stdin.write(text);
       await vi.waitFor(() => expect(app.lastFrame()).toContain(text));
       app.stdin.write('\r');
-      await vi.waitFor(() => expect(handleUserMessage).toHaveBeenCalledWith(expect.objectContaining({ text })));
+      await vi.waitFor(() => expect(submit).toHaveBeenCalledWith({ kind: 'message', text }, undefined));
       await vi.waitFor(() => expect(app.lastFrame()).toContain('会話を続けます'));
     }
-    expect(handleUserMessage).toHaveBeenCalledTimes(2);
+    expect(submit).toHaveBeenCalledTimes(2);
     expect(app.lastFrame()).toContain(notice);
     expect(doubles.failure).not.toHaveBeenCalled();
-  } finally { app.unmount(); await session.close(); }
+  } finally { app.unmount(); client.close(); }
 });

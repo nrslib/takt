@@ -1,7 +1,7 @@
 import { truncateUtf8 } from '../../shared/utils/utf8.js';
 import { StandaloneInquiryStore, type InquiryOwner } from './standalone-inquiries.js';
 import { GoalStore } from './store.js';
-import type { GoalQuestion } from './schema.js';
+import type { Goal, GoalQuestion } from './schema.js';
 
 type InquiryAssignment = InquiryOwner & { readonly repositoryDirectories: readonly string[] };
 
@@ -31,7 +31,13 @@ function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function compareInquiries(left: PendingInquiry, right: PendingInquiry): number {
+interface InquiryPosition {
+  question: { id: string; createdAt?: string };
+  repositoryDirectory?: string;
+  goalId: string | null;
+}
+
+export function compareInquiries(left: InquiryPosition, right: InquiryPosition): number {
   const leftTime = left.question.createdAt === undefined ? Infinity : Date.parse(left.question.createdAt);
   const rightTime = right.question.createdAt === undefined ? Infinity : Date.parse(right.question.createdAt);
   if (leftTime !== rightTime) return leftTime < rightTime ? -1 : 1;
@@ -59,4 +65,29 @@ export async function listPendingInquiries(configDirectory: string, assignment: 
     inquiries: inquiries.sort(compareInquiries),
     errors: errors.sort((left, right) => compareText(left.repositoryDirectory, right.repositoryDirectory) || compareText(left.goalId, right.goalId)),
   };
+}
+
+export function* projectPendingGoalInquiries(goal: Goal, repositoryDirectory: string): Generator<PendingInquiry> {
+  for (const question of goal.questions ?? []) {
+    if (question.status !== 'pending' || question.recipient !== 'human') continue;
+    yield { question, kind: question.kind ?? 'question', summary: truncateUtf8(question.body, SUMMARY_MAX_BYTES).value,
+      goalId: goal.id, repositoryDirectory, objective: goal.objective };
+  }
+}
+
+export async function* iterateStandalonePendingInquiries(configDirectory: string, assignment: InquiryAssignment): AsyncGenerator<PendingInquiry> {
+  for await (const question of new StandaloneInquiryStore(configDirectory, assignment).iteratePending()) {
+    yield { question, kind: question.kind ?? 'question', summary: truncateUtf8(question.body, SUMMARY_MAX_BYTES).value, goalId: null };
+  }
+}
+
+export async function* iteratePendingInquiries(configDirectory: string, assignment: InquiryAssignment): AsyncGenerator<PendingInquiry> {
+  const inquiries: PendingInquiry[] = [];
+  for (const repositoryDirectory of assignment.repositoryDirectories) {
+    for await (const goal of new GoalStore(repositoryDirectory).iterate()) {
+      for (const inquiry of projectPendingGoalInquiries(goal, repositoryDirectory)) inquiries.push(inquiry);
+    }
+  }
+  for await (const inquiry of iterateStandalonePendingInquiries(configDirectory, assignment)) inquiries.push(inquiry);
+  yield* inquiries.sort(compareInquiries);
 }
