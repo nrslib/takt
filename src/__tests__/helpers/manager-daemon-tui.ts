@@ -14,7 +14,7 @@ const built = (path: string): string => pathToFileURL(join(process.cwd(), 'dist'
 const require = createRequire(import.meta.url);
 
 interface Observation {
-  event: 'write' | 'provider_start' | 'provider_complete' | 'request';
+  event: 'write' | 'provider_start' | 'provider_complete' | 'request' | 'submit' | 'submit_result' | 'submit_error';
   pid: number;
   conversationId?: string;
   revision?: number;
@@ -25,6 +25,10 @@ interface Observation {
   method?: string;
   command?: string;
   operationId?: string;
+  connection?: 'connecting' | 'connected' | 'disconnected';
+  readStatus?: 'reading' | 'complete' | 'incomplete';
+  kind?: 'accepted' | 'busy' | 'error';
+  code?: string;
 }
 
 export interface ManagerTuiProcess {
@@ -32,6 +36,8 @@ export interface ManagerTuiProcess {
   key(input: string): void;
   frame(): Promise<string>;
   ready(runningOperationId?: string | null): Promise<void>;
+  approveSummary(revision: number): Promise<void>;
+  continueSummary(revision: number, text: string): Promise<void>;
   exit(): Promise<void>;
 }
 
@@ -61,11 +67,32 @@ export function managerDaemonFixture(language: 'ja' | 'en') {
   const harness = join(directory, 'ink-harness.mjs');
   writeFileSync(harness, `
 import { render } from ${JSON.stringify(pathToFileURL(require.resolve('ink-testing-library')).href)};
+import { stripVTControlCharacters } from 'node:util';
+import { appendFileSync } from 'node:fs';
+import { getLabel } from ${JSON.stringify(built('shared/i18n/index.js'))};
 export async function mountInk(buildTree) {
   let settle, fail;
   const completed = new Promise((resolve, reject) => { settle = resolve; fail = reject; });
   const tree = buildTree({ settle, fail });
   const client = tree.props.client;
+  const record = (value) => appendFileSync(${JSON.stringify(observations)}, JSON.stringify({ ...value, pid: process.pid }) + '\\n');
+  const submit = client.submit;
+  client.submit = async function(...args) {
+    const [command] = args;
+    const snapshot = this.getSnapshot();
+    const operation = { command: command.kind, revision: command.revision };
+    record({ event: 'submit', ...operation, connection: snapshot.connection, readStatus: snapshot.readStatus,
+      running: snapshot.state?.running != null });
+    try {
+      const result = await submit.apply(this, args);
+      record({ event: 'submit_result', ...operation, kind: result.kind,
+        ...(result.kind === 'error' ? { code: result.code } : {}) });
+      return result;
+    } catch (error) {
+      record({ event: 'submit_error', ...operation });
+      throw error;
+    }
+  };
   const app = render(tree);
   const receive = (message) => {
     if (message.kind === 'key') app.stdin.write(message.input);
@@ -74,6 +101,21 @@ export async function mountInk(buildTree) {
       const state = client.getSnapshot();
       process.send({ kind: 'ready', id: message.id, ready: state.connection === 'connected' && state.readStatus === 'complete'
         && (!Object.hasOwn(message, 'runningOperationId') || (state.state?.running?.operationId ?? null) === message.runningOperationId) });
+    }
+    if (message.kind === 'approve_summary' || message.kind === 'continue_summary') {
+      const snapshot = client.getSnapshot();
+      const pending = snapshot.state?.pending;
+      const normalize = (text) => stripVTControlCharacters(text).replace(/\\s+/gu, '');
+      const frame = normalize(app.lastFrame() ?? '');
+      const label = (key) => normalize(getLabel(key, ${JSON.stringify(language)}));
+      const inputSent = snapshot.connection === 'connected' && snapshot.readStatus === 'complete'
+        && snapshot.state?.running === null && snapshot.state.revision === message.revision
+        && pending?.revision === message.revision && frame.includes(normalize(pending.summary.objective))
+        && frame.includes(label('manager.summaryHint'))
+        && !frame.includes(label('manager.conversation.reading')) && !frame.includes(label('manager.conversation.incomplete'));
+      // 確認と入力の間に親子通信や周期更新を挟まない。
+      if (inputSent) app.stdin.write(message.kind === 'approve_summary' ? '\\x0f' : message.text);
+      process.send({ kind: message.kind, id: message.id, inputSent });
     }
   };
   process.on('message', receive);
@@ -151,7 +193,7 @@ finally { process.disconnect(); }
       HOME: home, TAKT_CONFIG_DIR: directory, TAKT_MOCK_SCENARIO: scenario,
       NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`, TAKT_NO_TTY: '',
     } });
-    const messages: Array<{ kind: string; id?: number; frame?: string; message?: string; ready?: boolean }> = [];
+    const messages: Array<{ kind: string; id?: number; frame?: string; message?: string; ready?: boolean; inputSent?: boolean }> = [];
     let errors = '';
     child.stdout!.resume();
     child.stderr!.on('data', (chunk: Buffer) => { errors += chunk.toString(); });
@@ -184,7 +226,25 @@ finally { process.disconnect(); }
         expect(messages.splice(index, 1)[0]!.ready).toBe(true);
       }, { timeout: 10000 });
     };
-    return { child, key, frame, ready, exit };
+    const inputSummary = async (operation: { kind: 'approve_summary'; revision: number }
+      | { kind: 'continue_summary'; revision: number; text: string }): Promise<void> => {
+      let request: number | undefined;
+      await vi.waitFor(() => {
+        if (request === undefined) {
+          request = ++id;
+          child.send({ ...operation, id: request });
+        }
+        const index = messages.findIndex((message) => message.id === request);
+        expect(index, errors).toBeGreaterThanOrEqual(0);
+        const response = messages.splice(index, 1)[0]!;
+        request = undefined;
+        expect(response.inputSent, errors).toBe(true);
+      }, { timeout: 10000 });
+    };
+    return { child, key, frame, ready,
+      approveSummary: (revision) => inputSummary({ kind: 'approve_summary', revision }),
+      continueSummary: (revision, text) => inputSummary({ kind: 'continue_summary', revision, text }),
+      exit };
   };
   const cleanup = async (): Promise<void> => {
     release();
