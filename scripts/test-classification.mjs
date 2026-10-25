@@ -381,6 +381,7 @@ export const lightContractIntegrationTestFiles = Object.freeze([
 // IT gate instead of being promoted solely because of their names.
 export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/conversation-store.integration.test.ts',
+  'src/__tests__/daemon-conversation-events.integration.test.ts',
   'src/__tests__/daemon-conversation-ipc.integration.test.ts',
   'src/__tests__/deepseek-runtime-mode-input.integration.test.ts',
   'src/__tests__/exec-workflowRunner.integration.test.ts',
