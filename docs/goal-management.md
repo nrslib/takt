@@ -4,13 +4,17 @@
 
 ## Discussion and registration
 
-Start `takt manager` in an interactive terminal and describe the objective, scope exclusions, acceptance criteria and work constraints. Review the displayed summary and approve it with `Ctrl+O` to let the TUI register the goal. Choose Continue conversation to revise it.
+Start `takt manager` in an interactive terminal and describe the objective, scope exclusions, acceptance criteria and work constraints. Manager starts the daemon if needed and waits until it is ready; the TUI connects to it to send requests and display results. Review the displayed summary and approve it with `Ctrl+O` to ask the daemon to register the goal. Choose Continue conversation to revise it.
 
 Press `Ctrl+O` to open the summary menu. If no summary is awaiting approval, it requests a summary of the current conversation. If a summary is already displayed, it approves and registers it without regenerating it. If there is insufficient material, manager explains this and you can continue the conversation. Manager can also offer a summary itself.
 
 The normal screen shows the count of ongoing goals (active and paused), the count of unanswered inquiries, and hints for `Ctrl+R`, `Ctrl+G`, `Ctrl+O`, and `Ctrl+N` (`^N Notifications`) on the same single line. It does not list completed or aborted goals or inquiry bodies. The input box is only for conversation with manager; text starting with `/` is sent as a regular message too. All four menu keys remain available while manager is processing.
 
-After registration, the manager inside the daemon handles events, submits tasks, checks and integrates results, and selects next work. The TUI displays work records and lets you continue the conversation with a manager that receives those records. Closing the TUI leaves an already running run active.
+The daemon owns and runs manager conversations. Once a turn is accepted, closing the TUI only disconnects that screen; the turn continues in the daemon. Reopening manager for the same repository or workspace, or opening a second TUI for that assignment, connects to the same conversation. A pending summary is shown again and can be approved with `Ctrl+O`, but previous messages and replies are not redisplayed. TAKT does not save conversation text; history is managed by the provider's session. Pending summaries and goal records are saved separately.
+
+Another message submitted while the same conversation is processing is rejected as busy and will not run later. Submit it again after processing finishes. After a daemon restart, a turn that was running is treated as interrupted, and new messages can be accepted. The daemon does not exit automatically while a TUI is connected or an accepted conversation operation is running. Use `takt daemon stop` for an explicit stop.
+
+After registration, the manager inside the daemon handles events, submits tasks, checks and integrates results, and selects next work. The TUI displays work records and lets you continue the conversation with a manager that receives those records. Closing the TUI also leaves an already running run active.
 
 By default, required runs start automatically. Disable this to start `takt run` / `takt watch` yourself.
 
@@ -31,7 +35,7 @@ Use these tools for inquiries that do not belong to a goal.
 
 Every turn, manager reviews unanswered inquiries both with and without a goal. It withdraws inquiries that no longer matter, such as approval for an operation that is no longer running, with a reason and records that reason in work records. It keeps inquiries that still need a human decision.
 
-Both the TUI and daemon manager use `full` permissions through the existing provider permission controls. Manager can use the provider's normal tools and user MCP servers, subject to the tool review for claude (claude-sdk) or codex described here. Configured provider options are preserved.
+The daemon runs both manager conversations and event processing with `full` permissions through the existing provider permission controls. Manager can use the provider's normal tools and user MCP servers, subject to the tool review for claude (claude-sdk) or codex described here. Configured provider options are preserved.
 
 In manager conversations with the claude (claude-sdk) or codex provider, an AI permission judge reviews tool use before execution instead of asking a person to approve every operation. It decides to allow, deny with a reason, or ask a person. This review is enabled by default and has no on/off setting.
 
@@ -103,7 +107,7 @@ Each list row shows the kind, short goal name ("No goal" for inquiries without a
 
 Approval defaults to this time only. Other scopes are this goal, project, manager (workspace), and global. Standalone approvals omit this goal. With one repository, project and manager share one choice saved as project scope; adding a repository later does not expand existing permissions.
 
-For project, workspace and global scopes, edit and confirm the proposed permission sentence. When no proposal is saved, the TUI initializes it from the tool, target and execution directory. Only the confirmed sentence is appended to permission Markdown by the TUI, before saving the answer. An append failure retains the pending inquiry and edited sentence; resolve the cause and press Enter to retry. Standalone approvals persist and can be answered after opening a new TUI.
+For project, workspace and global scopes, edit and confirm the proposed permission sentence. When no proposal is saved, the TUI initializes it from the tool, target and execution directory. The TUI sends the confirmed sentence to the daemon, which appends it to permission Markdown before saving the answer. An append failure retains the pending inquiry and edited sentence; resolve the cause and press Enter to retry. Standalone approvals persist and can be answered after opening a new TUI.
 
 ### Reading notifications
 
@@ -113,7 +117,7 @@ Notifications flowing onto the normal screen show only the key points: the headi
 
 ## Goal operations in conversation
 
-With a Claude (claude-sdk) or Codex manager, ask to pause the previous goal, resume a particular goal, or abort it with a reason, such as changed requirements. The manager identifies the target through the existing list and asks if it cannot be narrowed to one goal. Registration remains in the TUI.
+With a Claude (claude-sdk) or Codex manager, ask to pause the previous goal, resume a particular goal, or abort it with a reason, such as changed requirements. The manager identifies the target through the existing list and asks if it cannot be narrowed to one goal. Goal registration still requires approval in the TUI.
 
 Pause, resume and abort go through the permission judge and execute after human confirmation. Pending confirmation does not execute the operation. Before aborting, confirm that it cannot be undone and that goal records and branches remain. Running tasks continue while paused; resuming advances deferred work. Aborting interrupts running tasks and invalidates unstarted tasks. An aborted goal cannot resume. Completed goals cannot be paused or resumed; only active goals can be paused, and only paused goals can resume.
 

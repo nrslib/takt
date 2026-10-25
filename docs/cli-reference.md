@@ -85,7 +85,9 @@ Approximate sizes are 250 MB for Claude SDK, 340 MB for Codex, 60 MB for OpenCod
 
 In the manager TUI, `Ctrl+R` opens inquiries, `Ctrl+G` opens ongoing goals, `Ctrl+O` opens the summary menu, and `Ctrl+N` opens the saved notification list to read their full text. All four keys work while manager is processing. If no summary is awaiting approval, `Ctrl+O` requests one from the current conversation. If a summary is already displayed, it approves and registers it without regenerating it. Insufficient material is reported so you can continue the conversation. The input box is only for conversation; text starting with `/` is sent as a regular message too. See [Managing goals](./goal-management.md) for menu operations.
 
-Use `takt daemon stop` to stop the manager background daemon. Opening manager or answering a question or resuming a goal in its TUI starts the daemon again when needed. It exits automatically when its projects have no unfinished goals, pending events, or pending/running tasks.
+Opening manager starts the daemon if needed and waits until it is ready. The TUI sends conversation requests to the daemon and displays results. Accepted turns continue after the TUI closes. Reopening for the same repository or workspace, or opening a second TUI for that assignment, connects to the same conversation and restores any summary awaiting approval, without redisplaying previous messages and replies. See [Managing goals](./goal-management.md) for busy rejection, storage, and interruption after a daemon restart.
+
+Use `takt daemon stop` to stop the manager background daemon explicitly. It exits automatically only when its projects have no unfinished goals, pending events, or pending/running tasks, no project inspection is in progress, no TUI is connected, and no conversation operation is initializing, running, or finishing cleanup. A saved pending summary alone does not keep the daemon running.
 
 `takt manager` opens a goal conversation TUI in an interactive terminal. manager is experimental: behavior, settings, and saved data formats may change without notice. It automatically queues and runs tasks, which incurs provider API costs.
 

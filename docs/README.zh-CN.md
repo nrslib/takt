@@ -278,7 +278,7 @@ steps:
 | `takt run` | 执行所有待处理任务 |
 | `takt watch` | 监视任务队列并自动执行待处理任务 |
 | `takt ui` | 在 `http://127.0.0.1:20525` 启动实验性的 Viewer 优先 Web UI |
-| `takt manager` | 启动实验性的目标对话 TUI。使用 `Ctrl+R` 打开询问列表，`Ctrl+G` 打开进行中的目标列表，`Ctrl+O` 打开摘要菜单，`Ctrl+N` 打开已保存的通知列表并查看全文，`Ctrl+P` 打开 manager 负责的仓库列表，查看名称和位置。manager 处理期间也可以使用这五个键。仓库列表仅供查看，添加、删除或重命名负责的仓库仍需通过对话提出。如果没有等待批准的摘要，`Ctrl+O` 会从当前对话请求摘要；如果已显示摘要，则直接批准并注册目标，不重新生成摘要。材料不足时可以继续对话。行为、设置和保存的数据格式可能会随时更改，恕不另行通知。自动将任务加入队列并执行，因此会产生 provider API 费用。使用 claude（claude-sdk）或 codex 时，AI 会在工具执行前进行审查。启动时 daemon 会自动启动，处理事件并进行巡查。使用 `takt daemon stop` 可停止 daemon |
+| `takt manager` | 启动连接到 daemon 的实验性目标对话 TUI。使用 `Ctrl+R` 打开询问列表，`Ctrl+G` 打开进行中的目标列表，`Ctrl+O` 打开摘要菜单，`Ctrl+N` 打开已保存的通知列表并查看全文，`Ctrl+P` 打开 manager 负责的仓库列表，查看名称和位置。manager 处理期间也可以使用这五个键。仓库列表仅供查看，添加、删除或重命名负责的仓库仍需通过对话提出。如果没有等待批准的摘要，`Ctrl+O` 会从当前对话请求摘要；如果已显示摘要，则直接批准并注册目标，不重新生成摘要。材料不足时可以继续对话。行为、设置和保存的数据格式可能会随时更改，恕不另行通知。自动将任务加入队列并执行，因此会产生 provider API 费用。使用 claude（claude-sdk）或 codex 时，AI 会在工具执行前进行审查。启动时，manager 会按需启动 daemon，并等待其准备就绪；daemon 负责运行对话、处理事件和巡查。使用 `takt daemon stop` 可停止 daemon |
 | `takt list` | 管理任务分支：合并、重试、重新排队、请求停止、强制失败、指导或删除 |
 | `takt #N` | 将 GitHub Issue 作为任务输入 |
 | `takt eject` | 复制 builtin workflow/facet 以便定制 |
@@ -286,6 +286,14 @@ steps:
 | `takt workflow doctor` | 验证 workflow 定义 |
 | `takt workflow inspect` | 检查 workflow 的配置与解析来源 |
 | `takt repertoire add` | 从 GitHub 安装 repertoire package |
+
+manager 对话由 daemon 执行，TUI 负责发送请求和显示结果。一轮对话被接受后，即使关闭 TUI，也会继续在 daemon 中处理。为同一个仓库或 workspace 重新打开 manager，或为同一负责范围打开第二个 TUI，都会连接到同一个对话。如果有等待批准的摘要，它会重新显示，并可用 `Ctrl+O` 批准。
+
+重新打开 TUI 时，不会重新显示之前的发言和回复。TAKT 不保存对话正文，对话历史由 provider 的会话管理。等待批准的目标摘要和目标记录会单独保存。
+
+同一个对话正在处理时，后来发送的发言会以“处理中”被拒绝，也不会稍后执行。请在处理结束后重新发送。daemon 重启后，原先正在处理的一轮对话会被视为已中断，此时可以发送新的发言。
+
+只要有 TUI 保持连接，或仍有已接受的对话操作在执行，daemon 就不会自动退出。要明确停止它，请使用 `takt daemon stop`。
 
 全部命令和选项请参阅 [CLI Reference](./cli-reference.zh-CN.md)。
 
