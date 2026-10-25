@@ -35,10 +35,16 @@ interface Observation {
   code?: string;
 }
 
+interface ScreenObservation {
+  frame: string;
+  readStatus: 'reading' | 'complete' | 'incomplete';
+}
+
 export interface ManagerTuiProcess {
   child: ChildProcess;
   key(input: string): void;
   frame(): Promise<string>;
+  observeFrames(): Promise<ScreenObservation[]>;
   ready(runningOperationId?: string | null): Promise<void>;
   approveSummary(revision: number): Promise<void>;
   continueSummary(revision: number, text: string): Promise<void>;
@@ -75,12 +81,23 @@ export function managerDaemonFixture(language: 'ja' | 'en', replies?: readonly s
 import { render } from ${JSON.stringify(pathToFileURL(require.resolve('ink-testing-library')).href)};
 import { stripVTControlCharacters } from 'node:util';
 import { appendFileSync } from 'node:fs';
+import { setTimeout as delay } from 'node:timers/promises';
 import { getLabel } from ${JSON.stringify(built('shared/i18n/index.js'))};
 export async function mountInk(buildTree) {
   let settle, fail;
   const completed = new Promise((resolve, reject) => { settle = resolve; fail = reject; });
   const tree = buildTree({ settle, fail });
   const client = tree.props.client;
+  let firstCompleteAt;
+  let readComplete;
+  const initialRead = new Promise((resolve) => { readComplete = resolve; });
+  const checkRead = () => {
+    if (firstCompleteAt === undefined && client.getSnapshot().readStatus === 'complete') {
+      firstCompleteAt = Date.now(); readComplete();
+    }
+  };
+  const unsubscribeRead = client.subscribe(checkRead);
+  checkRead();
   const record = (value) => appendFileSync(${JSON.stringify(observations)}, JSON.stringify({ ...value, pid: process.pid }) + '\\n');
   const submit = client.submit;
   client.submit = async function(...args) {
@@ -108,6 +125,18 @@ export async function mountInk(buildTree) {
   const receive = (message) => {
     if (message.kind === 'key') app.stdin.write(message.input);
     if (message.kind === 'frame') process.send({ kind: 'frame', id: message.id, frame: app.lastFrame() ?? '' });
+    if (message.kind === 'observe_frames') {
+      void (async () => {
+        await initialRead;
+        await delay(Math.max(0, firstCompleteAt + 2000 - Date.now()));
+        const samples = [];
+        for (let index = 0; index < 30; index++) {
+          await delay(100);
+          samples.push({ frame: app.lastFrame() ?? '', readStatus: client.getSnapshot().readStatus });
+        }
+        process.send({ kind: 'observe_frames', id: message.id, samples });
+      })();
+    }
     if (message.kind === 'ready') {
       const state = client.getSnapshot();
       process.send({ kind: 'ready', id: message.id, ready: state.connection === 'connected' && state.readStatus === 'complete'
@@ -132,7 +161,7 @@ export async function mountInk(buildTree) {
   process.on('message', receive);
   process.send({ kind: 'mounted' });
   try { return await completed; }
-  finally { process.off('message', receive); app.unmount(); }
+  finally { process.off('message', receive); unsubscribeRead(); app.unmount(); }
 }
 `);
   const preload = join(directory, 'observe.mjs');
@@ -210,7 +239,7 @@ finally { process.disconnect(); }
       HOME: home, TAKT_CONFIG_DIR: directory, TAKT_MOCK_SCENARIO: scenario,
       NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`, TAKT_NO_TTY: '',
     } });
-    const messages: Array<{ kind: string; id?: number; frame?: string; message?: string; ready?: boolean; inputSent?: boolean }> = [];
+    const messages: Array<{ kind: string; id?: number; frame?: string; samples?: ScreenObservation[]; message?: string; ready?: boolean; inputSent?: boolean }> = [];
     let errors = '';
     child.stdout!.resume();
     child.stderr!.on('data', (chunk: Buffer) => { errors += chunk.toString(); });
@@ -233,6 +262,13 @@ finally { process.disconnect(); }
     const exit = async (): Promise<void> => {
       key('\x03');
       await vi.waitFor(() => expect(child.exitCode, errors).toBe(0), { timeout: 10000 });
+    };
+    const observeFrames = async (): Promise<ScreenObservation[]> => {
+      const request = ++id;
+      child.send({ kind: 'observe_frames', id: request });
+      await vi.waitFor(() => expect(messages.some((message) => message.id === request), errors).toBe(true), { timeout: 10000 });
+      const index = messages.findIndex((message) => message.id === request);
+      return messages.splice(index, 1)[0]!.samples!;
     };
     const ready = async (runningOperationId?: string | null): Promise<void> => {
       await vi.waitFor(async () => {
@@ -258,7 +294,7 @@ finally { process.disconnect(); }
         expect(response.inputSent, errors).toBe(true);
       }, { timeout: 10000 });
     };
-    return { child, key, frame, ready,
+    return { child, key, frame, observeFrames, ready,
       approveSummary: (revision) => inputSummary({ kind: 'approve_summary', revision }),
       continueSummary: (revision, text) => inputSummary({ kind: 'continue_summary', revision, text }),
       exit };

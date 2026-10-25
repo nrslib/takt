@@ -30,6 +30,7 @@ export interface ConversationClientSnapshot {
 type Output = Exclude<PortOutput, { kind: 'snapshot' }>;
 type DisplayItem = Exclude<SnapshotItem, { kind: 'state' }>;
 type Request = { resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> };
+type ActiveRead = { transferId?: string; response?: Promise<void> };
 
 export class ConversationIpcClient {
   private socket: Socket | undefined;
@@ -41,7 +42,7 @@ export class ConversationIpcClient {
   private attachmentId: string | undefined;
   private closed = false;
   private connecting: Promise<void> | undefined;
-  private refreshing: Promise<void> | undefined;
+  private read: ActiveRead | undefined;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private readItems: DisplayItem[] = [];
   private view: ConversationClientSnapshot = { connection: 'connecting', readStatus: 'reading', state: null, items: [], error: null };
@@ -84,21 +85,12 @@ export class ConversationIpcClient {
   }
 
   refresh(): Promise<void> {
-    if (this.refreshing !== undefined) return this.refreshing;
+    if (this.read !== undefined) return this.read.response ?? Promise.resolve();
     if (this.attachmentId === undefined || this.view.connection !== 'connected') return Promise.reject(new Error('Conversation is disconnected'));
-    this.update({ readStatus: 'reading' });
-    this.refreshing = this.request('snapshot', { attachmentId: this.attachmentId }, (value) => {
+    return this.requestRead('snapshot', { attachmentId: this.attachmentId }, (value) => {
       const result = z.object({ read: ConversationReadMetadataSchema }).strict().parse(value);
       this.receiver!.expectRead(result.read);
-    }).catch(async (error: unknown) => {
-      if (error instanceof Error && error.cause === 'invalid_assignment') {
-        await this.reopen();
-        return;
-      }
-      this.update({ readStatus: 'incomplete', error: error instanceof Error ? error.message : 'Read failed' });
-      throw error;
-    }).finally(() => { this.refreshing = undefined; });
-    return this.refreshing;
+    });
   }
 
   close(): void {
@@ -144,9 +136,19 @@ export class ConversationIpcClient {
           this.update({ items });
         },
         output: (output) => { for (const listener of this.outputs) listener(output); },
-        read: (readStatus) => {
-          if (readStatus === 'reading') this.readItems = [];
-          this.update({ readStatus, ...(readStatus === 'complete' ? { items: this.readItems } : {}) });
+        read: (readStatus, transferId) => {
+          if (readStatus === 'reading') {
+            this.readItems = [];
+            this.read ??= {};
+            this.read.transferId = transferId;
+          } else if (this.read?.transferId === transferId) {
+            this.read.transferId = undefined;
+            if (this.read.response === undefined) this.read = undefined;
+          }
+          this.update({
+            readStatus: readStatus === 'reading' && this.view.readStatus === 'complete' ? 'complete' : readStatus,
+            ...(readStatus === 'complete' ? { items: this.readItems } : {}),
+          });
         },
       });
     }
@@ -190,12 +192,34 @@ export class ConversationIpcClient {
       this.receiver!.authenticated();
       authenticated = true;
     });
-    await this.request('open', { ...resolved, ...(this.agentOverrides === undefined ? {} : { agentOverrides: this.agentOverrides }) }, (value) => {
+    await this.requestRead('open', { ...resolved, ...(this.agentOverrides === undefined ? {} : { agentOverrides: this.agentOverrides }) }, (value) => {
       const result = z.object({ attachmentId: z.uuid(), read: ConversationReadMetadataSchema }).strict().parse(value);
       this.attachmentId = result.attachmentId;
       this.receiver!.expectRead(result.read);
     });
     this.update({ connection: 'connected', error: null });
+  }
+
+  private requestRead(method: 'open' | 'snapshot', params: unknown, parse: (value: unknown) => void): Promise<void> {
+    const read: ActiveRead = {};
+    this.read = read;
+    if (this.view.readStatus !== 'complete') this.update({ readStatus: 'reading' });
+    read.response = this.request(method, params, parse).catch(async (error: unknown) => {
+      if (this.read !== read) throw error;
+      this.read = undefined;
+      if (method === 'snapshot') {
+        if (error instanceof Error && error.cause === 'invalid_assignment') {
+          await this.reopen();
+          return;
+        }
+        this.update({ readStatus: 'incomplete', error: error instanceof Error ? error.message : 'Read failed' });
+      }
+      throw error;
+    }).finally(() => {
+      read.response = undefined;
+      if (this.read === read && read.transferId === undefined) this.read = undefined;
+    });
+    return read.response;
   }
 
   private request<T>(method: string, params: unknown, parse: (value: unknown) => T): Promise<T> {
@@ -225,6 +249,7 @@ export class ConversationIpcClient {
     for (const pending of this.requests.values()) { clearTimeout(pending.timer); pending.reject(error); }
     this.requests.clear();
     this.attachmentId = undefined;
+    this.read = undefined;
     this.receiver?.disconnect();
     this.update({ connection: 'disconnected', readStatus: 'incomplete', error: error.message });
     if (!this.closed && this.reconnectTimer === undefined) {

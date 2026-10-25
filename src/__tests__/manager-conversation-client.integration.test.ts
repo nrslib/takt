@@ -27,6 +27,7 @@ import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
 import type { ManagerAssignment } from '../features/manager/startupResolution.js';
 import type { Goal } from '../infra/goals/schema.js';
 import type { ManagerTurnInput } from '../features/manager/turnExecutor.js';
+import { getLabel } from '../shared/i18n/index.js';
 
 const doubles = vi.hoisted(() => ({ assignment: vi.fn(), resolve: vi.fn(), ensure: vi.fn(), plan: vi.fn() }));
 vi.mock('../features/daemon/lifecycle.js', () => ({ ensureDaemon: doubles.ensure }));
@@ -72,6 +73,124 @@ function gate() {
   const promise = new Promise<void>((resolve) => { release = resolve; });
   return { promise, release };
 }
+
+function heldRead(read: SnapshotRead, entered: ReturnType<typeof gate>, released: ReturnType<typeof gate>): SnapshotRead {
+  return { ...read, items: (async function* () {
+    for await (const item of read.items) {
+      yield item;
+      if (item.kind === 'state') { entered.release(); await released.promise; }
+    }
+  })() };
+}
+
+it.each(['response', 'transfer'] as const)('approves the displayed proposal once while a background %s is held', async (phase) => {
+  const connection = vi.spyOn(net.Socket.prototype, 'write');
+  await client.connect(); await complete();
+  const entered = gate(); const released = gate();
+  const snapshot = service.snapshot.bind(service);
+  vi.spyOn(service, 'snapshot').mockImplementation(async (id) => {
+    const read = await snapshot(id);
+    if (phase === 'transfer') return heldRead(read, entered, released);
+    entered.release(); await released.promise; return read;
+  });
+  const registration = vi.spyOn(goalService, 'registerReservedGoal').mockImplementation(async ({ id, objective, outOfScope, acceptanceCriteria, constraints }) => {
+    const goal = { ...goalRecord(), id, objective, outOfScope, acceptanceCriteria, constraints }; saveGoal(goal); return goal;
+  });
+  const app = render(createElement(ManagerView, { cwd: repository, lang: 'en', client, assignment, initialDiagnostics: [], onExit() {} }));
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('manager.summaryHint', 'en')));
+  const submissions = vi.spyOn(client, 'submit');
+  const refreshing = client.refresh();
+  try {
+    await entered.promise;
+    await vi.waitFor(() => expect(service.snapshot).toHaveBeenCalled());
+    expect.soft(app.lastFrame()).not.toContain(getLabel('manager.conversation.reading', 'en'));
+    expect.soft(app.lastFrame()).toContain(getLabel('manager.summaryHint', 'en'));
+    app.stdin.write('\x0f');
+    await vi.waitFor(() => expect(submissions).toHaveBeenCalledExactlyOnceWith({ kind: 'approve_summary', revision: 4 }, undefined));
+    expect(connection.mock.calls.filter(([bytes]) => String(bytes).includes('"kind":"approve_summary"'))).toHaveLength(1);
+    // The server finishes the current input batch before accepting another one.
+    if (phase === 'response') released.release();
+    expect(await submissions.mock.results[0]!.value).toMatchObject({ kind: 'accepted' });
+    const record = conversationRecord(repository);
+    await vi.waitFor(() => expect(new ConversationStore(directory).read(record.id, record.assignment)?.approval)
+      .toMatchObject({ revision: 4, state: 'registered' }));
+    expect(registration).toHaveBeenCalledOnce();
+  } finally { released.release(); await refreshing.catch(() => {}); app.unmount(); }
+});
+
+it('does not send approval before the initial transfer ends and enables it on the same screen after completion', async () => {
+  const entered = gate(); const released = gate();
+  const open = service.open.bind(service);
+  vi.spyOn(service, 'open').mockImplementation(async (...args) => {
+    const opened = await open(...args);
+    return { ...opened, read: heldRead(opened.read, entered, released) };
+  });
+  await client.connect();
+  const app = render(createElement(ManagerView, { cwd: repository, lang: 'en', client, assignment, initialDiagnostics: [], onExit() {} }));
+  const submissions = vi.spyOn(client, 'submit');
+  try {
+    await entered.promise;
+    await vi.waitFor(() => {
+      expect(app.lastFrame()).toContain('CSV出力');
+      expect(app.lastFrame()).toContain(getLabel('manager.conversation.reading', 'en'));
+    });
+    app.stdin.write('\x0f');
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
+    expect(submissions).not.toHaveBeenCalled();
+    expect(app.lastFrame()).not.toContain(getLabel('manager.summaryHint', 'en'));
+    released.release(); await complete();
+    await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('manager.summaryHint', 'en')));
+    app.stdin.write('\x0f');
+    await vi.waitFor(() => expect(submissions).toHaveBeenCalledOnce());
+    expect(submissions.mock.calls[0]![0]).toEqual({ kind: 'approve_summary', revision: 4 });
+    expect(await submissions.mock.results[0]!.value).toMatchObject({ kind: 'accepted' });
+  } finally { released.release(); app.unmount(); }
+});
+
+it.each(['read failure', 'disconnect'] as const)('blocks approval after a background %s until a fresh transfer completes on the same screen', async (failure) => {
+  const connection = vi.spyOn(net.Socket.prototype, 'write');
+  await client.connect(); await complete();
+  const app = render(createElement(ManagerView, { cwd: repository, lang: 'en', client, assignment, initialDiagnostics: [], onExit() {} }));
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('manager.summaryHint', 'en')));
+  const submissions = vi.spyOn(client, 'submit');
+  const entered = gate(); const released = gate();
+  let refreshing: Promise<void> | undefined;
+  try {
+    if (failure === 'read failure') {
+      const goal = goalRecord(); saveGoal(goal);
+      writeFileSync(join(repository, '.takt', 'goals', goal.id, 'goal.json'), '{broken');
+      await Promise.allSettled([client.refresh()]);
+      await vi.waitFor(() => expect(client.getSnapshot().readStatus).toBe('incomplete'));
+      saveGoal(goal);
+      const snapshot = service.snapshot.bind(service);
+      vi.spyOn(service, 'snapshot').mockImplementation(async (id) => heldRead(await snapshot(id), entered, released));
+      refreshing = client.refresh();
+    } else {
+      const open = service.open.bind(service);
+      vi.spyOn(service, 'open').mockImplementation(async (...args) => {
+        const opened = await open(...args);
+        return { ...opened, read: heldRead(opened.read, entered, released) };
+      });
+      const index = connection.mock.calls.findIndex(([bytes]) => String(bytes).includes('"method":"open"'));
+      (connection.mock.contexts[index] as net.Socket).destroy();
+    }
+    await entered.promise;
+    await vi.waitFor(() => {
+      expect(app.lastFrame()).toContain(getLabel('manager.conversation.reading', 'en'));
+      expect(app.lastFrame()).toContain('CSV出力');
+    });
+    app.stdin.write('\x0f');
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
+    expect(submissions).not.toHaveBeenCalled();
+    expect(app.lastFrame()).not.toContain(getLabel('manager.summaryHint', 'en'));
+    released.release(); await refreshing; await complete();
+    await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('manager.summaryHint', 'en')));
+    app.stdin.write('\x0f');
+    await vi.waitFor(() => expect(submissions).toHaveBeenCalledOnce());
+    expect(submissions.mock.calls[0]![0]).toEqual({ kind: 'approve_summary', revision: 4 });
+    expect(await submissions.mock.results[0]!.value).toMatchObject({ kind: 'accepted' });
+  } finally { released.release(); await refreshing?.catch(() => {}); app.unmount(); }
+});
 
 it.each([
   { kind: 'approve_summary', concurrent: false }, { kind: 'approve_summary', concurrent: true },
@@ -294,8 +413,8 @@ it('removes the same standalone approval after withdrawal and refresh on the sam
   expect(selection.candidates).toEqual([{ goalId: null, owner: { kind: 'repository', repositoryDirectory: repository }, question: inquiry }]);
   await vi.waitFor(() => expect(frame()).toContain(inquiry.body));
   await new StandaloneInquiryStore(directory, assignment).withdraw(inquiry.id);
-  await client.refresh(); await complete();
-  expect(inquiries()).toEqual([]);
+  await client.refresh();
+  await vi.waitFor(() => expect(inquiries()).toEqual([]));
   await vi.waitFor(() => expect(frame()).not.toContain(inquiry.body));
 });
 

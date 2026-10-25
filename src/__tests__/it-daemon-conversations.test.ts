@@ -11,7 +11,7 @@ import { createTuiConversationPort } from '../features/manager/tuiConversationPo
 import { ConversationStore } from '../infra/conversations/store.js';
 import { conversationRecord } from './helpers/conversation-fixtures.js';
 import { captureOwnedProcess, terminateOwnedProcess } from './helpers/owned-process.js';
-import { managerDaemonFixture, submitManagerText, waitForManager } from './helpers/manager-daemon-tui.js';
+import { managerDaemonFixture, submitManagerText, waitForManager, type ManagerTuiProcess } from './helpers/manager-daemon-tui.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { GoalStore } from '../infra/goals/store.js';
 import { stripVTControlCharacters } from 'node:util';
@@ -20,6 +20,19 @@ import { saveManagerToolPermissionInquiry } from '../features/manager/toolPermis
 import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
 
 const lifecycle = await import(pathToFileURL(join(process.cwd(), 'dist/features/daemon/lifecycle.js')).href) as typeof import('../features/daemon/lifecycle.js');
+
+async function expectCompletedFrames(tui: ManagerTuiProcess, expected: readonly string[]) {
+  const samples = await tui.observeFrames();
+  expect(samples).toHaveLength(30);
+  const failures = samples.flatMap((sample, index) => {
+    const screen = stripVTControlCharacters(sample.frame).replace(/\s+/gu, '');
+    const readingVisible = screen.includes('会話の情報を読み出しています。');
+    const missing = expected.filter((text) => !screen.includes(text.replace(/\s+/gu, '')));
+    return sample.readStatus !== 'complete' || readingVisible || missing.length > 0
+      ? [{ index, readStatus: sample.readStatus, readingVisible, missing }] : [];
+  });
+  expect(failures).toEqual([]);
+}
 
 it('keeps one daemon across two attachments, last detach and accepted work, then exits with only saved pending', async () => {
   const directory = getGlobalConfigDir(); const repository = join(directory, 'repository'); mkdirSync(repository);
@@ -156,17 +169,13 @@ it('connects two TUI processes for the same canonical assignment to the same sav
     const second = await fixture.start(fixture.repository, undefined);
     await waitForManager(second, saved.pending!.summary.objective);
     await second.ready(null);
-    await vi.waitFor(async () => {
-      const screen = stripVTControlCharacters(await second.frame()).replace(/\s+/gu, '');
-      expect(screen).toContain(saved.pending!.summary.objective.replace(/\s+/gu, ''));
-      expect(screen).not.toContain(getLabel('manager.conversation.reading', 'ja').replace(/\s+/gu, ''));
-    });
     const opens = fixture.readObservations().filter(({ event, method }) => event === 'request' && method === 'open');
     for (const tui of [first, second]) {
       expect(opens.filter(({ pid }) => pid === tui.child.pid).map(({ conversationId }) => conversationId)).toEqual([saved.id]);
     }
     expect(fixture.state()?.pending).toEqual(saved.pending);
     expect(fixture.readObservations().filter(({ event }) => event === 'provider_start')).toEqual([]);
+    await expectCompletedFrames(second, [saved.pending!.summary.objective]);
     await first.exit();
     await waitForManager(second, saved.pending!.summary.objective);
     const reopened = await fixture.start(fixture.repository, undefined);
@@ -198,13 +207,28 @@ it('finishes reading on the same Japanese screen after an empty Ctrl+O request a
     tui.key('\r');
     await waitForManager(tui, greeting);
     await tui.ready(null);
-    await vi.waitFor(async () => {
-      const screen = stripVTControlCharacters(await tui.frame()).replace(/\s+/gu, '');
-      expect(screen).toContain(insufficient);
-      expect(screen).toContain(greeting);
-      expect(screen).not.toContain(getLabel('manager.conversation.reading', 'ja').replace(/\s+/gu, ''));
-    });
+    await expectCompletedFrames(tui, [insufficient, greeting]);
     expect(fixture.readObservations().filter(({ event, pid }) => event === 'provider_complete' && pid !== tui.child.pid)).toHaveLength(2);
+    await tui.exit();
+  } finally { await fixture.cleanup(); }
+});
+
+it('keeps every sampled Japanese screen complete during periodic refresh and accepts one Ctrl+O approval', async () => {
+  const fixture = managerDaemonFixture('ja');
+  const saved = conversationRecord(fixture.repository);
+  new ConversationStore(fixture.directory).write(saved);
+  fixture.release();
+  try {
+    const tui = await fixture.start(fixture.repository, undefined);
+    await tui.ready(null);
+    await waitForManager(tui, saved.pending!.summary.objective);
+    await expectCompletedFrames(tui, [saved.pending!.summary.objective, getLabel('manager.summaryHint', 'ja')]);
+    tui.key('\x0f');
+    await vi.waitFor(() => expect(fixture.state()?.approval).toMatchObject({ revision: 4, state: 'registered' }), { timeout: 10000 });
+    expect(fixture.readObservations().filter(({ event, command, pid }) => event === 'request' && command === 'approve_summary' && pid === tui.child.pid))
+      .toEqual([expect.objectContaining({ revision: saved.pending!.revision })]);
+    const receipt = fixture.state()!.approval!;
+    expect((await new GoalStore(fixture.repository).get(receipt.goalId)).objective).toBe(saved.pending!.summary.objective);
     await tui.exit();
   } finally { await fixture.cleanup(); }
 });

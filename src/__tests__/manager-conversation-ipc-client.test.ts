@@ -5,6 +5,7 @@ import { ConversationIpcClient } from '../features/manager/conversationIpcClient
 import { conversationRecord } from './helpers/conversation-fixtures.js';
 import { conversationTransferFrames, encodeConversationFrame } from '../features/daemon/conversationFrames.js';
 import type { ConversationCommand } from '../features/manager/conversationPort.js';
+import type { ConversationReadMetadata } from '../features/manager/conversationTransferReceiver.js';
 
 const doubles = vi.hoisted(() => ({ connect: vi.fn(), ensure: vi.fn(), resolve: vi.fn(), owner: {
   pid: 1234, identity: { startTime: 'incarnation-one' }, version: 'test', cliPath: '/cli.js',
@@ -67,6 +68,146 @@ beforeEach(() => {
   });
 });
 afterEach(() => { for (const value of clients) value.close(); vi.useRealTimers(); });
+
+function controlReads(method: 'open' | 'snapshot') {
+  const reads: Array<{ request: Request; socket: FakeSocket }> = [];
+  doubles.connect.mockImplementation(() => {
+    const socket = new FakeSocket((request, socket) => {
+      if (request.method === method || request.method === 'snapshot') reads.push({ request, socket });
+      else void respond(request, socket);
+    });
+    sockets.push(socket); queueMicrotask(() => socket.emit('connect')); return socket;
+  });
+  return reads;
+}
+
+async function snapshotWire(revision: number, stateSequence: number) {
+  const read = { conversationId: record.id, transferId: randomUUID(), revision, stateSequence, operationId: null };
+  const pending = { ...record.pending!, revision };
+  const state = { conversationId: record.id, assignment: record.assignment, revision, pending,
+    approval: null, running: null, interrupted: false };
+  const item = { kind: 'display_event', event: { id: `revision-${revision}`, message: `Proposal ${revision}` } };
+  const wire: Buffer[] = [];
+  for await (const { frame } of conversationTransferFrames(record.id, read, 'snapshot', (async function* () {
+    yield { kind: 'state', state }; yield item;
+  })())) wire.push(encodeConversationFrame(frame));
+  return { read, state, item, wire };
+}
+
+function readResponse(target: { request: Request; socket: FakeSocket }, read: ConversationReadMetadata) {
+  target.socket.response(target.request, {
+    ...(target.request.method === 'open' ? { attachmentId: randomUUID() } : {}), read,
+  });
+}
+
+it('keeps the completed proposal usable while a background response and its transfer are pending', async () => {
+  const reads = controlReads('open');
+  const value = client(); const connecting = value.connect();
+  await vi.waitFor(() => expect(reads).toHaveLength(1));
+  const initial = await snapshotWire(4, 1);
+  readResponse(reads[0]!, initial.read);
+  reads[0]!.socket.emit('data', Buffer.concat(initial.wire));
+  await connecting;
+  const previous = value.getSnapshot();
+  const statuses: string[] = [];
+  value.subscribe(() => { statuses.push(value.getSnapshot().readStatus); });
+  const refreshing = value.refresh();
+  await vi.waitFor(() => expect(reads).toHaveLength(2));
+  const waiting = value.getSnapshot();
+  const { read, state, item, wire } = await snapshotWire(5, 2);
+  readResponse(reads[1]!, read);
+  const awaitingStart = value.getSnapshot();
+  reads[1]!.socket.emit('data', Buffer.concat(wire.slice(0, -1)));
+  const transferring = value.getSnapshot();
+  reads[1]!.socket.emit('data', wire.at(-1)!);
+  await refreshing;
+
+  expect(waiting).toMatchObject({ readStatus: 'complete', state: previous.state, items: previous.items });
+  expect(awaitingStart.readStatus).toBe('complete');
+  expect(transferring).toMatchObject({ readStatus: 'complete', state });
+  expect(statuses.every((status) => status === 'complete')).toBe(true);
+  expect(value.getSnapshot()).toMatchObject({ readStatus: 'complete', state, items: [item] });
+});
+
+it.each(['open', 'snapshot'] as const)('allows a slow $0 transfer to finish without starting another snapshot', async (method) => {
+  const reads = controlReads(method);
+  const value = client();
+  let operation: Promise<void>;
+  if (method === 'open') operation = value.connect();
+  else {
+    await value.connect();
+    await vi.waitFor(() => expect(value.getSnapshot().readStatus).toBe('complete'));
+    operation = value.refresh();
+  }
+  await vi.waitFor(() => expect(reads).toHaveLength(1));
+  const { read, wire } = await snapshotWire(4, 2);
+  readResponse(reads[0]!, read);
+  reads[0]!.socket.emit('data', wire[0]!);
+  vi.useFakeTimers();
+  const refreshes: Promise<void>[] = [];
+  for (let index = 0; index < 3; index++) {
+    await vi.advanceTimersByTimeAsync(500);
+    refreshes.push(value.refresh());
+  }
+  await vi.advanceTimersByTimeAsync(0);
+  const snapshotRequests = sockets[0]!.requests.filter(({ method }) => method === 'snapshot').length;
+  reads[0]!.socket.emit('data', Buffer.concat(wire.slice(1)));
+  // 旧実装が作った余分な要求も完結させ、失敗理由を要求数に限定する。
+  for (const target of reads.slice(1)) {
+    const extra = await snapshotWire(4, 3);
+    readResponse(target, extra.read);
+    target.socket.emit('data', Buffer.concat(extra.wire));
+  }
+  await operation;
+  await Promise.all(refreshes);
+  expect(snapshotRequests).toBe(method === 'open' ? 0 : 1);
+  expect(value.getSnapshot().readStatus).toBe('complete');
+});
+
+it.each(['request', 'transfer'] as const)('invalidates a completed read after a background %s failure and recovers after retry', async (failure) => {
+  const reads = controlReads('snapshot');
+  const value = client(); await value.connect();
+  await vi.waitFor(() => expect(value.getSnapshot().readStatus).toBe('complete'));
+  const refreshing = value.refresh();
+  const settled = refreshing.catch(() => {});
+  await vi.waitFor(() => expect(reads).toHaveLength(1));
+  const { read, wire } = await snapshotWire(4, 2);
+  if (failure === 'request') {
+    reads[0]!.socket.emit('data', encodeConversationFrame({ protocolVersion: 1, type: 'response',
+      requestId: reads[0]!.request.requestId, error: { kind: 'error', code: 'read_failed', message: 'Read failed' } }));
+  } else {
+    readResponse(reads[0]!, read);
+    reads[0]!.socket.emit('data', wire[0]!);
+    reads[0]!.socket.emit('data', encodeConversationFrame({ protocolVersion: 1, type: 'event', conversationId: record.id,
+      output: { kind: 'transfer_error', transferId: read.transferId, code: 'read_failed' } }));
+  }
+  await settled;
+  expect(value.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'incomplete' });
+  const retry = value.refresh();
+  await vi.waitFor(() => expect(reads).toHaveLength(2));
+  expect(value.getSnapshot().readStatus).toBe('reading');
+  const repaired = await snapshotWire(5, 3);
+  readResponse(reads[1]!, repaired.read);
+  reads[1]!.socket.emit('data', Buffer.concat(repaired.wire));
+  await retry;
+  expect(value.getSnapshot()).toMatchObject({ readStatus: 'complete', state: repaired.state });
+});
+
+it('requires a fresh completed read after reconnecting the same client', async () => {
+  const value = client(); await value.connect();
+  await vi.waitFor(() => expect(value.getSnapshot().readStatus).toBe('complete'));
+  const reads = controlReads('open');
+  sockets[0]!.destroy();
+  expect(value.getSnapshot()).toMatchObject({ connection: 'disconnected', readStatus: 'incomplete' });
+  await vi.waitFor(() => expect(reads).toHaveLength(1), { timeout: 2000 });
+  const { read, wire } = await snapshotWire(4, 2);
+  readResponse(reads[0]!, read);
+  reads[0]!.socket.emit('data', Buffer.concat(wire.slice(0, -1)));
+  await vi.waitFor(() => expect(value.getSnapshot().connection).toBe('connected'));
+  expect(value.getSnapshot().readStatus).toBe('reading');
+  reads[0]!.socket.emit('data', wire.at(-1)!);
+  expect(value.getSnapshot().readStatus).toBe('complete');
+});
 
 it('authenticates the current owner and opens the resolved identity with CLI overrides before applying a complete read', async () => {
   const value = client(); const listener = vi.fn(); const unsubscribe = value.subscribe(listener);
