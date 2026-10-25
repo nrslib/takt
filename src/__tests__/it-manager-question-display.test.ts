@@ -105,7 +105,7 @@ async function mountGoalControls(lang: 'ja' | 'en', goal: Goal) {
       strategy: { systemPrompt: 'manager fixture' } },
   });
   app = render(createElement(ManagerView, { cwd, lang, session, initialDiagnostics: [], onExit: vi.fn() }));
-  await vi.waitFor(() => expect(app!.lastFrame()!.replace(/\n/gu, '')).toContain(cwd));
+  await vi.waitFor(() => expect(app!.lastFrame()).toContain(basename(cwd)));
   const send = async (text: string): Promise<void> => {
     app!.stdin.write(text);
     await vi.waitFor(() => expect(app!.lastFrame()).toContain(text.split('\n')[0]!));
@@ -359,6 +359,75 @@ it.each(['enter', 'escape'] as const)('blocks inquiry entry during registration 
   } finally { finish(); }
 });
 
+it.each(['ja', 'en'] as const)('[SCN-GOALLIST-P1] shows a saved awaiting-merge goal with the merge label in the %s goal list', async (lang) => {
+  const saved: Goal = { ...goalRecord(), objective: 'Awaiting merge fixture', status: 'awaiting_merge',
+    completion: {
+      goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', summary: 'Ready for integration',
+      instructions: ['git merge --ff-only goal-branch'],
+      changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+    },
+  };
+  const { store } = await mountGoalControls(lang, saved);
+  await openMenu('goal');
+  await vi.waitFor(() => {
+    expect(app!.lastFrame()).toContain(getLabel('manager.selectionTitles.goal', lang));
+    const row = app!.lastFrame()!.split('\n').find((line) => line.includes(saved.objective));
+    expect(row).toContain(`${saved.objective} — ${getLabel('manager.goalStates.awaiting_merge', lang)}`);
+    expect(row).not.toContain(getLabel('manager.goalStates.active', lang));
+  });
+  expect(await store.get(saved.id)).toEqual(saved);
+});
+
+it.each([
+  { lang: 'ja' as const, status: 'created' as const },
+  { lang: 'en' as const, status: 'created' as const },
+  { lang: 'ja' as const, status: 'awaiting_merge' as const },
+  { lang: 'en' as const, status: 'awaiting_merge' as const },
+])('[SCN-GOALLIST-P2] prioritizes paused for a saved $status goal in the $lang goal list', async ({ lang, status }) => {
+  const saved: Goal = { ...goalRecord(), objective: 'Paused goal fixture', status, executionStatus: 'paused',
+    ...(status === 'awaiting_merge' ? { completion: {
+      goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', summary: 'Ready for integration',
+      instructions: ['git merge --ff-only goal-branch'],
+      changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+    } } : {}),
+  };
+  const { store } = await mountGoalControls(lang, saved);
+  await openMenu('goal');
+  await vi.waitFor(() => {
+    expect(app!.lastFrame()).toContain(getLabel('manager.selectionTitles.goal', lang));
+    const row = app!.lastFrame()!.split('\n').find((line) => line.includes(saved.objective));
+    expect(row).toContain(`${saved.objective} — ${getLabel('manager.goalStates.paused', lang)}`);
+    expect(row).not.toContain(getLabel('manager.goalStates.awaiting_merge', lang));
+    expect(row).not.toContain(getLabel('manager.goalStates.active', lang));
+  });
+  expect(await store.get(saved.id)).toEqual(saved);
+});
+
+it.each(['ja', 'en'] as const)('[SCN-GOALLIST-N1] excludes saved completed and aborted goals from the %s goal list', async (lang) => {
+  const completed: Goal = { ...goalRecord(), objective: 'Completed goal fixture', status: 'completed',
+    completion: {
+      goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', targetSha: 'b'.repeat(40),
+      summary: 'Integrated', instructions: ['Verified merge'],
+      changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+    },
+  };
+  const aborted: Goal = { ...goalRecord(), id: '550e8400-e29b-41d4-a716-446655440001',
+    objective: 'Aborted goal fixture', executionStatus: 'aborted' };
+  await new GoalStore(cwd).create(completed);
+  const { store } = await mountGoalControls(lang, aborted);
+  await openMenu('goal');
+  await vi.waitFor(() => {
+    const frame = app!.lastFrame()!;
+    expect(frame).toContain(getLabel('manager.selectionEmpty.goal', lang));
+    expect(frame).not.toContain(completed.objective);
+    expect(frame).not.toContain(aborted.objective);
+    expect(frame).not.toContain(getLabel('manager.selectionTitles.goal', lang));
+    expect(frame).not.toContain(getLabel('manager.selectionHint', lang));
+  });
+  expect(await store.get(completed.id)).toEqual(completed);
+  expect(await store.get(aborted.id)).toEqual(aborted);
+});
+
 it.each(['pause', 'resume', 'abort'] as const)('filters mixed saved goal states and applies %s only to the second selected goal', async (command) => {
   const executionStatus = command === 'resume' ? 'paused' : 'active';
   const saved: Goal = { ...goalRecord(), objective: 'Eligible first', executionStatus };
@@ -376,6 +445,8 @@ it.each(['pause', 'resume', 'abort'] as const)('filters mixed saved goal states 
     expect(list).toBeDefined();
     expect(list).toContain(saved.objective);
     expect(list).toContain(other.objective);
+    const row = list!.split('\n').find((line) => line.includes(saved.objective));
+    expect(row).toContain(`${saved.objective} — ${getLabel(`manager.goalStates.${executionStatus}`, 'en')}`);
     expect(list).not.toContain('Completed candidate');
     expect(list).not.toContain('Aborted candidate');
   });
@@ -444,7 +515,7 @@ it.each([
   await vi.waitFor(async () => expect((await store.get(saved.id)).executionStatus).toBe('aborted'));
   expect(await store.get(saved.id)).toEqual({ ...saved, executionStatus: 'aborted' });
   const expectAbortedGoal = (): void => {
-    expect(app!.lastFrame()!.split('\n').find((row) => /\^R/u.test(row))).toMatch(lang === 'ja'
+    expect(app!.lastFrame()!.split('\n').find((row) => /^(?:進行中|in progress|ongoing|active)/iu.test(row))).toMatch(lang === 'ja'
       ? /進行中\s*0/u : /(?:in progress|ongoing|active)\s*:?\s*0/iu);
   };
   await vi.waitFor(expectAbortedGoal);
@@ -701,7 +772,9 @@ it.each(['ja', 'en'] as const)('pauses and resumes an awaiting-merge goal from c
     const boxes = app!.lastFrame()!.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu) ?? [];
     const list = boxes.find((box) => /↑|↓/u.test(box) && /Enter/u.test(box));
     expect(list).toContain(saved.objective);
-    expect(list).toContain(getLabel('manager.goalStates.active', lang));
+    const row = list!.split('\n').find((line) => line.includes(saved.objective));
+    expect(row).toContain(getLabel('manager.goalStates.awaiting_merge', lang));
+    expect(row).not.toContain(getLabel('manager.goalStates.active', lang));
   });
   expect(call).not.toHaveBeenCalled();
 });

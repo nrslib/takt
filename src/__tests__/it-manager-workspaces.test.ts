@@ -4,7 +4,7 @@ import { cleanup,render } from 'ink-testing-library';
 import { execFileSync } from 'node:child_process';
 import { existsSync,mkdirSync,mkdtempSync,readFileSync,realpathSync,rmSync,symlinkSync,writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename,join } from 'node:path';
 import { createElement } from 'react';
 import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
 import { resolveAssignedProjectRoot,resolveCurrentManagerAssignment } from '../features/manager/assignment.js';
@@ -20,6 +20,7 @@ import { createWorkspace,findWorkspaceForRepository,readWorkspace,readWorkspaceR
 import { GoalStore } from '../infra/goals/store.js';
 import { resetScenario,setMockScenario } from '../infra/mock/index.js';
 import { MockProvider } from '../infra/providers/mock.js';
+import { getLabel } from '../shared/i18n/index.js';
 import { goalInput,goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn(async () => {}) }));
@@ -206,7 +207,7 @@ describe('manager workspace storage and repository boundaries', () => {
     const expected = createWorkspaceManagerContext(workspace!, globalDirectory);
     mkdirSync(join(repositoryB, 'src'));
     for (const cwd of [repositoryA, repositoryB, join(repositoryB, 'src')]) {
-      expect(await resolveManagerStartup(cwd, globalDirectory)).toEqual({ kind: 'ready', context: expected });
+      expect(await resolveManagerStartup(cwd, globalDirectory)).toMatchObject({ kind: 'ready', context: expected });
     }
     expect(await readWorkspace(globalDirectory, workspace!.id)).toEqual(workspace);
     expect(JSON.parse(readFileSync(join(globalDirectory, 'workspaces', workspace!.id, 'workspace.json'), 'utf8'))).toEqual(workspace);
@@ -405,7 +406,7 @@ describe('manager workspace storage and repository boundaries', () => {
     } finally { await session.close(); await mcp.dispose(); }
   });
 
-  it('shows the current workspace name and count and goals from all members in the TUI', async () => {
+  it('shows the current repository count and goals from all members in the same TUI', async () => {
     const workspace = await addManagerRepository(single(), repositoryB, globalDirectory);
     const assignment = createWorkspaceManagerContext(workspace!, globalDirectory).assignment;
     const goal = await new GoalStore(repositoryB).create({ ...goalRecord(), executionStatus: 'paused' });
@@ -415,7 +416,7 @@ describe('manager workspace storage and repository boundaries', () => {
     const app = render(createElement(ManagerView, { cwd: repositoryA, assignment, lang: 'ja', session, initialDiagnostics: [], onExit: vi.fn() }));
     try {
       await vi.waitFor(() => {
-        expect(app.lastFrame()).toContain(`${workspace!.name} (2)`);
+        expect(app.lastFrame()!.split('\n')[0]).toBe('担当: a ほか 1 件');
         expect(app.lastFrame()).toMatch(/進行中\s*1/u);
       });
       app.stdin.write('\x07');
@@ -431,7 +432,86 @@ describe('manager workspace storage and repository boundaries', () => {
       app.stdin.write('担当を確認');
       await vi.waitFor(() => expect(app.lastFrame()).toContain('担当を確認'));
       app.stdin.write('\r');
-      await vi.waitFor(() => expect(app.lastFrame()).toContain('新しい担当 (3)'), { timeout: 30_000 });
+      await vi.waitFor(() => expect(app.lastFrame()!.split('\n')).toContain('担当: a ほか 2 件'), { timeout: 30_000 });
+    } finally { app.unmount(); await session.close(); }
+  });
+
+  it('shows the repository used for startup even when it is not the first workspace member', async () => {
+    await createWorkspace({ globalConfigDirectory: globalDirectory, name: '開発担当', repositoryDirectories: [repositoryA, repositoryB, repositoryC] });
+    const startupDirectory = join(repositoryB, 'src');
+    mkdirSync(startupDirectory);
+    const resolution = await resolveManagerStartup(startupDirectory, globalDirectory);
+    expect(resolution.kind).toBe('ready');
+    if (resolution.kind !== 'ready') throw new Error('Expected ready manager context');
+    const { cwd, assignment } = resolution.context;
+    expect(cwd).toBe(repositoryA);
+    const session = createManagerConversationSession({ cwd, assignment,
+      plan: { ctx: { provider: new MockProvider(), providerType: 'mock', model: undefined, lang: 'ja' },
+        strategy: { systemPrompt: 'manager fixture' } } });
+    const app = render(createElement(ManagerView, { cwd, assignment, lang: 'ja', session, initialDiagnostics: [], onExit: vi.fn() }));
+    try {
+      await vi.waitFor(() => {
+        expect(app.lastFrame()).not.toContain('処理中');
+        expect(app.lastFrame()!.split('\n').slice(0, 2)).toEqual(['担当: b ほか 2 件', '進行中 0 ／ 未回答 0']);
+      });
+      expect(await session.getAssignment()).toMatchObject({ repositoryDirectories: [repositoryA, repositoryB, repositoryC] });
+    } finally { app.unmount(); await session.close(); }
+  });
+
+  it.each(['ja', 'en'] as const)('shows an empty assignment when starting from a selected empty workspace in %s', async (lang) => {
+    const workspace = await createWorkspace({ globalConfigDirectory: globalDirectory, name: '開発担当', repositoryDirectories: [repositoryA] });
+    await removeManagerRepository(createWorkspaceManagerContext(workspace, globalDirectory).assignment, repositoryA, globalDirectory);
+    const resolution = await resolveManagerStartup(root, globalDirectory);
+    expect(resolution.kind).toBe('selection');
+    if (resolution.kind !== 'selection') throw new Error('Expected workspace selection');
+    const selectedWorkspace = resolution.workspaces.find((candidate) => candidate.id === workspace.id)!;
+    expect(selectedWorkspace.repositoryDirectories).toEqual([]);
+    const { cwd, assignment } = createWorkspaceManagerContext(selectedWorkspace, globalDirectory);
+    expect(cwd).toBe(join(globalDirectory, 'workspaces', workspace.id));
+    const session = createManagerConversationSession({ cwd, assignment,
+      plan: { ctx: { provider: new MockProvider(), providerType: 'mock', model: undefined, lang },
+        strategy: { systemPrompt: 'manager fixture' } } });
+    const app = render(createElement(ManagerView, { cwd, assignment, lang, session, initialDiagnostics: [], onExit: vi.fn() }));
+    const checkHeading = () => {
+      const rows = app.lastFrame()!.split('\n');
+      expect(rows[0]).toBe(getLabel('manager.selectionEmpty.repository', lang));
+      for (const value of [basename(cwd), workspace.id]) expect(rows[0]).not.toContain(value);
+      expect(rows[1]).toBe(getLabel('manager.counts', lang, { goals: '0', questions: '0' }));
+    };
+    try {
+      checkHeading();
+      await vi.waitFor(() => {
+        expect(app.lastFrame()).not.toContain(lang === 'ja' ? '処理中' : 'Working');
+        checkHeading();
+      });
+      expect((await session.getAssignment())!.repositoryDirectories).toEqual([]);
+    } finally { app.unmount(); await session.close(); }
+  });
+
+  it.each(['ja', 'en'] as const)('updates the same screen to an empty assignment after removing its last repository in %s', async (lang) => {
+    const workspace = await createWorkspace({ globalConfigDirectory: globalDirectory, name: '開発担当', repositoryDirectories: [repositoryA] });
+    const { cwd, assignment } = createWorkspaceManagerContext(workspace, globalDirectory);
+    const session = createManagerConversationSession({ cwd, assignment,
+      plan: { ctx: { provider: new MockProvider(), providerType: 'mock', model: undefined, lang },
+        strategy: { systemPrompt: 'manager fixture' } } });
+    const app = render(createElement(ManagerView, { cwd, assignment, lang, session, initialDiagnostics: [], onExit: vi.fn() }));
+    try {
+      await vi.waitFor(() => {
+        expect(app.lastFrame()).not.toContain(lang === 'ja' ? '処理中' : 'Working');
+        expect(app.lastFrame()!.split('\n')[0]).toBe(getLabel('manager.assignmentHeading', lang, { name: basename(repositoryA) }));
+      });
+      const currentAssignment = (await session.getAssignment())!;
+      await removeManagerRepository(currentAssignment, repositoryA, globalDirectory);
+      expect((await readWorkspace(globalDirectory, workspace.id))!.repositoryDirectories).toEqual([]);
+      await vi.waitFor(() => {
+        const rows = app.lastFrame()!.split('\n');
+        expect(rows[0]).toBe(getLabel('manager.selectionEmpty.repository', lang));
+        for (const value of [basename(cwd), workspace.id]) {
+          expect(rows[0]).not.toBe(getLabel('manager.assignmentHeading', lang, { name: value }));
+        }
+        expect(rows[1]).toBe(getLabel('manager.counts', lang, { goals: '0', questions: '0' }));
+      });
+      expect(await session.getAssignment()).toMatchObject({ kind: 'workspace', workspaceId: workspace.id, repositoryDirectories: [] });
     } finally { app.unmount(); await session.close(); }
   });
 

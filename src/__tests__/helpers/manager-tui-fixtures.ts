@@ -109,7 +109,7 @@ export async function enterSelection(context: ReturnType<typeof mount>): Promise
 }
 
 export async function openMenu(context: ReturnType<typeof mount>, kind: 'answer' | 'goal'): Promise<void> {
-  await waitFor(() => expect(context.app.lastFrame()).toContain(cwd));
+  await waitFor(() => expect(context.app.lastFrame()).toContain('manager-repository'));
   context.app.stdin.write(kind === 'answer' ? QUESTION_MENU : GOAL_MENU);
 }
 

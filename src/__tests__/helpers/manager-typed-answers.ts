@@ -3,7 +3,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { render } from 'ink-testing-library';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
 import { createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -573,7 +573,9 @@ export function registerManagerTypedAnswerTests(): void {
       const second = join(cwd, 'added');
       mkdirSync(second);
       await putWorkspace([cwd, second]);
-      await waitFor(() => expect(frame()).toContain('Answer workspace (2)'));
+      await waitFor(() => expect(frame().split('\n')).toContain(getLabel('manager.assignmentHeadingMultiple', 'en', {
+        name: basename(cwd), count: '1',
+      })));
       expect(await readScopedPermissions({ projectDirectory: cwd, workspaceId })).toEqual(before);
       expect(await readScopedPermissions({ projectDirectory: second, workspaceId })).toEqual({ ok: true, files: [] });
       expect((await savedQuestion()).answer?.scope).toBe('project');
