@@ -1332,6 +1332,50 @@ describe('callDevin', () => {
     expect(killSpy).toHaveBeenCalledWith(-(leaderPid + 2), 'SIGTERM');
   });
 
+  it('Given a descendant appears after termination starts, When stderr keeps flowing, Then the late group is still signaled', async () => {
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    const abort = new AbortController();
+    let leaderPid = 0;
+    let lateSpawnVisible = false;
+    mockExecFileSync.mockImplementation((command: unknown) => {
+      if (command !== 'ps' || leaderPid === 0) {
+        return '';
+      }
+      const descendant = lateSpawnVisible
+        ? `${leaderPid + 1} ${leaderPid} ${leaderPid + 1}\n`
+        : '';
+      return `${leaderPid} 1 ${leaderPid}\n${descendant}`;
+    });
+    mockSpawn.mockImplementation((...call: unknown[]) => {
+      recordConfigArg(call);
+      const child = createAcpChild();
+      leaderPid = child.pid!;
+      attachAcpServer(child, {
+        initialize: () => ({ protocolVersion: 1, agentCapabilities: {}, agentInfo: { name: 'x', version: '0' } }),
+        'session/new': () => ({ sessionId: 'keen-otter', modes: DEFAULT_MODES, configOptions: [] }),
+        'session/prompt': (_params, _api, _id) => {
+          queueMicrotask(() => {
+            abort.abort(); // terminate() runs here: no descendants yet
+            lateSpawnVisible = true; // a descendant appears during shutdown
+            child.stderr.write('late\n');
+            // Delay close so the post-terminate stderr chunk reaches the
+            // refresh while `exit` is still unset.
+            setTimeout(() => child.emit('close', null, 'SIGTERM'), 50);
+          });
+          return undefined;
+        },
+      });
+      return child;
+    });
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo', abortSignal: abort.signal });
+
+    expect(result.status).toBe('error');
+    await vi.waitFor(() => {
+      expect(killSpy).toHaveBeenCalledWith(-(leaderPid + 1), 'SIGTERM');
+    });
+  });
+
   it('Given an exit with empty stderr, When the process dies mid-prompt, Then the error does not repeat the exit code', async () => {
     mockChildExitAfterPrompt(2, '');
 

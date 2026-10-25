@@ -249,6 +249,7 @@ export function spawnDevinAcp(args: string[], options: DevinCallOptions): DevinA
   // recorded groups on stdio activity (when setsid'd exec children are being
   // spawned), throttled to bound the synchronous `ps` scans, and stop once
   // the leader's exit is observed.
+  let terminateRequested = false;
   // Union, never replace: an intermediate process can die while the leader
   // is still alive, reparenting its descendants out of reach of later scans.
   // Groups recorded earlier stay signaled even after a fresh scan loses them.
@@ -264,12 +265,23 @@ export function spawnDevinAcp(args: string[], options: DevinCallOptions): DevinA
     }
     lastDescendantScanAt = now;
     for (const pgid of collectDescendantProcessGroups(child.pid)) {
+      if (recordedDescendantGroups.has(pgid)) {
+        continue;
+      }
       recordedDescendantGroups.add(pgid);
+      // A group first seen after termination started still needs the
+      // SIGTERM → grace → SIGKILL cadence — the terminate() snapshot was
+      // already frozen before this scan ran.
+      if (terminateRequested) {
+        signalProcessGroup(pgid, 'SIGTERM');
+        void delay(DESCENDANT_KILL_GRACE_MS)
+          .then(() => signalProcessGroup(pgid, 'SIGKILL'))
+          .catch(() => {});
+      }
     }
   };
   child.stderr?.on('data', refreshDescendantSnapshot);
 
-  let terminateRequested = false;
   const terminate = (): void => {
     if (terminateRequested) return;
     terminateRequested = true;
