@@ -145,15 +145,22 @@ it('reopens the same conversation and approves its restored summary with Ctrl+O'
 });
 
 it('connects two TUI processes for the same canonical assignment to the same saved conversation', async () => {
-  const fixture = managerDaemonFixture('en');
+  const fixture = managerDaemonFixture('ja');
   const saved = conversationRecord(fixture.repository);
   new ConversationStore(fixture.directory).write(saved);
   fixture.release();
   try {
     const first = await fixture.start(fixture.repository, undefined);
-    const second = await fixture.start(fixture.repository, undefined);
     await waitForManager(first, saved.pending!.summary.objective);
+    await first.ready(null);
+    const second = await fixture.start(fixture.repository, undefined);
     await waitForManager(second, saved.pending!.summary.objective);
+    await second.ready(null);
+    await vi.waitFor(async () => {
+      const screen = stripVTControlCharacters(await second.frame()).replace(/\s+/gu, '');
+      expect(screen).toContain(saved.pending!.summary.objective.replace(/\s+/gu, ''));
+      expect(screen).not.toContain(getLabel('manager.conversation.reading', 'ja').replace(/\s+/gu, ''));
+    });
     const opens = fixture.readObservations().filter(({ event, method }) => event === 'request' && method === 'open');
     for (const tui of [first, second]) {
       expect(opens.filter(({ pid }) => pid === tui.child.pid).map(({ conversationId }) => conversationId)).toEqual([saved.id]);
@@ -168,6 +175,37 @@ it('connects two TUI processes for the same canonical assignment to the same sav
     expect(fixture.readObservations().filter(({ event, method, pid }) => event === 'request' && method === 'open' && pid === reopened.child.pid)
       .map(({ conversationId }) => conversationId)).toEqual([saved.id]);
     await second.exit(); await reopened.exit();
+  } finally { await fixture.cleanup(); }
+});
+
+it('finishes reading on the same Japanese screen after an empty Ctrl+O request and a greeting reply', async () => {
+  const insufficient = '要約を作るには会話の材料が足りません。';
+  const greeting = 'こんにちは。ゴールについて相談できます。';
+  const fixture = managerDaemonFixture('ja', [insufficient, greeting]);
+  fixture.release();
+  try {
+    const tui = await fixture.start(fixture.repository, undefined);
+    await waitForManager(tui, 'ゴールを相談してください');
+    await tui.ready(null);
+    expect(fixture.state()?.pending).toBeNull();
+    tui.key('\x0f');
+    await waitForManager(tui, insufficient);
+    await vi.waitFor(() => expect(fixture.state()?.running).toBeNull());
+    expect(fixture.state()?.pending).toBeNull();
+
+    tui.key('こんにちは');
+    await waitForManager(tui, 'こんにちは');
+    tui.key('\r');
+    await waitForManager(tui, greeting);
+    await tui.ready(null);
+    await vi.waitFor(async () => {
+      const screen = stripVTControlCharacters(await tui.frame()).replace(/\s+/gu, '');
+      expect(screen).toContain(insufficient);
+      expect(screen).toContain(greeting);
+      expect(screen).not.toContain(getLabel('manager.conversation.reading', 'ja').replace(/\s+/gu, ''));
+    });
+    expect(fixture.readObservations().filter(({ event, pid }) => event === 'provider_complete' && pid !== tui.child.pid)).toHaveLength(2);
+    await tui.exit();
   } finally { await fixture.cleanup(); }
 });
 

@@ -96,6 +96,54 @@ it('correlates out-of-order submit responses without replaying or queuing mutati
   expect(sockets[0]!.requests.filter(({ method }) => method === 'submit')).toHaveLength(2);
 });
 
+it.each([
+  { method: 'open', responseAfter: 'start', frameCount: 1 },
+  { method: 'open', responseAfter: 'an item', frameCount: 3 },
+  { method: 'open', responseAfter: 'completion', frameCount: 5 },
+  { method: 'snapshot', responseAfter: 'start', frameCount: 1 },
+  { method: 'snapshot', responseAfter: 'an item', frameCount: 3 },
+  { method: 'snapshot', responseAfter: 'completion', frameCount: 5 },
+])('publishes complete $method items when the response arrives after $responseAfter', async ({ method, frameCount }) => {
+  let pending: { request: Request; socket: FakeSocket } | undefined;
+  doubles.connect.mockImplementation(() => {
+    const socket = new FakeSocket((request, socket) => {
+      if (request.method === method) pending = { request, socket };
+      else void respond(request, socket);
+    });
+    sockets.push(socket); queueMicrotask(() => socket.emit('connect')); return socket;
+  });
+  const value = client();
+  let operation: Promise<void>;
+  if (method === 'open') operation = value.connect();
+  else {
+    await value.connect();
+    await vi.waitFor(() => expect(value.getSnapshot().readStatus).toBe('complete'));
+    operation = value.refresh();
+  }
+  await vi.waitFor(() => expect(pending).toBeDefined());
+  const { request, socket } = pending!;
+  const read = { conversationId: record.id, transferId: randomUUID(), revision: 4, stateSequence: 2, operationId: null };
+  const state = { conversationId: record.id, assignment: record.assignment, revision: 4, pending: record.pending,
+    approval: null, running: null, interrupted: false };
+  const items = [
+    { kind: 'assignment', assignment: { ...record.assignment, repositoryDirectories: ['/repository'] } },
+    { kind: 'display_event', event: { id: 'after-response', message: 'Current conversation information' } },
+  ];
+  const wire: Buffer[] = [];
+  for await (const { frame } of conversationTransferFrames(record.id, read, 'snapshot', (async function* () {
+    yield { kind: 'state', state }; yield* items;
+  })())) wire.push(encodeConversationFrame(frame));
+
+  socket.emit('data', Buffer.concat(wire.slice(0, frameCount)));
+  const response = encodeConversationFrame({ protocolVersion: 1, type: 'response', requestId: request.requestId,
+    result: { ...(method === 'open' ? { attachmentId: randomUUID() } : {}), read } });
+  socket.emit('data', Buffer.concat([response, ...wire.slice(frameCount)]));
+  await operation;
+
+  expect(value.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete', state, error: null });
+  expect(value.getSnapshot().items).toEqual(items);
+});
+
 it('identifies an accepted operation before its result arrives in the same chunk', async () => {
   const value = client(); await value.connect();
   let accepted: string | undefined;
@@ -180,6 +228,6 @@ it('does not apply stale events from a socket after reconnecting to another sock
   await vi.waitFor(() => expect(value.getSnapshot().readStatus).toBe('complete'));
   const current = value.getSnapshot();
   old.emit('data', Buffer.from('invalid old socket data\n'));
-  expect(value.getSnapshot()).toBe(current);
+  expect(value.getSnapshot()).toEqual(current);
   expect(sockets[1]!.destroyed).toBe(false);
 });

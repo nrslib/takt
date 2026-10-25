@@ -80,35 +80,43 @@ export interface ConversationTransferObserver {
   read(status: 'reading' | 'complete' | 'incomplete', transferId: string): void;
 }
 
+function validateReadMetadata(actual: ConversationReadMetadata, expected: ConversationReadMetadata): void {
+  for (const key of ['revision', 'stateSequence', 'operationId'] as const) {
+    if (actual[key] !== expected[key]) throw new Error('Read metadata mismatch');
+  }
+}
+
 export class ConversationTransferReceiver {
   private transfers = new Map<string, Transfer>();
-  private expected: ConversationReadMetadata | undefined;
-  private snapshot: string | undefined;
+  private awaitingStart = false;
+  private snapshot: ConversationReadMetadata | undefined;
   private revision = -1;
   private sequence = -1;
-  private snapshotSequence = -1;
 
   constructor(private readonly conversationId: string, private readonly observer: ConversationTransferObserver) {}
 
   expectRead(metadata: ConversationReadMetadata): void {
     if (metadata.conversationId !== this.conversationId) throw new Error('Unexpected conversation');
-    if (this.snapshot !== undefined) this.transfers.delete(this.snapshot);
-    this.expected = metadata;
-    this.snapshot = metadata.transferId;
-    this.snapshotSequence = metadata.stateSequence;
+    if (this.snapshot?.transferId === metadata.transferId) {
+      validateReadMetadata(metadata, this.snapshot);
+      return;
+    }
+    if (this.snapshot !== undefined) this.transfers.delete(this.snapshot.transferId);
+    this.awaitingStart = true;
+    this.snapshot = metadata;
     this.observer.read('reading', metadata.transferId);
   }
 
   disconnect(): void {
     this.transfers.clear();
-    this.expected = undefined;
-    if (this.snapshot !== undefined) this.observer.read('incomplete', this.snapshot);
+    this.awaitingStart = false;
+    if (this.snapshot !== undefined) this.observer.read('incomplete', this.snapshot.transferId);
   }
 
   authenticated(): void {
     this.disconnect();
     this.sequence = -1;
-    this.snapshotSequence = -1;
+    this.snapshot = undefined;
   }
 
   receive(value: unknown): void {
@@ -120,17 +128,15 @@ export class ConversationTransferReceiver {
       const metadata = { conversationId: event.conversationId, transferId: output.transferId,
         revision: output.revision, stateSequence: output.stateSequence, operationId: output.operationId };
       if (output.purpose === 'snapshot') {
-        if (this.expected !== undefined) {
-          if (output.transferId !== this.expected.transferId) return;
-          for (const key of ['revision', 'stateSequence', 'operationId'] as const) {
-            if (metadata[key] !== this.expected[key]) throw new Error('Read metadata mismatch');
-          }
-          this.expected = undefined;
+        if (this.awaitingStart) {
+          if (output.transferId !== this.snapshot!.transferId) return;
+          validateReadMetadata(metadata, this.snapshot!);
+          this.awaitingStart = false;
         } else {
-          if (metadata.revision < this.revision || metadata.stateSequence < this.sequence || metadata.stateSequence < this.snapshotSequence) return;
-          if (this.snapshot !== undefined) this.transfers.delete(this.snapshot);
-          this.snapshot = output.transferId;
-          this.snapshotSequence = metadata.stateSequence;
+          if (metadata.revision < this.revision || metadata.stateSequence < this.sequence
+            || this.snapshot !== undefined && metadata.stateSequence < this.snapshot.stateSequence) return;
+          if (this.snapshot !== undefined) this.transfers.delete(this.snapshot.transferId);
+          this.snapshot = metadata;
           this.observer.read('reading', output.transferId);
         }
       }
@@ -145,14 +151,14 @@ export class ConversationTransferReceiver {
     try {
       if (output.kind === 'transfer_error') {
         this.transfers.delete(output.transferId);
-        if (this.snapshot === output.transferId) this.observer.read('incomplete', output.transferId);
+        if (this.snapshot?.transferId === output.transferId) this.observer.read('incomplete', output.transferId);
         return;
       }
       if (output.kind === 'transfer_end') {
         if (transfer.fragmentIndex !== 0 || output.itemCount !== transfer.itemIndex
           || (transfer.purpose === 'snapshot' ? output.itemCount < 1 : output.itemCount !== 1)) throw new Error('Incomplete transfer');
         this.transfers.delete(output.transferId);
-        if (output.transferId === this.snapshot) this.observer.read('complete', output.transferId);
+        if (output.transferId === this.snapshot?.transferId) this.observer.read('complete', output.transferId);
         return;
       }
       if (output.itemIndex !== transfer.itemIndex || output.fragmentIndex !== transfer.fragmentIndex || output.data.length === 0) {
@@ -173,7 +179,7 @@ export class ConversationTransferReceiver {
         const parsed = snapshotItemSchema.parse(item);
         if ((transfer.itemIndex === 0) !== (parsed.kind === 'state')) throw new Error('Snapshot must start with state');
         if (parsed.kind === 'state') this.applyState(parsed.state, transfer.metadata);
-        else if (this.snapshot === output.transferId) {
+        else if (this.snapshot?.transferId === output.transferId) {
           if (parsed.kind === 'assignment') {
             const identity = parsed.assignment.kind === 'workspace'
               ? { kind: 'workspace' as const, workspaceId: parsed.assignment.workspaceId }
@@ -202,7 +208,7 @@ export class ConversationTransferReceiver {
       transfer.itemIndex++;
     } catch (error) {
       this.transfers.delete(output.transferId);
-      if (this.snapshot === output.transferId) this.observer.read('incomplete', output.transferId);
+      if (this.snapshot?.transferId === output.transferId) this.observer.read('incomplete', output.transferId);
       throw error;
     }
   }
