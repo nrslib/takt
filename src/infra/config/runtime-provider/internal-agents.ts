@@ -125,6 +125,12 @@ export function resolveRuntimeInternalAgentProvider(
   return defaultsProfileEntry(env);
 }
 
+export function resolveRuntimeManagerPermissionJudgeProvider(
+  projectCwd: string,
+): ProviderRoutingEntry | undefined {
+  return resolveActiveRuntimeProviderEnvironment(projectCwd)?.internalAgents?.managerPermissionJudge;
+}
+
 /**
  * Resolve provider/model/options for the non-workflow agents (task summarizer, sync conflict
  * resolver, non-assistant interactive personas) from an active runtime.yaml provider section.

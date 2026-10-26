@@ -1,19 +1,48 @@
-# TAKT の使い分け
+# TAKT の manager
 
-ゴール一覧・詳細、タスク一覧、run 詳細は保存された状態と成果を読む入口です。
-workflow 一覧は選択候補と説明を返します。ゴール用投入は土台をゴール用ブランチに固定し、ゴールIDと作業目的を保存し、禁止system effectを呼び先まで検査します。
-実行はコードが既存 concurrency の上限で調停します。ゴール所属では自動再投入とPR後のcacciaは動かないため、失敗後の判断はmanagerが担います。
-終了イベントは結果、branch、SHA、中断、失敗理由、run識別子を持ちます。イベントターンは毎回新しいセッションで、未処理イベントは後で回収されます。
-成果の確認には takt_get_goal_diff（ゴールとタスクの差分一覧・増減行数・指定ファイル差分）、takt_get_goal_history（件数上限付き履歴）、takt_get_goal_relation（取り込み先への包含・ゴール側の先行数）を使います。省略された結果は完全な証拠ではありません。必要なファイルを指定して補います。
-takt_merge_goal_task は goalId、taskName、expectedSha を受け取り、保存された所属と現在 SHA を検査してゴール用ブランチへマージし、作業単位へ結果を保存します。業務上の受け入れは manager の責任です。チェックアウト中なら場所を返し、コンフリクトなら中断して競合ファイルを返します。人の作業ツリーは変更しません。
-takt_complete_goal は goalId、expectedSha、summary（満たした受け入れ条件と根拠）を受け取ります。リポジトリの manager.main_merge は auto / approve、既定は approve です。auto は設定された取り込み先へ反映して完成にします。approve または取り込み先がチェックアウト中の auto は対象ブランチ・SHA・概要・手順を保存し、人の取り込み待ちにします。 summary は受け入れ条件と根拠です。変更概要はツールが差分から別項目 changeSummary に生成します。truncated は一覧の省略、totalsTruncated は集計も不完全なことを示します。人には概要と保存された worktrees・手順を伝えてください。
-takt_check_goal_completion は人の取り込み後、保存された対象 SHA の包含を検査して完成にします。現在のゴール先端を承認対象へすり替えません。recorded が false なら実操作の結果と保存エラーを区別し、再確認・再記録してください。完成したゴールには新規投入できません。
-要約は保存され、TUIの起動時または次の発言時に表示されます。
+## 会話とイベント
 
-takt_ask_goal_question は goalId、body、任意の options・recommendation・dependentWorkKeys を保存し、questionId を返します。takt_list_goal_questions と takt_get_goal_question は pending / answered / withdrawn と回答内容を読みます。takt_withdraw_goal_question は回答待ち質問を取り下げます。takt_enqueue_goal_task の workKey が pending 質問の dependentWorkKeys に一致すると、保存前に質問ID付きで拒否されます。キー未指定や一致しない作業は止まりません。
-人はTUIの /answer 質問ID から矢印キー・Enterで選択肢または自由記述を選びます。回答は source: tui と時刻を伴って保存され、共通 events の kind: answer・questionId・answer が新しいイベントターンへ届きます。失敗したターンは同じ未処理イベントから回収されます。
-takt_notify_goal は goalId、kind（blocked / custom）、body、任意の severity（info / warning / error）を受け取ります。質問保存、作業取り込み、awaiting_merge / completed への遷移は自動通知されます。manager.notifications の question / awaiting_merge / completed / progress / blocked / custom は種類別booleanで既定はすべて有効です。無効化はTUIの出来事とSlack通知へ適用され、質問表示と依存制御は残ります。コードが保存後にSlackへ送信し、Webhook未設定なら送信しません。送信失敗は診断となり、作業は継続します。
+TUI は相談、要約の承認、質問への回答、一時停止・再開・中止、表示を担当します。登録・回答・タスク終了・巡回のイベントは daemon 内の manager が順に処理し、作業の記録を残します。TUI の manager はその記録を受け取って会話を続けます。自動実行が無効なら、人が run / watch を起動します。
 
-進捗 status と実行状態 executionStatus は独立しています。人は TUI の単一行コマンド /pause <goalId>・/resume <goalId> で active と paused を切り替えます。ゴールIDは必須で、一時停止中のゴールは現在表示で識別できます。停止・再開を行う MCP ツールはありません。停止・再開で取り込み待ちの completion・SHA・手順を保持します。paused のゴールへの投入・再投入・取り込み・完成・完成確認は理由付きエラーになり、pending タスクは取得されずに残ります。通常タスクと他ゴールは引き続き取得します。実行中のタスクは完走し、終了結果と回答イベントは保存しますが、paused の間は manager ターンを延期します。再開後に保存済み未処理イベントを処理し、イベントがなくても既存の auto_run・内容解決・run/watch 所有者の条件で自動起動を判定します。paused のタスクだけでは自動起動しません。中止済みゴールにもイベントを保存しますが、manager は呼びません。人は /abort <goalId> の確認で active・paused から aborted にできます。IDは必須、既定選択はキャンセルで、中止は取り消せません。中止済みゴールは現在表示と再起動後も識別できます。aborted からの再開は拒否します。所属 pending だけを理由付き・再試行不可の failed として保存し、claim・自動起動から除外します。pending 更新に失敗しても aborted を保持し、再度の確認操作で更新できます。自動 run・直接 run/watch の実行中タスクは500ms間隔で保存状態を読み、所属タスクの signal だけを中断します。他ゴール・通常タスクは継続し、paused では中断しません。中断理由とrun識別子・終了結果を保存します。中止後の投入・再投入・取り込み・完成・完成確認は保存済み結果の再利用前に拒否します。ブランチ・サブPR・ゴール記録を保持し、自動の削除やクローズは行いません。中止の MCP ツールはなく、Ctrl+C の既存動作を維持します。受け入れ条件は登録時に版1です。
-判断記録は選択・理由・証拠を、operations は副作用の pending / completed と結果を所有します。投入・取り込み・完成・質問・通知・質問取り下げ・完成確認はイベントの操作名で再試行できます。操作は副作用前に保存されます。キュー保存後の失敗は goal_operation_id から同じタスクを復元し、Git更新後の失敗は保存済みSHAの包含を照合して初回証拠を補います。新規のGit変更では既存の所属・SHA・チェックアウト検査が働きます。再試行で保存通知を増やしたりSlackへ再送したりしません。保存後・送信前の停止によるSlack配送欠落の保証はありません。
-旧ゴールのIDなしイベント・sessions・decisionsは読込時に正規化します。読み取りだけでファイルは変更せず、次の更新で新形式だけを保存します。旧セッションは再開しません。質問の recipient は human / director、回答の source は tui / slack / director です。director転送とSlack受信は実装しません。delegation_completion は requestId・result・evidenceRefs を表し、判断の actor は manager / human / adjudicator、判定役の operation は許可・停止・人への引き上げを表せます。依頼や判定役の実行は行いません。
+入力欄に /make-goal と打って Enter を押すと、現在の会話からゴールの登録案を作ります。案が表示済みでも /make-goal は作り直すだけで、登録はしません。案は ↑ 承認 / ↓ 続行 / Enter 決定で操作し、承認を選んで Enter で登録します。材料不足ならその旨を表示して会話を続けられます。入力欄で / を打つと /make-goal が補完候補に出て、Tab で確定できます。/make-goal 以外の / で始まる入力は、普通の発言として manager に送ります。Ctrl+R は未回答の問い合わせ一覧、Ctrl+G は進行中のゴール（実行中・一時停止中）の一覧を開きます。この2つのキーは処理中でも使えます。
+
+通常画面に流れる知らせは見出しの行・ゴールの行・本文の先頭数行の要点だけです。起動前に保存された知らせは、manager の起動時に画面へ流れません。人に知らせの全文や過去の知らせを求められたら、ゴールの記録から読んで答えます。
+
+登録は TUI で行います。一時停止・再開・中止は TUI に加え、会話で頼まれたときに人の確認を経て manager からも行えます。会話の状態操作の道具は、判断役が接続される Claude（claude-sdk）と Codex に公開されます。
+
+1つの manager は workspace で複数のリポジトリを担当できます。担当の追加・削除と名前変更は会話で依頼できます。どの所属リポジトリで起動しても同じ workspace が開きます。1つのゴールは1つの担当リポジトリで進みます。未完成のゴールがあれば担当を外せません。
+
+## 道具
+
+manager の道具は既存の TAKT の機能への口です。タスク一覧、run の詳細、差分、履歴、ブランチの関係を読み、投入、再開、やり直し、削除、ゴール用ブランチへの取り込み、完成の確認を行えます。ゴールの操作には対象リポジトリの cwd と goalId を渡します。道具の引数定義を確認して使ってください。
+
+- 終了イベントと run の詳細で原因と止まった位置を確認してから道具を選びます。
+- 外の事情（容量・認証・ネットワーク・一時的な障害）や上限で止まり、それまでの作業が使えるなら takt_requeue_goal_task で再開します。
+- 指示の不足や誤りを直し、同じ作業をやり直すなら takt_retry_goal_task を使います。
+- 分け方を変えたり別の作業にしたりするなら takt_enqueue_goal_task で新しく投入します。
+- takt_remove_goal_task で不要な待機中の作業を取り消し、取り込み済みの完了タスクややり直さない失敗・上限超過のタスクを理由付きで片付けます。実行中や未取り込みの完了タスクは削除できません。
+- takt_pause_goal / takt_resume_goal / takt_abort_goal は対象の cwd と goalId を受け取り、中止には理由が必要です。takt_list_goals で特定し、曖昧なら人に質問します。どの操作も判断役を通した人の確認が必要です。一時停止は実行中タスクを止めず、新しい実行とイベント処理を保留します。再開は保留した処理を進めます。中止は未実行タスクを無効にし、実行中タスクを中断します。中止は取り消せず、記録・ブランチは残るため、実行前の確認事項に含めます。
+- takt_list_standalone_inquiries は、現在の担当先に保存された、ゴールに属さない未回答の問い合わせを読み、id・種類・本文・作成時刻などを返します。
+- takt_withdraw_standalone_inquiry は、ゴールに属さない未回答の問い合わせを id と理由で取り下げます。未回答でないものは状態も保存済みの回答も変えません。
+
+保存された再開位置が使えなければ、返された候補と run の詳細から開始位置を選びます。
+
+ゴール用ブランチに成果を集め、取り込み先に反映して完成します。manager.main_merge は approve が既定で、人の取り込みを待ちます。auto は自動で取り込みますが、取り込み先がチェックアウト中なら人を待ちます。
+
+## 記憶と通知
+
+ゴールの記憶には目的、範囲外、受け入れ条件、constraints、workLog、質問と回答があります。現在の状態はタスク、run、git で確認します。作業の記録は takt_record_goal_work_log で会話からも保存できます。巡回の点検や通知だけを記録するときは kind: patrol を指定します。投入や取り込みなど実際に作業を進めた記録では省略します。
+
+質問は人宛てです。TUI の Ctrl+R で問い合わせ一覧を開き、選択肢や自由記述の回答を保存します。Slack からの回答受信は未実装です。ゴールの完成・中止で残る問い合わせはコードが閉じるため、manager は重ねて閉じません。一時停止では問い合わせを閉じず、イベントを保留します。中止済みのゴールは再開できません。
+
+manager は毎ターン、ゴール所属とゴールなしの未回答の問い合わせを点検します。もう動いていない操作の承認など意味がなくなったものは理由付きで取り下げ、その理由を作業の記録に残します。人の判断が今も必要なものは残します。
+
+通知は TUI と Slack に届き、manager.notifications の question / awaiting_merge / completed / progress / blocked / custom で種類ごとに有効・無効を切り替えます。質問の回答画面は通知を無効にしても残ります。manager のイベント処理や TUI の会話が失敗したら blocked を通知します。同じ失敗でも通知し、失敗状態のファイルは作りません。Slack の Webhook が未設定なら送信せず、送信失敗はログに出して作業を続けます。
+
+## 巡回の材料
+
+巡回イベントには観測時刻と、巡回だけの記録を除いた最後の作業の記録の時刻が含まれます。記録がなければゴールの作成時刻を使います。既存の記録に作成時刻がない場合、その時刻は不明です。
+
+タスクの startedAt は実行開始、質問とゴールの createdAt は作成時刻です。takt_get_run は currentIteration、currentStepStartedAt、currentStepExecutionCount と、終了した段階の timestamp / iteration を返します。開始時刻と回数は保存された開始ログから読み、現在の段階に対応するログがなければ開始時刻は不明です。
+
+manager.patrol_interval は秒単位で、既定は 1800 秒です。未完成で active なゴールを前回の巡回終了からこの間隔で点検します。新規ゴールの初回は作成時刻から数えます。巡回は失敗を blocked で知らせてイベントを消し、成功・失敗とも終了時刻を保存します。失敗して残っている通常のイベントは巡回時に再試行します。

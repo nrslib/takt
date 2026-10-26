@@ -1,11 +1,11 @@
 import { TaskRecordSchema, type TaskFileData, type TaskRecord, type TaskFailure } from './schema.js';
-import type { TaskInfo, TaskResult } from './types.js';
-import { resolveTaskContent, toTaskInfo } from './mapper.js';
+import type { TaskInfo, TaskResult, TaskState } from './types.js';
+import { resolveTaskContent, toTaskInfo, toTaskState } from './mapper.js';
 import { cleanupTaskSpecDirectory, prepareTaskSpecDirectory, type PreparedTaskSpecDirectory } from './enqueueService.js';
 import { TaskStore } from './store.js';
 import { firstLine, nowIso } from './naming.js';
 import { slugify } from '../../shared/utils/slug.js';
-import { isStaleRunningTask } from './process.js';
+import { isProcessAlive, isStaleRunningTask } from './process.js';
 import { readRetryMetadataByRunSlug } from '../../core/workflow/run/retry-metadata.js';
 import {
   buildClaimedTaskRecord,
@@ -23,7 +23,10 @@ import { isGoalPaused } from '../goals/state.js';
 import { withGoalExecutionLock } from '../goals/execution-lock.js';
 import type { MergeMethod } from '../../core/models/config-types.js';
 import type { PrExecutionContext } from '../../core/workflow/system/pr-execution-context.js';
-import { getSelfTaskProcessIdentity } from './taskProcessIdentity.js';
+import { getSelfTaskProcessIdentity, getTaskProcessIdentity } from './taskProcessIdentity.js';
+import { assertTaskStopHandled } from './taskStop.js';
+
+export class TaskClaimLockAcquisitionError extends Error {}
 
 export class TaskLifecycleService {
   constructor(
@@ -36,9 +39,11 @@ export class TaskLifecycleService {
 
   startPrMergeTask(input: {
     prNumber: number; headBranch: string; baseBranch: string; headSha: string;
+    prUrl?: string;
     headRepositoryUrl: string; headRepositoryPushUrls: readonly string[];
     workflow: string; method: MergeMethod; worktreePath: string;
     threatCheckMaxDiffBytes: number;
+    concurrency?: number;
     parentTaskName?: string;
   }): TaskInfo {
     const content = `Evaluate pull request #${input.prNumber} using this workflow. Review the cumulative PR diff and record the outcome on the PR.`;
@@ -61,9 +66,11 @@ export class TaskLifecycleService {
         owner_pid: process.pid, owner_start_time: ownerStartTime,
         worktree: true, worktree_path: input.worktreePath,
         source: 'pr_review', pr_number: input.prNumber, branch: input.headBranch,
+        ...(input.prUrl === undefined ? {} : { pr_url: input.prUrl }),
         base_branch: input.baseBranch, workflow: input.workflow,
         merge_task: true, merge_method: input.method,
         merge_threat_check_max_diff_bytes: input.threatCheckMaxDiffBytes,
+        merge_concurrency: input.concurrency,
         merge_head_repository_url: input.headRepositoryUrl,
         merge_head_repository_push_urls: input.headRepositoryPushUrls,
         merge_initial_head_sha: input.headSha,
@@ -183,85 +190,105 @@ export class TaskLifecycleService {
       return [];
     }
 
-    return withGoalExecutionLock(this.projectDir, () => {
-      const claimed: TaskInfo[] = [];
+    const claimed: TaskInfo[] = [];
 
-      this.store.update((current) => {
-        let remaining = count;
-        const goalStore = new GoalStore(this.projectDir);
-        const blockedByGoal = new Map<string, boolean>();
-        const tasks = current.tasks.map((task) => {
-          if (remaining > 0 && task.status === 'pending' && task.deletion === undefined
-            && (this.goalTasksOnly !== true || task.goal_id !== undefined)) {
-            if (task.goal_id !== undefined) {
-              try {
-                let blocked = blockedByGoal.get(task.goal_id);
-                if (blocked === undefined) {
-                  const goal = goalStore.getSync(task.goal_id);
-                  blocked = isGoalPaused(goal) || goal.executionStatus === 'aborted';
-                  blockedByGoal.set(task.goal_id, blocked);
-                }
-                if (blocked) return task;
-              } catch (error) {
-                this.onWarning?.(`Cannot read goal for task ${task.name}: ${sanitizeSensitiveText(getErrorMessage(error))}`);
-                return task;
-              }
-            }
-            const next = buildClaimedTaskRecord(task);
-            let info: TaskInfo;
+    withGoalExecutionLock(this.projectDir, () => this.store.update((current) => {
+      let remaining = count;
+      const goalStore = new GoalStore(this.projectDir);
+      const blockedByGoal = new Map<string, boolean>();
+      const tasks = current.tasks.map((task) => {
+        if (remaining > 0 && task.status === 'pending' && task.deletion === undefined
+          && (this.goalTasksOnly !== true || task.goal_id !== undefined)) {
+          if (task.goal_id !== undefined) {
             try {
-              info = toTaskInfo(this.projectDir, this.tasksFile, next);
+              let blocked = blockedByGoal.get(task.goal_id);
+              if (blocked === undefined) {
+                const goal = goalStore.getSync(task.goal_id);
+                blocked = isGoalPaused(goal) || goal.executionStatus === 'aborted';
+                blockedByGoal.set(task.goal_id, blocked);
+              }
+              if (blocked) return task;
             } catch (error) {
-              if (task.goal_id === undefined) throw error;
-              const reason = sanitizeSensitiveText(getErrorMessage(error));
-              return buildTerminalTaskRecord(next, {
-                status: 'failed', completed_at: nowIso(), owner_pid: null,
-                failure: { error: reason },
-                run_slug: `setup-${randomUUID()}`,
-                completion: {
-                  success: false, interrupted: false, workflowResult: 'error',
-                  branch: task.branch, failureReason: reason,
-                  shaUnavailableReason: 'Workflow execution did not start',
-                },
-              }, this.readTerminalRetryMetadata(task));
+              this.onWarning?.(`Cannot read goal for task ${task.name}: ${sanitizeSensitiveText(getErrorMessage(error))}`);
+              return task;
             }
-            claimed.push(info);
-            remaining--;
-            return next;
           }
-          return task;
-        });
-        return { tasks };
+          const next = buildClaimedTaskRecord(task);
+          let info: TaskInfo;
+          try {
+            info = toTaskInfo(this.projectDir, this.tasksFile, next);
+          } catch (error) {
+            if (task.goal_id === undefined) throw error;
+            const reason = sanitizeSensitiveText(getErrorMessage(error));
+            return buildTerminalTaskRecord(next, {
+              status: 'failed', completed_at: nowIso(), owner_pid: null,
+              failure: { error: reason },
+              run_slug: `setup-${randomUUID()}`,
+              completion: {
+                success: false, interrupted: false, workflowResult: 'error',
+                branch: task.branch, failureReason: reason,
+                shaUnavailableReason: 'Workflow execution did not start',
+              },
+            }, this.readTerminalRetryMetadata(task));
+          }
+          claimed.push(info);
+          remaining--;
+          return next;
+        }
+        return task;
       });
+      return { tasks };
+    }, {
+      onAcquisitionError: (error) => {
+        if (error instanceof Error && 'code' in error && error.code === 'ENOSPC') {
+          throw new TaskClaimLockAcquisitionError(error.message, { cause: error });
+        }
+        throw error;
+      },
+    }));
 
-      return claimed;
-    });
+    return claimed;
   }
 
   invalidatePendingGoalTasks(goalId: string): void {
-    withGoalExecutionLock(this.projectDir, () => {
-      this.store.update((current) => ({
-        tasks: current.tasks.map((task) => {
-          if (task.status !== 'pending' || task.goal_id !== goalId) return task;
-          return buildTerminalTaskRecord(task, {
-            status: 'failed', owner_pid: null,
-            failure: { error: `Goal ${goalId} was aborted`, retryable: false },
-          });
-        }),
-      }));
-    });
+    withGoalExecutionLock(this.projectDir, () => this.store.update((current) => ({
+      tasks: current.tasks.map((task) => {
+        if (task.status !== 'pending' || task.goal_id !== goalId) return task;
+        return buildTerminalTaskRecord(task, {
+          status: 'failed', owner_pid: null,
+          failure: { error: `Goal ${goalId} was aborted`, retryable: false },
+        });
+      }),
+    })));
   }
 
-  failInterruptedRunningTasks(goalId?: string): number {
-    let failed = 0;
+  failInterruptedRunningTasks(goalId?: string, onRecovered?: (task: TaskState) => void): number {
+    const snapshot = this.store.read();
+    const candidates = new Map(snapshot.tasks
+      .filter((task) => task.status === 'running'
+        && (this.goalTasksOnly !== true || task.goal_id !== undefined)
+        && (goalId === undefined || task.goal_id === goalId)
+        && this.isRunningTaskStale(task))
+      .map((task) => [task.name, task]));
+    if (candidates.size === 0) return 0;
+
+    const recovered: TaskRecord[] = [];
     this.store.update((current) => {
       const tasks = current.tasks.map((task) => {
-        if (task.status !== 'running' || (this.goalTasksOnly === true && task.goal_id === undefined)
-          || (goalId !== undefined && task.goal_id !== goalId) || !this.isRunningTaskStale(task)) {
+        const candidate = candidates.get(task.name);
+        if (candidate === undefined || task.status !== candidate.status
+          || task.owner_pid !== candidate.owner_pid || task.owner_start_time !== candidate.owner_start_time) {
           return task;
         }
-        failed++;
         const reason = 'Task was interrupted before this TAKT run started. Requeue it explicitly to run again.';
+        let retryMetadata: ResolvedTaskRetryMetadata;
+        try {
+          retryMetadata = this.readTerminalRetryMetadata(task);
+        } catch (error) {
+          // 補助情報の読込失敗で回復を止めず、保存済みの再試行情報を保持する。
+          retryMetadata = { preserveExisting: true };
+          this.onWarning?.(sanitizeSensitiveText(`Cannot read retry metadata for interrupted task ${task.name}: ${getErrorMessage(error)}`));
+        }
         const completed = buildTerminalTaskRecord(task, {
           status: 'failed',
           completed_at: nowIso(),
@@ -277,12 +304,14 @@ export class TaskLifecycleService {
               shaUnavailableReason: 'Execution process stopped before saving its result',
             },
           }),
-        }, this.readTerminalRetryMetadata(task));
+        }, retryMetadata);
+        recovered.push(completed);
         return completed;
       });
-      return { tasks };
+      return recovered.length === 0 ? undefined : { tasks };
     });
-    return failed;
+    for (const task of recovered) onRecovered?.(toTaskState(this.tasksFile, task));
+    return recovered.length;
   }
 
   private readTerminalRetryMetadata(task: TaskRecord): ResolvedTaskRetryMetadata {
@@ -319,6 +348,34 @@ export class TaskLifecycleService {
     return {};
   }
 
+  requestTaskStop(goalId: string | undefined, taskName: string, executionId: string): NonNullable<TaskRecord['stop_request']> {
+    const state = this.store.update((current) => {
+      const index = current.tasks.findIndex((task) => task.name === taskName);
+      const task = current.tasks[index];
+      if (task === undefined) throw new Error(`Task name does not match a saved task: ${taskName}`);
+      if (task.goal_id !== goalId) throw new Error('Task does not belong to this goal');
+      if (task.execution_id !== executionId) throw new Error('Task executionId does not match the saved execution');
+      if (task.status !== 'running') throw new Error(`Task is not running: ${task.status}`);
+      if (task.owner_pid == null || !isProcessAlive(task.owner_pid)) {
+        throw new Error('Task execution has ended: its owner is not alive');
+      }
+      if (task.owner_start_time != null) {
+        const ownerIdentity = getTaskProcessIdentity(task.owner_pid);
+        if (ownerIdentity === undefined) {
+          throw new Error('Cannot verify task execution owner: current owner start time is unavailable');
+        }
+        if (ownerIdentity.startTime !== task.owner_start_time) {
+          throw new Error('Task execution has ended or its owner no longer matches');
+        }
+      }
+      if (task.stop_request?.execution_id === executionId) return undefined;
+      const tasks = [...current.tasks];
+      tasks[index] = { ...task, stop_request: { execution_id: executionId, requested_at: nowIso() } };
+      return { tasks };
+    });
+    return state.tasks.find((task) => task.name === taskName)!.stop_request!;
+  }
+
   completeTask(result: TaskResult): string {
     if (!result.success) {
       throw new Error('Cannot complete a failed task. Use failTask() instead.');
@@ -331,6 +388,7 @@ export class TaskLifecycleService {
       }
 
       const target = current.tasks[index]!;
+      assertTaskStopHandled(target, result.completion);
       const updated = buildTerminalTaskRecord(target, {
         status: 'completed',
         started_at: result.startedAt,
@@ -364,6 +422,7 @@ export class TaskLifecycleService {
       }
 
       const target = current.tasks[index]!;
+      assertTaskStopHandled(target, result.completion);
       const updated = buildTerminalTaskRecord(target, {
         status: 'failed',
         started_at: result.startedAt,
@@ -467,6 +526,7 @@ export class TaskLifecycleService {
       }
 
       const target = current.tasks[index]!;
+      assertTaskStopHandled(target, result.completion);
       const updated = buildTerminalTaskRecord(target, {
         status: 'pr_failed',
         started_at: result.startedAt,

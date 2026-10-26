@@ -13,7 +13,10 @@ export async function executeMockMcpCalls(
       throw new Error(`Mock MCP requires a configured stdio server: ${call.server}`);
     }
     const permission = `mcp__${call.server}__${call.tool}`;
-    if (!options.allowedTools?.includes(permission)) throw new Error(`Mock MCP tool is not allowed: ${permission}`);
+    const allowed = options.allowedTools === undefined
+      ? options.permissionMode === 'full'
+      : options.allowedTools.includes(permission);
+    if (!allowed) throw new Error(`Mock MCP tool is not allowed: ${permission}`);
     if (options.abortSignal?.aborted) return 'aborted';
     const client = new Client({ name: 'takt-mock-provider', version: '1.0.0' });
     const env = Object.fromEntries(Object.entries(buildChildProcessEnv({ ...process.env, ...server.env }))

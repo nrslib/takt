@@ -41,6 +41,7 @@ import { RATE_LIMIT_MAX_RETRIES, waitForRateLimitRetry } from '../rate-limit/ret
 import { buildClaudePromptInput } from './image-input.js';
 import { extractClaudeProviderUsage } from './usage.js';
 import type { StreamEvent } from '../../shared/types/provider.js';
+import { isClaudeSessionMissing } from './session-resume.js';
 
 const log = createLogger('claude-sdk');
 const ABORT_CLEANUP_TIMEOUT_MS = 30_000;
@@ -151,7 +152,7 @@ export class QueryExecutor {
           else executionOptions.onStream?.(event);
         },
       }, loaded.modules[0]);
-      if (result.rateLimitClass === 'Transient' && !result.toolUseObserved && retries < RATE_LIMIT_MAX_RETRIES) {
+      if (!options.callerManagedSession && result.rateLimitClass === 'Transient' && !result.toolUseObserved && retries < RATE_LIMIT_MAX_RETRIES) {
         try {
           await waitForRateLimitRetry(++retries, options.abortSignal);
         } catch {
@@ -162,7 +163,7 @@ export class QueryExecutor {
         continue;
       }
       if (result.errorKind === 'rate_limit' || result.interrupted) break;
-      if (!resumedWithoutSession && !result.toolUseObserved && result.error && executionOptions.sessionId
+      if (!options.callerManagedSession && !resumedWithoutSession && !result.toolUseObserved && result.error && executionOptions.sessionId
         && result.error.includes('exited with code') && !result.content) {
         log.info('Session resume may have failed, retrying without resume', {
           sessionId: executionOptions.sessionId, error: result.error,
@@ -241,6 +242,7 @@ export class QueryExecutor {
     let rateLimitMessage: string | undefined;
     let rateLimitClass: RateLimitClass = 'NotRateLimit';
     let toolUseObserved = false;
+    let rejectedResume = false;
     const applyAssistantMessage = (assistantMsg: SDKAssistantMessage): string => {
       let messageText = '';
       for (const block of assistantMsg.message.content) {
@@ -284,6 +286,7 @@ export class QueryExecutor {
 
       if (resultMsg.subtype !== 'success' || resultMsg.is_error) {
         success = false;
+        rejectedResume = resultErrors.some((error) => isClaudeSessionMissing(options.sessionId, error));
         const statusCode = 'api_error_status' in resultMsg && typeof resultMsg.api_error_status === 'number'
           ? resultMsg.api_error_status : undefined;
         const classification = classifyRateLimitError(resultContent, statusCode);
@@ -433,6 +436,7 @@ export class QueryExecutor {
       const response: ClaudeResult = {
         success,
         content: finalContent.trim(),
+        ...(rejectedResume ? { failureCategory: 'session_continuation_unsupported' as const } : {}),
         sessionId,
         fullContent: accumulatedAssistantText.trim(),
         structuredOutput,
@@ -443,7 +447,7 @@ export class QueryExecutor {
       };
       return response;
     } catch (error) {
-      return QueryExecutor.handleQueryError(
+      const response = QueryExecutor.handleQueryError(
         error,
         queryId,
         sessionId,
@@ -459,6 +463,9 @@ export class QueryExecutor {
         toolUseObserved,
         AbortError,
       );
+      return !response.success && !response.interrupted && response.errorKind === undefined
+        && (rejectedResume || isClaudeSessionMissing(options.sessionId, stderrChunks.join('')))
+        ? { ...response, failureCategory: 'session_continuation_unsupported' } : response;
     } finally {
       if (onExternalAbort && options.abortSignal) {
         options.abortSignal.removeEventListener('abort', onExternalAbort);

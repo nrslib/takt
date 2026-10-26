@@ -13,15 +13,6 @@ import { installImmediateSigintExit } from './immediateSigintExit.js';
 
 import { program, runPreActionHook, scheduleUpdateCheck } from './program.js';
 import './commands.js';
-import { MANAGER_GOAL_TASKS_ENV } from '../../shared/constants.js';
-
-const automaticManagerRun = process.env[MANAGER_GOAL_TASKS_ENV] === '1';
-const startupCwd = process.cwd();
-async function recordAutomaticRunFailure(error: unknown): Promise<void> {
-  if (!automaticManagerRun) return;
-  const { recordManagerRunFailure } = await import('../../infra/task/manager-run-state.js');
-  recordManagerRunFailure(startupCwd, error);
-}
 
 (async () => {
   const args = process.argv.slice(2);
@@ -50,7 +41,6 @@ async function recordAutomaticRunFailure(error: unknown): Promise<void> {
       await program.parseAsync();
     } catch (error) {
       if (!(error instanceof CommanderError)) throw error;
-      if (error.exitCode !== 0) await recordAutomaticRunFailure(error);
       await scheduleUpdateCheck();
       return process.exit(error.exitCode);
     }
@@ -62,8 +52,7 @@ async function recordAutomaticRunFailure(error: unknown): Promise<void> {
   } finally {
     cleanupImmediateSigintExit();
   }
-})().catch(async (err) => {
-  await recordAutomaticRunFailure(err);
+})().catch((err) => {
   errorLog(sanitizeTerminalText(getErrorMessage(err)));
   process.exit(1);
 });

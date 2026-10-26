@@ -5,7 +5,7 @@ import type {
   ProviderActivityCallback,
   StreamCallback,
 } from '../../shared/types/provider.js';
-import type { PermissionHandler, SkillPermissionHandler, AskUserQuestionHandler } from '../../core/workflow/types.js';
+import type { PermissionHandler, SkillPermissionHandler, AskUserQuestionHandler, ToolPermissionDecisionHandler } from '../../core/workflow/types.js';
 import type { PreparedProviderMcp } from './mcp/types.js';
 
 export interface AgentSetup {
@@ -20,6 +20,10 @@ export interface ProviderImageAttachment {
 
 export interface ProviderCallOptions {
   cwd: string;
+  /** The caller owns session recovery; provider retries must not replay a turn. */
+  callerManagedSession?: true;
+  /** Keep supplied prepared MCP alive until the caller finishes all attempts. */
+  callerManagedMcp?: true;
   /** Exact tool exposure, with ambient tools, skills and hooks disabled. */
   strictToolAllowlist?: readonly string[];
   /** No direct writes/network; side effects only through these exact local MCP tools. Read is allowed. */
@@ -53,6 +57,7 @@ export interface ProviderCallOptions {
   onStream?: StreamCallback;
   onActivity?: ProviderActivityCallback;
   onPermissionRequest?: PermissionHandler;
+  onToolPermissionDecision?: ToolPermissionDecisionHandler;
   onSkillPermissionRequest?: SkillPermissionHandler;
   onAskUserQuestion?: AskUserQuestionHandler;
   bypassPermissions?: boolean;

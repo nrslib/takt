@@ -12,7 +12,9 @@ import { transitionGoalExecution } from '../infra/goals/state.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { captureOwnedChild, terminateOwnedProcess, type OwnedProcess } from './helpers/owned-process.js';
 
-it.each(['claim', 'spawn'] as const)('serializes pause publication with %s in both orders across processes', async (operation) => {
+it.each((['claim', 'spawn'] as const).flatMap((operation) =>
+  (['paused', 'aborted'] as const).map((status) => ({ operation, status })),
+))('serializes $status publication with $operation in both orders across processes', async ({ operation, status }) => {
   for (let trial = 0; trial < 2; trial++) {
     for (const pauseFirst of [false, true]) {
       const root = join(process.cwd(), '.tmp');
@@ -68,7 +70,7 @@ fs.lstatSync = function(path, ...args) {
 };
 syncBuiltinESMExports();
 const { setGoalExecutionStatus } = await import(${JSON.stringify(sourceUrl('infra/goals/execution.ts'))});
-await setGoalExecutionStatus(cwd, ${JSON.stringify(goal.id)}, 'paused', new AbortController().signal);
+await setGoalExecutionStatus(cwd, ${JSON.stringify(goal.id)}, ${JSON.stringify(status)}, new AbortController().signal);
 record('pause-saved');
 mark('pause-saved');
 `;
@@ -85,8 +87,8 @@ GoalStore.prototype.getSync = function(id) {
 };
 ${operation === 'claim' ? `
 const update = TaskStore.prototype.update;
-TaskStore.prototype.update = function(action) {
-  const saved = update.call(this, action);
+TaskStore.prototype.update = function(action, options) {
+  const saved = update.call(this, action, options);
   record('task-saved');
   return saved;
 };
@@ -130,8 +132,8 @@ await ensureManagerRun(cwd);
           await Promise.all([execution, pause]);
         }
         const events = readFileSync(join(cwd, 'events'), 'utf8').trim().split('\n');
-        console.info(JSON.stringify({ operation, trial, pauseFirst, events }));
-        expect((await new GoalStore(cwd).get(goal.id)).executionStatus).toBe('paused');
+        console.info(JSON.stringify({ operation, status, trial, pauseFirst, events }));
+        expect((await new GoalStore(cwd).get(goal.id)).executionStatus).toBe(status);
         if (operation === 'claim') {
           expect(JSON.parse(readFileSync(join(cwd, 'claimed'), 'utf8'))).toEqual(pauseFirst ? [] : [task.name]);
           expect(runner.listTaskStateItems()[0]!.status).toBe(pauseFirst ? 'pending' : 'completed');
@@ -165,14 +167,15 @@ it('releases the execution lock after failed claim publication and goal transfor
     const task = runner.addTask('claim publication failure', { goal_id: goal.id });
     const tasks = new TaskStore(cwd);
     const update = tasks.update;
-    vi.spyOn(tasks, 'update').mockImplementationOnce((action) => update.call(tasks, (current) => {
+    vi.spyOn(tasks, 'update').mockImplementationOnce((action, options) => update.call(tasks, (current) => {
       action(current);
       throw new Error('injected publication failure');
-    }));
+    }, options));
     const lifecycle = new TaskLifecycleService(cwd, tasks.getTasksFilePath(), tasks);
     expect(() => lifecycle.claimNextTasks(1)).toThrow();
     expect(runner.listTaskStateItems()[0]!.status).toBe('pending');
     await expect(goals.update(goal.id, () => { throw new Error('injected transform failure'); })).rejects.toThrow();
+    expect((await goals.get(goal.id)).executionStatus).toBe('active');
     await goals.update(goal.id, (saved) => transitionGoalExecution(saved, 'paused'));
     expect(lifecycle.claimNextTasks(1)).toEqual([]);
     await goals.update(goal.id, (saved) => transitionGoalExecution(saved, 'active'));

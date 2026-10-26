@@ -20,6 +20,8 @@ steps:
       - type: sync_with_root
         pr: "{context:identify.pr.number}"
     rules:
+      - condition: when(effect.sync.sync_with_root.success == true && effect.sync.sync_with_root.resyncCount > 0)
+        next: push
       - condition: when(effect.sync.sync_with_root.success == true)
         next: review
       - condition: when(effect.sync.sync_with_root.conflicted == true)
@@ -33,6 +35,8 @@ steps:
       - type: resolve_conflicts_with_ai
         pr: "{context:identify.pr.number}"
     rules:
+      - condition: when(effect.resolve_conflicts.resolve_conflicts_with_ai.success == true && effect.sync.sync_with_root.resyncCount > 0)
+        next: push
       - condition: when(effect.resolve_conflicts.resolve_conflicts_with_ai.success == true)
         next: review
       - condition: when(true)
@@ -90,7 +94,9 @@ steps:
         next: collect_ci_failure
       - condition: when(context.wait_ci.status.ci.passed == false)
         next: collect_ci_failure
-      - condition: when(context.wait_ci.status.mergeable != "MERGEABLE")
+      - condition: when(context.wait_ci.status.mergeable == "CONFLICTING" && effect.sync.sync_with_root.resyncCount < effect.sync.sync_with_root.resyncLimit)
+        next: sync
+      - condition: when(context.wait_ci.status.mergeable != "MERGEABLE" && context.wait_ci.status.mergeable != "BEHIND")
         next: unmergeable
       - condition: when(context.wait_ci.status.reviewDecision == "CHANGES_REQUESTED")
         next: changes_requested

@@ -11,5 +11,14 @@ export function transitionGoalExecution(goal: Goal, executionStatus: Goal['execu
   if (goal.executionStatus === 'aborted' && executionStatus !== 'aborted') {
     throw new Error('An aborted goal cannot resume');
   }
+  if (goal.status === 'completed' && executionStatus !== 'aborted') {
+    throw new Error('A completed goal cannot be paused or resumed');
+  }
+  if (executionStatus === 'paused' && goal.executionStatus !== 'active') {
+    throw new Error('Only an active goal can be paused');
+  }
+  if (executionStatus === 'active' && goal.executionStatus !== 'paused') {
+    throw new Error('Only a paused goal can resume');
+  }
   return { ...goal, executionStatus };
 }

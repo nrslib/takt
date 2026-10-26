@@ -369,10 +369,11 @@ function buildInternalAgents(
     assistant: 'assistant',
     'loop-judge': 'loopJudge',
     'review-completion-judge': 'completionRetryJudge',
+    'manager-permission-judge': 'managerPermissionJudge',
   };
   const result: InternalAgentEnvironment = {};
   for (const [key, assignment] of Object.entries(map)) {
-    const seat = seats[key];
+    const seat = Object.hasOwn(seats, key) ? seats[key] : undefined;
     if (seat === undefined) {
       throw new Error(
         `runtime.yaml \`provider.targets.internal_agents\` supports only ${Object.keys(seats)

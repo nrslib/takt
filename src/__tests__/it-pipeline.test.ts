@@ -9,6 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import type { MockInstance } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, readdirSync, existsSync, cpSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -171,6 +172,11 @@ import * as taskExecution from '../features/tasks/index.js';
 import * as managedProviders from '../infra/managed-providers/loader.js';
 import { loadWorkflowByIdentifier } from '../infra/config/index.js';
 import { executeWorkflow } from '../features/tasks/execute/workflowExecution.js';
+import * as pipelineSteps from '../features/pipeline/steps.js';
+import * as prSubmission from '../features/pipeline/prSubmission.js';
+import * as cacciaFeature from '../features/caccia/index.js';
+import * as mergeFeature from '../features/merge/index.js';
+import * as workflowExecutionApi from '../features/tasks/execute/workflowExecutionApi.js';
 
 const mockExecFileSync = vi.mocked(execFileSync);
 
@@ -396,6 +402,165 @@ describe('Pipeline Integration Tests', () => {
       },
     }));
   }
+
+  describe('Caccia after a bundled development workflow', () => {
+    let caccia: MockInstance<typeof cacciaFeature.runCaccia>;
+    let execution: MockInstance<typeof workflowExecutionApi.runWorkflowExecution>;
+
+    beforeEach(() => {
+      vi.stubEnv('TAKT_CONFIG_DIR', join(testDir, 'isolated-config'));
+      mkdirSync(join(testDir, '.takt', 'workflows'), { recursive: true });
+      workflowPath = join(testDir, '.takt', 'workflows', 'development.yaml');
+      writeFileSync(join(testDir, '.takt', 'config.yaml'), stringifyYaml({ caccia: { enabled: true } }));
+      const commit = vi.spyOn(pipelineSteps, 'commitAndPush').mockResolvedValue(true);
+      const submit = vi.spyOn(prSubmission, 'submitPullRequest').mockReturnValue('https://github.com/org/repo/pull/123');
+      caccia = vi.spyOn(cacciaFeature, 'runCaccia').mockResolvedValue({ outcome: 'success', unresolvedCount: 0 });
+      execution = vi.spyOn(workflowExecutionApi, 'runWorkflowExecution');
+      const merge = vi.spyOn(mergeFeature, 'runLinkedMergeSafely').mockResolvedValue(undefined);
+      restorePreflightState.push(() => commit.mockRestore(), () => submit.mockRestore(),
+        () => caccia.mockRestore(), () => merge.mockRestore(), () => execution.mockRestore());
+      setMockScenario([{ persona: 'coder', status: 'done', content: 'Development complete' }]);
+    });
+
+    function writeDevelopmentWorkflow(effectLocation: 'none' | 'child' | 'parallel' | 'nested' | 'root', reached = false, descend = reached) {
+      const steps: Array<Record<string, unknown>> = [{
+        name: 'caccia', persona: join(testDir, '.takt', 'personas', 'coder.md'), instruction: 'type: caccia',
+        rules: [{ condition: 'when(true)', next: reached ? (effectLocation === 'parallel' ? 'reviews' : 'delegate') : 'COMPLETE' }],
+      }];
+      const review = { name: 'review', kind: 'system', effects: [{ type: 'caccia', pr: 123 }],
+        rules: [{ condition: 'when(true)', next: 'COMPLETE' }] };
+      if (effectLocation === 'child' || effectLocation === 'parallel' || effectLocation === 'nested') {
+        const childPath = join(testDir, '.takt', 'workflows', 'child.yaml');
+        const childSteps: Array<Record<string, unknown>> = [{ name: 'inspect',
+          persona: join(testDir, '.takt', 'personas', 'coder.md'), instruction: 'Inspect child',
+          rules: [{ condition: 'when(true)', next: effectLocation === 'nested' && descend ? 'delegate' : 'COMPLETE' }] }];
+        if (effectLocation === 'nested') {
+          writeFileSync(join(testDir, '.takt', 'workflows', 'grandchild.yaml'), stringifyYaml({
+            name: 'grandchild-review', subworkflow: { callable: true }, initial_step: 'inspect', max_steps: 2,
+            steps: [{ ...childSteps[0], rules: [{ condition: 'when(true)', next: 'COMPLETE' }] }, review],
+          }));
+          childSteps.push({ name: 'delegate', kind: 'workflow_call', call: './grandchild.yaml',
+            rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }] });
+        } else childSteps.push(review);
+        writeFileSync(childPath, stringifyYaml({
+          name: 'child-review', subworkflow: { callable: true }, initial_step: 'inspect', max_steps: 4,
+          steps: childSteps,
+        }));
+        const delegate = { name: 'delegate', kind: 'workflow_call', call: './child.yaml',
+          rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }] };
+        steps.push(effectLocation === 'parallel'
+          ? { name: 'reviews', parallel: [delegate], rules: [{ condition: 'all("COMPLETE")', next: 'COMPLETE' }] }
+          : delegate);
+      } else if (effectLocation === 'root') {
+        steps.push(review);
+      }
+      writeFileSync(workflowPath, stringifyYaml({ name: 'development', initial_step: 'caccia', max_steps: 10, steps }));
+    }
+
+    it('runs post-PR Caccia for an agent name and instruction containing caccia', async () => {
+      writeDevelopmentWorkflow('none');
+      const exitCode = await executePipeline({ cwd: testDir, task: 'Publish development', workflow: workflowPath,
+        branch: 'feature/development', autoPr: true });
+      expect(exitCode).toBe(0);
+      expect(await execution.mock.results[0]!.value).toMatchObject({ success: true, workflowHasCaccia: false });
+      expect(caccia).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        entry: 'linked', projectCwd: testDir, prUrl: 'https://github.com/org/repo/pull/123',
+      }));
+    });
+
+    it.each(['child', 'parallel', 'nested', 'root'] as const)('suppresses post-PR Caccia using the %s effect in a started workflow', async (effectLocation) => {
+      writeDevelopmentWorkflow(effectLocation, effectLocation !== 'root');
+      const events = vi.spyOn(WorkflowEngine.prototype, 'emit');
+      restorePreflightState.push(() => events.mockRestore());
+      const exitCode = await executePipeline({ cwd: testDir, task: 'Publish development', workflow: workflowPath,
+        branch: 'feature/development', autoPr: true });
+      expect(exitCode).toBe(0);
+      expect(await execution.mock.results[0]!.value).toMatchObject({ success: true, workflowHasCaccia: true });
+      expect(vi.mocked(prSubmission.submitPullRequest)).toHaveBeenCalledOnce();
+      expect(caccia).not.toHaveBeenCalled();
+      expect(vi.mocked(mergeFeature.runLinkedMergeSafely)).toHaveBeenCalledOnce();
+      const starts = events.mock.calls.filter(([event]) => event === 'step:start');
+      expect(starts.some((args) => args[5] === 'child-review')).toBe(effectLocation !== 'root');
+      expect(starts.some((args) => args[5] === 'grandchild-review')).toBe(effectLocation === 'nested');
+    });
+
+    it.each(['child', 'parallel', 'nested'] as const)('runs post-PR Caccia when the %s child with an effect is not reached', async (effectLocation) => {
+      writeDevelopmentWorkflow(effectLocation, effectLocation === 'nested', false);
+      const exitCode = await executePipeline({ cwd: testDir, task: 'Publish development', workflow: workflowPath,
+        branch: 'feature/development', autoPr: true });
+      expect(exitCode).toBe(0);
+      expect(await execution.mock.results[0]!.value).toMatchObject({ success: true, workflowHasCaccia: false });
+      expect(caccia).toHaveBeenCalledOnce();
+    });
+
+    it.each([false, true])('uses the reached call binding when the same workflow has different arguments (effect=%s)', async (withEffect) => {
+      writeDevelopmentWorkflow('none');
+      const workflowDir = join(testDir, '.takt', 'workflows');
+      const inspect = { name: 'inspect', persona: join(testDir, '.takt', 'personas', 'coder.md'), instruction: 'Inspect',
+        rules: [{ condition: 'when(true)', next: 'COMPLETE' }] };
+      for (const effect of [false, true]) {
+        writeFileSync(join(workflowDir, `leaf-${effect}.yaml`), stringifyYaml({
+          name: 'same-leaf-name', subworkflow: { callable: true }, initial_step: 'inspect', max_steps: 2,
+          steps: [inspect, ...(effect ? [{ name: 'review', kind: 'system', effects: [{ type: 'caccia', pr: 123 }],
+            rules: [{ condition: 'when(true)', next: 'COMPLETE' }] }] : [])],
+        }));
+      }
+      writeFileSync(join(workflowDir, 'wrapper.yaml'), stringifyYaml({ name: 'same-wrapper',
+        subworkflow: { callable: true, params: { target: { type: 'workflow_ref' } } }, initial_step: 'delegate', max_steps: 4,
+        steps: [{ name: 'delegate', kind: 'workflow_call', call: { $param: 'target' },
+          rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }] }],
+      }));
+      writeFileSync(workflowPath, stringifyYaml({ name: 'development', initial_step: 'work', max_steps: 8,
+        steps: [{ ...inspect, name: 'work', rules: [{ condition: 'when(true)', next: `call-${withEffect}` }] },
+          ...[false, true].map((effect) => ({ name: `call-${effect}`, kind: 'workflow_call', call: './wrapper.yaml',
+            args: { target: `./leaf-${effect}.yaml` }, rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }] }))],
+      }));
+      expect(await executePipeline({ cwd: testDir, task: 'Publish', workflow: workflowPath,
+        branch: 'feature/development', autoPr: true })).toBe(0);
+      expect(await execution.mock.results[0]!.value).toMatchObject({ workflowHasCaccia: withEffect });
+      expect(caccia).toHaveBeenCalledTimes(withEffect ? 0 : 1);
+    });
+
+    it.each([false, true])('resolves the selected merge workflow and its relative child before post-PR Caccia (effect=%s)', async (withEffect) => {
+      writeDevelopmentWorkflow('none');
+      const mergeDirectory = join(testDir, '.takt', 'workflows', 'custom-merge');
+      mkdirSync(mergeDirectory);
+      const mergePath = join(mergeDirectory, 'parent.yaml');
+      writeFileSync(mergePath, stringifyYaml({
+        name: 'selected-merge', initial_step: 'delegate', max_steps: 2,
+        steps: [{ name: 'delegate', kind: 'workflow_call', call: './child.yaml',
+          rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }] }],
+      }));
+      writeFileSync(join(mergeDirectory, 'child.yaml'), withEffect
+        ? 'name: merge-child\nsubworkflow: {callable: true}\ninitial_step: review\nmax_steps: 1\nsteps:\n  - name: review\n    kind: system\n    effects: [{type: "caccia", pr: 123}]\n    rules: [{condition: "when(true)", next: COMPLETE}]\n'
+        : stringifyYaml({
+          name: 'merge-child', subworkflow: { callable: true }, initial_step: 'caccia', max_steps: 1,
+          steps: [{ name: 'caccia', persona: join(testDir, '.takt', 'personas', 'coder.md'), instruction: 'type: caccia',
+            rules: [{ condition: 'when(true)', next: 'COMPLETE' }] }],
+        }));
+      writeFileSync(join(testDir, '.takt', 'config.yaml'), stringifyYaml({
+        caccia: { enabled: true }, merge: { auto_start: true, workflow: mergePath },
+      }));
+      if (loadWorkflowByIdentifier(mergePath, testDir) === null) throw new Error('Merge workflow fixture could not be loaded');
+      const exitCode = await executePipeline({ cwd: testDir, task: 'Publish development', workflow: workflowPath,
+        branch: 'feature/development', autoPr: true });
+      expect(exitCode).toBe(0);
+      expect(caccia).toHaveBeenCalledTimes(withEffect ? 0 : 1);
+      expect(vi.mocked(mergeFeature.runLinkedMergeSafely)).toHaveBeenCalledOnce();
+    });
+
+    it('leaves Caccia to the default automatically started merge workflow', async () => {
+      writeDevelopmentWorkflow('none');
+      writeFileSync(join(testDir, '.takt', 'config.yaml'), stringifyYaml({
+        caccia: { enabled: true }, merge: { auto_start: true },
+      }));
+      const exitCode = await executePipeline({ cwd: testDir, task: 'Publish development', workflow: workflowPath,
+        branch: 'feature/development', autoPr: true });
+      expect(exitCode).toBe(0);
+      expect(caccia).not.toHaveBeenCalled();
+      expect(vi.mocked(mergeFeature.runLinkedMergeSafely)).toHaveBeenCalledOnce();
+    });
+  });
 
   it.each([false, true])('stops a pipeline before its first mock step when a later provider is missing with terminal=%s', async (terminal) => {
     const { mockAgentCall, managedCall, stepStarts } = prepareManagedPreflight(terminal);

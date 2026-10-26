@@ -5,6 +5,13 @@ import type {
 import { getAllParallelSubSteps } from '../models/types.js';
 import { isWorkflowCallStep } from './step-kind.js';
 
+export function hasCacciaEffect(steps: readonly WorkflowStep[]): boolean {
+  return steps.some((step) => (
+    (step.kind === 'system' && step.effects?.some((effect) => effect.type === 'caccia') === true)
+    || (step.parallel !== undefined && hasCacciaEffect(getAllParallelSubSteps(step.parallel)))
+  ));
+}
+
 export function collectWorkflowCallSteps(
   steps: readonly WorkflowStep[],
 ): WorkflowCallStep[] {

@@ -19,9 +19,9 @@ vi.mock('node:child_process', () => ({
   execFileSync: vi.fn(),
 }));
 
-const mockResolveConfigValue = vi.fn(() => undefined);
+const mockResolveConfigValue = vi.fn<(_projectDir: string, _key: string) => boolean | undefined>(() => undefined);
 vi.mock('../infra/config/index.js', () => ({
-  resolveConfigValue: (...args: unknown[]) => mockResolveConfigValue(...args),
+  resolveConfigValue: (projectDir: string, key: string) => mockResolveConfigValue(projectDir, key),
 }));
 
 const mockMaterializeCloneHeadToRootBranch = vi.fn();
@@ -49,8 +49,10 @@ function setupSuccessfulCommit(): void {
     const argsArr = args as string[];
     if (argsArr.includes('diff')) return 'M src/index.ts\n';
     if (argsArr.includes('rev-parse')) return 'abc1234\n';
+    if (argsArr.includes('symbolic-ref')) return 'feat/my-branch\n';
+    if (argsArr.includes('cat-file')) return 'abc1234 missing\n';
     if (argsArr.includes('config')) return '';
-    return Buffer.from('');
+    return '';
   });
 }
 
@@ -61,6 +63,47 @@ beforeEach(() => {
 });
 
 describe('autoCommitAndPush — branch parameter', () => {
+  it.each([
+    { objectType: 'missing', targetExists: false, unpublished: true },
+    { objectType: 'commit', targetExists: false, unpublished: true },
+    { objectType: 'commit', targetExists: true, unpublished: true },
+    { objectType: 'commit', targetExists: true, unpublished: false },
+    { objectType: 'commit', targetExists: false, unpublished: false },
+  ])('publishes only an unpublished clean HEAD: %j', async ({ objectType, targetExists, unpublished }) => {
+    const head = 'a'.repeat(40);
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const command = args?.[0];
+      if (command === 'rev-parse') return head;
+      if (command === 'cat-file') return objectType === 'missing' ? `${head} missing\n` : 'commit\n';
+      if (command === 'for-each-ref') return targetExists ? 'refs/heads/feat/my-branch\n' : '';
+      if (command === 'rev-list') return unpublished ? head : '';
+      return '';
+    });
+
+    const result = await autoCommitAndPush('/tmp/clone', 'agent task', '/project', 'feat/my-branch');
+
+    expect(result.success).toBe(true);
+    expect(result.commitHash).toBeUndefined();
+    expect(result.localPushFailed).toBeUndefined();
+    expect(result.publishedHead).toBe(unpublished ? head : undefined);
+    expect(mockMaterializeCloneHeadToRootBranch).toHaveBeenCalledTimes(unpublished ? 1 : 0);
+  });
+
+  it.each(['rev-parse', 'cat-file', 'for-each-ref', 'rev-list'])('reports publication inspection failure instead of treating it as no changes: %s', async (failedCommand) => {
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      if (args?.[0] === failedCommand) throw new Error('inspection failed');
+      if (args?.[0] === 'rev-parse') return 'a'.repeat(40);
+      if (args?.[0] === 'cat-file') return 'commit\n';
+      return '';
+    });
+
+    const result = await autoCommitAndPush('/tmp/clone', 'agent task', '/project', 'feat/my-branch');
+
+    expect(result.localPushFailed).toBe(true);
+    expect(result.publishedHead).toBeUndefined();
+    expect(mockMaterializeCloneHeadToRootBranch).not.toHaveBeenCalled();
+  });
+
   it('uses materializeCloneHeadToRootBranch when branch is provided', async () => {
     // Given: changes exist
     setupSuccessfulCommit();
@@ -76,6 +119,7 @@ describe('autoCommitAndPush — branch parameter', () => {
     );
     expect(result.success).toBe(true);
     expect(result.commitHash).toBe('abc1234');
+    expect(result.publishedHead).toBe('abc1234');
     expect(result.localPushFailed).toBeUndefined();
   });
 
@@ -127,6 +171,7 @@ describe('autoCommitAndPush — branch parameter', () => {
     expect(result.success).toBe(true);
     expect(result.commitHash).toBe('abc1234');
     expect(result.localPushFailed).toBe(true);
+    expect(result.publishedHead).toBeUndefined();
     expect(result.message).toContain('abc1234');
     expect(result.message).not.toContain('Auto-commit failed');
   });
@@ -145,13 +190,15 @@ describe('autoCommitAndPush — branch parameter', () => {
     expect(mockMaterializeCloneHeadToRootBranch).not.toHaveBeenCalled();
   });
 
-  it('skips root branch materialization when there are no changes to commit', async () => {
+  it('skips root branch materialization when clean HEAD is already reachable in the base', async () => {
     // Given: no staged changes
     mockExecFileSync.mockImplementation((_cmd, args) => {
       const argsArr = args as string[];
       if (argsArr.includes('diff')) return '';
+      if (argsArr.includes('rev-parse')) return 'abc1234\n';
+      if (argsArr.includes('cat-file')) return 'commit\n';
       if (argsArr.includes('config')) return '';
-      return Buffer.from('');
+      return '';
     });
 
     // When
@@ -161,5 +208,7 @@ describe('autoCommitAndPush — branch parameter', () => {
     expect(mockMaterializeCloneHeadToRootBranch).not.toHaveBeenCalled();
     expect(result.success).toBe(true);
     expect(result.commitHash).toBeUndefined();
+    expect(result.publishedHead).toBeUndefined();
+    expect(result.localPushFailed).toBeUndefined();
   });
 });

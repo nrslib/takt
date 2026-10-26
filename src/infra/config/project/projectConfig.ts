@@ -190,7 +190,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     caccia,
     merge,
     assistant: normalizeAssistantConfig(assistant),
-    manager: manager === undefined ? undefined : { autoRun: manager.auto_run, defaultWorkflow: manager.default_workflow, mainMerge: manager.main_merge, notifications: manager.notifications },
+    manager: manager === undefined ? undefined : { autoRun: manager.auto_run, patrolInterval: manager.patrol_interval, defaultWorkflow: manager.default_workflow, mainMerge: manager.main_merge, notifications: manager.notifications, sensitivePaths: manager.sensitive_paths },
     taktProviders: normalizedTaktProviders,
     personaProviders: normalizedPersonaProviders,
     providerRouting: normalizedProviderRouting,
@@ -322,7 +322,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
   delete savePayload.caccia;
   delete savePayload.manager;
   if (config.manager !== undefined) {
-    savePayload.manager = { auto_run: config.manager.autoRun, default_workflow: config.manager.defaultWorkflow, main_merge: config.manager.mainMerge, notifications: config.manager.notifications };
+    savePayload.manager = { auto_run: config.manager.autoRun, patrol_interval: config.manager.patrolInterval, default_workflow: config.manager.defaultWorkflow, main_merge: config.manager.mainMerge, notifications: config.manager.notifications, sensitive_paths: config.manager.sensitivePaths };
   }
   delete savePayload.merge;
   const rawMerge = denormalizeMergeConfig(config.merge);

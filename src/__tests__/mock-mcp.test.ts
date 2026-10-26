@@ -21,6 +21,28 @@ beforeEach(() => {
 });
 afterEach(() => { resetScenario(); vi.unstubAllEnvs(); });
 describe('mock provider real MCP calls', () => {
+  it('executes configured MCP tools with full permissions and no tool allowlist', async () => {
+    const onCallCompleted = vi.fn();
+    await expect(executeMockMcpCalls(calls, {
+      ...options, permissionMode: 'full', allowedTools: undefined,
+    }, onCallCompleted)).resolves.toBe('completed');
+    expect(doubles.call).toHaveBeenCalledWith({ name: calls[0]!.tool, arguments: calls[0]!.arguments }, undefined, { signal: undefined });
+    expect(onCallCompleted).toHaveBeenCalledExactlyOnceWith({ server: calls[0]!.server, tool: calls[0]!.tool, result: { content: [] } });
+    expect(doubles.close).toHaveBeenCalledOnce();
+    expect(doubles.transportClose).toHaveBeenCalledOnce();
+  });
+  it.each([undefined, 'readonly', 'edit'] as const)('keeps rejecting an omitted allowlist without full permissions: %s', async (permissionMode) => {
+    await expect(executeMockMcpCalls(calls, {
+      ...options, permissionMode, allowedTools: undefined,
+    }, vi.fn())).rejects.toThrow('not allowed');
+    expect(doubles.connect).not.toHaveBeenCalled();
+  });
+  it.each([{ allowedTools: [] }, { allowedTools: ['mcp__manager__other_tool'] }])('keeps explicit tool restrictions in full mode: $allowedTools', async ({ allowedTools }) => {
+    await expect(executeMockMcpCalls(calls, {
+      ...options, permissionMode: 'full', allowedTools,
+    }, vi.fn())).rejects.toThrow('not allowed');
+    expect(doubles.connect).not.toHaveBeenCalled();
+  });
   it('transfers real arguments and awaits SDK responses before closing both resources', async () => {
     const onCallCompleted = vi.fn();
     await expect(executeMockMcpCalls(calls, options, onCallCompleted)).resolves.toBe('completed');

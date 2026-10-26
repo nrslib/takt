@@ -260,7 +260,7 @@ describe('instruction Issue binding from the task list to a pull request', () =>
     };
     const issues = resolveTaskIssue(execution.issueNumber, fixture.cwd, provider);
     vi.spyOn(taskInfrastructure, 'autoCommitAndPush').mockResolvedValue({
-      success: true, commitHash: 'new-commit', message: 'Committed for the PR fixture',
+      success: true, commitHash: 'new-commit', publishedHead: 'a'.repeat(40), message: 'Committed for the PR fixture',
     });
     vi.spyOn(taskGit, 'pushBranch').mockImplementation(() => undefined);
     menuMocks.createPullRequestSafely.mockReturnValue({ success: true });

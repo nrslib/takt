@@ -1,10 +1,357 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
+import type { HookCallback, HookJSONOutput, Options, PreToolUseHookInput } from '@anthropic-ai/claude-agent-sdk';
+import { buildSdkOptions, TOOL_PERMISSION_DECISION_TIMEOUT_MS } from '../infra/claude/options-builder.js';
+import * as readonlyArtifactAccess from '../infra/claude/readonly-artifact-access.js';
+import type {
+  ClaudeSpawnOptions,
+  ToolPermissionDecision,
+  ToolPermissionDecisionHandler,
+  ToolPermissionDecisionRequest,
+} from '../infra/claude/types.js';
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
 import { createInitialState } from '../core/workflow/engine/state-manager.js';
 import * as capabilityModule from '../infra/providers/provider-capabilities.js';
 import type { NormalAgentWorkflowStep, WorkflowResumePointEntry, WorkflowStep } from '../core/models/types.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { DeepSeekHarnessProvider } from '../infra/providers/deepseek-harness.js';
+
+function createPreToolUseInput(
+  toolName: string,
+  toolInput: unknown,
+): PreToolUseHookInput {
+  return {
+    hook_event_name: 'PreToolUse',
+    session_id: 'permission-test-session',
+    transcript_path: '/runtime/transcript.jsonl',
+    cwd: '/runtime/tool-cwd',
+    tool_name: toolName,
+    tool_input: toolInput,
+    tool_use_id: 'permission-test-tool-use',
+  };
+}
+
+function getToolDecisionHook(options: Options): HookCallback {
+  const registrations = options.hooks?.PreToolUse?.filter(({ matcher }) => matcher === undefined);
+  expect(registrations).toHaveLength(1);
+  expect(registrations![0]!.hooks).toHaveLength(1);
+  return registrations![0]!.hooks[0]!;
+}
+
+async function invokeMatchingPreToolUseHooks(
+  options: Options,
+  input: PreToolUseHookInput,
+): Promise<HookJSONOutput[]> {
+  const registrations = options.hooks?.PreToolUse;
+  expect(registrations).toBeDefined();
+  return Promise.all(registrations!
+    .filter(({ matcher }) => matcher === undefined || matcher === input.tool_name)
+    .flatMap(({ hooks }) => hooks.map((hook) => hook(
+      input,
+      input.tool_use_id,
+      { signal: new AbortController().signal },
+    ))));
+}
+
+function expectReasonedToolDenial(output: HookJSONOutput): void {
+  expect(output).toMatchObject({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: expect.stringMatching(/\S/u),
+    },
+  });
+}
+
+describe('SdkOptionsBuilder tool permission decision hook', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('exports the specified request, decision, handler and optional spawn option types', () => {
+    expectTypeOf<ToolPermissionDecisionRequest>().toEqualTypeOf<{
+      readonly toolName: string;
+      readonly toolInput: unknown;
+      readonly cwd: string;
+      readonly abortSignal?: AbortSignal;
+    }>();
+    expectTypeOf<ToolPermissionDecision>().toEqualTypeOf<
+      | { readonly decision: 'allow' }
+      | { readonly decision: 'deny'; readonly reason: string }
+    >();
+    expectTypeOf<ToolPermissionDecisionHandler>().toEqualTypeOf<
+      (request: ToolPermissionDecisionRequest) => Promise<ToolPermissionDecision>
+    >();
+    expectTypeOf<Pick<ClaudeSpawnOptions, 'onToolPermissionDecision'>>().toEqualTypeOf<{
+      onToolPermissionDecision?: ToolPermissionDecisionHandler;
+    }>();
+  });
+
+  it('does not register a decision hook when no handler is supplied', () => {
+    const options = buildSdkOptions({ cwd: '/configured/cwd' });
+
+    expect(options.hooks?.PreToolUse?.filter(({ matcher }) => matcher === undefined)).toHaveLength(0);
+  });
+
+  it.each([
+    { toolName: 'Read', toolInput: { file_path: '/runtime/file.txt' } },
+    { toolName: 'UnlistedTool', toolInput: null },
+    { toolName: 'mcp__external__custom_action', toolInput: ['opaque', { value: 1 }] },
+  ])('registers one unfiltered hook and forwards $toolName in full permission mode', async ({ toolName, toolInput }) => {
+    const handler = vi.fn<ToolPermissionDecisionHandler>().mockResolvedValue({ decision: 'allow' });
+    const options = buildSdkOptions({
+      cwd: '/configured/cwd',
+      permissionMode: 'full',
+      allowedTools: ['Read'],
+      onToolPermissionDecision: handler,
+    });
+    const input = createPreToolUseInput(toolName, toolInput);
+
+    await getToolDecisionHook(options)(input, input.tool_use_id, { signal: new AbortController().signal });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({
+      toolName,
+      toolInput,
+      cwd: input.cwd,
+    }));
+  });
+
+  it('converts a top-level allow decision to SDK permission output', async () => {
+    const handler = vi.fn<ToolPermissionDecisionHandler>().mockResolvedValue({ decision: 'allow' });
+    const hook = getToolDecisionHook(buildSdkOptions({ cwd: '/project', onToolPermissionDecision: handler }));
+
+    const output = await hook(createPreToolUseInput('CustomTool', {}), undefined, { signal: new AbortController().signal });
+
+    expect(output).toMatchObject({
+      hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' },
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['判断役による拒否', ''])('preserves a deny decision and its reason: %j', async (reason) => {
+    const handler = vi.fn<ToolPermissionDecisionHandler>().mockResolvedValue({ decision: 'deny', reason });
+    const hook = getToolDecisionHook(buildSdkOptions({ cwd: '/project', onToolPermissionDecision: handler }));
+
+    const output = await hook(createPreToolUseInput('CustomTool', {}), undefined, { signal: new AbortController().signal });
+
+    expect(output).toMatchObject({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason,
+      },
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { label: 'nested allow', value: { result: { decision: 'allow' } } },
+    { label: 'nested allow JSON string', value: '{"result":{"decision":"allow"}}' },
+    { label: 'top-level allow JSON string', value: '{"decision":"allow"}' },
+    { label: 'null', value: null },
+    { label: 'undefined', value: undefined },
+    { label: 'array', value: [{ decision: 'allow' }] },
+    { label: 'bare string', value: 'allow' },
+    { label: 'unknown decision', value: { decision: 'ask' } },
+    { label: 'missing deny reason', value: { decision: 'deny' } },
+    { label: 'non-string deny reason', value: { decision: 'deny', reason: 42 } },
+  ])('denies an invalid result without retrying: $label', async ({ value }) => {
+    // 外部ハンドラーの実行時の契約違反を再現する。
+    const handler = vi.fn<ToolPermissionDecisionHandler>().mockResolvedValue(value as ToolPermissionDecision);
+    const hook = getToolDecisionHook(buildSdkOptions({ cwd: '/project', onToolPermissionDecision: handler }));
+
+    const output = await hook(createPreToolUseInput('CustomTool', {}), undefined, { signal: new AbortController().signal });
+
+    expectReasonedToolDenial(output);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['throw', 'reject'] as const)('denies a handler %s without retrying', async (failure) => {
+    const handler = vi.fn<ToolPermissionDecisionHandler>().mockImplementation(() => {
+      const error = new Error('decision handler failed');
+      if (failure === 'throw') throw error;
+      return Promise.reject(error);
+    });
+    const hook = getToolDecisionHook(buildSdkOptions({ cwd: '/project', onToolPermissionDecision: handler }));
+
+    const output = await hook(createPreToolUseInput('CustomTool', {}), undefined, { signal: new AbortController().signal });
+
+    expectReasonedToolDenial(output);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('exports a 60000 millisecond decision timeout', () => {
+    expect(TOOL_PERMISSION_DECISION_TIMEOUT_MS).toBe(60_000);
+  });
+
+  it('denies a pending decision at 60000 milliseconds without retrying', async () => {
+    vi.useFakeTimers();
+    const handler = vi.fn<ToolPermissionDecisionHandler>().mockImplementation(() => new Promise(() => {}));
+    const hook = getToolDecisionHook(buildSdkOptions({ cwd: '/project', onToolPermissionDecision: handler }));
+    let settled = false;
+
+    const pending = hook(createPreToolUseInput('CustomTool', {}), undefined, { signal: new AbortController().signal });
+    void pending.then(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(settled).toBe(true);
+    expectReasonedToolDenial(await pending);
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['allow', 'deny', 'throw', 'invalid'] as const)('clears the wait timer after a completed %s result', async (outcome) => {
+    vi.useFakeTimers();
+    const handler = vi.fn<ToolPermissionDecisionHandler>().mockImplementation(async () => {
+      if (outcome === 'throw') throw new Error('decision failed');
+      if (outcome === 'invalid') return null as unknown as ToolPermissionDecision;
+      return outcome === 'allow' ? { decision: 'allow' } : { decision: 'deny', reason: 'denied' };
+    });
+    const hook = getToolDecisionHook(buildSdkOptions({ cwd: '/project', onToolPermissionDecision: handler }));
+
+    const output = await hook(createPreToolUseInput('CustomTool', {}), undefined, { signal: new AbortController().signal });
+
+    if (outcome === 'allow') {
+      expect(output).toMatchObject({ hookSpecificOutput: { permissionDecision: 'allow' } });
+    } else {
+      expectReasonedToolDenial(output);
+    }
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([
+    { source: 'parent', withParent: true },
+    { source: 'SDK', withParent: true },
+    { source: 'SDK', withParent: false },
+  ])('propagates $source cancellation to the running handler (parent supplied: $withParent)', async ({ source, withParent }) => {
+    const parent = new AbortController();
+    const sdk = new AbortController();
+    let complete!: (decision: ToolPermissionDecision) => void;
+    const decision = new Promise<ToolPermissionDecision>((resolve) => { complete = resolve; });
+    let markStarted!: (request: ToolPermissionDecisionRequest) => void;
+    const started = new Promise<ToolPermissionDecisionRequest>((resolve) => { markStarted = resolve; });
+    const handler = vi.fn<ToolPermissionDecisionHandler>().mockImplementation((request) => {
+      markStarted(request);
+      return decision;
+    });
+    const hook = getToolDecisionHook(buildSdkOptions({
+      cwd: '/project',
+      ...(withParent ? { abortSignal: parent.signal } : {}),
+      onToolPermissionDecision: handler,
+    }));
+
+    const pending = hook(createPreToolUseInput('CustomTool', {}), undefined, { signal: sdk.signal });
+    try {
+      const { abortSignal } = await started;
+      expect(abortSignal).toBeInstanceOf(AbortSignal);
+      expect(abortSignal!.aborted).toBe(false);
+      const onAbort = vi.fn();
+      abortSignal!.addEventListener('abort', onAbort, { once: true });
+
+      (source === 'parent' ? parent : sdk).abort();
+
+      expect(abortSignal!.aborted).toBe(true);
+      expect(onAbort).toHaveBeenCalledTimes(1);
+      expect(handler).toHaveBeenCalledTimes(1);
+    } finally {
+      complete({ decision: 'allow' });
+      await pending;
+    }
+  });
+
+  it.each(['parent', 'SDK'] as const)('passes an already aborted %s signal to the handler', async (source) => {
+    const parent = new AbortController();
+    const sdk = new AbortController();
+    (source === 'parent' ? parent : sdk).abort();
+    const handler = vi.fn<ToolPermissionDecisionHandler>().mockResolvedValue({ decision: 'allow' });
+    const hook = getToolDecisionHook(buildSdkOptions({
+      cwd: '/project', abortSignal: parent.signal, onToolPermissionDecision: handler,
+    }));
+
+    await hook(createPreToolUseInput('CustomTool', {}), undefined, { signal: sdk.signal });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0]![0].abortSignal?.aborted).toBe(true);
+  });
+
+  describe.each(['strictToolAllowlist', 'mcpOnlySideEffects'] as const)('%s coexistence', (restriction) => {
+    it('runs both AskUserQuestion and the decision handler alongside the strict denial', async () => {
+      const answers = { 'Which option?': 'Option A' };
+      const onAskUserQuestion = vi.fn().mockResolvedValue(answers);
+      const onToolPermissionDecision = vi.fn<ToolPermissionDecisionHandler>().mockResolvedValue({ decision: 'allow' });
+      const options = buildSdkOptions({
+        cwd: '/project', permissionMode: 'readonly', [restriction]: ['Read'],
+        onAskUserQuestion, onToolPermissionDecision,
+      });
+      const toolInput = { questions: [{ question: 'Which option?' }] };
+
+      const outputs = await invokeMatchingPreToolUseHooks(options, createPreToolUseInput('AskUserQuestion', toolInput));
+
+      expect(onAskUserQuestion).toHaveBeenCalledExactlyOnceWith(toolInput);
+      expect(onToolPermissionDecision).toHaveBeenCalledTimes(1);
+      expect(outputs).toEqual(expect.arrayContaining([
+        expect.objectContaining({ hookSpecificOutput: expect.objectContaining({ additionalContext: JSON.stringify(answers) }) }),
+        expect.objectContaining({ hookSpecificOutput: expect.objectContaining({ permissionDecision: 'allow' }) }),
+        expect.objectContaining({ hookSpecificOutput: expect.objectContaining({ permissionDecision: 'deny' }) }),
+      ]));
+    });
+
+    it('keeps the strict denial when the decision handler allows an unlisted tool', async () => {
+      const handler = vi.fn<ToolPermissionDecisionHandler>().mockResolvedValue({ decision: 'allow' });
+      const options = buildSdkOptions({
+        cwd: '/project', permissionMode: 'readonly', [restriction]: ['Read'], onToolPermissionDecision: handler,
+      });
+
+      const outputs = await invokeMatchingPreToolUseHooks(options, createPreToolUseInput('Bash', { command: 'pwd' }));
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(outputs).toEqual(expect.arrayContaining([
+        expect.objectContaining({ hookSpecificOutput: expect.objectContaining({ permissionDecision: 'allow' }) }),
+        expect.objectContaining({ hookSpecificOutput: expect.objectContaining({ permissionDecision: 'deny' }) }),
+      ]));
+    });
+
+    it('keeps the decision handler denial when the strict allowlist permits the tool', async () => {
+      const reason = '外部の判断役が拒否';
+      const handler = vi.fn<ToolPermissionDecisionHandler>().mockResolvedValue({ decision: 'deny', reason });
+      const toolName = 'mcp__external__inspect';
+      const options = buildSdkOptions({
+        cwd: '/project', permissionMode: 'readonly', [restriction]: [toolName], onToolPermissionDecision: handler,
+      });
+
+      const outputs = await invokeMatchingPreToolUseHooks(options, createPreToolUseInput(toolName, {}));
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(outputs).toEqual(expect.arrayContaining([
+        expect.objectContaining({ hookSpecificOutput: expect.objectContaining({ permissionDecision: 'allow' }) }),
+        expect.objectContaining({ hookSpecificOutput: expect.objectContaining({ permissionDecision: 'deny', permissionDecisionReason: reason }) }),
+      ]));
+    });
+
+    it('retains the readonly Read boundary alongside both allowing hooks', async () => {
+      const paths = ['/project/verification.txt'];
+      vi.spyOn(readonlyArtifactAccess, 'resolveReadonlyArtifactReadPaths').mockReturnValue(paths);
+      const isAllowed = vi.spyOn(readonlyArtifactAccess, 'isReadonlyArtifactReadAllowed').mockReturnValue(false);
+      const handler = vi.fn<ToolPermissionDecisionHandler>().mockResolvedValue({ decision: 'allow' });
+      const options = buildSdkOptions({
+        cwd: '/project', permissionMode: 'readonly', internalAgentIsolation: 'strict-readonly',
+        allowReadonlyFileRead: true, readonlyFileReadPaths: paths, allowedTools: ['Read'],
+        [restriction]: ['Read'], onToolPermissionDecision: handler,
+      });
+
+      const outputs = await invokeMatchingPreToolUseHooks(options, createPreToolUseInput('Read', { file_path: '/project/secrets.txt' }));
+
+      expect(isAllowed).toHaveBeenCalledExactlyOnceWith('/project/secrets.txt', '/project', paths);
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(outputs.filter((output) => 'hookSpecificOutput' in output && output.hookSpecificOutput?.hookEventName === 'PreToolUse'
+        && output.hookSpecificOutput.permissionDecision === 'allow')).toHaveLength(2);
+      expect(outputs).toEqual(expect.arrayContaining([
+        expect.objectContaining({ hookSpecificOutput: expect.objectContaining({ permissionDecision: 'deny' }) }),
+      ]));
+    });
+  });
+});
 
 function createStep(overrides: Partial<NormalAgentWorkflowStep> = {}): NormalAgentWorkflowStep {
   const hasEngineProviderFields = overrides.provider !== undefined

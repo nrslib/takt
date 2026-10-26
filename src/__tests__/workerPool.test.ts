@@ -1,3 +1,5 @@
+const manager = vi.hoisted(() => ({ create: vi.fn() }));
+vi.mock('../features/manager/runEventManager.js', () => ({ createRunEventManager: manager.create }));
 vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkPendingTaskProviders: vi.fn(async () => undefined), checkTaskNameProvider: vi.fn(async () => undefined), checkQueuedTaskProviders: vi.fn(async () => undefined), terminalProviderConfirmation: vi.fn(() => undefined) }));
 /**
  * Worker pool の結果集計・再キュー・停止境界を検証する。
@@ -10,9 +12,12 @@ import type { AutoRequeueResult, TaskInfo } from '../infra/task/index.js';
 import type { executeRunTaskAndComplete as ExecuteRunTask } from '../features/tasks/execute/runTaskExecution.js';
 import { PrivateFileLockAcquisitionError } from '../shared/utils/private-file-lock.js';
 
-const { executeRunTaskAndComplete } = vi.hoisted(() => ({
+const { executeRunTaskAndComplete, executeWithDetails, saveEvent } = vi.hoisted(() => ({
   executeRunTaskAndComplete: vi.fn(),
+  executeWithDetails: vi.fn(),
+  saveEvent: vi.fn(),
 }));
+vi.mock('../infra/goals/events.js', () => ({ saveManagerEvent: saveEvent }));
 
 vi.mock('../shared/exitCodes.js', () => ({ EXIT_SIGINT: 130 }));
 vi.mock('../shared/i18n/index.js', () => ({ getLabel: vi.fn((key: string) => key) }));
@@ -22,6 +27,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 }));
 vi.mock('../features/tasks/execute/runTaskExecution.js', () => ({
   executeRunTaskAndComplete,
+  executeRunTaskAndCompleteWithDetails: executeWithDetails,
 }));
 vi.mock('../features/tasks/execute/taskExecution.js', () => ({
   executeAndCompleteTask: vi.fn(),
@@ -223,6 +229,19 @@ describe('runWithWorkerPool', () => {
     expect(runner.claimNextTasks).toHaveBeenCalledTimes(1);
   });
 
+  it('goal限定poolは通常タスクのpendingだけではENOSPCの復旧待ちを始めない', async () => {
+    const runner = createRunner();
+    runner.listTaskStateItems.mockReturnValue([{ name: 'ordinary', status: 'pending' }] as never);
+    const failure = new PrivateFileLockAcquisitionError('disk full', 'ENOSPC', undefined, {});
+    runner.claimNextTasks.mockImplementation(() => { throw failure; });
+
+    await expect(runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 100, 'run', undefined, true))
+      .rejects.toBe(failure);
+    expect(runner.claimNextTasks).toHaveBeenCalledOnce();
+    expect(executeRunTaskAndComplete).not.toHaveBeenCalled();
+    expect(checkPendingTaskProviders).toHaveBeenCalledWith(runner, '/cwd', {}, undefined, [], expect.any(AbortSignal), true);
+  });
+
   it('provider preflightのENOSPCは取得処理として再試行しない', async () => {
     const runner = createRunner();
     const error = Object.assign(new Error('provider preparation failed'), { code: 'ENOSPC' });
@@ -295,6 +314,27 @@ describe('runWithWorkerPool', () => {
       for (const control of controls) control.resolve(true);
       await outcome;
     }
+  });
+
+  it('タスクが空の run は manager を作成せず終了する', async () => {
+    const runner = createRunner();
+    await expect(runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 10))
+      .resolves.toEqual({ success: 0, fail: 0, executedTaskNames: [] });
+    expect(runner.claimNextTasks).toHaveBeenCalledOnce();
+    expect(manager.create).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('ゴールのタスクの終了を受信箱へ保存し、イベントを処理せず終了する: success=%s', async (success) => {
+    const task = createTask('goal-task');
+    task.data!.goal_id = '550e8400-e29b-41d4-a716-446655440000';
+    const completion = { success, interrupted: !success };
+    executeWithDetails.mockResolvedValue({ success, runSlug: 'run-goal-task', completion });
+    const result = await runWithWorkerPool(createRunner() as never, [task], 1, '/cwd', undefined, undefined, 10);
+    expect(result).toEqual({ success: success ? 1 : 0, fail: success ? 0 : 1, executedTaskNames: [task.name] });
+    expect(saveEvent).toHaveBeenCalledExactlyOnceWith('/cwd', {
+      kind: 'completion', goalId: task.data!.goal_id, taskName: task.name, runSlug: 'run-goal-task', result: completion,
+    });
+    expect(manager.create).not.toHaveBeenCalled();
   });
 
   it('入口の停止信号を使い、SIGINT ハンドラを重複登録しない', async () => {

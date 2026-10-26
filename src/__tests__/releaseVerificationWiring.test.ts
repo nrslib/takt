@@ -826,6 +826,16 @@ describe('release verification wiring', () => {
       normalized: 'src/__tests__/statusLine.test.ts',
     },
     {
+      target: 'src/__tests__/taskDeleteActions.test.ts',
+      script: 'test:it:heavy:parallel',
+      normalized: 'src/__tests__/taskDeleteActions.test.ts',
+    },
+    {
+      target: 'taskDeleteActions.test.ts',
+      script: 'test:it:heavy:parallel',
+      normalized: 'src/__tests__/taskDeleteActions.test.ts',
+    },
+    {
       target: 'src/__tests__/it-web-ui-retry-dom.test.ts',
       script: 'test:it:heavy:parallel',
       normalized: 'src/__tests__/it-web-ui-retry-dom.test.ts',
@@ -869,6 +879,16 @@ describe('release verification wiring', () => {
       target: 'companion-diff-runtime.integration.test.ts',
       script: 'test:it:heavy:serial:git',
       normalized: 'src/__tests__/companion-diff-runtime.integration.test.ts',
+    },
+    {
+      target: 'src/__tests__/it-list-filtered-delete.test.ts',
+      script: 'test:it:heavy:serial:git',
+      normalized: 'src/__tests__/it-list-filtered-delete.test.ts',
+    },
+    {
+      target: 'it-list-filtered-delete.test.ts',
+      script: 'test:it:heavy:serial:git',
+      normalized: 'src/__tests__/it-list-filtered-delete.test.ts',
     },
   ])('should route $target to $script', ({ target, script, normalized }) => {
     expect(selectNpmTestRuns([target])).toEqual([{

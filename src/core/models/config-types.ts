@@ -92,6 +92,8 @@ export interface InternalAgentSeats {
   loopJudge?: ProviderRoutingEntry;
   /** `review-completion-judge`: completion-retry episode の網羅性判定役。 */
   completionRetryJudge?: ProviderRoutingEntry;
+  /** `manager-permission-judge`: manager の道具の使用を審査する判断役。 */
+  managerPermissionJudge?: ProviderRoutingEntry;
 }
 
 export interface ProviderRoutingConfig {
@@ -350,7 +352,7 @@ export interface NotificationSoundEventsConfig {
  * Project-level configuration stored in .takt/config.yaml.
  */
 export interface ProjectConfig {
-  manager?: { autoRun?: boolean; defaultWorkflow?: string; mainMerge?: 'auto' | 'approve'; notifications?: ManagerNotifications };
+  manager?: { autoRun?: boolean; patrolInterval?: number; defaultWorkflow?: string; mainMerge?: 'auto' | 'approve'; notifications?: ManagerNotifications; sensitivePaths?: string[] };
   /** UI / builtin resource language override for this project */
   language?: Language;
   /** Provider selection for agent runtime */
@@ -440,7 +442,7 @@ export interface ProjectConfig {
  * — handled by the resolution layer.
  */
 export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSubmodules' | 'assistant' | 'manager'> {
-  manager?: { autoRun?: boolean; defaultWorkflow?: string; notifications?: ManagerNotifications };
+  manager?: { autoRun?: boolean; patrolInterval?: number; defaultWorkflow?: string; notifications?: ManagerNotifications; sensitivePaths?: string[] };
   /** Global default for assistant task-instruction formatting. */
   assistant?: GlobalAssistantConfig;
   /** @globalOnly */

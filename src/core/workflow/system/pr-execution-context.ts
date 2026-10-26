@@ -25,12 +25,14 @@ export class PrHeadObservationMismatchError extends Error {
 
 export interface PrExecutionContext {
   readonly prNumber: number;
+  readonly prUrl?: string;
   readonly headBranch: string;
   readonly baseBranch: string;
   readonly headSha: string;
   readonly headRepositoryUrl: string;
   readonly headRepositoryPushUrls: readonly string[];
   readonly preserveConflictState?: boolean;
+  readonly mergeConcurrency?: number;
   readonly threatCheckMaxDiffBytes?: number;
 }
 

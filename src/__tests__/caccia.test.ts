@@ -95,8 +95,8 @@ function createHarness(threadPages: CacciaReviewThread[][] = [[]]) {
   return { dependencies, events };
 }
 
-function standaloneInput(overrides: Partial<CacciaInput> = {}): CacciaInput {
-  return {
+function standaloneInput(overrides: Partial<Extract<CacciaInput, { prNumber: number }>> = {}): CacciaInput {
+  const input = {
     entry: 'standalone',
     prNumber: 42,
     projectCwd: '/project',
@@ -108,6 +108,7 @@ function standaloneInput(overrides: Partial<CacciaInput> = {}): CacciaInput {
     },
     ...overrides,
   };
+  return input.entry === 'linked' ? { ...input, entry: 'linked' } : { ...input, entry: 'standalone' };
 }
 
 function captureScreen() {
@@ -1190,6 +1191,54 @@ describe('Caccia loop', () => {
     expect(dependencies.resolveReviewThread).not.toHaveBeenCalled();
     expect(dependencies.logResult).not.toHaveBeenCalled();
     expect(dependencies.notifyResult).not.toHaveBeenCalled();
+  });
+
+  it.each(['terminal', 'silent'] as const)('skips a published GitLab MR with %s output', async (outputMode) => {
+    const { dependencies } = createHarness();
+    vi.mocked(dependencies.detectVcsProvider).mockReturnValue('gitlab');
+    const screen = captureScreen();
+    const listeners = process.listenerCount('SIGINT');
+    try {
+      const result = await runCaccia({
+        entry: 'linked', prUrl: 'https://gitlab.com/org/repo/-/merge_requests/123',
+        projectCwd: '/project', outputMode,
+        settings: { ...standaloneInput().settings, enabled: true },
+      }, dependencies);
+
+      expect(result).toEqual({ outcome: 'skipped', skipReason: 'github_unavailable', unresolvedCount: 0,
+        reason: 'GitHub is not the configured or detected provider' });
+      if (outputMode === 'terminal') expect(screen.text()).toContain(result.reason);
+      else expect(screen.text()).toBe('');
+      expect(dependencies.detectVcsProvider).toHaveBeenCalledExactlyOnceWith('/project');
+      expect(dependencies.waitForCodeRabbitReview).not.toHaveBeenCalled();
+      expect(dependencies.fetchCodeRabbitReviewThreads).not.toHaveBeenCalled();
+      expect(dependencies.createTemporaryClone).not.toHaveBeenCalled();
+      expect(dependencies.executeWorkflow).not.toHaveBeenCalled();
+      expect(dependencies.resolveReviewThread).not.toHaveBeenCalled();
+      expect(dependencies.logResult).not.toHaveBeenCalled();
+      expect(dependencies.notifyResult).not.toHaveBeenCalled();
+      expect(process.listenerCount('SIGINT')).toBe(listeners);
+    } finally {
+      screen.restore();
+    }
+  });
+
+  it('rejects a published GitLab MR in the GitHub provider context without reviewing it', async () => {
+    const { dependencies } = createHarness();
+    const listeners = process.listenerCount('SIGINT');
+
+    await expect(runCaccia({
+      entry: 'linked', prUrl: 'https://gitlab.com/org/repo/-/merge_requests/123',
+      projectCwd: '/project', settings: { ...standaloneInput().settings, enabled: true },
+    }, dependencies)).rejects.toThrow();
+
+    expect(dependencies.detectVcsProvider).toHaveBeenCalledExactlyOnceWith('/project');
+    expect(dependencies.waitForCodeRabbitReview).not.toHaveBeenCalled();
+    expect(dependencies.fetchCodeRabbitReviewThreads).not.toHaveBeenCalled();
+    expect(dependencies.createTemporaryClone).not.toHaveBeenCalled();
+    expect(dependencies.executeWorkflow).not.toHaveBeenCalled();
+    expect(dependencies.resolveReviewThread).not.toHaveBeenCalled();
+    expect(process.listenerCount('SIGINT')).toBe(listeners);
   });
 
   it('cleans up the clone and leaves threads unresolved when cancellation arrives during the workflow', async () => {

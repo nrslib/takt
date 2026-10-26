@@ -77,11 +77,11 @@ program
  * Run pre-action hook: common initialization for all commands.
  * Exported for use in slash-command fallback logic.
  */
-export async function runPreActionHook(): Promise<void> {
+export async function runPreActionHook(suppressVerboseConsole = false): Promise<void> {
   const { assertConfigDirsDoNotCollide, initializeCliExecutionContext } = await import('./initialization.js');
   assertConfigDirsDoNotCollide(process.cwd());
   await scheduleUpdateCheck();
-  await initializeCliExecutionContext(program, cliVersion);
+  await initializeCliExecutionContext(program, cliVersion, suppressVerboseConsole);
 }
 
 export async function scheduleUpdateCheck(): Promise<void> {
@@ -110,4 +110,7 @@ program.hook('preSubcommand', async (_command, subcommand) => {
 });
 
 // Common initialization for all commands
-program.hook('preAction', runPreActionHook);
+program.hook('preAction', async (_command, actionCommand) => {
+  if (actionCommand.name() === 'daemon' || actionCommand.parent?.name() === 'daemon') return;
+  await runPreActionHook(actionCommand.name() === 'manager');
+});

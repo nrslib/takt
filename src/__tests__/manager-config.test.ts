@@ -3,9 +3,22 @@ const doubles = vi.hoisted(() => ({ project: vi.fn(), global: vi.fn() }));
 vi.mock('../infra/config/project/projectConfig.js', () => ({ loadProjectConfig: doubles.project }));
 vi.mock('../infra/config/global/globalConfig.js', () => ({ loadGlobalConfig: doubles.global }));
 import { resolveManagerConfig } from '../infra/config/managerConfig.js';
+import { GlobalConfigSchema, ProjectConfigSchema } from '../core/models/config-schemas.js';
 beforeEach(() => { vi.resetAllMocks(); doubles.project.mockReturnValue({}); doubles.global.mockReturnValue({}); });
 it('defaults to automatic execution without inventing a default workflow', () => {
   expect(resolveManagerConfig('/project')).toMatchObject({ autoRun: true, defaultWorkflow: undefined, mainMerge: 'approve' });
+});
+it('defaults patrols to 30 minutes and prioritizes project intervals over global intervals', () => {
+  expect(resolveManagerConfig('/project').patrolInterval).toBe(1800);
+  doubles.global.mockReturnValue({ manager: { patrolInterval: 900 } });
+  expect(resolveManagerConfig('/project').patrolInterval).toBe(900);
+  doubles.project.mockReturnValue({ manager: { patrolInterval: 60 } });
+  expect(resolveManagerConfig('/project').patrolInterval).toBe(60);
+});
+it.each([0, -1, 0.5, '1800', Infinity])('rejects invalid patrol interval %s at the configuration boundary', (patrol_interval) => {
+  const input = { manager: { patrol_interval } };
+  expect(ProjectConfigSchema.safeParse(input).success).toBe(false);
+  expect(GlobalConfigSchema.safeParse(input).success).toBe(false);
 });
 it('resolves project and global settings separately for each field', () => {
   doubles.project.mockReturnValue({ manager: { autoRun: false } });
@@ -52,4 +65,39 @@ it.each(notificationKinds)('prioritizes explicit project false over global true 
 
   doubles.project.mockReturnValue({ manager: { notifications: { [kind]: true } } });
   expect(resolveManagerConfig('/project').notifications).toEqual(enabled);
+});
+
+it('provides sensitive file defaults without manager configuration', () => {
+  expect(resolveManagerConfig('/project')).toHaveProperty('sensitivePaths', expect.arrayContaining([
+    '.env', '.env.*', 'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519',
+    '*.key', '*.pem', '*.crt', '*.cer', '*.p12', '*.pfx',
+  ]));
+});
+
+it('adds both configuration layers to the sensitive defaults', () => {
+  doubles.global.mockReturnValue({ manager: { sensitivePaths: ['global-private'] } });
+  doubles.project.mockReturnValue({ manager: { sensitivePaths: ['project-private'] } });
+
+  expect(resolveManagerConfig('/project')).toHaveProperty('sensitivePaths', expect.arrayContaining([
+    '.env', '*.pem', 'global-private', 'project-private',
+  ]));
+});
+
+it('keeps sensitive defaults when both configuration layers specify empty lists', () => {
+  doubles.global.mockReturnValue({ manager: { sensitivePaths: [] } });
+  doubles.project.mockReturnValue({ manager: { sensitivePaths: [] } });
+
+  expect(resolveManagerConfig('/project')).toHaveProperty('sensitivePaths', expect.arrayContaining(['.env', '.env.*', '*.key', '*.crt']));
+});
+
+it.each([{ sensitive_paths: [] }, { sensitive_paths: ['private', 'config/credentials.json'] }])('accepts additional sensitive paths in both YAML schemas: $sensitive_paths', ({ sensitive_paths }) => {
+  const input = { manager: { sensitive_paths } };
+  expect(ProjectConfigSchema.parse(input)).toMatchObject(input);
+  expect(GlobalConfigSchema.parse(input)).toMatchObject(input);
+});
+
+it.each([null, 'private', [42], { path: 'private' }].map((sensitive_paths) => ({ sensitive_paths })))('rejects invalid sensitive path lists at both YAML boundaries: $sensitive_paths', ({ sensitive_paths }) => {
+  const input = { manager: { sensitive_paths } };
+  expect(ProjectConfigSchema.safeParse(input).success).toBe(false);
+  expect(GlobalConfigSchema.safeParse(input).success).toBe(false);
 });

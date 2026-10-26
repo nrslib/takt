@@ -878,6 +878,7 @@ describe('runFormalSpecVerification', () => {
     mkdirSync(unrelatedDirectory, { recursive: true, mode: 0o700 });
     const staleTime = new Date(Date.now() - age);
     utimesSync(staleDirectory, staleTime, staleTime);
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(statSync(staleDirectory).mtimeMs + age);
 
     try {
       await runFormalSpecVerification('No formal specification was generated.', directory, { modelCheckTimeoutSeconds: 300 });
@@ -886,6 +887,7 @@ describe('runFormalSpecVerification', () => {
       expect(existsSync(recentDirectory)).toBe(true);
       expect(existsSync(unrelatedDirectory)).toBe(true);
     } finally {
+      nowSpy.mockRestore();
       rmSync(directory, { recursive: true, force: true });
     }
   });
@@ -908,16 +910,21 @@ describe('runFormalSpecVerification', () => {
       const activeWorkspace = spawnedProcesses.at(-1)!.options.cwd!;
       const staleTime = new Date(Date.now() - age);
       utimesSync(activeWorkspace, staleTime, staleTime);
-      await runFormalSpecVerification('No specification.', directory, { modelCheckTimeoutSeconds: 300 });
-      expect(existsSync(join(activeWorkspace, 'specs', 'spec.als'))).toBe(true);
-      mockIsProcessAlive.mockReturnValue(owner !== 'dead');
-      if (owner === 'reused') mockGetProcessIdentity.mockReturnValue({ startTime: 'darwin-start-v2:101' });
-      if (owner === 'unknown') mockGetProcessIdentity.mockReturnValue(undefined);
-      if (owner === 'unavailable') mockIsProcessAlive.mockImplementation(() => { throw new Error('process lookup unavailable'); });
-      await runFormalSpecVerification('No specification.', directory, { modelCheckTimeoutSeconds: 300 });
-      expect(existsSync(join(activeWorkspace, 'specs', 'spec.als'))).toBe(true);
-      observed = true;
-      controller.abort(new Error('test owner stopped'));
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(statSync(activeWorkspace).mtimeMs + age);
+      try {
+        await runFormalSpecVerification('No specification.', directory, { modelCheckTimeoutSeconds: 300 });
+        expect(existsSync(join(activeWorkspace, 'specs', 'spec.als'))).toBe(true);
+        mockIsProcessAlive.mockReturnValue(owner !== 'dead');
+        if (owner === 'reused') mockGetProcessIdentity.mockReturnValue({ startTime: 'darwin-start-v2:101' });
+        if (owner === 'unknown') mockGetProcessIdentity.mockReturnValue(undefined);
+        if (owner === 'unavailable') mockIsProcessAlive.mockImplementation(() => { throw new Error('process lookup unavailable'); });
+        await runFormalSpecVerification('No specification.', directory, { modelCheckTimeoutSeconds: 300 });
+        expect(existsSync(join(activeWorkspace, 'specs', 'spec.als'))).toBe(true);
+        observed = true;
+        controller.abort(new Error('test owner stopped'));
+      } finally {
+        nowSpy.mockRestore();
+      }
     } });
     try {
       await expect(runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300, abortSignal: controller.signal }))

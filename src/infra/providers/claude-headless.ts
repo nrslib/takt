@@ -18,6 +18,7 @@ function toHeadlessOptions(options: ProviderCallOptions): ClaudeHeadlessCallOpti
     : claudeOptions?.skills?.enabled;
   return {
     cwd: options.cwd,
+    callerManagedSession: options.callerManagedSession,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
     internalAgentIsolation: options.internalAgentIsolation,
@@ -33,6 +34,7 @@ function toHeadlessOptions(options: ProviderCallOptions): ClaudeHeadlessCallOpti
     allowedTools: options.allowedTools,
     mcpServers: options.mcpServers,
     preparedMcp: options.preparedMcp,
+    callerManagedMcp: options.callerManagedMcp,
     permissionMode: options.permissionMode,
     bypassPermissions: options.bypassPermissions,
     sandbox: claudeOptions?.sandbox,

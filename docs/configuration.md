@@ -251,7 +251,7 @@ Dynamic parallel and `dynamic_facets` selectors use read-only mode with only `Re
 | `sync_conflict_resolver` | object | `{ auto_approve_tools: false }` | Sync conflict resolver policy |
 | `observability` | object | disabled | Opt-in OpenTelemetry foundation. `enabled` initializes the SDK, `monitor` writes workflow metrics to `.takt/runs/<run>/monitor.json`, `session_log_exporter` writes a shadow session log from spans, and `usage_events_phase` writes phase-level usage events to `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl`. With `enabled: true` and `OTEL_EXPORTER_OTLP_ENDPOINT`, TAKT also sends spans and metrics through OTLP using standard `OTEL_EXPORTER_OTLP_*` environment variables; TAKT does not add an OTLP config key. |
 
-Codex, Claude SDK, claude-headless, and Copilot retry transient HTTP 429 failures with the same provider up to eight times, waiting 1, 2, 4, 8, 16, 30, 30, and 30 seconds. Codex, Claude SDK, claude-headless, Copilot, and OpenCode do not automatically retry a 429 after observing a tool execution event, so workspace operations are not repeated. OpenCode shares its attempt budget with other transient failures and retries up to twice (three attempts total), waiting 250ms and 500ms. A successful retry completes normally. Explicit usage, credit, or spend-cap exhaustion proceeds immediately to `rate_limit_fallback.switch_chain`; persistent throttling proceeds there after the retry budget is consumed. Exhaustion takes precedence when both occur in the same failure. Without a fallback provider, execution aborts as before. There are no retry configuration keys, and existing retry conditions for other failures remain unchanged.
+Codex, Claude SDK, claude-headless, and Copilot retry transient HTTP 429 failures with the same provider up to eight times, waiting 1, 2, 4, 8, 16, 30, 30, and 30 seconds. Codex, Claude SDK, claude-headless, Copilot, and OpenCode do not automatically retry a 429 after observing a tool execution event, so workspace operations are not repeated. OpenCode shares its attempt budget with other transient failures and retries up to twice (three attempts total), waiting 250ms and 500ms. A successful retry completes normally. Explicit usage, credit, or spend-cap exhaustion proceeds immediately to `rate_limit_fallback.switch_chain`; persistent throttling proceeds there after the retry budget is consumed. Exhaustion takes precedence when both occur in the same failure. A Copilot `session.error` reporting monthly quota exhaustion (`statusCode` 402, `errorType: quota`, or `errorCode: quota_exceeded`) is also treated as exhaustion and proceeds immediately to `rate_limit_fallback.switch_chain` without retrying. Without a fallback provider, execution aborts as before. There are no retry configuration keys, and existing retry conditions for other failures remain unchanged.
 
 ## Caccia Review Loop
 
@@ -259,7 +259,7 @@ The optional `caccia` object is accepted in both `~/.takt/config.yaml` and `.tak
 
 ```yaml
 caccia:
-  enabled: false          # Allow the caccia effect to wait for CodeRabbit
+  enabled: false          # Enable post-PR Caccia and CodeRabbit waits in explicit effects
   wait_timeout_ms: 1800000 # Maximum wait for the initial review and each pushed commit review, in milliseconds
   max_iterations: 3       # Maximum fix-and-review iterations
   workflow: caccia        # Workflow used to judge and fix each set of threads
@@ -267,13 +267,15 @@ caccia:
 
 The `caccia` effect waits for CodeRabbit only when `enabled` is `true`; otherwise it skips the review wait and returns `skipped` with `skipReason: config_disabled`. The standalone `takt caccia <PR-number>` command is available regardless of this flag. Defaults are disabled, 1,800,000 milliseconds, 3 iterations, and workflow `caccia`. A project `caccia` block takes precedence over the global block; omitted fields in the selected block receive these defaults. Set `workflow` to a workflow identifier to replace the builtin workflow.
 
+The same `enabled` flag also enables automatic Caccia after successful PR creation or update by worktree tasks with `auto_pr` and Pipeline with `--auto-pr`. Failed publication, missing PRs, goal-managed tasks, and non-GitHub providers do not run post-processing Caccia. It is suppressed when the executed workflow contains a `caccia` system effect, including in a called workflow, or when `merge.auto_start: true` selects a merge workflow containing such an effect. Otherwise Caccia finishes before the linked merge workflow starts. Step names and instruction text do not count as effects.
+
 If the GitHub PR head differs from the clone's starting HEAD, the effect fetches PR details every 2 seconds before execution for up to 60 seconds, including fetch time. Inconsistent head observations within a PR details fetch also trigger a retry within the same deadline. It continues only on the expected SHA; a mismatch at the deadline returns an `error` containing the expected SHA and the last observed SHA. If the last observation was inconsistent, both conflicting SHAs are included. Authentication failures and other fetch errors, PR identity changes, and cancellation fail immediately. This also applies before recording a skip when execution metadata and a push recorder are present, so disabled or unset configuration may still wait for this check. This wait is fixed and is independent of the review setting `wait_timeout_ms`.
 
 `wait_timeout_ms` bounds the initial review wait and each pushed-commit review wait, including a retry request. If a CodeRabbit rate-limit notice gives a retry time before the deadline, Caccia requests one review when that time arrives; a retry time at or beyond the deadline skips Caccia immediately. A review still incomplete at the deadline after a rate-limit notice also skips Caccia. Without a rate-limit notice, an initial timeout skips Caccia and a pushed-commit timeout is an error. The standalone command exits non-zero in either case; the system effect returns failures as `success: false` with `error` for workflow routing.
 
 Effect progress, workflow output, results, and failures inherit the parent task's display mode and task prefix. Silent parents produce no Caccia screen output.
 
-The merge builtins execute Caccia explicitly: `merge-review` runs `review → caccia → wait_ci → evaluation comment`, while `merge-review-fix` and `merge-review-fix-simple` run `review/fix → commit_and_push → caccia → wait_ci → merge_pr`. `success` and `skipped` continue to CI on the returned head. `limit` comments with the unresolved thread count and ends COMPLETE without merging. An effect error comments with `error` and ends ABORT. Push, task post-processing, and Pipeline no longer start Caccia implicitly. With `merge.auto_start: true`, PR publication starts the merge workflow, whose explicit effect owns Caccia.
+The merge builtins execute Caccia explicitly: `merge-review` runs `review → caccia → wait_ci → evaluation comment`, while `merge-review-fix` and `merge-review-fix-simple` run `review/fix → commit_and_push → caccia → wait_ci → merge_pr`. `success` and `skipped` continue to CI on the returned head. `limit` comments with the unresolved thread count and ends COMPLETE without merging. An effect error comments with `error` and ends ABORT. Git push itself does not start Caccia; `takt merge` uses these explicit effects. Automatic post-PR execution follows the exclusion and ordering rules above.
 
 ## Project Configuration
 
@@ -465,9 +467,22 @@ Most config keys can be overridden with an environment variable named `TAKT_` pl
 
 Separately from config-key overrides, `TAKT_NOTIFY_WEBHOOK` sets a Slack Incoming Webhook URL. When it is set, TAKT posts a Slack notification on pipeline completion and when a `takt run` task batch finishes (run summary). Enabled manager goal notifications use the same webhook.
 
-## Manager Notification Settings
+## Manager sensitive read targets
 
-Manager is in preparation and currently unavailable. The settings below are retained for the internal implementation.
+In global `~/.takt/config.yaml` or project `.takt/config.yaml`, `manager.sensitive_paths` adds files and directories that require the manager permission judge even inside assigned repositories:
+
+```yaml
+manager:
+  sensitive_paths:
+    - private
+    - config/credentials.json
+```
+
+Defaults are `.env`, `.env.*`, `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`, `*.key`, `*.pem`, `*.crt`, `*.cer`, `*.p12`, and `*.pfx`. Both configuration lists are added to the defaults; omission or an empty list cannot remove them. A bare name applies at any directory depth. Relative paths with a directory component are relative to each assigned repository; absolute paths and `~/` paths are also supported. A directory entry includes its descendants. Name patterns support a single leading or trailing `*`; this setting does not define allow rules.
+
+With Claude, `Read`, `Glob`, and `Grep` bypass the judge only for readable ordinary targets inside the assignment after path and symlink resolution. Search candidates are checked using paths and metadata, without reading sensitive contents. Simple search patterns with `*`, `**`, and `?` are supported; exclusion, brace expansion, character classes, escapes, or ranges that cannot be established go to the judge. Hidden paths and traversed directories or symlinks are checked conservatively, so an otherwise restrictive search can still require review. Codex built-in tools continue to require review.
+
+## Manager Notification Settings
 
 Use `manager.notifications` in project `.takt/config.yaml` or global
 `~/.takt/config.yaml` to enable or disable each kind of goal notification.
@@ -478,7 +493,7 @@ Use `manager.notifications` in project `.takt/config.yaml` or global
 | `awaiting_merge` | A goal awaits a human merge | `true` |
 | `completed` | A goal is completed | `true` |
 | `progress` | A work unit is integrated | `true` |
-| `blocked` | The manager reports a blocker through the notification tool | `true` |
+| `blocked` | The manager reports a blocker through the notification tool, or event handling or TUI conversation fails | `true` |
 | `custom` | The manager reports another event through the notification tool | `true` |
 
 ```yaml
@@ -497,15 +512,9 @@ Each kind resolves independently in this order: project setting → global setti
 `question: true` overrides global `question: false`; omitting that key in the
 project uses the global value. Settings for other kinds are unaffected.
 
-Setting a kind to `false` disables saving notifications of that kind and sending
-them to Slack. Saving and answering questions, checking work dependencies,
-integrating work units, and updating goal state continue to operate.
-Pending questions remain visible in the TUI even when their notifications are disabled.
-Without `TAKT_NOTIFY_WEBHOOK`, Slack delivery is skipped and enabled saved
-notifications appear when the TUI next opens or receives a user message.
-Slack delivery failures do not stop manager processing; diagnostics are saved and
-displayed in the TUI. `manager.notifications` does not affect existing run or
-pipeline notifications.
+Setting a kind to `false` disables saving, TUI notification display and Slack delivery for that kind. Answering questions, integrating results and updating goals continue, and pending questions remain visible.
+
+Set `TAKT_NOTIFY_WEBHOOK` to deliver notifications to Slack. Enabled saved notifications refresh while the TUI is open. Failed manager event handling or TUI conversation sends `blocked`, including repeated failures. No failure-state file is created. Slack delivery failures are logged and manager work continues. These settings do not affect ordinary run or pipeline notifications.
 
 ## API Key Configuration
 
@@ -827,6 +836,8 @@ provider:
         profile: router
       review-completion-judge:
         profile: router
+      manager-permission-judge:
+        profile: router
 
   auto_routing:
     strategy: balanced
@@ -987,7 +998,7 @@ defaults
   < steps
 ```
 
-The internal `selector`, `assistant`, `loop-judge`, and `review-completion-judge` agents resolve through a separate ladder. `selector` chooses dynamic work, `assistant` backs interactive sessions, `loop-judge` evaluates loop monitors, and `review-completion-judge` decides whether an opted-in reviewer needs another pass. Every seat is optional; an unassigned seat uses the ordinary default resolution.
+The internal `selector`, `assistant`, `loop-judge`, `review-completion-judge`, and `manager-permission-judge` agents resolve through a separate ladder. `selector` chooses dynamic work, `assistant` backs interactive sessions, `loop-judge` evaluates loop monitors, and `review-completion-judge` decides whether an opted-in reviewer needs another pass. `manager-permission-judge` reviews tool use before execution in manager conversations with the claude (claude-sdk) or codex provider. Set its provider and model through `provider.targets.internal_agents.manager-permission-judge` in `runtime.yaml`, using `profile` or `ladder`; `pool` is not allowed. Every seat is optional; an unassigned seat uses the ordinary default resolution. However, an unassigned `manager-permission-judge` seat uses the same provider, model, and provider options as the manager.
 
 ```text
 defaults
@@ -1086,7 +1097,7 @@ mcp:
 | `mcp.targets.personas` | `{ <persona>: { servers?, exclude? } }` | Per-persona additions/exclusions. |
 | `mcp.targets.tags` | `{ <tag>: { servers?, exclude? } }` | Per-tag additions/exclusions. |
 | `mcp.targets.steps` | `{ <leaf-workflow>/<step>: { servers?, exclude? } }` | Per-step additions/exclusions. Control nodes (`workflow_call` etc.) are not resolution targets. |
-| `mcp.targets.internal_agents` | `{ selector: { exclude? } }` | Exclusions applied to both internal agents (`selector` and `assistant`). Only `selector.exclude` is accepted. |
+| `mcp.targets.internal_agents` | `{ selector: { exclude? } }` | Exclusions applied to internal agents (`selector`, `assistant`, and `manager`). Only `selector.exclude` is accepted. Manager also matches `mcp.targets.personas.manager`; its own TAKT MCP server is always added. |
 
 Server entries:
 

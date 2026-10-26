@@ -3,6 +3,7 @@ import type { PrStatus, PrStatusFetchOptions } from '../../core/workflow/system/
 import { PrCiFailureSchema, PrCiRerunSchema,
   type PrCiFailure, type PrCiRerun, type PrCiRerunResult } from '../../core/workflow/system/pr-ci.js';
 import { runPrCommand } from './pr-command.js';
+import { assertGitHubPullRequestTarget, type GitHubPullRequestTarget } from './pull-request-target.js';
 
 const FAILED_LOG_MAX_BUFFER = 64 * 1024 * 1024;
 const MAX_FAILED_LOG_CHARS = 200_000;
@@ -33,9 +34,10 @@ export function actionsReference(value: string) {
   return { id: Number(match[3]), repository: `${url.hostname}/${match[1]}/${match[2]}` };
 }
 
-async function readRun(id: number, cwd: string, options?: PrStatusFetchOptions, url?: string): Promise<CiRun> {
+async function readRun(id: number, cwd: string, options?: PrStatusFetchOptions, url?: string, target?: GitHubPullRequestTarget): Promise<CiRun> {
   const run = RunSchema.parse(JSON.parse(await runPrCommand([
     'run', 'view', String(id), '--json', 'databaseId,url,headSha,attempt,status,conclusion,jobs',
+    ...(target === undefined ? [] : ['--repo', `${target.hostname}/${target.owner}/${target.repo}`]),
   ], cwd, options)));
   if (run.databaseId !== id || actionsReference(run.url).id !== id) throw new Error('Actions run ID does not match the requested run');
   if (url !== undefined && actionsReference(run.url).repository !== actionsReference(url).repository) {
@@ -50,6 +52,7 @@ function errorText(error: unknown): string {
 
 export async function collectPrCiFailure(
   status: PrStatus, headSha: string, cwd: string, options?: PrStatusFetchOptions,
+  target?: GitHubPullRequestTarget,
 ): Promise<PrCiFailure> {
   const result: PrCiFailure = { number: status.number, headSha, complete: false, checks: [], unavailable: [] };
   if (status.headSha !== headSha || !status.ci.finished || status.ci.passed) {
@@ -66,7 +69,7 @@ export async function collectPrCiFailure(
       const key = `${reference.repository}/${reference.id}`;
       let pending = runs.get(key);
       if (!pending) {
-        pending = readRun(reference.id, cwd, options, check.url);
+        pending = readRun(reference.id, cwd, options, check.url, target);
         runs.set(key, pending);
       }
       const run = await pending;
@@ -89,6 +92,7 @@ export async function collectPrCiFailure(
             pendingLog = runPrCommand([
               'run', 'view', String(run.databaseId),
               '--attempt', String(run.attempt), '--job', String(job.databaseId), '--log-failed',
+              ...(target === undefined ? [] : ['--repo', `${target.hostname}/${target.owner}/${target.repo}`]),
             ], cwd, options, FAILED_LOG_MAX_BUFFER).then((text) => {
               if (text.trim().length === 0) throw new Error(`Failed job ${job.databaseId} has no log content`);
               return text.length > MAX_FAILED_LOG_CHARS
@@ -120,7 +124,7 @@ export async function collectPrCiFailure(
   return result;
 }
 
-export async function rerunPrCi(failure: PrCiFailure, cwd: string, options?: PrStatusFetchOptions): Promise<PrCiRerunResult> {
+export async function rerunPrCi(failure: PrCiFailure, cwd: string, options?: PrStatusFetchOptions, pullRequest?: GitHubPullRequestTarget): Promise<PrCiRerunResult> {
   const evidence = PrCiFailureSchema.parse(failure);
   const runs = [...new Map(evidence.checks.map(({ run }) => [run.url, {
     id: run.id, attempt: run.attempt, url: run.url,
@@ -133,22 +137,26 @@ export async function rerunPrCi(failure: PrCiFailure, cwd: string, options?: PrS
     }
     // Validate every target before starting any side effect.
     for (const target of runs) {
-      const current = await readRun(target.id, cwd, options, target.url);
+      const current = await readRun(target.id, cwd, options, target.url, pullRequest);
       if (current.headSha !== evidence.headSha || current.attempt !== target.attempt
         || current.status !== 'completed' || ['success', 'neutral', 'skipped'].includes(current.conclusion ?? '')) {
         throw new Error('Actions run changed since investigation');
       }
     }
     for (const target of runs) {
-      const current = PrHeadSchema.parse(JSON.parse(await runPrCommand([
-        'pr', 'view', String(evidence.number), '--json', 'number,headRefOid',
-      ], cwd, options)));
+      const output = await runPrCommand([
+        'pr', 'view', pullRequest?.url ?? String(evidence.number), '--json',
+        pullRequest === undefined ? 'number,headRefOid' : 'number,headRefOid,url',
+      ], cwd, options);
+      if (pullRequest !== undefined) assertGitHubPullRequestTarget(JSON.parse(output).url, pullRequest);
+      const current = PrHeadSchema.parse(JSON.parse(output));
       if (current.number !== evidence.number) throw new Error('PR status response does not match the requested PR');
       if (current.headRefOid !== evidence.headSha) {
         return { ...result, headChanged: true,
           error: `PR HEAD changed from ${evidence.headSha} to ${current.headRefOid} before CI rerun` };
       }
-      await runPrCommand(['run', 'rerun', String(target.id), '--failed'], cwd, options);
+      await runPrCommand(['run', 'rerun', String(target.id), '--failed',
+        ...(pullRequest === undefined ? [] : ['--repo', `${pullRequest.hostname}/${pullRequest.owner}/${pullRequest.repo}`])], cwd, options);
     }
     return { ...result, success: true, failed: false };
   } catch (error) {
@@ -160,6 +168,7 @@ export async function rerunPrCi(failure: PrCiFailure, cwd: string, options?: PrS
 export async function readCiRerunStatus(
   status: PrStatus, value: PrCiRerun, cwd: string, options?: PrStatusFetchOptions,
   supersededRuns: ReadonlyMap<number, string> = new Map(),
+  pullRequest?: GitHubPullRequestTarget,
 ): Promise<PrStatus['ci']> {
   const rerun = PrCiRerunSchema.parse(value);
   if (rerun.number !== status.number) throw new Error('CI rerun target no longer matches the PR');
@@ -179,7 +188,7 @@ export async function readCiRerunStatus(
       if (reference?.id === target.id && supersededRuns.get(target.id) === reference.repository) continue;
     }
     pendingTargets++;
-    const run = await readRun(target.id, cwd, options, target.url);
+    const run = await readRun(target.id, cwd, options, target.url, pullRequest);
     if (run.headSha !== status.headSha) throw new Error('CI rerun HEAD does not match the PR');
     const completed = run.attempt > target.attempt && run.status === 'completed';
     const succeeded = completed && ['success', 'neutral', 'skipped'].includes(run.conclusion ?? '');
