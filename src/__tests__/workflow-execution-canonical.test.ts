@@ -66,6 +66,7 @@ vi.mock('../features/tasks/execute/workflowExecutionBundle.js', () => {
       if (prepared === undefined) throw new Error('Workflow execution bundle was not prepared');
       return {
         rootWorkflow: prepared.rootWorkflow,
+        workflows: [prepared.rootWorkflow],
         workflowCallResolver: prepared.workflowCallResolver,
         resourceRoot: '/tmp/workflow-bundle',
       };

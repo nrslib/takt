@@ -68,6 +68,7 @@ export class TaskRunner {
 
   startPrMergeTask(input: {
     prNumber: number; headBranch: string; baseBranch: string; headSha: string;
+    prUrl?: string;
     headRepositoryUrl: string; headRepositoryPushUrls: readonly string[];
     workflow: string; method: MergeMethod; worktreePath: string;
     threatCheckMaxDiffBytes: number;

@@ -446,6 +446,7 @@ export const lightIntegrationTestFiles = Object.freeze([
 ]);
 
 export const heavyParallelIntegrationTestFiles = Object.freeze([
+  'src/__tests__/caccia-published-pr.integration.test.ts',
   ...legacyParallelIntegrationTestFiles,
   ...auditedIntegrationBoundaryTestFiles,
   // Measured slow suites dominate the serial light gate; CI shards this gate.

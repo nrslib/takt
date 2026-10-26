@@ -1876,7 +1876,7 @@ describe('executeAndCompleteTask', () => {
     );
   });
 
-  it('should pass shouldPublishBranchToOrigin from resolveTaskExecution into postExecutionFlow', async () => {
+  it.each([false, true])('passes publication settings and the executed workflow Caccia decision to post-processing (%s)', async (workflowHasCaccia) => {
     const task = createTask('task-publish-origin');
     mockResolveTaskExecution.mockResolvedValue({
       execCwd: '/worktree/clone',
@@ -1895,7 +1895,7 @@ describe('executeAndCompleteTask', () => {
       retryNote: undefined,
       issueNumber: undefined,
     });
-    mockExecuteWorkflow.mockResolvedValue({ success: true });
+    mockExecuteWorkflow.mockResolvedValue({ success: true, workflowHasCaccia });
     mockPostExecutionFlow.mockResolvedValue({});
 
     const result = await executeAndCompleteTaskWithoutWorkflow(task, createTaskRunnerMock() as never, '/project');
@@ -1907,6 +1907,7 @@ describe('executeAndCompleteTask', () => {
         shouldPublishBranchToOrigin: true,
         branch: 'takt/task-publish-origin',
         execCwd: '/worktree/clone',
+        workflowHasCaccia,
       }),
     );
   });

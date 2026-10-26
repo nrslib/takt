@@ -51,12 +51,19 @@ vi.mock('../shared/utils/private-file.js', () => ({
   writePrivateFile: (...args: unknown[]) => mockWritePrivateFile(...args),
 }));
 
-vi.mock('../features/caccia/index.js', () => ({
+vi.mock('../features/caccia/index.js', async (original) => ({
+  ...await original<typeof import('../features/caccia/index.js')>(),
   runCaccia: (...args: unknown[]) => mockRunCaccia(...args),
 }));
 
-vi.mock('../features/merge/index.js', () => ({
+vi.mock('../features/merge/index.js', async (original) => ({
+  ...await original<typeof import('../features/merge/index.js')>(),
   runLinkedMergeSafely: (...args: unknown[]) => mockRunLinkedMergeSafely(...args),
+}));
+
+vi.mock('../infra/config/index.js', async (original) => ({
+  ...await original<typeof import('../infra/config/index.js')>(),
+  resolveConfigValue: (_cwd: string, key: string) => key === 'caccia' ? { enabled: false } : undefined,
 }));
 
 vi.mock('../infra/task/index.js', () => ({
@@ -116,6 +123,7 @@ const baseOptions = {
   shouldCreatePr: true,
   draftPr: false,
   workflowIdentifier: 'default',
+  workflowHasCaccia: false,
 };
 
 const mockInfo = vi.mocked(info);

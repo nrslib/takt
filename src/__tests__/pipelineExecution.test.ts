@@ -36,11 +36,13 @@ function createDeferred() {
   return { promise, resolve };
 }
 
-vi.mock('../features/caccia/index.js', () => ({
+vi.mock('../features/caccia/index.js', async (original) => ({
+  ...await original<typeof import('../features/caccia/index.js')>(),
   runCaccia: (...args: unknown[]) => Reflect.apply(mockRunCaccia, undefined, args),
 }));
 
-vi.mock('../features/merge/index.js', () => ({
+vi.mock('../features/merge/index.js', async (original) => ({
+  ...await original<typeof import('../features/merge/index.js')>(),
   runLinkedMergeSafely: (...args: unknown[]) => Reflect.apply(mockRunLinkedMergeSafely, undefined, args),
 }));
 
@@ -77,8 +79,12 @@ vi.mock('../infra/task/git.js', async (importOriginal) => ({
 const mockExecuteTask = vi.fn();
 const mockConfirmAndCreateWorktree = vi.fn();
 vi.mock('../features/tasks/index.js', () => ({
-  executeTask: mockExecuteTask,
   confirmAndCreateWorktree: mockConfirmAndCreateWorktree,
+}));
+vi.mock('../features/tasks/execute/taskExecution.js', () => ({
+  executeTaskWithResult: async (...args: unknown[]) => ({
+    success: await mockExecuteTask(...args), workflowHasCaccia: false,
+  }),
 }));
 
 const mockResolveConfigValues = vi.fn();
@@ -156,7 +162,7 @@ describe('executePipeline', () => {
     mockExecFileSync.mockReturnValue('abc1234\n');
     mockGetCurrentBranch.mockReturnValue('current/branch');
     mockResolveConfigValues.mockReturnValue({ pipeline: undefined });
-    mockResolveConfigValue.mockReturnValue(undefined);
+    mockResolveConfigValue.mockImplementation((_cwd: string, key: string) => key === 'caccia' ? { enabled: false } : undefined);
     mockCreateLoopAnalysisPublicationCoordinator.mockReturnValue(mockPublicationCoordinator);
     mockRunCaccia.mockReset();
     mockRunLinkedMergeSafely.mockReset();

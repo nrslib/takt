@@ -1,14 +1,66 @@
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { WorkflowStepRawSchema } from '../core/models/index.js';
-import type { WorkflowEffect } from '../core/models/types.js';
+import type { WorkflowEffect, WorkflowStep } from '../core/models/types.js';
+import { hasCacciaEffect } from '../core/workflow/workflow-step-traversal.js';
 import { validateSystemEffectPayload } from '../core/workflow/system/system-step-effect-runner.js';
 import { normalizeWorkflowEffects } from '../infra/config/loaders/workflowSystemStepNormalizer.js';
+import { parseGitHubPullRequestTarget } from '../infra/github/pull-request-target.js';
+
+describe('Published GitHub PR target', () => {
+  it.each(['github.com', 'ghe.example.test'])('keeps the host, repository and PR number for %s', (hostname) => {
+    const url = `https://${hostname}/acme/target/pull/123`;
+    expect(parseGitHubPullRequestTarget(url)).toEqual({ hostname, owner: 'acme', repo: 'target', number: 123, url });
+  });
+});
 
 const step = {
   name: 'review_external', kind: 'system',
   rules: [{ condition: 'when(true)', next: 'COMPLETE' }],
 };
+
+describe('Caccia effect detection', () => {
+  const effectStep: WorkflowStep = {
+    name: 'review', kind: 'system', personaDisplayName: 'system', instruction: '',
+    effects: [{ type: 'caccia', pr: 123 }],
+  };
+
+  it('detects a system effect independently of its step name', () => {
+    expect(hasCacciaEffect([effectStep])).toBe(true);
+    expect(hasCacciaEffect([{
+      ...effectStep, effects: [{ type: 'comment_pr' as const, pr: 123, body: 'Review' }, { type: 'caccia' as const, pr: 123 }],
+    }])).toBe(true);
+  });
+
+  it('detects a system effect nested in static parallel steps', () => {
+    expect(hasCacciaEffect([{
+      name: 'parallel', personaDisplayName: 'parallel', instruction: '',
+      parallel: [{ name: 'nested', personaDisplayName: 'parallel', instruction: '', parallel: [effectStep] }],
+    }])).toBe(true);
+  });
+
+  it('does not infer effects from agent names or instructions', () => {
+    expect(hasCacciaEffect([{ name: 'caccia', personaDisplayName: 'coder', instruction: 'type: caccia' }])).toBe(false);
+    expect(hasCacciaEffect([])).toBe(false);
+  });
+
+  it('does not treat other system effects or a wait-only step as Caccia', () => {
+    expect(hasCacciaEffect([
+      { ...effectStep, effects: [{ type: 'comment_pr' as const, pr: 123, body: 'type: caccia' }] },
+      { ...effectStep, effects: undefined, wait: { until: 'when(true)', intervalMs: 1, maxRetries: 1, onTimeout: 'ABORT' } },
+    ])).toBe(false);
+  });
+
+  it('visits both dynamic parallel sets without treating instructions as effects', () => {
+    expect(hasCacciaEffect([{
+      name: 'parallel', personaDisplayName: 'parallel', instruction: '', parallel: {
+        kind: 'dynamic', selection: { mode: 'replace' },
+        fixed: [{ name: 'fixed', personaDisplayName: 'coder', instruction: 'type: caccia' }],
+        pool: [{ name: 'caccia', personaDisplayName: 'coder', instruction: 'type: caccia', description: 'Review' }],
+      },
+    }])).toBe(false);
+  });
+});
 
 describe('Caccia system effect input', () => {
   it.each(['"{context:identify.pr.number}"', "'{context:identify.pr.number}'"])(

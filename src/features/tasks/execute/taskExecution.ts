@@ -334,6 +334,7 @@ export async function executeTaskAndCompleteWithDetails(
         ? resolveTaskIssue(issueNumber, projectRootCwd)
         : resolveTaskIssue(issueNumber, projectRootCwd, gitProvider);
       const postResult = await postExecutionFlow({
+        workflowHasCaccia: taskRunResult.workflowHasCaccia,
         goalId: task.data?.goal_id,
         execCwd,
         projectCwd: projectRootCwd,

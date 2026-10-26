@@ -1,19 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mockExpandPipelineTemplate = vi.fn();
-const mockExecuteTask = vi.fn();
+const mockExecuteTaskWithResult = vi.fn();
 const mockGetGitProvider = vi.fn();
 const mockStatusStart = vi.fn();
 const mockStatusStop = vi.fn();
 
-vi.mock('../features/pipeline/templateExpander.js', () => ({
-  expandPipelineTemplate: (...args: unknown[]) =>
-    mockExpandPipelineTemplate(...(args as [string, Record<string, string>])),
+vi.mock('../features/tasks/index.js', () => ({
+  confirmAndCreateWorktree: vi.fn(),
 }));
 
-vi.mock('../features/tasks/index.js', () => ({
-  executeTask: (...args: unknown[]) => mockExecuteTask(...args),
-  confirmAndCreateWorktree: vi.fn(),
+vi.mock('../features/tasks/execute/taskExecution.js', () => ({
+  executeTaskWithResult: (...args: unknown[]) => mockExecuteTaskWithResult(...args),
 }));
 
 vi.mock('../infra/git/index.js', async (importOriginal) => ({
@@ -41,9 +38,7 @@ describe('buildCommitMessage', () => {
     vi.clearAllMocks();
   });
 
-  it('should delegate commit message template expansion to the shared pipeline helper', () => {
-    mockExpandPipelineTemplate.mockReturnValueOnce('expanded commit message');
-
+  it('formats the configured commit message with the issue title and number', () => {
     const result = buildCommitMessage(
       { commitMessageTemplate: 'feat: {title} (#{issue})' },
       {
@@ -56,18 +51,14 @@ describe('buildCommitMessage', () => {
       undefined,
     );
 
-    expect(result).toBe('expanded commit message');
-    expect(mockExpandPipelineTemplate).toHaveBeenCalledWith('feat: {title} (#{issue})', {
-      title: 'Fix pipeline',
-      issue: '42',
-    });
+    expect(result).toBe('feat: Fix pipeline (#42)');
   });
 });
 
 describe('runWorkflow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockExecuteTask.mockResolvedValue(true);
+    mockExecuteTaskWithResult.mockResolvedValue({ success: true, workflowHasCaccia: false });
     mockGetGitProvider.mockReturnValue({ name: 'pipeline-provider' });
   });
 
@@ -84,7 +75,7 @@ describe('runWorkflow', () => {
       execCwd: '/worktree', isWorktree: true, branch: 'feature/images', baseBranch: 'main', prContext,
     }, undefined, taskSpec);
 
-    expect(mockExecuteTask).toHaveBeenCalledWith(expect.objectContaining({
+    expect(mockExecuteTaskWithResult).toHaveBeenCalledWith(expect.objectContaining({
       task: taskSpec.taskPrompt, taskSpec, reportDirName: taskSpec.runSlug, cwd: '/worktree', projectCwd: '/project',
       prContext, agentOverrides: { provider: 'mock', model: 'test-model' },
     }));
@@ -112,8 +103,8 @@ describe('runWorkflow', () => {
       loopAnalysisPublication,
     );
 
-    expect(result).toBe(true);
-    expect(mockExecuteTask).toHaveBeenCalledWith(expect.objectContaining({
+    expect(result).toMatchObject({ success: true, workflowHasCaccia: false });
+    expect(mockExecuteTaskWithResult).toHaveBeenCalledWith(expect.objectContaining({
       loopAnalysisPublication,
     }));
   });
@@ -123,12 +114,28 @@ describe('runWorkflow', () => {
     await runWorkflow('/project', 'default', 'Pipeline task', '/worktree/clone', display, {
       execCwd: '/worktree/clone', isWorktree: true, branch: 'takt/pipeline', baseBranch: 'main',
     });
-    expect(mockExecuteTask).toHaveBeenCalledWith(expect.objectContaining({
+    expect(mockExecuteTaskWithResult).toHaveBeenCalledWith(expect.objectContaining({
       outputMode, taskPrefix: display.taskPrefix, taskDisplayLabel: display.taskDisplayLabel, taskColorIndex: display.taskColorIndex,
     }));
     if (outputMode === 'silent') {
       expect(mockStatusStart).not.toHaveBeenCalled();
       expect(mockStatusStop).not.toHaveBeenCalled();
     }
+  });
+
+  it.each([false, true])('retains the executed workflow Caccia decision in its result (%s)', async (workflowHasCaccia) => {
+    mockExecuteTaskWithResult.mockResolvedValue({ success: true, workflowHasCaccia });
+    const result = await runWorkflow('/project', 'default', 'Pipeline task', '/clone', {}, {
+      execCwd: '/clone', isWorktree: true, branch: 'takt/pipeline', baseBranch: 'main',
+    });
+    expect(result).toMatchObject({ success: true, workflowHasCaccia });
+  });
+
+  it('retains workflow failure rather than treating its result object as success', async () => {
+    mockExecuteTaskWithResult.mockResolvedValue({ success: false, workflowHasCaccia: false });
+    const result = await runWorkflow('/project', 'default', 'Pipeline task', '/clone', {}, {
+      execCwd: '/clone', isWorktree: true, branch: 'takt/pipeline', baseBranch: 'main',
+    });
+    expect(result).toMatchObject({ success: false });
   });
 });

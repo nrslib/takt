@@ -10,11 +10,56 @@
 
 ### Changed
 
-- 日英の`merge-review-fix`と`merge-review-fix-simple`でCI失敗時にログ・累積差分・関連コードを調査するようにしました。フレークとmainでも落ちる欠陥を含め、レビュー付きの根本修正を最大2周行います。外部要因を証拠で判断した場合は修正2周後も独立した予算で1回再実行し、新しいattemptと既存マージ条件を確認します。証拠不足や回復上限では回数・最後の失敗チェック・調査要点をコメントして失敗終了します。
+- worktree の `auto_pr` タスクと Pipeline の `--auto-pr` で PR を正常に作成・更新した後、`caccia.enabled` が true なら Caccia を自動実行するように戻しました。実行した workflow または自動で始まる merge workflow に Caccia effect が明示されている場合は、後処理での Caccia を抑止します。そうでなければ merge 開始前に Caccia を完了します。Git push 自体では Caccia を開始しません。
+
+## [0.72.0] - 2026-10-23
+
+### Added
+
+- `takt merge` で、PR 番号の代わりに選び方を文章で渡せるようにしました(例: `takt merge "プロンプト変更以外ぜんぶ"`)(#1809)。数字だけの引数は従来どおり PR 番号として扱います。CLI の絞り込みまたは `merge.where` と、下書き・fork の除外を先に適用し、残った open PR ごとに、AI がタイトル、本文、ラベル、ブランチ名、変更ファイルのパスから判定します。選んだ PR を理由付きで、除外した PR とあわせて表示し、選んだ PR だけを開始します。判定の欠落や不正、選定用データの取得不足があると、PR の workflow を始める前に失敗します。
+- `takt merge` で GitLab の MR を扱えるようにしました。番号指定と一括選択の両方に対応します。GitLab では Caccia をスキップし、マージ方法の指定と head の制約には対応していません。
+- 対話モードの `takt list` に **Delete selected…** を追加しました (#1855)。実行中でないタスクをチェックボックスで選び、1 回の確認(既定は No)で削除します。後片付けは単体の Delete と同じです。1 件が失敗しても残りは続行し、結果を `Deleted M of N tasks.` と表示します。削除中の pending タスクを `takt run` は取得しません。
+- アシスタントの処理中、TUI の状態行に、いま何をしているか(思考中、推論中、Bash のコマンドやファイルパスなど入力の要約付きのツール名、ストリーム中の応答)と、そのターンの経過時間を表示するようにしました (#1832)。幅の狭い端末では中断のヒントを短くします。
+- DeepSeek Harness の plugin を npm パッケージから読み込めるようにしました。`provider_options.deepseek_harness.plugins` に文字列で `npm:<package-spec>` を書くか、オブジェクトの `source` に指定します(`id` と `config` は省略可)。パッケージは lifecycle scripts を実行せずに一時 runtime へインストールし、runtime の終了時に削除します。npm の source では `ref` と認証情報を含む URL を拒否します。信頼の規則は Git の plugin と同じです。@eiei114 さん、ありがとうございます。
+- workflow の step で `input_reports`(`from_step`、`reports`: 名前の一覧または `all`、`optional_if_unrun`)を宣言すると、同じ workflow の別 step の完了した実行からレポートを受け取れるようにしました。選んだレポートは `{report:name}` で参照でき、プレースホルダーのないものは Phase 1 の指示に追記します。レポートが見つからない、不完全、または特定できない場合は step を失敗させます。agent step、`workflow_call`、parallel の親と sub-step で使えます。
+
+- 静的な parallel の sub-step に `description` を書けるようにし、動的プールの候補には選ぶ基準を書く任意の `selection_hint` を追加しました。selector は両方を受け取ります。ビルトインの全 step に役目を説明する `description` を書き、セキュリティレビュアーの選択条件は `selection_hint` に移しました。
+
+### Changed
+
+- `runtime.yaml` の profile(`provider.profiles`)で `model` を省略できるようにしました (#1856)。省略した場合は provider の CLI の既定モデルを使い、その step には優先度の低い model の設定を適用しません。OpenCode の profile では従来どおり `model` が必須です。
+- BREAKING: Caccia は workflow の `caccia` effect を明示したときだけ実行するようにしました (#1804)。push、タスク後の PR 作成・更新、Pipeline モードでは起動しなくなりました。`caccia.enabled` は effect が CodeRabbit を待つかどうかだけを決め、false または未設定なら effect はスキップされます。ビルトインの `merge-review`、`merge-review-fix`、`merge-review-fix-simple` は push のあとにこの effect を呼び、Caccia が返した head で CI を確認します。自動の CodeRabbit ループに頼っていた自作 workflow には `caccia` step を追加してください。実行前に、GitHub 上の PR の head が push したコミットに一致するまで最大 60 秒待ちます。
+- `merge-review-fix` と `merge-review-fix-simple` で、CI が失敗したときにコメントして止まるのではなく回復を試みるようにしました。読み取り専用の step が失敗したチェック、ジョブのログ、PR の累積差分、関連コードを調べます。フレークや main でも落ちる失敗を含むリポジトリの欠陥には、レビュー付きの根本修正を最大 2 周行います。証拠のある外部要因なら、失敗したジョブを 1 回だけ再実行します。証拠が足りない場合や回復の上限に達した場合は、回数、最後に失敗したチェック、調査の要点をコメントし、タスクを失敗として終えます(これまではコメント後に完了扱いでした)。workflow の部品として、system input の `pr_ci_failure`、effect の `rerun_ci`、`pr_status.rerun_from`、`comment_pr` の `body_format: plain_text` を追加しました。
+- アシスタントの会話の `/requeue` と `/retry` で、AI がタスクや開始位置を決められないときや選択に失敗したときは、通知して止まるのではなく一覧から選べるようにしました (#1863)。AI はまず会話で合意した内容を要約し、その要約、インラインの指示、workflow/step の完全なパスを使って選ぶので、同名の step も区別できます。AI の回答が不正なら 1 回だけ訂正を求め、それでも不正なら手動のメニューに理由を表示します。`/requeue` では、停止位置が保存されていない上限超過のタスクでも開始位置を選べます。
+- `/tell` と MCP の `takt_tell_run` で、実行中のマージタスクを対象にできるようにしました。requeue や retry のあとに `takt run` や `takt watch` で動いているマージタスクも含みます。
+- worktree の clone で動く step も、同じ run の中では、persona・provider・model が同じ保存済みセッションを再開するようにしました(worktree を使わない場合は以前から再開していました)。ほかの clone やプロジェクトルートとはセッションを共有せず、retry、requeue、instruct では従来どおり各 persona を新しいセッションで始めます。
+- `/verify` で Alloy の `run`/`check` を並列に実行するようにしました。既定は 2 並列です (#1852)。並列数と JVM のメモリは `TAKT_ALLOY_CONCURRENCY`、`TAKT_ALLOY_HEAP`(既定 `4g`)、`TAKT_ALLOY_STACK`(既定 `64m`)で変えられます。タイムアウトや失敗したコマンドがあっても残りを止めません。検証が通らなかったときは `.takt/runs/verify-*/` の仕様とログを残し、そのパスを表示します。
+- Codex、Claude SDK、claude-headless、OpenCode、Copilot で、一時的な HTTP 429 と利用量・クレジット・上限の使い切り通知を区別し、一時的なものは同じ provider で再試行するようにしました (#1816)。Codex、Claude SDK、claude-headless、Copilot は 1 秒から 30 秒のバックオフで最大 8 回、OpenCode はほかの一時障害と予算を共有して最大 2 回再試行します。その試行でツールが動いたあとの 429 はどの provider も再試行しません。使い切り通知は再試行せず、`rate_limit_fallback.switch_chain` に進むか、フォールバックがなければ中止します。
+- 更新通知を stderr の 1 行(`takt: Update available X → Y (npm install --global takt)`)にしました。`--no-update-notifier` や `NO_UPDATE_NOTIFIER` で従来どおり無効にできます。
+- ビルトインのレビュー・修正 workflow で、エージェントにレポートディレクトリを探させるのをやめ、`input_reports` で必要な step にレポートを渡すようにしました。`review-fix-*` と `simple*` の workflow では、レビューの裁定で修正不要となった場合、レビューをもう一周せずに最終確認へ進みます。`simple`、`simple-mini`、`simple-core` をもとにした workflow では、修正後のレビューを別の follow-up review step で行います。
+- step のレポート出力に失敗した場合、あとの step がそのレポートを読むなら、続行して古いレポートを読ませるのではなく、その step を失敗させるようにしました。parallel の sub-step も同様です。
+- ビルトインのセキュリティレビュアーを、ドキュメントのみ・コメントのみ・テストのみ・小さな修正という理由だけではスキップしないようにしました。セキュリティ境界に影響しうる変更や、影響がないと言い切れないほど大きい変更では選ばれます。
+- ビルトインのレビュー・裁定・セキュリティのプロンプトで、確認できない前提(根拠なく外部から来ると仮定した入力、同時に動くと仮定した操作、コードが生まないデータ量など)の上でしか成り立たない指摘を出さず、受け入れないようにしました。新しい `process-deviation` policy により、supervise、final-gate、裁定、fix-plan、fix-verifier の step は、取り消せず成果物にも何も残っていない過去の作業指示からの逸脱を理由に失敗させません。
+- ビルトインの最終確認で、受け入れ条件や既存の契約が求めていない外部確認を理由に BLOCKED で止めないようにしました。未確認の項目は根拠として記録し、通常の判定を続けます。
+- ビルトインのフロントエンドレビューで、画面(Web ではページ)を状態と操作判断を持つ最上位の Mediator として扱うようにしました。フレームワーク標準の状態保持や採用済みの状態管理ライブラリは許容し、画面の状態を独自の層に移してページを委譲だけにする構成は REJECT します。
 
 ### Fixed
 
-- Codex、Claude SDK、claude-headless、OpenCode、Copilotで一時的なHTTP 429を使い切り通知と区別するようにしました。OpenCodeは通常の一時障害と試行予算を共有し、250ms・500ms待機して最大2回再試行します（合計3試行）。他の4 providerは同じproviderで最大8回再試行し、1秒から30秒を上限とする指数バックオフで待機します。ツール実行イベントを観測した試行ではCodexを含めて429後に自動再試行せず、同一入力の再実行を防ぎます。使い切り通知は再試行せず、既存のフォールバックまたは停止処理へ直ちに進みます。ツールイベントを観測せずに429が続く場合は再試行予算を消費してから同じ処理へ進みます。使い切りと429が同時に通知された場合は使い切りを優先します。再試行の設定項目は追加していません。
+- 同じセッションを引き継いだエージェントが、レポートや判定のフェーズの制限(ファイルを読まないなど)を次の作業フェーズにも持ち越してしまう問題を修正しました。システムプロンプトで workflow・step・フェーズの仕組みと、この run の workflow の木(現在の step 付き)を伝え、各フェーズの指示の先頭で、担当している step とフェーズ、そのフェーズでしてよいこと・しないことを伝えます。判定、レポートの書き直し、parallel の sub-step、team の part、loop monitor、selector にも同じ情報を渡します。
+- `takt merge` で、同じ HEAD の古い GitHub Actions の run が並行実行制御でキャンセルされ、同じ workflow の後続の run が成功した場合に、CI 失敗として扱わないようにしました。リポジトリ、workflow、HEAD、開始時刻から後続の run を一意に特定できる場合だけ、古い run を除外します。
+- 古い版の上に `npm install --global takt` で上書きしたとき、空のディレクトリが残って `takt` が起動時に `Cannot find package .../string-width/index.js` で失敗する問題を修正しました (#1851)。TAKT は `update-notifier` に依存しなくなりました。
+- pending タスクの取得中にディスクがいっぱいになっても、`takt run` と `takt watch` がタスクの取得を止めないようにしました。警告を出して 5 秒ごとに再試行し、空きができたら再開します。
+- プロジェクトのリポジトリで Git のガベージコレクションが同時に動くと、タスクの clone 作成がまれに失敗する問題を修正しました。
+- clone を作る前に失敗した worktree タスクでも Requeue と Retry を使えるようにしました。保存済みの開始 step を保ったまま新しい clone で始めます。
+- `/tell` や `takt_tell_run` で送った指示を、届いた時点でタスクの `order.md` に追記するようにしました。あとの step や再開した run からも読めます。
+- Codex provider で、新規と再開のどちらのスレッドでも Codex SDK の Git リポジトリ確認を省くようにしました。Git リポジトリでない(または信頼されていない)ディレクトリでも動きます。
+
+### Internal
+
+- global install の検査に、公開済みの最新版への上書きを追加し、CI で npm 12 も対象にしました。
+- ローカルの軽い結合テストを最大 2 worker で動かし、テスト中は通知を止めるようにしました。
+- フロントエンドの Mediator レビュー、確認できない前提の指摘、外部確認、レポートの受け渡しの eval suite を追加しました。
+- `check:release` で lockfile と `npmDepsHash` を同期しました。
 
 ## [0.71.0] - 2026-10-15
 

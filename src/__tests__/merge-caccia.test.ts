@@ -56,7 +56,9 @@ describe('Merge workflows own Caccia execution', () => {
       : key === 'worktreeDir' ? join(project, '.takt', 'worktrees') : false);
     mocks.clone.mockImplementation(async (_source: string, target: string) => { mkdirSync(target, { recursive: true }); });
     mocks.git.mockImplementation(async (cwd: string, args: string[]) => ({ stdout:
-      args[0] === 'remote' && args[1] === 'get-url'
+      args[0] === 'config' && args[1] === '--get'
+        ? args[2] === 'remote.origin.url' ? '/head' : '/project'
+        : args[0] === 'remote' && args[1] === 'get-url'
         ? cwd === project ? '/project' : args[2] === 'origin' ? '/head' : '/project'
         : args[0] === 'remote' ? 'origin\n' : args[0] === 'symbolic-ref' ? 'feature/pr'
           : args[0] === 'rev-parse' ? headSha : '/project' }));

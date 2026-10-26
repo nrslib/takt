@@ -16,6 +16,7 @@ export interface TaskInfo {
   createdAt: string;
   status: TaskStatus;
   worktreePath?: string;
+  prUrl?: string;
   data: TaskFileData | null;
 }
 

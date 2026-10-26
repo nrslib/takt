@@ -13,6 +13,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { USAGE_MISSING_REASONS } from '../core/logging/contracts.js';
 import type { WorkflowConfig, WorkflowRestartPoint } from '../core/models/index.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
+import { getWorkflowResumeFrameKind } from '../core/workflow/step-kind.js';
 
 const {
   MockWorkflowEngine,
@@ -97,7 +99,8 @@ const {
       const firstStep = this.config.steps[0];
       if (firstStep) {
         const providerInfo = resolveProviderInfo(firstStep, this.receivedOptions);
-        this.emit('step:start', firstStep, 1, firstStep.instruction, providerInfo);
+        this.emit('step:start', firstStep, 1, firstStep.instruction, providerInfo, this.config.name, firstStep.name, 1,
+          [buildWorkflowResumePointEntry(this.config, firstStep.name, getWorkflowResumeFrameKind(firstStep), 1)]);
         this.emit('step:complete', firstStep, {
           persona: firstStep.personaDisplayName,
           status: 'done',
@@ -105,7 +108,8 @@ const {
           timestamp: new Date('2026-03-04T00:00:00.000Z'),
           sessionId: 'step-session',
           providerUsage: mockStepResponse.providerUsage,
-        }, firstStep.instruction);
+        }, firstStep.instruction, firstStep.name,
+        [buildWorkflowResumePointEntry(this.config, firstStep.name, getWorkflowResumeFrameKind(firstStep), 1)]);
       }
       if (MockWorkflowEngine.runOutcome.status === 'aborted') {
         this.emit(

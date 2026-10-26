@@ -199,6 +199,8 @@ export interface WorkflowExecutionResult {
   setupFailed?: boolean;
   interrupted?: boolean;
   success: boolean;
+  /** Whether the root or a started child workflow defines an explicit Caccia effect. */
+  workflowHasCaccia?: boolean;
   reason?: string;
   retryable?: boolean;
   lastStep?: string;

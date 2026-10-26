@@ -39,6 +39,7 @@ export class TaskLifecycleService {
 
   startPrMergeTask(input: {
     prNumber: number; headBranch: string; baseBranch: string; headSha: string;
+    prUrl?: string;
     headRepositoryUrl: string; headRepositoryPushUrls: readonly string[];
     workflow: string; method: MergeMethod; worktreePath: string;
     threatCheckMaxDiffBytes: number;
@@ -64,6 +65,7 @@ export class TaskLifecycleService {
         owner_pid: process.pid, owner_start_time: ownerStartTime,
         worktree: true, worktree_path: input.worktreePath,
         source: 'pr_review', pr_number: input.prNumber, branch: input.headBranch,
+        ...(input.prUrl === undefined ? {} : { pr_url: input.prUrl }),
         base_branch: input.baseBranch, workflow: input.workflow,
         merge_task: true, merge_method: input.method,
         merge_threat_check_max_diff_bytes: input.threatCheckMaxDiffBytes,
