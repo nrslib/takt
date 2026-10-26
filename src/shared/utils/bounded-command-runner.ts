@@ -53,6 +53,7 @@ export function runBoundedCommand(options: {
     let settled = false;
     let terminating = false;
     let forceKillTimer: NodeJS.Timeout | undefined;
+    let settleTimer: NodeJS.Timeout | undefined;
 
     function appendOutput(stream: 'stdout' | 'stderr', chunk: string): void {
       if (settled || result.outputLimitExceeded) return;
@@ -82,9 +83,12 @@ export function runBoundedCommand(options: {
       settled = true;
       clearTimeout(timeout);
       clearTimeout(forceKillTimer);
+      clearTimeout(settleTimer);
       options.signal?.removeEventListener('abort', onAbort);
       child.stdout?.removeListener('data', onStdout);
       child.stderr?.removeListener('data', onStderr);
+      child.stdout?.destroy();
+      child.stderr?.destroy();
       resolve(result);
     }
 
@@ -112,7 +116,12 @@ export function runBoundedCommand(options: {
       }
       kill('SIGTERM');
       forceKillTimer = setTimeout(() => {
-        if (!kill('SIGKILL')) settle();
+        if (!kill('SIGKILL')) {
+          settle();
+          return;
+        }
+        settleTimer = setTimeout(settle, 1000);
+        settleTimer.unref?.();
       }, 100);
       forceKillTimer.unref?.();
     }

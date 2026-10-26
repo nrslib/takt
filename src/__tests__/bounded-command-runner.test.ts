@@ -114,6 +114,31 @@ describe('bounded command runner', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('settles after SIGKILL when close never arrives and destroys the output streams', async () => {
+    let settled = false;
+    const running = runBoundedCommand(options).then((result) => {
+      settled = true;
+      return result;
+    });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(process.kill).toHaveBeenLastCalledWith(
+      process.platform === 'win32' ? child.pid : -child.pid,
+      'SIGKILL',
+    );
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(await running).toMatchObject({ timedOut: true, exitCode: null });
+    expect(child.stdout.destroyed).toBe(true);
+    expect(child.stderr.destroyed).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('removes cancellation after successful close', async () => {
     const controller = new AbortController();
     const running = runBoundedCommand({ ...options, signal: controller.signal });
