@@ -127,8 +127,8 @@ it.each([
   expect(lines[0]).toContain('customer-export');
   expect(lines.slice(2, 4).join('\n')).toBe(`${reason}\n${'x'.repeat(599 - reason.length - 1)}…`);
   const guidance = lines.slice(4).join('\n');
-  expect(guidance).toMatch(language === 'ja' ? /全文/u : /full message/iu);
-  expect(guidance).toMatch(/Ctrl\+N/u);
+  expect(guidance).toMatch(language === 'ja' ? /会話.*作業状態/u : /conversation.*work state/iu);
+  expect(guidance).not.toMatch(/Ctrl\+N|\^N/u);
   expect(guidance).toContain('TUI');
   expect(guidance).toContain('takt manager');
   expect(guidance).toContain('customer-export');

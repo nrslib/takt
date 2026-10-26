@@ -341,7 +341,8 @@ it.each(['enter', 'escape'] as const)('blocks inquiry entry during registration 
   });
   const answer = spyConversationCommand(session!, 'answer_question');
   try {
-    app!.stdin.write('\x0f');
+    app!.stdin.write('\x1b[A');
+    app!.stdin.write('\r');
     await vi.waitFor(() => expect(approval).toHaveBeenCalledOnce());
     app!.stdin.write('会話の下書き');
     await vi.waitFor(() => expect(app!.lastFrame()).toContain('会話の下書き'));
@@ -997,7 +998,8 @@ it.each([
   expect(display.events).toHaveLength(1);
   expect(display.events[0]!.id).toBe(JSON.stringify([saved.id, 'notification', saved.notifications![0]!.id]));
   expect(display.events[0]!.message.split('\n').slice(2, 5)).toEqual(body.split('\n').slice(0, 3));
-  expect(display.events[0]!.message.split('\n')[5]).toMatch(/Ctrl\+N|\^N/u);
+  expect(display.events[0]!.message.split('\n')[5]).toMatch(lang === 'ja' ? /省略/u : /omitted/iu);
+  expect(display.events[0]!.message).not.toMatch(/Ctrl\+N|\^N/u);
   expect(display).toMatchObject({ notices: [{ message: expect.stringContaining(body) }] });
   expect(await store.get(saved.id)).toEqual(saved);
   expect(call).not.toHaveBeenCalled();

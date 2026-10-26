@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { expect, it } from 'vitest';
-import { mount, promptFrame, waitFor, typeAndSubmit, showProposal, summaryA, ENTER, ESC, SUMMARY_MENU } from './manager-tui-fixtures.js';
+import { mount, promptFrame, waitFor, typeAndSubmit, showProposal, summaryA, ENTER, ESC, approveSummary } from './manager-tui-fixtures.js';
 import { getLabel } from '../../shared/i18n/index.js';
 
-it.each(['/go', '  /go  ', '/go extra', '/answer ID', '/pause ID', '/resume ID', '/abort ID', '/goal', '> /go', '説明 /go', '\x60\x60\x60\n/go\n\x60\x60\x60'])(
+it.each(['/help', '/make-goal extra', '説明 /make-goal', '> /make-goal', '`/make-goal`', '~~~\n/make-goal\n~~~', '```\n/make-goal\n```', '```\n/make-goal', '````\n```\n/make-goal\n```\n````', '/go', '  /go  ', '/go extra', '/answer ID', '/pause ID', '/resume ID', '/abort ID', '/goal', '> /go', '説明 /go', '\x60\x60\x60\n/go\n\x60\x60\x60'])(
   'sends slash and quoted input unchanged as a message: %j', async (text) => {
     const context = mount();
     await typeAndSubmit(context, text);
@@ -89,11 +89,15 @@ it.each(['message', 'approve_summary'] as const)('never resends input rejected w
   expect(context.app.lastFrame()).not.toMatch(/Queued messages|送信待ち/u);
 });
 
-it('aborts only the operation named by current authoritative running state on Escape', async () => {
+it.each(['', '/'])('aborts only the authoritative running operation on Escape with draft %j', async (draft) => {
   const context = mount();
   const operationId = randomUUID();
   context.client.change({ state: { ...context.client.getSnapshot().state!, running: { operationId, kind: 'message' } } });
   await waitFor(() => expect(context.app.lastFrame()).toContain('Working'));
+  if (draft !== '') {
+    context.app.stdin.write(draft);
+    await waitFor(() => expect(promptFrame(context)).toContain('❯ ' + draft));
+  }
   context.app.stdin.write(ESC);
   await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'abort_turn', operationId }]));
   expect(context.onExit).not.toHaveBeenCalled();
@@ -114,12 +118,12 @@ it('does not queue a summary instruction rejected as busy or approve a later arr
   const operationId = randomUUID();
   context.client.change({ state: { ...context.client.getSnapshot().state!, running: { operationId, kind: 'message' } } });
   context.client.submit.mockResolvedValueOnce({ kind: 'busy', operationId });
-  context.app.stdin.write(SUMMARY_MENU);
+  await typeAndSubmit(context, '/make-goal');
   await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.conversation.busy', 'en')));
   await showProposal(context, summaryA, 5);
   await waitFor(() => expect(context.client.refresh).toHaveBeenCalled());
   expect(context.client.commands()).toEqual([{ kind: 'message', text: getLabel('manager.goSummaryRequest', 'en') }]);
-  context.app.stdin.write(SUMMARY_MENU);
+  approveSummary(context);
   await waitFor(() => expect(context.client.commands()).toEqual([
     { kind: 'message', text: getLabel('manager.goSummaryRequest', 'en') },
     { kind: 'approve_summary', revision: 5 },

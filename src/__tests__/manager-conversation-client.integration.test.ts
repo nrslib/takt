@@ -83,6 +83,49 @@ function heldRead(read: SnapshotRead, entered: ReturnType<typeof gate>, released
   })() };
 }
 
+it('regenerates with /make-goal on the same screen and registers the new proposal only with Up and Enter', async () => {
+  const summary = { objective: 'Replacement JSON export', outOfScope: ['CSV'], acceptanceCriteria: ['JSON exists'], constraints: [] };
+  const generate = vi.fn(async () => ({ message: 'Replacement ready', summary, sessionId: 'session', assignment }));
+  doubles.resolve.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'test', executor: { execute: generate } });
+  const registration = vi.spyOn(goalService, 'registerReservedGoal');
+  await client.connect(); await complete();
+  const app = render(createElement(ManagerView, { cwd: repository, lang: 'en', client, assignment, initialDiagnostics: [], onExit() {} }));
+  await vi.waitFor(() => expect(app.lastFrame()).toContain('CSV出力'));
+  const submissions = vi.spyOn(client, 'submit');
+  let draft = '';
+  for (const character of '/make-goal') {
+    draft += character;
+    app.stdin.write(character);
+    await vi.waitFor(() => expect(app.lastFrame()).toContain('❯ ' + draft));
+  }
+  app.stdin.write('\r');
+  await vi.waitFor(() => expect(submissions.mock.calls.map(([command]) => command)).toEqual([
+    { kind: 'message', text: getLabel('manager.goSummaryRequest', 'en') },
+  ]));
+  await vi.waitFor(() => {
+    expect(app.lastFrame()).toContain(summary.objective);
+    expect(app.lastFrame()).not.toContain('CSV出力');
+    expect(client.getSnapshot().state).toMatchObject({ pending: { revision: 5, summary }, approval: null, running: null });
+  });
+  const record = conversationRecord(repository);
+  expect(new ConversationStore(directory).read(record.id, record.assignment)).toMatchObject({
+    pending: { revision: 5, summary }, approval: null, running: null,
+  });
+  expect(generate).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ prompt: getLabel('manager.goSummaryRequest', 'en') }));
+  expect(registration).not.toHaveBeenCalled();
+  expect((await new GoalStore(repository).list()).goals).toEqual([]);
+  registration.mockImplementation(async ({ id, objective, outOfScope, acceptanceCriteria, constraints }) => {
+    const goal = { ...goalRecord(), id, objective, outOfScope, acceptanceCriteria, constraints }; saveGoal(goal); return goal;
+  });
+  app.stdin.write('\x1b[A');
+  app.stdin.write('\r');
+  await vi.waitFor(() => expect(new ConversationStore(directory).read(record.id, record.assignment)?.approval)
+    .toMatchObject({ revision: 5, state: 'registered' }));
+  const receipt = new ConversationStore(directory).read(record.id, record.assignment)!.approval!;
+  expect((await new GoalStore(repository).get(receipt.goalId)).objective).toBe(summary.objective);
+  expect(registration).toHaveBeenCalledOnce();
+});
+
 it.each(['response', 'transfer'] as const)('approves the displayed proposal once while a background %s is held', async (phase) => {
   const connection = vi.spyOn(net.Socket.prototype, 'write');
   await client.connect(); await complete();
@@ -97,15 +140,21 @@ it.each(['response', 'transfer'] as const)('approves the displayed proposal once
     const goal = { ...goalRecord(), id, objective, outOfScope, acceptanceCriteria, constraints }; saveGoal(goal); return goal;
   });
   const app = render(createElement(ManagerView, { cwd: repository, lang: 'en', client, assignment, initialDiagnostics: [], onExit() {} }));
-  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('manager.summaryHint', 'en')));
+  await vi.waitFor(() => {
+    expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' });
+    expect(app.lastFrame()).not.toContain(getLabel('manager.conversation.reading', 'en'));
+    expect(app.lastFrame()).not.toContain(getLabel('manager.conversation.incomplete', 'en'));
+    expect(app.lastFrame()).toContain(getLabel('manager.summaryInputHint', 'en'));
+  });
   const submissions = vi.spyOn(client, 'submit');
   const refreshing = client.refresh();
   try {
     await entered.promise;
     await vi.waitFor(() => expect(service.snapshot).toHaveBeenCalled());
     expect.soft(app.lastFrame()).not.toContain(getLabel('manager.conversation.reading', 'en'));
-    expect.soft(app.lastFrame()).toContain(getLabel('manager.summaryHint', 'en'));
-    app.stdin.write('\x0f');
+    expect.soft(app.lastFrame()).toContain(getLabel('manager.summaryInputHint', 'en'));
+    app.stdin.write('\x1b[A');
+    app.stdin.write('\r');
     await vi.waitFor(() => expect(submissions).toHaveBeenCalledExactlyOnceWith({ kind: 'approve_summary', revision: 4 }, undefined));
     expect(connection.mock.calls.filter(([bytes]) => String(bytes).includes('"kind":"approve_summary"'))).toHaveLength(1);
     // The server finishes the current input batch before accepting another one.
@@ -134,13 +183,20 @@ it('does not send approval before the initial transfer ends and enables it on th
       expect(app.lastFrame()).toContain('CSV出力');
       expect(app.lastFrame()).toContain(getLabel('manager.conversation.reading', 'en'));
     });
-    app.stdin.write('\x0f');
+    app.stdin.write('\x1b[A');
+    app.stdin.write('\r');
     await new Promise<void>((resolve) => { setImmediate(resolve); });
     expect(submissions).not.toHaveBeenCalled();
-    expect(app.lastFrame()).not.toContain(getLabel('manager.summaryHint', 'en'));
+    expect(client.getSnapshot().readStatus).not.toBe('complete');
     released.release(); await complete();
-    await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('manager.summaryHint', 'en')));
-    app.stdin.write('\x0f');
+    await vi.waitFor(() => {
+    expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' });
+    expect(app.lastFrame()).not.toContain(getLabel('manager.conversation.reading', 'en'));
+    expect(app.lastFrame()).not.toContain(getLabel('manager.conversation.incomplete', 'en'));
+    expect(app.lastFrame()).toContain(getLabel('manager.summaryInputHint', 'en'));
+  });
+    app.stdin.write('\x1b[A');
+    app.stdin.write('\r');
     await vi.waitFor(() => expect(submissions).toHaveBeenCalledOnce());
     expect(submissions.mock.calls[0]![0]).toEqual({ kind: 'approve_summary', revision: 4 });
     expect(await submissions.mock.results[0]!.value).toMatchObject({ kind: 'accepted' });
@@ -151,7 +207,12 @@ it.each(['read failure', 'disconnect'] as const)('blocks approval after a backgr
   const connection = vi.spyOn(net.Socket.prototype, 'write');
   await client.connect(); await complete();
   const app = render(createElement(ManagerView, { cwd: repository, lang: 'en', client, assignment, initialDiagnostics: [], onExit() {} }));
-  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('manager.summaryHint', 'en')));
+  await vi.waitFor(() => {
+    expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' });
+    expect(app.lastFrame()).not.toContain(getLabel('manager.conversation.reading', 'en'));
+    expect(app.lastFrame()).not.toContain(getLabel('manager.conversation.incomplete', 'en'));
+    expect(app.lastFrame()).toContain(getLabel('manager.summaryInputHint', 'en'));
+  });
   const submissions = vi.spyOn(client, 'submit');
   const entered = gate(); const released = gate();
   let refreshing: Promise<void> | undefined;
@@ -179,13 +240,20 @@ it.each(['read failure', 'disconnect'] as const)('blocks approval after a backgr
       expect(app.lastFrame()).toContain(getLabel('manager.conversation.reading', 'en'));
       expect(app.lastFrame()).toContain('CSV出力');
     });
-    app.stdin.write('\x0f');
+    app.stdin.write('\x1b[A');
+    app.stdin.write('\r');
     await new Promise<void>((resolve) => { setImmediate(resolve); });
     expect(submissions).not.toHaveBeenCalled();
-    expect(app.lastFrame()).not.toContain(getLabel('manager.summaryHint', 'en'));
+    expect(client.getSnapshot().readStatus).not.toBe('complete');
     released.release(); await refreshing; await complete();
-    await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('manager.summaryHint', 'en')));
-    app.stdin.write('\x0f');
+    await vi.waitFor(() => {
+    expect(client.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: 'complete' });
+    expect(app.lastFrame()).not.toContain(getLabel('manager.conversation.reading', 'en'));
+    expect(app.lastFrame()).not.toContain(getLabel('manager.conversation.incomplete', 'en'));
+    expect(app.lastFrame()).toContain(getLabel('manager.summaryInputHint', 'en'));
+  });
+    app.stdin.write('\x1b[A');
+    app.stdin.write('\r');
     await vi.waitFor(() => expect(submissions).toHaveBeenCalledOnce());
     expect(submissions.mock.calls[0]![0]).toEqual({ kind: 'approve_summary', revision: 4 });
     expect(await submissions.mock.results[0]!.value).toMatchObject({ kind: 'accepted' });
@@ -253,7 +321,8 @@ it.each([
     const socket = connection.mock.contexts[openWrite] as net.Socket;
     const submissions = vi.spyOn(client, 'submit');
     if (concurrent) socket.cork();
-    app.stdin.write(kind === 'approve_summary' ? '\x0f' : '\x1b[27u');
+    if (kind === 'approve_summary') { app.stdin.write('\x1b[A'); app.stdin.write('\r'); }
+    else app.stdin.write('\x1b[27u');
     await vi.waitFor(() => expect(submissions).toHaveBeenCalledOnce());
     let refreshed: Promise<void> | undefined;
     if (concurrent) { refreshed = client.refresh(); socket.uncork(); }
@@ -278,7 +347,8 @@ it.each([
     expect(store.read(selected.conversationId, selected.assignment)?.approval).toBeNull();
     expect(registration).not.toHaveBeenCalled();
     expect((await new GoalStore(repository).list()).goals).toEqual([]);
-    app.stdin.write(kind === 'approve_summary' ? '\x0f' : '\x1b[27u');
+    if (kind === 'approve_summary') { app.stdin.write('\x1b[A'); app.stdin.write('\r'); }
+    else app.stdin.write('\x1b[27u');
     await vi.waitFor(() => expect(submissions).toHaveBeenCalledTimes(2));
     expect(submissions.mock.calls[1]![0]).toEqual({ kind, revision: 5 });
     expect(await submissions.mock.results[1]!.value).toMatchObject({ kind: 'accepted' });
@@ -299,7 +369,7 @@ it.each([
     notifications.release();
   }
 });
-async function displayedSelection(key: string, kind: 'answer' | 'goal' | 'notice') {
+async function displayedSelection(key: string, kind: 'answer' | 'goal') {
   const component = vi.spyOn(selectionDialog, 'ManagerSelectionDialog');
   const app = render(createElement(ManagerView, { cwd: repository, lang: 'en', client, assignment,
     initialDiagnostics: [], onExit() {} }));
@@ -397,9 +467,6 @@ it.each([7, 9])('restores the full notice projection for a body containing %i la
   expect(notices).toHaveLength(1);
   expect(notices[0]).toMatchObject({ id: goal.notifications[0]!.id, repositoryDirectory: repository, goalId: goal.id, objective: goal.objective });
   expect(notices[0]!.message).toContain(body);
-  const { selection } = await displayedSelection('\x0e', 'notice');
-  if (selection.kind !== 'notice') throw new Error('Expected notice selection');
-  expect(selection.candidates).toEqual(notices);
 });
 
 it('removes the same standalone approval after withdrawal and refresh on the same client', async () => {

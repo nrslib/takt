@@ -1074,7 +1074,7 @@ describe('manager questions, answers and notifications through production bounda
     ]));
   });
 
-  it('shows new notifications in the same mounted TUI and reads saved notifications with Ctrl+N without replaying them on reopening', async () => {
+  it('shows new notifications in the same mounted TUI without replaying saved notifications on reopening', async () => {
     const first = ['保存済みの進捗', '保存済みの確認事項', '保存済みの次の作業', '保存済みの詳細末尾'];
     const second = ['新着の停止理由', '新着の確認事項', '新着の次の作業', '新着の詳細末尾'];
     const counts = getLabel('manager.counts', 'en', { goals: '1', questions: '0' }).replace(/\s+/gu, ' ');
@@ -1126,23 +1126,6 @@ describe('manager questions, answers and notifications through production bounda
       for (const line of [...first, ...second]) expect(frame).not.toContain(line);
       expect(frame).not.toContain(customHeading);
       expect(frame).not.toContain(blockedHeading);
-    });
-    app!.stdin.write('\x0e');
-    await vi.waitFor(() => {
-      const text = app!.lastFrame()!.replace(/[│\s]+/gu, ' ');
-      expect(text).toContain(getLabel('manager.selectionTitles.notice', 'en'));
-      expect(text).toContain(`${blockedHeading} — ${goalRecord().objective}`);
-      expect(text).toContain(`${customHeading} — ${goalRecord().objective}`);
-    });
-    app!.stdin.write('\x1b[B');
-    app!.stdin.write('\r');
-    await vi.waitFor(() => {
-      const frame = app!.lastFrame()!;
-      const text = frame.replace(/[│\s]+/gu, ' ');
-      expect(text).toContain(getLabel('manager.noticeDetailHint', 'en'));
-      expect(text).toContain(customHeading);
-      expect(text).toContain(goalLine);
-      for (const line of first) expect(frame).toContain(line);
     });
   }, 30_000);
 });
