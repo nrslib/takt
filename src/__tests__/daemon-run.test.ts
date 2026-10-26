@@ -8,7 +8,9 @@ const doubles = vi.hoisted(() => ({
   patrol: vi.fn(), config: vi.fn(), notify: vi.fn(), logError: vi.fn(),
   runner: vi.fn(), recover: vi.fn(), logWarn: vi.fn(),
   conversationService: vi.fn(), ipc: vi.fn(), runtime: vi.fn(),
+  slack: vi.fn(),
 }));
+vi.mock('../features/daemon/slackPorts.js', () => ({ createDaemonSlackPorts: doubles.slack }));
 vi.mock('../infra/daemon/ipcEndpoint.js', () => ({ resolveDaemonConfigDirectory: () => process.env.TAKT_CONFIG_DIR }));
 vi.mock('../features/manager/conversationService.js', () => ({ createConversationService: doubles.conversationService }));
 vi.mock('../features/manager/conversationRuntime.js', () => ({ createConversationRuntime: doubles.runtime }));
@@ -33,6 +35,8 @@ vi.mock('../features/manager/turnFailureNotification.js', () => ({ notifyManager
 
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.stubEnv('TAKT_SLACK_APP_TOKEN', undefined);
+  vi.stubEnv('TAKT_SLACK_BOT_TOKEN', undefined);
   doubles.registerOwner.mockReturnValue(true);
   doubles.projects.mockResolvedValue(['/project-a', '/project-b']);
   doubles.work.mockResolvedValue(false);
@@ -41,8 +45,115 @@ beforeEach(() => {
   doubles.recover.mockReturnValue(0);
   doubles.conversationService.mockReturnValue({ attachmentCount: 0, activeOperationCount: 0, stopAccepting: vi.fn(), close: vi.fn() });
   doubles.ipc.mockReturnValue({ initializingCount: 0, stopAccepting: vi.fn(), close: vi.fn() });
+  doubles.slack.mockResolvedValue({ listening: false, stopAccepting: vi.fn(), close: vi.fn() });
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
+
+it.each([
+  ['IPC startup', 'SIGTERM'],
+  ['project listing', 'SIGINT'],
+  ['Slack startup', 'SIGTERM'],
+] as const)('closes admission immediately during %s on %s and never starts later work', async (stage, signal) => {
+  const before = process.rawListeners(signal);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let conversationAccepting = true;
+  let ipcAccepting = true;
+  const conversation = { attachmentCount: 0, activeOperationCount: 0,
+    stopAccepting: vi.fn(() => { conversationAccepting = false; }), close: vi.fn() };
+  const ipc = { initializingCount: 0, stopAccepting: vi.fn(() => { ipcAccepting = false; }), close: vi.fn() };
+  const slack = { listening: false, stopAccepting: vi.fn(), close: vi.fn() };
+  doubles.conversationService.mockReturnValue(conversation);
+  doubles.ipc.mockImplementation(async () => { if (stage === 'IPC startup') await gate; return ipc; });
+  doubles.projects.mockImplementation(async () => { if (stage === 'project listing') await gate; return ['/project']; });
+  doubles.slack.mockImplementation(async () => { if (stage === 'Slack startup') await gate; return slack; });
+  const daemon = runDaemon();
+  try {
+    const boundary = stage === 'IPC startup' ? doubles.ipc : stage === 'project listing' ? doubles.projects : doubles.slack;
+    await vi.waitFor(() => expect(boundary).toHaveBeenCalledOnce());
+    process.rawListeners(signal).find((listener) => !before.includes(listener))!.call(process, signal);
+    expect(conversationAccepting).toBe(false);
+    if (stage !== 'IPC startup') expect(ipcAccepting).toBe(false);
+    if (stage === 'Slack startup') expect(doubles.slack.mock.calls[0]![0].signal.aborted).toBe(true);
+    expect(doubles.removeOwner).not.toHaveBeenCalled();
+  } finally {
+    process.rawListeners(signal).find((listener) => !before.includes(listener))?.call(process, signal);
+    release();
+    await daemon;
+  }
+  expect(ipcAccepting).toBe(false);
+  if (stage === 'IPC startup') expect(doubles.projects).not.toHaveBeenCalled();
+  if (stage !== 'Slack startup') expect(doubles.slack).not.toHaveBeenCalled();
+  else {
+    expect(slack.stopAccepting).toHaveBeenCalled();
+    expect(conversation.close.mock.invocationCallOrder[0]).toBeLessThan(slack.close.mock.invocationCallOrder[0]!);
+    expect(slack.close.mock.invocationCallOrder[0]).toBeLessThan(doubles.removeOwner.mock.invocationCallOrder[0]!);
+  }
+  expect(doubles.create).not.toHaveBeenCalled();
+  expect(process.rawListeners(signal)).toEqual(before);
+});
+
+it('keeps the same daemon waiting for Slack after work and TUI connections end, then closes on explicit stop', async () => {
+  const before = process.rawListeners('SIGTERM');
+  const conversation = { attachmentCount: 1, activeOperationCount: 0, stopAccepting: vi.fn(), close: vi.fn() };
+  doubles.conversationService.mockReturnValue(conversation);
+  const slack = { listening: true, stopAccepting: vi.fn(), close: vi.fn() };
+  doubles.slack.mockResolvedValue(slack);
+  doubles.create.mockReturnValue({ processPending: vi.fn(), close: vi.fn() });
+  let round = 0;
+  doubles.delay.mockImplementation(async () => {
+    await new Promise(setImmediate);
+    round++;
+    expect(doubles.removeOwner).not.toHaveBeenCalled();
+    if (round === 2) { conversation.attachmentCount = 0; conversation.activeOperationCount = 1; }
+    if (round === 3) conversation.activeOperationCount = 0;
+    if (round === 6) process.rawListeners('SIGTERM').find((listener) => !before.includes(listener))!.call(process, 'SIGTERM');
+  });
+  await runDaemon();
+  expect(round).toBe(6);
+  expect(doubles.slack).toHaveBeenCalledOnce();
+  expect(slack.stopAccepting).toHaveBeenCalled();
+  expect(slack.close).toHaveBeenCalledOnce();
+  expect(conversation.close.mock.invocationCallOrder[0]).toBeLessThan(slack.close.mock.invocationCallOrder[0]!);
+  expect(slack.close.mock.invocationCallOrder[0]).toBeLessThan(doubles.removeOwner.mock.invocationCallOrder[0]!);
+  expect(process.rawListeners('SIGTERM')).toEqual(before);
+});
+
+it.each(['app', 'bot', 'both'] as const)('exits normally with %s Slack tokens missing', async (missing) => {
+  vi.stubEnv('TAKT_SLACK_APP_TOKEN', missing === 'bot' ? 'xapp-test-1' : '');
+  vi.stubEnv('TAKT_SLACK_BOT_TOKEN', missing === 'app' ? 'xoxb-test-2' : '');
+  doubles.projects.mockResolvedValue([]);
+  await runDaemon();
+  expect(doubles.slack).toHaveBeenCalledWith(expect.objectContaining({ tokens: undefined }));
+  expect(process.env).not.toHaveProperty('TAKT_SLACK_APP_TOKEN');
+  expect(process.env).not.toHaveProperty('TAKT_SLACK_BOT_TOKEN');
+  expect(doubles.removeOwner).toHaveBeenCalledOnce();
+});
+
+it('takes Slack credentials out of the environment before creating the runtime and preserves the client credentials', async () => {
+  vi.stubEnv('TAKT_SLACK_APP_TOKEN', 'xapp-test-1');
+  vi.stubEnv('TAKT_SLACK_BOT_TOKEN', 'xoxb-test-2');
+  vi.stubEnv('PROVIDER_CANARY', 'kept');
+  const environments: NodeJS.ProcessEnv[] = [];
+  doubles.runtime.mockImplementation(() => { environments.push({ ...process.env }); return {}; });
+  doubles.conversationService.mockImplementation(() => {
+    environments.push({ ...process.env });
+    return { attachmentCount: 0, activeOperationCount: 0, stopAccepting: vi.fn(), close: vi.fn() };
+  });
+  doubles.projects.mockResolvedValue([]);
+  await runDaemon();
+  expect(environments).toHaveLength(2);
+  for (const env of environments) {
+    expect(env).not.toHaveProperty('TAKT_SLACK_APP_TOKEN');
+    expect(env).not.toHaveProperty('TAKT_SLACK_BOT_TOKEN');
+    expect(env.PROVIDER_CANARY).toBe('kept');
+  }
+  expect(doubles.slack).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+    tokens: { appToken: 'xapp-test-1', botToken: 'xoxb-test-2' },
+  }));
+  expect(process.env).not.toHaveProperty('TAKT_SLACK_APP_TOKEN');
+  expect(process.env).not.toHaveProperty('TAKT_SLACK_BOT_TOKEN');
+});
 
 it('exits without polling or removing ownership when another daemon is registered', async () => {
   doubles.registerOwner.mockReturnValue(false);

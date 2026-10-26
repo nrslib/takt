@@ -19,6 +19,7 @@ import { resolveDaemonConfigDirectory } from '../../infra/daemon/ipcEndpoint.js'
 import { createConversationService } from '../manager/conversationService.js';
 import { createConversationRuntime } from '../manager/conversationRuntime.js';
 import { createConversationIpcServer } from './conversationIpcServer.js';
+import { createDaemonSlackPorts } from './slackPorts.js';
 
 const POLL_INTERVAL_MS = 500;
 const EVENTS_PER_PROJECT = 10;
@@ -43,6 +44,11 @@ export async function runDaemon(): Promise<void> {
   const { cliPath } = resolveCliInvocation('daemon');
   const owner = { pid: process.pid, identity, version: packageVersion, cliPath };
   if (!registerDaemonOwner(globalConfigDirectory, owner)) return;
+  const appToken = process.env.TAKT_SLACK_APP_TOKEN;
+  const botToken = process.env.TAKT_SLACK_BOT_TOKEN;
+  // Slack credentials belong to the listener, not provider or tool subprocesses.
+  delete process.env.TAKT_SLACK_APP_TOKEN;
+  delete process.env.TAKT_SLACK_BOT_TOKEN;
   const controller = new AbortController();
   const managers = new Map<string, ReturnType<typeof createRunEventManager>>();
   const pollingFailures = new Map<string, PollingFailure>();
@@ -52,6 +58,7 @@ export async function runDaemon(): Promise<void> {
   const conversations = createConversationService({ configDirectory: globalConfigDirectory, owner,
     runtime: createConversationRuntime(globalConfigDirectory), onDomainChange: () => { domainGeneration++; projectWork.clear(); } });
   let ipc: Awaited<ReturnType<typeof createConversationIpcServer>> | undefined;
+  let slack: Awaited<ReturnType<typeof createDaemonSlackPorts>> | undefined;
   const inspectProject = async (cwd: string): Promise<boolean> => {
     const errors: Array<{ error: unknown; failedAt: number }> = [];
     let hasWork = false;
@@ -100,11 +107,17 @@ export async function runDaemon(): Promise<void> {
     }
     return hasWork;
   };
-  const stop = (): void => { controller.abort(); };
+  const stopAccepting = (): void => {
+    conversations.stopAccepting();
+    ipc?.stopAccepting();
+    slack?.stopAccepting();
+  };
+  const stop = (): void => { stopAccepting(); controller.abort(); };
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);
   try {
     ipc = await createConversationIpcServer(globalConfigDirectory, owner, conversations);
+    if (controller.signal.aborted) return;
     initDebugLogger({ enabled: true, logFile: join(globalConfigDirectory, 'logs', 'daemon.log') });
     log.info('Daemon started', { pid: process.pid, version: packageVersion, cliPath });
     while (!controller.signal.aborted) {
@@ -115,15 +128,18 @@ export async function runDaemon(): Promise<void> {
         break;
       }
       const projects = await listDaemonProjects(globalConfigDirectory);
+      if (controller.signal.aborted) break;
+      slack ??= await createDaemonSlackPorts({ projects, configDirectory: globalConfigDirectory, input: conversations,
+        tokens: appToken && botToken ? { appToken, botToken } : undefined, signal: controller.signal });
+      if (controller.signal.aborted) break;
       log.debug('Daemon projects', { projects });
       for (const cwd of projectWork.keys()) {
         if (!projects.includes(cwd)) projectWork.delete(cwd);
       }
       if (inFlight.size === 0 && projects.every((cwd) => projectWork.get(cwd) === false)
-        && conversations.attachmentCount === 0 && conversations.activeOperationCount === 0) {
+        && conversations.attachmentCount === 0 && conversations.activeOperationCount === 0 && !slack.listening) {
         if (ipc.initializingCount !== 0) continue;
-        conversations.stopAccepting();
-        ipc.stopAccepting();
+        stopAccepting();
         break;
       }
       for (const cwd of projects) {
@@ -140,9 +156,7 @@ export async function runDaemon(): Promise<void> {
       }
     }
   } finally {
-    controller.abort();
-    conversations.stopAccepting();
-    ipc?.stopAccepting();
+    stop();
     try { await conversations.close(); }
     catch { log.error('Cannot close daemon conversations'); }
     await Promise.all(inFlight.values());
@@ -153,7 +167,7 @@ export async function runDaemon(): Promise<void> {
       try { await manager.close(); }
       catch (error) { log.error('Cannot close daemon project manager', { cwd, error: getErrorMessage(error) }); }
     }
-    try { await ipc?.close(); }
+    try { await slack?.close(); await ipc?.close(); }
     finally {
       removeDaemonOwner(globalConfigDirectory, owner);
       process.removeListener('SIGTERM', stop);
