@@ -62,6 +62,20 @@ function liveHandler(target: Awaited<ReturnType<typeof fixture>>) {
   return { handler, onDenial };
 }
 
+async function timeOutJudgment(handler: ReturnType<typeof liveHandler>['handler'], request: ToolPermissionDecisionRequest) {
+  let started!: () => void;
+  const ready = new Promise<void>((resolve) => { started = resolve; });
+  doubles.judge.mockImplementationOnce(() => {
+    started();
+    return new Promise<AgentResponse>(() => {});
+  });
+  const decision = handler(request);
+  await Promise.race([ready, decision]);
+  expect(doubles.judge).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(30_000);
+  return decision;
+}
+
 function approvalInput(request: ToolPermissionDecisionRequest): GoalQuestionInput {
   return { kind: 'approval', body: reason,
     operation: { toolName: request.toolName, args: JSON.stringify(request.toolInput), cwd: request.cwd } };
@@ -83,6 +97,44 @@ function judgeRecords(): Record<string, unknown>[] {
 }
 
 describe('manager saved approval decisions', () => {
+  it.each(['goal', 'workspace', 'repository'] as const)('[SCN-JUDGE-TIMEOUT-P2] allows the same operation on the live handler after a human approves a timed-out %s inquiry once', async (origin) => {
+    const target = await fixture(origin);
+    const { handler } = liveHandler(target);
+    vi.useFakeTimers();
+
+    const first = await timeOutJudgment(handler, target.request);
+    const pending = await target.all();
+    expect(pending).toHaveLength(1);
+    const inquiry = pending[0]!;
+    expect(inquiry).toMatchObject({ kind: 'approval', status: 'pending' });
+    expect(first).toEqual({ decision: 'deny', reason: `人の確認待ち (Write): ${inquiry.id}: ${inquiry.body}` });
+    await target.answer(inquiry.id, { decision: 'allow', scope: 'once' });
+
+    expect(await handler(target.request)).toEqual({ decision: 'allow' });
+    expect(doubles.judge).toHaveBeenCalledOnce();
+    const saved = await target.all();
+    expect(saved).toEqual([expect.objectContaining({ id: inquiry.id, status: 'answered',
+      consumedAt: expect.any(String), answer: expect.objectContaining({ decision: 'allow', scope: 'once' }) })]);
+  });
+
+  it.each(['goal', 'workspace', 'repository'] as const)('[SCN-JUDGE-TIMEOUT-P3] reuses a timed-out pending %s inquiry on the same handler without judging or creating another inquiry', async (origin) => {
+    const target = await fixture(origin);
+    const { handler } = liveHandler(target);
+    vi.useFakeTimers();
+
+    const first = await timeOutJudgment(handler, target.request);
+    const pending = await target.all();
+    expect(pending).toHaveLength(1);
+    const inquiry = pending[0]!;
+    expect(inquiry).toMatchObject({ kind: 'approval', status: 'pending' });
+    const expected = { decision: 'deny', reason: `人の確認待ち (Write): ${inquiry.id}: ${inquiry.body}` };
+    expect(first).toEqual(expected);
+
+    expect(await handler(target.request)).toEqual(expected);
+    expect(doubles.judge).toHaveBeenCalledOnce();
+    expect(await target.all()).toEqual(pending);
+  });
+
   it.each(['goal', 'workspace', 'repository'] as const)('allows a %s approval once after an external answer and persists consumption before returning', async (origin) => {
     const target = await fixture(origin);
     const { handler } = liveHandler(target);
@@ -427,6 +479,7 @@ describe('manager permission judge persisted context', () => {
   });
 });
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 

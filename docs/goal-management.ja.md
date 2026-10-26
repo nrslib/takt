@@ -60,7 +60,7 @@ claude（claude-sdk）の `Read`、`Glob`、`Grep` は、解決後の対象が m
 
 判断役の provider と model は、`runtime.yaml` の `provider.targets.internal_agents.manager-permission-judge` で指定できます。他の内部 agent の seat と同じく `profile` または `ladder` を指定でき、`pool` は指定できません。未指定なら manager と同じ provider・model・provider options を使います。
 
-判断には短い期限があり、期限切れ、例外、判定形式の不一致はいずれも操作の拒否になります。判断を自動でやり直すことはありません。
+判断には30秒の期限があります。期限切れは人への確認と同じ扱いになり、承認問い合わせを保存し、操作を確認待ちとして止めて通知します。例外や判定形式の不一致は引き続き操作の拒否になります。判断を自動でやり直すことはありません。
 
 利用者の MCP は、既存の `runtime.yaml` の割り当て規則で指定します。自分で用意したブラウザ MCP サーバーを割り当てる例です。
 
