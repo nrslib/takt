@@ -727,7 +727,12 @@ describe('TUI local commands', () => {
     },
   );
 
-  it('should include /issue in the default TUI completion commands', () => {
+  it('should retain the default interactive completion commands without manager commands', () => {
+    expect(resolveSlashCompletions('/', 'en', { enableSettingsCommands: true, enableTellCommand: true })
+      .map((completion) => completion.command)).toEqual([
+      '/accept', '/go', '/issue', '/tell', '/cancel', '/resume', '/paste-image',
+      '/workflow', '/interaction', '/provider', '/model', '/effort',
+    ]);
     expect(resolveSlashCompletions('/iss', 'en', {}).map((completion) => completion.command))
       .toContain('/issue');
   });

@@ -1,9 +1,8 @@
-import { randomUUID } from 'node:crypto';
 import { expect, it } from 'vitest';
 import type { SnapshotItem } from '../../features/manager/conversationPort.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { goalRecord } from './goal-fixtures.js';
-import { ManagerClientDouble, cwd, mount, waitFor, promptFrame, ENTER, UP, DOWN, ESC, QUESTION_MENU, GOAL_MENU, NOTICE_MENU, REPOSITORY_MENU } from './manager-tui-fixtures.js';
+import { ManagerClientDouble, cwd, mount, waitFor, promptFrame, ENTER, UP, DOWN, ESC, QUESTION_MENU, GOAL_MENU } from './manager-tui-fixtures.js';
 
 const question = (index = 1): Extract<SnapshotItem, { kind: 'inquiry' }> => ({
   kind: 'inquiry', inquiry: { target: { goalId: goalRecord().id, repositoryDirectory: cwd }, objective: 'Answer goal',
@@ -13,31 +12,67 @@ const question = (index = 1): Extract<SnapshotItem, { kind: 'inquiry' }> => ({
 const goal = (executionStatus: 'active' | 'paused' = 'active'): Extract<SnapshotItem, { kind: 'goal' }> => ({
   kind: 'goal', goal: { id: goalRecord().id, objective: 'Control goal', status: 'created', executionStatus, repositoryDirectory: cwd },
 });
-const notice = (index: number): Extract<SnapshotItem, { kind: 'notice' }> => ({
-  kind: 'notice', notice: { id: randomUUID(), repositoryDirectory: cwd, project: 'manager-repository',
-    goalId: goalRecord().id, objective: 'Notice ' + index, kind: 'custom', recordedAt: '2026-10-24T00:00:00Z',
-    message: 'notice-body-' + index + '\n' + 'n'.repeat(7000) + '\nnotice-end-' + index },
-});
 function mounted(items: SnapshotItem[]) {
   const client = new ManagerClientDouble();
   client.change({ items: [...client.getSnapshot().items, ...items.filter((item) => item.kind !== 'state')] });
   return mount('en', client);
 }
+function expectCommandHint(context: ReturnType<typeof mount>, visible: boolean): void {
+  const rows = context.app.lastFrame()!.split('\n');
+  const promptEnd = rows.map((row) => row.startsWith('╰')).lastIndexOf(true);
+  expect(promptEnd).toBeGreaterThan(0);
+  const hints = rows.slice(promptEnd + 1).filter((row) => /^\s*\/make-goal\b/u.test(row));
+  expect(hints).toHaveLength(visible ? 1 : 0);
+}
 async function chooseGoal(context: ReturnType<typeof mount>, action: 'pause' | 'resume' | 'abort') {
+  await waitFor(() => expectCommandHint(context, true));
   context.app.stdin.write(GOAL_MENU);
-  await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.selectionTitles.goal', 'en')));
+  await waitFor(() => {
+    expect(context.app.lastFrame()).toContain(getLabel('manager.selectionTitles.goal', 'en'));
+    expectCommandHint(context, false);
+  });
   context.app.stdin.write(ENTER);
-  await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.goalActions.' + action, 'en')));
+  await waitFor(() => {
+    expect(context.app.lastFrame()).toContain(getLabel('manager.selectionTitles.action', 'en'));
+    expect(context.app.lastFrame()).toContain(getLabel('manager.goalActions.' + action, 'en'));
+    expectCommandHint(context, false);
+  });
   if (action === 'abort') context.app.stdin.write(DOWN);
   context.app.stdin.write(ENTER);
 }
 async function openAnswer(context: ReturnType<typeof mount>) {
-  await waitFor(() => expect(context.app.lastFrame()).toContain('Pending 1'));
+  await waitFor(() => {
+    expect(context.app.lastFrame()).toContain('Pending 1');
+    expectCommandHint(context, true);
+  });
   context.app.stdin.write(QUESTION_MENU);
-  await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.selectionTitles.answer', 'en')));
+  await waitFor(() => {
+    expect(context.app.lastFrame()).toContain(getLabel('manager.selectionTitles.answer', 'en'));
+    expectCommandHint(context, false);
+  });
   context.app.stdin.write(ENTER);
-  await waitFor(() => expect(context.app.lastFrame()).toContain('Free text'));
+  await waitFor(() => {
+    expect(context.app.lastFrame()).toContain('Free text');
+    expect(promptFrame(context)).toContain('Enter your answer');
+    expectCommandHint(context, false);
+  });
 }
+
+it.each(['answer', 'goal'] as const)('hides command guidance in the %s list and restores it after Escape on the same screen', async (kind) => {
+  const context = mounted([question(), goal()]);
+  await waitFor(() => expectCommandHint(context, true));
+  context.app.stdin.write(kind === 'answer' ? QUESTION_MENU : GOAL_MENU);
+  await waitFor(() => {
+    expect(context.app.lastFrame()).toContain(getLabel('manager.selectionTitles.' + kind, 'en'));
+    expectCommandHint(context, false);
+  });
+  context.app.stdin.write(ESC);
+  await waitFor(() => {
+    expect(context.app.lastFrame()).not.toContain(getLabel('manager.selectionTitles.' + kind, 'en'));
+    expectCommandHint(context, true);
+  });
+  expect(context.client.submit).not.toHaveBeenCalled();
+});
 
 it.each(['pause', 'resume'] as const)('sends %s for the selected goal through IPC and displays the operation result', async (action) => {
   const item = goal(action === 'pause' ? 'active' : 'paused');
@@ -56,10 +91,16 @@ it.each([ENTER, ESC])('requires explicit abort confirmation and cancels it with 
   const context = mounted([goal()]);
   await waitFor(() => expect(context.app.lastFrame()).toContain('Ongoing 1'));
   await chooseGoal(context, 'abort');
-  await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.abortConfirmation', 'en')));
+  await waitFor(() => {
+    expect(context.app.lastFrame()).toContain(getLabel('manager.abortConfirmation', 'en'));
+    expectCommandHint(context, false);
+  });
   expect(context.client.submit).not.toHaveBeenCalled();
   context.app.stdin.write(cancel);
-  await waitFor(() => expect(context.app.lastFrame()).not.toContain(getLabel('manager.abortConfirmation', 'en')));
+  await waitFor(() => {
+    expect(context.app.lastFrame()).not.toContain(getLabel('manager.abortConfirmation', 'en'));
+    expectCommandHint(context, true);
+  });
   expect(context.client.submit).not.toHaveBeenCalled();
 });
 
@@ -76,6 +117,7 @@ it('sends abort only after the human selects approval and preserves retry confir
     result: { kind: 'error', code: 'operation_failed', message: 'Task invalidation failed' } });
   await waitFor(() => expect(context.app.lastFrame()).toContain('Task invalidation failed'));
   expect(context.app.lastFrame()).toMatch(/retry|再試行/iu);
+  expectCommandHint(context, false);
 });
 
 it('sends the selected target and structured answer, then closes the saved answer on its completion event', async () => {
@@ -92,6 +134,29 @@ it('sends the selected target and structured answer, then closes the saved answe
   await waitFor(() => {
     expect(promptFrame(context)).toContain('Discuss your goal');
     expect(context.app.lastFrame()).toContain('Answer saved');
+    expectCommandHint(context, true);
+  });
+});
+
+it('sends /make-goal as a free-text inquiry answer without requesting a goal proposal', async () => {
+  const item = question();
+  const context = mounted([item]);
+  await openAnswer(context);
+  context.app.stdin.write('/make-goal');
+  await waitFor(() => {
+    expect(promptFrame(context)).toContain('/make-goal');
+    expectCommandHint(context, false);
+  });
+  context.app.stdin.write(ENTER);
+  await waitFor(() => expect(context.client.commands()).toEqual([{
+    kind: 'answer_question', target: item.inquiry.target, questionId: item.inquiry.question.id, answer: { text: '/make-goal' },
+  }]));
+  context.client.output({ kind: 'result', operationId: await context.client.operation(),
+    result: { kind: 'answer_saved', answerSaved: true, message: 'Answer saved' } });
+  await waitFor(() => {
+    expect(promptFrame(context)).toContain('Discuss your goal');
+    expect(context.app.lastFrame()).toContain('/make-goal');
+    expectCommandHint(context, true);
   });
 });
 
@@ -154,51 +219,5 @@ it('does not restore a withdrawn inquiry when Escape returns from details to its
   await waitFor(() => expect(context.app.lastFrame()).toContain('Pending 0'));
   context.app.stdin.write(ESC);
   await waitFor(() => expect(context.app.lastFrame()).not.toContain('Choose output'));
-  expect(context.client.submit).not.toHaveBeenCalled();
-});
-
-it('keeps the answer draft while visiting the read-only repository list and returning on Escape', async () => {
-  const context = mounted([question()]);
-  await openAnswer(context);
-  context.app.stdin.write('unsent answer');
-  await waitFor(() => expect(promptFrame(context)).toContain('unsent answer'));
-  context.app.stdin.write(REPOSITORY_MENU);
-  await waitFor(() => expect(context.app.lastFrame()).toContain('manager-repository — ' + cwd));
-  context.app.stdin.write(ENTER);
-  context.app.stdin.write(ESC);
-  await waitFor(() => {
-    expect(context.app.lastFrame()).toContain('Choose output');
-    expect(promptFrame(context)).toContain('unsent answer');
-  });
-  expect(context.client.submit).not.toHaveBeenCalled();
-});
-
-it('keeps an answer draft when there are no notices', async () => {
-  const context = mounted([question()]);
-  await openAnswer(context);
-  context.app.stdin.write('unsent answer');
-  await waitFor(() => expect(promptFrame(context)).toContain('unsent answer'));
-  context.app.stdin.write(NOTICE_MENU);
-  await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.selectionEmpty.notice', 'en')));
-  expect(promptFrame(context)).toContain('unsent answer');
-  expect(context.client.submit).not.toHaveBeenCalled();
-});
-
-it('scrolls a complete 7000-character notice and returns to the same list without a mutation', async () => {
-  const item = notice(1);
-  const context = mounted([item]);
-  context.app.stdin.write(NOTICE_MENU);
-  await waitFor(() => expect(context.app.lastFrame()).toContain('Notice 1'));
-  expect(context.app.lastFrame()).not.toContain('notice-end-1');
-  context.app.stdin.write(ENTER);
-  await waitFor(() => expect(context.app.lastFrame()).toContain('notice-body-1'));
-  for (let index = 0; index < 150; index++) context.app.stdin.write(DOWN);
-  await waitFor(() => expect(context.app.lastFrame()).toContain('notice-end-1'));
-  context.app.stdin.write(ESC);
-  await waitFor(() => {
-    expect(context.app.lastFrame()).toContain('Notice 1');
-    expect(context.app.lastFrame()).not.toContain('notice-end-1');
-  });
-  expect(context.client.getSnapshot().items).toContainEqual(item);
   expect(context.client.submit).not.toHaveBeenCalled();
 });

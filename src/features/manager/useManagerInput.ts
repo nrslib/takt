@@ -1,16 +1,19 @@
 import { useInput, usePaste } from 'ink';
 import type { RefObject } from 'react';
-import { applyEditorKey, commitEditorInput, type EditorState } from '../tui/editorState.js';
+import { applyEditorKey, commitEditorInput, replaceEditorText, type EditorState } from '../tui/editorState.js';
+import type { useSlashCompletion } from '../tui/useSlashCompletion.js';
 import { resolveEditorKey } from '../tui/editorKeys.js';
 import type { ManagerAbortTarget, useManagerAbortConfirmation } from './useManagerAbortConfirmation.js';
 import type { SaveManagerAnswer, useManagerQuestionAnswer } from './useManagerQuestionAnswer.js';
 import type { useManagerSummaryApproval } from './useManagerSummaryApproval.js';
 import type { ManagerSelectedTarget, ManagerSelectionCommand, useManagerSelection } from './useManagerSelection.js';
 
+export const MAKE_GOAL_COMMAND = '/make-goal';
+
 export function useManagerInput({
   exiting, active, registering, editorRef, edit, submit, onExit, contentWidth, canApprove, abortTurn,
   abortConfirmation, questionAnswer, summaryApproval, selection, selectTarget, abortGoal, saveAnswer, register, onInputUnavailable,
-  openMenu, summarize,
+  openMenu, slashCompletion,
 }: {
   exiting: RefObject<boolean>;
   active: RefObject<boolean>;
@@ -32,7 +35,7 @@ export function useManagerInput({
   register: (revision: number) => Promise<void>;
   onInputUnavailable: () => void;
   openMenu: (kind: ManagerSelectionCommand) => void;
-  summarize: () => void;
+  slashCompletion: ReturnType<typeof useSlashCompletion>;
 }): void {
   const { abortTarget } = abortConfirmation;
   const { answerTarget } = questionAnswer;
@@ -40,10 +43,12 @@ export function useManagerInput({
   const editDraft = (next: EditorState): void => {
     if (!registering.current && pending !== null
       && answerTarget === null && selection.selection === null && abortTarget === null
-      && next.text !== editorRef.current.text) {
+      && next.text !== editorRef.current.text
+      && !(next.text.trim() !== '' && MAKE_GOAL_COMMAND.startsWith(next.text.trim()))) {
       summaryApproval.dismiss(pending);
     }
     edit(next);
+    slashCompletion.reset();
   };
   const insertText = (text: string): void => {
     if (exiting.current || (answerTarget !== null && active.current)) return;
@@ -60,11 +65,8 @@ export function useManagerInput({
       onExit();
       return;
     }
-    if (key.ctrl && (input === 'r' || input === 'g' || input === 'o' || input === 'n' || input === 'p')) {
-      if (input === 'o') summarize();
-      else if (input === 'n') openMenu('notice');
-      else if (input === 'p') openMenu('repository');
-      else openMenu(input === 'r' ? 'answer' : 'goal');
+    if (key.ctrl && (input === 'r' || input === 'g')) {
+      openMenu(input === 'r' ? 'answer' : 'goal');
       return;
     }
     if (selection.selection !== null) {
@@ -89,6 +91,10 @@ export function useManagerInput({
       return;
     }
     const editKey = resolveEditorKey(input, key, contentWidth);
+    if (key.ctrl && editKey === null) return;
+    if (answerTarget === null && slashCompletion.handleInput(key, (text) => {
+      editDraft(replaceEditorText(editorRef.current, text));
+    })) return;
     // Ink は本文と同じチャンクに入った CR/LF を Enter と分類しない。
     const trailingEnter = !key.return && !(key.shift || key.meta)
       && editKey?.kind === 'insert' && /[\r\n]$/u.test(input);
@@ -109,6 +115,7 @@ export function useManagerInput({
       } else if (editorRef.current.text.trim() !== '') {
         const text = editorRef.current.text;
         edit(commitEditorInput(editorRef.current, text));
+        slashCompletion.reset();
         submit(text);
       }
       return;

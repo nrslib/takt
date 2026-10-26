@@ -193,7 +193,7 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
     expect(text.split('\n').slice(5).join('\n')).not.toMatch(language === 'ja' ? /全文|Ctrl\+N/u : /full message|Ctrl\+N/iu);
   });
 
-  it.each(['blocked', 'custom'] as const)('shortens only the tail of a long %s body and points to the full TUI notice', (kind) => {
+  it.each(['blocked', 'custom'] as const)('shortens only the tail of a long %s body and guides readers to the current TUI state', (kind) => {
     const reason = language === 'ja' ? '認証に失敗しました。' : 'Authentication failed.';
     const action = language === 'ja' ? '検証用の認証情報を更新してください。' : 'Update test credentials.';
     const body = `${reason}\n${'x'.repeat(620)}\n${action}`;
@@ -205,8 +205,8 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
     const guidance = text.split('\n').slice(4).join('\n');
 
     expect(visibleBody).toBe(`${reason}\n${'x'.repeat(599 - reason.length - 1)}…`);
-    expect(guidance).toMatch(language === 'ja' ? /全文/u : /full message/iu);
-    expect(guidance).toMatch(/Ctrl\+N/u);
+    expect(guidance).toMatch(language === 'ja' ? /会話.*作業状態/u : /conversation.*work state/iu);
+    expect(guidance).not.toMatch(/Ctrl\+N|\^N/u);
     expect(guidance).toContain('TUI');
     expect(guidance).toContain('takt manager');
     expect(guidance).toContain('customer-export');
@@ -323,13 +323,15 @@ describe.each(['ja', 'en'] as const)('human-readable goal notifications in %s', 
       if (destination === 'slack') expect(custom.split('\n').slice(2).join('\n')).toBe(oldBody);
       else {
         expect(custom.split('\n').slice(2, 5)).toEqual(oldBody.split('\n').slice(0, 3));
-        expect(custom.split('\n')[5]).toMatch(/Ctrl\+N|\^N/u);
+        expect(custom.split('\n')[5]).toMatch(language === 'ja' ? /省略/u : /omitted/iu);
+        expect(custom).not.toMatch(/Ctrl\+N|\^N/u);
       }
       const withoutCompletion = formatGoalNotification(goalRecord(), { kind: 'awaiting_merge', body: oldBody }, language, 'customer-export', destination);
       if (destination === 'slack') expect(withoutCompletion.split('\n').slice(2).join('\n')).toBe(oldBody);
       else {
         expect(withoutCompletion.split('\n').slice(2, 5)).toEqual(oldBody.split('\n').slice(0, 3));
-        expect(withoutCompletion.split('\n')[5]).toMatch(/Ctrl\+N|\^N/u);
+        expect(withoutCompletion.split('\n')[5]).toMatch(language === 'ja' ? /省略/u : /omitted/iu);
+        expect(withoutCompletion).not.toMatch(/Ctrl\+N|\^N/u);
       }
     }
     expect(goal).toEqual(before);

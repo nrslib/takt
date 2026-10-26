@@ -72,7 +72,7 @@ it('projects sequential work logs and enabled notices with exact stable IDs and 
 
 describe.each(['ja', 'en'] as const)('TUI notice formatting in %s', (lang) => {
   it.each(['progress', 'awaiting_merge', 'completed', 'blocked', 'custom'] as const)(
-    'keeps exactly three complete body lines and one full-message hint for %s', (kind) => {
+    'keeps exactly three complete body lines and an omission hint without retired keys for %s', (kind) => {
       const body = ['first ' + 'e\u0301'.repeat(701) + '  ', '', 'third line  ', 'fourth line', 'fifth line'].join('\n');
       const goal = goalRecord();
       const lines = formatGoalNotification(goal, { kind, body, severity: 'warning' }, lang, 'fixture', 'tui').split('\n');
@@ -83,8 +83,8 @@ describe.each(['ja', 'en'] as const)('TUI notice formatting in %s', (lang) => {
         getLabel('manager.notificationSeverity', lang, { severity: getLabel('manager.notificationSeverities.warning', lang) }),
       ]);
       expect(lines.slice(3, 6)).toEqual(body.split('\n').slice(0, 3));
-      expect(lines[6]).toMatch(/Ctrl\+N|\^N/u);
-      expect(lines[6]).toMatch(lang === 'ja' ? /省略.*全文|全文.*省略/u : /(?:omitt|truncat|shorten).*full|full.*(?:omitt|truncat|shorten)/iu);
+      expect(lines[6]).not.toMatch(/Ctrl\+N|\^N/u);
+      expect(lines[6]).toMatch(lang === 'ja' ? /省略/u : /omitted/iu);
       expect(lines.slice(7)).toEqual(kind === 'blocked'
         ? [getLabel('manager.notificationBlockedAction', lang, { project: 'fixture' })] : []);
     },
@@ -109,7 +109,8 @@ describe.each(['ja', 'en'] as const)('TUI notice formatting in %s', (lang) => {
     const lines = formatGoalNotification(goal, { kind: 'awaiting_merge', body: 'Unused notification body' }, lang, 'fixture', 'tui').split('\n');
 
     expect(lines.slice(2, 5)).toEqual(summary.split('\n').slice(0, 3));
-    expect(lines[5]).toMatch(/Ctrl\+N|\^N/u);
+    expect(lines[5]).toMatch(lang === 'ja' ? /省略/u : /omitted/iu);
+    expect(lines[5]).not.toMatch(/Ctrl\+N|\^N/u);
     expect(lines.slice(6, 8)).toEqual([
       getLabel('manager.notificationMerge', lang, { branch: 'main' }),
       getLabel('manager.notificationMergeWorktree', lang, { directory: '/Users/nrs/work/git/takt3' }),

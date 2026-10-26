@@ -5,7 +5,7 @@ import { useManagerAbortConfirmation, type ManagerAbortTarget } from './useManag
 import { useManagerQuestionAnswer, type SaveManagerAnswer } from './useManagerQuestionAnswer.js';
 import type { PendingQuestion } from './inquiryAnswer.js';
 import { useManagerSummaryApproval } from './useManagerSummaryApproval.js';
-import { useManagerInput } from './useManagerInput.js';
+import { MAKE_GOAL_COMMAND, useManagerInput } from './useManagerInput.js';
 import { ManagerAnswerDialog } from './ManagerAnswerDialog.js';
 import { ManagerAbortDialog } from './ManagerAbortDialog.js';
 import { ManagerSummaryDialog } from './ManagerSummaryDialog.js';
@@ -17,6 +17,8 @@ import type { ManagerExecutionContext } from './startupResolution.js';
 import type { ConversationIpcClient } from './conversationIpcClient.js';
 import type { ConversationCommand, OperationResult } from './conversationPort.js';
 import { PromptInput } from '../tui/PromptInput.js';
+import { resolveSlashCompletions } from '../tui/slashCompletion.js';
+import { useSlashCompletion } from '../tui/useSlashCompletion.js';
 import { TranscriptView, type TranscriptEntry } from '../tui/TranscriptEntryView.js';
 import { StatusLine } from '../tui/StatusLine.js';
 import { createEditorState, type EditorState } from '../tui/editorState.js';
@@ -26,6 +28,8 @@ import { getErrorMessage } from '../../shared/utils/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { measureWidth } from '../../shared/utils/grapheme.js';
+
+const MANAGER_COMMANDS = [{ command: MAKE_GOAL_COMMAND, labelKey: 'manager.makeGoalDescription' }];
 
 export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, assignment }: {
   assignment: ManagerExecutionContext['assignment'];
@@ -70,7 +74,8 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const { abortTarget, setAbortTarget } = abortConfirmation;
   const questionAnswer = useManagerQuestionAnswer(bodyWidth);
   const { answerTarget, clearAnswer, beginAnswer } = questionAnswer;
-  const selection = useManagerSelection(bodyWidth);
+  const selection = useManagerSelection();
+  const slashCompletion = useSlashCompletion(resolveSlashCompletions(editor.text, lang, {}, MANAGER_COMMANDS));
   const state = snapshot.state;
   const busy = sending || state?.running != null;
   active.current = busy;
@@ -109,8 +114,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     if (objective === undefined) throw new Error('Missing inquiry objective');
     return [{ ...target, question, objective }];
   });
-  const notices = snapshot.items.flatMap((item) => item.kind === 'notice' ? [item.notice] : []);
-  const display = { questions, goals, notices, repositoryDirectories: currentAssignment.repositoryDirectories };
+  const display = { questions, goals };
   useEffect(() => {
     setPending(state?.pending ?? null);
     resetChoice();
@@ -173,16 +177,14 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     resetChoice();
     if (await send({ kind: 'approve_summary', revision }) === null) registering.current = false;
   };
-  const submit = (text: string, summaryRequest = false): void => {
+  const submit = (text: string): void => {
+    const summaryRequest = text.trim() === MAKE_GOAL_COMMAND;
     if (!summaryRequest) setEntries((previous) => [...previous, { role: 'user', content: toDisplayText(text) }]);
     else setSummarizing(true);
     resetChoice();
-    void send({ kind: 'message', text }, summaryRequest ? (id) => { summaryOperation.current = id; } : undefined)
+    void send({ kind: 'message', text: summaryRequest ? getLabel('manager.goSummaryRequest', lang) : text },
+      summaryRequest ? (id) => { summaryOperation.current = id; } : undefined)
       .then((id) => { if (id === null && summaryRequest) setSummarizing(false); });
-  };
-  const summarize = (): void => {
-    if (latest.current.state?.pending != null) void register(latest.current.state.pending.revision);
-    else submit(getLabel('manager.goSummaryRequest', lang), true);
   };
   const changeGoal = async (kind: 'pause' | 'resume' | 'abort', target: ManagerAbortTarget['goal'], confirmed = false, retry = false): Promise<void> => {
     const current = retry ? target : goals.find((goal) => goal.id === target.id && isGoalSelectionCandidate(kind, goal));
@@ -209,20 +211,12 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   };
   const openMenu = (kind: ManagerSelectionCommand): void => {
     if (kind === 'answer' && registering.current) return;
-    if (kind === 'notice' && notices.length === 0) {
-      append(getLabel('manager.selectionEmpty.notice', lang));
-      void client.refresh().catch((error: unknown) => append(getErrorMessage(error)));
-      return;
-    }
-    if (kind === 'repository' && display.repositoryDirectories.length === 0) {
-      append(getLabel('manager.selectionEmpty.repository', lang));
-      return;
-    }
-    if (kind !== 'repository') { clearAnswer(); setAbortTarget(null); resetChoice(); }
+    clearAnswer(); setAbortTarget(null); resetChoice();
     if (!selection.open(kind, display)) append(getLabel('manager.selectionEmpty.' + kind, lang));
     void client.refresh().catch((error: unknown) => append(getErrorMessage(error)));
   };
   const visibleEditor = answerTarget === null ? editor : answerEditor;
+  const conversationInput = answerTarget === null && selection.selection === null && abortTarget === null;
   const summaryVisible = pending !== null && selection.selection === null && answerTarget === null && abortTarget === null;
   const selectingSummary = summaryVisible && editor.text === '';
   const repositoryDirectories = currentAssignment.repositoryDirectories;
@@ -240,7 +234,8 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     edit: answerTarget === null ? edit : editAnswer, submit, onExit, contentWidth, canApprove,
     abortTurn: () => { const running = latest.current.state?.running; if (running != null) void send({ kind: 'abort_turn', operationId: running.operationId }); },
     abortConfirmation, questionAnswer, summaryApproval, selection, selectTarget,
-    abortGoal: (target) => changeGoal('abort', target.goal, true, target.retry), saveAnswer, register, openMenu, summarize,
+    abortGoal: (target) => changeGoal('abort', target.goal, true, target.retry), saveAnswer, register, openMenu,
+    slashCompletion,
     onInputUnavailable: () => append(getLabel('manager.inputUnavailableDuringAbort', lang)),
   });
   return <Box flexDirection="column">
@@ -251,22 +246,22 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     {snapshot.readStatus === 'reading' && <Text>{getLabel('manager.conversation.reading', lang)}</Text>}
     {snapshot.readStatus === 'incomplete' && <Text>{getLabel('manager.conversation.incomplete', lang)}</Text>}
     {state?.interrupted && <Text>{getLabel('manager.conversation.interrupted', lang)}</Text>}
-    {selection.selection !== null && <ManagerSelectionDialog selection={selection.selection} bodyText={selection.bodyText} lang={lang} />}
+    {selection.selection !== null && <ManagerSelectionDialog selection={selection.selection} lang={lang} />}
     {answerTarget !== null && selection.selection === null && <ManagerAnswerDialog answerTarget={answerTarget} bodyText={questionAnswer.bodyText} lang={lang} />}
     {abortTarget !== null && selection.selection === null && <ManagerAbortDialog abortTarget={abortTarget.goal} retry={abortTarget.retry} approve={approve} lang={lang} />}
-    {summaryVisible && <>
-      <ManagerSummaryDialog pending={pending} approve={approve} ja={ja} />
-      {canApprove && <Text dimColor>{getLabel('manager.summaryHint', lang)}</Text>}
-    </>}
+    {summaryVisible && <ManagerSummaryDialog pending={pending} approve={approve} ja={ja} />}
     <ManagerHelp lang={lang} />
     <StatusLine busy={busy} label={summarizing ? getLabel('manager.summaryWorking', lang) : ja ? '処理中' : 'Working'} streamed="" />
     <PromptInput text={visibleEditor.text} cursor={visibleEditor.cursor} contentWidth={contentWidth}
       placeholder={answerTarget === null ? (ja ? 'ゴールを相談してください' : 'Discuss your goal') : (ja ? '回答を入力してください' : 'Enter your answer')}
-      hint={inputHint} showHint={false} completions={[]} completionIndex={0}
+      hint={inputHint} showHint={false}
+      completions={conversationInput ? slashCompletion.completions : []}
+      completionIndex={slashCompletion.completionIndex}
       disabled={selection.selection !== null || abortTarget !== null || selectingSummary} />
     <Box flexWrap="wrap">{hintItems.map((item, index) => {
       const text = item + (index < hintItems.length - 1 ? hintSeparator : '');
       return <Box key={item} width={measureWidth(text)} flexShrink={0}><Text dimColor>{text}</Text></Box>;
     })}</Box>
+    {conversationInput && !selectingSummary && <Text dimColor>{getLabel('manager.makeGoalHint', lang)}</Text>}
   </Box>;
 }
