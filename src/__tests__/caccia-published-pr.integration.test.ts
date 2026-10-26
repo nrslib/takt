@@ -13,7 +13,11 @@ vi.mock('../features/pipeline/steps.js', () => ({
 }));
 vi.mock('../infra/task/index.js', async (original) => ({
   ...await original<typeof import('../infra/task/index.js')>(),
-  autoCommitAndPush: vi.fn().mockResolvedValue({ success: true, commitHash: 'development-commit' }),
+  autoCommitAndPush: vi.fn().mockResolvedValue({
+    success: true,
+    commitHash: 'development-commit',
+    publishedHead: 'd'.repeat(40),
+  }),
 }));
 vi.mock('../infra/task/git.js', async (original) => ({
   ...await original<typeof import('../infra/task/git.js')>(), pushBranch: vi.fn(),
@@ -145,7 +149,12 @@ describe('Published PR identity through production Caccia', () => {
   beforeEach(() => {
     vi.mocked(runWorkflow).mockResolvedValue({ success: true, workflowHasCaccia: false });
     vi.mocked(commitAndPush).mockResolvedValue(true);
-    vi.mocked(autoCommitAndPush).mockResolvedValue({ success: true, commitHash: 'development-commit', message: 'Committed' });
+    vi.mocked(autoCommitAndPush).mockResolvedValue({
+      success: true,
+      commitHash: 'development-commit',
+      publishedHead: 'd'.repeat(40),
+      message: 'Committed',
+    });
     root = mkdtempSync(join(tmpdir(), 'takt-published-caccia-'));
     project = join(root, 'project'); statePath = join(root, 'state.json'); remotes = {}; clonePaths = []; mergeStarts = [];
     fixStarted = undefined; finishFix = undefined;
