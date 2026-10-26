@@ -364,7 +364,7 @@ When an operation is denied, the reason returns to the manager, which takes it i
 
 Set the judge's provider and model through `provider.targets.internal_agents.manager-permission-judge` in `runtime.yaml`. Like other internal agent seats, it accepts `profile` or `ladder`, but not `pool`. If unassigned, it uses the same provider, model, and provider options as the manager.
 
-The judge has a short deadline. A timeout, exception, or invalid decision format denies the operation, without an automatic retry of the judgment.
+The judge has a 30-second deadline. A timeout follows the same human confirmation flow as an “ask a person” decision: an approval inquiry is saved, the operation is stopped pending confirmation, and a notification is sent. Exceptions and invalid decision formats still deny the operation. The judgment is not retried automatically.
 
 ### Instant exec mode
 

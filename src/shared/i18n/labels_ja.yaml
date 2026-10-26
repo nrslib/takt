@@ -466,7 +466,7 @@ manager:
     judgeFailed: "道具の判断役の実行に失敗したため拒否しました。"
     judgeInvalidOutput: "道具の判断役の出力が不正なため拒否しました。"
     judgeMissingReason: "道具の判断役が理由を返さなかったため拒否しました。"
-    judgeTimeout: "道具の判断役が30秒の期限を超えたため拒否しました。"
+    judgeTimeout: "道具の判断役が30秒の期限内に判断を返さなかったため、人の確認に回しました。"
     judgeInterrupted: "道具の判断が中断されたため拒否しました。"
     judgeValidationFailed: "道具の判断役の実行または出力の検証に失敗したため拒否しました。"
   conversationFailureNotification: |-

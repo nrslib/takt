@@ -346,7 +346,7 @@ manager:
 
 判断 agent 的 provider 和 model 可通过 `runtime.yaml` 中的 `provider.targets.internal_agents.manager-permission-judge` 指定。与其他内部 agent seat 一样，可以使用 `profile` 或 `ladder`，不能使用 `pool`。未分配时使用与 manager 相同的 provider、model 和 provider options。
 
-判断有较短的期限。超时、异常或判断格式不符合要求时都会拒绝操作，不会自动重试判断。
+判断的期限为30秒。超时与请求人工确认采用相同流程：保存批准询问，停止操作并等待确认，同时发送通知。异常或判断格式不符合要求时仍会拒绝操作。不会自动重试判断。
 
 ### 即时 exec 模式
 

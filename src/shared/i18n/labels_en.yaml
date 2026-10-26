@@ -466,7 +466,7 @@ manager:
     judgeFailed: "Denied because the tool permission judge failed to run."
     judgeInvalidOutput: "Denied because the tool permission judge returned invalid output."
     judgeMissingReason: "Denied because the tool permission judge did not provide a reason."
-    judgeTimeout: "Denied because the tool permission judge exceeded the 30-second time limit."
+    judgeTimeout: "Referred for human confirmation because the tool permission judge did not return a decision within the 30-second time limit."
     judgeInterrupted: "Denied because the tool permission check was interrupted."
     judgeValidationFailed: "Denied because the tool permission judge failed to run or its output could not be validated."
   conversationFailureNotification: |-
