@@ -113,6 +113,8 @@ const PROJECT_TRACKED_KEYS = [
   'workflow_runtime_prepare.custom_scripts',
   'workflow_command_gates',
   'workflow_command_gates.custom_scripts',
+  'workflow_system_commands',
+  'workflow_system_commands.custom_scripts',
   'workflow_arpeggio',
   'workflow_arpeggio.custom_data_source_modules',
   'workflow_arpeggio.custom_merge_inline_js',
@@ -131,6 +133,7 @@ const PROJECT_TRACKED_KEYS = [
 ] as const;
 
 const GLOBAL_TRACKED_KEYS = [
+  'workflow_system_commands_trusted_projects',
   'language',
   'provider',
   'model',
@@ -232,6 +235,8 @@ const GLOBAL_TRACKED_KEYS = [
   'workflow_runtime_prepare.custom_scripts',
   'workflow_command_gates',
   'workflow_command_gates.custom_scripts',
+  'workflow_system_commands',
+  'workflow_system_commands.custom_scripts',
   'workflow_arpeggio',
   'workflow_arpeggio.custom_data_source_modules',
   'workflow_arpeggio.custom_merge_inline_js',

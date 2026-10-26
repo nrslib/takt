@@ -793,6 +793,55 @@ system step は TAKT エンジン自身が実行する step で、agent は起�
         next: plan_from_existing_pr
 ```
 
+#### 固定コマンドの input
+
+`type: command`はworkflowに固定した文字列をshellで実行します。以下の許可設定は既定で無効です。明示登録したprojectではprojectの値がglobalより優先されます。`workflow_command_gates.custom_scripts`とは独立し、無許可のworkflowは読み込み時に拒否されます。
+
+project設定だけで許可するには、利用者がそのsystem command設定を信頼し、global専用の`workflow_system_commands_trusted_projects: [/absolute/path/to/project]`へ設定読込元を登録する必要があります。環境変数`TAKT_WORKFLOW_SYSTEM_COMMANDS_TRUSTED_PROJECTS`は絶対パスのJSON配列です。実パスの完全一致だけを認め、親ディレクトリの登録では許可しません。未登録ならPR contextやcloneの有無にかかわらずglobal設定または`TAKT_WORKFLOW_SYSTEM_COMMANDS_CUSTOM_SCRIPTS=true`による許可が必要です。projectの明示的な`false`は常に拒否します。別cloneでも元の設定読込元を照合します。自動登録は行わず、各実行で現在の承認を解決します。rootと子workflowは同じ値を使い、`wait`では設定を読み直しません。詳細は[設定ガイド](configuration.ja.md)を参照してください。
+
+```yaml
+workflow_system_commands:
+  custom_scripts: true
+```
+
+```yaml
+name: approval-command
+steps:
+  - name: check
+    kind: system
+    system_inputs:
+      - type: command
+        as: approval
+        command: node scripts/check-approval.mjs
+        timeout_ms: 1000
+        output: json
+    wait:
+      until: when(context.check.approval.json.ready == true)
+      interval_ms: 1000
+      max_retries: 30
+      on_timeout: ABORT
+    rules:
+      - condition: when(context.approval.json.status == "approved")
+        next: consume
+      - condition: when(true)
+        next: ABORT
+  - name: consume
+    instruction: "承認結果: {context:check.approval.json.status}"
+    rules:
+      - condition: when(true)
+        next: COMPLETE
+```
+
+`timeout_ms` は必須で、1～2147483647 の整数です。既定値や無期限指定はありません。`output: json` は省略できます。`cwd` は指定できず、タスクの実行ディレクトリ（worktree ならクローン）で起動します。pipeline と対話モードで同じ動作をします。command は effects には指定できません。
+
+結果には `exit_code`（終了コードを取得できない場合は `null`）、`timed_out`、`stdout`、`stderr` が入ります。`json` は `output: json` を指定し、タイムアウトせず終了コード 0 で JSON を解析できた場合だけ入ります。非ゼロ終了とタイムアウトは rules へ渡す結果です。stdout と stderr の合計が 65536 バイトを超えた場合、起動できない場合、成功時の JSON が不正な場合はステップが失敗し、effects と rules は実行されません。
+
+現在の command binding は条件評価時に `context.approval...` とも書けます。既存のステップ名付き scope が同名ならそちらを優先します。保存する値と後続 instruction の参照は `context.check.approval...` の形式です。
+
+TAKT は command のテンプレート展開や引数の追加をしません。直前の応答本文は `TAKT_PREVIOUS_RESPONSE_FILE`、同じ応答に構造化出力があれば `TAKT_PREVIOUS_STRUCTURED_OUTPUT_FILE` で非公開ファイルのパスを渡します。本文がなければ空ファイルを渡し、構造化出力がなければその環境変数は設定しません。スクリプト側でファイルを読み、値を検証してください。ファイルは run の context 配下に保存し、run の成果物として保持します。環境変数はコマンドゲートと同じ基本許可リストと、この2つのファイルパスに限定します。
+
+無通信タイムアウトは適用しません。実行期限または中断時に SIGTERM を送り、終了しなければ100ms後に SIGKILL を送ります。`wait` は確認ごとにコマンドを実行し直し、各実行に `timeout_ms` を適用します。各確認は同じ直前応答を参照し、次の system step は直前の system 応答を参照します。前回の JSON は引き継ぎません。`wait.max_retries`、`on_timeout`、ステップの計数、`loop_monitors`、元の agent に戻った際のセッション継続は既存の規則に従います。
+
 `effects` はエンジン側のアクションを実行します: `commit_and_push`、`caccia`、`enqueue_task`、`comment_pr`、`sync_with_root`、`resolve_conflicts_with_ai`、`merge_pr`、`close_pr`。各 effect type は 1 step につき最大 1 回しか書けず、結果は `when(effect.<step>.<type>.<field>)` でルーティングします。
 
 ```yaml

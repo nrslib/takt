@@ -8,6 +8,7 @@ import type {
   AutoRoutingStrategy,
   PersonaProviderEntry,
   ProviderRoutingConfig,
+  WorkflowSystemCommandsConfig,
 } from '../../../core/models/config-types.js';
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
 import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
@@ -224,6 +225,8 @@ export interface InteractiveMetadata {
 
 /** Options for workflow execution */
 export interface WorkflowExecutionOptions extends PrMergeOptions {
+  /** System command permission resolved for this run, including the configuration source. */
+  workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig;
   /** Header prefix for display */
   headerPrefix?: string;
   /** Controls terminal-oriented output side effects. */

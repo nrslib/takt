@@ -19,6 +19,7 @@ interface SystemStepExecutorDeps extends PrMergeOptions {
   readonly task: string;
   readonly projectCwd: string;
   readonly getCwd: () => string;
+  readonly getContextDirectory?: () => string;
   readonly taskContext?: {
     readonly issueNumber?: number;
     readonly runSlug?: string;
@@ -99,6 +100,7 @@ export class SystemStepExecutor {
     const createProviderStream = this.deps.createProviderStream;
     return this.deps.systemStepServicesFactory({
       cwd,
+      contextDirectory: this.deps.getContextDirectory?.(),
       projectCwd: this.deps.projectCwd,
       task: this.deps.task,
       taskContext: this.deps.taskContext,
@@ -166,7 +168,16 @@ export class SystemStepExecutor {
     const ruleContext = this.deps.getRuleContext(step, runtime);
 
     const wait = step.kind === 'system' ? step.wait : undefined;
+    const commandBindings = new Map<string, Record<string, unknown>>();
+    const evaluationState = (): WorkflowState => {
+      const systemContexts = new Map(state.systemContexts);
+      for (const [binding, value] of commandBindings) {
+        if (!systemContexts.has(binding)) systemContexts.set(binding, value);
+      }
+      return { ...state, systemContexts };
+    };
     const resolveInputs = async (): Promise<boolean> => {
+      commandBindings.clear();
       const resolvedContext: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
       if ((step.systemInputs?.length ?? 0) > 0) {
         const services = this.requireServices(cwd, step);
@@ -181,6 +192,9 @@ export class SystemStepExecutor {
         for (const input of step.systemInputs ?? []) {
           const resolvedInput = await services.resolveSystemInput(input, state, step.name, resolutionContext);
           resolvedContext[input.as] = resolvedInput;
+          if (input.type === 'command') {
+            commandBindings.set(input.as, resolvedInput as Record<string, unknown>);
+          }
           resolutionContext.resolvedBindings.set(input.as, resolvedInput);
         }
       }
@@ -208,7 +222,7 @@ export class SystemStepExecutor {
       const condition = parseWorkflowRuleCondition(wait.until);
       if (condition.kind !== 'when') throw new Error('wait.until requires when(...)');
       let retries = 0;
-      while (!inputsResolved || !evaluateWhenExpression(condition.expression, state)) {
+      while (!inputsResolved || !evaluateWhenExpression(condition.expression, evaluationState())) {
         if (retries === wait.maxRetries) {
           systemWaitTimeout = true;
           break;
@@ -237,7 +251,7 @@ export class SystemStepExecutor {
       runtime,
     ), {
       ...ruleContext,
-      state,
+      state: evaluationState(),
     });
 
     const response: AgentResponse = {

@@ -1,10 +1,14 @@
 import type { z } from 'zod';
+import { realpathSync, statSync } from 'node:fs';
 import { isRuntimePreparePreset } from '../../../core/models/workflow-types.js';
 import type {
   WorkflowArpeggioConfig,
   WorkflowCommandGatesConfig,
+  WorkflowSystemCommandsConfig,
   WorkflowMcpServersConfig,
   WorkflowRuntimePrepareConfig,
+  GlobalConfig,
+  ProjectConfig,
 } from '../../../core/models/config-types.js';
 import type { WorkflowConfig, WorkflowStepRawSchema } from '../../../core/models/index.js';
 import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../../core/workflow/workflow-config-error.js';
@@ -44,6 +48,60 @@ export function validateWorkflowRuntimePrepare(
       `Workflow runtime.prepare custom script "${entry}" is disabled by default. `
       + 'Configure workflow_runtime_prepare.custom_scripts in project/global config to allow it.',
     );
+  }
+}
+
+export function resolveWorkflowSystemCommandsPolicy(
+  globalPolicy: WorkflowSystemCommandsConfig | undefined,
+  projectPolicy: WorkflowSystemCommandsConfig | undefined,
+  projectConfigTrusted: boolean,
+): WorkflowSystemCommandsConfig | undefined {
+  if (!projectConfigTrusted) {
+    return { customScripts: globalPolicy?.customScripts === true && projectPolicy?.customScripts !== false };
+  }
+  const customScripts = projectPolicy?.customScripts ?? globalPolicy?.customScripts;
+  return customScripts === undefined ? undefined : { customScripts };
+}
+
+export function resolveWorkflowSystemCommandsForProject(
+  projectCwd: string,
+  globalConfig: GlobalConfig,
+  projectConfig: ProjectConfig,
+): WorkflowSystemCommandsConfig {
+  const trustedRoots = globalConfig.workflowSystemCommandsTrustedProjects ?? [];
+  const canonicalRoot = trustedRoots.length === 0 ? undefined : canonicalProjectRoot(projectCwd);
+  const trusted = canonicalRoot !== undefined && trustedRoots.some(
+    (root) => canonicalProjectRoot(root) === canonicalRoot,
+  );
+  return {
+    customScripts: resolveWorkflowSystemCommandsPolicy(
+      globalConfig.workflowSystemCommands, projectConfig.workflowSystemCommands, trusted,
+    )?.customScripts === true,
+  };
+}
+
+function canonicalProjectRoot(root: string): string | undefined {
+  try {
+    const path = realpathSync(root);
+    return statSync(path).isDirectory() ? path : undefined;
+  } catch {
+    // An inaccessible registration cannot establish trust.
+    return undefined;
+  }
+}
+
+export function validateWorkflowSystemCommands(
+  steps: RawStep[],
+  policy: WorkflowSystemCommandsConfig | undefined,
+): void {
+  for (const [stepIndex, step] of steps.entries()) {
+    for (const [inputIndex, input] of (step.system_inputs ?? []).entries()) {
+      if (input.type !== 'command' || policy?.customScripts === true) continue;
+      throw withWorkflowStepErrorPath(new Error(
+        `Step "${step.name}" uses a command system input, which is disabled by default. `
+        + 'Configure workflow_system_commands.custom_scripts in project/global config to allow it.',
+      ), ['steps', stepIndex, 'system_inputs', inputIndex]);
+    }
   }
 }
 

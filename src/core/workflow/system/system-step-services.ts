@@ -123,6 +123,7 @@ export interface SystemStepServicesOptions extends PrMergeOptions {
   readonly allowGitHooks?: boolean;
   readonly allowGitFilters?: boolean;
   readonly cwd: string;
+  readonly contextDirectory?: string;
   readonly projectCwd: string;
   readonly task: string;
   readonly taskContext?: SystemStepTaskContext;

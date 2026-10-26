@@ -3,6 +3,7 @@
  */
 
 import { z } from 'zod/v4';
+import { isAbsolute } from 'node:path';
 import { DEFAULT_LANGUAGE } from '../../shared/constants.js';
 import { MAX_ASSISTANT_INIT_FILES } from './assistant-config.js';
 import { VCS_PROVIDER_TYPES } from './vcs-types.js';
@@ -41,6 +42,10 @@ export const WorkflowRuntimePrepareConfigSchema = z.object({
 }).strict();
 
 export const WorkflowCommandGatesConfigSchema = z.object({
+  custom_scripts: z.boolean().optional(),
+}).strict();
+
+export const WorkflowSystemCommandsConfigSchema = z.object({
   custom_scripts: z.boolean().optional(),
 }).strict();
 
@@ -189,6 +194,7 @@ const ProjectConfigObjectBaseSchema = z.object({
   runtime: RuntimeConfigSchema,
   workflow_runtime_prepare: WorkflowRuntimePrepareConfigSchema.optional(),
   workflow_command_gates: WorkflowCommandGatesConfigSchema.optional(),
+  workflow_system_commands: WorkflowSystemCommandsConfigSchema.optional(),
   workflow_arpeggio: WorkflowArpeggioConfigSchema.optional(),
   sync_conflict_resolver: SyncConflictResolverConfigSchema.optional(),
   workflow_mcp_servers: WorkflowMcpServersConfigSchema.optional(),
@@ -221,6 +227,9 @@ const ProjectConfigObjectSchema = ProjectConfigObjectBaseSchema.extend({
 export const ProjectConfigSchema = ProjectConfigObjectSchema;
 
 const GlobalOnlyConfigSchema = z.object({
+  workflow_system_commands_trusted_projects: z.array(z.string().refine((path) => isAbsolute(path), {
+    message: 'Trusted project roots must be absolute paths',
+  })).optional(),
   language: LanguageSchema.optional().default(DEFAULT_LANGUAGE),
   logging: LoggingConfigSchema.optional(),
   worktree_dir: z.string().optional(),

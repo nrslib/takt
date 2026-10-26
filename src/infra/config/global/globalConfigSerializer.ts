@@ -169,6 +169,14 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
       custom_scripts: config.workflowCommandGates.customScripts,
     };
   }
+  if (config.workflowSystemCommandsTrustedProjects !== undefined) {
+    raw.workflow_system_commands_trusted_projects = config.workflowSystemCommandsTrustedProjects;
+  }
+  if (config.workflowSystemCommands) {
+    raw.workflow_system_commands = {
+      custom_scripts: config.workflowSystemCommands.customScripts,
+    };
+  }
   if (config.workflowArpeggio) {
     raw.workflow_arpeggio = {
       custom_data_source_modules: config.workflowArpeggio.customDataSourceModules,

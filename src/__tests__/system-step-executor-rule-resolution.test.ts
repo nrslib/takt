@@ -23,6 +23,9 @@ function createState(): WorkflowState {
     userInputs: [],
     personaSessions: new Map(),
     stepIterations: new Map(),
+    restoredStepIterationNames: new Set(),
+    dynamicParallelSelections: new Map(),
+    dynamicFacetSelections: new Map(),
     status: 'running',
   };
 }
@@ -160,6 +163,53 @@ describe('SystemStepExecutor rule resolution', () => {
       cwd: '/execution',
       projectCwd: '/project',
     }));
+  });
+
+  it('evaluates current command bindings without persisting short aliases', async () => {
+    const inputExecutor = new SystemStepExecutor({
+      task: '', projectCwd: '/project', getCwd: () => '/execution',
+      getContextDirectory: () => '/central/run/context',
+      getRuleContext: () => ({}), getStatusJudgmentContext,
+      systemStepServicesFactory: (options) => {
+        expect(options.contextDirectory).toBe('/central/run/context');
+        return {
+          resolveSystemInput: () => ({ exit_code: 0, json: { ready: true } }),
+          executeEffect: vi.fn(),
+        };
+      },
+    });
+    const step = makeStep({
+      name: 'check', kind: 'system',
+      systemInputs: [{ type: 'command', as: 'approval', command: 'fixed', timeout_ms: 1 }],
+      wait: { until: 'when(context.approval.json.ready == true)', intervalMs: 1, maxRetries: 0, onTimeout: 'ABORT' },
+      rules: [makeRule('when(context.approval.exit_code == 0 && context.check.approval.json.ready == true)', 'COMPLETE')],
+    });
+    const state = createState();
+    const response = await inputExecutor.run(step, state);
+    expect(response.matchedRuleIndex).toBe(0);
+    expect(response.systemWaitTimeout).toBeUndefined();
+    expect(state.systemContexts.has('approval')).toBe(false);
+    expect(state.systemContexts.get('check')).toEqual({ approval: { exit_code: 0, json: { ready: true } } });
+  });
+
+  it('keeps a preexisting step scope when a command binding has the same name', async () => {
+    const state = createState();
+    state.systemContexts.set('approval', { status: 'existing' });
+    const inputExecutor = new SystemStepExecutor({
+      task: '', projectCwd: '/project', getCwd: () => '/execution',
+      getRuleContext: () => ({}), getStatusJudgmentContext,
+      systemStepServicesFactory: () => ({
+        resolveSystemInput: () => ({ status: 'command' }), executeEffect: vi.fn(),
+      }),
+    });
+    const response = await inputExecutor.run(makeStep({
+      name: 'check', kind: 'system',
+      systemInputs: [{ type: 'command', as: 'approval', command: 'fixed', timeout_ms: 1 }],
+      rules: [makeRule('when(context.approval.status == "existing" && context.check.approval.status == "command")', 'COMPLETE')],
+    }), state);
+    expect(response.matchedRuleIndex).toBe(0);
+    expect(state.systemContexts.get('approval')).toEqual({ status: 'existing' });
+    expect(state.systemContexts.get('check')?.approval).toEqual({ status: 'command' });
   });
 
   it('recreates cleanup abort state for reuse but keeps explicit cancellation permanent', async () => {

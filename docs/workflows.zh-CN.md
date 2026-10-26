@@ -656,6 +656,55 @@ System step 由 TAKT engine 执行，不启动 agent。使用 `kind: system` 或
         next: plan_from_existing_pr
 ```
 
+#### 固定命令 input
+
+`type: command`执行workflow中固定的shell命令。以下权限默认禁用。明确登记的project保留project优先于global的规则。此权限独立于`workflow_command_gates.custom_scripts`。未授权的workflow在加载时失败。
+
+project授权需要使用者明确信任其system command设置：在global专用的`workflow_system_commands_trusted_projects: [/absolute/path/to/project]`中登记配置来源根目录，或使用JSON数组环境变量`TAKT_WORKFLOW_SYSTEM_COMMANDS_TRUSTED_PROJECTS`。只认可实际路径完全一致的目录，父目录登记不授权子目录。未登记的project需要global授权或`TAKT_WORKFLOW_SYSTEM_COMMANDS_CUSTOM_SCRIPTS=true`，与PR context或clone位置无关。project显式的`false`始终拒绝。独立clone使用原配置根目录。不会自动登记；每次运行解析当前授权并传给root和子workflow，`wait`期间不重新加载。参见[配置指南](configuration.zh-CN.md)。
+
+```yaml
+workflow_system_commands:
+  custom_scripts: true
+```
+
+```yaml
+name: approval-command
+steps:
+  - name: check
+    kind: system
+    system_inputs:
+      - type: command
+        as: approval
+        command: node scripts/check-approval.mjs
+        timeout_ms: 1000
+        output: json
+    wait:
+      until: when(context.check.approval.json.ready == true)
+      interval_ms: 1000
+      max_retries: 30
+      on_timeout: ABORT
+    rules:
+      - condition: when(context.approval.json.status == "approved")
+        next: consume
+      - condition: when(true)
+        next: ABORT
+  - name: consume
+    instruction: "审批结果: {context:check.approval.json.status}"
+    rules:
+      - condition: when(true)
+        next: COMPLETE
+```
+
+`timeout_ms` 必填，必须是 1～2147483647 的整数，没有默认值或无限设置。`output: json` 可省略。YAML 不能指定 `cwd`，命令在任务执行目录中运行（worktree 任务使用克隆目录）。Pipeline 与交互模式行为相同。不支持 command effect。
+
+结果包含 `exit_code`（无法取得时为 `null`）、`timed_out`、`stdout` 和 `stderr`。仅当指定 `output: json`、退出码为 0、未超时且解析成功时才包含 `json`。非零退出和超时作为结果交给 rules。stdout 与 stderr 合计超过 65536 字节、启动失败、成功退出时的 JSON 无效都会使 step 失败，不执行 effects 或 rules。
+
+条件求值时还可用 `context.approval...` 引用当前 command binding；同名的现有 step scope 优先。持久化的 context 和后续 instruction 使用完整的 `context.check.approval...` scope。
+
+TAKT 不展开 command 占位符，也不追加参数。`TAKT_PREVIOUS_RESPONSE_FILE` 提供上一响应正文的私有文件路径，没有正文时文件为空。仅当同一响应有结构化输出时才设置 `TAKT_PREVIOUS_STRUCTURED_OUTPUT_FILE`。脚本负责读取文件并验证内容。文件保留在 run context 中作为运行产物。环境变量仅包含 command gate 的基本允许列表及这两个文件路径。
+
+不应用无通信超时。执行超时或中断时发送 SIGTERM，100ms 后仍未退出则发送 SIGKILL。`wait` 每次检查重新执行命令，每次都有独立的 `timeout_ms`，并读取同一个上一响应。后续 system step 读取前一个 system 的响应。不会保留之前尝试的 JSON。沿用现有的 `wait.max_retries`、`on_timeout`、step 计数、`loop_monitors` 和 agent session 继续规则。
+
 `effects` 执行 engine-side action：`commit_and_push`, `caccia`, `enqueue_task`、`comment_pr`、`sync_with_root`、`resolve_conflicts_with_ai`、`merge_pr` 和 `close_pr`。每种 effect 在一个 step 中最多一次，结果通过 `when(effect.<step>.<type>.<field>)` 路由。
 
 ```yaml

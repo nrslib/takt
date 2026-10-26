@@ -158,6 +158,8 @@ Dynamic parallel and `dynamic_facets` selectors use read-only mode with only `Re
 #   custom_scripts: false                # Allow custom scripts (default: false; builtin presets always allowed)
 # workflow_command_gates:                # Workflow YAML command quality gate policy
 #   custom_scripts: false                # Allow command gates from workflow YAML (default: false)
+# workflow_system_commands:             # Workflow system command input policy
+#   custom_scripts: false
 # sync_conflict_resolver:                # Sync conflict resolver policy
 #   auto_approve_tools: false            # Allow auto-approval of tools (default: false)
 
@@ -247,6 +249,7 @@ Dynamic parallel and `dynamic_facets` selectors use read-only mode with only `Re
 | `workflow_arpeggio` | object | all `false` | Arpeggio custom code policy (`custom_data_source_modules`, `custom_merge_inline_js`, `custom_merge_files`) |
 | `workflow_runtime_prepare` | object | `{ custom_scripts: false }` | Runtime prepare policy (builtin presets always allowed) |
 | `workflow_command_gates` | object | `{ custom_scripts: false }` | Workflow YAML command quality gate policy |
+| `workflow_system_commands` | object | `{ custom_scripts: false }` | Workflow system command input policy |
 | `workflow_overrides` | object | - | Workflow-level overrides: top-level / per-step / per-persona `quality_gates` (AI directives or `type: command` gates) and `quality_gates_edit_only` |
 | `sync_conflict_resolver` | object | `{ auto_approve_tools: false }` | Sync conflict resolver policy |
 | `observability` | object | disabled | Opt-in OpenTelemetry foundation. `enabled` initializes the SDK, `monitor` writes workflow metrics to `.takt/runs/<run>/monitor.json`, `session_log_exporter` writes a shadow session log from spans, and `usage_events_phase` writes phase-level usage events to `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl`. With `enabled: true` and `OTEL_EXPORTER_OTLP_ENDPOINT`, TAKT also sends spans and metrics through OTLP using standard `OTEL_EXPORTER_OTLP_*` environment variables; TAKT does not add an OTLP config key. |
@@ -416,6 +419,7 @@ The project's `.takt/config.yaml` can override many global settings, including `
 | `workflow_arpeggio` | object | - | Arpeggio custom code policy (overrides global) |
 | `workflow_runtime_prepare` | object | - | Runtime prepare policy (overrides global) |
 | `workflow_command_gates` | object | - | Workflow YAML command quality gate policy (overrides global) |
+| `workflow_system_commands` | object | - | Workflow system command input policy |
 | `sync_conflict_resolver` | object | - | Sync conflict resolver policy (overrides global) |
 | `observability` | object | - | Project-level OpenTelemetry opt-in override. `enabled` initializes the SDK, `monitor` writes workflow metrics to `.takt/runs/<run>/monitor.json`, `session_log_exporter` writes a shadow session log from spans, and `usage_events_phase` writes phase-level usage events to `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl`. With `enabled: true` and `OTEL_EXPORTER_OTLP_ENDPOINT`, TAKT also sends spans and metrics through OTLP using standard `OTEL_EXPORTER_OTLP_*` environment variables; TAKT does not add an OTLP config key. |
 
@@ -460,6 +464,28 @@ If memory is limited, lower the heap limit or set concurrency to 1. Use these TA
 Failed, errored, or timed-out verification retains specifications and logs under `.takt/runs/verify-*/` and reports the directory in the result message. Retained directories are excluded from automatic cleanup; remove them manually when no longer needed. Successful verification artifacts are deleted after result interpretation.
 
 If writing the retention marker fails, TAKT moves the ownership marker to the retention marker and reports the directory and write error. If the move also fails, TAKT leaves the ownership marker in place and reports that retention could not be confirmed, together with the directory and both errors. The remaining ownership marker protects the directory from automatic cleanup even after the owner Node process exits. Copy any needed artifacts manually.
+
+## Workflow system command input policy
+
+Disabled by default. In explicitly trusted projects, an explicit project value, including `false`, overrides global. Unauthorized command inputs fail during workflow loading. This permission is independent of `workflow_command_gates.custom_scripts`.
+
+```yaml
+workflow_system_commands:
+  custom_scripts: true
+```
+
+`TAKT_WORKFLOW_SYSTEM_COMMANDS_CUSTOM_SCRIPTS=true`
+
+To let project configuration authorize commands, explicitly trust its system command settings by registering the configuration source root in your operator-controlled global `~/.takt/config.yaml`:
+
+```yaml
+workflow_system_commands_trusted_projects:
+  - /absolute/path/to/project
+```
+
+The global-only environment variable `TAKT_WORKFLOW_SYSTEM_COMMANDS_TRUSTED_PROJECTS='["/absolute/path/to/project"]'` accepts the same absolute paths as a JSON array. This key is rejected in project configuration. Missing or empty registrations confer no trust. Roots must match by exact real path; registering a parent does not trust descendants. Unverifiable registrations confer no trust.
+
+Unregistered projects require global `workflow_system_commands.custom_scripts: true` or `TAKT_WORKFLOW_SYSTEM_COMMANDS_CUSTOM_SCRIPTS=true`, regardless of PR context or clone location. An explicit project `false` always denies commands. A separate clone uses the original configuration root's registration. Projects are never registered automatically. Each run resolves current approval once and passes it to root and child workflows; `wait` does not reload configuration.
 
 ## Environment Variable Overrides
 

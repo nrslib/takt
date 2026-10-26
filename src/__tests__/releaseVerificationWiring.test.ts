@@ -752,6 +752,15 @@ describe('release verification wiring', () => {
     ]);
   });
 
+  it('routes system command configuration to light IT and excludes it from heavy IT', () => {
+    const testFile = 'src/__tests__/it-system-command-input-config.test.ts';
+    expect(lightIntegrationConfig.test?.include).toContain(testFile);
+    expect(heavyParallelIntegrationConfig.test?.exclude).toContain(testFile);
+    expect(selectNpmTestRuns([testFile])).toEqual([
+      { npmArgs: ['run', 'test:it:light', '--', testFile] },
+    ]);
+  });
+
   it('routes tell publication concurrency through the heavy integration gate', () => {
     const testFile = 'src/__tests__/it-live-intervention-task-spec-concurrency.test.ts';
     expect(selectNpmTestRuns([testFile])).toEqual([
