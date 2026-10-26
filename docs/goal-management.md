@@ -4,13 +4,20 @@
 
 ## Discussion and registration
 
-Start `takt manager` in an interactive terminal and describe the objective, scope exclusions, acceptance criteria and work constraints. Manager starts the daemon if needed and waits until it is ready; the TUI connects to it to send requests and display results. Review the displayed summary and approve it with `Ctrl+O` to ask the daemon to register the goal. Choose Continue conversation to revise it.
+Start `takt manager` in an interactive terminal and describe the objective, scope exclusions, acceptance criteria and work constraints. Manager starts the daemon if needed and waits until it is ready; the TUI connects to it to send requests and display results. Type `/make-goal` in the input box and press `Enter` to create a goal proposal from the conversation. Review the displayed proposal and use `↑` Approve / `↓` Continue / `Enter` Confirm. Select Approve and press `Enter` to ask the daemon to register the goal. Choose Continue conversation to revise it.
 
-Press `Ctrl+O` to open the summary menu. If no summary is awaiting approval, it requests a summary of the current conversation. If a summary is already displayed, it approves and registers it without regenerating it. If there is insufficient material, manager explains this and you can continue the conversation. Manager can also offer a summary itself.
+Even when a proposal is already displayed, `/make-goal` only regenerates it from the current conversation; it does not register the goal. Registration requires selecting Approve and pressing `Enter`. If there is insufficient material, manager explains this and you can continue the conversation. Manager can also offer a goal proposal itself.
 
-The normal screen shows the count of ongoing goals (active and paused), the count of unanswered inquiries, and hints for `Ctrl+R`, `Ctrl+G`, `Ctrl+O`, and `Ctrl+N` (`^N Notifications`) on the same single line. It does not list completed or aborted goals or inquiry bodies. The input box is only for conversation with manager; text starting with `/` is sent as a regular message too. All four menu keys remain available while manager is processing.
+The top of the normal screen has two lines: the assignment name on the first, and the counts of ongoing goals (active and paused) and unanswered inquiries on the second. It does not list completed or aborted goals or inquiry bodies. Typing `/` in the input box shows `/make-goal` as a completion candidate; press `Tab` to accept it. Input starting with `/` other than `/make-goal` is sent to manager as a regular message.
 
-The daemon owns and runs manager conversations. Once a turn is accepted, closing the TUI only disconnects that screen; the turn continues in the daemon. Reopening manager for the same repository or workspace, or opening a second TUI for that assignment, connects to the same conversation. A pending summary is shown again and can be approved with `Ctrl+O`, but previous messages and replies are not redisplayed. TAKT does not save conversation text; history is managed by the provider's session. Pending summaries and goal records are saved separately.
+The hints below the input box appear on two lines:
+
+```text
+Enter Send  Shift+Enter Newline  Esc Interrupt  ^R Inquiries  ^G Goals  ^C Exit
+/make-goal to create a goal proposal
+```
+
+The daemon owns and runs manager conversations. Once a turn is accepted, closing the TUI only disconnects that screen; the turn continues in the daemon. Reopening manager for the same repository or workspace, or opening a second TUI for that assignment, connects to the same conversation. A pending goal proposal is shown again and can be registered by selecting Approve and pressing `Enter`, but previous messages and replies are not redisplayed. TAKT does not save conversation text; history is managed by the provider's session. Pending summaries and goal records are saved separately.
 
 Another message submitted while the same conversation is processing is rejected as busy and will not run later. Submit it again after processing finishes. After a daemon restart, a turn that was running is treated as interrupted, and new messages can be accepted. The daemon does not exit automatically while a TUI is connected or an accepted conversation operation is running. Use `takt daemon stop` for an explicit stop.
 
@@ -92,8 +99,6 @@ Open menus with the following keys, including while manager is processing.
 |-----|----------|
 | `Ctrl+R` | List unanswered inquiries with and without a goal together, then answer the selected inquiry. |
 | `Ctrl+G` | List only ongoing goals (active and paused) by short name and state. Use `↑↓` to select a goal and `Enter` to choose pause, resume or abort. |
-| `Ctrl+O` | Request a summary of the current conversation if none is awaiting approval, or approve and register the displayed summary without regenerating it. Continue the conversation if material is insufficient. |
-| `Ctrl+N` | Open saved notifications and select one to read its full text. |
 
 Pausing stops new submissions and integrations while running tasks continue and results are deferred. Resuming advances deferred events and tasks. Before aborting, confirm that the operation is irreversible and that records and branches remain; aborting interrupts the goal's running tasks and invalidates unstarted tasks. `Esc` closes the list without making changes. If there are no eligible targets, the TUI shows a notice instead of opening a list.
 
@@ -111,9 +116,7 @@ For project, workspace and global scopes, edit and confirm the proposed permissi
 
 ### Reading notifications
 
-Press `Ctrl+N` to open saved notifications. As with the inquiry and goal lists, each page shows up to 10 items, one per row. Use `↑↓` to select a notification and `Enter` to open its details. Each row shows only the heading and short goal name, without the body. The details show the full body without truncation. `Esc` in the details returns to the list; `Esc` in the list closes it. If there are no saved notifications, the list does not open.
-
-Notifications flowing onto the normal screen show only the key points: the heading line, goal line, and first few lines of the body. Read the full text in the `Ctrl+N` details. Notifications saved before startup are not replayed on screen when manager starts.
+Notifications flowing onto the normal screen show only the key points: the heading line, goal line, and first few lines of the body. Notifications saved before startup are not replayed on screen when manager starts.
 
 ## Goal operations in conversation
 
