@@ -138,6 +138,34 @@ describe('bounded command runner', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('keeps termination timers referenced when the command leader closes after TERM', async () => {
+    vi.useRealTimers();
+    const realSetTimeout = globalThis.setTimeout.bind(globalThis);
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    const running = runBoundedCommand({ ...options, timeoutMs: 1 });
+
+    await new Promise((resolve) => realSetTimeout(resolve, 10));
+    const forceKillTimerIndex = setTimeoutSpy.mock.calls.findIndex(([, delay]) => delay === 100);
+    expect(forceKillTimerIndex).toBeGreaterThanOrEqual(0);
+    const forceKillTimer = setTimeoutSpy.mock.results[forceKillTimerIndex]?.value as NodeJS.Timeout;
+    expect(forceKillTimer.hasRef()).toBe(true);
+
+    child.emit('close', null);
+    await new Promise((resolve) => realSetTimeout(resolve, 110));
+    expect(process.kill).toHaveBeenLastCalledWith(
+      process.platform === 'win32' ? child.pid : -child.pid,
+      'SIGKILL',
+    );
+
+    const settleTimerIndex = setTimeoutSpy.mock.calls.findIndex(([, delay]) => delay === 1000);
+    expect(settleTimerIndex).toBeGreaterThanOrEqual(0);
+    const settleTimer = setTimeoutSpy.mock.results[settleTimerIndex]?.value as NodeJS.Timeout;
+    expect(settleTimer.hasRef()).toBe(true);
+
+    child.emit('close', null);
+    expect(await running).toMatchObject({ timedOut: true, exitCode: null });
+  });
+
   it('settles after SIGKILL when close never arrives and destroys the output streams', async () => {
     let settled = false;
     const running = runBoundedCommand(options).then((result) => {

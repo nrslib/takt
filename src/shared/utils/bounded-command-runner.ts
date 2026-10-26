@@ -123,9 +123,7 @@ export function runBoundedCommand(options: {
           return;
         }
         settleTimer = setTimeout(settle, 1000);
-        settleTimer.unref?.();
       }, 100);
-      forceKillTimer.unref?.();
     }
 
     function onAbort(): void {
