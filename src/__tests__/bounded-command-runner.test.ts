@@ -114,6 +114,30 @@ describe('bounded command runner', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('still sends KILL when the command leader closes after TERM', async () => {
+    let settled = false;
+    const running = runBoundedCommand(options).then((result) => {
+      settled = true;
+      return result;
+    });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    child.emit('close', null);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(process.kill).toHaveBeenLastCalledWith(
+      process.platform === 'win32' ? child.pid : -child.pid,
+      'SIGKILL',
+    );
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await running).toMatchObject({ timedOut: true, exitCode: null });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('settles after SIGKILL when close never arrives and destroys the output streams', async () => {
     let settled = false;
     const running = runBoundedCommand(options).then((result) => {

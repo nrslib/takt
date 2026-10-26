@@ -52,6 +52,7 @@ export function runBoundedCommand(options: {
     let outputBytes = 0;
     let settled = false;
     let terminating = false;
+    let forceKillSent = false;
     let forceKillTimer: NodeJS.Timeout | undefined;
     let settleTimer: NodeJS.Timeout | undefined;
 
@@ -116,6 +117,7 @@ export function runBoundedCommand(options: {
       }
       kill('SIGTERM');
       forceKillTimer = setTimeout(() => {
+        forceKillSent = true;
         if (!kill('SIGKILL')) {
           settle();
           return;
@@ -143,6 +145,8 @@ export function runBoundedCommand(options: {
     child.once('close', (code: number | null) => {
       if (settled) return;
       result.exitCode = code;
+      // A process-group leader can close on TERM while descendants still need KILL.
+      if (terminating && !forceKillSent) return;
       settle();
     });
     options.signal?.addEventListener('abort', onAbort, { once: true });
