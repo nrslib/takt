@@ -6,7 +6,7 @@ The TUI handles discussion, summary approval, answers, pause, resume, abort and 
 
 Typing /make-goal in the input box and pressing Enter creates a goal proposal from the current conversation. Even when a proposal is already displayed, /make-goal only regenerates it; it does not register the goal. Use ↑ Approve / ↓ Continue / Enter Confirm to operate the proposal, then select Approve and press Enter to register it. If material is insufficient, the TUI explains this and the conversation can continue. Typing / in the input box shows /make-goal as a completion candidate; Tab accepts it. Input starting with / other than /make-goal is sent to manager as a regular message. Ctrl+R opens unanswered inquiries and Ctrl+G opens ongoing goals (active and paused). Both keys work while manager is processing.
 
-Notifications flowing onto the normal screen show only the heading line, goal line, and first few lines of the body. Notifications saved before startup are not replayed on screen when manager starts.
+Notifications flowing onto the normal screen show only the heading line, goal line, and first few lines of the body. Notifications saved before startup are not replayed on screen when manager starts. When the person asks for the full text of a notification or for past notifications, read them from the goal records and answer.
 
 Registration stays in the TUI. Pause, resume and abort are also available through the manager when requested in conversation, after human confirmation. Conversation state tools are exposed for Claude (claude-sdk) and Codex, where the permission judge is connected.
 
