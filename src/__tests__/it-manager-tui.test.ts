@@ -2,14 +2,98 @@ import './helpers/manager-tui-input.js';
 import './helpers/manager-tui-startup.js';
 import './helpers/manager-tui-selection.js';
 import { randomUUID } from 'node:crypto';
-import { expect, it, vi } from 'vitest';
+import { expect, it } from 'vitest';
 import { ConversationTransferReceiver } from '../features/manager/conversationTransferReceiver.js';
 import { conversationTransferFrames } from '../features/daemon/conversationFrames.js';
 import type { ConversationState } from '../features/manager/conversationPort.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { toDisplayText } from '../features/tui/displayText.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
-import { cwd, mount, showProposal, summaryA, summaryB, waitFor, finish, ENTER, UP, ESC, SUMMARY_MENU } from './helpers/manager-tui-fixtures.js';
+import { cwd, mount, showProposal, summaryA, summaryB, waitFor, finish, ENTER, UP, DOWN, ESC, typeAndSubmit, approveSummary, promptFrame, ManagerClientDouble } from './helpers/manager-tui-fixtures.js';
+
+it.each(['ja', 'en'] as const)('creates a proposal from a conversation with /make-goal and registers only after Up and Enter in %s', async (lang) => {
+  const context = mount(lang);
+  await typeAndSubmit(context, 'Export the current data');
+  await waitFor(() => expect(context.client.commands()).toHaveLength(1));
+  await finish(context, 'Which output format should be used?');
+  await typeAndSubmit(context, '/make-goal');
+  await waitFor(() => expect(context.client.commands()).toEqual([
+    { kind: 'message', text: 'Export the current data' },
+    { kind: 'message', text: getLabel('manager.goSummaryRequest', lang) },
+  ]));
+  await showProposal(context, summaryA, 5);
+  await finish(context, 'Proposal ready');
+  expect(context.app.lastFrame()).toContain(getLabel('manager.summaryInputHint', lang));
+  context.app.stdin.write(UP);
+  context.app.stdin.write(DOWN);
+  context.app.stdin.write(UP);
+  expect(context.client.commands()).toHaveLength(2);
+  context.app.stdin.write(ENTER);
+  await waitFor(() => expect(context.client.commands().at(-1)).toEqual({ kind: 'approve_summary', revision: 5 }));
+});
+
+it.each(['typed', 'Tab completion', 'pasted'] as const)('regenerates a displayed proposal without approval or competing withdrawal using %s input', async (delivery) => {
+  const context = mount();
+  await showProposal(context, summaryA, 4);
+  if (delivery === 'pasted') await typeAndSubmit(context, '  /make-goal  ');
+  else {
+    for (const character of delivery === 'typed' ? '/make-goal' : '/ma') {
+      context.app.stdin.write(character);
+    }
+    if (delivery === 'Tab completion') {
+      await waitFor(() => expect(context.app.lastFrame()).toMatch(/^❯ \/make-goal  /mu));
+      context.app.stdin.write('\t');
+    }
+    await waitFor(() => expect(promptFrame(context)).toContain('/make-goal'));
+    context.app.stdin.write(ENTER);
+  }
+  await waitFor(() => expect(context.client.commands()).toEqual([
+    { kind: 'message', text: getLabel('manager.goSummaryRequest', 'en') },
+  ]));
+  await showProposal(context, summaryB, 5);
+  await finish(context, 'Replacement ready');
+  await waitFor(() => {
+    expect(context.app.lastFrame()).toContain(summaryB.objective);
+    expect(context.app.lastFrame()).not.toContain(summaryA.objective);
+  });
+  expect(context.client.commands().map((command) => command.kind)).toEqual(['message']);
+  expect(context.client.getSnapshot().state?.approval).toBeNull();
+});
+
+it.each(['empty', 'draft', 'proposal'].flatMap((state) => [
+  { name: 'Ctrl+O', key: '\x0f' }, { name: 'Ctrl+N', key: '\x0e' }, { name: 'Ctrl+P', key: '\x10' },
+].map((entry) => ({ state, ...entry }))))(
+  'keeps $state input and the displayed proposal unchanged after retired key $name', async ({ state, key }) => {
+    const client = new ManagerClientDouble();
+    client.change({ items: [...client.getSnapshot().items, { kind: 'notice', notice: {
+      id: randomUUID(), repositoryDirectory: cwd, project: 'manager-repository', goalId: goalRecord().id,
+      objective: 'Saved notice', kind: 'custom', recordedAt: '2026-10-24T00:00:00Z', message: 'Saved notice body',
+    } }] });
+    const context = mount('en', client);
+    if (state === 'proposal') await showProposal(context);
+    else if (state === 'draft') {
+      context.app.stdin.write('unsent draft');
+      await waitFor(() => expect(promptFrame(context)).toContain('unsent draft'));
+    } else await waitFor(() => expect(promptFrame(context)).toContain('Discuss your goal'));
+    const before = context.app.lastFrame();
+    context.app.stdin.write(key);
+    await new Promise<void>((resolve) => { setTimeout(resolve, 50); });
+    expect(context.client.commands()).toEqual([]);
+    expect(context.app.lastFrame()).toBe(before);
+  });
+
+it('withdraws the displayed proposal when a /make-goal prefix becomes ordinary conversation input', async () => {
+  const context = mount();
+  await showProposal(context);
+  context.app.stdin.write('/ma');
+  await waitFor(() => expect(promptFrame(context)).toContain('/ma'));
+  expect(context.client.commands()).toEqual([]);
+  context.app.stdin.write('p');
+  await waitFor(() => {
+    expect(context.client.commands()).toEqual([{ kind: 'dismiss_summary', revision: 4 }]);
+    expect(promptFrame(context)).toContain('/map');
+  });
+});
 
 it.each(['ja', 'en'] as const)('sends the summary instruction but displays only short processing status in %s', async (lang) => {
   const context = mount(lang);
@@ -20,7 +104,7 @@ it.each(['ja', 'en'] as const)('sends the summary instruction but displays only 
     client.change({ state: { ...client.getSnapshot().state!, running: { operationId, kind: 'message' } } });
     return { kind: 'accepted', operationId };
   });
-  app.stdin.write(SUMMARY_MENU);
+  await typeAndSubmit(context, '/make-goal');
   await waitFor(() => {
     expect(client.commands()).toEqual([{ kind: 'message', text: getLabel('manager.goSummaryRequest', lang) }]);
     expect(app.lastFrame()).toContain(getLabel('manager.summaryWorking', lang));
@@ -32,10 +116,10 @@ it.each(['ja', 'en'] as const)('sends the summary instruction but displays only 
   await waitFor(() => expect(client.commands().at(-1)).toEqual({ kind: 'message', text: 'Next message' }));
 });
 
-it.each(['ja', 'en'] as const)('approves exactly the restored revision with Ctrl+O in %s', async (lang) => {
+it.each(['ja', 'en'] as const)('approves exactly the restored revision with Up and Enter in %s', async (lang) => {
   const context = mount(lang);
   await showProposal(context, summaryB, 4);
-  context.app.stdin.write(SUMMARY_MENU);
+  approveSummary(context);
   await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'approve_summary', revision: 4 }]));
   const operationId = await context.client.operation();
   const goal = { ...goalRecord(), ...summaryB };
@@ -74,11 +158,11 @@ it('displays a stale approval error and requires review of the refreshed revisio
   context.client.submit.mockResolvedValueOnce({ kind: 'error', code: 'stale_summary',
     message: getLabel('manager.conversation.stale_summary', 'en') });
   context.client.refresh.mockImplementation(async () => { context.client.proposal(summaryB, 5); });
-  context.app.stdin.write(SUMMARY_MENU);
+  approveSummary(context);
   await waitFor(() => expect(context.app.lastFrame()).toContain(summaryB.objective));
   expect(context.client.commands()).toEqual([{ kind: 'approve_summary', revision: 4 }]);
   expect(context.app.lastFrame()).toContain(getLabel('manager.conversation.stale_summary', 'en'));
-  context.app.stdin.write(SUMMARY_MENU);
+  approveSummary(context);
   await waitFor(() => expect(context.client.commands()).toEqual([
     { kind: 'approve_summary', revision: 4 }, { kind: 'approve_summary', revision: 5 },
   ]));
@@ -152,7 +236,7 @@ it('keeps revision five on the same mounted screen after delayed revision four d
     expect(context.app.lastFrame()).toContain(summaryB.objective);
     expect(context.app.lastFrame()).not.toContain(summaryA.objective);
   });
-  context.app.stdin.write(SUMMARY_MENU);
+  approveSummary(context);
   await waitFor(() => expect(client.commands()).toEqual([{ kind: 'approve_summary', revision: 5 }]));
 });
 
@@ -176,7 +260,7 @@ it('disables approval after a mid-item disconnect and restores the whole proposa
   client.change({ connection: 'disconnected' });
   client.submit.mockResolvedValueOnce({ kind: 'error', code: 'unavailable_attachment', message: 'Disconnected' });
   await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.conversation.incomplete', 'en')));
-  context.app.stdin.write(SUMMARY_MENU);
+  await typeAndSubmit(context, '/make-goal');
   await waitFor(() => expect(client.submit).toHaveBeenCalledOnce());
   expect(client.commands().some((command) => command.kind === 'approve_summary')).toBe(false);
   expect(client.getSnapshot().state?.pending).toBeNull();
@@ -189,7 +273,7 @@ it('disables approval after a mid-item disconnect and restores the whole proposa
   await waitFor(() => expect(context.app.lastFrame()).toContain(summaryA.objective));
   expect(client.getSnapshot().state?.conversationId).toBe(conversationId);
   expect(client.getSnapshot().state?.pending?.summary).toEqual(summaryA);
-  context.app.stdin.write(SUMMARY_MENU);
+  approveSummary(context);
   await waitFor(() => expect(client.commands().filter((command) => command.kind === 'approve_summary')).toEqual([
     { kind: 'approve_summary', revision: 4 },
   ]));

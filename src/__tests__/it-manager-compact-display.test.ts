@@ -404,14 +404,14 @@ describe('manager polling and answer cancellation', () => {
       await mount('ja', undefined, []);
       vi.spyOn(app!.stdout, 'columns', 'get').mockReturnValue(columns);
       app!.stdout.emit('resize');
-      const expected = 'Enter 送信  Shift+Enter 改行  Esc 中断  ^R 問い合わせ  ^G ゴール  ^O 要約  ^N 知らせ  ^P 担当  ^C 終了';
+      const expected = 'Enter 送信  Shift+Enter 改行  Esc 中断  ^R 問い合わせ  ^G ゴール  ^C 終了';
       await waitFor(() => {
         const frame = app!.lastFrame()!;
         const rows = frame.split('\n');
         const promptEnd = rows.map((row) => row.startsWith('╰')).lastIndexOf(true);
         expect(promptEnd).toBeGreaterThan(0);
         const hintRows = rows.slice(promptEnd + 1).filter((row) => row.trim() !== '');
-        expect(hintRows.join('').replace(/\s+/gu, '')).toBe(expected.replace(/\s+/gu, ''));
+        expect(hintRows.join('').replace(/\s+/gu, '')).toBe((expected + '/make-goal でゴールの登録案を作る').replace(/\s+/gu, ''));
         expect(hintRows.length).toBeGreaterThan(1);
         for (const row of rows) expect(stringWidth(row)).toBeLessThanOrEqual(columns);
         expect(rows[1]).toBe('進行中 0 ／ 未回答 0');
@@ -431,103 +431,12 @@ describe('manager polling and answer cancellation', () => {
       expect(rows[0]).toContain(basename(cwd));
       const promptEnd = rows.map((row) => row.startsWith('╰')).lastIndexOf(true);
       const hint = rows.slice(promptEnd + 1).join(' ');
-      expect(hint).toMatch(/Enter\s+Send.*Shift\+Enter\s+Newline.*Esc.*\^R.*\^G.*\^O.*\^N.*\^P.*\^C/iu);
-      expect(hint).toMatch(/\^P\s+(?:Assignment|Assigned|Repositories)/iu);
+      expect(hint).toMatch(/Enter\s+Send.*Shift\+Enter\s+Newline.*Esc.*\^R.*\^G.*\^C/iu);
+      expect(hint).toContain('/make-goal');
+      expect(hint).not.toMatch(/\^[ONP]/u);
       for (const row of [rows[0]!, ...rows.slice(promptEnd + 1)]) expect(row).not.toMatch(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u);
       for (const row of rows) expect(stringWidth(row)).toBeLessThanOrEqual(80);
     });
-  });
-
-  function repositoryAssignment(count: number): ManagerAssignment {
-    const directories = Array.from({ length: count }, (_, index) => join(cwd, `repository-${String(index + 1).padStart(2, '0')}`));
-    for (const directory of directories) mkdirSync(directory);
-    return { kind: 'workspace', workspaceId: randomUUID(), name: '担当リポジトリ', repositoryDirectories: directories };
-  }
-
-  const repositoryRows = (): string[] => boxes(app!.lastFrame()!).flatMap((box) => contentRows(box))
-    .filter((row) => /repository-\d{2}/u.test(row));
-
-  it.each(['ja', 'en'] as const)('opens assigned repositories with Ctrl+P as one name and path row per repository in %s', async (lang) => {
-    const assignment = repositoryAssignment(2);
-    await mount(lang, assignment);
-    // 一時ディレクトリのパス全体が収まる幅で、行の内容を確認する。
-    vi.spyOn(app!.stdout, 'columns', 'get').mockReturnValue(200);
-    app!.stdout.emit('resize');
-    app!.stdin.write('\x10');
-    await waitFor(() => {
-      expect(repositoryRows()).toHaveLength(2);
-      for (const directory of assignment.repositoryDirectories) {
-        const row = repositoryRows().find((candidate) => candidate.includes(directory));
-        expect(row).toBeDefined();
-        expect(row!.replace(directory, '')).toContain(basename(directory));
-      }
-      const dialog = boxes(app!.lastFrame()!).find((box) => box.includes('repository-01'))!;
-      const instructions = contentRows(dialog)
-        .filter((row) => !assignment.repositoryDirectories.some((directory) => row.includes(directory)))
-        .join('\n');
-      expect(instructions).toMatch(/↑.*↓|↑↓/u);
-      expect(instructions).toContain('Esc');
-      expect(instructions).not.toMatch(/Enter|追加|削除|名前変更|\b(?:add|remove|rename)\b/iu);
-      if (lang === 'en') expect(dialog).not.toMatch(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u);
-    });
-  });
-
-  it('moves a ten-repository window down to the twelfth repository and back up', async () => {
-    await mount('ja', repositoryAssignment(12));
-    app!.stdin.write('\x10');
-    await waitFor(() => {
-      expect(repositoryRows()).toHaveLength(10);
-      expect(repositoryRows()[0]).toContain('repository-01');
-      expect(repositoryRows().at(-1)).toContain('repository-10');
-    });
-    for (let move = 0; move < 11; move++) app!.stdin.write('\x1b[B');
-    await waitFor(() => {
-      expect(repositoryRows()).toHaveLength(10);
-      expect(repositoryRows()[0]).toContain('repository-03');
-      expect(repositoryRows().at(-1)).toContain('repository-12');
-    });
-    for (let move = 0; move < 11; move++) app!.stdin.write('\x1b[A');
-    await waitFor(() => {
-      expect(repositoryRows()).toHaveLength(10);
-      expect(repositoryRows()[0]).toContain('repository-01');
-      expect(repositoryRows().at(-1)).toContain('repository-10');
-    });
-  });
-
-  it('closes the repository list with Esc and keeps the same unsent Japanese draft', async () => {
-    const calls = await mount('ja', repositoryAssignment(2));
-    app!.stdin.write('あいう');
-    await waitFor(() => {
-      expect(prompt().text).toBe('あいう');
-      expect(contentRows(boxes(app!.lastFrame()!).at(-1)).join('')).toContain('あいう');
-    });
-    app!.stdin.write('\x10');
-    await waitFor(() => {
-      expect(repositoryRows()).toHaveLength(2);
-      expect(prompt()).toMatchObject({ text: 'あいう', disabled: true });
-    });
-    app!.stdin.write('\x1b[27u');
-    await waitFor(() => {
-      expect(repositoryRows()).toHaveLength(0);
-      expect(prompt()).toMatchObject({ text: 'あいう', disabled: false, placeholder: 'ゴールを相談してください' });
-      expect(contentRows(boxes(app!.lastFrame()!).at(-1)).join('')).toContain('あいう');
-      expect(app!.lastFrame()).toContain('会話ログの目印');
-    });
-    for (const call of [calls.answerQuestion, calls.pauseGoal, calls.resumeGoal, calls.abortGoal]) expect(call).not.toHaveBeenCalled();
-  });
-
-  it('keeps the repository list read-only when Enter is pressed', async () => {
-    const assignment = repositoryAssignment(2);
-    const calls = await mount('ja', assignment);
-    app!.stdin.write('\x10');
-    await waitFor(() => expect(repositoryRows()).toHaveLength(2));
-    app!.stdin.write('\r');
-    app!.stdin.write('\x1b[27u');
-    await waitFor(() => {
-      expect(repositoryRows()).toHaveLength(0);
-      expect(prompt().disabled).toBe(false);
-    });
-    for (const call of [calls.answerQuestion, calls.pauseGoal, calls.resumeGoal, calls.abortGoal]) expect(call).not.toHaveBeenCalled();
   });
 
   it.each(['ja', 'en'] as const)('replaces fixed goal and inquiry panels with counts and key guidance in %s', async (lang) => {

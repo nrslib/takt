@@ -130,7 +130,7 @@ it('finishes an accepted turn after Ctrl+C has exited the TUI process', async ()
   } finally { await fixture.cleanup(); }
 });
 
-it('reopens the same conversation and approves its restored summary with Ctrl+O', async () => {
+it('reopens the same conversation and approves its restored summary with Up and Enter', async () => {
   const fixture = managerDaemonFixture('en');
   fixture.release();
   try {
@@ -187,7 +187,7 @@ it('connects two TUI processes for the same canonical assignment to the same sav
   } finally { await fixture.cleanup(); }
 });
 
-it('finishes reading on the same Japanese screen after an empty Ctrl+O request and a greeting reply', async () => {
+it('finishes reading on the same Japanese screen after a /make-goal request with no prior conversation and a greeting reply', async () => {
   const insufficient = '要約を作るには会話の材料が足りません。';
   const greeting = 'こんにちは。ゴールについて相談できます。';
   const fixture = managerDaemonFixture('ja', [insufficient, greeting]);
@@ -197,7 +197,7 @@ it('finishes reading on the same Japanese screen after an empty Ctrl+O request a
     await waitForManager(tui, 'ゴールを相談してください');
     await tui.ready(null);
     expect(fixture.state()?.pending).toBeNull();
-    tui.key('\x0f');
+    await submitManagerText(tui, '/make-goal');
     await waitForManager(tui, insufficient);
     await vi.waitFor(() => expect(fixture.state()?.running).toBeNull());
     expect(fixture.state()?.pending).toBeNull();
@@ -213,7 +213,7 @@ it('finishes reading on the same Japanese screen after an empty Ctrl+O request a
   } finally { await fixture.cleanup(); }
 });
 
-it('keeps every sampled Japanese screen complete during periodic refresh and accepts one Ctrl+O approval', async () => {
+it('keeps every sampled Japanese screen complete during periodic refresh and accepts one Up and Enter approval', async () => {
   const fixture = managerDaemonFixture('ja');
   const saved = conversationRecord(fixture.repository);
   new ConversationStore(fixture.directory).write(saved);
@@ -222,8 +222,8 @@ it('keeps every sampled Japanese screen complete during periodic refresh and acc
     const tui = await fixture.start(fixture.repository, undefined);
     await tui.ready(null);
     await waitForManager(tui, saved.pending!.summary.objective);
-    await expectCompletedFrames(tui, [saved.pending!.summary.objective, getLabel('manager.summaryHint', 'ja')]);
-    tui.key('\x0f');
+    await expectCompletedFrames(tui, [saved.pending!.summary.objective, getLabel('manager.summaryInputHint', 'ja')]);
+    await tui.approveSummary(saved.pending!.revision);
     await vi.waitFor(() => expect(fixture.state()?.approval).toMatchObject({ revision: 4, state: 'registered' }), { timeout: 10000 });
     expect(fixture.readObservations().filter(({ event, command, pid }) => event === 'request' && command === 'approve_summary' && pid === tui.child.pid))
       .toEqual([expect.objectContaining({ revision: saved.pending!.revision })]);
@@ -284,7 +284,7 @@ it.each(['ja', 'en'] as const)('shows a short summary status without displaying 
   try {
     const tui = await fixture.start(fixture.repository, undefined);
     await waitForManager(tui, language === 'ja' ? 'ゴールを相談してください' : 'Discuss your goal');
-    tui.key('\x0f');
+    await submitManagerText(tui, '/make-goal');
     await vi.waitFor(() => expect(fixture.readObservations()).toContainEqual(expect.objectContaining({
       event: 'provider_start', summaryRequest: true,
     })), { timeout: 5000 });
@@ -294,7 +294,7 @@ it.each(['ja', 'en'] as const)('shows a short summary status without displaying 
     for (const line of instructions.split(/[\n。.!?]+/u).filter((line) => line.trim().length > 20)) {
       expect(screen).not.toContain(line.replace(/\s+/gu, '').toLowerCase());
     }
-    const status = frame.split('\n').filter((line) => !/\^O|Ctrl\+O|Enter|↑|↓/u.test(line)).join('\n');
+    const status = frame.split('\n').filter((line) => !/Enter|↑|↓/u.test(line)).join('\n');
     expect(status).toMatch(language === 'ja' ? /要約.*(?:作成|作って)/u : /(?:creat|prepar|generat|summariz).*summar|summarizing/iu);
     fixture.release();
     await waitForManager(tui, fixture.summary.objective);
@@ -320,7 +320,7 @@ it('rejects a busy TUI message and never sends it after the active turn complete
   } finally { await fixture.cleanup(); }
 });
 
-it('keeps a proposal arriving after busy Ctrl+O unregistered until a new explicit approval on the same screen', async () => {
+it('keeps a proposal arriving after busy /make-goal unregistered until a new explicit approval on the same screen', async () => {
   const fixture = managerDaemonFixture('en');
   try {
     const tui = await fixture.start(fixture.repository, undefined);
@@ -330,17 +330,12 @@ it('keeps a proposal arriving after busy Ctrl+O unregistered until a new explici
     const operationId = fixture.state()!.running!.operationId;
     await tui.ready(operationId);
     expect(fixture.state()?.pending).toBeNull();
-    tui.key('\x0f');
+    await submitManagerText(tui, '/make-goal');
     await waitForManager(tui, getLabel('manager.conversation.busy', 'en'));
     fixture.release();
     await waitForManager(tui, fixture.summary.objective);
     await tui.ready(null);
     const requests = () => fixture.readObservations().filter(({ event, pid }) => event === 'request' && pid === tui.child.pid);
-    const emptyNotice = getLabel('manager.selectionEmpty.notice', 'en');
-    expect(await tui.frame()).not.toContain(emptyNotice);
-    tui.key('\x0e');
-    await waitForManager(tui, emptyNotice);
-    await tui.ready(null);
     const proposal = fixture.state()!.pending!;
     expect(proposal.summary).toEqual(fixture.summary);
     expect(fixture.state()?.approval).toBeNull();
@@ -442,7 +437,7 @@ it('reauthenticates and restores the proposal on the same mounted screen after a
       const observations = dismissals();
       expect(observations.filter(({ event }) => event === 'request'), JSON.stringify(observations))
         .toEqual([expect.objectContaining({ method: 'submit', revision: saved.pending!.revision })]);
-      expect(observations.filter(({ event }) => event === 'submit_result'), JSON.stringify(observations))
+      expect(observations.filter(({ event }) => event === 'submit_result'), JSON.stringify(fixture.readObservations()))
         .toEqual([expect.objectContaining({ kind: 'accepted', revision: saved.pending!.revision })]);
       expect(observations.filter(({ event }) => event === 'submit_error')).toEqual([]);
     });
@@ -474,9 +469,9 @@ it('disables summary approval after an incomplete read and restores it after the
       const frame = stripVTControlCharacters(await tui.frame()).replace(/\s+/gu, ' ');
       expect(frame).toContain(getLabel('manager.conversation.incomplete', 'en'));
       expect(frame).toContain(saved.pending!.summary.objective);
-      expect(frame).not.toContain(getLabel('manager.summaryHint', 'en'));
     });
-    tui.key('\x0f');
+    tui.key('\x1b[A');
+    tui.key('\r');
     await tui.frame();
     expect(fixture.readObservations().filter(({ event, command }) => event === 'request' && command === 'approve_summary')).toEqual([]);
     expect(fixture.state()?.approval).toBeNull();

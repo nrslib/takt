@@ -17,11 +17,8 @@ export const ENTER = '\r';
 export const UP = '\x1b[A';
 export const DOWN = '\x1b[B';
 export const ESC = '\x1b[27u';
-export const SUMMARY_MENU = '\x0f';
 export const QUESTION_MENU = '\x12';
 export const GOAL_MENU = '\x07';
-export const NOTICE_MENU = '\x0e';
-export const REPOSITORY_MENU = '\x10';
 type Output = Exclude<PortOutput, { kind: 'snapshot' }>;
 
 /** The UI boundary is authoritative snapshots plus commands and output events. */
@@ -84,6 +81,10 @@ export const promptFrame = ({ app }: Tui): string => {
 export async function typeAndSubmit(context: Tui, text: string): Promise<void> {
   context.app.stdin.write('\x1b[200~' + text + '\x1b[201~');
   await waitFor(() => expect(promptFrame(context)).toContain(text.split('\n')[0]!.replace(/\t/gu, ' ')));
+  context.app.stdin.write(ENTER);
+}
+export function approveSummary(context: Tui): void {
+  context.app.stdin.write(UP);
   context.app.stdin.write(ENTER);
 }
 export async function showProposal(context: Tui, summary = summaryA, revision = 4): Promise<void> {

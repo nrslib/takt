@@ -98,7 +98,7 @@ export async function mountInk(buildTree) {
   };
   const unsubscribeRead = client.subscribe(checkRead);
   checkRead();
-  const record = (value) => appendFileSync(${JSON.stringify(observations)}, JSON.stringify({ ...value, pid: process.pid }) + '\\n');
+  const record = (value) => appendFileSync(${JSON.stringify(observations)}, JSON.stringify({ ...value, pid: process.pid, at: Date.now() }) + '\\n');
   const submit = client.submit;
   client.submit = async function(...args) {
     const [command] = args;
@@ -151,10 +151,13 @@ export async function mountInk(buildTree) {
       const inputSent = snapshot.connection === 'connected' && snapshot.readStatus === 'complete'
         && snapshot.state?.running === null && snapshot.state.revision === message.revision
         && pending?.revision === message.revision && frame.includes(normalize(pending.summary.objective))
-        && frame.includes(label('manager.summaryHint'))
+        && frame.includes(label('manager.summaryInputHint'))
         && !frame.includes(label('manager.conversation.reading')) && !frame.includes(label('manager.conversation.incomplete'));
       // 確認と入力の間に親子通信や周期更新を挟まない。
-      if (inputSent) app.stdin.write(message.kind === 'approve_summary' ? '\\x0f' : message.text);
+      if (inputSent) {
+        if (message.kind === 'approve_summary') { app.stdin.write('\\x1b[A'); app.stdin.write('\\r'); }
+        else app.stdin.write(message.text);
+      }
       process.send({ kind: message.kind, id: message.id, inputSent });
     }
   };
@@ -174,7 +177,7 @@ import { Socket } from 'node:net';
 import { ConversationStore } from ${JSON.stringify(built('infra/conversations/store.js'))};
 import { MockProvider } from ${JSON.stringify(built('infra/providers/mock.js'))};
 import { getLabel } from ${JSON.stringify(built('shared/i18n/index.js'))};
-const record = (value) => appendFileSync(${JSON.stringify(observations)}, JSON.stringify({ ...value, pid: process.pid }) + '\\n');
+const record = (value) => appendFileSync(${JSON.stringify(observations)}, JSON.stringify({ ...value, pid: process.pid, at: Date.now() }) + '\\n');
 const save = ConversationStore.prototype.write;
 ConversationStore.prototype.write = function(value) {
   const result = save.call(this, value);
@@ -206,8 +209,9 @@ Socket.prototype.write = function(chunk, ...args) {
   if (value?.type === 'request' && value.protocolVersion === 1) record({ event: 'request', method: value.method, requestId: value.requestId,
     conversationId: value.params?.conversationId, command: value.params?.command?.kind, revision: value.params?.command?.revision,
     operationId: value.params?.command?.operationId });
-  if (value?.type === 'response' && value.result?.read) record({ event: 'response', requestId: value.requestId,
-    conversationId: value.result.read.conversationId, transferId: value.result.read.transferId });
+  if (value?.type === 'response') record({ event: 'response', requestId: value.requestId,
+    conversationId: value.result?.read?.conversationId, transferId: value.result?.read?.transferId,
+    kind: value.result?.kind, code: value.error?.code });
   if (value?.type === 'event' && ['transfer_start', 'transfer_end', 'transfer_error'].includes(value.output?.kind)) {
     record({ event: 'transfer', conversationId: value.conversationId, transferId: value.output.transferId,
       frameKind: value.output.kind, purpose: value.output.purpose });

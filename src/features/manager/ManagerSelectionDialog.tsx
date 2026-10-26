@@ -1,22 +1,12 @@
 import { Box, Text } from 'ink';
-import { basename } from 'node:path';
 import type { ReactElement } from 'react';
 import { getLabel } from '../../shared/i18n/index.js';
 import { formatGoalName, formatPendingQuestion } from './goalDisplay.js';
 import { MANAGER_SELECTION_PAGE_SIZE, type ManagerSelection } from './useManagerSelection.js';
-import { toDisplayText, toSingleLineText } from '../tui/displayText.js';
 
-export function ManagerSelectionDialog({ selection, bodyText, lang }: {
-  selection: ManagerSelection; bodyText: string; lang: 'en' | 'ja';
+export function ManagerSelectionDialog({ selection, lang }: {
+  selection: ManagerSelection; lang: 'en' | 'ja';
 }): ReactElement {
-  if (selection.kind === 'notice' && selection.bodyOffset !== null) {
-    return (
-      <Box borderStyle="round" flexDirection="column">
-        <Text>{bodyText}</Text>
-        <Text dimColor>{getLabel('manager.noticeDetailHint', lang)}</Text>
-      </Box>
-    );
-  }
   const end = selection.start + MANAGER_SELECTION_PAGE_SIZE;
   const rows = selection.kind === 'answer'
     ? selection.candidates.slice(selection.start, end).map((pending) => ({
@@ -24,12 +14,6 @@ export function ManagerSelectionDialog({ selection, bodyText, lang }: {
     }))
     : selection.kind === 'action' ? selection.candidates.slice(selection.start, end).map((action) => ({
       key: action, text: getLabel(`manager.goalActions.${action}`, lang),
-    })) : selection.kind === 'notice' ? selection.candidates.slice(selection.start, end).map((notice) => ({
-      key: JSON.stringify([notice.repositoryDirectory, notice.goalId, notice.id]),
-      text: `${toDisplayText(getLabel(`manager.notificationHeadings.${notice.kind}`, lang, { project: notice.project }))} — ${formatGoalName(notice.objective)}`,
-    })) : selection.kind === 'repository' ? selection.candidates.slice(selection.start, end).map((directory) => ({
-      key: directory,
-      text: toSingleLineText(`${basename(directory)} — ${directory}`),
     })) : selection.candidates.slice(selection.start, end).map((goal) => {
       const state = goal.executionStatus === 'paused' ? 'paused'
         : goal.status === 'awaiting_merge' ? 'awaiting_merge' : 'active';
@@ -44,7 +28,7 @@ export function ManagerSelectionDialog({ selection, bodyText, lang }: {
       {rows.map((row, index) => (
         <Text key={row.key} inverse={selection.start + index === selection.index} wrap="truncate-end">{row.text}</Text>
       ))}
-      <Text dimColor>{getLabel(selection.kind === 'repository' ? 'manager.repositorySelectionHint' : 'manager.selectionHint', lang)}</Text>
+      <Text dimColor>{getLabel('manager.selectionHint', lang)}</Text>
     </Box>
   );
 }

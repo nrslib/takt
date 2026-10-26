@@ -446,8 +446,9 @@ manager:
   assignmentHeading: "Assignment: {name}"
   assignmentHeadingMultiple: "Assignment: {name} + {count} more"
   counts: "Ongoing {goals} / Pending {questions}"
-  inputHint: "Enter Send  Shift+Enter Newline  Esc Interrupt  ^R Inquiries  ^G Goals  ^O Summary  ^N Notices  ^P Repositories  ^C Exit"
-  summaryHint: "^O Register the displayed summary"
+  inputHint: "Enter Send  Shift+Enter Newline  Esc Interrupt  ^R Inquiries  ^G Goals  ^C Exit"
+  makeGoalHint: "/make-goal creates a goal registration proposal"
+  makeGoalDescription: "Create a goal registration proposal"
   summaryInputHint: "↑↓ Choose / Enter Confirm / Esc Continue conversation / Ctrl+C Exit"
   goSummaryRequest: "Summarize the current conversation for goal registration. Return the objective, out-of-scope items, acceptance criteria, and work constraints in the structured response's summary. If there is insufficient material to summarize, explain why in message and return summary: null."
   goSummaryUnavailable: "Could not create a summary for registration because there is insufficient material. Please continue the conversation."
@@ -478,20 +479,15 @@ manager:
     For a paused goal, press Ctrl+G in the TUI, select the goal and resume it, or request resumption in conversation with a supported provider and confirm the operation. An aborted goal cannot be resumed.
     Reason: {reason}
   selectionTitles:
-    repository: "Assigned repositories"
     answer: "Select an inquiry to answer"
     goal: "Select a goal"
     action: "Select a goal operation"
-    notice: "Select a notice to read"
   goalActions:
     pause: "Pause"
     resume: "Resume"
     abort: "Abort"
   selectionHint: "↑↓ Choose / Enter Select / Esc Close"
-  repositorySelectionHint: "↑↓ Move / Esc Close"
-  noticeDetailHint: "↑↓ Scroll / Esc Back to list"
   selectionEmpty:
-    notice: "No notices to read."
     repository: "No assigned repositories."
     answer: "No pending inquiries to answer."
     goal: "No ongoing goals to operate on."
@@ -565,8 +561,8 @@ manager:
   notificationMergeRepository: "Run the following commands in order in a clean worktree of the {project} repository where you can switch branches."
   notificationMergeWorktree: "Check the state of the worktree at {directory}, then run the following commands in order."
   notificationBlockedAction: "Check the reason and required action above. For full details, open takt manager in {project} and follow up in the TUI."
-  notificationFullMessage: "Open takt manager in {project}, press Ctrl+N in the TUI and select a notice from the list, then press Enter to read the full message."
-  notificationDigestHint: "Remaining body lines omitted. Press Ctrl+N to read the full message."
+  notificationFullMessage: "Open takt manager in {project} to check the conversation and current work state in the TUI."
+  notificationDigestHint: "Remaining body lines omitted."
 
 caccia:
   waitingForReview: "Caccia: Waiting for a CodeRabbit review."

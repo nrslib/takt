@@ -446,8 +446,9 @@ manager:
   assignmentHeading: "担当: {name}"
   assignmentHeadingMultiple: "担当: {name} ほか {count} 件"
   counts: "進行中 {goals} ／ 未回答 {questions}"
-  inputHint: "Enter 送信  Shift+Enter 改行  Esc 中断  ^R 問い合わせ  ^G ゴール  ^O 要約  ^N 知らせ  ^P 担当  ^C 終了"
-  summaryHint: "^O 表示中の要約を登録"
+  inputHint: "Enter 送信  Shift+Enter 改行  Esc 中断  ^R 問い合わせ  ^G ゴール  ^C 終了"
+  makeGoalHint: "/make-goal でゴールの登録案を作る"
+  makeGoalDescription: "ゴールの登録案を作る"
   summaryInputHint: "↑↓ 選択 / Enter 決定 / Esc 会話を続ける / Ctrl+C 終了"
   goSummaryRequest: "現在の会話から、ゴール登録用の要約を作成してください。目的、範囲外、受け入れ条件、作業の制約を含む構造化応答の summary を返してください。材料が不足して要約できない場合は、理由を message で説明し、summary は null にしてください。"
   goSummaryUnavailable: "材料が不足しているため、登録用の要約を作成できませんでした。会話を続けてください。"
@@ -478,20 +479,15 @@ manager:
     一時停止中のゴールは TUI で Ctrl+G を押し、一覧から選択して再開するか、対応する provider の会話で再開を依頼し、人の確認を経て再開してください。中止済みのゴールは再開できません。
     理由: {reason}
   selectionTitles:
-    repository: "担当リポジトリ"
     answer: "回答する問い合わせを選択"
     goal: "操作するゴールを選択"
     action: "ゴールの操作を選択"
-    notice: "読む知らせを選択"
   goalActions:
     pause: "一時停止"
     resume: "再開"
     abort: "中止"
   selectionHint: "↑↓ 選択 / Enter 決定 / Esc 閉じる"
-  repositorySelectionHint: "↑↓ 移動 / Esc 閉じる"
-  noticeDetailHint: "↑↓ スクロール / Esc 一覧へ戻る"
   selectionEmpty:
-    notice: "知らせはありません。"
     repository: "担当のリポジトリはありません。"
     answer: "未回答の問い合わせはありません。"
     goal: "操作できる進行中のゴールはありません。"
@@ -565,8 +561,8 @@ manager:
   notificationMergeRepository: "{project}リポジトリの、ブランチを切り替えられる未コミットの変更がない作業ツリーで、次のコマンドを順に実行してください。"
   notificationMergeWorktree: "作業ツリー {directory} の状態を確認し、次のコマンドを順に実行してください。"
   notificationBlockedAction: "上記の理由と必要な操作を確認してください。詳しい内容は{project}で takt manager を開き、TUIで確認・対応してください。"
-  notificationFullMessage: "{project}で takt manager を開き、TUIで Ctrl+N を押し、一覧から知らせを選択して Enter で全文を確認してください。"
-  notificationDigestHint: "本文の続きは省略しています。Ctrl+N で全文を確認できます。"
+  notificationFullMessage: "{project}で takt manager を開き、TUIで会話と現在の作業状態を確認してください。"
+  notificationDigestHint: "本文の続きは省略しています。"
 
 caccia:
   waitingForReview: "Caccia: CodeRabbit のレビュー待ちに入ります。"
