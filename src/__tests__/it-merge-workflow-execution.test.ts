@@ -14,6 +14,12 @@ import { buildEditRule } from '../core/workflow/instruction/instruction-context.
 import { GitHubProvider } from '../infra/github/GitHubProvider.js';
 import { runPrCommand } from '../infra/github/pr-command.js';
 import { marked } from 'marked';
+import { syncWithRootEffect, resolveConflictsWithAiEffect } from '../infra/workflow/system/system-sync-effects.js';
+import { executeTaskWorkflow } from '../features/tasks/execute/taskWorkflowExecution.js';
+
+vi.mock('../infra/workflow/system/system-sync-effects.js', () => ({
+  syncWithRootEffect: vi.fn(), resolveConflictsWithAiEffect: vi.fn(),
+}));
 
 vi.mock('../infra/github/pr-command.js', () => ({ runPrCommand: vi.fn() }));
 
@@ -35,6 +41,13 @@ import { runAgent } from '../agents/runner.js';
 import { executeStructuredAgent } from '../agents/structured-caller/transport.js';
 
 interface Scenario {
+  concurrency?: number;
+  lateConflicts?: number;
+  resyncConflicted?: boolean;
+  resyncFailure?: 'sync' | 'resolve' | 'push';
+  mergeable?: string;
+  mergeStateStatus?: string;
+  ciFailsAfterResync?: boolean;
   fullInitialReview?: boolean;
   prNumber?: number;
   approved?: boolean;
@@ -78,24 +91,6 @@ describe('Builtin PR merge workflow execution', () => {
     rmSync(project, { recursive: true, force: true });
   });
 
-  it.each([
-    ['ja', 'merge-review', 'review'],
-    ['en', 'merge-review', 'review'],
-    ['ja', 'merge-review-fix', 'review-fix'],
-    ['en', 'merge-review-fix', 'review-fix'],
-    ['ja', 'merge-review-fix-simple', 'review-fix-simple'],
-    ['en', 'merge-review-fix-simple', 'review-fix-simple'],
-  ])('%sの%sから実際の%sを子workflowとして解決できる', (language, name, childName) => {
-    const workflow = loadWorkflowByIdentifier(join(process.cwd(), 'builtins', language, 'workflows', `${name}.yaml`), project);
-    if (!workflow) throw new Error(`Missing builtin workflow: ${name}`);
-    const step = workflow.steps.find((candidate) => candidate.kind === 'workflow_call' && candidate.call === childName);
-    if (!step || step.kind !== 'workflow_call') throw new Error('Missing review workflow call');
-    const child = resolveWorkflowCallTarget(workflow, step, project, join(project, 'clone'));
-    expect(child?.name).toBe(childName);
-    expect(child?.subworkflow?.callable).toBe(true);
-    expect(child?.steps.length).toBeGreaterThan(0);
-  });
-
   it.each(['ja', 'en'] as const)('%sのsingle-review-suiteは編集しない1体のレビュアーだけを持つ', (language) => {
     const suite = loadWorkflowByIdentifier(join(process.cwd(), 'builtins', language, 'workflows', 'single-review-suite.yaml'), project);
     expect(suite?.steps).toHaveLength(1);
@@ -122,6 +117,7 @@ describe('Builtin PR merge workflow execution', () => {
     let headSha = 'a'.repeat(40);
     let conflictsResolved = false;
     let pushes = 0;
+    let syncs = 0;
     let reruns = 0;
     let rerunAttempt = 1;
     let rerunStatus = 'completed';
@@ -131,6 +127,7 @@ describe('Builtin PR merge workflow execution', () => {
     const judgedSteps: string[] = [];
     const comments: string[] = [];
     const failures: string[] = [];
+    const taskEntryStates: WorkflowState[] = [];
     const observedStatuses: Array<{ headSha: string; finished: boolean; mergeable: string }> = [];
     const childContexts: Array<{ cwd: string; projectCwd: string; prNumber: number | undefined }> = [];
     const simpleReviewPrompts: string[] = [];
@@ -222,13 +219,15 @@ describe('Builtin PR merge workflow execution', () => {
       const remoteHeadSha = remoteHeadOverride ?? (scenario.prePushRemoteHeadDiffers && headSha === 'a'.repeat(40)
         ? 'c'.repeat(40) : headSha);
       const mergeable = (scenario.syncFailed && !conflictsResolved)
-        || (scenario.prePushRemoteConflicting && headSha === 'a'.repeat(40)) ? 'CONFLICTING' : 'MERGEABLE';
+        || (scenario.prePushRemoteConflicting && headSha === 'a'.repeat(40))
+        || (pushes > 0 && syncs <= (scenario.lateConflicts ?? 0)) ? 'CONFLICTING' : scenario.mergeable ?? 'MERGEABLE';
       observedStatuses.push({ headSha: remoteHeadSha, finished: ciFinished, mergeable });
       return { exists: true, number: prNumber, headSha: remoteHeadSha, branch: 'feature/pr', baseBranch: 'main',
         ci: { finished: ciFinished,
-          passed: ciFinished && scenario.ciPassed !== false && (ciRecovered || scenario.ciFailures === undefined
+          passed: ciFinished && !(scenario.ciFailsAfterResync && syncs > 1) && scenario.ciPassed !== false && (ciRecovered || scenario.ciFailures === undefined
             || (reruns > 0 ? rerunConclusion === 'success' : pushes > scenario.ciFailures.length)) },
-        mergeable: pushes > 1 && scenario.recoveredMergeable ? scenario.recoveredMergeable : mergeable, mergeStateStatus: 'CLEAN',
+        mergeable: pushes > 1 && scenario.recoveredMergeable ? scenario.recoveredMergeable : mergeable,
+        mergeStateStatus: scenario.mergeStateStatus ?? 'CLEAN',
         reviewDecision: scenario.reviewDecision ?? 'APPROVED', merged: false };
     };
     vi.mocked(runPrCommand).mockImplementation(async (args) => {
@@ -260,6 +259,9 @@ describe('Builtin PR merge workflow execution', () => {
     });
     const executeEffect = vi.fn(async (effect: WorkflowEffect, payload: Record<string, unknown>, state: WorkflowState) => {
       calls.push(effect.type);
+      if (effect.type === 'sync_with_root' || effect.type === 'resolve_conflicts_with_ai') {
+        return recoveryServices.executeEffect(effect, payload, state);
+      }
       if (String(effect.type) === 'caccia') {
         if (scenario.cacciaError) {
           cacciaGit.mockRejectedValueOnce(scenario.cacciaError);
@@ -275,21 +277,32 @@ describe('Builtin PR merge workflow execution', () => {
       if (effect.type === 'comment_pr') {
         return recoveryServices.executeEffect(effect, payload, state);
       }
-      const failed = (effect.type === 'sync_with_root' && scenario.syncFailed)
-        || (effect.type === 'resolve_conflicts_with_ai' && scenario.conflictFailed)
-        || (String(effect.type) === 'commit_and_push' && scenario.pushFailed)
+      const failed = (String(effect.type) === 'commit_and_push' && scenario.pushFailed)
         || (String(effect.type) === 'commit_and_push' && scenario.recoveryPushFails && pushes > 0)
+        || (String(effect.type) === 'commit_and_push' && scenario.resyncFailure === 'push' && syncs > 1)
         || (effect.type === 'merge_pr' && scenario.mergeFailed);
-      if (effect.type === 'resolve_conflicts_with_ai' && !failed) conflictsResolved = true;
       if (String(effect.type) === 'commit_and_push' && !failed) {
         pushes++;
-        headSha = String.fromCharCode('a'.charCodeAt(0) + pushes).repeat(40);
+        headSha = pushes < 6 ? (10 + pushes).toString(16).repeat(40) : pushes.toString(16).padStart(40, '0');
         ciFinished = scenario.ciRunning !== true;
       }
       return { success: !failed, failed: Boolean(failed),
-        ...(effect.type === 'sync_with_root' || effect.type === 'resolve_conflicts_with_ai' ? { conflicted: Boolean(failed) } : {}),
         ...(String(effect.type) === 'commit_and_push' && !failed ? { headSha } : {}),
         ...(failed ? { error: `${effect.type} rejected` } : {}) };
+    });
+    vi.mocked(syncWithRootEffect).mockImplementation(async () => {
+      syncs++;
+      if (syncs > 1 && scenario.resyncFailure === 'sync') {
+        return { success: false, failed: true, conflicted: false, error: 'sync_with_root rejected' };
+      }
+      const conflicted = syncs === 1 ? scenario.syncFailed === true : scenario.resyncConflicted === true;
+      return { success: !conflicted, failed: false, conflicted };
+    });
+    vi.mocked(resolveConflictsWithAiEffect).mockImplementation(async () => {
+      const failed = scenario.conflictFailed === true || (syncs > 1 && scenario.resyncFailure === 'resolve');
+      if (!failed) conflictsResolved = true;
+      return { success: !failed, failed, conflicted: failed,
+        ...(failed ? { error: 'resolve_conflicts_with_ai rejected' } : {}) };
     });
     const fetchPrCiFailure = vi.fn(async (number: number, expectedHead: string) => {
       expect(number).toBe(prNumber);
@@ -306,7 +319,8 @@ describe('Builtin PR merge workflow execution', () => {
     const rerunPrCi = vi.fn(githubProvider.rerunPrCi.bind(githubProvider));
     const recoveryServices = createDefaultSystemStepServices({ cwd: cloneCwd, projectCwd: project, task: 'Review PR',
       prExecutionContext: { prNumber, headBranch: 'feature/pr', baseBranch: 'main', headSha: 'a'.repeat(40),
-        headRepositoryUrl: '/remote', headRepositoryPushUrls: ['/remote'] },
+        headRepositoryUrl: '/remote', headRepositoryPushUrls: ['/remote'],
+        ...{ mergeConcurrency: scenario.concurrency ?? 2 } },
       gitProvider: { checkCliStatus: vi.fn(), fetchIssue: vi.fn(), createIssue: vi.fn(), closeIssue: vi.fn(),
         fetchPrReviewComments: vi.fn(), listOpenIssues: vi.fn(), listOpenPrs: vi.fn(), findExistingPr: vi.fn(),
         commentOnPr: vi.fn((_pr, body: string) => {
@@ -316,7 +330,7 @@ describe('Builtin PR merge workflow execution', () => {
         fetchPrStatus: githubProvider.fetchPrStatus.bind(githubProvider),
       },
     });
-    const engine = new WorkflowEngine(workflow, cloneCwd, `Review PR ${prNumber}`, {
+    const engineOptions: ConstructorParameters<typeof WorkflowEngine>[3] = {
       provider: 'mock', language, projectCwd: project, reportDirName: 'merge-workflow-report',
       selectorProvider: { provider: 'mock', model: 'mock' },
       selectorGitCommandRunner: { isInsideWorkTree: async () => false,
@@ -363,10 +377,23 @@ describe('Builtin PR merge workflow execution', () => {
           return executeEffect(effect, payload, state);
         },
       }),
-    });
+    };
+    const engine = new WorkflowEngine(workflow, cloneCwd, `Review PR ${prNumber}`, engineOptions);
     engine.on('workflow:abort', (_state, reason) => failures.push(reason));
     return { engine, workflow, calls, judgedSteps, comments, failures, observedStatuses, childContexts, cloneCwd,
       executeEffect, simpleReviewPrompts, recoveryPrompts, reportDirectory, fetchPrCiFailure, rerunPrCi,
+      taskEntryStates,
+      runFromTaskEntry: (workflowIdentifier: string) => executeTaskWorkflow({
+        cwd: cloneCwd, projectCwd: project, workflowIdentifier, task: 'Review PR', outputMode: 'silent',
+        prExecutionContext: { prNumber, headBranch: 'feature/pr', baseBranch: 'main', headSha,
+          headRepositoryUrl: '/remote', headRepositoryPushUrls: ['/remote'],
+          ...{ mergeConcurrency: scenario.concurrency ?? 2 } },
+      }, async (config, task, cwd, options) => {
+        const taskEngine = new WorkflowEngine(config, cwd, task, { ...engineOptions, maxStepsOverride: options.maxStepsOverride });
+        const state = await taskEngine.run();
+        taskEntryStates.push(state);
+        return { success: state.status === 'completed' };
+      }),
       setRemoteHead: (value: string) => { remoteHeadOverride = value; },
       setRerun: (attempt: number, status: string, conclusion: string) => {
         rerunAttempt = attempt;
@@ -375,6 +402,138 @@ describe('Builtin PR merge workflow execution', () => {
       },
       finishCi: () => { ciFinished = true; } };
   }
+
+  describe.each((['ja', 'en'] as const).flatMap((language) =>
+    ['merge-review-fix', 'merge-review-fix-simple'].map((name) => ({ language, name })),
+  ))('$languageの$nameの後発競合', ({ language, name }) => {
+    const reviewCall = `call:${name === 'merge-review-fix' ? 'review-fix' : 'review-fix-simple'}`;
+
+    it.each([false, true])('取り込み直しの競合=%sでもレビューを繰り返さずpush後の新HEADのCIを待ってマージする', async (resyncConflicted) => {
+      const h = harness(name, { lateConflicts: 1, resyncConflicted, ciRunning: true }, language);
+      const running = h.engine.run();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.calls.filter((call) => call === 'sync_with_root')).toHaveLength(1);
+      expect(h.calls).not.toContain('merge_pr');
+      h.finishCi();
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(h.calls.filter((call) => call === 'sync_with_root')).toHaveLength(2);
+      expect(h.calls.filter((call) => call === reviewCall)).toHaveLength(1);
+      expect(h.calls.filter((call) => call === 'resolve_conflicts_with_ai')).toHaveLength(resyncConflicted ? 1 : 0);
+      expect(h.calls.filter((call) => call === 'commit_and_push')).toHaveLength(2);
+      expect(h.calls.filter((call) => call === 'caccia')).toHaveLength(2);
+      expect(h.calls.lastIndexOf('sync_with_root')).toBeLessThan(h.calls.lastIndexOf('commit_and_push'));
+      expect(h.calls.lastIndexOf('commit_and_push')).toBeLessThan(h.calls.lastIndexOf('caccia'));
+      expect(h.observedStatuses.at(-1)).toMatchObject({ headSha: 'c'.repeat(40), finished: false });
+      expect(h.calls).not.toContain('merge_pr');
+      expect(h.comments).toEqual([]);
+      h.finishCi();
+      await vi.advanceTimersByTimeAsync(15_000);
+      const state = await running;
+      expect(state.status).toBe('completed');
+      expect(h.failures).toEqual([]);
+      expect(h.calls.filter((call) => call === 'merge_pr')).toHaveLength(1);
+      expect(h.calls.lastIndexOf('caccia')).toBeLessThan(h.calls.indexOf('merge_pr'));
+      expect(h.comments[0]).toContain('c'.repeat(40));
+    });
+
+    it.each([
+      { concurrency: 2, limit: 2, syncFailed: false },
+      { concurrency: 3, limit: 2, syncFailed: false },
+      { concurrency: 4, limit: 3, syncFailed: false },
+      { concurrency: 2, limit: 2, syncFailed: true },
+    ])('並列数$concurrencyで初回競合=$syncFailedの同期を回数に含めず$limit回取り込み直して停止する', async ({ concurrency, limit, syncFailed }) => {
+      const h = harness(name, { concurrency, syncFailed, lateConflicts: 100, resyncConflicted: true }, language);
+      const state = await h.engine.run();
+      expect(state.status).toBe('completed');
+      expect(h.failures).toEqual([]);
+      expect(h.calls.filter((call) => call === 'sync_with_root')).toHaveLength(1 + limit);
+      expect(h.calls.filter((call) => call === 'resolve_conflicts_with_ai')).toHaveLength(limit + Number(syncFailed));
+      expect(h.calls.filter((call) => call === 'commit_and_push')).toHaveLength(1 + limit);
+      expect(h.calls.filter((call) => call === 'caccia')).toHaveLength(1 + limit);
+      expect(h.calls.filter((call) => call === reviewCall)).toHaveLength(1);
+      expect(h.calls).not.toContain('merge_pr');
+      expect(h.comments).toHaveLength(1);
+      expect(h.comments[0]).toContain('CONFLICTING');
+    });
+
+    it.each([{ concurrency: 2, limit: 2 }, { concurrency: 3, limit: 2 }, { concurrency: 4, limit: 3 }])(
+      '並列数$concurrencyで最後の取り込み直し$limit回目に競合がなくなればマージする', async ({ concurrency, limit }) => {
+        const h = harness(name, { concurrency, lateConflicts: limit, resyncConflicted: true }, language);
+        expect((await h.engine.run()).status).toBe('completed');
+        expect(h.calls.filter((call) => call === 'sync_with_root')).toHaveLength(1 + limit);
+        expect(h.calls.filter((call) => call === reviewCall)).toHaveLength(1);
+        expect(h.calls.filter((call) => call === 'merge_pr')).toHaveLength(1);
+        expect(h.comments).toHaveLength(1);
+        expect(h.comments[0]).toMatch(/\bmerged\b/);
+      },
+    );
+
+    it.each([
+      { mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED', merges: 1 },
+      { mergeable: 'MERGEABLE', mergeStateStatus: 'BEHIND', reviewDecision: 'APPROVED', merges: 1 },
+      { mergeable: 'BEHIND', mergeStateStatus: 'BEHIND', reviewDecision: 'APPROVED', merges: 1 },
+      { mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN', reviewDecision: 'APPROVED', merges: 0 },
+      { mergeable: 'MERGEABLE', mergeStateStatus: 'BEHIND', reviewDecision: 'CHANGES_REQUESTED', merges: 0 },
+      { mergeable: 'BEHIND', mergeStateStatus: 'BEHIND', reviewDecision: 'CHANGES_REQUESTED', merges: 0 },
+    ])('$mergeable/$mergeStateStatusの$reviewDecisionでは取り込み直さず既存のマージ条件を守る', async ({ mergeable, mergeStateStatus, reviewDecision, merges }) => {
+      const h = harness(name, { mergeable, mergeStateStatus, reviewDecision }, language);
+      expect((await h.engine.run()).status).toBe('completed');
+      expect(h.calls.filter((call) => call === 'sync_with_root')).toHaveLength(1);
+      expect(h.calls.filter((call) => call === 'merge_pr')).toHaveLength(merges);
+    });
+
+    it.each(['sync', 'resolve', 'push'] as const)('取り込み直しの%s失敗は理由をコメントしてマージしない', async (resyncFailure) => {
+      const h = harness(name, { lateConflicts: 1, resyncConflicted: true, resyncFailure }, language);
+      const state = await h.engine.run();
+      expect(h.calls.filter((call) => call === 'sync_with_root')).toHaveLength(2);
+      expect(state.status).toBe('completed');
+      expect(h.calls.filter((call) => call === reviewCall)).toHaveLength(1);
+      expect(h.calls.filter((call) => call === 'caccia')).toHaveLength(1);
+      expect(h.calls).not.toContain('merge_pr');
+      expect(h.comments).toHaveLength(1);
+      const operation = { sync: 'sync_with_root', resolve: 'resolve_conflicts_with_ai', push: 'commit_and_push' }[resyncFailure];
+      expect(h.comments[0]).toContain(`${operation} rejected`);
+    });
+
+    it.each([false, true])('CI再実行成功後の競合は新HEADのCI失敗=%sに従い使用済み再実行予算を保持する', async (ciFailsAfterResync) => {
+      const h = harness(name, { lateConflicts: 1, ciFailures: [{ verdict: 'external', summary: 'Runner outage' }],
+        ciRunning: false, ciFailsAfterResync }, language);
+      const running = h.engine.run();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.rerunPrCi).toHaveBeenCalledOnce();
+      h.setRerun(2, 'completed', 'success');
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect((await running).status).toBe(ciFailsAfterResync ? 'aborted' : 'completed');
+      expect(h.calls.filter((call) => call === 'sync_with_root')).toHaveLength(2);
+      expect(h.fetchPrCiFailure.mock.calls.map(([, head]) => head))
+        .toEqual((ciFailsAfterResync ? ['b', 'c'] : ['b']).map((char) => char.repeat(40)));
+      expect(h.rerunPrCi).toHaveBeenCalledOnce();
+      expect(h.calls.filter((call) => call === 'merge_pr')).toHaveLength(ciFailsAfterResync ? 0 : 1);
+      expect(h.comments).toHaveLength(1);
+      expect(h.comments[0]).toContain(ciFailsAfterResync ? 'unit-round-2' : 'c'.repeat(40));
+    });
+
+    it('大きい並列数でも実行入口の予算で上限まで取り込み直してコメントへ到達する', async () => {
+      const h = harness(name, { concurrency: 20, lateConflicts: 100, resyncConflicted: true }, language);
+      const result = await h.runFromTaskEntry(join(process.cwd(), 'builtins', language, 'workflows', `${name}.yaml`));
+      expect(result.success).toBe(true);
+      expect(h.calls.filter((call) => call === 'sync_with_root')).toHaveLength(20);
+      expect(h.calls.filter((call) => call === reviewCall)).toHaveLength(1);
+      expect(h.comments).toHaveLength(1);
+      expect(h.comments[0]).toContain('CONFLICTING');
+      expect(h.calls).not.toContain('merge_pr');
+    });
+
+    it('同名の利用者workflowにはbuiltin用の追加予算を適用しない', async () => {
+      const h = harness(name, { concurrency: 20 }, language);
+      const customPath = join(project, `${name}.yaml`);
+      writeFileSync(customPath, `name: ${name}\nmax_steps: 3\ninitial_step: loop\nsteps:\n  - name: loop\n    mode: system\n    rules:\n      - condition: when(true)\n        next: loop\n`);
+      expect((await h.runFromTaskEntry(customPath)).success).toBe(false);
+      expect(h.taskEntryStates[0]?.iteration).toBe(3);
+      expect(h.calls).not.toContain('sync_with_root');
+      expect(h.calls).not.toContain('merge_pr');
+    });
+  });
 
   describe.each(['ja', 'en'])('%sのCaccia結果による分岐', (language) => {
     describe.each(['merge-review', 'merge-review-fix', 'merge-review-fix-simple'])('%s', (name) => {
@@ -971,10 +1130,11 @@ describe('Builtin PR merge workflow execution', () => {
         ? value : JSON.stringify(value).slice(1, -1));
     });
 
-    it('回復後もGitHubのマージ可否条件を通し競合があればマージしない', async () => {
+    it('CI修正後も競合が続けば取り込み直し上限まで試みコメントしてマージしない', async () => {
       const h = await runRecovery({ ciFailures: [defect()], recoveredMergeable: 'CONFLICTING' });
       expect(h.calls).toContain('agent:fix_ci');
-      expect(h.calls.filter((call) => call === 'commit_and_push')).toHaveLength(2);
+      expect(h.calls.filter((call) => call === 'sync_with_root')).toHaveLength(3);
+      expect(h.calls.filter((call) => call === 'commit_and_push')).toHaveLength(4);
       expect(h.calls).not.toContain('merge_pr');
       expect(h.comments).toHaveLength(1);
       expect(h.comments[0]).toContain('CONFLICTING');

@@ -94,6 +94,7 @@ export async function executePrWorkflow(request: PrWorkflowRequest): Promise<{ m
     headRepositoryPushUrls: details.headRepositoryPushUrls,
     workflow: request.workflow, method: request.settings.method, worktreePath,
     threatCheckMaxDiffBytes: request.settings.threatCheckMaxDiffBytes,
+    concurrency: request.settings.concurrency,
     parentTaskName: request.parentTaskName,
   });
   return executePersistedPrMergeTask(task, runner, request.projectCwd, request.abortSignal, request.display);
@@ -127,6 +128,7 @@ export async function executePersistedPrMergeTask(
       projectCwd, prNumber: data.pr_number, workflow: data.workflow,
       ...(task.prUrl === undefined ? {} : { pullRequest: parseGitHubPullRequestTarget(task.prUrl) }),
       settings: { ...settings, method: data.merge_method,
+        concurrency: data.merge_concurrency ?? settings.concurrency,
         threatCheckMaxDiffBytes: data.merge_threat_check_max_diff_bytes ?? settings.threatCheckMaxDiffBytes },
       abortSignal: signal, display,
     }, runningTask, runner, runSlug);
@@ -328,6 +330,7 @@ async function runPrMergeWorkflow(
       headSha,
       headRepositoryUrl: cloneGit.headRepositoryUrl, headRepositoryPushUrls: cloneGit.headRepositoryPushUrls,
       preserveConflictState: true,
+      mergeConcurrency: request.settings.concurrency,
       threatCheckMaxDiffBytes: request.settings.threatCheckMaxDiffBytes,
     },
     prGitOperations: cloneGit.operations,
@@ -413,7 +416,8 @@ export async function runMerge(
   const execute = async (prNumber: number): Promise<void> => {
     try {
       const result = await dependencies.executePrWorkflow({
-        projectCwd: options.projectCwd, prNumber, settings: options.settings,
+        projectCwd: options.projectCwd, prNumber,
+        settings: { ...options.settings, concurrency: options.concurrency },
         ...(options.pullRequest === undefined ? {} : { pullRequest: options.pullRequest }),
         workflow, abortSignal: options.abortSignal,
         display: options.display,
