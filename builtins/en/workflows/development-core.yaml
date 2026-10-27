@@ -249,13 +249,13 @@ steps:
       testing_report_format:
         $param: testing_report_format
     rules:
-      - condition: Reviewed and ran existing or new tests for contracts verifiable before implementation, and recorded whether test changes were needed, the results, and unverified areas
+      - condition: Test work is complete
         next: implement
-      - condition: Recorded a concrete reason why only implementing first can make creating the necessary tests possible, and which tests to create and run afterward. Missing functions or APIs and test failures alone do not qualify
+      - condition: Necessary tests cannot be created until after implementation
         next: implement
-      - condition: A concrete conflict between a planning assumption and the actual code or requirements prevents defining what to test or expect, and the report records how revising the plan can resolve it
+      - condition: A planning assumption conflicts with the code or requirements and needs revision
         next: plan
-      - condition: Only an indispensable external action or answer remains, or the requirements are confirmed incompatible, and revising the plan cannot resolve the blockage
+      - condition: Work cannot proceed even after revising the plan
         next: ABORT
       - condition: User input is required for a clarification
         next: write_tests

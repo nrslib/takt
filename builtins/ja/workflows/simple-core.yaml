@@ -119,13 +119,13 @@ steps:
         $param: testing_instruction
       testing_report_format: test-report
     rules:
-      - condition: 計画上の契約を実装前に検証する既存・新規テストを確認して実行し、追加・変更の要否、結果、未確認範囲を記録した
+      - condition: テスト作業を終えた
         next: implement
-      - condition: 実装を先に行うことでしか必要なテストを作成できない具体的理由と、実装後に作成・実行するテストを記録した。未実装の関数・APIやテスト失敗だけでは該当しない
+      - condition: 実装後でなければ必要なテストを作成できない
         next: implement
-      - condition: 計画の前提が実コードまたは要件と具体的に矛盾し、テストの観測対象や期待結果を定められない。計画の見直しで解消できる根拠を記録した
+      - condition: 計画の前提が実コード・要件と合わず、見直しが必要
         next: plan
-      - condition: 不可欠な外部操作・回答待ちだけが残る、または要件が両立しないと確認され、計画の見直しでも進められない
+      - condition: 計画を見直しても続行できない
         next: ABORT
       - condition: ユーザーへの確認事項があるためユーザー入力が必要
         next: write_tests
