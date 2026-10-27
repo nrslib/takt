@@ -10,7 +10,7 @@ const doubles = vi.hoisted(() => ({
   initProjectDirs: vi.fn(),
   initGitProvider: vi.fn(),
   spawn: vi.fn(),
-  runAnalysis: vi.fn(),
+  executeWorkflow: vi.fn(),
   selectOption: vi.fn(),
   promptInput: vi.fn(),
 }));
@@ -28,8 +28,9 @@ vi.mock('node:child_process', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:child_process')>()),
   spawn: doubles.spawn,
 }));
-vi.mock('../features/tasks/execute/workflowExecutionApi.js', () => ({
-  runLoopAnalysisWorkflowExecution: doubles.runAnalysis,
+vi.mock('../features/tasks/execute/workflowExecution.js', () => ({
+  executeWorkflow: doubles.executeWorkflow,
+  executeWorkflowForRun: vi.fn(),
 }));
 
 describe('runtime assignment invocation', () => {
@@ -427,6 +428,7 @@ describe('runtime assignment invocation', () => {
     writeRuntime(projectDir, { ...fixture, provider: {
       ...fixture.provider, defaults: { assignment: 'cost' }, directories: {},
     } });
+    await initialize('directory');
     const jobPath = join(projectCwd, 'analysis.job.json');
     const reportDirectory = join(projectDir, 'runs', 'analysis', 'reports');
     mkdirSync(reportDirectory, { recursive: true });
@@ -436,8 +438,9 @@ describe('runtime assignment invocation', () => {
       output: 'file', parentPid: process.pid,
     }), { mode: 0o600 });
     const observedProvider = vi.fn();
-    doubles.runAnalysis.mockImplementation(async () => {
-      observedProvider(await workflowEnvironment());
+    doubles.executeWorkflow.mockImplementation(async (workflow, _task, cwd, options) => {
+      const { prepareWorkflowProviderEnvironment } = await import('../infra/config/runtime-provider/execution-preparation.js');
+      observedProvider(prepareWorkflowProviderEnvironment(options.projectCwd, cwd, workflow, options).providerEnvironment);
       return { success: true, reportDirectory };
     });
     const { executeLoopAnalysisJob } = await import('../features/tasks/execute/loopAnalysisWorker.js');
@@ -459,8 +462,9 @@ describe('runtime assignment invocation', () => {
       output: 'file', parentPid: process.pid, runtimeAssignment: 'cost',
     }), { mode: 0o600 });
     const observedProvider = vi.fn();
-    doubles.runAnalysis.mockImplementation(async () => {
-      observedProvider(await workflowEnvironment());
+    doubles.executeWorkflow.mockImplementation(async (workflow, _task, cwd, options) => {
+      const { prepareWorkflowProviderEnvironment } = await import('../infra/config/runtime-provider/execution-preparation.js');
+      observedProvider(prepareWorkflowProviderEnvironment(options.projectCwd, cwd, workflow, options).providerEnvironment);
       return { success: true, reportDirectory };
     });
     const { executeLoopAnalysisJob } = await import('../features/tasks/execute/loopAnalysisWorker.js');
@@ -482,7 +486,7 @@ describe('runtime assignment invocation', () => {
 
     await expect(runLoopAnalysisWorker(jobPath)).rejects.toThrow('typo');
 
-    expect(doubles.runAnalysis).not.toHaveBeenCalled();
+    expect(doubles.executeWorkflow).not.toHaveBeenCalled();
     const failures = readFileSync(join(projectCwd, 'worker-errors.jsonl'), 'utf8').trim().split('\n')
       .map((line) => JSON.parse(line) as { error: string });
     expect(failures).toHaveLength(1);
