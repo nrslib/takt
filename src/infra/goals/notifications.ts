@@ -63,7 +63,6 @@ export function formatIntegratedWorkNotification(purpose: string, language: Lang
 export function formatGoalNotification(
   goal: Goal, notification: GoalNotificationInput, language: Language, project: string,
   destination: 'slack' | 'tui' = 'slack',
-  presentation: 'digest' | 'full' = 'digest',
 ): string {
   const lines = [
     getLabel(`manager.notificationHeadings.${notification.kind}`, language, { project }),
@@ -89,8 +88,8 @@ export function formatGoalNotification(
       ? goal.completion.summary : notification.body;
     if (destination === 'tui' && notification.kind !== 'question') {
       const bodyLines = source.split('\n');
-      lines.push(presentation === 'full' ? source : bodyLines.slice(0, 3).join('\n'));
-      if (presentation === 'digest' && bodyLines.length > 3) {
+      lines.push(bodyLines.slice(0, 3).join('\n'));
+      if (bodyLines.length > 3) {
         lines.push(getLabel('manager.notificationDigestHint', language));
       }
     } else {

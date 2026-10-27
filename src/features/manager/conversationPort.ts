@@ -4,7 +4,7 @@ import type { ConversationActor, ConversationAssignment, ConversationRecord, Por
 import type { WritablePermissionScope } from './scopedPermissionStorage.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
 import type { ManagerAssignment } from './startupResolution.js';
-import type { ManagerDisplayEvent, ManagerDisplayNotice } from './savedEvents.js';
+import type { ManagerDisplayEvent } from './savedEvents.js';
 
 export type ConversationCommand =
   | { kind: 'message'; text: string }
@@ -23,18 +23,22 @@ export interface ConversationState {
   running: { operationId: string; kind: string } | null;
   interrupted: boolean;
 }
-export type SnapshotItem =
+export type SnapshotValue =
   | { kind: 'state'; state: ConversationState }
   | { kind: 'assignment'; assignment: ManagerAssignment }
   | { kind: 'goal'; goal: Pick<Goal, 'id' | 'objective' | 'status' | 'executionStatus'> & { repositoryDirectory: string } }
   | { kind: 'inquiry'; inquiry: { target: QuestionTarget; question: GoalQuestion; objective?: string } }
-  | { kind: 'notice'; notice: ManagerDisplayNotice }
   | { kind: 'display_event'; event: ManagerDisplayEvent };
+export type SnapshotItem = SnapshotValue | { kind: 'remove'; key: string };
+export type SnapshotMode = 'initial' | 'delta';
 export interface OutputVersion { revision: number; stateSequence: number; operationId: string | null }
 export interface SnapshotRead extends OutputVersion {
   transferId: string;
   conversationId: string;
+  mode: SnapshotMode;
   items: AsyncIterable<SnapshotItem>;
+  complete(): void;
+  cancel(): void;
 }
 export type Submission = { kind: 'accepted' | 'busy'; operationId: string } | { kind: 'error'; code: string; message: string };
 export type OperationResult =

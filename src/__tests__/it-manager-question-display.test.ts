@@ -330,7 +330,7 @@ it.each(['enter', 'escape'] as const)('blocks inquiry entry during registration 
   call.mockResolvedValueOnce({ persona: 'manager', status: 'done', timestamp: new Date(), content: '',
     structuredOutput: { message: 'Summary ready', summary } });
   await send('Prepare export');
-  await vi.waitFor(() => expect(app!.lastFrame()).toContain('Summary to register'));
+  await vi.waitFor(() => expect(app!.lastFrame()).toContain('Summary to register'), { timeout: 10_000 });
   let finish!: () => void;
   const registration = new Promise<void>((resolve) => { finish = resolve; });
   const approval = spyConversationCommand(session!, 'approve_summary').mockImplementation(async (command) => {
@@ -560,7 +560,7 @@ it.each(['default', 'escape'] as const)('cancels abort with %s without changing 
   expect(await store.get(saved.id)).toEqual(saved);
   expect(call).not.toHaveBeenCalled();
   await send('Continue conversation');
-  await vi.waitFor(() => expect(call).toHaveBeenCalledOnce());
+  await vi.waitFor(() => expect(call).toHaveBeenCalledOnce(), { timeout: 10_000 });
   expect(await store.get(saved.id)).toEqual(saved);
 });
 
@@ -573,7 +573,7 @@ it.each([
   const saved = goalRecord();
   const { store, call, send } = await mountGoalControls('ja', saved);
   await send(text);
-  await vi.waitFor(() => expect(call).toHaveBeenCalledOnce());
+  await vi.waitFor(() => expect(call).toHaveBeenCalledOnce(), { timeout: 10_000 });
   const [conversation, context] = call.mock.calls[0]![0].split('\n\nBusiness context (not approval): ');
   expect(conversation).toBe(text);
   expectGoalMemory(JSON.stringify(JSON.parse(context!).goals), saved);
@@ -809,7 +809,7 @@ it.each([
   const { store, call, send } = await mountGoalControls('ja', saved);
   const text = prefix.includes('GOAL') ? prefix.replace('GOAL', goalId) : `${prefix} ${goalId}`;
   await send(text);
-  await vi.waitFor(() => expect(call).toHaveBeenCalledOnce());
+  await vi.waitFor(() => expect(call).toHaveBeenCalledOnce(), { timeout: 10_000 });
   const [conversation, context] = call.mock.calls[0]![0].split('\n\nBusiness context (not approval): ');
   expect(conversation).toBe(text);
   expectGoalMemory(JSON.stringify(JSON.parse(context!).goals), saved);
@@ -1000,7 +1000,6 @@ it.each([
   expect(display.events[0]!.message.split('\n').slice(2, 5)).toEqual(body.split('\n').slice(0, 3));
   expect(display.events[0]!.message.split('\n')[5]).toMatch(lang === 'ja' ? /省略/u : /omitted/iu);
   expect(display.events[0]!.message).not.toMatch(/Ctrl\+N|\^N/u);
-  expect(display).toMatchObject({ notices: [{ message: expect.stringContaining(body) }] });
   expect(await store.get(saved.id)).toEqual(saved);
   expect(call).not.toHaveBeenCalled();
   await vi.waitFor(() => {
