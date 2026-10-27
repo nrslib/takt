@@ -7,6 +7,11 @@ const evalDir = dirname(fileURLToPath(import.meta.url));
 const CLASSIFICATIONS = [
   {
     tier: 'active',
+    reason: '仕様逸脱の判定と最終報告を両言語・両入口で評価する',
+    suites: ['spec-deviation-phase1', 'spec-deviation-summary'],
+  },
+  {
+    tier: 'active',
     reason: 'manager の作業分割・同時投入・結合後の確認・作業の制約の保持と引き継ぎ・人の対応が必要な場合の停止を日英17ケースで測る（Python データ処理と Web アプリを含む）',
     suites: ['manager-work-split'],
   },
@@ -683,6 +688,10 @@ const EXECUTION_OVERRIDES = {
 };
 
 const PREPARE_TARGET_OVERRIDES = {
+  ...Object.fromEntries(['spec-deviation-phase1', 'spec-deviation-summary'].map(name => [name,
+    ['grounded', 'reinterpretation', 'ungrounded', 'clean', 'other-unmet'].flatMap(scenario =>
+      ['ja', 'en'].flatMap(language => ['generic', 'peer'].map(entry => `spec-deviation-${scenario}-${entry}-${language}`))),
+  ])),
   'manager-work-split': [],
   'finding-realistic-premise': [
     'rt', 'rc', 'rq', 'ne', 'np', 'nb', 'at', 'ac', 'aq', 'ae', 'ap', 'ab',

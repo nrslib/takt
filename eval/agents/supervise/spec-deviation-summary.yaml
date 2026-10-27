@@ -1,0 +1,202 @@
+description: 最終報告の仕様逸脱
+prompts:
+  - label: spec-deviation-grounded-generic-ja-summary
+    raw: file://../../prompts/spec-deviation-grounded-generic-ja.phase2.j2
+    config:
+      working_dir: fixtures/spec-deviation/grounded
+  - label: spec-deviation-grounded-peer-ja-summary
+    raw: file://../../prompts/spec-deviation-grounded-peer-ja.phase2.j2
+    config:
+      working_dir: fixtures/spec-deviation/grounded
+  - label: spec-deviation-grounded-generic-en-summary
+    raw: file://../../prompts/spec-deviation-grounded-generic-en.phase2.j2
+    config:
+      working_dir: fixtures/spec-deviation/grounded
+  - label: spec-deviation-grounded-peer-en-summary
+    raw: file://../../prompts/spec-deviation-grounded-peer-en.phase2.j2
+    config:
+      working_dir: fixtures/spec-deviation/grounded
+  - label: spec-deviation-reinterpretation-generic-ja-summary
+    raw: file://../../prompts/spec-deviation-reinterpretation-generic-ja.phase2.j2
+    config:
+      working_dir: fixtures/spec-deviation/reinterpretation
+  - label: spec-deviation-reinterpretation-peer-ja-summary
+    raw: file://../../prompts/spec-deviation-reinterpretation-peer-ja.phase2.j2
+    config:
+      working_dir: fixtures/spec-deviation/reinterpretation
+  - label: spec-deviation-reinterpretation-generic-en-summary
+    raw: file://../../prompts/spec-deviation-reinterpretation-generic-en.phase2.j2
+    config:
+      working_dir: fixtures/spec-deviation/reinterpretation
+  - label: spec-deviation-reinterpretation-peer-en-summary
+    raw: file://../../prompts/spec-deviation-reinterpretation-peer-en.phase2.j2
+    config:
+      working_dir: fixtures/spec-deviation/reinterpretation
+  - label: spec-deviation-ungrounded-generic-ja-summary
+    raw: file://../../prompts/spec-deviation-ungrounded-generic-ja.phase2.j2
+    config:
+      working_dir: fixtures/spec-deviation/ungrounded
+  - label: spec-deviation-ungrounded-peer-ja-summary
+    raw: file://../../prompts/spec-deviation-ungrounded-peer-ja.phase2.j2
+    config:
+      working_dir: fixtures/spec-deviation/ungrounded
+  - label: spec-deviation-ungrounded-generic-en-summary
+    raw: file://../../prompts/spec-deviation-ungrounded-generic-en.phase2.j2
+    config:
+      working_dir: fixtures/spec-deviation/ungrounded
+  - label: spec-deviation-ungrounded-peer-en-summary
+    raw: file://../../prompts/spec-deviation-ungrounded-peer-en.phase2.j2
+    config:
+      working_dir: fixtures/spec-deviation/ungrounded
+  - label: spec-deviation-clean-generic-ja-summary
+    raw: file://../../prompts/spec-deviation-clean-generic-ja.phase2.j2
+    config:
+      working_dir: fixtures/spec-deviation/clean
+  - label: spec-deviation-clean-peer-ja-summary
+    raw: file://../../prompts/spec-deviation-clean-peer-ja.phase2.j2
+    config:
+      working_dir: fixtures/spec-deviation/clean
+  - label: spec-deviation-clean-generic-en-summary
+    raw: file://../../prompts/spec-deviation-clean-generic-en.phase2.j2
+    config:
+      working_dir: fixtures/spec-deviation/clean
+  - label: spec-deviation-clean-peer-en-summary
+    raw: file://../../prompts/spec-deviation-clean-peer-en.phase2.j2
+    config:
+      working_dir: fixtures/spec-deviation/clean
+  - label: spec-deviation-other-unmet-generic-ja-summary
+    raw: file://../../prompts/spec-deviation-other-unmet-generic-ja.phase2.j2
+    config:
+      working_dir: fixtures/spec-deviation/other-unmet
+  - label: spec-deviation-other-unmet-peer-ja-summary
+    raw: file://../../prompts/spec-deviation-other-unmet-peer-ja.phase2.j2
+    config:
+      working_dir: fixtures/spec-deviation/other-unmet
+  - label: spec-deviation-other-unmet-generic-en-summary
+    raw: file://../../prompts/spec-deviation-other-unmet-generic-en.phase2.j2
+    config:
+      working_dir: fixtures/spec-deviation/other-unmet
+  - label: spec-deviation-other-unmet-peer-en-summary
+    raw: file://../../prompts/spec-deviation-other-unmet-peer-en.phase2.j2
+    config:
+      working_dir: fixtures/spec-deviation/other-unmet
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-sol-low
+    config:
+      cli: codex
+      model: gpt-6-sol
+      reasoning_effort: low
+      isolate_working_dir: true
+evaluateOptions:
+  maxConcurrency: 4
+tests:
+  - description: 根拠のある逸脱を承認して報告する
+    prompts:
+      - spec-deviation-grounded-generic-ja-summary
+      - spec-deviation-grounded-peer-ja-summary
+      - spec-deviation-grounded-generic-en-summary
+      - spec-deviation-grounded-peer-en-summary
+    vars:
+      task: order.md の要件を config.js の実装と照合する。existingKey は workflow_command_gates と
+        workflow_runtime_prepare の従来の共通規則を表す。security.md があればプロジェクトの脅威モデルである。
+      previous_response: >-
+        判定: APPROVE
+
+        要件: 「project の値が global の値より優先される」。実装: 登録済み project のみ優先する。根拠:
+        security.md の未登録 project に対する脅威モデル。関連する不整合: workflow_command_gates と
+        workflow_runtime_prepare は登録の有無にかかわらず project を優先する。
+    assert:
+      - type: llm-rubric
+        metric: spec-deviation/grounded/summary
+        value: APPROVE とし、要件の文面を満たしたとは扱わず逸脱として、該当要件の引用、登録済み project
+          のみ優先する実装、脅威モデルの根拠、既存の二つの設定キーに残る不整合を記録する。
+          要件の引用、実際の実装、根拠、関連する不整合の4項目を保持する。
+  - description: 読み替えだけで充足する要件を逸脱として扱う
+    prompts:
+      - spec-deviation-reinterpretation-generic-ja-summary
+      - spec-deviation-reinterpretation-peer-ja-summary
+      - spec-deviation-reinterpretation-generic-en-summary
+      - spec-deviation-reinterpretation-peer-en-summary
+    vars:
+      task: order.md の要件を config.js の実装と照合する。existingKey は workflow_command_gates と
+        workflow_runtime_prepare の従来の共通規則を表す。security.md があればプロジェクトの脅威モデルである。
+      previous_response: >-
+        判定: APPROVE
+
+        要件: 「project の値が global の値より優先される」。実装: 登録済み project のみ優先する。根拠:
+        security.md の未登録 project に対する脅威モデル。関連する不整合: workflow_command_gates と
+        workflow_runtime_prepare は登録の有無にかかわらず project を優先する。
+    assert:
+      - type: llm-rubric
+        metric: spec-deviation/reinterpretation/summary
+        value: project が登録済みかを問わない要件を登録済み project
+          に限定して充足と読み替えず、文面からの逸脱として記録する。根拠と残る不整合を示し、他に問題がないため APPROVE とする。
+          要件の引用、実際の実装、根拠、関連する不整合の4項目を保持する。
+  - description: 根拠のない逸脱を承認しない
+    prompts:
+      - spec-deviation-ungrounded-generic-ja-summary
+      - spec-deviation-ungrounded-peer-ja-summary
+      - spec-deviation-ungrounded-generic-en-summary
+      - spec-deviation-ungrounded-peer-en-summary
+    vars:
+      task: order.md の要件を config.js の実装と照合する。existingKey は workflow_command_gates と
+        workflow_runtime_prepare の従来の共通規則を表す。security.md があればプロジェクトの脅威モデルである。
+      previous_response: >-
+        判定: REJECT
+
+        要件: 「project の値が global の値より優先される」。実装: 登録済み project のみ優先する。根拠:
+        確認可能な根拠なし。関連する不整合: workflow_command_gates と workflow_runtime_prepare
+        は登録の有無にかかわらず project を優先する。
+    assert:
+      - type: llm-rubric
+        metric: spec-deviation/ungrounded/summary
+        value: 未登録 project を除外した差には確認可能な根拠がないため要件未充足として扱い、APPROVE
+          せず差、根拠がないこと、残る不整合を記録する。 要件の引用、実際の実装、根拠、関連する不整合の4項目を保持する。
+  - description: 逸脱がない場合に逸脱を作らない
+    prompts:
+      - spec-deviation-clean-generic-ja-summary
+      - spec-deviation-clean-peer-ja-summary
+      - spec-deviation-clean-generic-en-summary
+      - spec-deviation-clean-peer-en-summary
+    vars:
+      task: order.md の要件を config.js の実装と照合する。existingKey は workflow_command_gates と
+        workflow_runtime_prepare の従来の共通規則を表す。security.md があればプロジェクトの脅威モデルである。
+      previous_response: |-
+        判定: APPROVE
+        project の値は登録の有無にかかわらず global より優先される。要件と実装は一致し、仕様からの逸脱はない。
+    assert:
+      - type: llm-rubric
+        metric: spec-deviation/clean/summary
+        value: project の値が登録の有無にかかわらず global より優先されることを確認し、APPROVE
+          とする。存在しない仕様上の逸脱を作り出さない。
+  - description: 他の未充足がある場合も逸脱を報告する
+    prompts:
+      - spec-deviation-other-unmet-generic-ja-summary
+      - spec-deviation-other-unmet-peer-ja-summary
+      - spec-deviation-other-unmet-generic-en-summary
+      - spec-deviation-other-unmet-peer-en-summary
+    vars:
+      task: order.md の要件を config.js の実装と照合する。existingKey は workflow_command_gates と
+        workflow_runtime_prepare の従来の共通規則を表す。security.md があればプロジェクトの脅威モデルである。
+      previous_response: >-
+        判定: REJECT
+
+        要件: 「project の値が global の値より優先される」。実装: 登録済み project のみ優先する。根拠:
+        security.md の未登録 project に対する脅威モデル。関連する不整合: workflow_command_gates と
+        workflow_runtime_prepare は登録の有無にかかわらず project を優先する。別要件の空文字列保持は未充足。
+    assert:
+      - type: llm-rubric
+        metric: spec-deviation/other-unmet/summary
+        value: 根拠のある優先順位の逸脱を要件引用、実装、根拠、残る不整合とともに記録し、別要件である空値の保持が未充足のため APPROVE しない。
+          要件の引用、実際の実装、根拠、関連する不整合の4項目を保持する。
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model: gpt-6-sol
+        model_reasoning_effort: low
