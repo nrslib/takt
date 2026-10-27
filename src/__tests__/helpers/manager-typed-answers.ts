@@ -37,7 +37,7 @@ const DOWN = '\x1b[B';
 const ESC = '\x1b[27u';
 const workspaceId = '750e8400-e29b-41d4-a716-446655440001';
 const sentence = '出力先を限定してWriteを許可する';
-const waitFor = (assertion: () => void | Promise<void>) => vi.waitFor(assertion, { timeout: 2000 });
+const waitFor = (assertion: () => void | Promise<void>) => vi.waitFor(assertion, { timeout: 5_000 });
 
 export function registerManagerTypedAnswerTests(): void {
   describe('manager typed inquiry answers', () => {

@@ -62,6 +62,9 @@ vi.mock('../infra/task/process.js', async (importOriginal) => ({
     : undefined,
 }));
 
+// 負荷が高いと TUI の入力からエージェント呼び出しまで 1 秒を超えるため、既定の上限では足りない。
+function waitFor<T>(callback: () => T | Promise<T>): Promise<T> { return vi.waitFor(callback, { timeout: 5_000 }); }
+
 let cwd: string;
 let app: ReturnType<typeof render> | undefined;
 let session: ManagerServiceClient | undefined;
@@ -112,10 +115,10 @@ async function mountGoalControls(lang: 'ja' | 'en', goal: Goal) {
   });
   await session.ready;
   app = render(createElement(ManagerView, { cwd, lang, client: session, assignment: { kind: 'repository', repositoryDirectory: cwd, repositoryDirectories: [cwd] }, initialDiagnostics: [], onExit: vi.fn() }));
-  await vi.waitFor(() => expect(app!.lastFrame()).toContain(basename(cwd)));
+  await waitFor(() => expect(app!.lastFrame()).toContain(basename(cwd)));
   const send = async (text: string): Promise<void> => {
     app!.stdin.write(text);
-    await vi.waitFor(() => expect(app!.lastFrame()).toContain(text.split('\n')[0]!));
+    await waitFor(() => expect(app!.lastFrame()).toContain(text.split('\n')[0]!));
     app!.stdin.write('\r');
   };
   return { store, call, send };
@@ -123,7 +126,7 @@ async function mountGoalControls(lang: 'ja' | 'en', goal: Goal) {
 
 async function mountNewNoticeControls(lang: 'ja' | 'en', goal: Goal) {
   const controls = await mountGoalControls(lang, { ...goal, notifications: [] });
-  await vi.waitFor(() => expect(app!.lastFrame()).not.toMatch(/処理中|Working/u));
+  await waitFor(() => expect(app!.lastFrame()).not.toMatch(/処理中|Working/u));
   const recordedAt = new Date(Date.now() + 1).toISOString();
   const saved = await controls.store.update(goal.id, () => ({ ...goal,
     notifications: goal.notifications!.map((notification) => ({ ...notification, recordedAt })),
@@ -151,7 +154,7 @@ function expectGoalMemory(memory: string, goal: Goal): void {
 const irreversibleWarning = /取り消せ|元に戻せ|不可逆|cannot.*undo|irreversible/iu;
 
 async function expectAbortConfirmation(goal: Goal): Promise<void> {
-  await vi.waitFor(() => {
+  await waitFor(() => {
     const frame = app!.lastFrame()!.replace(/\s+/gu, ' ');
     expect(frame).toContain(goal.objective);
     expect(frame).toMatch(irreversibleWarning);
@@ -159,7 +162,7 @@ async function expectAbortConfirmation(goal: Goal): Promise<void> {
 }
 
 async function selectGoal(goal: Goal, action: 'pause' | 'resume' | 'abort'): Promise<void> {
-  await vi.waitFor(() => {
+  await waitFor(() => {
     const lists = app!.lastFrame()?.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu) ?? [];
     expect(lists.some((box) => box.includes(goal.objective) && /↑|↓/u.test(box) && /Enter/u.test(box) && /Esc/u.test(box))).toBe(true);
   });
@@ -175,7 +178,7 @@ async function selectGoalAction(action: 'pause' | 'resume' | 'abort'): Promise<v
     return menu === undefined ? [] : menu.split('\n').slice(2, -2)
       .filter((row) => Object.values(patterns).some((pattern) => pattern.test(row)));
   };
-  await vi.waitFor(() => {
+  await waitFor(() => {
     expect(rows()).toHaveLength(2);
     expect(rows().some((row) => patterns[action].test(row))).toBe(true);
   });
@@ -189,7 +192,7 @@ async function selectGoalAction(action: 'pause' | 'resume' | 'abort'): Promise<v
 async function openMenu(kind: 'answer' | 'goal'): Promise<void> {
   await session!.ready;
   await session!.refresh();
-  await vi.waitFor(() => expect(app!.lastFrame()).not.toMatch(/処理中|Working/u));
+  await waitFor(() => expect(app!.lastFrame()).not.toMatch(/処理中|Working/u));
   app!.stdin.write(kind === 'answer' ? '\x12' : '\x07');
 }
 
@@ -219,18 +222,18 @@ it.each(['choice', 'free text'] as const)('persists only the selected inquiry th
   if (selected.goalId === null) throw new Error('Expected a goal inquiry');
   const untouched = await store.get(selected.goalId === saved.id ? other.id : saved.id);
   await openMenu('answer');
-  await vi.waitFor(() => {
+  await waitFor(() => {
     const lists = app!.lastFrame()?.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu) ?? [];
     expect(lists.some((box) => box.includes(saved.objective) && /↑|↓/u.test(box) && /Enter/u.test(box))).toBe(true);
   });
   app!.stdin.write('\x1b[B');
   app!.stdin.write('\r');
-  await vi.waitFor(() => expect(app!.lastFrame()).toContain(mode === 'choice' ? 'Free text' : 'Enter your answer'));
+  await waitFor(() => expect(app!.lastFrame()).toContain(mode === 'choice' ? 'Free text' : 'Enter your answer'));
   expect((await store.get(selected.goalId)).questions![0]!.status).toBe('pending');
   if (mode === 'choice') app!.stdin.write('\x1b[B');
   else app!.stdin.write('Custom output destination');
   app!.stdin.write('\r');
-  await vi.waitFor(async () => expect((await store.get(selected.goalId)).questions![0]).toMatchObject({
+  await waitFor(async () => expect((await store.get(selected.goalId)).questions![0]).toMatchObject({
     status: 'answered', answer: { text: mode === 'choice' ? 'JSON' : 'Custom output destination', source: 'tui' },
   }));
   expect(await store.get(untouched.id)).toEqual(untouched);
@@ -256,17 +259,17 @@ it.each(['multiline', 'wrapped'] as const)('scrolls a %s inquiry and returns to 
     ?.find((box) => box.includes(getLabel('manager.answerPrompt', 'en')));
   const visibleText = (): string | undefined => detail()?.replace(/[│\s]/gu, '');
   await openMenu('answer');
-  await vi.waitFor(() => expect(app!.lastFrame()).toContain(getLabel('manager.selectionHint', 'en')));
+  await waitFor(() => expect(app!.lastFrame()).toContain(getLabel('manager.selectionHint', 'en')));
   app!.stdin.write('\r');
-  await vi.waitFor(() => expect(visibleText()).toContain(start));
+  await waitFor(() => expect(visibleText()).toContain(start));
   expect(visibleText()).not.toContain(end);
   for (let move = 0; move < 100; move++) app!.stdin.write('\x1b[B');
-  await vi.waitFor(() => {
+  await waitFor(() => {
     expect(visibleText()).toContain(end);
     expect(visibleText()).not.toContain(start);
   });
   app!.stdin.write('\x1b[27u');
-  await vi.waitFor(() => {
+  await waitFor(() => {
     expect(app!.lastFrame()).toContain(getLabel('manager.selectionTitles.answer', 'en'));
     expect(detail()).toBeUndefined();
   });
@@ -292,30 +295,30 @@ it('updates an open inquiry on terminal resize and uses the new scroll bounds wi
     ?.find((box) => box.includes(getLabel('manager.answerPrompt', 'en')))
     ?.split('\n').slice(1, -2).map((row) => row.slice(1, -1).trimEnd());
   await openMenu('answer');
-  await vi.waitFor(() => expect(app!.lastFrame()).toContain(getLabel('manager.selectionHint', 'en')));
+  await waitFor(() => expect(app!.lastFrame()).toContain(getLabel('manager.selectionHint', 'en')));
   app!.stdin.write('\r');
-  await vi.waitFor(() => expect(bodyRows()).toEqual(lines.slice(0, 8)));
+  await waitFor(() => expect(bodyRows()).toEqual(lines.slice(0, 8)));
   for (let move = 0; move < 20; move++) app!.stdin.write('\x1b[B');
-  await vi.waitFor(() => expect(bodyRows()).toEqual(lines.slice(2)));
+  await waitFor(() => expect(bodyRows()).toEqual(lines.slice(2)));
 
   columns.mockReturnValue(42);
   app!.stdout.emit('resize');
-  await vi.waitFor(() => expect(bodyRows()).toEqual(wrapped.slice(2, 10)));
+  await waitFor(() => expect(bodyRows()).toEqual(wrapped.slice(2, 10)));
   for (let move = 0; move < 20; move++) app!.stdin.write('\x1b[B');
-  await vi.waitFor(() => expect(bodyRows()).toEqual(wrapped.slice(12)));
+  await waitFor(() => expect(bodyRows()).toEqual(wrapped.slice(12)));
   app!.stdin.write('\x1b[B');
   app!.stdin.write('\x1b[A');
-  await vi.waitFor(() => expect(bodyRows()).toEqual(wrapped.slice(11, 19)));
+  await waitFor(() => expect(bodyRows()).toEqual(wrapped.slice(11, 19)));
   app!.stdin.write('\x1b[B');
-  await vi.waitFor(() => expect(bodyRows()).toEqual(wrapped.slice(12)));
+  await waitFor(() => expect(bodyRows()).toEqual(wrapped.slice(12)));
 
   columns.mockReturnValue(82);
   app!.stdout.emit('resize');
-  await vi.waitFor(() => expect(bodyRows()).toEqual(lines.slice(2)));
+  await waitFor(() => expect(bodyRows()).toEqual(lines.slice(2)));
   app!.stdin.write('\x1b[A');
-  await vi.waitFor(() => expect(bodyRows()).toEqual(lines.slice(1, 9)));
+  await waitFor(() => expect(bodyRows()).toEqual(lines.slice(1, 9)));
   app!.stdin.write('\x1b[B');
-  await vi.waitFor(() => expect(bodyRows()).toEqual(lines.slice(2)));
+  await waitFor(() => expect(bodyRows()).toEqual(lines.slice(2)));
   expect(await store.get(goal.id)).toEqual(saved);
   expect(answer).not.toHaveBeenCalled();
   expect(call).not.toHaveBeenCalled();
@@ -330,7 +333,7 @@ it.each(['enter', 'escape'] as const)('blocks inquiry entry during registration 
   call.mockResolvedValueOnce({ persona: 'manager', status: 'done', timestamp: new Date(), content: '',
     structuredOutput: { message: 'Summary ready', summary } });
   await send('Prepare export');
-  await vi.waitFor(() => expect(app!.lastFrame()).toContain('Summary to register'));
+  await waitFor(() => expect(app!.lastFrame()).toContain('Summary to register'));
   let finish!: () => void;
   const registration = new Promise<void>((resolve) => { finish = resolve; });
   const approval = spyConversationCommand(session!, 'approve_summary').mockImplementation(async (command) => {
@@ -343,30 +346,30 @@ it.each(['enter', 'escape'] as const)('blocks inquiry entry during registration 
   try {
     app!.stdin.write('\x1b[A');
     app!.stdin.write('\r');
-    await vi.waitFor(() => expect(approval).toHaveBeenCalledOnce());
+    await waitFor(() => expect(approval).toHaveBeenCalledOnce());
     app!.stdin.write('会話の下書き');
-    await vi.waitFor(() => expect(app!.lastFrame()).toContain('会話の下書き'));
+    await waitFor(() => expect(app!.lastFrame()).toContain('会話の下書き'));
     app!.stdin.write('\x12');
     app!.stdin.write('保持');
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(app!.lastFrame()).toContain('会話の下書き保持');
       expect(app!.lastFrame()).not.toContain('Enter your answer');
       expect(app!.lastFrame()).not.toContain(getLabel('manager.selectionHint', 'en'));
     });
     expect(answer).not.toHaveBeenCalled();
     finish();
-    await vi.waitFor(() => expect(app!.lastFrame()).not.toContain('Working'));
+    await waitFor(() => expect(app!.lastFrame()).not.toContain('Working'));
     await openMenu('answer');
-    await vi.waitFor(() => expect(app!.lastFrame()).toContain(getLabel('manager.selectionHint', 'en')));
+    await waitFor(() => expect(app!.lastFrame()).toContain(getLabel('manager.selectionHint', 'en')));
     app!.stdin.write('\r');
-    await vi.waitFor(() => expect(app!.lastFrame()).toContain('Enter your answer'));
+    await waitFor(() => expect(app!.lastFrame()).toContain('Enter your answer'));
     app!.stdin.write('CSVで保存');
-    await vi.waitFor(() => expect(app!.lastFrame()).toContain('CSVで保存'));
+    await waitFor(() => expect(app!.lastFrame()).toContain('CSVで保存'));
     app!.stdin.write(confirm === 'enter' ? '\r' : '\x1b[27u');
-    await vi.waitFor(() => expect(app!.lastFrame()).not.toContain('Enter your answer'));
+    await waitFor(() => expect(app!.lastFrame()).not.toContain('Enter your answer'));
     const saved = await store.get(goal.id);
     if (confirm === 'enter') {
-      await vi.waitFor(async () => expect((await store.get(goal.id)).questions![0]).toMatchObject({
+      await waitFor(async () => expect((await store.get(goal.id)).questions![0]).toMatchObject({
         status: 'answered', answer: { text: 'CSVで保存', source: 'tui' },
       }));
       expect(answer).toHaveBeenCalledExactlyOnceWith({ kind: 'answer_question', target: { goalId: goal.id, repositoryDirectory: cwd },
@@ -391,7 +394,7 @@ it.each(['ja', 'en'] as const)('[SCN-GOALLIST-P1] shows a saved awaiting-merge g
   };
   const { store } = await mountGoalControls(lang, saved);
   await openMenu('goal');
-  await vi.waitFor(() => {
+  await waitFor(() => {
     expect(app!.lastFrame()).toContain(getLabel('manager.selectionTitles.goal', lang));
     const row = app!.lastFrame()!.split('\n').find((line) => line.includes(saved.objective));
     expect(row).toContain(`${saved.objective} — ${getLabel('manager.goalStates.awaiting_merge', lang)}`);
@@ -415,7 +418,7 @@ it.each([
   };
   const { store } = await mountGoalControls(lang, saved);
   await openMenu('goal');
-  await vi.waitFor(() => {
+  await waitFor(() => {
     expect(app!.lastFrame()).toContain(getLabel('manager.selectionTitles.goal', lang));
     const row = app!.lastFrame()!.split('\n').find((line) => line.includes(saved.objective));
     expect(row).toContain(`${saved.objective} — ${getLabel('manager.goalStates.paused', lang)}`);
@@ -438,7 +441,7 @@ it.each(['ja', 'en'] as const)('[SCN-GOALLIST-N1] excludes saved completed and a
   await new GoalStore(cwd).create(completed);
   const { store } = await mountGoalControls(lang, aborted);
   await openMenu('goal');
-  await vi.waitFor(() => {
+  await waitFor(() => {
     const frame = app!.lastFrame()!;
     expect(frame).toContain(getLabel('manager.selectionEmpty.goal', lang));
     expect(frame).not.toContain(completed.objective);
@@ -461,7 +464,7 @@ it.each(['pause', 'resume', 'abort'] as const)('filters mixed saved goal states 
       changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false } } });
   await store.create({ ...saved, id: '550e8400-e29b-41d4-a716-446655440003', objective: 'Aborted candidate', executionStatus: 'aborted' });
   await openMenu('goal');
-  await vi.waitFor(() => {
+  await waitFor(() => {
     const lists = app!.lastFrame()?.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu) ?? [];
     const list = lists.find((box) => /↑|↓/u.test(box) && /Enter/u.test(box) && /Esc/u.test(box));
     expect(list).toBeDefined();
@@ -477,7 +480,7 @@ it.each(['pause', 'resume', 'abort'] as const)('filters mixed saved goal states 
   await selectGoalAction(command);
   if (command === 'abort') { await expectAbortConfirmation(other); confirmAbort(); }
   const expected = command === 'pause' ? 'paused' : command === 'resume' ? 'active' : 'aborted';
-  await vi.waitFor(async () => expect((await store.get(other.id)).executionStatus).toBe(expected));
+  await waitFor(async () => expect((await store.get(other.id)).executionStatus).toBe(expected));
   expect(await store.get(saved.id)).toEqual(saved);
   expect(call).not.toHaveBeenCalled();
 });
@@ -503,12 +506,12 @@ it.each([
   runner.addTask('preserve pending work', { goal_id: saved.id });
   const before = new TaskStore(cwd).read();
   expect(await session!.submit({ kind: 'abort_goal', goalId: saved.id })).toMatchObject({ kind: 'accepted' });
-  await vi.waitFor(() => expect(session!.results.at(-1)).toMatchObject({ kind: 'error', code: 'operation_failed' }));
+  await waitFor(() => expect(session!.results.at(-1)).toMatchObject({ kind: 'error', code: 'operation_failed' }));
   expect(await store.get(saved.id)).toEqual(saved);
   expect(new TaskStore(cwd).read()).toEqual(before);
   abort.mockClear();
   await openMenu('goal');
-  await vi.waitFor(() => {
+  await waitFor(() => {
     expect(app!.lastFrame()).toMatch(lang === 'ja' ? /(?:対象|ゴール).*(?:ありません|なし)/u : /no.*(?:goals|targets)/iu);
     expect(app!.lastFrame()).not.toMatch(irreversibleWarning);
   });
@@ -533,20 +536,20 @@ it.each([
   expect(await store.get(saved.id)).toEqual(saved);
   expect(call).not.toHaveBeenCalled();
   confirmAbort();
-  await vi.waitFor(async () => expect((await store.get(saved.id)).executionStatus).toBe('aborted'));
+  await waitFor(async () => expect((await store.get(saved.id)).executionStatus).toBe('aborted'));
   expect(await store.get(saved.id)).toEqual({ ...saved, executionStatus: 'aborted' });
   const expectAbortedGoal = (): void => {
     expect(app!.lastFrame()!.split('\n').find((row) => /^(?:進行中|in progress|ongoing|active)/iu.test(row))).toMatch(lang === 'ja'
       ? /進行中\s*0/u : /(?:in progress|ongoing|active)\s*:?\s*0/iu);
   };
-  await vi.waitFor(expectAbortedGoal);
+  await waitFor(expectAbortedGoal);
   expect(call).not.toHaveBeenCalled();
   await openMenu('goal');
-  await vi.waitFor(() => expect(app!.lastFrame()).toMatch(/(?:対象|ゴール).*(?:ありません|なし)|no.*(?:goals|targets)/iu));
+  await waitFor(() => expect(app!.lastFrame()).toMatch(/(?:対象|ゴール).*(?:ありません|なし)|no.*(?:goals|targets)/iu));
   expect((await store.get(saved.id)).executionStatus).toBe('aborted');
   app!.unmount();
   await remount(lang);
-  await vi.waitFor(expectAbortedGoal);
+  await waitFor(expectAbortedGoal);
 });
 
 it.each(['default', 'escape'] as const)('cancels abort with %s without changing saved state or calling the agent', async (choice) => {
@@ -556,11 +559,11 @@ it.each(['default', 'escape'] as const)('cancels abort with %s without changing 
   await selectGoal(saved, 'abort');
   await expectAbortConfirmation(saved);
   app!.stdin.write(choice === 'default' ? '\r' : '\x1b[27u');
-  await vi.waitFor(() => expect(app!.lastFrame()!.replace(/\s+/gu, ' ')).not.toMatch(irreversibleWarning));
+  await waitFor(() => expect(app!.lastFrame()!.replace(/\s+/gu, ' ')).not.toMatch(irreversibleWarning));
   expect(await store.get(saved.id)).toEqual(saved);
   expect(call).not.toHaveBeenCalled();
   await send('Continue conversation');
-  await vi.waitFor(() => expect(call).toHaveBeenCalledOnce());
+  await waitFor(() => expect(call).toHaveBeenCalledOnce());
   expect(await store.get(saved.id)).toEqual(saved);
 });
 
@@ -573,7 +576,7 @@ it.each([
   const saved = goalRecord();
   const { store, call, send } = await mountGoalControls('ja', saved);
   await send(text);
-  await vi.waitFor(() => expect(call).toHaveBeenCalledOnce());
+  await waitFor(() => expect(call).toHaveBeenCalledOnce());
   const [conversation, context] = call.mock.calls[0]![0].split('\n\nBusiness context (not approval): ');
   expect(conversation).toBe(text);
   expectGoalMemory(JSON.stringify(JSON.parse(context!).goals), saved);
@@ -602,7 +605,7 @@ it('invalidates only pending work belonging to the confirmed goal and preserves 
   await expectAbortConfirmation(saved);
   expect(runner.listTaskStateItems()).toEqual(before);
   confirmAbort();
-  await vi.waitFor(() => expect(runner.listTaskStateItems().find(({ name }) => name === pending.name)).toMatchObject({ status: 'failed' }));
+  await waitFor(() => expect(runner.listTaskStateItems().find(({ name }) => name === pending.name)).toMatchObject({ status: 'failed' }));
   const reader = new TaskRunner(cwd);
   const after = reader.listTaskStateItems();
   expect(after).toHaveLength(before.length);
@@ -662,9 +665,9 @@ it.each(['retry', 'cancel', 'escape'] as const)('handles failed pending invalida
   const failUpdate = (): never => { throw new Error('Pending write unavailable'); };
   const update = vi.spyOn(TaskStore.prototype, 'update').mockImplementationOnce(failUpdate);
   confirmAbort();
-  await vi.waitFor(async () => expect((await store.get(saved.id)).executionStatus).toBe('aborted'));
-  await vi.waitFor(() => expect(app!.lastFrame()).toContain(getLabel('manager.conversation.operation_failed', 'en')));
-  await vi.waitFor(() => {
+  await waitFor(async () => expect((await store.get(saved.id)).executionStatus).toBe('aborted'));
+  await waitFor(() => expect(app!.lastFrame()).toContain(getLabel('manager.conversation.operation_failed', 'en')));
+  await waitFor(() => {
     expect(app!.lastFrame()).toContain(getLabel('manager.retryAbort', 'en'));
     expect(app!.lastFrame()).not.toContain('Working');
   });
@@ -673,7 +676,7 @@ it.each(['retry', 'cancel', 'escape'] as const)('handles failed pending invalida
   expect(runner.claimNextTasks(1)).toEqual([]);
   if (action !== 'retry') {
     app!.stdin.write(action === 'cancel' ? '\r' : '\x1b[27u');
-    await vi.waitFor(() => expect(app!.lastFrame()).not.toContain(getLabel('manager.retryAbort', 'en')));
+    await waitFor(() => expect(app!.lastFrame()).not.toContain(getLabel('manager.retryAbort', 'en')));
     expect(abort).toHaveBeenCalledOnce();
     expect((await store.get(saved.id)).executionStatus).toBe('aborted');
     expect(new TaskStore(cwd).read().tasks.find(({ name }) => name === pending.name)?.status).toBe('pending');
@@ -683,7 +686,7 @@ it.each(['retry', 'cancel', 'escape'] as const)('handles failed pending invalida
   const errorCount = app!.lastFrame()?.match(/The conversation operation failed/gu)?.length ?? 0;
   const retryUpdate = vi.spyOn(TaskStore.prototype, 'update').mockImplementationOnce(failUpdate);
   confirmAbort();
-  await vi.waitFor(() => {
+  await waitFor(() => {
     expect(abort).toHaveBeenCalledTimes(2);
     expect(retryUpdate).toHaveBeenCalledOnce();
     expect(app!.lastFrame()?.match(/The conversation operation failed/gu)?.length).toBeGreaterThan(errorCount);
@@ -693,11 +696,11 @@ it.each(['retry', 'cancel', 'escape'] as const)('handles failed pending invalida
   retryUpdate.mockRestore();
   expect(new TaskStore(cwd).read().tasks.find(({ name }) => name === pending.name)?.status).toBe('pending');
   confirmAbort();
-  await vi.waitFor(() => expect(runner.listTaskStateItems()).toContainEqual(expect.objectContaining({ name: pending.name, status: 'failed', failure: expect.objectContaining({ retryable: false }) })));
+  await waitFor(() => expect(runner.listTaskStateItems()).toContainEqual(expect.objectContaining({ name: pending.name, status: 'failed', failure: expect.objectContaining({ retryable: false }) })));
   expect(new TaskStore(cwd).read().tasks).toContainEqual(expect.objectContaining({ name: pending.name, status: 'failed', started_at: null, completed_at: null, failure: expect.objectContaining({ retryable: false }) }));
   expect(runner.claimNextTasks(1)).toEqual([]);
   expect((await store.get(saved.id)).executionStatus).toBe('aborted');
-  await vi.waitFor(() => expect(app!.lastFrame()).not.toContain(getLabel('manager.retryAbort', 'en')));
+  await waitFor(() => expect(app!.lastFrame()).not.toContain(getLabel('manager.retryAbort', 'en')));
   expect(abort.mock.calls.map(([command]) => 'goalId' in command ? command.goalId : null)).toEqual([saved.id, saved.id, saved.id]);
   expect(call).not.toHaveBeenCalled();
 });
@@ -748,11 +751,11 @@ it('keeps SIGINT ownership when a single goal task receives its own signal witho
   });
   try {
     let listener: NodeJS.SignalsListener | undefined;
-    await vi.waitFor(() => {
+    await waitFor(() => {
       listener = process.listeners('SIGINT').find((value) => !listeners.has(value));
       expect(listener).toBeDefined();
       expect(providerSignal).toBeDefined();
-    }, { timeout: 2000 });
+    });
     expect(taskSignal).toBeDefined();
     expect(taskSignal!.aborted).toBe(false);
     listener!('SIGINT');
@@ -775,10 +778,10 @@ it.each(['ja', 'en'] as const)('pauses and resumes an awaiting-merge goal from c
   const { store, call } = await mountGoalControls(lang, saved);
   await openMenu('goal');
   await selectGoal(saved, 'pause');
-  await vi.waitFor(async () => expect((await store.get(goalId)).executionStatus).toBe('paused'));
+  await waitFor(async () => expect((await store.get(goalId)).executionStatus).toBe('paused'));
   expect(await store.get(goalId)).toEqual({ ...saved, executionStatus: 'paused' });
   await openMenu('goal');
-  await vi.waitFor(() => {
+  await waitFor(() => {
     const boxes = app!.lastFrame()!.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu) ?? [];
     const list = boxes.find((box) => /↑|↓/u.test(box) && /Enter/u.test(box));
     expect(list).toContain(saved.objective);
@@ -786,10 +789,10 @@ it.each(['ja', 'en'] as const)('pauses and resumes an awaiting-merge goal from c
   });
   expect(call).not.toHaveBeenCalled();
   await selectGoal(saved, 'resume');
-  await vi.waitFor(async () => expect((await store.get(goalId)).executionStatus).toBe('active'));
+  await waitFor(async () => expect((await store.get(goalId)).executionStatus).toBe('active'));
   expect(await store.get(goalId)).toEqual(saved);
   await openMenu('goal');
-  await vi.waitFor(() => {
+  await waitFor(() => {
     const boxes = app!.lastFrame()!.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu) ?? [];
     const list = boxes.find((box) => /↑|↓/u.test(box) && /Enter/u.test(box));
     expect(list).toContain(saved.objective);
@@ -809,7 +812,7 @@ it.each([
   const { store, call, send } = await mountGoalControls('ja', saved);
   const text = prefix.includes('GOAL') ? prefix.replace('GOAL', goalId) : `${prefix} ${goalId}`;
   await send(text);
-  await vi.waitFor(() => expect(call).toHaveBeenCalledOnce());
+  await waitFor(() => expect(call).toHaveBeenCalledOnce());
   const [conversation, context] = call.mock.calls[0]![0].split('\n\nBusiness context (not approval): ');
   expect(conversation).toBe(text);
   expectGoalMemory(JSON.stringify(JSON.parse(context!).goals), saved);
@@ -838,7 +841,7 @@ it('shows compact pending questions and an ID-free answer hint when notification
   });
   app = render(createElement(ManagerView, { cwd, lang: 'ja', client: session, assignment: { kind: 'repository', repositoryDirectory: cwd, repositoryDirectories: [cwd] }, initialDiagnostics: [], onExit: vi.fn() }));
   await openMenu('answer');
-  await vi.waitFor(() => {
+  await waitFor(() => {
     const frame = app!.lastFrame()!;
     const rows = frame.split('\n');
     expect(rows.find((row) => row.includes(input.body))).toContain(saved.objective);
@@ -857,7 +860,7 @@ it('shows compact pending questions and an ID-free answer hint when notification
   expect(display.questions.map(({ question }) => question.id)).toEqual([remaining.questionId]);
   await remount('ja');
   await openMenu('answer');
-  await vi.waitFor(() => {
+  await waitFor(() => {
     const frame = app!.lastFrame();
     expect(frame).toContain('保存先はどこですか');
     expect(frame).toContain('^R');
@@ -873,7 +876,7 @@ it.each(['startup', 'polling'] as const)('hides default question notifications o
   invalidateResolvedConfigCache(cwd);
   expect(resolveManagerConfig(cwd).notifications.question).toBe(true);
   const { store, call } = await mountGoalControls('ja', goalRecord());
-  await vi.waitFor(() => expect(app!.lastFrame()).not.toContain('処理中'));
+  await waitFor(() => expect(app!.lastFrame()).not.toContain('処理中'));
   if (phase === 'startup') app!.unmount();
   const server = createTaktMcpServer({}, { toolSet: 'manager', allowedProjectRoot: cwd });
   const client = new Client({ name: 'manager-question-display-test', version: '1.0.0' });
@@ -891,23 +894,23 @@ it.each(['startup', 'polling'] as const)('hides default question notifications o
     expect(display.questions).toHaveLength(1);
     expect(display.events).toEqual([]);
     if (phase === 'startup') await remount('ja');
-    await vi.waitFor(() => expect(app!.lastFrame()).toContain('未回答 1'));
+    await waitFor(() => expect(app!.lastFrame()).toContain('未回答 1'));
     const transcript = (): string => app!.lastFrame()!.split(/進行中\s+\d/u)[0]!;
     for (const value of [input.body, ...input.options, input.recommendation]) expect(transcript()).not.toContain(value);
     await openMenu('answer');
-    await vi.waitFor(() => expect(app!.lastFrame()).toContain(getLabel('manager.selectionHint', 'ja')));
+    await waitFor(() => expect(app!.lastFrame()).toContain(getLabel('manager.selectionHint', 'ja')));
     app!.stdin.write('\x1b[27u');
-    await vi.waitFor(() => expect(app!.lastFrame()).not.toContain(getLabel('manager.selectionHint', 'ja')));
+    await waitFor(() => expect(app!.lastFrame()).not.toContain(getLabel('manager.selectionHint', 'ja')));
     for (const value of [input.body, ...input.options, input.recommendation]) expect(transcript()).not.toContain(value);
     await openMenu('answer');
-    await vi.waitFor(() => expect(app!.lastFrame()).toContain(getLabel('manager.selectionHint', 'ja')));
+    await waitFor(() => expect(app!.lastFrame()).toContain(getLabel('manager.selectionHint', 'ja')));
     app!.stdin.write('\r');
-    await vi.waitFor(() => {
+    await waitFor(() => {
       for (const value of [input.body, ...input.options, input.recommendation]) expect(app!.lastFrame()).toContain(value);
     });
     expect(await store.get(goalId)).toEqual(saved);
     app!.stdin.write('\x1b[27u');
-    await vi.waitFor(() => expect(app!.lastFrame()).not.toContain('回答を入力してください'));
+    await waitFor(() => expect(app!.lastFrame()).not.toContain('回答を入力してください'));
     const custom = { ...saved, notifications: saved.notifications!.map((notification) => ({
       ...notification, kind: 'custom' as const, recordedAt: new Date(Date.now() + 1).toISOString(),
     })) };
@@ -915,7 +918,7 @@ it.each(['startup', 'polling'] as const)('hides default question notifications o
     const customDisplay = await readManagerTestDisplay(cwd, 'ja');
     expect(customDisplay.events).toHaveLength(1);
     for (const value of [input.body, ...input.options, input.recommendation]) expect(customDisplay.events[0]!.message).toContain(value);
-    await vi.waitFor(() => {
+    await waitFor(() => {
       for (const value of [input.body, ...input.options, input.recommendation]) expect(transcript()).toContain(value);
     });
     expect(await store.get(goalId)).toEqual(custom);
@@ -945,7 +948,7 @@ it.each([true, false])('keeps human inquiries and custom notifications without p
   });
   app = render(createElement(ManagerView, { cwd, lang: 'ja', client: session, assignment: { kind: 'repository', repositoryDirectory: cwd, repositoryDirectories: [cwd] }, initialDiagnostics: [], onExit: vi.fn() }));
   await openMenu('answer');
-  await vi.waitFor(() => {
+  await waitFor(() => {
     const frame = app!.lastFrame()!;
     expect(frame).toContain('出力形式はどれですか');
     expect(frame).toContain('出力先はどこですか');
@@ -967,7 +970,7 @@ it.each(['ja', 'en'] as const)('renders saved notification text in the %s TUI la
     recordedAt: '2026-10-08T00:00:00Z',
   }] };
   const { store, call, saved } = await mountNewNoticeControls(lang, initial);
-  await vi.waitFor(() => {
+  await waitFor(() => {
     const frame = app!.lastFrame()!;
     const rows = frame.split('\n');
     const heading = rows.find((row) => (lang === 'ja' ? /ゴールが完成|ゴールが完了/u : /goal completed|goal is complete/iu).test(row));
@@ -1003,7 +1006,7 @@ it.each([
   expect(display).toMatchObject({ notices: [{ message: expect.stringContaining(body) }] });
   expect(await store.get(saved.id)).toEqual(saved);
   expect(call).not.toHaveBeenCalled();
-  await vi.waitFor(() => {
+  await waitFor(() => {
     const frame = app!.lastFrame()!;
     const visible = frame.normalize('NFC').replace(/\s+/gu, '');
     expect(visible).toContain(body.split('\n').slice(0, 3).join('').normalize('NFC').replace(/\s+/gu, ''));
@@ -1026,7 +1029,7 @@ it.each([
   const { store, call, saved } = await mountNewNoticeControls(lang, initial);
   const prefix = lang === 'ja' ? '重要度: ' : 'Severity: ';
   const expected = prefix + (lang === 'ja' ? '警告' : 'Warning');
-  await vi.waitFor(() => {
+  await waitFor(() => {
     const frame = app!.lastFrame()!;
     expect(frame).toContain('warning');
     const rows = frame.split('\n').filter((row) => row.includes(prefix));
@@ -1056,7 +1059,7 @@ it.each(['ja', 'en'] as const)('renders old saved merge instructions once in the
   const display = await readManagerTestDisplay(cwd, lang);
   expect(display.events).toHaveLength(1);
   expect(display.events[0]!.message.split('\n').filter((line) => line.startsWith('git'))).toEqual(commands);
-  await vi.waitFor(() => {
+  await waitFor(() => {
     const frame = app!.lastFrame()!;
     expect(frame).toContain(summary);
     expect(frame).toMatch(lang === 'ja' ? /release ブランチへマージ/u : /merge them into the release branch/iu);
@@ -1085,7 +1088,7 @@ it.each(['ja', 'en'] as const)('reopens the %s TUI without withdrawn question de
     body: formatGoalQuestionNotification(question, lang === 'ja' ? 'en' : 'ja'), recordedAt: '2026-10-08T00:00:00Z',
   }] };
   const { store, call } = await mountGoalControls(lang, saved);
-  await vi.waitFor(() => expect(app!.lastFrame()).toContain('^R'));
+  await waitFor(() => expect(app!.lastFrame()).toContain('^R'));
   app!.unmount();
   const withdrawn = await store.update(saved.id, (goal) => withdrawGoalQuestion(goal, question.id));
   expect(withdrawn.questions).toEqual([{
@@ -1096,7 +1099,7 @@ it.each(['ja', 'en'] as const)('reopens the %s TUI without withdrawn question de
   expect(display.questions).toEqual([]);
   expect(display.events).toEqual([]);
   await remount(lang);
-  await vi.waitFor(() => {
+  await waitFor(() => {
     const frame = app!.lastFrame()!;
     expect(frame).toContain(lang === 'ja' ? '未回答 0' : 'Pending 0');
     for (const value of [question.body, ...question.options]) expect(frame).not.toContain(value);
