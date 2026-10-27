@@ -857,17 +857,25 @@ provider:
 ### Named assignments
 
 `provider.assignments` defines named provider configuration sets that can be selected for a
-project directory or with `--runtime-assignment <name>`. Each entry must contain `defaults` or `targets`; an empty assignment is not
-valid. `defaults` has the same shape as top-level `provider.defaults` and must choose exactly one
+project directory, with `--runtime-assignment <name>`, or as the default. Each entry must contain `defaults` or `targets`; an empty assignment is not
+valid. An assignment's `defaults` must choose exactly one
 of `profile` or `ladder`. `targets` has the same shape as top-level `provider.targets`:
 `personas`, `tags`, and `steps` may use `profile`, `pool`, or `ladder`; `internal_agents` may use
 `profile` or `ladder`, while `companions` may use only a fixed `profile`.
+
+Set `provider.defaults: { assignment: project-sol }` to select a named assignment by default.
+Top-level `defaults` must specify exactly one of `profile`, `ladder`, or `assignment`; assignment
+defaults accept only `profile` or `ladder` and cannot refer to another assignment. Selection uses
+CLI, matching directory, then default assignment priority. Project defaults replace global defaults
+wholesale. An unknown assignment or profile, conflicting or empty defaults, or a selected assignment
+without concrete defaults when top-level defaults names an assignment fails before an agent starts.
+When top-level defaults specifies a profile or ladder, an assignment may omit defaults and inherit it.
 
 `provider.directories` maps a directory path to an assignment name. The lookup target is the
 startup project directory. Keys expand `~`, become absolute, and then receive realpath-equivalent
 normalization for existing paths before exact comparison. Prefix matching and globs are not used.
 An unknown assignment name in this map fails fast while loading. When a directory matches, the
-assignment's `defaults` are used; if omitted, top-level `provider.defaults` is used. If the
+assignment's `defaults` are used; if omitted, a top-level profile or ladder is used. If the
 assignment has `targets`, it replaces the entire top-level `provider.targets` map; individual
 target maps are not merged. An assignment that omits `targets` keeps the top-level
 `provider.targets`. `profiles` and `auto_routing` remain shared.
@@ -901,8 +909,8 @@ an agent runs.
 
 `--runtime-assignment <name>` selects from `provider.assignments` after global and project
 runtime files are merged. It takes precedence over a matching `provider.directories` entry.
-The assignment is applied once to the merged top-level settings: omitted `defaults` or `targets`
-inherit the top-level value, and supplied `targets` replace the entire map. `profiles`,
+The assignment is applied once to the merged top-level settings: omitted `defaults` inherit a
+top-level profile or ladder, omitted `targets` inherit the top-level targets, and supplied `targets` replace the entire map. `profiles`,
 `auto_routing`, `mcp`, `companion`, and `loop_analysis` stay shared. Existing `--provider`,
 `--model`, and `--auto-strategy` overrides retain their priority above the selected settings.
 
@@ -983,7 +991,7 @@ provider:
 
 To restrict an internal agent's permissions, assign a profile with `capabilities` or `permission_mode`. Without either, normal provider settings apply.
 
-`provider.defaults` is required in every active provider section and must choose exactly one of a fixed `profile` or an ordered `ladder`. It cannot specify `pool`. Entries under `provider.targets.personas`, `provider.targets.tags`, and `provider.targets.steps` choose exactly one of a fixed `profile`, an ordered `ladder`, or an auto-routing `pool`; `pool` is valid only on these explicit workflow targets. `internal_agents` entries may use a fixed `profile` or an ordered `ladder`, but cannot use `pool`. `companions` entries must use a fixed `profile` and cannot use `pool` or `ladder`. Steps are named `<leaf-workflow-name>/<step-name>`; control nodes that do not run an agent (such as `workflow_call`) are not resolution targets.
+`provider.defaults` is required in every active provider section and must choose exactly one of a fixed `profile`, an ordered `ladder`, or a named `assignment`. It cannot specify `pool`. Entries under `provider.targets.personas`, `provider.targets.tags`, and `provider.targets.steps` choose exactly one of a fixed `profile`, an ordered `ladder`, or an auto-routing `pool`; `pool` is valid only on these explicit workflow targets. `internal_agents` entries may use a fixed `profile` or an ordered `ladder`, but cannot use `pool`. `companions` entries must use a fixed `profile` and cannot use `pool` or `ladder`. Steps are named `<leaf-workflow-name>/<step-name>`; control nodes that do not run an agent (such as `workflow_call`) are not resolution targets.
 
 Set `pool` on targets that should use auto routing. Other targets and operations outside workflows use `provider.defaults`. A selected pool uses its own `fallback_profile`.
 

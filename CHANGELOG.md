@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `provider.defaults.assignment` selects a named runtime assignment by default, after CLI and directory selections.
+
 ### Changed
 
 - `merge-review-fix` and `merge-review-fix-simple` now resynchronize PRs that become `CONFLICTING` after CI, then push, run Caccia and wait for CI on the new HEAD without repeating the initial review. Resynchronizations are limited to `max(2, runtime concurrency - 1)`, excluding initial synchronization; CLI concurrency overrides persist through Requeue and Retry. Persistent conflicts at the limit produce a comment and end COMPLETE without merging. PRs that are only `BEHIND` proceed to the existing merge conditions. Used CI recovery budgets remain unchanged.

@@ -849,16 +849,23 @@ provider:
 
 `provider.assignments` には起動ディレクトリや `--runtime-assignment <name>` で選択する名前付きの provider 設定セットを定義できます。
 各 entry は `defaults` または `targets` の少なくとも一方を持つ必要があり、空の assignment は指定できません。
-`defaults` はトップレベルの `provider.defaults` と同じく `profile` または `ladder` の一方を指定します。
+assignment 内の `defaults` は `profile` または `ladder` の一方を指定し、別の assignment は参照できません。
 `targets` はトップレベルの `provider.targets` と同じ形で、`personas`、`tags`、`steps` は
 `profile`、`pool`、`ladder` のいずれか、`internal_agents` は `profile` または `ladder`、
 `companions` は固定 `profile` を指定できます。
 
+`provider.defaults: { assignment: project-sol }` で既定の assignment を選択できます。
+トップレベルの `defaults` は `profile`、`ladder`、`assignment` のいずれか一つを指定します。
+選択の優先順位は CLI、ディレクトリの一致、既定 assignment の順です。project の `defaults` は global の値を丸ごと置き換えます。
+未知の assignment や profile、空または複数指定の defaults は agent 起動前にエラーになります。
+トップレベルが assignment を指定し、選択先に具体的な defaults がない場合もエラーになります。
+トップレベルが profile または ladder の場合は、assignment の defaults を省略するとその値を引き継ぎます。
+
 `provider.directories` はディレクトリパスから assignment 名への map です。照合対象は起動時の project
 ディレクトリで、キーは `~` を展開して絶対パス化した後、存在するパスについて realpath 相当に正規化して
 完全一致で照合します。前方一致や glob は使いません。値の assignment 名が未定義の場合は読み込み時に
-fail-fast します。ディレクトリが一致すると、assignment の `defaults`（省略時はトップレベルの
-`provider.defaults`）を使用し、assignment に `targets` がある場合はトップレベルの `provider.targets` 全体を
+fail-fast します。ディレクトリが一致すると assignment の `defaults` を使用し、省略時はトップレベルの
+profile または ladder を使用します。assignment に `targets` がある場合はトップレベルの `provider.targets` 全体を
 置き換えます。`personas` だけを残すような map 単位のマージは行いません。`targets` を省略した assignment
 はトップレベルの `provider.targets` をそのまま引き継ぎます。`profiles` と `auto_routing` は共有されたままです。
 
@@ -889,8 +896,8 @@ global と project のレイヤーで `assignments` が定義されている場�
 
 `--runtime-assignment <name>` は global と project の runtime.yaml を合成した後の
 `provider.assignments` から名前を選びます。`provider.directories` の一致より CLI 指定が優先します。
-assignment は合成直後のトップレベルへ1回だけ適用します。`defaults` と `targets` は省略すると
-トップレベルの値を継承し、`targets` を指定すると map 全体を置き換えます。
+assignment は合成直後のトップレベルへ1回だけ適用します。`defaults` を省略するとトップレベルの profile または ladder を継承し、
+`targets` を省略するとトップレベルの値を継承します。`targets` を指定すると map 全体を置き換えます。
 `profiles`、`auto_routing`、`mcp`、`companion`、`loop_analysis` は共通のままです。
 既存の `--provider`、`--model`、`--auto-strategy` override は選択後の設定より優先します。
 
@@ -967,7 +974,7 @@ provider:
 
 内部 agent の権限を制限する場合は、`capabilities` または `permission_mode` を指定した profile を割り当ててください。未指定なら provider の通常設定が使われます。
 
-有効な provider section では `provider.defaults` の指定が必須で、固定の `profile` または順序付きの `ladder` のいずれか一方だけを指定します。`pool` は指定できません。`provider.targets.personas`、`provider.targets.tags`、`provider.targets.steps` のエントリは、固定の `profile`、順序付きの `ladder`、または auto routing 用の `pool` のいずれか一方を指定できます。`pool` はこれらの明示的な workflow target に限り指定できます。`internal_agents` のエントリは固定の `profile` または順序付きの `ladder` を指定できますが、`pool` は指定できません。`companions` のエントリは固定の `profile` のみ指定でき、`pool` と `ladder` は指定できません。step は `<leaf-workflow-name>/<step-name>` 形式で指定し、agent を起動しない制御ノード（`workflow_call` など）は解決対象になりません。
+有効な provider section では `provider.defaults` の指定が必須で、固定の `profile`、順序付きの `ladder`、名前付きの `assignment` のいずれか一つを指定します。`pool` は指定できません。`provider.targets.personas`、`provider.targets.tags`、`provider.targets.steps` のエントリは、固定の `profile`、順序付きの `ladder`、または auto routing 用の `pool` のいずれか一方を指定できます。`pool` はこれらの明示的な workflow target に限り指定できます。`internal_agents` のエントリは固定の `profile` または順序付きの `ladder` を指定できますが、`pool` は指定できません。`companions` のエントリは固定の `profile` のみ指定でき、`pool` と `ladder` は指定できません。step は `<leaf-workflow-name>/<step-name>` 形式で指定し、agent を起動しない制御ノード（`workflow_call` など）は解決対象になりません。
 
 自動ルーティングを使う target には `pool` を指定してください。指定しない target と workflow 外の処理には `provider.defaults` が使われます。`fallback_profile` は選択した pool の中で使われます。
 
