@@ -1,10 +1,11 @@
 import { beforeEach, expect, it, vi } from 'vitest';
-import { createSlackConversationPort } from '../features/manager/slackConversationPort.js';
+import { createSlackConversationPort, SLACK_GOAL_APPROVE } from '../features/manager/slackConversationPort.js';
 import { conversationId } from '../infra/conversations/identity.js';
 import { ConversationError } from '../features/manager/conversationErrors.js';
 import type { ConversationDelivery, ConversationInput, SnapshotRead } from '../features/manager/conversationPort.js';
 import type { SlackClient } from '../infra/slack/client.js';
 import { createInquiry } from '../infra/goals/inquiry.js';
+import { conversationRecord } from './helpers/conversation-fixtures.js';
 
 const assignment = vi.hoisted(() => vi.fn());
 const inquiries = vi.hoisted(() => ({ find: vi.fn(), goal: vi.fn(), question: vi.fn(), save: vi.fn() }));
@@ -31,6 +32,48 @@ function read(): SnapshotRead {
   return { transferId: 'read', conversationId: 'conversation', revision: 0, stateSequence: 0, operationId: null,
     items: (async function* () {})() };
 }
+it.each(['invalid', '{}', '{"conversationId":"other","revision":4}', '{"conversationId":"other","revision":-1}'])('ignores an invalid or mismatched goal button value %s', async (value) => {
+  const { port, input } = fixture();
+  await port.receiveAction(endpoint, SLACK_GOAL_APPROVE, value, undefined);
+  expect(input.open).not.toHaveBeenCalled();
+  expect(input.submit).not.toHaveBeenCalled();
+});
+it('detaches the operation if the proposal cannot be posted', async () => {
+  const { port, input, client } = fixture();
+  let delivery!: ConversationDelivery;
+  vi.mocked(input.open).mockImplementation(async (_open, value) => { delivery = value; return { attachmentId: 'attachment', read: read() }; });
+  vi.mocked(input.submit).mockResolvedValue({ kind: 'accepted', operationId: 'operation' });
+  vi.mocked(client.postThreadMessage).mockResolvedValue({ kind: 'unavailable', reason: 'failed' });
+  await port.receive(endpoint, '/make-goal');
+  const record = conversationRecord('/canonical');
+  await delivery.deliver(record.id, { kind: 'pending', state: { conversationId: record.id, assignment: record.assignment,
+    revision: record.revision, pending: record.pending, approval: null, running: null, interrupted: false } },
+  { revision: record.revision, stateSequence: 1, operationId: 'operation' });
+  expect(input.detach).toHaveBeenCalledExactlyOnceWith('attachment');
+  await delivery.deliver(record.id, { kind: 'result', operationId: 'operation', result: { kind: 'reply', message: 'reply' } },
+    { revision: record.revision, stateSequence: 1, operationId: 'operation' });
+  expect(client.postThreadMessage).toHaveBeenCalledOnce();
+  port.close();
+});
+it('posts a proposal once when another Slack attachment receives the same update', async () => {
+  const { port, input, client } = fixture();
+  const deliveries: ConversationDelivery[] = [];
+  vi.mocked(input.open).mockImplementation(async (_open, delivery) => {
+    deliveries.push(delivery);
+    return { attachmentId: `attachment-${deliveries.length}`, read: read() };
+  });
+  vi.mocked(input.submit).mockResolvedValueOnce({ kind: 'accepted', operationId: 'first' })
+    .mockResolvedValueOnce({ kind: 'accepted', operationId: 'second' });
+  await port.receive(endpoint, '/make-goal');
+  await port.receive(endpoint, 'another turn');
+  const record = conversationRecord('/canonical');
+  const output = { kind: 'pending' as const, state: { conversationId: record.id, assignment: record.assignment,
+    revision: record.revision, pending: record.pending, approval: null, running: null, interrupted: false } };
+  const version = { revision: record.revision, stateSequence: 1, operationId: 'first' };
+  await Promise.all(deliveries.map((delivery) => delivery.deliver(record.id, output, version)));
+  expect(client.postThreadMessage).toHaveBeenCalledOnce();
+  port.close();
+});
 it('resolves the current shared assignment and preserves Slack binding and speaker namespaces', async () => {
   const { port } = fixture();
   assignment.mockResolvedValue({ kind: 'workspace', workspaceId: '11111111-1111-4111-8111-111111111111' });

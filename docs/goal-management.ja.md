@@ -93,6 +93,8 @@ daemon は未完成で active なゴールを定期的に巡回します。`mana
 
 ## Slack での会話
 
+会話スレッドに `/make-goal` を送ると登録案が表示されます。「登録を承認」または「会話を続ける」で操作でき、古い版のボタンは使えません。
+
 設定した1つの Slack チャンネルから、Socket Mode で manager と会話できます。公開 URL は不要です。[Slack で manager と会話する](./configuration.ja.md#slack-で-manager-と会話する)の手順で App を作成・インストールし、daemon を起動するシェルに `TAKT_SLACK_APP_TOKEN` と `TAKT_SLACK_BOT_TOKEN` を設定してください。リポジトリの `.takt/config.yaml` に `manager.slack` を設定し、`takt manager` または `takt daemon` で daemon を起動します。
 
 スレッドの外に投稿すると、その投稿のスレッドに返事が届きます。以後はそのスレッドで続けてください。どの会話スレッドも、そのリポジトリの manager の同じ会話につながり、TUI と共有します。返事は発言したスレッドにだけ届き、TUI での発言への返事は Slack に出ません。処理中に送った発言には「処理中」と返し、後から実行しないため、処理後に再送してください。設定したチャンネルと `allowed_user_ids` のユーザーだけを受け付け、ボットへの DM には反応しません。

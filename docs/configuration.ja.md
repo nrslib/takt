@@ -465,6 +465,8 @@ TAKT_ALLOY_CONCURRENCY=1 TAKT_ALLOY_HEAP=2g TAKT_ALLOY_STACK=128m takt
 
 ## Slack で manager と会話する
 
+会話スレッドに `/make-goal` を送ると登録案が表示されます。「登録を承認」または「会話を続ける」で操作でき、古い版のボタンは使えません。
+
 Slack の Socket Mode を使うと、公開 URL を用意せずに manager と会話できます。会話の返事と問い合わせへの回答には、以下の Slack App を使います。「完成しました」などの通知は、引き続き `TAKT_NOTIFY_WEBHOOK` に設定した Incoming Webhook で届きます。会話と通知は併用できます。
 
 ### Slack App を作る

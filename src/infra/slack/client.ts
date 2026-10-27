@@ -9,7 +9,7 @@ export type SlackDeliveryResult = { kind: 'delivered' } | { kind: 'unavailable';
 export type SlackPostResult = { kind: 'delivered'; parentTs: string } | { kind: 'unavailable'; reason: string };
 export interface SlackClient {
   start(receive: (event: SlackEvent) => Promise<void>): Promise<void>;
-  postThreadMessage(thread: SlackThread, text: string): Promise<SlackDeliveryResult>;
+  postThreadMessage(thread: SlackThread, text: string, blocks?: KnownBlock[]): Promise<SlackDeliveryResult>;
   postMessage(channelId: string, text: string, blocks: KnownBlock[]): Promise<SlackPostResult>;
   openModal(triggerId: string, view: ModalView): Promise<SlackDeliveryResult>;
   stopAccepting(): void;
@@ -53,10 +53,10 @@ export function createSlackClient(tokens: { appToken: string; botToken: string }
         await bounded(starting);
       } catch { throw new Error('Cannot connect to Slack'); }
     },
-    async postThreadMessage(thread, text) {
+    async postThreadMessage(thread, text, blocks) {
       try {
         await bounded(web.chat.postMessage({ channel: thread.channelId, thread_ts: thread.parentTs,
-          text, unfurl_links: false, unfurl_media: false }));
+          text, ...(blocks === undefined ? {} : { blocks }), unfurl_links: false, unfurl_media: false }));
         return { kind: 'delivered' };
       } catch {
         log.error('Cannot post Slack reply');
