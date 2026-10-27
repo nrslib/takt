@@ -152,6 +152,11 @@ describe('Merge PR persistent clone ownership', () => {
         headRepositoryUrl: fork, headRepositoryPushUrls: [fork], sameRepository: false });
     }
 
+    function useSameRepository(): void {
+      const details = mocks.details.getMockImplementation()!();
+      mocks.details.mockReturnValue({ ...details, sameRepository: true });
+    }
+
     async function prepareRetry(editClone: (cwd: string, request: WorkflowExecutionRequest) => void) {
       const execute = mocks.workflow.getMockImplementation()!;
       mocks.workflow.mockImplementationOnce(async (request: WorkflowExecutionRequest) => {
@@ -283,6 +288,7 @@ describe('Merge PR persistent clone ownership', () => {
     it('分岐したheadの衝突をAIが編集した後に検証してマージを完了する', async () => {
       const context = await prepareRetry((cwd) => { commitFile(cwd, 'code.txt', 'local resolution\n'); });
       advancePr('code.txt', 'remote change\n');
+      useSameRepository();
       mocks.resolver.mockImplementation(resolveConflict);
       const execute = mocks.workflow.getMockImplementation()!;
       mocks.workflow.mockImplementation(async (request: WorkflowExecutionRequest) => {
@@ -299,6 +305,7 @@ describe('Merge PR persistent clone ownership', () => {
       'AIの%sではworkflowを開始せず失敗を保存し今回のマージを中止する', async (failure) => {
         const context = await prepareRetry((cwd) => { commitFile(cwd, 'code.txt', 'local resolution\n'); });
         advancePr('code.txt', 'remote change\n');
+        useSameRepository();
         mocks.resolver.mockImplementation((options: Parameters<typeof runSyncConflictResolver>[0]) => {
           expect(git(options.cwd, 'ls-files', '-u')).toContain('code.txt');
           if (failure === 'exception') throw new Error('resolver unavailable');
@@ -325,6 +332,7 @@ describe('Merge PR persistent clone ownership', () => {
     it('AI解消中にPR headがさらに動いたらworkflowを開始しない', async () => {
       const context = await prepareRetry((cwd) => { commitFile(cwd, 'code.txt', 'local resolution\n'); });
       advancePr('code.txt', 'remote change\n');
+      useSameRepository();
       mocks.resolver.mockImplementation((options: Parameters<typeof runSyncConflictResolver>[0]) => {
         const response = resolveConflict(options);
         advancePr('later.txt', 'head moved during AI resolution\n');
@@ -338,6 +346,25 @@ describe('Merge PR persistent clone ownership', () => {
         .toBe(result.failureReason);
       expect(git(context.clone, 'merge-base', context.localHead, 'HEAD')).toBe(context.localHead);
       expect(git(fork, 'rev-parse', 'refs/heads/feature/pr')).toBe(prHead);
+    });
+
+    it('forkの衝突はAI解消前に停止してマージを中止する', async () => {
+      const context = await prepareRetry((cwd) => { commitFile(cwd, 'code.txt', 'local resolution\n'); });
+      advancePr('code.txt', 'remote change\n');
+      await expectPreparationFailed(context);
+      expect(mocks.resolver).not.toHaveBeenCalled();
+    });
+
+    it('force-pushで削除されたremote履歴を再導入せず停止する', async () => {
+      const context = await prepareRetry((cwd) => { commitFile(cwd, 'local-only.txt', 'local work\n'); });
+      const author = join(root, 'author');
+      git(author, 'reset', '--hard', baseHead);
+      prHead = commitFile(author, 'replacement.txt', 'replacement\n');
+      git(author, 'push', '--force', 'origin', 'HEAD:refs/heads/feature/pr');
+      mocks.details.mockReturnValue({ number: 123, headBranch: 'feature/pr', baseBranch: 'main', headSha: prHead,
+        headRepositoryUrl: fork, headRepositoryPushUrls: [fork], sameRepository: false });
+      await expectPreparationFailed(context);
+      expect(mocks.resolver).not.toHaveBeenCalled();
     });
 
     it('取り込んだforkの変更を脅威検査し拒否時はworkflowを開始しない', async () => {

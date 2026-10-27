@@ -12,6 +12,8 @@ interface RetrySyncOptions {
   readonly cwd: string;
   readonly headSha: string;
   readonly headRef: string;
+  readonly knownRemoteHeadSha: string;
+  readonly isFork: boolean;
   readonly operations: PrGitOperations;
   readonly environment: NodeJS.ProcessEnv;
   readonly abortSignal?: AbortSignal;
@@ -31,6 +33,14 @@ export async function synchronizeRetryPrHead(options: RetrySyncOptions): Promise
   if (await git(['rev-parse', 'FETCH_HEAD']) !== headSha) {
     throw new Error('PR head changed during retry synchronization');
   }
+  try {
+    await git(['merge-base', '--is-ancestor', options.knownRemoteHeadSha, headSha]);
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'status' in error && error.status === 1) {
+      throw new Error('PR head history was rewritten since the last known remote head');
+    }
+    throw error;
+  }
   if (originalHead !== headSha) {
     const mergeBase = await git(['merge-base', originalHead, headSha]);
     if (mergeBase === originalHead) {
@@ -44,6 +54,7 @@ export async function synchronizeRetryPrHead(options: RetrySyncOptions): Promise
         try {
           abortSignal?.throwIfAborted();
           if (await git(['ls-files', '-u']) === '') throw mergeError;
+          if (options.isFork) throw new Error('Cannot resolve retry merge conflicts for a fork PR before threat checking');
           const conflictFiles = captureSyncConflictFiles(cwd, env);
           const response = await runSyncConflictResolver({
             projectCwd: options.projectCwd, cwd, abortSignal,

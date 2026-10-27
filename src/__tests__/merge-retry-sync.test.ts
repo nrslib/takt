@@ -17,7 +17,8 @@ describe('synchronizeRetryPrHead', () => {
   const operations = { fetch: vi.fn(), push: vi.fn() };
 
   const run = () => synchronizeRetryPrHead({ projectCwd: '/project', cwd: '/clone',
-    headSha: target, headRef: 'refs/heads/feature', environment: {}, operations, abortSignal: controller.signal });
+    headSha: target, headRef: 'refs/heads/feature', knownRemoteHeadSha: 'known', isFork: false,
+    environment: {}, operations, abortSignal: controller.signal });
 
   beforeEach(() => {
     vi.resetAllMocks();
@@ -30,7 +31,8 @@ describe('synchronizeRetryPrHead', () => {
     doubles.git.mockImplementation(async (_cwd: string, args: string[]) => {
       if (args[0] === 'rev-parse') return { stdout: args.includes('--git-path') ? '.git/MERGE_HEAD'
         : args[1] === 'HEAD' ? head : target };
-      if (args[0] === 'merge-base') return { stdout: args[1] === args[2] || head === 'merged' ? args[1] : mergeBase };
+      if (args[0] === 'merge-base') return { stdout: args[1] === '--is-ancestor' ? ''
+        : args[1] === args[2] || head === 'merged' ? args[1] : mergeBase };
       if (args[0] === 'ls-files') return { stdout: conflict ? 'unmerged' : '' };
       if (args[0] === 'merge' && args[1] === '--abort') { merging = false; conflict = false; }
       else if (args[0] === 'merge') {
@@ -61,6 +63,18 @@ describe('synchronizeRetryPrHead', () => {
     expect(doubles.git.mock.calls.some(([, args]) => args[0] === 'merge')).toBe(false);
   });
 
+  it.each([1, 128])('handles ancestor check exit status %s without starting a merge', async (status) => {
+    const normal = doubles.git.getMockImplementation()!;
+    const error = Object.assign(new Error('git failure'), { status });
+    doubles.git.mockImplementation(async (cwd, args) => {
+      if (args[1] === '--is-ancestor') throw error;
+      return normal(cwd, args);
+    });
+    if (status === 1) await expect(run()).rejects.toThrow('history was rewritten');
+    else await expect(run()).rejects.toBe(error);
+    expect(doubles.git.mock.calls.some(([, args]) => args[0] === 'merge')).toBe(false);
+  });
+
   it('does not resolve or abort a preexisting unfinished merge', async () => {
     merging = true;
     await expect(run()).rejects.toThrow();
@@ -84,6 +98,15 @@ describe('synchronizeRetryPrHead', () => {
       return normal(cwd, args, ...rest);
     });
   }
+
+  it('aborts a fork conflict before invoking the resolver', async () => {
+    startConflict();
+    await expect(synchronizeRetryPrHead({ projectCwd: '/project', cwd: '/clone', headSha: target,
+      headRef: 'refs/heads/feature', knownRemoteHeadSha: 'known', isFork: true,
+      environment: {}, operations, abortSignal: controller.signal })).rejects.toThrow('fork PR');
+    expect(doubles.resolver).not.toHaveBeenCalled();
+    expect(doubles.git).toHaveBeenCalledWith('/clone', ['merge', '--abort'], undefined, environment);
+  });
 
   it('validates AI edits before committing with the same safe environment', async () => {
     startConflict();
