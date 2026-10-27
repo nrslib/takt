@@ -937,7 +937,8 @@ it.each([true, false])('keeps human inquiries and custom notifications without p
   await new GoalStore(cwd).create(saved);
   const display = await readManagerTestDisplay(cwd);
   expect(display.questions.map(({ question }) => question.id).sort()).toEqual([human.questionId, second.questionId].sort());
-  expect(display.events.map(({ id }) => JSON.parse(id)[2])).toEqual(saved.notifications!.filter(({ kind }) => kind !== 'question').map(({ id }) => id));
+  expect(display.events.map(({ id }) => id)).toEqual(saved.notifications!.filter(({ kind }) => kind !== 'question')
+    .map(({ id }) => JSON.stringify([cwd, saved.id, 'notification', id])));
   session = new ManagerServiceClient({
     cwd,
     plan: { ctx: { providerType: 'mock', model: undefined, lang: 'ja', provider: new MockProvider() },
@@ -996,7 +997,7 @@ it.each([
   const { store, call, saved } = await mountNewNoticeControls(lang, initial);
   const display = await readManagerTestDisplay(cwd, lang);
   expect(display.events).toHaveLength(1);
-  expect(display.events[0]!.id).toBe(JSON.stringify([saved.id, 'notification', saved.notifications![0]!.id]));
+  expect(display.events[0]!.id).toBe(JSON.stringify([cwd, saved.id, 'notification', saved.notifications![0]!.id]));
   expect(display.events[0]!.message.split('\n').slice(2, 5)).toEqual(body.split('\n').slice(0, 3));
   expect(display.events[0]!.message.split('\n')[5]).toMatch(lang === 'ja' ? /省略/u : /omitted/iu);
   expect(display.events[0]!.message).not.toMatch(/Ctrl\+N|\^N/u);
@@ -1119,8 +1120,10 @@ it.each(['question', 'awaiting_merge', 'completed', 'progress', 'blocked', 'cust
     invalidateResolvedConfigCache(cwd);
     const display = await readManagerTestDisplay(cwd);
     expect(display.questions.map(({ question: saved }) => saved.id)).toEqual([question.questionId]);
-    expect(display.events.map(({ id }) => JSON.parse(id)[2])).toEqual([
-      goal.workLog[0]!.id, ...goal.notifications!.filter((notice) => notice.kind !== 'question' && notice.kind !== kind).map(({ id }) => id),
+    expect(display.events.map(({ id }) => id)).toEqual([
+      JSON.stringify([cwd, goal.id, 'work-log', goal.workLog[0]!.id]),
+      ...goal.notifications!.filter((notice) => notice.kind !== 'question' && notice.kind !== kind)
+        .map(({ id }) => JSON.stringify([cwd, goal.id, 'notification', id])),
     ]);
     expect((await new GoalStore(cwd).get(goal.id)).notifications).toEqual(goal.notifications);
   },
