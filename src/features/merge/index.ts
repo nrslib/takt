@@ -31,6 +31,7 @@ import { buildRunPaths } from '../../core/workflow/run/run-paths.js';
 import { resolveTaskSpecForExecution } from '../tasks/execute/taskSpecContext.js';
 import { GoalAbortMonitor } from '../tasks/execute/goalAbortMonitor.js';
 import { TaskStoppedError } from '../../infra/task/taskStop.js';
+import { synchronizeRetryPrHead } from './retry-sync.js';
 
 const log = createLogger('merge');
 
@@ -263,24 +264,13 @@ async function runPrMergeWorkflow(
       { branch: details.headBranch, originUrl: cloneGit.headRepositoryUrl, baseUrl: cloneGit.baseRepositoryUrl },
     );
   }
-  let headSha = (await git(['rev-parse', 'HEAD'])).stdout.trim();
-  const headMatches = isRetry
-    ? data.merge_push_source === 'caccia'
-      ? details.headSha === data.merge_pushed_head_sha
-      : details.headSha === data.merge_initial_head_sha
-        || details.headSha === data.merge_pushed_head_sha
-        || details.headSha === headSha
-    : headSha === details.headSha;
-  if (!headMatches) throw new Error('PR head changed since clone preparation');
-  if (isRetry && details.headSha === data.merge_pushed_head_sha && headSha !== details.headSha) {
-    await cloneGit.operations.fetch('origin', headRef);
-    if ((await git(['rev-parse', 'FETCH_HEAD'])).stdout.trim() !== details.headSha) {
-      throw new Error('PR head changed during retry synchronization');
-    }
-    await git(['merge', '--ff-only', 'FETCH_HEAD']);
-    headSha = (await git(['rev-parse', 'HEAD'])).stdout.trim();
-    if (headSha !== details.headSha) throw new Error('PR head changed during retry synchronization');
-  }
+  const headSha = isRetry
+    ? await synchronizeRetryPrHead({
+      projectCwd: request.projectCwd, cwd, headSha: details.headSha, headRef,
+      operations: cloneGit.operations, environment: env, abortSignal: request.abortSignal,
+    })
+    : (await git(['rev-parse', 'HEAD'])).stdout.trim();
+  if (!isRetry && headSha !== details.headSha) throw new Error('PR head changed since clone preparation');
   if (!isRetry) runner.recordPrMergeClonePrepared(task.name);
   if (!details.sameRepository) {
     const check = await checkForkThreats({
@@ -298,6 +288,11 @@ async function runPrMergeWorkflow(
   const taskSpec = resolveTaskSpecForExecution(
     request.projectCwd, cwd, task.taskDir, runSlug, buildRunPaths(request.projectCwd, runSlug),
   );
+  if (isRetry) {
+    const latest = await provider.fetchPrDetails(request.prNumber, request.projectCwd, request.abortSignal);
+    assertSavedPrMergeIdentity(data, latest, request.prNumber);
+    if (latest.headSha !== details.headSha) throw new Error('PR head changed during retry synchronization');
+  }
   const result = await runWorkflowExecution({
     ...request.display,
     eventSink: (event) => {

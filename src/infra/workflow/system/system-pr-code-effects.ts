@@ -3,33 +3,12 @@ import { isAbsolute } from 'node:path';
 import type { SystemStepServicesOptions } from '../../../core/workflow/system/system-step-services.js';
 import { stageAndCommit } from '../../task/git.js';
 import { buildSafeGitEnvironment } from '../../task/git-environment.js';
+import { suppressMergeDrivers } from '../../task/git-merge-environment.js';
 import { toLocalBranchRef, toPullRequestBaseRef } from '../../../shared/utils/gitBranchValidation.js';
 import { runSyncConflictResolver } from '../../service/runSyncConflictResolver.js';
 import { captureSyncConflictFiles } from '../../service/syncConflictFiles.js';
 import { getCommandErrorDetail } from './system-git-context.js';
 import { runGitCommandAbortable } from '../../task/clone-exec.js';
-
-function suppressMergeDrivers(cwd: string, environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  let names: string[];
-  try {
-    names = execFileSync('git', ['config', '--null', '--name-only', '--get-regexp', '^merge\\..*\\.driver$'], {
-      cwd, env: environment, encoding: 'utf8', stdio: 'pipe',
-    }).split('\0').filter(Boolean);
-  } catch (error) {
-    if (error instanceof Error && 'status' in error && error.status === 1) return environment;
-    throw error;
-  }
-  if (names.length === 0) return environment;
-  const env = { ...environment };
-  let count = Number(env.GIT_CONFIG_COUNT ?? 0);
-  for (const name of new Set(names)) {
-    env[`GIT_CONFIG_KEY_${count}`] = name;
-    env[`GIT_CONFIG_VALUE_${count}`] = 'false';
-    count += 1;
-  }
-  env.GIT_CONFIG_COUNT = String(count);
-  return env;
-}
 
 function requirePrClone(options: SystemStepServicesOptions, pr: number) {
   const context = options.prExecutionContext;
