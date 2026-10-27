@@ -103,12 +103,15 @@ async function execute(config: WorkflowConfig, stepName: string, ruleIndex: numb
 }
 
 describe('shipped development completion and remediation routes', () => {
-  it.each(variants(['development-core', 'simple-core', 'simple']))('$language/$name routes test creation outcomes without returning to planning', async ({ language, name }) => {
+  it.each(variants(['development-core', 'simple-core', 'simple']))('$language/$name returns a broken test plan to planning before test creation resumes', async ({ language, name }) => {
     const config = load(language, name);
-    for (const [ruleIndex, nextStep] of [[0, 'implement'], [1, 'implement'], [2, 'ABORT']] as const) {
+    for (const [ruleIndex, nextStep] of [[0, 'implement'], [1, 'implement'], [3, 'ABORT']] as const) {
       start(config, 'write_tests');
       expect((await execute(config, 'write_tests', ruleIndex)).nextStep).toBe(nextStep);
     }
+    start(config, 'write_tests');
+    expect((await execute(config, 'write_tests', 2)).nextStep).toBe('plan');
+    expect((await execute(config, 'plan', 0)).nextStep).toBe('write_tests');
   });
 
   it.each(variants(implementations))('$language/$name sends executable incompleteness to reimplement once, then hands remaining gaps to planning', async ({ language, name }) => {

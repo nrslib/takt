@@ -1,4 +1,4 @@
-Write tests from the plan before implementing production code.
+Use existing tests to check contracts verifiable before implementation, and write tests for gaps identified from the plan. You do not need to determine every additional test that may become necessary during implementation in this step.
 Refer only to reports in the Report Directory shown in Workflow Context. Do not search or reference other report directories. You may inspect repository source, existing tests, and configuration needed to verify the contract.
 
 **Important: Do NOT create or modify production code. Only test files may be created.**

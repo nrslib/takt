@@ -57,6 +57,11 @@ const CLASSIFICATIONS = [
   },
   {
     tier: 'active',
+    reason: 'write_tests の完了・実装先行・計画見直し・外部停止の条件選択を日英で測る',
+    suites: ['write-tests-routing'],
+  },
+  {
+    tier: 'active',
     reason: '裁定、最終判定、再計画で外部確認だけを修正ループへ持ち越さない境界を測る',
     suites: [
       'review-external-confirmation',
@@ -375,6 +380,12 @@ const EXECUTION_OVERRIDES = {
     credentials: ['codex', 'claude'],
     cost: 'high',
     reason: '日英・旧版と候補を Codex 2モデルと道具を使える Claude の強めた条件で比較する',
+  },
+  'write-tests-routing': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'high',
+    reason: '日英の4分岐を Sol High と Luna Max の実モデルで明示評価する',
   },
   'completion-scope-routing': {
     defaultEligible: false,
@@ -727,6 +738,7 @@ const PREPARE_TARGET_OVERRIDES = {
   'interactive-topic-boundary': [],
   'completion-scope-structured': [],
   'phase3-follow-input': [],
+  'write-tests-routing': [],
   'remediation-evidence': [],
   'fix-verifier-model-matrix': ['fix-verifier-state-closure'],
   'fix-verifier-routing-model-matrix': ['fix-verifier-state-routing'],

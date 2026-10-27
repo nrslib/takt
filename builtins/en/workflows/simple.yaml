@@ -53,11 +53,13 @@ steps:
       testing_instruction: simple-write-tests-first
       testing_report_format: test-report
     rules:
-      - condition: Test creation completed
+      - condition: Reviewed and ran existing or new tests for contracts verifiable before implementation, and recorded whether test changes were needed, the results, and unverified areas
         next: implement
       - condition: Recorded a concrete reason why only implementing first can make creating the necessary tests possible, and which tests to create and run afterward. Missing functions or APIs and test failures alone do not qualify
         next: implement
-      - condition: Requirements, planning, or environment problems prevent creating or running tests and cannot be resolved by implementing first
+      - condition: A concrete conflict between a planning assumption and the actual code or requirements prevents defining what to test or expect, and the report records how revising the plan can resolve it
+        next: plan
+      - condition: Only an indispensable external action or answer remains, or the requirements are confirmed incompatible, and revising the plan cannot resolve the blockage
         next: ABORT
       - condition: User input is required to resolve a question
         next: write_tests
