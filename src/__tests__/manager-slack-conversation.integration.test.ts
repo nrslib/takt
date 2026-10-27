@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createConversationService } from '../features/manager/conversationService.js';
@@ -9,11 +9,14 @@ import { createDaemonSlackPorts } from '../features/daemon/slackPorts.js';
 import { ConversationStore } from '../infra/conversations/store.js';
 import { conversationRecord } from './helpers/conversation-fixtures.js';
 import type { ManagerTurnInput } from '../features/manager/turnExecutor.js';
+import type { validateManagerSummary } from '../features/manager/turnResponse.js';
 import { createSlackClient, type SlackEvent } from '../infra/slack/client.js';
 import { DebugLogger, initDebugLogger } from '../shared/utils/debug.js';
 import type { ChatPostMessageArguments, ChatUpdateArguments, ViewsOpenArguments } from '@slack/web-api';
 import type { ActionsBlock, Button, InputBlock, PlainTextInput } from '@slack/types';
 import { GoalStore } from '../infra/goals/store.js';
+import { readManagerEvents } from '../infra/goals/events.js';
+import * as goalService from '../infra/goals/service.js';
 import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
 import { createInquiry } from '../infra/goals/inquiry.js';
 import type { GoalQuestionInput } from '../infra/goals/schema.js';
@@ -47,7 +50,7 @@ vi.mock('../features/manager/conversationPlan.js', () => ({ createManagerConvers
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { listTaskStateItems() { return []; } } }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: vi.fn() }));
 
-const execute = vi.fn(async (input: ManagerTurnInput) => ({ message: `reply:${input.instruction}`, summary: null, sessionId: 'session', assignment: input.assignment }));
+const execute = vi.fn<(input: ManagerTurnInput) => Promise<{ message: string; summary: ReturnType<typeof validateManagerSummary> | null; sessionId: string; assignment: ManagerTurnInput['assignment'] }>>(async (input) => ({ message: `reply:${input.instruction}`, summary: null, sessionId: 'session', assignment: input.assignment }));
 let directory: string;
 let repository: string;
 let service: ReturnType<typeof createConversationService>;
@@ -234,6 +237,204 @@ it('routes a channel post through the shared conversation and replies in its new
   expect(execute).toHaveBeenCalledOnce();
   expect(execute.mock.calls[0]![0]).toMatchObject({ instruction: '状況は？', assignment: selected.assignment });
   expect(sdk.post).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ channel: 'C0123', thread_ts: '1700000000.000001', text: 'reply:状況は？' }));
+});
+
+async function makeGoalProposal() {
+  const summary = { objective: '新しい目的', outOfScope: ['対象外'], acceptanceCriteria: ['受入条件'], constraints: ['作業制約'] };
+  const start = sdk.post.mock.calls.length;
+  execute.mockImplementationOnce(async (input) => ({ message: '案を作りました', summary: { ...summary, repositoryDirectory: repository }, sessionId: 'session', assignment: input.assignment }));
+  await (await emit({ text: '  /make-goal  ', thread_ts: '1700000000.000001', ts: '1700000000.000010' })).pending;
+  await vi.waitFor(() => {
+    expect(service.activeOperationCount).toBe(0);
+    expect(sdk.post.mock.calls.some(([post]) => 'blocks' in post && Array.isArray(post.blocks) && post.blocks.some((block) => block.type === 'actions'))).toBe(true);
+  });
+  const post = sdk.post.mock.calls.map(([value]) => value).find((value) => 'blocks' in value && Array.isArray(value.blocks) && value.blocks.some((block) => block.type === 'actions'))!;
+  const index = sdk.post.mock.calls.findIndex(([value]) => value === post);
+  const result = await sdk.post.mock.results[index]!.value;
+  return { post, start, parentTs: result.ts, summary };
+}
+
+async function pressProposal(posted: Awaited<ReturnType<typeof makeGoalProposal>>, name: RegExp, overrides: Record<string, unknown> = {}) {
+  const chosen = button(posted.post, name);
+  await interactive({ type: 'block_actions', channel: { id: 'C0123' },
+    container: { type: 'message', channel_id: 'C0123', message_ts: posted.parentTs },
+    message: { ts: posted.parentTs, thread_ts: '1700000000.000001' },
+    actions: [{ type: 'button', action_id: chosen.action_id, value: chosen.value }], ...overrides });
+}
+
+it('posts a Slack proposal in the source thread and registers it when approved', async () => {
+  const git = (args: string[], input?: string) => execFileSync('git', args, {
+    cwd: repository, input, encoding: 'utf8', stdio: 'pipe',
+    env: { ...process.env, GIT_AUTHOR_NAME: 'Goal Test', GIT_AUTHOR_EMAIL: 'goal@example.test',
+      GIT_COMMITTER_NAME: 'Goal Test', GIT_COMMITTER_EMAIL: 'goal@example.test' },
+  }).trim();
+  git(['init', '--initial-branch=main']);
+  const tree = git(['hash-object', '-w', '-t', 'tree', '--stdin'], '');
+  const initial = git(['commit-tree', tree, '-m', 'fixture']);
+  git(['update-ref', 'refs/heads/main', initial]);
+  await (await emit()).pending; await finished(1);
+  const proposal = await makeGoalProposal();
+  expect(execute.mock.calls[1]![0].instruction).toBe(getLabel('manager.goSummaryRequest', 'ja'));
+  expect(proposal.post.thread_ts).toBe('1700000000.000001');
+  for (const text of [proposal.summary.objective, ...proposal.summary.outOfScope, ...proposal.summary.acceptanceCriteria, ...proposal.summary.constraints]) {
+    await vi.waitFor(() => expect(sdk.post.mock.calls.slice(proposal.start).some(([post]) => post.channel === 'C0123' && post.thread_ts === '1700000000.000001' && JSON.stringify(post).includes(text))).toBe(true));
+  }
+  expect(buttons(proposal.post)).toHaveLength(2);
+  button(proposal.post, /登録を承認/u); button(proposal.post, /会話を続ける/u);
+  const count = sdk.post.mock.calls.length;
+  await pressProposal(proposal, /登録を承認/u);
+  await vi.waitFor(async () => expect((await new GoalStore(repository).list()).goals, JSON.stringify(sdk.post.mock.calls.slice(count))).toHaveLength(1), { timeout: 15000 });
+  const goals = (await new GoalStore(repository).list()).goals;
+  expect(goals[0]).toMatchObject(proposal.summary);
+  expect(git(['rev-parse', '--verify', `refs/heads/${goals[0]!.branch}^{commit}`])).toBe(initial);
+  await vi.waitFor(() => expect(readManagerEvents(repository).filter(({ event }) => event.kind === 'registered' && event.goalId === goals[0]!.id)).toHaveLength(1));
+  await vi.waitFor(() => expect(sdk.post.mock.calls.slice(count).some(([post]) => post.thread_ts === '1700000000.000001' && JSON.stringify(post).includes(proposal.summary.objective))).toBe(true));
+}, 30000);
+
+it('passes other slash-prefixed messages through as ordinary conversation', async () => {
+  await (await emit({ text: '/make-goal extra' })).pending; await finished(1);
+  expect(execute.mock.calls[0]![0].instruction).toBe('/make-goal extra');
+});
+
+it.each([false, true])('rejects a registered proposal button after conversation advances: %s', async (advance) => {
+  vi.spyOn(goalService, 'registerReservedGoal').mockImplementation(async (input) => new GoalStore(input.cwd).create({
+    ...goalRecord(), id: input.id, objective: input.objective, outOfScope: input.outOfScope,
+    acceptanceCriteria: input.acceptanceCriteria, constraints: input.constraints,
+  }));
+  const proposal = await makeGoalProposal();
+  await pressProposal(proposal, /登録を承認/u);
+  await vi.waitFor(async () => {
+    expect((await new GoalStore(repository).list()).goals).toHaveLength(1);
+    expect(service.activeOperationCount).toBe(0);
+    expect(new ConversationStore(directory).read(selected.conversationId, selected.assignment)!.approval?.state).toBe('registered');
+    expect(sdk.post.mock.calls.some(([post]) => String(post.text).includes('ゴール登録完了'))).toBe(true);
+  });
+  if (advance) {
+    expect((await submitTui('変更')).kind).toBe('accepted');
+    await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
+  }
+  const before = new ConversationStore(directory).read(selected.conversationId, selected.assignment)!;
+  const goals = (await new GoalStore(repository).list()).goals;
+  const count = sdk.post.mock.calls.length;
+  await pressProposal(proposal, /登録を承認/u);
+  await vi.waitFor(() => expect(sdk.post.mock.calls.length).toBeGreaterThan(count));
+  const posts = sdk.post.mock.calls.slice(count).map(([post]) => post);
+  expect(posts).toHaveLength(1);
+  expect(posts[0]).toMatchObject({ thread_ts: '1700000000.000001', text: getLabel('manager.conversation.stale_summary', 'ja') });
+  expect((await new GoalStore(repository).list()).goals).toEqual(goals);
+  expect(new ConversationStore(directory).read(selected.conversationId, selected.assignment)).toEqual(before);
+});
+
+it('rejects a make-goal request while the conversation is busy without running it later', async () => {
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  execute.mockImplementationOnce(async (input) => { await gate; return { message: 'later', summary: null, sessionId: 'session', assignment: input.assignment }; });
+  expect((await submitTui('local')).kind).toBe('accepted');
+  await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+  await (await emit({ text: '/make-goal' })).pending;
+  expect(sdk.post).toHaveBeenCalledWith(expect.objectContaining({ thread_ts: '1700000000.000001', text: getLabel('manager.conversation.busy', 'ja') }));
+  release!(); await finished(1);
+  expect(execute).toHaveBeenCalledOnce();
+});
+
+it('does not post a proposal produced by a TUI turn', async () => {
+  execute.mockImplementationOnce(async (input) => ({ message: '案', summary: { ...conversationRecord(repository).pending!.summary, repositoryDirectory: repository }, sessionId: 'session', assignment: input.assignment }));
+  expect((await submitTui('要約')).kind).toBe('accepted');
+  await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
+  expect(sdk.post).not.toHaveBeenCalled();
+});
+
+it('dismisses a Slack proposal without registering a goal', async () => {
+  const proposal = await makeGoalProposal();
+  await pressProposal(proposal, /会話を続ける/u);
+  await vi.waitFor(() => expect(new ConversationStore(directory).read(selected.conversationId, selected.assignment)!.pending).toBeNull());
+  await vi.waitFor(() => expect(sdk.post.mock.calls.some(([post]) => post.thread_ts === '1700000000.000001' && String(post.text).includes(getLabel('manager.conversation.dismissed', 'ja')))).toBe(true));
+  const before = new ConversationStore(directory).read(selected.conversationId, selected.assignment)!;
+  const count = sdk.post.mock.calls.length;
+  await pressProposal(proposal, /登録を承認/u);
+  await vi.waitFor(() => expect(sdk.post.mock.calls.length).toBeGreaterThan(count));
+  expect(sdk.post.mock.calls.slice(count)).toHaveLength(1);
+  expect(sdk.post.mock.calls[count]![0]).toMatchObject({ thread_ts: '1700000000.000001', text: getLabel('manager.conversation.stale_summary', 'ja') });
+  expect(new ConversationStore(directory).read(selected.conversationId, selected.assignment)).toEqual(before);
+  expect((await new GoalStore(repository).list()).goals).toHaveLength(0);
+});
+
+it('rejects an old Slack approval after a TUI turn without changing the new revision', async () => {
+  await slack.close();
+  await service.close();
+  const record = conversationRecord(repository);
+  record.revision = 3;
+  record.pending!.revision = 3;
+  new ConversationStore(directory).write(record);
+  service = createConversationService({ configDirectory: directory, owner: { pid: process.pid, identity: { startTime: 'slack-test' }, version: 'test', cliPath: '/test/cli.js' },
+    onDomainChange() {}, runtime: { resolve: async () => ({ provider: 'mock', model: null, language: 'ja', contextKey: 'test', executor: { execute } }), close: async () => {} } });
+  const delivery = { deliver: async () => ({ kind: 'delivered' as const }) };
+  tui = await service.open(selected, delivery);
+  const iterator = tui.read.items[Symbol.asyncIterator]();
+  await iterator.next(); await iterator.return?.();
+  sdk.on.mockClear();
+  slack = await createDaemonSlackPorts({ projects: [repository], configDirectory: directory, input: service,
+    tokens: { appToken: 'xapp-test-1', botToken: 'xoxb-test-2' } });
+  const proposal = await makeGoalProposal();
+  expect(new ConversationStore(directory).read(selected.conversationId, selected.assignment)!.pending?.revision).toBe(4);
+  expect((await submitTui('変更')).kind).toBe('accepted');
+  await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
+  const before = new ConversationStore(directory).read(selected.conversationId, selected.assignment)!;
+  expect(before.revision).toBe(5);
+  const count = sdk.post.mock.calls.length;
+  await pressProposal(proposal, /登録を承認/u);
+  await vi.waitFor(() => expect(sdk.post.mock.calls.length).toBeGreaterThan(count));
+  expect(sdk.post.mock.calls.slice(count).some(([post]) => post.thread_ts === '1700000000.000001' && String(post.text).includes(getLabel('manager.conversation.stale_summary', 'ja')))).toBe(true);
+  expect((await new GoalStore(repository).list()).goals).toHaveLength(0);
+  expect(new ConversationStore(directory).read(selected.conversationId, selected.assignment)).toMatchObject({ revision: before.revision, pending: before.pending, approval: before.approval });
+});
+
+it('ignores a proposal approval by a user outside the allowlist', async () => {
+  const proposal = await makeGoalProposal();
+  const before = new ConversationStore(directory).read(selected.conversationId, selected.assignment)!;
+  const count = sdk.post.mock.calls.length;
+  await pressProposal(proposal, /登録を承認/u, { user: { id: 'U0BBB' } });
+  expect((await new GoalStore(repository).list()).goals).toHaveLength(0);
+  expect(new ConversationStore(directory).read(selected.conversationId, selected.assignment)).toEqual(before);
+  expect(sdk.post).toHaveBeenCalledTimes(count);
+});
+
+it('ignores a proposal approval from another channel', async () => {
+  const proposal = await makeGoalProposal();
+  const before = new ConversationStore(directory).read(selected.conversationId, selected.assignment)!;
+  const count = sdk.post.mock.calls.length;
+  await pressProposal(proposal, /登録を承認/u, { channel: { id: 'C0999' },
+    container: { type: 'message', channel_id: 'C0999', message_ts: proposal.parentTs } });
+  expect((await new GoalStore(repository).list()).goals).toHaveLength(0);
+  expect(new ConversationStore(directory).read(selected.conversationId, selected.assignment)).toEqual(before);
+  expect(sdk.post).toHaveBeenCalledTimes(count);
+});
+
+it('acknowledges proposal approval while goal registration is blocked', async () => {
+  const proposal = await makeGoalProposal();
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const registration = vi.spyOn(goalService, 'registerReservedGoal').mockImplementation(async (input) => {
+    await gate;
+    return new GoalStore(input.cwd).create({ ...goalRecord(), id: input.id, objective: input.objective,
+      outOfScope: input.outOfScope, acceptanceCriteria: input.acceptanceCriteria, constraints: input.constraints });
+  });
+  const chosen = button(proposal.post, /登録を承認/u);
+  const receive = sdk.on.mock.calls.find(([type]) => type === 'slack_event')![1] as (event: SlackEvent & { ack(): Promise<void> }) => Promise<void>;
+  const ack = vi.fn(async () => {});
+  const startedAt = Date.now();
+  const pending = receive({ type: 'interactive', body: { type: 'block_actions', team: { id: 'T1' }, user: { id: 'U0AAA' },
+    channel: { id: 'C0123' }, container: { type: 'message', channel_id: 'C0123', message_ts: proposal.parentTs },
+    message: { ts: proposal.parentTs, thread_ts: '1700000000.000001' },
+    actions: [{ type: 'button', action_id: chosen.action_id, value: chosen.value }] }, ack });
+  try {
+    await vi.waitFor(() => expect(registration).toHaveBeenCalledOnce(), { timeout: 2000 });
+    expect(ack).toHaveBeenCalledOnce();
+    expect(Date.now() - startedAt).toBeLessThan(3000);
+    expect((await new GoalStore(repository).list()).goals).toHaveLength(0);
+  } finally {
+    release!();
+    await pending;
+  }
+  await vi.waitFor(async () => expect((await new GoalStore(repository).list()).goals).toHaveLength(1));
 });
 
 it('routes a broadcast reply once to the TUI conversation and replies in the parent thread', async () => {

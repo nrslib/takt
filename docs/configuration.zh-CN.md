@@ -466,6 +466,8 @@ TAKT_ALLOY_CONCURRENCY=1 TAKT_ALLOY_HEAP=2g TAKT_ALLOY_STACK=128m takt
 
 ## 通过 Slack 与 manager 对话
 
+在对话消息列中发送 `/make-goal` 可创建注册提案。使用「Approve registration（批准注册）」或「Continue conversation（继续对话）」操作；旧版本提案的按钮无效。
+
 通过 Slack 的 Socket Mode，可以与 manager 对话，无需提供公开 URL。对话回复和询问的回答使用下述 Slack App；“目标已完成”等通知仍通过 `TAKT_NOTIFY_WEBHOOK` 配置的 Incoming Webhook 发送。两者可以同时使用。
 
 ### 创建 Slack App

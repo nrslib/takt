@@ -2,7 +2,7 @@ import { loadProjectConfig } from '../../infra/config/project/projectConfig.js';
 import { resolveConfigValue } from '../../infra/config/resolveConfigValue.js';
 import { createSlackClient, type SlackClient, type SlackEvent } from '../../infra/slack/client.js';
 import { createLogger } from '../../shared/utils/debug.js';
-import { createSlackConversationPort } from '../manager/slackConversationPort.js';
+import { createSlackConversationPort, SLACK_GOAL_APPROVE, SLACK_GOAL_DISMISS } from '../manager/slackConversationPort.js';
 import type { ConversationInput } from '../manager/conversationPort.js';
 import { withInquiryLock } from '../../infra/goals/inquiry-lock.js';
 import { iteratePendingInquiries } from '../../infra/goals/pending-inquiries.js';
@@ -66,7 +66,10 @@ export async function dispatchSlackEvent(event: SlackEvent, ports: ReadonlyMap<s
           || !Array.isArray(body.actions) || body.actions.length !== 1) return;
         const action: unknown = body.actions[0];
         if (!isRecord(action) || action.type !== 'button' || typeof action.action_id !== 'string' || typeof action.value !== 'string') return;
-        await selected.port.receiveAction({ teamId, channelId, userId, parentTs: body.container.message_ts }, action.action_id,
+        const parentTs = action.action_id === SLACK_GOAL_APPROVE || action.action_id === SLACK_GOAL_DISMISS
+          ? body.message.thread_ts : body.container.message_ts;
+        if (typeof parentTs !== 'string') return;
+        await selected.port.receiveAction({ teamId, channelId, userId, parentTs }, action.action_id,
           action.value, typeof body.trigger_id === 'string' ? body.trigger_id : undefined);
       } else if (view !== undefined && typeof metadata === 'string' && (body.type === 'view_submission' || body.type === 'view_closed')) {
         const endpoint = selected.port.modalEndpoint(metadata);

@@ -12,14 +12,19 @@ import { StandaloneInquiryStore } from '../../infra/goals/standalone-inquiries.j
 import { SlackInquiryBindings, slackInquiryKey, type SlackInquiryBinding } from '../../infra/slack/inquiryBindings.js';
 import { createPermissionProposal, type PendingQuestion } from './inquiryAnswer.js';
 import { buildSlackInquiry, buildSlackPermissionModal, SLACK_INQUIRY_ACTION } from './slackInquiryBlocks.js';
+import { formatGoalName } from './goalDisplay.js';
 import type { WritablePermissionScope } from './scopedPermissionStorage.js';
+import type { KnownBlock } from '@slack/types';
+
+export const SLACK_GOAL_APPROVE = 'takt_goal_approve';
+export const SLACK_GOAL_DISMISS = 'takt_goal_dismiss';
 
 export interface SlackEndpoint extends SlackThread { teamId: string; userId: string }
 
 export function createSlackConversationPort(options: {
   repositoryDirectory: string; configDirectory: string; channelId: string; input: ConversationInput; client: SlackClient; language: 'ja' | 'en';
 }) {
-  const targets = new Map<string, { endpoint: SlackEndpoint; attachmentId: string }>();
+  const targets = new Map<string, { endpoint: SlackEndpoint; attachmentId: string; conversationId: string; makeGoal: boolean }>();
   const attachments = new Set<string>();
   const bindings = new SlackInquiryBindings(options.configDirectory, options.repositoryDirectory);
   const attempted = new Map<string, Promise<SlackDeliveryResult>>();
@@ -62,7 +67,7 @@ export function createSlackConversationPort(options: {
         speaker: { namespace: 'slack-user', id: JSON.stringify([endpoint.teamId, endpoint.userId]) } };
     },
     delivery: {
-      async deliver(_conversationId, output) {
+      async deliver(currentConversationId, output, version) {
         if (output.kind === 'snapshot') {
           await output.read.items[Symbol.asyncIterator]().return?.();
         }
@@ -91,29 +96,85 @@ export function createSlackConversationPort(options: {
           attempted.set(key, sending);
           return sending;
         }
+        if (output.kind === 'pending' && output.state.pending !== null && version.operationId !== null) {
+          const target = targets.get(version.operationId);
+          if (target === undefined || !target.makeGoal || target.conversationId !== currentConversationId
+            || output.state.conversationId !== currentConversationId) return { kind: 'delivered' };
+          const pending = output.state.pending;
+          const summary = pending.summary;
+          const sections = [
+            `${getLabel('manager.slackGoalObjective', options.language)}\n${summary.objective}`,
+            `${getLabel('manager.slackGoalOutOfScope', options.language)}\n${summary.outOfScope.join('\n')}`,
+            `${getLabel('manager.slackGoalAcceptance', options.language)}\n${summary.acceptanceCriteria.join('\n')}`,
+            `${getLabel('manager.slackGoalConstraints', options.language)}\n${summary.constraints.join('\n')}`,
+          ];
+          let fragments: string[] = [];
+          for (const section of sections) {
+            for (let offset = 0; offset < section.length;) {
+              let end = Math.min(offset + 2900, section.length);
+              const last = section.charCodeAt(end - 1);
+              if (end < section.length && last >= 0xd800 && last <= 0xdbff) end--;
+              fragments.push(section.slice(offset, end));
+              if (fragments.length === 10) {
+                const blocks: KnownBlock[] = fragments.map((text) => ({ type: 'section', text: { type: 'plain_text', text } }));
+                const result = await options.client.postThreadMessage(target.endpoint, fragments.join('\n'), blocks);
+                if (result.kind !== 'delivered') {
+                  targets.delete(version.operationId);
+                  detach(target.attachmentId);
+                  return result;
+                }
+                fragments = [];
+              }
+              offset = end;
+            }
+          }
+          const value = JSON.stringify({ conversationId: currentConversationId, revision: pending.revision });
+          const text = fragments.length > 0 ? fragments.join('\n') : getLabel('manager.makeGoalDescription', options.language);
+          const blocks: KnownBlock[] = [...fragments.map((part): KnownBlock => ({ type: 'section', text: { type: 'plain_text', text: part } })), { type: 'actions', elements: [
+            { type: 'button', action_id: SLACK_GOAL_APPROVE, text: { type: 'plain_text', text: getLabel('manager.slackGoalApprove', options.language) }, value },
+            { type: 'button', action_id: SLACK_GOAL_DISMISS, text: { type: 'plain_text', text: getLabel('manager.slackGoalDismiss', options.language) }, value },
+          ] }];
+          const result = await options.client.postThreadMessage(target.endpoint, text, blocks);
+          if (result.kind !== 'delivered') {
+            targets.delete(version.operationId);
+            detach(target.attachmentId);
+          }
+          return result;
+        }
         if (output.kind !== 'result') return { kind: 'delivered' };
         const target = targets.get(output.operationId);
         if (target === undefined) return { kind: 'delivered' };
         targets.delete(output.operationId);
         try {
+          if (output.result.kind === 'goal_registered') {
+            const goal = output.result.goal;
+            return await options.client.postThreadMessage(target.endpoint, getLabel('manager.goalRegistered', options.language,
+              { name: formatGoalName(goal.objective), id: goal.id, branch: goal.branch }));
+          }
           if (output.result.kind !== 'reply' && output.result.kind !== 'error') return { kind: 'delivered' };
           return await options.client.postThreadMessage(target.endpoint, output.result.message);
         } finally { detach(target.attachmentId); }
       },
     },
   };
-  const submitCommand = async (endpoint: SlackEndpoint, command: ConversationCommand): Promise<void> => {
+  const submitCommand = async (endpoint: SlackEndpoint, command: ConversationCommand, makeGoal = false, expectedConversationId?: string): Promise<void> => {
     if (!accepting) return;
     let attachmentId: string | undefined;
+    let ownedOperationId: string | undefined;
     let admitted!: () => void;
     const admission = new Promise<void>((resolve) => { admitted = resolve; });
     // A fast executor may publish its result before submit returns its operation ID.
     const delivery: ConversationDelivery = { deliver: async (...args) => {
       await admission;
+      const [, output, outputVersion] = args;
+      if ((output.kind === 'pending' || output.kind === 'result') && outputVersion.operationId !== ownedOperationId) {
+        return { kind: 'delivered' };
+      }
       return port.delivery.deliver(...args);
     } };
     try {
       const resolved = await port.resolve(endpoint);
+      if (expectedConversationId !== undefined && resolved.conversationId !== expectedConversationId) return;
       if (command.kind === 'answer_question') {
         const key = JSON.stringify([endpoint.teamId, endpoint.channelId]);
         resolved.binding = { port: 'slack-inquiry', key, counterpart: { namespace: 'slack-channel', id: key } };
@@ -129,7 +190,8 @@ export function createSlackConversationPort(options: {
       const submission = await options.input.submit({ attachmentId, requestId: randomUUID(), speaker: resolved.speaker,
         command });
       if (submission.kind === 'accepted') {
-        targets.set(submission.operationId, { endpoint, attachmentId });
+        ownedOperationId = submission.operationId;
+        targets.set(submission.operationId, { endpoint, attachmentId, conversationId: resolved.conversationId, makeGoal });
         attachmentId = undefined;
       } else {
         const message = submission.kind === 'error' ? submission.message : getLabel('manager.conversation.busy', options.language);
@@ -153,7 +215,11 @@ export function createSlackConversationPort(options: {
       } catch {
         // An unreadable binding is treated as an ordinary conversation thread.
       }
-      if (binding === undefined) { await submitCommand(endpoint, { kind: 'message', text }); return; }
+      if (binding === undefined) {
+        const makeGoal = text.trim() === '/make-goal';
+        await submitCommand(endpoint, { kind: 'message', text: makeGoal ? getLabel('manager.goSummaryRequest', options.language) : text }, makeGoal);
+        return;
+      }
       const current = await loadInquiry(binding.target, binding.questionId);
       if (current === undefined || current.pending.question.kind !== 'question') return;
       await submitCommand(endpoint, { kind: 'answer_question', target: binding.target, questionId: binding.questionId,
@@ -161,6 +227,20 @@ export function createSlackConversationPort(options: {
     },
     async receiveAction(endpoint: SlackEndpoint, actionId: string, value: string, triggerId: string | undefined): Promise<void> {
       if (!accepting) return;
+      if (actionId === SLACK_GOAL_APPROVE || actionId === SLACK_GOAL_DISMISS) {
+        let decoded: unknown;
+        try { decoded = JSON.parse(value) as unknown; } catch { return; }
+        if (typeof decoded !== 'object' || decoded === null || Array.isArray(decoded)) return;
+        const fields = decoded as Record<string, unknown>;
+        if (Object.keys(fields).length !== 2 || typeof fields.conversationId !== 'string' || !Number.isSafeInteger(fields.revision)
+          || (fields.revision as number) < 0) return;
+        const revision = fields.revision as number;
+        const command: ConversationCommand = actionId === SLACK_GOAL_APPROVE
+          ? { kind: 'approve_summary', revision, requirePending: true }
+          : { kind: 'dismiss_summary', revision };
+        await submitCommand(endpoint, command, false, fields.conversationId);
+        return;
+      }
       const binding = bindings.find(endpoint.channelId, endpoint.parentTs);
       if (binding === undefined) return;
       const current = await loadInquiry(binding.target, binding.questionId);

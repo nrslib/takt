@@ -280,7 +280,7 @@ it('persists its reservation before acceptance and registration, retains it afte
   await finished();
   const reserved = store.read(record.id, record.assignment)!.approval!;
   expect(await submit(opened.attachmentId, { kind: 'message', text: 'replace' })).toMatchObject({ kind: 'error', code: 'registration_recovery' });
-  expect((await submit(opened.attachmentId, { kind: 'approve_summary', revision: 4 })).kind).toBe('accepted');
+  expect((await submit(opened.attachmentId, { kind: 'approve_summary', revision: 4, requirePending: true })).kind).toBe('accepted');
   await finished();
   expect(doubles.register.mock.calls.map(([input]) => input.id)).toEqual([reserved.goalId, reserved.goalId]);
   expect(store.read(record.id, record.assignment)).toMatchObject({ approval: { ...reserved, state: 'registered' }, pending: null, running: null });

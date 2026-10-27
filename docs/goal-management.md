@@ -93,6 +93,8 @@ Removing an assignment does not delete the repository or its goals. Repositories
 
 ## Slack conversations
 
+In a conversation thread, send `/make-goal` to create a proposal. Use **Approve registration** or **Continue conversation**; buttons on an outdated proposal no longer work.
+
 You can talk to manager from one configured Slack channel using Socket Mode, without exposing a public URL. Follow [Slack conversations with manager](./configuration.md#slack-conversations-with-manager) to create and install the App, set `TAKT_SLACK_APP_TOKEN` and `TAKT_SLACK_BOT_TOKEN` in the shell that starts the daemon, and configure `manager.slack` in the repository's `.takt/config.yaml`. Start the daemon with `takt manager` or `takt daemon`.
 
 A post outside a thread receives a reply in that post's thread. Continue there; all conversation threads share the repository's manager conversation with the TUI. Replies go only to the originating thread, and replies to TUI messages do not appear in Slack. Messages sent while manager is processing receive a busy response and are not executed later; resend them after processing finishes. Only the configured channel and `allowed_user_ids` are accepted; DMs to the bot are ignored.

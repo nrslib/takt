@@ -8,7 +8,8 @@ import type { ManagerDisplayEvent, ManagerDisplayNotice } from './savedEvents.js
 
 export type ConversationCommand =
   | { kind: 'message'; text: string }
-  | { kind: 'approve_summary' | 'dismiss_summary'; revision: number }
+  | { kind: 'approve_summary'; revision: number; requirePending?: boolean }
+  | { kind: 'dismiss_summary'; revision: number }
   | { kind: 'answer_question'; target: QuestionTarget; questionId: string; answer: GoalAnswerInput;
       source?: 'tui' | 'slack';
       permission?: { scope: WritablePermissionScope; sentence: string } }

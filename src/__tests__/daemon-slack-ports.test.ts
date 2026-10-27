@@ -15,7 +15,8 @@ const doubles = vi.hoisted(() => ({ config: vi.fn(), error: vi.fn(), port: vi.fn
 vi.mock('../infra/config/project/projectConfig.js', () => ({ loadProjectConfig: doubles.config }));
 vi.mock('../infra/config/resolveConfigValue.js', () => ({ resolveConfigValue: () => 'ja' }));
 vi.mock('../shared/utils/debug.js', () => ({ createLogger: () => ({ error: doubles.error }) }));
-vi.mock('../features/manager/slackConversationPort.js', () => ({ createSlackConversationPort: doubles.port }));
+vi.mock('../features/manager/slackConversationPort.js', () => ({ createSlackConversationPort: doubles.port,
+  SLACK_GOAL_APPROVE: 'takt_goal_approve', SLACK_GOAL_DISMISS: 'takt_goal_dismiss' }));
 vi.mock('../infra/goals/pending-inquiries.js', () => ({ iteratePendingInquiries: doubles.pending }));
 vi.mock('../infra/task/repositoryDirectory.js', () => ({ resolveGitRepositoryDirectory: async (value: string) => value }));
 vi.mock('../features/manager/assignment.js', () => ({ resolveCurrentManagerAssignment: doubles.assignment }));

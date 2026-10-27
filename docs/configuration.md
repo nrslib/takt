@@ -469,6 +469,8 @@ Separately from config-key overrides, `TAKT_NOTIFY_WEBHOOK` sets a Slack Incomin
 
 ## Slack conversations with manager
 
+In a conversation thread, send `/make-goal` to create a proposal. Use **Approve registration** or **Continue conversation**; buttons on an outdated proposal no longer work.
+
 Use Slack Socket Mode to talk to manager without exposing a public URL. Conversation replies and answers to inquiries use the Slack App below. Completion notices and other notifications continue to use the Incoming Webhook configured by `TAKT_NOTIFY_WEBHOOK`; you can use both together.
 
 ### Create the Slack App
