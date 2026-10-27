@@ -2317,6 +2317,21 @@ describe('Quint run declaration verification', () => {
     expect(spawnedProcesses.some(({ args }) => args[1] === 'verify')).toBe(false);
   });
 
+  it.each([
+    { label: 'empty output', quintTestOutput: undefined },
+    { label: 'malformed JSON', quintTestOutput: '{' },
+    { label: 'invalid result arrays', quintTestOutput: '{"passed":"runA","failed":[],"ignored":[]}' },
+  ])('preserves process diagnostics for nonzero exit with $label', async ({ quintTestOutput }) => {
+    setRunDeclarations(['runA']);
+    queueTest({ code: 1, stdout: 'test stdout', stderr: 'test stderr', quintTestOutput });
+
+    const result = await verify();
+
+    expect(result.quint.test).toEqual({ status: 'failed', message: 'test stderr\ntest stdout' });
+    expect(result.verdict).toBe('failed');
+    expect(spawnedProcesses.some(({ args }) => args[1] === 'verify')).toBe(false);
+  });
+
   it.each(['parse', 'typecheck', 'run'] as const)('records a reasoned skipped test when %s does not pass', async (stage) => {
     setRunDeclarations(['runParam']);
     const stages = ['parse', 'typecheck', 'run'];
@@ -2526,6 +2541,7 @@ describe('selectQuintVerificationTargets', () => {
         { moduleName: 'workflowModel', name: 'invOwner' },
       ],
       temporal: [{ moduleName: 'workflowModel', name: 'propEventuallyDone' }],
+      runs: [],
     });
   });
 
@@ -2544,6 +2560,7 @@ describe('selectQuintVerificationTargets', () => {
     expect(selectQuintVerificationTargets(parseResult)).toMatchObject({
       invariants: [{ moduleName: 'workflowModel', name: 'invReal' }],
       temporal: [],
+      runs: [],
     });
   });
 });

@@ -695,13 +695,17 @@ function quintTestStage(
   try {
     output = JSON.parse(readFileSync(outputPath, 'utf8')) as unknown;
   } catch (error) {
-    return errorStage(`Quint test output could not be read: ${error instanceof Error ? error.message : String(error)}`);
+    return isSuccessfulProcess(result)
+      ? errorStage(`Quint test output could not be read: ${error instanceof Error ? error.message : String(error)}`)
+      : processStage;
   }
   if (!isRecord(output)
     || !isStringArray(output.passed)
     || !isStringArray(output.failed)
     || !isStringArray(output.ignored)) {
-    return errorStage('Quint test output must contain passed, failed, and ignored arrays of declaration names.');
+    return isSuccessfulProcess(result)
+      ? errorStage('Quint test output must contain passed, failed, and ignored arrays of declaration names.')
+      : processStage;
   }
 
   const passed = new Set(output.passed);
