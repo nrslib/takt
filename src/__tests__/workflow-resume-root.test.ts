@@ -61,6 +61,12 @@ describe('saved workflow resume root validation', () => {
     expect(() => validateWorkflowResumeRoot(workflow, { ...point(), stack: [] })).toThrow(/stack is empty/);
   });
 
+  it('reports both workflow names when the saved name differs', () => {
+    const saved = point({ workflow: 'previous', workflow_ref: 'project:old' });
+    expect(getWorkflowResumeFrameError(workflow, saved.stack[0]!, workflow.steps))
+      .toBe('Saved resume position "previous/reviewers" has a workflow name mismatch (saved: "previous", current: "default")');
+  });
+
   it('reports an ambiguous saved step', () => {
     const duplicate = { ...workflow, steps: [agent, { ...agent }] };
     expect(getWorkflowResumeFrameError(duplicate, point().stack[0]!, duplicate.steps)).toMatch(/ambiguous/);

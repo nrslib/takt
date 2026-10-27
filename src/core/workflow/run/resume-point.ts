@@ -126,7 +126,7 @@ export function getWorkflowResumeFrameError(
 ): string | undefined {
   const location = JSON.stringify(`${entry.workflow}/${entry.step}`);
   if (!resumeWorkflowMatches(entry, workflow)) {
-    return `Saved resume position ${location} has a workflow identity mismatch (workflow_ref: ${JSON.stringify(entry.workflow_ref)})`;
+    return `Saved resume position ${location} has a workflow name mismatch (saved: ${JSON.stringify(entry.workflow)}, current: ${JSON.stringify(workflow.name)})`;
   }
   const matches = steps.filter((step) => step.name === entry.step);
   if (matches.length === 0) {
