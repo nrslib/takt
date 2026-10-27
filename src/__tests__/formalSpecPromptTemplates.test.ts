@@ -218,6 +218,89 @@ describe('formal specification generation context wiring', () => {
   });
 });
 
+describe.each(['en', 'ja'] as const)('Quint scenario system prompt contract (%s)', (lang) => {
+  describe.each(['generation', 'interpretation'] as const)('%s', (purpose) => {
+    const prompt = purpose === 'generation'
+      ? buildFormalSpecGenerationSystemPrompt(lang)
+      : buildFormalSpecInterpretationSystemPrompt(lang, undefined);
+
+    it('explains execution of main-module run declarations and failure of unsatisfied expectations', () => {
+      const execution = lang === 'ja'
+        ? /シナリオの\s*`run`\s*宣言[^。\n]*。\s*main module[^。\n]*`quint test`\s*で実行/u
+        : /Scenario\s+`run`\s+declarations[^.\n]*\.\s*When[^.\n]*main module[^.\n]*executes them with\s+`quint test`/u;
+      const failure = lang === 'ja'
+        ? /`expect`\s*が成り立たなければ\s*不合格/u
+        : /unsatisfied\s+`expect`\s+fails verification/u;
+
+      expect(prompt).toMatch(execution);
+      expect(prompt).toMatch(failure);
+
+      const withoutExecution = prompt.replace(lang === 'ja'
+        ? /`quint test`\s*で実行し、/u
+        : /TAKT executes them with\s+`quint test`\s+after\s+`quint run`\s+passes;/u, '');
+      const withoutFailure = prompt.replace(lang === 'ja'
+        ? /`expect`\s*が成り立たなければ不合格にする。/u
+        : /an unsatisfied\s+`expect`\s+fails verification\./u, '');
+      const reversedFailure = prompt.replace(lang === 'ja'
+        ? /不合格にする/u
+        : /fails verification/u, lang === 'ja' ? '合格にする' : 'passes verification');
+
+      expect(withoutExecution).not.toMatch(execution);
+      expect(withoutFailure).not.toMatch(failure);
+      expect(reversedFailure).not.toMatch(failure);
+    });
+
+    it('shows parameterized initialization called by init with a nondeterministic value and by run with a concrete value', () => {
+      const examples = [...prompt.matchAll(/```quint\s*\n([\s\S]*?)```/gu)].map((match) => match[1]!);
+      const example = examples.find((code) => /action\s+initWith\s*\(/u.test(code));
+      expect(example).toBeDefined();
+      const code = example!;
+      const parameterizedAction = /\baction\s+initWith\s*\(\s*\w+\s*:\s*\w+\s*\)/u;
+      const initCall = /\baction\s+init\s*=\s*\{\s*nondet\s+(\w+)\s*=[^{}]*?\.oneOf\(\)\s+initWith\(\s*\1\s*\)\s*\}/u;
+      const runCall = /\brun\s+\w+\s*=\s*initWith\(\s*"[^"\n]+"\s*\)\s*\.then\(/u;
+
+      expect(code).toMatch(parameterizedAction);
+      expect(code).toMatch(initCall);
+      expect(code).toMatch(runCall);
+
+      const withoutParameter = code.replace(/initWith\([^)]*:\s*\w+\s*\)/u, 'initWith()');
+      const withoutInitCall = code.replace(/action\s+init\s*=\s*\{[^{}]*\}/u,
+        'action init = all { mode\' = "a", n\' = 0 }');
+      const withoutRunCall = code.replace(/(\brun\s+\w+\s*=\s*)initWith\("[^"\n]+"\)/u, '$1init');
+
+      expect(withoutParameter).not.toMatch(parameterizedAction);
+      expect(withoutInitCall).not.toMatch(initCall);
+      expect(withoutInitCall).toMatch(runCall);
+      expect(withoutRunCall).not.toMatch(runCall);
+      expect(withoutRunCall).toMatch(initCall);
+    });
+
+    it('explains init.then as a transition to the next state without overriding initial values', () => {
+      const transition = lang === 'ja'
+        ? /`init\.then\(\.\.\.\)`\s*は[^。\n]*次の状態への遷移/u
+        : /`init\.then\(\.\.\.\)`\s+transitions to the state after init/u;
+      const noOverride = lang === 'ja'
+        ? /`init\.then\(\.\.\.\)`[^。\n]*初期値の上書きではない/u
+        : /`init\.then\(\.\.\.\)`[^.\n]*does not override initial values/u;
+
+      expect(prompt).toMatch(transition);
+      expect(prompt).toMatch(noOverride);
+
+      const withoutTransition = prompt.replace(lang === 'ja'
+        ? /init の次の状態への遷移であり、/u
+        : /transitions to the state after init;/u, '');
+      const reversedOverride = prompt.replace(lang === 'ja'
+        ? /上書きではない/u
+        : /does not override/u, lang === 'ja' ? '上書きである' : 'does override');
+
+      expect(withoutTransition).not.toMatch(transition);
+      expect(withoutTransition).toMatch(noOverride);
+      expect(reversedOverride).not.toMatch(noOverride);
+      expect(reversedOverride).toMatch(transition);
+    });
+  });
+});
+
 describe('Quint scenario result interpretation', () => {
   it.each(['en', 'ja'] as const)('transfers the test stage and its diagnostic artifact paths for %s', (lang) => {
     const test = { status: 'failed' as const, message: 'runBad: expectation failed' };
