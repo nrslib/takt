@@ -1,13 +1,17 @@
 import { SocketModeClient, LogLevel, type Logger } from '@slack/socket-mode';
 import { WebClient } from '@slack/web-api';
+import type { KnownBlock, ModalView } from '@slack/types';
 import { createLogger } from '../../shared/utils/debug.js';
 
 export interface SlackEvent { type: string; body: unknown }
 export interface SlackThread { channelId: string; parentTs: string }
 export type SlackDeliveryResult = { kind: 'delivered' } | { kind: 'unavailable'; reason: string };
+export type SlackPostResult = { kind: 'delivered'; parentTs: string } | { kind: 'unavailable'; reason: string };
 export interface SlackClient {
   start(receive: (event: SlackEvent) => Promise<void>): Promise<void>;
   postThreadMessage(thread: SlackThread, text: string): Promise<SlackDeliveryResult>;
+  postMessage(channelId: string, text: string, blocks: KnownBlock[]): Promise<SlackPostResult>;
+  openModal(triggerId: string, view: ModalView): Promise<SlackDeliveryResult>;
   stopAccepting(): void;
   close(): Promise<void>;
 }
@@ -57,6 +61,27 @@ export function createSlackClient(tokens: { appToken: string; botToken: string }
       } catch {
         log.error('Cannot post Slack reply');
         return { kind: 'unavailable', reason: 'Slack reply unavailable' };
+      }
+    },
+    async postMessage(channelId, text, blocks) {
+      try {
+        const response = await bounded(web.chat.postMessage({ channel: channelId, text, blocks,
+          unfurl_links: false, unfurl_media: false }));
+        if (!response.ok || typeof response.ts !== 'string' || response.ts.length === 0) throw new Error('Missing Slack timestamp');
+        return { kind: 'delivered', parentTs: response.ts };
+      } catch {
+        log.error('Cannot post Slack inquiry');
+        return { kind: 'unavailable', reason: 'Slack inquiry unavailable' };
+      }
+    },
+    async openModal(triggerId, view) {
+      try {
+        const response = await bounded(web.views.open({ trigger_id: triggerId, view }));
+        if (!response.ok) throw new Error('Slack modal unavailable');
+        return { kind: 'delivered' };
+      } catch {
+        log.error('Cannot open Slack modal');
+        return { kind: 'unavailable', reason: 'Slack modal unavailable' };
       }
     },
     stopAccepting() { accepting = false; },
