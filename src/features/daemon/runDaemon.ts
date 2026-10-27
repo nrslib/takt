@@ -22,6 +22,7 @@ import { createConversationIpcServer } from './conversationIpcServer.js';
 import { createDaemonSlackPorts } from './slackPorts.js';
 
 const POLL_INTERVAL_MS = 500;
+const SLACK_INQUIRY_POLL_INTERVAL_MS = 5_000;
 const EVENTS_PER_PROJECT = 10;
 const log = createLogger('daemon');
 
@@ -59,6 +60,8 @@ export async function runDaemon(): Promise<void> {
     runtime: createConversationRuntime(globalConfigDirectory), onDomainChange: () => { domainGeneration++; projectWork.clear(); } });
   let ipc: Awaited<ReturnType<typeof createConversationIpcServer>> | undefined;
   let slack: Awaited<ReturnType<typeof createDaemonSlackPorts>> | undefined;
+  let nextSlackInquiryPoll = 0;
+  let slackInquiryPolling: Promise<void> | undefined;
   const inspectProject = async (cwd: string): Promise<boolean> => {
     const errors: Array<{ error: unknown; failedAt: number }> = [];
     let hasWork = false;
@@ -132,7 +135,15 @@ export async function runDaemon(): Promise<void> {
       slack ??= await createDaemonSlackPorts({ projects, configDirectory: globalConfigDirectory, input: conversations,
         tokens: appToken && botToken ? { appToken, botToken } : undefined, signal: controller.signal });
       if (controller.signal.aborted) break;
-      await slack.pollInquiries();
+      if (slackInquiryPolling === undefined && Date.now() >= nextSlackInquiryPoll) {
+        nextSlackInquiryPoll = Date.now() + SLACK_INQUIRY_POLL_INTERVAL_MS;
+        const currentSlack = slack;
+        slackInquiryPolling = Promise.resolve().then(() => currentSlack.pollInquiries())
+          .catch((error: unknown) => {
+            log.error('Cannot poll Slack inquiries', { error: sanitizeSensitiveText(getErrorMessage(error)) });
+          })
+          .finally(() => { slackInquiryPolling = undefined; });
+      }
       if (controller.signal.aborted) break;
       log.debug('Daemon projects', { projects });
       for (const cwd of projectWork.keys()) {
@@ -169,7 +180,7 @@ export async function runDaemon(): Promise<void> {
       try { await manager.close(); }
       catch (error) { log.error('Cannot close daemon project manager', { cwd, error: getErrorMessage(error) }); }
     }
-    try { await slack?.close(); await ipc?.close(); }
+    try { await slackInquiryPolling; await slack?.close(); await ipc?.close(); }
     finally {
       removeDaemonOwner(globalConfigDirectory, owner);
       process.removeListener('SIGTERM', stop);

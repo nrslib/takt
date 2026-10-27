@@ -517,6 +517,8 @@ manager:
 
 仓库的 `.takt/config.yaml` 可能纳入版本控制并与他人共享。修改 `manager.slack.allowed_user_ids` 会改变哪些 Slack 用户可以向 manager 发送输入。启动 daemon 前，请检查仓库配置的变更，并仅使用你信任的配置。
 
+Slack 配置和已注册的仓库列表在 daemon 启动时读取。更改后，请运行 `takt daemon stop` 并重新启动 daemon，以应用包括移除允许用户在内的更改。
+
 在启动 daemon 的 shell 中设置两个令牌环境变量，然后使用 `takt manager` 或 `takt daemon` 启动。例如：
 
 ```bash

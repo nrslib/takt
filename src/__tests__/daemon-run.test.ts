@@ -132,19 +132,94 @@ it.each(['app', 'bot', 'both'] as const)('exits normally with %s Slack tokens mi
 
 it('polls for new Slack inquiries on later rounds of the same daemon without waiting for a conversation message', async () => {
   const before = process.rawListeners('SIGTERM');
+  let now = 10_000;
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
   const slack = { listening: true, pollInquiries: vi.fn(), stopAccepting: vi.fn(), close: vi.fn() };
   doubles.slack.mockResolvedValue(slack);
   doubles.projects.mockResolvedValue([]);
   let rounds = 0;
   doubles.delay.mockImplementation(async () => {
     await new Promise(setImmediate);
+    now += 2_500;
     if (++rounds === 4) process.rawListeners('SIGTERM').find((listener) => !before.includes(listener))!.call(process, 'SIGTERM');
   });
   await runDaemon();
   expect(doubles.slack).toHaveBeenCalledOnce();
-  expect(slack.pollInquiries.mock.calls.length).toBeGreaterThanOrEqual(2);
+  expect(slack.pollInquiries).toHaveBeenCalledTimes(2);
   expect(slack.close).toHaveBeenCalledOnce();
   expect(process.rawListeners('SIGTERM')).toEqual(before);
+});
+
+it('inspects projects while an inquiry poll is still pending', async () => {
+  const before = process.rawListeners('SIGTERM');
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  const slack = { listening: true, pollInquiries: vi.fn(() => pending), stopAccepting: vi.fn(), close: vi.fn(() => pending) };
+  doubles.slack.mockResolvedValue(slack);
+  doubles.create.mockReturnValue({ processPending: vi.fn(), close: vi.fn() });
+  const daemon = runDaemon();
+  try {
+    await vi.waitFor(() => expect(doubles.patrol).toHaveBeenCalled());
+    expect(slack.pollInquiries).toHaveBeenCalledOnce();
+  } finally {
+    process.rawListeners('SIGTERM').find((listener) => !before.includes(listener))?.call(process, 'SIGTERM');
+    release();
+    await daemon;
+  }
+});
+
+it('does not start another inquiry poll until the previous one finishes', async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(10_000);
+  const before = process.rawListeners('SIGTERM');
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  const slack = { listening: true, pollInquiries: vi.fn().mockReturnValueOnce(pending).mockResolvedValue(undefined),
+    stopAccepting: vi.fn(), close: vi.fn() };
+  doubles.slack.mockResolvedValue(slack);
+  doubles.projects.mockResolvedValue([]);
+  doubles.delay.mockImplementation((ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); }));
+  const daemon = runDaemon();
+  try {
+    await vi.advanceTimersByTimeAsync(500);
+    expect(slack.pollInquiries).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(slack.pollInquiries).toHaveBeenCalledTimes(1);
+    release();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(slack.pollInquiries).toHaveBeenCalledTimes(2);
+  } finally {
+    release();
+    process.rawListeners('SIGTERM').find((listener) => !before.includes(listener))?.call(process, 'SIGTERM');
+    await vi.advanceTimersByTimeAsync(500);
+    await daemon;
+    vi.useRealTimers();
+  }
+});
+
+it('logs a rejected inquiry poll and retries on the next interval', async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(10_000);
+  const before = process.rawListeners('SIGTERM');
+  const slack = { listening: true, pollInquiries: vi.fn().mockRejectedValueOnce(new Error('poll failed'))
+    .mockResolvedValue(undefined), stopAccepting: vi.fn(), close: vi.fn() };
+  doubles.slack.mockResolvedValue(slack);
+  doubles.projects.mockResolvedValue([]);
+  doubles.delay.mockImplementation((ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); }));
+  const daemon = runDaemon();
+  try {
+    await vi.advanceTimersByTimeAsync(500);
+    expect(slack.pollInquiries).toHaveBeenCalledTimes(1);
+    expect(doubles.logError).toHaveBeenCalledWith('Cannot poll Slack inquiries', { error: 'poll failed' });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(slack.pollInquiries).toHaveBeenCalledTimes(2);
+    expect(doubles.removeOwner).not.toHaveBeenCalled();
+  } finally {
+    process.rawListeners('SIGTERM').find((listener) => !before.includes(listener))?.call(process, 'SIGTERM');
+    await vi.advanceTimersByTimeAsync(500);
+    await daemon;
+    vi.useRealTimers();
+  }
 });
 
 it('takes Slack credentials out of the environment before creating the runtime and preserves the client credentials', async () => {

@@ -520,6 +520,8 @@ manager:
 
 The repository's `.takt/config.yaml` may be version-controlled and shared. Changes to `manager.slack.allowed_user_ids` change which Slack users can send input to manager. Before starting the daemon, review changes to the repository configuration and use only settings you trust.
 
+Slack settings and the registered repository list are loaded when the daemon starts. After changing them, run `takt daemon stop` and start the daemon again to apply the changes, including removal of allowed users.
+
 Set both tokens in the shell that starts the daemon, then start it through `takt manager` or `takt daemon`. For example:
 
 ```bash

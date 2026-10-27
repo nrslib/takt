@@ -11,5 +11,5 @@ it('uses the canonical configuration directory for the exclusion boundary', asyn
   mocks.exclusive.mockImplementation(async (_path: string, action: () => Promise<string>) => action());
   await expect(withInquiryLock('/alias', async () => 'saved')).resolves.toBe('saved');
   expect(mocks.realpath).toHaveBeenCalledWith('/alias');
-  expect(mocks.exclusive).toHaveBeenCalledWith('/canonical/inquiries.lock', expect.any(Function), { timeoutMs: Infinity });
+  expect(mocks.exclusive).toHaveBeenCalledWith('/canonical/inquiries.lock', expect.any(Function), { timeoutMs: 60_000 });
 });

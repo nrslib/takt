@@ -516,6 +516,8 @@ manager:
 
 リポジトリの `.takt/config.yaml` は、バージョン管理され、共有される場合があります。`manager.slack.allowed_user_ids` を変更すると、Slack から manager に入力できるユーザーが変わります。daemon を起動する前にリポジトリ設定の変更を確認し、信頼できる設定を使ってください。
 
+Slack 設定と登録済みリポジトリの一覧は daemon の起動時に読み込まれます。許可ユーザーの削除を含む変更を反映するには、`takt daemon stop` を実行してから daemon を起動し直してください。
+
 daemon を起動するシェルで2つのトークンを環境変数に設定し、`takt manager` または `takt daemon` で起動します。たとえば次のように実行します。
 
 ```bash
