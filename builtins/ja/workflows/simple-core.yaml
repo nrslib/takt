@@ -123,10 +123,8 @@ steps:
         next: implement
       - condition: 実装後でなければ必要なテストを作成できない
         next: implement
-      - condition: 計画の前提が実コード・要件と合わず、見直しが必要
+      - condition: テスト作成を進行できない
         next: plan
-      - condition: 計画を見直しても続行できない
-        next: ABORT
       - condition: ユーザーへの確認事項があるためユーザー入力が必要
         next: write_tests
         requires_user_input: true

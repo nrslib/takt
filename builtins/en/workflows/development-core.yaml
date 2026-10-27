@@ -253,10 +253,8 @@ steps:
         next: implement
       - condition: Necessary tests cannot be created until after implementation
         next: implement
-      - condition: A planning assumption conflicts with the code or requirements and needs revision
+      - condition: Test creation cannot proceed
         next: plan
-      - condition: Work cannot proceed even after revising the plan
-        next: ABORT
       - condition: User input is required for a clarification
         next: write_tests
         requires_user_input: true

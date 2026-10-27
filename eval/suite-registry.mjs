@@ -57,7 +57,7 @@ const CLASSIFICATIONS = [
   },
   {
     tier: 'active',
-    reason: 'write_tests の完了・実装先行・計画見直し・外部停止の条件選択を日英で測る',
+    reason: 'write_tests の完了・実装先行・計画への差し戻しを日英で測る',
     suites: ['write-tests-routing'],
   },
   {

@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
-description: 'write_tests の完了・実装先行・計画見直し・停止を日英で判定する'
+description: 'write_tests の完了・実装先行・計画への差し戻しを日英で判定する'
 prompts:
   - file://../../phase3-judgment-prompt.mjs
 providers:
@@ -87,9 +87,9 @@ tests:
     vars:
       language: ja
       input: file://../../cases/write-tests-routing/blocked-ja.md
-      expected_rule_index: 4
+      expected_rule_index: 3
   - description: 'en: Only an external device remains unavailable'
     vars:
       language: en
       input: file://../../cases/write-tests-routing/blocked-en.md
-      expected_rule_index: 4
+      expected_rule_index: 3
