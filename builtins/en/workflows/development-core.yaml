@@ -251,10 +251,10 @@ steps:
     rules:
       - condition: Test creation is complete
         next: implement
-      - condition: Test creation is skipped because the target is not implemented
+      - condition: Recorded a concrete reason why only implementing first can make creating the necessary tests possible, and which tests to create and run afterward. Missing functions or APIs and test failures alone do not qualify
         next: implement
-      - condition: Test creation cannot proceed
-        next: plan
+      - condition: Requirements, planning, or environment problems prevent creating or running tests and cannot be resolved by implementing first
+        next: ABORT
       - condition: User input is required for a clarification
         next: write_tests
         requires_user_input: true

@@ -121,9 +121,9 @@ steps:
     rules:
       - condition: テスト作成が完了した
         next: implement
-      - condition: テスト対象が未実装のためテスト作成をスキップする
+      - condition: 実装を先に行うことでしか必要なテストを作成できない具体的理由と、実装後に作成・実行するテストを記録した。未実装の関数・APIやテスト失敗だけでは該当しない
         next: implement
-      - condition: テスト作成を進行できない
+      - condition: 要件・計画・実行環境などの問題でテスト作成・実行を進められず、実装を先に行っても解消できない
         next: ABORT
       - condition: ユーザーへの確認事項があるためユーザー入力が必要
         next: write_tests

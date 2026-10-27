@@ -10,8 +10,9 @@ Refer only to reports in the Report Directory shown in Workflow Context. Do not 
 **Test boundaries:**
 - Decide whether to create, update, or delete tests from observable contracts, and follow test-related judgment criteria supplied by the task
 - Failures caused by not-yet-implemented production code are expected at this stage; fix test defects that would remain afterward
+- Do not skip tests solely because production code is not implemented. If implementation must come first to make creating the necessary tests possible, record the concrete reason and the tests to create and run afterward
 
 **Post-edit checks:**
-- Check references and imports made unused by the test changes, and the dependency direction of added or changed imports
+- Check arguments, variables, functions, exports, imports, and types made unused by the test changes, and the dependency direction of added or changed imports. Check that added or changed mocks and test doubles match their real contracts
 - Run created or changed tests through the project's test entrypoint and fix defects in the tests themselves. If changed integration tests require classification or wiring checks, run those too
 - There is no need to inspect or run every existing mock and test double. Carry any unresolved matters forward to post-implementation verification

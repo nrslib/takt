@@ -103,6 +103,14 @@ async function execute(config: WorkflowConfig, stepName: string, ruleIndex: numb
 }
 
 describe('shipped development completion and remediation routes', () => {
+  it.each(variants(['development-core', 'simple-core', 'simple']))('$language/$name routes test creation outcomes without returning to planning', async ({ language, name }) => {
+    const config = load(language, name);
+    for (const [ruleIndex, nextStep] of [[0, 'implement'], [1, 'implement'], [2, 'ABORT']] as const) {
+      start(config, 'write_tests');
+      expect((await execute(config, 'write_tests', ruleIndex)).nextStep).toBe(nextStep);
+    }
+  });
+
   it.each(variants(implementations))('$language/$name sends executable incompleteness to reimplement once, then hands remaining gaps to planning', async ({ language, name }) => {
     const config = load(language, name);
     start(config, 'implement');
