@@ -127,6 +127,13 @@ describe('readline operation feedback', () => {
     });
 
     expect(handler).toHaveBeenCalledTimes(1);
+    if (command === 'tell') {
+      expect(handler).toHaveBeenCalledWith(expect.objectContaining({
+        cwd: '/test-project', inlineText: '',
+        history: expect.arrayContaining([expect.objectContaining({ role: 'user', content: 'Prepare a login fix' })]),
+        sessionContext: expect.objectContaining({ providerType: 'mock' }),
+      }));
+    }
     expect(doubles.info).toHaveBeenCalledWith(notice);
     expect(doubles.ai.mock.calls[1]?.[0]).toContain(notice);
     expect(doubles.ai.mock.calls[1]?.[0]).toContain('どうなった？');

@@ -170,7 +170,7 @@ describe('runTellCommand', () => {
     expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
   });
 
-  it('uses the preferred target only as the initial selection and writes after confirmation', async () => {
+  it('automatically confirms the only target and writes after confirmation', async () => {
     const notice = await runTellCommand({
       cwd: '/project',
       lang: 'en',
@@ -180,13 +180,9 @@ describe('runTellCommand', () => {
       preferredRunSlug: target.runSlug,
     });
 
-    expect(mockSelectOptionWithDefault).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.arrayContaining([
-        expect.objectContaining({ value: target.runSlug, label: 'authentication' }),
-      ]),
-      target.runSlug,
-    );
+    expect(mockSelectOption).not.toHaveBeenCalled();
+    expect(mockSelectOptionWithDefault).not.toHaveBeenCalled();
+    expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.not.stringContaining('Running tasks excluded from /tell'));
     expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringContaining('Current step: implement'));
     expect(mockIssueTellableRunningTask).toHaveBeenCalledWith(
       '/project',
@@ -293,7 +289,7 @@ describe('runTellCommand', () => {
 
     expect(notice).toContain('provider unavailable');
     expect(mockInspectTellableRunningTasks).toHaveBeenCalledWith('/project');
-    expect(mockSelectOption).toHaveBeenCalledOnce();
+    expect(mockSelectOption).not.toHaveBeenCalled();
     expect(mockSelectOptionWithDefault).not.toHaveBeenCalled();
     expect(mockConfirmWithCancel).not.toHaveBeenCalled();
     expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
@@ -325,17 +321,56 @@ describe('runTellCommand', () => {
 
     expect(notice).toContain('generated');
     expect(mockInspectTellableRunningTasks).toHaveBeenCalledWith('/project');
-    expect(mockSelectOption).toHaveBeenCalledOnce();
+    expect(mockSelectOption).not.toHaveBeenCalled();
     expect(mockSelectOptionWithDefault).not.toHaveBeenCalled();
     expect(mockConfirmWithCancel).not.toHaveBeenCalled();
     expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])('reports excluded tasks on single-target generation failure when excluded=%s', async (hasExcluded) => {
+    mockInspectTellableRunningTasks.mockReturnValue({ tasks: [target], excluded: hasExcluded ? ['local-task: not a worktree clone'] : [] });
+    mockCallAIWithRetry.mockResolvedValueOnce({ result: null, error: 'provider unavailable' });
+    const notice = await runTellCommand({ cwd: '/project', lang: 'en', inlineText: 'Update this.', history: [], sessionContext: makeSessionContext() });
+    expect(notice).toContain('provider unavailable');
+    if (hasExcluded) expect(notice).toContain('local-task: not a worktree clone');
+    else expect(notice).not.toContain('Running tasks excluded from /tell');
+    expect(mockSelectOption).not.toHaveBeenCalled();
+    expect(mockSelectOptionWithDefault).not.toHaveBeenCalled();
+    expect(mockConfirmWithCancel).not.toHaveBeenCalled();
+    expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('reports excluded tasks on AI-selected empty generation when excluded=%s', async (hasExcluded) => {
+    mockInspectTellableRunningTasks.mockReturnValue({ tasks: [target, alternateTarget], excluded: hasExcluded ? ['local-task: not a worktree clone'] : [] });
+    mockCallAIWithRetry.mockResolvedValueOnce({ result: { success: true, content: JSON.stringify({ runSlug: alternateTarget.runSlug }) } })
+      .mockResolvedValueOnce({ result: { success: true, content: '   ' } });
+    const notice = await runTellCommand({ cwd: '/project', lang: 'en', inlineText: 'Update payments.', history: [], sessionContext: makeSessionContext() });
+    expect(notice).toContain('generated');
+    if (hasExcluded) expect(notice).toContain('local-task: not a worktree clone');
+    else expect(notice).not.toContain('Running tasks excluded from /tell');
+    expect(mockSelectOption).not.toHaveBeenCalled();
+    expect(mockSelectOptionWithDefault).not.toHaveBeenCalled();
+    expect(mockConfirmWithCancel).not.toHaveBeenCalled();
+    expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
+  });
+
+  it('does not repeat excluded tasks after manual selection when generation fails', async () => {
+    mockInspectTellableRunningTasks.mockReturnValue({ tasks: [target, alternateTarget], excluded: ['local-task: not a worktree clone'] });
+    mockCallAIWithRetry.mockResolvedValueOnce({ result: null, error: 'target unavailable' })
+      .mockResolvedValueOnce({ result: null, error: 'target unavailable' })
+      .mockResolvedValueOnce({ result: null, error: 'provider unavailable' });
+    mockSelectOption.mockResolvedValueOnce(alternateTarget.runSlug);
+    const notice = await runTellCommand({ cwd: '/project', lang: 'en', inlineText: 'Update payments.', history: [], sessionContext: makeSessionContext() });
+    expect(mockSelectOption).toHaveBeenCalledWith(expect.stringContaining('local-task: not a worktree clone'), expect.any(Array));
+    expect(notice).toContain('provider unavailable');
+    expect(notice).not.toContain('local-task: not a worktree clone');
+    expect(mockConfirmWithCancel).not.toHaveBeenCalled();
+    expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
+  });
+
   it('keeps the referenced run as the initial choice but writes only the confirmed selection', async () => {
-    mockInspectTellableRunningTasks.mockReturnValue({
-      tasks: [target, alternateTarget],
-      excluded: [],
-    });
+    mockInspectTellableRunningTasks.mockReturnValue({ tasks: [target, alternateTarget], excluded: [] });
+    mockCallAIWithRetry.mockResolvedValueOnce({ result: null, error: 'target unavailable' }).mockResolvedValueOnce({ result: null, error: 'target unavailable' });
     mockSelectOptionWithDefault.mockResolvedValue(alternateTarget.runSlug);
 
     const notice = await runTellCommand({
@@ -362,7 +397,7 @@ describe('runTellCommand', () => {
     expect(confirmation).toContain('review');
     expect(confirmation).toContain('payments-run');
     expect(confirmation).toContain('Generated standalone instruction.');
-    expect(String(mockCallAIWithRetry.mock.calls[0]?.[0])).toContain('payments\nAdd payment retries');
+    expect(String(mockCallAIWithRetry.mock.calls.at(-1)?.[0])).toContain('payments\nAdd payment retries');
     expect(mockIssueTellableRunningTask).toHaveBeenCalledWith(
       '/project',
       alternateTarget.runSlug,
@@ -373,6 +408,7 @@ describe('runTellCommand', () => {
 
   it('identifies the selected recipient even when a different task is the last conversation topic', async () => {
     mockInspectTellableRunningTasks.mockReturnValue({ tasks: [target, alternateTarget], excluded: [] });
+    mockCallAIWithRetry.mockResolvedValueOnce({ result: null, error: 'target unavailable' }).mockResolvedValueOnce({ result: null, error: 'target unavailable' });
     mockSelectOption.mockResolvedValue(target.runSlug);
 
     await runTellCommand({
@@ -405,6 +441,8 @@ describe('runTellCommand', () => {
 
   describe.each(['en', 'ja'] as const)('recipient selection failure in %s', (lang) => {
     it.each([false, true])('reports the selection reason without generating, confirming, or sending when preferred=%s', async (preferred) => {
+      mockInspectTellableRunningTasks.mockReturnValue({ tasks: [target, alternateTarget], excluded: [] });
+      mockCallAIWithRetry.mockResolvedValueOnce({ result: null, error: 'target unavailable' }).mockResolvedValueOnce({ result: null, error: 'target unavailable' });
       const selector = preferred ? mockSelectOptionWithDefault : mockSelectOption;
       const reason = 'Interactive selection input exceeds 65536 byte limit';
       selector.mockRejectedValueOnce(new Error(reason));
@@ -419,7 +457,7 @@ describe('runTellCommand', () => {
       expect(notice).toMatch(lang === 'en' ? /failed to select/i : /送信先選択に失敗/);
       expect(notice).toMatch(lang === 'en' ? /no instruction was sent/i : /送信されていません/);
       expect(selector).toHaveBeenCalledTimes(1);
-      expect(mockCallAIWithRetry).not.toHaveBeenCalled();
+      expect(mockCallAIWithRetry).toHaveBeenCalledTimes(2);
       expect(mockConfirmWithCancel).not.toHaveBeenCalled();
       expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
     });
@@ -435,7 +473,8 @@ describe('runTellCommand', () => {
         ...(preferred ? { preferredRunSlug: target.runSlug } : {}),
       });
 
-      expect(preferred ? mockSelectOptionWithDefault : mockSelectOption).toHaveBeenCalledOnce();
+      expect(mockSelectOption).not.toHaveBeenCalled();
+      expect(mockSelectOptionWithDefault).not.toHaveBeenCalled();
       expect(mockCallAIWithRetry).toHaveBeenCalledOnce();
       expect(mockConfirmWithCancel).toHaveBeenCalledOnce();
       expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringContaining(target.runSlug));
@@ -447,6 +486,8 @@ describe('runTellCommand', () => {
   });
 
   it('sanitizes the recipient selection failure reason', async () => {
+    mockInspectTellableRunningTasks.mockReturnValue({ tasks: [target, alternateTarget], excluded: [] });
+    mockCallAIWithRetry.mockResolvedValueOnce({ result: null, error: 'target unavailable' }).mockResolvedValueOnce({ result: null, error: 'target unavailable' });
     mockSelectOption.mockRejectedValueOnce(new Error('input\x1b[31m failed\n'));
     const notice = await runTellCommand({
       cwd: '/project', lang: 'en', inlineText: 'Add login audit.', history: [], sessionContext: makeSessionContext(),
@@ -457,6 +498,8 @@ describe('runTellCommand', () => {
   });
 
   it.each([false, true])('does not generate when recipient selection is cancelled with preferred=%s', async (preferred) => {
+    mockInspectTellableRunningTasks.mockReturnValue({ tasks: [target, alternateTarget], excluded: [] });
+    mockCallAIWithRetry.mockResolvedValueOnce({ result: null, error: 'target unavailable' }).mockResolvedValueOnce({ result: null, error: 'target unavailable' });
     const selector = preferred ? mockSelectOptionWithDefault : mockSelectOption;
     selector.mockResolvedValueOnce(null);
 
@@ -477,9 +520,88 @@ describe('runTellCommand', () => {
     });
 
     expect(notice).toContain('was not sent');
-    expect(mockCallAIWithRetry).not.toHaveBeenCalled();
+    expect(mockCallAIWithRetry).toHaveBeenCalledTimes(2);
     expect(mockConfirmWithCancel).not.toHaveBeenCalled();
     expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
+  });
+
+  it('selects the conversation topic with AI even when another run is referenced', async () => {
+    mockInspectTellableRunningTasks.mockReturnValue({ tasks: [target, alternateTarget], excluded: [] });
+    mockCallAIWithRetry.mockResolvedValueOnce({ result: { success: true, content: JSON.stringify({ runSlug: alternateTarget.runSlug }) } });
+
+    await runTellCommand({
+      cwd: '/project', lang: 'en', inlineText: 'Apply this to payments.',
+      history: [{ role: 'user', content: 'For payments, retry declined charges.' }],
+      sessionContext: makeSessionContext(), preferredRunSlug: target.runSlug,
+    });
+
+    const calls = mockCallAIWithRetry.mock.calls.slice(0, -1).flat().map(String).join(' ');
+    expect(calls).toContain('For payments, retry declined charges.');
+    expect(calls).toContain('payments-run');
+    expect(mockSelectOption).not.toHaveBeenCalled();
+    expect(mockSelectOptionWithDefault).not.toHaveBeenCalled();
+    expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringContaining('payments-run'));
+    expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringContaining('review'));
+    expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringContaining('Generated standalone instruction.'));
+    expect(mockIssueTellableRunningTask).toHaveBeenCalledWith('/project', alternateTarget.runSlug, 'Generated standalone instruction.');
+    expect(mockCallAIWithRetry.mock.calls[0]?.[4]).toMatchObject({ sessionId: undefined, mcpServers: undefined, taskStateMcpServers: undefined, disableSessionRetry: true });
+    expect(mockCallAIWithRetry.mock.calls[0]?.[5]).toMatchObject({ permissionMode: 'readonly', internalAgentIsolation: 'strict-readonly', persistSession: false });
+  });
+
+  it('retries an invalid target response and accepts a valid second choice', async () => {
+    mockInspectTellableRunningTasks.mockReturnValue({ tasks: [target, alternateTarget], excluded: [] });
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: { success: true, content: 'invalid JSON' } })
+      .mockResolvedValueOnce({ result: { success: true, content: JSON.stringify({ runSlug: alternateTarget.runSlug }) } });
+
+    await runTellCommand({
+      cwd: '/project', lang: 'en', inlineText: 'Apply this to payments.', history: [],
+      sessionContext: makeSessionContext(),
+    });
+
+    expect(mockCallAIWithRetry).toHaveBeenCalledTimes(3);
+    expect(mockSelectOption).not.toHaveBeenCalled();
+    expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringContaining(alternateTarget.runSlug));
+    expect(mockIssueTellableRunningTask).toHaveBeenCalledWith('/project', alternateTarget.runSlug, 'Generated standalone instruction.');
+  });
+
+  it('shows a reason after two target resolution exceptions with empty messages', async () => {
+    mockInspectTellableRunningTasks.mockReturnValue({ tasks: [target, alternateTarget], excluded: [] });
+    mockCallAIWithRetry.mockRejectedValueOnce(new Error('')).mockRejectedValueOnce(new Error(''));
+    mockSelectOption.mockResolvedValueOnce(null);
+
+    await runTellCommand({
+      cwd: '/project', lang: 'en', inlineText: 'Apply this to payments.', history: [],
+      sessionContext: makeSessionContext(),
+    });
+
+    expect(mockCallAIWithRetry).toHaveBeenCalledTimes(2);
+    expect(mockSelectOption).toHaveBeenCalledWith(expect.stringMatching(/conversation.*recipient/i), expect.any(Array));
+    expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { kind: 'unknown candidate', response: { result: { success: true, content: JSON.stringify({ runSlug: 'unknown-run' }) } }, reason: /not among the candidates/i },
+    { kind: 'provider failure', response: { result: null, error: 'target unavailable' }, reason: /target unavailable/i },
+    { kind: 'undecided', response: { result: { success: true, content: '{"runSlug":null}' } }, reason: /conversation.*recipient/i },
+  ])('asks the user with a reason after two target resolution failures: $kind', async ({ response, reason }) => {
+    mockInspectTellableRunningTasks.mockReturnValue({ tasks: [target, alternateTarget], excluded: [] });
+    mockCallAIWithRetry.mockResolvedValueOnce(response).mockResolvedValueOnce(response);
+    mockSelectOption.mockResolvedValue(alternateTarget.runSlug);
+
+    await runTellCommand({
+      cwd: '/project', lang: 'en', inlineText: 'Apply this to payments.',
+      history: [{ role: 'user', content: 'For payments, retry declined charges.' }],
+      sessionContext: makeSessionContext(),
+    });
+
+    expect(mockCallAIWithRetry).toHaveBeenCalledTimes(3);
+    const [prompt, options] = mockSelectOption.mock.calls[0]!;
+    expect(String(prompt)).toMatch(reason);
+    expect(String(prompt)).not.toContain('Running tasks excluded from /tell');
+    expect(options).toEqual(expect.arrayContaining([expect.objectContaining({ value: alternateTarget.runSlug })]));
+    expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringContaining('payments-run'));
+    expect(mockIssueTellableRunningTask).toHaveBeenCalledWith('/project', alternateTarget.runSlug, 'Generated standalone instruction.');
   });
 
   it('reports missing generation context before asking for a recipient', async () => {
@@ -518,7 +640,7 @@ describe('runTellCommand', () => {
     );
   });
 
-  it('does not write when confirmation is cancelled and explains excluded running tasks', async () => {
+  it('does not write when confirmation is cancelled with excluded running tasks', async () => {
     mockInspectTellableRunningTasks.mockReturnValue({
       tasks: [target],
       excluded: ['local-task: not a worktree clone'],
@@ -533,12 +655,52 @@ describe('runTellCommand', () => {
       sessionContext: makeSessionContext(),
     });
 
-    expect(mockSelectOption).toHaveBeenCalledWith(
-      expect.stringContaining('local-task: not a worktree clone'),
-      expect.any(Array),
-    );
+    expect(mockSelectOption).not.toHaveBeenCalled();
+    expect(mockSelectOptionWithDefault).not.toHaveBeenCalled();
+    expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringContaining('local-task: not a worktree clone'));
+    expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringContaining(target.runSlug));
     expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
     expect(notice).toContain('was not sent');
+  });
+
+  it('shows excluded tasks before confirming an AI-selected target', async () => {
+    mockInspectTellableRunningTasks.mockReturnValue({
+      tasks: [target, alternateTarget], excluded: ['local-task: not a worktree clone'],
+    });
+    mockCallAIWithRetry.mockResolvedValueOnce({ result: { success: true, content: JSON.stringify({ runSlug: alternateTarget.runSlug }) } });
+    mockConfirmWithCancel.mockImplementationOnce(async () => {
+      expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
+      return { kind: 'value', value: true };
+    });
+
+    await runTellCommand({
+      cwd: '/project', lang: 'en', inlineText: 'Apply this to payments.', history: [],
+      sessionContext: makeSessionContext(),
+    });
+
+    expect(mockSelectOption).not.toHaveBeenCalled();
+    expect(mockSelectOptionWithDefault).not.toHaveBeenCalled();
+    expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringContaining('local-task: not a worktree clone'));
+    expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringContaining(alternateTarget.runSlug));
+    expect(mockIssueTellableRunningTask).toHaveBeenCalledWith('/project', alternateTarget.runSlug, 'Generated standalone instruction.');
+  });
+
+  it('shows excluded tasks in the manual selection after two failures', async () => {
+    mockInspectTellableRunningTasks.mockReturnValue({
+      tasks: [target, alternateTarget], excluded: ['local-task: not a worktree clone'],
+    });
+    mockCallAIWithRetry.mockResolvedValueOnce({ result: null, error: 'target unavailable' })
+      .mockResolvedValueOnce({ result: null, error: 'target unavailable' });
+    mockSelectOption.mockResolvedValueOnce(alternateTarget.runSlug);
+
+    await runTellCommand({
+      cwd: '/project', lang: 'en', inlineText: 'Apply this to payments.', history: [],
+      sessionContext: makeSessionContext(),
+    });
+
+    expect(mockSelectOption).toHaveBeenCalledWith(expect.stringContaining('local-task: not a worktree clone'), expect.any(Array));
+    expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.not.stringContaining('local-task: not a worktree clone'));
+    expect(mockIssueTellableRunningTask).toHaveBeenCalledWith('/project', alternateTarget.runSlug, 'Generated standalone instruction.');
   });
 
   it('reports that no task can receive the instruction without writing', async () => {
@@ -571,6 +733,7 @@ describe('runTellCommand', () => {
     });
 
     expect(notice).toContain('No running worktree-clone task');
+    expect(notice).not.toContain('Running tasks excluded from /tell');
     expect(mockInspectTellableRunningTasks).toHaveBeenCalledWith('/project');
     expect(mockCallAIWithRetry).not.toHaveBeenCalled();
     expect(mockSelectOption).not.toHaveBeenCalled();

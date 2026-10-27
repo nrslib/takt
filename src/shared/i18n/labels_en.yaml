@@ -413,6 +413,10 @@ tui:
     settingValueRequired: "{command} requires a value."
     imagePasteFailed: "The image could not be pasted."
   tell:
+    targetFailed: "Could not determine the recipient: {reason}"
+    targetUnresolved: "The conversation did not identify one recipient."
+    targetInvalid: "The assistant returned an invalid response."
+    targetUnknown: "The returned run is not among the candidates."
     selectPrompt: "Select the running task to tell:"
     confirm: "Send this additional instruction?\nTask: {task}\nSummary: {summary}\nWorkflow: {workflow}\nCurrent step: {step}\nRun slug: {runSlug}\nInstruction:\n{content}"
     sent: "Additional instruction sent to {task} (instruction #{instructionId})."

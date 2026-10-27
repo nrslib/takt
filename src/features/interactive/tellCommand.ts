@@ -26,7 +26,7 @@ export interface TellCommandOptions {
   readonly history: readonly ConversationMessage[];
   /** Resolved provider context for additional-instruction generation. */
   readonly sessionContext?: SessionContext;
-  /** Initial choice only; the selected value is always taken from the menu. */
+  /** Initial choice when manual selection is needed. */
   readonly preferredRunSlug?: string;
 }
 
@@ -148,6 +148,72 @@ function tellCandidateOption(target: TellableRunningTask): {
   };
 }
 
+async function resolveTellTarget(
+  options: TellCommandOptions,
+  candidates: readonly TellableRunningTask[],
+  context: SessionContext,
+): Promise<{ runSlug: string } | { reason: string }> {
+  let reason = '';
+  const system = loadTemplate('score_tell_target_prompt', options.lang);
+  const prompt = JSON.stringify({
+    conversation: options.history.map(({ role, content }) => ({ role, content })),
+    supplementalInstruction: options.inlineText,
+    candidates: candidates.map(({ task, runSlug, meta }) => ({
+      runSlug, name: task.name, summary: task.summary, workflow: meta.workflow, currentStep: meta.currentStep,
+    })),
+  });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const { result, error } = await withHandoffProgress(
+        options.showProgress === true,
+        'selectTask',
+        options.lang,
+        () => callAIWithRetry(prompt, system, [], options.cwd, {
+          ...context,
+          sessionId: undefined,
+          mcpServers: undefined,
+          taskStateMcpServers: undefined,
+          disableSessionRetry: true,
+        }, {
+          outputMode: 'silent',
+          persistSession: false,
+          permissionMode: 'readonly',
+          internalAgentIsolation: 'strict-readonly',
+        }),
+      );
+      if (result === null || !result.success) {
+        reason = error || result?.content.trim() || getLabel('tui.tell.targetUnresolved', options.lang);
+        continue;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(result.content);
+      } catch {
+        reason = getLabel('tui.tell.targetInvalid', options.lang);
+        continue;
+      }
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)
+        || Object.keys(parsed).length !== 1 || !Object.hasOwn(parsed, 'runSlug')) {
+        reason = getLabel('tui.tell.targetInvalid', options.lang);
+        continue;
+      }
+      const runSlug: unknown = (parsed as Record<string, unknown>).runSlug;
+      if (runSlug === null) {
+        reason = getLabel('tui.tell.targetUnresolved', options.lang);
+      } else if (typeof runSlug !== 'string' || runSlug.length === 0) {
+        reason = getLabel('tui.tell.targetInvalid', options.lang);
+      } else if (candidates.filter((candidate) => candidate.runSlug === runSlug).length !== 1) {
+        reason = getLabel('tui.tell.targetUnknown', options.lang);
+      } else {
+        return { runSlug };
+      }
+    } catch (error) {
+      reason = getErrorMessage(error).trim() || getLabel('tui.tell.targetUnresolved', options.lang);
+    }
+  }
+  return { reason: sanitizeTerminalText(reason) };
+}
+
 async function resolveTellContent(
   options: TellCommandOptions,
   target: TellableRunningTask,
@@ -215,29 +281,34 @@ export async function runTellCommand(options: TellCommandOptions): Promise<strin
     });
   }
 
-  const candidateOptions = candidates.map(tellCandidateOption);
-  const selectorPrompt = [
-    getLabel('tui.tell.selectPrompt', options.lang),
-    ...(exclusionNotice === undefined ? [] : [exclusionNotice]),
-  ].join('\n');
-  const preferred = options.preferredRunSlug !== undefined
-    && candidateOptions.some((candidate) => candidate.value === options.preferredRunSlug);
   let selectedRunSlug: string | null;
-  try {
-    selectedRunSlug = preferred
-      ? await selectOptionWithDefault(
-        selectorPrompt,
-        candidateOptions,
-        options.preferredRunSlug!,
-      )
-      : await selectOption(
-        selectorPrompt,
-        candidateOptions,
-      );
-  } catch (error) {
-    return getLabel('tui.errors.tellSelectionFailed', options.lang, {
-      error: sanitizeTerminalText(getErrorMessage(error)),
-    });
+  let selectionShown = false;
+  if (candidates.length === 1) {
+    selectedRunSlug = candidates[0]!.runSlug;
+  } else {
+    const resolution = await resolveTellTarget(options, candidates, options.sessionContext);
+    if ('runSlug' in resolution) {
+      selectedRunSlug = resolution.runSlug;
+    } else {
+      selectionShown = true;
+      const candidateOptions = candidates.map(tellCandidateOption);
+      const selectorPrompt = [
+        getLabel('tui.tell.targetFailed', options.lang, { reason: resolution.reason }),
+        getLabel('tui.tell.selectPrompt', options.lang),
+        ...(exclusionNotice === undefined ? [] : [exclusionNotice]),
+      ].join('\n');
+      const preferred = options.preferredRunSlug !== undefined
+        && candidateOptions.some((candidate) => candidate.value === options.preferredRunSlug);
+      try {
+        selectedRunSlug = preferred
+          ? await selectOptionWithDefault(selectorPrompt, candidateOptions, options.preferredRunSlug!)
+          : await selectOption(selectorPrompt, candidateOptions);
+      } catch (error) {
+        return getLabel('tui.errors.tellSelectionFailed', options.lang, {
+          error: sanitizeTerminalText(getErrorMessage(error)),
+        });
+      }
+    }
   }
   if (selectedRunSlug === null) {
     return getLabel('tui.errors.tellCancelled', options.lang);
@@ -252,19 +323,26 @@ export async function runTellCommand(options: TellCommandOptions): Promise<strin
 
   const contentResolution = await resolveTellContent(options, selected);
   if ('notice' in contentResolution) {
-    return contentResolution.notice;
+    return [
+      ...(!selectionShown && exclusionNotice !== undefined ? [exclusionNotice] : []),
+      contentResolution.notice,
+    ].join('\n\n');
   }
   const { content } = contentResolution;
 
   try {
-    const confirmed = await confirmWithCancel(getLabel('tui.tell.confirm', options.lang, {
+    const confirmation = getLabel('tui.tell.confirm', options.lang, {
       task: safeTellDisplayText(selected.task.name, '(unnamed task)'),
       summary: safeTellDisplayText(selected.task.summary, '(no summary)'),
       workflow: safeTellDisplayText(selected.meta.workflow, 'unknown'),
       step: safeTellDisplayText(selected.meta.currentStep, 'unknown'),
       runSlug: safeTellDisplayText(selected.runSlug, 'unknown'),
       content: safeTellContentDisplayText(content),
-    }));
+    });
+    const confirmed = await confirmWithCancel([
+      ...(!selectionShown && exclusionNotice !== undefined ? [exclusionNotice] : []),
+      confirmation,
+    ].join('\n\n'));
     if (confirmed.kind === 'cancelled' || !confirmed.value) {
       return getLabel('tui.errors.tellCancelled', options.lang);
     }
