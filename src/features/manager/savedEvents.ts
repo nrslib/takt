@@ -18,13 +18,13 @@ export function* projectManagerDisplayEvents(goal: Goal, directory: string, lang
   const project = basename(directory);
   for (const record of goal.workLog) {
     if (startupBoundary !== undefined && Date.parse(record.recordedAt) < startupBoundary) continue;
-    yield { id: JSON.stringify([goal.id, 'work-log', record.id]),
+    yield { id: JSON.stringify([directory, goal.id, 'work-log', record.id]),
       message: `${goal.id}: ${record.kind === 'patrol' ? formatPatrolSummary(record.summary) : record.summary}` };
   }
   for (const notification of goal.notifications ?? []) {
     if (notification.kind === 'question' || !policy[notification.kind]) continue;
     if (Date.parse(notification.recordedAt) < notificationStartedAt) continue;
-    yield { id: JSON.stringify([goal.id, 'notification', notification.id]),
+    yield { id: JSON.stringify([directory, goal.id, 'notification', notification.id]),
       message: formatGoalNotification(goal, notification, language, project, 'tui') };
   }
 }

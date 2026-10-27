@@ -51,8 +51,8 @@ let service: ReturnType<typeof createConversationService>;
 let client: ConversationIpcClient;
 const owner = { pid: process.pid, identity: { startTime: 'client-integration-owner' }, version: 'test', cliPath: '/test/cli.js' };
 const execute = vi.fn(async (input: ManagerTurnInput) => ({ message: 'finished', summary: null, sessionId: 'session', assignment: input.assignment }));
-function saveGoal(goal: Goal) {
-  const path = join(repository, '.takt', 'goals', goal.id);
+function saveGoal(goal: Goal, goalRepository = repository) {
+  const path = join(goalRepository, '.takt', 'goals', goal.id);
   mkdirSync(path, { recursive: true }); writeFileSync(join(path, 'goal.json'), JSON.stringify(goal));
 }
 beforeEach(async () => {
@@ -658,7 +658,7 @@ it('[SCN-SNAP-DELTA-P1] transfers only a newly appended work event and changed g
   expect.soft(received.items.filter((item) => item.kind !== 'state')).toEqual([
     { kind: 'goal', goal: { id: goal!.id, objective: goal!.objective, status: goal!.status,
       executionStatus: 'paused', repositoryDirectory: repository } },
-    { kind: 'display_event', event: { id: JSON.stringify([goal!.id, 'work-log', record.id]), message: `${goal!.id}: ${record.summary}` } },
+    { kind: 'display_event', event: { id: JSON.stringify([repository, goal!.id, 'work-log', record.id]), message: `${goal!.id}: ${record.summary}` } },
   ]);
   await vi.waitFor(() => expect(app.lastFrame()!.split(record.summary)).toHaveLength(2));
   await refreshSnapshot(client, connections[0]!);
@@ -726,6 +726,39 @@ it('[SCN-SNAP-RECONNECT-P1] reconnects the same client and screen with a complet
   } finally { released.release(); unsubscribe(); }
 });
 
+it('keeps events for identical goals in different workspace repositories across delta reads', async () => {
+  const secondRepository = join(directory, 'second-repository');
+  mkdirSync(secondRepository, { recursive: true });
+  assignment = { kind: 'workspace', workspaceId: randomUUID(), name: 'Workspace', repositoryDirectories: [repository, secondRepository] };
+  doubles.assignment.mockResolvedValue(assignment);
+  client.close();
+  client = new ConversationIpcClient(assignment, { provider: 'mock' });
+  const connections = observeIpcConnections();
+  await client.connect(); await complete();
+
+  const record = { id: randomUUID(), recordedAt: new Date().toISOString(), summary: 'Shared work' };
+  const notification = { id: randomUUID(), kind: 'progress' as const, body: 'Shared notice', recordedAt: record.recordedAt };
+  const goal = { ...goalRecord(), workLog: [record], notifications: [notification] };
+  saveGoal(goal, repository); saveGoal(goal, secondRepository);
+  const received = await refreshSnapshot(client, connections[0]!);
+  const events = received.items.flatMap((item) => item.kind === 'display_event' ? [item.event] : []);
+  expect(received.complete).toBe(true);
+  expect(events.map((event) => event.id).sort()).toEqual([repository, secondRepository].flatMap((path) => [
+    JSON.stringify([path, goal.id, 'work-log', record.id]), JSON.stringify([path, goal.id, 'notification', notification.id]),
+  ]).sort());
+  expect(client.getSnapshot().items.filter((item) => item.kind === 'goal')).toHaveLength(2);
+  expect(client.getSnapshot().items.filter((item) => item.kind === 'display_event')).toHaveLength(4);
+
+  const unchanged = await refreshSnapshot(client, connections[0]!);
+  expect(unchanged.items).toEqual([]);
+  saveGoal({ ...goal, workLog: [] }, repository);
+  const changed = await refreshSnapshot(client, connections[0]!);
+  expect(changed.items).toContainEqual({ kind: 'remove', key: JSON.stringify(['display_event', JSON.stringify([repository, goal.id, 'work-log', record.id])]) });
+  expect(client.getSnapshot().readStatus).toBe('complete');
+  expect(client.getSnapshot().items.flatMap((item) => item.kind === 'display_event' ? [item.event.id] : []).sort())
+    .toEqual(events.map((event) => event.id).filter((id) => id !== JSON.stringify([repository, goal.id, 'work-log', record.id])).sort());
+});
+
 it('[SCN-SNAP-MULTI-N1] delivers the same new work once to each attachment when the second client refreshes first', async () => {
   const [goal] = seedSnapshotGoals(1, 0, 0);
   const connections = observeIpcConnections();
@@ -740,7 +773,7 @@ it('[SCN-SNAP-MULTI-N1] delivers the same new work once to each attachment when 
     const fromSecond = await refreshSnapshot(second, connections[1]!);
     const fromFirst = await refreshSnapshot(client, connections[0]!);
 
-    const expected = [{ id: JSON.stringify([goal!.id, 'work-log', record.id]), message: `${goal!.id}: ${record.summary}` }];
+    const expected = [{ id: JSON.stringify([repository, goal!.id, 'work-log', record.id]), message: `${goal!.id}: ${record.summary}` }];
     for (const received of [fromFirst, fromSecond]) {
       expect(received.items.flatMap((item) => item.kind === 'display_event' ? [item.event] : [])).toEqual(expected);
     }
@@ -825,7 +858,7 @@ it.each(['transfer_data', 'transfer_end'] as const)('releases the read and retri
 
   expect(received.items).toContainEqual({ kind: 'goal', goal: { id: goal!.id, objective: goal!.objective, status: goal!.status,
     executionStatus: 'paused', repositoryDirectory: repository } });
-  expect(received.items).toContainEqual({ kind: 'display_event', event: { id: JSON.stringify([goal!.id, 'work-log', record.id]),
+  expect(received.items).toContainEqual({ kind: 'display_event', event: { id: JSON.stringify([repository, goal!.id, 'work-log', record.id]),
     message: `${goal!.id}: ${record.summary}` } });
   expect(displayedInquiries(client)).toEqual([previousInquiries[1]]);
   expect(displayedGoals(client)).toHaveLength(2);

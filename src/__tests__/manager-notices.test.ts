@@ -41,7 +41,7 @@ it('filters notifications for each assigned repository without changing event id
   for await (const item of source) ids.push(item.id);
   const expected = repositories.flatMap((directory) => goals.flatMap((goal) => goal.notifications
     .filter((notification) => notification.kind !== 'custom' || directory === '/first')
-    .map((notification) => JSON.stringify([goal.id, 'notification', notification.id]))));
+    .map((notification) => JSON.stringify([directory, goal.id, 'notification', notification.id]))));
   expect(ids.sort()).toEqual(expected.sort());
 });
 
@@ -54,7 +54,7 @@ it('projects sequential work logs and enabled notices with exact stable IDs and 
   const values = [];
   for await (const event of iterateTestDisplayEvents(assignment, 'en', new Map([['/first', startedAt]]), startedAt + 2)) values.push(event);
   expect(values).toEqual([
-    { id: JSON.stringify([goal.id, 'work-log', record.id]), message: goal.id + ': Old work' },
+    { id: JSON.stringify(['/second', goal.id, 'work-log', record.id]), message: goal.id + ': Old work' },
   ]);
 });
 
@@ -129,7 +129,7 @@ describe('saved manager display events', () => {
     const original = structuredClone(goal);
     const added = [...projectManagerDisplayEvents(goal, '/second', 'en', undefined, startedAt, policy)];
     expect(added).toEqual([
-      { id: JSON.stringify([goal.id, 'work-log', record.id]), message: `${goal.id}: ${record.summary}` },
+      { id: JSON.stringify(['/second', goal.id, 'work-log', record.id]), message: `${goal.id}: ${record.summary}` },
     ]);
     const initial = [...projectManagerDisplayEvents(goal, '/second', 'en', startedAt, startedAt, policy)];
     expect(initial).toEqual([]);
@@ -144,8 +144,8 @@ describe('saved manager display events', () => {
     const before = structuredClone(goal);
     const result = [...projectManagerDisplayEvents(goal, '/fixture', 'en', startedAt, startedAt, policy)];
     expect(result).toEqual([
-      ...workLog.slice(1).map((record) => ({ id: JSON.stringify([goal.id, 'work-log', record.id]), message: `${goal.id}: ${record.summary}` })),
-      ...notifications.slice(1).map((notification) => ({ id: JSON.stringify([goal.id, 'notification', notification.id]),
+      ...workLog.slice(1).map((record) => ({ id: JSON.stringify(['/fixture', goal.id, 'work-log', record.id]), message: `${goal.id}: ${record.summary}` })),
+      ...notifications.slice(1).map((notification) => ({ id: JSON.stringify(['/fixture', goal.id, 'notification', notification.id]),
         message: formatGoalNotification(goal, notification, 'en', 'fixture', 'tui') })),
     ]);
     expect(goal).toEqual(before);
@@ -169,7 +169,7 @@ describe('saved manager display events', () => {
     const expected = [[first, first.notifications![0]!], [first, first.notifications![1]!],
       [second, second.notifications![0]!], [second, second.notifications![1]!]] as const;
     expect(result).toEqual(expected.map(([goal, notification]) => ({
-      id: JSON.stringify([goal.id, 'notification', notification.id]),
+      id: JSON.stringify([goal === first ? '/first' : '/second', goal.id, 'notification', notification.id]),
       message: formatGoalNotification(goal, notification, 'en', goal === first ? 'first' : 'second', 'tui'),
     })));
     expect([first, second]).toEqual(before);
