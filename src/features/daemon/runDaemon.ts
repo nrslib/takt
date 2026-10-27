@@ -132,6 +132,8 @@ export async function runDaemon(): Promise<void> {
       slack ??= await createDaemonSlackPorts({ projects, configDirectory: globalConfigDirectory, input: conversations,
         tokens: appToken && botToken ? { appToken, botToken } : undefined, signal: controller.signal });
       if (controller.signal.aborted) break;
+      await slack.pollInquiries();
+      if (controller.signal.aborted) break;
       log.debug('Daemon projects', { projects });
       for (const cwd of projectWork.keys()) {
         if (!projects.includes(cwd)) projectWork.delete(cwd);

@@ -505,6 +505,12 @@ manager:
     approval: "Approval"
     operation_request: "Operation request"
   answerHint: "Press Ctrl+R to select an inquiry and answer"
+  slack:
+    replyHint: "Use a button to choose an answer, or reply in this thread for free text."
+    permissionTitle: "Confirm permission"
+    permissionSentence: "Permission sentence"
+    confirm: "Confirm"
+    cancel: "Cancel"
   answerFreeText: "Free text"
   answerChoiceHint: "↑↓ Choose / Enter Select / Esc Back"
   answerPrompt: "Enter your answer"

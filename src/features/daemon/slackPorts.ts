@@ -4,10 +4,18 @@ import { createSlackClient, type SlackClient, type SlackEvent } from '../../infr
 import { createLogger } from '../../shared/utils/debug.js';
 import { createSlackConversationPort } from '../manager/slackConversationPort.js';
 import type { ConversationInput } from '../manager/conversationPort.js';
+import { withInquiryLock } from '../../infra/goals/inquiry-lock.js';
+import { iteratePendingInquiries } from '../../infra/goals/pending-inquiries.js';
+import { resolveGitRepositoryDirectory } from '../../infra/task/repositoryDirectory.js';
+import { slackInquiryKey } from '../../infra/slack/inquiryBindings.js';
+import { conversationId } from '../../infra/conversations/identity.js';
+import { resolveCurrentManagerAssignment } from '../manager/assignment.js';
+import { SLACK_PERMISSION_BLOCK, SLACK_PERMISSION_INPUT, SLACK_PERMISSION_CALLBACK } from '../manager/slackInquiryBlocks.js';
 
 const log = createLogger('slack');
 type SlackPort = ReturnType<typeof createSlackConversationPort>;
-interface RepositoryPort { allowedUserIds: readonly string[]; port: Pick<SlackPort, 'receive'> }
+interface RepositoryPort { allowedUserIds: readonly string[];
+  port: Pick<SlackPort, 'receive' | 'receiveAction' | 'modalEndpoint' | 'receiveModal'> }
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -25,8 +33,18 @@ export async function dispatchSlackEvent(event: SlackEvent, ports: ReadonlyMap<s
   const message = event.type === 'events_api' ? body.event : body;
   if (!isRecord(message)) return;
   const teamId = event.type === 'events_api' ? body.team_id : isRecord(body.team) ? body.team.id : undefined;
-  const channelId = event.type === 'events_api' ? message.channel : isRecord(body.channel) ? body.channel.id : undefined;
+  let channelId = event.type === 'events_api' ? message.channel : isRecord(body.channel) ? body.channel.id : undefined;
   const userId = event.type === 'events_api' ? message.user : isRecord(body.user) ? body.user.id : undefined;
+  const view = isRecord(body.view) ? body.view : undefined;
+  const metadata = view?.private_metadata;
+  if (event.type === 'interactive' && (body.type === 'view_submission' || body.type === 'view_closed')) {
+    if (view?.callback_id !== SLACK_PERMISSION_CALLBACK || typeof metadata !== 'string') return;
+    const endpoints = [...ports.values()].map(({ port }) => port.modalEndpoint(metadata)).filter((endpoint) => endpoint !== undefined);
+    if (endpoints.length !== 1) return;
+    const endpoint = endpoints[0]!;
+    if (endpoint.teamId !== teamId || endpoint.userId !== userId || (channelId !== undefined && channelId !== endpoint.channelId)) return;
+    channelId = endpoint.channelId;
+  }
   if (typeof teamId !== 'string' || typeof channelId !== 'string' || typeof userId !== 'string') return;
   const selected = ports.get(channelId);
   if (selected === undefined || !selected.allowedUserIds.includes(userId)) return;
@@ -41,7 +59,28 @@ export async function dispatchSlackEvent(event: SlackEvent, ports: ReadonlyMap<s
       await selected.port.receive({ teamId, channelId, userId, parentTs }, message.text);
       return;
     }
-    case 'interactive': return;
+    case 'interactive': {
+      if (body.type === 'block_actions') {
+        if (!isRecord(body.container) || body.container.type !== 'message' || body.container.channel_id !== channelId
+          || typeof body.container.message_ts !== 'string' || !isRecord(body.message) || body.message.ts !== body.container.message_ts
+          || !Array.isArray(body.actions) || body.actions.length !== 1) return;
+        const action: unknown = body.actions[0];
+        if (!isRecord(action) || action.type !== 'button' || typeof action.action_id !== 'string' || typeof action.value !== 'string') return;
+        await selected.port.receiveAction({ teamId, channelId, userId, parentTs: body.container.message_ts }, action.action_id,
+          action.value, typeof body.trigger_id === 'string' ? body.trigger_id : undefined);
+      } else if (view !== undefined && typeof metadata === 'string' && (body.type === 'view_submission' || body.type === 'view_closed')) {
+        const endpoint = selected.port.modalEndpoint(metadata);
+        if (endpoint === undefined) return;
+        const state = isRecord(view.state) ? view.state : undefined;
+        const values = isRecord(state?.values) ? state.values : undefined;
+        const block = values !== undefined && Object.hasOwn(values, SLACK_PERMISSION_BLOCK) ? values[SLACK_PERMISSION_BLOCK] : undefined;
+        const input = isRecord(block) && Object.hasOwn(block, SLACK_PERMISSION_INPUT) ? block[SLACK_PERMISSION_INPUT] : undefined;
+        const sentence = body.type === 'view_submission' && isRecord(input) && input.type === 'plain_text_input' && typeof input.value === 'string'
+          ? input.value : undefined;
+        await selected.port.receiveModal(endpoint, metadata, sentence);
+      }
+      return;
+    }
     default: return;
   }
 }
@@ -53,18 +92,52 @@ export async function createDaemonSlackPorts(options: {
   signal?: AbortSignal;
 }) {
   let client: SlackClient | undefined;
-  const ports = new Map<string, RepositoryPort & { port: SlackPort }>();
+  const ports = new Map<string, RepositoryPort & { repositoryDirectory: string; port: SlackPort }>();
   let listening = false;
   let stopped = false;
+  let polling: Promise<void> | undefined;
+  let signalStop!: () => void;
+  const stopping = new Promise<void>((resolve) => { signalStop = resolve; });
+  const seen = new Map<string, Set<string>>();
+  const scanInquiries = async (initial: boolean): Promise<void> => {
+      for (const { port, repositoryDirectory: configured } of ports.values()) {
+        if (stopped) break;
+        const repositoryDirectory = await resolveGitRepositoryDirectory(configured);
+        const assignment = await resolveCurrentManagerAssignment({ kind: 'repository', repositoryDirectory }, options.configDirectory);
+        const known = seen.get(configured) ?? new Set<string>();
+        seen.set(configured, known);
+        for await (const inquiry of iteratePendingInquiries(options.configDirectory, assignment)) {
+          if (stopped) break;
+          if (inquiry.goalId !== null && inquiry.repositoryDirectory !== repositoryDirectory) continue;
+          const owner = assignment.kind === 'workspace' ? { kind: 'workspace' as const, workspaceId: assignment.workspaceId }
+            : { kind: 'repository' as const, repositoryDirectory: assignment.repositoryDirectory };
+          const target = inquiry.goalId === null ? { goalId: null, owner }
+            : { goalId: inquiry.goalId, repositoryDirectory: inquiry.repositoryDirectory };
+          const key = slackInquiryKey(target, inquiry.question.id);
+          if (known.has(key)) continue;
+          known.add(key);
+          if (!initial) await port.delivery.deliver(conversationId(assignment), { kind: 'inquiry', target, question: inquiry.question },
+            { revision: 0, stateSequence: 0, operationId: null });
+        }
+      }
+  };
+  const pollInquiries = (): Promise<void> => {
+    if (polling !== undefined) return polling;
+    if (stopped || !listening) return Promise.resolve();
+    polling = scanInquiries(false).catch(() => { log.error('Cannot poll Slack inquiries'); }).finally(() => { polling = undefined; });
+    return polling;
+  };
   const stopAccepting = (): void => {
     stopped = true;
     listening = false;
+    signalStop();
     client?.stopAccepting();
     for (const { port } of ports.values()) port.stopAccepting();
   };
   const close = async (): Promise<void> => {
     options.signal?.removeEventListener('abort', stopAccepting);
     stopAccepting();
+    await polling;
     for (const { port } of ports.values()) port.close();
     ports.clear();
     await client?.close();
@@ -91,12 +164,18 @@ export async function createDaemonSlackPorts(options: {
       }
       const config = group[0]!;
       client ??= (options.clientFactory ?? createSlackClient)(options.tokens);
-      ports.set(channelId, { allowedUserIds: config.allowedUserIds,
+      ports.set(channelId, { allowedUserIds: config.allowedUserIds, repositoryDirectory: config.repositoryDirectory,
         port: createSlackConversationPort({ ...config, configDirectory: options.configDirectory, input: options.input, client }) });
     }
     if (client !== undefined) {
       try {
-        await client.start(async (event) => { if (!stopped) await dispatchSlackEvent(event, ports); });
+        await withInquiryLock(options.configDirectory, async () => {
+          if (stopped) return;
+          await Promise.race([stopping, (async () => {
+            await client!.start(async (event) => { if (!stopped) await dispatchSlackEvent(event, ports); });
+            if (!stopped) await scanInquiries(true);
+          })()]);
+        });
         listening = !stopped;
       } catch {
         log.error('Cannot start Slack listener');
@@ -104,5 +183,5 @@ export async function createDaemonSlackPorts(options: {
       }
     }
   }
-  return { get listening() { return listening; }, stopAccepting, close };
+  return { get listening() { return listening; }, pollInquiries, stopAccepting, close };
 }

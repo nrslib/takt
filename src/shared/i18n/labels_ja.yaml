@@ -505,6 +505,12 @@ manager:
     approval: "承認"
     operation_request: "操作依頼"
   answerHint: "Ctrl+R で問い合わせを選択して回答"
+  slack:
+    replyHint: "選択肢はボタンで、自由記述はこの投稿のスレッドへ返信してください。"
+    permissionTitle: "許可する一文の確認"
+    permissionSentence: "許可する一文"
+    confirm: "確定"
+    cancel: "キャンセル"
   answerFreeText: "自由記述"
   answerChoiceHint: "↑↓ 選択 / Enter 決定 / Esc 戻る"
   answerPrompt: "回答を入力してください"
