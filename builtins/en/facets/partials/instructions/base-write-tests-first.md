@@ -11,6 +11,7 @@ Refer only to reports in the Report Directory shown in Workflow Context. Do not 
 - Decide whether to create, update, or delete tests from observable contracts, and follow test-related judgment criteria supplied by the task
 - Failures caused by not-yet-implemented production code are expected at this stage; fix test defects that would remain afterward
 
-{{include:instructions/post-edit-self-scan}}
-
-In this test-only step, do not make the self-scan's exhaustive inspection and execution of existing mocks and test doubles a condition of completion. Carry any unverified scope forward to post-implementation verification. Run the tests you created or changed, and fix defects in the tests themselves.
+**Post-edit checks:**
+- Check references and imports made unused by the test changes, and the dependency direction of added or changed imports
+- Run created or changed tests through the project's test entrypoint and fix defects in the tests themselves. If changed integration tests require classification or wiring checks, run those too
+- There is no need to inspect or run every existing mock and test double. Carry any unresolved matters forward to post-implementation verification

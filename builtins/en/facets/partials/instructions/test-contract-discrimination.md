@@ -1,7 +1,7 @@
 **Procedure:**
 1. Identify the observable behavior to change and the existing contracts to preserve
-2. When updating or deleting an existing test, record the reason based on observable contracts and the test-related criteria supplied by the task. Do not require mapping every existing assertion as a condition of completion
+2. When updating or deleting an existing test, record the reason based on observable contracts and the test-related criteria supplied by the task. There is no need to map every existing assertion
 3. Choose the smallest inputs or states that distinguish the intended behavior from plausible near-miss implementations. Do not invent persistence, lifecycle, integration, or concurrency axes outside the contract
 4. Create the smallest tests that observe the contract directly. Choose an integration test only when a real primary path crosses a unit boundary
 5. In this test-first step, run the tests and confirm they fail because the production behavior is not implemented, distinguishing that failure from defects in test setup, fixtures, or assertions. Record the post-implementation condition that the intended behavior must pass while the selected near-misses fail for the intended reason. Run mutation checks only after implementation through an existing isolated runner on a disposable copy, never in this step
-6. Complete this step when the necessary tests are written and confirmed to fail due to unimplemented behavior. Carry any unresolved existing-test matters forward to implementation and review. Record the input or state and assertion that rejects each near-miss, any uncovered reason, and the execution result
+6. Record the input or state and assertion that rejects each near-miss, any uncovered reason, and the execution result. Once the necessary tests are written and their failures due to unimplemented behavior are confirmed, carry uninspected existing tests forward to post-implementation verification without mapping them all
