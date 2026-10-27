@@ -392,6 +392,32 @@ describe('shipped development completion and remediation routes', () => {
     },
   );
 
+  it.each(variants(remediations))('$language/$name aborts repeated plan revisions when the monitor selects abort', async ({ language, name }) => {
+    const config = load(language, name);
+    const fix = config.steps.find(step => step.name === 'fix');
+    const replan = config.steps.find(step => step.name === 'fix-replan');
+    const monitor = config.loopMonitors?.find(item => item.cycle.length === 1 && item.cycle[0] === 'fix');
+    const fixRule = fix?.rules?.[1];
+    const replanRule = replan?.rules?.[0];
+    const abortRule = monitor?.judge.rules.find(rule => rule.next === 'ABORT');
+    if (!monitor || fixRule?.condition.kind !== 'semantic' || replanRule?.condition.kind !== 'semantic'
+      || abortRule?.condition.kind !== 'semantic') throw new Error('Missing fix revision or monitor abort rules');
+    start(config, 'fix');
+    if (!engine) throw new Error('Missing engine');
+    const responses = [];
+    for (let cycle = 0; cycle < monitor.threshold; cycle++) {
+      responses.push(makeResponse({ content: 'Product repair is incomplete and its plan needs revision.' }));
+      responses.push(makeResponse({ content: 'Repair plan revised.' }));
+      vi.mocked(runStatusJudgmentPhase).mockResolvedValueOnce({ label: fixRule.condition.label, method: 'phase3_tag' });
+      vi.mocked(runStatusJudgmentPhase).mockResolvedValueOnce({ label: replanRule.condition.label, method: 'phase3_tag' });
+    }
+    responses.push(makeResponse({ content: 'No feasible path remains.' }));
+    vi.mocked(runStatusJudgmentPhase).mockResolvedValueOnce({ label: abortRule.condition.label, method: 'phase3_tag' });
+    mockRunAgentSequence(responses);
+    const result = await engine.run();
+    expect(result.status).toBe('aborted');
+  });
+
   it.each(variants(remediations))('$language/$name monitors repeated fix-plan revisions', ({ language, name }) => {
     const config = load(language, name);
     const detector = new CycleDetector(config.loopMonitors);

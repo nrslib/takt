@@ -1,5 +1,5 @@
 // promptfoo prompt function: fix ループ収束規則の挙動評価。
-// builtins/ja の実ファセットを実行時に組み立ててロール別ヘッダを作り、
+// builtins の実ファセットを実行時に組み立ててロール別ヘッダを作り、
 // cases/fix-loop-convergence/<scenario>.md のシナリオ本文と合成する。
 // ファセットを変更すると、この評価は変更後の文面をそのまま対象にする。
 // 縮約構成の独立評価として、runtime の project → user → builtin resolver は使わず builtin 層だけを対象にする。
@@ -9,9 +9,10 @@ import { fileURLToPath } from 'node:url';
 import { expandFacetIncludes } from '#faceted-prompting/cli/facet-includes';
 
 const EVAL_DIR = dirname(fileURLToPath(import.meta.url));
-const FACETS_ROOT = join(EVAL_DIR, '../builtins/ja/facets');
 
-function expandFacet(relativePath) {
+
+function expandFacet(relativePath, language) {
+  const FACETS_ROOT = join(EVAL_DIR, '../builtins', language, 'facets');
   const body = readFileSync(join(FACETS_ROOT, relativePath), 'utf-8');
   return expandFacetIncludes({
     body,
@@ -43,6 +44,8 @@ const ROLES = {
 };
 
 export default async function ({ vars }) {
+  const language = vars.language ?? 'ja';
+  if (!['ja', 'en'].includes(language)) throw new Error(`Unknown language: ${language}`);
   const role = ROLES[vars.role];
   if (role === undefined) throw new Error(`Unknown role: ${vars.role}`);
   const scenario = readFileSync(
@@ -51,11 +54,15 @@ export default async function ({ vars }) {
   );
   const sections = [
     scenario,
-    role.intro,
+    language === 'en' && vars.role === 'fix'
+      ? 'You are the coder agent executing the fix step in a TAKT workflow. Follow the entire instruction below.'
+      : role.intro,
     '--- INSTRUCTION（全文） ---',
-    expandFacet(role.instruction),
+    expandFacet(role.instruction, language),
     '--- INSTRUCTION ここまで ---',
-    ...role.afterInstruction,
+    ...(language === 'en' && vars.role === 'fix'
+      ? ['This is a dry-run evaluation: actual code edits and commands are unavailable. Describe edits at the level of a plan. Do not cite this restriction as a work result or as the reason for your decision. If the approach is executable within the repair boundary, treat the edits and relevant tests as completed. Follow the instruction and required output. Referenced reports are supplied in the scenario.']
+      : role.afterInstruction),
   ];
   return sections.join('\n\n');
 }

@@ -49,3 +49,35 @@ tests:
         value: 'JUDGEMENT: introduced_violation=検出'
       - type: icontains
         value: 'INV-BUDGET-50'
+  - description: 製品修正が完了し承認者のいない外部の後始末だけが残る
+    vars: { role: fix, scenario: external-cleanup-complete }
+    assert:
+      - type: llm-rubric
+        value: |
+          修正報告を評価する。製品修正と必要な検証が完了したことを認め、外部ファイルの後始末が残っていることを報告し、それだけを理由に計画の見直しや承認待ちに進まない場合に合格とする。外部ファイルを削除したと偽って報告した場合も不合格とする。
+      - type: javascript
+        value: file://../../asserts/external-cleanup-phase3.mjs
+  - description: 外部の後始末とともに製品修正が未完了である
+    vars: { role: fix, scenario: external-cleanup-incomplete }
+    assert:
+      - type: llm-rubric
+        value: |
+          修正報告を評価する。未完了の製品修正を識別して未完了と報告し、外部の後始末だけが残る場合と同様に修正完了と扱わない場合に合格とする。
+      - type: javascript
+        value: file://../../asserts/external-cleanup-phase3.mjs
+  - description: '外部 cleanup remains after product repair (English)'
+    vars: { role: fix, language: en, scenario: external-cleanup-complete-en }
+    assert:
+      - type: llm-rubric
+        value: |
+          Pass only if the report recognizes the product repair and required verification are complete, reports the remaining external file, and does not require plan revision or approval solely because of that cleanup. Reject a false claim that the external file was deleted.
+      - type: javascript
+        value: file://../../asserts/external-cleanup-phase3.mjs
+  - description: '外部 cleanup and product repair are incomplete (English)'
+    vars: { role: fix, language: en, scenario: external-cleanup-incomplete-en }
+    assert:
+      - type: llm-rubric
+        value: |
+          Pass only if the report identifies the unfinished product repair and does not treat it as complete merely because external cleanup is outstanding.
+      - type: javascript
+        value: file://../../asserts/external-cleanup-phase3.mjs
