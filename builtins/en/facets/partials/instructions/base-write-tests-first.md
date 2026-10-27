@@ -12,3 +12,5 @@ Refer only to reports in the Report Directory shown in Workflow Context. Do not 
 - Failures caused by not-yet-implemented production code are expected at this stage; fix test defects that would remain afterward
 
 {{include:instructions/post-edit-self-scan}}
+
+In this test-only step, do not make the self-scan's exhaustive inspection and execution of existing mocks and test doubles a condition of completion. Carry any unverified scope forward to post-implementation verification. Run the tests you created or changed, and fix defects in the tests themselves.
