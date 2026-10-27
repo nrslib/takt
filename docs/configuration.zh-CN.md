@@ -464,6 +464,79 @@ TAKT_ALLOY_CONCURRENCY=1 TAKT_ALLOY_HEAP=2g TAKT_ALLOY_STACK=128m takt
 
 除了配置 key 覆盖外，`TAKT_NOTIFY_WEBHOOK` 设置 Slack Incoming Webhook URL。设置后，TAKT 会在 pipeline 完成和 `takt run` 任务批次结束时发送 Slack 通知。
 
+## 通过 Slack 与 manager 对话
+
+通过 Slack 的 Socket Mode，可以与 manager 对话，无需提供公开 URL。对话回复和询问的回答使用下述 Slack App；“目标已完成”等通知仍通过 `TAKT_NOTIFY_WEBHOOK` 配置的 Incoming Webhook 发送。两者可以同时使用。
+
+### 创建 Slack App
+
+1. 在 Slack 的 App 创建页面选择 **From an app manifest**，选定工作区，然后粘贴以下 YAML：
+
+   ```yaml
+   display_information:
+     name: TAKT manager
+   features:
+     bot_user:
+       display_name: TAKT manager
+       always_online: true
+   oauth_config:
+     scopes:
+       bot:
+         - chat:write
+         - channels:history
+         - groups:history
+   settings:
+     event_subscriptions:
+       bot_events:
+         - message.channels
+         - message.groups
+     interactivity:
+       is_enabled: true
+     socket_mode_enabled: true
+   ```
+
+2. 将 App 安装到工作区，在 **OAuth & Permissions** 中复制机器人令牌（`xoxb-…`）。
+3. 在 **Basic Information → App-Level Tokens** 中创建带有 `connections:write` 权限的 App-Level Token，并复制该令牌（`xapp-…`）。
+4. 在用于对话的频道中执行 `/invite @TAKT manager`，邀请机器人加入。
+5. 在 Slack 的频道详情中查看频道 ID。打开每位获准用户的个人资料，选择“复制成员 ID”以获取用户 ID。
+
+### 配置和启动
+
+在仓库的 `.takt/config.yaml` 中指定一个对话频道，以及允许发送消息和操作按钮的 Slack 用户：
+
+```yaml
+manager:
+  slack:
+    channel_id: C0123ABCD
+    allowed_user_ids: [U0AAAAAA]
+```
+
+`manager.slack` 仅支持仓库配置，不能写入全局 `~/.takt/config.yaml`。不要在 `manager.slack` 中填写令牌；配置验证会拒绝令牌字段。
+
+仓库的 `.takt/config.yaml` 可能纳入版本控制并与他人共享。修改 `manager.slack.allowed_user_ids` 会改变哪些 Slack 用户可以向 manager 发送输入。启动 daemon 前，请检查仓库配置的变更，并仅使用你信任的配置。
+
+在启动 daemon 的 shell 中设置两个令牌环境变量，然后使用 `takt manager` 或 `takt daemon` 启动。例如：
+
+```bash
+export TAKT_SLACK_APP_TOKEN='xapp-...'
+export TAKT_SLACK_BOT_TOKEN='xoxb-...'
+takt manager
+```
+
+`TAKT_SLACK_APP_TOKEN` 使用带有 `connections:write` 权限的 App-Level Token，`TAKT_SLACK_BOT_TOKEN` 使用机器人令牌。daemon 读取后会从自身环境中删除这两个变量，避免 provider 和工具子进程继承令牌。没有自动启动机制，需要使用上述命令之一启动 daemon。
+
+只要有仓库配置了 Slack，且两个令牌均已设置，即使没有任务，daemon 也会继续监听。未配置 Slack 或缺少任一令牌时，daemon 仍按原有规则在空闲时退出。如果两个仓库配置了同一频道，两者的 Slack 都会被禁用，原因会写入 `~/.takt/logs/daemon.log`。
+
+### 对话和回答询问
+
+- 在配置的频道中发消息，manager 会在该消息的消息列中回复；之后请在同一消息列继续交流。该仓库的所有对话消息列都连接到同一个 manager 对话，并与 TUI 共享。回复只发送到发言所在的消息列；对 TUI 发言的回复不会发送到 Slack。
+- 不响应其他频道中的消息、发给机器人的私信，以及不在 `allowed_user_ids` 中的用户发送的消息或按钮操作。
+- 对话正在处理时发送的消息会收到“处理中”的回复，不会排队或执行。请在处理结束后重新发送。
+- 每条询问（问题、审批或操作请求）都会在配置的频道中单独发布为新消息，不放入已有消息列。通过按钮选择允许或拒绝、审批范围以及回答选项。如果选择比“仅本次”更广的审批范围，按钮会打开对话框；编辑建议的权限语句并确认后，该语句会追加到权限 Markdown 中。
+- 自由文本回答应回复到对应询问的消息列。当消息与询问的关联有效时，回复会作为回答处理，不会进入 manager 对话。回答会以 `slack` 为来源保存。
+- Slack 连接时已经待回答的询问不会发布到 Slack，请在 TUI 中按 `Ctrl+R` 回答。连接后出现的新询问每条只发布一次，不会重发。如果消息与询问的关联保存失败或无法读取，该消息列中的回复会作为普通对话处理，不会成为回答。
+- “目标已完成”等通知不会通过对话连接发布，仍由 `TAKT_NOTIFY_WEBHOOK` 发送。
+
 ## manager 敏感文件设置
 
 通过全局 `~/.takt/config.yaml` 或项目 `.takt/config.yaml` 中的 `manager.sensitive_paths`，可以添加即使位于负责仓库内也需要交给 manager 权限判断 agent 的文件和目录。

@@ -463,6 +463,79 @@ TAKT_ALLOY_CONCURRENCY=1 TAKT_ALLOY_HEAP=2g TAKT_ALLOY_STACK=128m takt
 
 設定キー上書きとは別に、`TAKT_NOTIFY_WEBHOOK` には Slack Incoming Webhook URL を設定できます。設定すると、pipeline 完了時と `takt run` のタスクバッチ完了時（run summary）に Slack へ通知が送信されます。manager の有効なゴール通知にも同じ Webhook を使用します。
 
+## Slack で manager と会話する
+
+Slack の Socket Mode を使うと、公開 URL を用意せずに manager と会話できます。会話の返事と問い合わせへの回答には、以下の Slack App を使います。「完成しました」などの通知は、引き続き `TAKT_NOTIFY_WEBHOOK` に設定した Incoming Webhook で届きます。会話と通知は併用できます。
+
+### Slack App を作る
+
+1. Slack の App 作成画面で **From an app manifest** を選び、ワークスペースを指定して次の YAML を貼り付けます。
+
+   ```yaml
+   display_information:
+     name: TAKT manager
+   features:
+     bot_user:
+       display_name: TAKT manager
+       always_online: true
+   oauth_config:
+     scopes:
+       bot:
+         - chat:write
+         - channels:history
+         - groups:history
+   settings:
+     event_subscriptions:
+       bot_events:
+         - message.channels
+         - message.groups
+     interactivity:
+       is_enabled: true
+     socket_mode_enabled: true
+   ```
+
+2. App をワークスペースにインストールし、**OAuth & Permissions** でボット用トークン（`xoxb-…`）をコピーします。
+3. **Basic Information → App-Level Tokens** で、スコープ `connections:write` を付けた App-Level Token を作り、コピーします（`xapp-…`）。
+4. 会話するチャンネルで `/invite @TAKT manager` を実行し、ボットを招待します。
+5. Slack のチャンネル詳細でチャンネル ID を確認します。許可する各ユーザーのプロフィールから「メンバー ID をコピー」を選び、ユーザー ID を取得します。
+
+### 設定して起動する
+
+リポジトリの `.takt/config.yaml` に、会話する1つのチャンネルと、発言・ボタン操作を受け付ける Slack ユーザーを指定します。
+
+```yaml
+manager:
+  slack:
+    channel_id: C0123ABCD
+    allowed_user_ids: [U0AAAAAA]
+```
+
+`manager.slack` はリポジトリ専用で、グローバルの `~/.takt/config.yaml` には書けません。トークンを `manager.slack` に書くと設定の検証で拒否されます。
+
+リポジトリの `.takt/config.yaml` は、バージョン管理され、共有される場合があります。`manager.slack.allowed_user_ids` を変更すると、Slack から manager に入力できるユーザーが変わります。daemon を起動する前にリポジトリ設定の変更を確認し、信頼できる設定を使ってください。
+
+daemon を起動するシェルで2つのトークンを環境変数に設定し、`takt manager` または `takt daemon` で起動します。たとえば次のように実行します。
+
+```bash
+export TAKT_SLACK_APP_TOKEN='xapp-...'
+export TAKT_SLACK_BOT_TOKEN='xoxb-...'
+takt manager
+```
+
+`TAKT_SLACK_APP_TOKEN` は `connections:write` を持つ App-Level Token、`TAKT_SLACK_BOT_TOKEN` はボット用トークンです。daemon は読み取った後に両変数を自身の環境から削除し、provider やツールの子プロセスに渡らないようにします。自動起動の仕組みはないため、上記のどちらかのコマンドで daemon を起動してください。
+
+Slack を設定したリポジトリがあり、両方のトークンがそろっていれば、仕事がなくても daemon は止まらず待ち受けます。Slack の設定がない場合や、どちらかのトークンがない場合は、従来どおり仕事がないときに終了します。同じチャンネルを2つのリポジトリが設定すると、両方の Slack を無効にし、理由を `~/.takt/logs/daemon.log` に記録します。
+
+### 会話と問い合わせへの回答
+
+- 設定したチャンネルに投稿すると、その投稿のスレッドに返事が届きます。以後はそのスレッドで会話を続けてください。どの会話スレッドも、そのリポジトリの manager の同じ会話につながり、TUI とも共有します。返事は発言したスレッドにだけ届き、TUI での発言への返事は Slack に出ません。
+- 別のチャンネル、ボットへの DM、`allowed_user_ids` にない人の発言やボタン操作には反応しません。
+- 処理中の発言には「処理中」と返し、後から実行するための保存もしません。処理が終わってから、もう一度送ってください。
+- 問い合わせ（質問・承認・操作依頼）は、設定したチャンネルにスレッド外の新しい投稿として1件ずつ届きます。承認の許可・拒否と範囲、選択肢はボタンで答えます。「今回だけ」より広い範囲で承認するときは、ボタンで開くモーダルで提案された許可の一文を編集して確定すると、許可の Markdown にその一文が追記されます。
+- 自由記述の回答は、その問い合わせの投稿のスレッドに返信します。投稿と問い合わせの対応が有効な場合、返信は会話ではなく回答として扱われます。回答は出どころ `slack` として保存されます。
+- Slack 接続時にすでに未回答の問い合わせは Slack に投稿されません。TUI の `Ctrl+R` で回答してください。接続後の新しい問い合わせは1件につき1回投稿し、再送しません。投稿と問い合わせの対応を保存できなかった場合や読み取れない場合、そのスレッドへの返信は回答にならず、通常の会話として扱われます。
+- 「完成しました」などの知らせは、会話の接続からは投稿しません。引き続き `TAKT_NOTIFY_WEBHOOK` で届きます。
+
 ## manager の秘密ファイル設定
 
 グローバル `~/.takt/config.yaml` またはプロジェクト `.takt/config.yaml` の `manager.sensitive_paths` で、担当リポジトリ内でも判断役へ渡すファイルとディレクトリを追加できます。
