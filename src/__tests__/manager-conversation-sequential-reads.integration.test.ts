@@ -6,7 +6,7 @@ import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { GoalStore } from '../infra/goals/store.js';
 import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
 import { iteratePendingInquiries, listPendingInquiries } from '../infra/goals/pending-inquiries.js';
-import { iterateManagerNotices, iterateManagerDisplayEvents } from '../features/manager/savedEvents.js';
+import { iterateTestDisplayEvents } from './helpers/manager-display-items.js';
 import { createInquiry } from '../infra/goals/inquiry.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import type { Goal } from '../infra/goals/schema.js';
@@ -56,25 +56,7 @@ it('retains inquiry ordering and full values without either goal or standalone a
   expect(list).not.toHaveBeenCalled(); expect(standalone).not.toHaveBeenCalled();
 });
 
-it('preserves notice policy, equal-time ordering and complete multiline bodies', async () => {
-  mkdirSync(join(repository, '.takt'), { recursive: true });
-  writeFileSync(join(repository, '.takt', 'config.yaml'), 'manager:\n  notifications:\n    custom: false\n');
-  const notifications = [1, 2, 3].map((index) => ({ id: `11111111-1111-4111-8111-${String(index).padStart(12, '0')}`,
-    kind: index === 3 ? 'custom' as const : 'progress' as const, body: `Full notice ${index}\nline 2\nline 3\nline 4`, recordedAt: '2026-10-24T00:00:00.000Z' }));
-  const goal = { ...goalRecord(), notifications };
-  save(goal);
-  const expected = notifications.slice(0, 2).map((notification) => ({
-    id: notification.id, repositoryDirectory: repository, project: basename(repository), goalId: goal.id,
-    objective: goal.objective, kind: notification.kind, recordedAt: notification.recordedAt,
-    message: formatGoalNotification(goal, notification, 'en', basename(repository), 'tui', 'full'),
-  }));
-  const list = vi.spyOn(GoalStore.prototype, 'list').mockRejectedValue(new Error('forbidden array read'));
-  expect(await collect(iterateManagerNotices(assignment(), 'en'))).toEqual(expected);
-  expect(expected.map(({ id }) => id)).toEqual(notifications.slice(0, 2).map(({ id }) => id));
-  expect(expected.every(({ message }) => message.includes('line 4'))).toBe(true); expect(list).not.toHaveBeenCalled();
-});
-
-it('projects work logs and notifications sequentially with the existing IDs, formatting and initial suppression', async () => {
+it('projects work logs and notifications sequentially with the existing IDs, formatting and startup exclusion', async () => {
   const boundary = Date.parse('2026-10-24T00:00:01.000Z');
   const goal = { ...goalRecord(), workLog: [{ id: '650e8400-e29b-41d4-a716-446655440001',
     summary: 'old work', recordedAt: '2026-10-24T00:00:00.000Z' }], notifications: [{
@@ -84,20 +66,17 @@ it('projects work logs and notifications sequentially with the existing IDs, for
   save(goal);
   const boundaries = new Map([[repository, boundary]]);
   const expected = [
-    { id: JSON.stringify([goal.id, 'work-log', goal.workLog[0]!.id]), message: goal.id + ': old work', suppressInitialDisplay: true },
     { id: JSON.stringify([goal.id, 'notification', goal.notifications[0]!.id]),
       message: formatGoalNotification(goal, goal.notifications[0]!, 'en', basename(repository), 'tui') },
   ];
   const list = vi.spyOn(GoalStore.prototype, 'list').mockRejectedValue(new Error('forbidden array read'));
-  expect(await collect(iterateManagerDisplayEvents(assignment(), 'en', boundaries, boundary))).toEqual(expected);
-  expect(expected[0]).toMatchObject({ id: JSON.stringify([goal.id, 'work-log', goal.workLog[0]!.id]), suppressInitialDisplay: true });
-  expect(expected[1]).not.toHaveProperty('suppressInitialDisplay');
+  expect(await collect(iterateTestDisplayEvents(assignment(), 'en', boundaries, boundary))).toEqual(expected);
   expect(list).not.toHaveBeenCalled();
-  const addedRepository = await collect(iterateManagerDisplayEvents(assignment(), 'en', new Map(), boundary));
-  expect(addedRepository[0]).not.toHaveProperty('suppressInitialDisplay');
+  const addedRepository = await collect(iterateTestDisplayEvents(assignment(), 'en', new Map(), boundary));
+  expect(addedRepository[0]).toEqual({ id: JSON.stringify([goal.id, 'work-log', goal.workLog[0]!.id]), message: goal.id + ': old work' });
 });
 
-it('reads each goal once when independently ordering multiple inquiries or notices', async () => {
+it('reads each goal once when independently ordering multiple inquiries or display events', async () => {
   const goals = [5, 6].map((prefix) => ({ ...goalRecord(), id: `${prefix}50e8400-e29b-41d4-a716-446655440000`,
     questions: Array.from({ length: 4 }, (_, index) => createInquiry({ body: `Question ${prefix}/${index}` })),
     notifications: Array.from({ length: 4 }, (_, index) => ({ id: `${prefix}50e8400-e29b-41d4-a716-44665544000${index}`,
@@ -105,7 +84,7 @@ it('reads each goal once when independently ordering multiple inquiries or notic
   }));
   for (const goal of goals) save(goal);
   const reads = vi.spyOn(privateFiles, 'readPrivateFileState');
-  for (const source of [iteratePendingInquiries(directory, assignment()), iterateManagerNotices(assignment(), 'en')]) {
+  for (const source of [iteratePendingInquiries(directory, assignment()), iterateTestDisplayEvents(assignment(), 'en', new Map(), -Infinity)]) {
     reads.mockClear();
     const items = await collect<unknown>(source);
     expect(items).toHaveLength(8);
