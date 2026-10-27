@@ -27,7 +27,7 @@ import {
   type ResolvedTaskSpec,
 } from './taskSpecContext.js';
 import { resolveReusedWorktreeExecution } from './reusedWorktree.js';
-import { validateTaskRetryRestartPoint } from '../taskRetryStartPath.js';
+import { resolveTaskRetryStackPath, validateTaskRetryRestartPoint } from '../taskRetryStartPath.js';
 import type { ExecuteTaskOptions, TaskExecutionContextOverride } from './types.js';
 import { createPullRequestContext, type PullRequestContext } from '../../../core/workflow/pr-context.js';
 import {
@@ -206,6 +206,10 @@ function resolveRetryResume(
     throw new Error(`Saved resume position cannot be resolved because workflow "${workflowIdentifier}" was not found`);
   }
   validateWorkflowResumeRoot(workflowConfig, resumePoint);
+  const validation = resolveTaskRetryStackPath(workflowConfig, resumePoint.stack, { projectCwd, lookupCwd });
+  if ('reason' in validation) {
+    throw new Error(validation.reason);
+  }
 
   // Root validation guarantees that trimming can retain at least the root frame.
   const resolvedResumePoint = trimResumePointStackForWorkflow({

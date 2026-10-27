@@ -46,7 +46,7 @@ import { getWorkflowResumeFrameKind, isWorkflowCallStep } from '../step-kind.js'
 import { applyAutoRoutingStrategyOverride } from '../auto-routing/resolver.js';
 import { RoutingRuntime } from '../auto-routing/runtime.js';
 import { resolveEffectiveAutoRouting } from '../auto-routing/effective-auto-routing.js';
-import { buildWorkflowResumePointEntry, workflowEntryMatchesWorkflow } from '../workflow-reference.js';
+import { buildWorkflowResumePointEntry } from '../workflow-reference.js';
 import { runWithWorkflowSpan, type WorkflowSpanOutcome, type WorkflowSpanParams } from '../observability/workflowSpans.js';
 import { WorkflowEngineStepCoordinator } from './WorkflowEngineStepCoordinator.js';
 import type { WorkflowCallExecutionToken } from './WorkflowCallRunner.js';
@@ -77,7 +77,7 @@ import { withWorkflowTargetContext } from '../provider-target-resolution.js';
 import { readResumeReportSnapshotManifest } from '../run/resume-report-snapshot.js';
 import { ResumeArtifactOccurrenceIndex } from '../run/resume-artifact-occurrence-index.js';
 import { readRunMetaBySlug } from '../run/run-meta.js';
-import { validateWorkflowResumeRoot } from '../run/resume-point.js';
+import { resumeWorkflowMatches, validateWorkflowResumeRoot } from '../run/resume-point.js';
 const log = createLogger('workflow-engine');
 
 type WorkflowEngineRuntimeOptions = WorkflowEngineOptions & {
@@ -247,6 +247,19 @@ export class WorkflowEngine extends EventEmitter {
       this.options.resumePoint,
       initialMaxSteps,
     );
+    if (restartPoint !== undefined && this.options.resumeSource?.sourceRunSlug !== undefined) {
+      const sourceResumePoint = readRunMetaBySlug(
+        this.cwd,
+        this.options.resumeSource.sourceRunSlug,
+        undefined,
+        this.options.runPathsDirectory,
+      )?.resumePoint;
+      if (sourceResumePoint !== undefined) {
+        this.sharedRuntime.workflowCallInvocationEvidence = restoreWorkflowCallInvocationEvidence(sourceResumePoint);
+        this.sharedRuntime.resumeInvocationSource = sourceResumePoint;
+      }
+    }
+    this.sharedRuntime.resumeInvocationSource ??= this.options.resumePoint;
     if (restartNavigator !== undefined) {
       if (this.sharedRuntime.restartNavigator !== undefined) {
         throw new Error('Workflow restart navigator is already initialized');
@@ -601,7 +614,7 @@ export class WorkflowEngine extends EventEmitter {
     const entry = resumePoint?.stack[this.resumeStackPrefix.length];
     return entry !== undefined
       && entry.step === step.name
-      && workflowEntryMatchesWorkflow(entry, this.config);
+      && resumeWorkflowMatches(entry, this.config);
   }
 
   private buildResumePoint(

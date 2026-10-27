@@ -9,7 +9,8 @@ import type {
   WorkflowState,
 } from '../../models/types.js';
 import type { RunPaths } from '../run/run-paths.js';
-import { trimResumePointStackForWorkflow } from '../run/resume-point.js';
+import { resumeWorkflowMatches, trimResumePointStackForWorkflow } from '../run/resume-point.js';
+import { createLogger } from '../../../shared/utils/index.js';
 import {
   resolveWorkflowCallChildAutoRouting,
 } from '../workflow-call-provider-context.js';
@@ -21,7 +22,6 @@ import { withWorkflowTargetContext } from '../provider-target-resolution.js';
 import {
   buildWorkflowResumePointEntry,
   getWorkflowReference,
-  workflowEntryMatchesWorkflow,
 } from '../workflow-reference.js';
 import { buildWorkflowCallSiteIdentity } from '../workflow-call-site-identity.js';
 import {
@@ -45,6 +45,7 @@ import { resolveDeclaredReportInputs } from '../instruction/declared-report-inpu
 import type { LiveInterventionChannel } from '../live-intervention/types.js';
 
 const PENDING_WORKFLOW_CALL_SITE_DIGEST = '0'.repeat(64);
+const log = createLogger('workflow-call');
 
 export interface WorkflowCallSessionUpdate {
   expectedSessionId: string | undefined;
@@ -267,7 +268,7 @@ export class WorkflowCallExecutor {
     }
 
     const nextEntry = resumePoint.stack[resumeStackPrefix.length + 1];
-    if (!nextEntry || !workflowEntryMatchesWorkflow(nextEntry, childWorkflow)) {
+    if (!nextEntry || !resumeWorkflowMatches(nextEntry, childWorkflow)) {
       return undefined;
     }
 
@@ -320,6 +321,10 @@ export class WorkflowCallExecutor {
   ): void {
     const parentConfig = this.deps.getConfig();
     const index = this.deps.sharedRuntime.workflowCallInvocationEvidence!.index;
+    index.rebindResumeInvocation(
+      this.deps.sharedRuntime.resumeInvocationSource, parentConfig, step.name, resumeStackPrefix, occurrence,
+      this.deps.sharedRuntime.restartNavigator?.isActive() === true,
+    );
     const existing = index.get(parentConfig, step.name, resumeStackPrefix);
     if (existing?.call_instance === occurrence) {
       if (existing.completed === true) {
@@ -391,6 +396,7 @@ export class WorkflowCallExecutor {
       step.name,
       resumeStackSnapshot,
     );
+    let invocation = expectedInvocation;
     if (existing?.call_instance === occurrence) {
       if (existing.report_namespace_segment !== expectedInvocation.report_namespace_segment) {
         const existingNamespace = parseWorkflowCallNamespaceSegment(
@@ -406,6 +412,10 @@ export class WorkflowCallExecutor {
             resumeStackSnapshot,
             expectedInvocation,
           );
+        } else if ((this.deps.getOptions().resumePoint !== undefined || this.deps.getOptions().restartPoint !== undefined || this.deps.sharedRuntime.restartNavigator !== undefined)
+          && existingNamespace?.stepName === step.name && existingNamespace.workflowName === childWorkflow.name) {
+          log.warn('Saved workflow call site digest differs from current workflow', { step: step.name, saved: existing.report_namespace_segment, current: expectedInvocation.report_namespace_segment });
+          invocation = existing;
         } else {
           throw new Error(`workflow_call step "${step.name}" invocation record does not match the canonical call site`);
         }
@@ -424,7 +434,7 @@ export class WorkflowCallExecutor {
       childWorkflow,
       occurrence,
       resumeStackPrefix: resumeStackSnapshot,
-      invocation: expectedInvocation,
+      invocation,
     });
   }
 

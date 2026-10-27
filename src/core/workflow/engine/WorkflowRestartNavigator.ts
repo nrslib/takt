@@ -8,8 +8,8 @@ import type {
 import { getWorkflowStepKind, isWorkflowCallStep } from '../step-kind.js';
 import {
   getWorkflowReference,
-  workflowRestartEntryMatchesWorkflow,
 } from '../workflow-reference.js';
+import { resumeWorkflowMatches } from '../run/resume-point.js';
 import { isWorkflowRestartTarget } from '../workflow-restart-target.js';
 
 export class WorkflowRestartNavigator {
@@ -70,7 +70,7 @@ export class WorkflowRestartNavigator {
     workflow: WorkflowConfig,
     relationship: 'root' | 'child',
   ): WorkflowStep {
-    if (!workflowRestartEntryMatchesWorkflow(entry, workflow)) {
+    if (!resumeWorkflowMatches(entry, workflow)) {
       throw new Error(
         `Restart path workflow "${entry.workflow}" (ref "${entry.workflow_ref}") does not match ${relationship} workflow "${workflow.name}" (ref "${getWorkflowReference(workflow)}")`,
       );
@@ -97,7 +97,7 @@ export class WorkflowRestartNavigator {
       const runtimeEntry = callStack[index]!;
       const selectedEntry = this.restartPoint.stack[index]!;
       if (
-        runtimeEntry.workflow_ref !== selectedEntry.workflow_ref
+        runtimeEntry.workflow !== selectedEntry.workflow
         || runtimeEntry.step !== selectedEntry.step
         || runtimeEntry.kind !== selectedEntry.kind
       ) {

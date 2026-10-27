@@ -7,7 +7,19 @@ import type {
 } from '../../models/types.js';
 import { getAllParallelSubSteps } from '../../models/types.js';
 import { getWorkflowResumeFrameKind, isWorkflowCallStep } from '../step-kind.js';
-import { workflowEntriesMatch, workflowEntryMatchesWorkflow } from '../workflow-reference.js';
+import { getWorkflowReference, normalizeWorkflowResumePointEntry } from '../workflow-reference.js';
+import { createLogger } from '../../../shared/utils/index.js';
+
+const log = createLogger('workflow-resume');
+
+export function resumeWorkflowMatches(entry: { workflow: string; workflow_ref: string }, workflow: WorkflowConfig): boolean {
+  if (entry.workflow !== workflow.name) return false;
+  const currentRef = getWorkflowReference(workflow);
+  if (entry.workflow_ref !== currentRef) {
+    log.warn('Saved workflow reference differs from current workflow', { workflow: entry.workflow, saved: entry.workflow_ref, current: currentRef });
+  }
+  return true;
+}
 import {
   parseCanonicalWorkflowResumeFrame,
 } from '../../../shared/types/workflow-resume.js';
@@ -82,7 +94,8 @@ export function matchesResumeStackPrefix(
     if (candidate === undefined) {
       return false;
     }
-    return workflowEntriesMatch(candidate, entry)
+    return candidate.workflow === entry.workflow
+      && normalizeWorkflowResumePointEntry(candidate).call_instance === normalizeWorkflowResumePointEntry(entry).call_instance
       && candidate.step === entry.step
       && candidate.kind === entry.kind
       && candidate.occurrence === entry.occurrence;
@@ -112,10 +125,7 @@ export function getWorkflowResumeFrameError(
   steps: readonly WorkflowStep[],
 ): string | undefined {
   const location = JSON.stringify(`${entry.workflow}/${entry.step}`);
-  if (!workflowEntryMatchesWorkflow(entry, workflow)) {
-    if (/^builtin:sha256:[a-f0-9]{64}$/.test(entry.workflow_ref)) {
-      return `Saved resume position ${location} cannot be used: its legacy builtin workflow_ref is derived from an absolute path and cannot verify that the current workflow content is identical (workflow_ref: ${JSON.stringify(entry.workflow_ref)})`;
-    }
+  if (!resumeWorkflowMatches(entry, workflow)) {
     return `Saved resume position ${location} has a workflow identity mismatch (workflow_ref: ${JSON.stringify(entry.workflow_ref)})`;
   }
   const matches = steps.filter((step) => step.name === entry.step);
@@ -152,7 +162,7 @@ function canResolveResumePointSuffix(
   resolveWorkflowCall: ResumePointStepResolver,
   validateTerminalWorkflowCall: boolean,
 ): boolean {
-  if (stackSuffix.length === 0 || !workflowEntryMatchesWorkflow(stackSuffix[0]!, workflow)) {
+  if (stackSuffix.length === 0 || !resumeWorkflowMatches(stackSuffix[0]!, workflow)) {
     return false;
   }
 
@@ -160,7 +170,7 @@ function canResolveResumePointSuffix(
   let candidateSteps: readonly WorkflowStep[] = currentWorkflow.steps;
   for (let index = 0; index < stackSuffix.length; index += 1) {
     const entry = stackSuffix[index]!;
-    if (!workflowEntryMatchesWorkflow(entry, currentWorkflow)) {
+    if (!resumeWorkflowMatches(entry, currentWorkflow)) {
       return false;
     }
 
