@@ -47,3 +47,11 @@ export function normalizeLogValue(key: string, value: unknown): unknown {
   }
   return typeof value === 'string' ? normalizeLogMetadata(value) : value;
 }
+
+/** Preserve provider evidence while applying the same secret masking as ordinary log values. */
+export function normalizeProviderEventValue(key: string, value: unknown): unknown {
+  if (isSensitiveLogKey(key)) {
+    return REDACTED_LOG_VALUE;
+  }
+  return typeof value === 'string' ? sanitizeSensitiveText(value) : value;
+}
