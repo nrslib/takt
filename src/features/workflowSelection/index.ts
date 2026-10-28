@@ -8,6 +8,7 @@ import {
   buildCategorizedWorkflows,
 } from '../../infra/config/index.js';
 import { DEFAULT_WORKFLOW_NAME } from '../../shared/constants.js';
+import type { WorkflowSystemCommandsConfig } from '../../core/models/config-types.js';
 export {
   buildWorkflowSelectionItems,
   buildTopLevelSelectOptions,
@@ -26,6 +27,7 @@ import { warnMissingWorkflows } from './options.js';
 
 export interface SelectWorkflowOptions {
   fallbackToDefault?: boolean;
+  workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig;
 }
 
 export async function selectWorkflow(
@@ -36,7 +38,7 @@ export async function selectWorkflow(
   const categoryConfig = getWorkflowCategories(cwd);
 
   if (categoryConfig) {
-    const allWorkflows = loadAllStandaloneWorkflowsWithSources(cwd, { onWarning: warn });
+    const allWorkflows = loadAllStandaloneWorkflowsWithSources(cwd, { onWarning: warn, ...(options?.workflowSystemCommandsPolicy === undefined ? {} : { workflowSystemCommandsPolicy: options.workflowSystemCommandsPolicy }) });
     if (allWorkflows.size === 0) {
       if (fallbackToDefault) {
         info(`No workflows found. Using default workflow: ${DEFAULT_WORKFLOW_NAME}`);
@@ -50,7 +52,7 @@ export async function selectWorkflow(
     return selectWorkflowFromCategorizedWorkflows(categorized);
   }
 
-  const entries = listStandaloneWorkflowEntries(cwd, { onWarning: warn });
+  const entries = listStandaloneWorkflowEntries(cwd, { onWarning: warn, ...(options?.workflowSystemCommandsPolicy === undefined ? {} : { workflowSystemCommandsPolicy: options.workflowSystemCommandsPolicy }) });
   if (entries.length === 0) {
     if (fallbackToDefault) {
       info(`No workflows found. Using default workflow: ${DEFAULT_WORKFLOW_NAME}`);

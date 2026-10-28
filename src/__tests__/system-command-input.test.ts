@@ -83,12 +83,12 @@ describe('system command permission conversion and validation', () => {
   it('preserves an absent policy', () => {
     expect(normalizeWorkflowSystemCommandsPolicy(undefined)).toBeUndefined();
     expect(denormalizeWorkflowSystemCommandsPolicy(undefined)).toBeUndefined();
-    expect(resolveWorkflowSystemCommandsPolicy(undefined, undefined, true)).toBeUndefined();
+    expect(resolveWorkflowSystemCommandsPolicy(undefined, undefined)).toBeUndefined();
   });
   it.each([
     [true, false, false], [false, true, true], [true, undefined, true],
   ])('prioritizes explicit project permission %s/%s', (global, project, expected) => {
-    expect(resolveWorkflowSystemCommandsPolicy({ customScripts: global }, { customScripts: project }, true))
+    expect(resolveWorkflowSystemCommandsPolicy({ customScripts: global }, { customScripts: project }))
       .toEqual({ customScripts: expected });
   });
   it('rejects a command at loading and leaves existing inputs available', () => {
@@ -106,16 +106,15 @@ describe('system command permission conversion and validation', () => {
   });
 
   it.each([
-    { global: undefined, project: true, expected: false },
-    { global: false, project: true, expected: false },
+    { global: undefined, project: true, expected: true },
+    { global: false, project: true, expected: true },
     { global: true, project: true, expected: true },
     { global: true, project: undefined, expected: true },
     { global: true, project: false, expected: false },
-  ])('requires independent global permission for a PR project: $global/$project', ({ global, project, expected }) => {
+  ])('resolves project and global permission: $global/$project', ({ global, project, expected }) => {
     expect(resolveWorkflowSystemCommandsPolicy(
       global === undefined ? undefined : { customScripts: global },
       project === undefined ? undefined : { customScripts: project },
-      false,
     )).toEqual({ customScripts: expected });
   });
 });

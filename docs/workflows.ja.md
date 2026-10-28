@@ -795,9 +795,11 @@ system step は TAKT エンジン自身が実行する step で、agent は起�
 
 #### 固定コマンドの input
 
-`type: command`はworkflowに固定した文字列をshellで実行します。以下の許可設定は既定で無効です。明示登録したprojectではprojectの値がglobalより優先されます。`workflow_command_gates.custom_scripts`とは独立し、無許可のworkflowは読み込み時に拒否されます。
+`type: command`はworkflowに固定した文字列をshellで実行します。以下の許可設定は既定で無効です。projectの明示値はglobalより優先され、projectで未指定の場合はglobalの値を使います。`workflow_command_gates.custom_scripts`とは独立し、無許可のworkflowは読み込み時に拒否されます。
 
-project設定だけで許可するには、利用者がそのsystem command設定を信頼し、global専用の`workflow_system_commands_trusted_projects: [/absolute/path/to/project]`へ設定読込元を登録する必要があります。環境変数`TAKT_WORKFLOW_SYSTEM_COMMANDS_TRUSTED_PROJECTS`は絶対パスのJSON配列です。実パスの完全一致だけを認め、親ディレクトリの登録では許可しません。未登録ならPR contextやcloneの有無にかかわらずglobal設定または`TAKT_WORKFLOW_SYSTEM_COMMANDS_CUSTOM_SCRIPTS=true`による許可が必要です。projectの明示的な`false`は常に拒否します。別cloneでも元の設定読込元を照合します。自動登録は行わず、各実行で現在の承認を解決します。rootと子workflowは同じ値を使い、`wait`では設定を読み直しません。詳細は[設定ガイド](configuration.ja.md)を参照してください。
+`workflow_system_commands_trusted_projects`への登録は許可判定に影響しません。別cloneでも元のproject設定を使います。各実行で許可を解決し、rootと子workflowへ同じ値を渡します。`wait`では設定を読み直しません。詳細は[設定ガイド](configuration.ja.md)を参照してください。
+
+pipeline または対話モードが現在のディレクトリに PR をチェックアウトする場合は、切り替え前の設定から許可を決めます。対話セッションでは Issue に切り替えた後も同じディレクトリでこの許可を使います。PR が追加した project 設定だけでは許可されません。
 
 ```yaml
 workflow_system_commands:

@@ -132,13 +132,13 @@ describe('command system input execution entrypoints', () => {
     expect(prompts[0]?.prompt).toContain('Task: Inspect approval');
   });
 
-  it.each(entrypoints)('$name requires operator permission without PR context', async ({ execute }) => {
+  it.each(entrypoints)('$name uses project permission without PR context', async ({ execute }) => {
     writeCommandWorkflow(true);
-    writeGlobalPermission(true);
+    writeGlobalPermission(false);
     expect(await execute(projectDir, workflowPath)).toBe(true);
     expect(readFileSync(join(projectDir, 'command-ran'), 'utf8')).toBe('approved');
     rmSync(join(projectDir, 'command-ran'));
-    writeGlobalPermission(false);
+    writeCommandWorkflow(false);
     vi.mocked(childProcess.spawn).mockClear();
     let success = false;
     try { success = await execute(projectDir, workflowPath); } catch { /* Loader rejection follows the entrypoint contract. */ }
@@ -177,12 +177,13 @@ describe('command system input execution entrypoints', () => {
 
   it.each([
     { global: false, project: true, pr: false, trusted: true, allowed: true },
-    { global: false, project: true, pr: false, trusted: false, allowed: false },
-    { global: false, project: true, pr: true, allowed: false },
-    { global: undefined, project: true, pr: true, allowed: false },
+    { global: false, project: true, pr: false, trusted: false, allowed: true },
+    { global: false, project: true, pr: true, allowed: true },
+    { global: undefined, project: true, pr: true, allowed: true },
+    { global: false, project: false, pr: true, allowed: false },
     { global: true, project: true, pr: true, allowed: true },
     { global: true, project: false, pr: true, allowed: false },
-  ])('enforces configuration trust before shell startup ($global/$project, PR=$pr)', async ({ global, project, pr, trusted, allowed }) => {
+  ])('enforces configuration permission before shell startup ($global/$project, PR=$pr)', async ({ global, project, pr, trusted, allowed }) => {
     writeCommandWorkflow(project);
     writeGlobalPermission(global, trusted);
     const spawn = vi.mocked(childProcess.spawn);
@@ -203,14 +204,27 @@ describe('command system input execution entrypoints', () => {
     }
   });
 
-  it.each([true, false])('uses operator permission %s after the pipeline checks out a PR', async (global) => {
+  it.each([
+    { global: false, project: true, allowed: true },
+    { global: false, project: undefined, allowed: false },
+    { global: true, project: false, allowed: false },
+    { global: false, project: true, env: 'false', allowed: false },
+    { global: false, project: false, env: 'true', allowed: true },
+  ].flatMap((scenario) => [false, true].map((childOnly) => ({ ...scenario, childOnly }))))(
+  'uses pre-checkout permission for PR commands ($global/$project, env=$env, child=$childOnly)',
+  async ({ global, project, env, allowed, childOnly }) => {
     writeGlobalPermission(global);
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), stringify({
+      provider: 'mock', language: 'en',
+      ...(project === undefined ? {} : { workflow_system_commands: { custom_scripts: project } }),
+    }));
+    if (env !== undefined) vi.stubEnv('TAKT_WORKFLOW_SYSTEM_COMMANDS_CUSTOM_SCRIPTS', env);
     vi.spyOn(GitHubProvider.prototype, 'checkCliStatus').mockReturnValue({ available: true });
     vi.spyOn(GitHubProvider.prototype, 'fetchPrReviewComments').mockReturnValue({
       number: 1905, title: 'PR command', body: '', url: 'https://example.test/pull/1905',
       headRefName: 'feature/pr', baseRefName: 'main', comments: [], reviews: [], files: [],
     });
-    const checkout = vi.spyOn(taskGit, 'checkoutBranch').mockImplementation(() => writeCommandWorkflow(true));
+    const checkout = vi.spyOn(taskGit, 'checkoutBranch').mockImplementation(() => writeCommandWorkflow(true, childOnly));
     vi.spyOn(taskGit, 'materializePullRequestBase').mockReturnValue('refs/takt/pr-base/main');
     vi.spyOn(taskGit, 'stageAndCommit').mockResolvedValue(undefined);
     vi.spyOn(taskGit, 'pushBranch').mockImplementation(() => undefined);
@@ -219,7 +233,7 @@ describe('command system input execution entrypoints', () => {
       cwd: projectDir, workflow: workflowPath, prNumber: 1905, provider: 'mock',
       autoPr: false, createWorktree: false, outputMode: 'silent',
     });
-    if (global) {
+    if (allowed) {
       expect(await execution).toBe(0);
       expect(readFileSync(join(projectDir, 'command-ran'), 'utf8')).toBe('approved');
       expect(spawn).toHaveBeenCalledWith('printf approved > command-ran', expect.objectContaining({ shell: true }));
@@ -231,9 +245,9 @@ describe('command system input execution entrypoints', () => {
     expect(checkout).toHaveBeenCalledWith(projectDir, 'feature/pr');
   });
 
-  it.each([true, false])('uses the run permission %s for child-only commands through bundle execution', async (global) => {
-    writeCommandWorkflow(true, true);
-    writeGlobalPermission(global);
+  it.each([true, false])('uses project permission %s for child-only commands through bundle execution', async (project) => {
+    writeCommandWorkflow(project, true);
+    writeGlobalPermission(false);
     const spawn = vi.mocked(childProcess.spawn);
     const execution = executeTaskWithResult({
       task: 'Inspect child', cwd: projectDir, projectCwd: projectDir, workflowIdentifier: workflowPath,
@@ -241,7 +255,7 @@ describe('command system input execution entrypoints', () => {
       prContext: { source: 'pr_review', prNumber: 1905, baseBranch: 'main', headBranch: 'feature/pr',
         baseBranchSource: 'pull_request' },
     });
-    if (global) {
+    if (project) {
       expect((await execution).success).toBe(true);
       expect(readFileSync(join(projectDir, 'command-ran'), 'utf8')).toBe('approved');
     } else {
@@ -252,11 +266,12 @@ describe('command system input execution entrypoints', () => {
   });
 
   it.each([
-    { global: false, trusted: true, allowed: true },
-    { global: false, trusted: false, allowed: false },
-    { global: true, trusted: false, allowed: true },
-  ])('reads original project trust when executing in a separate clone: $global/$trusted', async ({ global, trusted, allowed }) => {
-    writeCommandWorkflow(true);
+    { global: false, project: true, trusted: true, allowed: true },
+    { global: false, project: true, trusted: false, allowed: true },
+    { global: false, project: false, trusted: false, allowed: false },
+    { global: true, project: true, trusted: false, allowed: true },
+  ])('reads original project permission when executing in a separate clone: $global/$project/$trusted', async ({ global, project, trusted, allowed }) => {
+    writeCommandWorkflow(project);
     writeGlobalPermission(global, trusted);
     const clone = join(projectDir, 'clone');
     mkdirSync(join(clone, '.takt'), { recursive: true });
@@ -280,7 +295,7 @@ describe('command system input execution entrypoints', () => {
     }
   });
 
-  it('rechecks current operator permission for a saved PR task on each execution', async () => {
+  it('rechecks current project permission for a saved PR task on each execution', async () => {
     writeCommandWorkflow(true);
     const resolved = await resolveTaskExecution({
       name: 'saved-pr', content: 'Review PR', filePath: join(projectDir, 'saved.yaml'),
@@ -298,7 +313,7 @@ describe('command system input execution entrypoints', () => {
     expect((await executeTaskWithResult(request)).success).toBe(true);
     expect(readFileSync(join(projectDir, 'command-ran'), 'utf8')).toBe('approved');
     rmSync(join(projectDir, 'command-ran'));
-    writeGlobalPermission(false);
+    writeCommandWorkflow(false);
     const spawn = vi.mocked(childProcess.spawn);
     spawn.mockClear();
     await expect(executeTaskWithResult(request)).rejects.toThrow();

@@ -1,5 +1,4 @@
 import type { z } from 'zod';
-import { realpathSync, statSync } from 'node:fs';
 import { isRuntimePreparePreset } from '../../../core/models/workflow-types.js';
 import type {
   WorkflowArpeggioConfig,
@@ -54,40 +53,20 @@ export function validateWorkflowRuntimePrepare(
 export function resolveWorkflowSystemCommandsPolicy(
   globalPolicy: WorkflowSystemCommandsConfig | undefined,
   projectPolicy: WorkflowSystemCommandsConfig | undefined,
-  projectConfigTrusted: boolean,
 ): WorkflowSystemCommandsConfig | undefined {
-  if (!projectConfigTrusted) {
-    return { customScripts: globalPolicy?.customScripts === true && projectPolicy?.customScripts !== false };
-  }
   const customScripts = projectPolicy?.customScripts ?? globalPolicy?.customScripts;
   return customScripts === undefined ? undefined : { customScripts };
 }
 
 export function resolveWorkflowSystemCommandsForProject(
-  projectCwd: string,
   globalConfig: GlobalConfig,
   projectConfig: ProjectConfig,
 ): WorkflowSystemCommandsConfig {
-  const trustedRoots = globalConfig.workflowSystemCommandsTrustedProjects ?? [];
-  const canonicalRoot = trustedRoots.length === 0 ? undefined : canonicalProjectRoot(projectCwd);
-  const trusted = canonicalRoot !== undefined && trustedRoots.some(
-    (root) => canonicalProjectRoot(root) === canonicalRoot,
-  );
   return {
     customScripts: resolveWorkflowSystemCommandsPolicy(
-      globalConfig.workflowSystemCommands, projectConfig.workflowSystemCommands, trusted,
+      globalConfig.workflowSystemCommands, projectConfig.workflowSystemCommands,
     )?.customScripts === true,
   };
-}
-
-function canonicalProjectRoot(root: string): string | undefined {
-  try {
-    const path = realpathSync(root);
-    return statSync(path).isDirectory() ? path : undefined;
-  } catch {
-    // An inaccessible registration cannot establish trust.
-    return undefined;
-  }
 }
 
 export function validateWorkflowSystemCommands(

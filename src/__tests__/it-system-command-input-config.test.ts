@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parse, stringify } from 'yaml';
@@ -12,7 +12,6 @@ import { invalidateGlobalConfigCache, loadGlobalConfig, saveGlobalConfig } from 
 import { loadProjectConfig, saveProjectConfig, updateProjectConfig } from '../infra/config/project/projectConfig.js';
 import { invalidateAllResolvedConfigCache } from '../infra/config/resolutionCache.js';
 import { GlobalConfigSchema, ProjectConfigSchema } from '../core/models/config-schemas.js';
-import { resolveWorkflowSystemCommandsForProject } from '../infra/config/loaders/workflowNormalizationPolicies.js';
 import { loadGlobalConfigTraceState } from '../infra/config/global/globalConfigCore.js';
 
 describe('command system input configuration', () => {
@@ -65,18 +64,21 @@ describe('command system input configuration', () => {
 
   it.each([
     { roots: 'same', global: false, project: true, allowed: true },
-    { roots: 'empty', global: false, project: true, allowed: false },
-    { roots: 'absent', global: undefined, project: true, allowed: false },
-    { roots: 'parent', global: false, project: true, allowed: false },
-    { roots: 'other', global: false, project: true, allowed: false },
-    { roots: 'missing', global: false, project: true, allowed: false },
+    { roots: 'empty', global: false, project: true, allowed: true },
+    { roots: 'absent', global: undefined, project: true, allowed: true },
+    { roots: 'parent', global: false, project: true, allowed: true },
+    { roots: 'other', global: false, project: true, allowed: true },
+    { roots: 'missing', global: false, project: true, allowed: true },
     { roots: 'same', global: true, project: false, allowed: false },
     { roots: 'empty', global: true, project: false, allowed: false },
     { roots: 'empty', global: true, project: true, allowed: true },
     { roots: 'empty', global: true, project: undefined, allowed: true },
     { roots: 'same', global: true, project: undefined, allowed: true },
     { roots: 'same', global: false, project: undefined, allowed: false },
-  ])('uses explicit registration $roots with global $global and project $project', ({ roots, global, project, allowed }) => {
+    { roots: 'empty', global: false, project: false, allowed: false },
+    { roots: 'empty', global: false, project: undefined, allowed: false },
+    { roots: 'absent', global: undefined, project: undefined, allowed: false },
+  ])('resolves global $global and project $project regardless of registration $roots', ({ roots, global, project, allowed }) => {
     const other = join(projectDir, 'other');
     mkdirSync(other);
     const registered = roots === 'same' ? [projectDir] : roots === 'parent' ? [dirname(projectDir)]
@@ -114,15 +116,6 @@ describe('command system input configuration', () => {
     expect(loadProjectConfig(projectDir)).not.toHaveProperty('workflowSystemCommandsTrustedProjects');
     expect(loadGlobalConfigTraceState().getOrigin('workflow_system_commands_trusted_projects')).toBe('env');
     expect(loadWorkflowFromFile(workflowPath, projectDir).steps[0]?.systemInputs).toHaveLength(1);
-  });
-
-  it('matches registered roots by real path and refuses unverifiable roots', () => {
-    const alias = join(projectDir, 'alias');
-    symlinkSync(projectDir, alias, 'dir');
-    const project = { workflowSystemCommands: { customScripts: true } };
-    const global = { language: 'en' as const, autoFetch: false, workflowSystemCommandsTrustedProjects: [alias] };
-    expect(resolveWorkflowSystemCommandsForProject(projectDir, global, project).customScripts).toBe(true);
-    expect(resolveWorkflowSystemCommandsForProject(join(projectDir, 'missing'), global, project).customScripts).toBe(false);
   });
 
   it('rejects command inputs without dedicated permission', () => {
@@ -249,8 +242,9 @@ steps:
     expect(child?.steps[0]?.systemInputs?.[0]).toMatchObject({ type: 'command', command: 'printf approved' });
   });
 
-  it.each([true, false])('keeps resolved permission %s through recursive child validation', (allowed) => {
-    writeProject({ workflow_system_commands: { custom_scripts: true } });
+  it.each([true, false])('applies project permission %s through recursive child validation', (allowed) => {
+    writeGlobal({ workflow_system_commands: { custom_scripts: false } });
+    writeProject({ workflow_system_commands: { custom_scripts: allowed } });
     const commandWorkflow = parse(readFileSync(workflowPath, 'utf8'));
     writeFileSync(join(projectDir, '.takt', 'workflows', 'command-child.yaml'), stringify({
       ...commandWorkflow, subworkflow: { callable: true },
@@ -263,9 +257,7 @@ steps:
     });
     writeFileSync(join(projectDir, '.takt', 'workflows', 'child.yaml'), stringify(parent('child', './command-child.yaml')));
     writeFileSync(workflowPath, stringify(parent('parent', './child.yaml')));
-    const load = () => loadWorkflowByIdentifier(workflowPath, projectDir, {
-      workflowSystemCommandsPolicy: { customScripts: allowed },
-    });
+    const load = () => loadWorkflowByIdentifier(workflowPath, projectDir);
     if (allowed) expect(load()?.name).toBe('parent');
     else expect(load).toThrow();
   });

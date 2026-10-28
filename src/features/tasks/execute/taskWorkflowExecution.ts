@@ -160,7 +160,8 @@ export async function executeTaskWorkflow(
   const traceTaskMetadata = resolveTraceTaskMetadata(options);
   const globalConfig = loadGlobalConfig();
   const projectConfig = loadProjectConfig(projectCwd);
-  const workflowSystemCommandsPolicy = resolveWorkflowSystemCommandsForProject(projectCwd, globalConfig, projectConfig);
+  const workflowSystemCommandsPolicy = options.workflowSystemCommandsPolicy
+    ?? resolveWorkflowSystemCommandsForProject(globalConfig, projectConfig);
   const workflowConfig = loadWorkflowByIdentifier(
     workflowIdentifier,
     projectCwd,

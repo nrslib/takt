@@ -463,7 +463,7 @@ TAKT_ALLOY_CONCURRENCY=1 TAKT_ALLOY_HEAP=2g TAKT_ALLOY_STACK=128m takt
 
 ## workflow の system command input を許可するポリシー
 
-既定は無効です。globalで明示的に信頼したprojectでは、projectの明示値（`false`を含む）がglobalより優先されます。未許可のcommand inputを含むworkflowは読み込み時にエラーになります。`workflow_command_gates.custom_scripts`とは独立しています。
+既定は無効です。projectの明示値（`false`を含む）はglobalより優先されます。projectで未指定の場合はglobalの値を使います。未許可のcommand inputを含むworkflowは読み込み時にエラーになります。`workflow_command_gates.custom_scripts`とは独立しています。
 
 ```yaml
 workflow_system_commands:
@@ -472,16 +472,9 @@ workflow_system_commands:
 
 `TAKT_WORKFLOW_SYSTEM_COMMANDS_CUSTOM_SCRIPTS=true`
 
-project設定だけで許可する場合は、そのsystem command設定を信頼したうえで、利用者が管理するglobal `~/.takt/config.yaml`へ設定読込元を登録してください。
+global専用の`workflow_system_commands_trusted_projects`と環境変数`TAKT_WORKFLOW_SYSTEM_COMMANDS_TRUSTED_PROJECTS`はこの許可判定に影響しません。別cloneでの実行にも元のproject設定を使います。各実行で許可を解決し、rootと子workflowへ同じ値を渡します。`wait`中は再解決しません。
 
-```yaml
-workflow_system_commands_trusted_projects:
-  - /absolute/path/to/project
-```
-
-global専用の環境変数`TAKT_WORKFLOW_SYSTEM_COMMANDS_TRUSTED_PROJECTS='["/absolute/path/to/project"]'`でも登録できます。project側にこのキーは指定できません。未設定・空配列は未登録です。登録先と設定読込元の実パスが完全一致した場合だけ信頼し、親ディレクトリの登録は配下のprojectへ適用しません。確認できない登録先は信頼しません。
-
-未登録projectでは、PR contextや実行先にかかわらずglobalの`workflow_system_commands.custom_scripts: true`、または`TAKT_WORKFLOW_SYSTEM_COMMANDS_CUSTOM_SCRIPTS=true`が必要です。projectの明示的な`false`は常に拒否します。別cloneでも元の設定読込元の登録を照合します。自動登録は行いません。各実行で現在の登録と許可を解決し、rootと子workflowへ同じ値を渡します。`wait`中は再解決しません。
+pipeline または対話モードが現在のディレクトリに PR をチェックアウトする場合は、切り替え前の設定から許可を決めます。対話セッションでは Issue に切り替えた後も同じディレクトリでこの許可を使います。PR が追加した project 設定だけでは許可されません。
 
 ## 環境変数上書き
 

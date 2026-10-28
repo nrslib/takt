@@ -108,7 +108,7 @@ function loadWorkflowFromFileInternal(
         projectConfig.workflowCommandGates,
       ),
       workflowSystemCommandsPolicy: options?.workflowSystemCommandsPolicy ?? resolveWorkflowSystemCommandsForProject(
-        projectDir, globalConfig, projectConfig,
+        globalConfig, projectConfig,
       ),
       workflowPath: canonicalFilePath,
       workflowTrustInfo: trustInfo,

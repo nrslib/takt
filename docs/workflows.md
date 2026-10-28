@@ -796,9 +796,11 @@ A system step is executed by the TAKT engine itself — no agent runs. Declare i
 
 #### Fixed command inputs
 
-`type: command` executes a shell command fixed in the workflow. The permission below defaults to disabled. Explicitly registered projects retain project precedence over global. This permission is independent of `workflow_command_gates.custom_scripts`. Unauthorized workflows fail during loading.
+`type: command` executes a shell command fixed in the workflow. The permission below defaults to disabled. An explicit project value overrides global; when absent, the global value applies. This permission is independent of `workflow_command_gates.custom_scripts`. Unauthorized workflows fail during loading.
 
-Project permission requires explicit trust of its system command settings: register the configuration source root in global-only `workflow_system_commands_trusted_projects: [/absolute/path/to/project]`, or use the JSON-array environment variable `TAKT_WORKFLOW_SYSTEM_COMMANDS_TRUSTED_PROJECTS`. Exact real paths must match; parent registrations do not trust descendants. Unregistered projects need global permission or `TAKT_WORKFLOW_SYSTEM_COMMANDS_CUSTOM_SCRIPTS=true`, regardless of PR context or clone location. Explicit project `false` always denies commands. Separate clones use the original configuration root. Registration is never automatic. Current approval is resolved for each run and shared by root and child workflows; `wait` does not reload it. See the [configuration guide](configuration.md).
+Registration in `workflow_system_commands_trusted_projects` does not affect permission. Separate clones use the original project configuration. Permission is resolved for each run and shared by root and child workflows; `wait` does not reload it. See the [configuration guide](configuration.md).
+
+When a pipeline or interactive session checks out a PR in the current directory, it resolves permission before switching branches. The interactive session retains that permission for the directory, including after switching to an Issue. A project setting added by the PR alone does not grant permission.
 
 ```yaml
 workflow_system_commands:

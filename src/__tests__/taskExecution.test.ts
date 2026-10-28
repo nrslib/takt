@@ -1538,10 +1538,10 @@ describe('executeAndCompleteTask', () => {
   });
 
   it.each([
-    { cwd: '/project', global: false, project: true, expected: false },
+    { cwd: '/project', global: false, project: true, expected: true },
     { cwd: '/project', global: true, project: true, expected: true },
     { cwd: '/project', global: true, project: false, expected: false },
-    { cwd: '/clone', global: false, project: true, expected: false },
+    { cwd: '/clone', global: false, project: true, expected: true },
     { cwd: '/clone', global: true, project: false, expected: false },
   ])('passes resolved PR command permission $expected for $cwd ($global/$project)', async ({ cwd, global, project, expected }) => {
     mockLoadGlobalConfig.mockReturnValue({ workflowSystemCommands: { customScripts: global } });

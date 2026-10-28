@@ -464,7 +464,7 @@ TAKT_ALLOY_CONCURRENCY=1 TAKT_ALLOY_HEAP=2g TAKT_ALLOY_STACK=128m takt
 
 ## Workflow system command input 策略
 
-默认为禁用。在明确信任的project中，project的显式值（包括`false`）优先于global。未授权的command input在workflow加载时失败。此权限独立于`workflow_command_gates.custom_scripts`。
+默认为禁用。project的显式值（包括`false`）优先于global；project未指定时使用global值。未授权的command input在workflow加载时失败。此权限独立于`workflow_command_gates.custom_scripts`。
 
 ```yaml
 workflow_system_commands:
@@ -473,16 +473,9 @@ workflow_system_commands:
 
 `TAKT_WORKFLOW_SYSTEM_COMMANDS_CUSTOM_SCRIPTS=true`
 
-要让project配置授权命令，请先确认信任其system command设置，再在使用者管理的global `~/.takt/config.yaml`中登记配置来源的根目录：
+global专用的`workflow_system_commands_trusted_projects`和环境变量`TAKT_WORKFLOW_SYSTEM_COMMANDS_TRUSTED_PROJECTS`不影响此权限。独立clone使用原project配置。每次运行解析权限并传给root和子workflow，`wait`期间不重新加载。
 
-```yaml
-workflow_system_commands_trusted_projects:
-  - /absolute/path/to/project
-```
-
-global专用环境变量`TAKT_WORKFLOW_SYSTEM_COMMANDS_TRUSTED_PROJECTS='["/absolute/path/to/project"]'`也接受绝对路径的JSON数组。project配置不能设置此键。未设置或空数组均表示未登记。只认可实际路径完全相同的根目录；登记父目录不会授权子目录。无法确认的登记路径不受信任。
-
-未登记的project必须由global `workflow_system_commands.custom_scripts: true`或`TAKT_WORKFLOW_SYSTEM_COMMANDS_CUSTOM_SCRIPTS=true`授权，与PR context和clone位置无关。project显式设置的`false`始终拒绝命令。独立clone使用原配置根目录的登记。不会自动登记project。每次运行解析当前授权并传给root和子workflow，`wait`期间不重新加载。
+当 pipeline 或交互模式在当前目录检出 PR 时，会在切换分支前解析权限。交互会话在同一目录中保留该权限，切换到 Issue 后也使用该权限。仅由 PR 添加的 project 设置不会授予权限。
 
 ## 环境变量覆盖
 

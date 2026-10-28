@@ -467,7 +467,7 @@ If writing the retention marker fails, TAKT moves the ownership marker to the re
 
 ## Workflow system command input policy
 
-Disabled by default. In explicitly trusted projects, an explicit project value, including `false`, overrides global. Unauthorized command inputs fail during workflow loading. This permission is independent of `workflow_command_gates.custom_scripts`.
+Disabled by default. An explicit project value, including `false`, overrides global; if the project value is absent, the global value applies. Unauthorized command inputs fail during workflow loading. This permission is independent of `workflow_command_gates.custom_scripts`.
 
 ```yaml
 workflow_system_commands:
@@ -476,16 +476,9 @@ workflow_system_commands:
 
 `TAKT_WORKFLOW_SYSTEM_COMMANDS_CUSTOM_SCRIPTS=true`
 
-To let project configuration authorize commands, explicitly trust its system command settings by registering the configuration source root in your operator-controlled global `~/.takt/config.yaml`:
+The global-only `workflow_system_commands_trusted_projects` setting and `TAKT_WORKFLOW_SYSTEM_COMMANDS_TRUSTED_PROJECTS` environment variable do not affect this permission. A separate clone uses the original project configuration. Each run resolves permission once and passes it to root and child workflows; `wait` does not reload configuration.
 
-```yaml
-workflow_system_commands_trusted_projects:
-  - /absolute/path/to/project
-```
-
-The global-only environment variable `TAKT_WORKFLOW_SYSTEM_COMMANDS_TRUSTED_PROJECTS='["/absolute/path/to/project"]'` accepts the same absolute paths as a JSON array. This key is rejected in project configuration. Missing or empty registrations confer no trust. Roots must match by exact real path; registering a parent does not trust descendants. Unverifiable registrations confer no trust.
-
-Unregistered projects require global `workflow_system_commands.custom_scripts: true` or `TAKT_WORKFLOW_SYSTEM_COMMANDS_CUSTOM_SCRIPTS=true`, regardless of PR context or clone location. An explicit project `false` always denies commands. A separate clone uses the original configuration root's registration. Projects are never registered automatically. Each run resolves current approval once and passes it to root and child workflows; `wait` does not reload configuration.
+When a pipeline or interactive session checks out a PR in the current directory, it resolves permission before switching branches. The interactive session retains that permission for the directory, including after switching to an Issue. A project setting added by the PR alone does not grant permission.
 
 ## Environment Variable Overrides
 

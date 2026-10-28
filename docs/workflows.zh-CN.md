@@ -658,9 +658,11 @@ System step 由 TAKT engine 执行，不启动 agent。使用 `kind: system` 或
 
 #### 固定命令 input
 
-`type: command`执行workflow中固定的shell命令。以下权限默认禁用。明确登记的project保留project优先于global的规则。此权限独立于`workflow_command_gates.custom_scripts`。未授权的workflow在加载时失败。
+`type: command`执行workflow中固定的shell命令。以下权限默认禁用。project的显式值优先于global，未指定时使用global值。此权限独立于`workflow_command_gates.custom_scripts`。未授权的workflow在加载时失败。
 
-project授权需要使用者明确信任其system command设置：在global专用的`workflow_system_commands_trusted_projects: [/absolute/path/to/project]`中登记配置来源根目录，或使用JSON数组环境变量`TAKT_WORKFLOW_SYSTEM_COMMANDS_TRUSTED_PROJECTS`。只认可实际路径完全一致的目录，父目录登记不授权子目录。未登记的project需要global授权或`TAKT_WORKFLOW_SYSTEM_COMMANDS_CUSTOM_SCRIPTS=true`，与PR context或clone位置无关。project显式的`false`始终拒绝。独立clone使用原配置根目录。不会自动登记；每次运行解析当前授权并传给root和子workflow，`wait`期间不重新加载。参见[配置指南](configuration.zh-CN.md)。
+`workflow_system_commands_trusted_projects`中的登记不影响权限。独立clone使用原project配置。每次运行解析权限并传给root和子workflow，`wait`期间不重新加载。参见[配置指南](configuration.zh-CN.md)。
+
+当 pipeline 或交互模式在当前目录检出 PR 时，会在切换分支前解析权限。交互会话在同一目录中保留该权限，切换到 Issue 后也使用该权限。仅由 PR 添加的 project 设置不会授予权限。
 
 ```yaml
 workflow_system_commands:

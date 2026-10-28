@@ -351,6 +351,8 @@ export interface TaskExecutionParallelOptions {
 }
 
 export interface ExecuteTaskOptions extends PrMergeOptions {
+  /** System command permission resolved before changing the project checkout. */
+  workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig;
   /** Goal ownership enables the terminal details used by the manager. */
   goalId?: string;
   /** Task content */
@@ -467,6 +469,7 @@ export interface WorktreeConfirmationResult {
 
 export interface SelectAndExecuteOptions {
   workflow?: string;
+  workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig;
   /** Enable interactive user input during step transitions */
   interactiveUserInput?: boolean;
   /** Interactive mode result metadata for NDJSON logging */
