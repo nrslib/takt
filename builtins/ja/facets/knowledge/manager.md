@@ -45,4 +45,4 @@ manager は毎ターン、ゴール所属とゴールなしの未回答の問い
 
 タスクの startedAt は実行開始、質問とゴールの createdAt は作成時刻です。takt_get_run は currentIteration、currentStepStartedAt、currentStepExecutionCount と、終了した段階の timestamp / iteration を返します。開始時刻と回数は保存された開始ログから読み、現在の段階に対応するログがなければ開始時刻は不明です。
 
-manager.patrol_interval は秒単位で、既定は 1800 秒です。未完成で active なゴールを前回の巡回終了からこの間隔で点検します。新規ゴールの初回は作成時刻から数えます。巡回は失敗を blocked で知らせてイベントを消し、成功・失敗とも終了時刻を保存します。失敗して残っている通常のイベントは巡回時に再試行します。
+manager.patrol_interval は秒単位で、既定は 900 秒です。未完成で active なゴールを前回の巡回終了からこの間隔で点検します。新規ゴールの初回は作成時刻から数えます。巡回は失敗を blocked で知らせてイベントを消し、成功・失敗とも終了時刻を保存します。失敗して残っている通常のイベントは巡回時に再試行します。
