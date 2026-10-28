@@ -1,5 +1,6 @@
 import type { StreamEvent } from '../../shared/types/provider.js';
 import { normalizeProviderEventValue } from '../../shared/utils/logMetadata.js';
+import { collectEmbeddedSensitiveValues, REDACTED_VALUE } from '../../shared/utils/sensitive-text.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import type { PhasePromptParts } from './types.js';
 
@@ -12,6 +13,42 @@ interface StreamGroup {
   readonly indexes: number[];
   readonly chunks: string[];
   readonly tool?: string;
+}
+
+function maskTextFragments(chunks: readonly string[]): string[] {
+  const fullText = chunks.join('');
+  const sensitiveValues = new Set<string>();
+  collectEmbeddedSensitiveValues(fullText, sensitiveValues);
+  if (sensitiveValues.size === 0) return [...chunks];
+  const masked = new Uint8Array(fullText.length);
+  for (const value of sensitiveValues) {
+    let index = fullText.indexOf(value);
+    while (index >= 0) {
+      const before = fullText[index - 1];
+      const after = fullText[index + value.length];
+      const isShortValueBoundary = value.length >= 4
+        || ((before === undefined || !/[\p{L}\p{N}_]/u.test(before))
+          && (after === undefined || !/[\p{L}\p{N}_]/u.test(after)));
+      if (isShortValueBoundary) masked.fill(1, index, index + value.length);
+      index = fullText.indexOf(value, index + 1);
+    }
+  }
+  let offset = 0;
+  return chunks.map((chunk) => {
+    let output = '';
+    let inMaskedSpan = false;
+    for (let index = 0; index < chunk.length; index++) {
+      if (masked[offset + index]) {
+        if (!inMaskedSpan) output += REDACTED_VALUE;
+        inMaskedSpan = true;
+      } else {
+        output += chunk[index];
+        inMaskedSpan = false;
+      }
+    }
+    offset += chunk.length;
+    return output;
+  });
 }
 
 /** Evidence captured by the engine for one step execution, independent of provider log settings. */
@@ -76,6 +113,14 @@ export class Phase1ExecutionLog {
       }
       for (const index of group.indexes.slice(1)) omitted.add(index);
     };
+    const finishText = (group: StreamGroup): void => {
+      const fragments = maskTextFragments(group.chunks);
+      for (const [position, index] of group.indexes.entries()) {
+        const entry = this.entries[index];
+        if (entry?.kind !== 'provider_event' || entry.event.type !== 'text') throw new Error('Text group must contain text events');
+        replacements.set(index, { ...entry, event: { type: 'text', data: { text: fragments[position]! } } });
+      }
+    };
     const finishSource = (source: string | undefined): void => {
       const byId = pendingOutputs.get(source);
       if (byId !== undefined) for (const group of byId.values()) finish(group);
@@ -84,7 +129,7 @@ export class Phase1ExecutionLog {
       if (idless !== undefined) finish(idless);
       pendingIdlessOutputs.delete(source);
       const text = pendingTexts.get(source);
-      if (text !== undefined) finish(text);
+      if (text !== undefined) finishText(text);
       pendingTexts.delete(source);
     };
     for (const [index, entry] of this.entries.entries()) {
@@ -93,11 +138,6 @@ export class Phase1ExecutionLog {
         continue;
       }
       const event = entry.event;
-      if (event.type !== 'text') {
-        const text = pendingTexts.get(entry.source);
-        if (text !== undefined) finish(text);
-        pendingTexts.delete(entry.source);
-      }
       if (event.type === 'text') {
         const group = pendingTexts.get(entry.source) ?? { indexes: [], chunks: [] };
         group.indexes.push(index);

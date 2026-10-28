@@ -46,9 +46,63 @@ describe('Phase1ExecutionLog', () => {
     expect(reportInput).not.toContain('synthetic-secret-1929');
     expect(reportInput).not.toContain('another-synthetic-secret');
     expect(JSON.parse(reportInput).filter((entry: { event?: { type: string } }) => entry.event?.type === 'text'))
-      .toEqual([{ kind: 'provider_event', source: 'leader', event: { type: 'text', data: { text: 'password=[REDACTED]' } } }]);
+      .toEqual([
+        { kind: 'provider_event', source: 'leader', event: { type: 'text', data: { text: 'password=' } } },
+        { kind: 'provider_event', source: 'leader', event: { type: 'text', data: { text: '[REDACTED]' } } },
+      ]);
     expect(JSON.parse(reportInput).filter((entry: { event?: { type: string; data: { id?: string } } }) => entry.event?.data.id === 'b'))
       .toEqual([{ kind: 'provider_event', source: 'leader', event: { type: 'tool_output', data: { id: 'b', tool: 'Bash', output: 'ordinary' } } }]);
+  });
+
+  it('masks text fragments around tool events without moving the events', () => {
+    const log = new Phase1ExecutionLog();
+    log.recordEvent({ type: 'text', data: { text: 'Checked files. password=' } }, 'leader');
+    log.recordEvent({ type: 'tool_use', data: { id: 'read-1', tool: 'Read', input: {} } }, 'leader');
+    log.recordEvent({ type: 'tool_result', data: { id: 'read-1', content: 'read complete', isError: false } }, 'leader');
+    log.recordEvent({ type: 'text', data: { text: 'synthetic-secret-across-tool and finished.' } }, 'leader');
+
+    const reportInput = log.toReportInput();
+    expect(reportInput).not.toContain('synthetic-secret-across-tool');
+    expect(JSON.parse(reportInput)).toEqual([
+      { kind: 'provider_event', source: 'leader', event: { type: 'text', data: { text: 'Checked files. password=' } } },
+      { kind: 'provider_event', source: 'leader', event: { type: 'tool_use', data: { id: 'read-1', tool: 'Read', input: {} } } },
+      { kind: 'provider_event', source: 'leader', event: { type: 'tool_result', data: { id: 'read-1', content: 'read complete', isError: false } } },
+      { kind: 'provider_event', source: 'leader', event: { type: 'text', data: { text: '[REDACTED] and finished.' } } },
+    ]);
+  });
+
+  it('masks a secret value split across text events around a tool call', () => {
+    const log = new Phase1ExecutionLog();
+    log.recordEvent({ type: 'text', data: { text: 'password=synthetic-' } });
+    log.recordEvent({ type: 'tool_use', data: { id: 'read-1', tool: 'Read', input: {} } });
+    log.recordEvent({ type: 'text', data: { text: 'secret-across-tool' } });
+
+    const reportInput = log.toReportInput();
+    expect(reportInput).not.toContain('synthetic-');
+    expect(reportInput).not.toContain('secret-across-tool');
+    expect(JSON.parse(reportInput).map((entry: { event: { type: string; data: { text?: string } } }) =>
+      entry.event.type === 'text' ? entry.event.data.text : entry.event.type))
+      .toEqual(['password=[REDACTED]', 'tool_use', '[REDACTED]']);
+  });
+
+  it('does not combine text fragments from different sources or attempts', () => {
+    const log = new Phase1ExecutionLog();
+    const prompt = { systemPrompt: 'system', userInstruction: 'instruction' };
+    log.recordInstruction('initial', prompt, 'leader');
+    log.markDispatched('leader');
+    log.recordEvent({ type: 'text', data: { text: 'password=' } }, 'leader');
+    log.recordEvent({ type: 'text', data: { text: 'ordinary' } }, 'part');
+    log.recordResult({ status: 'done', content: '' }, 'leader');
+    log.recordInstruction('retry', prompt, 'leader');
+    log.markDispatched('leader');
+    log.recordEvent({ type: 'text', data: { text: 'later response' } }, 'leader');
+
+    expect(JSON.parse(log.toReportInput()).filter((entry: { event?: { type: string } }) => entry.event?.type === 'text'))
+      .toEqual([
+        { kind: 'provider_event', source: 'leader', event: { type: 'text', data: { text: 'password=' } } },
+        { kind: 'provider_event', source: 'part', event: { type: 'text', data: { text: 'ordinary' } } },
+        { kind: 'provider_event', source: 'leader', event: { type: 'text', data: { text: 'later response' } } },
+      ]);
   });
 
   it('masks contiguous idless tool output without joining separate attempts', () => {
