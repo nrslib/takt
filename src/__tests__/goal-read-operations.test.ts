@@ -1,6 +1,6 @@
 import { beforeEach,expect,it,vi } from 'vitest';
 import { getTaktGoalDiff,getTaktGoalHistory,getTaktGoalRelation } from '../features/mcp/goalReadOperations.js';
-import { completeGoalInputSchema,goalDiffInputSchema,goalHistoryInputSchema,mergeGoalTaskInputSchema } from '../features/mcp/schemas.js';
+import { completeGoalInputSchema,getGoalInputSchema,goalDiffInputSchema,goalHistoryInputSchema,mergeGoalTaskInputSchema } from '../features/mcp/schemas.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 const doubles = vi.hoisted(() => ({ diff: vi.fn(), history: vi.fn(), relation: vi.fn(), allowed: vi.fn(), get: vi.fn() }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.get; } }));
@@ -13,6 +13,20 @@ vi.mock('../features/mcp/operations.js', async (importOriginal) => ({
 }));
 const input = { cwd: '/project', goalId: goalRecord().id };
 const signal = new AbortController().signal;
+it('accepts human verification steps without discarding their whitespace', () => {
+  const completion = { ...input, expectedSha: 'a'.repeat(40), summary: 'evidence', humanChecks: '  画面を開く\n結果を確認する  ' };
+  expect(completeGoalInputSchema.parse(completion)).toEqual(completion);
+});
+
+it.each(['', ' \n\t '])('rejects invalid human verification steps %#', (humanChecks) => {
+  expect(completeGoalInputSchema.safeParse({ ...input, expectedSha: 'a'.repeat(40), summary: 'evidence', humanChecks }).success).toBe(false);
+});
+
+it.each(['pullRequest', 'pullRequest.number', 'pullRequest.url', 'completion.humanChecks'])(
+  'accepts the saved goal selector %s', (path) => {
+    expect(getGoalInputSchema.parse({ ...input, path })).toEqual({ ...input, path });
+  },
+);
 const workLog = [
   { id: '550e8400-e29b-41d4-a716-446655440003', summary: 'Submitted initial work', recordedAt: '2026-10-13T00:00:00Z' },
   { id: '550e8400-e29b-41d4-a716-446655440004', summary: 'Integrated completed work', recordedAt: '2026-10-13T01:00:00Z' },

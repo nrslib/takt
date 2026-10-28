@@ -120,6 +120,7 @@ export const GoalCompletionSchema = z.object({
   goalSha,
   targetBranch: goalBranch,
   summary: goalText,
+  humanChecks: goalText.optional(),
   changeSummary: z.object({
     filesChanged: z.number().int().nonnegative(),
     additions: z.number().int().nonnegative(),
@@ -164,6 +165,7 @@ export const GoalRecordObjectSchema = z.object({
     id: z.uuid(), recordedAt: z.iso.datetime(),
   })).optional(),
   completion: GoalCompletionSchema.optional(),
+  pullRequest: z.object({ number: z.number().int().safe().positive(), url: z.url() }).strict().optional(),
 }).strict();
 export const GoalSchema = GoalRecordObjectSchema.superRefine((goal, ctx) => {
   if (goal.status !== 'created' && goal.completion === undefined) {

@@ -1,3 +1,4 @@
+import * as goalPr from '../infra/goals/pull-request.js';
 import { readManagerTestDisplay } from './helpers/manager-display-items.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -50,9 +51,11 @@ function session(call: ProviderAgent['call']) {
   return { setup, session: new ManagerServiceClient({ cwd, plan }) };
 }
 beforeEach(async () => {
+  vi.spyOn(goalPr, 'prepareGoalPullRequest').mockResolvedValue({ number: 1950, url: 'https://github.com/example/project/pull/1950' });
   root = realpathSync(mkdtempSync(join(tmpdir(), 'takt-manager-events-'))); cwd = join(root, 'project'); mkdirSync(cwd);
   vi.stubEnv('TAKT_CONFIG_DIR', join(root, 'global')); vi.stubEnv('TAKT_NOTIFY_WEBHOOK', undefined);
   git('init', '-b', 'main'); git('config', 'user.name', 'Test'); git('config', 'user.email', 'test@example.test');
+  git('remote', 'add', 'origin', cwd);
   writeFileSync(join(cwd, '.gitignore'), '.takt/\n'); git('add', '.gitignore'); git('commit', '-m', 'fixture');
   mkdirSync(join(cwd, '.takt')); writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nlanguage: ja\nmanager:\n  auto_run: false\n');
   mkdirSync(join(cwd, '.takt', 'workflows')); writeFileSync(join(cwd, '.takt', 'workflows', 'safe.yaml'), 'name: safe\ninitial_step: implement\nsteps:\n  - name: implement\n    persona: coder\n    rules:\n      - condition: completed\n        next: COMPLETE\n');

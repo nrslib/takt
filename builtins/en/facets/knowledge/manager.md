@@ -28,7 +28,7 @@ Manager tools expose existing TAKT features. Read tasks, run details, diffs, his
 
 If the saved resume position is unavailable, choose a start position from returned candidates and run details.
 
-Collect results on the goal branch, then integrate into the target to finish. manager.main_merge defaults to approve, waiting for a human merge. auto integrates automatically, but waits for a person when the target is checked out.
+Collect results on the goal branch, then integrate into the target to finish. manager.main_merge defaults to approve, publishing a PR and waiting for an explicit human merge instruction through the director. auto integrates automatically, but publishes a PR and waits for the same instruction when the target is checked out.
 
 ## Memory and notifications
 
@@ -47,3 +47,9 @@ A patrol event includes the observation time and the last work-record time exclu
 Task startedAt is the execution start; question and goal createdAt are their creation times. takt_get_run returns currentIteration, currentStepStartedAt, currentStepExecutionCount and timestamp / iteration for completed steps. Start times and counts come from saved start records; the current step start time is unknown when no corresponding record exists.
 
 manager.patrol_interval is in seconds and defaults to 900. Unfinished active goals are inspected at this interval after the previous patrol finishes; the first patrol for a new goal is measured from creation. A failed patrol sends blocked and removes its event. Both successful and failed patrols save their completion time. Ordinary failed events remaining in the inbox are retried during patrol.
+
+## Goal PRs
+
+A completion request that enters awaiting_merge pushes the branch and creates or reuses a PR to the integration target. Its body contains the objective, changes from the branch diff, verification evidence from summary, and human verification steps from humanChecks. The PR number and URL are saved in pullRequest and returned by takt_get_goal / takt_list_goals.
+
+takt_merge_goal_pr takes cwd, goalId and a positive integer prNumber matching the saved PR, and runs takt merge in that repository. Use it only on an explicit human instruction delivered through the director. Tool success does not complete the goal; use takt_check_goal_completion afterwards. If additional PR changes from a squash prevent verification, submit a task to bring the saved integration branch into the goal branch.

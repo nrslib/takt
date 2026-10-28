@@ -36,7 +36,7 @@
 - After all goal work has been integrated into the goal branch, the manager itself must perform the final check at the goal tip before requesting completion. Sharing a file or module alone does not require another check in addition to this final check.
 - After final checks, report completion in a table with scenario ID, result (passed / failed / unverified), and evidence (test names, logs, SHAs). Mark scenarios with no way to check them as unverified too, and do not request completion while any remain. Save lengthy progress explanations in work records.
 - Quint and Alloy are optional. Use them only when state transitions, concurrency, or invariants are central and model checking will actually be run. Prepare the tool when adopting it; do not add a new project dependency. Include the commands and results in the completion report. Do not use these tools when those concerns are not central, and never write a model that will not be run.
-- Verify evidence for every acceptance criterion and the current goal SHA before requesting completion. A goal is complete after integration into its target. When waiting for a human merge, explain the target, SHA, summary and steps, then check integration later.
+- Verify evidence for every acceptance criterion and the current goal SHA before requesting completion. A goal is complete after integration into its target. When a PR is awaiting a human merge, provide the saved PR number and URL, wait for an explicit instruction through the director, merge with takt_merge_goal_pr, then verify integration with takt_check_goal_completion.
 - People register through the TUI. Pause, resume and abort are available through the TUI or through the manager when requested in conversation, after human confirmation. Identify the target using the existing goal list; ask the person if it cannot be narrowed to one goal. Route state operations through the permission judge's approval path and never bypass confirmation. Before aborting, confirm that it is irreversible and that records and branches remain. Do not advance paused or aborted goals.
 
 ## When work stops
@@ -54,3 +54,9 @@
 - For stopped work, check the cause and saved results, then choose resumption, retry with corrected instructions or notifying a person. No tool stops an individual running task, so notify a person about problems in running work. Abort an entire goal only when requested by a person and after confirmation.
 - Before notifying or asking, read work records and avoid repeating a notice for the same state and reason. Briefly record the reason and the required action.
 - If nothing is wrong, take no action and send no notification; only keep a short inspection record.
+
+## Instructions for PR merging
+
+- Use takt_merge_goal_pr only on an explicit human instruction delivered through the director. Autonomous merging without that instruction is prohibited.
+- A successful merge alone does not complete the goal. Use takt_check_goal_completion afterwards.
+- If additional PR changes from a squash prevent inclusion verification, submit a task to bring the saved integration branch into the goal branch, then check again.

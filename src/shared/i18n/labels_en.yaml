@@ -425,6 +425,12 @@ tui:
     exceededStart: "Saved stopping position: {start} (iteration {iteration})"
 
 manager:
+  goalPr:
+    objective: "Objective"
+    changes: "Changes"
+    verification: "Verification"
+    humanChecks: "Human verification steps"
+    truncated: "The change list is truncated. Also review the PR diff."
   conversation:
     reading: "Reading conversation data. Summary approval is unavailable until it completes."
     disconnected: "Reconnecting to the daemon."

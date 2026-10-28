@@ -8,10 +8,15 @@ function preview(value: string) {
 
 export function completionSummary(completion: Goal['completion']) {
   if (completion === undefined) return undefined;
-  const { summary, ...decision } = completion;
+  const { summary, humanChecks, ...decision } = completion;
+  const texts = [{ path: 'completion.summary', value: summary },
+    ...(humanChecks === undefined ? [] : [{ path: 'completion.humanChecks', value: humanChecks }])];
   return { ...decision, summary: preview(summary),
-    ...(preview(summary) === summary ? {} : { truncated: true,
-      omissions: [{ path: 'completion.summary', totalBytes: Buffer.byteLength(summary) }] }) };
+    ...(humanChecks === undefined ? {} : { humanChecks: preview(humanChecks) }),
+    ...(texts.some(({ value }) => preview(value) !== value) ? { truncated: true,
+      omissions: texts.filter(({ value }) => preview(value) !== value).map(({ path, value }) => ({
+        path, totalBytes: Buffer.byteLength(value),
+      })) } : {}) };
 }
 
 export function questionSummary(question: GoalQuestion) {
@@ -40,6 +45,7 @@ export function goalSummary(goal: Goal) {
   return {
     id: goal.id, status: goal.status, executionStatus: goal.executionStatus,
     branch: goal.branch, integrationBranch: goal.integrationBranch,
+    ...(goal.pullRequest === undefined ? {} : { pullRequest: goal.pullRequest }),
     ...(goal.completion === undefined ? {} : { completion: completionSummary(goal.completion) }),
     objective: preview(goal.objective), acceptanceCriteriaVersion: goal.acceptanceCriteriaVersion,
     questions: pending.slice(0, 3).map(questionSummary),
@@ -61,6 +67,7 @@ export function goalSummary(goal: Goal) {
 export function goalWriteSummary(goal: Goal) {
   return { id: goal.id, status: goal.status, executionStatus: goal.executionStatus,
     branch: goal.branch, integrationBranch: goal.integrationBranch,
+    ...(goal.pullRequest === undefined ? {} : { pullRequest: goal.pullRequest }),
     ...(goal.completion === undefined ? {} : { completion: completionSummary(goal.completion) }) };
 }
 

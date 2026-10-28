@@ -1,9 +1,10 @@
 import { beforeEach,expect,it,vi } from 'vitest';
-import { checkTaktGoalCompletion,completeTaktGoal,mergeTaktGoalTask,reopenTaktGoal } from '../features/mcp/goalIntegrationOperations.js';
+import { checkTaktGoalCompletion,completeTaktGoal,mergeTaktGoalTask,mergeTaktGoalPr,reopenTaktGoal } from '../features/mcp/goalIntegrationOperations.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 import { responseBytes, MCP_RESPONSE_MAX_BYTES } from '../features/mcp/response.js';
-const doubles = vi.hoisted(() => ({ get: vi.fn(), merge: vi.fn(), complete: vi.fn(), check: vi.fn(), reopen: vi.fn(), notify: vi.fn(), config: vi.fn(), resolve: vi.fn() }));
+const doubles = vi.hoisted(() => ({ get: vi.fn(), merge: vi.fn(), mergePr: vi.fn(), complete: vi.fn(), check: vi.fn(), reopen: vi.fn(), notify: vi.fn(), config: vi.fn(), resolve: vi.fn() }));
+vi.mock('../features/manager/mergeGoalPr.js', () => ({ mergeGoalPr: doubles.mergePr }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.get; } }));
 vi.mock('../infra/goals/integration.js', () => ({ integrateGoalTask: doubles.merge, completeGoal: doubles.complete, checkGoalCompletion: doubles.check, reopenGoal: doubles.reopen }));
 vi.mock('../infra/config/managerConfig.js', () => ({ resolveManagerConfig: doubles.config }));
@@ -13,6 +14,37 @@ vi.mock('../features/manager/notifications.js', () => ({ resolveManagerNotificat
 const policy = { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true };
 const input = { cwd: '/project', goalId: goalRecord().id };
 const signal = new AbortController().signal;
+const waitingGoal = { ...goalRecord(), status: 'awaiting_merge' as const,
+  completion: { goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', summary: 'evidence',
+    instructions: [], changeSummary: { filesChanged: 1, additions: 1, deletions: 0, files: [], truncated: false, totalsTruncated: false } },
+  pullRequest: { number: 1950, url: 'https://github.com/example/project/pull/1950' },
+};
+it('passes the matching saved PR and cancellation to the merge runner', async () => {
+  doubles.get.mockResolvedValue(waitingGoal);
+  doubles.mergePr.mockResolvedValue({ success: true, output: 'merged' });
+  const result = await mergeTaktGoalPr({ ...input, prNumber: 1950 }, {}, signal);
+  expect(result.isError).toBeUndefined();
+  expect(doubles.mergePr).toHaveBeenCalledExactlyOnceWith(input.cwd, 1950, waitingGoal.branch, waitingGoal.completion.goalSha, signal);
+});
+it.each(['created', 'completed', 'missing PR', 'wrong PR', 'paused', 'aborted'])('rejects %s before calling the PR merge runner', async (condition) => {
+  const number = condition === 'wrong PR' ? 1951 : 1950;
+  doubles.get.mockResolvedValue({ ...waitingGoal, status: condition === 'created' || condition === 'completed' ? condition : 'awaiting_merge',
+    executionStatus: condition === 'paused' || condition === 'aborted' ? condition : 'active',
+    ...(condition === 'completed' ? { completion: { ...waitingGoal.completion, targetSha: 'b'.repeat(40) } } : {}),
+    pullRequest: condition === 'missing PR' ? undefined : { number, url: `https://github.com/example/project/pull/${number}` } });
+  expect((await mergeTaktGoalPr({ ...input, prNumber: 1950 }, {}, signal)).isError).toBe(true);
+  expect(doubles.mergePr).not.toHaveBeenCalled();
+});
+it.each(['ja', 'en'])('passes human verification steps and resolved language %s to completion', async (language) => {
+  doubles.resolve.mockReturnValue(language);
+  const completion = { ...input, expectedSha: 'a'.repeat(40), summary: 'evidence', humanChecks: '  Open the result\nCheck its content  ' };
+
+  const result = await completeTaktGoal(completion, {}, signal);
+
+  expect(result.isError).toBeUndefined();
+  expect(doubles.complete).toHaveBeenCalledOnce();
+  expect(doubles.complete.mock.calls[0]).toEqual(expect.arrayContaining([completion.humanChecks, language]));
+});
 beforeEach(() => { vi.resetAllMocks(); doubles.get.mockResolvedValue(goalRecord()); doubles.config.mockReturnValue({ mainMerge: 'approve', policy }); doubles.resolve.mockReturnValue('ja'); doubles.merge.mockResolvedValue({ status: 'merged' }); doubles.complete.mockResolvedValue({ status: 'awaiting_merge' }); doubles.check.mockResolvedValue({ included: true }); });
 it.each(['paused', 'aborted'] as const)('rejects writes against a %s goal before invoking tools', async (executionStatus) => {
   doubles.get.mockResolvedValue({ ...goalRecord(), executionStatus });
@@ -57,7 +89,7 @@ it('passes reviewed SHA, notification policy and cancellation directly to integr
 it.each(['auto', 'approve'] as const)('uses the configured %s completion policy', async (mainMerge) => {
   doubles.config.mockReturnValue({ mainMerge, policy });
   await completeTaktGoal({ ...input, expectedSha: 'a'.repeat(40), summary: 'evidence' }, {}, signal);
-  expect(doubles.complete).toHaveBeenCalledExactlyOnceWith(input.cwd, input.goalId, 'a'.repeat(40), 'evidence', mainMerge, signal, policy);
+  expect(doubles.complete).toHaveBeenCalledExactlyOnceWith(input.cwd, input.goalId, 'a'.repeat(40), 'evidence', mainMerge, signal, policy, undefined, 'ja');
 });
 it('returns the checked completion state and target SHA and notifies with the saved goal', async () => {
   const previous = { ...goalRecord(), status: 'awaiting_merge' as const };
@@ -133,7 +165,7 @@ it('returns a completion request error without notifying when the approval chang
   const result = await completeTaktGoal({ ...input, expectedSha: 'a'.repeat(40), summary: 'evidence' }, {}, signal);
 
   expect(result.isError).toBe(true);
-  expect(doubles.complete).toHaveBeenCalledExactlyOnceWith(input.cwd, input.goalId, 'a'.repeat(40), 'evidence', 'approve', signal, policy);
+  expect(doubles.complete).toHaveBeenCalledExactlyOnceWith(input.cwd, input.goalId, 'a'.repeat(40), 'evidence', 'approve', signal, policy, undefined, 'ja');
   expect(doubles.notify).not.toHaveBeenCalled();
   expect(doubles.get).toHaveBeenCalledOnce();
 });
