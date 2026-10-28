@@ -137,6 +137,8 @@
     "src/__tests__/deleteSelectedTasks.test.ts",
     "src/__tests__/dependency-versions.test.ts",
     "src/__tests__/development-loop-routing.integration.test.ts",
+    "src/__tests__/devin-client.test.ts",
+    "src/__tests__/devin-provider.test.ts",
     "src/__tests__/direct-run-nested-resume.integration.test.ts",
     "src/__tests__/directInstructMode.test.ts",
     "src/__tests__/directRunResume.test.ts",
