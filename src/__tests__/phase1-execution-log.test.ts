@@ -2,6 +2,76 @@ import { describe, expect, it } from 'vitest';
 import { Phase1ExecutionLog } from '../core/workflow/phase1-execution-log.js';
 
 describe('Phase1ExecutionLog', () => {
+  it('masks a secret split across tool output chunks before deduplicating the full result', () => {
+    const log = new Phase1ExecutionLog();
+    log.recordEvent({ type: 'tool_output', data: { id: 'x', tool: 'Bash', output: 'password=' } });
+    log.recordEvent({ type: 'tool_output', data: { id: 'x', tool: 'Bash', output: 'synthetic-secret-1929' } });
+    log.recordEvent({ type: 'tool_result', data: { id: 'x', content: 'password=synthetic-secret-1929', isError: false } });
+
+    const reportInput = log.toReportInput();
+    expect(reportInput).not.toContain('synthetic-secret-1929');
+    expect(JSON.parse(reportInput)).toEqual([
+      { kind: 'provider_event', event: { type: 'tool_result', data: { id: 'x', content: 'password=[REDACTED]', isError: false } } },
+    ]);
+  });
+
+  it('masks split secrets in unmatched and unfinished tool output', () => {
+    const log = new Phase1ExecutionLog();
+    log.recordEvent({ type: 'tool_output', data: { id: 'different', tool: 'Bash', output: 'password=' } });
+    log.recordEvent({ type: 'tool_output', data: { id: 'different', tool: 'Bash', output: 'synthetic-secret-1929' } });
+    log.recordEvent({ type: 'tool_result', data: { id: 'different', content: 'another result', isError: false } });
+    log.recordEvent({ type: 'tool_output', data: { id: 'unfinished', tool: 'Bash', output: 'password=' } });
+    log.recordEvent({ type: 'tool_output', data: { id: 'unfinished', tool: 'Bash', output: 'another-synthetic-secret' } });
+
+    const reportInput = log.toReportInput();
+    expect(reportInput).not.toContain('synthetic-secret-1929');
+    expect(reportInput).not.toContain('another-synthetic-secret');
+    expect(JSON.parse(reportInput).filter((entry: { event: { type: string } }) => entry.event.type === 'tool_output'))
+      .toEqual([
+        { kind: 'provider_event', event: { type: 'tool_output', data: { id: 'different', tool: 'Bash', output: 'password=[REDACTED]' } } },
+        { kind: 'provider_event', event: { type: 'tool_output', data: { id: 'unfinished', tool: 'Bash', output: 'password=[REDACTED]' } } },
+      ]);
+  });
+
+  it('masks text deltas across other sources without combining distinct tool ids', () => {
+    const log = new Phase1ExecutionLog();
+    log.recordEvent({ type: 'text', data: { text: 'password=' } }, 'leader');
+    log.recordEvent({ type: 'tool_output', data: { id: 'other', tool: 'Bash', output: 'other output' } }, 'part');
+    log.recordEvent({ type: 'text', data: { text: 'synthetic-secret-1929' } }, 'leader');
+    log.recordEvent({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: 'password=' } }, 'leader');
+    log.recordEvent({ type: 'tool_output', data: { id: 'b', tool: 'Bash', output: 'ordinary' } }, 'leader');
+    log.recordEvent({ type: 'tool_output', data: { id: 'a', tool: 'Bash', output: 'another-synthetic-secret' } }, 'leader');
+
+    const reportInput = log.toReportInput();
+    expect(reportInput).not.toContain('synthetic-secret-1929');
+    expect(reportInput).not.toContain('another-synthetic-secret');
+    expect(JSON.parse(reportInput).filter((entry: { event?: { type: string } }) => entry.event?.type === 'text'))
+      .toEqual([{ kind: 'provider_event', source: 'leader', event: { type: 'text', data: { text: 'password=[REDACTED]' } } }]);
+    expect(JSON.parse(reportInput).filter((entry: { event?: { type: string; data: { id?: string } } }) => entry.event?.data.id === 'b'))
+      .toEqual([{ kind: 'provider_event', source: 'leader', event: { type: 'tool_output', data: { id: 'b', tool: 'Bash', output: 'ordinary' } } }]);
+  });
+
+  it('masks contiguous idless tool output without joining separate attempts', () => {
+    const log = new Phase1ExecutionLog();
+    const prompt = { systemPrompt: 'system', userInstruction: 'instruction' };
+    log.recordInstruction('initial', prompt);
+    log.markDispatched();
+    log.recordEvent({ type: 'tool_output', data: { tool: 'Bash', output: 'password=' } });
+    log.recordEvent({ type: 'tool_output', data: { tool: 'Bash', output: 'synthetic-secret-1929' } });
+    log.recordResult({ status: 'done', content: '' });
+    log.recordInstruction('retry', prompt);
+    log.markDispatched();
+    log.recordEvent({ type: 'tool_output', data: { tool: 'Bash', output: 'ordinary output' } });
+
+    const reportInput = log.toReportInput();
+    expect(reportInput).not.toContain('synthetic-secret-1929');
+    expect(JSON.parse(reportInput).filter((entry: { event?: { type: string } }) => entry.event?.type === 'tool_output'))
+      .toEqual([
+        { kind: 'provider_event', event: { type: 'tool_output', data: { tool: 'Bash', output: 'password=[REDACTED]' } } },
+        { kind: 'provider_event', event: { type: 'tool_output', data: { tool: 'Bash', output: 'ordinary output' } } },
+      ]);
+  });
+
   it('keeps one complete tool result when streamed output repeats it', () => {
     const log = new Phase1ExecutionLog();
     log.recordEvent({ type: 'tool_use', data: { id: 'read-1', tool: 'Read', input: {} } });

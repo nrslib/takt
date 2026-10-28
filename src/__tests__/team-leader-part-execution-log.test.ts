@@ -30,7 +30,7 @@ describe('team leader part execution log', () => {
     vi.mocked(runAgent).mockImplementationOnce(async (_persona, instruction, options) => {
       options.onPromptResolved?.({ systemPrompt: 'reviewer', userInstruction: instruction });
       options.onDispatch?.(options.permissionMode);
-      options.onStream?.({ type: 'tool_result', data: { id: 'read', content: 'partial evidence' } });
+      options.onStream?.({ type: 'tool_result', data: { id: 'read', content: 'partial evidence', isError: false } });
       controller.abort(cancellation);
       if (mode === 'throw') throw cancellation;
       return completed;
