@@ -65,10 +65,6 @@ it.each(['empty', 'draft', 'proposal'].flatMap((state) => [
 ].map((entry) => ({ state, ...entry }))))(
   'keeps $state input and the displayed proposal unchanged after retired key $name', async ({ state, key }) => {
     const client = new ManagerClientDouble();
-    client.change({ items: [...client.getSnapshot().items, { kind: 'notice', notice: {
-      id: randomUUID(), repositoryDirectory: cwd, project: 'manager-repository', goalId: goalRecord().id,
-      objective: 'Saved notice', kind: 'custom', recordedAt: '2026-10-24T00:00:00Z', message: 'Saved notice body',
-    } }] });
     const context = mount('en', client);
     if (state === 'proposal') await showProposal(context);
     else if (state === 'draft') {
@@ -213,14 +209,14 @@ it('keeps revision five on the same mounted screen after delayed revision four d
   const { client } = context;
   const initial = { ...client.getSnapshot().state!, pending: { revision: 4, repositoryDirectory: cwd, summary: summaryA } };
   const receiver = new ConversationTransferReceiver(initial.conversationId, {
-    state: (state) => client.change({ state }), item() {}, output: (output) => client.output(output),
+    state: (state) => client.change({ state }), item() {}, remove() {}, output: (output) => client.output(output),
     read: (readStatus) => client.change({ readStatus }),
   });
   const metadata = (revision: number, stateSequence: number) => ({ conversationId: initial.conversationId,
-    transferId: randomUUID(), revision, stateSequence, operationId: null });
+    transferId: randomUUID(), mode: 'initial' as const, revision, stateSequence, operationId: null });
   const collect = async (read: ReturnType<typeof metadata>, state: ConversationState, snapshot = false) => {
     const frames = [];
-    for await (const { frame } of conversationTransferFrames(initial.conversationId, read, snapshot ? 'snapshot' : 'output',
+    for await (const { frame } of conversationTransferFrames(initial.conversationId, snapshot ? read : { ...read, mode: undefined }, snapshot ? 'snapshot' : 'output',
       (async function* () { yield snapshot ? { kind: 'state', state } : { kind: 'pending', state }; })())) frames.push(frame);
     return frames;
   };
@@ -245,10 +241,10 @@ it('disables approval after a mid-item disconnect and restores the whole proposa
   const { client } = context;
   const state = { ...client.getSnapshot().state!, pending: { revision: 4, repositoryDirectory: cwd, summary: summaryA } };
   const receiver = new ConversationTransferReceiver(state.conversationId, {
-    state: (value) => client.change({ state: value }), item() {}, output: (output) => client.output(output),
+    state: (value) => client.change({ state: value }), item() {}, remove() {}, output: (output) => client.output(output),
     read: (readStatus) => client.change({ readStatus }),
   });
-  const read = { conversationId: state.conversationId, transferId: randomUUID(), revision: 4, stateSequence: 2, operationId: null };
+  const read = { conversationId: state.conversationId, transferId: randomUUID(), mode: 'initial' as const, revision: 4, stateSequence: 2, operationId: null };
   receiver.expectRead(read);
   const { conversationId, ...wire } = read;
   receiver.receive({ protocolVersion: 1, type: 'event', conversationId,

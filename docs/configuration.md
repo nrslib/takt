@@ -467,6 +467,83 @@ Most config keys can be overridden with an environment variable named `TAKT_` pl
 
 Separately from config-key overrides, `TAKT_NOTIFY_WEBHOOK` sets a Slack Incoming Webhook URL. When it is set, TAKT posts a Slack notification on pipeline completion and when a `takt run` task batch finishes (run summary). Enabled manager goal notifications use the same webhook.
 
+## Slack conversations with manager
+
+In a conversation thread, send `/make-goal` to create a proposal. Use **Approve registration** or **Continue conversation**; buttons on an outdated proposal no longer work.
+
+Use Slack Socket Mode to talk to manager without exposing a public URL. Conversation replies and answers to inquiries use the Slack App below. Completion notices and other notifications continue to use the Incoming Webhook configured by `TAKT_NOTIFY_WEBHOOK`; you can use both together.
+
+### Create the Slack App
+
+1. In Slack's app creation screen, choose **From an app manifest**, select your workspace, and paste this YAML:
+
+   ```yaml
+   display_information:
+     name: TAKT manager
+   features:
+     bot_user:
+       display_name: TAKT manager
+       always_online: true
+   oauth_config:
+     scopes:
+       bot:
+         - chat:write
+         - channels:history
+         - groups:history
+   settings:
+     event_subscriptions:
+       bot_events:
+         - message.channels
+         - message.groups
+     interactivity:
+       is_enabled: true
+     socket_mode_enabled: true
+   ```
+
+2. Install the App to your workspace. Under **OAuth & Permissions**, copy the bot token (`xoxb-…`).
+3. Under **Basic Information → App-Level Tokens**, create an App-Level Token with the `connections:write` scope and copy it (`xapp-…`).
+4. Invite the bot to the channel where you want to talk: `/invite @TAKT manager`.
+5. Open the channel details in Slack to find the channel ID. Open each permitted user's profile and choose **Copy member ID** to get their user ID.
+
+### Configure and start
+
+In the repository's `.takt/config.yaml`, choose one channel and list the Slack users allowed to send messages and use buttons:
+
+```yaml
+manager:
+  slack:
+    channel_id: C0123ABCD
+    allowed_user_ids: [U0AAAAAA]
+```
+
+`manager.slack` is available only in repository configuration, not global `~/.takt/config.yaml`. Do not put tokens under `manager.slack`: configuration validation rejects token fields.
+
+The repository's `.takt/config.yaml` may be version-controlled and shared. Changes to `manager.slack.allowed_user_ids` change which Slack users can send input to manager. Before starting the daemon, review changes to the repository configuration and use only settings you trust.
+
+Slack settings and the registered repository list are loaded when the daemon starts. After changing them, run `takt daemon stop` and start the daemon again to apply the changes, including removal of allowed users.
+
+Set both tokens in the shell that starts the daemon, then start it through `takt manager` or `takt daemon`. For example:
+
+```bash
+export TAKT_SLACK_APP_TOKEN='xapp-...'
+export TAKT_SLACK_BOT_TOKEN='xoxb-...'
+takt manager
+```
+
+`TAKT_SLACK_APP_TOKEN` is the App-Level Token with `connections:write`; `TAKT_SLACK_BOT_TOKEN` is the bot token. After reading them, the daemon removes both variables from its environment so provider and tool subprocesses do not inherit them. There is no automatic startup mechanism; start the daemon with one of the commands above.
+
+When a repository has Slack configured and both tokens are present, the daemon keeps listening even when there is no work. If Slack is not configured or either token is missing, it retains its usual behavior of exiting when idle. If two repositories configure the same channel, Slack is disabled for both, and the reason is written to `~/.takt/logs/daemon.log`.
+
+### Conversations and inquiries
+
+- Post a message in the configured channel. Manager replies in that post's thread; continue the exchange there. All conversation threads connect to the same manager conversation for the repository, shared with the TUI. Replies go only to the thread where the message was sent. Replies to TUI messages are not sent to Slack.
+- Messages in other channels, DMs to the bot, and messages or button actions from users outside `allowed_user_ids` receive no response.
+- A message sent while the conversation is processing gets a busy response and is not queued or executed. Send it again after processing finishes.
+- Each inquiry (a question, approval, or operation request) appears as a separate new post outside any thread in the configured channel. Use buttons for approval decisions (Allow or Deny and scope) and choices. For an approval scope broader than this time only, the button opens a modal: edit the proposed permission sentence and confirm it to append the sentence to the permission Markdown.
+- Answer free-text inquiries by replying in the inquiry post's thread. When its inquiry binding is available, the reply is treated as an answer, not a manager conversation message. Answers are saved with source `slack`.
+- Inquiries already pending when Slack connects are not posted to Slack; answer them in the TUI with `Ctrl+R`. Each new inquiry after connection is posted once, with no retry. If the binding between a post and its inquiry could not be saved or cannot be read, replies in that thread are treated as ordinary conversation, not answers.
+- Notices such as goal completion are not posted through the conversation connection. They continue to arrive through `TAKT_NOTIFY_WEBHOOK`.
+
 ## Manager sensitive read targets
 
 In global `~/.takt/config.yaml` or project `.takt/config.yaml`, `manager.sensitive_paths` adds files and directories that require the manager permission judge even inside assigned repositories:

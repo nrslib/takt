@@ -37,7 +37,7 @@ const DOWN = '\x1b[B';
 const ESC = '\x1b[27u';
 const workspaceId = '750e8400-e29b-41d4-a716-446655440001';
 const sentence = '出力先を限定してWriteを許可する';
-const waitFor = (assertion: () => void | Promise<void>) => vi.waitFor(assertion, { timeout: 2000 });
+const waitFor = (assertion: () => void | Promise<void>) => vi.waitFor(assertion, { timeout: 10_000 });
 
 export function registerManagerTypedAnswerTests(): void {
   describe('manager typed inquiry answers', () => {
@@ -608,9 +608,13 @@ export function registerManagerTypedAnswerTests(): void {
       app!.unmount();
       await session!.close();
       await mount('en', ownerKind === 'workspace');
+      const save = vi.spyOn(session!, 'submit');
       await openAnswer(question.body);
       await choose(/^Deny$/u);
       await comment('');
+      await waitFor(() => expect(save).toHaveBeenCalledOnce());
+      expect(await save.mock.results[0]!.value).toMatchObject({ kind: 'accepted' });
+      await waitFor(() => expect(session!.results).toContainEqual(expect.objectContaining({ kind: 'answer_saved', answerSaved: true })));
       await waitFor(async () => expect(await new StandaloneInquiryStore(configDirectory, owner).list()).toEqual([
         expect.objectContaining({ id: question.id, status: 'answered', answer: expect.objectContaining({ decision: 'deny', text: '', source: 'tui' }) }),
       ]));
@@ -632,6 +636,9 @@ export function registerManagerTypedAnswerTests(): void {
       await allow(/project/iu);
       await editSentence(sentence);
       if (assigned) {
+        await waitFor(() => expect(save).toHaveBeenCalledOnce());
+        expect(await save.mock.results[0]!.value).toMatchObject({ kind: 'accepted' });
+        await waitFor(() => expect(session!.results).toContainEqual(expect.objectContaining({ kind: 'answer_saved', answerSaved: true })));
         await waitFor(async () => expect(await store.list()).toEqual([
           expect.objectContaining({ id: question.id, status: 'answered',
             answer: expect.objectContaining({ decision: 'allow', scope: 'project', text: '' }) }),

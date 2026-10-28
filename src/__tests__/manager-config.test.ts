@@ -8,12 +8,15 @@ beforeEach(() => { vi.resetAllMocks(); doubles.project.mockReturnValue({}); doub
 it('defaults to automatic execution without inventing a default workflow', () => {
   expect(resolveManagerConfig('/project')).toMatchObject({ autoRun: true, defaultWorkflow: undefined, mainMerge: 'approve' });
 });
-it('defaults patrols to 30 minutes and prioritizes project intervals over global intervals', () => {
-  expect(resolveManagerConfig('/project').patrolInterval).toBe(1800);
-  doubles.global.mockReturnValue({ manager: { patrolInterval: 900 } });
+it('defaults patrols to 15 minutes when neither configuration specifies an interval', () => {
   expect(resolveManagerConfig('/project').patrolInterval).toBe(900);
-  doubles.project.mockReturnValue({ manager: { patrolInterval: 60 } });
-  expect(resolveManagerConfig('/project').patrolInterval).toBe(60);
+});
+it('prioritizes project patrol intervals and falls back to the explicit global interval', () => {
+  doubles.global.mockReturnValue({ manager: { patrolInterval: 1800 } });
+  doubles.project.mockReturnValue({ manager: { patrolInterval: 600 } });
+  expect(resolveManagerConfig('/project').patrolInterval).toBe(600);
+  doubles.project.mockReturnValue({});
+  expect(resolveManagerConfig('/project').patrolInterval).toBe(1800);
 });
 it.each([0, -1, 0.5, '1800', Infinity])('rejects invalid patrol interval %s at the configuration boundary', (patrol_interval) => {
   const input = { manager: { patrol_interval } };
@@ -100,4 +103,32 @@ it.each([null, 'private', [42], { path: 'private' }].map((sensitive_paths) => ({
   const input = { manager: { sensitive_paths } };
   expect(ProjectConfigSchema.safeParse(input).success).toBe(false);
   expect(GlobalConfigSchema.safeParse(input).success).toBe(false);
+});
+
+it.each([{ allowedUserIds: ['U0AAA', 'U0BBB'] }, { allowedUserIds: [] }])('accepts repository Slack channel and allowed user IDs $allowedUserIds', ({ allowedUserIds }) => {
+  const slack = { channel_id: 'C0123', allowed_user_ids: allowedUserIds };
+
+  expect(ProjectConfigSchema.parse({ manager: { slack } })).toMatchObject({ manager: { slack } });
+});
+
+it.each([
+  { channel_id: 123, allowed_user_ids: ['U0AAA'] },
+  { channel_id: 'C0123', allowed_user_ids: 'U0AAA' },
+  { channel_id: 'C0123', allowed_user_ids: [123] },
+  { channel_id: 'C0123' },
+  { allowed_user_ids: ['U0AAA'] },
+])('rejects Slack settings without a string channel and a string user list: %j', (slack) => {
+  expect(ProjectConfigSchema.safeParse({ manager: { slack } }).success).toBe(false);
+});
+
+it.each(['app_token', 'bot_token'])('rejects %s in repository Slack settings', (key) => {
+  const slack = { channel_id: 'C0123', allowed_user_ids: ['U0AAA'], [key]: 'environment-only' };
+
+  expect(ProjectConfigSchema.safeParse({ manager: { slack } }).success).toBe(false);
+});
+
+it('keeps Slack channel authorization specific to repository configuration', () => {
+  const slack = { channel_id: 'C0123', allowed_user_ids: ['U0AAA'] };
+
+  expect(GlobalConfigSchema.safeParse({ manager: { slack } }).success).toBe(false);
 });

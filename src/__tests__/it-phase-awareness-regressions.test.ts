@@ -20,7 +20,7 @@ const phaseBodies = {
   ja: {
     1: 'このフェーズでは、ステップの作業をします。前のレポートフェーズや判定フェーズの「ファイルを読まない」「ツールを使わない」「ソースファイルを変更しない」という制限は、このフェーズにはありません。このステップの指示と権限の範囲で、必要なファイルを読み、コマンドを実行して確かめてください。',
     2: `このフェーズでは、今回の作業フェーズの結果を、「出力内容」の節で指定した形式のレポートとして回答します。
-- 今回の作業フェーズの結果は「作業結果」の節です。会話の中に前の回の回答が残っていても、レポートには「作業結果」の節の内容を書いてください。「作業結果」の節に、今回の作業フェーズの回答を取得できなかったと書かれている場合は、会話の中の回答で補わず、作業結果がないためレポートを作れないことと、その理由を書いてください。
+- 今回の作業フェーズの結果は「作業結果」と、提示されている場合は「今回の Phase 1 実行記録」の節で確認してください。会話に残る前の回の回答を今回の結果として使わないでください。判定だけの構造化出力から実施した作業を推測せず、実行記録にない確認を実施済みと書かないでください。今回の結果を確認できない場合は、その範囲と理由を明示してください。
 - 「元の要求」と「追加のユーザー入力」の節は、レポートが答えるべき要求として使ってください。
 - 「Phase 1に提示された上流応答」と「Phase 1に注入された参考レポート」の節は、作業フェーズが受け取った材料です。作業結果の根拠を確かめるためだけに使い、そこから新しい結論を作らないでください。
 このフェーズでは、ファイルを読まず、ツールも使いません。足りない情報は推測せず、分からないと書いてください。この制限はこのフェーズの中だけのもので、次の作業フェーズには持ち越しません。`,
@@ -30,7 +30,7 @@ const phaseBodies = {
   en: {
     1: "In this phase, perform the step's work. Restrictions from previous report or judgment phases against reading files, using tools, or modifying source files do not apply to this phase. Within this step's instructions and permissions, read the necessary files and run commands to verify facts.",
     2: `In this phase, respond with a report of the current work phase's results in the format specified in the "Output" section.
-- The results of the current work phase are in the "Work Results" section. Even if responses from earlier executions remain in the conversation, report the contents of "Work Results". If that section says the current work phase's response could not be retrieved, do not fill the gap with responses from the conversation. Explain that a report cannot be created because the work results are unavailable, and state the reason.
+- Use "Work Results" and, when provided, "Current Phase 1 Execution Record" to establish what happened in this work phase. Do not treat responses left in the conversation from earlier executions as current results. A judgment-only structured response does not establish which work was performed. Do not claim checks absent from the execution record. If current results cannot be verified, state the affected scope and reason.
 - Use the "Original Request" and "Additional User Inputs" sections as the requirements the report must address.
 - The "Upstream Response Presented in Phase 1" and "Reference Reports Injected in Phase 1" sections contain materials received by the work phase. Use them only to check the evidence for the work results; do not draw new conclusions from them.
 In this phase, do not read files or use tools. Do not guess missing information; state what is unknown. These restrictions apply only within this phase and do not carry over to the next work phase.`,
@@ -48,7 +48,8 @@ function expectPhase(instruction: string, language: Language, step: string, phas
     ? `今は ${step} ステップの${name}フェーズ（Phase ${phase}）です（Step Iteration: ${stepIteration}）。`
     : `You are now in the ${name} phase (Phase ${phase}) of step ${step} (Step Iteration: ${stepIteration}).`;
   const expected = `${heading}\n\n${firstLine}\n${phaseBodies[language][phase]}`;
-  expect(instruction.split(heading)).toHaveLength(2);
+  // Phase 1 records may quote older headings inside JSON; only top-level headings are active.
+  expect(instruction.match(/^## (?:担当とフェーズ|Assignment and phase)\n/gm), instruction).toHaveLength(1);
   expect(instruction.trimStart().startsWith(`${expected}\n\n`)).toBe(true);
 }
 
@@ -88,9 +89,8 @@ describe('phase awareness review regressions', () => {
     invalidateAllResolvedConfigCache();
     rmSync(directory, { recursive: true, force: true });
     for (const call of calls) {
-      const request = `${call.system}\n\n${call.instruction}`;
-      expect(request.match(/## (?:担当|Assignment)(?:\n|\\n)/g), request).toHaveLength(1);
-      expect(request.match(/## (?:担当とフェーズ|Assignment and phase)/g), request).toHaveLength(1);
+      expect(call.system.match(/^## (?:担当|Assignment)\n/gm), call.system).toHaveLength(1);
+      expect(call.instruction.match(/^## (?:担当とフェーズ|Assignment and phase)\n/gm), call.instruction).toHaveLength(1);
     }
   });
 

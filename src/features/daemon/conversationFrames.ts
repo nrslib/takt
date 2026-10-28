@@ -1,5 +1,5 @@
 import type { Socket } from 'node:net';
-import type { OutputVersion, SnapshotRead } from '../manager/conversationPort.js';
+import type { OutputVersion, SnapshotMode, SnapshotRead } from '../manager/conversationPort.js';
 
 export const MAX_CONVERSATION_FRAME_BYTES = 1_048_576;
 const RAW_FRAGMENT_BYTES = 256 * 1024;
@@ -66,15 +66,17 @@ export async function writeConversationFrame(socket: Socket, value: unknown): Pr
 export interface ConversationTransfer {
   frame: unknown;
   boundary: boolean;
+  terminal: boolean;
 }
 
 export async function* conversationTransferFrames(
-  conversationId: string, metadata: OutputVersion & { transferId: string }, purpose: 'snapshot' | 'output',
+  conversationId: string, metadata: OutputVersion & { transferId: string; mode?: SnapshotMode }, purpose: 'snapshot' | 'output',
   items: AsyncIterable<unknown>,
 ): AsyncGenerator<ConversationTransfer> {
   const envelope = (output: unknown) => ({ protocolVersion: 1, type: 'event', conversationId, output });
   yield { frame: envelope({ kind: 'transfer_start', purpose, transferId: metadata.transferId,
-    revision: metadata.revision, stateSequence: metadata.stateSequence, operationId: metadata.operationId }), boundary: false };
+    revision: metadata.revision, stateSequence: metadata.stateSequence, operationId: metadata.operationId,
+    ...(metadata.mode === undefined ? {} : { mode: metadata.mode }) }), boundary: false, terminal: false };
   let itemIndex = 0;
   for await (const item of items) {
     const bytes = Buffer.from(JSON.stringify(item), 'utf8');
@@ -91,14 +93,14 @@ export async function* conversationTransferFrames(
       }
       offset += count;
       fragmentIndex++;
-      yield { frame, boundary: offset === bytes.length };
+      yield { frame, boundary: offset === bytes.length, terminal: false };
     }
     itemIndex++;
   }
-  yield { frame: envelope({ kind: 'transfer_end', transferId: metadata.transferId, itemCount: itemIndex }), boundary: true };
+  yield { frame: envelope({ kind: 'transfer_end', transferId: metadata.transferId, itemCount: itemIndex }), boundary: true, terminal: true };
 }
 
 export function snapshotMetadata(read: SnapshotRead) {
   return { transferId: read.transferId, conversationId: read.conversationId, revision: read.revision,
-    stateSequence: read.stateSequence, operationId: read.operationId };
+    stateSequence: read.stateSequence, operationId: read.operationId, mode: read.mode };
 }

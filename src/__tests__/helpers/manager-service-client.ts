@@ -9,6 +9,7 @@ import type { ConversationClientSnapshot } from '../../features/manager/conversa
 import type { ConversationAssignment } from '../../infra/conversations/schema.js';
 import type { ConversationCommand, ConversationDelivery, OperationResult, OutputVersion, PortOutput, SnapshotRead, Submission } from '../../features/manager/conversationPort.js';
 import { ConversationError } from '../../features/manager/conversationErrors.js';
+import { snapshotItemKey, orderSnapshotItems, type SnapshotDisplayItem } from '../../features/manager/snapshotChanges.js';
 
 /** UI tests use the real service/executor; transport validation belongs to client tests. */
 export class ManagerServiceClient {
@@ -21,6 +22,7 @@ export class ManagerServiceClient {
   private reading: Promise<void> | undefined;
   private readGeneration = 0;
   private stateSequence = -1;
+  private committedItems = new Map<string, SnapshotDisplayItem>();
   private pendingOutputs: Array<{ output: Exclude<PortOutput, { kind: 'snapshot' }>; version?: OutputVersion }> = [];
   readonly results: OperationResult[] = [];
   private readonly actor = { namespace: 'local', id: 'operator' };
@@ -82,6 +84,10 @@ export class ManagerServiceClient {
     const resolved = await createTuiConversationPort(this.configDirectory, this.delivery).resolve(assignment
       ?? { kind: 'repository', repositoryDirectory: cwd });
     if (this.closed || generation !== this.readGeneration) return;
+    if (this.view.state?.conversationId !== resolved.conversationId) {
+      this.committedItems.clear();
+      this.update({ state: null, items: [] });
+    }
     const opened = await this.service.open({ ...resolved, agentOverrides: { provider: plan.ctx.providerType, model: plan.ctx.model } }, this.delivery);
     if (this.closed || generation !== this.readGeneration) { this.service.detach(opened.attachmentId); return; }
     this.attachmentId = opened.attachmentId;
@@ -103,25 +109,34 @@ export class ManagerServiceClient {
     return tracked;
   }
   private async consumeRead(read: SnapshotRead, generation: number): Promise<void> {
-    if (generation !== this.readGeneration) return;
+    if (generation !== this.readGeneration) { read.cancel(); return; }
     if (this.view.readStatus !== 'complete') this.update({ readStatus: 'reading' });
-    const items: ConversationClientSnapshot['items'][number][] = [];
+    const items = new Map(this.committedItems);
+    const updates = new Map<string, SnapshotDisplayItem>();
+    const removed = new Set<string>();
     try {
       for await (const item of read.items) {
-        if (generation !== this.readGeneration) return;
+        if (generation !== this.readGeneration) { read.cancel(); return; }
         if (item.kind === 'state') {
           if (item.state.conversationId !== this.view.state?.conversationId || read.stateSequence > this.stateSequence) {
             this.stateSequence = read.stateSequence;
             this.update({ state: item.state });
           }
         }
-        else items.push(item);
+        else if (item.kind === 'remove') removed.add(item.key);
+        else { const key = snapshotItemKey(item); updates.set(key, item); items.set(key, item); }
       }
-      if (generation !== this.readGeneration) return;
-      this.update({ items, readStatus: 'complete', error: null });
+      if (generation !== this.readGeneration) { read.cancel(); return; }
+      const next = read.mode === 'initial' ? new Map<string, SnapshotDisplayItem>() : new Map(this.committedItems);
+      for (const [key, item] of updates) next.set(key, item);
+      for (const key of removed) next.delete(key);
+      read.complete();
+      this.committedItems = next;
+      this.update({ items: orderSnapshotItems(next), readStatus: 'complete', error: null });
     } catch (error) {
       if (generation !== this.readGeneration) return;
-      this.update({ items, readStatus: 'incomplete' });
+      read.cancel();
+      this.update({ items: orderSnapshotItems(items), readStatus: 'incomplete' });
       throw error;
     }
   }

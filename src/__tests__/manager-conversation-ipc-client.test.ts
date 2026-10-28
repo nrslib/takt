@@ -46,7 +46,7 @@ let helloOwner: () => typeof doubles.owner;
 async function respond(request: Request, socket: FakeSocket) {
   if (request.method === 'hello') { socket.response(request, { owner: helloOwner() }); return; }
   if (request.method === 'submit') { submit(request, socket); return; }
-  const read = { conversationId: record.id, transferId: randomUUID(), revision: 4, stateSequence: 1, operationId: null };
+  const read = { conversationId: record.id, transferId: randomUUID(), mode: 'initial' as const, revision: 4, stateSequence: 1, operationId: null };
   socket.response(request, { ...(request.method === 'open' ? { attachmentId: randomUUID() } : {}), read });
   const state = { conversationId: record.id, assignment: record.assignment, revision: 4, pending: record.pending,
     approval: null, running: null, interrupted: false };
@@ -82,7 +82,7 @@ function controlReads(method: 'open' | 'snapshot') {
 }
 
 async function snapshotWire(revision: number, stateSequence: number) {
-  const read = { conversationId: record.id, transferId: randomUUID(), revision, stateSequence, operationId: null };
+  const read = { conversationId: record.id, transferId: randomUUID(), mode: 'initial' as const, revision, stateSequence, operationId: null };
   const pending = { ...record.pending!, revision };
   const state = { conversationId: record.id, assignment: record.assignment, revision, pending,
     approval: null, running: null, interrupted: false };
@@ -99,6 +99,35 @@ function readResponse(target: { request: Request; socket: FakeSocket }, read: Co
     ...(target.request.method === 'open' ? { attachmentId: randomUUID() } : {}), read,
   });
 }
+
+it.each(['complete', 'incomplete'] as const)('publishes display items together when a transfer is %s even when each item arrives in a separate chunk', async (status) => {
+  const reads = controlReads('open');
+  const value = client();
+  const connecting = value.connect();
+  await vi.waitFor(() => expect(reads).toHaveLength(1));
+  const { read, state } = await snapshotWire(4, 1);
+  const items = Array.from({ length: 200 }, (_, index) => ({ kind: 'display_event' as const,
+    event: { id: `event-${index}`, message: `Work ${index}` } }));
+  const wire: Buffer[] = [];
+  for await (const { frame } of conversationTransferFrames(record.id, read, 'snapshot', (async function* () {
+    yield { kind: 'state', state }; yield* items;
+  })())) wire.push(encodeConversationFrame(frame));
+  const counts: number[] = [];
+  value.subscribe(() => counts.push(value.getSnapshot().items.length));
+  readResponse(reads[0]!, read);
+  await connecting;
+  for (const bytes of wire.slice(0, -1)) reads[0]!.socket.emit('data', bytes);
+
+  expect(value.getSnapshot().state).toEqual(state);
+  expect(new Set(counts)).toEqual(new Set([0]));
+  reads[0]!.socket.emit('data', status === 'complete' ? wire.at(-1)! : encodeConversationFrame({
+    protocolVersion: 1, type: 'event', conversationId: record.id,
+    output: { kind: 'transfer_error', transferId: read.transferId, code: 'read_failed' },
+  }));
+
+  expect(value.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: status, items });
+  expect(new Set(counts)).toEqual(new Set([0, items.length]));
+});
 
 it('keeps the completed proposal usable while a background response and its transfer are pending', async () => {
   const reads = controlReads('open');
@@ -263,7 +292,7 @@ it.each([
   }
   await vi.waitFor(() => expect(pending).toBeDefined());
   const { request, socket } = pending!;
-  const read = { conversationId: record.id, transferId: randomUUID(), revision: 4, stateSequence: 2, operationId: null };
+  const read = { conversationId: record.id, transferId: randomUUID(), mode: 'initial' as const, revision: 4, stateSequence: 2, operationId: null };
   const state = { conversationId: record.id, assignment: record.assignment, revision: 4, pending: record.pending,
     approval: null, running: null, interrupted: false };
   const items = [
