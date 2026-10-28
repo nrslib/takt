@@ -5,7 +5,7 @@ import { resolveManagerNotificationOptions, sendSavedGoalNotifications } from '.
 import { assertCwdAllowedByMcpRoot, errorResult, jsonResult, type McpOperationDependencies } from './operations.js';
 import {
   askGoalQuestionInputSchema, completeGoalInputSchema, enqueueGoalTaskInputSchema, goalWriteInputSchema,
-  mergeGoalTaskInputSchema, notifyGoalInputSchema, reopenGoalInputSchema, tellGoalRunInputSchema, withdrawGoalQuestionInputSchema, type GoalIdentityInput,
+  mergeGoalTaskInputSchema, mergeGoalPrInputSchema, notifyGoalInputSchema, reopenGoalInputSchema, tellGoalRunInputSchema, withdrawGoalQuestionInputSchema, type GoalIdentityInput,
 } from './schemas.js';
 import { requeueGoalTaskInputSchema, retryGoalTaskInputSchema } from './goalTaskRetrySchemas.js';
 import { removeGoalTaskInputSchema } from './goalTaskRemovalSchemas.js';
@@ -18,6 +18,7 @@ const inputSchemas = {
   requeue: requeueGoalTaskInputSchema, retry: retryGoalTaskInputSchema, remove: removeGoalTaskInputSchema,
   reopen: reopenGoalInputSchema, tell: tellGoalRunInputSchema,
   stop: stopGoalTaskInputSchema,
+  merge_pr: mergeGoalPrInputSchema,
 };
 
 export async function goalWrite(
@@ -34,7 +35,7 @@ export async function goalWrite(
     if (previous.executionStatus === 'aborted' && tool !== 'withdraw_question' && tool !== 'remove') {
       throw new Error('Goal is aborted. Work cannot continue for this goal.');
     }
-    if (isGoalPaused(previous) && ['enqueue', 'integrate', 'complete', 'check_completion', 'requeue', 'retry', 'reopen', 'tell'].includes(tool)) {
+    if (isGoalPaused(previous) && ['enqueue', 'integrate', 'complete', 'check_completion', 'requeue', 'retry', 'reopen', 'tell', 'merge_pr'].includes(tool)) {
       throw new Error('Goal is paused. Resume it in the manager TUI before continuing work.');
     }
     const { policy, webhookUrl, mainMerge } = resolveManagerNotificationOptions(input.cwd);

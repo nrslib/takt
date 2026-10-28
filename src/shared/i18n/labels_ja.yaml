@@ -425,6 +425,12 @@ tui:
     exceededStart: "保存済みの停止位置: {start}（iteration {iteration}）"
 
 manager:
+  goalPr:
+    objective: "目的"
+    changes: "変更"
+    verification: "確かめたこと"
+    humanChecks: "人が確かめる手順"
+    truncated: "変更一覧は省略されています。PR の差分も確認してください。"
   conversation:
     reading: "会話の情報を読み出しています。完了するまで要約を承認できません。"
     disconnected: "daemon に再接続しています。"

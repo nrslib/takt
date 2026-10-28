@@ -14,6 +14,7 @@ import {
   enqueueGoalTaskInputSchema,
   mergeGoalTaskInputSchema,
   completeGoalInputSchema,
+  mergeGoalPrInputSchema,
   reopenGoalInputSchema,
   abortGoalInputSchema,
   goalDiffInputSchema,
@@ -50,7 +51,7 @@ import type { InquiryOwner } from '../../infra/goals/standalone-inquiries.js';
 import { notifyTaktGoal } from './goalNotificationOperations.js';
 import { recordTaktGoalWorkLog, listTaktGoalRecords } from './goalWorkLogOperations.js';
 import { pauseTaktGoal, resumeTaktGoal, abortTaktGoal } from './goalExecutionOperations.js';
-import { mergeTaktGoalTask, completeTaktGoal, checkTaktGoalCompletion, reopenTaktGoal } from './goalIntegrationOperations.js';
+import { mergeTaktGoalTask, mergeTaktGoalPr, completeTaktGoal, checkTaktGoalCompletion, reopenTaktGoal } from './goalIntegrationOperations.js';
 import { getTaktGoalDiff, getTaktGoalHistory, getTaktGoalRelation } from './goalReadOperations.js';
 import { assertCwdAllowedByMcpRoot, errorResult } from './operations.js';
 import { workspaceResult } from './workspaceResponse.js';
@@ -88,6 +89,7 @@ export const TAKT_MCP_MANAGER_TOOL_NAMES = [
   'takt_stop_goal_task',
   'takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion',
   'takt_reopen_goal',
+  'takt_merge_goal_pr',
   'takt_tell_run',
   'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation',
   'takt_ask_goal_question', 'takt_list_goal_questions', 'takt_get_goal_question',
@@ -270,9 +272,14 @@ export function createTaktMcpServer(
       inputSchema: removeGoalTaskInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal task removal failed', (deps) => removeTaktGoalTask(projectInput(input, deps), deps, extra.signal), false));
     server.registerTool('takt_complete_goal', {
-      title: 'Complete a reviewed goal', description: 'Apply repository manager.main_merge permission to the reviewed goal SHA and acceptance evidence. Auto merges or saves human merge instructions; conflicts keep the goal open. Responses fit 64 KiB, with explicit truncation. Read saved completion fields with takt_get_goal path and textOffset/maxBytes.',
+      title: 'Complete a reviewed goal', description: 'Apply repository manager.main_merge permission to the reviewed goal SHA and acceptance evidence. Auto merges or pushes and creates/reuses a PR to the saved target branch when awaiting merge; provide humanChecks for the PR. Conflicts keep the goal open. Responses fit 64 KiB, with explicit truncation. Read saved completion fields with takt_get_goal path and textOffset/maxBytes.',
       inputSchema: completeGoalInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal completion failed', (deps) => completeTaktGoal(projectInput(input, deps), deps, extra.signal), true));
+    server.registerTool('takt_merge_goal_pr', {
+      title: 'Merge a goal PR',
+      description: 'Run takt merge with the saved PR number in the target repository. Use only on an explicit human instruction delivered by the director. Rejects goals not awaiting merge, missing or mismatched PRs, paused and aborted goals. Returns command output and failure. After success use takt_check_goal_completion; this operation does not complete the goal.',
+      inputSchema: mergeGoalPrInputSchema,
+    }, (input, extra) => operation(input.cwd, 'Goal PR merge failed', (deps) => mergeTaktGoalPr(projectInput(input, deps), deps, extra.signal), false));
     server.registerTool('takt_reopen_goal', {
       title: 'Reopen a waiting goal', description: 'Return an unmerged awaiting-merge goal to created with a required reason saved in its work log. Preserves completion evidence. Rejects completed, created, aborted or paused goals and approved SHAs already included in the target; use takt_check_goal_completion for an included SHA. Responses fit 64 KiB, with explicit truncation. Read saved reasons with takt_get_goal path workLog.summary, recordId and textOffset/maxBytes, and completion fields with path.',
       inputSchema: reopenGoalInputSchema,
