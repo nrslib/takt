@@ -472,6 +472,8 @@ workflow_system_commands:
 
 `TAKT_WORKFLOW_SYSTEM_COMMANDS_CUSTOM_SCRIPTS=true`
 
+この環境変数はprojectとglobalの設定より優先され、`false`の場合はprojectが`true`でも許可されません。
+
 global専用の`workflow_system_commands_trusted_projects`と環境変数`TAKT_WORKFLOW_SYSTEM_COMMANDS_TRUSTED_PROJECTS`はこの許可判定に影響しません。別cloneでの実行にも元のproject設定を使います。各実行で許可を解決し、rootと子workflowへ同じ値を渡します。`wait`中は再解決しません。
 
 pipeline または対話モードが現在のディレクトリに PR をチェックアウトする場合は、切り替え前の設定から許可を決めます。対話セッションでは Issue に切り替えた後も同じディレクトリでこの許可を使います。PR が追加した project 設定だけでは許可されません。

@@ -476,6 +476,8 @@ workflow_system_commands:
 
 `TAKT_WORKFLOW_SYSTEM_COMMANDS_CUSTOM_SCRIPTS=true`
 
+This environment variable overrides both project and global settings; `false` denies permission even when the project setting is `true`.
+
 The global-only `workflow_system_commands_trusted_projects` setting and `TAKT_WORKFLOW_SYSTEM_COMMANDS_TRUSTED_PROJECTS` environment variable do not affect this permission. A separate clone uses the original project configuration. Each run resolves permission once and passes it to root and child workflows; `wait` does not reload configuration.
 
 When a pipeline or interactive session checks out a PR in the current directory, it resolves permission before switching branches. The interactive session retains that permission for the directory, including after switching to an Issue. A project setting added by the PR alone does not grant permission.

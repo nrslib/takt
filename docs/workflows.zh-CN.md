@@ -636,7 +636,7 @@ Team Leader agent 在运行时将任务分解成独立子部分，并把每部�
 
 System step 由 TAKT engine 执行，不启动 agent。使用 `kind: system` 或简写 `mode: system`，两者不能同时声明。System step 不能声明 `persona`、`instruction`、`provider`、`structured_output`、`output_contracts` 或 `quality_gates` 等 agent 字段。
 
-`system_inputs` 从 engine context 读取并通过 `as` 绑定名称；支持 `task_context`、`branch_context`、`pr_context`、`issue_context`、`task_queue_context`、`pr_list`、`pr_selection`、`issue_list` 和 `issue_selection`。绑定的值可通过 `when(context.<step>.<binding>...)` 使用，也可在后续 agent instruction 中使用 `{context:step.binding.field}`：
+`system_inputs` 从 engine context 读取数据或执行固定命令，并通过 `as` 绑定名称；支持 `task_context`、`branch_context`、`pr_context`、`issue_context`、`task_queue_context`、`pr_list`、`pr_selection`、`issue_list`、`issue_selection`、`pr_status`、`pr_ci_failure` 和 `command`。执行 `command` 需要授权设置，详见[固定命令 input](#固定命令-input)。绑定的值可通过 `when(context.<step>.<binding>...)` 使用，也可在后续 agent instruction 中使用 `{context:step.binding.field}`：
 
 ```yaml
   - name: route_context

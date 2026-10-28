@@ -473,6 +473,8 @@ workflow_system_commands:
 
 `TAKT_WORKFLOW_SYSTEM_COMMANDS_CUSTOM_SCRIPTS=true`
 
+此环境变量优先于project和global设置；即使project设置为`true`，`false`也会拒绝授权。
+
 global专用的`workflow_system_commands_trusted_projects`和环境变量`TAKT_WORKFLOW_SYSTEM_COMMANDS_TRUSTED_PROJECTS`不影响此权限。独立clone使用原project配置。每次运行解析权限并传给root和子workflow，`wait`期间不重新加载。
 
 当 pipeline 或交互模式在当前目录检出 PR 时，会在切换分支前解析权限。交互会话在同一目录中保留该权限，切换到 Issue 后也使用该权限。仅由 PR 添加的 project 设置不会授予权限。
