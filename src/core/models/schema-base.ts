@@ -162,6 +162,7 @@ const CopilotProviderOptionsSchema = z.object({
 
 const KiroProviderOptionsSchema = z.object({
   agent: z.string().min(1).optional(),
+  effort: ProviderEffortSchema.optional(),
   guards: ProviderGuardOptionsSchema.optional(),
 });
 
@@ -695,6 +696,7 @@ const NormalizedStepProviderOptionsSchema = z.object({
   }).strict().optional(),
   kiro: z.object({
     agent: z.string().min(1).optional(),
+    effort: ProviderEffortSchema.optional(),
     guards: z.object({
       callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
     }).strict().optional(),

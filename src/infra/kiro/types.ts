@@ -6,6 +6,8 @@ export interface KiroCallOptions {
   abortSignal?: AbortSignal;
   sessionId?: string;
   model?: string;
+  /** kiro-cli `--effort` value (e.g. low/medium/high). Passed through unchanged. */
+  effort?: string;
   systemPrompt?: string;
   permissionMode?: PermissionMode;
   onStream?: StreamCallback;

@@ -626,6 +626,60 @@ describe('resolveEffectiveProviderOptions', () => {
     )).toBe('env');
   });
 
+  it('kiro.effort は step > persona > config の優先で解決される', () => {
+    expect(resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      { kiro: { effort: 'low' } },
+      { kiro: { effort: 'high' } },
+      { kiro: { effort: 'medium' } },
+    )).toEqual({
+      kiro: { effort: 'high' },
+    });
+
+    expect(resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      { kiro: { effort: 'low' } },
+      undefined,
+      { kiro: { effort: 'medium' } },
+    )).toEqual({
+      kiro: { effort: 'medium' },
+    });
+
+    expect(resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      { kiro: { effort: 'low' } },
+      undefined,
+      undefined,
+    )).toEqual({
+      kiro: { effort: 'low' },
+    });
+
+    // Given kiro effort on step, When resolve, Then source is step
+    expect(resolveProviderOptionSource(
+      'kiro.effort',
+      { kiro: { effort: 'high' } },
+      [],
+      { kiro: { effort: 'low' } },
+      undefined,
+      'project',
+    )).toBe('step');
+  });
+
+  it('kiro.effort のみ指定でも結果は undefined にならない', () => {
+    const result = resolveEffectiveProviderOptions(
+      'global',
+      undefined,
+      { kiro: { effort: 'low' } },
+      { kiro: { effort: 'high' } },
+    );
+
+    expect(result).toBeDefined();
+    expect(result?.kiro).toEqual({ effort: 'high' });
+  });
+
   it('空 sandbox object は step の leaf を潰さない', () => {
     const result = resolveEffectiveProviderOptions(
       'project',
@@ -1109,6 +1163,7 @@ describe('providerOptionsContract', () => {
       'provider_options.copilot.effort',
       'provider_options.copilot.guards.call_timeout_ms',
       'provider_options.kiro.agent',
+      'provider_options.kiro.effort',
       'provider_options.kiro.guards.call_timeout_ms',
       'provider_options.cursor.guards.call_timeout_ms',
       'provider_options.deepseek_harness.base_url',
@@ -1149,6 +1204,7 @@ describe('providerOptionsContract', () => {
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude_terminal.guards.call_timeout_ms');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.kiro');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.kiro.agent');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.kiro.effort');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.kiro.guards.call_timeout_ms');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.cursor.guards.call_timeout_ms');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.deepseek_harness');

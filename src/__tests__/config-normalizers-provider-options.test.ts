@@ -418,6 +418,24 @@ describe('denormalizeProviderOptions', () => {
     expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
   });
 
+  it('should round-trip kiro effort through normalize and denormalize', () => {
+    const rawProviderOptions = {
+      kiro: {
+        effort: 'medium',
+      },
+    };
+
+    const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
+    const denormalizedProviderOptions = denormalizeProviderOptions(normalizedProviderOptions);
+
+    expect(normalizedProviderOptions).toEqual({
+      kiro: {
+        effort: 'medium',
+      },
+    });
+    expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
+  });
+
   it('should round-trip kiro agent through normalize and denormalize', () => {
     const rawProviderOptions = {
       kiro: {

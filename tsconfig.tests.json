@@ -332,6 +332,7 @@
     "src/__tests__/judge-runagent-provider-resolution.test.ts",
     "src/__tests__/kiro-client.test.ts",
     "src/__tests__/kiro-provider-integration.test.ts",
+    "src/__tests__/kiro-provider.test.ts",
     "src/__tests__/listNonInteractive-completedActions.test.ts",
     "src/__tests__/listNonInteractive.test.ts",
     "src/__tests__/listTasksInteractiveStatusActions.test.ts",
