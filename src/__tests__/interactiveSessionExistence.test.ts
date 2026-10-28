@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from 'vitest';
+import type { AcquiredOpenCodeClient } from '../infra/opencode/server-pool.js';
 
 const doubles = vi.hoisted(() => ({ stat: vi.fn(), readdir: vi.fn(), acquire: vi.fn(), get: vi.fn(), release: vi.fn(), kiro: vi.fn() }));
 vi.mock('node:fs', () => ({ statSync: doubles.stat, readdirSync: doubles.readdir }));
@@ -53,6 +54,36 @@ it('distinguishes OpenCode not found from an unavailable service and releases th
   expect(await interactiveSessionExists('/project', 'opencode', 'missing')).toBe(false);
   expect(await interactiveSessionExists('/project', 'opencode', 'unknown')).toBeUndefined();
   expect(doubles.release).toHaveBeenCalledTimes(3);
+});
+
+it('bounds OpenCode client acquisition and releases a client returned after timeout', async () => {
+  const timeoutController = new AbortController();
+  const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeoutController.signal);
+  let resolveAcquisition!: (value: AcquiredOpenCodeClient) => void;
+  const acquisition = new Promise<AcquiredOpenCodeClient>((resolve) => { resolveAcquisition = resolve; });
+  doubles.acquire.mockImplementation(() => acquisition);
+
+  try {
+    const pending = interactiveSessionExists('/project', 'opencode', 'session');
+    expect(doubles.acquire.mock.calls[0]?.[3]).toBe(timeoutController.signal);
+
+    timeoutController.abort(new Error('timed out'));
+    await expect(pending).resolves.toBeUndefined();
+
+    resolveAcquisition({
+      client: { session: { get: doubles.get } } as unknown as AcquiredOpenCodeClient['client'],
+      release: doubles.release,
+      invalidate: vi.fn(),
+      invalidationSignal: new AbortController().signal,
+      acquireSession: vi.fn(),
+    });
+    await Promise.resolve();
+
+    expect(doubles.release).toHaveBeenCalledOnce();
+    expect(doubles.get).not.toHaveBeenCalled();
+  } finally {
+    timeoutSpy.mockRestore();
+  }
 });
 
 it('retains unknown providers without declaring them missing', async () => {

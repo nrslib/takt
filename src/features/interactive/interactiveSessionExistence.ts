@@ -2,7 +2,7 @@ import { readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { getClaudeProjectSessionsDir } from '../../infra/config/project/sessionStore.js';
-import { acquireOpenCodeClient } from '../../infra/opencode/server-pool.js';
+import { acquireOpenCodeClient, type AcquiredOpenCodeClient } from '../../infra/opencode/server-pool.js';
 import { kiroSessionExists } from '../../infra/kiro/sessionExistence.js';
 
 const SESSION_EXISTS_TIMEOUT_MS = 10_000;
@@ -32,6 +32,41 @@ function findCodexRollout(directory: string, sessionId: string): boolean {
   return false;
 }
 
+function acquireOpenCodeClientUntilAborted(signal: AbortSignal): Promise<AcquiredOpenCodeClient> {
+  const acquisition = acquireOpenCodeClient(undefined, undefined, undefined, signal);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const onAbort = (): void => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      reject(signal.reason ?? new Error('OpenCode session existence check timed out'));
+    };
+
+    if (signal.aborted) onAbort();
+    else signal.addEventListener('abort', onAbort, { once: true });
+
+    void acquisition.then(
+      (acquired) => {
+        if (settled || signal.aborted) {
+          acquired.release();
+          onAbort();
+          return;
+        }
+        settled = true;
+        signal.removeEventListener('abort', onAbort);
+        resolve(acquired);
+      },
+      (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 export async function interactiveSessionExists(cwd: string, provider: string, sessionId: string): Promise<boolean | undefined> {
   if (basename(sessionId) !== sessionId || !sessionId) return false;
   if (provider === 'claude' || provider === 'claude-sdk' || provider === 'claude-headless' || provider === 'claude-terminal') {
@@ -42,10 +77,11 @@ export async function interactiveSessionExists(cwd: string, provider: string, se
     catch (error) { return isMissing(error) ? false : undefined; }
   }
   if (provider === 'opencode') {
+    const timeoutSignal = AbortSignal.timeout(SESSION_EXISTS_TIMEOUT_MS);
     try {
-      const { client, release, invalidationSignal } = await acquireOpenCodeClient(undefined, undefined, undefined);
+      const { client, release, invalidationSignal } = await acquireOpenCodeClientUntilAborted(timeoutSignal);
       try {
-        const signal = AbortSignal.any([invalidationSignal, AbortSignal.timeout(SESSION_EXISTS_TIMEOUT_MS)]);
+        const signal = AbortSignal.any([invalidationSignal, timeoutSignal]);
         const result = await client.session.get({ sessionID: sessionId, directory: cwd }, { signal });
         if (result.data !== undefined) return true;
         const error = result.error;
