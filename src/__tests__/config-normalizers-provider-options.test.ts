@@ -418,19 +418,20 @@ describe('denormalizeProviderOptions', () => {
     expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
   });
 
-  it('should round-trip kiro effort through normalize and denormalize', () => {
+  it.each(['medium', 'custom'])('should round-trip kiro effort through the schema and normalizers: %s', (effort) => {
     const rawProviderOptions = {
       kiro: {
-        effort: 'medium',
+        effort,
       },
     };
 
-    const normalizedProviderOptions = normalizeProviderOptions(rawProviderOptions);
+    const parsedProviderOptions = StepProviderOptionsObjectSchema.parse(rawProviderOptions);
+    const normalizedProviderOptions = normalizeProviderOptions(parsedProviderOptions);
     const denormalizedProviderOptions = denormalizeProviderOptions(normalizedProviderOptions);
 
     expect(normalizedProviderOptions).toEqual({
       kiro: {
-        effort: 'medium',
+        effort,
       },
     });
     expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
