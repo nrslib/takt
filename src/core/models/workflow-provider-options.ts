@@ -90,7 +90,7 @@ export type RuntimePreparePreset = (typeof RUNTIME_PREPARE_PRESETS)[number];
 export type CodexReasoningEffort = string;
 export type ClaudeEffort = string;
 export type CopilotEffort = string;
-export type KiroEffort = string;
+export type KiroEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 const RUNTIME_PREPARE_PRESET_SET: ReadonlySet<string> = new Set(RUNTIME_PREPARE_PRESETS);
 
 export function isRuntimePreparePreset(entry: string): entry is RuntimePreparePreset {

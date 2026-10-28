@@ -418,7 +418,7 @@ describe('denormalizeProviderOptions', () => {
     expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
   });
 
-  it.each(['medium', 'custom'])('should round-trip kiro effort through the schema and normalizers: %s', (effort) => {
+  it.each(['low', 'medium', 'high', 'xhigh', 'max'])('should round-trip kiro effort through the schema and normalizers: %s', (effort) => {
     const rawProviderOptions = {
       kiro: {
         effort,
@@ -435,6 +435,14 @@ describe('denormalizeProviderOptions', () => {
       },
     });
     expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
+  });
+
+  it('should reject a kiro effort value that kiro-cli does not accept', () => {
+    expect(() => StepProviderOptionsObjectSchema.parse({
+      kiro: {
+        effort: 'custom',
+      },
+    })).toThrow();
   });
 
   it('should round-trip kiro agent through normalize and denormalize', () => {
