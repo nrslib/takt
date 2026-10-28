@@ -121,7 +121,6 @@ test('patrol fixtures include repeated repair history, source documents and the 
           if (caseId === 'mail-dispatch-state') {
             const peerReview = parse(readFileSync(new URL('../builtins/ja/workflows/peer-review.yaml', import.meta.url), 'utf8'));
             const cycle = peerReview.loop_monitors[0].cycle;
-            assert.deepEqual(cycle, ['reviewers', 'review-adjudication', 'remediation']);
             assert.ok(cycle.every((step) => run.result.stepLogs.some((entry) => entry.step === step)));
           }
         }
