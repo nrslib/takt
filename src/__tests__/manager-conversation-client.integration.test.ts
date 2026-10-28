@@ -91,6 +91,16 @@ function heldRead(read: SnapshotRead, entered: ReturnType<typeof gate>, released
   })() };
 }
 
+function captureAndStopPolling() {
+  const intervals = vi.spyOn(globalThis, 'setInterval');
+  return async () => {
+    await vi.waitFor(() => expect(intervals.mock.calls.some(([, milliseconds]) => milliseconds === 500)).toBe(true));
+    for (const [index, [, milliseconds]] of intervals.mock.calls.entries()) {
+      if (milliseconds === 500) clearInterval(intervals.mock.results[index]!.value as ReturnType<typeof setInterval>);
+    }
+  };
+}
+
 it('regenerates with /make-goal on the same screen and registers the new proposal only with Up and Enter', async () => {
   const summary = { objective: 'Replacement JSON export', outOfScope: ['CSV'], acceptanceCriteria: ['JSON exists'], constraints: [] };
   const generate = vi.fn(async () => ({ message: 'Replacement ready', summary, sessionId: 'session', assignment }));
@@ -378,11 +388,23 @@ it.each([
   }
 });
 async function displayedSelection(key: string, kind: 'answer' | 'goal') {
+  const stopPolling = captureAndStopPolling();
   const component = vi.spyOn(selectionDialog, 'ManagerSelectionDialog');
   const app = render(createElement(ManagerView, { cwd: repository, lang: 'en', client, assignment,
     initialDiagnostics: [], onExit() {} }));
-  app.stdin.write(key);
-  await waitFor(() => expect(component.mock.calls.some(([props]) => props.selection.kind === kind)).toBe(true));
+  await stopPolling();
+  let readCompleted = false;
+  const unsubscribe = client.subscribe(() => {
+    if (client.getSnapshot().readStatus === 'complete') readCompleted = true;
+  });
+  try {
+    app.stdin.write(key);
+    await waitFor(() => expect(component.mock.calls.some(([props]) => props.selection.kind === kind)).toBe(true));
+    await waitFor(() => expect(readCompleted).toBe(true));
+  } finally {
+    unsubscribe();
+    await stopPolling();
+  }
   return { selection: [...component.mock.calls].reverse().find(([props]) => props.selection.kind === kind)![0].selection,
     frame: () => app.lastFrame() };
 }
@@ -584,16 +606,14 @@ function displayedInquiries(value: ConversationIpcClient) {
 }
 
 async function snapshotView() {
-  const intervals = vi.spyOn(globalThis, 'setInterval');
+  const stopPolling = captureAndStopPolling();
   const app = render(createElement(ManagerView, { cwd: repository, lang: 'en', client, assignment,
     initialDiagnostics: [], onExit() {} }));
+  await stopPolling();
   vi.spyOn(app.stdout, 'columns', 'get').mockReturnValue(80);
   app.stdout.emit('resize');
-  await vi.waitFor(() => expect(intervals.mock.calls.some(([, milliseconds]) => milliseconds === 500)).toBe(true));
+  await stopPolling();
   // バイト計測と差分の観測には明示 refresh だけを使う。
-  for (const [index, [, milliseconds]] of intervals.mock.calls.entries()) {
-    if (milliseconds === 500) clearInterval(intervals.mock.results[index]!.value as ReturnType<typeof setInterval>);
-  }
   return app;
 }
 
