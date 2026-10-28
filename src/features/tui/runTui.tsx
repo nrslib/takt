@@ -46,6 +46,8 @@ import {
   type ResolvedFormalSpecConfiguration,
 } from '../interactive/taskInstructionFormat.js';
 import { runTuiConversation } from './conversationRunner.js';
+import { InteractiveSessionRecords } from '../interactive/interactiveSessionRecords.js';
+import { interactiveSessionExists } from '../interactive/interactiveSessionExistence.js';
 import { runConversationOperation } from '../interactive/operationFeedback.js';
 import type { ConversationDispatchOutcome } from '../interactive/actionDispatcher.js';
 import { handOverAttachments } from './attachmentHandover.js';
@@ -88,6 +90,7 @@ export type TuiRunResult =
   | { kind: 'selected'; workflowId: string; result: InteractiveModeResult };
 
 export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
+  const records = new InteractiveSessionRecords(options.cwd);
   const attachmentStore = createSessionImageAttachmentStore(options.cwd);
   const releaseExitCleanup = cleanupImageAttachmentStoreOnProcessExit(attachmentStore);
   let handedOver = false;
@@ -282,6 +285,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
         : currentConversation.getSourceContext() ?? options.sourceContext;
       const nextConversation = createTuiConversation({
         cwd: options.cwd,
+        interactiveSessionRecords: records,
         undeliveredMessages,
         plan: nextPlan,
         workflowContext: context,
@@ -561,12 +565,15 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
       return { kind: 'continue' as const };
     }
 
+    await records.clean((provider, sessionId) => interactiveSessionExists(options.cwd, provider, sessionId));
     const setup = await createCurrentConversation(true);
     const dispatch = options.dispatch;
     const result = await runTuiConversation({
       cwd: options.cwd,
       lang: options.lang,
       conversation: conversationFacade,
+      interactiveSessionRecords: records,
+      getProvider: () => selectedProvider ?? currentPlan.ctx.providerType,
       initialEntries: setup.initialEntries,
       submitMode: 'chat',
       autoSubmit: false,

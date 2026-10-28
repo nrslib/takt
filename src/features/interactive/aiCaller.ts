@@ -64,6 +64,7 @@ export interface SessionContext {
 }
 
 interface CallAIWithRetryOptions {
+  onSessionResumeFailure?: () => void;
   confirmManagedProvider?: ConfirmManagedProvider;
   imageAttachments?: ImageAttachmentReference[];
   /** Receives what a terminal caller would have printed alongside the answer. */
@@ -450,6 +451,7 @@ export async function callAIWithRetry(
       && response.failureCategory === AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED;
     const canRetrySession = Boolean(sessionId);
     if (rejectedSession) {
+      options.onSessionResumeFailure?.();
       sessionId = undefined;
       if (shouldPersistSession()) {
         updatePersonaSession(cwd, ctx.personaName, undefined, ctx.providerType);
@@ -505,6 +507,7 @@ export async function callAIWithRetry(
       && ctx.providerType === 'deepseek-harness'
       && response.failureCategory === AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED;
     if (startFreshNextTurn) {
+      options.onSessionResumeFailure?.();
       sessionId = undefined;
       if (shouldPersistSession()) {
         updatePersonaSession(cwd, ctx.personaName, undefined, ctx.providerType);

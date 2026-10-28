@@ -1,5 +1,6 @@
 import { SlashCommand } from '../../shared/constants.js';
 import { getLabel } from '../../shared/i18n/index.js';
+import type { InteractiveSessionRecords } from './interactiveSessionRecords.js';
 import { updatePersonaSession } from '../../infra/config/index.js';
 import { isDisabledVerifyCommand, matchSlashCommand } from './commandMatcher.js';
 import {
@@ -78,6 +79,7 @@ export interface ConversationSessionStrategy {
 
 export interface ConversationSessionOptions {
   cwd: string;
+  interactiveSessionRecords?: InteractiveSessionRecords;
   formalSpec: boolean;
   /** Resolved setting propagated to this session's summary prompt. */
   formalSpecComments?: boolean;
@@ -180,7 +182,7 @@ export interface InteractiveConversationSession extends ConversationSession {
   recordRejectedDraft(task: string): void;
   recordOperationResult(notice: string): void;
   /** Continue from a previously recorded provider session (/resume). */
-  setSessionId(nextSessionId: string): void;
+  setSessionId(nextSessionId: string | undefined): void;
   /** Current provider session used by this conversation. */
   getSessionId(): string | undefined;
   /** Apply the prompt configuration resolved for the selected session. */
@@ -260,6 +262,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
     ? [{ role: 'user', content: initialUserMessage }]
     : [];
   let sessionId = options.ctx.sessionId;
+  let selectedResumePending = false;
   let formalSpec = options.formalSpec;
   let formalSpecComments = options.formalSpecComments ?? options.strategy.formalSpecComments ?? true;
   let modelCheckTimeoutSeconds = options.modelCheckTimeoutSeconds;
@@ -349,7 +352,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
 
   async function handleRegularMessage(
     message: string,
-    input: ConversationTurnInput,
+    input: ConversationTurnInput & { text: string },
   ): Promise<ConversationSessionResult> {
     const isLatestTurn = beginTurn(input.abortSignal);
     const turn = undeliveredMessages.begin(message);
@@ -407,11 +410,13 @@ export function createConversationSession(options: ConversationSessionOptions): 
           permissionMode: options.strategy.permissionMode,
           imageAttachments,
           ...(input.onNotice ? { onNotice: input.onNotice } : {}),
+          ...(selectedResumePending ? { onSessionResumeFailure: () => input.onNotice?.(getLabel('interactive.resumeSessionFailed', ctx.lang)) } : {}),
           ...(input.confirmManagedProvider ? { confirmManagedProvider: input.confirmManagedProvider } : {}),
         },
       );
       if (isCurrentTurn()) {
         sessionId = newSessionId;
+        selectedResumePending = false;
       }
 
       if (!result) {
@@ -450,6 +455,9 @@ export function createConversationSession(options: ConversationSessionOptions): 
       shouldSendInitialPromptContext = false;
       shouldSendSeededContext = false;
       history = [...history, { role: 'assistant', content: result.content }];
+      if (options.interactiveSessionRecords !== undefined && sessionId !== undefined) {
+        options.interactiveSessionRecords.record({ provider: ctx.providerType, sessionId, input: input.text, response: result.content });
+      }
       return {
         kind: 'assistant_response',
         content: result.content,
@@ -791,7 +799,8 @@ export function createConversationSession(options: ConversationSessionOptions): 
       return null;
     },
 
-    setSessionId(nextSessionId: string): void {
+    setSessionId(nextSessionId: string | undefined): void {
+      selectedResumePending = nextSessionId !== undefined;
       sessionId = nextSessionId;
     },
 

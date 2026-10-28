@@ -604,6 +604,25 @@ describe('notices from a turn the user left behind', () => {
 });
 
 describe('TUI local commands', () => {
+  it('reports a failed resume and continues with the fresh session', async () => {
+    const conversation = createConversation();
+    await conversation.resumeSession('missing-session');
+    mockCallAIWithRetry.mockImplementationOnce((...args: unknown[]) => {
+      const options = args[5] as { onSessionResumeFailure?: () => void };
+      options.onSessionResumeFailure?.();
+      return Promise.resolve({
+        result: { content: 'Fresh answer', sessionId: 'fresh-session', success: true },
+        sessionId: 'fresh-session',
+      });
+    });
+
+    const first = await send(conversation, 'first input', []);
+    expect(first).toMatchObject({ kind: 'assistant_response', notices: [getLabel('interactive.resumeSessionFailed', 'en')] });
+    expect(conversation.getSessionId()).toBe('fresh-session');
+    await send(conversation, 'next input', []);
+    expect(mockCallAIWithRetry.mock.calls.at(-1)?.[4]).toMatchObject({ sessionId: 'fresh-session' });
+  });
+
   it('exposes the active provider session after /resume updates the conversation', async () => {
     const conversation = createConversation();
 

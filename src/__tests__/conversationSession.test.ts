@@ -40,6 +40,7 @@ vi.mock('../features/interactive/formalSpecVerification.js', async (importOrigin
 }));
 
 import { createConversationSession } from '../features/interactive/conversationSession.js';
+import { listRecords, InteractiveSessionRecords } from '../features/interactive/interactiveSessionRecords.js';
 import { SlashCommand } from '../shared/constants.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { PROVIDER_TYPES } from '../shared/types/provider.js';
@@ -170,6 +171,29 @@ describe('conversation session application API', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('records the current raw input without overwriting it when an earlier turn finishes late', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-interactive-record-'));
+    let finishFirst!: (value: unknown) => void;
+    mockCallAIWithRetry
+      .mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }))
+      .mockResolvedValueOnce({ result: { success: true, content: 'new reply', sessionId: 'current' }, sessionId: 'current' });
+    const session = createConversationSession({
+      cwd, ctx: makeSessionContext(), formalSpec: false, modelCheckTimeoutSeconds: 300,
+      interactiveSessionRecords: new InteractiveSessionRecords(cwd),
+      strategy: { systemPrompt: 'system', allowedTools: ['Read'], modelCheckTimeoutSeconds: 300, transformPrompt: (message) => `wrapped: ${message}` },
+    });
+    try {
+      const first = session.handleUserMessage({ text: 'old input' });
+      await vi.waitFor(() => expect(mockCallAIWithRetry).toHaveBeenCalledTimes(1));
+      await session.handleUserMessage({ text: 'new input' });
+      finishFirst({ result: { success: true, content: 'old reply', sessionId: 'old' }, sessionId: 'old' });
+      await first;
+      expect(listRecords(cwd, 'mock')).toMatchObject([{ sessionId: 'current', inputs: ['new input'], response: 'new reply' }]);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   it('should accept user text from the adapter without reading stdin', async () => {

@@ -19,6 +19,8 @@ import { info, error, blankLine } from '../../shared/ui/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
 import { readPipedLine } from './lineEditor.js';
 import { selectRecentSession } from './sessionSelector.js';
+import { InteractiveSessionRecords } from './interactiveSessionRecords.js';
+import { interactiveSessionExists } from './interactiveSessionExistence.js';
 import { isDisabledVerifyCommand, matchSlashCommand } from './commandMatcher.js';
 import {
   resolveFormalSpecCommandAvailability,
@@ -198,6 +200,8 @@ export async function runConversationLoop(
   workflowContext: WorkflowContext | undefined,
   initialInput: InteractiveSeedInput | undefined,
 ): Promise<InteractiveModeResult> {
+  const records = new InteractiveSessionRecords(cwd);
+  await records.clean((provider, sessionId) => interactiveSessionExists(cwd, provider, sessionId));
   const initialUserMessage = initialInput?.userMessage;
   let shouldSendSeededContext = initialUserMessage !== undefined && ctx.sessionId === undefined;
   const formalSpecInitialContext = initialUserMessage ?? strategy.formalSpecInitialContext;
@@ -210,6 +214,7 @@ export async function runConversationLoop(
   let referenceRunSlug = strategy.initialReferenceRunSlug;
   let shouldSendInitialPromptContext = !!strategy.initialPromptContext;
   let sessionId = ctx.sessionId;
+  let selectedResumePending = false;
   let activePromptConfiguration: ConversationPromptConfiguration = {
     systemPrompt: strategy.systemPrompt,
     formalSpec: strategy.formalSpec,
@@ -271,6 +276,7 @@ export async function runConversationLoop(
         persistSession?: boolean | (() => boolean);
         onAbort?: () => void;
         commitSession?: boolean;
+        onSessionResumeFailure?: () => void;
       } = {},
       callSessionId = sessionId,
     ): Promise<ConversationAICall> {
@@ -306,6 +312,7 @@ export async function runConversationLoop(
             : { readonlyFileReadPaths: callOptions.readonlyFileReadPaths }),
           ...(callOptions.persistSession === undefined ? {} : { persistSession: callOptions.persistSession }),
           ...(callOptions.onAbort === undefined ? {} : { onAbort: callOptions.onAbort }),
+          ...(callOptions.onSessionResumeFailure === undefined ? {} : { onSessionResumeFailure: callOptions.onSessionResumeFailure }),
         },
       );
       if (callOptions.commitSession !== false) {
@@ -532,6 +539,7 @@ export async function runConversationLoop(
           ),
           shouldSendSeededContext ? initialUserMessage : undefined,
         );
+        let resumeFailed = false;
         const { result, sessionId: newSessionId } = await callConversationAI(
           promptWithTransform,
           activePromptConfiguration.systemPrompt,
@@ -540,12 +548,17 @@ export async function runConversationLoop(
             commitSession: false,
             persistSession: () => !delivery.interrupted,
             onAbort: () => delivery.interrupt(),
+            ...(selectedResumePending ? { onSessionResumeFailure: () => {
+              resumeFailed = true;
+              info(getLabel('interactive.resumeSessionFailed', ctx.lang));
+            } } : {}),
           },
         );
         if (delivery.interrupted) {
           continue;
         }
         sessionId = newSessionId;
+        selectedResumePending = false;
         if (result) {
           shouldSendInitialPromptContext = false;
           shouldSendSeededContext = false;
@@ -554,6 +567,10 @@ export async function runConversationLoop(
           }
           if (!result.success) {
             delivery.fail();
+            if (resumeFailed) {
+              history.pop();
+              continue;
+            }
             error(result.content);
             blankLine();
             history.pop();
@@ -561,6 +578,9 @@ export async function runConversationLoop(
           }
           delivery.complete();
           history.push({ role: 'assistant', content: result.content });
+          if (sessionId !== undefined) {
+            records.record({ provider: ctx.providerType, sessionId, input, response: result.content });
+          }
           blankLine();
         } else {
           delivery.fail();
@@ -778,8 +798,14 @@ export async function runConversationLoop(
         }
 
         case SlashCommand.Resume: {
-          const selectedId = await selectRecentSession(cwd, ctx.lang);
+          const selectedId = await selectRecentSession(cwd, ctx.lang, ctx.providerType, records);
           if (selectedId) {
+            if (await interactiveSessionExists(cwd, ctx.providerType, selectedId) === false) {
+              sessionId = undefined;
+              selectedResumePending = false;
+              info(getLabel('interactive.resumeSessionFailed', ctx.lang));
+              continue;
+            }
             if (strategy.resolveResumedSessionConfiguration) {
               const configuration = await strategy.resolveResumedSessionConfiguration();
               if (configuration === null) {
@@ -792,6 +818,7 @@ export async function runConversationLoop(
               );
             }
             sessionId = selectedId;
+            selectedResumePending = true;
             info(getLabel('interactive.resumeSessionLoaded', ctx.lang));
           }
           continue;
