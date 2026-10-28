@@ -344,6 +344,9 @@ export function createTaktAcpAgent(deps: TaktAcpAgentDependencies = {}): TaktAcp
           abortSignal: abortController.signal,
         });
         if (abortController.signal.aborted) {
+          if (result.kind === 'error' && result.retainedArtifactsMessage !== undefined) {
+            await sendAgentMessage(params.sessionId, result.retainedArtifactsMessage);
+          }
           return {
             stopReason: 'cancelled',
           };

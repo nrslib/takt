@@ -30,6 +30,7 @@ import {
   settleLoopAnalysisPublication,
 } from '../tasks/execute/loopAnalysisPublication.js';
 import { runLinkedMergeSafely } from '../merge/index.js';
+import { runLinkedCacciaSafely } from '../caccia/linked.js';
 
 export type { PipelineExecutionOptions };
 
@@ -106,7 +107,7 @@ async function runPipeline(options: PipelineExecutionOptions): Promise<PipelineO
   const preparedTask = await preparePipelineTaskSpec(cwd, context.execCwd, taskContent);
   try {
     log.info('Pipeline workflow execution starting', { workflow, branch: context.branch, skipGit, issueNumber: options.issueNumber });
-    const workflowOk = await runWorkflow(
+    const workflowResult = await runWorkflow(
       cwd,
       workflow,
       preparedTask.task,
@@ -116,7 +117,7 @@ async function runPipeline(options: PipelineExecutionOptions): Promise<PipelineO
       loopAnalysisPublication,
       preparedTask.taskSpec,
     );
-    if (!workflowOk) return { exitCode: EXIT_WORKFLOW_FAILED, result: buildResult({ branch: context.branch }) };
+    if (!workflowResult.success) return { exitCode: EXIT_WORKFLOW_FAILED, result: buildResult({ branch: context.branch }) };
 
     if (!skipGit && context.branch) {
       const commitMessage = buildCommitMessage(pipelineConfig, taskContent.issue, options.task);
@@ -135,6 +136,7 @@ async function runPipeline(options: PipelineExecutionOptions): Promise<PipelineO
         taskColorIndex: options.taskColorIndex,
         taskDisplayLabel: options.taskDisplayLabel,
       };
+      await runLinkedCacciaSafely(cwd, prUrl, workflowResult.workflowHasCaccia, undefined, display);
       await runLinkedMergeSafely(cwd, prUrl, undefined, display);
     } else if (autoPr && skipGit) {
       info('--auto-pr is ignored when --skip-git is specified (no push was performed)');

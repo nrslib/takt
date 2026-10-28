@@ -21,6 +21,7 @@ import {
   AGENT_FAILURE_CATEGORIES,
   classifyAbortSignalReason,
   createProviderErrorFailure,
+  createSessionContinuationUnsupportedFailure,
   createProviderStreamParseFailure,
   createStreamIdleTimeoutFailure,
   formatAgentFailure,
@@ -34,6 +35,11 @@ import {
 } from './types.js';
 import { buildCodexSessionConfig } from './session-config.js';
 import { prepareCodexMcpIsolation } from './mcp-isolation.js';
+import { delimiter } from 'node:path';
+import { resolveCodexSdkCli } from './cli-runtime.js';
+import { prepareCodexToolPermissionHook } from './tool-permission-hook.js';
+import { resolveCodexHookTrust } from './hook-trust.js';
+import { buildCodexToolPermissionHookConfig } from './tool-permission-hook-protocol.js';
 import { validateProviderImageAttachments } from '../providers/imageAttachments.js';
 import {
   type CodexEvent,
@@ -46,7 +52,8 @@ import {
   emitCodexItemCompleted,
   emitCodexItemUpdate,
 } from './CodexStreamHandler.js';
-import { buildRateLimitedResponseFields, containsRateLimitError, isRateLimitNoticeResponse } from '../rate-limit/detection.js';
+import { buildRateLimitedResponseFields, classifyRateLimitError, isRateLimitNoticeResponse } from '../rate-limit/detection.js';
+import { RATE_LIMIT_MAX_RETRIES, waitForRateLimitRetry } from '../rate-limit/retry.js';
 import {
   boundCodexFailureMessage,
   type CodexFailureMessageOptions,
@@ -56,12 +63,8 @@ export type { CodexCallOptions } from './types.js';
 
 const log = createLogger('codex-sdk');
 const CODEX_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
-const CODEX_STREAM_ABORTED_MESSAGE = 'Codex execution aborted';
 const CODEX_TIMEOUT_MAX_RETRIES = 2;
 const CODEX_REFUSAL_MAX_RETRIES = 2;
-const CODEX_RETRY_MAX_RETRIES = 8;
-const CODEX_RETRY_BASE_DELAY_MS = 1000;
-const CODEX_RETRY_MAX_DELAY_MS = 30_000;
 const CODEX_ERROR_MATCH_PREFIX_BYTES = 4 * 1024;
 const CODEX_PARSE_FAILURE_PREFIX = 'Failed to parse item:';
 const CODEX_RECONNECT_ERROR_PATTERNS = [
@@ -170,6 +173,7 @@ function buildCodexInput(
  */
 export class CodexClient {
   private isRetriableError(message: string): boolean {
+    if (classifyRateLimitError(message) === 'Transient') return true;
     const lower = getCodexErrorMatchPrefix(message);
     return CODEX_RETRYABLE_ERROR_PATTERNS.some((pattern) => lower.includes(pattern));
   }
@@ -211,43 +215,13 @@ export class CodexClient {
     };
   }
 
-  private async waitForRetryDelay(attempt: number, signal?: AbortSignal): Promise<void> {
-    const delayMs = Math.min(
-      CODEX_RETRY_BASE_DELAY_MS * (2 ** Math.max(0, attempt - 1)),
-      CODEX_RETRY_MAX_DELAY_MS,
-    );
-    await new Promise<void>((resolve, reject) => {
-      const timeoutId = setTimeout(() => {
-        if (signal) {
-          signal.removeEventListener('abort', onAbort);
-        }
-        resolve();
-      }, delayMs);
-
-      const onAbort = (): void => {
-        clearTimeout(timeoutId);
-        if (signal) {
-          signal.removeEventListener('abort', onAbort);
-        }
-        reject(signal?.reason ?? new Error(CODEX_STREAM_ABORTED_MESSAGE));
-      };
-
-      if (signal) {
-        if (signal.aborted) {
-          onAbort();
-          return;
-        }
-        signal.addEventListener('abort', onAbort, { once: true });
-      }
-    });
-  }
-
   private resolveFailureDetail(
     message: string,
     streamSignal: AbortSignal,
     externalSignal: AbortSignal | undefined,
     abortCause: 'timeout' | 'external' | undefined,
     timeoutMessage: string,
+    resumedThreadId: string | undefined,
   ): AgentFailureDetail {
     if (abortCause === 'timeout') {
       return createStreamIdleTimeoutFailure(timeoutMessage);
@@ -260,6 +234,10 @@ export class CodexClient {
     }
     if (message.startsWith(CODEX_PARSE_FAILURE_PREFIX)) {
       return createProviderStreamParseFailure(message);
+    }
+    if (resumedThreadId !== undefined && message.split('\n').some((line) =>
+      line.trim() === `Error: thread/resume: thread/resume failed: no rollout found for thread id ${resumedThreadId} (code -32600)`)) {
+      return createSessionContinuationUnsupportedFailure('Codex rejected the saved session.');
     }
     return createProviderErrorFailure(message);
   }
@@ -278,7 +256,7 @@ export class CodexClient {
     if (failure.category !== AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR) {
       return false;
     }
-    return standardRetryCount < CODEX_RETRY_MAX_RETRIES && this.isRetriableError(failure.reason);
+    return standardRetryCount < RATE_LIMIT_MAX_RETRIES && this.isRetriableError(failure.reason);
   }
 
   private recordRetry(
@@ -356,14 +334,42 @@ export class CodexClient {
       emitResult(options.onStream, false, response.error ?? response.content, options.sessionId, failure.category);
       return response;
     }
-    const response = await this.callWithSdk(agentType, prompt, { ...options, onStream: managedFailureStream(options.onStream, loaded.stale, 'codex') }, loaded.modules[0].Codex);
-    return managedFailureResponse(response, loaded.stale, 'codex');
+    let hook: Awaited<ReturnType<typeof prepareCodexToolPermissionHook>> | undefined;
+    const usesHook = options.onToolPermissionDecision !== undefined && options.internalAgentIsolation !== 'strict-readonly' && !options.mcpOnlySideEffects;
+    try {
+      if (usesHook) {
+        hook = await prepareCodexToolPermissionHook(options.onToolPermissionDecision!, options.abortSignal);
+      }
+      const runtime = hook === undefined ? undefined : resolveCodexSdkCli(options.codexPathOverride, loaded.directory);
+      const response = await this.callWithSdk(agentType, prompt, {
+        ...options,
+        onStream: managedFailureStream(options.onStream, loaded.stale, 'codex'),
+      }, loaded.modules[0].Codex, hook === undefined || runtime === undefined ? undefined : { ...hook, ...runtime });
+      return managedFailureResponse(response, loaded.stale, 'codex');
+    } catch (error) {
+      if (!usesHook) throw error;
+      const rawFailure = options.abortSignal?.aborted ? classifyAbortSignalReason(options.abortSignal.reason)
+        : createProviderErrorFailure(getErrorMessage(error));
+      const failure = hook === undefined ? rawFailure : { ...rawFailure, reason: hook.redact(rawFailure.reason) };
+      const response = this.buildErrorResponse(agentType, options.sessionId, failure, options, 0);
+      emitResult(options.onStream, false, response.error ?? response.content, options.sessionId, failure.category);
+      return response;
+    } finally {
+      await hook?.dispose();
+    }
   }
 
-  private async callWithSdk(agentType: string, prompt: string, options: CodexCallOptions, Codex: typeof import('@openai/codex-sdk')['Codex']): Promise<AgentResponse> {
+  private async callWithSdk(
+    agentType: string, prompt: string, options: CodexCallOptions, Codex: typeof import('@openai/codex-sdk')['Codex'],
+    hook: (Awaited<ReturnType<typeof prepareCodexToolPermissionHook>> & ReturnType<typeof resolveCodexSdkCli>) | undefined,
+  ): Promise<AgentResponse> {
+    const redact = (message: string) => hook === undefined ? message : hook.redact(message);
+    const redactFailure = (failure: AgentFailureDetail): AgentFailureDetail => hook === undefined
+      ? failure : { ...failure, reason: redact(failure.reason) };
     const threadOptions = {
       ...(options.model ? { model: options.model } : {}),
       workingDirectory: options.cwd,
+      skipGitRepoCheck: true,
       ...(options.permissionControl === 'codex'
         ? {}
         : {
@@ -416,6 +422,28 @@ export class CodexClient {
       return errorResponse;
     }
     const { config: codexConfig, env: codexEnvironment } = sessionConfig;
+    let hookConfigOverrides: string[] | undefined;
+    if (hook !== undefined) {
+      if (hook.pathDirs.length > 0) {
+        codexEnvironment.PATH = [...hook.pathDirs, ...(codexEnvironment.PATH === undefined ? [] : [codexEnvironment.PATH])].join(delimiter);
+      }
+      const shellPolicy = codexConfig.shell_environment_policy as {
+        set?: Record<string, string>;
+      } | undefined;
+      codexConfig.shell_environment_policy = {
+        ...shellPolicy,
+        ...(codexEnvironment.PATH === undefined ? {} : {
+          set: { ...shellPolicy?.set, PATH: codexEnvironment.PATH },
+        }),
+      };
+      const trust = await resolveCodexHookTrust({
+        executablePath: hook.executablePath, cwd: options.cwd, env: codexEnvironment,
+        definition: hook.definition, abortSignal: options.abortSignal,
+      });
+      codexConfig.features = { ...(codexConfig.features as Record<string, boolean> | undefined), hooks: true };
+      codexConfig.hooks = buildCodexToolPermissionHookConfig(hook.definition);
+      hookConfigOverrides = [`hooks.state={${JSON.stringify(trust.key)}={trusted_hash=${JSON.stringify(trust.trustedHash)}}}`];
+    }
 
     const isolation = options.mcpOnlySideEffects
       ? await prepareCodexMcpIsolation(options, codexConfig, codexEnvironment)
@@ -430,7 +458,9 @@ export class CodexClient {
         ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
         ...(isolation === undefined ? {
           env: codexEnvironment, config: codexConfig,
-          ...(options.codexPathOverride ? { codexPathOverride: options.codexPathOverride } : {}),
+          ...(hookConfigOverrides === undefined ? {} : { configOverrides: hookConfigOverrides }),
+          ...(hook !== undefined ? { codexPathOverride: hook.executablePath }
+            : options.codexPathOverride ? { codexPathOverride: options.codexPathOverride } : {}),
         } : isolation),
       };
       const codex = new Codex(codexClientOptions);
@@ -500,7 +530,9 @@ export class CodexClient {
         let sawTurnCompleted = false;
         let lastStreamErrorMessage: string | undefined;
 
-        for await (const event of events as AsyncGenerator<CodexEvent>) {
+        for await (const rawEvent of events as AsyncGenerator<CodexEvent>) {
+          // SDK events are JSON; remove echoed hook credentials before diagnostics and stream consumers.
+          const event = hook === undefined ? rawEvent : JSON.parse(redact(JSON.stringify(rawEvent))) as CodexEvent;
           resetIdleTimeout();
           diag.onFirstEvent(event.type);
           diag.onEvent(event.type);
@@ -609,16 +641,20 @@ export class CodexClient {
         diag.onCompleted(success ? 'normal' : 'error', boundedStreamFailureMessage);
 
         if (!success) {
-          const failure = this.resolveFailureDetail(
+          const failure = redactFailure(this.resolveFailureDetail(
             failureMessage || 'Codex execution failed',
             streamAbortController.signal,
             options.abortSignal,
             abortCause,
             timeoutMessage,
-          );
+            threadId,
+          ));
+          const rateLimitClass = classifyRateLimitError(failureMessage);
           if (
-            failure.category !== AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR
-            && containsRateLimitError(failureMessage)
+            failure.category === AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR
+            && (rateLimitClass === 'Exhausted'
+              || (rateLimitClass === 'Transient'
+                && (state.observedToolUse || standardRetryCount >= RATE_LIMIT_MAX_RETRIES)))
           ) {
             const rateLimitedResponse = this.buildRateLimitedResponse(
               agentType,
@@ -631,7 +667,8 @@ export class CodexClient {
             return rateLimitedResponse;
           }
 
-          if (!failedAfterStreamError && this.shouldRetry(failure, standardRetryCount, timeoutRetryCount)) {
+          if (!options.callerManagedSession && (!failedAfterStreamError || rateLimitClass === 'Transient')
+            && this.shouldRetry(failure, standardRetryCount, timeoutRetryCount)) {
             const boundedFailureMessage = boundCodexFailureMessage(failure.reason, options, true);
             log.info('Retrying Codex call after transient failure', {
               agentType,
@@ -642,7 +679,7 @@ export class CodexClient {
             const retryState = this.recordRetry(failure.category, standardRetryCount, timeoutRetryCount);
             standardRetryCount = retryState.standardRetryCount;
             timeoutRetryCount = retryState.timeoutRetryCount;
-            await this.waitForRetryDelay(retryState.retryAttempt, options.abortSignal);
+            await waitForRateLimitRetry(retryState.retryAttempt, options.abortSignal);
             continue;
           }
 
@@ -693,14 +730,14 @@ export class CodexClient {
           && (trimmed.startsWith('{') || trimmed.startsWith('```'));
         const refusalDetected = !looksLikePureStructuredOutput && isCodexSafetyRefusal(trimmed);
         if (refusalDetected) {
-          if (refusalRetryCount < CODEX_REFUSAL_MAX_RETRIES) {
+          if (!options.callerManagedSession && refusalRetryCount < CODEX_REFUSAL_MAX_RETRIES) {
             refusalRetryCount += 1;
             log.info('Retrying Codex call after safety-filter refusal', { agentType, attempt, refusalRetryCount });
             // 拒否文脈を持ち越さないため、この call がセッションを開始した場合は
             // 新セッションでやり直す。呼び出し元から渡された既存セッションは
             // 後続フェーズの継続に必要なので破棄せず、同一セッションで再試行する。
             threadId = options.sessionId;
-            await this.waitForRetryDelay(refusalRetryCount, options.abortSignal);
+            await waitForRateLimitRetry(refusalRetryCount, options.abortSignal);
             continue;
           }
           const failure = createProviderErrorFailure(
@@ -740,17 +777,21 @@ export class CodexClient {
         };
         return response;
       } catch (error) {
-        const rawErrorMessage = getErrorMessage(error);
-        const failure = this.resolveFailureDetail(
+        const rawErrorMessage = redact(getErrorMessage(error));
+        let failure = redactFailure(this.resolveFailureDetail(
           rawErrorMessage,
           streamAbortController.signal,
           options.abortSignal,
           abortCause,
           timeoutMessage,
-        );
+          threadId,
+        ));
+        const rateLimitClass = classifyRateLimitError(rawErrorMessage);
         if (
-          failure.category !== AGENT_FAILURE_CATEGORIES.PROVIDER_STREAM_PARSE_ERROR
-          && containsRateLimitError(rawErrorMessage)
+          failure.category === AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR
+          && (rateLimitClass === 'Exhausted'
+            || (rateLimitClass === 'Transient'
+              && (state.observedToolUse || standardRetryCount >= RATE_LIMIT_MAX_RETRIES)))
         ) {
           const rateLimitedResponse = this.buildRateLimitedResponse(
             agentType,
@@ -776,7 +817,7 @@ export class CodexClient {
           boundedErrorMessage,
         );
 
-        if (this.shouldRetry(failure, standardRetryCount, timeoutRetryCount)) {
+        if (!options.callerManagedSession && this.shouldRetry(failure, standardRetryCount, timeoutRetryCount)) {
           const retryErrorMessage = boundCodexFailureMessage(errorMessage, options, true);
           log.info('Retrying Codex call after transient exception', {
             agentType,
@@ -787,8 +828,13 @@ export class CodexClient {
           const retryState = this.recordRetry(failure.category, standardRetryCount, timeoutRetryCount);
           standardRetryCount = retryState.standardRetryCount;
           timeoutRetryCount = retryState.timeoutRetryCount;
-          await this.waitForRetryDelay(retryState.retryAttempt, options.abortSignal);
-          continue;
+          try {
+            await waitForRateLimitRetry(retryState.retryAttempt, options.abortSignal);
+            continue;
+          } catch (retryError) {
+            failure = redactFailure(this.resolveFailureDetail(redact(getErrorMessage(retryError)), streamAbortController.signal,
+              options.abortSignal, abortCause, timeoutMessage, threadId));
+          }
         }
 
         const finalFailure = this.withReconnectFailureDiagnostics(failure, state.activeTool);

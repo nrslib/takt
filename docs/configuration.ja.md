@@ -253,19 +253,25 @@ dynamic parallel と `dynamic_facets` の selector は読み取り専用で、`R
 | `sync_conflict_resolver` | object | `{ auto_approve_tools: false }` | sync conflict resolver ポリシー |
 | `observability` | object | 無効 | OpenTelemetry foundation の opt-in 設定。`enabled` で SDK を初期化し、`monitor` は workflow metric を `.takt/runs/<run>/monitor.json` に出力し、`session_log_exporter` は span 由来の shadow session log を出力します。`usage_events_phase` は phase 粒度の usage events を `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl` に出力します。`enabled: true` と `OTEL_EXPORTER_OTLP_ENDPOINT` が揃うと、TAKT は標準の `OTEL_EXPORTER_OTLP_*` 環境変数で span と metric も OTLP 送信します。TAKT 独自の OTLP config キーはありません。 |
 
+Codex、Claude SDK、claude-headless、Copilotの一時的なHTTP 429は同じproviderで最大8回再試行します。待機時間は1、2、4、8、16、30、30、30秒です。Codex、Claude SDK、claude-headless、Copilot、OpenCodeでツール実行イベントを観測した試行では429を受けても操作の重複を防ぐため自動再試行しません。OpenCodeは通常の一時障害と試行予算を共有し、250ms・500ms待機して最大2回再試行します（合計3試行）。再試行で成功すれば通常完了します。使用枠・クレジット・spend capの使い切り通知は再試行せず、直ちに`rate_limit_fallback.switch_chain`へ進みます。ツールイベントを観測せずに429が続く場合は再試行予算を消費してから同じ切り替え処理へ進みます。使い切りと429の両方を含む失敗は使い切りとして扱います。Copilotの`session.error`が月間クォータ切れ（`statusCode` 402、`errorType: quota`、`errorCode: quota_exceeded`のいずれか）を示す場合も使い切りとして扱い、再試行せず直ちに`rate_limit_fallback.switch_chain`へ進みます。切り替え先がなければ従来どおり停止します。再試行の設定項目はありません。429以外の既存の再試行条件は維持します。
+
 ## Caccia レビューループ
 
 `caccia` は `~/.takt/config.yaml` と `.takt/config.yaml` のどちらにも設定できます。
 
 ```yaml
 caccia:
-  enabled: false          # caccia 効果による CodeRabbit の待機を有効化
+  enabled: false          # PR 公開後の自動 Caccia と明示効果のレビュー待機を有効化
   wait_timeout_ms: 1800000 # 初回レビューとPush後の各コミットのレビューを待つ上限（ミリ秒）
   max_iterations: 3       # 修正と再レビューの最大反復回数
   workflow: caccia        # 各スレッド群の判断と修正に使う workflow
 ```
 
-`caccia` 効果は `enabled: true` の場合だけ CodeRabbit を待ちます。無効なら待たずに `outcome: skipped` と `skipReason: config_disabled` を返します。単独実行の `takt caccia <PR番号>` はこのフラグに関係なく利用できます。既定値は無効、1,800,000 ミリ秒、3 回、workflow `caccia` です。project に `caccia` ブロックがある場合は global のブロックより優先し、省略した項目には上記の既定値を適用します。`workflow` に workflow 識別子を指定するとビルトイン workflow を差し替えられます。
+`caccia` 効果は `enabled: true` の場合だけ CodeRabbit を待ちます。無効ならレビューを待たずに `outcome: skipped` と `skipReason: config_disabled` を返します。単独実行の `takt caccia <PR番号>` はこのフラグに関係なく利用できます。既定値は無効、1,800,000 ミリ秒、3 回、workflow `caccia` です。project に `caccia` ブロックがある場合は global のブロックより優先し、省略した項目には上記の既定値を適用します。`workflow` に workflow 識別子を指定するとビルトイン workflow を差し替えられます。
+
+同じ `enabled` は worktree タスクの `auto_pr` と Pipeline の `--auto-pr` による PR 作成・更新成功後の自動 Caccia も制御します。PR 公開失敗、PR がない場合、goal 管理タスク、GitHub 以外では後処理の Caccia を実行しません。実行した workflow に呼び出し先も含めて `caccia` system 効果がある場合、または `merge.auto_start: true` で選択されたマージ用 workflow に同じ効果がある場合も後処理を抑止します。それ以外は Caccia が完了してからマージ用 workflow を起動します。step 名や指示文の文字列は効果として扱いません。
+
+GitHub の PR head と開始時のクローン HEAD が不一致なら、効果は実行前に2秒間隔で PR 情報を再取得し、取得時間を含めて最大60秒待ちます。PR 情報の取得中に異なる head を観測した場合も同じ期限内で再取得します。期待 SHA と一致した場合だけ続行し、期限まで不一致なら期待 SHA と最後に観測した SHA を含む `error` を返します。最後の観測が不整合だった場合は食い違った両方の SHA も示します。認証失敗など他の取得例外、PR の識別情報変更、中断は直ちに失敗とします。実行文脈と push 記録先がある場合はスキップ記録前にも適用するため、無効・未設定でもこの照合を待つことがあります。この待機は固定値で、レビュー待機の `wait_timeout_ms` では変更されません。
 
 `wait_timeout_ms` は初回と各 Push 後のレビュー待機期限で、再依頼もこの期限に含みます。レビュー制限通知の再試行時刻が期限より前なら到来時に一度だけレビューを依頼し、期限以降なら直ちにスキップします。制限通知を受けた後、レビューが期限までに完了しなければスキップします。制限通知を受けずに期限に達した場合は初回待機をスキップし、Push 後の待機をエラーとします。単独コマンドはいずれも非ゼロで終了し、system 効果は失敗を `success: false` と `error` で返し、workflow のルールで分岐します。
 
@@ -429,15 +435,129 @@ OpenCode の `event_limit` は既定で 500,000、`text_byte_limit` は 1 MiB、
 `TAKT_IGNORE_EXCEED` は `true` または `false` のみ受け付け、それ以外の値は config
 validation に失敗します。
 
+## Alloyの並列実行とJVM設定
+
+次の環境変数を検証開始時に読み取ります。YAMLの設定キーではありません。Quintだけの検証には適用しません。
+
+| 環境変数 | 既定値 | 入力形式 |
+|----------|--------|----------|
+| `TAKT_ALLOY_CONCURRENCY` | `2` | 正の安全な整数。`1`で順次実行 |
+| `TAKT_ALLOY_HEAP` | `4g` | 正の整数と小文字の単位`k`・`m`・`g` |
+| `TAKT_ALLOY_STACK` | `64m` | 正の整数と小文字の単位`k`・`m`・`g` |
+
+未指定時だけ既定値を使い、空文字列や不正値は変数名を含むエラーになります。設定値は検証1回の間で固定されます。Alloyのコマンド列挙と各コマンドのJVMには、既定で`-Xmx4g -Xss64m`を渡します。上書きすると指定値だけを渡します。
+
+```bash
+TAKT_ALLOY_CONCURRENCY=1 TAKT_ALLOY_HEAP=2g TAKT_ALLOY_STACK=128m takt
+```
+
+メモリが不足する場合はヒープ上限を下げるか、同時実行数を1にしてください。上記のTAKT専用設定でJVM引数を変更できます。`JAVA_TOOL_OPTIONS`だけでこれらの値を上書きしないでください。
+
+`assistant.formal_spec.model_check_timeout_seconds`はAlloyの各コマンドに個別に適用されます（既定900秒）。全体の上限時間は設けず、時間切れや失敗があっても残りを実行します。空いた枠には次のコマンドをすぐに投入します。各コマンド結果の`timedOut: true`が時間切れを示します。
+
+検証の失敗・エラー・時間切れでは`.takt/runs/verify-*/`の仕様とログを保持し、保存先を結果メッセージに表示します。保持したディレクトリは自動掃除の対象外です。不要になったら手動で削除してください。成功時は結果の解釈が終わってから削除します。
+
+保持マーカーの書き込みに失敗した場合は所有権マーカーを保持マーカーへ移動し、保存先と書き込みエラーを通知します。移動にも失敗した場合は所有権マーカーを残し、保持を確定できない旨と保存先、両方のエラーを通知します。残った所有権マーカーは所有するNodeプロセスの終了後もディレクトリを自動掃除から保護します。必要な成果物を手動で退避してください。
+
 ## 環境変数上書き
 
 ほとんどの設定キーは `TAKT_` に設定キーパスをアンダースコア区切り・大文字化して続けた環境変数で上書きできます。`logging.debug` は `TAKT_LOGGING_DEBUG`、`telemetry.routing_decisions` は `TAKT_TELEMETRY_ROUTING_DECISIONS` になります。よく使う例: `TAKT_PROVIDER`、`TAKT_MODEL`、`TAKT_CONCURRENCY`、`TAKT_LOGGING_DEBUG`、`TAKT_TELEMETRY_ROUTING_DECISIONS`、`TAKT_OBSERVABILITY_ENABLED`。環境変数の値は対応するファイルの値を上書きし、キーを持つ層で適用されます。グローバル専用キー（例: `logging`、`disabled_builtins`）はグローバル `~/.takt/config.yaml` 層で、プロジェクト上書き可能キー（例: `concurrency`、`telemetry.routing_decisions`）はプロジェクト `.takt/config.yaml` 層でも解決されます。
 
 設定キー上書きとは別に、`TAKT_NOTIFY_WEBHOOK` には Slack Incoming Webhook URL を設定できます。設定すると、pipeline 完了時と `takt run` のタスクバッチ完了時（run summary）に Slack へ通知が送信されます。manager の有効なゴール通知にも同じ Webhook を使用します。
 
-## manager の通知設定
+## Slack で manager と会話する
 
-manager は準備中で、現在は利用できません。以下は内部実装のために残している設定です。
+会話スレッドに `/make-goal` を送ると登録案が表示されます。「登録を承認」または「会話を続ける」で操作でき、古い版のボタンは使えません。
+
+Slack の Socket Mode を使うと、公開 URL を用意せずに manager と会話できます。会話の返事と問い合わせへの回答には、以下の Slack App を使います。「完成しました」などの通知は、引き続き `TAKT_NOTIFY_WEBHOOK` に設定した Incoming Webhook で届きます。会話と通知は併用できます。
+
+### Slack App を作る
+
+1. Slack の App 作成画面で **From an app manifest** を選び、ワークスペースを指定して次の YAML を貼り付けます。
+
+   ```yaml
+   display_information:
+     name: TAKT manager
+   features:
+     bot_user:
+       display_name: TAKT manager
+       always_online: true
+   oauth_config:
+     scopes:
+       bot:
+         - chat:write
+         - channels:history
+         - groups:history
+   settings:
+     event_subscriptions:
+       bot_events:
+         - message.channels
+         - message.groups
+     interactivity:
+       is_enabled: true
+     socket_mode_enabled: true
+   ```
+
+2. App をワークスペースにインストールし、**OAuth & Permissions** でボット用トークン（`xoxb-…`）をコピーします。
+3. **Basic Information → App-Level Tokens** で、スコープ `connections:write` を付けた App-Level Token を作り、コピーします（`xapp-…`）。
+4. 会話するチャンネルで `/invite @TAKT manager` を実行し、ボットを招待します。
+5. Slack のチャンネル詳細でチャンネル ID を確認します。許可する各ユーザーのプロフィールから「メンバー ID をコピー」を選び、ユーザー ID を取得します。
+
+### 設定して起動する
+
+リポジトリの `.takt/config.yaml` に、会話する1つのチャンネルと、発言・ボタン操作を受け付ける Slack ユーザーを指定します。
+
+```yaml
+manager:
+  slack:
+    channel_id: C0123ABCD
+    allowed_user_ids: [U0AAAAAA]
+```
+
+`manager.slack` はリポジトリ専用で、グローバルの `~/.takt/config.yaml` には書けません。トークンを `manager.slack` に書くと設定の検証で拒否されます。
+
+リポジトリの `.takt/config.yaml` は、バージョン管理され、共有される場合があります。`manager.slack.allowed_user_ids` を変更すると、Slack から manager に入力できるユーザーが変わります。daemon を起動する前にリポジトリ設定の変更を確認し、信頼できる設定を使ってください。
+
+Slack 設定と登録済みリポジトリの一覧は daemon の起動時に読み込まれます。許可ユーザーの削除を含む変更を反映するには、`takt daemon stop` を実行してから daemon を起動し直してください。
+
+daemon を起動するシェルで2つのトークンを環境変数に設定し、`takt manager` または `takt daemon` で起動します。たとえば次のように実行します。
+
+```bash
+export TAKT_SLACK_APP_TOKEN='xapp-...'
+export TAKT_SLACK_BOT_TOKEN='xoxb-...'
+takt manager
+```
+
+`TAKT_SLACK_APP_TOKEN` は `connections:write` を持つ App-Level Token、`TAKT_SLACK_BOT_TOKEN` はボット用トークンです。daemon は読み取った後に両変数を自身の環境から削除し、provider やツールの子プロセスに渡らないようにします。自動起動の仕組みはないため、上記のどちらかのコマンドで daemon を起動してください。
+
+Slack を設定したリポジトリがあり、両方のトークンがそろっていれば、仕事がなくても daemon は止まらず待ち受けます。Slack の設定がない場合や、どちらかのトークンがない場合は、従来どおり仕事がないときに終了します。同じチャンネルを2つのリポジトリが設定すると、両方の Slack を無効にし、理由を `~/.takt/logs/daemon.log` に記録します。
+
+### 会話と問い合わせへの回答
+
+- 設定したチャンネルに投稿すると、その投稿のスレッドに返事が届きます。以後はそのスレッドで会話を続けてください。どの会話スレッドも、そのリポジトリの manager の同じ会話につながり、TUI とも共有します。返事は発言したスレッドにだけ届き、TUI での発言への返事は Slack に出ません。
+- 別のチャンネル、ボットへの DM、`allowed_user_ids` にない人の発言やボタン操作には反応しません。
+- 処理中の発言には「処理中」と返し、後から実行するための保存もしません。処理が終わってから、もう一度送ってください。
+- 問い合わせ（質問・承認・操作依頼）は、設定したチャンネルにスレッド外の新しい投稿として1件ずつ届きます。承認の許可・拒否と範囲、選択肢はボタンで答えます。「今回だけ」より広い範囲で承認するときは、ボタンで開くモーダルで提案された許可の一文を編集して確定すると、許可の Markdown にその一文が追記されます。
+- 自由記述の回答は、その問い合わせの投稿のスレッドに返信します。投稿と問い合わせの対応が有効な場合、返信は会話ではなく回答として扱われます。回答は出どころ `slack` として保存されます。
+- Slack 接続時にすでに未回答の問い合わせは Slack に投稿されません。TUI の `Ctrl+R` で回答してください。接続後の新しい問い合わせは1件につき1回投稿し、再送しません。投稿と問い合わせの対応を保存できなかった場合や読み取れない場合、そのスレッドへの返信は回答にならず、通常の会話として扱われます。
+- 「完成しました」などの知らせは、会話の接続からは投稿しません。引き続き `TAKT_NOTIFY_WEBHOOK` で届きます。
+
+## manager の秘密ファイル設定
+
+グローバル `~/.takt/config.yaml` またはプロジェクト `.takt/config.yaml` の `manager.sensitive_paths` で、担当リポジトリ内でも判断役へ渡すファイルとディレクトリを追加できます。
+
+```yaml
+manager:
+  sensitive_paths:
+    - private
+    - config/credentials.json
+```
+
+既定は `.env`、`.env.*`、`id_rsa`、`id_dsa`、`id_ecdsa`、`id_ed25519`、`*.key`、`*.pem`、`*.crt`、`*.cer`、`*.p12`、`*.pfx` です。両設定の一覧を既定に追加し、省略や空配列でも既定を削除できません。単独の名前は任意の深さで適用し、ディレクトリ成分を含む相対パスは各担当リポジトリを基準にします。絶対パスと `~/` も指定できます。ディレクトリ指定は配下を含みます。名前には先頭または末尾の単一の `*` を使えます。許可ルールを定義する設定ではありません。
+
+Claude の `Read`、`Glob`、`Grep` は、パスとシンボリックリンクを解決した対象が担当内の読み取り可能な通常対象だけの場合に判断役を通りません。検索候補は秘密の本文を読まず、パスとメタデータで確認します。検索指定は `*`、`**`、`?` の単純な形式に対応し、除外、波括弧展開、文字クラス、エスケープや範囲を確定できない指定は判断役へ渡します。隠しパス、走査するディレクトリやリンクは保守的に確認するため、絞り込んだ検索でも審査する場合があります。Codex の組み込み道具は引き続き審査します。
+
+## manager の通知設定
 
 プロジェクト `.takt/config.yaml` とグローバル `~/.takt/config.yaml` の
 `manager.notifications` で、ゴール通知の種類ごとに有効・無効を指定できます。
@@ -448,7 +568,7 @@ manager は準備中で、現在は利用できません。以下は内部実装
 | `awaiting_merge` | 人の取り込み待ち | `true` |
 | `completed` | ゴールの完成 | `true` |
 | `progress` | 作業単位の取り込み | `true` |
-| `blocked` | manager が通知ツールで伝える行き詰まり | `true` |
+| `blocked` | manager が通知ツールで伝える行き詰まり、manager のイベント処理・TUI の会話の失敗 | `true` |
 | `custom` | manager が通知ツールで伝える任意の出来事 | `true` |
 
 ```yaml
@@ -467,13 +587,9 @@ manager:
 プロジェクトの `question: true` で上書きでき、プロジェクトでそのキーを省略すると
 グローバルの値を使います。他の種類の指定には影響しません。
 
-`false` は該当種類の通知の保存と Slack 送信を無効にします。
-質問の保存・回答・依存する作業の投入判定、作業単位の取り込み、ゴールの状態更新は維持します。
-通知を無効にしても回答待ちの質問は TUI に表示されます。
-`TAKT_NOTIFY_WEBHOOK` が未設定なら Slack には送らず、有効な保存通知は
-次の TUI 起動時・発言時に表示します。Slack 送信に失敗しても manager の処理は止めず、
-診断を保存して TUI に表示します。通常の run・pipeline の既存通知には
-`manager.notifications` を適用しません。
+`false` は、その種類の通知の保存、TUI での通知表示、Slack 送信を無効にします。質問への回答、成果の取り込み、ゴールの状態更新は続き、回答待ちの質問も表示されます。
+
+`TAKT_NOTIFY_WEBHOOK` を指定すると Slack に送信します。有効な保存通知は、TUI を開いている間も更新して表示します。manager のイベント処理や TUI の会話が失敗すると `blocked` を通知し、同じ失敗でも通知します。失敗状態のファイルは作りません。Slack の送信失敗はログに出し、manager の作業は続けます。通常の run・pipeline の通知はこの設定の対象外です。
 
 ## API キー設定
 
@@ -797,6 +913,8 @@ provider:
         profile: router
       review-completion-judge:
         profile: router
+      manager-permission-judge:
+        profile: router
 
   auto_routing:
     strategy: balanced
@@ -924,6 +1042,15 @@ takt run --runtime-assignment personal
 
 `provider.profiles` に provider、model、options を名前付きで定義します。`capabilities` には provider-options preset 名を指定でき、project → global → builtin の順に探します。profile の `options` は preset より優先されます。必要なら `permission_mode` や別の profile を継承する `extends` も指定できます。global と project に同名の profile がある場合は project の定義が全体を置き換えます。
 
+`provider` は継承解決後も必須です。codex、claude、claude-sdk、claude-headless、claude-terminal、copilot、cursor、kiro、pi、deepseek-harness、mock では `model` を省略できます。`extends` で親に model があれば継承し、継承後も model がなければプロバイダーの既定モデルに委ねます。選択されなかった defaults や低優先度の別 profile から model を補完しません。明示的な CLI `--model` または環境変数 `TAKT_MODEL` は優先されます。opencode は例外で、`provider/model` 形式の `model` が必要です。
+
+```yaml
+provider:
+  profiles:
+    provider-default: { provider: codex }
+  defaults: { profile: provider-default }
+```
+
 内部 agent の権限を制限する場合は、`capabilities` または `permission_mode` を指定した profile を割り当ててください。未指定なら provider の通常設定が使われます。
 
 有効な provider section では `provider.defaults` の指定が必須で、固定の `profile` または順序付きの `ladder` のいずれか一方だけを指定します。`pool` は指定できません。`provider.targets.personas`、`provider.targets.tags`、`provider.targets.steps` のエントリは、固定の `profile`、順序付きの `ladder`、または auto routing 用の `pool` のいずれか一方を指定できます。`pool` はこれらの明示的な workflow target に限り指定できます。`internal_agents` のエントリは固定の `profile` または順序付きの `ladder` を指定できますが、`pool` は指定できません。`companions` のエントリは固定の `profile` のみ指定でき、`pool` と `ladder` は指定できません。step は `<leaf-workflow-name>/<step-name>` 形式で指定し、agent を起動しない制御ノード（`workflow_call` など）は解決対象になりません。
@@ -941,7 +1068,7 @@ defaults
   < steps
 ```
 
-内部 agent（`selector`、`assistant`、`loop-judge`、`review-completion-judge`）は別のラダーで解決します。`selector` は動的な作業選択、`assistant` は対話セッション、`loop-judge` は loop monitor の判定、`review-completion-judge` は opt-in した reviewer に再確認が必要かの判定を担当します。seat はすべて任意で、未指定なら通常の既定解決を使います。
+内部 agent（`selector`、`assistant`、`loop-judge`、`review-completion-judge`、`manager-permission-judge`）は別のラダーで解決します。`selector` は動的な作業選択、`assistant` は対話セッション、`loop-judge` は loop monitor の判定、`review-completion-judge` は opt-in した reviewer に再確認が必要かの判定を担当します。`manager-permission-judge` は、provider が claude（claude-sdk）または codex の manager 会話で、道具の実行前審査を担当します。判断役の provider と model は `runtime.yaml` の `provider.targets.internal_agents.manager-permission-judge` で指定し、`profile` または `ladder` を使います。`pool` は指定できません。seat はすべて任意で、未指定なら通常の既定解決を使います。ただし、`manager-permission-judge` は未指定なら manager と同じ provider・model・provider options を使います。
 
 ```text
 defaults
@@ -1040,7 +1167,7 @@ mcp:
 | `mcp.targets.personas` | `{ <persona>: { servers?, exclude? } }` | persona 単位の追加/除外。 |
 | `mcp.targets.tags` | `{ <tag>: { servers?, exclude? } }` | tag 単位の追加/除外。 |
 | `mcp.targets.steps` | `{ <leaf-workflow>/<step>: { servers?, exclude? } }` | step 単位の追加/除外。制御ノード（`workflow_call` など）は解決対象外です。 |
-| `mcp.targets.internal_agents` | `{ selector: { exclude? } }` | 両内部 agent（`selector` と `assistant`）へ適用する除外。`selector.exclude` のみ受け付けます。 |
+| `mcp.targets.internal_agents` | `{ selector: { exclude? } }` | 内部 agent（`selector`、`assistant`、`manager`）へ適用する除外。`selector.exclude` のみ受け付けます。manager は `mcp.targets.personas.manager` にも一致し、自身の TAKT MCP は常に追加されます。 |
 
 server エントリ:
 
@@ -1757,4 +1884,4 @@ fork の除外も `where` より先に適用します。fork を対象にする�
 
 `threat_check_max_diff_bytes` は fork の AI 評価へ渡す累積差分の上限で、正の整数（UTF-8 バイト数）です。既定は200,000です。上限超過では差分を切り詰めて判定せず、人間による確認を求める PR コメントを残して停止します。機械的検査で指示ファイル・CI 定義や危険な Git 設定を検出した場合、AI 評価と本体 workflow は実行しません。
 
-`auto_start: true` は workflow が PR を作成・更新した後、その PR を対象にマージ処理を起動します。Caccia はマージ用 workflow 内の明示効果で実行します。手動で作成した PR は自動起動の対象外です。
+`auto_start: true` は workflow が PR を作成・更新した後、その PR を対象にマージ処理を起動します。マージ用 workflow に明示の Caccia 効果があれば後処理の Caccia を抑止します。実行した workflow とマージ用 workflow のどちらにも効果がなければ、有効設定時の後処理の Caccia が完了してからマージ処理を起動します。手動で作成した PR は自動起動の対象外です。

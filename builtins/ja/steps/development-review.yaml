@@ -1,4 +1,5 @@
 name: review
+description: 変更に応じた専門レビューを並列に実行し、修正の要否を判定する
 tags: [review]
 parallel:
   fixed: []

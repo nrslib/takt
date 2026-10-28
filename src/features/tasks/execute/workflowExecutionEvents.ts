@@ -112,7 +112,7 @@ export interface WorkflowExecutionEventBridge {
   prepareTerminalPublicationPayload: () => WorkflowTerminalPublicationPayload;
   emitProviderOutput: (event: StreamEvent) => void;
   emitTerminalFeedback: (
-    event: Extract<WorkflowExecutionEvent, { type: 'completed' }>,
+    event: Extract<WorkflowExecutionEvent, { type: 'completed' | 'progress' }>,
   ) => void;
   flushEventSink: () => Promise<void>;
 }

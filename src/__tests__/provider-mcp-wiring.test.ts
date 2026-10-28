@@ -165,6 +165,22 @@ function getLastCallOptions(mockFn: { mock: { calls: unknown[][] } }): AnyCallOp
 }
 
 describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => {
+  it.each([undefined, true] as const)('passes MCP ownership independently of session ownership (%s)', async (callerManagedMcp) => {
+    const { ClaudeHeadlessProvider } = await import('../infra/providers/claude-headless.js');
+    const { ClaudeTerminalProvider } = await import('../infra/providers/claude-terminal.js');
+    const { CursorProvider } = await import('../infra/providers/cursor.js');
+    const { callClaudeHeadless } = await import('../infra/claude-headless/client.js');
+    const { callClaudeTerminal } = await import('../infra/claude-terminal/client.js');
+    const { callCursor, callCursorCustom } = await import('../infra/cursor/client.js');
+    for (const provider of [new ClaudeHeadlessProvider(), new ClaudeTerminalProvider(), new CursorProvider()]) {
+      for (const systemPrompt of [undefined, 'manager']) {
+        await provider.setup({ name: 'manager', systemPrompt }).call('prompt', { cwd: '/tmp', preparedMcp, callerManagedMcp });
+      }
+    }
+    for (const call of [callClaudeHeadless, callClaudeTerminal, callCursor, callCursorCustom]) {
+      expect(getLastCallOptions(vi.mocked(call))).toMatchObject({ preparedMcp, callerManagedMcp });
+    }
+  });
   it('preserves Claude MCP-only side effects through the client boundary', async () => {
     const { ClaudeProvider } = await import('../infra/providers/claude.js');
     const { callClaude } = await import('../infra/claude/client.js');

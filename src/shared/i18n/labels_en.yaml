@@ -5,6 +5,27 @@
 # Template variables use {variableName} syntax.
 # =============================================================================
 
+taskStop:
+  label: "Stop"
+  description: "Request a stop; the worker interrupts itself and determines the final state"
+  confirm: 'Request a stop for running task "{name}"? The worker will determine the final state.'
+  staleOwner: "Cannot request a stop because the owner is not alive. Use Mark as failed."
+  missingExecutionId: "Cannot request a stop because the execution ID is missing."
+  rejected: "Stop request rejected: {reason}"
+  requested: 'Stop requested for "{name}". The worker will interrupt itself and determine the final state.'
+
+taskDeletion:
+  statusOption: "Filter deletion by status (pending|completed|failed|exceeded|pr_failed; multiple values allowed)"
+  goalOption: "Filter deletion by goal ID"
+  invalidStatus: "Invalid deletion status: {status}. Use pending, completed, failed, exceeded, or pr_failed."
+  filtersRequired: "Deletion requires at least one of --status, --goal, or --branch."
+  preview: "Tasks selected for deletion (preview; use --yes to delete):"
+  previewTask: "Name: {name} | Status: {status} | Branch: {branch} | Goal: {goal}"
+  empty: "No tasks match the deletion filters."
+  deleted: "Deleted task: {name}"
+  failed: "Failed to delete task: {name}"
+  failedWithError: "Failed to delete task {name}: {error}"
+
 # ===== Interactive Mode UI =====
 interactive:
   operation:
@@ -334,8 +355,11 @@ issue:
 tui:
   ui:
     thinking: "Thinking..."
+    extendedThinking: "Reasoning..."
+    responding: "Responding"
     selectTask: "Selecting a task..."
     selectStart: "Choosing a starting point..."
+    extractRetryAgreement: "Summarizing the agreed retry position..."
     reviseInstruction: "Revising the instruction..."
     composeTell: "Composing the instruction..."
     hint: "Enter: send  Shift+Enter: newline  Tab: complete  ↑↓: move/history  Ctrl+C: cancel"
@@ -343,6 +367,8 @@ tui:
     queuedHint: "↑ to edit the queued line"
     queuedMore: "+{count} more queued"
     interruptHint: "(Esc to interrupt)"
+    interruptHintCompact: "(Esc: stop)"
+    interruptHintMinimal: "Esc"
     responseInterrupted: "Response interrupted."
     instructionInterrupted: "Instruction generation interrupted."
     runFinished: "The workflow run finished. Describe the next task, or /cancel to leave."
@@ -378,6 +404,9 @@ tui:
     assistantRetryUnresolved: "I could not identify one eligible task and a usable start position from the conversation. No task was changed."
     assistantRetryGenerationFailed: "The task could not be prepared: {error}"
     assistantRetryInvalidResult: "The assistant returned a task or start position that is not available. No task was changed."
+    assistantRetryFormatMismatch: "The response did not match the required single-property JSON format."
+    assistantRetryUnknownTaskName: "The returned task name is not among the candidates."
+    assistantRetryUnknownStartId: "The returned start position ID is not among the selectable candidates."
     assistantRetryCancelled: "The task was not changed."
     assistantRetryRequeued: "Task \"{task}\" is pending again. The workflow was not started."
     assistantRetrySaved: "The revised task \"{task}\" is pending. The workflow was not started."
@@ -396,17 +425,125 @@ tui:
     exceededStart: "Saved stopping position: {start} (iteration {iteration})"
 
 manager:
-  goalExecutionUsage: "Pause: /pause <goalId> / Resume: /resume <goalId> / Abort: /abort <goalId> (goal ID required)"
-  invalidGoalId: "Invalid goal ID format."
+  conversation:
+    reading: "Reading conversation data. Summary approval is unavailable until it completes."
+    disconnected: "Reconnecting to the daemon."
+    incomplete: "The read is incomplete. Summary approval is unavailable until refresh completes."
+    interrupted: "The previous operation was interrupted. You can send a new message."
+    permission_appended: "The permission was appended. Check whether the answer was saved."
+    assignment_changed: 'The assignment has changed. Reopen the conversation for the current assignment.'
+    busy: "An operation is running. Submit again after it finishes."
+    stale_summary: "The summary has changed. Review the latest summary."
+    invalid_assignment: "The assignment changed or the target is outside it. Reopen the conversation."
+    unavailable_attachment: "The conversation is disconnected. Reopen it."
+    registration_recovery: "Goal registration needs recovery. Inspect the saved reservation and goal state."
+    storage_error: "Conversation state could not be saved. Check storage and reconnect."
+    shutting_down: "The daemon is shutting down. Connect again."
+    invalid_input: "The operation input is invalid."
+    operation_failed: "The conversation operation failed. Inspect its current state."
+    dismissed: "Summary dismissed."
+    answer_saved: "Answer saved."
+  assignmentHeading: "Assignment: {name}"
+  assignmentHeadingMultiple: "Assignment: {name} + {count} more"
+  counts: "Ongoing {goals} / Pending {questions}"
+  inputHint: "Enter Send  Shift+Enter Newline  Esc Interrupt  ^R Inquiries  ^G Goals  ^C Exit"
+  makeGoalHint: "/make-goal creates a goal registration proposal"
+  makeGoalDescription: "Create a goal registration proposal"
+  slackGoalApprove: "Approve registration"
+  slackGoalDismiss: "Continue conversation"
+  slackGoalObjective: "Objective"
+  slackGoalOutOfScope: "Out of scope"
+  slackGoalAcceptance: "Acceptance criteria"
+  slackGoalConstraints: "Work constraints"
+  summaryInputHint: "↑↓ Choose / Enter Confirm / Esc Continue conversation / Ctrl+C Exit"
+  goSummaryRequest: "Summarize the current conversation for goal registration. Return the objective, out-of-scope items, acceptance criteria, and work constraints in the structured response's summary. If there is insufficient material to summarize, explain why in message and return summary: null."
+  goSummaryUnavailable: "Could not create a summary for registration because there is insufficient material. Please continue the conversation."
+  summaryWorking: "Preparing a summary"
+  inputUnavailableDuringAbort: "Cannot enter input during abort confirmation. Finish the confirmation before typing."
+  toolPermission:
+    savedDenial: "Denied by the saved approval answer."
+    consumptionFailed: "Denied because approval consumption could not be saved."
+    contextReadFailed: "Human confirmation is required because permission or approval information could not be read. {reason}"
+    approvalConsumed: "The once approval has been consumed. Human confirmation is required again."
+    inquirySaveFailed: "Failed to save the approval inquiry."
+    agentDenied: "{toolName}: The manager is not allowed to launch another AI agent."
+    bashDenied: "Bash: Launching another AI command-line agent is not allowed."
+    awaitingConfirmation: "Waiting for human confirmation ({toolName}): {reason}"
+    judgeFailed: "Denied because the tool permission judge failed to run."
+    judgeInvalidOutput: "Denied because the tool permission judge returned invalid output."
+    judgeMissingReason: "Denied because the tool permission judge did not provide a reason."
+    judgeTimeout: "Referred for human confirmation because the tool permission judge did not return a decision within the 30-second time limit."
+    judgeInterrupted: "Denied because the tool permission check was interrupted."
+    judgeValidationFailed: "Denied because the tool permission judge failed to run or its output could not be validated."
+  conversationFailureNotification: |-
+    Manager processing failed.
+    Reason: {reason}
+    Review the conversation and current work state before trying again.
+  turnFailureNotification: |-
+    The manager failed to process an event. Unprocessed events remain.
+    Review the logs and configuration to resolve the event processing failure.
+    For a paused goal, press Ctrl+G in the TUI, select the goal and resume it, or request resumption in conversation with a supported provider and confirm the operation. An aborted goal cannot be resumed.
+    Reason: {reason}
+  selectionTitles:
+    answer: "Select an inquiry to answer"
+    goal: "Select a goal"
+    action: "Select a goal operation"
+  goalActions:
+    pause: "Pause"
+    resume: "Resume"
+    abort: "Abort"
+  selectionHint: "↑↓ Choose / Enter Select / Esc Close"
+  selectionEmpty:
+    repository: "No assigned repositories."
+    answer: "No pending inquiries to answer."
+    goal: "No ongoing goals to operate on."
+  goalRegistered: "Goal registered: {name} ({id})\n{branch}"
   sessionUnavailable: "The manager session is currently unavailable."
   goalPaused: "Goal paused: {goalId}"
   goalResumed: "Goal resumed: {goalId}"
   goalExecutionFailed: "Could not change the goal execution state: {reason}"
-  pausedGoals: "Paused goals"
+  goalStates:
+    active: "Active"
+    paused: "Paused"
+    awaiting_merge: "Awaiting merge"
+  inquiryKinds:
+    question: "Question"
+    approval: "Approval"
+    operation_request: "Operation request"
+  answerHint: "Press Ctrl+R to select an inquiry and answer"
+  slack:
+    replyHint: "Use a button to choose an answer, or reply in this thread for free text."
+    permissionTitle: "Confirm permission"
+    permissionSentence: "Permission sentence"
+    confirm: "Confirm"
+    cancel: "Cancel"
+  answerFreeText: "Free text"
+  answerChoiceHint: "↑↓ Choose / Enter Select / Esc Back"
+  answerPrompt: "Enter your answer"
+  inquiryNoGoal: "No goal"
+  permissionAppendFailed: "Failed to append permission: {reason}"
+  answerStages:
+    decision: "Choose whether to allow this operation."
+    report: "Report the result of the procedure."
+    scope: "Choose the approval scope."
+    comment: "Optional comment (Enter to confirm)"
+    permission: "Edit and confirm one permission sentence. If saving fails, correct the cause and press Enter to retry."
+  answerChoices:
+    allow: "Allow"
+    deny: "Deny"
+    completed: "Completed"
+    unable: "Unable"
+    once: "This time only (once)"
+    goal: "This goal"
+    project: "Project"
+    projectManager: "Project / Manager"
+    workspace: "Manager (workspace)"
+    global: "Global"
   goalAborted: "Goal aborted: {goalId}"
-  completedGoalCannotAbort: "A completed goal cannot be aborted: {goalId}"
-  abortedGoals: "Aborted goals"
   abortConfirmation: "Confirm goal abort"
+  abortRetryWarning: "The abort operation failed. Retry the same goal to finish abort processing."
+  retryAbort: "Retry abort processing"
+  selectionChanged: "The selected goal is no longer eligible. The candidate list has been updated."
   abortWarning: "Aborting cannot be undone. Pending tasks are invalidated and running tasks belonging to this goal are interrupted. Branches, sub-PRs and records are retained."
   confirmAbort: "Abort goal"
   cancelAbort: "Cancel"
@@ -414,7 +551,30 @@ manager:
   description: "Open the experimental manager conversation TUI"
   experimentalNotice: "manager is experimental. Behavior, settings, and saved data formats may change without notice."
   costNotice: "manager automatically queues and runs tasks, which incurs provider API costs."
-  notifyIntegrated: "Integrated {task}: {purpose}\nCommit: {sha}"
+  notificationHeadings:
+    progress: "Progress update — {project}"
+    awaiting_merge: "Awaiting merge — {project}"
+    completed: "Goal completed — {project}"
+    blocked: "Cannot proceed — {project}"
+    question: "Question — {project}"
+    custom: "Notification — {project}"
+  notificationGoal: "Goal: {objective} ({id})"
+  notificationSeverity: "Severity: {severity}"
+  notificationSeverities:
+    info: "Information"
+    warning: "Warning"
+    error: "Error"
+  notificationIntegratedBody: "Integrated the work on “{purpose}”."
+  notificationOptions: "Options: {options}"
+  notificationMoreOptions: "Additional options: {count}. View all options in the TUI."
+  notificationRecommendation: "Recommendation: {recommendation}"
+  notificationAnswer: "Open takt manager in {project}, press Ctrl+R in the TUI and select an inquiry from the list to answer."
+  notificationMerge: "Review the changes and merge them into the {branch} branch."
+  notificationMergeRepository: "Run the following commands in order in a clean worktree of the {project} repository where you can switch branches."
+  notificationMergeWorktree: "Check the state of the worktree at {directory}, then run the following commands in order."
+  notificationBlockedAction: "Check the reason and required action above. For full details, open takt manager in {project} and follow up in the TUI."
+  notificationFullMessage: "Open takt manager in {project} to check the conversation and current work state in the TUI."
+  notificationDigestHint: "Remaining body lines omitted."
 
 caccia:
   waitingForReview: "Caccia: Waiting for a CodeRabbit review."

@@ -74,6 +74,110 @@ describe('compileLegacyProviderEnvironment', () => {
 });
 
 describe('compileRuntimeProviderEnvironment (profile path)', () => {
+  it.each([
+    'codex', 'claude', 'claude-sdk', 'claude-headless', 'claude-terminal',
+    'copilot', 'cursor', 'kiro', 'pi', 'deepseek-harness', 'mock',
+  ] as const)('compiles %s defaults without a model', (provider) => {
+    const env = compileRuntimeProviderEnvironment({
+      defaults: { profile: 'selected' },
+      profiles: { selected: { provider } },
+    });
+
+    const resolved = resolveStepProviderModel({
+      ...env,
+      step: { name: 'review', provider: undefined, model: undefined, personaDisplayName: 'reviewer' },
+    });
+    expect(resolved.provider).toBe(provider);
+    expect(resolved.model).toBeUndefined();
+  });
+
+  it.each(['steps', 'tags', 'personas'] as const)(
+    'keeps an omitted model on a compiled %s target instead of borrowing a lower profile model',
+    (target) => {
+      const section: RuntimeProviderSection = {
+        defaults: { profile: 'base' },
+        profiles: {
+          base: { provider: 'codex', model: 'base-model' },
+          lower: { provider: 'codex', model: 'lower-model' },
+          selected: { provider: 'codex' },
+        },
+        targets: {
+          personas: { reviewer: { profile: target === 'personas' ? 'selected' : 'lower' } },
+          ...(target === 'personas' ? {} : {
+            tags: { review: { profile: target === 'tags' ? 'selected' : 'lower' } },
+          }),
+          ...(target === 'steps' ? { steps: { review: { profile: 'selected' } } } : {}),
+        },
+      };
+      const env = compileRuntimeProviderEnvironment(section);
+      const resolved = resolveStepProviderModel({
+        ...env,
+        step: {
+          name: 'review', provider: undefined, model: undefined,
+          personaDisplayName: 'reviewer', tags: ['review'],
+        },
+      });
+
+      expect(resolved.provider).toBe('codex');
+      expect(resolved.model).toBeUndefined();
+    },
+  );
+
+  it.each([undefined, 'inherited-model'])(
+    'resolves a child profile after inheriting parent model %s',
+    (model) => {
+      const env = compileRuntimeProviderEnvironment({
+        defaults: { profile: 'base' },
+        profiles: {
+          base: { provider: 'codex', model: 'unrelated-model' },
+          parent: { provider: 'codex', ...(model === undefined ? {} : { model }) },
+          child: { extends: 'parent' },
+        },
+        targets: { steps: { review: { profile: 'child' } } },
+      });
+      const resolved = resolveStepProviderModel({
+        ...env,
+        step: { name: 'review', provider: undefined, model: undefined, personaDisplayName: 'reviewer' },
+      });
+
+      expect(resolved.provider).toBe('codex');
+      expect(resolved.model).toBe(model);
+    },
+  );
+
+  it('keeps model omission on an auto-routing candidate and fallback', () => {
+    const env = compileRuntimeProviderEnvironment({
+      defaults: { profile: 'base' },
+      profiles: {
+        base: { provider: 'codex', model: 'unrelated-model' },
+        selected: { provider: 'codex' },
+        router: { provider: 'codex', model: 'router-model' },
+      },
+      targets: { steps: { review: { pool: 'review-pool' } } },
+      auto_routing: {
+        router_profile: 'router',
+        pools: {
+          'review-pool': { candidates: [{ profile: 'selected', tier: 'low' }], fallback_profile: 'selected' },
+        },
+      },
+    });
+    const resolved = resolveDeterministicAutoRoutingProviderInfo({
+      autoRouting: env.autoRouting!,
+      step: { name: 'review' },
+      currentProviderInfo: { provider: undefined, model: undefined },
+    });
+
+    expect(resolved?.provider).toBe('codex');
+    expect(resolved?.model).toBeUndefined();
+    const fallback = selectRoutingCandidate({
+      autoRouting: env.autoRouting!,
+      step: { name: 'review' },
+      estimatorFailure: new Error('router unavailable'),
+    });
+    expect(fallback.candidate.name).toBe('selected');
+    expect(fallback.candidate.model).toBeUndefined();
+  });
+
   it.each(['claude-sdk', 'claude', 'claude-headless'] as const)('compiles shared Claude options for %s', (provider) => {
     const env = compileRuntimeProviderEnvironment({
       defaults: { profile: 'default' },
@@ -621,6 +725,21 @@ describe('compileRuntimeProviderEnvironment fail-fast on structural inconsistenc
 });
 
 describe('compileRuntimeProviderEnvironment (internal agent seats)', () => {
+  it('compiles the manager-permission-judge seat from its assigned profile', () => {
+    const env = compileRuntimeProviderEnvironment({
+      defaults: { profile: 'base' },
+      profiles: {
+        base: { provider: 'codex', model: 'base-model' },
+        judge: { provider: 'claude', model: 'judge-model' },
+      },
+      targets: { internal_agents: { 'manager-permission-judge': { profile: 'judge' } } },
+    });
+
+    expect(env.internalAgents?.managerPermissionJudge).toEqual({
+      provider: 'claude', model: 'judge-model',
+    });
+  });
+
   it('compiles the loop-judge seat', () => {
     const env = compileRuntimeProviderEnvironment({
       defaults: { profile: 'weak' },
@@ -639,6 +758,43 @@ describe('compileRuntimeProviderEnvironment (internal agent seats)', () => {
     expect(env.internalAgents).toEqual({
       loopJudge: strong,
     });
+    expect(env.internalAgents).not.toHaveProperty('managerPermissionJudge');
+  });
+
+  it('rejects a pool assigned to the manager-permission-judge seat', () => {
+    const section: RuntimeProviderSection = {
+      defaults: { profile: 'base' },
+      profiles: {
+        base: { provider: 'codex', model: 'base-model' },
+        router: { provider: 'codex', model: 'router-model' },
+      },
+      targets: { internal_agents: { 'manager-permission-judge': { pool: 'judge-pool' } } },
+      auto_routing: {
+        router_profile: 'router',
+        pools: {
+          'judge-pool': { candidates: [{ profile: 'base', tier: 'low' }], fallback_profile: 'base' },
+        },
+      },
+    };
+
+    expect(() => compileRuntimeProviderEnvironment(section))
+      .toThrow(/internal_agents\.manager-permission-judge.*cannot use a `pool`/);
+  });
+
+  it('compiles the first ladder stage for the manager-permission-judge seat', () => {
+    const env = compileRuntimeProviderEnvironment({
+      defaults: { profile: 'base' },
+      profiles: {
+        base: { provider: 'codex', model: 'base-model' },
+        first: { provider: 'claude', model: 'first-model' },
+        second: { provider: 'codex', model: 'second-model' },
+      },
+      targets: { internal_agents: { 'manager-permission-judge': { ladder: ['first', 'second'] } } },
+    });
+
+    expect(env.internalAgents?.managerPermissionJudge).toEqual({
+      provider: 'claude', model: 'first-model',
+    });
   });
 
   it('leaves every seat unset when internal_agents is omitted', () => {
@@ -650,12 +806,18 @@ describe('compileRuntimeProviderEnvironment (internal agent seats)', () => {
     expect(env.internalAgents).toBeUndefined();
   });
 
-  it('still rejects an unknown internal_agents seat', () => {
-    expect(() => compileRuntimeProviderEnvironment({
+  it.each(['reviewer', 'constructor', 'toString'])('rejects unknown internal_agents seat %s and lists allowed keys', (key) => {
+    const compile = () => compileRuntimeProviderEnvironment({
       defaults: { profile: 'weak' },
       profiles: { weak: { provider: 'codex', model: 'weak-model' } },
-      targets: { internal_agents: { reviewer: { profile: 'weak' } } },
-    })).toThrow(/supports only .*loop-judge.*got "reviewer"/);
+      targets: { internal_agents: { [key]: { profile: 'weak' } } },
+    });
+
+    expect(compile).toThrow(/internal_agents.*supports only/);
+    expect(compile).toThrow(`got "${key}"`);
+    for (const allowed of ['selector', 'assistant', 'loop-judge', 'review-completion-judge', 'manager-permission-judge']) {
+      expect(compile).toThrow(`\`${allowed}\``);
+    }
   });
 
 });

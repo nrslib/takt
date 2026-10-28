@@ -25,10 +25,15 @@ import type {
   AskUserQuestionInput,
   AskUserQuestionHandler,
   ClaudeSpawnOptions,
+  ToolPermissionDecision,
+  ToolPermissionDecisionHandler,
+  ToolPermissionDecisionRequest,
 } from './types.js';
 import { AskUserQuestionDeniedError, createAskUserQuestionHandler } from './ask-user-question-handler.js';
 
 const log = createLogger('claude-sdk');
+
+export const TOOL_PERMISSION_DECISION_TIMEOUT_MS = 60_000;
 
 function buildSdkEnv(options: ClaudeSpawnOptions): Record<string, string> {
   const env = buildEnvWithNestedObservabilitySnapshot(process.env, options.childProcessEnv) as Record<string, string>;
@@ -109,6 +114,34 @@ export class SdkOptionsBuilder {
                 hookEventName: 'PreToolUse',
                 permissionDecision: 'deny',
                 permissionDecisionReason: 'Read is limited to verification artifacts',
+              },
+            };
+          }],
+        },
+      ];
+    }
+
+    const decisionHandler = this.options.onToolPermissionDecision;
+    if (decisionHandler) {
+      hooks.PreToolUse = [
+        ...(hooks.PreToolUse ?? []),
+        {
+          hooks: [async (input, _toolUseID, { signal }): Promise<HookJSONOutput> => {
+            const preToolInput = input as PreToolUseHookInput;
+            const abortSignal = this.options.abortSignal
+              ? AbortSignal.any([this.options.abortSignal, signal])
+              : signal;
+            const decision = await SdkOptionsBuilder.requestToolPermissionDecision(decisionHandler, {
+              toolName: preToolInput.tool_name,
+              toolInput: preToolInput.tool_input,
+              cwd: preToolInput.cwd,
+              abortSignal,
+            });
+            return {
+              hookSpecificOutput: {
+                hookEventName: 'PreToolUse',
+                permissionDecision: decision.decision,
+                ...(decision.decision === 'deny' ? { permissionDecisionReason: decision.reason } : {}),
               },
             };
           }],
@@ -201,8 +234,9 @@ export class SdkOptionsBuilder {
       sdkOptions.strictMcpConfig = true;
       sdkOptions.sandbox = { enabled: true, allowUnsandboxedCommands: false };
       // Auto-approved tools also pass this hook; canUseTool alone does not guard them.
-      sdkOptions.hooks = {
-        PreToolUse: [{
+      hooks.PreToolUse = [
+        ...(hooks.PreToolUse ?? []),
+        {
           hooks: [async (input): Promise<HookJSONOutput> => {
             const tool = (input as PreToolUseHookInput).tool_name;
             return {
@@ -213,8 +247,8 @@ export class SdkOptionsBuilder {
               },
             };
           }],
-        }],
-      };
+        },
+      ];
       // Manager permissions are enforced by the hook; bare allowedTools shadow canUseTool.
       if (this.options.mcpOnlySideEffects === undefined) {
         sdkOptions.canUseTool = async (toolName, input): Promise<PermissionResult> =>
@@ -225,6 +259,37 @@ export class SdkOptionsBuilder {
     }
 
     return sdkOptions;
+  }
+
+  private static async requestToolPermissionDecision(
+    handler: ToolPermissionDecisionHandler,
+    request: ToolPermissionDecisionRequest,
+  ): Promise<ToolPermissionDecision> {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result: unknown = await Promise.race([
+        new Promise<ToolPermissionDecision>((resolve) => {
+          timeout = setTimeout(() => resolve({
+            decision: 'deny',
+            reason: 'Tool permission decision timed out after 60000 ms',
+          }), TOOL_PERMISSION_DECISION_TIMEOUT_MS);
+        }),
+        handler(request),
+      ]);
+      if (typeof result === 'object' && result !== null && !Array.isArray(result) && 'decision' in result) {
+        if (result.decision === 'allow') {
+          return { decision: 'allow' };
+        }
+        if (result.decision === 'deny' && 'reason' in result && typeof result.reason === 'string') {
+          return { decision: 'deny', reason: result.reason };
+        }
+      }
+      return { decision: 'deny', reason: 'Tool permission decision returned an invalid result' };
+    } catch {
+      return { decision: 'deny', reason: 'Tool permission decision handler failed' };
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   static mapToSdkPermissionMode(mode: PermissionMode): SdkPermissionMode {

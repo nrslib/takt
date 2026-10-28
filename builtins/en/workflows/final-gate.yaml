@@ -33,6 +33,7 @@ capabilities: readonly
 initial_step: supervise
 steps:
   - name: supervise
+    description: Check requirements and preceding findings against current code to determine whether to complete, fix, or replan.
     tags:
       - review
       - final-gate
@@ -41,6 +42,7 @@ steps:
     persona:
       $param: supervisor_persona
     policy:
+      - process-deviation
       - review
       - $param: supervise_policy
     knowledge:

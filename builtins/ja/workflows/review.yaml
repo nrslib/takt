@@ -26,6 +26,7 @@ steps:
           - {質問2}
 
   - name: reviewers
+    description: 変更に応じて専門レビュアーを選び、並列レビューで修正の要否を判定する
     kind: workflow_call
     call: development-review
     vars:
@@ -39,6 +40,7 @@ steps:
         next: ABORT
 
   - name: review-synthesis
+    description: 各レビューの結果と指摘を統合し、総合判定と最終サマリーを作成する
     input_reports:
       from_step: reviewers
       reports: all
@@ -110,6 +112,7 @@ steps:
             ```
 
   - name: supervise
+    description: 各レビューの結果と指摘を統合し、総合判定と最終サマリーを作成する
     input_reports:
       from_step: reviewers
       reports: all
@@ -120,6 +123,7 @@ steps:
     edit: false
     persona: supervisor
     policy:
+      - process-deviation
       - contract-change
       - review
     pass_previous_response: false

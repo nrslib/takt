@@ -1,10 +1,12 @@
 name: supervise
+description: Compare the requirements with the current code and decide whether the task is complete or needs fixes.
 capabilities: readonly
 tags:
   - supervise
 edit: false
 persona: supervisor
 policy:
+  - process-deviation
   - contract-change
 pass_previous_response: false
 instruction: supervise

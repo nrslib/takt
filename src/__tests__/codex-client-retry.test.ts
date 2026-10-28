@@ -18,6 +18,7 @@ let runStreamedInputs: unknown[] = [];
 let codexConstructorCalls: Array<Record<string, unknown> | undefined> = [];
 let attemptOrder: string[] = [];
 const tempRoots = new Set<string>();
+let projectDirectory: string;
 const CODEX_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const CODEX_RECONNECT_FAILURE_MESSAGE = 'Reconnecting... 2/5 (timeout waiting for child process to exit)';
 const CODEX_RETRY_MAX_DELAY_MS = 30_000;
@@ -139,6 +140,7 @@ vi.mock('@openai/codex-sdk', () => {
 });
 
 const { CodexClient } = await import('../infra/codex/client.js');
+const { CodexProvider } = await import('../infra/providers/codex.js');
 
 describe('CodexClient retry', () => {
   beforeEach(() => {
@@ -151,6 +153,8 @@ describe('CodexClient retry', () => {
     runStreamedInputs = [];
     codexConstructorCalls = [];
     attemptOrder = [];
+    projectDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-codex-retry-'));
+    tempRoots.add(projectDirectory);
   });
 
   afterEach(() => {
@@ -163,26 +167,298 @@ describe('CodexClient retry', () => {
     tempRoots.clear();
   });
 
-  it('turn.failed が rate limit を示す場合は retry せず rate_limited を返す', async () => {
-    runPlans = [
-      {
-        type: 'events',
-        events: [
-          { type: 'turn.failed', error: { message: 'HTTP 429: rate limit exceeded' } },
-        ],
-      },
-    ];
+  it.each(['turn.failed', 'error', 'exception'] as const)('classifies a confirmed resume rejection from %s through both provider entrances', async (source) => {
+    const sessionId = '00000000-0000-4000-8000-000000000099';
+    const diagnostic = `Error: thread/resume: thread/resume failed: no rollout found for thread id ${sessionId} (code -32600)`;
+    for (const systemPrompt of [undefined, 'manager instruction']) {
+      runPlans.push(source === 'exception'
+        ? { type: 'throw', error: new Error(`Codex Exec exited with code 1: Reading prompt from stdin...\n${diagnostic}\n`) }
+        : { type: 'events', events: [source === 'error' ? { type: 'error', message: diagnostic } : { type: 'turn.failed', error: { message: diagnostic } }] });
+      const onStream = vi.fn();
+      const response = await new CodexProvider().setup({ name: 'manager', systemPrompt }).call('continue', {
+        cwd: projectDirectory, sessionId, callerManagedSession: true, onStream,
+      });
+      expect(response).toMatchObject({ status: 'error', failureCategory: 'session_continuation_unsupported', sessionId });
+      expect(onStream).toHaveBeenCalledWith(expect.objectContaining({ type: 'result', data: expect.objectContaining({
+        success: false, failureCategory: 'session_continuation_unsupported',
+      }) }));
+      expect(response.error).not.toContain(sessionId);
+    }
+    expect(runPlanIndex).toBe(2);
+    expect(startThreadCalls).toHaveLength(0);
+  });
+
+  it.each(['authentication failed', 'network error', 'Codex Exec exited with code 1',
+    'Error: thread/resume: thread/resume failed: no rollout found for thread id another-session (code -32600)'])
+  ('keeps general failures separate from rejected resumes (%s)', async (message) => {
+    runPlans = [{ type: 'events', events: [{ type: 'turn.failed', error: { message } }] }];
+    const response = await new CodexClient().call('manager', 'continue', { cwd: projectDirectory, sessionId: 'saved-session', callerManagedSession: true });
+    expect(response.failureCategory).toBe('provider_error');
+    expect(runPlanIndex).toBe(1);
+  });
+
+  it('does not classify assistant or tool content as a resume rejection', async () => {
+    const message = 'Error: thread/resume: thread/resume failed: no rollout found for thread id saved-session (code -32600)';
+    runPlans = [{ type: 'events', events: [
+      { type: 'item.completed', item: { id: 'tool', type: 'command_execution', command: 'test', aggregated_output: message, exit_code: 0, status: 'completed' } },
+      { type: 'item.completed', item: { id: 'quoted', type: 'agent_message', text: message } },
+      { type: 'item.completed', item: { id: 'reply', type: 'agent_message', text: JSON.stringify({ message: 'session_continuation_unsupported', summary: null }) } },
+      { type: 'turn.completed' },
+    ] }];
+    const response = await new CodexProvider().setup({ name: 'manager' }).call('continue', { cwd: projectDirectory, sessionId: 'saved-session', callerManagedSession: true, outputSchema: { type: 'object' } });
+    expect(response).toMatchObject({ status: 'done', sessionId: 'saved-session', structuredOutput: { message: 'session_continuation_unsupported', summary: null } });
+    expect(response.failureCategory).toBeUndefined();
+    expect(runPlanIndex).toBe(1);
+  });
+
+  it('does not replay a caller-owned conversation after a transient provider failure', async () => {
+    runPlans = [{ type: 'events', events: [{ type: 'turn.failed', error: { message: 'HTTP 429: rate limit exceeded' } }] }];
+    const result = await new CodexClient().call('manager', 'private text', { cwd: '/tmp', callerManagedSession: true });
+    expect(result.status).not.toBe('done');
+    expect(runPlanIndex).toBe(1);
+    expect(result.retryCount).toBeUndefined();
+  });
+
+  it.each([undefined, 'takt', 'codex'] as const)(
+    '新規・再開スレッドで Git repository check を省略する (permissionControl=%s)',
+    async (permissionControl) => {
+      runPlans = [
+        {
+          type: 'events',
+          events: [
+            { type: 'thread.started', thread_id: 'thread-1' },
+            { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+          ],
+        },
+        {
+          type: 'events',
+          events: [
+            { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+          ],
+        },
+      ];
+      const client = new CodexClient();
+
+      const first = await client.call('coder', 'prompt', { cwd: '/tmp', permissionControl });
+      const resumed = await client.call('coder', 'prompt', {
+        cwd: '/tmp',
+        permissionControl,
+        sessionId: first.sessionId,
+      });
+
+      expect(first.status).toBe('done');
+      expect(resumed.status).toBe('done');
+      expect(startThreadCalls).toHaveLength(1);
+      expect(startThreadCalls[0]).toMatchObject({ skipGitRepoCheck: true });
+      expect(resumeThreadCalls).toHaveLength(1);
+      expect(resumeThreadCalls[0]).toMatchObject({
+        threadId: 'thread-1',
+        options: { skipGitRepoCheck: true },
+      });
+    },
+  );
+
+  it('turn.failed の429は8回の待機後に rate_limited を返す', async () => {
+    vi.useFakeTimers();
+    runPlans = Array.from({ length: 9 }, () => ({
+      type: 'events',
+      events: [
+        { type: 'turn.failed', error: { message: 'HTTP 429: rate limit exceeded' } },
+      ],
+    }));
 
     const client = new CodexClient();
 
-    const result = await client.call('coder', 'prompt', { cwd: '/tmp' });
+    const onStream = vi.fn();
+    const pending = client.call('coder', 'prompt', { cwd: '/tmp', onStream });
+    await vi.advanceTimersByTimeAsync(0);
+    for (const [index, delay] of CODEX_CAPPED_RETRY_DELAYS_MS.entries()) {
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(runPlanIndex).toBe(index + 1);
+      expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(runPlanIndex).toBe(index + 2);
+    }
+    const result = await pending;
 
-    expect(startThreadCalls).toHaveLength(1);
-    expect(resumeThreadCalls).toHaveLength(0);
+    expect(runPlanIndex).toBe(9);
     expect(result.status).toBe('rate_limited');
     expect(result.errorKind).toBe('rate_limit');
     expect(result.content).toBe('');
+    expect(result.retryCount).toBe(8);
+    expect(result.rateLimitInfo?.provider).toBe('codex');
+    expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toHaveLength(1);
+  });
+
+  it.each(['turn.failed', 'error', 'exception'] as const)(
+    '%s の429を同じ呼び出し内で2回再試行して成功する', async (channel) => {
+      vi.useFakeTimers();
+      const failure: RunPlan = channel === 'exception'
+        ? { type: 'throw', error: new Error('HTTP 429: Too Many Requests') }
+        : { type: 'events', events: [channel === 'error'
+          ? { type: 'error', message: 'HTTP 429: Too Many Requests' }
+          : { type: 'turn.failed', error: { message: 'HTTP 429: Too Many Requests' } }] };
+      runPlans = [failure, failure, { type: 'events', events: [
+        { type: 'thread.started', thread_id: 'thread-success' },
+        { type: 'item.completed', item: { id: 'answer', type: 'agent_message', text: '{"ok":true}' } },
+        { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 2 } },
+      ] }];
+      const onStream = vi.fn();
+      const pending = new CodexClient().call('coder', 'original prompt', {
+        cwd: '/tmp', model: 'gpt-5.4', permissionMode: 'readonly',
+        outputSchema: { type: 'object' }, onStream,
+      });
+      await vi.advanceTimersByTimeAsync(999);
+      expect(runPlanIndex).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(runPlanIndex).toBe(2);
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(runPlanIndex).toBe(2);
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await pending;
+      expect(result).toMatchObject({ status: 'done', content: '{"ok":true}', structuredOutput: { ok: true } });
+      expect(result.errorKind).toBeUndefined();
+      expect(runPlanIndex).toBe(3);
+      expect(runStreamedInputs).toEqual(['original prompt', 'original prompt', 'original prompt']);
+      for (const options of [...startThreadCalls, ...resumeThreadCalls.map((call) => call.options)]) {
+        expect(options).toMatchObject({ model: 'gpt-5.4', sandboxMode: 'read-only' });
+      }
+      const terminal = onStream.mock.calls.filter(([event]) => event.type === 'result');
+      expect(terminal).toHaveLength(1);
+      expect(terminal[0]?.[0].data.success).toBe(true);
+    },
+  );
+
+  it.each([
+    { eventType: 'item.started', item: { id: 'command', type: 'command_execution', command: 'touch marker' } },
+    { eventType: 'item.updated', item: { id: 'file', type: 'file_change', changes: [{ path: 'file.ts', kind: 'update' }] } },
+    { eventType: 'item.completed', item: { id: 'mcp', type: 'mcp_tool_call', tool: 'write_file', arguments: { path: 'file.ts' } } },
+  ])('$eventType のツールイベント後に429を受けても同じ入力を再実行しない', async ({ eventType, item }) => {
+    runPlans = [{ type: 'events', events: [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: eventType, item },
+      { type: 'turn.failed', error: { message: 'HTTP 429: Too Many Requests' } },
+    ] }];
+    const onStream = vi.fn();
+
+    const result = await new CodexClient().call('coder', 'prompt', { cwd: '/tmp', onStream });
+
+    expect(result).toMatchObject({ status: 'rate_limited', errorKind: 'rate_limit', sessionId: 'thread-1' });
     expect(result.retryCount).toBeUndefined();
+    expect(runPlanIndex).toBe(1);
+    expect(runStreamedInputs).toEqual(['prompt']);
+    expect(resumeThreadCalls).toHaveLength(0);
+    expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toHaveLength(1);
+  });
+
+  it('ツールイベント後に stream が429を投げても再実行しない', async () => {
+    runPlans = [{
+      type: 'stream',
+      createEvents: async function* () {
+        yield { type: 'thread.started', thread_id: 'thread-1' };
+        yield { type: 'item.started', item: { id: 'command', type: 'command_execution', command: 'touch marker' } };
+        throw new Error('HTTP 429: Too Many Requests');
+      },
+    }];
+
+    const result = await new CodexClient().call('coder', 'prompt', { cwd: '/tmp' });
+
+    expect(result).toMatchObject({ status: 'rate_limited', errorKind: 'rate_limit' });
+    expect(runPlanIndex).toBe(1);
+    expect(resumeThreadCalls).toHaveLength(0);
+  });
+
+  it('ツールイベント後に error event の429を受けても再実行しない', async () => {
+    runPlans = [{ type: 'events', events: [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'item.completed', item: { id: 'command', type: 'command_execution', command: 'touch marker', exit_code: 0 } },
+      { type: 'error', message: 'HTTP 429: Too Many Requests' },
+    ] }];
+
+    const result = await new CodexClient().call('coder', 'prompt', { cwd: '/tmp' });
+
+    expect(result).toMatchObject({ status: 'rate_limited', errorKind: 'rate_limit' });
+    expect(runPlanIndex).toBe(1);
+    expect(resumeThreadCalls).toHaveLength(0);
+  });
+
+  it.each(['HTTP 429', 'Too Many Requests', 'rate limit exceeded', 'rate_limit_error'])(
+    '使い切りを含まない失敗文言を再試行する: %s', async (message) => {
+      vi.useFakeTimers();
+      runPlans = [{ type: 'events', events: [{ type: 'turn.failed', error: { message } }] }, {
+        type: 'events', events: [
+          { type: 'item.completed', item: { id: 'answer', type: 'agent_message', text: 'final answer' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+        ],
+      }];
+      const pending = new CodexClient().call('coder', 'prompt', { cwd: '/tmp' });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(await pending).toMatchObject({ status: 'done', content: 'final answer' });
+      expect(runPlanIndex).toBe(2);
+    },
+  );
+
+  it.each([
+    "You've hit your usage limit. Try again later.",
+    "You've hit your weekly limit · resets 2:30pm (Asia/Tokyo)",
+    "You've hit your 5-hour limit · resets 2:30pm (Asia/Tokyo)",
+    "You've hit your session limit · resets 2:30pm (Asia/Tokyo)",
+    "You're out of extra usage. Please retry later.",
+    'usage_limit_exceeded',
+    'Your workspace is out of credits. Add credits to continue.',
+    'You hit your spend cap set in your workspace. Increase your spend cap to continue.',
+  ])('使い切り単独と429の混在は出現順によらず即終了する: %s', async (notice) => {
+    vi.useFakeTimers();
+    for (const message of [notice, `HTTP 429: ${notice}`, `${notice} HTTP 429: Too Many Requests`]) {
+      runPlans = [{ type: 'events', events: [{ type: 'turn.failed', error: { message } }] }];
+      runPlanIndex = 0;
+      const pending = new CodexClient().call('coder', 'prompt', { cwd: '/tmp' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runPlanIndex).toBe(1);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(await pending).toMatchObject({ status: 'rate_limited', errorKind: 'rate_limit' });
+    }
+  });
+
+  it('429の再試行中に使い切り通知を受けたら以後は呼び出さない', async () => {
+    vi.useFakeTimers();
+    runPlans = ['HTTP 429: Too Many Requests', 'HTTP 429: usage_limit_exceeded'].map((message) => ({
+      type: 'events', events: [{ type: 'turn.failed', error: { message } }],
+    }));
+    const pending = new CodexClient().call('coder', 'prompt', { cwd: '/tmp' });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await pending).toMatchObject({ status: 'rate_limited', errorKind: 'rate_limit' });
+    await vi.advanceTimersByTimeAsync(121_000);
+    expect(runPlanIndex).toBe(2);
+  });
+
+  it.each(['turn.failed', 'error', 'exception'] as const)('%s の429の待機中に中断したら次の試行を開始しない', async (channel) => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    runPlans = [channel === 'exception'
+      ? { type: 'throw', error: new Error('HTTP 429: Too Many Requests') }
+      : { type: 'events', events: [channel === 'error'
+        ? { type: 'error', message: 'HTTP 429: Too Many Requests' }
+        : { type: 'turn.failed', error: { message: 'HTTP 429: Too Many Requests' } }] }];
+    const pending = new CodexClient().call('coder', 'prompt', { cwd: '/tmp', abortSignal: controller.signal });
+    await vi.advanceTimersByTimeAsync(500);
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(121_000);
+    expect(await pending).toMatchObject({ status: 'error', failureCategory: 'external_abort' });
+    expect(runPlanIndex).toBe(1);
+  });
+
+  it('429と既存の一時障害は同じ8回の標準再試行予算を消費する', async () => {
+    vi.useFakeTimers();
+    runPlans = Array.from({ length: 9 }, (_, index) => ({
+      type: 'events', events: [{ type: 'turn.failed', error: {
+        message: index % 2 === 0 ? 'HTTP 429: Too Many Requests' : 'at capacity',
+      } }],
+    }));
+    const pending = new CodexClient().call('coder', 'prompt', { cwd: '/tmp' });
+    await vi.advanceTimersByTimeAsync(121_000);
+    expect(await pending).toMatchObject({ status: 'rate_limited', retryCount: 8 });
+    expect(runPlanIndex).toBe(9);
   });
 
   it.each([
@@ -266,7 +542,7 @@ describe('CodexClient retry', () => {
         type: 'events',
         events: [
           { type: 'thread.started', thread_id: 'thread-2' },
-          { type: 'turn.failed', error: { message: 'HTTP 429: rate limit exceeded' } },
+          { type: 'turn.failed', error: { message: 'usage_limit_exceeded' } },
         ],
       },
     ];

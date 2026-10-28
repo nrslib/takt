@@ -1,88 +1,130 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-const doubles = vi.hoisted(() => ({ mkdtemp: vi.fn(), writeFile: vi.fn(), rm: vi.fn(), connect: vi.fn(), close: vi.fn(), transportClose: vi.fn(), transport: vi.fn() }));
-vi.mock('node:fs', async (importOriginal) => ({ ...await importOriginal<typeof import('node:fs')>(), existsSync: () => true }));
-vi.mock('node:fs/promises', async (importOriginal) => ({ ...await importOriginal<typeof import('node:fs/promises')>(), mkdtemp: doubles.mkdtemp, writeFile: doubles.writeFile, rm: doubles.rm }));
-vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({ Client: class { connect = doubles.connect; close = doubles.close; } }));
-vi.mock('@modelcontextprotocol/sdk/client/stdio.js', () => ({ StdioClientTransport: class { close = doubles.transportClose; constructor(input: unknown) { doubles.transport(input); } } }));
-import { connectManagerMcp, prepareManagerMcp, TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
+import { connectManagerMcp, TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
+import { MANAGER_ASSIGNMENT_HEADER, withManagerAssignment } from '../features/manager/assignment.js';
 
-describe('manager MCP public key resources', () => {
-  afterEach(() => vi.unstubAllEnvs());
+const doubles = vi.hoisted(() => ({
+  connect: vi.fn(), close: vi.fn(), transportClose: vi.fn(), transport: vi.fn(), httpTransport: vi.fn(),
+  exists: vi.fn(), client: vi.fn(), startOwner: vi.fn(), closeOwner: vi.fn(), invalidate: vi.fn(),
+}));
+vi.mock('node:fs', async (original) => ({ ...await original<typeof import('node:fs')>(), existsSync: doubles.exists }));
+vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({ Client: class {
+  connect = doubles.connect; close = doubles.close; constructor() { doubles.client(); }
+} }));
+vi.mock('@modelcontextprotocol/sdk/client/stdio.js', () => ({ StdioClientTransport: class {
+  close = doubles.transportClose; constructor(input: unknown) { doubles.transport(input); }
+} }));
+vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({ StreamableHTTPClientTransport: class {
+  close = doubles.transportClose; constructor(url: URL, options: unknown) { doubles.httpTransport(url, options); }
+} }));
+vi.mock('../features/manager/managerMcpConnection.js', async (original) => ({
+  ...await original<typeof import('../features/manager/managerMcpConnection.js')>(), startManagerMcpConnection: doubles.startOwner,
+}));
+
+describe('manager MCP resources', () => {
+  const config = { type: 'http' as const, url: 'http://127.0.0.1:12345/', headers: {
+    authorization: 'Bearer fixture',
+    [MANAGER_ASSIGNMENT_HEADER]: Buffer.from(JSON.stringify({ kind: 'repository', repositoryDirectory: '/repository' })).toString('base64url'),
+  } };
   beforeEach(() => {
-    vi.clearAllMocks();
-    vi.stubEnv('TAKT_NOTIFY_WEBHOOK', undefined);
-    doubles.mkdtemp.mockResolvedValue('/temporary/manager');
-    doubles.writeFile.mockResolvedValue(undefined);
+    vi.resetAllMocks();
+    doubles.exists.mockReturnValue(true);
+    doubles.startOwner.mockResolvedValue({ config, invalidate: doubles.invalidate, dispose: doubles.closeOwner });
     doubles.connect.mockResolvedValue(undefined);
     doubles.close.mockResolvedValue(undefined);
     doubles.transportClose.mockResolvedValue(undefined);
-    doubles.rm.mockResolvedValue(undefined);
+    doubles.closeOwner.mockResolvedValue(undefined);
+    vi.stubEnv('TAKT_NOTIFY_WEBHOOK', undefined);
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('shares the owned HTTP address and headers between the internal client and provider', async () => {
+    const assignment = { kind: 'repository' as const, repositoryDirectory: '/repository' };
+    const connection = await connectManagerMcp('/repository', assignment, undefined, { enableGoalExecutionTools: true });
+    expect(doubles.startOwner).toHaveBeenCalledWith('/repository', assignment);
+    expect(connection.servers[TAKT_MANAGER_MCP_SERVER_NAME]).toEqual(config);
+    expect(doubles.httpTransport).toHaveBeenCalledWith(new URL(config.url), { requestInit: { headers: config.headers } });
+    expect(doubles.transport).not.toHaveBeenCalled();
+    await connection.dispose();
+    expect(doubles.invalidate.mock.invocationCallOrder[0]).toBeLessThan(doubles.close.mock.invocationCallOrder[0]!);
+    expect(doubles.closeOwner).toHaveBeenCalledOnce();
   });
 
-  it('explicitly transfers the webhook to both the host transport and provider MCP configuration', async () => {
-    const webhook = 'https://example.test/manager-webhook';
-    vi.stubEnv('TAKT_NOTIFY_WEBHOOK', webhook);
-    const connection = await connectManagerMcp('/repository', 'PUBLIC KEY');
-    expect(doubles.transport.mock.calls[0]![0].env).toMatchObject({ TAKT_NOTIFY_WEBHOOK: webhook });
-    expect(connection.servers[TAKT_MANAGER_MCP_SERVER_NAME]).toMatchObject({ env: { TAKT_NOTIFY_WEBHOOK: webhook } });
+  it('preserves user MCP servers and gives its own definition priority on a name collision', async () => {
+    const userServers = { browser: { type: 'http' as const, url: 'https://example.test/mcp' },
+      [TAKT_MANAGER_MCP_SERVER_NAME]: { command: '/conflicting-user-mcp' } };
+    const connection = await connectManagerMcp('/repository', undefined, userServers, { enableGoalExecutionTools: true });
+    expect(connection.servers.browser).toEqual(userServers.browser);
+    expect(connection.servers[TAKT_MANAGER_MCP_SERVER_NAME]).toEqual(config);
+    expect(userServers[TAKT_MANAGER_MCP_SERVER_NAME].command).toBe('/conflicting-user-mcp');
     await connection.dispose();
   });
 
-  it('writes only the public key, limits the MCP tool set, and releases resources after use', async () => {
-    const connection = await connectManagerMcp('/repository', 'PUBLIC KEY');
-    expect(doubles.writeFile).toHaveBeenCalledExactlyOnceWith('/temporary/manager/confirmation-public.pem', 'PUBLIC KEY', { mode: 0o600 });
-    expect(doubles.transport.mock.calls[0]![0]).toMatchObject({ cwd: '/repository', args: expect.arrayContaining(['--tool-set', 'manager', '--goal-confirmation-public-key', '/temporary/manager/confirmation-public.pem']) });
-    expect(connection.servers[TAKT_MANAGER_MCP_SERVER_NAME]).toMatchObject({ args: doubles.transport.mock.calls[0]![0].args });
-    expect(doubles.rm).not.toHaveBeenCalled();
-    await connection.dispose();
-    expect(doubles.close).toHaveBeenCalledTimes(1);
-    expect(doubles.transportClose).toHaveBeenCalledTimes(1);
-    expect(doubles.rm).toHaveBeenCalledWith('/temporary/manager', { recursive: true, force: true });
+  it('keeps third-party HTTP configuration free of manager assignment and credentials', () => {
+    const thirdParty = { type: 'http' as const, url: 'https://example.test/mcp', headers: { authorization: 'Bearer external' } };
+    const updated = withManagerAssignment(thirdParty, { kind: 'repository', repositoryDirectory: '/work/担当A' });
+    expect(updated).toEqual(thirdParty);
+    expect(updated).not.toHaveProperty(`headers.${MANAGER_ASSIGNMENT_HEADER}`);
   });
-  it.each(['/isolated-global-config', undefined])('preserves the configured global directory for the actual MCP child: %s', async (configDir) => {
+
+  it.each([undefined, false])('keeps the existing stdio launch when goal execution is disabled: %s', async (enableGoalExecutionTools) => {
+    const connection = await connectManagerMcp('/repository', undefined, undefined,
+      enableGoalExecutionTools === undefined ? undefined : { enableGoalExecutionTools });
+    const transport = doubles.transport.mock.calls[0]![0];
+    expect(connection.servers[TAKT_MANAGER_MCP_SERVER_NAME]).toMatchObject({ command: transport.command, args: transport.args, env: transport.env });
+    expect(transport).toMatchObject({ cwd: '/repository', args: expect.arrayContaining(['--tool-set', 'manager']) });
+    expect(doubles.startOwner).not.toHaveBeenCalled();
+    await connection.dispose();
+    expect(doubles.close).toHaveBeenCalledOnce();
+    expect(doubles.transportClose).toHaveBeenCalledOnce();
+  });
+
+  it.each(['/isolated-global-config', undefined])('preserves global config and webhook for the stdio child: %s', async (configDir) => {
     vi.stubEnv('TAKT_CONFIG_DIR', configDir);
-    const connection = await connectManagerMcp('/repository', 'PUBLIC KEY');
-    const expected = { ...(configDir === undefined ? {} : { TAKT_CONFIG_DIR: configDir }) };
-    expect(connection.servers[TAKT_MANAGER_MCP_SERVER_NAME]).toMatchObject({ env: expected });
+    vi.stubEnv('TAKT_NOTIFY_WEBHOOK', 'https://example.test/webhook');
+    const connection = await connectManagerMcp('/repository');
+    const expected = { ...(configDir === undefined ? {} : { TAKT_CONFIG_DIR: configDir }), TAKT_NOTIFY_WEBHOOK: 'https://example.test/webhook' };
     expect(doubles.transport.mock.calls[0]![0].env).toEqual(expected);
+    expect(connection.servers[TAKT_MANAGER_MCP_SERVER_NAME]).toMatchObject({ env: expected });
     await connection.dispose();
   });
-  it('prepares completion-turn MCP without creating a redundant host client and delegates its goal owner', async () => {
-    const owners = { '550e8400-e29b-41d4-a716-446655440000': '550e8400-e29b-41d4-a716-446655440001' };
-    const prepared = await prepareManagerMcp('PUBLIC KEY', owners);
-    expect(prepared.servers[TAKT_MANAGER_MCP_SERVER_NAME]).toMatchObject({
-      env: { TAKT_MANAGER_GOAL_OWNERS: JSON.stringify(owners) },
-    });
-    expect(doubles.connect).not.toHaveBeenCalled();
-    await prepared.dispose();
-    expect(doubles.rm).toHaveBeenCalledTimes(1);
-  });
 
-  it('transfers the current event context to provider MCP configuration and host transport', async () => {
-    const goalId = '550e8400-e29b-41d4-a716-446655440000';
-    const owners = { [goalId]: '550e8400-e29b-41d4-a716-446655440001' };
-    const context = { goalId, eventId: 'completion-event-a' };
-    const connection = await Reflect.apply(connectManagerMcp, undefined, ['/repository', 'PUBLIC KEY', owners, context]);
-    try {
-      const env = doubles.transport.mock.calls[0]![0].env as Record<string, string>;
-      expect(Reflect.get(connection.servers[TAKT_MANAGER_MCP_SERVER_NAME]!, 'env')).toEqual(env);
-      expect(Object.values(env)).toContain(JSON.stringify(context));
-      expect(env).toMatchObject({ TAKT_MANAGER_GOAL_OWNERS: JSON.stringify(owners) });
-    } finally { await connection.dispose(); }
-  });
-
-  it.each(['write', 'connect', 'close'] as const)('releases public key resources even when %s fails', async (stage) => {
-    const failure = new Error('failed');
-    if (stage === 'write') doubles.writeFile.mockRejectedValueOnce(failure);
+  it.each(['client', 'transport', 'connect'] as const)('releases the HTTP owner when %s fails during startup', async (stage) => {
+    const failure = new Error('startup failed');
+    if (stage === 'client') doubles.client.mockImplementationOnce(() => { throw failure; });
+    if (stage === 'transport') doubles.httpTransport.mockImplementationOnce(() => { throw failure; });
     if (stage === 'connect') doubles.connect.mockRejectedValueOnce(failure);
-    if (stage === 'close') {
-      const connection = await connectManagerMcp('/repository', 'PUBLIC KEY');
-      doubles.close.mockRejectedValueOnce(failure);
-      await expect(connection.dispose()).rejects.toThrow('failed');
-      expect(doubles.transportClose).toHaveBeenCalledTimes(1);
-    } else {
-      await expect(connectManagerMcp('/repository', 'PUBLIC KEY')).rejects.toThrow('failed');
-    }
-    expect(doubles.rm).toHaveBeenCalledWith('/temporary/manager', { recursive: true, force: true });
+    await expect(connectManagerMcp('/repository', undefined, undefined, { enableGoalExecutionTools: true })).rejects.toBe(failure);
+    expect(doubles.invalidate).toHaveBeenCalledOnce();
+    expect(doubles.closeOwner).toHaveBeenCalledOnce();
+    expect(doubles.close).toHaveBeenCalledTimes(stage === 'client' ? 0 : 1);
+    expect(doubles.transportClose).toHaveBeenCalledTimes(stage === 'connect' ? 1 : 0);
+  });
+
+  it('releases the stdio client when launch preparation fails', async () => {
+    const failure = new Error('prepare failed');
+    doubles.exists.mockImplementationOnce(() => { throw failure; });
+    await expect(connectManagerMcp('/repository')).rejects.toBe(failure);
+    expect(doubles.close).toHaveBeenCalledOnce();
+    expect(doubles.transport).not.toHaveBeenCalled();
+  });
+
+  it.each(['close', 'transportClose', 'closeOwner'] as const)('attempts all cleanup when %s fails', async (stage) => {
+    const connection = await connectManagerMcp('/repository', undefined, undefined, { enableGoalExecutionTools: true });
+    const failure = new Error('close failed');
+    doubles[stage].mockRejectedValueOnce(failure);
+    await expect(connection.dispose()).rejects.toBe(failure);
+    expect(doubles.close).toHaveBeenCalledOnce();
+    expect(doubles.transportClose).toHaveBeenCalledOnce();
+    expect(doubles.closeOwner).toHaveBeenCalledOnce();
+  });
+
+  it('reports startup and cleanup failures after attempting every resource close', async () => {
+    const startup = new Error('startup failed');
+    const cleanup = new Error('client close failed');
+    doubles.connect.mockRejectedValueOnce(startup);
+    doubles.close.mockRejectedValueOnce(cleanup);
+    await expect(connectManagerMcp('/repository', undefined, undefined, { enableGoalExecutionTools: true })).rejects.toMatchObject({ errors: [startup, cleanup] });
+    expect(doubles.transportClose).toHaveBeenCalledOnce();
+    expect(doubles.closeOwner).toHaveBeenCalledOnce();
   });
 });

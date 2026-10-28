@@ -1,6 +1,6 @@
 {
   "name": "takt",
-  "version": "0.71.0",
+  "version": "0.73.0",
   "description": "Workflow control for AI coding agents",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -26,6 +26,11 @@
     "sync:nix-deps": "node scripts/sync-nix-deps.mjs",
     "analyze:usage": "node dist/commands/analyze-usage.js",
     "eval:prompts:prepare": "node eval/scripts/prepare.mjs",
+    "eval:prompts:manager-work-split": "node --test eval/asserts/manager-work-split.test.mjs eval/manager-work-split-prompt.test.mjs && node eval/scripts/run-evals.mjs manager-work-split --no-cache --repeat 3",
+    "eval:prompts:merge-ci-recovery:contracts": "node --test eval/asserts/merge-ci-recovery.test.mjs eval/suite-registry.test.mjs",
+    "eval:prompts:merge-ci-recovery": "npm run eval:prompts:merge-ci-recovery:contracts && node eval/scripts/run-evals.mjs merge-ci-investigation merge-ci-review --prepare --no-cache --repeat 3",
+    "eval:prompts:frontend-mediator-review": "node eval/scripts/run-evals.mjs --prepare frontend-mediator-review --no-cache",
+    "eval:prompts:frontend-mediator-coder": "node eval/scripts/run-evals.mjs --prepare frontend-mediator-coder --no-cache",
     "eval:prompts:interactive-topic-boundary": "node --import tsx --test eval/asserts/interactive-topic-boundary.test.mjs eval/suite-registry.test.mjs && node eval/scripts/run-evals.mjs interactive-topic-boundary --no-cache --repeat 3",
     "eval:prompts:db-pagination:contracts": "node --test eval/asserts/db-pagination-fixture.test.mjs eval/asserts/db-pagination-implement.test.mjs eval/providers/pagination-skill-isolation.test.mjs eval/suite-registry.test.mjs",
     "eval:prompts:db-pagination": "npm run eval:prompts:db-pagination:contracts && node eval/scripts/run-evals.mjs --prepare db-pagination db-pagination-adjudication db-pagination-implement --no-cache",
@@ -34,9 +39,10 @@
     "eval:prompts:review-external-confirmation": "node eval/scripts/run-evals.mjs review-external-confirmation --prepare",
     "eval:prompts:supervise-external-confirmation": "node eval/scripts/run-evals.mjs supervise-external-confirmation --prepare",
     "eval:prompts:replan-external-confirmation": "node eval/scripts/run-evals.mjs replan-external-confirmation --prepare",
-    "eval:prompts:contracts": "node --test eval/providers/cli-plan-report.test.mjs eval/suite-registry.test.mjs eval/asserts/fix-loop-convergence.test.mjs eval/asserts/remediation-evidence.test.mjs eval/asserts/evidence-judgment.test.mjs eval/asserts/review-proof-boundary.test.mjs eval/asserts/external-confirmation.test.mjs eval/phase3-judgment-prompt.test.mjs eval/asserts/phase3-judgment.test.mjs eval/scripts/prepare-review-artifact-input-handoff.test.mjs",
+    "eval:prompts:contracts": "node --test eval/providers/cli-plan-report.test.mjs eval/suite-registry.test.mjs eval/asserts/fix-loop-convergence.test.mjs eval/asserts/remediation-evidence.test.mjs eval/asserts/evidence-judgment.test.mjs eval/asserts/review-proof-boundary.test.mjs eval/asserts/external-confirmation.test.mjs eval/asserts/finding-realistic-premise.test.mjs eval/phase3-judgment-prompt.test.mjs eval/asserts/phase3-judgment.test.mjs eval/scripts/prepare-review-artifact-input-handoff.test.mjs eval/providers/phase-session.test.mjs eval/asserts/phase-awareness.test.mjs",
     "eval:prompts:review-artifact-input-handoff": "node eval/scripts/run-evals.mjs review-artifact-input-handoff --prepare --no-cache --repeat 3 --filter-providers codex-sol-high",
     "eval:prompts:phase3-follow-input": "node eval/scripts/run-evals.mjs phase3-follow-input --no-cache",
+    "eval:prompts:write-tests-routing": "npm run build && node eval/scripts/run-evals.mjs write-tests-routing --no-cache",
     "eval:prompts:coding": "node --test eval/asserts/coding-review-metrics.test.mjs && node eval/scripts/prepare.mjs coding-review && node eval/scripts/run-evals.mjs coding",
     "eval:prompts:fix-closure": "node eval/scripts/prepare.mjs fix-closure && node eval/scripts/run-evals.mjs fix-closure",
     "eval:prompts:fix-self-scan": "node eval/scripts/prepare.mjs fix-self-scan && node eval/scripts/run-evals.mjs fix-self-scan",
@@ -74,6 +80,7 @@
     "eval:prompts:fix-verifier-state-routing": "node eval/scripts/prepare.mjs fix-verifier-state-routing && node eval/scripts/run-evals.mjs fix-verifier-state-routing",
     "eval:prompts:fix-verifier-model-matrix": "node eval/scripts/prepare.mjs fix-verifier-state-closure fix-verifier-state-routing && node eval/scripts/run-evals.mjs fix-verifier-model-matrix fix-verifier-routing-model-matrix --no-cache",
     "eval:prompts:finding-premise-scope": "node eval/scripts/run-evals.mjs finding-premise-scope --prepare --no-cache",
+    "eval:prompts:finding-realistic-premise": "node eval/scripts/run-evals.mjs --prepare finding-realistic-premise --no-cache",
     "eval:prompts:review-adjudication-binding": "node eval/scripts/prepare.mjs review-adjudication-binding && node eval/scripts/run-evals.mjs review-adjudication-binding",
     "eval:prompts:security-review-method": "node eval/scripts/prepare.mjs security-review-method && node eval/scripts/run-evals.mjs security-review-method",
     "eval:prompts:security-threat-model": "node eval/scripts/run-evals.mjs security-threat-model --prepare --no-cache",
@@ -133,7 +140,10 @@
     "postinstall": "node -e \"const fs = require('node:fs'); if (fs.existsSync('patches/ink+7.1.1.patch') && fs.existsSync('node_modules/patch-package/index.js')) require('node:child_process').execSync('npm run patch:dependencies', {stdio: 'inherit'});\"",
     "canary:coder": "node scripts/canary-coder.mjs",
     "eval:prompts:resource-boundary:contracts": "node --test eval/asserts/resource-flow-fixture.test.mjs",
-    "eval:prompts:resource-boundary": "npm run eval:prompts:resource-boundary:contracts && node eval/scripts/run-evals.mjs --prepare resource-flow-review resource-flow-adjudication --no-cache"
+    "eval:prompts:resource-boundary": "npm run eval:prompts:resource-boundary:contracts && node eval/scripts/run-evals.mjs --prepare resource-flow-review resource-flow-adjudication --no-cache",
+    "eval:prompts:phase-awareness:contracts": "node --test eval/providers/phase-session.test.mjs eval/asserts/phase-awareness.test.mjs",
+    "eval:prompts:phase-awareness": "node eval/scripts/prepare.mjs phase-awareness && node eval/scripts/phase-awareness-redgreen.mjs --no-cache",
+    "eval:prompts:phase-awareness:smoke": "node eval/scripts/prepare.mjs phase-awareness && node eval/scripts/phase-awareness-redgreen.mjs --smoke --no-cache"
   },
   "keywords": [
     "ai",
@@ -174,6 +184,16 @@
   },
   "homepage": "https://github.com/nrslib/takt#readme",
   "type": "module",
+  "imports": {
+    "#faceted-prompting": {
+      "types": "./vendor/faceted-prompting/dist/index.d.ts",
+      "default": "./vendor/faceted-prompting/dist/index.js"
+    },
+    "#faceted-prompting/cli/facet-includes": {
+      "types": "./vendor/faceted-prompting/dist/cli/facet-includes.d.ts",
+      "default": "./vendor/faceted-prompting/dist/cli/facet-includes.js"
+    }
+  },
   "engines": {
     "node": ">=22.22.0"
   },
@@ -183,11 +203,12 @@
     "bin/",
     "builtins/",
     "docs/assets/takt-logo-dark.svg",
-    "web-ui/"
+    "web-ui/",
+    "vendor/faceted-prompting/"
   ],
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.3.0",
-    "@informalsystems/quint": "^0.32.0",
+    "@informalsystems/quint": "0.32.0",
     "@modelcontextprotocol/sdk": "1.32.1",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/exporter-metrics-otlp-http": "^0.222.0",
@@ -195,17 +216,19 @@
     "@opentelemetry/sdk-metrics": "^2.11.0",
     "@opentelemetry/sdk-node": "^0.222.0",
     "@opentelemetry/sdk-trace-base": "^2.11.0",
+    "@slack/socket-mode": "3.1.0",
+    "@slack/web-api": "8.2.0",
     "ajv": "^6.12.6",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
     "cross-spawn": "^7.0.6",
-    "faceted-prompting": "^0.6.1",
     "ink": "7.1.1",
     "react": "19.2.8",
+    "semver": "^7.8.5",
     "string-width": "^8.2.2",
     "traced-config": "^0.3.0",
-    "update-notifier": "7.3.1",
     "wanakana": "^5.3.1",
+    "wrap-ansi": "10.0.2",
     "yaml": "^2.9.0",
     "zod": "^4.3.6"
   },
@@ -223,6 +246,7 @@
     "@types/cross-spawn": "^6.0.6",
     "@types/node": "^22.0.0",
     "@types/react": "^19.2.18",
+    "@types/semver": "^7.7.1",
     "@types/wanakana": "^4.0.6",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
@@ -238,17 +262,19 @@
     "typescript-eslint": "^8.53.1",
     "vitest": "^3.2.6",
     "@anthropic-ai/claude-agent-sdk": "0.3.300",
-    "@openai/codex-sdk": "0.162.1",
+    "@openai/codex-sdk": "0.164.0",
     "@opencode-ai/sdk": "1.18.28",
     "@opencode/client": "2.0.18",
     "@earendil-works/pi-ai": "1.1.0",
-    "@earendil-works/pi-coding-agent": "1.1.0"
+    "@earendil-works/pi-coding-agent": "1.1.0",
+    "marked": "18.0.11"
   },
   "bundleDependencies": [
     "@modelcontextprotocol/sdk",
     "ink",
     "react",
-    "update-notifier"
+    "@informalsystems/quint",
+    "wrap-ansi"
   ],
   "overrides": {
     "@earendil-works/chord": "1.1.0",

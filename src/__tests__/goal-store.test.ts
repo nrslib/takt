@@ -1,52 +1,76 @@
+import type { Stats } from 'node:fs';
+import type { GoalProjectionCacheEntry } from '../infra/goals/store.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GoalStore } from '../infra/goals/store.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
+import type { Goal } from '../infra/goals/schema.js';
 
 const doubles = vi.hoisted(() => ({
   read: vi.fn(), write: vi.fn(), lstat: vi.fn(), readdir: vi.fn(),
-  safe: vi.fn(), capture: vi.fn(), assertSnapshot: vi.fn(), exclusive: vi.fn(),
+  inspect: vi.fn(), ancestors: vi.fn(), opendir: vi.fn(),
+  safe: vi.fn(), capture: vi.fn(), assertSnapshot: vi.fn(),
 }));
-vi.mock('../infra/goals/execution-lock.js', () => ({
-  withGoalExecutionLock: (_cwd: string, action: () => unknown) => action(),
-}));
+vi.mock('node:fs/promises', () => ({ opendir: doubles.opendir }));
 vi.mock('node:fs', () => ({ readdirSync: doubles.readdir }));
+vi.mock('../infra/fs/file-lock.js', () => ({ withFileLock: (_path: string, action: () => unknown) => action() }));
+vi.mock('../infra/goals/execution-lock.js', () => ({ withGoalExecutionLock: (_cwd: string, action: () => unknown) => action() }));
 vi.mock('../shared/utils/private-file.js', () => ({
-  readPrivateFileState: doubles.read,
+  readPrivateFileState: doubles.read, writePrivateFile: doubles.write, ensurePrivateDirectory: vi.fn(),
   capturePrivateDirectoryReadSnapshot: doubles.capture, assertPrivateDirectoryReadSnapshot: doubles.assertSnapshot,
 }));
 vi.mock('../shared/utils/private-path-identity.js', () => ({
   assertSafePath: doubles.safe, lstatOrUndefined: doubles.lstat,
+  inspectPrivateArtifactPath: doubles.inspect, assertAncestorIdentities: doubles.ancestors,
+  hasMatchingIdentity: (left: Stats, right: Stats) => left.dev === right.dev && left.ino === right.ino,
 }));
-vi.mock('../shared/utils/private-file-lock.js', () => ({ runPrivateFileExclusiveAsync: doubles.exclusive }));
-vi.mock('../infra/goals/record-pages.js', () => ({ writeGoalWithRecordIndex: doubles.write }));
 
 describe('GoalStore validation and publication', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     doubles.lstat.mockReturnValue({});
     doubles.read.mockReturnValue({ state: { exists: false } });
-    doubles.exclusive.mockImplementation(async (_path: string, action: () => unknown) => action());
   });
-  it('validates and publishes a new complete record inside the lock', async () => {
+  it('validates and publishes a new complete record without creating a lock', async () => {
     expect(await new GoalStore('/project').create(goalRecord())).toEqual(goalRecord());
-    expect(doubles.write).toHaveBeenCalledWith(`/project/.takt/goals/${goalId}/goal.json`, goalRecord());
+    expect(doubles.write).toHaveBeenCalledOnce();
+    expect(doubles.write.mock.calls[0]![0]).toBe(`/project/.takt/goals/${goalId}/goal.json`);
+    expect(JSON.parse(doubles.write.mock.calls[0]![1])).toEqual(goalRecord());
   });
   it('refuses an existing record without publishing', async () => {
     doubles.read.mockReturnValue({ content: Buffer.from(JSON.stringify(goalRecord())) });
     await expect(new GoalStore('/project').create(goalRecord())).rejects.toThrow();
     expect(doubles.write).not.toHaveBeenCalled();
   });
-  it('validates updates after rereading the record under its short storage lock', async () => {
+  it('validates updates after rereading the current record', async () => {
     doubles.read.mockReturnValue({ content: Buffer.from(JSON.stringify(goalRecord())) });
-    const updated = await new GoalStore('/project').update(goalId, (goal) => ({ ...goal, workUnits: [{ taskName: 'task-a', purpose: '検証する' }] }));
-    expect(updated.workUnits).toEqual([{ taskName: 'task-a', purpose: '検証する' }]);
-    expect(doubles.write.mock.calls[0]![1]).toEqual(updated);
+    const entry = { id: '550e8400-e29b-41d4-a716-446655440001', summary: '検証を投入した', recordedAt: '2026-10-14T00:00:00Z' };
+    const updated = await new GoalStore('/project').update(goalId, (goal) => ({ ...goal, workLog: [entry] }));
+    expect(updated.workLog).toEqual([entry]);
+    expect(JSON.parse(doubles.write.mock.calls[0]![1])).toEqual(updated);
     await expect(new GoalStore('/project').update(goalId, (goal) => ({ ...goal, id: '550e8400-e29b-41d4-a716-446655440001' }))).rejects.toThrow();
     expect(doubles.write).toHaveBeenCalledTimes(1);
   });
   it('rejects a saved ID that differs from its directory', async () => {
     doubles.read.mockReturnValue({ content: Buffer.from(JSON.stringify({ ...goalRecord(), id: '550e8400-e29b-41d4-a716-446655440001' })) });
     await expect(new GoalStore('/project').get(goalId)).rejects.toThrow();
+  });
+  it.each([false, true])('notifies only after saving and permits retry after a save failure: %s', async (saveFails) => {
+    const saved = goalRecord();
+    doubles.read.mockReturnValue({ content: Buffer.from(JSON.stringify(saved)) });
+    const failure = new Error('goal save failed');
+    if (saveFails) doubles.write.mockImplementationOnce(() => { throw failure; });
+    const onSaved = vi.fn(() => {
+      expect(JSON.parse(doubles.write.mock.calls.at(-1)![1]).executionStatus).toBe('paused');
+      expect(doubles.write.mock.invocationCallOrder.at(-1)).toBeLessThan(onSaved.mock.invocationCallOrder.at(-1)!);
+    });
+    const update = () => new GoalStore('/project').update(goalId,
+      (goal) => ({ ...goal, executionStatus: 'paused' }), onSaved);
+    if (saveFails) {
+      await expect(update()).rejects.toBe(failure);
+      expect(onSaved).not.toHaveBeenCalled();
+    }
+    await expect(update()).resolves.toMatchObject({ executionStatus: 'paused' });
+    expect(onSaved).toHaveBeenCalledOnce();
   });
   it('reads the latest execution state synchronously through the same store without writing', () => {
     const store = new GoalStore('/project');
@@ -66,6 +90,16 @@ describe('GoalStore validation and publication', () => {
     doubles.read.mockReturnValue({ content: Buffer.from(JSON.stringify(goalRecord())) });
     expect(await new GoalStore('/project').list()).toEqual({ goals: [goalRecord()], errors: [] });
     expect(doubles.assertSnapshot).toHaveBeenCalledWith({ path: '/project/.takt/goals' });
+  });
+  it('projects and selects one validated record at a time without changing default listing', async () => {
+    const other = { ...goalRecord(), id: '550e8400-e29b-41d4-a716-446655440001' };
+    doubles.readdir.mockReturnValue([{ name: goalId }, { name: other.id }]);
+    doubles.read.mockImplementation((file: string) => ({ content: Buffer.from(JSON.stringify(file.includes(other.id) ? other : goalRecord())) }));
+    const project = vi.fn((goal: Goal) => goal.id === goalId ? { id: goal.id } : undefined);
+    expect(await new GoalStore('/project').list(project)).toEqual({ goals: [{ id: goalId }], errors: [] });
+    expect(project).toHaveBeenCalledTimes(2);
+    expect(doubles.assertSnapshot).toHaveBeenCalledOnce();
+    expect((await new GoalStore('/project').list()).goals).toEqual([goalRecord(), other]);
   });
   it('ignores only an unpublished registration directory', async () => {
     doubles.readdir.mockReturnValue([{ name: goalId }]);
@@ -100,5 +134,66 @@ describe('GoalStore validation and publication', () => {
     doubles.readdir.mockReturnValue([{ name: '../outside' }]);
     await expect(new GoalStore('/project').list()).rejects.toThrow();
     expect(doubles.read).not.toHaveBeenCalled();
+  });
+});
+
+describe('GoalStore display projection cache', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    doubles.opendir.mockImplementation(async () => (async function* () { yield { name: goalId }; })());
+    doubles.read.mockReturnValue({ content: Buffer.from(JSON.stringify(goalRecord())) });
+  });
+  it('reuses compact projections, reloads changed files and evicts deleted entries', async () => {
+    let stat = { dev: 1, ino: 1, size: 100, mtimeMs: 1, ctimeMs: 1 } as Stats;
+    doubles.lstat.mockImplementation(() => stat);
+    doubles.inspect.mockImplementation(() => ({ expectedStat: stat, ancestorIdentities: [] }));
+    const store = new GoalStore('/project');
+    const cache = new Map<string, GoalProjectionCacheEntry<string>>();
+    const project = vi.fn((goal: Goal) => goal.objective);
+    const collect = async () => { const result = []; for await (const value of store.iterateProjected(cache, project)) result.push(value); return result; };
+    expect(await collect()).toEqual([goalRecord().objective]);
+    expect(await collect()).toEqual([goalRecord().objective]);
+    expect(doubles.read).toHaveBeenCalledOnce();
+    expect(project).toHaveBeenCalledOnce();
+    stat = { ...stat, ino: 2 } as Stats;
+    doubles.read.mockReturnValue({ content: Buffer.from(JSON.stringify({ ...goalRecord(), objective: 'Replaced' })) });
+    expect(await collect()).toEqual(['Replaced']);
+    expect(doubles.read).toHaveBeenCalledTimes(2);
+    expect(doubles.ancestors).toHaveBeenCalledTimes(3);
+    doubles.opendir.mockImplementation(async () => (async function* () {})());
+    expect(await collect()).toEqual([]);
+    expect(cache.size).toBe(0);
+  });
+  it('propagates safety and changed-file validation failures without using the cached value', async () => {
+    const stat = { dev: 1, ino: 1, size: 100, mtimeMs: 1, ctimeMs: 1 } as Stats;
+    doubles.lstat.mockReturnValue(stat);
+    doubles.inspect.mockReturnValue({ expectedStat: stat, ancestorIdentities: [] });
+    const store = new GoalStore('/project');
+    const cache = new Map<string, GoalProjectionCacheEntry<string>>();
+    const collect = async () => { for await (const value of store.iterateProjected(cache, (goal) => goal.objective)) expect(value).toBe(goalRecord().objective); };
+    await collect();
+    doubles.inspect.mockImplementationOnce(() => { throw new Error('Unsafe path'); });
+    await expect(collect()).rejects.toThrow('Unsafe path');
+    doubles.inspect.mockReturnValue({ expectedStat: { ...stat, mtimeMs: 2 }, ancestorIdentities: [] });
+    doubles.read.mockReturnValue({ content: Buffer.from('{broken') });
+    await expect(collect()).rejects.toThrow('Invalid goal file');
+    expect(cache.size).toBe(0);
+  });
+  it('keeps cached projections unchanged when a consumer edits a previously returned value', async () => {
+    const stat = { dev: 1, ino: 1, size: 100, mtimeMs: 1, ctimeMs: 1 } as Stats;
+    doubles.lstat.mockReturnValue(stat);
+    doubles.inspect.mockReturnValue({ expectedStat: stat, ancestorIdentities: [] });
+    const store = new GoalStore('/project');
+    const cache = new Map<string, GoalProjectionCacheEntry<{ display: { objective: string } }>>();
+    const collect = async () => {
+      const values = [];
+      for await (const value of store.iterateProjected(cache, (goal) => ({ display: { objective: goal.objective } }))) values.push(value);
+      return values;
+    };
+    const first = await collect();
+    first[0]!.display.objective = 'Changed by consumer';
+
+    expect(await collect()).toEqual([{ display: { objective: goalRecord().objective } }]);
+    expect(doubles.read).toHaveBeenCalledOnce();
   });
 });

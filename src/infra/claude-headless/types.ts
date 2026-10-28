@@ -8,6 +8,8 @@ import type {
 
 export interface ClaudeHeadlessCallOptions {
   cwd: string;
+  callerManagedSession?: true;
+  callerManagedMcp?: true;
   abortSignal?: AbortSignal;
   sessionId?: string;
   internalAgentIsolation?: InternalAgentIsolation;

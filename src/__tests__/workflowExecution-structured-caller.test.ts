@@ -11,7 +11,8 @@ import {
   ProviderNeutralStructuredCaller,
   type StructuredCaller,
 } from '../agents/structured-caller.js';
-import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
+import { buildWorkflowResumePointEntry, getWorkflowReference } from '../core/workflow/workflow-reference.js';
+import { getWorkflowResumeFrameKind } from '../core/workflow/step-kind.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import type { SystemStepServicesFactory } from '../core/workflow/system/system-step-services.js';
 
@@ -61,13 +62,18 @@ const {
       }
       const step = this.receivedConfig.steps[0];
       if (step) {
-        this.emit('step:start', step, 1, step.instruction, { provider: 'cursor', model: undefined });
+        this.emit('step:start', step, 1, step.instruction, { provider: 'cursor', model: undefined },
+          this.receivedConfig.name, step.name, 1,
+          [buildWorkflowResumePointEntry(this.receivedConfig, step.name, getWorkflowResumeFrameKind(step), 1, undefined,
+            step.kind === 'workflow_call' ? 1 : undefined)]);
         this.emit('step:complete', step, {
           persona: step.personaDisplayName,
           status: 'done',
           content: 'ok',
           timestamp: new Date('2026-04-01T00:00:00.000Z'),
-        }, step.instruction);
+        }, step.instruction, step.name,
+        [buildWorkflowResumePointEntry(this.receivedConfig, step.name, getWorkflowResumeFrameKind(step), 1, undefined,
+          step.kind === 'workflow_call' ? 1 : undefined)]);
       }
       this.emit('workflow:complete', { status: 'completed', iteration: 1 });
       return { status: 'completed', iteration: 1 };
@@ -574,6 +580,7 @@ steps:
         { label: 'needs_fix' },
       ],
       {
+        judgmentInput: 'work result',
         cwd: projectCwd,
         stepName: 'implement',
         provider: 'cursor',
@@ -636,6 +643,7 @@ steps:
         { label: 'needs_fix' },
       ],
       {
+        judgmentInput: 'work result',
         cwd: projectCwd,
         stepName: 'implement',
         provider: 'claude',
@@ -944,13 +952,16 @@ steps:
 
     MockWorkflowEngine.nextRunImpl = async (instance) => {
       instance.currentResumePoint = childResumePoint;
-      instance.emit('step:start', workflowCallStep, 7, workflowCallStep.instruction, { provider: 'cursor', model: undefined });
+      instance.emit('step:start', workflowCallStep, 7, workflowCallStep.instruction, { provider: 'cursor', model: undefined },
+        instance.receivedConfig.name, workflowCallStep.name, 1,
+        [buildWorkflowResumePointEntry(instance.receivedConfig, workflowCallStep.name, 'workflow_call', 1, undefined, 1)]);
       instance.emit('step:complete', workflowCallStep, {
         persona: 'delegate',
         status: 'done',
         content: 'COMPLETE',
         timestamp: new Date('2026-04-01T00:00:00.000Z'),
-      }, workflowCallStep.instruction);
+      }, workflowCallStep.instruction, workflowCallStep.name,
+      [buildWorkflowResumePointEntry(instance.receivedConfig, workflowCallStep.name, 'workflow_call', 1, undefined, 1)]);
       instance.currentResumePoint = parentResumePoint;
       instance.emit(
         'workflow:abort',
@@ -1041,13 +1052,16 @@ steps:
 
     MockWorkflowEngine.nextRunImpl = async (instance) => {
       instance.currentResumePoint = childResumePoint;
-      instance.emit('step:start', workflowCallStep, 7, workflowCallStep.instruction, { provider: 'cursor', model: undefined });
+      instance.emit('step:start', workflowCallStep, 7, workflowCallStep.instruction, { provider: 'cursor', model: undefined },
+        instance.receivedConfig.name, workflowCallStep.name, 1,
+        [buildWorkflowResumePointEntry(instance.receivedConfig, workflowCallStep.name, 'workflow_call', 1, undefined, 1)]);
       instance.emit('step:complete', workflowCallStep, {
         persona: 'delegate',
         status: 'done',
         content: 'COMPLETE',
         timestamp: new Date('2026-04-01T00:00:00.000Z'),
-      }, workflowCallStep.instruction);
+      }, workflowCallStep.instruction, workflowCallStep.name,
+      [buildWorkflowResumePointEntry(instance.receivedConfig, workflowCallStep.name, 'workflow_call', 1, undefined, 1)]);
       instance.currentResumePoint = parentResumePoint;
       throw new Error('engine crashed after child completion');
     };

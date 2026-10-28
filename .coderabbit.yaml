@@ -4,6 +4,10 @@ reviews:
   profile: assertive
   poem: false
 
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
+
   path_instructions:
     - path: "**"
       instructions: |

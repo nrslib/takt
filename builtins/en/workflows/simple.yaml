@@ -53,12 +53,12 @@ steps:
       testing_instruction: simple-write-tests-first
       testing_report_format: test-report
     rules:
-      - condition: Test creation completed
+      - condition: Test work is complete
         next: implement
-      - condition: Test creation skipped because the target is not yet implemented
+      - condition: Necessary tests cannot be created until after implementation
         next: implement
-      - condition: Unable to create tests
-        next: ABORT
+      - condition: Test creation cannot proceed
+        next: plan
       - condition: User input is required to resolve a question
         next: write_tests
         requires_user_input: true
@@ -173,6 +173,7 @@ steps:
         next: ABORT
 
   - name: supervise
+    description: Compare current code against requirements and preceding findings to decide completion, repair, or waiting for external confirmation.
     input_reports:
       from_step: remediation
       reports:
@@ -185,6 +186,7 @@ steps:
     edit: false
     persona: supervisor
     policy:
+      - process-deviation
       - contract-change
       - review
       - coding

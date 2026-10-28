@@ -274,6 +274,32 @@ function renderParallelBoundaryFixture() {
 }
 
 describe('Web UI execution model', () => {
+  it('renders a completed run warning in the existing status panel', () => {
+    const runtime = globalThis as unknown as { document?: FakeDomDocument };
+    const previousDocument = runtime.document;
+    runtime.document = new FakeDomDocument();
+    try {
+      const runDetail = new FakeDomNode('section');
+      const view = createExecutionView({
+        runList: new FakeDomNode('div'), runListEmpty: new FakeDomNode('p'),
+        taskCount: new FakeDomNode('span'), runDetail,
+        onSelectRun: () => undefined, onStatusChange: () => undefined,
+      });
+      view.renderDetail({
+        project: { id: 'project-a', displayName: 'Project A' },
+        meta: { runSlug: 'run-1', workflow: 'default', status: 'completed', task: 'trace warning' },
+        events: [], history: [], reports: [], warnings: ['trace rendering failed'],
+      }, { projectId: 'project-a', slug: 'run-1' });
+      const warning = runDetail.querySelector('.run-artifact-warning');
+      expect(warning?.attributes.role).toBe('status');
+      expect(warning?.children.find((node) => node.tagName === 'p')?.textContent).toContain('trace rendering failed');
+      expect(runDetail.querySelector('.status-completed')).not.toBeNull();
+      view.dispose();
+    } finally {
+      runtime.document = previousDocument;
+    }
+  });
+
   it('builds lanes from chronological events and groups phases by logical step and pass', () => {
     const trace = buildExecutionTrace(
       { workflow: 'default', status: 'running', currentStep: 'review', currentIteration: 2 },

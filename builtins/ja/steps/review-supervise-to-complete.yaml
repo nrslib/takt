@@ -1,10 +1,12 @@
 name: supervise
+description: 要求と現在のコードを照合し、完了か修正が必要かを判定する
 capabilities: readonly
 tags:
   - supervise
 edit: false
 persona: supervisor
 policy:
+  - process-deviation
   - contract-change
 pass_previous_response: false
 instruction: supervise

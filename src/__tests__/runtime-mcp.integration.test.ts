@@ -1,20 +1,13 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-// Modules under test (implemented in the following `implement` step).
-import {
-  resolveRuntimeProviderFile,
-} from '../infra/config/runtime-provider/loader.js';
-import {
-  resolveMcpAssignment,
-} from '../infra/config/runtime-provider/mcp-assignment.js';
-import {
-  hasActiveMcpSection,
-} from '../infra/config/runtime-provider/mode.js';
+import { getDefaultEnvironment,StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { mkdirSync,mkdtempSync,rmSync,writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach,beforeEach,describe,expect,it } from 'vitest';
 import { RUNTIME_PROVIDER_FILENAME } from '../infra/config/runtime-provider/constants.js';
+import { resolveRuntimeProviderFile } from '../infra/config/runtime-provider/loader.js';
+import { resolveInternalAgentMcpServers, resolveMcpAssignment } from '../infra/config/runtime-provider/mcp-assignment.js';
+import { hasActiveMcpSection } from '../infra/config/runtime-provider/mode.js';
 
 /**
  * Contracts covered (see plan.md 完了契約):
@@ -74,6 +67,21 @@ function baseCtx(overrides: {
 }
 
 describe('runtime MCP integration: loader → mode → resolveMcpAssignment (MCP-INTEGRATION-TESTS)', () => {
+  it('resolves a manager persona with common internal exclusions while keeping other internal agents unchanged', () => {
+    writeRuntimeYaml(projectDir, [
+      ...COMMON_RUNTIME_YAML,
+      '  defaults:', '    servers: [common, legacy]',
+      '  targets:', '    personas:', '      manager:', '        servers: [github, legacy]',
+      '    internal_agents:', '      selector:', '        exclude: [legacy]',
+    ]);
+    const runtime = resolveRuntimeProviderFile({ globalConfigDir: projectDir, projectConfigDir: projectDir });
+    expect(resolveInternalAgentMcpServers(runtime?.mcp, 'manager').servers).toEqual({
+      common: { type: 'stdio', command: 'common-srv' }, github: { type: 'http', url: 'https://api.github.com/mcp' },
+    });
+    expect(resolveInternalAgentMcpServers(runtime?.mcp).servers).toEqual({ common: { type: 'stdio', command: 'common-srv' } });
+    expect(resolveInternalAgentMcpServers(undefined)).toEqual({ servers: {}, identity: undefined });
+    expect(resolveInternalAgentMcpServers({}, 'manager')).toEqual({ servers: {}, identity: undefined });
+  });
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'takt-mcp-integration-'));
     projectDir = join(root, 'project-.takt');
@@ -293,8 +301,32 @@ describe('deterministic stdio MCP server fixture (MCP-INTEGRATION-TESTS)', () =>
 
       expect(tools.tools.map((tool) => tool.name).sort()).toEqual([
         'takt_list_workflows',
+        'takt_enqueue_goal_task',
+        'takt_merge_goal_task',
+        'takt_requeue_goal_task',
+        'takt_retry_goal_task',
+        'takt_remove_goal_task',
+        'takt_stop_goal_task',
+        'takt_complete_goal',
+        'takt_reopen_goal',
+        'takt_check_goal_completion',
+        'takt_get_goal_diff',
+        'takt_get_goal_history',
+        'takt_get_goal_relation',
+        'takt_ask_goal_question',
+        'takt_list_goal_questions',
+        'takt_get_goal_question',
+        'takt_withdraw_goal_question',
+        'takt_list_standalone_inquiries',
+        'takt_withdraw_standalone_inquiry',
+        'takt_notify_goal',
+        'takt_record_goal_work_log',
+        'takt_list_goal_work_log',
         'takt_enqueue_task',
+        'takt_list_goals',
+        'takt_get_goal',
         'takt_list_tasks',
+        'takt_cleanup_tasks',
         'takt_get_run',
         'takt_tell_run',
       ].sort());

@@ -6,6 +6,8 @@ import type { PermissionMode } from '../../core/models/index.js';
 import type { CodexPermissionControl } from '../../core/models/workflow-types.js';
 import type { ProviderImageAttachment } from '../providers/types.js';
 import type { ProviderActivityCallback, StreamCallback } from '../../shared/types/provider.js';
+import type { ToolPermissionDecisionHandler } from '../../core/workflow/types.js';
+import type { InternalAgentIsolation } from '../../shared/types/provider.js';
 
 /** Codex sandbox mode values */
 export type CodexSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
@@ -23,6 +25,9 @@ export function mapToCodexSandboxMode(mode: PermissionMode): CodexSandboxMode {
 /** Options for calling Codex */
 export interface CodexCallOptions {
   cwd: string;
+  callerManagedSession?: true;
+  onToolPermissionDecision?: ToolPermissionDecisionHandler;
+  internalAgentIsolation?: InternalAgentIsolation;
   abortSignal?: AbortSignal;
   sessionId?: string;
   model?: string;

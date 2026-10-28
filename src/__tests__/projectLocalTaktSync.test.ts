@@ -83,6 +83,8 @@ describe('syncProjectLocalTaktForRetry', () => {
     const result = await autoCommitAndPush(worktreePath, 'sync-only', projectDir, 'task-sync');
     expect(result.success).toBe(true);
     expect(result.commitHash).toBeUndefined();
+    expect(result.publishedHead).toBeUndefined();
+    expect(git(projectDir, ['branch', '--list', 'task-sync'])).toBe('');
     expect(git(worktreePath, ['rev-parse', 'HEAD'])).toBe(base);
     expect(git(worktreePath, ['diff', '--cached'])).toBe('');
 
@@ -90,6 +92,8 @@ describe('syncProjectLocalTaktForRetry', () => {
     const committed = await autoCommitAndPush(worktreePath, 'task-change', projectDir, 'task-sync');
     expect(committed.success).toBe(true);
     expect(committed.commitHash).toBeDefined();
+    expect(committed.publishedHead).toBe(git(worktreePath, ['rev-parse', 'HEAD']).trim());
+    expect(git(projectDir, ['rev-parse', 'task-sync']).trim()).toBe(committed.publishedHead);
     expect(git(worktreePath, ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'])).toBe('README.md\n');
     expect(git(worktreePath, ['show', 'HEAD:.takt/config.yaml'])).toBe('provider: mock\n');
     expect(git(worktreePath, ['show', 'HEAD:.takt/steps/review.yaml'])).toBe('instruction: base\n');

@@ -10,14 +10,10 @@ import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
 
 const log = createLogger('project-execution');
 
-interface ProjectExecutionContext extends WorkerPoolShutdownSignals {
-  onTasksClaimed(): void;
-}
-
 export async function withProjectExecution<Result>(
   cwd: string,
   kind: ProjectExecutionKind,
-  execute: (signals: ProjectExecutionContext) => Promise<Result>,
+  execute: (signals: WorkerPoolShutdownSignals) => Promise<Result>,
   automaticRun?: boolean,
 ): Promise<Result | undefined> {
   let lock: ProjectExecutionLock;
@@ -30,8 +26,6 @@ export async function withProjectExecution<Result>(
   const task = new AbortController();
   let shutdownManager: ShutdownManager | undefined;
   let forceShutdownStarted = false;
-  let tasksClaimed = false;
-  let executionCompleted = false;
   const onExit = (): void => {
     try {
       lock.release();
@@ -66,12 +60,9 @@ export async function withProjectExecution<Result>(
     });
     shutdownManager.install();
     lock.updateState('running');
-    const result = await execute({
+    return await execute({
       schedulingSignal: scheduling.signal, taskAbortSignal: task.signal,
-      onTasksClaimed: () => { tasksClaimed = true; },
     });
-    executionCompleted = true;
-    return result;
   } finally {
     // Tasks may settle while forced cleanup is pending; retain ownership until exit.
     if (!forceShutdownStarted) {
@@ -79,15 +70,6 @@ export async function withProjectExecution<Result>(
         lock.updateState('stopping');
       } finally {
         onExit();
-        // Retry normal empty-queue exits, but do not loop on failures before claiming tasks.
-        if (!scheduling.signal.aborted && (automaticRun !== true || tasksClaimed || executionCompleted)) {
-          try {
-            const { ensureManagerRun } = await import('../../manager/autoRun.js');
-            await ensureManagerRun(cwd);
-          } catch (error) {
-            log.error('Cannot start manager run after releasing execution ownership', { error: sanitizeSensitiveText(getErrorMessage(error)) });
-          }
-        }
       }
     }
   }

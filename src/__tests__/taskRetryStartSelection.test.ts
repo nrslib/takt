@@ -195,6 +195,70 @@ beforeEach(() => {
 });
 
 describe('invalid saved resume position', () => {
+  it.each([false, true])('should explain a legacy builtin mismatch against a project workflow, with matching ref: %s', async (matching) => {
+    const currentRef = `project:sha256:${'b'.repeat(64)}`;
+    const root = makeWorkflow({
+      name: 'default', ref: currentRef, steps: [agentStep('plan')],
+    });
+    const saved = rootResumePoint('plan', 'agent');
+    const point: WorkflowResumePoint = {
+      ...saved,
+      stack: [{ ...saved.stack[0]!, workflow_ref: matching ? currentRef : `builtin:sha256:${'a'.repeat(64)}` }],
+    };
+
+    const cap = await capturePicker(root, { ...pathContext, resumePoint: point },
+      (_options, defaultValue) => defaultValue);
+
+    expect(cap.options.some((option) => option.value === 'resume-checkpoint')).toBe(matching);
+    expect(cap.result?.selection.kind).toBe(matching ? 'resume' : 'restart');
+    if (matching) {
+      expect(mockWarn).not.toHaveBeenCalled();
+      expect(cap.result?.selection).toEqual({ kind: 'resume', resumePoint: point });
+    } else {
+      expect(mockWarn).toHaveBeenCalledTimes(1);
+      const notice = mockWarn.mock.calls[0]![0] as string;
+      expect(notice).toMatch(/legacy builtin workflow_ref/i);
+      expect(notice).toMatch(/absolute.path/i);
+      expect(notice).toMatch(/current workflow content/i);
+      expect(notice).not.toMatch(/current builtin/i);
+    }
+  });
+
+  it.each([false, true])('should retain the valid prefix for a legacy builtin child mismatch, with matching ref: %s', async (matching) => {
+    const currentRef = `project:sha256:${'b'.repeat(64)}`;
+    const child = makeWorkflow({
+      name: 'coding', ref: currentRef, callable: true, steps: [agentStep('review')],
+    });
+    const root = makeWorkflow({
+      name: 'default', ref: 'project:root', steps: [callStep('delegate', 'coding')],
+    });
+    mockResolveWorkflowCallTarget.mockReturnValue(child);
+    const point: WorkflowResumePoint = {
+      ...rootResumePoint('plan', 'agent'),
+      stack: [
+        { workflow: 'default', workflow_ref: 'project:root', step: 'delegate', kind: 'workflow_call', occurrence: 1, call_instance: 1 },
+        { workflow: 'coding', workflow_ref: matching ? currentRef : `builtin:sha256:${'a'.repeat(64)}`, step: 'review', kind: 'agent', occurrence: 1 },
+      ],
+    };
+
+    const cap = await capturePicker(root, { ...pathContext, resumePoint: point },
+      (_options, defaultValue) => defaultValue);
+
+    expect(cap.result?.selection).toEqual({
+      kind: 'resume', resumePoint: { ...point, stack: matching ? point.stack : point.stack.slice(0, 1) },
+    });
+    const description = cap.options.find((option) => option.value === 'resume-checkpoint')!.description;
+    if (matching) {
+      expect(description).not.toMatch(/legacy/i);
+    } else {
+      expect(description).toMatch(/absolute.path/i);
+      expect(description).toMatch(/current workflow content/i);
+      expect(description).not.toMatch(/current builtin/i);
+      expect(description).toMatch(/valid prefix/i);
+    }
+    expect(mockWarn).not.toHaveBeenCalled();
+  });
+
   it('should notify and cancel without a picker when an invalid checkpoint has no restart target', async () => {
     const root = makeWorkflow({
       name: 'default', ref: 'project:root',
@@ -295,16 +359,12 @@ describe('invalid saved resume position', () => {
 });
 
 describe('tree restart picker contracts', () => {
-  it('should present the whole call tree in a single prompt without the two-line path style', async () => {
+  it('should present the whole call tree in a single prompt', async () => {
     const { root } = developmentTree();
 
     const cap = await capturePicker(root, pathContext, (options) => firstSelectable(options).value);
 
     expect(cap.promptCount).toBe(1);
-    for (const option of cap.options) {
-      expect(option.label.startsWith('Restart from: ')).toBe(false);
-      expect(option.label.startsWith('Browse child workflow from: ')).toBe(false);
-    }
     const heading = cap.options.find((option) => option.label.includes('review-suite-call'));
     expect(heading).toBeDefined();
     expect(isHeading(heading!)).toBe(true);
@@ -426,9 +486,6 @@ describe('tree restart picker contracts', () => {
     );
     expect(failedLeaf).toBeDefined();
     expect(cap.defaultValue).toBe(failedLeaf!.value);
-    for (const option of cap.options) {
-      expect(option.label.startsWith('Restart from: ')).toBe(false);
-    }
     const selection = cap.result?.selection;
     if (selection?.kind !== 'restart') {
       throw new Error('Expected a restart selection for the defaulted leaf');
@@ -580,6 +637,11 @@ describe('resume checkpoint is preserved across the tree picker', () => {
       expect(model.defaultId).toBe('resume-checkpoint');
       expect(model.resumeFailureReason).toBeUndefined();
       const resume = model.options.find((option) => option.id === 'resume-checkpoint');
+      expect(resume).toMatchObject({ path: length === 3
+        ? '"default" > "delegate" → "child" > "delegate-leaf" → "leaf" > "child-first"'
+        : length === 2
+          ? '"default" > "delegate" → "child" > "delegate-leaf"'
+          : '"default" > "delegate"' });
       if (length < 3) {
         expect(resume?.description).toContain('Full saved position could not be resolved:');
         expect(resume?.description).toContain('Resume will use the valid prefix:');
@@ -808,7 +870,7 @@ describe('resume checkpoint is preserved across the tree picker', () => {
       ...(checkpoint === 'invalid' ? { resumePoint: rootResumePoint('deleted-step', 'agent') } : {}),
     });
 
-    expect(catalog.options).toEqual([
+    expect(catalog.options.map(({ id, label, selectable }) => ({ id, label, selectable }))).toEqual([
       { id: 'restart:0', label: '"plan"', selectable: true },
       { id: 'heading:1', label: '"delegate":', selectable: false },
       { id: 'restart:1.0', label: '  "review"', selectable: true },
@@ -975,7 +1037,6 @@ describe('resume checkpoint is preserved across the tree picker', () => {
     expect(cap.defaultValue).toBe('resume-checkpoint');
     const resumeOption = cap.options.find((option) => option.value === cap.defaultValue);
     expect(resumeOption?.label.startsWith('Resume failed position:')).toBe(true);
-    expect(cap.options.some((option) => option.label.startsWith('Restart from: '))).toBe(false);
     // The synthesized checkpoint is never presented as a selectable restart leaf.
     expect(cap.options.some(
       (option) => option.value.startsWith('restart:') && option.label.includes('engine-step'),
@@ -1042,6 +1103,124 @@ describe('resume checkpoint is preserved across the tree picker', () => {
 });
 
 describe('task retry start options without terminal selection', () => {
+  it.each([true, false])('keeps authored descriptions on their own restart and resume paths: heading=%s', async (onHeading) => {
+    const child = makeWorkflow({ name: 'child', ref: 'project:child', callable: true, steps: [agentStep('final-gate')] });
+    const makeRoot = (described: boolean): WorkflowConfig => makeWorkflow({ name: 'default', ref: 'project:root', steps: [
+      { ...agentStep('final-gate'), ...(!onHeading && described ? { description: '再レビュー' } : {}) },
+      { ...callStep('delegate', 'child'), ...(onHeading && described ? { description: '再レビュー' } : {}) },
+    ] });
+    mockResolveWorkflowCallTarget.mockReturnValue(child);
+    const resumePoint: WorkflowResumePoint = {
+      ...rootResumePoint('delegate', 'agent'),
+      stack: [
+        { workflow: 'default', workflow_ref: 'project:root', step: 'delegate', kind: 'workflow_call', occurrence: 1, call_instance: 1 },
+        { workflow: 'child', workflow_ref: 'project:child', step: 'final-gate', kind: 'agent', occurrence: 1 },
+      ],
+    };
+    const selectionOptions = { ...pathContext, resumePoint };
+    const root = makeRoot(true);
+    const catalog = buildTaskRetryStartOptions(root, selectionOptions);
+    const baseline = buildTaskRetryStartOptions(makeRoot(false), selectionOptions);
+    const headings = [{ path: '"default" > "delegate"', ...(onHeading ? { description: '再レビュー' } : {}) }];
+
+    for (const id of ['restart:1.0', 'resume-checkpoint']) {
+      expect(catalog.options.find((option) => option.id === id)).toMatchObject({
+        path: '"default" > "delegate" → "child" > "final-gate"',
+      });
+      expect(catalog.options.find((option) => option.id === id)?.headings).toEqual(headings);
+      expect(resolveTaskRetryStartOption(root, selectionOptions, id)).toEqual(resolveTaskRetryStartOption(makeRoot(false), selectionOptions, id));
+    }
+    expect(catalog.options.find((option) => option.id === 'restart:0')?.headings).toEqual([]);
+    expect(catalog.defaultId).toBe(baseline.defaultId);
+    expect(catalog.options.map(({ id, label, selectable }) => ({ id, label, selectable })))
+      .toEqual(baseline.options.map(({ id, label, selectable }) => ({ id, label, selectable })));
+    expect(() => resolveTaskRetryStartOption(root, selectionOptions, 'heading:1')).toThrow();
+    const picked = await capturePicker(root, selectionOptions, () => 'restart:1.0');
+    expect(picked.result).toEqual(resolveTaskRetryStartOption(root, selectionOptions, 'restart:1.0'));
+  });
+
+  it.each([
+    { position: 'leaf', length: 3, renamed: undefined, resolvedLength: 3 },
+    { position: 'terminal call', length: 2, renamed: undefined, resolvedLength: 2 },
+    { position: 'renamed leaf', length: 3, renamed: 'leaf', resolvedLength: 2 },
+    { position: 'renamed middle call', length: 3, renamed: 'middle', resolvedLength: 1 },
+  ].flatMap((position) => [true, false].map((onHeading) => ({ ...position, onHeading }))))(
+    'uses only headings belonging to the resolved resume prefix: $position, heading=$onHeading', ({ length, renamed, resolvedLength, onHeading }) => {
+    const leaf = makeWorkflow({ name: 'leaf', ref: 'project:leaf', callable: true,
+      steps: [agentStep(renamed === 'leaf' ? 'final-gate-new' : 'final-gate')] });
+    const child = makeWorkflow({ name: 'child', ref: 'project:child', callable: true,
+      steps: [{ ...callStep(renamed === 'middle' ? 'review-new' : 'review', 'leaf'),
+        ...(onHeading ? { description: 'Child review' } : {}) }] });
+    const root = makeWorkflow({ name: 'default', ref: 'project:root',
+      steps: [{ ...callStep('delegate', 'child'), description: 'Root review' },
+        { ...agentStep('other'), ...(!onHeading ? { description: 'Child review' } : {}) }] });
+    mockResolveWorkflowCallTarget.mockImplementation((_parent: WorkflowConfig, step: WorkflowCallStep) => step.call === 'child' ? child : leaf);
+    const stack: WorkflowResumePoint['stack'] = [
+        { workflow: 'default', workflow_ref: 'project:root', step: 'delegate', kind: 'workflow_call', occurrence: 1, call_instance: 1 },
+        { workflow: 'child', workflow_ref: 'project:child', step: 'review', kind: 'workflow_call', occurrence: 1, call_instance: 1 },
+        { workflow: 'leaf', workflow_ref: 'project:leaf', step: 'final-gate', kind: 'agent', occurrence: 1 },
+    ];
+    const resumePoint: WorkflowResumePoint = {
+      ...rootResumePoint('delegate', 'agent'),
+      stack: stack.slice(0, length),
+    };
+    const selectionOptions = { ...pathContext, resumePoint };
+    const catalog = buildTaskRetryStartOptions(root, selectionOptions);
+    const resume = catalog.options.find((option) => option.id === 'resume-checkpoint')!;
+    expect(resume.headings).toEqual([
+      { path: '"default" > "delegate"', description: 'Root review' },
+      ...(resolvedLength > 1 ? [{ path: '"default" > "delegate" → "child" > "review"',
+        ...(onHeading ? { description: 'Child review' } : {}) }] : []),
+    ]);
+    expect(resume.path).toBe(resolvedLength === 3
+      ? '"default" > "delegate" → "child" > "review" → "leaf" > "final-gate"'
+      : resolvedLength === 2 ? '"default" > "delegate" → "child" > "review"' : '"default" > "delegate"');
+    if (renamed !== undefined) expect(resume.description).toContain(renamed === 'leaf' ? 'final-gate' : 'review');
+    expect(catalog.defaultId).toBe('resume-checkpoint');
+    expect(resolveTaskRetryStartOption(root, selectionOptions, 'resume-checkpoint').selection).toEqual({
+      kind: 'resume', resumePoint: { ...resumePoint, stack: resumePoint.stack.slice(0, resolvedLength) },
+    });
+  });
+
+  it('carries complete paths for duplicate nested names and keeps positional IDs and heading diagnostics', () => {
+    const leaf = makeWorkflow({ name: 'review-suite', ref: 'project:suite', callable: true,
+      steps: [agentStep('review'), agentStep('final-gate')] });
+    const child = makeWorkflow({ name: 'development-core', ref: 'project:core', callable: true,
+      steps: [agentStep('review'), callStep('peer-review', 'review-suite'), callStep('unavailable', 'missing')] });
+    const root = makeWorkflow({ name: 'takt-default', ref: 'project:root',
+      steps: [agentStep('review'), callStep('develop', 'development-core')] });
+    mockResolveWorkflowCallTarget.mockImplementation((_parent: WorkflowConfig, step: WorkflowCallStep) =>
+      step.call === 'development-core' ? child : step.call === 'review-suite' ? leaf : null);
+
+    const catalog = buildTaskRetryStartOptions(root, pathContext);
+
+    expect(catalog.options.filter((option) => option.selectable)).toMatchObject([
+      { id: 'restart:0', path: '"takt-default" > "review"' },
+      { id: 'restart:1.0', path: '"takt-default" > "develop" → "development-core" > "review"' },
+      { id: 'restart:1.1.0', path: '"takt-default" > "develop" → "development-core" > "peer-review" → "review-suite" > "review"' },
+      { id: 'restart:1.1.1', path: '"takt-default" > "develop" → "development-core" > "peer-review" → "review-suite" > "final-gate"' },
+    ]);
+    expect(catalog.options.find((option) => option.id === 'heading:1.2')).toMatchObject({
+      selectable: false, path: '"takt-default" > "develop" → "development-core" > "unavailable"',
+      description: expect.stringContaining('missing'),
+    });
+    expect(() => resolveTaskRetryStartOption(root, pathContext, 'heading:1.2')).toThrow();
+  });
+
+  it('preserves separators inside authored names in a complete restart path', () => {
+    const child = makeWorkflow({ name: 'child > workflow', ref: 'project:child', callable: true,
+      steps: [agentStep('review → final')] });
+    const root = makeWorkflow({ name: 'root > workflow', ref: 'project:root',
+      steps: [callStep('call → child', 'child')] });
+    mockResolveWorkflowCallTarget.mockReturnValue(child);
+
+    const catalog = buildTaskRetryStartOptions(root, pathContext);
+
+    expect(catalog.options.find((option) => option.id === 'restart:0.0')).toMatchObject({
+      path: '"root > workflow" > "call → child" → "child > workflow" > "review → final"',
+    });
+  });
+
   it('should expose the invalid saved position reason without changing restart choices', () => {
     const root = makeWorkflow({
       name: 'default', ref: 'project:root', steps: [agentStep('plan'), agentStep('reviewers-v2')],

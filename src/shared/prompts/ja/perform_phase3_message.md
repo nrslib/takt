@@ -2,11 +2,13 @@
 <!--
   template: perform_phase3_message
   phase: 3 (status judgment)
-  vars: reportContent, criteriaTable, outputList, hasAppendix, appendixContent, structuredOutput
+  vars: phaseContext, reportContent, criteriaTable, outputList, hasAppendix, appendixContent, structuredOutput
   builder: StatusJudgmentBuilder
 -->
+{{phaseContext}}
+
 {{#if structuredOutput}}
-**以下の入力に書かれた判定結果を、判定基準のルール番号（1始まり）に対応づけてください。**
+**判定対象のレポートや回答に書かれた判定結果を、判定基準のルール番号（1始まり）に対応づけてください。**
 {{else}}
 **入力に書かれた内容から、判定基準に当たるルールのタグを1つだけ出力してください。**
 
@@ -26,7 +28,7 @@
 
 ## タスク
 
-- 判定は、上の入力に書かれた内容だけで行ってください。結論の正しさを確かめ直したり、ファイル・コード・テスト結果を読んだり、入力にない問題を理由にしたりしないでください。
+- 判定は、この指示に含まれる入力に書かれた内容だけで行ってください。結論の正しさを確かめ直したり、ファイル・コード・テスト結果を読んだり、入力にない問題を理由にしたりしないでください。
 - 入力に結論が明記されていれば、それに当たるルールを選んでください。見出しでなくても、本文で結果がはっきり述べられていればそれを結論とします。
 - 結論が明記されていなければ、入力に書かれた事実がどのルールに当たるかで選んでください。
 - 明記された結論と、同じ入力の中の記載が食い違う場合（結論は承認なのに未解消の指摘が残っている等）は、その結論をそのまま採らず、記載された事実に当たるルールを選んでください。

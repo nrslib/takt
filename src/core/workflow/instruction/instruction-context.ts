@@ -23,6 +23,7 @@ import type { DeclaredReportInputs } from './prepared-instruction.js';
  * Context for building instruction from template.
  */
 export interface InstructionContext {
+  workflowAssignment?: import('../workflow-prompt-context.js').WorkflowAssignment;
   /** The main task/prompt */
   task: string;
   /** Current iteration number (workflow-wide turn count) */
@@ -63,14 +64,6 @@ export interface InstructionContext {
   language?: Language;
   /** Whether interactive-only rules are enabled */
   interactive?: boolean;
-  /** Top-level workflow steps for workflow structure display */
-  workflowSteps?: ReadonlyArray<{ name: string; description?: string }>;
-  /** Index of the current step in workflowSteps (0-based) */
-  currentStepIndex?: number;
-  /** Workflow name */
-  workflowName?: string;
-  /** Workflow description (optional) */
-  workflowDescription?: string;
   /** Retry note explaining why task is being retried */
   retryNote?: string;
   /** Structured PR context resolved at the execution boundary. */

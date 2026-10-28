@@ -1,8 +1,10 @@
 name: reviewers_2
+description: セキュリティとコードを並列にレビューし、修正の要否を判定する
 tags:
   - review
 parallel:
   - name: security-review
+    description: 入力や権限の境界を調べ、実際の経路にあるセキュリティの問題を報告する
     tags:
       - review
     edit: false
@@ -18,6 +20,7 @@ parallel:
         - name: security-review.md
           format: security-review
   - name: coding-review
+    description: 要求と差分を照合し、実装の不具合や既存動作への影響を報告する
     tags:
       - review
     edit: false

@@ -27,6 +27,7 @@ import { enqueueTaskEffect } from './system-enqueue-effect.js';
 import { resolveConflictsWithAiEffect, syncWithRootEffect } from './system-sync-effects.js';
 import { resolveIssueListInput, resolveIssueSelectionInput } from './system-issue-input-resolver.js';
 import { resolvePrListInput, resolvePrSelectionInput } from './system-pr-input-resolver.js';
+import { prCiStatusOptions, resolvePrCiFailure, rerunCiEffect } from './system-pr-ci.js';
 
 function listQueueTasks(projectCwd: string) {
   return new TaskRunner(projectCwd).listAllTaskItems();
@@ -92,9 +93,16 @@ function resolveInput(
       if (!context) throw new Error('pr_status requires PR execution context');
       const provider = options.gitProvider ?? getGitProvider();
       if (!provider.fetchPrStatus) throw new Error('PR status is not supported by this Git provider');
-      return provider.fetchPrStatus(context.prNumber, options.projectCwd,
-        resolutionContext?.prStatusFetchOptions ?? { signal: options.abortSignal });
+      const status = provider.fetchPrStatus(context.prNumber, options.projectCwd,
+        prCiStatusOptions(input, state, resolutionContext?.prStatusFetchOptions ?? { signal: options.abortSignal }));
+      return status.then((value) => ({ ...value,
+        rerunHeadChanged: value.ci.rerunHeadChange !== undefined,
+        rerunHeadChangeReason: value.ci.rerunHeadChange?.reason ?? '',
+      }));
     }
+    case 'pr_ci_failure':
+      return resolvePrCiFailure(options, input, state,
+        resolutionContext?.prStatusFetchOptions ?? { signal: options.abortSignal });
     case 'task_context':
       return options.task.length > 0
         ? { exists: true, body: options.task }
@@ -181,8 +189,11 @@ async function runEffect(
   options: SystemStepServicesOptions,
   effect: WorkflowEffect,
   payload: Record<string, unknown>,
+  state: WorkflowState,
 ): Promise<Record<string, unknown>> {
   switch (effect.type) {
+    case 'rerun_ci':
+      return rerunCiEffect(options, payload, state);
     case 'caccia':
       if (!options.cacciaService) throw new Error('Caccia execution service is required');
       return options.cacciaService.execute(payload.pr as number);
@@ -192,8 +203,15 @@ async function runEffect(
       return enqueueTaskEffect(options, payload as Parameters<typeof enqueueTaskEffect>[1]);
     case 'comment_pr':
       return commentPrEffect(options, payload as Parameters<typeof commentPrEffect>[1]);
-    case 'sync_with_root':
-      return syncWithRootEffect(options, payload as Parameters<typeof syncWithRootEffect>[1]);
+    case 'sync_with_root': {
+      const result = await syncWithRootEffect(options, payload as Parameters<typeof syncWithRootEffect>[1]);
+      const concurrency = options.prExecutionContext?.mergeConcurrency;
+      if (concurrency === undefined) return result;
+      return { ...result,
+        resyncCount: Math.max(0, (state.stepIterations.get(state.currentStep) ?? 1) - 1),
+        resyncLimit: Math.max(2, concurrency - 1),
+      };
+    }
     case 'resolve_conflicts_with_ai':
       return resolveConflictsWithAiEffect(options, payload as Parameters<typeof resolveConflictsWithAiEffect>[1]);
     case 'merge_pr':
@@ -218,10 +236,10 @@ export class DefaultSystemStepServices implements SystemStepServices {
   executeEffect = async (
     effect: WorkflowEffect,
     payload: Record<string, unknown>,
-    _state: WorkflowState,
+    state: WorkflowState,
   ): Promise<Record<string, unknown>> => {
     validateSystemEffectPayload(effect, payload);
-    return runEffect(this.options, effect, payload);
+    return runEffect(this.options, effect, payload, state);
   };
 }
 

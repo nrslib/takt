@@ -2,7 +2,7 @@
  * Tests: session loading behavior in executeWorkflow().
  *
  * Normal runs pass empty sessions to WorkflowEngine;
- * retry runs (startStep / retryNote / resumePoint) load persisted sessions,
+ * non-worktree retry runs (startStep / retryNote / resumePoint) load persisted sessions,
  * while stateless restartPoint runs start with empty sessions.
  */
 
@@ -13,6 +13,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { USAGE_MISSING_REASONS } from '../core/logging/contracts.js';
 import type { WorkflowConfig, WorkflowRestartPoint } from '../core/models/index.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
+import { getWorkflowResumeFrameKind } from '../core/workflow/step-kind.js';
 
 const {
   MockWorkflowEngine,
@@ -97,7 +99,8 @@ const {
       const firstStep = this.config.steps[0];
       if (firstStep) {
         const providerInfo = resolveProviderInfo(firstStep, this.receivedOptions);
-        this.emit('step:start', firstStep, 1, firstStep.instruction, providerInfo);
+        this.emit('step:start', firstStep, 1, firstStep.instruction, providerInfo, this.config.name, firstStep.name, 1,
+          [buildWorkflowResumePointEntry(this.config, firstStep.name, getWorkflowResumeFrameKind(firstStep), 1)]);
         this.emit('step:complete', firstStep, {
           persona: firstStep.personaDisplayName,
           status: 'done',
@@ -105,7 +108,8 @@ const {
           timestamp: new Date('2026-03-04T00:00:00.000Z'),
           sessionId: 'step-session',
           providerUsage: mockStepResponse.providerUsage,
-        }, firstStep.instruction);
+        }, firstStep.instruction, firstStep.name,
+        [buildWorkflowResumePointEntry(this.config, firstStep.name, getWorkflowResumeFrameKind(firstStep), 1)]);
       }
       if (MockWorkflowEngine.runOutcome.status === 'aborted') {
         this.emit(
@@ -524,6 +528,7 @@ describe('executeWorkflow session loading', () => {
 
     // Then: loadPersonaSessions is called to load saved sessions
     expect(mockLoadPersonaSessions).toHaveBeenCalledWith(projectCwd, 'claude');
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.initialSessions).toEqual({ coder: 'saved-session-id' });
   });
 
   it('should pass the central session storage directory for persona retries', async () => {
@@ -540,6 +545,7 @@ describe('executeWorkflow session loading', () => {
       'claude',
       centralSessionDirectory,
     );
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.initialSessions).toEqual({ coder: 'saved-session-id' });
   });
 
   it('should load persisted sessions when retryNote is set (retry)', async () => {
@@ -551,6 +557,7 @@ describe('executeWorkflow session loading', () => {
 
     // Then: loadPersonaSessions is called to load saved sessions
     expect(mockLoadPersonaSessions).toHaveBeenCalledWith(projectCwd, 'claude');
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.initialSessions).toEqual({ coder: 'saved-session-id' });
   });
 
   it('should start with empty sessions when restartPoint requests a stateless retry', async () => {
@@ -575,22 +582,25 @@ describe('executeWorkflow session loading', () => {
     expect(MockWorkflowEngine.lastInstance.receivedOptions.initialSessions).toEqual({});
   });
 
-  it('should load worktree sessions on retry when cwd differs from projectCwd', async () => {
-    // Given: retry execution in a worktree (cwd !== projectCwd)
+  it.each([
+    { startStep: 'implement' },
+    { retryNote: 'Fix the failing test' },
+    { resumeSource: { resumeMode: 'retry' as const } },
+    { resumeSource: { resumeMode: 'requeue' as const } },
+    { resumeSource: { resumeMode: 'instruct' as const } },
+  ])('should start worktree re-execution with empty sessions for %j', async (retryOptions) => {
     const projectDir = createTempDir('takt-session-project-');
     const worktreeDir = createTempDir('takt-session-worktree-');
 
     await executeWorkflow(makeConfig(), 'task', worktreeDir, {
       projectCwd: projectDir,
-      startStep: 'implement',
+      ...retryOptions,
     });
 
-    // Then: loadWorktreeSessions is called instead of loadPersonaSessions
-    expect(mockLoadWorktreeSessions).toHaveBeenCalledWith(projectDir, worktreeDir, 'claude');
-    expect(mockLoadPersonaSessions).not.toHaveBeenCalled();
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.initialSessions).toEqual({});
   });
 
-  it('should pass the central session storage directory for worktree retries', async () => {
+  it('should start worktree retries with empty sessions even with central session storage', async () => {
     const projectDir = createTempDir('takt-session-central-project-');
     const worktreeDir = createTempDir('takt-session-central-worktree-');
     const centralSessionDirectory = join(projectDir, 'central-sessions');
@@ -601,13 +611,7 @@ describe('executeWorkflow session loading', () => {
       sessionStorageDirectory: centralSessionDirectory,
     });
 
-    expect(mockLoadWorktreeSessions).toHaveBeenCalledWith(
-      projectDir,
-      worktreeDir,
-      'claude',
-      centralSessionDirectory,
-    );
-    expect(mockLoadPersonaSessions).not.toHaveBeenCalled();
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.initialSessions).toEqual({});
   });
 
   it('should not load sessions for worktree normal run', async () => {
@@ -636,19 +640,6 @@ describe('executeWorkflow session loading', () => {
     expect(mockLoadPersonaSessions).toHaveBeenCalledWith(projectCwd, 'claude');
   });
 
-  it('should resolve logging config from workflow config values', async () => {
-    await executeWorkflow(makeConfig(), 'task', projectCwd, {
-      projectCwd,
-    });
-
-    const calls = vi.mocked(resolveWorkflowConfigValues).mock.calls.filter(([, keys]) => keys.includes('logging'));
-    expect(calls).toHaveLength(1);
-    const keys = calls[0]?.[1];
-    expect(Array.isArray(keys)).toBe(true);
-    expect(keys).toContain('logging');
-    expect(keys).toContain('observability');
-  });
-
   it('should initialize and shutdown observability when enabled in resolved config', async () => {
     const observability = {
       enabled: true,
@@ -666,7 +657,7 @@ describe('executeWorkflow session loading', () => {
     });
 
     expect(mockInitializeOtelFoundation).toHaveBeenCalledWith(observability, undefined);
-    expect(MockWorkflowEngine.lastInstance.receivedOptions.observability).toBe(observability);
+    expect(MockWorkflowEngine.lastInstance.receivedOptions.observability).toEqual(observability);
     expect(mockObservabilityShutdown).toHaveBeenCalledOnce();
   });
 

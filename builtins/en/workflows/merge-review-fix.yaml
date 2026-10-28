@@ -1,9 +1,10 @@
 name: merge-review-fix
 description: Review, fix and merge a PR after CI passes
-max_steps: 51
+max_steps: 75
 initial_step: identify
 steps:
   - name: identify
+    description: Retrieve the target PR number and its current status.
     mode: system
     system_inputs:
       - type: pr_status
@@ -13,11 +14,14 @@ steps:
       - condition: when(true)
         next: sync
   - name: sync
+    description: Merge base branch changes into the target PR, push them, and check the synchronization result.
     mode: system
     effects:
       - type: sync_with_root
         pr: "{context:identify.pr.number}"
     rules:
+      - condition: when(effect.sync.sync_with_root.success == true && effect.sync.sync_with_root.resyncCount > 0)
+        next: push
       - condition: when(effect.sync.sync_with_root.success == true)
         next: review
       - condition: when(effect.sync.sync_with_root.conflicted == true)
@@ -25,16 +29,20 @@ steps:
       - condition: when(true)
         next: sync_failed
   - name: resolve_conflicts
+    description: Resolve conflicts with the base branch using AI, push the changes, and check the resolution result.
     mode: system
     effects:
       - type: resolve_conflicts_with_ai
         pr: "{context:identify.pr.number}"
     rules:
+      - condition: when(effect.resolve_conflicts.resolve_conflicts_with_ai.success == true && effect.sync.sync_with_root.resyncCount > 0)
+        next: push
       - condition: when(effect.resolve_conflicts.resolve_conflicts_with_ai.success == true)
         next: review
       - condition: when(true)
         next: conflict_failed
   - name: review
+    description: Review the PR from multiple perspectives, then adjudicate, fix, and verify findings and check requirement fulfillment.
     kind: workflow_call
     call: review-fix
     rules:
@@ -43,6 +51,7 @@ steps:
       - condition: ABORT
         next: review_failed
   - name: push
+    description: Commit the changes made after review and push them to the target PR.
     mode: system
     effects:
       - type: commit_and_push
@@ -53,6 +62,7 @@ steps:
       - condition: when(true)
         next: push_failed
   - name: caccia
+    description: Address CodeRabbit findings through Caccia and check the outcome.
     mode: system
     effects:
       - type: caccia
@@ -69,24 +79,31 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: wait_ci
+    description: Wait for CI to finish for the target commit and determine the next action from the CI and PR status.
     mode: system
     system_inputs:
       - type: pr_status
         source: current_pr
         as: status
+        rerun_from: "{effect:rerun_ci.rerun_ci.rerun}"
     wait:
-      until: 'when(context.wait_ci.status.ci.finished == true && context.wait_ci.status.headSha == effect.caccia.caccia.headSha)'
+      until: 'when(context.wait_ci.status.rerunHeadChanged == true || context.wait_ci.status.ci.finished == true && context.wait_ci.status.headSha == effect.caccia.caccia.headSha)'
       on_timeout: timeout
     rules:
+      - condition: when(context.wait_ci.status.rerunHeadChanged == true)
+        next: collect_ci_failure
       - condition: when(context.wait_ci.status.ci.passed == false)
-        next: ci_failed
-      - condition: when(context.wait_ci.status.mergeable != "MERGEABLE")
+        next: collect_ci_failure
+      - condition: when(context.wait_ci.status.mergeable == "CONFLICTING" && effect.sync.sync_with_root.resyncCount < effect.sync.sync_with_root.resyncLimit)
+        next: sync
+      - condition: when(context.wait_ci.status.mergeable != "MERGEABLE" && context.wait_ci.status.mergeable != "BEHIND")
         next: unmergeable
       - condition: when(context.wait_ci.status.reviewDecision == "CHANGES_REQUESTED")
         next: changes_requested
       - condition: when(true)
         next: merge
   - name: merge
+    description: Merge the target PR and check whether it succeeded.
     mode: system
     effects:
       - type: merge_pr
@@ -97,6 +114,7 @@ steps:
       - condition: when(true)
         next: merge_failed
   - name: changes_requested
+    description: Comment on the PR that GitHub reviews still request changes.
     mode: system
     effects:
       - type: comment_pr
@@ -107,18 +125,137 @@ steps:
         next: COMPLETE
       - condition: when(true)
         next: ABORT
-  - name: ci_failed
+  - name: collect_ci_failure
+    description: Collect logs, execution details, and recovery attempt counts for CI failures on the target commit.
+    mode: system
+    system_inputs:
+      - type: pr_ci_failure
+        source: current_pr
+        as: failure
+        head_sha: "{effect:caccia.caccia.headSha}"
+    rules:
+      - condition: when(true)
+        next: investigate_ci
+  - name: investigate_ci
+    description: Inspect CI failure evidence and the PR diff to determine the cause, its location, and whether a root fix is appropriate.
+    capabilities: readonly
+    edit: false
+    persona: planner
+    policy: merge-ci-recovery
+    instruction: merge-ci-investigate
+    structured_output:
+      schema_ref: merge-ci-investigation
+    output_contracts:
+      report:
+        - name: ci-investigation.md
+          format: merge-ci-investigation
+    rules:
+      - condition: when(true)
+        next: refresh_ci
+  - name: refresh_ci
+    description: Refresh CI and commit status, then use the investigation and attempt counts to choose whether to wait, fix, rerun, or stop.
+    mode: system
+    system_inputs:
+      - type: pr_status
+        source: current_pr
+        as: status
+        rerun_from: "{effect:rerun_ci.rerun_ci.rerun}"
+    rules:
+      - condition: when(context.refresh_ci.status.headSha == effect.caccia.caccia.headSha && context.refresh_ci.status.ci.passed == true)
+        next: wait_ci
+      - condition: when(context.refresh_ci.status.headSha == effect.caccia.caccia.headSha && context.refresh_ci.status.ci.finished == false)
+        next: wait_ci
+      - condition: when(context.collect_ci_failure.failure.complete == false)
+        next: ci_stopped
+      - condition: when(context.collect_ci_failure.failure.rerunCount > 0)
+        next: ci_stopped
+      - condition: when(structured.investigate_ci.verdict == "defect" && context.collect_ci_failure.failure.fixRounds < 2)
+        next: fix_ci
+      - condition: when(structured.investigate_ci.verdict == "external")
+        next: rerun_ci
+      - condition: when(true)
+        next: ci_stopped
+  - name: fix_ci
+    description: Fix the demonstrated root cause of the CI failure and verify it with tests and builds.
+    capabilities: edit
+    edit: true
+    persona: coder
+    policy: merge-ci-recovery
+    instruction: merge-ci-fix
+    output_contracts:
+      report:
+        - name: ci-fix.md
+          format: merge-ci-fix
+    rules:
+      - condition: CI root cause fixed and verified
+        next: review_ci_fix
+      - condition: Cannot safely fix or verify the demonstrated cause
+        next: ci_stopped
+  - name: review_ci_fix
+    description: Inspect the CI fix diff and verification evidence to decide approval based on root cause resolution and preservation of existing contracts.
+    capabilities: readonly
+    edit: false
+    persona: coding-reviewer
+    policy: merge-ci-recovery
+    instruction: merge-ci-review
+    structured_output:
+      schema_ref: simple-review-result
+    output_contracts:
+      report:
+        - name: ci-fix-review.md
+          format: merge-ci-review
+    rules:
+      - condition: when(structured.review_ci_fix.result == "APPROVE")
+        next: push_ci_fix
+      - condition: when(true)
+        next: ci_stopped
+  - name: push_ci_fix
+    description: Commit the approved CI fix and push it to the target PR.
+    mode: system
+    effects:
+      - type: commit_and_push
+        pr: "{context:identify.pr.number}"
+    rules:
+      - condition: when(effect.push_ci_fix.commit_and_push.success == true)
+        next: caccia
+      - condition: when(true)
+        next: ci_push_failed
+  - name: rerun_ci
+    description: Rerun the affected CI checks after the investigation establishes an external cause.
+    mode: system
+    effects:
+      - type: rerun_ci
+        pr: "{context:identify.pr.number}"
+        failure: "{context:collect_ci_failure.failure}"
+    rules:
+      - condition: when(effect.rerun_ci.rerun_ci.success == true)
+        next: wait_ci
+      - condition: when(true)
+        next: collect_ci_failure
+  - name: ci_stopped
+    description: Comment on the PR with the CI recovery stop reason, investigation results, attempt counts, and remaining evidence gaps.
     mode: system
     effects:
       - type: comment_pr
         pr: "{context:identify.pr.number}"
-        body: "TAKT evaluation failed: CI checks failed for head {context:wait_ci.status.headSha}."
+        body_format: plain_text
+        body: "TAKT CI recovery stopped. Fix rounds: {context:collect_ci_failure.failure.fixRounds}; rerun count: {context:collect_ci_failure.failure.rerunCount}. Investigation: {structured:investigate_ci.summary}. Last failed checks, runs, jobs and unavailable evidence: {context:collect_ci_failure.failure.details}"
     rules:
-      - condition: when(effect.ci_failed.comment_pr.success == true)
-        next: COMPLETE
+      - condition: when(true)
+        next: ABORT
+  - name: ci_push_failed
+    description: Comment on the PR with the CI fix push failure, investigation results, attempt counts, and remaining evidence gaps.
+    mode: system
+    effects:
+      - type: comment_pr
+        pr: "{context:identify.pr.number}"
+        body_format: plain_text
+        body: "TAKT CI recovery stopped. Fix rounds: {context:collect_ci_failure.failure.fixRounds}; rerun count: {context:collect_ci_failure.failure.rerunCount}. Investigation: {structured:investigate_ci.summary}. Last failed checks, runs, jobs and unavailable evidence: {context:collect_ci_failure.failure.details}. Push error: {effect:push_ci_fix.commit_and_push.error}"
+    rules:
       - condition: when(true)
         next: ABORT
   - name: timeout
+    description: Comment on the PR that waiting for CI exceeded the time limit.
     mode: system
     effects:
       - type: comment_pr
@@ -130,6 +267,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: unmergeable
+    description: Comment on the PR that its current state prevents merging.
     mode: system
     effects:
       - type: comment_pr
@@ -141,6 +279,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: review_failed
+    description: Comment on the PR that the called review workflow aborted.
     mode: system
     effects:
       - type: comment_pr
@@ -152,6 +291,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: merged
+    description: Comment on the PR that it was merged after review and CI.
     mode: system
     effects:
       - type: comment_pr
@@ -163,6 +303,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: sync_failed
+    description: Comment on the PR with the base branch synchronization failure and its error.
     mode: system
     effects:
       - type: comment_pr
@@ -174,6 +315,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: conflict_failed
+    description: Comment on the PR with the AI conflict resolution failure and its error.
     mode: system
     effects:
       - type: comment_pr
@@ -185,6 +327,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: push_failed
+    description: Comment on the PR with the commit or push failure and its error.
     mode: system
     effects:
       - type: comment_pr
@@ -196,6 +339,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: merge_failed
+    description: Comment on the PR with the merge failure and its error.
     mode: system
     effects:
       - type: comment_pr
@@ -207,6 +351,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: caccia_limit
+    description: Comment on the PR that Caccia reached its iteration limit and report the unresolved thread count.
     mode: system
     effects:
       - type: comment_pr
@@ -218,6 +363,7 @@ steps:
       - condition: when(true)
         next: ABORT
   - name: caccia_failed
+    description: Comment on the PR with the Caccia failure and its error.
     mode: system
     effects:
       - type: comment_pr

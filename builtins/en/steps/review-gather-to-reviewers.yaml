@@ -1,4 +1,5 @@
 name: gather
+description: Collect the changes and requirements under review and prepare a report for reviewers.
 capabilities: readonly
 tags:
   - plan

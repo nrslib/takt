@@ -1,10 +1,12 @@
 import type { MergeMethod } from '../../models/config-types.js';
+import type { PrCiCheck, PrCiRerun } from './pr-ci.js';
 
 export const PR_STATUS_TIMEOUT_MS = 15_000;
 
 export interface PrStatusFetchOptions {
   readonly timeoutMs?: number;
   readonly signal?: AbortSignal;
+  readonly rerun?: PrCiRerun;
 }
 
 export class PrStatusTimeoutError extends Error {
@@ -14,21 +16,30 @@ export class PrStatusTimeoutError extends Error {
   }
 }
 
+export class PrHeadObservationMismatchError extends Error {
+  constructor(prNumber: number, readonly firstHeadSha: string, readonly lastHeadSha: string) {
+    super(`Pull request #${prNumber} head changed while reading its metadata`);
+    this.name = 'PrHeadObservationMismatchError';
+  }
+}
+
 export interface PrExecutionContext {
   readonly prNumber: number;
+  readonly prUrl?: string;
   readonly headBranch: string;
   readonly baseBranch: string;
   readonly headSha: string;
   readonly headRepositoryUrl: string;
   readonly headRepositoryPushUrls: readonly string[];
   readonly preserveConflictState?: boolean;
+  readonly mergeConcurrency?: number;
   readonly threatCheckMaxDiffBytes?: number;
 }
 
 export interface PrStatus {
   number: number;
   headSha: string;
-  ci: { finished: boolean; passed: boolean };
+  ci: { finished: boolean; passed: boolean; checks?: PrCiCheck[]; rerunHeadChange?: { reason: string } };
   mergeable: string;
   mergeStateStatus: string;
   reviewDecision: string;

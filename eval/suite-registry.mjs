@@ -7,6 +7,36 @@ const evalDir = dirname(fileURLToPath(import.meta.url));
 const CLASSIFICATIONS = [
   {
     tier: 'active',
+    reason: 'manager の作業分割・同時投入・結合後の確認・作業の制約の保持と引き継ぎ・人の対応が必要な場合の停止を日英17ケースで測る（Python データ処理と Web アプリを含む）',
+    suites: ['manager-work-split'],
+  },
+  {
+    tier: 'active',
+    reason: 'フェーズを跨ぐ会話での読み取り再開、現在の結果への追従、ユーザー制約の維持を本番 dist と生イベントで測る',
+    suites: ['phase-awareness'],
+  },
+  {
+    tier: 'active',
+    reason: 'CI回復の調査分類と根本修正レビューを本番ファセットで評価する',
+    suites: ['merge-ci-investigation', 'merge-ci-review'],
+  },
+  {
+    tier: 'active',
+    reason: 'ページに閉じた状態・操作判断の誤検知と、別の状態操作層への委譲の見逃しを測る',
+    suites: ['frontend-mediator-review'],
+  },
+  {
+    tier: 'active',
+    reason: 'frontend implement がページの操作判断を独立した Mediator 層へ委譲する生成と、表示部品での誤発火を測る',
+    suites: ['frontend-mediator-coder'],
+  },
+  {
+    tier: 'active',
+    reason: '入力の主体・並行処理・量の根拠と過去の工程逸脱を、発火する例としない例で測る',
+    suites: ['finding-realistic-premise'],
+  },
+  {
+    tier: 'active',
     reason: '完了検証・再計画・レビュー裁定で反例に使う入力の根拠を確かめる',
     suites: ['fix-verification-applicable-inputs'],
   },
@@ -24,6 +54,11 @@ const CLASSIFICATIONS = [
     tier: 'active',
     reason: 'Phase 3 が入力の結論をルールへ対応づけ、入力外の再評価と入力内の矛盾を区別するか測る',
     suites: ['phase3-follow-input'],
+  },
+  {
+    tier: 'active',
+    reason: 'write_tests の完了・実装先行・計画への差し戻しを日英で測る',
+    suites: ['write-tests-routing'],
   },
   {
     tier: 'active',
@@ -125,6 +160,11 @@ const CLASSIFICATIONS = [
   },
   {
     tier: 'active',
+    reason: '判定専用の構造化出力と実際の Phase 1 実行記録から、確認範囲と未確認事項を分けて報告するか測る',
+    suites: ['phase1-execution-log-handoff'],
+  },
+  {
+    tier: 'active',
     reason: '変化を名指しし、その後も状態に合わせて振る舞うことを求め、同じ実体が存続する契約の発火・誤発火・証拠境界を測る',
     suites: [
       'state-after-event-plan',
@@ -204,6 +244,32 @@ const CLASSIFICATIONS = [
 ];
 
 const EXECUTION_OVERRIDES = {
+  'phase1-execution-log-handoff': {
+    defaultEligible: false, credentials: ['codex'], cost: 'standard',
+    reason: 'Terra medium で合成した Phase 1 実行記録の報告品質を明示評価する',
+  },
+  'manager-work-split': {
+    defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
+    reason: 'Sol Low、Opus 5、Luna Max で日英の操作選択と引数を比較する明示選択の評価',
+  },
+  'phase-awareness': {
+    defaultEligible: false, credentials: ['codex', 'claude'], cost: 'high',
+    reason: '固定の red/green 実行表と複数 CLI 認証を要するため専用 runner で明示実行する',
+  },
+  'merge-ci-investigation': {
+    defaultEligible: false, credentials: ['codex'], cost: 'high',
+    reason: '日英6事例を各3回、指定モデルで明示実行する',
+  },
+  'merge-ci-review': {
+    defaultEligible: false, credentials: ['codex'], cost: 'high',
+    reason: '日英5事例を各3回、指定モデルで明示実行する',
+  },
+  'finding-realistic-premise': {
+    defaultEligible: false,
+    credentials: ['claude', 'codex'],
+    cost: 'high',
+    reason: '17ケースを隔離した3モデルで比較するため両CLI認証と大きな実行枠を要する',
+  },
   'fix-verification-applicable-inputs': {
     defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
     reason: 'Sol Low、Opus 5、Luna Max の3モデルで完了検証・再計画・裁定の入力範囲を比較する',
@@ -264,6 +330,18 @@ const EXECUTION_OVERRIDES = {
     cost: 'standard',
     reason: 'Lunaで検証したGUI設計ケースをOpusでも確認する',
   },
+  'frontend-mediator-review': {
+    defaultEligible: false,
+    credentials: ['codex', 'claude'],
+    cost: 'high',
+    reason: 'Luna max と Opus の隔離レビューを固定した4実装と意味採点で比較する',
+  },
+  'frontend-mediator-coder': {
+    defaultEligible: false,
+    credentials: ['codex', 'claude'],
+    cost: 'high',
+    reason: '隔離した React アプリで Codex low と Claude Opus の実装を生成し、artifact と LLM rubric で構造を評価する',
+  },
   'resource-flow-review': {
     defaultEligible: false,
     credentials: ['codex'],
@@ -311,6 +389,12 @@ const EXECUTION_OVERRIDES = {
     credentials: ['codex', 'claude'],
     cost: 'high',
     reason: '日英・旧版と候補を Codex 2モデルと道具を使える Claude の強めた条件で比較する',
+  },
+  'write-tests-routing': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'high',
+    reason: '日英の4分岐を Sol High と Luna Max の実モデルで明示評価する',
   },
   'completion-scope-routing': {
     defaultEligible: false,
@@ -619,6 +703,12 @@ const EXECUTION_OVERRIDES = {
 };
 
 const PREPARE_TARGET_OVERRIDES = {
+  'phase1-execution-log-handoff': [],
+  'manager-work-split': [],
+  'finding-realistic-premise': [
+    'rt', 'rc', 'rq', 'ne', 'np', 'nb', 'at', 'ac', 'aq', 'ae', 'ap', 'ab',
+    'vd1', 'vd2', 'vn1', 'vn2', 'pd1',
+  ].map((caseId) => `finding-realistic-premise-${caseId}`),
   'fix-verification-applicable-inputs': ['f1', 'f2', 'f3', 'r1', 'r2', 'n1', 'n2', 'n3', 'n4', 'n5', 'a1', 'a2', 'a3', 'a4']
     .map((caseId) => `fix-verification-applicable-inputs-${caseId}`),
   'review-adjudication-applicable-inputs': ['a1', 'a2', 'a3', 'a4']
@@ -658,6 +748,7 @@ const PREPARE_TARGET_OVERRIDES = {
   'interactive-topic-boundary': [],
   'completion-scope-structured': [],
   'phase3-follow-input': [],
+  'write-tests-routing': [],
   'remediation-evidence': [],
   'fix-verifier-model-matrix': ['fix-verifier-state-closure'],
   'fix-verifier-routing-model-matrix': ['fix-verifier-state-routing'],
@@ -671,6 +762,8 @@ const PREPARE_TARGET_OVERRIDES = {
   'frontend-opus': ['frontend-review', 'frontend-review-react'],
   cqrs: ['cqrs-review'],
   'frontend-coder': ['frontend-implement'],
+  'frontend-mediator-review': ['good', 'bad', 'bad2', 'good-hook'].map(variant => `frontend-mediator-review-${variant}`),
+  'frontend-mediator-coder': ['frontend-mediator-implement'],
   'cqrs-coder': ['cqrs-implement'],
   'fix-loop-convergence': [],
   'final-readiness-preservation': ['final-readiness-supervision-phase2'],

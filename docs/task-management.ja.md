@@ -69,6 +69,10 @@ CLI・TUI・MCPから登録する場合は、同じIssue・PR・ブランチのp
 
 MCP client は `takt-mcp` stdio server を使って、shell command を直接呼ばずに pending タスクを保存し、task/run 状態を確認し、実行中 worktree clone へ追加指示を送れます。`takt_enqueue_task` は `.takt/tasks.yaml` に pending レコードを書き込み、`takt_list_tasks` は要約、`takt_get_run` は1つの run の詳細、`takt_tell_run` は再確認後に実行中 clone への書き込みを行います。Issue 作成後に保存が失敗し、Issue 番号まで解決済みなら、Issue は open のまま残り、MCP error result は再試行用の番号を返します。番号抽出に失敗した場合は代わりに Issue URL を返すことがあります。tool は server が許可した project root 内の絶対パス `cwd` を必須とし、enqueue と tell には空でない本文も必要です。pending タスクの実行には `takt run`、継続監視と実行には `takt watch` を使用してください。設定方法と tool 入力の詳細は [CLI リファレンス](./cli-reference.ja.md#mcp-server) を参照してください。
 
+`takt_cleanup_tasks` は絞り込んだタスクの一覧を確認してから削除するツールです。絶対パスの `cwd` と `reason` が必須です。任意入力は `statuses`（`pending`、`completed`、`failed`、`exceeded`、`pr_failed` を複数指定でき、`running` は指定できません）、`goalId`、`branch`、`confirm`（既定値は `false`）です。`statuses`、`goalId`、`branch` のいずれか1つ以上が必要です。
+
+`confirm` の省略時または `false` の場合は対象一覧だけを返し、何も削除しません。`confirm: true` の場合だけ、`takt list` と同じ範囲を削除します。このツールは `all` のツール一覧だけで利用でき、`read-only` と `manager` には含まれません。`manager` には別のツール `takt_remove_goal_task` があります。
+
 通常の assistant 会話には、MCP 対応 provider の場合だけ読み取り専用の task 状態 tool が渡されます。新しいタスクには `/go`、実行中 worktree clone への追加指示には `/tell` で対象を選び、内容を確認してから送ります。failed タスクの再投入には `/requeue` または `/retry` を使用できます。MCP 非対応 provider でも会話は利用できますが、task 状態の参照はできません。
 
 `takt_tell_run` または CLI の `/tell` で配送が成立した追加指示は、指示 ID・受信時刻とともにタスクの正本 `order.md` に追記され、実行中 run の `context/task/order.md` にも反映されます。保存に成功した場合は、後続の役と再開後の run が同じ追加指示を参照できます。保存に失敗した場合は標準エラーへ警告し、配送や tell の成功は妨げません。
@@ -239,7 +243,7 @@ takt list
 | **Create PR** | 失敗した run の変更をコミットして push し、プルリクエストを作成 |
 | **Delete** | 失敗したタスクレコードを削除 |
 
-CLI/TUI の assistant と grill-me 会話では `/requeue [補足]` で failed または exceeded タスクを会話から決めます。補足は会話の最後のユーザー発話として対象タスクと開始位置の両方の判定に渡します。候補名との機械的な照合は行いません。AI が対象を決められない場合や判定に失敗した場合は候補タスクの一覧を表示し、人が選びます。開始位置が決まらない場合も選択可能な位置の一覧から選べます。タスク名、要約、workflow、開始位置を表示して Y/n で確認し、承認後は `order.md` を変えずに `pending` へ戻します。選択や確認を取りやめた場合は変更せず、その旨を会話に残します。再投入した結果もタスク名とともに会話へ残ります。`/retry [補足]` は従来どおり failed タスクを会話から決め、改訂後の order 全文を表示して **タスクにつむ** または **会話を続ける** を選びます。タスクにつむと旧版をアーカイブして `pending` に戻し、会話を続けると変更せず会話へ戻ります。`/retry` で対象や開始位置が曖昧な場合や、どちらのコマンドでも候補がない場合は通知して終了します。どちらも対話端末が必要で、TTY がなければ選択も変更も行いません。workflow をその場で開始しません。persona 会話と Web UI ではコマンド文字列を通常メッセージとして扱います。`takt resume` の直接 run 向け `/retry` は別経路です。
+CLI/TUI の assistant と grill-me 会話では `/requeue [補足]` は failed または exceeded タスクを、`/retry [補足]` は failed タスクを会話から決めます。両コマンドの選択は対話セッションから独立した AI 呼び出しで行い、直近の合意を含む会話の要点、補足指示、候補の完全な経路と見出しの説明を渡します。補足は文脈から解釈します。応答が形式外または候補外なら各選択段階で1回だけ再質問し、それでも無効なら手動メニューへ切り替えます。メニューには形式不一致、候補にないタスク名、候補にない開始位置 ID のいずれかを表示します。判断不能や provider の失敗時は直接手動選択へ進みます。タスク名、要約、workflow、開始位置を表示して Y/n で確認します。`/requeue` は承認後に `order.md` を変えず `pending` へ戻します。選択や確認を取りやめた場合は変更せず、その旨を会話に残します。再投入した結果もタスク名とともに会話へ残ります。`/retry [補足]` は failed タスクを会話から決め、改訂後の order 全文を表示して **タスクにつむ** または **会話を続ける** を選びます。タスクにつむと旧版をアーカイブして `pending` に戻し、会話を続けると変更せず会話へ戻ります。どちらのコマンドでも候補がない場合は通知して終了します。どちらも対話端末が必要で、TTY がなければ選択も変更も行いません。workflow をその場で開始しません。persona 会話と Web UI ではコマンド文字列を通常メッセージとして扱います。`takt resume` の直接 run 向け `/retry` は別経路です。
 
 ### Pending タスクの操作
 
@@ -251,7 +255,8 @@ CLI/TUI の assistant と grill-me 会話では `/requeue [補足]` で failed �
 
 | 操作 | 説明 |
 |------|------|
-| **Mark as failed** | `running` のまま残ったタスクを `failed` にマーク |
+| **Stop** | 実行中のタスク1件に停止を依頼。worker が自分で中断し、終端状態を決める |
+| **Mark as failed** | `running` のまま残ったタスクを `failed` にマーク。worker は停止しない |
 
 ワークツリークローンを持つ実行中タスクを選ぶと、そのタスクを `/tell` の初期対象にした通常の assistant 会話が開きます。会話中に別のタスクを確認したり、新しいタスクを相談したりできます。`/tell` は確定後に対象を再確認し、選択されたタスクだけへ書き込みます。完了、削除、slug 不一致、clone でない run は候補にも書き込み先にもなりません。
 
@@ -340,9 +345,26 @@ takt list --non-interactive --action try --branch takt/my-branch
 
 利用可能なアクションは `diff`、`sync`、`try`、`merge`、`delete` です。
 
+`takt list --non-interactive --action delete` の `--status <status...>` には、`pending`、`completed`、`failed`、`exceeded`、`pr_failed` を複数指定できます。実行中のタスクは削除できないため、`running` は指定できません。`--goal <goalId>` は指定ゴールに属するタスクに絞ります。既存の `--branch <branch>` も使用でき、単独指定では `completed` のタスクだけが対象です。
+
+`--status`、`--goal`、`--branch` のいずれか1つ以上が必須です。無指定では何も削除せず、エラーで終了します。`--yes` を省略すると対象のタスク名・状態・ブランチ・ゴールの一覧を表示し、削除せず正常終了します。削除は `--yes` を指定した場合だけ行います。`--format json` を併せると対象一覧を JSON で取得でき、JSON 出力には `goal_id` が含まれます。
+
+削除する範囲は対話の一覧からの削除と同じで、タスクの作業場所の clone、worktree セッションのファイル、clone のメタ情報、ブランチ、`.takt/tasks.yaml` の記録です。clone のタスクでも、後片付けのあとに元のリポジトリの同名ブランチを `git branch -d` で削除します。未取り込みなどで Git が削除を拒否した場合は、ブランチを残して警告し、clone とタスクの記録の削除は成功します。
+
+```bash
+# 対象一覧を確認してから削除します
+takt list --non-interactive --action delete --status failed pr_failed
+takt list --non-interactive --action delete --status failed pr_failed --yes
+
+# 対象一覧を JSON で確認します
+takt list --non-interactive --action delete --status failed pr_failed --format json
+```
+
 ## CodeRabbit レビューループ（`caccia`）
 
-マージ用ビルトインは Caccia を明示的に実行します。`merge-review` は `review → caccia → wait_ci → 評価コメント`、`merge-review-fix` と `merge-review-fix-simple` は `review/fix → commit_and_push → caccia → wait_ci → merge_pr` の順です。`success` と `skipped` は返された head の CI 待ちへ進みます。`limit` は未解決件数をコメントして COMPLETE で終了し、マージしません。効果の失敗は `error` をコメントして ABORT で終了します。push、タスク後処理、Pipeline からの暗黙の Caccia は廃止しました。`merge.auto_start: true` では PR 公開後にマージ用 workflow が起動し、その明示効果が Caccia を実行します。
+マージ用ビルトインは Caccia を明示的に実行します。`merge-review` は `review → caccia → wait_ci → 評価コメント`、`merge-review-fix` と `merge-review-fix-simple` は `review/fix → commit_and_push → caccia → wait_ci → merge_pr` の順です。`success` と `skipped` は返された head の CI 待ちへ進みます。`limit` は未解決件数をコメントして COMPLETE で終了し、マージしません。効果の失敗は `error` をコメントして ABORT で終了します。worktree タスクの `auto_pr` と Pipeline の `--auto-pr` は `caccia.enabled: true` の場合に PR 作成・更新成功後の Caccia を実行します。PR 公開失敗、PR がない場合、goal 管理タスク、GitHub 以外では後処理の Caccia を実行しません。実行した workflow、または `merge.auto_start: true` で選択されたマージ用 workflow に明示の `caccia` system 効果がある場合も後処理を抑止します。呼び出し先の workflow も判定対象です。それ以外は Caccia の完了後にマージ用 workflow を起動します。step 名や指示文の文字列は効果として扱いません。Git の push 自体からは起動せず、`takt merge` は引き続き明示効果で実行します。
+
+`merge-review-fix` と `merge-review-fix-simple` はCI失敗が確定するたびに失敗チェック、run・attempt・jobの参照先、ログ本文、PRの累積差分、関連コードを調査します。フレークやmainでも失敗する欠陥はPRの作業ツリーで根本修正し、読み取り専用レビューを経てpush → Caccia → CI待ちへ戻ります。修正は最大2周です。外部要因を証拠で判断した場合だけ、修正回数とは独立してCIを1回再実行します。修正2周後も未使用なら再実行できます。同じHEADの新しいattemptを待ち、すべてのチェックと既存のマージ条件を再確認します。証拠不足、修正2周後も残る欠陥、修正レビューのREJECT、再実行後の失敗では回数・最後の失敗チェックと参照先・調査要点をPRへコメントしてABORTします。調査・修正レポートはrunに残ります。初回成功とCIのtimeoutの扱いは変わらず、`merge-review` はコメント専用のままです。GitHub Actionsのログ取得・再実行の権限不足や未対応Providerは明示します。
 
 Caccia は CodeRabbit の投稿を待ち、`coderabbitai` が開始した未解決スレッドだけを処理します。各反復は一時クローンで指定された workflow を実行し、判断レポートを `.takt/runs/` に残します。修正を Push したら、その反復で判断したスレッドだけを Resolve し、Push したコミットへの CodeRabbit のレビューを待ちます。人が開始したスレッドは未解決のまま残します。レビューへの返信は投稿しません。成功と反復上限到達はログに記録し、設定済み通知経路にも送ります。
 
@@ -403,7 +425,7 @@ worktree 実行中、TAKT は2つのディレクトリ参照を管理します�
 | `cwd`（クローンパス） | エージェントの実行場所、レポートの書き込み先 |
 | `projectCwd`（プロジェクトルート） | ログとセッションデータの保存先 |
 
-レポートは `cwd/.takt/runs/{slug}/reports/`（クローン内）に書き込まれ、エージェントがメインリポジトリのパスを発見することを防ぎます。`cwd !== projectCwd` の場合、クロスディレクトリ汚染を避けるためセッション再開はスキップされます。
+レポートは `cwd/.takt/runs/{slug}/reports/`（クローン内）に書き込まれ、エージェントがメインリポジトリのパスを発見することを防ぎます。provider fallback を除く `session: continue` の step は同一 run 内で同じクローンに紐づく同一 persona・provider・model の保存済み session を再開します。別のクローンやプロジェクトルートの session は使いません。retry・requeue・instruct で既存クローンの新しい試行を始める場合、各 persona は新規 session で開始し、後続 step でその session を継続します。
 
 ## セッションログ
 

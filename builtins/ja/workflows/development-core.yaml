@@ -178,6 +178,7 @@ steps:
         next: ABORT
 
   - name: replan
+    description: 実装・検証の不足と制約を整理し、実装の続行・独立レビュー・停止のいずれかを判断する
     input_reports:
       from_step: peer-review
       reports:
@@ -189,6 +190,7 @@ steps:
     capabilities: readonly
     persona: planner
     policy:
+      - process-deviation
       - contract-change
       - applicable-inputs
       - $param: plan_policy
@@ -242,9 +244,9 @@ steps:
       testing_report_format:
         $param: testing_report_format
     rules:
-      - condition: テスト作成が完了した
+      - condition: テスト作業を終えた
         next: implement
-      - condition: テスト対象が未実装のためテスト作成をスキップする
+      - condition: 実装後でなければ必要なテストを作成できない
         next: implement
       - condition: テスト作成を進行できない
         next: plan
@@ -254,6 +256,7 @@ steps:
         interactive_only: true
 
   - name: implement
+    description: 計画に沿った実装と必須検証を実行し、不足の補完または再計画の必要性を報告する
     kind: workflow_call
     call:
       $param: implementation_workflow
@@ -281,6 +284,7 @@ steps:
         next: replan
 
   - name: peer-review
+    description: 専門レビューの指摘を裁定して修正・検証し、要件充足を確認して完了か再計画かを判断する
     kind: workflow_call
     call:
       $param: peer_review_workflow

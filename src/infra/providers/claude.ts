@@ -21,6 +21,7 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
     : options.providerOptions?.claude?.skills?.enabled;
   return {
     cwd: options.cwd,
+    callerManagedSession: options.callerManagedSession,
     strictToolAllowlist: options.strictToolAllowlist,
     mcpOnlySideEffects: options.mcpOnlySideEffects,
     abortSignal: options.abortSignal,
@@ -41,6 +42,7 @@ function toClaudeOptions(options: ProviderCallOptions): ClaudeCallOptions {
     onStream: options.onStream,
     onActivity: options.onActivity,
     onPermissionRequest: options.onPermissionRequest,
+    onToolPermissionDecision: options.onToolPermissionDecision,
     onAskUserQuestion: options.onAskUserQuestion,
     bypassPermissions: options.bypassPermissions,
     anthropicApiKey: options.anthropicApiKey ?? resolveAnthropicApiKey(),

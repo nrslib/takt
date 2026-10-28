@@ -52,6 +52,7 @@ export interface StreamToolUseEventData {
 
 export interface StreamToolResultEventData {
   id?: string;
+  completedToolIds?: readonly string[];
   content: string;
   isError: boolean;
 }

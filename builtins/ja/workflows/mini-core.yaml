@@ -94,10 +94,12 @@ steps:
         requires_user_input: true
         interactive_only: true
   - name: reviewers
+    description: AI特有の問題と要件の充足を並列に確認し、完了・修正・停止のいずれに進むか判定する
     tags:
       - review
     parallel:
       - name: ai-antipattern-review-2nd
+        description: AI生成コード特有の問題を確認し、根拠と修正案を報告する
         capabilities: readonly
         tags:
           - review
@@ -116,6 +118,7 @@ steps:
             - name: ai-antipattern-review.md
               format: ai-antipattern-review
       - name: supervise
+        description: 現在のコードと前段の報告を要件に照合し、完了・修正・外部確認待ちを判定する
         capabilities: readonly
         tags:
           - review
@@ -124,6 +127,7 @@ steps:
         persona:
           $param: supervisor_persona
         policy:
+          - process-deviation
           - contract-change
         knowledge:
           $param: development_knowledge
@@ -175,6 +179,7 @@ steps:
           - condition: 修正を進行できない
 
   - name: ai-antipattern-fix
+    description: AIレビューの指摘を実ファイルと仕様で確かめ、確認できた問題を修正して結果を報告する
     capabilities: edit
     tags:
       - coding
@@ -201,6 +206,7 @@ steps:
           format: fix-report
 
   - name: supervise_fix
+    description: 監督者の指摘を実ファイルと照合し、優先度に従って修正して結果を報告する
     capabilities: edit
     tags:
       - coding

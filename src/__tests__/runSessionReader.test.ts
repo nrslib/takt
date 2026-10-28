@@ -147,7 +147,8 @@ vi.mock('node:fs', async (importOriginal) => {
   };
 });
 
-vi.mock('../infra/fs/session.js', () => ({
+vi.mock('../infra/fs/session.js', async (original) => ({
+  ...await original<typeof import('../infra/fs/session.js')>(),
   loadNdjsonLog: vi.fn(),
   parseNdjsonLogContent: vi.fn(),
 }));
@@ -159,6 +160,7 @@ import {
   findRunForTask,
   getRunPaths,
   loadRunSessionContext,
+  loadRunSessionPage,
   formatRunSessionForPrompt,
   MAX_RUN_REPORT_BYTES,
   type RunSessionContext,
@@ -362,6 +364,88 @@ describe('loadRunSessionContext', () => {
 
   it('should throw when run does not exist', () => {
     expect(() => loadRunSessionContext(tmpDir, 'nonexistent')).toThrow('Run not found: nonexistent');
+  });
+  it('exposes current step timing and execution count from real log records without counting nested steps', async () => {
+    const { parseNdjsonLogContent: parse } = await vi.importActual<typeof import('../infra/fs/session.js')>('../infra/fs/session.js');
+    const slug = 'patrol-run';
+    const runDir = createRunDir(tmpDir, slug, {
+      task: '巡回の材料', workflow: 'default', status: 'running', startTime: '2026-10-14T00:00:00Z',
+      currentStep: 'implement', currentIteration: 3, phase: 1,
+    });
+    const logPath = join(runDir, 'logs', 'session.jsonl');
+    writeFileSync(logPath, [
+      { type: 'workflow_start', task: '巡回の材料', workflowName: 'default', startTime: '2026-10-14T00:00:00Z' },
+      { type: 'step_start', step: 'implement', persona: 'coder', iteration: 1, timestamp: '2026-10-14T00:01:00Z' },
+      { type: 'step_complete', step: 'implement', persona: 'coder', iteration: 1, status: 'done', content: '変更しました', instruction: '', timestamp: '2026-10-14T00:02:00Z' },
+      { type: 'step_start', step: 'implement', persona: 'coder', iteration: 2, workflow: 'child', timestamp: '2026-10-14T00:03:00Z' },
+      { type: 'step_start', step: 'implement', persona: 'coder', iteration: 3, workflow: 'default', timestamp: '2026-10-14T00:04:00Z' },
+    ].map((record) => JSON.stringify(record)).join('\n'));
+    mockParseNdjsonLogContent.mockImplementationOnce(parse);
+    const context = loadRunSessionContext(tmpDir, slug);
+    expect(context).toMatchObject({ currentStep: 'implement', currentIteration: 3, currentStepStartedAt: '2026-10-14T00:04:00Z', currentStepExecutionCount: 2 });
+    expect(context.stepLogs[0]).toMatchObject({ timestamp: '2026-10-14T00:02:00Z', iteration: 1 });
+    expect(loadRunSessionPage(tmpDir, slug, { maxBytes: 4096 })).toMatchObject({ currentStepStartedAt: '2026-10-14T00:04:00Z', currentStepExecutionCount: 2 });
+    const next = { type: 'step_start', step: 'review', persona: 'reviewer', iteration: 4, timestamp: '2026-10-14T00:05:00Z' };
+    writeFileSync(logPath, JSON.stringify({ type: 'workflow_start', task: '巡回の材料', workflowName: 'default', startTime: '2026-10-14T00:00:00Z' }) + '\n' + JSON.stringify(next));
+    mockParseNdjsonLogContent.mockImplementationOnce(parse);
+    expect(loadRunSessionContext(tmpDir, slug).currentStepStartedAt).toBeUndefined();
+    expect(loadRunSessionPage(tmpDir, slug, { maxBytes: 4096 })).toMatchObject({ currentStepStartedAt: null, currentStepExecutionCount: 0 });
+  });
+
+  it('takes timing and execution count from the running child step when the current step calls a child workflow', async () => {
+    const { parseNdjsonLogContent: parse } = await vi.importActual<typeof import('../infra/fs/session.js')>('../infra/fs/session.js');
+    const slug = 'patrol-child-run';
+    const runDir = createRunDir(tmpDir, slug, {
+      task: '子のワークフロー', workflow: 'default', status: 'running', startTime: '2026-10-14T00:00:00Z',
+      currentStep: 'develop', currentIteration: 1, phase: 1,
+    });
+    const stack = (step: string) => [
+      { workflow: 'default', workflow_ref: 'builtin:default', step: 'develop', kind: 'workflow_call', occurrence: 1 },
+      { workflow: 'development-core', workflow_ref: 'builtin:development-core', step, kind: 'agent', occurrence: 1 },
+    ];
+    writeFileSync(join(runDir, 'logs', 'session.jsonl'), [
+      { type: 'workflow_start', task: '子のワークフロー', workflowName: 'default', startTime: '2026-10-14T00:00:00Z' },
+      { type: 'step_start', step: 'plan', persona: 'planner', iteration: 1, workflow: 'development-core', stack: stack('plan'), timestamp: '2026-10-14T00:01:00Z' },
+      { type: 'step_start', step: 'fix', persona: 'coder', iteration: 2, workflow: 'development-core', stack: stack('fix'), timestamp: '2026-10-14T00:02:00Z' },
+      { type: 'step_start', step: 'fix', persona: 'coder', iteration: 3, workflow: 'development-core', stack: stack('fix'), timestamp: '2026-10-14T00:05:00Z' },
+    ].map((record) => JSON.stringify(record)).join('\n'));
+    mockParseNdjsonLogContent.mockImplementationOnce(parse);
+    expect(loadRunSessionContext(tmpDir, slug)).toMatchObject({
+      currentStep: 'develop', currentStepStartedAt: '2026-10-14T00:05:00Z', currentStepExecutionCount: 2,
+    });
+    expect(loadRunSessionPage(tmpDir, slug, { maxBytes: 4096 })).toMatchObject({
+      currentStep: 'develop', currentStepStartedAt: '2026-10-14T00:05:00Z', currentStepExecutionCount: 2,
+    });
+  });
+
+  it('does not report a child step of an earlier parent step as the current step', async () => {
+    const { parseNdjsonLogContent: parse } = await vi.importActual<typeof import('../infra/fs/session.js')>('../infra/fs/session.js');
+    const slug = 'patrol-other-parent';
+    const runDir = createRunDir(tmpDir, slug, {
+      task: '子のワークフロー', workflow: 'default', status: 'running', startTime: '2026-10-14T00:00:00Z',
+      currentStep: 'review', currentIteration: 4, phase: 1,
+    });
+    writeFileSync(join(runDir, 'logs', 'session.jsonl'), [
+      { type: 'workflow_start', task: '子のワークフロー', workflowName: 'default', startTime: '2026-10-14T00:00:00Z' },
+      { type: 'step_start', step: 'fix', persona: 'coder', iteration: 3, workflow: 'development-core', timestamp: '2026-10-14T00:05:00Z',
+        stack: [
+          { workflow: 'default', workflow_ref: 'builtin:default', step: 'develop', kind: 'workflow_call', occurrence: 1 },
+          { workflow: 'development-core', workflow_ref: 'builtin:development-core', step: 'fix', kind: 'agent', occurrence: 1 },
+        ] },
+    ].map((record) => JSON.stringify(record)).join('\n'));
+    mockParseNdjsonLogContent.mockImplementationOnce(parse);
+    expect(loadRunSessionContext(tmpDir, slug).currentStepStartedAt).toBeUndefined();
+    expect(loadRunSessionPage(tmpDir, slug, { maxBytes: 4096 }).currentStepStartedAt).toBeNull();
+  });
+
+  it('preserves complete task strings for the ordinary reader and prompt formatter', () => {
+    const slug = 'task-text-run';
+    for (const task of ['Short task', '日本語'.repeat(10000)]) {
+      createRunDir(tmpDir, slug, { task, workflow: 'default', status: 'completed', startTime: '2026-02-01T00:00:00.000Z' });
+      const context = loadRunSessionContext(tmpDir, slug);
+      expect(context.task).toBe(task);
+      expect(formatRunSessionForPrompt(context).runTask).toBe(task);
+    }
   });
 
   it('should load context with step logs and reports', () => {
@@ -979,6 +1063,7 @@ describe('loadRunSessionContext', () => {
         persona: 'reviewer',
         status: 'completed',
         content: 'Safe log',
+        timestamp: '2026-02-01T00:01:00.000Z',
       },
     ]);
     expect(context.reports).toEqual([
@@ -1150,6 +1235,7 @@ describe('loadRunSessionContext', () => {
         persona: 'coder',
         status: 'completed',
         content: 'Loaded the main session log',
+        timestamp: '2026-02-01T00:01:00.000Z',
       },
     ]);
   });

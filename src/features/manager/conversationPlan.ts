@@ -1,14 +1,18 @@
 import { resolveConfigValue, resolveNonWorkflowProviderOptions } from '../../infra/config/index.js';
 import { resolveAssistantProviderModel } from '../interactive/assistantConfig.js';
 import { getProvider } from '../../infra/providers/index.js';
-import { resolveRequiredReadOnlyCapabilities } from '../../infra/providers/requiredCapabilities.js';
+import { getGlobalConfigDir, getProjectConfigDir } from '../../infra/config/paths.js';
+import { resolveInvocationRuntimeProviderFileWithOrigins } from '../../infra/config/runtime-provider/invocation.js';
+import { resolveInternalAgentMcpServers } from '../../infra/config/runtime-provider/mcp-assignment.js';
 import { resolveFacetByName, resolveFacetByNameWithSource, resolveRefToContent } from '../../infra/config/loaders/resource-resolver.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
 import type { McpServerConfig, StepProviderOptions } from '../../core/models/index.js';
 import type { Provider, ProviderType } from '../../infra/providers/index.js';
-import { TAKT_MCP_MANAGER_TOOL_NAMES } from '../mcp/server.js';
-import { TAKT_MANAGER_MCP_SERVER_NAME } from './managerMcp.js';
 import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
+import { resolveRuntimeManagerPermissionJudgeProvider } from '../../infra/config/runtime-provider/internal-agents.js';
+import type { ManagerPermissionJudgePlan } from './toolPermissionJudge.js';
+import { withManagerReadScope } from './readScopeProvider.js';
+import { supportsManagerPermissionJudge } from './permissionJudgeSupport.js';
 
 export interface ManagerConversationContext {
   provider: Provider;
@@ -21,9 +25,9 @@ export interface ManagerConversationContext {
 
 export interface ManagerConversationPlan {
   ctx: ManagerConversationContext;
+  permissionJudge?: ManagerPermissionJudgePlan;
   strategy: {
     systemPrompt: string;
-    allowedTools: string[];
   };
 }
 
@@ -39,10 +43,16 @@ export function createManagerConversationPlan(
   const configured = resolved.runtimeManaged
     ? resolved.providerOptions
     : resolveNonWorkflowProviderOptions(cwd, undefined, undefined, resolved.provider);
-  const restrictions = resolveRequiredReadOnlyCapabilities(
-    'manager', cwd, context, resolved.provider, provider, configured,
-    TAKT_MCP_MANAGER_TOOL_NAMES.map((name) => `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${name}`),
-  );
+  if (!provider.supportsStructuredOutput) {
+    throw new Error(`Provider "${resolved.provider}" does not support manager structured output`);
+  }
+  if (!provider.supportedMcpTransports?.has('stdio')) {
+    throw new Error(`Provider "${resolved.provider}" does not support manager stdio MCP`);
+  }
+  const { runtimeFile } = resolveInvocationRuntimeProviderFileWithOrigins({
+    globalConfigDir: getGlobalConfigDir(), projectConfigDir: getProjectConfigDir(cwd),
+  });
+  const { servers } = resolveInternalAgentMcpServers(runtimeFile?.mcp, 'manager');
   const persona = resolveFacetByName('manager', 'personas', context);
   const policy = resolveFacetByName('manager', 'policies', context);
   const knowledge = resolveFacetByName('manager', 'knowledge', context);
@@ -51,10 +61,29 @@ export function createManagerConversationPlan(
   const instruction = instructionSource === undefined ? undefined
     : resolveRefToContent('manager', { manager: instructionSource }, cwd, 'instructions', context);
   if (persona === undefined || instruction === undefined || policy === undefined || knowledge === undefined) throw new Error('Manager facets are missing');
+  let permissionJudge: ManagerPermissionJudgePlan | undefined;
+  if (supportsManagerPermissionJudge(resolved.provider)) {
+    const seat = resolveRuntimeManagerPermissionJudgeProvider(cwd);
+    const judgeProvider = seat === undefined ? resolved.provider : seat.provider;
+    if (judgeProvider === undefined) throw new Error('Manager permission judge provider is not configured');
+    const judgePersona = resolveFacetByName('manager-permission-judge', 'personas', context);
+    const judgePolicy = resolveFacetByName('manager-permission-judge', 'policies', context);
+    if (judgePersona === undefined || judgePolicy === undefined) throw new Error('Manager permission judge facets are missing');
+    permissionJudge = {
+      resolution: {
+        provider: judgeProvider, model: seat === undefined ? resolved.model : seat.model,
+        providerOptions: (seat === undefined ? configured : seat.providerOptions) ?? {},
+      },
+      language: lang, systemPrompt: [judgePersona.trim(), judgePolicy.trim()].join('\n\n'),
+      managerPersona: persona, managerPolicy: policy,
+    };
+  }
   return {
+    ...(permissionJudge === undefined ? {} : { permissionJudge }),
     ctx: {
-      provider, providerType: resolved.provider, model: resolved.model, lang,
-      providerOptions: restrictions.providerOptions,
+      provider: withManagerReadScope(provider, cwd, getGlobalConfigDir(), managerConfig.sensitivePaths),
+      providerType: resolved.provider, model: resolved.model, lang,
+      providerOptions: configured, mcpServers: servers,
     },
     strategy: {
       systemPrompt: [
@@ -62,8 +91,8 @@ export function createManagerConversationPlan(
         `Repository: ${JSON.stringify(cwd)}`,
         `Default workflow: ${JSON.stringify(managerConfig.defaultWorkflow ?? null)}`,
         `Repository manager.main_merge: ${JSON.stringify(managerConfig.mainMerge)}`,
+        `Concurrency limit: ${resolveConfigValue(cwd, 'concurrency')}`,
       ].join('\n\n'),
-      allowedTools: restrictions.allowedTools,
     },
   };
 }

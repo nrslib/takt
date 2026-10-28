@@ -98,7 +98,7 @@ Verified against `resolveStepProviderModel` / `PROVIDER_MODEL_SOURCE_PRIORITY` a
 
 ### Worktree-isolated execution
 
-`worktree: true` runs a task in a clone created with `git clone --reference <main-repo> --dissociate` (plain `git clone` when the project is itself a linked worktree, or as fallback when the reference repo is shallow) — not a real git worktree, because Claude Code follows `.git`-file `gitdir:` pointers back to the main repo, which breaks isolation. Clones are ephemeral (auto-commit + push on success, deleted after), contain only tracked files, and cannot resume sessions (`cwd !== projectCwd`). `cwd` = clone path, `projectCwd` = repo root; reports go to `cwd/.takt/runs/{slug}/reports/`.
+`worktree: true` runs a task in a clone created with `git clone --reference <main-repo> --dissociate` (plain `git clone` when the project is itself a linked worktree, or as fallback when the reference repo is shallow) — not a real git worktree, because Claude Code follows `.git`-file `gitdir:` pointers back to the main repo, which breaks isolation. Clones are ephemeral (auto-commit + push on success, deleted after) and contain only tracked files. Within the same run, steps with the same persona, provider, and model resume the current clone's session unless `session: refresh` or provider fallback disables resuming. Sessions remain isolated from other clones and the project root. Starting a new attempt in an existing clone through retry, requeue, or instruct starts each persona fresh; later steps in that attempt resume its new session. `cwd` = clone path, `projectCwd` = repo root; reports go to `cwd/.takt/runs/{slug}/reports/`.
 
 ## Faceted Prompting
 

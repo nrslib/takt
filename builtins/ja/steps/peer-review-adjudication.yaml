@@ -6,12 +6,14 @@ params:
     type: facet_ref[]
     facet_kind: knowledge
 name: review-adjudication
+description: レビューの指摘を証拠と照合し、今回修正する対象を確定する
 capabilities: readonly
 tags:
   - adjudication
 edit: false
 persona: review-adjudicator
 policy:
+  - process-deviation
   - review-adjudication
   - architecture
   - takt

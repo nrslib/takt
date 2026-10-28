@@ -3,6 +3,7 @@ import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/
 import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
 import { CODEX_CONFIG_PROFILE_ENV, type CodexCallOptions } from './types.js';
 import { buildCodexSkillConfig } from './skill-config.js';
+import { CODEX_TOOL_PERMISSION_ENDPOINT_ENV, CODEX_TOOL_PERMISSION_TOKEN_ENV } from './tool-permission-hook-protocol.js';
 
 function removeCodexConfigProfileMarker(environment: Record<string, string>): void {
   for (const key of Object.keys(environment)) {
@@ -42,6 +43,10 @@ export function buildCodexSessionConfig(options: CodexCallOptions): {
     buildChildProcessEnv(),
     options.childProcessEnv,
   ) as Record<string, string>;
+  // Hook credentials are supplied only by its command, never by the Codex process environment.
+  for (const key of [CODEX_TOOL_PERMISSION_ENDPOINT_ENV, CODEX_TOOL_PERMISSION_TOKEN_ENV]) {
+    delete codexEnvironment[key];
+  }
   removeCodexConfigProfileMarker(codexEnvironment);
   if (options.configProfile !== undefined) {
     codexEnvironment[CODEX_CONFIG_PROFILE_ENV] = options.configProfile;
@@ -52,9 +57,13 @@ export function buildCodexSessionConfig(options: CodexCallOptions): {
     ...(options.reasoningEffort === undefined
       ? {}
       : { model_reasoning_effort: options.reasoningEffort }),
-    ...(options.fastMode === undefined
-      ? {}
-      : { features: { fast_mode: options.fastMode } }),
+    ...((options.fastMode !== undefined || options.internalAgentIsolation === 'strict-readonly') ? {
+      features: {
+        ...(codexSkillConfig?.features as Record<string, boolean> | undefined),
+        ...(options.fastMode === undefined ? {} : { fast_mode: options.fastMode }),
+        ...(options.internalAgentIsolation === 'strict-readonly' ? { hooks: false } : {}),
+      },
+    } : {}),
     model_reasoning_summary: 'auto',
     ...(shellPath === undefined
       ? {}

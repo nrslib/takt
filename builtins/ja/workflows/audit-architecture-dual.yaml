@@ -25,6 +25,7 @@ loop_monitors:
 
 steps:
   - name: plan
+    description: フロントエンドとバックエンドのモジュールと境界を列挙し、監査対象と優先順位を整理する
     tags:
       - plan
     persona: planner
@@ -50,6 +51,7 @@ steps:
         next: ABORT
 
   - name: audit
+    description: フロントエンドとバックエンドの監査対象を分担し、構造・依存関係・配線を並列に監査して結果を記録する
     tags:
       - review
     persona: architecture-reviewer
@@ -78,6 +80,7 @@ steps:
         next: supervise
 
   - name: supervise
+    description: フロントエンドとバックエンドの監査の網羅性と根拠を確認し、完了か再監査かを判定する
     tags:
       - review
       - supervise
@@ -102,6 +105,7 @@ steps:
         next: review
 
   - name: review
+    description: フロントエンドとバックエンドの未監査または根拠不足の箇所を再監査し、既存レポートへ結果を統合する
     tags:
       - review
     persona: architecture-reviewer

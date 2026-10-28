@@ -9,6 +9,7 @@ import type { PermissionUpdate, AgentDefinition, SandboxSettings } from '@anthro
 import type { PermissionMode, McpServerConfig } from '../../core/models/index.js';
 import type { AgentErrorKind, ProviderUsageSnapshot, RateLimitInfo } from '../../core/models/response.js';
 import type { ProviderImageAttachment } from '../providers/types.js';
+import type { AgentFailureCategory } from '../../shared/types/agent-failure.js';
 import type {
   StreamEvent as SharedStreamEvent,
   StreamCallback as SharedStreamCallback,
@@ -28,6 +29,10 @@ import type {
 
 export type { SandboxSettings };
 import type { PermissionResult } from '../../core/workflow/index.js';
+import type { ToolPermissionDecisionHandler } from '../../core/workflow/types.js';
+export type {
+  ToolPermissionDecisionRequest, ToolPermissionDecision, ToolPermissionDecisionHandler,
+} from '../../core/workflow/types.js';
 
 // Re-export PermissionResult for convenience
 export type { PermissionResult, PermissionUpdate };
@@ -84,6 +89,7 @@ export interface ClaudeResult {
   sessionId?: string;
   error?: string;
   errorKind?: AgentErrorKind;
+  failureCategory?: AgentFailureCategory;
   rateLimitInfo?: RateLimitInfo;
   interrupted?: boolean;
   /** All assistant text accumulated during execution (for status detection) */
@@ -102,6 +108,7 @@ export interface ClaudeResultWithQueryId extends ClaudeResult {
 /** Options for calling Claude (high-level, used by client/providers/agents) */
 export interface ClaudeCallOptions {
   cwd: string;
+  callerManagedSession?: true;
   strictToolAllowlist?: readonly string[];
   mcpOnlySideEffects?: readonly string[];
   abortSignal?: AbortSignal;
@@ -128,6 +135,7 @@ export interface ClaudeCallOptions {
   onActivity?: ProviderActivityCallback;
   /** Custom permission handler for interactive permission prompts */
   onPermissionRequest?: PermissionHandler;
+  onToolPermissionDecision?: ToolPermissionDecisionHandler;
   /** Custom handler for AskUserQuestion tool */
   onAskUserQuestion?: AskUserQuestionHandler;
   /** Bypass all permission checks */
@@ -149,6 +157,7 @@ export interface ClaudeCallOptions {
 /** Options for spawning a Claude SDK query (low-level, used by executor/process) */
 export interface ClaudeSpawnOptions {
   cwd: string;
+  callerManagedSession?: true;
   strictToolAllowlist?: readonly string[];
   mcpOnlySideEffects?: readonly string[];
   abortSignal?: AbortSignal;
@@ -182,6 +191,7 @@ export interface ClaudeSpawnOptions {
   onPermissionRequest?: PermissionHandler;
   /** Custom handler for AskUserQuestion tool */
   onAskUserQuestion?: AskUserQuestionHandler;
+  onToolPermissionDecision?: ToolPermissionDecisionHandler;
   /** Bypass all permission checks */
   bypassPermissions?: boolean;
   /** Anthropic API key to inject via env (bypasses CLI auth) */

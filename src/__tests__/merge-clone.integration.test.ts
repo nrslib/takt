@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowExecutionRequest } from '../features/tasks/execute/workflowExecutionApi.js';
+import type { WorkflowExecutionEvent } from '../features/tasks/execute/types.js';
 
 const mocks = vi.hoisted(() => ({ details: vi.fn(), status: vi.fn(), workflow: vi.fn(), logError: vi.fn(), agent: vi.fn(), comment: vi.fn() }));
 vi.mock('../infra/git/index.js', async (importOriginal) => ({
@@ -13,6 +14,10 @@ vi.mock('../infra/git/index.js', async (importOriginal) => ({
 }));
 vi.mock('../infra/github/pr.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()), fetchPrDetails: mocks.details, fetchPrStatus: mocks.status,
+}));
+vi.mock('../infra/github/issue.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/github/issue.js')>()),
+  checkGhCli: () => ({ available: true }),
 }));
 vi.mock('../agents/agent-usecases.js', () => ({ executeAgent: mocks.agent }));
 vi.mock('../agents/runner.js', () => ({ runAgent: vi.fn() }));
@@ -36,6 +41,9 @@ import { issueTellableRunningTask } from '../features/tasks/liveIntervention.js'
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { LiveInterventionFileStore } from '../infra/workflow/live-intervention-store.js';
 import { stageTaskSpecForExecution } from '../features/tasks/execute/taskSpecContext.js';
+import { createDefaultSystemStepServices } from '../infra/workflow/system/DefaultSystemStepServices.js';
+import { createInitialState } from '../core/workflow/engine/state-manager.js';
+import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 
 describe('Merge PR persistent clone ownership', () => {
   let root: string;
@@ -56,6 +64,10 @@ describe('Merge PR persistent clone ownership', () => {
     root = mkdtempSync(join(tmpdir(), 'takt-merge-clone-'));
     project = join(root, 'project');
     fork = join(root, 'fork.git');
+    const gitConfig = join(root, 'gitconfig');
+    writeFileSync(gitConfig, '');
+    vi.stubEnv('GIT_CONFIG_GLOBAL', gitConfig);
+    vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1');
     git(root, 'init', '--initial-branch=main', project);
     git(project, 'config', 'user.name', 'Merge Test');
     git(project, 'config', 'user.email', 'merge@example.com');
@@ -63,6 +75,7 @@ describe('Merge PR persistent clone ownership', () => {
     git(project, 'add', 'code.txt');
     git(project, 'commit', '-m', 'base');
     baseHead = git(project, 'rev-parse', 'HEAD');
+    git(root, 'config', '--file', gitConfig, `url.file://${project}.insteadOf`, 'git@github.com:org/repo.git');
     git(root, 'clone', '--bare', project, fork);
     const author = join(root, 'author');
     git(root, 'clone', fork, author);
@@ -112,6 +125,65 @@ describe('Merge PR persistent clone ownership', () => {
     return runMerge({ projectCwd: project, prNumber: 123, concurrency: 1,
       settings: resolveMergeSettings({ workflow: 'merge-review' }) });
   }
+  it.each(['Requeue', 'Retry'])('%sでもCLIの実行並列数から決まる取り込み直し上限を設定変更後まで保持する', async (mode) => {
+    mkdirSync(join(project, '.takt'), { recursive: true });
+    writeFileSync(join(project, '.takt', 'config.yaml'), 'provider: mock\nmerge:\n  concurrency: 2\n');
+    const execute = mocks.workflow.getMockImplementation()!;
+    const limits: unknown[] = [];
+    mocks.workflow.mockImplementation(async (request: WorkflowExecutionRequest) => {
+      const config = normalizeWorkflowConfig({ name: 'sync-observation', initial_step: 'sync', steps: [
+        { name: 'sync', mode: 'system', effects: [{ type: 'sync_with_root', pr: 123 }],
+          rules: [{ condition: 'when(true)', next: 'COMPLETE' }] },
+      ] }, project);
+      const state = createInitialState(config, { provider: 'mock', projectCwd: project });
+      state.stepIterations.set('sync', 1);
+      const service = createDefaultSystemStepServices({ cwd: request.cwd, projectCwd: project, task: request.task,
+        prExecutionContext: request.prExecutionContext, prGitOperations: request.prGitOperations });
+      const result = await service.executeEffect({ type: 'sync_with_root', pr: 123 }, { pr: 123 }, state);
+      expect(result).toMatchObject({ success: true, failed: false });
+      limits.push(result.resyncLimit);
+      return execute(request);
+    });
+    await runMerge({ projectCwd: project, prNumber: 123, concurrency: 5,
+      settings: resolveMergeSettings({ workflow: 'merge-review', concurrency: 2 }) });
+    const runner = new TaskRunner(project);
+    const failed = runner.listFailedTasks()[0]!;
+    writeFileSync(join(project, '.takt', 'config.yaml'), 'provider: mock\nmerge:\n  concurrency: 3\n');
+    if (mode === 'Requeue') {
+      runner.requeueTask(failed.name, ['failed']);
+    } else {
+      await persistFailedTaskRetry({ task: failed, projectDir: project, worktreePath: failed.worktreePath!,
+        startStep: undefined, retryNote: undefined, resumePoint: undefined, workflow: undefined,
+        taskDir: undefined, sourceRunSlug: null, restartPoint: undefined });
+    }
+    const claimed = runner.claimNextTasks(1)[0]!;
+    await executePersistedPrMergeTask(claimed, runner, project);
+    expect(mocks.workflow).toHaveBeenCalledTimes(2);
+    expect(limits).toEqual([4, 4]);
+    expect(mocks.workflow.mock.calls[1]![0].cwd).toBe(failed.worktreePath);
+  });
+  it('relays only child warning progress during a silent linked merge and preserves the merge result', async () => {
+    mkdirSync(join(project, '.takt'), { recursive: true });
+    writeFileSync(join(project, '.takt', 'config.yaml'), 'merge:\n  auto_start: true\n  workflow: merge-review\n');
+    const warning = { type: 'progress', level: 'warn', message: 'merge trace failed' } as const;
+    mocks.workflow.mockImplementationOnce(async (request: WorkflowExecutionRequest) => {
+      await request.eventSink?.({ type: 'run_started', runDirectory: request.cwd, reportDirectory: request.cwd, ndjsonLogPath: 'log' });
+      await request.eventSink?.({ type: 'output', outputType: 'text', message: warning.message });
+      await request.eventSink?.({ type: 'progress', message: 'ordinary progress' });
+      await request.eventSink?.(warning);
+      await request.eventSink?.({ type: 'completed', success: true });
+      return { success: true };
+    });
+    mocks.status.mockResolvedValue({ merged: true });
+    const events: WorkflowExecutionEvent[] = [];
+    await runLinkedMergeSafely(project, 'https://github.com/org/repo/pull/123', undefined, {
+      outputMode: 'silent', eventSink: (event) => { events.push(event); },
+    });
+    expect(mocks.workflow).toHaveBeenCalledOnce();
+    expect(events).toEqual([warning]);
+    expect(new TaskRunner(project).listAllTaskItems().filter((task) => task.kind === 'completed')).toHaveLength(1);
+  });
+
   it('同秒の再投入でもプロジェクト側の既存runを避け、保存値とtaskSpecを同じslugで実行する', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-02-16T01:02:03.000Z'));

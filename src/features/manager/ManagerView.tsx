@@ -1,377 +1,267 @@
-import { Box, Text, useApp, useInput, useStdout } from 'ink';
-import { useEffect, useRef, useState, type ReactElement } from 'react';
+import { basename } from 'node:path';
+import { Box, Text, useStdout } from 'ink';
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactElement } from 'react';
+import { useManagerAbortConfirmation, type ManagerAbortTarget } from './useManagerAbortConfirmation.js';
+import { useManagerQuestionAnswer, type SaveManagerAnswer } from './useManagerQuestionAnswer.js';
+import type { PendingQuestion } from './inquiryAnswer.js';
+import { useManagerSummaryApproval } from './useManagerSummaryApproval.js';
+import { MAKE_GOAL_COMMAND, useManagerInput } from './useManagerInput.js';
+import { ManagerAnswerDialog } from './ManagerAnswerDialog.js';
+import { ManagerAbortDialog } from './ManagerAbortDialog.js';
+import { ManagerSummaryDialog } from './ManagerSummaryDialog.js';
+import { ManagerHelp } from './ManagerHelp.js';
+import { ManagerSelectionDialog } from './ManagerSelectionDialog.js';
+import { isGoalSelectionCandidate, useManagerSelection, type ManagerSelectedTarget, type ManagerSelectionCommand } from './useManagerSelection.js';
+import { formatGoalName } from './goalDisplay.js';
+import type { ManagerExecutionContext } from './startupResolution.js';
+import type { ConversationIpcClient } from './conversationIpcClient.js';
+import type { ConversationCommand, OperationResult } from './conversationPort.js';
 import { PromptInput } from '../tui/PromptInput.js';
+import { resolveSlashCompletions } from '../tui/slashCompletion.js';
+import { useSlashCompletion } from '../tui/useSlashCompletion.js';
 import { TranscriptView, type TranscriptEntry } from '../tui/TranscriptEntryView.js';
 import { StatusLine } from '../tui/StatusLine.js';
-import { applyEditorKey, commitEditorInput, createEditorState } from '../tui/editorState.js';
-import { resolveEditorKey } from '../tui/editorKeys.js';
+import { createEditorState, type EditorState } from '../tui/editorState.js';
 import { FALLBACK_USER_MESSAGE_COLORS } from '../tui/terminalColors.js';
-import { toDisplayText } from '../tui/displayText.js';
+import { toDisplayText, toSingleLineText } from '../tui/displayText.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
-import type { ManagerConversationSession, PendingManagerSummary } from './conversationSession.js';
-import { readManagerDisplayEvents, type ManagerDisplayGoal } from './savedEvents.js';
-import { GoalIdSchema, type GoalQuestion } from '../../infra/goals/schema.js';
-import { isGoalPaused } from '../../infra/goals/state.js';
-import { GoalStore } from '../../infra/goals/store.js';
+import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
+import { measureWidth } from '../../shared/utils/grapheme.js';
 
-type PendingQuestion = { goalId: string; objective: string; question: GoalQuestion };
+const MANAGER_COMMANDS = [{ command: MAKE_GOAL_COMMAND, labelKey: 'manager.makeGoalDescription' }];
 
-function toDisplayBullet(item: string): string {
-  return `- ${toDisplayText(item).replace(/\n/g, '\n  ')}`;
-}
-
-export function ManagerView({ cwd, lang, session, initialDiagnostics, onExit, startup }: {
-  cwd: string; lang: 'en' | 'ja'; session: ManagerConversationSession; onExit: () => void;
-  initialDiagnostics: readonly string[];
-  startup?: { run: (signal: AbortSignal) => Promise<readonly string[]>; fail: (error: unknown) => void };
+export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, assignment }: {
+  assignment: ManagerExecutionContext['assignment'];
+  cwd: string; lang: 'en' | 'ja';
+  client: Pick<ConversationIpcClient, 'getSnapshot' | 'subscribe' | 'onOutput' | 'submit' | 'refresh' | 'close'>;
+  onExit: () => void; initialDiagnostics: readonly string[];
 }): ReactElement {
-  const [editor, setEditor] = useState(() => createEditorState(''));
-  const [entries, setEntries] = useState<TranscriptEntry[]>(() => initialDiagnostics.map((content) => ({
-    role: 'assistant', content: toDisplayText(content),
-  })));
-  const [pending, setPending] = useState<PendingManagerSummary | null>(null);
+  const snapshot = useSyncExternalStore(client.subscribe, client.getSnapshot);
+  const latest = useRef(snapshot);
+  latest.current = snapshot;
+  const editorRef = useRef(createEditorState(''));
+  const [editor, setEditor] = useState(editorRef.current);
+  const answerEditorRef = useRef(createEditorState(''));
+  const [answerEditor, setAnswerEditor] = useState(answerEditorRef.current);
+  const [entries, setEntries] = useState<TranscriptEntry[]>(() => initialDiagnostics.map((content) => ({ role: 'assistant', content: toDisplayText(content) })));
   const [approve, setApprove] = useState(false);
-  const [busy, setBusy] = useState(startup !== undefined);
-  const [questions, setQuestions] = useState<PendingQuestion[]>([]);
-  const [goals, setGoals] = useState<ManagerDisplayGoal[]>([]);
-  const [abortTarget, setAbortTarget] = useState<ManagerDisplayGoal | null>(null);
-  const [answerTarget, setAnswerTarget] = useState<{ pending: PendingQuestion; choice: number | null } | null>(null);
-  const active = useRef<AbortController | null>(null);
+  const [sending, setSending] = useState(false);
+  const submitting = useRef(false);
+  const [summarizing, setSummarizing] = useState(false);
+  const summaryOperation = useRef<string | null>(null);
+  const active = useRef(false);
   const registering = useRef(false);
   const selected = useRef(false);
-  const answerChoice = useRef<number | null>(null);
   const mounted = useRef(true);
-  const starting = useRef(startup !== undefined);
   const exiting = useRef(false);
   const displayed = useRef(new Set<string>());
-  const { waitUntilRenderFlush } = useApp();
+  const lastError = useRef<string | null>(null);
+  const pendingAnswer = useRef<{ text: string; operationId?: string } | null>(null);
+  const goalOperations = useRef(new Map<string, { kind: 'pause' | 'resume' | 'abort'; goal: ManagerAbortTarget['goal'] }>());
   const { stdout } = useStdout();
-  const contentWidth = Math.max(1, (stdout.columns ?? 80) - 6);
+  const [columns, setColumns] = useState(() => stdout.columns);
+  useEffect(() => {
+    const handleResize = (): void => { setColumns(stdout.columns); };
+    stdout.on('resize', handleResize);
+    return () => { stdout.off('resize', handleResize); };
+  }, [stdout]);
+  const contentWidth = Math.max(1, (columns ?? 80) - 6);
+  const bodyWidth = Math.max(1, (columns ?? 80) - 2);
   const ja = lang === 'ja';
+  const resetChoice = (): void => { selected.current = false; setApprove(false); };
+  const abortConfirmation = useManagerAbortConfirmation({ selected, setApprove, resetChoice });
+  const { abortTarget, setAbortTarget } = abortConfirmation;
+  const questionAnswer = useManagerQuestionAnswer(bodyWidth);
+  const { answerTarget, clearAnswer, beginAnswer } = questionAnswer;
+  const selection = useManagerSelection();
+  const slashCompletion = useSlashCompletion(resolveSlashCompletions(editor.text, lang, {}, MANAGER_COMMANDS));
+  const state = snapshot.state;
+  const busy = sending || state?.running != null;
+  active.current = busy;
+  const canApprove = snapshot.connection === 'connected' && snapshot.readStatus === 'complete' && !busy;
+  const append = (content: string): void => {
+    if (mounted.current) setEntries((previous) => [...previous, { role: 'assistant', content: toDisplayText(sanitizeSensitiveText(content)) }]);
+  };
+  const send = async (command: ConversationCommand, onAccepted?: (id: string) => void): Promise<string | null> => {
+    if (submitting.current && command.kind !== 'abort_turn') { append(getLabel('manager.conversation.busy', lang)); return null; }
+    submitting.current = true;
+    setSending(true);
+    try {
+      const result = await client.submit(command, onAccepted);
+      if (result.kind === 'accepted') return result.operationId;
+      append(result.kind === 'error' ? result.message : getLabel('manager.conversation.busy', lang));
+      if (result.kind === 'error') void client.refresh().catch((error: unknown) => append(getErrorMessage(error)));
+      return null;
+    } catch (error) { append(getErrorMessage(error)); return null; }
+    finally { submitting.current = false; if (mounted.current) setSending(false); }
+  };
+  const summaryApproval = useManagerSummaryApproval({ selected, setApprove, resetChoice,
+    dismissSummary: async (revision) => {
+      if (await send({ kind: 'dismiss_summary', revision }) === null) {
+        setPending(client.getSnapshot().state?.pending ?? null);
+      }
+    } });
+  const { pending, setPending } = summaryApproval;
+  const edit = (next: EditorState): void => { editorRef.current = next; setEditor(next); };
+  const editAnswer = (next: EditorState): void => { answerEditorRef.current = next; setAnswerEditor(next); };
+  const currentAssignment = snapshot.items.find((item) => item.kind === 'assignment')?.assignment ?? assignment;
+  const goals = snapshot.items.flatMap((item) => item.kind === 'goal' ? [item.goal] : []);
+  const questions: PendingQuestion[] = snapshot.items.flatMap((item): PendingQuestion[] => {
+    if (item.kind !== 'inquiry') return [];
+    const { target, question, objective } = item.inquiry;
+    if (target.goalId === null) return [{ ...target, question }];
+    if (objective === undefined) throw new Error('Missing inquiry objective');
+    return [{ ...target, question, objective }];
+  });
+  const display = { questions, goals };
+  useEffect(() => {
+    setPending(state?.pending ?? null);
+    resetChoice();
+  }, [state?.revision, state?.pending]);
+  useEffect(() => {
+    if (snapshot.error !== null && snapshot.error !== lastError.current) append(snapshot.error);
+    lastError.current = snapshot.error;
+    for (const item of snapshot.items) {
+      if (item.kind !== 'display_event' || displayed.current.has(item.event.id)) continue;
+      displayed.current.add(item.event.id);
+      append(item.event.message);
+    }
+    if (snapshot.readStatus === 'complete') selection.refresh(display);
+  }, [snapshot.items, snapshot.readStatus, snapshot.error]);
+  const showResult = (result: OperationResult, operationId: string): void => {
+    const goalOperation = goalOperations.current.get(operationId);
+    goalOperations.current.delete(operationId);
+    if (result.kind === 'goal_registered') append(getLabel('manager.goalRegistered', lang, {
+      name: formatGoalName(result.goal.objective), id: result.goal.id, branch: result.goal.branch,
+    }));
+    else append(goalOperation !== undefined && result.kind === 'reply'
+      ? formatGoalName(goalOperation.goal.objective) + '\n' + result.message : result.message);
+    if (goalOperation?.kind === 'abort') setAbortTarget(result.kind === 'error'
+      ? { goal: goalOperation.goal, retry: true } : null);
+    if (summaryOperation.current === operationId) {
+      if (result.kind === 'reply' && latest.current.state?.pending == null) append(getLabel('manager.goSummaryUnavailable', lang));
+      summaryOperation.current = null;
+      setSummarizing(false);
+    }
+    if (result.kind === 'error' && result.permissionAppended) append(getLabel('manager.conversation.permission_appended', lang));
+    if (result.kind === 'error' && result.answerSaved) append(getLabel('manager.conversation.answer_saved', lang));
+    if ('answerSaved' in result && result.answerSaved && pendingAnswer.current?.operationId === operationId) {
+      clearAnswer();
+      editAnswer(createEditorState(''));
+      const text = pendingAnswer.current.text;
+      setEntries((previous) => [...previous, { role: 'user', content: toDisplayText(text) }]);
+      pendingAnswer.current = null;
+    }
+    registering.current = false;
+    void client.refresh().catch((error: unknown) => append(getErrorMessage(error)));
+  };
   useEffect(() => {
     mounted.current = true;
-    void (async () => {
-      if (startup !== undefined) {
-        const controller = new AbortController();
-        active.current = controller;
-        try {
-          // Recovery can call the provider too, so stdout must contain the notices first.
-          await waitUntilRenderFlush();
-          if (!mounted.current || controller.signal.aborted) return;
-          const diagnostics = await startup.run(controller.signal);
-          if (!mounted.current || controller.signal.aborted) return;
-          for (const diagnostic of diagnostics) append(diagnostic);
-        } catch (error) {
-          if (!controller.signal.aborted) startup.fail(error);
-          return;
-        } finally {
-          if (active.current === controller) active.current = null;
-          starting.current = false;
-          if (mounted.current) setBusy(false);
-        }
+    const unsubscribe = client.onOutput((output) => {
+      if (output.kind === 'result') showResult(output.result, output.operationId);
+      else if (output.kind === 'progress' || output.kind === 'reply' || output.kind === 'notice') append(output.message);
+    });
+    const timer = setInterval(() => {
+      if (latest.current.connection === 'connected' && latest.current.readStatus !== 'reading') {
+        void client.refresh().catch((error: unknown) => append(getErrorMessage(error)));
       }
-      await refreshEvents();
-    })().catch((error: unknown) => append(getErrorMessage(error)));
-    return () => { mounted.current = false; active.current?.abort(); };
-  }, []);
-  const append = (content: string): void => {
-    if (mounted.current) setEntries((previous) => [...previous, { role: 'assistant', content: toDisplayText(content) }]);
-  };
-  const refreshEvents = async (): Promise<PendingQuestion[]> => {
-    const { events, diagnostics, questions: savedQuestions, goals: savedGoals } = await readManagerDisplayEvents(cwd);
-    if (mounted.current) { setQuestions(savedQuestions); setGoals(savedGoals); }
-    for (const event of [...events, ...diagnostics]) {
-      if (displayed.current.has(event.id) || !mounted.current) continue;
-      displayed.current.add(event.id);
-      append(event.message);
-    }
-    return savedQuestions;
-  };
-  const resetChoice = (): void => { selected.current = false; setApprove(false); };
-  const submit = async (text: string): Promise<void> => {
-    const controller = new AbortController();
-    active.current = controller;
-    setBusy(true);
-    setPending(null);
-    resetChoice();
-    setEntries((previous) => [...previous, { role: 'user', content: toDisplayText(text) }]);
-    try {
-      const savedQuestions = await refreshEvents();
-      const command = !/[\r\n]/u.test(text) ? /^\/(pause|resume|abort)(?:[\t ]+(.*))?$/u.exec(text) : null;
-      if (command !== null) {
-        const goalId = command[2]?.trim();
-        if (goalId === undefined || goalId === '') append(getLabel('manager.goalExecutionUsage', lang));
-        else if (!GoalIdSchema.safeParse(goalId).success) append(getLabel('manager.invalidGoalId', lang));
-        else if (command[1] === 'abort') {
-          const goal = await new GoalStore(cwd).get(goalId);
-          if (active.current !== controller || !mounted.current) return;
-          if (goal.status === 'completed' && goal.executionStatus !== 'aborted') {
-            append(getLabel('manager.completedGoalCannotAbort', lang, { goalId }));
-          } else setAbortTarget(goal);
-        }
-        else {
-          const options = { goalId, abortSignal: controller.signal };
-          const result = await (command[1] === 'pause' ? session.pauseGoal(options) : session.resumeGoal(options));
-          if (active.current !== controller || !mounted.current) return;
-          append(result.message);
-          await refreshEvents();
-        }
-        return;
-      }
-      if (text.startsWith('/answer ')) {
-        const questionId = text.slice('/answer '.length).trim();
-        const target = savedQuestions.find((saved) => saved.question.id === questionId);
-        if (target === undefined) append(ja ? '回答待ちの質問が見つかりません' : 'Pending question not found');
-        else {
-          answerChoice.current = target.question.options === undefined ? null : 0;
-          setAnswerTarget({ pending: target, choice: answerChoice.current });
-        }
-        return;
-      }
-      const result = await session.handleUserMessage({ text, abortSignal: controller.signal });
-      if (active.current !== controller || !mounted.current) return;
-      append(result.message);
-      setPending(session.getPendingSummary());
-      await refreshEvents();
-    } catch (error) {
-      append(getErrorMessage(error));
-    } finally {
-      if (active.current === controller) {
-        active.current = null;
-        if (mounted.current) setBusy(false);
-      }
-    }
-  };
-  const abortGoal = async (goalId: string): Promise<void> => {
-    const controller = new AbortController();
-    active.current = controller;
-    setBusy(true);
-    setAbortTarget(null);
-    resetChoice();
-    try {
-      const result = await session.abortGoal({ goalId, abortSignal: controller.signal });
-      append(result.message);
-      await refreshEvents();
-    } catch (error) { append(getErrorMessage(error)); }
-    finally {
-      if (active.current === controller) {
-        active.current = null;
-        if (mounted.current) setBusy(false);
-      }
-    }
-  };
-  const saveAnswer = async (target: PendingQuestion, text: string): Promise<void> => {
-    const controller = new AbortController();
-    active.current = controller;
-    setBusy(true);
-    setAnswerTarget(null);
-    setEntries((previous) => [...previous, { role: 'user', content: toDisplayText(text) }]);
-    try {
-      const result = await session.answerQuestion({
-        goalId: target.goalId, questionId: target.question.id, text, abortSignal: controller.signal,
-      });
-      append(result.message);
-      await refreshEvents();
-    } catch (error) { append(getErrorMessage(error)); }
-    finally {
-      if (active.current === controller) {
-        active.current = null;
-        if (mounted.current) setBusy(false);
-      }
-    }
-  };
+    }, 500);
+    return () => { mounted.current = false; clearInterval(timer); unsubscribe(); client.close(); };
+  }, [client]);
   const register = async (revision: number): Promise<void> => {
+    const current = client.getSnapshot();
+    if (current.connection !== 'connected' || current.readStatus !== 'complete'
+      || current.state?.running != null || submitting.current || current.state?.pending?.revision !== revision) return;
     registering.current = true;
-    setBusy(true);
-    setPending(null);
     resetChoice();
-    try {
-      const result = await session.approveSummary(revision);
-      append(result.kind === 'goal_registered'
-        ? `${ja ? 'ゴール登録完了' : 'Goal registered'}: ${result.goal.id}\n${result.goal.branch}`
-        : result.message);
-      if (result.kind === 'goal_registered') append(result.turn.message);
-      await refreshEvents();
-    } catch (error) {
-      append(getErrorMessage(error));
-    } finally {
-      registering.current = false;
-      if (mounted.current) setBusy(false);
-    }
+    if (await send({ kind: 'approve_summary', revision }) === null) registering.current = false;
   };
-  useInput((input, key) => {
-    if (exiting.current || registering.current) return;
-    if (key.ctrl && input === 'c') {
-      exiting.current = true;
-      active.current?.abort();
-      onExit();
-      return;
-    }
-    if (starting.current) return;
-    if (active.current !== null) {
-      if (key.escape) {
-        active.current.abort();
-        active.current = null;
-        setPending(null);
-        setBusy(false);
-      }
-      return;
-    }
-    if (abortTarget !== null) {
-      if (key.escape) { setAbortTarget(null); resetChoice(); return; }
-      if (key.upArrow || key.downArrow) {
-        selected.current = key.upArrow;
-        setApprove(selected.current);
-      } else if (key.return) {
-        if (selected.current) void abortGoal(abortTarget.id);
-        else { setAbortTarget(null); resetChoice(); }
-      }
-      return;
-    }
-    if (answerTarget !== null) {
-      if (key.escape) { setAnswerTarget(null); return; }
-      const options = answerTarget.pending.question.options ?? [];
-      if (answerChoice.current !== null && (key.upArrow || key.downArrow)) {
-        const next = answerChoice.current + (key.upArrow ? -1 : 1);
-        answerChoice.current = Math.max(0, Math.min(options.length, next));
-        setAnswerTarget({ ...answerTarget, choice: answerChoice.current });
-        return;
-      }
-      if (key.return && answerChoice.current !== null) {
-        if (answerChoice.current === options.length) {
-          answerChoice.current = null;
-          setAnswerTarget({ ...answerTarget, choice: null });
-        } else void saveAnswer(answerTarget.pending, options[answerChoice.current]!);
-        return;
-      }
-      if (key.return && !(key.shift || key.meta) && editor.text.trim() !== '') {
-        setEditor(commitEditorInput(editor, editor.text));
-        void saveAnswer(answerTarget.pending, editor.text);
-        return;
-      }
-      if (answerChoice.current !== null) {
-        answerChoice.current = null;
-        setAnswerTarget({ ...answerTarget, choice: null });
-      }
-    }
-    if (pending !== null) {
-      if (key.upArrow || key.downArrow) {
-        selected.current = key.upArrow;
-        setApprove(selected.current);
-        return;
-      }
-      if (key.return) {
-        if (selected.current) void register(pending.revision);
-        else { session.dismissSummary(pending.revision); setPending(null); resetChoice(); }
-        return;
-      }
-      if (key.escape) { session.dismissSummary(pending.revision); setPending(null); resetChoice(); return; }
-      // Typing resumes conversation and leaves the summary unavailable to UI approval.
-      session.dismissSummary(pending.revision);
-      setPending(null);
-      resetChoice();
-    }
-    if (key.return) {
-      if (key.shift || key.meta) {
-        setEditor((previous) => applyEditorKey(previous, { kind: 'newline' }));
-      } else if (editor.text.trim() !== '') {
-        setEditor(commitEditorInput(editor, editor.text));
-        void submit(editor.text);
-      }
-      return;
-    }
-    const editKey = resolveEditorKey(input, key, contentWidth);
-    if (editKey !== null) setEditor((previous) => applyEditorKey(previous, editKey));
+  const submit = (text: string): void => {
+    const summaryRequest = text.trim() === MAKE_GOAL_COMMAND;
+    if (!summaryRequest) setEntries((previous) => [...previous, { role: 'user', content: toDisplayText(text) }]);
+    else setSummarizing(true);
+    resetChoice();
+    void send({ kind: 'message', text: summaryRequest ? getLabel('manager.goSummaryRequest', lang) : text },
+      summaryRequest ? (id) => { summaryOperation.current = id; } : undefined)
+      .then((id) => { if (id === null && summaryRequest) setSummarizing(false); });
+  };
+  const changeGoal = async (kind: 'pause' | 'resume' | 'abort', target: ManagerAbortTarget['goal'], confirmed = false, retry = false): Promise<void> => {
+    const current = retry ? target : goals.find((goal) => goal.id === target.id && isGoalSelectionCandidate(kind, goal));
+    if (current === undefined) { append(getLabel('manager.selectionChanged', lang)); return; }
+    if (kind === 'abort' && !confirmed) { setAbortTarget({ goal: current, retry: false }); return; }
+    await send({ kind: kind === 'pause' ? 'pause_goal' : kind === 'resume' ? 'resume_goal' : 'abort_goal', goalId: current.id }, (id) => {
+      goalOperations.current.set(id, { kind, goal: current });
+      setAbortTarget(null);
+    });
+  };
+  const selectTarget = (target: ManagerSelectedTarget): void => {
+    if (target.kind === 'answer') {
+      editAnswer(createEditorState(''));
+      beginAnswer(target.target, currentAssignment, target.onCancel);
+    } else void changeGoal(target.kind, target.target);
+  };
+  const saveAnswer: SaveManagerAnswer = async (target, answer, permission) => {
+    pendingAnswer.current = { text: answer.text ?? '' };
+    const operationId = await send({ kind: 'answer_question', target: target.goalId === null
+      ? { goalId: null, owner: target.owner } : { goalId: target.goalId, repositoryDirectory: target.repositoryDirectory },
+      questionId: target.question.id, answer, ...(permission === undefined ? {} : { permission }) },
+    (id) => { if (pendingAnswer.current !== null) pendingAnswer.current.operationId = id; });
+    if (operationId === null) pendingAnswer.current = null;
+  };
+  const openMenu = (kind: ManagerSelectionCommand): void => {
+    if (kind === 'answer' && registering.current) return;
+    clearAnswer(); setAbortTarget(null); resetChoice();
+    if (!selection.open(kind, display)) append(getLabel('manager.selectionEmpty.' + kind, lang));
+    void client.refresh().catch((error: unknown) => append(getErrorMessage(error)));
+  };
+  const visibleEditor = answerTarget === null ? editor : answerEditor;
+  const conversationInput = answerTarget === null && selection.selection === null && abortTarget === null;
+  const summaryVisible = pending !== null && selection.selection === null && answerTarget === null && abortTarget === null;
+  const selectingSummary = summaryVisible && editor.text === '';
+  const repositoryDirectories = currentAssignment.repositoryDirectories;
+  const startupRepositoryDirectory = assignment.startupRepositoryDirectory ?? cwd;
+  const headingRepository = repositoryDirectories.includes(startupRepositoryDirectory) ? startupRepositoryDirectory : repositoryDirectories[0];
+  const assignmentHeading = headingRepository === undefined ? getLabel('manager.selectionEmpty.repository', lang)
+    : getLabel(repositoryDirectories.length > 1 ? 'manager.assignmentHeadingMultiple' : 'manager.assignmentHeading', lang, {
+      name: toSingleLineText(basename(headingRepository)), count: String(repositoryDirectories.length - 1),
+    });
+  const inputHint = getLabel(selectingSummary ? 'manager.summaryInputHint' : 'manager.inputHint', lang);
+  const hintSeparator = selectingSummary ? ' / ' : '  ';
+  const hintItems = inputHint.split(hintSeparator);
+  useManagerInput({
+    exiting, active, registering, editorRef: answerTarget === null ? editorRef : answerEditorRef,
+    edit: answerTarget === null ? edit : editAnswer, submit, onExit, contentWidth, canApprove,
+    abortTurn: () => { const running = latest.current.state?.running; if (running != null) void send({ kind: 'abort_turn', operationId: running.operationId }); },
+    abortConfirmation, questionAnswer, summaryApproval, selection, selectTarget,
+    abortGoal: (target) => changeGoal('abort', target.goal, true, target.retry), saveAnswer, register, openMenu,
+    slashCompletion,
+    onInputUnavailable: () => append(getLabel('manager.inputUnavailableDuringAbort', lang)),
   });
-  return (
-    <Box flexDirection="column">
-      <Text bold>{`manager — ${ja ? '実験的機能' : 'Experimental'}`}</Text>
-      <Text>{toDisplayText(cwd)}</Text>
-      <TranscriptView entries={entries} userMessageColors={FALLBACK_USER_MESSAGE_COLORS} />
-      {goals.some((goal) => goal.executionStatus === 'aborted') && (
-        <Box borderStyle="round" flexDirection="column">
-          <Text bold>{getLabel('manager.abortedGoals', lang)}</Text>
-          {goals.filter((goal) => goal.executionStatus === 'aborted').map((goal) => (
-            <Text key={goal.id}>{toDisplayText(`${goal.id}: ${goal.objective}`)}</Text>
-          ))}
-        </Box>
-      )}
-      {goals.some(isGoalPaused) && (
-        <Box borderStyle="round" flexDirection="column">
-          <Text bold>{getLabel('manager.pausedGoals', lang)}</Text>
-          {goals.filter(isGoalPaused).map((goal) => (
-            <Box key={goal.id} flexDirection="column">
-              <Text>{toDisplayText(`${goal.id}: ${goal.objective}`)}</Text>
-              <Text dimColor>{`/resume ${goal.id}`}</Text>
-            </Box>
-          ))}
-        </Box>
-      )}
-      {questions.length > 0 && (
-        <Box borderStyle="round" flexDirection="column">
-          <Text bold>{ja ? '回答待ちの質問' : 'Pending questions'}</Text>
-          {questions.map(({ goalId, objective, question }) => (
-            <Box key={JSON.stringify([goalId, question.id])} flexDirection="column">
-              <Text>{toDisplayText(`${goalId}: ${objective}\n${question.id}: ${question.body}`)}</Text>
-              {question.options !== undefined && <Text>{toDisplayText(question.options.join(' / '))}</Text>}
-              {question.recommendation !== undefined && <Text>{`${ja ? '推奨' : 'Recommendation'}: ${toDisplayText(question.recommendation)}`}</Text>}
-              <Text dimColor>{toDisplayText(`/answer ${question.id}`)}</Text>
-            </Box>
-          ))}
-        </Box>
-      )}
-      {answerTarget !== null && (
-        <Box borderStyle="round" flexDirection="column">
-          <Text bold>{toDisplayText(answerTarget.pending.question.body)}</Text>
-          {answerTarget.choice !== null ? (
-            <>
-              {answerTarget.pending.question.options?.map((option, index) => (
-                <Text key={index} inverse={answerTarget.choice === index}>{toDisplayText(option)}</Text>
-              ))}
-              <Text inverse={answerTarget.choice === answerTarget.pending.question.options?.length}>
-                {ja ? '自由記述' : 'Free text'}
-              </Text>
-              <Text dimColor>{ja ? '↑↓ 選択 / Enter 決定 / Esc 戻る' : '↑↓ Choose / Enter Select / Esc Back'}</Text>
-            </>
-          ) : <Text>{ja ? '回答を入力してください' : 'Enter your answer'}</Text>}
-        </Box>
-      )}
-      {abortTarget !== null && (
-        <Box borderStyle="round" flexDirection="column">
-          <Text bold>{getLabel('manager.abortConfirmation', lang)}</Text>
-          <Text>{toDisplayText(`${abortTarget.id}: ${abortTarget.objective}`)}</Text>
-          <Text>{getLabel('manager.abortWarning', lang)}</Text>
-          <Text inverse={approve}>{getLabel('manager.confirmAbort', lang)}</Text>
-          <Text inverse={!approve}>{getLabel('manager.cancelAbort', lang)}</Text>
-          <Text dimColor>{getLabel('manager.abortChoiceHint', lang)}</Text>
-        </Box>
-      )}
-      {pending !== null && (
-        <Box borderStyle="round" flexDirection="column">
-          <Text bold>{ja ? '登録する要約' : 'Summary to register'}</Text>
-          <Text>{toDisplayText(pending.summary.objective)}</Text>
-          <Text>{`${ja ? '範囲外' : 'Out of scope'}:`}</Text>
-          {pending.summary.outOfScope.map((item, index) => <Text key={index}>{toDisplayBullet(item)}</Text>)}
-          <Text>{`${ja ? '受け入れ条件' : 'Acceptance criteria'}:`}</Text>
-          {pending.summary.acceptanceCriteria.map((item, index) => <Text key={index}>{toDisplayBullet(item)}</Text>)}
-          {pending.summary.startBranch !== undefined && <Text>{`startBranch: ${toDisplayText(pending.summary.startBranch)}`}</Text>}
-          {pending.summary.integrationBranch !== undefined && <Text>{`integrationBranch: ${toDisplayText(pending.summary.integrationBranch)}`}</Text>}
-          <Text inverse={approve}>{ja ? '登録を承認' : 'Approve registration'}</Text>
-          <Text inverse={!approve}>{ja ? '会話を続ける' : 'Continue conversation'}</Text>
-          <Text dimColor>{ja ? '↑ 承認 / ↓ 続行 / Enter 決定' : '↑ Approve / ↓ Continue / Enter Select'}</Text>
-        </Box>
-      )}
-      <Box flexDirection="column" flexShrink={0}>
-        <Text dimColor>{getLabel('manager.goalExecutionUsage', lang)}</Text>
-        <Text color="yellow">{getLabel('manager.experimentalNotice', lang)}</Text>
-        <Text color="yellow">{getLabel('manager.costNotice', lang)}</Text>
-      </Box>
-      <StatusLine busy={busy} label={ja ? '処理中' : 'Working'} streamed="" />
-      <PromptInput text={editor.text} cursor={editor.cursor} contentWidth={contentWidth}
-        placeholder={answerTarget === null ? (ja ? 'ゴールを相談してください' : 'Discuss your goal') : (ja ? '回答を入力してください' : 'Enter your answer')}
-        hint="Enter: send / Shift+Enter: newline / Esc: interrupt / Ctrl+C: exit"
-        completions={[]} completionIndex={0} disabled={busy || pending !== null || abortTarget !== null} />
-    </Box>
-  );
+  return <Box flexDirection="column">
+    <Text bold wrap="truncate-middle">{assignmentHeading}</Text>
+    <Text>{getLabel('manager.counts', lang, { goals: String(goals.filter((goal) => isGoalSelectionCandidate('abort', goal)).length), questions: String(questions.length) })}</Text>
+    <TranscriptView entries={entries} userMessageColors={FALLBACK_USER_MESSAGE_COLORS} />
+    {snapshot.connection !== 'connected' && <Text>{getLabel('manager.conversation.disconnected', lang)}</Text>}
+    {snapshot.readStatus === 'reading' && <Text>{getLabel('manager.conversation.reading', lang)}</Text>}
+    {snapshot.readStatus === 'incomplete' && <Text>{getLabel('manager.conversation.incomplete', lang)}</Text>}
+    {state?.interrupted && <Text>{getLabel('manager.conversation.interrupted', lang)}</Text>}
+    {selection.selection !== null && <ManagerSelectionDialog selection={selection.selection} lang={lang} />}
+    {answerTarget !== null && selection.selection === null && <ManagerAnswerDialog answerTarget={answerTarget} bodyText={questionAnswer.bodyText} lang={lang} />}
+    {abortTarget !== null && selection.selection === null && <ManagerAbortDialog abortTarget={abortTarget.goal} retry={abortTarget.retry} approve={approve} lang={lang} />}
+    {summaryVisible && <ManagerSummaryDialog pending={pending} approve={approve} ja={ja} />}
+    <ManagerHelp lang={lang} />
+    <StatusLine busy={busy} label={summarizing ? getLabel('manager.summaryWorking', lang) : ja ? '処理中' : 'Working'} streamed="" />
+    <PromptInput text={visibleEditor.text} cursor={visibleEditor.cursor} contentWidth={contentWidth}
+      placeholder={answerTarget === null ? (ja ? 'ゴールを相談してください' : 'Discuss your goal') : (ja ? '回答を入力してください' : 'Enter your answer')}
+      hint={inputHint} showHint={false}
+      completions={conversationInput ? slashCompletion.completions : []}
+      completionIndex={slashCompletion.completionIndex}
+      disabled={selection.selection !== null || abortTarget !== null || selectingSummary} />
+    <Box flexWrap="wrap">{hintItems.map((item, index) => {
+      const text = item + (index < hintItems.length - 1 ? hintSeparator : '');
+      return <Box key={item} width={measureWidth(text)} flexShrink={0}><Text dimColor>{text}</Text></Box>;
+    })}</Box>
+    {conversationInput && !selectingSummary && <Text dimColor>{getLabel('manager.makeGoalHint', lang)}</Text>}
+  </Box>;
 }

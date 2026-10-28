@@ -61,6 +61,7 @@ interface CompanionStepRuntimeDeps {
   readonly runSlug: string;
   readonly runPathNamespace: readonly string[];
   readonly language: 'en' | 'ja';
+  readonly workflowMeta?: RunAgentOptions['workflowMeta'];
   readonly task: string;
   readonly reviewMode: CompanionReviewMode;
   readonly fixPolicy: CompanionFixPolicy;
@@ -110,6 +111,7 @@ export class CompanionStepRuntime {
       projectCwd: deps.projectCwd,
       failureDir: deps.failureDir,
       language: deps.language,
+      workflowMeta: deps.workflowMeta,
       abortSignal: deps.abortSignal,
       buildProviderCallCallbacks: deps.buildProviderCallCallbacks,
       recordUsage: deps.recordUsage,

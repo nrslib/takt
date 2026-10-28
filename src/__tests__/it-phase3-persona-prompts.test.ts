@@ -72,6 +72,7 @@ describe('Phase 3 persona and judgment prompt regressions', () => {
         .mockResolvedValueOnce(doneResponse({ content: '[REVIEW:1]' }));
       const setup = vi.spyOn(MockProvider.prototype, 'setup').mockReturnValue({ call });
       const options = {
+        judgmentInput: 'work result',
         cwd: projectDir,
         language: executionLanguage,
         stepName: 'review',
@@ -143,17 +144,17 @@ describe('Phase 3 persona and judgment prompt regressions', () => {
     it('renders the output-only boundary in the AI judgment prompt', () => {
       const agentOutput = 'approved';
       const conditionList = '| 1 | approved |';
-      const prompt = loadTemplate('perform_judge_message', language, { agentOutput, conditionList });
+      const prompt = loadTemplate('perform_judge_message', language, { agentOutput, conditionList, phaseContext: '' });
 
       expect(prompt).toContain(language === 'ja'
-        ? '判定は上の出力に書かれた内容だけで行い、ファイルやコードなど出力の外の資料は調べないでください。'
-        : 'Judge only what is written in the output above; do not inspect materials outside the output, such as files or code.');
+        ? '判定は「エージェント出力」の節に書かれた内容だけで行い、ファイルやコードなど出力の外の資料は調べないでください。'
+        : 'Judge only what is written in the "Agent Output" section; do not inspect materials outside the output, such as files or code.');
       expect(prompt).toContain(agentOutput);
       expect(prompt).toContain(conditionList);
       expect(prompt).toContain('[JUDGE:N]');
       expect(prompt).not.toContain('{{');
       if (language === 'en') {
-        expect(buildJudgePrompt(agentOutput, [{ index: 0, text: 'approved' }])).toBe(prompt);
+        expect(buildJudgePrompt(agentOutput, [{ index: 0, text: 'approved' }], language)).toBe(prompt);
       }
     });
 

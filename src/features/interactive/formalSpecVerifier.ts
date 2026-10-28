@@ -18,10 +18,12 @@ import {
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { spawnManagedProcess } from '../../shared/utils/spawn.js';
+import { getSelfProcessIdentity } from '../../infra/task/process.js';
 
 const require = createRequire(import.meta.url);
 
 const QUINT_TIMEOUT_MS = 60_000;
+const QUINT_TEST_MAX_SAMPLES = 100;
 const ALLOY_VERSION = '6.2.0';
 const ALLOY_JAR_URL = `https://repo1.maven.org/maven2/org/alloytools/org.alloytools.alloy.dist/${ALLOY_VERSION}/org.alloytools.alloy.dist-${ALLOY_VERSION}.jar`;
 const ALLOY_JAR_SHA256 = '6037cbeee0e8423c1c468447ed10f5fcf2f2743a2ffc39cb1c81f2905c0fdb9d';
@@ -34,6 +36,10 @@ const TLC_OUTPUT_TRUNCATED_MESSAGE = 'TLC output was truncated at the capture li
 // Each bounded process refreshes the workspace timestamp, so cleanup measures
 // inactivity rather than the total duration of sequential verification stages.
 const STALE_VERIFY_RUN_MAX_AGE_MS = 60 * 60 * 1000;
+const RETAIN_VERIFY_RUN_MARKER = '.retain';
+const ACTIVE_VERIFY_RUN_MARKER = '.active';
+// A failed marker removal cannot erase the fact that the last consumer has finished.
+const verifyRunDirectoriesPendingRemoval = new Set<string>();
 
 export type FormalSpecVerificationStatus = 'passed' | 'failed' | 'error' | 'skipped';
 
@@ -47,6 +53,7 @@ export interface FormalSpecQuintResult extends FormalSpecStageResult {
   readonly parse?: FormalSpecStageResult;
   readonly typecheck?: FormalSpecStageResult;
   readonly run?: FormalSpecStageResult;
+  readonly test?: FormalSpecStageResult;
   readonly verify?: FormalSpecStageResult;
   readonly invariants?: readonly string[];
   readonly temporal?: readonly string[];
@@ -57,7 +64,9 @@ export interface FormalSpecAlloyResult extends FormalSpecStageResult {
   readonly commandResults?: readonly FormalSpecAlloyCommandResult[];
 }
 
-export type FormalSpecAlloyCommandResult = FormalSpecStageResult & AlloyParsedCommand;
+export type FormalSpecAlloyCommandResult = FormalSpecStageResult & AlloyParsedCommand & {
+  readonly timedOut?: boolean;
+};
 
 export interface FormalSpecVerificationResult {
   readonly verdict: 'passed' | 'failed' | 'error';
@@ -67,6 +76,10 @@ export interface FormalSpecVerificationResult {
   readonly quint: FormalSpecQuintResult;
   readonly alloy: FormalSpecAlloyResult;
   readonly artifacts?: FormalSpecVerificationArtifacts;
+  readonly artifactRetention?: {
+    readonly status: 'passed' | 'error';
+    readonly message?: string;
+  };
 }
 
 export interface FormalSpecVerificationArtifacts {
@@ -93,6 +106,7 @@ export interface FormalSpecBlocks {
 export interface QuintVerificationTargets {
   readonly invariants: readonly QuintVerificationTarget[];
   readonly temporal: readonly QuintVerificationTarget[];
+  readonly runs: readonly QuintVerificationTarget[];
 }
 
 export interface QuintVerificationTarget {
@@ -123,6 +137,33 @@ interface ProcessResult {
 interface ProcessLogPaths {
   readonly stdout: string;
   readonly stderr: string;
+}
+
+interface AlloyExecutionSettings {
+  readonly concurrency: number;
+  readonly heap: string;
+  readonly stack: string;
+}
+
+function resolveAlloyExecutionSettings(): AlloyExecutionSettings {
+  const concurrencyName = 'TAKT_ALLOY_CONCURRENCY';
+  const concurrencyValue = process.env[concurrencyName] ?? '2';
+  const concurrency = Number(concurrencyValue);
+  if (!/^[1-9]\d*$/u.test(concurrencyValue) || !Number.isSafeInteger(concurrency)) {
+    throw new Error(`${concurrencyName} must be a positive safe integer.`);
+  }
+  const memorySetting = (name: string, defaultValue: string): string => {
+    const value = process.env[name] ?? defaultValue;
+    if (!/^[1-9]\d*[kmg]$/u.test(value)) {
+      throw new Error(`${name} must be a positive integer followed by k, m, or g.`);
+    }
+    return value;
+  };
+  return {
+    concurrency,
+    heap: memorySetting('TAKT_ALLOY_HEAP', '4g'),
+    stack: memorySetting('TAKT_ALLOY_STACK', '64m'),
+  };
 }
 
 interface FenceState {
@@ -224,12 +265,13 @@ export function detectJavaMajorVersion(output: string): number | undefined {
   return first;
 }
 
-/** Select every conventionally named Quint invariant and temporal property. */
+/** Select conventionally named Quint properties and every run declaration. */
 export function selectQuintVerificationTargets(parseResult: unknown): QuintVerificationTargets {
   const invariants: QuintVerificationTarget[] = [];
   const temporal: QuintVerificationTarget[] = [];
+  const runs: QuintVerificationTarget[] = [];
   if (!isRecord(parseResult) || !Array.isArray(parseResult.modules)) {
-    return { invariants, temporal };
+    return { invariants, temporal, runs };
   }
 
   for (const module of parseResult.modules) {
@@ -246,10 +288,13 @@ export function selectQuintVerificationTargets(parseResult: unknown): QuintVerif
       if (declaration.qualifier === 'temporal' && declaration.name.startsWith('prop')) {
         temporal.push({ moduleName: module.name, name: declaration.name });
       }
+      if (declaration.qualifier === 'run') {
+        runs.push({ moduleName: module.name, name: declaration.name });
+      }
     }
   }
 
-  return { invariants, temporal };
+  return { invariants, temporal, runs };
 }
 
 const QUINT_MAIN_REQUIRED_MESSAGE = 'Quint verification requires a module with action init and action step.';
@@ -262,7 +307,7 @@ function quintTargetsOutsideMainModule(
   targets: QuintVerificationTargets,
   mainModule: string,
 ): QuintVerificationTarget[] {
-  return [...targets.invariants, ...targets.temporal]
+  return [...targets.invariants, ...targets.temporal, ...targets.runs]
     .filter((target) => target.moduleName !== mainModule);
 }
 
@@ -632,6 +677,45 @@ function verificationProcessStage(
     : errorStage(message);
 }
 
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function quintTestStage(
+  result: ProcessResult,
+  outputPath: string,
+  runNames: readonly string[],
+): FormalSpecStageResult {
+  const processStage = verificationProcessStage(result, 'typescript');
+  if (result.outcome !== 'exit' || result.status === null || result.artifactWriteError !== undefined) {
+    return processStage;
+  }
+
+  let output: unknown;
+  try {
+    output = JSON.parse(readFileSync(outputPath, 'utf8')) as unknown;
+  } catch (error) {
+    return isSuccessfulProcess(result)
+      ? errorStage(`Quint test output could not be read: ${error instanceof Error ? error.message : String(error)}`)
+      : processStage;
+  }
+  if (!isRecord(output)
+    || !isStringArray(output.passed)
+    || !isStringArray(output.failed)
+    || !isStringArray(output.ignored)) {
+    return isSuccessfulProcess(result)
+      ? errorStage('Quint test output must contain passed, failed, and ignored arrays of declaration names.')
+      : processStage;
+  }
+
+  const passed = new Set(output.passed);
+  const failed = new Set(output.failed);
+  const unsuccessful = runNames.filter((name) => failed.has(name) || !passed.has(name));
+  return unsuccessful.length === 0
+    ? passedStage()
+    : { status: 'failed', message: truncateFailureMessage(`Quint run declarations did not pass: ${unsuccessful.join(', ')}.`) };
+}
+
 function selectPrimaryStage(stages: readonly FormalSpecStageResult[]): FormalSpecStageResult {
   return stages.find((stage) => stage.status === 'error')
     ?? stages.find((stage) => stage.status === 'failed')
@@ -647,8 +731,28 @@ function aggregateStageResult(
   return stages.length > 0 ? selectPrimaryStage(stages) : skippedStage(emptyMessage);
 }
 
+function hasActiveVerifyMarker(directory: string): boolean {
+  try {
+    statSync(join(directory, ACTIVE_VERIFY_RUN_MARKER));
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    // An inaccessible marker cannot establish that artifacts are safe to remove.
+    return true;
+  }
+}
+
 /** Remove abandoned verify run workspaces older than the stale threshold. */
 function cleanupAbandonedVerifyRuns(cwd: string): void {
+  for (const directory of verifyRunDirectoriesPendingRemoval) {
+    try {
+      statSync(directory);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        verifyRunDirectoriesPendingRemoval.delete(directory);
+      }
+    }
+  }
   const runsDirectory = join(cwd, '.takt', 'runs');
   let entries;
   try {
@@ -661,6 +765,8 @@ function cleanupAbandonedVerifyRuns(cwd: string): void {
     if (!entry.isDirectory() || !entry.name.startsWith('verify-')) continue;
     const directory = join(runsDirectory, entry.name);
     try {
+      if (existsSync(join(directory, RETAIN_VERIFY_RUN_MARKER))) continue;
+      if (!verifyRunDirectoriesPendingRemoval.has(resolve(directory)) && hasActiveVerifyMarker(directory)) continue;
       if (statSync(directory).mtimeMs < staleBefore) {
         removeVerifyRunDirectory(directory);
       }
@@ -671,8 +777,16 @@ function cleanupAbandonedVerifyRuns(cwd: string): void {
 }
 
 function removeVerifyRunDirectory(directory: string): void {
+  const normalizedDirectory = resolve(directory);
+  verifyRunDirectoriesPendingRemoval.add(normalizedDirectory);
+  try {
+    rmSync(join(directory, ACTIVE_VERIFY_RUN_MARKER), { force: true });
+  } catch {
+    // Ownership release must not prevent the remaining best-effort cleanup.
+  }
   try {
     rmSync(directory, { recursive: true, force: true });
+    verifyRunDirectoriesPendingRemoval.delete(normalizedDirectory);
   } catch {
     // Cleanup is best effort and must not replace the verification result.
   }
@@ -681,15 +795,7 @@ function removeVerifyRunDirectory(directory: string): void {
 function createRunDirectory(cwd: string): string {
   const runsDirectory = join(cwd, '.takt', 'runs');
   mkdirSync(runsDirectory, { recursive: true });
-  const runDirectory = mkdtempSync(join(runsDirectory, 'verify-'));
-  try {
-    mkdirSync(join(runDirectory, 'specs'), { mode: 0o700 });
-    mkdirSync(join(runDirectory, 'logs'), { mode: 0o700 });
-  } catch (error) {
-    removeVerifyRunDirectory(runDirectory);
-    throw error;
-  }
-  return runDirectory;
+  return mkdtempSync(join(runsDirectory, 'verify-'));
 }
 
 function createFormalSpecVerificationArtifacts(
@@ -712,9 +818,9 @@ function createFormalSpecVerificationArtifacts(
   };
 }
 
-/** Remove verification artifacts after the interpretation call has finished. */
+/** Remove successful verification artifacts after interpretation has finished. */
 export function cleanupFormalSpecVerificationArtifacts(result: FormalSpecVerificationResult): void {
-  if (result.artifacts) {
+  if (result.verdict === 'passed' && result.artifacts) {
     removeVerifyRunDirectory(result.artifacts.runDirectory);
   }
 }
@@ -970,6 +1076,7 @@ async function runQuintCommand(
 
 async function runAlloyCommand(
   jarPath: string,
+  settings: AlloyExecutionSettings,
   args: readonly string[],
   cwd: string,
   timeoutMs: number,
@@ -978,12 +1085,87 @@ async function runAlloyCommand(
 ): Promise<ProcessResult> {
   return runProcess(
     'java',
-    ['-jar', jarPath, ...args],
+    [`-Xmx${settings.heap}`, `-Xss${settings.stack}`, '-jar', jarPath, ...args],
     cwd,
     timeoutMs,
     abortSignal,
     logPaths,
   );
+}
+
+async function runAlloyCommands(
+  commands: readonly AlloyParsedCommand[],
+  jarPath: string,
+  settings: AlloyExecutionSettings,
+  specificationPath: string,
+  runDirectory: string,
+  timeoutMs: number,
+  processLogs: Record<string, ProcessLogPaths>,
+  alloyOutputs: string[],
+  abortSignal: AbortSignal | undefined,
+): Promise<FormalSpecAlloyCommandResult[]> {
+  let nextCommandIndex = 0;
+  const results: FormalSpecAlloyCommandResult[] = [];
+  const worker = async (): Promise<void> => {
+    while (!abortSignal?.aborted) {
+      const index = nextCommandIndex++;
+      const command = commands[index];
+      if (command === undefined) return;
+      let stage: FormalSpecStageResult;
+      let timedOut = false;
+      try {
+        const stageName = `alloy-${command.type}-${command.number}`;
+        const outputDirectory = join(runDirectory, stageName);
+        mkdirSync(outputDirectory, { mode: 0o700 });
+        const process = await runAlloyCommand(
+          jarPath,
+          settings,
+          ['exec', '--quiet', '--type', 'text', '--output', outputDirectory, '--command', String(command.number), specificationPath],
+          runDirectory,
+          timeoutMs,
+          abortSignal,
+          createProcessLogPaths(join(runDirectory, 'logs'), stageName, processLogs),
+        );
+        timedOut = process.outcome === 'timeout';
+        stage = alloyCommandStage(process, command, outputDirectory, alloyOutputs);
+      } catch (error) {
+        if (abortSignal?.aborted) return;
+        stage = errorStage(error instanceof Error ? error.message : String(error));
+      }
+      results[index] = {
+        ...command,
+        ...stage,
+        timedOut,
+        ...(stage.message ? { message: `${command.type} ${command.number} (${command.label}): ${stage.message}` } : {}),
+      };
+    }
+  };
+  // Workers own their running processes until every wait settles, including abort.
+  await Promise.all(Array.from({ length: Math.min(settings.concurrency, commands.length) }, worker));
+  abortSignal?.throwIfAborted();
+  return results;
+}
+
+function retainVerifyRunDirectory(directory: string): NonNullable<FormalSpecVerificationResult['artifactRetention']> {
+  const diagnostics: string[] = [];
+  try {
+    writeFileSync(join(directory, RETAIN_VERIFY_RUN_MARKER), '', { mode: 0o600 });
+  } catch (error) {
+    diagnostics.push(`Failed to write verification retention marker: ${error instanceof Error ? error.message : String(error)}`);
+    // The sweeper only needs marker existence; reuse ownership without another write.
+    try {
+      renameSync(join(directory, ACTIVE_VERIFY_RUN_MARKER), join(directory, RETAIN_VERIFY_RUN_MARKER));
+    } catch (renameError) {
+      diagnostics.push(`Failed to move verification ownership marker: ${renameError instanceof Error ? renameError.message : String(renameError)}`);
+      return { status: 'error', message: diagnostics.join('\n') };
+    }
+  }
+  try {
+    rmSync(join(directory, ACTIVE_VERIFY_RUN_MARKER), { force: true });
+  } catch (error) {
+    diagnostics.push(`Failed to release verification workspace ownership: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return { status: 'passed', ...(diagnostics.length === 0 ? {} : { message: diagnostics.join('\n') }) };
 }
 
 function createProcessLogPaths(
@@ -1003,6 +1185,7 @@ interface QuintStageSet {
   readonly parse?: FormalSpecStageResult;
   readonly typecheck?: FormalSpecStageResult;
   readonly run?: FormalSpecStageResult;
+  readonly test?: FormalSpecStageResult;
   readonly verify?: FormalSpecStageResult;
 }
 
@@ -1010,7 +1193,7 @@ function quintResultFromStages(
   stageSet: QuintStageSet,
   targets: QuintVerificationTargets,
 ): FormalSpecQuintResult {
-  const stages = [stageSet.parse, stageSet.typecheck, stageSet.run, stageSet.verify]
+  const stages = [stageSet.parse, stageSet.typecheck, stageSet.run, stageSet.test, stageSet.verify]
     .filter((stage): stage is FormalSpecStageResult => stage !== undefined);
   const primary = aggregateStageResult(stages, 'No Quint verification stage was executed.');
   return {
@@ -1019,6 +1202,7 @@ function quintResultFromStages(
     ...(stageSet.parse ? { parse: stageSet.parse } : {}),
     ...(stageSet.typecheck ? { typecheck: stageSet.typecheck } : {}),
     ...(stageSet.run ? { run: stageSet.run } : {}),
+    ...(stageSet.test ? { test: stageSet.test } : {}),
     ...(stageSet.verify ? { verify: stageSet.verify } : {}),
     invariants: targets.invariants.map(({ name }) => name),
     temporal: targets.temporal.map(({ name }) => name),
@@ -1055,13 +1239,20 @@ export async function runFormalSpecVerification(
   let alloySpecificationPath: string | undefined;
   let parseJsonPath: string | undefined;
   let verificationStarted = false;
+  let result: FormalSpecVerificationResult;
   const processLogs: Record<string, ProcessLogPaths> = {};
   const alloyOutputs: string[] = [];
   try {
     verificationStarted = true;
     runDirectory = createRunDirectory(cwd);
+    writeFileSync(join(runDirectory, ACTIVE_VERIFY_RUN_MARKER), JSON.stringify({
+      pid: process.pid,
+      identity: getSelfProcessIdentity(),
+    }), { mode: 0o600 });
     const specsDirectory = join(runDirectory, 'specs');
     const logsDirectory = join(runDirectory, 'logs');
+    mkdirSync(specsDirectory, { mode: 0o700 });
+    mkdirSync(logsDirectory, { mode: 0o700 });
     quintSpecificationPath = blocks.quint.length > 0
       ? writeSpecification(runDirectory, 'spec.qnt', blocks.quint)
       : undefined;
@@ -1069,9 +1260,18 @@ export async function runFormalSpecVerification(
       ? writeSpecification(runDirectory, 'spec.als', blocks.alloy)
       : undefined;
 
+    let alloySettings: AlloyExecutionSettings | undefined;
+    let alloySettingsError: string | undefined;
+    if (alloySpecificationPath !== undefined) {
+      try {
+        alloySettings = resolveAlloyExecutionSettings();
+      } catch (error) {
+        alloySettingsError = error instanceof Error ? error.message : String(error);
+      }
+    }
     const stages: FormalSpecStageResult[] = [];
     let quint: FormalSpecQuintResult;
-    let targets: QuintVerificationTargets = { invariants: [], temporal: [] };
+    let targets: QuintVerificationTargets = { invariants: [], temporal: [], runs: [] };
     let mainModule: string | undefined;
     let targetScopeError: string | undefined;
     let quintStageSet: QuintStageSet = {};
@@ -1103,23 +1303,27 @@ export async function runFormalSpecVerification(
       }
 
       let parseResult: unknown;
-      if (parse.status === 'passed') {
-        try {
-          parseResult = JSON.parse(readFileSync(parseJsonPath, 'utf8')) as unknown;
-        } catch (error) {
+      // Failed parses can still report declarations; unavailable JSON must not replace the original failure.
+      try {
+        parseResult = JSON.parse(readFileSync(parseJsonPath, 'utf8')) as unknown;
+      } catch (error) {
+        if (parse.status === 'passed') {
           const message = `Quint parse output could not be read: ${error instanceof Error ? error.message : String(error)}`;
           parse = errorStage(message);
         }
       }
+      const parsedTargets = selectQuintVerificationTargets(parseResult);
+      targets = parse.status === 'passed'
+        ? parsedTargets
+        : { invariants: [], temporal: [], runs: parsedTargets.runs };
+      mainModule = selectQuintMainModule(parseResult);
+      targetScopeError = mainModule === undefined
+        ? undefined
+        : quintTargetScopeError(targets, mainModule);
 
       let typecheck: FormalSpecStageResult = skippedStage('Quint typechecking was skipped because parsing did not pass.');
       let run: FormalSpecStageResult = skippedStage('Quint simulation was skipped because typechecking did not pass.');
       if (parse.status === 'passed') {
-        targets = selectQuintVerificationTargets(parseResult);
-        mainModule = selectQuintMainModule(parseResult);
-        targetScopeError = mainModule === undefined
-          ? undefined
-          : quintTargetScopeError(targets, mainModule);
         typecheck = specificationProcessStage(
           await runQuintCommand(
             quintCli,
@@ -1166,7 +1370,34 @@ export async function runFormalSpecVerification(
           );
         }
       }
-      quintStageSet = { parse, typecheck, run };
+      const runNames = targets.runs
+        .filter((target) => target.moduleName === mainModule)
+        .map(({ name }) => name);
+      let test: FormalSpecStageResult | undefined;
+      if (runNames.length > 0) {
+        test = skippedStage('Quint scenario testing was skipped because an earlier Quint stage did not pass.');
+        if (run.status === 'passed' && mainModule !== undefined) {
+          const testOutputPath = join(specsDirectory, 'test.json');
+          writeFileSync(testOutputPath, '', { encoding: 'utf8', mode: 0o600 });
+          const match = `^(${runNames.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})$`;
+          const testProcess = await runQuintCommand(
+            quintCli,
+            [
+              'test', quintSpecificationPath, '--main', mainModule, '--backend', 'typescript',
+              '--max-samples', String(QUINT_TEST_MAX_SAMPLES), '--match', match, '--out', testOutputPath,
+            ],
+            runDirectory,
+            QUINT_TIMEOUT_MS,
+            abortSignal,
+            createProcessLogPaths(logsDirectory, 'quint-test', processLogs),
+          );
+          if (existsSync(testOutputPath)) {
+            chmodSync(testOutputPath, 0o600);
+          }
+          test = quintTestStage(testProcess, testOutputPath, runNames);
+        }
+      }
+      quintStageSet = { parse, typecheck, run, ...(test === undefined ? {} : { test }) };
       quint = quintResultFromStages(quintStageSet, targets);
     }
 
@@ -1174,7 +1405,8 @@ export async function runFormalSpecVerification(
       && mainModule !== undefined
       && quint.parse?.status === 'passed'
       && quint.typecheck?.status === 'passed'
-      && quint.run?.status === 'passed';
+      && quint.run?.status === 'passed'
+      && (quint.test === undefined || quint.test.status === 'passed');
     const javaDetectionRan = alloySpecificationPath !== undefined || canRunQuintVerify;
     const detectedJavaMajorVersion = javaDetectionRan
       ? await javaVersion(
@@ -1231,7 +1463,7 @@ export async function runFormalSpecVerification(
     }
     if (quintSpecificationPath) {
       stages.push(
-        ...[quintStageSet.parse, quintStageSet.typecheck, quintStageSet.run, quintStageSet.verify]
+        ...[quintStageSet.parse, quintStageSet.typecheck, quintStageSet.run, quintStageSet.test, quintStageSet.verify]
           .filter((stage): stage is FormalSpecStageResult => stage !== undefined),
       );
     }
@@ -1239,6 +1471,12 @@ export async function runFormalSpecVerification(
     let alloy: FormalSpecAlloyResult = skippedAlloyResult('Alloy verification was not run.');
     if (!alloySpecificationPath) {
       alloy = skippedAlloyResult('No Alloy specification block was present.');
+      stages.push(alloy);
+    } else if (alloySettingsError !== undefined) {
+      alloy = errorStage(alloySettingsError);
+      stages.push(alloy);
+    } else if (!alloySettings) {
+      alloy = errorStage('Alloy execution settings were not resolved.');
       stages.push(alloy);
     } else if (!hasJava17) {
       alloy = skippedAlloyResult(javaSkipMessage);
@@ -1256,6 +1494,7 @@ export async function runFormalSpecVerification(
       if (jarPath !== undefined) {
         const commandsProcess = await runAlloyCommand(
           jarPath,
+          alloySettings,
           ['commands', alloySpecificationPath],
           runDirectory,
           modelCheckTimeoutMs,
@@ -1282,26 +1521,10 @@ export async function runFormalSpecVerification(
             }
             stages.push(alloy);
           } else {
-            const commandResults: FormalSpecAlloyCommandResult[] = [];
-            for (const command of commands) {
-              const stageName = `alloy-${command.type}-${command.number}`;
-              const outputDirectory = join(runDirectory, stageName);
-              mkdirSync(outputDirectory, { mode: 0o700 });
-              const commandProcess = await runAlloyCommand(
-                jarPath,
-                ['exec', '--quiet', '--type', 'text', '--output', outputDirectory, '--command', String(command.number), alloySpecificationPath],
-                runDirectory,
-                modelCheckTimeoutMs,
-                abortSignal,
-                createProcessLogPaths(logsDirectory, stageName, processLogs),
-              );
-              const result = alloyCommandStage(commandProcess, command, outputDirectory, alloyOutputs);
-              commandResults.push({
-                ...command,
-                ...result,
-                ...(result.message ? { message: `${command.type} ${command.number} (${command.label}): ${result.message}` } : {}),
-              });
-            }
+            const commandResults = await runAlloyCommands(
+              commands, jarPath, alloySettings, alloySpecificationPath, runDirectory,
+              modelCheckTimeoutMs, processLogs, alloyOutputs, abortSignal,
+            );
             const primary = aggregateStageResult(commandResults, 'No Alloy command was executed.');
             alloy = {
               status: primary.status,
@@ -1317,7 +1540,7 @@ export async function runFormalSpecVerification(
     }
 
     const primary = selectPrimaryStage(stages);
-    return {
+    result = {
       verdict: primary.status === 'skipped' ? 'error' : primary.status,
       verificationStarted: true,
       ...(primary.message ? { message: primary.message } : {}),
@@ -1337,11 +1560,11 @@ export async function runFormalSpecVerification(
     if (abortSignal?.aborted) {
       throw abortSignal.reason ?? error;
     }
-    const result = resultForUnexpectedError(error, verificationStarted);
-    return runDirectory === undefined
-      ? result
+    const errorResult = resultForUnexpectedError(error, verificationStarted);
+    result = runDirectory === undefined
+      ? errorResult
       : {
-        ...result,
+        ...errorResult,
         artifacts: createFormalSpecVerificationArtifacts(
           runDirectory,
           quintSpecificationPath,
@@ -1356,4 +1579,18 @@ export async function runFormalSpecVerification(
       removeVerifyRunDirectory(runDirectory);
     }
   }
+  if (result.verdict !== 'passed' && result.artifacts !== undefined) {
+    const directory = result.artifacts.runDirectory;
+    const artifactRetention = retainVerifyRunDirectory(directory);
+    const artifactMessage = artifactRetention.status === 'passed'
+      ? `Verification artifacts retained at: ${directory}`
+      : `Verification artifact retention could not be confirmed at: ${directory}`;
+    result = {
+      ...result,
+      artifactRetention,
+      message: [result.message, artifactMessage, artifactRetention.message]
+        .filter((message) => message !== undefined).join('\n'),
+    };
+  }
+  return result;
 }

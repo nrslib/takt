@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import type { ChildProcess } from 'node:child_process';
@@ -69,6 +69,9 @@ import {
   runHeadlessCli,
 } from '../infra/claude-headless/headless-spawn.js';
 import type { ClaudeHeadlessCallOptions } from '../infra/claude-headless/types.js';
+import { createManagerTurnExecutor } from '../features/manager/turnExecutor.js';
+import { ClaudeHeadlessProvider } from '../infra/providers/claude-headless.js';
+import { createMcpAdapter } from '../infra/providers/mcp/index.js';
 
 describe('callClaudeHeadless', () => {
   let lastArgv: string[] = [];
@@ -77,6 +80,7 @@ describe('callClaudeHeadless', () => {
   let capturedMcpConfigContent: string | undefined;
   let capturedMcpConfigMode: number | undefined;
   let capturedMcpConfigPath: string | undefined;
+  let mcpConfigReads: Array<{ path: string; exists: boolean }> = [];
 
   beforeEach(() => {
     vi.mocked(spawn).mockReset();
@@ -110,24 +114,36 @@ describe('callClaudeHeadless', () => {
     capturedMcpConfigContent = undefined;
     capturedMcpConfigMode = undefined;
     capturedMcpConfigPath = undefined;
+    mcpConfigReads = [];
     delete process.env.TAKT_OBSERVABILITY;
     delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
   });
 
-  function stubSpawn(opts: {
+  type SpawnPlan = {
     stdoutChunks?: string[];
     stderrChunks?: string[];
     closeCode?: number | null;
     closeSignal?: NodeJS.Signals | null;
     error?: NodeJS.ErrnoException;
     keepOpen?: boolean;
-  }): void {
+  };
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  function stubSpawn(plans: SpawnPlan | SpawnPlan[]): void {
+    let attempt = 0;
     vi.mocked(spawn).mockImplementation((_cmd, _args, spawnOptions) => {
+      const opts = Array.isArray(plans) ? plans[attempt++] : plans;
+      if (opts === undefined) throw new Error('Missing headless spawn plan');
       lastArgv = [...(_args as string[])];
       lastSpawnEnv = spawnOptions?.env as NodeJS.ProcessEnv | undefined;
       const mcpIndex = lastArgv.indexOf('--mcp-config');
       if (mcpIndex >= 0) {
         capturedMcpConfigPath = lastArgv[mcpIndex + 1];
+        mcpConfigReads.push({ path: capturedMcpConfigPath!, exists: existsSync(capturedMcpConfigPath!) });
         capturedMcpConfigContent = readFileSync(capturedMcpConfigPath!, 'utf-8');
         capturedMcpConfigMode = statSync(capturedMcpConfigPath!).mode & 0o777;
       }
@@ -160,6 +176,126 @@ describe('callClaudeHeadless', () => {
       return proc as ChildProcess;
     });
   }
+
+  it.each([0, 1])('classifies an explicit missing resume from a failed result with exit %i', async (closeCode) => {
+    const sessionId = '00000000-0000-4000-8000-000000000099';
+    const error = `No conversation found with session ID: ${sessionId}`;
+    stubSpawn({ closeCode, stdoutChunks: [JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true,
+      session_id: sessionId, errors: [error] }) + '\n'] });
+    const result = await callClaudeHeadless('manager', 'continue', { cwd: '/tmp', sessionId, callerManagedSession: true });
+    expect(result).toMatchObject({ status: 'error', failureCategory: 'session_continuation_unsupported' });
+    expect(spawn).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true].flatMap((tools) => [false, true].map((withMcp) => ({ tools, withMcp }))))('reconstructs through the headless adapter only before tools ran (tools: $tools, MCP: $withMcp)', async ({ tools, withMcp }) => {
+    const sessionId = '00000000-0000-4000-8000-000000000099';
+    stubSpawn([
+      { closeCode: 1, stdoutChunks: [
+        ...(tools ? [JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool', name: 'Read', input: {} }] } }) + '\n'] : []),
+        JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, errors: [`No conversation found with session ID: ${sessionId}`] }) + '\n',
+      ] },
+      { stdoutChunks: [JSON.stringify({ type: 'result', subtype: 'success', session_id: 'fresh-session', structured_output: { message: 'fresh reply', summary: null } }) + '\n'] },
+    ]);
+    const invalidateSession = vi.fn(async () => {});
+    const executor = createManagerTurnExecutor('/tmp', { ctx: { providerType: 'claude-headless', provider: new ClaudeHeadlessProvider(), model: undefined, lang: 'en',
+      ...(withMcp ? { mcpServers: { context: { command: 'manager-context-server' } } } : {}) },
+      strategy: { systemPrompt: 'manager' } });
+    const input = { prompt: 'continue', instruction: 'continue', sessionId, abortSignal: new AbortController().signal,
+      assignment: { kind: 'repository' as const, repositoryDirectory: '/tmp' }, configDirectory: '/tmp/config',
+      recovery: { context: 'pending revision 4; current goals', invalidateSession } };
+    let result: Awaited<ReturnType<typeof executor.execute>> | undefined;
+    let failure: unknown;
+    try { result = await executor.execute(input); } catch (error) { failure = error; }
+    if (withMcp) {
+      expect(mcpConfigReads).toEqual(Array.from({ length: tools ? 1 : 2 }, () => ({ path: mcpConfigReads[0]!.path, exists: true })));
+      expect(existsSync(mcpConfigReads[0]!.path)).toBe(false);
+    }
+    if (tools) expect(failure).toMatchObject({ failureCategory: 'session_continuation_unsupported' });
+    else {
+      expect(failure).toBeUndefined();
+      expect(result).toMatchObject({ message: 'fresh reply', sessionId: 'fresh-session' });
+      expect(lastArgv).not.toContain('--resume');
+      expect(lastArgv.at(-1)).toContain(input.recovery.context);
+    }
+    expect(invalidateSession).toHaveBeenCalledOnce();
+    expect(spawn).toHaveBeenCalledTimes(tools ? 1 : 2);
+  });
+
+  it.each([false, true])('keeps MCP through overflow without session recovery ownership (tools: %s)', async (tools) => {
+    stubSpawn([
+      { closeCode: 1, stderrChunks: ['prompt is too long'], stdoutChunks: [
+        ...(tools ? [JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool', name: 'Read', input: {} }] } }) + '\n'] : []),
+        JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['prompt is too long'] }) + '\n',
+      ] },
+      { stdoutChunks: [JSON.stringify({ type: 'result', subtype: 'success', session_id: 'fresh-session', structured_output: { message: 'fresh reply', summary: null } }) + '\n'] },
+    ]);
+    const executor = createManagerTurnExecutor('/tmp', { ctx: { providerType: 'claude-headless', provider: new ClaudeHeadlessProvider(), model: undefined, lang: 'en',
+      mcpServers: { context: { command: 'manager-context-server' } } }, strategy: { systemPrompt: 'manager' } });
+    const running = executor.execute({ prompt: 'continue', instruction: 'continue', sessionId: 'saved-session',
+      abortSignal: new AbortController().signal, assignment: undefined, configDirectory: '/tmp/config' });
+    if (tools) await expect(running).rejects.toThrow();
+    else expect(await running).toMatchObject({ message: 'fresh reply', sessionId: 'fresh-session' });
+    expect(spawn).toHaveBeenCalledTimes(tools ? 1 : 2);
+    expect(mcpConfigReads).toEqual(Array.from({ length: tools ? 1 : 2 }, () => ({ path: mcpConfigReads[0]!.path, exists: true })));
+    expect(existsSync(mcpConfigReads[0]!.path)).toBe(false);
+  });
+
+  it.each([undefined, true] as const)('respects MCP ownership before argument construction fails (%s)', async (callerManagedMcp) => {
+    const prepared = await createMcpAdapter('claude-headless').prepare({ enabled: true, servers: { docs: { command: 'docs-mcp' } }, serverNames: ['docs'], identity: 'docs' }, { cwd: '/tmp' });
+    assertClaudeSkillsDisableSupportedMock.mockRejectedValueOnce(new Error('capability unavailable'));
+    try {
+      expect(await callClaudeHeadless('manager', 'prompt', { cwd: '/tmp', skillsEnabled: false, preparedMcp: prepared, callerManagedMcp })).toMatchObject({ status: 'error' });
+      expect(spawn).not.toHaveBeenCalled();
+      expect(existsSync(prepared.path!)).toBe(callerManagedMcp === true);
+    } finally { await prepared.dispose(); }
+    expect(existsSync(prepared.path!)).toBe(false);
+  });
+
+  it.each(['running', 'between-attempts'] as const)('removes caller-owned MCP after an abort %s without another attempt', async (when) => {
+    const sessionId = 'saved-session';
+    stubSpawn(when === 'running' ? { keepOpen: true } : { closeCode: 1, stdoutChunks: [JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true,
+      errors: [`No conversation found with session ID: ${sessionId}`] }) + '\n'] });
+    const controller = new AbortController();
+    let release!: () => void;
+    const invalidation = new Promise<void>((resolve) => { release = resolve; });
+    const invalidateSession = vi.fn(() => invalidation);
+    const executor = createManagerTurnExecutor('/tmp', { ctx: { providerType: 'claude-headless', provider: new ClaudeHeadlessProvider(), model: undefined, lang: 'en',
+      mcpServers: { context: { command: 'manager-context-server' } } }, strategy: { systemPrompt: 'manager' } });
+    const running = executor.execute({ prompt: 'continue', instruction: 'continue', sessionId, abortSignal: controller.signal, assignment: undefined,
+      configDirectory: '/tmp/config', recovery: { context: 'pending revision 4', invalidateSession } });
+    const observed = expect(running).rejects.toThrow();
+    try {
+      await vi.waitFor(() => expect(when === 'running' ? spawn : invalidateSession).toHaveBeenCalledOnce());
+      expect(readFileSync(mcpConfigReads[0]!.path, 'utf8')).toContain('manager-context-server');
+      if (when === 'running') lastKill!.mockImplementationOnce(() => {
+        queueMicrotask(() => vi.mocked(spawn).mock.results[0]!.value.emit('close', null, 'SIGTERM'));
+        return true;
+      });
+      controller.abort();
+    } finally { release(); }
+    await observed;
+    expect(spawn).toHaveBeenCalledOnce();
+    expect(existsSync(mcpConfigReads[0]!.path)).toBe(false);
+  });
+
+  it('classifies a missing resume reported on stderr when the CLI exits before a result', async () => {
+    const sessionId = '00000000-0000-4000-8000-000000000099';
+    stubSpawn({ closeCode: 1, stderrChunks: [`No conversation found with session ID: ${sessionId}\n`] });
+    expect(await callClaudeHeadless('manager', 'continue', { cwd: '/tmp', sessionId, callerManagedSession: true }))
+      .toMatchObject({ status: 'error', failureCategory: 'session_continuation_unsupported' });
+  });
+
+  it.each(['success', 'tool', 'authentication', 'network', 'other-session'] as const)('does not classify %s output as a rejected resume', async (kind) => {
+    const sessionId = '00000000-0000-4000-8000-000000000099';
+    const text = `No conversation found with session ID: ${sessionId}`;
+    stubSpawn(kind === 'success' ? { stdoutChunks: [JSON.stringify({ type: 'result', subtype: 'success', result: text }) + '\n'] }
+      : kind === 'tool' ? { closeCode: 1, stdoutChunks: [JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool', content: text }] } }) + '\n'] }
+        : { closeCode: 1, stderrChunks: [kind === 'other-session' ? 'No conversation found with session ID: another-session\n' : `${kind} failed\n`] });
+    const response = await callClaudeHeadless('manager', 'continue', { cwd: '/tmp', sessionId, callerManagedSession: true });
+    expect(response.failureCategory).toBeUndefined();
+    expect(response.status).toBe(kind === 'success' ? 'done' : 'error');
+    expect(spawn).toHaveBeenCalledOnce();
+  });
 
   it('passes --disable-slash-commands for disabled Skills on a new headless session', async () => {
     stubSpawn({
@@ -825,7 +961,14 @@ describe('callClaudeHeadless', () => {
     });
   });
 
-  it('失敗 result の一般的な rate limit / 429 記述は error_text source で返す', async () => {
+  it('does not replay a caller-owned conversation after a transient CLI failure', async () => {
+    stubSpawn({ stderrChunks: ['HTTP 429: Too Many Requests'], closeCode: 1 });
+    const result = await callClaudeHeadless('manager', 'private text', { cwd: '/tmp', callerManagedSession: true });
+    expect(result.status).toBe('rate_limited'); expect(spawn).toHaveBeenCalledOnce();
+  });
+
+  it('失敗resultの429は8回の待機後に error_text source で返す', async () => {
+    vi.useFakeTimers();
     stubSpawn({
       stdoutChunks: [
         `${JSON.stringify({
@@ -838,12 +981,222 @@ describe('callClaudeHeadless', () => {
       closeCode: 0,
     });
 
-    const res = await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
+    const onStream = vi.fn();
+    const pending = callClaudeHeadless('agent', 'hi', { cwd: '/tmp', onStream });
+    await vi.advanceTimersByTimeAsync(0);
+    for (const [index, delay] of [1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000].entries()) {
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(spawn).toHaveBeenCalledTimes(index + 1);
+      expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(spawn).toHaveBeenCalledTimes(index + 2);
+    }
+    const res = await pending;
 
     expect(res.status).toBe('rate_limited');
     expect(res.errorKind).toBe('rate_limit');
     expect(res.content).toBe('');
     expect(res.rateLimitInfo?.source).toBe('error_text');
+    expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toHaveLength(1);
+  });
+
+  it.each(['result', 'stderr', 'exception'] as const)(
+    '%s の429を2回再試行して成功しMCPと実行制約を最終試行まで保持する', async (channel) => {
+      vi.useFakeTimers();
+      const failure: SpawnPlan = channel === 'result'
+        ? { stdoutChunks: [`${JSON.stringify({ type: 'result', subtype: 'error', errors: ['HTTP 429: Too Many Requests'], result: 'failed answer' })}\n`] }
+        : channel === 'stderr'
+          ? { stderrChunks: ['HTTP 429: Too Many Requests'], closeCode: 1 }
+          : { error: new Error('HTTP 429: Too Many Requests') };
+      stubSpawn([failure, failure, { stdoutChunks: [`${JSON.stringify({
+        type: 'result', subtype: 'success', result: 'final answer', session_id: 'final-session', structured_output: { ok: true },
+      })}\n`] }]);
+      const preparedMcp = { args: ['--mcp-config=/tmp/prepared-mcp.json'], dispose: vi.fn(async () => {}) };
+      const onStream = vi.fn();
+      const pending = callClaudeHeadless('agent', 'original prompt', {
+        cwd: '/tmp', model: 'sonnet', sessionId: 'original-session', permissionMode: 'readonly',
+        allowedTools: ['Read'], outputSchema: { type: 'object' }, preparedMcp, onStream,
+      });
+      await vi.advanceTimersByTimeAsync(999);
+      expect(spawn).toHaveBeenCalledTimes(1);
+      expect(preparedMcp.dispose).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(spawn).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(spawn).toHaveBeenCalledTimes(2);
+      expect(preparedMcp.dispose).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await pending).toMatchObject({ status: 'done', content: 'final answer', sessionId: 'final-session', structuredOutput: { ok: true } });
+      expect(spawn).toHaveBeenCalledTimes(3);
+      for (const [, argv] of vi.mocked(spawn).mock.calls) {
+        const separatorIdx = argv.indexOf('--');
+        expect(separatorIdx).toBeGreaterThan(-1);
+        expect(argv.slice(0, separatorIdx)).toEqual(expect.arrayContaining(['--model', 'sonnet', '--resume', 'original-session', '--allowed-tools', 'Read', '--json-schema', '{"type":"object"}', ...preparedMcp.args]));
+        expect(argv.slice(separatorIdx)).toEqual(['--', 'original prompt']);
+        expect(argv).not.toContain('--dangerously-skip-permissions');
+      }
+      expect(preparedMcp.dispose).toHaveBeenCalledOnce();
+      const results = onStream.mock.calls.filter(([event]) => event.type === 'result');
+      expect(results).toHaveLength(1);
+      expect(results[0]?.[0].data.success).toBe(true);
+    },
+  );
+
+  it('新規セッションの429再試行で使用済みsession-idを新規作成に再利用しない', async () => {
+    vi.useFakeTimers();
+    vi.mocked(randomUUID).mockReturnValueOnce('11111111-1111-4111-8111-111111111111')
+      .mockReturnValue('22222222-2222-4222-8222-222222222222');
+    stubSpawn([{ closeCode: 1, stderrChunks: ['HTTP 429: Too Many Requests'] }, {
+      stdoutChunks: [`${JSON.stringify({ type: 'result', subtype: 'success', result: 'final answer' })}\n`],
+    }]);
+    const pending = callClaudeHeadless('agent', 'prompt', { cwd: '/tmp' });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await pending).toMatchObject({ status: 'done', content: 'final answer' });
+    expect(spawn).toHaveBeenCalledTimes(2);
+    const first = vi.mocked(spawn).mock.calls[0]?.[1] as string[];
+    const second = vi.mocked(spawn).mock.calls[1]?.[1] as string[];
+    const firstId = first[first.indexOf('--session-id') + 1];
+    expect(second).toContain('--session-id');
+    expect(second).not.toContain('--resume');
+    expect(second[second.indexOf('--session-id') + 1]).not.toBe(firstId);
+  });
+
+  it.each([
+    { event: 'tool_use', closeCode: 0 },
+    { event: 'tool_result', closeCode: 0 },
+    { event: 'tool_use', closeCode: 1 },
+    { event: 'tool_result', closeCode: 1 },
+  ] as const)('$event観測後の終了コード$closeCodeによる429では新規セッションで再実行しない', async ({ event, closeCode }) => {
+    vi.useFakeTimers();
+    const toolEvent = event === 'tool_use'
+      ? { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command: 'touch marker' } }] } }
+      : { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'done' }] } };
+    stubSpawn([
+      {
+        closeCode,
+        stdoutChunks: [`${JSON.stringify(toolEvent)}\n`, ...(closeCode === 0
+          ? [`${JSON.stringify({ type: 'result', subtype: 'error', errors: ['HTTP 429: Too Many Requests'] })}\n`]
+          : [])],
+        stderrChunks: closeCode === 1 ? ['HTTP 429: Too Many Requests'] : [],
+      },
+      { stdoutChunks: [`${JSON.stringify({ type: 'result', subtype: 'success', result: 'unexpected retry' })}\n`] },
+    ]);
+
+    const pending = callClaudeHeadless('agent', 'prompt', { cwd: '/tmp' });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await pending).toMatchObject({ status: 'rate_limited', content: '', errorKind: 'rate_limit' });
+    expect(spawn).toHaveBeenCalledOnce();
+  });
+
+  it('本文中のtool_use文字列だけなら429を再試行する', async () => {
+    vi.useFakeTimers();
+    stubSpawn([
+      { stdoutChunks: [
+        `${JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'The literal string tool_use appears here.' }] } })}\n`,
+        `${JSON.stringify({ type: 'result', subtype: 'error', errors: ['HTTP 429: Too Many Requests'] })}\n`,
+      ] },
+      { stdoutChunks: [`${JSON.stringify({ type: 'result', subtype: 'success', result: 'final answer' })}\n`] },
+    ]);
+
+    const pending = callClaudeHeadless('agent', 'prompt', { cwd: '/tmp' });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await pending).toMatchObject({ status: 'done', content: 'final answer' });
+    expect(spawn).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    'usage_limit_exceeded',
+    'HTTP 429: Your workspace is out of credits. Add credits to continue.',
+    'You hit your spend cap set in your workspace. Increase your spend cap to continue. HTTP 429',
+  ])('失敗resultの使い切りは即終了する: %s', async (message) => {
+    stubSpawn({ stdoutChunks: [`${JSON.stringify({ type: 'result', subtype: 'error', errors: [message] })}\n`] });
+    const result = await callClaudeHeadless('agent', 'prompt', { cwd: '/tmp' });
+    expect(result).toMatchObject({ status: 'rate_limited', content: '', errorKind: 'rate_limit' });
+    expect(spawn).toHaveBeenCalledOnce();
+  });
+
+  it('429の再試行中に使い切り通知を受けたら即終了する', async () => {
+    vi.useFakeTimers();
+    stubSpawn(['HTTP 429: Too Many Requests', 'HTTP 429: usage_limit_exceeded'].map((message) => ({
+      stdoutChunks: [`${JSON.stringify({ type: 'result', subtype: 'error', errors: [message] })}\n`],
+    })));
+    const pending = callClaudeHeadless('agent', 'prompt', { cwd: '/tmp' });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await pending).toMatchObject({ status: 'rate_limited', errorKind: 'rate_limit' });
+    await vi.advanceTimersByTimeAsync(121_000);
+    expect(spawn).toHaveBeenCalledTimes(2);
+  });
+
+  it('非ゼロ終了のstderrに429と失敗resultに使い切りがある場合は使い切りを優先する', async () => {
+    stubSpawn({ closeCode: 1, stderrChunks: ['HTTP 429: Too Many Requests'], stdoutChunks: [
+      `${JSON.stringify({ type: 'result', subtype: 'error', errors: ["You've hit your weekly limit"] })}\n`,
+    ] });
+    expect(await callClaudeHeadless('agent', 'prompt', { cwd: '/tmp' }))
+      .toMatchObject({ status: 'rate_limited', error: "You've hit your weekly limit" });
+    expect(spawn).toHaveBeenCalledOnce();
+  });
+
+  it('429の待機中に中断したらCLIを追加起動しない', async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const preparedMcp = { args: [], dispose: vi.fn(async () => {}) };
+    stubSpawn({ stderrChunks: ['HTTP 429: Too Many Requests'], closeCode: 1 });
+    const pending = callClaudeHeadless('agent', 'prompt', { cwd: '/tmp', abortSignal: controller.signal, preparedMcp });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(preparedMcp.dispose).not.toHaveBeenCalled();
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(121_000);
+    expect(await pending).toMatchObject({ status: 'error', error: HEADLESS_ABORTED_MESSAGE });
+    expect(spawn).toHaveBeenCalledOnce();
+    expect(preparedMcp.dispose).toHaveBeenCalledOnce();
+  });
+
+  it('通常の失敗resultは再試行せず終端イベントの部分本文を保持する', async () => {
+    const onStream = vi.fn();
+    stubSpawn({ stdoutChunks: [
+      `${JSON.stringify({ type: 'result', subtype: 'error', result: 'partial answer', errors: ['permission denied'] })}\n`,
+    ] });
+    const response = await callClaudeHeadless('agent', 'prompt', { cwd: '/tmp', onStream });
+    expect(response).toMatchObject({ status: 'error', content: 'partial answer', error: 'permission denied' });
+    expect(spawn).toHaveBeenCalledOnce();
+    expect(onStream).toHaveBeenLastCalledWith({ type: 'result', data: {
+      result: 'partial answer', success: false, sessionId: response.sessionId, error: 'permission denied',
+    } });
+  });
+
+  it('非ゼロ終了でもtool出力の429を失敗resultの原因へ混ぜない', async () => {
+    vi.useFakeTimers();
+    stubSpawn({ closeCode: 1, stdoutChunks: [
+      `${JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool', content: 'HTTP 429: Too Many Requests' }] } })}\n`,
+      `${JSON.stringify({ type: 'result', subtype: 'error', errors: ['permission denied'] })}\n`,
+    ] });
+    const pending = callClaudeHeadless('agent', 'prompt', { cwd: '/tmp' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(0);
+    const result = await pending;
+    expect(result.status).toBe('error');
+    expect(result.errorKind).not.toBe('rate_limit');
+    expect(spawn).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    'HTTP 429: Too Many Requests',
+    '```text\nusage_limit_exceeded\n```',
+    '~~~text\nusage_limit_exceeded\n~~~',
+    '> > usage_limit_exceeded',
+    '説明:\n    usage_limit_exceeded\n以上',
+    '```text\nusage_limit_exceeded',
+  ])('成功本文とtool出力の通知の引用を失敗扱いしない: %s', async (text) => {
+    stubSpawn({ stdoutChunks: [
+      `${JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool', content: text }] } })}\n`,
+      `${JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text }] } })}\n`,
+      `${JSON.stringify({ type: 'result', subtype: 'success', result: text })}\n`,
+    ] });
+    const result = await callClaudeHeadless('agent', 'prompt', { cwd: '/tmp' });
+    expect(result).toMatchObject({ status: 'done', content: text });
+    expect(result.errorKind).toBeUndefined();
+    expect(spawn).toHaveBeenCalledOnce();
+    expect(lastKill).not.toHaveBeenCalled();
   });
 
   it('成功 result 本文の一般的な rate limit / 429 記述は done のまま返す', async () => {
@@ -1080,9 +1433,9 @@ describe('callClaudeHeadless', () => {
     });
     await callClaudeHeadless('agent', 'hi', { cwd: '/tmp' });
     const argv = lastSpawnArgv();
-    expect(argv[0]).toBe('-p');
     expect(argv).toEqual(
       expect.arrayContaining([
+        '-p',
         '--output-format',
         'stream-json',
         '--verbose',
@@ -1283,7 +1636,7 @@ describe('callClaudeHeadless', () => {
     expect(second.content).toBe('second');
   });
 
-  it('passes mcpServers as --mcp-config temp file and removes it after execution', async () => {
+  it.each([undefined, true] as const)('cleans client-created MCP independently of prepared MCP ownership (%s)', async (callerManagedMcp) => {
     stubSpawn({
       stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'x' })}\n`],
       closeCode: 0,
@@ -1291,6 +1644,7 @@ describe('callClaudeHeadless', () => {
 
     await callClaudeHeadless('agent', 'p', {
       cwd: '/tmp',
+      callerManagedMcp,
       mcpServers: {
         local: {
           command: 'node',
@@ -1567,7 +1921,7 @@ describe('callClaudeHeadless', () => {
     expect(res.sessionId).toBe('resume-session-from-report-phase');
   });
 
-  it('passes --allowed-tools with comma-joined values after --model and before --effort', async () => {
+  it('passes model, comma-joined allowed tools, and effort to the CLI', async () => {
     stubSpawn({
       stdoutChunks: [`${JSON.stringify({ type: 'text', text: 'x' })}\n`],
       closeCode: 0,
@@ -1582,15 +1936,17 @@ describe('callClaudeHeadless', () => {
     const modelIdx = argv.indexOf('--model');
     const toolsIdx = argv.indexOf('--allowed-tools');
     const effortIdx = argv.indexOf('--effort');
-    const sepIdx = argv.indexOf('--');
     expect(modelIdx).toBeGreaterThanOrEqual(0);
     expect(toolsIdx).toBeGreaterThanOrEqual(0);
     expect(effortIdx).toBeGreaterThanOrEqual(0);
+    expect(argv[modelIdx + 1]).toBe('sonnet');
     expect(argv[toolsIdx + 1]).toBe('Read,Grep,Edit');
     expect(argv[effortIdx + 1]).toBe('high');
-    expect(modelIdx).toBeLessThan(toolsIdx);
-    expect(toolsIdx).toBeLessThan(effortIdx);
-    expect(effortIdx).toBeLessThan(sepIdx);
+    const separatorIdx = argv.indexOf('--');
+    expect(separatorIdx).toBeGreaterThan(-1);
+    expect(modelIdx).toBeLessThan(separatorIdx);
+    expect(toolsIdx).toBeLessThan(separatorIdx);
+    expect(effortIdx).toBeLessThan(separatorIdx);
   });
 
   it('passes anthropicApiKey to the child process as ANTHROPIC_API_KEY', async () => {

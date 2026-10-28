@@ -23,8 +23,18 @@ export const TaskRecordSchema = buildTaskSchema(
   TaskExecutionConfigObjectSchema.extend({
     name: z.string().min(1),
     status: TaskStatusSchema,
+    deletion: z.object({
+      id: z.string().uuid(),
+      owner_pid: z.number().int().positive(),
+      owner_start_time: z.string().min(1).optional(),
+    }).optional(),
     slug: z.string().optional(),
     run_slug: z.string().min(1).optional(),
+    execution_id: z.string().min(1).optional(),
+    stop_request: z.object({
+      execution_id: z.string().min(1),
+      requested_at: z.iso.datetime(),
+    }).strict().optional(),
     source_run_slug: z.string().min(1).optional(),
     resume_mode: z.enum(RUN_RESUME_MODES).optional(),
     summary: z.string().optional(),

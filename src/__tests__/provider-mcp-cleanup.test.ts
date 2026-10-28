@@ -1,8 +1,11 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 const runHeadlessCliMock = vi.hoisted(() => vi.fn());
+const cursorSpawn = vi.hoisted(() => vi.fn());
+vi.mock('node:child_process', () => ({ spawn: cursorSpawn }));
 vi.mock('../infra/claude-headless/headless-spawn.js', async () => {
   const actual = await vi.importActual<typeof import('../infra/claude-headless/headless-spawn.js')>(
     '../infra/claude-headless/headless-spawn.js',
@@ -12,6 +15,7 @@ vi.mock('../infra/claude-headless/headless-spawn.js', async () => {
 // New modules under test (implemented in the following `implement` step).
 import { createMcpAdapter, type ResolvedMcpServers, type ProviderMcpContext } from '../infra/providers/mcp/index.js';
 import { callClaudeHeadless } from '../infra/claude-headless/client.js';
+import { CursorProvider } from '../infra/providers/cursor.js';
 
 /**
  * Contracts covered (see plan.md 完了契約):
@@ -53,6 +57,7 @@ describe('ProviderMcpAdapter cleanup (MCP-CLEANUP)', () => {
   beforeEach(() => {
     workDir = mkdtempSync(join(tmpdir(), 'takt-mcp-cleanup-'));
     runHeadlessCliMock.mockReset();
+    cursorSpawn.mockReset();
   });
 
   afterEach(() => {
@@ -167,5 +172,26 @@ describe('ProviderMcpAdapter cleanup (MCP-CLEANUP)', () => {
     const path = (prepared as { path?: string }).path;
     expect(path).toBeUndefined();
     await expect(prepared.dispose()).resolves.toBeUndefined();
+  });
+
+  it.each([undefined, true] as const)('preserves the Cursor workspace until its owner disposes it (%s)', async (callerManagedMcp) => {
+    const prepared = await createMcpAdapter('cursor').prepare(resolvedServers(), baseContext());
+    const path = join(prepared.configRoot!, '.cursor', 'mcp.json');
+    cursorSpawn.mockImplementation((_command: string, args: string[]) => {
+      expect(args[args.indexOf('--workspace') + 1]).toBe(prepared.configRoot);
+      expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({ mcpServers: { 'common-tools': { command: 'srv', env: { TOKEN: 'x' } } } });
+      const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter(), kill: vi.fn() });
+      queueMicrotask(() => {
+        child.stdout.emit('data', Buffer.from(JSON.stringify({ content: 'reply', sessionId: 'fresh-session' })));
+        child.emit('close', 0);
+      });
+      return child;
+    });
+    try {
+      expect(await new CursorProvider().setup({ name: 'manager' }).call('prompt', { cwd: workDir, preparedMcp: prepared, callerManagedMcp }))
+        .toMatchObject({ status: 'done', content: 'reply', sessionId: 'fresh-session' });
+      expect(existsSync(path)).toBe(callerManagedMcp === true);
+    } finally { await prepared.dispose(); }
+    expect(existsSync(prepared.configRoot!)).toBe(false);
   });
 });

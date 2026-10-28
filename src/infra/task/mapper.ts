@@ -45,7 +45,6 @@ function buildTaskFileData(task: TaskRecord, content: string): TaskFileData {
     ...(task.goal_id === undefined ? {} : { goal_id: task.goal_id }),
     ...(task.goal_purpose === undefined ? {} : { goal_purpose: task.goal_purpose }),
     ...(task.goal_work_key === undefined ? {} : { goal_work_key: task.goal_work_key }),
-    ...(task.goal_operation_id === undefined ? {} : { goal_operation_id: task.goal_operation_id }),
     worktree: task.worktree,
     branch: task.branch,
     base_branch: task.base_branch,
@@ -68,6 +67,7 @@ function buildTaskFileData(task: TaskRecord, content: string): TaskFileData {
     caccia_pushed_head: task.caccia_pushed_head,
     merge_task: task.merge_task,
     merge_method: task.merge_method,
+    merge_concurrency: task.merge_concurrency,
     merge_threat_check_max_diff_bytes: task.merge_threat_check_max_diff_bytes,
     merge_head_repository_url: task.merge_head_repository_url,
     merge_head_repository_push_urls: task.merge_head_repository_push_urls,
@@ -90,6 +90,7 @@ export function toTaskInfo(projectDir: string, tasksFile: string, task: TaskReco
     name: task.name,
     slug: task.slug,
     runSlug: task.run_slug,
+    executionId: task.execution_id,
     sourceRunSlug: task.source_run_slug,
     resumeMode: task.resume_mode,
     summary: task.summary,
@@ -98,6 +99,7 @@ export function toTaskInfo(projectDir: string, tasksFile: string, task: TaskReco
     createdAt: task.created_at,
     status: task.status,
     worktreePath: task.worktree_path,
+    ...(task.pr_url === undefined ? {} : { prUrl: task.pr_url }),
     data: buildTaskFileData(task, content),
   };
 }
@@ -150,6 +152,8 @@ function toCompletedTaskItem(projectDir: string, tasksFile: string, task: TaskRe
 
 function toBaseTaskListItem(projectDir: string, tasksFile: string, task: TaskRecord): Omit<TaskListItem, 'kind' | 'failure' | 'exceededMaxSteps' | 'exceededCurrentIteration'> {
   return {
+    executionId: task.execution_id,
+    goalId: task.goal_id,
     name: task.name,
     createdAt: task.created_at,
     filePath: tasksFile,
@@ -191,10 +195,10 @@ export function toTaskListItem(projectDir: string, tasksFile: string, task: Task
 
 export function toTaskState(tasksFile: string, task: TaskRecord): TaskState {
   return {
+    executionId: task.execution_id,
     ...(task.goal_id === undefined ? {} : { goalId: task.goal_id }),
     ...(task.goal_purpose === undefined ? {} : { goalPurpose: task.goal_purpose }),
     ...(task.goal_work_key === undefined ? {} : { goalWorkKey: task.goal_work_key }),
-    ...(task.goal_operation_id === undefined ? {} : { goalOperationId: task.goal_operation_id }),
     ...(task.completion === undefined ? {} : { completion: task.completion }),
     kind: task.status,
     status: task.status,

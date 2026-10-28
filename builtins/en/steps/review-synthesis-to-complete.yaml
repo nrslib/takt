@@ -1,4 +1,5 @@
 name: review-synthesis
+description: Independently determine whether the current code meets requirements and resolves the findings.
 capabilities: readonly
 tags:
   - final-gate

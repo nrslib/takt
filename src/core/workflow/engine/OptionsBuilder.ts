@@ -3,6 +3,7 @@ import type { StepProviderOptions } from '../../models/workflow-types.js';
 import type { TaskReviewScope } from '../review-scope.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { WorkflowMeta } from '../../../agents/types.js';
+import type { WorkflowAssignment, WorkflowPromptContext } from '../workflow-prompt-context.js';
 import type { StructuredCaller } from '../../../agents/structured-caller.js';
 import type { ReportPhaseRunnerContext, StatusJudgmentPhaseContext } from '../phase-runner.js';
 import {
@@ -95,9 +96,7 @@ export class OptionsBuilder {
     private readonly getSessionId: (persona: string) => string | undefined,
     private readonly getReportDir: () => string,
     private readonly getLanguage: () => Language | undefined,
-    private readonly getWorkflowSteps: () => ReadonlyArray<{ name: string; description?: string }>,
     private readonly getWorkflowName: () => string,
-    private readonly getWorkflowDescription: () => string | undefined,
     private readonly getCurrentWorkflowStack: () => WorkflowResumePointEntry[] | undefined = () => undefined,
     private readonly getTask?: () => string,
     private readonly getReviewScope?: () => TaskReviewScope,
@@ -105,6 +104,7 @@ export class OptionsBuilder {
     private readonly getAbortSignal: () => AbortSignal | undefined = () => this.engineOptions.abortSignal,
     private readonly recordActivity: ProviderActivityCallback = () => {},
     private readonly getReportsRootDir?: () => string,
+    private readonly getWorkflowPromptContext?: (step: WorkflowStep, assignment?: WorkflowAssignment) => WorkflowPromptContext | undefined,
   ) {}
 
   private resolveAbortSignal(): AbortSignal | undefined {
@@ -472,27 +472,22 @@ export class OptionsBuilder {
       && providerInfo.provider === step.provider;
   }
 
+  buildWorkflowMeta(step: WorkflowStep, runtime?: RuntimeStepResolution): WorkflowMeta {
+    return { workflowName: this.getWorkflowName(), currentStep: step.name, context: this.getWorkflowPromptContext?.(step, runtime?.workflowAssignment) };
+  }
+
   /** Build common RunAgentOptions shared by all phases */
   buildBaseOptions(
     step: WorkflowStep,
     mergedProviderOptions?: StepProviderOptions,
     runtime?: RuntimeStepResolution,
   ): ResolvedRunAgentOptions {
-    const steps = this.getWorkflowSteps();
-    const currentIndex = steps.findIndex((currentStep) => currentStep.name === step.name);
-    const currentPosition = currentIndex >= 0 ? `${currentIndex + 1}/${steps.length}` : '?/?';
     const providerInfo = this.resolveStepProviderModel(step, runtime);
     const { provider: resolvedProvider, model: resolvedModel } = providerInfo;
 
     const providerOptions = mergedProviderOptions
       ?? this.resolveMergedProviderOptions(step, providerInfo, runtime);
-    const workflowMeta: WorkflowMeta = {
-      workflowName: this.getWorkflowName(),
-      workflowDescription: this.getWorkflowDescription(),
-      currentStep: step.name,
-      stepsList: steps,
-      currentPosition,
-    };
+    const workflowMeta = this.buildWorkflowMeta(step, runtime);
     const baseOptions: ResolvedRunAgentOptions = {
       executionPhase: 1,
       cwd: this.getCwd(),
@@ -711,8 +706,7 @@ export class OptionsBuilder {
         resolvedProvider,
       );
 
-    // Skip session resume when cwd !== projectCwd (worktree execution) to avoid cross-directory contamination
-    const shouldResumeSession = !runtime?.fallback && step.session !== 'refresh' && this.getCwd() === this.getProjectCwd();
+    const shouldResumeSession = !runtime?.fallback && step.session !== 'refresh';
 
     const supportsStructuredOutput = providerSupportsStructuredOutput(resolvedProvider);
     const baseOptions = this.buildBaseOptions(step, mergedProviderOptions, runtime);
@@ -814,6 +808,7 @@ export class OptionsBuilder {
     const options: RunAgentOptions = {
       ...this.buildReadonlyPhaseBaseOptions(step, undefined, fallbackRuntime),
       ...this.resolveReadonlyPhaseConstraints(step, overrides.allowedTools, fallbackRuntime),
+      workflowMeta: failedPrimaryOptions.workflowMeta,
       sessionId: undefined,
       ...(maxTurns !== undefined ? { maxTurns } : {}),
     };
@@ -878,6 +873,7 @@ export class OptionsBuilder {
       this.getCurrentWorkflowStack() ?? [],
     );
     return {
+      workflowMeta: this.buildWorkflowMeta(step, runtime),
       cwd: this.getCwd(),
       task: this.getTask?.(),
       projectCwd: this.getProjectCwd(),

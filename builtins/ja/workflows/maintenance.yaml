@@ -5,6 +5,7 @@ initial_step: develop
 
 steps:
   - name: develop
+    description: 既存のコードと契約を尊重して必要な変更を実装し、テスト・レビューと修正で要件の充足を確認する
     kind: workflow_call
     call: development-core
     args:

@@ -197,7 +197,7 @@ export function compileRuntimeProviderEnvironment(
   }
 
   // Reuse the runtime section's up-front validation: unknown profile/pool references,
-  // cyclic `extends`, and profiles missing provider/model all throw here.
+  // cyclic `extends`, missing providers, and OpenCode profiles missing models all throw here.
   validateRuntimeProviderSection(section);
 
   const flatProfiles = flattenProfiles(section.profiles ?? {});
@@ -369,10 +369,11 @@ function buildInternalAgents(
     assistant: 'assistant',
     'loop-judge': 'loopJudge',
     'review-completion-judge': 'completionRetryJudge',
+    'manager-permission-judge': 'managerPermissionJudge',
   };
   const result: InternalAgentEnvironment = {};
   for (const [key, assignment] of Object.entries(map)) {
-    const seat = seats[key];
+    const seat = Object.hasOwn(seats, key) ? seats[key] : undefined;
     if (seat === undefined) {
       throw new Error(
         `runtime.yaml \`provider.targets.internal_agents\` supports only ${Object.keys(seats)
@@ -452,7 +453,7 @@ function buildAutoRoutingConfig(
     strategy,
     router: {
       provider: router.provider as ProviderType,
-      model: router.model as string,
+      model: router.model,
       ...(router.providerOptions !== undefined ? { providerOptions: router.providerOptions } : {}),
       ...(router.permissionMode !== undefined ? { permissionMode: router.permissionMode } : {}),
     },
@@ -482,7 +483,7 @@ function registerCandidate(
   candidates.set(profileName, {
     name: profileName,
     provider: entry.provider as ProviderType,
-    model: entry.model as string,
+    model: entry.model,
     routingTier: tier,
     ...(entry.providerOptions !== undefined ? { providerOptions: entry.providerOptions } : {}),
     ...(entry.permissionMode !== undefined ? { permissionMode: entry.permissionMode } : {}),
@@ -561,7 +562,7 @@ function requireRoutingTier(
 }
 
 /**
- * Resolve a profile reference into provider/model/options. Presence of provider/model on
+ * Resolve a profile reference into provider/model/options. Presence of provider on
  * referenced profiles was asserted by `validateRuntimeProviderSection`; a flat profile
  * `options` bag is nested under the profile's provider and normalized into `StepProviderOptions`.
  */
@@ -571,15 +572,16 @@ function resolveProfileEntry(
   resolutionContext?: FacetResolutionContext,
 ): ProviderRoutingEntry {
   const profile = flatProfiles.get(profileName);
-  if (profile?.provider === undefined || profile.model === undefined) {
+  if (profile?.provider === undefined) {
     throw new Error(
-      `runtime.yaml \`provider.profiles."${profileName}"\` is not defined or is missing \`provider\`/\`model\``,
+      `runtime.yaml \`provider.profiles."${profileName}"\` is not defined or is missing \`provider\``,
     );
   }
   const options = resolveProfileProviderOptions(profileName, profile, resolutionContext);
   return {
     provider: profile.provider as ProviderType,
     model: profile.model,
+    ...(profile.model === undefined ? { modelSpecified: true } : {}),
     ...(options !== undefined ? { providerOptions: options } : {}),
     ...(profile.permissionMode !== undefined ? { permissionMode: profile.permissionMode } : {}),
   };

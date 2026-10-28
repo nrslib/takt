@@ -6,12 +6,14 @@ params:
     type: facet_ref[]
     facet_kind: knowledge
 name: fix-verifier
+description: 修正計画の受入条件を現在のコードと証拠に照らし、完了したかを検証する
 capabilities: readonly
 tags:
   - verification
 edit: false
 persona: coding-reviewer
 policy:
+  - process-deviation
   - contract-change
   - $param: verification_policy
 knowledge:

@@ -1,3 +1,4 @@
+description: Call the specified specialist review workflow and decide whether fixes are needed.
 kind: workflow_call
 call:
   $param: reviewer_suite

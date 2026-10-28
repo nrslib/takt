@@ -5,11 +5,13 @@ params:
   fix_knowledge:
     type: facet_ref[]
     facet_kind: knowledge
+description: Fix the findings from the AI antipattern review and the supervisor in parallel.
 tags:
   - coding
 capabilities: readonly
 parallel:
   - name: ai-antipattern-fix-parallel
+    description: Check the AI review findings against the actual code, fix the issues, and report the results.
     capabilities: edit
     tags:
       - coding
@@ -27,6 +29,7 @@ parallel:
         - name: ai-antipattern-fix-report.md
           format: fix-report
   - name: supervise_fix_parallel
+    description: Fix the supervisor findings in priority order and report the changes and verification results.
     capabilities: edit
     tags:
       - coding

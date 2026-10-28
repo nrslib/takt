@@ -664,6 +664,10 @@ async function readRunView(
   return {
     project,
     ...detail,
+    warnings: [
+      ...detail.warnings,
+      ...(task?.runWarnings ?? []).filter((warning) => warning.runId === slug).map((warning) => warning.message),
+    ],
     ...(task === undefined
       ? {}
       : {

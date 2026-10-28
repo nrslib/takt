@@ -14,6 +14,7 @@ import { assertStrictStructuredOutputSchema } from '../core/workflow/engine/stru
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { makeStep } from './engine-test-helpers.js';
 import { SelectorInputReader } from '../core/workflow/dynamic-parallel/selector-input-reader.js';
+import { buildDynamicSelectorInstruction } from '../core/workflow/dynamic-parallel/selector-input.js';
 
 vi.mock('../agents/structured-caller/transport.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../agents/structured-caller/transport.js')>();
@@ -104,9 +105,69 @@ function dependencies(
   };
 }
 
+describe('buildDynamicSelectorInstruction', () => {
+  it('should render reviewer roles and optional selection hints for a mixed pool', () => {
+    const instruction = buildDynamicSelectorInstruction({
+      task: 'review changes',
+      reportDirectory: '.takt/reports',
+      reportNames: [],
+      changedPaths: [],
+      pool: [
+        {
+          name: 'backend',
+          personaDisplayName: 'backend',
+          instruction: 'review',
+          description: 'API とドメインロジックをレビューする',
+        },
+        {
+          name: 'security',
+          personaDisplayName: 'security',
+          instruction: 'review',
+          description: '秘密情報と権限にかかわる変更をレビューする',
+          selectionHint: '認証・権限にかかわる変更がある場合に選ぶ',
+        },
+      ],
+      selection: { mode: 'replace' },
+    });
+
+    expect(instruction.split('\n').slice(0, 3)).toEqual([
+      'Select the pool reviewer IDs that are required for this task.',
+      'Return only the requested structured output.',
+      'Each candidate line states what the reviewer does. When a candidate has a "Selection hint", follow it to decide whether to select that candidate; otherwise decide from what the reviewer does.',
+    ]);
+    expect(instruction.split('Candidates:\n')[1]).toBe([
+      '- backend: API とドメインロジックをレビューする',
+      '- security: 秘密情報と権限にかかわる変更をレビューする',
+      '  Selection hint: 認証・権限にかかわる変更がある場合に選ぶ',
+    ].join('\n'));
+  });
+});
+
 describe('DynamicParallelSelectorCoordinator', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('should redact secrets from selection hints when the selector echoes them in an error', async () => {
+    mockedExecuteAgent.mockRejectedValueOnce(new Error('selector failed: hint-secret'));
+    const coordinator = new DynamicParallelSelectorCoordinator(dependencies());
+    const step = makeStep('reviewers', {
+      parallel: {
+        kind: 'dynamic',
+        fixed: [],
+        pool: [{
+          name: 'security',
+          personaDisplayName: 'security',
+          instruction: 'review',
+          description: 'security review',
+          selectionHint: 'Inspect token=hint-secret when reviewing authentication changes.',
+        }],
+        selection: { mode: 'replace' },
+      },
+    });
+
+    await expect(coordinator.selectParticipants(step, workflowState(), 'review changes'))
+      .rejects.toThrow('selector failed: [REDACTED]');
   });
 
   it('should send a provider-compatible schema and validate the returned selection', async () => {

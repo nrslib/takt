@@ -1,3 +1,4 @@
+import { buildWorkflowPromptTree } from '../workflow-prompt-context.js';
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import { ProviderNeutralStructuredCaller, type StructuredCaller } from '../../../agents/structured-caller.js';
@@ -70,7 +71,7 @@ import {
 } from '../review-report-discovery.js';
 import { getRemoteRepositoryIdentifiers } from '../../../infra/git/detect.js';
 import { WorkflowResumeContinuation } from './workflow-resume-continuation.js';
-import { inheritWorkflowConfigMetadata, translateWorkflowConfigError } from '../../../shared/workflowConfigMetadata.js';
+import { getAttachedWorkflowBundleNodeId, inheritWorkflowConfigMetadata, translateWorkflowConfigError } from '../../../shared/workflowConfigMetadata.js';
 import { WorkflowRestartNavigator } from './WorkflowRestartNavigator.js';
 import { withWorkflowTargetContext } from '../provider-target-resolution.js';
 import { readResumeReportSnapshotManifest } from '../run/resume-report-snapshot.js';
@@ -303,6 +304,12 @@ export class WorkflowEngine extends EventEmitter {
       throw translateWorkflowConfigError(this.config, error);
     }
 
+    // Only bundle resolvers read already resolved definitions without invoking live calls.
+    if (this.resumeStackPrefix.length === 0 && getAttachedWorkflowBundleNodeId(this.config) !== undefined) {
+      this.sharedRuntime.workflowPromptTree ??= buildWorkflowPromptTree(
+        this.config, this.options.workflowCallResolver, this.projectCwd, this.cwd,
+      );
+    }
     this.state = createInitialState(this.config, this.options);
     this.resumeContinuation = new WorkflowResumeContinuation(
       this.config,
@@ -440,6 +447,7 @@ export class WorkflowEngine extends EventEmitter {
           prepareNormalStepExecution: this.stepCoordinator.prepareNormalStepExecution.bind(this.stepCoordinator),
           resolveStepProviderModel: (step, runtime) => this.optionsBuilder.resolveStepProviderModel(step, runtime),
           resolveStepProviderModelBeforeAutoRouting: (step, runtime) => this.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(step, runtime),
+          buildWorkflowMeta: (step, runtime) => this.optionsBuilder.buildWorkflowMeta(step, runtime),
           resolveRuntimeForStep: this.stepCoordinator.resolveRuntimeForStep.bind(this.stepCoordinator),
           claimStepOccurrence: (step) => (
             this.claimStepOccurrence(step, this.resumeStackPrefix)
@@ -967,6 +975,7 @@ export class WorkflowEngine extends EventEmitter {
           prepareNormalStepExecution: this.stepCoordinator.prepareNormalStepExecution.bind(this.stepCoordinator),
           resolveStepProviderModel: (step, runtime) => this.optionsBuilder.resolveStepProviderModel(step, runtime),
           resolveStepProviderModelBeforeAutoRouting: (step, runtime) => this.optionsBuilder.resolveStepProviderModelBeforeAutoRouting(step, runtime),
+          buildWorkflowMeta: (step, runtime) => this.optionsBuilder.buildWorkflowMeta(step, runtime),
           resolveRuntimeForStep: this.stepCoordinator.resolveRuntimeForStep.bind(this.stepCoordinator),
           claimStepOccurrence: (step) => (
             this.claimStepOccurrence(step, this.resumeStackPrefix)

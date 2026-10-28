@@ -39,6 +39,7 @@ import { runAgent } from '../agents/runner.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import { WorkflowEngine } from '../core/workflow/engine/WorkflowEngine.js';
 import { buildGitRules } from '../core/workflow/instruction/instruction-context.js';
+import { renderPhaseContext } from '../shared/prompts/phase-context.js';
 import { ProviderNeutralStructuredCaller } from '../agents/structured-caller.js';
 import type { WorkflowConfig, WorkflowStep, AgentResponse, ArpeggioStepConfig } from '../core/models/index.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
@@ -591,8 +592,10 @@ describe('ArpeggioRunner integration', () => {
     expect(phaseStarts.every((instruction) => !instruction.includes('arpeggio-execution-rule'))).toBe(true);
     expect(phaseStarts.every((instruction) => !instruction.includes('arpeggio-instruction-rule'))).toBe(true);
     const gitRules = buildGitRules(undefined, 'en', 'phase1');
+    const phaseContext = renderPhaseContext({ stepName: 'process', stepIteration: 1 }, 1, 'en');
     for (const instruction of phaseStarts) {
-      expect(instruction.startsWith(gitRules)).toBe(true);
+      expect(instruction.startsWith(phaseContext)).toBe(true);
+      expect(instruction.slice(phaseContext.length).trimStart().startsWith(gitRules)).toBe(true);
       expect(instruction.indexOf('ARPEGGIO_EXECUTION_RULE')).toBeGreaterThanOrEqual(gitRules.length);
       expect(instruction.indexOf('ARPEGGIO_INSTRUCTION_RULE')).toBeLessThan(
         instruction.indexOf('Process '),

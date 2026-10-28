@@ -4,9 +4,12 @@ import { parsePullRequestNumber, parseUiAction, parseUiPort } from '../app/cli/c
 import { resolveRemovedRootCommand } from '../app/cli/helpers.js';
 
 describe('CLI command registration', () => {
-  it('does not register manager or show it in help', () => {
-    expect(program.commands.map((command) => command.name())).not.toContain('manager');
-    expect(program.helpInformation()).not.toMatch(/\bmanager\b/u);
+  it('registers manager as an experimental conversation command without a one-shot argument', () => {
+    const manager = program.commands.find((command) => command.name() === 'manager');
+
+    expect(manager).toBeDefined();
+    expect(manager?.description()).toMatch(/experimental|実験的/iu);
+    expect(manager?.registeredArguments).toEqual([]);
   });
 
   it('should register the optional task argument on the root command', () => {

@@ -1,5 +1,24 @@
 # Prompt Quality Eval
 
+CI回復の実モデル評価はbuild後に`npm run eval:prompts:merge-ci-recovery`で明示実行します。
+調査6事例とレビュー5事例を日英で各3回、`gpt-5.6-sol`・reasoning effort `high`・生成キャッシュなしで評価します。
+調査はフレーク、mainの同一失敗、ランナー障害と403、外部シークレット欠落と空ログを比較します。
+レビューは製品コード・テストの根本修正と、テスト削除・アサーション緩和・ゲート無効化を比較します。
+専用prepareは本番workflowとInstructionBuilderへworkflow stateとレポートを渡します。
+入力と使用ファセットは`eval/prompts/merge-ci-*.phase1.md`と`eval/.work/merge-ci-recovery/*/.takt/facets.json`に保存します。
+生のモデル出力と採点はGit管理対象外の`eval/.results/merge-ci-investigation.json`と`eval/.results/merge-ci-review.json`に保存します。
+共通runnerはfixture metadataのソース・隔離作業ディレクトリと、それらを転載したプロンプト・回答・採点用プロンプトをリポジトリ相対パスへ正規化します。
+metadata設定前の準備エラーではProviderが生成する`takt-prompt-eval-fixture-`から始まる隔離ルートの絶対パスを`.`へ変換します。配下の`project`やsnapshot名、エラー理由は保持し、一般的な一時パスや接頭辞への本文中の言及は変更しません。
+公開用の結果は`eval/results/merge-ci-investigation.json`と`eval/results/merge-ci-review.json`に保存します。
+評価が失敗しても今回生成したJSONがあれば正規化します。今回のJSONがない場合や変換に失敗した場合はsuiteを失敗として記録し、以前の中間結果を公開せず後続suiteへ進みます。
+設定されたケースと有効な反復数から期待するラベル別件数を求め、実結果行の件数と照合します。終了コードが0でも欠落・過剰・件数の偏りがあればsuiteを失敗とし、今回のJSONは正規化して公開します。
+`--filter-pattern`と`--filter-first-n N`（`--filter-first-n=N`、`-n N`も同じ指定）による部分実行と、`--repeat`の指定を照合に反映します。フラグの記述順にかかわらず正規表現で絞ってから先頭Nケースを選び、そのケースの反復数から期待件数を求めます。
+例えば調査suiteに`--filter-first-n 1 --repeat 3`を渡した場合は`ja-clock`の3結果を要求します。選択指定がなければ12ラベル各3結果の36結果を要求します。部分実行の合格は全件評価の合格にはなりません。
+正規表現がどのケースにも一致しない場合は0件の部分実行です。実結果も0行でPromptfooの終了コードが0なら空の結果を公開してsuiteを合格としますが、全件評価の合格証拠にはなりません。選択外の結果行がある場合や終了コードが非0の場合も今回のJSONを正規化して公開し、suiteを失敗とします。ケースが選択されているのに実結果が0行なら欠落として失敗にします。
+本番schemaに適合する最終JSONのverdict/resultと、原因・根拠・結論の整合性を別々に採点します。
+調査36結果・レビュー30結果の全件合格を必要とし、平均点では相殺しません。
+`npm run eval:prompts:merge-ci-recovery:contracts`はモデルを呼ばずに構造化結果の読み取り・登録・公開用変換と保存経路を確認します。
+
 promptfoo-based quality evaluation for TAKT's faceted prompts. Unlike the mock
 E2E suite (which verifies engine mechanics), this measures whether the
 *content* of personas/policies/instructions actually produces good agent
@@ -92,6 +111,65 @@ Each row checks that its target task content is present and other task content
 is absent or present according to the user's stated scope. Compare
 per-metric rates and inspect actual model outputs before changing templates.
 
+`manager-work-split` は本番と同じ resolver で manager の persona / policy /
+knowledge / instruction を全文組み立て、設定行も本番と同じ形で付ける。
+`projectDir` と `TAKT_CONFIG_DIR` は空の一時ディレクトリに隔離し、ユーザーと
+プロジェクトの上書きを拾わない。Repository 行と書き込み引数には固定ケースの
+`cwd` を使う。イベント入力は dist の `buildGoalTurnContext`、会話入力は
+本番の `handleUserMessage` が渡す文書本文を使う。書き込みツールの引数 schema
+も dist から読み、テキスト再生の外側の JSON（`response` / `calls`）で採点する。
+この eval は「どの作業を投入し、どの操作を選ぶか、指示書に何を書くか」を計測する。
+本番のツール呼び出しの結果を受けた後の挙動や、操作名の管理（再試行・重複・
+保存済み操作との照合）は測らない。すべてのケースで操作列を JavaScript assert で
+検査し、`takt_tell_run` の引数 schema も本番の manager 用 schema から読み込む。
+制約に関する6ケースに加え、`parallel-cli`、`parallel-docs-migration`、
+`shared-resource`、`shared-definition`、`human-order`、`integration-check` は
+目的・指示書（本番の `purpose` / `task` 引数）や要約の実質を
+llm-rubric で判定する。追加した停止判断の2ケースも、通知・質問の説明や
+修正した指示書の内容を llm-rubric で判定する。再生時は一時の `CODEX_HOME` に元の環境から `auth.json` だけを置いて Codex を起動し、
+通常の設定、指示書、skill、MCP 設定を読み込まない。`auth.json` がない場合はコピーせず起動する。
+Claude は `--strict-mcp-config` で外部の MCP 設定を読み込まない。
+TAKT と関係のない題材として、`constraint-carryover-data` は Python の売上集計で
+変更モジュールの pytest、ゴール全体の最後に1回の全データ再集計、本番データベースへの
+接続禁止と手元の見本データでの途中の検証を指示書へ引き継ぐかを測る。
+`summary-keeps-constraint-web` は購入画面のゴール文書から、途中は変更画面の
+コンポーネントテストだけ、ブラウザ E2E は最後に1回、本番の決済 API は呼ばない
+（スタブかテスト用 API で検証）の区別を要約に残すかを測る。
+`escalate-repeated-failure` は Web ストアの決済用の検証鍵がなく、方針を変えても
+同じ原因で2回失敗した終了イベントで、決済確認とその後続を止め、blocked 通知か人宛ての質問で
+理由・試したこと・人に必要な対応を伝え、独立した管理画面の案内文の修正を投入するかを測る。
+`integration-already-checked` は在庫の保存形式を取り込んでから再読み込みの作業が始まり、
+成果の履歴と run の報告で統合後のビルドとテストを確認できる場合に、確認作業を足さず完成するかを測る。
+`escalate-not-on-first-failure` は CSV の仕様書の指定漏れによるデータ処理の初回失敗で、
+人の対応待ちで止まらず、読む資料と実装方針を補った指示書で投入するかを測る。
+巡回用の11ケースは、要求にない途中状態、方針で対象外の脅威、範囲外の作業、保証を
+保てる単純な代替案を裁定に指摘されたときの `takt_tell_run`、受け入れ条件にある
+不具合・既存動作の回帰・テスト不足・形式仕様・再試行時の重複防止を指摘されたときに
+対象を外さないこと、条件が矛盾して人の判断が要るときの質問、裁定が変わらない同一 run
+への指示の繰り返し防止を測る。指示の内容と理由、代替案の適切さは該当ケースの
+llm-rubric で評価し、`takt_tell_run` の有無と質問操作は JavaScript assert で判定する。
+28ケースを日英で、Sol Low (`gpt-6-sol`)、Opus 5 (`claude-opus-5`)、Luna Max
+(`gpt-6-luna`) に渡す。通常の gate は Sol Low、他の2行は本番条件との比較用。
+両CLI認証が必要で費用が高いため、既定実行から除外する。
+明示実行は `npm run eval:prompts:manager-work-split`（3反復、生成キャッシュ無効）。
+生の生成結果の保存は共通CLI provider の `TAKT_INTERACTIVE_EVAL_OUTPUT_DIR` を使える。
+
+モデルを呼ばない検証は build 済みの dist を用いて行う。
+
+```bash
+node --test eval/asserts/manager-work-split.test.mjs
+node --test eval/manager-work-split-prompt.test.mjs
+node --test eval/providers/manager-work-split.test.mjs
+node --test eval/suite-registry.test.mjs
+```
+
+RED は別の隔離コピーで日英の policy / knowledge / instruction を main の内容に
+差し替え、`TAKT_EVAL_MANAGER_OMIT_CONCURRENCY=1` で main の設定行を再現する。
+GREEN は改修後のファセットと Concurrency limit 行を使う。ケース・外側の再生指示・
+採点条件・モデル設定・反復数は両方で固定する。RED でも合格するケースは回帰ガード
+として扱い、改善の根拠に数えない。実モデルでの結果は未測定であり、差が出るとは
+断定しない。モデルの失敗と provider / grader の失敗は区別し、生成結果を確認する。
+
 The `rescan` suite additionally runs local/open models through the opencode
 CLI (`eval/providers/opencode-review.sh`) to track how far facet design can
 carry weak reviewers; those rows need an authenticated opencode login.
@@ -179,6 +257,23 @@ for baseline conditions and the limits of comparative claims.
 `fix-verification-applicable-inputs` は完了検証7ケース、再計画3ケース、レビュー裁定4ケースを、隔離したfixtureと現在のファセットで評価します。`npm run eval:prompts:fix-verification-applicable-inputs` で明示実行します。レビュー裁定A1〜A4だけの評価は `npm run eval:prompts:review-adjudication-applicable-inputs` で実行できます。専用verifierの状態・経路を測る `fix-verifier-family-boundary`、`fix-verifier-state-closure`、`fix-verifier-state-routing` と複数モデル比較の設定も登録されています。これらは各stepの評価であり、修正ループ全体の収束は測りません。
 
 `finding-premise-scope` はレビュー担当4ケースと再計画2ケースを、ケースごとの隔離 fixture と現在のファセットから生成したプロンプトで評価します。Codex gpt-6-sol low、Claude Opus 5、Codex gpt-6-luna max を使い、判定役は gpt-6-sol low です。両 CLI の認証が必要なためデフォルト実行から除外し、`npm run eval:prompts:finding-premise-scope` で明示実行します。rv1 は計画の設計判断（秘密値を写さない）を受入条件として指摘にしないこと、rv2 は前回の裁定が広げた取引先 CSV の形式外の金額表記を理由に persists にしないことを測ります。rn1 は契約が定める円記号付きの金額を persists とし、rn2 は外部の提出者が付けたファイル名による保存先の外への書き込みを blocking の指摘にすることを測ります。pl1 は裁定が広げた形式外の表記を再計画の作業にしないこと、pn1 は契約が定める表記を作業にすることを測ります。
+
+`finding-realistic-premise` は、レビュー6ケース、裁定6ケース、修正完了の検証4ケース、検証後の再計画1ケースの計17ケースで、各役割の判断を評価します。
+
+レビューと裁定では、問題として扱うべきかを次の組み合わせで測ります。
+
+- ローカル状態を書き換えるという仮定だけでは修正対象にせず、共有アーカイブのパスによって展開先の外へ書き込める問題は修正対象にする。
+- 人が別々に始めた操作が重なるという仮定だけでは修正対象にせず、製品自身が並行に動かす処理で起きる問題は修正対象にする。
+- 根拠のない大量入力を修正対象にせず、文書が定める量のデータで起きる問題は修正対象にする。
+
+修正完了の検証と再計画では、過去にテストや文書生成を実行したことと、成果物に残る変更や共有DBへの書き込みを区別するかを測ります。
+
+各ケースには、独立した fixture と現在のファセットから生成したプロンプトを使います。
+Codex gpt-6-sol low、Claude Opus 5、Codex gpt-6-luna max の結果を、判定役の gpt-6-sol low で比較します。
+両CLIの認証が必要なため、デフォルトの実行対象には含めません。
+`npm run eval:prompts:finding-realistic-premise` で、キャッシュを使わずに明示的に実行します。
+構成の確認は、build 後の `npm run eval:prompts:contracts` に含まれます。
+固定入力に対する各役割の判断を測る評価であり、ループ全体が収束するか、変更によって改善したかは別途実測する必要があります。
 
 The `instruction-research-handoff` suite evaluates the instruction-summary,
 plan, report, and routing boundaries from the instruction-research handoff
@@ -389,8 +484,21 @@ remain excluded.
 
 ## Suites
 
+`phase-awareness` を実行する前に、main のチェックアウトで `npm install` と
+`npm run build` を実行し、生成された `dist` の絶対パスを用意してください。
+このブランチでも build 後、次のように指定します。
+
+```sh
+npm run eval:prompts:phase-awareness -- --red-dist /path/to/main/dist
+npm run eval:prompts:phase-awareness:smoke -- --red-dist /path/to/main/dist
+```
+
+`--plan` にも `--red-dist` が必要です。既存結果を集計する `--report-only` では不要です。
+
 | Suite | Workflow / step | Fixture | Measures |
 |-------|-----------------|---------|----------|
+| `manager-work-split` | manager conversation / event turn | manager-work-split（28ケース×日英） | 同時投入と依存・共有資源・人の順序の区別、結合後の確認と不要な確認・確認済みの区別、制約の引き継ぎ・1回の担当・要約での保持・制約を作らないこと、人の対応が必要な失敗での停止と自力で直せる初回失敗の継続、巡回時に裁定対象と元の要求・方針・範囲を照合する判断（指示・対象外・単純化・継続・質問・変更なし）。操作選択と引数のみを測定 |
+| `phase-awareness` | review-adjudication / coding-review / implement の Phase 1 → 2 → 1、conductor の structured / tag / ai_judge | phase-awareness（1〜9・5b・6b・8b、会話・判定方式の別で14行） | 本番 dist を切り替える独立セッション。生イベントのツール出力・fixture前後差分・実行マーカー・StructuredOutput の別集計を検査。`npm run eval:prompts:phase-awareness` は Luna max の1・2を red/green 各10回、他は3回（5bはgreenのみ）。改善は1・2それぞれ green 10/10 かつ red ≤5/10。Sol low／Opus 5は参考。build後の `npm run eval:prompts:phase-awareness:smoke` はSol lowで各 red/green 1回のみ（5bも両方を確認）。`--red-dist <mainのdistの絶対パス>`（必須）・`--green-dist`（既定このdist）・`--cases 2,4,5,8,9`（対象を限定）を指定可能。ケース8はfixtureのテストファイル読み込み時とtest scriptのランナー起動時に印ファイルを書き、試行後に印があれば fail とする。ファイル変更はfixture前後差分で判定し、変更やテストの試行の文字列分類は行わない。ケース9は試行ごとに乱数で作る一意の文字列をdocs/内だけに置き、全ターンのモデル応答・ツール出力・試行で作成または変更したファイルのいずれかへの露出で fail とする。docs/を読んでも文字列を応答・ツール出力・生成ファイルに出さない場合は見逃すという限界がある。ケース8・9とも対象ソースを確認した証拠はツール出力の内容で検査し、コマンドやツール引数の文字列は分類しない。ケース1・2はturn2後に乱数で作った一意の文字列（ケース1は新レビューレポート内の各ID、ケース2は変更コードのコメント）が、turn3の生イベントのツール出力（Claudeのネイティブツール結果を含む）に現れたことを読み取りの証拠とし、コマンドやツール引数を分類しない。一意の文字列が送信入力に含まれないことも検査する。ケース1はIDごとの裁定を構造化抽出し、否定・矛盾を含め期待値と照合する。ケース1〜5・5b・8・9の内容は、対象とは別の新規・隔離された Sol low 採点セッションで実質を検査し、入力・生イベントを `content-grade/` に保存（同じ入力の集計では再利用）。採点CLIの失敗・タイムアウト・不正な採点応答は無効として合否から除き、表に不合格数・無効数を出す。無効が1件でもあれば1・2の改善は判定不能。常に `--no-cache`。送信入力・生イベント・セッション／終了コード・回答・前後差分・固定入力manifest・provider×ケース×red/green表は `eval/.results/phase-awareness/<実行日時>/`。contractsはモデルを呼ばない |
 | `review-external-confirmation` | peer-review / review-adjudication | review-external-confirmation (9 independent cases) | 採用済み問題の外部確認待ちへの移行、未修正・必要検証未実施・旧版成功・コード起因失敗の維持、根拠なし条件の範囲外、サービス停止の原因分類。human-approval は改善根拠に数えない回帰確認用 |
 | `security-threat-model` | takt-development-review / security-review (A1, A3, A5); peer-review / initial security-review (A2, A4) | security-threat-model (5 independent cases) | 明示された実行前提の新しい入口と、自動起動・書き込み credential・既存防御の迂回・Git merge driver の経路を区別する RED 先行評価 |
 | `secondary-platform-adjudication` | peer-review / review-adjudication (B1–B13), final-gate (C1) | secondary-platform-adjudication (14 independent cases) | 副次環境の新機能と退行の区別、主要環境・明示契約の対照、根拠なしの実機確認条件を外した後の完了判定 |
@@ -405,6 +513,8 @@ remain excluded.
 | `cqrs` | review-backend-cqrs / cqrs-es-review | backend-cqrs | recall on 3 planted CQRS+ES violations |
 | `rescan` | peer-review / arch-review (round 2) | inventory-es | re-scan evidence + recall on 4 planted defects after previous findings were resolved |
 | `frontend-coder` | frontend / implement | frontend-app (work copy) | artifact checks on the implemented change |
+| `frontend-mediator-review` | frontend / frontend-review (React knowledge) | frontend-mediator-review/{good,bad,bad2,good-hook} (separate copies) | page-owned state false positives and delegation-layer false negatives; Luna max / Opus |
+| `frontend-mediator-coder` | frontend / implement | frontend-mediator (fresh copy per call) | page operation ownership versus a separate Mediator layer; paired editing and display-only cases; Codex low / Claude Opus |
 | `cqrs-coder` | backend-cqrs / implement | backend-cqrs (work copy) | artifact checks on the implemented change |
 | `fix-closure` | review-remediation / fix | fix-closure (work copy) | whether implementation closes the planned obligations across fix units and hierarchical projections |
 | `fix-self-scan` | peer-review / fix | fix-self-scan (work copy) | whether the coder's post-edit self-scan removes change-induced dead code, keeps the declared layer direction, and consolidates duplicated override semantics instead of shipping a plan-complete but messy fix |
@@ -453,6 +563,7 @@ remain excluded.
 | `final-readiness-preservation` | final-gate / supervise Phase 2 | final-readiness-supervision | whether the supervisor preserves the unresolved finding and does not reopen a previously excluded documentation request |
 | `final-readiness-precision` | final-gate / supervise | final-readiness-precision | three cases: APPROVE when every code requirement is fulfilled despite an absent mock E2E record, REJECT for an unmet code requirement, and BLOCKED for an external decision that task-scope code changes cannot provide |
 | `finding-premise-scope` | peer-review / coding-review (RV1 initial, RV2・RN1 follow-up), security-review (RN2 initial); development-core / replan (PL1, PN1) | finding-premise-scope (6 independent cases) | 計画の設計判断や前回の裁定が広げた形式外の入力を指摘・作業にせず、契約が定める入力と外部入力による保存先の外への書き込みは指摘・作業にする |
+| `finding-realistic-premise` | peer-review / initial-reviewers, review-adjudication; review-remediation / fix-verifier, verification-replan | finding-realistic-premise (17 independent cases) | 誰が入力を決めるか、操作が同時に起きるか、想定した量が作られるかを根拠で判断し、過去の行動と現在も残る影響を区別する |
 
 GUI設計の比較例、採点、旧・新比較の手順は [frontend-design.md](frontend-design.md) を参照。
 
@@ -506,6 +617,189 @@ JS
 ```
 
 ## Improvement workflow (red -> green)
+
+### Frontend operation ownership
+
+
+### Mediator の配置を測るレビュー評価
+
+`frontend-mediator-review` は `frontend / frontend-review` の React knowledge を含む構成を使う。
+既存の `frontend` / `frontend-opus` の課題・fixture・期待値は変更しない。
+仮説 H1 は別の状態操作層への委譲を承認する見逃し、H2 はページ自身の判断に別層を要求する誤検知。
+`review-frontend` workflow との比較はこのスイートには含めない。
+
+| ケース | 実装 | 合格条件 |
+|--------|------|----------|
+| good | OrderEditPage が下書き・保存状態と保存・編集の受理判断を所有。純粋関数は別ファイル、領域の入力途中の値は局所 state | APPROVE、または別層の新設・ページからの状態や判断の切り出しを修正必須にしない REJECT |
+| bad | OrderEditMediator クラスと useOrderEditMediator が状態と操作処理を持ち、ページは委譲 | 状態と操作判断をページ外に置いて委譲する構造を修正必須として REJECT |
+| bad2 | bad と同じ構造を OrderEditSession / useOrderEditSession（ja/en のファセット全体にない名前）に改名 | bad と同じ。名称に依存せず問題を指摘 |
+| good-hook | good と同じ機能をページ専用 useOrderEditPage に実装分割。注文編集固有の型・API を直接扱い、useReducer・受理判断・保存開始をまとめる | good と同じ。専用 hook を別層と見なして廃止やページ本体への移動を修正必須にしない |
+
+fixture は `fixtures/frontend-mediator-review/{good,bad,bad2,good-hook}/`。各ケースは専用 prompt と
+prepare target に対応し、`tests[].prompts` で1ケースと1 prompt を対応付ける。
+prepare はそれぞれ `.work/frontend-mediator-review-<case>` にコピーし、ファセット snapshot を保存する。
+実行ごとにその1つだけをリポジトリ外へコピーするため、他の変種や採点コード・期待値は見せない。
+モデルに渡す snapshot 名は全ケースで `frontend-review-context-*` に揃え、ケース名を含めない。
+課題とレビュー対象の説明は全ケース共通で、設計パターン・配置・期待判定を指定しない。
+API・型・領域/表示部品・純粋関数・依存設定は4変種で同一。
+商品未検出も顧客未検出と同様に role="alert" で表示し、描画中の throw による雑音を除く。
+素材は既存 Opus 成果物の `src/` を参照し、テスト・node_modules・dist はコピーしていない。
+
+回答には `verdict: APPROVE|REJECT` と `findings: [{file, blocking, reason}]` の JSON を要求する。
+`asserts/frontend-mediator-review.mjs` の format metric は JSON のみ（json）、単一フェンス（fenced）、
+前置き・後置き付き（prose）を区別し、課題どおり JSON のみを形式合格にする。
+設計 metric の gradeDesign は、文字列中の括弧を考慮し、フェンス内外を問わず出力中から
+verdict と findings を持つ JSON オブジェクトを候補として列挙する。候補がちょうど1つで、
+verdict・findings・blocking が整合する場合だけ、その JSON を llm-rubric に渡す。
+findings 内の通常の指摘や無関係な JSON は候補に数えない。前置きの未閉鎖の `{` からも独立して抽出する。
+候補が0個・複数、または不正な shape の場合は grader を呼ばず不合格にする。
+前置きがあっても設計採点は行う。llm-rubric は指摘の実質を判定し、特定語の名指しは不要。
+good で別層を任意に提案しただけでは失敗にせず、bad/bad2 は別の不備だけの REJECT では合格にしない。
+条件間の比較は設計 metric 別（good-precision、good-hook-precision、bad-recall、bad2-recall）に行う。
+形式 metric（format）は別に記録する。形式違反でも総合 pass は失敗するため、総合 pass 率を設計の比較には使わない。
+
+provider は既存レビューと同じ Luna (`gpt-5.6-luna`, max) と Opus (`claude-opus-5`)。
+`providers/frontend-mediator-review.mjs` は `cli-review.mjs` の prompt ごとの working_dir 合成を使い、
+実行には実装 eval wrapper の隔離を再利用する。Codex は SDK の read-only・approval never、
+一時 HOME/CODEX_HOME（auth.json のみ）・継承 skill 無効化を適用する。
+Opus は safe mode・project 設定のみ・slash command 無効、許可ツールを Read/Glob/Grep に限定し、
+`dontAsk`・セッション保存なしで実行する。環境変数は実装 eval と同じ allowlist。
+両者とも `isolate_working_dir: true` を必須にする。採点は隔離した Codex `gpt-6-sol` low。
+grader の作業ディレクトリは `.gitkeep` だけを置く `fixtures/frontend-mediator-review-grader/` の一時コピーとし、
+採点対象は llm-rubric に渡すレビュー JSON とする。
+レビュー provider は実装成果物を `.results` に保存せず、回答は promptfoo の結果に残る。
+
+```sh
+node --test eval/asserts/frontend-mediator-review.test.mjs eval/providers/frontend-mediator-review.test.mjs eval/providers/frontend-mediator-coder.test.mjs eval/asserts/frontend-mediator-implement.test.mjs eval/providers/frontend-mediator-skill-isolation.test.mjs eval/suite-registry.test.mjs
+node eval/scripts/prepare.mjs frontend-mediator-review-good frontend-mediator-review-bad frontend-mediator-review-bad2 frontend-mediator-review-good-hook
+# 以下は API を使う RED 探索。ハーネスの単体検証とは別に実行する。
+npm run eval:prompts:frontend-mediator-review
+# provider 別
+npm run eval:prompts:frontend-mediator-review -- --filter-providers codex-luna-max
+npm run eval:prompts:frontend-mediator-review -- --filter-providers claude-opus-5
+```
+
+prepare は作業ツリーのファセットを読む。main 条件を測るときは `builtins/` が main と同じか確認する。
+revision、生成 prompt と snapshot、fixture、モデル設定、回答原文と採点結果を条件ごとに保存する。
+旧条件で期待との不一致を観測して初めて RED と呼び、回答の指摘内容も確認する。
+提供された main 条件の RED 記録（eval-jJK-2026-10-16T14:36:50）では、Luna/Opus とも bad/bad2 の
+状態操作層への委譲を指摘せず、good の Opus は JSON 前の前置きだけで形式不合格になった。
+今回の改修後の実モデル評価は未実行であり、GREEN はまだ確認していない。
+単体テストは形式と設計入力の分離・ケース配線・レビュー対象の型/未使用コード、別層とページ専用 hook の保存動作、SDK モックと偽 CLI による
+隔離・権限・後片付けを検証する。型チェックは既存 bootstrap `main.tsx` を除くレビュー対象コードを対象とし、
+実ブラウザでの機能同等性と実際の認証成功は検証しない。テスト成果物は一時ディレクトリへ保存する。
+
+`frontend-mediator-coder` は、現行の frontend / implement ファセットを使い、
+注文編集・保存と合計金額表示だけの対照ケースを比較する mutable スイート。
+ファセット本文は変更しない。`src/` に React ページを持たないリポジトリ本体、および
+既存 fixture を検索し、顧客価格と明細編集と保存を連動させる類似実装がないことを確認した。
+ケース本文と fixture 内には設計パターンや状態の置き場所の誘導を含めていない。
+prepare は作業ツリーのファセットを読む。main の RED を測る際は、評価元の
+`builtins/` が main と一致していることを確認する。ローカル改修を含む prepare は別条件として扱う。
+
+```sh
+node --test eval/asserts/frontend-mediator-implement.test.mjs eval/providers/frontend-mediator-coder.test.mjs eval/providers/frontend-mediator-skill-isolation.test.mjs eval/suite-registry.test.mjs
+node eval/scripts/prepare.mjs frontend-mediator-implement
+node eval/scripts/run-evals.mjs --prepare frontend-mediator-coder --no-cache
+# provider 別に測る場合（rubric の判定はどちらも隔離した read-only Codex low）
+node eval/scripts/run-evals.mjs --prepare frontend-mediator-coder --no-cache --filter-providers codex
+node eval/scripts/run-evals.mjs --prepare frontend-mediator-coder --no-cache --filter-providers claude-opus-5
+```
+
+`npm run eval:prompts:frontend-mediator-coder` でも両 provider を実行する。
+Codex は pagination provider と同じく `@openai/codex-sdk` を直接使用する
+（モデル gpt-6-sol、reasoning low、approval never を SDK オプションで明示する）。
+実装側と rubric 側の双方で、呼び出しごとに一時 HOME とその配下の CODEX_HOME を作り、
+ユーザーの `$CODEX_HOME`（未設定なら `~/.codex`）から `auth.json` だけをコピーする。
+`auth.json` がなければ明確なエラーで停止する。config.toml、AGENTS.md、skills、履歴等はコピーしない。
+SDK に渡す環境変数は PATH、TMPDIR、LANG、LC_ALL と隔離先の HOME、CODEX_HOME だけ。
+`buildCodexSkillConfig` に `repo: false, user: false` を渡して作業コピー内の継承 skill も無効化し、
+ネットワークと web search も無効にする。認証を含む一時 HOME は成功・失敗にかかわらず削除する。
+rubric も同じ wrapper を `role: rubric` で使い、明示した working_dir のコピーを
+リポジトリ外の一時ディレクトリに作って read-only（実装側は workspace-write）で実行し、終了後に削除する。
+
+Opus は既存 Claude provider の `--setting-sources=project` に加え、
+`--disable-slash-commands` と `--safe-mode` を指定して `claude-opus-5` を直接実行する。
+`claude --help` では safe mode は CLAUDE.md、skills、インストール済み plugins、hooks、MCP、
+custom commands/agents 等を無効化し、認証・モデル選択・組み込みツール・権限は通常どおり維持すると説明されている。
+`--setting-sources=project` で user 設定の読み込みも除外する。管理ポリシーは引き続き適用される。
+Keychain を使う通常ログインのため、HOME と USER は実ユーザーの値を維持し、CLAUDE_CONFIG_DIR は渡さない。
+引き継ぐ環境変数は PATH、TMPDIR、LANG、LC_ALL、TERM、HOME、USER と認証用の
+ANTHROPIC_API_KEY、CLAUDE_CODE_OAUTH_TOKEN だけ。シェル初期化を経由しない。
+作業ディレクトリはリポジトリ外の一時コピーを使う。
+Opus の実行上限は30分（`timeout_ms: 1800000`）。Codex 実装は15分、rubric は5分。
+detached でプロセスグループを作り、時間切れにはグループ全体へ SIGKILL を送る。
+Opus は `--output-format stream-json --verbose --include-partial-messages` で逐次出力を取得し、
+`claude.stdout.log` と `claude.stderr.log` に受信の都度追記する。
+response と rubric 入力へ渡すのは stream-json の result イベントの result（最終応答）だけであり、
+ストリーム全文や途中のツール出力は含めない。result がない・複数・失敗・文字列でない場合は明示的に失敗する。
+約440万文字のストリームを偽 CLI で生成し、ログ全文の保存と rubric 入力の分離を単体テストで確認する。
+隔離テストでは SDK をモックし、Opus は偽 CLI を使って環境・引数、子孫プロセスの停止、
+タイムアウト・異常終了・起動失敗時の作業コピーとログの保存を確認する。
+実際の認証成功は API を呼ぶため、この単体テストでは検証しない。
+rubric も Codex SDK を使うため、別途の OpenAI API 用 grader は不要。
+
+prepare 単体は呼び出し間のリセットをしないため、wrapper が **各ケース・各 provider・各反復ごとに**
+`eval/.work/frontend-mediator-implement` を隔離コピーする。元の作業コピーへは書き戻さない。
+fixture からの変更・削除一覧と、変更・追加された `src/` のソースおよび設定ファイルの内容を JSON 出力し、
+`eval/.results/frontend-mediator-coder/<uuid>/` に prompt、result、project を保存する。
+実装がタイムアウト・エラーで失敗した場合も同じ場所に `project/` を退避し、
+`result.json` にエラーを記録する。Opus のログも成功・失敗を問わずこのディレクトリに残す。
+起動前に失敗した場合はログが空の場合がある。作業コピーの `node_modules` は保存対象から除く。
+artifact assert はチャットの自己申告を使わず、provider metadata が指す project を再読する。
+単体呼び出し時は `eval/.work/frontend-mediator-implement` を検査する。
+
+rubric の `files` には未変更ファイルを含めない。`node_modules`、`dist`、`build`、`out`、coverage・cache、
+lockfile、source map、tsbuildinfo、minified JS を除外する。ルートの package.json、tsconfig、
+各種 `*.config.*` などの設定変更は含める。削除は `deletedPaths` に記録する。
+JSON 全体の上限は200,000文字とし、超過時は切り捨てず `Rubric input exceeds ... characters` で失敗させる。
+
+artifact assert は新規・変更ファイルについて、状態と購読・通知のメンバーを併せ持つ非 React クラスと、
+fixture の package.json にない既知の状態管理ライブラリの import / re-export / dynamic import / require を拒否する。
+クラスの検査は本番コードだけに適用し、
+`*.test.*`、`*.spec.*`、`__tests__`、`test-setup` 等のテスト専用コードは除外する。
+状態管理ライブラリの import 検査はテストでも継続する。コメントと単なる文字列内の名称は無視する。
+識別子名やファイル名だけでは拒否せず、状態所有と操作処理の構造は rubric で判定する。
+ライブラリを生成先の package.json に追記しても許容条件は変わらない。
+未実装のまま合格しないよう、ページの存在とソース変更も要求する。
+ライブラリ検知は assert 内の列挙集合に限る。補助 rubric は「状態の所有」と「操作の処理の開始」を
+判定軸とする。ページ・独立領域とは別に状態を保持する実体（クラスインスタンス、
+モジュールスコープの可変状態、store、状態機械インスタンス）を新設するか、操作通知を受けて
+通信・副作用を開始する別層（再利用可能な hook・関数・オブジェクトを含む）を置き、
+ページが委譲するだけになる構造を不合格とする。操作判断を担う中間オブジェクトの props 配布も不合格。
+ページ固有の型・API・状態を直接扱い、ページの操作判断が閉じる専用 hook は合格に含める。
+呼び出し元の数では判定しない。操作の種類や保存先を引数で差し替えて他画面でも使う前提の
+汎用インターフェースを持つ hook は汎用層として扱う。
+**純粋関数の切り出しは合格**。引数のデータから新しいデータや真偽を返す検証、
+明細の追加・合算、差分判定、価格計算、reducer 関数そのもの（純粋な遷移表による計算を含む）は、
+別ファイルでも許容する。ページがそれらを呼んで自分の state を更新し、保存の開始判断を
+ページまたはページ専用 hook が行えば合格。通信だけを行う `saveOrder` 等の API 関数や型定義も許容する。
+ページ外の `saveOrderIfChanged` のような関数が差分・保存中の判断と送信開始をまとめて持ち、
+ページがそれを呼ぶだけなら不合格。
+回帰例は RED 実行 `eval-Yyr-2026-10-16T12:58:50` の Codex 成果物
+`eval/.results/frontend-mediator-coder/1ea328b2-d125-4809-84bd-3040a782a723/project/`。
+この例の `src/features/orders/order-edit.ts` は `validQuantity`・`addLine`・`orderChanged` の純粋関数だけを持ち、
+`src/routes/order-edit.tsx` が draft・saveState と保存・編集の開始判断を所有するため、構造は合格とする。
+`operation-ownership` は構造だけ、`functional-completeness` は価格連動、保存の二入口、
+二重実行防止、未変更時の送信抑止、成功・失敗表示などの機能完了だけを採点する。
+構造 metric は機能の欠落を理由に落とさず、機能 metric は実装場所を理由に落とさない。
+対照ケースでは新しい状態管理層の有無だけを rubric で確認し、保存機能は要求しない。
+
+正実装・誤実装の mutation は assert のテスト内で一時 fixture として作成する。
+静的 assert は、インスタンスの可変フィールドまたは状態更新メソッドを持ち、かつ購読・通知の
+メンバーも持つ非 React クラスを拒否する。メソッドの存在だけでは拒否せず、
+通信専用の API クラスは許容する。
+クラス・識別子・ライブラリの反例に加え、ページ内 useReducer、
+領域の局所 state、ページ専用 hook の正例を確認する。
+createOrderStore、モジュールスコープの可変 state を持つ遷移表と dispatch だけのページ、
+汎用 useOrderController は静的 assert では通し、rubric が構造上の不合格を担う。
+純粋な reducer や遷移表による計算とは区別する。静的テストの pass は構造の合格を意味しない。
+isolation テストはユーザーの auth.json だけがコピーされ、設定・skill が混入しないこと、
+SDK の環境変数と実装・rubric の作業ディレクトリが隔離され、成功・失敗時に削除されることを確認する。
+偽の Claude CLI で safe mode の引数、HOME・USER の維持と環境変数の制限、
+時間切れに CLI と子・孫プロセスが SIGKILL で停止することも確認する。
+これらの成否は検出器の契約検証であり、現行ファセットの RED 観測ではない。
+RED の確認には上記の実モデル eval を実行し、artifact / rubric の各 metric と保存したコードを確認する。
 
 ### Database pagination
 
@@ -659,6 +953,7 @@ npx promptfoo view               # browse results in the web UI
 
 Do not use `--repeat` with mutable coder suites such as `fix-closure`,
 `frontend-coder`, or `cqrs-coder`; independent trials require a fresh work copy.
+`frontend-mediator-coder` creates a fresh copy per call, so it supports independent repeats.
 
 Run from the repo root. The custom providers resolve `working_dir` and prompt
 paths in their provider config relative to `eval/`, regardless of the config

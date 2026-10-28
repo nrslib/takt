@@ -12,12 +12,14 @@ params:
     type: facet_ref
     facet_kind: report_format
 name: fix-plan
+description: 採用された修正対象と現在のコードを照合し、実行できる修正計画を作成する
 capabilities: readonly
 tags:
   - plan
 edit: false
 persona: planner
 policy:
+  - process-deviation
   - contract-change
   - $param: plan_policy
 knowledge:

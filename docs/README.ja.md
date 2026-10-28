@@ -110,7 +110,7 @@ GitHub PR に対して `takt caccia <PR番号>` を実行すると、CodeRabbit 
 
 ## 必要なもの
 
-TAKT の実行には Node.js `>=22.22.0` が必要です。
+TAKT の実行には Node.js `>=22.22.0` と Git `>=2.38` が必要です（ゴールの完成判定が `git merge-tree --write-tree` で tree を比べます）。
 
 利用するプロバイダーに応じて、外部 CLI のインストール要否が変わります。
 
@@ -214,9 +214,11 @@ takt run
 ### 結果を管理する
 
 ```bash
-# タスクブランチの一覧を確認し、マージ、リトライ、リキュー、強制失敗、削除ができます
+# タスクブランチの一覧を確認し、マージ、リトライ、リキュー、停止依頼、強制失敗、削除ができます
 takt list
 ```
+
+**Stop** は実行中のタスク1件に停止を依頼し、worker が自分で中断して終端状態を決めます。**Mark as failed** は状態を付け直すだけで、worker を停止しません。
 
 ## 仕組み
 
@@ -291,7 +293,8 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 | `takt run` | 積まれたタスクをまとめて実行します |
 | `takt watch` | タスクキューを監視し、pending タスクを自動実行します（常駐プロセス） |
 | `takt ui` | 実験的な Viewer 中心の Web UI を `http://127.0.0.1:20525` で起動します |
-| `takt list` | タスクブランチを管理します（マージ、リトライ、リキュー、強制失敗、追加指示、削除） |
+| `takt manager` | daemon に接続する実験的なゴール相談 TUI を起動します。`Ctrl+R` で問い合わせ、`Ctrl+G` で進行中のゴールを開きます。この2つのキーは manager の処理中も使えます。入力欄に `/make-goal` と打って `Enter` を押すと、現在の会話からゴールの登録案を作ります。案が表示済みでも作り直すだけで、登録はしません。`↑` 承認 / `↓` 続行 / `Enter` 決定で操作し、承認を選んで `Enter` で登録します。`/` を打つと `/make-goal` が補完候補に出て、`Tab` で確定できます。それ以外の `/` で始まる入力は普通の発言として送ります。材料不足なら会話を続けられます。担当の追加・削除・名前変更は会話で依頼します。動作・設定・保存するデータの形式は予告なく変わることがあります。自動でタスクを投入・実行するため、provider の API の費用がかかります。claude（claude-sdk）または codex では、道具の実行前に AI が審査します。起動時に必要なら daemon を起動し、準備が整うまで待ちます。daemon が会話の実行、イベント処理と巡回を行います。`takt daemon stop` で daemon を停止できます |
+| `takt list` | タスクブランチを管理します（マージ、リトライ、リキュー、停止依頼、強制失敗、追加指示、削除） |
 | `takt #N` | GitHub Issue を初期入力としてタスク化します |
 | `takt merge` | workflow で PR のレビュー・修正・マージを行います |
 | `takt install <provider>` | SDK 経由 provider の SDK をインストールします |
@@ -302,11 +305,67 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 | `takt workflow inspect` | workflow の設定と解決ソースを検査します |
 | `takt repertoire add` | GitHub から repertoire パッケージをインストールします |
 
+manager との会話は daemon で実行され、TUI は要求を送り、結果を表示します。受け付けたターンは、TUI を閉じても daemon で処理が続きます。同じリポジトリや workspace を担当先として開き直すと、同じ会話に戻ります。同じ担当先で2つ目の TUI を開いても同じ会話につながり、承認待ちの登録案があれば再表示され、承認を選んで `Enter` を押すと登録できます。
+
+開き直した画面には、前の画面の発言や返事は再表示されません。会話本文は TAKT に保存せず、会話履歴は provider のセッションに任せます。承認待ちのゴール要約やゴールの記録は別に保存します。
+
+同じ会話の処理中に別の発言を送ると、「処理中」と返され、後から実行されることはありません。処理が終わってから、もう一度送ってください。daemon を起動し直すと、実行中だったターンは中断として扱われ、新しい発言を送れます。
+
+TUI が接続している間や、受け付けた会話の操作を実行している間は、daemon は自動終了しません。明示的に止めるには `takt daemon stop` を使います。
+
+**Slack での会話:** 設定した Slack チャンネルからも、同じ manager の会話につながります。返事は発言したスレッドにだけ届き、TUI の返事は Slack に転送しません。Socket Mode の App マニフェスト、トークン用環境変数、リポジトリ設定、問い合わせへの回答方法は、[Slack で manager と会話する](./configuration.ja.md#slack-で-manager-と会話する)を参照してください。完成などの通知は、別の経路である `TAKT_NOTIFY_WEBHOOK` の Incoming Webhook を引き続き使います。
+
+会話スレッドに `/make-goal` を送ると登録案が表示されます。「登録を承認」または「会話を続ける」で操作でき、古い版のボタンは使えません。
+
 全コマンド・オプションは [CLI Reference](./cli-reference.ja.md) を参照してください。
+
+`takt list --non-interactive --action delete` の `--status <status...>` には、`pending`、`completed`、`failed`、`exceeded`、`pr_failed` を複数指定できます。実行中のタスクは削除できないため、`running` は指定できません。`--goal <goalId>` は指定ゴールに属するタスクに絞ります。既存の `--branch <branch>` も使用でき、単独指定では `completed` のタスクだけが対象です。
+
+`--status`、`--goal`、`--branch` のいずれか1つ以上が必須です。無指定では何も削除せず、エラーで終了します。`--yes` を省略すると対象のタスク名・状態・ブランチ・ゴールの一覧を表示し、削除せず正常終了します。削除は `--yes` を指定した場合だけ行います。`--format json` を併せると対象一覧を JSON で取得でき、JSON 出力には `goal_id` が含まれます。
+
+削除する範囲は対話の一覧からの削除と同じで、タスクの作業場所の clone、worktree セッションのファイル、clone のメタ情報、ブランチ、`.takt/tasks.yaml` の記録です。
+
+```bash
+# 対象一覧を確認してから削除します
+takt list --non-interactive --action delete --status failed pr_failed
+takt list --non-interactive --action delete --status failed pr_failed --yes
+
+# 対象一覧を JSON で確認します
+takt list --non-interactive --action delete --status failed pr_failed --format json
+```
 
 クライアント連携用のエントリポイントも 2 つ同梱しています。`takt-acp` は TAKT を stdio JSON-RPC 上の [Agent Client Protocol](./cli-reference.ja.md#acp-agent) エージェントとして起動し、`takt-mcp` は stdio の [MCP サーバー](./cli-reference.ja.md#mcp-server) として起動して、MCP クライアント（Codex、Claude Code など）からタスクを積み、task/run 状態を確認し、実行中 worktree clone へ追加指示を送れます。pending タスクの実行には `takt run` または `takt watch` を使用します。
 
+`takt_cleanup_tasks` は絞り込んだタスクの一覧を確認してから削除するツールです。絶対パスの `cwd` と `reason` が必須です。任意入力は `statuses`（`pending`、`completed`、`failed`、`exceeded`、`pr_failed` を複数指定でき、`running` は指定できません）、`goalId`、`branch`、`confirm`（既定値は `false`）です。`statuses`、`goalId`、`branch` のいずれか1つ以上が必要です。
+
+`confirm` の省略時または `false` の場合は対象一覧だけを返し、何も削除しません。`confirm: true` の場合だけ、`takt list` と同じ範囲を削除します。このツールは `all` のツール一覧だけで利用でき、`read-only` と `manager` には含まれません。`manager` には別のツール `takt_remove_goal_task` があります。
+
+`takt_stop_goal_task` は `manager` と `all` のツール一覧で利用できます。絶対パスの `cwd` を渡します。`takt_list_tasks` が返す同じタスク項目の `name` の値を `taskName` に設定し、`goalId`・`executionId` もその項目の値を使います。所有PIDの生存を確認します。開始時刻が保存されている場合は、現在の開始時刻を取得して一致を確認します。保存済み開始時刻がない場合は、goalId・taskName・executionIdの一致、実行中の状態、所有PIDの生存を確認して受理します。識別情報の不一致、実行中でないタスク、所有プロセスの終了は、停止依頼を保存せず理由付きで拒否します。開始時刻が保存されているのに現在値を取得できない場合も拒否します。ツールは依頼だけを保存し、workerが500ms間隔で検知して自身を中断する間は `running` を維持します。処理と後片付けの終了後に `failed` とタスク停止理由を保存するため、ゴール中止とは区別できます。他のタスクとゴールは継続します。重複依頼の評価時点で、同じ実行が引き続き `running` で、所有者を検証できる場合に限り保存済みの依頼を返し、再実行には新しい実行IDを使います。
+
+daemon は各プロジェクトのイベント処理前に、中断タスクを `failed` に回復し、ゴールタスクの完了イベントを作成します。pendingタスクがなくても回復します。回復対象は、所有PIDがない場合、生存していない場合、または保存済み開始時刻と現在の開始時刻の既知の不一致がある場合です。生存するPIDの保存済みまたは現在の開始時刻が不明なだけでは、回復せず `running` を維持します。
+
 通常の `takt` assistant 会話でも、MCP 対応 provider なら同じ task 状態を読み取り専用で確認できます。新しいタスクは `/go`、実行中 worktree clone への追加指示は `/tell` で対象を選び、確認してから送ります。失敗したタスクは `/requeue` または `/retry` で、確認のうえキューに戻せます。
+
+### manager の道具の実行前審査
+
+グローバルの `~/.takt/config.yaml` またはプロジェクトの `.takt/config.yaml` で、秘密として扱うファイルやディレクトリを追加できます。
+
+```yaml
+manager:
+  sensitive_paths: [private, config/credentials.json]
+```
+
+どちらの一覧も既定に追加され、片方が空でも既定は変わりません。各項目にはファイル名またはディレクトリ名を指定します。詳しくは [manager の秘密ファイル設定](./configuration.ja.md#manager-の秘密ファイル設定)を参照してください。
+
+`takt manager` の provider が claude（claude-sdk）または codex の会話では、人が操作のたびに承認する代わりに、AI の判断役が道具の実行前に審査します。判断は許可、理由付きの拒否、人への確認のいずれかです。既定で有効になり、入切の設定はありません。
+
+claude（claude-sdk）の `Read` は、解決後の対象が manager の担当リポジトリ内にある、秘密ではない読み取り可能な通常のファイルの場合に限り、審査を通らずに実行できます。`Glob` はディレクトリを検索ルートとし、探索対象のファイルと、走査するディレクトリ・シンボリックリンクが担当内にあり、秘密対象を含まず安全に探索できると確認できた場合に審査を通らずに実行できます。`Grep` は `Read` と同じ条件の通常ファイルへの検索と、`Glob` と同じ安全性を確認できたディレクトリ検索で審査を通らずに実行できます。担当範囲は workspace の所属リポジトリで、workspace がなければ現在のリポジトリです。相対パスは道具の実際の作業ディレクトリを基準にし、`~`、`..`、シンボリックリンクは比較前に解決します。担当外の対象、秘密ファイル、対象や探索範囲を確定できない操作は判断役へ渡します。既定の秘密ファイルは `.env`、`.env.*`、SSH の秘密鍵の名前（`id_rsa`、`id_dsa`、`id_ecdsa`、`id_ed25519`）、および `*.key`、`*.pem`、`*.crt`、`*.cer`、`*.p12`、`*.pfx` です。グローバルとプロジェクトの `manager.sensitive_paths` はこれらの既定に追加するだけで、既定を削除できません。`ToolSearch` と manager 自身の TAKT MCP の道具は、引き続き審査を通らずに実行できます。Codex では、manager 自身の TAKT MCP の道具だけが審査を通らずに実行でき、組み込みの道具はすべて審査します。どちらの provider でも、それ以外は未知の道具や外部 MCP の道具も含め、保存済み承認が適用されない操作を審査します。`Bash` などのシェルの実行も、保存済み承認が適用されなければ、内容が読み取りだけに見える場合も毎回審査します。`Task` や `Agent` による別のエージェントの起動は常に拒否し、`Bash` から別の AI コマンドラインエージェントを起動する指示も拒否します。Codex の `spawn_agent` も、判断役を通さず常に拒否します。
+
+拒否理由は manager に返り、manager は次の発言でその理由を踏まえて動きます。人への確認と判定した場合も操作はいったん拒否し、人の確認待ちであることと理由を TUI と Slack に通知します。操作を保持したまま確認を待つことはありません。通知には既存の種類を使い、新しい種類は追加しません。
+
+判断役の provider と model は、`runtime.yaml` の `provider.targets.internal_agents.manager-permission-judge` で指定できます。他の内部 agent の seat と同じく `profile` または `ladder` を指定でき、`pool` は指定できません。未指定なら manager と同じ provider・model・provider options を使います。
+
+判断には30秒の期限があります。期限切れは人への確認と同じ扱いになり、承認問い合わせを保存し、操作を確認待ちとして止めて通知します。例外や判定形式の不一致は引き続き操作の拒否になります。判断を自動でやり直すことはありません。
 
 ### インスタント exec モード
 

@@ -6,12 +6,14 @@ params:
     type: facet_ref[]
     facet_kind: knowledge
 name: review-adjudication
+description: Check review findings against the evidence and determine which issues to fix in this task.
 capabilities: readonly
 tags:
   - adjudication
 edit: false
 persona: review-adjudicator
 policy:
+  - process-deviation
   - review-adjudication
   - architecture
   - takt

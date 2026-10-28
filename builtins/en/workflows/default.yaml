@@ -5,6 +5,7 @@ initial_step: develop
 
 steps:
   - name: develop
+    description: Plan, write tests, and implement with dynamic facets based on requirement scenarios, then confirm requirements through review and fixes.
     kind: workflow_call
     call: development-core
     args:

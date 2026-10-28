@@ -5,6 +5,7 @@ initial_step: address
 
 steps:
   - name: address
+    description: Validate all CodeRabbit threads, fix valid findings, and record the decision and rationale for each thread.
     tags:
       - implementation
     capabilities: edit

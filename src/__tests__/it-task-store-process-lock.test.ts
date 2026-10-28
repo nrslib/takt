@@ -7,6 +7,7 @@ import { parse as parseYaml } from 'yaml';
 import { afterEach, describe, expect, it } from 'vitest';
 import { TaskStore } from '../infra/task/store.js';
 import { getSelfProcessIdentity } from '../infra/task/process.js';
+import { TaskRunner } from '../infra/task/runner.js';
 
 const fixturePath = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -62,6 +63,24 @@ async function waitUntilAllWorkersReady(readyFiles: string[]): Promise<void> {
   }
 }
 
+function runDeletionRaceWorker(projectDir: string, role: 'delete' | 'claim', taskName: string) {
+  const child = spawn(process.execPath, [
+    viteNodePath,
+    join(dirname(fixturePath), 'task-delete-claim.ts'),
+    projectDir, role, taskName,
+  ], {
+    cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'], timeout: 20_000, killSignal: 'SIGKILL',
+  });
+  let stderr = '';
+  child.stdout.resume();
+  child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+  const completed = new Promise<{ code: number | null; stderr: string }>((resolve) => {
+    child.on('error', (error) => { stderr += String(error); });
+    child.on('close', (code) => { resolve({ code, stderr }); });
+  });
+  return { child, completed };
+}
+
 describe('TaskStore process lock', () => {
   const testDirs: string[] = [];
 
@@ -71,6 +90,59 @@ describe('TaskStore process lock', () => {
     }
     testDirs.length = 0;
   });
+
+  it.each(['delete', 'claim'] as const)('protects cleanup from concurrent claim when %s acquires first', async (first) => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-delete-claim-'));
+    testDirs.push(projectDir);
+    const worktreePath = join(projectDir, 'worktree');
+    mkdirSync(worktreePath);
+    const marker = join(worktreePath, 'work.txt');
+    writeFileSync(marker, 'keep work');
+    const runner = new TaskRunner(projectDir);
+    const target = runner.addTask('delete claim race', { branch: 'takt/race', worktree_path: worktreePath });
+    const deletion = runDeletionRaceWorker(projectDir, 'delete', target.name);
+    const claim = runDeletionRaceWorker(projectDir, 'claim', target.name);
+    const start = (role: 'delete' | 'claim') => writeFileSync(join(projectDir, `${role}-start`), 'go');
+    try {
+      await waitUntilAllWorkersReady(['delete', 'claim'].map((role) => join(projectDir, `${role}-ready`)));
+      start(first);
+      if (first === 'delete') {
+        await waitUntilAllWorkersReady([join(projectDir, 'cleanup-started')]);
+        const lockFile = join(projectDir, '.takt', 'tasks.yaml.lock');
+        expect(existsSync(lockFile)).toBe(false);
+        start('claim');
+        await waitUntilAllWorkersReady([
+          join(projectDir, 'claim-attempt'),
+          join(projectDir, 'claim-result'),
+        ]);
+        expect(existsSync(lockFile)).toBe(false);
+        expect(JSON.parse(readFileSync(join(projectDir, 'claim-result'), 'utf8'))).toEqual([]);
+        expect(parseYaml(readFileSync(runner.getTasksFilePath(), 'utf8'))).toMatchObject({
+          tasks: [{ name: target.name, status: 'pending' }],
+        });
+        writeFileSync(join(projectDir, 'cleanup-release'), 'go');
+      } else {
+        expect(await claim.completed).toMatchObject({ code: 0 });
+        start('delete');
+      }
+
+      expect(await deletion.completed).toMatchObject({ code: 0 });
+      expect(await claim.completed).toMatchObject({ code: 0 });
+      expect(JSON.parse(readFileSync(join(projectDir, 'delete-result'), 'utf8'))).toEqual({ deleted: first === 'delete' });
+      expect(JSON.parse(readFileSync(join(projectDir, 'claim-result'), 'utf8'))).toEqual(first === 'claim' ? [target.name] : []);
+      expect(existsSync(marker)).toBe(first === 'claim');
+      expect(existsSync(join(projectDir, 'cleanup-started'))).toBe(first === 'delete');
+      expect(runner.listAllTaskItems()).toMatchObject(first === 'claim'
+        ? [{ name: target.name, kind: 'running', worktreePath }] : []);
+      expect(runner.listAllTaskItems()).toHaveLength(first === 'claim' ? 1 : 0);
+    } finally {
+      writeFileSync(join(projectDir, 'cleanup-release'), 'go');
+      for (const worker of [deletion, claim]) {
+        if (worker.child.exitCode === null && worker.child.signalCode === null) worker.child.kill('SIGKILL');
+      }
+      await Promise.all([deletion.completed, claim.completed]);
+    }
+  }, 30_000);
 
   it('serializes simultaneous automatic same-target additions across processes without lost updates', async () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-task-store-process-lock-'));

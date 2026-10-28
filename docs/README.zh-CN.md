@@ -101,7 +101,7 @@ takt list
 
 ## 要求
 
-TAKT 需要 Node.js `>=22.22.0`。
+TAKT 需要 Node.js `>=22.22.0` 和 Git `>=2.38`（目标完成判定使用 `git merge-tree --write-tree` 比较 tree）。
 
 所选 provider 决定是否需要外部 CLI，或者是否只用 Node.js 即可通过 TypeScript SDK 运行。
 
@@ -202,9 +202,11 @@ takt run
 ### 管理结果
 
 ```bash
-# 查看任务分支，并进行合并、重试、重新排队、强制失败或删除
+# 查看任务分支，并进行合并、重试、重新排队、请求停止、强制失败或删除
 takt list
 ```
+
+**Stop** 请求停止一个运行中的任务，由 worker 自行中断并决定最终状态。**Mark as failed** 只修改状态，不会停止 worker。
 
 ## 工作原理
 
@@ -277,19 +279,79 @@ steps:
 | `takt run` | 执行所有待处理任务 |
 | `takt watch` | 监视任务队列并自动执行待处理任务 |
 | `takt ui` | 在 `http://127.0.0.1:20525` 启动实验性的 Viewer 优先 Web UI |
-| `takt list` | 管理任务分支：合并、重试、重新排队、强制失败、指导或删除 |
+| `takt manager` | 启动连接到 daemon 的实验性目标对话 TUI。使用 `Ctrl+R` 打开询问列表，`Ctrl+G` 打开进行中的目标列表；manager 处理期间也可以使用这两个键。在输入框中输入 `/make-goal` 并按 `Enter`，即可根据当前对话生成目标注册草案。即使已显示草案，也只会重新生成，不会注册目标。使用 `↑` 批准 / `↓` 继续 / `Enter` 确定，选择批准后按 `Enter` 注册。输入 `/` 时会显示 `/make-goal` 补全候选，按 `Tab` 确认补全。其他以 `/` 开头的输入会作为普通消息发送。材料不足时可以继续对话。添加、删除或重命名负责的仓库需通过对话提出。行为、设置和保存的数据格式可能会随时更改，恕不另行通知。自动将任务加入队列并执行，因此会产生 provider API 费用。使用 claude（claude-sdk）或 codex 时，AI 会在工具执行前进行审查。启动时，manager 会按需启动 daemon，并等待其准备就绪；daemon 负责运行对话、处理事件和巡查。使用 `takt daemon stop` 可停止 daemon |
+| `takt list` | 管理任务分支：合并、重试、重新排队、请求停止、强制失败、指导或删除 |
 | `takt #N` | 将 GitHub Issue 作为任务输入 |
+| `takt merge` | 使用 workflow 审查、修复并合并 PR |
+| `takt install <provider>` | 安装基于 SDK 的 provider 所需的 SDK |
+| `takt update` | 将已安装的 provider SDK 更新到 TAKT 固定的版本 |
 | `takt eject` | 复制 builtin workflow/facet 以便定制 |
 | `takt workflow init` | 创建 workflow scaffold |
 | `takt workflow doctor` | 验证 workflow 定义 |
 | `takt workflow inspect` | 检查 workflow 的配置与解析来源 |
 | `takt repertoire add` | 从 GitHub 安装 repertoire package |
 
+manager 对话由 daemon 执行，TUI 负责发送请求和显示结果。一轮对话被接受后，即使关闭 TUI，也会继续在 daemon 中处理。为同一个仓库或 workspace 重新打开 manager，或为同一负责范围打开第二个 TUI，都会连接到同一个对话。如果有等待批准的目标注册草案，它会重新显示，选择批准并按 `Enter` 即可注册。
+
+重新打开 TUI 时，不会重新显示之前的发言和回复。TAKT 不保存对话正文，对话历史由 provider 的会话管理。等待批准的目标摘要和目标记录会单独保存。
+
+同一个对话正在处理时，后来发送的发言会以“处理中”被拒绝，也不会稍后执行。请在处理结束后重新发送。daemon 重启后，原先正在处理的一轮对话会被视为已中断，此时可以发送新的发言。
+
+只要有 TUI 保持连接，或仍有已接受的对话操作在执行，daemon 就不会自动退出。要明确停止它，请使用 `takt daemon stop`。
+
+**Slack 对话：** 也可以从配置的 Slack 频道连接到同一个 manager 对话。回复只发送到发言所在的消息列，不会转发 TUI 的回复。Socket Mode App 清单、令牌环境变量、仓库配置以及回答询问的方法，请参阅[通过 Slack 与 manager 对话](./configuration.zh-CN.md#通过-slack-与-manager-对话)。完成等通知仍通过独立的 `TAKT_NOTIFY_WEBHOOK` Incoming Webhook 发送。
+
+在对话消息列中发送 `/make-goal` 可创建注册提案。使用「Approve registration（批准注册）」或「Continue conversation（继续对话）」操作；旧版本提案的按钮无效。
+
 全部命令和选项请参阅 [CLI Reference](./cli-reference.zh-CN.md)。
+
+`takt list --non-interactive --action delete` 的 `--status <status...>` 可指定一个或多个状态，允许值为 `pending`、`completed`、`failed`、`exceeded` 和 `pr_failed`。不能指定 `running`，因为运行中的任务不能删除。`--goal <goalId>` 只选择属于指定目标的任务。仍可使用 `--branch <branch>`，单独指定时只选择 `completed` 任务。
+
+必须至少指定 `--status`、`--goal` 或 `--branch` 中的一个。不指定筛选条件时，命令报错退出且不删除任何内容。省略 `--yes` 时，显示匹配任务的名称、状态、分支和目标列表，然后正常退出，不执行删除。只有指定 `--yes` 才会删除。配合 `--format json` 可返回 JSON 格式的预览列表，JSON 输出包含 `goal_id`。
+
+删除范围与交互列表中的删除相同，包括任务的工作 clone、worktree 会话文件、clone 元数据、分支和 `.takt/tasks.yaml` 中的记录。
+
+```bash
+# 先确认匹配列表，再执行删除
+takt list --non-interactive --action delete --status failed pr_failed
+takt list --non-interactive --action delete --status failed pr_failed --yes
+
+# 以 JSON 查看预览列表
+takt list --non-interactive --action delete --status failed pr_failed --format json
+```
 
 TAKT 还提供两个客户端集成入口：`takt-acp` 通过 stdio JSON-RPC 作为 [Agent Client Protocol](./cli-reference.zh-CN.md#acp-agent) agent 运行；`takt-mcp` 作为 stdio [MCP server](./cli-reference.zh-CN.md#mcp-server) 运行，让 MCP 客户端（Codex、Claude Code 等）可以加入任务队列、读取 task/run 状态，并向正在运行的 worktree clone 任务发送追加指令。使用 `takt run` 或 `takt watch` 执行待处理任务。
 
+`takt_cleanup_tasks` 用于先查看筛选后的任务，再执行删除。必需输入为绝对路径的 `cwd` 和 `reason`。可选输入为 `statuses`（可指定一个或多个 `pending`、`completed`、`failed`、`exceeded`、`pr_failed`，不能指定 `running`）、`goalId`、`branch` 和 `confirm`（默认 `false`）。必须至少指定 `statuses`、`goalId` 或 `branch` 中的一个。
+
+省略 `confirm` 或设为 `false` 时，只返回匹配列表，不删除任何内容。只有 `confirm: true` 才会删除，删除范围与 `takt list` 相同。此工具仅在 `all` 工具集中提供，不包含在 `read-only` 或 `manager` 中；`manager` 另有 `takt_remove_goal_task` 工具。
+
+`takt_stop_goal_task` 可在 `manager` 和 `all` 工具集中使用。传入绝对路径的 `cwd`。从 `takt_list_tasks` 返回的同一个任务条目中，将 `name` 的值作为 `taskName`，并使用该条目的 `goalId` 和 `executionId`。所属PID必须仍存活。已保存启动时间时，必须获取当前启动时间并确认一致。未保存启动时间时，只要 goalId、taskName、executionId 一致、任务仍在运行且所属PID存活，就接受请求。标识不匹配、任务未运行或所属进程已结束时，返回原因且不保存停止请求。已保存启动时间但无法获取当前值时，也会拒绝请求。工具只保存请求；worker 每500毫秒检查一次并自行中断，执行和清理结束前任务保持 `running`。结束后保存 `failed` 和任务停止原因，可与整个 goal 的中止区分。其他任务和 goal 继续运行。只有在评估重复请求时，同一执行仍为 `running` 且能够验证所属进程，才返回已保存的请求；重试使用新的执行ID。
+
+daemon 在处理每个项目的事件前，将中断的任务恢复为 `failed` 并创建 goal 任务完成事件，即使没有 pending 任务也会执行恢复。仅当所属PID缺失、已死亡，或已知保存的启动时间与当前启动时间不一致时，才进行恢复。如果PID仍存活，仅凭保存的或当前的启动时间不可用，不会恢复任务，而是保留 `running` 状态。
+
 普通 `takt` assistant 对话在 provider 支持 MCP 时也可以只读查看相同的 task 状态。新任务使用 `/go`，向正在运行的 worktree clone 追加指令时使用 `/tell` 选择目标并确认后发送。
+
+### manager 工具执行前的权限审查
+
+可以在全局 `~/.takt/config.yaml` 或项目 `.takt/config.yaml` 中添加敏感文件或目录。
+
+```yaml
+manager:
+  sensitive_paths: [private, config/credentials.json]
+```
+
+两个列表都会在默认项的基础上追加，即使其中一个列表为空也不会改变默认项。每一项指定文件名或目录名。详情请参阅 [manager 敏感文件设置](./configuration.zh-CN.md#manager-敏感文件设置)。
+
+在 `takt manager` 使用 claude（claude-sdk）或 codex provider 的对话中，AI 权限判断 agent 会在工具执行前进行审查，代替每次都向用户请求批准。判断结果为允许、拒绝并附带理由，或请求人工确认。审查默认启用，没有开关设置。
+
+使用 claude（claude-sdk）时，`Read` 只有在解析后的目标是 manager 负责的仓库内非敏感且可读取的普通文件时，才能跳过审查。`Glob` 以目录为搜索根目录，只有确认搜索候选文件、遍历的目录和符号链接都在负责范围内、不涉及敏感目标且可以安全搜索时，才能跳过审查。`Grep` 对普通文件的搜索需满足与 `Read` 相同的条件，对目录的搜索需通过与 `Glob` 相同的安全检查，才能跳过审查。负责范围为 workspace 的成员仓库；没有 workspace 时则为当前仓库。相对路径以工具实际的工作目录为基准，`~`、`..` 和符号链接会在比较前解析。范围外的目标、敏感文件，以及无法确定目标或搜索范围的操作都会交给权限判断 agent。默认敏感文件包括 `.env`、`.env.*`、SSH 私钥名称（`id_rsa`、`id_dsa`、`id_ecdsa`、`id_ed25519`），以及 `*.key`、`*.pem`、`*.crt`、`*.cer`、`*.p12`、`*.pfx`。全局和项目的 `manager.sensitive_paths` 只能追加到这些默认项，不能删除默认项。`ToolSearch` 和 manager 自身的 TAKT MCP 工具仍然可以跳过审查。使用 Codex 时，只有 manager 自身的 TAKT MCP 工具可以跳过审查，所有内置工具都需要审查。对于这两种 provider，其他所有工具（包括未知工具和外部 MCP 工具）在没有适用的已保存批准时都需要审查。Shell 执行（包括 `Bash`）在没有适用的已保存批准时每次都需要审查，即使命令内容看起来只是读取操作。通过 `Task` 或 `Agent` 启动其他 agent 一律拒绝；通过 `Bash` 启动其他 AI 命令行 agent 的指令也会被拒绝。使用 Codex 时，`spawn_agent` 也一律拒绝，不经过权限判断 agent 审查。
+
+拒绝理由会返回给 manager，供其在下一次回复中考虑。判定为请求人工确认时，操作也会先被拒绝，并通过 TUI 和 Slack 通知正在等待人工确认及其理由。不会挂起工具操作来等待确认。通知使用现有类型，不增加新的通知类型。
+
+判断 agent 的 provider 和 model 可通过 `runtime.yaml` 中的 `provider.targets.internal_agents.manager-permission-judge` 指定。与其他内部 agent seat 一样，可以使用 `profile` 或 `ladder`，不能使用 `pool`。未分配时使用与 manager 相同的 provider、model 和 provider options。
+
+判断的期限为30秒。超时与请求人工确认采用相同流程：保存批准询问，停止操作并等待确认，同时发送通知。异常或判断格式不符合要求时仍会拒绝操作。不会自动重试判断。
 
 ### 即时 exec 模式
 

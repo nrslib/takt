@@ -1,23 +1,30 @@
-import { readdirSync } from 'node:fs';
+import { readdirSync, type Stats } from 'node:fs';
+import { opendir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
   assertPrivateDirectoryReadSnapshot,
   capturePrivateDirectoryReadSnapshot,
   readPrivateFileState,
+  ensurePrivateDirectory,
+  writePrivateFile,
 } from '../../shared/utils/private-file.js';
-import { assertSafePath, lstatOrUndefined } from '../../shared/utils/private-path-identity.js';
-import { runPrivateFileExclusiveAsync } from '../../shared/utils/private-file-lock.js';
+import { assertSafePath, lstatOrUndefined, inspectPrivateArtifactPath, assertAncestorIdentities, hasMatchingIdentity } from '../../shared/utils/private-path-identity.js';
+import { withFileLock } from '../fs/file-lock.js';
 import { GoalIdSchema, GoalSchema, type Goal } from './schema.js';
-import { normalizeSavedGoal } from './migration.js';
 import { withGoalExecutionLock } from './execution-lock.js';
-import { GoalRecordReadConflictError, prepareGoalRecordIndex, readGoalRecordPage, writeGoalWithRecordIndex, type GoalRecordKind, type GoalRecordPage } from './record-pages.js';
 
 const GOAL_FILE_NAME = 'goal.json';
 
 class InvalidGoalFileError extends Error {}
 
-interface GoalListResult {
-  goals: Goal[];
+export interface GoalProjectionCacheEntry<T> { stat: Stats; value: T }
+
+function sameFileVersion(left: Stats, right: Stats): boolean {
+  return hasMatchingIdentity(left, right) && left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
+}
+
+interface GoalListResult<T = Goal> {
+  goals: T[];
   errors: { goalId: string; error: Error }[];
 }
 
@@ -31,11 +38,10 @@ export class GoalStore {
   async create(input: Goal): Promise<Goal> {
     const goal = GoalSchema.parse(input);
     const filePath = this.filePath(goal.id);
-    return runPrivateFileExclusiveAsync(`${filePath}.lock`, () => {
-      this.assertAbsent(goal.id);
-      writeGoalWithRecordIndex(filePath, goal);
-      return goal;
-    });
+    this.assertAbsent(goal.id);
+    ensurePrivateDirectory(dirname(filePath));
+    writePrivateFile(filePath, JSON.stringify(goal));
+    return goal;
   }
 
   assertAbsent(id: string): void {
@@ -47,62 +53,94 @@ export class GoalStore {
     return this.getSync(id);
   }
 
+  find(id: string): Goal | undefined {
+    return this.read(id);
+  }
+
+  async *iterate(): AsyncGenerator<Goal> {
+    for await (const { id, snapshot } of this.iterateIds()) {
+      const goal = this.read(id);
+      assertPrivateDirectoryReadSnapshot(snapshot);
+      if (goal !== undefined) yield goal;
+    }
+  }
+
+  async *iterateProjected<T>(cache: Map<string, GoalProjectionCacheEntry<T>>, project: (goal: Goal) => T): AsyncGenerator<T> {
+    const seen = new Set<string>();
+    for await (const { id, snapshot } of this.iterateIds()) {
+      const filePath = this.filePath(id);
+      const inspection = inspectPrivateArtifactPath(filePath, 'file');
+      const stat = inspection.expectedStat;
+      if (stat === undefined) { cache.delete(id); continue; }
+      const previous = cache.get(id);
+      let value: T;
+      if (previous !== undefined && sameFileVersion(previous.stat, stat)) value = previous.value;
+      else {
+        cache.delete(id);
+        const goal = this.read(id);
+        if (goal === undefined) throw new Error('Goal disappeared during projection');
+        value = project(goal);
+      }
+      assertAncestorIdentities(inspection.ancestorIdentities);
+      const current = lstatOrUndefined(filePath);
+      if (current === undefined || !sameFileVersion(stat, current)) throw new Error('Goal changed during projection');
+      cache.set(id, { stat: current, value });
+      seen.add(id);
+      assertPrivateDirectoryReadSnapshot(snapshot);
+      yield structuredClone(value);
+    }
+    for (const id of cache.keys()) if (!seen.has(id)) cache.delete(id);
+  }
+
+  private async *iterateIds() {
+    assertSafePath(this.root, true);
+    if (lstatOrUndefined(this.root) === undefined) return;
+    const snapshot = capturePrivateDirectoryReadSnapshot(this.root);
+    const ids: string[] = [];
+    for await (const entry of await opendir(this.root)) ids.push(GoalIdSchema.parse(entry.name));
+    ids.sort((left, right) => left.localeCompare(right));
+    assertPrivateDirectoryReadSnapshot(snapshot);
+    for (const id of ids) {
+      assertPrivateDirectoryReadSnapshot(snapshot);
+      yield { id, snapshot };
+      assertPrivateDirectoryReadSnapshot(snapshot);
+    }
+  }
+
   getSync(id: string): Goal {
     const goal = this.read(id);
     if (goal === undefined) throw new Error(`Goal does not exist: ${id}`);
     return goal;
   }
 
-  async update(id: string, transform: (goal: Goal) => Goal): Promise<Goal> {
+  async update(id: string, transform: (goal: Goal) => Goal, onSaved?: () => void): Promise<Goal> {
     const filePath = this.filePath(id);
-    return runPrivateFileExclusiveAsync(`${filePath}.lock`, () => withGoalExecutionLock(this.cwd, () => {
+    assertSafePath(filePath, false);
+    return withFileLock(`${filePath}.lock`, () => withGoalExecutionLock(this.cwd, () => {
       const goal = GoalSchema.parse(transform(this.getSync(id)));
       if (goal.id !== id) throw new Error('Goal update cannot change its ID');
-      writeGoalWithRecordIndex(filePath, goal);
+      writePrivateFile(filePath, JSON.stringify(goal));
+      onSaved?.();
       return goal;
     }));
   }
 
-  async readRecordPage(
-    id: string, kind: GoalRecordKind, eventId: string | undefined, offset: number, limit: number, budget: number,
-  ): Promise<GoalRecordPage> {
-    const filePath = this.filePath(id);
-    const read = (): GoalRecordPage | undefined => {
-      for (let attempt = 0; ; attempt += 1) {
-        try { return readGoalRecordPage(filePath, id, kind, eventId, offset, limit, budget); }
-        catch (error) {
-          if (!(error instanceof GoalRecordReadConflictError) || attempt === 2) throw error;
-        }
-      }
-    };
-    const page = read();
-    if (page !== undefined) return page;
-    return runPrivateFileExclusiveAsync(`${filePath}.lock`, () => {
-      const prepared = read();
-      if (prepared !== undefined) return prepared;
-      const snapshot = readPrivateFileState(filePath);
-      if (!('content' in snapshot)) throw new Error(`Goal does not exist: ${id}`);
-      const goal = normalizeSavedGoal(JSON.parse(snapshot.content.toString('utf8')));
-      if (goal.id !== id) throw new Error('Saved goal ID differs from its directory');
-      prepareGoalRecordIndex(filePath, snapshot.state.stat, snapshot.content, goal);
-      const migrated = read();
-      if (migrated === undefined) throw new Error('Goal record index was not prepared');
-      return migrated;
-    });
-  }
-
-  async list(): Promise<GoalListResult> {
+  async list(): Promise<GoalListResult>;
+  async list<T>(project: (goal: Goal) => T | undefined): Promise<GoalListResult<T>>;
+  async list<T>(project?: (goal: Goal) => T | undefined): Promise<GoalListResult<Goal | T>> {
     assertSafePath(this.root, true);
     if (lstatOrUndefined(this.root) === undefined) return { goals: [], errors: [] };
     const snapshot = capturePrivateDirectoryReadSnapshot(this.root);
-    const goals: Goal[] = [];
+    const goals: (Goal | T)[] = [];
     const errors: GoalListResult['errors'] = [];
     for (const entry of readdirSync(this.root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
       const id = GoalIdSchema.parse(entry.name);
       try {
         const goal = this.read(id);
-        // A registration creates its lock directory before publishing the record.
-        if (goal !== undefined) goals.push(goal);
+        if (goal !== undefined) {
+          const projected = project === undefined ? goal : project(goal);
+          if (projected !== undefined) goals.push(projected);
+        }
       } catch (error) {
         if (!(error instanceof InvalidGoalFileError)) throw error;
         errors.push({ goalId: id, error });
@@ -124,7 +162,7 @@ export class GoalStore {
     if (!('content' in snapshot)) return undefined;
     try {
       const raw: unknown = JSON.parse(snapshot.content.toString('utf8'));
-      const goal = normalizeSavedGoal(raw);
+      const goal = GoalSchema.parse(raw);
       if (goal.id !== id) throw new Error('Saved goal ID differs from its directory');
       return goal;
     } catch (error) {

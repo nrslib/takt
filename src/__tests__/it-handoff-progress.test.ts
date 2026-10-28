@@ -148,7 +148,8 @@ function retryOptions(command: 'retry' | 'requeue', lang: 'en' | 'ja', showProgr
   return {
     cwd: '/repo', command, lang, inlineText: '', formalSpec: false,
     ...(showProgress === undefined ? {} : { showProgress }),
-    history: [{ role: 'user', content: 'Repair the parser.' }],
+    history: [],
+    sourceContext: 'Repair the parser.',
     sessionContext: makeSessionContext({ lang }),
   };
 }
@@ -244,9 +245,11 @@ describe('handoff command progress on the released terminal', () => {
     mocks.startContext.mockReturnValue({
       workflowName: 'development', workflowOverride: undefined,
       workflowConfig: { steps: [] }, options: {},
-      startOptions: { options: [{ id: 'restart:implement', label: 'Restart implement', selectable: true }] },
+      startOptions: { options: [{ id: 'restart:implement', label: 'Restart implement', path: '"development" > "implement"', selectable: true }] },
     });
-    mocks.resolveStart.mockReturnValue({ label: 'Restart implement', restartPoint: { step: 'implement' } });
+    mocks.resolveStart.mockReturnValue({ label: 'Restart implement', restartPoint: {
+      stack: [{ workflow: 'development', workflow_ref: 'project:development', step: 'implement', kind: 'agent' }],
+    } });
     mocks.loadWorkflow.mockReturnValue(attachWorkflowOpaqueRef({
       name: 'development', initialStep: 'implement', maxSteps: 10,
       steps: ['implement', 'review'].map((name) => ({ name, personaDisplayName: name, instruction: name })),
@@ -509,12 +512,43 @@ describe('handoff command progress on the released terminal', () => {
 
     assertProgress(waiting, 'task', 'en');
     expect(mocks.callAI).toHaveBeenCalledOnce();
-    expect(promptScreens).toEqual([]);
+    expect(promptScreens.map((prompt) => prompt.kind)).toEqual(['select']);
+    expect(promptScreens[0]?.screen.filter((line) => SPINNER.test(line))).toEqual([]);
     expect((await screen()).filter((line) => line !== '')).toEqual([]);
     expect(vi.getTimerCount()).toBe(0);
     expect(process.stdout.write).toBe(stdoutWrite);
     expect(process.stderr.write).toBe(stderrWrite);
     expect(notice.length).toBeGreaterThan(0);
+  });
+
+  it.each([false, true])('clears progress before the manual menu on the same terminal with extraction failure=%s', async (extractionFails) => {
+    const observed: Screen[] = [];
+    mocks.callAI.mockImplementation(async () => {
+      observed.push(await screen());
+      if (extractionFails) throw new Error('Agreement extraction failed');
+      return { result: { success: true, content: observed.length === 1
+        ? 'Restart parser-repair from development > implement.'
+        : 'not JSON' }, sessionId: undefined };
+    });
+    mocks.select.mockImplementation(async () => {
+      promptScreens.push({ kind: 'select', screen: await screen() });
+      return null;
+    });
+
+    const notice = await runAssistantRetryCommand({ ...retryOptions('retry', 'en', true),
+      history: [{ role: 'user', content: 'Restart parser-repair from development > implement.' }] });
+
+    expect(mocks.callAI).toHaveBeenCalledTimes(extractionFails ? 1 : 3);
+    if (!extractionFails) {
+      assertProgress(observed[1]!, 'start', 'en');
+      assertProgress(observed[2]!, 'start', 'en');
+    }
+    expect(promptScreens).toHaveLength(1);
+    expect(promptScreens[0]?.screen.filter((line) => SPINNER.test(line))).toEqual([]);
+    expect((await screen()).filter((line) => SPINNER.test(line))).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(mocks.persist).not.toHaveBeenCalled();
+    expect(notice).toContain('not changed');
   });
 
   it('propagates an initial render failure, restores writes, and leaves the next operation usable', async () => {

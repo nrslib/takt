@@ -69,6 +69,10 @@ In ordinary interactive mode, press Escape at any worktree-settings prompt after
 
 MCP clients can use the `takt-mcp` stdio server to save pending tasks, inspect task/run state, and send additional instructions to running worktree-clone tasks without invoking shell commands. `takt_enqueue_task` writes a pending record to `.takt/tasks.yaml`; `takt_list_tasks` returns compact summaries, `takt_get_run` reads one run's details, and `takt_tell_run` rechecks and writes only to a running clone. If saving fails after issue creation and the issue number was resolved, the issue remains open and the MCP error result returns its number for retry. If number extraction fails, the result can provide the issue URL instead. The tools require an absolute `cwd` inside the server's allowed project root; enqueue and tell also require non-empty task content. Use `takt run` to execute pending tasks or `takt watch` to monitor and execute them continuously. See [CLI Reference](./cli-reference.md#mcp-server) for setup and tool input details.
 
+`takt_cleanup_tasks` previews filtered tasks before deletion. It requires an absolute `cwd` and a `reason`. Optional inputs are `statuses` (one or more of `pending`, `completed`, `failed`, `exceeded`, and `pr_failed`; `running` is not allowed), `goalId`, `branch`, and `confirm` (default `false`). At least one of `statuses`, `goalId`, or `branch` is required.
+
+Omitting `confirm` or setting it to `false` returns only the matching list without deleting anything. Only `confirm: true` deletes tasks, with the same deletion scope as `takt list`. This tool is available only in the `all` tool set, not in `read-only` or `manager`; `manager` has the separate `takt_remove_goal_task` tool.
+
 The ordinary assistant conversation receives only the read-only task-state tools when its provider supports MCP. Use `/go` for a new task, `/tell` to select, review, and confirm an additional instruction for a running worktree clone, or `/requeue` and `/retry` to return a failed task to the queue. A provider without MCP support keeps the conversation available but cannot look up task state.
 
 After delivery succeeds, instructions sent through `takt_tell_run` or CLI `/tell` are also appended to the task's source `order.md`, with their instruction ID and receipt time, and reflected in the active run's `context/task/order.md`. When persistence succeeds, later agents and resumed runs can read these instructions. Persistence failures produce a warning on standard error without preventing delivery or making tell fail.
@@ -239,7 +243,7 @@ The list view shows all tasks organized by status (pending, running, completed, 
 | **Create PR** | Commit, push, and create a pull request from the failed run's changes |
 | **Delete** | Remove the failed task record |
 
-In CLI/TUI assistant and grill-me conversations, `/requeue [guidance]` resolves a failed or exceeded task from the conversation. The guidance is appended as the final user turn for both task and start-position selection, rather than mechanically matched to a task name. If the AI cannot identify a task or its selection fails, TAKT asks you to choose from the eligible tasks. If the start position cannot be determined, you can choose from the available positions. TAKT then shows the task name, summary, workflow, and start position and asks for Y/n confirmation. Approval returns the task to `pending` without changing its `order.md`. Cancelling selection or confirmation leaves the task unchanged and records that result in the conversation. Successful requeue results also remain in the conversation with the task name. `/retry [guidance]` retains its existing behavior: it resolves a failed task and shows a complete revised order with **Save task** and **Continue** choices. **Save task** archives the previous order and returns the task to `pending`; **Continue** makes no task changes and returns to the conversation. Ambiguous `/retry` targets or start positions, and an empty candidate set for either command, return a notice. Neither command starts a worker. Both require an interactive terminal; without a TTY, neither selection nor task changes occur. Persona conversations and the Web UI treat these strings as ordinary messages. The direct-run `/retry` flow in `takt resume` remains separate.
+In CLI/TUI assistant and grill-me conversations, `/requeue [guidance]` resolves a failed or exceeded task from the conversation, and `/retry [guidance]` resolves a failed task from the conversation. Selection uses an independent AI call with the latest conversation agreement, inline guidance, complete candidate paths, and workflow heading descriptions. Guidance is interpreted in context rather than mechanically matched to a task name. For both commands, a malformed response or a value outside the candidates triggers one correction request at each selection stage. If the correction is still invalid, a manual menu identifies the reason: JSON format mismatch, unknown task name, or unknown start position ID. An undecided response or provider failure goes directly to manual selection. TAKT then shows the task name, summary, workflow, and start position and asks for Y/n confirmation. For `/requeue`, approval returns the task to `pending` without changing its `order.md`. Cancelling selection or confirmation leaves the task unchanged and records that result in the conversation. Successful requeue results also remain in the conversation with the task name. `/retry [guidance]` resolves a failed task and shows a complete revised order with **Save task** and **Continue** choices. **Save task** archives the previous order and returns the task to `pending`; **Continue** makes no task changes and returns to the conversation. An empty candidate set returns a notice for either command. Neither command starts a worker. Both require an interactive terminal; without a TTY, neither selection nor task changes occur. Persona conversations and the Web UI treat these strings as ordinary messages. The direct-run `/retry` flow in `takt resume` remains separate.
 
 ### Actions for Pending Tasks
 
@@ -251,7 +255,8 @@ In CLI/TUI assistant and grill-me conversations, `/requeue [guidance]` resolves 
 
 | Action | Description |
 |--------|-------------|
-| **Mark as failed** | Mark a stuck `running` task as `failed` |
+| **Stop** | Request a stop for one running task; the worker interrupts itself and determines the final state |
+| **Mark as failed** | Mark a stuck `running` task as `failed`; does not stop the worker |
 
 Selecting a running task with a worktree clone opens the ordinary assistant conversation with that task as the initial `/tell` target. The conversation can inspect other tasks or discuss a new task. `/tell` rechecks the selected task after confirmation and writes only to that task; completed, missing, mismatched, and non-clone runs are not candidates or recipients.
 
@@ -340,6 +345,21 @@ takt list --non-interactive --action try --branch takt/my-branch
 
 Available actions: `diff`, `sync`, `try`, `merge`, `delete`.
 
+`takt list --non-interactive --action delete` accepts `--status <status...>` to select one or more of `pending`, `completed`, `failed`, `exceeded`, and `pr_failed`. `running` is not allowed because running tasks cannot be deleted. `--goal <goalId>` selects tasks belonging to that goal. `--branch <branch>` is also available; when used alone, it targets only `completed` tasks.
+
+At least one of `--status`, `--goal`, or `--branch` is required. Without a filter, the command exits with an error without deleting anything. Without `--yes`, it lists the matching task names, statuses, branches, and goals, then exits successfully without deleting anything. Only `--yes` performs deletion. Use `--format json` to return the preview as JSON; JSON output includes `goal_id`.
+
+Deletion removes the task's working clone, worktree session files, clone metadata, branch, and record in `.takt/tasks.yaml`, matching deletion from the interactive list. Clone tasks also delete the branch with the same name in the original repository with `git branch -d` after cleanup. If Git refuses deletion because the branch is not fully merged or for another reason, the branch is retained with a warning while clone and task-record deletion succeed.
+
+```bash
+# Preview matching tasks, then delete them after checking the list
+takt list --non-interactive --action delete --status failed pr_failed
+takt list --non-interactive --action delete --status failed pr_failed --yes
+
+# Preview as JSON
+takt list --non-interactive --action delete --status failed pr_failed --format json
+```
+
 ## Task Directory Workflow
 
 The recommended end-to-end workflow:
@@ -352,7 +372,9 @@ The recommended end-to-end workflow:
 
 ## CodeRabbit review loop (`caccia`)
 
-The merge builtins execute Caccia explicitly: `merge-review` runs `review → caccia → wait_ci → evaluation comment`, while `merge-review-fix` and `merge-review-fix-simple` run `review/fix → commit_and_push → caccia → wait_ci → merge_pr`. `success` and `skipped` continue to CI on the returned head. `limit` comments with the unresolved thread count and ends COMPLETE without merging. An effect error comments with `error` and ends ABORT. Push, task post-processing, and Pipeline no longer start Caccia implicitly. With `merge.auto_start: true`, PR publication starts the merge workflow, whose explicit effect owns Caccia.
+The merge builtins execute Caccia explicitly: `merge-review` runs `review → caccia → wait_ci → evaluation comment`, while `merge-review-fix` and `merge-review-fix-simple` run `review/fix → commit_and_push → caccia → wait_ci → merge_pr`. `success` and `skipped` continue to CI on the returned head. `limit` comments with the unresolved thread count and ends COMPLETE without merging. An effect error comments with `error` and ends ABORT. Worktree tasks with `auto_pr` and Pipeline with `--auto-pr` run Caccia after successful PR creation or update when `caccia.enabled: true`. Post-processing skips failed publication, missing PRs, goal-managed tasks, and non-GitHub providers. It also skips Caccia when the executed workflow or the merge workflow selected by `merge.auto_start: true` contains an explicit `caccia` system effect, including in a called workflow. Otherwise Caccia completes before the linked merge workflow starts. Step names and instruction text do not count as effects. Git push itself does not start Caccia; `takt merge` continues to use explicit effects.
+
+`merge-review-fix` and `merge-review-fix-simple` investigate every completed CI failure using failed checks, run/attempt/job references, log contents, the cumulative PR diff and related code. Repository defects (including flaky tests and failures also present on main) receive a root fix and read-only review, followed by push → Caccia → CI, for at most two rounds. Only an evidenced external cause permits one CI rerun, independently of the fix budget, including after both fix rounds. The workflow waits for the new attempt on the same HEAD and rechecks all checks and existing merge conditions. Missing evidence, a defect after both fix rounds, a rejected fix or a failed rerun stops recovery with a PR comment containing the counts, last failed checks and references, and investigation summary, then ABORT. Investigation and fix reports remain in the run. Initial success and CI timeout behavior are unchanged; `merge-review` remains comment-only. GitHub Actions log/rerun permission failures and unsupported providers are reported explicitly.
 
 Caccia waits for CodeRabbit, then processes only unresolved threads started by `coderabbitai`. Each iteration runs the configured workflow in a temporary clone, preserves its decision report under `.takt/runs/`, pushes successful fixes, resolves only the threads evaluated in that iteration, and waits for CodeRabbit to review the pushed commit. Human-started threads remain open. Caccia does not reply to reviews. Successes and iteration-limit results are logged and sent through the configured notification path.
 
@@ -403,7 +425,7 @@ During worktree execution, TAKT maintains two directory references:
 | `cwd` (clone path) | Where agents run, where reports are written |
 | `projectCwd` (project root) | Where logs and session data are stored |
 
-Reports are written to `cwd/.takt/runs/{slug}/reports/` (inside the clone) to prevent agents from discovering the main repository path. Session resume is skipped when `cwd !== projectCwd` to avoid cross-directory contamination.
+Reports are written to `cwd/.takt/runs/{slug}/reports/` (inside the clone) to prevent agents from discovering the main repository path. With `session: continue` and no provider fallback, steps in the same run resume a saved session for the same persona, provider, and model associated with that clone. They do not use sessions from another clone or the project root. Retry, requeue, and instruct start each persona with a fresh session in an existing clone; later steps in the new attempt resume that session.
 
 ## Session Logs
 

@@ -1,9 +1,11 @@
 import { EventEmitter } from 'node:events';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-const doubles = vi.hoisted(() => ({ config: vi.fn(), owner: vi.fn(), pending: vi.fn(), spawn: vi.fn(), exists: vi.fn(), open: vi.fn(), close: vi.fn(), resolve: vi.fn(), diagnostic: vi.fn(), goal: vi.fn() }));
-vi.mock('../infra/goals/execution-lock.js', () => ({
-  withGoalExecutionLock: (_cwd: string, action: () => unknown) => action(),
-}));
+import { afterEach,beforeEach,expect,it,vi } from 'vitest';
+import { ensureManagerRun } from '../features/manager/autoRun.js';
+import { MANAGER_GOAL_TASKS_ENV } from '../shared/constants.js';
+import { goalRecord } from './helpers/goal-fixtures.js';
+const doubles = vi.hoisted(() => ({ config: vi.fn(), owner: vi.fn(), pending: vi.fn(), spawn: vi.fn(), exists: vi.fn(), open: vi.fn(), close: vi.fn(), resolve: vi.fn(), diagnostic: vi.fn(), goal: vi.fn(), events: vi.fn() }));
+vi.mock('../infra/goals/events.js', () => ({ readManagerEvents: doubles.events }));
+vi.mock('../infra/goals/execution-lock.js', () => ({ withGoalExecutionLock: (_cwd: string, action: () => unknown) => action() }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class {
   getSync = doubles.goal;
   async get(id: string) { return doubles.goal(id); }
@@ -12,13 +14,10 @@ vi.mock('../infra/config/managerConfig.js', () => ({ resolveManagerConfig: doubl
 vi.mock('../infra/task/store.js', () => ({ TaskStore: class { read() { return { tasks: doubles.pending() }; } } }));
 vi.mock('../infra/task/mapper.js', () => ({ resolveTaskContent: doubles.resolve }));
 vi.mock('../infra/task/project-execution-lock.js', () => ({ getProjectExecutionOwner: doubles.owner }));
-vi.mock('../infra/task/manager-run-state.js', () => ({ recordManagerRunFailure: doubles.diagnostic }));
+vi.mock('../features/manager/turnFailureNotification.js', () => ({ notifyManagerTurnFailure: doubles.diagnostic }));
 vi.mock('../shared/utils/private-file.js', () => ({ ensurePrivateDirectory: vi.fn() }));
 vi.mock('node:fs', async (importOriginal) => ({ ...await importOriginal<typeof import('node:fs')>(), existsSync: doubles.exists, openSync: doubles.open, closeSync: doubles.close }));
 vi.mock('node:child_process', () => ({ spawn: doubles.spawn }));
-import { ensureManagerRun } from '../features/manager/autoRun.js';
-import { MANAGER_GOAL_TASKS_ENV } from '../shared/constants.js';
-import { goalRecord } from './helpers/goal-fixtures.js';
 it.each(['paused', 'aborted', 'active'] as const)('rechecks the saved %s goal after launch preparation', async (executionStatus) => {
   doubles.open.mockImplementation(() => {
     doubles.goal.mockReturnValue({ ...goalRecord(), executionStatus });
@@ -41,6 +40,7 @@ it('stops launching the same pending queue once its saved goal becomes aborted',
 beforeEach(() => {
   vi.resetAllMocks();
   doubles.config.mockReturnValue({ autoRun: true, mainMerge: 'approve' });
+  doubles.events.mockReturnValue([]);
   doubles.goal.mockReturnValue(goalRecord());
   doubles.pending.mockReturnValue([{ name: 'saved-task', status: 'pending', content: 'work', goal_id: 'goal' }]);
   doubles.exists.mockReturnValue(true);
@@ -99,8 +99,6 @@ it.each([false, true])('launches a detached CLI and returns after spawn (built C
   expect(args).toContain('run');
   expect(args.some((arg: string) => arg.endsWith(built ? 'index.js' : 'index.ts'))).toBe(true);
   expect(options).toMatchObject({ cwd: '/project', detached: true, shell: false, stdio: ['ignore', 99, 99] });
-  expect(options.env.TAKT_MANAGER_GOAL_OWNERS).toBeUndefined();
-  expect(options.env.TAKT_MANAGER_GOAL_EVENT_CONTEXT).toBeUndefined();
   expect(options.env[MANAGER_GOAL_TASKS_ENV]).toBe('1');
   expect(doubles.spawn.mock.results[0]!.value.unref).toHaveBeenCalledOnce();
   expect(doubles.close).toHaveBeenCalledExactlyOnceWith(99);
@@ -110,14 +108,14 @@ it('allows both launchers to spawn before execution ownership is acquired', asyn
   expect(doubles.spawn).toHaveBeenCalledTimes(2);
   expect(doubles.diagnostic).not.toHaveBeenCalled();
 });
-it('records a spawn error without discarding the pending task and permits the next attempt', async () => {
+it('notifies a spawn error without discarding the pending task and permits the next attempt', async () => {
   doubles.spawn.mockImplementationOnce(() => {
     const child = new EventEmitter();
     queueMicrotask(() => child.emit('error', new Error('injected spawn failure')));
     return child;
   });
   await ensureManagerRun('/project');
-  expect(doubles.diagnostic).toHaveBeenCalledExactlyOnceWith('/project', expect.objectContaining({ message: 'injected spawn failure' }));
+  expect(doubles.diagnostic).toHaveBeenCalledExactlyOnceWith('/project', undefined, expect.objectContaining({ message: 'injected spawn failure' }));
   expect(doubles.pending()).toHaveLength(1);
   expect(doubles.close).toHaveBeenCalledExactlyOnceWith(99);
   await ensureManagerRun('/project');
@@ -136,7 +134,7 @@ it.each(['run', 'watch'] as const)('rechecks a %s owner acquired during launch p
   expect(doubles.spawn).not.toHaveBeenCalled();
   expect(doubles.close).toHaveBeenCalledExactlyOnceWith(99);
 });
-it('records a synchronous spawn failure, closes the descriptor and permits retry', async () => {
+it('notifies a synchronous spawn failure, closes the descriptor and permits retry', async () => {
   doubles.spawn.mockImplementationOnce(() => { throw new Error('spawn failed'); });
   await ensureManagerRun('/project');
   expect(doubles.diagnostic).toHaveBeenCalledOnce();
@@ -162,9 +160,41 @@ it('skips unreadable pending tasks while executing readable work', async () => {
   await ensureManagerRun('/project');
   expect(doubles.spawn).not.toHaveBeenCalled();
 });
-it('records a whole queue read failure without spawning', async () => {
-  doubles.pending.mockImplementation(() => { throw new Error('invalid tasks.yaml'); });
+it('notifies a whole queue read failure without spawning', async () => {
+  const failure = new Error('invalid tasks.yaml');
+  doubles.pending.mockImplementation(() => { throw failure; });
   await ensureManagerRun('/project');
   expect(doubles.spawn).not.toHaveBeenCalled();
-  expect(doubles.diagnostic).toHaveBeenCalledOnce();
+  expect(doubles.diagnostic).toHaveBeenCalledExactlyOnceWith('/project', undefined, failure);
+});
+
+it.each(['queue', 'spawn', 'spawn-event'] as const)('propagates a daemon %s failure without notifying', async (stage) => {
+  const failure = new Error('polling failed');
+  if (stage === 'queue') doubles.pending.mockImplementation(() => { throw failure; });
+  if (stage === 'spawn') doubles.spawn.mockImplementation(() => { throw failure; });
+  if (stage === 'spawn-event') doubles.spawn.mockImplementation(() => {
+    const child = new EventEmitter();
+    queueMicrotask(() => child.emit('error', failure));
+    return child;
+  });
+
+  await expect(ensureManagerRun('/project', { notifyOnFailure: false })).rejects.toBe(failure);
+
+  expect(doubles.diagnostic).not.toHaveBeenCalled();
+  if (stage === 'queue') expect(doubles.spawn).not.toHaveBeenCalled();
+  else expect(doubles.close).toHaveBeenCalledExactlyOnceWith(99);
+});
+
+it('does not start run for an inbox event when no tasks are pending', async () => {
+  doubles.pending.mockReturnValue([]);
+  doubles.events.mockReturnValue([{ event: { kind: 'registered', goalId: goalRecord().id } }]);
+  await ensureManagerRun('/project');
+  expect(doubles.spawn).not.toHaveBeenCalled();
+});
+it('keeps paused events without repeatedly starting an empty run', async () => {
+  doubles.pending.mockReturnValue([]);
+  doubles.events.mockReturnValue([{ event: { kind: 'answer', goalId: goalRecord().id } }]);
+  doubles.goal.mockReturnValue({ ...goalRecord(), executionStatus: 'paused' });
+  await ensureManagerRun('/project');
+  expect(doubles.spawn).not.toHaveBeenCalled();
 });

@@ -561,7 +561,7 @@ export function normalizeStepFromRaw(
 
   if (step.parallel && !Array.isArray(step.parallel)) {
     const normalizeDynamicSubStep = (
-      sub: typeof step.parallel.fixed[number] | typeof step.parallel.pool[number],
+      sub: RawStep,
       branch: 'fixed' | 'pool',
       index: number,
     ): DynamicParallelFixedSubStep => {
@@ -584,9 +584,13 @@ export function normalizeStepFromRaw(
     const fixed: DynamicParallelFixedSubStep[] = step.parallel.fixed.map(
       (sub, index) => normalizeDynamicSubStep(sub, 'fixed', index),
     );
-    const pool: DynamicParallelPoolSubStep[] = step.parallel.pool.map((sub, index) => {
+    const pool: DynamicParallelPoolSubStep[] = step.parallel.pool.map(({ selection_hint, ...sub }, index) => {
       const normalized = normalizeDynamicSubStep(sub, 'pool', index);
-      return normalized as DynamicParallelPoolSubStep;
+      return {
+        ...normalized,
+        description: sub.description,
+        ...(selection_hint === undefined ? {} : { selectionHint: selection_hint }),
+      };
     });
     const parallel = {
       kind: 'dynamic' as const,

@@ -1,7 +1,7 @@
 import type { SystemStepServicesOptions } from '../../core/workflow/system/system-step-services.js';
 import type { PullRequestContext } from '../../core/workflow/pr-context.js';
 import { detectVcsProvider } from '../../infra/git/detect.js';
-import type { PrDetails, PrExecutionContext } from '../../core/workflow/system/pr-execution-context.js';
+import { PrHeadObservationMismatchError, type PrDetails, type PrExecutionContext } from '../../core/workflow/system/pr-execution-context.js';
 import { getGitProvider, type GitProvider } from '../../infra/git/index.js';
 import { resolveConfigValue } from '../../infra/config/index.js';
 import { runGitCommandAbortable } from '../../infra/task/clone-exec.js';
@@ -14,10 +14,15 @@ import { checkForkThreats, toPublicThreatCheckComment } from '../merge/threat-ch
 import { resolveMergeSettings } from '../merge/settings.js';
 import { resolveCacciaSettings, runCaccia } from './index.js';
 import type { CacciaDisplayOptions } from './output.js';
+import type { WorkflowExecutionEventSink } from '../tasks/execute/types.js';
+import { parseGitHubPullRequestTarget } from '../../infra/github/pull-request-target.js';
 
 const log = createLogger('caccia-effect');
+const HEAD_WAIT_MS = 60_000;
+const HEAD_POLL_INTERVAL_MS = 2_000;
 
 interface CacciaEffectOptions extends Omit<SystemStepServicesOptions, 'gitProvider'>, CacciaDisplayOptions {
+  readonly eventSink?: WorkflowExecutionEventSink;
   readonly gitProvider?: GitProvider;
   readonly prContext?: PullRequestContext;
 }
@@ -30,15 +35,75 @@ function assertPrIdentity(context: PrExecutionContext, details: PrDetails): void
   }
 }
 
-async function recordSkippedHead(options: CacciaEffectOptions, headSha: string): Promise<void> {
+async function waitForExpectedPrHead(
+  provider: GitProvider,
+  context: PrExecutionContext,
+  projectCwd: string,
+  expectedHeadSha: string,
+  failureMessage: string,
+  callerSignal: AbortSignal | undefined,
+): Promise<void> {
+  if (!provider.fetchPrDetails) throw new Error('PR details are not supported by this Git provider');
+  const deadline = Date.now() + HEAD_WAIT_MS;
+  const controller = new AbortController();
+  const signal = callerSignal === undefined ? controller.signal : AbortSignal.any([callerSignal, controller.signal]);
+  let lastObservedHead: string | undefined;
+  const timeoutError = (): Error => new Error(
+    `${failureMessage} (expected ${expectedHeadSha}, ${lastObservedHead === undefined
+      ? 'no PR head was fetched' : `last observed ${lastObservedHead}`})`,
+  );
+  const timeout = setTimeout(() => controller.abort(timeoutError()), HEAD_WAIT_MS);
+  try {
+    while (true) {
+      signal.throwIfAborted();
+      let headMatches = false;
+      try {
+        const details = await provider.fetchPrDetails(context.prNumber, projectCwd, signal);
+        signal.throwIfAborted();
+        assertPrIdentity(context, details);
+        lastObservedHead = details.headSha;
+        headMatches = details.headSha === expectedHeadSha;
+      } catch (error) {
+        if (!(error instanceof PrHeadObservationMismatchError)) throw error;
+        lastObservedHead = `${error.lastHeadSha} (inconsistent with ${error.firstHeadSha})`;
+      }
+      signal.throwIfAborted();
+      if (Date.now() >= deadline) throw timeoutError();
+      if (headMatches) return;
+      await new Promise<void>((resolve, reject) => {
+        const abort = (): void => {
+          clearTimeout(pollTimer);
+          reject(signal.reason);
+        };
+        const pollTimer = setTimeout(() => {
+          signal.removeEventListener('abort', abort);
+          resolve();
+        }, Math.min(HEAD_POLL_INTERVAL_MS, deadline - Date.now()));
+        signal.addEventListener('abort', abort, { once: true });
+      });
+    }
+  } catch (error) {
+    signal.throwIfAborted();
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function recordSkippedHead(options: CacciaEffectOptions, headSha: string, isGitHub: boolean): Promise<void> {
   const context = options.prExecutionContext;
   const recorder = options.prMergePushRecorder;
   if (!context || !recorder) return;
   const provider = options.gitProvider ?? getGitProvider();
-  if (!provider.fetchPrDetails) throw new Error('PR details are not supported by this Git provider');
-  const latest = await provider.fetchPrDetails(context.prNumber, options.projectCwd, options.abortSignal);
-  assertPrIdentity(context, latest);
-  if (latest.headSha !== headSha) throw new Error('Pull request head changed before Caccia was skipped');
+  if (isGitHub) {
+    await waitForExpectedPrHead(provider, context, options.projectCwd, headSha,
+      'Pull request head changed before Caccia was skipped', options.abortSignal);
+  } else {
+    if (!provider.fetchPrDetails) throw new Error('PR details are not supported by this Git provider');
+    const latest = await provider.fetchPrDetails(context.prNumber, options.projectCwd, options.abortSignal);
+    assertPrIdentity(context, latest);
+    if (latest.headSha !== headSha) throw new Error('Pull request head changed before Caccia was skipped');
+  }
   recorder.record(headSha, headSha, context);
 }
 
@@ -59,36 +124,38 @@ export async function cacciaEffect(
     }
     const initialHeadSha = (await git(['rev-parse', 'HEAD'])).stdout.trim();
     const settings = resolveCacciaSettings(resolveConfigValue(options.projectCwd, 'caccia'));
+    const isGitHub = (resolveConfigValue(options.projectCwd, 'vcsProvider') ?? detectVcsProvider(options.projectCwd)) === 'github';
     if (!settings.enabled) {
-      await recordSkippedHead(options, initialHeadSha);
+      await recordSkippedHead(options, initialHeadSha, isGitHub);
       return { success: true, failed: false, outcome: 'skipped', headSha: initialHeadSha,
         unresolvedCount: 0, skipReason: 'config_disabled', reason: 'Caccia is disabled in configuration' };
     }
-    if ((resolveConfigValue(options.projectCwd, 'vcsProvider') ?? detectVcsProvider(options.projectCwd)) !== 'github') {
-      await recordSkippedHead(options, initialHeadSha);
+    if (!isGitHub) {
+      await recordSkippedHead(options, initialHeadSha, isGitHub);
       return { success: true, failed: false, outcome: 'skipped', headSha: initialHeadSha,
         unresolvedCount: 0, skipReason: 'github_unavailable', reason: 'GitHub is required for the Caccia effect' };
     }
     if (!context) throw new Error('GitHub PR execution metadata is required for Caccia');
     const provider = options.gitProvider ?? getGitProvider();
     if (!provider.fetchPrDetails) throw new Error('PR details are not supported by this Git provider');
-    const before = await provider.fetchPrDetails(prNumber, options.projectCwd, options.abortSignal);
-    assertPrIdentity(context, before);
-    if (before.headSha !== initialHeadSha) throw new Error('Pull request head changed before Caccia execution');
+    await waitForExpectedPrHead(provider, context, options.projectCwd, initialHeadSha,
+      'Pull request head changed before Caccia execution', options.abortSignal);
     let expectedHeadSha = initialHeadSha;
     const result = await runCaccia({
       entry: 'linked', prNumber, projectCwd: options.projectCwd, settings,
+      ...(context.prUrl === undefined ? {} : { pullRequest: parseGitHubPullRequestTarget(context.prUrl) }),
       expectedInitialHeadSha: initialHeadSha, abortSignal: options.abortSignal,
       onPushedHead: (headSha) => {
         options.prMergePushRecorder?.record(headSha, expectedHeadSha, context);
         expectedHeadSha = headSha;
       },
       outputMode: options.outputMode, taskPrefix: options.taskPrefix,
+      eventSink: options.eventSink,
       taskColorIndex: options.taskColorIndex, taskDisplayLabel: options.taskDisplayLabel,
     });
     if (result.outcome === 'not_run') throw new Error('Enabled Caccia did not execute');
     if (result.skipReason === 'github_unavailable') {
-      await recordSkippedHead(options, initialHeadSha);
+      await recordSkippedHead(options, initialHeadSha, isGitHub);
       return { success: true, failed: false, outcome: result.outcome, headSha: initialHeadSha,
         unresolvedCount: result.unresolvedCount, skipReason: result.skipReason, reason: result.reason ?? null };
     }

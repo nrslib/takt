@@ -9,6 +9,7 @@ params:
     type: facet_ref
     facet_kind: instruction
 name: final-gate
+description: Check the requirements and review decisions against the current code and decide whether to complete or send back for further work.
 capabilities: readonly
 tags:
   - final-gate
@@ -16,6 +17,7 @@ tags:
 edit: false
 persona: supervisor
 policy:
+  - process-deviation
   - contract-change
   - $param: final_gate_policy
 knowledge:

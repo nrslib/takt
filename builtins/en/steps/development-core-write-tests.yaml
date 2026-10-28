@@ -12,6 +12,7 @@ params:
     type: facet_ref
     facet_kind: report_format
 name: write_tests
+description: Before implementation, write tests that verify the requirements and acceptance criteria in the plan.
 capabilities: edit
 tags:
   - coding

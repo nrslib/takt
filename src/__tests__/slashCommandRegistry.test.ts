@@ -15,6 +15,14 @@ function assistantRetryAvailability(enabled: boolean): CommandAvailability {
 }
 
 describe('filterSlashCommands', () => {
+  it('filters caller-supplied definitions without adding interactive commands', () => {
+    const definitions = [{ command: '/make-goal', labelKey: 'manager.makeGoalDescription' }];
+    expect(filterSlashCommands('/', {}, definitions)).toEqual(definitions);
+    expect(filterSlashCommands('/ma', {}, definitions)).toEqual(definitions);
+    expect(filterSlashCommands('/MAKE-GOAL', {}, definitions)).toEqual(definitions);
+    expect(filterSlashCommands('/help', {}, definitions)).toEqual([]);
+    expect(filterSlashCommands('/ma')).toEqual([]);
+  });
   it('should return all commands when prefix is "/"', () => {
     const result = filterSlashCommands('/');
     const commands = result.map((e) => e.command);

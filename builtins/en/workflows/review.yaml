@@ -26,6 +26,7 @@ steps:
           - {Question 2}
 
   - name: reviewers
+    description: Select specialist reviewers for the change and review in parallel to determine whether fixes are needed.
     kind: workflow_call
     call: development-review
     vars:
@@ -39,6 +40,7 @@ steps:
         next: ABORT
 
   - name: review-synthesis
+    description: Consolidate review results and findings into an overall verdict and final summary.
     input_reports:
       from_step: reviewers
       reports: all
@@ -133,6 +135,7 @@ steps:
             ```
 
   - name: supervise
+    description: Consolidate review results and findings into an overall verdict and final summary.
     input_reports:
       from_step: reviewers
       reports: all
@@ -143,6 +146,7 @@ steps:
     edit: false
     persona: supervisor
     policy:
+      - process-deviation
       - contract-change
       - review
     pass_previous_response: false

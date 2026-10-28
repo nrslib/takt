@@ -73,6 +73,7 @@ import {
 } from '../infra/config/index.js';
 import { runCaccia } from '../features/caccia/index.js';
 import type { WorkflowExecutionRequest } from '../features/tasks/execute/workflowExecutionApi.js';
+import type { WorkflowExecutionEvent } from '../features/tasks/execute/types.js';
 import { createCheckoutFilter } from './helpers/checkout-filter.js';
 
 const temporaryRoots: string[] = [];
@@ -661,14 +662,7 @@ describe('Caccia real Git isolation', () => {
     let cloneCwd: string | undefined;
     const reportDirectory = join(projectCwd, '.takt', 'runs', 'caccia-git-isolation-report');
     mockRunWorkflowExecution.mockImplementation(async (...args: unknown[]) => {
-      const options = args[0] as {
-        cwd: string;
-        projectCwd: string;
-        workflowIdentifier: string;
-        runPathsDirectory: string;
-        outputMode: string;
-        task: string;
-      };
+      const options = args[0] as WorkflowExecutionRequest;
       cloneCwd = options.cwd;
       expect(git(options.cwd, ['remote', 'get-url', 'origin'])).toBe(bareRemote);
       expect(git(options.cwd, ['remote', 'get-url', '--push', '--all', 'origin'])).toBe(headPushRemotes.join('\n'));
@@ -694,12 +688,18 @@ describe('Caccia real Git isolation', () => {
       });
       expect(options).not.toHaveProperty('workflowResourceRoot');
       expect(options.task).toContain('"thread_id": "thread-42"');
+      await options.eventSink?.({ type: 'output', outputType: 'text', message: 'Caccia trace failed' });
+      await options.eventSink?.({ type: 'progress', message: 'ordinary progress' });
+      await options.eventSink?.({ type: 'progress', level: 'warn', message: 'Caccia trace failed' });
+      await options.eventSink?.({ type: 'completed', success: true });
       return { success: true, reportDirectory };
     });
 
     const exitListenerCount = process.listenerCount('exit');
+    const events: WorkflowExecutionEvent[] = [];
     const result = await runCaccia({
       ...display,
+      eventSink: (event) => { events.push(event); },
       prNumber: 42,
       projectCwd,
       settings: {
@@ -711,6 +711,7 @@ describe('Caccia real Git isolation', () => {
     });
 
     expect(result).toMatchObject({ outcome: 'success', unresolvedCount: 0 });
+    expect(events).toEqual([{ type: 'progress', level: 'warn', message: 'Caccia trace failed' }]);
     expect(result.exitCode).toBe(display.entry === 'standalone' ? 0 : undefined);
     expect(cloneCwd).toBeDefined();
     expect(existsSync(cloneCwd as string)).toBe(false);

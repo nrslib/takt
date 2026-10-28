@@ -94,10 +94,12 @@ steps:
         requires_user_input: true
         interactive_only: true
   - name: reviewers
+    description: Check AI-specific issues and requirement fulfillment in parallel, then decide whether to complete, repair, or stop.
     tags:
       - review
     parallel:
       - name: ai-antipattern-review-2nd
+        description: Check for issues specific to AI-generated code and report evidence and proposed fixes.
         capabilities: readonly
         tags:
           - review
@@ -116,6 +118,7 @@ steps:
             - name: ai-antipattern-review.md
               format: ai-antipattern-review
       - name: supervise
+        description: Compare current code and preceding reports with requirements to decide whether to complete, repair, or await external confirmation.
         capabilities: readonly
         tags:
           - review
@@ -124,6 +127,7 @@ steps:
         persona:
           $param: supervisor_persona
         policy:
+          - process-deviation
           - contract-change
         knowledge:
           $param: development_knowledge
@@ -175,6 +179,7 @@ steps:
           - condition: Cannot proceed, insufficient info
 
   - name: ai-antipattern-fix
+    description: Verify AI review findings against actual files and specifications, fix confirmed issues, and report the results.
     capabilities: edit
     tags:
       - coding
@@ -201,6 +206,7 @@ steps:
           format: fix-report
 
   - name: supervise_fix
+    description: Verify supervisor findings against actual files, fix them in priority order, and report the results.
     capabilities: edit
     tags:
       - coding

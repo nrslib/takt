@@ -458,6 +458,7 @@ function toOpenCodeAllowedPermission(tool: string): string | null {
 
 /** Options for calling OpenCode */
 export interface OpenCodeCallOptions {
+  callerManagedSession?: true;
   cwd: string;
   abortSignal?: AbortSignal;
   sessionId?: string;

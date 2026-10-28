@@ -27,6 +27,7 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
   assertCodexConfigProfilePermissionControl(providerCodexOptions);
   return {
     cwd: options.cwd,
+    callerManagedSession: options.callerManagedSession,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
     model: options.model,
@@ -53,6 +54,8 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
     childProcessEnv: options.childProcessEnv,
     preparedMcp: options.preparedMcp,
     mcpOnlySideEffects: options.mcpOnlySideEffects !== undefined,
+    onToolPermissionDecision: options.onToolPermissionDecision,
+    internalAgentIsolation: options.internalAgentIsolation,
   };
 }
 
@@ -115,6 +118,7 @@ export class CodexProvider implements Provider {
         ...options,
         sessionId: undefined,
         internalAgentIsolation: 'strict-readonly',
+        onToolPermissionDecision: undefined,
         permissionMode: 'readonly',
         allowedTools: [],
         mcpServers: undefined,

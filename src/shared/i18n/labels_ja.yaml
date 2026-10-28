@@ -6,6 +6,27 @@
 # =============================================================================
 
 # ===== Interactive Mode UI =====
+taskStop:
+  label: "Stop（停止依頼）"
+  description: "停止を依頼します。worker が自分で中断し、終端状態を決めます"
+  confirm: '実行中のタスク「{name}」に停止を依頼しますか？ 終端状態は worker が決めます。'
+  staleOwner: "所有者が生きていないため停止を依頼できません。Mark as failed を使用してください。"
+  missingExecutionId: "実行IDがないため停止を依頼できません。"
+  rejected: "停止依頼が拒否されました: {reason}"
+  requested: '「{name}」に停止を依頼しました。worker が自分で中断し、終端状態を決めます。'
+
+taskDeletion:
+  statusOption: "削除対象の状態で絞り込む（pending|completed|failed|exceeded|pr_failed、複数指定可）"
+  goalOption: "削除対象のゴールIDで絞り込む"
+  invalidStatus: "削除対象に指定できない状態です: {status}。pending、completed、failed、exceeded、pr_failedを指定してください。"
+  filtersRequired: "削除には --status、--goal、--branch のいずれかが必要です。"
+  preview: "削除対象のタスク（プレビュー。削除するには --yes を指定）:"
+  previewTask: "タスク名: {name} | 状態: {status} | ブランチ: {branch} | ゴール: {goal}"
+  empty: "削除条件に一致するタスクはありません。"
+  deleted: "タスクを削除しました: {name}"
+  failed: "タスクの削除に失敗しました: {name}"
+  failedWithError: "タスク {name} の削除に失敗しました: {error}"
+
 interactive:
   operation:
     taskSaved: "タスクを保存しました: {taskName}。"
@@ -334,8 +355,11 @@ issue:
 tui:
   ui:
     thinking: "考え中..."
+    extendedThinking: "推論中..."
+    responding: "応答中"
     selectTask: "候補タスクを選択中..."
     selectStart: "開始位置を判断中..."
+    extractRetryAgreement: "再投入についての合意を整理中..."
     reviseInstruction: "指示書を改訂中..."
     composeTell: "指示文を作成中..."
     hint: "Enter: 送信  Shift+Enter: 改行  Tab: 補完  ↑↓: 行移動/履歴  Ctrl+C: 中止"
@@ -343,6 +367,8 @@ tui:
     queuedHint: "↑ でキューを編集"
     queuedMore: "他 {count} 件をキュー中"
     interruptHint: "(Esc で中断)"
+    interruptHintCompact: "(Esc: 中断)"
+    interruptHintMinimal: "Esc"
     responseInterrupted: "応答を中断しました。"
     instructionInterrupted: "指示書の生成を中断しました。"
     runFinished: "ワークフローの実行が完了しました。続けてタスクを入力するか、/cancel で終了できます。"
@@ -378,6 +404,9 @@ tui:
     assistantRetryUnresolved: "会話から対象タスクと利用可能な開始位置を1つに特定できませんでした。タスクは変更していません。"
     assistantRetryGenerationFailed: "タスクを準備できませんでした: {error}"
     assistantRetryInvalidResult: "利用できないタスクまたは開始位置がアシスタントから返されました。タスクは変更していません。"
+    assistantRetryFormatMismatch: "応答が単一プロパティの JSON 形式と一致しませんでした。"
+    assistantRetryUnknownTaskName: "候補にないタスク名が返されました。"
+    assistantRetryUnknownStartId: "選択可能な候補にない開始位置 ID が返されました。"
     assistantRetryCancelled: "タスクは変更していません。"
     assistantRetryRequeued: "タスク「{task}」を pending に戻しました。workflow は開始していません。"
     assistantRetrySaved: "改訂したタスク「{task}」を pending に戻しました。workflow は開始していません。"
@@ -396,25 +425,156 @@ tui:
     exceededStart: "保存済みの停止位置: {start}（iteration {iteration}）"
 
 manager:
-  goalExecutionUsage: "一時停止: /pause <goalId> / 再開: /resume <goalId> / 中止: /abort <goalId>（ゴールID必須）"
-  invalidGoalId: "ゴールIDの形式が正しくありません。"
+  conversation:
+    reading: "会話の情報を読み出しています。完了するまで要約を承認できません。"
+    disconnected: "daemon に再接続しています。"
+    incomplete: "読み出しが不完全です。再読み込みが完了するまで要約を承認できません。"
+    interrupted: "前の処理は中断されました。新しい発言を送信できます。"
+    permission_appended: "許可文を追記しました。回答の保存結果を確認してください。"
+    assignment_changed: '担当が変わりました。現在の担当で会話を開き直してください。'
+    busy: "処理中です。完了してからもう一度送信してください。"
+    stale_summary: "表示中の要約は更新されています。最新の要約を確認してください。"
+    invalid_assignment: "担当が変わったか、操作対象が担当の範囲外です。会話を開き直してください。"
+    unavailable_attachment: "会話の接続がありません。開き直してください。"
+    registration_recovery: "ゴール登録の復旧が必要です。保存済みの予約と登録状況を確認してください。"
+    storage_error: "会話の状態を保存できませんでした。保存先を確認してから再接続してください。"
+    shutting_down: "daemonは終了処理中です。もう一度接続してください。"
+    invalid_input: "操作の入力が正しくありません。"
+    operation_failed: "会話の操作を完了できませんでした。現在の状態を確認してください。"
+    dismissed: "要約を取り下げました。"
+    answer_saved: "回答を保存しました。"
+  assignmentHeading: "担当: {name}"
+  assignmentHeadingMultiple: "担当: {name} ほか {count} 件"
+  counts: "進行中 {goals} ／ 未回答 {questions}"
+  inputHint: "Enter 送信  Shift+Enter 改行  Esc 中断  ^R 問い合わせ  ^G ゴール  ^C 終了"
+  makeGoalHint: "/make-goal でゴールの登録案を作る"
+  makeGoalDescription: "ゴールの登録案を作る"
+  slackGoalApprove: "登録を承認"
+  slackGoalDismiss: "会話を続ける"
+  slackGoalObjective: "目的"
+  slackGoalOutOfScope: "範囲外"
+  slackGoalAcceptance: "受け入れ条件"
+  slackGoalConstraints: "作業の制約"
+  summaryInputHint: "↑↓ 選択 / Enter 決定 / Esc 会話を続ける / Ctrl+C 終了"
+  goSummaryRequest: "現在の会話から、ゴール登録用の要約を作成してください。目的、範囲外、受け入れ条件、作業の制約を含む構造化応答の summary を返してください。材料が不足して要約できない場合は、理由を message で説明し、summary は null にしてください。"
+  goSummaryUnavailable: "材料が不足しているため、登録用の要約を作成できませんでした。会話を続けてください。"
+  summaryWorking: "要約を作っています"
+  inputUnavailableDuringAbort: "中止の確認中は文字を入力できません。確認を終えてから入力してください。"
+  toolPermission:
+    savedDenial: "保存済みの承認回答で拒否されています。"
+    consumptionFailed: "承認の消費状態の保存に失敗したため拒否しました。"
+    contextReadFailed: "許可・承認情報の読み取りに失敗したため、人の確認が必要です。{reason}"
+    approvalConsumed: "今回だけの承認は消費済みです。再び人の確認が必要です。"
+    inquirySaveFailed: "承認問い合わせの保存に失敗しました。"
+    agentDenied: "{toolName}: manager から別の AI エージェントを起動する操作は許可されていません。"
+    bashDenied: "Bash: 別の AI コマンド行エージェントを起動する操作は許可されていません。"
+    awaitingConfirmation: "人の確認待ち ({toolName}): {reason}"
+    judgeFailed: "道具の判断役の実行に失敗したため拒否しました。"
+    judgeInvalidOutput: "道具の判断役の出力が不正なため拒否しました。"
+    judgeMissingReason: "道具の判断役が理由を返さなかったため拒否しました。"
+    judgeTimeout: "道具の判断役が30秒の期限内に判断を返さなかったため、人の確認に回しました。"
+    judgeInterrupted: "道具の判断が中断されたため拒否しました。"
+    judgeValidationFailed: "道具の判断役の実行または出力の検証に失敗したため拒否しました。"
+  conversationFailureNotification: |-
+    manager の処理に失敗しました。
+    理由: {reason}
+    会話と現在の作業状態を確認してから、もう一度操作してください。
+  turnFailureNotification: |-
+    manager によるイベント処理が失敗しました。未処理のイベントが残っています。
+    ログと設定を確認し、イベント処理の失敗原因を解消してください。
+    一時停止中のゴールは TUI で Ctrl+G を押し、一覧から選択して再開するか、対応する provider の会話で再開を依頼し、人の確認を経て再開してください。中止済みのゴールは再開できません。
+    理由: {reason}
+  selectionTitles:
+    answer: "回答する問い合わせを選択"
+    goal: "操作するゴールを選択"
+    action: "ゴールの操作を選択"
+  goalActions:
+    pause: "一時停止"
+    resume: "再開"
+    abort: "中止"
+  selectionHint: "↑↓ 選択 / Enter 決定 / Esc 閉じる"
+  selectionEmpty:
+    repository: "担当のリポジトリはありません。"
+    answer: "未回答の問い合わせはありません。"
+    goal: "操作できる進行中のゴールはありません。"
+  goalRegistered: "ゴール登録完了: {name} ({id})\n{branch}"
   sessionUnavailable: "manager セッションは現在利用できません。"
   goalPaused: "ゴールを一時停止しました: {goalId}"
   goalResumed: "ゴールを再開しました: {goalId}"
   goalExecutionFailed: "ゴールの実行状態を変更できませんでした: {reason}"
-  pausedGoals: "一時停止中のゴール"
+  goalStates:
+    active: "実行中"
+    paused: "一時停止中"
+    awaiting_merge: "マージ待ち"
+  inquiryKinds:
+    question: "質問"
+    approval: "承認"
+    operation_request: "操作依頼"
+  answerHint: "Ctrl+R で問い合わせを選択して回答"
+  slack:
+    replyHint: "選択肢はボタンで、自由記述はこの投稿のスレッドへ返信してください。"
+    permissionTitle: "許可する一文の確認"
+    permissionSentence: "許可する一文"
+    confirm: "確定"
+    cancel: "キャンセル"
+  answerFreeText: "自由記述"
+  answerChoiceHint: "↑↓ 選択 / Enter 決定 / Esc 戻る"
+  answerPrompt: "回答を入力してください"
+  inquiryNoGoal: "ゴールなし"
+  permissionAppendFailed: "許可文の追記に失敗しました: {reason}"
+  answerStages:
+    decision: "この操作の許可・拒否を選択してください。"
+    report: "手順を実施した結果を選択してください。"
+    scope: "許可の範囲を選択してください。"
+    comment: "任意のコメント（Enter で確定）"
+    permission: "許可する一文を編集して確定してください。保存に失敗した場合は原因を解消し、Enter で再試行できます。"
+  answerChoices:
+    allow: "許可"
+    deny: "拒否"
+    completed: "実施した"
+    unable: "対応できない"
+    once: "今回だけ"
+    goal: "このゴール"
+    project: "プロジェクト"
+    projectManager: "プロジェクト / manager"
+    workspace: "manager（workspace）"
+    global: "全体"
   goalAborted: "ゴールを中止しました: {goalId}"
-  completedGoalCannotAbort: "完了済みのゴールは中止できません: {goalId}"
-  abortedGoals: "中止済みのゴール"
   abortConfirmation: "ゴールの中止を確認"
+  abortRetryWarning: "中止処理に失敗しました。同じゴールの中止処理を再試行して完了してください。"
+  retryAbort: "中止処理を再試行する"
+  selectionChanged: "選択したゴールは操作の対象外になりました。候補一覧を更新しました。"
   abortWarning: "中止は取り消せません。未実行のタスクを無効にし、所属する実行中タスクを中断します。ブランチ・サブPR・記録は保持します。"
   confirmAbort: "ゴールを中止する"
   cancelAbort: "キャンセル"
   abortChoiceHint: "↑ 中止 / ↓ キャンセル / Enter 決定 / Esc 戻る"
   description: "実験的な manager の会話 TUI を起動します"
-  experimentalNotice: "manager は実験的機能です。動作・設定・保存するデータの形式は予告なく変わることがあります。"
+  experimentalNotice: "manager\u00A0は実験的機能です。動作・設定・保存するデータの形式は予告なく変わることがあります。"
   costNotice: "manager は自動でタスクを投入・実行するため、provider の API の費用がかかります。"
-  notifyIntegrated: "作業単位「{task}」を取り込みました: {purpose}\nコミット: {sha}"
+  notificationHeadings:
+    progress: "進捗をお知らせします — {project}"
+    awaiting_merge: "マージを待っています — {project}"
+    completed: "ゴールが完成しました — {project}"
+    blocked: "進められません — {project}"
+    question: "質問があります — {project}"
+    custom: "お知らせ — {project}"
+  notificationGoal: "ゴール: {objective} ({id})"
+  notificationSeverity: "重要度: {severity}"
+  notificationSeverities:
+    info: "情報"
+    warning: "警告"
+    error: "エラー"
+  notificationIntegratedBody: "「{purpose}」の作業を取り込みました。"
+  notificationOptions: "選択肢: {options}"
+  notificationMoreOptions: "ほかに{count}件の選択肢があります。すべての選択肢はTUIで確認できます。"
+  notificationRecommendation: "推奨: {recommendation}"
+  notificationAnswer: "{project}で takt manager を開き、TUIで Ctrl+R を押し、一覧から問い合わせを選択して回答してください。"
+  notificationMerge: "変更内容を確認し、{branch} ブランチへマージしてください。"
+  notificationMergeRepository: "{project}リポジトリの、ブランチを切り替えられる未コミットの変更がない作業ツリーで、次のコマンドを順に実行してください。"
+  notificationMergeWorktree: "作業ツリー {directory} の状態を確認し、次のコマンドを順に実行してください。"
+  notificationBlockedAction: "上記の理由と必要な操作を確認してください。詳しい内容は{project}で takt manager を開き、TUIで確認・対応してください。"
+  notificationFullMessage: "{project}で takt manager を開き、TUIで会話と現在の作業状態を確認してください。"
+  notificationDigestHint: "本文の続きは省略しています。"
 
 caccia:
   waitingForReview: "Caccia: CodeRabbit のレビュー待ちに入ります。"
