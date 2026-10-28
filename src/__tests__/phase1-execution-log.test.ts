@@ -85,6 +85,22 @@ describe('Phase1ExecutionLog', () => {
       .toEqual(['password=[REDACTED]', 'tool_use', '[REDACTED]']);
   });
 
+  it('masks repeated and overlapping sensitive values wherever they occur', () => {
+    const log = new Phase1ExecutionLog();
+    log.recordEvent({ type: 'text', data: { text: 'password=abcde\napi_key=bcdef\nrepeat abcdef\n' } });
+
+    const entries = JSON.parse(log.toReportInput());
+    expect(entries[0].event.data.text).toBe('password=[REDACTED]\napi_key=[REDACTED]\nrepeat [REDACTED]\n');
+  });
+
+  it('preserves Unicode word boundaries around short sensitive values', () => {
+    const log = new Phase1ExecutionLog();
+    log.recordEvent({ type: 'text', data: { text: 'password=短\n独短\n短\n' } });
+
+    const entries = JSON.parse(log.toReportInput());
+    expect(entries[0].event.data.text).toBe('password=[REDACTED]\n独短\n[REDACTED]\n');
+  });
+
   it('does not combine text fragments from different sources or attempts', () => {
     const log = new Phase1ExecutionLog();
     const prompt = { systemPrompt: 'system', userInstruction: 'instruction' };
