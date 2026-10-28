@@ -57,6 +57,7 @@ vi.mock('../infra/config/loaders/resource-resolver.js', () => ({
   resolveRefToContent: () => 'fixture instruction',
 }));
 vi.mock('../infra/config/managerConfig.js', () => ({ resolveManagerConfig: () => ({ mainMerge: 'approve', sensitivePaths: [] }) }));
+vi.mock('../infra/goals/inquiry-lock.js', () => ({ withInquiryLock: (_directory: string, action: () => Promise<unknown>) => action() }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class {
   constructor(directory: string) { doubles.store(directory); }
   update = doubles.update; get = async (id: string) => structuredClone(goal.id === id ? goal : { ...goalRecord(), id });
@@ -788,41 +789,90 @@ describe('manager permission judge input and output', () => {
     { decision: 'deny', reason: '' }, { decision: 'deny', reason: '   ' },
     { decision: 'ask', reason: '' }, { decision: 'ask', reason: null },
     { result: { decision: 'allow', reason: null } }, { decision: 'allow', reason: null, unexpected: true },
-  ])('denies invalid structured output without retrying: %j', async (output) => {
+  ])('[SCN-JUDGE-TIMEOUT-N2] denies invalid structured output without retrying: %j', async (output) => {
     vi.mocked(executeIsolatedStructuredInternalAgent).mockResolvedValue(judgment(output));
     expectDenial(await decide('Bash'));
     expect(executeIsolatedStructuredInternalAgent).toHaveBeenCalledOnce();
+    expect(doubles.inquiryApproval).not.toHaveBeenCalled();
+    expect(doubles.update).not.toHaveBeenCalled();
   });
-  it.each(['', 'not json', '```json\n{"decision":"allow","reason":null}\n```', '{"result":{"decision":"allow","reason":null}}'])('does not extract allow from invalid text output: %s', async (content) => {
+  it.each(['', 'not json', '```json\n{"decision":"allow","reason":null}\n```', '{"result":{"decision":"allow","reason":null}}'])('[SCN-JUDGE-TIMEOUT-N2] does not extract allow from invalid text output: %s', async (content) => {
     vi.mocked(executeIsolatedStructuredInternalAgent).mockResolvedValue(judgment(undefined, content));
     expectDenial(await decide('Bash'));
     expect(executeIsolatedStructuredInternalAgent).toHaveBeenCalledOnce();
+    expect(doubles.inquiryApproval).not.toHaveBeenCalled();
+    expect(doubles.update).not.toHaveBeenCalled();
   });
-  it.each(['throw', 'error response'] as const)('denies a judge %s without retrying or failing the conversation', async (failure) => {
+  it.each(['throw', 'error response'] as const)('[SCN-JUDGE-TIMEOUT-N2] denies a judge %s without retrying or failing the conversation', async (failure) => {
     if (failure === 'throw') vi.mocked(executeIsolatedStructuredInternalAgent).mockRejectedValue(new Error('judge failure'));
     else vi.mocked(executeIsolatedStructuredInternalAgent).mockResolvedValue({ ...judgment(undefined), status: 'error', error: 'judge failure' });
     expectDenial(await decide('Bash'));
     expect(executeIsolatedStructuredInternalAgent).toHaveBeenCalledOnce();
+    expect(doubles.inquiryApproval).not.toHaveBeenCalled();
+    expect(doubles.update).not.toHaveBeenCalled();
   });
   describe.each(['ja', 'en'] as const)('fixed judge failure reasons in %s', (language) => {
     it.each([
-      { failure: 'error response', ja: '道具の判断役の実行に失敗したため拒否しました。', en: 'Denied because the tool permission judge failed to run.' },
-      { failure: 'invalid output', ja: '道具の判断役の出力が不正なため拒否しました。', en: 'Denied because the tool permission judge returned invalid output.' },
-      { failure: 'missing reason', ja: '道具の判断役が理由を返さなかったため拒否しました。', en: 'Denied because the tool permission judge did not provide a reason.' },
-      { failure: 'exception', ja: '道具の判断役の実行または出力の検証に失敗したため拒否しました。', en: 'Denied because the tool permission judge failed to run or its output could not be validated.' },
-    ])('denies $failure with the localized reason without retrying', async ({ failure, ja, en }) => {
-      if (failure === 'exception') vi.mocked(executeIsolatedStructuredInternalAgent).mockRejectedValueOnce(new Error('judge failure'));
-      else {
-        const response = failure === 'error response' ? { ...judgment(undefined), status: 'error' as const }
-          : judgment(failure === 'invalid output' ? {} : { decision: 'deny', reason: '   ' });
-        vi.mocked(executeIsolatedStructuredInternalAgent).mockResolvedValueOnce(response);
-      }
+      { failure: 'error response', response: { ...judgment(undefined), status: 'error' as const },
+        ja: '道具の判断役の実行に失敗したため拒否しました。', en: 'Denied because the tool permission judge failed to run.' },
+      { failure: 'invalid output', response: judgment({}),
+        ja: '道具の判断役の出力が不正なため拒否しました。', en: 'Denied because the tool permission judge returned invalid output.' },
+      { failure: 'missing reason', response: judgment({ decision: 'deny', reason: '   ' }),
+        ja: '道具の判断役が理由を返さなかったため拒否しました。', en: 'Denied because the tool permission judge did not provide a reason.' },
+      { failure: 'empty ask reason', response: judgment({ decision: 'ask', reason: '' }),
+        ja: '道具の判断役が理由を返さなかったため拒否しました。', en: 'Denied because the tool permission judge did not provide a reason.' },
+      { failure: 'blank ask reason', response: judgment({ decision: 'ask', reason: '   ' }),
+        ja: '道具の判断役が理由を返さなかったため拒否しました。', en: 'Denied because the tool permission judge did not provide a reason.' },
+      { failure: 'null ask reason', response: judgment({ decision: 'ask', reason: null }),
+        ja: '道具の判断役が理由を返さなかったため拒否しました。', en: 'Denied because the tool permission judge did not provide a reason.' },
+      { failure: 'exception', response: undefined,
+        ja: '道具の判断役の実行または出力の検証に失敗したため拒否しました。', en: 'Denied because the tool permission judge failed to run or its output could not be validated.' },
+    ])('[SCN-JUDGE-TIMEOUT-N2] denies $failure with the localized reason without retrying', async ({ response, ja, en }) => {
+      if (response === undefined) vi.mocked(executeIsolatedStructuredInternalAgent).mockRejectedValueOnce(new Error('judge failure'));
+      else vi.mocked(executeIsolatedStructuredInternalAgent).mockResolvedValueOnce(response);
       expect(await decide('Bash', { command: 'pwd' }, language)).toEqual({ decision: 'deny', reason: language === 'ja' ? ja : en });
       expect(executeIsolatedStructuredInternalAgent).toHaveBeenCalledOnce();
+      expect(doubles.inquiryApproval).not.toHaveBeenCalled();
+      expect(doubles.update).not.toHaveBeenCalled();
     });
   });
 });
 describe('manager permission judge deadline and cancellation', () => {
+  it('[SCN-JUDGE-TIMEOUT-N1] keeps the operation pending without saving an inquiry or notifying a human after 29 seconds', async () => {
+    vi.useFakeTimers();
+    const hook = new AbortController();
+    let started!: () => void;
+    const ready = new Promise<void>((resolve) => { started = resolve; });
+    vi.mocked(executeIsolatedStructuredInternalAgent).mockImplementationOnce(() => {
+      started(); return new Promise(() => {});
+    });
+    const session = createExecutor();
+    let decision: ToolPermissionDecision | undefined;
+    const onNotification = vi.fn();
+    const onDenial = vi.fn();
+    doubles.call.mockImplementationOnce(async (_prompt: string, options: DecisionOptions) => {
+      decision = await handler(options)(request('Bash', { command: 'pwd' }, hook.signal));
+      return reply();
+    });
+    const turn = executeTurn(session, { text: humanInstruction, onNotification, onDenial });
+    try {
+      await Promise.race([ready, turn]);
+      expect(executeIsolatedStructuredInternalAgent).toHaveBeenCalledOnce();
+
+      await vi.advanceTimersByTimeAsync(29_000);
+
+      expect(decision).toBeUndefined();
+      expect(doubles.inquiryApproval).not.toHaveBeenCalled();
+      expect(doubles.update).not.toHaveBeenCalled();
+      expect(doubles.slack).not.toHaveBeenCalled();
+      expect(onNotification).not.toHaveBeenCalled();
+      expect(onDenial).not.toHaveBeenCalled();
+    } finally {
+      hook.abort();
+      await turn;
+    }
+  });
+
   it.each(['ja', 'en'] as const)('denies an already cancelled request in %s without invoking the judge or leaving timers', async (language) => {
     vi.useFakeTimers();
     const controller = new AbortController();
@@ -839,7 +889,7 @@ describe('manager permission judge deadline and cancellation', () => {
       expect(vi.getTimerCount()).toBe(0);
     }
   });
-  it.each([{ language: 'ja', provider: 'claude-sdk' }, { language: 'en', provider: 'claude-sdk' }, { language: 'ja', provider: 'codex' }] as const)('denies at 30 seconds in $language for $provider even if the judge ignores abort, and never accepts its late allow', async ({ language, provider }) => {
+  it.each([{ language: 'ja', provider: 'claude-sdk' }, { language: 'en', provider: 'claude-sdk' }, { language: 'ja', provider: 'codex' }] as const)('[SCN-JUDGE-TIMEOUT-P1] requests human confirmation only at 30 seconds in $language for $provider and never accepts a late allow', async ({ language, provider }) => {
     vi.useFakeTimers();
     let complete!: (response: AgentResponse) => void;
     let started!: () => void;
@@ -848,30 +898,47 @@ describe('manager permission judge deadline and cancellation', () => {
       started(); return new Promise((resolve) => { complete = resolve; });
     });
     const session = createExecutor(provider, language);
+    const onNotification = vi.fn();
+    const onDenial = vi.fn();
     let decision: ToolPermissionDecision | undefined;
     doubles.call.mockImplementationOnce(async (_prompt: string, options: DecisionOptions) => {
       decision = await handler(options)(request()); return reply();
     });
-    const turn = executeTurn(session, { text: humanInstruction });
+    const turn = executeTurn(session, { text: humanInstruction, onNotification, onDenial });
     try {
       // handler の配線漏れで ready が解決しない場合も、ターンの結果から失敗理由を得る。
       await Promise.race([ready, turn]);
       expect(executeIsolatedStructuredInternalAgent).toHaveBeenCalledOnce();
       await vi.advanceTimersByTimeAsync(29_999);
       expect(decision).toBeUndefined();
+      expect(doubles.inquiryApproval).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
       expect((await turn).summary).toBeNull();
-      expect(decision).toEqual({ decision: 'deny', reason: language === 'ja'
-        ? '道具の判断役が30秒の期限を超えたため拒否しました。' : 'Denied because the tool permission judge exceeded the 30-second time limit.' });
+      expect(doubles.inquiryApproval).toHaveBeenCalledOnce();
+      const saved = await doubles.inquiryApproval.mock.results[0]!.value as ReturnType<typeof createInquiry>;
+      expect(saved).toMatchObject({ id: inquiryId, kind: 'approval', recipient: 'human', status: 'pending',
+        operation: { toolName: 'Bash', args: JSON.stringify({ command: 'pwd' }), cwd: toolCwd } });
+      expect(saved.body).toMatch(language === 'ja' ? /30\s*秒/u : /30[ -]second/iu);
+      expect(saved.body).toMatch(language === 'ja' ? /人.*確認/u : /human.*(?:confirm|approv)/iu);
+      expect(saved.body).not.toMatch(/拒否しました|denied/iu);
+      const expectedReason = language === 'ja' ? `人の確認待ち (Bash): ${inquiryId}: ${saved.body}`
+        : `Waiting for human confirmation (Bash): ${inquiryId}: ${saved.body}`;
+      expect(decision).toEqual({ decision: 'deny', reason: expectedReason });
+      expect(onDenial).toHaveBeenCalledExactlyOnceWith(expectedReason);
+      expect(onNotification).toHaveBeenCalledExactlyOnceWith(`manager: ${expectedReason}`);
+      expect(doubles.slack).toHaveBeenCalledExactlyOnceWith(webhook, `manager: ${expectedReason}`);
       expect(vi.mocked(executeIsolatedStructuredInternalAgent).mock.calls[0]![3].abortSignal?.aborted).toBe(true);
       complete(judgment({ decision: 'allow', reason: null }));
       await Promise.resolve();
       expectDenial(decision!);
+      expect(doubles.inquiryApproval).toHaveBeenCalledOnce();
+      expect(onNotification).toHaveBeenCalledOnce();
       expect(executeIsolatedStructuredInternalAgent).toHaveBeenCalledOnce();
       expect(vi.getTimerCount()).toBe(0);
     } finally { complete?.(judgment({ decision: 'allow', reason: null }));  }
   });
-  it.each(['parent', 'hook'] as const)('propagates %s cancellation and denies without retrying', async (source) => {
+  it.each(['parent', 'hook'] as const)('[SCN-JUDGE-TIMEOUT-N3] propagates %s cancellation and denies without retrying', async (source) => {
+    vi.useFakeTimers();
     const parent = new AbortController(); const hook = new AbortController();
     let started!: () => void;
     const ready = new Promise<void>((resolve) => { started = resolve; });
@@ -886,12 +953,17 @@ describe('manager permission judge deadline and cancellation', () => {
     try {
       await Promise.race([ready, turn]);
       expect(executeIsolatedStructuredInternalAgent).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1_000);
       (source === 'parent' ? parent : hook).abort();
       if (source === 'parent') await expect(turn).rejects.toBeDefined();
       else await expect(turn).resolves.toMatchObject({ summary: null });
-      expectDenial(decision!);
+      expect(decision).toEqual({ decision: 'deny', reason: '道具の判断が中断されたため拒否しました。' });
+      expect(doubles.inquiryApproval).not.toHaveBeenCalled();
+      expect(doubles.update).not.toHaveBeenCalled();
+      expect(doubles.slack).not.toHaveBeenCalled();
       expect(vi.mocked(executeIsolatedStructuredInternalAgent).mock.calls[0]![3].abortSignal?.aborted).toBe(true);
       expect(executeIsolatedStructuredInternalAgent).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
     } finally { parent.abort(); hook.abort();  }
   });
 });

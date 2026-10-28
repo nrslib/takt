@@ -1252,6 +1252,8 @@ fork の脅威検査は merge コマンドが本体 workflow の前に実行し�
 
 ### CI回復の入力と効果
 
+`merge-review-fix` と `merge-review-fix-simple` はCI待ち後に `CONFLICTING` を検出すると、ベースブランチを取り込み直して必要な競合解消を行います。初回のレビューは繰り返さず、push → Caccia → 新しいHEADのCI待ち → マージ判定へ進みます。`BEHIND` だけなら取り込み直さず、レビューなどの既存条件を確認してマージを試みます。取り込み直しは `max(2, 実行時並列数 - 1)` 回までです。並列数2・3では2回、4では3回となり、初回の同期は数えません。CLIの `--concurrency` を含む実行時並列数をタスクへ保存し、Requeue・Retryでも使います。上限に達しても競合が続く場合は理由をPRへコメントしてCOMPLETEで終了し、マージしません。CI修正・再実行の使用済み回数は取り込み直し後も保持します。
+
 再実行直前に現在のPR HEADを取得し、証拠のHEADと異なる場合は再実行を拒否します。受付後にHEADが変わった場合も待機を抜け、元HEADの失敗チェックとログを保持して不一致理由をコメントしてからABORTします。`pr_status`のsystem inputは`rerunHeadChanged`と`rerunHeadChangeReason`を常に返します。通常のpollingでは`false`と空文字列になります。run・repository・attemptの検証は引き続き適用されます。
 
 `comment_pr`には任意の`body_format: plain_text`を指定できます。補間済みの本文全体をコードブロックで囲み、区切りのバッククォートは本文中の最長の連続列より長くします。CI回復の停止・push失敗コメントでこの形式を使い、チェック名・job名・調査要点・エラーを文字として表示します。未指定の場合は従来どおりMarkdown本文を渡します。

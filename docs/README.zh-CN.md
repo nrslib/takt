@@ -298,6 +298,10 @@ manager 对话由 daemon 执行，TUI 负责发送请求和显示结果。一轮
 
 只要有 TUI 保持连接，或仍有已接受的对话操作在执行，daemon 就不会自动退出。要明确停止它，请使用 `takt daemon stop`。
 
+**Slack 对话：** 也可以从配置的 Slack 频道连接到同一个 manager 对话。回复只发送到发言所在的消息列，不会转发 TUI 的回复。Socket Mode App 清单、令牌环境变量、仓库配置以及回答询问的方法，请参阅[通过 Slack 与 manager 对话](./configuration.zh-CN.md#通过-slack-与-manager-对话)。完成等通知仍通过独立的 `TAKT_NOTIFY_WEBHOOK` Incoming Webhook 发送。
+
+在对话消息列中发送 `/make-goal` 可创建注册提案。使用「Approve registration（批准注册）」或「Continue conversation（继续对话）」操作；旧版本提案的按钮无效。
+
 全部命令和选项请参阅 [CLI Reference](./cli-reference.zh-CN.md)。
 
 `takt list --non-interactive --action delete` 的 `--status <status...>` 可指定一个或多个状态，允许值为 `pending`、`completed`、`failed`、`exceeded` 和 `pr_failed`。不能指定 `running`，因为运行中的任务不能删除。`--goal <goalId>` 只选择属于指定目标的任务。仍可使用 `--branch <branch>`，单独指定时只选择 `completed` 任务。
@@ -346,7 +350,7 @@ manager:
 
 判断 agent 的 provider 和 model 可通过 `runtime.yaml` 中的 `provider.targets.internal_agents.manager-permission-judge` 指定。与其他内部 agent seat 一样，可以使用 `profile` 或 `ladder`，不能使用 `pool`。未分配时使用与 manager 相同的 provider、model 和 provider options。
 
-判断有较短的期限。超时、异常或判断格式不符合要求时都会拒绝操作，不会自动重试判断。
+判断的期限为30秒。超时与请求人工确认采用相同流程：保存批准询问，停止操作并等待确认，同时发送通知。异常或判断格式不符合要求时仍会拒绝操作。不会自动重试判断。
 
 ### 即时 exec 模式
 

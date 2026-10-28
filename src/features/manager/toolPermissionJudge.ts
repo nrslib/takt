@@ -74,7 +74,7 @@ export async function judgeManagerToolPermission(
     if (!parsed.data.reason?.trim()) return { decision: 'deny', reason: getLabel('manager.toolPermission.judgeMissingReason', plan.language) };
     return { decision: parsed.data.decision, reason: sanitizeSensitiveText(parsed.data.reason.trim()) };
   } catch {
-    return { decision: 'deny', reason: getLabel(deadline.signal.aborted
+    return { decision: deadline.signal.aborted ? 'ask' : 'deny', reason: getLabel(deadline.signal.aborted
       ? 'manager.toolPermission.judgeTimeout'
       : signal.aborted ? 'manager.toolPermission.judgeInterrupted'
         : 'manager.toolPermission.judgeValidationFailed', plan.language) };

@@ -357,7 +357,8 @@ export interface NotificationSoundEventsConfig {
  * Project-level configuration stored in .takt/config.yaml.
  */
 export interface ProjectConfig {
-  manager?: { autoRun?: boolean; patrolInterval?: number; defaultWorkflow?: string; mainMerge?: 'auto' | 'approve'; notifications?: ManagerNotifications; sensitivePaths?: string[] };
+  manager?: { autoRun?: boolean; patrolInterval?: number; defaultWorkflow?: string; mainMerge?: 'auto' | 'approve'; notifications?: ManagerNotifications; sensitivePaths?: string[];
+    slack?: { channelId: string; allowedUserIds: string[] } };
   /** UI / builtin resource language override for this project */
   language?: Language;
   /** Provider selection for agent runtime */

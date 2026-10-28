@@ -310,6 +310,10 @@ If another message is submitted while the same conversation is processing, it is
 
 The daemon does not exit automatically while a TUI is connected or an accepted conversation operation is running. To stop it explicitly, use `takt daemon stop`.
 
+**Slack conversations:** You can also talk to the same manager conversation from a configured Slack channel. Replies stay in the thread where you sent the message; TUI replies are not forwarded to Slack. See [Slack conversations with manager](./docs/configuration.md#slack-conversations-with-manager) for the Socket Mode App manifest, token environment variables, repository settings, and how to answer inquiries. Completion notices continue to use the separate `TAKT_NOTIFY_WEBHOOK` Incoming Webhook.
+
+In a conversation thread, send `/make-goal` to create a proposal. Use **Approve registration** or **Continue conversation**; buttons on an outdated proposal no longer work.
+
 See the [CLI Reference](./docs/cli-reference.md) for all commands and options.
 
 `takt list --non-interactive --action delete` accepts `--status <status...>` to select one or more of `pending`, `completed`, `failed`, `exceeded`, and `pr_failed`. `running` is not allowed because running tasks cannot be deleted. `--goal <goalId>` selects tasks belonging to that goal. `--branch <branch>` is also available; when used alone, it targets only `completed` tasks.
@@ -364,7 +368,7 @@ When an operation is denied, the reason returns to the manager, which takes it i
 
 Set the judge's provider and model through `provider.targets.internal_agents.manager-permission-judge` in `runtime.yaml`. Like other internal agent seats, it accepts `profile` or `ladder`, but not `pool`. If unassigned, it uses the same provider, model, and provider options as the manager.
 
-The judge has a short deadline. A timeout, exception, or invalid decision format denies the operation, without an automatic retry of the judgment.
+The judge has a 30-second deadline. A timeout follows the same human confirmation flow as an “ask a person” decision: an approval inquiry is saved, the operation is stopped pending confirmation, and a notification is sent. Exceptions and invalid decision formats still deny the operation. The judgment is not retried automatically.
 
 ### Instant exec mode
 

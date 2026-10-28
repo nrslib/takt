@@ -221,6 +221,10 @@ const ProjectConfigObjectBaseSchema = z.object({
 const ProjectConfigObjectSchema = ProjectConfigObjectBaseSchema.extend({
   manager: ProjectConfigObjectBaseSchema.shape.manager.unwrap().extend({
     main_merge: z.enum(['auto', 'approve']).optional(),
+    slack: z.object({
+      channel_id: z.string().trim().min(1),
+      allowed_user_ids: z.array(z.string().trim().min(1)),
+    }).strict().optional(),
   }).optional(),
 });
 

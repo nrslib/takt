@@ -56,6 +56,14 @@ describe('Merge target selection and execution', () => {
     expect(resolveMergeSettings({ concurrency: 5 }).concurrency).toBe(5);
   });
 
+  it.each([2, 3, 4])('実行時並列数%sを設定値より優先して各PRのworkflowへ渡す', async (concurrency) => {
+    await run({ concurrency }, { concurrency: 7 });
+    expect(executePrWorkflow).toHaveBeenCalledTimes(2);
+    for (const [request] of executePrWorkflow.mock.calls) {
+      expect(request.settings).toMatchObject({ concurrency });
+    }
+  });
+
   it('番号指定時は不一致条件とdraft除外を適用せず指定PRだけを実行する', async () => {
     await run({ prNumber: 123, where: { author: 'other', draft: false } },
       { where: { labels: ['absent'] } });

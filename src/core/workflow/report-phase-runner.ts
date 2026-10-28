@@ -174,6 +174,7 @@ async function executeReportPhase(
       language: ctx.language,
       targetFile: fileName,
       lastResponse,
+      phase1ExecutionLog: ctx.phase1ExecutionLog,
       injectedReports: ctx.injectedReports,
       completionRetryDiagnostic: ctx.completionRetryDiagnostic,
     }).build();
@@ -250,6 +251,7 @@ async function executeReportPhase(
       language: ctx.language,
       targetFile: fileName,
       lastResponse,
+      phase1ExecutionLog: ctx.phase1ExecutionLog,
       injectedReports: ctx.injectedReports,
       completionRetryDiagnostic: ctx.completionRetryDiagnostic,
     }).build();

@@ -57,6 +57,8 @@ import {
 } from './team-leader-part-runner.js';
 import { runWithPhaseSpan } from '../observability/workflowSpans.js';
 import { buildPhaseExecutionId } from '../../../shared/utils/phaseExecutionId.js';
+import { Phase1ExecutionLog } from '../phase1-execution-log.js';
+import { getReportFiles } from '../output-contract-files.js';
 import { resolveTeamLeaderInspectToolsForProvider, isTeamLeaderInspectGuidanceApplicable } from './engine-provider-options.js';
 import {
   createRoutingScope,
@@ -296,6 +298,9 @@ export class TeamLeaderRunner {
         })
       : undefined;
     const reportInputTracker = new Phase1ReportInputTracker(preparedInstruction.reportInputs);
+    const phase1ExecutionLog = getReportFiles(executableStep.outputContracts).length > 0
+      ? new Phase1ExecutionLog()
+      : undefined;
     const initialDeliveryCommitter = createLiveInterventionDeliveryCommitter(
       liveIntervention,
       initialLiveDelivery,
@@ -454,7 +459,12 @@ export class TeamLeaderRunner {
       activeTeamCompanionRuntime!.completeSingleFix(state, 1);
       return undefined;
     };
-    const leaderStream = composedLeaderOptions.onStream;
+    const leaderStream = phase1ExecutionLog === undefined
+      ? composedLeaderOptions.onStream
+      : (event: Parameters<NonNullable<RunAgentOptions['onStream']>>[0]) => {
+          phase1ExecutionLog.recordEvent(event, 'leader');
+          composedLeaderOptions.onStream?.(event);
+        };
     const inspectTools = resolveTeamLeaderInspectToolsForProvider(teamLeaderConfig, leaderProvider);
     const inspectGuidance = isTeamLeaderInspectGuidanceApplicable(inspectTools);
     const leaderMcpServers = this.deps.optionsBuilder.resolveMcpServersForStep(leaderStep, leaderProvider);
@@ -510,9 +520,16 @@ export class TeamLeaderRunner {
       abortSignal,
       onStream: leaderStream,
       onActivity: leaderBaseOptions.onActivity,
+      onPromptResolved: (promptParts: PhasePromptParts) => {
+        phase1ExecutionLog?.recordInstruction('leader_feedback', promptParts, 'leader');
+      },
       ...(leaderSessionId === undefined ? {} : { sessionId: leaderSessionId }),
-      ...(onDispatch === undefined ? {} : { onDispatch }),
+      onDispatch: (permissionMode: Parameters<NonNullable<RunAgentOptions['onDispatch']>>[0]) => {
+        onDispatch?.(permissionMode);
+        phase1ExecutionLog?.markDispatched('leader');
+      },
       onAgentResponse: (response: AgentResponse) => {
+        phase1ExecutionLog?.recordResult(response, 'leader');
         this.recordUsage(
           leaderStep.name,
           leaderProviderInfo,
@@ -520,8 +537,12 @@ export class TeamLeaderRunner {
           response.providerUsage,
         );
       },
-      onAgentError: () => {
+      onAgentError: (error: unknown) => {
+        phase1ExecutionLog?.recordFailure(error, 'leader');
         this.recordUsage(leaderStep.name, leaderProviderInfo, false);
+      },
+      onValidationError: (error: unknown) => {
+        phase1ExecutionLog?.recordFailure(error, 'leader');
       },
     });
     const leaderStartedAt = Date.now();
@@ -550,10 +571,13 @@ export class TeamLeaderRunner {
       onStream: leaderStream,
       onActivity: leaderBaseOptions.onActivity,
       ...(leaderSessionId === undefined ? {} : { sessionId: leaderSessionId }),
-      ...(initialDeliveryCommitter === undefined
-        ? {}
-        : { onDispatch: initialDeliveryCommitter.onDispatch }),
+      onDispatch: (permissionMode: Parameters<NonNullable<RunAgentOptions['onDispatch']>>[0]) => {
+        if (initialDeliveryCommitter === undefined) composedLeaderOptions.onDispatch?.(permissionMode);
+        else initialDeliveryCommitter.onDispatch(permissionMode);
+        phase1ExecutionLog?.markDispatched('leader');
+      },
       onAgentResponse: (response: AgentResponse) => {
+        phase1ExecutionLog?.recordResult(response, 'leader');
         this.recordUsage(
           leaderStep.name,
           leaderProviderInfo,
@@ -562,10 +586,15 @@ export class TeamLeaderRunner {
           response.providerUsage,
         );
       },
-      onAgentError: () => {
+      onAgentError: (error: unknown) => {
+        phase1ExecutionLog?.recordFailure(error, 'leader');
         this.recordUsage(leaderStep.name, leaderProviderInfo, false);
       },
+      onValidationError: (error: unknown) => {
+        phase1ExecutionLog?.recordFailure(error, 'leader');
+      },
       onPromptResolved: (promptParts: PhasePromptParts) => {
+        phase1ExecutionLog?.recordInstruction('leader_decomposition', promptParts, 'leader');
         if (didEmitPhaseStart) return;
         resolvedPromptParts = promptParts;
         this.deps.onPhaseStart?.(
@@ -1066,6 +1095,10 @@ export class TeamLeaderRunner {
             language: this.deps.engineOptions.language,
           });
           if (timeoutFallback) {
+            phase1ExecutionLog?.recordResult({
+              status: 'synthetic_fallback',
+              content: JSON.stringify(timeoutFallback),
+            }, 'leader');
             if (timeoutFallback.parts.length > 0) {
               for (const partId of collectUncoveredPartTimeoutIds(currentResultsCopy, coveredTimedOutPartIds)) {
                 coveredTimedOutPartIds.add(partId);
@@ -1113,6 +1146,7 @@ export class TeamLeaderRunner {
               partAbortSignal,
               publicationFence,
               partDeadline?.signal,
+              phase1ExecutionLog,
             ),
           ).catch((error) => {
           if (isTeamLeaderPartCancellation(error)) throw error;
@@ -1249,6 +1283,7 @@ export class TeamLeaderRunner {
       preparedInstruction.injectedReports,
       reportInputTracker.snapshot(),
       (reportName) => writtenReportNames.push(reportName),
+      phase1ExecutionLog?.toReportInput(),
     );
 
     state.stepOutputs.set(step.name, aggregatedResponse);
@@ -1381,6 +1416,7 @@ export class TeamLeaderRunner {
     executionAbortSignal?: AbortSignal,
     publicationFence?: TeamLeaderExecutionPublicationFence,
     deadlineSignal?: AbortSignal,
+    phase1ExecutionLog?: Phase1ExecutionLog,
   ): Promise<PartResult> {
     publicationFence?.assertRunning('part.worker_start');
     const startedAt = Date.now();
@@ -1424,6 +1460,7 @@ export class TeamLeaderRunner {
         composeOptions: composeTeamCompanionOptions,
         deadlineSignal,
         providerInfo,
+        phase1ExecutionLog,
         createCompanionRuntime: async (partStep, abortSignal) => {
           if (partStep.companion === undefined) return undefined;
           return this.deps.stepExecutor.createCompanionRuntime(
@@ -1458,6 +1495,8 @@ export class TeamLeaderRunner {
             companionRuntime,
             providerInfo,
             nextSequence: () => companionPhaseSequence++,
+            phase1ExecutionLog,
+            phase1LogSource: part.id,
             abortSignal,
             recordUsage: (success, usage) => this.recordUsage(
               partStep.name,

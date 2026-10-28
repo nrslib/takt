@@ -31,7 +31,11 @@ export function prCiStatusOptions(
       return options;
     }
   }
-  return { ...options, rerun: PrCiRerunSchema.parse(referenceValue(input.rerun_from, state)) };
+  const rerun = PrCiRerunSchema.parse(referenceValue(input.rerun_from, state));
+  const caccia = state.effectResults.get('caccia')?.caccia;
+  if (typeof caccia === 'object' && caccia !== null && 'headSha' in caccia
+    && caccia.headSha !== rerun.headSha) return options;
+  return { ...options, rerun };
 }
 
 export async function resolvePrCiFailure(
@@ -73,7 +77,7 @@ export async function resolvePrCiFailure(
       const rerun = typeof rerunResult === 'object' && rerunResult !== null && 'success' in rerunResult && rerunResult.success === true
         ? PrCiRerunSchema.parse(Reflect.get(rerunResult, 'rerun')) : undefined;
       failure = PrCiFailureSchema.parse(await provider.fetchPrCiFailure(context.prNumber, headSha, options.projectCwd,
-        rerun === undefined ? fetchOptions : { ...fetchOptions, rerun }));
+        rerun === undefined || rerun.headSha !== headSha ? fetchOptions : { ...fetchOptions, rerun }));
       if (failure.number !== context.prNumber || failure.headSha !== headSha) throw new Error('CI evidence does not match the requested PR and HEAD');
     } catch (error) {
       fetchOptions.signal?.throwIfAborted();

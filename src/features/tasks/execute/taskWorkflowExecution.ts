@@ -25,6 +25,7 @@ import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import type { ExecuteTaskOptions, WorkflowExecutionOptions, WorkflowExecutionResult } from './types.js';
 import { buildTraceTaskMetadata } from './traceTaskMetadata.js';
 import { resolveWorkflowSystemCommandsForProject } from '../../../infra/config/loaders/workflowNormalizationPolicies.js';
+import { getWorkflowTrustInfo } from '../../../infra/config/loaders/workflowTrustSource.js';
 
 const log = createLogger('task');
 
@@ -189,6 +190,12 @@ export async function executeTaskWorkflow(
 
   const config = resolveWorkflowConfigValues(projectCwd, ['language', 'personaProviders', 'providerRouting', 'providerProfiles']);
   const providerOptions = resolveProviderOptionsWithTrace(projectCwd);
+  const concurrency = prExecutionContext?.mergeConcurrency;
+  const mergeResyncBudget = concurrency !== undefined
+    && (workflowConfig.name === 'merge-review-fix' || workflowConfig.name === 'merge-review-fix-simple')
+    && getWorkflowTrustInfo(workflowConfig, projectCwd).source === 'builtin'
+    ? 5 * Math.max(2, concurrency - 1) : 0;
+  const maxSteps = maxStepsOverride ?? workflowConfig.maxSteps;
   return workflowExecutor(workflowConfig, task, cwd, {
     projectCwd,
     workflowResourceRoot,
@@ -233,7 +240,9 @@ export async function executeTaskWorkflow(
     taskPrefix,
     taskColorIndex,
     taskDisplayLabel,
-    maxStepsOverride,
+    maxStepsOverride: mergeResyncBudget > 0 && maxSteps !== 'infinite'
+      ? maxSteps + mergeResyncBudget
+      : maxStepsOverride,
     initialIterationOverride,
     currentTaskIssueNumber,
     traceTaskMetadata,

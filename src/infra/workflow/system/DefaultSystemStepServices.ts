@@ -207,8 +207,15 @@ async function runEffect(
       return enqueueTaskEffect(options, payload as Parameters<typeof enqueueTaskEffect>[1]);
     case 'comment_pr':
       return commentPrEffect(options, payload as Parameters<typeof commentPrEffect>[1]);
-    case 'sync_with_root':
-      return syncWithRootEffect(options, payload as Parameters<typeof syncWithRootEffect>[1]);
+    case 'sync_with_root': {
+      const result = await syncWithRootEffect(options, payload as Parameters<typeof syncWithRootEffect>[1]);
+      const concurrency = options.prExecutionContext?.mergeConcurrency;
+      if (concurrency === undefined) return result;
+      return { ...result,
+        resyncCount: Math.max(0, (state.stepIterations.get(state.currentStep) ?? 1) - 1),
+        resyncLimit: Math.max(2, concurrency - 1),
+      };
+    }
     case 'resolve_conflicts_with_ai':
       return resolveConflictsWithAiEffect(options, payload as Parameters<typeof resolveConflictsWithAiEffect>[1]);
     case 'merge_pr':
