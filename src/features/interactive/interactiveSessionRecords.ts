@@ -63,24 +63,32 @@ export function listRecords(cwd: string, provider: string): InteractiveSessionRe
 }
 
 async function cleanAndReadRecords(cwd: string, exists: CheckSession): Promise<InteractiveSessionRecord[]> {
+  if (!existsSync(getRecordsPath(cwd))) return [];
+  let records: InteractiveSessionRecord[];
   try {
-    if (!existsSync(getRecordsPath(cwd))) return [];
-    const records = readRecords(cwd);
-    const counts = new Map<string, number>();
-    const retained: InteractiveSessionRecord[] = [];
-    for (const record of records) {
-      if (await exists(record.provider, record.sessionId) === false) continue;
-      const count = counts.get(record.provider) ?? 0;
-      if (count >= 10) continue;
-      counts.set(record.provider, count + 1);
-      retained.push(record);
-    }
-    writeRecords(cwd, retained);
-    return retained;
+    records = readRecords(cwd);
   } catch {
     writeRecords(cwd, []);
     return [];
   }
+
+  const counts = new Map<string, number>();
+  const retained: InteractiveSessionRecord[] = [];
+  for (const record of records) {
+    const count = counts.get(record.provider) ?? 0;
+    if (count >= 10) continue;
+    let existsResult: boolean | undefined;
+    try {
+      existsResult = await exists(record.provider, record.sessionId);
+    } catch {
+      existsResult = undefined;
+    }
+    if (existsResult === false) continue;
+    counts.set(record.provider, count + 1);
+    retained.push(record);
+  }
+  writeRecords(cwd, retained);
+  return retained;
 }
 
 export async function cleanRecords(cwd: string, exists: CheckSession): Promise<void> {

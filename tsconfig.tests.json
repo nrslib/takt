@@ -239,6 +239,7 @@
     "src/__tests__/interactive-issue-binding.test.ts",
     "src/__tests__/interactive-mode.test.ts",
     "src/__tests__/interactive-provider-effort.test.ts",
+    "src/__tests__/interactive-resume-records.integration.test.ts",
     "src/__tests__/interactive-summary.test.ts",
     "src/__tests__/interactive.test.ts",
     "src/__tests__/issue-comment-error.performance.test.ts",

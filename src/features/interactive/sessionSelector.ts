@@ -1,6 +1,7 @@
 import { selectOption, type SelectOptionItem } from '../../shared/prompt/index.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { info } from '../../shared/ui/index.js';
+import { sanitizeTerminalText } from '../../shared/utils/text.js';
 import { listRecords, type InteractiveSessionRecords } from './interactiveSessionRecords.js';
 import { truncateForLabel, formatDateForSelector } from './selectorUtils.js';
 
@@ -22,13 +23,14 @@ export async function selectRecentSession(
     description: getLabel('interactive.sessionSelector.newSessionDescription', lang),
   }];
   for (const session of sessions) {
-    const label = truncateForLabel(session.inputs.at(-1) ?? '', 60);
+    const label = truncateForLabel(sanitizeTerminalText(session.inputs.at(-1) ?? ''), 60);
     const date = formatDateForSelector(session.modified, lang);
     const count = getLabel('interactive.sessionSelector.messages', lang, { count: String(session.messageCount) });
-    const details = session.inputs.slice(0, -1).reverse().map((input) => truncateForLabel(input, 60));
+    const details = session.inputs.slice(0, -1).reverse()
+      .map((input) => truncateForLabel(sanitizeTerminalText(input), 60));
     if (session.response) {
       details.push(getLabel('interactive.sessionSelector.lastResponse', lang, {
-        response: truncateForLabel(session.response, 60),
+        response: truncateForLabel(sanitizeTerminalText(session.response), 60),
       }));
     }
     options.push({ label, value: session.sessionId, description: `${date} | ${count}`, details });

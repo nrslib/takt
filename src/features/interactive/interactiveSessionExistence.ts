@@ -5,6 +5,8 @@ import { getClaudeProjectSessionsDir } from '../../infra/config/project/sessionS
 import { acquireOpenCodeClient } from '../../infra/opencode/server-pool.js';
 import { kiroSessionExists } from '../../infra/kiro/sessionExistence.js';
 
+const SESSION_EXISTS_TIMEOUT_MS = 10_000;
+
 function isMissing(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
 }
@@ -43,7 +45,8 @@ export async function interactiveSessionExists(cwd: string, provider: string, se
     try {
       const { client, release, invalidationSignal } = await acquireOpenCodeClient(undefined, undefined, undefined);
       try {
-        const result = await client.session.get({ sessionID: sessionId, directory: cwd }, { signal: invalidationSignal });
+        const signal = AbortSignal.any([invalidationSignal, AbortSignal.timeout(SESSION_EXISTS_TIMEOUT_MS)]);
+        const result = await client.session.get({ sessionID: sessionId, directory: cwd }, { signal });
         if (result.data !== undefined) return true;
         const error = result.error;
         return isMissingOpenCodeSession(error, sessionId) ? false : undefined;
