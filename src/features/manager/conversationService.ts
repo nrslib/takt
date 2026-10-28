@@ -385,6 +385,10 @@ export function createConversationService(input: {
           return { kind: 'accepted', operationId: active.id };
         }
         if (conversation.active !== undefined) return { kind: 'busy', operationId: conversation.active.id };
+        if (command.kind === 'approve_summary' && command.requirePending === true
+          && (conversation.record.pending?.revision !== command.revision || conversation.record.revision !== command.revision)) {
+          throw new ConversationError('stale_summary');
+        }
         operation = { id: randomUUID(), controller: new AbortController(), cleanupComplete: false };
         conversation.active = operation;
         const assignment = await currentAssignment(conversation);

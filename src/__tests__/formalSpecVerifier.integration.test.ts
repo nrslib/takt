@@ -69,6 +69,7 @@ import {
   detectJavaMajorVersion,
   runFormalSpecVerification,
 } from '../features/interactive/formalSpecVerifier.js';
+import { loadFormalSpecVerifierConstraints } from '../features/interactive/formalSpecPrompts.js';
 
 const require = createRequire(import.meta.url);
 
@@ -427,6 +428,171 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe('bundled Quint CLI verification boundary', () => {
+  function runDeclarationResponse(expectation: string): string {
+    return [
+      '```quint',
+      'module helper { val constant = true }',
+      'module workflowModel {',
+      '  var mode: str',
+      '  var n: int',
+      "  action initWith(m0: str): bool = all { mode' = m0, n' = 0 }",
+      '  action init = { nondet m0 = Set("a", "b").oneOf() initWith(m0) }',
+      "  action step = all { mode' = mode, n' = n }",
+      '  val invBound = n == 0',
+      '  run runParam =',
+      `    initWith("b").then(step).expect(${expectation})`,
+      '}',
+      '```',
+    ].join('\n');
+  }
+
+  it.each([
+    { expectation: 'mode == "b"', status: 'passed' },
+    { expectation: 'mode == "a"', status: 'failed' },
+  ] as const)('executes a multiline run declaration whose expectation is $status through the bundled CLI', async ({ expectation, status }) => {
+    const directory = mkdtempSync(join(tmpdir(), 'takt-quint-run-declaration-'));
+    fakeQuintVerify.mode = 'passed';
+    try {
+      const result = await runFormalSpecVerification(runDeclarationResponse(expectation), directory, { modelCheckTimeoutSeconds: 2 });
+      const quintCli = require.resolve('@informalsystems/quint/dist/src/cli.js');
+      const calls = spawnedProcessCalls.filter(({ command, args }) => command === process.execPath && args[0] === quintCli);
+      const testCall = calls.find(({ args }) => args[1] === 'test');
+
+      expect(result.quint.parse?.status).toBe('passed');
+      expect(result.quint.typecheck?.status).toBe('passed');
+      expect(result.quint.run?.status).toBe('passed');
+      expect(testCall).toBeDefined();
+      expect(result.quint).toMatchObject({ status, test: { status } });
+      expect(result.verdict).toBe(status);
+      const output = JSON.parse(readFileSync(argumentAfter(testCall!.args, '--out')!, 'utf8'));
+      expect(output[status]).toEqual(['runParam']);
+      expect(argumentAfter(testCall!.args, '--match')).toBe('^(runParam)$');
+      expect(argumentAfter(testCall!.args, '--main')).toBe('workflowModel');
+      expect(result.quint.verify?.status).toBe(status === 'passed' && java17Available ? 'passed' : 'skipped');
+      expect(calls.some(({ args }) => args[1] === 'verify')).toBe(status === 'passed' && java17Available);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('does not treat run text in comments, strings, or action names as declarations', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'takt-quint-run-text-'));
+    fakeQuintVerify.mode = 'passed';
+    try {
+      const result = await runFormalSpecVerification([
+        '```quint', 'module workflowModel {', '  var n: int',
+        "  action init = n' = 0", "  action step = n' = n",
+        '  // run runFake = init', '  /* run runOther = init */',
+        '  val text = "run runText = init"', '  action runAction = init', '}', '```',
+      ].join('\n'), directory, { modelCheckTimeoutSeconds: 2 });
+
+      expect(result.quint.run?.status).toBe('passed');
+      expect(result.verdict).toBe('passed');
+      expect(result.quint).not.toHaveProperty('test');
+      expect(spawnedProcessCalls.some(({ args }) => args[1] === 'test')).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects an actual helper module run declaration before simulation and verification', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'takt-quint-run-scope-'));
+    fakeQuintVerify.mode = 'passed';
+    try {
+      const response = runDeclarationResponse('mode == "b"').replace(
+        'module helper { val constant = true }',
+        "module helper { var flag: bool action start = flag' = true run runHelper = start.expect(flag) }",
+      );
+      const result = await runFormalSpecVerification(response, directory, { modelCheckTimeoutSeconds: 2 });
+
+      expect(result.quint.parse?.status).toBe('passed');
+      expect(result.quint.typecheck?.status).toBe('passed');
+      expect(result.verdict).toBe('error');
+      expect(result.quint.run).toMatchObject({ status: 'error', message: expect.stringContaining('helper::runHelper') });
+      expect(spawnedProcessCalls.some(({ args }) => ['run', 'test', 'verify'].includes(args[1]!))).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('runs a nondeterministic scenario with an explicit sample limit without Java', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'takt-quint-run-nondet-'));
+    vi.stubEnv('PATH', directory);
+    try {
+      const response = runDeclarationResponse('mode == "b"').replace(
+        'initWith("b").then(step).expect(mode == "b")',
+        'init.then(step).expect(Set("a", "b").contains(mode))',
+      );
+      const result = await runFormalSpecVerification(response, directory, { modelCheckTimeoutSeconds: 2 });
+      const testCall = spawnedProcessCalls.find(({ args }) => args[1] === 'test');
+
+      expect(result.quint).toMatchObject({ test: { status: 'passed' }, verify: { status: 'skipped' } });
+      expect(result.verdict).toBe('passed');
+      expect(testCall).toBeDefined();
+      const limit = Number(argumentAfter(testCall!.args, '--max-samples'));
+      expect(Number.isInteger(limit) && limit > 0 && limit < 10_000).toBe(true);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a skipped scenario stage when failed parsing still reports its run declaration', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'takt-quint-run-parse-error-'));
+    try {
+      const response = runDeclarationResponse('mode == "b"').replace('.then(step)', '.then(missingAction)');
+      const result = await runFormalSpecVerification(response, directory, { modelCheckTimeoutSeconds: 2 });
+
+      expect(result.quint.parse?.status).toBe('error');
+      expect(result.verdict).toBe('error');
+      const parsed = JSON.parse(readFileSync(result.artifacts!.parseJson!, 'utf8')) as {
+        modules: Array<{ declarations: Array<{ name: string; qualifier?: string }> }>;
+      };
+      expect(parsed.modules.some(({ declarations }) => declarations.some(({ name, qualifier }) => name === 'runParam' && qualifier === 'run'))).toBe(true);
+      expect(result.quint).toMatchObject({ test: { status: 'skipped', message: expect.stringMatching(/\S/) } });
+      expect(spawnedProcessCalls.some(({ args }) => ['test', 'verify'].includes(args[1]!))).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['ja', 'en'] as const)('typechecks and executes the parameterized initialization example rendered for %s', (lang) => {
+    const directory = mkdtempSync(join(tmpdir(), 'takt-quint-prompt-example-'));
+    try {
+      const constraints = loadFormalSpecVerifierConstraints(lang);
+      const examples = [...constraints.matchAll(/```quint\s*\n([\s\S]*?)```/g)]
+        .map((match) => match[1]!).filter((code) => /action\s+initWith\s*\(/.test(code));
+      expect(examples.length).toBeGreaterThan(0);
+      const quintCli = require.resolve('@informalsystems/quint/dist/src/cli.js');
+      for (const code of examples) {
+        const path = join(directory, 'example.qnt');
+        const outputPath = join(directory, 'test.json');
+        writeFileSync(path, /\bmodule\s+\w+\s*\{/.test(code) ? code : `module example {\n${code}\n}`);
+        const typecheck = runQuint(quintCli, ['typecheck', path], directory);
+        expect(typecheck.status, typecheck.stderr).toBe(0);
+        const parsePath = join(directory, 'parse.json');
+        const parse = runQuint(quintCli, ['parse', path, '--out', parsePath], directory);
+        expect(parse.status, parse.stderr).toBe(0);
+        const ast = JSON.parse(readFileSync(parsePath, 'utf8')) as {
+          modules: Array<{ name: string; declarations: Array<{ qualifier?: string; name: string }> }>;
+        };
+        const main = ast.modules.find(({ declarations }) => declarations.some(({ qualifier }) => qualifier === 'run'));
+        expect(main).toBeDefined();
+        const runNames = main!.declarations.filter(({ qualifier }) => qualifier === 'run').map(({ name }) => name);
+        const match = `^(${runNames.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})$`;
+        const test = runQuint(quintCli, [
+          'test', path, '--main', main!.name, '--backend', 'typescript', '--max-samples', '1', '--match', match, '--out', outputPath,
+        ], directory);
+        expect(test.status, test.stderr).toBe(0);
+        const output = JSON.parse(readFileSync(outputPath, 'utf8'));
+        expect(output.passed.slice().sort()).toEqual(runNames.slice().sort());
+        expect(output.failed).toEqual([]);
+        expect(output.ignored).toEqual([]);
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('keeps complete Quint logs beyond the in-memory output limit in private artifacts', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'takt-formal-spec-artifact-logs-'));
     const diagnosticTail = 'LATE DIAGNOSTIC invViolated: counterexample counter = -1';

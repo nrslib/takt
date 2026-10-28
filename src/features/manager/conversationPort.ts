@@ -8,8 +8,10 @@ import type { ManagerDisplayEvent } from './savedEvents.js';
 
 export type ConversationCommand =
   | { kind: 'message'; text: string }
-  | { kind: 'approve_summary' | 'dismiss_summary'; revision: number }
+  | { kind: 'approve_summary'; revision: number; requirePending?: boolean }
+  | { kind: 'dismiss_summary'; revision: number }
   | { kind: 'answer_question'; target: QuestionTarget; questionId: string; answer: GoalAnswerInput;
+      source?: 'tui' | 'slack';
       permission?: { scope: WritablePermissionScope; sentence: string } }
   | { kind: 'pause_goal' | 'resume_goal' | 'abort_goal'; goalId: string }
   | { kind: 'abort_turn'; operationId: string };
