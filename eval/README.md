@@ -121,7 +121,8 @@ knowledge / instruction を全文組み立て、設定行も本番と同じ形�
 この eval は「どの作業を投入し、どの操作を選ぶか、指示書に何を書くか」を計測する。
 本番のツール呼び出しの結果を受けた後の挙動や、操作名の管理（再試行・重複・
 保存済み操作との照合）は測らない。すべてのケースで操作列を JavaScript assert で
-検査する。制約に関する6ケースに加え、`parallel-cli`、`parallel-docs-migration`、
+検査し、`takt_tell_run` の引数 schema も本番の manager 用 schema から読み込む。
+制約に関する6ケースに加え、`parallel-cli`、`parallel-docs-migration`、
 `shared-resource`、`shared-definition`、`human-order`、`integration-check` は
 目的・指示書（本番の `purpose` / `task` 引数）や要約の実質を
 llm-rubric で判定する。追加した停止判断の2ケースも、通知・質問の説明や
@@ -141,7 +142,13 @@ TAKT と関係のない題材として、`constraint-carryover-data` は Python 
 成果の履歴と run の報告で統合後のビルドとテストを確認できる場合に、確認作業を足さず完成するかを測る。
 `escalate-not-on-first-failure` は CSV の仕様書の指定漏れによるデータ処理の初回失敗で、
 人の対応待ちで止まらず、読む資料と実装方針を補った指示書で投入するかを測る。
-17ケースを日英で、Sol Low (`gpt-6-sol`)、Opus 5 (`claude-opus-5`)、Luna Max
+巡回用の11ケースは、要求にない途中状態、方針で対象外の脅威、範囲外の作業、保証を
+保てる単純な代替案を裁定に指摘されたときの `takt_tell_run`、受け入れ条件にある
+不具合・既存動作の回帰・テスト不足・形式仕様・再試行時の重複防止を指摘されたときに
+対象を外さないこと、条件が矛盾して人の判断が要るときの質問、裁定が変わらない同一 run
+への指示の繰り返し防止を測る。指示の内容と理由、代替案の適切さは該当ケースの
+llm-rubric で評価し、`takt_tell_run` の有無と質問操作は JavaScript assert で判定する。
+28ケースを日英で、Sol Low (`gpt-6-sol`)、Opus 5 (`claude-opus-5`)、Luna Max
 (`gpt-6-luna`) に渡す。通常の gate は Sol Low、他の2行は本番条件との比較用。
 両CLI認証が必要で費用が高いため、既定実行から除外する。
 明示実行は `npm run eval:prompts:manager-work-split`（3反復、生成キャッシュ無効）。
@@ -490,7 +497,7 @@ npm run eval:prompts:phase-awareness:smoke -- --red-dist /path/to/main/dist
 
 | Suite | Workflow / step | Fixture | Measures |
 |-------|-----------------|---------|----------|
-| `manager-work-split` | manager conversation / event turn | manager-work-split（17ケース×日英） | 同時投入と依存・共有資源・人の順序の区別、結合後の確認と不要な確認・確認済みの区別、制約の引き継ぎ・1回の担当・要約での保持・制約を作らないこと、人の対応が必要な失敗での停止と自力で直せる初回失敗の継続（Python データ処理と Web アプリを含む）。操作選択と引数のみを測定 |
+| `manager-work-split` | manager conversation / event turn | manager-work-split（28ケース×日英） | 同時投入と依存・共有資源・人の順序の区別、結合後の確認と不要な確認・確認済みの区別、制約の引き継ぎ・1回の担当・要約での保持・制約を作らないこと、人の対応が必要な失敗での停止と自力で直せる初回失敗の継続、巡回時に裁定対象と元の要求・方針・範囲を照合する判断（指示・対象外・単純化・継続・質問・変更なし）。操作選択と引数のみを測定 |
 | `phase-awareness` | review-adjudication / coding-review / implement の Phase 1 → 2 → 1、conductor の structured / tag / ai_judge | phase-awareness（1〜9・5b・6b・8b、会話・判定方式の別で14行） | 本番 dist を切り替える独立セッション。生イベントのツール出力・fixture前後差分・実行マーカー・StructuredOutput の別集計を検査。`npm run eval:prompts:phase-awareness` は Luna max の1・2を red/green 各10回、他は3回（5bはgreenのみ）。改善は1・2それぞれ green 10/10 かつ red ≤5/10。Sol low／Opus 5は参考。build後の `npm run eval:prompts:phase-awareness:smoke` はSol lowで各 red/green 1回のみ（5bも両方を確認）。`--red-dist <mainのdistの絶対パス>`（必須）・`--green-dist`（既定このdist）・`--cases 2,4,5,8,9`（対象を限定）を指定可能。ケース8はfixtureのテストファイル読み込み時とtest scriptのランナー起動時に印ファイルを書き、試行後に印があれば fail とする。ファイル変更はfixture前後差分で判定し、変更やテストの試行の文字列分類は行わない。ケース9は試行ごとに乱数で作る一意の文字列をdocs/内だけに置き、全ターンのモデル応答・ツール出力・試行で作成または変更したファイルのいずれかへの露出で fail とする。docs/を読んでも文字列を応答・ツール出力・生成ファイルに出さない場合は見逃すという限界がある。ケース8・9とも対象ソースを確認した証拠はツール出力の内容で検査し、コマンドやツール引数の文字列は分類しない。ケース1・2はturn2後に乱数で作った一意の文字列（ケース1は新レビューレポート内の各ID、ケース2は変更コードのコメント）が、turn3の生イベントのツール出力（Claudeのネイティブツール結果を含む）に現れたことを読み取りの証拠とし、コマンドやツール引数を分類しない。一意の文字列が送信入力に含まれないことも検査する。ケース1はIDごとの裁定を構造化抽出し、否定・矛盾を含め期待値と照合する。ケース1〜5・5b・8・9の内容は、対象とは別の新規・隔離された Sol low 採点セッションで実質を検査し、入力・生イベントを `content-grade/` に保存（同じ入力の集計では再利用）。採点CLIの失敗・タイムアウト・不正な採点応答は無効として合否から除き、表に不合格数・無効数を出す。無効が1件でもあれば1・2の改善は判定不能。常に `--no-cache`。送信入力・生イベント・セッション／終了コード・回答・前後差分・固定入力manifest・provider×ケース×red/green表は `eval/.results/phase-awareness/<実行日時>/`。contractsはモデルを呼ばない |
 | `review-external-confirmation` | peer-review / review-adjudication | review-external-confirmation (9 independent cases) | 採用済み問題の外部確認待ちへの移行、未修正・必要検証未実施・旧版成功・コード起因失敗の維持、根拠なし条件の範囲外、サービス停止の原因分類。human-approval は改善根拠に数えない回帰確認用 |
 | `security-threat-model` | takt-development-review / security-review (A1, A3, A5); peer-review / initial security-review (A2, A4) | security-threat-model (5 independent cases) | 明示された実行前提の新しい入口と、自動起動・書き込み credential・既存防御の迂回・Git merge driver の経路を区別する RED 先行評価 |

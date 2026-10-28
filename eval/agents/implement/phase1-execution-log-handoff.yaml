@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'Phase 2 reports grounded in engine-captured Phase 1 instructions and execution events'
+
+prompts:
+  - file://../../phase1-execution-log-prompt.mjs
+
+providers:
+  - id: file://../../providers/cli-review.mjs
+    label: codex-terra-medium
+    config:
+      cli: codex
+      model: gpt-6.1-terra
+      reasoning_effort: medium
+      working_dir: fixtures/remediation-evidence
+      isolate_working_dir: true
+
+evaluateOptions:
+  maxConcurrency: 1
+
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        model: gpt-6.1-terra
+        model_reasoning_effort: medium
+        working_dir: ../../fixtures/remediation-evidence
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+
+tests: file://../../cases/phase1-execution-log-handoff.yaml

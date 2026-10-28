@@ -29,11 +29,16 @@ export interface FlatProfile {
   permissionMode?: 'readonly' | 'edit' | 'full';
 }
 
+export interface RuntimeProviderAssignmentOrigins {
+  readonly defaults?: string;
+  readonly targets?: string;
+}
+
 /**
  * Validate every profile/pool reference in the section up front. Throws on unknown
  * references, cyclic `extends`, missing providers, and OpenCode profiles missing models.
  */
-export function validateRuntimeProviderSection(section: RuntimeProviderSection): void {
+export function validateRuntimeProviderSection(section: RuntimeProviderSection, origins?: RuntimeProviderAssignmentOrigins): void {
   if (hasActiveProviderContent(section) && section.defaults === undefined) {
     throw new Error('runtime.yaml active provider section must specify `provider.defaults`');
   }
@@ -44,7 +49,7 @@ export function validateRuntimeProviderSection(section: RuntimeProviderSection):
 
   const flatProfiles = flattenProfiles(section.profiles ?? {});
   const poolNames = new Set(Object.keys(section.auto_routing?.pools ?? {}));
-  validateReferences(section, flatProfiles, poolNames);
+  validateReferences(section, flatProfiles, poolNames, origins);
 }
 
 /** Resolve every `extends` chain into flat profiles; throw on cycles and unknown parents. */
@@ -101,6 +106,7 @@ function validateReferences(
   section: RuntimeProviderSection,
   flatProfiles: Map<string, FlatProfile>,
   poolNames: Set<string>,
+  origins?: RuntimeProviderAssignmentOrigins,
 ): void {
   const assertProfile = (name: string, referencedBy: string): void => {
     const profile = flatProfiles.get(name);
@@ -163,10 +169,10 @@ function validateReferences(
   };
 
   if (section.defaults) {
-    assertAssignment(section.defaults, 'defaults');
+    assertAssignment(section.defaults, origins?.defaults ?? 'defaults');
   }
 
-  assertTargetMaps(section.targets, 'targets');
+  assertTargetMaps(section.targets, origins?.targets ?? 'targets');
 
   for (const [assignmentName, assignmentSet] of Object.entries(section.assignments ?? {})) {
     if (assignmentSet.defaults !== undefined) {

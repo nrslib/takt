@@ -52,6 +52,7 @@ function queueAttempt(result: AgentResponse, streamEvents: StreamEvent[] = []): 
       systemPrompt: typeof persona === 'string' ? persona : '',
       userInstruction: task,
     });
+    options?.onDispatch?.(options.permissionMode);
 
     for (const event of streamEvents) {
       options?.onStream?.(event);
@@ -123,7 +124,6 @@ describe('WorkflowEngine report fallback integration', () => {
     expect(reports).toHaveLength(resume ? 3 : 1);
     for (const [, prompt, options] of reports) {
       expect(prompt).toContain(revision);
-      expect(prompt.split(revision)).toHaveLength(2);
       expect(prompt).toContain('An earlier ordinary user requirement.');
       expect(prompt).toContain('Implementation and checks completed.');
       expect(prompt).not.toContain(pending);
@@ -233,6 +233,12 @@ describe('WorkflowEngine report fallback integration', () => {
       const isReport = options?.allowedTools?.length === 0;
       const attempt = isReport ? (reportAttempts.get(String(persona)) ?? 0) + 1 : 0;
       if (isReport) reportAttempts.set(String(persona), attempt);
+      if (!isReport && persona !== 'planner') {
+        options?.onStream?.({
+          type: 'tool_result',
+          data: { id: `${String(persona)}-call`, content: `${String(persona)}-only-evidence`, isError: false },
+        });
+      }
       return response({
         persona: String(persona),
         content: persona === 'planner' ? upstream : isReport ? attempt < 2 ? '' : '# Part report' : 'Part completed.',
@@ -259,6 +265,8 @@ describe('WorkflowEngine report fallback integration', () => {
       expect(prompt).toContain(revision);
       expect(prompt).toContain(liveRevision);
       expect(prompt).toContain('Part completed.');
+      expect(prompt).toContain(`${String(persona)}-only-evidence`);
+      expect(prompt).not.toContain(`${String(persona) === 'left' ? 'right' : 'left'}-only-evidence`);
       expect(options?.sessionId).toBeUndefined();
       expect(readFileSync(join(tmpRoot, '.takt', 'runs', 'parallel-report-inputs', 'reports', `${persona}.md`), 'utf-8'))
         .toBe('# Part report');
@@ -363,7 +371,7 @@ describe('WorkflowEngine report fallback integration', () => {
     queueAttempt(response({
       content: '[IMPLEMENT:1]\nPhase 1 output',
       sessionId: 'opencode-session-1',
-    }));
+    }), [{ type: 'tool_result', data: { id: 'phase1-call', content: 'verified phase1 tool output', isError: false } }]);
     queueAttempt(response({ content: '# Report\nfirst attempt' }), [{
       type: 'tool_use',
       data: { id: 'tool-1', tool: 'read', input: {} },
@@ -440,6 +448,10 @@ describe('WorkflowEngine report fallback integration', () => {
     );
 
     const fallbackOptions = vi.mocked(runAgent).mock.calls[3]?.[2] as RunAgentOptions;
+    for (const call of vi.mocked(runAgent).mock.calls.slice(1)) {
+      expect(call[1]).toContain('verified phase1 tool output');
+      expect(call[1]).toContain('Implement the task');
+    }
     expect(fallbackOptions).toEqual(expect.objectContaining({
       resolvedProvider: 'codex',
       resolvedModel: 'gpt-5-report',
@@ -455,5 +467,96 @@ describe('WorkflowEngine report fallback integration', () => {
       provider: 'codex',
       providerModel: 'gpt-5-report',
     }]));
+  });
+
+  it.each([true, false])('passes actual work attempts to Phase 2 with provider logging disabled (session=%s)', async (withSession) => {
+    queueAttempt(response({ status: 'error', content: '', error: 'provider failed' }), [
+      { type: 'tool_result', data: { id: 'failed-call', content: 'failed attempt evidence', isError: true } },
+    ]);
+    queueAttempt(response({
+      content: 'The review result is REJECT.',
+      ...(withSession ? { sessionId: 'work-session' } : {}),
+    }), [
+      { type: 'text', data: { text: 'Checked the current file.' } },
+      { type: 'tool_use', data: { id: 'current-call', tool: 'Read', input: { path: 'current.ts' } } },
+      { type: 'tool_result', data: { id: 'current-call', content: 'current file content', isError: false } },
+    ]);
+    queueAttempt(response({ content: '# Report\nChecked current.ts; outcome REJECT.' }));
+    const structuredCaller: StructuredCaller = {
+      judgeStatus: vi.fn().mockImplementation(async (_structured, _tag, _candidates, options) => {
+        options.onStructuredPromptResolved?.({ systemPrompt: 'judge', userInstruction: 'judge' });
+        return { candidateIndex: 1, method: 'structured_output' };
+      }),
+      evaluateCondition: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn(),
+    };
+    const engine = new WorkflowEngine(workflowConfig(), tmpRoot, 'Review current.ts', {
+      projectCwd: tmpRoot,
+      provider: 'opencode',
+      model: 'opencode/primary-model',
+      reportDirName: 'attempt-evidence',
+      structuredCaller,
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    const calls = vi.mocked(runAgent).mock.calls;
+    expect(calls).toHaveLength(3);
+    expect(calls[1]?.[2]?.sessionId).toBeUndefined();
+    expect(calls[2]?.[2]?.sessionId).toBe(withSession ? 'work-session' : undefined);
+    const reportPrompt = calls[2]![1];
+    expect(reportPrompt).toContain('failed attempt evidence');
+    expect(reportPrompt).toContain('provider_error_fresh');
+    expect(reportPrompt).toContain('current file content');
+    expect(reportPrompt).toContain('Checked the current file.');
+    expect(reportPrompt).toContain('Review current.ts');
+    expect(calls[2]?.[2]?.allowedTools).toEqual([]);
+  });
+
+  it('keeps each repeated step execution record separate', async () => {
+    let workCount = 0;
+    const reportPrompts: string[] = [];
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: instruction });
+      if (options?.allowedTools?.length === 0) {
+        reportPrompts.push(instruction);
+        return response({ content: '# Current report', sessionId: 'report-session' });
+      }
+      workCount += 1;
+      options?.onStream?.({
+        type: 'tool_result',
+        data: { id: `call-${workCount}`, content: `evidence-run-${workCount}`, isError: false },
+      });
+      return response({ content: `result-run-${workCount}`, sessionId: `work-session-${workCount}` });
+    });
+    const config = workflowConfig();
+    config.steps[0]!.rules = [
+      normalizeRule({ condition: 'again', next: 'implement' }),
+      normalizeRule({ condition: 'done', next: 'COMPLETE' }),
+    ];
+    const structuredCaller: StructuredCaller = {
+      judgeStatus: vi.fn().mockImplementationOnce(async (_structured, _tag, _candidates, options) => {
+        options.onStructuredPromptResolved?.({ systemPrompt: 'judge', userInstruction: 'judge' });
+        return { candidateIndex: 0, method: 'structured_output' };
+      }).mockImplementationOnce(async (_structured, _tag, _candidates, options) => {
+        options.onStructuredPromptResolved?.({ systemPrompt: 'judge', userInstruction: 'judge' });
+        return { candidateIndex: 1, method: 'structured_output' };
+      }),
+      evaluateCondition: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn(),
+    };
+    const engine = new WorkflowEngine(config, tmpRoot, 'Review twice', {
+      projectCwd: tmpRoot,
+      provider: 'opencode',
+      model: 'opencode/primary-model',
+      reportDirName: 'repeat-evidence',
+      structuredCaller,
+    });
+
+    expect((await engine.run()).status).toBe('completed');
+    expect(reportPrompts).toHaveLength(2);
+    expect(reportPrompts[0]).toContain('evidence-run-1');
+    expect(reportPrompts[0]).not.toContain('evidence-run-2');
+    expect(reportPrompts[1]).toContain('evidence-run-2');
+    expect(reportPrompts[1]).not.toContain('evidence-run-1');
   });
 });
