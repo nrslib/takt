@@ -128,13 +128,16 @@ tests:
 
         要件: 「project の値が global の値より優先される」。実装: 登録済み project のみ優先する。根拠:
         security.md の未登録 project に対する脅威モデル。関連する不整合: workflow_command_gates と
-        workflow_runtime_prepare は登録の有無にかかわらず project を優先する。
+        workflow_runtime_prepare は登録の有無にかかわらず project を優先する。要件: 「空文字列を明示値として保持する」。
+        実装: 未登録 project の空文字列は保持されず global の値が使われる。根拠は同じ脅威モデルであり、
+        両既存キーは未登録 project の空文字列も保持する。
     assert:
       - type: llm-rubric
         metric: spec-deviation/reinterpretation/summary
         value: project が登録済みかを問わない要件を登録済み project
-          に限定して充足と読み替えず、文面からの逸脱として記録する。根拠と残る不整合を示し、他に問題がないため APPROVE とする。
-          要件の引用、実際の実装、根拠、関連する不整合の4項目を保持する。
+          に限定して充足と読み替えず、文面からの逸脱として記録する。空文字列の保持についても未登録 project
+          で保持されない逸脱を記録する。各逸脱について要件の引用、実際の実装、根拠、関連する不整合の4項目を保持し、
+          他に問題がないため APPROVE とする。
   - description: 根拠のない逸脱を承認しない
     prompts:
       - spec-deviation-ungrounded-generic-ja-summary
