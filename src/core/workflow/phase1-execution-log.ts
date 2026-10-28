@@ -47,7 +47,38 @@ export class Phase1ExecutionLog {
   }
 
   toReportInput(): string {
-    return JSON.stringify(this.entries.filter((entry) => entry.kind !== 'instruction' || entry.dispatched));
+    const redundantOutputs = new Set<number>();
+    const pendingOutputs = new Map<string | undefined, Map<string, { chunks: string[]; indexes: number[] }>>();
+    for (const [index, entry] of this.entries.entries()) {
+      if (entry.kind === 'instruction' || entry.kind === 'attempt_result') {
+        pendingOutputs.delete(entry.source);
+        continue;
+      }
+      if (entry.event.type === 'tool_use' && entry.event.data.id) {
+        pendingOutputs.get(entry.source)?.delete(entry.event.data.id);
+      }
+      if (entry.event.type === 'tool_output' && entry.event.data.id) {
+        let byId = pendingOutputs.get(entry.source);
+        if (byId === undefined) {
+          byId = new Map();
+          pendingOutputs.set(entry.source, byId);
+        }
+        const pending = byId.get(entry.event.data.id) ?? { chunks: [], indexes: [] };
+        pending.chunks.push(entry.event.data.output);
+        pending.indexes.push(index);
+        byId.set(entry.event.data.id, pending);
+      }
+      if (entry.event.type === 'tool_result' && entry.event.data.id) {
+        const byId = pendingOutputs.get(entry.source);
+        const pending = byId?.get(entry.event.data.id);
+        if (pending !== undefined && pending.chunks.join('') === entry.event.data.content) {
+          for (const outputIndex of pending.indexes) redundantOutputs.add(outputIndex);
+        }
+        byId?.delete(entry.event.data.id);
+      }
+    }
+    return JSON.stringify(this.entries.filter((entry, index) =>
+      !redundantOutputs.has(index) && (entry.kind !== 'instruction' || entry.dispatched)));
   }
 
   private sanitize<T>(value: T): T {

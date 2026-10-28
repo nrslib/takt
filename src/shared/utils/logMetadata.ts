@@ -48,7 +48,7 @@ export function normalizeLogValue(key: string, value: unknown): unknown {
   return typeof value === 'string' ? normalizeLogMetadata(value) : value;
 }
 
-/** Preserve provider evidence while applying the same secret masking as ordinary log values. */
+/** Mask secrets but preserve complete provider evidence; fixed length limits can hide Phase 2 tool results. */
 export function normalizeProviderEventValue(key: string, value: unknown): unknown {
   if (isSensitiveLogKey(key)) {
     return REDACTED_LOG_VALUE;
