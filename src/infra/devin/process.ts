@@ -260,6 +260,12 @@ export function spawnDevinAcp(args: string[], options: DevinCallOptions): DevinA
   // Groups recorded earlier stay signaled even after a fresh scan loses them.
   const recordedDescendantGroups = new Set<number>();
   let lastDescendantScanAt = 0;
+  // A throttled shutdown scan must not be the last word: the stderr chunk it
+  // skipped may have accompanied the final spawn before the leader dies, so
+  // reserve the next scan slot the interval would have allowed anyway. The
+  // interval is a minimum spacing, not a scheduled guarantee — without this
+  // a spawn inside the window followed by quiet stderr is never seen.
+  let deferredShutdownScan: NodeJS.Timeout | undefined;
   const refreshDescendantSnapshot = (): void => {
     if (process.platform === 'win32' || child.pid === undefined || exit !== undefined) {
       return;
@@ -268,8 +274,20 @@ export function spawnDevinAcp(args: string[], options: DevinCallOptions): DevinA
     const scanInterval = terminateRequested
       ? DESCENDANT_SHUTDOWN_SCAN_INTERVAL_MS
       : DESCENDANT_SNAPSHOT_INTERVAL_MS;
-    if (now - lastDescendantScanAt < scanInterval) {
+    const elapsed = now - lastDescendantScanAt;
+    if (elapsed < scanInterval) {
+      if (terminateRequested && deferredShutdownScan === undefined) {
+        deferredShutdownScan = setTimeout(() => {
+          deferredShutdownScan = undefined;
+          refreshDescendantSnapshot();
+        }, scanInterval - elapsed);
+        deferredShutdownScan.unref();
+      }
       return;
+    }
+    if (deferredShutdownScan !== undefined) {
+      clearTimeout(deferredShutdownScan);
+      deferredShutdownScan = undefined;
     }
     lastDescendantScanAt = now;
     for (const pgid of collectDescendantProcessGroups(child.pid)) {

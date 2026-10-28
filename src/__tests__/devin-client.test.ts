@@ -1377,6 +1377,63 @@ describe('callDevin', () => {
     });
   });
 
+  it('Given a scan ran just before shutdown, When one stderr chunk lands inside the throttle window then goes quiet, Then a deferred scan still signals the late group', async () => {
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    const abort = new AbortController();
+    let leaderPid = 0;
+    let lateSpawnVisible = false;
+    mockExecFileSync.mockImplementation((command: unknown) => {
+      if (command !== 'ps' || leaderPid === 0) {
+        return '';
+      }
+      const descendant = lateSpawnVisible
+        ? `${leaderPid + 1} ${leaderPid} ${leaderPid + 1}\n`
+        : '';
+      return `${leaderPid} 1 ${leaderPid}\n${descendant}`;
+    });
+    mockSpawn.mockImplementation((...call: unknown[]) => {
+      recordConfigArg(call);
+      const child = createAcpChild();
+      // Keep the leader alive until the test emits exit — the default kill
+      // closes on a microtask, which would set `exit` before the deferred
+      // scan slot and skip the scan entirely.
+      child.kill = vi.fn(() => true);
+      leaderPid = child.pid!;
+      attachAcpServer(child, {
+        initialize: () => ({ protocolVersion: 1, agentCapabilities: {}, agentInfo: { name: 'x', version: '0' } }),
+        'session/new': () => ({ sessionId: 'keen-otter', modes: DEFAULT_MODES, configOptions: [] }),
+        'session/prompt': (_params, _api, _id) => {
+          queueMicrotask(() => {
+            // Runs a refresh scan and stamps lastDescendantScanAt shortly
+            // before shutdown, like ordinary stderr noise would.
+            child.stderr.write('boot\n');
+            setTimeout(() => {
+              abort.abort(); // terminate(): its own scan finds no descendant yet
+              lateSpawnVisible = true; // a detached child spawns during shutdown
+              // The one and only chunk inside the 100ms throttle window —
+              // then stderr goes quiet while the leader is still dying.
+              child.stderr.write('late\n');
+              setTimeout(() => {
+                child.emit('exit', null, 'SIGTERM');
+                child.emit('close', null, 'SIGTERM');
+              }, 400);
+            }, 20);
+          });
+          return undefined;
+        },
+      });
+      return child;
+    });
+
+    const result = await callDevin('coder', 'implement', { cwd: '/repo', abortSignal: abort.signal });
+
+    expect(result.status).toBe('error');
+    await vi.waitFor(() => {
+      expect(killSpy).toHaveBeenCalledWith(-(leaderPid + 1), 'SIGTERM');
+      expect(killSpy).toHaveBeenCalledWith(-(leaderPid + 1), 'SIGKILL');
+    });
+  });
+
   it('Given an exit with empty stderr, When the process dies mid-prompt, Then the error does not repeat the exit code', async () => {
     mockChildExitAfterPrompt(2, '');
 
