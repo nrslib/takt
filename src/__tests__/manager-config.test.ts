@@ -101,3 +101,31 @@ it.each([null, 'private', [42], { path: 'private' }].map((sensitive_paths) => ({
   expect(ProjectConfigSchema.safeParse(input).success).toBe(false);
   expect(GlobalConfigSchema.safeParse(input).success).toBe(false);
 });
+
+it.each([{ allowedUserIds: ['U0AAA', 'U0BBB'] }, { allowedUserIds: [] }])('accepts repository Slack channel and allowed user IDs $allowedUserIds', ({ allowedUserIds }) => {
+  const slack = { channel_id: 'C0123', allowed_user_ids: allowedUserIds };
+
+  expect(ProjectConfigSchema.parse({ manager: { slack } })).toMatchObject({ manager: { slack } });
+});
+
+it.each([
+  { channel_id: 123, allowed_user_ids: ['U0AAA'] },
+  { channel_id: 'C0123', allowed_user_ids: 'U0AAA' },
+  { channel_id: 'C0123', allowed_user_ids: [123] },
+  { channel_id: 'C0123' },
+  { allowed_user_ids: ['U0AAA'] },
+])('rejects Slack settings without a string channel and a string user list: %j', (slack) => {
+  expect(ProjectConfigSchema.safeParse({ manager: { slack } }).success).toBe(false);
+});
+
+it.each(['app_token', 'bot_token'])('rejects %s in repository Slack settings', (key) => {
+  const slack = { channel_id: 'C0123', allowed_user_ids: ['U0AAA'], [key]: 'environment-only' };
+
+  expect(ProjectConfigSchema.safeParse({ manager: { slack } }).success).toBe(false);
+});
+
+it('keeps Slack channel authorization specific to repository configuration', () => {
+  const slack = { channel_id: 'C0123', allowed_user_ids: ['U0AAA'] };
+
+  expect(GlobalConfigSchema.safeParse({ manager: { slack } }).success).toBe(false);
+});

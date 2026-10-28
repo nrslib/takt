@@ -83,7 +83,7 @@ it('does not pull the next item before demand and closes a cancelled read', asyn
     try { readItem(0); yield { id: 'first' }; readItem(1); yield { id: 'second' }; }
     finally { close(); }
   };
-  const frames = conversationTransferFrames('conversation', { transferId: 'transfer', revision: 4, stateSequence: 1, operationId: null }, 'snapshot', items());
+  const frames = conversationTransferFrames('conversation', { transferId: 'transfer', mode: 'initial', revision: 4, stateSequence: 1, operationId: null }, 'snapshot', items());
   await frames.next();
   expect(readItem).not.toHaveBeenCalled();
   await frames.next();
@@ -91,6 +91,20 @@ it('does not pull the next item before demand and closes a cancelled read', asyn
   await frames.return(undefined);
   expect(close).toHaveBeenCalledOnce();
   expect(readItem).toHaveBeenCalledOnce();
+});
+
+it('frames an empty delta with its mode and marks only the end as terminal', async () => {
+  const fragments = [];
+  for await (const fragment of conversationTransferFrames('conversation', {
+    transferId: 'delta', mode: 'delta', revision: 4, stateSequence: 1, operationId: null,
+  }, 'snapshot', (async function* () {})())) fragments.push(fragment);
+  expect(fragments.map(({ terminal }) => terminal)).toEqual([false, true]);
+  expect(fragments.map(({ frame }) => frame)).toEqual([
+    { protocolVersion: 1, type: 'event', conversationId: 'conversation', output: {
+      kind: 'transfer_start', purpose: 'snapshot', transferId: 'delta', mode: 'delta', revision: 4, stateSequence: 1, operationId: null,
+    } },
+    { protocolVersion: 1, type: 'event', conversationId: 'conversation', output: { kind: 'transfer_end', transferId: 'delta', itemCount: 0 } },
+  ]);
 });
 
 it.each(['callback', 'drain'] as const)('waits for both the write callback and drain when %s arrives first', async (first) => {

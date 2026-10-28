@@ -81,6 +81,8 @@ interface ObservedPhase1AttemptOptions {
   readonly workflowStack: WorkflowResumePointEntry[] | undefined;
   readonly sanitizeText: ((text: string) => string) | undefined;
   readonly providerInfo: StepProviderInfo;
+  readonly onPromptResolved?: (promptParts: PhasePromptParts) => void;
+  readonly onAttemptError?: (error: unknown) => void;
   readonly execute: (
     instruction: string,
     sessionId: string | undefined,
@@ -129,6 +131,7 @@ export async function executeObservedPhase1Attempt(
   let resolvedPromptParts: PhasePromptParts | undefined;
   const onPromptResolved = (promptParts: PhasePromptParts): void => {
     resolvedPromptParts = promptParts;
+    options.onPromptResolved?.(promptParts);
     options.onPhaseStart?.(
       options.eventStep,
       1,
@@ -166,6 +169,7 @@ export async function executeObservedPhase1Attempt(
       providerUsage: result.providerUsage,
     }));
   } catch (error) {
+    options.onAttemptError?.(error);
     if (resolvedPromptParts !== undefined && options.onPhaseComplete !== undefined) {
       completeObservedPhase1Attempt({
         eventStep: options.eventStep,

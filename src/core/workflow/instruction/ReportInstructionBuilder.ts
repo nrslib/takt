@@ -40,6 +40,8 @@ export interface ReportInstructionContext {
   targetFile?: string;
   /** Latest Phase 1 work result, supplied regardless of report session reuse. */
   lastResponse?: string;
+  /** Engine-captured evidence from the current Phase 1 execution. */
+  phase1ExecutionLog?: string;
   /** Advisory diagnostics emitted by the reviewer completion check. */
   completionRetryDiagnostic?: string;
   /** Engine-computed changed file set for `{review_scope}` in output contracts. */
@@ -135,6 +137,8 @@ export class ReportInstructionBuilder {
       lastResponse: this.context.lastResponse?.trim()
         ? this.context.lastResponse
         : language === 'ja' ? '今回の作業フェーズの回答を取得できませんでした。' : 'The response from the current work phase could not be retrieved.',
+      hasPhase1ExecutionLog: this.context.phase1ExecutionLog !== undefined,
+      phase1ExecutionLog: this.context.phase1ExecutionLog ?? '',
       hasCompletionRetryDiagnostic:
         this.context.completionRetryDiagnostic !== undefined,
       completionRetryDiagnostic: this.context.completionRetryDiagnostic ?? '',

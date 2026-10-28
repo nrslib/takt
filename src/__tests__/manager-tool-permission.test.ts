@@ -57,6 +57,7 @@ vi.mock('../infra/config/loaders/resource-resolver.js', () => ({
   resolveRefToContent: () => 'fixture instruction',
 }));
 vi.mock('../infra/config/managerConfig.js', () => ({ resolveManagerConfig: () => ({ mainMerge: 'approve', sensitivePaths: [] }) }));
+vi.mock('../infra/goals/inquiry-lock.js', () => ({ withInquiryLock: (_directory: string, action: () => Promise<unknown>) => action() }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class {
   constructor(directory: string) { doubles.store(directory); }
   update = doubles.update; get = async (id: string) => structuredClone(goal.id === id ? goal : { ...goalRecord(), id });
