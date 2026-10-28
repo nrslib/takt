@@ -14,6 +14,7 @@ const PROVIDER_OPTION_ROOTS: Readonly<Record<ProviderType, readonly (keyof StepP
   kiro: ['kiro'],
   pi: ['pi'],
   'deepseek-harness': ['deepseekHarness'],
+  devin: ['devin'],
   mock: [],
 };
 
@@ -32,6 +33,7 @@ const SELECTOR_PROVIDER_OPTION_TYPES: ReadonlySet<ProviderType> = new Set([
   'kiro',
   'pi',
   'deepseek-harness',
+  'devin',
 ]);
 
 export function getSelectorProviderOptionRoots(
@@ -122,6 +124,7 @@ const PROVIDER_OPTIONS_ENV_SPEC_ENTRIES = [
   { path: 'provider_options.kiro.effort', type: 'string' },
   { path: 'provider_options.kiro.guards.call_timeout_ms', type: 'number' },
   { path: 'provider_options.cursor.guards.call_timeout_ms', type: 'number' },
+  { path: 'provider_options.devin.guards.call_timeout_ms', type: 'number' },
   { path: 'provider_options.deepseek_harness.base_url', type: 'string' },
   { path: 'provider_options.deepseek_harness.max_tokens', type: 'number' },
   { path: 'provider_options.deepseek_harness.request_timeout_ms', type: 'number' },
@@ -196,6 +199,9 @@ const PROVIDER_OPTIONS_TRACE_PATH_ENTRIES = [
   'provider_options.cursor',
   'provider_options.cursor.guards',
   'provider_options.cursor.guards.call_timeout_ms',
+  'provider_options.devin',
+  'provider_options.devin.guards',
+  'provider_options.devin.guards.call_timeout_ms',
   'provider_options.deepseek_harness',
   'provider_options.deepseek_harness.base_url',
   'provider_options.deepseek_harness.max_tokens',
@@ -261,6 +267,7 @@ const PROVIDER_OPTIONS_INTERNAL_PATH_ENTRIES = [
   'kiro.effort',
   'kiro.guards.callTimeoutMs',
   'cursor.guards.callTimeoutMs',
+  'devin.guards.callTimeoutMs',
   'deepseekHarness.baseUrl',
   'deepseekHarness.maxTokens',
   'deepseekHarness.requestTimeoutMs',
@@ -298,6 +305,7 @@ export const PROVIDER_OPTIONS_TRACKED_KEYS = [
   'provider_options.claude_terminal',
   'provider_options.copilot',
   'provider_options.kiro',
+  'provider_options.devin',
   ...PROVIDER_OPTIONS_ENV_SPEC_ENTRIES.map((spec) => spec.path).filter((path) => path !== 'provider_options'),
   'provider_options.claude.allowed_tools',
 ] as const;

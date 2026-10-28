@@ -680,6 +680,44 @@ describe('resolveEffectiveProviderOptions', () => {
     expect(result?.kiro).toEqual({ effort: 'high' });
   });
 
+  it('devin.guards.callTimeoutMs は step が config より優先され結果に出る', () => {
+    const result = resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      { devin: { guards: { callTimeoutMs: 120_000 } } },
+      { devin: { guards: { callTimeoutMs: 240_000 } } },
+    );
+
+    expect(result).toEqual({
+      devin: { guards: { callTimeoutMs: 240_000 } },
+    });
+  });
+
+  it('env origin は devin.guards.callTimeoutMs の leaf にも適用される', () => {
+    const result = resolveEffectiveProviderOptions(
+      'project',
+      (path: string) => (path === 'devin.guards.callTimeoutMs' ? 'env' : 'local'),
+      { devin: { guards: { callTimeoutMs: 120_000 } } },
+      { devin: { guards: { callTimeoutMs: 240_000 } } },
+    );
+
+    expect(result).toEqual({
+      devin: { guards: { callTimeoutMs: 120_000 } },
+    });
+  });
+
+  it('mergeProviderOptions は devin.guards を leaf 単位でマージする', () => {
+    expect(mergeProviderOptions(
+      { devin: { guards: { callTimeoutMs: 120_000 } } },
+      { devin: { guards: { callTimeoutMs: 240_000 } } },
+    )?.devin?.guards).toEqual({ callTimeoutMs: 240_000 });
+
+    expect(mergeProviderOptions(
+      { devin: { guards: { callTimeoutMs: 120_000 } } },
+      {},
+    )?.devin?.guards).toEqual({ callTimeoutMs: 120_000 });
+  });
+
   it('空 sandbox object は step の leaf を潰さない', () => {
     const result = resolveEffectiveProviderOptions(
       'project',
@@ -1172,6 +1210,7 @@ describe('providerOptionsContract', () => {
       'provider_options.deepseek_harness.shutdown_timeout_ms',
       'provider_options.deepseek_harness.reasoning_effort',
       'provider_options.deepseek_harness.plugins',
+      'provider_options.devin.guards.call_timeout_ms',
       'provider_options.pi.extensions',
       'provider_options.pi.thinking_level',
       'provider_options.pi.system_prompt_mode',

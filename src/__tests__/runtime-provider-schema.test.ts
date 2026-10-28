@@ -86,6 +86,29 @@ describe('RuntimeProviderFileSchema', () => {
     expect(result.success).toBe(true);
   });
 
+  it('accepts a top-level default assignment', () => {
+    expect(RuntimeProviderFileSchema.safeParse({ version: 1, provider: {
+      defaults: { assignment: 'work' },
+      assignments: { work: { defaults: { profile: 'base' } } },
+    } }).success).toBe(true);
+  });
+
+  it.each([
+    {},
+    { profile: 'base', assignment: 'work' },
+    { ladder: ['base'], assignment: 'work' },
+    { profile: 'base', ladder: ['base'], assignment: 'work' },
+  ])('rejects empty or mixed top-level defaults %j', (defaults) => {
+    expect(RuntimeProviderFileSchema.safeParse({ version: 1, provider: { defaults } }).success).toBe(false);
+  });
+
+  it('rejects assignment references inside assignment defaults', () => {
+    expect(RuntimeProviderFileSchema.safeParse({ version: 1, provider: {
+      defaults: { profile: 'base' },
+      assignments: { work: { defaults: { assignment: 'other' } } },
+    } }).success).toBe(false);
+  });
+
   it('Given the first-run active file, When parsed, Then it is accepted (C17)', () => {
     const result = RuntimeProviderFileSchema.safeParse({
       version: 1,

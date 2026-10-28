@@ -174,6 +174,10 @@ const CursorProviderOptionsSchema = z.object({
   guards: ProviderGuardOptionsSchema.optional(),
 });
 
+const DevinProviderOptionsSchema = z.object({
+  guards: ProviderGuardOptionsSchema.optional(),
+});
+
 const DeepSeekReasoningEffortSchema = z.enum(['off', 'low', 'high', 'max'], {
   error: (issue) => `Invalid DeepSeek reasoning_effort ${JSON.stringify(issue.input)}; expected off, low, high, or max`,
 });
@@ -239,6 +243,7 @@ export const StepProviderOptionsObjectSchema = z.object({
   kiro: KiroProviderOptionsSchema.optional(),
   pi: PiProviderOptionsSchema.optional(),
   deepseek_harness: DeepSeekHarnessProviderOptionsSchema.optional(),
+  devin: DevinProviderOptionsSchema.optional(),
 });
 
 export const StepProviderOptionsSchema = StepProviderOptionsObjectSchema.optional();
@@ -253,6 +258,7 @@ const StrictStepProviderOptionsSchema = z.object({
   kiro: KiroProviderOptionsSchema.strict().optional(),
   pi: PiProviderOptionsSchema.strict().optional(),
   deepseek_harness: DeepSeekHarnessProviderOptionsSchema.strict().optional(),
+  devin: DevinProviderOptionsSchema.strict().optional(),
 }).strict().optional();
 
 /** Provider key schema for profile maps */
@@ -451,6 +457,7 @@ export const ProviderPermissionProfilesSchema = z.object({
   kiro: ProviderPermissionProfileSchema.optional(),
   pi: ProviderPermissionProfileSchema.optional(),
   'deepseek-harness': ProviderPermissionProfileSchema.optional(),
+  devin: ProviderPermissionProfileSchema.optional(),
   mock: ProviderPermissionProfileSchema.optional(),
 }).strict().optional();
 
@@ -706,6 +713,11 @@ const NormalizedStepProviderOptionsSchema = z.object({
     }).strict().optional(),
   }).strict().optional(),
   cursor: z.object({
+    guards: z.object({
+      callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
+    }).strict().optional(),
+  }).strict().optional(),
+  devin: z.object({
     guards: z.object({
       callTimeoutMs: z.number().int().min(60_000).max(86_400_000).optional(),
     }).strict().optional(),

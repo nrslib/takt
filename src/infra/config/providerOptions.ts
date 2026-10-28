@@ -90,6 +90,9 @@ type RawProviderOptions = {
   cursor?: {
     guards?: RawProviderGuardOptions;
   };
+  devin?: {
+    guards?: RawProviderGuardOptions;
+  };
   deepseek_harness?: {
     base_url?: string;
     max_tokens?: number;
@@ -439,6 +442,13 @@ export function normalizeProviderOptions(
         : {}),
     };
   }
+  if (options.devin?.guards !== undefined) {
+    result.devin = {
+      ...(options.devin.guards.call_timeout_ms !== undefined
+        ? { guards: { callTimeoutMs: options.devin.guards.call_timeout_ms } }
+        : {}),
+    };
+  }
   if (options.deepseek_harness !== undefined) {
     const deepseekOptionsPath = `${normalizationOptions.pathPrefix ?? 'provider_options'}.deepseek_harness`;
     const deepseekBaseUrlPath = `${deepseekOptionsPath}.base_url`;
@@ -672,6 +682,14 @@ export function mergeProviderOptions(
         ...result.cursor,
         ...(layer.cursor.guards !== undefined
           ? { guards: { ...result.cursor?.guards, ...layer.cursor.guards } }
+          : {}),
+      };
+    }
+    if (layer.devin) {
+      result.devin = {
+        ...result.devin,
+        ...(layer.devin.guards !== undefined
+          ? { guards: { ...result.devin?.guards, ...layer.devin.guards } }
           : {}),
       };
     }
@@ -1242,6 +1260,12 @@ export function resolveEffectiveProviderOptions(
     stepOptions?.cursor?.guards?.callTimeoutMs,
     resolveProviderOptionOrigin(originResolver, 'cursor.guards.callTimeoutMs', source),
   );
+  const devinCallTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.devin?.guards?.callTimeoutMs,
+    personaOptions?.devin?.guards?.callTimeoutMs,
+    stepOptions?.devin?.guards?.callTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'devin.guards.callTimeoutMs', source),
+  );
   const claudeTerminalBackend = selectProviderValue(
     resolvedConfigOptions.claudeTerminal?.backend,
     personaOptions?.claudeTerminal?.backend,
@@ -1394,6 +1418,9 @@ export function resolveEffectiveProviderOptions(
     ...(cursorCallTimeoutMs !== undefined
       ? { cursor: { guards: { callTimeoutMs: cursorCallTimeoutMs } } }
       : {}),
+    ...(devinCallTimeoutMs !== undefined
+      ? { devin: { guards: { callTimeoutMs: devinCallTimeoutMs } } }
+      : {}),
     ...(deepseekHarnessBaseUrl !== undefined
       || deepseekHarnessMaxTokens !== undefined
       || deepseekHarnessRequestTimeoutMs !== undefined
@@ -1524,6 +1551,9 @@ function stripClaudeAllowedTools(
     ...(providerOptions.kiro !== undefined
       ? { kiro: { ...providerOptions.kiro } }
       : {}),
+    ...(providerOptions.devin !== undefined
+      ? { devin: { ...providerOptions.devin } }
+      : {}),
     ...(providerOptions.deepseekHarness !== undefined
       ? { deepseekHarness: {
           ...providerOptions.deepseekHarness,
@@ -1638,6 +1668,7 @@ export const PROVIDER_OPTION_PATHS = [
   'kiro.effort',
   'kiro.guards.callTimeoutMs',
   'cursor.guards.callTimeoutMs',
+  'devin.guards.callTimeoutMs',
   'deepseekHarness.baseUrl',
   'deepseekHarness.maxTokens',
   'deepseekHarness.requestTimeoutMs',

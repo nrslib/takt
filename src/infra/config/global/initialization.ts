@@ -80,6 +80,7 @@ export async function promptProviderSelection(): Promise<InitialSetupProvider> {
     { label: 'Kiro CLI', value: 'kiro' },
     { label: 'Pi SDK', value: 'pi' },
     { label: 'DeepSeek Harness (official TypeScript SDK)', value: 'deepseek-harness' },
+    { label: 'Devin CLI', value: 'devin' },
   ];
 
   const result = await selectOptionWithDefault(

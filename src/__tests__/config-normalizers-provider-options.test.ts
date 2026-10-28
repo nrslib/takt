@@ -343,6 +343,7 @@ describe('denormalizeProviderOptions', () => {
       copilot: { guards: { call_timeout_ms: 120_000 } },
       kiro: { guards: { call_timeout_ms: 120_000 } },
       cursor: { guards: { call_timeout_ms: 120_000 } },
+      devin: { guards: { call_timeout_ms: 120_000 } },
       pi: { guards: { call_timeout_ms: 120_000 } },
     };
 
@@ -355,6 +356,7 @@ describe('denormalizeProviderOptions', () => {
       copilot: { guards: { callTimeoutMs: 120_000 } },
       kiro: { guards: { callTimeoutMs: 120_000 } },
       cursor: { guards: { callTimeoutMs: 120_000 } },
+      devin: { guards: { callTimeoutMs: 120_000 } },
       pi: { guards: { callTimeoutMs: 120_000 } },
     });
     expect(denormalizeProviderOptions(normalizedProviderOptions)).toEqual(rawProviderOptions);
