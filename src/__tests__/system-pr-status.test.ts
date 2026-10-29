@@ -1,8 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDefaultSystemStepServices } from '../infra/workflow/system/DefaultSystemStepServices.js';
 import type { WorkflowEffect, WorkflowSystemInput } from '../core/models/types.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 import { createInitialState } from '../core/workflow/engine/state-manager.js';
+import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 
 describe('PR status system input target ownership', () => {
   const fetchPrStatus = vi.fn();
@@ -71,6 +75,9 @@ describe('PR status system input target ownership', () => {
 });
 
 describe('CI failure system input and rerun effect', () => {
+  let runDirectory: string;
+  beforeEach(() => { runDirectory = mkdtempSync(join(tmpdir(), 'takt-ci-status-')); });
+  afterEach(() => { rmSync(runDirectory, { recursive: true, force: true }); });
   const headSha = 'b'.repeat(40);
   const failure = () => ({ number: 123, headSha, complete: true, checks: [
     { name: 'unit', run: { id: 10, attempt: 1, headSha, url: 'https://github.com/org/repo/actions/runs/10' },
@@ -82,7 +89,9 @@ describe('CI failure system input and rerun effect', () => {
   const effect: WorkflowEffect = { type: 'rerun_ci', pr: 123,
     failure: '{context:collect_ci_failure.failure}' };
 
-  function fixture(supported = true) {
+  function fixture(supported = true, runRootAbs?: string) {
+    const cloneCwd = join(runDirectory, 'clone');
+    mkdirSync(cloneCwd, { recursive: true });
     const fetchPrStatus = vi.fn(async () => ({ number: 123, headSha, ci: { finished: true, passed: false },
       mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED', merged: false }));
     const fetchPrCiFailure = vi.fn(async () => failure());
@@ -93,7 +102,9 @@ describe('CI failure system input and rerun effect', () => {
       commentOnPr: vi.fn(), closePr: vi.fn(), mergePr: vi.fn(),
       fetchPrStatus, ...(supported ? { fetchPrCiFailure, rerunPrCi } : {}),
     };
-    const service = createDefaultSystemStepServices({ cwd: '/clone', projectCwd: '/project', task: 'Review PR', gitProvider,
+    const service = createDefaultSystemStepServices({ cwd: cloneCwd, projectCwd: '/project', task: 'Review PR', gitProvider,
+      runPaths: { ...buildRunPaths(runDirectory, 'run'),
+        ...(runRootAbs === undefined ? {} : { runRootAbs }) },
       prExecutionContext: { prNumber: 123, headBranch: 'feature/pr', baseBranch: 'main', headSha: 'a'.repeat(40),
         headRepositoryUrl: '/remote', headRepositoryPushUrls: ['/remote'] },
     });
@@ -139,6 +150,97 @@ describe('CI failure system input and rerun effect', () => {
     expect(details).toMatchObject({ checks: [{ name: 'unit', jobs: [{ id: 20, url: expect.any(String) }] }],
       recoveryError: 'HTTP 403: rerun denied' });
     expect(Object.hasOwn(details.checks[0].jobs[0], 'log')).toBe(false);
+  });
+
+  it('保存した索引とjobログを再取得後も同じrunから参照できる', async () => {
+    const h = fixture();
+    const first = await h.service.resolveSystemInput(input, h.state) as { promptEvidence: string };
+    const indexPath = /^Evidence index: (.+)$/m.exec(first.promptEvidence)?.[1];
+    expect(indexPath).toBeDefined();
+    const index = JSON.parse(readFileSync(indexPath!, 'utf8')) as {
+      checks: Array<{ jobs: Array<{ logPath: string }> }>;
+    };
+    expect(readFileSync(index.checks[0]!.jobs[0]!.logPath, 'utf8')).toContain('math.test.ts > adds');
+    const restored = JSON.parse(JSON.stringify(first)) as { promptEvidence: string };
+    expect(readFileSync(/^Evidence index: (.+)$/m.exec(restored.promptEvidence)![1]!, 'utf8')).toBe(
+      readFileSync(indexPath!, 'utf8'));
+
+    const resumed = await fixture().service.resolveSystemInput(input, h.state) as { promptEvidence: string };
+    expect(/^Evidence index: (.+)$/m.exec(resumed.promptEvidence)?.[1]).toBe(indexPath);
+    expect(readdirSync(join(runDirectory, '.takt', 'runs', 'run', 'ci-evidence'))
+      .filter((name) => name.endsWith('.log'))).toHaveLength(1);
+  });
+
+  it('索引を保存できなければ不完全な証拠として再実行を拒否する', async () => {
+    const blocked = join(runDirectory, 'blocked');
+    writeFileSync(blocked, 'file');
+    const h = fixture(true, blocked);
+    const result = await h.service.resolveSystemInput(input, h.state);
+    expect(result).toMatchObject({ complete: false,
+      unavailable: expect.arrayContaining([expect.objectContaining({ name: 'CI evidence storage' })]) });
+    h.state.systemContexts.set('collect_ci_failure', { failure: result });
+    expect(await h.service.executeEffect(effect, { type: 'rerun_ci', pr: 123, failure: result }, h.state))
+      .toMatchObject({ success: false });
+    expect(h.rerunPrCi).not.toHaveBeenCalled();
+  });
+
+  it('clone側の表示viewを作れなければ原本が残っても再実行を拒否する', async () => {
+    const h = fixture();
+    writeFileSync(join(runDirectory, 'clone', '.takt'), 'blocked');
+    const result = await h.service.resolveSystemInput(input, h.state);
+    expect(result).toMatchObject({ complete: false,
+      unavailable: expect.arrayContaining([expect.objectContaining({ name: 'CI evidence storage' })]) });
+    expect(readdirSync(join(runDirectory, '.takt', 'runs', 'run', 'ci-evidence'))
+      .filter((name) => name.endsWith('.log'))).toHaveLength(1);
+    h.state.systemContexts.set('collect_ci_failure', { failure: result });
+    expect(await h.service.executeEffect(effect, { type: 'rerun_ci', pr: 123, failure: result }, h.state))
+      .toMatchObject({ success: false });
+    expect(h.rerunPrCi).not.toHaveBeenCalled();
+  });
+
+  it('clone側の既存logがsymlinkなら外部の証拠を参照せず不完全とする', async () => {
+    const h = fixture();
+    const first = await h.service.resolveSystemInput(input, h.state) as { promptEvidence: string };
+    const indexPath = /^Evidence index: (.+)$/m.exec(first.promptEvidence)![1]!;
+    const index = JSON.parse(readFileSync(indexPath, 'utf8')) as {
+      checks: Array<{ jobs: Array<{ logPath: string }> }>;
+    };
+    const viewLog = index.checks[0]!.jobs[0]!.logPath;
+    const canonicalDirectory = join(runDirectory, '.takt', 'runs', 'run', 'ci-evidence');
+    const canonicalLog = join(canonicalDirectory,
+      readdirSync(canonicalDirectory).find((name) => name.endsWith('.log'))!);
+    unlinkSync(viewLog);
+    symlinkSync(canonicalLog, viewLog, 'file');
+
+    const result = await h.service.resolveSystemInput(input, h.state);
+    expect(result).toMatchObject({ complete: false,
+      unavailable: expect.arrayContaining([expect.objectContaining({ name: 'CI evidence storage' })]) });
+  });
+
+  it('取得した失敗jobにログが欠ける場合は索引に理由を残しcompleteをfalseにする', async () => {
+    const h = fixture();
+    h.fetchPrCiFailure.mockResolvedValue({ ...failure(), checks: [{ ...failure().checks[0]!,
+      jobs: [{ id: 20, name: 'unit', url: 'https://github.com/org/repo/actions/runs/10/job/20', log: '' }] }] });
+    const result = await h.service.resolveSystemInput(input, h.state) as {
+      complete: boolean; promptEvidence: string;
+    };
+    expect(result.complete).toBe(false);
+    const indexPath = /^Evidence index: (.+)$/m.exec(result.promptEvidence)?.[1];
+    const index = JSON.parse(readFileSync(indexPath!, 'utf8')) as {
+      unavailable: Array<{ reason: string }>; checks: Array<{ jobs: Array<{ logPath: string | null }> }>;
+    };
+    expect(index.unavailable).toHaveLength(1);
+    expect(index.checks[0]!.jobs[0]!.logPath).toBeNull();
+  });
+
+  it('証拠保存前のキャンセルを証拠不足へ変換しない', async () => {
+    const h = fixture();
+    const controller = new AbortController();
+    controller.abort();
+    await expect(h.service.resolveSystemInput(input, h.state, 'collect_ci_failure', {
+      cache: new Map(), resolvedBindings: new Map(), prStatusFetchOptions: { signal: controller.signal },
+    })).rejects.toThrow();
+    expect(readdirSync(runDirectory)).toEqual(['clone']);
   });
 
   it('再実行後の失敗調査にも旧attemptの識別情報を渡して最新の失敗を取得する', async () => {

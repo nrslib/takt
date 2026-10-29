@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -16,6 +17,8 @@ import { runPrCommand } from '../infra/github/pr-command.js';
 import { marked } from 'marked';
 import { syncWithRootEffect, resolveConflictsWithAiEffect } from '../infra/workflow/system/system-sync-effects.js';
 import { executeTaskWorkflow } from '../features/tasks/execute/taskWorkflowExecution.js';
+import { buildRunPaths } from '../core/workflow/run/run-paths.js';
+import { isRealPathInside } from '../shared/utils/pathBoundary.js';
 
 vi.mock('../infra/workflow/system/system-sync-effects.js', () => ({
   syncWithRootEffect: vi.fn(), resolveConflictsWithAiEffect: vi.fn(),
@@ -77,6 +80,7 @@ interface Scenario {
   headChangesDuringRunValidation?: boolean;
   recoveryPushFails?: boolean;
   ciName?: { field: 'check' | 'job' | 'unavailable'; value: string };
+  largeCiLogs?: boolean;
 }
 
 describe('Builtin PR merge workflow execution', () => {
@@ -134,6 +138,7 @@ describe('Builtin PR merge workflow execution', () => {
     const recoveryPrompts: Array<{ step: string; prompt: string; requiredPermissionMode: string | undefined; cwd: string | undefined }> = [];
     const cloneCwd = join(project, 'clone');
     mkdirSync(cloneCwd);
+    if (scenario.largeCiLogs) execFileSync('git', ['init', '-q'], { cwd: cloneCwd });
     const reportDirectory = join(project, '.takt', 'runs', 'merge-workflow-report', 'reports');
     const decision = { approved: scenario.approved !== false,
       reason: scenario.reason ?? (scenario.approved === false ? 'AI denied this PR' : 'AI approved this PR') };
@@ -309,15 +314,23 @@ describe('Builtin PR merge workflow execution', () => {
       expect(expectedHead).toBe(headSha);
       calls.push('fetch_ci_failure');
       const complete = currentFailure()?.verdict !== 'insufficient_evidence';
-      return { number, headSha, complete, checks: [{ name: scenario.ciName?.field === 'check' ? scenario.ciName.value : `unit-round-${pushes}`,
+      const jobs = scenario.largeCiLogs
+        ? Array.from({ length: 6 }, (_, index) => ({ id: 20 + index, name: `job-${index}`,
+          url: `https://github.com/org/repo/actions/runs/${10 + pushes}/job/${20 + index}`,
+          log: `CI_LOG_${index}\n${'x'.repeat(199_980)}` }))
+        : [{ id: 20 + pushes, name: scenario.ciName?.field === 'job' ? scenario.ciName.value : 'unit',
+          url: `https://github.com/org/repo/actions/runs/${10 + pushes}/job/${20 + pushes}`,
+          log: complete ? `round-${pushes}.test.ts > adds\nexpected ${pushes} to equal 3` : '' }];
+      const check = { name: scenario.ciName?.field === 'check' ? scenario.ciName.value : `unit-round-${pushes}`,
         run: { id: 10 + pushes, attempt: reruns + 1, headSha, url: `https://github.com/org/repo/actions/runs/${10 + pushes}` },
-        jobs: [{ id: 20 + pushes, name: scenario.ciName?.field === 'job' ? scenario.ciName.value : 'unit', url: `https://github.com/org/repo/actions/runs/${10 + pushes}/job/${20 + pushes}`,
-          log: complete ? `round-${pushes}.test.ts > adds\nexpected ${pushes} to equal 3` : '' }] }],
+        jobs };
+      return { number, headSha, complete, checks: scenario.largeCiLogs ? [check, { ...check, name: 'second-check' }] : [check],
         unavailable: complete ? [] : [{ name: scenario.ciName?.field === 'unavailable' ? scenario.ciName.value : `unit-round-${pushes}`, reason: 'HTTP 403: cannot read logs' }] };
     });
     const githubProvider = new GitHubProvider();
     const rerunPrCi = vi.fn(githubProvider.rerunPrCi.bind(githubProvider));
     const recoveryServices = createDefaultSystemStepServices({ cwd: cloneCwd, projectCwd: project, task: 'Review PR',
+      runPaths: buildRunPaths(project, 'merge-workflow-report'),
       prExecutionContext: { prNumber, headBranch: 'feature/pr', baseBranch: 'main', headSha: 'a'.repeat(40),
         headRepositoryUrl: '/remote', headRepositoryPushUrls: ['/remote'],
         ...{ mergeConcurrency: scenario.concurrency ?? 2 } },
@@ -923,6 +936,16 @@ describe('Builtin PR merge workflow execution', () => {
         .map((path) => readFileSync(join(directory, path), 'utf8'));
     }
 
+    function evidenceIndex(prompt: string) {
+      const path = /^Evidence index: (.+)$/m.exec(prompt)?.[1];
+      expect(path).toBeDefined();
+      return JSON.parse(readFileSync(path!, 'utf8')) as {
+        checks: Array<{ name: string; run: { id: number; attempt: number; headSha: string };
+          jobs: Array<{ id: number; logPath: string | null }> }>;
+        unavailable: Array<{ reason: string }>;
+      };
+    }
+
     function expectStopped(h: Awaited<ReturnType<typeof runRecovery>>, rounds: number, reruns: number) {
       expect(h.state.status).toBe('aborted');
       expect(h.calls).not.toContain('merge_pr');
@@ -955,11 +978,46 @@ describe('Builtin PR merge workflow execution', () => {
       expect(h.recoveryPrompts[2]?.prompt).toContain(buildEditRule(false, language));
       expect(h.recoveryPrompts.every(({ cwd }) => cwd === h.cloneCwd)).toBe(true);
       const investigation = h.recoveryPrompts[0]!.prompt;
-      for (const evidence of ['unit-round-1', 'round-1.test.ts > adds', 'expected 1 to equal 3',
-        'https://github.com/org/repo/actions/runs/11', '/job/21']) expect(investigation).toContain(evidence);
+      expect(investigation).not.toContain('round-1.test.ts > adds');
+      const index = evidenceIndex(investigation);
+      expect(index.checks[0]).toMatchObject({ name: 'unit-round-1', run: { id: 11, attempt: 1, headSha: 'b'.repeat(40) },
+        jobs: [{ id: 21, logPath: expect.any(String) }] });
+      expect(readFileSync(index.checks[0]!.jobs[0]!.logPath!, 'utf8')).toContain('expected 1 to equal 3');
       expect(reports(h.reportDirectory).some((report) => report.includes(cause.summary) && report.includes('Location:'))).toBe(true);
       expect(h.comments[0]).toContain('c'.repeat(40));
       expect(h.rerunPrCi).not.toHaveBeenCalled();
+    });
+
+    it('同じrunの複数checkと6件の長いjobログを一度だけ保存し3段階のpromptから参照できる', async () => {
+      const h = await runRecovery({ ciFailures: [defect()], largeCiLogs: true });
+      expect(h.state.status).toBe('completed');
+      expect(h.recoveryPrompts.map(({ step }) => step)).toEqual(['investigate_ci', 'fix_ci', 'review_ci_fix']);
+      for (const { prompt } of h.recoveryPrompts) {
+        expect(prompt.length).toBeLessThan(100_000);
+        expect(prompt).not.toContain('CI_LOG_0');
+        const index = evidenceIndex(prompt);
+        const indexPath = /^Evidence index: (.+)$/m.exec(prompt)?.[1];
+        expect(isRealPathInside(h.cloneCwd, indexPath!)).toBe(true);
+        expect(index.checks).toHaveLength(2);
+        expect(index.checks.flatMap(({ jobs }) => jobs)).toHaveLength(12);
+        const paths = index.checks.flatMap(({ jobs }) => jobs.map(({ logPath }) => logPath));
+        expect(new Set(paths).size).toBe(6);
+        expect(paths.every((path) => path !== null && isRealPathInside(h.cloneCwd, path))).toBe(true);
+        expect(readFileSync(index.checks[0]!.jobs[0]!.logPath!, 'utf8')).toContain('CI_LOG_0');
+      }
+      const evidenceDirectory = join(h.reportDirectory, '..', 'ci-evidence');
+      expect(readdirSync(evidenceDirectory).filter((name) => name.endsWith('.log'))).toHaveLength(6);
+      const canonicalIndexPath = join(evidenceDirectory,
+        readdirSync(evidenceDirectory).find((name) => name.endsWith('.json'))!);
+      const canonical = JSON.parse(readFileSync(canonicalIndexPath, 'utf8')) as {
+        checks: Array<{ jobs: Array<{ logPath: string }> }>;
+      };
+      const view = evidenceIndex(h.recoveryPrompts[0]!.prompt);
+      expect(canonical.checks.map(({ jobs }) => jobs.map(({ logPath }) => readFileSync(logPath, 'utf8'))))
+        .toEqual(view.checks.map(({ jobs }) => jobs.map(({ logPath }) => readFileSync(logPath!, 'utf8'))));
+      expect(execFileSync('git', ['status', '--porcelain'], { cwd: h.cloneCwd, encoding: 'utf8' })).toBe('');
+      expect(execFileSync('git', ['check-ignore', '.takt/runs/merge-workflow-report/ci-evidence'],
+        { cwd: h.cloneCwd, encoding: 'utf8' }).trim()).toBe('.takt/runs/merge-workflow-report/ci-evidence');
     });
 
     it.each([
@@ -982,7 +1040,8 @@ describe('Builtin PR merge workflow execution', () => {
       expect(h.calls.filter((call) => call === 'agent:fix_ci')).toHaveLength(2);
       expect(h.calls.filter((call) => call === 'commit_and_push')).toHaveLength(3);
       expect(h.fetchPrCiFailure.mock.calls.map(([, head]) => head)).toEqual(['b', 'c', 'd'].map((char) => char.repeat(40)));
-      expect(h.recoveryPrompts.filter(({ step }) => step === 'investigate_ci').at(-1)?.prompt).toContain('round-3.test.ts');
+      const finalIndex = evidenceIndex(h.recoveryPrompts.filter(({ step }) => step === 'investigate_ci').at(-1)!.prompt);
+      expect(readFileSync(finalIndex.checks[0]!.jobs[0]!.logPath!, 'utf8')).toContain('round-3.test.ts');
       expect(h.comments[0]).toContain(finalCause);
       expect(h.rerunPrCi).not.toHaveBeenCalled();
     });
@@ -1035,7 +1094,8 @@ describe('Builtin PR merge workflow execution', () => {
       expect(h.calls.filter((call) => call === 'commit_and_push')).toHaveLength(1);
       expect(h.comments[0]).toContain('b'.repeat(40));
       expect(h.comments[0]).toContain('f'.repeat(40));
-      expect(h.recoveryPrompts.at(-1)?.prompt).toContain('round-1.test.ts > adds');
+      expect(readFileSync(evidenceIndex(h.recoveryPrompts.at(-1)!.prompt).checks[0]!.jobs[0]!.logPath!, 'utf8'))
+        .toContain('round-1.test.ts > adds');
     });
 
     it('run検証中に現在HEADが変わればAPIを呼ばず元の証拠と変更理由をコメントして停止する', async () => {
@@ -1050,8 +1110,8 @@ describe('Builtin PR merge workflow execution', () => {
       const rerunResult = h.state.effectResults.get('rerun_ci')?.rerun_ci;
       expect(rerunResult).toMatchObject({ success: false, failed: true, headChanged: true });
       expect(h.comments[0]).toContain(String((rerunResult as { error: string }).error));
-      expect(h.recoveryPrompts.at(-1)?.prompt).toContain('round-1.test.ts > adds');
-      expect(h.recoveryPrompts.at(-1)?.prompt).toContain('expected 1 to equal 3');
+      expect(readFileSync(evidenceIndex(h.recoveryPrompts.at(-1)!.prompt).checks[0]!.jobs[0]!.logPath!, 'utf8'))
+        .toContain('expected 1 to equal 3');
     });
 
     it('再実行受付後のHEAD変更では待機を抜け元HEADの失敗証拠と変更理由をコメントして停止する', async () => {
@@ -1067,7 +1127,8 @@ describe('Builtin PR merge workflow execution', () => {
       expect(h.calls.filter((call) => call === 'commit_and_push')).toHaveLength(1);
       expect(h.comments[0]).toContain('b'.repeat(40));
       expect(h.comments[0]).toContain('f'.repeat(40));
-      expect(h.recoveryPrompts.at(-1)?.prompt).toContain('round-1.test.ts > adds');
+      expect(readFileSync(evidenceIndex(h.recoveryPrompts.at(-1)!.prompt).checks[0]!.jobs[0]!.logPath!, 'utf8'))
+        .toContain('round-1.test.ts > adds');
       expect(state.systemContexts.get('wait_ci')?.status).toMatchObject({ headSha: 'f'.repeat(40),
         ci: { finished: false, passed: false }, rerunHeadChanged: true });
     });
@@ -1077,7 +1138,7 @@ describe('Builtin PR merge workflow execution', () => {
       const h = await runRecovery({ ciFailures: [{ verdict: 'insufficient_evidence', summary }] });
       expectStopped(h, 0, 0);
       expect(h.calls.filter((call) => call.startsWith('agent:'))).toEqual(['agent:investigate_ci']);
-      expect(h.recoveryPrompts[0]?.prompt).toContain('HTTP 403');
+      expect(evidenceIndex(h.recoveryPrompts[0]!.prompt).unavailable[0]?.reason).toContain('HTTP 403');
       expect(reports(h.reportDirectory).some((report) => report.includes(summary))).toBe(true);
       expect(h.comments[0]).toContain(summary);
       expect(h.rerunPrCi).not.toHaveBeenCalled();

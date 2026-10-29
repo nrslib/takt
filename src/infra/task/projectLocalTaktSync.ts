@@ -282,6 +282,10 @@ export function ensureWorktreeTaktGitignore(worktreePath: string): void {
 
 export function ensureWorktreeTaktRuntimeProtection(worktreePath: string): void {
   ensureWorktreeTaktGitignore(worktreePath);
+  ensureWorktreeTaktRunsIgnored(worktreePath);
+}
+
+export function ensureWorktreeTaktRunsIgnored(worktreePath: string): void {
   if (getPathKind(path.join(worktreePath, '.git')) === 'missing') {
     return;
   }
