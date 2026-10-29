@@ -68,7 +68,9 @@ export function captureV3({ revisionRoot, workspace, configDirectory, sample, la
   const captured = readJson(resultPath);
   // Capturing both phases must not expose the stub's future report to actual Phase 1.
   rmSync(join(workspace, '.takt/runs/eval/reports/implementation-report.md'), { force: true });
-  assert.deepEqual(captured.phase2Options, { allowedTools: [], sessionIdPresent: false });
+  assert.equal(captured.phase2Options.executionPhase, 2);
+  assert.equal(captured.phase2Options.permissionMode, 'readonly');
+  assert.equal(captured.phase2Options.sessionIdPresent, false);
   for (const prompt of [captured.phase1Prompt, captured.phase2Prompt]) assertNeutralTarget(prompt, workspace);
   if (sample.liveInput !== undefined) {
     assert.ok(captured.phase1Prompt.includes(sample.liveInput));
@@ -149,7 +151,7 @@ async function freezeBaseline(revision, directory, neutralRoot) {
     permissions: { sandbox: 'read-only', approvalPolicy: 'never', networkAccessEnabled: false, webSearchMode: 'disabled', inheritedSkills: false },
     targetCwd: 'Same neutral absolute path per paired sample; isolated case/language/repeat; external to repository',
     providerBoundary: 'Actual AgentRunner wrapper + actual onPromptResolved, only CodexProvider setup/call replaced',
-    p2Tools: 'Prompt prohibition plus executed item audit; SDK readonly is not hard tool disablement',
+    p2Tools: 'Reads permitted; executed tool receipts audited for test/build/install/write attempts',
     graderTools: 'Prompt prohibition; any executed tool item is infrastructure failure',
     engineReset: 'Reset all fixture and engine-owned workspace files before each sample; clear .takt on each capture',
     captureStubReport: 'Remove the capture-only placeholder report before actual model execution',

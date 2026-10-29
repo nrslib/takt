@@ -24,6 +24,7 @@ export function mapToCodexSandboxMode(mode: PermissionMode): CodexSandboxMode {
 
 /** Options for calling Codex */
 export interface CodexCallOptions {
+  executionPhase?: 1 | 2 | 3;
   cwd: string;
   callerManagedSession?: true;
   onToolPermissionDecision?: ToolPermissionDecisionHandler;

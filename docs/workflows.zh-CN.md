@@ -708,6 +708,8 @@ output_contracts:
       format: decisions
 ```
 
+Phase 2 沿用 provider 现有的 readonly 设置，只读取报告所需的证据。本次 Phase 1 执行记录以脱敏后的 JSONL 保存，并以路径和字节数传入。长字符串会拆成多行，便于搜索后只读取附近内容。Phase 2 不修改文件，不运行测试或构建，不开始新的调查，也不新增指摘、判定或计划；报告需区分 Phase 1 实际完成的确认与 Phase 2 读取的内容。TAKT 会把最终回答保存到报告文件。Phase 3 仍不使用工具。
+
 每项必须有 `name` 和 `format`。可选字段：`use_judge`（默认 `true`，决定 report 是否作为 Phase 3 status judgment 证据）和 `order`（替换默认 report-writing instruction 的 report-format facet）。需要 judgment 的规则至少保留一个 `use_judge` report。
 
 ## Runtime Provider Promotion

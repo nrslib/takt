@@ -1,7 +1,10 @@
+import { expandLargeRecord } from './phase1-execution-log-fixtures.mjs';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Phase1ExecutionLog } from '../dist/core/workflow/phase1-execution-log.js';
 import { ReportInstructionBuilder } from '../dist/core/workflow/instruction/ReportInstructionBuilder.js';
+import { mergeCliReviewConfig, resolveSourceDirectory } from './providers/cli-review.mjs';
 
 const format = [
   '# コーディングレビュー',
@@ -15,9 +18,11 @@ const format = [
   '実行記録から確認できない範囲を記載する。',
 ].join('\n');
 
-export default function buildPhase1ExecutionLogPrompt({ vars }) {
+export default function buildPhase1ExecutionLogPrompt({ vars, config }) {
+  const cwd = resolveSourceDirectory(mergeCliReviewConfig(config));
   const log = JSON.parse(vars.phase1_log);
   if (!Array.isArray(log)) throw new Error('phase1_log must be a JSON array');
+  if (vars.large_record) expandLargeRecord(log);
   const step = {
     name: 'review',
     persona: 'coding-reviewer',
@@ -27,13 +32,22 @@ export default function buildPhase1ExecutionLogPrompt({ vars }) {
   };
   const directory = mkdtempSync(join(tmpdir(), 'takt-phase1-log-eval-'));
   process.on('exit', () => rmSync(directory, { recursive: true, force: true }));
-  const path = join(directory, 'phase1-execution.json');
-  const content = JSON.stringify(log);
+  const path = join(directory, 'phase1-execution.jsonl');
+  const executionLog = new Phase1ExecutionLog();
+  for (const entry of log) {
+    if (entry.kind === 'instruction') {
+      executionLog.recordInstruction(entry.reason, entry.prompt, entry.source);
+      if (entry.dispatched) executionLog.markDispatched(entry.source);
+    } else if (entry.kind === 'provider_event') executionLog.recordEvent(entry.event, entry.source);
+    else if (entry.kind === 'attempt_result') executionLog.recordResult(entry, entry.source);
+    else throw new Error(`Unknown execution entry: ${entry.kind}`);
+  }
+  const content = executionLog.toReportInput();
   writeFileSync(path, content);
   return new ReportInstructionBuilder(step, {
-    cwd: '/fixture',
+    cwd,
     task: vars.task,
-    reportDir: '/fixture/.takt/reports',
+    reportDir: join(cwd, '.takt/reports'),
     stepIteration: 1,
     language: vars.language ?? 'ja',
     targetFile: 'coding-review.md',

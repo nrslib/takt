@@ -370,10 +370,10 @@ export class CodexClient {
       ...(options.model ? { model: options.model } : {}),
       workingDirectory: options.cwd,
       skipGitRepoCheck: true,
-      ...(options.permissionControl === 'codex'
+      ...(options.permissionControl === 'codex' && options.executionPhase !== 2
         ? {}
         : {
-            sandboxMode: options.mcpOnlySideEffects ? 'read-only' as const : options.permissionMode
+            sandboxMode: options.executionPhase === 2 || options.mcpOnlySideEffects ? 'read-only' as const : options.permissionMode
               ? mapToCodexSandboxMode(options.permissionMode)
               : 'workspace-write' as const,
             ...(options.mcpOnlySideEffects

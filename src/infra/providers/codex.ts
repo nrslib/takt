@@ -28,6 +28,7 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
   return {
     cwd: options.cwd,
     callerManagedSession: options.callerManagedSession,
+    executionPhase: options.executionPhase,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
     model: options.model,

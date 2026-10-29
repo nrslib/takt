@@ -306,7 +306,6 @@
     "src/__tests__/it-opencode-task-state-mcp.test.ts",
     "src/__tests__/it-phase-awareness-prompts.test.ts",
     "src/__tests__/it-phase-awareness-regressions.test.ts",
-    "src/__tests__/it-phase1-log-access.test.ts",
     "src/__tests__/it-phase3-persona-prompts.test.ts",
     "src/__tests__/it-pipe-reader.test.ts",
     "src/__tests__/it-pipeline.test.ts",

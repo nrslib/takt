@@ -177,7 +177,7 @@ describe('OpenCode Skill execution contract', () => {
   });
 
   it('keeps Skill off for a fresh-session report retry while retaining the step setting', async () => {
-    const options = optionsBuilder().buildNewSessionReportOptions(step, { allowedTools: ['Read'] });
+    const options = optionsBuilder().buildNewSessionReportOptions(step, {});
     expect(options.providerOptions).toMatchObject({ opencode: { skills: { enabled: true } } });
     const response = await runAgent(undefined, 'report retry', options);
     expect(response.status).toBe('done');
@@ -186,6 +186,25 @@ describe('OpenCode Skill execution contract', () => {
     expect(options.providerOptions).toMatchObject({ opencode: { skills: { enabled: true } } });
     for (const agent of ['takt', 'takt-review', 'takt-report']) {
       expect(agentPermissions(agent).filter((rule) => rule.action === 'skill' || rule.action === '*')).toEqual([]);
+    }
+  });
+
+  it.each(['v1', 'v2'] as const)('disables Skill on both report routes while preserving readonly file tools on %s', async (generation) => {
+    vi.stubEnv('TAKT_OPENCODE_VERSION', generation);
+    const builder = optionsBuilder();
+    for (const options of [
+      builder.buildResumeOptions(step, 'phase1-session', {}),
+      builder.buildNewSessionReportOptions(step, {}),
+    ]) {
+      const result = await runAgent(undefined, 'report', options);
+      expect(result.status).toBe('done');
+      expect(options.providerOptions).toMatchObject({ opencode: { skills: { enabled: true } } });
+      expect(options.allowedTools).not.toContain('skill');
+    }
+    expect(promptAsync).toHaveBeenCalledTimes(2);
+    for (const [payload] of promptAsync.mock.calls) {
+      expect(payload.tools.skill).toBe(false);
+      expect(Object.keys(payload.tools).filter((name) => payload.tools[name])).toEqual(['read', 'list', 'glob', 'grep']);
     }
   });
 

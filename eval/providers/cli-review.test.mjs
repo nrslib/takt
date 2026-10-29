@@ -505,3 +505,95 @@ test('invalid provider timeout returns an error without creating an isolated fix
   assert.match(result.error, /timeout_ms must be 0/);
   assert.deepEqual(leaked, []);
 });
+
+test('Codex saves JSONL events on initial and resume calls while returning final text', async () => {
+  const { createCliReviewSession } = await import('./cli-review.mjs');
+  const invocations = [];
+  const recorded = [];
+  const session = createCliReviewSession({ cli: 'codex', model: 'offline', reasoning_effort: 'low' }, {
+    cwd: '/tmp', onEvent: (event) => recorded.push(event),
+    processRunner: async (cli, args) => {
+      invocations.push({ cli, args });
+      writeFileSync(args[args.indexOf('-o') + 1], `answer-${invocations.length}`);
+      return [
+        { type: 'thread.started', thread_id: 'same-thread' },
+        { type: 'item.completed', item: { id: 'command', type: 'command_execution', command: 'head -n 2 record', aggregated_output: 'two lines' } },
+        { type: 'turn.completed' },
+      ].map((event) => JSON.stringify(event)).join('\n');
+    },
+  });
+  assert.equal(await session.run('phase 1'), 'answer-1');
+  assert.equal(await session.run('phase 2'), 'answer-2');
+  assert.equal(recorded.length, 6);
+  for (const { cli, args } of invocations) {
+    assert.equal(cli, 'codex');
+    assert.ok(args.includes('--json'));
+  }
+  assert.deepEqual(invocations[1].args.slice(0, 3), ['exec', 'resume', 'same-thread']);
+  assert.ok(invocations[1].args.includes('sandbox_mode="read-only"'));
+});
+
+test('Claude preserves text output on initial and resume calls without event capture', async () => {
+  const { createCliReviewSession } = await import('./cli-review.mjs');
+  const invocations = [];
+  const outputs = ['[]\n', '{"type":"result","result":"literal"}\n'];
+  const session = createCliReviewSession({ cli: 'claude', model: 'opus' }, {
+    cwd: '/tmp',
+    processRunner: async (cli, args) => {
+      invocations.push({ cli, args });
+      return outputs[invocations.length - 1];
+    },
+  });
+  assert.equal(await session.run('phase 1'), outputs[0]);
+  assert.equal(await session.run('phase 2'), outputs[1]);
+  for (const { cli, args } of invocations) {
+    assert.equal(cli, 'claude');
+    assert.equal(args.includes('--output-format'), false);
+    assert.equal(args.includes('--verbose'), false);
+    assert.equal(args[args.indexOf('--allowed-tools') + 1], 'Read,Glob,Grep');
+  }
+  const sessionId = invocations[0].args[invocations[0].args.indexOf('--session-id') + 1];
+  assert.equal(invocations[1].args[invocations[1].args.indexOf('--resume') + 1], sessionId);
+});
+
+test('Claude saves stream-json events on initial and resume calls while returning final text', async () => {
+  const { createCliReviewSession } = await import('./cli-review.mjs');
+  const invocations = [];
+  const recorded = [];
+  const session = createCliReviewSession({ cli: 'claude', model: 'opus' }, {
+    cwd: '/tmp', onEvent: (event) => recorded.push(event),
+    processRunner: async (cli, args) => {
+      invocations.push({ cli, args });
+      return [
+        { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', id: 'read', input: { limit: 2 } }] } },
+        { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'read', content: 'two lines' }] } },
+        { type: 'result', subtype: 'success', result: `answer-${invocations.length}` },
+      ].map((event) => JSON.stringify(event)).join('\n');
+    },
+  });
+  assert.equal(await session.run('phase 1'), 'answer-1');
+  assert.equal(await session.run('phase 2'), 'answer-2');
+  assert.equal(recorded.length, 6);
+  for (const { cli, args } of invocations) {
+    assert.equal(cli, 'claude');
+    assert.equal(args[args.indexOf('--output-format') + 1], 'stream-json');
+    assert.ok(args.includes('--verbose'));
+    assert.equal(args[args.indexOf('--allowed-tools') + 1], 'Read,Glob,Grep');
+  }
+  const sessionId = invocations[0].args[invocations[0].args.indexOf('--session-id') + 1];
+  assert.equal(invocations[1].args[invocations[1].args.indexOf('--resume') + 1], sessionId);
+});
+
+test('Claude event capture rejects missing, invalid and failed stream results', async () => {
+  const { createCliReviewSession } = await import('./cli-review.mjs');
+  for (const output of [
+    '[]\n',
+    '{"type":"result","result":null}\n',
+    '{"type":"result","result":"failed","is_error":true}\n',
+  ]) {
+    const session = createCliReviewSession({ cli: 'claude', model: 'opus' }, {
+      cwd: '/tmp', onEvent: () => {}, processRunner: async () => output,
+    });
+    await assert.rejects(session.run('phase 2'));
+  }
+});

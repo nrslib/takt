@@ -539,14 +539,12 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
       () => workspace, () => workspace, () => undefined, () => path.join(root, 'reports'),
       () => 'en', () => 'default',
     );
-    const fallback = builder.buildFallbackReportOptions(step, { cwd: workspace, resolvedProvider: 'opencode' }, { allowedTools: [] });
+    const fallback = builder.buildFallbackReportOptions(step, { cwd: workspace, resolvedProvider: 'opencode' }, {});
     expect(fallback).toBeDefined();
     const start = vi.spyOn(DeepSeekHarness.prototype, 'start');
     for (const options of [
       builder.buildResumeOptions(step, 'old-session', {}),
-      builder.buildNewSessionReportOptions(step, { allowedTools: [] }),
       builder.buildNewSessionReportOptions(step, {}),
-      builder.buildNewSessionReportOptions(step, { allowedTools: ['Read'] }),
       fallback!,
     ]) {
       const response = await runAgent(undefined, 'Write a tool-free report.', options);

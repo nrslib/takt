@@ -13,6 +13,7 @@ vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CodexOptions, ThreadOptions, TurnOptions } from '@openai/codex-sdk';
 import type { CodexCallOptions } from '../infra/codex/types.js';
+import { CodexProvider } from '../infra/providers/codex.js';
 import { runCodexMcpList } from '../infra/codex/mcp-list.js';
 
 const {
@@ -87,6 +88,16 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 const { CodexClient } = await import('../infra/codex/client.js');
 
 describe('CodexClient — structuredOutput 抽出', () => {
+  it.each([undefined, 'existing-session'])('forces read-only sandbox in Phase 2 with delegated Codex permissions (session=%s)', async (sessionId) => {
+    mockEvents = [{ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } }];
+    const agent = new CodexProvider().setup({ name: 'reporter' });
+    const result = await agent.call('Report current work', {
+      cwd: '/tmp', permissionMode: 'full', providerOptions: { codex: { permissionControl: 'codex' } }, executionPhase: 2, sessionId,
+    });
+    expect(result.status).toBe('done');
+    expect(lastThreadOptions).toMatchObject({ sandboxMode: 'read-only', approvalPolicy: 'never' });
+  });
+
   it('通常のタスク実行には manager のフック設定を追加しない', async () => {
     mockEvents = [{ type: 'turn.completed' }];
     const result = await new CodexClient().call('coder', 'prompt', { cwd: '/tmp', fastMode: true });
