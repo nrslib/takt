@@ -279,6 +279,38 @@ describe('Phase 2 engine-mediated Phase 1 log access', () => {
       .toBe('# Report\ncompleted without another read');
   });
 
+  it.each(['read', 'search'] as const)('routes an out-of-range %s offset through retry and fallback', async (operation) => {
+    const ctx = createContext('phase1-session');
+    const invalidRequest = operation === 'read'
+      ? request(reference.byteSize + 1, 5)
+      : JSON.stringify({ _takt_phase1_log_request: {
+        operation: 'search', offset: reference.byteSize + 1, limit: 64, query: 'missing',
+      } });
+    queue(
+      response(invalidRequest, 'report-session'),
+      response(invalidRequest),
+      response('# Report\nout-of-range request recovered'),
+    );
+
+    await runReportPhase(step, 1, ctx);
+
+    const calls = vi.mocked(runAgent).mock.calls;
+    expect(calls).toHaveLength(3);
+    expect(calls[2]?.[2]?.resolvedProvider).toBe('claude');
+    expect(readFileSync(join(ctx.reportDir, 'review.md'), 'utf8'))
+      .toBe('# Report\nout-of-range request recovered');
+  });
+
+  it('allows a read at the exact EOF offset', async () => {
+    const ctx = createContext('phase1-session');
+    queue(response(request(reference.byteSize, 5), 'report-session'), response('# Report\nEOF verified'));
+
+    await runReportPhase(step, 1, ctx);
+
+    expect(vi.mocked(runAgent).mock.calls[1]?.[1]).toContain('"nextOffset":null');
+    expect(readFileSync(join(ctx.reportDir, 'review.md'), 'utf8')).toBe('# Report\nEOF verified');
+  });
+
   it('rejects an invalid reserved request instead of saving it as a report', async () => {
     const ctx = createContext('phase1-session');
     queue(response(JSON.stringify({ _takt_phase1_log_request: {
