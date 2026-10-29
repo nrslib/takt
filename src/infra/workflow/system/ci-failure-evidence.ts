@@ -32,18 +32,21 @@ async function saveIndex(
 ): Promise<{ failure: PrCiFailure; manifestPath: string; logCount: number }> {
   const saved = new Map<string, string>();
   const unavailable = [...failure.unavailable];
+  const addUnavailable = (item: PrCiFailure['unavailable'][number]) => {
+    if (unavailable.some((existing) => existing.name === item.name && existing.url === item.url
+      && existing.reason === item.reason)) return;
+    unavailable.push(item);
+  };
   const checks = [];
   for (const check of failure.checks) {
     const jobs = [];
     if (check.jobs.length === 0) {
-      unavailable.push({ name: check.name, url: check.run.url, reason: 'Failed check has no job evidence' });
+      addUnavailable({ name: check.name, url: check.run.url, reason: 'Failed check has no job evidence' });
     }
     for (const job of check.jobs) {
       signal?.throwIfAborted();
       if (!job.log?.trim()) {
-        if (!unavailable.some((item) => item.url === job.url)) {
-          unavailable.push({ name: check.name, url: job.url, reason: 'Failed job log is missing' });
-        }
+        addUnavailable({ name: check.name, url: job.url, reason: 'Failed job log is missing' });
         jobs.push({ id: job.id, name: job.name, url: job.url, logPath: null });
         continue;
       }

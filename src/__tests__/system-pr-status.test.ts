@@ -233,6 +233,41 @@ describe('CI failure system input and rerun effect', () => {
     expect(index.checks[0]!.jobs[0]!.logPath).toBeNull();
   });
 
+  it('jobのない複数checkを原本とclone側で同じ不足証拠として保持し再保存しても増やさない', async () => {
+    const h = fixture();
+    const run = failure().checks[0]!.run;
+    h.fetchPrCiFailure.mockResolvedValue({ ...failure(), checks: [
+      { name: 'unit', run, jobs: [] },
+      { name: 'lint', run, jobs: [] },
+    ] });
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await h.service.resolveSystemInput(input, h.state) as {
+        complete: boolean; unavailable: Array<{ name: string; url?: string; reason: string }>;
+        checks: Array<{ name: string }>; promptEvidence: string;
+      };
+      const viewPath = /^Evidence index: (.+)$/m.exec(result.promptEvidence)?.[1];
+      expect(viewPath).toBeDefined();
+      const view = JSON.parse(readFileSync(viewPath!, 'utf8')) as typeof result;
+      const canonicalDirectory = join(runDirectory, '.takt', 'runs', 'run', 'ci-evidence');
+      const canonicalPath = join(canonicalDirectory,
+        readdirSync(canonicalDirectory).find((name) => name.endsWith('.json'))!);
+      const canonical = JSON.parse(readFileSync(canonicalPath, 'utf8')) as typeof result;
+      expect(result.complete).toBe(false);
+      expect(result.unavailable).toEqual([
+        { name: 'unit', url: run.url, reason: 'Failed check has no job evidence' },
+        { name: 'lint', url: run.url, reason: 'Failed check has no job evidence' },
+      ]);
+      expect(canonical.unavailable).toEqual(result.unavailable);
+      expect(view.unavailable).toEqual(result.unavailable);
+      expect(view.checks).toHaveLength(2);
+      h.state.systemContexts.set('collect_ci_failure', { failure: result });
+      expect(await h.service.executeEffect(effect, { type: 'rerun_ci', pr: 123, failure: result }, h.state))
+        .toMatchObject({ success: false });
+      expect(h.rerunPrCi).not.toHaveBeenCalled();
+    }
+  });
+
   it('証拠保存前のキャンセルを証拠不足へ変換しない', async () => {
     const h = fixture();
     const controller = new AbortController();
