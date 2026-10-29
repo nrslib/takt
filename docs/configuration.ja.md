@@ -159,6 +159,8 @@ dynamic parallel と `dynamic_facets` の selector は読み取り専用で、`R
 #   custom_scripts: false                # カスタムスクリプトを許可（デフォルト: false、ビルトインプリセットは常に許可）
 # workflow_command_gates:                # workflow YAML command quality gate ポリシー
 #   custom_scripts: false                # workflow YAML の command gate を許可（デフォルト: false）
+# workflow_system_commands:             # workflow の system command input を許可するポリシー
+#   custom_scripts: false
 # sync_conflict_resolver:                # sync conflict resolver ポリシー
 #   auto_approve_tools: false            # ツールの自動承認を許可（デフォルト: false）
 
@@ -249,6 +251,7 @@ dynamic parallel と `dynamic_facets` の selector は読み取り専用で、`R
 | `workflow_arpeggio` | object | すべて `false` | Arpeggio カスタムコードポリシー（`custom_data_source_modules`, `custom_merge_inline_js`, `custom_merge_files`） |
 | `workflow_runtime_prepare` | object | `{ custom_scripts: false }` | ランタイム prepare ポリシー（ビルトインプリセットは常に許可） |
 | `workflow_command_gates` | object | `{ custom_scripts: false }` | workflow YAML command quality gate ポリシー |
+| `workflow_system_commands` | object | `{ custom_scripts: false }` | workflow の system command input を許可するポリシー |
 | `workflow_overrides` | object | - | workflow レベルの上書き。トップレベル / step 単位 / persona 単位の `quality_gates`（AI ディレクティブまたは `type: command` ゲート）と `quality_gates_edit_only` |
 | `sync_conflict_resolver` | object | `{ auto_approve_tools: false }` | sync conflict resolver ポリシー |
 | `observability` | object | 無効 | OpenTelemetry foundation の opt-in 設定。`enabled` で SDK を初期化し、`monitor` は workflow metric を `.takt/runs/<run>/monitor.json` に出力し、`session_log_exporter` は span 由来の shadow session log を出力します。`usage_events_phase` は phase 粒度の usage events を `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl` に出力します。`enabled: true` と `OTEL_EXPORTER_OTLP_ENDPOINT` が揃うと、TAKT は標準の `OTEL_EXPORTER_OTLP_*` 環境変数で span と metric も OTLP 送信します。TAKT 独自の OTLP config キーはありません。 |
@@ -415,6 +418,7 @@ OpenCode の `event_limit` は既定で 500,000、`text_byte_limit` は 1 MiB、
 | `workflow_arpeggio` | object | - | Arpeggio カスタムコードポリシー（グローバルを上書き） |
 | `workflow_runtime_prepare` | object | - | ランタイム prepare ポリシー（グローバルを上書き） |
 | `workflow_command_gates` | object | - | workflow YAML command quality gate ポリシー（グローバルを上書き） |
+| `workflow_system_commands` | object | - | workflow の system command input を許可するポリシー |
 | `sync_conflict_resolver` | object | - | sync conflict resolver ポリシー（グローバルを上書き） |
 | `observability` | object | - | プロジェクトレベルの OpenTelemetry opt-in 上書き。`enabled` で SDK を初期化し、`monitor` は workflow metric を `.takt/runs/<run>/monitor.json` に出力し、`session_log_exporter` は span 由来の shadow session log を出力します。`usage_events_phase` は phase 粒度の usage events を `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl` に出力します。`enabled: true` と `OTEL_EXPORTER_OTLP_ENDPOINT` が揃うと、TAKT は標準の `OTEL_EXPORTER_OTLP_*` 環境変数で span と metric も OTLP 送信します。TAKT 独自の OTLP config キーはありません。 |
 
@@ -459,6 +463,23 @@ TAKT_ALLOY_CONCURRENCY=1 TAKT_ALLOY_HEAP=2g TAKT_ALLOY_STACK=128m takt
 検証の失敗・エラー・時間切れでは`.takt/runs/verify-*/`の仕様とログを保持し、保存先を結果メッセージに表示します。保持したディレクトリは自動掃除の対象外です。不要になったら手動で削除してください。成功時は結果の解釈が終わってから削除します。
 
 保持マーカーの書き込みに失敗した場合は所有権マーカーを保持マーカーへ移動し、保存先と書き込みエラーを通知します。移動にも失敗した場合は所有権マーカーを残し、保持を確定できない旨と保存先、両方のエラーを通知します。残った所有権マーカーは所有するNodeプロセスの終了後もディレクトリを自動掃除から保護します。必要な成果物を手動で退避してください。
+
+## workflow の system command input を許可するポリシー
+
+既定は無効です。projectの明示値（`false`を含む）はglobalより優先されます。projectで未指定の場合はglobalの値を使います。未許可のcommand inputを含むworkflowは読み込み時にエラーになります。`workflow_command_gates.custom_scripts`とは独立しています。
+
+```yaml
+workflow_system_commands:
+  custom_scripts: true
+```
+
+`TAKT_WORKFLOW_SYSTEM_COMMANDS_CUSTOM_SCRIPTS=true`
+
+この環境変数はprojectとglobalの設定より優先され、`false`の場合はprojectが`true`でも許可されません。
+
+global専用の`workflow_system_commands_trusted_projects`と環境変数`TAKT_WORKFLOW_SYSTEM_COMMANDS_TRUSTED_PROJECTS`はこの許可判定に影響しません。別cloneでの実行にも元のproject設定を使います。各実行で許可を解決し、rootと子workflowへ同じ値を渡します。`wait`中は再解決しません。
+
+pipeline または対話モードが現在のディレクトリに PR をチェックアウトする場合は、切り替え前の設定から許可を決めます。対話セッションでは Issue に切り替えた後も同じディレクトリでこの許可を使います。PR が追加した project 設定だけでは許可されません。
 
 ## 環境変数上書き
 

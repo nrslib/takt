@@ -90,6 +90,8 @@ vi.mock('../features/tasks/execute/taskExecution.js', () => ({
 const mockResolveConfigValues = vi.fn();
 const mockResolveConfigValue = vi.fn();
 vi.mock('../infra/config/index.js', () => ({
+  loadGlobalConfig: () => ({}),
+  loadProjectConfig: () => ({}),
   resolveConfigValues: mockResolveConfigValues,
   resolveConfigValue: (...args: unknown[]) => mockResolveConfigValue(...args),
 }));

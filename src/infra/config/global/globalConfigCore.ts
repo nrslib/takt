@@ -197,6 +197,10 @@ export class GlobalConfigManager {
       workflowCommandGates: parsed.workflow_command_gates ? {
         customScripts: parsed.workflow_command_gates.custom_scripts,
       } : undefined,
+      workflowSystemCommandsTrustedProjects: parsed.workflow_system_commands_trusted_projects,
+      workflowSystemCommands: parsed.workflow_system_commands ? {
+        customScripts: parsed.workflow_system_commands.custom_scripts,
+      } : undefined,
       workflowArpeggio: parsed.workflow_arpeggio ? {
         customDataSourceModules: parsed.workflow_arpeggio.custom_data_source_modules,
         customMergeInlineJs: parsed.workflow_arpeggio.custom_merge_inline_js,

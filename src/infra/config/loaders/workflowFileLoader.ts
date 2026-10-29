@@ -3,6 +3,7 @@ import { existsSync, realpathSync } from 'node:fs';
 import { readWorkflowFile } from './workflow-file-reader.js';
 import { parse as parseYaml } from 'yaml';
 import type { WorkflowCallArgValue, WorkflowConfig } from '../../../core/models/index.js';
+import type { WorkflowSystemCommandsConfig } from '../../../core/models/config-types.js';
 import { isNormalOrTeamLeaderWorkflowStep } from '../../../core/models/types.js';
 import { getRepertoireDir, isPathSafe } from '../paths.js';
 import { getResourcesDir } from '../../resources/index.js';
@@ -15,6 +16,7 @@ import { normalizeWorkflowConfig } from './workflowParser.js';
 import {
   resolveWorkflowArpeggioPolicy,
   resolveWorkflowCommandGatesPolicy,
+  resolveWorkflowSystemCommandsForProject,
   resolveWorkflowMcpServersPolicy,
   resolveWorkflowRuntimePreparePolicy,
 } from './workflowNormalizationPolicies.js';
@@ -31,6 +33,7 @@ import { buildConfiguredCompanionLookupDirs } from './companionLookupDirectories
 import { loadCompanionDefinition } from './companionDefinitionLoader.js';
 
 interface LoadWorkflowFromFileOptions {
+  workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig;
   trustInfo?: WorkflowTrustInfo;
   callableArgs?: Record<string, WorkflowCallArgValue>;
   callableArgPolicy?: WorkflowCallArgResolutionPolicy;
@@ -103,6 +106,9 @@ function loadWorkflowFromFileInternal(
       workflowCommandGatesPolicy: resolveWorkflowCommandGatesPolicy(
         globalConfig.workflowCommandGates,
         projectConfig.workflowCommandGates,
+      ),
+      workflowSystemCommandsPolicy: options?.workflowSystemCommandsPolicy ?? resolveWorkflowSystemCommandsForProject(
+        globalConfig, projectConfig,
       ),
       workflowPath: canonicalFilePath,
       workflowTrustInfo: trustInfo,

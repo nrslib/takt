@@ -307,6 +307,11 @@ export interface WorkflowCommandGatesConfig {
   customScripts?: boolean;
 }
 
+/** Workflow-level system command input policy */
+export interface WorkflowSystemCommandsConfig {
+  customScripts?: boolean;
+}
+
 /** Workflow-level Arpeggio custom capability policy */
 export interface WorkflowArpeggioConfig {
   /** Allow non-builtin Arpeggio data sources from workflow YAML (default: false) */
@@ -427,6 +432,7 @@ export interface ProjectConfig {
   workflowRuntimePrepare?: WorkflowRuntimePrepareConfig;
   /** Workflow-level command quality gate policy */
   workflowCommandGates?: WorkflowCommandGatesConfig;
+  workflowSystemCommands?: WorkflowSystemCommandsConfig;
   /** Workflow-level Arpeggio policy */
   workflowArpeggio?: WorkflowArpeggioConfig;
   /** Sync conflict resolver behavior */
@@ -443,6 +449,8 @@ export interface ProjectConfig {
  * — handled by the resolution layer.
  */
 export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSubmodules' | 'assistant' | 'manager'> {
+  /** @globalOnly */
+  workflowSystemCommandsTrustedProjects?: string[];
   manager?: { autoRun?: boolean; patrolInterval?: number; defaultWorkflow?: string; notifications?: ManagerNotifications; sensitivePaths?: string[] };
   /** Global default for assistant task-instruction formatting. */
   assistant?: GlobalAssistantConfig;

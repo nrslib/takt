@@ -774,7 +774,7 @@ A `workflow_call` step may also declare scalar `vars` for execution context that
 
 A system step is executed by the TAKT engine itself — no agent runs. Declare it with `kind: system` (or the shorthand `mode: system`; declaring both is a configuration error). System steps cannot declare agent fields such as `persona`, `instruction`, `provider`, `structured_output`, `output_contracts`, or `quality_gates`. See `src/core/models/workflow-system-schemas.ts` for the full schema. The builtin `auto-improvement-loop` workflow (`builtins/en/workflows/auto-improvement-loop.yaml`) is the reference example: it routes between PR handling, issue-driven planning, and fresh improvement planning using only system steps and planner agent steps.
 
-`system_inputs` reads engine-provided context and binds each entry to a name via `as`. Available types: `task_context`, `branch_context`, `pr_context`, `issue_context`, `task_queue_context`, `pr_list`, `pr_selection`, `issue_list`, `issue_selection` (`pr_list` / `pr_selection` accept a `where` filter, which must match between the two). Bindings must be unique within the step. Bound values drive `when()` rules as `context.<step>.<binding>...` and can be referenced from later agent instructions with `{context:step.binding.field}`:
+`system_inputs` reads engine-provided context or executes a fixed command and binds each entry to a name via `as`. Available types: `task_context`, `branch_context`, `pr_context`, `issue_context`, `task_queue_context`, `pr_list`, `pr_selection`, `issue_list`, `issue_selection`, `pr_status`, `pr_ci_failure`, `command` (`pr_list` / `pr_selection` accept a `where` filter, which must match between the two). The `command` type requires permission; see [Fixed command inputs](#fixed-command-inputs). Bindings must be unique within the step. Bound values drive `when()` rules as `context.<step>.<binding>...` and can be referenced from later agent instructions with `{context:step.binding.field}`:
 
 ```yaml
   - name: route_context
@@ -793,6 +793,57 @@ A system step is executed by the TAKT engine itself — no agent runs. Declare i
       - condition: when(context.route_context.selected_pr.exists == true)
         next: plan_from_existing_pr
 ```
+
+#### Fixed command inputs
+
+`type: command` executes a shell command fixed in the workflow. The permission below defaults to disabled. An explicit project value overrides global; when absent, the global value applies. This permission is independent of `workflow_command_gates.custom_scripts`. Unauthorized workflows fail during loading.
+
+Registration in `workflow_system_commands_trusted_projects` does not affect permission. Separate clones use the original project configuration. Permission is resolved for each run and shared by root and child workflows; `wait` does not reload it. See the [configuration guide](configuration.md).
+
+When a pipeline or interactive session checks out a PR in the current directory, it resolves permission before switching branches. The interactive session retains that permission for the directory, including after switching to an Issue. A project setting added by the PR alone does not grant permission.
+
+```yaml
+workflow_system_commands:
+  custom_scripts: true
+```
+
+```yaml
+name: approval-command
+steps:
+  - name: check
+    kind: system
+    system_inputs:
+      - type: command
+        as: approval
+        command: node scripts/check-approval.mjs
+        timeout_ms: 1000
+        output: json
+    wait:
+      until: when(context.check.approval.json.ready == true)
+      interval_ms: 1000
+      max_retries: 30
+      on_timeout: ABORT
+    rules:
+      - condition: when(context.approval.json.status == "approved")
+        next: consume
+      - condition: when(true)
+        next: ABORT
+  - name: consume
+    instruction: "Approval: {context:check.approval.json.status}"
+    rules:
+      - condition: when(true)
+        next: COMPLETE
+```
+
+`timeout_ms` is required: an integer from 1 through 2147483647, with no default or unlimited setting. `output: json` is optional. YAML cannot set `cwd`; commands run in the task execution directory (the clone for a worktree task). Pipeline and interactive modes behave identically. Command effects are not supported.
+
+Results expose `exit_code` (`null` if no exit code is available), `timed_out`, `stdout`, and `stderr`. `json` is present only when requested, exit code is 0, no timeout occurred, and stdout parses as JSON. Nonzero exits and timeouts are results for rules. Combined stdout and stderr exceeding 65536 bytes, a spawn failure, or invalid JSON on a successful JSON command fails the step before effects or rules run.
+
+During condition evaluation, current command bindings also support `context.approval...`; an existing step scope with the same name takes precedence. Persisted contexts and later instructions use the full `context.check.approval...` scope.
+
+TAKT does not expand command placeholders or append arguments. `TAKT_PREVIOUS_RESPONSE_FILE` points to the immediately previous response body, or an empty file when absent. `TAKT_PREVIOUS_STRUCTURED_OUTPUT_FILE` is set only when that same response has structured output. Scripts read and validate these private files. Files remain under the run context as run artifacts. The environment contains only the command gate base allowlist plus these two file paths.
+
+No inactivity timeout applies. Timeout or cancellation sends SIGTERM, followed by SIGKILL after 100ms if needed. Each `wait` check reruns the command with a fresh `timeout_ms` deadline and the same previous response. A subsequent system step sees the previous system response. JSON from an older attempt is not retained. Existing `wait.max_retries`, `on_timeout`, step counting, `loop_monitors`, and agent session continuation rules apply.
 
 `effects` executes engine-side actions: `commit_and_push`, `caccia`, `enqueue_task`, `comment_pr`, `sync_with_root`, `resolve_conflicts_with_ai`, `merge_pr`, `close_pr`. Each effect type may appear at most once per step, and results route via `when(effect.<step>.<type>.<field>)`:
 

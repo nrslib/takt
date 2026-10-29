@@ -69,6 +69,12 @@ interface WorkflowSystemBinding {
 
 export type WorkflowSystemInput =
   | (WorkflowSystemBinding & {
+    type: 'command';
+    command: string;
+    timeout_ms: number;
+    output?: 'json';
+  })
+  | (WorkflowSystemBinding & {
     type: 'pr_status';
     source: 'current_pr';
     rerun_from?: WorkflowTemplateReference;

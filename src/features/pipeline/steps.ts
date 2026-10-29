@@ -349,6 +349,7 @@ export async function runWorkflow(
   context: ExecutionContext,
   loopAnalysisPublication?: LoopAnalysisPublicationCoordinator,
   taskSpec?: ResolvedTaskSpec,
+  workflowSystemCommandsPolicy?: ExecuteTaskOptions['workflowSystemCommandsPolicy'],
 ): Promise<WorkflowExecutionResult> {
   const safeWorkflow = sanitizeTerminalText(workflow);
   if (options.outputMode !== 'silent') {
@@ -373,6 +374,7 @@ export async function runWorkflow(
       cwd: execCwd,
       workflowIdentifier: workflow,
       projectCwd,
+      ...(workflowSystemCommandsPolicy === undefined ? {} : { workflowSystemCommandsPolicy }),
       agentOverrides,
       outputMode: options.outputMode ?? 'terminal',
       taskPrefix: options.taskPrefix,

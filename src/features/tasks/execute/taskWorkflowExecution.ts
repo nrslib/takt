@@ -24,6 +24,7 @@ import { createLogger } from '../../../shared/utils/index.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import type { ExecuteTaskOptions, WorkflowExecutionOptions, WorkflowExecutionResult } from './types.js';
 import { buildTraceTaskMetadata } from './traceTaskMetadata.js';
+import { resolveWorkflowSystemCommandsForProject } from '../../../infra/config/loaders/workflowNormalizationPolicies.js';
 import { getWorkflowTrustInfo } from '../../../infra/config/loaders/workflowTrustSource.js';
 
 const log = createLogger('task');
@@ -157,10 +158,14 @@ export async function executeTaskWorkflow(
     skipWorktreeRuntimeProtection,
   } = options;
   const traceTaskMetadata = resolveTraceTaskMetadata(options);
+  const globalConfig = loadGlobalConfig();
+  const projectConfig = loadProjectConfig(projectCwd);
+  const workflowSystemCommandsPolicy = options.workflowSystemCommandsPolicy
+    ?? resolveWorkflowSystemCommandsForProject(globalConfig, projectConfig);
   const workflowConfig = loadWorkflowByIdentifier(
     workflowIdentifier,
     projectCwd,
-    { lookupCwd: cwd, resourceRoot: workflowResourceRoot },
+    { lookupCwd: cwd, resourceRoot: workflowResourceRoot, workflowSystemCommandsPolicy },
   );
   const safeWorkflowIdentifier = sanitizeTerminalText(workflowIdentifier);
 
@@ -195,13 +200,14 @@ export async function executeTaskWorkflow(
   return workflowExecutor(workflowConfig, task, cwd, {
     projectCwd,
     workflowResourceRoot,
+    workflowSystemCommandsPolicy,
     language: config.language,
     provider: agentOverrides?.provider,
     providerSource: agentOverrides?.providerSource,
     model: agentOverrides?.model,
     modelSource: agentOverrides?.modelSource,
     autoStrategy: agentOverrides?.autoStrategy,
-    reportFallbackProvider: resolveReportFallbackProviderModel(projectCwd),
+    reportFallbackProvider: resolveReportFallbackProviderModel(projectConfig, globalConfig),
     selectorProviderOverrides: agentOverrides === undefined
       ? undefined
       : {
@@ -257,9 +263,10 @@ export async function executeTaskWorkflow(
   });
 }
 
-function resolveReportFallbackProviderModel(projectCwd: string): StepProviderInfo | undefined {
-  const project = loadProjectConfig(projectCwd);
-  const global = loadGlobalConfig();
+function resolveReportFallbackProviderModel(
+  project: ReturnType<typeof loadProjectConfig>,
+  global: ReturnType<typeof loadGlobalConfig>,
+): StepProviderInfo | undefined {
   const resolved = resolveAssistantScopedProviderModelFromConfig({
     local: {
       provider: project.provider,

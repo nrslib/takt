@@ -150,6 +150,8 @@ assistant:
 #   custom_scripts: false                # 允许自定义脚本（默认 false；builtin preset 始终允许）
 # workflow_command_gates:                # Workflow YAML command quality gate 策略
 #   custom_scripts: false                # 允许来自 workflow YAML 的 command gate（默认 false）
+# workflow_system_commands:             # Workflow system command input 策略
+#   custom_scripts: false
 # sync_conflict_resolver:                # Sync conflict resolver 策略
 #   auto_approve_tools: false            # 允许工具自动批准（默认 false）
 
@@ -242,6 +244,7 @@ assistant:
 | `workflow_arpeggio` | object | 全部 `false` | Arpeggio 自定义代码策略 |
 | `workflow_runtime_prepare` | object | `{ custom_scripts: false }` | Runtime prepare 策略 |
 | `workflow_command_gates` | object | `{ custom_scripts: false }` | Workflow YAML command quality gate 策略 |
+| `workflow_system_commands` | object | `{ custom_scripts: false }` | Workflow system command input 策略 |
 | `workflow_overrides` | object | - | workflow 级 `quality_gates` 与 `quality_gates_edit_only` 覆盖 |
 | `sync_conflict_resolver` | object | `{ auto_approve_tools: false }` | sync conflict resolver 策略 |
 | `observability` | object | disabled | opt-in OpenTelemetry 基础设施 |
@@ -423,6 +426,7 @@ TAKT 观察实际收到的 provider event，不会合成 keepalive。OpenCode �
 | `workflow_arpeggio` | object | - | Arpeggio 自定义代码策略覆盖 |
 | `workflow_runtime_prepare` | object | - | Runtime prepare 策略覆盖 |
 | `workflow_command_gates` | object | - | Workflow YAML command quality gate 策略覆盖 |
+| `workflow_system_commands` | object | - | Workflow system command input 策略 |
 | `sync_conflict_resolver` | object | - | Sync conflict resolver 策略覆盖 |
 | `observability` | object | - | 项目级 OpenTelemetry opt-in 覆盖 |
 
@@ -460,6 +464,23 @@ TAKT_ALLOY_CONCURRENCY=1 TAKT_ALLOY_HEAP=2g TAKT_ALLOY_STACK=128m takt
 验证失败、错误或超时时，`.takt/runs/verify-*/` 中的规范与日志会保留，结果消息会显示目录路径。保留目录不参与自动清理，请在不再需要时手动删除。成功验证的产物在结果解读结束后删除。
 
 如果写入保留标记失败，TAKT 会将所有权标记移动为保留标记，并报告目录路径和写入错误。如果移动也失败，TAKT 会保留所有权标记，提示无法确认保留状态，并报告目录路径和两个错误。即使所属 Node 进程退出，剩余的所有权标记仍会保护目录，使其不被自动清理。请手动复制所需的产物。
+
+## Workflow system command input 策略
+
+默认为禁用。project的显式值（包括`false`）优先于global；project未指定时使用global值。未授权的command input在workflow加载时失败。此权限独立于`workflow_command_gates.custom_scripts`。
+
+```yaml
+workflow_system_commands:
+  custom_scripts: true
+```
+
+`TAKT_WORKFLOW_SYSTEM_COMMANDS_CUSTOM_SCRIPTS=true`
+
+此环境变量优先于project和global设置；即使project设置为`true`，`false`也会拒绝授权。
+
+global专用的`workflow_system_commands_trusted_projects`和环境变量`TAKT_WORKFLOW_SYSTEM_COMMANDS_TRUSTED_PROJECTS`不影响此权限。独立clone使用原project配置。每次运行解析权限并传给root和子workflow，`wait`期间不重新加载。
+
+当 pipeline 或交互模式在当前目录检出 PR 时，会在切换分支前解析权限。交互会话在同一目录中保留该权限，切换到 Issue 后也使用该权限。仅由 PR 添加的 project 设置不会授予权限。
 
 ## 环境变量覆盖
 

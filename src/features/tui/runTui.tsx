@@ -68,6 +68,7 @@ export interface RunTuiOptions {
   cwd: string;
   lang: 'en' | 'ja';
   workflowId?: string;
+  getWorkflowSystemCommandsPolicy?: () => import('../../core/models/config-types.js').WorkflowSystemCommandsConfig | undefined;
   previewCount: number | undefined;
   agentOverrides?: TaskExecutionOptions;
   taskHistory: TaskHistorySummaryItem[];
@@ -219,6 +220,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
       const firstStepOverrides = temporaryProviderActive && selectedProvider
         ? { provider: selectedProvider }
         : undefined;
+      const workflowSystemCommandsPolicy = options.getWorkflowSystemCommandsPolicy?.();
       const description = getWorkflowDescription(
         selectedWorkflowId,
         options.cwd,
@@ -226,6 +228,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
         options.cwd,
         workflowPreviewOverrides,
         firstStepOverrides,
+        ...(workflowSystemCommandsPolicy === undefined ? [] : [workflowSystemCommandsPolicy]),
       );
       const context = workflowContext(description);
       currentWorkflowContext = context;
@@ -432,7 +435,8 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
           }
         }
         case 'workflow': {
-          const workflowId = await determineWorkflow(options.cwd, undefined);
+          const workflowSystemCommandsPolicy = options.getWorkflowSystemCommandsPolicy?.();
+          const workflowId = await determineWorkflow(options.cwd, undefined, ...(workflowSystemCommandsPolicy === undefined ? [] : [workflowSystemCommandsPolicy]));
           if (workflowId !== null && workflowId !== selectedWorkflowId) {
             selectedWorkflowId = workflowId;
             requestRebuild();

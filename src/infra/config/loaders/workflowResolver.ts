@@ -7,6 +7,7 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { isScopeRef, parseScopeRef } from '#faceted-prompting';
 import type { WorkflowCallArgValue, WorkflowConfig } from '../../../core/models/index.js';
+import type { WorkflowSystemCommandsConfig } from '../../../core/models/config-types.js';
 import { validateWorkflowCallContracts as validateWorkflowCallContractsImpl } from './workflowCallContractValidator.js';
 import { buildWorkflowDiscoveryConfig, loadValidatedWorkflowDiscoveryEntry } from './workflowDiscoveryLoader.js';
 import {
@@ -20,6 +21,9 @@ import {
 } from './workflowLookupDirectories.js';
 import { loadWorkflowFileWithResolutionOptions } from './workflowResolvedLoader.js';
 import { getRepertoireDir } from '../paths.js';
+import { loadGlobalConfig } from '../global/globalConfig.js';
+import { loadProjectConfig } from '../project/projectConfig.js';
+import { resolveWorkflowSystemCommandsForProject } from './workflowNormalizationPolicies.js';
 import { type WorkflowTrustInfo } from './workflowTrustSource.js';
 import {
   collectValidatedWorkflowEntries,
@@ -36,7 +40,12 @@ interface LoadWorkflowsOptions {
   onWarning?: (message: string) => void;
 }
 
+interface LoadStandaloneWorkflowsOptions extends LoadWorkflowsOptions {
+  workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig;
+}
+
 export interface WorkflowLookupOptions {
+  workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig;
   basePath?: string;
   lookupCwd?: string;
   resourceRoot?: string;
@@ -75,6 +84,7 @@ function loadWorkflowFromLookupDirs(
   callableArgs?: Record<string, WorkflowCallArgValue>,
   parentTrustInfo?: WorkflowTrustInfo,
   resourceRoot?: string,
+  workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig,
 ): WorkflowConfig | null {
   const match = findWorkflowInLookupDirs(name, lookupDirs);
   if (!match) {
@@ -88,6 +98,7 @@ function loadWorkflowFromLookupDirs(
     callableArgs,
     parentTrustInfo,
     resourceRoot,
+    workflowSystemCommandsPolicy,
   });
 }
 
@@ -100,12 +111,14 @@ export function getBuiltinWorkflow(name: string, projectCwd: string): WorkflowCo
   if (!yamlPath) {
     return null;
   }
+  const workflowSystemCommandsPolicy = resolveWorkflowSystemCommandsForProject(loadGlobalConfig(), loadProjectConfig(projectCwd));
   const workflow = loadWorkflowFileWithResolutionOptions(yamlPath, {
     projectCwd,
     lookupCwd: projectCwd,
     source: 'builtin',
+    workflowSystemCommandsPolicy,
   });
-  return finalizeLoadedWorkflow(workflow, projectCwd, projectCwd);
+  return finalizeLoadedWorkflow(workflow, projectCwd, projectCwd, false, true, undefined, workflowSystemCommandsPolicy);
 }
 
 function loadWorkflowFromPath(
@@ -116,6 +129,7 @@ function loadWorkflowFromPath(
   callableArgs?: Record<string, WorkflowCallArgValue>,
   parentTrustInfo?: WorkflowTrustInfo,
   resourceRoot?: string,
+  workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig,
 ): WorkflowConfig | null {
   const resolvedPath = resolvePath(filePath, basePath);
   return loadWorkflowFromResolvedPath(
@@ -125,6 +139,7 @@ function loadWorkflowFromPath(
     callableArgs,
     parentTrustInfo,
     resourceRoot,
+    workflowSystemCommandsPolicy,
   );
 }
 
@@ -135,6 +150,7 @@ function loadWorkflowFromResolvedPath(
   callableArgs?: Record<string, WorkflowCallArgValue>,
   parentTrustInfo?: WorkflowTrustInfo,
   resourceRoot?: string,
+  workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig,
 ): WorkflowConfig | null {
   if (!existsSync(resolvedPath)) {
     return null;
@@ -146,6 +162,7 @@ function loadWorkflowFromResolvedPath(
     callableArgs,
     parentTrustInfo,
     resourceRoot,
+    workflowSystemCommandsPolicy,
   });
 }
 
@@ -156,12 +173,13 @@ function finalizeLoadedWorkflow(
   skipWorkflowCallContractValidation = false,
   allowPathBasedCalls = true,
   resourceRoot?: string,
+  workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig,
 ): WorkflowConfig | null {
   if (!workflow || skipWorkflowCallContractValidation) {
     return workflow;
   }
 
-  validateWorkflowCallContracts(workflow, projectCwd, lookupCwd, { allowPathBasedCalls, resourceRoot });
+  validateWorkflowCallContracts(workflow, projectCwd, lookupCwd, { allowPathBasedCalls, resourceRoot, workflowSystemCommandsPolicy });
   return workflow;
 }
 
@@ -174,11 +192,12 @@ function loadWorkflowForDiscovery(entry: WorkflowDirEntry, cwd: string): Workflo
   });
 }
 
-function loadWorkflowForRuntime(entry: WorkflowDirEntry, cwd: string): WorkflowConfig {
+function loadWorkflowForRuntime(entry: WorkflowDirEntry, cwd: string, workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig): WorkflowConfig {
   return loadWorkflowFileWithResolutionOptions(entry.path, {
     projectCwd: cwd,
     lookupCwd: cwd,
     source: entry.source,
+    workflowSystemCommandsPolicy,
   });
 }
 
@@ -186,8 +205,9 @@ function validateLoadedWorkflowEntryContracts(
   workflow: WorkflowConfig,
   cwd: string,
   allowPathBasedCalls: boolean,
+  workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig,
 ): void {
-  validateWorkflowCallContracts(workflow, cwd, cwd, { allowPathBasedCalls });
+  validateWorkflowCallContracts(workflow, cwd, cwd, { allowPathBasedCalls, workflowSystemCommandsPolicy });
 }
 
 function loadValidatedWorkflowEntry(entry: WorkflowDirEntry, cwd: string): WorkflowDiscoveryConfig {
@@ -203,27 +223,33 @@ function loadValidatedWorkflowEntry(entry: WorkflowDirEntry, cwd: string): Workf
   });
 }
 
-function loadValidatedWorkflowConfigEntry(entry: WorkflowDirEntry, cwd: string): WorkflowConfig {
-  const workflow = loadWorkflowForRuntime(entry, cwd);
-  validateLoadedWorkflowEntryContracts(workflow, cwd, true);
+function loadValidatedWorkflowConfigEntry(entry: WorkflowDirEntry, cwd: string, workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig): WorkflowConfig {
+  const workflow = loadWorkflowForRuntime(entry, cwd, workflowSystemCommandsPolicy);
+  validateLoadedWorkflowEntryContracts(workflow, cwd, true, workflowSystemCommandsPolicy);
   return workflow;
 }
 
 function loadValidatedStandaloneWorkflowEntry(
   entry: WorkflowDirEntry,
   cwd: string,
+  workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig,
 ): WorkflowDiscoveryConfig {
-  return buildWorkflowDiscoveryConfig(loadValidatedWorkflowConfigEntry(entry, cwd));
+  return buildWorkflowDiscoveryConfig(loadValidatedWorkflowConfigEntry(entry, cwd, workflowSystemCommandsPolicy));
 }
 
 export function loadWorkflow(name: string, projectCwd: string): WorkflowConfig | null {
+  const workflowSystemCommandsPolicy = resolveWorkflowSystemCommandsForProject(loadGlobalConfig(), loadProjectConfig(projectCwd));
   const workflow = loadWorkflowFromLookupDirs(
     name,
     getNamedWorkflowLookupDirs(projectCwd),
     projectCwd,
     projectCwd,
+    undefined,
+    undefined,
+    undefined,
+    workflowSystemCommandsPolicy,
   );
-  return finalizeLoadedWorkflow(workflow, projectCwd, projectCwd);
+  return finalizeLoadedWorkflow(workflow, projectCwd, projectCwd, false, true, undefined, workflowSystemCommandsPolicy);
 }
 
 export function isWorkflowPath(identifier: string): boolean {
@@ -243,6 +269,7 @@ function loadRepertoireWorkflowByRef(
   callableArgs?: Record<string, WorkflowCallArgValue>,
   parentTrustInfo?: WorkflowTrustInfo,
   resourceRoot?: string,
+  workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig,
 ): WorkflowConfig | null {
   const scopeRef = parseScopeRef(identifier);
   const workflowsDir = join(getRepertoireDir(), `@${scopeRef.owner}`, scopeRef.repo, 'workflows');
@@ -255,6 +282,7 @@ function loadRepertoireWorkflowByRef(
       callableArgs,
       parentTrustInfo,
       resourceRoot,
+      workflowSystemCommandsPolicy,
     })
     : null;
 }
@@ -266,6 +294,7 @@ export function validateWorkflowCallContracts(
   options?: {
     allowPathBasedCalls?: boolean;
     resourceRoot?: string;
+    workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig;
   },
 ): void {
   validateWorkflowCallContractsImpl(workflow, projectCwd, {
@@ -275,6 +304,7 @@ export function validateWorkflowCallContracts(
     lookupCwd,
     allowPathBasedCalls: options?.allowPathBasedCalls,
     resourceRoot: options?.resourceRoot,
+    workflowSystemCommandsPolicy: options?.workflowSystemCommandsPolicy,
   });
 }
 
@@ -285,6 +315,8 @@ function loadWorkflowByIdentifierInternal(
 ): WorkflowConfig | null {
   const lookupCwd = options?.lookupCwd ?? projectCwd;
   const basePath = options?.basePath ?? lookupCwd;
+  const workflowSystemCommandsPolicy = options?.workflowSystemCommandsPolicy
+    ?? resolveWorkflowSystemCommandsForProject(loadGlobalConfig(), loadProjectConfig(projectCwd));
   const workflow = isScopeRef(identifier)
     ? loadRepertoireWorkflowByRef(
       identifier,
@@ -292,6 +324,7 @@ function loadWorkflowByIdentifierInternal(
       options?.callableArgs,
       options?.parentTrustInfo,
       options?.resourceRoot,
+      workflowSystemCommandsPolicy,
     )
     : isWorkflowPath(identifier)
       ? loadWorkflowFromPath(
@@ -302,6 +335,7 @@ function loadWorkflowByIdentifierInternal(
         options?.callableArgs,
         options?.parentTrustInfo,
         options?.resourceRoot,
+        workflowSystemCommandsPolicy,
       )
       : loadWorkflowFromLookupDirs(
         identifier,
@@ -311,6 +345,7 @@ function loadWorkflowByIdentifierInternal(
         options?.callableArgs,
         options?.parentTrustInfo,
         options?.resourceRoot,
+        workflowSystemCommandsPolicy,
       );
 
   return finalizeLoadedWorkflow(
@@ -320,6 +355,7 @@ function loadWorkflowByIdentifierInternal(
     options?.skipWorkflowCallContractValidation === true,
     true,
     options?.resourceRoot,
+    workflowSystemCommandsPolicy,
   );
 }
 
@@ -366,13 +402,13 @@ export function loadAllWorkflowDiscoveryWithSources(
 
 export function loadAllStandaloneWorkflowsWithSources(
   cwd: string,
-  options?: LoadWorkflowsOptions,
+  options?: LoadStandaloneWorkflowsOptions,
 ): Map<string, WorkflowDiscoveryWithSource> {
   return loadAllWorkflowsWithSourcesFromDirs(
     cwd,
     getWorkflowDirs(cwd),
     options,
-    loadValidatedStandaloneWorkflowEntry,
+    (entry, projectCwd) => loadValidatedStandaloneWorkflowEntry(entry, projectCwd, options?.workflowSystemCommandsPolicy),
   );
 }
 
@@ -383,11 +419,11 @@ export function listWorkflowEntries(cwd: string, options?: LoadWorkflowsOptions)
   return collectValidatedWorkflowEntries(entries, cwd, options, loadValidatedWorkflowEntry).map(({ entry }) => entry);
 }
 
-export function listStandaloneWorkflowEntries(cwd: string, options?: LoadWorkflowsOptions): WorkflowDirEntry[] {
+export function listStandaloneWorkflowEntries(cwd: string, options?: LoadStandaloneWorkflowsOptions): WorkflowDirEntry[] {
   const dirs = getWorkflowDirs(cwd);
   const entries = dirs.flatMap(({ dir, source, disabled }) => Array.from(iterateWorkflowDir(dir, source, disabled)));
   entries.push(...listRepertoireWorkflowEntries());
-  return collectValidatedWorkflowEntries(entries, cwd, options, loadValidatedStandaloneWorkflowEntry)
+  return collectValidatedWorkflowEntries(entries, cwd, options, (entry, projectCwd) => loadValidatedStandaloneWorkflowEntry(entry, projectCwd, options?.workflowSystemCommandsPolicy))
     .map(({ entry }) => entry);
 }
 

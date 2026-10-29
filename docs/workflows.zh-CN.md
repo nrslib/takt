@@ -636,7 +636,7 @@ Team Leader agent 在运行时将任务分解成独立子部分，并把每部�
 
 System step 由 TAKT engine 执行，不启动 agent。使用 `kind: system` 或简写 `mode: system`，两者不能同时声明。System step 不能声明 `persona`、`instruction`、`provider`、`structured_output`、`output_contracts` 或 `quality_gates` 等 agent 字段。
 
-`system_inputs` 从 engine context 读取并通过 `as` 绑定名称；支持 `task_context`、`branch_context`、`pr_context`、`issue_context`、`task_queue_context`、`pr_list`、`pr_selection`、`issue_list` 和 `issue_selection`。绑定的值可通过 `when(context.<step>.<binding>...)` 使用，也可在后续 agent instruction 中使用 `{context:step.binding.field}`：
+`system_inputs` 从 engine context 读取数据或执行固定命令，并通过 `as` 绑定名称；支持 `task_context`、`branch_context`、`pr_context`、`issue_context`、`task_queue_context`、`pr_list`、`pr_selection`、`issue_list`、`issue_selection`、`pr_status`、`pr_ci_failure` 和 `command`。执行 `command` 需要授权设置，详见[固定命令 input](#固定命令-input)。绑定的值可通过 `when(context.<step>.<binding>...)` 使用，也可在后续 agent instruction 中使用 `{context:step.binding.field}`：
 
 ```yaml
   - name: route_context
@@ -655,6 +655,57 @@ System step 由 TAKT engine 执行，不启动 agent。使用 `kind: system` 或
       - condition: when(context.route_context.selected_pr.exists == true)
         next: plan_from_existing_pr
 ```
+
+#### 固定命令 input
+
+`type: command`执行workflow中固定的shell命令。以下权限默认禁用。project的显式值优先于global，未指定时使用global值。此权限独立于`workflow_command_gates.custom_scripts`。未授权的workflow在加载时失败。
+
+`workflow_system_commands_trusted_projects`中的登记不影响权限。独立clone使用原project配置。每次运行解析权限并传给root和子workflow，`wait`期间不重新加载。参见[配置指南](configuration.zh-CN.md)。
+
+当 pipeline 或交互模式在当前目录检出 PR 时，会在切换分支前解析权限。交互会话在同一目录中保留该权限，切换到 Issue 后也使用该权限。仅由 PR 添加的 project 设置不会授予权限。
+
+```yaml
+workflow_system_commands:
+  custom_scripts: true
+```
+
+```yaml
+name: approval-command
+steps:
+  - name: check
+    kind: system
+    system_inputs:
+      - type: command
+        as: approval
+        command: node scripts/check-approval.mjs
+        timeout_ms: 1000
+        output: json
+    wait:
+      until: when(context.check.approval.json.ready == true)
+      interval_ms: 1000
+      max_retries: 30
+      on_timeout: ABORT
+    rules:
+      - condition: when(context.approval.json.status == "approved")
+        next: consume
+      - condition: when(true)
+        next: ABORT
+  - name: consume
+    instruction: "审批结果: {context:check.approval.json.status}"
+    rules:
+      - condition: when(true)
+        next: COMPLETE
+```
+
+`timeout_ms` 必填，必须是 1～2147483647 的整数，没有默认值或无限设置。`output: json` 可省略。YAML 不能指定 `cwd`，命令在任务执行目录中运行（worktree 任务使用克隆目录）。Pipeline 与交互模式行为相同。不支持 command effect。
+
+结果包含 `exit_code`（无法取得时为 `null`）、`timed_out`、`stdout` 和 `stderr`。仅当指定 `output: json`、退出码为 0、未超时且解析成功时才包含 `json`。非零退出和超时作为结果交给 rules。stdout 与 stderr 合计超过 65536 字节、启动失败、成功退出时的 JSON 无效都会使 step 失败，不执行 effects 或 rules。
+
+条件求值时还可用 `context.approval...` 引用当前 command binding；同名的现有 step scope 优先。持久化的 context 和后续 instruction 使用完整的 `context.check.approval...` scope。
+
+TAKT 不展开 command 占位符，也不追加参数。`TAKT_PREVIOUS_RESPONSE_FILE` 提供上一响应正文的私有文件路径，没有正文时文件为空。仅当同一响应有结构化输出时才设置 `TAKT_PREVIOUS_STRUCTURED_OUTPUT_FILE`。脚本负责读取文件并验证内容。文件保留在 run context 中作为运行产物。环境变量仅包含 command gate 的基本允许列表及这两个文件路径。
+
+不应用无通信超时。执行超时或中断时发送 SIGTERM，100ms 后仍未退出则发送 SIGKILL。`wait` 每次检查重新执行命令，每次都有独立的 `timeout_ms`，并读取同一个上一响应。后续 system step 读取前一个 system 的响应。不会保留之前尝试的 JSON。沿用现有的 `wait.max_retries`、`on_timeout`、step 计数、`loop_monitors` 和 agent session 继续规则。
 
 `effects` 执行 engine-side action：`commit_and_push`, `caccia`, `enqueue_task`、`comment_pr`、`sync_with_root`、`resolve_conflicts_with_ai`、`merge_pr` 和 `close_pr`。每种 effect 在一个 step 中最多一次，结果通过 `when(effect.<step>.<type>.<field>)` 路由。
 

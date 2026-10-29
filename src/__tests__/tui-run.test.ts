@@ -1038,7 +1038,7 @@ describe('runTui', () => {
     }
   });
 
-  it('should retain the replaced Source Context when a setting handoff rebuilds the conversation', async () => {
+  it.each([true, false])('should retain the replaced Source Context and permission %s when a setting handoff rebuilds the conversation', async (customScripts) => {
     installIssueProvider();
     mockDetermineWorkflow.mockResolvedValueOnce('default').mockResolvedValueOnce('review');
     const initial = createConversationDouble();
@@ -1046,7 +1046,8 @@ describe('runTui', () => {
       .mockReturnValueOnce(initial)
       .mockReturnValueOnce(createConversationDouble());
     const tree = scriptRender();
-    const run = startRun();
+    const policy = { customScripts };
+    const run = startRun({ getWorkflowSystemCommandsPolicy: () => policy });
     await waitForMount(tree, 1);
 
     tree.conversationProps().onExit(
@@ -1059,6 +1060,7 @@ describe('runTui', () => {
       { history: [], queue: [] },
     );
     await waitForMount(tree, 3);
+    expect(mockDetermineWorkflow).toHaveBeenLastCalledWith('/repo', undefined, policy);
     await tree.conversationProps().conversation.submit({
       text: 'continue after the workflow change',
       abortSignal: new AbortController().signal,
@@ -1068,6 +1070,7 @@ describe('runTui', () => {
     expect(mockCreateTuiConversation.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
       sourceContext: expect.stringContaining('## Issue #456: Issue 456'),
     }));
+    expect(mockGetWorkflowDescription).toHaveBeenLastCalledWith('review', '/repo', undefined, '/repo', undefined, undefined, policy);
 
     tree.conversationProps().onExit(
       { kind: 'result', result: { action: 'cancel', task: '' } },
@@ -1279,6 +1282,22 @@ describe('runTui', () => {
       text: 'continue with the task',
       abortSignal: new AbortController().signal,
       onAssistantChunk: vi.fn(),
+    });
+
+    it('uses the retained command permission when changing workflows after a PR execution', async () => {
+      let policy: { customScripts: boolean } | undefined;
+      const tree = scriptRender();
+      const run = startRun({ getWorkflowSystemCommandsPolicy: () => policy });
+      await waitForMount(tree, 1);
+      policy = { customScripts: false };
+      mockDetermineWorkflow.mockResolvedValueOnce('review');
+      tree.conversationProps().onExit({ kind: 'handoff', id: 'workflow' }, { history: [], queue: [] });
+      await waitForMount(tree, 2);
+      expect(mockDetermineWorkflow).toHaveBeenLastCalledWith('/repo', undefined, policy);
+      await tree.conversationProps().conversation.submit(submitInput());
+      expect(mockGetWorkflowDescription).toHaveBeenLastCalledWith('review', '/repo', undefined, '/repo', undefined, undefined, policy);
+      tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
+      await run;
     });
 
     describe.each(['workflow', 'mode', 'provider'] as const)('/%s selector cancellation', (id) => {

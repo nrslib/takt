@@ -8,6 +8,7 @@ import type {
   AutoRoutingStrategy,
   PersonaProviderEntry,
   ProviderRoutingConfig,
+  WorkflowSystemCommandsConfig,
 } from '../../../core/models/config-types.js';
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
 import type { StepProviderOptions } from '../../../core/models/workflow-types.js';
@@ -224,6 +225,8 @@ export interface InteractiveMetadata {
 
 /** Options for workflow execution */
 export interface WorkflowExecutionOptions extends PrMergeOptions {
+  /** System command permission resolved for this run, including the configuration source. */
+  workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig;
   /** Header prefix for display */
   headerPrefix?: string;
   /** Controls terminal-oriented output side effects. */
@@ -348,6 +351,8 @@ export interface TaskExecutionParallelOptions {
 }
 
 export interface ExecuteTaskOptions extends PrMergeOptions {
+  /** System command permission resolved before changing the project checkout. */
+  workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig;
   /** Goal ownership enables the terminal details used by the manager. */
   goalId?: string;
   /** Task content */
@@ -464,6 +469,7 @@ export interface WorktreeConfirmationResult {
 
 export interface SelectAndExecuteOptions {
   workflow?: string;
+  workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig;
   /** Enable interactive user input during step transitions */
   interactiveUserInput?: boolean;
   /** Interactive mode result metadata for NDJSON logging */
