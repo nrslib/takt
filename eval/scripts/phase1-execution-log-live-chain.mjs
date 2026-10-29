@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runAgent } from '../../dist/agents/runner.js';
-import { Phase1ExecutionLog } from '../../dist/core/workflow/phase1-execution-log.js';
-import { ReportInstructionBuilder } from '../../dist/core/workflow/instruction/ReportInstructionBuilder.js';
+import { Phase1ExecutionLog, savePhase1ExecutionLog } from '../../dist/core/workflow/phase1-execution-log.js';
+import { generateReportPhase } from '../../dist/core/workflow/phase-runner.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const artifactPath = join(root, 'eval/results/phase1-execution-log-handoff/live-helper-chain-20261028.json');
@@ -48,16 +48,27 @@ try {
     name: 'review', persona: 'coding-reviewer', personaDisplayName: 'Coding Reviewer',
     instruction: task, outputContracts: [{ name: 'review.md', format }],
   };
-  const phase2Prompt = new ReportInstructionBuilder(step, {
-    cwd, task, reportDir: join(cwd, '.takt/reports'), stepIteration: 1,
-    language: 'ja', targetFile: 'review.md', lastResponse: phase1.content,
-    phase1ExecutionLog: log.toReportInput(),
-  }).build();
-  let resolvedPhase2Prompt;
-  const phase2 = await runAgent('レポート担当。今回の記録だけに基づいて回答してください。', phase2Prompt, {
-    ...common, executionPhase: 2, allowedTools: [],
-    onPromptResolved: (prompt) => { resolvedPhase2Prompt = prompt; },
+  const reportDir = join(cwd, '.takt/reports');
+  const phase1ExecutionLog = await savePhase1ExecutionLog(log, join(cwd, '.takt/logs'), step.name, 1);
+  const resolvedPhase2Prompts = [];
+  const buildPhase2Options = (sessionId, maxTurns) => ({
+    ...common, executionPhase: 2, allowedTools: [], sessionId, maxTurns,
+    onPromptResolved: (prompt) => { resolvedPhase2Prompts.push(prompt); },
   });
+  const reportResult = await generateReportPhase(step, 1, {
+    workflowName: 'phase1-execution-log-eval', cwd, reportDir, task, language: 'ja',
+    lastResponse: phase1.content, lastStructuredOutput: phase1.structuredOutput, phase1ExecutionLog,
+    getSessionId: () => phase1.sessionId, resolveSessionKey: () => 'review',
+    buildResumeOptions: (_step, sessionId, overrides) => buildPhase2Options(sessionId, overrides.maxTurns),
+    buildNewSessionReportOptions: (_step, overrides) => buildPhase2Options(undefined, overrides.maxTurns),
+    buildFallbackReportOptions: () => undefined,
+    resolveReportFallbackProviderModel: () => undefined,
+    resolveStepProviderModel: () => ({ provider: 'codex', model }),
+    updatePersonaSession: () => {},
+  });
+  if (!('reports' in reportResult)) throw new Error('Phase 2 did not produce a report');
+  const report = reportResult.reports[0];
+  const phase2 = report.response;
   if (phase2.status !== 'done') throw new Error(`Phase 2 failed: ${phase2.error ?? phase2.content}`);
 
   const artifact = {
@@ -70,8 +81,9 @@ try {
       executionLog: JSON.parse(log.toReportInput()),
     },
     phase2: {
-      prompt: resolvedPhase2Prompt ?? { userInstruction: phase2Prompt },
-      status: phase2.status, content: phase2.content,
+      prompts: resolvedPhase2Prompts,
+      executionLogReference: phase1ExecutionLog,
+      status: phase2.status, content: report.reportContent,
     },
   };
   mkdirSync(dirname(artifactPath), { recursive: true });

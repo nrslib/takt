@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync, existsSync, realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join, resolve, isAbsolute, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -83,10 +83,31 @@ function resolveCursorConfigDir(): string {
   return join(process.env['HOME']!, '.cursor');
 }
 
+/**
+ * Mirrors the Devin CLI's own config-dir resolution: %APPDATA%\devin on
+ * Windows, $XDG_CONFIG_HOME/devin elsewhere (default ~/.config/devin). TAKT
+ * hands `devin acp` a generated `--config` that replaces the user config
+ * entirely, and the generated file is seeded from the user's real config —
+ * so the seed source must keep pointing at the ORIGINAL location after
+ * createBaseEnvironment's XDG_CONFIG_HOME override lands in process.env.
+ */
+function resolveDevinConfigDir(): string {
+  if (process.env['TAKT_DEVIN_CONFIG_DIR']) {
+    return process.env['TAKT_DEVIN_CONFIG_DIR'];
+  }
+  if (process.platform === 'win32') {
+    const appData = process.env['APPDATA'] ?? join(homedir(), 'AppData', 'Roaming');
+    return join(appData, 'devin');
+  }
+  const configHome = process.env['XDG_CONFIG_HOME'] ?? join(process.env['HOME']!, '.config');
+  return join(configHome, 'devin');
+}
+
 function createBaseEnvironment(runtimeRoot: string, runtimeTmp: string): Record<string, string> {
   const ghConfigDir = preserveToolConfigDir('GH_CONFIG_DIR', 'gh');
   const glabConfigDir = resolveGlabConfigDir();
   const cursorConfigDir = resolveCursorConfigDir();
+  const devinConfigDir = resolveDevinConfigDir();
   const env: Record<string, string> = {
     TMPDIR: runtimeTmp,
     TAKT_RUNTIME_TMP: runtimeTmp,
@@ -97,6 +118,7 @@ function createBaseEnvironment(runtimeRoot: string, runtimeTmp: string): Record<
     GH_CONFIG_DIR: ghConfigDir,
     GLAB_CONFIG_DIR: glabConfigDir,
     CURSOR_CONFIG_DIR: cursorConfigDir,
+    TAKT_DEVIN_CONFIG_DIR: devinConfigDir,
   };
   if (process.platform === 'win32') {
     env.TEMP = runtimeTmp;

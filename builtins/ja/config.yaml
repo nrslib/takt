@@ -7,7 +7,7 @@
 language: ja         # 表示言語: ja | en
 
 # デフォルトプロバイダー・モデル
-# provider: claude-sdk                    # デフォルトプロバイダー: claude-sdk | claude (alias) | claude-headless | claude-terminal | codex | opencode | deepseek-harness | pi | cursor | copilot | kiro | mock
+# provider: claude-sdk                    # デフォルトプロバイダー: claude-sdk | claude (alias) | claude-headless | claude-terminal | codex | opencode | deepseek-harness | pi | cursor | copilot | kiro | devin | mock
 # model: sonnet                       # デフォルトモデル（プロバイダーにそのまま渡される）
 
 # 実行制御
@@ -174,6 +174,7 @@ language: ja         # 表示言語: ja | en
 # cursor_cli_path: "/absolute/path/to/cursor"  # cursor-agent CLI絶対パス
 # copilot_cli_path: "/absolute/path/to/copilot" # Copilot CLI絶対パス
 # kiro_cli_path: "/absolute/path/to/kiro-cli"   # Kiro CLI絶対パス
+# devin_cli_path: "/absolute/path/to/devin"     # Devin CLI絶対パス
 # copilot_github_token: "ghp_..."              # Copilot GitHubトークン
 
 # その他

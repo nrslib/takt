@@ -125,6 +125,7 @@ TAKT 需要 Node.js `>=22.22.0` 和 Git `>=2.38`（目标完成判定使用 `git
 - `copilot` — [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli)
 - `cursor` — [Cursor Agent](https://docs.cursor.com/)
 - `kiro` — [Kiro CLI](https://kiro.dev/docs/cli/headless/)
+- `devin` — [Devin CLI](https://devin.ai/)
 
 可选工具：
 
@@ -367,7 +368,7 @@ exec 输入支持图片附件。使用 `/paste-image` 或 macOS 上的 `Ctrl+V` 
 最小的 `~/.takt/config.yaml`：
 
 ```yaml
-provider: claude-sdk              # claude-sdk, claude (alias), claude-headless, claude-terminal, codex, opencode, deepseek-harness, cursor, copilot, kiro, pi, or mock
+provider: claude-sdk              # claude-sdk, claude (alias), claude-headless, claude-terminal, codex, opencode, deepseek-harness, cursor, copilot, kiro, devin, pi, or mock
 model: sonnet                 # 直接传给 provider
 language: en                  # en 或 ja；当前 UI 不提供 zh-CN
 ```

@@ -265,8 +265,8 @@
     "@openai/codex-sdk": "0.164.0",
     "@opencode-ai/sdk": "1.18.28",
     "@opencode/client": "2.0.18",
-    "@earendil-works/pi-ai": "1.1.0",
-    "@earendil-works/pi-coding-agent": "1.1.0",
+    "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/pi-coding-agent": "1.4.0",
     "marked": "18.0.11"
   },
   "bundleDependencies": [
@@ -277,12 +277,11 @@
     "wrap-ansi"
   ],
   "overrides": {
-    "@earendil-works/chord": "1.1.0",
-    "@earendil-works/pi-agent-core": "1.1.0",
-    "@earendil-works/pi-codemode": "1.1.0",
-    "@earendil-works/pi-mcp": "1.1.0",
-    "@earendil-works/pi-telemetry": "1.1.0",
-    "@earendil-works/pi-tui": "1.1.0",
+    "@earendil-works/pi-agent-core": "1.4.0",
+    "@earendil-works/pi-codemode": "1.4.0",
+    "@earendil-works/pi-mcp": "1.4.0",
+    "@earendil-works/pi-telemetry": "1.4.0",
+    "@earendil-works/pi-tui": "1.4.0",
     "fflate": "0.8.3",
     "hono": "^4.12.25",
     "vite": "6.4.3",

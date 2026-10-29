@@ -1138,7 +1138,13 @@ export class ParallelRunner {
                 lastStructuredOutput: subResponse.structuredOutput,
                 injectedReports: subInstruction.injectedReports,
                 reportInputs: reportInputTracker.snapshot(),
-                phase1ExecutionLog: phase1ExecutionLog?.toReportInput(),
+                phase1ExecutionLog: phase1ExecutionLog === undefined
+                  ? undefined
+                  : await this.deps.stepExecutor.savePhase1ExecutionLog(
+                    phase1ExecutionLog,
+                    subStep.name,
+                    subIteration,
+                  ),
               }, (reportName) => {
                 writtenReportNames.push(reportName);
                 this.deps.stepExecutor.recordReportGeneration(phaseCtx.reportDir, reportName, true);

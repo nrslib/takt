@@ -601,6 +601,7 @@ const PROVIDER_OPTIONS_RAW_KEY: Partial<Record<ProviderType, string>> = {
   kiro: 'kiro',
   pi: 'pi',
   'deepseek-harness': 'deepseek_harness',
+  devin: 'devin',
 };
 
 /** Merge capabilities with validated profile options, trusting non-loopback URLs only in global profiles. */
