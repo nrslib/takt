@@ -406,26 +406,28 @@ const managedTargets = [
 ] as const;
 
 const PI_TEST_INSTALL_TIMEOUT_MS = 120_000;
-// Leave another minute after each bounded Pi install for checks and cleanup.
-const PI_TEST_ONE_INSTALL_TIMEOUT_MS = PI_TEST_INSTALL_TIMEOUT_MS + 60_000;
-const PI_TEST_TWO_INSTALL_TIMEOUT_MS = PI_TEST_INSTALL_TIMEOUT_MS * 2 + 60_000;
+const PI_TEST_VERIFICATION_TIMEOUT_MS = 60_000;
+const PI_TEST_ONE_INSTALL_TIMEOUT_MS = PI_TEST_INSTALL_TIMEOUT_MS + PI_TEST_VERIFICATION_TIMEOUT_MS;
 
 function registerManagedTargetTestCases(
   name: string,
-  piInstallCount: 1 | 2,
+  piInstallCount: 1 | 2 | 3,
   run: (target: (typeof managedTargets)[number]) => Promise<void>,
 ): void {
   for (const target of managedTargets) {
     const options = target.provider === 'pi'
-      ? { timeout: piInstallCount === 1 ? PI_TEST_ONE_INSTALL_TIMEOUT_MS : PI_TEST_TWO_INSTALL_TIMEOUT_MS }
+      ? { timeout: PI_TEST_INSTALL_TIMEOUT_MS * piInstallCount + PI_TEST_VERIFICATION_TIMEOUT_MS }
       : {};
     it(name.replace('$provider', target.provider), options, () => run(target));
   }
 }
 
+function managedInstallCliTimeoutMs(provider: (typeof managedTargets)[number]['provider']): number {
+  return provider === 'pi' ? PI_TEST_INSTALL_TIMEOUT_MS : 15_000;
+}
+
 async function runSuccessfulManagedInstall(provider: (typeof managedTargets)[number]['provider'], platform?: 'win32') {
-  const timeoutMs = provider === 'pi' ? PI_TEST_INSTALL_TIMEOUT_MS : 15_000;
-  return runManagedCli(['install', provider], platform, timeoutMs);
+  return runManagedCli(['install', provider], platform, managedInstallCliTimeoutMs(provider));
 }
 
 function installedGeneration(packageName: string): string {
@@ -820,13 +822,14 @@ export default function extension(pi) {
     await expect(loadManagedSdk(provider)).rejects.toThrow(`takt install ${provider}`);
   });
 
-  registerManagedTargetTestCases('keeps the installed $provider generation when a forced replacement fails', 2, async ({ provider, packageName }) => {
+  registerManagedTargetTestCases('keeps the installed $provider generation when a forced replacement fails', 3, async ({ provider, packageName }) => {
     const first = await runSuccessfulManagedInstall(provider);
     expect(first.code, first.output).toBe(0);
     const directory = await installedGeneration(packageName);
     const originalManifest = await readFile(join(directory, 'package.json'));
     vi.stubEnv('TAKT_TEST_NPM_FAIL', '1');
-    const failed = await runManagedCli(['install', provider, '--force']);
+    const failed = await runManagedCli(['install', provider, '--force'], undefined, managedInstallCliTimeoutMs(provider));
+    expect(failed.code, failed.output).not.toBeNull();
     expect(failed.code, failed.output).not.toBe(0);
     expect(await installedGeneration(packageName)).toBe(directory);
     expect(await readFile(join(directory, 'package.json'))).toEqual(originalManifest);
@@ -836,13 +839,14 @@ export default function extension(pi) {
     expect(await installedGeneration(packageName)).toBe(directory);
   });
 
-  registerManagedTargetTestCases('keeps the installed $provider generation when npm succeeds without its SDK', 2, async ({ provider, packageName }) => {
+  registerManagedTargetTestCases('keeps the installed $provider generation when npm succeeds without its SDK', 3, async ({ provider, packageName }) => {
     const first = await runSuccessfulManagedInstall(provider);
     expect(first.code, first.output).toBe(0);
     const directory = installedGeneration(packageName);
     const manifest = await readFile(join(directory, 'package.json'));
     vi.stubEnv('TAKT_TEST_MISSING_PACKAGE', packageName);
-    const rejected = await runManagedCli(['install', provider, '--force']);
+    const rejected = await runManagedCli(['install', provider, '--force'], undefined, managedInstallCliTimeoutMs(provider));
+    expect(rejected.code, rejected.output).not.toBeNull();
     expect(rejected.code, rejected.output).not.toBe(0);
     expect(installedGeneration(packageName)).toBe(directory);
     expect(await readFile(join(directory, 'package.json'))).toEqual(manifest);
