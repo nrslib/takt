@@ -1804,7 +1804,7 @@ steps:
     await installDeepSeekHarness({ npmPath: fakeNpmPath });
     const first = await getReadyDeepSeekHarnessPackageDirectory();
     expect((await loadManagedDeepSeekHarnessModules()).directory).toBe(first);
-    expect((await readFile(join(first, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), 'utf8'))).toContain('0.2.1-alpha.2');
+    expect((await readFile(join(first, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), 'utf8'))).toContain('0.2.1-rc.3');
 
     vi.stubEnv('TAKT_TEST_NPM_FAIL', '1');
     await installDeepSeekHarness({ npmPath: fakeNpmPath });
@@ -1814,20 +1814,10 @@ steps:
   it('replaces a ready generation through the CLI --force option', async () => {
     await installDeepSeekHarness({ npmPath: fakeNpmPath });
     const previous = await getReadyDeepSeekHarnessPackageDirectory();
-    const npmExecutable = join(temporaryRoot, 'npm');
-    await writeFile(npmExecutable, '#!/bin/sh\nexec node "$TAKT_TEST_FAKE_NPM_SCRIPT" "$@"\n');
-    await chmod(npmExecutable, 0o755);
-    const child = spawn(process.execPath, ['--import', 'tsx', cliSource, 'install', 'deepseek-harness', '--force'], {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        PATH: `${temporaryRoot}${delimiter}${process.env.PATH ?? ''}`,
-        TAKT_TEST_FAKE_NPM_SCRIPT: fakeNpmPath,
-      },
-      stdio: 'ignore',
-    });
-    const [code] = await once(child, 'close') as [number | null, NodeJS.Signals | null];
-    expect(code).toBe(0);
+    // Use the isolated npm resolver as the other CLI fixtures do. A PATH-only
+    // shim loses to Node's bundled npm and would run a real dependency install.
+    const result = await runManagedCli(['install', 'deepseek-harness', '--force']);
+    expect(result.code, result.output).toBe(0);
     expect(await getReadyDeepSeekHarnessPackageDirectory()).not.toBe(previous);
   });
 
@@ -1868,6 +1858,30 @@ steps:
     expect(await getReadyDeepSeekHarnessPackageDirectory()).toBe(previous);
     expect((await readdir(getDeepSeekHarnessManagedPackagePaths().root))
       .filter((name) => name.startsWith('.sdk-stage-') || name.startsWith('.sdk-link-'))).toEqual([]);
+  });
+
+  it('rejects a managed DSH direct pin outside RC2 before invoking npm', async () => {
+    const manifestPath = join(temporaryRoot, 'stale-dsh-package.json');
+    const lockPath = join(temporaryRoot, 'stale-dsh-package-lock.json');
+    const manifest = JSON.parse(await readFile(manifestSource, 'utf8')) as {
+      dependencies: Record<string, string>;
+    };
+    const lock = JSON.parse(await readFile(lockSource, 'utf8')) as {
+      packages: Record<string, { version?: string; dependencies?: Record<string, string> }>;
+    };
+    manifest.dependencies['@deepseek-ai/dsh-sandbox'] = '0.2.1-alpha.2';
+    lock.packages['']!.dependencies!['@deepseek-ai/dsh-sandbox'] = '0.2.1-alpha.2';
+    lock.packages['node_modules/@deepseek-ai/dsh-sandbox']!.version = '0.2.1-alpha.2';
+    await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
+    await writeFile(lockPath, `${JSON.stringify(lock)}\n`);
+    const npmLog = join(temporaryRoot, 'npm-calls.jsonl');
+    vi.stubEnv('TAKT_TEST_NPM_LOG', npmLog);
+
+    await expect(installDeepSeekHarness({
+      npmPath: fakeNpmPath,
+      assetPaths: { manifestPath, lockPath },
+    })).rejects.toThrow('DeepSeek Harness managed npm assets are inconsistent');
+    await expect(readFile(npmLog)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('replaces a damaged install with a validated one', async () => {

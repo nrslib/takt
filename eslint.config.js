@@ -13,6 +13,8 @@ export default tseslint.config(
             'eval/asserts/*.mjs',
             'eval/scripts/*.mjs',
             'scripts/test-classification.mjs',
+            'scripts/verify-deepseek-sdk-lock.mjs',
+            'scripts/verify-deepseek-sdk-lock.d.mts',
             'scripts/pi-provider-live-smoke.mjs',
             'src/infra/deepseek-harness/*.mjs',
             'scripts/test-classification.mjs',

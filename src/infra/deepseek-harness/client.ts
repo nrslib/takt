@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { withUpdateAdvice } from '../managed-providers/messages.js';
 import { realpathSync, unwatchFile, watchFile } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -1005,7 +1005,10 @@ class DeepSeekHarnessProcess {
   private closed = false;
   private runtimeStartAttempted = false;
   private resourceDisposal: Promise<void> | undefined;
-  private cleanupReconciliation: Promise<boolean> | undefined;
+  private cleanupReconciliation: {
+    allowMissingOwnerAfterSdkClose: boolean;
+    promise: Promise<boolean | undefined | null>;
+  } | undefined;
   private cleanupReceiptListener: (() => void) | undefined;
   activeTurns = 1;
   lastUsed = ++runtimeUseSequence;
@@ -1174,9 +1177,6 @@ class DeepSeekHarnessProcess {
     let cleanupBarrierPersisted = false;
     cleanupConfirmed = await this.waitForRuntimeExitConfirmation(sdkCloseSucceeded);
     if (cleanupConfirmed) {
-      await this.disposeResources();
-      this.closed = true;
-      this.releasePendingCleanupOwnership();
       return;
     }
 
@@ -1194,23 +1194,37 @@ class DeepSeekHarnessProcess {
 
   /** Reconcile the durable owner and dispose resources only after process-group exit is proven. */
   async disposeAfterConfirmedExit(allowMissingOwnerAfterSdkClose = false): Promise<boolean> {
+    return (await this.reconcileRuntimeExit(allowMissingOwnerAfterSdkClose)) === true;
+  }
+
+  /** Share receipt consumption and disposal with close so neither can recreate a resolved barrier. */
+  private async reconcileRuntimeExit(allowMissingOwnerAfterSdkClose: boolean): Promise<boolean | undefined | null> {
     if (this.closed) {
       this.releasePendingCleanupOwnership();
       return true;
     }
-    if (this.cleanupReconciliation !== undefined) return this.cleanupReconciliation;
-    const reconciliation = (async (): Promise<boolean> => {
-      if (!(await this.confirmRuntimeExit(allowMissingOwnerAfterSdkClose))) return false;
+    const pending = this.cleanupReconciliation;
+    if (pending !== undefined) {
+      const confirmation = await pending.promise;
+      if (pending.allowMissingOwnerAfterSdkClose === allowMissingOwnerAfterSdkClose || this.closed) {
+        return confirmation;
+      }
+      // Different policies still serialize receipt consumption, then confirm under their own policy.
+      return this.reconcileRuntimeExit(allowMissingOwnerAfterSdkClose);
+    }
+    const reconciliation = (async (): Promise<boolean | undefined | null> => {
+      const confirmation = await this.confirmRuntimeExit(allowMissingOwnerAfterSdkClose);
+      if (confirmation !== true) return confirmation;
       await this.disposeResources();
       this.closed = true;
       this.releasePendingCleanupOwnership();
       return true;
     })();
-    this.cleanupReconciliation = reconciliation;
+    this.cleanupReconciliation = { allowMissingOwnerAfterSdkClose, promise: reconciliation };
     try {
       return await reconciliation;
     } finally {
-      if (this.cleanupReconciliation === reconciliation) this.cleanupReconciliation = undefined;
+      if (this.cleanupReconciliation?.promise === reconciliation) this.cleanupReconciliation = undefined;
     }
   }
 
@@ -1220,8 +1234,13 @@ class DeepSeekHarnessProcess {
     while (true) {
       let cleanupAcknowledged: boolean | undefined | null;
       try {
-        cleanupAcknowledged = await this.confirmRuntimeExit(allowMissingOwnerAfterSdkClose);
-      } catch {
+        cleanupAcknowledged = await this.reconcileRuntimeExit(allowMissingOwnerAfterSdkClose);
+      } catch (error) {
+        // Exit confirmation failure is quarantinable; resource disposal failure must withhold completion.
+        if (error instanceof DeepSeekHarnessTransportError
+          && (error.sdkCode === 'credential-patch-cleanup-failed' || error.sdkCode === 'plugin-cleanup-failed')) {
+          throw error;
+        }
         return false;
       }
       if (cleanupAcknowledged === true) return true;
@@ -1437,12 +1456,24 @@ async function getOrCreateProcess(
   assertSupportedDeepSeekHarnessPlatform();
   const providerOptions = options.providerOptions;
   const configuration = resolveDeepSeekConfiguration(options, providerOptions);
-  const binding = await resolveDeepSeekCredentialBinding({
+  const sourceBinding = await resolveDeepSeekCredentialBinding({
     childProcessEnv: options.childProcessEnv,
     ambientEnv: getAmbientEnvironment(),
     userHome: os.homedir(),
     providerOptions,
   });
+  const explicitCredential = options.childProcessEnv?.[sourceBinding.ref];
+  const preferLaunchEnvironmentCredential = (explicitCredential?.length ?? 0) > 0;
+  // The same selected value can come from ambient env or an explicit per-call
+  // override. rc.2 gives those modes different store precedence, so they must
+  // never share a live session even when the source binding is otherwise equal.
+  const binding: DeepSeekCredentialBinding = {
+    ...sourceBinding,
+    fingerprint: createHash('sha256').update(JSON.stringify({
+      sourceFingerprint: sourceBinding.fingerprint,
+      preferLaunchEnvironmentCredential,
+    })).digest('hex'),
+  };
   credentialFailureContext.sourceHomeOrigin = binding.home.origin;
   credentialFailureContext.reference = binding.ref;
   const runtimePaths = getDeepSeekRuntimePaths();
@@ -1489,10 +1520,19 @@ async function getOrCreateProcess(
   let credentialPatch: DeepSeekCredentialPatch | undefined;
   let processRecord: DeepSeekHarnessProcess | undefined;
   try {
+    // The SDK's local provider resolves stored references before ambient environment.
+    // A per-runtime reference selects the explicit value without copying or changing the store.
+    const runtimeCredentialReference = preferLaunchEnvironmentCredential
+      ? `TAKT_DSH_EXPLICIT_${randomBytes(16).toString('hex').toUpperCase()}`
+      : binding.ref;
+    if (preferLaunchEnvironmentCredential && explicitCredential !== undefined) {
+      environment.env[runtimeCredentialReference] = explicitCredential;
+    }
     credentialPatch = await createDeepSeekCredentialPatch(
       binding,
       configuration.systemPrompt,
       pluginResolution.plugins,
+      preferLaunchEnvironmentCredential ? { runtimeCredentialReference } : {},
     );
     processRecord = new DeepSeekHarnessProcess(
       configuration,
@@ -1843,10 +1883,13 @@ export async function callDeepSeekHarness(
         await pruneIdleProcesses(currentProcess);
         return createSuccessResponse(agentType, result, state, turnOptions, currentProcess.knownSecrets);
       } catch (error) {
+        const isTimeout = error instanceof DeepSeekHarnessTimeoutError
+          || (error instanceof Error && error.name === 'TimeoutError');
         try {
           await currentProcess.close();
         } catch (cleanupError) {
           removeProcess(currentProcess);
+          if (isTimeout) throw error;
           throw cleanupError;
         }
         removeProcess(currentProcess);
@@ -1868,7 +1911,9 @@ export async function callDeepSeekHarness(
       try {
         await processRecord.close();
       } catch (cleanupError) {
-        reportedError = cleanupError;
+        const isTimeout = error instanceof DeepSeekHarnessTimeoutError
+          || (error instanceof Error && error.name === 'TimeoutError');
+        if (!isTimeout) reportedError = cleanupError;
       }
       removeProcess(processRecord);
     }

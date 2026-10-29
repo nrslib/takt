@@ -422,3 +422,49 @@ describe('shipped development completion and remediation routes', () => {
     }
   });
 });
+
+describe('final gate summary output', () => {
+  it.each(['ja', 'en'] as const)('%s: peer review produces a summary and preserves the resolution report', (language) => {
+    const peer = load(language, 'peer-review').steps.find(step => step.name === 'final-gate');
+    const summaryFormat = readFileSync(resolve(repoRoot, 'builtins', language, 'facets/output-contracts/supervisor-summary.md'), 'utf8').trim();
+    expect(peer?.outputContracts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'review-resolution.md' }),
+      expect.objectContaining({ name: 'summary.md' }),
+    ]));
+    expect(peer?.outputContracts?.find(contract => contract.name === 'summary.md')?.format.trim()).toBe(summaryFormat);
+  });
+
+  it.each(['ja', 'en'] as const)('%s: common final gate preserves both reports', (language) => {
+    const common = load(language, 'final-gate').steps.find(step => step.name === 'supervise');
+    const summaryFormat = readFileSync(resolve(repoRoot, 'builtins', language, 'facets/output-contracts/supervisor-summary.md'), 'utf8').trim();
+    expect(common?.outputContracts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'supervisor-validation.md' }),
+      expect.objectContaining({ name: 'summary.md' }),
+    ]));
+    expect(common?.outputContracts?.find(contract => contract.name === 'summary.md')?.format.trim()).toBe(summaryFormat);
+  });
+
+  it.each(['ja', 'en'] as const)('%s: final gate verdicts retain their existing destinations', async (language) => {
+    for (const [workflow, stepName, verdicts] of [
+      ['peer-review', 'final-gate', [['APPROVE', 'COMPLETE'], ['REJECT', 'remediation'], ['BLOCKED', 'need_replan']]],
+      ['final-gate', 'supervise', [['APPROVE', 'COMPLETE'], ['REJECT', 'needs_fix'], ['BLOCKED', 'need_replan']]],
+    ] as const) {
+      const config = load(language, workflow);
+      const step = config.steps.find(candidate => candidate.name === stepName);
+      if (!step?.rules) throw new Error(`Missing rules for ${workflow}:${stepName}`);
+      for (const [verdict, destination] of verdicts) {
+        const index = step.rules.findIndex(rule => rule.condition.kind === 'semantic' && rule.condition.label === verdict);
+        expect(index).toBeGreaterThanOrEqual(0);
+        start(config, stepName);
+        const result = await execute(config, stepName, index);
+        if (destination === 'need_replan' || destination === 'needs_fix') {
+          expect(result).toMatchObject({ isComplete: true, returnValue: destination });
+        } else {
+          expect(result.nextStep).toBe(destination);
+        }
+        if (engine) cleanupWorkflowEngine(engine);
+        engine = undefined;
+      }
+    }
+  });
+});

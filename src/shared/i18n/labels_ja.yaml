@@ -95,6 +95,7 @@ interactive:
   continueNoSession: "前回のアシスタントセッションが見つかりません。新しいセッションで開始します。"
   mcpUnavailable: "プロバイダ {provider} ではタスク状態の参照を利用できません。会話は継続します。理由: {error}"
   resumeSessionLoaded: "セッションを読み込みました。以降のAI呼び出しでこのセッションを使用します。"
+  resumeSessionFailed: "会話の再開に失敗しました。新しい会話として続けます。"
   sessionSelector:
     prompt: "直近のセッションを引き継ぎますか？"
     newSession: "新しいセッション"

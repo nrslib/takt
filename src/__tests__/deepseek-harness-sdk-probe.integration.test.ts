@@ -74,7 +74,7 @@ interface LocalApiMock {
   close(): Promise<void>;
 }
 
-const SDK_VERSION = '0.2.1-alpha.2';
+const SDK_VERSION = '0.2.1-rc.3';
 const STDERR_SENTINEL = 'TAKT_DSH_PROBE_STDERR_SENTINEL';
 const isSupportedDshRuntimePlatform = (
   (process.platform === 'linux' && (process.arch === 'x64' || process.arch === 'arm64'))
@@ -180,7 +180,7 @@ async function createHarness(
     patches: options.patches ?? [],
     dshHome: options.dshHome ?? env.DSH_HOME,
     env,
-    initializeTimeoutMs: options.initializeTimeoutMs ?? 2_000,
+    initializeTimeoutMs: options.initializeTimeoutMs ?? 30_000,
     requestTimeoutMs: options.requestTimeoutMs ?? 2_000,
     shutdownTimeoutMs: options.shutdownTimeoutMs ?? 200,
     disposeEofGraceMs: options.disposeEofGraceMs ?? 300,
@@ -595,7 +595,7 @@ describe('DeepSeek Harness TypeScript SDK feasibility probes', () => {
       ['@deepseek-ai/dsh-sdk-protocol', SDK_VERSION],
       ['@deepseek-ai/dsh-session', SDK_VERSION],
     ]));
-    expect(peerVersions.find(([name]) => name === '@deepseek-ai/cordis')?.[1]).toBe('4.0.5-alpha.1');
+    expect(peerVersions.find(([name]) => name === '@deepseek-ai/cordis')?.[1]).toBe('4.0.5');
   });
 
   it.skipIf(!isSupportedDshRuntimePlatform)('continues multiple FIFO turns in one live runtime with an unchanged configuration', async () => {

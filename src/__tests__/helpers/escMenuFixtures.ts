@@ -7,7 +7,6 @@ import type { Provider } from '../../infra/providers/index.js';
 import type { FormalSpecMode } from '../../core/models/config-types.js';
 import type { FirstStepInfo } from '../../infra/config/index.js';
 import type { TellableRunningTask } from '../../features/tasks/liveIntervention.js';
-import type { SessionIndexEntry } from '../../infra/claude/session-reader.js';
 import { attachWorkflowOpaqueRef } from '../../infra/config/loaders/workflowSourceMetadata.js';
 import { createScenarioProvider, type CallScenario } from './stdinSimulator.js';
 
@@ -115,15 +114,6 @@ vi.mock('../../features/interactive/runSessionReader.js', async (importOriginal)
   findRunForTask: () => null,
   listRecentRuns: (...args: unknown[]) => menuMocks.listRecentRuns(...args),
   loadRunSessionContext: (...args: unknown[]) => menuMocks.loadRunSessionContext(...args),
-}));
-
-vi.mock('../../infra/claude/session-reader.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../infra/claude/session-reader.js')>()),
-  loadSessionIndex: (): SessionIndexEntry[] => [{
-    sessionId: 'selected-session', firstPrompt: 'Previous conversation',
-    modified: '2026-10-08T00:00:00Z', messageCount: 2, gitBranch: 'takt/menu-task', isSidechain: false, fullPath: '/fixture/session.jsonl',
-  }],
-  extractLastAssistantResponse: () => null,
 }));
 
 vi.mock('../../features/tasks/liveIntervention.js', async (importOriginal) => ({
