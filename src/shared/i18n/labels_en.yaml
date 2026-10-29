@@ -397,6 +397,7 @@ tui:
     tellRequiresTty: "The additional instruction was not sent: /tell requires an interactive terminal."
     tellNoCandidates: "No running worktree-clone task can receive an additional instruction."
     tellExcluded: "Running tasks excluded from /tell:\n{tasks}"
+    tellExcludedMore: "... and {count} more excluded tasks"
     tellCancelled: "Additional instruction was not sent."
     tellStale: "The additional instruction was not sent: {error}"
     assistantRetryRequiresTty: "The task was not changed: /requeue and /retry require an interactive terminal."

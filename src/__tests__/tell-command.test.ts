@@ -1,7 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createInterface } from 'node:readline';
+import { PassThrough } from 'node:stream';
 import type { TellableRunningTask } from '../features/tasks/liveIntervention.js';
 import { getDisplayWidth } from '../shared/utils/text.js';
 import { makeSessionContext } from './test-helpers.js';
+
+function terminalTextWidth(text: string): number {
+  const input = Object.assign(new PassThrough(), { isTTY: true });
+  const output = Object.assign(new PassThrough(), { isTTY: true, columns: 1000 });
+  const reader = createInterface({ input, output, terminal: true });
+  reader.setPrompt('');
+  reader.write(text);
+  const { rows, cols } = reader.getCursorPos();
+  reader.close();
+  return rows * output.columns + cols;
+}
 
 const {
   mockConfirmWithCancel,
@@ -75,6 +88,7 @@ describe('runTellCommand', () => {
   let savedStdinIsTTY: boolean | undefined;
   let savedStdoutIsTTY: boolean | undefined;
   let savedStdoutColumns: number | undefined;
+  let savedStdoutRows: number | undefined;
   let savedNoTty: string | undefined;
   let savedTouchTty: string | undefined;
 
@@ -82,6 +96,7 @@ describe('runTellCommand', () => {
     savedStdinIsTTY = process.stdin.isTTY;
     savedStdoutIsTTY = process.stdout.isTTY;
     savedStdoutColumns = process.stdout.columns;
+    savedStdoutRows = process.stdout.rows;
     savedNoTty = process.env.TAKT_NO_TTY;
     savedTouchTty = process.env.TAKT_TEST_FLG_TOUCH_TTY;
     Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
@@ -107,6 +122,7 @@ describe('runTellCommand', () => {
     Object.defineProperty(process.stdin, 'isTTY', { value: savedStdinIsTTY, configurable: true });
     Object.defineProperty(process.stdout, 'isTTY', { value: savedStdoutIsTTY, configurable: true });
     Object.defineProperty(process.stdout, 'columns', { value: savedStdoutColumns, configurable: true });
+    Object.defineProperty(process.stdout, 'rows', { value: savedStdoutRows, configurable: true });
     if (savedNoTty === undefined) {
       delete process.env.TAKT_NO_TTY;
     } else {
@@ -609,10 +625,51 @@ describe('runTellCommand', () => {
   });
 
   it.each([
+    { lang: 'en', preferred: false, columns: 80 },
+    { lang: 'en', preferred: true, columns: 30 },
+    { lang: 'ja', preferred: false, columns: 30 },
+    { lang: 'ja', preferred: true, columns: 80 },
+  ] as const)('keeps a failure reason, selection prompt, and excluded count in a $columns-column $lang selector (preferred=$preferred)', async ({
+    lang, preferred, columns,
+  }) => {
+    Object.defineProperty(process.stdout, 'columns', { value: columns, configurable: true });
+    Object.defineProperty(process.stdout, 'rows', { value: 24, configurable: true });
+    const excluded = Array.from({ length: 25 }, (_, index) => `excluded-${index}: not a worktree clone`);
+    mockInspectTellableRunningTasks.mockReturnValue({ tasks: [target, alternateTarget], excluded });
+    mockCallAIWithRetry.mockResolvedValueOnce({ result: null, error: 'target unavailable' })
+      .mockResolvedValueOnce({ result: null, error: 'target unavailable' });
+    const selector = preferred ? mockSelectOptionWithDefault : mockSelectOption;
+    selector.mockResolvedValueOnce(alternateTarget.runSlug);
+
+    await runTellCommand({
+      cwd: '/project', lang, inlineText: 'Apply this to payments.', history: [],
+      sessionContext: makeSessionContext(),
+      ...(preferred ? { preferredRunSlug: alternateTarget.runSlug } : {}),
+    });
+
+    const prompt = String(selector.mock.calls[0]?.[0]);
+    expect(prompt.split('\n')[0]).toContain(columns === 30 ? 'target unavai' : 'target unavailable');
+    expect(prompt.split('\n')[1]).toContain(lang === 'en' ? 'Select the running task' : '実行中タスクを選択');
+    expect(prompt).toContain('excluded-0');
+    expect(prompt).toMatch(lang === 'en' ? /and \d+ more excluded tasks/ : /ほか \d+ 件の実行中タスクを除外/);
+    expect(prompt).not.toContain(excluded[24]);
+    const headerRows = 2 + [...prompt.split('\n'), '  (↑↓ to move, Enter to select)']
+      .reduce((rows, line) => rows + Math.max(1, Math.ceil(terminalTextWidth(line) / columns)), 0);
+    expect(headerRows + 7).toBeLessThanOrEqual(24);
+    expect(selector).toHaveBeenCalledWith(prompt, expect.arrayContaining([
+      expect.objectContaining({ value: target.runSlug }),
+      expect.objectContaining({ value: alternateTarget.runSlug }),
+    ]), ...(preferred ? [alternateTarget.runSlug] : []));
+    expect(mockIssueTellableRunningTask).toHaveBeenCalledWith('/project', alternateTarget.runSlug, 'Generated standalone instruction.');
+  });
+
+  it.each([
     { lang: 'en', preferred: false, source: 'provider', error: `\u001b[31mA\nB\t${'x'.repeat(240)}`, visibleReason: 'A\\nB\\t' },
     { lang: 'en', preferred: true, source: 'provider', error: `\u001b[31mA\nB\t${'x'.repeat(240)}`, visibleReason: 'A\\nB\\t' },
     { lang: 'ja', preferred: false, source: 'exception', error: `\u001b[31m異常\n詳細\t${'長'.repeat(240)}`, visibleReason: '異常\\n詳細\\t' },
     { lang: 'ja', preferred: true, source: 'exception', error: `\u001b[31m異常\n詳細\t${'長'.repeat(240)}`, visibleReason: '異常\\n詳細\\t' },
+    { lang: 'en', preferred: false, source: 'provider', error: '😀'.repeat(100), visibleReason: '😀' },
+    { lang: 'ja', preferred: true, source: 'exception', error: '😀'.repeat(100), visibleReason: '😀' },
   ] as const)('keeps the $lang failure header within terminal width and allows selection (preferred=$preferred)', async ({
     lang, preferred, source, error, visibleReason,
   }) => {

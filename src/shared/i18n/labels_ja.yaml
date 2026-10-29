@@ -397,6 +397,7 @@ tui:
     tellRequiresTty: "追加指示は送信されませんでした: /tell には対話端末 (TTY) が必要です。"
     tellNoCandidates: "追加指示を受け取れる worktree clone の実行中タスクがありません。"
     tellExcluded: "/tell の候補から除外した実行中タスク:\n{tasks}"
+    tellExcludedMore: "ほか {count} 件の実行中タスクを除外"
     tellCancelled: "追加指示は送信しませんでした。"
     tellStale: "追加指示は送信されませんでした: {error}"
     assistantRetryRequiresTty: "タスクは変更していません。/requeue と /retry には対話端末 (TTY) が必要です。"

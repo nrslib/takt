@@ -52,6 +52,10 @@ function headerLineCount(message: string, hint: string, terminalColumns: number)
   );
 }
 
+export function defaultSelectHeaderLineCount(message: string, terminalColumns: number): number {
+  return headerLineCount(message, headerHint(), terminalColumns);
+}
+
 function printHeader(message: string, hint: string): void {
   console.log();
   console.log(chalk.cyan(message));

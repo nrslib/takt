@@ -1,5 +1,7 @@
 import { getLabel } from '../../shared/i18n/index.js';
 import { confirmWithCancel, selectOption, selectOptionWithDefault } from '../../shared/prompt/index.js';
+import { countItemLines } from '../../shared/prompt/select-menu.js';
+import { defaultSelectHeaderLineCount } from '../../shared/prompt/select.js';
 import { resolveTtyPolicy } from '../../shared/prompt/tty.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
 import {
@@ -36,6 +38,41 @@ function safeTellDisplayText(value: string | undefined, fallback: string): strin
 
 function safeTellContentDisplayText(value: string): string {
   return sanitizeTerminalText(value);
+}
+
+function tellSelectionPrompt(
+  reason: string,
+  lang: 'en' | 'ja',
+  excludedEntries: readonly string[],
+  firstCandidate: ReturnType<typeof tellCandidateOption>,
+): string {
+  const columns = process.stdout.columns || 80;
+  const base = [
+    truncateText(getLabel('tui.tell.targetFailed', lang, { reason }), columns),
+    getLabel('tui.tell.selectPrompt', lang),
+  ];
+  if (excludedEntries.length === 0) return base.join('\n');
+
+  const rows = process.stdout.rows || 24;
+  // A scrolled menu can show one candidate with indicators above and below it.
+  const menuRows = countItemLines(firstCandidate, columns) + 2;
+  const maxHeaderRows = rows - menuRows;
+  const visible: string[] = [];
+  const exclusionText = (entries: string[]): string => {
+    const omitted = excludedEntries.length - entries.length;
+    const tasks = omitted === 0 ? entries : [
+      ...entries,
+      getLabel('tui.errors.tellExcludedMore', lang, { count: String(omitted) }),
+    ];
+    return getLabel('tui.errors.tellExcluded', lang, { tasks: tasks.join('\n') });
+  };
+  for (const entry of excludedEntries) {
+    const nextEntry = truncateText(entry, columns - 1);
+    const next = [...visible, nextEntry];
+    if (defaultSelectHeaderLineCount([...base, exclusionText(next)].join('\n'), columns) > maxHeaderRows) break;
+    visible.push(nextEntry);
+  }
+  return [...base, exclusionText(visible)].join('\n');
 }
 
 export function buildTellConversationPrompt(
@@ -258,12 +295,11 @@ export async function runTellCommand(options: TellCommandOptions): Promise<strin
       error: sanitizeTerminalText(getErrorMessage(error)),
     });
   }
+  const excludedEntries = excluded.map((entry) => safeTellDisplayText(entry, '(unnamed task)'));
   const exclusionNotice = excluded.length === 0
     ? undefined
     : getLabel('tui.errors.tellExcluded', options.lang, {
-      tasks: excluded
-        .map((entry) => safeTellDisplayText(entry, '(unnamed task)'))
-        .join('\n'),
+      tasks: excludedEntries.join('\n'),
     });
   if (candidates.length === 0) {
     return [
@@ -292,14 +328,7 @@ export async function runTellCommand(options: TellCommandOptions): Promise<strin
     } else {
       selectionShown = true;
       const candidateOptions = candidates.map(tellCandidateOption);
-      const selectorPrompt = [
-        truncateText(
-          getLabel('tui.tell.targetFailed', options.lang, { reason: resolution.reason }),
-          process.stdout.columns || 80,
-        ),
-        getLabel('tui.tell.selectPrompt', options.lang),
-        ...(exclusionNotice === undefined ? [] : [exclusionNotice]),
-      ].join('\n');
+      const selectorPrompt = tellSelectionPrompt(resolution.reason, options.lang, excludedEntries, candidateOptions[0]!);
       const preferred = options.preferredRunSlug !== undefined
         && candidateOptions.some((candidate) => candidate.value === options.preferredRunSlug);
       try {
