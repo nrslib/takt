@@ -40,6 +40,7 @@ import {
 } from '../core/workflow/workflow-reference.js';
 import { buildWorkflowCallSiteIdentity } from '../core/workflow/workflow-call-site-identity.js';
 import { WorkflowCallInvocationIndex } from '../core/workflow/workflow-call-invocation-index.js';
+import { WorkflowEngine } from '../core/workflow/engine/WorkflowEngine.js';
 import { WorkflowStepParticipationIndex } from '../core/workflow/workflow-step-participation-index.js';
 import { inheritResumeReportSnapshot } from '../core/workflow/run/resume-report-snapshot.js';
 import { readRunMetaBySlug } from '../core/workflow/run/run-meta.js';
@@ -229,11 +230,12 @@ function buildFinalGateResumePoint(projectDir: string) {
   };
 }
 
-function buildResumePoint(projectDir: string, previousChildRef?: string) {
+function buildResumePoint(projectDir: string, previousChildRef?: string, previousParentRef?: string) {
   const { parent, child } = loadResumeWorkflows(projectDir);
+  const savedParent = previousParentRef === undefined ? parent : attachWorkflowOpaqueRef({ ...parent }, previousParentRef);
   const savedChild = previousChildRef === undefined ? child : attachWorkflowOpaqueRef({ ...child }, previousChildRef);
   const delegateEntry = buildWorkflowResumePointEntry(
-    parent,
+    savedParent,
     'delegate',
     'workflow_call',
     1,
@@ -241,7 +243,7 @@ function buildResumePoint(projectDir: string, previousChildRef?: string) {
     1,
   );
   const invocationIndex = new WorkflowCallInvocationIndex(new Map());
-  invocationIndex.record(parent, 'delegate', [], {
+  invocationIndex.record(savedParent, 'delegate', [], {
     call_instance: 1,
     report_namespace_segment: buildWorkflowCallSiteIdentity({ stack: [delegateEntry], childWorkflow: savedChild }).runPathSegment,
   });
@@ -277,6 +279,7 @@ function prepareResumedTask(
   mode: ResumeMode,
   projectDir: string,
   previousChildRef?: string,
+  previousParentRef?: string,
 ): TaskInfo {
   runner.addTask('resume inherited review reports', { workflow: 'parent-fix' });
   const sourceTask = runner.claimNextTasks(1)[0];
@@ -286,7 +289,7 @@ function prepareResumedTask(
   const taskWithSourceRun = runner.updateRunningTaskExecution(sourceTask.name, {
     runSlug: sourceRunSlug,
   });
-  const resumePoint = buildResumePoint(projectDir, previousChildRef);
+  const resumePoint = buildResumePoint(projectDir, previousChildRef, previousParentRef);
 
   if (mode === 'requeue') {
     runner.exceedTask(taskWithSourceRun.name, {
@@ -491,6 +494,125 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
   });
 
   if (mode === 'requeue') {
+    it.each([[false, 'same'], [true, 'same'], [false, 'removed'], [false, 'kind changed']] as const)(
+      'requeues a nested saved position after parent reference changes: %s, child step: %s', async (updated, change) => {
+      environment = createEnvironment();
+      process.env.TAKT_CONFIG_DIR = environment.globalDir;
+      invalidateGlobalConfigCache();
+      const workflowDir = join(environment.projectDir, '.takt', 'workflows');
+      const builtinRoot = join(environment.root, 'builtins');
+      const builtinWorkflows = join(builtinRoot, 'en', 'workflows');
+      mkdirSync(builtinWorkflows, { recursive: true });
+      const parentPath = join(workflowDir, 'parent-fix.yaml');
+      const builtinParent = join(builtinWorkflows, 'parent-fix.yaml');
+      const parentDefinition = readFileSync(parentPath, 'utf8');
+      writeFileSync(builtinParent, parentDefinition);
+      rmSync(parentPath);
+      vi.spyOn(resources, 'getResourcesDir').mockReturnValue(builtinRoot);
+      vi.spyOn(resources, 'getLanguageResourcesDir').mockImplementation((lang) => join(builtinRoot, lang));
+      writeFileSync(join(workflowDir, 'child-fix.yaml'), [
+        'name: child-fix', 'subworkflow:', '  callable: true', 'initial_step: nested', 'max_steps: 4', 'steps:',
+        '  - name: nested', '    kind: workflow_call', '    call: nested-fix',
+        '    rules:', '      - condition: COMPLETE', '        next: COMPLETE',
+      ].join('\n'));
+      const nestedPath = join(workflowDir, 'nested-fix.yaml');
+      const nestedDefinition = [
+        'name: nested-fix', 'subworkflow:', '  callable: true', 'initial_step: fix', 'max_steps: 4', 'steps:',
+        '  - name: fix', '    persona: ./personas/fixer.md', '    instruction: "Read {report:plan.md}"',
+        '    rules:', '      - condition: when(true)', '        next: COMPLETE',
+      ].join('\n');
+      writeFileSync(nestedPath, nestedDefinition);
+      invalidateAllResolvedConfigCache();
+      const oldParent = loadWorkflowByIdentifier('parent-fix', environment.projectDir)!;
+      vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+        options?.onPromptResolved?.({ systemPrompt: typeof persona === 'string' ? persona : '', userInstruction: instruction });
+        return { persona: 'fixer', status: 'blocked', content: 'blocked', timestamp: new Date(), sessionId: 'session' };
+      });
+      const runner = new TaskRunner(environment.projectDir);
+      runner.addTask('nested requeue', { workflow: 'parent-fix' });
+      const source = runner.claimNextTasks(1)[0]!;
+      expect(await executeAndCompleteTask(source, runner, environment.projectDir)).toBe(false);
+      let failed = runner.listAllTaskItems().find((item) => item.name === source.name)!;
+      const sourceSlug = failed.runSlug!;
+      let point = readRunMetaBySlug(environment.projectDir, sourceSlug)?.resumePoint;
+      if (point === undefined) throw new Error('Expected nested source checkpoint');
+      expect(point.stack.map((entry) => entry.step)).toEqual(['delegate', 'nested', 'fix']);
+      const calls = Object.entries(point.workflow_call_invocations).map(([identity, record]) => ({ step: (JSON.parse(identity) as { step: string }).step, record }));
+      const outer = calls.find((call) => call.step === 'delegate')!.record;
+      const inner = calls.find((call) => call.step === 'nested')!.record;
+      const reportDir = join(environment.projectDir, '.takt', 'runs', sourceSlug, 'reports', 'subworkflows', outer.report_namespace_segment, 'subworkflows', inner.report_namespace_segment);
+      mkdirSync(reportDir, { recursive: true });
+      writeFileSync(join(reportDir, 'plan.md'), 'saved nested report');
+      if (updated) writeFileSync(builtinParent, parentDefinition.replace('max_steps: 4', 'max_steps: 5'));
+      if (change === 'removed') {
+        writeFileSync(nestedPath, nestedDefinition.replace('initial_step: fix', 'initial_step: replacement').replace('name: fix\n', 'name: replacement\n'));
+      } else if (change === 'kind changed') {
+        writeFileSync(nestedPath, nestedDefinition.replace('    persona: ./personas/fixer.md\n    instruction: "Read {report:plan.md}"', [
+          '    parallel:', '      - name: worker', '        persona: ./personas/fixer.md',
+          '        instruction: worker', '        rules:', '          - condition: when(true)', '            next: COMPLETE',
+        ].join('\n')));
+      }
+      invalidateAllResolvedConfigCache();
+      expect(getWorkflowReference(loadWorkflowByIdentifier('parent-fix', environment.projectDir)!) !== getWorkflowReference(oldParent)).toBe(updated);
+      const warnings = vi.spyOn(DebugLogger.getInstance(), 'writeLog');
+      const instructions: string[] = [];
+      vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+        options?.onPromptResolved?.({ systemPrompt: typeof persona === 'string' ? persona : '', userInstruction: instruction });
+        instructions.push(instruction);
+        return { persona: 'fixer', status: instructions.length === 1 ? 'blocked' : 'done', content: 'done', timestamp: new Date(), sessionId: 'session' };
+      });
+      if (change !== 'same') {
+        runner.requeueTask(failed.name, ['failed'], { resumePoint: point, sourceRunSlug: failed.runSlug });
+        const task = runner.claimNextTasks(1)[0]!;
+        expect(await executeAndCompleteTask(task, runner, environment.projectDir)).toBe(false);
+        expect(runner.listAllTaskItems().find((item) => item.name === task.name)?.failure?.error).toContain('fix');
+        expect(instructions).toEqual([]);
+        return;
+      }
+      for (const attempt of [0, 1]) {
+        runner.requeueTask(failed.name, ['failed'], { resumePoint: point, sourceRunSlug: failed.runSlug });
+        const task = runner.claimNextTasks(1)[0]!;
+        const success = await executeAndCompleteTask(task, runner, environment.projectDir);
+        failed = runner.listAllTaskItems().find((item) => item.name === task.name)!;
+        expect(success, failed.failure?.error).toBe(attempt === 1);
+        expect(instructions[attempt]).toContain('saved nested report');
+        if (attempt === 0) {
+          point = readRunMetaBySlug(environment.projectDir, failed.runSlug!)?.resumePoint;
+          expect(point?.stack.map((entry) => entry.step)).toEqual(['delegate', 'nested', 'fix']);
+        }
+      }
+      expect(warnings.mock.calls.some(([level, , message]) => level === 'WARN' && /digest|hash|ref/i.test(message))).toBe(updated);
+    });
+
+    it.each([false, true])('resumes the saved child when the parent reference changes: %s', async (updated) => {
+      environment = createEnvironment();
+      process.env.TAKT_CONFIG_DIR = environment.globalDir;
+      invalidateGlobalConfigCache();
+      const previousParentRef = updated ? `builtin:sha256:${'a'.repeat(64)}` : undefined;
+      const point = buildResumePoint(environment.projectDir, undefined, previousParentRef);
+      const savedRecord = Object.values(point.workflow_call_invocations)[0]!;
+      writeSourceRunMeta(environment.projectDir, point);
+      const reportDir = join(environment.projectDir, '.takt', 'runs', sourceRunSlug, 'reports', 'subworkflows', savedRecord.report_namespace_segment);
+      mkdirSync(reportDir, { recursive: true });
+      writeFileSync(join(reportDir, '05-arch-review.md'), 'saved parent report');
+      const instructions: string[] = [];
+      vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+        options?.onPromptResolved?.({ systemPrompt: typeof persona === 'string' ? persona : '', userInstruction: instruction });
+        instructions.push(instruction);
+        return { persona: 'fixer', status: 'done', content: '[FIX:1]\nfix complete', timestamp: new Date(), sessionId: 'fix-session' };
+      });
+      const runner = new TaskRunner(environment.projectDir);
+      const task = prepareResumedTask(runner, 'requeue', environment.projectDir, undefined, previousParentRef);
+      const warnings = vi.spyOn(DebugLogger.getInstance(), 'writeLog');
+
+      const success = await executeAndCompleteTask(task, runner, environment.projectDir);
+
+      expect(success, runner.listAllTaskItems().find((item) => item.name === task.name)?.failure?.error).toBe(true);
+      expect(instructions).toHaveLength(1);
+      expect(instructions[0]).toContain('saved parent report');
+      expect(warnings.mock.calls.some(([level, , message]) => level === 'WARN' && /digest|hash|ref/i.test(message))).toBe(updated);
+    });
+
     it('uses the saved child report after its workflow reference changes', async () => {
       environment = createEnvironment();
       process.env.TAKT_CONFIG_DIR = environment.globalDir;
@@ -533,7 +655,96 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
   }
 
   if (mode === 'retry') {
-    it.each([[false, 'nested'], [true, 'nested'], [true, 'other']] as const)('retries a completed nested call after parent ref update: %s %s', async (updated, selectedCall) => {
+    it.each([[1, 'delegate'], [2, 'delegate'], [2, 'COMPLETE']] as const)('retries the saved invocation %s and reads its report with next %s', async (stopAt, next) => {
+      environment = createEnvironment();
+      process.env.TAKT_CONFIG_DIR = environment.globalDir;
+      invalidateGlobalConfigCache();
+      const workflowDir = join(environment.projectDir, '.takt', 'workflows');
+      writeFileSync(join(workflowDir, 'parent-fix.yaml'), [
+        'name: parent-fix', 'initial_step: delegate', 'max_steps: 10', 'steps:',
+        '  - name: delegate', '    kind: workflow_call', '    call: child-fix',
+        '    rules:', '      - condition: COMPLETE', '        next: delegate',
+      ].join('\n'));
+      invalidateAllResolvedConfigCache();
+      let calls = 0;
+      vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+        options?.onPromptResolved?.({ systemPrompt: typeof persona === 'string' ? persona : '', userInstruction: instruction });
+        calls += 1;
+        return { persona: 'fixer', status: calls === stopAt ? 'blocked' : 'done', content: '[FIX:1]\nfix complete', timestamp: new Date(), sessionId: 'session' };
+      });
+      const runner = new TaskRunner(environment.projectDir);
+      runner.addTask('repeated call retry', { workflow: 'parent-fix' });
+      const source = runner.claimNextTasks(1)[0]!;
+      expect(await executeAndCompleteTask(source, runner, environment.projectDir)).toBe(false);
+      const failed = runner.listAllTaskItems().find((item) => item.name === source.name)!;
+      const slug = failed.runSlug!;
+      const point = readRunMetaBySlug(environment.projectDir, slug)?.resumePoint;
+      if (point === undefined) throw new Error('Expected source checkpoint');
+      expect(point.stack.map((entry) => entry.step)).toEqual(['delegate', 'fix']);
+      expect(point.stack[0]?.call_instance).toBe(stopAt);
+      const record = Object.values(point.workflow_call_invocations)[0]!;
+      expect(record.call_instance).toBe(stopAt);
+      const reports = join(environment.projectDir, '.takt', 'runs', slug, 'reports', 'subworkflows');
+      for (const occurrence of [1, 2]) {
+        const namespace = occurrence === stopAt ? record.report_namespace_segment : buildWorkflowCallNamespace(environment.projectDir, occurrence);
+        mkdirSync(join(reports, namespace), { recursive: true });
+        writeFileSync(join(reports, namespace, '05-arch-review.md'), occurrence === 1 ? 'first report' : 'second report');
+      }
+      const parentPath = join(workflowDir, 'parent-fix.yaml');
+      writeFileSync(parentPath, readFileSync(parentPath, 'utf-8').replace('next: delegate', `next: ${next}`));
+      invalidateAllResolvedConfigCache();
+      const { parent } = loadResumeWorkflows(environment.projectDir);
+      const selected = await selectTaskRetryStart(parent, { projectCwd: environment.projectDir, lookupCwd: environment.projectDir, resumePoint: point }, async (_message, options) => {
+        const target = options.find((option) => option.selectable !== false && option.label.trim() === '"fix"');
+        if (target === undefined) throw new Error('Expected retry step');
+        return target.value;
+      });
+      if (selected?.selection.kind !== 'restart') throw new Error('Expected restart');
+      const retry = runner.startReExecution(failed.name, ['failed'], 'retry', { restartPoint: selected.selection.restartPoint, sourceRunSlug: slug });
+      const instructions: string[] = [];
+      const lifecycle: Array<{ event: string; instance: number; savedInstance: number | undefined }> = [];
+      const originalEmit = WorkflowEngine.prototype.emit;
+      vi.spyOn(WorkflowEngine.prototype, 'emit').mockImplementation(function (event, ...args) {
+        if (event === 'workflow_call:start' || event === 'workflow_call:complete') {
+          const payload = args[0] as { step: string; callInstance: number };
+          if (payload.step === 'delegate') {
+            lifecycle.push({ event, instance: payload.callInstance, savedInstance: this.getResumePoint()?.stack[0]?.call_instance });
+          }
+        }
+        return originalEmit.call(this, event, ...args);
+      });
+      vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+        options?.onPromptResolved?.({ systemPrompt: typeof persona === 'string' ? persona : '', userInstruction: instruction });
+        instructions.push(instruction);
+        return { persona: 'fixer', status: stopAt === 2 && instructions.length === 1 ? 'done' : 'blocked', content: '[FIX:1]\nfix complete', timestamp: new Date(), sessionId: 'session' };
+      });
+      await executeAndCompleteTask(retry, runner, environment.projectDir);
+      expect(instructions).toHaveLength(stopAt === 2 && next === 'delegate' ? 2 : 1);
+      expect(instructions[0]).toContain(stopAt === 1 ? 'first report' : 'second report');
+      expect(instructions[0]).not.toContain(stopAt === 1 ? 'second report' : 'first report');
+      const starts = lifecycle.filter((event) => event.event === 'workflow_call:start');
+      const completions = lifecycle.filter((event) => event.event === 'workflow_call:complete');
+      expect(starts).toHaveLength(instructions.length);
+      expect(completions.map((event) => event.instance)).toEqual(starts.map((event) => event.instance));
+      expect(starts.map((event) => event.savedInstance)).toEqual(starts.map((event) => event.instance));
+      if (starts.length === 2) expect(starts[1]!.instance).not.toBe(starts[0]!.instance);
+      const retrySlug = findRunSlugExcluding(environment.projectDir, new Set([slug]));
+      const saved = readRunMetaBySlug(environment.projectDir, retrySlug)?.resumePoint;
+      if (next === 'COMPLETE') {
+        const completed = Object.values(saved!.workflow_call_invocations)[0]!;
+        expect(completed.report_namespace_segment).toBe(record.report_namespace_segment);
+        expect(completed.completed).toBe(true);
+        return;
+      }
+      expect(saved?.stack.map((entry) => entry.step)).toEqual(['delegate', 'fix']);
+      const savedCall = Object.values(saved!.workflow_call_invocations)[0]!;
+      expect(savedCall.call_instance).toBe(saved!.stack[0]!.call_instance);
+      if (stopAt === 2) {
+        expect(savedCall.report_namespace_segment).not.toBe(record.report_namespace_segment);
+      }
+    });
+
+    it.each([[false, 'nested', false], [true, 'nested', false], [true, 'other', false], [false, 'nested', true], [false, 'other', true]] as const)('retries a completed nested call after parent ref update: %s %s repeated: %s', async (updated, selectedCall, repeated) => {
       environment = createEnvironment();
       process.env.TAKT_CONFIG_DIR = environment.globalDir;
       invalidateGlobalConfigCache();
@@ -550,7 +761,7 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
         '  - name: delegate', '    kind: workflow_call', '    call: child-fix',
         '    rules:', '      - condition: COMPLETE', '        next: stopped',
         '  - name: stopped', '    persona: ./personas/fixer.md', '    instruction: stop-here',
-        '    rules:', '      - condition: when(true)', '        next: COMPLETE',
+        '    rules:', '      - condition: when(true)', `        next: ${repeated ? 'delegate' : 'COMPLETE'}`,
       ].join('\n'));
       const childDefinition = [
         'name: child-fix', 'subworkflow:', '  callable: true', 'initial_step: nested', 'max_steps: 10', 'steps:',
@@ -567,9 +778,11 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
       ].join('\n'));
       invalidateAllResolvedConfigCache();
       const oldChild = loadWorkflowByIdentifier('child-fix', environment.projectDir)!;
+      let stoppedCalls = 0;
       vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
         options?.onPromptResolved?.({ systemPrompt: typeof persona === 'string' ? persona : '', userInstruction: instruction });
-        return { persona: 'fixer', status: instruction.includes('stop-here') ? 'blocked' : 'done', content: 'done', timestamp: new Date(), sessionId: 'session' };
+        if (instruction.includes('stop-here')) stoppedCalls += 1;
+        return { persona: 'fixer', status: instruction.includes('stop-here') && (!repeated || stoppedCalls === 2) ? 'blocked' : 'done', content: 'done', timestamp: new Date(), sessionId: 'session' };
       });
       const runner = new TaskRunner(environment.projectDir);
       runner.addTask('nested retry', { workflow: 'parent-fix' });
@@ -580,13 +793,16 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
       const point = readRunMetaBySlug(environment.projectDir, slug)?.resumePoint;
       if (point === undefined) throw new Error('Expected source checkpoint');
       expect(point.stack.map((entry) => entry.step)).toEqual(['stopped']);
-      const entries = Object.entries(point.workflow_call_invocations).map(([key, record]) => ({ key: JSON.parse(key) as { step: string }, record }));
+      const entries = Object.entries(point.workflow_call_invocations).map(([key, record]) => ({ key: JSON.parse(key) as { step: string; calls: Array<{ instance: number }> }, record }));
       const outer = entries.find((entry) => entry.key.step === 'delegate')!.record;
       for (const call of ['nested', 'other']) {
-        const record = entries.find((entry) => entry.key.step === call)!.record;
-        const reportDir = join(environment.projectDir, '.takt', 'runs', slug, 'reports', 'subworkflows', outer.report_namespace_segment, 'subworkflows', record.report_namespace_segment);
-        mkdirSync(reportDir, { recursive: true });
-        writeFileSync(join(reportDir, 'plan.md'), `${call} saved report`);
+        for (const entry of entries.filter((item) => item.key.step === call)) {
+          const instance = entry.key.calls[0]!.instance;
+          const outerNamespace = instance === outer.call_instance ? outer.report_namespace_segment : buildWorkflowCallNamespace(environment.projectDir, instance);
+          const reportDir = join(environment.projectDir, '.takt', 'runs', slug, 'reports', 'subworkflows', outerNamespace, 'subworkflows', entry.record.report_namespace_segment);
+          mkdirSync(reportDir, { recursive: true });
+          writeFileSync(join(reportDir, 'plan.md'), repeated ? `${call} invocation ${instance} saved report` : `${call} saved report`);
+        }
       }
       if (updated) writeFileSync(childPath, childDefinition.replace('max_steps: 10', 'max_steps: 11'));
       invalidateAllResolvedConfigCache();
@@ -606,11 +822,11 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
       vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
         options?.onPromptResolved?.({ systemPrompt: typeof persona === 'string' ? persona : '', userInstruction: instruction });
         instructions.push(instruction);
-        return { persona: 'fixer', status: 'done', content: 'done', timestamp: new Date(), sessionId: 'session' };
+        return { persona: 'fixer', status: repeated ? 'blocked' : 'done', content: 'done', timestamp: new Date(), sessionId: 'session' };
       });
-      expect(await executeAndCompleteTask(retry, runner, environment.projectDir)).toBe(true);
-      expect(instructions[0]).toContain(`${selectedCall} saved report`);
-      expect(instructions[0]).not.toContain(`${selectedCall === 'nested' ? 'other' : 'nested'} saved report`);
+      expect(await executeAndCompleteTask(retry, runner, environment.projectDir)).toBe(!repeated);
+      expect(instructions[0]).toContain(repeated ? `${selectedCall} invocation 2 saved report` : `${selectedCall} saved report`);
+      expect(instructions[0]).not.toContain(repeated ? `${selectedCall} invocation 1 saved report` : `${selectedCall === 'nested' ? 'other' : 'nested'} saved report`);
       const warnings = writeLog.mock.calls.filter(([level, , message]) => level === 'WARN' && /digest|hash|ref/i.test(message));
       expect(warnings.length > 0).toBe(updated);
       writeLog.mockRestore();

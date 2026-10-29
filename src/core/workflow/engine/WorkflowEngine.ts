@@ -132,6 +132,7 @@ export class WorkflowEngine extends EventEmitter {
   private readonly resumeStackPrefix: WorkflowResumePointEntry[];
   private activeResumePoint: WorkflowResumePoint | undefined;
   private readonly resumeContinuation: WorkflowResumeContinuation;
+  private reservedNextWorkflowCall: { step: string; occurrence: number } | undefined;
 
   private readonly optionsBuilder: WorkflowEngineServices['optionsBuilder'];
   private readonly stepExecutor: WorkflowEngineServices['stepExecutor'];
@@ -276,7 +277,7 @@ export class WorkflowEngine extends EventEmitter {
       new ReportGenerationIndex(this.options.resumePoint?.missing_report_generations);
     if (
       this.sharedRuntime.resumeArtifactOccurrenceIndex === undefined
-      && this.options.resumeSource?.resumeMode === 'requeue'
+      && (this.options.resumeSource?.resumeMode === 'requeue' || this.options.resumeSource?.resumeMode === 'retry')
     ) {
       const manifest = readResumeReportSnapshotManifest(this.cwd, runPaths.slug, this.options.runPathsDirectory);
       const sourceResumePoint = manifest === undefined
@@ -284,7 +285,7 @@ export class WorkflowEngine extends EventEmitter {
         : readRunMetaBySlug(this.cwd, manifest.sourceRunSlug, undefined, this.options.runPathsDirectory)?.resumePoint;
       if (manifest !== undefined && sourceResumePoint === undefined) {
         log.warn(
-          'Requeue artifact occurrence restoration is unavailable because source run metadata or resume point is missing',
+          `${this.options.resumeSource?.resumeMode === 'retry' ? 'Retry' : 'Requeue'} artifact occurrence restoration is unavailable because source run metadata or resume point is missing`,
           { sourceRunSlug: manifest.sourceRunSlug },
         );
       }
@@ -463,7 +464,7 @@ export class WorkflowEngine extends EventEmitter {
           buildWorkflowMeta: (step, runtime) => this.optionsBuilder.buildWorkflowMeta(step, runtime),
           resolveRuntimeForStep: this.stepCoordinator.resolveRuntimeForStep.bind(this.stepCoordinator),
           claimStepOccurrence: (step) => (
-            this.claimStepOccurrence(step, this.resumeStackPrefix)
+            this.claimRunLoopStepOccurrence(step)
           ),
           setActiveStep: this.activateStep.bind(this),
           cancelPendingStepActivation: () => this.workflowCallRunner.cancelPendingInvocation(),
@@ -520,6 +521,15 @@ export class WorkflowEngine extends EventEmitter {
           }
         : {}),
     });
+  }
+
+  private claimRunLoopStepOccurrence(step: WorkflowStep): number {
+    if (this.reservedNextWorkflowCall?.step === step.name) {
+      const occurrence = this.reservedNextWorkflowCall.occurrence;
+      this.reservedNextWorkflowCall = undefined;
+      return occurrence;
+    }
+    return this.claimStepOccurrence(step, this.resumeStackPrefix);
   }
 
   private emitEvent(event: string, ...args: unknown[]): void {
@@ -677,8 +687,13 @@ export class WorkflowEngine extends EventEmitter {
     step: WorkflowStep,
     iteration: number,
     occurrence: number,
+    preparingNextStep = false,
   ): WorkflowCallExecutionToken | undefined {
     if (isWorkflowCallStep(step)) {
+      if (preparingNextStep && this.sharedRuntime.resumeArtifactOccurrenceIndex !== undefined) {
+        occurrence = this.claimStepOccurrence(step, this.resumeStackPrefix);
+        this.reservedNextWorkflowCall = { step: step.name, occurrence };
+      }
       return this.workflowCallRunner.activateInvocation(
         step,
         iteration,
@@ -991,7 +1006,7 @@ export class WorkflowEngine extends EventEmitter {
           buildWorkflowMeta: (step, runtime) => this.optionsBuilder.buildWorkflowMeta(step, runtime),
           resolveRuntimeForStep: this.stepCoordinator.resolveRuntimeForStep.bind(this.stepCoordinator),
           claimStepOccurrence: (step) => (
-            this.claimStepOccurrence(step, this.resumeStackPrefix)
+            this.claimRunLoopStepOccurrence(step)
           ),
           setActiveStep: this.activateStep.bind(this),
           cancelPendingStepActivation: () => this.workflowCallRunner.cancelPendingInvocation(),

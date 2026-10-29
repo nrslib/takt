@@ -244,7 +244,7 @@ async function consumeNestedWorkflowCallRestart() {
 }
 
 describe('WorkflowCallExecutor nested restart contract', () => {
-  it('rebinds nested records only for the matching ancestor and invocation instance', () => {
+  it('rebinds nested records for the matching ancestor and current invocation instance', () => {
     const root = makeWorkflow('outer', 'call', [makeCallStep('call', 'default')]);
     const oldParent = attachWorkflowOpaqueRef(makeWorkflow('default', 'delegate', [makeCallStep('delegate', 'coding')]), 'old-parent');
     const parent = attachWorkflowOpaqueRef({ ...oldParent }, 'new-parent');
@@ -257,26 +257,25 @@ describe('WorkflowCallExecutor nested restart contract', () => {
     const source = { version: 2 as const, stack: [{ ...prefix, step: 'stopped', kind: 'agent' as const }], iteration: 1, elapsed_ms: 0, workflow_call_invocations: sourceIndex.serialized(), workflow_step_participations: {} };
     const index = new WorkflowCallInvocationIndex(new Map(Object.entries(source.workflow_call_invocations)));
     index.rebindResumeInvocation(source, parent, 'delegate', [{ ...prefix, occurrence: 2, call_instance: 2 }], 1, true);
-    index.rebindResumeInvocation(source, parent, 'delegate', [prefix], 2, true);
     expect(index.get(parent, 'delegate', [prefix])).toBeUndefined();
-    index.rebindResumeInvocation(source, parent, 'delegate', [prefix], 1, true);
-    expect(index.get(parent, 'delegate', [prefix])).toEqual(record);
+    index.rebindResumeInvocation(source, parent, 'delegate', [prefix], 2, true);
+    expect(index.get(parent, 'delegate', [prefix])).toEqual({ ...record, call_instance: 2 });
   });
-  it('rebinds a completed sibling only for an active restart and the saved invocation instance', () => {
+  it('rebinds a completed sibling only for an active restart', () => {
     const step = makeCallStep('delegate', 'coding');
     const oldParent = attachWorkflowOpaqueRef(makeWorkflow('default', 'delegate', [step]), 'old-parent');
     const parent = attachWorkflowOpaqueRef(makeWorkflow('default', 'delegate', [step]), 'new-parent');
     const child = makeWorkflow('coding', 'review', [{ name: 'review', persona: 'reviewer', instruction: 'Review' }]);
     const frame = { ...makeRuntimeCallEntry('default', 'delegate'), workflow_ref: 'old-parent' };
     const record = { call_instance: 1, report_namespace_segment: buildWorkflowCallSiteIdentity({ stack: [frame], childWorkflow: child }).runPathSegment, completed: true };
-    const index = new WorkflowCallInvocationIndex(new Map());
-    index.record(oldParent, step.name, [], record);
-    const source = { version: 2 as const, stack: [{ ...frame, step: 'stopped', kind: 'agent' as const }], iteration: 1, elapsed_ms: 0, workflow_call_invocations: index.serialized(), workflow_step_participations: {} };
+    const sourceIndex = new WorkflowCallInvocationIndex(new Map());
+    sourceIndex.record(oldParent, step.name, [], record);
+    const source = { version: 2 as const, stack: [{ ...frame, step: 'stopped', kind: 'agent' as const }], iteration: 1, elapsed_ms: 0, workflow_call_invocations: sourceIndex.serialized(), workflow_step_participations: {} };
+    const index = new WorkflowCallInvocationIndex(new Map(Object.entries(source.workflow_call_invocations)));
     index.rebindResumeInvocation(source, parent, step.name, [], 1, false);
-    index.rebindResumeInvocation(source, parent, step.name, [], 2, true);
     expect(index.get(parent, step.name, [])).toBeUndefined();
-    index.rebindResumeInvocation(source, parent, step.name, [], 1, true);
-    expect(index.get(parent, step.name, [])).toEqual(record);
+    index.rebindResumeInvocation(source, parent, step.name, [], 2, true);
+    expect(index.get(parent, step.name, [])).toEqual({ ...record, call_instance: 2 });
   });
   it('rebinds a saved invocation only for the matching ancestor instance', () => {
     const step = makeCallStep('delegate', 'coding');
