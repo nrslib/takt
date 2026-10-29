@@ -3,6 +3,8 @@ import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { getProjectResourcesDir } from '../resources/index.js';
 import { createLogger, isRealPathInside } from '../../shared/utils/index.js';
+import { buildSafeGitEnvironment } from './git-environment.js';
+import { isGitRepository, resolveGitRepositoryDirectory } from './repositoryDirectory.js';
 
 const log = createLogger('project-local-takt-sync');
 
@@ -152,13 +154,14 @@ function ensureWorktreeTaktGitignoreFile(targetTaktDir: string): void {
   assertTargetPathInside(targetTaktDir, targetPath);
 }
 
-function resolveGitExcludePath(worktreePath: string): string | undefined {
+function resolveGitExcludePath(worktreePath: string, env?: NodeJS.ProcessEnv): string | undefined {
   let gitPath: string;
   try {
     gitPath = execFileSync('git', ['rev-parse', '--git-path', 'info/exclude'], {
       cwd: worktreePath,
       encoding: 'utf-8',
       stdio: 'pipe',
+      env,
     }).trim();
   } catch (error: unknown) {
     // The protection only matters where git commands (e.g. git clean) can run;
@@ -292,6 +295,36 @@ export function ensureWorktreeTaktRunsIgnored(worktreePath: string): void {
   const excludePath = resolveGitExcludePath(worktreePath);
   if (excludePath !== undefined) {
     appendGitignorePatterns(excludePath, [TAKT_RUNS_GIT_EXCLUDE_PATTERN]);
+  }
+}
+
+export async function ensureDirectoryIgnoredByGit(directory: string): Promise<void> {
+  if (!await isGitRepository(directory)) return;
+  const gitRoot = await resolveGitRepositoryDirectory(directory);
+  const relativeDirectory = path.relative(gitRoot, fs.realpathSync(directory));
+  if (relativeDirectory === '' || relativeDirectory === '..' || relativeDirectory.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relativeDirectory) || /[\r\n]/u.test(relativeDirectory)) {
+    throw new Error('Cannot protect directory outside its Git worktree');
+  }
+  const gitRelativeDirectory = relativeDirectory.split(path.sep).join('/');
+  const environment = await buildSafeGitEnvironment(gitRoot, { allowGitHooks: true, allowGitFilters: true });
+  const gitOptions = { cwd: gitRoot, env: environment, stdio: 'pipe' as const };
+  if (execFileSync('git', ['ls-files', '-z', '--', gitRelativeDirectory], gitOptions).length > 0) {
+    throw new Error('CI evidence directory contains tracked files');
+  }
+  const excludePath = resolveGitExcludePath(gitRoot, environment);
+  if (excludePath === undefined) throw new Error('Cannot protect CI evidence from Git');
+  const escaped = gitRelativeDirectory.split('/')
+    .map((segment) => segment.replace(/[\\*?[\] ]/gu, '\\$&')).join('/');
+  appendGitignorePatterns(excludePath, [`/${escaped}/`]);
+  const checkEnvironment = { ...environment };
+  delete checkEnvironment.GIT_LITERAL_PATHSPECS;
+  try {
+    execFileSync('git', ['check-ignore', '-q', '--stdin', '-z'], {
+      cwd: gitRoot, env: checkEnvironment, input: `${gitRelativeDirectory}\0`, stdio: ['pipe', 'ignore', 'ignore'],
+    });
+  } catch {
+    throw new Error('CI evidence directory is not ignored by Git');
   }
 }
 

@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDefaultSystemStepServices } from '../infra/workflow/system/DefaultSystemStepServices.js';
 import type { WorkflowEffect, WorkflowSystemInput } from '../core/models/types.js';
@@ -103,8 +104,7 @@ describe('CI failure system input and rerun effect', () => {
   const effect: WorkflowEffect = { type: 'rerun_ci', pr: 123,
     failure: '{context:collect_ci_failure.failure}' };
 
-  function fixture(supported = true, runRootAbs?: string) {
-    const cloneCwd = join(runDirectory, 'clone');
+  function fixture(supported = true, runRootAbs?: string, cloneCwd = join(runDirectory, 'clone')) {
     mkdirSync(cloneCwd, { recursive: true });
     const fetchPrStatus = vi.fn(async () => ({ number: 123, headSha, ci: { finished: true, passed: false },
       mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED', merged: false }));
@@ -185,6 +185,56 @@ describe('CI failure system input and rerun effect', () => {
       .filter((name) => name.endsWith('.log'))).toHaveLength(1);
   });
 
+  it('別Gitリポジトリの原本とnested workspaceの表示viewをgit add -Aから保護する', async () => {
+    const projectRoot = join(runDirectory, 'project');
+    const cloneRoot = join(runDirectory, 'clone');
+    mkdirSync(projectRoot);
+    mkdirSync(cloneRoot);
+    for (const root of [projectRoot, cloneRoot]) execFileSync('git', ['init', '-q'], { cwd: root });
+    const runRootAbs = join(projectRoot, '.takt', 'runs', 'run');
+    const cloneCwd = join(cloneRoot, 'nested [draft]');
+    const h = fixture(true, runRootAbs, cloneCwd);
+
+    const result = await h.service.resolveSystemInput(input, h.state) as { complete: boolean; promptEvidence: string };
+    expect(result.complete).toBe(true);
+    const canonicalDirectory = join(runRootAbs, 'ci-evidence');
+    const viewDirectory = join(cloneCwd, '.takt', 'runs', 'run', 'ci-evidence');
+    for (const directory of [canonicalDirectory, viewDirectory]) {
+      expect(readdirSync(directory).filter((name) => name.endsWith('.json') || name.endsWith('.log'))).toHaveLength(2);
+    }
+    expect(result.promptEvidence).toContain(viewDirectory);
+    for (const [root, directory] of [[projectRoot, canonicalDirectory], [cloneRoot, viewDirectory]] as const) {
+      execFileSync('git', ['add', '-A'], { cwd: root });
+      const staged = execFileSync('git', ['diff', '--cached', '--name-only', '-z'], { cwd: root, encoding: 'utf8' })
+        .split('\0').filter(Boolean);
+      const evidencePrefix = `${relative(root, directory).split(sep).join('/')}/`;
+      expect(staged.filter((file) => file.startsWith(evidencePrefix))).toEqual([]);
+    }
+  });
+
+  it.each(['canonical', 'view'] as const)('%sのGit ignoreを拒否されたら両方の保存先に証拠本文を残さない', async (rejected) => {
+    const projectRoot = join(runDirectory, 'project');
+    const cloneRoot = join(runDirectory, 'clone');
+    mkdirSync(projectRoot);
+    mkdirSync(cloneRoot);
+    for (const root of [projectRoot, cloneRoot]) execFileSync('git', ['init', '-q'], { cwd: root });
+    const runRootAbs = join(projectRoot, '.takt', 'runs', 'run');
+    const rejectedRoot = rejected === 'canonical' ? projectRoot : cloneRoot;
+    writeFileSync(join(rejectedRoot, '.gitignore'), [
+      '!/.takt/', '!/.takt/runs/', '!/.takt/runs/run/', '!/.takt/runs/run/ci-evidence/', '',
+    ].join('\n'));
+    const h = fixture(true, runRootAbs);
+
+    const result = await h.service.resolveSystemInput(input, h.state);
+    expect(result).toMatchObject({ complete: false,
+      unavailable: expect.arrayContaining([expect.objectContaining({ name: 'CI evidence storage' })]) });
+    const canonicalDirectory = join(runRootAbs, 'ci-evidence');
+    const viewDirectory = join(cloneRoot, '.takt', 'runs', 'run', 'ci-evidence');
+    for (const directory of [canonicalDirectory, viewDirectory]) {
+      expect(readdirSync(directory)).toEqual([]);
+    }
+  });
+
   it('jobログの書込が途中で失敗しても不完全な最終ファイルを公開せず同じrunで再試行できる', async () => {
     const h = fixture();
     failFirstEvidenceWrite = true;
@@ -219,14 +269,14 @@ describe('CI failure system input and rerun effect', () => {
     expect(h.rerunPrCi).not.toHaveBeenCalled();
   });
 
-  it('clone側の表示viewを作れなければ原本が残っても再実行を拒否する', async () => {
+  it('clone側の表示viewを作れなければ原本への保存前に再実行を拒否する', async () => {
     const h = fixture();
     writeFileSync(join(runDirectory, 'clone', '.takt'), 'blocked');
     const result = await h.service.resolveSystemInput(input, h.state);
     expect(result).toMatchObject({ complete: false,
       unavailable: expect.arrayContaining([expect.objectContaining({ name: 'CI evidence storage' })]) });
     expect(readdirSync(join(runDirectory, '.takt', 'runs', 'run', 'ci-evidence'))
-      .filter((name) => name.endsWith('.log'))).toHaveLength(1);
+      .filter((name) => name.endsWith('.log'))).toHaveLength(0);
     h.state.systemContexts.set('collect_ci_failure', { failure: result });
     expect(await h.service.executeEffect(effect, { type: 'rerun_ci', pr: 123, failure: result }, h.state))
       .toMatchObject({ success: false });

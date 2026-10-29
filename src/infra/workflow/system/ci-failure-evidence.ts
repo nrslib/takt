@@ -1,12 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
 import { link, lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { PrCiFailure } from '../../../core/workflow/system/pr-ci.js';
 import type { RunPaths } from '../../../core/workflow/run/run-paths.js';
 import { isRealPathInside } from '../../../shared/utils/pathBoundary.js';
-import { ensureWorktreeTaktRunsIgnored } from '../../task/projectLocalTaktSync.js';
+import { ensureDirectoryIgnoredByGit, ensureWorktreeTaktRunsIgnored } from '../../task/projectLocalTaktSync.js';
 
 function digest(value: string): string {
   return createHash('sha256').update(value).digest('hex');
@@ -102,23 +100,16 @@ export async function saveCiFailureEvidence(
   if (!isRealPathInside(runPaths.runRootAbs, canonicalDirectory)) {
     throw new Error('CI evidence directory leaves its run');
   }
-  const canonical = await saveIndex(failure, canonicalDirectory, fixRounds, rerunCount, recoveryError, signal);
-
   ensureWorktreeTaktRunsIgnored(workspaceCwd);
   signal?.throwIfAborted();
   await mkdir(viewDirectory, { recursive: true, mode: 0o700 });
   if (!isRealPathInside(workspaceCwd, viewDirectory)) {
     throw new Error('CI evidence view leaves its workspace');
   }
-  if (existsSync(join(workspaceCwd, '.git'))) {
-    try {
-      execFileSync('git', ['check-ignore', '-q', '--', join(viewRelativeDirectory, 'manifest.json')], {
-        cwd: workspaceCwd, stdio: 'ignore',
-      });
-    } catch {
-      throw new Error('CI evidence view is not ignored by Git');
-    }
-  }
+  await ensureDirectoryIgnoredByGit(canonicalDirectory);
+  if (resolve(canonicalDirectory) !== resolve(viewDirectory)) await ensureDirectoryIgnoredByGit(viewDirectory);
+  signal?.throwIfAborted();
+  const canonical = await saveIndex(failure, canonicalDirectory, fixRounds, rerunCount, recoveryError, signal);
   const view = resolve(canonicalDirectory) === resolve(viewDirectory)
     ? canonical
     : await saveIndex(canonical.failure, viewDirectory, fixRounds, rerunCount, recoveryError, signal);
