@@ -33,7 +33,8 @@ import { tellDirectorManager } from '../features/director/tellManager.js';
 import { createDirectorManagerPort } from '../features/director/managerPort.js';
 import { ConversationIpcClient } from '../features/manager/conversationIpcClient.js';
 import { startLocalMcpConnection } from '../features/mcp/localConnection.js';
-import type { ManagerTurnInput } from '../features/manager/turnExecutor.js';
+import { createManagerTurnExecutor, type ManagerTurnInput } from '../features/manager/turnExecutor.js';
+import type { Goal } from '../infra/goals/schema.js';
 import type { PreparedConversationRuntime, ConversationRuntime } from '../features/manager/conversationRuntime.js';
 import type { PortOutput } from '../features/manager/conversationPort.js';
 import { makeProvider } from './test-helpers.js';
@@ -268,6 +269,140 @@ it.each(['ja', 'en'] as const)('loads four director facets through provider setu
   await vi.waitFor(() => expect(reopened.getSnapshot().readStatus).toBe('complete'));
   expect(reopened.getSnapshot().items).toContainEqual({ kind: 'display_event', event: { id: notice!.kind === 'notice' ? notice!.id : '', message: 'Human decision required' } });
   expect(new ConversationStore(directory).read(selected.conversationId, selected.assignment)).toMatchObject({ agent: 'director', sessionId: 'director-session' });
+  expect(slack).not.toHaveBeenCalled();
+});
+
+it.each(['ja', 'en'] as const)('supplies the saved goal fields and existing tools for merge forwarding in the %s director prompt', (lang) => {
+  writeFileSync(join(directory, 'config.yaml'), `provider: mock\nlanguage: ${lang}\n`);
+  invalidateGlobalConfigCache(); invalidateAllResolvedConfigCache();
+  vi.spyOn(providers, 'getProvider').mockReturnValue(makeProvider({ supportsStrictToolAllowlist: true,
+    supportedMcpTransports: new Set(['http']) }));
+
+  const { systemPrompt } = createDirectorConversationPlan(directory, {});
+
+  // 判断精度ではなく、実行時入力に必要な道具と保存値の参照が含まれることを確認する。
+  for (const reference of ['takt_get_goal', 'awaiting_merge', 'pullRequest', 'takt_tell_manager', 'takt_merge_goal_pr']) {
+    expect(systemPrompt, reference).toContain(reference);
+  }
+});
+
+it.each(['ja', 'en'] as const)('relays a human merge request through director MCP and IPC with the saved PR and speaker in %s', async (lang) => {
+  writeFileSync(join(directory, 'config.yaml'), `provider: mock\nlanguage: ${lang}\n`);
+  invalidateGlobalConfigCache(); invalidateAllResolvedConfigCache();
+  const repository = await seedManager('merge-repository');
+  const otherRepository = await seedManager('other-repository');
+  const goal = saveGoal(repository, 'awaiting_merge', 'active');
+  const pullRequest = { number: 1950, url: 'https://github.invalid/example/project/pull/1950' };
+  await new GoalStore(repository).update(goal.id, (saved) => ({ ...saved, pullRequest }));
+  const otherGoal = saveGoal(otherRepository, 'awaiting_merge', 'active');
+  await new GoalStore(otherRepository).update(otherGoal.id, (saved) => ({ ...saved,
+    pullRequest: { number: 1949, url: 'https://github.invalid/example/other/pull/1949' } }));
+  const assignment = { kind: 'repository' as const, repositoryDirectory: repository };
+  const managerId = conversationId(assignment);
+  const humanMessage = lang === 'ja' ? `${repository} のゴール ${goal.id} をマージして`
+    : `Merge goal ${goal.id} in ${repository}`;
+  const managerReply = lang === 'ja' ? 'マージ指示を受け取りました。' : 'Merge instruction received.';
+  const slack = vi.spyOn(slackWebhook, 'sendSlackNotification').mockResolvedValue(undefined);
+  const toolCalls = vi.spyOn(Client.prototype, 'callTool');
+  let managerOperationId: string | undefined;
+  const managerCall = vi.fn<ProviderAgent['call']>(async () => {
+    const conversation = new ConversationStore(directory).read(managerId, assignment);
+    expect(conversation).toBeDefined();
+    managerOperationId = conversation!.running?.operationId;
+    return { persona: 'manager', status: 'done', content: '', timestamp: new Date(),
+      structuredOutput: { message: managerReply, summary: null }, sessionId: 'manager-merge-session' };
+  });
+  const managerExecutor = createManagerTurnExecutor(repository, {
+    ctx: { provider: makeProvider({ setup: () => ({ call: managerCall }) }), providerType: 'mock', model: undefined, lang },
+    strategy: { systemPrompt: 'manager provider test double' },
+  });
+  const directorCall = vi.fn<ProviderAgent['call']>(async (prompt, options) => {
+    expect(prompt).toBe(humanMessage);
+    const config = options.mcpServers![DIRECTOR_MCP_SERVER_NAME];
+    if (config === undefined || config.type !== 'http') throw new Error('HTTP MCP required');
+    const client = new Client({ name: 'merge-director-provider', version: '1' });
+    const transport = new StreamableHTTPClientTransport(new URL(config.url), { requestInit: { headers: config.headers } });
+    try {
+      await client.connect(transport);
+      const tools = (await client.listTools()).tools.map((tool) => tool.name);
+      expect([...tools].sort()).toEqual([...DIRECTOR_TOOL_NAMES].sort());
+      expect(options.permissionMode).toBe('readonly');
+      expect([...options.strictToolAllowlist!].sort()).toEqual(tools.map((name) => `mcp__${DIRECTOR_MCP_SERVER_NAME}__${name}`).sort());
+      expect(Object.keys(options.mcpServers!)).toEqual([DIRECTOR_MCP_SERVER_NAME]);
+      for (const forbidden of ['Bash', 'Write', 'Edit', 'takt_merge_goal_pr']) {
+        expect(tools).not.toContain(forbidden);
+        expect(options.strictToolAllowlist).not.toContain(`mcp__${DIRECTOR_MCP_SERVER_NAME}__${forbidden}`);
+      }
+      const managers = decoded(await client.callTool({ name: 'takt_list_managers', arguments: {} })).managers as
+        Array<{ id: string; assignment: { repositoryDirectories: string[] } }>;
+      const selected = managers.find((manager) => manager.assignment.repositoryDirectories.includes(repository));
+      expect(selected?.id).toBe(managerId);
+      const goals = decoded(await client.callTool({ name: 'takt_list_goals',
+        arguments: { managerId: selected!.id, cwd: repository } })).goals as Array<Pick<Goal, 'id' | 'pullRequest'>>;
+      const selectedGoal = goals.find((candidate) => candidate.id === goal.id);
+      expect(selectedGoal).toMatchObject({ id: goal.id, pullRequest });
+      const detail = decoded(await client.callTool({ name: 'takt_get_goal',
+        arguments: { managerId: selected!.id, cwd: repository, goalId: selectedGoal!.id } })).goal as
+        Pick<Goal, 'id' | 'status' | 'pullRequest'>;
+      expect(detail).toMatchObject({ id: goal.id, status: 'awaiting_merge', pullRequest });
+      const text = lang === 'ja'
+        ? `人の明示の指示により、${repository} のゴール ${detail.id} の PR #${detail.pullRequest!.number} を takt_merge_goal_pr でマージしてください。`
+        : `On the human's explicit instruction, merge PR #${detail.pullRequest!.number} for goal ${detail.id} in ${repository} using takt_merge_goal_pr.`;
+      const reply = decoded(await client.callTool({ name: 'takt_tell_manager', arguments: { managerId: selected!.id, text } }));
+      expect(reply).toEqual({ kind: 'reply', message: managerReply });
+      return { persona: 'director', status: 'done', content: reply.message as string, timestamp: new Date() };
+    } finally { await client.close(); await transport.close(); }
+  });
+  vi.spyOn(providers, 'getProvider').mockReturnValue(makeProvider({ supportsStrictToolAllowlist: true,
+    supportedMcpTransports: new Set(['http']), setup: () => ({ call: directorCall }) }));
+  const directorRuntime = createDaemonConversationRuntime(directory, { notify: async () => {} });
+  const runtime: ConversationRuntime = {
+    resolve: async (selected, abortSignal, overrides) => {
+      if (selected.kind === 'daemon') return directorRuntime.resolve(selected, abortSignal, overrides);
+      expect(selected).toMatchObject(assignment);
+      return { provider: 'mock', model: null, language: lang, contextKey: 'merge-test', executor: managerExecutor };
+    },
+    close: () => directorRuntime.close(),
+  };
+  const service = createConversationService({ configDirectory: directory, owner, runtime, onDomainChange: vi.fn() });
+  cleanups.push(service.close);
+  const submissions = vi.spyOn(service, 'submit');
+  const server = await createConversationIpcServer(directory, owner, service);
+  cleanups.push(server.close);
+  const human = new ConversationIpcClient({ kind: 'daemon' });
+  cleanups.push(async () => human.close());
+  const outputs: PortOutput[] = [];
+  human.onOutput((output) => outputs.push(output));
+  await human.connect();
+
+  const accepted = await human.submit({ kind: 'message', text: humanMessage });
+
+  expect(accepted.kind).toBe('accepted');
+  await vi.waitFor(() => expect(outputs).toContainEqual(expect.objectContaining({ kind: 'result',
+    operationId: accepted.kind === 'accepted' ? accepted.operationId : '', result: { kind: 'reply', message: managerReply } })));
+  await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
+  expect(directorCall).toHaveBeenCalledOnce();
+  expect(managerCall).toHaveBeenCalledOnce();
+  const forwarded = submissions.mock.calls.map(([request]) => request)
+    .find((request) => request.speaker.namespace === 'agent' && request.speaker.id === 'director');
+  expect(forwarded).toMatchObject({ command: { kind: 'message', text: expect.stringContaining('PR #1950') } });
+  const command = forwarded!.command;
+  if (command.kind !== 'message') throw new Error('Manager message required');
+  expect(command.text).toContain(repository);
+  expect(command.text).toContain(goal.id);
+  expect(command.text).toContain('takt_merge_goal_pr');
+  expect(command.text).toContain(lang === 'ja' ? '人の明示の指示' : "human's explicit instruction");
+  expect(managerCall.mock.calls[0]![0]).toContain(command.text);
+  expect(managerCall.mock.calls[0]![0]).toContain('Speaker: {"namespace":"agent","id":"director"}');
+  expect(managerCall.mock.calls[0]![1].cwd).toBe(repository);
+  expect(managerOperationId).toBeTypeOf('string');
+  expect(await collect(new ConversationSpeakerStore(directory).iterate(managerId))).toEqual([
+    { conversationId: managerId, operationId: managerOperationId, actor: { namespace: 'agent', id: 'director' } },
+  ]);
+  expect(await collect(new ConversationSpeakerStore(directory).iterate(conversationId({ kind: 'repository', repositoryDirectory: otherRepository })))).toEqual([]);
+  expect(toolCalls.mock.calls.map(([request]) => request.name)).toEqual([
+    'takt_list_managers', 'takt_list_goals', 'takt_get_goal', 'takt_tell_manager',
+  ]);
   expect(slack).not.toHaveBeenCalled();
 });
 
