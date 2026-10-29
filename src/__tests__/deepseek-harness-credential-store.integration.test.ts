@@ -217,7 +217,7 @@ async function startMockEndpoint(readSourcePath: string): Promise<MockEndpoint> 
         response.writeHead(401, { 'Content-Type': 'application/json' });
         response.end(JSON.stringify({
           type: 'error',
-          error: { type: 'authentication_error', message: `rejected ${STORE_KEY}` },
+          error: { type: 'authentication_error', message: `rejected ${requests[sequence - 1]?.apiKey}` },
         }));
         return;
       }
