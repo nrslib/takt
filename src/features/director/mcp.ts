@@ -10,6 +10,7 @@ import { getGoalInputSchema, listGoalsInputSchema } from '../mcp/schemas.js';
 import { jsonResult, pagedResult } from '../mcp/response.js';
 import { listDirectorManagers, resolveDirectorManager } from './managers.js';
 import { tellDirectorManager } from './tellManager.js';
+import { directorNotificationTargetSchema, resolveDirectorNotificationSubject } from './notificationTarget.js';
 
 export const DIRECTOR_MCP_SERVER_NAME = 'takt_director';
 export const DIRECTOR_TOOL_NAMES = [
@@ -21,7 +22,7 @@ export interface DirectorNotifications {
   notify(notification: DirectorNotification): Promise<void>;
 }
 
-export function createDirectorMcpServer(configDirectory: string, notifications: DirectorNotifications, signal: AbortSignal): McpServer {
+export function createDirectorMcpServer(configDirectory: string, notifications: DirectorNotifications, signal: AbortSignal, requireNotificationTarget = false): McpServer {
   const server = new McpServer({ name: 'takt-director', version: packageVersion });
   const managerId = z.string().regex(/^manager-[a-f0-9]{64}$/);
   const page = { offset: z.number().int().safe().nonnegative().optional(), limit: z.number().int().min(1).max(50).optional() };
@@ -61,8 +62,17 @@ export function createDirectorMcpServer(configDirectory: string, notifications: 
     inputSchema: z.object({ managerId, text: z.string().min(1) }).strict() }, guarded(async (value: { managerId: string; text: string }) =>
     jsonResult(await tellDirectorManager(configDirectory, value.managerId, value.text, signal))));
   server.registerTool('takt_notify_human', { description: 'Save a director notification and show it in the director conversation. Does not post to Slack.',
-    inputSchema: z.object({ message: z.string().min(1) }).strict() }, guarded(async (value: { message: string }) => {
-    const notification = new DirectorNotificationStore(configDirectory).create(value.message);
+    inputSchema: z.object({ message: z.string().min(1), target: directorNotificationTargetSchema.optional() }).strict() },
+  guarded(async (value: { message: string; target?: z.infer<typeof directorNotificationTargetSchema> }) => {
+    if (requireNotificationTarget && value.target === undefined) throw new Error('Patrol notifications require a target');
+    const store = new DirectorNotificationStore(configDirectory);
+    const subject = value.target === undefined ? undefined : await resolveDirectorNotificationSubject(configDirectory, value.target);
+    signal.throwIfAborted();
+    const message = value.target === undefined ? value.message : 'goalId' in value.target
+      ? `${value.target.cwd} (${value.target.goalId}): ${value.message}`
+      : `${value.target.managerId} (${value.target.inquiryId}): ${value.message}`;
+    const notification = subject === undefined ? store.create(message) : store.create(message, subject);
+    if (notification === undefined) return jsonResult({ notified: false });
     await notifications.notify(notification);
     return jsonResult(notification);
   }));

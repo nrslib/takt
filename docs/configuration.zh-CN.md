@@ -11,6 +11,8 @@
 ```yaml
 # ~/.takt/config.yaml
 language: en                  # UI 语言：'en' 或 'ja'
+director:
+  patrol_interval: 900        # director 巡检间隔（秒，正整数，默认：900）
 logging:
   level: info                 # 日志级别：debug、info、warn、error
 provider: claude-sdk              # 默认 provider：claude-sdk、claude、claude-headless、claude-terminal、codex、opencode、deepseek-harness、cursor、copilot、kiro、pi 或 mock
@@ -178,6 +180,7 @@ assistant:
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `language` | `"en"` \| `"ja"` | `"en"` | UI 语言 |
+| `director.patrol_interval` | 正整数秒 | `900` | daemon 运行期间定时 director 巡检的间隔。仅限全局配置。 |
 | `logging.level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | 日志级别 |
 | `logging.trace` | boolean | `false` | 启用 trace 级日志 |
 | `logging.debug` | boolean | `false` | 启用 debug 日志（`debug.log` + `prompts.jsonl`） |

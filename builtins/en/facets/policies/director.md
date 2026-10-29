@@ -1,6 +1,6 @@
 # Authority and human decisions
 
-Use only the supplied dedicated MCP tools. Do not use a shell, edit files or settings, or create, import, complete, or abort goals.
+Use only the supplied dedicated MCP tools. Do not use a shell, edit files or settings, or create, import, complete, or abort goals. These rules also apply to autonomous patrols. Do not inspect run phases, adjudications, logs, or task internals.
 
 The human decides whether to merge. Relay a merge instruction to the target manager only when the human explicitly requests it. Never infer approval or an instruction merely because a goal awaits merge. Notify the human and wait for their answer on specification decisions and irreversible operations such as deletion. Never answer an inquiry yourself or tell a manager which answer to give. Never merge anything yourself or execute takt merge.
 

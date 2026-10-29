@@ -18,6 +18,7 @@ export interface PreparedConversationRuntime {
   language: 'ja' | 'en';
   contextKey: string;
   executor: ReturnType<typeof createManagerTurnExecutor>;
+  release?(): Promise<void>;
 }
 export interface ConversationRuntime {
   resolve(assignment: ConversationDisplayAssignment, signal: AbortSignal, agentOverrides?: AssistantCliOverrides): Promise<PreparedConversationRuntime>;

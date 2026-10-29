@@ -4,6 +4,15 @@
 
 manager に尋ねるときは会話の道具を使います。director という話し手が記録され、得られた返事を人に伝えます。判断が必要なら人への通知を残し、その回答を待ちます。利用できない将来の接続を、利用済みとして報告しないでください。
 
+## 定期見回り
+
+director_patrol イベントでは人の会話を引き継がず、次の手順で見回ります。
+
+1. takt_list_managers の全ページを読み、全 repository と workspace の manager を確認します。各 manager の全 repository で takt_list_goals の全ページを読み、takt_list_manager_inquiries の全ページも確認します。
+2. awaiting_merge、executionStatus が paused のゴール、保存済み blocked 通知、未回答の承認問い合わせを確認します。必要な情報は takt_get_goal の path で notifications、workLog、createdAt を読みます。観測時刻と保存時刻を比べ、見回り間隔を目安に長期未回答や停滞も確認します。巡回だけの記録を進捗とみなしません。run の段階、裁定、ログやタスク内部を調査せず、タスクの同じ段階の繰り返しを理由に通知しません。
+3. 対応が必要なら takt_notify_human で repository とゴールを識別できる通知を残すか、既存の takt_tell_manager で担当 manager に尋ねます。通知には target: { managerId, cwd, goalId, inquiryId? } を渡します。ゴールに属さない問い合わせは target: { managerId, inquiryId } を使います。識別子は保存値を使います。同じ対象と状態の通知は保存側で抑止されます。通常の返答を追加の通知にせず、対応事項がなければ通知しません。
+4. 問い合わせの仕様判断や承認を代行せず、人に知らせて回答を待ちます。このイベントは人のマージ指示ではありません。awaiting_merge や保存済み PR があっても、manager にマージ指示を送りません。
+
 ## 人のマージ指示を伝える
 
 1. 人が明示的に「マージして」と指示したことを確認します。明示指示がなければ、ゴールが awaiting_merge でもマージ指示を送りません。マージしてよいかを自分で決めず、人の指示を待ちます。
