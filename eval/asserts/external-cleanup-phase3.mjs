@@ -10,9 +10,18 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '../..');
 
 export async function evaluateReport(report, vars, judge) {
   const language = vars.language ?? 'ja';
+  const verifier = vars.role === 'verifier';
+  const expectedResult = vars.scenario.startsWith('external-cleanup-complete') ? 'verified'
+    : vars.scenario.startsWith('external-cleanup-repair-pending') ? 'incomplete' : 'plan_invalid';
+  if (verifier) {
+    const result = report.match(/^##\s*(?:結果|Result):\s*(verified|incomplete|plan_invalid)\s*$/im)?.[1];
+    if (result !== expectedResult) {
+      return { pass: false, score: 0, reason: `Verifier report result: ${result ?? 'missing'}; expected: ${expectedResult}` };
+    }
+  }
   const phaseVars = {
     language, variant: 'candidate', workflow: 'development-remediation-dynamic',
-    step_name: 'fix', input_source: 'report', input: report, json_instruction: true,
+    step_name: verifier ? 'fix-verifier' : 'fix', input_source: 'report', input: report, json_instruction: true,
   };
   const prompt = buildPhase3Prompt({ vars: phaseVars });
   const answer = await judge(prompt);
@@ -31,11 +40,13 @@ export async function evaluateReport(report, vars, judge) {
     return { pass: false, score: 0, reason: 'Phase 3 returned an invalid decision' };
   }
   const workflow = parse(readFileSync(join(root, 'builtins', language, 'workflows', `${phaseVars.workflow}.yaml`), 'utf8'));
-  const fix = workflow.steps.find(step => step.name === 'fix');
-  const index = fix.rules.findIndex(rule => rule.condition === candidate.label);
-  const nextStep = determineRuleTransition(fix, index)?.nextStep;
-  const complete = vars.scenario.startsWith('external-cleanup-complete');
-  const pass = complete ? nextStep === 'fix-verifier' : nextStep === 'fix-replan';
+  const step = workflow.steps.find(entry => entry.name === phaseVars.step_name);
+  const index = step.rules.findIndex(rule => rule.condition === candidate.label);
+  const nextStep = determineRuleTransition(step, index)?.nextStep;
+  const expectedNextStep = verifier
+    ? { verified: 'COMPLETE', incomplete: 'fix-retry', plan_invalid: 'verification-replan' }[expectedResult]
+    : vars.scenario.startsWith('external-cleanup-complete') ? 'fix-verifier' : 'fix-replan';
+  const pass = nextStep === expectedNextStep;
   return { pass, score: pass ? 1 : 0, reason: `Phase 3 selected ${candidate.label}; next: ${nextStep}` };
 }
 

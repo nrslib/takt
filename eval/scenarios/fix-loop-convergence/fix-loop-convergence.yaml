@@ -81,3 +81,33 @@ tests:
           Pass only if the report identifies the unfinished product repair and does not treat it as complete merely because external cleanup is outstanding.
       - type: javascript
         value: file://../../asserts/external-cleanup-phase3.mjs
+  - description: 'fix-verifier: 外部 cleanup のみ残る製品修正完了 (ja)'
+    vars: { role: verifier, scenario: external-cleanup-complete }
+    assert:
+      - type: javascript
+        value: file://../../asserts/external-cleanup-phase3.mjs
+  - description: 'fix-verifier: 対象関数が存在せず計画が無効 (ja)'
+    vars: { role: verifier, scenario: external-cleanup-incomplete }
+    assert:
+      - type: javascript
+        value: file://../../asserts/external-cleanup-phase3.mjs
+  - description: 'fix-verifier: 計画は有効だが製品修正が未完了 (ja)'
+    vars: { role: verifier, scenario: external-cleanup-repair-pending }
+    assert:
+      - type: javascript
+        value: file://../../asserts/external-cleanup-phase3.mjs
+  - description: 'fix-verifier: only external cleanup remains (en)'
+    vars: { role: verifier, language: en, scenario: external-cleanup-complete-en }
+    assert:
+      - type: javascript
+        value: file://../../asserts/external-cleanup-phase3.mjs
+  - description: 'fix-verifier: missing planned function invalidates the plan (en)'
+    vars: { role: verifier, language: en, scenario: external-cleanup-incomplete-en }
+    assert:
+      - type: javascript
+        value: file://../../asserts/external-cleanup-phase3.mjs
+  - description: 'fix-verifier: valid plan with unfinished product repair (en)'
+    vars: { role: verifier, language: en, scenario: external-cleanup-repair-pending-en }
+    assert:
+      - type: javascript
+        value: file://../../asserts/external-cleanup-phase3.mjs
