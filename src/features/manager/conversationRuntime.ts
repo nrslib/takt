@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { createWorkspaceManagerContext, type ManagerAssignment } from './startupResolution.js';
+import { createWorkspaceManagerContext } from './startupResolution.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 import type { ConversationAssignment } from '../../infra/conversations/schema.js';
 import { createManagerConversationPlan } from './conversationPlan.js';
@@ -10,6 +10,7 @@ import { createManagerTurnExecutor } from './turnExecutor.js';
 import type { ProviderType } from '../../infra/providers/types.js';
 import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
+import type { ConversationDisplayAssignment } from './conversationPort.js';
 
 export interface PreparedConversationRuntime {
   provider: ProviderType;
@@ -19,7 +20,7 @@ export interface PreparedConversationRuntime {
   executor: ReturnType<typeof createManagerTurnExecutor>;
 }
 export interface ConversationRuntime {
-  resolve(assignment: ManagerAssignment, signal: AbortSignal, agentOverrides?: AssistantCliOverrides): Promise<PreparedConversationRuntime>;
+  resolve(assignment: ConversationDisplayAssignment, signal: AbortSignal, agentOverrides?: AssistantCliOverrides): Promise<PreparedConversationRuntime>;
   close(): Promise<void>;
 }
 
@@ -27,6 +28,7 @@ export function createConversationRuntime(configDirectory: string): Conversation
   const entries = new Map<string, PreparedConversationRuntime & { dispose(): Promise<void> }>();
   return {
     async resolve(assignment, signal, agentOverrides) {
+      if (assignment.kind === 'daemon') throw new Error('Director runtime is required for daemon conversations');
       const identity: ConversationAssignment = assignment.kind === 'workspace'
         ? { kind: 'workspace', workspaceId: assignment.workspaceId }
         : { kind: 'repository', repositoryDirectory: assignment.repositoryDirectory };

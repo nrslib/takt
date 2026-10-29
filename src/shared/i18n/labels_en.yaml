@@ -424,6 +424,11 @@ tui:
     retryDetails: "Task: {task}\nSummary: {summary}\nWorkflow: {workflow}\nStart position: {start}"
     exceededStart: "Saved stopping position: {start} (iteration {iteration})"
 
+director:
+  description: "Open the experimental director conversation TUI"
+  experimentalNotice: "director is experimental. Behavior, settings, and saved data formats may change."
+  costNotice: "director runs AI turns, which incur provider API costs."
+  placeholder: "Discuss manager status or instructions"
 manager:
   conversation:
     reading: "Reading conversation data. Summary approval is unavailable until it completes."

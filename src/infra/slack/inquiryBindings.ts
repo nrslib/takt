@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { isAbsolute, join } from 'node:path';
 import { z } from 'zod/v4';
-import { ConversationAssignmentSchema } from '../conversations/schema.js';
+import { ManagerConversationAssignmentSchema } from '../conversations/schema.js';
 import { GoalIdSchema } from '../goals/schema.js';
 import { ensurePrivateDirectory, readPrivateFileState } from '../../shared/utils/private-file.js';
 import { assertSafePath, lstatOrUndefined } from '../../shared/utils/private-path-identity.js';
@@ -9,7 +9,7 @@ import { writeFileAtomic } from '../config/project/sessionStore.js';
 
 const targetSchema = z.union([
   z.object({ goalId: GoalIdSchema, repositoryDirectory: z.string().refine(isAbsolute) }).strict(),
-  z.object({ goalId: z.null(), owner: ConversationAssignmentSchema }).strict(),
+  z.object({ goalId: z.null(), owner: ManagerConversationAssignmentSchema }).strict(),
 ]);
 const identity = { channelId: z.string().min(1), target: targetSchema, questionId: z.uuid() };
 const bindingSchema = z.object({ ...identity, parentTs: z.string().min(1) }).strict();

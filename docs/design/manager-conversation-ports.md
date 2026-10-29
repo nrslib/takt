@@ -2,7 +2,7 @@
 
 This is a developer design note, outside the three-language translation requirement that applies to the README and user documentation.
 
-This document records the design and original rollout plan for daemon-owned manager conversations. The local daemon service/IPC (A), TUI IPC client (B), and user documentation (C) are implemented in the current codebase. Slack Apps, HTTP Webhooks, director, transcript storage and conversation-history summaries remain future work. No dependencies, conversation locks, application request queues, unused port configuration or general plugin registry are introduced.
+This document records the design and original rollout plan for daemon-owned manager conversations. The local daemon service/IPC (A), TUI IPC client (B), user documentation (C), and the initial daemon-wide director conversation are implemented in the current codebase. The director can inspect assigned managers, read their saved goals and pending human inquiries, send a manager message, and save a notice for the director TUI. Scheduled inspection, director Slack delivery, a dedicated merge-request flow, transcript storage and conversation-history summaries remain future work. The sections below describe the manager conversation contract unless stated otherwise. No dependencies, conversation locks, application request queues, unused port configuration or general plugin registry are introduced.
 
 Before this migration, `runManager.tsx` created the provider plan, prepared MCP, and created `createManagerConversationSession` in the TUI process. `conversationSession.ts` kept `sessionId`, `pending`, `generation`, `active`, and `registering` in memory. `ManagerView.tsx` invoked it directly, polled saved events, and supplied a callback for permission-file updates. Closing the TUI aborted the session. Separately, `runDaemon.ts` created per-project event managers; `runEventManager.ts` reset its session before each event. The migration replaced the human conversation path while retaining the existing goal, task, inquiry, permission and event files as sources of truth.
 
@@ -17,9 +17,9 @@ The record has exactly the following information. All nullable fields must be pr
 | Field | Type / required | Meaning and validation |
 |---|---|---|
 | `schemaVersion` | integer literal `1`, required | Reject unsupported versions explicitly; do not silently reset or introduce legacy readers. |
-| `id` | string, required | `manager-` plus 64 lowercase SHA-256 hexadecimal digits, as defined in §2; must match filename and assignment. |
-| `agent` | nonempty string, required; currently `manager` | Conversation owner role, separate from assignment and human identity. This does not enable director. |
-| `assignment` | repository or workspace identity, required | `{kind:'repository', repositoryDirectory:string}` with canonical Git root, or `{kind:'workspace', workspaceId:string}` with existing UUID. Resolve membership afresh when acting. |
+| `id` | string, required | `manager-` plus 64 lowercase SHA-256 hexadecimal digits for the manager identity as defined in §2; must match filename and assignment. Director IDs use a separate `director-` identity. |
+| `agent` | nonempty string, required; `manager` in this contract | Conversation owner role, separate from assignment and human identity. The director uses its own record and daemon assignment. |
+| `assignment` | repository or workspace identity in this contract | `{kind:'repository', repositoryDirectory:string}` with canonical Git root, or `{kind:'workspace', workspaceId:string}` with existing UUID. Resolve membership afresh when acting. The director assignment is daemon-scoped. |
 | `counterpart` | `{namespace:string, id:string}`, required | Logical audience: initially the local human operating this assignment. It is not an OS process, speaker, or transport connection. |
 | `lastSpeaker` | `{namespace:string, id:string} \| null`, required | Last accepted actor identity, with no utterance text; adapters authenticate/establish it. Multiple speakers can address one audience. |
 | `provider` | nonempty canonical provider name, required | Provider resolved by the manager plan. |

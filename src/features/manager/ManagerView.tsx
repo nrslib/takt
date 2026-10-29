@@ -106,6 +106,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const edit = (next: EditorState): void => { editorRef.current = next; setEditor(next); };
   const editAnswer = (next: EditorState): void => { answerEditorRef.current = next; setAnswerEditor(next); };
   const currentAssignment = snapshot.items.find((item) => item.kind === 'assignment')?.assignment ?? assignment;
+  if (currentAssignment.kind === 'daemon') throw new Error('Manager view received a director assignment');
   const goals = snapshot.items.flatMap((item) => item.kind === 'goal' ? [item.goal] : []);
   const questions: PendingQuestion[] = snapshot.items.flatMap((item): PendingQuestion[] => {
     if (item.kind !== 'inquiry') return [];

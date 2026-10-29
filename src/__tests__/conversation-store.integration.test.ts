@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { ConversationStore } from '../infra/conversations/store.js';
-import { conversationRecord } from './helpers/conversation-fixtures.js';
+import { conversationRecord, directorConversationRecord } from './helpers/conversation-fixtures.js';
 
 vi.mock('node:fs', async (original) => {
   const actual = await original<typeof import('node:fs')>();
@@ -30,6 +30,32 @@ it('round-trips the complete record, reserved goal identity and provider session
     expect(fs.statSync(path).mode & 0o777).toBe(0o600);
     expect(fs.statSync(join(directory, 'conversations')).mode & 0o777).toBe(0o700);
   }
+});
+
+it('restores the director session without replacing a repository manager record', () => {
+  const manager = conversationRecord('/work/example');
+  store.write(manager);
+  const managerPath = join(directory, 'conversations', `${manager.id}.json`);
+  const priorManager = fs.readFileSync(managerPath);
+  const director = { ...directorConversationRecord(), sessionId: 'director-session' };
+
+  store.write(director);
+  const restored = new ConversationStore(directory).read(director.id, director.assignment);
+
+  expect(restored).toEqual(director);
+  expect(restored?.agent).toBe('director');
+  expect(director.id).not.toBe(manager.id);
+  expect(fs.readFileSync(managerPath)).toEqual(priorManager);
+  expect(new ConversationStore(directory).read(manager.id, manager.assignment)).toEqual(manager);
+});
+
+it('keeps director conversations scoped to the daemon configuration directory', () => {
+  const director = { ...directorConversationRecord(), sessionId: 'director-session' };
+  store.write(director);
+  const other = new ConversationStore(join(directory, 'other-daemon'));
+
+  expect(other.read(director.id, director.assignment)).toBeUndefined();
+  expect(store.read(director.id, director.assignment)).toEqual(director);
 });
 
 it('returns missing only for a missing conversation and rejects malformed or unsupported records', () => {

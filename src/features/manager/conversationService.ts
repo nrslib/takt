@@ -1,4 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { DirectorNotificationStore } from '../../infra/conversations/directorNotifications.js';
+import { ConversationSpeakerStore } from '../../infra/conversations/speakerStore.js';
+import { createDirectorConversationPlan } from '../director/conversationPlan.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 import { ConversationActorSchema, ConversationAssignmentSchema, PortBindingSchema,
   type ConversationRecord, type PendingSummary, type ConversationAssignment } from '../../infra/conversations/schema.js';
@@ -18,6 +21,7 @@ import { SnapshotChanges } from './snapshotChanges.js';
 import type { ConversationRuntime } from './conversationRuntime.js';
 import type { ConversationCommand, ConversationDelivery, ConversationInput, ConversationOpen, ConversationState,
   OperationResult, OutputVersion, PortOutput, SnapshotValue, SnapshotRead, Submission } from './conversationPort.js';
+import type { ConversationDisplayAssignment } from './conversationPort.js';
 import { ConversationError, conversationErrorResult } from './conversationErrors.js';
 import { answerConversationInquiry } from './conversationAnswers.js';
 import { setGoalExecutionStatus } from '../../infra/goals/execution.js';
@@ -40,6 +44,7 @@ interface LoadedConversation {
   active?: Operation;
   contextKey?: string;
   storageFailed: boolean;
+  recoveryRecord?: ConversationRecord;
   denials?: string[];
 }
 interface GoalProjection { goal: Extract<SnapshotValue, { kind: 'goal' }>; inquiries: PendingInquiry[]; events: ManagerDisplayEvent[] }
@@ -48,7 +53,10 @@ interface Attachment { conversation: LoadedConversation; delivery: ConversationD
   changes: SnapshotChanges; currentRead?: SnapshotRead;
   projections: Map<string, { context: string; cache: Map<string, GoalProjectionCacheEntry<GoalProjection>> }> }
 
-function identityOf(assignment: ManagerAssignment): ConversationAssignment {
+function identityOf(assignment: ManagerAssignment): Exclude<ConversationAssignment, { kind: 'daemon' }>;
+function identityOf(assignment: ConversationDisplayAssignment): ConversationAssignment;
+function identityOf(assignment: ConversationDisplayAssignment): ConversationAssignment {
+  if (assignment.kind === 'daemon') return { kind: 'daemon' };
   return assignment.kind === 'workspace' ? { kind: 'workspace', workspaceId: assignment.workspaceId }
     : { kind: 'repository', repositoryDirectory: assignment.repositoryDirectory };
 }
@@ -57,6 +65,8 @@ export function createConversationService(input: {
   configDirectory: string; owner: DaemonOwner; runtime: ConversationRuntime; onDomainChange(): void;
 }) {
   const store = new ConversationStore(input.configDirectory);
+  const speakers = new ConversationSpeakerStore(input.configDirectory);
+  const notifications = new DirectorNotificationStore(input.configDirectory);
   const conversations = new Map<string, LoadedConversation>();
   const initializing = new Set<string>();
   const admissions = new Set<Promise<void>>();
@@ -82,6 +92,7 @@ export function createConversationService(input: {
     conversation.record = record;
     conversation.sequence++;
     conversation.storageFailed = false;
+    conversation.recoveryRecord = undefined;
   };
   const capture = (conversation: LoadedConversation): ConversationState => {
     const record = conversation.record;
@@ -102,12 +113,13 @@ export function createConversationService(input: {
     }
     await Promise.all(deliveries);
   };
-  const resolveAssignment = async (identity: ConversationAssignment): Promise<ManagerAssignment> => {
+  const resolveAssignment = async (identity: ConversationAssignment): Promise<ConversationDisplayAssignment> => {
+    if (identity.kind === 'daemon') return { kind: 'daemon', repositoryDirectories: [] };
     const normalized = identity.kind === 'repository'
       ? { kind: 'repository' as const, repositoryDirectory: await resolveGitRepositoryDirectory(identity.repositoryDirectory) } : identity;
     return resolveCurrentManagerAssignment(normalized, input.configDirectory);
   };
-  const currentAssignment = async (conversation: LoadedConversation): Promise<ManagerAssignment> => {
+  const currentAssignment = async (conversation: LoadedConversation): Promise<ConversationDisplayAssignment> => {
     const assignment = await resolveAssignment(conversation.record.assignment);
     if (conversationId(identityOf(assignment)) !== conversation.record.id) {
       const original = conversation.record.assignment;
@@ -126,7 +138,7 @@ export function createConversationService(input: {
     if (attachment === undefined) throw new ConversationError('unavailable_attachment');
     return attachment;
   };
-  const readSnapshot = (conversation: LoadedConversation, assignment: ManagerAssignment, attachment: Attachment): SnapshotRead => {
+  const readSnapshot = (conversation: LoadedConversation, assignment: ConversationDisplayAssignment, attachment: Attachment): SnapshotRead => {
     const state = capture(conversation);
     const capturedVersion = version(conversation, state.running?.operationId ?? null);
     const language = conversation.language;
@@ -135,6 +147,10 @@ export function createConversationService(input: {
       yield { kind: 'state', state };
       yield { kind: 'assignment', assignment };
       try {
+        if (assignment.kind === 'daemon') {
+          for await (const notification of notifications.iterate()) yield { kind: 'display_event', event: notification };
+          return;
+        }
         const inquiries: PendingInquiry[] = [];
         const events: ManagerDisplayEvent[] = [];
         for (const directory of attachment.projections.keys()) {
@@ -197,14 +213,30 @@ export function createConversationService(input: {
     return { kind: 'goal_registered', goal };
   };
   const execute = async (conversation: LoadedConversation, operation: Operation, command: Exclude<ConversationCommand, { kind: 'abort_turn' }>,
-    assignment: ManagerAssignment, priorPending: PendingSummary | null, agentOverrides: ConversationOpen['agentOverrides']): Promise<void> => {
+    assignment: ConversationDisplayAssignment, priorPending: PendingSummary | null, agentOverrides: ConversationOpen['agentOverrides']): Promise<void> => {
     let result: OperationResult;
     let clearSessionOnFailure = false;
     const denials: string[] = [];
     try {
       const signal = operation.controller.signal;
       signal.throwIfAborted();
-      switch (command.kind) {
+      if (assignment.kind === 'daemon') {
+        if (command.kind !== 'message') throw new ConversationError('invalid_input');
+        const runtime = await input.runtime.resolve(assignment, signal, agentOverrides);
+        const changed = conversation.record.provider !== runtime.provider || conversation.record.model !== runtime.model
+          || conversation.contextKey !== undefined && conversation.contextKey !== runtime.contextKey;
+        if (changed) save(conversation, { ...conversation.record, provider: runtime.provider, model: runtime.model, sessionId: null });
+        conversation.contextKey = runtime.contextKey;
+        conversation.language = runtime.language;
+        const output = await runtime.executor.execute({
+          prompt: command.text, instruction: command.text, sessionId: conversation.record.sessionId ?? undefined,
+          assignment: undefined, abortSignal: signal, configDirectory: input.configDirectory,
+          recovery: { context: '', invalidateSession: async () => { save(conversation, { ...conversation.record, sessionId: null }); } },
+        });
+        signal.throwIfAborted();
+        save(conversation, { ...conversation.record, sessionId: output.sessionId ?? null });
+        result = { kind: 'reply', message: output.message };
+      } else switch (command.kind) {
         case 'message': {
           const previousDenials = conversation.denials;
           conversation.denials = undefined;
@@ -232,10 +264,15 @@ export function createConversationService(input: {
           }
           const businessContext = JSON.stringify({ assignment, pending: priorPending, goals: JSON.parse(buildGoalMemory(memories)) as unknown });
           const output = await runtime.executor.execute({
-            prompt: previousDenials === undefined || previousDenials.length === 0 ? command.text
-              : `${command.text}\n\nPrevious tool permission denials: ${JSON.stringify(previousDenials)}`,
+            prompt: [
+              command.text,
+              ...(conversation.record.lastSpeaker?.namespace === 'agent'
+                ? [`Speaker: ${JSON.stringify(conversation.record.lastSpeaker)}`] : []),
+              ...(previousDenials === undefined || previousDenials.length === 0 ? []
+                : [`Previous tool permission denials: ${JSON.stringify(previousDenials)}`]),
+            ].join('\n\n'),
             instruction: command.text, sessionId: conversation.record.sessionId ?? undefined,
-            assignment: conversation.record.assignment, abortSignal: signal, configDirectory: input.configDirectory,
+            assignment: identityOf(assignment), abortSignal: signal, configDirectory: input.configDirectory,
             recovery: { context: businessContext, invalidateSession: async () => {
               clearSessionOnFailure = true;
               save(conversation, { ...conversation.record, sessionId: null });
@@ -245,6 +282,7 @@ export function createConversationService(input: {
           });
           signal.throwIfAborted();
           const latest = await resolveAssignment(conversation.record.assignment);
+          if (latest.kind === 'daemon') throw new ConversationError('invalid_assignment');
           let pending: PendingSummary | null = null;
           if (output.summary !== null) {
             const { repositoryDirectory: requested, ...summary } = output.summary;
@@ -289,7 +327,7 @@ export function createConversationService(input: {
       }
     } catch (error) {
       result = conversationErrorResult(error, conversation.language);
-      if (command.kind === 'message' && !operation.controller.signal.aborted) {
+      if (command.kind === 'message' && assignment.kind !== 'daemon' && !operation.controller.signal.aborted) {
         const cwd = assignment.kind === 'repository' ? assignment.repositoryDirectory
           : createWorkspaceManagerContext({ id: assignment.workspaceId, name: assignment.name,
             repositoryDirectories: assignment.repositoryDirectories }, input.configDirectory).cwd;
@@ -330,14 +368,16 @@ export function createConversationService(input: {
         const assignment = await resolveAssignment(requested);
         const identity = identityOf(assignment);
         if (conversationId(identity) !== open.conversationId) throw new ConversationError('invalid_assignment');
+        const directorPlan = assignment.kind === 'daemon'
+          ? createDirectorConversationPlan(input.configDirectory, open.agentOverrides ?? {}) : undefined;
         checkAdmission();
         let conversation = existing;
         if (conversation === undefined) {
           const restored = store.read(open.conversationId, identity);
-          const cwd = assignment.kind === 'repository' ? assignment.repositoryDirectory
+          const cwd = assignment.kind === 'daemon' ? input.configDirectory : assignment.kind === 'repository' ? assignment.repositoryDirectory
             : createWorkspaceManagerContext({ id: assignment.workspaceId, name: assignment.name, repositoryDirectories: assignment.repositoryDirectories }, input.configDirectory).cwd;
-          const plan = createManagerConversationPlan(cwd, open.agentOverrides ?? {});
-          const record = restored ?? { schemaVersion: 1 as const, id: open.conversationId, agent: 'manager', assignment: identity,
+          const plan = directorPlan ?? createManagerConversationPlan(cwd, open.agentOverrides ?? {});
+          const record = restored ?? { schemaVersion: 1 as const, id: open.conversationId, agent: assignment.kind === 'daemon' ? 'director' : 'manager', assignment: identity,
             counterpart: binding.counterpart, lastSpeaker: null, provider: plan.ctx.providerType, model: plan.ctx.model ?? null, sessionId: null, bindings: [],
             revision: 0, pending: null, approval: null, running: null };
           conversation = { record, sequence: 0, interrupted: record.running !== null,
@@ -376,6 +416,8 @@ export function createConversationService(input: {
         const parsedCommand = ConversationCommandSchema.safeParse(request.command);
         if (!parsedCommand.success) throw new ConversationError('invalid_input');
         const command = parsedCommand.data;
+        if ((conversation.record.assignment.kind === 'daemon' || attachment.speaker.namespace === 'agent' && attachment.speaker.id === 'director')
+          && command.kind !== 'message') throw new ConversationError('invalid_input');
         if (command.kind === 'abort_turn') {
           const active = conversation.active;
           if (active === undefined || active.id !== command.operationId) throw new ConversationError('invalid_input');
@@ -415,10 +457,19 @@ export function createConversationService(input: {
           nextRevision(conversation.record.revision);
           approval = { state: 'reserved', revision: command.revision, goalId: randomUUID(), repositoryDirectory: priorPending.repositoryDirectory };
         }
-        save(conversation, { ...conversation.record, lastSpeaker: attachment.speaker,
+        const priorRecord = conversation.record;
+        save(conversation, { ...priorRecord, lastSpeaker: attachment.speaker,
           approval,
           ...(changesRevision ? { revision: nextRevision(conversation.record.revision), pending: null } : {}),
           running: { operationId: operation.id, kind: command.kind, owner: { pid: input.owner.pid, identity: input.owner.identity } } });
+        if (command.kind === 'message') {
+          try { speakers.write({ conversationId: conversation.record.id, operationId: operation.id, actor: attachment.speaker }); }
+          catch {
+            conversation.recoveryRecord = priorRecord;
+            save(conversation, priorRecord);
+            throw new ConversationError('storage_error');
+          }
+        }
         const owned = conversation;
         const accepted = operation;
         void publish(conversation, { kind: 'running', state: capture(conversation) }, version(conversation, operation.id));
@@ -435,7 +486,7 @@ export function createConversationService(input: {
       const { conversation } = attachment;
       if (conversation.storageFailed) {
         if (conversation.active !== undefined && !conversation.active.cleanupComplete) throw new ConversationError('storage_error');
-        save(conversation, { ...conversation.record, running: null });
+        save(conversation, conversation.recoveryRecord ?? { ...conversation.record, running: null });
         conversation.active = undefined;
       }
       return readSnapshot(conversation, await currentAssignment(conversation), attachment);
@@ -444,6 +495,10 @@ export function createConversationService(input: {
   };
   return {
     ...service,
+    async notifyDirector(notification: { id: string; message: string }): Promise<void> {
+      const conversation = conversations.get(conversationId({ kind: 'daemon' }));
+      if (conversation !== undefined) await publish(conversation, { kind: 'notice', ...notification }, version(conversation, conversation.active?.id ?? null));
+    },
     get attachmentCount() { return attachments.size; },
     get activeOperationCount() { return initializing.size + [...conversations.values()].filter(({ active }) => active !== undefined).length; },
     stopAccepting() {
