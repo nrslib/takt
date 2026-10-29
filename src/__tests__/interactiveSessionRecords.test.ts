@@ -120,6 +120,19 @@ it('does not restore a discarded session after a failed write recovers', () => {
   expect(listRecords('/project', 'codex')).toHaveLength(1);
 });
 
+it('does not restore a discarded session after a failed read recovers', () => {
+  recordTurn({ cwd: '/project', provider: 'codex', sessionId: 'selected', input: 'old input', response: 'old reply' });
+  const owner = new InteractiveSessionRecords('/project');
+  disk.readError = true;
+  owner.discard({ provider: 'codex', sessionId: 'selected' });
+  expect(owner.list('codex')).toEqual([]);
+
+  disk.readError = false;
+  recordCompletedTurn(owner, 'codex', 'new', 'new input', 'new reply');
+  expect(listRecords('/project', 'codex')).toMatchObject([{ sessionId: 'new', response: 'new reply' }]);
+  expect(listRecords('/project', 'codex')).toHaveLength(1);
+});
+
 it('keeps unknown sessions and removes only confirmed missing sessions', async () => {
   for (const id of ['present', 'missing', 'unknown']) recordTurn({ cwd: '/project', provider: 'codex', sessionId: id, input: id, response: id });
   await cleanRecords('/project', async (_provider, id) => id === 'missing' ? false : id === 'present' ? true : undefined);

@@ -591,6 +591,8 @@ export async function runConversationLoop(
           if (!result.success) {
             delivery.fail();
             if (resumeFailed) {
+              error(result.content);
+              blankLine();
               history.pop();
               continue;
             }

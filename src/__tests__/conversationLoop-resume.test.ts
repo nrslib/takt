@@ -788,6 +788,35 @@ describe('/resume command', () => {
     expect(notices.some((message) => /(?:resume|session).*(?:fail|not found|no longer|could not)/i.test(message))).toBe(true);
   });
 
+  it('shows the fresh retry error and accepts the next input after a selected session cannot resume', async () => {
+    setupRawStdin(toRawInputs(['/resume', 'first input', 'next input', '/cancel']));
+    mockSelectRecentSession.mockResolvedValue('deleted-session');
+    const { provider } = createScenarioProvider([]);
+    const sessionIds: Array<string | undefined> = [];
+    provider._call.mockImplementation(async (_prompt: string, options: { sessionId?: string }) => {
+      sessionIds.push(options.sessionId);
+      if (options.sessionId === 'deleted-session') {
+        return {
+          persona: 'test', status: 'error', content: '', error: 'session no longer exists',
+          failureCategory: 'session_continuation_unsupported', timestamp: new Date(),
+        };
+      }
+      if (sessionIds.length === 2) {
+        return { persona: 'test', status: 'error', content: '', error: 'fresh retry failed', timestamp: new Date() };
+      }
+      return { persona: 'test', status: 'done', content: 'next reply', sessionId: 'new-session', timestamp: new Date() };
+    });
+
+    const result = await runConversationLoop('/test', createSessionContext({ provider }), defaultStrategy, undefined, undefined);
+
+    expect(result.action).toBe('cancel');
+    expect(sessionIds).toEqual(['deleted-session', undefined, undefined]);
+    expect(mockLogError).toHaveBeenCalledWith('fresh retry failed');
+    expect(listRecords('/test', 'mock')).toMatchObject([{
+      sessionId: 'new-session', inputs: ['first input', 'next input'], response: 'next reply',
+    }]);
+  });
+
   it('keeps a selected session record after an unrelated provider error', async () => {
     setupRawStdin(toRawInputs(['/resume', 'new input']));
     mockSelectRecentSession.mockResolvedValue('selected-session');
