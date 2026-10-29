@@ -95,6 +95,30 @@ describe('Builtin PR merge workflow execution', () => {
     rmSync(project, { recursive: true, force: true });
   });
 
+  function nextStepStart(engine: WorkflowEngine, name: string, occurrence = 1): Promise<void> {
+    return new Promise((resolve) => {
+      const onStart = (step: WorkflowStep) => {
+        if (step.name !== name) return;
+        occurrence--;
+        if (occurrence > 0) return;
+        engine.off('step:start', onStart);
+        resolve();
+      };
+      engine.on('step:start', onStart);
+    });
+  }
+
+  function nextStepComplete(engine: WorkflowEngine, name: string): Promise<void> {
+    return new Promise((resolve) => {
+      const onComplete = (step: WorkflowStep) => {
+        if (step.name !== name) return;
+        engine.off('step:complete', onComplete);
+        resolve();
+      };
+      engine.on('step:complete', onComplete);
+    });
+  }
+
   it.each(['ja', 'en'] as const)('%sのsingle-review-suiteは編集しない1体のレビュアーだけを持つ', (language) => {
     const suite = loadWorkflowByIdentifier(join(process.cwd(), 'builtins', language, 'workflows', 'single-review-suite.yaml'), project);
     expect(suite?.steps).toHaveLength(1);
@@ -423,12 +447,23 @@ describe('Builtin PR merge workflow execution', () => {
 
     it.each([false, true])('取り込み直しの競合=%sでもレビューを繰り返さずpush後の新HEADのCIを待ってマージする', async (resyncConflicted) => {
       const h = harness(name, { lateConflicts: 1, resyncConflicted, ciRunning: true }, language);
+      const firstCiWait = nextStepStart(h.engine, 'wait_ci');
       const running = h.engine.run();
+      await firstCiWait;
       await vi.advanceTimersByTimeAsync(0);
+      expect(h.engine.getState().systemContexts.get('wait_ci')?.status)
+        .toMatchObject({ headSha: 'b'.repeat(40), ci: { finished: false } });
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
       expect(h.calls.filter((call) => call === 'sync_with_root')).toHaveLength(1);
       expect(h.calls).not.toContain('merge_pr');
+      const secondCiWait = nextStepStart(h.engine, 'wait_ci');
       h.finishCi();
       await vi.advanceTimersByTimeAsync(15_000);
+      await secondCiWait;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.engine.getState().systemContexts.get('wait_ci')?.status)
+        .toMatchObject({ headSha: 'c'.repeat(40), ci: { finished: false } });
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
       expect(h.calls.filter((call) => call === 'sync_with_root')).toHaveLength(2);
       expect(h.calls.filter((call) => call === reviewCall)).toHaveLength(1);
       expect(h.calls.filter((call) => call === 'resolve_conflicts_with_ai')).toHaveLength(resyncConflicted ? 1 : 0);
@@ -511,9 +546,12 @@ describe('Builtin PR merge workflow execution', () => {
     it.each([false, true])('CI再実行成功後の競合は新HEADのCI失敗=%sに従い使用済み再実行予算を保持する', async (ciFailsAfterResync) => {
       const h = harness(name, { lateConflicts: 1, ciFailures: [{ verdict: 'external', summary: 'Runner outage' }],
         ciRunning: false, ciFailsAfterResync }, language);
+      const rerunCiWait = nextStepStart(h.engine, 'wait_ci', 2);
       const running = h.engine.run();
+      await rerunCiWait;
       await vi.advanceTimersByTimeAsync(0);
       expect(h.rerunPrCi).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
       h.setRerun(2, 'completed', 'success');
       await vi.advanceTimersByTimeAsync(15_000);
       expect((await running).status).toBe(ciFailsAfterResync ? 'aborted' : 'completed');
@@ -557,8 +595,11 @@ describe('Builtin PR merge workflow execution', () => {
           skipReason: outcome === 'skipped' ? 'review_rate_limited' : null,
           reason: outcome === 'skipped' ? 'Review rate limited after push' : null,
         } }, language);
+        const ciWait = nextStepStart(h.engine, 'wait_ci');
         const running = h.engine.run();
+        await ciWait;
         await vi.advanceTimersByTimeAsync(0);
+        expect(vi.getTimerCount()).toBeGreaterThan(0);
         expect(h.calls.filter((call) => call === 'caccia')).toHaveLength(1);
         expect(h.calls).not.toContain('merge_pr');
         expect(h.comments).toEqual([]);
@@ -620,8 +661,11 @@ describe('Builtin PR merge workflow execution', () => {
 
   it.each(['ja', 'en'] as const)('%sのsimpleは単体レビューと共通最終ゲートを経てpush後のCIを待ってmergeする', async (language) => {
     const h = harness('merge-review-fix-simple', { ciRunning: true, syncFailed: true }, language);
+    const ciWait = nextStepStart(h.engine, 'wait_ci');
     const running = h.engine.run();
+    await ciWait;
     await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
     expect(h.failures).toEqual([]);
     expect(h.calls, JSON.stringify(h.engine.getState().stepOutputs.get('review'))).toContain('commit_and_push');
     expect(h.calls).not.toContain('merge_pr');
@@ -795,8 +839,11 @@ describe('Builtin PR merge workflow execution', () => {
     { language, approved: false, reason: 'REASON_A', absentReason: 'REASON_B' },
   ]))('$languageのコメント専用builtinはapproved=$approvedと$reasonを対象PRへ反映する', async ({ language, approved, reason, absentReason }) => {
     const h = harness('merge-review', { ciRunning: true, approved, reason }, language);
+    const ciWait = nextStepStart(h.engine, 'wait_ci');
     const running = h.engine.run();
+    await ciWait;
     await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
     const commentsBeforeCi = h.comments.length;
     h.finishCi();
     await vi.advanceTimersByTimeAsync(15_000);
@@ -820,8 +867,11 @@ describe('Builtin PR merge workflow execution', () => {
 
   it.each(['ja', 'en'])('%sの修正builtinは子レビュー完了とpush後のCI通過後に追加AI判定なしでmergeする', async (language) => {
     const h = harness('merge-review-fix', { ciRunning: true }, language);
+    const ciWait = nextStepStart(h.engine, 'wait_ci');
     const running = h.engine.run();
+    await ciWait;
     await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
     const mergedBeforeCi = h.calls.includes('merge_pr');
     h.finishCi();
     await vi.advanceTimersByTimeAsync(15_000);
@@ -896,7 +946,11 @@ describe('Builtin PR merge workflow execution', () => {
 
     it.each(['merge-review', 'merge-review-fix'])('%sはCI待機上限超過の理由を対象PRへ投稿する', async (name) => {
       const h = harness(name, { ciRunning: true }, language);
+      const ciWait = nextStepStart(h.engine, 'wait_ci');
       const running = h.engine.run();
+      await ciWait;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
       await vi.advanceTimersByTimeAsync(1_800_000);
       await running;
       expect(h.comments).toHaveLength(1);
@@ -919,10 +973,18 @@ describe('Builtin PR merge workflow execution', () => {
 
     async function runRecovery(scenario: Scenario) {
       const h = harness(name, scenario, language);
+      const rerunComplete = nextStepComplete(h.engine, 'rerun_ci');
+      const firstExternalIndex = scenario.ciFailures?.findIndex(({ verdict }) => verdict === 'external') ?? -1;
+      const rerunCiWait = nextStepStart(h.engine, 'wait_ci', 2 + Math.max(0, firstExternalIndex));
       const running = h.engine.run();
-      await vi.advanceTimersByTimeAsync(0);
-      if (h.rerunPrCi.mock.calls.length > 0) h.setRerun(2, 'completed', scenario.rerunFails ? 'failure' : 'success');
-      await vi.advanceTimersByTimeAsync(45_000);
+      const reachedRerun = await Promise.race([rerunComplete.then(() => true), running.then(() => false)]);
+      if (reachedRerun && (h.engine.getState().effectResults.get('rerun_ci')?.rerun_ci as { success?: boolean })?.success) {
+        await rerunCiWait;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(vi.getTimerCount()).toBeGreaterThan(0);
+        h.setRerun(2, 'completed', scenario.rerunFails ? 'failure' : 'success');
+        await vi.advanceTimersByTimeAsync(45_000);
+      }
       const state = await running;
       expect(h.failures.every((reason) => !/iteration.limit|maximum.*steps/i.test(reason))).toBe(true);
       expect(typeof h.workflow.maxSteps).toBe('number');
@@ -1048,9 +1110,12 @@ describe('Builtin PR merge workflow execution', () => {
 
     it.each([0, 2])('修正%s周後の外部要因は独立した予算で1回再実行し同じHEADの完了を待ってマージする', async (fixRounds) => {
       const h = harness(name, { ciFailures: [...Array.from({ length: fixRounds }, () => defect()), external] }, language);
+      const rerunCiWait = nextStepStart(h.engine, 'wait_ci', 2 + fixRounds);
       const running = h.engine.run();
+      await rerunCiWait;
       await vi.advanceTimersByTimeAsync(0);
       expect(h.rerunPrCi).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
       const investigations = h.calls.filter((call) => call === 'agent:investigate_ci').length;
       const targetHead = h.engine.getState().effectResults.get('caccia')?.caccia;
       for (const [attempt, status, conclusion] of [[1, 'completed', 'failure'], [2, 'in_progress', 'success']] as const) {
@@ -1116,9 +1181,12 @@ describe('Builtin PR merge workflow execution', () => {
 
     it('再実行受付後のHEAD変更では待機を抜け元HEADの失敗証拠と変更理由をコメントして停止する', async () => {
       const h = harness(name, { ciFailures: [external] }, language);
+      const rerunCiWait = nextStepStart(h.engine, 'wait_ci', 2);
       const running = h.engine.run();
+      await rerunCiWait;
       await vi.advanceTimersByTimeAsync(0);
       expect(h.rerunPrCi).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
       h.setRemoteHead('f'.repeat(40));
       await vi.advanceTimersByTimeAsync(15_000);
       const state = await running;

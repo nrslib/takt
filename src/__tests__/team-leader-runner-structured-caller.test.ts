@@ -3237,6 +3237,12 @@ describe('TeamLeaderRunner with structuredCaller', () => {
         buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
         prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
+        savePhase1ExecutionLog: vi.fn(async (_log, stepName: string, stepIteration: number) => ({
+          path: '/tmp/project/.takt/runs/test/logs/phase1-execution/implement.json',
+          byteSize: 2,
+          stepName,
+          stepIteration,
+        })),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),
       },
