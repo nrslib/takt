@@ -8,13 +8,16 @@ import { zstdCompressSync } from 'node:zlib';
 import { decompressSessionFrames } from './helpers/deepseek-session-frames.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DeepSeekHarness } from '@deepseek-ai/dsh-sdk-client';
+const realManagedModuleLoads = vi.hoisted(() => vi.fn<(directory: string) => void>());
 vi.mock('../infra/deepseek-harness/managed-package.js', async (importOriginal) => {
   const managed = await importOriginal<typeof import('../infra/deepseek-harness/managed-package.js')>();
   return {
     ...managed,
     loadManagedDeepSeekHarnessModules: async () => {
       if (process.env.TAKT_DSH_USE_REAL_MANAGED_LOADER === '1') {
-        return managed.loadManagedDeepSeekHarnessModules();
+        const modules = await managed.loadManagedDeepSeekHarnessModules();
+        realManagedModuleLoads(modules.directory);
+        return modules;
       }
       const [sdk, llm] = await Promise.all([
         import('@deepseek-ai/dsh-sdk-client'),
@@ -30,6 +33,10 @@ import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
 import { runAgent } from '../agents/runner.js';
 import { loadPersonaSessions, resolvePersonaSessionId, updatePersonaSession } from '../infra/config/project/sessionStore.js';
 import { getDeepSeekRuntimePaths, hasDeepSeekSessionMarker } from '../infra/deepseek-harness/runtime-state.js';
+import {
+  getReadyDeepSeekHarnessPackageDirectory,
+  installDeepSeekHarness,
+} from '../infra/deepseek-harness/managed-package.js';
 import type { WorkflowStep } from '../core/models/types.js';
 import {
   callDeepSeekHarness,
@@ -374,6 +381,7 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
   }
 
   beforeEach(async () => {
+    realManagedModuleLoads.mockClear();
     root = await mkdtemp(path.join(os.tmpdir(), 'takt-deepseek-credential-store-'));
     workspace = path.join(root, 'workspace');
     sourceHome = path.join(root, 'source-home');
@@ -445,12 +453,11 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
     expect(() => expectNoManagedCredentialCopy()).toThrow();
   });
 
-  it('executes standard tools and streaming across multiple turns in the same live session without copying credentials', async () => {
-    const managedConfigDir = process.env.TAKT_DSH_REAL_MANAGED_CONFIG_DIR;
-    if (managedConfigDir !== undefined) {
-      vi.stubEnv('TAKT_CONFIG_DIR', managedConfigDir);
-      vi.stubEnv('TAKT_DSH_USE_REAL_MANAGED_LOADER', '1');
-    }
+  it('executes standard tools and streaming across multiple turns through the installed managed SDK without copying credentials', { timeout: 240_000 }, async () => {
+    await installDeepSeekHarness({ npmTimeoutMs: 120_000 });
+    const managedDirectory = await getReadyDeepSeekHarnessPackageDirectory();
+    expect(managedDirectory.startsWith(`${path.join(root, 'config', 'deepseek-harness')}${path.sep}`)).toBe(true);
+    vi.stubEnv('TAKT_DSH_USE_REAL_MANAGED_LOADER', '1');
     endpoint.setMode('workspace-tools');
     const events: StreamEvent[] = [];
     const storeBefore = await readFile(storePath);
@@ -467,6 +474,8 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
     });
     const response = await session.handleUserMessage({ text: 'Read, write, edit and run the workspace fixture.' });
 
+    expect(realManagedModuleLoads).toHaveBeenCalled();
+    expect(realManagedModuleLoads.mock.calls.every(([directory]) => directory === managedDirectory)).toBe(true);
     expect(response.kind).toBe('assistant_response');
     const toolNames = endpoint.requests[0]?.toolNames ?? [];
     expect(toolNames).toEqual(expect.arrayContaining(['read', 'write', 'edit', 'bash', 'glob', 'grep', 'subagent', 'workflow']));
