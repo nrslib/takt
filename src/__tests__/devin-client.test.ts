@@ -1056,11 +1056,27 @@ describe('callDevin', () => {
   it('Given parallel calls in the same directory, When each finishes, Then each resolves only its own session', async () => {
     let next = 0;
     const ids = ['session-a', 'session-b'];
+    const promptAssignments: Array<{
+      assignedSessionId: string;
+      requestSessionId: unknown;
+      prompt: unknown;
+    }> = [];
     mockSpawn.mockImplementation((...call: unknown[]) => {
       recordConfigArg(call);
       const child = createAcpChild();
       const id = ids[next++] ?? 'unexpected';
-      attachAcpServer(child, defaultHandlers({ sessionId: id }));
+      const handlers = defaultHandlers({ sessionId: id });
+      attachAcpServer(child, {
+        ...handlers,
+        'session/prompt': (params, api, requestId) => {
+          promptAssignments.push({
+            assignedSessionId: id,
+            requestSessionId: params.sessionId,
+            prompt: params.prompt,
+          });
+          return handlers['session/prompt']!(params, api, requestId);
+        },
+      });
       return child;
     });
 
@@ -1070,9 +1086,22 @@ describe('callDevin', () => {
     ]);
 
     expect(a.content).toBe('done');
-    expect(a.sessionId).toBe('session-a');
     expect(b.content).toBe('done');
-    expect(b.sessionId).toBe('session-b');
+    expect(a.sessionId).not.toBe(b.sessionId);
+    expect(next).toBe(2);
+    expect(promptAssignments).toHaveLength(2);
+    expect(promptAssignments).toEqual(expect.arrayContaining([
+      {
+        assignedSessionId: a.sessionId,
+        requestSessionId: a.sessionId,
+        prompt: [{ type: 'text', text: 'task a' }],
+      },
+      {
+        assignedSessionId: b.sessionId,
+        requestSessionId: b.sessionId,
+        prompt: [{ type: 'text', text: 'task b' }],
+      },
+    ]));
   });
 
   it('Given an invalid session ID, When called, Then returns an error without spawning', async () => {
