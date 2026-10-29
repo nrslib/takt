@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { withUpdateAdvice } from '../managed-providers/messages.js';
 import { realpathSync, unwatchFile, watchFile } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -1462,7 +1462,8 @@ async function getOrCreateProcess(
     userHome: os.homedir(),
     providerOptions,
   });
-  const preferLaunchEnvironmentCredential = (options.childProcessEnv?.[sourceBinding.ref]?.length ?? 0) > 0;
+  const explicitCredential = options.childProcessEnv?.[sourceBinding.ref];
+  const preferLaunchEnvironmentCredential = (explicitCredential?.length ?? 0) > 0;
   // The same selected value can come from ambient env or an explicit per-call
   // override. rc.2 gives those modes different store precedence, so they must
   // never share a live session even when the source binding is otherwise equal.
@@ -1519,13 +1520,19 @@ async function getOrCreateProcess(
   let credentialPatch: DeepSeekCredentialPatch | undefined;
   let processRecord: DeepSeekHarnessProcess | undefined;
   try {
+    // The SDK's local provider resolves stored references before ambient environment.
+    // A per-runtime reference selects the explicit value without copying or changing the store.
+    const runtimeCredentialReference = preferLaunchEnvironmentCredential
+      ? `TAKT_DSH_EXPLICIT_${randomBytes(16).toString('hex').toUpperCase()}`
+      : binding.ref;
+    if (preferLaunchEnvironmentCredential && explicitCredential !== undefined) {
+      environment.env[runtimeCredentialReference] = explicitCredential;
+    }
     credentialPatch = await createDeepSeekCredentialPatch(
       binding,
       configuration.systemPrompt,
       pluginResolution.plugins,
-      {
-        preferLaunchEnvironmentCredential,
-      },
+      preferLaunchEnvironmentCredential ? { runtimeCredentialReference } : {},
     );
     processRecord = new DeepSeekHarnessProcess(
       configuration,

@@ -22,8 +22,8 @@ export interface DeepSeekCredentialPatch {
 }
 
 export interface DeepSeekCredentialPatchOptions {
-  /** Let an explicitly supplied per-call environment value win over stored credentials. */
-  preferLaunchEnvironmentCredential?: boolean;
+  /** Reference used only by the DeepSeek LLM plugin for this runtime. */
+  runtimeCredentialReference?: string;
 }
 
 /**
@@ -46,22 +46,12 @@ export async function createDeepSeekCredentialPatch(
   }
   try {
     const patchPath = path.join(patchDirectoryPath, PATCH_FILE_NAME);
-    const credentialsPath = options.preferLaunchEnvironmentCredential === true
-      ? path.join(patchDirectoryPath, 'environment-credentials.yaml')
-      : binding.home.credentialsPath;
-    if (options.preferLaunchEnvironmentCredential === true) {
-      writeNewPrivateFileWithMode(
-        credentialsPath,
-        'version: 1\nrefs: {}\nrecords: {}\n',
-        PATCH_FILE_MODE,
-      );
-    }
     const document = [
       // Keep the official coding tools. As with other local coding providers,
       // this composition requires a trusted workspace; a credential reference
       // is not an OS-level read-isolation boundary for model-callable tools.
-      { id: 'credentials', config: { path: credentialsPath } },
-      { id: 'llm-deepseek', config: { apiKeyEnv: binding.ref } },
+      { id: 'credentials', config: { path: binding.home.credentialsPath } },
+      { id: 'llm-deepseek', config: { apiKeyEnv: options.runtimeCredentialReference ?? binding.ref } },
       { id: 'session-persistence-jsonl', disabled: true },
       { id: 'session-log-deepseek', config: { enabled: false } },
       ...(systemPrompt === undefined

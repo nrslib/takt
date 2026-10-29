@@ -5,6 +5,7 @@ import { createServer, type Server } from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { zstdCompressSync } from 'node:zlib';
+import { parse as parseYaml } from 'yaml';
 import { decompressSessionFrames } from './helpers/deepseek-session-frames.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DeepSeekHarness } from '@deepseek-ai/dsh-sdk-client';
@@ -741,6 +742,80 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
     expect(endpoint.requests.at(-1)?.apiKey).not.toContain(STORE_KEY);
   });
 
+  it('keeps other saved references and plugin records available with an explicit launch credential', async () => {
+    const otherKey = 'dummy-other-credential-1487';
+    const recordKey = 'dummy-plugin-record-1487';
+    const marker = path.join(root, 'credential-observation.json');
+    const packageDirectory = path.join(root, 'credential-observer-plugin');
+    await writeStore([
+      'version: 1',
+      'refs:',
+      `  DEEPSEEK_API_KEY: ${STORE_KEY}`,
+      `  OTHER_PLUGIN_KEY: ${otherKey}`,
+      'records:',
+      '  observer-plugin/default:',
+      '    kind: api-key',
+      `    key: ${recordKey}`,
+      '',
+    ].join('\n'));
+    const sourceBefore = await readFile(storePath);
+    await mkdir(packageDirectory);
+    await writeFile(path.join(packageDirectory, 'package.json'), JSON.stringify({
+      name: 'local-credential-observer-plugin',
+      version: '1.0.0',
+      type: 'module',
+      main: './index.js',
+    }));
+    await writeFile(path.join(packageDirectory, 'index.js'), [
+      "import { writeFileSync } from 'node:fs';",
+      "export const inject = ['credentials'];",
+      'export async function apply(ctx, config) {',
+      "  const credentials = ctx.get('credentials');",
+      "  const other = await credentials.resolve('OTHER_PLUGIN_KEY');",
+      "  const record = await credentials.readRecord('observer-plugin/default');",
+      '  const records = await credentials.listRecords();',
+      '  const patchIndex = process.argv.indexOf(\'--patch\');',
+      '  writeFileSync(config.marker, JSON.stringify({',
+      '    other, record, records, patchPath: process.argv[patchIndex + 1],',
+      '  }), { mode: 0o600 });',
+      '}',
+    ].join('\n'));
+
+    const response = await callDeepSeekHarness('live-smoke', 'Return ok.', {
+      cwd: workspace,
+      childProcessEnv: { DEEPSEEK_API_KEY: ENV_KEY },
+      providerOptions: {
+        baseUrl: endpoint.baseUrl,
+        requestTimeoutMs: REQUEST_TIMEOUT_MS,
+        plugins: [{ source: `npm:file:${packageDirectory}`, id: 'credential-observer', config: { marker } }],
+      },
+    });
+
+    expect(response.status).toBe('done');
+    expect(endpoint.requests.at(-1)?.apiKey).toBe(ENV_KEY);
+    const observation = JSON.parse(await readFile(marker, 'utf8')) as {
+      other: { value: string; source: string };
+      record: { kind: string; key: string };
+      records: Array<{ key: string; kind: string }>;
+      patchPath: string;
+    };
+    expect(observation.other).toEqual({ value: otherKey, source: 'file' });
+    expect(observation.record).toEqual({ kind: 'api-key', key: recordKey });
+    expect(observation.records).toContainEqual({ key: 'observer-plugin/default', kind: 'api-key' });
+    const patchText = await readFile(observation.patchPath, 'utf8');
+    const patch = parseYaml(patchText) as Array<{ id?: string; config?: { path?: string; apiKeyEnv?: string } }>;
+    expect(patch[0]).toEqual({ id: 'credentials', config: { path: storePath } });
+    expect(patch[1]?.config?.apiKeyEnv).toMatch(/^TAKT_DSH_EXPLICIT_[0-9A-F]{32}$/);
+    expect(patchText).not.toContain(ENV_KEY);
+    expect(existsSync(path.join(path.dirname(observation.patchPath), 'environment-credentials.yaml'))).toBe(false);
+    expect((await stat(observation.patchPath)).mode & 0o777).toBe(0o600);
+    expect((await stat(path.dirname(observation.patchPath))).mode & 0o777).toBe(0o700);
+    expect(await readFile(storePath)).toEqual(sourceBefore);
+    expectNoManagedCredentialCopy();
+    await closeDeepSeekHarnessProcesses();
+    expect(existsSync(path.dirname(observation.patchPath))).toBe(false);
+  });
+
   it.each([false, true])('refuses a credential source mode switch in a live session (explicit first=%s)', async (explicitFirst) => {
     vi.stubEnv('DEEPSEEK_API_KEY', ENV_KEY);
     const storeBefore = await readFile(storePath);
@@ -912,28 +987,33 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
     }, { timeout: WATCHER_TIMEOUT_MS, interval: WATCHER_POLL_INTERVAL_MS });
   });
 
-  it('keeps an echoed dummy credential out of TAKT output, session-log uploads and the runtime session store', async () => {
+  it.each([false, true])('keeps an echoed dummy credential out of TAKT output, session-log uploads and the runtime session store (explicit=%s)', async (explicit) => {
     endpoint.setMode('auth-echo');
+    const credential = explicit ? ENV_KEY : STORE_KEY;
     await mkdir(path.join(root, 'reports'));
     const logger = createProviderEventLogger({
       logsDir: path.join(root, 'reports'), sessionId: 'credential-echo', runId: 'credential-echo', enabled: true,
     });
     const events: unknown[] = [];
-    const response = await runTurn({ prompt: 'Trigger the mocked auth rejection.', onStream: (event) => {
-      events.push(event);
-      logger.logEvent({ provider: 'deepseek-harness', providerModel: 'deepseek-v4-flash', step: 'smoke' }, event);
-    } });
+    const response = await runTurn({
+      prompt: 'Trigger the mocked auth rejection.',
+      ...(explicit ? { childProcessEnv: { DEEPSEEK_API_KEY: ENV_KEY } } : {}),
+      onStream: (event) => {
+        events.push(event);
+        logger.logEvent({ provider: 'deepseek-harness', providerModel: 'deepseek-v4-flash', step: 'smoke' }, event);
+      },
+    });
 
     await closeDeepSeekHarnessProcesses();
 
     expect(endpoint.requests).toHaveLength(1);
-    expect(endpoint.requests[0]?.apiKey).toContain(STORE_KEY);
+    expect(endpoint.requests[0]?.apiKey).toContain(credential);
     expect(response.status).toBe('error');
-    expect(response.content).not.toContain(STORE_KEY);
+    expect(response.content).not.toContain(credential);
     expect(response.content).toMatch(/credential|auth/iu);
     expect(endpoint.requests[0]?.hasSessionLog).toBe(false);
-    expect(JSON.stringify(events)).not.toContain(STORE_KEY);
-    expect(await readFile(logger.filepath, 'utf8')).not.toContain(STORE_KEY);
+    expect(JSON.stringify(events)).not.toContain(credential);
+    expect(await readFile(logger.filepath, 'utf8')).not.toContain(credential);
 
     const timestamp = '2026-09-24T12:00:00.000Z';
     const report = renderTraceReportFromRecords({
@@ -944,9 +1024,9 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
       status: response.status, content: response.content, instruction: 'Trigger the mocked auth rejection.', timestamp,
     }], [], 'full');
     expect(report).toContain(response.content);
-    expect(report).not.toContain(STORE_KEY);
+    expect(report).not.toContain(credential);
 
-    const leakedIntoRuntimeStore = collectSecretHits(dshHome, STORE_KEY);
+    const leakedIntoRuntimeStore = collectSecretHits(dshHome, credential);
     expect(
       leakedIntoRuntimeStore,
       'the pinned DeepSeek Harness runtime persisted the echoed dummy credential into its session store',
