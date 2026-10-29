@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentSession, DefaultResourceLoader, ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { callPi } from '../infra/pi/client.js';
 import type { PiCallOptions } from '../infra/pi/types.js';
-import { COMPAT_MODEL, EXECUTION_FILE } from './fixtures/pi-sdk-compat.js';
+import { COMPAT_MODEL, EXECUTION_FILE, TURN_END_FILE } from './fixtures/pi-sdk-compat.js';
 
 const fixturePath = fileURLToPath(new URL('./fixtures/pi-sdk-compat.ts', import.meta.url));
 
@@ -61,6 +61,11 @@ describe('Pi SDK compatibility through the TAKT client', () => {
     return existsSync(file) ? readFileSync(file, 'utf8').trim().split('\n') : [];
   }
 
+  function turnEndCount(): number {
+    const file = path.join(root, TURN_END_FILE);
+    return existsSync(file) ? readFileSync(file, 'utf8').trim().split('\n').length : 0;
+  }
+
   it('preserves the logical ID and earlier user and assistant messages after explicit extensions change', async () => {
     const first = await callPi('worker', 'remember:nonsecret-history-marker', options);
     expect(first.status).toBe('done');
@@ -78,13 +83,27 @@ describe('Pi SDK compatibility through the TAKT client', () => {
     expect(second.status).toBe('done');
     expect(second.sessionId).toBe(first.sessionId);
     expect(JSON.parse(second.content)).toEqual([
-      'remember:nonsecret-history-marker', 'saved:nonsecret-history-marker', 'recall',
+      { role: 'user', text: 'remember:nonsecret-history-marker' },
+      { role: 'assistant', text: 'saved:nonsecret-history-marker' },
+      { role: 'user', text: 'recall' },
     ]);
     expect(shutdown).toHaveBeenCalledWith({ type: 'session_shutdown', reason: 'quit' });
     expect(dispose).toHaveBeenCalledOnce();
     expect(dispose.mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(AgentSession.prototype.bindExtensions).mock.invocationCallOrder[1]!,
     );
+  });
+
+  it('emits one extension turn boundary for each completed prompt in a continuing session', async () => {
+    const first = await callPi('worker', 'remember:turn-boundary-marker', options);
+    expect(first.status).toBe('done');
+    expect(turnEndCount()).toBe(1);
+
+    const second = await callPi('worker', 'recall', { ...options, sessionId: first.sessionId });
+
+    expect(second.status).toBe('done');
+    expect(second.sessionId).toBe(first.sessionId);
+    expect(turnEndCount()).toBe(2);
   });
 
   /** Creates a distinct resource fingerprint while preserving the probe module. */
@@ -111,7 +130,9 @@ describe('Pi SDK compatibility through the TAKT client', () => {
     expect(recovered.status).toBe('done');
     expect(recovered.sessionId).toBe(first.sessionId);
     expect(JSON.parse(recovered.content)).toEqual([
-      'remember:retry-marker', 'saved:retry-marker', 'recall',
+      { role: 'user', text: 'remember:retry-marker' },
+      { role: 'assistant', text: 'saved:retry-marker' },
+      { role: 'user', text: 'recall' },
     ]);
     expect(sessions).toHaveLength(2);
   });
@@ -220,7 +241,9 @@ export default function extension(pi) {
     expect(recovered.status).toBe('done');
     expect(recovered.sessionId).toBe(first.sessionId);
     expect(JSON.parse(recovered.content)).toEqual([
-      'remember:startup-only-marker', 'saved:startup-only-marker', 'recall',
+      { role: 'user', text: 'remember:startup-only-marker' },
+      { role: 'assistant', text: 'saved:startup-only-marker' },
+      { role: 'user', text: 'recall' },
     ]);
     expect(sessions).toHaveLength(3);
   });
@@ -241,7 +264,9 @@ export default function extension(pi) {
 
     expect(second.status).toBe('done');
     expect(JSON.parse(second.content)).toEqual([
-      'remember:edited-marker', 'saved:original-marker', 'recall',
+      { role: 'user', text: 'remember:edited-marker' },
+      { role: 'assistant', text: 'saved:original-marker' },
+      { role: 'user', text: 'recall' },
     ]);
   });
 
@@ -262,7 +287,9 @@ export default function extension(pi) {
     expect(second.sessionId).toBe(first.sessionId);
     expect(sessions[1]!.thinkingLevel).toBe('medium');
     expect(JSON.parse(second.content)).toEqual([
-      'remember:thinking-marker', 'saved:thinking-marker', 'recall',
+      { role: 'user', text: 'remember:thinking-marker' },
+      { role: 'assistant', text: 'saved:thinking-marker' },
+      { role: 'user', text: 'recall' },
     ]);
   });
 

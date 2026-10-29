@@ -653,6 +653,7 @@ describe('DeepSeek Harness TypeScript SDK feasibility probes', () => {
   it.skipIf(process.platform === 'win32')('discards runtime stderr before it reaches SDK failures', async () => {
     const { harness, launchDirectory } = await createHarness({ mode: 'stderr-exit' });
     const error = await rejectionOf(bounded(harness.start(), 3_000, 'SDK initialization'));
+    await waitForFile(join(launchDirectory, 'runtime.pgid'));
     const pgid = readPidFile(join(launchDirectory, 'runtime.pgid'));
 
     expect(error).toBeInstanceOf(Error);
@@ -664,6 +665,7 @@ describe('DeepSeek Harness TypeScript SDK feasibility probes', () => {
   it.skipIf(process.platform === 'win32')('cleans the process group after an initialization failure', async () => {
     const { harness, launchDirectory } = await createHarness({ mode: 'initialize-failure' });
     const error = await rejectionOf(bounded(harness.start(), 3_000, 'SDK initialization failure'));
+    await waitForFile(join(launchDirectory, 'runtime.pgid'));
     const pgid = readPidFile(join(launchDirectory, 'runtime.pgid'));
 
     expect(error).toBeInstanceOf(Error);
@@ -677,6 +679,7 @@ describe('DeepSeek Harness TypeScript SDK feasibility probes', () => {
       initializeTimeoutMs: 100,
     });
     const error = await rejectionOf(bounded(harness.start(), 2_000, 'bounded initialization'));
+    await waitForFile(join(launchDirectory, 'runtime.pgid'));
     const pgid = readPidFile(join(launchDirectory, 'runtime.pgid'));
 
     expect(error).toMatchObject({ name: 'RequestTimeoutError' });
@@ -694,6 +697,7 @@ describe('DeepSeek Harness TypeScript SDK feasibility probes', () => {
       2_000,
       'bounded turn request',
     ));
+    await waitForFile(join(launchDirectory, 'runtime.pgid'));
     const pgid = readPidFile(join(launchDirectory, 'runtime.pgid'));
     await bounded(harness.close(), 2_000, 'runtime close after turn timeout');
 
@@ -754,12 +758,34 @@ describe('DeepSeek Harness TypeScript SDK feasibility probes', () => {
       dshHome: join(temporaryRoot, 'failed-cleanup-home'),
       mode: 'cleanup-failure',
       failCleanup: true,
-      initializeTimeoutMs: 1_000,
+      initializeTimeoutMs: 5_000,
       shutdownTimeoutMs: 40,
       disposeEofGraceMs: 30,
       disposeGraceMs: 50,
     });
-    const startError = await rejectionOf(bounded(first.harness.start(), 2_000, 'failed initialization cleanup'));
+    const startError = await rejectionOf(bounded(first.harness.start(), 6_000, 'failed initialization cleanup'));
+    try {
+      await waitForFile(join(first.launchDirectory, 'runtime.pgid'));
+    } catch (error) {
+      const dshHome = first.env.DSH_HOME;
+      if (dshHome === undefined) throw new Error('The probe runtime home was not configured');
+      const readDiagnostic = (filePath: string): string => (
+        existsSync(filePath) ? readFileSync(filePath, 'utf8').trim() : '<missing>'
+      );
+      const startErrorDescription = startError instanceof Error
+        ? `${startError.name}: ${startError.message}`
+        : String(startError);
+      throw new Error([
+        error instanceof Error ? error.message : String(error),
+        `startError=${startErrorDescription}`,
+        `supervisorPid=${readDiagnostic(join(first.launchDirectory, 'supervisor.pid'))}`,
+        `runtimePid=${readDiagnostic(join(first.launchDirectory, 'runtime.pid'))}`,
+        `toolChildPid=${readDiagnostic(join(first.launchDirectory, 'tool-child.pid'))}`,
+        `spawnLog=${readDiagnostic(join(dshHome, 'spawned-supervisors.log'))}`,
+      ].join('; '));
+    }
+    await waitForFile(join(first.launchDirectory, 'runtime.pid'));
+    await waitForFile(join(first.launchDirectory, 'tool-child.pid'));
     const pgid = readPidFile(join(first.launchDirectory, 'runtime.pgid'));
     const runtimePid = readPidFile(join(first.launchDirectory, 'runtime.pid'));
     const childPid = readPidFile(join(first.launchDirectory, 'tool-child.pid'));
@@ -885,6 +911,8 @@ describe('DeepSeek Harness TypeScript SDK feasibility probes', () => {
       runtimeBin,
       cwd: temporaryRoot,
       reasoningEffort: 'high',
+      initializeTimeoutMs: 15_000,
+      requestTimeoutMs: 15_000,
     });
     const run = await bounded(harness.harness.run('return text and reasoning', {
       onNotification: () => {},
@@ -912,6 +940,8 @@ describe('DeepSeek Harness TypeScript SDK feasibility probes', () => {
       credential: 'TAKT_DUMMY_CREDENTIAL_ASSISTANT_TEXT',
       runtimeBin,
       cwd: temporaryRoot,
+      initializeTimeoutMs: 15_000,
+      requestTimeoutMs: 15_000,
     });
     const run = await bounded(harness.harness.run('return only text', {
       onNotification: () => {},

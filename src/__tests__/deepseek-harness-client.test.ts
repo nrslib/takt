@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { execFileSync, spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { appendFileSync, existsSync } from 'node:fs';
 import { chmod, mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -10,8 +11,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DeepSeekHarness, HarnessClient, RequestTimeoutError, TransportClosedError, type DeepSeekHarnessOptions } from '@deepseek-ai/dsh-sdk-client';
 import { parse as parseYaml } from 'yaml';
 
+interface ManagedModuleLoadEvidence {
+  directory: string;
+  sdkPath: string;
+  llmPath: string;
+  piAiPackagePath?: string;
+  piAiVersion?: string;
+}
+
+const managedPackageRootEnvironmentKey = vi.hoisted(() => 'TAKT_DSH_CLIENT_PACKAGE_ROOT');
 const sdkConstructorOptions = vi.hoisted(() => [] as Array<DeepSeekHarnessOptions | undefined>);
-const managedModuleLoads = vi.hoisted(() => vi.fn());
+const managedModuleLoads = vi.hoisted(() => vi.fn<(evidence: ManagedModuleLoadEvidence) => void>());
 vi.mock('@deepseek-ai/dsh-sdk-client', async (importOriginal) => {
   const sdk = await importOriginal<typeof import('@deepseek-ai/dsh-sdk-client')>();
   return {
@@ -27,16 +37,39 @@ vi.mock('@deepseek-ai/dsh-sdk-client', async (importOriginal) => {
 });
 vi.mock('../infra/deepseek-harness/managed-package.js', async (importOriginal) => {
   const managed = await importOriginal<typeof import('../infra/deepseek-harness/managed-package.js')>();
-  const [sdk, llm] = await Promise.all([
-    import('@deepseek-ai/dsh-sdk-client'),
-    import('@deepseek-ai/dsh-llm'),
-  ]);
   return {
     ...managed,
     loadManagedDeepSeekHarnessModules: async () => {
-      managedModuleLoads();
+      const packageRoot = process.env[managedPackageRootEnvironmentKey]
+        ?? fileURLToPath(new URL('../..', import.meta.url));
+      const requireFromPackageRoot = createRequire(join(packageRoot, 'package.json'));
+      const sdkPath = requireFromPackageRoot.resolve('@deepseek-ai/dsh-sdk-client');
+      const llmPath = requireFromPackageRoot.resolve('@deepseek-ai/dsh-llm');
+      let evidence: ManagedModuleLoadEvidence = { directory: packageRoot, sdkPath, llmPath };
+      const selectedPackageRoot = process.env[managedPackageRootEnvironmentKey];
+      const [sdk, llm] = selectedPackageRoot
+        ? await Promise.all([
+          import(pathToFileURL(sdkPath).href),
+          import(pathToFileURL(llmPath).href),
+        ])
+        : await Promise.all([
+          import('@deepseek-ai/dsh-sdk-client'),
+          import('@deepseek-ai/dsh-llm'),
+        ]);
+      if (selectedPackageRoot) {
+        const piAiPackagePath = await realpath(join(
+          packageRoot,
+          'node_modules',
+          '@earendil-works',
+          'pi-ai',
+          'package.json',
+        ));
+        const piAiManifest = JSON.parse(await readFile(piAiPackagePath, 'utf8')) as { version: string };
+        evidence = { ...evidence, piAiPackagePath, piAiVersion: piAiManifest.version };
+      }
+      managedModuleLoads(evidence);
       return {
-        directory: fileURLToPath(new URL('../..', import.meta.url)),
+        directory: packageRoot,
         sdk,
         llm,
       };
@@ -97,7 +130,8 @@ const SUPPORTED_RUNTIME = (
   || (process.platform === 'darwin' && process.arch === 'arm64')
 );
 const DUMMY_CREDENTIAL = 'TAKT_DUMMY_CLIENT_CREDENTIAL_SENTINEL';
-const environmentKeys = ['TAKT_CONFIG_DIR', 'DSH_HOME', 'DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL', 'PI_CODING_AGENT_DIR', 'npm_config_cache', 'npm_config_ignore_scripts'] as const;
+const offlineManagedNpmCache = process.env.TAKT_DSH_OFFLINE_NPM_CACHE;
+const environmentKeys = ['TAKT_CONFIG_DIR', 'DSH_HOME', 'DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL', 'PI_CODING_AGENT_DIR', 'NPM_CONFIG_CACHE', 'npm_config_cache', 'NPM_CONFIG_OFFLINE', 'npm_config_offline', 'npm_config_ignore_scripts', managedPackageRootEnvironmentKey] as const;
 const savedEnvironment = new Map<string, string | undefined>();
 let temporaryRoot: string;
 let localApis: LocalApi[] = [];
@@ -383,11 +417,13 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
     managedModuleLoads.mockClear();
     for (const key of environmentKeys) savedEnvironment.set(key, process.env[key]);
     temporaryRoot = await mkdtemp(join(tmpdir(), 'takt-deepseek-client-sdk-'));
+    process.env.npm_config_cache = join(temporaryRoot, 'npm-cache');
     process.env.TAKT_CONFIG_DIR = join(temporaryRoot, 'takt');
     process.env.PI_CODING_AGENT_DIR = join(temporaryRoot, 'pi-agent');
     process.env.DSH_HOME = join(temporaryRoot, 'credential-source');
     process.env.DEEPSEEK_API_KEY = DUMMY_CREDENTIAL;
     delete process.env.DEEPSEEK_BASE_URL;
+    delete process.env[managedPackageRootEnvironmentKey];
     await mkdir(process.env.DSH_HOME, { recursive: true });
     await mkdir(process.env.PI_CODING_AGENT_DIR, { recursive: true });
   });
@@ -456,9 +492,11 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
     await expect(assertDeepSeekRuntimeCreationAllowed()).resolves.toBeUndefined();
   });
 
-  it.skipIf(!SUPPORTED_RUNTIME)('reuses a live SDK session without reloading managed modules and refuses after teardown', async () => {
+  it.skipIf(!SUPPORTED_RUNTIME)('uses the root SDK modules for one live session and refuses after teardown', async () => {
     const api = await startLocalApi();
     process.env.DEEPSEEK_BASE_URL = api.endpoint;
+    const packageRoot = fileURLToPath(new URL('../..', import.meta.url));
+    process.env[managedPackageRootEnvironmentKey] = packageRoot;
     const runtimePaths = getDeepSeekRuntimePaths();
     const workspace = join(temporaryRoot, 'workspace');
     await mkdir(workspace, { recursive: true });
@@ -466,8 +504,23 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
       cwd: workspace,
       providerOptions: { reasoningEffort: 'low', baseUrl: api.endpoint },
     });
-    expect(initial).toMatchObject({ status: 'done', content: 'mock client response 1' });
     expect(managedModuleLoads).toHaveBeenCalledTimes(1);
+    const requireFromPackageRoot = createRequire(join(packageRoot, 'package.json'));
+    expect(managedModuleLoads).toHaveBeenCalledWith({
+      directory: packageRoot,
+      sdkPath: requireFromPackageRoot.resolve('@deepseek-ai/dsh-sdk-client'),
+      llmPath: requireFromPackageRoot.resolve('@deepseek-ai/dsh-llm'),
+      piAiPackagePath: await realpath(join(
+        packageRoot,
+        'node_modules',
+        '@earendil-works',
+        'pi-ai',
+        'package.json',
+      )),
+      piAiVersion: '1.4.0',
+    });
+    expect(api.requests).toHaveLength(1);
+    expect(initial).toMatchObject({ status: 'done', content: 'mock client response 1' });
     expect(initial.sessionId).toEqual(expect.any(String));
     const sessionId = initial.sessionId!;
     const streamEvents: unknown[][] = [[], []];
@@ -1981,7 +2034,12 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
   }, 90_000);
 
   it.skipIf(!SUPPORTED_RUNTIME)('refuses a previously used session ID after the parent process restarts', async () => {
-    process.env.npm_config_cache = join(temporaryRoot, 'npm-cache');
+    if (offlineManagedNpmCache !== undefined) {
+      process.env.NPM_CONFIG_CACHE = offlineManagedNpmCache;
+      process.env.npm_config_cache = offlineManagedNpmCache;
+      process.env.NPM_CONFIG_OFFLINE = 'true';
+      process.env.npm_config_offline = 'true';
+    }
     process.env.npm_config_ignore_scripts = 'true';
     await installDeepSeekHarness();
     const api = await startLocalApi();
