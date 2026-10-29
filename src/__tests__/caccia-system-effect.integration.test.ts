@@ -864,6 +864,11 @@ describe('Caccia effect through PR workflow execution', () => {
       }
       const beforeRetry = git(clone, 'rev-parse', 'HEAD');
       const remoteBeforeRetry = git(root, '--git-dir', remote, 'rev-parse', 'refs/heads/feature/pr');
+      if (condition === 'initial_head' || condition === 'clone_head') {
+        expect(remoteBeforeRetry).not.toBe(effectHead);
+        expect(git(root, '--git-dir', remote, 'merge-base', effectHead, remoteBeforeRetry))
+          .toBe(remoteBeforeRetry);
+      }
       let synchronizedHead: string | undefined;
       mocks.execution.mockClear();
       mocks.status.mockClear();
@@ -884,7 +889,7 @@ describe('Caccia effect through PR workflow execution', () => {
         return { success: true };
       });
       const retry = executePersistedPrMergeTask(claimed, runner, project, undefined, { outputMode: 'silent' });
-      if (condition !== 'fetch_head') {
+      if (condition !== 'fetch_head' && condition !== 'initial_head' && condition !== 'clone_head') {
         expect(await retry).toEqual({ merged: true });
         expect(mocks.execution).toHaveBeenCalledOnce();
         expect(mocks.caccia).toHaveBeenCalledOnce();
@@ -893,7 +898,11 @@ describe('Caccia effect through PR workflow execution', () => {
         expect(mocks.comment).toHaveBeenCalledWith(123,
           `outcome=success; head=${synchronizedHead}; unresolved=0`, project);
       } else {
-        await expect(retry).rejects.toThrow();
+        if (condition === 'fetch_head') {
+          await expect(retry).rejects.toThrow('PR head changed during retry synchronization');
+        } else {
+          await expect(retry).rejects.toThrow();
+        }
         expect(git(clone, 'rev-parse', 'HEAD')).toBe(beforeRetry);
         expect(mocks.execution).not.toHaveBeenCalled();
         expect(mocks.status).not.toHaveBeenCalled();
