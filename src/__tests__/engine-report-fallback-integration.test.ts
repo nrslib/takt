@@ -46,6 +46,12 @@ function workflowConfig(): WorkflowConfig {
   };
 }
 
+function readExecutionLogFromReportPrompt(prompt: string): string {
+  const path = prompt.split('\n').find((line) => line.startsWith('- Path: '))?.slice('- Path: '.length);
+  if (path === undefined) throw new Error('Phase 1 execution log reference missing from report prompt');
+  return readFileSync(path, 'utf8');
+}
+
 function queueAttempt(result: AgentResponse, streamEvents: StreamEvent[] = []): void {
   vi.mocked(runAgent).mockImplementationOnce(async (persona, task, options) => {
     options?.onPromptResolved?.({
@@ -261,12 +267,13 @@ describe('WorkflowEngine report fallback integration', () => {
     const reportCalls = vi.mocked(runAgent).mock.calls.filter(([, , options]) => options?.allowedTools?.length === 0);
     expect(reportCalls).toHaveLength(4);
     for (const [persona, prompt, options] of reportCalls) {
+      const executionLog = readExecutionLogFromReportPrompt(prompt);
       expect(prompt).toContain(JSON.stringify(upstream));
       expect(prompt).toContain(revision);
       expect(prompt).toContain(liveRevision);
       expect(prompt).toContain('Part completed.');
-      expect(prompt).toContain(`${String(persona)}-only-evidence`);
-      expect(prompt).not.toContain(`${String(persona) === 'left' ? 'right' : 'left'}-only-evidence`);
+      expect(executionLog).toContain(`${String(persona)}-only-evidence`);
+      expect(executionLog).not.toContain(`${String(persona) === 'left' ? 'right' : 'left'}-only-evidence`);
       expect(options?.sessionId).toBeUndefined();
       expect(readFileSync(join(tmpRoot, '.takt', 'runs', 'parallel-report-inputs', 'reports', `${persona}.md`), 'utf-8'))
         .toBe('# Part report');
@@ -449,8 +456,9 @@ describe('WorkflowEngine report fallback integration', () => {
 
     const fallbackOptions = vi.mocked(runAgent).mock.calls[3]?.[2] as RunAgentOptions;
     for (const call of vi.mocked(runAgent).mock.calls.slice(1)) {
-      expect(call[1]).toContain('verified phase1 tool output');
-      expect(call[1]).toContain('Implement the task');
+      const executionLog = readExecutionLogFromReportPrompt(call[1]);
+      expect(executionLog).toContain('verified phase1 tool output');
+      expect(executionLog).toContain('Implement the task');
     }
     expect(fallbackOptions).toEqual(expect.objectContaining({
       resolvedProvider: 'codex',
@@ -505,12 +513,51 @@ describe('WorkflowEngine report fallback integration', () => {
     expect(calls[1]?.[2]?.sessionId).toBeUndefined();
     expect(calls[2]?.[2]?.sessionId).toBe(withSession ? 'work-session' : undefined);
     const reportPrompt = calls[2]![1];
-    expect(reportPrompt).toContain('failed attempt evidence');
-    expect(reportPrompt).toContain('provider_error_fresh');
-    expect(reportPrompt).toContain('current file content');
-    expect(reportPrompt).toContain('Checked the current file.');
+    const executionLog = readExecutionLogFromReportPrompt(reportPrompt);
+    expect(executionLog).toContain('failed attempt evidence');
+    expect(executionLog).toContain('provider_error_fresh');
+    expect(executionLog).toContain('current file content');
+    expect(executionLog).toContain('Checked the current file.');
     expect(reportPrompt).toContain('Review current.ts');
     expect(calls[2]?.[2]?.allowedTools).toEqual([]);
+  });
+
+  it('mediates a Phase 2 search request through the real engine before saving the report', async () => {
+    queueAttempt(response({ content: 'Work summary', sessionId: 'work-session' }), [
+      { type: 'tool_result', data: { id: 'evidence-call', content: 'engine mediated evidence', isError: false } },
+    ]);
+    queueAttempt(response({
+      content: JSON.stringify({ _takt_phase1_log_request: {
+        operation: 'search', offset: 0, limit: 128, query: 'engine mediated evidence',
+      } }),
+      sessionId: 'report-session',
+    }));
+    queueAttempt(response({ content: '# Report\nEngine-mediated evidence verified' }));
+    const structuredCaller: StructuredCaller = {
+      judgeStatus: vi.fn().mockImplementation(async (_structured, _tag, _candidates, options) => {
+        options.onStructuredPromptResolved?.({ systemPrompt: 'judge', userInstruction: 'judge' });
+        return { candidateIndex: 0, method: 'structured_output' };
+      }),
+      evaluateCondition: vi.fn(), decomposeTask: vi.fn(), requestMoreParts: vi.fn(),
+    };
+    const engine = new WorkflowEngine(workflowConfig(), tmpRoot, 'Review engine mediation', {
+      projectCwd: tmpRoot,
+      provider: 'opencode',
+      model: 'opencode/primary-model',
+      reportDirName: 'engine-mediated-log',
+      structuredCaller,
+    });
+
+    expect((await engine.run()).status).toBe('completed');
+
+    const calls = vi.mocked(runAgent).mock.calls;
+    expect(calls).toHaveLength(3);
+    expect(calls[2]?.[1]).toContain('Engine-mediated Phase 1 Execution Record Result');
+    expect(calls[2]?.[1]).toContain('"matchCount":1');
+    expect(calls[2]?.[1]).toContain('engine mediated evidence');
+    expect(calls[2]?.[2]?.sessionId).toBe('report-session');
+    expect(readFileSync(join(tmpRoot, '.takt', 'runs', 'engine-mediated-log', 'reports', 'review.md'), 'utf8'))
+      .toBe('# Report\nEngine-mediated evidence verified');
   });
 
   it('keeps each repeated step execution record separate', async () => {
@@ -554,9 +601,11 @@ describe('WorkflowEngine report fallback integration', () => {
 
     expect((await engine.run()).status).toBe('completed');
     expect(reportPrompts).toHaveLength(2);
-    expect(reportPrompts[0]).toContain('evidence-run-1');
-    expect(reportPrompts[0]).not.toContain('evidence-run-2');
-    expect(reportPrompts[1]).toContain('evidence-run-2');
-    expect(reportPrompts[1]).not.toContain('evidence-run-1');
+    const executionLogs = reportPrompts.map(readExecutionLogFromReportPrompt);
+    expect(executionLogs[0]).toContain('evidence-run-1');
+    expect(executionLogs[0]).not.toContain('evidence-run-2');
+    expect(executionLogs[1]).toContain('evidence-run-2');
+    expect(executionLogs[1]).not.toContain('evidence-run-1');
+    expect(new Set(reportPrompts.map((prompt) => prompt.match(/^- Path: (.+)$/m)?.[1])).size).toBe(2);
   });
 });

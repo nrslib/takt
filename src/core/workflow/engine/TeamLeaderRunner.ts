@@ -1283,7 +1283,13 @@ export class TeamLeaderRunner {
       preparedInstruction.injectedReports,
       reportInputTracker.snapshot(),
       (reportName) => writtenReportNames.push(reportName),
-      phase1ExecutionLog?.toReportInput(),
+      phase1ExecutionLog === undefined
+        ? undefined
+        : await this.deps.stepExecutor.savePhase1ExecutionLog(
+          phase1ExecutionLog,
+          executableStep.name,
+          stepIteration,
+        ),
     );
 
     state.stepOutputs.set(step.name, aggregatedResponse);

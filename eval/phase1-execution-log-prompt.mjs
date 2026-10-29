@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { ReportInstructionBuilder } from '../dist/core/workflow/instruction/ReportInstructionBuilder.js';
 
 const format = [
@@ -22,14 +25,19 @@ export default function buildPhase1ExecutionLogPrompt({ vars }) {
     instruction: vars.task,
     outputContracts: [{ name: 'coding-review.md', format }],
   };
+  const directory = mkdtempSync(join(tmpdir(), 'takt-phase1-log-eval-'));
+  process.on('exit', () => rmSync(directory, { recursive: true, force: true }));
+  const path = join(directory, 'phase1-execution.json');
+  const content = JSON.stringify(log);
+  writeFileSync(path, content);
   return new ReportInstructionBuilder(step, {
     cwd: '/fixture',
     task: vars.task,
     reportDir: '/fixture/.takt/reports',
     stepIteration: 1,
-    language: 'ja',
+    language: vars.language ?? 'ja',
     targetFile: 'coding-review.md',
     lastResponse: vars.last_response,
-    phase1ExecutionLog: JSON.stringify(log),
+    phase1ExecutionLog: { path, byteSize: Buffer.byteLength(content), stepName: step.name, stepIteration: 1 },
   }).build();
 }

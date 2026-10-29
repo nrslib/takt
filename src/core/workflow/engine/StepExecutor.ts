@@ -145,7 +145,11 @@ import type {
   PreparedLiveInterventionDelivery,
 } from '../live-intervention/types.js';
 import { createLiveInterventionDeliveryCommitter } from '../live-intervention/delivery.js';
-import { Phase1ExecutionLog } from '../phase1-execution-log.js';
+import {
+  Phase1ExecutionLog,
+  savePhase1ExecutionLog,
+  type Phase1ExecutionLogReference,
+} from '../phase1-execution-log.js';
 
 const log = createLogger('step-executor');
 
@@ -1604,6 +1608,19 @@ export class StepExecutor {
     return instruction;
   }
 
+  savePhase1ExecutionLog(
+    executionLog: Phase1ExecutionLog,
+    stepName: string,
+    stepIteration: number,
+  ): Promise<Phase1ExecutionLogReference> {
+    return savePhase1ExecutionLog(
+      executionLog,
+      this.deps.getRunPaths().logsAbs,
+      stepName,
+      stepIteration,
+    );
+  }
+
   /**
    * Apply shared post-execution phases (Phase 2/3 + fallback rule evaluation).
    *
@@ -1625,7 +1642,7 @@ export class StepExecutor {
     injectedReports?: readonly InjectedReport[],
     reportInputs?: Phase1ReportInputs,
     onReportWritten?: (reportName: string) => void,
-    phase1ExecutionLog?: string,
+    phase1ExecutionLog?: Phase1ExecutionLogReference,
   ): Promise<AgentResponse> {
     let nextResponse = response;
 
@@ -2402,7 +2419,9 @@ export class StepExecutor {
         preparedInstruction.injectedReports,
         reportInputTracker.snapshot(),
         (reportName) => writtenReportNames.push(reportName),
-        phase1ExecutionLog?.toReportInput(),
+        phase1ExecutionLog === undefined
+          ? undefined
+          : await this.savePhase1ExecutionLog(phase1ExecutionLog, step.name, stepIteration),
       );
     } catch (error) {
       if (error instanceof RuleDetectionExhaustedError) {

@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { StreamEvent } from '../../shared/types/provider.js';
 import { normalizeProviderEventValue } from '../../shared/utils/logMetadata.js';
 import { collectEmbeddedSensitiveValues, REDACTED_VALUE } from '../../shared/utils/sensitive-text.js';
@@ -99,6 +102,28 @@ function maskTextFragments(chunks: readonly string[]): string[] {
     offset += chunk.length;
     return output;
   });
+}
+
+export interface Phase1ExecutionLogReference {
+  readonly path: string;
+  readonly byteSize: number;
+  readonly stepName: string;
+  readonly stepIteration: number;
+}
+
+export async function savePhase1ExecutionLog(
+  log: Phase1ExecutionLog,
+  logsDirectory: string,
+  stepName: string,
+  stepIteration: number,
+): Promise<Phase1ExecutionLogReference> {
+  const content = log.toReportInput();
+  const directory = join(logsDirectory, 'phase1-execution');
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const safeStepName = stepName.replace(/[^A-Za-z0-9._-]/g, '_');
+  const path = join(directory, `${safeStepName}-${stepIteration}-${randomUUID()}.json`);
+  await writeFile(path, content, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  return { path, byteSize: Buffer.byteLength(content), stepName, stepIteration };
 }
 
 /** Evidence captured by the engine for one step execution, independent of provider log settings. */

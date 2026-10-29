@@ -13,6 +13,15 @@ import type { ReportPhaseRunnerContext } from './phase-runner.js';
 import { runWithPhaseSpan } from './observability/workflowSpans.js';
 import { writeReportFile } from './report-writer.js';
 import { AGENT_FAILURE_CATEGORIES } from '../../shared/types/agent-failure.js';
+import {
+  buildLogAccessContinuation,
+  executePhase1LogRequest,
+  LOG_BUDGET_EXHAUSTED_CONTINUATION,
+  parsePhase1LogRequest,
+  PHASE1_LOG_MAX_REQUESTS,
+  PHASE1_LOG_TOTAL_BYTE_BUDGET,
+  type Phase1LogRequest,
+} from './phase1-log-access.js';
 
 const log = createLogger('phase-runner');
 const REPORT_PHASE_MAX_TURNS = 3;
@@ -50,6 +59,13 @@ export interface ReportPhaseGenerationOptions {
   readonly validateReportContent?: ReportContentValidator;
   readonly retryMode?: 'standard' | 'single-attempt';
   readonly nextPhaseSequence?: () => number;
+}
+
+interface Phase1LogAccessBudget {
+  requestsRemaining: number;
+  bytesRemaining: number;
+  exhaustionNoticeSent: boolean;
+  readonly continuations: string[];
 }
 
 export interface ReportPhaseRecoveryMetadata {
@@ -152,6 +168,12 @@ async function executeReportPhase(
     ?? (() => ++localPhaseSequence);
   for (const fileName of reportFiles) {
     const failureReasons = new Set<ReportRetryFailureReason>();
+    const logAccessBudget: Phase1LogAccessBudget = {
+      requestsRemaining: PHASE1_LOG_MAX_REQUESTS,
+      bytesRemaining: PHASE1_LOG_TOTAL_BYTE_BUDGET,
+      exhaustionNoticeSent: false,
+      continuations: [],
+    };
     if (!fileName) {
       throw new Error(`Invalid report file name: ${fileName}`);
     }
@@ -186,19 +208,14 @@ async function executeReportPhase(
         maxTurns: REPORT_PHASE_MAX_TURNS,
       });
     }
-    const firstAttemptPhaseExecutionId = nextReportPhaseExecutionId(
-      step.name,
-      ctx.iteration,
-      nextPhaseSequence(),
-    );
-
-    const firstAttempt = await runSingleReportAttempt(
+    const firstAttempt = await runReportAttemptWithLogAccess(
       step,
       firstAttemptInstruction,
       firstAttemptOptions,
       ctx,
-      firstAttemptPhaseExecutionId,
+      () => nextReportPhaseExecutionId(step.name, ctx.iteration, nextPhaseSequence()),
       options.validateReportContent,
+      logAccessBudget,
     );
     if (firstAttempt.kind === 'blocked') {
       return {
@@ -268,26 +285,21 @@ async function executeReportPhase(
     let retryFailure: Extract<ReportAttemptResult, { kind: 'retryable_failure' }> = firstAttempt;
     let fallbackBaseOptions = firstAttemptOptions;
 
-    if (currentSessionId || firstAttempt.failureReason === 'invalid_output') {
+    if (currentSessionId || firstAttempt.failureReason === 'invalid_output' || firstAttempt.failureReason === 'invalid_log_request') {
       log.info('Report phase failed, retrying with new session', {
         step: step.name,
         fileName,
         reason: firstAttempt.failureReason,
       });
 
-      const retryAttemptPhaseExecutionId = nextReportPhaseExecutionId(
-        step.name,
-        ctx.iteration,
-        nextPhaseSequence(),
-      );
-
-      const retryAttempt = await runSingleReportAttempt(
+      const retryAttempt = await runReportAttemptWithLogAccess(
         step,
         retryInstruction,
         retryOptions,
         ctx,
-        retryAttemptPhaseExecutionId,
+        () => nextReportPhaseExecutionId(step.name, ctx.iteration, nextPhaseSequence()),
         options.validateReportContent,
+        logAccessBudget,
       );
       if (retryAttempt.kind === 'blocked') {
         return {
@@ -340,18 +352,14 @@ async function executeReportPhase(
       provider: fallbackOptions.resolvedProvider,
     });
 
-    const fallbackAttemptPhaseExecutionId = nextReportPhaseExecutionId(
-      step.name,
-      ctx.iteration,
-      nextPhaseSequence(),
-    );
-    const fallbackAttempt = await runSingleReportAttempt(
+    const fallbackAttempt = await runReportAttemptWithLogAccess(
       step,
       retryInstruction,
       fallbackOptions,
       ctx,
-      fallbackAttemptPhaseExecutionId,
+      () => nextReportPhaseExecutionId(step.name, ctx.iteration, nextPhaseSequence()),
       options.validateReportContent,
+      logAccessBudget,
     );
     if (fallbackAttempt.kind === 'blocked') {
       return {
@@ -461,6 +469,11 @@ type ReportAttemptResult =
     response: AgentResponse;
     attemptIdentity: ReportAttemptIdentity;
   }
+  | {
+    kind: 'log_request';
+    request: Phase1LogRequest;
+    attemptIdentity: ReportAttemptIdentity;
+  }
   | { kind: 'blocked'; response: AgentResponse; providerInfo: StepProviderInfo }
   | { kind: 'rate_limited'; response: AgentResponse; providerInfo: StepProviderInfo }
   | {
@@ -480,7 +493,8 @@ export type ReportRetryFailureReason =
   | 'tool_call'
   | 'empty_output'
   | 'provider_error'
-  | 'invalid_output';
+  | 'invalid_output'
+  | 'invalid_log_request';
 
 function isFreshPhase1RecoveryFailure(
   failureReason: ReportRetryFailureReason,
@@ -501,6 +515,88 @@ function buildReportPhaseRecoveryMetadata(
 interface ReportRetryableFailure {
   readonly failureReason: ReportRetryFailureReason;
   readonly errorMessage: string;
+}
+
+type CompletedReportAttemptResult = Exclude<ReportAttemptResult, { kind: 'log_request' }>;
+
+function buildLogRequestFailure(message: string): Extract<ReportAttemptResult, { kind: 'retryable_failure' }> {
+  return { kind: 'retryable_failure', errorMessage: message, failureReason: 'invalid_log_request' };
+}
+
+function buildFreshSessionInstruction(
+  instruction: string,
+  budget: Phase1LogAccessBudget,
+  finalNotice?: string,
+): string {
+  const notices = finalNotice !== undefined
+    ? [finalNotice]
+    : budget.exhaustionNoticeSent ? [LOG_BUDGET_EXHAUSTED_CONTINUATION] : [];
+  return [
+    instruction,
+    ...budget.continuations,
+    ...notices,
+  ].join('\n\n');
+}
+
+async function runReportAttemptWithLogAccess(
+  step: WorkflowStep,
+  instruction: string,
+  options: RunAgentOptions,
+  ctx: ReportPhaseRunnerContext,
+  nextPhaseExecutionId: () => string | undefined,
+  validateReportContent: ReportContentValidator | undefined,
+  budget: Phase1LogAccessBudget,
+): Promise<CompletedReportAttemptResult> {
+  let nextInstruction = options.sessionId === undefined
+    && (budget.continuations.length > 0 || budget.exhaustionNoticeSent)
+    ? buildFreshSessionInstruction(instruction, budget)
+    : instruction;
+  let nextOptions = options;
+  for (;;) {
+    const result = await runSingleReportAttempt(
+      step,
+      nextInstruction,
+      nextOptions,
+      ctx,
+      nextPhaseExecutionId(),
+      validateReportContent,
+    );
+    if (result.kind !== 'log_request') return result;
+
+    if (ctx.phase1ExecutionLog === undefined) {
+      return buildLogRequestFailure('The Phase 1 execution record is unavailable for this report.');
+    }
+    if (budget.requestsRemaining === 0 || budget.bytesRemaining === 0) {
+      if (budget.exhaustionNoticeSent) {
+        return buildLogRequestFailure('The Phase 1 execution record read budget is exhausted.');
+      }
+      budget.exhaustionNoticeSent = true;
+      nextInstruction = result.attemptIdentity.sessionId === undefined
+        ? buildFreshSessionInstruction(instruction, budget, LOG_BUDGET_EXHAUSTED_CONTINUATION)
+        : LOG_BUDGET_EXHAUSTED_CONTINUATION;
+      nextOptions = { ...options, sessionId: result.attemptIdentity.sessionId };
+      continue;
+    }
+
+    if (result.request.offset > ctx.phase1ExecutionLog.byteSize) {
+      return buildLogRequestFailure(
+        `The Phase 1 log offset ${result.request.offset} exceeds the record size ${ctx.phase1ExecutionLog.byteSize}.`,
+      );
+    }
+    const accessResult = await executePhase1LogRequest(
+      ctx.phase1ExecutionLog,
+      result.request,
+      Math.min(result.request.limit, budget.bytesRemaining),
+    );
+    budget.requestsRemaining--;
+    budget.bytesRemaining -= Buffer.byteLength(accessResult.content);
+    const continuation = buildLogAccessContinuation(result.request, accessResult);
+    budget.continuations.push(continuation);
+    nextInstruction = result.attemptIdentity.sessionId === undefined
+      ? buildFreshSessionInstruction(instruction, budget)
+      : continuation;
+    nextOptions = { ...options, sessionId: result.attemptIdentity.sessionId };
+  }
 }
 
 /** Execute one report attempt and preserve terminal provider failures before applying report validation or retry policy. */
@@ -679,6 +775,19 @@ async function runSingleReportAttempt(
   }
 
   const finalReportContent = response.content.trim();
+  const logRequest = parsePhase1LogRequest(finalReportContent);
+  if (logRequest.kind === 'invalid') {
+    ctx.onPhaseComplete?.(step, 2, 'report', '', 'error', logRequest.message, phaseExecutionId, ctx.iteration);
+    return buildLogRequestFailure(logRequest.message);
+  }
+  if (logRequest.kind === 'request') {
+    ctx.onPhaseComplete?.(step, 2, 'report', '', 'log_request', undefined, phaseExecutionId, ctx.iteration);
+    return {
+      kind: 'log_request',
+      request: logRequest.request,
+      attemptIdentity: buildReportAttemptIdentity(step, options, response, ctx),
+    };
+  }
   if (classifiedFailure !== undefined) {
     ctx.onPhaseComplete?.(
       step,
@@ -763,6 +872,7 @@ function classifyRetryableFailure(
     };
   }
   const finalReportContent = response.content.trim();
+  if (parsePhase1LogRequest(finalReportContent).kind !== 'none') return undefined;
   if (finalReportContent.length === 0) {
     return {
       failureReason: 'empty_output',
