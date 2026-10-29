@@ -73,6 +73,7 @@ function buildTaskFileData(task: TaskRecord, content: string): TaskFileData {
     merge_head_repository_push_urls: task.merge_head_repository_push_urls,
     merge_initial_head_sha: task.merge_initial_head_sha,
     merge_clone_prepared: task.merge_clone_prepared,
+    merge_known_remote_head_sha: task.merge_known_remote_head_sha,
     merge_pushed_head_sha: task.merge_pushed_head_sha,
     merge_push_base_head_sha: task.merge_push_base_head_sha,
     merge_push_source: task.merge_push_source,

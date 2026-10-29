@@ -269,13 +269,14 @@ async function runPrMergeWorkflow(
   const headSha = isRetry
     ? await synchronizeRetryPrHead({
       projectCwd: request.projectCwd, cwd, headSha: details.headSha, headRef,
-      knownRemoteHeadSha: data.merge_pushed_head_sha ?? data.merge_initial_head_sha!,
+      knownRemoteHeadSha: data.merge_known_remote_head_sha ?? data.merge_pushed_head_sha ?? data.merge_initial_head_sha!,
       isFork: !details.sameRepository,
       operations: cloneGit.operations, environment: env, abortSignal: request.abortSignal,
     })
     : (await git(['rev-parse', 'HEAD'])).stdout.trim();
   if (!isRetry && headSha !== details.headSha) throw new Error('PR head changed since clone preparation');
   if (!isRetry) runner.recordPrMergeClonePrepared(task.name);
+  else runner.recordPrMergeKnownRemoteHead(task.name, details.headSha);
   if (!details.sameRepository) {
     const check = await checkForkThreats({
       cwd, projectCwd: request.projectCwd, baseRef: prContext.baseDiffRef!,

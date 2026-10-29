@@ -272,6 +272,55 @@ describe('Merge PR persistent clone ownership', () => {
       expect(mocks.resolver).not.toHaveBeenCalled();
     });
 
+    it('再試行で取り込んだremote headの履歴が次の再試行前に書き換わったら停止する', async () => {
+      const originalRemoteHead = prHead;
+      const context = await prepareRetry((cwd) => {
+        commitFile(cwd, 'local-only.txt', 'unpushed local work\n');
+        commitFile(project, 'base-work.txt', 'unpushed base work\n');
+        git(cwd, 'fetch', 'base', 'refs/heads/main');
+        git(cwd, 'merge', '--no-ff', '--no-edit', 'FETCH_HEAD');
+      });
+      advancePr('remote-first.txt', 'first remote update\n');
+      const firstRemoteHead = prHead;
+      const execute = mocks.workflow.getMockImplementation()!;
+      mocks.workflow.mockImplementationOnce(async (request: WorkflowExecutionRequest) => {
+        await execute(request);
+        expect(readFileSync(join(request.cwd, 'local-only.txt'), 'utf8')).toBe('unpushed local work\n');
+        expect(readFileSync(join(request.cwd, 'base-work.txt'), 'utf8')).toBe('unpushed base work\n');
+        throw new Error('review interrupted after remote synchronization');
+      });
+      expect((await retry(context)).success).toBe(false);
+      const runner = new TaskRunner(project);
+      const failed = runner.listFailedTasks().find((task) => task.name === context.claimed.name)!;
+      expect(failed.failure?.error).toBe('review interrupted after remote synchronization');
+      expect(failed.data?.merge_known_remote_head_sha).toBe(firstRemoteHead);
+      const synchronizedHead = git(context.clone, 'rev-parse', 'HEAD');
+      expect(git(context.clone, 'merge-base', context.localHead, synchronizedHead)).toBe(context.localHead);
+      expect(git(context.clone, 'merge-base', firstRemoteHead, synchronizedHead)).toBe(firstRemoteHead);
+      runner.requeueTask(failed.name, ['failed'], { resumePoint });
+      const claimed = runner.claimNextTasks(1)[0]!;
+      expect(claimed.data?.merge_known_remote_head_sha).toBe(firstRemoteHead);
+
+      const author = join(root, 'author');
+      git(author, 'reset', '--hard', originalRemoteHead);
+      prHead = commitFile(author, 'remote-rewrite.txt', 'replacement remote update\n');
+      git(author, 'push', '--force', 'origin', 'HEAD:refs/heads/feature/pr');
+      mocks.details.mockReturnValue({ number: 123, headBranch: 'feature/pr', baseBranch: 'main', headSha: prHead,
+        headRepositoryUrl: fork, headRepositoryPushUrls: [fork], sameRepository: false });
+      expect(git(fork, 'merge-base', originalRemoteHead, prHead)).toBe(originalRemoteHead);
+      expect(git(fork, 'merge-base', firstRemoteHead, prHead)).not.toBe(firstRemoteHead);
+      mocks.workflow.mockClear();
+      const result = await executeRunTaskAndCompleteWithDetails(claimed, runner, project,
+        undefined, { outputMode: 'silent' });
+      expect(result.success).toBe(false);
+      expect(mocks.workflow).not.toHaveBeenCalled();
+      expect(git(context.clone, 'rev-parse', 'HEAD')).toBe(synchronizedHead);
+      expect(runner.listFailedTasks().find((task) => task.name === claimed.name)).toMatchObject({
+        worktreePath: context.clone, data: { merge_known_remote_head_sha: firstRemoteHead },
+      });
+      expect(git(fork, 'rev-parse', 'refs/heads/feature/pr')).toBe(prHead);
+    });
+
     it('分岐したPR headを取り込み双方のコミットと内容を保持する', async () => {
       const context = await prepareRetry((cwd) => { commitFile(cwd, 'local-only.txt', 'unpushed local work\n'); });
       advancePr('remote-only.txt', 'new remote work\n');

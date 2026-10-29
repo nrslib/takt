@@ -86,6 +86,10 @@ export class TaskRunner {
     this.lifecycle.recordPrMergeClonePrepared(taskName);
   }
 
+  recordPrMergeKnownRemoteHead(taskName: string, headSha: string): void {
+    this.lifecycle.recordPrMergeKnownRemoteHead(taskName, headSha);
+  }
+
   recordPrMergePushedHead(
     taskName: string, headSha: string, previousRemoteHeadSha: string,
     source: NonNullable<TaskFileData['merge_push_source']>,
