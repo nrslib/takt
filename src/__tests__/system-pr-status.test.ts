@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDefaultSystemStepServices } from '../infra/workflow/system/DefaultSystemStepServices.js';
 import type { WorkflowEffect, WorkflowSystemInput } from '../core/models/types.js';
+import type { PrCiFailure } from '../core/workflow/system/pr-ci.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 import { createInitialState } from '../core/workflow/engine/state-manager.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
@@ -79,7 +80,7 @@ describe('CI failure system input and rerun effect', () => {
   beforeEach(() => { runDirectory = mkdtempSync(join(tmpdir(), 'takt-ci-status-')); });
   afterEach(() => { rmSync(runDirectory, { recursive: true, force: true }); });
   const headSha = 'b'.repeat(40);
-  const failure = () => ({ number: 123, headSha, complete: true, checks: [
+  const failure = (): PrCiFailure => ({ number: 123, headSha, complete: true, checks: [
     { name: 'unit', run: { id: 10, attempt: 1, headSha, url: 'https://github.com/org/repo/actions/runs/10' },
       jobs: [{ id: 20, name: 'unit', url: 'https://github.com/org/repo/actions/runs/10/job/20',
         log: 'math.test.ts > adds\nexpected 2 to equal 3' }] },
@@ -265,6 +266,42 @@ describe('CI failure system input and rerun effect', () => {
       expect(await h.service.executeEffect(effect, { type: 'rerun_ci', pr: 123, failure: result }, h.state))
         .toMatchObject({ success: false });
       expect(h.rerunPrCi).not.toHaveBeenCalled();
+    }
+  });
+
+  it('同じjob URLの取得失敗理由をcheckごとに原本とclone側へ一度だけ保存する', async () => {
+    const h = fixture();
+    const original = failure();
+    const run = original.checks[0]!.run;
+    const { log: _log, ...job } = original.checks[0]!.jobs[0]!;
+    const unavailable = [
+      { name: 'unit', url: job.url, reason: 'HTTP 403: cannot read log' },
+      { name: 'lint', url: job.url, reason: 'HTTP 404: log unavailable' },
+    ];
+    h.fetchPrCiFailure.mockResolvedValue({ ...original, complete: false, checks: [
+      { name: 'unit', run, jobs: [job] },
+      { name: 'lint', run, jobs: [job] },
+    ], unavailable });
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await h.service.resolveSystemInput(input, h.state) as {
+        complete: boolean; unavailable: typeof unavailable; promptEvidence: string;
+      };
+      const viewPath = /^Evidence index: (.+)$/m.exec(result.promptEvidence)?.[1];
+      expect(viewPath).toBeDefined();
+      const view = JSON.parse(readFileSync(viewPath!, 'utf8')) as {
+        unavailable: typeof unavailable; checks: Array<{ jobs: Array<{ logPath: string | null }> }>;
+      };
+      const canonicalDirectory = join(runDirectory, '.takt', 'runs', 'run', 'ci-evidence');
+      const manifests = readdirSync(canonicalDirectory).filter((name) => name.endsWith('.json'));
+      expect(manifests).toHaveLength(1);
+      const canonical = JSON.parse(readFileSync(join(canonicalDirectory, manifests[0]!), 'utf8')) as typeof view;
+      expect(result.complete).toBe(false);
+      expect(result.unavailable).toEqual(unavailable);
+      expect(canonical.unavailable).toEqual(unavailable);
+      expect(view.unavailable).toEqual(unavailable);
+      expect(view.checks).toHaveLength(2);
+      expect(view.checks.flatMap(({ jobs }) => jobs.map(({ logPath }) => logPath))).toEqual([null, null]);
     }
   });
 

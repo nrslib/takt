@@ -46,7 +46,9 @@ async function saveIndex(
     for (const job of check.jobs) {
       signal?.throwIfAborted();
       if (!job.log?.trim()) {
-        addUnavailable({ name: check.name, url: job.url, reason: 'Failed job log is missing' });
+        if (!unavailable.some((item) => item.name === check.name && item.url === job.url)) {
+          addUnavailable({ name: check.name, url: job.url, reason: 'Failed job log is missing' });
+        }
         jobs.push({ id: job.id, name: job.name, url: job.url, logPath: null });
         continue;
       }
