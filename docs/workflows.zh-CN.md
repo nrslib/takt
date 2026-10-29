@@ -742,7 +742,7 @@ steps:
 | `policy` | - | policy key 或数组 |
 | `knowledge` | - | knowledge key 或数组 |
 | `instruction` | - | instruction key、内联文本，或由两者组成的非空有序数组；facet 名称按项目 → 用户 → builtin 解析 |
-| `edit` | - | 是否可以编辑项目文件 |
+| `edit` | - | 是否可以编辑项目文件。Codex 对显式设置 `false` 的 step，在 Phase 1 中使用 `read-only` sandbox |
 | `companion` | - | 在 normal agent step 或 Team Leader step 上运行 companion reviewer |
 | `completion_retry` | - | opt-in 的 reviewer 完整性检查与有界重试 |
 | `pass_previous_response` | `true` | 将上一个 step 输出传给 `{previous_response}` |
@@ -754,6 +754,8 @@ steps:
 | `quality_gates` | - | agent step 完成 gate；字符串是 AI 指令，`type: command` 是机器 gate |
 
 `completion_retry` 是只接受对象的显式 opt-in，要求 `retry_instruction`，可选 `min_retry` 与 `max_retry`。`max_retry` 未设置时内部上限为 4；`review_completion` 仍是已弃用别名，不能与 `completion_retry` 同时使用。Provider 和 model 不是 workflow 字段，必须由 runtime profile/routing 提供；workflow 中写入已移除字段会在加载边界失败。
+
+Codex 对显式设置 `edit: false` 的 step，在 Phase 1 中使用 `read-only` sandbox，无论解析出的 permission mode 是什么，包括 `permission_control: codex`。team leader 的 part（通过 `part_edit` 或继承的 `edit`）、parallel 子 step 和 `workflow_call` 子 workflow 中的各 step，分别使用自身的实际 `edit` 设置。通用权限解析、其他 provider、省略 `edit` 和 `edit: true` 的行为保持不变。
 
 ## Workflow 级配置
 

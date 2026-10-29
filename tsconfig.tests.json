@@ -266,6 +266,7 @@
     "src/__tests__/it-daemon-process.test.ts",
     "src/__tests__/it-daemon-projects.test.ts",
     "src/__tests__/it-daemon-slack-lifetime.test.ts",
+    "src/__tests__/it-edit-false-readonly.test.ts",
     "src/__tests__/it-failed-retry-order-revision-worktree.test.ts",
     "src/__tests__/it-goal-content-inclusion.test.ts",
     "src/__tests__/it-goal-execution-lock-process.test.ts",

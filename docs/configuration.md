@@ -1622,6 +1622,8 @@ provider_options:
 
 With `permission_control: codex`, Codex settings control sandbox and network permissions. TAKT's `network_access` setting does not affect effective Codex permissions in this mode. TAKT still sets `approvalPolicy: never` for non-interactive runs, so check the Codex configuration you use. `reasoning_effort`, `fast_mode`, and `skills` continue to apply.
 
+Phase 2 and Phase 1 of steps with an explicit `edit: false` still pass a `read-only` sandbox. Codex uses this sandbox in Phase 1 regardless of the resolved permission mode, including with `permission_control: codex`. These calls also handle `network_access` as in TAKT-managed permission control.
+
 To select a named Codex configuration profile, add `config_profile` alongside `permission_control: codex`:
 
 ```yaml

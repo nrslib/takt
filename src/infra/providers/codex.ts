@@ -35,6 +35,7 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
     reasoningEffort: options.effort ?? providerCodexOptions?.reasoningEffort,
     fastMode: providerCodexOptions?.fastMode,
     permissionMode: options.permissionMode,
+    edit: options.edit,
     permissionControl: providerCodexOptions?.permissionControl,
     configProfile: providerCodexOptions?.configProfile,
     networkAccess: providerCodexOptions?.networkAccess,

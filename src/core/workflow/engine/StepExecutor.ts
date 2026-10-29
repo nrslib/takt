@@ -1980,6 +1980,7 @@ export class StepExecutor {
                     onDispatch: agentOptions.onDispatch,
                     workflowMeta: agentOptions.workflowMeta,
                     executionPhase: agentOptions.executionPhase,
+                    edit: agentOptions.edit,
                     mcpServers: agentOptions.mcpServers,
                     mcpAssignment: agentOptions.mcpAssignment,
                     mcpServerIdentity: agentOptions.mcpServerIdentity,
