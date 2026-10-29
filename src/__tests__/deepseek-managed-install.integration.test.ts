@@ -406,9 +406,22 @@ const managedTargets = [
 ] as const;
 
 const PI_TEST_INSTALL_TIMEOUT_MS = 120_000;
-// Keep the child install bounded at 120s; allow another minute for the real
-// SDK import, compatibility assertions, and disposal in this Pi-only test.
-const PI_TEST_COMPATIBILITY_TIMEOUT_MS = PI_TEST_INSTALL_TIMEOUT_MS + 60_000;
+// Leave another minute after each bounded Pi install for checks and cleanup.
+const PI_TEST_ONE_INSTALL_TIMEOUT_MS = PI_TEST_INSTALL_TIMEOUT_MS + 60_000;
+const PI_TEST_TWO_INSTALL_TIMEOUT_MS = PI_TEST_INSTALL_TIMEOUT_MS * 2 + 60_000;
+
+function registerManagedTargetTestCases(
+  name: string,
+  piInstallCount: 1 | 2,
+  run: (target: (typeof managedTargets)[number]) => Promise<void>,
+): void {
+  for (const target of managedTargets) {
+    const options = target.provider === 'pi'
+      ? { timeout: piInstallCount === 1 ? PI_TEST_ONE_INSTALL_TIMEOUT_MS : PI_TEST_TWO_INSTALL_TIMEOUT_MS }
+      : {};
+    it(name.replace('$provider', target.provider), options, () => run(target));
+  }
+}
 
 async function runSuccessfulManagedInstall(provider: (typeof managedTargets)[number]['provider'], platform?: 'win32') {
   const timeoutMs = provider === 'pi' ? PI_TEST_INSTALL_TIMEOUT_MS : 15_000;
@@ -544,7 +557,7 @@ describe.skipIf(!supported)('managed DeepSeek installation', () => {
     expect(mockConfirm).not.toHaveBeenCalled();
   });
 
-  it.each(managedTargets)('installs a usable pinned $provider SDK and leaves it unchanged on a repeated install', async ({ provider, packageName }) => {
+  registerManagedTargetTestCases('installs a usable pinned $provider SDK and leaves it unchanged on a repeated install', 2, async ({ provider, packageName }) => {
     const log = join(temporaryRoot, 'npm-calls.jsonl');
     vi.stubEnv('TAKT_TEST_NPM_LOG', log);
     const first = await runSuccessfulManagedInstall(provider);
@@ -565,7 +578,7 @@ if (Object.keys(sdk).length === 0) process.exit(2);`], { cwd: directory, stdio: 
     expect(code).toBe(0);
   });
 
-  it('preserves Pi compatibility through the installed managed SDK and loader', { timeout: PI_TEST_COMPATIBILITY_TIMEOUT_MS }, async ({ task }) => {
+  it('preserves Pi compatibility through the installed managed SDK and loader', { timeout: PI_TEST_ONE_INSTALL_TIMEOUT_MS }, async ({ task }) => {
     // Inspect the registered Vitest deadline, not just the intended constant.
     expect(task.timeout).toBeGreaterThan(PI_TEST_INSTALL_TIMEOUT_MS + 30_000);
     const installed = await runSuccessfulManagedInstall('pi');
@@ -794,7 +807,7 @@ export default function extension(pi) {
     }
   });
 
-  it.each(managedTargets)('loads an intact older $provider generation and rejects damaged SDK code', async ({ provider, packageName }) => {
+  registerManagedTargetTestCases('loads an intact older $provider generation and rejects damaged SDK code', 1, async ({ provider, packageName }) => {
     const first = await runSuccessfulManagedInstall(provider);
     expect(first.code, first.output).toBe(0);
     const directory = await makeManagedGenerationStale(packageName);
@@ -807,7 +820,7 @@ export default function extension(pi) {
     await expect(loadManagedSdk(provider)).rejects.toThrow(`takt install ${provider}`);
   });
 
-  it.each(managedTargets)('keeps the installed $provider generation when a forced replacement fails', async ({ provider, packageName }) => {
+  registerManagedTargetTestCases('keeps the installed $provider generation when a forced replacement fails', 2, async ({ provider, packageName }) => {
     const first = await runSuccessfulManagedInstall(provider);
     expect(first.code, first.output).toBe(0);
     const directory = await installedGeneration(packageName);
@@ -823,7 +836,7 @@ export default function extension(pi) {
     expect(await installedGeneration(packageName)).toBe(directory);
   });
 
-  it.each(managedTargets)('keeps the installed $provider generation when npm succeeds without its SDK', async ({ provider, packageName }) => {
+  registerManagedTargetTestCases('keeps the installed $provider generation when npm succeeds without its SDK', 2, async ({ provider, packageName }) => {
     const first = await runSuccessfulManagedInstall(provider);
     expect(first.code, first.output).toBe(0);
     const directory = installedGeneration(packageName);
@@ -839,7 +852,7 @@ export default function extension(pi) {
     expect(installedGeneration(packageName)).toBe(directory);
   });
 
-  it.each(managedTargets)('stops an interrupted $provider replacement and keeps its installed generation usable', async ({ provider, packageName }) => {
+  registerManagedTargetTestCases('stops an interrupted $provider replacement and keeps its installed generation usable', 2, async ({ provider, packageName }) => {
     const first = await runSuccessfulManagedInstall(provider);
     expect(first.code, first.output).toBe(0);
     const directory = installedGeneration(packageName);
