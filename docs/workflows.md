@@ -848,6 +848,8 @@ output_contracts:
       format: decisions
 ```
 
+Phase 2 uses the provider's existing readonly settings to read only the evidence needed for the report. The current Phase 1 execution record is saved as masked JSONL and passed by path and byte size. Long strings span multiple lines so the agent can search and read nearby evidence. Phase 2 must not modify files, run tests or builds, start new investigations, or add findings, judgments, or plans. Reports distinguish checks performed in Phase 1 from material read in Phase 2. TAKT saves the final response body to the report file. Phase 3 remains tool-free.
+
 Every report entry requires `name` and `format`. Two optional fields refine behavior:
 
 - `use_judge` (default `true`) — whether the report is fed into the Phase 3 status judgment. Set `use_judge: false` for reports that should be written but not used as judgment evidence. A step whose rules need judgment must keep at least one `use_judge` report.
