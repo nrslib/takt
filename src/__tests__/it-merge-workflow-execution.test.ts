@@ -23,6 +23,30 @@ vi.mock('../infra/workflow/system/system-sync-effects.js', () => ({
 
 vi.mock('../infra/github/pr-command.js', () => ({ runPrCommand: vi.fn() }));
 
+vi.mock('../core/workflow/phase1-execution-log.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/workflow/phase1-execution-log.js')>();
+  const { randomUUID } = await import('node:crypto');
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  return {
+    ...actual,
+    savePhase1ExecutionLog: async (
+      log: InstanceType<typeof actual.Phase1ExecutionLog>,
+      logsDirectory: string,
+      stepName: string,
+      stepIteration: number,
+    ) => {
+      const content = log.toReportInput();
+      const directory = join(logsDirectory, 'phase1-execution');
+      mkdirSync(directory, { recursive: true, mode: 0o700 });
+      const safeStepName = stepName.replace(/[^A-Za-z0-9._-]/g, '_');
+      const path = join(directory, `${safeStepName}-${stepIteration}-${randomUUID()}.json`);
+      writeFileSync(path, content, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+      return { path, byteSize: Buffer.byteLength(content), stepName, stepIteration };
+    },
+  };
+});
+
 const cacciaGit = vi.hoisted(() => vi.fn());
 vi.mock('../infra/task/clone-exec.js', async (original) => ({
   ...await original<typeof import('../infra/task/clone-exec.js')>(), runGitCommandAbortable: cacciaGit,
