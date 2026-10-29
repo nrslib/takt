@@ -389,6 +389,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
         shouldSendSeededContext ? initialUserMessage : undefined,
       );
       const providerPrompt = resolveProviderPrompt(prompt);
+      const selectedSessionId = selectedResumePending ? sessionId : undefined;
       // Resolve placeholders after adding the handoff transcript so images from
       // the prior session remain attached to the first call of the new session.
       // A placeholder whose file went missing is the user's problem to fix, not a
@@ -420,7 +421,12 @@ export function createConversationSession(options: ConversationSessionOptions): 
           permissionMode: options.strategy.permissionMode,
           imageAttachments,
           ...(input.onNotice ? { onNotice: input.onNotice } : {}),
-          ...(selectedResumePending ? { onSessionResumeFailure: () => input.onNotice?.(getLabel('interactive.resumeSessionFailed', ctx.lang)) } : {}),
+          ...(selectedSessionId === undefined ? {} : { onSessionResumeFailure: () => {
+            if (!isCurrentTurn() || !selectedResumePending || sessionId !== selectedSessionId) return;
+            options.interactiveSessionRecords?.discard({ provider: ctx.providerType, sessionId: selectedSessionId });
+            unidentifiedInputs = [...unidentifiedInputs, input.text].slice(-3);
+            input.onNotice?.(getLabel('interactive.resumeSessionFailed', ctx.lang));
+          } }),
           ...(input.confirmManagedProvider ? { confirmManagedProvider: input.confirmManagedProvider } : {}),
         },
       );

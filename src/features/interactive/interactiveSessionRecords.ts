@@ -44,6 +44,10 @@ type SessionKey = Pick<Turn, 'provider' | 'sessionId'>;
 type Input = SessionKey & { input: string };
 type Response = SessionKey & { inputRevision: number; response: string };
 
+function sessionKey(record: SessionKey): string {
+  return JSON.stringify([record.provider, record.sessionId]);
+}
+
 function appendInput(records: InteractiveSessionRecord[], args: Input): { records: InteractiveSessionRecord[]; revision: number } {
   const previous = records.find((record) => record.provider === args.provider && record.sessionId === args.sessionId);
   const next: InteractiveSessionRecord = {
@@ -95,7 +99,7 @@ async function cleanAndReadRecords(cwd: string, exists: CheckSession): Promise<I
   }
 
   const counts = new Map<string, number>();
-  const retained: InteractiveSessionRecord[] = [];
+  const missing = new Map<string, string>();
   for (const record of records) {
     const count = counts.get(record.provider) ?? 0;
     if (count >= 10) continue;
@@ -105,10 +109,27 @@ async function cleanAndReadRecords(cwd: string, exists: CheckSession): Promise<I
     } catch {
       existsResult = undefined;
     }
-    if (existsResult === false) continue;
+    if (existsResult === false) {
+      missing.set(sessionKey(record), JSON.stringify(record));
+      continue;
+    }
     counts.set(record.provider, count + 1);
-    retained.push(record);
   }
+  let latest: InteractiveSessionRecord[];
+  try {
+    latest = readRecords(cwd);
+  } catch {
+    writeRecords(cwd, []);
+    return [];
+  }
+  const retainedCounts = new Map<string, number>();
+  const retained = latest.filter((record) => {
+    if (missing.get(sessionKey(record)) === JSON.stringify(record)) return false;
+    const count = retainedCounts.get(record.provider) ?? 0;
+    if (count >= 10) return false;
+    retainedCounts.set(record.provider, count + 1);
+    return true;
+  });
   writeRecords(cwd, retained);
   return retained;
 }
@@ -122,6 +143,7 @@ export class InteractiveSessionRecords {
   private pending: InteractiveSessionRecord[] | undefined;
   private snapshot: InteractiveSessionRecord[] = [];
   private readFailed = false;
+  private discarded = new Set<string>();
 
   constructor(private readonly cwd: string) {}
 
@@ -160,9 +182,8 @@ export class InteractiveSessionRecords {
     if (this.readFailed) {
       try {
         const saved = readRecords(this.cwd);
-        this.pending = [...this.pending, ...saved.filter((record) => !this.pending!.some(
-          (current) => current.provider === record.provider && current.sessionId === record.sessionId,
-        ))];
+        this.pending = [...this.pending, ...saved.filter((record) => !this.discarded.has(sessionKey(record))
+          && !this.pending!.some((current) => current.provider === record.provider && current.sessionId === record.sessionId))];
         this.readFailed = false;
       } catch {
         const changed = change(this.pending);
@@ -179,6 +200,7 @@ export class InteractiveSessionRecords {
     try {
       writeRecords(this.cwd, this.pending);
       this.pending = undefined;
+      this.discarded.clear();
     } catch (error) {
       warn(`Interactive session records could not be saved: ${String(error)}`);
     }
@@ -199,5 +221,13 @@ export class InteractiveSessionRecords {
       const changed = updateResponse(records, args);
       return changed === undefined ? undefined : { records: changed, value: undefined };
     });
+  }
+
+  discard(args: SessionKey): void {
+    this.discarded.add(sessionKey(args));
+    this.update((records) => ({
+      records: records.filter((record) => record.provider !== args.provider || record.sessionId !== args.sessionId),
+      value: undefined,
+    }));
   }
 }

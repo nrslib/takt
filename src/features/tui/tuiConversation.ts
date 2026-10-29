@@ -474,6 +474,7 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
 
     async resumeSession(sessionId: string): Promise<string | undefined> {
       if (await interactiveSessionExists(options.cwd, ctx.providerType, sessionId) === false) {
+        options.interactiveSessionRecords?.discard({ provider: ctx.providerType, sessionId });
         session.setSessionId(undefined);
         return getLabel('interactive.resumeSessionFailed', ctx.lang);
       }

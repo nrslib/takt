@@ -198,7 +198,7 @@ import { selectOption } from '../shared/prompt/index.js';
 import { error as logError, info as logInfo } from '../shared/ui/index.js';
 import { callAIWithRetry, runConversationLoop, type SessionContext } from '../features/interactive/conversationLoop.js';
 import { initializeSession } from '../features/interactive/sessionInitialization.js';
-import { getRecordsPath, listRecords } from '../features/interactive/interactiveSessionRecords.js';
+import { getRecordsPath, listRecords, recordTurn } from '../features/interactive/interactiveSessionRecords.js';
 import { SlashCommand } from '../shared/constants.js';
 import type { GitProvider, Issue } from '../infra/git/index.js';
 import type { SummaryPromptOptions } from '../features/interactive/conversationLoop.js';
@@ -761,6 +761,8 @@ describe('/resume command', () => {
   it('reports a missing selected session and continues with a fresh session', async () => {
     setupRawStdin(toRawInputs(['/resume', 'first input', 'next input', '/cancel']));
     mockSelectRecentSession.mockResolvedValue('deleted-session');
+    recordTurn({ cwd: '/test', provider: 'mock', sessionId: 'deleted-session', input: 'old input', response: 'old reply' });
+    recordTurn({ cwd: '/test', provider: 'pi', sessionId: 'deleted-session', input: 'other input', response: 'other reply' });
     const { provider } = createScenarioProvider([]);
     const sessionIds: Array<string | undefined> = [];
     provider._call.mockImplementation(async (_prompt: string, options: { sessionId?: string }) => {
@@ -779,8 +781,40 @@ describe('/resume command', () => {
 
     expect(result.action).toBe('cancel');
     expect(sessionIds).toEqual(['deleted-session', undefined, 'fresh-session']);
+    expect(listRecords('/test', 'mock')).toMatchObject([{ sessionId: 'fresh-session', inputs: ['first input', 'next input'] }]);
+    expect(listRecords('/test', 'mock')).toHaveLength(1);
+    expect(listRecords('/test', 'pi')).toMatchObject([{ sessionId: 'deleted-session', response: 'other reply' }]);
     const notices = [...mockLogInfo.mock.calls, ...mockLogError.mock.calls].map(([message]) => String(message));
     expect(notices.some((message) => /(?:resume|session).*(?:fail|not found|no longer|could not)/i.test(message))).toBe(true);
+  });
+
+  it('keeps a selected session record after an unrelated provider error', async () => {
+    setupRawStdin(toRawInputs(['/resume', 'new input']));
+    mockSelectRecentSession.mockResolvedValue('selected-session');
+    recordTurn({ cwd: '/test', provider: 'mock', sessionId: 'selected-session', input: 'old input', response: 'old reply' });
+    const { provider } = createScenarioProvider([
+      { content: 'provider unavailable', status: 'error', sessionId: 'selected-session' },
+    ]);
+
+    const result = await runConversationLoop('/test', createSessionContext({ provider, disableSessionRetry: true }), defaultStrategy, undefined, undefined);
+
+    expect(result.action).toBe('cancel');
+    expect(listRecords('/test', 'mock')).toMatchObject([
+      { sessionId: 'selected-session', inputs: ['old input', 'new input'], response: 'old reply' },
+    ]);
+  });
+
+  it('discards a session that disappears between selection and resume', async () => {
+    setupRawStdin(toRawInputs(['/resume', '/cancel']));
+    mockSelectRecentSession.mockImplementation(async () => {
+      recordTurn({ cwd: '/test', provider: 'claude', sessionId: 'disappeared', input: 'old input', response: 'old reply' });
+      return 'disappeared';
+    });
+
+    const result = await runConversationLoop('/test', createSessionContext({ providerType: 'claude' }), defaultStrategy, undefined, undefined);
+
+    expect(result.action).toBe('cancel');
+    expect(listRecords('/test', 'claude')).toEqual([]);
   });
 
   it('passes the current provider to the session selector', async () => {

@@ -548,6 +548,7 @@ export async function runConversationLoop(
           shouldSendSeededContext ? initialUserMessage : undefined,
         );
         let resumeFailed = false;
+        const selectedSessionId = selectedResumePending ? sessionId : undefined;
         const { result, sessionId: newSessionId } = await callConversationAI(
           promptWithTransform,
           activePromptConfiguration.systemPrompt,
@@ -556,10 +557,13 @@ export async function runConversationLoop(
             commitSession: false,
             persistSession: () => !delivery.interrupted,
             onAbort: () => delivery.interrupt(),
-            ...(selectedResumePending ? { onSessionResumeFailure: () => {
+            ...(selectedSessionId === undefined ? {} : { onSessionResumeFailure: () => {
+              if (delivery.interrupted || !selectedResumePending || sessionId !== selectedSessionId) return;
               resumeFailed = true;
+              records.discard({ provider: ctx.providerType, sessionId: selectedSessionId });
+              unidentifiedInputs = [...unidentifiedInputs, input].slice(-3);
               info(getLabel('interactive.resumeSessionFailed', ctx.lang));
-            } } : {}),
+            } }),
           },
         );
         if (delivery.interrupted) {
@@ -820,6 +824,7 @@ export async function runConversationLoop(
           const selectedId = await selectRecentSession(cwd, ctx.lang, ctx.providerType, records);
           if (selectedId) {
             if (await interactiveSessionExists(cwd, ctx.providerType, selectedId) === false) {
+              records.discard({ provider: ctx.providerType, sessionId: selectedId });
               sessionId = undefined;
               unidentifiedInputs = [];
               selectedResumePending = false;

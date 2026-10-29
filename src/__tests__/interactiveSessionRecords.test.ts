@@ -94,10 +94,48 @@ it('keeps conversations ordered by their last input when an older response arriv
   expect(owner.list('codex')[1]).toMatchObject({ modified: modifiedOnInput, response: 'older reply' });
 });
 
+it('discards only the selected provider session and ignores its late response', () => {
+  const owner = new InteractiveSessionRecords('/project');
+  recordCompletedTurn(owner, 'codex', 'selected', 'old input', 'old reply');
+  recordCompletedTurn(owner, 'claude', 'selected', 'other input', 'other reply');
+  const revision = owner.recordInput({ provider: 'codex', sessionId: 'selected', input: 'failed input' });
+
+  owner.discard({ provider: 'codex', sessionId: 'selected' });
+  owner.recordResponse({ provider: 'codex', sessionId: 'selected', inputRevision: revision, response: 'late reply' });
+
+  expect(owner.list('codex')).toEqual([]);
+  expect(owner.list('claude')).toMatchObject([{ sessionId: 'selected', response: 'other reply' }]);
+});
+
+it('does not restore a discarded session after a failed write recovers', () => {
+  const owner = new InteractiveSessionRecords('/project');
+  recordCompletedTurn(owner, 'codex', 'selected', 'old input', 'old reply');
+  disk.writeError = true;
+  owner.discard({ provider: 'codex', sessionId: 'selected' });
+  expect(owner.list('codex')).toEqual([]);
+
+  disk.writeError = false;
+  recordCompletedTurn(owner, 'codex', 'new', 'new input', 'new reply');
+  expect(listRecords('/project', 'codex')).toMatchObject([{ sessionId: 'new', response: 'new reply' }]);
+  expect(listRecords('/project', 'codex')).toHaveLength(1);
+});
+
 it('keeps unknown sessions and removes only confirmed missing sessions', async () => {
   for (const id of ['present', 'missing', 'unknown']) recordTurn({ cwd: '/project', provider: 'codex', sessionId: id, input: id, response: id });
   await cleanRecords('/project', async (_provider, id) => id === 'missing' ? false : id === 'present' ? true : undefined);
   expect(listRecords('/project', 'codex').map((entry) => entry.sessionId)).toEqual(['unknown', 'present']);
+});
+
+it('recreates empty records when startup cleanup cannot reread them', async () => {
+  recordTurn({ cwd: '/project', provider: 'codex', sessionId: 'existing', input: 'old', response: 'old reply' });
+  const owner = new InteractiveSessionRecords('/project');
+  await owner.clean(async () => { disk.readError = true; return true; });
+  expect(disk.content).toBe('[]');
+  expect(owner.list('codex')).toEqual([]);
+
+  disk.readError = false;
+  recordCompletedTurn(owner, 'codex', 'new', 'new input', 'new reply');
+  expect(listRecords('/project', 'codex')).toMatchObject([{ sessionId: 'new', response: 'new reply' }]);
 });
 
 it('recreates corrupted stored records as an empty readable list', async () => {

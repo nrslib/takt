@@ -61,6 +61,7 @@ import {
 } from '../features/interactive/conversationPlan.js';
 import { createInstructConversationPlan } from '../features/interactive/taskActionConversationPlan.js';
 import { createSessionImageAttachmentStore } from '../features/interactive/imageAttachments.js';
+import { InteractiveSessionRecords } from '../features/interactive/interactiveSessionRecords.js';
 import {
   createTuiConversation,
   type TuiConversation,
@@ -604,6 +605,22 @@ describe('notices from a turn the user left behind', () => {
 });
 
 describe('TUI local commands', () => {
+  it('discards a selected session confirmed missing before calling the provider', async () => {
+    mockInitializeSession.mockReturnValue({
+      provider: { setup: vi.fn(), getRuntimeInstructions: vi.fn(() => null) },
+      providerType: 'claude', model: 'mock-model', lang: 'en', personaName: 'interactive', sessionId: undefined,
+    });
+    const records = new InteractiveSessionRecords('/repo');
+    const discard = vi.spyOn(records, 'discard').mockImplementation(() => {});
+    const conversation = createConversation({ interactiveSessionRecords: records });
+
+    const notice = await conversation.resumeSession('nested/missing-session');
+
+    expect(notice).toBe(getLabel('interactive.resumeSessionFailed', 'en'));
+    expect(discard).toHaveBeenCalledWith({ provider: 'claude', sessionId: 'nested/missing-session' });
+    expect(mockCallAIWithRetry).not.toHaveBeenCalled();
+  });
+
   it('reports a failed resume and continues with the fresh session', async () => {
     const conversation = createConversation();
     await conversation.resumeSession('missing-session');

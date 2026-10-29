@@ -1,4 +1,5 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
@@ -141,6 +142,39 @@ it('retains records when provider existence checks throw', async () => {
     return false;
   });
   expect((await store.listRecords(cwd, 'codex')).map((entry) => entry.sessionId)).toEqual(['uncheckable']);
+});
+
+it('keeps records added or updated by another writer during startup cleanup', async () => {
+  const project = mkdtempSync(join(tmpdir(), 'takt-clean-records-'));
+  const writeTurn = (sessionId: string, input: string) => recordsStore.recordTurn({
+    cwd: project, provider: 'codex', sessionId, input, response: `reply ${input}`,
+  });
+  let release: (() => void) | undefined;
+  try {
+    writeTurn('updated', 'before');
+    writeTurn('missing', 'gone');
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const checked: string[] = [];
+    const cleaning = recordsStore.cleanRecords(project, async (_provider, sessionId) => {
+      checked.push(sessionId);
+      if (sessionId === 'missing') await held;
+      return false;
+    });
+    expect(checked).toEqual(['missing']);
+
+    writeTurn('new', 'new input');
+    writeTurn('updated', 'after');
+    release?.();
+    await cleaning;
+
+    expect(recordsStore.listRecords(project, 'codex')).toMatchObject([
+      { sessionId: 'updated', inputs: ['before', 'after'], response: 'reply after' },
+      { sessionId: 'new', inputs: ['new input'] },
+    ]);
+  } finally {
+    release?.();
+    rmSync(project, { recursive: true, force: true });
+  }
 });
 
 it('sanitizes recorded inputs and replies before displaying them', async () => {
