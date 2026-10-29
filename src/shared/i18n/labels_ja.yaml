@@ -424,6 +424,11 @@ tui:
     retryDetails: "タスク: {task}\n要約: {summary}\nワークフロー: {workflow}\n開始位置: {start}"
     exceededStart: "保存済みの停止位置: {start}（iteration {iteration}）"
 
+director:
+  description: "実験的な director 会話 TUI を開きます"
+  experimentalNotice: "director は実験的機能です。動作や保存形式は変更されます。"
+  costNotice: "director は AI を動かすため、provider API の費用がかかります。"
+  placeholder: "manager の状況や指示を相談してください"
 manager:
   goalPr:
     objective: "目的"

@@ -13,7 +13,7 @@ const doubles = vi.hoisted(() => ({
 vi.mock('../features/daemon/slackPorts.js', () => ({ createDaemonSlackPorts: doubles.slack }));
 vi.mock('../infra/daemon/ipcEndpoint.js', () => ({ resolveDaemonConfigDirectory: () => process.env.TAKT_CONFIG_DIR }));
 vi.mock('../features/manager/conversationService.js', () => ({ createConversationService: doubles.conversationService }));
-vi.mock('../features/manager/conversationRuntime.js', () => ({ createConversationRuntime: doubles.runtime }));
+vi.mock('../features/director/conversationRuntime.js', () => ({ createDaemonConversationRuntime: doubles.runtime }));
 vi.mock('../features/daemon/conversationIpcServer.js', () => ({ createConversationIpcServer: doubles.ipc }));
 vi.mock('../features/daemon/projects.js', () => ({ listDaemonProjects: doubles.projects, hasDaemonProjectWork: doubles.work }));
 vi.mock('../features/manager/runEventManager.js', () => ({ createRunEventManager: doubles.create }));

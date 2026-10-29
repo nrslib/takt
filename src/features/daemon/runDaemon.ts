@@ -17,7 +17,7 @@ import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { failInterruptedTasksWithGoalEvents } from '../tasks/execute/claimTasks.js';
 import { resolveDaemonConfigDirectory } from '../../infra/daemon/ipcEndpoint.js';
 import { createConversationService } from '../manager/conversationService.js';
-import { createConversationRuntime } from '../manager/conversationRuntime.js';
+import { createDaemonConversationRuntime } from '../director/conversationRuntime.js';
 import { createConversationIpcServer } from './conversationIpcServer.js';
 import { createDaemonSlackPorts } from './slackPorts.js';
 
@@ -57,7 +57,8 @@ export async function runDaemon(): Promise<void> {
   const projectWork = new Map<string, boolean>();
   let domainGeneration = 0;
   const conversations = createConversationService({ configDirectory: globalConfigDirectory, owner,
-    runtime: createConversationRuntime(globalConfigDirectory), onDomainChange: () => { domainGeneration++; projectWork.clear(); } });
+    runtime: createDaemonConversationRuntime(globalConfigDirectory, { notify: (notification) => conversations.notifyDirector(notification) }),
+    onDomainChange: () => { domainGeneration++; projectWork.clear(); } });
   let ipc: Awaited<ReturnType<typeof createConversationIpcServer>> | undefined;
   let slack: Awaited<ReturnType<typeof createDaemonSlackPorts>> | undefined;
   let nextSlackInquiryPoll = 0;

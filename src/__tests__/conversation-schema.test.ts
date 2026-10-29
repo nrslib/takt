@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { conversationId, conversationIdentity } from '../infra/conversations/identity.js';
-import { ConversationRecordSchema } from '../infra/conversations/schema.js';
-import { conversationRecord } from './helpers/conversation-fixtures.js';
+import { ConversationAssignmentSchema, ConversationRecordSchema } from '../infra/conversations/schema.js';
+import { conversationRecord, directorConversationRecord } from './helpers/conversation-fixtures.js';
 
 describe('conversation identity and schema', () => {
   it('derives identity from the complete repository path and keeps the same assignment stable', () => {
@@ -17,6 +17,24 @@ describe('conversation identity and schema', () => {
     const assignment = { kind: 'workspace' as const, workspaceId: '11111111-1111-4111-8111-111111111111' };
     expect(conversationIdentity(assignment)).toEqual(['manager', 'workspace', assignment.workspaceId]);
     expect(conversationId(assignment)).not.toBe(conversationId({ kind: 'repository', repositoryDirectory: '/work/example' }));
+  });
+
+  it('gives the daemon director a stable identity separate from repository and workspace managers', () => {
+    const assignment = ConversationAssignmentSchema.parse({ kind: 'daemon' });
+    const id = conversationId(assignment);
+
+    expect(conversationId(ConversationAssignmentSchema.parse({ kind: 'daemon' }))).toBe(id);
+    expect(id).not.toBe(conversationId({ kind: 'repository', repositoryDirectory: '/work/example' }));
+    expect(id).not.toBe(conversationId({ kind: 'workspace', workspaceId: '11111111-1111-4111-8111-111111111111' }));
+    expect(ConversationRecordSchema.parse(directorConversationRecord())).toMatchObject({ agent: 'director', assignment });
+  });
+
+  it('rejects a director agent attached to a repository manager identity', () => {
+    expect(ConversationRecordSchema.safeParse({ ...conversationRecord('/work/example'), agent: 'director' }).success).toBe(false);
+  });
+
+  it('rejects a manager agent attached to the daemon director identity', () => {
+    expect(ConversationRecordSchema.safeParse({ ...directorConversationRecord(), agent: 'manager' }).success).toBe(false);
   });
 
   it.each(['lastSpeaker', 'model', 'sessionId', 'pending', 'approval', 'running'] as const)('requires nullable field %s', (field) => {

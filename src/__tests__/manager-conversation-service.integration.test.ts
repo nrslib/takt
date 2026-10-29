@@ -8,6 +8,7 @@ import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { createConversationService } from '../features/manager/conversationService.js';
 import { ConversationStore } from '../infra/conversations/store.js';
+import { ConversationSpeakerStore } from '../infra/conversations/speakerStore.js';
 import { conversationRecord } from './helpers/conversation-fixtures.js';
 import type { ConversationRecord } from '../infra/conversations/schema.js';
 import type { ConversationDelivery, PortOutput, SnapshotRead, SnapshotItem } from '../features/manager/conversationPort.js';
@@ -72,7 +73,7 @@ let directory: string;
 let repository: string;
 let assignment: ManagerAssignment;
 let store: ConversationStore;
-let record: ConversationRecord;
+let record: ConversationRecord & { assignment: Exclude<ConversationRecord['assignment'], { kind: 'daemon' }> };
 let service: ReturnType<typeof createConversationService>;
 let outputs: PortOutput[];
 let delivery: ConversationDelivery;
@@ -144,6 +145,60 @@ it('reopens the same conversation with two independent attachments and no provid
   const reopened = await open();
   expect(await state(reopened.read)).toMatchObject({ conversationId: record.id, pending: record.pending });
   expect(execute).not.toHaveBeenCalled();
+});
+
+it.each([
+  { namespace: 'local', id: 'operator' },
+  { namespace: 'agent', id: 'director' },
+  { namespace: 'slack-user', id: '["team","user"]' },
+])('restores the proposal and last speaker when recording $namespace fails', async (speaker) => {
+  record.lastSpeaker = speaker.namespace === 'agent' ? record.counterpart : { namespace: 'agent', id: 'director' };
+  store.write(record);
+  const opened = await service.open({ conversationId: record.id, assignment: record.assignment,
+    binding: record.bindings[0]!, speaker }, delivery);
+  const original = store.read(record.id, record.assignment);
+  const write = vi.spyOn(ConversationSpeakerStore.prototype, 'write').mockImplementationOnce(() => { throw new Error('speaker storage failed'); });
+
+  expect(await service.submit({ attachmentId: opened.attachmentId, requestId: 'rejected', speaker,
+    command: { kind: 'message', text: 'new request' } })).toMatchObject({ kind: 'error', code: 'storage_error' });
+
+  expect(store.read(record.id, record.assignment)).toEqual(original);
+  expect(await state(await service.snapshot(opened.attachmentId))).toMatchObject({ revision: 4, pending: record.pending, running: null });
+  expect(execute).not.toHaveBeenCalled();
+  expect(outputs).toEqual([]);
+  expect(service.activeOperationCount).toBe(0);
+  write.mockRestore();
+  const human = await open();
+  expect(await submit(human.attachmentId, { kind: 'approve_summary', revision: 4 })).toMatchObject({ kind: 'accepted' });
+  await finished();
+  expect(doubles.register).toHaveBeenCalledOnce();
+  expect(store.read(record.id, record.assignment)?.approval).toMatchObject({ revision: 4, state: 'registered' });
+});
+
+it('recovers the original proposal after both speaker storage and restoration fail', async () => {
+  record.lastSpeaker = { namespace: 'agent', id: 'director' };
+  store.write(record);
+  const opened = await open();
+  const original = store.read(record.id, record.assignment);
+  vi.spyOn(ConversationSpeakerStore.prototype, 'write').mockImplementationOnce(() => { throw new Error('speaker storage failed'); });
+  const write = ConversationStore.prototype.write;
+  let failRestoration = true;
+  vi.spyOn(ConversationStore.prototype, 'write').mockImplementation(function (this: ConversationStore, value) {
+    if (failRestoration && value.running === null) throw new Error('restoration failed');
+    write.call(this, value);
+  });
+
+  expect(await submit(opened.attachmentId, { kind: 'message', text: 'rejected' })).toMatchObject({ code: 'storage_error' });
+  expect(await submit(opened.attachmentId, { kind: 'message', text: 'unavailable' })).toMatchObject({ code: 'storage_error' });
+  await expect(service.snapshot(opened.attachmentId)).rejects.toMatchObject({ code: 'storage_error' });
+  expect(execute).not.toHaveBeenCalled();
+  failRestoration = false;
+  expect(await state(await service.snapshot(opened.attachmentId))).toMatchObject({ revision: 4, pending: record.pending, running: null });
+  expect(store.read(record.id, record.assignment)).toEqual(original);
+  expect(service.activeOperationCount).toBe(0);
+  expect(await submit(opened.attachmentId, { kind: 'approve_summary', revision: 4 })).toMatchObject({ kind: 'accepted' });
+  await finished();
+  expect(doubles.register).toHaveBeenCalledOnce();
 });
 
 it('captures a complete snapshot state before later conversation updates', async () => {
@@ -390,6 +445,58 @@ it('keeps an accepted operation running after detach and exposes its saved pendi
   } finally {
     finish?.({ message: 'done', summary: null, sessionId: 'finished-session', assignment: record.assignment });
   }
+});
+
+it('returns busy to a director speaker during a human turn and never executes the rejected message later', async () => {
+  const human = await open();
+  const speaker = { namespace: 'agent', id: 'director' };
+  const director = await service.open({ conversationId: record.id, assignment: record.assignment,
+    binding: { port: 'director', key: 'daemon-director', counterpart: record.counterpart }, speaker }, delivery);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  execute.mockImplementationOnce(async () => {
+    await gate;
+    return { message: 'human reply', summary: null, sessionId: 'human-session', assignment: record.assignment };
+  });
+  try {
+    const first = await submit(human.attachmentId, { kind: 'message', text: 'human request' });
+    expect(first.kind).toBe('accepted');
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+
+    expect(await service.submit({ attachmentId: director.attachmentId, requestId: 'director-request', speaker,
+      command: { kind: 'message', text: 'rejected director request' } })).toEqual({
+      kind: 'busy', operationId: 'operationId' in first ? first.operationId : undefined,
+    });
+    release();
+    await finished();
+
+    expect(execute).toHaveBeenCalledOnce();
+    expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['human request']);
+    expect(store.read(record.id, record.assignment)?.lastSpeaker).toEqual(record.counterpart);
+    const second = await service.submit({ attachmentId: director.attachmentId, requestId: 'explicit-director-request', speaker,
+      command: { kind: 'message', text: 'explicit director request' } });
+    expect(second.kind).toBe('accepted');
+    if (second.kind === 'accepted') lastOperationId = second.operationId;
+    await finished();
+
+    expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['human request', 'explicit director request']);
+    expect(store.read(record.id, record.assignment)?.lastSpeaker).toEqual(speaker);
+    expect(outputs).toContainEqual({ kind: 'result', operationId: 'operationId' in second ? second.operationId : undefined,
+      result: { kind: 'reply', message: 'manager reply' } });
+  } finally { release(); }
+});
+
+it('rejects a director speaker submitted through a human attachment without running or changing its record', async () => {
+  const human = await open();
+  const before = readFileSync(join(directory, 'conversations', `${record.id}.json`));
+
+  const rejected = await service.submit({ attachmentId: human.attachmentId, requestId: 'spoofed-director',
+    speaker: { namespace: 'agent', id: 'director' }, command: { kind: 'message', text: 'director request' } });
+
+  expect(rejected).toMatchObject({ kind: 'error', code: 'invalid_input' });
+  expect(execute).not.toHaveBeenCalled();
+  expect(service.activeOperationCount).toBe(0);
+  expect(readFileSync(join(directory, 'conversations', `${record.id}.json`))).toEqual(before);
 });
 
 it.each([

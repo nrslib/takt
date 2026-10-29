@@ -6,6 +6,8 @@ import type { AssistantCliOverrides } from '../../core/config/provider-resolutio
 import type { ManagerAssignment } from './startupResolution.js';
 import type { ManagerDisplayEvent } from './savedEvents.js';
 
+export type ConversationDisplayAssignment = ManagerAssignment | { readonly kind: 'daemon'; readonly repositoryDirectories: readonly string[] };
+
 export type ConversationCommand =
   | { kind: 'message'; text: string }
   | { kind: 'approve_summary'; revision: number; requirePending?: boolean }
@@ -27,7 +29,7 @@ export interface ConversationState {
 }
 export type SnapshotValue =
   | { kind: 'state'; state: ConversationState }
-  | { kind: 'assignment'; assignment: ManagerAssignment }
+  | { kind: 'assignment'; assignment: ConversationDisplayAssignment }
   | { kind: 'goal'; goal: Pick<Goal, 'id' | 'objective' | 'status' | 'executionStatus'> & { repositoryDirectory: string } }
   | { kind: 'inquiry'; inquiry: { target: QuestionTarget; question: GoalQuestion; objective?: string } }
   | { kind: 'display_event'; event: ManagerDisplayEvent };
