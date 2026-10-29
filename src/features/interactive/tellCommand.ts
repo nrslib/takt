@@ -45,13 +45,13 @@ function tellSelectionPrompt(
   lang: 'en' | 'ja',
   excludedEntries: readonly string[],
   firstCandidate: ReturnType<typeof tellCandidateOption>,
-): string {
+): { prompt: string; exclusionsShown: boolean } {
   const columns = process.stdout.columns || 80;
   const base = [
     truncateText(getLabel('tui.tell.targetFailed', lang, { reason }), columns),
     getLabel('tui.tell.selectPrompt', lang),
   ];
-  if (excludedEntries.length === 0) return base.join('\n');
+  if (excludedEntries.length === 0) return { prompt: base.join('\n'), exclusionsShown: false };
 
   const rows = process.stdout.rows || 24;
   // A scrolled menu can show one candidate with indicators above and below it.
@@ -73,7 +73,9 @@ function tellSelectionPrompt(
     visible.push(nextEntry);
   }
   const prompt = [...base, exclusionText(visible)].join('\n');
-  return defaultSelectHeaderLineCount(prompt, columns) <= maxHeaderRows ? prompt : base.join('\n');
+  return defaultSelectHeaderLineCount(prompt, columns) <= maxHeaderRows
+    ? { prompt, exclusionsShown: true }
+    : { prompt: base.join('\n'), exclusionsShown: false };
 }
 
 export function buildTellConversationPrompt(
@@ -319,7 +321,11 @@ export async function runTellCommand(options: TellCommandOptions): Promise<strin
   }
 
   let selectedRunSlug: string | null;
-  let selectionShown = false;
+  let exclusionsShown = false;
+  const withUnshownExclusions = (notice: string): string => [
+    ...(!exclusionsShown && exclusionNotice !== undefined ? [exclusionNotice] : []),
+    notice,
+  ].join('\n\n');
   if (candidates.length === 1) {
     selectedRunSlug = candidates[0]!.runSlug;
   } else {
@@ -327,9 +333,11 @@ export async function runTellCommand(options: TellCommandOptions): Promise<strin
     if ('runSlug' in resolution) {
       selectedRunSlug = resolution.runSlug;
     } else {
-      selectionShown = true;
       const candidateOptions = candidates.map(tellCandidateOption);
-      const selectorPrompt = tellSelectionPrompt(resolution.reason, options.lang, excludedEntries, candidateOptions[0]!);
+      const { prompt: selectorPrompt, exclusionsShown: selectorExclusionsShown } = tellSelectionPrompt(
+        resolution.reason, options.lang, excludedEntries, candidateOptions[0]!,
+      );
+      exclusionsShown = selectorExclusionsShown;
       const preferred = options.preferredRunSlug !== undefined
         && candidateOptions.some((candidate) => candidate.value === options.preferredRunSlug);
       try {
@@ -337,29 +345,26 @@ export async function runTellCommand(options: TellCommandOptions): Promise<strin
           ? await selectOptionWithDefault(selectorPrompt, candidateOptions, options.preferredRunSlug!)
           : await selectOption(selectorPrompt, candidateOptions);
       } catch (error) {
-        return getLabel('tui.errors.tellSelectionFailed', options.lang, {
+        return withUnshownExclusions(getLabel('tui.errors.tellSelectionFailed', options.lang, {
           error: sanitizeTerminalText(getErrorMessage(error)),
-        });
+        }));
       }
     }
   }
   if (selectedRunSlug === null) {
-    return getLabel('tui.errors.tellCancelled', options.lang);
+    return withUnshownExclusions(getLabel('tui.errors.tellCancelled', options.lang));
   }
 
   const selected = candidates.find((candidate) => candidate.runSlug === selectedRunSlug);
   if (selected === undefined) {
-    return getLabel('tui.errors.tellStale', options.lang, {
+    return withUnshownExclusions(getLabel('tui.errors.tellStale', options.lang, {
       error: 'The selected running task is no longer available.',
-    });
+    }));
   }
 
   const contentResolution = await resolveTellContent(options, selected);
   if ('notice' in contentResolution) {
-    return [
-      ...(!selectionShown && exclusionNotice !== undefined ? [exclusionNotice] : []),
-      contentResolution.notice,
-    ].join('\n\n');
+    return withUnshownExclusions(contentResolution.notice);
   }
   const { content } = contentResolution;
 
@@ -373,9 +378,10 @@ export async function runTellCommand(options: TellCommandOptions): Promise<strin
       content: safeTellContentDisplayText(content),
     });
     const confirmed = await confirmWithCancel([
-      ...(!selectionShown && exclusionNotice !== undefined ? [exclusionNotice] : []),
+      ...(!exclusionsShown && exclusionNotice !== undefined ? [exclusionNotice] : []),
       confirmation,
     ].join('\n\n'));
+    if (exclusionNotice !== undefined) exclusionsShown = true;
     if (confirmed.kind === 'cancelled' || !confirmed.value) {
       return getLabel('tui.errors.tellCancelled', options.lang);
     }
@@ -387,8 +393,8 @@ export async function runTellCommand(options: TellCommandOptions): Promise<strin
       instructionId: String(result.instructionId),
     });
   } catch (error) {
-    return getLabel('tui.errors.tellStale', options.lang, {
+    return withUnshownExclusions(getLabel('tui.errors.tellStale', options.lang, {
       error: sanitizeTerminalText(getErrorMessage(error)),
-    });
+    }));
   }
 }

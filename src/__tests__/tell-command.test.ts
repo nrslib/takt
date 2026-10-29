@@ -660,6 +660,7 @@ describe('runTellCommand', () => {
       expect.objectContaining({ value: target.runSlug }),
       expect.objectContaining({ value: alternateTarget.runSlug }),
     ]), ...(preferred ? [alternateTarget.runSlug] : []));
+    expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.not.stringContaining('excluded-0'));
     expect(mockIssueTellableRunningTask).toHaveBeenCalledWith('/project', alternateTarget.runSlug, 'Generated standalone instruction.');
   });
 
@@ -690,7 +691,55 @@ describe('runTellCommand', () => {
       expect.objectContaining({ value: target.runSlug }),
       expect.objectContaining({ value: alternateTarget.runSlug }),
     ]));
+    expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringContaining('excluded-0: not a worktree clone'));
     expect(mockIssueTellableRunningTask).toHaveBeenCalledWith('/project', alternateTarget.runSlug, 'Generated standalone instruction.');
+  });
+
+  it.each(['selection failure', 'selection cancellation', 'generation failure', 'confirmation failure'] as const)(
+    'reports exclusions after a compact selector on %s', async (ending) => {
+      Object.defineProperty(process.stdout, 'columns', { value: 80, configurable: true });
+      Object.defineProperty(process.stdout, 'rows', { value: 12, configurable: true });
+      mockInspectTellableRunningTasks.mockReturnValue({
+        tasks: [target, alternateTarget],
+        excluded: ['local-task: not a worktree clone'],
+      });
+      mockCallAIWithRetry.mockResolvedValueOnce({ result: null, error: 'target unavailable' })
+        .mockResolvedValueOnce({ result: null, error: 'target unavailable' });
+      if (ending === 'selection failure') mockSelectOption.mockRejectedValueOnce(new Error('selection unavailable'));
+      if (ending === 'selection cancellation') mockSelectOption.mockResolvedValueOnce(null);
+      if (ending === 'generation failure') mockCallAIWithRetry.mockResolvedValueOnce({ result: null, error: 'provider unavailable' });
+      if (ending === 'confirmation failure') mockConfirmWithCancel.mockRejectedValueOnce(new Error('confirmation unavailable'));
+
+      const notice = await runTellCommand({
+        cwd: '/project', lang: 'en', inlineText: 'Update payments.', history: [], sessionContext: makeSessionContext(),
+      });
+
+      expect(mockSelectOption).toHaveBeenCalledOnce();
+      expect(String(mockSelectOption.mock.calls[0]?.[0])).not.toContain('local-task: not a worktree clone');
+      expect(notice).toContain('local-task: not a worktree clone');
+      expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
+    },
+  );
+
+  it('shows omitted exclusions before a cancelled confirmation in an 80x12 terminal', async () => {
+    Object.defineProperty(process.stdout, 'columns', { value: 80, configurable: true });
+    Object.defineProperty(process.stdout, 'rows', { value: 12, configurable: true });
+    mockInspectTellableRunningTasks.mockReturnValue({
+      tasks: [target, alternateTarget], excluded: ['local-task: not a worktree clone'],
+    });
+    mockCallAIWithRetry.mockResolvedValueOnce({ result: null, error: 'target unavailable' })
+      .mockResolvedValueOnce({ result: null, error: 'target unavailable' });
+    mockConfirmWithCancel.mockResolvedValueOnce({ kind: 'cancelled' });
+
+    const notice = await runTellCommand({
+      cwd: '/project', lang: 'en', inlineText: 'Update payments.', history: [], sessionContext: makeSessionContext(),
+    });
+
+    expect(mockSelectOption).toHaveBeenCalledOnce();
+    expect(String(mockSelectOption.mock.calls[0]?.[0])).not.toContain('local-task: not a worktree clone');
+    expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringContaining('local-task: not a worktree clone'));
+    expect(notice).toContain('was not sent');
+    expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
   });
 
   it.each([
