@@ -121,6 +121,7 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   'src/__tests__/interactive-mode.test.ts',
   'src/__tests__/interactive.test.ts',
   'src/__tests__/it-central-task-process.test.ts',
+  'src/__tests__/it-daemon-slack-lifetime.test.ts',
   'src/__tests__/it-project-execution-lock.test.ts',
   'src/__tests__/it-report-inheritance-task-resume.test.ts',
   // Exercises task persistence through synchronous private-artifact subprocesses.
@@ -131,6 +132,7 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   // Launches a real Chrome/Chromium child process for browser layout assertions.
   'src/__tests__/it-web-ui-retry-dom.test.ts',
   'src/__tests__/kiro-config.test.ts',
+  'src/__tests__/manager-slack-conversation.integration.test.ts',
   'src/__tests__/mcp-enqueue-draft-pr.integration.test.ts',
   'src/__tests__/mock-call-log.test.ts',
   'src/__tests__/opencode-client-cleanup.test.ts',
@@ -246,6 +248,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/deepseek-harness-credential-settings.test.ts',
   'src/__tests__/deploySkill.test.ts',
   'src/__tests__/deploySkillCodex.test.ts',
+  'src/__tests__/devin-client.test.ts',
   'src/__tests__/directRunFinder.test.ts',
   'src/__tests__/directRunResume.test.ts',
   'src/__tests__/entrypoint.test.ts',

@@ -1,6 +1,5 @@
 import { createConnection, type Socket } from 'node:net';
 import { randomUUID } from 'node:crypto';
-import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod/v4';
 import { conversationIpcEndpoint, DaemonIpcStateSchema, ipcStateMatchesOwner, readDaemonIpcState,
   resolveDaemonConfigDirectory } from '../../infra/daemon/ipcEndpoint.js';
@@ -9,7 +8,8 @@ import type { ConversationAssignment } from '../../infra/conversations/schema.js
 import { ConversationFrameDecoder, encodeConversationFrame, MAX_CONVERSATION_FRAME_BYTES } from '../daemon/conversationFrames.js';
 import { ensureDaemon } from '../daemon/lifecycle.js';
 import { createTuiConversationPort } from './tuiConversationPort.js';
-import type { ConversationCommand, ConversationOpen, ConversationState, PortOutput, SnapshotItem, Submission } from './conversationPort.js';
+import type { ConversationCommand, ConversationOpen, ConversationState, PortOutput, Submission } from './conversationPort.js';
+import { snapshotItemKey, orderSnapshotItems, type SnapshotDisplayItem } from './snapshotChanges.js';
 import { ConversationReadMetadataSchema, ConversationTransferReceiver } from './conversationTransferReceiver.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
 
@@ -25,11 +25,10 @@ export interface ConversationClientSnapshot {
   connection: 'connecting' | 'connected' | 'disconnected';
   readStatus: 'reading' | 'complete' | 'incomplete';
   state: ConversationState | null;
-  items: readonly Exclude<SnapshotItem, { kind: 'state' }>[];
+  items: readonly SnapshotDisplayItem[];
   error: string | null;
 }
 type Output = Exclude<PortOutput, { kind: 'snapshot' }>;
-type DisplayItem = Exclude<SnapshotItem, { kind: 'state' }>;
 type Request = { resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> };
 type ActiveRead = { transferId?: string; response?: Promise<void> };
 
@@ -45,7 +44,10 @@ export class ConversationIpcClient {
   private connecting: Promise<void> | undefined;
   private read: ActiveRead | undefined;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
-  private readItems: DisplayItem[] = [];
+  private committedItems = new Map<string, SnapshotDisplayItem>();
+  private items = new Map<string, SnapshotDisplayItem>();
+  private readItems = new Map<string, SnapshotDisplayItem>();
+  private removed = new Set<string>();
   private view: ConversationClientSnapshot = { connection: 'connecting', readStatus: 'reading', state: null, items: [], error: null };
   private configDirectory = resolveDaemonConfigDirectory();
 
@@ -127,33 +129,40 @@ export class ConversationIpcClient {
     const resolved = await port.resolve(this.assignment);
     if (this.closed) return;
     if (this.resolved?.conversationId !== resolved.conversationId) {
+      this.committedItems.clear();
+      this.items.clear();
       this.update({ state: null, items: [] });
       this.receiver = new ConversationTransferReceiver(resolved.conversationId, {
         state: (next) => this.update({ state: next }),
         item: (item) => {
-          const key = this.itemKey(item);
-          if (this.readItems.some((current) => this.itemKey(current) === key)) throw new Error('Repeated display item');
-          this.readItems.push(item);
-          const index = this.view.items.findIndex((current) => this.itemKey(current) === key);
-          if (index >= 0 && isDeepStrictEqual(this.view.items[index], item)) return;
-          const items = [...this.view.items];
-          if (index < 0) items.push(item); else items[index] = item;
-          this.update({ items });
+          const key = snapshotItemKey(item);
+          this.readItems.set(key, item);
+          this.items.set(key, item);
         },
+        remove: (key) => { this.removed.add(key); },
         output: (output) => { for (const listener of this.outputs) listener(output); },
-        read: (readStatus, transferId) => {
+        read: (readStatus, transferId, mode) => {
           if (readStatus === 'reading') {
-            this.readItems = [];
+            this.readItems.clear();
+            this.removed.clear();
+            this.items = new Map(this.committedItems);
             this.read ??= {};
             this.read.transferId = transferId;
           } else if (this.read?.transferId === transferId) {
+            if (readStatus === 'complete') {
+              const next = mode === 'initial' ? new Map<string, SnapshotDisplayItem>() : new Map(this.committedItems);
+              for (const [key, item] of this.readItems) next.set(key, item);
+              for (const key of this.removed) next.delete(key);
+              this.committedItems = next;
+              this.items = new Map(next);
+            }
             this.read.transferId = undefined;
             if (this.read.response === undefined) this.read = undefined;
           }
           if (readStatus === 'reading' && this.view.readStatus === 'complete') return;
           this.update({
             readStatus,
-            ...(readStatus === 'complete' ? { items: this.readItems } : {}),
+            ...(readStatus === 'reading' ? {} : { items: orderSnapshotItems(this.items) }),
           });
         },
       });
@@ -239,16 +248,6 @@ export class ConversationIpcClient {
       this.requests.set(requestId, { resolve: (value) => resolve(parse(value)), reject, timer });
       socket.write(bytes, (error) => { if (error) { this.disconnect(error); socket.destroy(); } });
     });
-  }
-
-  private itemKey(item: DisplayItem): string {
-    switch (item.kind) {
-      case 'assignment': return 'assignment';
-      case 'goal': return JSON.stringify(['goal', item.goal.repositoryDirectory, item.goal.id]);
-      case 'inquiry': return JSON.stringify(['inquiry', item.inquiry.target, item.inquiry.question.id]);
-      case 'notice': return JSON.stringify(['notice', item.notice.repositoryDirectory, item.notice.goalId, item.notice.id]);
-      case 'display_event': return JSON.stringify(['display_event', item.event.id]);
-    }
   }
 
   private disconnect(error: Error): void {

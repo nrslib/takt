@@ -32,6 +32,7 @@ export interface PrExecutionContext {
   readonly headRepositoryUrl: string;
   readonly headRepositoryPushUrls: readonly string[];
   readonly preserveConflictState?: boolean;
+  readonly mergeConcurrency?: number;
   readonly threatCheckMaxDiffBytes?: number;
 }
 
