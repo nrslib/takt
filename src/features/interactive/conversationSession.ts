@@ -294,6 +294,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
    * over the current one would undo a turn the user has already seen answered.
    */
   let currentTurn = 0;
+  let unidentifiedInputs: string[] = [];
   /**
    * What the front-end gates its own command list with. Sharing it is what keeps
    * a disabled command from being re-read as a command down here.
@@ -355,6 +356,15 @@ export function createConversationSession(options: ConversationSessionOptions): 
     input: ConversationTurnInput & { text: string },
   ): Promise<ConversationSessionResult> {
     const isLatestTurn = beginTurn(input.abortSignal);
+    let recordedSessionId = sessionId;
+    let inputRevision: number | undefined;
+    if (options.interactiveSessionRecords !== undefined) {
+      if (recordedSessionId === undefined) {
+        unidentifiedInputs = [...unidentifiedInputs, input.text].slice(-3);
+      } else {
+        inputRevision = options.interactiveSessionRecords.recordInput({ provider: ctx.providerType, sessionId: recordedSessionId, input: input.text });
+      }
+    }
     const turn = undeliveredMessages.begin(message);
     const isCurrentTurn = (): boolean => isLatestTurn() && !turn.interrupted;
     const previousHistory = history;
@@ -417,6 +427,17 @@ export function createConversationSession(options: ConversationSessionOptions): 
       if (isCurrentTurn()) {
         sessionId = newSessionId;
         selectedResumePending = false;
+        if (options.interactiveSessionRecords !== undefined && sessionId !== undefined && recordedSessionId !== sessionId) {
+          recordedSessionId = sessionId;
+          if (unidentifiedInputs.length > 0) {
+            for (const pendingInput of unidentifiedInputs) {
+              inputRevision = options.interactiveSessionRecords.recordInput({ provider: ctx.providerType, sessionId, input: pendingInput });
+            }
+            unidentifiedInputs = [];
+          } else {
+            inputRevision = options.interactiveSessionRecords.recordInput({ provider: ctx.providerType, sessionId, input: input.text });
+          }
+        }
       }
 
       if (!result) {
@@ -455,8 +476,8 @@ export function createConversationSession(options: ConversationSessionOptions): 
       shouldSendInitialPromptContext = false;
       shouldSendSeededContext = false;
       history = [...history, { role: 'assistant', content: result.content }];
-      if (options.interactiveSessionRecords !== undefined && sessionId !== undefined) {
-        options.interactiveSessionRecords.record({ provider: ctx.providerType, sessionId, input: input.text, response: result.content });
+      if (options.interactiveSessionRecords !== undefined && sessionId !== undefined && inputRevision !== undefined) {
+        options.interactiveSessionRecords.recordResponse({ provider: ctx.providerType, sessionId, inputRevision, response: result.content });
       }
       return {
         kind: 'assistant_response',
@@ -800,6 +821,8 @@ export function createConversationSession(options: ConversationSessionOptions): 
     },
 
     setSessionId(nextSessionId: string | undefined): void {
+      currentTurn += 1;
+      unidentifiedInputs = [];
       selectedResumePending = nextSessionId !== undefined;
       sessionId = nextSessionId;
     },

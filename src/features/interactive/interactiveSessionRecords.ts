@@ -40,18 +40,40 @@ function writeRecords(cwd: string, records: InteractiveSessionRecord[]): void {
 }
 
 type Turn = { cwd: string; provider: string; sessionId: string; input: string; response: string };
+type SessionKey = Pick<Turn, 'provider' | 'sessionId'>;
+type Input = SessionKey & { input: string };
+type Response = SessionKey & { inputRevision: number; response: string };
 
-function updateRecords(records: InteractiveSessionRecord[], args: Turn): InteractiveSessionRecord[] {
+function appendInput(records: InteractiveSessionRecord[], args: Input): { records: InteractiveSessionRecord[]; revision: number } {
   const previous = records.find((record) => record.provider === args.provider && record.sessionId === args.sessionId);
   const next: InteractiveSessionRecord = {
     provider: args.provider,
     sessionId: args.sessionId,
     inputs: [...(previous?.inputs ?? []), args.input].slice(-3),
-    response: args.response,
+    response: previous?.response ?? '',
     modified: new Date().toISOString(),
-    messageCount: (previous?.messageCount ?? 0) + 2,
+    messageCount: (previous?.messageCount ?? 0) + 1,
   };
-  return [next, ...records.filter((record) => record !== previous)];
+  return { records: [next, ...records.filter((record) => record !== previous)], revision: next.messageCount };
+}
+
+function updateResponse(records: InteractiveSessionRecord[], args: Response): InteractiveSessionRecord[] | undefined {
+  const previous = records.find((record) => record.provider === args.provider && record.sessionId === args.sessionId);
+  if (previous?.messageCount !== args.inputRevision) return undefined;
+  const next = { ...previous, response: args.response, messageCount: previous.messageCount + 1 };
+  return records.map((record) => record === previous ? next : record);
+}
+
+function updateRecords(records: InteractiveSessionRecord[], args: Turn): InteractiveSessionRecord[] {
+  const input = appendInput(records, args);
+  const updated = updateResponse(input.records, {
+    provider: args.provider,
+    sessionId: args.sessionId,
+    inputRevision: input.revision,
+    response: args.response,
+  });
+  if (updated === undefined) throw new Error('Interactive session response was not recorded');
+  return updated;
 }
 
 export function recordTurn(args: Turn): void {
@@ -125,7 +147,7 @@ export class InteractiveSessionRecords {
     return (this.pending ?? this.snapshot).filter((record) => record.provider === provider).slice(0, 10);
   }
 
-  record(args: Omit<Turn, 'cwd'>): void {
+  private update<T>(change: (records: InteractiveSessionRecord[]) => { records: InteractiveSessionRecord[]; value: T } | undefined): T | undefined {
     if (this.pending === undefined) {
       try {
         this.snapshot = readRecords(this.cwd);
@@ -143,12 +165,16 @@ export class InteractiveSessionRecords {
         ))];
         this.readFailed = false;
       } catch {
-        this.pending = updateRecords(this.pending, { cwd: this.cwd, ...args });
+        const changed = change(this.pending);
+        if (changed === undefined) return undefined;
+        this.pending = changed.records;
         this.snapshot = this.pending;
-        return;
+        return changed.value;
       }
     }
-    this.pending = updateRecords(this.pending, { cwd: this.cwd, ...args });
+    const changed = change(this.pending);
+    if (changed === undefined) return undefined;
+    this.pending = changed.records;
     this.snapshot = this.pending;
     try {
       writeRecords(this.cwd, this.pending);
@@ -156,5 +182,22 @@ export class InteractiveSessionRecords {
     } catch (error) {
       warn(`Interactive session records could not be saved: ${String(error)}`);
     }
+    return changed.value;
+  }
+
+  recordInput(args: Input): number {
+    const revision = this.update((records) => {
+      const changed = appendInput(records, args);
+      return { records: changed.records, value: changed.revision };
+    });
+    if (revision === undefined) throw new Error('Interactive session input was not recorded');
+    return revision;
+  }
+
+  recordResponse(args: Response): void {
+    this.update((records) => {
+      const changed = updateResponse(records, args);
+      return changed === undefined ? undefined : { records: changed, value: undefined };
+    });
   }
 }

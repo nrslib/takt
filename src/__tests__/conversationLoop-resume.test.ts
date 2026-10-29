@@ -729,6 +729,35 @@ describe('/resume command', () => {
     }]);
   });
 
+  it('keeps the latest raw input and previous reply when a later provider call fails', async () => {
+    setupRawStdin(toRawInputs(['one', 'two']));
+    const { provider } = createScenarioProvider([
+      { content: 'reply one', sessionId: 'conversation' },
+      { content: 'provider failed', status: 'error', sessionId: 'conversation' },
+    ]);
+
+    const result = await runConversationLoop('/test', createSessionContext({ provider, disableSessionRetry: true }), defaultStrategy, undefined, undefined);
+
+    expect(result.action).toBe('cancel');
+    expect(listRecords('/test', 'mock')).toMatchObject([{
+      sessionId: 'conversation', inputs: ['one', 'two'], response: 'reply one',
+    }]);
+  });
+
+  it('records earlier raw inputs after a new session ID becomes available', async () => {
+    setupRawStdin(toRawInputs(['one', 'two', '/cancel']));
+    const { provider } = createScenarioProvider([
+      { content: '', throws: new Error('provider failed') },
+      { content: 'reply two', sessionId: 'created' },
+    ]);
+
+    await runConversationLoop('/test', createSessionContext({ provider }), defaultStrategy, undefined, undefined);
+
+    expect(listRecords('/test', 'mock')).toMatchObject([{
+      sessionId: 'created', inputs: ['one', 'two'], response: 'reply two',
+    }]);
+  });
+
   it('reports a missing selected session and continues with a fresh session', async () => {
     setupRawStdin(toRawInputs(['/resume', 'first input', 'next input', '/cancel']));
     mockSelectRecentSession.mockResolvedValue('deleted-session');

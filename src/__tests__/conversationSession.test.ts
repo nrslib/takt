@@ -187,10 +187,107 @@ describe('conversation session application API', () => {
     try {
       const first = session.handleUserMessage({ text: 'old input' });
       await vi.waitFor(() => expect(mockCallAIWithRetry).toHaveBeenCalledTimes(1));
+      expect(listRecords(cwd, 'mock')).toEqual([]);
       await session.handleUserMessage({ text: 'new input' });
       finishFirst({ result: { success: true, content: 'old reply', sessionId: 'old' }, sessionId: 'old' });
       await first;
-      expect(listRecords(cwd, 'mock')).toMatchObject([{ sessionId: 'current', inputs: ['new input'], response: 'new reply' }]);
+      expect(listRecords(cwd, 'mock')).toMatchObject([{ sessionId: 'current', inputs: ['old input', 'new input'], response: 'new reply' }]);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps inputs without a session ID until the provider returns a real ID', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-interactive-record-'));
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: null, sessionId: undefined, error: 'provider failed' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'reply two', sessionId: 'created' }, sessionId: 'created' });
+    const session = createConversationSession({
+      cwd, ctx: makeSessionContext(), formalSpec: false, modelCheckTimeoutSeconds: 300,
+      interactiveSessionRecords: new InteractiveSessionRecords(cwd),
+      strategy: { systemPrompt: 'system', allowedTools: ['Read'], modelCheckTimeoutSeconds: 300, transformPrompt: (message) => message },
+    });
+    try {
+      await session.handleUserMessage({ text: 'one' });
+      expect(listRecords(cwd, 'mock')).toEqual([]);
+      await session.handleUserMessage({ text: 'two' });
+      expect(listRecords(cwd, 'mock')).toMatchObject([{ sessionId: 'created', inputs: ['one', 'two'], response: 'reply two' }]);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it.each([undefined, 'resumed'])('does not attach unidentified inputs after selecting session %s', async (selectedSessionId) => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-interactive-record-'));
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: null, sessionId: undefined, error: 'provider failed' })
+      .mockResolvedValueOnce({ result: { success: true, content: 'reply two', sessionId: 'resumed' }, sessionId: 'resumed' });
+    const session = createConversationSession({
+      cwd, ctx: makeSessionContext(), formalSpec: false, modelCheckTimeoutSeconds: 300,
+      interactiveSessionRecords: new InteractiveSessionRecords(cwd),
+      strategy: { systemPrompt: 'system', allowedTools: ['Read'], modelCheckTimeoutSeconds: 300, transformPrompt: (message) => message },
+    });
+    try {
+      await session.handleUserMessage({ text: 'one' });
+      session.setSessionId(selectedSessionId);
+      await session.handleUserMessage({ text: 'two' });
+      expect(listRecords(cwd, 'mock')).toMatchObject([{ sessionId: 'resumed', inputs: ['two'], response: 'reply two' }]);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['failed', 'interrupted'] as const)('keeps the latest raw input and previous reply when an existing session call is %s', async (outcome) => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-interactive-record-'));
+    const controller = new AbortController();
+    let finishSecond!: (value: unknown) => void;
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: { success: true, content: 'reply one', sessionId: 'existing' }, sessionId: 'existing' })
+      .mockImplementationOnce(() => new Promise((resolve) => { finishSecond = resolve; }));
+    const session = createConversationSession({
+      cwd, ctx: makeSessionContext(), formalSpec: false, modelCheckTimeoutSeconds: 300,
+      interactiveSessionRecords: new InteractiveSessionRecords(cwd),
+      strategy: { systemPrompt: 'system', allowedTools: ['Read'], modelCheckTimeoutSeconds: 300, transformPrompt: (message) => `wrapped: ${message}` },
+    });
+    try {
+      await session.handleUserMessage({ text: 'one' });
+      const pending = session.handleUserMessage({ text: 'two', abortSignal: controller.signal });
+      await vi.waitFor(() => expect(mockCallAIWithRetry).toHaveBeenCalledTimes(2));
+      expect(listRecords(cwd, 'mock')).toMatchObject([{ sessionId: 'existing', inputs: ['one', 'two'], response: 'reply one' }]);
+
+      if (outcome === 'interrupted') controller.abort();
+      finishSecond(outcome === 'failed'
+        ? { result: null, sessionId: 'existing', error: 'provider failed' }
+        : { result: { success: true, content: 'late reply', sessionId: 'existing' }, sessionId: 'existing' });
+      expect(await pending).toMatchObject(outcome === 'failed'
+        ? { kind: 'error', code: 'provider_error' }
+        : { kind: 'assistant_response', content: 'late reply' });
+      expect(listRecords(cwd, 'mock')).toMatchObject([{ sessionId: 'existing', inputs: ['one', 'two'], response: 'reply one' }]);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it.each([undefined, 'other-session'])('does not accept a late reply after changing the session to %s', async (nextSessionId) => {
+    const cwd = mkdtempSync(join(tmpdir(), 'takt-interactive-record-'));
+    let finishSecond!: (value: unknown) => void;
+    mockCallAIWithRetry
+      .mockResolvedValueOnce({ result: { success: true, content: 'reply one', sessionId: 'existing' }, sessionId: 'existing' })
+      .mockImplementationOnce(() => new Promise((resolve) => { finishSecond = resolve; }));
+    const session = createConversationSession({
+      cwd, ctx: makeSessionContext(), formalSpec: false, modelCheckTimeoutSeconds: 300,
+      interactiveSessionRecords: new InteractiveSessionRecords(cwd),
+      strategy: { systemPrompt: 'system', allowedTools: ['Read'], modelCheckTimeoutSeconds: 300, transformPrompt: (message) => message },
+    });
+    try {
+      await session.handleUserMessage({ text: 'one' });
+      const pending = session.handleUserMessage({ text: 'two' });
+      await vi.waitFor(() => expect(mockCallAIWithRetry).toHaveBeenCalledTimes(2));
+      session.setSessionId(nextSessionId);
+      finishSecond({ result: { success: true, content: 'late reply', sessionId: 'existing' }, sessionId: 'existing' });
+      await pending;
+      expect(session.getSessionId()).toBe(nextSessionId);
+      expect(listRecords(cwd, 'mock')).toMatchObject([{ sessionId: 'existing', inputs: ['one', 'two'], response: 'reply one' }]);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }

@@ -21,7 +21,13 @@ vi.mock('../features/interactive/lineEditor.js', async (importOriginal) => ({
   readPipedLine: doubles.line,
 }));
 vi.mock('../features/interactive/interactiveSessionRecords.js', () => ({
-  InteractiveSessionRecords: class { clean = vi.fn(async () => {}); record = vi.fn(); list = vi.fn(() => []); },
+  InteractiveSessionRecords: class {
+    private revision = 0;
+    clean = vi.fn(async () => {});
+    recordInput = vi.fn(() => ++this.revision);
+    recordResponse = vi.fn();
+    list = vi.fn(() => []);
+  },
   recordTurn: vi.fn(),
   listRecords: vi.fn(() => []),
 }));

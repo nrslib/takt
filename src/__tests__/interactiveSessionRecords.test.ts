@@ -14,6 +14,11 @@ import { cleanRecords, listRecords, recordTurn, InteractiveSessionRecords } from
 
 beforeEach(() => { disk.content = undefined; disk.writeError = false; disk.readError = false; disk.failAfterWrite = false; });
 
+function recordCompletedTurn(owner: InteractiveSessionRecords, provider: string, sessionId: string, input: string, response: string): void {
+  const inputRevision = owner.recordInput({ provider, sessionId, input });
+  owner.recordResponse({ provider, sessionId, inputRevision, response });
+}
+
 it.each([false, true])('preserves cleaned records when subsequent reads fail: %s', async (failRead) => {
   recordTurn({ cwd: '/project', provider: 'codex', sessionId: 'A', input: 'input A', response: 'reply A' });
   const owner = new InteractiveSessionRecords('/project');
@@ -21,11 +26,11 @@ it.each([false, true])('preserves cleaned records when subsequent reads fail: %s
   await owner.clean(async () => true);
   disk.failAfterWrite = false;
   const cleaned = disk.content;
-  owner.record({ provider: 'codex', sessionId: 'B', input: 'input B', response: 'reply B' });
+  recordCompletedTurn(owner, 'codex', 'B', 'input B', 'reply B');
   expect(owner.list('codex').map((record) => record.sessionId)).toEqual(['B', 'A']);
   if (failRead) expect(disk.content).toBe(cleaned);
   disk.readError = false;
-  owner.record({ provider: 'codex', sessionId: 'B', input: 'next B', response: 'next reply' });
+  recordCompletedTurn(owner, 'codex', 'B', 'next B', 'next reply');
   expect(JSON.parse(disk.content!)).toMatchObject([
     { sessionId: 'B', inputs: ['input B', 'next B'], response: 'next reply' },
     { sessionId: 'A', inputs: ['input A'], response: 'reply A' },
@@ -35,12 +40,12 @@ it.each([false, true])('preserves cleaned records when subsequent reads fail: %s
 it.each(['read', 'write'] as const)('retains updates after a normal %s failure and persists them after recovery', async (failure) => {
   const owner = new InteractiveSessionRecords('/project');
   await owner.clean(async () => undefined);
-  owner.record({ provider: 'codex', sessionId: 'other', input: 'other input', response: 'other reply' });
-  owner.record({ provider: 'codex', sessionId: 's', input: 'first', response: 'reply first' });
+  recordCompletedTurn(owner, 'codex', 'other', 'other input', 'other reply');
+  recordCompletedTurn(owner, 'codex', 's', 'first', 'reply first');
   const beforeFailure = disk.content;
   if (failure === 'read') disk.readError = true;
   else disk.writeError = true;
-  expect(() => owner.record({ provider: 'codex', sessionId: 's', input: 'second', response: 'reply second' })).not.toThrow();
+  expect(() => recordCompletedTurn(owner, 'codex', 's', 'second', 'reply second')).not.toThrow();
   expect(owner.list('codex')).toMatchObject([
     { sessionId: 's', inputs: ['first', 'second'], response: 'reply second', messageCount: 4 },
     { sessionId: 'other', inputs: ['other input'] },
@@ -48,7 +53,7 @@ it.each(['read', 'write'] as const)('retains updates after a normal %s failure a
   expect(disk.content).toBe(beforeFailure);
   disk.readError = false;
   disk.writeError = false;
-  owner.record({ provider: 'codex', sessionId: 's', input: 'third', response: 'reply third' });
+  recordCompletedTurn(owner, 'codex', 's', 'third', 'reply third');
   expect(JSON.parse(disk.content!)).toMatchObject([
     { sessionId: 's', inputs: ['first', 'second', 'third'], response: 'reply third', messageCount: 6 },
     { sessionId: 'other', inputs: ['other input'], response: 'other reply' },
@@ -61,6 +66,32 @@ it('updates a conversation with the last three inputs and most recent response',
   }
   expect(listRecords('/project', 'codex')).toMatchObject([{ inputs: ['two', 'three', 'four'], response: 'response four', messageCount: 8 }]);
   expect(listRecords('/project', 'claude')).toEqual([]);
+});
+
+it('records input before its response and ignores an older response after a newer input', () => {
+  const owner = new InteractiveSessionRecords('/project');
+  recordCompletedTurn(owner, 'codex', 'session', 'one', 'reply one');
+  const olderRevision = owner.recordInput({ provider: 'codex', sessionId: 'session', input: 'two' });
+  expect(owner.list('codex')).toMatchObject([{ inputs: ['one', 'two'], response: 'reply one', messageCount: 3 }]);
+
+  const currentRevision = owner.recordInput({ provider: 'codex', sessionId: 'session', input: 'three' });
+  owner.recordResponse({ provider: 'codex', sessionId: 'session', inputRevision: olderRevision, response: 'late reply' });
+  expect(owner.list('codex')).toMatchObject([{ inputs: ['one', 'two', 'three'], response: 'reply one', messageCount: 4 }]);
+
+  owner.recordResponse({ provider: 'codex', sessionId: 'session', inputRevision: currentRevision, response: 'reply three' });
+  expect(listRecords('/project', 'codex')).toMatchObject([{ inputs: ['one', 'two', 'three'], response: 'reply three', messageCount: 5 }]);
+});
+
+it('keeps conversations ordered by their last input when an older response arrives', () => {
+  const owner = new InteractiveSessionRecords('/project');
+  const olderRevision = owner.recordInput({ provider: 'codex', sessionId: 'older', input: 'older input' });
+  const modifiedOnInput = owner.list('codex')[0]!.modified;
+  owner.recordInput({ provider: 'codex', sessionId: 'newer', input: 'newer input' });
+
+  owner.recordResponse({ provider: 'codex', sessionId: 'older', inputRevision: olderRevision, response: 'older reply' });
+
+  expect(owner.list('codex').map((record) => record.sessionId)).toEqual(['newer', 'older']);
+  expect(owner.list('codex')[1]).toMatchObject({ modified: modifiedOnInput, response: 'older reply' });
 });
 
 it('keeps unknown sessions and removes only confirmed missing sessions', async () => {
@@ -82,7 +113,7 @@ it('uses the empty recovered records for subsequent conversation updates', async
   await owner.clean(async () => undefined);
   expect(JSON.parse(disk.content!)).toEqual([]);
   expect(owner.list('codex')).toEqual([]);
-  owner.record({ provider: 'codex', sessionId: 'B', input: 'input B', response: 'reply B' });
+  recordCompletedTurn(owner, 'codex', 'B', 'input B', 'reply B');
   expect(JSON.parse(disk.content!)).toMatchObject([{ sessionId: 'B', inputs: ['input B'], response: 'reply B' }]);
 });
 
@@ -92,10 +123,10 @@ it('continues startup when corrupted records cannot be rewritten', async () => {
   const records = new InteractiveSessionRecords('/project');
   await expect(records.clean(async () => undefined)).resolves.toBeUndefined();
   expect(records.list('codex')).toEqual([]);
-  records.record({ provider: 'codex', sessionId: 's', input: 'first', response: 'reply' });
+  recordCompletedTurn(records, 'codex', 's', 'first', 'reply');
   expect(records.list('codex')).toMatchObject([{ sessionId: 's', inputs: ['first'] }]);
   expect(disk.content).toBe('{broken');
   disk.writeError = false;
-  records.record({ provider: 'codex', sessionId: 's', input: 'second', response: 'reply 2' });
+  recordCompletedTurn(records, 'codex', 's', 'second', 'reply 2');
   expect(JSON.parse(disk.content!)).toMatchObject([{ sessionId: 's', inputs: ['first', 'second'], response: 'reply 2' }]);
 });

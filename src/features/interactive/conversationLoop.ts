@@ -214,6 +214,7 @@ export async function runConversationLoop(
   let referenceRunSlug = strategy.initialReferenceRunSlug;
   let shouldSendInitialPromptContext = !!strategy.initialPromptContext;
   let sessionId = ctx.sessionId;
+  let unidentifiedInputs: string[] = [];
   let selectedResumePending = false;
   let activePromptConfiguration: ConversationPromptConfiguration = {
     systemPrompt: strategy.systemPrompt,
@@ -520,6 +521,13 @@ export async function runConversationLoop(
           info(getLabel('interactive.ui.verifyUnavailable', ctx.lang));
           continue;
         }
+        let recordedSessionId = sessionId;
+        let inputRevision: number | undefined;
+        if (recordedSessionId === undefined) {
+          unidentifiedInputs = [...unidentifiedInputs, input].slice(-3);
+        } else {
+          inputRevision = records.recordInput({ provider: ctx.providerType, sessionId: recordedSessionId, input });
+        }
         if (strategy.resolveCurrentPromptConfiguration !== undefined) {
           await refreshPromptConfiguration();
         }
@@ -559,6 +567,17 @@ export async function runConversationLoop(
         }
         sessionId = newSessionId;
         selectedResumePending = false;
+        if (sessionId !== undefined && recordedSessionId !== sessionId) {
+          recordedSessionId = sessionId;
+          if (unidentifiedInputs.length > 0) {
+            for (const pendingInput of unidentifiedInputs) {
+              inputRevision = records.recordInput({ provider: ctx.providerType, sessionId, input: pendingInput });
+            }
+            unidentifiedInputs = [];
+          } else {
+            inputRevision = records.recordInput({ provider: ctx.providerType, sessionId, input });
+          }
+        }
         if (result) {
           shouldSendInitialPromptContext = false;
           shouldSendSeededContext = false;
@@ -578,8 +597,8 @@ export async function runConversationLoop(
           }
           delivery.complete();
           history.push({ role: 'assistant', content: result.content });
-          if (sessionId !== undefined) {
-            records.record({ provider: ctx.providerType, sessionId, input, response: result.content });
+          if (sessionId !== undefined && inputRevision !== undefined) {
+            records.recordResponse({ provider: ctx.providerType, sessionId, inputRevision, response: result.content });
           }
           blankLine();
         } else {
@@ -802,6 +821,7 @@ export async function runConversationLoop(
           if (selectedId) {
             if (await interactiveSessionExists(cwd, ctx.providerType, selectedId) === false) {
               sessionId = undefined;
+              unidentifiedInputs = [];
               selectedResumePending = false;
               info(getLabel('interactive.resumeSessionFailed', ctx.lang));
               continue;
@@ -818,6 +838,7 @@ export async function runConversationLoop(
               );
             }
             sessionId = selectedId;
+            unidentifiedInputs = [];
             selectedResumePending = true;
             info(getLabel('interactive.resumeSessionLoaded', ctx.lang));
           }
