@@ -196,7 +196,7 @@ describe('managed DeepSeek npm dependency graph', () => {
     )).not.toThrow();
   });
 
-  it('rejects a Cordis SDK peer pin outside the declared peer range', () => {
+  it('rejects a Cordis pin other than 4.0.5 in the root and managed SDK graphs', () => {
     const fixture = createDeepSeekFixture();
     const staleVersion = '4.0.5-alpha.1';
     fixture.root.devDependencies['@deepseek-ai/cordis'] = staleVersion;
@@ -212,7 +212,7 @@ describe('managed DeepSeek npm dependency graph', () => {
       fixture.managed,
       fixture.lock,
       fixture.constants,
-    )).toThrow();
+    )).toThrow('@deepseek-ai/cordis must be pinned in the root and managed SDK dependency graphs');
   });
 
   it('rejects a managed DSH direct pin outside the pinned SDK version', () => {
