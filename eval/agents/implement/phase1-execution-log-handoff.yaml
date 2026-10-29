@@ -5,7 +5,7 @@ prompts:
   - file://../../phase1-execution-log-prompt.mjs
 
 providers:
-  - id: file://../../providers/cli-review.mjs
+  - id: file://../../providers/phase1-execution-log.mjs
     label: codex-terra-medium
     config:
       cli: codex

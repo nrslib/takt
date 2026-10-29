@@ -6468,9 +6468,9 @@ describe('WorkflowEngine Integration: team_leader report phase fallback', () => 
 
   function executionEntriesFromReportPrompt(): Array<Record<string, unknown>> {
     const reportCall = vi.mocked(runAgent).mock.calls.find(([, , options]) => options?.allowedTools?.length === 0);
-    const logLine = reportCall?.[1].split('\n').find((line) => line.startsWith('[{') && line.includes('"kind":'));
-    if (logLine === undefined) throw new Error('Phase 1 execution log missing from report prompt');
-    return JSON.parse(logLine) as Array<Record<string, unknown>>;
+    const logPath = reportCall?.[1].split('\n').find((line) => line.startsWith('- Path: '))?.slice('- Path: '.length);
+    if (logPath === undefined) throw new Error('Phase 1 execution log reference missing from report prompt');
+    return JSON.parse(readFileSync(logPath, 'utf8')) as Array<Record<string, unknown>>;
   }
 
   function createReportPhaseStructuredCaller(): StructuredCaller {

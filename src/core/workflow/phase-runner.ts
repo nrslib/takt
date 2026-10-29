@@ -12,6 +12,7 @@ import type { RunAgentOptions } from '../../agents/runner.js';
 import { needsSemanticStatusJudgment } from '../models/workflow-rule-condition.js';
 import type { TaskReviewScope } from './review-scope.js';
 import type { InjectedReport, Phase1ReportInputs } from './instruction/prepared-instruction.js';
+import type { Phase1ExecutionLogReference } from './phase1-execution-log.js';
 export {
   generateReportPhase,
   runReportPhase,
@@ -106,8 +107,8 @@ export interface BasePhaseRunnerContext {
 
 export interface ReportPhaseRunnerContext extends BasePhaseRunnerContext {
   lastStructuredOutput?: Record<string, unknown>;
-  /** Engine-captured instructions and provider events from this execution of Phase 1. */
-  phase1ExecutionLog?: string;
+  /** Engine-managed reference to evidence from this execution of Phase 1. */
+  phase1ExecutionLog?: Phase1ExecutionLogReference;
   injectedReports?: readonly InjectedReport[];
   reportInputs?: Phase1ReportInputs;
   userInputs?: readonly string[];
