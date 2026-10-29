@@ -663,6 +663,36 @@ describe('runTellCommand', () => {
     expect(mockIssueTellableRunningTask).toHaveBeenCalledWith('/project', alternateTarget.runSlug, 'Generated standalone instruction.');
   });
 
+  it('keeps the failure reason, selection prompt, and a candidate visible in an 80x12 terminal', async () => {
+    Object.defineProperty(process.stdout, 'columns', { value: 80, configurable: true });
+    Object.defineProperty(process.stdout, 'rows', { value: 12, configurable: true });
+    mockInspectTellableRunningTasks.mockReturnValue({
+      tasks: [target, alternateTarget],
+      excluded: Array.from({ length: 25 }, (_, index) => `excluded-${index}: not a worktree clone`),
+    });
+    mockCallAIWithRetry.mockResolvedValueOnce({ result: null, error: 'target unavailable' })
+      .mockResolvedValueOnce({ result: null, error: 'target unavailable' });
+    mockSelectOption.mockResolvedValueOnce(alternateTarget.runSlug);
+
+    await runTellCommand({
+      cwd: '/project', lang: 'en', inlineText: 'Apply this to payments.', history: [],
+      sessionContext: makeSessionContext(),
+    });
+
+    const prompt = String(mockSelectOption.mock.calls[0]?.[0]);
+    expect(prompt).toContain('target unavailable');
+    expect(prompt).toContain('Select the running task');
+    expect(prompt).not.toContain('Running tasks excluded from /tell');
+    const headerRows = 2 + [...prompt.split('\n'), '  (↑↓ to move, Enter to select)']
+      .reduce((rows, line) => rows + Math.max(1, Math.ceil(terminalTextWidth(line) / 80)), 0);
+    expect(headerRows + 7).toBeLessThanOrEqual(12);
+    expect(mockSelectOption).toHaveBeenCalledWith(prompt, expect.arrayContaining([
+      expect.objectContaining({ value: target.runSlug }),
+      expect.objectContaining({ value: alternateTarget.runSlug }),
+    ]));
+    expect(mockIssueTellableRunningTask).toHaveBeenCalledWith('/project', alternateTarget.runSlug, 'Generated standalone instruction.');
+  });
+
   it.each([
     { lang: 'en', preferred: false, source: 'provider', error: `\u001b[31mA\nB\t${'x'.repeat(240)}`, visibleReason: 'A\\nB\\t' },
     { lang: 'en', preferred: true, source: 'provider', error: `\u001b[31mA\nB\t${'x'.repeat(240)}`, visibleReason: 'A\\nB\\t' },

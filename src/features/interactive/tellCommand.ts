@@ -72,7 +72,8 @@ function tellSelectionPrompt(
     if (defaultSelectHeaderLineCount([...base, exclusionText(next)].join('\n'), columns) > maxHeaderRows) break;
     visible.push(nextEntry);
   }
-  return [...base, exclusionText(visible)].join('\n');
+  const prompt = [...base, exclusionText(visible)].join('\n');
+  return defaultSelectHeaderLineCount(prompt, columns) <= maxHeaderRows ? prompt : base.join('\n');
 }
 
 export function buildTellConversationPrompt(
