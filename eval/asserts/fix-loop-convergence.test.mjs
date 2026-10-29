@@ -74,6 +74,7 @@ test('fix-verifier prompt includes the selected language instruction and three r
     }).body;
     assert.ok(prompt.includes(instruction));
     assert.ok(prompt.includes(readFileSync(new URL(`../../builtins/${language}/facets/output-contracts/fix-verification.md`, import.meta.url), 'utf8')));
+    assert.ok(prompt.includes('review-resolution.md'));
     assert.ok(prompt.indexOf('review-resolution.md') < prompt.indexOf(instruction));
     assert.ok(prompt.includes('fix-plan.md'));
     assert.ok(prompt.includes('fix-report.md'));

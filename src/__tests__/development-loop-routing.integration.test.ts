@@ -409,8 +409,8 @@ describe('shipped development completion and remediation routes', () => {
     const fix = config.steps.find(step => step.name === 'fix');
     const replan = config.steps.find(step => step.name === 'fix-replan');
     const monitor = config.loopMonitors?.find(item => item.cycle.length === 1 && item.cycle[0] === 'fix');
-    const fixRule = fix?.rules?.[1];
-    const replanRule = replan?.rules?.[0];
+    const fixRule = fix?.rules?.find(rule => rule.next === 'fix-replan');
+    const replanRule = replan?.rules?.find(rule => rule.next === 'fix');
     const abortRule = monitor?.judge.rules.find(rule => rule.next === 'ABORT');
     if (!monitor || fixRule?.condition.kind !== 'semantic' || replanRule?.condition.kind !== 'semantic'
       || abortRule?.condition.kind !== 'semantic') throw new Error('Missing fix revision or monitor abort rules');
@@ -423,11 +423,12 @@ describe('shipped development completion and remediation routes', () => {
       vi.mocked(runStatusJudgmentPhase).mockResolvedValueOnce({ label: fixRule.condition.label, method: 'phase3_tag' });
       vi.mocked(runStatusJudgmentPhase).mockResolvedValueOnce({ label: replanRule.condition.label, method: 'phase3_tag' });
     }
-    responses.push(makeResponse({ content: 'No feasible path remains.' }));
+    responses.push(makeResponse({ content: JSON.stringify({ content: 'No feasible path remains.' }) }));
     vi.mocked(runStatusJudgmentPhase).mockResolvedValueOnce({ label: abortRule.condition.label, method: 'phase3_tag' });
     mockRunAgentSequence(responses);
     const result = await engine.run();
     expect(result.status).toBe('aborted');
+    expect(vi.mocked(runStatusJudgmentPhase).mock.lastCall?.[0].internalPromptContext?.kind).toBe('loop_monitor');
   });
 
   it.each(variants(remediations))('$language/$name monitors repeated fix-plan revisions', ({ language, name }) => {
