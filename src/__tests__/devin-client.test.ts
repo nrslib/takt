@@ -1087,6 +1087,7 @@ describe('callDevin', () => {
 
     expect(a.content).toBe('done');
     expect(b.content).toBe('done');
+    expect(a.sessionId).not.toBe(b.sessionId);
     expect(next).toBe(2);
     expect(promptAssignments).toHaveLength(2);
     expect(promptAssignments).toEqual(expect.arrayContaining([
