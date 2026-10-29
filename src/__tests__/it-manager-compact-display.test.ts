@@ -140,15 +140,15 @@ describe('manager polling and answer cancellation', () => {
         await held;
         return directory;
       });
-    } else vi.spyOn(GoalStore.prototype, 'iterate').mockImplementation(async function* (this: GoalStore) {
+    } else vi.spyOn(GoalStore.prototype, 'iterateProjected').mockImplementation(async function* (this: GoalStore, _cache, project) {
       for await (const item of iterate.call(this)) {
         if (holdNext) {
           holdNext = false;
           entered();
           await held;
           if (outcome === 'error') throw new Error('Obsolete read failed');
-          yield { ...item, objective: 'Obsolete goal' };
-        } else yield item;
+          yield project({ ...item, objective: 'Obsolete goal' });
+        } else yield project(item);
       }
     });
     const reading = client.refresh();
@@ -196,7 +196,7 @@ describe('manager polling and answer cancellation', () => {
     const goals = await createGoalsWithHistory();
     const goalFile = join(cwd, '.takt', 'goals', goals[1]!.id, 'goal.json');
     const iterator = failure === 'repository'
-      ? vi.spyOn(GoalStore.prototype, 'iterate').mockImplementation(async function* () { throw new Error('repository read failed'); }) : undefined;
+      ? vi.spyOn(GoalStore.prototype, 'iterateProjected').mockImplementation(async function* () { throw new Error('repository read failed'); }) : undefined;
     if (failure === 'goal') writeFileSync(goalFile, '{}');
     const { client, read } = await mount('en');
     await waitFor(() => {
@@ -208,7 +208,7 @@ describe('manager polling and answer cancellation', () => {
     else writeFileSync(goalFile, JSON.stringify(goals[1]));
     await waitFor(() => {
       expect(client.getSnapshot().readStatus).toBe('complete');
-      expect(client.getSnapshot().items.filter((item) => item.kind === 'display_event')).toHaveLength(60);
+      expect(client.getSnapshot().items.filter((item) => item.kind === 'display_event')).toHaveLength(0);
       expect(client.getSnapshot().items.flatMap((item) => item.kind === 'goal' ? [item.goal.id] : []))
         .toEqual(goals.map((goal) => goal.id));
     });
@@ -229,7 +229,7 @@ describe('manager polling and answer cancellation', () => {
     const save = () => store.update(goalId, (goal) => appendGoalWorkLog(goal, { summary }));
     if (beforeStartup) await save();
     vi.setSystemTime(new Date('2026-10-21T10:00:00Z'));
-    const iterator = vi.spyOn(GoalStore.prototype, 'iterate').mockImplementation(async function* () {
+    const iterator = vi.spyOn(GoalStore.prototype, 'iterateProjected').mockImplementation(async function* () {
       throw new Error('initial display read rejected');
     });
     const { client, read } = await mount('en');
@@ -243,7 +243,7 @@ describe('manager polling and answer cancellation', () => {
     iterator.mockRestore();
     await waitFor(() => {
       expect(client.getSnapshot().readStatus).toBe('complete');
-      expect(client.getSnapshot().items.filter((item) => item.kind === 'display_event')).toHaveLength(61);
+      expect(client.getSnapshot().items.filter((item) => item.kind === 'display_event')).toHaveLength(beforeStartup ? 0 : 1);
       expect(transcript().filter((entry) => entry.content === `${goalId}: ${summary}`)).toHaveLength(beforeStartup ? 0 : 1);
     });
     const polls = read.mock.calls.length;
@@ -254,7 +254,7 @@ describe('manager polling and answer cancellation', () => {
     }
   });
 
-  it('reads all work records without a startup boundary and limits suppression to startup repositories', async () => {
+  it('reads all work records without a startup boundary and excludes old work only for startup repositories', async () => {
     const goals = await createGoalsWithHistory();
     const added = join(cwd, 'added');
     mkdirSync(added);
@@ -263,14 +263,12 @@ describe('manager polling and answer cancellation', () => {
       repositoryDirectories: [cwd, added] };
     const all = await readManagerTestDisplay(cwd, 'en', assignment);
     expect(all.events).toHaveLength(90);
-    for (const event of all.events) expect(event.suppressInitialDisplay).toBeUndefined();
     const bounded = await readManagerTestDisplay(cwd, 'en', assignment,
       new Map([[cwd, Date.now()]]));
-    expect(bounded.events).toHaveLength(90);
+    expect(bounded.events).toHaveLength(30);
     const addedEvents = bounded.events.filter((event) => event.message.startsWith(`${addedGoal.id}: `));
     expect(addedEvents).toHaveLength(30);
-    for (const event of addedEvents) expect(event.suppressInitialDisplay).toBeUndefined();
-    expect(bounded.events.filter((event) => event.suppressInitialDisplay)).toHaveLength(60);
+    expect(bounded.events).toEqual(addedEvents);
   });
 
   it.each(['ja', 'en'] as const)('suppresses historical work records and notices but keeps diagnostics and new records in the same screen in %s', async (lang) => {

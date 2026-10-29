@@ -94,9 +94,11 @@ function resolveConfiguredWorkflowStepCallTimeoutMs(
             ? providerOptions?.copilot?.guards?.callTimeoutMs
             : provider === 'kiro'
               ? providerOptions?.kiro?.guards?.callTimeoutMs
-              : provider === 'pi'
-                ? providerOptions?.pi?.guards?.callTimeoutMs
-                : undefined;
+              : provider === 'devin'
+                ? providerOptions?.devin?.guards?.callTimeoutMs
+                : provider === 'pi'
+                  ? providerOptions?.pi?.guards?.callTimeoutMs
+                  : undefined;
 }
 
 export function resolveWorkflowStepCallTimeoutMs(

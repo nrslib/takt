@@ -13,7 +13,7 @@ const permission = z.object({
 }).strict();
 export const ConversationCommandSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('message'), text: z.string().min(1) }).strict(),
-  z.object({ kind: z.literal('approve_summary'), revision }).strict(),
+  z.object({ kind: z.literal('approve_summary'), revision, requirePending: z.boolean().optional() }).strict(),
   z.object({ kind: z.literal('dismiss_summary'), revision }).strict(),
   z.object({ kind: z.literal('answer_question'), questionId: id,
     target: z.union([
@@ -23,6 +23,7 @@ export const ConversationCommandSchema = z.discriminatedUnion('kind', [
     answer: z.object({ text: z.string().max(128 * 1024).optional(), decision: z.enum(['allow', 'deny']).optional(),
       report: z.enum(['completed', 'unable']).optional(), scope: z.enum(['once', 'goal', 'project', 'workspace', 'global']).optional() }).strict(),
     permission: permission.optional(),
+    source: z.enum(['tui', 'slack']).optional(),
   }).strict(),
   ...(['pause_goal', 'resume_goal', 'abort_goal'] as const).map((kind) => z.object({ kind: z.literal(kind), goalId: id }).strict()),
   z.object({ kind: z.literal('abort_turn'), operationId: id }).strict(),

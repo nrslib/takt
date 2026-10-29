@@ -149,6 +149,36 @@ describe('CI failure system input and rerun effect', () => {
     expect(h.fetchPrCiFailure).toHaveBeenCalledWith(123, headSha, '/project', { signal: undefined, rerun });
   });
 
+  it('Cacciaが新HEADを返した後は古い再実行情報をpollingと失敗証拠へ渡さず使用済み予算は保持する', async () => {
+    const h = fixture();
+    const statusInput: WorkflowSystemInput = { type: 'pr_status', source: 'current_pr', as: 'status',
+      rerun_from: '{effect:rerun_ci.rerun_ci.rerun}' };
+    const rerun = { number: 123, headSha, runs: [{ id: 10, attempt: 1 }] };
+    h.state.effectResults.set('caccia', { caccia: { success: true, headSha } });
+    h.state.effectResults.set('rerun_ci', { rerun_ci: { success: true, rerun } });
+    await h.service.resolveSystemInput(statusInput, h.state);
+    expect(h.fetchPrStatus).toHaveBeenLastCalledWith(123, '/project', { signal: undefined, rerun });
+
+    const newHead = 'c'.repeat(40);
+    h.state.effectResults.set('caccia', { caccia: { success: true, headSha: newHead } });
+    h.state.stepIterations.set('push_ci_fix', 2);
+    h.fetchPrStatus.mockResolvedValue({ number: 123, headSha: newHead, ci: { finished: true, passed: false },
+      mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', reviewDecision: 'APPROVED', merged: false });
+    const latestFailure = { ...failure(), headSha: newHead,
+      checks: [{ ...failure().checks[0]!, run: { ...failure().checks[0]!.run, headSha: newHead, id: 11 } }] };
+    h.fetchPrCiFailure.mockResolvedValue(latestFailure);
+    await h.service.resolveSystemInput(statusInput, h.state);
+    expect(h.fetchPrStatus).toHaveBeenLastCalledWith(123, '/project', { signal: undefined });
+    h.state.systemContexts.set('wait_ci', { status: { headSha: newHead, ci: { finished: true, passed: false } } });
+    const latestInput: WorkflowSystemInput = { ...input, head_sha: '{effect:caccia.caccia.headSha}' };
+    expect(await h.service.resolveSystemInput(latestInput, h.state)).toMatchObject({ headSha: newHead,
+      checks: latestFailure.checks, fixRounds: 2, rerunCount: 1 });
+    expect(h.fetchPrCiFailure).toHaveBeenLastCalledWith(123, newHead, '/project', { signal: undefined });
+    expect(await h.service.executeEffect(effect, { type: 'rerun_ci', pr: 123, failure: latestFailure }, h.state))
+      .toMatchObject({ success: false });
+    expect(h.rerunPrCi).not.toHaveBeenCalled();
+  });
+
   it('別名ステップの再実行結果も回数とエラーに反映する', async () => {
     const h = fixture();
     h.state.effectResults.set('retry_ci', { rerun_ci: { success: false, error: 'HTTP 403: rerun denied' } });

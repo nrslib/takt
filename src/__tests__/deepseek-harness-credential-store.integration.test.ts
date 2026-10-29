@@ -10,13 +10,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DeepSeekHarness } from '@deepseek-ai/dsh-sdk-client';
 vi.mock('../infra/deepseek-harness/managed-package.js', async (importOriginal) => {
   const managed = await importOriginal<typeof import('../infra/deepseek-harness/managed-package.js')>();
-  const [sdk, llm] = await Promise.all([
-    import('@deepseek-ai/dsh-sdk-client'),
-    import('@deepseek-ai/dsh-llm'),
-  ]);
   return {
     ...managed,
-    loadManagedDeepSeekHarnessModules: async () => ({ directory: process.cwd(), sdk, llm }),
+    loadManagedDeepSeekHarnessModules: async () => {
+      if (process.env.TAKT_DSH_USE_REAL_MANAGED_LOADER === '1') {
+        return managed.loadManagedDeepSeekHarnessModules();
+      }
+      const [sdk, llm] = await Promise.all([
+        import('@deepseek-ai/dsh-sdk-client'),
+        import('@deepseek-ai/dsh-llm'),
+      ]);
+      return { directory: process.cwd(), sdk, llm };
+    },
   };
 });
 import { createAssistantConversationPlan } from '../features/interactive/conversationPlan.js';
@@ -24,7 +29,7 @@ import { createConversationSession } from '../features/interactive/conversationS
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
 import { runAgent } from '../agents/runner.js';
 import { loadPersonaSessions, resolvePersonaSessionId, updatePersonaSession } from '../infra/config/project/sessionStore.js';
-import { hasDeepSeekSessionMarker } from '../infra/deepseek-harness/runtime-state.js';
+import { getDeepSeekRuntimePaths, hasDeepSeekSessionMarker } from '../infra/deepseek-harness/runtime-state.js';
 import type { WorkflowStep } from '../core/models/types.js';
 import {
   callDeepSeekHarness,
@@ -55,6 +60,13 @@ interface RecordedRequest {
   system: unknown;
   reasoningEffort: unknown;
   messages: unknown;
+}
+
+interface ToolUseIdMismatch {
+  index: number;
+  expectedSdkToolUseId: string | undefined;
+  requestToolUseId: string | undefined;
+  requestToolResultId: string | undefined;
 }
 
 type MockMode = 'ok' | 'auth-echo' | 'workspace-tools' | 'held-tool' | 'assistant-message-reasoning' | 'assistant-message-text-only';
@@ -278,6 +290,41 @@ function collectSecretHits(directory: string, secret: string): string[] {
   return hits;
 }
 
+function findFinalRequestToolUseIdMismatches(messages: unknown, sdkToolUseIds: readonly string[]): ToolUseIdMismatch[] {
+  if (!Array.isArray(messages)) {
+    throw new Error('final request does not contain a messages array');
+  }
+  const blocks: unknown[] = messages.flatMap((message: unknown): unknown[] => {
+    if (message === null || typeof message !== 'object' || !('content' in message)) {
+      return [];
+    }
+    return Array.isArray(message.content) ? message.content : [];
+  });
+  const toolUseIds = blocks.flatMap((block: unknown): string[] => (
+    block !== null && typeof block === 'object' && 'type' in block && block.type === 'tool_use'
+      && 'id' in block && typeof block.id === 'string'
+      ? [block.id]
+      : []
+  ));
+  const toolResultIds = blocks.flatMap((block: unknown): string[] => (
+    block !== null && typeof block === 'object' && 'type' in block && block.type === 'tool_result'
+      && 'tool_use_id' in block && typeof block.tool_use_id === 'string'
+      ? [block.tool_use_id]
+      : []
+  ));
+  const length = Math.max(sdkToolUseIds.length, toolUseIds.length, toolResultIds.length);
+  const mismatches: ToolUseIdMismatch[] = [];
+  for (let index = 0; index < length; index += 1) {
+    const expectedSdkToolUseId = sdkToolUseIds[index];
+    const requestToolUseId = toolUseIds[index];
+    const requestToolResultId = toolResultIds[index];
+    if (requestToolUseId !== expectedSdkToolUseId || requestToolResultId !== expectedSdkToolUseId) {
+      mismatches.push({ index, expectedSdkToolUseId, requestToolUseId, requestToolResultId });
+    }
+  }
+  return mismatches;
+}
+
 describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integration', () => {
   let root: string;
   let workspace: string;
@@ -299,6 +346,11 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
       `  baseURL: ${baseUrl}`,
       '',
     ].join('\n'), 'utf8');
+  }
+
+  function expectNoManagedCredentialCopy(): void {
+    const managedHome = getDeepSeekRuntimePaths().dshHome;
+    expect(existsSync(path.join(managedHome, '.credentials.yaml'))).toBe(false);
   }
 
   /** Call the provider with fixture defaults and optional session/environment overrides without contacting a real service. */
@@ -367,7 +419,39 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
     expect(existsSync(path.join(dshHome, '.credentials.yaml'))).toBe(false);
   });
 
+  it('reports a final request tool-result ID mismatch against the SDK tool-use ID', () => {
+    expect(findFinalRequestToolUseIdMismatches([
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'call_01' },
+          { type: 'tool_result', tool_use_id: 'call_02' },
+        ],
+      },
+    ], ['call_01'])).toEqual([{
+      index: 0,
+      expectedSdkToolUseId: 'call_01',
+      requestToolUseId: 'call_01',
+      requestToolResultId: 'call_02',
+    }]);
+  });
+
+  it.each([false, true])('detects a managed credential copy with redirected config=%s', async (redirected) => {
+    const configDir = path.join(root, redirected ? 'redirected-config' : 'config');
+    vi.stubEnv('TAKT_CONFIG_DIR', configDir);
+    const destination = path.join(configDir, 'deepseek-harness', 'dsh-home');
+    await mkdir(destination, { recursive: true });
+    expectNoManagedCredentialCopy();
+    await writeFile(path.join(destination, '.credentials.yaml'), 'synthetic copied credential fixture');
+    expect(() => expectNoManagedCredentialCopy()).toThrow();
+  });
+
   it('executes standard tools and streaming across multiple turns in the same live session without copying credentials', async () => {
+    const managedConfigDir = process.env.TAKT_DSH_REAL_MANAGED_CONFIG_DIR;
+    if (managedConfigDir !== undefined) {
+      vi.stubEnv('TAKT_CONFIG_DIR', managedConfigDir);
+      vi.stubEnv('TAKT_DSH_USE_REAL_MANAGED_LOADER', '1');
+    }
     endpoint.setMode('workspace-tools');
     const events: StreamEvent[] = [];
     const storeBefore = await readFile(storePath);
@@ -389,13 +473,25 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
     expect(toolNames).toEqual(expect.arrayContaining(['read', 'write', 'edit', 'bash', 'glob', 'grep', 'subagent', 'workflow']));
     expect(endpoint.requests).toHaveLength(5);
     expect(JSON.stringify(endpoint.requests[0]?.messages)).toContain('Read, write, edit and run the workspace fixture.');
+    const toolUses = events.filter((event) => event.type === 'tool_use');
+    const toolResults = events.filter((event) => event.type === 'tool_result');
+    expect(toolUses.map((event) => event.data.tool)).toEqual(['read', 'write', 'edit', 'bash']);
+    expect(toolResults.map((event) => event.data.id)).toEqual(toolUses.map((event) => event.data.id));
+    const streamToolUseIds = toolUses.map((event) => event.data.id);
+    expect(findFinalRequestToolUseIdMismatches(endpoint.requests.at(-1)?.messages, streamToolUseIds)).toEqual([]);
+    for (const result of toolResults) {
+      const tool = toolUses.find((event) => event.data.id === result.data.id);
+      const safeContent = result.data.content
+        .replaceAll(STORE_KEY, '[redacted]')
+        .replaceAll(UPDATED_STORE_KEY, '[redacted]')
+        .replaceAll(ENV_KEY, '[redacted]');
+      expect(result.data.isError, `tool result for ${tool?.data.tool} reported an error: ${safeContent}`).toBe(false);
+    }
     expect(await readFile(path.join(workspace, 'generated.ts'), 'utf8')).toBe('export const value = 2;\n');
     expect(await readFile(path.join(workspace, 'shell.txt'), 'utf8')).toBe('shell-ok');
-    expect(events.filter((event) => event.type === 'tool_use')).toHaveLength(4);
-    expect(events.filter((event) => event.type === 'tool_result')).toHaveLength(4);
     expect(JSON.stringify(response)).not.toContain(STORE_KEY);
     expect(await readFile(storePath)).toEqual(storeBefore);
-    expect(existsSync(path.join(dshHome, '.credentials.yaml'))).toBe(false);
+    expectNoManagedCredentialCopy();
 
     const liveId = session.getSessionId();
     plan.strategy.permissionMode = 'readonly';
@@ -420,7 +516,7 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
     expect(events.filter((event) => event.type === 'tool_use')).toHaveLength(5);
     expect(events.filter((event) => event.type === 'tool_result')).toHaveLength(5);
     expect(await readFile(storePath)).toEqual(storeBefore);
-    expect(existsSync(path.join(dshHome, '.credentials.yaml'))).toBe(false);
+    expectNoManagedCredentialCopy();
   });
 
   it('refuses all report routes through the real agent dispatcher without starting the SDK or contacting the endpoint', async () => {
@@ -552,15 +648,49 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
   it('terminates a real coding-tool child on abort before allowing another runtime', async () => {
     endpoint.setMode('held-tool');
     const controller = new AbortController();
-    const turn = runTurn({ abortSignal: controller.signal });
+    const events: StreamEvent[] = [];
+    const turn = runTurn({ abortSignal: controller.signal, onStream: (event) => events.push(event) });
     let childPid: number | undefined;
+    const childPidPath = path.join(workspace, 'child.pid');
+    const childStart = vi.waitFor(async () => {
+      childPid = Number(await readFile(childPidPath, 'utf8'));
+      expect(childPid).toBeGreaterThan(0);
+    }, { timeout: 10_000, interval: 50 }).then(
+      () => ({ type: 'child' as const }),
+      (error: unknown) => ({ type: 'timeout' as const, error }),
+    );
     try {
-      await vi.waitFor(async () => {
-        childPid = Number(await readFile(path.join(workspace, 'child.pid'), 'utf8'));
-        expect(childPid).toBeGreaterThan(0);
-      }, { timeout: 10_000, interval: 50 });
+      const outcome = await Promise.race([
+        childStart,
+        vi.waitFor(() => {
+          const bashToolUse = events.find((event): event is Extract<StreamEvent, { type: 'tool_use' }> => (
+            event.type === 'tool_use' && event.data.tool === 'bash'
+          ));
+          const bashToolResult = bashToolUse === undefined
+            ? undefined
+            : events.find((event): event is Extract<StreamEvent, { type: 'tool_result' }> => (
+              event.type === 'tool_result' && event.data.id === bashToolUse.data.id
+            ));
+          expect(bashToolResult).toBeDefined();
+          return bashToolResult;
+        }, { timeout: 10_000, interval: 50 }).then((result) => ({ type: 'tool-result' as const, result })),
+      ]);
+      if (outcome.type === 'tool-result') {
+        const safeResult = JSON.stringify(outcome.result?.data)
+          .replaceAll(STORE_KEY, '[redacted]')
+          .replaceAll(UPDATED_STORE_KEY, '[redacted]')
+          .replaceAll(ENV_KEY, '[redacted]');
+        expect(outcome.result?.data.isError, `held bash tool result arrived before child.pid: ${safeResult}`).toBe(false);
+        const markerOutcome = await childStart;
+        expect(markerOutcome.type).toBe('child');
+      } else if (outcome.type === 'timeout') {
+        throw outcome.error;
+      } else {
+        expect(outcome.type, 'the held bash tool returned before creating child.pid').toBe('child');
+      }
       controller.abort();
       expect((await turn).status).not.toBe('done');
+      // SDK shutdown proves process exit; it does not promise a final tool-result notification.
       await vi.waitFor(() => {
         expect(() => process.kill(childPid!, 0)).toThrow();
       }, { timeout: 5_000, interval: 50 });

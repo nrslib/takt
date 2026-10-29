@@ -28,6 +28,7 @@ export {
   resolveCursorCliPath,
   resolveCopilotCliPath,
   resolveKiroCliPath,
+  resolveDevinCliPath,
   resolveCopilotGithubToken,
   resolveKiroApiKey,
   resolveOpencodeApiKey,

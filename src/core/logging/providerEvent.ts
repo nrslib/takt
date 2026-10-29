@@ -1,5 +1,5 @@
 import type { ProviderType, StreamEvent } from '../../shared/types/provider.js';
-import { normalizeLogMetadata, normalizeLogValue } from '../../shared/utils/logMetadata.js';
+import { normalizeLogMetadata, normalizeProviderEventValue } from '../../shared/utils/logMetadata.js';
 
 export interface ProviderEventLogRecord {
   timestamp: string;
@@ -15,11 +15,8 @@ export interface ProviderEventLogRecord {
   data: Record<string, unknown>;
 }
 
-const TRUNCATED_MARKER = '...[truncated]';
-const MAX_SERIALIZED_RECORD_LENGTH = 50_000;
-
 function sanitizeEventData(event: StreamEvent): Record<string, unknown> {
-  const serialized = JSON.stringify(event.data, normalizeLogValue);
+  const serialized = JSON.stringify(event.data, normalizeProviderEventValue);
   if (serialized === undefined) {
     throw new Error('Provider event data is not serializable');
   }
@@ -61,15 +58,5 @@ export function normalizeProviderEvent(
     ...(requestId !== undefined ? { request_id: requestId } : {}),
     data,
   };
-  if (JSON.stringify(record).length <= MAX_SERIALIZED_RECORD_LENGTH) {
-    return record;
-  }
-  const truncatedRecord = {
-    ...record,
-    data: { __takt_truncated__: TRUNCATED_MARKER },
-  };
-  if (JSON.stringify(truncatedRecord).length > MAX_SERIALIZED_RECORD_LENGTH) {
-    throw new Error(`Provider event record exceeds ${MAX_SERIALIZED_RECORD_LENGTH} serialized characters`);
-  }
-  return truncatedRecord;
+  return record;
 }

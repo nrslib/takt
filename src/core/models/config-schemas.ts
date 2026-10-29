@@ -215,6 +215,10 @@ const ProjectConfigObjectBaseSchema = z.object({
 const ProjectConfigObjectSchema = ProjectConfigObjectBaseSchema.extend({
   manager: ProjectConfigObjectBaseSchema.shape.manager.unwrap().extend({
     main_merge: z.enum(['auto', 'approve']).optional(),
+    slack: z.object({
+      channel_id: z.string().trim().min(1),
+      allowed_user_ids: z.array(z.string().trim().min(1)),
+    }).strict().optional(),
   }).optional(),
 });
 
@@ -237,6 +241,7 @@ const GlobalOnlyConfigSchema = z.object({
   cursor_cli_path: z.string().optional(),
   copilot_cli_path: z.string().optional(),
   kiro_cli_path: z.string().optional(),
+  devin_cli_path: z.string().optional(),
   copilot_github_token: z.string().optional(),
   kiro_api_key: z.string().optional(),
   opencode_api_key: z.string().optional(),

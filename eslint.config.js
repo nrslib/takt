@@ -15,6 +15,7 @@ export default tseslint.config(
             'scripts/test-classification.mjs',
             'scripts/verify-deepseek-sdk-lock.mjs',
             'scripts/verify-deepseek-sdk-lock.d.mts',
+            'scripts/pi-provider-live-smoke.mjs',
             'src/infra/deepseek-harness/*.mjs',
             'scripts/test-classification.mjs',
           ],
@@ -47,6 +48,21 @@ export default tseslint.config(
       globals: {
         process: 'readonly',
         setTimeout: 'readonly',
+      },
+    },
+  },
+  {
+    files: ['scripts/pi-provider-live-smoke.mjs'],
+    languageOptions: {
+      globals: {
+        console: 'readonly',
+        process: 'readonly',
+        AbortController: 'readonly',
+        AbortSignal: 'readonly',
+        URL: 'readonly',
+        fetch: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
       },
     },
   },
