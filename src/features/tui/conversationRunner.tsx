@@ -1,3 +1,4 @@
+import type { InteractiveSessionRecords } from '../interactive/interactiveSessionRecords.js';
 /**
  * The conversation phase of a TUI run, without anything that decides what the
  * conversation is about.
@@ -37,6 +38,8 @@ export interface TuiConversationRunOptions {
   readonly cwd: string;
   readonly lang: 'en' | 'ja';
   readonly conversation: TuiConversation;
+  readonly getProvider?: () => string;
+  readonly interactiveSessionRecords?: InteractiveSessionRecords;
   /** Written into the transcript of the first mount only. */
   readonly initialEntries: readonly TranscriptEntry[];
   /** `summarize` turns the first input straight into an instruction. */
@@ -263,7 +266,8 @@ export async function runTuiConversation(
         break;
       }
       case 'resume_session': {
-        const selected = await selectRecentSession(options.cwd, options.lang);
+        if (options.getProvider === undefined) throw new Error('Session provider is unavailable');
+        const selected = await selectRecentSession(options.cwd, options.lang, options.getProvider(), options.interactiveSessionRecords);
         if (selected !== null) {
           const notice = await options.conversation.resumeSession(selected);
           initialEntries = notice === undefined

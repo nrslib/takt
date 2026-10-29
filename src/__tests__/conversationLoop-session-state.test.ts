@@ -20,6 +20,17 @@ vi.mock('../features/interactive/lineEditor.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../features/interactive/lineEditor.js')>()),
   readPipedLine: doubles.line,
 }));
+vi.mock('../features/interactive/interactiveSessionRecords.js', () => ({
+  InteractiveSessionRecords: class {
+    private revision = 0;
+    clean = vi.fn(async () => {});
+    recordInput = vi.fn(() => ++this.revision);
+    recordResponse = vi.fn();
+    list = vi.fn(() => []);
+  },
+  recordTurn: vi.fn(),
+  listRecords: vi.fn(() => []),
+}));
 vi.mock('../features/interactive/aiCaller.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../features/interactive/aiCaller.js')>()),
   callAIWithRetry: doubles.ai,

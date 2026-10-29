@@ -266,6 +266,7 @@ export async function runWorkflowMakerTui(options: RunWorkflowMakerTuiOptions): 
       cwd: options.projectDir,
       lang,
       conversation: facade,
+      getProvider: () => currentPlan.ctx.providerType,
       initialEntries: [{ role: 'system', content: currentPlan.strategy.introMessage }],
       submitMode: 'chat',
       autoSubmit: false,

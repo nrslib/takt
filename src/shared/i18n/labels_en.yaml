@@ -95,6 +95,7 @@ interactive:
   continueNoSession: "No previous assistant session found. Starting a new session."
   mcpUnavailable: "Task-state lookup is unavailable for provider {provider}; the conversation will continue without it. Reason: {error}"
   resumeSessionLoaded: "Session loaded. Subsequent AI calls will use this session."
+  resumeSessionFailed: "Session resume failed. Continuing with a new conversation."
   sessionSelector:
     prompt: "Resume from a recent session?"
     newSession: "New session"
