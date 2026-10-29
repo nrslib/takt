@@ -95,6 +95,7 @@ import {
   withDeepSeekRuntimeCreation,
 } from '../infra/deepseek-harness/runtime-state.js';
 import {
+  acknowledgeDeepSeekRuntimeCleanup as acknowledgeDeepSeekRuntimeCleanupLocked,
   markDeepSeekCleanupBarrierLocked,
   withDeepSeekRuntimeStateFileLock,
 } from '../infra/deepseek-harness/runtime-state-lock.mjs';
@@ -3434,6 +3435,99 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
       }
     }
   });
+
+  it.skipIf(process.platform === 'win32')('clears a cleanup barrier when its group exits during acknowledgement', async () => {
+    const paths = getDeepSeekRuntimePaths();
+    const runtimePid = 2_147_483_000;
+    const cleanupPath = join(temporaryRoot, 'takt-deepseek-barrier-race');
+    const receiptPath = join(paths.state, 'cleanup-receipts', 'takt-deepseek-barrier-race.confirmed');
+    const ownerPath = join(paths.owners, 'barrier-race.json');
+    const barrierPath = join(paths.state, 'cleanup-blocked');
+    await mkdir(cleanupPath);
+    await mkdir(dirname(receiptPath), { recursive: true });
+    await mkdir(paths.owners, { recursive: true });
+    await writeFile(receiptPath, 'confirmed\n');
+    await writeFile(ownerPath, JSON.stringify({
+      parentPid: process.pid,
+      supervisorPid: process.pid,
+      runtimePid,
+      cleanupPaths: [cleanupPath],
+      cleanupConfirmationPath: receiptPath,
+      cleanupRoot: temporaryRoot,
+    }));
+    await writeFile(barrierPath, JSON.stringify({ runtimePids: [runtimePid], unknownRuntime: false }));
+
+    const realKill = process.kill.bind(process);
+    let groupChecks = 0;
+    vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      if (pid !== -runtimePid || signal !== 0) return realKill(pid, signal);
+      groupChecks += 1;
+      if (groupChecks === 1) return true;
+      throw Object.assign(new Error('group exited'), { code: 'ESRCH' });
+    });
+
+    expect(await acknowledgeDeepSeekRuntimeCleanupLocked(paths.state, paths.owners, receiptPath)).toBe(true);
+    expect(existsSync(cleanupPath)).toBe(false);
+    expect(existsSync(ownerPath)).toBe(false);
+    expect(existsSync(receiptPath)).toBe(false);
+    expect(existsSync(barrierPath)).toBe(false);
+  });
+
+  it.skipIf(process.platform === 'win32').each(['receipt-only', 'barrier-only'] as const)(
+    'clears an exited cleanup barrier when acknowledgement has %s evidence',
+    async (kind) => {
+      const paths = getDeepSeekRuntimePaths();
+      const runtimePid = 2_147_483_000;
+      const receiptPath = join(paths.state, 'cleanup-receipts', 'takt-deepseek-barrier-race.confirmed');
+      const barrierPath = join(paths.state, 'cleanup-blocked');
+      await mkdir(dirname(receiptPath), { recursive: true });
+      if (kind === 'receipt-only') await writeFile(receiptPath, 'confirmed\n');
+      await writeFile(barrierPath, JSON.stringify({ runtimePids: [runtimePid], unknownRuntime: false }));
+
+      const realKill = process.kill.bind(process);
+      let groupChecks = 0;
+      vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+        if (pid !== -runtimePid || signal !== 0) return realKill(pid, signal);
+        groupChecks += 1;
+        if (groupChecks === 1) return true;
+        throw Object.assign(new Error('group exited'), { code: 'ESRCH' });
+      });
+
+      expect(await acknowledgeDeepSeekRuntimeCleanupLocked(paths.state, paths.owners, receiptPath)).toBe(true);
+      expect(existsSync(receiptPath)).toBe(false);
+      expect(existsSync(barrierPath)).toBe(false);
+    },
+  );
+
+  it.each(['unknown', 'other-live-group'] as const)(
+    'retains a %s cleanup barrier after acknowledging a receipt',
+    async (kind) => {
+      const paths = getDeepSeekRuntimePaths();
+      const runtimePid = 2_147_483_000;
+      const otherPid = runtimePid - 1;
+      const receiptPath = join(paths.state, 'cleanup-receipts', 'takt-deepseek-other-group.confirmed');
+      const barrierPath = join(paths.state, 'cleanup-blocked');
+      await mkdir(dirname(receiptPath), { recursive: true });
+      await writeFile(receiptPath, 'confirmed\n');
+      await writeFile(barrierPath, JSON.stringify({
+        runtimePids: kind === 'unknown' ? [runtimePid] : [runtimePid, otherPid],
+        unknownRuntime: kind === 'unknown',
+      }));
+
+      const realKill = process.kill.bind(process);
+      vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+        if (signal === 0 && pid === -runtimePid) {
+          throw Object.assign(new Error('group exited'), { code: 'ESRCH' });
+        }
+        if (signal === 0 && pid === -otherPid) return true;
+        return realKill(pid, signal);
+      });
+
+      expect(await acknowledgeDeepSeekRuntimeCleanupLocked(paths.state, paths.owners, receiptPath)).toBe(true);
+      expect(existsSync(receiptPath)).toBe(false);
+      expect(existsSync(barrierPath)).toBe(true);
+    },
+  );
 
   it.each(['malformed', 'directory', 'insufficient', 'missing-live-pid'] as const)(
     'does not confirm an existing %s cleanup barrier and retains the startup lock',
