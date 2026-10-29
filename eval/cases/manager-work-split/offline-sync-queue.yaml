@@ -1,0 +1,308 @@
+ja:
+  lang: ja
+  turn: event
+  cwd: /workspace/project
+  concurrency: 2
+  defaultWorkflow: default
+  mainMerge: auto
+  goal: &a1
+    id: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-11T20:00:00.000Z
+    objective: 現場メモをオンライン時に共有する
+    outOfScope:
+      - ネットワーク断の間に送る内容を保持する再送待ち行列と自動再送
+    acceptanceCriteria:
+      - オンライン時に新しい現場メモを共有先へ送る。
+      - 送信に失敗した場合は失敗を表示し、入力内容を保持する。
+    constraints: []
+    mode: local
+    status: created
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/field-notes
+    startBranch: main
+    integrationBranch: main
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-000000000032
+        recordedAt: 2026-10-11T23:00:00.000Z
+        summary: "seed-index を takt/goal/field-notes に取り込みました。成果 SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。索引の土台を用意しました。"
+    questions: []
+  event:
+    kind: patrol
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-12T00:01:00.000Z
+  tasks:
+    - name: seed-index
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: completed
+      status: completed
+      createdAt: 2026-10-11T20:10:00.000Z
+      startedAt: 2026-10-11T20:15:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-seed-index
+      completion:
+        success: true
+        interrupted: false
+        branch: takt/task/seed-index
+        sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        workflowResult: completed
+      goalWorkKey: seed-index
+      goalPurpose: 索引の土台を用意する
+    - name: field-notes
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: running
+      status: running
+      createdAt: 2026-10-11T23:10:00.000Z
+      startedAt: 2026-10-11T23:15:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-field-notes
+      goalWorkKey: field-notes
+      goalPurpose: オンライン時の送信と失敗表示を実装する。
+  readResults:
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goal: *a1
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/goal-request.md
+      result: |-
+        # 現場メモをオンライン時に共有する
+
+        ## 目的
+        現場メモをオンライン時に共有する
+
+        ## 受け入れ条件
+        - オンライン時に新しい現場メモを共有先へ送る。
+        - 送信に失敗した場合は失敗を表示し、入力内容を保持する。
+
+        ## 作業指示
+        オンライン時の送信と失敗表示を実装する。
+
+        ## 範囲外
+        - ネットワーク断の間に送る内容を保持する再送待ち行列と自動再送
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/project-policy.md
+      result: 一時的な外部サービス障害は送信失敗として表示する。
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/.takt/runs/reports/review-resolution.md
+      result: |-
+        ## 修正対象
+        ネットワーク断の間もメモを保持し、復旧後に自動で再送する待ち行列を追加する。
+
+        ## 裁定の根拠
+        一時的なネットワーク断でメモが共有されないと利用体験が悪いため、再送を保証する。
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-field-notes
+      result:
+        runSlug: run-field-notes
+        task: オンライン時の送信と失敗表示を実装する。
+        workflow: default
+        status: running
+        currentStep: review
+        currentIteration: 3
+        currentStepStartedAt: 2026-10-12T00:00:00.000Z
+        currentStepExecutionCount: 3
+        phase: 1
+        stepLogs:
+          - step: review
+            persona: reviewer
+            status: done
+            iteration: 1
+            timestamp: 2026-10-11T23:03:00.000Z
+            content: 対象項目の不具合を報告した。周回 1。
+          - step: review-adjudication
+            persona: review-adjudicator
+            status: done
+            iteration: 1
+            timestamp: 2026-10-11T23:04:00.000Z
+            content: 対象項目を修正対象として採用した。周回 1。
+          - step: fix
+            persona: coder
+            status: done
+            iteration: 1
+            timestamp: 2026-10-11T23:05:00.000Z
+            content: 修正を試みたが、項目を解消できなかった。周回 1。
+          - step: review
+            persona: reviewer
+            status: done
+            iteration: 2
+            timestamp: 2026-10-11T23:06:00.000Z
+            content: 1周目に修正を試みた項目が残っていると報告した。周回 2。
+          - step: review-adjudication
+            persona: review-adjudicator
+            status: done
+            iteration: 2
+            timestamp: 2026-10-11T23:07:00.000Z
+            content: 対象項目を修正対象として採用した。周回 2。
+          - step: fix
+            persona: coder
+            status: done
+            iteration: 2
+            timestamp: 2026-10-11T23:08:00.000Z
+            content: 修正を試みたが、項目を解消できなかった。周回 2。
+        reports:
+          - filename: review-resolution.md
+            sizeBytes: 740
+          - filename: implementation.md
+            sizeBytes: 520
+en:
+  lang: en
+  turn: event
+  cwd: /workspace/project
+  concurrency: 2
+  defaultWorkflow: default
+  mainMerge: auto
+  goal: &a2
+    id: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-11T20:00:00.000Z
+    objective: Share field notes when online
+    outOfScope:
+      - A retry queue and automatic resending while the network is unavailable
+    acceptanceCriteria:
+      - Send new field notes to the shared destination while online.
+      - On send failure, show the failure and retain the entered note.
+    constraints: []
+    mode: local
+    status: created
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/field-notes
+    startBranch: main
+    integrationBranch: main
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-000000000032
+        recordedAt: 2026-10-11T23:00:00.000Z
+        summary: "Integrated seed-index into takt/goal/field-notes. Result SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa. Prepared the index foundation."
+    questions: []
+  event:
+    kind: patrol
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-12T00:01:00.000Z
+  tasks:
+    - name: seed-index
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: completed
+      status: completed
+      createdAt: 2026-10-11T20:10:00.000Z
+      startedAt: 2026-10-11T20:15:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-seed-index
+      completion:
+        success: true
+        interrupted: false
+        branch: takt/task/seed-index
+        sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        workflowResult: completed
+      goalWorkKey: seed-index
+      goalPurpose: Prepare the index foundation
+    - name: field-notes
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: running
+      status: running
+      createdAt: 2026-10-11T23:10:00.000Z
+      startedAt: 2026-10-11T23:15:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-field-notes
+      goalWorkKey: field-notes
+      goalPurpose: Implement online sending and failure reporting.
+  readResults:
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goal: *a2
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/goal-request.md
+      result: |-
+        # Share field notes when online
+
+        ## Objective
+        Share field notes when online
+
+        ## Acceptance criteria
+        - Send new field notes to the shared destination while online.
+        - On send failure, show the failure and retain the entered note.
+
+        ## Work instructions
+        Implement online sending and failure reporting.
+
+        ## Out of scope
+        - A retry queue and automatic resending while the network is unavailable
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/project-policy.md
+      result: Show temporary external-service failures as send failures.
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/.takt/runs/reports/review-resolution.md
+      result: |-
+        ## Items to fix
+        Add a queue that retains notes while offline and resends them automatically after connectivity returns.
+
+        ## Adjudication basis
+        A note not being shared during a temporary outage harms usability, so delivery should be guaranteed by retrying.
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-field-notes
+      result:
+        runSlug: run-field-notes
+        task: Implement online sending and failure reporting.
+        workflow: default
+        status: running
+        currentStep: review
+        currentIteration: 3
+        currentStepStartedAt: 2026-10-12T00:00:00.000Z
+        currentStepExecutionCount: 3
+        phase: 1
+        stepLogs:
+          - step: review
+            persona: reviewer
+            status: done
+            iteration: 1
+            timestamp: 2026-10-11T23:03:00.000Z
+            content: Reported the repair item. Cycle 1.
+          - step: review-adjudication
+            persona: review-adjudicator
+            status: done
+            iteration: 1
+            timestamp: 2026-10-11T23:04:00.000Z
+            content: Accepted the item for repair. Cycle 1.
+          - step: fix
+            persona: coder
+            status: done
+            iteration: 1
+            timestamp: 2026-10-11T23:05:00.000Z
+            content: Attempted a fix, but could not resolve the item. Cycle 1.
+          - step: review
+            persona: reviewer
+            status: done
+            iteration: 2
+            timestamp: 2026-10-11T23:06:00.000Z
+            content: Reported that the item addressed in cycle 1 remained unresolved. Cycle 2.
+          - step: review-adjudication
+            persona: review-adjudicator
+            status: done
+            iteration: 2
+            timestamp: 2026-10-11T23:07:00.000Z
+            content: Accepted the item for repair. Cycle 2.
+          - step: fix
+            persona: coder
+            status: done
+            iteration: 2
+            timestamp: 2026-10-11T23:08:00.000Z
+            content: Attempted a fix, but could not resolve the item. Cycle 2.
+        reports:
+          - filename: review-resolution.md
+            sizeBytes: 740
+          - filename: implementation.md
+            sizeBytes: 520

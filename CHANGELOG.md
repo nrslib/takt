@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `provider.defaults.assignment` selects a named runtime assignment by default, after CLI and directory selections.
+
 ## [0.73.0] - 2026-10-27
 
 ### Added

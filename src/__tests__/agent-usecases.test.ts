@@ -1149,18 +1149,21 @@ describe('agent-usecases', () => {
   });
 
   it('decomposition は意味的検証診断付きで全partsを再生成する', async () => {
+    const onValidationError = vi.fn();
     vi.mocked(runAgent)
       .mockResolvedValueOnce(doneResponse('invalid', { parts: [] }))
       .mockResolvedValueOnce(doneResponse('valid', {
         parts: [{ id: 'p1', title: 'Part 1', instruction: 'Do 1' }],
       }));
 
-    const result = await decomposeTask('instruction', 2, { cwd: '/repo' });
+    const result = await decomposeTask('instruction', 2, { cwd: '/repo', onValidationError });
 
     expect(result.parts).toEqual([
       { id: 'p1', title: 'Part 1', instruction: 'Do 1' },
     ]);
     expect(runAgent).toHaveBeenCalledTimes(2);
+    expect(onValidationError).toHaveBeenCalledOnce();
+    expect(onValidationError.mock.calls[0]?.[0]).toBeInstanceOf(Error);
   });
 
   it('decomposition は provider 例外を再試行しない', async () => {
@@ -1578,6 +1581,21 @@ describe('agent-usecases', () => {
       ['p1'],
       { cwd: '/repo', persona: 'team-leader', cancellablePartIds: [] },
     )).rejects.toThrow("timeout");
+  });
+
+  it('requestMoreParts は不正な feedback の検証失敗を通知する', async () => {
+    const onValidationError = vi.fn();
+    vi.mocked(runAgent).mockResolvedValue(doneResponse('invalid feedback', {
+      done: true, reasoning: 'Enough', cancelPartIds: ['unknown-part'], parts: [],
+    }));
+
+    await expect(requestMoreParts(
+      'instruction',
+      [{ id: 'p1', title: 'Part 1', status: 'done', content: 'ok' }],
+      ['p1'],
+      { cwd: '/repo', persona: 'team-leader', cancellablePartIds: [], onValidationError },
+    )).rejects.toThrow();
+    expect(onValidationError).toHaveBeenCalledOnce();
   });
 
   it('requestMoreParts は AbortSignal と provider usage を呼び出し境界へ伝搬する', async () => {

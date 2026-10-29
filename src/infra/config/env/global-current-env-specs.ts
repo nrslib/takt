@@ -37,6 +37,7 @@ export const GLOBAL_ENV_SPECS: readonly EnvSpec[] = [
   { path: 'cursor_cli_path', type: 'string' },
   { path: 'copilot_cli_path', type: 'string' },
   { path: 'kiro_cli_path', type: 'string' },
+  { path: 'devin_cli_path', type: 'string' },
   { path: 'copilot_github_token', type: 'string' },
   { path: 'kiro_api_key', type: 'string' },
   { path: 'opencode_api_key', type: 'string' },

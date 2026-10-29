@@ -30,7 +30,7 @@ function fixture() {
 }
 function read(): SnapshotRead {
   return { transferId: 'read', conversationId: 'conversation', revision: 0, stateSequence: 0, operationId: null,
-    items: (async function* () {})() };
+    mode: 'initial', items: (async function* () {})(), complete: vi.fn(), cancel: vi.fn() };
 }
 it.each(['invalid', '{}', '{"conversationId":"other","revision":4}', '{"conversationId":"other","revision":-1}'])('ignores an invalid or mismatched goal button value %s', async (value) => {
   const { port, input } = fixture();

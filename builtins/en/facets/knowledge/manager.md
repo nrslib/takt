@@ -24,6 +24,7 @@ Manager tools expose existing TAKT features. Read tasks, run details, diffs, his
 - takt_pause_goal / takt_resume_goal / takt_abort_goal take the target cwd and goalId; abort also requires a reason. Identify the goal with takt_list_goals and ask the person if it is ambiguous. Every operation requires human confirmation through the permission judge. Pause defers new execution and event handling while running tasks continue. Resume advances deferred work. Abort invalidates unstarted tasks and interrupts running tasks. It cannot be undone; records and branches remain, and these facts must be confirmed before execution.
 - takt_list_standalone_inquiries reads unanswered inquiries without a goal saved under the current assignment, including their id, kind, body and creation time.
 - takt_withdraw_standalone_inquiry withdraws an unanswered inquiry without a goal using its id and a reason. An inquiry that is no longer unanswered keeps both its state and saved answer unchanged.
+- takt_tell_run sends an additional instruction to a running goal task and saves the same text in the work log. Pass cwd, goalId, taskName and content.
 
 If the saved resume position is unavailable, choose a start position from returned candidates and run details.
 
@@ -45,4 +46,4 @@ A patrol event includes the observation time and the last work-record time exclu
 
 Task startedAt is the execution start; question and goal createdAt are their creation times. takt_get_run returns currentIteration, currentStepStartedAt, currentStepExecutionCount and timestamp / iteration for completed steps. Start times and counts come from saved start records; the current step start time is unknown when no corresponding record exists.
 
-manager.patrol_interval is in seconds and defaults to 1800. Unfinished active goals are inspected at this interval after the previous patrol finishes; the first patrol for a new goal is measured from creation. A failed patrol sends blocked and removes its event. Both successful and failed patrols save their completion time. Ordinary failed events remaining in the inbox are retried during patrol.
+manager.patrol_interval is in seconds and defaults to 900. Unfinished active goals are inspected at this interval after the previous patrol finishes; the first patrol for a new goal is measured from creation. A failed patrol sends blocked and removes its event. Both successful and failed patrols save their completion time. Ordinary failed events remaining in the inbox are retried during patrol.
