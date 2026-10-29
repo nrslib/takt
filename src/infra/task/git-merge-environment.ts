@@ -21,4 +21,3 @@ export function suppressMergeDrivers(cwd: string, environment: NodeJS.ProcessEnv
   env.GIT_CONFIG_COUNT = String(count);
   return env;
 }
-

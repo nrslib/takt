@@ -403,7 +403,7 @@ describe('Merge PR persistent clone ownership', () => {
         expect(fetch.mock.calls.filter(([, args]) => args[0] === 'fetch')).toEqual([]);
         expect(mocks.resolver).not.toHaveBeenCalled();
       });
-  });
+    });
 
   it.each(['Requeue', 'Retry'])('%sでもCLIの実行並列数から決まる取り込み直し上限を設定変更後まで保持する', async (mode) => {
     mkdirSync(join(project, '.takt'), { recursive: true });
