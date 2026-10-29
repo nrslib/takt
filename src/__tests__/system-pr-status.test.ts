@@ -9,6 +9,19 @@ import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.
 import { createInitialState } from '../core/workflow/engine/state-manager.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 
+let failFirstEvidenceWrite = false;
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const original = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...original, writeFile: async (...args: Parameters<typeof original.writeFile>) => {
+    if (failFirstEvidenceWrite && typeof args[0] === 'string' && args[0].includes('job-')) {
+      failFirstEvidenceWrite = false;
+      await original.writeFile(args[0], String(args[1]).slice(0, 8), args[2]);
+      throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+    }
+    return original.writeFile(...args);
+  } };
+});
+
 describe('PR status system input target ownership', () => {
   const fetchPrStatus = vi.fn();
   const findExistingPr = vi.fn();
@@ -172,6 +185,27 @@ describe('CI failure system input and rerun effect', () => {
       .filter((name) => name.endsWith('.log'))).toHaveLength(1);
   });
 
+  it('jobログの書込が途中で失敗しても不完全な最終ファイルを公開せず同じrunで再試行できる', async () => {
+    const h = fixture();
+    failFirstEvidenceWrite = true;
+    try {
+      const first = await h.service.resolveSystemInput(input, h.state);
+      expect(first).toMatchObject({ complete: false,
+        unavailable: expect.arrayContaining([expect.objectContaining({ name: 'CI evidence storage' })]) });
+      const canonicalDirectory = join(runDirectory, '.takt', 'runs', 'run', 'ci-evidence');
+      expect(readdirSync(canonicalDirectory)).toEqual([]);
+    } finally {
+      failFirstEvidenceWrite = false;
+    }
+    const resumed = await h.service.resolveSystemInput(input, h.state) as { complete: boolean; promptEvidence: string };
+    expect(resumed.complete).toBe(true);
+    const manifestPath = /^Evidence index: (.+)$/m.exec(resumed.promptEvidence)![1]!;
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+      checks: Array<{ jobs: Array<{ logPath: string }> }>;
+    };
+    expect(readFileSync(manifest.checks[0]!.jobs[0]!.logPath, 'utf8')).toBe(failure().checks[0]!.jobs[0]!.log);
+  });
+
   it('索引を保存できなければ不完全な証拠として再実行を拒否する', async () => {
     const blocked = join(runDirectory, 'blocked');
     writeFileSync(blocked, 'file');
@@ -311,7 +345,7 @@ describe('CI failure system input and rerun effect', () => {
     controller.abort();
     await expect(h.service.resolveSystemInput(input, h.state, 'collect_ci_failure', {
       cache: new Map(), resolvedBindings: new Map(), prStatusFetchOptions: { signal: controller.signal },
-    })).rejects.toThrow();
+    })).rejects.toBe(controller.signal.reason);
     expect(readdirSync(runDirectory)).toEqual(['clone']);
   });
 

@@ -1,7 +1,7 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { lstat, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { link, lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { PrCiFailure } from '../../../core/workflow/system/pr-ci.js';
 import type { RunPaths } from '../../../core/workflow/run/run-paths.js';
@@ -13,12 +13,18 @@ function digest(value: string): string {
 }
 
 async function writeOnce(path: string, content: string): Promise<void> {
+  const temporaryPath = `${path}.${randomUUID()}.tmp`;
   try {
-    await writeFile(path, content, { flag: 'wx', mode: 0o600 });
-  } catch (error) {
-    if (typeof error !== 'object' || error === null || !('code' in error) || error.code !== 'EEXIST') throw error;
-    if (!(await lstat(path)).isFile()) throw new Error('Saved CI evidence is not a regular file');
-    if (await readFile(path, 'utf8') !== content) throw new Error('Saved CI evidence differs from the current run');
+    await writeFile(temporaryPath, content, { flag: 'wx', mode: 0o600 });
+    try {
+      await link(temporaryPath, path);
+    } catch (error) {
+      if (typeof error !== 'object' || error === null || !('code' in error) || error.code !== 'EEXIST') throw error;
+      if (!(await lstat(path)).isFile()) throw new Error('Saved CI evidence is not a regular file');
+      if (await readFile(path, 'utf8') !== content) throw new Error('Saved CI evidence differs from the current run');
+    }
+  } finally {
+    await rm(temporaryPath, { force: true });
   }
 }
 
