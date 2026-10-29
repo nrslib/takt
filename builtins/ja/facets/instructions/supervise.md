@@ -2,6 +2,8 @@
 
 {{include:instructions/final-preservation-check}}
 
+{{include:instructions/supervise-spec-deviations}}
+
 1. タスク指示書の要件を独立に判定できる最小単位へ分解し、現在のコードへ対応付ける
 2. 前段の報告にある記載を補助として読み、現在のコードと矛盾する場合は現在のコードを優先する
 3. 前段の問題を元の受入条件へ対応付け、解消済みか確認する
