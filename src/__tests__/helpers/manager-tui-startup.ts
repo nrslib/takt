@@ -187,7 +187,6 @@ it.each(['ja', 'en'] as const)('projects new notices once while preserving assig
   const context = mount(lang);
   const assignment = context.client.getSnapshot().items[0]!;
   context.client.change({ items: [assignment,
-    { kind: 'display_event', event: { id: 'old', message: 'Historical record', suppressInitialDisplay: true } },
     { kind: 'display_event', event: { id: 'new', message: 'New work record' } },
   ] });
   await waitFor(() => expect(context.app.lastFrame()).toContain('New work record'));

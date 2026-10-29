@@ -143,6 +143,10 @@ export interface CursorProviderOptions {
   guards?: ProviderGuardOptions;
 }
 
+export interface DevinProviderOptions {
+  guards?: ProviderGuardOptions;
+}
+
 /** Configuration for the DeepSeek Harness TypeScript SDK. */
 export type DeepSeekReasoningEffort = 'off' | 'low' | 'high' | 'max';
 
@@ -206,6 +210,7 @@ export interface StepProviderOptions {
   kiro?: KiroProviderOptions;
   pi?: PiProviderOptions;
   deepseekHarness?: DeepSeekHarnessProviderOptions;
+  devin?: DevinProviderOptions;
 }
 
 export type WorkflowStepKind = 'agent' | 'system' | 'workflow_call';

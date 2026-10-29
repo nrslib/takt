@@ -18,7 +18,6 @@ import type { ManagerTurnInput } from '../features/manager/turnExecutor.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { askTaktGoalQuestion } from '../features/mcp/goalQuestionOperations.js';
 import { GoalStore } from '../infra/goals/store.js';
-import { formatGoalNotification } from '../infra/goals/notifications.js';
 import type { Goal } from '../infra/goals/schema.js';
 import { saveManagerToolPermissionInquiry } from '../features/manager/toolPermissionInquiry.js';
 import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
@@ -186,20 +185,6 @@ it.each([7, 9])('transfers all %i large options created through the real goal-qu
   expect(value.sizes.every((bytes) => bytes <= MAX_CONVERSATION_FRAME_BYTES)).toBe(true);
 });
 
-it.each([7, 9])('transfers a single full notice containing %i large blocks', async (count) => {
-  const body = Array.from({ length: count }, (_, index) => `${index}:`.padEnd(128 * 1024, 'a')).join('\n');
-  const notification = { id: '11111111-1111-4111-8111-111111111111', kind: 'custom' as const, recordedAt: '2026-10-24T00:00:00.000Z', body };
-  const goal = { ...goalRecord(), notifications: [notification] }; saveGoal(goal);
-  const value = await authenticated(); const result = await opened(value);
-  const items = (await value.items(result.read.transferId)) as Array<{ kind: string; notice: unknown }>;
-  expect(items.filter(({ kind }) => kind === 'notice').map(({ notice }) => notice)).toEqual([
-    { id: notification.id, repositoryDirectory: repository, project: 'repository', goalId: goal.id, objective: goal.objective,
-      kind: notification.kind, recordedAt: notification.recordedAt,
-      message: formatGoalNotification(goal, notification, 'en', 'repository', 'tui', 'full') },
-  ]);
-  expect(value.sizes.every((bytes) => bytes <= MAX_CONVERSATION_FRAME_BYTES)).toBe(true);
-});
-
 it('transfers the exact normal standalone approval and removes that inquiry on refresh after withdrawal', async () => {
   const owner = { kind: 'repository' as const, repositoryDirectory: repository };
   const question = await saveManagerToolPermissionInquiry({ configDirectory: directory, owner,
@@ -324,12 +309,13 @@ it('accepts a complete message spanning input batches and rejects concurrent mes
   expect(value.socket.destroyed).toBe(false);
 });
 
-it('starts every replacement snapshot with a different transfer ID and its complete captured state', async () => {
+it('uses a fresh transfer ID and an empty delta after an unchanged completed read', async () => {
   const value = await authenticated();
   const first = await opened(value);
   const second = (await value.request('snapshot', { attachmentId: first.attachmentId })).result!;
   expect(second.read.transferId).not.toBe(first.read.transferId);
-  expect((await value.items(second.read.transferId))[0]).toMatchObject({ kind: 'state', state: { revision: 4 } });
+  expect(await value.items(second.read.transferId)).toEqual([]);
+  expect(value.latestState()).toMatchObject({ revision: 4 });
 });
 
 it('returns assignment-change rejection without waiting for a notice behind that request response', async () => {

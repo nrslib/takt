@@ -145,6 +145,11 @@ import type {
   PreparedLiveInterventionDelivery,
 } from '../live-intervention/types.js';
 import { createLiveInterventionDeliveryCommitter } from '../live-intervention/delivery.js';
+import {
+  Phase1ExecutionLog,
+  savePhase1ExecutionLog,
+  type Phase1ExecutionLogReference,
+} from '../phase1-execution-log.js';
 
 const log = createLogger('step-executor');
 
@@ -676,6 +681,8 @@ export class StepExecutor {
     readonly companionRuntime: CompanionStepRuntime | undefined;
     readonly providerInfo: StepProviderInfo;
     readonly nextSequence: () => number;
+    readonly phase1ExecutionLog?: Phase1ExecutionLog;
+    readonly phase1LogSource?: string;
     readonly onSingleFixSettled?: () => void;
     readonly abortSignal: AbortSignal | undefined;
     readonly afterPhase1Response?: (response: AgentResponse) => Promise<CompanionFollowUpResult>;
@@ -738,6 +745,8 @@ export class StepExecutor {
                 workflowStack: this.deps.getCurrentWorkflowStack?.(),
                 sanitizeText: this.deps.sanitizeObservabilityText,
                 providerInfo: input.providerInfo,
+                onPromptResolved: (prompt) => input.phase1ExecutionLog?.recordInstruction(phaseAttempt.reason, prompt, input.phase1LogSource),
+                onAttemptError: (error) => input.phase1ExecutionLog?.recordFailure(error, input.phase1LogSource),
                 execute: (instruction, sessionId, onPromptResolved) => executeAgent(
                   input.executableStep.persona,
                   instruction,
@@ -748,6 +757,7 @@ export class StepExecutor {
                   this.deps.onPhaseStart?.(...args);
                 },
               });
+              input.phase1ExecutionLog?.recordResult(observed.response, input.phase1LogSource);
               return observed.response;
             } catch (error) {
               if (promptResolvedAttempts.has(phaseAttempt.sequence)) {
@@ -1598,6 +1608,19 @@ export class StepExecutor {
     return instruction;
   }
 
+  savePhase1ExecutionLog(
+    executionLog: Phase1ExecutionLog,
+    stepName: string,
+    stepIteration: number,
+  ): Promise<Phase1ExecutionLogReference> {
+    return savePhase1ExecutionLog(
+      executionLog,
+      this.deps.getRunPaths().logsAbs,
+      stepName,
+      stepIteration,
+    );
+  }
+
   /**
    * Apply shared post-execution phases (Phase 2/3 + fallback rule evaluation).
    *
@@ -1619,6 +1642,7 @@ export class StepExecutor {
     injectedReports?: readonly InjectedReport[],
     reportInputs?: Phase1ReportInputs,
     onReportWritten?: (reportName: string) => void,
+    phase1ExecutionLog?: Phase1ExecutionLogReference,
   ): Promise<AgentResponse> {
     let nextResponse = response;
 
@@ -1665,6 +1689,7 @@ export class StepExecutor {
             lastStructuredOutput: nextResponse.structuredOutput,
             injectedReports,
             reportInputs,
+            phase1ExecutionLog,
           },
           (reportName) => {
             writtenReports.add(reportName);
@@ -1875,6 +1900,9 @@ export class StepExecutor {
       throw error;
     }
     const reportInputTracker = new Phase1ReportInputTracker(preparedInstruction.reportInputs);
+    const phase1ExecutionLog = getReportFiles(step.outputContracts).length > 0
+      ? new Phase1ExecutionLog()
+      : undefined;
     const initialDeliveryCommitter = createLiveInterventionDeliveryCommitter(
       this.deps.liveIntervention,
       liveInterventionDelivery,
@@ -1885,9 +1913,17 @@ export class StepExecutor {
     );
     const agentOptions: RunAgentOptions = {
       ...baseAgentOptions,
-      ...(initialDeliveryCommitter === undefined
-        ? {}
-        : { onDispatch: initialDeliveryCommitter.onDispatch }),
+      ...(phase1ExecutionLog === undefined ? {} : {
+        onStream: (event) => {
+          phase1ExecutionLog.recordEvent(event);
+          baseAgentOptions.onStream?.(event);
+        },
+      }),
+      onDispatch: (permissionMode) => {
+        if (initialDeliveryCommitter === undefined) baseAgentOptions.onDispatch?.(permissionMode);
+        else initialDeliveryCommitter.onDispatch(permissionMode);
+        phase1ExecutionLog?.markDispatched();
+      },
     };
     activeCompanionRuntime?.beginReviewAttempt();
     const promptResolvedAttempts = new Set<number>();
@@ -1912,6 +1948,8 @@ export class StepExecutor {
             workflowStack: this.deps.getCurrentWorkflowStack?.(),
             sanitizeText: this.deps.sanitizeObservabilityText,
             providerInfo,
+            onPromptResolved: (prompt) => phase1ExecutionLog?.recordInstruction(attempt.reason, prompt),
+            onAttemptError: (error) => phase1ExecutionLog?.recordFailure(error),
             execute: (attemptInstruction, sessionId, onPromptResolved) => (
               executableStep.internalFreshSession === true
                 ? executeStructuredTextAgent(attemptInstruction, {
@@ -1987,6 +2025,7 @@ export class StepExecutor {
           if (result.promptResolved) {
             promptResolvedAttempts.add(attempt.sequence);
           }
+          phase1ExecutionLog?.recordResult(result.response);
           return result.response;
         },
         discardSession: (sessionId) => {
@@ -2123,6 +2162,8 @@ export class StepExecutor {
             workflowStack: this.deps.getCurrentWorkflowStack?.(),
             sanitizeText: this.deps.sanitizeObservabilityText,
             providerInfo,
+            onPromptResolved: (prompt) => phase1ExecutionLog?.recordInstruction(liveAttempt.reason, prompt),
+            onAttemptError: (error) => phase1ExecutionLog?.recordFailure(error),
             execute: (attemptInstruction, sessionId, onPromptResolved) => executeAgent(
               executableStep.persona,
               attemptInstruction,
@@ -2132,7 +2173,10 @@ export class StepExecutor {
                 onPromptResolved,
                 ...(sameSessionCommitter === undefined
                   ? {}
-                  : { onDispatch: sameSessionCommitter.onDispatch }),
+                  : { onDispatch: (permissionMode) => {
+                      sameSessionCommitter.onDispatch(permissionMode);
+                      phase1ExecutionLog?.markDispatched();
+                    } }),
               },
             ),
             onPhaseStart: this.deps.onPhaseStart,
@@ -2142,6 +2186,7 @@ export class StepExecutor {
               step.name, providerInfo, false, undefined,
             ),
           });
+          phase1ExecutionLog?.recordResult(observed.response);
           if (!observed.promptResolved) {
             throw new Error(`Missing prompt parts for phase start: ${step.name}:1`);
           }
@@ -2205,6 +2250,7 @@ export class StepExecutor {
       companionRuntime: activeCompanionRuntime,
       providerInfo,
       nextSequence: () => phaseExecutionSequence++,
+      phase1ExecutionLog,
       afterPhase1Response: (companionResponse) => drainLiveIntervention(companionResponse),
       onSingleFixSettled: () => {
         companionSingleFixSettled = true;
@@ -2262,6 +2308,8 @@ export class StepExecutor {
                 workflowStack: this.deps.getCurrentWorkflowStack?.(),
                 sanitizeText: this.deps.sanitizeObservabilityText,
                 providerInfo,
+                onPromptResolved: (prompt) => phase1ExecutionLog?.recordInstruction(attempt.reason, prompt),
+                onAttemptError: (error) => phase1ExecutionLog?.recordFailure(error),
                 execute: (attemptInstruction, attemptSessionId, onPromptResolved) => executeAgent(
                   executableStep.persona,
                   attemptInstruction,
@@ -2277,6 +2325,7 @@ export class StepExecutor {
                   undefined,
                 ),
               });
+              phase1ExecutionLog?.recordResult(observed.response);
               return observed.response;
             },
             discardSession: () => undefined,
@@ -2330,6 +2379,7 @@ export class StepExecutor {
             companionRuntime: activeCompanionRuntime,
             providerInfo,
             nextSequence: () => phaseExecutionSequence++,
+            phase1ExecutionLog,
             afterPhase1Response: (companionResponse) => drainLiveIntervention(companionResponse),
             onSingleFixSettled: () => {
               companionSingleFixSettled = true;
@@ -2369,6 +2419,9 @@ export class StepExecutor {
         preparedInstruction.injectedReports,
         reportInputTracker.snapshot(),
         (reportName) => writtenReportNames.push(reportName),
+        phase1ExecutionLog === undefined
+          ? undefined
+          : await this.savePhase1ExecutionLog(phase1ExecutionLog, step.name, stepIteration),
       );
     } catch (error) {
       if (error instanceof RuleDetectionExhaustedError) {

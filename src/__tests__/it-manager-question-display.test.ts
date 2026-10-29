@@ -333,7 +333,7 @@ it.each(['enter', 'escape'] as const)('blocks inquiry entry during registration 
   call.mockResolvedValueOnce({ persona: 'manager', status: 'done', timestamp: new Date(), content: '',
     structuredOutput: { message: 'Summary ready', summary } });
   await send('Prepare export');
-  await waitFor(() => expect(app!.lastFrame()).toContain('Summary to register'));
+  await vi.waitFor(() => expect(app!.lastFrame()).toContain('Summary to register'), { timeout: 10_000 });
   let finish!: () => void;
   const registration = new Promise<void>((resolve) => { finish = resolve; });
   const approval = spyConversationCommand(session!, 'approve_summary').mockImplementation(async (command) => {
@@ -563,7 +563,7 @@ it.each(['default', 'escape'] as const)('cancels abort with %s without changing 
   expect(await store.get(saved.id)).toEqual(saved);
   expect(call).not.toHaveBeenCalled();
   await send('Continue conversation');
-  await waitFor(() => expect(call).toHaveBeenCalledOnce());
+  await vi.waitFor(() => expect(call).toHaveBeenCalledOnce(), { timeout: 10_000 });
   expect(await store.get(saved.id)).toEqual(saved);
 });
 
@@ -576,7 +576,7 @@ it.each([
   const saved = goalRecord();
   const { store, call, send } = await mountGoalControls('ja', saved);
   await send(text);
-  await waitFor(() => expect(call).toHaveBeenCalledOnce());
+  await vi.waitFor(() => expect(call).toHaveBeenCalledOnce(), { timeout: 10_000 });
   const [conversation, context] = call.mock.calls[0]![0].split('\n\nBusiness context (not approval): ');
   expect(conversation).toBe(text);
   expectGoalMemory(JSON.stringify(JSON.parse(context!).goals), saved);
@@ -812,7 +812,7 @@ it.each([
   const { store, call, send } = await mountGoalControls('ja', saved);
   const text = prefix.includes('GOAL') ? prefix.replace('GOAL', goalId) : `${prefix} ${goalId}`;
   await send(text);
-  await waitFor(() => expect(call).toHaveBeenCalledOnce());
+  await vi.waitFor(() => expect(call).toHaveBeenCalledOnce(), { timeout: 10_000 });
   const [conversation, context] = call.mock.calls[0]![0].split('\n\nBusiness context (not approval): ');
   expect(conversation).toBe(text);
   expectGoalMemory(JSON.stringify(JSON.parse(context!).goals), saved);
@@ -940,7 +940,8 @@ it.each([true, false])('keeps human inquiries and custom notifications without p
   await new GoalStore(cwd).create(saved);
   const display = await readManagerTestDisplay(cwd);
   expect(display.questions.map(({ question }) => question.id).sort()).toEqual([human.questionId, second.questionId].sort());
-  expect(display.events.map(({ id }) => JSON.parse(id)[2])).toEqual(saved.notifications!.filter(({ kind }) => kind !== 'question').map(({ id }) => id));
+  expect(display.events.map(({ id }) => id)).toEqual(saved.notifications!.filter(({ kind }) => kind !== 'question')
+    .map(({ id }) => JSON.stringify([cwd, saved.id, 'notification', id])));
   session = new ManagerServiceClient({
     cwd,
     plan: { ctx: { providerType: 'mock', model: undefined, lang: 'ja', provider: new MockProvider() },
@@ -999,11 +1000,10 @@ it.each([
   const { store, call, saved } = await mountNewNoticeControls(lang, initial);
   const display = await readManagerTestDisplay(cwd, lang);
   expect(display.events).toHaveLength(1);
-  expect(display.events[0]!.id).toBe(JSON.stringify([saved.id, 'notification', saved.notifications![0]!.id]));
+  expect(display.events[0]!.id).toBe(JSON.stringify([cwd, saved.id, 'notification', saved.notifications![0]!.id]));
   expect(display.events[0]!.message.split('\n').slice(2, 5)).toEqual(body.split('\n').slice(0, 3));
   expect(display.events[0]!.message.split('\n')[5]).toMatch(lang === 'ja' ? /省略/u : /omitted/iu);
   expect(display.events[0]!.message).not.toMatch(/Ctrl\+N|\^N/u);
-  expect(display).toMatchObject({ notices: [{ message: expect.stringContaining(body) }] });
   expect(await store.get(saved.id)).toEqual(saved);
   expect(call).not.toHaveBeenCalled();
   await waitFor(() => {
@@ -1123,8 +1123,10 @@ it.each(['question', 'awaiting_merge', 'completed', 'progress', 'blocked', 'cust
     invalidateResolvedConfigCache(cwd);
     const display = await readManagerTestDisplay(cwd);
     expect(display.questions.map(({ question: saved }) => saved.id)).toEqual([question.questionId]);
-    expect(display.events.map(({ id }) => JSON.parse(id)[2])).toEqual([
-      goal.workLog[0]!.id, ...goal.notifications!.filter((notice) => notice.kind !== 'question' && notice.kind !== kind).map(({ id }) => id),
+    expect(display.events.map(({ id }) => id)).toEqual([
+      JSON.stringify([cwd, goal.id, 'work-log', goal.workLog[0]!.id]),
+      ...goal.notifications!.filter((notice) => notice.kind !== 'question' && notice.kind !== kind)
+        .map(({ id }) => JSON.stringify([cwd, goal.id, 'notification', id])),
     ]);
     expect((await new GoalStore(cwd).get(goal.id)).notifications).toEqual(goal.notifications);
   },

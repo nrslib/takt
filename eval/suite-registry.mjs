@@ -160,6 +160,11 @@ const CLASSIFICATIONS = [
   },
   {
     tier: 'active',
+    reason: '判定専用の構造化出力と実際の Phase 1 実行記録から、確認範囲と未確認事項を分けて報告するか測る',
+    suites: ['phase1-execution-log-handoff'],
+  },
+  {
+    tier: 'active',
     reason: '変化を名指しし、その後も状態に合わせて振る舞うことを求め、同じ実体が存続する契約の発火・誤発火・証拠境界を測る',
     suites: [
       'state-after-event-plan',
@@ -239,6 +244,10 @@ const CLASSIFICATIONS = [
 ];
 
 const EXECUTION_OVERRIDES = {
+  'phase1-execution-log-handoff': {
+    defaultEligible: false, credentials: ['codex'], cost: 'standard',
+    reason: 'Terra medium で合成した Phase 1 実行記録の報告品質を明示評価する',
+  },
   'manager-work-split': {
     defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
     reason: 'Sol Low、Opus 5、Luna Max で日英の操作選択と引数を比較する明示選択の評価',
@@ -694,6 +703,7 @@ const EXECUTION_OVERRIDES = {
 };
 
 const PREPARE_TARGET_OVERRIDES = {
+  'phase1-execution-log-handoff': [],
   'manager-work-split': [],
   'finding-realistic-premise': [
     'rt', 'rc', 'rq', 'ne', 'np', 'nb', 'at', 'ac', 'aq', 'ae', 'ap', 'ab',

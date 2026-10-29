@@ -27,6 +27,7 @@ export const DEFAULT_PROVIDER_PERMISSION_PROFILES: ProviderPermissionProfiles = 
   kiro: { defaultPermissionMode: DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE },
   pi: { defaultPermissionMode: DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE },
   'deepseek-harness': { defaultPermissionMode: DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE },
+  devin: { defaultPermissionMode: DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE },
   mock: { defaultPermissionMode: DEFAULT_PROVIDER_PROFILE_PERMISSION_MODE },
 };
 
