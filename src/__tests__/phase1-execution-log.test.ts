@@ -10,7 +10,7 @@ describe('Phase1ExecutionLog', () => {
 
     const reportInput = log.toReportInput();
     expect(reportInput).not.toContain('synthetic-secret-1929');
-    expect(JSON.parse(reportInput)).toEqual([
+    expect(reportInput.trim().split('\n').map((line) => JSON.parse(line))).toEqual([
       { kind: 'provider_event', event: { type: 'tool_result', data: { id: 'x', content: 'password=[REDACTED]', isError: false } } },
     ]);
   });
@@ -26,7 +26,7 @@ describe('Phase1ExecutionLog', () => {
     const reportInput = log.toReportInput();
     expect(reportInput).not.toContain('synthetic-secret-1929');
     expect(reportInput).not.toContain('another-synthetic-secret');
-    expect(JSON.parse(reportInput).filter((entry: { event: { type: string } }) => entry.event.type === 'tool_output'))
+    expect(reportInput.trim().split('\n').map((line) => JSON.parse(line)).filter((entry: { event: { type: string } }) => entry.event.type === 'tool_output'))
       .toEqual([
         { kind: 'provider_event', event: { type: 'tool_output', data: { id: 'different', tool: 'Bash', output: 'password=[REDACTED]' } } },
         { kind: 'provider_event', event: { type: 'tool_output', data: { id: 'unfinished', tool: 'Bash', output: 'password=[REDACTED]' } } },
@@ -45,12 +45,12 @@ describe('Phase1ExecutionLog', () => {
     const reportInput = log.toReportInput();
     expect(reportInput).not.toContain('synthetic-secret-1929');
     expect(reportInput).not.toContain('another-synthetic-secret');
-    expect(JSON.parse(reportInput).filter((entry: { event?: { type: string } }) => entry.event?.type === 'text'))
+    expect(reportInput.trim().split('\n').map((line) => JSON.parse(line)).filter((entry: { event?: { type: string } }) => entry.event?.type === 'text'))
       .toEqual([
         { kind: 'provider_event', source: 'leader', event: { type: 'text', data: { text: 'password=' } } },
         { kind: 'provider_event', source: 'leader', event: { type: 'text', data: { text: '[REDACTED]' } } },
       ]);
-    expect(JSON.parse(reportInput).filter((entry: { event?: { type: string; data: { id?: string } } }) => entry.event?.data.id === 'b'))
+    expect(reportInput.trim().split('\n').map((line) => JSON.parse(line)).filter((entry: { event?: { type: string; data: { id?: string } } }) => entry.event?.data.id === 'b'))
       .toEqual([{ kind: 'provider_event', source: 'leader', event: { type: 'tool_output', data: { id: 'b', tool: 'Bash', output: 'ordinary' } } }]);
   });
 
@@ -63,7 +63,7 @@ describe('Phase1ExecutionLog', () => {
 
     const reportInput = log.toReportInput();
     expect(reportInput).not.toContain('synthetic-secret-across-tool');
-    expect(JSON.parse(reportInput)).toEqual([
+    expect(reportInput.trim().split('\n').map((line) => JSON.parse(line))).toEqual([
       { kind: 'provider_event', source: 'leader', event: { type: 'text', data: { text: 'Checked files. password=' } } },
       { kind: 'provider_event', source: 'leader', event: { type: 'tool_use', data: { id: 'read-1', tool: 'Read', input: {} } } },
       { kind: 'provider_event', source: 'leader', event: { type: 'tool_result', data: { id: 'read-1', content: 'read complete', isError: false } } },
@@ -80,7 +80,7 @@ describe('Phase1ExecutionLog', () => {
     const reportInput = log.toReportInput();
     expect(reportInput).not.toContain('synthetic-');
     expect(reportInput).not.toContain('secret-across-tool');
-    expect(JSON.parse(reportInput).map((entry: { event: { type: string; data: { text?: string } } }) =>
+    expect(reportInput.trim().split('\n').map((line) => JSON.parse(line)).map((entry: { event: { type: string; data: { text?: string } } }) =>
       entry.event.type === 'text' ? entry.event.data.text : entry.event.type))
       .toEqual(['password=[REDACTED]', 'tool_use', '[REDACTED]']);
   });
@@ -89,7 +89,7 @@ describe('Phase1ExecutionLog', () => {
     const log = new Phase1ExecutionLog();
     log.recordEvent({ type: 'text', data: { text: 'password=abcde\napi_key=bcdef\nrepeat abcdef\n' } });
 
-    const entries = JSON.parse(log.toReportInput());
+    const entries = log.toReportInput().trim().split('\n').map((line) => JSON.parse(line));
     expect(entries[0].event.data.text).toBe('password=[REDACTED]\napi_key=[REDACTED]\nrepeat [REDACTED]\n');
   });
 
@@ -97,7 +97,7 @@ describe('Phase1ExecutionLog', () => {
     const log = new Phase1ExecutionLog();
     log.recordEvent({ type: 'text', data: { text: 'password=短\n独短\n短\n' } });
 
-    const entries = JSON.parse(log.toReportInput());
+    const entries = log.toReportInput().trim().split('\n').map((line) => JSON.parse(line));
     expect(entries[0].event.data.text).toBe('password=[REDACTED]\n独短\n[REDACTED]\n');
   });
 
@@ -113,7 +113,7 @@ describe('Phase1ExecutionLog', () => {
     log.markDispatched('leader');
     log.recordEvent({ type: 'text', data: { text: 'later response' } }, 'leader');
 
-    expect(JSON.parse(log.toReportInput()).filter((entry: { event?: { type: string } }) => entry.event?.type === 'text'))
+    expect(log.toReportInput().trim().split('\n').map((line) => JSON.parse(line)).filter((entry: { event?: { type: string } }) => entry.event?.type === 'text'))
       .toEqual([
         { kind: 'provider_event', source: 'leader', event: { type: 'text', data: { text: 'password=' } } },
         { kind: 'provider_event', source: 'part', event: { type: 'text', data: { text: 'ordinary' } } },
@@ -135,7 +135,7 @@ describe('Phase1ExecutionLog', () => {
 
     const reportInput = log.toReportInput();
     expect(reportInput).not.toContain('synthetic-secret-1929');
-    expect(JSON.parse(reportInput).filter((entry: { event?: { type: string } }) => entry.event?.type === 'tool_output'))
+    expect(reportInput.trim().split('\n').map((line) => JSON.parse(line)).filter((entry: { event?: { type: string } }) => entry.event?.type === 'tool_output'))
       .toEqual([
         { kind: 'provider_event', event: { type: 'tool_output', data: { tool: 'Bash', output: 'password=[REDACTED]' } } },
         { kind: 'provider_event', event: { type: 'tool_output', data: { tool: 'Bash', output: 'ordinary output' } } },
@@ -149,7 +149,7 @@ describe('Phase1ExecutionLog', () => {
     log.recordEvent({ type: 'tool_output', data: { id: 'read-1', tool: 'Read', output: 'second' } });
     log.recordEvent({ type: 'tool_result', data: { id: 'read-1', content: 'first second', isError: false } });
 
-    expect(JSON.parse(log.toReportInput())).toEqual([
+    expect(log.toReportInput().trim().split('\n').map((line) => JSON.parse(line))).toEqual([
       { kind: 'provider_event', event: { type: 'tool_use', data: { id: 'read-1', tool: 'Read', input: {} } } },
       { kind: 'provider_event', event: { type: 'tool_result', data: { id: 'read-1', content: 'first second', isError: false } } },
     ]);
@@ -165,7 +165,7 @@ describe('Phase1ExecutionLog', () => {
     log.recordEvent({ type: 'tool_result', data: { content: 'no id', isError: false } });
     log.recordEvent({ type: 'tool_output', data: { id: 'pending', tool: 'Read', output: 'unmatched' } });
 
-    expect(JSON.parse(log.toReportInput()).filter((entry: { event: { type: string } }) => entry.event.type === 'tool_output')).toHaveLength(4);
+    expect(log.toReportInput().trim().split('\n').map((line) => JSON.parse(line)).filter((entry: { event: { type: string } }) => entry.event.type === 'tool_output')).toHaveLength(4);
   });
 
   it('does not combine reused tool ids across attempts or sources', () => {
@@ -181,7 +181,7 @@ describe('Phase1ExecutionLog', () => {
     log.recordEvent({ type: 'tool_result', data: { id: 'reused', content: 'first', isError: false } }, 'leader');
     log.recordEvent({ type: 'tool_result', data: { id: 'reused', content: 'other', isError: false } }, 'part');
 
-    const outputs = JSON.parse(log.toReportInput()).filter((entry: { event?: { type: string } }) => entry.event?.type === 'tool_output');
+    const outputs = log.toReportInput().trim().split('\n').map((line) => JSON.parse(line)).filter((entry: { event?: { type: string } }) => entry.event?.type === 'tool_output');
     expect(outputs).toEqual([
       { kind: 'provider_event', source: 'leader', event: { type: 'tool_output', data: { id: 'reused', tool: 'Read', output: 'first' } } },
     ]);
@@ -201,7 +201,7 @@ describe('Phase1ExecutionLog', () => {
       },
     });
 
-    const entries = JSON.parse(log.toReportInput());
+    const entries = log.toReportInput().trim().split('\n').map((line) => JSON.parse(line));
     expect(entries).toEqual([{
       kind: 'attempt_result', status: 'done', content: '',
       structuredOutput: {
@@ -214,4 +214,26 @@ describe('Phase1ExecutionLog', () => {
     }]);
     expect(log.toReportInput()).not.toContain('synthetic-secret-123');
   });
+  it('splits a multi-megabyte event into searchable masked chunks without losing Unicode text', () => {
+    const log = new Phase1ExecutionLog();
+    const content = `${'あ'.repeat(1_000_000)} observation-middle: current.ts:42 ${'😀'.repeat(500_000)}`;
+    log.recordEvent({ type: 'tool_result', data: { id: 'huge', content, isError: false } });
+    log.recordResult({ status: 'done', content: 'password=synthetic-secret' });
+    const output = log.toReportInput();
+    const lines = output.trim().split('\n');
+    const entries = lines.map((line) => JSON.parse(line));
+    const chunks = entries.filter((entry) => entry.kind === 'content_chunk');
+    expect(entries[0].event.data.content.chunks).toBe(chunks.length);
+    expect(chunks.every((chunk) => chunk.content.length <= 2000)).toBe(true);
+    expect(chunks.map((chunk) => chunk.content).join('')).toBe(content);
+    expect(chunks.every((chunk, index) => chunk.entry === 0 && chunk.part === index + 1
+      && chunk.total === chunks.length && chunk.field.join('.') === 'event.data.content')).toBe(true);
+    const middle = lines.findIndex((line) => line.includes('observation-middle'));
+    expect(middle).toBeGreaterThan(1);
+    expect(middle).toBeLessThan(lines.length - 2);
+    expect(lines[middle]!.length).toBeLessThan(2500);
+    expect(output).not.toContain('synthetic-secret');
+    expect(entries.at(-1).kind).toBe('attempt_result');
+  });
+
 });

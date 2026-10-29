@@ -27,7 +27,9 @@ import {
   providerSupportsMaxTurns,
   providerSupportsPermissionControls,
   providerSupportsStructuredOutput,
+  providerSupportsAllowedTools,
 } from '../../../infra/providers/provider-capabilities.js';
+import { reportPhaseEventTools } from '../report-phase-tools.js';
 import type {
   ProviderActivityCallback,
   ProviderType,
@@ -728,13 +730,14 @@ export class OptionsBuilder {
     };
   }
 
-  /** Preserve explicit readonly/tool-free constraints for DeepSeek validation; other providers keep their readonly policy. */
-  private resolveReadonlyPhaseConstraints(
+  private resolveReportPhaseConstraints(
     step: WorkflowStep,
-    allowedTools: string[] | undefined,
     runtime?: RuntimeStepResolution,
   ): Pick<RunAgentOptions, 'permissionMode' | 'permissionResolution' | 'allowedTools'> {
     const { provider: resolvedProvider } = this.resolveStepProviderModel(step, runtime);
+    const allowedTools = providerSupportsAllowedTools(resolvedProvider) === true
+      ? [...reportPhaseEventTools(resolvedProvider)]
+      : undefined;
     if (resolvedProvider === 'deepseek-harness') {
       // The SDK cannot enforce report-phase tool restrictions. Keep even the
       // synthetic empty allowlist so the provider refuses before any tool runs.
@@ -742,9 +745,7 @@ export class OptionsBuilder {
     }
     const supportsPermissionControls = providerSupportsPermissionControls(resolvedProvider);
     if (supportsPermissionControls === false) {
-      // Empty tools are the synthetic report-phase default. Preserve a
-      // non-empty caller constraint so unsupported providers can reject it at
-      // their boundary instead of silently running without the constraint.
+      // Preserve constraints for validation at providers without permission controls.
       return allowedTools !== undefined && allowedTools.length > 0
         ? { allowedTools }
         : {};
@@ -757,7 +758,7 @@ export class OptionsBuilder {
   }
 
   /**
-   * Build RunAgentOptions for session-resume phases (Phase 2, Phase 3).
+   * Build RunAgentOptions for the resumed report phase (Phase 2).
    *
    * step の `structured_output` は Phase 1 の遷移判定用であって、report phase の
    * 成果物ではない。ここで outputSchema を渡すと provider が Phase 2 でもスキーマ
@@ -772,7 +773,7 @@ export class OptionsBuilder {
     const maxTurns = this.resolveSupportedMaxTurns(step, overrides.maxTurns, runtime);
     return {
       ...this.buildReadonlyPhaseBaseOptions(step, undefined, runtime),
-      ...this.resolveReadonlyPhaseConstraints(step, [], runtime),
+      ...this.resolveReportPhaseConstraints(step, runtime),
       sessionId,
       ...(maxTurns !== undefined ? { maxTurns } : {}),
     };
@@ -781,13 +782,13 @@ export class OptionsBuilder {
   /** Build RunAgentOptions for Phase 2 retry with a new session */
   buildNewSessionReportOptions(
     step: WorkflowStep,
-    overrides: Pick<RunAgentOptions, 'allowedTools' | 'maxTurns'>,
+    overrides: Pick<RunAgentOptions, 'maxTurns'>,
     runtime?: RuntimeStepResolution,
   ): RunAgentOptions {
     const maxTurns = this.resolveSupportedMaxTurns(step, overrides.maxTurns, runtime);
     return {
       ...this.buildReadonlyPhaseBaseOptions(step, undefined, runtime),
-      ...this.resolveReadonlyPhaseConstraints(step, overrides.allowedTools, runtime),
+      ...this.resolveReportPhaseConstraints(step, runtime),
       ...(maxTurns !== undefined ? { maxTurns } : {}),
     };
   }
@@ -795,7 +796,7 @@ export class OptionsBuilder {
   buildFallbackReportOptions(
     step: WorkflowStep,
     failedPrimaryOptions: RunAgentOptions,
-    overrides: Pick<RunAgentOptions, 'allowedTools' | 'maxTurns'>,
+    overrides: Pick<RunAgentOptions, 'maxTurns'>,
   ): RunAgentOptions | undefined {
     if (this.engineOptions.reportFallbackProvider === undefined) {
       return undefined;
@@ -807,7 +808,7 @@ export class OptionsBuilder {
     const maxTurns = this.resolveSupportedMaxTurns(step, overrides.maxTurns, fallbackRuntime);
     const options: RunAgentOptions = {
       ...this.buildReadonlyPhaseBaseOptions(step, undefined, fallbackRuntime),
-      ...this.resolveReadonlyPhaseConstraints(step, overrides.allowedTools, fallbackRuntime),
+      ...this.resolveReportPhaseConstraints(step, fallbackRuntime),
       workflowMeta: failedPrimaryOptions.workflowMeta,
       sessionId: undefined,
       ...(maxTurns !== undefined ? { maxTurns } : {}),

@@ -6467,10 +6467,10 @@ describe('WorkflowEngine Integration: team_leader report phase fallback', () => 
   let engine: WorkflowEngine | undefined;
 
   function executionEntriesFromReportPrompt(): Array<Record<string, unknown>> {
-    const reportCall = vi.mocked(runAgent).mock.calls.find(([, , options]) => options?.allowedTools?.length === 0);
+    const reportCall = vi.mocked(runAgent).mock.calls.find(([, , options]) => options?.executionPhase === 2);
     const logPath = reportCall?.[1].split('\n').find((line) => line.startsWith('- Path: '))?.slice('- Path: '.length);
     if (logPath === undefined) throw new Error('Phase 1 execution log reference missing from report prompt');
-    return JSON.parse(readFileSync(logPath, 'utf8')) as Array<Record<string, unknown>>;
+    return readFileSync(logPath, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) as Array<Record<string, unknown>>;
   }
 
   function createReportPhaseStructuredCaller(): StructuredCaller {
@@ -6701,7 +6701,7 @@ describe('WorkflowEngine Integration: team_leader report phase fallback', () => 
     expect(feedback).toMatchObject({ status: 'done', structuredOutput: {
       done: true, reasoning: 'token=[REDACTED]', cancelPartIds: [], parts: [],
     } });
-    const reportPrompt = vi.mocked(runAgent).mock.calls.find(([, , options]) => options?.allowedTools?.length === 0)?.[1];
+    const reportPrompt = vi.mocked(runAgent).mock.calls.find(([, , options]) => options?.executionPhase === 2)?.[1];
     expect(reportPrompt).not.toContain('synthetic-secret-123');
   });
 

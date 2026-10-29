@@ -177,7 +177,7 @@ describe('OpenCode Skill execution contract', () => {
   });
 
   it('keeps Skill off for a fresh-session report retry while retaining the step setting', async () => {
-    const options = optionsBuilder().buildNewSessionReportOptions(step, { allowedTools: ['Read'] });
+    const options = optionsBuilder().buildNewSessionReportOptions(step, {});
     expect(options.providerOptions).toMatchObject({ opencode: { skills: { enabled: true } } });
     const response = await runAgent(undefined, 'report retry', options);
     expect(response.status).toBe('done');

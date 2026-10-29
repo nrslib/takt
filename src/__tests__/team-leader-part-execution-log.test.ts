@@ -43,7 +43,7 @@ describe('team leader part execution log', () => {
       { forceNewSession: false, deadlineSignal: controller.signal, providerInfo, phase1ExecutionLog: log },
     )).rejects.toBe(cancellation);
 
-    const entries = JSON.parse(log.toReportInput()) as Array<{ kind: string; status?: string; content?: string }>;
+    const entries = log.toReportInput().trim().split('\n').map((line) => JSON.parse(line)) as Array<{ kind: string; status?: string; content?: string }>;
     expect(entries.filter((entry) => entry.kind === 'attempt_result').map((entry) => entry.status))
       .toEqual(['cancelled']);
     expect(log.toReportInput()).toContain('partial evidence');
