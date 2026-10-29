@@ -256,9 +256,15 @@ test('manager work split is active, explicit, costly and has no prepare targets'
   assert.deepEqual(config.providers.map(({ config: { model, reasoning_effort } }) => [model, reasoning_effort]), [
     ['gpt-6-sol', 'low'], ['claude-opus-5', undefined], ['gpt-6-luna', 'max'],
   ]);
-  assert.equal(config.tests.length, 34);
-  assert.equal(new Set(config.tests.map(({ vars }) => vars.case)).size, 17);
-  for (const caseId of ['constraint-carryover-data', 'summary-keeps-constraint-web', 'escalate-repeated-failure', 'escalate-not-on-first-failure', 'integration-already-checked']) {
+  assert.equal(config.tests.length, 56);
+  assert.equal(new Set(config.tests.map(({ vars }) => vars.case)).size, 28);
+  for (const caseId of [
+    'constraint-carryover-data', 'summary-keeps-constraint-web', 'escalate-repeated-failure',
+    'escalate-not-on-first-failure', 'integration-already-checked', 'mail-dispatch-state',
+    'local-config-tampering', 'offline-sync-queue', 'report-publish-replacement',
+    'reservation-validation', 'legacy-date-format', 'archive-test-coverage', 'quoted-csv-fields',
+    'inventory-retry-idempotency', 'conflicting-calendar-visibility', 'unchanged-adjudication',
+  ]) {
     assert.deepEqual(config.tests.filter(({ vars }) => vars.case === caseId).map(({ vars }) => vars.lang), ['ja', 'en']);
   }
 });

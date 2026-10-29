@@ -103,6 +103,18 @@ async function execute(config: WorkflowConfig, stepName: string, ruleIndex: numb
 }
 
 describe('shipped development completion and remediation routes', () => {
+  it.each(variants(['development-core', 'simple-core', 'simple']))('$language/$name returns blocked test creation to planning before it resumes', async ({ language, name }) => {
+    const config = load(language, name);
+    for (const [ruleIndex, nextStep] of [[0, 'implement'], [1, 'implement'], [2, 'plan']] as const) {
+      start(config, 'write_tests');
+      expect((await execute(config, 'write_tests', ruleIndex)).nextStep).toBe(nextStep);
+    }
+    expect((await execute(config, 'plan', 0)).nextStep).toBe('write_tests');
+    const writeTests = config.steps.find(step => step.name === 'write_tests');
+    if (!writeTests) throw new Error('Missing write_tests step');
+    expect(determineRuleTransition(writeTests, 3)).toMatchObject({ nextStep: 'write_tests', requiresUserInput: true });
+  });
+
   it.each(variants(implementations))('$language/$name sends executable incompleteness to reimplement once, then hands remaining gaps to planning', async ({ language, name }) => {
     const config = load(language, name);
     start(config, 'implement');

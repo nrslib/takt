@@ -125,7 +125,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     for (const item of snapshot.items) {
       if (item.kind !== 'display_event' || displayed.current.has(item.event.id)) continue;
       displayed.current.add(item.event.id);
-      if (!item.event.suppressInitialDisplay) append(item.event.message);
+      append(item.event.message);
     }
     if (snapshot.readStatus === 'complete') selection.refresh(display);
   }, [snapshot.items, snapshot.readStatus, snapshot.error]);

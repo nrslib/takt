@@ -881,9 +881,10 @@ export function denormalizeProviderOptions(
         : {}),
     };
   }
-  if (providerOptions.kiro?.agent !== undefined || providerOptions.kiro?.guards?.callTimeoutMs !== undefined) {
+  if (providerOptions.kiro?.agent !== undefined || providerOptions.kiro?.effort !== undefined || providerOptions.kiro?.guards?.callTimeoutMs !== undefined) {
     raw.kiro = {
       ...(providerOptions.kiro.agent !== undefined ? { agent: providerOptions.kiro.agent } : {}),
+      ...(providerOptions.kiro.effort !== undefined ? { effort: providerOptions.kiro.effort } : {}),
       ...(providerOptions.kiro.guards?.callTimeoutMs !== undefined
         ? { guards: { call_timeout_ms: providerOptions.kiro.guards.callTimeoutMs } }
         : {}),
@@ -894,6 +895,15 @@ export function denormalizeProviderOptions(
       guards: {
         ...(providerOptions.cursor.guards.callTimeoutMs !== undefined
           ? { call_timeout_ms: providerOptions.cursor.guards.callTimeoutMs }
+          : {}),
+      },
+    };
+  }
+  if (providerOptions.devin?.guards?.callTimeoutMs !== undefined) {
+    raw.devin = {
+      guards: {
+        ...(providerOptions.devin.guards.callTimeoutMs !== undefined
+          ? { call_timeout_ms: providerOptions.devin.guards.callTimeoutMs }
           : {}),
       },
     };

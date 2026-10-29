@@ -99,6 +99,19 @@ export function resolveKiroCliPath(): string | undefined {
   return validateCliPath(config.kiroCliPath, 'kiro_cli_path');
 }
 
+export function resolveDevinCliPath(): string | undefined {
+  const envPath = process.env[envVarNameFromPath('devin_cli_path')];
+  if (envPath !== undefined) {
+    return validateCliPath(envPath, 'TAKT_DEVIN_CLI_PATH');
+  }
+
+  const config: GlobalConfig = loadGlobalConfig();
+  if (config.devinCliPath === undefined) {
+    return undefined;
+  }
+  return validateCliPath(config.devinCliPath, 'devin_cli_path');
+}
+
 export function resolveCopilotGithubToken(): string | undefined {
   const envKey = process.env[envVarNameFromPath('copilot_github_token')];
   if (envKey) return envKey;

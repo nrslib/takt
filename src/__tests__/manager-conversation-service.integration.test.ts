@@ -280,7 +280,7 @@ it('persists its reservation before acceptance and registration, retains it afte
   await finished();
   const reserved = store.read(record.id, record.assignment)!.approval!;
   expect(await submit(opened.attachmentId, { kind: 'message', text: 'replace' })).toMatchObject({ kind: 'error', code: 'registration_recovery' });
-  expect((await submit(opened.attachmentId, { kind: 'approve_summary', revision: 4 })).kind).toBe('accepted');
+  expect((await submit(opened.attachmentId, { kind: 'approve_summary', revision: 4, requirePending: true })).kind).toBe('accepted');
   await finished();
   expect(doubles.register.mock.calls.map(([input]) => input.id)).toEqual([reserved.goalId, reserved.goalId]);
   expect(store.read(record.id, record.assignment)).toMatchObject({ approval: { ...reserved, state: 'registered' }, pending: null, running: null });
@@ -724,33 +724,29 @@ it.each(([
   }
 });
 
-it.each([1, 4])('reads each goal once per snapshot with %i inquiries and notices per goal', async (count) => {
+it.each([1, 4])('caches goal projections after a completed initial read with %i inquiries per goal', async (count) => {
   const goals = [5, 6, 7].map((prefix) => ({ ...goalRecord(), id: `${prefix}50e8400-e29b-41d4-a716-446655440000`,
     questions: Array.from({ length: count }, (_, index) => ({ ...createInquiry({ body: `Question ${prefix}/${index}` }),
       createdAt: `2026-10-24T00:00:0${index}.000Z` })),
-    notifications: Array.from({ length: count }, (_, index) => ({ id: randomUUID(), kind: 'progress' as const,
-      body: `Notice ${prefix}/${index}\nComplete detail`, recordedAt: `2026-10-24T00:00:0${index}.000Z` })),
-    workLog: [{ id: randomUUID(), summary: `Work ${prefix}`, recordedAt: '2026-10-24T00:00:00.000Z' }],
   }));
   for (const goal of goals) await new GoalStore(repository).create(goal);
   const reads = vi.spyOn(privateFiles, 'readPrivateFileState');
   const config = vi.spyOn(managerConfig, 'resolveManagerConfig');
   const opened = await open();
-  for (const read of [opened.read, await service.snapshot(opened.attachmentId)]) {
-    reads.mockClear();
-    config.mockClear();
-    const items: SnapshotItem[] = [];
-    for await (const item of read.items) items.push(item);
-    expect(config).toHaveBeenCalledExactlyOnceWith(repository);
-    expect(reads.mock.calls.map(([path]) => path).filter((path) => basename(path) === 'goal.json').sort())
-      .toEqual(goals.map((goal) => join(repository, '.takt', 'goals', goal.id, 'goal.json')).sort());
-    expect(items.flatMap((item) => item.kind === 'goal' ? [item.goal.id] : [])).toEqual(goals.map((goal) => goal.id));
-    expect(items.flatMap((item) => item.kind === 'inquiry' ? [item.inquiry.question.id] : []))
-      .toEqual(Array.from({ length: count }, (_, index) => goals.map((goal) => goal.questions[index]!.id)).flat());
-    expect(items.flatMap((item) => item.kind === 'notice' ? [item.notice.id] : []))
-      .toEqual(Array.from({ length: count }, (_, index) => goals.map((goal) => goal.notifications[count - index - 1]!.id)).flat());
-    expect(items.flatMap((item) => item.kind === 'display_event' ? [item.event.id] : []))
-      .toEqual(goals.flatMap((goal) => [JSON.stringify([goal.id, 'work-log', goal.workLog[0]!.id]),
-        ...goal.notifications.map((notification) => JSON.stringify([goal.id, 'notification', notification.id]))]));
-  }
+  const items: SnapshotItem[] = [];
+  for await (const item of opened.read.items) items.push(item);
+  opened.read.complete();
+  expect(config).toHaveBeenCalledExactlyOnceWith(repository);
+  expect(reads.mock.calls.map(([path]) => path).filter((path) => basename(path) === 'goal.json').sort())
+    .toEqual(goals.map((goal) => join(repository, '.takt', 'goals', goal.id, 'goal.json')).sort());
+  expect(items.flatMap((item) => item.kind === 'goal' ? [item.goal.id] : [])).toEqual(goals.map((goal) => goal.id));
+  expect(items.flatMap((item) => item.kind === 'inquiry' ? [item.inquiry.question.id] : []))
+    .toEqual(Array.from({ length: count }, (_, index) => goals.map((goal) => goal.questions[index]!.id)).flat());
+  reads.mockClear();
+  const delta = await service.snapshot(opened.attachmentId);
+  const changes: SnapshotItem[] = [];
+  for await (const item of delta.items) changes.push(item);
+  expect(changes).toEqual([]);
+  delta.complete();
+  expect(reads.mock.calls.filter(([path]) => basename(path) === 'goal.json')).toHaveLength(0);
 });

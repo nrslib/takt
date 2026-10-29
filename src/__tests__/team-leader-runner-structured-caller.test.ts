@@ -38,6 +38,7 @@ import { makeInstructionContext } from './test-helpers.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import { TeamLeaderPartCancellation } from '../core/workflow/engine/team-leader-part-cancellation.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
+import { savePhase1ExecutionLog } from '../core/workflow/phase1-execution-log.js';
 import {
   buildTeamLeaderPartReportPath,
   TEAM_LEADER_FEEDBACK_SUMMARY_MAX_CHARS,
@@ -3236,6 +3237,8 @@ describe('TeamLeaderRunner with structuredCaller', () => {
       stepExecutor: {
         buildInstruction: vi.fn(buildLeaderOrMemberInstruction),
         prepareInstruction: vi.fn((...args: Parameters<typeof buildLeaderOrMemberInstruction>) => ({ text: buildLeaderOrMemberInstruction(...args), injectedReports: [] })),
+        savePhase1ExecutionLog: vi.fn((log, stepName, stepIteration) =>
+          savePhase1ExecutionLog(log, defaultTeamLeaderRunPaths.logsAbs, stepName, stepIteration)),
         applyPostExecutionPhases: vi.fn(async (_step, _state, _iteration, response) => response),
         persistPreviousResponseSnapshot: vi.fn(),
         emitStepReports: vi.fn(),

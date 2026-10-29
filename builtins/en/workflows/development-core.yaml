@@ -249,9 +249,9 @@ steps:
       testing_report_format:
         $param: testing_report_format
     rules:
-      - condition: Test creation is complete
+      - condition: Test work is complete
         next: implement
-      - condition: Test creation is skipped because the target is not implemented
+      - condition: Necessary tests cannot be created until after implementation
         next: implement
       - condition: Test creation cannot proceed
         next: plan

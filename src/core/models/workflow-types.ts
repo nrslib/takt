@@ -49,6 +49,7 @@ export type {
   CodexReasoningEffort,
   ClaudeEffort,
   CopilotEffort,
+  KiroEffort,
   ClaudeSandboxSettings,
   ProviderGuardOptions,
   CodexProviderOptions,

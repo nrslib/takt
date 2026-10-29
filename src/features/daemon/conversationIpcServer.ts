@@ -74,7 +74,7 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
   const cancelRead = (): void => {
     const old = snapshot;
     snapshot = undefined;
-    if (old !== undefined) { old.cancelled = true; void old.iterator.return(undefined).catch(() => { socket.destroy(); }); }
+    if (old !== undefined) { old.cancelled = true; old.read.cancel(); void old.iterator.return(undefined).catch(() => { socket.destroy(); }); }
   };
   const fail = (): void => {
     wakeControls();
@@ -138,7 +138,10 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
           await writeConversationFrame(socket, next.value.frame);
           current.started = true;
           current.boundary = next.value.boundary;
+          if (next.value.terminal && !current.cancelled && snapshot === current) current.read.complete();
         } catch {
+          current.read.cancel();
+          await current.iterator.return(undefined);
           if (snapshot === current) snapshot = undefined;
           if (!current.cancelled) await writeConversationFrame(socket, { protocolVersion: 1, type: 'event',
             conversationId: current.read.conversationId, output: { kind: 'transfer_error', transferId: current.read.transferId, code: 'read_failed' } });

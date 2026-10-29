@@ -57,6 +57,11 @@ const CLASSIFICATIONS = [
   },
   {
     tier: 'active',
+    reason: 'write_tests の完了・実装先行・計画への差し戻しを日英で測る',
+    suites: ['write-tests-routing'],
+  },
+  {
+    tier: 'active',
     reason: '裁定、最終判定、再計画で外部確認だけを修正ループへ持ち越さない境界を測る',
     suites: [
       'review-external-confirmation',
@@ -155,6 +160,11 @@ const CLASSIFICATIONS = [
   },
   {
     tier: 'active',
+    reason: '判定専用の構造化出力と実際の Phase 1 実行記録から、確認範囲と未確認事項を分けて報告するか測る',
+    suites: ['phase1-execution-log-handoff'],
+  },
+  {
+    tier: 'active',
     reason: '変化を名指しし、その後も状態に合わせて振る舞うことを求め、同じ実体が存続する契約の発火・誤発火・証拠境界を測る',
     suites: [
       'state-after-event-plan',
@@ -234,6 +244,10 @@ const CLASSIFICATIONS = [
 ];
 
 const EXECUTION_OVERRIDES = {
+  'phase1-execution-log-handoff': {
+    defaultEligible: false, credentials: ['codex'], cost: 'standard',
+    reason: 'Terra medium で合成した Phase 1 実行記録の報告品質を明示評価する',
+  },
   'manager-work-split': {
     defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
     reason: 'Sol Low、Opus 5、Luna Max で日英の操作選択と引数を比較する明示選択の評価',
@@ -375,6 +389,12 @@ const EXECUTION_OVERRIDES = {
     credentials: ['codex', 'claude'],
     cost: 'high',
     reason: '日英・旧版と候補を Codex 2モデルと道具を使える Claude の強めた条件で比較する',
+  },
+  'write-tests-routing': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'high',
+    reason: '日英の4分岐を Sol High と Luna Max の実モデルで明示評価する',
   },
   'completion-scope-routing': {
     defaultEligible: false,
@@ -683,6 +703,7 @@ const EXECUTION_OVERRIDES = {
 };
 
 const PREPARE_TARGET_OVERRIDES = {
+  'phase1-execution-log-handoff': [],
   'manager-work-split': [],
   'finding-realistic-premise': [
     'rt', 'rc', 'rq', 'ne', 'np', 'nb', 'at', 'ac', 'aq', 'ae', 'ap', 'ab',
@@ -727,6 +748,7 @@ const PREPARE_TARGET_OVERRIDES = {
   'interactive-topic-boundary': [],
   'completion-scope-structured': [],
   'phase3-follow-input': [],
+  'write-tests-routing': [],
   'remediation-evidence': [],
   'fix-verifier-model-matrix': ['fix-verifier-state-closure'],
   'fix-verifier-routing-model-matrix': ['fix-verifier-state-routing'],
