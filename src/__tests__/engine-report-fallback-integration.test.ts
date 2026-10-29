@@ -6,6 +6,7 @@ import type { StructuredCaller } from '../agents/structured-caller.js';
 import type { RunAgentOptions } from '../agents/runner.js';
 import type { AgentResponse, WorkflowConfig } from '../core/models/index.js';
 import { WorkflowEngine } from '../core/workflow/index.js';
+import { reportPhaseEventTools } from '../core/workflow/report-phase-tools.js';
 import type { StreamEvent } from '../shared/types/provider.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import { LiveInterventionFileStore } from '../infra/workflow/live-intervention-store.js';
@@ -133,7 +134,7 @@ describe('WorkflowEngine report fallback integration', () => {
       expect(prompt).toContain('An earlier ordinary user requirement.');
       expect(prompt).toContain('Implementation and checks completed.');
       expect(prompt).not.toContain(pending);
-      expect(options?.allowedTools).toEqual(options?.resolvedProvider === 'codex' ? undefined : ['Read', 'Glob', 'Grep']);
+      expect(options?.allowedTools).toEqual(options?.resolvedProvider === 'codex' ? undefined : reportPhaseEventTools(options?.resolvedProvider));
     }
     if (resume) {
       expect(reports[1]![2]?.sessionId).toBeUndefined();
@@ -338,7 +339,7 @@ describe('WorkflowEngine report fallback integration', () => {
         else expect(prompt).not.toContain(revision);
       }
       expect(prompt).toContain('Implementation and checks completed.');
-      expect(options?.allowedTools).toEqual(options?.resolvedProvider === 'codex' ? undefined : ['Read', 'Glob', 'Grep']);
+      expect(options?.allowedTools).toEqual(options?.resolvedProvider === 'codex' ? undefined : reportPhaseEventTools(options?.resolvedProvider));
       expect(options?.sessionId).toBeUndefined();
     }
     expect(reports[1]![2]?.resolvedProvider).toBe('codex');
@@ -519,7 +520,7 @@ describe('WorkflowEngine report fallback integration', () => {
     expect(executionLog).toContain('current file content');
     expect(executionLog).toContain('Checked the current file.');
     expect(reportPrompt).toContain('Review current.ts');
-    expect(calls[2]?.[2]?.allowedTools).toEqual(['Read', 'Glob', 'Grep']);
+    expect(calls[2]?.[2]?.allowedTools).toEqual(reportPhaseEventTools(calls[2]?.[2]?.resolvedProvider));
   });
 
   it('keeps each repeated step execution record separate', async () => {

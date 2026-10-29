@@ -15,7 +15,6 @@ import type { NormalAgentWorkflowStep, WorkflowResumePointEntry, WorkflowStep } 
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { DeepSeekHarnessProvider } from '../infra/providers/deepseek-harness.js';
 import { buildOpenCodePromptTools } from '../infra/opencode/types.js';
-import { fromV2ToolName, toV2Tools } from '../infra/opencode/v2-contract.js';
 import { resolvePiActiveTools } from '../infra/providers/pi-tool-policy.js';
 
 function createPreToolUseInput(
@@ -1287,7 +1286,7 @@ describe('OptionsBuilder.buildResumeOptions', () => {
       const phase1 = builder.buildAgentOptions(readonlyStep);
       const expectedTools = ['codex', 'copilot', 'kiro', 'cursor', 'devin'].includes(provider) ? undefined
         : provider === 'pi' ? ['read', 'grep', 'find', 'ls', 'codemode']
-          : provider === 'opencode' ? ['read', 'list', 'skill', 'glob', 'grep']
+          : provider === 'opencode' ? ['read', 'list', 'glob', 'grep']
             : provider === 'mock' ? ['Read', 'Glob', 'Grep']
               : ['Read', 'Glob', 'Grep', 'Bash'];
       const primary = createStep({ provider: 'opencode', model: 'primary' });
@@ -1311,22 +1310,20 @@ describe('OptionsBuilder.buildResumeOptions', () => {
   );
 
   it.each([undefined, ['Read', 'Glob', 'Grep']])(
-    'preserves every OpenCode readonly tool id, including compatibility tools (%j)', (phase1AllowedTools) => {
+    'preserves OpenCode readonly file tools while excluding Skill from reports (%j)', (phase1AllowedTools) => {
       const step = createStep({ provider: 'opencode', model: 'opencode/test-model' });
       const builder = createBuilder(step);
       const phase1Tools = buildOpenCodePromptTools('readonly', undefined, phase1AllowedTools);
       const enabledNames = (tools: Record<string, boolean>): string[] => Object.entries(tools)
         .filter(([, enabled]) => enabled).map(([name]) => name);
       const phase1Names = enabledNames(phase1Tools);
+      expect(phase1Names).toContain('skill');
 
       for (const options of [
         builder.buildResumeOptions(step, 'session', { maxTurns: 3 }),
         builder.buildNewSessionReportOptions(step, { maxTurns: 3 }),
       ]) {
-        expect(new Set(options.allowedTools)).toEqual(new Set(phase1Names));
-        const reportTools = buildOpenCodePromptTools(options.permissionMode, undefined, options.allowedTools);
-        expect(reportTools).toEqual(phase1Tools);
-        expect(enabledNames(toV2Tools(reportTools)).map(fromV2ToolName)).toEqual(phase1Names);
+        expect(new Set(options.allowedTools)).toEqual(new Set(phase1Names.filter((name) => name !== 'skill')));
       }
     },
   );
@@ -1570,7 +1567,7 @@ describe('OptionsBuilder.buildNewSessionReportOptions', () => {
     });
 
     expect(options.resolvedProvider).toBe('opencode');
-    expect(options.allowedTools).toEqual(['read', 'list', 'skill', 'glob', 'grep']);
+    expect(options.allowedTools).toEqual(['read', 'list', 'glob', 'grep']);
     expect(Object.prototype.hasOwnProperty.call(options, 'maxTurns')).toBe(false);
     expect(options.maxTurns).toBeUndefined();
   });

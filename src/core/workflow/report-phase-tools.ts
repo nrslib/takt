@@ -13,7 +13,7 @@ export function reportPhaseEventTools(provider: RunAgentOptions['resolvedProvide
     case 'codex':
       return ['Bash'];
     case 'opencode':
-      return ['read', 'list', 'skill', 'glob', 'grep'];
+      return ['read', 'list', 'glob', 'grep'];
     case 'pi':
       return PI_READONLY_TOOLS;
     case 'copilot':

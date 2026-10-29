@@ -1316,8 +1316,10 @@ export class OpenCodeAttemptRunner {
       options.allowedMcpTools,
       options.strictToolAllowlist,
     );
-    if (openCodeRuntimeSelection().generation === 'v2') {
-      promptTools.skill = options.skillsEnabled === true && options.disableSkills !== true;
+    if (options.disableSkills === true) {
+      promptTools.skill = false;
+    } else if (openCodeRuntimeSelection().generation === 'v2') {
+      promptTools.skill = options.skillsEnabled === true;
     }
     log.debug('Selecting OpenCode agent', {
       agentName,

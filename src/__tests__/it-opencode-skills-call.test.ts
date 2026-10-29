@@ -189,6 +189,25 @@ describe('OpenCode Skill execution contract', () => {
     }
   });
 
+  it.each(['v1', 'v2'] as const)('disables Skill on both report routes while preserving readonly file tools on %s', async (generation) => {
+    vi.stubEnv('TAKT_OPENCODE_VERSION', generation);
+    const builder = optionsBuilder();
+    for (const options of [
+      builder.buildResumeOptions(step, 'phase1-session', {}),
+      builder.buildNewSessionReportOptions(step, {}),
+    ]) {
+      const result = await runAgent(undefined, 'report', options);
+      expect(result.status).toBe('done');
+      expect(options.providerOptions).toMatchObject({ opencode: { skills: { enabled: true } } });
+      expect(options.allowedTools).not.toContain('skill');
+    }
+    expect(promptAsync).toHaveBeenCalledTimes(2);
+    for (const [payload] of promptAsync.mock.calls) {
+      expect(payload.tools.skill).toBe(false);
+      expect(Object.keys(payload.tools).filter((name) => payload.tools[name])).toEqual(['read', 'list', 'glob', 'grep']);
+    }
+  });
+
   it('forces Skill off when strict-readonly is specified on a regular provider call', async () => {
     const response = await new OpenCodeProvider().setup({ name: 'internal' }).call('task', {
       ...callOptions(true), internalAgentIsolation: 'strict-readonly', permissionMode: 'readonly', allowedTools: ['Read'],
