@@ -8,10 +8,8 @@ import chalk from 'chalk';
 import type { SelectOptionItem, ViewportState } from './select-menu.js';
 import { countItemLines, countRenderedLines, renderSingleOption, renderCancelOption } from './select-menu.js';
 
-const HEADER_LINES = 4;
-
 /**
- * Create viewport state from terminal dimensions and menu content.
+ * Create viewport state from terminal dimensions, header height, and menu content.
  *
  * When all items fit within the available terminal space, viewport is
  * inactive and the menu renders without scrolling (identical to the
@@ -21,10 +19,11 @@ export function createViewportState<T extends string>(
   terminalRows: number,
   options: SelectOptionItem<T>[],
   hasCancelOption: boolean,
-  maxWidth = process.stdout.columns || 80,
+  maxWidth: number,
+  headerLines: number,
 ): ViewportState {
   const totalMenuLines = countRenderedLines(options, hasCancelOption, maxWidth);
-  const availableLines = Math.max(1, terminalRows - HEADER_LINES);
+  const availableLines = Math.max(1, terminalRows - headerLines);
 
   if (totalMenuLines <= availableLines) {
     return { scrollOffset: 0, maxOptionLines: availableLines, active: false };

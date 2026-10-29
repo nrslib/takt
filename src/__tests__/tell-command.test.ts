@@ -616,7 +616,7 @@ describe('runTellCommand', () => {
   ] as const)('keeps the $lang failure header within terminal width and allows selection (preferred=$preferred)', async ({
     lang, preferred, source, error, visibleReason,
   }) => {
-    const columns = 58;
+    const columns = 30;
     Object.defineProperty(process.stdout, 'columns', { value: columns, configurable: true });
     mockInspectTellableRunningTasks.mockReturnValue({ tasks: [target, alternateTarget], excluded: [] });
     if (source === 'provider') {

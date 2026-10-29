@@ -413,7 +413,7 @@ tui:
     settingValueRequired: "{command} には値が必要です。"
     imagePasteFailed: "画像を貼り付けられませんでした。"
   tell:
-    targetFailed: "送信先を特定できませんでした: {reason}"
+    targetFailed: "送信先不明: {reason}"
     targetUnresolved: "会話から送信先を一つに特定できませんでした。"
     targetInvalid: "アシスタントの応答形式が不正でした。"
     targetUnknown: "候補にない run が返されました。"
