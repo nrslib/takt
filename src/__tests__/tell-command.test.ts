@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TellableRunningTask } from '../features/tasks/liveIntervention.js';
+import { getDisplayWidth } from '../shared/utils/text.js';
 import { makeSessionContext } from './test-helpers.js';
 
 const {
@@ -73,12 +74,14 @@ const alternateTarget = {
 describe('runTellCommand', () => {
   let savedStdinIsTTY: boolean | undefined;
   let savedStdoutIsTTY: boolean | undefined;
+  let savedStdoutColumns: number | undefined;
   let savedNoTty: string | undefined;
   let savedTouchTty: string | undefined;
 
   beforeEach(() => {
     savedStdinIsTTY = process.stdin.isTTY;
     savedStdoutIsTTY = process.stdout.isTTY;
+    savedStdoutColumns = process.stdout.columns;
     savedNoTty = process.env.TAKT_NO_TTY;
     savedTouchTty = process.env.TAKT_TEST_FLG_TOUCH_TTY;
     Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
@@ -103,6 +106,7 @@ describe('runTellCommand', () => {
   afterEach(() => {
     Object.defineProperty(process.stdin, 'isTTY', { value: savedStdinIsTTY, configurable: true });
     Object.defineProperty(process.stdout, 'isTTY', { value: savedStdoutIsTTY, configurable: true });
+    Object.defineProperty(process.stdout, 'columns', { value: savedStdoutColumns, configurable: true });
     if (savedNoTty === undefined) {
       delete process.env.TAKT_NO_TTY;
     } else {
@@ -576,14 +580,14 @@ describe('runTellCommand', () => {
     });
 
     expect(mockCallAIWithRetry).toHaveBeenCalledTimes(2);
-    expect(mockSelectOption).toHaveBeenCalledWith(expect.stringMatching(/conversation.*recipient/i), expect.any(Array));
+    expect(mockSelectOption).toHaveBeenCalledWith(expect.stringMatching(/conversation did not identify/i), expect.any(Array));
     expect(mockIssueTellableRunningTask).not.toHaveBeenCalled();
   });
 
   it.each([
     { kind: 'unknown candidate', response: { result: { success: true, content: JSON.stringify({ runSlug: 'unknown-run' }) } }, reason: /not among the candidates/i },
     { kind: 'provider failure', response: { result: null, error: 'target unavailable' }, reason: /target unavailable/i },
-    { kind: 'undecided', response: { result: { success: true, content: '{"runSlug":null}' } }, reason: /conversation.*recipient/i },
+    { kind: 'undecided', response: { result: { success: true, content: '{"runSlug":null}' } }, reason: /conversation did not identify/i },
   ])('asks the user with a reason after two target resolution failures: $kind', async ({ response, reason }) => {
     mockInspectTellableRunningTasks.mockReturnValue({ tasks: [target, alternateTarget], excluded: [] });
     mockCallAIWithRetry.mockResolvedValueOnce(response).mockResolvedValueOnce(response);
@@ -602,6 +606,47 @@ describe('runTellCommand', () => {
     expect(options).toEqual(expect.arrayContaining([expect.objectContaining({ value: alternateTarget.runSlug })]));
     expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringContaining('payments-run'));
     expect(mockIssueTellableRunningTask).toHaveBeenCalledWith('/project', alternateTarget.runSlug, 'Generated standalone instruction.');
+  });
+
+  it.each([
+    { lang: 'en', preferred: false, source: 'provider', error: `\u001b[31mA\nB\t${'x'.repeat(240)}`, visibleReason: 'A\\nB\\t' },
+    { lang: 'en', preferred: true, source: 'provider', error: `\u001b[31mA\nB\t${'x'.repeat(240)}`, visibleReason: 'A\\nB\\t' },
+    { lang: 'ja', preferred: false, source: 'exception', error: `\u001b[31m異常\n詳細\t${'長'.repeat(240)}`, visibleReason: '異常\\n詳細\\t' },
+    { lang: 'ja', preferred: true, source: 'exception', error: `\u001b[31m異常\n詳細\t${'長'.repeat(240)}`, visibleReason: '異常\\n詳細\\t' },
+  ] as const)('keeps the $lang failure header within terminal width and allows selection (preferred=$preferred)', async ({
+    lang, preferred, source, error, visibleReason,
+  }) => {
+    const columns = 58;
+    Object.defineProperty(process.stdout, 'columns', { value: columns, configurable: true });
+    mockInspectTellableRunningTasks.mockReturnValue({ tasks: [target, alternateTarget], excluded: [] });
+    if (source === 'provider') {
+      mockCallAIWithRetry.mockResolvedValueOnce({ result: null, error })
+        .mockResolvedValueOnce({ result: null, error });
+    } else {
+      mockCallAIWithRetry.mockRejectedValueOnce(new Error(error))
+        .mockRejectedValueOnce(new Error(error));
+    }
+    const selector = preferred ? mockSelectOptionWithDefault : mockSelectOption;
+    selector.mockResolvedValueOnce(alternateTarget.runSlug);
+
+    await runTellCommand({
+      cwd: '/project', lang, inlineText: 'Apply this to payments.', history: [],
+      sessionContext: makeSessionContext(),
+      ...(preferred ? { preferredRunSlug: alternateTarget.runSlug } : {}),
+    });
+
+    const prompt = String(selector.mock.calls[0]?.[0]);
+    const [failureLine, selectionLine] = prompt.split('\n');
+    expect(getDisplayWidth(failureLine!)).toBeLessThanOrEqual(columns);
+    expect(failureLine).toContain(visibleReason);
+    expect(failureLine).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/u);
+    expect(selectionLine).toBeTruthy();
+    expect(mockCallAIWithRetry).toHaveBeenCalledTimes(3);
+    expect(selector).toHaveBeenCalledTimes(1);
+    expect(preferred ? mockSelectOption : mockSelectOptionWithDefault).not.toHaveBeenCalled();
+    expect(mockIssueTellableRunningTask).toHaveBeenCalledWith(
+      '/project', alternateTarget.runSlug, 'Generated standalone instruction.',
+    );
   });
 
   it('reports missing generation context before asking for a recipient', async () => {

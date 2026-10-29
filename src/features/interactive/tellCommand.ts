@@ -293,7 +293,10 @@ export async function runTellCommand(options: TellCommandOptions): Promise<strin
       selectionShown = true;
       const candidateOptions = candidates.map(tellCandidateOption);
       const selectorPrompt = [
-        getLabel('tui.tell.targetFailed', options.lang, { reason: resolution.reason }),
+        truncateText(
+          getLabel('tui.tell.targetFailed', options.lang, { reason: resolution.reason }),
+          process.stdout.columns || 80,
+        ),
         getLabel('tui.tell.selectPrompt', options.lang),
         ...(exclusionNotice === undefined ? [] : [exclusionNotice]),
       ].join('\n');
