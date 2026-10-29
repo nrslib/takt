@@ -1007,7 +1007,7 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
     await closeDeepSeekHarnessProcesses();
 
     expect(endpoint.requests).toHaveLength(1);
-    expect(endpoint.requests[0]?.apiKey).toContain(credential);
+    expect(endpoint.requests[0]?.apiKey).toBe(credential);
     expect(response.status).toBe('error');
     expect(response.content).not.toContain(credential);
     expect(response.content).toMatch(/credential|auth/iu);
