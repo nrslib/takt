@@ -72,6 +72,7 @@ export class TaskRunner {
     headRepositoryUrl: string; headRepositoryPushUrls: readonly string[];
     workflow: string; method: MergeMethod; worktreePath: string;
     threatCheckMaxDiffBytes: number;
+    concurrency?: number;
     parentTaskName?: string;
   }): TaskInfo {
     return this.lifecycle.startPrMergeTask(input);

@@ -231,7 +231,7 @@ describe('providerEventLogger', () => {
     });
   });
 
-  it('should preserve 1000 metadata characters and truncate 1001 characters', () => {
+  it('should preserve provider event data beyond 1000 characters', () => {
     const logger = createProviderEventLogger({
       logsDir: tempDir,
       sessionId: 'session-metadata-boundary',
@@ -255,9 +255,27 @@ describe('providerEventLogger', () => {
       .split('\n')
       .map((line) => JSON.parse(line) as ProviderEventLogRecord);
     expect(records[0]?.data['tool']).toBe(atLimit);
-    expect(records[1]?.data['tool']).toHaveLength(1_000);
-    expect(records[1]?.data['tool']).not.toBe(overLimit);
-    expect(records[1]?.data['tool']).toMatch(/\.\.\.\[truncated\]$/);
+    expect(records[1]?.data['tool']).toBe(overLimit);
+  });
+
+  it('should retain a large provider event and mask secrets within it', () => {
+    const logger = createProviderEventLogger({
+      logsDir: tempDir,
+      sessionId: 'session-large-event',
+      runId: 'run-large-event',
+      enabled: true,
+    });
+    const content = `begin-${'x'.repeat(51_000)}-end`;
+    logger.logEvent({ provider: 'codex', providerModel: 'gpt-5', step: 'review' }, {
+      type: 'tool_result',
+      data: { id: 'large-call', content, isError: false, token: 'SECRET_VALUE' },
+    } as import('../shared/types/provider.js').StreamEvent);
+
+    const persisted = readFileSync(logger.filepath, 'utf-8').trim();
+    const record = JSON.parse(persisted) as ProviderEventLogRecord;
+    expect(record.data['content']).toBe(content);
+    expect(record.data['token']).toBe('[REDACTED]');
+    expect(persisted).not.toContain('SECRET_VALUE');
   });
 
   it('should bound long step metadata without adding derived identifiers', () => {

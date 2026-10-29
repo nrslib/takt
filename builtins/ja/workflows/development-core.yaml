@@ -244,9 +244,9 @@ steps:
       testing_report_format:
         $param: testing_report_format
     rules:
-      - condition: テスト作成が完了した
+      - condition: テスト作業を終えた
         next: implement
-      - condition: テスト対象が未実装のためテスト作成をスキップする
+      - condition: 実装後でなければ必要なテストを作成できない
         next: implement
       - condition: テスト作成を進行できない
         next: plan

@@ -60,7 +60,7 @@ Read failures, invalid UTF-8, or exceeding 8KiB per source or 32KiB in total are
 
 Set the judge's provider and model through `provider.targets.internal_agents.manager-permission-judge` in `runtime.yaml`. Like other internal agent seats, it accepts `profile` or `ladder`, but not `pool`. If unassigned, it uses the same provider, model, and provider options as the manager.
 
-The judge has a short deadline. A timeout, exception, or invalid decision format denies the operation, without an automatic retry of the judgment.
+The judge has a 30-second deadline. A timeout follows the same human confirmation flow as an “ask a person” decision: an approval inquiry is saved, the operation is stopped pending confirmation, and a notification is sent. Exceptions and invalid decision formats still deny the operation. The judgment is not retried automatically.
 
 Assign user MCP servers through the existing `runtime.yaml` rules. For example, to assign a browser MCP server you have installed:
 
@@ -83,13 +83,25 @@ Replace `command` with your server executable. No browser MCP server is bundled 
 
 Before processing each project's events, the daemon recovers interrupted tasks as `failed` and creates completion events for goal tasks. Recovery runs even without pending tasks, so restarting `takt run` is unnecessary. The manager reads the recovered task state when handling patrol events. Recovery failures are logged and passed to the existing patrol-interval and shutdown notification checks while subsequent processing continues. Recovery requires an absent or dead owner PID, or a known mismatch between the saved and current owner start times. A live PID with unavailable saved or current owner identity is left running.
 
-The daemon periodically inspects unfinished active goals. `manager.patrol_interval` is a positive integer in seconds, defaulting to `1800` (30 minutes); project settings override global settings. The first patrol for a new goal is measured from creation, and later patrols from the previous completion. It checks long-running work, repeated steps, stalled goals and unanswered questions, then resumes, retries or notifies as needed. For running tasks, manager can request an individual stop; issues it cannot resolve are reported to a person. Failed patrols send `blocked` and are checked again after the interval. Ordinary failed events remaining in the inbox are also retried during patrol.
+The daemon periodically inspects unfinished active goals. `manager.patrol_interval` is a positive integer in seconds, defaulting to `900` (15 minutes); project settings override global settings. The first patrol for a new goal is measured from creation, and later patrols from the previous completion. It checks long-running work, repeated steps, stalled goals and unanswered questions, then resumes, retries or notifies as needed. For running tasks, manager can request an individual stop; issues it cannot resolve are reported to a person. Failed patrols send `blocked` and are checked again after the interval. Ordinary failed events remaining in the inbox are also retried during patrol.
 
 ## Workspace
 
 Ask to add `/path/to/web`, remove a repository from the assignment, or rename the workspace. Starting from any member repository opens the same workspace. Each goal proceeds in one repository.
 
 Removing an assignment does not delete the repository or its goals. Repositories with unfinished goals cannot be removed; complete or abort those goals first. Starting outside a repository lets you choose a workspace.
+
+## Slack conversations
+
+In a conversation thread, send `/make-goal` to create a proposal. Use **Approve registration** or **Continue conversation**; buttons on an outdated proposal no longer work.
+
+You can talk to manager from one configured Slack channel using Socket Mode, without exposing a public URL. Follow [Slack conversations with manager](./configuration.md#slack-conversations-with-manager) to create and install the App, set `TAKT_SLACK_APP_TOKEN` and `TAKT_SLACK_BOT_TOKEN` in the shell that starts the daemon, and configure `manager.slack` in the repository's `.takt/config.yaml`. Start the daemon with `takt manager` or `takt daemon`.
+
+A post outside a thread receives a reply in that post's thread. Continue there; all conversation threads share the repository's manager conversation with the TUI. Replies go only to the originating thread, and replies to TUI messages do not appear in Slack. Messages sent while manager is processing receive a busy response and are not executed later; resend them after processing finishes. Only the configured channel and `allowed_user_ids` are accepted; DMs to the bot are ignored.
+
+Each inquiry (a question, approval, or operation request) is a new post outside any thread in the configured channel. Answer approval decisions (Allow or Deny and scope) and choices with buttons. Choosing an approval scope broader than this time only opens a modal; edit and confirm the proposed sentence to append it to permission Markdown. Answer free-text inquiries in the inquiry post's thread. When its inquiry binding is available, the reply is treated as an answer rather than a manager conversation message. Answers are saved with source `slack`. See the [configuration guide](./configuration.md#slack-conversations-with-manager) for pending inquiries and binding failure behavior.
+
+Completion notices and other notifications continue to use the Incoming Webhook configured by `TAKT_NOTIFY_WEBHOOK`, separately from conversation replies. Both can be enabled together.
 
 ## Answers, pause and abort
 
@@ -102,7 +114,7 @@ Open menus with the following keys, including while manager is processing.
 
 Pausing stops new submissions and integrations while running tasks continue and results are deferred. Resuming advances deferred events and tasks. Before aborting, confirm that the operation is irreversible and that records and branches remain; aborting interrupts the goal's running tasks and invalidates unstarted tasks. `Esc` closes the list without making changes. If there are no eligible targets, the TUI shows a notice instead of opening a list.
 
-Aborting is irreversible. Goal records and branches remain. Answers are saved for the run manager's next decision. Receiving answers from Slack is not implemented.
+Aborting is irreversible. Goal records and branches remain. Answers are saved for the run manager's next decision.
 
 ### Answering inquiries
 

@@ -6466,6 +6466,13 @@ describe('WorkflowEngine Integration: team_leader report phase fallback', () => 
   let tmpDir: string;
   let engine: WorkflowEngine | undefined;
 
+  function executionEntriesFromReportPrompt(): Array<Record<string, unknown>> {
+    const reportCall = vi.mocked(runAgent).mock.calls.find(([, , options]) => options?.allowedTools?.length === 0);
+    const logPath = reportCall?.[1].split('\n').find((line) => line.startsWith('- Path: '))?.slice('- Path: '.length);
+    if (logPath === undefined) throw new Error('Phase 1 execution log reference missing from report prompt');
+    return JSON.parse(readFileSync(logPath, 'utf8')) as Array<Record<string, unknown>>;
+  }
+
   function createReportPhaseStructuredCaller(): StructuredCaller {
     return {
       judgeStatus: async () => {
@@ -6604,6 +6611,98 @@ describe('WorkflowEngine Integration: team_leader report phase fallback', () => 
     expect(reportInstruction).toContain('Part audit finished');
     expect(state.personaSessions.get('["audit.part-1","mock"]')).toBe('part-session-1');
     expect(state.personaSessions.get('["testing-reviewer","mock"]')).toBe('report-session-1');
+  });
+
+  it('records every decomposition validation retry prompt and raw response', async () => {
+    mockRunAgentWithPrompt(
+      makeResponse({ persona: 'testing-reviewer', content: 'Part audit finished' }),
+      makeResponse({ persona: 'testing-reviewer', content: '# Audit Report' }),
+    );
+    const caller: StructuredCaller = { ...createReportPhaseStructuredCaller(), decomposeTask: async (_instruction, _limit, options) => {
+      for (const [attempt, content] of ['invalid decomposition', 'valid decomposition'].entries()) {
+        options.onPromptResolved?.({ systemPrompt: 'leader', userInstruction: `decomposition attempt ${attempt + 1}` });
+        options.onDispatch?.(options.permissionMode);
+        options.onAgentResponse?.(makeResponse({ persona: 'leader', content }));
+        if (attempt === 0) options.onValidationError?.(new Error('invalid decomposition'));
+      }
+      return { parts: [{ id: 'part-1', title: 'Audit flow', instruction: 'Inspect the workflow' }] };
+    } };
+    engine = new WorkflowEngine(createReportPhaseConfig(), tmpDir, 'run audit', {
+      projectCwd: tmpDir, provider: 'mock', reportDirName: 'decomposition-log', structuredCaller: caller,
+    });
+
+    expect((await engine.run()).status).toBe('completed');
+    const entries = executionEntriesFromReportPrompt().filter((entry) => entry.source === 'leader');
+    expect(entries.filter((entry) => entry.kind === 'instruction')).toHaveLength(2);
+    expect(entries.filter((entry) => entry.kind === 'attempt_result').map((entry) => [entry.status, entry.content, entry.error]))
+      .toEqual([
+        ['done', 'invalid decomposition', undefined],
+        ['error', '', 'invalid decomposition'],
+        ['done', 'valid decomposition', undefined],
+      ]);
+  });
+
+  it.each(['provider', 'validation'] as const)('records a failed feedback attempt before completing the report (%s)', async (mode) => {
+    mockRunAgentWithPrompt(
+      makeResponse({ persona: 'testing-reviewer', content: 'Part audit finished' }),
+      makeResponse({ persona: 'testing-reviewer', content: '# Audit Report' }),
+    );
+    const caller: StructuredCaller = { ...createReportPhaseStructuredCaller(), requestMoreParts: async (_instruction, _results, _ids, options) => {
+      options.onPromptResolved?.({ systemPrompt: 'leader', userInstruction: 'feedback attempt' });
+      options.onDispatch?.(options.permissionMode);
+      if (mode === 'provider') options.onAgentError?.(new Error('feedback provider failure'));
+      else {
+        options.onAgentResponse?.(makeResponse({ persona: 'leader', content: 'invalid feedback' }));
+        options.onValidationError?.(new Error('feedback validation failure'));
+      }
+      throw new Error(mode === 'provider' ? 'feedback provider failure' : 'feedback validation failure');
+    } };
+    engine = new WorkflowEngine(createReportPhaseConfig(), tmpDir, 'run audit', {
+      projectCwd: tmpDir, provider: 'mock', reportDirName: 'feedback-log', structuredCaller: caller,
+    });
+
+    await engine.run();
+    const entries = executionEntriesFromReportPrompt().filter((entry) => entry.source === 'leader');
+    expect(entries.some((entry) => entry.kind === 'instruction'
+      && (entry.prompt as { userInstruction: string }).userInstruction === 'feedback attempt')).toBe(true);
+    expect(entries).toContainEqual(expect.objectContaining({
+      kind: 'attempt_result', status: 'error', error: mode === 'provider'
+        ? 'feedback provider failure' : 'feedback validation failure',
+    }));
+    if (mode === 'validation') {
+      expect(entries).toContainEqual(expect.objectContaining({
+        kind: 'attempt_result', status: 'done', content: 'invalid feedback',
+      }));
+    }
+    expect(entries.some((entry) => entry.status === 'synthetic_fallback')).toBe(false);
+  });
+
+  it('preserves an empty native structured feedback response and masks its secret in Phase 2', async () => {
+    mockRunAgentWithPrompt(
+      makeResponse({ persona: 'testing-reviewer', content: 'Part audit finished' }),
+      makeResponse({ persona: 'testing-reviewer', content: '# Audit Report' }),
+    );
+    const reasoning = 'token=synthetic-secret-123';
+    const caller: StructuredCaller = { ...createReportPhaseStructuredCaller(), requestMoreParts: async (_instruction, _results, _ids, options) => {
+      options.onPromptResolved?.({ systemPrompt: 'leader', userInstruction: 'native feedback attempt' });
+      options.onDispatch?.(options.permissionMode);
+      options.onAgentResponse?.(makeResponse({ persona: 'leader', content: '', structuredOutput: {
+        done: true, reasoning, cancelPartIds: [], parts: [],
+      } }));
+      return { done: true, reasoning, cancelPartIds: [], parts: [] };
+    } };
+    engine = new WorkflowEngine(createReportPhaseConfig(), tmpDir, 'run audit', {
+      projectCwd: tmpDir, provider: 'mock', reportDirName: 'native-feedback-log', structuredCaller: caller,
+    });
+
+    expect((await engine.run()).status).toBe('completed');
+    const entries = executionEntriesFromReportPrompt().filter((entry) => entry.source === 'leader');
+    const feedback = entries.find((entry) => entry.kind === 'attempt_result' && entry.content === '');
+    expect(feedback).toMatchObject({ status: 'done', structuredOutput: {
+      done: true, reasoning: 'token=[REDACTED]', cancelPartIds: [], parts: [],
+    } });
+    const reportPrompt = vi.mocked(runAgent).mock.calls.find(([, , options]) => options?.allowedTools?.length === 0)?.[1];
+    expect(reportPrompt).not.toContain('synthetic-secret-123');
   });
 
   it('should record team_leader part and report attempts across retry and fallback providers', async () => {

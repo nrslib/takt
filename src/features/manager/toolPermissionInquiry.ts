@@ -1,4 +1,5 @@
 import type { ToolPermissionDecisionRequest } from '../../core/workflow/types.js';
+import { withInquiryLock } from '../../infra/goals/inquiry-lock.js';
 import { createInquiry } from '../../infra/goals/inquiry.js';
 import { addGoalQuestion, consumeGoalApproval, isSameGoalOperation } from '../../infra/goals/questions.js';
 import type { Goal, GoalQuestion, GoalQuestionInput } from '../../infra/goals/schema.js';
@@ -118,10 +119,10 @@ export async function saveManagerToolPermissionInquiry(input: {
     const candidate = createInquiry(inquiry);
     const matches = (question: GoalQuestion): boolean => question.kind === 'approval'
       && question.status === 'pending' && isSameGoalOperation(question, candidate);
-    const saved = await new GoalStore(input.goal.repositoryDirectory).update(input.goal.id, (current) => {
+    const saved = await withInquiryLock(input.configDirectory, () => new GoalStore(input.goal!.repositoryDirectory).update(input.goal!.id, (current) => {
       if (current.questions?.some(matches)) return current;
       return addGoalQuestion(current, inquiry).goal;
-    });
+    }));
     return saved.questions!.find(matches)!;
   }
   const store = new StandaloneInquiryStore(input.configDirectory, input.owner);

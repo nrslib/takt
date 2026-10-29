@@ -16,7 +16,7 @@ export function resolveManagerConfig(cwd: string): {
   const global = loadGlobalConfig().manager;
   return {
     autoRun: project?.autoRun ?? global?.autoRun ?? true,
-    patrolInterval: project?.patrolInterval ?? global?.patrolInterval ?? 1800,
+    patrolInterval: project?.patrolInterval ?? global?.patrolInterval ?? 900,
     defaultWorkflow: project?.defaultWorkflow ?? global?.defaultWorkflow,
     mainMerge: project?.mainMerge ?? 'approve',
     sensitivePaths: [...new Set([...defaultSensitivePaths, ...(global?.sensitivePaths ?? []), ...(project?.sensitivePaths ?? [])])],

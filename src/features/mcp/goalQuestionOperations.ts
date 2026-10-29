@@ -1,3 +1,5 @@
+import { getGlobalConfigDir } from '../../infra/config/paths.js';
+import { withInquiryLock } from '../../infra/goals/inquiry-lock.js';
 import { resolveConfigValue } from '../../infra/config/resolveConfigValue.js';
 import { GoalStore } from '../../infra/goals/store.js';
 import { addGoalQuestion, withdrawGoalQuestion } from '../../infra/goals/questions.js';
@@ -16,7 +18,7 @@ export function askTaktGoalQuestion(input: AskGoalQuestionInput, deps: McpOperat
     const matches = (question: GoalQuestion) => question.body === input.body
       && question.status === 'pending' && (question.kind ?? 'question') === kind;
     const store = new GoalStore(input.cwd);
-    const saved = await store.update(input.goalId, (current) => {
+    const saved = await withInquiryLock(getGlobalConfigDir(), () => store.update(input.goalId, (current) => {
       if (current.status === 'completed') throw new Error('Goal is completed. New questions cannot be added.');
       const existing = current.questions?.find(matches);
       if (existing !== undefined) return current;
@@ -28,7 +30,7 @@ export function askTaktGoalQuestion(input: AskGoalQuestionInput, deps: McpOperat
       return appendGoalNotification(added.goal, {
         kind: 'question', body: formatGoalQuestionNotification(question, resolveConfigValue(input.cwd, 'language')),
       }, policy);
-    });
+    }));
     const question = saved.questions!.find(matches)!;
     return { questionId: question.id };
   }, 'Goal question failed', 'question');

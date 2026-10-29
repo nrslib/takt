@@ -190,7 +190,8 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     caccia,
     merge,
     assistant: normalizeAssistantConfig(assistant),
-    manager: manager === undefined ? undefined : { autoRun: manager.auto_run, patrolInterval: manager.patrol_interval, defaultWorkflow: manager.default_workflow, mainMerge: manager.main_merge, notifications: manager.notifications, sensitivePaths: manager.sensitive_paths },
+    manager: manager === undefined ? undefined : { autoRun: manager.auto_run, patrolInterval: manager.patrol_interval, defaultWorkflow: manager.default_workflow, mainMerge: manager.main_merge, notifications: manager.notifications, sensitivePaths: manager.sensitive_paths,
+      slack: manager.slack === undefined ? undefined : { channelId: manager.slack.channel_id, allowedUserIds: manager.slack.allowed_user_ids } },
     taktProviders: normalizedTaktProviders,
     personaProviders: normalizedPersonaProviders,
     providerRouting: normalizedProviderRouting,
@@ -322,7 +323,8 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
   delete savePayload.caccia;
   delete savePayload.manager;
   if (config.manager !== undefined) {
-    savePayload.manager = { auto_run: config.manager.autoRun, patrol_interval: config.manager.patrolInterval, default_workflow: config.manager.defaultWorkflow, main_merge: config.manager.mainMerge, notifications: config.manager.notifications, sensitive_paths: config.manager.sensitivePaths };
+    savePayload.manager = { auto_run: config.manager.autoRun, patrol_interval: config.manager.patrolInterval, default_workflow: config.manager.defaultWorkflow, main_merge: config.manager.mainMerge, notifications: config.manager.notifications, sensitive_paths: config.manager.sensitivePaths,
+      slack: config.manager.slack === undefined ? undefined : { channel_id: config.manager.slack.channelId, allowed_user_ids: config.manager.slack.allowedUserIds } };
   }
   delete savePayload.merge;
   const rawMerge = denormalizeMergeConfig(config.merge);

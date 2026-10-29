@@ -53,12 +53,12 @@ steps:
       testing_instruction: simple-write-tests-first
       testing_report_format: test-report
     rules:
-      - condition: テスト作成が完了した
+      - condition: テスト作業を終えた
         next: implement
-      - condition: テスト対象が未実装のためテスト作成をスキップする
+      - condition: 実装後でなければ必要なテストを作成できない
         next: implement
       - condition: テスト作成を進行できない
-        next: ABORT
+        next: plan
       - condition: ユーザーへの確認事項があるためユーザー入力が必要
         next: write_tests
         requires_user_input: true

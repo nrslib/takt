@@ -352,7 +352,8 @@ export interface NotificationSoundEventsConfig {
  * Project-level configuration stored in .takt/config.yaml.
  */
 export interface ProjectConfig {
-  manager?: { autoRun?: boolean; patrolInterval?: number; defaultWorkflow?: string; mainMerge?: 'auto' | 'approve'; notifications?: ManagerNotifications; sensitivePaths?: string[] };
+  manager?: { autoRun?: boolean; patrolInterval?: number; defaultWorkflow?: string; mainMerge?: 'auto' | 'approve'; notifications?: ManagerNotifications; sensitivePaths?: string[];
+    slack?: { channelId: string; allowedUserIds: string[] } };
   /** UI / builtin resource language override for this project */
   language?: Language;
   /** Provider selection for agent runtime */
@@ -490,6 +491,9 @@ export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSu
   /** @globalOnly */
   /** External Kiro CLI path (overridden by TAKT_KIRO_CLI_PATH env var) */
   kiroCliPath?: string;
+  /** @globalOnly */
+  /** External Devin CLI path (overridden by TAKT_DEVIN_CLI_PATH env var) */
+  devinCliPath?: string;
   /** @globalOnly */
   /** Copilot GitHub token (overridden by TAKT_COPILOT_GITHUB_TOKEN env var) */
   copilotGithubToken?: string;

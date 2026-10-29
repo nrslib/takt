@@ -626,6 +626,98 @@ describe('resolveEffectiveProviderOptions', () => {
     )).toBe('env');
   });
 
+  it('kiro.effort は step > persona > config の優先で解決される', () => {
+    expect(resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      { kiro: { effort: 'low' } },
+      { kiro: { effort: 'high' } },
+      { kiro: { effort: 'medium' } },
+    )).toEqual({
+      kiro: { effort: 'high' },
+    });
+
+    expect(resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      { kiro: { effort: 'low' } },
+      undefined,
+      { kiro: { effort: 'medium' } },
+    )).toEqual({
+      kiro: { effort: 'medium' },
+    });
+
+    expect(resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      { kiro: { effort: 'low' } },
+      undefined,
+      undefined,
+    )).toEqual({
+      kiro: { effort: 'low' },
+    });
+
+    // Given kiro effort on step, When resolve, Then source is step
+    expect(resolveProviderOptionSource(
+      'kiro.effort',
+      { kiro: { effort: 'high' } },
+      [],
+      { kiro: { effort: 'low' } },
+      undefined,
+      'project',
+    )).toBe('step');
+  });
+
+  it('kiro.effort のみ指定でも結果は undefined にならない', () => {
+    const result = resolveEffectiveProviderOptions(
+      'global',
+      undefined,
+      { kiro: { effort: 'low' } },
+      { kiro: { effort: 'high' } },
+    );
+
+    expect(result).toBeDefined();
+    expect(result?.kiro).toEqual({ effort: 'high' });
+  });
+
+  it('devin.guards.callTimeoutMs は step が config より優先され結果に出る', () => {
+    const result = resolveEffectiveProviderOptions(
+      'project',
+      undefined,
+      { devin: { guards: { callTimeoutMs: 120_000 } } },
+      { devin: { guards: { callTimeoutMs: 240_000 } } },
+    );
+
+    expect(result).toEqual({
+      devin: { guards: { callTimeoutMs: 240_000 } },
+    });
+  });
+
+  it('env origin は devin.guards.callTimeoutMs の leaf にも適用される', () => {
+    const result = resolveEffectiveProviderOptions(
+      'project',
+      (path: string) => (path === 'devin.guards.callTimeoutMs' ? 'env' : 'local'),
+      { devin: { guards: { callTimeoutMs: 120_000 } } },
+      { devin: { guards: { callTimeoutMs: 240_000 } } },
+    );
+
+    expect(result).toEqual({
+      devin: { guards: { callTimeoutMs: 120_000 } },
+    });
+  });
+
+  it('mergeProviderOptions は devin.guards を leaf 単位でマージする', () => {
+    expect(mergeProviderOptions(
+      { devin: { guards: { callTimeoutMs: 120_000 } } },
+      { devin: { guards: { callTimeoutMs: 240_000 } } },
+    )?.devin?.guards).toEqual({ callTimeoutMs: 240_000 });
+
+    expect(mergeProviderOptions(
+      { devin: { guards: { callTimeoutMs: 120_000 } } },
+      {},
+    )?.devin?.guards).toEqual({ callTimeoutMs: 120_000 });
+  });
+
   it('空 sandbox object は step の leaf を潰さない', () => {
     const result = resolveEffectiveProviderOptions(
       'project',
@@ -1109,6 +1201,7 @@ describe('providerOptionsContract', () => {
       'provider_options.copilot.effort',
       'provider_options.copilot.guards.call_timeout_ms',
       'provider_options.kiro.agent',
+      'provider_options.kiro.effort',
       'provider_options.kiro.guards.call_timeout_ms',
       'provider_options.cursor.guards.call_timeout_ms',
       'provider_options.deepseek_harness.base_url',
@@ -1117,6 +1210,7 @@ describe('providerOptionsContract', () => {
       'provider_options.deepseek_harness.shutdown_timeout_ms',
       'provider_options.deepseek_harness.reasoning_effort',
       'provider_options.deepseek_harness.plugins',
+      'provider_options.devin.guards.call_timeout_ms',
       'provider_options.pi.extensions',
       'provider_options.pi.thinking_level',
       'provider_options.pi.system_prompt_mode',
@@ -1149,6 +1243,7 @@ describe('providerOptionsContract', () => {
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.claude_terminal.guards.call_timeout_ms');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.kiro');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.kiro.agent');
+    expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.kiro.effort');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.kiro.guards.call_timeout_ms');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.cursor.guards.call_timeout_ms');
     expect(PROVIDER_OPTIONS_TRACE_PATHS).toContain('provider_options.deepseek_harness');
