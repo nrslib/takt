@@ -79,23 +79,31 @@ export async function createDeepSeekCredentialPatch(
     ensurePrivateDirectory(patchDirectoryPath);
     writeNewPrivateFileWithMode(patchPath, stringifyYaml(document), PATCH_FILE_MODE);
     let disposed = false;
+    let pendingDisposal: Promise<void> | undefined;
     return {
       path: patchPath,
-      dispose: async (): Promise<void> => {
-        if (disposed) {
-          return;
-        }
-        disposed = true;
-        await rm(patchPath, { force: true });
-        await rm(patchDirectoryPath, { recursive: true, force: true });
+      dispose: (): Promise<void> => {
+        if (pendingDisposal !== undefined) return pendingDisposal;
+        if (disposed) return Promise.resolve();
+        const cleanup = (async (): Promise<void> => {
+          try {
+            await rm(patchPath, { force: true });
+            await rm(patchDirectoryPath, { recursive: true, force: true });
+            disposed = true;
+          } finally {
+            pendingDisposal = undefined;
+          }
+        })();
+        pendingDisposal = cleanup;
+        return cleanup;
       },
       disposeSync: (): void => {
         if (disposed) {
           return;
         }
-        disposed = true;
         rmSync(patchPath, { force: true });
         rmSync(patchDirectoryPath, { recursive: true, force: true });
+        disposed = true;
       },
     };
   } catch (error) {

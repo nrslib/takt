@@ -2,8 +2,56 @@ import { existsSync, statSync } from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parse as parseYaml } from 'yaml';
+
+const cleanupFaults = vi.hoisted(() => ({
+  asyncFileFailures: 0,
+  asyncDirectoryFailures: 0,
+  syncFileFailures: 0,
+  syncDirectoryFailures: 0,
+  waitForFileRemoval: undefined as Promise<void> | undefined,
+}));
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, rm: async (...args: Parameters<typeof actual.rm>) => {
+    const target = String(args[0]);
+    if (target.includes('takt-deepseek-credentials-')) {
+      if (target.endsWith('credentials.patch.yml')) {
+        await cleanupFaults.waitForFileRemoval;
+        if (cleanupFaults.asyncFileFailures > 0) {
+          cleanupFaults.asyncFileFailures -= 1;
+          throw new Error('injected patch file removal failure');
+        }
+      } else if (cleanupFaults.asyncDirectoryFailures > 0) {
+        cleanupFaults.asyncDirectoryFailures -= 1;
+        throw new Error('injected patch directory removal failure');
+      }
+    }
+    return actual.rm(...args);
+  } };
+});
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, rmSync: (...args: Parameters<typeof actual.rmSync>) => {
+    const target = String(args[0]);
+    if (target.includes('takt-deepseek-credentials-')) {
+      if (target.endsWith('credentials.patch.yml')) {
+        if (cleanupFaults.syncFileFailures > 0) {
+          cleanupFaults.syncFileFailures -= 1;
+          throw new Error('injected sync patch file removal failure');
+        }
+      } else if (cleanupFaults.syncDirectoryFailures > 0) {
+        cleanupFaults.syncDirectoryFailures -= 1;
+        throw new Error('injected sync patch directory removal failure');
+      }
+    }
+    return actual.rmSync(...args);
+  } };
+});
+
 import { createDeepSeekCredentialPatch } from '../infra/deepseek-harness/credential-patch.js';
 import type { DeepSeekCredentialBinding } from '../infra/deepseek-harness/credential-binding.js';
 
@@ -32,6 +80,11 @@ describe('DeepSeek Harness credential patch', () => {
   let root: string;
 
   beforeEach(async () => {
+    cleanupFaults.asyncFileFailures = 0;
+    cleanupFaults.asyncDirectoryFailures = 0;
+    cleanupFaults.syncFileFailures = 0;
+    cleanupFaults.syncDirectoryFailures = 0;
+    cleanupFaults.waitForFileRemoval = undefined;
     root = await mkdtemp(path.join(os.tmpdir(), 'takt-deepseek-credential-patch-'));
   });
 
@@ -199,5 +252,76 @@ describe('DeepSeek Harness credential patch', () => {
     expect(existsSync(path.dirname(patch.path))).toBe(false);
     patch.disposeSync();
     await expect(patch.dispose()).resolves.toBeUndefined();
+  });
+
+  it.each(['file', 'directory'] as const)('retries asynchronous cleanup after the %s removal fails', async (target) => {
+    const patch = await createDeepSeekCredentialPatch(createBinding(path.join(root, '.credentials.yaml'), 'DEEPSEEK_API_KEY'));
+    const directory = path.dirname(patch.path);
+    if (target === 'file') cleanupFaults.asyncFileFailures = 1;
+    else cleanupFaults.asyncDirectoryFailures = 1;
+    try {
+      await expect(patch.dispose()).rejects.toThrow(`injected patch ${target} removal failure`);
+      expect(existsSync(directory)).toBe(true);
+      await patch.dispose();
+      expect(existsSync(directory)).toBe(false);
+    } finally {
+      cleanupFaults.asyncFileFailures = 0;
+      cleanupFaults.asyncDirectoryFailures = 0;
+      await patch.dispose();
+    }
+  });
+
+  it.each(['file', 'directory'] as const)('retries synchronous cleanup after the %s removal fails', async (target) => {
+    const patch = await createDeepSeekCredentialPatch(createBinding(path.join(root, '.credentials.yaml'), 'DEEPSEEK_API_KEY'));
+    const directory = path.dirname(patch.path);
+    if (target === 'file') cleanupFaults.syncFileFailures = 1;
+    else cleanupFaults.syncDirectoryFailures = 1;
+    try {
+      expect(() => patch.disposeSync()).toThrow(`injected sync patch ${target} removal failure`);
+      expect(existsSync(directory)).toBe(true);
+      patch.disposeSync();
+      expect(existsSync(directory)).toBe(false);
+    } finally {
+      cleanupFaults.syncFileFailures = 0;
+      cleanupFaults.syncDirectoryFailures = 0;
+      await patch.dispose();
+    }
+  });
+
+  it('shares a pending asynchronous cleanup with concurrent callers', async () => {
+    const patch = await createDeepSeekCredentialPatch(createBinding(path.join(root, '.credentials.yaml'), 'DEEPSEEK_API_KEY'));
+    let releaseRemoval!: () => void;
+    cleanupFaults.waitForFileRemoval = new Promise<void>((resolve) => { releaseRemoval = resolve; });
+    try {
+      const first = patch.dispose();
+      const second = patch.dispose();
+      expect(second).toBe(first);
+      expect(existsSync(patch.path)).toBe(true);
+      releaseRemoval();
+      await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
+      expect(existsSync(path.dirname(patch.path))).toBe(false);
+    } finally {
+      releaseRemoval();
+      cleanupFaults.waitForFileRemoval = undefined;
+      await patch.dispose();
+    }
+  });
+
+  it('keeps asynchronous callers waiting when synchronous cleanup finishes first', async () => {
+    const patch = await createDeepSeekCredentialPatch(createBinding(path.join(root, '.credentials.yaml'), 'DEEPSEEK_API_KEY'));
+    let releaseRemoval!: () => void;
+    cleanupFaults.waitForFileRemoval = new Promise<void>((resolve) => { releaseRemoval = resolve; });
+    try {
+      const pending = patch.dispose();
+      patch.disposeSync();
+      expect(existsSync(path.dirname(patch.path))).toBe(false);
+      expect(patch.dispose()).toBe(pending);
+      releaseRemoval();
+      await expect(pending).resolves.toBeUndefined();
+    } finally {
+      releaseRemoval();
+      cleanupFaults.waitForFileRemoval = undefined;
+      await patch.dispose();
+    }
   });
 });
