@@ -26,6 +26,7 @@ defaultTest:
     provider:
       id: openai:codex-sdk
       config:
+        model: gpt-6.1-sol
         sandbox_mode: read-only
         approval_policy: never
         skip_git_repo_check: true
@@ -84,30 +85,48 @@ tests:
   - description: 'fix-verifier: 外部 cleanup のみ残る製品修正完了 (ja)'
     vars: { role: verifier, scenario: external-cleanup-complete }
     assert:
+      - type: llm-rubric
+        value: |
+          記録済み資料と生成された検証レポートを意味で照合する。F-1 の製品修正が現在の normalizeLimit の負数→0・正数維持と対象テスト成功によって確認され、結果が verified であり、プロジェクト外の session ファイルの残存と未削除を正しく報告している場合だけ合格。外部ファイルを削除済みと偽る、外部 cleanup だけを理由に未完了・計画不備とする、製品修正の証拠を誤る場合は不合格。
       - type: javascript
         value: file://../../asserts/external-cleanup-phase3.mjs
   - description: 'fix-verifier: 対象関数が存在せず計画が無効 (ja)'
     vars: { role: verifier, scenario: external-cleanup-incomplete }
     assert:
+      - type: llm-rubric
+        value: |
+          記録済み資料と生成された検証レポートを意味で照合する。計画の normalizeLimitLegacy は存在せず実際の normalizeLimit と利用経路を計画が扱わないため plan_invalid と判定し、負数テスト失敗による製品修正未完了も記録し、外部 session ファイルの残存と未削除を正しく報告する場合だけ合格。外部 cleanup 自体を計画不備の理由にする、製品修正を完了扱いする、外部ファイルを削除済みと偽る場合は不合格。
       - type: javascript
         value: file://../../asserts/external-cleanup-phase3.mjs
   - description: 'fix-verifier: 計画は有効だが製品修正が未完了 (ja)'
     vars: { role: verifier, scenario: external-cleanup-repair-pending }
     assert:
+      - type: llm-rubric
+        value: |
+          記録済み資料と生成された検証レポートを意味で照合する。計画は実在する normalizeLimit と必要なテストを対象にして有効だが、現在の実装が負数をそのまま返し対象テストが失敗しているため incomplete と判定し、外部 session ファイルの残存と未削除を正しく報告する場合だけ合格。製品修正を完了扱いする、外部 cleanup だけを理由に plan_invalid とする、外部ファイルを削除済みと偽る場合は不合格。
       - type: javascript
         value: file://../../asserts/external-cleanup-phase3.mjs
   - description: 'fix-verifier: only external cleanup remains (en)'
     vars: { role: verifier, language: en, scenario: external-cleanup-complete-en }
     assert:
+      - type: llm-rubric
+        value: |
+          Compare the generated verification report with the recorded materials by meaning. Pass only if it concludes verified from the current normalizeLimit behavior (negative values become 0, positive values are preserved) and passing targeted tests, and accurately reports that the external session file remains and was not deleted. Fail if it falsely claims deletion, treats external cleanup alone as an implementation or plan defect, or misstates the product evidence.
       - type: javascript
         value: file://../../asserts/external-cleanup-phase3.mjs
   - description: 'fix-verifier: missing planned function invalidates the plan (en)'
     vars: { role: verifier, language: en, scenario: external-cleanup-incomplete-en }
     assert:
+      - type: llm-rubric
+        value: |
+          Compare the generated verification report with the recorded materials by meaning. Pass only if it concludes plan_invalid because the planned normalizeLimitLegacy does not exist and the plan omits the real normalizeLimit consumer path, also records the failed negative-value test and unfinished product repair, and accurately reports that the external session file remains and was not deleted. Fail if it blames the plan defect on external cleanup, claims the product repair is complete, or falsely claims deletion.
       - type: javascript
         value: file://../../asserts/external-cleanup-phase3.mjs
   - description: 'fix-verifier: valid plan with unfinished product repair (en)'
     vars: { role: verifier, language: en, scenario: external-cleanup-repair-pending-en }
     assert:
+      - type: llm-rubric
+        value: |
+          Compare the generated verification report with the recorded materials by meaning. Pass only if it recognizes that the plan correctly targets the existing normalizeLimit and required tests, concludes incomplete because the current function returns negative values unchanged and the targeted test failed, and accurately reports that the external session file remains and was not deleted. Fail if it claims product completion, calls the plan invalid solely because of external cleanup, or falsely claims deletion.
       - type: javascript
         value: file://../../asserts/external-cleanup-phase3.mjs

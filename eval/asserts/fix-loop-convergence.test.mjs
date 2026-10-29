@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { expandFacetIncludes } from '#faceted-prompting/cli/facet-includes';
+import { parse } from 'yaml';
 
 import buildFixLoopConvergencePrompt from '../fix-loop-convergence-prompt.mjs';
 
@@ -105,4 +106,19 @@ test('fix-verifier report result and real Phase 3 routing distinguish completion
       assert.equal(template.pass, false);
     }
   }
+});
+
+test('fix-verifier cases require a semantic report check as well as real Phase 3 routing', () => {
+  const suite = parse(readFileSync(new URL('../scenarios/fix-loop-convergence/fix-loop-convergence.yaml', import.meta.url), 'utf8'));
+  const cases = suite.tests.filter(({ vars }) => vars.role === 'verifier');
+  assert.equal(cases.length, 6);
+  for (const entry of cases) {
+    assert.deepEqual(entry.assert.map(({ type }) => type), ['llm-rubric', 'javascript']);
+    const rubric = entry.assert[0].value;
+    assert.match(rubric, /normalizeLimit/);
+    assert.match(rubric, /session/);
+    assert.match(rubric, /(?:削除|delet)/i);
+    assert.equal(entry.assert[1].value, 'file://../../asserts/external-cleanup-phase3.mjs');
+  }
+  assert.equal(suite.defaultTest.options.provider.config.model, 'gpt-6.1-sol');
 });
