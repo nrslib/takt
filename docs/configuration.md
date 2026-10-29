@@ -1548,7 +1548,7 @@ You can continue a session while the same runtime remains active and the model, 
 
 The DeepSeek SDK can use file, search, shell, and subagent tools. Its workspace-write boundary limits writes but does not isolate secret-file reads. Run it in a trusted workspace. TAKT disables the SDK's session-file persistence and session-log API upload.
 
-The SDK does not support permission modes or callbacks, `bypassPermissions`, an explicit allowed-tools list, a nonempty MCP server map, `maxTurns`, structured output, or image attachments. Steps that require these fail before execution. Tool-free report or status phases also cannot use this provider; choose a provider that supports those controls.
+The SDK does not support permission modes or callbacks, `bypassPermissions`, an explicit allowed-tools list, a nonempty MCP server map, `maxTurns`, structured output, or image attachments. Steps that require these fail before execution. Report phases with read-only tools and tool-free status phases also cannot use this provider; choose a provider that supports those controls.
 
 When migrating from the old Python/uv version, remove `runtime_mode`, Python/uv-only options, `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_RUNTIME_MODE`, and `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PYTHON_PATH` from configuration. Use `takt install deepseek-harness`. Before manually removing old `venv/`, `pyproject.toml`, or `uv.lock` files, stop all TAKT/DeepSeek processes, back up needed data, and confirm they belong to the old environment. Keep the `$DSH_HOME` credential store and current `deepseek-harness/sdk`, `state/`, `dsh-home/`, and `install.lock`.
 

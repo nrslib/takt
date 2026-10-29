@@ -34,7 +34,7 @@ Normal steps execute in up to 3 phases. Sessions persist across phases.
 | Phase | Purpose | Tools | Condition |
 |-------|---------|-------|-----------|
 | Phase 1 | Main work | Step's allowed_tools | Always |
-| Phase 2 | Report output | Write only | When output_contracts defined |
+| Phase 2 | Report output | Read-only tools | When output_contracts defined |
 | Phase 3 | Status judgment | None (judgment only) | When tag-based rules exist |
 
 ## Rule Evaluation
@@ -167,7 +167,7 @@ When a normal Phase 1 response merely omits `sessionId`, that alone is not a rea
 
 However, when a retry or fallback explicitly runs as a new session and succeeds, a missing `sessionId` must not continue using the old resumed session. The storage layer must be told that the new run produced no sessionId, so the old session is cleared or isolated.
 
-The Report Phase is Phase 2 and reads Phase 1 outputs. Its execution contract is readonly and tool-free. Report retry/fallback must preserve `permissionMode: readonly`, empty tool permission, and provider capability overrides such as turn limits.
+The Report Phase is Phase 2: it uses read-only tools to read necessary parts of the Phase 1 execution record and related files, then summarizes the results. It does not modify files, run tests or builds, or add new investigations, findings, judgments, or plans; TAKT saves the response body. Report retry/fallback preserves `permissionMode: readonly`, read-only tool restrictions, and provider capability overrides such as turn limits. Phase 3 uses no tools.
 
 
 ## Asynchronous Work and Process Boundaries
