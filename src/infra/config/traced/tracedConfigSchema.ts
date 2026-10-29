@@ -195,6 +195,8 @@ const GLOBAL_TRACKED_KEYS = [
   'merge.threat_check_max_diff_bytes',
   'merge.where',
   'caccia',
+  'director',
+  'director.patrol_interval',
   'manager',
   'manager.auto_run',
   'manager.patrol_interval',

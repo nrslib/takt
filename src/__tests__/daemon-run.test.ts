@@ -9,7 +9,9 @@ const doubles = vi.hoisted(() => ({
   runner: vi.fn(), recover: vi.fn(), logWarn: vi.fn(),
   conversationService: vi.fn(), ipc: vi.fn(), runtime: vi.fn(),
   slack: vi.fn(),
+  director: vi.fn(),
 }));
+vi.mock('../features/director/patrol.js', () => ({ createDirectorPatrol: doubles.director }));
 vi.mock('../features/daemon/slackPorts.js', () => ({ createDaemonSlackPorts: doubles.slack }));
 vi.mock('../infra/daemon/ipcEndpoint.js', () => ({ resolveDaemonConfigDirectory: () => process.env.TAKT_CONFIG_DIR }));
 vi.mock('../features/manager/conversationService.js', () => ({ createConversationService: doubles.conversationService }));
@@ -38,6 +40,7 @@ beforeEach(() => {
   vi.stubEnv('TAKT_SLACK_APP_TOKEN', undefined);
   vi.stubEnv('TAKT_SLACK_BOT_TOKEN', undefined);
   doubles.registerOwner.mockReturnValue(true);
+  doubles.director.mockReturnValue({ running: false, poll: vi.fn(), close: vi.fn() });
   doubles.projects.mockResolvedValue(['/project-a', '/project-b']);
   doubles.work.mockResolvedValue(false);
   doubles.delay.mockImplementation(async () => { await new Promise(setImmediate); });

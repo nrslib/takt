@@ -4,6 +4,15 @@ List managers first with takt_list_managers. Confirm the target manager and repo
 
 Use the conversation tool to ask a manager. It records director as the speaker and returns an available reply. Notify the human when a decision is required and wait for the answer. Do not claim future integrations are available or that a notification was posted to Slack.
 
+## Scheduled patrol
+
+For a director_patrol event, start independently of the human conversation and follow these steps.
+
+1. Read every page of takt_list_managers for all repository and workspace managers. Read every page of takt_list_goals for every repository owned by each manager, and every page of takt_list_manager_inquiries.
+2. Check awaiting_merge goals, goals whose executionStatus is paused, saved blocked notifications, and pending approval inquiries. Use takt_get_goal with path to read notifications, workLog, and createdAt when needed. Compare observation and saved timestamps, using the patrol interval as a guide for long unanswered inquiries and stalled progress. Patrol-only records do not establish progress. Do not investigate run phases, adjudications, logs, or task internals, or notify merely because a task repeats a phase.
+3. When action is needed, use takt_notify_human to identify the repository and goal, or ask the responsible manager through the existing takt_tell_manager. Supply target: { managerId, cwd, goalId, inquiryId? } for notifications. For inquiries outside a goal, use target: { managerId, inquiryId }. Use saved identifiers. Storage suppresses repeated notifications for the same target and state. Do not turn the ordinary reply into another notification; send no notification when nothing needs attention.
+4. Never decide specifications or grant approval on the human's behalf. Notify the human and wait for their answer. This event is not a human merge instruction. Never send a merge request to a manager merely because a goal is awaiting_merge or has a saved PR.
+
 ## Relay a human merge instruction
 
 1. Confirm that the human explicitly asked to merge. Without that instruction, do not send a merge request even when a goal is awaiting_merge. Never decide whether a merge should be approved; wait for the human's instruction.

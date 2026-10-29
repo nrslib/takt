@@ -20,6 +20,9 @@ import { createConversationService } from '../manager/conversationService.js';
 import { createDaemonConversationRuntime } from '../director/conversationRuntime.js';
 import { createConversationIpcServer } from './conversationIpcServer.js';
 import { createDaemonSlackPorts } from './slackPorts.js';
+import { createDirectorPatrol } from '../director/patrol.js';
+import { resolveDirectorConfig } from '../../infra/config/directorConfig.js';
+import { loadGlobalConfig } from '../../infra/config/global/globalConfig.js';
 
 const POLL_INTERVAL_MS = 500;
 const SLACK_INQUIRY_POLL_INTERVAL_MS = 5_000;
@@ -63,6 +66,7 @@ export async function runDaemon(): Promise<void> {
   let slack: Awaited<ReturnType<typeof createDaemonSlackPorts>> | undefined;
   let nextSlackInquiryPoll = 0;
   let slackInquiryPolling: Promise<void> | undefined;
+  let director: ReturnType<typeof createDirectorPatrol> | undefined;
   const inspectProject = async (cwd: string): Promise<boolean> => {
     const errors: Array<{ error: unknown; failedAt: number }> = [];
     let hasWork = false;
@@ -120,6 +124,9 @@ export async function runDaemon(): Promise<void> {
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);
   try {
+    const globalConfig = loadGlobalConfig();
+    director = createDirectorPatrol(globalConfigDirectory, { notify: (notification) => conversations.notifyDirector(notification) },
+      resolveDirectorConfig(globalConfig).patrolInterval, globalConfig.language);
     ipc = await createConversationIpcServer(globalConfigDirectory, owner, conversations);
     if (controller.signal.aborted) return;
     initDebugLogger({ enabled: true, logFile: join(globalConfigDirectory, 'logs', 'daemon.log') });
@@ -150,7 +157,7 @@ export async function runDaemon(): Promise<void> {
       for (const cwd of projectWork.keys()) {
         if (!projects.includes(cwd)) projectWork.delete(cwd);
       }
-      if (inFlight.size === 0 && projects.every((cwd) => projectWork.get(cwd) === false)
+      if (!director.running && inFlight.size === 0 && projects.every((cwd) => projectWork.get(cwd) === false)
         && conversations.attachmentCount === 0 && conversations.activeOperationCount === 0 && !slack.listening) {
         if (ipc.initializingCount !== 0) continue;
         stopAccepting();
@@ -161,16 +168,25 @@ export async function runDaemon(): Promise<void> {
         if (inFlight.has(cwd)) continue;
         const inspectedGeneration = domainGeneration;
         const processing = inspectProject(cwd)
-          .then((hasWork) => { if (domainGeneration === inspectedGeneration) projectWork.set(cwd, hasWork); })
+          .then((hasWork) => {
+            if (domainGeneration === inspectedGeneration) {
+              projectWork.set(cwd, hasWork);
+              if (hasWork || conversations.attachmentCount > 0 || conversations.activeOperationCount > 0 || slack?.listening) {
+                director?.poll(controller.signal);
+              }
+            }
+          })
           .catch((error: unknown) => {
             log.error('Cannot inspect daemon project', { cwd, error: sanitizeSensitiveText(getErrorMessage(error)) });
           })
           .finally(() => { inFlight.delete(cwd); });
         inFlight.set(cwd, processing);
       }
+      if (projects.every((cwd) => projectWork.has(cwd))) director.poll(controller.signal);
     }
   } finally {
     stop();
+    await director?.close();
     try { await conversations.close(); }
     catch { log.error('Cannot close daemon conversations'); }
     await Promise.all(inFlight.values());

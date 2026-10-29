@@ -91,6 +91,10 @@ Ask to add `/path/to/web`, remove a repository from the assignment, or rename th
 
 Removing an assignment does not delete the repository or its goals. Repositories with unfinished goals cannot be removed; complete or abort those goals first. Starting outside a repository lets you choose a workspace.
 
+## Director patrol
+
+While the daemon is running, it periodically inspects registered repository and workspace managers. The global `director.patrol_interval` setting controls the interval in seconds (positive integer, default `900`). The director reads goals and pending manager inquiries, then saves a notification when a human decision or attention is needed. It can ask a manager to resolve work within the manager's authority; it does not answer human inquiries or merge pull requests. Notifications for unchanged saved state are suppressed. The daemon retains its existing idle-exit behavior; start it with `takt manager` or `takt daemon` when needed.
+
 ## Slack conversations
 
 In a conversation thread, send `/make-goal` to create a proposal. Use **Approve registration** or **Continue conversation**; buttons on an outdated proposal no longer work.
@@ -165,4 +169,4 @@ Goal memory is saved in `.takt/goals/<UUID>/goal.json`: objective, scope exclusi
 
 ## Future plans
 
-A choice of Docker or local execution, and goals spanning repositories are planned. A director would coordinate several managers, forward questions, receive delegated-work completion notices and support adjudication. It would order work across managers using dependencies, overlapping change targets and checks of combined results. These features are not implemented.
+A choice of Docker or local execution, goals spanning repositories, delegated-work completion notices and adjudication are planned. The director does not yet order work across managers using dependencies, overlapping change targets or combined-result checks.

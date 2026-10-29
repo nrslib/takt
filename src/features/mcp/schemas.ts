@@ -94,7 +94,7 @@ export const reopenGoalInputSchema = goalWriteInputSchema.extend({
 });
 export type ReopenGoalInput = z.infer<typeof reopenGoalInputSchema>;
 export const getGoalInputSchema = goalWriteInputSchema.extend({
-  path: z.string().max(512).regex(/^(objective|outOfScope|acceptanceCriteria|constraints|completion|pullRequest|questions|workLog|notifications)(\.(\d+|body|summary|humanChecks|number|url|recommendation|answer|text|options|instructions|reason|changeSummary|files|path|worktrees))*$/).optional()
+  path: z.string().max(512).regex(/^(createdAt|objective|outOfScope|acceptanceCriteria|constraints|completion|pullRequest|questions|workLog|notifications)(\.(\d+|body|summary|humanChecks|number|url|recommendation|answer|text|options|instructions|reason|changeSummary|files|path|worktrees))*$/).optional()
     .describe('Saved field path, for example workLog.0.summary or completion.summary. Array indices refer to saved order.'),
   recordId: z.uuid().optional().describe('Select a saved record by ID when path selects questions, workLog or notifications.'),
   limit: goalReadLimitSchema, offset: readOffsetSchema, ...textReadShape,

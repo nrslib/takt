@@ -14,6 +14,8 @@ If the global configuration directory and the current project's `.takt/` point t
 ```yaml
 # ~/.takt/config.yaml
 language: en                  # UI language: 'en' or 'ja'
+director:
+  patrol_interval: 900        # Director patrol interval in seconds (positive integer, default: 900)
 logging:
   level: info                 # Log level: debug, info, warn, error
 provider: claude-sdk              # Default provider: claude-sdk, claude, claude-headless, claude-terminal, codex, opencode, deepseek-harness, cursor, copilot, kiro, pi, or mock
@@ -185,6 +187,7 @@ Dynamic parallel and `dynamic_facets` selectors use read-only mode with only `Re
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `language` | `"en"` \| `"ja"` | `"en"` | UI language |
+| `director.patrol_interval` | positive integer seconds | `900` | Interval between scheduled director patrols while the daemon is running. Global-only. |
 | `logging.level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | Log level |
 | `logging.trace` | boolean | `false` | Enable trace-level logging (suppresses high-frequency debug noise) |
 | `logging.debug` | boolean | `false` | Enable debug logging (`debug.log` + `prompts.jsonl`) |

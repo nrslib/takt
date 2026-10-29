@@ -225,6 +225,7 @@ const ProjectConfigObjectSchema = ProjectConfigObjectBaseSchema.extend({
 export const ProjectConfigSchema = ProjectConfigObjectSchema;
 
 const GlobalOnlyConfigSchema = z.object({
+  director: z.object({ patrol_interval: z.number().int().positive().optional() }).strict().optional(),
   language: LanguageSchema.optional().default(DEFAULT_LANGUAGE),
   logging: LoggingConfigSchema.optional(),
   worktree_dir: z.string().optional(),

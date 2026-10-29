@@ -5,7 +5,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
-import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig.js';
+import { invalidateGlobalConfigCache, loadGlobalConfig, saveGlobalConfig } from '../infra/config/global/globalConfig.js';
 import { invalidateAllResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
 import { createWorkspace } from '../infra/config/global/workspaceRegistry.js';
@@ -42,8 +42,30 @@ import * as providers from '../infra/providers/index.js';
 import * as readers from '../features/mcp/operations.js';
 import * as slackWebhook from '../shared/utils/slackWebhook.js';
 import type { ProviderAgent, Provider } from '../infra/providers/types.js';
+import * as timerPromises from 'node:timers/promises';
+import type { TimerOptions } from 'node:timers';
+import { parse as parseYaml } from 'yaml';
+import { runDaemon } from '../features/daemon/runDaemon.js';
+import * as daemonOwners from '../infra/daemon/owner.js';
+import * as processIdentity from '../infra/task/process.js';
+import * as cliInvocation from '../shared/utils/cli-invocation.js';
+import * as slackPorts from '../features/daemon/slackPorts.js';
+import * as taskRecovery from '../features/tasks/execute/claimTasks.js';
+import * as autoRun from '../features/manager/autoRun.js';
+import * as eventManagers from '../features/manager/runEventManager.js';
+import * as managerPlans from '../features/manager/conversationPlan.js';
+import * as managerMcp from '../features/manager/managerMcp.js';
+import * as goalIntegration from '../features/mcp/goalIntegrationOperations.js';
+import { enqueueDueGoalPatrols } from '../features/manager/patrol.js';
+import { readManagerEvents } from '../infra/goals/events.js';
+import { TaskStore } from '../infra/task/store.js';
+import * as localMcp from '../features/mcp/localConnection.js';
+import type { RunMeta } from '../core/workflow/run/run-meta.js';
+import { packageVersion } from '../shared/package-info.js';
+import * as privateFiles from '../shared/utils/private-file.js';
 
 const ids = vi.hoisted(() => ({ next: vi.fn() }));
+vi.mock('node:timers/promises', async (original) => ({ ...await original<typeof import('node:timers/promises')>() }));
 vi.mock('node:crypto', async (original) => {
   const actual = await original<typeof import('node:crypto')>();
   return { ...actual, randomUUID: () => ids.next() ?? actual.randomUUID() };
@@ -71,6 +93,7 @@ beforeEach(() => {
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
   vi.restoreAllMocks();
+  vi.useRealTimers();
   invalidateGlobalConfigCache(); invalidateAllResolvedConfigCache();
 });
 const delivery = { deliver: async () => ({ kind: 'delivered' as const }) };
@@ -84,8 +107,8 @@ function decoded(result: Awaited<ReturnType<Client['callTool']>>): Record<string
   const content = result.content as Array<{ type: string; text?: string }>;
   return JSON.parse(content.find((item) => item.type === 'text')!.text!) as Record<string, unknown>;
 }
-async function connectMcp(notify = vi.fn(async () => {})) {
-  const connection = await startLocalMcpConnection(() => createDirectorMcpServer(directory, { notify }, signal()));
+async function connectMcp(notify = vi.fn(async () => {}), patrol = false) {
+  const connection = await startLocalMcpConnection(() => createDirectorMcpServer(directory, { notify }, signal(), patrol));
   cleanups.push(connection.dispose);
   const client = new Client({ name: 'director-test', version: '1' });
   const transport = new StreamableHTTPClientTransport(new URL(connection.config.url), { requestInit: { headers: connection.config.headers } });
@@ -249,7 +272,7 @@ it.each(['ja', 'en'] as const)('loads four director facets through provider setu
   await client.connect();
   const accepted = await client.submit({ kind: 'message', text: 'Check managers' });
   expect(accepted.kind).toBe('accepted');
-  await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
+  await vi.waitFor(() => expect(service.activeOperationCount).toBe(0), { timeout: 30_000 });
   expect(call).toHaveBeenCalledOnce();
   const prompt = setup.mock.calls[0]![0].systemPrompt as string;
   for (const category of ['personas', 'policies', 'knowledge', 'instructions']) {
@@ -379,8 +402,8 @@ it.each(['ja', 'en'] as const)('relays a human merge request through director MC
 
   expect(accepted.kind).toBe('accepted');
   await vi.waitFor(() => expect(outputs).toContainEqual(expect.objectContaining({ kind: 'result',
-    operationId: accepted.kind === 'accepted' ? accepted.operationId : '', result: { kind: 'reply', message: managerReply } })));
-  await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
+    operationId: accepted.kind === 'accepted' ? accepted.operationId : '', result: { kind: 'reply', message: managerReply } })), { timeout: 30_000 });
+  await vi.waitFor(() => expect(service.activeOperationCount).toBe(0), { timeout: 30_000 });
   expect(directorCall).toHaveBeenCalledOnce();
   expect(managerCall).toHaveBeenCalledOnce();
   const forwarded = submissions.mock.calls.map(([request]) => request)
@@ -428,6 +451,94 @@ it('closes the director MCP listener after failed preflight and permits a new pr
   await expect(fetch(closed.url, { method: 'POST', headers: closed.headers })).rejects.toThrow();
   expect(await runtime.resolve({ kind: 'daemon', repositoryDirectories: [] }, signal())).toMatchObject({ provider: 'mock' });
   expect(preflight).toHaveBeenCalledTimes(2);
+});
+
+it('releases prepared MCP before reporting a settings save failure and succeeds on the next turn in the same runtime', async () => {
+  const preflight = vi.fn<NonNullable<Provider['preflight']>>(async (options) => {
+    const config = options.mcpServers![DIRECTOR_MCP_SERVER_NAME]!;
+    if (config.type !== 'http') throw new Error('HTTP MCP required');
+    await fetch(config.url, { method: 'POST', headers: config.headers });
+  });
+  const call = vi.fn<ProviderAgent['call']>(async () => ({ persona: 'director', status: 'done', content: 'recovered',
+    timestamp: new Date(), sessionId: 'recovered-session' }));
+  vi.spyOn(providers, 'getProvider').mockReturnValue(makeProvider({ supportsStrictToolAllowlist: true,
+    supportedMcpTransports: new Set(['http']), preflight, setup: () => ({ call }) }));
+  const original = directorConversationRecord();
+  new ConversationStore(directory).write(original);
+  const runtime = createDaemonConversationRuntime(directory, { notify: async () => {} });
+  const service = createConversationService({ configDirectory: directory, owner, runtime, onDomainChange: vi.fn() });
+  cleanups.push(service.close);
+  const outputs: PortOutput[] = [];
+  const opened = await service.open({ conversationId: original.id, assignment: original.assignment,
+    binding: original.bindings[0]!, speaker: original.counterpart, agentOverrides: { model: 'new-model' } }, {
+    deliver: async (_id, output) => { outputs.push(output); return { kind: 'delivered' }; },
+  });
+  opened.read.cancel();
+  const write = ConversationStore.prototype.write;
+  let failSave = true;
+  const writes = vi.spyOn(ConversationStore.prototype, 'write').mockImplementation(function (this: ConversationStore, record) {
+    if (failSave && record.model === 'new-model') {
+      failSave = false;
+      throw new Error('settings save failed');
+    }
+    return write.call(this, record);
+  });
+  const submit = () => service.submit({ attachmentId: opened.attachmentId, requestId: randomUUID(),
+    speaker: original.counterpart, command: { kind: 'message', text: 'status' } });
+  expect(await submit()).toMatchObject({ kind: 'accepted' });
+  await vi.waitFor(() => expect(outputs.filter((output) => output.kind === 'result')).toHaveLength(1));
+  expect(outputs).toContainEqual(expect.objectContaining({ kind: 'result', result: expect.objectContaining({ kind: 'error', code: 'storage_error' }) }));
+  expect(call).not.toHaveBeenCalled();
+  const first = preflight.mock.calls[0]![0].mcpServers![DIRECTOR_MCP_SERVER_NAME]!;
+  if (first.type !== 'http') throw new Error('HTTP MCP required');
+  await expect(fetch(first.url, { method: 'POST', headers: first.headers })).rejects.toThrow();
+  const snapshot = await service.snapshot(opened.attachmentId);
+  snapshot.cancel();
+  expect(await submit()).toMatchObject({ kind: 'accepted' });
+  await vi.waitFor(() => expect(outputs.filter((output) => output.kind === 'result')).toHaveLength(2));
+  expect(outputs).toContainEqual(expect.objectContaining({ kind: 'result', result: { kind: 'reply', message: 'recovered' } }));
+  expect(call).toHaveBeenCalledOnce();
+  expect(preflight).toHaveBeenCalledTimes(2);
+  const second = preflight.mock.calls[1]![0].mcpServers![DIRECTOR_MCP_SERVER_NAME]!;
+  if (second.type !== 'http') throw new Error('HTTP MCP required');
+  await expect(fetch(second.url, { method: 'POST', headers: second.headers })).rejects.toThrow();
+  expect(new ConversationStore(directory).read(original.id, original.assignment)).toMatchObject({ model: 'new-model', sessionId: 'recovered-session', running: null });
+  writes.mockRestore();
+});
+
+it.each([false, true])('awaits release before reporting storage_error even when cleanup fails=%s', async (cleanupFails) => {
+  const original = directorConversationRecord();
+  new ConversationStore(directory).write(original);
+  let finish!: () => void;
+  const release = vi.fn(() => new Promise<void>((resolve, reject) => {
+    finish = () => cleanupFails ? reject(new Error('cleanup failed')) : resolve();
+  }));
+  const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>();
+  const runtime: ConversationRuntime = { resolve: async () => ({ provider: 'mock', model: 'new-model', language: 'en',
+    contextKey: 'director', executor: { execute }, release }), close: async () => {} };
+  const outputs: PortOutput[] = [];
+  const service = createConversationService({ configDirectory: directory, owner, runtime, onDomainChange: vi.fn() });
+  cleanups.push(service.close);
+  const opened = await service.open({ conversationId: original.id, assignment: original.assignment,
+    binding: original.bindings[0]!, speaker: original.counterpart }, {
+    deliver: async (_id, output) => { outputs.push(output); return { kind: 'delivered' }; },
+  });
+  opened.read.cancel();
+  const write = ConversationStore.prototype.write;
+  vi.spyOn(ConversationStore.prototype, 'write').mockImplementation(function (this: ConversationStore, record) {
+    if (record.model === 'new-model') throw new Error('settings save failed');
+    return write.call(this, record);
+  });
+  expect(await service.submit({ attachmentId: opened.attachmentId, requestId: randomUUID(), speaker: original.counterpart,
+    command: { kind: 'message', text: 'status' } })).toMatchObject({ kind: 'accepted' });
+  await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
+  expect(execute).not.toHaveBeenCalled();
+  expect(service.activeOperationCount).toBe(1);
+  expect(outputs.some((output) => output.kind === 'result')).toBe(false);
+  finish();
+  await vi.waitFor(() => expect(outputs).toContainEqual(expect.objectContaining({ kind: 'result',
+    result: expect.objectContaining({ kind: 'error', code: 'storage_error' }) })));
+  expect(service.activeOperationCount).toBe(0);
 });
 
 it('uses global assistant settings and runtime profiles and rejects providers without strict tool support', () => {
@@ -601,4 +712,553 @@ it('does not resend an accepted manager message after losing its IPC connection'
   await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
   expect(execute).toHaveBeenCalledOnce();
   expect(execute.mock.calls[0]![0].instruction).toBe('one message');
+});
+
+it('loads and saves the director patrol interval without changing manager settings', () => {
+  writeFileSync(join(directory, 'config.yaml'), 'provider: mock\nlanguage: en\ndirector:\n  patrol_interval: 600\nmanager:\n  patrol_interval: 1800\n  auto_run: false\n');
+  invalidateGlobalConfigCache();
+  const loaded = loadGlobalConfig();
+  expect(loaded).toMatchObject({ director: { patrolInterval: 600 }, manager: { patrolInterval: 1800, autoRun: false } });
+  saveGlobalConfig(loaded);
+  expect(parseYaml(readFileSync(join(directory, 'config.yaml'), 'utf8'))).toMatchObject({
+    director: { patrol_interval: 600 }, manager: { patrol_interval: 1800, auto_run: false },
+  });
+  invalidateGlobalConfigCache();
+  expect(loadGlobalConfig()).toMatchObject({ director: { patrolInterval: 600 }, manager: { patrolInterval: 1800, autoRun: false } });
+});
+
+interface PatrolTarget {
+  managerId: string;
+  cwd: string;
+  goalId: string;
+  inquiryId?: string;
+}
+
+async function savedDirectorNotices() {
+  return collect(new DirectorNotificationStore(directory).iterate());
+}
+
+async function seedPatrolGoal(repository: string, changes: Partial<Goal>) {
+  const goal: Goal = { ...goalRecord(), id: randomUUID(), notifications: [], createdAt: '2026-10-29T01:00:00.000Z', ...changes };
+  await new GoalStore(repository).create(goal);
+  return goal;
+}
+
+function mergeEvidence() {
+  return { goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', summary: 'Ready',
+    changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false }, instructions: [] };
+}
+
+async function readMcpPage<T>(client: Client, name: string, collection: string, arguments_: Record<string, unknown> = {}): Promise<T[]> {
+  const entries: T[] = [];
+  let offset: number | null = 0;
+  while (offset !== null) {
+    const result = await client.callTool({ name, arguments: { ...arguments_, offset, limit: 1 } });
+    expect(result.isError, JSON.stringify(result.content)).not.toBe(true);
+    const page = decoded(result);
+    entries.push(...page[collection] as T[]);
+    offset = page.nextOffset as number | null;
+  }
+  return entries;
+}
+
+// 偽 provider は判断精度を検証せず、保存値の読み取りから通知までの接続を実行する。
+function patrolProvider(language: 'ja' | 'en' = 'en') {
+  let wording = 0;
+  let disposedConnections = 0;
+  const failures: unknown[] = [];
+  const start = localMcp.startLocalMcpConnection;
+  vi.spyOn(localMcp, 'startLocalMcpConnection').mockImplementation(async (...args) => {
+    const connection = await start(...args);
+    return { ...connection, async dispose() { await connection.dispose(); disposedConnections++; } };
+  });
+  const setup = vi.fn<Provider['setup']>();
+  const call = vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    const config = options.mcpServers![DIRECTOR_MCP_SERVER_NAME];
+    if (config === undefined || config.type !== 'http') throw new Error('HTTP director MCP required');
+    const client = new Client({ name: 'patrol-provider', version: '1' });
+    const transport = new StreamableHTTPClientTransport(new URL(config.url), { requestInit: { headers: config.headers } });
+    try {
+      await client.connect(transport);
+      const toolNames = (await client.listTools()).tools.map((tool) => tool.name);
+      expect(toolNames.sort()).toEqual([...DIRECTOR_TOOL_NAMES].sort());
+      expect(options).toMatchObject({ permissionMode: 'readonly', strictToolAllowlist: DIRECTOR_TOOL_ALLOWLIST });
+      expect(options.sessionId).toBeUndefined();
+      const notify = async (target: PatrolTarget, reason: string) => {
+        const message = `${target.cwd} goal ${target.goalId}: ${reason} (${++wording})`;
+        const result = await client.callTool({ name: 'takt_notify_human', arguments: { message, target } });
+        expect(result.isError, JSON.stringify(result.content)).not.toBe(true);
+      };
+      const managers = await readMcpPage<{ id: string; assignment: { repositoryDirectories: string[] } }>(client, 'takt_list_managers', 'managers');
+      for (const manager of managers) {
+        for (const cwd of manager.assignment.repositoryDirectories) {
+          const goals = await readMcpPage<Pick<Goal, 'id' | 'status' | 'executionStatus'>>(client, 'takt_list_goals', 'goals', { managerId: manager.id, cwd });
+          for (const goal of goals) {
+            const target = { managerId: manager.id, cwd, goalId: goal.id };
+            if (goal.status === 'awaiting_merge') await notify(target, 'awaiting_merge');
+            else if (goal.executionStatus === 'paused') await notify(target, 'paused');
+            else {
+              const notifications = await readMcpPage<{ kind: string }>(client, 'takt_get_goal', 'items', { ...target, path: 'notifications' });
+              if (notifications.some((notification) => notification.kind === 'blocked')) await notify(target, 'blocked');
+            }
+          }
+        }
+        const inquiries = await readMcpPage<{ goalId: string; repositoryDirectory: string; question: { id: string; body: string } }>(
+          client, 'takt_list_manager_inquiries', 'inquiries', { managerId: manager.id });
+        for (const inquiry of inquiries) {
+          await notify({ managerId: manager.id, cwd: inquiry.repositoryDirectory, goalId: inquiry.goalId, inquiryId: inquiry.question.id }, inquiry.question.body);
+        }
+      }
+      return { persona: 'director', status: 'done', content: 'Patrol finished', timestamp: new Date(), sessionId: 'patrol-session' };
+    } catch (error) { failures.push(error); throw error; }
+    finally { await client.close(); await transport.close(); }
+  });
+  setup.mockImplementation((input) => {
+    for (const category of ['policies', 'instructions']) {
+      expect(input.systemPrompt).toContain(readFileSync(join(process.cwd(), `builtins/${language}/facets`, category, 'director.md'), 'utf8').trim());
+    }
+    return { call };
+  });
+  vi.spyOn(providers, 'getProvider').mockReturnValue(makeProvider({ supportsStrictToolAllowlist: true,
+    supportedMcpTransports: new Set(['http', 'stdio']), supportsStructuredOutput: true, setup }));
+  return { call, setup, failures, get disposedConnections() { return disposedConnections; } };
+}
+
+async function startPatrolDaemon() {
+  const priorListeners = process.rawListeners('SIGTERM');
+  const polls: Array<() => void> = [];
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime('2026-10-29T01:05:00.000Z');
+  vi.spyOn(timerPromises, 'setTimeout').mockImplementation(async <T = void>(_ms?: number, value?: T, options?: TimerOptions) => {
+    await new Promise<void>((resolve) => { polls.push(resolve); });
+    options?.signal?.throwIfAborted();
+    return value as T;
+  });
+  vi.spyOn(daemonOwners, 'registerDaemonOwner').mockReturnValue(true);
+  vi.spyOn(daemonOwners, 'readDaemonOwner').mockReturnValue({ ...owner, version: packageVersion });
+  const removeOwner = vi.spyOn(daemonOwners, 'removeDaemonOwner').mockImplementation(() => {});
+  vi.spyOn(processIdentity, 'getSelfProcessIdentity').mockReturnValue(owner.identity);
+  vi.spyOn(cliInvocation, 'resolveCliInvocation').mockReturnValue({ args: [], cliPath: owner.cliPath });
+  vi.spyOn(slackPorts, 'createDaemonSlackPorts').mockResolvedValue({ listening: false, pollInquiries: async () => {}, stopAccepting: () => {}, close: async () => {} });
+  vi.spyOn(taskRecovery, 'failInterruptedTasksWithGoalEvents').mockReturnValue(0);
+  vi.spyOn(autoRun, 'ensureManagerRun').mockResolvedValue(undefined);
+  const processPending = vi.fn(async () => false);
+  const createManager = eventManagers.createRunEventManager;
+  vi.spyOn(eventManagers, 'createRunEventManager').mockReturnValue({ processPending, close: async () => {} });
+  const run = runDaemon();
+  let failure: unknown;
+  void run.catch((error: unknown) => { failure = error; });
+  const waitForPoll = async () => {
+    await vi.waitFor(() => {
+      if (failure !== undefined) throw failure;
+      expect(polls.length).toBeGreaterThan(0);
+    });
+  };
+  const stop = async () => {
+    const listener = process.rawListeners('SIGTERM').find((candidate) => !priorListeners.includes(candidate));
+    listener?.call(process, 'SIGTERM');
+    polls.splice(0).forEach((resolve) => resolve());
+    await run;
+  };
+  cleanups.push(stop);
+  await waitForPoll();
+  return { processPending, createManager, removeOwner, stop,
+    async poll(elapsedSeconds = 0) {
+      await waitForPoll();
+      vi.setSystemTime(Date.now() + elapsedSeconds * 1000);
+      polls.shift()!();
+      await waitForPoll();
+    },
+  };
+}
+
+async function expectCompletedPatrol(provider: ReturnType<typeof patrolProvider>, count: number) {
+  await vi.waitFor(() => {
+    if (provider.failures.length > 0) throw provider.failures[0];
+    expect(provider.call).toHaveBeenCalledTimes(count);
+    const settled = provider.call.mock.settledResults[count - 1];
+    if (settled?.type === 'rejected') throw settled.value;
+    expect(provider.call.mock.settledResults[count - 1]?.type).toBe('fulfilled');
+    expect(provider.disposedConnections).toBeGreaterThanOrEqual(count);
+  }, { timeout: 30_000 });
+  await new Promise(setImmediate);
+}
+
+it('patrols repository and workspace managers and notifies each stopped goal and pending approval', async () => {
+  const a = await seedManager('patrol-a');
+  const b = await seedManager('patrol-b');
+  await createWorkspace({ globalConfigDirectory: directory, name: 'workspace manager', repositoryDirectories: [b] });
+  const merge = await seedPatrolGoal(a, { status: 'awaiting_merge', completion: mergeEvidence() });
+  const paused = await seedPatrolGoal(a, { executionStatus: 'paused' });
+  const blocked = await seedPatrolGoal(b, { notifications: [{ id: randomUUID(), kind: 'blocked', body: 'Cannot proceed', recordedAt: '2026-10-29T01:01:00.000Z' }] });
+  const approval = createInquiry({ kind: 'approval', body: 'Approve the proposed change', operation: { toolName: 'Write', args: '{}', cwd: b } });
+  const waiting = await seedPatrolGoal(b, { questions: [approval] });
+  const provider = patrolProvider();
+  const daemon = await startPatrolDaemon();
+  await daemon.poll();
+  await expectCompletedPatrol(provider, 1);
+  const notices = await savedDirectorNotices();
+  expect(notices).toHaveLength(4);
+  for (const [cwd, goal, reason] of [[a, merge, 'awaiting_merge'], [a, paused, 'paused'], [b, blocked, 'blocked'], [b, waiting, approval.body]] as const) {
+    expect(notices).toContainEqual(expect.objectContaining({ message: expect.stringContaining(`${cwd} goal ${goal.id}: ${reason}`) }));
+  }
+  expect((await new GoalStore(b).get(waiting.id)).questions).toEqual([approval]);
+});
+
+it('suppresses unchanged patrol notifications on the same daemon and notifies a changed goal state', async () => {
+  const repository = await seedManager('deduplicated-patrol');
+  const goal = await seedPatrolGoal(repository, { status: 'awaiting_merge', completion: mergeEvidence() });
+  const provider = patrolProvider();
+  const daemon = await startPatrolDaemon();
+  await daemon.poll();
+  await expectCompletedPatrol(provider, 1);
+  const human = new ConversationIpcClient({ kind: 'daemon' });
+  cleanups.push(async () => human.close());
+  const outputs: PortOutput[] = [];
+  human.onOutput((output) => outputs.push(output));
+  await human.connect();
+  await vi.waitFor(() => expect(human.getSnapshot().readStatus).toBe('complete'));
+  const first = await savedDirectorNotices();
+  expect(first).toHaveLength(1);
+  expect(human.getSnapshot().items).toContainEqual({ kind: 'display_event', event: { id: first[0]!.id, message: first[0]!.message } });
+  outputs.length = 0;
+  await new GoalStore(repository).update(goal.id, (saved) => ({ ...saved, lastPatrolCompletedAt: new Date().toISOString(),
+    workLog: [{ id: randomUUID(), kind: 'patrol', recordedAt: new Date().toISOString(), summary: 'Manager patrol only' }] }));
+  await daemon.poll(900);
+  await expectCompletedPatrol(provider, 2);
+  expect(await savedDirectorNotices()).toEqual(first);
+  expect(outputs.filter((output) => output.kind === 'notice')).toEqual([]);
+  await new GoalStore(repository).update(goal.id, (saved) => ({ ...saved, status: 'created', executionStatus: 'paused' }));
+  await daemon.poll(900);
+  await expectCompletedPatrol(provider, 3);
+  const notices = await savedDirectorNotices();
+  expect(notices).toHaveLength(2);
+  expect(notices).toContainEqual(first[0]);
+  expect(notices).toContainEqual(expect.objectContaining({ message: expect.stringContaining('paused') }));
+  await vi.waitFor(() => expect(outputs.filter((output) => output.kind === 'notice')).toHaveLength(1));
+});
+
+it('keeps identical goal identities in different repositories separate during patrol notification', async () => {
+  const a = await seedManager('identity-a');
+  const b = await seedManager('identity-b');
+  await createWorkspace({ globalConfigDirectory: directory, name: 'shared manager', repositoryDirectories: [a, b] });
+  const goal = await seedPatrolGoal(a, { status: 'awaiting_merge', completion: mergeEvidence() });
+  await seedPatrolGoal(b, { id: goal.id, status: 'awaiting_merge', completion: mergeEvidence() });
+  const provider = patrolProvider();
+  const daemon = await startPatrolDaemon();
+  await daemon.poll();
+  await expectCompletedPatrol(provider, 1);
+  const notices = await savedDirectorNotices();
+  expect(notices).toHaveLength(2);
+  for (const cwd of [a, b]) expect(notices).toContainEqual(expect.objectContaining({ message: expect.stringContaining(`${cwd} goal ${goal.id}`) }));
+});
+
+it('does not read run internals or notify about a running task during director patrol', async () => {
+  const repository = await seedManager('running-task-patrol');
+  const goal = await seedPatrolGoal(repository, {});
+  new TaskStore(repository).update(() => ({ tasks: [{ name: 'repeated-review', status: 'running', goal_id: goal.id,
+    run_slug: 'repeated-review-run', content: 'Implement the goal', created_at: '2026-10-29T01:00:00.000Z',
+    started_at: '2026-10-29T01:01:00.000Z', completed_at: null }] }));
+  const runRoot = join(repository, '.takt', 'runs', 'repeated-review-run');
+  mkdirSync(runRoot, { recursive: true });
+  const meta: RunMeta = { task: 'Implement the goal', workflow: 'default', runSlug: 'repeated-review-run', runRoot,
+    reportDirectory: join(runRoot, 'reports'), contextDirectory: join(runRoot, 'context'), logsDirectory: join(runRoot, 'logs'),
+    status: 'running', startTime: '2026-10-29T01:01:00.000Z', currentStep: 'review', currentIteration: 100, iterations: 100, phase: 1 };
+  writeFileSync(join(runRoot, 'meta.json'), JSON.stringify(meta));
+  const run = vi.spyOn(readers, 'getTaktRun');
+  const tasks = vi.spyOn(readers, 'listTaktTasks');
+  const toolCalls = vi.spyOn(Client.prototype, 'callTool');
+  const provider = patrolProvider();
+  const daemon = await startPatrolDaemon();
+  await daemon.poll();
+  await expectCompletedPatrol(provider, 1);
+  expect(run).not.toHaveBeenCalled();
+  expect(tasks).not.toHaveBeenCalled();
+  expect(await savedDirectorNotices()).toEqual([]);
+  for (const [request] of toolCalls.mock.calls) {
+    expect(['takt_get_run', 'takt_list_tasks', 'takt_tell_manager', 'takt_notify_human']).not.toContain(request.name);
+  }
+});
+
+it.each([undefined, 600])('schedules director patrols at the resolved global interval %s', async (configured) => {
+  const repository = await seedManager('interval-patrol');
+  await seedPatrolGoal(repository, {});
+  if (configured !== undefined) {
+    writeFileSync(join(directory, 'config.yaml'), `provider: mock\nlanguage: en\ndirector:\n  patrol_interval: ${configured}\n`);
+    invalidateGlobalConfigCache(); invalidateAllResolvedConfigCache();
+  }
+  const provider = patrolProvider();
+  const daemon = await startPatrolDaemon();
+  await daemon.poll();
+  await expectCompletedPatrol(provider, 1);
+  await daemon.poll((configured ?? 900) - 1);
+  expect(provider.call).toHaveBeenCalledTimes(1);
+  await daemon.poll(1);
+  await expectCompletedPatrol(provider, 2);
+});
+
+it('leaves a specification inquiry unanswered and notifies the human during director patrol', async () => {
+  const repository = await seedManager('specification-patrol');
+  const inquiry = createInquiry({ body: 'Should the export include deleted records?' });
+  const goal = await seedPatrolGoal(repository, { questions: [inquiry] });
+  const toolCalls = vi.spyOn(Client.prototype, 'callTool');
+  const provider = patrolProvider();
+  const daemon = await startPatrolDaemon();
+  await daemon.poll();
+  await expectCompletedPatrol(provider, 1);
+  expect((await new GoalStore(repository).get(goal.id)).questions).toEqual([inquiry]);
+  expect(await savedDirectorNotices()).toEqual([expect.objectContaining({ message: expect.stringContaining(inquiry.body) })]);
+  expect(toolCalls.mock.calls.some(([request]) => request.name === 'takt_tell_manager')).toBe(false);
+});
+
+it('does not merge a saved PR without human instructions in director and manager patrol turns', async () => {
+  const repository = await seedManager('merge-patrol');
+  const goal = await seedPatrolGoal(repository, { status: 'awaiting_merge', completion: mergeEvidence(),
+    pullRequest: { number: 1950, url: 'https://github.invalid/project/pull/1950' }, createdAt: '2026-10-29T00:00:00.000Z' });
+  const merge = vi.spyOn(goalIntegration, 'mergeTaktGoalPr').mockRejectedValue(new Error('Autonomous merge is forbidden'));
+  const provider = patrolProvider();
+  const daemon = await startPatrolDaemon();
+  const actualPlans = await vi.importActual<typeof import('../features/manager/conversationPlan.js')>('../features/manager/conversationPlan.js');
+  vi.spyOn(managerPlans, 'createManagerConversationPlan').mockImplementation(actualPlans.createManagerConversationPlan);
+  vi.spyOn(managerMcp, 'connectManagerMcp').mockResolvedValue({
+    client: new Client({ name: 'manager-patrol-double', version: '1' }), servers: {}, dispose: async () => {},
+  });
+  const managerCall = vi.fn<ProviderAgent['call']>(async () => ({ persona: 'manager', status: 'done', content: '', timestamp: new Date(),
+    structuredOutput: { message: 'Waiting for a human merge instruction', summary: null } }));
+  provider.setup.mockReturnValueOnce({ call: managerCall });
+  const manager = daemon.createManager(repository);
+  cleanups.push(manager.close);
+  await enqueueDueGoalPatrols(repository, 900);
+  expect(readManagerEvents(repository)).toContainEqual(expect.objectContaining({ event: expect.objectContaining({ kind: 'patrol', goalId: goal.id }) }));
+  await manager.processPending(signal(), 10);
+  expect(managerCall).toHaveBeenCalledOnce();
+  const managerSetup = provider.setup.mock.calls.find(([input]) => input.name === 'manager')?.[0];
+  expect(managerSetup?.systemPrompt).toContain(readFileSync(join(process.cwd(), 'builtins/en/facets/policies/manager.md'), 'utf8').trim());
+  await daemon.poll();
+  await expectCompletedPatrol(provider, 1);
+  expect(merge).not.toHaveBeenCalled();
+  expect((await new GoalStore(repository).get(goal.id)).status).toBe('awaiting_merge');
+  expect(await savedDirectorNotices()).toEqual([expect.objectContaining({ message: expect.stringContaining('awaiting_merge') })]);
+});
+
+it('retains notification suppression after reopening the director MCP server', async () => {
+  const repository = await seedManager('persisted-patrol-notice');
+  const goal = await seedPatrolGoal(repository, { status: 'awaiting_merge', completion: mergeEvidence() });
+  const target = { managerId: conversationId({ kind: 'repository', repositoryDirectory: repository }), cwd: repository, goalId: goal.id };
+  const first = await connectMcp();
+  const result = await first.client.callTool({ name: 'takt_notify_human', arguments: { message: 'Ready for merge', target } });
+  expect(result.isError, JSON.stringify(result.content)).not.toBe(true);
+  const saved = await savedDirectorNotices();
+  expect(saved).toHaveLength(1);
+  expect(first.notify).toHaveBeenCalledOnce();
+  const reopened = await connectMcp();
+  expect((await reopened.client.callTool({ name: 'takt_notify_human', arguments: { message: 'The same PR is waiting', target } })).isError).not.toBe(true);
+  expect(await savedDirectorNotices()).toEqual(saved);
+  expect(reopened.notify).not.toHaveBeenCalled();
+});
+
+it('requires a patrol target and rejects a repository outside its manager assignment', async () => {
+  const repository = await seedManager('patrol-target-validation');
+  const goal = await seedPatrolGoal(repository, {});
+  const { client, notify } = await connectMcp(vi.fn(async () => {}), true);
+  expect((await client.callTool({ name: 'takt_notify_human', arguments: { message: 'No identity' } })).isError).toBe(true);
+  const target = { managerId: conversationId({ kind: 'repository', repositoryDirectory: repository }), cwd: directory, goalId: goal.id };
+  expect((await client.callTool({ name: 'takt_notify_human', arguments: { message: 'Wrong repository', target } })).isError).toBe(true);
+  expect(await savedDirectorNotices()).toEqual([]);
+  expect(notify).not.toHaveBeenCalled();
+});
+
+it('retries notification after storage failure without recording a delivered state', async () => {
+  const repository = await seedManager('patrol-storage-failure');
+  const goal = await seedPatrolGoal(repository, {});
+  const target = { managerId: conversationId({ kind: 'repository', repositoryDirectory: repository }), cwd: repository, goalId: goal.id };
+  const { client, notify } = await connectMcp();
+  vi.spyOn(privateFiles, 'writeNewPrivateFileWithMode').mockImplementationOnce(() => { throw new Error('notification save failed'); });
+  const args = { name: 'takt_notify_human', arguments: { message: 'Waiting for a decision', target } };
+  expect((await client.callTool(args)).isError).toBe(true);
+  expect(await savedDirectorNotices()).toEqual([]);
+  expect(notify).not.toHaveBeenCalled();
+  expect((await client.callTool(args)).isError).not.toBe(true);
+  expect(await savedDirectorNotices()).toHaveLength(1);
+  expect(notify).toHaveBeenCalledOnce();
+});
+
+it('suppresses concurrent notifications from separate MCP connections for the same saved state', async () => {
+  const repository = await seedManager('concurrent-patrol-notice');
+  const goal = await seedPatrolGoal(repository, {});
+  const target = { managerId: conversationId({ kind: 'repository', repositoryDirectory: repository }), cwd: repository, goalId: goal.id };
+  const notify = vi.fn(async () => {});
+  const first = await connectMcp(notify);
+  const second = await connectMcp(notify);
+  const results = await Promise.all([first, second].map(({ client }) => client.callTool({ name: 'takt_notify_human', arguments: { message: 'Waiting', target } })));
+  expect(results.every((result) => result.isError !== true)).toBe(true);
+  expect(await savedDirectorNotices()).toHaveLength(1);
+  expect(notify).toHaveBeenCalledOnce();
+});
+
+it('reports corrupt saved notification state rather than treating it as not yet notified', async () => {
+  const repository = await seedManager('corrupt-patrol-notice');
+  const goal = await seedPatrolGoal(repository, {});
+  const target = { managerId: conversationId({ kind: 'repository', repositoryDirectory: repository }), cwd: repository, goalId: goal.id };
+  const { client, notify } = await connectMcp();
+  const args = { name: 'takt_notify_human', arguments: { message: 'Waiting', target } };
+  expect((await client.callTool(args)).isError).not.toBe(true);
+  const saved = (await savedDirectorNotices())[0]!;
+  writeFileSync(join(directory, 'director-notifications', `${saved.id}.json`), '{invalid');
+  expect((await client.callTool(args)).isError).toBe(true);
+  expect(notify).toHaveBeenCalledOnce();
+});
+
+it.each(['ja', 'en'] as const)('provides saved progress and inquiry timestamps for patrol decisions in %s', async (language) => {
+  writeFileSync(join(directory, 'config.yaml'), `provider: mock\nlanguage: ${language}\n`);
+  invalidateGlobalConfigCache(); invalidateAllResolvedConfigCache();
+  const repository = await seedManager('old-patrol-progress');
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-10-27T00:00:00Z'));
+  const question = createInquiry({ body: 'Long unanswered specification', recipient: 'human' });
+  question.createdAt = '2026-10-27T00:00:00.000Z';
+  const goal = await seedPatrolGoal(repository, { createdAt: '2026-10-26T00:00:00.000Z', questions: [question], workLog: [
+    { id: randomUUID(), summary: 'Actual progress', recordedAt: '2026-10-27T01:00:00.000Z' },
+    { id: randomUUID(), summary: 'Patrol only', kind: 'patrol', recordedAt: '2026-10-29T01:00:00.000Z' },
+  ] });
+  const assignment = { kind: 'repository' as const, repositoryDirectory: repository, repositoryDirectories: [repository] };
+  const inquiryStore = new StandaloneInquiryStore(directory, assignment);
+  const standalone = await inquiryStore.create({ body: question.body, recipient: 'human' });
+  const provider = patrolProvider(language);
+  provider.call.mockImplementationOnce(async (prompt, options) => {
+    const event = JSON.parse(prompt);
+    expect(event).toMatchObject({ event: 'director_patrol', patrolIntervalSeconds: 900 });
+    expect(Date.parse(event.observedAt)).toBeGreaterThanOrEqual(Date.parse('2026-10-29T01:05:00.000Z'));
+    expect(Date.parse(event.observedAt)).toBeLessThanOrEqual(Date.now());
+    const server = options.mcpServers![DIRECTOR_MCP_SERVER_NAME]!;
+    if (server.type !== 'http') throw new Error('HTTP MCP required');
+    const client = new Client({ name: 'patrol-time-inputs', version: '1' });
+    const transport = new StreamableHTTPClientTransport(new URL(server.url), { requestInit: { headers: server.headers } });
+    await client.connect(transport);
+    try {
+      const target = { managerId: conversationId(assignment), cwd: repository, goalId: goal.id };
+      const createdResult = await client.callTool({ name: 'takt_get_goal', arguments: { ...target, path: 'createdAt' } });
+      expect(createdResult.isError, JSON.stringify(createdResult.content)).not.toBe(true);
+      expect(decoded(createdResult).content).toBe(goal.createdAt);
+      const work = await readMcpPage<{ kind?: string; recordedAt: string }>(client, 'takt_get_goal', 'items', { ...target, path: 'workLog' });
+      expect(work.filter((entry) => entry.kind !== 'patrol').at(-1)?.recordedAt).toBe('2026-10-27T01:00:00.000Z');
+      const inquiries = await readMcpPage<{ question: { id: string; createdAt: string } }>(client, 'takt_list_manager_inquiries', 'inquiries', { managerId: target.managerId });
+      expect(inquiries.find((entry) => entry.question.id === standalone.id)?.question.createdAt).toBe('2026-10-27T00:00:00.000Z');
+      const result = await client.callTool({ name: 'takt_notify_human', arguments: { message: question.body, target: { managerId: target.managerId, inquiryId: standalone.id } } });
+      expect(result.isError).not.toBe(true);
+    } finally { await client.close(); await transport.close(); }
+    return { persona: 'director', status: 'done', content: 'Inspected progress', timestamp: new Date() };
+  });
+  const daemon = await startPatrolDaemon();
+  await daemon.poll();
+  await expectCompletedPatrol(provider, 1);
+  expect(await savedDirectorNotices()).toHaveLength(1);
+  expect((await inquiryStore.get(standalone.id)).status).toBe('pending');
+});
+
+it('keeps manager polling active without overlapping a director patrol and waits for it on stop', async () => {
+  const repository = await seedManager('pending-patrol');
+  await seedPatrolGoal(repository, {});
+  const provider = patrolProvider();
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  provider.call.mockImplementationOnce(async (_prompt, options) => {
+    await pending;
+    options.abortSignal?.throwIfAborted();
+    return { persona: 'director', status: 'done', content: '', timestamp: new Date() };
+  });
+  const daemon = await startPatrolDaemon();
+  try {
+    await daemon.poll();
+    await vi.waitFor(() => expect(provider.call).toHaveBeenCalledOnce());
+    await daemon.poll(1800);
+    await daemon.poll(1800);
+    expect(provider.call).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(daemon.processPending.mock.calls.length).toBeGreaterThan(1));
+    const stopped = daemon.stop();
+    await vi.waitFor(() => expect(provider.call.mock.calls[0]![1].abortSignal?.aborted).toBe(true));
+    expect(daemon.removeOwner).not.toHaveBeenCalled();
+    release();
+    await stopped;
+    expect(daemon.removeOwner).toHaveBeenCalledOnce();
+  } finally { release(); }
+});
+
+it('waits the patrol interval after a director provider failure before retrying', async () => {
+  const repository = await seedManager('failed-patrol');
+  await seedPatrolGoal(repository, {});
+  const provider = patrolProvider();
+  provider.call.mockRejectedValueOnce(new Error('Director provider unavailable'));
+  const daemon = await startPatrolDaemon();
+  await daemon.poll();
+  await vi.waitFor(() => expect(provider.call.mock.settledResults[0]?.type).toBe('rejected'));
+  await vi.waitFor(() => expect(provider.disposedConnections).toBe(1));
+  await daemon.poll(899);
+  expect(provider.call).toHaveBeenCalledOnce();
+  await daemon.poll(1);
+  await expectCompletedPatrol(provider, 2);
+});
+
+it('preserves the human director session across an autonomous patrol', async () => {
+  await seedManager('conversation-patrol');
+  const provider = patrolProvider();
+  provider.call.mockImplementationOnce(async () => ({ persona: 'director', status: 'done', content: 'Human reply',
+    timestamp: new Date(), sessionId: 'human-session' }));
+  const daemon = await startPatrolDaemon();
+  const human = new ConversationIpcClient({ kind: 'daemon' });
+  cleanups.push(async () => human.close());
+  await human.connect();
+  const conversation = new ConversationStore(directory);
+  const id = conversationId({ kind: 'daemon' });
+  await human.submit({ kind: 'message', text: 'Status please' });
+  await vi.waitFor(() => expect(conversation.read(id, { kind: 'daemon' })?.sessionId).toBe('human-session'));
+  await daemon.poll();
+  await expectCompletedPatrol(provider, 2);
+  expect(conversation.read(id, { kind: 'daemon' })?.sessionId).toBe('human-session');
+  provider.call.mockImplementationOnce(async (_prompt, options) => {
+    expect(options.sessionId).toBe('human-session');
+    return { persona: 'director', status: 'done', content: 'Continued reply', timestamp: new Date(), sessionId: 'human-session' };
+  });
+  expect((await human.submit({ kind: 'message', text: 'Continue' })).kind).toBe('accepted');
+  await vi.waitFor(() => expect(provider.call).toHaveBeenCalledTimes(3));
+  await vi.waitFor(() => expect(provider.call.mock.settledResults[2]?.type).toBe('fulfilled'));
+});
+
+it('keeps a human conversation MCP connection usable while an autonomous patrol finishes', async () => {
+  await seedManager('concurrent-conversation-patrol');
+  const provider = patrolProvider();
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  let humanMcp: Client | undefined;
+  provider.call.mockImplementationOnce(async (_prompt, options) => {
+    const config = options.mcpServers![DIRECTOR_MCP_SERVER_NAME];
+    if (config === undefined || config.type !== 'http') throw new Error('HTTP director MCP required');
+    const client = new Client({ name: 'human-provider', version: '1' });
+    const transport = new StreamableHTTPClientTransport(new URL(config.url), { requestInit: { headers: config.headers } });
+    try {
+      await client.connect(transport);
+      humanMcp = client;
+      await pending;
+      return { persona: 'director', status: 'done', content: 'Human conversation finished', timestamp: new Date(), sessionId: 'human-session' };
+    } finally { await client.close(); await transport.close(); }
+  });
+  const daemon = await startPatrolDaemon();
+  const human = new ConversationIpcClient({ kind: 'daemon' });
+  cleanups.push(async () => human.close());
+  try {
+    await human.connect();
+    expect((await human.submit({ kind: 'message', text: 'Check the current goals' })).kind).toBe('accepted');
+    await vi.waitFor(() => expect(humanMcp).toBeDefined());
+    const initialTools = (await humanMcp!.listTools()).tools.map((tool) => tool.name).sort();
+    await daemon.poll();
+    await vi.waitFor(() => {
+      if (provider.failures.length > 0) throw provider.failures[0];
+      expect(provider.call).toHaveBeenCalledTimes(2);
+      expect(provider.call.mock.settledResults[1]?.type).toBe('fulfilled');
+      expect(provider.disposedConnections).toBe(1);
+    });
+    expect((await humanMcp!.listTools()).tools.map((tool) => tool.name).sort()).toEqual(initialTools);
+    release();
+    await expectCompletedPatrol(provider, 2);
+  } finally { release(); }
 });

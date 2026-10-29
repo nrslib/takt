@@ -223,19 +223,34 @@ export function createConversationService(input: {
       if (assignment.kind === 'daemon') {
         if (command.kind !== 'message') throw new ConversationError('invalid_input');
         const runtime = await input.runtime.resolve(assignment, signal, agentOverrides);
-        const changed = conversation.record.provider !== runtime.provider || conversation.record.model !== runtime.model
-          || conversation.contextKey !== undefined && conversation.contextKey !== runtime.contextKey;
-        if (changed) save(conversation, { ...conversation.record, provider: runtime.provider, model: runtime.model, sessionId: null });
-        conversation.contextKey = runtime.contextKey;
-        conversation.language = runtime.language;
-        const output = await runtime.executor.execute({
-          prompt: command.text, instruction: command.text, sessionId: conversation.record.sessionId ?? undefined,
-          assignment: undefined, abortSignal: signal, configDirectory: input.configDirectory,
-          recovery: { context: '', invalidateSession: async () => { save(conversation, { ...conversation.record, sessionId: null }); } },
-        });
-        signal.throwIfAborted();
-        save(conversation, { ...conversation.record, sessionId: output.sessionId ?? null });
-        result = { kind: 'reply', message: output.message };
+        let outcome: { result: OperationResult } | { error: unknown };
+        let cleanupFailure: { error: unknown } | undefined;
+        try {
+          const changed = conversation.record.provider !== runtime.provider || conversation.record.model !== runtime.model
+            || conversation.contextKey !== undefined && conversation.contextKey !== runtime.contextKey;
+          if (changed) save(conversation, { ...conversation.record, provider: runtime.provider, model: runtime.model, sessionId: null });
+          conversation.contextKey = runtime.contextKey;
+          conversation.language = runtime.language;
+          const output = await runtime.executor.execute({
+            prompt: command.text, instruction: command.text, sessionId: conversation.record.sessionId ?? undefined,
+            assignment: undefined, abortSignal: signal, configDirectory: input.configDirectory,
+            recovery: { context: '', invalidateSession: async () => { save(conversation, { ...conversation.record, sessionId: null }); } },
+          });
+          signal.throwIfAborted();
+          save(conversation, { ...conversation.record, sessionId: output.sessionId ?? null });
+          outcome = { result: { kind: 'reply', message: output.message } };
+        } catch (error) {
+          outcome = { error };
+        } finally {
+          try { await runtime.release?.(); }
+          catch (error) { cleanupFailure = { error }; }
+        }
+        if (cleanupFailure !== undefined) {
+          if ('error' in outcome && outcome.error instanceof ConversationError) outcome.error.cause = cleanupFailure.error;
+          else throw cleanupFailure.error;
+        }
+        if ('error' in outcome) throw outcome.error;
+        result = outcome.result;
       } else switch (command.kind) {
         case 'message': {
           const previousDenials = conversation.denials;

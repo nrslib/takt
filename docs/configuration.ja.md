@@ -14,6 +14,8 @@ phase 粒度の usage events と集計方法は [Observability Guide](./observab
 ```yaml
 # ~/.takt/config.yaml
 language: en                  # UI 言語: 'en' または 'ja'
+director:
+  patrol_interval: 900        # director の見回り間隔（秒、正の整数、デフォルト: 900）
 logging:
   level: info                 # ログレベル: debug, info, warn, error
 provider: claude-sdk              # デフォルト provider: claude-sdk, claude, claude-headless, claude-terminal, codex, opencode, deepseek-harness, cursor, copilot, kiro, pi, または mock
@@ -185,6 +187,7 @@ dynamic parallel と `dynamic_facets` の selector は読み取り専用で、`R
 | フィールド | 型 | デフォルト | 説明 |
 |-----------|------|---------|------|
 | `language` | `"en"` \| `"ja"` | `"en"` | UI 言語 |
+| `director.patrol_interval` | 正の整数（秒） | `900` | daemon 稼働中に director の見回りを行う間隔。グローバル設定のみ。 |
 | `logging.level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | ログレベル |
 | `logging.trace` | boolean | `false` | trace レベルのログを有効化（高頻度のデバッグノイズを抑制） |
 | `logging.debug` | boolean | `false` | デバッグログを有効化（`debug.log` + `prompts.jsonl`） |
