@@ -99,11 +99,15 @@ it('processes events separately from run and restores their saved records in the
   let goalId = '';
   let results = 0;
   const call = vi.fn<ProviderAgent['call']>().mockImplementation(async (prompt) => {
-    if (prompt.startsWith('取り込みました')) {
-      await tool('takt_check_goal_completion', { goalId });
-      return reply('ゴールが完成しました');
+    if (!prompt.startsWith('{')) {
+      const [turnContext, ...paragraphs] = prompt.split('\n\n');
+      expect(turnContext).toMatch(/^Conversation operation ID: [a-f0-9-]{36}\n/u);
+      if (paragraphs.join('\n\n') === '取り込みました') {
+        await tool('takt_check_goal_completion', { goalId });
+        return reply('ゴールが完成しました');
+      }
+      return reply('要約を確認してください', goalInput());
     }
-    if (!prompt.startsWith('{')) return reply('要約を確認してください', goalInput());
     const event = ManagerEventSchema.parse((JSON.parse(prompt.split('\n\nGoal memory')[0]!) as { event: unknown }).event);
     if (event.kind === 'registered') {
       goalId = event.goalId;
@@ -126,6 +130,7 @@ it('processes events separately from run and restores their saved records in the
     return reply('結果を取り込みました');
   });
   const context = session(call);
+  const submit = vi.spyOn(context.session, 'submit');
   const manager = createRunEventManager(cwd);
   const signal = new AbortController().signal;
   try {
@@ -178,7 +183,11 @@ it('processes events separately from run and restores their saved records in the
     expect(call.mock.calls[4]![1].sessionId).toBe('shared-conversation');
     // Resumed provider sessions receive the request; current saved work is projected independently to the TUI.
     const latestWorkLog = (await new GoalStore(cwd).get(goalId)).workLog.filter((record) => record.kind !== 'patrol').at(-2)!.summary;
-    expect(call.mock.calls.at(-1)![0]).toBe('取り込みました');
+    const submission = await submit.mock.results.at(-1)!.value;
+    if (submission.kind !== 'accepted') throw new Error('Expected an accepted conversation turn');
+    const [turnContext, ...paragraphs] = call.mock.calls.at(-1)![0].split('\n\n');
+    expect(turnContext!.split('\n')[0]).toBe(`Conversation operation ID: ${submission.operationId}`);
+    expect(paragraphs.join('\n\n')).toBe('取り込みました');
     await context.session.refresh();
     expect(context.session.getSnapshot().items).toContainEqual(expect.objectContaining({
       kind: 'display_event', event: expect.objectContaining({ message: expect.stringContaining(latestWorkLog) }),
