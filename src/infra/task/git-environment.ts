@@ -10,6 +10,7 @@ interface SafeGitEnvironmentOptions {
 export async function buildSafeGitEnvironment(
   cwd: string,
   options: SafeGitEnvironmentOptions,
+  signal?: AbortSignal,
 ): Promise<NodeJS.ProcessEnv> {
   const environment: NodeJS.ProcessEnv = {
     ...buildChildProcessEnv(),
@@ -30,7 +31,7 @@ export async function buildSafeGitEnvironment(
   }
 
   if (!options.allowGitFilters) {
-    configEntries.push(...(await getFilterConfigNames(cwd, environment)).map((configName) => [
+    configEntries.push(...(await getFilterConfigNames(cwd, environment, signal)).map((configName) => [
       configName,
       configName.toLowerCase().endsWith('.required') ? 'false' : '',
     ] as const));
@@ -62,9 +63,10 @@ function removeInheritedGitCommandConfig(environment: NodeJS.ProcessEnv): void {
 async function getFilterConfigNames(
   cwd: string,
   environment: NodeJS.ProcessEnv,
+  signal?: AbortSignal,
 ): Promise<string[]> {
   try {
-    const stdout = await readGitConfigNames(cwd, environment);
+    const stdout = await readGitConfigNames(cwd, environment, signal);
     const names = stdout.trim().split('\n').filter(Boolean);
     return [...new Map(names.map((name) => [name.toLowerCase(), name])).values()];
   } catch (error) {
@@ -73,12 +75,12 @@ async function getFilterConfigNames(
   }
 }
 
-function readGitConfigNames(cwd: string, environment: NodeJS.ProcessEnv): Promise<string> {
+function readGitConfigNames(cwd: string, environment: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
       'git',
       ['config', '--name-only', '--get-regexp', '^filter\\..*\\.(clean|smudge|process|required)$'],
-      { cwd, encoding: 'utf-8', env: environment },
+      { cwd, encoding: 'utf-8', env: environment, signal },
       (error, stdout) => {
         if (error !== null) reject(error);
         else resolve(stdout);

@@ -2,8 +2,8 @@ import { PassThrough } from 'node:stream';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Goal } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
-const doubles = vi.hoisted(() => ({ spawn: vi.fn(), spawnSync: vi.fn(), environment: vi.fn(), get: vi.fn(), update: vi.fn() }));
-vi.mock('node:child_process', async (original) => ({ ...await original<typeof import('node:child_process')>(), spawnSync: doubles.spawnSync }));
+const doubles = vi.hoisted(() => ({ spawn: vi.fn(), spawnSync: vi.fn(), execFile: vi.fn(), environment: vi.fn(), get: vi.fn(), update: vi.fn() }));
+vi.mock('node:child_process', async (original) => ({ ...await original<typeof import('node:child_process')>(), spawnSync: doubles.spawnSync, execFile: doubles.execFile }));
 vi.mock('../shared/utils/spawn.js', () => ({ spawnManagedProcess: doubles.spawn }));
 vi.mock('../infra/task/git-environment.js', () => ({ buildSafeGitEnvironment: doubles.environment }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.get; getSync() { return structuredClone(goal); } update = doubles.update; } }));
@@ -86,6 +86,23 @@ it('resolves a fully qualified local branch commit and rejects invalid branch in
 it('does not start a child for an already cancelled operation', async () => {
   const controller = new AbortController(); controller.abort();
   await expect(runGoalGit('/project', ['diff'], 100, controller.signal)).rejects.toThrow();
+  expect(doubles.spawn).not.toHaveBeenCalled();
+});
+it('cancels Git config reads during environment preparation without starting the goal command', async () => {
+  const { buildSafeGitEnvironment } = await vi.importActual<typeof import('../infra/task/git-environment.js')>('../infra/task/git-environment.js');
+  doubles.environment.mockImplementation(buildSafeGitEnvironment);
+  const controller = new AbortController();
+  const error = Object.assign(new Error('cancelled'), { name: 'AbortError', code: 'ABORT_ERR' });
+  doubles.execFile.mockImplementation((
+    _command: string, _args: string[], options: { signal?: AbortSignal }, callback: (error: Error, stdout: string) => void,
+  ) => {
+    options.signal?.addEventListener('abort', () => callback(error, ''), { once: true });
+  });
+
+  const result = runGoalGit('/project', ['diff'], 100, controller.signal);
+  expect(doubles.execFile.mock.calls[0]?.[2]?.signal).toBe(controller.signal);
+  controller.abort();
+  await expect(result).rejects.toBe(error);
   expect(doubles.spawn).not.toHaveBeenCalled();
 });
 it('terminates a process when capture streams are unavailable', async () => {
