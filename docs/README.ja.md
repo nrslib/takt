@@ -314,6 +314,8 @@ TUI が接続している間や、受け付けた会話の操作を実行して�
 
 **Slack での会話:** 設定した Slack チャンネルからも、同じ manager の会話につながります。返事は発言したスレッドにだけ届き、TUI の返事は Slack に転送しません。Socket Mode の App マニフェスト、トークン用環境変数、リポジトリ設定、問い合わせへの回答方法は、[Slack で manager と会話する](./configuration.ja.md#slack-で-manager-と会話する)を参照してください。完成などの通知は、別の経路である `TAKT_NOTIFY_WEBHOOK` の Incoming Webhook を引き続き使います。
 
+**director の Slack:** `~/.takt/config.yaml` の `director.slack` を設定すると、director の知らせがチャンネルにまとまって届き、そのチャンネルで director と会話できます。返事は元のスレッドに届き、許可された人の発言だけを受け付けます。[Slack で director と会話する](./configuration.ja.md#slack-で-director-と会話する)を参照してください。
+
 会話スレッドに `/make-goal` を送ると登録案が表示されます。「登録を承認」または「会話を続ける」で操作でき、古い版のボタンは使えません。
 
 全コマンド・オプションは [CLI Reference](./cli-reference.ja.md) を参照してください。

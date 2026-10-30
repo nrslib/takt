@@ -1,6 +1,6 @@
 # 担当の分担
 
-director の三つの仕事は、manager の見回り、人への通知、人の「マージして」という指示を manager に伝えることです。会話の発言と daemon の定期見回りで動き、通知は director の会話に保存されます。人の明示的なマージ指示は、既存の道具で対象を確認して manager に伝えます。Slack 接続は対象外です。
+director の三つの仕事は、manager の見回り、人への通知、人の「マージして」という指示を manager に伝えることです。会話の発言と daemon の定期見回りで動き、通知は director の会話に保存されます。人の明示的なマージ指示は、既存の道具で対象を確認して manager に伝えます。director.slack が設定されていれば、その turn の新しい通知は director 用チャンネルへ1件にまとめて届きます。許可された人のチャンネル発言は director との会話になり、返事は元投稿のスレッドに届きます。未設定なら Slack で送受信しません。
 
 見回りイベント director_patrol の observedAt は観測時刻、patrolIntervalSeconds は見回り間隔です。保存済みの createdAt、workLog の recordedAt、問い合わせの createdAt と比較し、長い未回答や進捗停滞を判断します。kind が patrol の作業記録と lastPatrolCompletedAt は進捗に含めません。blocked はゴールの status ではなく notifications の kind です。
 

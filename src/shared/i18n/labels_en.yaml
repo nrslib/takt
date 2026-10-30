@@ -425,6 +425,7 @@ tui:
     exceededStart: "Saved stopping position: {start} (iteration {iteration})"
 
 director:
+  slackNotifications: "Director updates: completed work and decisions for the human"
   patrolFailed: "Director patrol failed"
   description: "Open the experimental director conversation TUI"
   experimentalNotice: "director is experimental. Behavior, settings, and saved data formats may change."

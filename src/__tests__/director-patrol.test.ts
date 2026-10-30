@@ -14,6 +14,16 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
+it('passes the resolved notification delivery to each patrol turn', async () => {
+  const notifications = { notify: vi.fn() };
+  const delivery = { deliver: vi.fn() };
+  const signal = new AbortController().signal;
+  const patrol = createDirectorPatrol('/config', notifications, 600, 'en', delivery);
+  patrol.poll(signal);
+  await patrol.close();
+  expect(doubles.prepare).toHaveBeenCalledExactlyOnceWith('/config', notifications, signal, {}, true, delivery);
+});
+
 it.each(['ja', 'en'] as const)('starts a separate patrol with observation time and interval in %s', async (language) => {
   const notifications = { notify: vi.fn() };
   const patrol = createDirectorPatrol('/config', notifications, 600, language);
@@ -21,7 +31,7 @@ it.each(['ja', 'en'] as const)('starts a separate patrol with observation time a
   patrol.poll(signal);
   expect(patrol.running).toBe(true);
   await patrol.close();
-  expect(doubles.prepare).toHaveBeenCalledExactlyOnceWith('/config', notifications, signal, {}, true);
+  expect(doubles.prepare).toHaveBeenCalledExactlyOnceWith('/config', notifications, signal, {}, true, undefined);
   const input = doubles.execute.mock.calls[0]![0];
   expect(JSON.parse(input.prompt)).toEqual({ event: 'director_patrol', observedAt: '2026-10-29T01:00:00.000Z', patrolIntervalSeconds: 600 });
   expect(input).toMatchObject({ sessionId: undefined, assignment: undefined, abortSignal: signal });

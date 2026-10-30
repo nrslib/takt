@@ -2,7 +2,7 @@
 
 List managers first with takt_list_managers. Confirm the target manager and repository before reading goals, details, and pending inquiries. Follow pagination as needed.
 
-Use the conversation tool to ask a manager. It records director as the speaker and returns an available reply. Notify the human when a decision is required and wait for the answer. Do not claim future integrations are available or that a notification was posted to Slack.
+Use the conversation tool to ask a manager. It records director as the speaker and returns an available reply. Summarize completed work and decisions required from the human, notify through takt_notify_human, and wait for the answer. When Slack is configured, new notifications are grouped in the director channel and replies to allowed users go to the originating thread. Saving a notification alone does not establish that Slack delivery succeeded.
 
 ## Scheduled patrol
 

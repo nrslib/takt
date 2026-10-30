@@ -16,6 +16,9 @@ phase 粒度の usage events と集計方法は [Observability Guide](./observab
 language: en                  # UI 言語: 'en' または 'ja'
 director:
   patrol_interval: 900        # director の見回り間隔（秒、正の整数、デフォルト: 900）
+  slack:
+    channel_id: C0DIR
+    allowed_user_ids: [U0AAA]
 logging:
   level: info                 # ログレベル: debug, info, warn, error
 provider: claude-sdk              # デフォルト provider: claude-sdk, claude, claude-headless, claude-terminal, codex, opencode, deepseek-harness, cursor, copilot, kiro, pi, または mock
@@ -188,6 +191,8 @@ dynamic parallel と `dynamic_facets` の selector は読み取り専用で、`R
 |-----------|------|---------|------|
 | `language` | `"en"` \| `"ja"` | `"en"` | UI 言語 |
 | `director.patrol_interval` | 正の整数（秒） | `900` | daemon 稼働中に director の見回りを行う間隔。グローバル設定のみ。 |
+| `director.slack.channel_id` | string | - | director の Slack チャンネル。グローバル設定のみ。[Slack で director と会話する](#slack-で-director-と会話する)を参照。 |
+| `director.slack.allowed_user_ids` | string[] | - | Slack から director への発言を許可するユーザー。`director.slack` を設定するときは必須。空配列では誰の発言も受け付けない。 |
 | `logging.level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | ログレベル |
 | `logging.trace` | boolean | `false` | trace レベルのログを有効化（高頻度のデバッグノイズを抑制） |
 | `logging.debug` | boolean | `false` | デバッグログを有効化（`debug.log` + `prompts.jsonl`） |
@@ -542,6 +547,24 @@ Slack を設定したリポジトリがあり、両方のトークンがそろ�
 - 自由記述の回答は、その問い合わせの投稿のスレッドに返信します。投稿と問い合わせの対応が有効な場合、返信は会話ではなく回答として扱われます。回答は出どころ `slack` として保存されます。
 - Slack 接続時にすでに未回答の問い合わせは Slack に投稿されません。TUI の `Ctrl+R` で回答してください。接続後の新しい問い合わせは1件につき1回投稿し、再送しません。投稿と問い合わせの対応を保存できなかった場合や読み取れない場合、そのスレッドへの返信は回答にならず、通常の会話として扱われます。
 - 「完成しました」などの知らせは、会話の接続からは投稿しません。引き続き `TAKT_NOTIFY_WEBHOOK` で届きます。
+
+## Slack で director と会話する
+
+director のチャンネルと許可するユーザーは、プロジェクトの `.takt/config.yaml` ではなく、グローバルの `~/.takt/config.yaml` に設定します。
+
+```yaml
+# ~/.takt/config.yaml
+director:
+  slack:
+    channel_id: C0DIR
+    allowed_user_ids: [U0AAA]
+```
+
+manager と同じ Slack App と環境変数 `TAKT_SLACK_APP_TOKEN` / `TAKT_SLACK_BOT_TOKEN` を使います。[Slack App を作る](#slack-app-を作る)に従ってボットを director のチャンネルへ招待し、`takt daemon` を起動するシェルで両変数を設定してください。トークンは設定ファイルに書かず、環境変数で渡します。Slack 設定を変更したら daemon を起動し直してください。
+
+director のチャンネルに許可された人が書いた発言は、manager ではなく director の会話に渡ります。director の返事は元の投稿のスレッドに届きます。`director.slack.allowed_user_ids` にない人の発言は無視します。manager と同じチャンネルを使う場合も、通常の発言は director に渡り、manager の問い合わせボタンとモーダルの操作には `manager.slack.allowed_user_ids` が適用されます。
+
+director は、1回の会話または見回りで出た新しい知らせを、このチャンネルへの1件の投稿にまとめます。終わった仕事と、マージ承認や未回答の問い合わせなど人に決めてほしいことを知らせます。既存の重複抑止で除かれた知らせは再投稿しません。`director.slack` がなければ、director は Slack に投稿せず、発言も受け付けません。接続には両方のトークン環境変数が必要です。既存の `TAKT_NOTIFY_WEBHOOK` による通知経路は変わりません。
 
 ## manager の秘密ファイル設定
 

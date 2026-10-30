@@ -61,7 +61,7 @@ export function createDirectorMcpServer(configDirectory: string, notifications: 
   server.registerTool('takt_tell_manager', { description: 'Send a message as director through daemon IPC. Busy messages are never queued or resent.',
     inputSchema: z.object({ managerId, text: z.string().min(1) }).strict() }, guarded(async (value: { managerId: string; text: string }) =>
     jsonResult(await tellDirectorManager(configDirectory, value.managerId, value.text, signal))));
-  server.registerTool('takt_notify_human', { description: 'Save a director notification and show it in the director conversation. Does not post to Slack.',
+  server.registerTool('takt_notify_human', { description: 'Save a director notification and show it in the director conversation. New notifications from this turn are grouped into one post when director Slack is configured.',
     inputSchema: z.object({ message: z.string().min(1), target: directorNotificationTargetSchema.optional() }).strict() },
   guarded(async (value: { message: string; target?: z.infer<typeof directorNotificationTargetSchema> }) => {
     if (requireNotificationTarget && value.target === undefined) throw new Error('Patrol notifications require a target');

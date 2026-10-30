@@ -5,6 +5,8 @@ import { createDirectorConversationPlan } from './conversationPlan.js';
 import { createDirectorMcpServer, DIRECTOR_MCP_SERVER_NAME, DIRECTOR_TOOL_ALLOWLIST, type DirectorNotifications } from './mcp.js';
 import { startLocalMcpConnection } from '../mcp/localConnection.js';
 import { createDirectorTurnExecutor } from './turnExecutor.js';
+import type { DirectorNotificationDelivery } from './notificationDelivery.js';
+import type { DirectorNotification } from '../../infra/conversations/directorNotifications.js';
 
 export async function prepareDirectorTurn(
   configDirectory: string,
@@ -12,10 +14,24 @@ export async function prepareDirectorTurn(
   signal: AbortSignal,
   overrides: AssistantCliOverrides,
   patrol: boolean,
+  delivery?: DirectorNotificationDelivery,
 ) {
   signal.throwIfAborted();
   const plan = createDirectorConversationPlan(configDirectory, overrides);
-  const connection = await startLocalMcpConnection(() => createDirectorMcpServer(configDirectory, notifications, signal, patrol));
+  const batch: DirectorNotification[] = [];
+  const collected: DirectorNotifications = delivery === undefined ? notifications : {
+    async notify(notification) {
+      batch.push(notification);
+      await notifications.notify(notification);
+    },
+  };
+  const connection = await startLocalMcpConnection(() => createDirectorMcpServer(configDirectory, collected, signal, patrol));
+  let disposed: Promise<void> | undefined;
+  const dispose = (): Promise<void> => disposed ??= (async () => {
+    try {
+      if (batch.length > 0) await delivery!.deliver(batch);
+    } finally { await connection.dispose(); }
+  })();
   try {
     await plan.ctx.provider.preflight?.({ cwd: plan.cwd, model: plan.ctx.model, providerOptions: plan.ctx.providerOptions,
       permissionMode: 'readonly', strictToolAllowlist: DIRECTOR_TOOL_ALLOWLIST,
@@ -25,18 +41,18 @@ export async function prepareDirectorTurn(
     return { provider: plan.ctx.providerType, model: plan.ctx.model ?? null, language: plan.ctx.lang,
       contextKey: createHash('sha256').update(JSON.stringify({
         provider: plan.ctx.providerType, model: plan.ctx.model, options: plan.ctx.providerOptions, prompt: plan.systemPrompt,
-      })).digest('hex'), executor, dispose: connection.dispose,
+      })).digest('hex'), executor, dispose,
     };
-  } catch (error) { await connection.dispose(); throw error; }
+  } catch (error) { await dispose(); throw error; }
 }
 
-export function createDaemonConversationRuntime(configDirectory: string, notifications: DirectorNotifications): ConversationRuntime {
+export function createDaemonConversationRuntime(configDirectory: string, notifications: DirectorNotifications, delivery?: DirectorNotificationDelivery): ConversationRuntime {
   const managers = createConversationRuntime(configDirectory);
   const connections = new Set<() => Promise<void>>();
   return {
     async resolve(assignment, signal, overrides) {
       if (assignment.kind !== 'daemon') return managers.resolve(assignment, signal, overrides);
-      const prepared = await prepareDirectorTurn(configDirectory, notifications, signal, overrides ?? {}, false);
+      const prepared = await prepareDirectorTurn(configDirectory, notifications, signal, overrides ?? {}, false, delivery);
       const { executor, dispose, ...configuration } = prepared;
       let released: Promise<void> | undefined;
       const release = (): Promise<void> => released ??= Promise.resolve().then(dispose).finally(() => { connections.delete(release); });

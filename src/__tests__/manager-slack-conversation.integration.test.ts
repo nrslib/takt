@@ -89,6 +89,14 @@ async function reopenSlack() {
     tokens: { appToken: 'xapp-test-1', botToken: 'xoxb-test-2' } });
 }
 
+async function reopenSharedSlack(allowedUserIds: string[]) {
+  await slack.close();
+  sdk.on.mockClear();
+  slack = await createDaemonSlackPorts({ projects: [repository], configDirectory: directory, input: service,
+    tokens: { appToken: 'xapp-test-1', botToken: 'xoxb-test-2' },
+    director: { slack: { channelId: 'C0123', allowedUserIds }, language: 'ja' } });
+}
+
 async function createGoalInquiry(input: GoalQuestionInput) {
   const question = createInquiry(input);
   await new GoalStore(repository).create({ ...goalRecord(), questions: [question] });
@@ -197,6 +205,29 @@ beforeEach(async () => {
     tokens: { appToken: 'xapp-test-1', botToken: 'xoxb-test-2' } });
 });
 afterEach(async () => { release?.(); slack?.stopAccepting(); await service?.close(); await slack?.close(); DebugLogger.getInstance().reset(); vi.restoreAllMocks(); });
+
+it('keeps manager conversations and inquiry buttons working with director on the shared Slack connection', async () => {
+  await slack.close();
+  sdk.on.mockClear();
+  sdk.start.mockClear();
+  slack = await createDaemonSlackPorts({ projects: [repository], configDirectory: directory, input: service,
+    tokens: { appToken: 'xapp-test-1', botToken: 'xoxb-test-2' },
+    director: { slack: { channelId: 'C0DIR', allowedUserIds: ['U0DIR'] }, language: 'ja' } });
+  await (await emit()).pending;
+  await finished(1);
+  expect(execute).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ instruction: '状況は？' }));
+  const question = await createGoalInquiry({ body: '形式を選んでください', options: ['A', 'B'] });
+  const posted = await postedInquiry();
+  await pressButton(posted, /^1\. A$/u);
+  await answersFinished();
+  expect(await savedInquiry()).toMatchObject({ id: question.id, status: 'answered', answer: { text: 'A', source: 'slack' } });
+  await slack.notifications.deliver([{ id: 'director-notice', message: '人の判断が必要です' }]);
+  const directorPosts = sdk.post.mock.calls.map(([post]) => post).filter((post) => post.channel === 'C0DIR');
+  expect(directorPosts).toHaveLength(1);
+  expect(directorPosts[0]).toMatchObject({ text: expect.stringContaining('人の判断が必要です') });
+  expect(directorPosts[0]!.thread_ts).toBeUndefined();
+  expect(sdk.start).toHaveBeenCalledOnce();
+});
 
 it('acknowledges shutdown-time messages without starting a turn before or after delayed startup completes', async () => {
   await slack.close();
@@ -747,12 +778,49 @@ it.each(['operation_request', 'approval'] as const)('posts %s actions initially 
 });
 
 it.each([undefined, 'thread_broadcast'])('saves an inquiry thread reply with subtype %s without passing it to the provider', async (subtype) => {
+  await reopenSharedSlack(['U0AAA']);
   await createGoalInquiry({ body: '幅を確認してください' });
   const posted = await postedInquiry();
   await (await emit({ subtype, thread_ts: posted.parentTs, ts: '1700000000.000100', text: '幅 80 で問題なし' })).pending;
   await answersFinished();
   expect(await savedInquiry()).toMatchObject({ status: 'answered', answer: { text: '幅 80 で問題なし', source: 'slack' } });
   expect(execute).not.toHaveBeenCalled();
+});
+
+it.each(['U0AAA', 'U0DIR'])('uses manager authorization for a shared-channel inquiry reply from %s', async (user) => {
+  await reopenSharedSlack(['U0DIR']);
+  const question = await createGoalInquiry({ body: '幅を確認してください' });
+  const posted = await postedInquiry();
+  const open = vi.spyOn(service, 'open');
+  const submit = vi.spyOn(service, 'submit');
+  await (await emit({ user, thread_ts: posted.parentTs, ts: '1700000000.000100', text: '幅 80 で問題なし' })).pending;
+  await answersFinished();
+  if (user === 'U0AAA') {
+    expect(await savedInquiry()).toMatchObject({ id: question.id, status: 'answered', answer: { text: '幅 80 で問題なし', source: 'slack' } });
+    expect(open).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ assignment: { kind: 'repository', repositoryDirectory: repository } }), expect.any(Object));
+    expect(submit).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ command: expect.objectContaining({ kind: 'answer_question' }) }));
+  } else {
+    expect(await savedInquiry()).toEqual(question);
+    expect(open).not.toHaveBeenCalled();
+    expect(submit).not.toHaveBeenCalled();
+    expect(sdk.post).toHaveBeenCalledOnce();
+  }
+  expect(execute).not.toHaveBeenCalled();
+});
+
+it('routes an unbound shared-channel thread to director and replies there without answering the inquiry', async () => {
+  await reopenSharedSlack(['U0AAA']);
+  const question = await createGoalInquiry({ body: '幅を確認してください' });
+  const posted = await postedInquiry();
+  const parentTs = '1700000000.000002';
+  expect(parentTs).not.toBe(posted.parentTs);
+  const open = vi.spyOn(service, 'open');
+  await (await emit({ thread_ts: parentTs, ts: '1700000000.000100', text: '幅 80 で問題なし' })).pending;
+  await finished(2);
+  expect(await savedInquiry()).toEqual(question);
+  expect(open).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ assignment: { kind: 'daemon' } }), expect.any(Object));
+  expect(execute).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ instruction: '幅 80 で問題なし', assignment: undefined }));
+  expect(sdk.post.mock.calls[1]![0]).toMatchObject({ channel: 'C0123', thread_ts: parentTs, text: 'reply:幅 80 で問題なし' });
 });
 
 it('passes the same reply in an ordinary thread to the conversation while leaving the inquiry pending', async () => {
@@ -766,6 +834,7 @@ it('passes the same reply in an ordinary thread to the conversation while leavin
 
 it.each([{ subtype: 'message_changed' }, { subtype: 'message_deleted' }, { bot_id: 'B1' }])(
   'ignores inquiry thread edits, deletions and bot posts %j', async (overrides) => {
+    await reopenSharedSlack(['U0AAA']);
     const question = await createGoalInquiry({ body: '幅を確認してください' });
     const posted = await postedInquiry();
     await (await emit({ thread_ts: posted.parentTs, text: '幅 80 で問題なし', ...overrides })).pending;
@@ -775,26 +844,30 @@ it.each([{ subtype: 'message_changed' }, { subtype: 'message_deleted' }, { bot_i
   },
 );
 
-it('keeps an answered inquiry thread separate from the conversation on later replies', async () => {
+it.each(['answered', 'withdrawn'] as const)('keeps an %s inquiry thread separate from the conversation on later replies', async (status) => {
+  await reopenSharedSlack(['U0AAA']);
   await createGoalInquiry({ body: '幅を確認してください' });
   const posted = await postedInquiry();
-  await (await emit({ thread_ts: posted.parentTs, text: '幅 80 で問題なし' })).pending;
-  await answersFinished();
-  const answered = await savedInquiry();
-  expect(answered.status).toBe('answered');
+  if (status === 'answered') {
+    await (await emit({ thread_ts: posted.parentTs, text: '幅 80 で問題なし' })).pending;
+    await answersFinished();
+  } else {
+    await new GoalStore(repository).update(goalRecord().id, (goal) => ({ ...goal,
+      questions: goal.questions!.map((question) => ({ ...question, status, withdrawnAt: new Date().toISOString() })) }));
+  }
+  const saved = await savedInquiry();
+  expect(saved.status).toBe(status);
   await (await emit({ thread_ts: posted.parentTs, text: '後から追記' })).pending;
   await answersFinished();
-  expect(await savedInquiry()).toEqual(answered);
+  expect(await savedInquiry()).toEqual(saved);
   expect(execute).not.toHaveBeenCalled();
 });
 
 it('restores the inquiry parent binding after reopening the Slack port and answers without a provider turn', async () => {
+  await reopenSharedSlack(['U0AAA']);
   await createGoalInquiry({ body: '幅を確認してください' });
   const posted = await postedInquiry();
-  await slack.close();
-  sdk.on.mockClear();
-  slack = await createDaemonSlackPorts({ projects: [repository], configDirectory: directory, input: service,
-    tokens: { appToken: 'xapp-test-1', botToken: 'xoxb-test-2' } });
+  await reopenSharedSlack(['U0AAA']);
   await (await emit({ thread_ts: posted.parentTs, text: '幅 80 で問題なし' })).pending;
   await answersFinished();
   expect(await savedInquiry()).toMatchObject({ status: 'answered', answer: { text: '幅 80 で問題なし', source: 'slack' } });
@@ -820,6 +893,7 @@ it.each(['completed', 'unable'] as const)('saves an operation request button as 
 });
 
 it.each(['approval', 'operation_request'] as const)('does not infer a structured %s answer from free text', async (kind) => {
+  await reopenSharedSlack(['U0AAA']);
   const question = await createGoalInquiry(kind === 'approval' ? approvalInput() : { kind, body: '認証を更新してください' });
   const posted = await postedInquiry();
   await (await emit({ thread_ts: posted.parentTs, text: 'できました' })).pending;
@@ -986,16 +1060,20 @@ it.each(['recovered', 'unavailable'] as const)('routes a reply to conversation w
 });
 
 it('routes a reply to conversation when a saved inquiry binding cannot be read', async () => {
+  await reopenSharedSlack(['U0AAA']);
   const question = await createGoalInquiry({ body: '幅を確認してください' });
   const posted = await postedInquiry();
   const bindingDirectory = join(directory, 'slack-inquiries');
   const savedDirectory = join(directory, 'slack-inquiries-saved');
   renameSync(bindingDirectory, savedDirectory);
   writeFileSync(bindingDirectory, 'unavailable');
+  const open = vi.spyOn(service, 'open');
   try {
     await (await emit({ thread_ts: posted.parentTs, text: '幅 80 で問題なし' })).pending;
     await finished(2);
+    expect(open).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ assignment: { kind: 'daemon' } }), expect.any(Object));
     expect(execute).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ instruction: '幅 80 で問題なし' }));
+    expect(sdk.post.mock.calls[1]![0]).toMatchObject({ channel: 'C0123', thread_ts: posted.parentTs, text: 'reply:幅 80 で問題なし' });
     expect(await savedInquiry()).toEqual(question);
     expect(sdk.history).not.toHaveBeenCalled();
   } finally {

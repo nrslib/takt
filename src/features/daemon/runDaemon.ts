@@ -23,6 +23,7 @@ import { createDaemonSlackPorts } from './slackPorts.js';
 import { createDirectorPatrol } from '../director/patrol.js';
 import { resolveDirectorConfig } from '../../infra/config/directorConfig.js';
 import { loadGlobalConfig } from '../../infra/config/global/globalConfig.js';
+import type { DirectorNotificationDelivery } from '../director/notificationDelivery.js';
 
 const POLL_INTERVAL_MS = 500;
 const SLACK_INQUIRY_POLL_INTERVAL_MS = 5_000;
@@ -59,8 +60,16 @@ export async function runDaemon(): Promise<void> {
   const inFlight = new Map<string, Promise<void>>();
   const projectWork = new Map<string, boolean>();
   let domainGeneration = 0;
+  let directorConfig: ReturnType<typeof resolveDirectorConfig> | undefined;
+  let resolveSlack!: (ports: Awaited<ReturnType<typeof createDaemonSlackPorts>> | undefined) => void;
+  const slackReady = new Promise<Awaited<ReturnType<typeof createDaemonSlackPorts>> | undefined>((resolve) => { resolveSlack = resolve; });
+  const notifications: DirectorNotificationDelivery = { async deliver(batch) {
+    if (directorConfig?.slack === undefined) return;
+    const ports = await slackReady;
+    if (ports !== undefined) await ports.notifications.deliver(batch);
+  } };
   const conversations = createConversationService({ configDirectory: globalConfigDirectory, owner,
-    runtime: createDaemonConversationRuntime(globalConfigDirectory, { notify: (notification) => conversations.notifyDirector(notification) }),
+    runtime: createDaemonConversationRuntime(globalConfigDirectory, { notify: (notification) => conversations.notifyDirector(notification) }, notifications),
     onDomainChange: () => { domainGeneration++; projectWork.clear(); } });
   let ipc: Awaited<ReturnType<typeof createConversationIpcServer>> | undefined;
   let slack: Awaited<ReturnType<typeof createDaemonSlackPorts>> | undefined;
@@ -125,11 +134,19 @@ export async function runDaemon(): Promise<void> {
   process.on('SIGINT', stop);
   try {
     const globalConfig = loadGlobalConfig();
-    director = createDirectorPatrol(globalConfigDirectory, { notify: (notification) => conversations.notifyDirector(notification) },
-      resolveDirectorConfig(globalConfig).patrolInterval, globalConfig.language);
+    directorConfig = resolveDirectorConfig(globalConfig);
+    initDebugLogger({ enabled: true, logFile: join(globalConfigDirectory, 'logs', 'daemon.log') });
     ipc = await createConversationIpcServer(globalConfigDirectory, owner, conversations);
     if (controller.signal.aborted) return;
-    initDebugLogger({ enabled: true, logFile: join(globalConfigDirectory, 'logs', 'daemon.log') });
+    const initialProjects = await listDaemonProjects(globalConfigDirectory);
+    if (controller.signal.aborted) return;
+    slack = await createDaemonSlackPorts({ projects: initialProjects, configDirectory: globalConfigDirectory, input: conversations,
+      director: { slack: directorConfig.slack, language: globalConfig.language },
+      tokens: appToken && botToken ? { appToken, botToken } : undefined, signal: controller.signal });
+    resolveSlack(slack);
+    if (controller.signal.aborted) return;
+    director = createDirectorPatrol(globalConfigDirectory, { notify: (notification) => conversations.notifyDirector(notification) },
+      directorConfig.patrolInterval, globalConfig.language, notifications);
     log.info('Daemon started', { pid: process.pid, version: packageVersion, cliPath });
     while (!controller.signal.aborted) {
       // Leave the first polling interval for the launching manager to observe startup.
@@ -139,9 +156,6 @@ export async function runDaemon(): Promise<void> {
         break;
       }
       const projects = await listDaemonProjects(globalConfigDirectory);
-      if (controller.signal.aborted) break;
-      slack ??= await createDaemonSlackPorts({ projects, configDirectory: globalConfigDirectory, input: conversations,
-        tokens: appToken && botToken ? { appToken, botToken } : undefined, signal: controller.signal });
       if (controller.signal.aborted) break;
       if (slackInquiryPolling === undefined && Date.now() >= nextSlackInquiryPoll) {
         nextSlackInquiryPoll = Date.now() + SLACK_INQUIRY_POLL_INTERVAL_MS;
@@ -185,6 +199,7 @@ export async function runDaemon(): Promise<void> {
       if (projects.every((cwd) => projectWork.has(cwd))) director.poll(controller.signal);
     }
   } finally {
+    resolveSlack(undefined);
     stop();
     await director?.close();
     try { await conversations.close(); }
