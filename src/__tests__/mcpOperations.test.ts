@@ -1,5 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { getTaktGoal, listTaktGoals, enqueueTaktTask, type McpOperationDependencies } from '../features/mcp/operations.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { getTaktGoal, listTaktGoals, listTaktTasks, enqueueTaktTask, type McpOperationDependencies } from '../features/mcp/operations.js';
+import { TaskRunner, type TaskState } from '../infra/task/index.js';
+import * as goalGit from '../infra/goals/git-command.js';
+import * as runMeta from '../core/workflow/run/run-meta.js';
 import { listGoalsInputSchema, type EnqueueTaskInput } from '../features/mcp/schemas.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
@@ -26,6 +29,240 @@ function invalidGoalErrors(count: number) {
     error: new Error('Invalid goal file: /Users/reviewer/secret/goal.json'),
   }));
 }
+
+describe('MCP task goal integration', () => {
+  const cwd = '/repo';
+  const completionSha = 'a'.repeat(40);
+  const goalSha = 'b'.repeat(40);
+
+  function task(overrides: Partial<TaskState> = {}): TaskState {
+    return {
+      name: 'completed-task', kind: 'completed', status: 'completed', goalId,
+      createdAt: '2026-10-30T00:00:00Z', filePath: '/repo/.takt/tasks.yaml',
+      completion: { success: true, interrupted: false, sha: completionSha },
+      ...overrides,
+    };
+  }
+
+  async function list(input: { offset?: number; limit?: number } = {}) {
+    const result = await listTaktTasks({ cwd, ...input });
+    expect(result.isError).toBeUndefined();
+    return JSON.parse(firstTextContent(result.content)) as {
+      tasks: Record<string, unknown>[]; totalCount: number; returnedCount: number;
+      offset: number; nextOffset: number | null;
+    };
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.spyOn(TaskRunner.prototype, 'listTaskStateItems').mockReturnValue([task()]);
+    goalDoubles.get.mockResolvedValue(goalRecord());
+    vi.spyOn(goalGit, 'resolveGoalBranchSha').mockResolvedValue(goalSha);
+    vi.spyOn(goalGit, 'isGoalCommitIncluded').mockResolvedValue(true);
+    vi.spyOn(goalGit, 'runGoalGit').mockResolvedValue({ output: Buffer.alloc(0), code: 0, truncated: false });
+  });
+
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('returns integrated for a completion commit reachable from the goal branch', async () => {
+    const output = await list();
+    expect(output.tasks[0]).toMatchObject({ status: 'completed', goalIntegration: 'integrated' });
+    expect(output.tasks[0]).not.toHaveProperty('goalIntegrationReason');
+    expect(goalDoubles.get).toHaveBeenCalledWith(goalId);
+    expect(goalGit.resolveGoalBranchSha).toHaveBeenCalledWith(cwd, goalRecord().branch, undefined);
+    expect(goalGit.isGoalCommitIncluded).toHaveBeenCalledWith(cwd, completionSha, goalSha, undefined);
+    expect(goalGit.runGoalGit).not.toHaveBeenCalled();
+  });
+
+  it('returns not_integrated for an existing completion commit outside the goal history', async () => {
+    vi.mocked(goalGit.isGoalCommitIncluded).mockResolvedValue(false);
+    const output = await list();
+    expect(output.tasks[0]).toMatchObject({ status: 'completed', goalIntegration: 'not_integrated' });
+    expect(output.tasks[0]).not.toHaveProperty('goalIntegrationReason');
+    expect(goalGit.runGoalGit).not.toHaveBeenCalled();
+  });
+
+  it.each(['pending', 'running', 'failed', 'exceeded', 'pr_failed', 'completed'] as const)(
+    'returns not_integrated without Git for a %s task without a completion SHA', async (status) => {
+      vi.mocked(TaskRunner.prototype.listTaskStateItems).mockReturnValue([task({
+        status, kind: status, completion: { success: status === 'completed', interrupted: false },
+      })]);
+      const output = await list();
+      expect(output.tasks[0]).toMatchObject({ status, goalIntegration: 'not_integrated' });
+      expect(output.tasks[0]).not.toHaveProperty('goalIntegrationReason');
+      expect(goalDoubles.get).not.toHaveBeenCalled();
+      expect(goalGit.resolveGoalBranchSha).not.toHaveBeenCalled();
+      expect(goalGit.isGoalCommitIncluded).not.toHaveBeenCalled();
+      expect(goalGit.runGoalGit).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['pending', 'running', 'failed'] as const)(
+    'does not infer integration from a stale completion SHA on a %s task', async (status) => {
+      vi.mocked(TaskRunner.prototype.listTaskStateItems).mockReturnValue([task({ status, kind: status })]);
+      expect((await list()).tasks[0]).toMatchObject({ status, goalIntegration: 'not_integrated' });
+      expect(goalGit.isGoalCommitIncluded).not.toHaveBeenCalled();
+      expect(goalGit.resolveGoalBranchSha).not.toHaveBeenCalled();
+    },
+  );
+
+  it('keeps a task without a completion record not_integrated', async () => {
+    vi.mocked(TaskRunner.prototype.listTaskStateItems).mockReturnValue([task({ completion: undefined })]);
+    expect((await list()).tasks[0]).toMatchObject({ goalIntegration: 'not_integrated' });
+    expect(goalDoubles.get).not.toHaveBeenCalled();
+    expect(goalGit.isGoalCommitIncluded).not.toHaveBeenCalled();
+  });
+
+  it('localizes a missing completion commit and explains it while preserving a healthy task', async () => {
+    const missingSha = 'c'.repeat(40);
+    vi.mocked(TaskRunner.prototype.listTaskStateItems).mockReturnValue([
+      task({ name: 'missing', completion: { success: true, interrupted: false, sha: missingSha } }), task(),
+    ]);
+    vi.mocked(goalGit.isGoalCommitIncluded).mockImplementation(async (_cwd, source) => {
+      if (source === missingSha) throw new Error('Goal Git merge-base failed (128)');
+      return true;
+    });
+    vi.mocked(goalGit.runGoalGit).mockImplementation(async (_cwd, _args, _limit, _signal, acceptedCodes = [0]) => {
+      if (!acceptedCodes.includes(128)) throw new Error('Goal Git cat-file failed (128)');
+      return { output: Buffer.alloc(0), code: 128, truncated: false };
+    });
+    const output = await list();
+    expect(output.tasks[0]).toMatchObject({ name: 'missing', goalIntegration: 'unknown' });
+    expect(output.tasks[0]?.goalIntegrationReason).toEqual(expect.stringMatching(/commit.*(?:missing|not found|unavailable|cannot|could not)|コミット.*(?:見つから|存在し|読み取れ)/i));
+    expect(output.tasks[1]).toMatchObject({ goalIntegration: 'integrated' });
+    expect(vi.mocked(goalGit.runGoalGit).mock.calls[0]?.slice(0, 2)).toEqual([
+      cwd, ['cat-file', '-e', '--', `${missingSha}^{commit}`],
+    ]);
+  });
+
+  it('returns unknown with the Git failure reason when the completion commit exists', async () => {
+    vi.mocked(goalGit.isGoalCommitIncluded).mockRejectedValue(new Error('ancestry check unavailable'));
+    const output = await list();
+    expect(output.tasks[0]).toMatchObject({ goalIntegration: 'unknown',
+      goalIntegrationReason: expect.stringContaining('ancestry check unavailable') });
+  });
+
+  it('reports a failed commit check as a Git failure without asserting that the commit is missing', async () => {
+    vi.mocked(goalGit.isGoalCommitIncluded).mockRejectedValue(new Error('ancestry process unavailable'));
+    vi.mocked(goalGit.runGoalGit).mockRejectedValue(new Error('commit check process unavailable'));
+    const output = await list();
+    expect(output.tasks[0]).toMatchObject({ goalIntegration: 'unknown',
+      goalIntegrationReason: expect.stringContaining('commit check process unavailable') });
+  });
+
+  it('sanitizes external branch errors before including them in the task response', async () => {
+    vi.mocked(goalGit.resolveGoalBranchSha).mockRejectedValue(
+      new Error("EACCES: permission denied, open '/Users/reviewer/secret/goal.json'"),
+    );
+    const output = await list();
+    expect(output.tasks[0]).toMatchObject({ goalIntegration: 'unknown',
+      goalIntegrationReason: expect.stringContaining('permission denied') });
+    expect(output.tasks[0]?.goalIntegrationReason).not.toContain('/Users/reviewer/secret');
+  });
+
+  it('localizes goal read failures and still returns tasks from another goal', async () => {
+    const otherGoalId = '650e8400-e29b-41d4-a716-446655440000';
+    vi.mocked(TaskRunner.prototype.listTaskStateItems).mockReturnValue([task(), task({ name: 'healthy', goalId: otherGoalId })]);
+    goalDoubles.get.mockImplementation(async (id: string) => {
+      if (id === goalId) throw new Error('goal unavailable');
+      return { ...goalRecord(), id: otherGoalId };
+    });
+    const output = await list();
+    expect(output.tasks[0]).toMatchObject({ goalIntegration: 'unknown', goalIntegrationReason: expect.any(String) });
+    expect(output.tasks[0]?.goalIntegrationReason).not.toBe('');
+    expect(output.tasks[1]).toMatchObject({ name: 'healthy', goalIntegration: 'integrated' });
+  });
+
+  it('shares a branch resolution failure only within one list call and retries on the next call', async () => {
+    vi.mocked(TaskRunner.prototype.listTaskStateItems).mockReturnValue([task(), task({ name: 'second' })]);
+    vi.mocked(goalGit.resolveGoalBranchSha).mockRejectedValueOnce(new Error('goal branch unavailable')).mockResolvedValue(goalSha);
+    const first = await list();
+    expect(first.tasks).toHaveLength(2);
+    for (const entry of first.tasks) {
+      expect(entry).toMatchObject({ goalIntegration: 'unknown', goalIntegrationReason: expect.any(String) });
+      expect(entry.goalIntegrationReason).not.toBe('');
+    }
+    expect(goalGit.resolveGoalBranchSha).toHaveBeenCalledTimes(1);
+    expect(goalGit.isGoalCommitIncluded).not.toHaveBeenCalled();
+    expect((await list()).tasks.map((entry) => entry.goalIntegration)).toEqual(['integrated', 'integrated']);
+    expect(goalGit.resolveGoalBranchSha).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the existing summary and omits integration fields for tasks without a goal', async () => {
+    vi.mocked(TaskRunner.prototype.listTaskStateItems).mockReturnValue([task({ goalId: undefined, summary: 'ordinary task' })]);
+    const output = await list();
+    expect(output.tasks).toEqual([{ name: 'completed-task', summary: 'ordinary task', status: 'completed' }]);
+    expect(goalDoubles.get).not.toHaveBeenCalled();
+    expect(goalGit.resolveGoalBranchSha).not.toHaveBeenCalled();
+    expect(goalGit.isGoalCommitIncluded).not.toHaveBeenCalled();
+    expect(goalGit.runGoalGit).not.toHaveBeenCalled();
+  });
+
+  it('checks only the selected page and resolves each goal tip once per call', async () => {
+    const tasks = Array.from({ length: 20 }, (_, index) => task({ name: `task-${index}`,
+      completion: { success: true, interrupted: false, sha: index.toString(16).padStart(40, '0') } }));
+    vi.mocked(TaskRunner.prototype.listTaskStateItems).mockReturnValue(tasks);
+    const output = await list({ offset: 7, limit: 2 });
+    expect(output).toMatchObject({ totalCount: 20, returnedCount: 2, offset: 7, nextOffset: 9 });
+    expect(output.tasks.map((entry) => entry.name)).toEqual(['task-7', 'task-8']);
+    expect(output.tasks.map((entry) => entry.goalIntegration)).toEqual(['integrated', 'integrated']);
+    expect(goalDoubles.get).toHaveBeenCalledTimes(1);
+    expect(goalGit.resolveGoalBranchSha).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(goalGit.isGoalCommitIncluded).mock.calls.map((args) => args.slice(0, 3))).toEqual([
+      [cwd, tasks[7]!.completion!.sha, goalSha], [cwd, tasks[8]!.completion!.sha, goalSha],
+    ]);
+    expect(goalGit.runGoalGit).not.toHaveBeenCalled();
+  });
+
+  it('reads the current goal tip again on every list call', async () => {
+    const newGoalSha = 'd'.repeat(40);
+    vi.mocked(goalGit.resolveGoalBranchSha).mockResolvedValueOnce(goalSha).mockResolvedValueOnce(newGoalSha);
+    vi.mocked(goalGit.isGoalCommitIncluded).mockImplementation(async (_cwd, _source, target) => target === newGoalSha);
+    expect((await list()).tasks[0]?.goalIntegration).toBe('not_integrated');
+    expect((await list()).tasks[0]?.goalIntegration).toBe('integrated');
+    expect(goalGit.resolveGoalBranchSha).toHaveBeenCalledTimes(2);
+  });
+
+  it('bounds integration reasons to 64 KiB and preserves pagination without gaps', async () => {
+    const tasks = Array.from({ length: 12 }, (_, index) => task({ name: `task-${index}`, summary: '説明'.repeat(1000) }));
+    vi.mocked(TaskRunner.prototype.listTaskStateItems).mockReturnValue(tasks);
+    vi.mocked(goalGit.resolveGoalBranchSha).mockRejectedValue(new Error('branch unavailable: ' + '理由'.repeat(1000)));
+    const names: unknown[] = [];
+    let offset = 0;
+    for (let pageIndex = 0; pageIndex < tasks.length; pageIndex++) {
+      const result = await listTaktTasks({ cwd, offset, limit: 12 });
+      expect(result.isError).toBeUndefined();
+      expect(responseBytes(result)).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
+      const output = JSON.parse(firstTextContent(result.content));
+      expect(output).toMatchObject({ totalCount: tasks.length, offset, returnedCount: output.tasks.length });
+      expect(output.tasks.length).toBeGreaterThan(0);
+      for (const entry of output.tasks) {
+        expect(entry).toMatchObject({ goalIntegration: 'unknown', goalIntegrationReason: expect.any(String) });
+      }
+      names.push(...output.tasks.map((entry: { name: string }) => entry.name));
+      if (output.nextOffset === null) break;
+      expect(output.nextOffset).toBe(offset + output.tasks.length);
+      expect(output.nextOffset).toBeGreaterThan(offset);
+      offset = output.nextOffset;
+    }
+    expect(names).toEqual(tasks.map((entry) => entry.name));
+  });
+
+  it('preserves a run metadata error alongside the integration result', async () => {
+    vi.mocked(TaskRunner.prototype.listTaskStateItems).mockReturnValue([task({ runSlug: 'missing-run' })]);
+    vi.spyOn(runMeta, 'readRunMetaBySlug').mockReturnValue(null);
+    expect((await list()).tasks[0]).toMatchObject({ runSlug: 'missing-run',
+      error: expect.stringMatching(/\S/), goalIntegration: 'integrated' });
+  });
+
+  it('preserves whole-tool errors when reading the task queue fails', async () => {
+    vi.mocked(TaskRunner.prototype.listTaskStateItems).mockImplementation(() => { throw new Error('queue unavailable'); });
+    const result = await listTaktTasks({ cwd });
+    expect(result.isError).toBe(true);
+    expect(firstTextContent(result.content)).toContain('Task list failed');
+    expect(goalGit.resolveGoalBranchSha).not.toHaveBeenCalled();
+  });
+});
 
 describe('MCP goal operations', () => {
   beforeEach(() => {

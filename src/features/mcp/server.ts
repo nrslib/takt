@@ -351,7 +351,7 @@ export function createTaktMcpServer(
     TAKT_MCP_READ_ONLY_TOOL_NAMES[0],
     {
       title: 'List TAKT tasks',
-      description: `Read a compact summary of project tasks and their run state. Individual worktree or run failures return that task's available basic information with an error while preserving the other tasks. Invalid worktree references are not read. Queue or cwd access failures remain whole-tool errors. Logs and report contents are not loaded. Responses fit 64 KiB, with explicit truncation. Use offset/limit for continuation. Optional view workspace is manager only. ${workspaceRetrieval}`,
+      description: `Read a compact summary of project tasks and their run state. Goal tasks include goalIntegration (integrated / not_integrated / unknown) and goalIntegrationReason when unknown. Individual worktree or run failures return that task's available basic information with an error while preserving the other tasks. Invalid worktree references are not read. Queue or cwd access failures remain whole-tool errors. Logs and report contents are not loaded. Responses fit 64 KiB, with explicit truncation. Use offset/limit for continuation. Optional view workspace is manager only. ${workspaceRetrieval}`,
       inputSchema: listTasksInputSchema,
     },
     (input) => input.view === 'workspace' ? workspaceOperation(async () => {
