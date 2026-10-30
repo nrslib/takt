@@ -31,6 +31,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { MERGE_CI_TARGETS, prepareMergeCiRecovery } from './prepare-merge-ci-recovery.mjs';
 import { PHASE_AWARENESS_TARGET, preparePhaseAwareness } from './prepare-phase-awareness.mjs';
+import { ADJUDICATOR_TARGETS, buildAdjudicatorFixture } from '../adjudicator-no-fix-cases.mjs';
 
 const TASK_MARKER = '@@PROMPTFOO_TASK@@';
 const PREV_MARKER = '@@PROMPTFOO_PREVIOUS_RESPONSE@@';
@@ -49,6 +50,11 @@ export function assertRequiredFacetSnapshots(id, requiredFacetKinds, sourcePaths
 // id doubles as the prompt basename (normal targets use phase1; loop monitors use phase3).
 // mutable targets run in a disposable copy under eval/.work/<id>.
 const TARGETS = [
+  ...ADJUDICATOR_TARGETS.map((id) => ({
+    id, workflow: 'peer-review', step: 'review-adjudication',
+    fixture: `eval/.work/${id}`, projectFromFixture: true,
+    requiredFacetKinds: ['policies', 'knowledge'], promptExtension: 'j2',
+  })),
   ...[
     ['rt', 'security-review'],
     ['rc', 'coding-review'],
@@ -1208,6 +1214,10 @@ async function main() {
   }
   await prepareMergeCiRecovery(requested.filter((id) => MERGE_CI_TARGETS.includes(id)));
   const targets = requested.length > 0 ? TARGETS.filter((t) => requested.includes(t.id)) : TARGETS;
+
+  for (const { id, fixture } of targets) {
+    if (ADJUDICATOR_TARGETS.includes(id)) buildAdjudicatorFixture(resolve(repoRoot, fixture), id.at(-1));
+  }
 
   const preparedDirs = new Set();
 

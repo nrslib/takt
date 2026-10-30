@@ -195,13 +195,13 @@ export async function runProcess(command, args, { cwd, input, timeoutMs, abortSi
     }
     return output;
   } catch (error) {
-    if (inputError !== undefined) throw inputError;
-    if (aborted) throw new Error(`${command} was aborted`);
-    if (timedOut) {
-      const errorOutput = Buffer.concat(stderr).toString('utf8');
-      throw new Error(`${command} timed out after ${timeoutMs}ms: ${errorOutput}`);
-    }
-    throw error;
+    let failure = error;
+    if (inputError !== undefined) failure = inputError;
+    else if (aborted) failure = new Error(`${command} was aborted`);
+    else if (timedOut) failure = new Error(`${command} timed out after ${timeoutMs}ms: ${Buffer.concat(stderr).toString('utf8')}`);
+    failure.stdout = Buffer.concat(stdout).toString('utf8');
+    failure.stderr = Buffer.concat(stderr).toString('utf8');
+    throw failure;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
     abortSignal?.removeEventListener('abort', abort);
@@ -248,8 +248,26 @@ function cliEvents(output, onEvent) {
   return events;
 }
 
-export function createCliReviewSession(config, { cwd, abortSignal, onEvent, allowedTools = ['Read', 'Glob', 'Grep'], processRunner = runProcess }) {
+export function createCliReviewSession(config, {
+  cwd, abortSignal, onEvent, onInvocation, onOutput,
+  sandboxMode = 'read-only', allowedTools = ['Read', 'Glob', 'Grep'], processRunner = runProcess,
+}) {
   const timeoutMs = resolveTimeoutMs(config);
+  if (!['read-only', 'workspace-write'].includes(sandboxMode)) throw new Error(`Unsupported eval sandbox: ${sandboxMode}`);
+  const run = async (command, args, prompt) => {
+    onInvocation?.({ command, args, cwd });
+    let output;
+    try {
+      output = await processRunner(command, args, { cwd, input: prompt, timeoutMs, abortSignal });
+    } catch (error) {
+      output = error.stdout ?? '';
+      onOutput?.({ stdout: output, stderr: error.stderr ?? '' });
+      cliEvents(output, onEvent);
+      throw error;
+    }
+    onOutput?.({ stdout: output, stderr: '' });
+    return output;
+  };
   if (config.cli === 'claude') {
     const sessionId = randomUUID();
     let started = false;
@@ -264,11 +282,7 @@ export function createCliReviewSession(config, { cwd, abortSignal, onEvent, allo
           '--setting-sources=project',
           ...(started ? ['--resume', sessionId] : ['--session-id', sessionId]),
         ];
-        const output = await processRunner(
-          'claude',
-          args,
-          { cwd, input: prompt, timeoutMs, abortSignal },
-        );
+        const output = await run('claude', args, prompt);
         started = true;
         if (onEvent === undefined) return output;
         const events = cliEvents(output, onEvent);
@@ -294,7 +308,7 @@ export function createCliReviewSession(config, { cwd, abortSignal, onEvent, allo
             ? [
               'exec',
               '-m', config.model,
-              '-s', 'read-only',
+              '-s', sandboxMode,
               '--skip-git-repo-check',
               '-c', `model_reasoning_effort=${config.reasoning_effort}`,
               ...skillOverrides,
@@ -305,7 +319,7 @@ export function createCliReviewSession(config, { cwd, abortSignal, onEvent, allo
             : [
               'exec', 'resume', sessionId,
               '--json',
-              '-c', 'sandbox_mode="read-only"',
+              '-c', `sandbox_mode=${JSON.stringify(sandboxMode)}`,
               '-m', config.model,
               '--skip-git-repo-check',
               '-c', `model_reasoning_effort=${config.reasoning_effort}`,
@@ -313,11 +327,7 @@ export function createCliReviewSession(config, { cwd, abortSignal, onEvent, allo
               '-o', outputPath,
               '-',
             ];
-          const processOutput = await processRunner(
-            'codex',
-            args,
-            { cwd, input: prompt, timeoutMs, abortSignal },
-          );
+          const processOutput = await run('codex', args, prompt);
           cliEvents(processOutput, onEvent);
           if (firstRun) sessionId = readCodexSessionId(processOutput);
           return readFileSync(outputPath, 'utf8');
