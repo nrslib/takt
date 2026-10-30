@@ -88,6 +88,46 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 const { CodexClient } = await import('../infra/codex/client.js');
 
 describe('CodexClient — structuredOutput 抽出', () => {
+  it.each([
+    { permissionControl: 'takt', sessionId: undefined },
+    { permissionControl: 'codex', sessionId: undefined },
+    { permissionControl: 'takt', sessionId: 'existing-session' },
+    { permissionControl: 'codex', sessionId: 'existing-session' },
+  ] as const)('enforces edit=false readonly in Phase 1 ($permissionControl, $sessionId)', async ({ permissionControl, sessionId }) => {
+    mockEvents = [{ type: 'turn.completed' }];
+    const result = await new CodexProvider().setup({ name: 'reviewer' }).call('Review', {
+      cwd: '/tmp', edit: false, permissionMode: 'edit', executionPhase: 1, sessionId,
+      providerOptions: { codex: { permissionControl } },
+    });
+    expect(result.status).toBe('done');
+    expect(lastThreadOptions).toMatchObject({ sandboxMode: 'read-only', approvalPolicy: 'never' });
+    if (sessionId === undefined) {
+      expect(mockStartThread).toHaveBeenCalledOnce();
+      expect(mockResumeThread).not.toHaveBeenCalled();
+    } else {
+      expect(mockResumeThread).toHaveBeenCalledWith(sessionId, lastThreadOptions);
+      expect(mockStartThread).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each([undefined, true])('preserves delegated permissions in Phase 1 when edit=%s', async (edit) => {
+    mockEvents = [{ type: 'turn.completed' }];
+    await new CodexProvider().setup({ name: 'coder' }).call('Work', {
+      cwd: '/tmp', edit, permissionMode: 'readonly', executionPhase: 1,
+      providerOptions: { codex: { permissionControl: 'codex' } },
+    });
+    expect(lastThreadOptions).not.toHaveProperty('sandboxMode');
+  });
+
+  it.each(['takt', 'codex'] as const)('enforces edit=false over full permissions with permission_control=%s', async (permissionControl) => {
+    mockEvents = [{ type: 'turn.completed' }];
+    await new CodexProvider().setup({ name: 'coder' }).call('Work', {
+      cwd: '/tmp', edit: false, permissionMode: 'full', executionPhase: 1,
+      providerOptions: { codex: { permissionControl } },
+    });
+    expect(lastThreadOptions?.sandboxMode).toBe('read-only');
+  });
+
   it.each([undefined, 'existing-session'])('forces read-only sandbox in Phase 2 with delegated Codex permissions (session=%s)', async (sessionId) => {
     mockEvents = [{ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } }];
     const agent = new CodexProvider().setup({ name: 'reporter' });

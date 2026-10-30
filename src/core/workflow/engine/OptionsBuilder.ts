@@ -492,6 +492,7 @@ export class OptionsBuilder {
     const workflowMeta = this.buildWorkflowMeta(step, runtime);
     const baseOptions: ResolvedRunAgentOptions = {
       executionPhase: 1,
+      edit: step.edit,
       cwd: this.getCwd(),
       projectCwd: this.getProjectCwd(),
       abortSignal: this.resolveAbortSignal(),

@@ -1587,6 +1587,8 @@ provider_options:
 
 `permission_control: codex` ではサンドボックスとネットワークの権限を Codex の設定に委ねます。この場合、TAKT の `network_access` は Codex の実効権限に反映されません。非対話実行の `approvalPolicy: never` は引き続き適用されるため、使用する Codex の設定を確認してください。`reasoning_effort`、`fast_mode`、`skills` は通常どおり適用されます。
 
+ただし、Phase 2 と、`edit: false` を明示した step の Phase 1 では、TAKT が `read-only` sandbox を渡します。Codex の Phase 1 では、解決された permission mode にかかわらずこの sandbox を使用し、`permission_control: codex` でも適用されます。この場合は `network_access` も通常の TAKT 管理時と同じ扱いになります。
+
 Codex の設定プロファイルを名前で選択するには、`permission_control: codex` と一緒に `config_profile` を指定します。
 
 ```yaml

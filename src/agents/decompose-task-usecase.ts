@@ -52,6 +52,7 @@ export interface DecomposeTaskOptions {
   resolvedProvider?: ProviderType;
   resolvedProviderOptions?: StepProviderOptions;
   permissionMode?: PermissionMode;
+  edit?: RunAgentOptions['edit'];
   projectCwd?: string;
   onStream?: StreamCallback;
   onActivity?: RunAgentOptions['onActivity'];
@@ -148,6 +149,7 @@ export async function requestDecompositionRawResponse(
       onActivity: options.onActivity,
       workflowMeta: options.workflowMeta,
       executionPhase: 1,
+      edit: options.edit,
       childProcessEnv: options.childProcessEnv,
       abortSignal: options.abortSignal,
       failureDir: options.failureDir,
@@ -265,6 +267,7 @@ export async function requestMorePartsRawResponse(
       onActivity: options.onActivity,
       workflowMeta: options.workflowMeta,
       executionPhase: 1,
+      edit: options.edit,
       childProcessEnv: options.childProcessEnv,
       abortSignal: options.abortSignal,
       failureDir: options.failureDir,

@@ -597,3 +597,47 @@ test('Claude event capture rejects missing, invalid and failed stream results', 
     await assert.rejects(session.run('phase 2'));
   }
 });
+
+test('eval sandbox override reaches initial and resumed Codex CLI without changing its default', async () => {
+  const { createCliReviewSession } = await import('./cli-review.mjs');
+  const invocations = [];
+  const session = createCliReviewSession({ cli: 'codex', model: 'offline', reasoning_effort: 'medium' }, {
+    cwd: '/tmp', sandboxMode: 'workspace-write', onInvocation: (value) => invocations.push(value),
+    processRunner: async (_cli, args) => {
+      writeFileSync(args[args.indexOf('-o') + 1], 'answer');
+      return '{"type":"thread.started","thread_id":"offline"}\n';
+    },
+  });
+  await session.run('first');
+  await session.run('second');
+  assert.equal(invocations[0].args[invocations[0].args.indexOf('-s') + 1], 'workspace-write');
+  assert.ok(invocations[1].args.includes('sandbox_mode="workspace-write"'));
+});
+
+for (const cli of ['claude', 'codex']) {
+  test(`${cli} preserves failed process events and stdout for adjudicator audit`, async () => {
+    const { createCliReviewSession } = await import('./cli-review.mjs');
+    const events = [];
+    const outputs = [];
+    const raw = '{"type":"error","message":"partial"}\n';
+    const session = createCliReviewSession({ cli, model: 'offline', reasoning_effort: 'low' }, {
+      cwd: '/tmp', onEvent: (event) => events.push(event), onOutput: (output) => outputs.push(output),
+      processRunner: async () => { throw Object.assign(new Error('timeout'), { stdout: raw, stderr: 'diagnostic' }); },
+    });
+    await assert.rejects(session.run('prompt'), /timeout/);
+    assert.deepEqual(events, [{ type: 'error', message: 'partial' }]);
+    assert.deepEqual(outputs, [{ stdout: raw, stderr: 'diagnostic' }]);
+  });
+}
+
+test('runProcess preserves partial stdout when a CLI exits unsuccessfully', async () => {
+  await assert.rejects(runProcess(process.execPath, ['-e', 'console.log("partial"); process.exitCode = 7'], {
+    cwd: EVAL_DIR, input: '', timeoutMs: 0,
+  }), (error) => error.stdout === 'partial\n' && error.message.includes('code 7'));
+});
+
+test('runProcess preserves partial event stdout on timeout', { timeout: 10000 }, async () => {
+  await assert.rejects(runProcess(process.execPath, ['-e', 'console.log(JSON.stringify({ type: "turn.started" })); setInterval(() => {}, 1000)'], {
+    cwd: EVAL_DIR, input: '', timeoutMs: 2000,
+  }), (error) => error.message.includes('timed out') && JSON.parse(error.stdout).type === 'turn.started');
+});

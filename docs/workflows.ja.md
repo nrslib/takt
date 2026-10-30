@@ -902,7 +902,7 @@ promotion は並列サブ step ではサポートされません。
 | `policy` | - | policy キーまたはキー配列（section map、または bare 名で project → user → builtin の順に解決） |
 | `knowledge` | - | knowledge キーまたはキー配列（section map、または bare 名で project → user → builtin の順に解決） |
 | `instruction` | - | instruction キー・インライン文字列、またはそれらを並べた空でない配列。facet 参照は section map、または bare 名で project → user → builtin の順に解決 |
-| `edit` | - | step がプロジェクトファイルを編集できるか (`true` / `false`) |
+| `edit` | - | step がプロジェクトファイルを編集できるか (`true` / `false`)。Codex では `false` を明示した step の Phase 1 を `read-only` sandbox で動かす |
 | `companion` | - | 解決済み runtime profile を使う Companion reviewer を通常 agent step または Team Leader step で実行（[Companion レビュアー](#companion-レビュアー)参照） |
 | `completion_retry` | - | 必須の `retry_instruction` facet と任意の再試行上限を持つ object でレビュー網羅性確認を有効化 |
 | `pass_previous_response` | `true` | 前の step の出力を `{previous_response}` に渡す |
@@ -922,6 +922,8 @@ workflow YAML では provider と model を指定できません。runtime profi
 実効ツール一覧は設定値より狭くなる場合があります。`edit: false` の場合、または step に `output_contracts` があり `edit: true` ではない場合、TAKT は provider 呼び出し前に `provider_options.*.allowed_tools` からコマンド・編集系 tool を除去します。Claude 系 provider ではカンマ区切り entry を atomic な tool spec に正規化し、`Bash(...)` は `(` より前の canonical tool 名で判定してから、`Bash`、`Edit`、`Write`、`Apply_Patch`、`Patch` を除去します。OpenCode では `bash`、`edit`、`write` など lowercase の tool を除去します。同じ read-only フィルタは`part_edit: false` または継承された `edit: false` などにより part の実効 edit 設定が false の場合の `team_leader.part_allowed_tools` にも適用されます。
 
 Pi provider は generic な `Read`、`Glob`、`Grep`、`Edit`、`Write`、`Bash` 名を Pi SDK tool へ変換します。Pi は TAKT の MCP server と structured output に対応しません。step-level の MCP 設定は drop され、session-level の MCP 設定は対応 provider が必要です。`max_turns` は Pi call で無視します。
+
+`edit: false` を明示した step は、Codex では Phase 1 を `read-only` sandbox で実行します。解決された permission mode にかかわらず、`permission_control: codex` でも適用されます。team leader の part（`part_edit` または `edit` の継承）、parallel の各 sub-step、`workflow_call` の子 workflow の各 step にも、それぞれの実効 `edit` 設定が適用されます。共通の権限解決、ほかの provider の動作、`edit` 未指定・`edit: true` の動作は変わりません。
 
 ## Workflow レベルの設定
 
@@ -1163,7 +1165,7 @@ Companion 定義は `.takt/companions/`、`~/.takt/companions/`、`builtins/{lan
 ## ベストプラクティス
 
 1. **イテレーション数を妥当に保つ** — 開発系 workflow では 10〜30 程度が一般的
-2. **レビュー step では `edit: false`** — レビュアーがコードを変更しないようにする
+2. **レビュー step では `edit: false`** — レビュアーがコードを変更しないようにする。Codex では Phase 1 を `read-only` sandbox で実行する
 3. **わかりやすい step 名を使う** — ログが読みやすくなる
 4. **workflow は段階的にテストする** — 単純な構成から始めて複雑化する
 5. **`takt eject <workflow>` でカスタマイズする** — ビルトイン workflow をコピーして編集する

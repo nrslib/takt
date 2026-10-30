@@ -37,6 +37,7 @@ export interface CodexCallOptions {
   systemPrompt?: string;
   /** Permission mode for the TAKT-controlled sandbox */
   permissionMode?: PermissionMode;
+  edit?: boolean;
   /** Select whether TAKT or Codex controls permissions. */
   permissionControl?: CodexPermissionControl;
   /** Name of the Codex config profile selected by the caller. */
