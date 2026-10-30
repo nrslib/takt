@@ -1,6 +1,5 @@
 import { GoalStore } from '../../infra/goals/store.js';
 import { isGoalPaused } from '../../infra/goals/state.js';
-import type { GoalNotificationPolicy } from '../../infra/goals/notifications.js';
 import { resolveManagerNotificationOptions, sendSavedGoalNotifications } from '../manager/notifications.js';
 import { assertCwdAllowedByMcpRoot, errorResult, jsonResult, type McpOperationDependencies } from './operations.js';
 import {
@@ -23,7 +22,7 @@ const inputSchemas = {
 
 export async function goalWrite(
   input: GoalIdentityInput, deps: McpOperationDependencies, signal: AbortSignal,
-  action: (policy: GoalNotificationPolicy, mainMerge: 'auto' | 'approve') => Promise<Record<string, unknown>>,
+  action: (options: ReturnType<typeof resolveManagerNotificationOptions>) => Promise<Record<string, unknown>>,
   errorContext: string, tool: keyof typeof inputSchemas,
 ) {
   try {
@@ -38,9 +37,9 @@ export async function goalWrite(
     if (isGoalPaused(previous) && ['enqueue', 'integrate', 'complete', 'check_completion', 'requeue', 'retry', 'reopen', 'tell', 'merge_pr'].includes(tool)) {
       throw new Error('Goal is paused. Resume it in the manager TUI before continuing work.');
     }
-    const { policy, webhookUrl, mainMerge } = resolveManagerNotificationOptions(input.cwd);
-    const result = await action(policy, mainMerge);
-    await sendSavedGoalNotifications(input.cwd, previous, await store.get(input.goalId), webhookUrl);
+    const options = resolveManagerNotificationOptions(input.cwd);
+    const result = await action(options);
+    await sendSavedGoalNotifications(input.cwd, previous, await store.get(input.goalId), options.webhookUrl);
     return jsonResult(result);
   } catch (error) { return errorResult(errorContext, error); }
 }

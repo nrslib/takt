@@ -1,4 +1,4 @@
-import { prepareGoalPullRequest } from '../infra/goals/pull-request.js';
+import { GoalPullRequestUnavailableError, prepareGoalPullRequest } from '../infra/goals/pull-request.js';
 import { afterEach,beforeEach,expect,it,vi } from 'vitest';
 import { checkGoalCompletion,completeGoal,integrateGoalTask,reopenGoal } from '../infra/goals/integration.js';
 import type { Goal,GoalQuestion } from '../infra/goals/schema.js';
@@ -20,7 +20,7 @@ vi.mock('../infra/goals/git-command.js', async (original) => ({
   fetchGoalIntegrationBranchSha: doubles.remoteSha,
 }));
 vi.mock('../infra/goals/diff-summary.js', () => ({ readGoalDiffSummary: doubles.diff, GOAL_DIFF_MAX_FILES: 50 }));
-vi.mock('../infra/goals/pull-request.js', () => ({ prepareGoalPullRequest: vi.fn(async () => ({ number: 1950, url: 'https://github.com/example/project/pull/1950' })) }));
+vi.mock('../infra/goals/pull-request.js', () => ({ GoalPullRequestUnavailableError: class extends Error {}, prepareGoalPullRequest: vi.fn(async () => ({ number: 1950, url: 'https://github.com/example/project/pull/1950' })) }));
 const sourceSha = 'a'.repeat(40);
 const targetSha = 'b'.repeat(40);
 const policy = { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true };
@@ -790,3 +790,43 @@ it.each(['before final check', 'after final check'])(
     if (timing === 'before final check') expect(doubles.gitSync).not.toHaveBeenCalled();
   },
 );
+
+it('saves local merge instructions and the failure reason when a PR is unavailable, then recovers on retry', async () => {
+  vi.mocked(prepareGoalPullRequest).mockRejectedValueOnce(new GoalPullRequestUnavailableError('origin unavailable'));
+  const result = await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
+  expect(result).toMatchObject({ status: 'awaiting_merge', goal });
+  expect(goal.pullRequest).toBeUndefined();
+  expect(goal.completion?.instructions).toContain(`git merge --no-ff --no-edit '${sourceSha}'`);
+  expect(goal.workLog.at(-1)?.summary).toContain('origin unavailable');
+  expect(goal.notifications).toHaveLength(1);
+  const completion = structuredClone(goal.completion);
+  await completeGoal('/project', goal.id, sourceSha, 'new evidence', 'approve', undefined, policy, undefined, 'ja');
+  expect(goal.pullRequest).toMatchObject({ number: 1950 });
+  expect(goal.completion).toEqual(completion);
+  expect(goal.notifications).toHaveLength(1);
+});
+
+it('preserves an existing approval and records a failed PR retry without duplicating notifications', async () => {
+  await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
+  delete goal.pullRequest;
+  const before = structuredClone(goal);
+  vi.mocked(prepareGoalPullRequest).mockRejectedValueOnce(new GoalPullRequestUnavailableError('PR unavailable'));
+  await completeGoal('/project', goal.id, sourceSha, 'new evidence', 'approve', undefined, policy, undefined, 'ja');
+  expect(goal.completion).toEqual(before.completion);
+  expect(goal.notifications).toEqual(before.notifications);
+  expect(goal.pullRequest).toBeUndefined();
+  expect(goal.workLog).toEqual([...before.workLog, expect.objectContaining({ summary: 'PR unavailable' })]);
+});
+
+it('does not save completion after cancellation while attempting a PR', async () => {
+  const before = structuredClone(goal);
+  const controller = new AbortController();
+  vi.mocked(prepareGoalPullRequest).mockImplementationOnce(async () => {
+    controller.abort();
+    throw new GoalPullRequestUnavailableError('push unavailable');
+  });
+  await expect(completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', controller.signal, policy, 'Check', 'ja'))
+    .rejects.toMatchObject({ name: 'AbortError' });
+  expect(goal).toEqual(before);
+  expect(doubles.update).not.toHaveBeenCalled();
+});

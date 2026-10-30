@@ -367,6 +367,7 @@
     "src/__tests__/manager-conversation-sequential-reads.integration.test.ts",
     "src/__tests__/manager-conversation-service.integration.test.ts",
     "src/__tests__/manager-conversation-transfer.test.ts",
+    "src/__tests__/manager-conversation-turn.test.ts",
     "src/__tests__/manager-goal-display.test.ts",
     "src/__tests__/manager-goal-execution-permission.test.ts",
     "src/__tests__/manager-goal-operations.test.ts",

@@ -34,6 +34,10 @@ import { tellDirectorManager } from '../features/director/tellManager.js';
 import { createDirectorManagerPort } from '../features/director/managerPort.js';
 import { ConversationIpcClient } from '../features/manager/conversationIpcClient.js';
 import { startLocalMcpConnection } from '../features/mcp/localConnection.js';
+import { startManagerMcpConnection } from '../features/manager/managerMcpConnection.js';
+import { TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
+import * as goalPrMerge from '../features/manager/mergeGoalPr.js';
+import * as goalIntegration from '../features/mcp/goalIntegrationOperations.js';
 import { createManagerTurnExecutor, type ManagerTurnInput } from '../features/manager/turnExecutor.js';
 import type { Goal } from '../infra/goals/schema.js';
 import type { PreparedConversationRuntime, ConversationRuntime } from '../features/manager/conversationRuntime.js';
@@ -60,7 +64,6 @@ import * as autoRun from '../features/manager/autoRun.js';
 import * as eventManagers from '../features/manager/runEventManager.js';
 import * as managerPlans from '../features/manager/conversationPlan.js';
 import * as managerMcp from '../features/manager/managerMcp.js';
-import * as goalIntegration from '../features/mcp/goalIntegrationOperations.js';
 import { enqueueDueGoalPatrols } from '../features/manager/patrol.js';
 import { readManagerEvents } from '../infra/goals/events.js';
 import { TaskStore } from '../infra/task/store.js';
@@ -335,16 +338,40 @@ it.each(['ja', 'en'] as const)('relays a human merge request through director MC
   const managerReply = lang === 'ja' ? 'マージ指示を受け取りました。' : 'Merge instruction received.';
   const slack = vi.spyOn(slackWebhook, 'sendSlackNotification').mockResolvedValue(undefined);
   const toolCalls = vi.spyOn(Client.prototype, 'callTool');
+  const managerConnection = await startManagerMcpConnection(repository, assignment);
+  cleanups.push(managerConnection.dispose);
+  const merging = vi.spyOn(goalPrMerge, 'mergeGoalPr').mockResolvedValue({ success: true, prNumber: 1950, exitCode: 0, output: 'merged', truncated: false });
   let managerOperationId: string | undefined;
-  const managerCall = vi.fn<ProviderAgent['call']>(async () => {
+  const additionalHuman = new ConversationIpcClient(assignment);
+  cleanups.push(async () => additionalHuman.close());
+  const managerCall = vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
     const conversation = new ConversationStore(directory).read(managerId, assignment);
     expect(conversation).toBeDefined();
     managerOperationId = conversation!.running?.operationId;
+    expect(await additionalHuman.submit({ kind: 'message', text: 'additional human message' }))
+      .toEqual({ kind: 'busy', operationId: managerOperationId });
+    expect(new ConversationStore(directory).read(managerId, assignment)).toMatchObject({
+      lastSpeaker: { namespace: 'agent', id: 'director' }, running: { operationId: managerOperationId },
+    });
+    const config = options.mcpServers![TAKT_MANAGER_MCP_SERVER_NAME];
+    if (config?.type !== 'http') throw new Error('HTTP MCP required');
+    const client = new Client({ name: 'merge-manager-provider', version: '1' });
+    const transport = new StreamableHTTPClientTransport(new URL(config.url), { requestInit: { headers: config.headers } });
+    try {
+      await client.connect(transport);
+      const operationId = _prompt.match(/Conversation operation ID: ([a-f0-9-]{36})/)?.[1];
+      expect(operationId).toBe(managerOperationId);
+      const result = await client.callTool({ name: 'takt_merge_goal_pr', arguments: {
+        cwd: repository, goalId: goal.id, prNumber: 1950, conversationOperationId: operationId,
+      } });
+      expect(result.isError).toBeUndefined();
+    } finally { await client.close(); await transport.close(); }
     return { persona: 'manager', status: 'done', content: '', timestamp: new Date(),
       structuredOutput: { message: managerReply, summary: null }, sessionId: 'manager-merge-session' };
   });
   const managerExecutor = createManagerTurnExecutor(repository, {
-    ctx: { provider: makeProvider({ setup: () => ({ call: managerCall }) }), providerType: 'mock', model: undefined, lang },
+    ctx: { provider: makeProvider({ setup: () => ({ call: managerCall }) }), providerType: 'mock', model: undefined, lang,
+      mcpServers: { [TAKT_MANAGER_MCP_SERVER_NAME]: managerConnection.config } },
     strategy: { systemPrompt: 'manager provider test double' },
   });
   const directorCall = vi.fn<ProviderAgent['call']>(async (prompt, options) => {
@@ -405,6 +432,7 @@ it.each(['ja', 'en'] as const)('relays a human merge request through director MC
   const outputs: PortOutput[] = [];
   human.onOutput((output) => outputs.push(output));
   await human.connect();
+  await additionalHuman.connect();
 
   const accepted = await human.submit({ kind: 'message', text: humanMessage });
 
@@ -432,8 +460,9 @@ it.each(['ja', 'en'] as const)('relays a human merge request through director MC
   ]);
   expect(await collect(new ConversationSpeakerStore(directory).iterate(conversationId({ kind: 'repository', repositoryDirectory: otherRepository })))).toEqual([]);
   expect(toolCalls.mock.calls.map(([request]) => request.name)).toEqual([
-    'takt_list_managers', 'takt_list_goals', 'takt_get_goal', 'takt_tell_manager',
+    'takt_list_managers', 'takt_list_goals', 'takt_get_goal', 'takt_tell_manager', 'takt_merge_goal_pr',
   ]);
+  expect(merging).toHaveBeenCalledExactlyOnceWith(repository, 1950, goal.branch, goal.completion!.goalSha, expect.any(AbortSignal));
   expect(slack).not.toHaveBeenCalled();
 });
 
@@ -1026,16 +1055,30 @@ it('does not merge a saved PR without human instructions in director and manager
   const repository = await seedManager('merge-patrol');
   const goal = await seedPatrolGoal(repository, { status: 'awaiting_merge', completion: mergeEvidence(),
     pullRequest: { number: 1950, url: 'https://github.invalid/project/pull/1950' }, createdAt: '2026-10-29T00:00:00.000Z' });
-  const merge = vi.spyOn(goalIntegration, 'mergeTaktGoalPr').mockRejectedValue(new Error('Autonomous merge is forbidden'));
+  const merge = vi.spyOn(goalPrMerge, 'mergeGoalPr').mockResolvedValue({ success: true, prNumber: 1950, exitCode: 0, output: 'merged', truncated: false });
   const provider = patrolProvider();
   const daemon = await startPatrolDaemon();
   const actualPlans = await vi.importActual<typeof import('../features/manager/conversationPlan.js')>('../features/manager/conversationPlan.js');
   vi.spyOn(managerPlans, 'createManagerConversationPlan').mockImplementation(actualPlans.createManagerConversationPlan);
+  const connection = await startManagerMcpConnection(repository);
+  cleanups.push(connection.dispose);
   vi.spyOn(managerMcp, 'connectManagerMcp').mockResolvedValue({
-    client: new Client({ name: 'manager-patrol-double', version: '1' }), servers: {}, dispose: async () => {},
+    client: new Client({ name: 'manager-patrol-double', version: '1' }),
+    servers: { [TAKT_MANAGER_MCP_SERVER_NAME]: connection.config }, dispose: connection.dispose,
   });
-  const managerCall = vi.fn<ProviderAgent['call']>(async () => ({ persona: 'manager', status: 'done', content: '', timestamp: new Date(),
-    structuredOutput: { message: 'Waiting for a human merge instruction', summary: null } }));
+  const managerCall = vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    const config = options.mcpServers![TAKT_MANAGER_MCP_SERVER_NAME];
+    if (config?.type !== 'http') throw new Error('HTTP MCP required');
+    const client = new Client({ name: 'autonomous-manager-provider', version: '1' });
+    const transport = new StreamableHTTPClientTransport(new URL(config.url), { requestInit: { headers: config.headers } });
+    try {
+      await client.connect(transport);
+      const result = await client.callTool({ name: 'takt_merge_goal_pr', arguments: { cwd: repository, goalId: goal.id, prNumber: 1950 } });
+      expect(result.isError).toBe(true);
+    } finally { await client.close(); await transport.close(); }
+    return { persona: 'manager', status: 'done', content: '', timestamp: new Date(),
+      structuredOutput: { message: 'Waiting for a human merge instruction', summary: null } };
+  });
   provider.setup.mockReturnValueOnce({ call: managerCall });
   const manager = daemon.createManager(repository);
   cleanups.push(manager.close);

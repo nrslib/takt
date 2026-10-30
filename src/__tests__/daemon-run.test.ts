@@ -63,11 +63,12 @@ it('retains a notification raised during Slack startup and uses the same deliver
   const notices = [{ id: 'saved-notice', message: 'Human decision required' }];
   const ports = { listening: false, notifications: { deliver: vi.fn(async () => {}) },
     pollInquiries: vi.fn(), stopAccepting: vi.fn(), close: vi.fn() };
-  let posting!: Promise<void>;
+  let posted = false;
   let connected!: () => void;
   const connecting = new Promise<void>((resolve) => { connected = resolve; });
   doubles.slack.mockImplementation(async () => {
-    posting = delivery.deliver(notices);
+    await delivery.deliver(notices);
+    posted = true;
     expect(ports.notifications.deliver).not.toHaveBeenCalled();
     await connecting;
     return ports;
@@ -77,9 +78,9 @@ it('retains a notification raised during Slack startup and uses the same deliver
   try {
     await vi.waitFor(() => expect(doubles.slack).toHaveBeenCalledOnce());
     expect(doubles.ipc).toHaveBeenCalledOnce();
+    expect(posted).toBe(true);
     expect(ports.notifications.deliver).not.toHaveBeenCalled();
   } finally { connected(); await daemon; }
-  await posting;
   expect(ports.notifications.deliver).toHaveBeenCalledExactlyOnceWith(notices);
 });
 
@@ -789,4 +790,27 @@ it('notifies an unreported polling failure when stopped before the patrol interv
 
   expect(doubles.notify).toHaveBeenCalledExactlyOnceWith('/project', undefined, failure);
   expect(process.rawListeners('SIGTERM')).toEqual(before);
+});
+
+it.each([false, true])('waits for background director delivery before closing Slack, including failure=%s', async (fails) => {
+  vi.mocked(globalConfig.loadGlobalConfig).mockReturnValue({ language: 'en', autoFetch: true,
+    director: { slack: { channelId: 'C0DIR', allowedUserIds: ['U0AAA'] } } });
+  let delivery!: DirectorNotificationDelivery;
+  doubles.runtime.mockImplementation((_directory, _notices, target: DirectorNotificationDelivery) => { delivery = target; return {}; });
+  let finish!: () => void;
+  const pending = new Promise<void>((resolve, reject) => { finish = () => fails ? reject(new Error('delivery failed')) : resolve(); });
+  const ports = { listening: false, notifications: { deliver: vi.fn(() => pending) },
+    pollInquiries: vi.fn(), stopAccepting: vi.fn(), close: vi.fn() };
+  doubles.slack.mockResolvedValue(ports);
+  doubles.projects.mockResolvedValue([]);
+  doubles.delay.mockImplementationOnce(async () => { await delivery.deliver([{ id: 'one', message: 'Saved notice' }]); });
+  const daemon = runDaemon();
+  try {
+    await vi.waitFor(() => expect(ports.notifications.deliver).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(doubles.conversationService.mock.results[0]!.value.close).toHaveBeenCalledOnce());
+    expect(ports.close).not.toHaveBeenCalled();
+  } finally { finish(); await daemon; }
+  expect(ports.close).toHaveBeenCalledOnce();
+  expect(doubles.removeOwner).toHaveBeenCalledOnce();
+  if (fails) expect(doubles.logError).toHaveBeenCalledWith('Cannot deliver director notifications', { error: 'delivery failed' });
 });

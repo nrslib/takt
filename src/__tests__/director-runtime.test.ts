@@ -4,7 +4,8 @@ import { DIRECTOR_TOOL_ALLOWLIST } from '../features/director/mcp.js';
 import * as directorMcp from '../features/director/mcp.js';
 
 const doubles = vi.hoisted(() => ({ plan: vi.fn(), connect: vi.fn(), executor: vi.fn(), preflight: vi.fn(),
-  managers: vi.fn(), dispose: vi.fn(), execute: vi.fn(), resolve: vi.fn(), close: vi.fn() }));
+  managers: vi.fn(), dispose: vi.fn(), execute: vi.fn(), resolve: vi.fn(), close: vi.fn(), logError: vi.fn() }));
+vi.mock('../shared/utils/debug.js', () => ({ createLogger: () => ({ error: doubles.logError }) }));
 vi.mock('../features/director/conversationPlan.js', () => ({ createDirectorConversationPlan: doubles.plan }));
 vi.mock('../features/mcp/localConnection.js', () => ({ startLocalMcpConnection: doubles.connect }));
 vi.mock('../features/director/turnExecutor.js', () => ({ createDirectorTurnExecutor: doubles.executor }));
@@ -129,7 +130,7 @@ it('collects notifications separately for a human turn and a patrol and delivers
   expect(doubles.dispose).toHaveBeenCalledTimes(2);
 });
 
-it('does not deliver an empty turn and closes MCP even when batch delivery fails', async () => {
+it('does not deliver an empty turn and logs delivery failure without failing cleanup', async () => {
   const server = vi.spyOn(directorMcp, 'createDirectorMcpServer');
   const deliver = vi.fn(async () => {});
   const empty = await prepareDirectorTurn('/config', notices, signal(), {}, true, { deliver });
@@ -139,8 +140,28 @@ it('does not deliver an empty turn and closes MCP even when batch delivery fails
   doubles.connect.mock.calls[1]![0]();
   await server.mock.calls[0]![1].notify({ id: 'one', message: 'Saved notice' });
   deliver.mockRejectedValueOnce(new Error('Delivery failed'));
-  await expect(saved.dispose()).rejects.toThrow('Delivery failed');
-  await expect(saved.dispose()).rejects.toThrow('Delivery failed');
+  await saved.dispose();
+  await saved.dispose();
+  await vi.waitFor(() => expect(doubles.logError).toHaveBeenCalledOnce());
   expect(deliver).toHaveBeenCalledOnce();
   expect(doubles.dispose).toHaveBeenCalledTimes(2);
+});
+
+it('finishes a successful turn while Slack delivery is still pending', async () => {
+  const server = vi.spyOn(directorMcp, 'createDirectorMcpServer');
+  let finish!: () => void;
+  const pending = new Promise<void>((resolve) => { finish = resolve; });
+  const deliver = vi.fn(() => pending);
+  doubles.execute.mockResolvedValue({ message: 'done' });
+  const runtime = createDaemonConversationRuntime('/config', notices, { deliver });
+  const prepared = await runtime.resolve({ kind: 'daemon', repositoryDirectories: [] }, signal());
+  doubles.connect.mock.calls[0]![0]();
+  await server.mock.calls[0]![1].notify({ id: 'one', message: 'Saved notice' });
+  try {
+    expect(await prepared.executor.execute({ prompt: 'notify', instruction: 'notify', sessionId: undefined,
+      assignment: undefined, configDirectory: '/config', abortSignal: signal() })).toEqual({ message: 'done' });
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(doubles.dispose).toHaveBeenCalledOnce();
+    await runtime.close();
+  } finally { finish(); }
 });

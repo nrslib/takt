@@ -150,6 +150,7 @@ export const completeGoalInputSchema = goalWriteInputSchema.extend({
   humanChecks: taskContentSchema.optional().describe('Concrete steps a person can follow to verify the changes. Required when completion needs a PR.'),
 });
 export const mergeGoalPrInputSchema = goalWriteInputSchema.extend({
+  conversationOperationId: z.uuid().describe('Current conversation operation ID supplied with this turn. Never reuse an ID from an earlier turn.'),
   prNumber: z.number().int().safe().positive().describe('Saved goal PR number to pass to takt merge.'),
 });
 export type MergeGoalPrInput = z.infer<typeof mergeGoalPrInputSchema>;

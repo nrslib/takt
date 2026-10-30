@@ -288,6 +288,7 @@ export function createConversationService(input: {
             ].join('\n\n'),
             instruction: command.text, sessionId: conversation.record.sessionId ?? undefined,
             assignment: identityOf(assignment), abortSignal: signal, configDirectory: input.configDirectory,
+            conversationOperationId: operation.id,
             recovery: { context: businessContext, invalidateSession: async () => {
               clearSessionOnFailure = true;
               save(conversation, { ...conversation.record, sessionId: null });

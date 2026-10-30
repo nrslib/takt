@@ -7,6 +7,9 @@ import { startLocalMcpConnection } from '../mcp/localConnection.js';
 import { createDirectorTurnExecutor } from './turnExecutor.js';
 import type { DirectorNotificationDelivery } from './notificationDelivery.js';
 import type { DirectorNotification } from '../../infra/conversations/directorNotifications.js';
+import { createLogger } from '../../shared/utils/debug.js';
+
+const log = createLogger('director');
 
 export async function prepareDirectorTurn(
   configDirectory: string,
@@ -28,9 +31,11 @@ export async function prepareDirectorTurn(
   const connection = await startLocalMcpConnection(() => createDirectorMcpServer(configDirectory, collected, signal, patrol));
   let disposed: Promise<void> | undefined;
   const dispose = (): Promise<void> => disposed ??= (async () => {
-    try {
-      if (batch.length > 0) await delivery!.deliver(batch);
-    } finally { await connection.dispose(); }
+    if (batch.length > 0) {
+      void Promise.resolve().then(() => delivery!.deliver(batch))
+        .catch(() => { log.error('Cannot deliver director notifications'); });
+    }
+    await connection.dispose();
   })();
   try {
     await plan.ctx.provider.preflight?.({ cwd: plan.cwd, model: plan.ctx.model, providerOptions: plan.ctx.providerOptions,

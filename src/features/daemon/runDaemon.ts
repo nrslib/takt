@@ -63,10 +63,15 @@ export async function runDaemon(): Promise<void> {
   let directorConfig: ReturnType<typeof resolveDirectorConfig> | undefined;
   let resolveSlack!: (ports: Awaited<ReturnType<typeof createDaemonSlackPorts>> | undefined) => void;
   const slackReady = new Promise<Awaited<ReturnType<typeof createDaemonSlackPorts>> | undefined>((resolve) => { resolveSlack = resolve; });
+  const deliveries = new Set<Promise<void>>();
   const notifications: DirectorNotificationDelivery = { async deliver(batch) {
     if (directorConfig?.slack === undefined) return;
-    const ports = await slackReady;
-    if (ports !== undefined) await ports.notifications.deliver(batch);
+    const pending = slackReady.then(async (ports) => {
+      if (ports !== undefined) await ports.notifications.deliver(batch);
+    }).catch((error: unknown) => {
+      log.error('Cannot deliver director notifications', { error: sanitizeSensitiveText(getErrorMessage(error)) });
+    }).finally(() => { deliveries.delete(pending); });
+    deliveries.add(pending);
   } };
   const conversations = createConversationService({ configDirectory: globalConfigDirectory, owner,
     runtime: createDaemonConversationRuntime(globalConfigDirectory, { notify: (notification) => conversations.notifyDirector(notification) }, notifications),
@@ -212,7 +217,7 @@ export async function runDaemon(): Promise<void> {
       try { await manager.close(); }
       catch (error) { log.error('Cannot close daemon project manager', { cwd, error: getErrorMessage(error) }); }
     }
-    try { await slackInquiryPolling; await slack?.close(); await ipc?.close(); }
+    try { await slackInquiryPolling; await Promise.all(deliveries); await slack?.close(); await ipc?.close(); }
     finally {
       removeDaemonOwner(globalConfigDirectory, owner);
       process.removeListener('SIGTERM', stop);

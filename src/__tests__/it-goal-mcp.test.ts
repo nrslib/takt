@@ -14,8 +14,11 @@ import { createTaktMcpServer,type TaktMcpToolSet } from '../features/mcp/server.
 import { attemptAutoRequeueTask,requeueExistingFailedTasks } from '../features/tasks/execute/parallelExecution.js';
 import { resolveTaskExecution } from '../features/tasks/execute/resolveTask.js';
 import { loadWorkflowByIdentifier,resolveWorkflowCallTarget } from '../infra/config/index.js';
+import { invalidateResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
 import { getWorkflowSourcePath } from '../infra/config/loaders/workflowSourceMetadata.js';
-import { getRepertoireDir } from '../infra/config/paths.js';
+import { getGlobalConfigDir, getRepertoireDir } from '../infra/config/paths.js';
+import { ConversationStore } from '../infra/conversations/store.js';
+import { conversationRecord } from './helpers/conversation-fixtures.js';
 import { GoalStore } from '../infra/goals/store.js';
 import { GoalSchema } from '../infra/goals/schema.js';
 import { TaskRunner } from '../infra/task/index.js';
@@ -1477,7 +1480,12 @@ describe('goal PR publication and merge through manager MCP', () => {
     }));
   }
 
+  const operationId = '550e8400-e29b-41d4-a716-446655440002';
+
   async function withMerge(action: (client: Client) => Promise<void>) {
+    new ConversationStore(getGlobalConfigDir()).write({ ...conversationRecord(cwd),
+      lastSpeaker: { namespace: 'agent', id: 'director' },
+      running: { kind: 'message', operationId, owner: { pid: process.pid, identity: { startTime: 'merge-test' } } } });
     await withServer(cwd, 'manager', async (client) => {
       expect((await client.listTools()).tools.map(({ name }) => name)).toContain(mergeTool);
       await saveWaitingGoal();
@@ -1488,7 +1496,7 @@ describe('goal PR publication and merge through manager MCP', () => {
   }
 
   function merge(client: Client, overrides: Record<string, unknown> = {}) {
-    return client.callTool({ name: mergeTool, arguments: { cwd, goalId, prNumber: pullRequest.number, ...overrides } });
+    return client.callTool({ name: mergeTool, arguments: { cwd, goalId, prNumber: pullRequest.number, conversationOperationId: operationId, ...overrides } });
   }
 
   function captureMergeProcess(code: number) {
@@ -1675,14 +1683,17 @@ describe('goal PR publication and merge through manager MCP', () => {
     });
   });
 
-  it.each(['push', 'PR creation'] as const)('returns a %s failure without saving completion and succeeds on retry', async (failure) => {
+  it.each(['push', 'PR creation'] as const)('saves local merge instructions after %s failure and recovers the PR on retry', async (failure) => {
     if (failure === 'push') git(cwd, ['remote', 'set-url', 'origin', join(cwd, 'missing-origin.git')]);
     else vi.mocked(githubPr.createPullRequest).mockReturnValueOnce({ success: false, error: 'fixture PR creation failed' });
-    const before = await new GoalStore(cwd).get(goalId);
     await withServer(cwd, 'manager', async (client) => {
       const failed = await complete(client);
-      expect(failed.isError).toBe(true);
-      expect(await new GoalStore(cwd).get(goalId)).toEqual(before);
+      expect(failed.isError).toBeUndefined();
+      const saved = await new GoalStore(cwd).get(goalId);
+      expect(saved).toMatchObject({ status: 'awaiting_merge', completion: { goalSha: sha, humanChecks } });
+      expect(saved.pullRequest).toBeUndefined();
+      expect(saved.completion?.instructions.some((line) => line.includes(sha))).toBe(true);
+      expect(saved.workLog.at(-1)?.summary).toMatch(/PR.*failed/i);
       expect(prs).toEqual([]);
       if (failure === 'push') {
         expect(githubPr.createPullRequest).not.toHaveBeenCalled();
@@ -1721,6 +1732,65 @@ describe('goal PR publication and merge through manager MCP', () => {
       expect(await new GoalStore(cwd).get(goalId)).toEqual(before);
       expect(githubPr.createPullRequest).not.toHaveBeenCalled();
       expect(prs).toHaveLength(1);
+    });
+  });
+
+  it.each(['no origin', 'GitLab', 'unknown host'] as const)('saves awaiting merge without publishing in an unsupported environment: %s', async (environment) => {
+    if (environment === 'no origin') git(cwd, ['remote', 'remove', 'origin']);
+    else {
+      git(cwd, ['remote', 'set-url', 'origin', environment === 'GitLab'
+        ? 'https://gitlab.com/example/project.git' : 'https://bitbucket.org/example/project.git']);
+      writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nmanager:\n  auto_run: false\n');
+      invalidateResolvedConfigCache(cwd);
+    }
+    await withServer(cwd, 'manager', async (client) => {
+      const result = await client.callTool({ name: 'takt_complete_goal', arguments: { cwd, goalId, expectedSha: sha, summary } });
+      expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+      const saved = await new GoalStore(cwd).get(goalId);
+      expect(saved.status).toBe('awaiting_merge');
+      expect(saved.pullRequest).toBeUndefined();
+      expect(saved.completion?.instructions.some((line) => line.includes(sha))).toBe(true);
+      expect(saved.workLog.at(-1)?.summary).toMatch(/PR/);
+      expect(githubPr.findExistingPr).not.toHaveBeenCalled();
+      expect(githubPr.createPullRequest).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each(['human', 'event during director turn', 'finished director turn', 'stale turn'] as const)(
+    'rejects merging in a %s without spawning takt merge', async (turn) => {
+      const spawn = captureMergeProcess(0);
+      await withMerge(async (client) => {
+        const store = new ConversationStore(getGlobalConfigDir());
+        const assignment = { kind: 'repository' as const, repositoryDirectory: cwd };
+        const initial = conversationRecord(cwd);
+        const record = store.read(initial.id, assignment)!;
+        if (turn === 'human') store.write({ ...record, lastSpeaker: { namespace: 'local', id: 'operator' } });
+        else if (turn === 'finished director turn') store.write({ ...record, running: null });
+        else if (turn === 'stale turn') store.write({ ...record, running: { ...record.running!, operationId: '550e8400-e29b-41d4-a716-446655440003' } });
+        const before = await new GoalStore(cwd).get(goalId);
+        if (turn === 'event during director turn') {
+          await withServer(cwd, 'manager', async (eventClient) => { expect((await merge(eventClient, { conversationOperationId: undefined })).isError).toBe(true); });
+        } else expect((await merge(client)).isError).toBe(true);
+        expect(spawn.mock.calls.filter(([command]) => command === process.execPath)).toEqual([]);
+        expect(await new GoalStore(cwd).get(goalId)).toEqual(before);
+      });
+    },
+  );
+
+  it('reuses one MCP session across director turns and rejects the previous operation ID', async () => {
+    const spawn = captureMergeProcess(0);
+    await withMerge(async (client) => {
+      expect((await merge(client)).isError).toBeUndefined();
+      const store = new ConversationStore(getGlobalConfigDir());
+      const assignment = { kind: 'repository' as const, repositoryDirectory: cwd };
+      const record = store.read(conversationRecord(cwd).id, assignment)!;
+      const nextOperationId = '550e8400-e29b-41d4-a716-446655440003';
+      store.write({ ...record, running: { ...record.running!, operationId: nextOperationId } });
+      expect((await merge(client)).isError).toBe(true);
+      expect((await merge(client, { conversationOperationId: nextOperationId })).isError).toBeUndefined();
+      store.write({ ...record, running: null });
+      expect((await merge(client, { conversationOperationId: nextOperationId })).isError).toBe(true);
+      expect(spawn.mock.calls.filter(([command]) => command === process.execPath)).toHaveLength(2);
     });
   });
 
@@ -1804,7 +1874,7 @@ describe('goal PR publication and merge through manager MCP', () => {
     await withMerge(async (client) => {
       const before = await new GoalStore(cwd).get(goalId);
       const controller = new AbortController();
-      const request = client.callTool({ name: mergeTool, arguments: { cwd, goalId, prNumber: 1950 } }, undefined, { signal: controller.signal });
+      const request = client.callTool({ name: mergeTool, arguments: { cwd, goalId, prNumber: 1950, conversationOperationId: operationId } }, undefined, { signal: controller.signal });
       const rejected = expect(request).rejects.toBeDefined();
       await started;
       controller.abort();

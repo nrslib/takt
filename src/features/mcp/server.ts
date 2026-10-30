@@ -277,9 +277,14 @@ export function createTaktMcpServer(
     }, (input, extra) => operation(input.cwd, 'Goal completion failed', (deps) => completeTaktGoal(projectInput(input, deps), deps, extra.signal), true));
     server.registerTool('takt_merge_goal_pr', {
       title: 'Merge a goal PR',
-      description: 'Run takt merge with the saved PR number in the target repository. Use only on an explicit human instruction delivered by the director. Rejects goals not awaiting merge, missing or mismatched PRs, paused and aborted goals. Returns command output and failure. After success use takt_check_goal_completion; this operation does not complete the goal.',
+      description: 'Run takt merge with the saved PR number in the target repository. Requires the current conversation operation to be an active message from the director conveying an explicit human instruction. Autonomous events, patrols and direct human messages to manager are rejected. manager.main_merge controls automatic goal completion, not this explicit PR merge. Rejects goals not awaiting merge, missing or mismatched PRs, paused and aborted goals. Returns command output and failure. After success use takt_check_goal_completion; this operation does not complete the goal.',
       inputSchema: mergeGoalPrInputSchema,
-    }, (input, extra) => operation(input.cwd, 'Goal PR merge failed', (deps) => mergeTaktGoalPr(projectInput(input, deps), deps, extra.signal), false));
+    }, (input, extra) => operation(input.cwd, 'Goal PR merge failed', (deps, assignment) => mergeTaktGoalPr(projectInput(input, deps), {
+      ...deps,
+      managerConversation: assignment === undefined ? undefined : {
+        configDirectory: globalConfigDirectory, assignment,
+      },
+    }, extra.signal), false));
     server.registerTool('takt_reopen_goal', {
       title: 'Reopen a waiting goal', description: 'Return an unmerged awaiting-merge goal to created with a required reason saved in its work log. Preserves completion evidence. Rejects completed, created, aborted or paused goals and approved SHAs already included in the target; use takt_check_goal_completion for an included SHA. Responses fit 64 KiB, with explicit truncation. Read saved reasons with takt_get_goal path workLog.summary, recordId and textOffset/maxBytes, and completion fields with path.',
       inputSchema: reopenGoalInputSchema,
