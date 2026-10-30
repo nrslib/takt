@@ -33,11 +33,17 @@ const patrolRequiredCases = new Set([
 ]);
 const patrolNoTellCases = new Set(['unchanged-adjudication']);
 const patrolQuestionCases = new Set(['conflicting-calendar-visibility']);
+const verificationTellCases = new Set(['verification-repeated', 'verification-mixed']);
+const verificationNoTellCases = new Set(['verification-once', 'verification-told']);
+const planWaitCases = new Set(['plan-dependent', 'plan-queued']);
+const finalPlanCases = new Set(['integration-check', 'plan-cancelled', 'plan-integrated', 'final-impact-tests']);
 const taskTools = new Set(['takt_enqueue_goal_task', 'takt_merge_goal_task']);
 const completionTools = new Set(['takt_complete_goal', 'takt_merge_goal_task']);
 const caseWriteTools = {
   ...Object.fromEntries(Object.keys(readyKeys).map((caseId) => [caseId, taskTools])),
-  'integration-check': taskTools,
+  'plan-missing': new Set(['takt_enqueue_goal_task']),
+  ...Object.fromEntries([...verificationTellCases].map((caseId) => [caseId, new Set(['takt_tell_run'])])),
+  ...Object.fromEntries([...verificationNoTellCases, ...planWaitCases, ...finalPlanCases].map((caseId) => [caseId, new Set()])),
   'escalate-repeated-failure': new Set(['takt_enqueue_goal_task', 'takt_notify_goal', 'takt_ask_goal_question']),
   'escalate-not-on-first-failure': new Set(['takt_enqueue_goal_task', 'takt_requeue_goal_task', 'takt_retry_goal_task']),
   ...Object.fromEntries([...completionCases].map((caseId) => [caseId, completionTools])),
@@ -121,6 +127,22 @@ export default function assertManagerWorkSplit(output, context) {
     return result(parsed.calls.length === 0 && parsed.response.summary !== null, 'Summary must precede human registration approval; semantics are graded separately');
   }
   if (parsed.response.summary !== null) return result(false, 'Event response summary must be null');
+  const workLogs = parsed.calls.filter(({ tool }) => tool === 'takt_record_goal_work_log');
+  if (verificationTellCases.has(caseId)) {
+    return result(tells.length === 1 && workLogs.length > 0,
+      'Send one verification instruction and record its reason; substance is graded by llm-rubric');
+  }
+  if (verificationNoTellCases.has(caseId) || planWaitCases.has(caseId)) {
+    return result(true, 'No new task or instruction; assess the reason with llm-rubric');
+  }
+  if (caseId === 'plan-missing') {
+    return result(enqueues.length === 1 && enqueues[0].arguments.workKey === 'usage-docs' && workLogs.length > 0,
+      'Submit the missing usage documentation once and record why; assess its instructions with llm-rubric');
+  }
+  if (finalPlanCases.has(caseId)) {
+    return result(caseId !== 'final-impact-tests' || workLogs.length > 0,
+      'No extra task or premature completion; final-impact-tests requires selected tests and reasons in the work log; substance is graded by llm-rubric');
+  }
   if (patrolTellCases.has(caseId)) {
     return result(tells.length === 1, 'Send one instruction to the running task; assess its substance with llm-rubric');
   }
@@ -144,9 +166,6 @@ export default function assertManagerWorkSplit(output, context) {
       && completes[0].arguments.expectedSha === relation.goalSha, 'Complete using the current reviewed goal SHA without an additional task');
   }
   if (completes.length > 0) return result(false, 'Premature completion');
-  if (caseId === 'integration-check') {
-    return result(enqueues.length === 1, 'Submit one task without completion; verification semantics are graded by llm-rubric');
-  }
   if (caseId === 'escalate-repeated-failure') {
     const questions = parsed.calls.filter(({ tool }) => tool === 'takt_ask_goal_question');
     if (questions.some(({ arguments: args }) => managerWriteSchemas.takt_ask_goal_question.parse(args).recipient !== 'human')) {

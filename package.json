@@ -26,7 +26,7 @@
     "sync:nix-deps": "node scripts/sync-nix-deps.mjs",
     "analyze:usage": "node dist/commands/analyze-usage.js",
     "eval:prompts:prepare": "node eval/scripts/prepare.mjs",
-    "eval:prompts:manager-work-split": "node --test eval/asserts/manager-work-split.test.mjs eval/manager-work-split-prompt.test.mjs && node eval/scripts/run-evals.mjs manager-work-split --no-cache --repeat 3",
+    "eval:prompts:manager-work-split": "node --test eval/asserts/manager-work-split.test.mjs eval/manager-work-split-prompt.test.mjs eval/providers/manager-work-split.test.mjs eval/manager-work-split-offline.test.mjs eval/suite-registry.test.mjs && node eval/scripts/run-evals.mjs manager-work-split --no-cache --repeat 3",
     "eval:prompts:merge-ci-recovery:contracts": "node --test eval/asserts/merge-ci-recovery.test.mjs eval/suite-registry.test.mjs",
     "eval:prompts:merge-ci-recovery": "npm run eval:prompts:merge-ci-recovery:contracts && node eval/scripts/run-evals.mjs merge-ci-investigation merge-ci-review --prepare --no-cache --repeat 3",
     "eval:prompts:frontend-mediator-review": "node eval/scripts/run-evals.mjs --prepare frontend-mediator-review --no-cache",
