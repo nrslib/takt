@@ -99,11 +99,16 @@ it('executes provider calls and conversation writes only in the daemon process a
     await submitManagerText(tui, 'Prepare a CSV export');
     await waitForManager(tui, fixture.summary.objective);
     const owner = readDaemonOwner(fixture.directory)!;
+    expect(owner).toBeDefined();
+    await vi.waitFor(() => expect(fixture.readObservations()).toContainEqual(expect.objectContaining({
+      event: 'provider_complete', agent: 'director', pid: owner.pid,
+    })), { timeout: 10000 });
     const calls = fixture.readObservations().filter(({ event }) => event === 'provider_start');
     expect(calls.length).toBeGreaterThan(0);
     expect(calls.filter(({ pid }) => pid === tui.child.pid)).toEqual([]);
-    expect(owner).toBeDefined();
-    expect(calls.map(({ pid }) => pid)).toEqual([owner.pid]);
+    expect([...new Set(calls.map(({ pid }) => pid))]).toEqual([owner.pid]);
+    expect(calls.filter(({ agent }) => agent === 'manager').map(({ pid }) => pid)).toEqual([owner.pid]);
+    expect(calls.filter(({ agent }) => agent === 'director').map(({ pid }) => pid)).toEqual([owner.pid]);
     await vi.waitFor(() => expect(fixture.state()).toMatchObject({ pending: { summary: fixture.summary }, running: null }));
     const writes = fixture.readObservations().filter(({ event }) => event === 'write');
     expect(writes.some(({ pid, running }) => pid === owner.pid && !running)).toBe(true);
@@ -121,12 +126,12 @@ it('finishes an accepted turn after Ctrl+C has exited the TUI process', async ()
     await submitManagerText(tui, 'Continue after I close this screen');
     await vi.waitFor(() => expect(fixture.state()?.running?.kind).toBe('message'), { timeout: 10000 });
     const owner = readDaemonOwner(fixture.directory)!;
-    await vi.waitFor(() => expect(fixture.readObservations()).toContainEqual(expect.objectContaining({ event: 'provider_start', pid: owner.pid })), { timeout: 10000 });
+    await vi.waitFor(() => expect(fixture.readObservations()).toContainEqual(expect.objectContaining({ event: 'provider_start', agent: 'manager', pid: owner.pid })), { timeout: 10000 });
     await tui.exit();
     expect(fixture.state()?.running).toMatchObject({ kind: 'message' });
     fixture.release();
     await vi.waitFor(() => expect(fixture.state()).toMatchObject({ pending: { summary: fixture.summary }, running: null }), { timeout: 10000 });
-    expect(fixture.readObservations()).toContainEqual(expect.objectContaining({ event: 'provider_complete', pid: owner.pid }));
+    expect(fixture.readObservations()).toContainEqual(expect.objectContaining({ event: 'provider_complete', agent: 'manager', pid: owner.pid }));
   } finally { await fixture.cleanup(); }
 });
 
@@ -174,7 +179,7 @@ it('connects two TUI processes for the same canonical assignment to the same sav
       expect(opens.filter(({ pid }) => pid === tui.child.pid).map(({ conversationId }) => conversationId)).toEqual([saved.id]);
     }
     expect(fixture.state()?.pending).toEqual(saved.pending);
-    expect(fixture.readObservations().filter(({ event }) => event === 'provider_start')).toEqual([]);
+    expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager')).toEqual([]);
     await expectCompletedFrames(second, [saved.pending!.summary.objective]);
     await first.exit();
     await waitForManager(second, saved.pending!.summary.objective);
@@ -208,7 +213,7 @@ it('finishes reading on the same Japanese screen after a /make-goal request with
     await waitForManager(tui, greeting);
     await tui.ready(null);
     await expectCompletedFrames(tui, [insufficient, greeting]);
-    expect(fixture.readObservations().filter(({ event, pid }) => event === 'provider_complete' && pid !== tui.child.pid)).toHaveLength(2);
+    expect(fixture.readObservations().filter(({ event, agent, pid }) => event === 'provider_complete' && agent === 'manager' && pid !== tui.child.pid)).toHaveLength(2);
     await tui.exit();
   } finally { await fixture.cleanup(); }
 });
@@ -314,9 +319,9 @@ it('rejects a busy TUI message and never sends it after the active turn complete
     fixture.release();
     await waitForManager(tui, fixture.summary.objective);
     await vi.waitFor(() => expect(fixture.state()?.running).toBeNull());
-    expect(fixture.readObservations().filter(({ event }) => event === 'provider_start')).toHaveLength(1);
+    expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager')).toHaveLength(1);
     await tui.exit();
-    expect(fixture.readObservations().filter(({ event }) => event === 'provider_start')).toHaveLength(1);
+    expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager')).toHaveLength(1);
   } finally { await fixture.cleanup(); }
 });
 
@@ -341,7 +346,7 @@ it('keeps a proposal arriving after busy /make-goal unregistered until a new exp
     expect(fixture.state()?.approval).toBeNull();
     expect(requests().filter(({ command }) => command === 'message')).toHaveLength(2);
     expect(requests().filter(({ command }) => command === 'approve_summary')).toEqual([]);
-    expect(fixture.readObservations().filter(({ event }) => event === 'provider_start')).toHaveLength(1);
+    expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager')).toHaveLength(1);
     expect(fixture.readObservations().filter(({ event, approvalState }) => event === 'write' && approvalState != null)).toEqual([]);
     const goals = new GoalStore(fixture.repository);
     expect((await goals.list()).goals).toEqual([]);
@@ -368,7 +373,7 @@ it('passes CLI provider and model overrides to the daemon provider call even whe
     await waitForManager(tui, fixture.summary.objective);
     const owner = readDaemonOwner(fixture.directory)!;
     expect(owner).toBeDefined();
-    expect(fixture.readObservations().filter(({ event }) => event === 'provider_start'))
+    expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager'))
       .toEqual([expect.objectContaining({ pid: owner.pid, model: 'selected-manager-model' })]);
     await tui.exit();
   } finally { await fixture.cleanup(); }
@@ -500,7 +505,7 @@ it('interrupts only the named turn with Escape and keeps the TUI available for a
     })));
     await vi.waitFor(() => expect(fixture.state()?.running).toBeNull());
     expect(tui.child.exitCode).toBeNull();
-    expect(fixture.readObservations().filter(({ event }) => event === 'provider_complete')).toEqual([]);
+    expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_complete' && agent === 'manager')).toEqual([]);
     fixture.release();
     await waitForManager(tui, 'Discuss your goal');
     await submitManagerText(tui, 'A new turn after Escape');

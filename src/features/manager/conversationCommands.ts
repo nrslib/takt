@@ -1,6 +1,6 @@
 import { isAbsolute } from 'node:path';
 import { z } from 'zod/v4';
-import { ConversationAssignmentSchema } from '../../infra/conversations/schema.js';
+import { ManagerConversationAssignmentSchema } from '../../infra/conversations/schema.js';
 
 const id = z.uuid();
 const revision = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -18,7 +18,7 @@ export const ConversationCommandSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('answer_question'), questionId: id,
     target: z.union([
       z.object({ goalId: id, repositoryDirectory: z.string().refine(isAbsolute) }).strict(),
-      z.object({ goalId: z.null(), owner: ConversationAssignmentSchema }).strict(),
+      z.object({ goalId: z.null(), owner: ManagerConversationAssignmentSchema }).strict(),
     ]),
     answer: z.object({ text: z.string().max(128 * 1024).optional(), decision: z.enum(['allow', 'deny']).optional(),
       report: z.enum(['completed', 'unable']).optional(), scope: z.enum(['once', 'goal', 'project', 'workspace', 'global']).optional() }).strict(),

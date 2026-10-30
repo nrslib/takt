@@ -91,6 +91,49 @@ Ask to add `/path/to/web`, remove a repository from the assignment, or rename th
 
 Removing an assignment does not delete the repository or its goals. Repositories with unfinished goals cannot be removed; complete or abort those goals first. Starting outside a repository lets you choose a workspace.
 
+## Director patrol
+
+### Conversation
+
+Start director in an interactive terminal:
+
+```bash
+takt director
+takt director --help
+```
+
+`takt director` opens a conversation TUI. The daemon owns and runs the conversation; closing and reopening the TUI reconnects to the same conversation. Starting from any assigned repository connects to that same daemon-wide conversation. Previous messages and replies are not redisplayed when you reopen it; conversation history is managed by the provider's session.
+
+Director is experimental. Its behavior and saved data formats may change without notice. Conversations incur provider costs, and scheduled patrols also call the provider and incur costs.
+
+### Responsibilities and human decisions
+
+Manager advances goals within its assigned repository or workspace: it submits tasks, integrates results, and requests completion. Director looks across all managers' goals and unanswered inquiries. It saves notifications for work needing human attention, including goals awaiting merge, paused goals, saved `blocked` notifications, and unanswered inquiries. It can ask or inform a manager through the manager conversation, with `director` recorded as the speaker. Repeated notifications for the same saved target and state are suppressed.
+
+Director cannot run shell commands, write files, or change settings. It does not inspect task internals such as run phases, adjudications, or logs; each manager inspects its own tasks. Merge decisions, specification decisions, and irreversible operations such as deletion remain with the human. Director does not answer inquiries on the human's behalf.
+
+Only when the human explicitly says, for example, “merge goal G,” does director ask G's manager to merge its PR using `takt merge`. Before forwarding, director uniquely identifies the repository, goal, and manager, checks that the current goal is `awaiting_merge`, and reads the saved PR number and URL. If the target is ambiguous, the state differs, the PR is missing, or reading fails, it reports the reason without forwarding. Director never performs the merge itself. The manager executes it through `takt_merge_goal_pr`, which invokes `takt merge`; forwarding or accepting the request alone does not mean the merge succeeded. A busy response or a lost connection does not cause queuing or automatic resending.
+
+### Patrol settings
+
+While the daemon is running, director periodically inspects registered repository and workspace managers. Patrols run independently of the human conversation and do not count as human merge instructions. The daemon retains its existing idle-exit behavior.
+
+Set director options in global `~/.takt/config.yaml`, not project `.takt/config.yaml`:
+
+| Setting | Meaning |
+|---------|---------|
+| `director.patrol_interval` | Patrol interval in seconds; a positive integer, default `900` (15 minutes). |
+| `director.slack.channel_id` | Slack channel for director conversations and grouped notifications. |
+| `director.slack.allowed_user_ids` | Users allowed to talk to director from Slack; required when `director.slack` is configured. An empty list accepts no users. |
+
+See the [global config field reference](./configuration.md#global-config-field-reference).
+
+### Slack connection
+
+Use the same Slack App and `TAKT_SLACK_APP_TOKEN` / `TAKT_SLACK_BOT_TOKEN` environment variables as manager. Invite the bot to the director channel, set both variables in the shell that starts `takt daemon`, and restart the daemon after changing Slack settings. Keep tokens in environment variables rather than configuration files.
+
+Messages from allowed users enter the same director conversation, and replies go to the originating thread. New notifications from one conversation turn or patrol are grouped into one channel post. Without `director.slack`, director neither posts to nor accepts messages from Slack. Follow [Slack conversations with director](./configuration.md#slack-conversations-with-director) for the App setup and connection details.
+
 ## Slack conversations
 
 In a conversation thread, send `/make-goal` to create a proposal. Use **Approve registration** or **Continue conversation**; buttons on an outdated proposal no longer work.
@@ -165,4 +208,4 @@ Goal memory is saved in `.takt/goals/<UUID>/goal.json`: objective, scope exclusi
 
 ## Future plans
 
-A choice of Docker or local execution, and goals spanning repositories are planned. A director would coordinate several managers, forward questions, receive delegated-work completion notices and support adjudication. It would order work across managers using dependencies, overlapping change targets and checks of combined results. These features are not implemented.
+A choice of Docker or local execution, goals spanning repositories, delegated-work completion notices and adjudication are planned. The director does not yet order work across managers using dependencies, overlapping change targets or combined-result checks.

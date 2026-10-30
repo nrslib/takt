@@ -11,6 +11,11 @@
 ```yaml
 # ~/.takt/config.yaml
 language: en                  # UI 语言：'en' 或 'ja'
+director:
+  patrol_interval: 900        # director 巡检间隔（秒，正整数，默认：900）
+  slack:
+    channel_id: C0DIR
+    allowed_user_ids: [U0AAA]
 logging:
   level: info                 # 日志级别：debug、info、warn、error
 provider: claude-sdk              # 默认 provider：claude-sdk、claude、claude-headless、claude-terminal、codex、opencode、deepseek-harness、cursor、copilot、kiro、devin、pi 或 mock
@@ -179,6 +184,9 @@ assistant:
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `language` | `"en"` \| `"ja"` | `"en"` | UI 语言 |
+| `director.patrol_interval` | 正整数秒 | `900` | daemon 运行期间定时 director 巡检的间隔。仅限全局配置。 |
+| `director.slack.channel_id` | string | - | director 的 Slack 频道。仅限全局配置，参阅[通过 Slack 与 director 对话](#通过-slack-与-director-对话)。 |
+| `director.slack.allowed_user_ids` | string[] | - | 允许从 Slack 向 director 发言的用户。配置 `director.slack` 时必填；空数组表示不接受任何用户的发言。 |
 | `logging.level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | 日志级别 |
 | `logging.trace` | boolean | `false` | 启用 trace 级日志 |
 | `logging.debug` | boolean | `false` | 启用 debug 日志（`debug.log` + `prompts.jsonl`） |
@@ -543,6 +551,24 @@ takt manager
 - 自由文本回答应回复到对应询问的消息列。当消息与询问的关联有效时，回复会作为回答处理，不会进入 manager 对话。回答会以 `slack` 为来源保存。
 - Slack 连接时已经待回答的询问不会发布到 Slack，请在 TUI 中按 `Ctrl+R` 回答。连接后出现的新询问每条只发布一次，不会重发。如果消息与询问的关联保存失败或无法读取，该消息列中的回复会作为普通对话处理，不会成为回答。
 - “目标已完成”等通知不会通过对话连接发布，仍由 `TAKT_NOTIFY_WEBHOOK` 发送。
+
+## 通过 Slack 与 director 对话
+
+在全局 `~/.takt/config.yaml` 中配置 director 频道和允许的用户，不要写入项目的 `.takt/config.yaml`：
+
+```yaml
+# ~/.takt/config.yaml
+director:
+  slack:
+    channel_id: C0DIR
+    allowed_user_ids: [U0AAA]
+```
+
+使用与 manager 相同的 Slack App 和环境变量 `TAKT_SLACK_APP_TOKEN` / `TAKT_SLACK_BOT_TOKEN`。按照[创建 Slack App](#创建-slack-app)的说明，将机器人邀请到 director 频道，并在启动 `takt daemon` 的 shell 中设置这两个变量。令牌只通过环境变量传递，不写入配置文件。修改 Slack 配置后，请重新启动 daemon。
+
+获准用户在 director 频道中的发言会进入 director 对话，不会进入 manager 对话。director 在原消息的消息列中回复。不在 `director.slack.allowed_user_ids` 中的用户发言会被忽略。即使 manager 使用同一频道，普通发言仍交给 director；manager 的询问按钮和对话框操作则使用 `manager.slack.allowed_user_ids`。
+
+director 将一次对话或巡检中新产生的通知汇总为该频道中的一条消息，包括已完成的工作，以及合并审批、未回答的询问等需要人工决定的事项。被现有去重机制抑制的通知不会重复发布。未配置 `director.slack` 时，director 不会向 Slack 发布消息，也不接受 Slack 发言。连接需要同时设置两个令牌环境变量。现有的 `TAKT_NOTIFY_WEBHOOK` 通知路径不变。
 
 ## manager 敏感文件设置
 

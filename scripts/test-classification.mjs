@@ -388,6 +388,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/daemon-conversation-events.integration.test.ts',
   'src/__tests__/daemon-conversation-ipc.integration.test.ts',
   'src/__tests__/deepseek-runtime-mode-input.integration.test.ts',
+  'src/__tests__/director-foundation.integration.test.ts',
   'src/__tests__/exec-workflowRunner.integration.test.ts',
   'src/__tests__/facet-includes-integration.test.ts',
   'src/__tests__/interactive-resume-records.integration.test.ts',

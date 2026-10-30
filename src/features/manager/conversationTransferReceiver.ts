@@ -1,12 +1,12 @@
 import { z } from 'zod/v4';
 import { isAbsolute } from 'node:path';
 import { conversationId } from '../../infra/conversations/identity.js';
-import { ApprovalSchema, ConversationAssignmentSchema, ConversationIdSchema, PendingSummarySchema,
+import { ApprovalSchema, ConversationAssignmentSchema, ManagerConversationAssignmentSchema, ConversationIdSchema, PendingSummarySchema,
   RunningOperationSchema } from '../../infra/conversations/schema.js';
 import { GoalQuestionSchema, GoalRecordObjectSchema, GoalSchema } from '../../infra/goals/schema.js';
 import type { ConversationState, OutputVersion, PortOutput, SnapshotValue, SnapshotMode } from './conversationPort.js';
 import { snapshotItemKey } from './snapshotChanges.js';
-import type { ManagerAssignment } from './startupResolution.js';
+import type { ConversationDisplayAssignment } from './conversationPort.js';
 
 const sequence = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const repository = z.string().refine(isAbsolute);
@@ -18,6 +18,10 @@ const stateSchema = z.object({ conversationId: ConversationIdSchema, assignment:
   revision: sequence, pending: PendingSummarySchema.nullable(), approval: ApprovalSchema.nullable(),
   running: RunningOperationSchema.omit({ owner: true }).nullable(), interrupted: z.boolean() }).strict()
   .superRefine((state, ctx) => {
+    if (state.assignment.kind === 'daemon' && (state.pending !== null || state.approval !== null
+      || state.running !== null && state.running.kind !== 'message')) {
+      ctx.addIssue({ code: 'custom', message: 'Director state contains manager operations' });
+    }
     if (conversationId(state.assignment) !== state.conversationId || state.pending !== null && state.pending.revision !== state.revision) {
       ctx.addIssue({ code: 'custom', message: 'Inconsistent conversation state' });
     }
@@ -29,7 +33,7 @@ const stateSchema = z.object({ conversationId: ConversationIdSchema, assignment:
   });
 const targetSchema = z.union([
   z.object({ goalId: z.uuid(), repositoryDirectory: repository }).strict(),
-  z.object({ goalId: z.null(), owner: ConversationAssignmentSchema }).strict(),
+  z.object({ goalId: z.null(), owner: ManagerConversationAssignmentSchema }).strict(),
 ]);
 const inquirySchema = z.object({ target: targetSchema, question: GoalQuestionSchema.refine((question) =>
   question.recipient === 'human' && question.status === 'pending'), objective: z.string().optional() }).strict()
@@ -37,6 +41,7 @@ const inquirySchema = z.object({ target: targetSchema, question: GoalQuestionSch
     { message: 'Missing inquiry objective' });
 const noticeSchema = z.object({ id: z.string().min(1), message: z.string() }).strict();
 const displayAssignmentSchema = z.union([
+  z.object({ kind: z.literal('daemon'), repositoryDirectories: z.array(repository).length(0) }).strict(),
   z.object({ kind: z.literal('repository'), repositoryDirectory: repository, repositoryDirectories: z.array(repository) }).strict(),
   z.object({ kind: z.literal('workspace'), workspaceId: z.uuid(), name: z.string(), repositoryDirectories: z.array(repository) }).strict(),
 ]);
@@ -73,7 +78,7 @@ const transferSchema = z.object({ protocolVersion: z.literal(1), type: z.literal
   ]) }).strict();
 type TransferMetadata = OutputVersion & { transferId: string; conversationId: string; mode?: SnapshotMode };
 type Transfer = { metadata: TransferMetadata; purpose: 'snapshot' | 'output'; itemIndex: number;
-  fragmentIndex: number; parts: Buffer[]; length: number; assignment?: ManagerAssignment; seen: Set<string> };
+  fragmentIndex: number; parts: Buffer[]; length: number; assignment?: ConversationDisplayAssignment; seen: Set<string> };
 
 export interface ConversationTransferObserver {
   state(state: ConversationState, version: OutputVersion): void;
@@ -95,7 +100,7 @@ export class ConversationTransferReceiver {
   private snapshot: ConversationReadMetadata | undefined;
   private revision = -1;
   private sequence = -1;
-  private completed: { assignment?: ManagerAssignment } | undefined;
+  private completed: { assignment?: ConversationDisplayAssignment } | undefined;
 
   constructor(private readonly conversationId: string, private readonly observer: ConversationTransferObserver) {}
 
@@ -205,7 +210,7 @@ export class ConversationTransferReceiver {
         if (parsed.kind === 'state') this.applyState(parsed.state, transfer.metadata);
         else if (this.snapshot?.transferId === output.transferId) {
           if (parsed.kind === 'assignment') {
-            const identity = parsed.assignment.kind === 'workspace'
+            const identity = parsed.assignment.kind === 'daemon' ? { kind: 'daemon' as const } : parsed.assignment.kind === 'workspace'
               ? { kind: 'workspace' as const, workspaceId: parsed.assignment.workspaceId }
               : { kind: 'repository' as const, repositoryDirectory: parsed.assignment.repositoryDirectory };
             if (conversationId(identity) !== this.conversationId) throw new Error('Display assignment mismatch');

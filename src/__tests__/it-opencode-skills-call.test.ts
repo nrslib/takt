@@ -8,6 +8,14 @@ import { OpenCodeClient } from '../infra/opencode/client.js';
 import { resetSharedServerPool } from '../infra/opencode/server-pool.js';
 import { buildOpenCodePromptTools } from '../infra/opencode/types.js';
 import { runAgent } from '../agents/runner.js';
+import { createDirectorConversationPlan } from '../features/director/conversationPlan.js';
+import { createDirectorTurnExecutor } from '../features/director/turnExecutor.js';
+import { DIRECTOR_TOOL_ALLOWLIST } from '../features/director/mcp.js';
+import { createManagerConversationPlan } from '../features/manager/conversationPlan.js';
+import { getGlobalConfigDir, invalidateGlobalConfigCache, invalidateAllResolvedConfigCache } from '../infra/config/index.js';
+import { toOpenCodeMcpToolName } from '../infra/opencode/allowedTools.js';
+import plugin from '../infra/opencode/plugins/v2-session/index.js';
+import { TAKT_V2_METADATA_KEY } from '../infra/opencode/v2-contract.js';
 import { ProviderNeutralStructuredCaller } from '../agents/structured-caller.js';
 import { runStatusJudgmentPhase } from '../core/workflow/status-judgment-phase.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
@@ -118,6 +126,57 @@ afterEach(() => {
 });
 
 describe('OpenCode Skill execution contract', () => {
+  it('limits director tools to its six MCP tools on new, resumed and retried calls while preserving manager skills', async () => {
+    const directory = getGlobalConfigDir();
+    writeFileSync(join(directory, 'config.yaml'), JSON.stringify({ provider: 'opencode', model: 'probe/probe', language: 'en',
+      provider_options: { opencode: { skills: { enabled: true } } } }));
+    invalidateGlobalConfigCache(); invalidateAllResolvedConfigCache();
+    try {
+      const plan = createDirectorConversationPlan(directory, {});
+      const executor = createDirectorTurnExecutor(plan, { type: 'http', url: 'http://127.0.0.1:62001/mcp' });
+      const input = { prompt: 'Check managers', instruction: 'Check managers', sessionId: undefined, assignment: undefined,
+        configDirectory: directory, abortSignal: new AbortController().signal };
+      const first = await executor.execute(input);
+      expect(first.sessionId).toBeDefined();
+      await executor.execute({ ...input, sessionId: first.sessionId });
+      const invalidateSession = vi.fn(async () => {});
+      promptAsync.mockRejectedValueOnce(new Error('prompt is too long'));
+      await executor.execute({ ...input, sessionId: first.sessionId, recovery: { context: '', invalidateSession } });
+      expect(invalidateSession).toHaveBeenCalledOnce();
+      expect(promptAsync).toHaveBeenCalledTimes(4);
+      expect(promptAsync.mock.calls[1]![0].sessionID).toBe(first.sessionId);
+      expect(promptAsync.mock.calls[3]![0].sessionID).not.toBe(first.sessionId);
+      const expected = DIRECTOR_TOOL_ALLOWLIST.map((tool) => toOpenCodeMcpToolName(tool)!);
+      expect(expected).toHaveLength(6);
+      const hooks = new Map<string, (input: Record<string, unknown>) => Promise<void> | void>();
+      const dispose = async () => {};
+      const hook = async (name: string, callback: (input: Record<string, unknown>) => Promise<void> | void) => {
+        hooks.set(name, callback);
+        return { dispose };
+      };
+      for (const [payload] of promptAsync.mock.calls) {
+        expect(payload.tools.skill).toBe(false);
+        const context = { session: { hook, get: async () => ({ metadata: {
+          [TAKT_V2_METADATA_KEY]: { system: plan.systemPrompt, tools: payload.tools },
+        } }) }, tool: { hook }, rpc: { register: async () => ({ dispose }) } };
+        const cleanup = await plugin.setup(context as unknown as Parameters<typeof plugin.setup>[0]);
+        try {
+          const request = { sessionID: payload.sessionID, system: [], tools: Object.fromEntries(
+            [...Object.keys(payload.tools), 'skill', 'shell', 'write', 'ambient_extra'].map((name) => [name, {}])) };
+          await hooks.get('context')!(request);
+          expect(new Set(Object.keys(request.tools))).toEqual(new Set(expected));
+        } finally { if (typeof cleanup === 'function') await cleanup(); }
+      }
+      const manager = createManagerConversationPlan(directory, {});
+      expect(manager.ctx.providerOptions?.opencode?.skills?.enabled).toBe(true);
+      const normal = await new OpenCodeProvider().setup({ name: 'coder' }).call('task', {
+        ...callOptions(), cwd: directory, providerOptions: manager.ctx.providerOptions, allowedTools: ['Read'],
+      });
+      expect(normal.status).toBe('done');
+      expect(sentTools(4).skill).toBe(true);
+    } finally { invalidateGlobalConfigCache(); invalidateAllResolvedConfigCache(); }
+  });
+
   it.each([undefined, false])('disables Skill for an omitted or false setting: %s', async (enabled) => {
     const response = await new OpenCodeProvider().setup({ name: 'coder' }).call('task', { ...callOptions(enabled), allowedTools: ['Read'] });
     expect(response.status).toBe('done');

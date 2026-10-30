@@ -425,7 +425,20 @@ tui:
     retryDetails: "Task: {task}\nSummary: {summary}\nWorkflow: {workflow}\nStart position: {start}"
     exceededStart: "Saved stopping position: {start} (iteration {iteration})"
 
+director:
+  slackNotifications: "Director updates: completed work and decisions for the human"
+  patrolFailed: "Director patrol failed"
+  description: "Open the experimental director conversation TUI"
+  experimentalNotice: "director is experimental. Behavior, settings, and saved data formats may change."
+  costNotice: "director runs AI turns, which incur provider API costs."
+  placeholder: "Discuss manager status or instructions"
 manager:
+  goalPr:
+    objective: "Objective"
+    changes: "Changes"
+    verification: "Verification"
+    humanChecks: "Human verification steps"
+    truncated: "The change list is truncated. Also review the PR diff."
   conversation:
     reading: "Reading conversation data. Summary approval is unavailable until it completes."
     disconnected: "Reconnecting to the daemon."

@@ -20,6 +20,7 @@ interface Observation {
   revision?: number;
   running?: boolean;
   approvalState?: 'reserved' | 'registered' | null;
+  agent?: string;
   model?: string;
   summaryRequest?: boolean;
   method?: string;
@@ -189,7 +190,7 @@ const setup = MockProvider.prototype.setup;
 MockProvider.prototype.setup = function(config) {
   const agent = setup.call(this, config);
   return { ...agent, call: async (prompt, options) => {
-    record({ event: 'provider_start', model: options.model,
+    record({ event: 'provider_start', agent: config.name, model: options.model,
       summaryRequest: prompt.includes(getLabel('manager.goSummaryRequest', ${JSON.stringify(language)})) });
     const deadline = Date.now() + 15000;
     while (!existsSync(${JSON.stringify(gate)})) {
@@ -198,7 +199,7 @@ MockProvider.prototype.setup = function(config) {
       await delay(20);
     }
     const result = await agent.call(prompt, options);
-    record({ event: 'provider_complete' });
+    record({ event: 'provider_complete', agent: config.name });
     return result;
   } };
 };

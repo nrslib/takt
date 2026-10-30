@@ -7,7 +7,7 @@ vi.mock('node:child_process', async (original) => ({ ...await original<typeof im
 vi.mock('../shared/utils/spawn.js', () => ({ spawnManagedProcess: doubles.spawn }));
 vi.mock('../infra/task/git-environment.js', () => ({ buildSafeGitEnvironment: doubles.environment }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.get; getSync() { return structuredClone(goal); } update = doubles.update; } }));
-import { goalGitText, isGoalCommitIncluded, isGoalContentIncluded, isGoalContentIncludedSync, resolveGoalBranchSha, runGoalGit } from '../infra/goals/git-command.js';
+import { fetchGoalIntegrationBranchSha, goalGitText, isGoalCommitIncluded, isGoalContentIncluded, isGoalContentIncludedSync, resolveGoalBranchSha, runGoalGit } from '../infra/goals/git-command.js';
 import { checkGoalCompletion } from '../infra/goals/integration.js';
 const sourceSha = 'a'.repeat(40);
 const targetSha = 'b'.repeat(40);
@@ -44,6 +44,24 @@ function managedOutput(chunks: Buffer[], code: number, error: string) {
     }, terminate,
   };
 }
+
+it('fetches only the saved target into its remote tracking ref and resolves that commit', async () => {
+  processOutput([]);
+  processOutput([Buffer.from(`${targetSha}\n`)]);
+  expect(await fetchGoalIntegrationBranchSha('/project', 'release', undefined)).toBe(targetSha);
+  expect(doubles.spawn.mock.calls[0]![1]).toEqual(expect.arrayContaining([
+    'fetch', '--no-tags', '--no-write-fetch-head', 'origin', '+refs/heads/release:refs/remotes/origin/release',
+  ]));
+  expect(doubles.spawn.mock.calls[1]![1]).toContain('refs/remotes/origin/release^{commit}');
+});
+
+it.each(['fetch', 'resolve'] as const)('propagates a remote target %s failure without a local fallback', async (stage) => {
+  if (stage === 'resolve') processOutput([]);
+  processOutput([], 1, 'target unavailable');
+  await expect(fetchGoalIntegrationBranchSha('/project', 'main', undefined)).rejects.toThrow();
+  expect(doubles.spawn).toHaveBeenCalledTimes(stage === 'fetch' ? 1 : 2);
+  expect(doubles.spawn.mock.calls.every(([, args]) => !args.includes('refs/heads/main^{commit}'))).toBe(true);
+});
 it('retains only bounded bytes while draining arbitrary stdout chunks', async () => {
   processOutput([Buffer.from('abc'), Buffer.alloc(100000, 'd'), Buffer.alloc(100000, 'e')]);
   expect(await runGoalGit('/project', ['diff'], 5, undefined)).toEqual({ output: Buffer.from('abcdd'), truncated: true, code: 0 });

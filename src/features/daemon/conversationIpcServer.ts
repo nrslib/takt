@@ -7,6 +7,7 @@ import { isDaemonOwnerRunning, type DaemonOwner } from '../../infra/daemon/owner
 import type { ConversationDelivery, ConversationInput, OutputVersion, PortOutput, SnapshotRead } from '../manager/conversationPort.js';
 import { conversationErrorResult, ConversationError } from '../manager/conversationErrors.js';
 import { createTuiConversationPort } from '../manager/tuiConversationPort.js';
+import { createDirectorManagerPort } from '../director/managerPort.js';
 import { ConversationRequestSchema } from './conversationRequests.js';
 import { ConversationFrameDecoder, conversationTransferFrames, snapshotMetadata, writeConversationFrame } from './conversationFrames.js';
 
@@ -190,6 +191,8 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
     },
   };
   const port = createTuiConversationPort(configDirectory, delivery);
+  const directorPort = createDirectorManagerPort(configDirectory, delivery);
+  const directorAttachments = new Set<string>();
   const dispatch = async (raw: unknown): Promise<void> => {
     const request = ConversationRequestSchema.parse(raw);
     const response = (result: unknown) => send({ protocolVersion: 1, type: 'response', requestId: request.requestId, result });
@@ -204,12 +207,14 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
       if (request.method === 'open') {
         onInitializingChange(1);
         try {
-          const resolved = await port.resolve(request.params.assignment);
+          const selectedPort = request.params.binding.port === 'director' ? directorPort : port;
+          const resolved = await selectedPort.resolve(request.params.assignment);
           if (JSON.stringify(request.params.binding) !== JSON.stringify(resolved.binding)
             || JSON.stringify(request.params.speaker) !== JSON.stringify(resolved.speaker)) throw new ConversationError('invalid_input');
           const opened = await service.open(request.params, port.delivery);
           if (socket.destroyed) { service.detach(opened.attachmentId); await opened.read.items[Symbol.asyncIterator]().return?.(); return; }
           owned.add(opened.attachmentId);
+          if (selectedPort === directorPort) directorAttachments.add(opened.attachmentId);
           await response({ attachmentId: opened.attachmentId, read: snapshotMetadata(opened.read) });
           beginRead(opened.read);
         } finally { onInitializingChange(-1); }
@@ -217,6 +222,9 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
         if (!owned.has(request.params.attachmentId)) throw new ConversationError('unavailable_attachment');
         switch (request.method) {
           case 'submit': {
+            if (directorAttachments.has(request.params.attachmentId) && request.params.command.kind !== 'message') {
+              throw new ConversationError('invalid_input');
+            }
             const result = await service.submit({ ...request.params, requestId: request.requestId });
             await response(result);
             break;

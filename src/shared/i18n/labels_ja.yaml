@@ -425,7 +425,20 @@ tui:
     retryDetails: "タスク: {task}\n要約: {summary}\nワークフロー: {workflow}\n開始位置: {start}"
     exceededStart: "保存済みの停止位置: {start}（iteration {iteration}）"
 
+director:
+  slackNotifications: "director からのお知らせ（完了・人の判断が必要な事項）"
+  patrolFailed: "director の見回りに失敗しました"
+  description: "実験的な director 会話 TUI を開きます"
+  experimentalNotice: "director は実験的機能です。動作や保存形式は変更されます。"
+  costNotice: "director は AI を動かすため、provider API の費用がかかります。"
+  placeholder: "manager の状況や指示を相談してください"
 manager:
+  goalPr:
+    objective: "目的"
+    changes: "変更"
+    verification: "確かめたこと"
+    humanChecks: "人が確かめる手順"
+    truncated: "変更一覧は省略されています。PR の差分も確認してください。"
   conversation:
     reading: "会話の情報を読み出しています。完了するまで要約を承認できません。"
     disconnected: "daemon に再接続しています。"

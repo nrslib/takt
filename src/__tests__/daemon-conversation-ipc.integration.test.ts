@@ -11,7 +11,8 @@ import { encodeConversationFrame, MAX_CONVERSATION_FRAME_BYTES } from '../featur
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { readDaemonIpcState } from '../infra/daemon/ipcEndpoint.js';
 import { ConversationStore } from '../infra/conversations/store.js';
-import { conversationRecord } from './helpers/conversation-fixtures.js';
+import { conversationRecord, directorConversationRecord } from './helpers/conversation-fixtures.js';
+import { ConversationRecordSchema } from '../infra/conversations/schema.js';
 import type { ConversationOpen, PortOutput } from '../features/manager/conversationPort.js';
 import type { ManagerAssignment } from '../features/manager/startupResolution.js';
 import type { ManagerTurnInput } from '../features/manager/turnExecutor.js';
@@ -75,6 +76,121 @@ afterEach(async () => {
   for (const value of clients) value.socket.destroy();
   await service.close();
   await server.close();
+});
+
+it('continues the daemon-owned director session over IPC after detach without changing the manager record', async () => {
+  const manager = { ...conversationRecord(repository), sessionId: 'manager-session', bindings: [selected.binding] };
+  new ConversationStore(directory).write(manager);
+  const managerPath = join(directory, 'conversations', `${selected.conversationId}.json`);
+  const priorManager = readFileSync(managerPath);
+  const director = directorConversationRecord();
+  new ConversationStore(directory).write(director);
+  selected = { conversationId: director.id, assignment: director.assignment, binding: director.bindings[0]!, speaker: director.counterpart };
+  const first = await authenticated();
+  const initial = await opened(first);
+  expect((await first.items(initial.read.transferId))[0]).toMatchObject({
+    kind: 'state', state: { conversationId: director.id, assignment: director.assignment },
+  });
+  expect(execute).not.toHaveBeenCalled();
+
+  const accepted = (await first.request('submit', { attachmentId: initial.attachmentId, speaker: selected.speaker,
+    command: { kind: 'message', text: 'manager の状況を確認してください' } })).result!;
+  expect(accepted.kind).toBe('accepted');
+  await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
+  await vi.waitFor(async () => {
+    const replies: unknown[] = [];
+    for (const frame of first.frames) {
+      const output = frame.output;
+      if (output?.kind !== 'transfer_start' || output.purpose !== 'output' || output.operationId !== accepted.operationId) continue;
+      if (!first.frames.some((frame) => frame.output?.kind === 'transfer_end' && frame.output.transferId === output.transferId)) continue;
+      replies.push(...await first.items(output.transferId));
+    }
+    expect(replies).toContainEqual({ kind: 'result', operationId: accepted.operationId, result: { kind: 'reply', message: 'reply' } });
+  });
+  expect(execute).toHaveBeenCalledOnce();
+  expect(execute.mock.calls[0]![0].sessionId).toBeUndefined();
+  expect(new ConversationStore(directory).read(director.id, director.assignment)).toMatchObject({
+    agent: 'director', sessionId: 'session', running: null,
+  });
+  await first.request('detach', { attachmentId: initial.attachmentId });
+  first.socket.destroy();
+
+  const second = await authenticated();
+  const reopened = await opened(second);
+  expect((await second.items(reopened.read.transferId))[0]).toMatchObject({
+    kind: 'state', state: { conversationId: director.id, assignment: director.assignment, running: null },
+  });
+  const next = (await second.request('submit', { attachmentId: reopened.attachmentId, speaker: selected.speaker,
+    command: { kind: 'message', text: '続けてください' } })).result!;
+  expect(next.kind).toBe('accepted');
+  await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
+
+  expect(execute).toHaveBeenCalledTimes(2);
+  expect(execute.mock.calls[1]![0].sessionId).toBe('session');
+  expect(readFileSync(managerPath)).toEqual(priorManager);
+});
+
+it('opens one director conversation independently of repository and workspace manager assignments', async () => {
+  const delivery = { deliver: async () => ({ kind: 'delivered' as const }) };
+  const port = createTuiConversationPort(directory, delivery);
+  const director = directorConversationRecord();
+  const store = new ConversationStore(directory);
+  store.write(director);
+  const repositoryManager = await port.resolve({ kind: 'repository', repositoryDirectory: repository });
+  const first = { conversationId: director.id, assignment: director.assignment, binding: director.bindings[0]!, speaker: director.counterpart };
+  const firstOpen = await service.open(first, delivery);
+  const firstItems = firstOpen.read.items[Symbol.asyncIterator]();
+  const firstState = (await firstItems.next()).value;
+  await firstItems.return?.();
+  firstOpen.read.cancel();
+  const workspace = { kind: 'workspace' as const, workspaceId: '11111111-1111-4111-8111-111111111111',
+    name: 'workspace', repositoryDirectories: [repository, join(directory, 'second-repository')] };
+  doubles.assignment.mockResolvedValue(workspace);
+  const workspaceManager = await port.resolve({ kind: 'workspace', workspaceId: workspace.workspaceId });
+  store.write(ConversationRecordSchema.parse({ ...conversationRecord(repository), agent: 'manager',
+    id: workspaceManager.conversationId, assignment: workspaceManager.assignment, bindings: [workspaceManager.binding], pending: null }));
+  const secondOpen = await service.open(first, delivery);
+  const secondItems = secondOpen.read.items[Symbol.asyncIterator]();
+  const secondState = (await secondItems.next()).value;
+  await secondItems.return?.();
+  secondOpen.read.cancel();
+
+  expect(firstState).toMatchObject({ kind: 'state', state: { conversationId: director.id, assignment: director.assignment } });
+  expect(secondState).toEqual(firstState);
+  expect(secondOpen.read.conversationId).toBe(firstOpen.read.conversationId);
+  expect(secondOpen.read.conversationId).not.toBe(repositoryManager.conversationId);
+  expect(secondOpen.read.conversationId).not.toBe(workspaceManager.conversationId);
+  expect(store.read(secondOpen.read.conversationId, director.assignment)?.agent).toBe('director');
+  expect(execute).not.toHaveBeenCalled();
+});
+
+it('keeps an accepted director turn alive after its last TUI disconnects', async () => {
+  const director = directorConversationRecord();
+  new ConversationStore(directory).write(director);
+  selected = { conversationId: director.id, assignment: director.assignment, binding: director.bindings[0]!, speaker: director.counterpart };
+  const value = await authenticated();
+  const initial = await opened(value);
+  await value.items(initial.read.transferId);
+  execute.mockImplementationOnce(async (input) => {
+    await new Promise<void>((resolve) => { release = resolve; });
+    expect(input.abortSignal?.aborted).toBe(false);
+    return { message: 'director finished', summary: null, sessionId: 'director-finished', assignment: input.assignment };
+  });
+  const accepted = (await value.request('submit', { attachmentId: initial.attachmentId, speaker: selected.speaker,
+    command: { kind: 'message', text: '確認を続けてください' } })).result!;
+  expect(accepted.kind).toBe('accepted');
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+  value.socket.destroy();
+  await vi.waitFor(() => expect(service.attachmentCount).toBe(0));
+  expect(service.activeOperationCount).toBe(1);
+
+  release!();
+  await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
+
+  expect(execute).toHaveBeenCalledOnce();
+  expect(new ConversationStore(directory).read(director.id, director.assignment)).toMatchObject({
+    agent: 'director', sessionId: 'director-finished', running: null,
+  });
 });
 
 it('requires capability authentication and confirms readiness against the exact current owner', async () => {

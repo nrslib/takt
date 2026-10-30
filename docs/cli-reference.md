@@ -91,6 +91,17 @@ Use `takt daemon stop` to stop the manager background daemon explicitly. It exit
 
 `takt manager` opens a goal conversation TUI in an interactive terminal. manager is experimental: behavior, settings, and saved data formats may change without notice. It automatically queues and runs tasks, which incurs provider API costs.
 
+## Director (experimental)
+
+`takt director` opens a conversation TUI in an interactive terminal. The daemon owns the conversation: closing and reopening the TUI continues the same conversation, including when launched from another assigned repository. Previous messages and replies are not redisplayed; history is managed by the provider's session.
+
+```bash
+takt director
+takt director --help
+```
+
+Director is experimental; behavior and saved data formats may change without notice. Conversations and scheduled patrols incur provider costs. Manager advances goals and executes tasks; director checks all managers, notifies the human, and relays explicit human merge instructions to the responsible manager. Director does not merge PRs itself. See [Director patrol](./goal-management.md#director-patrol) for responsibilities, global `director.patrol_interval` and `director.slack` settings, and Slack setup.
+
 ## Web UI execution boundary
 
 Run `takt ui` to start the experimental local Web UI on `http://127.0.0.1:20525`, or pass `--port`. The command warns that the experimental interface may change without notice. If an instance for the same `TAKT_CONFIG_DIR` is already running, the command prints its actual URL and PID without starting another process. Use `takt ui stop` for a graceful stop and `takt ui restart [--port <number>]` to stop and start it again.

@@ -34,6 +34,14 @@ export function createSlackConversationPort(options: {
   const modals = new Map<string, { endpoint: SlackEndpoint; binding: SlackInquiryBinding; scope: WritablePermissionScope }>();
   let accepting = true;
   const detach = (id: string): void => { attachments.delete(id); options.input.detach(id); };
+  const findInquiryBinding = (channelId: string, parentTs: string): SlackInquiryBinding | undefined => {
+    try {
+      return bindings.find(channelId, parentTs);
+    } catch {
+      // An unreadable binding is treated as an ordinary conversation thread.
+      return undefined;
+    }
+  };
   const loadInquiry = async (target: QuestionTarget, questionId: string) => {
     const repositoryDirectory = await resolveGitRepositoryDirectory(options.repositoryDirectory);
     const assignment = await resolveCurrentManagerAssignment({ kind: 'repository', repositoryDirectory }, options.configDirectory);
@@ -207,14 +215,12 @@ export function createSlackConversationPort(options: {
   };
   return {
     ...port,
+    isInquiryThread(channelId: string, parentTs: string): boolean {
+      return findInquiryBinding(channelId, parentTs) !== undefined;
+    },
     async receive(endpoint: SlackEndpoint, text: string): Promise<void> {
       if (!accepting) return;
-      let binding: SlackInquiryBinding | undefined;
-      try {
-        binding = bindings.find(endpoint.channelId, endpoint.parentTs);
-      } catch {
-        // An unreadable binding is treated as an ordinary conversation thread.
-      }
+      const binding = findInquiryBinding(endpoint.channelId, endpoint.parentTs);
       if (binding === undefined) {
         const makeGoal = text.trim() === '/make-goal';
         await submitCommand(endpoint, { kind: 'message', text: makeGoal ? getLabel('manager.goSummaryRequest', options.language) : text }, makeGoal);

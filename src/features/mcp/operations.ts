@@ -33,11 +33,13 @@ import type {
   ListTasksInput,
   TellRunInput,
 } from './schemas.js';
+import type { ManagerAssignmentIdentity } from '../manager/assignment.js';
 
 type SaveTaskFile = typeof defaultSaveTaskFile;
 type CreateIssueFromTaskResult = typeof defaultCreateIssueFromTaskResult;
 
 export interface McpOperationDependencies {
+  managerConversation?: { configDirectory: string; assignment: ManagerAssignmentIdentity };
   readOnly?: boolean;
   saveTaskFile?: SaveTaskFile;
   createIssueFromTaskResult?: CreateIssueFromTaskResult;

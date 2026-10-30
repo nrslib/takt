@@ -163,6 +163,49 @@ manager はレポートと作業場所を確認し、既存タスクの再開、
 
 ゴールの記憶は `.takt/goals/<UUID>/goal.json` に保存します。目的、範囲外、受け入れ条件、作業の制約、質問と回答、何を投入・取り込み・取りやめたかと理由を記録します。workspace は `~/.takt/workspaces/`、未処理のイベントは `~/.takt/manager-inbox/` に保存します。`TAKT_CONFIG_DIR` を指定した場合はその下を使います。
 
+## director の見回り
+
+### 会話を始める
+
+対話端末から起動します。
+
+```bash
+takt director
+takt director --help
+```
+
+`takt director` は director と会話する TUI を開きます。会話は daemon が保持・実行するため、TUI を閉じて開き直すと同じ会話の続きにつながります。どの担当リポジトリから起動しても、同じ daemon 共通の会話です。前の画面の発言や返事は再表示されず、会話履歴は provider のセッションで管理します。
+
+director は実験的機能です。動作や保存するデータの形式は予告なく変わることがあります。会話には provider の費用がかかり、定期的な見回りも provider を呼び出すため費用がかかります。
+
+### manager との分担と人の判断
+
+manager は担当するリポジトリまたは workspace のゴールを進め、タスクの投入、成果の取り込み、完成の申請を行います。director は全 manager のゴールと未回答の問い合わせを見渡します。マージ待ち、一時停止、保存された `blocked` 通知、未回答の問い合わせなど、人の対応が必要な事項を通知として保存します。manager に尋ねたり伝えたりするときは、話し手を `director` とする manager の会話を使います。同じ対象と保存状態への通知は重複しません。
+
+director はシェルの実行、ファイルへの書き込み、設定の書き換えができません。run の段階、裁定、ログなどタスク内部の確認は各 manager の担当です。マージや仕様の判断、削除など取り返しのつかない操作は人に残し、問い合わせへの回答も代行しません。
+
+人が明示的に「ゴール G をマージして」と指示したときだけ、director は G の manager に、その PR を `takt merge` でマージするよう伝えます。転送前に対象のリポジトリ、ゴール、manager を一意に特定し、現在のゴールが `awaiting_merge` であることと、保存済みの PR 番号・URL を確認します。対象が曖昧、状態が異なる、PR がない、読み取りに失敗した場合は転送せず、理由を人に返します。director 自身はマージしません。manager が `takt_merge_goal_pr` を通じて `takt merge` を実行します。指示の転送や受理だけではマージ成功とはいえません。処理中の応答や通信断があっても、待ち行列に入れたり自動で再送したりしません。
+
+### 見回りの設定
+
+daemon 稼働中は、登録済みの repository manager と workspace manager を定期的に確認します。見回りは人との会話を引き継がずに実行し、人のマージ指示としては扱いません。daemon の既存のアイドル終了動作は変わりません。
+
+director の設定は、プロジェクトの `.takt/config.yaml` ではなく、グローバルの `~/.takt/config.yaml` に記述します。
+
+| 設定 | 意味 |
+|------|------|
+| `director.patrol_interval` | 見回り間隔。秒単位の正の整数で、既定は `900`（15分）。 |
+| `director.slack.channel_id` | director と会話し、まとめた通知を受け取る Slack チャンネル。 |
+| `director.slack.allowed_user_ids` | Slack から director に発言できるユーザー。`director.slack` を設定するときは必須。空配列では誰の発言も受け付けない。 |
+
+詳しくは[グローバル設定フィールドリファレンス](./configuration.ja.md#グローバル設定フィールドリファレンス)を参照してください。
+
+### Slack を接続する
+
+manager と同じ Slack App と環境変数 `TAKT_SLACK_APP_TOKEN` / `TAKT_SLACK_BOT_TOKEN` を使います。ボットを director のチャンネルへ招待し、`takt daemon` を起動するシェルで両変数を設定してください。Slack 設定を変更したら daemon を起動し直します。トークンは設定ファイルに書かず、環境変数で渡します。
+
+許可された人の発言は同じ director の会話につながり、返事は元の投稿のスレッドに届きます。1回の会話または見回りで出た新しい知らせは、チャンネルへの1件の投稿にまとまります。`director.slack` を設定しなければ Slack で送受信しません。App の作成と接続の詳細は、[Slack で director と会話する](./configuration.ja.md#slack-で-director-と会話する)を参照してください。
+
 ## 今後の構想
 
-Docker とローカルから選べる実行環境、リポジトリをまたぐゴールを検討しています。director は複数の manager を束ねる上位層とし、質問の転送、委任した作業の終了通知、判断を行う役割を想定しています。作業どうしの依存、変更対象の重なり、結合後の確認をもとに manager 間の順序を決める構想です。これらは未実装です。
+Docker とローカルから選べる実行環境、リポジトリをまたぐゴール、委任した作業の終了通知、裁定機能を検討しています。director が作業どうしの依存、変更対象の重なり、結合後の確認をもとに manager 間の順序を決める機能は未実装です。

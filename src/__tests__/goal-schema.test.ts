@@ -4,6 +4,22 @@ import { goalRecord } from './helpers/goal-fixtures.js';
 import { isGoalPaused, transitionGoalExecution } from '../infra/goals/state.js';
 
 describe('Goal saved record schema', () => {
+  it('preserves the pull request number and URL in a saved goal', () => {
+    const record = { ...goalRecord(), pullRequest: { number: 1950, url: 'https://github.com/example/project/pull/1950' } };
+    expect(GoalSchema.parse(record)).toEqual(record);
+  });
+
+  it.each([
+    { number: 0, url: 'https://github.com/example/project/pull/1950' },
+    { number: -1, url: 'https://github.com/example/project/pull/1950' },
+    { number: 1.5, url: 'https://github.com/example/project/pull/1950' },
+    { number: Number.MAX_SAFE_INTEGER + 1, url: 'https://github.com/example/project/pull/1950' },
+    { number: 1950 },
+    { url: 'https://github.com/example/project/pull/1950' },
+  ])('rejects incomplete or invalid saved pull request information: %j', (pullRequest) => {
+    expect(GoalSchema.safeParse({ ...goalRecord(), pullRequest }).success).toBe(false);
+  });
+
   it('preserves every required field', () => {
     const record = goalRecord();
     expect(GoalSchema.parse(record)).toEqual(record);

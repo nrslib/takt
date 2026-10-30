@@ -3,8 +3,14 @@ const doubles = vi.hoisted(() => ({ project: vi.fn(), global: vi.fn() }));
 vi.mock('../infra/config/project/projectConfig.js', () => ({ loadProjectConfig: doubles.project }));
 vi.mock('../infra/config/global/globalConfig.js', () => ({ loadGlobalConfig: doubles.global }));
 import { resolveManagerConfig } from '../infra/config/managerConfig.js';
+import { resolveDirectorConfig } from '../infra/config/directorConfig.js';
 import { GlobalConfigSchema, ProjectConfigSchema } from '../core/models/config-schemas.js';
 beforeEach(() => { vi.resetAllMocks(); doubles.project.mockReturnValue({}); doubles.global.mockReturnValue({}); });
+it('resolves the director interval from the already loaded global configuration', () => {
+  expect(resolveDirectorConfig({ language: 'en', autoFetch: true }).patrolInterval).toBe(900);
+  expect(resolveDirectorConfig({ language: 'ja', autoFetch: true, director: { patrolInterval: 600 } }).patrolInterval).toBe(600);
+  expect(doubles.global).not.toHaveBeenCalled();
+});
 it('defaults to automatic execution without inventing a default workflow', () => {
   expect(resolveManagerConfig('/project')).toMatchObject({ autoRun: true, defaultWorkflow: undefined, mainMerge: 'approve' });
 });
@@ -22,6 +28,14 @@ it.each([0, -1, 0.5, '1800', Infinity])('rejects invalid patrol interval %s at t
   const input = { manager: { patrol_interval } };
   expect(ProjectConfigSchema.safeParse(input).success).toBe(false);
   expect(GlobalConfigSchema.safeParse(input).success).toBe(false);
+});
+it('accepts a director patrol interval only in global configuration', () => {
+  const input = { director: { patrol_interval: 600 }, manager: { patrol_interval: 1800 } };
+  expect(GlobalConfigSchema.parse(input)).toMatchObject(input);
+  expect(ProjectConfigSchema.safeParse(input).success).toBe(false);
+});
+it.each([0, -1, 0.5, '600', Infinity])('rejects invalid director patrol interval %s', (patrol_interval) => {
+  expect(GlobalConfigSchema.safeParse({ director: { patrol_interval } }).success).toBe(false);
 });
 it('resolves project and global settings separately for each field', () => {
   doubles.project.mockReturnValue({ manager: { autoRun: false } });
@@ -131,4 +145,38 @@ it('keeps Slack channel authorization specific to repository configuration', () 
   const slack = { channel_id: 'C0123', allowed_user_ids: ['U0AAA'] };
 
   expect(GlobalConfigSchema.safeParse({ manager: { slack } }).success).toBe(false);
+});
+
+it.each([{ allowedUserIds: ['U0AAA', 'U0BBB'] }, { allowedUserIds: [] }])('accepts director Slack settings in global configuration with users $allowedUserIds', ({ allowedUserIds }) => {
+  const slack = { channel_id: 'C0DIR', allowed_user_ids: allowedUserIds };
+  const input = { director: { patrol_interval: 600, slack } };
+  expect(GlobalConfigSchema.parse(input)).toMatchObject(input);
+  expect(ProjectConfigSchema.safeParse(input).success).toBe(false);
+});
+
+it.each([
+  null,
+  { channel_id: 123, allowed_user_ids: ['U0AAA'] },
+  { channel_id: 'C0DIR', allowed_user_ids: 'U0AAA' },
+  { channel_id: 'C0DIR', allowed_user_ids: [123] },
+  { channel_id: 'C0DIR' },
+  { allowed_user_ids: ['U0AAA'] },
+  { channel_id: ' ', allowed_user_ids: ['U0AAA'] },
+  { channel_id: 'C0DIR', allowed_user_ids: [' '] },
+])('rejects invalid director Slack settings %j', (slack) => {
+  expect(GlobalConfigSchema.safeParse({ director: { slack } }).success).toBe(false);
+});
+
+it.each(['app_token', 'bot_token', 'unknown'])('rejects the unknown director Slack key %s', (key) => {
+  const slack = { channel_id: 'C0DIR', allowed_user_ids: ['U0AAA'], [key]: 'environment-only' };
+  expect(GlobalConfigSchema.safeParse({ director: { slack } }).success).toBe(false);
+});
+
+it('resolves director Slack from the already loaded global configuration', () => {
+  const slack = { channelId: 'C0DIR', allowedUserIds: ['U0AAA'] };
+  const config = { language: 'en' as const, autoFetch: true, director: { patrolInterval: 600, slack } };
+  expect(resolveDirectorConfig(config)).toMatchObject({ patrolInterval: 600, slack });
+  expect(resolveDirectorConfig({ language: 'en', autoFetch: true })).not.toHaveProperty('slack.channelId');
+  expect(doubles.global).not.toHaveBeenCalled();
+  expect(doubles.project).not.toHaveBeenCalled();
 });

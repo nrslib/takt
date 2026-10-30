@@ -14,6 +14,11 @@ If the global configuration directory and the current project's `.takt/` point t
 ```yaml
 # ~/.takt/config.yaml
 language: en                  # UI language: 'en' or 'ja'
+director:
+  patrol_interval: 900        # Director patrol interval in seconds (positive integer, default: 900)
+  slack:
+    channel_id: C0DIR
+    allowed_user_ids: [U0AAA]
 logging:
   level: info                 # Log level: debug, info, warn, error
 provider: claude-sdk              # Default provider: claude-sdk, claude, claude-headless, claude-terminal, codex, opencode, deepseek-harness, cursor, copilot, kiro, devin, pi, or mock
@@ -186,6 +191,9 @@ Dynamic parallel and `dynamic_facets` selectors use read-only mode with only `Re
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `language` | `"en"` \| `"ja"` | `"en"` | UI language |
+| `director.patrol_interval` | positive integer seconds | `900` | Interval between scheduled director patrols while the daemon is running. Global-only. |
+| `director.slack.channel_id` | string | - | Director Slack channel. Global-only; see [Slack conversations with director](#slack-conversations-with-director). |
+| `director.slack.allowed_user_ids` | string[] | - | Users allowed to send messages to director from Slack. Required when `director.slack` is configured; an empty list accepts no users. |
 | `logging.level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | Log level |
 | `logging.trace` | boolean | `false` | Enable trace-level logging (suppresses high-frequency debug noise) |
 | `logging.debug` | boolean | `false` | Enable debug logging (`debug.log` + `prompts.jsonl`) |
@@ -546,6 +554,24 @@ When a repository has Slack configured and both tokens are present, the daemon k
 - Answer free-text inquiries by replying in the inquiry post's thread. When its inquiry binding is available, the reply is treated as an answer, not a manager conversation message. Answers are saved with source `slack`.
 - Inquiries already pending when Slack connects are not posted to Slack; answer them in the TUI with `Ctrl+R`. Each new inquiry after connection is posted once, with no retry. If the binding between a post and its inquiry could not be saved or cannot be read, replies in that thread are treated as ordinary conversation, not answers.
 - Notices such as goal completion are not posted through the conversation connection. They continue to arrive through `TAKT_NOTIFY_WEBHOOK`.
+
+## Slack conversations with director
+
+Configure the director channel and permitted users in global `~/.takt/config.yaml`, not project `.takt/config.yaml`:
+
+```yaml
+# ~/.takt/config.yaml
+director:
+  slack:
+    channel_id: C0DIR
+    allowed_user_ids: [U0AAA]
+```
+
+Use the same Slack App and `TAKT_SLACK_APP_TOKEN` / `TAKT_SLACK_BOT_TOKEN` environment variables as manager. Follow [Create the Slack App](#create-the-slack-app), invite the bot to the director channel, and set both variables in the shell that starts `takt daemon`. Tokens belong in environment variables, not configuration files. Restart the daemon after changing Slack settings.
+
+Messages from permitted users in the director channel go to the director conversation, not manager. Director replies in the original post's thread. Messages from users outside `director.slack.allowed_user_ids` are ignored. If manager uses the same channel, ordinary messages still go to director; manager inquiry buttons and modals use `manager.slack.allowed_user_ids`.
+
+Director groups new notices from one turn or patrol into one post in this channel, covering completed work and decisions needed from a person, such as merge approval and unanswered inquiries. Notices suppressed by the existing duplicate check are not posted again. Without `director.slack`, director neither posts to nor accepts messages from Slack. Both token variables are required to connect. This does not change the existing `TAKT_NOTIFY_WEBHOOK` notification path.
 
 ## Manager sensitive read targets
 

@@ -280,6 +280,7 @@ steps:
 | `takt watch` | 监视任务队列并自动执行待处理任务 |
 | `takt ui` | 在 `http://127.0.0.1:20525` 启动实验性的 Viewer 优先 Web UI |
 | `takt manager` | 启动连接到 daemon 的实验性目标对话 TUI。使用 `Ctrl+R` 打开询问列表，`Ctrl+G` 打开进行中的目标列表；manager 处理期间也可以使用这两个键。在输入框中输入 `/make-goal` 并按 `Enter`，即可根据当前对话生成目标注册草案。即使已显示草案，也只会重新生成，不会注册目标。使用 `↑` 批准 / `↓` 继续 / `Enter` 确定，选择批准后按 `Enter` 注册。输入 `/` 时会显示 `/make-goal` 补全候选，按 `Tab` 确认补全。其他以 `/` 开头的输入会作为普通消息发送。材料不足时可以继续对话。添加、删除或重命名负责的仓库需通过对话提出。行为、设置和保存的数据格式可能会随时更改，恕不另行通知。自动将任务加入队列并执行，因此会产生 provider API 费用。使用 claude（claude-sdk）或 codex 时，AI 会在工具执行前进行审查。启动时，manager 会按需启动 daemon，并等待其准备就绪；daemon 负责运行对话、处理事件和巡查。使用 `takt daemon stop` 可停止 daemon |
+| `takt director` | 打开统览所有 manager 的实验性对话 TUI；参阅 [director](#director实验性) |
 | `takt list` | 管理任务分支：合并、重试、重新排队、请求停止、强制失败、指导或删除 |
 | `takt #N` | 将 GitHub Issue 作为任务输入 |
 | `takt merge` | 使用 workflow 审查、修复并合并 PR |
@@ -362,6 +363,23 @@ exec 会从上一次 exec 配置启动；首次使用时使用默认配置。传
 exec preset 的解析顺序是：项目 `.takt/exec/presets/` → 全局 `$TAKT_CONFIG_DIR/exec/presets/`（默认 `~/.takt/exec/presets/`）→ builtin `builtins/exec/presets/`。`/setup` 的变更保存到 `$TAKT_CONFIG_DIR/exec.yaml`（默认 `~/.takt/exec.yaml`），供下次 exec 使用。`/go` 会生成 `.takt/exec/workflow.yaml` 并通过普通 workflow engine 执行；没有对话或内联任务文本时，`/go` 不会生成 workflow。使用 `/cancel` 可退出而不运行。
 
 exec 输入支持图片附件。使用 `/paste-image` 或 macOS 上的 `Ctrl+V` 附加剪贴板图片；TAKT 会插入 `[Image #N]` 占位符。只有在 Assistant 消息或 `/go` 备注中引用该占位符时，图片才会随请求发送。支持 PNG、JPEG、GIF 和 WebP，内联及剪贴板图片限制为 10 MiB。
+
+## director（实验性）
+
+在交互终端中打开 director 对话 TUI：
+
+```bash
+takt director
+takt director --help
+```
+
+对话由 daemon 持有，关闭并重新打开 TUI 后会继续同一个对话。从另一个负责的仓库启动，也会连接到同一个对话。之前的发言和回复不会重新显示。director 是实验性功能，行为和保存的数据格式可能随时更改，恕不另行通知。对话和定期巡检都会调用 provider 并产生费用。
+
+manager 推进其负责的仓库或 workspace 的目标，提交任务、整合成果并申请完成。director 查看所有 manager 的目标和未回答的询问，将需要处理的事项告知人，并通过 manager 对话传达信息。决定仍由人作出；director 只把人明确提出的合并指令转发给负责的 manager，自己不执行合并。
+
+在全局 `~/.takt/config.yaml` 中设置 `director.patrol_interval`（秒，默认 `900`）和 `director.slack.channel_id` / `director.slack.allowed_user_ids`。参阅[全局配置字段参考](./configuration.zh-CN.md#全局配置字段参考)。
+
+**director 的 Slack：** 使用与 manager 相同的 Slack App 和 `TAKT_SLACK_APP_TOKEN` / `TAKT_SLACK_BOT_TOKEN`，将机器人邀请到 director 频道，并在修改 Slack 配置后重新启动 daemon。配置 `director.slack` 后，可以接收汇总通知并允许获准用户对话，回复发送到原消息列。连接步骤参阅[通过 Slack 与 director 对话](./configuration.zh-CN.md#通过-slack-与-director-对话)，完整的分工与限制参阅 [director CLI 说明](./cli-reference.zh-CN.md#director实验性)。
 
 ## 配置
 

@@ -88,6 +88,17 @@ manager を開くと、必要なら daemon を起動し、準備が整うまで�
 
 `takt manager` は対話端末でゴール相談の TUI を起動します。manager は実験的機能です。動作・設定・保存するデータの形式は予告なく変わることがあります。自動でタスクを投入・実行するため、provider の API の費用がかかります。
 
+## director（実験的）
+
+`takt director` は対話端末で会話の TUI を開きます。会話は daemon が保持するため、閉じて起動し直すと前の会話の続きにつながります。別の担当リポジトリから起動しても同じ会話です。前の画面の発言や返事は再表示せず、履歴は provider のセッションで管理します。
+
+```bash
+takt director
+takt director --help
+```
+
+director は実験的機能で、動作や保存するデータの形式は予告なく変わることがあります。会話と定期的な見回りには provider の費用がかかります。manager がゴールを進めてタスクを実行し、director は全 manager の確認、人への通知、人の明示的なマージ指示の担当 manager への転送を行います。director 自身は PR をマージしません。役割分担、グローバルの `director.patrol_interval` と `director.slack` の設定、Slack 接続の詳細は、[director の見回り](./goal-management.ja.md#director-の見回り)を参照してください。
+
 ## Web UI の実行境界
 
 `takt ui` は実験的なローカル Web UI を `http://127.0.0.1:20525` で起動し、`--port` でポートを変更できます。起動時には、予告なく仕様が変更される可能性があることを表示します。同じ `TAKT_CONFIG_DIR` のインスタンスがすでに動いている場合は二重起動せず、実際の URL と PID を表示します。グレースフルに停止するには `takt ui stop`、停止後に起動し直すには `takt ui restart [--port <number>]` を使用します。

@@ -227,6 +227,12 @@ export class GlobalConfigManager {
         parsed.pipeline as { default_branch_prefix?: string; commit_message_template?: string; pr_body_template?: string } | undefined,
       ),
       caccia: parsed.caccia,
+      director: parsed.director === undefined ? undefined : {
+        patrolInterval: parsed.director.patrol_interval,
+        slack: parsed.director.slack === undefined ? undefined : {
+          channelId: parsed.director.slack.channel_id, allowedUserIds: parsed.director.slack.allowed_user_ids,
+        },
+      },
       manager: parsed.manager === undefined ? undefined : {
         autoRun: parsed.manager.auto_run, patrolInterval: parsed.manager.patrol_interval, defaultWorkflow: parsed.manager.default_workflow, notifications: parsed.manager.notifications, sensitivePaths: parsed.manager.sensitive_paths,
       },

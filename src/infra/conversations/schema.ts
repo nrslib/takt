@@ -6,10 +6,13 @@ import { conversationId } from './identity.js';
 const nonempty = z.string().min(1);
 const repository = nonempty.refine(isAbsolute);
 const revision = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
-export const ConversationIdSchema = z.string().regex(/^manager-[a-f0-9]{64}$/);
-export const ConversationAssignmentSchema = z.discriminatedUnion('kind', [
+export const ConversationIdSchema = z.string().regex(/^(manager|director)-[a-f0-9]{64}$/);
+export const ManagerConversationAssignmentSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('repository'), repositoryDirectory: repository }).strict(),
   z.object({ kind: z.literal('workspace'), workspaceId: z.uuid() }).strict(),
+]);
+export const ConversationAssignmentSchema = z.union([
+  ManagerConversationAssignmentSchema, z.object({ kind: z.literal('daemon') }).strict(),
 ]);
 export const ConversationActorSchema = z.object({ namespace: nonempty, id: nonempty }).strict();
 export const PortBindingSchema = z.object({
@@ -41,6 +44,9 @@ export const ConversationRecordSchema = z.object({
   running: RunningOperationSchema.nullable(),
 }).strict().superRefine((record, ctx) => {
   const issue = (path: string, message: string): void => { ctx.addIssue({ code: 'custom', path: [path], message }); };
+  if (record.agent !== (record.assignment.kind === 'daemon' ? 'director' : 'manager')) issue('agent', 'Agent does not match assignment');
+  if (record.assignment.kind === 'daemon' && (record.pending !== null || record.approval !== null
+    || record.running !== null && record.running.kind !== 'message')) issue('assignment', 'Director cannot hold manager operations');
   if (record.id !== conversationId(record.assignment)) issue('id', 'Conversation identity does not match assignment');
   if (record.pending !== null && record.pending.revision !== record.revision) issue('pending', 'Pending revision does not match conversation');
   if (record.assignment.kind === 'repository') {
