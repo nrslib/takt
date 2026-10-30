@@ -12,7 +12,7 @@ const permission = z.object({
   ]), sentence: z.string().min(1),
 }).strict();
 export const ConversationCommandSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('message'), text: z.string().min(1) }).strict(),
+  z.object({ kind: z.literal('message'), text: z.string().min(1), display: z.boolean().optional() }).strict(),
   z.object({ kind: z.literal('approve_summary'), revision, requirePending: z.boolean().optional() }).strict(),
   z.object({ kind: z.literal('dismiss_summary'), revision }).strict(),
   z.object({ kind: z.literal('answer_question'), questionId: id,

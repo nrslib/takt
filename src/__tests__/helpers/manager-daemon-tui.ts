@@ -252,10 +252,16 @@ finally { process.disconnect(); }
     const owned = await captureOwnedChild(child);
     clients.push({ child, owned });
     let id = 0;
-    await vi.waitFor(() => {
-      expect(messages.find((message) => message.kind === 'failure')?.message, errors).toBeUndefined();
-      expect(messages.some((message) => message.kind === 'mounted'), errors).toBe(true);
-    }, { timeout: 10000 });
+    try {
+      // 起動全体にはdaemon確認・認証・openが含まれ、それぞれのIPC期限とは異なる。
+      await vi.waitFor(() => {
+        expect(messages.find((message) => message.kind === 'failure')?.message, errors).toBeUndefined();
+        expect(messages.some((message) => message.kind === 'mounted'), errors).toBe(true);
+      }, { timeout: 30000 });
+    } catch (cause) {
+      throw new Error(`TUI startup failed: ${JSON.stringify({ pid: child.pid, exitCode: child.exitCode,
+        signalCode: child.signalCode, errors, owner: readDaemonOwner(directory), observations: readObservations() })}`, { cause });
+    }
     const key = (input: string): void => { child.send({ kind: 'key', input }); };
     const frame = async (): Promise<string> => {
       const request = ++id;
@@ -316,11 +322,12 @@ finally { process.disconnect(); }
 }
 
 export async function waitForManager(tui: ManagerTuiProcess, text: string): Promise<void> {
+  // provider実行と保存を含む表示完了の待機は、個々のIPC要求期限とは別に扱う。
   await vi.waitFor(async () => {
     const frame = await tui.frame();
     expect(frame).toContain(text);
     if (text === 'Discuss your goal' || text === 'ゴールを相談してください') expect(frame).not.toMatch(/Working|処理中/u);
-  }, { timeout: 5000 });
+  }, { timeout: 10000 });
 }
 
 export async function submitManagerText(tui: ManagerTuiProcess, text: string): Promise<void> {

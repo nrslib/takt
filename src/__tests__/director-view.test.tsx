@@ -6,8 +6,27 @@ import { ManagerClientDouble } from './helpers/manager-tui-fixtures.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { measureWidth } from '../shared/utils/grapheme.js';
 import { stripAnsi } from '../shared/utils/text.js';
+import { randomUUID } from 'node:crypto';
 
 afterEach(cleanup);
+it('shows a remote message once and avoids repeating its own accepted message', async () => {
+  const client = new ManagerClientDouble();
+  const app = render(createElement(DirectorView, { client, lang: 'en', onExit: vi.fn() }));
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('director.costNotice', 'en')));
+  const remote = { kind: 'user_message' as const, operationId: randomUUID(), message: 'Remote request' };
+  client.output(remote); client.output(remote);
+  await vi.waitFor(() => expect(app.lastFrame()!.split(remote.message)).toHaveLength(2));
+  app.stdin.write('Local request');
+  await vi.waitFor(() => expect(app.lastFrame()).toContain('Local request'));
+  app.stdin.write('\r');
+  await vi.waitFor(() => expect(client.commands()).toHaveLength(1));
+  const operationId = await client.operation();
+  client.output({ kind: 'user_message', operationId, message: 'Local request' });
+  await vi.waitFor(() => {
+    expect(app.lastFrame()!.split('Local request')).toHaveLength(2);
+    expect(app.lastFrame()!.split(remote.message)).toHaveLength(2);
+  });
+});
 it.each(['ja', 'en'] as const)('shows startup notices at 80 columns and detaches without cancelling in %s', async (lang) => {
   const client = new ManagerClientDouble();
   const exit = vi.fn();

@@ -9,6 +9,7 @@ import { createDaemonSlackPorts } from '../features/daemon/slackPorts.js';
 import { ConversationStore } from '../infra/conversations/store.js';
 import { conversationRecord } from './helpers/conversation-fixtures.js';
 import type { ManagerTurnInput } from '../features/manager/turnExecutor.js';
+import type { PortOutput } from '../features/manager/conversationPort.js';
 import type { validateManagerSummary } from '../features/manager/turnResponse.js';
 import { createSlackClient, type SlackEvent } from '../infra/slack/client.js';
 import { DebugLogger, initDebugLogger } from '../shared/utils/debug.js';
@@ -292,6 +293,23 @@ async function pressProposal(posted: Awaited<ReturnType<typeof makeGoalProposal>
     message: { ts: posted.parentTs, thread_ts: '1700000000.000001' },
     actions: [{ type: 'button', action_id: chosen.action_id, value: chosen.value }], ...overrides });
 }
+
+it('shares ordinary Slack speech with TUI attachments without exposing make-goal instructions', async () => {
+  service.detach(tui.attachmentId);
+  const outputs: PortOutput[] = [];
+  tui = await service.open(selected, { deliver: async (_id, output) => {
+    outputs.push(output); return { kind: 'delivered' };
+  } });
+  await (await emit()).pending;
+  await finished(1);
+  expect(outputs.filter((output) => output.kind === 'user_message')).toEqual([
+    expect.objectContaining({ operationId: expect.any(String), message: '状況は？' }),
+  ]);
+  outputs.length = 0;
+  await makeGoalProposal();
+  expect(execute.mock.calls[1]![0].instruction).toBe(getLabel('manager.goSummaryRequest', 'ja'));
+  expect(outputs.filter((output) => output.kind === 'user_message')).toEqual([]);
+});
 
 it('posts a Slack proposal in the source thread and registers it when approved', async () => {
   const git = (args: string[], input?: string) => execFileSync('git', args, {

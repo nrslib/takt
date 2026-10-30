@@ -64,7 +64,7 @@ it.each(['ja', 'en'] as const)('displays a goal-less permission notice in %s dur
       app.stdin.write(text);
       await vi.waitFor(() => expect(app.lastFrame()).toContain(text));
       app.stdin.write('\r');
-      await vi.waitFor(() => expect(submit).toHaveBeenCalledWith({ kind: 'message', text }, undefined));
+      await vi.waitFor(() => expect(submit).toHaveBeenCalledWith({ kind: 'message', text }, expect.any(Function)));
       await vi.waitFor(() => expect(app.lastFrame()).toContain('会話を続けます'));
     }
     expect(submit).toHaveBeenCalledTimes(2);

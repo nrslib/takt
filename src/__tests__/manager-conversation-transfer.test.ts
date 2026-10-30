@@ -24,6 +24,24 @@ function fixture() {
   return { receiver, observer, state, metadata, event, frames };
 }
 
+it('validates and delivers a user message with the matching operation identity', async () => {
+  const { receiver, observer, metadata, frames } = fixture();
+  const operationId = randomUUID();
+  const message = { kind: 'user_message', operationId, message: 'Shared input' };
+  const read = metadata(5, 2, operationId);
+  for (const frame of await frames(read, [message], 'output')) receiver.receive(frame);
+  expect(observer.output).toHaveBeenCalledExactlyOnceWith(message, expect.objectContaining({ operationId }));
+});
+
+it('rejects a user message belonging to a different operation', async () => {
+  const { receiver, observer, metadata, frames } = fixture();
+  const read = metadata(5, 2, randomUUID());
+  const message = { kind: 'user_message', operationId: randomUUID(), message: 'Wrong operation' };
+  const values = await frames(read, [message], 'output');
+  expect(() => { for (const frame of values) receiver.receive(frame); }).toThrow();
+  expect(observer.output).not.toHaveBeenCalled();
+});
+
 it.each([
   { responseAfter: 'start', frameCount: 1 },
   { responseAfter: 'an item', frameCount: 3 },
