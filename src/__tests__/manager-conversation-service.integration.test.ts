@@ -25,6 +25,10 @@ import { CodexProvider } from '../infra/providers/codex.js';
 import { ClaudeTerminalProvider } from '../infra/providers/claude-terminal.js';
 import type { TaskState } from '../infra/task/types.js';
 import { GoalSchema } from '../infra/goals/schema.js';
+import { mergeTaktGoalPr } from '../features/mcp/goalIntegrationOperations.js';
+import * as goalPrMerge from '../features/manager/mergeGoalPr.js';
+import { DirectorMessageResultStore } from '../infra/conversations/directorMessageResults.js';
+import { ManagerTurnScheduler } from '../features/manager/managerTurnScheduler.js';
 
 const doubles = vi.hoisted(() => ({ assignment: vi.fn(), register: vi.fn(), notification: vi.fn(), codexRun: vi.fn(), tmux: vi.fn(), transcript: vi.fn(), pasteInput: vi.fn(), taskItems: vi.fn<() => TaskState[]>() }));
 vi.mock('../features/manager/turnFailureNotification.js', () => ({ notifyManagerTurnFailure: doubles.notification }));
@@ -75,6 +79,7 @@ let assignment: ManagerAssignment;
 let store: ConversationStore;
 let record: ConversationRecord & { assignment: Exclude<ConversationRecord['assignment'], { kind: 'daemon' }> };
 let service: ReturnType<typeof createConversationService>;
+let scheduler: ManagerTurnScheduler;
 let outputs: PortOutput[];
 let delivery: ConversationDelivery;
 let lastOperationId: string | undefined;
@@ -126,7 +131,8 @@ beforeEach(() => {
   doubles.register.mockReset().mockImplementation(async ({ id }: { id: string }) => saveGoal(id));
   resolveRuntime.mockReset().mockResolvedValue({ provider: 'mock', model: 'model-A', language: 'en', contextKey: 'context-A', executor: { execute } });
   const runtime = { resolve: resolveRuntime, close: closeRuntime };
-  service = createConversationService({ configDirectory: directory, owner, runtime, onDomainChange: vi.fn() });
+  scheduler = new ManagerTurnScheduler();
+  service = createConversationService({ configDirectory: directory, owner, runtime, scheduler, onDomainChange: vi.fn() });
   outputs = [];
   lastOperationId = undefined;
   delivery = { deliver: async (_id, output) => { outputs.push(output); return { kind: 'delivered' }; } };
@@ -149,10 +155,9 @@ it('reopens the same conversation with two independent attachments and no provid
 
 it.each([
   { namespace: 'local', id: 'operator' },
-  { namespace: 'agent', id: 'director' },
   { namespace: 'slack-user', id: '["team","user"]' },
 ])('restores the proposal and last speaker when recording $namespace fails', async (speaker) => {
-  record.lastSpeaker = speaker.namespace === 'agent' ? record.counterpart : { namespace: 'agent', id: 'director' };
+  record.lastSpeaker = { namespace: 'agent', id: 'director' };
   store.write(record);
   const opened = await service.open({ conversationId: record.id, assignment: record.assignment,
     binding: record.bindings[0]!, speaker }, delivery);
@@ -447,7 +452,7 @@ it('keeps an accepted operation running after detach and exposes its saved pendi
   }
 });
 
-it('returns busy to a director speaker during a human turn and never executes the rejected message later', async () => {
+it('accepts a director speaker during a human turn and runs its saved message before the next request', async () => {
   const human = await open();
   const speaker = { namespace: 'agent', id: 'director' };
   const director = await service.open({ conversationId: record.id, assignment: record.assignment,
@@ -463,23 +468,24 @@ it('returns busy to a director speaker during a human turn and never executes th
     expect(first.kind).toBe('accepted');
     await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
 
-    expect(await service.submit({ attachmentId: director.attachmentId, requestId: 'director-request', speaker,
-      command: { kind: 'message', text: 'rejected director request' } })).toEqual({
-      kind: 'busy', operationId: 'operationId' in first ? first.operationId : undefined,
-    });
+    const queued = await service.submit({ attachmentId: director.attachmentId, requestId: 'director-request', speaker,
+      command: { kind: 'message', text: 'queued director request' } });
+    expect(queued.kind).toBe('accepted');
+    if (queued.kind !== 'accepted') throw new Error('Director message must be accepted');
+    expect(queued.operationId).not.toBe('operationId' in first ? first.operationId : undefined);
     release();
     await finished();
 
-    expect(execute).toHaveBeenCalledOnce();
-    expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['human request']);
-    expect(store.read(record.id, record.assignment)?.lastSpeaker).toEqual(record.counterpart);
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['human request', 'queued director request']);
+    expect(store.read(record.id, record.assignment)?.lastSpeaker).toEqual(speaker);
     const second = await service.submit({ attachmentId: director.attachmentId, requestId: 'explicit-director-request', speaker,
       command: { kind: 'message', text: 'explicit director request' } });
     expect(second.kind).toBe('accepted');
     if (second.kind === 'accepted') lastOperationId = second.operationId;
     await finished();
 
-    expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['human request', 'explicit director request']);
+    expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['human request', 'queued director request', 'explicit director request']);
     expect(store.read(record.id, record.assignment)?.lastSpeaker).toEqual(speaker);
     expect(outputs).toContainEqual({ kind: 'result', operationId: 'operationId' in second ? second.operationId : undefined,
       result: { kind: 'reply', message: 'manager reply' } });
@@ -856,4 +862,460 @@ it.each([1, 4])('caches goal projections after a completed initial read with %i 
   expect(changes).toEqual([]);
   delta.complete();
   expect(reads.mock.calls.filter(([path]) => basename(path) === 'goal.json')).toHaveLength(0);
+});
+
+const directorActor = { namespace: 'agent', id: 'director' };
+async function openDirector() {
+  const opened = await service.open({ conversationId: record.id, assignment: record.assignment,
+    binding: { port: 'director', key: record.id, counterpart: record.counterpart }, speaker: directorActor }, delivery);
+  opened.read.cancel();
+  return opened.attachmentId;
+}
+function tell(attachmentId: string, text: string) {
+  return service.submit({ attachmentId, requestId: randomUUID(), speaker: directorActor, command: { kind: 'message', text } });
+}
+function holdNextTurn() {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  execute.mockImplementationOnce(async () => {
+    await gate;
+    return { message: 'held reply', summary: null, sessionId: 'held-session', assignment: record.assignment };
+  });
+  return release;
+}
+
+it('persists a director message during a human turn and executes it once after that turn finishes', async () => {
+  const director = await openDirector();
+  const human = await open();
+  const release = holdNextTurn();
+  try {
+    const current = await submit(human.attachmentId, { kind: 'message', text: 'held human input' });
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+    const before = store.read(record.id, record.assignment)!;
+    const queued = await tell(director, 'durable director input');
+    expect(queued.kind).toBe('accepted');
+    if (queued.kind !== 'accepted' || current.kind !== 'accepted') throw new Error('Messages must be accepted');
+    expect(queued.operationId).not.toBe(current.operationId);
+    const saved = store.read(record.id, record.assignment)!;
+    expect(JSON.stringify(saved)).toContain('durable director input');
+    expect(JSON.stringify(saved)).toContain(queued.operationId);
+    expect(JSON.stringify(saved)).toContain(JSON.stringify(directorActor));
+    expect(JSON.stringify(saved)).toContain(conversationId({ kind: 'daemon' }));
+    expect(saved).toMatchObject({ running: before.running, lastSpeaker: before.lastSpeaker,
+      revision: before.revision, pending: before.pending, approval: before.approval });
+    expect(execute).toHaveBeenCalledOnce();
+    expect(execute.mock.calls[0]![0].abortSignal.aborted).toBe(false);
+    release();
+    await vi.waitFor(() => expect(outputs).toContainEqual({ kind: 'result', operationId: queued.operationId,
+      result: { kind: 'reply', message: 'manager reply' } }));
+    await finished();
+    expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['held human input', 'durable director input']);
+    expect(execute.mock.calls[1]![0]).toMatchObject({ conversationOperationId: queued.operationId });
+    expect(execute.mock.calls[1]![0].prompt).toContain('Speaker: {"namespace":"agent","id":"director"}');
+    expect(JSON.stringify(store.read(record.id, record.assignment))).not.toContain('durable director input');
+    expect(JSON.stringify(store.read(record.id, record.assignment))).not.toContain('held human input');
+  } finally { release(); }
+});
+
+it('saves even an idle director input before atomically removing it and setting the running director operation', async () => {
+  const director = await openDirector();
+  const writes: ConversationRecord[] = [];
+  const write = ConversationStore.prototype.write;
+  vi.spyOn(ConversationStore.prototype, 'write').mockImplementation(function (this: ConversationStore, value) {
+    write.call(this, value);
+    writes.push(structuredClone(value));
+  });
+  const release = holdNextTurn();
+  try {
+    const accepted = await tell(director, 'idle durable input');
+    expect(accepted.kind).toBe('accepted');
+    if (accepted.kind !== 'accepted') throw new Error('Director message must be accepted');
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+    const queuedIndex = writes.findIndex((value) => JSON.stringify(value).includes('idle durable input'));
+    expect(queuedIndex).toBeGreaterThanOrEqual(0);
+    const startedIndex = writes.findIndex((value) => value.running?.operationId === accepted.operationId);
+    expect(startedIndex).toBeGreaterThan(queuedIndex);
+    expect(writes[queuedIndex]).toMatchObject({ running: null, revision: 4, pending: record.pending });
+    for (const value of writes.slice(queuedIndex, startedIndex)) {
+      expect(JSON.stringify(value)).toContain('idle durable input');
+      expect(value.running).toBeNull();
+    }
+    expect(writes[startedIndex]).toMatchObject({ lastSpeaker: directorActor, running: { operationId: accepted.operationId },
+      revision: 4, pending: record.pending });
+    expect(JSON.stringify(writes[startedIndex])).not.toContain('idle durable input');
+  } finally { release(); }
+  await finished();
+});
+
+it('keeps the active human operation and revision four proposal unchanged when a director message is saved', async () => {
+  const director = await openDirector();
+  const human = await open();
+  const goal = { ...goalRecord(), status: 'awaiting_merge' as const,
+    pullRequest: { number: 1950, url: 'https://github.invalid/pr/1950' }, completion: {
+      goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', summary: 'Ready', instructions: [],
+      changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+    } };
+  await new GoalStore(repository).create(goal);
+  const merge = vi.spyOn(goalPrMerge, 'mergeGoalPr').mockResolvedValue({ success: true, prNumber: 1950, exitCode: 0, output: 'merged', truncated: false });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  doubles.register.mockImplementationOnce(async ({ id }: { id: string }) => { await gate; return saveGoal(id); });
+  try {
+    const current = await submit(human.attachmentId, { kind: 'approve_summary', revision: 4 });
+    expect(current.kind).toBe('accepted');
+    if (current.kind !== 'accepted') throw new Error('Human operation must be accepted');
+    await vi.waitFor(() => expect(doubles.register).toHaveBeenCalledOnce());
+    const before = store.read(record.id, record.assignment)!;
+    expect(before).toMatchObject({ revision: 4, pending: record.pending, lastSpeaker: record.counterpart,
+      running: { operationId: current.operationId } });
+    const accepted = await tell(director, 'director waiting for human registration');
+    expect(accepted.kind).toBe('accepted');
+    if (accepted.kind !== 'accepted') throw new Error('Director message must be saved');
+    expect(store.read(record.id, record.assignment)).toMatchObject({ running: before.running, revision: 4,
+      pending: before.pending, approval: before.approval, lastSpeaker: record.counterpart });
+    const refused = await mergeTaktGoalPr({ cwd: repository, goalId: goal.id, prNumber: 1950,
+      conversationOperationId: current.operationId }, { allowedProjectRoot: repository,
+      managerConversation: { configDirectory: directory, assignment: record.assignment } }, new AbortController().signal);
+    expect(refused.isError).toBe(true);
+    expect(JSON.stringify(refused.content)).toContain('requires an active message from the director');
+    expect(merge).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+    release();
+    await vi.waitFor(() => expect(outputs).toContainEqual({ kind: 'result', operationId: accepted.operationId,
+      result: { kind: 'reply', message: 'manager reply' } }), { timeout: 5000 });
+    await finished();
+    expect(execute).toHaveBeenCalledOnce();
+  } finally { release(); }
+});
+
+it('executes director inputs in saved order with distinct IDs and never executes a rejected human input', async () => {
+  const director = await openDirector();
+  const human = await open();
+  execute.mockImplementation(async (input) => ({ message: `reply:${input.instruction}`, summary: null,
+    sessionId: 'session', assignment: record.assignment }));
+  const release = holdNextTurn();
+  try {
+    const current = await submit(human.attachmentId, { kind: 'message', text: 'human turn' });
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+    const first = await tell(director, 'first director input');
+    const second = await tell(director, 'second director input');
+    expect(first.kind).toBe('accepted'); expect(second.kind).toBe('accepted');
+    if (first.kind !== 'accepted' || second.kind !== 'accepted' || current.kind !== 'accepted') throw new Error('Messages must be accepted');
+    expect(new Set([current.operationId, first.operationId, second.operationId]).size).toBe(3);
+    expect(await submit(human.attachmentId, { kind: 'message', text: 'rejected human input' })).toMatchObject({ kind: 'busy' });
+    expect(JSON.stringify(store.read(record.id, record.assignment))).not.toContain('rejected human input');
+    release();
+    await vi.waitFor(() => expect(outputs).toContainEqual({ kind: 'result', operationId: second.operationId,
+      result: { kind: 'reply', message: 'reply:second director input' } }));
+    await finished();
+    expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['human turn', 'first director input', 'second director input']);
+    const savedResults = new DirectorMessageResultStore(directory);
+    for (const [accepted, text] of [[first, 'first director input'], [second, 'second director input']] as const) {
+      expect(outputs).toContainEqual({ kind: 'result', operationId: accepted.operationId, result: { kind: 'reply', message: `reply:${text}` } });
+      expect(savedResults.read(accepted.operationId)).toMatchObject({ operationId: accepted.operationId,
+        result: { kind: 'reply', message: `reply:${text}` } });
+    }
+  } finally { release(); }
+});
+
+it('returns busy without saving a human input while a director message is queued and no turn is persisted as running', async () => {
+  const human = await open();
+  const director = await openDirector();
+  const eventId = randomUUID();
+  let release: (() => void) | undefined = await scheduler.acquire(record.id, eventId, new AbortController().signal);
+  try {
+    const accepted = await tell(director, 'pending director input');
+    expect(accepted.kind).toBe('accepted');
+    if (accepted.kind !== 'accepted') throw new Error('Director input must be accepted');
+    expect(store.read(record.id, record.assignment)).toMatchObject({ running: null,
+      directorMessages: [{ operationId: accepted.operationId, text: 'pending director input' }] });
+    expect(await submit(human.attachmentId, { kind: 'message', text: 'rejected while only queued' }))
+      .toEqual({ kind: 'busy', operationId: eventId });
+    expect(JSON.stringify(store.read(record.id, record.assignment))).not.toContain('rejected while only queued');
+    expect(execute).not.toHaveBeenCalled();
+    release();
+    release = undefined;
+    await vi.waitFor(() => expect(outputs).toContainEqual({ kind: 'result', operationId: accepted.operationId,
+      result: { kind: 'reply', message: 'manager reply' } }));
+    await finished();
+    expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['pending director input']);
+  } finally { release?.(); }
+});
+
+it.each(['reply', 'summary', 'failure'] as const)('keeps the human proposal through a director %s and continues the same conversation', async (outcome) => {
+  const human = await open();
+  const director = await openDirector();
+  const before = store.read(record.id, record.assignment)!;
+  if (outcome === 'failure') execute.mockRejectedValueOnce(new Error('director provider failed'));
+  else execute.mockResolvedValueOnce({ message: 'director reply', summary: outcome === 'summary'
+    ? { ...record.pending!.summary, objective: 'director must not replace this proposal', repositoryDirectory: repository } : null,
+    sessionId: 'director-session', assignment: record.assignment });
+  const accepted = await tell(director, 'director interruption');
+  expect(accepted.kind).toBe('accepted');
+  if (accepted.kind !== 'accepted') throw new Error('Director message must be accepted');
+  await vi.waitFor(() => expect(outputs.some((output) => output.kind === 'result' && output.operationId === accepted.operationId)).toBe(true));
+  expect(store.read(record.id, record.assignment)).toMatchObject({ revision: 4, pending: before.pending, approval: before.approval, running: null });
+  expect(await submit(human.attachmentId, { kind: 'message', text: 'continue human consultation' })).toMatchObject({ kind: 'accepted' });
+  await finished();
+  expect(JSON.parse(execute.mock.calls[1]![0].recovery!.context).pending).toEqual(before.pending);
+  const speakers = [];
+  for await (const value of new ConversationSpeakerStore(directory).iterate(record.id)) speakers.push(value);
+  expect(speakers).toEqual(expect.arrayContaining([
+    expect.objectContaining({ operationId: accepted.operationId, actor: directorActor }),
+    expect.objectContaining({ operationId: lastOperationId, actor: record.counterpart }),
+  ]));
+});
+
+it('invalidates an aborted director session while retaining the human proposal for the next human turn', async () => {
+  const human = await open();
+  const director = await openDirector();
+  const release = holdNextTurn();
+  try {
+    const accepted = await tell(director, 'director turn to abort');
+    expect(accepted.kind).toBe('accepted');
+    if (accepted.kind !== 'accepted') throw new Error('Director message must be accepted');
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+    expect(await submit(human.attachmentId, { kind: 'abort_turn', operationId: accepted.operationId })).toEqual(accepted);
+    release();
+    await vi.waitFor(() => expect(outputs).toContainEqual({ kind: 'result', operationId: accepted.operationId,
+      result: expect.objectContaining({ kind: 'error', code: 'interrupted', message: expect.stringContaining(accepted.operationId) }) }));
+    await finished();
+    expect(store.read(record.id, record.assignment)).toMatchObject({ revision: 4, pending: record.pending, sessionId: null });
+    expect((await submit(human.attachmentId, { kind: 'message', text: 'continue after interruption' })).kind).toBe('accepted');
+    await finished();
+    expect(execute.mock.calls[1]![0].sessionId).toBeUndefined();
+    expect(JSON.parse(execute.mock.calls[1]![0].recovery!.context).pending).toEqual(record.pending);
+  } finally { release(); }
+});
+
+it('refuses a failed director queue save and never runs that input after storage recovers', async () => {
+  const director = await openDirector();
+  const human = await open();
+  const release = holdNextTurn();
+  try {
+    await submit(human.attachmentId, { kind: 'message', text: 'held turn' });
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+    const original = store.read(record.id, record.assignment);
+    const write = ConversationStore.prototype.write;
+    const failing = vi.spyOn(ConversationStore.prototype, 'write').mockImplementation(function (this: ConversationStore, value) {
+      if (JSON.stringify(value).includes('unsaved director input')) throw new Error('queue storage failed');
+      return write.call(this, value);
+    });
+    expect(await tell(director, 'unsaved director input')).toMatchObject({ kind: 'error', code: 'storage_error' });
+    expect(store.read(record.id, record.assignment)).toEqual(original);
+    failing.mockRestore();
+    release(); await finished();
+    const read = await service.snapshot(human.attachmentId); read.cancel();
+    expect(await tell(director, 'saved after recovery')).toMatchObject({ kind: 'accepted' });
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(2));
+    await finished();
+    expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['held turn', 'saved after recovery']);
+  } finally { release(); }
+});
+
+it('reports a speaker storage failure after director acceptance without discarding the human proposal', async () => {
+  const director = await openDirector();
+  const before = store.read(record.id, record.assignment)!;
+  vi.spyOn(ConversationSpeakerStore.prototype, 'write').mockImplementationOnce(() => { throw new Error('speaker storage failed'); });
+  const accepted = await tell(director, 'accepted before speaker storage');
+  expect(accepted.kind).toBe('accepted');
+  if (accepted.kind !== 'accepted') throw new Error('Saved director message must be accepted');
+  await vi.waitFor(() => expect(outputs).toContainEqual({ kind: 'result', operationId: accepted.operationId,
+    result: expect.objectContaining({ kind: 'error', code: 'storage_error' }) }));
+  expect(execute).not.toHaveBeenCalled();
+  expect(store.read(record.id, record.assignment)).toMatchObject({ revision: 4, pending: before.pending,
+    approval: before.approval, running: null });
+});
+
+it.each([false, true])('interrupts a started director operation when shutdown arrives during assignment preparation (validation fails=%s)', async (validationFails) => {
+  const director = await openDirector();
+  let release!: () => void;
+  let preparing = false;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  doubles.assignment.mockResolvedValueOnce(assignment).mockImplementationOnce(async () => {
+    preparing = true;
+    await gate;
+    if (validationFails) throw new Error('Assignment became unavailable');
+    return assignment;
+  });
+  try {
+    const accepted = await tell(director, 'stop during preparation');
+    expect(accepted.kind).toBe('accepted');
+    if (accepted.kind !== 'accepted') throw new Error('Director input must be accepted');
+    await vi.waitFor(() => expect(preparing).toBe(true), { timeout: 5000 });
+    expect(store.read(record.id, record.assignment)?.running?.operationId).toBe(accepted.operationId);
+    service.stopAccepting();
+    const closing = service.close();
+    release();
+    await closing;
+    expect(execute).not.toHaveBeenCalled();
+    expect(new DirectorMessageResultStore(directory).read(accepted.operationId)?.result).toMatchObject({ kind: 'error', code: 'interrupted' });
+    expect(store.read(record.id, record.assignment)).toMatchObject({ running: null, directorMessages: [], revision: 4, pending: record.pending });
+  } finally { release(); }
+});
+
+it.each(['result', 'record'] as const)('retains ownership of a rejected director input through a failed terminal %s save without executing it on recovery', async (failure) => {
+  const director = await openDirector();
+  doubles.assignment.mockResolvedValueOnce(assignment).mockRejectedValueOnce(new Error('Assignment is unavailable'));
+  let fail = true;
+  let failures = 0;
+  if (failure === 'record') {
+    const write = ConversationStore.prototype.write;
+    vi.spyOn(ConversationStore.prototype, 'write').mockImplementation(function (this: ConversationStore, value) {
+      if (fail && value.running === null && value.directorMessages?.length === 0) {
+        failures++;
+        throw new Error('Cannot save terminal record');
+      }
+      write.call(this, value);
+    });
+  } else {
+    const write = DirectorMessageResultStore.prototype.write;
+    vi.spyOn(DirectorMessageResultStore.prototype, 'write').mockImplementation(function (this: DirectorMessageResultStore, value) {
+      if (fail) { failures++; throw new Error('Cannot save terminal result'); }
+      write.call(this, value);
+    });
+  }
+  const accepted = await tell(director, 'must not execute after rejection');
+  expect(accepted.kind).toBe('accepted');
+  if (accepted.kind !== 'accepted') throw new Error('Director input must first be saved');
+  await vi.waitFor(() => expect(failures).toBeGreaterThan(0), { timeout: 5000 });
+  const saved = store.read(record.id, record.assignment)!;
+  const resultStore = new DirectorMessageResultStore(directory);
+  expect(saved.running?.operationId === accepted.operationId
+    || saved.directorMessages?.some((message) => message.operationId === accepted.operationId)
+    || resultStore.read(accepted.operationId) !== undefined).toBe(true);
+  fail = false;
+  doubles.assignment.mockResolvedValue(assignment);
+  await service.maintain();
+  await vi.waitFor(() => expect({ active: service.activeOperationCount, instructions: execute.mock.calls.map(([input]) => input.instruction) })
+    .toEqual({ active: 0, instructions: [] }), { timeout: 5000 });
+  expect(resultStore.read(accepted.operationId)?.result).toMatchObject({ kind: 'error', code: 'operation_failed' });
+  expect(store.read(record.id, record.assignment)).toMatchObject({ running: null, directorMessages: [], revision: 4, pending: record.pending });
+  expect(outputs.filter((output) => output.kind === 'result' && output.operationId === accepted.operationId)).toHaveLength(1);
+});
+
+it('retains the queued input when starting cannot be saved and retries storage before executing the provider', async () => {
+  const director = await openDirector();
+  const human = await open();
+  const write = ConversationStore.prototype.write;
+  let failedStarts = 0;
+  const failing = vi.spyOn(ConversationStore.prototype, 'write').mockImplementation(function (this: ConversationStore, value) {
+    if (value.running?.directorConversationId !== undefined) {
+      failedStarts++;
+      throw new Error('Cannot persist the director start');
+    }
+    write.call(this, value);
+  });
+  const accepted = await tell(director, 'retain until start is saved');
+  expect(accepted.kind).toBe('accepted');
+  if (accepted.kind !== 'accepted') throw new Error('Director input must first be saved');
+  await vi.waitFor(() => expect(failedStarts).toBe(1));
+  expect(execute).not.toHaveBeenCalled();
+  expect(store.read(record.id, record.assignment)).toMatchObject({ running: null, revision: 4, pending: record.pending,
+    directorMessages: [{ operationId: accepted.operationId, text: 'retain until start is saved' }] });
+  expect((await submit(human.attachmentId, { kind: 'message', text: 'must not overtake storage recovery' })).kind).not.toBe('accepted');
+  failing.mockRestore();
+  await service.maintain();
+  await vi.waitFor(() => expect(outputs).toContainEqual({ kind: 'result', operationId: accepted.operationId,
+    result: { kind: 'reply', message: 'manager reply' } }));
+  await finished();
+  expect(execute).toHaveBeenCalledOnce();
+  expect(execute.mock.calls[0]![0].instruction).toBe('retain until start is saved');
+});
+
+it.each(['active', 'paused', 'aborted', 'created', 'wrong-pr'] as const)('checks merge authority and the latest goal state when a queued director request starts (%s)', async (state) => {
+  const director = await openDirector();
+  const human = await open();
+  const goal = { ...goalRecord(), executionStatus: 'active' as const, status: 'awaiting_merge' as const,
+    pullRequest: { number: 1950, url: 'https://github.invalid/pr/1950' }, completion: {
+      goalBranch: goalRecord().branch, goalSha: 'a'.repeat(40), targetBranch: 'main', summary: 'Ready', instructions: [],
+      changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+    } };
+  const goals = new GoalStore(repository); await goals.create(goal);
+  const merge = vi.spyOn(goalPrMerge, 'mergeGoalPr').mockResolvedValue({ success: true, prNumber: 1950, exitCode: 0, output: 'merged', truncated: false });
+  const deps = { allowedProjectRoot: repository, managerConversation: { configDirectory: directory, assignment: record.assignment } };
+  const invoke = (operationId: string) => mergeTaktGoalPr({ cwd: repository, goalId: goal.id,
+    prNumber: state === 'wrong-pr' ? 1949 : 1950, conversationOperationId: operationId }, deps, new AbortController().signal);
+  const release = holdNextTurn();
+  try {
+    const current = await submit(human.attachmentId, { kind: 'message', text: 'human holding merge authority' });
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+    const before = store.read(record.id, record.assignment)!;
+    const accepted = await tell(director, 'merge goal PR #1950');
+    expect(accepted.kind).toBe('accepted');
+    if (accepted.kind !== 'accepted' || current.kind !== 'accepted') throw new Error('Messages must be accepted');
+    expect(store.read(record.id, record.assignment)).toMatchObject({ running: before.running, lastSpeaker: before.lastSpeaker,
+      revision: before.revision, pending: before.pending });
+    expect((await invoke(current.operationId)).isError).toBe(true);
+    expect((await invoke(accepted.operationId)).isError).toBe(true);
+    if (state === 'paused' || state === 'aborted') await goals.update(goal.id, (value) => ({ ...value, executionStatus: state }));
+    if (state === 'created') await goals.update(goal.id, (value) => ({ ...value, status: 'created' }));
+    execute.mockImplementationOnce(async (input) => {
+      expect((await invoke(current.operationId)).isError).toBe(true);
+      const result = await invoke(input.conversationOperationId!);
+      expect(result.isError).toBe(state === 'active' ? undefined : true);
+      if (state !== 'active') expect(JSON.stringify(result.content)).toContain({
+        paused: 'Goal is paused', aborted: 'Goal is aborted', created: 'Goal is not awaiting a merge',
+        'wrong-pr': 'PR number does not match the saved goal PR',
+      }[state]);
+      return { message: 'merge checked', summary: null, sessionId: 'merge-session', assignment: record.assignment };
+    });
+    release();
+    await vi.waitFor(() => expect(outputs).toContainEqual({ kind: 'result', operationId: accepted.operationId,
+      result: { kind: 'reply', message: 'merge checked' } }));
+    await finished();
+    expect((await invoke(accepted.operationId)).isError).toBe(true);
+    expect(merge).toHaveBeenCalledTimes(state === 'active' ? 1 : 0);
+  } finally { release(); }
+});
+
+it('retains a saved director reply after restart between result persistence and clearing running', async () => {
+  const director = await openDirector();
+  const release = holdNextTurn();
+  const resultStore = new DirectorMessageResultStore(directory);
+  let failing: ReturnType<typeof vi.spyOn> | undefined;
+  let firstId: string;
+  try {
+    const first = await tell(director, 'completed director operation');
+    expect(first.kind).toBe('accepted');
+    if (first.kind !== 'accepted') throw new Error('Director message must be accepted');
+    firstId = first.operationId;
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+    expect((await tell(director, 'next director operation')).kind).toBe('accepted');
+    const write = ConversationStore.prototype.write;
+    failing = vi.spyOn(ConversationStore.prototype, 'write').mockImplementation(function (this: ConversationStore, value) {
+      if (value.running === null) throw new Error('terminal record unavailable');
+      write.call(this, value);
+    });
+    release();
+    await vi.waitFor(() => expect(resultStore.read(firstId)?.result).toEqual({ kind: 'reply', message: 'held reply' }));
+    expect(store.read(record.id, record.assignment)?.running?.operationId).toBe(firstId);
+  } finally { release(); failing?.mockRestore(); }
+  await service.close();
+  service = createConversationService({ configDirectory: directory, owner: { ...owner, identity: { startTime: 'daemon-C' } },
+    runtime: { resolve: resolveRuntime, close: closeRuntime }, onDomainChange: vi.fn() });
+  await service.restore();
+  await vi.waitFor(() => expect(execute.mock.calls.map(([input]) => input.instruction))
+    .toEqual(['completed director operation', 'next director operation']));
+  await vi.waitFor(() => expect(store.read(record.id, record.assignment)?.running).toBeNull());
+  expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['completed director operation', 'next director operation']);
+  expect(new DirectorMessageResultStore(directory).read(firstId!)?.result).toEqual({ kind: 'reply', message: 'held reply' });
+  expect(doubles.notification).not.toHaveBeenCalled();
+  expect(store.read(record.id, record.assignment)).toMatchObject({ revision: 4, pending: record.pending });
+});
+
+it('restores an already saved director reply without displaying it as an interrupted turn', async () => {
+  const operationId = randomUUID();
+  const source = conversationId({ kind: 'daemon' });
+  store.write({ ...record, lastSpeaker: directorActor,
+    running: { operationId, kind: 'message', owner: { pid: owner.pid, identity: owner.identity }, directorConversationId: source } });
+  const saved = { operationId, conversationId: record.id, directorConversationId: source,
+    result: { kind: 'reply' as const, message: 'completed before stopping' } };
+  new DirectorMessageResultStore(directory).write(saved);
+  await service.restore();
+  const opened = await open();
+  expect(await state(opened.read)).toMatchObject({ running: null, interrupted: false, pending: record.pending });
+  expect(new DirectorMessageResultStore(directory).read(operationId)).toEqual(saved);
+  expect(execute).not.toHaveBeenCalled();
+  expect(doubles.notification).not.toHaveBeenCalled();
 });

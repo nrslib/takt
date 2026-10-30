@@ -413,6 +413,7 @@
     "src/__tests__/manager-turn-executor.test.ts",
     "src/__tests__/manager-turn-failure-notification.test.ts",
     "src/__tests__/manager-turn-response.test.ts",
+    "src/__tests__/manager-turn-scheduler.test.ts",
     "src/__tests__/mcp-enqueue-draft-pr.integration.test.ts",
     "src/__tests__/mcp-entrypoint.integration.test.ts",
     "src/__tests__/mcp-entrypoint.test.ts",

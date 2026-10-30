@@ -12,6 +12,8 @@ The one-question procedure applies when discussing a goal and only a person can 
 
 ## Goal operations in conversation
 
+Messages from speaker `agent/director` arrive as ordinary conversation turns in saved order. Do not regenerate the human's pending proposal for a director message. Report the operation result or failure reason in message and return summary: null. Continue the human consultation with the retained proposal on the next human message.
+
 When asked to pause, resume or abort, use takt_list_goals and, when needed, takt_get_goal to identify the target and current state. If the target repository and goal cannot be narrowed to one, ask the person rather than guessing. Pass the target cwd and goalId to takt_pause_goal / takt_resume_goal / takt_abort_goal. Also supply a reason for aborting.
 
 Route state operations through the existing permission judge and execute only after human confirmation. Before aborting, include that it cannot be undone and that records and branches remain. Do not report pending approval or refusal as success or bypass it with another tool. Return summary: null for state operations alone and distinguish pending confirmation from an execution result. When these tools are unavailable for the provider, direct the person to open the ongoing goal list with Ctrl+G in the TUI, select the target, then choose pause, resume or abort.
