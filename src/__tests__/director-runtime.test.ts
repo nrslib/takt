@@ -1,6 +1,7 @@
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createDaemonConversationRuntime, prepareDirectorTurn } from '../features/director/conversationRuntime.js';
 import { DIRECTOR_TOOL_ALLOWLIST } from '../features/director/mcp.js';
+import * as directorMcp from '../features/director/mcp.js';
 
 const doubles = vi.hoisted(() => ({ plan: vi.fn(), connect: vi.fn(), executor: vi.fn(), preflight: vi.fn(),
   managers: vi.fn(), dispose: vi.fn(), execute: vi.fn(), resolve: vi.fn(), close: vi.fn() }));
@@ -18,6 +19,7 @@ beforeEach(() => {
   doubles.executor.mockReturnValue({ execute: doubles.execute });
   doubles.managers.mockReturnValue({ resolve: doubles.resolve, close: doubles.close });
 });
+afterEach(() => vi.restoreAllMocks());
 
 it('prepares an isolated readonly turn and passes its connection to the executor', async () => {
   const abortSignal = signal();
@@ -103,4 +105,42 @@ it('propagates a release failure and shares it with concurrent runtime cleanup',
   await expect(closing).rejects.toBeInstanceOf(AggregateError);
   await expect(prepared.release!()).rejects.toThrow('connection cleanup failed');
   expect(doubles.dispose).toHaveBeenCalledOnce();
+});
+
+it('collects notifications separately for a human turn and a patrol and delivers each batch once', async () => {
+  const server = vi.spyOn(directorMcp, 'createDirectorMcpServer');
+  const notify = vi.fn(async () => {});
+  const deliver = vi.fn(async () => {});
+  const human = await prepareDirectorTurn('/config', { notify }, signal(), {}, false, { deliver });
+  const patrol = await prepareDirectorTurn('/config', { notify }, signal(), {}, true, { deliver });
+  for (const [factory] of doubles.connect.mock.calls) factory();
+  const first = { id: 'one', message: 'Completed' };
+  const second = { id: 'two', message: 'Merge decision' };
+  const third = { id: 'three', message: 'Inquiry' };
+  await server.mock.calls[0]![1].notify(first);
+  await server.mock.calls[1]![1].notify(second);
+  await server.mock.calls[1]![1].notify(third);
+  expect(notify.mock.calls).toEqual([[first], [second], [third]]);
+  expect(deliver).not.toHaveBeenCalled();
+  await Promise.all([human.dispose(), human.dispose()]);
+  expect(deliver).toHaveBeenCalledExactlyOnceWith([first]);
+  await patrol.dispose();
+  expect(deliver.mock.calls).toEqual([[[first]], [[second, third]]]);
+  expect(doubles.dispose).toHaveBeenCalledTimes(2);
+});
+
+it('does not deliver an empty turn and closes MCP even when batch delivery fails', async () => {
+  const server = vi.spyOn(directorMcp, 'createDirectorMcpServer');
+  const deliver = vi.fn(async () => {});
+  const empty = await prepareDirectorTurn('/config', notices, signal(), {}, true, { deliver });
+  await empty.dispose();
+  expect(deliver).not.toHaveBeenCalled();
+  const saved = await prepareDirectorTurn('/config', notices, signal(), {}, false, { deliver });
+  doubles.connect.mock.calls[1]![0]();
+  await server.mock.calls[0]![1].notify({ id: 'one', message: 'Saved notice' });
+  deliver.mockRejectedValueOnce(new Error('Delivery failed'));
+  await expect(saved.dispose()).rejects.toThrow('Delivery failed');
+  await expect(saved.dispose()).rejects.toThrow('Delivery failed');
+  expect(deliver).toHaveBeenCalledOnce();
+  expect(doubles.dispose).toHaveBeenCalledTimes(2);
 });

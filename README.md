@@ -312,6 +312,8 @@ The daemon does not exit automatically while a TUI is connected or an accepted c
 
 **Slack conversations:** You can also talk to the same manager conversation from a configured Slack channel. Replies stay in the thread where you sent the message; TUI replies are not forwarded to Slack. See [Slack conversations with manager](./docs/configuration.md#slack-conversations-with-manager) for the Socket Mode App manifest, token environment variables, repository settings, and how to answer inquiries. Completion notices continue to use the separate `TAKT_NOTIFY_WEBHOOK` Incoming Webhook.
 
+**Director on Slack:** Configure `director.slack` in `~/.takt/config.yaml` to receive grouped director notices and talk to director in its channel. Replies stay in the original thread, and only permitted users are accepted. See [Slack conversations with director](./docs/configuration.md#slack-conversations-with-director).
+
 In a conversation thread, send `/make-goal` to create a proposal. Use **Approve registration** or **Continue conversation**; buttons on an outdated proposal no longer work.
 
 See the [CLI Reference](./docs/cli-reference.md) for all commands and options.

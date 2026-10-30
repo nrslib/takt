@@ -145,6 +145,7 @@
     "src/__tests__/director-notification-target.test.ts",
     "src/__tests__/director-patrol.test.ts",
     "src/__tests__/director-runtime.test.ts",
+    "src/__tests__/director-slack-port.test.ts",
     "src/__tests__/director-startup.test.ts",
     "src/__tests__/director-turn-executor.test.ts",
     "src/__tests__/director-view.test.tsx",

@@ -146,3 +146,37 @@ it('keeps Slack channel authorization specific to repository configuration', () 
 
   expect(GlobalConfigSchema.safeParse({ manager: { slack } }).success).toBe(false);
 });
+
+it.each([{ allowedUserIds: ['U0AAA', 'U0BBB'] }, { allowedUserIds: [] }])('accepts director Slack settings in global configuration with users $allowedUserIds', ({ allowedUserIds }) => {
+  const slack = { channel_id: 'C0DIR', allowed_user_ids: allowedUserIds };
+  const input = { director: { patrol_interval: 600, slack } };
+  expect(GlobalConfigSchema.parse(input)).toMatchObject(input);
+  expect(ProjectConfigSchema.safeParse(input).success).toBe(false);
+});
+
+it.each([
+  null,
+  { channel_id: 123, allowed_user_ids: ['U0AAA'] },
+  { channel_id: 'C0DIR', allowed_user_ids: 'U0AAA' },
+  { channel_id: 'C0DIR', allowed_user_ids: [123] },
+  { channel_id: 'C0DIR' },
+  { allowed_user_ids: ['U0AAA'] },
+  { channel_id: ' ', allowed_user_ids: ['U0AAA'] },
+  { channel_id: 'C0DIR', allowed_user_ids: [' '] },
+])('rejects invalid director Slack settings %j', (slack) => {
+  expect(GlobalConfigSchema.safeParse({ director: { slack } }).success).toBe(false);
+});
+
+it.each(['app_token', 'bot_token', 'unknown'])('rejects the unknown director Slack key %s', (key) => {
+  const slack = { channel_id: 'C0DIR', allowed_user_ids: ['U0AAA'], [key]: 'environment-only' };
+  expect(GlobalConfigSchema.safeParse({ director: { slack } }).success).toBe(false);
+});
+
+it('resolves director Slack from the already loaded global configuration', () => {
+  const slack = { channelId: 'C0DIR', allowedUserIds: ['U0AAA'] };
+  const config = { language: 'en' as const, autoFetch: true, director: { patrolInterval: 600, slack } };
+  expect(resolveDirectorConfig(config)).toMatchObject({ patrolInterval: 600, slack });
+  expect(resolveDirectorConfig({ language: 'en', autoFetch: true })).not.toHaveProperty('slack.channelId');
+  expect(doubles.global).not.toHaveBeenCalled();
+  expect(doubles.project).not.toHaveBeenCalled();
+});

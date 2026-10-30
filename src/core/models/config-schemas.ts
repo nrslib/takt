@@ -212,20 +212,22 @@ const ProjectConfigObjectBaseSchema = z.object({
   with_submodules: z.boolean().optional(),
 }).strict();
 
+const SlackConfigSchema = z.object({
+  channel_id: z.string().trim().min(1),
+  allowed_user_ids: z.array(z.string().trim().min(1)),
+}).strict();
+
 const ProjectConfigObjectSchema = ProjectConfigObjectBaseSchema.extend({
   manager: ProjectConfigObjectBaseSchema.shape.manager.unwrap().extend({
     main_merge: z.enum(['auto', 'approve']).optional(),
-    slack: z.object({
-      channel_id: z.string().trim().min(1),
-      allowed_user_ids: z.array(z.string().trim().min(1)),
-    }).strict().optional(),
+    slack: SlackConfigSchema.optional(),
   }).optional(),
 });
 
 export const ProjectConfigSchema = ProjectConfigObjectSchema;
 
 const GlobalOnlyConfigSchema = z.object({
-  director: z.object({ patrol_interval: z.number().int().positive().optional() }).strict().optional(),
+  director: z.object({ patrol_interval: z.number().int().positive().optional(), slack: SlackConfigSchema.optional() }).strict().optional(),
   language: LanguageSchema.optional().default(DEFAULT_LANGUAGE),
   logging: LoggingConfigSchema.optional(),
   worktree_dir: z.string().optional(),

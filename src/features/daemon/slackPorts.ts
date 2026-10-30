@@ -11,11 +11,17 @@ import { slackInquiryKey } from '../../infra/slack/inquiryBindings.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 import { resolveCurrentManagerAssignment } from '../manager/assignment.js';
 import { SLACK_PERMISSION_BLOCK, SLACK_PERMISSION_INPUT, SLACK_PERMISSION_CALLBACK } from '../manager/slackInquiryBlocks.js';
+import { createDirectorSlackConversationPort } from '../director/slackConversationPort.js';
+import type { DirectorNotificationDelivery } from '../director/notificationDelivery.js';
+import type { GlobalConfig } from '../../core/models/config-types.js';
+import type { Language } from '../../core/models/types.js';
 
 const log = createLogger('slack');
 type SlackPort = ReturnType<typeof createSlackConversationPort>;
 interface RepositoryPort { allowedUserIds: readonly string[];
-  port: Pick<SlackPort, 'receive' | 'receiveAction' | 'modalEndpoint' | 'receiveModal'> }
+  port: Pick<SlackPort, 'receive' | 'isInquiryThread' | 'receiveAction' | 'modalEndpoint' | 'receiveModal'> }
+interface DirectorPort { channelId: string; allowedUserIds: readonly string[];
+  port: ReturnType<typeof createDirectorSlackConversationPort> }
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -27,7 +33,7 @@ export function loadSlackRepositoryConfig(repositoryDirectory: string) {
   };
 }
 
-export async function dispatchSlackEvent(event: SlackEvent, ports: ReadonlyMap<string, RepositoryPort>): Promise<void> {
+export async function dispatchSlackEvent(event: SlackEvent, ports: ReadonlyMap<string, RepositoryPort>, director?: DirectorPort): Promise<void> {
   const body = event.body;
   if (!isRecord(body)) return;
   const message = event.type === 'events_api' ? body.event : body;
@@ -47,8 +53,6 @@ export async function dispatchSlackEvent(event: SlackEvent, ports: ReadonlyMap<s
   }
   if (typeof teamId !== 'string' || typeof channelId !== 'string' || typeof userId !== 'string') return;
   const selected = ports.get(channelId);
-  if (selected === undefined || !selected.allowedUserIds.includes(userId)) return;
-  // Authorization precedes the event split so later interactive handlers share it.
   switch (event.type) {
     case 'events_api': {
       if (message.type !== 'message' || (message.subtype !== undefined && message.subtype !== 'thread_broadcast') || message.bot_id !== undefined
@@ -56,10 +60,13 @@ export async function dispatchSlackEvent(event: SlackEvent, ports: ReadonlyMap<s
         || typeof message.ts !== 'string' || typeof message.text !== 'string' || message.text.trim().length === 0) return;
       const parentTs = message.thread_ts ?? message.ts;
       if (typeof parentTs !== 'string') return;
-      await selected.port.receive({ teamId, channelId, userId, parentTs }, message.text);
+      const destination = director?.channelId === channelId && !selected?.port.isInquiryThread(channelId, parentTs) ? director : selected;
+      if (destination === undefined || !destination.allowedUserIds.includes(userId)) return;
+      await destination.port.receive({ teamId, channelId, userId, parentTs }, message.text);
       return;
     }
     case 'interactive': {
+      if (selected === undefined || !selected.allowedUserIds.includes(userId)) return;
       if (body.type === 'block_actions') {
         if (!isRecord(body.container) || body.container.type !== 'message' || body.container.channel_id !== channelId
           || typeof body.container.message_ts !== 'string' || !isRecord(body.message) || body.message.ts !== body.container.message_ts
@@ -93,8 +100,10 @@ export async function createDaemonSlackPorts(options: {
   tokens: { appToken: string; botToken: string } | undefined;
   clientFactory?: typeof createSlackClient;
   signal?: AbortSignal;
+  director?: { slack: NonNullable<GlobalConfig['director']>['slack']; language: Language };
 }) {
   let client: SlackClient | undefined;
+  let director: DirectorPort | undefined;
   const ports = new Map<string, RepositoryPort & { repositoryDirectory: string; port: SlackPort }>();
   let listening = false;
   let stopped = false;
@@ -136,12 +145,15 @@ export async function createDaemonSlackPorts(options: {
     signalStop();
     client?.stopAccepting();
     for (const { port } of ports.values()) port.stopAccepting();
+    director?.port.stopAccepting();
   };
   const close = async (): Promise<void> => {
     options.signal?.removeEventListener('abort', stopAccepting);
     stopAccepting();
     await polling;
     for (const { port } of ports.values()) port.close();
+    await director?.port.close();
+    director = undefined;
     ports.clear();
     await client?.close();
   };
@@ -170,12 +182,18 @@ export async function createDaemonSlackPorts(options: {
       ports.set(channelId, { allowedUserIds: config.allowedUserIds, repositoryDirectory: config.repositoryDirectory,
         port: createSlackConversationPort({ ...config, configDirectory: options.configDirectory, input: options.input, client }) });
     }
+    const configuredDirector = options.director?.slack;
+    if (configuredDirector !== undefined) {
+      client ??= (options.clientFactory ?? createSlackClient)(options.tokens);
+      director = { ...configuredDirector, port: createDirectorSlackConversationPort({ channelId: configuredDirector.channelId,
+        input: options.input, client, language: options.director!.language }) };
+    }
     if (client !== undefined) {
       try {
         await withInquiryLock(options.configDirectory, async () => {
           if (stopped) return;
           await Promise.race([stopping, (async () => {
-            await client!.start(async (event) => { if (!stopped) await dispatchSlackEvent(event, ports); });
+            await client!.start(async (event) => { if (!stopped) await dispatchSlackEvent(event, ports, director); });
             if (!stopped) await scanInquiries(true);
           })()]);
         });
@@ -186,5 +204,10 @@ export async function createDaemonSlackPorts(options: {
       }
     }
   }
-  return { get listening() { return listening; }, pollInquiries, stopAccepting, close };
+  const notifications: DirectorNotificationDelivery = {
+    async deliver(batch) {
+      if (director !== undefined) await director.port.notifications.deliver(batch);
+    },
+  };
+  return { get listening() { return listening; }, notifications, pollInquiries, stopAccepting, close };
 }

@@ -1,6 +1,7 @@
 import { prepareDirectorTurn } from './conversationRuntime.js';
 import { listDirectorManagers } from './managers.js';
 import type { DirectorNotifications } from './mcp.js';
+import type { DirectorNotificationDelivery } from './notificationDelivery.js';
 import type { Language } from '../../core/models/types.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { createLogger } from '../../shared/utils/debug.js';
@@ -14,6 +15,7 @@ export function createDirectorPatrol(
   notifications: DirectorNotifications,
   intervalSeconds: number,
   language: Language,
+  delivery?: DirectorNotificationDelivery,
 ) {
   let pending: Promise<void> | undefined;
   let completedAt: number | undefined;
@@ -26,7 +28,7 @@ export function createDirectorPatrol(
         signal.throwIfAborted();
         if ((await listDirectorManagers(configDirectory)).length === 0) return;
         signal.throwIfAborted();
-        const prepared = await prepareDirectorTurn(configDirectory, notifications, signal, {}, true);
+        const prepared = await prepareDirectorTurn(configDirectory, notifications, signal, {}, true, delivery);
         try {
           const prompt = JSON.stringify({
             event: 'director_patrol',

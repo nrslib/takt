@@ -444,7 +444,7 @@ export interface ProjectConfig {
  */
 export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSubmodules' | 'assistant' | 'manager'> {
   /** @globalOnly */
-  director?: { patrolInterval?: number };
+  director?: { patrolInterval?: number; slack?: { channelId: string; allowedUserIds: string[] } };
   manager?: { autoRun?: boolean; patrolInterval?: number; defaultWorkflow?: string; notifications?: ManagerNotifications; sensitivePaths?: string[] };
   /** Global default for assistant task-instruction formatting. */
   assistant?: GlobalAssistantConfig;

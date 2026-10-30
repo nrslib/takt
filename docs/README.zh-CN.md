@@ -300,6 +300,8 @@ manager 对话由 daemon 执行，TUI 负责发送请求和显示结果。一轮
 
 **Slack 对话：** 也可以从配置的 Slack 频道连接到同一个 manager 对话。回复只发送到发言所在的消息列，不会转发 TUI 的回复。Socket Mode App 清单、令牌环境变量、仓库配置以及回答询问的方法，请参阅[通过 Slack 与 manager 对话](./configuration.zh-CN.md#通过-slack-与-manager-对话)。完成等通知仍通过独立的 `TAKT_NOTIFY_WEBHOOK` Incoming Webhook 发送。
 
+**director 的 Slack：** 在 `~/.takt/config.yaml` 中配置 `director.slack`，即可在其频道接收汇总通知并与 director 对话。回复发送到原消息列，只接受获准用户的发言。参阅[通过 Slack 与 director 对话](./configuration.zh-CN.md#通过-slack-与-director-对话)。
+
 在对话消息列中发送 `/make-goal` 可创建注册提案。使用「Approve registration（批准注册）」或「Continue conversation（继续对话）」操作；旧版本提案的按钮无效。
 
 全部命令和选项请参阅 [CLI Reference](./cli-reference.zh-CN.md)。

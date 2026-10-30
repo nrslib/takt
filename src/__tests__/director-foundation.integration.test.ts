@@ -5,6 +5,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
+import { getLabel } from '../shared/i18n/index.js';
 import { invalidateGlobalConfigCache, loadGlobalConfig, saveGlobalConfig } from '../infra/config/global/globalConfig.js';
 import { invalidateAllResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
@@ -50,6 +51,10 @@ import * as daemonOwners from '../infra/daemon/owner.js';
 import * as processIdentity from '../infra/task/process.js';
 import * as cliInvocation from '../shared/utils/cli-invocation.js';
 import * as slackPorts from '../features/daemon/slackPorts.js';
+import * as slackClient from '../infra/slack/client.js';
+import type { SlackClient, SlackEvent } from '../infra/slack/client.js';
+import { loadGlobalConfigTrace } from '../infra/config/traced/tracedConfigLoader.js';
+import type { ConversationInput } from '../features/manager/conversationPort.js';
 import * as taskRecovery from '../features/tasks/execute/claimTasks.js';
 import * as autoRun from '../features/manager/autoRun.js';
 import * as eventManagers from '../features/manager/runEventManager.js';
@@ -91,10 +96,13 @@ beforeEach(() => {
   invalidateGlobalConfigCache(); invalidateAllResolvedConfigCache();
 });
 afterEach(async () => {
-  for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
-  vi.restoreAllMocks();
-  vi.useRealTimers();
-  invalidateGlobalConfigCache(); invalidateAllResolvedConfigCache();
+  try {
+    for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+  } finally {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    invalidateGlobalConfigCache(); invalidateAllResolvedConfigCache();
+  }
 });
 const delivery = { deliver: async () => ({ kind: 'delivered' as const }) };
 const signal = () => new AbortController().signal;
@@ -824,7 +832,7 @@ function patrolProvider(language: 'ja' | 'en' = 'en') {
   return { call, setup, failures, get disposedConnections() { return disposedConnections; } };
 }
 
-async function startPatrolDaemon() {
+async function startPatrolDaemon(useSlack = false) {
   const priorListeners = process.rawListeners('SIGTERM');
   const polls: Array<() => void> = [];
   vi.useFakeTimers({ toFake: ['Date'] });
@@ -839,7 +847,10 @@ async function startPatrolDaemon() {
   const removeOwner = vi.spyOn(daemonOwners, 'removeDaemonOwner').mockImplementation(() => {});
   vi.spyOn(processIdentity, 'getSelfProcessIdentity').mockReturnValue(owner.identity);
   vi.spyOn(cliInvocation, 'resolveCliInvocation').mockReturnValue({ args: [], cliPath: owner.cliPath });
-  vi.spyOn(slackPorts, 'createDaemonSlackPorts').mockResolvedValue({ listening: false, pollInquiries: async () => {}, stopAccepting: () => {}, close: async () => {} });
+  if (!useSlack) {
+    vi.spyOn(slackPorts, 'createDaemonSlackPorts').mockResolvedValue({ listening: false, notifications: { deliver: async () => {} },
+      pollInquiries: async () => {}, stopAccepting: () => {}, close: async () => {} });
+  }
   vi.spyOn(taskRecovery, 'failInterruptedTasksWithGoalEvents').mockReturnValue(0);
   vi.spyOn(autoRun, 'ensureManagerRun').mockResolvedValue(undefined);
   const processPending = vi.fn(async () => false);
@@ -1261,4 +1272,266 @@ it('keeps a human conversation MCP connection usable while an autonomous patrol 
     release();
     await expectCompletedPatrol(provider, 2);
   } finally { release(); }
+});
+
+it('roundtrips director Slack configuration and traces both keys to the global file', () => {
+  const configPath = join(directory, 'config.yaml');
+  const slack = { channel_id: 'C0DIR', allowed_user_ids: ['U0AAA'] };
+  writeFileSync(configPath, JSON.stringify({ provider: 'mock', language: 'en', director: { patrol_interval: 600, slack },
+    manager: { patrol_interval: 1800, auto_run: false } }));
+  invalidateGlobalConfigCache();
+  const loaded = loadGlobalConfig();
+  expect(loaded).toMatchObject({ director: { patrolInterval: 600, slack: { channelId: 'C0DIR', allowedUserIds: ['U0AAA'] } } });
+  saveGlobalConfig(loaded);
+  expect(parseYaml(readFileSync(configPath, 'utf8'))).toMatchObject({ director: { patrol_interval: 600, slack },
+    manager: { patrol_interval: 1800, auto_run: false } });
+  invalidateGlobalConfigCache();
+  expect(loadGlobalConfig()).toEqual(loaded);
+  const traced = loadGlobalConfigTrace(configPath, (value) => value, []);
+  expect(traced.rawConfig).toMatchObject({ director: { patrol_interval: 600, slack } });
+  for (const key of ['director.slack.channel_id', 'director.slack.allowed_user_ids']) {
+    expect(traced.trace.getOrigin(key), key).toBe('global');
+  }
+});
+
+function directorSlackMessage(overrides: Record<string, unknown> = {}): SlackEvent {
+  return { type: 'events_api', body: { team_id: 'T0TEAM', event: {
+    type: 'message', channel: 'C0DIR', user: 'U0AAA', ts: '1700000000.000001', text: 'マージ待ちは？', ...overrides,
+  } } };
+}
+
+function fakeDirectorSlack() {
+  const client = {
+    start: vi.fn<SlackClient['start']>(async () => {}),
+    postMessage: vi.fn<SlackClient['postMessage']>(async () => ({ kind: 'delivered', parentTs: '1700000000.000100' })),
+    postThreadMessage: vi.fn<SlackClient['postThreadMessage']>(async () => ({ kind: 'delivered' })),
+    openModal: vi.fn<SlackClient['openModal']>(async () => ({ kind: 'delivered' })),
+    stopAccepting: vi.fn(), close: vi.fn<SlackClient['close']>(async () => {}),
+  } satisfies SlackClient;
+  const factory = vi.spyOn(slackClient, 'createSlackClient').mockReturnValue(client);
+  let input: ConversationInput | undefined;
+  const createPorts = slackPorts.createDaemonSlackPorts;
+  vi.spyOn(slackPorts, 'createDaemonSlackPorts').mockImplementation(async (options) => {
+    input = options.input;
+    return createPorts(options);
+  });
+  process.env.TAKT_SLACK_APP_TOKEN = 'xapp-test-director';
+  process.env.TAKT_SLACK_BOT_TOKEN = 'xoxb-test-director';
+  return { client, factory,
+    input() {
+      if (input === undefined) throw new Error('Daemon Slack input has not been initialized');
+      return input;
+    },
+    async receive(event: SlackEvent) {
+      expect(client.start).toHaveBeenCalledOnce();
+      await client.start.mock.calls[0]![0](event);
+    },
+  };
+}
+
+function configureDirectorSlack(language: 'ja' | 'en') {
+  writeFileSync(join(directory, 'config.yaml'), JSON.stringify({ provider: 'mock', language,
+    director: { slack: { channel_id: 'C0DIR', allowed_user_ids: ['U0AAA'] } } }));
+  invalidateGlobalConfigCache(); invalidateAllResolvedConfigCache();
+}
+
+it.each(['ja', 'en'] as const)('posts merge and inquiry notices together once per patrol and suppresses unchanged notices in %s', async (language) => {
+  const repository = await seedManager('slack-patrol');
+  const merge = await seedPatrolGoal(repository, { status: 'awaiting_merge', completion: mergeEvidence() });
+  const question = createInquiry({ body: 'Which specification should be used?', recipient: 'human' });
+  const waiting = await seedPatrolGoal(repository, { questions: [question] });
+  configureDirectorSlack(language);
+  const slack = fakeDirectorSlack();
+  const provider = patrolProvider(language);
+  const daemon = await startPatrolDaemon(true);
+  await daemon.poll();
+  await expectCompletedPatrol(provider, 1);
+  expect(slack.factory).toHaveBeenCalledExactlyOnceWith({ appToken: 'xapp-test-director', botToken: 'xoxb-test-director' });
+  await vi.waitFor(() => expect(slack.client.postMessage).toHaveBeenCalledOnce());
+  const [channel, text] = slack.client.postMessage.mock.calls[0]!;
+  expect(channel).toBe('C0DIR');
+  expect(text).toContain(getLabel('director.slackNotifications', language));
+  expect(text).toContain(merge.id);
+  expect(text).toContain('awaiting_merge');
+  expect(text).toContain(waiting.id);
+  expect(text).toContain(question.body);
+  expect(await savedDirectorNotices()).toHaveLength(2);
+  expect(slack.client.postThreadMessage).not.toHaveBeenCalled();
+
+  const human = new ConversationIpcClient({ kind: 'daemon' });
+  cleanups.push(async () => human.close());
+  await human.connect();
+  await vi.waitFor(() => expect(human.getSnapshot().readStatus).toBe('complete'));
+  for (const notice of await savedDirectorNotices()) {
+    expect(human.getSnapshot().items).toContainEqual({ kind: 'display_event', event: notice });
+  }
+  await daemon.poll(900);
+  await expectCompletedPatrol(provider, 2);
+  expect(slack.client.postMessage).toHaveBeenCalledOnce();
+  expect(await savedDirectorNotices()).toHaveLength(2);
+  expect((await new GoalStore(repository).get(waiting.id)).questions).toEqual([question]);
+});
+
+it('routes allowed Slack speech to the director and replies to each originating thread', async () => {
+  const repository = await seedManager('slack-conversation');
+  configureDirectorSlack('en');
+  const slack = fakeDirectorSlack();
+  const provider = patrolProvider();
+  const daemon = await startPatrolDaemon(true);
+  await daemon.poll();
+  await expectCompletedPatrol(provider, 1);
+  provider.call.mockClear();
+  provider.call.mockImplementation(async (_prompt, options) => {
+    expect(options).toMatchObject({ permissionMode: 'readonly', strictToolAllowlist: DIRECTOR_TOOL_ALLOWLIST });
+    expect(Object.keys(options.mcpServers!)).toEqual([DIRECTOR_MCP_SERVER_NAME]);
+    return { persona: 'director', status: 'done', content: `Director reply ${provider.call.mock.calls.length}`, timestamp: new Date(), sessionId: 'slack-director-session' };
+  });
+  const open = vi.spyOn(slack.input(), 'open');
+  const submit = vi.spyOn(slack.input(), 'submit');
+  const managerPlan = vi.spyOn(managerPlans, 'createManagerConversationPlan');
+  for (const [index, [ts, text]] of [['1700000000.000001', 'マージ待ちは？'], ['1700000000.000002', '/make-goal\n```text\nそのまま渡す\n```']].entries()) {
+    await slack.receive(directorSlackMessage({ ts, text }));
+    await vi.waitFor(() => expect(slack.client.postThreadMessage).toHaveBeenCalledTimes(index + 1));
+  }
+  expect(provider.call).toHaveBeenCalledTimes(2);
+  expect(provider.call.mock.calls.map(([prompt]) => prompt)).toEqual(['マージ待ちは？', '/make-goal\n```text\nそのまま渡す\n```']);
+  expect(submit.mock.calls.map(([value]) => value.command)).toEqual([
+    { kind: 'message', text: 'マージ待ちは？' }, { kind: 'message', text: '/make-goal\n```text\nそのまま渡す\n```' },
+  ]);
+  for (const [opened] of open.mock.calls) {
+    expect(opened).toMatchObject({ conversationId: conversationId({ kind: 'daemon' }), assignment: { kind: 'daemon' },
+      speaker: { namespace: 'slack-user', id: JSON.stringify(['T0TEAM', 'U0AAA']) } });
+  }
+  expect(slack.client.postThreadMessage.mock.calls.map(([thread, text]) => [thread, text])).toEqual([
+    [{ channelId: 'C0DIR', parentTs: '1700000000.000001' }, 'Director reply 1'],
+    [{ channelId: 'C0DIR', parentTs: '1700000000.000002' }, 'Director reply 2'],
+  ]);
+  const store = new ConversationStore(directory);
+  expect(store.read(conversationId({ kind: 'daemon' }), { kind: 'daemon' })).toMatchObject({ agent: 'director', sessionId: 'slack-director-session' });
+  expect(store.read(conversationId({ kind: 'repository', repositoryDirectory: repository }), { kind: 'repository', repositoryDirectory: repository })).toBeUndefined();
+  expect(managerPlan).not.toHaveBeenCalled();
+  expect(slack.client.postMessage).not.toHaveBeenCalled();
+});
+
+it('ignores a user allowed only by the manager before opening or submitting a director conversation', async () => {
+  const repository = await seedManager('slack-authorization');
+  mkdirSync(join(repository, '.takt'), { recursive: true });
+  writeFileSync(join(repository, '.takt', 'config.yaml'), 'manager:\n  slack:\n    channel_id: C0MGR\n    allowed_user_ids: [U0BBB]\n');
+  const goal = await seedPatrolGoal(repository, { status: 'awaiting_merge', completion: mergeEvidence() });
+  configureDirectorSlack('en');
+  const slack = fakeDirectorSlack();
+  const provider = patrolProvider();
+  const daemon = await startPatrolDaemon(true);
+  await daemon.poll();
+  await expectCompletedPatrol(provider, 1);
+  provider.call.mockClear();
+  const open = vi.spyOn(slack.input(), 'open');
+  const submit = vi.spyOn(slack.input(), 'submit');
+  const merge = vi.spyOn(goalIntegration, 'mergeTaktGoalPr');
+  const tools = vi.spyOn(Client.prototype, 'callTool');
+  const saved = await new GoalStore(repository).get(goal.id);
+  slack.client.postMessage.mockClear();
+  await slack.receive(directorSlackMessage({ user: 'U0BBB', text: 'G をマージして' }));
+  expect(open).not.toHaveBeenCalled();
+  expect(submit).not.toHaveBeenCalled();
+  expect(provider.call).not.toHaveBeenCalled();
+  expect(tools).not.toHaveBeenCalled();
+  expect(merge).not.toHaveBeenCalled();
+  expect(slack.client.postMessage).not.toHaveBeenCalled();
+  expect(slack.client.postThreadMessage).not.toHaveBeenCalled();
+  expect(await new GoalStore(repository).get(goal.id)).toEqual(saved);
+  expect(slack.factory).toHaveBeenCalledOnce();
+});
+
+it('ignores edited, deleted, bot and interactive director events without treating nested text as speech', async () => {
+  await seedManager('slack-filtering');
+  configureDirectorSlack('en');
+  const slack = fakeDirectorSlack();
+  const provider = patrolProvider();
+  const daemon = await startPatrolDaemon(true);
+  await daemon.poll();
+  await expectCompletedPatrol(provider, 1);
+  provider.call.mockClear();
+  const open = vi.spyOn(slack.input(), 'open');
+  const submit = vi.spyOn(slack.input(), 'submit');
+  for (const changes of [
+    { subtype: 'message_changed', message: { text: 'マージ待ちは？', user: 'U0AAA' } },
+    { subtype: 'message_deleted', previous_message: { text: 'マージ待ちは？' } },
+    { bot_id: 'B0BOT' },
+  ]) await slack.receive(directorSlackMessage(changes));
+  await slack.receive({ type: 'interactive', body: { type: 'block_actions', team: { id: 'T0TEAM' },
+    channel: { id: 'C0DIR' }, user: { id: 'U0AAA' }, container: { type: 'message', channel_id: 'C0DIR', message_ts: '1700000000.000001' },
+    message: { ts: '1700000000.000001', text: 'マージ待ちは？' },
+    actions: [{ type: 'button', action_id: 'takt_goal_approve', value: 'マージ待ちは？' }] } });
+  expect(open).not.toHaveBeenCalled();
+  expect(submit).not.toHaveBeenCalled();
+  expect(provider.call).not.toHaveBeenCalled();
+  expect(slack.client.postThreadMessage).not.toHaveBeenCalled();
+  expect(slack.client.openModal).not.toHaveBeenCalled();
+});
+
+it('keeps director notifications local without director Slack even when manager Slack is connected', async () => {
+  const repository = await seedManager('manager-slack-only');
+  mkdirSync(join(repository, '.takt'), { recursive: true });
+  writeFileSync(join(repository, '.takt', 'config.yaml'), 'manager:\n  slack:\n    channel_id: C0MGR\n    allowed_user_ids: [U0BBB]\n');
+  await seedPatrolGoal(repository, { status: 'awaiting_merge', completion: mergeEvidence() });
+  const slack = fakeDirectorSlack();
+  const provider = patrolProvider();
+  const daemon = await startPatrolDaemon(true);
+  await daemon.poll();
+  await expectCompletedPatrol(provider, 1);
+  expect(slack.client.start).toHaveBeenCalledOnce();
+  const open = vi.spyOn(slack.input(), 'open');
+  await slack.receive(directorSlackMessage());
+  expect(open).not.toHaveBeenCalled();
+  expect(await savedDirectorNotices()).toHaveLength(1);
+  expect(slack.client.postMessage).not.toHaveBeenCalled();
+  expect(slack.client.postThreadMessage).not.toHaveBeenCalled();
+});
+
+it.each([false, true])('delivers saved completion notices from a human turn and preserves TUI delivery when the provider fails=%s', async (fails) => {
+  const repository = await seedManager('slack-completion');
+  configureDirectorSlack('en');
+  const slack = fakeDirectorSlack();
+  const provider = patrolProvider();
+  const daemon = await startPatrolDaemon(true);
+  await daemon.poll();
+  await expectCompletedPatrol(provider, 1);
+  const goal = await seedPatrolGoal(repository, { status: 'completed', completion: { ...mergeEvidence(), targetSha: 'b'.repeat(40) } });
+  provider.call.mockImplementationOnce(async (_prompt, options) => {
+    const config = options.mcpServers![DIRECTOR_MCP_SERVER_NAME];
+    if (config === undefined || config.type !== 'http') throw new Error('HTTP director MCP required');
+    const client = new Client({ name: 'completion-provider', version: '1' });
+    const transport = new StreamableHTTPClientTransport(new URL(config.url), { requestInit: { headers: config.headers } });
+    try {
+      await client.connect(transport);
+      const result = await client.callTool({ name: 'takt_notify_human', arguments: { message: 'Completed goal ready for the human',
+        target: { managerId: conversationId({ kind: 'repository', repositoryDirectory: repository }), cwd: repository, goalId: goal.id } } });
+      expect(result.isError).not.toBe(true);
+      expect(await savedDirectorNotices()).toHaveLength(1);
+    } finally { await client.close(); await transport.close(); }
+    if (fails) throw new Error('Provider failed after saving the notice');
+    return { persona: 'director', status: 'done', content: 'Human turn finished', timestamp: new Date() };
+  });
+  const human = new ConversationIpcClient({ kind: 'daemon' });
+  const outputs: PortOutput[] = [];
+  human.onOutput((output) => outputs.push(output));
+  cleanups.push(async () => human.close());
+  await human.connect();
+  expect((await human.submit({ kind: 'message', text: 'Report the completed goal' })).kind).toBe('accepted');
+  await vi.waitFor(() => expect(provider.disposedConnections).toBe(2), { timeout: 30_000 });
+  await vi.waitFor(() => expect(slack.client.postMessage).toHaveBeenCalledOnce());
+  expect(slack.client.postMessage.mock.calls[0]).toEqual([
+    'C0DIR', expect.stringContaining('Completed goal ready for the human'), expect.any(Array),
+  ]);
+  const [notice] = await savedDirectorNotices();
+  await vi.waitFor(() => expect(outputs).toContainEqual({ kind: 'notice', ...notice }));
+  expect(slack.client.postThreadMessage).not.toHaveBeenCalled();
+  human.close();
+  const reopened = new ConversationIpcClient({ kind: 'daemon' });
+  cleanups.push(async () => reopened.close());
+  await reopened.connect();
+  await vi.waitFor(() => expect(reopened.getSnapshot().readStatus).toBe('complete'));
+  expect(reopened.getSnapshot().items).toContainEqual({ kind: 'display_event', event: notice });
+  expect(slack.client.postMessage).toHaveBeenCalledOnce();
 });

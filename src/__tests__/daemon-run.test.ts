@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { runDaemon } from '../features/daemon/runDaemon.js';
 import type { TaskRunnerOptions } from '../infra/task/runner.js';
+import type { DirectorNotificationDelivery } from '../features/director/notificationDelivery.js';
+import * as globalConfig from '../infra/config/global/globalConfig.js';
 
 const doubles = vi.hoisted(() => ({
   projects: vi.fn(), work: vi.fn(), create: vi.fn(), ensure: vi.fn(),
@@ -37,6 +39,7 @@ vi.mock('../features/manager/turnFailureNotification.js', () => ({ notifyManager
 
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.spyOn(globalConfig, 'loadGlobalConfig').mockReturnValue({ language: 'en', autoFetch: true });
   vi.stubEnv('TAKT_SLACK_APP_TOKEN', undefined);
   vi.stubEnv('TAKT_SLACK_BOT_TOKEN', undefined);
   doubles.registerOwner.mockReturnValue(true);
@@ -48,9 +51,77 @@ beforeEach(() => {
   doubles.recover.mockReturnValue(0);
   doubles.conversationService.mockReturnValue({ attachmentCount: 0, activeOperationCount: 0, stopAccepting: vi.fn(), close: vi.fn() });
   doubles.ipc.mockReturnValue({ initializingCount: 0, stopAccepting: vi.fn(), close: vi.fn() });
-  doubles.slack.mockResolvedValue({ listening: false, pollInquiries: vi.fn(), stopAccepting: vi.fn(), close: vi.fn() });
+  doubles.slack.mockResolvedValue({ listening: false, notifications: { deliver: vi.fn() }, pollInquiries: vi.fn(), stopAccepting: vi.fn(), close: vi.fn() });
 });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
+
+it('retains a notification raised during Slack startup and uses the same delivery for patrol and conversation', async () => {
+  vi.mocked(globalConfig.loadGlobalConfig).mockReturnValue({ language: 'en', autoFetch: true,
+    director: { slack: { channelId: 'C0DIR', allowedUserIds: ['U0AAA'] } } });
+  let delivery!: DirectorNotificationDelivery;
+  doubles.runtime.mockImplementation((_directory, _notices, target: DirectorNotificationDelivery) => { delivery = target; return {}; });
+  const notices = [{ id: 'saved-notice', message: 'Human decision required' }];
+  const ports = { listening: false, notifications: { deliver: vi.fn(async () => {}) },
+    pollInquiries: vi.fn(), stopAccepting: vi.fn(), close: vi.fn() };
+  let posting!: Promise<void>;
+  let connected!: () => void;
+  const connecting = new Promise<void>((resolve) => { connected = resolve; });
+  doubles.slack.mockImplementation(async () => {
+    posting = delivery.deliver(notices);
+    expect(ports.notifications.deliver).not.toHaveBeenCalled();
+    await connecting;
+    return ports;
+  });
+  doubles.projects.mockResolvedValue([]);
+  const daemon = runDaemon();
+  try {
+    await vi.waitFor(() => expect(doubles.slack).toHaveBeenCalledOnce());
+    expect(doubles.ipc).toHaveBeenCalledOnce();
+    expect(ports.notifications.deliver).not.toHaveBeenCalled();
+  } finally { connected(); await daemon; }
+  await posting;
+  expect(ports.notifications.deliver).toHaveBeenCalledExactlyOnceWith(notices);
+});
+
+it('finishes local notification delivery while manager Slack startup is pending without director Slack', async () => {
+  let delivery!: DirectorNotificationDelivery;
+  doubles.runtime.mockImplementation((_directory, _notices, target: DirectorNotificationDelivery) => { delivery = target; return {}; });
+  let connected!: () => void;
+  const connecting = new Promise<void>((resolve) => { connected = resolve; });
+  const ports = { listening: false, notifications: { deliver: vi.fn() }, pollInquiries: vi.fn(), stopAccepting: vi.fn(), close: vi.fn() };
+  let delivered = false;
+  doubles.slack.mockImplementation(async () => {
+    void delivery.deliver([{ id: 'local-notice', message: 'Saved locally' }]).then(() => { delivered = true; });
+    await connecting;
+    return ports;
+  });
+  doubles.projects.mockResolvedValue([]);
+  const daemon = runDaemon();
+  try {
+    await vi.waitFor(() => expect(delivered).toBe(true));
+    expect(doubles.ipc).toHaveBeenCalledOnce();
+    expect(ports.notifications.deliver).not.toHaveBeenCalled();
+  } finally { connected(); await daemon; }
+});
+
+it('releases a saved notification waiting for Slack when project discovery fails after IPC opens', async () => {
+  vi.mocked(globalConfig.loadGlobalConfig).mockReturnValue({ language: 'en', autoFetch: true,
+    director: { slack: { channelId: 'C0DIR', allowedUserIds: ['U0AAA'] } } });
+  let delivery!: DirectorNotificationDelivery;
+  doubles.runtime.mockImplementation((_directory, _notices, target: DirectorNotificationDelivery) => { delivery = target; return {}; });
+  let posting!: Promise<void>;
+  doubles.projects.mockImplementationOnce(async () => {
+    posting = delivery.deliver([{ id: 'saved-notice', message: 'Saved before startup failed' }]);
+    throw new Error('Project discovery failed');
+  });
+  await expect(runDaemon()).rejects.toThrow('Project discovery failed');
+  await posting;
+  expect(doubles.ipc).toHaveBeenCalledOnce();
+  expect(doubles.slack).not.toHaveBeenCalled();
+  expect(doubles.conversationService.mock.results[0]!.value.close).toHaveBeenCalledOnce();
+  expect(doubles.ipc.mock.results[0]!.value.close).toHaveBeenCalledOnce();
+  expect(doubles.removeOwner).toHaveBeenCalledOnce();
+});
 
 it.each([
   ['IPC startup', 'SIGTERM'],
@@ -65,7 +136,7 @@ it.each([
   const conversation = { attachmentCount: 0, activeOperationCount: 0,
     stopAccepting: vi.fn(() => { conversationAccepting = false; }), close: vi.fn() };
   const ipc = { initializingCount: 0, stopAccepting: vi.fn(() => { ipcAccepting = false; }), close: vi.fn() };
-  const slack = { listening: false, pollInquiries: vi.fn(), stopAccepting: vi.fn(), close: vi.fn() };
+  const slack = { listening: false, notifications: { deliver: vi.fn() }, pollInquiries: vi.fn(), stopAccepting: vi.fn(), close: vi.fn() };
   doubles.conversationService.mockReturnValue(conversation);
   doubles.ipc.mockImplementation(async () => { if (stage === 'IPC startup') await gate; return ipc; });
   doubles.projects.mockImplementation(async () => { if (stage === 'project listing') await gate; return ['/project']; });
@@ -76,6 +147,7 @@ it.each([
     await vi.waitFor(() => expect(boundary).toHaveBeenCalledOnce());
     process.rawListeners(signal).find((listener) => !before.includes(listener))!.call(process, signal);
     expect(conversationAccepting).toBe(false);
+    expect(doubles.ipc).toHaveBeenCalledOnce();
     if (stage !== 'IPC startup') expect(ipcAccepting).toBe(false);
     if (stage === 'Slack startup') expect(doubles.slack.mock.calls[0]![0].signal.aborted).toBe(true);
     expect(doubles.removeOwner).not.toHaveBeenCalled();
@@ -85,7 +157,7 @@ it.each([
     await daemon;
   }
   expect(ipcAccepting).toBe(false);
-  if (stage === 'IPC startup') expect(doubles.projects).not.toHaveBeenCalled();
+  expect(doubles.projects).toHaveBeenCalledTimes(stage === 'IPC startup' ? 0 : 1);
   if (stage !== 'Slack startup') expect(doubles.slack).not.toHaveBeenCalled();
   else {
     expect(slack.stopAccepting).toHaveBeenCalled();
@@ -100,7 +172,7 @@ it('keeps the same daemon waiting for Slack after work and TUI connections end, 
   const before = process.rawListeners('SIGTERM');
   const conversation = { attachmentCount: 1, activeOperationCount: 0, stopAccepting: vi.fn(), close: vi.fn() };
   doubles.conversationService.mockReturnValue(conversation);
-  const slack = { listening: true, pollInquiries: vi.fn(), stopAccepting: vi.fn(), close: vi.fn() };
+  const slack = { listening: true, notifications: { deliver: vi.fn() }, pollInquiries: vi.fn(), stopAccepting: vi.fn(), close: vi.fn() };
   doubles.slack.mockResolvedValue(slack);
   doubles.create.mockReturnValue({ processPending: vi.fn(), close: vi.fn() });
   let round = 0;
@@ -137,7 +209,7 @@ it('polls for new Slack inquiries on later rounds of the same daemon without wai
   const before = process.rawListeners('SIGTERM');
   let now = 10_000;
   vi.spyOn(Date, 'now').mockImplementation(() => now);
-  const slack = { listening: true, pollInquiries: vi.fn(), stopAccepting: vi.fn(), close: vi.fn() };
+  const slack = { listening: true, notifications: { deliver: vi.fn() }, pollInquiries: vi.fn(), stopAccepting: vi.fn(), close: vi.fn() };
   doubles.slack.mockResolvedValue(slack);
   doubles.projects.mockResolvedValue([]);
   let rounds = 0;
@@ -157,7 +229,7 @@ it('inspects projects while an inquiry poll is still pending', async () => {
   const before = process.rawListeners('SIGTERM');
   let release!: () => void;
   const pending = new Promise<void>((resolve) => { release = resolve; });
-  const slack = { listening: true, pollInquiries: vi.fn(() => pending), stopAccepting: vi.fn(), close: vi.fn(() => pending) };
+  const slack = { listening: true, notifications: { deliver: vi.fn() }, pollInquiries: vi.fn(() => pending), stopAccepting: vi.fn(), close: vi.fn(() => pending) };
   doubles.slack.mockResolvedValue(slack);
   doubles.create.mockReturnValue({ processPending: vi.fn(), close: vi.fn() });
   const daemon = runDaemon();
@@ -177,7 +249,7 @@ it('does not start another inquiry poll until the previous one finishes', async 
   const before = process.rawListeners('SIGTERM');
   let release!: () => void;
   const pending = new Promise<void>((resolve) => { release = resolve; });
-  const slack = { listening: true, pollInquiries: vi.fn().mockReturnValueOnce(pending).mockResolvedValue(undefined),
+  const slack = { listening: true, notifications: { deliver: vi.fn() }, pollInquiries: vi.fn().mockReturnValueOnce(pending).mockResolvedValue(undefined),
     stopAccepting: vi.fn(), close: vi.fn() };
   doubles.slack.mockResolvedValue(slack);
   doubles.projects.mockResolvedValue([]);
@@ -204,7 +276,7 @@ it('logs a rejected inquiry poll and retries on the next interval', async () => 
   vi.useFakeTimers();
   vi.setSystemTime(10_000);
   const before = process.rawListeners('SIGTERM');
-  const slack = { listening: true, pollInquiries: vi.fn().mockRejectedValueOnce(new Error('poll failed'))
+  const slack = { listening: true, notifications: { deliver: vi.fn() }, pollInquiries: vi.fn().mockRejectedValueOnce(new Error('poll failed'))
     .mockResolvedValue(undefined), stopAccepting: vi.fn(), close: vi.fn() };
   doubles.slack.mockResolvedValue(slack);
   doubles.projects.mockResolvedValue([]);
@@ -491,7 +563,7 @@ it('keeps running with remaining work after a notification spans polling rounds'
 });
 
 it('ignores remaining work from a project removed from the project list', async () => {
-  doubles.projects.mockResolvedValueOnce(['/project']).mockResolvedValue([]);
+  doubles.projects.mockResolvedValueOnce(['/project']).mockResolvedValueOnce(['/project']).mockResolvedValue([]);
   const manager = { processPending: vi.fn(), close: vi.fn() };
   doubles.create.mockReturnValue(manager);
   doubles.work.mockResolvedValue(true);
