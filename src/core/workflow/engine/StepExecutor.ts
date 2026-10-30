@@ -145,6 +145,7 @@ import type {
   PreparedLiveInterventionDelivery,
 } from '../live-intervention/types.js';
 import { createLiveInterventionDeliveryCommitter } from '../live-intervention/delivery.js';
+import { resolveLiveInterventionPrompt } from '../live-intervention/prompt.js';
 import {
   Phase1ExecutionLog,
   savePhase1ExecutionLog,
@@ -1202,10 +1203,13 @@ export class StepExecutor {
     }, executableStep.engineSynthesized === true);
     return {
       executableStep,
-      phase1Instruction: this.appendLiveInterventionInstruction(
-        this.buildPhase1Instruction(instruction.text, executableStep, runtime),
-        liveInterventionDelivery,
-      ),
+      // Without a prepared delivery, resolve history after the final pending check in runNormalStep.
+      phase1Instruction: liveInterventionDelivery === undefined
+        ? this.buildPhase1Instruction(instruction.text, executableStep, runtime)
+        : this.appendLiveInterventionInstruction(
+            this.buildPhase1Instruction(instruction.text, executableStep, runtime),
+            liveInterventionDelivery,
+          ),
       injectedReports: instruction.injectedReports,
       reportInputs: instruction.reportInputs,
       ...(state.lastOutput?.content !== undefined ? { priorStepResponseText: state.lastOutput.content } : {}),
@@ -1232,9 +1236,14 @@ export class StepExecutor {
     instruction: string,
     delivery: PreparedLiveInterventionDelivery | undefined,
   ): string {
-    return delivery === undefined
+    const liveInstruction = resolveLiveInterventionPrompt(
+      this.deps.liveIntervention,
+      delivery,
+      this.deps.getLanguage(),
+    );
+    return liveInstruction.length === 0
       ? instruction
-      : [instruction, delivery.prompt].filter((part) => part.length > 0).join('\n\n');
+      : [instruction, liveInstruction].join('\n\n');
   }
 
   /**
