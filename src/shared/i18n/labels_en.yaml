@@ -445,6 +445,7 @@ manager:
     disconnected: "Reconnecting to the daemon."
     incomplete: "The read is incomplete. Summary approval is unavailable until refresh completes."
     interrupted: "The previous operation was interrupted. You can send a new message."
+    director_interrupted: "The director message (operation ID: {operationId}) was interrupted. It will not be retried automatically."
     permission_appended: "The permission was appended. Check whether the answer was saved."
     assignment_changed: 'The assignment has changed. Reopen the conversation for the current assignment.'
     busy: "An operation is running. Submit again after it finishes."

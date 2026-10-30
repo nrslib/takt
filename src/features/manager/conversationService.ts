@@ -34,8 +34,13 @@ import { validateManagerSummary } from './turnResponse.js';
 import { ConversationCommandSchema } from './conversationCommands.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { notifyManagerTurnFailure } from './turnFailureNotification.js';
+import { ManagerTurnScheduler } from './managerTurnScheduler.js';
+import { DirectorMessageResultStore } from '../../infra/conversations/directorMessageResults.js';
 
-interface Operation { id: string; controller: AbortController; cleanupComplete: boolean; completion?: Promise<void> }
+interface Operation {
+  id: string; controller: AbortController; cleanupComplete: boolean; release(): void; completion?: Promise<void>;
+  directorConversationId?: string; result?: OperationResult; startPending?: boolean;
+}
 interface LoadedConversation {
   record: ConversationRecord;
   sequence: number;
@@ -63,16 +68,20 @@ function identityOf(assignment: ConversationDisplayAssignment): ConversationAssi
 
 export function createConversationService(input: {
   configDirectory: string; owner: DaemonOwner; runtime: ConversationRuntime; onDomainChange(): void;
+  scheduler?: ManagerTurnScheduler;
 }) {
   const store = new ConversationStore(input.configDirectory);
   const speakers = new ConversationSpeakerStore(input.configDirectory);
   const notifications = new DirectorNotificationStore(input.configDirectory);
+  const results = new DirectorMessageResultStore(input.configDirectory);
+  const scheduler = input.scheduler ?? new ManagerTurnScheduler();
   const conversations = new Map<string, LoadedConversation>();
   const initializing = new Set<string>();
   const admissions = new Set<Promise<void>>();
   const attachments = new Map<string, Attachment>();
   let closed = false;
   let shutdownDelivery: Promise<void> | undefined;
+  let restoring = false;
   const detach = (id: string): void => { attachments.get(id)?.currentRead?.cancel(); attachments.delete(id); };
   const beginAdmission = (): (() => void) => {
     let finish!: () => void;
@@ -81,6 +90,10 @@ export function createConversationService(input: {
     return () => { admissions.delete(completion); finish(); };
   };
   const checkAdmission = (): void => { if (closed) throw new ConversationError('shutting_down'); };
+  const interruptedResult = (conversation: LoadedConversation, operationId: string) => ({
+    kind: 'error' as const, code: 'interrupted',
+    message: getLabel('manager.conversation.director_interrupted', conversation.language, { operationId }),
+  });
   const nextRevision = (revision: number): number => {
     if (revision >= Number.MAX_SAFE_INTEGER) throw new ConversationError('operation_failed');
     return revision + 1;
@@ -150,6 +163,11 @@ export function createConversationService(input: {
         if (assignment.kind === 'daemon') {
           for await (const notification of notifications.iterate()) yield { kind: 'display_event', event: notification };
           return;
+        }
+        for await (const saved of results.iterate(conversation.record.id)) {
+          if (saved.result.kind === 'error' && saved.result.code === 'interrupted') {
+            yield { kind: 'display_event', event: { id: saved.operationId, message: saved.result.message } };
+          }
         }
         const inquiries: PendingInquiry[] = [];
         const events: ManagerDisplayEvent[] = [];
@@ -300,7 +318,7 @@ export function createConversationService(input: {
           const latest = await resolveAssignment(conversation.record.assignment);
           if (latest.kind === 'daemon') throw new ConversationError('invalid_assignment');
           let pending: PendingSummary | null = null;
-          if (output.summary !== null) {
+          if (output.summary !== null && operation.directorConversationId === undefined) {
             const { repositoryDirectory: requested, ...summary } = output.summary;
             const targetRepository = requested ?? (assignment.kind === 'repository' ? assignment.repositoryDirectory : undefined);
             if (targetRepository === undefined) throw new ConversationError('invalid_assignment');
@@ -308,7 +326,8 @@ export function createConversationService(input: {
             if (!latest.repositoryDirectories.includes(repositoryDirectory)) throw new ConversationError('invalid_assignment');
             pending = { revision: conversation.record.revision, repositoryDirectory, summary };
           }
-          save(conversation, { ...conversation.record, sessionId: output.sessionId ?? null, pending });
+          save(conversation, { ...conversation.record, sessionId: output.sessionId ?? null,
+            pending: operation.directorConversationId === undefined ? pending : conversation.record.pending });
           clearSessionOnFailure = false;
           if (conversationId(identityOf(latest)) !== conversation.record.id) {
             await publish(conversation, { kind: 'notice', id: randomUUID(),
@@ -351,23 +370,136 @@ export function createConversationService(input: {
         if (message !== undefined) await publish(conversation, { kind: 'notice', id: randomUUID(), message }, version(conversation, operation.id));
       }
       if (command.kind === 'message' && conversation.record.approval?.state !== 'reserved') {
-        conversation.record = { ...conversation.record, pending: null,
+        conversation.record = { ...conversation.record,
+          ...(operation.directorConversationId === undefined ? { pending: null } : {}),
           ...(clearSessionOnFailure || operation.controller.signal.aborted ? { sessionId: null } : {}) };
       }
     }
     if (command.kind === 'message') conversation.denials = operation.controller.signal.aborted ? undefined : denials;
     operation.cleanupComplete = true;
+    operation.result = operation.directorConversationId !== undefined && operation.controller.signal.aborted
+      ? interruptedResult(conversation, operation.id) : result;
     try {
-      save(conversation, { ...conversation.record, running: null });
-      conversation.active = undefined;
-      conversation.interrupted = false;
-      const outputVersion = version(conversation, operation.id);
-      await publish(conversation, { kind: 'pending', state: capture(conversation) }, outputVersion);
-      await publish(conversation, { kind: 'result', operationId: operation.id, result }, outputVersion);
+      await finishOperation(conversation, operation);
     } catch {
-      await publish(conversation, { kind: 'result', operationId: operation.id,
-        result: conversationErrorResult(new ConversationError('storage_error'), conversation.language) }, version(conversation, operation.id));
+      conversation.storageFailed = true;
+      if (operation.directorConversationId === undefined) {
+        await publish(conversation, { kind: 'result', operationId: operation.id,
+          result: conversationErrorResult(new ConversationError('storage_error'), conversation.language) }, version(conversation, operation.id));
+      }
     }
+  };
+
+  const allocateOperationId = (): string => {
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const id = randomUUID();
+      if (results.read(id) !== undefined) continue;
+      if ([...conversations.values()].some(({ record, active }) => active?.id === id || record.running?.operationId === id
+        || record.directorMessages?.some((message) => message.operationId === id))) continue;
+      return id;
+    }
+    throw new ConversationError('operation_failed');
+  };
+  const finishOperation = async (conversation: LoadedConversation, operation: Operation): Promise<void> => {
+    const result = operation.result;
+    if (result === undefined) throw new Error('Manager operation has no terminal result');
+    if (operation.directorConversationId !== undefined) {
+      if (result.kind !== 'reply' && result.kind !== 'error') throw new Error('Director message requires a reply or error');
+      results.write({ operationId: operation.id, conversationId: conversation.record.id,
+        directorConversationId: operation.directorConversationId, result });
+    }
+    save(conversation, { ...conversation.record, running: null });
+    conversation.active = undefined;
+    conversation.interrupted = false;
+    const outputVersion = version(conversation, operation.id);
+    const state = capture(conversation);
+    operation.release();
+    await publish(conversation, { kind: 'pending', state }, outputVersion);
+    await publish(conversation, { kind: 'result', operationId: operation.id, result }, outputVersion);
+  };
+  const startDirector = (conversation: LoadedConversation): void => {
+    if (closed || conversation.storageFailed || conversation.active !== undefined) return;
+    const message = conversation.record.directorMessages?.[0];
+    if (message === undefined || !scheduler.tryAcquire(conversation.record.id, message.operationId)) return;
+    const operation: Operation = { id: message.operationId, controller: new AbortController(), cleanupComplete: false,
+      directorConversationId: message.directorConversationId,
+      release: () => scheduler.release(conversation.record.id, message.operationId) };
+    conversation.active = operation;
+    operation.completion = Promise.resolve().then(async () => {
+      let started = false;
+      try {
+        if (closed) {
+          conversation.active = undefined;
+          operation.release();
+          return;
+        }
+        const priorPending = conversation.record.pending;
+        save(conversation, { ...conversation.record, directorMessages: conversation.record.directorMessages!.slice(1),
+          lastSpeaker: message.speaker,
+          running: { operationId: message.operationId, kind: 'message', directorConversationId: message.directorConversationId,
+            owner: { pid: input.owner.pid, identity: input.owner.identity } } });
+        started = true;
+        const assignment = await currentAssignment(conversation);
+        operation.controller.signal.throwIfAborted();
+        try { speakers.write({ conversationId: conversation.record.id, operationId: message.operationId, actor: message.speaker }); }
+        catch { throw new ConversationError('storage_error'); }
+        void publish(conversation, { kind: 'running', state: capture(conversation) }, version(conversation, message.operationId));
+        await execute(conversation, operation, { kind: 'message', text: message.text }, assignment, priorPending, undefined);
+      } catch (error) {
+        operation.cleanupComplete = true;
+        if (!started && conversation.storageFailed) {
+          operation.startPending = true;
+          return;
+        }
+        operation.result = operation.controller.signal.aborted
+          ? interruptedResult(conversation, operation.id) : conversationErrorResult(error, conversation.language);
+        try {
+          await finishOperation(conversation, operation);
+        } catch { conversation.storageFailed = true; }
+      }
+    });
+  };
+  const loadConversation = async (record: ConversationRecord, assignment: ConversationDisplayAssignment): Promise<LoadedConversation> => {
+    const cwd = assignment.kind === 'daemon' ? input.configDirectory : assignment.kind === 'repository' ? assignment.repositoryDirectory
+      : createWorkspaceManagerContext({ id: assignment.workspaceId, name: assignment.name,
+        repositoryDirectories: assignment.repositoryDirectories }, input.configDirectory).cwd;
+    const conversation: LoadedConversation = { record, sequence: 0, interrupted: record.running !== null,
+      language: resolveConfigValue(cwd, 'language'), storageFailed: false };
+    const running = record.running;
+    if (running !== null) {
+      let interrupted: string | undefined;
+      if (running.directorConversationId !== undefined) {
+        const existing = results.read(running.operationId);
+        if (existing !== undefined && (existing.conversationId !== record.id || existing.directorConversationId !== running.directorConversationId)) {
+          throw new Error('Director message recovery identity mismatch');
+        }
+        conversation.interrupted = existing === undefined || existing.result.kind === 'error' && existing.result.code === 'interrupted';
+        if (existing === undefined) {
+          const result = interruptedResult(conversation, running.operationId);
+          results.write({ operationId: running.operationId, conversationId: record.id,
+            directorConversationId: running.directorConversationId, result });
+          interrupted = result.message;
+        }
+      }
+      save(conversation, { ...record, running: null, sessionId: null });
+      if (interrupted !== undefined) await notifyManagerTurnFailure(cwd, undefined, new Error(interrupted));
+    }
+    conversations.set(record.id, conversation);
+    scheduler.registerDirector(record.id, { peek: () => conversation.record.directorMessages?.[0]?.operationId,
+      start: () => startDirector(conversation) });
+    return conversation;
+  };
+  const recover = async (conversation: LoadedConversation): Promise<void> => {
+    const operation = conversation.active;
+    if (operation !== undefined && !operation.cleanupComplete) throw new ConversationError('storage_error');
+    if (operation?.directorConversationId !== undefined && !operation.startPending) {
+      await finishOperation(conversation, operation);
+      return;
+    }
+    save(conversation, conversation.recoveryRecord ?? { ...conversation.record, running: null });
+    conversation.active = undefined;
+    operation?.release();
+    scheduler.notify(conversation.record.id);
   };
   const service: ConversationInput = {
     async open(open, delivery) {
@@ -396,15 +528,12 @@ export function createConversationService(input: {
           const record = restored ?? { schemaVersion: 1 as const, id: open.conversationId, agent: assignment.kind === 'daemon' ? 'director' : 'manager', assignment: identity,
             counterpart: binding.counterpart, lastSpeaker: null, provider: plan.ctx.providerType, model: plan.ctx.model ?? null, sessionId: null, bindings: [],
             revision: 0, pending: null, approval: null, running: null };
-          conversation = { record, sequence: 0, interrupted: record.running !== null,
-            language: resolveConfigValue(cwd, 'language'), storageFailed: false };
-          if (record.running !== null) save(conversation, { ...record, running: null, sessionId: null });
-          conversations.set(record.id, conversation);
+          conversation = await loadConversation(record, assignment);
         }
         if (conversation.storageFailed) throw new ConversationError('storage_error');
         const savedBinding = conversation.record.bindings.some((value) => JSON.stringify(value) === JSON.stringify(binding));
         if (!savedBinding) {
-          if (conversation.active !== undefined) throw new ConversationError('busy');
+          if (conversation.active !== undefined && !(speaker.namespace === 'agent' && speaker.id === 'director')) throw new ConversationError('busy');
           save(conversation, { ...conversation.record, bindings: [...conversation.record.bindings, binding] });
         }
         const attachmentId = randomUUID();
@@ -413,6 +542,7 @@ export function createConversationService(input: {
           changes: new SnapshotChanges(), projections: new Map(),
           startupBoundaries: new Map(assignment.repositoryDirectories.map((directory) => [directory, startedAt])) };
         attachments.set(attachmentId, attachment);
+        scheduler.notify(conversation.record.id);
         return { attachmentId, read: readSnapshot(conversation, assignment, attachment) };
       } finally { finishAdmission(); if (existing === undefined) initializing.delete(open.conversationId); }
     },
@@ -434,20 +564,37 @@ export function createConversationService(input: {
         const command = parsedCommand.data;
         if ((conversation.record.assignment.kind === 'daemon' || attachment.speaker.namespace === 'agent' && attachment.speaker.id === 'director')
           && command.kind !== 'message') throw new ConversationError('invalid_input');
+        if (conversation.record.assignment.kind !== 'daemon' && attachment.speaker.namespace === 'agent'
+          && attachment.speaker.id === 'director' && command.kind === 'message') {
+          await currentAssignment(conversation);
+          checkAdmission();
+          const id = allocateOperationId();
+          save(conversation, { ...conversation.record, directorMessages: [...(conversation.record.directorMessages ?? []), {
+            operationId: id, text: command.text, speaker: { namespace: 'agent', id: 'director' },
+            directorConversationId: conversationId({ kind: 'daemon' }),
+          }] });
+          scheduler.notify(conversation.record.id);
+          return { kind: 'accepted', operationId: id };
+        }
         if (command.kind === 'abort_turn') {
           const active = conversation.active;
           if (active === undefined || active.id !== command.operationId) throw new ConversationError('invalid_input');
           active.controller.abort();
-          if (conversation.record.approval?.state !== 'reserved') save(conversation, { ...conversation.record,
+          if (active.directorConversationId === undefined && conversation.record.approval?.state !== 'reserved') save(conversation, { ...conversation.record,
             pending: null, sessionId: null, revision: nextRevision(conversation.record.revision) });
           return { kind: 'accepted', operationId: active.id };
         }
-        if (conversation.active !== undefined) return { kind: 'busy', operationId: conversation.active.id };
+        const busy = conversation.active?.id ?? scheduler.busyOperationId(conversation.record.id);
+        if (busy !== undefined) return { kind: 'busy', operationId: busy };
         if (command.kind === 'approve_summary' && command.requirePending === true
           && (conversation.record.pending?.revision !== command.revision || conversation.record.revision !== command.revision)) {
           throw new ConversationError('stale_summary');
         }
-        operation = { id: randomUUID(), controller: new AbortController(), cleanupComplete: false };
+        const id = allocateOperationId();
+        if (!scheduler.tryAcquire(conversation.record.id, id)) throw new ConversationError('busy');
+        const key = conversation.record.id;
+        operation = { id, controller: new AbortController(), cleanupComplete: false,
+          release: () => scheduler.release(key, id) };
         conversation.active = operation;
         const assignment = await currentAssignment(conversation);
         checkAdmission();
@@ -493,7 +640,10 @@ export function createConversationService(input: {
         return { kind: 'accepted', operationId: operation.id };
       } catch (error) {
         if (operation !== undefined) operation.cleanupComplete = true;
-        if (conversation !== undefined && operation !== undefined && conversation.active === operation && !conversation.storageFailed) conversation.active = undefined;
+        if (conversation !== undefined && operation !== undefined && conversation.active === operation && !conversation.storageFailed) {
+          conversation.active = undefined;
+          operation.release();
+        }
         return conversationErrorResult(error, conversation?.language ?? 'en');
       } finally { finishAdmission(); }
     },
@@ -501,9 +651,7 @@ export function createConversationService(input: {
       const attachment = getAttachment(attachmentId);
       const { conversation } = attachment;
       if (conversation.storageFailed) {
-        if (conversation.active !== undefined && !conversation.active.cleanupComplete) throw new ConversationError('storage_error');
-        save(conversation, conversation.recoveryRecord ?? { ...conversation.record, running: null });
-        conversation.active = undefined;
+        await recover(conversation);
       }
       return readSnapshot(conversation, await currentAssignment(conversation), attachment);
     },
@@ -511,12 +659,34 @@ export function createConversationService(input: {
   };
   return {
     ...service,
+    async restore(): Promise<void> {
+      restoring = true;
+      try {
+        for await (const record of store.iterate()) {
+          if (closed) return;
+          if ((record.directorMessages?.length ?? 0) === 0 && record.running?.directorConversationId === undefined) continue;
+          if (!conversations.has(record.id)) await loadConversation(record, await resolveAssignment(record.assignment));
+        }
+      } finally { restoring = false; }
+      for (const conversation of conversations.values()) scheduler.notify(conversation.record.id);
+    },
+    async maintain(): Promise<void> {
+      for (const conversation of conversations.values()) {
+        if (closed) return;
+        if (conversation.storageFailed) {
+          if (conversation.active !== undefined && !conversation.active.cleanupComplete) continue;
+          try { await recover(conversation); } catch { continue; }
+        }
+        scheduler.notify(conversation.record.id);
+      }
+    },
     async notifyDirector(notification: { id: string; message: string }): Promise<void> {
       const conversation = conversations.get(conversationId({ kind: 'daemon' }));
       if (conversation !== undefined) await publish(conversation, { kind: 'notice', ...notification }, version(conversation, conversation.active?.id ?? null));
     },
     get attachmentCount() { return attachments.size; },
-    get activeOperationCount() { return initializing.size + [...conversations.values()].filter(({ active }) => active !== undefined).length; },
+    get activeOperationCount() { return Number(restoring) + initializing.size + [...conversations.values()]
+      .filter(({ active, record, storageFailed }) => active !== undefined || storageFailed || (record.directorMessages?.length ?? 0) > 0).length; },
     stopAccepting() {
       if (closed) return;
       closed = true;

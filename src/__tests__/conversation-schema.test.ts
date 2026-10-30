@@ -64,4 +64,26 @@ describe('conversation identity and schema', () => {
     expect(ConversationRecordSchema.safeParse({ ...record, pending: null }).success).toBe(false);
     expect(ConversationRecordSchema.safeParse({ ...record, approval: { ...record.approval, revision: 3 } }).success).toBe(false);
   });
+
+  it('allows only director inputs with their source conversation in the waiting list', () => {
+    const record = conversationRecord('/work/example');
+    const message = { operationId: '00000000-0000-4000-8000-000000000001', text: 'request',
+      speaker: { namespace: 'agent', id: 'director' }, directorConversationId: conversationId({ kind: 'daemon' }) };
+    expect(ConversationRecordSchema.parse({ ...record, directorMessages: [message] }).directorMessages).toEqual([message]);
+    expect(ConversationRecordSchema.safeParse({ ...record, directorMessages: [{ ...message, speaker: record.counterpart }] }).success).toBe(false);
+    expect(ConversationRecordSchema.safeParse({ ...record, directorMessages: [{ ...message, directorConversationId: record.id }] }).success).toBe(false);
+    expect(ConversationRecordSchema.safeParse({ ...directorConversationRecord(), directorMessages: [message] }).success).toBe(false);
+    expect(ConversationRecordSchema.safeParse({ ...record, directorMessages: [message, message] }).success).toBe(false);
+  });
+
+  it('requires an active director speaker and removes its operation ID from the waiting list on start', () => {
+    const record = conversationRecord('/work/example');
+    const message = { operationId: '00000000-0000-4000-8000-000000000001', text: 'request',
+      speaker: { namespace: 'agent', id: 'director' }, directorConversationId: conversationId({ kind: 'daemon' }) };
+    const running = { operationId: message.operationId, directorConversationId: message.directorConversationId,
+      kind: 'message', owner: { pid: 1234, identity: { startTime: 'owner' } } };
+    expect(ConversationRecordSchema.safeParse({ ...record, running }).success).toBe(false);
+    expect(ConversationRecordSchema.safeParse({ ...record, lastSpeaker: message.speaker, running, directorMessages: [message] }).success).toBe(false);
+    expect(ConversationRecordSchema.parse({ ...record, lastSpeaker: message.speaker, running, directorMessages: [] }).pending).toEqual(record.pending);
+  });
 });

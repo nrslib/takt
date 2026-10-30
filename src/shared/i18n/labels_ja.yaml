@@ -445,6 +445,7 @@ manager:
     disconnected: "daemon に再接続しています。"
     incomplete: "読み出しが不完全です。再読み込みが完了するまで要約を承認できません。"
     interrupted: "前の処理は中断されました。新しい発言を送信できます。"
+    director_interrupted: "directorの伝言（操作ID: {operationId}）は中断されました。自動では再実行しません。"
     permission_appended: "許可文を追記しました。回答の保存結果を確認してください。"
     assignment_changed: '担当が変わりました。現在の担当で会話を開き直してください。'
     busy: "処理中です。完了してからもう一度送信してください。"

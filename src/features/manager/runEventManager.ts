@@ -17,10 +17,15 @@ import { buildGoalTurnContext } from './turnContext.js';
 import { notifyManagerTurnFailure } from './turnFailureNotification.js';
 import { isGoalPatrolDue } from './patrol.js';
 import { supportsManagerPermissionJudge } from './permissionJudgeSupport.js';
+import { randomUUID } from 'node:crypto';
+import { ManagerTurnScheduler } from './managerTurnScheduler.js';
+import { resolveCurrentManagerAssignment } from './assignment.js';
+import { conversationId } from '../../infra/conversations/identity.js';
 
 const MANAGER_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
-export function createRunEventManager(cwd: string) {
+export function createRunEventManager(cwd: string, scheduler?: ManagerTurnScheduler) {
+  const turns = scheduler ?? new ManagerTurnScheduler();
   // Failed events remain in the inbox; polling does not retry them.
   const failedEvents = new Set<string>();
   let executor: ReturnType<typeof createManagerTurnExecutor> | undefined;
@@ -55,6 +60,7 @@ export function createRunEventManager(cwd: string) {
     budget.remaining--;
     const store = new GoalStore(cwd);
     const patrol = saved.event.kind === 'patrol';
+    let release: (() => void) | undefined;
     try {
       let goal = await store.get(saved.event.goalId);
       if (patrol && !canProcessPatrol(goal, saved)) {
@@ -76,6 +82,20 @@ export function createRunEventManager(cwd: string) {
           }
         }
         if (signal.aborted) return false;
+        const identity = { kind: 'repository' as const, repositoryDirectory: cwd };
+        const assignment = await resolveCurrentManagerAssignment(identity, getGlobalConfigDir());
+        release = await turns.acquire(conversationId(assignment), randomUUID(), signal);
+        goal = await store.get(saved.event.goalId);
+        if (patrol && !canProcessPatrol(goal, saved)) {
+          deleteManagerEvent(saved);
+          return true;
+        }
+        if (goal.executionStatus === 'paused') { budget.remaining++; return false; }
+        if (goal.executionStatus === 'aborted') {
+          deleteManagerEvent(saved);
+          failedEvents.delete(saved.filePath);
+          return true;
+        }
         const timeout = new AbortController();
         let timer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
           timeout.abort(new Error('Manager provider produced no output for 30 minutes'));
@@ -131,6 +151,8 @@ export function createRunEventManager(cwd: string) {
       }
       failedEvents.add(saved.filePath);
       return false;
+    } finally {
+      release?.();
     }
   };
   return {

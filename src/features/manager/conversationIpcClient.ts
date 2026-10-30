@@ -120,15 +120,15 @@ export class ConversationIpcClient {
 
   private async open(): Promise<void> {
     this.update({ connection: 'connecting', readStatus: 'reading' });
+    const port = this.options?.port ?? createTuiConversationPort(this.configDirectory, { deliver: async () => ({ kind: 'unavailable', reason: 'IPC delivery only' }) });
+    const resolved = await port.resolve(this.assignment);
+    if (this.closed) return;
     await ensureDaemon();
     if (this.closed) return;
     const owner = readDaemonOwner(this.configDirectory);
     const state = readDaemonIpcState(this.configDirectory);
     if (owner === undefined || state === undefined || !isDaemonOwnerRunning(owner) || !ipcStateMatchesOwner(state, owner)
       || state.endpoint !== conversationIpcEndpoint(this.configDirectory, process.platform, process.getuid?.() ?? 0)) throw new Error('Daemon IPC identity mismatch');
-    const port = this.options?.port ?? createTuiConversationPort(this.configDirectory, { deliver: async () => ({ kind: 'unavailable', reason: 'IPC delivery only' }) });
-    const resolved = await port.resolve(this.assignment);
-    if (this.closed) return;
     if (this.resolved?.conversationId !== resolved.conversationId) {
       this.committedItems.clear();
       this.items.clear();
