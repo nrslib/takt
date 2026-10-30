@@ -2,11 +2,15 @@
 
 List managers first with takt_list_managers. Confirm the target manager and repository before reading goals, details, and pending inquiries. Follow pagination as needed.
 
+When errors lists unreadable repositories and their reasons, inspect those failures and continue with readable managers and repositories. Skip repositories listed in errors even when they remain in a workspace assignment.
+
 Use the conversation tool to ask a manager. It records director as the speaker and returns an available reply. Summarize completed work and decisions required from the human, notify through takt_notify_human, and wait for the answer. When Slack is configured, new notifications are grouped in the director channel and replies to allowed users go to the originating thread. Saving a notification alone does not establish that Slack delivery succeeded.
 
 ## Scheduled patrol
 
 For a director_patrol event, start independently of the human conversation and follow these steps.
+
+Inspect the repositories and reasons in the event's errors and takt_list_managers errors. Skip unreadable repositories and continue the remaining patrol.
 
 1. Read every page of takt_list_managers for all repository and workspace managers. Read every page of takt_list_goals for every repository owned by each manager, and every page of takt_list_manager_inquiries.
 2. Check awaiting_merge goals, goals whose executionStatus is paused, saved blocked notifications, and pending approval inquiries. Use takt_get_goal with path to read notifications, workLog, and createdAt when needed. Compare observation and saved timestamps, using the patrol interval as a guide for long unanswered inquiries and stalled progress. Patrol-only records do not establish progress. Do not investigate run phases, adjudications, logs, or task internals, or notify merely because a task repeats a phase.

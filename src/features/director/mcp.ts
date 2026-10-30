@@ -33,10 +33,10 @@ export function createDirectorMcpServer(configDirectory: string, notifications: 
   server.registerTool('takt_list_managers', { description: 'List every manager assigned to this daemon.', inputSchema: z.object(page).strict() },
     guarded(async (value: { offset?: number; limit?: number }) => {
       const offset = value.offset ?? 0;
-      const managers = await listDirectorManagers(configDirectory);
+      const { managers, errors } = await listDirectorManagers(configDirectory);
       return pagedResult('managers', managers.slice(offset, offset + (value.limit ?? 50)).map((assignment) => ({
         id: conversationId(assignment), assignment,
-      })), managers.length, offset);
+      })), managers.length, offset, false, { errors });
     }));
   server.registerTool('takt_list_goals', { description: 'Read saved goals and states of an assigned manager repository.',
     inputSchema: listGoalsInputSchema.extend({ managerId }).strict() }, guarded(async (value: z.infer<typeof listGoalsInputSchema> & { managerId: string }) => {

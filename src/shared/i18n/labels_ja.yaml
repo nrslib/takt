@@ -428,6 +428,7 @@ tui:
 director:
   slackNotifications: "director からのお知らせ（完了・人の判断が必要な事項）"
   patrolFailed: "director の見回りに失敗しました"
+  projectUnreadable: "director が project を読み取れませんでした"
   description: "実験的な director 会話 TUI を開きます"
   experimentalNotice: "director は実験的機能です。動作や保存形式は変更されます。"
   costNotice: "director は AI を動かすため、provider API の費用がかかります。"
