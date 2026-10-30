@@ -9,6 +9,7 @@ import { cloneWorkflowResumePoint, parseWorkflowResumePoint } from '../core/work
 import { inheritResumeReportSnapshot } from '../core/workflow/run/resume-report-snapshot.js';
 import { createSharedRuntime } from '../core/workflow/engine/WorkflowEngineSetup.js';
 import { makeInstructionContext, makeStep } from './test-helpers.js';
+import type { WorkflowResumePointEntry } from '../core/models/types.js';
 
 describe('report generation evidence', () => {
   const roots: string[] = [];
@@ -36,6 +37,58 @@ describe('report generation evidence', () => {
 
   afterEach(() => {
     for (const path of roots.splice(0)) rmSync(path, { recursive: true, force: true });
+  });
+
+  it('restores recoverable input evidence without sharing mutable checkpoint frames', () => {
+    const reports = join(root(), 'reports');
+    const stack: WorkflowResumePointEntry[] = [{
+      workflow: 'review', workflow_ref: 'review', kind: 'agent', step: 'consume', occurrence: 1,
+      step_iterations: { consume: 1 },
+    }];
+    const index = new ReportGenerationIndex();
+    index.record(reports, reports, 'review.md', false, stack);
+    stack[0] = { ...stack[0]!, occurrence: 2 };
+    const saved = parseWorkflowResumePoint(JSON.parse(JSON.stringify({
+      version: 2, stack: [{ ...stack[0], occurrence: 1 }], iteration: 1, elapsed_ms: 0,
+      workflow_call_invocations: {}, workflow_step_participations: {},
+      missing_report_generations: index.serialized(),
+      report_input_recoveries: index.serializedInputRecoveries(),
+    })));
+    const cloned = cloneWorkflowResumePoint(saved);
+    saved.report_input_recoveries!['review.md']![0] = { ...saved.report_input_recoveries!['review.md']![0]!, occurrence: 3 };
+    saved.report_input_recoveries!['review.md']![0]!.step_iterations!.consume = 3;
+    expect(cloned.report_input_recoveries!['review.md']![0]!.step_iterations!.consume).toBe(1);
+    const restored = createSharedRuntime(cloned, 5).reportGenerationIndex!;
+    const newReports = join(root(), 'reports');
+    expect(restored.canRecoverInput(newReports, newReports, 'review.md', cloned.stack)).toBe(true);
+    cloned.report_input_recoveries!['review.md']![0] = { ...cloned.report_input_recoveries!['review.md']![0]!, occurrence: 4 };
+    expect(restored.canRecoverInput(newReports, newReports, 'review.md', cloned.stack)).toBe(true);
+    expect(restored.canRecoverInput(newReports, newReports, 'other.md', cloned.stack)).toBe(false);
+    expect(restored.canRecoverInput(newReports, join(newReports, 'child'), 'review.md', cloned.stack)).toBe(false);
+    expect(restored.canRecoverInput(newReports, newReports, 'review.md', stack)).toBe(false);
+    expect(restored.canRecoverInput(newReports, newReports, 'review.md', undefined)).toBe(false);
+  });
+
+  it('replaces recovery evidence with each latest generation result', () => {
+    const reports = join(root(), 'reports');
+    const stack: WorkflowResumePointEntry[] = [{
+      workflow: 'review', workflow_ref: 'review', kind: 'agent', step: 'consume', occurrence: 1,
+    }];
+    const index = new ReportGenerationIndex();
+    index.record(reports, reports, 'review.md', false, stack);
+    expect(index.canRecoverInput(reports, reports, 'review.md', stack)).toBe(true);
+    index.record(reports, reports, 'review.md', false);
+    const restored = new ReportGenerationIndex(index.serialized(), index.serializedInputRecoveries());
+    expect(restored.isMissing(reports, reports, 'review.md')).toBe(true);
+    expect(restored.canRecoverInput(reports, reports, 'review.md', stack)).toBe(false);
+    restored.record(reports, reports, 'review.md', false, stack);
+    restored.record(reports, reports, 'review.md', true);
+    expect(restored.isMissing(reports, reports, 'review.md')).toBe(false);
+    expect(restored.serializedInputRecoveries()).toEqual({});
+    const withoutEvidence = new ReportGenerationIndex({ '': ['review.md'] });
+    expect(withoutEvidence.canRecoverInput(reports, reports, 'review.md', stack)).toBe(false);
+    const withoutFailure = new ReportGenerationIndex({}, { 'review.md': stack });
+    expect(withoutFailure.canRecoverInput(reports, reports, 'review.md', stack)).toBe(false);
   });
 
   it('follows the last same-name attempt through failure, alias success, and retry failure', () => {
