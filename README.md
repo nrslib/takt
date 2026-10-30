@@ -291,6 +291,7 @@ See the [Builtin Catalog](./docs/builtin-catalog.md) for all workflows and perso
 | `takt watch` | Monitor the task queue and auto-execute pending tasks (resident process) |
 | `takt ui` | Open the experimental Viewer-first Web UI on `http://127.0.0.1:20525` |
 | `takt manager` | Open the experimental goal conversation TUI connected to the daemon. Use `Ctrl+R` for inquiries and `Ctrl+G` for ongoing goals; both keys work while manager is processing. Type `/make-goal` in the input box and press `Enter` to create a goal proposal from the current conversation. Even when a proposal is already displayed, this only regenerates it; it does not register the goal. Use `↑` Approve / `↓` Continue / `Enter` Confirm, then select Approve and press `Enter` to register it. Typing `/` shows `/make-goal` as a completion candidate; `Tab` accepts it. Other input starting with `/` is sent as a regular message. If material is insufficient, continue the conversation. To add, remove, or rename a managed repository, ask in the conversation. Behavior, settings, and saved data formats may change without notice. Automatically queues and runs tasks, incurring provider API costs. With claude (claude-sdk) or codex, AI reviews tool use before execution. On startup, manager starts the daemon if needed and waits until it is ready; the daemon runs conversations, processes events, and performs patrols. Stop the daemon with `takt daemon stop` |
+| `takt director` | Open the experimental conversation TUI for oversight across managers; see [Director](#director-experimental) |
 | `takt list` | Manage task branches (merge, retry, requeue, stop, force-fail, instruct, delete) |
 | `takt #N` | Use a GitHub Issue as the initial input for a task |
 | `takt merge` | Review, fix, and merge pull requests with a workflow |
@@ -311,8 +312,6 @@ If another message is submitted while the same conversation is processing, it is
 The daemon does not exit automatically while a TUI is connected or an accepted conversation operation is running. To stop it explicitly, use `takt daemon stop`.
 
 **Slack conversations:** You can also talk to the same manager conversation from a configured Slack channel. Replies stay in the thread where you sent the message; TUI replies are not forwarded to Slack. See [Slack conversations with manager](./docs/configuration.md#slack-conversations-with-manager) for the Socket Mode App manifest, token environment variables, repository settings, and how to answer inquiries. Completion notices continue to use the separate `TAKT_NOTIFY_WEBHOOK` Incoming Webhook.
-
-**Director on Slack:** Configure `director.slack` in `~/.takt/config.yaml` to receive grouped director notices and talk to director in its channel. Replies stay in the original thread, and only permitted users are accepted. See [Slack conversations with director](./docs/configuration.md#slack-conversations-with-director).
 
 In a conversation thread, send `/make-goal` to create a proposal. Use **Approve registration** or **Continue conversation**; buttons on an outdated proposal no longer work.
 
@@ -379,6 +378,23 @@ The judge has a 30-second deadline. A timeout follows the same human confirmatio
 Exec starts from the previous exec configuration, or the default configuration on first run; pass a preset name to start from that preset. Use `/setup` during the conversation to edit agents, loop detection thresholds, presets, and referenced facets. When `/go` runs, TAKT generates `.takt/exec/workflow.yaml` and executes it through the normal workflow engine; use `/cancel` to exit without running. Image attachments are supported while editing input (`/paste-image`, `Ctrl+V`, or an OSC 1337 inline-image paste).
 
 See [Instant Exec Mode](./docs/cli-reference.md#instant-exec-mode) in the CLI Reference for preset resolution order, `/setup` persistence, image handling limits, and `session_key` behavior.
+
+## Director (experimental)
+
+Open the director conversation TUI in an interactive terminal:
+
+```bash
+takt director
+takt director --help
+```
+
+The daemon owns the conversation. Close and reopen the TUI to continue it; starting from another assigned repository connects to the same conversation. Previous messages and replies are not redisplayed. Director is experimental: behavior and saved data formats may change without notice. Both conversations and scheduled patrols call the provider and incur costs.
+
+Manager advances goals within its repository or workspace, submits tasks, integrates results, and requests completion. Director checks goals and unanswered inquiries across all managers, notifies the human when attention is needed, and communicates through manager conversations. Human decisions remain with the human: director only relays an explicit request to merge to the responsible manager and never performs the merge itself.
+
+Set `director.patrol_interval` (seconds, default `900`) and `director.slack.channel_id` / `director.slack.allowed_user_ids` in global `~/.takt/config.yaml`. See the [global config field reference](./docs/configuration.md#global-config-field-reference).
+
+**Director on Slack:** Use the same Slack App and `TAKT_SLACK_APP_TOKEN` / `TAKT_SLACK_BOT_TOKEN` as manager, invite the bot to the director channel, and restart the daemon after changing Slack settings. Configuring `director.slack` enables grouped notices and conversations with permitted users; replies stay in the original thread. See [Slack conversations with director](./docs/configuration.md#slack-conversations-with-director) for setup and [Director patrol](./docs/goal-management.md#director-patrol) for the full responsibilities and restrictions.
 
 ## Configuration
 
