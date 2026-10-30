@@ -133,6 +133,20 @@ beforeEach(() => {
 });
 afterEach(async () => { vi.restoreAllMocks(); await service.close(); });
 
+it.each([undefined, false])('shares accepted message text with both attachments only when display is enabled (%s)', async (display) => {
+  const first = await open(); await open();
+  const command = { kind: 'message' as const, text: 'Shared input', ...(display === undefined ? {} : { display }) };
+  const result = await submit(first.attachmentId, command);
+  expect(result.kind).toBe('accepted');
+  await finished();
+  const messages = outputs.filter((output) => output.kind === 'user_message');
+  expect(messages).toEqual(display === false ? [] : [
+    { kind: 'user_message', operationId: lastOperationId, message: command.text },
+    { kind: 'user_message', operationId: lastOperationId, message: command.text },
+  ]);
+  expect(execute).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ instruction: command.text }));
+});
+
 it('reopens the same conversation with two independent attachments and no provider call', async () => {
   const first = await open();
   const second = await open();
@@ -433,6 +447,7 @@ it('keeps an accepted operation running after detach and exposes its saved pendi
     ];
     for (const command of busyCommands) expect(await submit(second.attachmentId, command))
       .toEqual({ kind: 'busy', operationId: 'operationId' in accepted ? accepted.operationId : '' });
+    expect(outputs.filter((output) => output.kind === 'user_message').map((output) => output.message)).toEqual(['first', 'first']);
     service.detach(first.attachmentId); service.detach(second.attachmentId);
     expect(execute.mock.calls[0]![0].abortSignal.aborted).toBe(false);
     expect(service.activeOperationCount).toBe(1);

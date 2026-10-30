@@ -74,6 +74,40 @@ beforeEach(async () => {
 });
 afterEach(async () => { cleanup(); client.close(); await service.close(); await server.close(); vi.restoreAllMocks(); });
 async function complete() { await vi.waitFor(() => expect(client.getSnapshot().readStatus).toBe('complete'), { timeout: 10_000 }); }
+
+it.each([
+  { size: 'short', text: 'Keep reading while this request is admitted' },
+  { size: 'larger than an input batch', text: 'x'.repeat(16 * 1024) },
+])('keeps both snapshots within their deadline while a $size message response is pending', async ({ text }) => {
+  const second = new ConversationIpcClient(assignment, { provider: 'mock' });
+  const pendingReads: Promise<SnapshotRead>[] = [];
+  try {
+    await client.connect(); await complete(); await second.connect();
+    await vi.waitFor(() => expect(second.getSnapshot().readStatus).toBe('complete'));
+    // 実測した各要求の正常な処理時間内で、応答待ちの直列化を識別する。
+    const submitting = vi.spyOn(service, 'submit').mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => { setTimeout(resolve, 3000); });
+      return { kind: 'accepted', operationId: randomUUID() };
+    });
+    const snapshot = service.snapshot.bind(service);
+    vi.spyOn(service, 'snapshot').mockImplementation((id) => {
+      const reading = snapshot(id).then(async (read) => {
+        await new Promise<void>((resolve) => { setTimeout(resolve, 3000); });
+        return read;
+      });
+      pendingReads.push(reading);
+      return reading;
+    });
+    const message = client.submit({ kind: 'message', text });
+    await vi.waitFor(() => expect(submitting).toHaveBeenCalledOnce());
+    await expect(Promise.all([message, client.refresh(), second.refresh()])).resolves.toEqual([
+      { kind: 'accepted', operationId: expect.any(String) }, undefined, undefined,
+    ]);
+    await complete();
+    expect(second.getSnapshot().connection).toBe('connected');
+  } finally { await Promise.allSettled(pendingReads); second.close(); }
+});
+
 function gate() {
   let release!: () => void;
   const promise = new Promise<void>((resolve) => { release = resolve; });
@@ -118,7 +152,7 @@ it('regenerates with /make-goal on the same screen and registers the new proposa
   }
   app.stdin.write('\r');
   await waitFor(() => expect(submissions.mock.calls.map(([command]) => command)).toEqual([
-    { kind: 'message', text: getLabel('manager.goSummaryRequest', 'en') },
+    { kind: 'message', text: getLabel('manager.goSummaryRequest', 'en'), display: false },
   ]));
   await waitFor(() => {
     expect(app.lastFrame()).toContain(summary.objective);

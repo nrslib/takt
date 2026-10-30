@@ -64,13 +64,14 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
   let authenticated = false;
   let pumping = false;
   let pendingRequests = 0;
+  let pendingRequestBytes = 0;
   const controlWaiters = new Set<() => void>();
   const wakeControls = (): void => { for (const wake of controlWaiters) wake(); controlWaiters.clear(); };
   let wakeWriter: (() => void) | undefined;
   let snapshot: ActiveRead | undefined;
   let control: { value: unknown; resolve(): void; reject(error: unknown): void } | undefined;
   let state: { conversationId: string; output: PortOutput; version: OutputVersion } | undefined;
-  const outputs: Array<{ iterator: ReturnType<typeof conversationTransferFrames>;
+  const outputs: Array<{ iterator: ReturnType<typeof conversationTransferFrames>; started: boolean;
     resolve(result: { kind: 'delivered' } | { kind: 'unavailable'; reason: string }): void }> = [];
   const cancelRead = (): void => {
     const old = snapshot;
@@ -111,7 +112,7 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
           current.boundary = next.value.boundary;
           continue;
         }
-        if (state !== undefined && (current === undefined || current.boundary)) {
+        if (state !== undefined && outputs[0]?.started !== true && (current === undefined || current.boundary)) {
           const latest = state; state = undefined;
           for await (const fragment of conversationTransferFrames(latest.conversationId,
             { ...latest.version, transferId: randomUUID() }, 'output', (async function* () { yield latest.output; })())) {
@@ -123,7 +124,7 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
           const current = outputs[0]!;
           const next = await current.iterator.next();
           if (next.done) { outputs.shift(); current.resolve({ kind: 'delivered' }); }
-          else await writeConversationFrame(socket, next.value.frame);
+          else { await writeConversationFrame(socket, next.value.frame); current.started = true; }
           continue;
         }
         if (current === undefined) break;
@@ -184,7 +185,7 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
       }
       return new Promise((resolve) => {
         outputs.push({ iterator: conversationTransferFrames(conversationId, { ...version, transferId: randomUUID() },
-          'output', (async function* () { yield value; })()), resolve });
+          'output', (async function* () { yield value; })()), started: false, resolve });
         wakeWriter?.();
         void pump();
       });
@@ -250,22 +251,25 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
     if (reading) return;
     reading = true;
     try {
-      while (!socket.destroyed && socket.readableLength > 0) {
+      while (!socket.destroyed && socket.readableLength > 0
+        && (pendingRequestBytes < INPUT_BATCH_BYTES || pendingRequests === 1)) {
         const chunk = socket.read(Math.min(INPUT_BATCH_BYTES, socket.readableLength)) as Buffer | null;
         if (chunk === null) break;
-        // Admit every complete frame in this bounded batch before awaiting any
-        // response. Only admitted results wait for the writer; mutations are
-        // never deferred for reevaluation. Each frame consumes at least one
-        // newline byte, bounding producers by INPUT_BATCH_BYTES per connection.
-        const responses: Promise<void>[] = [];
+        // Admit the whole bounded batch so competing mutations are never queued
+        // for reevaluation. One large pending frame still leaves room for a
+        // second request. Frame limits and the byte budget bound further input.
         for (const value of decoder.decode(chunk)) {
+          const requestBytes = Buffer.byteLength(JSON.stringify(value)!) + 1;
           pendingRequests++;
-          responses.push(dispatch(value).catch(fail).finally(() => {
+          pendingRequestBytes += requestBytes;
+          void dispatch(value).catch(fail).finally(() => {
             pendingRequests--;
+            pendingRequestBytes -= requestBytes;
             void pump();
-          }));
+            void receive();
+          });
         }
-        await Promise.all(responses);
+        await new Promise<void>((resolve) => { setImmediate(resolve); });
       }
     } catch { fail(); }
     finally { reading = false; }
