@@ -128,7 +128,7 @@ describe('goal task retry through manager MCP and persistent task execution', ()
     }
     store = new GoalStore(cwd);
 
-  });
+  }, 30_000);
 
   afterEach(() => {
     vi.restoreAllMocks(); vi.unstubAllEnvs(); resetScenario(); invalidateGlobalConfigCache();

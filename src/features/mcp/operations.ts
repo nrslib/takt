@@ -8,6 +8,7 @@ import { TaskRunner } from '../../infra/task/index.js';
 import { loadRunSessionPage } from '../interactive/runSessionReader.js';
 import { jsonResult, textResult, pagedResult, MCP_TEXT_PAGE_BYTES } from './response.js';
 import { goalSummary, goalValuePage, selectGoalValue } from './goalResponse.js';
+import { getTaskGoalIntegrations } from './goalTaskIntegration.js';
 export { jsonResult } from './response.js';
 import {
   issueTellableRunningTask,
@@ -150,15 +151,17 @@ function taskSummary(cwd: string, task: ReturnType<TaskRunner['listTaskStateItem
   return summary;
 }
 
-export function listTaktTasks(
+export async function listTaktTasks(
   input: ListTasksInput,
   deps: McpOperationDependencies = {},
-): CallToolResult {
+): Promise<CallToolResult> {
   try {
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
     const tasks = new TaskRunner(input.cwd).listTaskStateItems();
     const offset = input.offset ?? 0;
-    const selected = tasks.slice(offset, offset + (input.limit ?? 50)).map((task) => taskSummary(input.cwd, task));
+    const page = tasks.slice(offset, offset + (input.limit ?? 50));
+    const integrations = await getTaskGoalIntegrations(input.cwd, page);
+    const selected = page.map((task, index) => ({ ...taskSummary(input.cwd, task), ...integrations[index] }));
     return pagedResult('tasks', selected, tasks.length, offset);
   } catch (error) {
     return errorResult('Task list failed', error);
