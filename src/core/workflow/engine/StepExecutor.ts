@@ -7,7 +7,7 @@
  */
 
 import { existsSync, writeFileSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { renderPhaseContext, stripPhaseContext } from '../../../shared/prompts/phase-context.js';
 import type {
   AgentWorkflowStep,
@@ -200,6 +200,7 @@ export interface StepExecutorDeps {
   readonly getReportDir: () => string;
   readonly getRunPaths: () => RunPaths;
   readonly reportGenerationIndex?: import('../report-generation-index.js').ReportGenerationIndex;
+  readonly isResumedReportInputStep?: (step: WorkflowStep, occurrence: number) => boolean;
   readonly getFailureDir: () => string;
   readonly getLanguage: () => Language | undefined;
   readonly getInteractive: () => boolean;
@@ -1440,12 +1441,18 @@ export class StepExecutor {
     return this.prepareInstruction(step, stepIteration, state, task, maxSteps, fallbackContext, transaction).text;
   }
 
-  recordReportGeneration(reportDir: string, reportName: string, written: boolean): void {
+  recordReportGeneration(
+    reportDir: string,
+    reportName: string,
+    written: boolean,
+    recovery?: readonly WorkflowResumePointEntry[],
+  ): void {
     this.deps.reportGenerationIndex?.record(
       this.deps.getRunPaths().reportsRootAbs,
       reportDir,
       reportName,
       written,
+      recovery,
     );
   }
 
@@ -1455,11 +1462,19 @@ export class StepExecutor {
     reportDir: string,
     writtenReports: ReadonlySet<string>,
     reportGenerationError?: ReportPhaseGenerationError,
+    injectedReports?: readonly InjectedReport[],
   ): void {
     const missingReports = getReportFiles(step.outputContracts)
       .filter((name) => !writtenReports.has(name));
     for (const reportName of missingReports) {
-      this.recordReportGeneration(reportDir, reportName, false);
+      const stack = this.deps.getCurrentWorkflowStack?.();
+      const frame = stack?.at(-1);
+      const readLocalInput = injectedReports?.some((report) => (
+        report.scope === 'step' && resolve(reportDir, report.reference) === resolve(reportDir, reportName)
+      )) === true;
+      const recovery = readLocalInput && frame?.kind === 'agent' && frame.step === step.name
+        ? stack : undefined;
+      this.recordReportGeneration(reportDir, reportName, false, recovery);
     }
     const consumers = missingReports.length === 0 ? [] : this.deps.getWorkflowSteps().flatMap((workflowStep) => [
       workflowStep,
@@ -1544,6 +1559,24 @@ export class StepExecutor {
     // read-only フォールバックするための reports ルート。engine の runPaths から
     // 明示的に渡す（リゾルバ側でパス文字列から推測しない）。
     const reportsRootDir = this.deps.getRunPaths().reportsRootAbs;
+    const readableResumeOutputs = new Set(
+      this.deps.isResumedReportInputStep?.(step, stepIteration) === true
+        ? getReportFiles(step.outputContracts)
+          .filter((name) => this.deps.reportGenerationIndex?.canRecoverInput(
+            reportsRootDir, reportDir, name, this.deps.getCurrentWorkflowStack?.(),
+          ) === true)
+          .map((name) => resolve(reportDir, name))
+        : [],
+    );
+    const isUnavailableReportPath = (path: string): boolean => {
+      const resolvedPath = resolve(path);
+      return !readableResumeOutputs.has(resolvedPath)
+        && this.deps.reportGenerationIndex?.isMissing(
+          reportsRootDir,
+          dirname(resolvedPath),
+          basename(resolvedPath),
+        ) === true;
+    };
     const declaredReportInputs = [
       this.deps.getInheritedReportInputs(),
       this.deps.resolveDeclaredReportInputs(step, state, reportDir),
@@ -1568,14 +1601,9 @@ export class StepExecutor {
       workflowAssignment: this.deps.getWorkflowAssignment?.(step),
       workflowCallVars: this.deps.getWorkflowCallVars?.(),
       declaredReportInputs,
-      unavailableLocalReports: this.deps.reportGenerationIndex?.missingNames(reportsRootDir, reportDir),
-      isUnavailableReportPath: this.deps.reportGenerationIndex === undefined
-        ? undefined
-        : (path) => this.deps.reportGenerationIndex!.isMissing(
-            reportsRootDir,
-            dirname(path),
-            basename(path),
-          ),
+      unavailableLocalReports: this.deps.reportGenerationIndex?.missingNames(reportsRootDir, reportDir)
+        .filter((name) => isUnavailableReportPath(resolve(reportDir, name))),
+      isUnavailableReportPath,
       retryNote: this.deps.getRetryNote(),
       prContext: this.deps.getPrContext?.(),
       reviewScope: this.deps.getReviewScope(),
@@ -1745,7 +1773,7 @@ export class StepExecutor {
           throw reportError;
         }
       }
-      this.finalizeReportGeneration(step, state, phaseCtx.reportDir, writtenReports, reportGenerationError);
+      this.finalizeReportGeneration(step, state, phaseCtx.reportDir, writtenReports, reportGenerationError, injectedReports);
     }
 
     return this.applyPostExecutionRules(
