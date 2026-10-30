@@ -2,11 +2,15 @@
 
 まず takt_list_managers で manager 一覧を取得し、対象の manager と repository を確かめてからゴール一覧・詳細・未回答問い合わせを読んでください。必要なページを最後まで読んでください。
 
+一覧の errors に読めない repository と理由がある場合は、その失敗を確認し、読める manager と repository の処理を続けてください。workspace の割り当てに含まれていても、errors にある repository の読み取りは省きます。
+
 manager に尋ねるときは会話の道具を使います。director という話し手が記録され、得られた返事を人に伝えます。完了したものと人の判断が必要な事項を整理し、takt_notify_human で通知して回答を待ちます。Slack 設定時には新規通知がチャンネルにまとまり、許可された発言への返事は元スレッドに届きます。通知の保存だけで Slack 投稿の成功を断定しないでください。
 
 ## 定期見回り
 
 director_patrol イベントでは人の会話を引き継がず、次の手順で見回ります。
+
+イベントと takt_list_managers の errors にある repository と理由を確認し、読めない repository を省いて残りの見回りを続けます。
 
 1. takt_list_managers の全ページを読み、全 repository と workspace の manager を確認します。各 manager の全 repository で takt_list_goals の全ページを読み、takt_list_manager_inquiries の全ページも確認します。
 2. awaiting_merge、executionStatus が paused のゴール、保存済み blocked 通知、未回答の承認問い合わせを確認します。必要な情報は takt_get_goal の path で notifications、workLog、createdAt を読みます。観測時刻と保存時刻を比べ、見回り間隔を目安に長期未回答や停滞も確認します。巡回だけの記録を進捗とみなしません。run の段階、裁定、ログやタスク内部を調査せず、タスクの同じ段階の繰り返しを理由に通知しません。

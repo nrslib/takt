@@ -73,6 +73,19 @@ import { packageVersion } from '../shared/package-info.js';
 import * as privateFiles from '../shared/utils/private-file.js';
 
 const ids = vi.hoisted(() => ({ next: vi.fn() }));
+const projectFault = vi.hoisted(() => ({ directory: undefined as string | undefined, operation: 'realpath' as 'realpath' | 'stat' }));
+vi.mock('node:fs/promises', async (original) => {
+  const actual = await original<typeof import('node:fs/promises')>();
+  const check = (operation: typeof projectFault.operation, path: unknown) => {
+    if (operation === projectFault.operation && path === projectFault.directory) {
+      throw Object.assign(new Error(`EACCES: ${operation} '${projectFault.directory}'`), { code: 'EACCES', path, syscall: operation });
+    }
+  };
+  return { ...actual,
+    realpath: async (...args: Parameters<typeof actual.realpath>) => { check('realpath', args[0]); return actual.realpath(...args); },
+    stat: async (...args: Parameters<typeof actual.stat>) => { check('stat', args[0]); return actual.stat(...args); },
+  };
+});
 vi.mock('node:timers/promises', async (original) => ({ ...await original<typeof import('node:timers/promises')>() }));
 vi.mock('node:crypto', async (original) => {
   const actual = await original<typeof import('node:crypto')>();
@@ -93,6 +106,8 @@ const owner = { pid: process.pid, identity: { startTime: 'director-test-owner' }
 let directory: string;
 const cleanups: Array<() => Promise<unknown>> = [];
 beforeEach(() => {
+  projectFault.directory = undefined;
+  projectFault.operation = 'realpath';
   ids.next.mockReset();
   directory = getGlobalConfigDir();
   writeFileSync(join(directory, 'config.yaml'), 'provider: mock\nlanguage: en\n');
@@ -102,6 +117,7 @@ afterEach(async () => {
   try {
     for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
   } finally {
+    projectFault.directory = undefined;
     vi.restoreAllMocks();
     vi.useRealTimers();
     invalidateGlobalConfigCache(); invalidateAllResolvedConfigCache();
@@ -169,7 +185,8 @@ it('lists all repository and workspace managers and reuses the existing paged go
   for (const tool of ['Bash', 'Write', 'Edit', 'takt_get_run', 'takt_merge_goal_pr', 'takt_enqueue_task', 'takt_complete_goal', 'takt_abort_goal']) {
     expect((await client.callTool({ name: tool, arguments: {} })).isError).toBe(true);
   }
-  const managers = await listDirectorManagers(directory);
+  const { managers, errors } = await listDirectorManagers(directory);
+  expect(errors).toEqual([]);
   expect(managers).toHaveLength(3);
   expect(managers.map((assignment) => conversationId(assignment))).toEqual(expect.arrayContaining([
     conversationId({ kind: 'repository', repositoryDirectory: a }), conversationId({ kind: 'workspace', workspaceId: workspace.id }),
@@ -923,6 +940,82 @@ async function expectCompletedPatrol(provider: ReturnType<typeof patrolProvider>
   }, { timeout: 30_000 });
   await new Promise(setImmediate);
 }
+
+async function seedPermissionPatrol() {
+  const first = await seedManager('a-good');
+  const denied = join(directory, 'b-denied');
+  mkdirSync(denied);
+  const last = await seedManager('c-good');
+  await createWorkspace({ globalConfigDirectory: directory, name: 'workspace only', repositoryDirectories: [denied] });
+  const goals = new Map<string, Goal>();
+  for (const cwd of [first, denied, last]) goals.set(cwd, await seedPatrolGoal(cwd, { objective: cwd }));
+  return { first, denied, last, goals };
+}
+
+function permissionPatrolProvider(goals: ReadonlyMap<string, Goal>) {
+  const provider = patrolProvider();
+  const observations: Array<{ errors: Array<{ repositoryDirectory: string; reason: string }>; directories: string[] }> = [];
+  provider.call.mockImplementation(async (prompt, options) => {
+    const config = options.mcpServers![DIRECTOR_MCP_SERVER_NAME];
+    if (config?.type !== 'http') throw new Error('HTTP director MCP required');
+    const client = new Client({ name: 'permission-patrol-provider', version: '1' });
+    const transport = new StreamableHTTPClientTransport(new URL(config.url), { requestInit: { headers: config.headers } });
+    try {
+      await client.connect(transport);
+      const result = await client.callTool({ name: 'takt_list_managers', arguments: {} });
+      expect(result.isError, JSON.stringify(result.content)).not.toBe(true);
+      const page = decoded(result) as { managers: Array<{ id: string; assignment: { repositoryDirectories: string[] } }>;
+        errors: Array<{ repositoryDirectory: string; reason: string }> };
+      expect(JSON.parse(prompt)).toMatchObject({ event: 'director_patrol', errors: page.errors });
+      const directories: string[] = [];
+      for (const manager of page.managers) {
+        for (const cwd of manager.assignment.repositoryDirectories) {
+          if (page.errors.some((failure) => failure.repositoryDirectory === cwd)) continue;
+          const expected = goals.get(cwd);
+          expect(expected).toBeDefined();
+          const read = await readMcpPage<Pick<Goal, 'id' | 'objective'>>(client, 'takt_list_goals', 'goals', { managerId: manager.id, cwd });
+          expect(read).toEqual([expect.objectContaining({ id: expected!.id, objective: expected!.objective })]);
+          directories.push(cwd);
+        }
+      }
+      observations.push({ errors: page.errors, directories: directories.sort() });
+      return { persona: 'director', status: 'done', content: 'Patrol finished', timestamp: new Date() };
+    } finally { await client.close(); await transport.close(); }
+  });
+  return { provider, observations };
+}
+
+it.each([false, true])('completes a daemon patrol with a workspace permission failure present at startup=%s', async (deniedAtStartup) => {
+  const { first, denied, last, goals } = await seedPermissionPatrol();
+  const { provider, observations } = permissionPatrolProvider(goals);
+  if (deniedAtStartup) projectFault.directory = denied;
+
+  const daemon = await startPatrolDaemon();
+  await daemon.poll();
+  await expectCompletedPatrol(provider, 1);
+
+  expect(observations).toEqual([{ directories: deniedAtStartup ? [first, last] : [first, denied, last],
+    errors: deniedAtStartup ? [{ repositoryDirectory: denied, reason: expect.stringContaining('EACCES') }] : [] }]);
+  expect(daemon.removeOwner).not.toHaveBeenCalled();
+});
+
+it('continues the same daemon patrol after a workspace stat becomes permission denied', async () => {
+  const { first, denied, last, goals } = await seedPermissionPatrol();
+  const { provider, observations } = permissionPatrolProvider(goals);
+  const daemon = await startPatrolDaemon();
+  await daemon.poll();
+  await expectCompletedPatrol(provider, 1);
+  expect(observations).toEqual([{ directories: [first, denied, last], errors: [] }]);
+
+  projectFault.directory = denied;
+  projectFault.operation = 'stat';
+  await daemon.poll(900);
+  await expectCompletedPatrol(provider, 2);
+
+  expect(observations).toEqual([{ directories: [first, denied, last], errors: [] },
+    { directories: [first, last], errors: [{ repositoryDirectory: denied, reason: expect.stringContaining('EACCES') }] }]);
+  expect(daemon.removeOwner).not.toHaveBeenCalled();
+});
 
 it('patrols repository and workspace managers and notifies each stopped goal and pending approval', async () => {
   const a = await seedManager('patrol-a');

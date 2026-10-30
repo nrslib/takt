@@ -428,6 +428,7 @@ tui:
 director:
   slackNotifications: "Director updates: completed work and decisions for the human"
   patrolFailed: "Director patrol failed"
+  projectUnreadable: "Director could not read a project"
   description: "Open the experimental director conversation TUI"
   experimentalNotice: "director is experimental. Behavior, settings, and saved data formats may change."
   costNotice: "director runs AI turns, which incur provider API costs."
