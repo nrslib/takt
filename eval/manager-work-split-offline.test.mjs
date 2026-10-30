@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -9,6 +9,7 @@ import { parse, stringify } from 'yaml';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const suite = parse(readFileSync(join(repoRoot, 'eval/scenarios/manager-work-split/manager-work-split.yaml'), 'utf8'));
+const instructionMarker = 'OFFLINE_MANAGER_INSTRUCTION_OVERRIDE';
 
 for (const variant of ['red', 'green']) {
   test(`promptfoo assembles all manager cases with ${variant} instructions and an offline provider`, { timeout: 60000 }, () => {
@@ -18,9 +19,8 @@ for (const variant of ['red', 'green']) {
       for (const lang of ['ja', 'en']) {
         mkdirSync(join(instructionRoot, lang), { recursive: true });
         const path = `builtins/${lang}/facets/instructions/manager.md`;
-        const body = variant === 'red'
-          ? execFileSync('git', ['show', `main:${path}`], { cwd: repoRoot, encoding: 'utf8' })
-          : readFileSync(join(repoRoot, path), 'utf8');
+        const instruction = readFileSync(join(repoRoot, path), 'utf8');
+        const body = variant === 'red' ? `${instructionMarker}_${lang}\n${instruction}` : instruction;
         writeFileSync(join(instructionRoot, lang, 'manager.md'), body);
       }
       // Semantic grading is intentionally excluded: this checks promptfoo assembly without a model.
@@ -54,6 +54,11 @@ for (const variant of ['red', 'green']) {
       assert.equal(report.results.stats.successes, suite.tests.length);
       assert.equal(report.results.stats.failures, 0);
       assert.equal(report.results.stats.errors, 0);
+      assert.equal(report.results.results.length, suite.tests.length);
+      for (const { prompt, vars } of report.results.results) {
+        assert.equal(prompt.raw.includes(`${instructionMarker}_${vars.lang}`), variant === 'red',
+          `${vars.case}/${vars.lang}: instruction override marker`);
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

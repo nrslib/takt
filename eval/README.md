@@ -188,7 +188,9 @@ node --test eval/suite-registry.test.mjs
 ```
 
 `manager-work-split-offline.test.mjs` は promptfoo の CLI から実際にプロンプトを組み立て、
-main と作業ツリーの指示書それぞれで全76入力をモデルを呼ばない provider に渡す。
+RED は作業ツリーの指示書に目印の1行を加えた写し、GREEN は現行指示書そのままで、
+それぞれ全76入力をモデルを呼ばない provider に渡す。組み立てたプロンプトの目印の有無で
+`TAKT_EVAL_MANAGER_INSTRUCTION_ROOT` による差し替えを確認し、Git や比較元 ref には依存しない。
 この確認では生成 provider と意味の採点をオフライン用に置き換え、組み立てだけを検証する。
 通常の eval の操作・rubric の合否を代用するものではない。
 
@@ -197,12 +199,17 @@ main と作業ツリーの指示書それぞれで全76入力をモデルを呼�
 persona / policy / knowledge、入力、schema、外側の再生指示、rubric、provider、反復数は固定する。
 変数を省いた GREEN は作業ツリーの指示書を使う。過去の concurrency 行を省く切替は使わない。
 
+実モデルでの比較では、比較元の ref またはコミット SHA を人が選び、
+`TAKT_EVAL_RED_REF` に指定してから以下を実行する。マージ後の `main` には変更後の指示書が
+含まれるため、変更前の PR の基点 SHA などを指定する。比較元を取得できない場合は停止する。
+
 ```bash
+: "${TAKT_EVAL_RED_REF:?比較元の ref または変更前の基点 SHA を指定してください}"
 manager_eval_dir="$(mktemp -d)"
 mkdir -p "$manager_eval_dir/red/ja" "$manager_eval_dir/red/en" \
   "$manager_eval_dir/green/ja" "$manager_eval_dir/green/en"
 for lang in ja en; do
-  git show "main:builtins/$lang/facets/instructions/manager.md" > "$manager_eval_dir/red/$lang/manager.md"
+  git show "${TAKT_EVAL_RED_REF}:builtins/$lang/facets/instructions/manager.md" > "$manager_eval_dir/red/$lang/manager.md" || exit 1
   cp "builtins/$lang/facets/instructions/manager.md" "$manager_eval_dir/green/$lang/manager.md"
 done
 TAKT_EVAL_MANAGER_INSTRUCTION_ROOT="$manager_eval_dir/red" \
