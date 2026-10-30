@@ -6,7 +6,7 @@ import { safeExternalErrorMessage } from '../../shared/utils/safeExternalErrorMe
 type GoalBranchResolution = { sha: string } | { reason: string };
 
 export async function getTaskGoalIntegrations(
-  cwd: string, tasks: readonly TaskState[],
+  cwd: string, tasks: readonly TaskState[], signal: AbortSignal | undefined,
 ): Promise<Record<string, unknown>[]> {
   const store = new GoalStore(cwd);
   const branches = new Map<string, GoalBranchResolution>();
@@ -25,8 +25,9 @@ export async function getTaskGoalIntegrations(
     if (branch === undefined) {
       try {
         const goal = await store.get(task.goalId);
-        branch = { sha: await resolveGoalBranchSha(cwd, goal.branch, undefined) };
+        branch = { sha: await resolveGoalBranchSha(cwd, goal.branch, signal) };
       } catch (error) {
+        signal?.throwIfAborted();
         branch = { reason: `Goal branch could not be resolved: ${safeExternalErrorMessage(error)}` };
       }
       branches.set(task.goalId, branch);
@@ -36,14 +37,16 @@ export async function getTaskGoalIntegrations(
       continue;
     }
     try {
-      const included = await isGoalCommitIncluded(cwd, sha, branch.sha, undefined);
+      const included = await isGoalCommitIncluded(cwd, sha, branch.sha, signal);
       integrations.push({ goalIntegration: included ? 'integrated' : 'not_integrated' });
     } catch (error) {
+      signal?.throwIfAborted();
       let reason = safeExternalErrorMessage(error);
       try {
-        const commit = await runGoalGit(cwd, ['cat-file', '-e', '--', `${sha}^{commit}`], 0, undefined, [0, 1, 128]);
+        const commit = await runGoalGit(cwd, ['cat-file', '-e', '--', `${sha}^{commit}`], 0, signal, [0, 1, 128]);
         if (commit.code !== 0) reason = 'Completion commit not found or unreadable';
       } catch (checkError) {
+        signal?.throwIfAborted();
         reason = `${reason}; completion commit check failed: ${safeExternalErrorMessage(checkError)}`;
       }
       integrations.push({ goalIntegration: 'unknown', goalIntegrationReason: reason });

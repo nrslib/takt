@@ -154,13 +154,14 @@ function taskSummary(cwd: string, task: ReturnType<TaskRunner['listTaskStateItem
 export async function listTaktTasks(
   input: ListTasksInput,
   deps: McpOperationDependencies = {},
+  signal?: AbortSignal,
 ): Promise<CallToolResult> {
   try {
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
     const tasks = new TaskRunner(input.cwd).listTaskStateItems();
     const offset = input.offset ?? 0;
     const page = tasks.slice(offset, offset + (input.limit ?? 50));
-    const integrations = await getTaskGoalIntegrations(input.cwd, page);
+    const integrations = await getTaskGoalIntegrations(input.cwd, page, signal);
     const selected = page.map((task, index) => ({ ...taskSummary(input.cwd, task), ...integrations[index] }));
     return pagedResult('tasks', selected, tasks.length, offset);
   } catch (error) {

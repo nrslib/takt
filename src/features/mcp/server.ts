@@ -354,12 +354,12 @@ export function createTaktMcpServer(
       description: `Read a compact summary of project tasks and their run state. Goal tasks include goalIntegration (integrated / not_integrated / unknown) and goalIntegrationReason when unknown. Individual worktree or run failures return that task's available basic information with an error while preserving the other tasks. Invalid worktree references are not read. Queue or cwd access failures remain whole-tool errors. Logs and report contents are not loaded. Responses fit 64 KiB, with explicit truncation. Use offset/limit for continuation. Optional view workspace is manager only. ${workspaceRetrieval}`,
       inputSchema: listTasksInputSchema,
     },
-    (input) => input.view === 'workspace' ? workspaceOperation(async () => {
+    (input, extra) => input.view === 'workspace' ? workspaceOperation(async () => {
       if (options.toolSet !== 'manager') throw new Error('Workspace view is only available to managers');
       const assignment = await currentAssignment();
       if (assignment.kind !== 'workspace') throw new Error('Manager does not belong to a workspace');
       return { id: assignment.workspaceId, name: assignment.name, repositoryDirectories: assignment.repositoryDirectories };
-    }, input) : operation(input.cwd, 'Task list failed', (deps) => listTaktTasks(projectInput(input, deps), deps)),
+    }, input) : operation(input.cwd, 'Task list failed', (deps) => listTaktTasks(projectInput(input, deps), deps, extra.signal)),
   );
 
   server.registerTool(

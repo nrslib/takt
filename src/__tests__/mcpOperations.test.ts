@@ -82,6 +82,27 @@ describe('MCP task goal integration', () => {
     expect(goalGit.runGoalGit).not.toHaveBeenCalled();
   });
 
+  it('forwards cancellation to all Git calls and fails the list with the abort reason', async () => {
+    const controller = new AbortController();
+    const abortReason = new DOMException('Task list cancelled', 'AbortError');
+    vi.mocked(goalGit.isGoalCommitIncluded).mockRejectedValue(new Error('ancestry check unavailable'));
+    vi.mocked(goalGit.runGoalGit).mockImplementation(async (_cwd, _args, _limit, signal) => {
+      controller.abort(abortReason);
+      signal?.throwIfAborted();
+      return { output: Buffer.alloc(0), code: 0, truncated: false };
+    });
+
+    const result = await listTaktTasks({ cwd }, {}, controller.signal);
+
+    expect(goalGit.resolveGoalBranchSha).toHaveBeenCalledWith(cwd, goalRecord().branch, controller.signal);
+    expect(goalGit.isGoalCommitIncluded).toHaveBeenCalledWith(cwd, completionSha, goalSha, controller.signal);
+    expect(goalGit.runGoalGit).toHaveBeenCalledWith(
+      cwd, ['cat-file', '-e', '--', `${completionSha}^{commit}`], 0, controller.signal, [0, 1, 128],
+    );
+    expect(result.isError).toBe(true);
+    expect(firstTextContent(result.content)).toContain(abortReason.message);
+  });
+
   it.each(['pending', 'running', 'failed', 'exceeded', 'pr_failed', 'completed'] as const)(
     'returns not_integrated without Git for a %s task without a completion SHA', async (status) => {
       vi.mocked(TaskRunner.prototype.listTaskStateItems).mockReturnValue([task({
