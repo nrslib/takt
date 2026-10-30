@@ -2,9 +2,16 @@ import { readdirSync } from 'node:fs';
 import { basename, dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { ADJUDICATOR_TARGETS } from './adjudicator-no-fix-cases.mjs';
+
 const evalDir = dirname(fileURLToPath(import.meta.url));
 
 const CLASSIFICATIONS = [
+  {
+    tier: 'active',
+    reason: '書き込み可能な隔離環境で裁定 Phase 1 の変更・実行の禁止と6ケースの判断を測る',
+    suites: ['adjudicator-no-fix'],
+  },
   {
     tier: 'active',
     reason: '仕様逸脱の判定と最終報告を両言語・両入口で評価する',
@@ -249,6 +256,10 @@ const CLASSIFICATIONS = [
 ];
 
 const EXECUTION_OVERRIDES = {
+  'adjudicator-no-fix': {
+    defaultEligible: false, credentials: ['codex', 'claude'], cost: 'high',
+    reason: '3モデルの書き込み可能な裁定を明示的に比較する',
+  },
   'phase1-execution-log-handoff': {
     defaultEligible: false, credentials: ['codex'], cost: 'standard',
     reason: 'Terra medium で合成した Phase 1 実行記録の報告品質を明示評価する',
@@ -708,6 +719,7 @@ const EXECUTION_OVERRIDES = {
 };
 
 const PREPARE_TARGET_OVERRIDES = {
+  'adjudicator-no-fix': ADJUDICATOR_TARGETS,
   ...Object.fromEntries(['spec-deviation-phase1', 'spec-deviation-summary'].map(name => [name,
     ['grounded', 'reinterpretation', 'ungrounded', 'clean', 'other-unmet'].flatMap(scenario =>
       ['ja', 'en'].flatMap(language => ['generic', 'peer'].map(entry => `spec-deviation-${scenario}-${entry}-${language}`))),

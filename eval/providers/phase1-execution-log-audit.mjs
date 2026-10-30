@@ -4,6 +4,8 @@ import { join, resolve } from 'node:path';
 import { parsePhaseEvents } from './phase-events.mjs';
 import { reportPhaseEventTools } from '../../dist/core/workflow/report-phase-tools.js';
 
+export { parsePhaseEvents };
+
 export function snapshotFiles(root) {
   const files = {};
   const visit = (directory) => {
@@ -20,7 +22,7 @@ export function snapshotFiles(root) {
 }
 
 // This is an eval audit, not a shell sandbox: reject identifiable prohibited actions.
-function shellTokens(command) {
+export function shellTokens(command) {
   const tokens = [];
   const pattern = /\s+|'([^']*)'|"((?:\\.|[^"\\])*)"|(&&|\|\||>>|[|;<>\n])|((?:\\.|[^\s'";&|<>])+)/gy;
   let index = 0;
@@ -38,7 +40,7 @@ function shellTokens(command) {
   return tokens;
 }
 
-function fixtureExecutionEntrypoints(cwd) {
+export function fixtureExecutionEntrypoints(cwd) {
   const { scripts = {} } = JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf8'));
   return new Set(Object.entries(scripts)
     .filter(([name]) => /^(?:pre|post)?(?:test|build)(?:$|:)/.test(name))
