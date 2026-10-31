@@ -50,7 +50,8 @@ import { compileRuntimeProviderEnvironment } from '../infra/config/runtime-provi
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfigCore.js';
 import { writeReportFile } from '../core/workflow/report-writer.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
-import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
+import { buildWorkflowResumePointEntry, getWorkflowReference } from '../core/workflow/workflow-reference.js';
+import { buildWorkflowStepParticipationIdentity } from '../core/workflow/workflow-step-participation-index.js';
 import { inheritResumeReportSnapshot } from '../core/workflow/run/resume-report-snapshot.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import {
@@ -180,7 +181,7 @@ describe('report current versions and execution history in complete prompts', ()
     return engine;
   }
 
-  async function useRealReportPhase(body: (name: string, occurrence: number) => string) {
+  async function useRealReportPhase(body: (name: string, occurrence: number) => string | Promise<string>) {
     const actual = await vi.importActual<typeof import('../core/workflow/phase-runner.js')>('../core/workflow/phase-runner.js');
     const active = new Map<string, { names: string[]; occurrence: number; index: number }>();
     vi.mocked(runReportPhase).mockImplementation(async (step, occurrence, context, onWritten) => {
@@ -199,7 +200,7 @@ describe('report current versions and execution history in complete prompts', ()
       if (generating) {
         const name = generating.names[generating.index++];
         if (name === undefined) throw new Error('Unexpected extra report attempt');
-        return makeResponse({ persona: String(persona), content: body(name, generating.occurrence) });
+        return makeResponse({ persona: String(persona), content: await body(name, generating.occurrence) });
       }
       prompts.push({ persona: String(persona), prompt });
       return makeResponse({ persona: String(persona), content: 'done',
@@ -399,12 +400,108 @@ describe('report current versions and execution history in complete prompts', ()
       index: step.name === 'consume' && ++consumed === 3 ? 1 : 0,
       method: step.parallel === undefined ? 'phase3_tag' : 'aggregate',
     }));
-    expect((await start(workflow, { workflowCallResolver: ({ step }) => step.call === 'leaf' ? leaf : child }).run()).status)
-      .toBe('completed');
+    const sharedRuntime: NonNullable<WorkflowEngineOptions['sharedRuntime']> = { startedAtMs: 0 };
+    expect((await start(workflow, {
+      workflowCallResolver: ({ step }) => step.call === 'leaf' ? leaf : child, sharedRuntime,
+    }).run()).status).toBe('completed');
     const prompt = prompts.filter(({ persona }) => persona === 'consumer').at(-1)!.prompt;
     expect(section(prompt, 'CURRENT')).toBe(`BODY-3-${plan}`);
-    expect(versionRows(section(prompt, 'HISTORY')).map(({ path }) => readFileSync(path, 'utf8')))
-      .toEqual([`BODY-1-${plan}`, `BODY-2-${plan}`]);
+    const rows = versionRows(section(prompt, 'HISTORY'));
+    expect(rows.map(({ path }) => readFileSync(path, 'utf8'))).toEqual([`BODY-1-${plan}`, `BODY-2-${plan}`]);
+    const store = sharedRuntime.reportExecutions!;
+    const parentIdentity = buildWorkflowStepParticipationIdentity(getWorkflowReference(workflow), 'remediation', []);
+    const parents = store.executions(parentIdentity);
+    for (const [index, { line }] of rows.entries()) {
+      const match = /^- execution=(\S+) order=(\d+) completion_order=(\d+) status=completed producer=(\S+) origin_execution=(\S+) origin_producer=(\S+) origin_order=(\d+) origin_completion_order=(\d+) path=/.exec(line);
+      expect(match).not.toBeNull();
+      const callOccurrence = index + 1;
+      const originIdentity = mode === 'parallel'
+        ? buildWorkflowStepParticipationIdentity(getWorkflowReference(workflow), 'write', [], 'remediation')
+        : buildWorkflowStepParticipationIdentity(getWorkflowReference(leaf), 'write', [
+            buildWorkflowResumePointEntry(workflow, 'remediation', 'workflow_call', callOccurrence, undefined, callOccurrence),
+            buildWorkflowResumePointEntry(child, 'delegate', 'workflow_call', 1, undefined, 1),
+          ]);
+      const parent = parents[index]!;
+      const origin = store.executions(originIdentity)[mode === 'parallel' ? index : 0]!;
+      expect(match![1]!.endsWith(`/${parent.id}`)).toBe(true);
+      expect(Number(match![2])).toBe(parent.sequence);
+      expect(Number(match![3])).toBe(parent.completionOrder);
+      expect(match![4]).toBe('remediation');
+      expect(match![5]!.endsWith(`/${origin.id}`)).toBe(true);
+      expect(match![5]).not.toBe(match![1]);
+      expect(match![6]).toBe('write');
+      expect(Number(match![7])).toBe(origin.sequence);
+      expect(Number(match![8])).toBe(origin.completionOrder);
+    }
+  });
+
+  it('records each parallel child producer with its own start and completion in the complete prompt', async () => {
+    let notifyAlphaStarted!: () => void;
+    const alphaStarted = new Promise<void>((resolve) => { notifyAlphaStarted = resolve; });
+    let releaseAlpha!: () => void;
+    const alphaCanFinish = new Promise<void>((resolve) => { releaseAlpha = resolve; });
+    const prompts = await useRealReportPhase(async (name) => {
+      if (name === plan) {
+        notifyAlphaStarted();
+        await alphaCanFinish;
+      }
+      return `BODY-${name}`;
+    });
+    const alpha = makeStep('alpha', { persona: 'alpha-writer',
+      outputContracts: [{ name: plan, format: 'Write the plan' }], rules: [makeRule('done', 'COMPLETE')] });
+    const beta = makeStep('beta', { persona: 'beta-writer',
+      outputContracts: [{ name: report, format: 'Write the report' }], rules: [makeRule('done', 'COMPLETE')] });
+    const workflow = config(consumer('Compare the parallel producer executions', 0));
+    workflow.steps[0] = makeStep('remediation', {
+      parallel: [alpha, beta], rules: [makeRule('all("done")', 'consume')],
+    });
+    vi.mocked(mockRuleEvaluation).mockImplementation((step) => ({
+      index: step.name === 'consume' ? 1 : 0,
+      method: step.parallel === undefined ? 'phase3_tag' : 'aggregate',
+    }));
+    const sharedRuntime: NonNullable<WorkflowEngineOptions['sharedRuntime']> = { startedAtMs: 0 };
+    const engine = start(workflow, { sharedRuntime });
+    const store = sharedRuntime.reportExecutions!;
+    const alphaIdentity = buildWorkflowStepParticipationIdentity(getWorkflowReference(workflow), 'alpha', [], 'remediation');
+    const betaIdentity = buildWorkflowStepParticipationIdentity(getWorkflowReference(workflow), 'beta', [], 'remediation');
+    const finish = store.finish.bind(store);
+    vi.spyOn(store, 'finish').mockImplementation((id, completed) => {
+      finish(id, completed);
+      if (completed && store.executions(betaIdentity).some((entry) => entry.id === id)) releaseAlpha();
+    });
+    const running = engine.run();
+    await alphaStarted;
+    expect((await running).status).toBe('completed');
+
+    const prompt = prompts.find(({ persona }) => persona === 'consumer')!.prompt;
+    const rows = new Map(prompt.split('\n').flatMap((line) => {
+      const match = /^- remediation: ([^;]+); execution=([^;]+); order=(\d+); completion_order=(\d+); producer execution=([^;]+); producer start=(\d+); producer completion=(\d+)$/.exec(line);
+      return match === null ? [] : [[match[1]!, {
+        execution: match[2]!, order: Number(match[3]), completion: Number(match[4]),
+        origin: match[5]!, start: Number(match[6]), originCompletion: Number(match[7]),
+      }]];
+    }));
+    const alphaRow = rows.get(plan)!;
+    const betaRow = rows.get(report)!;
+    expect(rows.size).toBe(2);
+    expect(alphaRow.execution).toBe(betaRow.execution);
+    expect(alphaRow.origin).not.toBe(alphaRow.execution);
+    expect(betaRow.origin).not.toBe(betaRow.execution);
+    expect(alphaRow.origin).not.toBe(betaRow.origin);
+    expect(alphaRow.order).toBeLessThan(alphaRow.start);
+    expect(alphaRow.start).toBeLessThan(betaRow.start);
+    expect(betaRow.originCompletion).toBeLessThan(alphaRow.originCompletion);
+    expect(alphaRow.start).toBeLessThan(betaRow.originCompletion);
+    expect(betaRow.start).toBeLessThan(alphaRow.originCompletion);
+    expect(alphaRow.completion).toBeGreaterThan(alphaRow.originCompletion);
+    expect(betaRow.completion).toBe(alphaRow.completion);
+
+    const alphaExecution = store.executions(alphaIdentity)
+      .find((entry) => entry.id === alphaRow.origin.split('/').at(-1));
+    const betaExecution = store.executions(betaIdentity)
+      .find((entry) => entry.id === betaRow.origin.split('/').at(-1));
+    expect(alphaExecution).toMatchObject({ producer: 'alpha', sequence: alphaRow.start, completionOrder: alphaRow.originCompletion });
+    expect(betaExecution).toMatchObject({ producer: 'beta', sequence: betaRow.start, completionOrder: betaRow.originCompletion });
   });
 
   it('restores pinned history and execution identities into the resumed run', async () => {

@@ -29,7 +29,7 @@ function fixture(root, withPrivateOutput = false) {
       + readFileSync(join(raw, path), 'utf8') + (withPrivateOutput ? '\nPRIVATE_LOCAL_INSTRUCTION' : '') }));
   if (withPrivateOutput) commands.push({ command: 'cat /synthetic-home/.codex/AGENTS.md',
     exitCode: 0, status: 'completed', output: 'PRIVATE_LOCAL_INSTRUCTION' });
-  writeFileSync(join(raw, 'fix-plan.prompt.md'), `Read ${join(raw, current)} and ${join(raw, prior)}`);
+  writeFileSync(join(raw, 'fix-plan.prompt.md'), `Read ${join(raw, current)} and ${join(raw, prior)}\n\n`);
   writeFileSync(join(raw, 'fix-plan.invocation.json'), JSON.stringify({ instruction: `Read ${join(raw, current)}` }));
   writeFileSync(join(raw, 'fix-plan.output.md'), output + (withPrivateOutput ? '\nPRIVATE_LOCAL_INSTRUCTION' : ''));
   writeFileSync(join(raw, 'fix-plan.trace.json'), JSON.stringify({ model: 'gpt-6.1-sol', effort: 'high',
@@ -68,6 +68,9 @@ for (const withPrivateOutput of [false, true]) {
       assert.equal(content.includes('/synthetic-home'), false, path);
       assert.equal(content.includes(root), false, path);
     }
+    const prompt = readFileSync(join(destination, 'fix-plan.prompt.md'), 'utf8');
+    assert.equal(prompt.endsWith('\n'), true);
+    assert.equal(prompt.endsWith('\n\n'), false);
     const trace = JSON.parse(readFileSync(join(destination, 'fix-plan.trace.json')));
     assert.equal(trace.executedPromptHash, 'executed-prompt-hash');
     assert.notEqual(trace.promptHash, trace.executedPromptHash);

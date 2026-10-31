@@ -1,47 +1,30 @@
-import { GoalStore } from '../../infra/goals/store.js';
-import { readManagerRunFailures } from '../../infra/task/manager-run-state.js';
-import { getErrorMessage } from '../../shared/utils/error.js';
-import { formatGoalNotification, isDirectorQuestionNotification } from '../../infra/goals/notifications.js';
-import type { Goal, GoalQuestion } from '../../infra/goals/schema.js';
+import { basename } from 'node:path';
+import type { Language } from '../../core/models/types.js';
+import type { resolveManagerConfig } from '../../infra/config/managerConfig.js';
+import { formatGoalNotification } from '../../infra/goals/notifications.js';
+import type { Goal } from '../../infra/goals/schema.js';
+import { formatPatrolSummary } from './goalDisplay.js';
 
-export type ManagerDisplayGoal = Pick<Goal, 'id' | 'objective' | 'executionStatus'>;
+type ManagerNotificationPolicy = Readonly<ReturnType<typeof resolveManagerConfig>['notifications']>;
 
-export async function readManagerDisplayEvents(cwd: string): Promise<{
-  events: { id: string; message: string }[]; diagnostics: { id: string; message: string }[];
-  questions: { goalId: string; objective: string; question: GoalQuestion }[];
-  goals: ManagerDisplayGoal[];
-}> {
-  const events: { id: string; message: string }[] = [];
-  const diagnostics: { id: string; message: string }[] = [];
-  const questions: { goalId: string; objective: string; question: GoalQuestion }[] = [];
-  const displayGoals: ManagerDisplayGoal[] = [];
-  try {
-    const { goals, errors } = await new GoalStore(cwd).list();
-    displayGoals.push(...goals.map(({ id, objective, executionStatus }) => ({ id, objective, executionStatus })));
-    events.push(...goals.flatMap((goal) => (goal.events ?? []).flatMap((event) => event.summary === undefined ? [] : [{
-      id: event.kind === 'completion' ? JSON.stringify([goal.id, event.taskName, event.runSlug])
-        : event.kind === 'answer' ? JSON.stringify([goal.id, 'answer', event.questionId]) : JSON.stringify([goal.id, event.id]), message: event.summary,
-    }])));
-    for (const goal of goals) {
-      questions.push(...(goal.questions ?? []).filter((question) => question.status === 'pending' && question.recipient === 'human')
-        .map((question) => ({ goalId: goal.id, objective: goal.objective, question })));
-      events.push(...(goal.notifications ?? []).filter((notification) => !isDirectorQuestionNotification(goal, notification)).map((notification) => ({
-        id: JSON.stringify([goal.id, 'notification', notification.id]), message: formatGoalNotification(goal, notification),
-      })));
-    }
-    diagnostics.push(...errors.map(({ goalId, error }) => ({
-      id: JSON.stringify(['diagnostic', 'goal', goalId, getErrorMessage(error)]),
-      message: `${goalId}: ${getErrorMessage(error)}`,
-    })));
-  } catch (error) {
-    const message = getErrorMessage(error);
-    diagnostics.push({ id: JSON.stringify(['diagnostic', 'goals', message]), message });
+export type ManagerDisplayGoal = Pick<Goal, 'id' | 'objective' | 'status' | 'executionStatus'>;
+export interface ManagerDisplayEvent {
+  id: string;
+  message: string;
+}
+
+export function* projectManagerDisplayEvents(goal: Goal, directory: string, language: Language,
+  startupBoundary: number | undefined, notificationStartedAt: number, policy: ManagerNotificationPolicy): Generator<ManagerDisplayEvent> {
+  const project = basename(directory);
+  for (const record of goal.workLog) {
+    if (startupBoundary !== undefined && Date.parse(record.recordedAt) < startupBoundary) continue;
+    yield { id: JSON.stringify([directory, goal.id, 'work-log', record.id]),
+      message: `${goal.id}: ${record.kind === 'patrol' ? formatPatrolSummary(record.summary) : record.summary}` };
   }
-  try {
-    events.push(...readManagerRunFailures(cwd).map((failure) => ({ id: failure.id, message: failure.message })));
-  } catch (error) {
-    const message = getErrorMessage(error);
-    diagnostics.push({ id: JSON.stringify(['diagnostic', 'run-failures', message]), message });
+  for (const notification of goal.notifications ?? []) {
+    if (notification.kind === 'question' || !policy[notification.kind]) continue;
+    if (Date.parse(notification.recordedAt) < notificationStartedAt) continue;
+    yield { id: JSON.stringify([directory, goal.id, 'notification', notification.id]),
+      message: formatGoalNotification(goal, notification, language, project, 'tui') };
   }
-  return { events, diagnostics, questions, goals: displayGoals };
 }

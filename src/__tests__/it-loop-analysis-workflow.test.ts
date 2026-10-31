@@ -124,7 +124,7 @@ describe('loop analysis builtin workflow integration', () => {
         systemPrompt: typeof persona === 'string' ? persona : '',
         userInstruction: task,
       });
-      const isReportPhase = options?.allowedTools?.length === 0;
+      const isReportPhase = options?.executionPhase === 2;
       if (isReportPhase) {
         reportCount += 1;
       }
@@ -215,7 +215,7 @@ describe('loop analysis builtin workflow integration', () => {
         systemPrompt: typeof persona === 'string' ? persona : '',
         userInstruction: task,
       });
-      const isReportPhase = options?.allowedTools?.length === 0;
+      const isReportPhase = options?.executionPhase === 2;
       if (!isReportPhase && activeStepName === reanalyzerName) {
         reanalysisPrompts.push(task);
       }
@@ -283,7 +283,7 @@ describe('loop analysis builtin workflow integration', () => {
         systemPrompt: typeof persona === 'string' ? persona : '',
         userInstruction: task,
       });
-      const isReportPhase = options?.allowedTools?.length === 0;
+      const isReportPhase = options?.executionPhase === 2;
       return agentResponse(
         isReportPhase ? finalReport : 'Analysis step result',
         isReportPhase ? undefined : `session-${vi.mocked(runAgent).mock.calls.length}`,

@@ -17,10 +17,11 @@ import {
   stripTaktManagedPrMarker,
 } from '../../../infra/git/index.js';
 import type { ExistingPr, Issue, CreatePrResult, GitProvider } from '../../../infra/git/index.js';
-import type { ExecuteTaskOptions } from './types.js';
+import type { ExecuteTaskOptions, WorkflowExecutionEventSink } from './types.js';
 import { readPrivateFileState, writePrivateFile } from '../../../shared/utils/private-file.js';
 import { prepareLoopAnalysisReportForPublication } from './loopAnalysisReportPublication.js';
 import { runLinkedMergeSafely } from '../../merge/index.js';
+import { runLinkedCacciaSafely } from '../../caccia/linked.js';
 
 const log = createLogger('postExecution');
 
@@ -32,6 +33,7 @@ const PR_CREATION_FAILURE_MESSAGE = 'Failed to create pull request.';
 
 
 export interface PostExecutionOptions {
+  workflowHasCaccia?: boolean;
   goalId?: string;
   execCwd: string;
   projectCwd: string;
@@ -48,6 +50,7 @@ export interface PostExecutionOptions {
   orderContent?: string;
   repo?: string;
   outputMode?: ExecuteTaskOptions['outputMode'];
+  eventSink?: WorkflowExecutionEventSink;
   taskPrefix?: ExecuteTaskOptions['taskPrefix'];
   taskColorIndex?: ExecuteTaskOptions['taskColorIndex'];
   taskDisplayLabel?: ExecuteTaskOptions['taskDisplayLabel'];
@@ -120,6 +123,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
   } = options;
   const emitStatusLog = outputMode !== 'silent';
   const display = {
+    ...(options.eventSink === undefined ? {} : { eventSink: options.eventSink }),
     outputMode: outputMode ?? 'terminal',
     taskPrefix: options.taskPrefix,
     taskColorIndex: options.taskColorIndex,
@@ -151,7 +155,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
     return { taskFailed: true, taskError: LOCAL_PUSH_FAILURE_MESSAGE };
   }
 
-  if (commitResult.commitHash && branch && (shouldPublishBranchToOrigin === true || shouldCreatePr)) {
+  if (commitResult.publishedHead && branch && (shouldPublishBranchToOrigin === true || shouldCreatePr)) {
     abortSignal?.throwIfAborted();
     try {
       pushBranch(projectCwd, branch);
@@ -165,7 +169,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
       const pushFailureMessage = [
         'Workflow completed, but publishing failed. Local results are preserved.',
         `Branch: ${branch}`,
-        `Commit: ${commitResult.commitHash}`,
+        `Commit: ${commitResult.publishedHead}`,
         'Remote: origin',
         `${ORIGIN_PUSH_FAILURE_MESSAGE} ${pushDetail}`.trim(),
         'TAKT does not prompt for Git HTTPS credentials.',
@@ -180,7 +184,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
     }
   }
 
-  if (commitResult.commitHash && branch && shouldCreatePr) {
+  if (commitResult.publishedHead && branch && shouldCreatePr) {
     abortSignal?.throwIfAborted();
     const resolvedGitProvider = gitProvider ?? getGitProvider();
     const report = workflowIdentifier ? `Workflow \`${workflowIdentifier}\` completed successfully.` : 'Task completed successfully.';
@@ -194,6 +198,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
           success(`PR updated with comment: ${existingPr.url}`);
         }
         if (options.goalId === undefined) {
+          await runLinkedCacciaSafely(projectCwd, existingPr.url, options.workflowHasCaccia, abortSignal, display);
           await runLinkedMergeSafely(projectCwd, existingPr.url, abortSignal, display, options.parentTaskName);
         }
         return { prUrl: existingPr.url };
@@ -229,6 +234,7 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
           success(`PR created: ${prResult.url}`);
         }
         if (prResult.url && options.goalId === undefined) {
+          await runLinkedCacciaSafely(projectCwd, prResult.url, options.workflowHasCaccia, abortSignal, display);
           await runLinkedMergeSafely(projectCwd, prResult.url, abortSignal, display, options.parentTaskName);
         }
         return { prUrl: prResult.url };

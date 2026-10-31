@@ -5,18 +5,27 @@ import { createServer, type Server } from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { zstdCompressSync } from 'node:zlib';
+import { parse as parseYaml } from 'yaml';
 import { decompressSessionFrames } from './helpers/deepseek-session-frames.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DeepSeekHarness } from '@deepseek-ai/dsh-sdk-client';
+const realManagedModuleLoads = vi.hoisted(() => vi.fn<(directory: string) => void>());
 vi.mock('../infra/deepseek-harness/managed-package.js', async (importOriginal) => {
   const managed = await importOriginal<typeof import('../infra/deepseek-harness/managed-package.js')>();
-  const [sdk, llm] = await Promise.all([
-    import('@deepseek-ai/dsh-sdk-client'),
-    import('@deepseek-ai/dsh-llm'),
-  ]);
   return {
     ...managed,
-    loadManagedDeepSeekHarnessModules: async () => ({ directory: process.cwd(), sdk, llm }),
+    loadManagedDeepSeekHarnessModules: async () => {
+      if (process.env.TAKT_DSH_USE_REAL_MANAGED_LOADER === '1') {
+        const modules = await managed.loadManagedDeepSeekHarnessModules();
+        realManagedModuleLoads(modules.directory);
+        return modules;
+      }
+      const [sdk, llm] = await Promise.all([
+        import('@deepseek-ai/dsh-sdk-client'),
+        import('@deepseek-ai/dsh-llm'),
+      ]);
+      return { directory: process.cwd(), sdk, llm };
+    },
   };
 });
 import { createAssistantConversationPlan } from '../features/interactive/conversationPlan.js';
@@ -24,7 +33,11 @@ import { createConversationSession } from '../features/interactive/conversationS
 import { OptionsBuilder } from '../core/workflow/engine/OptionsBuilder.js';
 import { runAgent } from '../agents/runner.js';
 import { loadPersonaSessions, resolvePersonaSessionId, updatePersonaSession } from '../infra/config/project/sessionStore.js';
-import { hasDeepSeekSessionMarker } from '../infra/deepseek-harness/runtime-state.js';
+import { getDeepSeekRuntimePaths, hasDeepSeekSessionMarker } from '../infra/deepseek-harness/runtime-state.js';
+import {
+  getReadyDeepSeekHarnessPackageDirectory,
+  installDeepSeekHarness,
+} from '../infra/deepseek-harness/managed-package.js';
 import type { WorkflowStep } from '../core/models/types.js';
 import {
   callDeepSeekHarness,
@@ -55,6 +68,13 @@ interface RecordedRequest {
   system: unknown;
   reasoningEffort: unknown;
   messages: unknown;
+}
+
+interface ToolUseIdMismatch {
+  index: number;
+  expectedSdkToolUseId: string | undefined;
+  requestToolUseId: string | undefined;
+  requestToolResultId: string | undefined;
 }
 
 type MockMode = 'ok' | 'auth-echo' | 'workspace-tools' | 'held-tool' | 'assistant-message-reasoning' | 'assistant-message-text-only';
@@ -197,7 +217,7 @@ async function startMockEndpoint(readSourcePath: string): Promise<MockEndpoint> 
         response.writeHead(401, { 'Content-Type': 'application/json' });
         response.end(JSON.stringify({
           type: 'error',
-          error: { type: 'authentication_error', message: `rejected ${STORE_KEY}` },
+          error: { type: 'authentication_error', message: `rejected ${requests[sequence - 1]?.apiKey}` },
         }));
         return;
       }
@@ -278,6 +298,41 @@ function collectSecretHits(directory: string, secret: string): string[] {
   return hits;
 }
 
+function findFinalRequestToolUseIdMismatches(messages: unknown, sdkToolUseIds: readonly string[]): ToolUseIdMismatch[] {
+  if (!Array.isArray(messages)) {
+    throw new Error('final request does not contain a messages array');
+  }
+  const blocks: unknown[] = messages.flatMap((message: unknown): unknown[] => {
+    if (message === null || typeof message !== 'object' || !('content' in message)) {
+      return [];
+    }
+    return Array.isArray(message.content) ? message.content : [];
+  });
+  const toolUseIds = blocks.flatMap((block: unknown): string[] => (
+    block !== null && typeof block === 'object' && 'type' in block && block.type === 'tool_use'
+      && 'id' in block && typeof block.id === 'string'
+      ? [block.id]
+      : []
+  ));
+  const toolResultIds = blocks.flatMap((block: unknown): string[] => (
+    block !== null && typeof block === 'object' && 'type' in block && block.type === 'tool_result'
+      && 'tool_use_id' in block && typeof block.tool_use_id === 'string'
+      ? [block.tool_use_id]
+      : []
+  ));
+  const length = Math.max(sdkToolUseIds.length, toolUseIds.length, toolResultIds.length);
+  const mismatches: ToolUseIdMismatch[] = [];
+  for (let index = 0; index < length; index += 1) {
+    const expectedSdkToolUseId = sdkToolUseIds[index];
+    const requestToolUseId = toolUseIds[index];
+    const requestToolResultId = toolResultIds[index];
+    if (requestToolUseId !== expectedSdkToolUseId || requestToolResultId !== expectedSdkToolUseId) {
+      mismatches.push({ index, expectedSdkToolUseId, requestToolUseId, requestToolResultId });
+    }
+  }
+  return mismatches;
+}
+
 describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integration', () => {
   let root: string;
   let workspace: string;
@@ -301,6 +356,11 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
     ].join('\n'), 'utf8');
   }
 
+  function expectNoManagedCredentialCopy(): void {
+    const managedHome = getDeepSeekRuntimePaths().dshHome;
+    expect(existsSync(path.join(managedHome, '.credentials.yaml'))).toBe(false);
+  }
+
   /** Call the provider with fixture defaults and optional session/environment overrides without contacting a real service. */
   async function runTurn(options: {
     prompt?: string;
@@ -322,6 +382,7 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
   }
 
   beforeEach(async () => {
+    realManagedModuleLoads.mockClear();
     root = await mkdtemp(path.join(os.tmpdir(), 'takt-deepseek-credential-store-'));
     workspace = path.join(root, 'workspace');
     sourceHome = path.join(root, 'source-home');
@@ -356,9 +417,10 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
 
     const response = await runTurn();
 
+    const sourceStoreCredentialMatched = endpoint.requests[0]?.apiKey?.includes(STORE_KEY) === true;
+    expect(sourceStoreCredentialMatched).toBe(true);
     expect(response.status).toBe('done');
     expect(endpoint.requests).toHaveLength(1);
-    expect(endpoint.requests[0]?.apiKey).toContain(STORE_KEY);
     expect(response.content).not.toContain(STORE_KEY);
     expect(await readFile(storePath)).toEqual(storeBefore);
     expect((await stat(storePath)).mode & 0o777).toBe(modeBefore);
@@ -366,7 +428,38 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
     expect(existsSync(path.join(dshHome, '.credentials.yaml'))).toBe(false);
   });
 
-  it('executes standard tools and streaming across multiple turns in the same live session without copying credentials', async () => {
+  it('reports a final request tool-result ID mismatch against the SDK tool-use ID', () => {
+    expect(findFinalRequestToolUseIdMismatches([
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'call_01' },
+          { type: 'tool_result', tool_use_id: 'call_02' },
+        ],
+      },
+    ], ['call_01'])).toEqual([{
+      index: 0,
+      expectedSdkToolUseId: 'call_01',
+      requestToolUseId: 'call_01',
+      requestToolResultId: 'call_02',
+    }]);
+  });
+
+  it.each([false, true])('detects a managed credential copy with redirected config=%s', async (redirected) => {
+    const configDir = path.join(root, redirected ? 'redirected-config' : 'config');
+    vi.stubEnv('TAKT_CONFIG_DIR', configDir);
+    const destination = path.join(configDir, 'deepseek-harness', 'dsh-home');
+    await mkdir(destination, { recursive: true });
+    expectNoManagedCredentialCopy();
+    await writeFile(path.join(destination, '.credentials.yaml'), 'synthetic copied credential fixture');
+    expect(() => expectNoManagedCredentialCopy()).toThrow();
+  });
+
+  it('executes standard tools and streaming across multiple turns through the installed managed SDK without copying credentials', { timeout: 240_000 }, async () => {
+    await installDeepSeekHarness({ npmTimeoutMs: 120_000 });
+    const managedDirectory = await getReadyDeepSeekHarnessPackageDirectory();
+    expect(managedDirectory.startsWith(`${path.join(root, 'config', 'deepseek-harness')}${path.sep}`)).toBe(true);
+    vi.stubEnv('TAKT_DSH_USE_REAL_MANAGED_LOADER', '1');
     endpoint.setMode('workspace-tools');
     const events: StreamEvent[] = [];
     const storeBefore = await readFile(storePath);
@@ -383,18 +476,32 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
     });
     const response = await session.handleUserMessage({ text: 'Read, write, edit and run the workspace fixture.' });
 
+    expect(realManagedModuleLoads).toHaveBeenCalled();
+    expect(realManagedModuleLoads.mock.calls.every(([directory]) => directory === managedDirectory)).toBe(true);
     expect(response.kind).toBe('assistant_response');
     const toolNames = endpoint.requests[0]?.toolNames ?? [];
     expect(toolNames).toEqual(expect.arrayContaining(['read', 'write', 'edit', 'bash', 'glob', 'grep', 'subagent', 'workflow']));
     expect(endpoint.requests).toHaveLength(5);
     expect(JSON.stringify(endpoint.requests[0]?.messages)).toContain('Read, write, edit and run the workspace fixture.');
+    const toolUses = events.filter((event) => event.type === 'tool_use');
+    const toolResults = events.filter((event) => event.type === 'tool_result');
+    expect(toolUses.map((event) => event.data.tool)).toEqual(['read', 'write', 'edit', 'bash']);
+    expect(toolResults.map((event) => event.data.id)).toEqual(toolUses.map((event) => event.data.id));
+    const streamToolUseIds = toolUses.map((event) => event.data.id);
+    expect(findFinalRequestToolUseIdMismatches(endpoint.requests.at(-1)?.messages, streamToolUseIds)).toEqual([]);
+    for (const result of toolResults) {
+      const tool = toolUses.find((event) => event.data.id === result.data.id);
+      const safeContent = result.data.content
+        .replaceAll(STORE_KEY, '[redacted]')
+        .replaceAll(UPDATED_STORE_KEY, '[redacted]')
+        .replaceAll(ENV_KEY, '[redacted]');
+      expect(result.data.isError, `tool result for ${tool?.data.tool} reported an error: ${safeContent}`).toBe(false);
+    }
     expect(await readFile(path.join(workspace, 'generated.ts'), 'utf8')).toBe('export const value = 2;\n');
     expect(await readFile(path.join(workspace, 'shell.txt'), 'utf8')).toBe('shell-ok');
-    expect(events.filter((event) => event.type === 'tool_use')).toHaveLength(4);
-    expect(events.filter((event) => event.type === 'tool_result')).toHaveLength(4);
     expect(JSON.stringify(response)).not.toContain(STORE_KEY);
     expect(await readFile(storePath)).toEqual(storeBefore);
-    expect(existsSync(path.join(dshHome, '.credentials.yaml'))).toBe(false);
+    expectNoManagedCredentialCopy();
 
     const liveId = session.getSessionId();
     plan.strategy.permissionMode = 'readonly';
@@ -419,7 +526,7 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
     expect(events.filter((event) => event.type === 'tool_use')).toHaveLength(5);
     expect(events.filter((event) => event.type === 'tool_result')).toHaveLength(5);
     expect(await readFile(storePath)).toEqual(storeBefore);
-    expect(existsSync(path.join(dshHome, '.credentials.yaml'))).toBe(false);
+    expectNoManagedCredentialCopy();
   });
 
   it('refuses all report routes through the real agent dispatcher without starting the SDK or contacting the endpoint', async () => {
@@ -432,14 +539,12 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
       () => workspace, () => workspace, () => undefined, () => path.join(root, 'reports'),
       () => 'en', () => 'default',
     );
-    const fallback = builder.buildFallbackReportOptions(step, { cwd: workspace, resolvedProvider: 'opencode' }, { allowedTools: [] });
+    const fallback = builder.buildFallbackReportOptions(step, { cwd: workspace, resolvedProvider: 'opencode' }, {});
     expect(fallback).toBeDefined();
     const start = vi.spyOn(DeepSeekHarness.prototype, 'start');
     for (const options of [
       builder.buildResumeOptions(step, 'old-session', {}),
-      builder.buildNewSessionReportOptions(step, { allowedTools: [] }),
       builder.buildNewSessionReportOptions(step, {}),
-      builder.buildNewSessionReportOptions(step, { allowedTools: ['Read'] }),
       fallback!,
     ]) {
       const response = await runAgent(undefined, 'Write a tool-free report.', options);
@@ -551,15 +656,49 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
   it('terminates a real coding-tool child on abort before allowing another runtime', async () => {
     endpoint.setMode('held-tool');
     const controller = new AbortController();
-    const turn = runTurn({ abortSignal: controller.signal });
+    const events: StreamEvent[] = [];
+    const turn = runTurn({ abortSignal: controller.signal, onStream: (event) => events.push(event) });
     let childPid: number | undefined;
+    const childPidPath = path.join(workspace, 'child.pid');
+    const childStart = vi.waitFor(async () => {
+      childPid = Number(await readFile(childPidPath, 'utf8'));
+      expect(childPid).toBeGreaterThan(0);
+    }, { timeout: 10_000, interval: 50 }).then(
+      () => ({ type: 'child' as const }),
+      (error: unknown) => ({ type: 'timeout' as const, error }),
+    );
     try {
-      await vi.waitFor(async () => {
-        childPid = Number(await readFile(path.join(workspace, 'child.pid'), 'utf8'));
-        expect(childPid).toBeGreaterThan(0);
-      }, { timeout: 10_000, interval: 50 });
+      const outcome = await Promise.race([
+        childStart,
+        vi.waitFor(() => {
+          const bashToolUse = events.find((event): event is Extract<StreamEvent, { type: 'tool_use' }> => (
+            event.type === 'tool_use' && event.data.tool === 'bash'
+          ));
+          const bashToolResult = bashToolUse === undefined
+            ? undefined
+            : events.find((event): event is Extract<StreamEvent, { type: 'tool_result' }> => (
+              event.type === 'tool_result' && event.data.id === bashToolUse.data.id
+            ));
+          expect(bashToolResult).toBeDefined();
+          return bashToolResult;
+        }, { timeout: 10_000, interval: 50 }).then((result) => ({ type: 'tool-result' as const, result })),
+      ]);
+      if (outcome.type === 'tool-result') {
+        const safeResult = JSON.stringify(outcome.result?.data)
+          .replaceAll(STORE_KEY, '[redacted]')
+          .replaceAll(UPDATED_STORE_KEY, '[redacted]')
+          .replaceAll(ENV_KEY, '[redacted]');
+        expect(outcome.result?.data.isError, `held bash tool result arrived before child.pid: ${safeResult}`).toBe(false);
+        const markerOutcome = await childStart;
+        expect(markerOutcome.type).toBe('child');
+      } else if (outcome.type === 'timeout') {
+        throw outcome.error;
+      } else {
+        expect(outcome.type, 'the held bash tool returned before creating child.pid').toBe('child');
+      }
       controller.abort();
       expect((await turn).status).not.toBe('done');
+      // SDK shutdown proves process exit; it does not promise a final tool-result notification.
       await vi.waitFor(() => {
         expect(() => process.kill(childPid!, 0)).toThrow();
       }, { timeout: 5_000, interval: 50 });
@@ -599,6 +738,108 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
     expect(response.status).toBe('done');
     expect(endpoint.requests.at(-1)?.apiKey).toContain(ENV_KEY);
     expect(endpoint.requests.at(-1)?.apiKey).not.toContain(STORE_KEY);
+  });
+
+  it('keeps other saved references and plugin records available with an explicit launch credential', async () => {
+    const otherKey = 'dummy-other-credential-1487';
+    const recordKey = 'dummy-plugin-record-1487';
+    const marker = path.join(root, 'credential-observation.json');
+    const packageDirectory = path.join(root, 'credential-observer-plugin');
+    await writeStore([
+      'version: 1',
+      'refs:',
+      `  DEEPSEEK_API_KEY: ${STORE_KEY}`,
+      `  OTHER_PLUGIN_KEY: ${otherKey}`,
+      'records:',
+      '  observer-plugin/default:',
+      '    kind: api-key',
+      `    key: ${recordKey}`,
+      '',
+    ].join('\n'));
+    const sourceBefore = await readFile(storePath);
+    await mkdir(packageDirectory);
+    await writeFile(path.join(packageDirectory, 'package.json'), JSON.stringify({
+      name: 'local-credential-observer-plugin',
+      version: '1.0.0',
+      type: 'module',
+      main: './index.js',
+    }));
+    await writeFile(path.join(packageDirectory, 'index.js'), [
+      "import { writeFileSync } from 'node:fs';",
+      "export const inject = ['credentials'];",
+      'export async function apply(ctx, config) {',
+      "  const credentials = ctx.get('credentials');",
+      "  const other = await credentials.resolve('OTHER_PLUGIN_KEY');",
+      "  const record = await credentials.readRecord('observer-plugin/default');",
+      '  const records = await credentials.listRecords();',
+      '  const patchIndex = process.argv.indexOf(\'--patch\');',
+      '  writeFileSync(config.marker, JSON.stringify({',
+      '    other, record, records, patchPath: process.argv[patchIndex + 1],',
+      '  }), { mode: 0o600 });',
+      '}',
+    ].join('\n'));
+
+    const response = await callDeepSeekHarness('live-smoke', 'Return ok.', {
+      cwd: workspace,
+      childProcessEnv: { DEEPSEEK_API_KEY: ENV_KEY },
+      providerOptions: {
+        baseUrl: endpoint.baseUrl,
+        requestTimeoutMs: REQUEST_TIMEOUT_MS,
+        plugins: [{ source: `npm:file:${packageDirectory}`, id: 'credential-observer', config: { marker } }],
+      },
+    });
+
+    expect(response.status).toBe('done');
+    expect(endpoint.requests.at(-1)?.apiKey).toBe(ENV_KEY);
+    const observation = JSON.parse(await readFile(marker, 'utf8')) as {
+      other: { value: string; source: string };
+      record: { kind: string; key: string };
+      records: Array<{ key: string; kind: string }>;
+      patchPath: string;
+    };
+    expect(observation.other).toEqual({ value: otherKey, source: 'file' });
+    expect(observation.record).toEqual({ kind: 'api-key', key: recordKey });
+    expect(observation.records).toContainEqual({ key: 'observer-plugin/default', kind: 'api-key' });
+    const patchText = await readFile(observation.patchPath, 'utf8');
+    const patch = parseYaml(patchText) as Array<{ id?: string; config?: { path?: string; apiKeyEnv?: string } }>;
+    expect(patch[0]).toEqual({ id: 'credentials', config: { path: storePath } });
+    expect(patch[1]?.config?.apiKeyEnv).toMatch(/^TAKT_DSH_EXPLICIT_[0-9A-F]{32}$/);
+    expect(patchText).not.toContain(ENV_KEY);
+    expect(existsSync(path.join(path.dirname(observation.patchPath), 'environment-credentials.yaml'))).toBe(false);
+    expect((await stat(observation.patchPath)).mode & 0o777).toBe(0o600);
+    expect((await stat(path.dirname(observation.patchPath))).mode & 0o777).toBe(0o700);
+    expect(await readFile(storePath)).toEqual(sourceBefore);
+    expectNoManagedCredentialCopy();
+    await closeDeepSeekHarnessProcesses();
+    expect(existsSync(path.dirname(observation.patchPath))).toBe(false);
+  });
+
+  it.each([false, true])('refuses a credential source mode switch in a live session (explicit first=%s)', async (explicitFirst) => {
+    vi.stubEnv('DEEPSEEK_API_KEY', ENV_KEY);
+    const storeBefore = await readFile(storePath);
+    const environmentFor = (explicit: boolean): Readonly<Record<string, string>> => (
+      explicit ? { DEEPSEEK_API_KEY: ENV_KEY } : {}
+    );
+    const first = await runTurn({ childProcessEnv: environmentFor(explicitFirst) });
+    expect(first.status).toBe('done');
+    expect(endpoint.requests.at(-1)?.apiKey).toContain(explicitFirst ? ENV_KEY : STORE_KEY);
+    expect(endpoint.requests).toHaveLength(1);
+
+    const changed = await runTurn({
+      sessionId: first.sessionId!,
+      childProcessEnv: environmentFor(!explicitFirst),
+    });
+    expect(changed.status).toBe('error');
+    expect(changed.content).toContain('changed during this session: start a new run or session');
+    expect(endpoint.requests).toHaveLength(1);
+    expect(changed.content).not.toContain(ENV_KEY);
+    expect(changed.content).not.toContain(STORE_KEY);
+
+    const fresh = await runTurn({ childProcessEnv: environmentFor(!explicitFirst) });
+    expect(fresh.status).toBe('done');
+    expect(endpoint.requests).toHaveLength(2);
+    expect(endpoint.requests.at(-1)?.apiKey).toContain(explicitFirst ? STORE_KEY : ENV_KEY);
+    expect(await readFile(storePath)).toEqual(storeBefore);
   });
 
   it('does not substitute a different reference for the selected reference', async () => {
@@ -744,28 +985,33 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
     }, { timeout: WATCHER_TIMEOUT_MS, interval: WATCHER_POLL_INTERVAL_MS });
   });
 
-  it('keeps an echoed dummy credential out of TAKT output, session-log uploads and the runtime session store', async () => {
+  it.each([false, true])('keeps an echoed dummy credential out of TAKT output, session-log uploads and the runtime session store (explicit=%s)', async (explicit) => {
     endpoint.setMode('auth-echo');
+    const credential = explicit ? ENV_KEY : STORE_KEY;
     await mkdir(path.join(root, 'reports'));
     const logger = createProviderEventLogger({
       logsDir: path.join(root, 'reports'), sessionId: 'credential-echo', runId: 'credential-echo', enabled: true,
     });
     const events: unknown[] = [];
-    const response = await runTurn({ prompt: 'Trigger the mocked auth rejection.', onStream: (event) => {
-      events.push(event);
-      logger.logEvent({ provider: 'deepseek-harness', providerModel: 'deepseek-v4-flash', step: 'smoke' }, event);
-    } });
+    const response = await runTurn({
+      prompt: 'Trigger the mocked auth rejection.',
+      ...(explicit ? { childProcessEnv: { DEEPSEEK_API_KEY: ENV_KEY } } : {}),
+      onStream: (event) => {
+        events.push(event);
+        logger.logEvent({ provider: 'deepseek-harness', providerModel: 'deepseek-v4-flash', step: 'smoke' }, event);
+      },
+    });
 
     await closeDeepSeekHarnessProcesses();
 
     expect(endpoint.requests).toHaveLength(1);
-    expect(endpoint.requests[0]?.apiKey).toContain(STORE_KEY);
+    expect(endpoint.requests[0]?.apiKey).toBe(credential);
     expect(response.status).toBe('error');
-    expect(response.content).not.toContain(STORE_KEY);
+    expect(response.content).not.toContain(credential);
     expect(response.content).toMatch(/credential|auth/iu);
     expect(endpoint.requests[0]?.hasSessionLog).toBe(false);
-    expect(JSON.stringify(events)).not.toContain(STORE_KEY);
-    expect(await readFile(logger.filepath, 'utf8')).not.toContain(STORE_KEY);
+    expect(JSON.stringify(events)).not.toContain(credential);
+    expect(await readFile(logger.filepath, 'utf8')).not.toContain(credential);
 
     const timestamp = '2026-09-24T12:00:00.000Z';
     const report = renderTraceReportFromRecords({
@@ -776,9 +1022,9 @@ describe.skipIf(!supportedRuntime)('DeepSeek Harness credential store integratio
       status: response.status, content: response.content, instruction: 'Trigger the mocked auth rejection.', timestamp,
     }], [], 'full');
     expect(report).toContain(response.content);
-    expect(report).not.toContain(STORE_KEY);
+    expect(report).not.toContain(credential);
 
-    const leakedIntoRuntimeStore = collectSecretHits(dshHome, STORE_KEY);
+    const leakedIntoRuntimeStore = collectSecretHits(dshHome, credential);
     expect(
       leakedIntoRuntimeStore,
       'the pinned DeepSeek Harness runtime persisted the echoed dummy credential into its session store',

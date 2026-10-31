@@ -94,6 +94,7 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => ({
 
 vi.mock('../shared/ui/index.js', () => ({
   info: vi.fn(),
+  warn: vi.fn(),
   error: vi.fn(),
   blankLine: vi.fn(),
   StreamDisplay: vi.fn().mockImplementation(() => ({

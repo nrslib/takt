@@ -6,18 +6,17 @@ import { confirm, selectMultipleOptions } from '../../../shared/prompt/index.js'
 import { success, error as logError } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage, sanitizeTerminalText } from '../../../shared/utils/index.js';
 import { deleteBranch } from './taskActions.js';
+import type { DeleteBranchOptions } from './taskBranchLifecycleActions.js';
 import { assertReusableWorktreePath } from '../execute/reusedWorktree.js';
 import { formatTaskStatusLabel } from './taskStatusLabel.js';
 
 const log = createLogger('list-tasks');
 
-class TaskCleanupAbortedError extends Error {}
-
 function getProjectDir(task: TaskListItem): string {
   return dirname(dirname(task.filePath));
 }
 
-function cleanupBranchIfPresent(task: TaskListItem, projectDir: string): void {
+function cleanupBranchIfPresent(task: TaskListItem, projectDir: string, options?: DeleteBranchOptions): boolean {
   if (task.data?.merge_task === true) {
     if (task.worktreePath !== undefined) {
       let exists = true;
@@ -32,27 +31,29 @@ function cleanupBranchIfPresent(task: TaskListItem, projectDir: string): void {
         rmSync(task.worktreePath, { recursive: true, force: true });
       }
     }
-    return;
+    return true;
   }
   if (!task.branch) {
-    return;
+    return true;
   }
+  const branchOptions: [] | [DeleteBranchOptions] = options === undefined ? [] : [options];
+  return deleteBranch(projectDir, task, ...branchOptions);
+}
 
-  if (!deleteBranch(projectDir, task)) {
-    throw new TaskCleanupAbortedError('Branch cleanup failed');
-  }
+export function deleteTaskResources(task: TaskListItem, options?: DeleteBranchOptions): boolean {
+  if (task.kind === 'running') throw new Error(`Cannot delete running task "${task.name}"`);
+  const projectDir = getProjectDir(task);
+  return new TaskRunner(projectDir).deleteTaskWithCleanup(task.name, task.kind,
+    () => cleanupBranchIfPresent(task, projectDir, options));
 }
 
 export async function deleteTaskByKind(task: TaskListItem): Promise<boolean> {
   if (task.kind === 'running') throw new Error(`Cannot delete running task "${task.name}"`);
   const confirmed = await confirm(`Delete ${task.kind} task "${sanitizeTerminalText(task.name)}"?`, false);
   if (!confirmed) return false;
-  const projectDir = getProjectDir(task);
   try {
-    const runner = new TaskRunner(projectDir);
-    runner.deleteTask(task.name, task.kind, () => cleanupBranchIfPresent(task, projectDir));
+    if (!deleteTaskResources(task)) return false;
   } catch (err) {
-    if (err instanceof TaskCleanupAbortedError) return false;
     const msg = getErrorMessage(err);
     logError(`Failed to delete ${task.kind} task "${sanitizeTerminalText(task.name)}": ${sanitizeTerminalText(msg)}`);
     log.error('Failed to delete task', { name: task.name, kind: task.kind, filePath: task.filePath, error: msg });
@@ -103,18 +104,15 @@ export async function deleteSelectedTasks(tasks: TaskListItem[]): Promise<boolea
 function deleteConfirmedTasks(tasks: DeletableTask[]): number {
   let deletedCount = 0;
   for (const task of tasks) {
-    const projectDir = getProjectDir(task);
     try {
-      const runner = new TaskRunner(projectDir);
-      runner.deleteTask(task.name, task.kind, () => cleanupBranchIfPresent(task, projectDir));
-      deletedCount++;
-      log.info('Deleted task in bulk delete', { name: task.name, kind: task.kind });
-    } catch (err) {
-      if (err instanceof TaskCleanupAbortedError) {
+      if (!deleteTaskResources(task)) {
         logError(`Failed to cleanup branch for task "${sanitizeTerminalText(task.name)}", skipping`);
         log.error('Branch cleanup failed, skipping task', { name: task.name, kind: task.kind });
         continue;
       }
+      deletedCount++;
+      log.info('Deleted task in bulk delete', { name: task.name, kind: task.kind });
+    } catch (err) {
       const msg = getErrorMessage(err);
       logError(`Failed to delete task "${sanitizeTerminalText(task.name)}": ${sanitizeTerminalText(msg)}`);
       log.error('Failed to delete task in bulk delete', { name: task.name, kind: task.kind, error: msg });

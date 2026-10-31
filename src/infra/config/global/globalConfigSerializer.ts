@@ -77,8 +77,15 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
     raw.draft_pr = config.draftPr;
   }
   const rawCaccia = denormalizeCacciaConfig(config.caccia);
+  if (config.director !== undefined) {
+    raw.director = { patrol_interval: config.director.patrolInterval,
+      ...(config.director.slack === undefined ? {} : { slack: {
+        channel_id: config.director.slack.channelId, allowed_user_ids: config.director.slack.allowedUserIds,
+      } }),
+    };
+  }
   if (config.manager !== undefined) {
-    raw.manager = { auto_run: config.manager.autoRun, default_workflow: config.manager.defaultWorkflow, notifications: config.manager.notifications };
+    raw.manager = { auto_run: config.manager.autoRun, patrol_interval: config.manager.patrolInterval, default_workflow: config.manager.defaultWorkflow, notifications: config.manager.notifications, sensitive_paths: config.manager.sensitivePaths };
   }
   const rawMerge = denormalizeMergeConfig(config.merge);
   if (rawMerge !== undefined) raw.merge = rawMerge;
@@ -123,6 +130,9 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
   }
   if (config.kiroCliPath) {
     raw.kiro_cli_path = config.kiroCliPath;
+  }
+  if (config.devinCliPath) {
+    raw.devin_cli_path = config.devinCliPath;
   }
   if (config.copilotGithubToken) {
     raw.copilot_github_token = config.copilotGithubToken;

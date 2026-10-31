@@ -1060,6 +1060,3 @@ _loop_judge_evaluation
 ### adjudicate: review-resolution.md (history)
 History: 1 / 2 completed previous executions
 - execution=0c26d76b-1f8a-4530-9e06-d8e3b10a6895/885cc9f2-3799-4e50-93bd-deec38578a10 order=1 status=completed producer=adjudicate path=`./project/reports/.takt-report-internal/executions/versions/6c1b51db-563f-4834-b97d-dcb96fb8eb13/review-resolution.md`
-
-
-

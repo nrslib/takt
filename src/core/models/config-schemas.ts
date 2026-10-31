@@ -151,7 +151,9 @@ export const WorkflowCategoryOverlaySchema = z.object({
 const ProjectConfigObjectBaseSchema = z.object({
   manager: z.object({
     auto_run: z.boolean().optional(),
+    patrol_interval: z.number().int().positive().optional(),
     default_workflow: z.string().trim().min(1).optional(),
+    sensitive_paths: z.array(z.string().trim().min(1)).optional(),
     notifications: z.object({
       question: z.boolean().optional(),
       awaiting_merge: z.boolean().optional(),
@@ -210,15 +212,22 @@ const ProjectConfigObjectBaseSchema = z.object({
   with_submodules: z.boolean().optional(),
 }).strict();
 
+const SlackConfigSchema = z.object({
+  channel_id: z.string().trim().min(1),
+  allowed_user_ids: z.array(z.string().trim().min(1)),
+}).strict();
+
 const ProjectConfigObjectSchema = ProjectConfigObjectBaseSchema.extend({
   manager: ProjectConfigObjectBaseSchema.shape.manager.unwrap().extend({
     main_merge: z.enum(['auto', 'approve']).optional(),
+    slack: SlackConfigSchema.optional(),
   }).optional(),
 });
 
 export const ProjectConfigSchema = ProjectConfigObjectSchema;
 
 const GlobalOnlyConfigSchema = z.object({
+  director: z.object({ patrol_interval: z.number().int().positive().optional(), slack: SlackConfigSchema.optional() }).strict().optional(),
   language: LanguageSchema.optional().default(DEFAULT_LANGUAGE),
   logging: LoggingConfigSchema.optional(),
   worktree_dir: z.string().optional(),
@@ -235,6 +244,7 @@ const GlobalOnlyConfigSchema = z.object({
   cursor_cli_path: z.string().optional(),
   copilot_cli_path: z.string().optional(),
   kiro_cli_path: z.string().optional(),
+  devin_cli_path: z.string().optional(),
   copilot_github_token: z.string().optional(),
   kiro_api_key: z.string().optional(),
   opencode_api_key: z.string().optional(),

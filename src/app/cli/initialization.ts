@@ -30,8 +30,15 @@ export function assertConfigDirsDoNotCollide(projectDir: string): void {
   );
 }
 
-export async function initializeCliExecutionContext(program: Command, cliVersion: string): Promise<void> {
+export async function initializeCliExecutionContext(
+  program: Command,
+  cliVersion: string,
+  suppressVerboseConsole = false,
+): Promise<void> {
   executionContext = undefined;
+  if (suppressVerboseConsole) {
+    setVerboseConsole(false);
+  }
   const cwd = resolve(process.cwd());
   const rootOpts = program.opts();
   const pipelineMode = rootOpts.pipeline === true;
@@ -47,7 +54,9 @@ export async function initializeCliExecutionContext(program: Command, cliVersion
   initDebugLogger(verbose ? { enabled: true, trace: config.logging?.trace } : undefined, cwd);
 
   if (verbose) {
-    setVerboseConsole(true);
+    if (!suppressVerboseConsole) {
+      setVerboseConsole(true);
+    }
     setLogLevel('debug');
   } else {
     setLogLevel(config.logging?.level ?? 'info');

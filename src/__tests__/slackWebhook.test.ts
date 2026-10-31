@@ -18,18 +18,16 @@ describe('sendSlackNotification', () => {
     vi.unstubAllGlobals();
   });
 
-  it.each(['HTTP', 'Error', 'string'] as const)('reports a %s failure to stderr and its optional observer without leaking secrets', async (kind) => {
+  it.each(['HTTP', 'Error', 'string'] as const)('reports a %s failure to stderr without leaking secrets', async (kind) => {
     vi.stubGlobal('fetch', kind === 'HTTP'
       ? vi.fn().mockResolvedValue({ ok: false, status: 503, statusText: `Unavailable ${webhookUrl}` })
       : vi.fn().mockRejectedValue(kind === 'Error'
         ? new Error(`Could not connect to ${webhookUrl}`)
         : `Could not connect to ${webhookUrl}`));
     const stderrSpy = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
-    const failed = vi.fn();
-    await expect(sendSlackNotification(webhookUrl, 'notice', failed)).resolves.toBeUndefined();
+    await expect(sendSlackNotification(webhookUrl, 'notice')).resolves.toBeUndefined();
     expect(stderrSpy).toHaveBeenCalledOnce();
-    expect(failed).toHaveBeenCalledOnce();
-    const diagnostics = [...stderrSpy.mock.calls.map(([message]) => message), ...failed.mock.calls.map(([message]) => message)];
+    const diagnostics = stderrSpy.mock.calls.map(([message]) => message);
     for (const diagnostic of diagnostics) {
       expect(diagnostic).toMatch(/Slack webhook.*(?:failed|error)/i);
       for (const secret of [webhookUrl, 'hooks.slack.com', 'T00', 'B00', 'test-secret']) {

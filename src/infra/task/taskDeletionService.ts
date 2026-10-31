@@ -26,6 +26,17 @@ export class TaskDeletionService {
       return;
     }
 
+    this.deleteTaskWithCleanup(name, status, () => {
+      cleanup();
+      return true;
+    });
+  }
+
+  deleteTaskWithCleanup(
+    name: string,
+    status: DeletableTaskStatus,
+    cleanup: () => boolean,
+  ): boolean {
     const deletionId = randomUUID();
     const processIdentity = getSelfProcessIdentity();
     this.store.update((current) => {
@@ -47,8 +58,9 @@ export class TaskDeletionService {
       };
     }, { deletionId });
 
+    let cleanupSucceeded: boolean;
     try {
-      cleanup();
+      cleanupSucceeded = cleanup();
     } catch (cleanupError) {
       try {
         this.clearDeletionReservation(name, status, deletionId);
@@ -61,6 +73,11 @@ export class TaskDeletionService {
       throw cleanupError;
     }
 
+    if (!cleanupSucceeded) {
+      this.clearDeletionReservation(name, status, deletionId);
+      return false;
+    }
+
     this.store.update((current) => {
       const exists = current.tasks.some((task) => (
         task.name === name && task.status === status && task.deletion?.id === deletionId
@@ -70,6 +87,7 @@ export class TaskDeletionService {
       }
       return { tasks: current.tasks.filter((task) => task.deletion?.id !== deletionId) };
     }, { deletionId });
+    return true;
   }
 
   private clearDeletionReservation(name: string, status: DeletableTaskStatus, deletionId: string): void {

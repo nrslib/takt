@@ -89,6 +89,10 @@ vi.mock('../infra/kiro/client.js', () => ({
   callKiro: vi.fn(async (): Promise<AgentResponse> => fakeAgentResponse),
 }));
 
+vi.mock('../infra/devin/index.js', () => ({
+  callDevin: vi.fn(async (): Promise<AgentResponse> => fakeAgentResponse),
+}));
+
 vi.mock('../infra/mock/client.js', () => ({
   MockClient: vi.fn(),
   callMock: vi.fn(async (): Promise<AgentResponse> => fakeAgentResponse),
@@ -107,6 +111,7 @@ vi.mock('../infra/config/index.js', () => ({
   resolveCopilotCliPath: () => '/usr/bin/copilot',
   resolveKiroApiKey: () => 'test-key',
   resolveKiroCliPath: () => '/usr/bin/kiro',
+  resolveDevinCliPath: () => '/usr/bin/devin',
 }));
 
 vi.mock('../infra/opencode/types.js', () => ({
@@ -160,6 +165,22 @@ function getLastCallOptions(mockFn: { mock: { calls: unknown[][] } }): AnyCallOp
 }
 
 describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => {
+  it.each([undefined, true] as const)('passes MCP ownership independently of session ownership (%s)', async (callerManagedMcp) => {
+    const { ClaudeHeadlessProvider } = await import('../infra/providers/claude-headless.js');
+    const { ClaudeTerminalProvider } = await import('../infra/providers/claude-terminal.js');
+    const { CursorProvider } = await import('../infra/providers/cursor.js');
+    const { callClaudeHeadless } = await import('../infra/claude-headless/client.js');
+    const { callClaudeTerminal } = await import('../infra/claude-terminal/client.js');
+    const { callCursor, callCursorCustom } = await import('../infra/cursor/client.js');
+    for (const provider of [new ClaudeHeadlessProvider(), new ClaudeTerminalProvider(), new CursorProvider()]) {
+      for (const systemPrompt of [undefined, 'manager']) {
+        await provider.setup({ name: 'manager', systemPrompt }).call('prompt', { cwd: '/tmp', preparedMcp, callerManagedMcp });
+      }
+    }
+    for (const call of [callClaudeHeadless, callClaudeTerminal, callCursor, callCursorCustom]) {
+      expect(getLastCallOptions(vi.mocked(call))).toMatchObject({ preparedMcp, callerManagedMcp });
+    }
+  });
   it('preserves Claude MCP-only side effects through the client boundary', async () => {
     const { ClaudeProvider } = await import('../infra/providers/claude.js');
     const { callClaude } = await import('../infra/claude/client.js');
@@ -298,6 +319,19 @@ describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => 
       preparedMcp,
     });
     const options = getLastCallOptions(callKiro as unknown as { mock: { calls: unknown[][] } });
+    expect(options.preparedMcp).toBe(preparedMcp);
+  });
+
+  it('Given devin provider, When ProviderCallOptions.preparedMcp is set, Then callDevin receives preparedMcp in DevinCallOptions', async () => {
+    const { DevinProvider } = await import('../infra/providers/devin.js');
+    const { callDevin } = await import('../infra/devin/index.js');
+    const provider = new DevinProvider();
+    const agent = provider.setup({ name: 'test' });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      preparedMcp,
+    });
+    const options = getLastCallOptions(callDevin as unknown as { mock: { calls: unknown[][] } });
     expect(options.preparedMcp).toBe(preparedMcp);
   });
 

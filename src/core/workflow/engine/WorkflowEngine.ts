@@ -267,7 +267,10 @@ export class WorkflowEngine extends EventEmitter {
     this.sharedRuntime.workflowStepParticipationIndex ??=
       restoreWorkflowStepParticipationIndex(this.options.resumePoint);
     this.sharedRuntime.reportGenerationIndex ??=
-      new ReportGenerationIndex(this.options.resumePoint?.missing_report_generations);
+      new ReportGenerationIndex(
+        this.options.resumePoint?.missing_report_generations,
+        this.options.resumePoint?.report_input_recoveries,
+      );
     if (
       this.sharedRuntime.resumeArtifactOccurrenceIndex === undefined
       && this.options.resumeSource?.resumeMode === 'requeue'
@@ -658,6 +661,7 @@ export class WorkflowEngine extends EventEmitter {
       workflow_call_invocations: workflowCallInvocations,
       workflow_step_participations: workflowStepParticipations,
       missing_report_generations: this.sharedRuntime.reportGenerationIndex!.serialized(),
+      report_input_recoveries: this.sharedRuntime.reportGenerationIndex!.serializedInputRecoveries(),
     };
   }
 
@@ -772,6 +776,7 @@ export class WorkflowEngine extends EventEmitter {
       workflow_call_invocations: workflowCallInvocations,
       workflow_step_participations: workflowStepParticipations,
       missing_report_generations: this.sharedRuntime.reportGenerationIndex!.serialized(),
+      report_input_recoveries: this.sharedRuntime.reportGenerationIndex!.serializedInputRecoveries(),
     };
     this.activeResumePoint = refreshedResumePoint;
     this.sharedRuntime.activeResumePoint = refreshedResumePoint;
@@ -1043,6 +1048,7 @@ function restoreActiveResumePoint(
     restored.workflow_call_invocations = current.workflow_call_invocations;
     restored.workflow_step_participations = current.workflow_step_participations;
     restored.missing_report_generations = current.missing_report_generations;
+    restored.report_input_recoveries = current.report_input_recoveries;
   }
 
   sharedRuntime.activeResumePoint = restored;

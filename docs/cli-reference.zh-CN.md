@@ -19,7 +19,7 @@
 | `--skip-git` | 跳过创建分支、commit 和 push（pipeline 模式，仅执行 workflow） |
 | `--repo <owner/repo>` | 指定仓库（创建 PR 时使用） |
 | `-q, --quiet` | 最小输出模式：抑制 AI 输出（用于 CI） |
-| `--provider <name>` | 覆盖 agent provider（claude\|claude-sdk\|claude-headless\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|pi\|mock） |
+| `--provider <name>` | 覆盖 agent provider（claude\|claude-sdk\|claude-headless\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|devin\|pi\|mock） |
 | `--auto-strategy <strategy>` | 覆盖自动路由策略（`cost`\|`balanced`\|`performance`）。只有执行进入当前 workflow 或具有有效 `auto_routing` 的 workflow-call 子流程时才应用；否则 TAKT 会警告并忽略。 |
 | `--model <name>` | 覆盖 agent model |
 | `--runtime-assignment <name>` | 为本次启动选择合并后的 runtime `provider.assignments` entry，优先于 `provider.directories` |
@@ -74,6 +74,57 @@ takt update codex     # 仅更新指定提供者
 ## DeepSeek Harness
 
 `takt install deepseek-harness` 将固定版本的官方 SDK/runtime 安装到 TAKT 管理目录。安装需要连接 npm 注册表，并沿用现有的 npm 注册表和代理设置。优先使用运行 TAKT 的 Node 随附的 npm；如果没有，则使用 `PATH` 中的 npm。通过完整性检查且与当前固定版本一致的安装在重复运行时保持不变；完整的旧版本会更新到固定版本，检测到的损坏可修复。如果检查通过但 provider 仍运行异常，可用 `takt install deepseek-harness --force` 重新安装。单独运行 `takt install` 仍将 `install` 作为任务处理。旧命令 `takt deepseek-harness install` 已移除。`provider: deepseek-harness` 和认证来源请参阅[配置指南](./configuration.zh-CN.md#deepseek-harness-deepseek-harness)。
+
+## director（实验性）
+
+### 开始对话
+
+在交互终端中运行：
+
+```bash
+takt director
+takt director --help
+```
+
+`takt director` 打开与 director 对话的 TUI。对话由 daemon 持有并执行；关闭并重新打开 TUI 后，会继续同一个对话。从任何负责的仓库启动，都会连接到该 daemon 共享的同一个对话。重新打开时不会重新显示之前的发言和回复，对话历史由 provider 的会话管理。
+
+director 是实验性功能，行为和保存的数据格式可能随时更改，恕不另行通知。对话会产生 provider 费用；定期巡检也会调用 provider 并产生费用。
+
+### 与 manager 的分工和人工决定
+
+manager 推进其负责的仓库或 workspace 的目标，提交任务、整合成果并申请完成。director 查看所有 manager 的目标和未回答的询问，对需要人工处理的事项保存通知，包括等待合并、已暂停的目标、已保存的 `blocked` 通知和未回答的询问。向 manager 提问或传达信息时，通过 manager 对话发送，并将 `director` 记录为发言者。同一对象的保存状态不变时，不会重复通知。
+
+`takt_tell_manager` 会将消息以“等待执行”的状态保存到 manager 的对话记录中，即使 manager 正忙也会接受。保存后立即返回操作 ID 和 manager，无需等待回复。每个 manager 的对话轮次和收件箱事件共用一个执行名额。当前处理结束后，等待的消息按保存顺序、优先于收件箱事件，以 `director` 为发言者各执行一次。人从 TUI 或 Slack 发送的消息仍会在 manager 正忙时被拒绝，不会保存或稍后执行。
+
+回复、失败和中断结果会以同一操作 ID 保存，稍后在 director 界面中通知。如果消息保存失败，工具会返回失败，不会接受该消息。接受后即使连接中断，已保存的消息仍会保留，director 不会自动重发。
+
+daemon 重启后，尚未开始的消息即使没有客户端连接也会执行。已经开始但在结果保存前停止的消息，会向 director 和人报告为中断，不会自动重新执行。
+
+director 不能执行 shell 命令、写入文件或修改配置。run 阶段、裁定、日志等任务内部信息由各 manager 检查。合并决策、规格决策以及删除等不可逆操作仍由人决定；director 不代替人回答询问。
+
+只有人明确指示“合并目标 G”时，director 才会请 G 的 manager 使用 `takt merge` 合并其 PR。转发前，director 会唯一确定仓库、目标和 manager，确认当前目标为 `awaiting_merge`，并读取已保存的 PR 编号和 URL。如果对象不明确、状态不同、没有保存 PR 或读取失败，会向人说明原因而不转发。director 自己不执行合并；manager 通过 `takt_merge_goal_pr` 调用 `takt merge`。转发或接受指令本身不代表合并成功；director 会根据稍后收到的同一操作 ID 的结果报告成败。执行时仍会通过现有检查：如果目标已暂停、已中止、不再是 `awaiting_merge`，或 PR 编号与保存的编号不符，则不会合并。
+
+manager 列表（`takt_list_managers`）和巡检按 project 分别读取。无法读取的 project（例如不是 Git 仓库的目录）会连同原因一起说明，并返回其余 manager、继续巡检。单个 project 的读取失败不会导致整个列表或巡检失败。
+
+### 巡检配置
+
+daemon 运行期间，director 会定期检查已注册的 repository manager 和 workspace manager。巡检独立于人的对话运行，不会被视为人的合并指令。daemon 原有的空闲退出行为不变。
+
+在全局 `~/.takt/config.yaml` 中设置 director，不要写入项目的 `.takt/config.yaml`：
+
+| 配置项 | 含义 |
+|--------|------|
+| `director.patrol_interval` | 巡检间隔，单位为秒，必须是正整数，默认 `900`（15 分钟）。 |
+| `director.slack.channel_id` | 用于 director 对话和汇总通知的 Slack 频道。 |
+| `director.slack.allowed_user_ids` | 允许从 Slack 向 director 发言的用户。配置 `director.slack` 时必填；空数组表示不接受任何用户的发言。 |
+
+参阅[全局配置字段参考](./configuration.zh-CN.md#全局配置字段参考)。
+
+### 连接 Slack
+
+使用与 manager 相同的 Slack App 和环境变量 `TAKT_SLACK_APP_TOKEN` / `TAKT_SLACK_BOT_TOKEN`。将机器人邀请到 director 频道，在启动 `takt daemon` 的 shell 中设置这两个变量，并在修改 Slack 配置后重新启动 daemon。令牌通过环境变量传递，不写入配置文件。
+
+获准用户的发言进入同一个 director 对话，回复发送到原消息列。一次对话或巡检中新产生的通知会汇总为频道中的一条消息。未配置 `director.slack` 时，director 不会通过 Slack 发送或接收消息。App 的创建和连接步骤参阅[通过 Slack 与 director 对话](./configuration.zh-CN.md#通过-slack-与-director-对话)。
 
 ## 交互模式
 
@@ -234,6 +285,15 @@ server 暴露以下工具：
 | `takt_list_tasks` | 不读取日志或 report 正文，返回任务和 run 的紧凑摘要。 |
 | `takt_get_run` | 返回一个 run 的当前 step、phase、日志、report 和追加指令投递状态。 |
 | `takt_tell_run` | 重新确认目标后，向一个正在运行的 worktree clone 任务发送追加指令。 |
+| `takt_cleanup_tasks` | 预览筛选后的任务，仅在 `confirm: true` 时删除（仅限 `all`）。 |
+
+`takt_cleanup_tasks` 用于先查看筛选后的任务，再执行删除。必需输入为绝对路径的 `cwd` 和 `reason`。可选输入为 `statuses`（可指定一个或多个 `pending`、`completed`、`failed`、`exceeded`、`pr_failed`，不能指定 `running`）、`goalId`、`branch` 和 `confirm`（默认 `false`）。必须至少指定 `statuses`、`goalId` 或 `branch` 中的一个。
+
+省略 `confirm` 或设为 `false` 时，只返回匹配列表，不删除任何内容。只有 `confirm: true` 才会删除，删除范围与 `takt list` 相同。此工具仅在 `all` 工具集中提供，不包含在 `read-only` 或 `manager` 中；`manager` 另有 `takt_remove_goal_task` 工具。
+
+`takt_stop_goal_task` 可在 `manager` 和 `all` 工具集中使用。传入绝对路径的 `cwd`。从 `takt_list_tasks` 返回的同一个任务条目中，将 `name` 的值作为 `taskName`，并使用该条目的 `goalId` 和 `executionId`。所属PID必须仍存活。已保存启动时间时，必须获取当前启动时间并确认一致。未保存启动时间时，只要 goalId、taskName、executionId 一致、任务仍在运行且所属PID存活，就接受请求。标识不匹配、任务未运行或所属进程已结束时，返回原因且不保存停止请求。已保存启动时间但无法获取当前值时，也会拒绝请求。工具只保存请求；worker 每500毫秒检查一次并自行中断，执行和清理结束前任务保持 `running`。结束后保存 `failed` 和任务停止原因，可与整个 goal 的中止区分。其他任务和 goal 继续运行。只有在评估重复请求时，同一执行仍为 `running` 且能够验证所属进程，才返回已保存的请求；重试使用新的执行ID。
+
+daemon 在处理每个项目的事件前，将中断的任务恢复为 `failed` 并创建 goal 任务完成事件，即使没有 pending 任务也会执行恢复。仅当所属PID缺失、已死亡，或已知保存的启动时间与当前启动时间不一致时，才进行恢复。如果PID仍存活，仅凭保存的或当前的启动时间不可用，不会恢复任务，而是保留 `running` 状态。
 
 每个工具的 `cwd` 都会通过 `realpath` 解析，且必须位于 MCP server 允许的项目根目录内。默认允许的根目录是启动 `takt-mcp` 的目录。
 
@@ -388,11 +448,28 @@ takt list --non-interactive --action delete --branch takt/my-branch --yes
 takt list --non-interactive --format json
 ```
 
-`--action` 接受 `diff`、`sync`、`try`、`merge` 或 `delete`。非交互操作需要 `--branch`，`delete` 还需要 `--yes`。交互模式中的 **Merge from root** 会将根仓库 HEAD 合并到任务分支，并使用 AI 辅助解决冲突。
+`--action` 接受 `diff`、`sync`、`try`、`merge` 或 `delete`。非交互模式下，除 `delete` 外的操作仍需要 `--branch`。交互模式中的 **Merge from root** 会将根仓库 HEAD 合并到任务分支，并使用 AI 辅助解决冲突。
+
+`takt list --non-interactive --action delete` 的 `--status <status...>` 可指定一个或多个状态，允许值为 `pending`、`completed`、`failed`、`exceeded` 和 `pr_failed`。不能指定 `running`，因为运行中的任务不能删除。`--goal <goalId>` 只选择属于指定目标的任务。仍可使用 `--branch <branch>`，单独指定时只选择 `completed` 任务。
+
+必须至少指定 `--status`、`--goal` 或 `--branch` 中的一个。不指定筛选条件时，命令报错退出且不删除任何内容。省略 `--yes` 时，显示匹配任务的名称、状态、分支和目标列表，然后正常退出，不执行删除。只有指定 `--yes` 才会删除。配合 `--format json` 可返回 JSON 格式的预览列表，JSON 输出包含 `goal_id`。
+
+删除范围与交互列表中的删除相同，包括任务的工作 clone、worktree 会话文件、clone 元数据、分支和 `.takt/tasks.yaml` 中的记录。
+
+```bash
+# 先确认匹配列表，再执行删除
+takt list --non-interactive --action delete --status failed pr_failed
+takt list --non-interactive --action delete --status failed pr_failed --yes
+
+# 以 JSON 查看预览列表
+takt list --non-interactive --action delete --status failed pr_failed --format json
+```
 
 在交互模式中，**Delete selected…** 会打开复选列表，只显示非运行中的任务。按 Space 切换选择，按 Enter 确定，然后只需进行一次显示所选数量的删除确认。未选择任务、取消选择或拒绝确认时不会删除任何任务，并返回菜单。每个任务使用与单独 **Delete** 相同的清理流程，包括分支和 merge 任务的克隆。某个任务删除失败后仍会继续处理其余任务，最后以 `Deleted M of N tasks.` 显示成功数和所选总数。**All Delete** 和单独 **Delete** 保持原有行为。
 
 #### 咨询运行中的任务
+
+在 `takt list` 中，**Stop** 经确认后请求停止一个运行中的任务。worker 自行中断并决定最终状态。**Mark as failed** 只修改任务状态，不会停止 worker。
 
 在 `takt list` 中选择带有 worktree clone 的运行中任务后，会打开普通 assistant 对话，并将该任务作为 `/tell` 的初始目标。对话中可以查看其他任务、讨论新任务，并使用 `/go` 执行或保存。`/tell` 会显示任务名称、workflow、当前 step 和指令，确认后只向确认时选中的任务写入。没有交互式终端或无法取得确认时不会发送指令，并会显示原因；`/cancel` 会关闭对话或取消待处理操作。
 

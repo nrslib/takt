@@ -849,6 +849,8 @@ output_contracts:
       format: decisions
 ```
 
+Phase 2 uses the provider's existing readonly settings to read only the evidence needed for the report. The current Phase 1 execution record is saved as masked JSONL and passed by path and byte size. Long strings span multiple lines so the agent can search and read nearby evidence. Phase 2 must not modify files, run tests or builds, start new investigations, or add findings, judgments, or plans. Reports distinguish checks performed in Phase 1 from material read in Phase 2. TAKT saves the final response body to the report file. Phase 3 remains tool-free.
+
 Every report entry requires `name` and `format`. Two optional fields refine behavior:
 
 - `use_judge` (default `true`) — whether the report is fed into the Phase 3 status judgment. Set `use_judge: false` for reports that should be written but not used as judgment evidence. A step whose rules need judgment must keep at least one `use_judge` report.
@@ -925,7 +927,7 @@ Promotion is not supported on parallel sub-steps.
 | `policy` | - | Policy key or array of keys (section map, or bare facet name resolved project → user → builtin) |
 | `knowledge` | - | Knowledge key or array of keys (section map, or bare facet name resolved project → user → builtin) |
 | `instruction` | - | An instruction key, inline text, or a non-empty ordered array of them. Facet references resolve through the section map or, for bare names, project → user → builtin |
-| `edit` | - | Whether the step can edit project files (`true`/`false`) |
+| `edit` | - | Whether the step can edit project files (`true`/`false`). Codex runs Phase 1 of steps with explicit `false` in a `read-only` sandbox |
 | `companion` | - | Run companion reviewers for a normal agent or Team Leader step using their resolved runtime profiles (see [Companion reviewers](#companion-reviewers)) |
 | `completion_retry` | - | Opt into bounded review completeness checks with an object containing the required `retry_instruction` facet and optional retry bounds |
 | `pass_previous_response` | `true` | Pass previous step's output to `{previous_response}` |
@@ -947,6 +949,8 @@ load boundary with a migration hint.
 The effective tool list may be narrower than configured. When `edit: false`, or when a step has `output_contracts` and does not set `edit: true`, TAKT removes command/edit tools from `provider_options.*.allowed_tools` before calling the provider. For Claude-family providers, comma-separated entries are normalized into atomic tool specs first, `Bash(...)` is judged by the canonical tool name before `(`, and `Bash`, `Edit`, `Write`, `Apply_Patch`, and `Patch` are removed. For OpenCode, lowercase tools such as `bash`, `edit`, and `write` are removed. The same read-only filtering applies to `team_leader.part_allowed_tools` when the part's effective edit setting is false, such as `part_edit: false` or inherited `edit: false`.
 
 The Pi provider maps generic `Read`, `Glob`, `Grep`, `Edit`, `Write`, and `Bash` names to Pi SDK tools. Pi does not support TAKT MCP servers or structured output; step-level MCP settings are dropped, while session-level MCP settings require a provider that supports them. `max_turns` is ignored for Pi calls.
+
+Codex runs Phase 1 of steps with an explicit `edit: false` in a `read-only` sandbox, regardless of the resolved permission mode and even with `permission_control: codex`. Each team leader part (via `part_edit` or inherited `edit`), parallel sub-step, and step within a `workflow_call` child workflow uses its own effective `edit` setting. Common permission resolution, other providers, omitted `edit`, and `edit: true` keep their existing behavior.
 
 ## Workflow-level Configuration
 
@@ -1239,6 +1243,8 @@ The merge command checks fork threats before starting the workflow, whether a PR
 The default `takt merge` workflow, `merge-review-fix-simple`, synchronizes the PR with its base branch and resolves conflicts when needed before running `review-fix-simple`. After gathering context, one read-only reviewer uses facets suited to the changes. Separate steps adjudicate findings, plan and apply fixes, verify completion, and review again. Once the final requirement check completes, TAKT pushes fixes, runs the Caccia effect, checks CI and GitHub review and mergeability on its returned head, then merges. An aborted child workflow stops the merge and produces a PR comment. CI failures enter the recovery process described below. Select `merge-review-fix` for parallel specialist reviews.
 
 ### CI failure recovery inputs and effects
+
+`merge-review-fix` and `merge-review-fix-simple` resynchronize with the base branch when CI completes and the PR is `CONFLICTING`, resolving conflicts when needed. They skip the initial review on these later attempts and continue through push → Caccia → CI on the new HEAD → merge evaluation. A PR that is only `BEHIND` proceeds to the existing review and merge conditions without resynchronization. The limit is `max(2, runtime concurrency - 1)`: two resynchronizations at concurrency 2 or 3, and three at concurrency 4. Initial synchronization does not count. Runtime concurrency, including a CLI `--concurrency` override, is saved with the task and retained by Requeue and Retry. If the PR is still conflicting at the limit, TAKT comments with the reason and ends COMPLETE without merging. Resynchronization preserves the CI fix and rerun budgets already used.
 
 Before rerunning, TAKT fetches the current PR HEAD and rejects evidence for a different HEAD. If the HEAD changes after a rerun is accepted, recovery leaves the wait immediately, preserves the original HEAD's failed checks and logs, and comments with the HEAD mismatch before aborting. `pr_status` system inputs always expose `rerunHeadChanged` and `rerunHeadChangeReason`; ordinary polling returns `false` and an empty reason. Run identity, repository and attempt checks still apply.
 

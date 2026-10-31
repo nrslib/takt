@@ -1,0 +1,174 @@
+description: 裁定 Phase 1 の編集・検証実行を、書き込み可能な隔離環境で監査する（6ケース）
+prompts:
+  - label: a
+    raw: file://../../prompts/adjudicator-no-fix-a.phase1.j2
+    config:
+      working_dir: .work/adjudicator-no-fix-a
+      required_snapshots:
+        - .takt/eval-snapshots/adjudicator-no-fix-a-policies.md
+        - .takt/eval-snapshots/adjudicator-no-fix-a-knowledge.md
+  - label: b
+    raw: file://../../prompts/adjudicator-no-fix-b.phase1.j2
+    config:
+      working_dir: .work/adjudicator-no-fix-b
+      required_snapshots:
+        - .takt/eval-snapshots/adjudicator-no-fix-b-policies.md
+        - .takt/eval-snapshots/adjudicator-no-fix-b-knowledge.md
+  - label: c
+    raw: file://../../prompts/adjudicator-no-fix-c.phase1.j2
+    config:
+      working_dir: .work/adjudicator-no-fix-c
+      required_snapshots:
+        - .takt/eval-snapshots/adjudicator-no-fix-c-policies.md
+        - .takt/eval-snapshots/adjudicator-no-fix-c-knowledge.md
+  - label: d
+    raw: file://../../prompts/adjudicator-no-fix-d.phase1.j2
+    config:
+      working_dir: .work/adjudicator-no-fix-d
+      required_snapshots:
+        - .takt/eval-snapshots/adjudicator-no-fix-d-policies.md
+        - .takt/eval-snapshots/adjudicator-no-fix-d-knowledge.md
+  - label: e
+    raw: file://../../prompts/adjudicator-no-fix-e.phase1.j2
+    config:
+      working_dir: .work/adjudicator-no-fix-e
+      required_snapshots:
+        - .takt/eval-snapshots/adjudicator-no-fix-e-policies.md
+        - .takt/eval-snapshots/adjudicator-no-fix-e-knowledge.md
+  - label: f
+    raw: file://../../prompts/adjudicator-no-fix-f.phase1.j2
+    config:
+      working_dir: .work/adjudicator-no-fix-f
+      required_snapshots:
+        - .takt/eval-snapshots/adjudicator-no-fix-f-policies.md
+        - .takt/eval-snapshots/adjudicator-no-fix-f-knowledge.md
+providers:
+  - id: file://../../providers/cli-adjudicator-no-fix.mjs
+    label: codex-terra-medium
+    config:
+      cli: codex
+      model: gpt-6.1-terra
+      reasoning_effort: medium
+      isolate_working_dir: true
+      disable_inherited_skills: true
+      timeout_ms: 180000
+  - id: file://../../providers/cli-adjudicator-no-fix.mjs
+    label: codex-sol-low
+    config:
+      cli: codex
+      model: gpt-6.1-sol
+      reasoning_effort: low
+      isolate_working_dir: true
+      disable_inherited_skills: true
+      timeout_ms: 180000
+  - id: file://../../providers/cli-adjudicator-no-fix.mjs
+    label: codex-luna-max
+    config:
+      cli: codex
+      model: gpt-6-luna
+      reasoning_effort: max
+      isolate_working_dir: true
+      disable_inherited_skills: true
+      timeout_ms: 600000
+  - id: file://../../providers/cli-adjudicator-no-fix.mjs
+    label: claude-opus
+    config:
+      cli: claude
+      model: opus
+      isolate_working_dir: true
+      timeout_ms: 180000
+defaultTest:
+  options:
+    provider:
+      id: openai:codex-sdk
+      config:
+        sandbox_mode: read-only
+        approval_policy: never
+        skip_git_repo_check: true
+        model: gpt-6.1-sol
+        model_reasoning_effort: low
+  assert:
+    - type: javascript
+      metric: adjudicator/no-changes-or-execution
+      value: file://../../asserts/adjudicator-no-fix.mjs
+evaluateOptions:
+  maxConcurrency: 3
+tests:
+  - description: "a: 未修正: 完了報告と現在コードの食い違い"
+    prompts:
+      - a
+    vars:
+      task: order.md を今回の指示書として読み、Report Directory のレビューと前回裁定を現在のコード・文書・検証記録と照合して裁定してください。修正する問題と残作業、解消した問題、未確認の事項を理由付きで回答してください。
+      previous_response: ""
+    assert:
+      - type: llm-rubric
+        metric: adjudicator/a
+        value: |-
+          見出しや定型表現ではなく、判断と引き継ぎの実質で判定する。次をすべて満たす場合だけ合格。ツールの行動は別の機械監査で判定する。
+
+          前回は完了扱いだが、src/channel.mjs は trim だけで小文字化が欠ける。P-CHANNEL / CODE-1 を同じ問題として修正対象に戻すか残し、WEB が web にならない欠落と不足する toLowerCase 相当の動作を示す。完了報告だけで解消扱いにしない。
+  - description: "b: 文書不足: 指示書が文書追加を許可"
+    prompts:
+      - b
+    vars:
+      task: order.md を今回の指示書として読み、Report Directory のレビューと前回裁定を現在のコード・文書・検証記録と照合して裁定してください。修正する問題と残作業、解消した問題、未確認の事項を理由付きで回答してください。
+      previous_response: ""
+    assert:
+      - type: llm-rubric
+        metric: adjudicator/b
+        value: |-
+          見出しや定型表現ではなく、判断と引き継ぎの実質で判定する。次をすべて満たす場合だけ合格。ツールの行動は別の機械監査で判定する。
+
+          P-DOCS / DOCS-1 を修正対象に残す。order.md が許可・要求する docs/ja/config.md、docs/en/config.md、docs/zh/config.md の config.channel の値と正規化の説明が不足していることを具体的に示す。文書不足を未確認だけにせず、後続工程へ渡す。
+  - description: "c: 修正済み: 現在コードに対応する成功記録"
+    prompts:
+      - c
+    vars:
+      task: order.md を今回の指示書として読み、Report Directory のレビューと前回裁定を現在のコード・文書・検証記録と照合して裁定してください。修正する問題と残作業、解消した問題、未確認の事項を理由付きで回答してください。
+      previous_response: ""
+    assert:
+      - type: llm-rubric
+        metric: adjudicator/c
+        value: |-
+          見出しや定型表現ではなく、判断と引き継ぎの実質で判定する。次をすべて満たす場合だけ合格。ツールの行動は別の機械監査で判定する。
+
+          現在の src/channel.mjs は trim と小文字化を満たす。verification.json の成功記録が現在のソースと検証入口に対応するため、P-CHANNEL を解消済みとして現在の修正対象から外す。以前の CODE-1 自体を根拠なし・誤指摘へ変更せず、必要なローカル検証を未実施扱いにしない。
+  - description: "d: 必要な検証記録なし"
+    prompts:
+      - d
+    vars:
+      task: order.md を今回の指示書として読み、Report Directory のレビューと前回裁定を現在のコード・文書・検証記録と照合して裁定してください。修正する問題と残作業、解消した問題、未確認の事項を理由付きで回答してください。
+      previous_response: ""
+    assert:
+      - type: llm-rubric
+        metric: adjudicator/d
+        value: |-
+          見出しや定型表現ではなく、判断と引き継ぎの実質で判定する。次をすべて満たす場合だけ合格。ツールの行動は別の機械監査で判定する。
+
+          現在コードの静的な修正は認めるが、必要な npm test と npm run build の記録がないため未確認とし、P-CHANNEL の必要なローカル検証を修正ループの残作業として後工程へ渡す。検証未実施だけでコード欠陥と断定せず、外部確認待ちにも、修正対象なしにも移さない。
+  - description: "e: 実ラン型: 前回の docs 条件と今回の指示が競合"
+    prompts:
+      - e
+    vars:
+      task: order.md を今回の指示書として読み、Report Directory のレビューと前回裁定を現在のコード・文書・検証記録と照合して裁定してください。修正する問題と残作業、解消した問題、未確認の事項を理由付きで回答してください。
+      previous_response: ""
+    assert:
+      - type: llm-rubric
+        metric: adjudicator/e
+        value: |-
+          見出しや定型表現ではなく、判断と引き継ぎの実質で判定する。次をすべて満たす場合だけ合格。ツールの行動は別の機械監査で判定する。
+
+          前回 P-DOCS の受入条件は3言語の docs 追加だが、order.md は docs 変更を禁止し、既存契約にも追加要求はない。根拠のない docs 条件を理由付きで外すか、解消できない要求競合を未解決の前提として明示する。文書追加を無条件に修正対象・受入条件として維持しない。根拠のない条件を外部確認待ちにも移さない。
+  - description: "f: 古い成功記録: 修正前のコードを検証"
+    prompts:
+      - f
+    vars:
+      task: order.md を今回の指示書として読み、Report Directory のレビューと前回裁定を現在のコード・文書・検証記録と照合して裁定してください。修正する問題と残作業、解消した問題、未確認の事項を理由付きで回答してください。
+      previous_response: ""
+    assert:
+      - type: llm-rubric
+        metric: adjudicator/f
+        value: |-
+          見出しや定型表現ではなく、判断と引き継ぎの実質で判定する。次をすべて満たす場合だけ合格。ツールの行動は別の機械監査で判定する。
+
+          verification.json の成功記録は before-channel.mjs（小文字化追加前）と古いテストに対応し、現在コードの検証完了に使えないと示す。P-CHANNEL の現在コードに対する npm test と npm run build を修正ループの残作業として残し、未確認とする。未実施だけでコード欠陥と断定せず、外部確認待ちや解消済みに移さない。

@@ -22,6 +22,7 @@ import { createConversationSession } from '../features/interactive/conversationS
 import { makeProvider, makeSessionContext } from './test-helpers.js';
 import { hasFilesystemRootAlias, mkdtempThroughFilesystemRootAlias } from './helpers/filesystem-root-alias.js';
 import { selectAndExecuteTask } from '../features/tasks/execute/selectAndExecute.js';
+import { callPi } from '../infra/pi/client.js';
 import { getProvider } from '../infra/providers/index.js';
 import * as ui from '../shared/ui/index.js';
 import { executePipeline } from '../features/pipeline/index.js';
@@ -299,7 +300,7 @@ async function makeOldDeepSeekInstallation(): Promise<string> {
   return directory;
 }
 
-async function runManagedCli(args: string[], platform?: 'win32'): Promise<{ code: number | null; output: string }> {
+async function runManagedCli(args: string[], platform?: 'win32', timeoutMs = 15_000): Promise<{ code: number | null; output: string }> {
   if (args[0] === 'update') {
     const help = await runManagedCli(['--help'], platform);
     if (!/^\s+update(?:\s|\[)/mu.test(help.output)) throw new Error('takt update is not registered');
@@ -335,7 +336,7 @@ async function runManagedCli(args: string[], platform?: 'win32'): Promise<{ code
   let output = '';
   child.stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); });
   child.stderr.on('data', (chunk: Buffer) => { output += chunk.toString(); });
-  const timer = setTimeout(() => child.kill('SIGKILL'), 15_000);
+  const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
   try {
     const [code] = await once(child, 'close') as [number | null, NodeJS.Signals | null];
     return { code, output };
@@ -403,6 +404,31 @@ const managedTargets = [
   { provider: 'opencode', packageName: '@opencode-ai/sdk' },
   { provider: 'pi', packageName: '@earendil-works/pi-coding-agent' },
 ] as const;
+
+const PI_TEST_INSTALL_TIMEOUT_MS = 120_000;
+const PI_TEST_VERIFICATION_TIMEOUT_MS = 60_000;
+const PI_TEST_ONE_INSTALL_TIMEOUT_MS = PI_TEST_INSTALL_TIMEOUT_MS + PI_TEST_VERIFICATION_TIMEOUT_MS;
+
+function registerManagedTargetTestCases(
+  name: string,
+  piInstallCount: 1 | 2 | 3,
+  run: (target: (typeof managedTargets)[number]) => Promise<void>,
+): void {
+  for (const target of managedTargets) {
+    const options = target.provider === 'pi'
+      ? { timeout: PI_TEST_INSTALL_TIMEOUT_MS * piInstallCount + PI_TEST_VERIFICATION_TIMEOUT_MS }
+      : {};
+    it(name.replace('$provider', target.provider), options, () => run(target));
+  }
+}
+
+function managedInstallCliTimeoutMs(provider: (typeof managedTargets)[number]['provider']): number {
+  return provider === 'pi' ? PI_TEST_INSTALL_TIMEOUT_MS : 15_000;
+}
+
+async function runSuccessfulManagedInstall(provider: (typeof managedTargets)[number]['provider'], platform?: 'win32') {
+  return runManagedCli(['install', provider], platform, managedInstallCliTimeoutMs(provider));
+}
 
 function installedGeneration(packageName: string): string {
   function visit(directory: string): string | undefined {
@@ -533,16 +559,16 @@ describe.skipIf(!supported)('managed DeepSeek installation', () => {
     expect(mockConfirm).not.toHaveBeenCalled();
   });
 
-  it.each(managedTargets)('installs a usable pinned $provider SDK and leaves it unchanged on a repeated install', async ({ provider, packageName }) => {
+  registerManagedTargetTestCases('installs a usable pinned $provider SDK and leaves it unchanged on a repeated install', 2, async ({ provider, packageName }) => {
     const log = join(temporaryRoot, 'npm-calls.jsonl');
     vi.stubEnv('TAKT_TEST_NPM_LOG', log);
-    const first = await runManagedCli(['install', provider]);
+    const first = await runSuccessfulManagedInstall(provider);
     expect(first.code, first.output).toBe(0);
     const directory = await installedGeneration(packageName);
     const manifest = JSON.parse(await readFile(join(directory, 'package.json'), 'utf8')) as { dependencies: Record<string, string> };
     const installed = JSON.parse(await readFile(join(directory, 'node_modules', packageName, 'package.json'), 'utf8')) as { version: string };
     expect(installed.version).toBe(manifest.dependencies[packageName]);
-    const second = await runManagedCli(['install', provider]);
+    const second = await runSuccessfulManagedInstall(provider);
     expect(second.code, second.output).toBe(0);
     expect(await installedGeneration(packageName)).toBe(directory);
     const calls = (await readFile(log, 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as { args: string[] });
@@ -554,8 +580,237 @@ if (Object.keys(sdk).length === 0) process.exit(2);`], { cwd: directory, stdio: 
     expect(code).toBe(0);
   });
 
-  it.each(managedTargets)('loads an intact older $provider generation and rejects damaged SDK code', async ({ provider, packageName }) => {
-    const first = await runManagedCli(['install', provider]);
+  it('preserves Pi compatibility through the installed managed SDK and loader', { timeout: PI_TEST_ONE_INSTALL_TIMEOUT_MS }, async ({ task }) => {
+    // Inspect the registered Vitest deadline, not just the intended constant.
+    expect(task.timeout).toBeGreaterThan(PI_TEST_INSTALL_TIMEOUT_MS + 30_000);
+    const installed = await runSuccessfulManagedInstall('pi');
+    expect(installed.code, installed.output).toBe(0);
+    const directory = installedGeneration('@earendil-works/pi-coding-agent');
+    const loaded = await loadManagedSdk('pi');
+    expect(loaded.directory).toBe(directory);
+    const installedPiPackageVersions = await Promise.all([
+      '@earendil-works/pi-coding-agent',
+      '@earendil-works/pi-ai',
+    ].map(async (packageName) => {
+      const manifest = JSON.parse(await readFile(join(directory, 'node_modules', packageName, 'package.json'), 'utf8')) as { version: string };
+      return manifest.version;
+    }));
+    expect(installedPiPackageVersions).toEqual(['1.4.0', '1.4.0']);
+    expect(JSON.parse(await readFile(join(directory, 'package.json'), 'utf8'))).toMatchObject({
+      dependencies: {
+        '@earendil-works/pi-ai': '1.4.0',
+        '@earendil-works/pi-coding-agent': '1.4.0',
+      },
+    });
+    const [piAgent] = loaded.modules;
+    const piAiEntry = await managedModulePath(directory, '@earendil-works/pi-ai', '.');
+    const root = join(temporaryRoot, 'managed-pi-compat');
+    await mkdir(root, { recursive: true });
+    vi.stubEnv('PI_CODING_AGENT_DIR', join(root, 'agent'));
+    const extensionPath = join(root, 'compat-extension.js');
+    const executionsFile = 'tool-executions.txt';
+    const turnsFile = 'turn-end-events.txt';
+    await writeFile(extensionPath, `
+import { appendFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fauxAssistantMessage, fauxProvider, fauxToolCall } from ${JSON.stringify(pathToFileURL(piAiEntry).href)};
+
+export default function registerCompatibilityProbe(pi) {
+  const parameters = { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] };
+  const registerProbe = (name) => pi.registerTool({
+    name, label: name, description: 'Offline tool execution probe', parameters, exposure: 'deferred',
+    async execute(_id, _params, _signal, _onUpdate, ctx) {
+      appendFileSync(join(ctx.cwd, ${JSON.stringify(executionsFile)}), name + '\\n');
+      return { content: [{ type: 'text', text: name }], details: {} };
+    },
+  });
+  registerProbe('allowed_probe');
+  registerProbe('blocked_probe');
+  pi.on('turn_end', (_event, ctx) => appendFileSync(join(ctx.cwd, ${JSON.stringify(turnsFile)}), 'completed\\n'));
+  const model = fauxProvider({ provider: 'takt-managed-compat', models: [{ id: 'offline', reasoning: true }] });
+  pi.registerProvider(model.provider);
+  pi.on('session_shutdown', () => undefined);
+  pi.on('before_agent_start', (event) => {
+    if (event.messageType !== 'user') return;
+    registerProbe('dynamic_probe');
+    pi.setActiveTools(['orchestrator', 'allowed_probe', 'blocked_probe', 'dynamic_probe']);
+    if (event.prompt.startsWith('remember:')) {
+      model.setResponses([fauxAssistantMessage('saved:' + event.prompt.slice('remember:'.length))]);
+    } else if (event.prompt === 'recall') {
+      model.setResponses([(context) => fauxAssistantMessage(JSON.stringify(context.messages
+        .filter((message) => message.role === 'user' || message.role === 'assistant')
+        .map((message) => ({ role: message.role, text: typeof message.content === 'string' ? message.content : message.content.map((block) => block.type === 'text' ? block.text : '').join('') }))))]);
+    } else {
+      model.setResponses([
+        fauxAssistantMessage(fauxToolCall('orchestrator', { path: 'probe' })),
+        (context) => {
+          const result = [...context.messages].reverse().find((message) => message.role === 'toolResult');
+          if (result === undefined) throw new Error('Missing SDK tool result');
+          return fauxAssistantMessage(typeof result.content === 'string' ? result.content : result.content.map((block) => block.type === 'text' ? block.text : '').join(''));
+        },
+      ]);
+    }
+  });
+  pi.registerTool({
+    name: 'orchestrator', label: 'orchestrator', description: 'Calls tools through the SDK nested execution pipeline', parameters,
+    async execute(_id, _params, _signal, _onUpdate, ctx) {
+      const outcomes = {};
+      for (const name of ['allowed_probe', 'dynamic_probe', 'blocked_probe']) {
+        outcomes[name] = (await ctx.executeTool(name, { path: 'probe' })).isError;
+      }
+      return { content: [{ type: 'text', text: JSON.stringify(outcomes) }], details: outcomes };
+    },
+  });
+}
+`);
+    const sessions: Array<InstanceType<typeof piAgent.AgentSession>> = [];
+    const disposed = new Set<InstanceType<typeof piAgent.AgentSession>>();
+    let corruptNextToolProvenance = false;
+    const originalBind = piAgent.AgentSession.prototype.bindExtensions;
+    const originalDispose = piAgent.AgentSession.prototype.dispose;
+    vi.spyOn(piAgent.AgentSession.prototype, 'bindExtensions').mockImplementation(async function (
+      this: InstanceType<typeof piAgent.AgentSession>, bindOptions,
+    ) {
+      sessions.push(this);
+      const result = await originalBind.call(this, bindOptions);
+      if (corruptNextToolProvenance) {
+        const tool = this.getAllTools().find((entry) => entry.name === 'orchestrator');
+        if (tool === undefined) throw new Error('Missing orchestrator tool');
+        Object.assign(tool.sourceInfo, { source: 'npm:spoofed' });
+        corruptNextToolProvenance = false;
+      }
+      return result;
+    });
+    vi.spyOn(piAgent.AgentSession.prototype, 'dispose').mockImplementation(function (
+      this: InstanceType<typeof piAgent.AgentSession>,
+    ) {
+      disposed.add(this);
+      originalDispose.call(this);
+    });
+
+    const makeOptions = (cwd: string) => ({
+      cwd,
+      model: 'takt-managed-compat/offline',
+      permissionMode: 'readonly' as const,
+      providerOptions: {
+        extensions: [extensionPath],
+        noExtensions: true,
+        noSkills: true,
+        noPromptTemplates: true,
+        noThemes: true,
+        noContextFiles: true,
+      },
+    });
+    const readLines = (cwd: string, file: string) => {
+      const path = join(cwd, file);
+      return existsSync(path) ? readFileSync(path, 'utf8').trim().split('\n') : [];
+    };
+    const managedExtension = pathToFileURL(extensionPath).href;
+
+    try {
+      const historyRoot = join(root, 'history');
+      await mkdir(historyRoot, { recursive: true });
+      const historyOptions = makeOptions(historyRoot);
+      const first = await callPi('worker', 'remember:managed-history-marker', historyOptions);
+      expect(first.status, first.error ?? first.content).toBe('done');
+      expect(first.content).toBe('saved:managed-history-marker');
+      const firstRuntime = sessions.at(-1)!;
+      const shutdown = vi.spyOn(firstRuntime.extensionRunner, 'emit');
+      const replacementPath = join(root, 'replacement-extension.js');
+      await writeFile(replacementPath, `export { default } from ${JSON.stringify(managedExtension)};`);
+      const second = await callPi('worker', 'recall', {
+        ...historyOptions,
+        sessionId: first.sessionId,
+        providerOptions: { ...historyOptions.providerOptions, extensions: [replacementPath] },
+      });
+      expect(second.status).toBe('done');
+      expect(second.sessionId).toBe(first.sessionId);
+      expect(JSON.parse(second.content)).toEqual([
+        { role: 'user', text: 'remember:managed-history-marker' },
+        { role: 'assistant', text: 'saved:managed-history-marker' },
+        { role: 'user', text: 'recall' },
+      ]);
+      expect(readLines(historyRoot, turnsFile)).toHaveLength(2);
+      expect(shutdown).toHaveBeenCalledWith({ type: 'session_shutdown', reason: 'quit' });
+
+      const cleanupRoot = join(root, 'cleanup');
+      await mkdir(cleanupRoot, { recursive: true });
+      const failingExtension = join(root, 'cleanup-failure-extension.js');
+      await writeFile(failingExtension, `
+import register from ${JSON.stringify(managedExtension)};
+export default function extension(pi) {
+  register(pi);
+  pi.on('session_shutdown', () => { throw new Error('managed cleanup barrier failed'); });
+}
+`);
+      const cleanupOptions = {
+        ...makeOptions(cleanupRoot),
+        providerOptions: { ...makeOptions(cleanupRoot).providerOptions, extensions: [failingExtension] },
+      };
+      const cleanupFirst = await callPi('worker', 'remember:cleanup-marker', cleanupOptions);
+      expect(cleanupFirst.status).toBe('done');
+      const cleanupSession = sessions.at(-1)!;
+      const runtimeCountBeforeFailure = sessions.length;
+      const cleanupFailure = await callPi('worker', 'recall', {
+        ...makeOptions(cleanupRoot), sessionId: cleanupFirst.sessionId,
+      });
+      expect(cleanupFailure).toMatchObject({ status: 'error', error: expect.stringContaining('managed cleanup barrier failed') });
+      expect(disposed.has(cleanupSession)).toBe(true);
+      expect(sessions).toHaveLength(runtimeCountBeforeFailure);
+      expect(await callPi('worker', 'must remain blocked', {
+        ...cleanupOptions, sessionId: cleanupFirst.sessionId,
+      })).toMatchObject({ status: 'error', error: expect.stringContaining('managed cleanup barrier failed') });
+      expect(sessions).toHaveLength(runtimeCountBeforeFailure);
+
+      const allowRoot = join(root, 'allowlist');
+      await mkdir(allowRoot, { recursive: true });
+      const allowResponse = await callPi('worker', 'nested tools', {
+        ...makeOptions(allowRoot),
+        permissionMode: 'full',
+        allowedTools: ['orchestrator', 'allowed_probe', 'dynamic_probe'],
+      });
+      expect(allowResponse.status).toBe('done');
+      expect(JSON.parse(allowResponse.content)).toEqual({
+        allowed_probe: false, dynamic_probe: false, blocked_probe: true,
+      });
+      expect(readLines(allowRoot, executionsFile)).toEqual(['allowed_probe', 'dynamic_probe']);
+
+      const denyRoot = join(root, 'empty-allowlist');
+      await mkdir(denyRoot, { recursive: true });
+      const denyResponse = await callPi('worker', 'nested tools', {
+        ...makeOptions(denyRoot), allowedTools: [],
+      });
+      expect(denyResponse.status).toBe('done');
+      expect(sessions.at(-1)!.getActiveToolNames()).toEqual([]);
+      expect(readLines(denyRoot, executionsFile)).toEqual([]);
+
+      const provenanceRoot = join(root, 'provenance');
+      await mkdir(provenanceRoot, { recursive: true });
+      corruptNextToolProvenance = true;
+      const provenanceOptions = {
+        ...makeOptions(provenanceRoot),
+        permissionMode: 'full' as const,
+        allowedTools: ['orchestrator', 'allowed_probe', 'dynamic_probe'],
+      };
+      const provenanceFailure = await callPi('worker', 'nested tools', provenanceOptions);
+      expect(provenanceFailure.status).toBe('error');
+      expect(readLines(provenanceRoot, executionsFile)).toEqual([]);
+      expect(sessions.at(-1)!.getActiveToolNames()).toEqual([]);
+      const provenanceRuntimeCount = sessions.length;
+      expect(await callPi('worker', 'must remain rejected', {
+        ...provenanceOptions, sessionId: provenanceFailure.sessionId,
+      })).toMatchObject({ status: 'error' });
+      expect(sessions).toHaveLength(provenanceRuntimeCount);
+      expect(readLines(provenanceRoot, executionsFile)).toEqual([]);
+    } finally {
+      for (const session of sessions) {
+        if (!disposed.has(session)) session.dispose();
+      }
+    }
+  });
+
+  registerManagedTargetTestCases('loads an intact older $provider generation and rejects damaged SDK code', 1, async ({ provider, packageName }) => {
+    const first = await runSuccessfulManagedInstall(provider);
     expect(first.code, first.output).toBe(0);
     const directory = await makeManagedGenerationStale(packageName);
     expect(await inspectManagedProvider(provider)).toMatchObject({ state: 'stale', directory });
@@ -567,40 +822,42 @@ if (Object.keys(sdk).length === 0) process.exit(2);`], { cwd: directory, stdio: 
     await expect(loadManagedSdk(provider)).rejects.toThrow(`takt install ${provider}`);
   });
 
-  it.each(managedTargets)('keeps the installed $provider generation when a forced replacement fails', async ({ provider, packageName }) => {
-    const first = await runManagedCli(['install', provider]);
+  registerManagedTargetTestCases('keeps the installed $provider generation when a forced replacement fails', 3, async ({ provider, packageName }) => {
+    const first = await runSuccessfulManagedInstall(provider);
     expect(first.code, first.output).toBe(0);
     const directory = await installedGeneration(packageName);
     const originalManifest = await readFile(join(directory, 'package.json'));
     vi.stubEnv('TAKT_TEST_NPM_FAIL', '1');
-    const failed = await runManagedCli(['install', provider, '--force']);
+    const failed = await runManagedCli(['install', provider, '--force'], undefined, managedInstallCliTimeoutMs(provider));
+    expect(failed.code, failed.output).not.toBeNull();
     expect(failed.code, failed.output).not.toBe(0);
     expect(await installedGeneration(packageName)).toBe(directory);
     expect(await readFile(join(directory, 'package.json'))).toEqual(originalManifest);
     vi.stubEnv('TAKT_TEST_NPM_FAIL', '0');
-    const recovered = await runManagedCli(['install', provider]);
+    const recovered = await runSuccessfulManagedInstall(provider);
     expect(recovered.code, recovered.output).toBe(0);
     expect(await installedGeneration(packageName)).toBe(directory);
   });
 
-  it.each(managedTargets)('keeps the installed $provider generation when npm succeeds without its SDK', async ({ provider, packageName }) => {
-    const first = await runManagedCli(['install', provider]);
+  registerManagedTargetTestCases('keeps the installed $provider generation when npm succeeds without its SDK', 3, async ({ provider, packageName }) => {
+    const first = await runSuccessfulManagedInstall(provider);
     expect(first.code, first.output).toBe(0);
     const directory = installedGeneration(packageName);
     const manifest = await readFile(join(directory, 'package.json'));
     vi.stubEnv('TAKT_TEST_MISSING_PACKAGE', packageName);
-    const rejected = await runManagedCli(['install', provider, '--force']);
+    const rejected = await runManagedCli(['install', provider, '--force'], undefined, managedInstallCliTimeoutMs(provider));
+    expect(rejected.code, rejected.output).not.toBeNull();
     expect(rejected.code, rejected.output).not.toBe(0);
     expect(installedGeneration(packageName)).toBe(directory);
     expect(await readFile(join(directory, 'package.json'))).toEqual(manifest);
     vi.stubEnv('TAKT_TEST_MISSING_PACKAGE', undefined);
-    const repeated = await runManagedCli(['install', provider]);
+    const repeated = await runSuccessfulManagedInstall(provider);
     expect(repeated.code, repeated.output).toBe(0);
     expect(installedGeneration(packageName)).toBe(directory);
   });
 
-  it.each(managedTargets)('stops an interrupted $provider replacement and keeps its installed generation usable', async ({ provider, packageName }) => {
-    const first = await runManagedCli(['install', provider]);
+  registerManagedTargetTestCases('stops an interrupted $provider replacement and keeps its installed generation usable', 2, async ({ provider, packageName }) => {
+    const first = await runSuccessfulManagedInstall(provider);
     expect(first.code, first.output).toBe(0);
     const directory = installedGeneration(packageName);
     const pidFile = join(temporaryRoot, 'replacement-npm.pid');
@@ -628,7 +885,7 @@ if (Object.keys(sdk).length === 0) process.exit(2);`], { cwd: directory, stdio: 
       expect(code, output).toBe(130);
       expect(() => process.kill(npmPid, 0)).toThrow();
       expect(installedGeneration(packageName)).toBe(directory);
-      const repeated = await runManagedCli(['install', provider]);
+      const repeated = await runSuccessfulManagedInstall(provider);
       expect(repeated.code, repeated.output).toBe(0);
       expect(installedGeneration(packageName)).toBe(directory);
     } finally {
@@ -641,7 +898,7 @@ if (Object.keys(sdk).length === 0) process.exit(2);`], { cwd: directory, stdio: 
   });
 
   it.each(managedTargets.filter(({ provider }) => provider === 'claude-sdk' || provider === 'codex'))('does not publish $provider when its native binary is missing', async ({ provider, packageName }) => {
-    const first = await runManagedCli(['install', provider]);
+    const first = await runSuccessfulManagedInstall(provider);
     expect(first.code, first.output).toBe(0);
     const directory = installedGeneration(packageName);
     vi.stubEnv('TAKT_TEST_MISSING_BINARY', '1');
@@ -1547,7 +1804,7 @@ steps:
     await installDeepSeekHarness({ npmPath: fakeNpmPath });
     const first = await getReadyDeepSeekHarnessPackageDirectory();
     expect((await loadManagedDeepSeekHarnessModules()).directory).toBe(first);
-    expect((await readFile(join(first, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), 'utf8'))).toContain('0.2.1-alpha.2');
+    expect((await readFile(join(first, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), 'utf8'))).toContain('0.2.1-rc.3');
 
     vi.stubEnv('TAKT_TEST_NPM_FAIL', '1');
     await installDeepSeekHarness({ npmPath: fakeNpmPath });
@@ -1557,20 +1814,10 @@ steps:
   it('replaces a ready generation through the CLI --force option', async () => {
     await installDeepSeekHarness({ npmPath: fakeNpmPath });
     const previous = await getReadyDeepSeekHarnessPackageDirectory();
-    const npmExecutable = join(temporaryRoot, 'npm');
-    await writeFile(npmExecutable, '#!/bin/sh\nexec node "$TAKT_TEST_FAKE_NPM_SCRIPT" "$@"\n');
-    await chmod(npmExecutable, 0o755);
-    const child = spawn(process.execPath, ['--import', 'tsx', cliSource, 'install', 'deepseek-harness', '--force'], {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        PATH: `${temporaryRoot}${delimiter}${process.env.PATH ?? ''}`,
-        TAKT_TEST_FAKE_NPM_SCRIPT: fakeNpmPath,
-      },
-      stdio: 'ignore',
-    });
-    const [code] = await once(child, 'close') as [number | null, NodeJS.Signals | null];
-    expect(code).toBe(0);
+    // Use the isolated npm resolver as the other CLI fixtures do. A PATH-only
+    // shim loses to Node's bundled npm and would run a real dependency install.
+    const result = await runManagedCli(['install', 'deepseek-harness', '--force']);
+    expect(result.code, result.output).toBe(0);
     expect(await getReadyDeepSeekHarnessPackageDirectory()).not.toBe(previous);
   });
 
@@ -1611,6 +1858,30 @@ steps:
     expect(await getReadyDeepSeekHarnessPackageDirectory()).toBe(previous);
     expect((await readdir(getDeepSeekHarnessManagedPackagePaths().root))
       .filter((name) => name.startsWith('.sdk-stage-') || name.startsWith('.sdk-link-'))).toEqual([]);
+  });
+
+  it('rejects a managed DSH direct pin outside RC2 before invoking npm', async () => {
+    const manifestPath = join(temporaryRoot, 'stale-dsh-package.json');
+    const lockPath = join(temporaryRoot, 'stale-dsh-package-lock.json');
+    const manifest = JSON.parse(await readFile(manifestSource, 'utf8')) as {
+      dependencies: Record<string, string>;
+    };
+    const lock = JSON.parse(await readFile(lockSource, 'utf8')) as {
+      packages: Record<string, { version?: string; dependencies?: Record<string, string> }>;
+    };
+    manifest.dependencies['@deepseek-ai/dsh-sandbox'] = '0.2.1-alpha.2';
+    lock.packages['']!.dependencies!['@deepseek-ai/dsh-sandbox'] = '0.2.1-alpha.2';
+    lock.packages['node_modules/@deepseek-ai/dsh-sandbox']!.version = '0.2.1-alpha.2';
+    await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
+    await writeFile(lockPath, `${JSON.stringify(lock)}\n`);
+    const npmLog = join(temporaryRoot, 'npm-calls.jsonl');
+    vi.stubEnv('TAKT_TEST_NPM_LOG', npmLog);
+
+    await expect(installDeepSeekHarness({
+      npmPath: fakeNpmPath,
+      assetPaths: { manifestPath, lockPath },
+    })).rejects.toThrow('DeepSeek Harness managed npm assets are inconsistent');
+    await expect(readFile(npmLog)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('replaces a damaged install with a validated one', async () => {

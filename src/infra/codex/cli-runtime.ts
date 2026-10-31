@@ -1,6 +1,7 @@
 import { statSync } from 'node:fs';
 import { createRequire, findPackageJSON } from 'node:module';
 import { dirname, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 function existsAs(path: string, kind: 'file' | 'directory'): boolean {
   try {
@@ -13,7 +14,7 @@ function existsAs(path: string, kind: 'file' | 'directory'): boolean {
 }
 
 /** Mirrors @openai/codex-sdk's native package resolution, including legacy layouts. */
-export function resolveCodexSdkCli(codexPathOverride: string | undefined): {
+export function resolveCodexSdkCli(codexPathOverride: string | undefined, managedDirectory?: string): {
   executablePath: string;
   pathDirs: string[];
 } {
@@ -29,7 +30,8 @@ export function resolveCodexSdkCli(codexPathOverride: string | undefined): {
   };
   const target = targets[`${platform}-${process.arch}`];
   if (target === undefined) throw new Error(`Unsupported Codex platform: ${platform} (${process.arch})`);
-  const sdkPackageJson = findPackageJSON('@openai/codex-sdk', import.meta.url);
+  const sdkPackageJson = findPackageJSON('@openai/codex-sdk', managedDirectory === undefined
+    ? import.meta.url : pathToFileURL(join(managedDirectory, 'package.json')));
   if (sdkPackageJson === undefined) throw new Error('Unable to locate the Codex SDK package');
   const sdkRequire = createRequire(join(dirname(sdkPackageJson), 'dist', 'index.js'));
   const codexRequire = createRequire(sdkRequire.resolve('@openai/codex/package.json'));

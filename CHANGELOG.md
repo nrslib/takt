@@ -8,9 +8,82 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `provider.defaults.assignment` selects a named runtime assignment by default, after CLI and directory selections.
+
+## [0.73.0] - 2026-10-27
+
+### Added
+
+- `takt manager` opens a goal conversation TUI connected to a background daemon (#1904). You discuss goals with the manager, type `/make-goal` to create a goal proposal from the conversation, and register it by selecting Approve. Conversations run in the daemon, so an accepted turn continues after the TUI is closed, and reopening manager for the same repository or workspace connects to the same conversation. With claude (claude-sdk) or codex, an AI permission judge reviews the manager's tool use before execution and allows it, denies it with a reason, or asks a person. `manager.sensitive_paths` adds sensitive read targets, and `provider.targets.internal_agents.manager-permission-judge` in `runtime.yaml` assigns the judge's provider and model. Stop the daemon with `takt daemon stop`.
+- The interactive `takt list` can request a stop for a running task with **Stop**. The worker interrupts itself and decides the final state. **Mark as failed** still only changes the status.
+- `takt list --non-interactive --action delete` accepts `--status`, `--goal`, and `--branch` filters. Without `--yes` it only lists the matching tasks (`--format json` is supported); `--yes` deletes them. The MCP tool `takt_cleanup_tasks` (in the `all` tool set) does the same, deleting only with `confirm: true`.
+- `/verify` executes Quint scenario `run` declarations in the main module with `quint test` after `quint run` passes (#1753). An unsatisfied `expect` fails verification, and `quint verify` runs only after every target has passed.
+
 ### Changed
 
-- The English and Japanese `merge-review-fix` and `merge-review-fix-simple` workflows now investigate CI failures using failed job logs, the cumulative PR diff and related code. Repository defects, including flaky tests and failures also present on main, receive at most two reviewed root-fix rounds. An evidenced external cause permits one independent rerun, including after both fix rounds; the new attempt must pass existing merge checks. Insufficient evidence or exhausted recovery posts counts, the last failed checks and investigation summary, then aborts.
+- TAKT now requires Git 2.38 or later. Goal completion compares trees with `git merge-tree --write-tree`.
+- `merge-review-fix` and `merge-review-fix-simple` now resynchronize PRs that become `CONFLICTING` after CI, then push, run Caccia and wait for CI on the new HEAD without repeating the initial review (#1893). Resynchronizations are limited to `max(2, runtime concurrency - 1)`, excluding initial synchronization; CLI concurrency overrides persist through Requeue and Retry. Persistent conflicts at the limit produce a comment and end COMPLETE without merging. PRs that are only `BEHIND` proceed to the existing merge conditions. Used CI recovery budgets remain unchanged.
+- Restored automatic Caccia after successful PR creation or update by worktree `auto_pr` tasks and Pipeline `--auto-pr` when `caccia.enabled` is true (#1883). Explicit Caccia effects in the executed workflow or an automatically started merge workflow suppress post-processing Caccia; otherwise it finishes before merge starts. Git push itself does not start Caccia.
+
+### Fixed
+
+- The Copilot provider now treats a monthly quota exhaustion (HTTP 402) as exhausted instead of retrying it, so `rate_limit_fallback.switch_chain` switches providers right away. When a 429 and a 402 arrive together, the 402 wins. Thanks to @kanae-chaika.
+
+### Internal
+
+- Updated the Codex SDK to 0.164.0.
+- Lengthened the wait limits in manager integration tests that timed out under heavy machine load.
+
+## [0.72.0] - 2026-10-23
+
+### Added
+
+- `takt merge` accepts selection text in place of a PR number, for example `takt merge "everything except prompt changes"` (#1809). An argument made only of digits is still a PR number. TAKT first applies the CLI filters or `merge.where` and the draft/fork exclusions, then the AI judges each remaining open PR from its title, body, labels, branch names, and changed file paths. TAKT prints the selected PRs with reasons and the excluded PRs, then starts only the selected ones. If a decision is missing or invalid, or the selection data cannot be fetched completely, the command fails before any PR workflow starts.
+- `takt merge` supports GitLab merge requests, both by number and by bulk selection. Caccia is skipped on GitLab, and choosing a merge method or constraining the head is not supported there.
+- In the interactive `takt list`, **Delete selected…** opens a checkbox list of tasks that are not running and deletes the chosen tasks after one confirmation (default No) (#1855). Cleanup is the same as for a single Delete. A failure in one task does not stop the others, and the result is reported as `Deleted M of N tasks.` A pending task being deleted is not picked up by `takt run`.
+- While the assistant is working, the TUI status line shows what it is doing (thinking, reasoning, the tool with an input summary such as the Bash command or file path, or the streamed response) and how long the turn has run (#1832). On narrow terminals the interrupt hint is shortened.
+- DeepSeek Harness plugins can be loaded from npm packages. Write `npm:<package-spec>` as a string entry in `provider_options.deepseek_harness.plugins`, or as `source` in an object entry, where `id` and `config` are optional. Packages are installed into the temporary runtime without lifecycle scripts and removed when the runtime ends. `ref` and URLs containing credentials are rejected for npm sources. The same trust rules as Git plugins apply. Thanks to @eiei114.
+- Workflow steps can declare `input_reports` (`from_step`, `reports`: a list of names or `all`, `optional_if_unrun`) to receive reports from the completed run of another step in the same workflow. Selected reports are available through `{report:name}`, and selected reports without a placeholder are appended to the Phase 1 instruction. A missing, incomplete, or ambiguous report fails the step. This works on agent steps, `workflow_call`, and parallel parents and sub-steps.
+
+- Static parallel sub-steps accept `description`, and dynamic pool candidates accept an optional `selection_hint` with the criteria for selecting them. The selector receives both. Every builtin step now has a `description` of its role, and the security reviewer's selection criteria moved to `selection_hint`.
+
+### Changed
+
+- Profiles in `runtime.yaml` (`provider.profiles`) may omit `model` (#1856). The provider then uses its CLI default model, and lower-priority model settings are not applied to that step. OpenCode profiles still require `model`.
+- BREAKING: Caccia now runs only from an explicit `caccia` workflow effect (#1804). Pushes, PR creation or update after a task, and Pipeline mode no longer start it. `caccia.enabled` now only decides whether the effect waits for CodeRabbit; when it is false or unset, the effect is skipped. The builtin `merge-review`, `merge-review-fix`, and `merge-review-fix-simple` workflows call it after each push and check CI on the head that Caccia returns. Custom workflows that relied on the automatic CodeRabbit loop must add a `caccia` step. Before running, the effect waits up to 60 seconds for the PR head on GitHub to match the pushed commit.
+- `merge-review-fix` and `merge-review-fix-simple` now try to recover from CI failures instead of commenting and stopping. A read-only step investigates the failed checks, job logs, the cumulative PR diff, and related code. A repository defect, including flaky tests and failures that also happen on main, gets at most two reviewed root-cause fix rounds. An evidenced external cause allows one rerun of the failed jobs. When evidence is insufficient or recovery is exhausted, the workflow comments with the counts, the last failed checks, and the investigation summary, and the task ends as failed (previously it completed after the comment). New workflow building blocks: the `pr_ci_failure` system input, the `rerun_ci` effect, `pr_status.rerun_from`, and `comment_pr` `body_format: plain_text`.
+- `/requeue` and `/retry` in assistant conversations let you choose the task or start position from a list when the AI cannot decide or its selection fails, instead of stopping with a notice (#1863). The AI first summarizes what the conversation agreed, then selects using that summary, the inline guidance, and full workflow/step paths so that steps with the same name can be told apart. An invalid AI answer is corrected once, and the manual menu then shows the reason. For `/requeue`, an exceeded task with no saved stopping position now offers a start-position choice.
+- `/tell` and MCP `takt_tell_run` can now target running merge tasks, including merge tasks started by `takt run` or `takt watch` after requeue or retry.
+- Steps running in a worktree clone now resume the saved session of the same persona, provider, and model within the same run, as they already did without a worktree. Sessions are never shared with other clones or the project root, and retry, requeue, and instruct still start each persona fresh.
+- `/verify` runs Alloy `run`/`check` commands in parallel, two at a time by default (#1852). `TAKT_ALLOY_CONCURRENCY`, `TAKT_ALLOY_HEAP` (default `4g`), and `TAKT_ALLOY_STACK` (default `64m`) control the concurrency and JVM memory. A timed-out or failed command no longer stops the remaining ones. When verification does not pass, the specifications and logs under `.takt/runs/verify-*/` are kept and their path is shown.
+- Codex, Claude SDK, claude-headless, OpenCode, and Copilot now distinguish a temporary HTTP 429 from a usage, credit, or spend-cap exhaustion notice and retry the temporary one with the same provider (#1816). Codex, Claude SDK, claude-headless, and Copilot retry up to eight times with backoff from 1 to 30 seconds; OpenCode retries up to twice and shares that budget with its other transient failures. No provider retries a 429 after a tool has run in that attempt. Exhaustion notices go straight to `rate_limit_fallback.switch_chain`, or abort when no fallback is set.
+- The update notice is now one line on stderr (`takt: Update available X → Y (npm install --global takt)`). It can still be turned off with `--no-update-notifier` or `NO_UPDATE_NOTIFIER`.
+- Builtin review and fix workflows pass reports to the steps that use them through `input_reports` instead of having agents search the report directory. When review adjudication finds nothing to repair, the `review-fix-*` and `simple*` workflows go straight to the final check instead of running another review round. In `simple`, `simple-mini`, and workflows built on `simple-core`, the review after a repair runs as a separate follow-up review step.
+- When a step's report phase fails, the step now fails if a later step reads that report, instead of continuing and letting the later step read an older report. This also applies to parallel sub-steps.
+- The builtin security reviewer is no longer skipped only because a change is documentation-only, comment-only, test-only, or a small fix. It is selected whenever the change may affect a security boundary or is too large to rule out security impact.
+- Builtin review, adjudication, and security prompts no longer raise or accept findings that hold only under unconfirmed premises, such as input assumed to be untrusted, operations assumed to run concurrently, or data sizes the code never produces. A new `process-deviation` policy keeps supervise, final-gate, adjudication, fix-plan, and fix-verifier steps from failing on a past departure from the work instructions that cannot be undone and leaves nothing behind in the artifacts.
+- Builtin final checks no longer stop as BLOCKED for an external confirmation that the acceptance criteria and existing contracts do not require; the unverified check is recorded as evidence and the normal judgment continues.
+- Builtin frontend review treats the screen (the page on the Web) as the top-level Mediator that owns state and operation decisions. Framework-standard state holders and adopted state-management libraries are accepted, while a custom layer that takes over the screen's state and leaves the page only delegating is rejected.
+
+### Fixed
+
+- An agent continuing the same session no longer carries a report or judgment phase's restrictions, such as not reading files, into its next work phase. The system prompt now explains how workflows, steps, and phases fit together and shows the run's workflow tree with the current step, and every phase instruction starts with the step and phase being handled and what that phase may and may not do. Judgments, report rewrites, parallel sub-steps, team parts, loop monitors, and selectors receive the same information.
+- `takt merge` no longer treats an earlier GitHub Actions run on the same HEAD as a CI failure when it was cancelled by concurrency control and a later run of the same workflow succeeded. The earlier run is ignored only when the later run can be identified uniquely by repository, workflow, HEAD, and start time.
+- Upgrading a global install with `npm install --global takt` over an older version no longer leaves empty directories that made `takt` fail at startup with `Cannot find package .../string-width/index.js` (#1851). TAKT no longer depends on `update-notifier`.
+- `takt run` and `takt watch` no longer stop picking up tasks when the disk fills up while claiming pending tasks; they warn, retry every 5 seconds, and continue once space is available.
+- Creating a task clone no longer fails intermittently when Git garbage collection runs in the project repository at the same time.
+- Requeue and Retry work for a worktree task that failed before its clone was created; the task starts in a fresh clone and keeps its saved start step.
+- Instructions sent with `/tell` or `takt_tell_run` are appended to the task's `order.md` once delivered, so later steps and resumed runs can read them.
+- The Codex provider skips the Codex SDK's Git repository check for new and resumed threads, so it runs in a directory that is not a (trusted) Git repository.
+
+### Internal
+
+- The global-install check also covers upgrading over the latest published version, and CI covers npm 12.
+- Light integration tests run with up to two workers locally, and notifications are silenced while tests run.
+- Added eval suites for frontend Mediator review, unconfirmed review premises, external confirmations, and report handoff.
+- Lockfile and `npmDepsHash` synchronized by `check:release`.
 
 ## [0.71.0] - 2026-10-15
 

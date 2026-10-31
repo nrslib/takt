@@ -1417,4 +1417,3 @@ Distinguish requirements, observed facts, proposals, and unknowns when planning,
 | Effects and success behavior | A guard's existence is insufficient: verify when it prevents prohibited results or side effects and whether required success behavior is preserved |
 | Preserve explicit obligations | When r
 ...（以下省略）...
-

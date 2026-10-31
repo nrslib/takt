@@ -83,6 +83,9 @@ export interface PermissionRequest {
 }
 
 export type { PermissionResult, PermissionUpdate };
+export type {
+  ToolPermissionDecisionRequest, ToolPermissionDecision, ToolPermissionDecisionHandler,
+} from './permission-types.js';
 
 export type PermissionHandler = (request: PermissionRequest) => Promise<PermissionResult>;
 

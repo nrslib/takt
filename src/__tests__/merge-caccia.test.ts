@@ -47,19 +47,42 @@ const details = { number: 123, headBranch: 'feature/pr', baseBranch: 'main', hea
 
 describe('Merge workflows own Caccia execution', () => {
   let project: string;
+  let cloneHead: string;
+  let remoteHead: string;
   beforeEach(() => {
     vi.resetAllMocks();
     project = mkdtempSync(join(tmpdir(), 'takt-merge-caccia-'));
+    cloneHead = headSha;
+    remoteHead = headSha;
     mocks.details.mockResolvedValue(details);
     mocks.status.mockResolvedValue({ merged: true });
     mocks.config.mockImplementation((_cwd: string, key: string) => key === 'caccia' ? { enabled: true }
       : key === 'worktreeDir' ? join(project, '.takt', 'worktrees') : false);
     mocks.clone.mockImplementation(async (_source: string, target: string) => { mkdirSync(target, { recursive: true }); });
-    mocks.git.mockImplementation(async (cwd: string, args: string[]) => ({ stdout:
-      args[0] === 'remote' && args[1] === 'get-url'
-        ? cwd === project ? '/project' : args[2] === 'origin' ? '/head' : '/project'
-        : args[0] === 'remote' ? 'origin\n' : args[0] === 'symbolic-ref' ? 'feature/pr'
-          : args[0] === 'rev-parse' ? headSha : '/project' }));
+    mocks.git.mockImplementation(async (cwd: string, args: string[]) => {
+      if (args[0] === 'config' && args[1] === '--get') {
+        return { stdout: args[2] === 'remote.origin.url' ? '/head' : '/project' };
+      }
+      if (args[0] === 'remote' && args[1] === 'get-url') {
+        return { stdout: cwd === project || args[2] !== 'origin' ? '/project' : '/head' };
+      }
+      if (args[0] === 'remote') return { stdout: 'origin\n' };
+      if (args[0] === 'symbolic-ref') return { stdout: 'feature/pr' };
+      if (args[0] === 'rev-parse') {
+        if (args.includes('--git-path')) return { stdout: `.git/${args.at(-1)!}` };
+        if (args.at(-1) === 'MERGE_HEAD') throw new Error('MERGE_HEAD not found');
+        if (args.at(-1) === 'FETCH_HEAD') return { stdout: remoteHead };
+        return { stdout: cloneHead };
+      }
+      if (args[0] === 'merge-base') {
+        const resolveRef = (ref: string) => ref === 'HEAD' ? cloneHead : ref === 'FETCH_HEAD' ? remoteHead : ref;
+        const left = resolveRef(args.at(-2)!);
+        const right = resolveRef(args.at(-1)!);
+        return { stdout: left === right ? left : headSha };
+      }
+      if (args[0] === 'merge' && args.includes('--ff-only')) cloneHead = remoteHead;
+      return { stdout: '' };
+    });
     mocks.reviewStatus.mockResolvedValue({ headSha, hasCodeRabbitPost: true, reviewedHeadShas: [headSha] });
     mocks.caccia.mockResolvedValue({ outcome: 'success', headSha, unresolvedCount: 0 });
     mocks.merge.mockReturnValue({ success: true });
@@ -68,10 +91,61 @@ describe('Merge workflows own Caccia execution', () => {
       return { success: true };
     });
   });
-  afterEach(() => rmSync(project, { recursive: true, force: true }));
+  afterEach(() => { vi.restoreAllMocks(); rmSync(project, { recursive: true, force: true }); });
 
   const run = () => executePrWorkflow({ projectCwd: project, prNumber: 123, workflow: 'custom-merge',
     settings: resolveMergeSettings(undefined) });
+
+  it('再キューされたマージ実行は停止を検知し、処理終了を待って停止理由付きで保存する', async () => {
+    mocks.workflow.mockRejectedValueOnce(new Error('initial failure'));
+    await expect(run()).rejects.toThrow('initial failure');
+    const runner = new TaskRunner(project);
+    const failed = runner.listFailedTasks()[0]!;
+    runner.requeueTask(failed.name, ['failed']);
+    const claimed = runner.claimNextTasks(1)[0]!;
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    mocks.workflow.mockImplementationOnce(async () => { await pending; return { success: true }; });
+    const execution = executePersistedPrMergeTask(claimed, runner, project);
+    const settled = execution.then(() => undefined, (error: unknown) => error);
+    try {
+      await vi.waitFor(() => expect(mocks.workflow).toHaveBeenCalledTimes(2));
+      const signal = mocks.workflow.mock.calls[1]![0].abortSignal as AbortSignal;
+      expect(signal.aborted).toBe(false);
+      runner.requestTaskStop(undefined, claimed.name, claimed.executionId!);
+      await vi.waitFor(() => expect(signal.aborted).toBe(true), { timeout: 3000 });
+      expect(runner.listAllTaskItems().find((task) => task.name === claimed.name)!.kind).toBe('running');
+      release();
+      const error = await settled;
+      expect(error).toBeInstanceOf(Error);
+      const saved = runner.listTaskStateItems().find((task) => task.name === claimed.name)!;
+      expect(saved).toMatchObject({ status: 'failed', ownerPid: undefined,
+        completion: { success: false, interrupted: true, workflowResult: 'aborted' } });
+      expect(saved.failure!.error).toContain('stopped by manager');
+      expect(saved.completion!.failureReason).toBe(saved.failure!.error);
+      expect((error as Error).message).toBe(saved.failure!.error);
+    } finally { release(); await settled; }
+  });
+
+  it.each([true, false])('マージ終端保存直前の停止を同じ停止理由で保存する (merged=%s)', async (merged) => {
+    mocks.workflow.mockRejectedValueOnce(new Error('initial failure'));
+    await expect(run()).rejects.toThrow('initial failure');
+    const runner = new TaskRunner(project);
+    runner.requeueTask(runner.listFailedTasks()[0]!.name, ['failed']);
+    const claimed = runner.claimNextTasks(1)[0]!;
+    mocks.workflow.mockResolvedValue({ success: true });
+    mocks.status.mockResolvedValue({ merged });
+    const method = merged ? 'completeTask' : 'failTask';
+    const save = runner[method].bind(runner);
+    vi.spyOn(runner, method).mockImplementationOnce((result) => {
+      runner.requestTaskStop(undefined, claimed.name, claimed.executionId!);
+      return save(result);
+    });
+    await expect(executePersistedPrMergeTask(claimed, runner, project)).rejects.toThrow(/stopped by manager/);
+    const saved = runner.listTaskStateItems().find((task) => task.name === claimed.name)!;
+    expect(saved.status).toBe('failed');
+    expect(saved.completion).toMatchObject({ success: false, interrupted: true, failureReason: saved.failure!.error });
+  });
 
   it('設定が有効でも効果のないworkflowは通常のpushだけを実行する', async () => {
     expect(await run()).toEqual({ merged: true });
@@ -110,20 +184,23 @@ describe('Merge workflows own Caccia execution', () => {
     expect(mocks.operations.push).toHaveBeenCalledOnce();
   });
 
-  it('再開前にPR headが外部変更された場合はworkflowを実行しない', async () => {
+  it('再開前にPR headが進んでいても取り込んで同じcloneでworkflowを実行する', async () => {
     mocks.workflow.mockRejectedValueOnce(new Error('workflow failed'));
     await expect(run()).rejects.toThrow('workflow failed');
     const runner = new TaskRunner(project);
     const failed = runner.listFailedTasks()[0]!;
     runner.requeueTask(failed.name, ['failed']);
     const claimed = runner.claimNextTasks(1)[0]!;
-    mocks.details.mockResolvedValue({ ...details, headSha: 'c'.repeat(40) });
-    await expect(executePersistedPrMergeTask(claimed, runner, project)).rejects.toThrow();
-    expect(mocks.workflow).toHaveBeenCalledOnce();
+    remoteHead = 'c'.repeat(40);
+    mocks.details.mockResolvedValue({ ...details, headSha: remoteHead });
+    expect(await executePersistedPrMergeTask(claimed, runner, project)).toEqual({ merged: true });
+    expect(mocks.workflow).toHaveBeenCalledTimes(2);
+    expect(mocks.workflow.mock.calls[1]?.[0]).toMatchObject({ cwd: failed.worktreePath,
+      prExecutionContext: { headSha: remoteHead } });
     expect(mocks.caccia).not.toHaveBeenCalled();
   });
 
-  it.each(['manual', 'caccia'] as const)('同じ送信前の状態でもpushの生成元%sで再試行を分ける', async (source) => {
+  it.each(['manual', 'caccia'] as const)('pushの生成元%sでも先行したcloneを保持して再試行する', async (source) => {
     mocks.workflow.mockRejectedValueOnce(new Error('workflow failed'));
     await expect(run()).rejects.toThrow();
     const runner = new TaskRunner(project);
@@ -132,18 +209,11 @@ describe('Merge workflows own Caccia execution', () => {
     runner.recordPrMergePushedHead(failed.name, localHead, headSha, source);
     runner.requeueTask(failed.name, ['failed']);
     const claimed = runner.claimNextTasks(1)[0]!;
-    const git = mocks.git.getMockImplementation()!;
-    mocks.git.mockImplementation(async (cwd, args) => args.join(' ') === 'rev-parse HEAD'
-      ? { stdout: localHead } : git(cwd, args));
+    cloneHead = localHead;
     mocks.workflow.mockClear().mockResolvedValue({ success: true });
-    const result = executePersistedPrMergeTask(claimed, runner, project);
-    if (source === 'manual') {
-      expect(await result).toEqual({ merged: true });
-      expect(mocks.workflow).toHaveBeenCalledOnce();
-      expect(mocks.workflow.mock.calls[0]?.[0].cwd).toBe(failed.worktreePath);
-    } else {
-      await expect(result).rejects.toThrow();
-      expect(mocks.workflow).not.toHaveBeenCalled();
-    }
+    expect(await executePersistedPrMergeTask(claimed, runner, project)).toEqual({ merged: true });
+    expect(mocks.workflow).toHaveBeenCalledOnce();
+    expect(mocks.workflow.mock.calls[0]?.[0]).toMatchObject({ cwd: failed.worktreePath,
+      prExecutionContext: { headSha: localHead } });
   });
 });

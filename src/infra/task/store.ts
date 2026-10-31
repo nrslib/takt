@@ -1,7 +1,7 @@
 import * as path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
-import { isRecordedProcessAlive, withFileLock } from '../fs/file-lock.js';
+import { isRecordedProcessAlive, withFileLock, type FileLockAcquisitionErrorHandler } from '../fs/file-lock.js';
 import { TasksFileSchema, serializeTasksFileData, type TasksFileData } from './schema.js';
 import { normalizePersistedTasksFile } from './taskConfigSerialization.js';
 import { createLogger } from '../../shared/utils/index.js';
@@ -38,16 +38,18 @@ export class TaskStore {
   }
 
   update(
-    mutator: (current: TasksFileData) => TasksFileData,
-    options?: { deletionId?: string },
+    mutator: (current: TasksFileData) => TasksFileData | undefined,
+    options?: { deletionId?: string; onAcquisitionError?: FileLockAcquisitionErrorHandler },
   ): TasksFileData {
     return this.withLock(() => {
       const current = this.clearStaleDeletions(this.readUnsafe());
-      const updated = TasksFileSchema.parse(mutator(current));
+      const mutation = mutator(current);
+      if (mutation === undefined) return current;
+      const updated = TasksFileSchema.parse(mutation);
       this.assertDeletionsUnchanged(current, updated, options?.deletionId);
       this.writeUnsafe(updated);
       return updated;
-    });
+    }, options?.onAcquisitionError);
   }
 
   private clearStaleDeletions(state: TasksFileData): TasksFileData {
@@ -115,14 +117,14 @@ export class TaskStore {
     writePrivateFileWithMode(this.tasksFile, yaml, 0o600);
   }
 
-  private withLock<T>(fn: () => T): T {
+  private withLock<T>(fn: () => T, onAcquisitionError?: FileLockAcquisitionErrorHandler): T {
     if (this.locked) {
       throw new Error('TaskStore: reentrant lock detected');
     }
     this.locked = true;
     try {
       this.ensureDirs();
-      return withFileLock(this.lockFile, fn);
+      return withFileLock(this.lockFile, fn, { onAcquisitionError });
     } finally {
       this.locked = false;
     }

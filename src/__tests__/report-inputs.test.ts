@@ -4,7 +4,7 @@ import { normalizeReportInputs } from '../infra/config/loaders/workflowReportInp
 import { CURRENT_REPORT_BODY_LIMIT, renderCurrentReport } from '../core/workflow/instruction/prepared-instruction.js';
 import { reportInputNames } from '../core/workflow/report-input-contract.js';
 import { makeStep } from './test-helpers.js';
-import type { WorkflowCallStep } from '../core/models/workflow-types.js';
+import type { WorkflowCallStep, WorkflowStep } from '../core/models/workflow-types.js';
 
 describe('report input declarations and rendering', () => {
   it('preserves the single declaration while enumerating both accepted forms', () => {
@@ -40,6 +40,50 @@ describe('report input declarations and rendering', () => {
     }) };
     expect(() => reportInputNames(workflow, consumer, context)).toThrow();
     expect(reportInputNames(workflow, { ...consumer, inputReports: consumer.inputReports.slice(0, 1) }, context)).toEqual([['plan.md']]);
+  });
+
+  it('rejects duplicate public names before all nested reports are deduplicated', () => {
+    const source: WorkflowCallStep = { name: 'source', personaDisplayName: 'source', instruction: '', kind: 'workflow_call', call: 'child' };
+    const workflow = { name: 'parent', initialStep: 'source', maxSteps: 10, steps: [source] };
+    const context = { projectCwd: '/', lookupCwd: '/', workflowCallResolver: () => ({
+      name: 'child', initialStep: 'left', maxSteps: 10,
+      steps: [
+        makeStep({ name: 'left', outputContracts: [{ name: 'left/review.md', format: 'Review' }] }),
+        makeStep({ name: 'right', outputContracts: [{ name: 'right/review.md', format: 'Review' }] }),
+      ],
+    }) };
+    expect(() => reportInputNames(workflow,
+      { name: 'consumer', inputReports: { fromStep: 'source', reports: 'all' } }, context)).toThrow();
+  });
+
+  function allReportsNames(kind: 'step' | 'parallel' | 'nested workflow', reportPaths: readonly string[]) {
+    const contracts = reportPaths.map((name) => ({ name, format: 'Review' }));
+    const source: WorkflowStep = kind === 'step'
+      ? makeStep({ name: 'source', outputContracts: contracts })
+      : kind === 'parallel'
+        ? makeStep({ name: 'source', parallel: [
+          makeStep({ name: 'left', outputContracts: [contracts[0]!] }),
+          makeStep({ name: 'right', outputContracts: [contracts[1]!] }),
+        ] })
+        : { name: 'source', personaDisplayName: 'source', instruction: '', kind: 'workflow_call', call: 'child' };
+    const workflow = { name: 'parent', initialStep: 'source', maxSteps: 10, steps: [source] };
+    return reportInputNames(workflow, { name: 'consumer', inputReports: { fromStep: 'source', reports: 'all' } }, {
+      projectCwd: '/', lookupCwd: '/', workflowCallResolver: () => ({
+        name: 'child', initialStep: 'left', maxSteps: 10,
+        steps: [
+          makeStep({ name: 'left', outputContracts: [contracts[0]!] }),
+          makeStep({ name: 'right', outputContracts: [contracts[1]!] }),
+        ],
+      }),
+    });
+  }
+
+  it.each(['step', 'parallel', 'nested workflow'] as const)('accepts duplicate full paths as one reports:all input from a %s', (kind) => {
+    expect(allReportsNames(kind, ['left/review.md', 'left/review.md'])).toEqual([['review.md']]);
+  });
+
+  it.each(['step', 'parallel', 'nested workflow'] as const)('rejects different full paths with one public name for reports:all from a %s', (kind) => {
+    expect(() => allReportsNames(kind, ['left/review.md', 'right/review.md'])).toThrow();
   });
 
   it('rejects parallel producers publishing the selected name into the same file', () => {

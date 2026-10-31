@@ -91,6 +91,7 @@ function buildMakerPlan(
 ): ConversationPlan {
   const assistantConversationInput = {
     assistantMode: 'assistant' as const,
+    includeAssistantMcpServers: false,
     enableAssistantRetryCommands: false,
     formalSpec: false,
     formalSpecComments: true,
@@ -266,6 +267,7 @@ export async function runWorkflowMakerTui(options: RunWorkflowMakerTuiOptions): 
       cwd: options.projectDir,
       lang,
       conversation: facade,
+      getProvider: () => currentPlan.ctx.providerType,
       initialEntries: [{ role: 'system', content: currentPlan.strategy.introMessage }],
       submitMode: 'chat',
       autoSubmit: false,

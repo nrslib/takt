@@ -360,6 +360,8 @@ function findRateLimitMessage(
   output: Pick<CopilotExecError, 'stdout' | 'stderr'>,
   stderrFallback = true,
 ): { message: string; classification: RateLimitClass } | undefined {
+  // 複数の session.error がある場合は使い切りを優先する（429 の後に 402 が来ても再試行しない）
+  let transient: { message: string; classification: RateLimitClass } | undefined;
   for (const line of parseValidJsonLines(output.stdout ?? '')) {
     const root = toRecord(line);
     if (root?.type !== 'session.error') {
@@ -368,14 +370,21 @@ function findRateLimitMessage(
     const data = extractCopilotEventData(root);
     const message = firstNonEmptyString([data.message]);
     const detail = [message, output.stderr].filter((value) => value !== undefined).join('\n');
-    const classification = classifyRateLimitError(detail, data.statusCode === 429 || data.statusCode === '429'
-      || data.errorType === 'rate_limit' || data.errorCode === 'rate_limited' ? 429 : undefined);
-    if (
-      classification !== 'NotRateLimit'
-    ) {
+    // 月間クォータ切れ（402）は再試行しても回復しないため、構造化フィールドだけで使い切りと判定する
+    const isQuotaExhausted = data.statusCode === 402 || data.statusCode === '402'
+      || data.errorType === 'quota' || data.errorCode === 'quota_exceeded';
+    const classification = isQuotaExhausted
+      ? 'Exhausted'
+      : classifyRateLimitError(detail, data.statusCode === 429 || data.statusCode === '429'
+        || data.errorType === 'rate_limit' || data.errorCode === 'rate_limited' ? 429 : undefined);
+    if (classification === 'Exhausted') {
       return { message: trimDetail(detail, 'Copilot rate limit exceeded'), classification };
     }
+    if (classification === 'Transient') {
+      transient ??= { message: trimDetail(detail, 'Copilot rate limit exceeded'), classification };
+    }
   }
+  if (transient !== undefined) return transient;
   if (!stderrFallback) return undefined;
   const stderr = output.stderr ?? '';
   const classification = classifyRateLimitError(stderr);

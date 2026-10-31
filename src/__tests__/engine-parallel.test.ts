@@ -1052,7 +1052,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       .toContain(facetKnowledge(config, 'security-facets', 'cli'));
   });
 
-  it('should preserve selected dynamic fragment metadata through participant and report execution', async () => {
+  it.each(['architecture', 'frontend'])('should preserve selected dynamic fragment metadata through participant and report execution when %s reports first', async (firstReporter) => {
     const raw = dynamicParallelWorkflowRaw();
     Object.assign(raw, {
       report_formats: {
@@ -1113,6 +1113,12 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       provider: string | undefined;
       providerOptions: unknown;
     }> = [];
+    const firstReportStarted = createDeferred();
+    vi.mocked(runReportPhase).mockImplementation(async (step) => {
+      if (step.name === firstReporter) {
+        firstReportStarted.resolve();
+      }
+    });
     vi.mocked(runAgent).mockImplementation(async (persona, _instruction, options) => {
       if (options?.outputSchema) {
         return makeResponse({
@@ -1133,6 +1139,9 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
         systemPrompt: persona ?? '',
         userInstruction: 'review',
       });
+      if (persona !== `${firstReporter}-reviewer`) {
+        await firstReportStarted.promise;
+      }
       return makeResponse({ persona: persona ?? 'reviewer', content: 'approved' });
     });
     mockRuleEvaluationSequence([
@@ -1164,8 +1173,9 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     ]);
     const reportedSteps = vi.mocked(runReportPhase).mock.calls.map(([step]) => step);
     expect(reportedSteps).toHaveLength(2);
-    expect(reportedSteps).toEqual([
-      expect.objectContaining({
+    expect(reportedSteps[0]?.name).toBe(firstReporter);
+    expect(Object.fromEntries(reportedSteps.map((step) => [step.name, step]))).toEqual({
+      architecture: expect.objectContaining({
         name: 'architecture',
         persona: 'architecture-reviewer',
         policyContents: [{ content: 'Architecture policy contract' }],
@@ -1175,7 +1185,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
           format: 'Return a metadata-aware review report.',
         })],
       }),
-      expect.objectContaining({
+      frontend: expect.objectContaining({
         name: 'frontend',
         persona: 'frontend-reviewer',
         policyContents: [{ content: 'Frontend policy contract' }],
@@ -1185,8 +1195,9 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
           format: 'Return a metadata-aware review report.',
         })],
       }),
-    ]);
+    });
     expect(reportedSteps.some((step) => step.name === 'backend')).toBe(false);
+    expect(state.lastOutput?.content.match(/^## .+$/gm)).toEqual(['## architecture', '## frontend']);
   });
 
   it('should record same-named parallel parent and child participation separately', async () => {

@@ -1,11 +1,14 @@
 import { cacciaEffect } from '../../caccia/system-effect.js';
 import { resolveTaskPrExecutionContext } from './prExecutionContext.js';
 import { WorkflowEngine, createDenyAskUserQuestionHandler } from '../../../core/workflow/index.js';
+import { hasCacciaEffect } from '../../../core/workflow/workflow-step-traversal.js';
+import { getAllParallelSubSteps } from '../../../core/models/index.js';
+import { workflowEntryMatchesWorkflow } from '../../../core/workflow/workflow-reference.js';
 import { ManagedProviderInstallRequiredError } from '../../../infra/managed-providers/loader.js';
 import { join } from 'node:path';
 import { resolveConfigValues } from '../../../infra/config/resolveConfigValue.js';
 import { getLabel } from '../../../shared/i18n/index.js';
-import type { WorkflowConfig } from '../../../core/models/index.js';
+import type { WorkflowConfig, WorkflowStep } from '../../../core/models/index.js';
 import type { WorkflowExecutionResult, WorkflowExecutionOptions } from './types.js';
 import { createDefaultSystemStepServices } from '../../../infra/workflow/system/DefaultSystemStepServices.js';
 import { createDefaultStructuredOutputNormalizers } from '../../../infra/workflow/structured-output/followup-task-normalizer.js';
@@ -55,6 +58,7 @@ import {
 import {
   RunCleanupError,
   RunLiveDeliveryError,
+  RunProjectionError,
   type RunFinalizationIssue,
   type WorkflowRunExecutionControl,
   type WorkflowRunExecutionHandle,
@@ -325,6 +329,7 @@ async function executeWorkflowInternal(
     });
   }
   const workflowCallResolver = executionBundle.workflowCallResolver;
+  const startedWorkflows = new Set<WorkflowConfig>([executionBundle.rootWorkflow]);
   const terminalPublicationContext = {
     runSlug: bootstrap.runSlug,
     projectCwd: options.projectCwd,
@@ -527,6 +532,7 @@ async function executeWorkflowInternal(
         phase1ProcessSafetyByStep,
         systemStepServicesFactory: (serviceOptions) => createDefaultSystemStepServices({
           ...serviceOptions,
+          runPaths: bootstrap.runPaths,
           ...gitSafety,
           ...(options.cacciaExecutionSource === undefined ? {} : { cacciaService: {
             execute: (prNumber) => cacciaEffect({
@@ -534,6 +540,7 @@ async function executeWorkflowInternal(
               prMergePushRecorder: options.prMergePushRecorder,
               gitProvider: runContext?.gitProvider,
               outputMode: options.outputMode, taskPrefix: options.taskPrefix,
+              eventSink: options.eventSink,
               taskColorIndex: options.taskColorIndex, taskDisplayLabel: options.taskDisplayLabel,
             }, prNumber),
           } }),
@@ -541,6 +548,27 @@ async function executeWorkflowInternal(
         }),
         workflowCallResolver,
         workflowBundleResourceRoot: executionBundle.resourceRoot,
+      });
+
+      engine.on('step:start', (_step, _iteration, _instruction, _provider, _workflowName,
+        _resumeStepName, _stepIteration, stack) => {
+        let workflow = executionBundle.rootWorkflow;
+        let steps: readonly WorkflowStep[] = workflow.steps;
+        for (const [index, frame] of stack.entries()) {
+          if (!workflowEntryMatchesWorkflow(frame, workflow)) throw new Error('Started workflow identity does not match its bundle');
+          if (index === stack.length - 1) break;
+          const step = steps.find((candidate) => candidate.name === frame.step);
+          if (step === undefined) throw new Error('Started workflow step is missing from its bundle');
+          if (step.kind === 'workflow_call') {
+            const child = workflowCallResolver({ parentWorkflow: workflow, step, projectCwd: options.projectCwd, lookupCwd: cwd });
+            if (child === null) throw new Error('Started child workflow is missing from its bundle');
+            startedWorkflows.add(child);
+            workflow = child;
+            steps = child.steps;
+          } else if (step.parallel !== undefined) {
+            steps = getAllParallelSubSteps(step.parallel);
+          }
+        }
       });
 
       eventBridge = bindWorkflowExecutionEvents({
@@ -578,6 +606,7 @@ async function executeWorkflowInternal(
       executionResult = {
         interrupted: eventBridge.getStagedAbort()?.status === 'aborted',
         success: finalState.status === 'completed',
+        workflowHasCaccia: [...startedWorkflows].some((workflow) => hasCacciaEffect(workflow.steps)),
         reason: eventBridge.state.failure?.error ?? eventBridge.state.abortReason,
         lastStep: eventBridge.state.failure?.step ?? eventBridge.state.lastStepName,
         lastMessage: eventBridge.state.lastStepContent,
@@ -914,6 +943,24 @@ async function publishTerminalLiveFeedback(input: {
   readonly shouldNotifyWorkflowAbort: boolean;
   readonly issues: RunFinalizationIssue[];
 }): Promise<void> {
+  const traceIssues = input.issues.filter(
+    (issue) => issue instanceof RunProjectionError && issue.stage === 'trace',
+  );
+  for (const issue of traceIssues) {
+    const message = sanitizeTerminalText(
+      `Run result was committed, but trace finalization failed: ${getErrorMessage(issue)}`,
+    );
+    try {
+      input.out.warn(message);
+    } catch (error) {
+      input.issues.push(new RunLiveDeliveryError(error));
+    }
+    try {
+      input.eventBridge.emitTerminalFeedback({ type: 'progress', level: 'warn', message });
+    } catch (error) {
+      input.issues.push(new RunLiveDeliveryError(error));
+    }
+  }
   try {
     if (input.payload.status === 'completed') {
       reportWorkflowCompletion(

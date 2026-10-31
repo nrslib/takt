@@ -6,6 +6,7 @@ import { ensurePrivateDirectory, readPrivateFileState, writePrivateFile } from '
 import { runPrivateFileExclusive } from '../../shared/utils/private-file-lock.js';
 import { pinReportContent } from './report-writer.js';
 import { buildWorkflowCallNamespaceSegment, parseWorkflowCallNamespaceSegment } from './workflow-call-namespace.js';
+import { parseWorkflowExecutionIdentity } from './workflow-execution-identity-codec.js';
 
 const publicName = z.string().refine((value) => classifyReportRelativePath(value).kind === 'public');
 const versionPath = z.string().refine((value) => value.startsWith(`${REPORT_EXECUTIONS_DIRECTORY}/versions/`)
@@ -36,6 +37,18 @@ export interface ReportExecutionMetadata {
 
 function nextExecutionOrder(executions: readonly ReportExecution[]): number {
   return executions.reduce((order, entry) => Math.max(order, entry.sequence, entry.completionOrder ?? 0), 0) + 1;
+}
+
+function reportOrigin(executions: readonly ReportExecution[], version: string): ReportExecution {
+  return executions.filter((entry) => Object.values(entry.reports).includes(version))
+    .sort((left, right) => right.namespace.length - left.namespace.length || right.sequence - left.sequence)[0]!;
+}
+
+function reportExecutionMetadata(lineage: string, entry: ReportExecution): ReportExecutionMetadata {
+  return {
+    id: `${lineage}/${entry.id}`, producer: entry.producer, order: entry.sequence,
+    ...(entry.completionOrder === undefined ? {} : { completionOrder: entry.completionOrder }),
+  };
 }
 
 function reportProducerPath(path: string): string {
@@ -115,7 +128,10 @@ export class ReportExecutionStore {
       const path = relative(this.reportsRoot, pinReportContent(this.reportsRoot, reportName, content)).split(sep).join('/');
       for (const execution of matching) {
         const name = relative(resolve(this.reportsRoot, execution.namespace), resolve(reportDir, reportName)).split(sep).join('/');
-        execution.reports[publicName.parse(reportProducerPath(name))] = path;
+        const producerName = publicName.parse(reportProducerPath(name));
+        if (parseWorkflowExecutionIdentity(execution.identity)?.parallel_parent !== undefined
+          && !Object.hasOwn(execution.reports, producerName)) continue;
+        execution.reports[producerName] = path;
       }
     });
   }
@@ -151,13 +167,12 @@ export class ReportExecutionStore {
     const path = resolve(this.reportsRoot, version);
     const snapshot = readPrivateFileState(path);
     if (!snapshot.state.exists || !('content' in snapshot)) throw new Error(`Current report version is missing: ${path}`);
-    const origin = state!.executions.filter((entry) => Object.values(entry.reports).includes(version))
-      .sort((left, right) => right.namespace.length - left.namespace.length || right.sequence - left.sequence)[0]!;
-    const metadata = (entry: ReportExecution): ReportExecutionMetadata => ({
-      id: `${state!.lineage}/${entry.id}`, producer: entry.producer, order: entry.sequence,
-      ...(entry.completionOrder === undefined ? {} : { completionOrder: entry.completionOrder }),
-    });
-    return { content: snapshot.content.toString('utf8'), path, execution: metadata(current), origin: metadata(origin) };
+    const origin = reportOrigin(state!.executions, version);
+    return {
+      content: snapshot.content.toString('utf8'), path,
+      execution: reportExecutionMetadata(state!.lineage, current),
+      origin: reportExecutionMetadata(state!.lineage, origin),
+    };
   }
 
   history(identity: string, reportName: string, previous: number): string {
@@ -171,7 +186,8 @@ export class ReportExecutionStore {
       const path = version == null ? undefined : resolve(this.reportsRoot, version);
       const snapshot = path === undefined ? undefined : readPrivateFileState(path);
       const available = snapshot?.state.exists === true && 'content' in snapshot;
-      lines.push(`- execution=${state!.lineage}/${entry.id} order=${entry.sequence} completion_order=${entry.completionOrder ?? 'unavailable'} status=completed producer=${entry.producer} ${available ? `path=\`${path}\`` : 'report=missing'}`);
+      const origin = version == null ? undefined : reportExecutionMetadata(state!.lineage, reportOrigin(state!.executions, version));
+      lines.push(`- execution=${state!.lineage}/${entry.id} order=${entry.sequence} completion_order=${entry.completionOrder ?? 'unavailable'} status=completed producer=${entry.producer} origin_execution=${origin?.id ?? 'unavailable'} origin_producer=${origin?.producer ?? 'unavailable'} origin_order=${origin?.order ?? 'unavailable'} origin_completion_order=${origin?.completionOrder ?? 'unavailable'} ${available ? `path=\`${path}\`` : 'report=missing'}`);
     }
     const incomplete = executions.filter((entry) => !entry.completed);
     if (incomplete.length > 0) lines.push('Incomplete executions (excluded from completed history):');

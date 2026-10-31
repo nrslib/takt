@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { execFileSync, spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { appendFileSync, existsSync } from 'node:fs';
 import { chmod, mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -9,9 +10,19 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DeepSeekHarness, HarnessClient, RequestTimeoutError, TransportClosedError, type DeepSeekHarnessOptions } from '@deepseek-ai/dsh-sdk-client';
 import { parse as parseYaml } from 'yaml';
+import { createPartTimeoutReason } from '../shared/types/agent-failure.js';
 
+interface ManagedModuleLoadEvidence {
+  directory: string;
+  sdkPath: string;
+  llmPath: string;
+  piAiPackagePath?: string;
+  piAiVersion?: string;
+}
+
+const managedPackageRootEnvironmentKey = vi.hoisted(() => 'TAKT_DSH_CLIENT_PACKAGE_ROOT');
 const sdkConstructorOptions = vi.hoisted(() => [] as Array<DeepSeekHarnessOptions | undefined>);
-const managedModuleLoads = vi.hoisted(() => vi.fn());
+const managedModuleLoads = vi.hoisted(() => vi.fn<(evidence: ManagedModuleLoadEvidence) => void>());
 vi.mock('@deepseek-ai/dsh-sdk-client', async (importOriginal) => {
   const sdk = await importOriginal<typeof import('@deepseek-ai/dsh-sdk-client')>();
   return {
@@ -27,16 +38,39 @@ vi.mock('@deepseek-ai/dsh-sdk-client', async (importOriginal) => {
 });
 vi.mock('../infra/deepseek-harness/managed-package.js', async (importOriginal) => {
   const managed = await importOriginal<typeof import('../infra/deepseek-harness/managed-package.js')>();
-  const [sdk, llm] = await Promise.all([
-    import('@deepseek-ai/dsh-sdk-client'),
-    import('@deepseek-ai/dsh-llm'),
-  ]);
   return {
     ...managed,
     loadManagedDeepSeekHarnessModules: async () => {
-      managedModuleLoads();
+      const packageRoot = process.env[managedPackageRootEnvironmentKey]
+        ?? fileURLToPath(new URL('../..', import.meta.url));
+      const requireFromPackageRoot = createRequire(join(packageRoot, 'package.json'));
+      const sdkPath = requireFromPackageRoot.resolve('@deepseek-ai/dsh-sdk-client');
+      const llmPath = requireFromPackageRoot.resolve('@deepseek-ai/dsh-llm');
+      let evidence: ManagedModuleLoadEvidence = { directory: packageRoot, sdkPath, llmPath };
+      const selectedPackageRoot = process.env[managedPackageRootEnvironmentKey];
+      const [sdk, llm] = selectedPackageRoot
+        ? await Promise.all([
+          import(pathToFileURL(sdkPath).href),
+          import(pathToFileURL(llmPath).href),
+        ])
+        : await Promise.all([
+          import('@deepseek-ai/dsh-sdk-client'),
+          import('@deepseek-ai/dsh-llm'),
+        ]);
+      if (selectedPackageRoot) {
+        const piAiPackagePath = await realpath(join(
+          packageRoot,
+          'node_modules',
+          '@earendil-works',
+          'pi-ai',
+          'package.json',
+        ));
+        const piAiManifest = JSON.parse(await readFile(piAiPackagePath, 'utf8')) as { version: string };
+        evidence = { ...evidence, piAiPackagePath, piAiVersion: piAiManifest.version };
+      }
+      managedModuleLoads(evidence);
       return {
-        directory: fileURLToPath(new URL('../..', import.meta.url)),
+        directory: packageRoot,
         sdk,
         llm,
       };
@@ -50,6 +84,7 @@ import {
 import { DeepSeekHarnessProvider } from '../infra/providers/deepseek-harness.js';
 import { DeepSeekHarnessInstallRequiredError, installDeepSeekHarness } from '../infra/deepseek-harness/managed-package.js';
 import { resolveDeepSeekHarnessNpmPlugins } from '../infra/deepseek-harness/npm-plugin.js';
+import * as runtimeState from '../infra/deepseek-harness/runtime-state.js';
 import {
   acknowledgeDeepSeekRuntimeCleanup,
   assertDeepSeekRuntimeCreationAllowed,
@@ -60,6 +95,7 @@ import {
   withDeepSeekRuntimeCreation,
 } from '../infra/deepseek-harness/runtime-state.js';
 import {
+  acknowledgeDeepSeekRuntimeCleanup as acknowledgeDeepSeekRuntimeCleanupLocked,
   markDeepSeekCleanupBarrierLocked,
   withDeepSeekRuntimeStateFileLock,
 } from '../infra/deepseek-harness/runtime-state-lock.mjs';
@@ -97,7 +133,8 @@ const SUPPORTED_RUNTIME = (
   || (process.platform === 'darwin' && process.arch === 'arm64')
 );
 const DUMMY_CREDENTIAL = 'TAKT_DUMMY_CLIENT_CREDENTIAL_SENTINEL';
-const environmentKeys = ['TAKT_CONFIG_DIR', 'DSH_HOME', 'DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL', 'PI_CODING_AGENT_DIR', 'npm_config_cache', 'npm_config_ignore_scripts'] as const;
+const offlineManagedNpmCache = process.env.TAKT_DSH_OFFLINE_NPM_CACHE;
+const environmentKeys = ['TAKT_CONFIG_DIR', 'DSH_HOME', 'DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL', 'PI_CODING_AGENT_DIR', 'NPM_CONFIG_CACHE', 'npm_config_cache', 'NPM_CONFIG_OFFLINE', 'npm_config_offline', 'npm_config_ignore_scripts', managedPackageRootEnvironmentKey] as const;
 const savedEnvironment = new Map<string, string | undefined>();
 let temporaryRoot: string;
 let localApis: LocalApi[] = [];
@@ -383,11 +420,13 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
     managedModuleLoads.mockClear();
     for (const key of environmentKeys) savedEnvironment.set(key, process.env[key]);
     temporaryRoot = await mkdtemp(join(tmpdir(), 'takt-deepseek-client-sdk-'));
+    process.env.npm_config_cache = join(temporaryRoot, 'npm-cache');
     process.env.TAKT_CONFIG_DIR = join(temporaryRoot, 'takt');
     process.env.PI_CODING_AGENT_DIR = join(temporaryRoot, 'pi-agent');
     process.env.DSH_HOME = join(temporaryRoot, 'credential-source');
     process.env.DEEPSEEK_API_KEY = DUMMY_CREDENTIAL;
     delete process.env.DEEPSEEK_BASE_URL;
+    delete process.env[managedPackageRootEnvironmentKey];
     await mkdir(process.env.DSH_HOME, { recursive: true });
     await mkdir(process.env.PI_CODING_AGENT_DIR, { recursive: true });
   });
@@ -456,9 +495,11 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
     await expect(assertDeepSeekRuntimeCreationAllowed()).resolves.toBeUndefined();
   });
 
-  it.skipIf(!SUPPORTED_RUNTIME)('reuses a live SDK session without reloading managed modules and refuses after teardown', async () => {
+  it.skipIf(!SUPPORTED_RUNTIME)('uses the root SDK modules for one live session and refuses after teardown', async () => {
     const api = await startLocalApi();
     process.env.DEEPSEEK_BASE_URL = api.endpoint;
+    const packageRoot = fileURLToPath(new URL('../..', import.meta.url));
+    process.env[managedPackageRootEnvironmentKey] = packageRoot;
     const runtimePaths = getDeepSeekRuntimePaths();
     const workspace = join(temporaryRoot, 'workspace');
     await mkdir(workspace, { recursive: true });
@@ -466,8 +507,23 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
       cwd: workspace,
       providerOptions: { reasoningEffort: 'low', baseUrl: api.endpoint },
     });
-    expect(initial).toMatchObject({ status: 'done', content: 'mock client response 1' });
     expect(managedModuleLoads).toHaveBeenCalledTimes(1);
+    const requireFromPackageRoot = createRequire(join(packageRoot, 'package.json'));
+    expect(managedModuleLoads).toHaveBeenCalledWith({
+      directory: packageRoot,
+      sdkPath: requireFromPackageRoot.resolve('@deepseek-ai/dsh-sdk-client'),
+      llmPath: requireFromPackageRoot.resolve('@deepseek-ai/dsh-llm'),
+      piAiPackagePath: await realpath(join(
+        packageRoot,
+        'node_modules',
+        '@earendil-works',
+        'pi-ai',
+        'package.json',
+      )),
+      piAiVersion: '1.4.0',
+    });
+    expect(api.requests).toHaveLength(1);
+    expect(initial).toMatchObject({ status: 'done', content: 'mock client response 1' });
     expect(initial.sessionId).toEqual(expect.any(String));
     const sessionId = initial.sessionId!;
     const streamEvents: unknown[][] = [[], []];
@@ -521,6 +577,153 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
     );
     expect(managedModuleLoads).toHaveBeenCalledTimes(1);
     expect(api.requests).toHaveLength(3);
+  }, 90_000);
+
+  it.skipIf(!SUPPORTED_RUNTIME)('does not start the next same-session request before timeout cleanup completes', async () => {
+    const api = await startLocalApi();
+    const workspace = join(temporaryRoot, 'timeout-cleanup-workspace');
+    await mkdir(workspace, { recursive: true });
+    const options = {
+      cwd: workspace,
+      providerOptions: { baseUrl: api.endpoint, shutdownTimeoutMs: 2_000 },
+    };
+    const initial = await callDeepSeekHarness('worker', 'start before timing out', options);
+    expect(initial).toMatchObject({ status: 'done', sessionId: expect.any(String) });
+    const sessionId = initial.sessionId!;
+    api.setMode('hold-response');
+    const timeoutController = new AbortController();
+    const timeoutMs = 1_000;
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+
+    let releaseCleanup!: () => void;
+    const cleanupGate = new Promise<void>((resolve) => { releaseCleanup = resolve; });
+    let cleanupHasStarted = false;
+    const originalClose = DeepSeekHarness.prototype.close;
+    const close = vi.spyOn(DeepSeekHarness.prototype, 'close').mockImplementation(async function (this: DeepSeekHarness) {
+      cleanupHasStarted = true;
+      await cleanupGate;
+      await originalClose.call(this);
+    });
+
+    try {
+      const timedOutTurn = callDeepSeekHarness('worker', 'time out while the API response is held', {
+        ...options,
+        sessionId,
+        abortSignal: timeoutController.signal,
+      });
+      await vi.waitFor(() => expect(api.requests).toHaveLength(2), { timeout: 10_000, interval: 25 });
+      const nextTurn = callDeepSeekHarness('worker', 'must wait for timeout cleanup', { ...options, sessionId });
+      timeoutHandle = setTimeout(() => {
+        timeoutController.abort(new Error(createPartTimeoutReason(timeoutMs)));
+      }, timeoutMs);
+
+      await vi.waitFor(() => expect(cleanupHasStarted).toBe(true), { timeout: 10_000, interval: 25 });
+      const requestsWhileCleanupIsPending = api.requests.map((request) => JSON.stringify(request.body.messages)).join('\n');
+      expect(requestsWhileCleanupIsPending).not.toContain('must wait for timeout cleanup');
+
+      releaseCleanup();
+      const [timedOut, next] = await Promise.all([timedOutTurn, nextTurn]);
+      expect(timedOut).toMatchObject({ status: 'error', failureCategory: 'part_timeout' });
+      expect(next).toMatchObject({ status: 'error', failureCategory: 'session_continuation_unsupported' });
+      expect(api.requests).toHaveLength(2);
+    } finally {
+      if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+      releaseCleanup();
+      close.mockRestore();
+    }
+  }, 90_000);
+
+  it.skipIf(!SUPPORTED_RUNTIME)('does not start the next same-session request before abort cleanup completes', async () => {
+    const api = await startLocalApi();
+    const workspace = join(temporaryRoot, 'abort-cleanup-workspace');
+    await mkdir(workspace, { recursive: true });
+    const options = {
+      cwd: workspace,
+      providerOptions: { baseUrl: api.endpoint, requestTimeoutMs: 30_000, shutdownTimeoutMs: 2_000 },
+    };
+    const initial = await callDeepSeekHarness('worker', 'start before aborting', options);
+    expect(initial).toMatchObject({ status: 'done', sessionId: expect.any(String) });
+    const sessionId = initial.sessionId!;
+    api.setMode('hold-response');
+    const abortController = new AbortController();
+
+    let releaseCleanup!: () => void;
+    const cleanupGate = new Promise<void>((resolve) => { releaseCleanup = resolve; });
+    let cleanupHasStarted = false;
+    const originalClose = DeepSeekHarness.prototype.close;
+    const close = vi.spyOn(DeepSeekHarness.prototype, 'close').mockImplementation(async function (this: DeepSeekHarness) {
+      cleanupHasStarted = true;
+      await cleanupGate;
+      await originalClose.call(this);
+    });
+
+    try {
+      const abortedTurn = callDeepSeekHarness('worker', 'abort while the API response is held', {
+        ...options,
+        sessionId,
+        abortSignal: abortController.signal,
+      });
+      await vi.waitFor(() => expect(api.requests).toHaveLength(2), { timeout: 10_000, interval: 25 });
+      const nextTurn = callDeepSeekHarness('worker', 'must wait for abort cleanup', { ...options, sessionId });
+      abortController.abort(new Error('test aborted active DeepSeek turn'));
+
+      await vi.waitFor(() => expect(cleanupHasStarted).toBe(true), { timeout: 10_000, interval: 25 });
+      const requestsWhileCleanupIsPending = api.requests.map((request) => JSON.stringify(request.body.messages)).join('\n');
+      expect(requestsWhileCleanupIsPending).not.toContain('must wait for abort cleanup');
+
+      releaseCleanup();
+      const [aborted, next] = await Promise.all([abortedTurn, nextTurn]);
+      expect(aborted.failureCategory).toBe('external_abort');
+      expect(next).toMatchObject({ status: 'error', failureCategory: 'session_continuation_unsupported' });
+      expect(api.requests).toHaveLength(2);
+    } finally {
+      releaseCleanup();
+      close.mockRestore();
+    }
+  }, 90_000);
+
+  it.skipIf(!SUPPORTED_RUNTIME)('uses the credential selected by each request context', async () => {
+    const api = await startLocalApi();
+    const workspace = join(temporaryRoot, 'credential-context-workspace');
+    const contexts = [
+      {
+        home: join(temporaryRoot, 'first-credential-context'),
+        reference: 'FIRST_DSH_CREDENTIAL',
+        credential: 'TAKT_DUMMY_FIRST_CONTEXT_CREDENTIAL',
+      },
+      {
+        home: join(temporaryRoot, 'second-credential-context'),
+        reference: 'SECOND_DSH_CREDENTIAL',
+        credential: 'TAKT_DUMMY_SECOND_CONTEXT_CREDENTIAL',
+      },
+    ];
+    await mkdir(workspace, { recursive: true });
+
+    for (const [index, context] of contexts.entries()) {
+      await mkdir(context.home, { recursive: true });
+      await writeFile(
+        join(context.home, 'settings.yaml'),
+        `llm-deepseek:\n  apiKeyEnv: ${context.reference}\n`,
+      );
+      const credentialStore = join(context.home, '.credentials.yaml');
+      await writeFile(
+        credentialStore,
+        `version: 1\nrefs:\n  ${context.reference}: ${context.credential}\n`,
+      );
+      await chmod(credentialStore, 0o600);
+
+      const response = await callDeepSeekHarness('worker', `request from credential context ${index + 1}`, {
+        cwd: workspace,
+        childProcessEnv: { DSH_HOME: context.home },
+        providerOptions: { baseUrl: api.endpoint },
+      });
+
+      expect(response.status).toBe('done');
+      expect(api.requests[index]?.headers['x-api-key']).toBe(context.credential);
+      await closeDeepSeekHarnessProcesses();
+    }
+
+    expect(api.requests).toHaveLength(contexts.length);
   }, 90_000);
 
   it.skipIf(!SUPPORTED_RUNTIME)('loads Git plugins in the official runtime and separates sessions by plugin source', async () => {
@@ -1898,6 +2101,270 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
     expect(api.requests).toHaveLength(2);
   }, 90_000);
 
+  it.skipIf(!SUPPORTED_RUNTIME).each([false, true])('keeps an aborted call classified while cleanup blocks another runtime start (repeated SDK close succeeds=%s)', async (repeatedCloseSucceeds) => {
+    let signalRunStarted: () => void = () => {};
+    const runStarted = new Promise<void>((resolve) => { signalRunStarted = resolve; });
+    vi.spyOn(DeepSeekHarness.prototype, 'start').mockResolvedValue(undefined);
+    vi.spyOn(DeepSeekHarness.prototype, 'run').mockImplementation(async () => {
+      signalRunStarted();
+      return await new Promise<never>(() => {});
+    });
+    let releaseRepeatedClose: () => void = () => {};
+    const repeatedCloseCanFinish = new Promise<void>((resolve) => { releaseRepeatedClose = resolve; });
+    let closeCalls = 0;
+    let delayStrictAcknowledgement = false;
+    let strictAcknowledgementPending = false;
+    let releaseStrictAcknowledgement: () => void = () => {};
+    const strictAcknowledgementCanFinish = new Promise<void>((resolve) => { releaseStrictAcknowledgement = resolve; });
+    const realAcknowledgement = runtimeState.acknowledgeDeepSeekRuntimeCleanup;
+    vi.spyOn(runtimeState, 'acknowledgeDeepSeekRuntimeCleanup').mockImplementation(async (confirmationPath) => {
+      if (delayStrictAcknowledgement) {
+        delayStrictAcknowledgement = false;
+        strictAcknowledgementPending = true;
+        await strictAcknowledgementCanFinish;
+      }
+      return realAcknowledgement(confirmationPath);
+    });
+    vi.spyOn(DeepSeekHarness.prototype, 'close').mockImplementation(async () => {
+      // Let the supervisor watcher reconcile before a repeated SDK close returns.
+      if (++closeCalls > 1) {
+        await repeatedCloseCanFinish;
+        if (repeatedCloseSucceeds) return;
+      }
+      throw new Error('simulated unconfirmed shutdown');
+    });
+
+    const abortController = new AbortController();
+    const operation = callDeepSeekHarness('worker', 'abort while runtime cleanup is pending', {
+      cwd: temporaryRoot,
+      abortSignal: abortController.signal,
+    });
+    let child: ReturnType<typeof spawn> | undefined;
+    let receiptPath: string | undefined;
+    let ownerPath: string | undefined;
+    let cleanupPaths: string[] = [];
+
+    try {
+      await runStarted;
+      const options = sdkConstructorOptions[0];
+      const runtimePaths = getDeepSeekRuntimePaths();
+      const cleanupConfirmation = options?.env?.TAKT_DSH_CLEANUP_CONFIRMATION;
+      const cleanupPathList = options?.env?.TAKT_DSH_CLEANUP_PATHS;
+      if (typeof cleanupConfirmation !== 'string' || typeof cleanupPathList !== 'string') {
+        throw new Error('DeepSeek Harness did not receive cleanup ownership paths');
+      }
+      receiptPath = cleanupConfirmation;
+      cleanupPaths = JSON.parse(cleanupPathList) as string[];
+      const firstCleanupPath = cleanupPaths[0];
+      if (firstCleanupPath === undefined) throw new Error('DeepSeek Harness cleanup paths were empty');
+      const cleanupBarrierPath = join(runtimePaths.state, 'cleanup-blocked');
+      ownerPath = join(runtimePaths.owners, 'aborted-runtime.json');
+      child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+        detached: true,
+        stdio: 'ignore',
+      });
+      await new Promise<void>((resolve, reject) => {
+        child?.once('error', reject);
+        child?.once('spawn', resolve);
+      });
+      if (child.pid === undefined) throw new Error('Delayed cleanup runtime did not start');
+      await mkdir(runtimePaths.owners, { recursive: true });
+      await writeFile(ownerPath, JSON.stringify({
+        parentPid: process.pid,
+        supervisorPid: process.pid,
+        runtimePid: child.pid,
+        cleanupPaths,
+        cleanupConfirmationPath: receiptPath,
+        cleanupRoot: dirname(firstCleanupPath),
+      }));
+
+      abortController.abort(new Error('test aborted active DeepSeek turn'));
+      await waitForFile(cleanupBarrierPath, 30_000);
+      expect(existsSync(cleanupPaths[0]!)).toBe(true);
+      const constructedBeforeRetry = sdkConstructorOptions.length;
+      const retryAbortController = new AbortController();
+      const retryAbortTimeout = setTimeout(
+        () => retryAbortController.abort(new Error('bounded cleanup-barrier retry')),
+        500,
+      );
+      let blocked: Awaited<ReturnType<typeof callDeepSeekHarness>>;
+      try {
+        blocked = await callDeepSeekHarness('worker', 'must wait for cleanup receipt', {
+          cwd: temporaryRoot,
+          abortSignal: retryAbortController.signal,
+        });
+      } finally {
+        clearTimeout(retryAbortTimeout);
+      }
+      expect(blocked.status).toBe('error');
+      expect(sdkConstructorOptions).toHaveLength(constructedBeforeRetry);
+      expect(existsSync(cleanupBarrierPath)).toBe(true);
+
+      delayStrictAcknowledgement = repeatedCloseSucceeds;
+      process.kill(-child.pid, 'SIGTERM');
+      await waitForExit(child);
+      await mkdir(dirname(receiptPath), { recursive: true });
+      await writeFile(receiptPath, 'confirmed\n', { mode: 0o600 });
+      if (repeatedCloseSucceeds) {
+        await vi.waitFor(() => expect(strictAcknowledgementPending).toBe(true));
+        // Another state owner consumes the proven-exit receipt while the strict watcher is pending.
+        expect(await realAcknowledgement(receiptPath)).toBe(true);
+        releaseRepeatedClose();
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        releaseStrictAcknowledgement();
+      } else {
+        await waitForPathRemoval(cleanupPaths[0]!);
+        await waitForPathRemoval(ownerPath);
+        releaseRepeatedClose();
+      }
+      const aborted = await operation;
+
+      expect(aborted).toMatchObject({ status: 'error', failureCategory: 'external_abort' });
+      await waitForPathRemoval(cleanupPaths[0]!);
+      await waitForPathRemoval(ownerPath);
+      await waitForPathRemoval(cleanupBarrierPath);
+    } finally {
+      if (!abortController.signal.aborted) {
+        abortController.abort(new Error('cleanup test finished'));
+      }
+      if (child !== undefined && child.exitCode === null && child.signalCode === null && child.pid !== undefined) {
+        try { process.kill(-child.pid, 'SIGKILL'); } catch { /* The runtime has already exited. */ }
+        await waitForExit(child);
+      }
+      if (receiptPath !== undefined) {
+        await mkdir(dirname(receiptPath), { recursive: true });
+        await writeFile(receiptPath, 'confirmed\n', { mode: 0o600 });
+      }
+      releaseRepeatedClose();
+      releaseStrictAcknowledgement();
+      await operation;
+      for (const cleanupPath of cleanupPaths) {
+        await waitForPathRemoval(cleanupPath, 10_000).catch(() => undefined);
+      }
+      if (ownerPath !== undefined) await rm(ownerPath, { force: true });
+      await closeDeepSeekHarnessProcesses().catch(() => undefined);
+    }
+  }, 60_000);
+
+  it.skipIf(!SUPPORTED_RUNTIME)('keeps a timed-out call classified while cleanup blocks another runtime start', async () => {
+    let signalRunStarted: () => void = () => {};
+    const runStarted = new Promise<void>((resolve) => { signalRunStarted = resolve; });
+    let rejectRun: (error: Error) => void = () => {};
+    const runPending = new Promise<never>((_resolve, reject) => { rejectRun = reject; });
+    const timeoutError = new RequestTimeoutError('simulated SDK request timeout');
+    vi.spyOn(DeepSeekHarness.prototype, 'start').mockResolvedValue(undefined);
+    vi.spyOn(DeepSeekHarness.prototype, 'run').mockImplementation(async () => {
+      signalRunStarted();
+      return await runPending;
+    });
+    let releaseRepeatedClose: () => void = () => {};
+    const repeatedCloseCanFinish = new Promise<void>((resolve) => { releaseRepeatedClose = resolve; });
+    let closeCalls = 0;
+    vi.spyOn(DeepSeekHarness.prototype, 'close').mockImplementation(async () => {
+      // Let the supervisor watcher reconcile before a repeated SDK close returns.
+      if (++closeCalls > 1) await repeatedCloseCanFinish;
+      throw new Error('simulated unconfirmed shutdown');
+    });
+
+    const operation = callDeepSeekHarness('worker', 'time out while runtime cleanup is pending', {
+      cwd: temporaryRoot,
+    });
+    let child: ReturnType<typeof spawn> | undefined;
+    let receiptPath: string | undefined;
+    let ownerPath: string | undefined;
+    let cleanupPaths: string[] = [];
+    let timeoutTriggered = false;
+
+    try {
+      await runStarted;
+      const options = sdkConstructorOptions[0];
+      const runtimePaths = getDeepSeekRuntimePaths();
+      const cleanupConfirmation = options?.env?.TAKT_DSH_CLEANUP_CONFIRMATION;
+      const cleanupPathList = options?.env?.TAKT_DSH_CLEANUP_PATHS;
+      if (typeof cleanupConfirmation !== 'string' || typeof cleanupPathList !== 'string') {
+        throw new Error('DeepSeek Harness did not receive cleanup ownership paths');
+      }
+      receiptPath = cleanupConfirmation;
+      cleanupPaths = JSON.parse(cleanupPathList) as string[];
+      const firstCleanupPath = cleanupPaths[0];
+      if (firstCleanupPath === undefined) throw new Error('DeepSeek Harness cleanup paths were empty');
+      const cleanupBarrierPath = join(runtimePaths.state, 'cleanup-blocked');
+      ownerPath = join(runtimePaths.owners, 'timed-out-runtime.json');
+      child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+        detached: true,
+        stdio: 'ignore',
+      });
+      await new Promise<void>((resolve, reject) => {
+        child?.once('error', reject);
+        child?.once('spawn', resolve);
+      });
+      if (child.pid === undefined) throw new Error('Delayed cleanup runtime did not start');
+      await mkdir(runtimePaths.owners, { recursive: true });
+      await writeFile(ownerPath, JSON.stringify({
+        parentPid: process.pid,
+        supervisorPid: process.pid,
+        runtimePid: child.pid,
+        cleanupPaths,
+        cleanupConfirmationPath: receiptPath,
+        cleanupRoot: dirname(firstCleanupPath),
+      }));
+
+      timeoutTriggered = true;
+      rejectRun(timeoutError);
+      await waitForFile(cleanupBarrierPath, 30_000);
+      expect(existsSync(cleanupPaths[0]!)).toBe(true);
+      const constructedBeforeRetry = sdkConstructorOptions.length;
+      const retryAbortController = new AbortController();
+      const retryAbortTimeout = setTimeout(
+        () => retryAbortController.abort(new Error('bounded cleanup-barrier retry')),
+        500,
+      );
+      let blocked: Awaited<ReturnType<typeof callDeepSeekHarness>>;
+      try {
+        blocked = await callDeepSeekHarness('worker', 'must wait for cleanup receipt', {
+          cwd: temporaryRoot,
+          abortSignal: retryAbortController.signal,
+        });
+      } finally {
+        clearTimeout(retryAbortTimeout);
+      }
+      expect(blocked.status).toBe('error');
+      expect(sdkConstructorOptions).toHaveLength(constructedBeforeRetry);
+      expect(existsSync(cleanupBarrierPath)).toBe(true);
+
+      process.kill(-child.pid, 'SIGTERM');
+      await waitForExit(child);
+      await mkdir(dirname(receiptPath), { recursive: true });
+      await writeFile(receiptPath, 'confirmed\n', { mode: 0o600 });
+      await waitForPathRemoval(cleanupPaths[0]!);
+      await waitForPathRemoval(ownerPath);
+      releaseRepeatedClose();
+      const timedOut = await operation;
+
+      expect(timedOut).toMatchObject({ status: 'error', failureCategory: 'part_timeout' });
+      await waitForPathRemoval(cleanupPaths[0]!);
+      await waitForPathRemoval(ownerPath);
+      await waitForPathRemoval(cleanupBarrierPath);
+    } finally {
+      if (!timeoutTriggered) rejectRun(timeoutError);
+      if (child !== undefined && child.exitCode === null && child.signalCode === null && child.pid !== undefined) {
+        try { process.kill(-child.pid, 'SIGKILL'); } catch { /* The runtime has already exited. */ }
+        await waitForExit(child);
+      }
+      if (receiptPath !== undefined) {
+        await mkdir(dirname(receiptPath), { recursive: true });
+        await writeFile(receiptPath, 'confirmed\n', { mode: 0o600 });
+      }
+      releaseRepeatedClose();
+      await operation;
+      for (const cleanupPath of cleanupPaths) {
+        await waitForPathRemoval(cleanupPath, 10_000).catch(() => undefined);
+      }
+      if (ownerPath !== undefined) await rm(ownerPath, { force: true });
+      await closeDeepSeekHarnessProcesses().catch(() => undefined);
+    }
+  }, 60_000);
+
   it.skipIf(!SUPPORTED_RUNTIME)('applies per-call effort to a new session and refuses changing it for a live session', async () => {
     const api = await startLocalApi();
     process.env.DEEPSEEK_BASE_URL = api.endpoint;
@@ -1981,7 +2448,14 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
   }, 90_000);
 
   it.skipIf(!SUPPORTED_RUNTIME)('refuses a previously used session ID after the parent process restarts', async () => {
-    process.env.npm_config_cache = join(temporaryRoot, 'npm-cache');
+    if (offlineManagedNpmCache !== undefined) {
+      process.env.NPM_CONFIG_CACHE = offlineManagedNpmCache;
+      process.env.npm_config_cache = offlineManagedNpmCache;
+      process.env.NPM_CONFIG_OFFLINE = 'true';
+      process.env.npm_config_offline = 'true';
+    } else {
+      process.env.npm_config_cache = join(temporaryRoot, 'npm-cache');
+    }
     process.env.npm_config_ignore_scripts = 'true';
     await installDeepSeekHarness();
     const api = await startLocalApi();
@@ -2961,6 +3435,99 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
       }
     }
   });
+
+  it.skipIf(process.platform === 'win32')('clears a cleanup barrier when its group exits during acknowledgement', async () => {
+    const paths = getDeepSeekRuntimePaths();
+    const runtimePid = 2_147_483_000;
+    const cleanupPath = join(temporaryRoot, 'takt-deepseek-barrier-race');
+    const receiptPath = join(paths.state, 'cleanup-receipts', 'takt-deepseek-barrier-race.confirmed');
+    const ownerPath = join(paths.owners, 'barrier-race.json');
+    const barrierPath = join(paths.state, 'cleanup-blocked');
+    await mkdir(cleanupPath);
+    await mkdir(dirname(receiptPath), { recursive: true });
+    await mkdir(paths.owners, { recursive: true });
+    await writeFile(receiptPath, 'confirmed\n');
+    await writeFile(ownerPath, JSON.stringify({
+      parentPid: process.pid,
+      supervisorPid: process.pid,
+      runtimePid,
+      cleanupPaths: [cleanupPath],
+      cleanupConfirmationPath: receiptPath,
+      cleanupRoot: temporaryRoot,
+    }));
+    await writeFile(barrierPath, JSON.stringify({ runtimePids: [runtimePid], unknownRuntime: false }));
+
+    const realKill = process.kill.bind(process);
+    let groupChecks = 0;
+    vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      if (pid !== -runtimePid || signal !== 0) return realKill(pid, signal);
+      groupChecks += 1;
+      if (groupChecks === 1) return true;
+      throw Object.assign(new Error('group exited'), { code: 'ESRCH' });
+    });
+
+    expect(await acknowledgeDeepSeekRuntimeCleanupLocked(paths.state, paths.owners, receiptPath)).toBe(true);
+    expect(existsSync(cleanupPath)).toBe(false);
+    expect(existsSync(ownerPath)).toBe(false);
+    expect(existsSync(receiptPath)).toBe(false);
+    expect(existsSync(barrierPath)).toBe(false);
+  });
+
+  it.skipIf(process.platform === 'win32').each(['receipt-only', 'barrier-only'] as const)(
+    'clears an exited cleanup barrier when acknowledgement has %s evidence',
+    async (kind) => {
+      const paths = getDeepSeekRuntimePaths();
+      const runtimePid = 2_147_483_000;
+      const receiptPath = join(paths.state, 'cleanup-receipts', 'takt-deepseek-barrier-race.confirmed');
+      const barrierPath = join(paths.state, 'cleanup-blocked');
+      await mkdir(dirname(receiptPath), { recursive: true });
+      if (kind === 'receipt-only') await writeFile(receiptPath, 'confirmed\n');
+      await writeFile(barrierPath, JSON.stringify({ runtimePids: [runtimePid], unknownRuntime: false }));
+
+      const realKill = process.kill.bind(process);
+      let groupChecks = 0;
+      vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+        if (pid !== -runtimePid || signal !== 0) return realKill(pid, signal);
+        groupChecks += 1;
+        if (groupChecks === 1) return true;
+        throw Object.assign(new Error('group exited'), { code: 'ESRCH' });
+      });
+
+      expect(await acknowledgeDeepSeekRuntimeCleanupLocked(paths.state, paths.owners, receiptPath)).toBe(true);
+      expect(existsSync(receiptPath)).toBe(false);
+      expect(existsSync(barrierPath)).toBe(false);
+    },
+  );
+
+  it.each(['unknown', 'other-live-group'] as const)(
+    'retains a %s cleanup barrier after acknowledging a receipt',
+    async (kind) => {
+      const paths = getDeepSeekRuntimePaths();
+      const runtimePid = 2_147_483_000;
+      const otherPid = runtimePid - 1;
+      const receiptPath = join(paths.state, 'cleanup-receipts', 'takt-deepseek-other-group.confirmed');
+      const barrierPath = join(paths.state, 'cleanup-blocked');
+      await mkdir(dirname(receiptPath), { recursive: true });
+      await writeFile(receiptPath, 'confirmed\n');
+      await writeFile(barrierPath, JSON.stringify({
+        runtimePids: kind === 'unknown' ? [runtimePid] : [runtimePid, otherPid],
+        unknownRuntime: kind === 'unknown',
+      }));
+
+      const realKill = process.kill.bind(process);
+      vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+        if (signal === 0 && pid === -runtimePid) {
+          throw Object.assign(new Error('group exited'), { code: 'ESRCH' });
+        }
+        if (signal === 0 && pid === -otherPid) return true;
+        return realKill(pid, signal);
+      });
+
+      expect(await acknowledgeDeepSeekRuntimeCleanupLocked(paths.state, paths.owners, receiptPath)).toBe(true);
+      expect(existsSync(receiptPath)).toBe(false);
+      expect(existsSync(barrierPath)).toBe(true);
+    },
+  );
 
   it.each(['malformed', 'directory', 'insufficient', 'missing-live-pid'] as const)(
     'does not confirm an existing %s cleanup barrier and retains the startup lock',

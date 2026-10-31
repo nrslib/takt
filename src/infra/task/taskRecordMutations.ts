@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { WorkflowRestartPoint, WorkflowResumePoint } from '../../core/models/index.js';
 import type { RunResumeSource } from '../../core/workflow/run/run-meta.js';
 import { nowIso } from './naming.js';
@@ -47,6 +48,8 @@ export function buildClaimedTaskRecord(task: TaskRecord): TaskRecord {
   return {
     ...task,
     status: 'running',
+    execution_id: randomUUID(),
+    stop_request: undefined,
     started_at: nowIso(),
     owner_pid: process.pid,
     owner_start_time: getSelfTaskProcessIdentity()?.startTime ?? null,
@@ -120,6 +123,8 @@ export function buildRetryTaskRecord(
     ...(options.workflow ? { workflow: options.workflow } : {}),
     ...taskSpecSource,
     status,
+    execution_id: status === 'running' ? randomUUID() : undefined,
+    stop_request: undefined,
     started_at: status === 'running' ? nowIso() : null,
     completed_at: null,
     owner_pid: status === 'running' ? process.pid : null,

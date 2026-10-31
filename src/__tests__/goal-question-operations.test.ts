@@ -1,30 +1,37 @@
-import { beforeEach, expect, it, vi } from 'vitest';
 import * as crypto from 'node:crypto';
-import { GoalSchema, type Goal } from '../infra/goals/schema.js';
+import { beforeEach,expect,it,vi } from 'vitest';
+import { notifyTaktGoal } from '../features/mcp/goalNotificationOperations.js';
+import { askTaktGoalQuestion,getTaktGoalQuestion,listTaktGoalQuestions,withdrawTaktGoalQuestion } from '../features/mcp/goalQuestionOperations.js';
+import { GoalQuestionSchema,GoalSchema,type Goal } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
+import { firstTextContent } from './helpers/mcp-content.js';
+import { listTaktGoalRecords, recordTaktGoalWorkLog } from '../features/mcp/goalWorkLogOperations.js';
+import { listGoalRecordsInputSchema } from '../features/mcp/schemas.js';
+import { responseBytes, MCP_RESPONSE_MAX_BYTES } from '../features/mcp/response.js';
+import { listTaktStandaloneInquiries, withdrawTaktStandaloneInquiry } from '../features/mcp/standaloneInquiryOperations.js';
+const standalone = vi.hoisted(() => ({ construct: vi.fn(), page: vi.fn(), withdraw: vi.fn() }));
+vi.mock('../infra/goals/standalone-inquiries.js', () => ({ StandaloneInquiryStore: class {
+  constructor(configDirectory: string, owner: unknown) { standalone.construct(configDirectory, owner); }
+  listPendingPage = standalone.page;
+  withdraw = standalone.withdraw;
+} }));
 vi.mock('node:crypto', async (original) => {
   const actual = await original<typeof import('node:crypto')>();
   return { ...actual, randomUUID: vi.fn(actual.randomUUID) };
 });
 const doubles = vi.hoisted(() => ({
-  get: vi.fn(), update: vi.fn(), lock: vi.fn(), allowed: vi.fn(), resolve: vi.fn(), send: vi.fn(),
+  get: vi.fn(), update: vi.fn(), allowed: vi.fn(), resolve: vi.fn(), send: vi.fn(), language: vi.fn(),
+}));
+vi.mock('../infra/config/resolveConfigValue.js', async (original) => ({
+  ...await original<typeof import('../infra/config/resolveConfigValue.js')>(), resolveConfigValue: doubles.language,
 }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.get; update = doubles.update; } }));
-vi.mock('../infra/goals/operations.js', async (original) => ({
-  ...await original<typeof import('../infra/goals/operations.js')>(),
-  withGoalWrites: async (_cwd: string, _id: string, action: () => Promise<unknown>) => action(),
-}));
-vi.mock('../infra/goals/turn-lock.js', () => ({ withGoalTurns: doubles.lock }));
 vi.mock('../features/manager/notifications.js', () => ({
   resolveManagerNotificationOptions: doubles.resolve, sendSavedGoalNotifications: doubles.send,
 }));
 vi.mock('../features/mcp/operations.js', async (original) => ({
   ...await original<typeof import('../features/mcp/operations.js')>(), assertCwdAllowedByMcpRoot: doubles.allowed,
 }));
-import { askTaktGoalQuestion, getTaktGoalQuestion, listTaktGoalQuestions, withdrawTaktGoalQuestion } from '../features/mcp/goalQuestionOperations.js';
-import { notifyTaktGoal } from '../features/mcp/goalNotificationOperations.js';
-import { goalWrite } from '../features/mcp/goalWrite.js';
-import { firstTextContent } from './helpers/mcp-content.js';
 let goal: Goal;
 const policy = { question: true, awaiting_merge: true, completed: true, progress: true, blocked: true, custom: true };
 const input = { cwd: '/project', goalId: goalRecord().id };
@@ -37,8 +44,8 @@ beforeEach(() => {
   doubles.update.mockImplementation(async (_id: string, transform: (current: Goal) => Goal) => {
     goal = transform(structuredClone(goal)); return structuredClone(goal);
   });
-  doubles.lock.mockImplementation(async (_cwd: string, _ids: string[], action: () => Promise<unknown>) => action());
   doubles.resolve.mockReturnValue({ policy, webhookUrl: undefined, mainMerge: 'approve' });
+  doubles.language.mockReturnValue('ja');
 });
 
 it('preserves question, notification and read operations for a paused goal', async () => {
@@ -78,109 +85,13 @@ it('allows withdrawing and reading an existing question for an aborted goal', as
 
   expect(result.isError).toBeUndefined();
   expect(goal.executionStatus).toBe('aborted');
-  expect(goal.questions).toEqual([{ id: questionId, body: '形式はどれですか', recipient: 'human', status: 'withdrawn' }]);
+  expect(goal.questions).toEqual([expect.objectContaining({
+    id: questionId, body: '形式はどれですか', recipient: 'human', status: 'withdrawn', withdrawnAt: expect.any(String),
+  })]);
   expect(JSON.parse(firstTextContent((await getTaktGoalQuestion({ ...input, questionId }, {})).content)))
     .toEqual({ question: goal.questions[0] });
   expect(JSON.parse(firstTextContent((await listTaktGoalQuestions(input, {})).content)))
-    .toEqual({ questions: goal.questions });
-});
-
-it('returns the original action error when reading the saved operation also fails', async () => {
-  goal.events = [{ id: 'event-a', kind: 'completion', taskName: 'trigger', runSlug: 'run-a',
-    result: { success: true, interrupted: false }, processed: false }];
-  const before = structuredClone(goal);
-  const request = { ...input, operationName: 'question:format', body: '形式はどれですか' };
-  const deps = { goalEventContext: { goalId: goal.id, eventId: 'event-a' } };
-  const action = vi.fn(async () => {
-    doubles.get.mockRejectedValueOnce(new Error('saved operation read failed'));
-    throw new Error('original action failed');
-  });
-
-  const result = await goalWrite(request, deps, signal, action, 'Goal question failed', 'question');
-
-  expect(result.isError).toBe(true);
-  expect(firstTextContent(result.content)).toContain('original action failed');
-  expect(firstTextContent(result.content)).not.toContain('saved operation read failed');
-  expect(action).toHaveBeenCalledExactlyOnceWith(policy, 'approve', expect.objectContaining({
-    eventId: 'event-a', operationName: request.operationName, status: 'pending', tool: 'question',
-  }));
-  expect(doubles.get).toHaveBeenCalledTimes(3);
-  expect(doubles.update).not.toHaveBeenCalled();
-  expect(doubles.send).not.toHaveBeenCalled();
-  expect(goal).toEqual(before);
-});
-
-it.each(['question', 'notify'] as const)('settles %s validation failures and requires a new name for corrected arguments', async (kind) => {
-  const existingId = '650e8400-e29b-41d4-a716-446655440001';
-  goal.events = [{ id: 'event-a', kind: 'completion', taskName: 'trigger', runSlug: 'run-a',
-    result: { success: true, interrupted: false }, processed: false }];
-  if (kind === 'question') goal.questions = [{ id: existingId, body: '既存の質問', recipient: 'human', status: 'pending' }];
-  else goal.notifications = [{ id: existingId, kind: 'custom', body: '既存の通知', recordedAt: '2026-10-08T00:00:00Z' }];
-  const deps = { goalEventContext: { goalId: goal.id, eventId: 'event-a' } };
-  const request = { ...input, operationName: `${kind}:format`, body: '新しい内容' };
-  const write = (request: typeof input & { operationName: string; body: string }) => kind === 'question'
-    ? askTaktGoalQuestion(request, deps, signal) : notifyTaktGoal({ ...request, kind: 'custom' }, deps, signal);
-  const before = structuredClone(goal);
-  vi.mocked(crypto.randomUUID).mockReturnValueOnce(existingId);
-  const failed = await write(request);
-  expect(failed.isError).toBe(true);
-  expect(goal.operations).toEqual([expect.objectContaining({ status: 'failed', tool: kind, eventId: 'event-a',
-    operationName: request.operationName, arguments: { body: request.body, ...(kind === 'notify' ? { kind: 'custom' } : {}) },
-    result: { status: 'failed', reason: expect.any(String) } })]);
-  expect({ ...goal, operations: before.operations }).toEqual(before);
-  expect(doubles.send).not.toHaveBeenCalled();
-  const settled = structuredClone(goal);
-  expect(await write(request)).toEqual(failed);
-  expect((await write({ ...request, body: '修正した内容' })).isError).toBe(true);
-  expect(goal).toEqual(settled);
-  expect(crypto.randomUUID).toHaveBeenCalledOnce();
-  expect(doubles.send).not.toHaveBeenCalled();
-  const result = await write({ ...request, operationName: `${kind}:format:corrected`, body: '修正した内容' });
-  expect(result.isError).toBeUndefined();
-  expect(goal.operations).toEqual([settled.operations![0], expect.objectContaining({ status: 'completed',
-    operationName: `${kind}:format:corrected`, result: JSON.parse(firstTextContent(result.content)) })]);
-  expect(kind === 'question' ? goal.questions : goal.notifications).toHaveLength(2);
-  expect(doubles.send).toHaveBeenCalledOnce();
-});
-
-it('settles withdrawal precondition failures and does not revalidate the same operation', async () => {
-  const questionId = '650e8400-e29b-41d4-a716-446655440001';
-  const missingId = '650e8400-e29b-41d4-a716-446655440002';
-  goal.events = [{ id: 'event-a', kind: 'completion', taskName: 'trigger', runSlug: 'run-a',
-    result: { success: true, interrupted: false }, processed: false }];
-  goal.questions = [{ id: questionId, body: '質問', recipient: 'human', status: 'pending' }];
-  const deps = { goalEventContext: { goalId: goal.id, eventId: 'event-a' } };
-  const request = { ...input, operationName: 'withdraw:format', questionId: missingId };
-  const failed = await withdrawTaktGoalQuestion(request, deps, signal);
-  expect(failed.isError).toBe(true);
-  expect(goal.operations?.[0]).toMatchObject({ status: 'failed', tool: 'withdraw_question',
-    arguments: { questionId: missingId }, result: { status: 'failed', reason: expect.any(String) } });
-  goal.questions.push({ id: missingId, body: '後から追加した質問', recipient: 'human', status: 'pending' });
-  const settled = structuredClone(goal);
-  expect(await withdrawTaktGoalQuestion(request, deps, signal)).toEqual(failed);
-  expect((await withdrawTaktGoalQuestion({ ...request, questionId }, deps, signal)).isError).toBe(true);
-  expect(goal).toEqual(settled);
-  expect(doubles.send).not.toHaveBeenCalled();
-  expect((await withdrawTaktGoalQuestion({ ...request, operationName: 'withdraw:format:corrected', questionId }, deps, signal)).isError).toBeUndefined();
-  expect(goal.questions[0]?.status).toBe('withdrawn');
-  expect(goal.questions[1]?.status).toBe('pending');
-  expect(goal.operations).toEqual([settled.operations![0], expect.objectContaining({ status: 'completed' })]);
-});
-
-it('returns the saved question ID, reads its details and retains withdrawn questions in the list', async () => {
-  const deps = { goalTurnOwners: { [input.goalId]: 'owner' } };
-  const asked = await askTaktGoalQuestion({ ...input, body: '形式はどれですか', options: ['CSV', 'JSON'] }, deps, signal);
-  expect(asked.isError).toBeUndefined();
-  const id = goal.questions![0]!.id;
-  expect(JSON.parse(firstTextContent(asked.content))).toEqual({ questionId: id });
-  expect(goal.notifications?.[0]).toMatchObject({ kind: 'question' });
-  expect(doubles.lock).toHaveBeenCalledWith(input.cwd, [input.goalId], expect.any(Function), deps.goalTurnOwners, signal);
-  expect(doubles.send.mock.invocationCallOrder[0]).toBeGreaterThan(doubles.update.mock.invocationCallOrder[0]!);
-  const detailed = await getTaktGoalQuestion({ ...input, questionId: id }, deps);
-  expect(JSON.parse(firstTextContent(detailed.content))).toEqual({ question: goal.questions![0] });
-  await withdrawTaktGoalQuestion({ ...input, questionId: id }, deps, signal);
-  const listed = await listTaktGoalQuestions(input, deps);
-  expect(JSON.parse(firstTextContent(listed.content))).toEqual({ questions: [expect.objectContaining({ id, status: 'withdrawn' })] });
+    .toMatchObject({ questions: goal.questions, totalCount: 1, truncated: false });
 });
 
 it('persists a manager event with severity before delivery', async () => {
@@ -196,7 +107,23 @@ it('saves a maximum-length question and its complete generated notification', as
   const result = await askTaktGoalQuestion({ ...input, body, options }, {}, signal);
   expect(result.isError).toBeUndefined();
   expect(GoalSchema.parse(goal).questions?.[0]).toMatchObject({ body, options });
-  expect(goal.notifications?.[0]?.body).toBe(`${goal.questions![0]!.id}: ${body}\nOptions: CSV, JSON`);
+  const notification = goal.notifications![0]!.body;
+  expect(notification.startsWith(`${goal.questions![0]!.id}: ${body}\n`)).toBe(true);
+  expect(notification.endsWith('選択肢: CSV, JSON')).toBe(true);
+});
+
+it.each(['ja', 'en'] as const)('saves question labels in the configured %s language without changing question data', async (language) => {
+  doubles.language.mockReturnValue(language);
+  const details = { body: '出力形式はどれですか', options: ['CSV', 'JSON'], recommendation: 'CSV' };
+  const result = await askTaktGoalQuestion({ ...input, ...details }, {}, signal);
+  expect(result.isError).toBeUndefined();
+  const question = goal.questions![0]!;
+  expect(question).toMatchObject({ ...details, recipient: 'human', status: 'pending' });
+  expect(goal.notifications?.[0]?.body).toBe(language === 'ja'
+    ? `${question.id}: ${details.body}\n選択肢: CSV, JSON\n推奨: CSV`
+    : `${question.id}: ${details.body}\nOptions: CSV, JSON\nRecommendation: CSV`);
+  expect(GoalSchema.parse(goal)).toEqual(goal);
+  expect(doubles.send).toHaveBeenCalledWith(input.cwd, expect.objectContaining({ id: goal.id }), goal, undefined);
 });
 
 it('keeps questions usable with question notification delivery disabled', async () => {
@@ -206,15 +133,97 @@ it('keeps questions usable with question notification delivery disabled', async 
   expect(goal.notifications).toBeUndefined();
 });
 
-it.each([true, false])('saves and exposes director questions without creating a human notification (notifications=%s)', async (enabled) => {
-  doubles.resolve.mockReturnValue({ policy: { ...policy, question: enabled }, webhookUrl: undefined, mainMerge: 'approve' });
-  const asked = await askTaktGoalQuestion({ ...input, body: '形式はどれですか', recipient: 'director' }, {}, signal);
-  expect(asked.isError).toBeUndefined();
-  const question = goal.questions![0]!;
-  expect(question).toMatchObject({ recipient: 'director', status: 'pending' });
-  expect(goal.notifications ?? []).toEqual([]);
-  expect(JSON.parse(firstTextContent((await listTaktGoalQuestions(input, {})).content))).toEqual({ questions: [question] });
-  expect(JSON.parse(firstTextContent((await getTaktGoalQuestion({ ...input, questionId: question.id }, {})).content))).toEqual({ question });
+it('preserves question changes made before the update reads the goal', async () => {
+  const previousQuestion = {
+    id: '650e8400-e29b-41d4-a716-446655440001', body: '先の質問', recipient: 'human' as const, status: 'pending' as const,
+  };
+  goal.questions = [previousQuestion];
+  doubles.update.mockImplementationOnce(async (_id: string, transform: (current: Goal) => Goal) => {
+    const current = { ...goal, questions: [
+      { ...previousQuestion, status: 'answered' as const, answer: { text: 'CSV', source: 'tui' as const, answeredAt: '2026-10-14T00:00:00Z' } },
+      { ...previousQuestion, id: '650e8400-e29b-41d4-a716-446655440002', body: '別の質問' },
+    ] };
+    goal = transform(current);
+    return structuredClone(goal);
+  });
+
+  const result = await askTaktGoalQuestion({ ...input, body: '新しい質問' }, {}, signal);
+
+  expect(result.isError).toBeUndefined();
+  expect(goal.questions).toEqual([
+    expect.objectContaining({ id: previousQuestion.id, status: 'answered', answer: expect.objectContaining({ text: 'CSV' }) }),
+    expect.objectContaining({ body: '別の質問', status: 'pending' }),
+    expect.objectContaining({ body: '新しい質問', status: 'pending' }),
+  ]);
+  expect(JSON.parse(firstTextContent(result.content))).toEqual({ questionId: goal.questions![2]!.id });
+  expect(goal.notifications).toHaveLength(1);
+});
+
+it('reuses a pending question from the update without adding a duplicate notification', async () => {
+  const question = {
+    id: '650e8400-e29b-41d4-a716-446655440001', body: '形式はどれですか', recipient: 'human' as const, status: 'pending' as const,
+  };
+  doubles.update.mockImplementationOnce(async (_id: string, transform: (current: Goal) => Goal) => {
+    goal = transform({ ...goal, questions: [question] });
+    return structuredClone(goal);
+  });
+
+  const result = await askTaktGoalQuestion({ ...input, body: question.body }, {}, signal);
+
+  expect(result.isError).toBeUndefined();
+  expect(JSON.parse(firstTextContent(result.content))).toEqual({ questionId: question.id });
+  expect(goal.questions).toEqual([question]);
+  expect(goal.notifications).toBeUndefined();
+});
+
+it.each((['question', 'operation_request'] as const).flatMap((kind) =>
+  (['before request', 'before update', 'awaiting merge'] as const).map((timing) => ({ kind, timing })),
+))('checks completion before saving a $kind inquiry: $timing', async ({ kind, timing }) => {
+  goal = GoalSchema.parse({
+    ...goal, status: timing === 'before request' ? 'completed' : 'awaiting_merge',
+    completion: {
+      goalBranch: goal.branch, goalSha: 'a'.repeat(40), targetBranch: goal.integrationBranch,
+      targetSha: 'b'.repeat(40), summary: 'evidence', instructions: [],
+      changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+    },
+    questions: [{
+      id: '650e8400-e29b-41d4-a716-446655440001', body: '確認してください', kind,
+      recipient: 'human', status: 'withdrawn', withdrawalReason: 'Goal was completed', withdrawnAt: '2026-10-19T03:00:00.000Z',
+    }],
+  });
+  const initial = structuredClone(goal);
+  const latest = GoalSchema.parse({ ...goal, status: timing === 'awaiting merge' ? 'awaiting_merge' : 'completed' });
+  const observed: Goal[] = [];
+  const update = doubles.update.getMockImplementation()!;
+  doubles.update.mockImplementationOnce(async (id: string, transform: (current: Goal) => Goal) => {
+    goal = structuredClone(latest);
+    return update(id, (current: Goal) => {
+      observed.push(structuredClone(current));
+      return GoalSchema.parse(transform(current));
+    });
+  });
+
+  const result = await askTaktGoalQuestion({ ...input, body: '確認してください', kind }, {}, signal);
+
+  expect(await doubles.get.mock.results[0]!.value).toEqual(initial);
+  expect(observed).toEqual([latest]);
+  if (timing === 'awaiting merge') {
+    expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+    expect(goal.questions).toEqual([...latest.questions!, expect.objectContaining({ kind, status: 'pending' })]);
+    expect(goal.notifications).toHaveLength(1);
+    expect(doubles.send).toHaveBeenCalledOnce();
+  } else {
+    expect(result.isError).toBe(true);
+    expect(goal).toEqual(latest);
+    expect(doubles.send).not.toHaveBeenCalled();
+  }
+  const listed = await listTaktGoalQuestions(input, {});
+  expect(listed.isError, firstTextContent(listed.content)).toBeUndefined();
+  expect(JSON.parse(firstTextContent(listed.content))).toMatchObject({ questions: [
+    ...(timing === 'awaiting merge' ? [expect.objectContaining({
+      id: goal.questions!.at(-1)!.id, body: '確認してください', kind, status: 'pending',
+    })] : []), ...latest.questions!,
+  ], totalCount: timing === 'awaiting merge' ? 2 : 1 });
 });
 
 it('returns read and write errors for missing questions and persistence failure', async () => {
@@ -233,5 +242,216 @@ it('rejects a root outside the MCP scope before reading or saving', async () => 
   expect((await notifyTaktGoal({ ...input, kind: 'custom', body: '通知' }, {}, signal)).isError).toBe(true);
   expect(doubles.get).not.toHaveBeenCalled();
   expect(doubles.update).not.toHaveBeenCalled();
-  expect(doubles.lock).not.toHaveBeenCalled();
+});
+
+it('bounds question reads, creation, withdrawal, notifications and work-log writes with large saved histories', async () => {
+  goal.workLog = Array.from({ length: 100 }, (_, index) => ({ id: `550e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`, summary: `記録${index}:` + '作業'.repeat(10000), recordedAt: '2026-10-14T00:00:00Z' }));
+  goal.questions = Array.from({ length: 100 }, (_, index) => ({ id: `650e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`, body: '質問'.repeat(20000), status: 'pending', recipient: 'human' }));
+  goal.notifications = Array.from({ length: 100 }, (_, index) => ({ id: `750e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`, body: '通知'.repeat(20000), kind: 'custom', recordedAt: '2026-10-14T00:00:00Z' }));
+  const questionId = goal.questions[99]!.id;
+  const previous = structuredClone(goal.workLog);
+  const results = [
+    await getTaktGoalQuestion({ ...input, questionId }, {}),
+    await listTaktGoalQuestions(input, {}),
+    await askTaktGoalQuestion({ ...input, body: '新しい質問'.repeat(20000) }, {}, signal),
+    await withdrawTaktGoalQuestion({ ...input, questionId }, {}, signal),
+    await notifyTaktGoal({ ...input, body: '更新通知'.repeat(20000), kind: 'custom' }, {}, signal),
+    await recordTaktGoalWorkLog({ ...input, summary: '保存内容'.repeat(20000) }, {}, signal),
+    await listTaktGoalRecords(input, {}),
+  ];
+  for (const result of results) {
+    expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+    expect(responseBytes(result)).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
+  }
+  const saved = JSON.parse(firstTextContent(results[5]!.content));
+  expect(saved.totalCount).toBe(101);
+  expect(saved.entry.id).toBe(goal.workLog[100]!.id);
+  expect(saved).not.toHaveProperty('workLog');
+  expect(JSON.parse(firstTextContent(results[3]!.content))).toMatchObject({
+    goalId: goal.id, status: 'created', questionId, questionStatus: 'withdrawn',
+  });
+  expect(JSON.parse(firstTextContent(results[4]!.content))).toMatchObject({
+    goal: { id: goal.id, status: 'created' }, notificationId: goal.notifications!.at(-1)!.id,
+  });
+  expect(goal.workLog.slice(0, 100)).toEqual(previous);
+  expect(goal.workLog[100]!.summary).toBe('保存内容'.repeat(20000));
+  expect(goal.questions.find((question) => question.id === questionId)!.status).toBe('withdrawn');
+  const first = JSON.parse(firstTextContent((await getTaktGoalQuestion({ ...input, questionId, path: 'body', maxBytes: 12 }, {})).content));
+  const next = JSON.parse(firstTextContent((await getTaktGoalQuestion({ ...input, questionId, path: 'body', maxBytes: 12, textOffset: first.nextOffset }, {})).content));
+  expect(first).toMatchObject({ content: '質問質問', nextOffset: 12, truncated: true });
+  expect(next.offset).toBe(12);
+});
+
+it.each([undefined, 1, 50])('returns recent work with limit %s and a usable continuation', async (limit) => {
+  goal.workLog = Array.from({ length: 60 }, (_, index) => ({ id: `550e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`, summary: `記録${index}`, recordedAt: '2026-10-14T00:00:00Z' }));
+  const first = JSON.parse(firstTextContent((await listTaktGoalRecords({ ...input, limit }, {})).content));
+  expect(first.workLog).toHaveLength(limit ?? 50);
+  expect(first.workLog[0].summary).toBe('記録59');
+  const next = JSON.parse(firstTextContent((await listTaktGoalRecords({ ...input, limit, offset: first.nextOffset }, {})).content));
+  expect(next.workLog[0].summary).toBe(`記録${59 - (limit ?? 50)}`);
+});
+
+it.each([0, 51, -1, 1.5])('rejects a work-log limit of %s', (limit) => {
+  expect(listGoalRecordsInputSchema.safeParse({ ...input, limit }).success).toBe(false);
+});
+
+it('puts pending questions first and retrieves the next pending question with its returned ID', async () => {
+  const first = { id: '650e8400-e29b-41d4-a716-446655440001', body: '古い質問', recipient: 'human' as const, status: 'withdrawn' as const };
+  const second = { ...first, id: '650e8400-e29b-41d4-a716-446655440002', body: '確認1', status: 'pending' as const };
+  const third = { ...second, id: '650e8400-e29b-41d4-a716-446655440003', body: '確認2' };
+  goal.questions = [first, second, third];
+  const page = JSON.parse(firstTextContent((await listTaktGoalQuestions({ ...input, limit: 1 }, {})).content));
+  expect(page).toMatchObject({ questions: [second], totalCount: 3, nextOffset: 1, omittedCount: 2 });
+  const next = JSON.parse(firstTextContent((await listTaktGoalQuestions({ ...input, limit: 1, offset: page.nextOffset }, {})).content));
+  expect(next.questions[0]).toEqual(third);
+  expect(JSON.parse(firstTextContent((await getTaktGoalQuestion({ ...input, questionId: next.questions[0].id }, {})).content)).question).toEqual(third);
+});
+
+it.each([undefined, 'question', 'operation_request'] as const)('saves kind %s and target SHA through the question operation', async (kind) => {
+  const details = { ...input, body: '認証を確認してください', ...(kind === undefined ? {} : { kind }), targetSha: 'a'.repeat(40) };
+  const result = await askTaktGoalQuestion(details, {}, signal);
+  expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+  const { questionId } = JSON.parse(firstTextContent(result.content));
+  const read = await getTaktGoalQuestion({ ...input, questionId }, {});
+  expect(JSON.parse(firstTextContent(read.content)).question).toMatchObject({
+    id: questionId, body: details.body, kind: kind ?? 'question', targetSha: details.targetSha, status: 'pending',
+  });
+});
+
+it('rejects approval creation before saving or delivering a notification', async () => {
+  const details = { ...input, body: '操作を許可しますか', kind: 'approval' } as unknown as Parameters<typeof askTaktGoalQuestion>[0];
+  const result = await askTaktGoalQuestion(details, {}, signal);
+  expect(result.isError).toBe(true);
+  expect(firstTextContent(result.content)).toMatch(/approval|承認/iu);
+  expect(doubles.update).not.toHaveBeenCalled();
+  expect(doubles.send).not.toHaveBeenCalled();
+  expect(goal.questions).toBeUndefined();
+});
+
+it.each(['question', 'operation_request'] as const)('creates a separate %s inquiry and returns its ID when another kind has the same body', async (kind) => {
+  const old = GoalQuestionSchema.parse({
+    id: '650e8400-e29b-41d4-a716-446655440001', recipient: 'human', status: 'pending',
+    body: '確認してください', kind: kind === 'question' ? 'operation_request' : 'question',
+  });
+  goal.questions = [old];
+  const details = { ...input, body: old.body, kind };
+  const result = await askTaktGoalQuestion(details, {}, signal);
+  expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+  expect(goal.questions).toHaveLength(2);
+  const created = goal.questions![1]!;
+  expect(created).toMatchObject({ body: old.body, kind, status: 'pending' });
+  expect(JSON.parse(firstTextContent(result.content))).toEqual({ questionId: created.id });
+  expect(created.id).not.toBe(old.id);
+  expect(goal.notifications).toHaveLength(1);
+});
+
+it('reuses the matching kind when a different kind appears first with the same body', async () => {
+  goal.questions = [
+    GoalQuestionSchema.parse({ id: '650e8400-e29b-41d4-a716-446655440001', body: '確認してください', status: 'pending', kind: 'question' }),
+    GoalQuestionSchema.parse({ id: '650e8400-e29b-41d4-a716-446655440002', body: '確認してください', status: 'pending', kind: 'operation_request' }),
+  ];
+  const before = structuredClone(goal.questions);
+  const details = { ...input, body: '確認してください', kind: 'operation_request' as const };
+  const result = await askTaktGoalQuestion(details, {}, signal);
+  expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+  expect(JSON.parse(firstTextContent(result.content))).toEqual({ questionId: before[1]!.id });
+  expect(goal.questions).toEqual(before);
+  expect(goal.notifications).toBeUndefined();
+});
+
+it.each([undefined, '  別の方法で解決しました\n'])('saves withdrawal time and optional reason %j through MCP operations', async (reason) => {
+  const question = GoalQuestionSchema.parse({ id: '650e8400-e29b-41d4-a716-446655440001', body: '確認してください', status: 'pending' });
+  goal.questions = [question];
+  const before = Date.now();
+  const details = { ...input, questionId: question.id, ...(reason === undefined ? {} : { reason }) };
+  const result = await withdrawTaktGoalQuestion(details, {}, signal);
+  expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+  const saved = goal.questions![0]!;
+  expect(saved).toMatchObject({ id: question.id, status: 'withdrawn' });
+  expect(saved.withdrawalReason).toBe(reason);
+  expect(Date.parse(saved.withdrawnAt!)).toBeGreaterThanOrEqual(before);
+  expect(Date.parse(saved.withdrawnAt!)).toBeLessThanOrEqual(Date.now());
+  const read = await getTaktGoalQuestion({ ...input, questionId: question.id }, {});
+  expect(JSON.parse(firstTextContent(read.content)).question).toEqual(saved);
+});
+
+it('returns structured answers, withdrawal details and consumed approval state from both reads', async () => {
+  const now = '2026-10-19T01:00:00.000Z';
+  const base = { recipient: 'human', body: '確認してください', createdAt: now };
+  const records = [
+    { ...base, id: '650e8400-e29b-41d4-a716-446655440001', kind: 'question', status: 'pending' },
+    { ...base, id: '650e8400-e29b-41d4-a716-446655440002', kind: 'operation_request', status: 'answered',
+      answer: { text: '', report: 'unable', source: 'tui', answeredAt: now } },
+    { ...base, id: '650e8400-e29b-41d4-a716-446655440003', kind: 'approval', status: 'answered', consumedAt: now,
+      operation: { toolName: 'Bash', args: '{}', cwd: '/project', argsDigest: 'a'.repeat(64) },
+      answer: { text: '', decision: 'allow', scope: 'workspace', source: 'tui', answeredAt: now } },
+    { ...base, id: '650e8400-e29b-41d4-a716-446655440004', kind: 'question', status: 'withdrawn', withdrawalReason: '不要です', withdrawnAt: now },
+  ].map((record) => GoalQuestionSchema.parse(record));
+  goal.questions = records;
+  const listed = await listTaktGoalQuestions(input, {});
+  expect(JSON.parse(firstTextContent(listed.content))).toMatchObject({ questions: records, totalCount: records.length });
+  for (const record of records) {
+    const result = await getTaktGoalQuestion({ ...input, questionId: record.id }, {});
+    expect(JSON.parse(firstTextContent(result.content))).toEqual({ question: record });
+  }
+});
+
+it.each([
+  { kind: 'repository' as const, repositoryDirectory: '/assigned' },
+  { kind: 'workspace' as const, workspaceId: '750e8400-e29b-41d4-a716-446655440001' },
+])('uses the resolved $kind owner and explicit paging for standalone reads', async (owner) => {
+  const inquiry = GoalQuestionSchema.parse({ id: '650e8400-e29b-41d4-a716-446655440001', body: '確認', status: 'pending' });
+  standalone.page.mockResolvedValue({ inquiries: [inquiry], totalCount: 4 });
+  const result = await listTaktStandaloneInquiries({ cwd: '/validated', offset: 2, limit: 1 }, '/config', owner);
+  expect(standalone.construct).toHaveBeenCalledWith('/config', owner);
+  expect(standalone.page).toHaveBeenCalledWith(2, 1);
+  expect(JSON.parse(firstTextContent(result.content))).toMatchObject({
+    inquiries: [{ ...inquiry, kind: 'question', createdAt: null }],
+    totalCount: 4, offset: 2, returnedCount: 1, nextOffset: 3,
+  });
+  expect(inquiry).not.toHaveProperty('createdAt');
+  expect(standalone.withdraw).not.toHaveBeenCalled();
+});
+
+it('defaults standalone paging and bounds response bytes without changing the store records', async () => {
+  const owner = { kind: 'repository' as const, repositoryDirectory: '/assigned' };
+  const inquiries = Array.from({ length: 3 }, (_, index) => GoalQuestionSchema.parse({
+    id: `650e8400-e29b-41d4-a716-${String(index).padStart(12, '0')}`,
+    body: '日本語\u0001'.repeat(10000), status: 'pending',
+  }));
+  const before = structuredClone(inquiries);
+  standalone.page.mockResolvedValue({ inquiries, totalCount: 3 });
+  const result = await listTaktStandaloneInquiries({ cwd: '/validated' }, '/config', owner);
+  expect(standalone.page).toHaveBeenCalledWith(0, 50);
+  const page = JSON.parse(firstTextContent(result.content));
+  expect(responseBytes(result)).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
+  expect(page.returnedCount).toBeGreaterThan(0);
+  expect(page.nextOffset).toBe(page.returnedCount);
+  expect(inquiries).toEqual(before);
+});
+
+it.each(['pending', 'answered', 'withdrawn'] as const)('returns the store result for standalone withdrawal from %s without duplicating the transition', async (status) => {
+  const owner = { kind: 'workspace' as const, workspaceId: '750e8400-e29b-41d4-a716-446655440001' };
+  const inquiry = GoalQuestionSchema.parse({
+    id: '650e8400-e29b-41d4-a716-446655440001', body: '確認', status: status === 'pending' ? 'withdrawn' : status,
+    ...(status === 'answered' ? { answer: { text: 'JSON', source: 'tui', answeredAt: '2026-10-19T01:00:00.000Z' } } : {}),
+  });
+  standalone.withdraw.mockResolvedValue(inquiry);
+  const reason = '  対象の操作は終了しました\n';
+  const result = await withdrawTaktStandaloneInquiry({ cwd: '/validated', id: inquiry.id, reason }, '/config', owner);
+  expect(standalone.construct).toHaveBeenCalledWith('/config', owner);
+  expect(standalone.withdraw).toHaveBeenCalledExactlyOnceWith(inquiry.id, reason);
+  expect(JSON.parse(firstTextContent(result.content))).toEqual({ inquiry });
+  expect(standalone.page).not.toHaveBeenCalled();
+});
+
+it('propagates standalone storage failures to the MCP server error boundary', async () => {
+  const owner = { kind: 'repository' as const, repositoryDirectory: '/assigned' };
+  const failure = new Error('storage failed');
+  standalone.page.mockRejectedValueOnce(failure);
+  standalone.withdraw.mockRejectedValueOnce(failure);
+  await expect(listTaktStandaloneInquiries({ cwd: '/validated' }, '/config', owner)).rejects.toBe(failure);
+  await expect(withdrawTaktStandaloneInquiry({
+    cwd: '/validated', id: '650e8400-e29b-41d4-a716-446655440001', reason: '不要',
+  }, '/config', owner)).rejects.toBe(failure);
 });

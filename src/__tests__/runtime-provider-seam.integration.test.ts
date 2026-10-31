@@ -24,6 +24,7 @@ import {
 import { getGlobalConfigDir, getGlobalConfigPath } from '../infra/config/paths.js';
 import { RUNTIME_PROVIDER_FILENAME } from '../infra/config/runtime-provider/constants.js';
 import { resolveStepProviderModel } from '../core/workflow/provider-resolution.js';
+import { resolveRuntimeInternalAgentProvider } from '../infra/config/runtime-provider/internal-agents.js';
 
 vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -112,6 +113,48 @@ describe('resolveCompiledProviderEnvironment seam', () => {
 
   afterEach(() => {
     rmSync(projectCwd, { recursive: true, force: true });
+  });
+
+  it.each([
+    ['assignment defaults', { profile: 'missing' }, undefined, { profile: 'known' }, undefined, 'assignments.work.defaults'],
+    ['assignment ladder', { ladder: ['known', 'missing'] }, undefined, { ladder: ['known'] }, undefined, 'assignments.work.defaults ladder[1]'],
+    ['assignment target', { profile: 'known' }, { internal_agents: { assistant: { profile: 'missing' } } }, { profile: 'known' }, { internal_agents: { assistant: { profile: 'known' } } }, 'assignments.work.targets.internal_agents.assistant'],
+  ])('reports the source of invalid %s', (_label, defaults, targets, validDefaults, validTargets, expected) => {
+    const write = (selectedDefaults: unknown, selectedTargets: unknown) => writeGlobalRuntimeFile({
+      version: 1, provider: {
+        defaults: { assignment: 'work' }, profiles: { known: { provider: 'mock' } },
+        assignments: { work: { defaults: selectedDefaults, ...(selectedTargets === undefined ? {} : { targets: selectedTargets }) } },
+      },
+    });
+    const resolve = () => resolveCompiledProviderEnvironment({ projectCwd, legacy: legacyInput, legacySignals: [] });
+    write(validDefaults, validTargets);
+    expect(resolve).not.toThrow();
+    expect(() => resolveRuntimeInternalAgentProvider(projectCwd, 'assistant')).not.toThrow();
+    write(defaults, targets);
+    expect(resolve).toThrow(expected);
+    expect(resolve).toThrow('missing');
+    expect(() => resolveRuntimeInternalAgentProvider(projectCwd, 'assistant')).toThrow(expected);
+  });
+
+  it('compiles the default assignment for the workflow and internal agent', () => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        defaults: { assignment: 'work' },
+        profiles: {
+          work: { provider: 'codex', model: 'work-model', options: { reasoning_effort: 'medium' } },
+          assistant: { provider: 'claude-sdk', model: 'assistant-model' },
+        },
+        assignments: {
+          work: { defaults: { profile: 'work' }, targets: { internal_agents: { selector: { profile: 'assistant' } } } },
+        },
+      },
+    });
+    const env = resolveCompiledProviderEnvironment({ projectCwd, legacy: legacyInput, legacySignals: [] });
+    expect(env.provider).toBe('codex');
+    expect(env.model).toBe('work-model');
+    expect(env.providerOptions).toEqual({ codex: { reasoningEffort: 'medium' } });
+    expect(env.internalAgents?.selector).toMatchObject({ provider: 'claude-sdk', model: 'assistant-model' });
   });
 
   it('maps an active runtime-v1 section to provider/model + routing with fail-fast tag policy', () => {
@@ -1216,6 +1259,31 @@ describe('runtime provider options through workflow execution', () => {
     expect(vi.mocked(runAgent).mock.calls[0]?.[2]).toMatchObject({
       resolvedProvider: 'codex', resolvedModel: 'explicit-model',
     });
+  });
+
+  it.each([
+    ['unknown profile', { defaults: { profile: 'missing-profile' } }, /missing-profile/],
+    ['missing defaults', { targets: { internal_agents: { selector: { profile: 'base' } } } }, /work/],
+  ])('rejects a default assignment with %s before starting an agent', async (_label, assignment, detail) => {
+    writeGlobalRuntimeFile({
+      version: 1,
+      provider: {
+        defaults: { assignment: 'work' },
+        profiles: { base: { provider: 'mock', model: 'base-model' } },
+        assignments: { work: assignment },
+      },
+    });
+
+    const execution = runWorkflowExecution({
+      task: 'invalid default assignment',
+      cwd: workflowProjectCwd,
+      projectCwd: workflowProjectCwd,
+      workflowIdentifier: 'runtime-provider-handoff',
+      outputMode: 'silent',
+    });
+    await expect(execution).rejects.toThrow(detail);
+    await expect(execution).rejects.toThrow(/defaults|assignments/i);
+    expect(runAgent).not.toHaveBeenCalled();
   });
 
   it('rejects an omitted OpenCode model at configuration loading before starting an agent', async () => {

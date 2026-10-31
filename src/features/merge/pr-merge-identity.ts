@@ -1,11 +1,15 @@
 import type { PrDetails } from '../../core/workflow/system/pr-execution-context.js';
 import type { TaskFileData } from '../../infra/task/schema.js';
 import { runGitCommandAbortable } from '../../infra/task/clone-exec.js';
+import { resolvePublishedPrRepositoryUrl, type GitHubPullRequestTarget } from '../../infra/github/pull-request-target.js';
 
-export async function resolvePrMergeBaseRepositoryUrl(projectDir: string, signal?: AbortSignal): Promise<string> {
+export async function resolvePrMergeBaseRepositoryUrl(projectDir: string, signal?: AbortSignal, target?: GitHubPullRequestTarget): Promise<string> {
   const remotes = await runGitCommandAbortable(projectDir, ['remote'], signal);
-  if (!remotes.stdout.trim().split(/\s+/u).includes('origin')) return projectDir;
-  return (await runGitCommandAbortable(projectDir, ['remote', 'get-url', 'origin'], signal)).stdout.trim();
+  const origin = remotes.stdout.trim().split(/\s+/u).includes('origin')
+    ? (await runGitCommandAbortable(projectDir, ['remote', 'get-url', 'origin'], signal)).stdout.trim()
+    : projectDir;
+  return target === undefined ? origin : resolvePublishedPrRepositoryUrl(origin,
+    `git@${target.hostname}:${target.owner}/${target.repo}.git`, target);
 }
 
 export function assertSavedPrMergeIdentity(

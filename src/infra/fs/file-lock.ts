@@ -21,6 +21,8 @@ interface LockSnapshot {
   readonly content: string | undefined;
 }
 
+export type FileLockAcquisitionErrorHandler = (error: unknown) => never;
+
 function hasCode(error: unknown, code: string): boolean {
   return error instanceof Error && 'code' in error && error.code === code;
 }
@@ -140,13 +142,22 @@ export function isRecordedProcessAlive(pid: number, processIdentity: ProcessIden
     && !hasProcessIdentityMismatch(processIdentity, getProcessIdentity(pid));
 }
 
-export function withFileLock<T>(lockPath: string, action: () => T, options?: { timeoutMs?: number }): T {
+export function withFileLock<T>(
+  lockPath: string, action: () => T,
+  options?: { timeoutMs?: number; onAcquisitionError?: FileLockAcquisitionErrorHandler },
+): T {
   const resolvedPath = resolve(lockPath);
   if (heldLocks.has(resolvedPath)) throw new Error(`File lock: reentrant lock detected: ${lockPath}`);
   heldLocks.add(resolvedPath);
   try {
     const content = JSON.stringify({ pid: process.pid, processIdentity: getSelfProcessIdentity() });
-    const acquired = acquireLock(resolvedPath, content, options?.timeoutMs ?? TIMEOUT_MS);
+    let acquired: LockSnapshot;
+    try {
+      acquired = acquireLock(resolvedPath, content, options?.timeoutMs ?? TIMEOUT_MS);
+    } catch (error) {
+      if (options?.onAcquisitionError) options.onAcquisitionError(error);
+      throw error;
+    }
     try {
       return action();
     } finally {

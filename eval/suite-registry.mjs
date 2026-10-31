@@ -2,9 +2,26 @@ import { readdirSync } from 'node:fs';
 import { basename, dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { ADJUDICATOR_TARGETS } from './adjudicator-no-fix-cases.mjs';
+
 const evalDir = dirname(fileURLToPath(import.meta.url));
 
 const CLASSIFICATIONS = [
+  {
+    tier: 'active',
+    reason: '書き込み可能な隔離環境で裁定 Phase 1 の変更・実行の禁止と6ケースの判断を測る',
+    suites: ['adjudicator-no-fix'],
+  },
+  {
+    tier: 'active',
+    reason: '仕様逸脱の判定と最終報告を両言語・両入口で評価する',
+    suites: ['spec-deviation-phase1', 'spec-deviation-summary'],
+  },
+  {
+    tier: 'active',
+    reason: 'manager の作業分割・同時投入・結合後の確認・作業の制約の保持と引き継ぎ・人の対応が必要な場合の停止を日英17ケースで測る（Python データ処理と Web アプリを含む）',
+    suites: ['manager-work-split'],
+  },
   {
     tier: 'active',
     reason: 'フェーズを跨ぐ会話での読み取り再開、現在の結果への追従、ユーザー制約の維持を本番 dist と生イベントで測る',
@@ -49,6 +66,11 @@ const CLASSIFICATIONS = [
     tier: 'active',
     reason: 'Phase 3 が入力の結論をルールへ対応づけ、入力外の再評価と入力内の矛盾を区別するか測る',
     suites: ['phase3-follow-input'],
+  },
+  {
+    tier: 'active',
+    reason: 'write_tests の完了・実装先行・計画への差し戻しを日英で測る',
+    suites: ['write-tests-routing'],
   },
   {
     tier: 'active',
@@ -150,6 +172,11 @@ const CLASSIFICATIONS = [
   },
   {
     tier: 'active',
+    reason: '判定専用の構造化出力と実際の Phase 1 実行記録から、確認範囲と未確認事項を分けて報告するか測る',
+    suites: ['phase1-execution-log-handoff'],
+  },
+  {
+    tier: 'active',
     reason: '変化を名指しし、その後も状態に合わせて振る舞うことを求め、同じ実体が存続する契約の発火・誤発火・証拠境界を測る',
     suites: [
       'state-after-event-plan',
@@ -229,6 +256,18 @@ const CLASSIFICATIONS = [
 ];
 
 const EXECUTION_OVERRIDES = {
+  'adjudicator-no-fix': {
+    defaultEligible: false, credentials: ['codex', 'claude'], cost: 'high',
+    reason: '3モデルの書き込み可能な裁定を明示的に比較する',
+  },
+  'phase1-execution-log-handoff': {
+    defaultEligible: false, credentials: ['codex'], cost: 'standard',
+    reason: 'Terra medium で合成した Phase 1 実行記録の報告品質を明示評価する',
+  },
+  'manager-work-split': {
+    defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
+    reason: 'Sol Low、Opus 5、Luna Max で日英の操作選択と引数を比較する明示選択の評価',
+  },
   'phase-awareness': {
     defaultEligible: false, credentials: ['codex', 'claude'], cost: 'high',
     reason: '固定の red/green 実行表と複数 CLI 認証を要するため専用 runner で明示実行する',
@@ -366,6 +405,12 @@ const EXECUTION_OVERRIDES = {
     credentials: ['codex', 'claude'],
     cost: 'high',
     reason: '日英・旧版と候補を Codex 2モデルと道具を使える Claude の強めた条件で比較する',
+  },
+  'write-tests-routing': {
+    defaultEligible: false,
+    credentials: ['codex'],
+    cost: 'high',
+    reason: '日英の4分岐を Sol High と Luna Max の実モデルで明示評価する',
   },
   'completion-scope-routing': {
     defaultEligible: false,
@@ -674,6 +719,13 @@ const EXECUTION_OVERRIDES = {
 };
 
 const PREPARE_TARGET_OVERRIDES = {
+  'adjudicator-no-fix': ADJUDICATOR_TARGETS,
+  ...Object.fromEntries(['spec-deviation-phase1', 'spec-deviation-summary'].map(name => [name,
+    ['grounded', 'reinterpretation', 'ungrounded', 'clean', 'other-unmet'].flatMap(scenario =>
+      ['ja', 'en'].flatMap(language => ['generic', 'peer'].map(entry => `spec-deviation-${scenario}-${entry}-${language}`))),
+  ])),
+  'phase1-execution-log-handoff': [],
+  'manager-work-split': [],
   'finding-realistic-premise': [
     'rt', 'rc', 'rq', 'ne', 'np', 'nb', 'at', 'ac', 'aq', 'ae', 'ap', 'ab',
     'vd1', 'vd2', 'vn1', 'vn2', 'pd1',
@@ -717,6 +769,7 @@ const PREPARE_TARGET_OVERRIDES = {
   'interactive-topic-boundary': [],
   'completion-scope-structured': [],
   'phase3-follow-input': [],
+  'write-tests-routing': [],
   'remediation-evidence': [],
   'fix-verifier-model-matrix': ['fix-verifier-state-closure'],
   'fix-verifier-routing-model-matrix': ['fix-verifier-state-routing'],

@@ -848,6 +848,8 @@ output_contracts:
       format: decisions
 ```
 
+Phase 2 では、provider の既存の読み取り専用の設定を使い、レポートの根拠に必要な箇所だけを読みます。今回の Phase 1 実行記録はマスク済み JSONL として保存され、パスとバイト数が渡されます。長い文字列は複数行に分かれているため、検索して周辺だけを参照できます。Phase 2 ではファイルの変更、テスト・ビルドの実行、新しい調査や指摘・判定・計画の追加をせず、Phase 1 の確認実績と Phase 2 で読んだ内容を区別します。最終回答は TAKT がレポートファイルに保存します。Phase 3 ではツールを使いません。
+
 各レポートエントリには `name` と `format` が必須です。任意フィールドが2つあります。
 
 - `use_judge`（デフォルト `true`）— そのレポートを Phase 3 のステータス判定に入力するかどうか。書き出すだけで判定の根拠にしないレポートには `use_judge: false` を指定します。rules の判定が必要な step では少なくとも 1 件の `use_judge` レポートを残す必要があります。
@@ -921,7 +923,7 @@ promotion は並列サブ step ではサポートされません。
 | `policy` | - | policy キーまたはキー配列（section map、または bare 名で project → user → builtin の順に解決） |
 | `knowledge` | - | knowledge キーまたはキー配列（section map、または bare 名で project → user → builtin の順に解決） |
 | `instruction` | - | instruction キー・インライン文字列、またはそれらを並べた空でない配列。facet 参照は section map、または bare 名で project → user → builtin の順に解決 |
-| `edit` | - | step がプロジェクトファイルを編集できるか (`true` / `false`) |
+| `edit` | - | step がプロジェクトファイルを編集できるか (`true` / `false`)。Codex では `false` を明示した step の Phase 1 を `read-only` sandbox で動かす |
 | `companion` | - | 解決済み runtime profile を使う Companion reviewer を通常 agent step または Team Leader step で実行（[Companion レビュアー](#companion-レビュアー)参照） |
 | `completion_retry` | - | 必須の `retry_instruction` facet と任意の再試行上限を持つ object でレビュー網羅性確認を有効化 |
 | `pass_previous_response` | `true` | 前の step の出力を `{previous_response}` に渡す |
@@ -941,6 +943,8 @@ workflow YAML では provider と model を指定できません。runtime profi
 実効ツール一覧は設定値より狭くなる場合があります。`edit: false` の場合、または step に `output_contracts` があり `edit: true` ではない場合、TAKT は provider 呼び出し前に `provider_options.*.allowed_tools` からコマンド・編集系 tool を除去します。Claude 系 provider ではカンマ区切り entry を atomic な tool spec に正規化し、`Bash(...)` は `(` より前の canonical tool 名で判定してから、`Bash`、`Edit`、`Write`、`Apply_Patch`、`Patch` を除去します。OpenCode では `bash`、`edit`、`write` など lowercase の tool を除去します。同じ read-only フィルタは`part_edit: false` または継承された `edit: false` などにより part の実効 edit 設定が false の場合の `team_leader.part_allowed_tools` にも適用されます。
 
 Pi provider は generic な `Read`、`Glob`、`Grep`、`Edit`、`Write`、`Bash` 名を Pi SDK tool へ変換します。Pi は TAKT の MCP server と structured output に対応しません。step-level の MCP 設定は drop され、session-level の MCP 設定は対応 provider が必要です。`max_turns` は Pi call で無視します。
+
+`edit: false` を明示した step は、Codex では Phase 1 を `read-only` sandbox で実行します。解決された permission mode にかかわらず、`permission_control: codex` でも適用されます。team leader の part（`part_edit` または `edit` の継承）、parallel の各 sub-step、`workflow_call` の子 workflow の各 step にも、それぞれの実効 `edit` 設定が適用されます。共通の権限解決、ほかの provider の動作、`edit` 未指定・`edit: true` の動作は変わりません。
 
 ## Workflow レベルの設定
 
@@ -1182,7 +1186,7 @@ Companion 定義は `.takt/companions/`、`~/.takt/companions/`、`builtins/{lan
 ## ベストプラクティス
 
 1. **イテレーション数を妥当に保つ** — 開発系 workflow では 10〜30 程度が一般的
-2. **レビュー step では `edit: false`** — レビュアーがコードを変更しないようにする
+2. **レビュー step では `edit: false`** — レビュアーがコードを変更しないようにする。Codex では Phase 1 を `read-only` sandbox で実行する
 3. **わかりやすい step 名を使う** — ログが読みやすくなる
 4. **workflow は段階的にテストする** — 単純な構成から始めて複雑化する
 5. **`takt eject <workflow>` でカスタマイズする** — ビルトイン workflow をコピーして編集する
@@ -1223,6 +1227,8 @@ fork の脅威検査は merge コマンドが本体 workflow の前に実行し�
 `takt merge` の既定である `merge-review-fix-simple` は、PR と土台ブランチを同期し、必要なら競合を解消してから `review-fix-simple` を実行します。情報収集後は1体の読み取り専用レビュアーが変更に応じたファセットで確認します。指摘は別ステップで裁定し、修正計画・修正・完了検証を経て再レビューします。要件の最終確認が完了したら修正を push し、Caccia 効果が返す head の CI と GitHub のレビュー・マージ可能状態を確認してマージします。子 workflow の失敗ではマージせず、結果を PR にコメントします。CI失敗では後述の回復処理へ進みます。並列の専門レビューを使う場合は `merge-review-fix` を選べます。
 
 ### CI回復の入力と効果
+
+`merge-review-fix` と `merge-review-fix-simple` はCI待ち後に `CONFLICTING` を検出すると、ベースブランチを取り込み直して必要な競合解消を行います。初回のレビューは繰り返さず、push → Caccia → 新しいHEADのCI待ち → マージ判定へ進みます。`BEHIND` だけなら取り込み直さず、レビューなどの既存条件を確認してマージを試みます。取り込み直しは `max(2, 実行時並列数 - 1)` 回までです。並列数2・3では2回、4では3回となり、初回の同期は数えません。CLIの `--concurrency` を含む実行時並列数をタスクへ保存し、Requeue・Retryでも使います。上限に達しても競合が続く場合は理由をPRへコメントしてCOMPLETEで終了し、マージしません。CI修正・再実行の使用済み回数は取り込み直し後も保持します。
 
 再実行直前に現在のPR HEADを取得し、証拠のHEADと異なる場合は再実行を拒否します。受付後にHEADが変わった場合も待機を抜け、元HEADの失敗チェックとログを保持して不一致理由をコメントしてからABORTします。`pr_status`のsystem inputは`rerunHeadChanged`と`rerunHeadChangeReason`を常に返します。通常のpollingでは`false`と空文字列になります。run・repository・attemptの検証は引き続き適用されます。
 

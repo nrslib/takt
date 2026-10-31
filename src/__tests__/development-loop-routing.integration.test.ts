@@ -109,6 +109,18 @@ async function execute(config: WorkflowConfig, stepName: string, ruleIndex: numb
 }
 
 describe('shipped development completion and remediation routes', () => {
+  it.each(variants(['development-core', 'simple-core', 'simple']))('$language/$name returns blocked test creation to planning before it resumes', async ({ language, name }) => {
+    const config = load(language, name);
+    for (const [ruleIndex, nextStep] of [[0, 'implement'], [1, 'implement'], [2, 'plan']] as const) {
+      start(config, 'write_tests');
+      expect((await execute(config, 'write_tests', ruleIndex)).nextStep).toBe(nextStep);
+    }
+    expect((await execute(config, 'plan', 0)).nextStep).toBe('write_tests');
+    const writeTests = config.steps.find(step => step.name === 'write_tests');
+    if (!writeTests) throw new Error('Missing write_tests step');
+    expect(determineRuleTransition(writeTests, 3)).toMatchObject({ nextStep: 'write_tests', requiresUserInput: true });
+  });
+
   it.each(variants(implementations))('$language/$name sends executable incompleteness to reimplement once, then hands remaining gaps to planning', async ({ language, name }) => {
     const config = load(language, name);
     start(config, 'implement');
@@ -398,6 +410,33 @@ describe('shipped development completion and remediation routes', () => {
     },
   );
 
+  it.each(variants(remediations))('$language/$name aborts repeated plan revisions when the monitor selects abort', async ({ language, name }) => {
+    const config = load(language, name);
+    const fix = config.steps.find(step => step.name === 'fix');
+    const replan = config.steps.find(step => step.name === 'fix-replan');
+    const monitor = config.loopMonitors?.find(item => item.cycle.length === 1 && item.cycle[0] === 'fix');
+    const fixRule = fix?.rules?.find(rule => rule.next === 'fix-replan');
+    const replanRule = replan?.rules?.find(rule => rule.next === 'fix');
+    const abortRule = monitor?.judge.rules.find(rule => rule.next === 'ABORT');
+    if (!monitor || fixRule?.condition.kind !== 'semantic' || replanRule?.condition.kind !== 'semantic'
+      || abortRule?.condition.kind !== 'semantic') throw new Error('Missing fix revision or monitor abort rules');
+    start(config, 'fix');
+    if (!engine) throw new Error('Missing engine');
+    const responses = [];
+    for (let cycle = 0; cycle < monitor.threshold; cycle++) {
+      responses.push(makeResponse({ content: 'Product repair is incomplete and its plan needs revision.' }));
+      responses.push(makeResponse({ content: 'Repair plan revised.' }));
+      vi.mocked(runStatusJudgmentPhase).mockResolvedValueOnce({ label: fixRule.condition.label, method: 'phase3_tag' });
+      vi.mocked(runStatusJudgmentPhase).mockResolvedValueOnce({ label: replanRule.condition.label, method: 'phase3_tag' });
+    }
+    responses.push(makeResponse({ content: JSON.stringify({ content: 'No feasible path remains.' }) }));
+    vi.mocked(runStatusJudgmentPhase).mockResolvedValueOnce({ label: abortRule.condition.label, method: 'phase3_tag' });
+    mockRunAgentSequence(responses);
+    const result = await engine.run();
+    expect(result.status).toBe('aborted');
+    expect(vi.mocked(runStatusJudgmentPhase).mock.lastCall?.[0].internalPromptContext?.kind).toBe('loop_monitor');
+  });
+
   it.each(variants(remediations))('$language/$name monitors repeated fix-plan revisions', ({ language, name }) => {
     const config = load(language, name);
     const detector = new CycleDetector(config.loopMonitors);
@@ -413,6 +452,52 @@ describe('shipped development completion and remediation routes', () => {
       if (!resumed) throw new Error('Missing replan transition');
       const result = detector.recordAndCheck('fix-replan', resumed);
       expect(result.triggered).toBe(count === 4);
+    }
+  });
+});
+
+describe('final gate summary output', () => {
+  it.each(['ja', 'en'] as const)('%s: peer review produces a summary and preserves the resolution report', (language) => {
+    const peer = load(language, 'peer-review').steps.find(step => step.name === 'final-gate');
+    const summaryFormat = readFileSync(resolve(repoRoot, 'builtins', language, 'facets/output-contracts/supervisor-summary.md'), 'utf8').trim();
+    expect(peer?.outputContracts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'review-resolution.md' }),
+      expect.objectContaining({ name: 'summary.md' }),
+    ]));
+    expect(peer?.outputContracts?.find(contract => contract.name === 'summary.md')?.format.trim()).toBe(summaryFormat);
+  });
+
+  it.each(['ja', 'en'] as const)('%s: common final gate preserves both reports', (language) => {
+    const common = load(language, 'final-gate').steps.find(step => step.name === 'supervise');
+    const summaryFormat = readFileSync(resolve(repoRoot, 'builtins', language, 'facets/output-contracts/supervisor-summary.md'), 'utf8').trim();
+    expect(common?.outputContracts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'supervisor-validation.md' }),
+      expect.objectContaining({ name: 'summary.md' }),
+    ]));
+    expect(common?.outputContracts?.find(contract => contract.name === 'summary.md')?.format.trim()).toBe(summaryFormat);
+  });
+
+  it.each(['ja', 'en'] as const)('%s: final gate verdicts retain their existing destinations', async (language) => {
+    for (const [workflow, stepName, verdicts] of [
+      ['peer-review', 'final-gate', [['APPROVE', 'COMPLETE'], ['REJECT', 'remediation'], ['BLOCKED', 'need_replan']]],
+      ['final-gate', 'supervise', [['APPROVE', 'COMPLETE'], ['REJECT', 'needs_fix'], ['BLOCKED', 'need_replan']]],
+    ] as const) {
+      const config = load(language, workflow);
+      const step = config.steps.find(candidate => candidate.name === stepName);
+      if (!step?.rules) throw new Error(`Missing rules for ${workflow}:${stepName}`);
+      for (const [verdict, destination] of verdicts) {
+        const index = step.rules.findIndex(rule => rule.condition.kind === 'semantic' && rule.condition.label === verdict);
+        expect(index).toBeGreaterThanOrEqual(0);
+        start(config, stepName);
+        const result = await execute(config, stepName, index);
+        if (destination === 'need_replan' || destination === 'needs_fix') {
+          expect(result).toMatchObject({ isComplete: true, returnValue: destination });
+        } else {
+          expect(result.nextStep).toBe(destination);
+        }
+        if (engine) cleanupWorkflowEngine(engine);
+        engine = undefined;
+      }
     }
   });
 });

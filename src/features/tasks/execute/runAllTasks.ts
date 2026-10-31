@@ -16,6 +16,7 @@ import { getLabel } from '../../../shared/i18n/index.js';
 import type { RunAllTasksOptions, TaskExecutionOptions } from './types.js';
 import { requeueExistingFailedTasks, runWithWorkerPool } from './parallelExecution.js';
 import { toSlackTaskDetail } from './slackSummaryAdapter.js';
+import { failInterruptedTasksWithGoalEvents } from './claimTasks.js';
 import { checkQueuedTaskProviders, checkPendingTaskProviders, terminalProviderConfirmation } from './providerPreflight.js';
 
 export async function runAllTasks(
@@ -56,7 +57,7 @@ export async function runAllTasks(
       && globalConfig.notificationSoundEvents?.runAbort !== false;
     const concurrency = globalConfig.concurrency;
     const slackWebhookUrl = getSlackWebhookUrl();
-    const failedInterrupted = taskRunner.failInterruptedRunningTasks();
+    const failedInterrupted = failInterruptedTasksWithGoalEvents(taskRunner, cwd);
     if (failedInterrupted > 0) {
       info(`Marked ${failedInterrupted} interrupted running task(s) as failed.`);
     }
@@ -85,93 +86,86 @@ export async function runAllTasks(
         pendingTasks, shutdownSignals.schedulingSignal, options?.goalTasksOnly === true);
     }
 
-    const { recoverManagerEvents } = await import('../../manager/completionTurn.js');
-    const managerRecovery = recoverManagerEvents(cwd, agentOverrides);
+    const runId = generateRunId();
+    const startTime = Date.now();
+
+    let displayStarted = false;
+    const poolSignals = {
+      ...shutdownSignals,
+      onTasksClaimed: () => {
+        if (displayStarted) return;
+        displayStarted = true;
+        header('Running tasks');
+        if (concurrency > 1) info(`Concurrency: ${concurrency}`);
+        statusLine.start('Running tasks...');
+      },
+    };
+
+    const sendSlackSummary = async (executedTaskNames: string[]): Promise<void> => {
+      if (!slackWebhookUrl) return;
+      const durationSec = Math.round((Date.now() - startTime) / 1000);
+      const executedSet = new Set(executedTaskNames);
+      const tasks = taskRunner.listAllTaskItems()
+        .filter((item) => executedSet.has(item.name))
+        .map(toSlackTaskDetail);
+      const successCount = tasks.filter((task) => task.success).length;
+      const message = buildSlackRunSummary({
+        runId,
+        total: tasks.length,
+        success: successCount,
+        failed: tasks.length - successCount,
+        durationSec,
+        concurrency,
+        tasks,
+      });
+      await sendSlackNotification(slackWebhookUrl, message);
+    };
+
     try {
-      const runId = generateRunId();
-      const startTime = Date.now();
-      let displayStarted = false;
-      const poolSignals = {
-        ...shutdownSignals,
-        onTasksClaimed: () => {
-          shutdownSignals.onTasksClaimed();
-          if (displayStarted) return;
-          displayStarted = true;
-          header('Running tasks');
-          if (concurrency > 1) info(`Concurrency: ${concurrency}`);
-          statusLine.start('Running tasks...');
-        },
-      };
+      const result = await runWithWorkerPool(
+        taskRunner,
+        [],
+        concurrency,
+        cwd,
+        agentOverrides,
+        runOptions,
+        globalConfig.taskPollIntervalMs,
+        'run',
+        poolSignals,
+        options?.goalTasksOnly === true,
+      );
 
-      const sendSlackSummary = async (executedTaskNames: string[]): Promise<void> => {
-        if (!slackWebhookUrl) return;
-        const durationSec = Math.round((Date.now() - startTime) / 1000);
-        const executedSet = new Set(executedTaskNames);
-        const tasks = taskRunner.listAllTaskItems()
-          .filter((item) => executedSet.has(item.name))
-          .map(toSlackTaskDetail);
-        const successCount = tasks.filter((task) => task.success).length;
-        const message = buildSlackRunSummary({
-          runId,
-          total: tasks.length,
-          success: successCount,
-          failed: tasks.length - successCount,
-          durationSec,
-          concurrency,
-          tasks,
-        });
-        await sendSlackNotification(slackWebhookUrl, message);
-      };
-
-      try {
-        const result = await runWithWorkerPool(
-          taskRunner,
-          [],
-          concurrency,
-          cwd,
-          agentOverrides,
-          runOptions,
-          globalConfig.taskPollIntervalMs,
-          'run',
-          poolSignals,
-          managerRecovery,
-          options?.goalTasksOnly === true,
-        );
-
-        const totalCount = result.success + result.fail;
-        if (totalCount === 0) {
-          info('No pending tasks in .takt/tasks.yaml');
-          info('Use takt add to append tasks.');
-          return;
-        }
-        blankLine();
-        header('Tasks Summary');
-        status('Total', String(totalCount));
-        status('Success', String(result.success), result.success === totalCount ? 'green' : undefined);
-        if (result.fail > 0) {
-          status('Failed', String(result.fail), 'red');
-          if (shouldNotifyRunAbort) {
-            notifyError('TAKT', getLabel('run.notifyAbort', undefined, { failed: String(result.fail) }));
-          }
-          await sendSlackSummary(result.executedTaskNames);
-          return;
-        }
-
-        if (shouldNotifyRunComplete) {
-          notifySuccess('TAKT', getLabel('run.notifyComplete', undefined, { total: String(totalCount) }));
+      const totalCount = result.success + result.fail;
+      if (totalCount === 0) {
+        info('No pending tasks in .takt/tasks.yaml');
+        info('Use takt add to append tasks.');
+        return;
+      }
+      blankLine();
+      header('Tasks Summary');
+      status('Total', String(totalCount));
+      status('Success', String(result.success), result.success === totalCount ? 'green' : undefined);
+      if (result.fail > 0) {
+        status('Failed', String(result.fail), 'red');
+        if (shouldNotifyRunAbort) {
+          notifyError('TAKT', getLabel('run.notifyAbort', undefined, { failed: String(result.fail) }));
         }
         await sendSlackSummary(result.executedTaskNames);
-      } catch (error) {
-        if (shouldNotifyRunAbort) {
-          notifyError('TAKT', getLabel('run.notifyAbort', undefined, { failed: getErrorMessage(error) }));
-        }
-        await sendSlackSummary([]);
-        throw error;
-      } finally {
-        statusLine.stop();
+        return;
       }
+
+      if (shouldNotifyRunComplete) {
+        notifySuccess('TAKT', getLabel('run.notifyComplete', undefined, { total: String(totalCount) }));
+      }
+      await sendSlackSummary(result.executedTaskNames);
+    } catch (error) {
+      if (shouldNotifyRunAbort) {
+        notifyError('TAKT', getLabel('run.notifyAbort', undefined, { failed: getErrorMessage(error) }));
+      }
+      await sendSlackSummary([]);
+      throw error;
     } finally {
-      await managerRecovery;
+      statusLine.stop();
     }
   }, options?.goalTasksOnly);
 }

@@ -317,6 +317,62 @@ describe('multiple report input declarations', () => {
     })).toThrow();
   });
 
+  it('rejects same public names from different parallel directories in doctor and complete prompt generation', async () => {
+    const raw = {
+      ...rawWorkflow([]),
+      steps: [
+        { name: 'remediation', parallel: [
+          { name: 'left', output_contracts: { report: [{ name: 'left/review.md', format: '# Review\nWrite the review.' }] } },
+          { name: 'right', output_contracts: { report: [{ name: 'right/review.md', format: '# Review\nWrite the review.' }] } },
+        ], rules: [{ condition: 'all("done")', next: 'consumer' }] },
+        { name: 'consumer', instruction: 'Consume the declared inputs', input_reports: declaration('remediation', 'all'),
+          rules: [{ condition: 'done', next: 'COMPLETE' }] },
+      ],
+    };
+    const file = saveWorkflow(raw);
+    await expect(doctorWorkflowCommand([file], root)).rejects.toThrow();
+    const config = loadWorkflowFromFile(file, root);
+    const prepare = () => new InstructionBuilder(config.steps[1]!, makeInstructionContext({
+      reportDir: root,
+      declaredReportInputs: [resolveDeclaredReportInputs(config.steps[1]!, {
+        workflow: config, state: createInitialState(config, { projectCwd: root }),
+        projectCwd: root, lookupCwd: root, reportDir: root, resumeStackPrefix: [],
+        sharedRuntime: {
+          startedAtMs: 0,
+          workflowCallInvocationEvidence: { kind: 'exact', index: new WorkflowCallInvocationIndex(new Map()) },
+          workflowStepParticipationIndex: new WorkflowStepParticipationIndex(new Map()),
+        },
+      })!],
+    })).prepare();
+    expect(prepare).toThrow();
+  });
+
+  it.each(['step', 'parallel', 'nested workflow'] as const)('rejects duplicate contract paths for an explicitly selected report from a %s in doctor', async (kind) => {
+    const contracts = ['left/review.md', 'right/review.md'].map((name) => ({ name, format: '# Review\nWrite the review.' }));
+    if (kind === 'nested workflow') {
+      writeFileSync(join(root, 'nested.yaml'), JSON.stringify({
+        name: 'nested', subworkflow: { callable: true }, steps: [
+          { name: 'left', output_contracts: { report: [contracts[0]!] }, rules: [{ condition: 'done', next: 'right' }] },
+          { name: 'right', output_contracts: { report: [contracts[1]!] }, rules: [{ condition: 'done', next: 'COMPLETE' }] },
+        ],
+      }));
+    }
+    const sources = {
+      step: { name: 'remediation', output_contracts: { report: contracts }, rules: [{ condition: 'done', next: 'consumer' }] },
+      parallel: { name: 'remediation', parallel: [
+        { name: 'left', output_contracts: { report: [contracts[0]!] } },
+        { name: 'right', output_contracts: { report: [contracts[1]!] } },
+      ], rules: [{ condition: 'all("done")', next: 'consumer' }] },
+      'nested workflow': { name: 'remediation', kind: 'workflow_call', call: './nested.yaml', rules: [{ condition: 'COMPLETE', next: 'consumer' }] },
+    };
+    const raw = {
+      ...rawWorkflow([]),
+      steps: [sources[kind], { name: 'consumer', instruction: 'Consume the declared inputs',
+        input_reports: declaration('remediation', ['review.md']), rules: [{ condition: 'done', next: 'COMPLETE' }] }],
+    };
+    await expect(doctorWorkflowCommand([saveWorkflow(raw)], root)).rejects.toThrow();
+  });
+
   it('preserves array inputs and history when loading a judge declaration', () => {
     const input = [{ ...declaration('remediation', ['fix-plan.md']), history: { previous: 2 } }];
     const judge = { instruction: '{report:fix-plan.md}\n{report_history:fix-plan.md}', input_reports: input,
@@ -327,6 +383,39 @@ describe('multiple report input declarations', () => {
     expect(loadWorkflowFromFile(saveWorkflow(raw), root).loopMonitors?.[0]?.judge).toMatchObject({
       inputReports: [{ fromStep: 'remediation', reports: ['fix-plan.md'], history: { previous: 2 } }],
     });
+  });
+
+  it.each([
+    { kind: 'an undeclared name', reference: 'unknown.md' },
+    { kind: 'a declaration without history', reference: 'fix-plan.md' },
+  ])('rejects a step history reference to $kind through workflow doctor', async ({ reference }) => {
+    const raw = rawWorkflow(declaration('remediation', ['fix-plan.md']));
+    raw.steps[2]!.instruction = `Inspect the prior result\n{report_history:${reference}}`;
+    await expect(doctorWorkflowCommand([saveWorkflow(raw)], root)).rejects.toThrow('Workflow validation failed');
+  });
+
+  it('rejects an invalid loop monitor judge history reference through workflow doctor', async () => {
+    const input = declaration('remediation', ['fix-plan.md']);
+    const raw = { ...rawWorkflow(input), loop_monitors: [{
+      cycle: ['remediation', 'adjudicate'], threshold: 2,
+      judge: { instruction: 'Inspect the prior result\n{report_history:fix-plan.md}', input_reports: input,
+        rules: [{ condition: 'done', next: 'COMPLETE' }] },
+    }] };
+    await expect(doctorWorkflowCommand([saveWorkflow(raw)], root)).rejects.toThrow('Workflow validation failed');
+  });
+
+  it.each(['step', 'loop monitor judge'] as const)('accepts a declared history reference on a %s through workflow doctor', async (consumer) => {
+    const input = { ...declaration('remediation', ['fix-plan.md']), history: { previous: 2 } };
+    const instruction = '{report:fix-plan.md}\n{report_history:fix-plan.md}';
+    const raw = {
+      ...rawWorkflow(input),
+      ...(consumer === 'loop monitor judge' ? { loop_monitors: [{
+        cycle: ['remediation', 'adjudicate'], threshold: 2,
+        judge: { instruction, input_reports: input, rules: [{ condition: 'done', next: 'COMPLETE' }] },
+      }] } : {}),
+    };
+    raw.steps[2]!.instruction = instruction;
+    await expect(doctorWorkflowCommand([saveWorkflow(raw)], root)).resolves.toBeUndefined();
   });
 
   it.each([false, true])('resolves nested producer report names in doctor (overlap=%s)', async (overlap) => {
@@ -470,6 +559,24 @@ describe('report execution versions', () => {
     expect(verified.origin).toMatchObject({ producer: 'fix-verifier', order: 4, completionOrder: 5 });
     expect(verified.origin.order).toBeGreaterThan(repaired.origin.completionOrder!);
     expect(repaired.execution.completionOrder).toBe(6);
+  });
+
+  it('keeps same-directory parallel child captures within their declared reports', () => {
+    const parent = store.begin('parent', 'remediation', root, ['plan.md', 'report.md']);
+    const alphaIdentity = buildWorkflowStepParticipationIdentity('parallel-origin', 'alpha', [], 'remediation');
+    const betaIdentity = buildWorkflowStepParticipationIdentity('parallel-origin', 'beta', [], 'remediation');
+    const alpha = store.begin(alphaIdentity, 'alpha', root, ['plan.md']);
+    const beta = store.begin(betaIdentity, 'beta', root, ['report.md']);
+    store.capture(root, 'plan.md', 'alpha plan');
+    store.capture(root, 'report.md', 'beta report');
+    store.finish(beta, true);
+    store.finish(alpha, true);
+    store.finish(parent, true);
+
+    expect(store.current('parent', 'plan.md')?.origin).toMatchObject({ producer: 'alpha' });
+    expect(store.current('parent', 'report.md')?.origin).toMatchObject({ producer: 'beta' });
+    expect(store.executions(alphaIdentity)[0]?.reports['report.md']).toBeUndefined();
+    expect(store.executions(betaIdentity)[0]?.reports['plan.md']).toBeUndefined();
   });
 
   it('shows incomplete executions and missing reports in the completed instruction without backfilling', () => {

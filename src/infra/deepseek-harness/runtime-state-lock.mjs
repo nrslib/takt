@@ -179,6 +179,20 @@ async function readCleanupBarrier(stateDirectory) {
   }
 }
 
+/** Clear a barrier only when every recorded process group is confirmed exited. */
+async function clearExitedCleanupBarrier(barrier) {
+  if (barrier.unknownRuntime === true
+    || barrier.runtimePids.some((pid) => isProcessGroupAlive(pid) !== false)) {
+    return false;
+  }
+  try {
+    await rm(barrier.path, { force: true });
+  } catch {
+    throw cleanupBlockedError();
+  }
+  return true;
+}
+
 /** Serialize runtime publication/cleanup across processes; never steal a stale lock. */
 export async function withDeepSeekRuntimeStateFileLock(stateDirectory, operation) {
   try {
@@ -250,16 +264,8 @@ export async function assertDeepSeekRuntimeCreationAllowedLocked(
   }
 
   const barrier = await readCleanupBarrier(stateDirectory);
-  if (barrier !== undefined) {
-    if (barrier.unknownRuntime === true) throw cleanupBlockedError();
-    for (const pid of barrier.runtimePids) {
-      if (isProcessGroupAlive(pid) !== false) throw cleanupBlockedError();
-    }
-    try {
-      await rm(barrier.path, { force: true });
-    } catch {
-      throw cleanupBlockedError();
-    }
+  if (barrier !== undefined && !(await clearExitedCleanupBarrier(barrier))) {
+    throw cleanupBlockedError();
   }
 
   for (const entry of ownerEntries) {
@@ -319,16 +325,10 @@ export async function acknowledgeDeepSeekRuntimeCleanup(stateDirectory, ownerDir
     let barrierBlocksCleanup = false;
     let barrierConfirmsGroupExit = false;
     if (barrier !== undefined) {
-      if (barrier.unknownRuntime === true
-        || barrier.runtimePids.some((pid) => isProcessGroupAlive(pid) !== false)) {
+      if (!(await clearExitedCleanupBarrier(barrier))) {
         barrierBlocksCleanup = true;
       } else {
         barrierConfirmsGroupExit = barrier.runtimePids.length > 0;
-        try {
-          await rm(barrier.path, { force: true });
-        } catch {
-          throw cleanupBlockedError();
-        }
       }
     }
 
@@ -365,13 +365,17 @@ export async function acknowledgeDeepSeekRuntimeCleanup(stateDirectory, ownerDir
         receipt = await readFile(cleanup.cleanupConfirmationPath, 'utf8');
       } catch (error) {
         if (error?.code === 'ENOENT') {
-          if (barrierBlocksCleanup) return null;
+          if (barrierBlocksCleanup) {
+            if (!(await clearExitedCleanupBarrier(barrier))) return null;
+            return barrier.runtimePids.length > 0 ? true : undefined;
+          }
           return barrierConfirmsGroupExit ? true : undefined;
         }
         throw cleanupBlockedError();
       }
       if (receipt !== 'confirmed\n') throw cleanupBlockedError();
       await rm(cleanup.cleanupConfirmationPath, { force: true });
+      if (barrierBlocksCleanup) await clearExitedCleanupBarrier(barrier);
       return true;
     }
 
@@ -397,6 +401,7 @@ export async function acknowledgeDeepSeekRuntimeCleanup(stateDirectory, ownerDir
         matchingOwner,
       );
     }
+    if (barrierBlocksCleanup) await clearExitedCleanupBarrier(barrier);
     return true;
   });
 }

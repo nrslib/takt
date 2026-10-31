@@ -97,6 +97,58 @@ describe('ParallelRunner live intervention integration', () => {
     }
   });
 
+  it('passes previously delivered instructions once to parallel agents and every workflow_call child step', async () => {
+    const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
+    const content = 'docs は変えない';
+    await store.issue(content);
+    const childConfig: WorkflowConfig = {
+      name: 'history-child', subworkflow: { callable: true }, maxSteps: 4, initialStep: 'adjudicate',
+      steps: [
+        makeStep('adjudicate', { rules: [makeRule('approved', 'replan')] }),
+        makeStep('replan', { rules: [makeRule('approved', 'COMPLETE')] }),
+      ],
+    };
+    const config: WorkflowConfig = {
+      name: 'history-parallel-parent', maxSteps: 8, initialStep: 'implement',
+      steps: [
+        makeStep('implement', { rules: [makeRule('approved', 'reviewers')] }),
+        makeStep('reviewers', {
+          concurrency: 2,
+          parallel: [
+            makeStep('agent-review', { rules: [makeRule('approved', 'COMPLETE')] }),
+            { name: 'delegated', personaDisplayName: 'delegated', instruction: '', kind: 'workflow_call',
+              call: childConfig.name, rules: [makeRule('COMPLETE', 'COMPLETE')] },
+          ],
+          rules: [makeRule('all("approved")', 'COMPLETE')],
+        }),
+      ],
+    };
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      markProviderDispatch(persona, instruction, options);
+      return makeResponse({ content: 'approved', sessionId: `${persona}-session` });
+    });
+    engine = new WorkflowEngine(config, projectCwd, 'test task', {
+      ...createEngineOptions(projectCwd, store), workflowCallResolver: () => childConfig,
+    });
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    const calls = vi.mocked(runAgent).mock.calls;
+    expect(calls.map(([persona]) => persona).sort()).toEqual([
+      '../personas/implement.md', '../personas/agent-review.md',
+      '../personas/adjudicate.md', '../personas/replan.md',
+    ].sort());
+    const deliveries = readFileSync(store.getFilePath(), 'utf8').trim().split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((event) => event.type === 'delivered');
+    expect(deliveries).toHaveLength(1);
+    expect(store.read()).toMatchObject({ pending: 0, deliveredNextStep: 1 });
+    for (const [persona, instruction] of calls) {
+      expect.soft(instruction.split(content).length - 1, persona).toBe(1);
+    }
+  });
+
   it('waits for the active substep, discards the interrupted trial, and reruns the whole parallel step', async () => {
     const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
     let resolveFirstTurn!: (response: AgentResponse) => void;

@@ -27,6 +27,10 @@ function publicText(text, source) {
     .replace(/\/home\/[^\s/`"'<>]+/g, '<local-home>');
 }
 
+function publicPrompt(text, source) {
+  return `${publicText(text, source).replace(/[\r\n]+$/, '')}\n`;
+}
+
 function comparison(output, versions) {
   const current = versions.find(version => version.version === 'current');
   const prior = versions.find(version => version.version === 'prior');
@@ -103,7 +107,9 @@ export function publishEvaluation(source, destination, execution) {
       && ['current', 'prior'].every(version => receipts.some(receipt => receipt.version === version));
     for (const suffix of ['invocation.json', 'prompt.md']) {
       const name = `${role}.${suffix}`;
-      if (files.has(name)) projected.set(name, publicText(files.get(name), source));
+      if (files.has(name)) projected.set(name, suffix === 'prompt.md'
+        ? publicPrompt(files.get(name), source)
+        : publicText(files.get(name), source));
     }
     const publicOutput = decision === undefined ? 'Comparison evidence unavailable.\n'
       : `CURRENT_PROOF: ${decision.currentProof}\nPRIOR_PROOF: ${decision.priorProof}\nCURRENT_TARGETS: B\nPROGRESS: 改善\n`;

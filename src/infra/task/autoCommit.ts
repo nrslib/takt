@@ -10,6 +10,7 @@
 import { execFileSync } from 'node:child_process';
 import { resolveConfigValue } from '../config/index.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
+import { toLocalBranchRef } from '../../shared/utils/gitBranchValidation.js';
 import {
   materializeCloneHeadToRootBranch,
   stageAndCommit,
@@ -21,14 +22,38 @@ const AUTO_COMMIT_PUSH_FAILURE_MESSAGE = 'Push to main repo failed after commit 
 const AUTO_COMMIT_FAILURE_MESSAGE = 'Auto-commit failed.';
 
 export interface AutoCommitResult {
-  /** Whether the commit was created successfully */
+  /** Whether auto-commit processing succeeded (check localPushFailed for publication) */
   success: boolean;
   /** The short commit hash (if committed) */
   commitHash?: string;
-  /** Whether the local push back to the main repo failed after commit creation */
+  /** The full HEAD SHA published to the main repo by this call */
+  publishedHead?: string;
+  /** Whether publication back to the main repo failed */
   localPushFailed?: boolean;
   /** Human-readable message */
   message: string;
+}
+
+function needsHeadPublication(cloneCwd: string, projectDir: string, head: string, branch: string | undefined): boolean {
+  const targetBranch = branch ?? execFileSync('git', ['symbolic-ref', '--short', 'HEAD'], {
+    cwd: cloneCwd, encoding: 'utf-8', stdio: 'pipe',
+  }).trim();
+  const targetRef = toLocalBranchRef(targetBranch);
+  const objectType = execFileSync('git', ['cat-file', '--batch-check=%(objecttype)'], {
+    cwd: projectDir, input: `${head}\n`, encoding: 'utf-8', stdio: 'pipe',
+  }).trim();
+  if (objectType === `${head} missing`) return true;
+  if (objectType !== 'commit') throw new Error(`Cannot resolve clone HEAD ${head} in the main repo`);
+
+  const targetRefs = execFileSync('git', ['for-each-ref', '--format=%(refname)', targetRef], {
+    cwd: projectDir, encoding: 'utf-8', stdio: 'pipe',
+  }).trim().split('\n');
+  // A new result branch at the unchanged starting position does not need publication.
+  const publishedRefs = targetRefs.includes(targetRef) ? [targetRef] : ['HEAD', '--branches', '--remotes'];
+  const unpublished = execFileSync('git', ['rev-list', '--max-count=1', head, '--not', ...publishedRefs], {
+    cwd: projectDir, encoding: 'utf-8', stdio: 'pipe',
+  }).trim();
+  return unpublished.length > 0;
 }
 
 export function resolveAutoCommitOptions(projectDir: string): StageAndCommitOptions {
@@ -67,14 +92,19 @@ export class AutoCommitter {
         resolveAutoCommitOptions(projectDir),
       );
 
-      if (!commitHash) {
-        log.info('No changes to commit');
-        return { success: true, message: 'No changes to commit' };
+      if (commitHash) {
+        log.info('Auto-commit created', { commitHash, message: commitMessage });
       }
-
-      log.info('Auto-commit created', { commitHash, message: commitMessage });
+      const message = commitHash ? `Committed: ${commitHash} - ${commitMessage}` : 'No changes to commit';
+      let head: string;
 
       try {
+        head = execFileSync('git', ['rev-parse', 'HEAD'], {
+          cwd: cloneCwd, encoding: 'utf-8', stdio: 'pipe',
+        }).trim();
+        if (!needsHeadPublication(cloneCwd, projectDir, head, branch)) {
+          return { success: true, commitHash, message };
+        }
         if (branch !== undefined) {
           materializeCloneHeadToRootBranch(cloneCwd, projectDir, branch);
           log.info('Materialized clone HEAD to root branch', { projectDir, branch });
@@ -96,14 +126,15 @@ export class AutoCommitter {
           success: true,
           commitHash,
           localPushFailed: true,
-          message: `Committed: ${commitHash} - ${commitMessage}`,
+          message,
         };
       }
 
       return {
         success: true,
         commitHash,
-        message: `Committed: ${commitHash} - ${commitMessage}`,
+        publishedHead: head,
+        message: commitHash ? message : `Published: ${head}`,
       };
     } catch (err) {
       const errorMessage = getErrorMessage(err);

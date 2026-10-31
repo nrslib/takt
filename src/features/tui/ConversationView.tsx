@@ -28,6 +28,7 @@ import {
 } from './editorState.js';
 import { layoutPromptRows, resolvePromptContentWidth } from './promptLayout.js';
 import { resolveSlashCompletions } from './slashCompletion.js';
+import { useSlashCompletion } from './useSlashCompletion.js';
 import type {
   InteractiveResultSource,
   TuiConversation,
@@ -201,7 +202,6 @@ export function ConversationView({
     history: initialHistory,
   });
   const [editor, setEditorView] = useState<EditorState>(editorRef.current);
-  const [completionIndex, setCompletionIndex] = useState(0);
   const [streamingRaw, setStreamingRaw] = useState('');
   const [turn, setTurn] = useState<{ readonly id: number; readonly startedAt: number } | null>(null);
   const [activity, setActivity] = useState<Activity>({ kind: 'waiting', tools: [] });
@@ -228,8 +228,6 @@ export function ConversationView({
   const submissionCountRef = useRef(0);
   /** True from the moment this view decides to hand the terminal to a selector. */
   const [isFinishing, setIsFinishing] = useState(false);
-  /** Set by Esc so the completion list closes without touching the draft. */
-  const [completionsHidden, setCompletionsHidden] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [confirmationMessage, setConfirmationMessage] = useState<string | null>(null);
   const confirmationRef = useRef<((answer: boolean) => void) | null>(null);
@@ -289,7 +287,8 @@ export function ConversationView({
     () => resolveSlashCompletions(editor.text, lang, conversation.commandAvailability),
     [conversation.commandAvailability, editor.text, lang],
   );
-  const completions = completionsHidden ? [] : allCompletions;
+  const slashCompletion = useSlashCompletion(allCompletions);
+  const { completions, completionIndex, reset: resetCompletion } = slashCompletion;
   const streamingPreview = useMemo(() => toDisplayText(streamingRaw), [streamingRaw]);
   const elapsed = elapsedSeconds < 60
     ? `${elapsedSeconds}s`
@@ -446,10 +445,8 @@ export function ConversationView({
 
   const updateEditor = useCallback((next: EditorState) => {
     writeEditor(next);
-    setCompletionIndex(0);
-    // Editing the draft is what brings a dismissed list back.
-    setCompletionsHidden(false);
-  }, [writeEditor]);
+    resetCompletion();
+  }, [writeEditor, resetCompletion]);
 
   const writeQueue = useCallback((next: readonly string[]) => {
     queueRef.current = next;
@@ -846,33 +843,12 @@ export function ConversationView({
       return;
     }
 
+    if (slashCompletion.handleInput(key, (text) => {
+      updateEditor(replaceEditorText(editorRef.current, text));
+    })) return;
     if (key.escape) {
-      // An open completion list is what Esc closes first; only then does Esc
-      // reach the call that is running.
-      if (completions.length > 0) {
-        setCompletionsHidden(true);
-        return;
-      }
       interruptSubmission();
       return;
-    }
-
-    if (completions.length > 0) {
-      if (key.downArrow) {
-        setCompletionIndex((index) => (index + 1) % completions.length);
-        return;
-      }
-      if (key.upArrow) {
-        setCompletionIndex((index) => (index + completions.length - 1) % completions.length);
-        return;
-      }
-      if (key.tab) {
-        const selected = completions[completionIndex];
-        if (selected) {
-          updateEditor(replaceEditorText(editorRef.current, `${selected.command} `));
-        }
-        return;
-      }
     }
 
     // Shift+Enter and Option+Enter insert a line break; plain Enter submits.
