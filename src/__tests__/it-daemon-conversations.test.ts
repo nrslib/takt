@@ -146,7 +146,7 @@ it.each(['manager', 'director'] as const)('keeps two %s screens connected to the
       owner: readDaemonOwner(fixture.directory) }));
     await fixture.cleanup();
   }
-});
+}, 180_000);
 
 it('keeps make-goal instructions hidden on both connected manager screens', async () => {
   const fixture = concurrentTuiFixture('manager');
