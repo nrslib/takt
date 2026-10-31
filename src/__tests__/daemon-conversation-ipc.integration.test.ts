@@ -98,12 +98,16 @@ it('finishes each output transfer before newer state on both attachments', async
     encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void), callback?: (error?: Error | null) => void): boolean {
     const complete = typeof encodingOrCallback === 'function' ? encodingOrCallback : callback;
     const encoding = typeof encodingOrCallback === 'string' ? encodingOrCallback : undefined;
-    let frame: { type: string; output?: { kind: string; purpose?: string } };
+    let parsed: unknown;
     try {
-      frame = JSON.parse(Buffer.from(chunk).toString('utf8')) as typeof frame;
+      parsed = JSON.parse(Buffer.from(chunk).toString('utf8'));
     } catch {
       return originalWrite.call(this, chunk, encoding, complete);
     }
+    if (parsed === null || typeof parsed !== 'object') {
+      return originalWrite.call(this, chunk, encoding, complete);
+    }
+    const frame = parsed as { type: string; output?: { kind: string; purpose?: string } };
     if (frame.type === 'event' && frame.output?.kind === 'transfer_start' && frame.output.purpose === 'output') {
       paused++;
       return originalWrite.call(this, chunk, encoding, (error) => { void gate.then(() => complete?.(error)); });
