@@ -73,15 +73,32 @@ it.each([
 });
 
 it.each(['result', 'notification'])('retains running when the recovered director %s cannot be saved', async (failure) => {
-  doubles.readResult.mockReturnValue({ operationId, conversationId: record.id, directorConversationId: source,
-    result: { kind: 'reply', message: 'saved reply' } });
+  const retained = structuredClone(record);
+  const saved = { operationId, conversationId: record.id, directorConversationId: source,
+    result: { kind: 'reply' as const, message: 'saved reply' } };
+  doubles.readResult.mockReturnValue(saved);
   const error = new Error('storage unavailable');
-  if (failure === 'result') doubles.saveResult.mockImplementation(() => { throw error; });
-  else doubles.createNotification.mockImplementation(() => { throw error; });
+  if (failure === 'result') doubles.saveResult.mockImplementationOnce(() => { throw error; });
+  else doubles.createNotification.mockImplementationOnce(() => { throw error; });
 
-  await expect(service.restore()).rejects.toBe(error);
+  await expect(service.restore()).resolves.toBeUndefined();
 
+  expect(doubles.saveResult).toHaveBeenCalledExactlyOnceWith(saved);
   expect(doubles.saveConversation).not.toHaveBeenCalled();
+  expect(record).toEqual(retained);
   if (failure === 'result') expect(doubles.createNotification).not.toHaveBeenCalled();
+  else expect(doubles.createNotification).toHaveBeenCalledOnce();
+  expect(resolve).not.toHaveBeenCalled();
+
+  await service.close();
+  service = createConversationService({ configDirectory: '/test/config', owner,
+    runtime: { resolve, close: async () => {} }, onDomainChange: vi.fn() });
+  await expect(service.restore()).resolves.toBeUndefined();
+
+  expect(doubles.saveResult).toHaveBeenLastCalledWith(saved);
+  expect(doubles.createNotification).toHaveBeenLastCalledWith(expect.stringContaining(operationId), {
+    key: expect.any(String), state: 'reply',
+  });
+  expect(doubles.saveConversation).toHaveBeenCalledExactlyOnceWith({ ...retained, running: null, sessionId: null });
   expect(resolve).not.toHaveBeenCalled();
 });
