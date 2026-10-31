@@ -288,11 +288,6 @@ describe('Workflow Maker assistant retry command availability integration', () =
         });
         expect(Object.keys(options.mcpServers!)).toEqual(['takt']);
         expect(options.allowedTools ?? []).not.toContain('mcp__backlog');
-        expect(options.preparedMcp?.conversationMcpTools).toEqual(expect.arrayContaining(['mcp__takt__takt_get_run']));
-        expect(options.preparedMcp!.conversationMcpTools).not.toContain('mcp__backlog');
-        expect(options.preparedMcp!.conversationMcpTools!.filter(
-          (tool) => tool.startsWith('mcp__') && !tool.startsWith('mcp__takt__'),
-        )).toEqual([]);
       }
       if (providerType === 'copilot') {
         expect(providerState.copilotConfigs).toHaveLength(4);

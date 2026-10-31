@@ -235,8 +235,6 @@ describe('conversation task-state MCP integration', () => {
       const payload = JSON.parse(readFileSync(options.preparedMcp!.path!, 'utf8')) as { mcpServers: Record<string, { args?: string[] }> };
       expect(Object.keys(payload.mcpServers).sort()).toEqual(['backlog', 'takt']);
       expect(payload.mcpServers.takt!.args).toContain('read-only');
-      expect(options.preparedMcp!.conversationMcpTools?.filter((tool) => tool === 'mcp__takt' || tool === 'takt_*' || tool.startsWith('mcp__takt__')).sort())
-        .toEqual(['mcp__takt__takt_get_goal', 'mcp__takt__takt_get_run', 'mcp__takt__takt_list_goals', 'mcp__takt__takt_list_tasks']);
       return successfulResponse();
     });
     const { provider } = createFakeProvider(providerCall);

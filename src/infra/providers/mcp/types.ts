@@ -72,8 +72,15 @@ export interface PreparedProviderMcp {
   serverConfig?: Record<string, unknown>;
   /** Identity of the resolved set (for shared server pool isolation). */
   identity?: string;
-  /** MCP tools and server grants allowed for this conversation. */
-  conversationMcpTools?: readonly string[];
+  /**
+   * MCP permissions of a conversation (OpenCode). `serverNames` are the
+   * conversation-approved user servers (every tool allowed); `tools` are the
+   * individually allowed `mcp__<server>__<tool>` names of the built-in server.
+   */
+  conversationMcpPermissions?: {
+    readonly serverNames: readonly string[];
+    readonly tools: readonly string[];
+  };
   /** Isolated workspace config root (Cursor). */
   configRoot?: string;
   /** Resolved server set for test inspection (Mock). */

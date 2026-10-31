@@ -134,6 +134,22 @@ describe('readline operation feedback', () => {
     expect(doubles.ai).toHaveBeenCalledTimes(3);
   });
 
+  it('should show the MCP-unavailable notice at the terminal when the conversation starts and still answer', async () => {
+    const notice = 'Task-state lookup is unavailable for provider pi; the conversation will continue without it.';
+
+    await run(['Prepare a login fix', '/cancel'], { mcpUnavailableNotice: notice });
+
+    expect(doubles.info).toHaveBeenCalledWith(notice);
+    expect(doubles.ai).toHaveBeenCalledTimes(1);
+  });
+
+  it('should not show an MCP-unavailable notice at the terminal without a notice from the strategy', async () => {
+    await run(['Prepare a login fix', '/cancel']);
+
+    expect(doubles.info.mock.calls.map(([message]) => String(message)).filter((message) => message.includes('MCP'))).toEqual([]);
+    expect(doubles.ai).toHaveBeenCalledTimes(1);
+  });
+
   it.each(['tell', 'retry', 'requeue'])('should accept the original proposal after /%s reports an operation', async (command) => {
     (command === 'tell' ? doubles.tell : doubles.retry).mockResolvedValue('Operation completed for login-fix.');
 

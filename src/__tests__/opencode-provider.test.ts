@@ -254,12 +254,16 @@ describe('OpenCodeProvider tool naming addendum', () => {
     await agent.call('mcp__takt__takt_create_goal in conversation gives no permission', {
       cwd: '/tmp/project', model: 'probe/probe', permissionMode: 'readonly',
       allowedTools: ['Read', 'Bash'], [restriction]: strictTools,
-      preparedMcp: { serverConfig: {}, identity: 'test', conversationMcpTools: ['mcp__takt__takt_create_goal'], dispose: async () => {} },
+      preparedMcp: {
+        serverConfig: {}, identity: 'test', dispose: async () => {},
+        conversationMcpPermissions: { serverNames: ['backlog'], tools: ['mcp__takt__takt_create_goal'] },
+      },
     });
     const options = systemPrompt === undefined
       ? openCodeMocks.callOpenCode.mock.calls.at(-1)?.[2]
       : openCodeMocks.callOpenCodeCustom.mock.calls.at(-1)?.[3];
     expect(options).toMatchObject({ allowedTools: ['Read'], allowedMcpTools: ['takt_mgr_session_takt_get_run'], strictToolAllowlist: strictTools });
+    expect(options).not.toHaveProperty('allowedMcpServers');
   });
 
   it.each(['mcp__takt__mgr__get_run', 'mcp__takt__get__run', 'mcp__takt___get_run'])('rejects ambiguous MCP names before calling OpenCode: %s', async (tool) => {
@@ -272,13 +276,28 @@ describe('OpenCodeProvider tool naming addendum', () => {
   });
 
   it('maps only the built-in takt tools of a conversation without user servers to OpenCode permission names', async () => {
-    const conversationMcpTools = ['mcp__takt__takt_get_run', 'mcp__takt__takt_list_tasks'];
+    const tools = ['mcp__takt__takt_get_run', 'mcp__takt__takt_list_tasks'];
     await new OpenCodeProvider().setup({ name: 'manager' }).call('read runs', {
       cwd: '/tmp/project', model: 'probe/probe', permissionMode: 'readonly',
-      preparedMcp: { serverConfig: {}, identity: 'test', conversationMcpTools, dispose: async () => {} },
+      preparedMcp: { serverConfig: {}, identity: 'test', conversationMcpPermissions: { serverNames: [], tools }, dispose: async () => {} },
     });
     expect(openCodeMocks.callOpenCode.mock.calls.at(-1)?.[2]).toMatchObject({
       allowedMcpTools: ['takt_takt_get_run', 'takt_takt_list_tasks'],
+    });
+  });
+
+  it('passes assigned server names as they are and maps only the built-in takt tools to permission names', async () => {
+    const serverNames = ['backlog', 'backlog__main', 'queue_', 'github.com'];
+    await new OpenCodeProvider().setup({ name: 'manager' }).call('read issues', {
+      cwd: '/tmp/project', model: 'probe/probe', permissionMode: 'readonly',
+      preparedMcp: {
+        serverConfig: {}, identity: 'test', dispose: async () => {},
+        conversationMcpPermissions: { serverNames, tools: ['mcp__takt__takt_get_run'] },
+      },
+    });
+    expect(openCodeMocks.callOpenCode.mock.calls.at(-1)?.[2]).toMatchObject({
+      allowedMcpTools: ['takt_takt_get_run'],
+      allowedMcpServers: serverNames,
     });
   });
 

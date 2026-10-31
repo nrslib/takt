@@ -220,6 +220,45 @@ describe('OpenCode task-state MCP integration', () => {
     ]);
   });
 
+  it.each(['backlog__main', 'queue_'])(
+    'grants every tool of the assigned server %s and rejects the tools of an unassigned similarly named server',
+    async (serverName) => {
+      projectCwd = mkdtempSync(join(process.env.TAKT_CONFIG_DIR!, 'assistant-opencode-mcp-name-'));
+      mkdirSync(join(projectCwd, '.takt'));
+      writeFileSync(join(projectCwd, '.takt', 'runtime.yaml'), stringify({ version: 1, mcp: {
+        servers: { backlog: { type: 'stdio', command: 'backlog-fixture' },
+          [serverName]: { type: 'stdio', command: 'named-fixture' } },
+        targets: { personas: { assistant: { servers: [serverName] } } },
+      } }));
+      const permissions = [`${serverName}_get_issue`, `${serverName}_add_issue`,
+        'backlog_get_issue', 'takt_takt_enqueue_goal_task', 'takt_takt_get_run'];
+      const { sessionCreate, promptAsync, permissionReply } = createOpenCodeClientMock('assistant-named-mcp', permissions);
+      const plan = createPlan(projectCwd);
+
+      const outcome = await callAIWithRetry('read and register issues', plan.strategy.systemPrompt, plan.strategy.allowedTools,
+        projectCwd, plan.ctx, { outputMode: 'silent', persistSession: false });
+
+      expect(outcome.error).toBeUndefined();
+      expect(outcome.result?.success).toBe(true);
+      expect(Object.keys(getFirstOpenCodeStartConfig().mcp as Record<string, unknown>).sort())
+        .toEqual([serverName, 'takt'].sort());
+      const rules = sessionCreate.mock.calls[0]![0].permission as OpenCodePermissionRule[];
+      expect(getPermissionRule(rules, `${serverName}_*`)).toEqual({ permission: `${serverName}_*`, pattern: '*', action: 'allow' });
+      expect(rules.filter((rule) => rule.permission.startsWith(`${serverName}_`)).map((rule) => rule.permission))
+        .toEqual([`${serverName}_*`]);
+      expect(getPermissionRule(rules, 'backlog_*')).toBeUndefined();
+      expect(getPermissionRule(rules, 'takt_*')).toBeUndefined();
+      expect(rules.filter((rule) => rule.permission.startsWith('takt_')).map((rule) => rule.permission).sort())
+        .toEqual(['takt_takt_get_goal', 'takt_takt_get_run', 'takt_takt_list_goals', 'takt_takt_list_tasks']);
+      const tools = promptAsync.mock.calls[0]![0].tools as Record<string, boolean>;
+      expect(tools[`${serverName}_*`]).toBe(true);
+      expect(tools['backlog_*']).toBeUndefined();
+      expect(permissionReply.mock.calls.map(([request]) => request.reply)).toEqual([
+        'once', 'once', 'reject', 'reject', 'once',
+      ]);
+    },
+  );
+
   it('starts the first manager turn with the actual MCP server name and connection settings', async () => {
     projectCwd = mkdtempSync(join(tmpdir(), 'takt-opencode-manager-mcp-'));
     mkdirSync(join(projectCwd, '.takt'));

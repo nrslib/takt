@@ -188,7 +188,9 @@ function resolveConversationMcpServers(
 }
 
 function resolveConversationMcpPermissions(ctx: SessionContext): {
+  /** Claude-style allowedTools: built-in tools one by one, user servers as `mcp__<name>`. */
   tools: readonly string[];
+  builtinTools: readonly string[];
   userServerNames: readonly string[];
   builtinToolNames: readonly string[];
 } | undefined {
@@ -200,6 +202,7 @@ function resolveConversationMcpPermissions(ctx: SessionContext): {
   const userServerNames = Object.keys(ctx.mcpServers).filter((name) => name !== 'takt');
   return {
     tools: [...builtinTools, ...userServerNames.map((name) => `mcp__${name}`)],
+    builtinTools,
     userServerNames,
     builtinToolNames,
   };
@@ -228,7 +231,10 @@ async function prepareConversationMcp(
       : {}),
   });
   if (permissions !== undefined) {
-    prepared.conversationMcpTools = permissions.tools;
+    prepared.conversationMcpPermissions = {
+      serverNames: permissions.userServerNames,
+      tools: permissions.builtinTools,
+    };
   }
   return { servers, prepared };
 }
@@ -342,16 +348,16 @@ export async function callAIWithRetry(
     const promptForProvider = ctx.provider.supportsNativeImageInput
       ? prompt
       : expandImageAttachmentPlaceholders(prompt, options.imageAttachments);
-    const conversationMcpTools = options.internalAgentIsolation === 'strict-readonly'
+    const conversationAllowedTools = options.internalAgentIsolation === 'strict-readonly'
       ? undefined
       : resolveConversationMcpPermissions(ctx)?.tools;
     const allowedToolsForProvider = ctx.providerType === 'deepseek-harness'
       ? allowedTools
       : providerSupportsAllowedTools(ctx.providerType) === false
         ? undefined
-        : conversationMcpTools === undefined
+        : conversationAllowedTools === undefined
           ? allowedTools
-          : [...new Set([...(allowedTools ?? []), ...conversationMcpTools])];
+          : [...new Set([...(allowedTools ?? []), ...conversationAllowedTools])];
     // Per-call permissionMode is used for operations with a dedicated constraint; a session-level
     // mode is resolved user configuration and must still reach the provider for explicit-constraint errors.
     const permissionModeForProvider = ctx.providerType !== 'deepseek-harness'
