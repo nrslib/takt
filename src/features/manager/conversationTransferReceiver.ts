@@ -62,6 +62,7 @@ const operationResultSchema = z.discriminatedUnion('kind', [
     permissionAppended: z.boolean().optional() }).strict(),
 ]);
 const outputItemSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('user_message'), operationId: z.uuid(), message: z.string() }).strict(),
   z.object({ kind: z.literal('notice'), ...noticeSchema.shape }).strict(),
   ...(['reply', 'progress'] as const).map((kind) => z.object({ kind: z.literal(kind), operationId: z.uuid(), message: z.string() }).strict()),
   ...(['pending', 'running'] as const).map((kind) => z.object({ kind: z.literal(kind), state: stateSchema }).strict()),

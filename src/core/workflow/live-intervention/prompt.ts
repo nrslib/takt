@@ -1,8 +1,10 @@
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import type { Language } from '../../models/types.js';
 import type {
+  LiveInterventionChannel,
   LiveInterventionInstruction,
   LiveInterventionState,
+  PreparedLiveInterventionDelivery,
 } from './types.js';
 
 export function buildLiveInterventionPrompt(
@@ -16,6 +18,22 @@ export function buildLiveInterventionPrompt(
   return loadTemplate('live_intervention_instructions', language ?? 'en', {
     instructions: instructions.map((instruction, index) => `${index + 1}. ${instruction.content}`).join('\n'),
   });
+}
+
+export function resolveLiveInterventionPrompt(
+  channel: LiveInterventionChannel | undefined,
+  delivery: PreparedLiveInterventionDelivery | undefined,
+  language: Language | undefined,
+): string {
+  if (delivery !== undefined) {
+    return delivery.prompt;
+  }
+  if (channel === undefined) {
+    return '';
+  }
+  return buildLiveInterventionPrompt(channel.read().instructions.filter((instruction) => (
+    instruction.state === 'deliveredSameSession' || instruction.state === 'deliveredNextStep'
+  )), language);
 }
 
 export function formatLiveInterventionStateForPrompt(

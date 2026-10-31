@@ -43,12 +43,12 @@ import { SystemStepExecutor } from './SystemStepExecutor.js';
 import { TeamLeaderRunner } from './TeamLeaderRunner.js';
 import { createWorkflowPhaseRelay } from './WorkflowEnginePhaseRelay.js';
 import { WorkflowCallRunner } from './WorkflowCallRunner.js';
-import { getWorkflowReference } from '../workflow-reference.js';
+import { getWorkflowReference, workflowEntriesMatch } from '../workflow-reference.js';
 import type { WorkflowCallChildEngine } from '../types.js';
 import type { StructuredOutputNormalizerRegistry } from './structured-output-normalizer.js';
 import { runQualityGates } from '../quality-gates/qualityGateRunner.js';
 import { createTaskReviewScopeResolver } from '../review-scope.js';
-import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
+import { matchesResumeStackPrefix, requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
 import {
   createReviewReportDiscoveryContext,
   resolveWorkflowStepReportNamesWithDiagnostics,
@@ -156,7 +156,9 @@ export function createSharedRuntime(
     dynamicFacetSelectionStore: new DynamicFacetSelectionStore(new Map()),
     workflowCallInvocationEvidence: restoreWorkflowCallInvocationEvidence(resumePoint),
     workflowStepParticipationIndex: restoreWorkflowStepParticipationIndex(resumePoint),
-    reportGenerationIndex: new ReportGenerationIndex(resumePoint?.missing_report_generations),
+    reportGenerationIndex: new ReportGenerationIndex(
+      resumePoint?.missing_report_generations, resumePoint?.report_input_recoveries,
+    ),
   };
 }
 
@@ -195,6 +197,27 @@ export function applyRuntimeEnvironment(
     gradleUserHome: prepared.injectedEnv.GRADLE_USER_HOME,
     npmCache: prepared.injectedEnv.npm_config_cache,
   });
+}
+
+export function isResumedReportInputStep(
+  source: WorkflowResumePoint | undefined,
+  currentStack: readonly WorkflowResumePointEntry[] | undefined,
+  stepName: string,
+  occurrence: number,
+): boolean {
+  const sourceFrame = source?.stack.at(-1);
+  const currentFrame = currentStack?.at(-1);
+  return source !== undefined
+    && currentStack !== undefined
+    && source.stack.length === currentStack.length
+    && sourceFrame?.kind === 'agent'
+    && currentFrame?.kind === 'agent'
+    && matchesResumeStackPrefix(source.stack, currentStack.slice(0, -1))
+    && workflowEntriesMatch(sourceFrame, currentFrame)
+    && sourceFrame.step === stepName
+    && currentFrame.step === stepName
+    && sourceFrame.occurrence === occurrence
+    && currentFrame.occurrence === occurrence;
 }
 
 export function createWorkflowEngineServices(params: WorkflowEngineSetupParams): WorkflowEngineServices {
@@ -342,6 +365,12 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getReportDir: params.getReportDir,
     getRunPaths: params.getRunPaths,
     reportGenerationIndex: params.sharedRuntime.reportGenerationIndex,
+    isResumedReportInputStep: (step, occurrence) => isResumedReportInputStep(
+      params.options.resumePoint,
+      params.getCurrentWorkflowStack(),
+      step.name,
+      occurrence,
+    ),
     getLanguage: () => params.options.language,
     getInteractive: () => params.options.interactive === true,
     getWorkflowSteps: () => params.config.steps,

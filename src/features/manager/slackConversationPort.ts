@@ -223,7 +223,8 @@ export function createSlackConversationPort(options: {
       const binding = findInquiryBinding(endpoint.channelId, endpoint.parentTs);
       if (binding === undefined) {
         const makeGoal = text.trim() === '/make-goal';
-        await submitCommand(endpoint, { kind: 'message', text: makeGoal ? getLabel('manager.goSummaryRequest', options.language) : text }, makeGoal);
+        await submitCommand(endpoint, { kind: 'message', text: makeGoal ? getLabel('manager.goSummaryRequest', options.language) : text,
+          ...(makeGoal ? { display: false } : {}) }, makeGoal);
         return;
       }
       const current = await loadInquiry(binding.target, binding.questionId);

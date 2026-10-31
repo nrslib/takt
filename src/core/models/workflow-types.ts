@@ -203,6 +203,7 @@ export interface WorkflowResumePoint {
   workflow_call_invocations: Record<string, WorkflowCallInvocationRecord>;
   workflow_step_participations: Record<string, WorkflowStepParticipationRecord>;
   missing_report_generations?: Record<string, string[]>;
+  report_input_recoveries?: Record<string, WorkflowResumePointEntry[]>;
 }
 
 export interface WorkflowStepParticipationRecord {

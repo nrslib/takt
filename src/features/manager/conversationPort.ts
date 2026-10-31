@@ -9,7 +9,7 @@ import type { ManagerDisplayEvent } from './savedEvents.js';
 export type ConversationDisplayAssignment = ManagerAssignment | { readonly kind: 'daemon'; readonly repositoryDirectories: readonly string[] };
 
 export type ConversationCommand =
-  | { kind: 'message'; text: string }
+  | { kind: 'message'; text: string; display?: boolean }
   | { kind: 'approve_summary'; revision: number; requirePending?: boolean }
   | { kind: 'dismiss_summary'; revision: number }
   | { kind: 'answer_question'; target: QuestionTarget; questionId: string; answer: GoalAnswerInput;
@@ -52,6 +52,7 @@ export type OperationResult =
   | { kind: 'error'; code: string; message: string; answerSaved?: boolean; permissionAppended?: boolean };
 export type PortOutput =
   | { kind: 'snapshot'; read: SnapshotRead }
+  | { kind: 'user_message'; operationId: string; message: string }
   | { kind: 'reply' | 'progress'; operationId: string; message: string }
   | { kind: 'pending' | 'running'; state: ConversationState }
   | { kind: 'notice'; id: string; message: string }

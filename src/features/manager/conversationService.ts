@@ -651,6 +651,9 @@ export function createConversationService(input: {
         }
         const owned = conversation;
         const accepted = operation;
+        if (command.kind === 'message' && command.display !== false) {
+          void publish(conversation, { kind: 'user_message', operationId: operation.id, message: command.text }, version(conversation, operation.id));
+        }
         void publish(conversation, { kind: 'running', state: capture(conversation) }, version(conversation, operation.id));
         operation.completion = Promise.resolve().then(() => execute(owned, accepted, command, assignment, priorPending, attachment.agentOverrides));
         return { kind: 'accepted', operationId: operation.id };
