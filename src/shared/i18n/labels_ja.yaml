@@ -433,6 +433,9 @@ director:
   experimentalNotice: "director は実験的機能です。動作や保存形式は変更されます。"
   costNotice: "director は AI を動かすため、provider API の費用がかかります。"
   placeholder: "manager の状況や指示を相談してください"
+  managerReply: "manager {managerId} の返事（操作ID: {operationId}）: {message}"
+  managerError: "manager {managerId} の伝言処理が失敗しました（操作ID: {operationId}）: {message}"
+  managerInterrupted: "manager {managerId} の伝言処理が中断されました（操作ID: {operationId}）: {message}"
 manager:
   goalPr:
     objective: "目的"

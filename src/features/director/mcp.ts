@@ -58,7 +58,7 @@ export function createDirectorMcpServer(configDirectory: string, notifications: 
     return pagedResult('inquiries', result.inquiries.slice(offset, offset + (value.limit ?? 50)), result.inquiries.length, offset,
       result.errors.length > 0, { errors: result.errors.map(({ repositoryDirectory, goalId }) => ({ repositoryDirectory, goalId })) });
   }));
-  server.registerTool('takt_tell_manager', { description: 'Send a message as director through daemon IPC. Busy messages are never queued or resent.',
+  server.registerTool('takt_tell_manager', { description: 'Save a message for a manager through daemon IPC and return accepted with operationId and managerId immediately. Saved messages are processed in order. Replies, failures, and interruptions appear later as director notifications with the same operationId. Acceptance does not mean a requested merge succeeded. Never automatically resend an accepted message.',
     inputSchema: z.object({ managerId, text: z.string().min(1) }).strict() }, guarded(async (value: { managerId: string; text: string }) =>
     jsonResult(await tellDirectorManager(configDirectory, value.managerId, value.text, signal))));
   server.registerTool('takt_notify_human', { description: 'Save a director notification and show it in the director conversation. New notifications from this turn are grouped into one post when director Slack is configured.',

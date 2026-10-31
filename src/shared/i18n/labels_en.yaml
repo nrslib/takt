@@ -433,6 +433,9 @@ director:
   experimentalNotice: "director is experimental. Behavior, settings, and saved data formats may change."
   costNotice: "director runs AI turns, which incur provider API costs."
   placeholder: "Discuss manager status or instructions"
+  managerReply: "Reply from manager {managerId} (operation ID: {operationId}): {message}"
+  managerError: "Manager {managerId} message failed (operation ID: {operationId}): {message}"
+  managerInterrupted: "Manager {managerId} message was interrupted (operation ID: {operationId}): {message}"
 manager:
   goalPr:
     objective: "Objective"
