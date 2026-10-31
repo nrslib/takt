@@ -400,12 +400,28 @@ process.stdin.resume(); process.stdin.on('end', () => {
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
-test('grader tool use cannot pass and target Phase 2 tool use fails boundary', () => {
+test('grader tool use cannot pass and target Phase 2 requires complete tool receipts', () => {
   assertToolFreeGrader(fresh);
   assert.throws(() => assertToolFreeGrader({ ...fresh, toolCount: 1 }), ExecutionAuditError);
   assert.throws(() => assertToolFreeGrader({ ...fresh, startedFresh: false }), ExecutionAuditError);
   assert.equal(scoreExecutionBoundaryV3(cases.cases[0], { ...fresh, toolCount: 1 }).pass, false);
 });
+
+test('v3 Phase 2 permits reads and rejects test/build/write attempts through the shared audit', () => withWorkspace(workspace => {
+  for (const [command, pass] of [
+    ['cat src/session-label.js', true], ['rg -n trim src/session-label.js', true],
+    ['npm test', false], ['npm run build', false], ['node tests/session-label.test.js', false],
+    ['node src/session-label.js', false], ['touch changed', false], ['cat package.json > copy', false],
+  ]) {
+    const trace = { startedFresh: true, toolCount: 1, toolTypes: ['command_execution'],
+      commands: [receipt(command, '', 1)] };
+    assert.equal(scoreExecutionBoundaryV3(cases.cases[0], trace, undefined, workspace).pass, pass, command);
+  }
+  for (const type of ['file_change', 'mcp_tool_call', 'web_search']) {
+    const trace = { startedFresh: true, toolCount: 1, toolTypes: [type], commands: [] };
+    assert.equal(scoreExecutionBoundaryV3(cases.cases[0], trace, undefined, workspace).pass, false, type);
+  }
+}));
 
 test('missing or reused Phase 1 and Phase 2 sessions are execution audit errors', () => {
   for (const startedFresh of [false, undefined, 'true']) {
@@ -416,12 +432,13 @@ test('missing or reused Phase 1 and Phase 2 sessions are execution audit errors'
   assert.throws(() => scoreExecutionBoundaryV3(cases.cases[2], fresh), ExecutionAuditError);
 });
 
-test('actual v3 wrapper accepts TODO progress but rejects execution items and SDK errors', async () => {
+test('actual v3 wrapper permits reads and TODO progress but rejects prohibited tools and SDK errors', async () => {
   const directory = mkdtempSync('/private/tmp/handoff-items-');
   const artifactPrefix = join(directory, 'model');
   const mocked = items => async () => {
     writeFileSync(artifactPrefix + '.private-turn.json', JSON.stringify({ items }));
-    return { output: 'Report', trace: { ...fresh, toolCount: 999 } };
+    return { output: 'Report', trace: { ...fresh, toolCount: 999,
+      commands: items.filter(item => item.type === 'command_execution').map(item => ({ command: item.command })) } };
   };
   const progress = [{ type: 'agent_message', text: 'Report' }, { type: 'reasoning' }, { type: 'todo_list', items: [{ text: 'Prepare report', completed: true }] }];
   try {
@@ -429,8 +446,11 @@ test('actual v3 wrapper accepts TODO progress but rejects execution items and SD
     assertToolFreeGrader(result.trace);
     assert.equal(scoreExecutionBoundaryV3(cases.cases[0], result.trace).pass, true);
     assert.deepEqual(JSON.parse(readFileSync(artifactPrefix + '.trace.json')).toolTypes, []);
+    const read = await runV3Model({ artifactPrefix }, mocked([...progress, { type: 'command_execution', command: 'cat package.json' }]));
+    assert.equal(scoreExecutionBoundaryV3(cases.cases[0], read.trace, undefined, fixture).pass, true);
+    assert.throws(() => assertToolFreeGrader(read.trace), ExecutionAuditError);
     for (const type of ['command_execution', 'file_change', 'mcp_tool_call', 'web_search']) {
-      const executed = await runV3Model({ artifactPrefix }, mocked([...progress, { type }]));
+      const executed = await runV3Model({ artifactPrefix }, mocked([...progress, { type, command: 'npm test' }]));
       assert.equal(scoreExecutionBoundaryV3(cases.cases[0], executed.trace).pass, false);
       assert.throws(() => assertToolFreeGrader(executed.trace), ExecutionAuditError);
       assert.deepEqual(executed.trace.toolTypes, [type]);
@@ -630,7 +650,7 @@ test('actual AgentRunner wrapper and live dispatch are captured without grader r
       assert.equal(repeated.phase1Prompt, captured.phase1Prompt);
       assert.equal(repeated.phase2Prompt, captured.phase2Prompt);
     }
-    assert.deepEqual(captured.phase2Options, { allowedTools: [], sessionIdPresent: false });
+    assert.deepEqual(captured.phase2Options, { executionPhase: 2, permissionMode: 'readonly', sessionIdPresent: false });
     for (const [index, prompt] of [captured.phase1Prompt, captured.phase2Prompt].entries()) {
       const parts = captured.phaseParts[index];
       assert.equal(prompt, parts.systemPrompt + '\n\n' + parts.userInstruction);

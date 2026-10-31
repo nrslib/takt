@@ -3,6 +3,8 @@ import { createRunEventManager } from '../features/manager/runEventManager.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import type { Goal } from '../infra/goals/schema.js';
 import type { SavedManagerEvent } from '../infra/goals/events.js';
+import { ManagerTurnScheduler } from '../features/manager/managerTurnScheduler.js';
+import { conversationId } from '../infra/conversations/identity.js';
 
 const doubles = vi.hoisted(() => ({
   read: vi.fn(), remove: vi.fn(), get: vi.fn(), update: vi.fn(),
@@ -17,6 +19,9 @@ vi.mock('../features/manager/managerMcp.js', () => ({ connectManagerMcp: doubles
 vi.mock('../features/manager/turnResponse.js', () => ({ getManagerOutputSchema: () => ({ type: 'object' }) }));
 vi.mock('../features/manager/turnExecutor.js', () => ({ createManagerTurnExecutor: doubles.createExecutor }));
 vi.mock('../features/manager/turnFailureNotification.js', () => ({ notifyManagerTurnFailure: doubles.notify }));
+vi.mock('../features/manager/assignment.js', () => ({ resolveCurrentManagerAssignment: async (identity: { kind: 'repository'; repositoryDirectory: string }) => ({
+  ...identity, repositoryDirectories: [identity.repositoryDirectory],
+}) }));
 vi.mock('../infra/config/managerConfig.js', () => ({ resolveManagerConfig: () => ({ patrolInterval: 1800 }) }));
 vi.mock('../shared/ui/index.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../shared/ui/index.js')>(), error: doubles.logError,
@@ -68,6 +73,43 @@ function holdTurn() {
   }));
   return { get signal() { return signal; }, output: () => output?.(), finish: () => finish() };
 }
+
+it('yields to a director message between failed-event retries before continuing the due patrol', async () => {
+  const scheduler = new ManagerTurnScheduler();
+  const id = conversationId({ kind: 'repository', repositoryDirectory: '/project' });
+  const queue: string[] = [];
+  const order: string[] = [];
+  let releaseDirector!: () => void;
+  scheduler.registerDirector(id, { peek: () => queue[0], start: () => {
+    const next = queue[0];
+    if (next !== undefined && scheduler.tryAcquire(id, next)) {
+      queue.shift(); order.push(next);
+      releaseDirector = () => scheduler.release(id, next);
+    }
+  } });
+  const manager = createRunEventManager('/project', scheduler);
+  inbox = [saved('failed-a'), saved('failed-b')];
+  doubles.turn.mockResolvedValue({ kind: 'error', message: 'first attempt failed' });
+  await manager.processPending(new AbortController().signal, 10);
+  expect(inbox).toHaveLength(2);
+  inbox.push(patrol());
+  doubles.turn.mockImplementation(async ({ text }: { text: string }) => {
+    const event = (JSON.parse(text) as { event: { kind: string; taskName?: string } }).event;
+    const label = event.taskName ?? event.kind;
+    order.push(label);
+    if (label === 'failed-a') queue.push('director');
+    return { kind: 'reply', message: `handled:${label}` };
+  });
+  const processing = manager.processPending(new AbortController().signal, 10);
+  try {
+    await vi.waitFor(() => expect(order).toEqual(['failed-a', 'director']));
+    expect(inbox.map(({ event }) => event.kind)).toEqual(['completion', 'patrol']);
+  } finally { releaseDirector?.(); }
+  expect(await processing).toBe(true);
+  expect(order).toEqual(['failed-a', 'director', 'failed-b', 'patrol']);
+  expect(inbox).toEqual([]);
+  await manager.close();
+});
 
 it('keeps a turn alive for fifty minutes of repeated provider output and records its completion once', async () => {
   vi.useFakeTimers();

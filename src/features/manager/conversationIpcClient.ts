@@ -8,7 +8,7 @@ import type { ConversationAssignment } from '../../infra/conversations/schema.js
 import { ConversationFrameDecoder, encodeConversationFrame, MAX_CONVERSATION_FRAME_BYTES } from '../daemon/conversationFrames.js';
 import { ensureDaemon } from '../daemon/lifecycle.js';
 import { createTuiConversationPort } from './tuiConversationPort.js';
-import type { ConversationCommand, ConversationOpen, ConversationState, PortOutput, Submission } from './conversationPort.js';
+import type { ConversationCommand, ConversationOpen, ConversationPort, ConversationState, PortOutput, Submission } from './conversationPort.js';
 import { snapshotItemKey, orderSnapshotItems, type SnapshotDisplayItem } from './snapshotChanges.js';
 import { ConversationReadMetadataSchema, ConversationTransferReceiver } from './conversationTransferReceiver.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
@@ -51,7 +51,8 @@ export class ConversationIpcClient {
   private view: ConversationClientSnapshot = { connection: 'connecting', readStatus: 'reading', state: null, items: [], error: null };
   private configDirectory = resolveDaemonConfigDirectory();
 
-  constructor(private readonly assignment: ConversationAssignment, private readonly agentOverrides?: AssistantCliOverrides) {}
+  constructor(private readonly assignment: ConversationAssignment, private readonly agentOverrides?: AssistantCliOverrides,
+    private readonly options?: { port: ConversationPort<ConversationAssignment>; reconnect: boolean }) {}
 
   getSnapshot = (): ConversationClientSnapshot => this.view;
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
@@ -119,15 +120,15 @@ export class ConversationIpcClient {
 
   private async open(): Promise<void> {
     this.update({ connection: 'connecting', readStatus: 'reading' });
+    const port = this.options?.port ?? createTuiConversationPort(this.configDirectory, { deliver: async () => ({ kind: 'unavailable', reason: 'IPC delivery only' }) });
+    const resolved = await port.resolve(this.assignment);
+    if (this.closed) return;
     await ensureDaemon();
     if (this.closed) return;
     const owner = readDaemonOwner(this.configDirectory);
     const state = readDaemonIpcState(this.configDirectory);
     if (owner === undefined || state === undefined || !isDaemonOwnerRunning(owner) || !ipcStateMatchesOwner(state, owner)
       || state.endpoint !== conversationIpcEndpoint(this.configDirectory, process.platform, process.getuid?.() ?? 0)) throw new Error('Daemon IPC identity mismatch');
-    const port = createTuiConversationPort(this.configDirectory, { deliver: async () => ({ kind: 'unavailable', reason: 'IPC delivery only' }) });
-    const resolved = await port.resolve(this.assignment);
-    if (this.closed) return;
     if (this.resolved?.conversationId !== resolved.conversationId) {
       this.committedItems.clear();
       this.items.clear();
@@ -257,7 +258,7 @@ export class ConversationIpcClient {
     this.read = undefined;
     this.receiver?.disconnect();
     this.update({ connection: 'disconnected', readStatus: 'incomplete', error: error.message });
-    if (!this.closed && this.reconnectTimer === undefined) {
+    if (!this.closed && this.options?.reconnect !== false && this.reconnectTimer === undefined) {
       this.reconnectTimer = setTimeout(() => {
         this.reconnectTimer = undefined;
         void this.connect().catch((next: Error) => this.disconnect(next));

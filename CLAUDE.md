@@ -65,7 +65,7 @@ agents/        agent-usecases (executeAgent, generateReport, judgeStatus, ...)
 
 ### Three-phase step model
 
-Each normal step runs up to three phases on the same provider session: Phase 1 main work (step's `allowed_tools`; `Write` excluded when a report is defined), Phase 2 report output (`Write` only, when `output_contracts` defined), Phase 3 status judgment (no tools, when tag-based rules exist). Implemented in `phase-runner.ts` / `report-phase-runner.ts` / `status-judgment-phase.ts`.
+Each normal step runs up to three phases on the same provider session: Phase 1 main work (step's `allowed_tools`; `Write` excluded when a report is defined), Phase 2 report output (readonly tools, when `output_contracts` defined; TAKT saves the response body), Phase 3 status judgment (no tools, when tag-based rules exist). Implemented in `phase-runner.ts` / `report-phase-runner.ts` / `status-judgment-phase.ts`.
 
 ### Rule evaluation (5-stage fallback)
 

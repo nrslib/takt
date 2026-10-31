@@ -69,8 +69,12 @@ export function assertRequiredSnapshots(sourceDirectory, requiredSnapshots = [])
   }
 }
 
+export function resolveSourceDirectory(config) {
+  return resolve(evalDirectory, config.working_dir);
+}
+
 export function prepareWorkingDirectory(config) {
-  const sourceDirectory = resolve(evalDirectory, config.working_dir);
+  const sourceDirectory = resolveSourceDirectory(config);
   assertRequiredSnapshots(sourceDirectory, config.required_snapshots);
   if (!config.isolate_working_dir) {
     return { sourceDirectory, cwd: sourceDirectory, cleanup: () => undefined };
@@ -191,13 +195,13 @@ export async function runProcess(command, args, { cwd, input, timeoutMs, abortSi
     }
     return output;
   } catch (error) {
-    if (inputError !== undefined) throw inputError;
-    if (aborted) throw new Error(`${command} was aborted`);
-    if (timedOut) {
-      const errorOutput = Buffer.concat(stderr).toString('utf8');
-      throw new Error(`${command} timed out after ${timeoutMs}ms: ${errorOutput}`);
-    }
-    throw error;
+    let failure = error;
+    if (inputError !== undefined) failure = inputError;
+    else if (aborted) failure = new Error(`${command} was aborted`);
+    else if (timedOut) failure = new Error(`${command} timed out after ${timeoutMs}ms: ${Buffer.concat(stderr).toString('utf8')}`);
+    failure.stdout = Buffer.concat(stdout).toString('utf8');
+    failure.stderr = Buffer.concat(stderr).toString('utf8');
+    throw failure;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
     abortSignal?.removeEventListener('abort', abort);
@@ -232,8 +236,38 @@ function readCodexSessionId(output) {
   throw new Error('Codex did not report a session ID');
 }
 
-export function createCliReviewSession(config, { cwd, abortSignal }) {
+function cliEvents(output, onEvent) {
+  const events = [];
+  for (const line of output.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let event;
+    try { event = JSON.parse(line); } catch { continue; }
+    events.push(event);
+    onEvent?.(event);
+  }
+  return events;
+}
+
+export function createCliReviewSession(config, {
+  cwd, abortSignal, onEvent, onInvocation, onOutput,
+  sandboxMode = 'read-only', allowedTools = ['Read', 'Glob', 'Grep'], processRunner = runProcess,
+}) {
   const timeoutMs = resolveTimeoutMs(config);
+  if (!['read-only', 'workspace-write'].includes(sandboxMode)) throw new Error(`Unsupported eval sandbox: ${sandboxMode}`);
+  const run = async (command, args, prompt) => {
+    onInvocation?.({ command, args, cwd });
+    let output;
+    try {
+      output = await processRunner(command, args, { cwd, input: prompt, timeoutMs, abortSignal });
+    } catch (error) {
+      output = error.stdout ?? '';
+      onOutput?.({ stdout: output, stderr: error.stderr ?? '' });
+      cliEvents(output, onEvent);
+      throw error;
+    }
+    onOutput?.({ stdout: output, stderr: '' });
+    return output;
+  };
   if (config.cli === 'claude') {
     const sessionId = randomUUID();
     let started = false;
@@ -242,18 +276,21 @@ export function createCliReviewSession(config, { cwd, abortSignal }) {
         const args = [
           '-p',
           '--model', config.model,
-          '--allowed-tools', 'Read,Glob,Grep',
+          ...(onEvent === undefined ? [] : ['--output-format', 'stream-json', '--verbose']),
+          '--allowed-tools', allowedTools.join(','),
           '--permission-mode', 'dontAsk',
           '--setting-sources=project',
           ...(started ? ['--resume', sessionId] : ['--session-id', sessionId]),
         ];
-        const output = await runProcess(
-          'claude',
-          args,
-          { cwd, input: prompt, timeoutMs, abortSignal },
-        );
+        const output = await run('claude', args, prompt);
         started = true;
-        return output;
+        if (onEvent === undefined) return output;
+        const events = cliEvents(output, onEvent);
+        const result = events.findLast((event) => event.type === 'result');
+        if (result === undefined || typeof result.result !== 'string' || result.is_error) {
+          throw new Error('Claude did not return a successful stream-json result');
+        }
+        return result.result;
       },
     };
   }
@@ -271,7 +308,7 @@ export function createCliReviewSession(config, { cwd, abortSignal }) {
             ? [
               'exec',
               '-m', config.model,
-              '-s', 'read-only',
+              '-s', sandboxMode,
               '--skip-git-repo-check',
               '-c', `model_reasoning_effort=${config.reasoning_effort}`,
               ...skillOverrides,
@@ -281,6 +318,8 @@ export function createCliReviewSession(config, { cwd, abortSignal }) {
             ]
             : [
               'exec', 'resume', sessionId,
+              '--json',
+              '-c', `sandbox_mode=${JSON.stringify(sandboxMode)}`,
               '-m', config.model,
               '--skip-git-repo-check',
               '-c', `model_reasoning_effort=${config.reasoning_effort}`,
@@ -288,11 +327,8 @@ export function createCliReviewSession(config, { cwd, abortSignal }) {
               '-o', outputPath,
               '-',
             ];
-          const processOutput = await runProcess(
-            'codex',
-            args,
-            { cwd, input: prompt, timeoutMs, abortSignal },
-          );
+          const processOutput = await run('codex', args, prompt);
+          cliEvents(processOutput, onEvent);
           if (firstRun) sessionId = readCodexSessionId(processOutput);
           return readFileSync(outputPath, 'utf8');
         } finally {

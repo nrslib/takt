@@ -50,7 +50,7 @@ export function fakePhaseCli(invocation, { cwd }) {
       : { step: rule, reason: '今回の入力' };
     return Promise.resolve(codexEvents(JSON.stringify(answer), [], session));
   }
-  if (/レポート内容のみを回答/.test(invocation.input)) {
+  if (/^今は .+ ステップのレポートフェーズ（Phase 2）です/m.test(invocation.input)) {
     if (invocation.input.includes('今回の作業フェーズの回答を取得できませんでした。')) {
       return Promise.resolve(codexEvents('今回の作業結果がないためレポートを作成できません。', [], session));
     }

@@ -708,6 +708,8 @@ output_contracts:
       format: decisions
 ```
 
+Phase 2 沿用 provider 现有的 readonly 设置，只读取报告所需的证据。本次 Phase 1 执行记录以脱敏后的 JSONL 保存，并以路径和字节数传入。长字符串会拆成多行，便于搜索后只读取附近内容。Phase 2 不修改文件，不运行测试或构建，不开始新的调查，也不新增指摘、判定或计划；报告需区分 Phase 1 实际完成的确认与 Phase 2 读取的内容。TAKT 会把最终回答保存到报告文件。Phase 3 仍不使用工具。
+
 每项必须有 `name` 和 `format`。可选字段：`use_judge`（默认 `true`，决定 report 是否作为 Phase 3 status judgment 证据）和 `order`（替换默认 report-writing instruction 的 report-format facet）。需要 judgment 的规则至少保留一个 `use_judge` report。
 
 ## Runtime Provider Promotion
@@ -740,7 +742,7 @@ steps:
 | `policy` | - | policy key 或数组 |
 | `knowledge` | - | knowledge key 或数组 |
 | `instruction` | - | instruction key、内联文本，或由两者组成的非空有序数组；facet 名称按项目 → 用户 → builtin 解析 |
-| `edit` | - | 是否可以编辑项目文件 |
+| `edit` | - | 是否可以编辑项目文件。Codex 对显式设置 `false` 的 step，在 Phase 1 中使用 `read-only` sandbox |
 | `companion` | - | 在 normal agent step 或 Team Leader step 上运行 companion reviewer |
 | `completion_retry` | - | opt-in 的 reviewer 完整性检查与有界重试 |
 | `pass_previous_response` | `true` | 将上一个 step 输出传给 `{previous_response}` |
@@ -752,6 +754,8 @@ steps:
 | `quality_gates` | - | agent step 完成 gate；字符串是 AI 指令，`type: command` 是机器 gate |
 
 `completion_retry` 是只接受对象的显式 opt-in，要求 `retry_instruction`，可选 `min_retry` 与 `max_retry`。`max_retry` 未设置时内部上限为 4；`review_completion` 仍是已弃用别名，不能与 `completion_retry` 同时使用。Provider 和 model 不是 workflow 字段，必须由 runtime profile/routing 提供；workflow 中写入已移除字段会在加载边界失败。
+
+Codex 对显式设置 `edit: false` 的 step，在 Phase 1 中使用 `read-only` sandbox，无论解析出的 permission mode 是什么，包括 `permission_control: codex`。team leader 的 part（通过 `part_edit` 或继承的 `edit`）、parallel 子 step 和 `workflow_call` 子 workflow 中的各 step，分别使用自身的实际 `edit` 设置。通用权限解析、其他 provider、省略 `edit` 和 `edit: true` 的行为保持不变。
 
 ## Workflow 级配置
 

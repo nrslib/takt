@@ -221,7 +221,7 @@ describe('tell command and live intervention file store', () => {
       }
 
       if (source === 'content') {
-        const response = listTaktTasks({ cwd: projectCwd });
+        const response = await listTaktTasks({ cwd: projectCwd });
         expect(response.isError).not.toBe(true);
         const text = response.content.find((block) => block.type === 'text');
         expect(text?.type).toBe('text');

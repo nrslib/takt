@@ -188,7 +188,7 @@ export class ManagerServiceClient {
   }
 }
 
-export async function submitAndWait(client: ManagerServiceClient, command: ConversationCommand): Promise<OperationResult | Submission> {
+export async function submitAndWait(client: ManagerServiceClient, command: ConversationCommand, timeoutMs = 5000): Promise<OperationResult | Submission> {
   await client.ready;
   let operationId: string | undefined;
   let resolve!: (result: OperationResult) => void;
@@ -200,8 +200,9 @@ export async function submitAndWait(client: ManagerServiceClient, command: Conve
   try {
     const result = await client.submit(command, (id) => { operationId = id; });
     if (result.kind !== 'accepted') return result;
+    const timeoutError = new Error(`Conversation operation did not finish (${command.kind}, ${result.operationId})`);
     return await Promise.race([completion, new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => reject(new Error('Conversation operation did not finish')), 5000);
+      timer = setTimeout(() => reject(timeoutError), timeoutMs);
     })]);
   } finally { clearTimeout(timer); unsubscribe(); }
 }

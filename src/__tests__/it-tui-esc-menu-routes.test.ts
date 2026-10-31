@@ -7,6 +7,7 @@ import { buildTaskRetryStartOptions } from '../features/tasks/list/taskRetryStar
 import { filterSlashCommands } from '../features/interactive/slashCommandRegistry.js';
 import { buildInteractiveSystemPrompt } from '../features/interactive/conversationPlan.js';
 import { getLabel } from '../shared/i18n/index.js';
+import { recordTurn } from '../features/interactive/interactiveSessionRecords.js';
 
 let fixture: ReturnType<typeof createEscMenuFixture>;
 let terminal: EscMenuTerminal;
@@ -140,6 +141,10 @@ describe('TUI confirmation to conversation routes through the real runner', () =
       await vi.waitFor(() => expect(first.submissions).toHaveLength(1));
       expect(capture.callCount).toBe(1);
       expect(capture.sessionIds[0]).toBe('original-session');
+
+      if (route === 'resume') {
+        recordTurn({ cwd: fixture.cwd, provider: 'mock', sessionId: 'selected-session', input: 'Previous conversation', response: '' });
+      }
 
       mark = terminal.mark();
       await terminal.send(command + '\r');

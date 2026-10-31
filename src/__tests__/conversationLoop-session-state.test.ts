@@ -20,6 +20,17 @@ vi.mock('../features/interactive/lineEditor.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../features/interactive/lineEditor.js')>()),
   readPipedLine: doubles.line,
 }));
+vi.mock('../features/interactive/interactiveSessionRecords.js', () => ({
+  InteractiveSessionRecords: class {
+    private revision = 0;
+    clean = vi.fn(async () => {});
+    recordInput = vi.fn(() => ++this.revision);
+    recordResponse = vi.fn();
+    list = vi.fn(() => []);
+  },
+  recordTurn: vi.fn(),
+  listRecords: vi.fn(() => []),
+}));
 vi.mock('../features/interactive/aiCaller.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../features/interactive/aiCaller.js')>()),
   callAIWithRetry: doubles.ai,
@@ -139,6 +150,22 @@ describe('readline operation feedback', () => {
     expect(doubles.ai.mock.calls[1]?.[0]).toContain('どうなった？');
     expect(summary.mock.calls[0]?.[0].history.map((message) => message.content)).toContain(notice);
     expect(doubles.ai).toHaveBeenCalledTimes(3);
+  });
+
+  it('should show the MCP-unavailable notice at the terminal when the conversation starts and still answer', async () => {
+    const notice = 'Task-state lookup is unavailable for provider pi; the conversation will continue without it.';
+
+    await run(['Prepare a login fix', '/cancel'], { mcpUnavailableNotice: notice });
+
+    expect(doubles.info).toHaveBeenCalledWith(notice);
+    expect(doubles.ai).toHaveBeenCalledTimes(1);
+  });
+
+  it('should not show an MCP-unavailable notice at the terminal without a notice from the strategy', async () => {
+    await run(['Prepare a login fix', '/cancel']);
+
+    expect(doubles.info.mock.calls.map(([message]) => String(message)).filter((message) => message.includes('MCP'))).toEqual([]);
+    expect(doubles.ai).toHaveBeenCalledTimes(1);
   });
 
   it.each(['tell', 'retry', 'requeue'])('should accept the original proposal after /%s reports an operation', async (command) => {

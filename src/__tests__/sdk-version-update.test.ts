@@ -53,7 +53,7 @@ describe('pi SDK dependency versions', () => {
     expect(
       managedDeepSeekLockfile.packages['node_modules/@deepseek-ai/dsh-llm-pi-ai']
         ?.dependencies?.['@earendil-works/pi-ai'],
-    ).toBe('^1.0.2');
+    ).toBe('^1.1.0');
     expect(
       managedDeepSeekLockfile.packages['node_modules/@earendil-works/pi-ai']?.version,
     ).toBe(PI_SDK_VERSION);

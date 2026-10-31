@@ -95,6 +95,7 @@ interactive:
   continueNoSession: "No previous assistant session found. Starting a new session."
   mcpUnavailable: "Task-state lookup is unavailable for provider {provider}; the conversation will continue without it. Reason: {error}"
   resumeSessionLoaded: "Session loaded. Subsequent AI calls will use this session."
+  resumeSessionFailed: "Session resume failed. Continuing with a new conversation."
   sessionSelector:
     prompt: "Resume from a recent session?"
     newSession: "New session"
@@ -429,12 +430,30 @@ tui:
     retryDetails: "Task: {task}\nSummary: {summary}\nWorkflow: {workflow}\nStart position: {start}"
     exceededStart: "Saved stopping position: {start} (iteration {iteration})"
 
+director:
+  slackNotifications: "Director updates: completed work and decisions for the human"
+  patrolFailed: "Director patrol failed"
+  projectUnreadable: "Director could not read a project"
+  description: "Open the experimental director conversation TUI"
+  experimentalNotice: "director is experimental. Behavior, settings, and saved data formats may change."
+  costNotice: "director runs AI turns, which incur provider API costs."
+  placeholder: "Discuss manager status or instructions"
+  managerReply: "Reply from manager {managerId} (operation ID: {operationId}): {message}"
+  managerError: "Manager {managerId} message failed (operation ID: {operationId}): {message}"
+  managerInterrupted: "Manager {managerId} message was interrupted (operation ID: {operationId}): {message}"
 manager:
+  goalPr:
+    objective: "Objective"
+    changes: "Changes"
+    verification: "Verification"
+    humanChecks: "Human verification steps"
+    truncated: "The change list is truncated. Also review the PR diff."
   conversation:
     reading: "Reading conversation data. Summary approval is unavailable until it completes."
     disconnected: "Reconnecting to the daemon."
     incomplete: "The read is incomplete. Summary approval is unavailable until refresh completes."
     interrupted: "The previous operation was interrupted. You can send a new message."
+    director_interrupted: "The director message (operation ID: {operationId}) was interrupted. It will not be retried automatically."
     permission_appended: "The permission was appended. Check whether the answer was saved."
     assignment_changed: 'The assignment has changed. Reopen the conversation for the current assignment.'
     busy: "An operation is running. Submit again after it finishes."

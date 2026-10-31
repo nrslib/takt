@@ -11,7 +11,8 @@ import {
   OPEN_CODE_MANAGED_TOOL_IDS,
   resolveOpenCodePermissionReply,
 } from '../infra/opencode/types.js';
-import { toOpenCodeMcpToolName } from '../infra/opencode/allowedTools.js';
+import { toOpenCodeMcpServerPermission, toOpenCodeMcpToolName } from '../infra/opencode/allowedTools.js';
+import { toV2Tools } from '../infra/opencode/v2-contract.js';
 import type { PermissionMode } from '../core/models/index.js';
 
 describe('mapToOpenCodePermissionReply', () => {
@@ -90,6 +91,32 @@ describe('resolveOpenCodePermissionReply', () => {
 });
 
 describe('OpenCode permissions', () => {
+  it.each(['backlog', 'takt-full', 'backlog__main', 'queue_'])(
+    'allows every tool of the assigned server %s while denying other MCP tools', (server) => {
+      const permission = toOpenCodeMcpServerPermission(server);
+      expect(permission).toBe(`${server}_*`);
+      const rules = buildOpenCodePermissionRuleset(undefined, undefined, ['Read'], [permission]);
+      for (const name of ['get_issue', 'add_issue', 'takt_enqueue_goal_task']) {
+        expect(resolveOpenCodePermissionReply(undefined, `${server}_${name}`, rules)).toBe('once');
+      }
+      for (const name of ['other_get_issue', 'takt_takt_enqueue_goal_task', `${server}x_get_issue`, `${server}-other_get_issue`, server]) {
+        expect(resolveOpenCodePermissionReply(undefined, name, rules)).toBe('reject');
+      }
+      const tools = buildOpenCodePromptTools(undefined, undefined, ['Read'], [permission]);
+      expect(tools[permission]).toBe(true);
+      expect(toV2Tools(tools)[permission]).toBe(true);
+    },
+  );
+  it.each([
+    { assigned: 'backlog__main', unassignedTool: 'backlog_get_issue' },
+    { assigned: 'queue_', unassignedTool: 'queue_get_issue' },
+  ])('does not let the server-wide permission of $assigned cover the tool $unassignedTool of a similarly named server', ({ assigned, unassignedTool }) => {
+    const rules = buildOpenCodePermissionRuleset(undefined, undefined, ['Read'], [toOpenCodeMcpServerPermission(assigned)]);
+    expect(resolveOpenCodePermissionReply(undefined, unassignedTool, rules)).toBe('reject');
+  });
+  it('normalizes characters OpenCode does not keep in a server name the same way as in MCP tool names', () => {
+    expect(toOpenCodeMcpServerPermission('github.com')).toBe('github_com_*');
+  });
   it('limits strict session, prompt and permission replies to read and the named MCP tools', () => {
     const mcpTools = ['takt_create_goal', 'takt_list_goals', 'takt_get_goal', 'takt_list_tasks', 'takt_get_run'].map((name) => `takt_${name}`);
     const strictTools = ['Read', ...mcpTools];

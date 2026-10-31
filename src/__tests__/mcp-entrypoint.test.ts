@@ -1654,7 +1654,7 @@ describe('MCP package entrypoint', () => {
               sessionId: 'conversation-session',
             };
           }
-          const result = listTaktTasks({ cwd });
+          const result = await listTaktTasks({ cwd });
           return {
             persona: 'interactive',
             status: 'done' as const,

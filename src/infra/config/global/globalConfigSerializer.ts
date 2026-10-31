@@ -77,6 +77,13 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
     raw.draft_pr = config.draftPr;
   }
   const rawCaccia = denormalizeCacciaConfig(config.caccia);
+  if (config.director !== undefined) {
+    raw.director = { patrol_interval: config.director.patrolInterval,
+      ...(config.director.slack === undefined ? {} : { slack: {
+        channel_id: config.director.slack.channelId, allowed_user_ids: config.director.slack.allowedUserIds,
+      } }),
+    };
+  }
   if (config.manager !== undefined) {
     raw.manager = { auto_run: config.manager.autoRun, patrol_interval: config.manager.patrolInterval, default_workflow: config.manager.defaultWorkflow, notifications: config.manager.notifications, sensitive_paths: config.manager.sensitivePaths };
   }

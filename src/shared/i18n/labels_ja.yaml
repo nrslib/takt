@@ -95,6 +95,7 @@ interactive:
   continueNoSession: "前回のアシスタントセッションが見つかりません。新しいセッションで開始します。"
   mcpUnavailable: "プロバイダ {provider} ではタスク状態の参照を利用できません。会話は継続します。理由: {error}"
   resumeSessionLoaded: "セッションを読み込みました。以降のAI呼び出しでこのセッションを使用します。"
+  resumeSessionFailed: "会話の再開に失敗しました。新しい会話として続けます。"
   sessionSelector:
     prompt: "直近のセッションを引き継ぎますか？"
     newSession: "新しいセッション"
@@ -429,12 +430,30 @@ tui:
     retryDetails: "タスク: {task}\n要約: {summary}\nワークフロー: {workflow}\n開始位置: {start}"
     exceededStart: "保存済みの停止位置: {start}（iteration {iteration}）"
 
+director:
+  slackNotifications: "director からのお知らせ（完了・人の判断が必要な事項）"
+  patrolFailed: "director の見回りに失敗しました"
+  projectUnreadable: "director が project を読み取れませんでした"
+  description: "実験的な director 会話 TUI を開きます"
+  experimentalNotice: "director は実験的機能です。動作や保存形式は変更されます。"
+  costNotice: "director は AI を動かすため、provider API の費用がかかります。"
+  placeholder: "manager の状況や指示を相談してください"
+  managerReply: "manager {managerId} の返事（操作ID: {operationId}）: {message}"
+  managerError: "manager {managerId} の伝言処理が失敗しました（操作ID: {operationId}）: {message}"
+  managerInterrupted: "manager {managerId} の伝言処理が中断されました（操作ID: {operationId}）: {message}"
 manager:
+  goalPr:
+    objective: "目的"
+    changes: "変更"
+    verification: "確かめたこと"
+    humanChecks: "人が確かめる手順"
+    truncated: "変更一覧は省略されています。PR の差分も確認してください。"
   conversation:
     reading: "会話の情報を読み出しています。完了するまで要約を承認できません。"
     disconnected: "daemon に再接続しています。"
     incomplete: "読み出しが不完全です。再読み込みが完了するまで要約を承認できません。"
     interrupted: "前の処理は中断されました。新しい発言を送信できます。"
+    director_interrupted: "directorの伝言（操作ID: {operationId}）は中断されました。自動では再実行しません。"
     permission_appended: "許可文を追記しました。回答の保存結果を確認してください。"
     assignment_changed: '担当が変わりました。現在の担当で会話を開き直してください。'
     busy: "処理中です。完了してからもう一度送信してください。"

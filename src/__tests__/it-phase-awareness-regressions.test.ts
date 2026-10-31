@@ -20,20 +20,20 @@ const phaseBodies = {
   ja: {
     1: 'このフェーズでは、ステップの作業をします。前のレポートフェーズや判定フェーズの「ファイルを読まない」「ツールを使わない」「ソースファイルを変更しない」という制限は、このフェーズにはありません。このステップの指示と権限の範囲で、必要なファイルを読み、コマンドを実行して確かめてください。',
     2: `このフェーズでは、今回の作業フェーズの結果を、「出力内容」の節で指定した形式のレポートとして回答します。
-- 今回の作業フェーズの結果は、まず「作業結果」から確認し、必要な場合だけ「今回の Phase 1 実行記録の参照」を使ってください。会話に残る前の回の回答を今回の結果として使わないでください。判定だけの構造化出力から実施した作業を推測せず、作業結果と取得した記録にない確認を実施済みと書かないでください。今回の結果を確認できない場合は、その範囲と理由を明示してください。
+- 今回の作業フェーズの結果は、まず「作業結果」から確認し、必要な場合だけ「今回の Phase 1 実行記録の参照」を使ってください。会話に残っている前の回の回答を、今回の結果として使わないでください。判定だけの構造化出力から実施した作業を推測せず、作業結果と記録にない確認を実施済みと書かないでください。今回の結果を確認できない場合は、その範囲と理由を明示してください。
 - 「元の要求」と「追加のユーザー入力」の節は、レポートが答えるべき要求として使ってください。
 - 「Phase 1に提示された上流応答」と「Phase 1に注入された参考レポート」の節は、作業フェーズが受け取った材料です。作業結果の根拠を確かめるためだけに使い、そこから新しい結論を作らないでください。
-このフェーズでは、ツールやファイルの直接読み取りは使わず、根拠が不足する場合だけ予約済みのエンジン仲介JSON要求を使ってください。新たなテスト・調査・変更は行わず、足りない情報は推測せず、分からないと書いてください。この制限はこのフェーズの中だけのもので、次の作業フェーズには持ち越しません。`,
+このフェーズでは、作業結果をレポートにまとめるために、読み取り専用のツールを使えます。読むのは、今回の Phase 1 実行記録や、作業結果に関係するファイル・レポートの必要な箇所だけにしてください。ファイルの変更、テストやビルドの実行、新しい調査はしないでください。Phase 1 で示されていない指摘・判定・計画を、新しく作らないでください。Phase 1 で実施した確認と、このフェーズで読んだ内容は分けて書いてください。必要な箇所を読んでも確かめられないことは、推測せず未確認と書いてください。この制限はこのフェーズの中だけのもので、次の作業フェーズには持ち越しません。`,
     3: `このフェーズでは、この指示に含まれるレポートや回答に書かれた内容が、「判定基準」の節のどのルールに当たるかを選びます。選べるのは「判定基準」の節にあるルールだけです。
 このフェーズでは、ファイルを読まず、ツールも使いません。会話の中に前の回のレポートや判定が残っていても、この指示に含まれる入力だけで判定してください。この制限はこのフェーズの中だけのものです。`,
   },
   en: {
     1: "In this phase, perform the step's work. Restrictions from previous report or judgment phases against reading files, using tools, or modifying source files do not apply to this phase. Within this step's instructions and permissions, read the necessary files and run commands to verify facts.",
     2: `In this phase, respond with a report of the current work phase's results in the format specified in the "Output" section.
-- Use "Work Results" first and, only when necessary, the "Current Phase 1 Execution Record Reference" to establish what happened in this work phase. Do not treat responses left in the conversation from earlier executions as current results. A judgment-only structured response does not establish which work was performed. Do not claim checks absent from the work result and retrieved record evidence. If current results cannot be verified, state the affected scope and reason.
+- Use "Work Results" first and, only when necessary, the "Current Phase 1 Execution Record Reference" to establish what happened in this work phase. Do not treat responses left in the conversation from earlier executions as current results. A judgment-only structured response does not establish which work was performed. Do not claim checks absent from the work result and record evidence. If current results cannot be verified, state the affected scope and reason.
 - Use the "Original Request" and "Additional User Inputs" sections as the requirements the report must address.
 - The "Upstream Response Presented in Phase 1" and "Reference Reports Injected in Phase 1" sections contain materials received by the work phase. Use them only to check the evidence for the work results; do not draw new conclusions from them.
-In this phase, do not use tools or read files directly. Use only the reserved engine-mediated JSON request when record evidence is insufficient. Do not run new tests, investigations, or changes, and do not guess missing information; state what is unknown. These restrictions apply only within this phase and do not carry over to the next work phase.`,
+You may use read-only tools to turn the work results into a report. Read only the necessary parts of this Phase 1 execution record and files or reports relevant to the work results. Do not modify files, run tests or builds, or start new investigations. Do not add findings, judgments, or plans that Phase 1 did not provide. Distinguish checks performed in Phase 1 from material read in this phase. If the necessary reading still cannot establish a fact, mark it unverified rather than guessing. These restrictions apply only within this phase and do not carry over to the next work phase.`,
     3: `In this phase, select the rule in "Criteria" that matches the contents of the reports or responses included in this instruction. Only rules in "Criteria" may be selected.
 In this phase, do not read files or use tools. Even if earlier reports or judgments remain in the conversation, judge only the inputs included in this instruction. These restrictions apply only within this phase.`,
   },

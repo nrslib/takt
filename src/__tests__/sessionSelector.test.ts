@@ -1,157 +1,59 @@
-/**
- * Tests for session selector
- */
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { InteractiveSessionRecord } from '../features/interactive/interactiveSessionRecords.js';
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { SessionIndexEntry } from '../infra/claude/session-reader.js';
-
-const mockLoadSessionIndex = vi.fn<(dir: string) => SessionIndexEntry[]>();
-const mockExtractLastAssistantResponse = vi.fn<(path: string, maxLen: number) => string | null>();
-
-vi.mock('../infra/claude/session-reader.js', () => ({
-  loadSessionIndex: (...args: [string]) => mockLoadSessionIndex(...args),
-  extractLastAssistantResponse: (...args: [string, number]) => mockExtractLastAssistantResponse(...args),
-}));
-
-const mockSelectOption = vi.fn<(prompt: string, options: unknown[]) => Promise<string | null>>();
-
-vi.mock('../shared/prompt/index.js', () => ({
-  selectOption: (...args: [string, unknown[]]) => mockSelectOption(...args),
-}));
-
-const mockInfo = vi.fn<(message: string) => void>();
-
-vi.mock('../shared/ui/index.js', () => ({
-  info: (...args: [string]) => mockInfo(...args),
-}));
-
+const store = vi.hoisted(() => ({ listRecords: vi.fn() }));
+const picker = vi.hoisted(() => vi.fn());
+const info = vi.hoisted(() => vi.fn());
+vi.mock('../features/interactive/interactiveSessionRecords.js', () => store);
+vi.mock('../shared/prompt/index.js', () => ({ selectOption: picker }));
+vi.mock('../shared/ui/index.js', () => ({ info }));
 vi.mock('../shared/i18n/index.js', () => ({
-  getLabel: (key: string, _lang: string, params?: Record<string, string>) =>
-    params?.response ?? params?.count ?? key,
+  getLabel: (key: string, _lang: string, params?: Record<string, string>) => params?.response ?? params?.count ?? key,
 }));
 
 import { selectRecentSession } from '../features/interactive/sessionSelector.js';
 
+function record(overrides: Partial<InteractiveSessionRecord> = {}): InteractiveSessionRecord {
+  return { provider: 'codex', sessionId: 's1', inputs: ['first', 'second', 'last'], response: 'reply', modified: '2026-01-28T10:00:00Z', messageCount: 6, ...overrides };
+}
+
 describe('selectRecentSession', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    store.listRecords.mockReturnValue([]);
+    picker.mockResolvedValue(null);
   });
 
-  it('should return null when no sessions exist', async () => {
-    mockLoadSessionIndex.mockReturnValue([]);
-
-    const result = await selectRecentSession('/project', 'en');
-
-    expect(result).toBeNull();
-    expect(mockSelectOption).not.toHaveBeenCalled();
-    expect(mockInfo).toHaveBeenCalled();
+  it('reports an empty recorded session list', async () => {
+    expect(await selectRecentSession('/project', 'en', 'codex')).toBeNull();
+    expect(store.listRecords).toHaveBeenCalledWith('/project', 'codex');
+    expect(picker).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalled();
   });
 
-  it('should return null when user selects __new__', async () => {
-    mockLoadSessionIndex.mockReturnValue([
-      createSession('session-1', 'Hello world', '2026-01-28T10:00:00.000Z'),
-    ]);
-    mockExtractLastAssistantResponse.mockReturnValue(null);
-    mockSelectOption.mockResolvedValue('__new__');
-
-    const result = await selectRecentSession('/project', 'en');
-
-    expect(result).toBeNull();
+  it.each(['__new__', null])('returns null for new session or cancellation (%s)', async (selected) => {
+    store.listRecords.mockReturnValue([record()]);
+    picker.mockResolvedValue(selected);
+    expect(await selectRecentSession('/project', 'en', 'codex')).toBeNull();
   });
 
-  it('should return null when user cancels selection', async () => {
-    mockLoadSessionIndex.mockReturnValue([
-      createSession('session-1', 'Hello world', '2026-01-28T10:00:00.000Z'),
-    ]);
-    mockExtractLastAssistantResponse.mockReturnValue(null);
-    mockSelectOption.mockResolvedValue(null);
-
-    const result = await selectRecentSession('/project', 'en');
-
-    expect(result).toBeNull();
+  it('returns the selected session and displays recent inputs, response and metadata', async () => {
+    store.listRecords.mockReturnValue([record()]);
+    picker.mockResolvedValue('s1');
+    expect(await selectRecentSession('/project', 'en', 'codex')).toBe('s1');
+    const options = picker.mock.calls[0]![1] as Array<{ value: string; label: string; description?: string; details?: string[] }>;
+    expect(options.map((option) => option.value)).toEqual(['__new__', 's1']);
+    expect(options[1]).toMatchObject({ label: 'last', details: ['second', 'first', 'reply'] });
+    expect(options[1]?.description).toContain('6');
+    expect(options[1]?.description).toContain('Jan');
   });
 
-  it('should return sessionId when user selects a session', async () => {
-    mockLoadSessionIndex.mockReturnValue([
-      createSession('session-abc', 'Fix the bug', '2026-01-28T10:00:00.000Z'),
-    ]);
-    mockExtractLastAssistantResponse.mockReturnValue(null);
-    mockSelectOption.mockResolvedValue('session-abc');
-
-    const result = await selectRecentSession('/project', 'en');
-
-    expect(result).toBe('session-abc');
-  });
-
-  it('should pass correct options to selectOption with new session first', async () => {
-    mockLoadSessionIndex.mockReturnValue([
-      createSession('s1', 'First prompt', '2026-01-28T10:00:00.000Z', 5),
-    ]);
-    mockExtractLastAssistantResponse.mockReturnValue('Some response');
-    mockSelectOption.mockResolvedValue('s1');
-
-    await selectRecentSession('/project', 'en');
-
-    expect(mockSelectOption).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.arrayContaining([
-        expect.objectContaining({ value: '__new__', label: expect.any(String) }),
-        expect.objectContaining({ value: 's1' }),
-      ]),
-    );
-
-    const options = mockSelectOption.mock.calls[0]![1] as Array<{ value: string }>;
-    expect(options[0]!.value).toBe('__new__');
-    expect(options[1]!.value).toBe('s1');
-  });
-
-  it('should limit display to MAX_DISPLAY_SESSIONS (10)', async () => {
-    const sessions = Array.from({ length: 15 }, (_, i) =>
-      createSession(`s${i}`, `Prompt ${i}`, `2026-01-${String(i + 10).padStart(2, '0')}T10:00:00.000Z`),
-    );
-    mockLoadSessionIndex.mockReturnValue(sessions);
-    mockExtractLastAssistantResponse.mockReturnValue(null);
-    mockSelectOption.mockResolvedValue(null);
-
-    await selectRecentSession('/project', 'en');
-
-    const options = mockSelectOption.mock.calls[0]![1] as Array<{ value: string }>;
-    // 1 new session + 10 display sessions = 11 total
-    expect(options).toHaveLength(11);
-  });
-
-  it('should include last response details when available', async () => {
-    mockLoadSessionIndex.mockReturnValue([
-      createSession('s1', 'Hello', '2026-01-28T10:00:00.000Z', 3, '/path/to/s1.jsonl'),
-    ]);
-    mockExtractLastAssistantResponse.mockReturnValue('AI response text');
-    mockSelectOption.mockResolvedValue('s1');
-
-    await selectRecentSession('/project', 'en');
-
-    expect(mockExtractLastAssistantResponse).toHaveBeenCalledWith('/path/to/s1.jsonl', 200);
-
-    const options = mockSelectOption.mock.calls[0]![1] as Array<{ value: string; details?: string[] }>;
-    const sessionOption = options[1]!;
-    expect(sessionOption.details).toBeDefined();
-    expect(sessionOption.details![0]).toContain('AI response text');
+  it('renders multiline long input and response as truncated single lines', async () => {
+    store.listRecords.mockReturnValue([record({ inputs: ['old\nline', 'a'.repeat(100)], response: 'b'.repeat(100) + '\nend' })]);
+    await selectRecentSession('/project', 'en', 'codex');
+    const item = (picker.mock.calls[0]![1] as Array<{ label: string; details: string[] }>)[1]!;
+    expect(item.label.length).toBeLessThan(100);
+    expect(item.details[1]!.length).toBeLessThan(100);
+    expect([item.label, ...item.details].every((line) => !line.includes('\n'))).toBe(true);
   });
 });
-
-function createSession(
-  sessionId: string,
-  firstPrompt: string,
-  modified: string,
-  messageCount = 5,
-  fullPath = `/path/to/${sessionId}.jsonl`,
-): SessionIndexEntry {
-  return {
-    sessionId,
-    firstPrompt,
-    modified,
-    messageCount,
-    gitBranch: 'main',
-    isSidechain: false,
-    fullPath,
-  };
-}

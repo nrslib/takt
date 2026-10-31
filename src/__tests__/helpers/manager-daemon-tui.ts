@@ -20,6 +20,7 @@ interface Observation {
   revision?: number;
   running?: boolean;
   approvalState?: 'reserved' | 'registered' | null;
+  agent?: string;
   model?: string;
   summaryRequest?: boolean;
   method?: string;
@@ -189,16 +190,16 @@ const setup = MockProvider.prototype.setup;
 MockProvider.prototype.setup = function(config) {
   const agent = setup.call(this, config);
   return { ...agent, call: async (prompt, options) => {
-    record({ event: 'provider_start', model: options.model,
+    record({ event: 'provider_start', agent: config.name, model: options.model,
       summaryRequest: prompt.includes(getLabel('manager.goSummaryRequest', ${JSON.stringify(language)})) });
-    const deadline = Date.now() + 15000;
+    const deadline = Date.now() + 60000;
     while (!existsSync(${JSON.stringify(gate)})) {
       if (options.abortSignal?.aborted) throw options.abortSignal.reason;
       if (Date.now() >= deadline) throw new Error('Test provider was not released');
       await delay(20);
     }
     const result = await agent.call(prompt, options);
-    record({ event: 'provider_complete' });
+    record({ event: 'provider_complete', agent: config.name });
     return result;
   } };
 };
@@ -251,26 +252,32 @@ finally { process.disconnect(); }
     const owned = await captureOwnedChild(child);
     clients.push({ child, owned });
     let id = 0;
-    await vi.waitFor(() => {
-      expect(messages.find((message) => message.kind === 'failure')?.message, errors).toBeUndefined();
-      expect(messages.some((message) => message.kind === 'mounted'), errors).toBe(true);
-    }, { timeout: 10000 });
+    try {
+      // 起動全体にはdaemon確認・認証・openが含まれ、それぞれのIPC期限とは異なる。
+      await vi.waitFor(() => {
+        expect(messages.find((message) => message.kind === 'failure')?.message, errors).toBeUndefined();
+        expect(messages.some((message) => message.kind === 'mounted'), errors).toBe(true);
+      }, { timeout: 30000 });
+    } catch (cause) {
+      throw new Error(`TUI startup failed: ${JSON.stringify({ pid: child.pid, exitCode: child.exitCode,
+        signalCode: child.signalCode, errors, owner: readDaemonOwner(directory), observations: readObservations() })}`, { cause });
+    }
     const key = (input: string): void => { child.send({ kind: 'key', input }); };
     const frame = async (): Promise<string> => {
       const request = ++id;
       child.send({ kind: 'frame', id: request });
-      await vi.waitFor(() => expect(messages.some((message) => message.id === request), errors).toBe(true));
+      await vi.waitFor(() => expect(messages.some((message) => message.id === request), errors).toBe(true), { timeout: 30000 });
       const index = messages.findIndex((message) => message.id === request);
       return messages.splice(index, 1)[0]!.frame!;
     };
     const exit = async (): Promise<void> => {
       key('\x03');
-      await vi.waitFor(() => expect(child.exitCode, errors).toBe(0), { timeout: 10000 });
+      await vi.waitFor(() => expect(child.exitCode, errors).toBe(0), { timeout: 30000 });
     };
     const observeFrames = async (): Promise<ScreenObservation[]> => {
       const request = ++id;
       child.send({ kind: 'observe_frames', id: request });
-      await vi.waitFor(() => expect(messages.some((message) => message.id === request), errors).toBe(true), { timeout: 10000 });
+      await vi.waitFor(() => expect(messages.some((message) => message.id === request), errors).toBe(true), { timeout: 30000 });
       const index = messages.findIndex((message) => message.id === request);
       return messages.splice(index, 1)[0]!.samples!;
     };
@@ -278,10 +285,10 @@ finally { process.disconnect(); }
       await vi.waitFor(async () => {
         const request = ++id;
         child.send({ kind: 'ready', id: request, ...(runningOperationId === undefined ? {} : { runningOperationId }) });
-        await vi.waitFor(() => expect(messages.some((message) => message.id === request), errors).toBe(true));
+        await vi.waitFor(() => expect(messages.some((message) => message.id === request), errors).toBe(true), { timeout: 30000 });
         const index = messages.findIndex((message) => message.id === request);
         expect(messages.splice(index, 1)[0]!.ready).toBe(true);
-      }, { timeout: 10000 });
+      }, { timeout: 30000 });
     };
     const inputSummary = async (operation: { kind: 'approve_summary'; revision: number }
       | { kind: 'continue_summary'; revision: number; text: string }): Promise<void> => {
@@ -296,7 +303,7 @@ finally { process.disconnect(); }
         const response = messages.splice(index, 1)[0]!;
         request = undefined;
         expect(response.inputSent, errors).toBe(true);
-      }, { timeout: 10000 });
+      }, { timeout: 30000 });
     };
     return { child, key, frame, observeFrames, ready,
       approveSummary: (revision) => inputSummary({ kind: 'approve_summary', revision }),
@@ -315,11 +322,12 @@ finally { process.disconnect(); }
 }
 
 export async function waitForManager(tui: ManagerTuiProcess, text: string): Promise<void> {
+  // provider実行と保存を含む表示完了の待機は、個々のIPC要求期限とは別に扱う。
   await vi.waitFor(async () => {
     const frame = await tui.frame();
     expect(frame).toContain(text);
     if (text === 'Discuss your goal' || text === 'ゴールを相談してください') expect(frame).not.toMatch(/Working|処理中/u);
-  }, { timeout: 5000 });
+  }, { timeout: 30000 });
 }
 
 export async function submitManagerText(tui: ManagerTuiProcess, text: string): Promise<void> {

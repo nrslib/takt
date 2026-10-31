@@ -78,7 +78,7 @@ try {
     phase1: {
       task, status: phase1.status, content: phase1.content,
       structuredOutput: phase1.structuredOutput,
-      executionLog: JSON.parse(log.toReportInput()),
+      executionLog: log.toReportInput().trim().split('\n').map((line) => JSON.parse(line)),
     },
     phase2: {
       prompts: resolvedPhase2Prompts,

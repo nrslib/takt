@@ -2,7 +2,10 @@
 description: 'Phase 2 reports grounded in engine-captured Phase 1 instructions and execution events'
 
 prompts:
-  - file://../../phase1-execution-log-prompt.mjs
+  - label: phase1-execution-log-handoff
+    raw: file://../../phase1-execution-log-prompt.mjs
+    config:
+      working_dir: fixtures/phase2-report-access
 
 providers:
   - id: file://../../providers/phase1-execution-log.mjs
@@ -11,13 +14,29 @@ providers:
       cli: codex
       model: gpt-6.1-terra
       reasoning_effort: medium
-      working_dir: fixtures/remediation-evidence
+      isolate_working_dir: true
+
+  - id: file://../../providers/phase1-execution-log.mjs
+    label: codex-sol-low
+    config:
+      cli: codex
+      model: gpt-6.1-sol
+      reasoning_effort: low
+      isolate_working_dir: true
+  - id: file://../../providers/phase1-execution-log.mjs
+    label: claude-opus
+    config:
+      cli: claude
+      model: opus
       isolate_working_dir: true
 
 evaluateOptions:
   maxConcurrency: 1
 
 defaultTest:
+  assert:
+    - type: javascript
+      value: file://../../asserts/phase1-execution-log.mjs
   options:
     provider:
       id: openai:codex-sdk

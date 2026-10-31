@@ -27,6 +27,7 @@ export interface ManagerTurnInput {
   abortSignal: AbortSignal;
   assignment: ManagerAssignmentIdentity | undefined;
   configDirectory: string;
+  conversationOperationId?: string;
   goal?: ManagerPermissionGoal;
   onProviderOutput?: () => void;
   onNotification?: (message: string) => void;
@@ -72,7 +73,9 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
           const additions = new Set<string>();
           const call = async (prompt: string) => {
             signal.throwIfAborted();
-            const response = await agent.call(prompt, {
+            const turnPrompt = input.conversationOperationId === undefined ? prompt
+              : `Conversation operation ID: ${input.conversationOperationId}\nFor takt_merge_goal_pr, pass this ID as conversationOperationId. It identifies this turn; merge authorization is checked against the saved conversation.\n\n${prompt}`;
+            const response = await agent.call(turnPrompt, {
               cwd, model: plan.ctx.model, sessionId, abortSignal: signal,
               providerOptions: plan.ctx.providerOptions, permissionMode: 'full',
               outputSchema: getManagerOutputSchema(plan.ctx.providerType), language: plan.ctx.lang,

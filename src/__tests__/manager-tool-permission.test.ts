@@ -156,6 +156,15 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe('manager tool permission classification', () => {
+  it.each(['claude-sdk', 'codex'] as const)('passes the goal PR merge tool through the %s manager permission handler', async (provider) => {
+    const decision = await decide(`mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__takt_merge_goal_pr`, {
+      cwd, goalId: goal.id, prNumber: 1950,
+    }, 'ja', provider);
+
+    expect(decision).toEqual({ decision: 'allow' });
+    expect(executeIsolatedStructuredInternalAgent).not.toHaveBeenCalled();
+  });
+
   it.each(['ToolSearch'])('allows only the exact built-in %s without a judge', async (name) => {
     expect(await decide(name)).toEqual({ decision: 'allow' });
     expect(executeIsolatedStructuredInternalAgent).not.toHaveBeenCalled();
