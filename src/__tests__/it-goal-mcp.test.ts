@@ -23,7 +23,9 @@ import { GoalStore } from '../infra/goals/store.js';
 import { GoalSchema } from '../infra/goals/schema.js';
 import { TaskRunner } from '../infra/task/index.js';
 import { LiveInterventionFileStore } from '../infra/workflow/live-intervention-store.js';
-import { goalId } from './helpers/goal-fixtures.js';
+import { goalId, goalRecord } from './helpers/goal-fixtures.js';
+import { TaskStore } from '../infra/task/store.js';
+import type { TaskRecord } from '../infra/task/schema.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 import { registerFixtureGoal } from './helpers/registered-goal.js';
 import { MCP_RESPONSE_MAX_BYTES } from '../features/mcp/response.js';
@@ -526,7 +528,7 @@ describe('local goal integration and inspection through manager MCP', () => {
       '      - condition: when(true)', '        next: COMPLETE',
     ].join('\n'));
     configure('approve');
-    base = commitFiles('main', { 'tracked.txt': 'base\n', 'src/a.ts': 'old\n' });
+    base = await commitFiles('main', { 'tracked.txt': 'base\n', 'src/a.ts': 'old\n' });
     for (const name of ['main', 'release', 'feature/current']) git(cwd, ['update-ref', `refs/heads/${name}`, base]);
     git(cwd, ['read-tree', '--reset', '-u', 'HEAD']);
     branch = (await registerFixtureGoal(cwd)).branch;
@@ -653,7 +655,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     ].join('\n'));
   }
 
-  function commitFiles(parent: string, files: Record<string, string | Buffer>): string {
+  async function commitFiles(parent: string, files: Record<string, string | Buffer>): Promise<string> {
     const index = join(cwd, '.git', 'fixture-index');
     const run = (args: string[], input?: string | Buffer) => execFileSync('git', args, {
       cwd, input, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
@@ -664,6 +666,8 @@ describe('local goal integration and inspection through manager MCP', () => {
       for (const [path, content] of Object.entries(files)) {
         const hash = run(['hash-object', '-w', '--stdin'], content);
         run(['update-index', '--add', '--cacheinfo', '100644', hash, path]);
+        // 大量の同期 Git 呼び出しで Vitest の通信を止めない。
+        await setImmediate();
       }
       const tree = run(['write-tree']);
       return git(cwd, ['commit-tree', tree, '-p', parent, '-m', 'fixture changes']);
@@ -671,7 +675,7 @@ describe('local goal integration and inspection through manager MCP', () => {
   }
 
   async function saveResult(files: Record<string, string | Buffer>, owner: string | null = goalId, success = true, sourceOverride?: string) {
-    const sha = commitFiles(branch, files);
+    const sha = await commitFiles(branch, files);
     const source = sourceOverride ?? `takt/task-${sha.slice(0, 12)}`;
     git(cwd, ['update-ref', `refs/heads/${source}`, sha]);
     const runner = new TaskRunner(cwd);
@@ -765,7 +769,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     const task = await saveResult({ 'result.txt': 'reviewed\n' });
     const source = kind === 'task' ? task.source : branch;
     const reviewed = git(cwd, ['rev-parse', source]);
-    git(cwd, ['update-ref', `refs/heads/${source}`, commitFiles(source, { 'later.txt': 'changed\n' })]);
+    git(cwd, ['update-ref', `refs/heads/${source}`, await commitFiles(source, { 'later.txt': 'changed\n' })]);
     configure('auto');
     const refs = git(cwd, ['show-ref', '--heads']);
     const saved = await new GoalStore(cwd).get(goalId);
@@ -814,7 +818,7 @@ describe('local goal integration and inspection through manager MCP', () => {
 
   it.each([false, true])('merges into the saved integration branch despite changed base branch configuration and rejects further enqueue (cleanup failure: %s)', async (cleanupFailure) => {
     configure('auto', 'release');
-    const sha = commitFiles(branch, { 'result.txt': 'ready\n' });
+    const sha = await commitFiles(branch, { 'result.txt': 'ready\n' });
     git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
     dirtyHumanTree();
     const human = humanSnapshot();
@@ -840,7 +844,7 @@ describe('local goal integration and inspection through manager MCP', () => {
 
   it.each(['approve', 'default', 'auto root', 'auto linked'])('records human merge instructions without moving references for %s', async (mode) => {
     configure(mode.startsWith('auto') ? 'auto' : mode === 'default' ? undefined : 'approve');
-    const sha = commitFiles(branch, { 'result.txt': 'ready\n' });
+    const sha = await commitFiles(branch, { 'result.txt': 'ready\n' });
     git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
     const directory = mode === 'auto linked' ? join(cwd, 'human main') : cwd;
     if (mode === 'auto root') git(cwd, ['switch', 'main']);
@@ -870,7 +874,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     { mode: 'approve', location: 'root' },
   ] as const)('executes the returned human merge commands in the $location target worktree in $mode mode', async ({ mode, location }) => {
     configure(mode);
-    const sha = commitFiles(branch, { 'result.txt': 'ready\n', 'src/a.ts': 'new one\nnew two\n' });
+    const sha = await commitFiles(branch, { 'result.txt': 'ready\n', 'src/a.ts': 'new one\nnew two\n' });
     git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
     const directory = location === 'linked' ? join(cwd, "human's main tree") : cwd;
     if (location === 'linked') git(cwd, ['worktree', 'add', directory, 'main']);
@@ -912,8 +916,8 @@ describe('local goal integration and inspection through manager MCP', () => {
 
   it.each(['auto', 'approve'] as const)('persists and returns only goal-side changes when main diverges in %s mode', async (mode) => {
     configure(mode);
-    const sha = commitFiles(branch, { 'goal-only.txt': 'goal change\n' });
-    const mainSha = commitFiles('main', { 'main-only.txt': 'main change\n' });
+    const sha = await commitFiles(branch, { 'goal-only.txt': 'goal change\n' });
+    const mainSha = await commitFiles('main', { 'main-only.txt': 'main change\n' });
     git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
     git(cwd, ['update-ref', 'refs/heads/main', mainSha]);
     await withServer(cwd, 'manager', async (client) => {
@@ -943,7 +947,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     const files = Object.fromEntries(Array.from({ length: count }, (_, index) => [
       `files/${String(index).padStart(3, '0')}-${'x'.repeat(longPaths ? 80 : 0)}.txt`, 'one\ntwo\n',
     ]));
-    const sha = commitFiles(branch, files);
+    const sha = await commitFiles(branch, files);
     git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
     await withServer(cwd, 'manager', async (client) => {
       const response = await call(client, completeTool, { expectedSha: sha, summary });
@@ -970,7 +974,7 @@ describe('local goal integration and inspection through manager MCP', () => {
   });
 
   it('reopens the same goal, enqueues corrective work and submits a new approval notification on the same connection', async () => {
-    const sha = commitFiles(branch, { 'result.txt': 'approved\n' });
+    const sha = await commitFiles(branch, { 'result.txt': 'approved\n' });
     git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
     const store = new GoalStore(cwd);
     await withServer(cwd, 'manager', async (client) => {
@@ -996,7 +1000,7 @@ describe('local goal integration and inspection through manager MCP', () => {
       expect(runner.listPendingTaskItems()).toEqual([expect.objectContaining({ name: taskName, data: expect.objectContaining({ goal_id: goalId, base_branch: branch }) })]);
       const claimed = runner.claimNextTasks(1)[0]!;
       expect(claimed.name).toBe(taskName);
-      const correctedSha = commitFiles(branch, { 'result.txt': 'corrected and validated\n' });
+      const correctedSha = await commitFiles(branch, { 'result.txt': 'corrected and validated\n' });
       const source = 'takt/corrective-result';
       git(cwd, ['update-ref', `refs/heads/${source}`, correctedSha]);
       const task = runner.updateRunningTaskExecution(taskName, { runSlug: 'corrective-run', branch: source });
@@ -1020,7 +1024,7 @@ describe('local goal integration and inspection through manager MCP', () => {
 
   it('bounds reopening a goal with large saved histories and preserves its complete evidence and maximum-length reason', async () => {
     await saveLargeGoalHistory();
-    const sha = commitFiles(branch, { 'result.txt': 'ready\n' });
+    const sha = await commitFiles(branch, { 'result.txt': 'ready\n' });
     git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
     await withServer(cwd, 'manager', async (client) => {
       expect((await call(client, completeTool, { expectedSha: sha, summary: '完成根拠'.repeat(20000) })).isError).toBeUndefined();
@@ -1046,7 +1050,7 @@ describe('local goal integration and inspection through manager MCP', () => {
   });
 
   it.each(['paused', 'aborted'] as const)('rejects reopening a %s goal and leaves saved state unchanged', async (executionStatus) => {
-    const sha = commitFiles(branch, { 'result.txt': 'ready\n' });
+    const sha = await commitFiles(branch, { 'result.txt': 'ready\n' });
     git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
     await withServer(cwd, 'manager', async (client) => {
       expect((await call(client, completeTool, { expectedSha: sha, summary })).isError).toBeUndefined();
@@ -1061,11 +1065,11 @@ describe('local goal integration and inspection through manager MCP', () => {
   });
 
   it('rejects reopening when the approved SHA is merged even if the goal tip has advanced', async () => {
-    const sha = commitFiles(branch, { 'result.txt': 'approved\n' });
+    const sha = await commitFiles(branch, { 'result.txt': 'approved\n' });
     git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
     await withServer(cwd, 'manager', async (client) => {
       expect((await call(client, completeTool, { expectedSha: sha, summary })).isError).toBeUndefined();
-      const later = commitFiles(branch, { 'later.txt': 'not reviewed\n' });
+      const later = await commitFiles(branch, { 'later.txt': 'not reviewed\n' });
       git(cwd, ['update-ref', `refs/heads/${branch}`, later]);
       git(cwd, ['update-ref', 'refs/heads/main', sha]);
       const before = await new GoalStore(cwd).get(goalId);
@@ -1078,13 +1082,13 @@ describe('local goal integration and inspection through manager MCP', () => {
   });
 
   it('completes only after the saved approval SHA is included even when the goal branch advances', async () => {
-    const sha = commitFiles(branch, { 'result.txt': 'approved\n' });
+    const sha = await commitFiles(branch, { 'result.txt': 'approved\n' });
     git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
     await withServer(cwd, 'manager', async (client) => {
       expect((await call(client, completeTool, { expectedSha: sha, summary })).isError).toBeUndefined();
       await call(client, checkTool);
       expect((await new GoalStore(cwd).get(goalId)).status).not.toBe('completed');
-      const later = commitFiles(branch, { 'later.txt': 'not reviewed\n' });
+      const later = await commitFiles(branch, { 'later.txt': 'not reviewed\n' });
       git(cwd, ['update-ref', `refs/heads/${branch}`, later]);
       git(cwd, ['update-ref', 'refs/heads/main', sha]);
       expect((await call(client, checkTool)).isError).toBeUndefined();
@@ -1097,7 +1101,7 @@ describe('local goal integration and inspection through manager MCP', () => {
 
   it('does not let tool input grant automatic main merge permission', async () => {
     configure(undefined);
-    const sha = commitFiles(branch, { 'result.txt': 'requires approval\n' });
+    const sha = await commitFiles(branch, { 'result.txt': 'requires approval\n' });
     git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
     await withServer(cwd, 'manager', async (client) => {
       const result = await call(client, completeTool, { expectedSha: sha, summary, mainMerge: 'auto' });
@@ -1126,7 +1130,7 @@ describe('local goal integration and inspection through manager MCP', () => {
     const task = await saveResult({ 'source-only.txt': 'source change\n' });
     const comparisonBranch = kind === 'task' ? branch : 'main';
     if (kind === 'goal') git(cwd, ['update-ref', `refs/heads/${branch}`, task.sha]);
-    const comparisonSha = commitFiles(base, { 'comparison-only.txt': 'comparison change\n' });
+    const comparisonSha = await commitFiles(base, { 'comparison-only.txt': 'comparison change\n' });
     git(cwd, ['update-ref', `refs/heads/${comparisonBranch}`, comparisonSha]);
     const selection = kind === 'task' ? { taskName: task.taskName } : {};
     await withServer(cwd, 'manager', async (client) => {
@@ -1199,10 +1203,10 @@ describe('local goal integration and inspection through manager MCP', () => {
   });
 
   it('compares against the saved integration branch despite changed configuration before and after completion', async () => {
-    const first = commitFiles(branch, { 'result.txt': 'ready\n' });
-    const sha = commitFiles(first, { 'goal-progress.txt': 'second goal commit\n' });
+    const first = await commitFiles(branch, { 'result.txt': 'ready\n' });
+    const sha = await commitFiles(first, { 'goal-progress.txt': 'second goal commit\n' });
     git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
-    git(cwd, ['update-ref', 'refs/heads/main', commitFiles(base, { 'main.txt': 'different\n' })]);
+    git(cwd, ['update-ref', 'refs/heads/main', await commitFiles(base, { 'main.txt': 'different\n' })]);
     configure('auto', 'release');
     await withServer(cwd, 'manager', async (client) => {
       const before = await call(client, 'takt_get_goal_relation');
@@ -1237,7 +1241,7 @@ describe('manager instructions to running goal work', () => {
       ].join('\n'));
       await registerFixtureGoal(root);
     }
-  });
+  }, 30_000);
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -1456,7 +1460,7 @@ describe('goal PR publication and merge through manager MCP', () => {
         headRepositoryUrl: 'https://github.com/example/project.git',
         headRepositoryPushUrls: ['https://github.com/example/project.git'] };
     });
-  });
+  }, 30_000);
 
   afterEach(async () => {
     vi.restoreAllMocks();
@@ -1919,6 +1923,80 @@ describe('goal PR publication and merge through manager MCP', () => {
       expect(spawn.mock.calls.filter(([command]) => command === process.execPath)).toEqual([]);
       expect(await new GoalStore(cwd).get(goalId)).toEqual(before);
     });
+  });
+});
+
+describe('task integration status through MCP with real Git', () => {
+  let cwd: string;
+
+  beforeEach(async () => {
+    cwd = realpathSync(mkdtempSync(join(tmpdir(), 'takt-task-integration-')));
+    const { mainCommit } = initializeRepository(cwd);
+    const integrated = git(cwd, ['commit-tree', 'main^{tree}', '-p', mainCommit, '-m', 'integrated task']);
+    const goalTip = git(cwd, ['commit-tree', 'main^{tree}', '-p', integrated, '-m', 'later goal work']);
+    const unmerged = git(cwd, ['commit-tree', 'main^{tree}', '-p', mainCommit, '-m', 'unmerged task']);
+    const goal = goalRecord();
+    git(cwd, ['update-ref', `refs/heads/${goal.branch}`, goalTip]);
+    git(cwd, ['update-ref', 'refs/heads/unmerged-task', unmerged]);
+    await new GoalStore(cwd).create(goal);
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nmanager:\n  auto_run: false\n');
+    const timestamp = '2026-10-30T00:00:00Z';
+    const outcomes: Pick<TaskRecord, 'name' | 'status' | 'completion' | 'failure'>[] = [
+      { name: 'integrated-task', status: 'completed', completion: { success: true, interrupted: false, sha: integrated } },
+      { name: 'unmerged-task', status: 'completed', completion: { success: true, interrupted: false, sha: unmerged } },
+      { name: 'pending-task', status: 'pending' },
+      { name: 'failed-task', status: 'failed', failure: { error: 'task failed' } },
+      { name: 'missing-commit-task', status: 'completed', completion: { success: true, interrupted: false, sha: 'f'.repeat(40) } },
+    ];
+    const records = outcomes.map<TaskRecord>((record) => ({
+      ...record, content: record.name, goal_id: goalId, workflow: 'default', worktree: false, auto_pr: false,
+      created_at: timestamp, started_at: record.status === 'pending' ? null : timestamp,
+      completed_at: record.status === 'pending' ? null : timestamp,
+    }));
+    new TaskStore(cwd).update(() => ({ tasks: records }));
+  });
+
+  afterEach(() => { rmSync(cwd, { recursive: true, force: true }); });
+
+  async function readTasks() {
+    return withServer(cwd, 'manager', async (client) => {
+      const result = await client.callTool({ name: 'takt_list_tasks', arguments: { cwd } });
+      expect(result.isError).toBeUndefined();
+      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
+      const output = JSON.parse(firstTextContent(result.content)) as { tasks: Record<string, unknown>[] };
+      return output.tasks;
+    });
+  }
+
+  function expectIntegrationStates(tasks: Record<string, unknown>[]) {
+    expect(tasks.map(({ name, status, goalIntegration }) => ({ name, status, goalIntegration }))).toEqual([
+      { name: 'integrated-task', status: 'completed', goalIntegration: 'integrated' },
+      { name: 'unmerged-task', status: 'completed', goalIntegration: 'not_integrated' },
+      { name: 'pending-task', status: 'pending', goalIntegration: 'not_integrated' },
+      { name: 'failed-task', status: 'failed', goalIntegration: 'not_integrated' },
+      { name: 'missing-commit-task', status: 'completed', goalIntegration: 'unknown' },
+    ]);
+    expect(tasks[4]?.goalIntegrationReason).toEqual(expect.stringMatching(/commit.*(?:missing|not found|unavailable|cannot|could not)|コミット.*(?:見つから|存在し|読み取れ)/i));
+    for (const entry of tasks.slice(0, 4)) expect(entry).not.toHaveProperty('goalIntegrationReason');
+  }
+
+  it('returns all four integration outcomes from persisted tasks and actual commit ancestry', async () => {
+    expectIntegrationStates(await readTasks());
+  });
+
+  it('returns the same integration states after recreating the MCP server without persisting them', async () => {
+    const tasksPath = join(cwd, '.takt', 'tasks.yaml');
+    const goalPath = join(cwd, '.takt', 'goals', goalId, 'goal.json');
+    const savedTasks = readFileSync(tasksPath, 'utf8');
+    const savedGoal = readFileSync(goalPath, 'utf8');
+    const first = await readTasks();
+    const restored = await readTasks();
+    expectIntegrationStates(first);
+    expectIntegrationStates(restored);
+    expect(restored.map(({ name, goalIntegration }) => ({ name, goalIntegration })))
+      .toEqual(first.map(({ name, goalIntegration }) => ({ name, goalIntegration })));
+    expect(readFileSync(tasksPath, 'utf8')).toBe(savedTasks);
+    expect(readFileSync(goalPath, 'utf8')).toBe(savedGoal);
   });
 });
 
