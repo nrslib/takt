@@ -1404,7 +1404,8 @@ describe('human interruption delivery during director notification recovery', ()
     const { operationId, saved } = saveInterruptedConversation();
     const failing = notificationFails ? failDirectorNotification() : undefined;
     if (notificationFails) {
-      await expect(restoreThrough(entry)).rejects.toBe(directorStorageError);
+      if (entry === 'restore') await expect(restoreThrough(entry)).resolves.toBeUndefined();
+      else await expect(restoreThrough(entry)).rejects.toBe(directorStorageError);
       expect(store.read(record.id, record.assignment)).toEqual(saved);
       expect(execute).not.toHaveBeenCalled();
       expect(await savedDirectorNotifications()).toEqual([]);
@@ -1423,7 +1424,7 @@ describe('human interruption delivery during director notification recovery', ()
 
     if (notificationFails) {
       await restartService();
-      await expect(service.restore()).rejects.toBe(directorStorageError);
+      await expect(service.restore()).resolves.toBeUndefined();
       expect(store.read(record.id, record.assignment)).toEqual(saved);
       expect(execute).not.toHaveBeenCalled();
       expect(fetchNotification).toHaveBeenCalledOnce();
@@ -1450,7 +1451,8 @@ describe('human interruption delivery during director notification recovery', ()
     const error = new Error('Result storage unavailable');
     vi.spyOn(DirectorMessageResultStore.prototype, 'write').mockImplementation(() => { throw error; });
     const create = failDirectorNotification();
-    await expect(restoreThrough(entry)).rejects.toBe(error);
+    if (entry === 'restore') await expect(restoreThrough(entry)).resolves.toBeUndefined();
+    else await expect(restoreThrough(entry)).rejects.toBe(error);
     expect(new DirectorMessageResultStore(directory).read(operationId)).toBeUndefined();
     expect(create).not.toHaveBeenCalled();
     expect(fetchNotification).not.toHaveBeenCalled();
@@ -1468,29 +1470,29 @@ describe('human interruption delivery during director notification recovery', ()
     const results = new DirectorMessageResultStore(directory);
     results.write(persisted);
     failDirectorNotification();
-    await expect(service.restore()).rejects.toBe(directorStorageError);
+    await expect(service.restore()).resolves.toBeUndefined();
     expect(results.read(operationId)).toEqual(persisted);
     expect(fetchNotification).not.toHaveBeenCalled();
     expect(store.read(record.id, record.assignment)).toEqual(saved);
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it('honors disabled blocked notifications while retaining the director storage failure', async () => {
+  it('honors disabled blocked notifications while retaining the record after director storage failure', async () => {
     const { saved } = saveInterruptedConversation();
     writeFileSync(join(repository, '.takt', 'config.yaml'), 'language: en\nmanager:\n  notifications:\n    blocked: false\n');
     failDirectorNotification();
-    await expect(service.restore()).rejects.toBe(directorStorageError);
+    await expect(service.restore()).resolves.toBeUndefined();
     expect(fetchNotification).not.toHaveBeenCalled();
     expect(store.read(record.id, record.assignment)).toEqual(saved);
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it('preserves the director storage failure when the human webhook delivery fails', async () => {
+  it('retains the record when director storage and human webhook delivery fail', async () => {
     const { saved } = saveInterruptedConversation();
     fetchNotification.mockRejectedValueOnce(new Error('Webhook unavailable'));
     vi.spyOn(process.stderr, 'write').mockReturnValue(true);
     failDirectorNotification();
-    await expect(service.restore()).rejects.toBe(directorStorageError);
+    await expect(service.restore()).resolves.toBeUndefined();
     expect(fetchNotification).toHaveBeenCalledOnce();
     expect(store.read(record.id, record.assignment)).toEqual(saved);
     expect(execute).not.toHaveBeenCalled();
@@ -1499,7 +1501,7 @@ describe('human interruption delivery during director notification recovery', ()
   it('does not notify before the recovered running state can be saved', async () => {
     const { operationId, saved } = saveInterruptedConversation();
     vi.spyOn(ConversationStore.prototype, 'write').mockImplementation(() => { throw new Error('Conversation storage unavailable'); });
-    await expect(service.restore()).rejects.toMatchObject({ code: 'storage_error' });
+    await expect(service.restore()).resolves.toBeUndefined();
     expect(new DirectorMessageResultStore(directory).read(operationId)?.result).toMatchObject({ code: 'interrupted' });
     expect(await savedDirectorNotifications()).toHaveLength(1);
     expect(fetchNotification).not.toHaveBeenCalled();

@@ -21,11 +21,13 @@ import type { ConversationInput } from '../features/manager/conversationPort.js'
 import { conversationRecord } from './helpers/conversation-fixtures.js';
 import { enqueueDueGoalPatrols } from '../features/manager/patrol.js';
 import { DirectorMessageResultStore } from '../infra/conversations/directorMessageResults.js';
+import * as managerAssignment from '../features/manager/assignment.js';
 
 const doubles = vi.hoisted(() => ({
   ipc: vi.fn<typeof createConversationIpcServer>(),
   plan: vi.fn<() => ManagerConversationPlan>(),
   registerOwner: vi.fn(), removeOwner: vi.fn(),
+  logError: vi.fn(),
 }));
 vi.mock('../features/daemon/conversationIpcServer.js', () => ({ createConversationIpcServer: doubles.ipc }));
 vi.mock('../features/manager/conversationPlan.js', () => ({ createManagerConversationPlan: doubles.plan }));
@@ -39,7 +41,7 @@ vi.mock('../infra/daemon/owner.js', () => ({
 vi.mock('../infra/task/process.js', () => ({ getSelfProcessIdentity: () => ({ startTime: 'conversation-events-test' }) }));
 vi.mock('../shared/utils/cli-invocation.js', () => ({ resolveCliInvocation: () => ({ cliPath: '/test/cli.js' }) }));
 vi.mock('../shared/utils/debug.js', () => ({
-  initDebugLogger: vi.fn(), createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+  initDebugLogger: vi.fn(), createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: doubles.logError }),
 }));
 vi.mock('../infra/task/repositoryDirectory.js', async (original) => ({
   ...await original<typeof import('../infra/task/repositoryDirectory.js')>(),
@@ -432,6 +434,70 @@ it.each([false, true])('restores queued messages without any client and never re
       expect(interrupted[0]).toContain(fixture.id);
     }
   } finally { restored.release(); await second.stop(); }
+});
+
+it.each(['assignment', 'load'] as const)('starts IPC and restores other conversations after a conversation %s failure, then retries on restart', async (failure) => {
+  const fixture = await queueFixture();
+  const source = conversationId({ kind: 'daemon' });
+  const speaker = { namespace: 'agent', id: 'director' } as const;
+  const brokenRepository = join(fixture.directory, 'broken-repository');
+  mkdirSync(join(brokenRepository, '.takt'), { recursive: true });
+  writeFileSync(join(brokenRepository, '.takt', 'config.yaml'), 'provider: mock\nmanager:\n  auto_run: false\n');
+  const interruptedId = randomUUID();
+  const queuedId = randomUUID();
+  const broken = { ...conversationRecord(brokenRepository), model: 'test-model', lastSpeaker: speaker,
+    running: { operationId: interruptedId, kind: 'message' as const,
+      owner: { pid: 1234, identity: { startTime: 'previous-daemon' } }, directorConversationId: source },
+    directorMessages: [{ operationId: queuedId, directorConversationId: source, speaker, text: 'D1' }] };
+  fixture.store.write(broken);
+  const healthy = { ...fixture.store.read(fixture.id, fixture.assignment)!,
+    directorMessages: [{ operationId: randomUUID(), directorConversationId: source, speaker, text: 'D2' }] };
+  fixture.store.write(healthy);
+  // 失敗する会話を先に返し、後続の会話まで復元されることを確認する。
+  const iterate = vi.spyOn(ConversationStore.prototype, 'iterate').mockImplementation(async function* () {
+    yield fixture.store.read(broken.id, broken.assignment)!;
+    yield fixture.store.read(healthy.id, healthy.assignment)!;
+  });
+  const resolveAssignment = managerAssignment.resolveCurrentManagerAssignment;
+  const secret = 'test-recovery-credential';
+  const assignment = vi.spyOn(managerAssignment, 'resolveCurrentManagerAssignment').mockImplementation(async (identity, directory) => {
+    if (failure === 'assignment' && identity.kind === 'repository' && identity.repositoryDirectory === brokenRepository) {
+      throw new Error(`Assignment unavailable: API_KEY=${secret}`);
+    }
+    return resolveAssignment(identity, directory);
+  });
+  const results = new DirectorMessageResultStore(fixture.directory);
+  const savedResult = { operationId: interruptedId, conversationId: broken.id, directorConversationId: source,
+    result: { kind: 'reply' as const, message: 'Completed before restart' } };
+  if (failure === 'load') results.write({ ...savedResult, conversationId: healthy.id });
+  const first = await fixture.start();
+  try {
+    await vi.waitFor(() => {
+      expect(fixture.turns).toEqual(['D2']);
+      expect(fixture.store.read(healthy.id, healthy.assignment)).toMatchObject({ running: null, directorMessages: [] });
+    }, { timeout: 5000 });
+    expect(fixture.store.read(broken.id, broken.assignment)).toEqual(broken);
+    expect(doubles.logError).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      conversationId: broken.id, error: expect.any(String),
+    }));
+    expect(JSON.stringify(doubles.logError.mock.calls)).not.toContain(secret);
+    expect(doubles.removeOwner).not.toHaveBeenCalled();
+  } finally { await first.stop(); iterate.mockRestore(); assignment.mockRestore(); }
+
+  if (failure === 'load') {
+    writeFileSync(join(fixture.directory, 'director-message-results', `${interruptedId}.json`), JSON.stringify(savedResult));
+  }
+  fixture.turns.length = 0;
+  const second = await fixture.start();
+  try {
+    await vi.waitFor(() => {
+      expect(fixture.turns).toEqual(['D1']);
+      expect(fixture.store.read(broken.id, broken.assignment)).toMatchObject({ running: null, directorMessages: [] });
+    }, { timeout: 5000 });
+    expect(results.read(queuedId)?.result).toEqual({ kind: 'reply', message: 'reply:D1' });
+    expect(results.read(interruptedId)?.result).toMatchObject(failure === 'load'
+      ? savedResult.result : { kind: 'error', code: 'interrupted' });
+  } finally { await second.stop(); }
 });
 
 it.each(['result', 'running'] as const)('recovers a failed director %s save without a snapshot or a repeated provider call', async (failure) => {

@@ -36,6 +36,9 @@ import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { notifyManagerTurnFailure } from './turnFailureNotification.js';
 import { ManagerTurnScheduler } from './managerTurnScheduler.js';
 import { DirectorMessageResultStore } from '../../infra/conversations/directorMessageResults.js';
+import { createLogger } from '../../shared/utils/debug.js';
+
+const log = createLogger('manager-conversation');
 
 interface Operation {
   id: string; controller: AbortController; cleanupComplete: boolean; release(): void; completion?: Promise<void>;
@@ -684,7 +687,12 @@ export function createConversationService(input: {
         for await (const record of store.iterate()) {
           if (closed) return;
           if ((record.directorMessages?.length ?? 0) === 0 && record.running?.directorConversationId === undefined) continue;
-          if (!conversations.has(record.id)) await loadConversation(record, await resolveAssignment(record.assignment));
+          try {
+            if (!conversations.has(record.id)) await loadConversation(record, await resolveAssignment(record.assignment));
+          } catch (error) {
+            log.error('Cannot restore manager conversation', { conversationId: record.id,
+              error: sanitizeSensitiveText(getErrorMessage(error)) });
+          }
         }
       } finally { restoring = false; }
       for (const conversation of conversations.values()) scheduler.notify(conversation.record.id);
