@@ -22,6 +22,7 @@ import {
 } from './select-viewport.js';
 import { ESCAPE_SEQUENCE_TIMEOUT_MS, KeyInputDecoder } from './select-key-input.js';
 import { statusLine } from '../ui/StatusLine.js';
+import { getDisplayWidth, stripAnsi } from '../utils/text.js';
 
 const MAX_STDIN_CHUNK_BYTES = 64 * 1024;
 
@@ -35,14 +36,29 @@ export {
   firstSelectableIndex,
 } from './select-menu.js';
 
-function printHeader<T extends string>(message: string, callbacks?: InteractiveSelectCallbacks<T>): void {
-  console.log();
-  console.log(chalk.cyan(message));
-  const hint = callbacks?.instructions
+function headerHint<T extends string>(callbacks?: InteractiveSelectCallbacks<T>): string {
+  return callbacks?.instructions
     ? `  (${callbacks.instructions})`
     : callbacks?.onKeyPress
     ? '  (↑↓ to move, Enter to select, b to bookmark, r to remove)'
     : '  (↑↓ to move, Enter to select)';
+}
+
+function headerLineCount(message: string, hint: string, terminalColumns: number): number {
+  const textLines = [message, hint].flatMap((text) => text.split('\n'));
+  return 2 + textLines.reduce(
+    (rows, line) => rows + Math.max(1, Math.ceil(getDisplayWidth(stripAnsi(line)) / terminalColumns)),
+    0,
+  );
+}
+
+export function defaultSelectHeaderLineCount(message: string, terminalColumns: number): number {
+  return headerLineCount(message, headerHint(), terminalColumns);
+}
+
+function printHeader(message: string, hint: string): void {
+  console.log();
+  console.log(chalk.cyan(message));
   console.log(chalk.gray(hint));
   console.log();
 }
@@ -174,13 +190,17 @@ function interactiveSelect<T extends string>(
     const keyInputDecoder = new KeyInputDecoder();
     let pendingInputTimer: NodeJS.Timeout | undefined;
     const cancelLabel = callbacks?.cancelLabel ?? 'Cancel';
+    const hint = headerHint(callbacks);
 
     const terminalRows = process.stdout.rows ?? 24;
     let viewport: ViewportState;
     let totalLines = 0;
 
     const prepareViewport = (scrollOffset: number, terminalColumns: number): ViewportState => {
-      const nextViewport = createViewportState(terminalRows, currentOptions, hasCancelOption, terminalColumns);
+      const nextViewport = createViewportState(
+        terminalRows, currentOptions, hasCancelOption, terminalColumns,
+        headerLineCount(message, hint, terminalColumns),
+      );
       if (!nextViewport.active) return nextViewport;
       return {
         ...nextViewport,
@@ -346,7 +366,7 @@ function interactiveSelect<T extends string>(
     try {
       const terminalColumns = process.stdout.columns || 80;
       viewport = prepareViewport(0, terminalColumns);
-      printHeader(message, callbacks);
+      printHeader(message, hint);
       process.stdout.write('\x1B[?7l');
 
       const initialLines = viewport.active

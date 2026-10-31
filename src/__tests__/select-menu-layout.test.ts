@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Terminal } from '@xterm/headless';
 import { stripVTControlCharacters } from 'node:util';
 import { countItemLines, countRenderedLines, renderSingleOption, type SelectOptionItem } from '../shared/prompt/select-menu.js';
 import { adjustScrollOffset, createViewportState, renderMenuWithViewport } from '../shared/prompt/select-viewport.js';
@@ -45,9 +46,9 @@ describe('select description layout', () => {
       { label: 'group:', value: 'heading', selectable: false },
       { label: 'review', value: 'leaf' },
     ];
-    const viewport = createViewportState(8, options, true, 80);
+    const viewport = createViewportState(8, options, true, 80, 4);
     expect(viewport.active).toBe(true);
-    expect(createViewportState(24, options, true, 80).active).toBe(false);
+    expect(createViewportState(24, options, true, 80, 4).active).toBe(false);
     const initial = renderMenuWithViewport(options, 0, true, 0, viewport.maxOptionLines, 'Cancel', 80)
       .map(stripVTControlCharacters);
     expect(initial).toHaveLength(4);
@@ -225,6 +226,60 @@ describe('select layout after terminal width changes', () => {
     } finally {
       stdin.send('\r');
       expect(await selection).toBe('ordinary');
+    }
+  });
+
+  it.each([
+    { columns: 80, message: 'SELECT_MARKER', preferred: false },
+    { columns: 80, message: 'FAILURE_MARKER\nSELECT_MARKER', preferred: false },
+    { columns: 80, message: 'FAILURE_MARKER\nSELECT_MARKER', preferred: true },
+    { columns: 30, message: 'FAILURE_MARKER\nSELECT_MARKER', preferred: true },
+    { columns: 30, message: `FAILURE_MARKER ${'x'.repeat(15)}\nSELECT_MARKER`, preferred: true },
+    { columns: 30, message: `FAILURE_MARKER ${'x'.repeat(24)}\nSELECT_MARKER`, preferred: false },
+  ])('keeps the $columns-column header visible while selecting (preferred=$preferred)', async ({
+    columns, message, preferred,
+  }) => {
+    const rows = 24;
+    setTerminal(columns, rows);
+    const stdin = setupRawStdin([]);
+    const log = vi.spyOn(console, 'log').mockImplementation((...parts: unknown[]) => {
+      process.stdout.write(parts.join(' ') + '\n');
+    });
+    const options = Array.from({ length: 30 }, (_, index) => ({ label: `Task ${index}`, value: String(index) }));
+    const selection = preferred
+      ? selectOptionWithDefault(message, options, '0')
+      : selectOption(message, options, { showConfirmation: false });
+    const terminal = new Terminal({ cols: columns, rows, allowProposedApi: true, convertEol: true });
+    let finished = false;
+    try {
+      const visibleScreen = async (): Promise<string> => {
+        const output = vi.mocked(process.stdout.write).mock.calls.map(([chunk]) => String(chunk)).join('');
+        terminal.reset();
+        await new Promise<void>((resolve) => terminal.write(output, resolve));
+        const viewportY = terminal.buffer.active.viewportY;
+        return Array.from({ length: rows }, (_, index) =>
+          terminal.buffer.active.getLine(viewportY + index)?.translateToString(true) ?? '').join('\n');
+      };
+
+      expect(await visibleScreen()).toContain('SELECT_MARKER');
+      if (message.includes('FAILURE_MARKER')) {
+        expect(await visibleScreen()).toContain('FAILURE_MARKER');
+      }
+      stdin.send('\x1b[B');
+      const movedScreen = await visibleScreen();
+      expect(movedScreen).toContain('SELECT_MARKER');
+      if (message.includes('FAILURE_MARKER')) expect(movedScreen).toContain('FAILURE_MARKER');
+      expect(movedScreen).toContain('Task 1');
+      stdin.send('\r');
+      finished = true;
+      expect(await selection).toBe('1');
+    } finally {
+      if (!finished) {
+        stdin.send('\r');
+        await selection;
+      }
+      terminal.dispose();
+      log.mockRestore();
     }
   });
 });
