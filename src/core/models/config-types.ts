@@ -92,6 +92,8 @@ export interface InternalAgentSeats {
   loopJudge?: ProviderRoutingEntry;
   /** `review-completion-judge`: completion-retry episode の網羅性判定役。 */
   completionRetryJudge?: ProviderRoutingEntry;
+  /** `manager-permission-judge`: manager の道具の使用を審査する判断役。 */
+  managerPermissionJudge?: ProviderRoutingEntry;
 }
 
 export interface ProviderRoutingConfig {
@@ -350,7 +352,8 @@ export interface NotificationSoundEventsConfig {
  * Project-level configuration stored in .takt/config.yaml.
  */
 export interface ProjectConfig {
-  manager?: { autoRun?: boolean; defaultWorkflow?: string; mainMerge?: 'auto' | 'approve'; notifications?: ManagerNotifications };
+  manager?: { autoRun?: boolean; patrolInterval?: number; defaultWorkflow?: string; mainMerge?: 'auto' | 'approve'; notifications?: ManagerNotifications; sensitivePaths?: string[];
+    slack?: { channelId: string; allowedUserIds: string[] } };
   /** UI / builtin resource language override for this project */
   language?: Language;
   /** Provider selection for agent runtime */
@@ -440,7 +443,9 @@ export interface ProjectConfig {
  * — handled by the resolution layer.
  */
 export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSubmodules' | 'assistant' | 'manager'> {
-  manager?: { autoRun?: boolean; defaultWorkflow?: string; notifications?: ManagerNotifications };
+  /** @globalOnly */
+  director?: { patrolInterval?: number; slack?: { channelId: string; allowedUserIds: string[] } };
+  manager?: { autoRun?: boolean; patrolInterval?: number; defaultWorkflow?: string; notifications?: ManagerNotifications; sensitivePaths?: string[] };
   /** Global default for assistant task-instruction formatting. */
   assistant?: GlobalAssistantConfig;
   /** @globalOnly */
@@ -488,6 +493,9 @@ export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSu
   /** @globalOnly */
   /** External Kiro CLI path (overridden by TAKT_KIRO_CLI_PATH env var) */
   kiroCliPath?: string;
+  /** @globalOnly */
+  /** External Devin CLI path (overridden by TAKT_DEVIN_CLI_PATH env var) */
+  devinCliPath?: string;
   /** @globalOnly */
   /** Copilot GitHub token (overridden by TAKT_COPILOT_GITHUB_TOKEN env var) */
   copilotGithubToken?: string;

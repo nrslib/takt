@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PrHeadObservationMismatchError } from '../core/workflow/system/pr-execution-context.js';
+import { parseGitHubPullRequestTarget } from '../infra/github/pull-request-target.js';
 import {
   closePr,
   createPullRequest,
@@ -226,6 +227,78 @@ describe('GitHub PR command boundary', () => {
     checkGhCli.mockReturnValue({ available: true });
   });
 
+  it.each(['github.com', 'ghe.example.test'])('keeps the explicit %s target for review pagination, replies and commit status', async (hostname) => {
+    const target = parseGitHubPullRequestTarget(`https://${hostname}/acme/target/pull/123`);
+    const page = (nodes: unknown[], next?: string) => ({ pageInfo: { hasNextPage: next !== undefined, endCursor: next ?? null }, nodes });
+    const pull = (value: unknown) => ({ data: { repository: { pullRequest: value } } });
+    queueAsyncGhResponses(
+      { url: target.url, headRefOid: 'head-target' },
+      pull({ reviews: page([], 'review-page-2') }), pull({ reviews: page([]) }),
+      pull({ reviewThreads: page([{ id: 'thread', comments: page([{ author: { login: 'reviewer' } }], 'reply-1') }], 'thread-page-2') }),
+      { data: { node: { comments: page([{ author: { login: 'reviewer' }, body: 'Reply' }], 'reply-2') } } },
+      { data: { node: { comments: page([{ author: { login: 'coderabbitai' }, body: 'Reviewed' }]) } } },
+      pull({ reviewThreads: page([]) }),
+      pull({ comments: page([], 'comment-page-2') }), pull({ comments: page([]) }),
+      { statuses: [{ context: 'other', state: 'success' }], total_count: 2 },
+      { statuses: [{ context: 'CodeRabbit', state: 'success', description: 'Review completed' }], total_count: 2 },
+    );
+    await expect(fetchCodeRabbitReviewStatus(123, '/source', undefined, undefined, target)).resolves.toMatchObject({
+      headSha: 'head-target', reviewedHeadShas: ['head-target'], hasCodeRabbitThreadReplyActivity: true,
+    });
+    queueAsyncGhResponses(
+      { url: target.url, headRefOid: 'head-target' },
+      pull({ headRefOid: 'head-target', reviewThreads: page([{ id: 'thread-target', isResolved: false, isOutdated: false,
+        comments: page([{ author: { login: 'coderabbitai' }, body: 'Fix', path: 'app.ts', line: 1, url: target.url }], 'starter') }], 'threads-2') }),
+      { data: { node: { comments: page([{ author: { login: 'user' }, body: 'Reply one' }], 'replies-2') } } },
+      { data: { node: { comments: page([{ author: { login: 'user' }, body: 'Reply two' }]) } } },
+      pull({ headRefOid: 'head-target', reviewThreads: page([]) }),
+    );
+    await expect(fetchCodeRabbitReviewThreads(123, '/source', 'head-target', undefined, target)).resolves.toMatchObject([
+      { id: 'thread-target', replies: [{ body: 'Reply one' }, { body: 'Reply two' }] },
+    ]);
+    for (const [, args] of execFile.mock.calls) {
+      const command = args as string[];
+      if (command[0] === 'pr') expect(command[2]).toBe(target.url);
+      else {
+        expect(command.slice(-2)).toEqual(['--hostname', hostname]);
+        if (command.some((arg) => arg.startsWith('owner='))) {
+          expect(command).toContain('owner=acme'); expect(command).toContain('repo=target');
+          expect(command).toContain('number=123');
+        }
+      }
+    }
+    expect(execFile.mock.calls.some(([, args]) => (args as string[])[1]?.includes('repos/acme/target/commits/head-target/status'))).toBe(true);
+    expect(asyncCommandResponses).toHaveLength(0);
+  });
+
+  it('uses the explicit URL for review requests and HEAD checks and the host for Resolve', async () => {
+    const target = parseGitHubPullRequestTarget('https://ghe.example.test/acme/target/pull/123');
+    queueAsyncGhResponses({}, { url: target.url, headRefOid: 'target-head' },
+      { data: { resolveReviewThread: { thread: { id: 'target-thread', isResolved: true } } } });
+    expect(await requestCodeRabbitReview(123, '/source', Date.now() + 1000, undefined, target)).toBe(true);
+    expect(await fetchCacciaPullRequestHeadSha(123, '/source', undefined, undefined, target)).toBe('target-head');
+    await resolveReviewThread('target-thread', '/source', undefined, target);
+    expect(execFile.mock.calls[0]?.[1]).toEqual(['pr', 'comment', target.url, '--body', '@coderabbitai review']);
+    expect(execFile.mock.calls[1]?.[1]).toEqual(['pr', 'view', target.url, '--json', 'url,headRefOid']);
+    expect(execFile.mock.calls[2]?.[1]).toEqual(expect.arrayContaining(['threadId=target-thread', '--hostname', target.hostname]));
+  });
+
+  it.each([
+    ['https://github.com/acme/source.git', 'git@github.com:acme/source.git\nssh://git@github.com:443/acme/source.git', 'github.com',
+      'https://github.com/acme/target.git', ['git@github.com:acme/target.git', 'ssh://git@github.com:443/acme/target.git']],
+    ['https://account@github.com/acme/source.git', 'https://account@github.com/acme/source.git', 'ghe.example.test',
+      'git@ghe.example.test:acme/target.git', ['git@ghe.example.test:acme/target.git']],
+  ] as const)('uses the published head repository without copying cross-host credentials (%s, %s, %s)', async (origin, push, hostname, fetchUrl, pushUrls) => {
+    const target = parseGitHubPullRequestTarget(`https://${hostname}/acme/target/pull/123`);
+    queueAsyncGhResponses({ url: target.url, headRefOid: 'target-head' }, pullHead());
+    asyncCommandResponses.push(origin, push);
+    function pullHead() { return { data: { repository: { pullRequest: { number: 123, headRefName: 'feature/target', headRefOid: 'target-head',
+      headRepository: { sshUrl: `git@${hostname}:acme/target.git` } } } } }; }
+    await expect(fetchCacciaPullRequestDetails(123, '/source', undefined, target)).resolves.toMatchObject({
+      headRepositoryUrl: fetchUrl, headRepositoryPushUrls: pushUrls,
+    });
+  });
+
   it('finds an open PR and treats CLI failure as no match', () => {
     execFileSync.mockReturnValueOnce(JSON.stringify([{ number: 42, url: 'https://example.test/pr/42' }]));
     expect(findExistingPr('feature/branch', '/project')).toEqual({
@@ -339,6 +412,28 @@ describe('GitHub PR command boundary', () => {
         threadState: 'active',
       }),
     ]));
+  });
+
+  it.each(['github.com', 'ghe.example.test'])('keeps the %s merge review context target through thread and reply pages', (hostname) => {
+    const target = parseGitHubPullRequestTarget(`https://${hostname}/acme/target/pull/123`);
+    const page = (nodes: unknown[], cursor: string | null = null) => ({
+      nodes, pageInfo: { hasNextPage: cursor !== null, endCursor: cursor },
+    });
+    const comment = (body: string) => ({ author: { login: 'reviewer' }, body, path: 'README.md',
+      line: 1, originalLine: null, url: target.url + '#comment' });
+    execFileSync.mockReturnValueOnce(JSON.stringify({ number: 123, title: 'Target', body: 'Review', url: target.url,
+      headRefName: 'feature/pr', baseRefName: 'main', comments: [], reviews: [], files: [] }))
+      .mockReturnValueOnce(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: page([
+        { id: 'thread-target', isResolved: false, isOutdated: false, resolvedBy: null,
+          comments: page([comment('first')], 'replies') },
+      ], 'threads') } } } }))
+      .mockReturnValueOnce(JSON.stringify({ data: { node: { comments: page([comment('reply')]) } } }))
+      .mockReturnValueOnce(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: page([]) } } } }));
+    expect(fetchPrReviewComments(123, '/source', target).reviews.map((review) => review.body)).toEqual(['first', 'reply']);
+    expect(execFileSync.mock.calls[0]?.[1]).toEqual(['pr', 'view', target.url, '--json',
+      'number,title,body,url,headRefName,baseRefName,comments,reviews,files']);
+    expect(execFileSync.mock.calls).toHaveLength(4);
+    for (const [, args] of execFileSync.mock.calls.slice(1)) expect((args as string[]).slice(-2)).toEqual(['--hostname', hostname]);
   });
 
   it('returns only unresolved CodeRabbit threads, using the first comment and all thread pages asynchronously', async () => {

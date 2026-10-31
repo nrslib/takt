@@ -7,6 +7,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
 import type { WorkflowConfig } from '../core/models/index.js';
+import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
+import { getWorkflowResumeFrameKind } from '../core/workflow/step-kind.js';
 import { buildPhaseExecutionId } from '../shared/utils/phaseExecutionId.js';
 import type { PromptLogRecord } from '../features/tasks/execute/promptLog.js';
 
@@ -146,16 +148,17 @@ const {
         phase: 3,
         sequence: 1,
       });
-      this.emit('step:start', step, 1, 'step instruction', providerInfo, this.config.name, step.name, 1);
+      const workflowStack = [buildWorkflowResumePointEntry(this.config, step.name, getWorkflowResumeFrameKind(step), 1)];
+      this.emit('step:start', step, 1, 'step instruction', providerInfo, this.config.name, step.name, 1, workflowStack);
       if (shouldReversePhaseCompletion) {
         this.emit('phase:start', step, 1, 'execute', 'phase prompt first', {
           systemPrompt: '../agents/coder.md',
           userInstruction: 'phase prompt first',
-        }, executePhaseId, 1);
+        }, executePhaseId, 1, workflowStack);
         this.emit('phase:start', step, 1, 'execute', 'phase prompt second', {
           systemPrompt: '../agents/coder.md',
           userInstruction: 'phase prompt second',
-        }, executePhaseSecondId, 1);
+        }, executePhaseSecondId, 1, workflowStack);
       } else {
         this.emit('phase:start', step, 1, 'execute', shouldEmitSensitive
           ? 'token=plain-secret'
@@ -166,7 +169,7 @@ const {
           userInstruction: shouldEmitSensitive
             ? 'api_key=plain-secret'
             : shouldEmitIsolationValues ? isolationInstruction : 'phase prompt',
-        }, executePhaseId, 1);
+        }, executePhaseId, 1, workflowStack);
       }
       if (shouldEmitIsolationValues) {
         await isolationPhaseBarrier.wait(this.task);
@@ -174,15 +177,15 @@ const {
       this.emit('phase:start', step, 3, 'judge', 'phase3 prompt', {
         systemPrompt: 'conductor',
         userInstruction: 'phase3 prompt',
-      }, judgePhaseId, 1);
+      }, judgePhaseId, 1, workflowStack);
       this.emit('phase:judge_stage', step, 3, 'judge', {
         stage: 1,
         method: 'structured_output',
         status: 'done',
         instruction: 'judge stage prompt',
         response: 'judge stage response',
-      }, judgePhaseId, 1);
-      this.emit('phase:complete', step, 3, 'judge', '[IMPLEMENT:1]', 'done', undefined, judgePhaseId, 1);
+      }, judgePhaseId, 1, workflowStack);
+      this.emit('phase:complete', step, 3, 'judge', '[IMPLEMENT:1]', 'done', undefined, judgePhaseId, 1, workflowStack);
       if (shouldAbortBeforeComplete) {
         this.emit(
           'workflow:abort',
@@ -199,19 +202,19 @@ const {
         return { status: 'aborted', iteration: 1 };
       }
       if (shouldReversePhaseCompletion) {
-        this.emit('phase:complete', step, 1, 'execute', 'phase response second', 'done', undefined, executePhaseSecondId, 1);
-        this.emit('phase:complete', step, 1, 'execute', 'phase response first', 'done', undefined, executePhaseId, 1);
+        this.emit('phase:complete', step, 1, 'execute', 'phase response second', 'done', undefined, executePhaseSecondId, 1, workflowStack);
+        this.emit('phase:complete', step, 1, 'execute', 'phase response first', 'done', undefined, executePhaseId, 1, workflowStack);
       } else {
         this.emit('phase:complete', step, 1, 'execute', shouldEmitSensitive
           ? 'password=plain-secret'
-          : shouldEmitIsolationValues ? isolationResponse : 'phase response', 'done', undefined, executePhaseId, 1);
+          : shouldEmitIsolationValues ? isolationResponse : 'phase response', 'done', undefined, executePhaseId, 1, workflowStack);
       }
       if (shouldDuplicatePhase) {
         this.emit('phase:start', step, 1, 'execute', 'phase prompt second', {
           systemPrompt: '../agents/coder.md',
           userInstruction: 'phase prompt second',
-        }, executePhaseSecondId, 1);
-        this.emit('phase:complete', step, 1, 'execute', 'phase response second', 'done', undefined, executePhaseSecondId, 1);
+        }, executePhaseSecondId, 1, workflowStack);
+        this.emit('phase:complete', step, 1, 'execute', 'phase response second', 'done', undefined, executePhaseSecondId, 1, workflowStack);
       }
       this.emit(
         'step:complete',
@@ -224,8 +227,10 @@ const {
         },
         'step instruction',
         step.name,
+        workflowStack,
       );
       if (shouldRepeatStep) {
+        const repeatedStack = [buildWorkflowResumePointEntry(this.config, step.name, getWorkflowResumeFrameKind(step), 2)];
         this.emit(
           'step:start',
           step,
@@ -235,6 +240,7 @@ const {
           this.config.name,
           step.name,
           2,
+          repeatedStack,
         );
         this.emit(
           'step:complete',
@@ -247,6 +253,7 @@ const {
           },
           'step instruction repeat',
           step.name,
+          repeatedStack,
         );
       }
       if (shouldAbort) {

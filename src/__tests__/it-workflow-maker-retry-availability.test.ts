@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { render } from 'ink-testing-library';
@@ -24,6 +24,8 @@ const {
   mockResolveUserMessageColors: vi.fn(),
   mockSelectOption: vi.fn(),
 }));
+
+vi.mock('../infra/managed-providers/preflight.js', () => ({ checkManagedProviders: vi.fn(async () => undefined) }));
 
 vi.mock('../shared/prompt/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -62,9 +64,13 @@ async function flushFrames(): Promise<void> {
 
 function createTestProvider() {
   const calls: { prompt: string; options: ProviderCallOptions }[] = [];
+  const copilotConfigs: unknown[] = [];
   const systemPrompts: string[] = [];
   const providerCall = vi.fn(async (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => {
     calls.push({ prompt, options });
+    if (options.preparedMcp?.path) {
+      copilotConfigs.push(JSON.parse(readFileSync(options.preparedMcp.path, 'utf8')));
+    }
     return {
       persona: 'interactive',
       status: 'done',
@@ -85,7 +91,7 @@ function createTestProvider() {
     },
   };
 
-  return { calls, provider, providerCall, systemPrompts };
+  return { calls, provider, providerCall, systemPrompts, copilotConfigs };
 }
 
 describe('Workflow Maker assistant retry command availability integration', () => {
@@ -187,12 +193,17 @@ describe('Workflow Maker assistant retry command availability integration', () =
     },
   );
 
-  it.each(['en', 'ja'] as const)(
-    'treats retry commands as regular conversation and retains /workflow for %s',
-    async (lang) => {
+  it.each([
+    { lang: 'en', providerType: 'mock' },
+    { lang: 'ja', providerType: 'copilot' },
+    { lang: 'en', providerType: 'opencode' },
+  ] as const)(
+    'treats retry commands as regular conversation and excludes assistant MCP assignments for $providerType',
+    async ({ lang, providerType }) => {
       projectDir = mkdtempSync(join(tmpdir(), 'takt-workflow-maker-retry-'));
       mkdirSync(join(projectDir, '.takt'), { recursive: true });
-      writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${lang}\nprovider: mock\n`);
+      writeFileSync(join(projectDir, '.takt', 'config.yaml'), `language: ${lang}\nprovider: ${providerType}\n`);
+      writeFileSync(join(projectDir, '.takt', 'runtime.yaml'), 'version: 1\nmcp:\n  servers:\n    backlog:\n      type: stdio\n      command: backlog-fixture\n  defaults:\n    servers: [backlog]\n  targets:\n    personas:\n      assistant:\n        servers: [backlog]\n');
 
       const providerState = createTestProvider();
       mockGetProvider.mockReturnValue(providerState.provider);
@@ -250,7 +261,7 @@ describe('Workflow Maker assistant retry command availability integration', () =
         stdoutWrite.mockRestore();
       }
 
-      expect(mockGetProvider).toHaveBeenCalledWith('mock');
+      expect(mockGetProvider).toHaveBeenCalledWith(providerType);
       expect(mockSelectOption).toHaveBeenCalledTimes(2);
       expect(mockPromptInput).toHaveBeenCalledTimes(2);
       expect(providerState.providerCall).toHaveBeenCalledTimes(4);
@@ -266,17 +277,23 @@ describe('Workflow Maker assistant retry command availability integration', () =
       }
       for (const { options } of providerState.calls) {
         expect(options.permissionMode).toBe('readonly');
-        expect(options.allowedTools).toEqual(expect.arrayContaining([
-          'Read',
-          'Glob',
-          'Grep',
-          'WebSearch',
-          'WebFetch',
-        ]));
-        expect(options.allowedTools).not.toEqual(expect.arrayContaining(['Write', 'Edit']));
+        if (providerType === 'mock') {
+          expect(options.allowedTools).toEqual(expect.arrayContaining([
+            'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch',
+          ]));
+          expect(options.allowedTools).not.toEqual(expect.arrayContaining(['Write', 'Edit']));
+        }
         expect(options.mcpServers?.takt).toMatchObject({
           args: expect.arrayContaining(['--tool-set', 'read-only']),
         });
+        expect(Object.keys(options.mcpServers!)).toEqual(['takt']);
+        expect(options.allowedTools ?? []).not.toContain('mcp__backlog');
+      }
+      if (providerType === 'copilot') {
+        expect(providerState.copilotConfigs).toHaveLength(4);
+        for (const config of providerState.copilotConfigs) {
+          expect(Object.keys((config as { mcpServers: object }).mcpServers)).toEqual(['takt']);
+        }
       }
       for (const prompt of providerState.systemPrompts) {
         expect(prompt).toContain(getLabel('interactive.ui.assistantRetryUnavailableGuidance', lang));

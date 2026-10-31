@@ -175,6 +175,7 @@ export class GlobalConfigManager {
       cursorCliPath: expandOptionalHomePath(parsed.cursor_cli_path),
       copilotCliPath: expandOptionalHomePath(parsed.copilot_cli_path),
       kiroCliPath: expandOptionalHomePath(parsed.kiro_cli_path),
+      devinCliPath: expandOptionalHomePath(parsed.devin_cli_path),
       copilotGithubToken: parsed.copilot_github_token,
       kiroApiKey: parsed.kiro_api_key,
       opencodeApiKey: parsed.opencode_api_key,
@@ -226,8 +227,14 @@ export class GlobalConfigManager {
         parsed.pipeline as { default_branch_prefix?: string; commit_message_template?: string; pr_body_template?: string } | undefined,
       ),
       caccia: parsed.caccia,
+      director: parsed.director === undefined ? undefined : {
+        patrolInterval: parsed.director.patrol_interval,
+        slack: parsed.director.slack === undefined ? undefined : {
+          channelId: parsed.director.slack.channel_id, allowedUserIds: parsed.director.slack.allowed_user_ids,
+        },
+      },
       manager: parsed.manager === undefined ? undefined : {
-        autoRun: parsed.manager.auto_run, defaultWorkflow: parsed.manager.default_workflow, notifications: parsed.manager.notifications,
+        autoRun: parsed.manager.auto_run, patrolInterval: parsed.manager.patrol_interval, defaultWorkflow: parsed.manager.default_workflow, notifications: parsed.manager.notifications, sensitivePaths: parsed.manager.sensitive_paths,
       },
       merge: parsed.merge,
       assistant: normalizeAssistantConfig(parsed.assistant),

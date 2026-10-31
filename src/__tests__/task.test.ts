@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, writeFileSync, existsSync, rmSync, readFileSync, readdirSync, symlinkSync, utimesSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, existsSync, rmSync, readFileSync, readdirSync, symlinkSync, statSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
@@ -118,9 +118,10 @@ class RecordingTaskStore extends TaskStore {
     return this.state;
   }
 
-  override update(mutator: (current: TasksFileData) => TasksFileData): TasksFileData {
+  override update(mutator: (current: TasksFileData) => TasksFileData | undefined): TasksFileData {
     this.updateCalls += 1;
-    this.state = mutator(this.state);
+    const updated = mutator(this.state);
+    if (updated !== undefined) this.state = updated;
     return this.state;
   }
 }
@@ -365,7 +366,8 @@ describe('TaskRunner (tasks.yaml)', () => {
       startedAt: new Date().toISOString(), completedAt: new Date().toISOString() });
     runner.requeueTask(task.name, ['failed']);
     const claimed = new TaskRunner(testDir).claimNextTasks(1)[0]!;
-    expect(claimed.data).toMatchObject({ merge_pushed_head_sha: c, merge_push_base_head_sha: b,
+    expect(claimed.data).toMatchObject({ merge_known_remote_head_sha: c,
+      merge_pushed_head_sha: c, merge_push_base_head_sha: b,
       merge_push_source: 'caccia' });
   });
 
@@ -450,6 +452,62 @@ describe('TaskRunner (tasks.yaml)', () => {
 
     expect(() => runner.completePublishedTask('task-a', 'https://example.test/pr/866')).toThrow();
     expect(loadTasksFile(testDir)).toEqual(before);
+  });
+
+  it.each([false, true])('returns current tasks without writing when the mutator returns undefined (existing file: %s)', (existingFile) => {
+    const store = new TaskStore(testDir);
+    const tasksFile = store.getTasksFilePath();
+    if (existingFile) {
+      writeTasksFile(testDir, [createPendingRecord({})]);
+      const previousTime = new Date('2000-01-01T00:00:00.000Z');
+      utimesSync(tasksFile, previousTime, previousTime);
+    }
+    const current = store.read();
+    const content = existingFile ? readFileSync(tasksFile, 'utf8') : undefined;
+    const modifiedAt = existingFile ? statSync(tasksFile).mtimeMs : undefined;
+
+    const result = store.update(() => undefined);
+
+    expect(result).toEqual(current);
+    expect(existsSync(tasksFile)).toBe(existingFile);
+    if (existingFile) {
+      expect(readFileSync(tasksFile, 'utf8')).toBe(content);
+      expect(statSync(tasksFile).mtimeMs).toBe(modifiedAt);
+    }
+  });
+
+  it.each([false, true])('returns current deletion state without writing when the mutator returns undefined (owner alive: %s)', (ownerAlive) => {
+    const store = new TaskStore(testDir);
+    const task = createPendingRecord({});
+    const deletion = {
+      id: '650e8400-e29b-41d4-a716-446655440000',
+      owner_pid: ownerAlive ? process.pid : 999999999,
+    };
+    writeTasksFile(testDir, [{ ...task, deletion }]);
+    const tasksFile = store.getTasksFilePath();
+    const previousTime = new Date('2000-01-01T00:00:00.000Z');
+    utimesSync(tasksFile, previousTime, previousTime);
+    const content = readFileSync(tasksFile, 'utf8');
+    const modifiedAt = statSync(tasksFile).mtimeMs;
+    const expected = { tasks: [ownerAlive ? { ...task, deletion } : task] };
+    const kill = process.kill.bind(process);
+    const inspect = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      if (pid === 999999999) throw Object.assign(new Error('No such process'), { code: 'ESRCH' });
+      return kill(pid, signal);
+    });
+
+    try {
+      const result = store.update((current) => {
+        expect(current).toEqual(expected);
+        return undefined;
+      });
+
+      expect(result).toEqual(expected);
+      expect(readFileSync(tasksFile, 'utf8')).toBe(content);
+      expect(statSync(tasksFile).mtimeMs).toBe(modifiedAt);
+    } finally {
+      inspect.mockRestore();
+    }
   });
 
   it('should recover a stale process lock before updating tasks', () => {
@@ -587,6 +645,65 @@ describe('TaskRunner (tasks.yaml)', () => {
       worktreePath: join(testDir, '.takt', 'worktrees', 'task-a'),
       branch: 'feature/task-a',
     });
+  });
+
+  it('should leave a missing tasks file absent when recovery finds no tasks', () => {
+    const tasksFile = runner.getTasksFilePath();
+    const onRecovered = vi.fn();
+
+    expect(runner.failInterruptedRunningTasks(undefined, onRecovered)).toBe(0);
+    expect(runner.failInterruptedRunningTasks(undefined, onRecovered)).toBe(0);
+
+    expect(existsSync(tasksFile)).toBe(false);
+    expect(onRecovered).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { condition: 'empty', tasks: [] },
+    { condition: 'pending', tasks: [createPendingRecord({})] },
+    { condition: 'failed', tasks: [createFailedRecord({})] },
+    { condition: 'exceeded', tasks: [createExceededRecord({})] },
+    { condition: 'completed', tasks: [createFailedRecord({ status: 'completed', failure: undefined })] },
+    { condition: 'pr_failed', tasks: [createFailedRecord({ status: 'pr_failed' })] },
+    { condition: 'live running', tasks: [createPendingRecord({
+      status: 'running', started_at: '2026-02-09T00:01:00.000Z', owner_pid: process.pid,
+    })] },
+  ])('should not rewrite the tasks file when recovery finds only $condition tasks', ({ tasks }) => {
+    writeTasksFile(testDir, tasks);
+    const tasksFile = runner.getTasksFilePath();
+    const previousTime = new Date('2000-01-01T00:00:00.000Z');
+    utimesSync(tasksFile, previousTime, previousTime);
+    const before = readFileSync(tasksFile, 'utf8');
+    const modifiedAt = statSync(tasksFile).mtimeMs;
+    const onRecovered = vi.fn();
+
+    expect(runner.failInterruptedRunningTasks(undefined, onRecovered)).toBe(0);
+    expect(runner.failInterruptedRunningTasks(undefined, onRecovered)).toBe(0);
+
+    expect(statSync(tasksFile).mtimeMs).toBe(modifiedAt);
+    expect(readFileSync(tasksFile, 'utf8')).toBe(before);
+    expect(onRecovered).not.toHaveBeenCalled();
+  });
+
+  it('should save recovered tasks before notification and skip saving on repeated recovery', () => {
+    writeTasksFile(testDir, [createPendingRecord({
+      status: 'running', started_at: '2026-02-09T00:01:00.000Z', owner_pid: null,
+    })]);
+    const tasksFile = runner.getTasksFilePath();
+    const onRecovered = vi.fn(() => expect(loadTasksFile(testDir).tasks[0]?.status).toBe('failed'));
+
+    expect(runner.failInterruptedRunningTasks(undefined, onRecovered)).toBe(1);
+    expect(onRecovered).toHaveBeenCalledOnce();
+    const saved = readFileSync(tasksFile, 'utf8');
+    const previousTime = new Date('2000-01-01T00:00:00.000Z');
+    utimesSync(tasksFile, previousTime, previousTime);
+    const modifiedAt = statSync(tasksFile).mtimeMs;
+
+    expect(runner.failInterruptedRunningTasks(undefined, onRecovered)).toBe(0);
+
+    expect(statSync(tasksFile).mtimeMs).toBe(modifiedAt);
+    expect(readFileSync(tasksFile, 'utf8')).toBe(saved);
+    expect(onRecovered).toHaveBeenCalledOnce();
   });
 
   it('should fail interrupted running tasks', () => {
@@ -2644,7 +2761,8 @@ describe('failed PR merge task publication', () => {
     lifecycle.recordPrMergePushedHead(record.name, newHeadSha, oldHeadSha, 'manual');
 
     expect(store.read().tasks[0]).toMatchObject({
-      status: 'failed', merge_pushed_head_sha: newHeadSha, merge_push_base_head_sha: oldHeadSha,
+      status: 'failed', merge_known_remote_head_sha: newHeadSha,
+      merge_pushed_head_sha: newHeadSha, merge_push_base_head_sha: oldHeadSha,
       merge_push_source: 'manual',
     });
   });

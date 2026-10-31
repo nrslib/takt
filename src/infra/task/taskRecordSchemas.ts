@@ -30,6 +30,11 @@ export const TaskRecordSchema = buildTaskSchema(
     }).optional(),
     slug: z.string().optional(),
     run_slug: z.string().min(1).optional(),
+    execution_id: z.string().min(1).optional(),
+    stop_request: z.object({
+      execution_id: z.string().min(1),
+      requested_at: z.iso.datetime(),
+    }).strict().optional(),
     source_run_slug: z.string().min(1).optional(),
     resume_mode: z.enum(RUN_RESUME_MODES).optional(),
     summary: z.string().optional(),

@@ -5,6 +5,7 @@ import type { SystemStepServicesOptions } from '../../../core/workflow/system/sy
 import { resolveWorkflowStateReference } from '../../../core/workflow/state/workflow-state-access.js';
 import { parseWorkflowStateReference } from '../../../core/models/workflow-state-reference.js';
 import { getGitProvider } from '../../git/index.js';
+import { saveCiFailureEvidence } from './ci-failure-evidence.js';
 
 const FIX_PUSH_STEP = 'push_ci_fix';
 const INVESTIGATION_STEP = 'investigate_ci';
@@ -31,7 +32,11 @@ export function prCiStatusOptions(
       return options;
     }
   }
-  return { ...options, rerun: PrCiRerunSchema.parse(referenceValue(input.rerun_from, state)) };
+  const rerun = PrCiRerunSchema.parse(referenceValue(input.rerun_from, state));
+  const caccia = state.effectResults.get('caccia')?.caccia;
+  if (typeof caccia === 'object' && caccia !== null && 'headSha' in caccia
+    && caccia.headSha !== rerun.headSha) return options;
+  return { ...options, rerun };
 }
 
 export async function resolvePrCiFailure(
@@ -73,7 +78,7 @@ export async function resolvePrCiFailure(
       const rerun = typeof rerunResult === 'object' && rerunResult !== null && 'success' in rerunResult && rerunResult.success === true
         ? PrCiRerunSchema.parse(Reflect.get(rerunResult, 'rerun')) : undefined;
       failure = PrCiFailureSchema.parse(await provider.fetchPrCiFailure(context.prNumber, headSha, options.projectCwd,
-        rerun === undefined ? fetchOptions : { ...fetchOptions, rerun }));
+        rerun === undefined || rerun.headSha !== headSha ? fetchOptions : { ...fetchOptions, rerun }));
       if (failure.number !== context.prNumber || failure.headSha !== headSha) throw new Error('CI evidence does not match the requested PR and HEAD');
     } catch (error) {
       fetchOptions.signal?.throwIfAborted();
@@ -81,7 +86,23 @@ export async function resolvePrCiFailure(
         unavailable: [{ name: 'CI', reason: error instanceof Error ? error.message : String(error) }] };
     }
   }
-  return { ...failure, fixRounds, rerunCount, recoveryError,
+  let promptEvidence: string;
+  try {
+    if (!options.runPaths) throw new Error('Run-owned CI evidence directory is unavailable');
+    const saved = await saveCiFailureEvidence(failure, options.runPaths, options.cwd, fixRounds, rerunCount,
+      recoveryError, fetchOptions.signal);
+    failure = saved.failure;
+    promptEvidence = saved.promptEvidence;
+  } catch (error) {
+    fetchOptions.signal?.throwIfAborted();
+    const reason = error instanceof Error && 'code' in error && typeof error.code === 'string'
+      ? `CI evidence storage failed (${error.code})`
+      : error instanceof Error ? error.message : String(error);
+    failure = { ...failure, complete: false,
+      unavailable: [...failure.unavailable, { name: 'CI evidence storage', reason }] };
+    promptEvidence = `CI evidence could not be saved for PR #${failure.number}, HEAD ${failure.headSha}. Return insufficient_evidence; do not rerun CI. Storage error: ${reason.slice(0, 300)}`;
+  }
+  return { ...failure, fixRounds, rerunCount, recoveryError, promptEvidence,
     details: JSON.stringify({
       checks: failure.checks.map(({ name, run, jobs }) => ({
         name, run, jobs: jobs.map(({ id, name: jobName, url }) => ({ id, name: jobName, url })),

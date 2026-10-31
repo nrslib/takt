@@ -19,7 +19,7 @@ This document provides a complete reference for all TAKT CLI commands and option
 | `--skip-git` | Skip branch creation, commit, and push (pipeline mode, workflow-only) |
 | `--repo <owner/repo>` | Specify repository (for PR creation) |
 | `-q, --quiet` | Minimal output mode: suppress AI output (for CI) |
-| `--provider <name>` | Override agent provider (claude\|claude-sdk\|claude-headless\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|pi\|mock) |
+| `--provider <name>` | Override agent provider (claude\|claude-sdk\|claude-headless\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|devin\|pi\|mock) |
 | `--auto-strategy <strategy>` | Override the auto-routing strategy (`cost`\|`balanced`\|`performance`). Applied when execution reaches the current workflow or a workflow-call child with effective `auto_routing`; otherwise, TAKT warns and ignores the option. |
 | `--model <name>` | Override agent model |
 | `--runtime-assignment <name>` | Select a merged runtime `provider.assignments` entry for this invocation; takes precedence over `provider.directories` |
@@ -81,9 +81,28 @@ Approximate sizes are 250 MB for Claude SDK, 340 MB for Codex, 60 MB for OpenCod
 
 `takt install deepseek-harness` installs the required official SDK. It needs access to the npm registry. If the provider still malfunctions after installation, run `takt install deepseek-harness --force`. See the [configuration guide](./configuration.md#deepseek-harness-deepseek-harness) for credentials and `provider: deepseek-harness`.
 
-## Manager (in preparation)
+## Manager (experimental)
 
-Manager is in preparation and currently unavailable. `takt manager` is not registered, and `takt-mcp` exposes no goal tools in its default, `all`, or `read-only` tool sets.
+In the manager TUI, `Ctrl+R` opens inquiries and `Ctrl+G` opens ongoing goals. Both keys work while manager is processing. Type `/make-goal` in the input box and press `Enter` to create a goal proposal from the current conversation. Even when a proposal is already displayed, this only regenerates it; it does not register the goal. Use `↑` Approve / `↓` Continue / `Enter` Confirm, then select Approve and press `Enter` to register it. Insufficient material is reported so you can continue the conversation. Typing `/` in the input box shows `/make-goal` as a completion candidate; press `Tab` to accept it. Input starting with `/` other than `/make-goal` is sent to manager as a regular message. See [Managing goals](./goal-management.md) for menu operations.
+
+Opening manager starts the daemon if needed and waits until it is ready. The TUI sends conversation requests to the daemon and displays results. Accepted turns continue after the TUI closes. Reopening for the same repository or workspace, or opening a second TUI for that assignment, connects to the same conversation and restores any summary awaiting approval, without redisplaying previous messages and replies. See [Managing goals](./goal-management.md) for busy rejection, storage, and interruption after a daemon restart.
+
+Use `takt daemon stop` to stop the manager background daemon explicitly. It exits automatically only when its projects have no unfinished goals, pending events, or pending/running tasks, no project inspection is in progress, no TUI is connected, and no conversation operation is initializing, running, or finishing cleanup. A saved pending summary alone does not keep the daemon running.
+
+`takt manager` opens a goal conversation TUI in an interactive terminal. manager is experimental: behavior, settings, and saved data formats may change without notice. It automatically queues and runs tasks, which incurs provider API costs.
+
+## Director (experimental)
+
+`takt director` opens a conversation TUI in an interactive terminal. The daemon owns the conversation: closing and reopening the TUI continues the same conversation, including when launched from another assigned repository. Previous messages and replies are not redisplayed; history is managed by the provider's session.
+
+```bash
+takt director
+takt director --help
+```
+
+Director is experimental; behavior and saved data formats may change without notice. Conversations and scheduled patrols incur provider costs. Manager advances goals and executes tasks; director checks all managers, notifies the human, and relays explicit human merge instructions to the responsible manager. Director does not merge PRs itself. See [Director patrol](./goal-management.md#director-patrol) for responsibilities, global `director.patrol_interval` and `director.slack` settings, and Slack setup.
+
+Messages sent through `takt_tell_manager` are saved even while manager is busy. The tool returns an operation ID and manager as soon as the message is saved, without waiting for a reply; messages are processed in saved order. Replies, failures, and interruptions are saved and shown later in the director TUI with the same operation ID. Manager listing (`takt_list_managers`) and patrol report unreadable projects with reasons and continue with the remaining managers.
 
 ## Web UI execution boundary
 
@@ -273,6 +292,15 @@ The server exposes these tools:
 | `takt_list_tasks` | Read compact task and run summaries without loading log or report contents. |
 | `takt_get_run` | Read one run's current step, phase, logs, reports, and live-intervention delivery state. |
 | `takt_tell_run` | Recheck and send an additional instruction to one running worktree-clone task. |
+| `takt_cleanup_tasks` | Preview filtered tasks and delete them only with `confirm: true` (`all` only). |
+
+`takt_cleanup_tasks` previews filtered tasks before deletion. It requires an absolute `cwd` and a `reason`. Optional inputs are `statuses` (one or more of `pending`, `completed`, `failed`, `exceeded`, and `pr_failed`; `running` is not allowed), `goalId`, `branch`, and `confirm` (default `false`). At least one of `statuses`, `goalId`, or `branch` is required.
+
+Omitting `confirm` or setting it to `false` returns only the matching list without deleting anything. Only `confirm: true` deletes tasks, with the same deletion scope as `takt list`. This tool is available only in the `all` tool set, not in `read-only` or `manager`; `manager` has the separate `takt_remove_goal_task` tool.
+
+`takt_stop_goal_task` is available in the `manager` and `all` tool sets. Pass an absolute `cwd`. From one task item returned by `takt_list_tasks`, pass its `name` value as `taskName` and use its `goalId` and `executionId`. The owner PID must be alive. When an owner start time is saved, the current start time must be available and match it. Without a saved start time, matching goalId, taskName and executionId, running status, and a live owner PID are sufficient to accept the request. Mismatched identities, non-running tasks, and ended owners are rejected with a reason and no stop request is saved. The tool only saves the request; the task stays `running` while its worker polls every 500 ms and aborts itself. After execution and cleanup finish, the worker saves `failed` with a task stop reason, distinct from a goal abort. Other tasks and the goal remain active. Repeated requests return the saved request only if the same execution is still `running` and its owner can be verified when the request is evaluated; retries use a new execution ID.
+
+Before processing each project's events, the daemon recovers interrupted tasks to `failed` and creates goal-task completion events, even when no pending tasks exist. Recovery requires an absent or dead owner PID, or a known mismatch between the saved and current owner start times. A live PID with unavailable saved or current owner identity is left running.
 
 Every tool `cwd` is resolved with `realpath` and must stay inside the MCP server's allowed project root. By default that root is the directory where `takt-mcp` was started.
 
@@ -457,13 +485,30 @@ takt list --non-interactive --action delete --branch takt/my-branch --yes
 takt list --non-interactive --format json
 ```
 
-`--action` accepts `diff`, `sync`, `try`, `merge`, or `delete`. Non-interactive actions require `--branch`, and `delete` also requires `--yes`. A failed `sync` exits with code `1`.
+`--action` accepts `diff`, `sync`, `try`, `merge`, or `delete`. Actions other than `delete` require `--branch` in non-interactive mode. A failed `sync` exits with code `1`.
+
+`takt list --non-interactive --action delete` accepts `--status <status...>` to select one or more of `pending`, `completed`, `failed`, `exceeded`, and `pr_failed`. `running` is not allowed because running tasks cannot be deleted. `--goal <goalId>` selects tasks belonging to that goal. `--branch <branch>` is also available; when used alone, it targets only `completed` tasks.
+
+At least one of `--status`, `--goal`, or `--branch` is required. Without a filter, the command exits with an error without deleting anything. Without `--yes`, it lists the matching task names, statuses, branches, and goals, then exits successfully without deleting anything. Only `--yes` performs deletion. Use `--format json` to return the preview as JSON; JSON output includes `goal_id`.
+
+Deletion removes the task's working clone, worktree session files, clone metadata, branch, and record in `.takt/tasks.yaml`, matching deletion from the interactive list.
+
+```bash
+# Preview matching tasks, then delete them after checking the list
+takt list --non-interactive --action delete --status failed pr_failed
+takt list --non-interactive --action delete --status failed pr_failed --yes
+
+# Preview as JSON
+takt list --non-interactive --action delete --status failed pr_failed --format json
+```
 
 In interactive mode, **Merge from root** merges the root repository HEAD into the worktree branch with AI-assisted conflict resolution.
 
 In interactive mode, **Delete selected…** opens a checkbox list of non-running tasks. Select tasks with Space and confirm the selection with Enter, then approve one confirmation showing the selected count. Empty selections, cancellation, or declining confirmation return to the menu without deleting anything. Each selected task uses the same cleanup as individual **Delete**, including branches and merge-task clones. Processing continues after a failure and ends with `Deleted M of N tasks.` showing the successful and selected counts. **All Delete** and individual **Delete** remain available with their existing behavior.
 
 #### Consult a running task
+
+In `takt list`, **Stop** requests a stop for one running task after confirmation. The worker interrupts itself and determines the final state. **Mark as failed** only changes the task status and does not stop the worker.
 
 Selecting a task in `takt list` opens its status-specific action menu. Existing actions such as Instruct and Requeue remain available for their respective task states. For a running task with a worktree clone, select **Interactive** to open the ordinary assistant conversation with that task as the initial `/tell` target. The conversation can inspect other tasks, discuss a new task, and use `/go` to execute or save it. `/tell` displays the task name, workflow, current step, and instruction, then writes only to the task selected at confirmation; `/cancel` closes the conversation or cancels the pending action. `/tell` requires an interactive terminal and sends nothing when confirmation cannot be obtained. **Mark as failed** remains available in the action menu.
 
@@ -686,6 +731,8 @@ takt purge --retention-days 14
 ```
 
 ### takt merge
+
+`merge-review-fix` and `merge-review-fix-simple` resynchronize with the base branch when CI completes and the PR is `CONFLICTING`, resolving conflicts when needed. They skip the initial review on these later attempts and continue through push → Caccia → CI on the new HEAD → merge evaluation. A PR that is only `BEHIND` proceeds to the existing review and merge conditions without resynchronization. The limit is `max(2, runtime concurrency - 1)`: two resynchronizations at concurrency 2 or 3, and three at concurrency 4. Initial synchronization does not count. Runtime concurrency, including a CLI `--concurrency` override, is saved with the task and retained by Requeue and Retry. If the PR is still conflicting at the limit, TAKT comments with the reason and ends COMPLETE without merging. Resynchronization preserves the CI fix and rerun budgets already used.
 
 Run a workflow for a pull request. With an explicit number, selection conditions are ignored. Without a number, TAKT collects every open PR number in creation order before reading each PR's details and applying the selection conditions. A PR closed before its details are read is skipped. If the number listing fails, no PR workflow starts.
 

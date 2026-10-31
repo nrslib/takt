@@ -77,11 +77,11 @@ program
  * Run pre-action hook: common initialization for all commands.
  * Exported for use in slash-command fallback logic.
  */
-export async function runPreActionHook(): Promise<void> {
+export async function runPreActionHook(suppressVerboseConsole = false): Promise<void> {
   const { assertConfigDirsDoNotCollide, initializeCliExecutionContext } = await import('./initialization.js');
   assertConfigDirsDoNotCollide(process.cwd());
   await scheduleUpdateCheck();
-  await initializeCliExecutionContext(program, cliVersion);
+  await initializeCliExecutionContext(program, cliVersion, suppressVerboseConsole);
 }
 
 export async function scheduleUpdateCheck(): Promise<void> {
@@ -91,7 +91,7 @@ export async function scheduleUpdateCheck(): Promise<void> {
 }
 
 program.hook('preSubcommand', async (_command, subcommand) => {
-  if (subcommand.name() !== 'manager') return;
+  if (!['manager', 'director'].includes(subcommand.name())) return;
   const [{ resolveConfigValue }, { getLabel }] = await Promise.all([
     import('../../infra/config/index.js'),
     import('../../shared/i18n/index.js'),
@@ -99,15 +99,19 @@ program.hook('preSubcommand', async (_command, subcommand) => {
   subcommand.configureHelp({
     commandDescription: () => {
       const lang = resolveConfigValue(process.cwd(), 'language');
+      const name = subcommand.name();
       return [
-        getLabel('manager.description', lang),
+        getLabel(`${name}.description`, lang),
         '',
-        getLabel('manager.experimentalNotice', lang),
-        getLabel('manager.costNotice', lang),
+        getLabel(`${name}.experimentalNotice`, lang),
+        getLabel(`${name}.costNotice`, lang),
       ].join('\n');
     },
   });
 });
 
 // Common initialization for all commands
-program.hook('preAction', runPreActionHook);
+program.hook('preAction', async (_command, actionCommand) => {
+  if (actionCommand.name() === 'daemon' || actionCommand.parent?.name() === 'daemon') return;
+  await runPreActionHook(['manager', 'director'].includes(actionCommand.name()));
+});

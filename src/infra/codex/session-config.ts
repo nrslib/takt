@@ -3,6 +3,7 @@ import { buildEnvWithNestedObservabilitySnapshot } from '../../shared/telemetry/
 import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
 import { CODEX_CONFIG_PROFILE_ENV, CODEX_SPAWN_PROFILE, type CodexCallOptions, type CodexSpawnEnvironment } from './types.js';
 import { buildCodexSkillConfig } from './skill-config.js';
+import { CODEX_TOOL_PERMISSION_ENDPOINT_ENV, CODEX_TOOL_PERMISSION_TOKEN_ENV } from './tool-permission-hook-protocol.js';
 
 function removeCodexConfigProfileMarker(environment: Record<string, string>): void {
   for (const key of Object.keys(environment)) {
@@ -10,6 +11,14 @@ function removeCodexConfigProfileMarker(environment: Record<string, string>): vo
       delete environment[key];
     }
   }
+}
+
+export function hasCodexShellEnvironmentFilter(
+  filters: Record<string, unknown> | undefined,
+  name: string,
+): boolean {
+  const normalizedName = name.toLowerCase();
+  return Object.keys(filters ?? {}).some((key) => key.toLowerCase() === normalizedName);
 }
 
 export function buildCodexSessionConfig(options: CodexCallOptions): {
@@ -47,8 +56,7 @@ export function buildCodexSessionConfig(options: CodexCallOptions): {
     const value = options.childProcessEnv?.[name];
     if (value !== undefined) codexEnvironment[name] = value;
   }
-  const referencesProfileEnv = Object.keys(headerFilters ?? {})
-    .some((name) => name.toLowerCase() === CODEX_CONFIG_PROFILE_ENV.toLowerCase());
+  const referencesProfileEnv = hasCodexShellEnvironmentFilter(headerFilters, CODEX_CONFIG_PROFILE_ENV);
   if (referencesProfileEnv) {
     codexEnvironment[CODEX_SPAWN_PROFILE] = {
       ...(options.configProfile === undefined ? {} : { configProfile: options.configProfile }),
@@ -59,8 +67,12 @@ export function buildCodexSessionConfig(options: CodexCallOptions): {
       codexEnvironment[CODEX_CONFIG_PROFILE_ENV] = options.configProfile;
     }
   }
+  // Hook credentials are supplied only by its command, never by the Codex process environment.
+  for (const key of [CODEX_TOOL_PERMISSION_ENDPOINT_ENV, CODEX_TOOL_PERMISSION_TOKEN_ENV]) {
+    delete codexEnvironment[key];
+  }
   const shellPath = codexEnvironment.PATH;
-  const excludesPath = Object.keys(headerFilters ?? {}).some((name) => name.toLowerCase() === 'path');
+  const excludesPath = hasCodexShellEnvironmentFilter(headerFilters, 'PATH');
   const shellPolicy = {
     ...(shellPath === undefined || excludesPath ? {} : { set: { PATH: shellPath } }),
     ...(headerFilters === undefined ? {} : { filters: headerFilters }),
@@ -70,9 +82,13 @@ export function buildCodexSessionConfig(options: CodexCallOptions): {
     ...(options.reasoningEffort === undefined
       ? {}
       : { model_reasoning_effort: options.reasoningEffort }),
-    ...(options.fastMode === undefined
-      ? {}
-      : { features: { fast_mode: options.fastMode } }),
+    ...((options.fastMode !== undefined || options.internalAgentIsolation === 'strict-readonly') ? {
+      features: {
+        ...(codexSkillConfig?.features as Record<string, boolean> | undefined),
+        ...(options.fastMode === undefined ? {} : { fast_mode: options.fastMode }),
+        ...(options.internalAgentIsolation === 'strict-readonly' ? { hooks: false } : {}),
+      },
+    } : {}),
     model_reasoning_summary: 'auto',
     ...(Object.keys(shellPolicy).length === 0
       ? {}

@@ -169,6 +169,7 @@ interface MockProcessResponse {
   readonly alloySolution?: boolean;
   readonly alloyReceipt?: string | null;
   readonly alloyTrace?: string | null;
+  readonly quintTestOutput?: string;
 }
 
 class MockStream extends EventEmitter {
@@ -218,11 +219,15 @@ function mockProcessBoundary(): void {
     const response = processResponses.shift() ?? { code: 0 };
     const stdout = new MockStream();
     const stderr = new MockStream();
-    const parseOutputIndex = args.indexOf('--out');
-    if (parseOutputIndex >= 0) {
-      const parseOutputPath = args[parseOutputIndex + 1];
-      if (parseOutputPath !== undefined) {
-        writeFileSync(parseOutputPath, JSON.stringify(parseResult));
+    const outputIndex = args.indexOf('--out');
+    if (outputIndex >= 0) {
+      const outputPath = args[outputIndex + 1];
+      if (outputPath !== undefined) {
+        if (args[1] === 'parse') {
+          writeFileSync(outputPath, JSON.stringify(parseResult));
+        } else if (args[1] === 'test' && response.quintTestOutput !== undefined) {
+          writeFileSync(outputPath, response.quintTestOutput);
+        }
       }
     }
     const wait = async () => {
@@ -873,6 +878,7 @@ describe('runFormalSpecVerification', () => {
     mkdirSync(unrelatedDirectory, { recursive: true, mode: 0o700 });
     const staleTime = new Date(Date.now() - age);
     utimesSync(staleDirectory, staleTime, staleTime);
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(statSync(staleDirectory).mtimeMs + age);
 
     try {
       await runFormalSpecVerification('No formal specification was generated.', directory, { modelCheckTimeoutSeconds: 300 });
@@ -881,6 +887,7 @@ describe('runFormalSpecVerification', () => {
       expect(existsSync(recentDirectory)).toBe(true);
       expect(existsSync(unrelatedDirectory)).toBe(true);
     } finally {
+      nowSpy.mockRestore();
       rmSync(directory, { recursive: true, force: true });
     }
   });
@@ -903,16 +910,21 @@ describe('runFormalSpecVerification', () => {
       const activeWorkspace = spawnedProcesses.at(-1)!.options.cwd!;
       const staleTime = new Date(Date.now() - age);
       utimesSync(activeWorkspace, staleTime, staleTime);
-      await runFormalSpecVerification('No specification.', directory, { modelCheckTimeoutSeconds: 300 });
-      expect(existsSync(join(activeWorkspace, 'specs', 'spec.als'))).toBe(true);
-      mockIsProcessAlive.mockReturnValue(owner !== 'dead');
-      if (owner === 'reused') mockGetProcessIdentity.mockReturnValue({ startTime: 'darwin-start-v2:101' });
-      if (owner === 'unknown') mockGetProcessIdentity.mockReturnValue(undefined);
-      if (owner === 'unavailable') mockIsProcessAlive.mockImplementation(() => { throw new Error('process lookup unavailable'); });
-      await runFormalSpecVerification('No specification.', directory, { modelCheckTimeoutSeconds: 300 });
-      expect(existsSync(join(activeWorkspace, 'specs', 'spec.als'))).toBe(true);
-      observed = true;
-      controller.abort(new Error('test owner stopped'));
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(statSync(activeWorkspace).mtimeMs + age);
+      try {
+        await runFormalSpecVerification('No specification.', directory, { modelCheckTimeoutSeconds: 300 });
+        expect(existsSync(join(activeWorkspace, 'specs', 'spec.als'))).toBe(true);
+        mockIsProcessAlive.mockReturnValue(owner !== 'dead');
+        if (owner === 'reused') mockGetProcessIdentity.mockReturnValue({ startTime: 'darwin-start-v2:101' });
+        if (owner === 'unknown') mockGetProcessIdentity.mockReturnValue(undefined);
+        if (owner === 'unavailable') mockIsProcessAlive.mockImplementation(() => { throw new Error('process lookup unavailable'); });
+        await runFormalSpecVerification('No specification.', directory, { modelCheckTimeoutSeconds: 300 });
+        expect(existsSync(join(activeWorkspace, 'specs', 'spec.als'))).toBe(true);
+        observed = true;
+        controller.abort(new Error('test owner stopped'));
+      } finally {
+        nowSpy.mockRestore();
+      }
     } });
     try {
       await expect(runFormalSpecVerification(validAlloyResponse(), directory, { modelCheckTimeoutSeconds: 300, abortSignal: controller.signal }))
@@ -2172,6 +2184,287 @@ describe('runFormalSpecVerification', () => {
   });
 });
 
+describe('Quint run declaration verification', () => {
+  let directory: string;
+
+  beforeEach(() => {
+    directory = createTestDirectory();
+  });
+
+  afterEach(() => {
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  function setRunDeclarations(names: readonly string[]): void {
+    parseResult = {
+      modules: [{
+        name: 'workflowModel',
+        declarations: [
+          { kind: 'def', name: 'init', qualifier: 'action' },
+          { kind: 'def', name: 'step', qualifier: 'action' },
+          { kind: 'def', name: 'invBound', qualifier: 'val' },
+          ...names.map((name) => ({ kind: 'def', name, qualifier: 'run' })),
+        ],
+      }],
+    };
+  }
+
+  function queueTest(response: MockProcessResponse): void {
+    processResponses.push(
+      { code: 0 }, { code: 0 }, { code: 0 }, response,
+      { code: 0, stderr: 'openjdk version "17.0.1"' }, { code: 0 },
+    );
+  }
+
+  function verify() {
+    return runFormalSpecVerification('```quint\nmodule workflowModel {}\n```', directory, {
+      modelCheckTimeoutSeconds: 2,
+    });
+  }
+
+  it('executes only main run declarations with an anchored escaped match and a sample limit', async () => {
+    setRunDeclarations(['runParam', 'runFixed']);
+    queueTest({ code: 0, quintTestOutput: JSON.stringify({ passed: ['runParam', 'runFixed'], failed: [], ignored: [] }) });
+
+    const result = await verify();
+    const testCall = spawnedProcesses.find(({ args }) => args[1] === 'test');
+    expect(testCall).toBeDefined();
+    const args = testCall!.args;
+    expect(args.slice(1, 7)).toEqual([
+      'test', result.artifacts!.specifications.quint, '--main', 'workflowModel', '--backend', 'typescript',
+    ]);
+    const match = args[args.indexOf('--match') + 1]!;
+    expect(match.startsWith('^(') && match.endsWith(')$')).toBe(true);
+    const pattern = new RegExp(match);
+    for (const name of ['runParam', 'runFixed']) expect(pattern.test(name)).toBe(true);
+    for (const name of ['init', 'step', 'invBound', 'runParamExtra', 'prefixrunParam']) {
+      expect(pattern.test(name), name).toBe(false);
+    }
+    expect(args).toContain('--max-samples');
+    const samples = Number(args[args.indexOf('--max-samples') + 1]);
+    expect(Number.isInteger(samples) && samples > 0).toBe(true);
+    expect(samples).toBeLessThan(10_000);
+    expect(args).toContain('--out');
+    expect(result.quint).toMatchObject({ test: { status: 'passed' }, verify: { status: 'passed' } });
+    expect(spawnedProcesses.map(({ command, args }) => command === 'java' ? args[0] : args[1]))
+      .toEqual(['parse', 'typecheck', 'run', 'test', '-version', 'verify']);
+  });
+
+  it('escapes regexp metacharacters from supplied AST declaration names', async () => {
+    // Synthetic AST names isolate the explicitly required escaping contract from Quint's identifier grammar.
+    const names = ['scenario.name', 'scenario$end', 'scenario[0]', 'scenario(a|b)', 'scenario+?^*{1}\\'];
+    setRunDeclarations(names);
+    queueTest({ code: 0, quintTestOutput: JSON.stringify({ passed: names, failed: [], ignored: [] }) });
+
+    await verify();
+    const testCall = spawnedProcesses.find(({ args }) => args[1] === 'test');
+
+    expect(testCall).toBeDefined();
+    const pattern = new RegExp(testCall!.args[testCall!.args.indexOf('--match') + 1]!);
+    for (const name of names) expect(pattern.test(name), name).toBe(true);
+    for (const name of ['scenarioXname', 'scenarioend', 'scenario0', 'scenarioa', 'prefixscenario.name']) {
+      expect(pattern.test(name), name).toBe(false);
+    }
+  });
+
+  it.each([0, 1])('passes all declared scenarios from JSON even when the exit code is %i', async (code) => {
+    setRunDeclarations(['runA', 'runB']);
+    queueTest({ code, quintTestOutput: JSON.stringify({ passed: ['runA', 'runB'], failed: [], ignored: [] }) });
+
+    const result = await verify();
+
+    expect(result.quint).toMatchObject({ status: 'passed', test: { status: 'passed' }, verify: { status: 'passed' } });
+    expect(result.verdict).toBe('passed');
+  });
+
+  it.each([
+    { label: 'one failed declaration', passed: ['runA'], failed: ['runB'], ignored: [], missing: 'runB' },
+    { label: 'one ignored declaration', passed: ['runA'], failed: [], ignored: ['runB'], missing: 'runB' },
+    { label: 'one missing declaration', passed: ['runA'], failed: [], ignored: [], missing: 'runB' },
+    { label: 'no executed declaration', passed: [], failed: [], ignored: [], missing: 'runA' },
+    { label: 'only a prefix collision passed', passed: ['runAB', 'runB'], failed: [], ignored: [], missing: 'runA' },
+    { label: 'a declaration both passed and failed', passed: ['runA', 'runB'], failed: ['runB'], ignored: [], missing: 'runB' },
+  ])('rejects JSON with $label despite exit code zero and stops verify', async ({ passed, failed, ignored, missing }) => {
+    setRunDeclarations(['runA', 'runB']);
+    queueTest({ code: 0, quintTestOutput: JSON.stringify({ passed, failed, ignored }) });
+
+    const result = await verify();
+
+    expect(result.quint).toMatchObject({
+      status: 'failed',
+      test: { status: 'failed', message: expect.stringContaining(missing) },
+      verify: { status: 'skipped' },
+    });
+    expect(result.verdict).toBe('failed');
+    expect(spawnedProcesses.some(({ args }) => args[1] === 'verify')).toBe(false);
+  });
+
+  it.each([
+    { label: 'missing output', quintTestOutput: undefined },
+    { label: 'malformed JSON', quintTestOutput: '{' },
+    { label: 'missing result arrays', quintTestOutput: '{"passed":["runA"]}' },
+    { label: 'invalid result arrays', quintTestOutput: '{"passed":"runA","failed":[],"ignored":[]}' },
+    { label: 'non-object output', quintTestOutput: 'null' },
+    { label: 'non-string declaration names', quintTestOutput: '{"passed":["runA"],"failed":[],"ignored":[1]}' },
+  ])('reports $label as an error rather than a scenario pass', async ({ quintTestOutput }) => {
+    setRunDeclarations(['runA']);
+    queueTest({ code: 0, quintTestOutput });
+
+    const result = await verify();
+
+    expect(result.quint).toMatchObject({ status: 'error', test: { status: 'error', message: expect.any(String) } });
+    expect(result.verdict).toBe('error');
+    expect(spawnedProcesses.some(({ args }) => args[1] === 'verify')).toBe(false);
+  });
+
+  it.each([
+    { label: 'empty output', quintTestOutput: undefined },
+    { label: 'malformed JSON', quintTestOutput: '{' },
+    { label: 'invalid result arrays', quintTestOutput: '{"passed":"runA","failed":[],"ignored":[]}' },
+  ])('preserves process diagnostics for nonzero exit with $label', async ({ quintTestOutput }) => {
+    setRunDeclarations(['runA']);
+    queueTest({ code: 1, stdout: 'test stdout', stderr: 'test stderr', quintTestOutput });
+
+    const result = await verify();
+
+    expect(result.quint.test).toEqual({ status: 'failed', message: 'test stderr\ntest stdout' });
+    expect(result.verdict).toBe('failed');
+    expect(spawnedProcesses.some(({ args }) => args[1] === 'verify')).toBe(false);
+  });
+
+  it.each(['parse', 'typecheck', 'run'] as const)('records a reasoned skipped test when %s does not pass', async (stage) => {
+    setRunDeclarations(['runParam']);
+    const stages = ['parse', 'typecheck', 'run'];
+    processResponses.push(...stages.slice(0, stages.indexOf(stage) + 1).map((name) => ({ code: name === stage ? 1 : 0 })));
+
+    const result = await verify();
+
+    expect(result.quint).toMatchObject({ test: { status: 'skipped', message: expect.stringMatching(/\S/) } });
+    expect(spawnedProcesses.some(({ args }) => args[1] === 'test' || args[1] === 'verify')).toBe(false);
+  });
+
+  it.each([0, 1])('omits test without declarations when simulation exits %i', async (code) => {
+    setRunDeclarations([]);
+    processResponses.push({ code: 0 }, { code: 0 }, { code }, { stderr: 'openjdk version "17.0.1"' }, { code: 0 });
+
+    const result = await verify();
+
+    expect(result.quint).not.toHaveProperty('test');
+    expect(spawnedProcesses.some(({ args }) => args[1] === 'test')).toBe(false);
+    expect(result.verdict).toBe(code === 0 ? 'passed' : 'failed');
+    expect(result.quint.verify?.status).toBe(code === 0 ? 'passed' : 'skipped');
+  });
+
+  it('rejects run declarations outside the selected main before executing simulation or tests', async () => {
+    parseResult = { modules: [
+      { name: 'helper', declarations: [{ kind: 'def', name: 'runHelper', qualifier: 'run' }] },
+      { name: 'workflowModel', declarations: [
+        { kind: 'def', name: 'init', qualifier: 'action' }, { kind: 'def', name: 'step', qualifier: 'action' },
+      ] },
+    ] };
+    processResponses.push({ code: 0 }, { code: 0 });
+
+    const result = await verify();
+
+    expect(result.verdict).toBe('error');
+    expect(result.quint.run).toMatchObject({ status: 'error', message: expect.stringContaining('helper::runHelper') });
+    expect(spawnedProcesses.some(({ args }) => ['run', 'test', 'verify'].includes(args[1]!))).toBe(false);
+  });
+
+  it('preserves the existing property lists when parsing fails without run declarations', async () => {
+    setRunDeclarations([]);
+    processResponses.push({ code: 1, stderr: 'parse failed' });
+
+    const result = await verify();
+
+    expect(result.quint).toMatchObject({
+      status: 'error', parse: { status: 'error' }, invariants: [], temporal: [],
+    });
+    expect(result.quint).not.toHaveProperty('test');
+    expect(spawnedProcesses.map(({ args }) => args[1])).toEqual(['parse']);
+  });
+
+  it('keeps the test timeout at sixty seconds with a shorter model-check timeout', async () => {
+    vi.useFakeTimers();
+    setRunDeclarations(['runParam']);
+    queueTest({ hang: true, quintTestOutput: JSON.stringify({ passed: ['runParam'], failed: [], ignored: [] }) });
+    let settled = false;
+    const verification = verify().then((result) => { settled = true; return result; });
+
+    try {
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(spawnedProcesses.some(({ args }) => args[1] === 'test')).toBe(true);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await verification;
+
+      expect(result.quint).toMatchObject({ status: 'error', test: { status: 'error', message: expect.stringContaining('timed out') } });
+      expect(result.verdict).toBe('error');
+      expect(spawnedProcesses.some(({ args }) => args[1] === 'verify')).toBe(false);
+    } finally {
+      await vi.runAllTimersAsync();
+      await verification;
+    }
+  });
+
+  it('keeps test stdout and stderr in the registered quint-test artifacts', async () => {
+    setRunDeclarations(['runParam']);
+    queueTest({ code: 0, stdout: 'scenario stdout', stderr: 'scenario stderr',
+      quintTestOutput: JSON.stringify({ passed: ['runParam'], failed: [], ignored: [] }) });
+
+    const result = await verify();
+    const logs = result.artifacts?.logs['quint-test'];
+
+    expect(logs).toBeDefined();
+    expect(readFileSync(logs!.stdout, 'utf8')).toBe('scenario stdout');
+    expect(readFileSync(logs!.stderr, 'utf8')).toBe('scenario stderr');
+  });
+
+  it('preserves a test spawn error even when passed JSON was written', async () => {
+    setRunDeclarations(['runParam']);
+    queueTest({ error: new Error('test spawn failed'),
+      quintTestOutput: JSON.stringify({ passed: ['runParam'], failed: [], ignored: [] }) });
+
+    const result = await verify();
+
+    expect(result.quint).toMatchObject({ test: { status: 'error', message: expect.stringContaining('test spawn failed') } });
+    expect(result.verdict).toBe('error');
+    expect(spawnedProcesses.some(({ args }) => args[1] === 'verify')).toBe(false);
+  });
+
+  it('does not overwrite a diagnostic log close failure with passed JSON', async () => {
+    setRunDeclarations(['runParam']);
+    queueTest({ code: 0, beforeExit: async () => { closeSyncControls.failNext = true; },
+      quintTestOutput: JSON.stringify({ passed: ['runParam'], failed: [], ignored: [] }) });
+
+    const result = await verify();
+
+    expect(result.quint).toMatchObject({ test: { message: expect.stringContaining('artifact log close failed') } });
+    expect(result.verdict).not.toBe('passed');
+    expect(spawnedProcesses.some(({ args }) => args[1] === 'verify')).toBe(false);
+  });
+
+  it('continues independent Alloy checks after a scenario fails', async () => {
+    setRunDeclarations(['runBad']);
+    installConfiguredAlloyJar(directory);
+    processResponses.push(
+      { code: 0 }, { code: 0 }, { code: 0 },
+      { code: 0, quintTestOutput: JSON.stringify({ passed: [], failed: ['runBad'], ignored: [] }) },
+      { code: 0, stderr: 'openjdk version "17.0.1"' },
+      { code: 0, stdout: '0 . Check Safety for 1' }, { code: 0 },
+    );
+
+    const result = await runFormalSpecVerification([
+      '```quint', 'module workflowModel {}', '```', validAlloyResponse(),
+    ].join('\n'), directory, { modelCheckTimeoutSeconds: 2 });
+
+    expect(result.quint).toMatchObject({ test: { status: 'failed' }, verify: { status: 'skipped' } });
+    expect(result.alloy).toMatchObject({ status: 'passed', commandResults: [{ number: 0, status: 'passed' }] });
+    expect(result.verdict).toBe('failed');
+    expect(spawnedProcesses.some(({ args }) => args[1] === 'verify')).toBe(false);
+  });
+});
+
 describe('extractFormalSpecBlocks', () => {
   it('should return closed quint and alloy blocks in response order without using older or unrelated text', () => {
     const response = [
@@ -2242,12 +2535,13 @@ describe('selectQuintVerificationTargets', () => {
       }],
     };
 
-    expect(selectQuintVerificationTargets(parseResult)).toEqual({
+    expect(selectQuintVerificationTargets(parseResult)).toMatchObject({
       invariants: [
         { moduleName: 'workflowModel', name: 'invSafe' },
         { moduleName: 'workflowModel', name: 'invOwner' },
       ],
       temporal: [{ moduleName: 'workflowModel', name: 'propEventuallyDone' }],
+      runs: [],
     });
   });
 
@@ -2263,9 +2557,10 @@ describe('selectQuintVerificationTargets', () => {
       }],
     };
 
-    expect(selectQuintVerificationTargets(parseResult)).toEqual({
+    expect(selectQuintVerificationTargets(parseResult)).toMatchObject({
       invariants: [{ moduleName: 'workflowModel', name: 'invReal' }],
       temporal: [],
+      runs: [],
     });
   });
 });

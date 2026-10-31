@@ -1,142 +1,19 @@
-import { spawn, spawnSync, execFileSync, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { readManagerEvents, saveManagerEvent } from '../infra/goals/events.js';
+import { execFileSync,spawn,spawnSync,type ChildProcess } from 'node:child_process';
+import { existsSync,mkdirSync,mkdtempSync,readFileSync,readdirSync,rmSync,writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { expect, it, vi } from 'vitest';
-import { TaskRunner } from '../infra/task/runner.js';
-import { isProcessAlive } from '../infra/task/process.js';
-import { registerFixtureGoal } from './helpers/registered-goal.js';
-import { acquireProjectExecutionLock } from '../infra/task/project-execution-lock.js';
-import { MANAGER_GOAL_TASKS_ENV } from '../shared/constants.js';
-import { readManagerRunFailures } from '../infra/task/manager-run-state.js';
-import { captureOwnedChild, ownedProcessMarkerScript, readOwnedProcessMarker, signalOwnedProcess, terminateOwnedProcess, type OwnedProcess } from './helpers/owned-process.js';
-import { GoalStore } from '../infra/goals/store.js';
+import { expect,it,vi } from 'vitest';
 import { transitionGoalExecution } from '../infra/goals/state.js';
+import { GoalStore } from '../infra/goals/store.js';
+import { isProcessAlive } from '../infra/task/process.js';
+import { acquireProjectExecutionLock } from '../infra/task/project-execution-lock.js';
+import { TaskRunner } from '../infra/task/runner.js';
+import { MANAGER_GOAL_TASKS_ENV } from '../shared/constants.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
-import { createManagerConversationSession } from '../features/manager/conversationSession.js';
-import { createGoalConfirmation } from '../features/manager/goalConfirmation.js';
-import { MockProvider } from '../infra/providers/mock.js';
-import * as managerMcp from '../features/manager/managerMcp.js';
-import { processGoalCompletions } from '../features/manager/completionTurn.js';
-import { invalidateResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
-import type { ProviderAgent } from '../infra/providers/types.js';
-
-it.each(['automatic run', 'direct run', 'direct watch'] as const)('interrupts only the aborted goal in the surviving parallel process through %s', async (entry) => {
-  const root = join(process.cwd(), '.tmp');
-  mkdirSync(root, { recursive: true });
-  const cwd = mkdtempSync(join(root, 'goal-abort-process-'));
-  const moduleUrl = (path: string): string => pathToFileURL(join(process.cwd(), 'dist', path)).href;
-  let child: ChildProcess | undefined;
-  let owned: OwnedProcess | undefined;
-  let captured: Promise<OwnedProcess | undefined> | undefined;
-  let stderr = '';
-  try {
-    execFileSync('git', ['init', '--initial-branch=main'], { cwd, stdio: 'ignore' });
-    execFileSync('git', ['config', 'user.name', 'Goal Abort Test'], { cwd });
-    execFileSync('git', ['config', 'user.email', 'goal-abort@example.com'], { cwd });
-    const tree = execFileSync('git', ['hash-object', '-w', '-t', 'tree', '--stdin'], { cwd, input: '', encoding: 'utf8' }).trim();
-    const commit = execFileSync('git', ['commit-tree', tree, '-m', 'goal abort fixture'], { cwd, encoding: 'utf8' }).trim();
-    execFileSync('git', ['update-ref', 'refs/heads/main', commit], { cwd });
-    mkdirSync(join(cwd, '.takt', 'workflows'), { recursive: true });
-    const automatic = entry === 'automatic run';
-    writeFileSync(join(cwd, '.takt', 'config.yaml'), `provider: mock\nlanguage: en\nconcurrency: 3\ntask_poll_interval_ms: 100\nmanager:\n  auto_run: ${automatic}\nauto_requeue_max_attempts: 0\n`);
-    writeFileSync(join(cwd, '.takt', 'workflows', 'abort-run.yaml'), 'name: abort-run\nmax_steps: 2\ninitial_step: work\nsteps:\n  - name: work\n    persona: coder\n    instruction: "{task}"\n    rules:\n      - condition: when(true)\n        next: COMPLETE\n');
-    const goal = await registerFixtureGoal(cwd);
-    const other = await registerFixtureGoal(cwd, { id: '650e8400-e29b-41d4-a716-446655440001' });
-    const store = new GoalStore(cwd);
-    const runner = new TaskRunner(cwd);
-    const options = { workflow: 'abort-run', worktree: false };
-    const target = runner.addTask('abort-target', { ...options, goal_id: goal.id });
-    const unrelated = runner.addTask('abort-sibling', { ...options, goal_id: other.id });
-    const ordinary = runner.addTask('abort-ordinary', options);
-    const goalSha = execFileSync('git', ['rev-parse', goal.branch], { cwd, encoding: 'utf8' }).trim();
-    const hook = join(cwd, 'abort-provider-hook.mjs');
-    writeFileSync(hook, `
-${ownedProcessMarkerScript(moduleUrl('infra/task/process.js'))}
-import { existsSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { MockProvider } from ${JSON.stringify(moduleUrl('infra/providers/mock.js'))};
-const root = ${JSON.stringify(cwd)};
-MockProvider.prototype.setup = config => ({ call: async (prompt, options) => {
-  if (config.name === 'manager') {
-    writeFileSync(join(root, 'manager-called'), 'unexpected turn');
-    return { persona: 'manager', status: 'done', timestamp: new Date(), content: '', structuredOutput: { message: 'unexpected turn', summary: null } };
-  }
-  const label = ['abort-target', 'abort-sibling', 'abort-ordinary'].find(value => prompt.includes(value));
-  if (label === undefined) throw new Error('Unknown test task prompt');
-  writeProcessMarker(join(root, 'started-' + label));
-  const outcome = await new Promise((resolve, reject) => {
-    const deadline = Date.now() + 25000;
-    const timer = setInterval(() => {
-      if (options.abortSignal?.aborted) { clearInterval(timer); resolve('aborted'); }
-      else if (existsSync(join(root, 'release-' + label))) { clearInterval(timer); resolve('completed'); }
-      else if (Date.now() >= deadline) { clearInterval(timer); reject(new Error('Test did not finish task ' + label)); }
-    }, 20);
-  });
-  writeFileSync(join(root, outcome + '-' + label), 'observed');
-  return { persona: config.name, status: outcome === 'aborted' ? 'blocked' : 'done', timestamp: new Date(),
-    content: outcome === 'aborted' ? '' : 'completed', ...(outcome === 'aborted' ? { error: 'mock task signal aborted' } : {}) };
-} });
-`);
-    const env = { ...process.env, NODE_OPTIONS: `--import ${pathToFileURL(hook).href}`, [MANAGER_GOAL_TASKS_ENV]: undefined };
-    if (automatic) {
-      const launcher = spawnSync(process.execPath, ['--input-type=module', '-e', `import { ensureManagerRun } from ${JSON.stringify(moduleUrl('features/manager/autoRun.js'))}; await ensureManagerRun(${JSON.stringify(cwd)});`], { cwd, env, encoding: 'utf8', timeout: 15000 });
-      expect(launcher.error).toBeUndefined();
-      expect(launcher.status, launcher.stdout + launcher.stderr).toBe(0);
-    } else {
-      child = spawn(process.execPath, [join(process.cwd(), 'dist/app/cli/index.js'), entry === 'direct watch' ? 'watch' : 'run'], { cwd, env, stdio: ['ignore', 'ignore', 'pipe'] });
-      captured = captureOwnedChild(child);
-      void captured.catch(() => {});
-      child.stderr!.on('data', (chunk) => { stderr += String(chunk); });
-    }
-    const runningLabels = automatic ? ['abort-target', 'abort-sibling'] : ['abort-target', 'abort-sibling', 'abort-ordinary'];
-    await vi.waitFor(() => {
-      for (const label of runningLabels) expect(existsSync(join(cwd, `started-${label}`)), stderr).toBe(true);
-    }, { timeout: 15000 });
-    owned = readOwnedProcessMarker(readFileSync(join(cwd, 'started-abort-target'), 'utf8'));
-    for (const label of runningLabels) expect(readOwnedProcessMarker(readFileSync(join(cwd, `started-${label}`), 'utf8')).pid).toBe(owned.pid);
-    expect(owned.pid).not.toBe(process.pid);
-    if (automatic) expect(runner.listTaskStateItems().find(({ name }) => name === ordinary.name)?.status).toBe('pending');
-    await store.update(other.id, (saved) => transitionGoalExecution(saved, 'paused'));
-    const request = spawnSync(process.execPath, ['--input-type=module', '-e', `import { setGoalExecutionStatus } from ${JSON.stringify(moduleUrl('infra/goals/execution.js'))}; await setGoalExecutionStatus(${JSON.stringify(cwd)}, ${JSON.stringify(goal.id)}, 'aborted', new AbortController().signal);`], { cwd, env: { ...env, NODE_OPTIONS: undefined }, encoding: 'utf8', timeout: 15000 });
-    expect(request.error).toBeUndefined();
-    expect(request.status, request.stdout + request.stderr).toBe(0);
-    expect((await store.get(goal.id)).executionStatus).toBe('aborted');
-    await vi.waitFor(() => expect(existsSync(join(cwd, 'aborted-abort-target'))).toBe(true), { timeout: 7000 });
-    await vi.waitFor(() => expect(runner.listTaskStateItems().find(({ name }) => name === target.name)?.status).toBe('failed'), { timeout: 7000 });
-    const targetState = runner.listTaskStateItems().find(({ name }) => name === target.name)!;
-    expect(targetState).toMatchObject({ runSlug: expect.any(String), completion: { success: false, interrupted: true, workflowResult: 'aborted', failureReason: expect.stringMatching(/goal.*abort|ゴール.*中止/iu) } });
-    expect(targetState.failure?.error).toMatch(/goal.*abort|ゴール.*中止/iu);
-    expect(isProcessAlive(owned.pid)).toBe(true);
-    expect(runner.listTaskStateItems().find(({ name }) => name === unrelated.name)?.status).toBe('running');
-    for (const label of runningLabels.filter((value) => value !== 'abort-target')) {
-      expect(existsSync(join(cwd, `aborted-${label}`))).toBe(false);
-      writeFileSync(join(cwd, `release-${label}`), 'complete unrelated work');
-    }
-    await vi.waitFor(() => expect(runner.listTaskStateItems().find(({ name }) => name === unrelated.name)?.status).toBe('completed'), { timeout: 10000 });
-    if (!automatic) await vi.waitFor(() => expect(runner.listTaskStateItems().find(({ name }) => name === ordinary.name)?.status).toBe('completed'), { timeout: 10000 });
-    else expect(runner.listTaskStateItems().find(({ name }) => name === ordinary.name)?.status).toBe('pending');
-    await vi.waitFor(async () => expect((await store.get(goal.id)).events).toContainEqual(expect.objectContaining({ kind: 'completion', taskName: target.name, runSlug: targetState.runSlug, result: targetState.completion, processed: false })), { timeout: 7000 });
-    expect(existsSync(join(cwd, 'manager-called'))).toBe(false);
-    expect(execFileSync('git', ['rev-parse', goal.branch], { cwd, encoding: 'utf8' }).trim()).toBe(goalSha);
-    if (entry === 'direct watch') {
-      expect(child!.exitCode).toBeNull();
-      expect(signalOwnedProcess(owned, 'SIGINT', () => child!.exitCode !== null || child!.signalCode !== null)).toBe(true);
-      await vi.waitFor(() => expect(child!.exitCode, stderr).toBe(0), { timeout: 10000 });
-    } else if (automatic) await vi.waitFor(() => expect(isProcessAlive(owned!.pid)).toBe(false), { timeout: 10000 });
-    else await vi.waitFor(() => expect(child!.exitCode, stderr).toBe(0), { timeout: 10000 });
-  } finally {
-    for (const label of ['abort-target', 'abort-sibling', 'abort-ordinary']) writeFileSync(join(cwd, `release-${label}`), 'cleanup');
-    try {
-      if (owned === undefined && captured !== undefined) owned = await captured;
-      if (owned === undefined && existsSync(join(cwd, 'started-abort-target'))) owned = readOwnedProcessMarker(readFileSync(join(cwd, 'started-abort-target'), 'utf8'));
-      if (owned !== undefined) await terminateOwnedProcess(owned, () => child !== undefined && (child.exitCode !== null || child.signalCode !== null));
-    } finally {
-      invalidateResolvedConfigCache(cwd);
-      rmSync(cwd, { recursive: true, force: true });
-    }
-  }
-});
+import { registerProject } from '../infra/config/global/projectRegistry.js';
+import { captureOwnedChild,ownedProcessMarkerScript,readOwnedProcessMarker,terminateOwnedProcess,type OwnedProcess } from './helpers/owned-process.js';
+import { registerFixtureGoal } from './helpers/registered-goal.js';
 
 it.each([false, true])('rejects claim after abort in the same TaskRunner even before pending invalidation (goalTasksOnly=%s)', async (goalTasksOnly) => {
   const root = join(process.cwd(), '.tmp');
@@ -221,106 +98,6 @@ it.each([false, true])('rechecks pause and resume in the same TaskRunner and pre
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
 
-it('lets an in-flight mock run finish while paused, saves one event and processes its original identity on human resume', async () => {
-  const root = join(process.cwd(), '.tmp');
-  mkdirSync(root, { recursive: true });
-  const cwd = mkdtempSync(join(root, 'goal-run-pause-'));
-  let child: ChildProcess | undefined;
-  let owned: Promise<OwnedProcess | undefined> | undefined;
-  let session: ReturnType<typeof createManagerConversationSession> | undefined;
-  try {
-    execFileSync('git', ['init', '--initial-branch=main'], { cwd, stdio: 'ignore' });
-    execFileSync('git', ['config', 'user.name', 'Goal Pause Test'], { cwd });
-    execFileSync('git', ['config', 'user.email', 'goal-pause@example.com'], { cwd });
-    const tree = execFileSync('git', ['hash-object', '-w', '-t', 'tree', '--stdin'], { cwd, input: '', encoding: 'utf8' }).trim();
-    const commit = execFileSync('git', ['commit-tree', tree, '-m', 'goal pause fixture'], { cwd, encoding: 'utf8' }).trim();
-    execFileSync('git', ['update-ref', 'refs/heads/main', commit], { cwd });
-    mkdirSync(join(cwd, '.takt', 'workflows'), { recursive: true });
-    writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\nmanager:\n  auto_run: false\nauto_requeue_max_attempts: 0\n');
-    writeFileSync(join(cwd, '.takt', 'workflows', 'pause-run.yaml'), 'name: pause-run\nmax_steps: 2\ninitial_step: work\nsteps:\n  - name: work\n    persona: coder\n    instruction: "{task}"\n    rules:\n      - condition: when(true)\n        next: COMPLETE\n');
-    const goal = await registerFixtureGoal(cwd);
-    const runner = new TaskRunner(cwd);
-    const task = runner.addTask('in-flight goal task', { workflow: 'pause-run', worktree: false, goal_id: goal.id });
-    const hook = join(cwd, 'pause-provider-hook.mjs');
-    const mockUrl = pathToFileURL(join(process.cwd(), 'dist/infra/providers/mock.js')).href;
-    writeFileSync(hook, `
-import { existsSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { MockProvider } from ${JSON.stringify(mockUrl)};
-MockProvider.prototype.setup = config => ({ call: async () => {
-  const manager = config.name === 'manager';
-  writeFileSync(join(process.cwd(), manager ? 'manager-called' : 'worker-entered'), 'entered');
-  if (!manager) {
-    const deadline = Date.now() + 20000;
-    while (!existsSync(join(process.cwd(), 'release-worker'))) {
-      if (Date.now() > deadline) throw new Error('Test did not release the worker');
-      await new Promise(resolve => setTimeout(resolve, 20));
-    }
-  }
-  return { persona: config.name, status: 'done', timestamp: new Date(),
-    content: manager ? JSON.stringify({ message: 'completion processed', summary: null }) : 'completed' };
-} });
-`);
-    child = spawn(process.execPath, [join(process.cwd(), 'dist/app/cli/index.js'), 'run'], {
-      cwd, stdio: ['ignore', 'ignore', 'pipe'],
-      env: { ...process.env, NODE_OPTIONS: `--import ${pathToFileURL(hook).href}`, [MANAGER_GOAL_TASKS_ENV]: '1' },
-    });
-    owned = captureOwnedChild(child);
-    let stderr = '';
-    child.stderr!.on('data', (chunk) => { stderr += String(chunk); });
-    const done = new Promise<void>((resolve, reject) => {
-      child!.once('error', reject);
-      child!.once('exit', (code) => code === 0 ? resolve() : reject(new Error(stderr || `Run exit: ${code}`)));
-    });
-    void done.catch(() => {});
-    await vi.waitFor(() => expect(existsSync(join(cwd, 'worker-entered'))).toBe(true), { timeout: 15000 });
-    const call = vi.fn<ProviderAgent['call']>().mockResolvedValue({ persona: 'manager', status: 'done', timestamp: new Date(),
-      content: '', structuredOutput: { message: 'completion processed', summary: null } });
-    vi.spyOn(MockProvider.prototype, 'setup').mockReturnValue({ call });
-    vi.spyOn(managerMcp, 'prepareManagerMcp').mockResolvedValue({ command: process.execPath, args: [], env: {}, servers: {}, dispose: async () => {} });
-    session = createManagerConversationSession({ cwd, confirmation: createGoalConfirmation(cwd), mcpClient: { callTool: vi.fn() },
-      plan: { ctx: { providerType: 'mock', model: undefined, lang: 'en', provider: new MockProvider() },
-        strategy: { systemPrompt: 'manager fixture', allowedTools: ['Read'] } },
-    });
-    expect((await session.pauseGoal({ goalId: goal.id })).kind).toBe('reply');
-    expect(runner.listTaskStateItems()).toContainEqual(expect.objectContaining({ name: task.name, status: 'running' }));
-    writeFileSync(join(cwd, 'release-worker'), 'finish the in-flight task');
-    await done;
-    expect(child.exitCode).toBe(0);
-    expect(runner.listTaskStateItems()).toContainEqual(expect.objectContaining({ name: task.name, status: 'completed' }));
-    const store = new GoalStore(cwd);
-    const paused = await store.get(goal.id);
-    expect(paused.executionStatus).toBe('paused');
-    expect(paused.events).toEqual([expect.objectContaining({ kind: 'completion', taskName: task.name, processed: false, result: expect.objectContaining({ success: true, interrupted: false }) })]);
-    expect(existsSync(join(cwd, 'manager-called'))).toBe(false);
-    expect(call).not.toHaveBeenCalled();
-    const event = paused.events![0]!;
-    if (event.kind !== 'completion') throw new Error('Expected completion evidence');
-    await processGoalCompletions(cwd, goal.id, {}, { taskName: event.taskName, runSlug: event.runSlug, result: event.result });
-    expect((await store.get(goal.id)).events).toEqual([event]);
-    expect(call).not.toHaveBeenCalled();
-    expect((await session.resumeGoal({ goalId: goal.id })).kind).toBe('reply');
-    const resumed = await store.get(goal.id);
-    expect(resumed.executionStatus).toBe('active');
-    expect(resumed.events).toEqual([{ ...event, processed: true, summary: 'completion processed' }]);
-    expect(call).toHaveBeenCalledOnce();
-    expect(JSON.parse(call.mock.calls[0]![0]).event.id).toBe(event.id);
-  } finally {
-    writeFileSync(join(cwd, 'release-worker'), 'cleanup');
-    try {
-      if (child !== undefined && owned !== undefined) {
-        const captured = await owned;
-        if (captured !== undefined) await terminateOwnedProcess(captured, () => child!.exitCode !== null || child!.signalCode !== null);
-      }
-      await session?.close();
-    } finally {
-      vi.restoreAllMocks();
-      invalidateResolvedConfigCache(cwd);
-      rmSync(cwd, { recursive: true, force: true });
-    }
-  }
-});
-
 it('executes only goal work in detached automatic runs and lets a direct run execute ordinary work', async () => {
   const root = join(process.cwd(), '.tmp');
   mkdirSync(root, { recursive: true });
@@ -387,15 +164,18 @@ MockProvider.prototype.setup = config => ({ call: async () => {
 } });
 `);
     const source = `
-import { createManagerConversationPlan } from ${JSON.stringify(moduleUrl('features/manager/conversationPlan.js'))};
-import { createManagerConversationSession } from ${JSON.stringify(moduleUrl('features/manager/conversationSession.js'))};
-import { createGoalConfirmation } from ${JSON.stringify(moduleUrl('features/manager/goalConfirmation.js'))};
+${ownedProcessMarkerScript(moduleUrl('infra/task/process.js'))}
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { ensureManagerRun } from ${JSON.stringify(moduleUrl('features/manager/autoRun.js'))};
 const cwd = process.cwd();
-const session = createManagerConversationSession({ cwd, plan: createManagerConversationPlan(cwd, {}), confirmation: createGoalConfirmation(cwd), mcpClient: { callTool: async () => { throw new Error('unused'); } } });
-try {
-  const result = await session.handleUserMessage({ text: 'Execute saved work' });
-  if (result.kind !== 'reply') throw new Error(JSON.stringify(result));
-} finally { await session.close(); }
+writeProcessMarker(join(cwd, 'ready-' + process.pid));
+const deadline = Date.now() + 20000;
+while (!existsSync(join(cwd, 'release-turns'))) {
+  if (Date.now() > deadline) throw new Error('Test did not release automatic run owners');
+  await new Promise(resolve => setTimeout(resolve, 20));
+}
+await ensureManagerRun(cwd);
 `;
     const done = Array.from({ length: 2 }, () => {
       const child = spawn(process.execPath, ['--input-type=module', '--eval', source], {
@@ -439,6 +219,14 @@ try {
     ]), { timeout: 15000 });
     await vi.waitFor(() => expect(isProcessAlive(worker!.pid)).toBe(false), { timeout: 15000 });
     expect(readdirSync(cwd).filter((file) => file.startsWith('worker-entered-'))).toHaveLength(1);
+    const completedGoalTask = runner.listTaskStateItems().find(({ name }) => name === task.name)!;
+    const savedEvents = readManagerEvents(cwd);
+    expect(savedEvents.map(({ event }) => event)).toEqual([
+      { kind: 'registered', goalId: goal.id, createdAt: expect.any(String) },
+      { kind: 'completion', goalId: goal.id, taskName: task.name, runSlug: completedGoalTask.runSlug,
+        result: completedGoalTask.completion, createdAt: expect.any(String) },
+    ]);
+    expect((await new GoalStore(cwd).get(goal.id)).workLog).toEqual([]);
     const direct = spawn(process.execPath, [join(process.cwd(), 'dist/app/cli/index.js'), 'run'], {
       cwd, stdio: ['ignore', 'ignore', 'pipe'],
       env: { ...process.env, NODE_OPTIONS: `--import ${pathToFileURL(hook).href}`, TAKT_CONFIG_DIR: configDirectory, TAKT_TEST_AUTO_RUN_ROOT: cwd },
@@ -471,7 +259,22 @@ try {
       watch.once('exit', (code) => code === 0 ? resolve() : reject(new Error(watchErrors || `Watch exit: ${code}`)));
     });
     expect(runner.listAllTaskItems().find(({ name }) => name === watched.name)?.kind).toBe('completed');
-    expect(readManagerRunFailures(cwd).length).toBeGreaterThan(0);
+    expect((await new GoalStore(cwd).get(goal.id)).notifications?.filter(({ kind }) => kind === 'blocked') ?? []).toEqual([]);
+    expect(readManagerEvents(cwd)).toEqual(savedEvents);
+    expect((await new GoalStore(cwd).get(goal.id)).workLog).toEqual([]);
+    rmSync(join(cwd, '.takt', 'goals', 'invalid-entry'), { recursive: true });
+    await registerProject({ globalConfigDirectory: configDirectory, projectDirectory: cwd, command: 'manager', managerUsed: true });
+    const daemon = spawn(process.execPath, [join(process.cwd(), 'dist/app/cli/index.js'), 'daemon'], {
+      cwd, stdio: ['ignore', 'ignore', 'pipe'],
+      env: { ...process.env, NODE_OPTIONS: `--import ${pathToFileURL(hook).href}`, TAKT_CONFIG_DIR: configDirectory, TAKT_TEST_AUTO_RUN_ROOT: cwd },
+    });
+    const daemonOwned = captureOwnedChild(daemon);
+    void daemonOwned.catch(() => {});
+    children.push({ child: daemon, owned: daemonOwned });
+    let daemonErrors = '';
+    daemon.stderr!.on('data', (chunk) => { daemonErrors += String(chunk); });
+    await vi.waitFor(() => expect(readManagerEvents(cwd), daemonErrors).toEqual([]), { timeout: 15000 });
+    expect((await new GoalStore(cwd).get(goal.id)).workLog.filter(({ summary }) => summary === 'ready work saved')).toHaveLength(2);
   } catch (error) {
     errors.push(error);
   } finally {
@@ -496,83 +299,6 @@ try {
   }
   if (errors.length === 1) throw errors[0];
   if (errors.length > 1) throw new AggregateError(errors, `Test or cleanup failed; fixture: ${cwd}`);
-});
-
-it('skips launch for goal work enqueued under ownership and launches once after release rechecks the queue', async () => {
-  const root = join(process.cwd(), '.tmp');
-  mkdirSync(root, { recursive: true });
-  const cwd = mkdtempSync(join(root, 'manager-empty-queue-'));
-  try {
-    await new GoalStore(cwd).create({ ...goalRecord(), id: '00000000-0000-4000-8000-000000000001' });
-    const runner = new TaskRunner(cwd);
-    runner.ensureDirs();
-    writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\n');
-    const moduleUrl = (path: string) => pathToFileURL(join(process.cwd(), 'dist', path)).href;
-    const hook = join(cwd, 'empty-queue-hook.mjs');
-    const launchMarker = join(cwd, 'relaunch.json');
-    writeFileSync(hook, `
-import assert from 'node:assert/strict';
-import childProcess from 'node:child_process';
-import { EventEmitter } from 'node:events';
-import { syncBuiltinESMExports } from 'node:module';
-import { writeFileSync } from 'node:fs';
-import { TaskRunner } from ${JSON.stringify(moduleUrl('infra/task/runner.js'))};
-import { getProjectExecutionOwner } from ${JSON.stringify(moduleUrl('infra/task/project-execution-lock.js'))};
-import { ensureManagerRun } from ${JSON.stringify(moduleUrl('features/manager/autoRun.js'))};
-const cwd = ${JSON.stringify(cwd)};
-const events = [];
-let launches = 0;
-let emptyReads = 0;
-const claim = TaskRunner.prototype.claimNextTasks;
-TaskRunner.prototype.claimNextTasks = function (count) {
-  const tasks = claim.call(this, count);
-  // Wait for the read after manager recovery so the pool cannot consume the injected task.
-  if (tasks.length !== 0 || ++emptyReads !== 2) return tasks;
-  events.push('read-empty');
-  assert.equal(getProjectExecutionOwner(cwd)?.pid, process.pid);
-  this.addTask('late goal task', {
-    goal_id: '00000000-0000-4000-8000-000000000001', worktree: false,
-  });
-  events.push('saved-with-owner');
-  void ensureManagerRun(cwd);
-  assert.equal(launches, 0, 'enqueue must skip launch while owner is alive');
-  assert.equal(getProjectExecutionOwner(cwd)?.pid, process.pid);
-  events.push('enqueue-start-skipped');
-  return tasks;
-};
-const spawn = childProcess.spawn;
-childProcess.spawn = (command, args, options) => {
-  if (!args.includes('run')) return spawn(command, args, options);
-  assert.equal(getProjectExecutionOwner(cwd), undefined);
-  events.push('spawn-without-owner');
-  launches++;
-  writeFileSync(${JSON.stringify(launchMarker)}, JSON.stringify({
-    events, launches, args, detached: options.detached,
-    automatic: options.env[${JSON.stringify(MANAGER_GOAL_TASKS_ENV)}],
-  }));
-  const child = Object.assign(new EventEmitter(), { unref() {} });
-  queueMicrotask(() => child.emit('spawn'));
-  return child;
-};
-syncBuiltinESMExports();
-`);
-    const child = spawnSync(process.execPath, [join(process.cwd(), 'dist/app/cli/index.js'), 'run'], {
-      cwd, encoding: 'utf8', timeout: 20000,
-      env: { ...process.env, NODE_OPTIONS: `--import ${pathToFileURL(hook).href}`, [MANAGER_GOAL_TASKS_ENV]: '1' },
-    });
-    expect(child.error).toBeUndefined();
-    expect(child.status, child.stdout + child.stderr).toBe(0);
-    expect(JSON.parse(readFileSync(launchMarker, 'utf8'))).toEqual({
-      events: ['read-empty', 'saved-with-owner', 'enqueue-start-skipped', 'spawn-without-owner'],
-      launches: 1, args: [join(process.cwd(), 'dist/app/cli/index.js'), 'run'],
-      detached: true, automatic: '1',
-    });
-    expect(runner.listTaskStateItems()).toEqual([expect.objectContaining({ kind: 'pending', goalId: '00000000-0000-4000-8000-000000000001' })]);
-    const lock = acquireProjectExecutionLock(cwd, 'run');
-    lock.release();
-  } finally {
-    rmSync(cwd, { recursive: true, force: true });
-  }
 });
 
 it('does not spawn another automatic run when initial task processing fails with goal work still pending', async () => {
@@ -621,4 +347,54 @@ syncBuiltinESMExports();
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
+});
+
+it('leaves events and goals unchanged in event-only runs without calling the manager or restarting', async () => {
+  const root = join(process.cwd(), '.tmp');
+  mkdirSync(root, { recursive: true });
+  const cwd = mkdtempSync(join(root, 'manager-event-failure-'));
+  try {
+    const goal = await new GoalStore(cwd).create(goalRecord());
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\n');
+    saveManagerEvent(cwd, { kind: 'registered', goalId: goal.id });
+    const saved = readManagerEvents(cwd);
+    const savedGoal = await new GoalStore(cwd).get(goal.id);
+    const launchMarker = join(cwd, 'unexpected-relaunch');
+    const managerMarker = join(cwd, 'unexpected-manager');
+    const hook = join(cwd, 'event-failure-hook.mjs');
+    const mockUrl = pathToFileURL(join(process.cwd(), 'dist/infra/providers/mock.js')).href;
+    writeFileSync(hook, `
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+import { writeFileSync } from 'node:fs';
+import { MockProvider } from ${JSON.stringify(mockUrl)};
+MockProvider.prototype.setup = () => {
+  writeFileSync(${JSON.stringify(managerMarker)}, 'unexpected manager call');
+  throw new Error('Run must not process manager events');
+};
+const spawn = childProcess.spawn;
+childProcess.spawn = (command, args, options) => {
+  if (args.includes('run')) {
+    writeFileSync(${JSON.stringify(launchMarker)}, 'unexpected restart');
+    throw new Error('Test prevents an unbounded restart');
+  }
+  return spawn(command, args, options);
+};
+syncBuiltinESMExports();
+`);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const child = spawnSync(process.execPath, [join(process.cwd(), 'dist/app/cli/index.js'), 'run'], {
+        cwd, encoding: 'utf8', timeout: 20000,
+        env: { ...process.env, NODE_OPTIONS: `--import ${pathToFileURL(hook).href}`, [MANAGER_GOAL_TASKS_ENV]: '1' },
+      });
+      expect(child.error).toBeUndefined();
+      expect(child.status).toBe(0);
+      expect(existsSync(managerMarker)).toBe(false);
+      expect(existsSync(launchMarker)).toBe(false);
+      expect(readManagerEvents(cwd)).toEqual(saved);
+      expect(await new GoalStore(cwd).get(goal.id)).toEqual(savedGoal);
+      const lock = acquireProjectExecutionLock(cwd, 'run');
+      lock.release();
+    }
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
 });

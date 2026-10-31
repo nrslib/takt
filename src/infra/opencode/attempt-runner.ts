@@ -8,7 +8,7 @@
 import type { AgentResponse } from '../../core/models/index.js';
 import type { OpenCodeExecutionContext } from './execution-context.js';
 import { openCodeRuntimeSelection } from './runtime.js';
-import { mapsToOpenCodeEditPermission } from './allowedTools.js';
+import { mapsToOpenCodeEditPermission, toOpenCodeMcpServerPermission } from './allowedTools.js';
 import { AskUserQuestionDeniedError } from '../../core/workflow/ask-user-question-error.js';
 import { parseStructuredOutputObject } from '../../agents/structured-caller/shared.js';
 import { createLogger, getErrorMessage, createStreamDiagnostics, type StreamDiagnostics } from '../../shared/utils/index.js';
@@ -216,6 +216,16 @@ function getToolGuardFailureFingerprint(failure: ToolGuardRecoverableFailure): s
 }
 
 let nextProvisionalId = 1;
+
+function rejectedResumeCategory(error: unknown, options: OpenCodeCallOptions): AgentFailureCategory | undefined {
+  if (!options.callerManagedSession || options.sessionId === undefined || typeof error !== 'object' || error === null) return undefined;
+  if ('_tag' in error && error._tag === 'SessionNotFoundError'
+    && 'sessionID' in error && error.sessionID === options.sessionId) {
+    return AGENT_FAILURE_CATEGORIES.SESSION_CONTINUATION_UNSUPPORTED;
+  }
+  return undefined;
+}
+
 export async function getOpenCodeSessionSnapshot(
   model: string,
   sessionID: string,
@@ -848,7 +858,7 @@ export class OpenCodeAttemptRunner {
             break;
           } catch (error) {
             lastError = error;
-            if (timedOut || callAbortController.signal.aborted || !this.isRetriableError(getErrorMessage(error), 'prompt') || resolutionAttempt === OPENCODE_RETRY_MAX_ATTEMPTS) {
+            if (options.callerManagedSession || timedOut || callAbortController.signal.aborted || !this.isRetriableError(getErrorMessage(error), 'prompt') || resolutionAttempt === OPENCODE_RETRY_MAX_ATTEMPTS) {
               break;
             }
             try {
@@ -865,7 +875,7 @@ export class OpenCodeAttemptRunner {
             ? AGENT_FAILURE_CATEGORIES.PART_TIMEOUT
             : callAbortController.signal.aborted
               ? AGENT_FAILURE_CATEGORIES.EXTERNAL_ABORT
-              : undefined;
+              : rejectedResumeCategory(lastError, options);
           const message = timedOut
             ? createPartTimeoutReason(timeoutMs)
             : callAbortController.signal.aborted
@@ -1021,6 +1031,7 @@ export class OpenCodeAttemptRunner {
   let promptCompletion: Promise<unknown> | undefined;
   let promptCompletionWait: Promise<void> | undefined;
   let promptError: string | undefined;
+  let resumeFailureCategory: AgentFailureCategory | undefined;
   const attemptSensitiveSources: unknown[] = [
     { opencodeApiKey: options.opencodeApiKey },
     options.childProcessEnv,
@@ -1143,7 +1154,7 @@ export class OpenCodeAttemptRunner {
   ): Promise<AgentResponse | typeof RETRY_ATTEMPT> => {
     throwIfCallAborted();
     throwIfServerInvalidated();
-    if (classification === 'Transient' && !toolExecutionObserved && attempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
+    if (!options.callerManagedSession && classification === 'Transient' && !toolExecutionObserved && attempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
       await this.waitForRetryDelay(attempt, options.abortSignal);
       throwIfCallAborted();
       throwIfServerInvalidated();
@@ -1219,11 +1230,17 @@ export class OpenCodeAttemptRunner {
       release = undefined;
       throw new Error(OPENCODE_STREAM_ABORTED_MESSAGE);
     }
+    // Every tool of an approved server is allowed by its `<server>_*` permission rule.
+    // Only the rules and a v1 prompt carry that wildcard: a v2 prompt names concrete
+    // tool ids, so v2 receives the server names and resolves their registered tools.
+    const allowedMcpPermissions = options.allowedMcpTools === undefined && options.allowedMcpServers === undefined
+      ? undefined
+      : [...(options.allowedMcpTools ?? []), ...(options.allowedMcpServers ?? []).map(toOpenCodeMcpServerPermission)];
     const permissionRuleset = buildOpenCodePermissionRuleset(
       options.permissionMode,
       options.networkAccess,
       options.allowedTools,
-      options.allowedMcpTools,
+      allowedMcpPermissions,
     );
     // The session is created once per step and reused across phases: a
     // session-scoped deny can never be escalated later, and recreating the
@@ -1235,7 +1252,7 @@ export class OpenCodeAttemptRunner {
       options.permissionMode,
       options.networkAccess,
       options.allowedTools,
-      options.allowedMcpTools,
+      allowedMcpPermissions,
       options.strictToolAllowlist,
     );
     if (sessionId === undefined) {
@@ -1302,11 +1319,13 @@ export class OpenCodeAttemptRunner {
       options.permissionMode,
       options.networkAccess,
       options.allowedTools,
-      options.allowedMcpTools,
+      opencodeApiClient.requiresExplicitMcpTools ? options.allowedMcpTools : allowedMcpPermissions,
       options.strictToolAllowlist,
     );
-    if (openCodeRuntimeSelection().generation === 'v2') {
-      promptTools.skill = options.skillsEnabled === true && options.disableSkills !== true;
+    if (options.disableSkills === true) {
+      promptTools.skill = false;
+    } else if (openCodeRuntimeSelection().generation === 'v2') {
+      promptTools.skill = options.skillsEnabled === true;
     }
     log.debug('Selecting OpenCode agent', {
       agentName,
@@ -1335,6 +1354,7 @@ export class OpenCodeAttemptRunner {
         : basePromptText;
     const promptPayload: Record<string, unknown> = {
       ...(opencodeApiClient.requiresExplicitMcpTools ? { allowConfiguredMcpTools: options.allowedTools === undefined && options.permissionMode !== 'readonly' } : {}),
+      ...(opencodeApiClient.requiresExplicitMcpTools && options.allowedMcpServers !== undefined ? { allowedMcpServers: options.allowedMcpServers } : {}),
       sessionID: activeSessionId,
       directory: options.cwd,
       model: parsedModel,
@@ -1356,6 +1376,7 @@ export class OpenCodeAttemptRunner {
       signal: streamAbortController.signal,
     }).catch((error) => {
       promptError = getErrorMessage(error);
+      resumeFailureCategory = rejectedResumeCategory(error, options);
       if (!streamAbortController.signal.aborted) {
         rateLimitClass = classifyRateLimitError(promptError, extractStatusCode(error));
         abortCause = 'prompt';
@@ -1875,6 +1896,7 @@ export class OpenCodeAttemptRunner {
         if (errorProps.sessionID === activeSessionId) {
           success = false;
           failureMessage = extractOpenCodeErrorMessage(errorProps.error) ?? 'OpenCode session error';
+          resumeFailureCategory = rejectedResumeCategory(errorProps.error, options);
           rateLimitClass = classifyRateLimitError(failureMessage, extractStatusCode(errorProps.error));
           diag.onStreamError('session.error', sanitizeAttemptError(failureMessage));
           break;
@@ -2024,7 +2046,7 @@ export class OpenCodeAttemptRunner {
       // native tool it just failed to use. Generic transient errors
       // (transport/network) must not trigger this, or they would burn the
       // one-shot fallback budget before a real format failure arrives.
-      if (options.strictToolAllowlist === undefined
+      if (!options.callerManagedSession && options.strictToolAllowlist === undefined
         && shouldDegradeToFormatless(callState.recoveryState, message, toolGuardFailure !== undefined)) {
         throwIfCallAborted();
         callState.recoveryState = degradeToFormatless(callState.recoveryState);
@@ -2048,7 +2070,7 @@ export class OpenCodeAttemptRunner {
       // that is stale session memory, not a real failure of this request —
       // retry the same prompt once in a fresh session instead of failing
       // the step outright.
-      if (shouldRecoverStaleSession(callState.recoveryState, attemptPlan, unavailableLoopToolName)) {
+      if (!options.callerManagedSession && shouldRecoverStaleSession(callState.recoveryState, attemptPlan, unavailableLoopToolName)) {
         throwIfCallAborted();
         callState.recoveryState = recoverStaleSession(callState.recoveryState);
         callState.maxAttempts = Math.max(callState.maxAttempts, attempt + 1);
@@ -2068,7 +2090,7 @@ export class OpenCodeAttemptRunner {
         && toolGuardFailure.tool === STRUCTURED_OUTPUT_TOOL_NAME
         ? undefined
         : toolGuardFailure;
-      if (recoverableToolFailure !== undefined) {
+      if (!options.callerManagedSession && recoverableToolFailure !== undefined) {
         const toolGuardRecoveryAction = resolveToolGuardRecoveryAction(
           callState.toolGuardRecovery,
           getToolGuardFailureFingerprint(recoverableToolFailure),
@@ -2122,7 +2144,7 @@ export class OpenCodeAttemptRunner {
       // 混同しない。
       const retriable = toolGuardFailure === undefined
         && this.isRetriableError(message, abortCause);
-      if (retriable && attempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
+      if (!options.callerManagedSession && retriable && attempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
         throwIfCallAborted();
         log.info('Retrying OpenCode call after transient failure', {
           agentType,
@@ -2165,6 +2187,7 @@ export class OpenCodeAttemptRunner {
         timestamp: new Date(),
         sessionId: activeSessionId,
         debugInfo: { toolHealth: failureToolHealth },
+        ...(resumeFailureCategory === undefined ? {} : { failureCategory: resumeFailureCategory }),
         ...(attempt > 1 ? { retryCount: attempt - 1 } : {}),
       };
     }
@@ -2274,7 +2297,7 @@ export class OpenCodeAttemptRunner {
 
     const retriable = (stopResult === undefined || stopResult.ok)
       && this.isRetriableError(errorMessage, abortCause);
-    if (retriable && attempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
+    if (!options.callerManagedSession && retriable && attempt < OPENCODE_RETRY_MAX_ATTEMPTS) {
       throwIfCallAborted();
       log.info('Retrying OpenCode call after transient exception', {
         agentType,
@@ -2299,7 +2322,8 @@ export class OpenCodeAttemptRunner {
     }
 
     const sanitizedErrorMessage = sanitizeAttemptError(errorMessage);
-    const failureCategory = resolveOpenCodeAbortFailureCategory(abortCause);
+    const failureCategory = resolveOpenCodeAbortFailureCategory(abortCause)
+      ?? resumeFailureCategory ?? rejectedResumeCategory(error, options);
     return {
       persona: agentType,
       status: 'error',

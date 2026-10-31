@@ -13,6 +13,7 @@ vi.mock('../infra/managed-providers/loader.js', () => import('./helpers/managed-
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CodexOptions, ThreadOptions, TurnOptions } from '@openai/codex-sdk';
 import type { CodexCallOptions } from '../infra/codex/types.js';
+import { CodexProvider } from '../infra/providers/codex.js';
 import { hasCodexMcpServer, runCodexMcpList } from '../infra/codex/mcp-list.js';
 
 const {
@@ -87,6 +88,78 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 const { CodexClient } = await import('../infra/codex/client.js');
 
 describe('CodexClient — structuredOutput 抽出', () => {
+  it.each([
+    { permissionControl: 'takt', sessionId: undefined },
+    { permissionControl: 'codex', sessionId: undefined },
+    { permissionControl: 'takt', sessionId: 'existing-session' },
+    { permissionControl: 'codex', sessionId: 'existing-session' },
+  ] as const)('enforces edit=false readonly in Phase 1 ($permissionControl, $sessionId)', async ({ permissionControl, sessionId }) => {
+    mockEvents = [{ type: 'turn.completed' }];
+    const result = await new CodexProvider().setup({ name: 'reviewer' }).call('Review', {
+      cwd: '/tmp', edit: false, permissionMode: 'edit', executionPhase: 1, sessionId,
+      providerOptions: { codex: { permissionControl } },
+    });
+    expect(result.status).toBe('done');
+    expect(lastThreadOptions).toMatchObject({ sandboxMode: 'read-only', approvalPolicy: 'never' });
+    if (sessionId === undefined) {
+      expect(mockStartThread).toHaveBeenCalledOnce();
+      expect(mockResumeThread).not.toHaveBeenCalled();
+    } else {
+      expect(mockResumeThread).toHaveBeenCalledWith(sessionId, lastThreadOptions);
+      expect(mockStartThread).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each([undefined, true])('preserves delegated permissions in Phase 1 when edit=%s', async (edit) => {
+    mockEvents = [{ type: 'turn.completed' }];
+    await new CodexProvider().setup({ name: 'coder' }).call('Work', {
+      cwd: '/tmp', edit, permissionMode: 'readonly', executionPhase: 1,
+      providerOptions: { codex: { permissionControl: 'codex' } },
+    });
+    expect(lastThreadOptions).not.toHaveProperty('sandboxMode');
+  });
+
+  it.each(['takt', 'codex'] as const)('enforces edit=false over full permissions with permission_control=%s', async (permissionControl) => {
+    mockEvents = [{ type: 'turn.completed' }];
+    await new CodexProvider().setup({ name: 'coder' }).call('Work', {
+      cwd: '/tmp', edit: false, permissionMode: 'full', executionPhase: 1,
+      providerOptions: { codex: { permissionControl } },
+    });
+    expect(lastThreadOptions?.sandboxMode).toBe('read-only');
+  });
+
+  it.each([undefined, 'existing-session'])('forces read-only sandbox in Phase 2 with delegated Codex permissions (session=%s)', async (sessionId) => {
+    mockEvents = [{ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } }];
+    const agent = new CodexProvider().setup({ name: 'reporter' });
+    const result = await agent.call('Report current work', {
+      cwd: '/tmp', permissionMode: 'full', providerOptions: { codex: { permissionControl: 'codex' } }, executionPhase: 2, sessionId,
+    });
+    expect(result.status).toBe('done');
+    expect(lastThreadOptions).toMatchObject({ sandboxMode: 'read-only', approvalPolicy: 'never' });
+  });
+
+  it('通常のタスク実行には manager のフック設定を追加しない', async () => {
+    mockEvents = [{ type: 'turn.completed' }];
+    const result = await new CodexClient().call('coder', 'prompt', { cwd: '/tmp', fastMode: true });
+    expect(result.status).toBe('done');
+    expect(lastCodexConstructorOptions?.config?.features).toMatchObject({ fast_mode: true });
+    expect((lastCodexConstructorOptions?.config?.features as Record<string, unknown>).hooks).toBeUndefined();
+    expect(lastCodexConstructorOptions?.config?.hooks).toBeUndefined();
+    expect(lastCodexConstructorOptions?.configOverrides?.filter((value) => value.startsWith('hooks.state')) ?? []).toEqual([]);
+    expect(lastThreadOptions?.approvalPolicy).toBe('never');
+  });
+
+  it('strict-readonly の判断役では fast_mode を維持して hooks を無効にする', async () => {
+    mockEvents = [{ type: 'turn.completed' }];
+    const options: CodexCallOptions & { internalAgentIsolation: 'strict-readonly' } = {
+      cwd: '/tmp', fastMode: true, permissionMode: 'readonly', internalAgentIsolation: 'strict-readonly',
+      outputSchema: { type: 'object', additionalProperties: false },
+    };
+    expect((await new CodexClient().call('manager-permission-judge', 'judge', options)).status).toBe('done');
+    expect(lastCodexConstructorOptions?.config?.features).toMatchObject({ hooks: false, fast_mode: true });
+    expect(lastThreadOptions).toMatchObject({ sandboxMode: 'read-only', approvalPolicy: 'never' });
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockBuildCodexSkillConfig.mockReset();

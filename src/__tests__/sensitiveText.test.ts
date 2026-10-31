@@ -13,6 +13,120 @@ import {
 import { sanitizeOpenCodeToolInput } from '../infra/opencode/tool-input-sanitizer.js';
 
 describe('sensitiveText', () => {
+  describe.each(['-u ', '-u', '--user ', '--user=', '--proxy-user ', '--proxy-user='])(
+    'user option %s', (option) => {
+      it.each([
+        'a:x', 'a1.b_c-d:abc', '"a1.b_c-d:abc"', "'alice:abc'",
+        'al+ice:abc', 'al%ice:abc', ':abc', 'alice:', ':',
+        '"al+ice:abc"', "'al%ice:abc'", '":abc"', "':abc'",
+        '"alice:"', "'alice:'", '":"', "':'",
+        '"alice:abc def"', "'alice:abc def'", '"al ice:abc"', "'al ice:abc'",
+      ])(
+        'redacts a colon-containing value in original and JSON text: %s', (value) => {
+          const text = `inspect ${option}${value} tail`;
+          const expected = `inspect ${option}[REDACTED] tail`;
+
+          expect(sanitizeSensitiveText(text)).toBe(expected);
+          expect(sanitizeSensitiveText(JSON.stringify({ command: text })))
+            .toBe(JSON.stringify({ command: expected }));
+        },
+      );
+
+      it.each([
+        '+%Y-%m-%dT%H:%M:%SZ',
+        '"+%Y-%m-%dT%H:%M:%SZ"',
+        "'+%Y-%m-%dT%H:%M:%SZ'",
+        '+al+ice:abc',
+        '"+al+ice:abc def"',
+        "'+al%ice:abc def'",
+        'alice',
+        '"alice"',
+        "'alice'",
+        '"aliceabc def"',
+        "'aliceabc def'",
+      ])('preserves a plus-prefixed or colon-free value before a URL in original and JSON text: %s', (value) => {
+        const text = `inspect ${option}${value} https://example.com tail`;
+        const json = JSON.stringify({ command: text });
+
+        expect(sanitizeSensitiveText(text)).toBe(text);
+        expect(sanitizeSensitiveText(json)).toBe(json);
+      });
+
+      it.each([
+        ['"a1.b_c-d:abc"', 'a1.b_c-d:abc', 'abc'],
+        ['"al+ice:s3cret value"', 'al+ice:s3cret value', 's3cret value'],
+        ["'al%ice:s3cret value'", 'al%ice:s3cret value', 's3cret value'],
+        ['":abc"', ':abc', 'abc'],
+      ])('redacts collected credentials and their password when echoed alone: %s', (value, credential, password) => {
+        const source = { command: `inspect ${option}${value}` };
+
+        const sanitized = sanitizeSensitiveTextWithKnownValues(`echoed ${credential} ${password}`, source);
+
+        expect(sanitized).toBe('echoed [REDACTED] [REDACTED]');
+      });
+
+      it.each(['', '"', "'"])('does not collect a date format or its colon suffix as a sensitive value: %s', (quote) => {
+        const format = '+%Y-%m-%dT%H:%M:%SZ';
+        const source = { command: `inspect ${option}${quote}${format}${quote}` };
+        const echo = `echoed ${format} %M:%SZ`;
+
+        expect(sanitizeSensitiveTextWithKnownValues(echo, source)).toBe(echo);
+        expect(sanitizeSensitiveTextWithKnownValues(echo, JSON.stringify(source))).toBe(echo);
+      });
+
+      it.each(['"', "'"])('does not collect a plus-prefixed quoted credential: %s', (quote) => {
+        const source = { command: `inspect ${option}${quote}+al+ice:s3cret value${quote}` };
+        const echo = 'echoed al+ice:s3cret value s3cret value';
+
+        expect(sanitizeSensitiveTextWithKnownValues(echo, source)).toBe(echo);
+        expect(sanitizeSensitiveTextWithKnownValues(echo, JSON.stringify(source))).toBe(echo);
+      });
+
+      it.each([
+        ['alice:', 'alice:'], ['"alice:"', 'alice:'], ["'alice:'", 'alice:'], [':', ':'],
+      ])(
+        'collects the complete credential with an empty password: %s', (value, credential) => {
+          const source = { command: `inspect ${option}${value} tail` };
+
+          expect(sanitizeSensitiveTextWithKnownValues(`echoed ${credential} tail`, source))
+            .toBe('echoed [REDACTED] tail');
+          expect(sanitizeSensitiveTextWithKnownValues(`echoed ${credential} tail`, JSON.stringify(source)))
+            .toBe('echoed [REDACTED] tail');
+        },
+      );
+
+      it.each(['"', "'"])(
+        'collects credentials without JSON quote boundaries: %s', (quote) => {
+          const source = JSON.stringify({ command: `inspect ${option}${quote}alice:s3cretvalue${quote}` });
+
+          expect(sanitizeSensitiveTextWithKnownValues('echoed alice:s3cretvalue s3cretvalue', source))
+            .toBe('echoed [REDACTED] [REDACTED]');
+        },
+      );
+
+      it.each([
+        ['"al+ice:s3cretvalue"', 'al+ice:s3cretvalue', 's3cretvalue'],
+        ['"alice:s3cretvalue tail"', 'alice:s3cretvalue tail', 's3cretvalue tail'],
+        ['"al+ice:s3cret value"', 'al+ice:s3cret value', 's3cret value'],
+      ])(
+        'collects a JSON quoted credential and its complete password: %s', (value, credential, password) => {
+          const source = JSON.stringify({ command: `inspect ${option}${value}` });
+          const echo = `echoed ${credential} ${password}`;
+
+          expect(sanitizeSensitiveTextWithKnownValues(echo, source)).toBe('echoed [REDACTED] [REDACTED]');
+        },
+      );
+    },
+  );
+
+  it('redacts both the API token assignment and API key option', () => {
+    const sanitized = sanitizeSensitiveText('api_token=abc123xyz --api-key=def456uvw');
+
+    expect(sanitized).toBe('api_token=[REDACTED] --api-key=[REDACTED]');
+    expect(sanitized).not.toContain('abc123xyz');
+    expect(sanitized).not.toContain('def456uvw');
+  });
+
   const privateKey = [
     '-----BEGIN OPENSSH PRIVATE KEY-----',
     'b3BlbnNzaC1rZXktdjEAAAAA',

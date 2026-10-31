@@ -90,6 +90,10 @@ vi.mock('../infra/kiro/client.js', () => ({
   callKiro: vi.fn(async (): Promise<AgentResponse> => fakeAgentResponse),
 }));
 
+vi.mock('../infra/devin/index.js', () => ({
+  callDevin: vi.fn(async (): Promise<AgentResponse> => fakeAgentResponse),
+}));
+
 vi.mock('../infra/mock/client.js', () => ({
   MockClient: vi.fn(),
   callMock: vi.fn(async (): Promise<AgentResponse> => fakeAgentResponse),
@@ -108,6 +112,7 @@ vi.mock('../infra/config/index.js', () => ({
   resolveCopilotCliPath: () => '/usr/bin/copilot',
   resolveKiroApiKey: () => 'test-key',
   resolveKiroCliPath: () => '/usr/bin/kiro',
+  resolveDevinCliPath: () => '/usr/bin/devin',
 }));
 
 vi.mock('../infra/opencode/types.js', () => ({
@@ -161,6 +166,22 @@ function getLastCallOptions(mockFn: { mock: { calls: unknown[][] } }): AnyCallOp
 }
 
 describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => {
+  it.each([undefined, true] as const)('passes MCP ownership independently of session ownership (%s)', async (callerManagedMcp) => {
+    const { ClaudeHeadlessProvider } = await import('../infra/providers/claude-headless.js');
+    const { ClaudeTerminalProvider } = await import('../infra/providers/claude-terminal.js');
+    const { CursorProvider } = await import('../infra/providers/cursor.js');
+    const { callClaudeHeadless } = await import('../infra/claude-headless/client.js');
+    const { callClaudeTerminal } = await import('../infra/claude-terminal/client.js');
+    const { callCursor, callCursorCustom } = await import('../infra/cursor/client.js');
+    for (const provider of [new ClaudeHeadlessProvider(), new ClaudeTerminalProvider(), new CursorProvider()]) {
+      for (const systemPrompt of [undefined, 'manager']) {
+        await provider.setup({ name: 'manager', systemPrompt }).call('prompt', { cwd: '/tmp', preparedMcp, callerManagedMcp });
+      }
+    }
+    for (const call of [callClaudeHeadless, callClaudeTerminal, callCursor, callCursorCustom]) {
+      expect(getLastCallOptions(vi.mocked(call))).toMatchObject({ preparedMcp, callerManagedMcp });
+    }
+  });
   it('preserves Claude MCP-only side effects through the client boundary', async () => {
     const { ClaudeProvider } = await import('../infra/providers/claude.js');
     const { callClaude } = await import('../infra/claude/client.js');
@@ -207,7 +228,7 @@ describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => 
       preparedMcp,
     });
     const options = getLastCallOptions(callClaude as unknown as { mock: { calls: unknown[][] } });
-    expect(options.preparedMcp).toEqual(preparedMcp);
+    expect(options.preparedMcp).toBe(preparedMcp);
   });
 
   it('Given claude-headless provider, When ProviderCallOptions.preparedMcp is set, Then callClaudeHeadless receives preparedMcp in ClaudeHeadlessCallOptions', async () => {
@@ -220,7 +241,7 @@ describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => 
       preparedMcp,
     });
     const options = getLastCallOptions(callClaudeHeadless as unknown as { mock: { calls: unknown[][] } });
-    expect(options.preparedMcp).toEqual(preparedMcp);
+    expect(options.preparedMcp).toBe(preparedMcp);
   });
 
   it('Given claude-terminal provider, When ProviderCallOptions.preparedMcp is set, Then callClaudeTerminal receives preparedMcp in ClaudeTerminalCallOptions', async () => {
@@ -233,7 +254,7 @@ describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => 
       preparedMcp,
     });
     const options = getLastCallOptions(callClaudeTerminal as unknown as { mock: { calls: unknown[][] } });
-    expect(options.preparedMcp).toEqual(preparedMcp);
+    expect(options.preparedMcp).toBe(preparedMcp);
   });
 
   it('Given codex provider, When ProviderCallOptions.preparedMcp is set, Then callCodex receives preparedMcp in CodexCallOptions', async () => {
@@ -246,7 +267,7 @@ describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => 
       preparedMcp,
     });
     const options = getLastCallOptions(callCodex as unknown as { mock: { calls: unknown[][] } });
-    expect(options.preparedMcp).toEqual(preparedMcp);
+    expect(options.preparedMcp).toBe(preparedMcp);
   });
 
   it('Given opencode provider, When ProviderCallOptions.preparedMcp is set, Then callOpenCode receives preparedMcp in OpenCodeCallOptions', async () => {
@@ -260,7 +281,7 @@ describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => 
       preparedMcp,
     });
     const options = getLastCallOptions(callOpenCode as unknown as { mock: { calls: unknown[][] } });
-    expect(options.preparedMcp).toEqual(preparedMcp);
+    expect(options.preparedMcp).toBe(preparedMcp);
   });
 
   it('Given cursor provider, When ProviderCallOptions.preparedMcp is set, Then callCursor receives preparedMcp in CursorCallOptions', async () => {
@@ -273,7 +294,7 @@ describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => 
       preparedMcp,
     });
     const options = getLastCallOptions(callCursor as unknown as { mock: { calls: unknown[][] } });
-    expect(options.preparedMcp).toEqual(preparedMcp);
+    expect(options.preparedMcp).toBe(preparedMcp);
   });
 
   it('Given copilot provider, When ProviderCallOptions.preparedMcp is set, Then callCopilot receives preparedMcp in CopilotCallOptions', async () => {
@@ -286,7 +307,7 @@ describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => 
       preparedMcp,
     });
     const options = getLastCallOptions(callCopilot as unknown as { mock: { calls: unknown[][] } });
-    expect(options.preparedMcp).toEqual(preparedMcp);
+    expect(options.preparedMcp).toBe(preparedMcp);
   });
 
   it('Given kiro provider, When ProviderCallOptions.preparedMcp is set, Then callKiro receives preparedMcp in KiroCallOptions', async () => {
@@ -299,7 +320,20 @@ describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => 
       preparedMcp,
     });
     const options = getLastCallOptions(callKiro as unknown as { mock: { calls: unknown[][] } });
-    expect(options.preparedMcp).toEqual(preparedMcp);
+    expect(options.preparedMcp).toBe(preparedMcp);
+  });
+
+  it('Given devin provider, When ProviderCallOptions.preparedMcp is set, Then callDevin receives preparedMcp in DevinCallOptions', async () => {
+    const { DevinProvider } = await import('../infra/providers/devin.js');
+    const { callDevin } = await import('../infra/devin/index.js');
+    const provider = new DevinProvider();
+    const agent = provider.setup({ name: 'test' });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      preparedMcp,
+    });
+    const options = getLastCallOptions(callDevin as unknown as { mock: { calls: unknown[][] } });
+    expect(options.preparedMcp).toBe(preparedMcp);
   });
 
   it('Given mock provider, When ProviderCallOptions.preparedMcp is set, Then callMock receives preparedMcp in MockCallOptions', async () => {
@@ -312,7 +346,7 @@ describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => 
       preparedMcp,
     });
     const options = getLastCallOptions(callMock as unknown as { mock: { calls: unknown[][] } });
-    expect(options.preparedMcp).toEqual(preparedMcp);
+    expect(options.preparedMcp).toBe(preparedMcp);
   });
 
   it('Given a provider with no preparedMcp, Then XxxCallOptions.preparedMcp is undefined (not silently dropped or defaulted)', async () => {

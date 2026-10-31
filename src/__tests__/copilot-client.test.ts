@@ -733,6 +733,103 @@ describe('callCopilot', () => {
     expect(result.status).toBe('error');
   });
 
+  it.each([
+    {
+      label: '実出力どおりの3フィールド',
+      data: {
+        errorType: 'quota',
+        errorCode: 'quota_exceeded',
+        message: 'You have exceeded your monthly quota (Request ID: 0000:1111:2222:3333)',
+        statusCode: 402,
+      },
+    },
+    { label: 'statusCode 402 (数値) のみ', data: { statusCode: 402, message: 'request rejected: quota' } },
+    { label: "statusCode '402' (文字列) のみ", data: { statusCode: '402', message: 'request rejected: quota' } },
+    { label: "errorType 'quota' のみ", data: { errorType: 'quota', message: 'request rejected: quota' } },
+    { label: "errorCode 'quota_exceeded' のみ", data: { errorCode: 'quota_exceeded', message: 'request rejected: quota' } },
+    {
+      label: "statusCode 402 と errorType 'rate_limit' の混在",
+      data: { statusCode: 402, errorType: 'rate_limit', message: 'request rejected: quota' },
+    },
+  ])('終了コード1のsession.errorが月間クォータ切れを示したら再試行せずrate_limitedを返す: $label', async ({ data }) => {
+    vi.useFakeTimers();
+    mockSpawnWithScenario([
+      { code: 1, stdout: `${JSON.stringify({ type: 'session.error', data })}\n` },
+      { stdout: 'unexpected retry' },
+    ]);
+    const onStream = vi.fn();
+
+    const pending = callCopilot('coder', 'implement feature', { cwd: '/repo', onStream });
+    await vi.advanceTimersByTimeAsync(121_000);
+    const result = await pending;
+
+    expect(result.status).toBe('rate_limited');
+    expect(result.errorKind).toBe('rate_limit');
+    expect(result.content).toBe('');
+    expect(result.error).toContain(data.message);
+    expect(result.rateLimitInfo?.provider).toBe('copilot');
+    const results = onStream.mock.calls.filter(([event]) => event.type === 'result');
+    expect(results).toHaveLength(1);
+    expect(results[0]?.[0].data).toMatchObject({ success: false, error: expect.stringContaining(data.message) });
+    expect(mockSpawn).toHaveBeenCalledOnce();
+  });
+
+  it('終了コード0でもsession.errorの月間クォータ切れを再試行せずrate_limitedを返す', async () => {
+    vi.useFakeTimers();
+    const message = 'You have exceeded your monthly quota (Request ID: 0000:1111:2222:3333)';
+    const quotaExceeded = [
+      { type: 'assistant.message', data: { content: 'partial answer' } },
+      { type: 'session.error', data: { errorType: 'quota', errorCode: 'quota_exceeded', message, statusCode: 402 } },
+    ].map((event) => JSON.stringify(event)).join('\n');
+    mockSpawnWithScenario([
+      { code: 0, stdout: `${quotaExceeded}\n` },
+      { code: 0, stdout: 'unexpected retry' },
+    ]);
+
+    const pending = callCopilot('coder', 'implement feature', { cwd: '/repo' });
+    await vi.advanceTimersByTimeAsync(121_000);
+    const result = await pending;
+
+    expect(result.status).toBe('rate_limited');
+    expect(result.errorKind).toBe('rate_limit');
+    expect(result.content).toBe('');
+    expect(result.error).toContain(message);
+    expect(result.rateLimitInfo?.provider).toBe('copilot');
+    expect(mockSpawn).toHaveBeenCalledOnce();
+  });
+
+  it('429のsession.errorの後に月間クォータ切れのsession.errorが続いたら使い切りを優先して再試行しない', async () => {
+    vi.useFakeTimers();
+    const message = 'You have exceeded your monthly quota (Request ID: 0000:1111:2222:3333)';
+    const errors = [
+      { type: 'session.error', data: { errorType: 'rate_limit', statusCode: 429, message: 'request rejected' } },
+      { type: 'session.error', data: { errorType: 'quota', errorCode: 'quota_exceeded', message, statusCode: 402 } },
+    ].map((event) => JSON.stringify(event)).join('\n');
+    mockSpawnWithScenario([
+      { code: 1, stdout: `${errors}\n` },
+      { stdout: 'unexpected retry' },
+    ]);
+
+    const pending = callCopilot('coder', 'implement feature', { cwd: '/repo' });
+    await vi.advanceTimersByTimeAsync(121_000);
+    const result = await pending;
+
+    expect(result.status).toBe('rate_limited');
+    expect(result.errorKind).toBe('rate_limit');
+    expect(result.error).toContain(message);
+    expect(mockSpawn).toHaveBeenCalledOnce();
+  });
+
+  it('session.errorがなくstderrに402やquotaの文言があるだけならerrorのままにする', async () => {
+    mockSpawnWithScenario({ code: 1, stderr: 'HTTP 402: You have exceeded your monthly quota' });
+
+    const result = await callCopilot('coder', 'implement feature', { cwd: '/repo' });
+
+    expect(result.status).toBe('error');
+    expect(result.errorKind).toBeUndefined();
+    expect(mockSpawn).toHaveBeenCalledOnce();
+  });
+
   it('should classify non-zero exits with detail', async () => {
     mockSpawnWithScenario({
       code: 2,

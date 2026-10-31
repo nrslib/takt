@@ -56,6 +56,7 @@ import { buildSdkOptions } from '../infra/claude/options-builder.js';
 import { getActiveQueryCount } from '../infra/claude/query-manager.js';
 import { sdkMessageToStreamEvent } from '../infra/claude/stream-converter.js';
 import { ClaudeProvider } from '../infra/providers/claude.js';
+import { createManagerTurnExecutor } from '../features/manager/turnExecutor.js';
 
 afterEach(() => {
   vi.clearAllTimers();
@@ -86,7 +87,8 @@ describe('strict manager tool restrictions', () => {
       if (restriction === 'strictToolAllowlist') {
         expect(await sdk.canUseTool(tool, {})).toMatchObject({ behavior: allowed ? 'allow' : 'deny' });
       }
-      const hook = sdk.hooks.PreToolUse[0].hooks[0];
+      const hook = sdk.hooks.PreToolUse.find(({ matcher }: { matcher?: string }) => matcher === undefined)?.hooks[0];
+      expect(hook).toBeTypeOf('function');
       expect(await hook({ tool_name: tool })).toMatchObject({ hookSpecificOutput: { permissionDecision: allowed ? 'allow' : 'deny' } });
     }
   });
@@ -101,7 +103,9 @@ describe('strict manager tool restrictions', () => {
 
   it('does not allow a native output collector when no output schema was requested', async () => {
     const sdk = buildSdkOptions({ cwd: '/tmp/project', permissionMode: 'readonly', mcpOnlySideEffects: ['Read'] });
-    const result = await sdk.hooks!.PreToolUse![0]!.hooks[0]!({ tool_name: 'StructuredOutput' } as HookInput, undefined, { signal: new AbortController().signal });
+    const hook = sdk.hooks?.PreToolUse?.find(({ matcher }) => matcher === undefined)?.hooks[0];
+    expect(hook).toBeDefined();
+    const result = await hook!({ tool_name: 'StructuredOutput' } as HookInput, undefined, { signal: new AbortController().signal });
     expect(result).toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
   });
 
@@ -121,6 +125,89 @@ describe('strict manager tool restrictions', () => {
 
 const RATE_LIMIT_MESSAGE = 'Rate limit exceeded. Please try again later.';
 const EXIT_CODE_MESSAGE = 'Claude Code process exited with code 1';
+
+it('keeps a caller-owned conversation resume failure to one SDK attempt through the provider adapter', async () => {
+  queryMock.mockReset().mockReturnValue(createMockQuery([], new Error(EXIT_CODE_MESSAGE)));
+  const result = await new ClaudeProvider().setup({ name: 'manager', systemPrompt: 'manager' }).call('private conversation', {
+    cwd: '/tmp/project', sessionId: 'saved-session', callerManagedSession: true,
+  });
+  expect(result.status).toBe('error');
+  expect(queryMock).toHaveBeenCalledOnce();
+  expect(queryMock.mock.calls[0]![0].options.resume).toBe('saved-session');
+  expect(result.failureCategory).toBeUndefined();
+});
+
+it.each([false, true].flatMap((custom) => [false, true].map((throws) => ({ custom, throws }))))('propagates a rejected resume through the Claude provider (custom: $custom, exception: $throws)', async ({ custom, throws }) => {
+  const sessionId = '00000000-0000-4000-8000-000000000099';
+  const error = `No conversation found with session ID: ${sessionId}`;
+  queryMock.mockReset().mockReturnValue(createMockQuery([
+    { type: 'result', subtype: 'error_during_execution', is_error: true, session_id: sessionId, errors: [error] },
+  ], throws ? new Error(`Claude Code returned an error result: ${error}`) : undefined));
+  const response = await new ClaudeProvider().setup({ name: 'manager', ...(custom ? { systemPrompt: 'manager' } : {}) }).call('continue', {
+    cwd: '/tmp/project', sessionId, callerManagedSession: true,
+  });
+  expect(response).toMatchObject({ status: 'error', failureCategory: 'session_continuation_unsupported' });
+  expect(queryMock).toHaveBeenCalledOnce();
+});
+
+it.each(['authentication failed', 'network unavailable', 'No conversation found with session ID: another-session'])('does not classify an unrelated SDK failure: %s', async (error) => {
+  queryMock.mockReset().mockReturnValue(createMockQuery([
+    { type: 'result', subtype: 'error_during_execution', is_error: true, errors: [error] },
+  ]));
+  const response = await new QueryExecutor().execute('continue', { cwd: '/tmp/project', sessionId: 'saved-session', callerManagedSession: true });
+  expect(response.success).toBe(false);
+  expect(response).not.toHaveProperty('failureCategory', 'session_continuation_unsupported');
+  expect(queryMock).toHaveBeenCalledOnce();
+});
+
+it.each([false, true])('recovers through the real Claude adapter only before tool execution (tools: %s)', async (tools) => {
+  const sessionId = '00000000-0000-4000-8000-000000000099';
+  const error = `No conversation found with session ID: ${sessionId}`;
+  queryMock.mockReset().mockReturnValueOnce(createMockQuery([
+    ...(tools ? [{ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool', name: 'Read', input: {} }] } }] : []),
+    { type: 'result', subtype: 'error_during_execution', is_error: true, session_id: sessionId, errors: [error] },
+  ], new Error(`Claude Code returned an error result: ${error}`)));
+  const invalidateSession = vi.fn(async () => {});
+  if (!tools) queryMock.mockImplementationOnce(({ prompt, options }) => {
+    expect(invalidateSession).toHaveBeenCalledOnce();
+    expect(options.resume).toBeUndefined();
+    expect(prompt).toContain('pending revision 4; current goals');
+    return createMockQuery([{ type: 'result', subtype: 'success', structured_output: { message: 'fresh reply', summary: null }, session_id: 'fresh-session' }]);
+  });
+  const executor = createManagerTurnExecutor('/tmp/project', {
+    ctx: { providerType: 'claude', provider: new ClaudeProvider(), lang: 'en', model: undefined },
+    permissionJudge: { resolution: { provider: 'claude', model: undefined, providerOptions: {} }, language: 'en', systemPrompt: 'judge', managerPersona: 'manager', managerPolicy: 'policy' },
+    strategy: { systemPrompt: 'manager' },
+  });
+  const result = executor.execute({ prompt: 'continue', instruction: 'continue', sessionId, abortSignal: new AbortController().signal,
+    assignment: { kind: 'repository', repositoryDirectory: '/tmp/project' }, configDirectory: '/tmp/config',
+    recovery: { context: 'pending revision 4; current goals', invalidateSession } });
+  if (tools) await expect(result).rejects.toMatchObject({ failureCategory: 'session_continuation_unsupported' });
+  else expect(await result).toMatchObject({ message: 'fresh reply', sessionId: 'fresh-session' });
+  expect(invalidateSession).toHaveBeenCalledOnce();
+  expect(queryMock).toHaveBeenCalledTimes(tools ? 1 : 2);
+});
+
+it('does not classify successful assistant content as a rejected Claude session', async () => {
+  const sessionId = '00000000-0000-4000-8000-000000000099';
+  queryMock.mockReset().mockReturnValue(createMockQuery([{ type: 'result', subtype: 'success',
+    result: `No conversation found with session ID: ${sessionId}`, structured_output: { message: 'session_continuation_unsupported', summary: null } }]));
+  const response = await new ClaudeProvider().setup({ name: 'manager' }).call('continue', { cwd: '/tmp/project', sessionId, callerManagedSession: true });
+  expect(response.status).toBe('done');
+  expect(response.failureCategory).toBeUndefined();
+  expect(queryMock).toHaveBeenCalledOnce();
+});
+
+it('classifies the exact resume diagnostic on SDK stderr before any result arrives', async () => {
+  const sessionId = '00000000-0000-4000-8000-000000000099';
+  queryMock.mockReset().mockImplementation(({ options }) => {
+    options.stderr(`No conversation found with session ID: ${sessionId}\n`);
+    return createMockQuery([], new Error(EXIT_CODE_MESSAGE));
+  });
+  const response = await new QueryExecutor().execute('continue', { cwd: '/tmp/project', sessionId, callerManagedSession: true });
+  expect(response).toMatchObject({ success: false, failureCategory: 'session_continuation_unsupported' });
+  expect(queryMock).toHaveBeenCalledOnce();
+});
 
 type RateLimitStatus = 'allowed' | 'allowed_warning' | 'rejected';
 

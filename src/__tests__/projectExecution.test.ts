@@ -32,43 +32,21 @@ describe('withProjectExecution', () => {
     sigintBefore = process.rawListeners('SIGINT');
     exitBefore = process.rawListeners('exit');
   });
-  it('judges pending work after releasing execution ownership', async () => {
-    mocks.ensure.mockImplementation(async () => expect(mocks.release).toHaveBeenCalledTimes(1));
-    await withProjectExecution('/project', 'run', async () => 'done');
-    expect(mocks.ensure).toHaveBeenCalledExactlyOnceWith('/project');
-  });
-  it('rejudges a normally completed automatic run with no claimed tasks after releasing ownership', async () => {
-    mocks.ensure.mockImplementation(async () => expect(mocks.release).toHaveBeenCalledOnce());
-    await expect(withProjectExecution('/project', 'run', async () => undefined, true)).resolves.toBeUndefined();
-    expect(mocks.ensure).toHaveBeenCalledExactlyOnceWith('/project');
-  });
-  it.each(['execution failure', 'lock state failure'] as const)('does not relaunch an automatic run before claiming tasks after %s', async (outcome) => {
-    const failure = new Error('startup failed');
-    if (outcome === 'lock state failure') mocks.update.mockImplementationOnce(() => { throw failure; });
-    const execute = async () => {
-      if (outcome === 'execution failure') throw failure;
-    };
-    const run = withProjectExecution('/project', 'run', execute, true);
-    await expect(run).rejects.toBe(failure);
+  it.each(['run', 'watch'] as const)('%s は正常終了して所有権を解放し、run を自動起動しない', async (kind) => {
+    await expect(withProjectExecution('/project', kind, async () => 'done')).resolves.toBe('done');
     expect(mocks.release).toHaveBeenCalledOnce();
     expect(mocks.ensure).not.toHaveBeenCalled();
   });
-  it.each([false, true])('rejudges an automatic run that claimed tasks, with execution failure=%s', async (failed) => {
-    const failure = new Error('execution failed after claim');
-    mocks.ensure.mockImplementation(async () => expect(mocks.release).toHaveBeenCalledOnce());
-    const run = withProjectExecution('/project', 'run', async (context) => {
-      context.onTasksClaimed();
+  it.each([false, true])('自動 run は正常終了・例外のどちらでも再起動しない: failure=%s', async (failed) => {
+    const failure = new Error('execution failed');
+    const run = withProjectExecution('/project', 'run', async () => {
       if (failed) throw failure;
+      return 'done';
     }, true);
     if (failed) await expect(run).rejects.toBe(failure);
-    else await expect(run).resolves.toBeUndefined();
-    expect(mocks.ensure).toHaveBeenCalledExactlyOnceWith('/project');
-  });
-  it.each(['run', 'watch'] as const)('preserves the manual %s result when startup judgment fails', async (kind) => {
-    mocks.ensure.mockRejectedValue(new Error('queue unavailable'));
-    await expect(withProjectExecution('/project', kind, async () => 'saved result')).resolves.toBe('saved result');
-    expect(mocks.release).toHaveBeenCalledTimes(1);
-    expect(mocks.logError).toHaveBeenCalledWith('Cannot start manager run after releasing execution ownership', { error: 'queue unavailable' });
+    else await expect(run).resolves.toBe('done');
+    expect(mocks.release).toHaveBeenCalledOnce();
+    expect(mocks.ensure).not.toHaveBeenCalled();
   });
   afterEach(() => {
     expect(process.rawListeners('SIGINT')).toEqual(sigintBefore);

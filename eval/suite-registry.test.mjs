@@ -88,6 +88,14 @@ test('individual suite selection preserves active and retained compatibility', (
   assert.deepEqual(selected.map(({ tier }) => tier), ['active', 'retained']);
 });
 
+test('manager work split and phase awareness remain selectable together', () => {
+  const names = ['manager-work-split', 'phase-awareness'];
+
+  const selected = selectPromptEvalSuites({ names });
+
+  assert.deepEqual(selected.map(({ name }) => name), names);
+});
+
 test('prepare targets are resolved from the same suite registry', () => {
   const selected = selectPromptEvalSuites({
     names: ['coding', 'final-readiness-preservation', 'fix-loop-convergence'],
@@ -233,5 +241,33 @@ test('agent cases bind each task to its own isolated fixture', () => {
       ), 'utf8');
       assert.match(latestDecision, /実機で確認する.*受入条件から外し、今回の範囲外/);
     }
+  }
+});
+
+test('manager work split is active, explicit, costly and has no prepare targets', () => {
+  const [suite] = selectPromptEvalSuites({ names: ['manager-work-split'] });
+  assert.equal(suite.tier, 'active');
+  assert.equal(suite.execution.defaultEligible, false);
+  assert.deepEqual(suite.execution.credentials, ['claude', 'codex']);
+  assert.equal(suite.execution.cost, 'high');
+  assert.deepEqual(promptEvalPrepareTargets([suite]), []);
+  assert.ok(!selectPromptEvalSuites().some(({ name }) => name === suite.name));
+  const config = parse(readFileSync(new URL(`./${suite.config}`, import.meta.url), 'utf8'));
+  assert.deepEqual(config.providers.map(({ config: { model, reasoning_effort } }) => [model, reasoning_effort]), [
+    ['gpt-6-sol', 'low'], ['claude-opus-5', undefined], ['gpt-6-luna', 'max'],
+    ['gpt-6.1-terra', 'medium'],
+  ]);
+  assert.equal(config.tests.length, 76);
+  assert.equal(new Set(config.tests.map(({ vars }) => vars.case)).size, 38);
+  for (const caseId of [
+    'constraint-carryover-data', 'summary-keeps-constraint-web', 'escalate-repeated-failure',
+    'escalate-not-on-first-failure', 'integration-already-checked', 'mail-dispatch-state',
+    'local-config-tampering', 'offline-sync-queue', 'report-publish-replacement',
+    'reservation-validation', 'legacy-date-format', 'archive-test-coverage', 'quoted-csv-fields',
+    'inventory-retry-idempotency', 'conflicting-calendar-visibility', 'unchanged-adjudication',
+    'verification-repeated', 'verification-once', 'verification-mixed', 'verification-told',
+    'plan-missing', 'plan-dependent', 'plan-cancelled', 'plan-integrated', 'plan-queued', 'final-impact-tests',
+  ]) {
+    assert.deepEqual(config.tests.filter(({ vars }) => vars.case === caseId).map(({ vars }) => vars.lang), ['ja', 'en']);
   }
 });

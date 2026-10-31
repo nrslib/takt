@@ -67,6 +67,7 @@ function toTerminalOptions(options: ProviderCallOptions): ClaudeTerminalCallOpti
     allowedTools: options.allowedTools,
     mcpServers: options.mcpServers,
     preparedMcp: options.preparedMcp,
+    callerManagedMcp: options.callerManagedMcp,
     ...(options.maxTurns !== undefined ? { maxTurns: options.maxTurns } : {}),
     permissionMode: options.permissionMode,
     bypassPermissions: options.bypassPermissions,

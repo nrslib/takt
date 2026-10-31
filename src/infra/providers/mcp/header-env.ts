@@ -1,8 +1,14 @@
 import type { ProviderType } from '../../../shared/types/provider.js';
 import { warn } from '../../../shared/ui/LogManager.js';
+import { CODEX_TOOL_PERMISSION_ENDPOINT_ENV, CODEX_TOOL_PERMISSION_TOKEN_ENV } from '../../codex/tool-permission-hook-protocol.js';
 import { buildMcpServerSetIdentity } from '../../config/runtime-provider/mcp-schema.js';
 import { getMcpHeaderEnvRefs, type McpHeaderPart } from '../../config/runtime-provider/mcp-header-env.js';
 import type { McpServerConfig, ResolvedMcpServers } from './types.js';
+
+const codexToolPermissionEnvNames = new Set([
+  CODEX_TOOL_PERMISSION_ENDPOINT_ENV,
+  CODEX_TOOL_PERMISSION_TOKEN_ENV,
+]);
 
 export function getCodexHeaderEnvRef(parts: McpHeaderPart[]): { name: string; bearer: boolean } | undefined {
   const variables = parts.filter((part) => typeof part !== 'string');
@@ -22,6 +28,7 @@ function unsupportedReason(provider: ProviderType, server: McpServerConfig): str
       ? undefined
       : 'provider header environment references have not been verified for this execution path';
   }
+  if (refs.length === 0) return undefined;
   const seenHeaders = new Set<string>();
   const headerNames = 'headers' in server ? Object.keys(server.headers ?? {}) : [];
   for (const header of headerNames) {
@@ -31,11 +38,13 @@ function unsupportedReason(provider: ProviderType, server: McpServerConfig): str
     }
     seenHeaders.add(normalized);
   }
-  if (refs.length === 0) return undefined;
   for (const [header, parts] of refs) {
     const ref = getCodexHeaderEnvRef(parts);
     if (ref === undefined || (ref.bearer && header.toLowerCase() !== 'authorization')) {
       return 'header environment reference cannot be represented by Codex';
+    }
+    if (codexToolPermissionEnvNames.has(ref.name)) {
+      return 'tool permission hook environment names are reserved';
     }
   }
   return undefined;

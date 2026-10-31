@@ -13,6 +13,8 @@ import { join } from 'node:path';
 import type { WorkflowConfig, WorkflowResumePoint } from '../core/models/index.js';
 import { AskUserQuestionDeniedError } from '../core/workflow/ask-user-question-error.js';
 import type { SkillPermissionHandler } from '../core/workflow/types.js';
+import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
+import { getWorkflowResumeFrameKind } from '../core/workflow/step-kind.js';
 import { confirmWithCancel } from '../shared/prompt/confirm.js';
 
 const { disabledObservability, MockWorkflowEngine } = vi.hoisted(() => {
@@ -84,7 +86,9 @@ const { disabledObservability, MockWorkflowEngine } = vi.hoisted(() => {
         };
       }
       if (firstStep) {
-        this.emit('step:start', firstStep, 1, firstStep.instruction, { provider: undefined, model: undefined });
+        this.emit('step:start', firstStep, 1, firstStep.instruction, { provider: undefined, model: undefined },
+          this.config.name, firstStep.name, 1,
+          [buildWorkflowResumePointEntry(this.config, firstStep.name, getWorkflowResumeFrameKind(firstStep), 1)]);
       }
       this.emit('workflow:complete', { status: 'completed', iteration: 1 });
       return { status: 'completed', iteration: 1 };

@@ -26,10 +26,9 @@ const load = path => import(pathToFileURL(join(revisionRoot, 'dist', path)).href
 const { CodexProvider } = await load('infra/providers/codex.js');
 CodexProvider.prototype.setup = function ({ name, systemPrompt }) {
   return { call: async (instruction, options) => {
-    const isReport = options.allowedTools?.length === 0;
-    calls.push({ name, systemPrompt: systemPrompt ?? '', instruction, phase: isReport ? 2 : 1,
+    calls.push({ name, systemPrompt: systemPrompt ?? '', instruction, phase: options.executionPhase, permissionMode: options.permissionMode,
       allowedTools: options.allowedTools, sessionIdPresent: options.sessionId !== undefined });
-    if (isReport) return response('# Captured report payload');
+    if (options.executionPhase === 2) return response('# Captured report payload');
     if (name === 'fixture-upstream') return response(sample.upstream);
     return response(request.workResult ?? sample.workResult ?? '@@ACTUAL_PHASE1_RESPONSE@@');
   } };
@@ -103,7 +102,7 @@ if (result.status !== 'completed') throw new Error('Payload capture engine did n
 const phase1 = calls.find(call => call.phase === 1 && call.name !== 'fixture-upstream');
 const phase2 = calls.find(call => call.phase === 2);
 if (!phase1 || !phase2) throw new Error('Missing production Phase 1/2 payload');
-if (phase2.sessionIdPresent || phase2.allowedTools.length !== 0) throw new Error('Phase 2 must be fresh and tool-free');
+if (phase2.sessionIdPresent || phase2.permissionMode !== 'readonly') throw new Error('Phase 2 must be fresh and read-only');
 const phaseParts = [phase1, phase2].map(call => {
   const parts = resolvedPrompts.find(parts => parts.stepName === 'implement' && parts.phase === call.phase);
   if (!parts || parts.systemPrompt !== call.systemPrompt || parts.userInstruction !== call.instruction) {
@@ -118,6 +117,7 @@ const fullPrompt = parts => parts.systemPrompt ? `${parts.systemPrompt}\n\n${par
 writeFileSync(resolve(resultPath), JSON.stringify({
   phase1Prompt: fullPrompt(phaseParts[0]), phase2Prompt: fullPrompt(phaseParts[1]),
   phaseParts, boundary: 'Actual WorkflowEngine/AgentRunner; CodexProvider setup/call replaced; fullPrompt is the production Codex systemPrompt + userInstruction concatenation.',
-  phase2Options: { allowedTools: phase2.allowedTools, sessionIdPresent: phase2.sessionIdPresent },
+  phase2Options: { executionPhase: phase2.phase, permissionMode: phase2.permissionMode,
+    allowedTools: phase2.allowedTools, sessionIdPresent: phase2.sessionIdPresent },
   liveInstructions: liveIntervention.read().instructions.map(({ content, state, deliveryMode }) => ({ content, state, deliveryMode })),
 }, null, 2) + '\n');

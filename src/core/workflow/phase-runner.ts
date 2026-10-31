@@ -12,6 +12,7 @@ import type { RunAgentOptions } from '../../agents/runner.js';
 import { needsSemanticStatusJudgment } from '../models/workflow-rule-condition.js';
 import type { TaskReviewScope } from './review-scope.js';
 import type { InjectedReport, Phase1ReportInputs } from './instruction/prepared-instruction.js';
+import type { Phase1ExecutionLogReference } from './phase1-execution-log.js';
 export {
   generateReportPhase,
   runReportPhase,
@@ -106,6 +107,8 @@ export interface BasePhaseRunnerContext {
 
 export interface ReportPhaseRunnerContext extends BasePhaseRunnerContext {
   lastStructuredOutput?: Record<string, unknown>;
+  /** Engine-managed reference to evidence from this execution of Phase 1. */
+  phase1ExecutionLog?: Phase1ExecutionLogReference;
   injectedReports?: readonly InjectedReport[];
   reportInputs?: Phase1ReportInputs;
   userInputs?: readonly string[];
@@ -116,11 +119,11 @@ export interface ReportPhaseRunnerContext extends BasePhaseRunnerContext {
   /** Build resume options for a step */
   buildResumeOptions: (step: WorkflowStep, sessionId: string, overrides: Pick<RunAgentOptions, 'maxTurns'>) => RunAgentOptions;
   /** Build options for report phase retry in a new session */
-  buildNewSessionReportOptions: (step: WorkflowStep, overrides: Pick<RunAgentOptions, 'allowedTools' | 'maxTurns'>) => RunAgentOptions;
+  buildNewSessionReportOptions: (step: WorkflowStep, overrides: Pick<RunAgentOptions, 'maxTurns'>) => RunAgentOptions;
   buildFallbackReportOptions: (
     step: WorkflowStep,
     failedPrimaryOptions: RunAgentOptions,
-    overrides: Pick<RunAgentOptions, 'allowedTools' | 'maxTurns'>,
+    overrides: Pick<RunAgentOptions, 'maxTurns'>,
   ) => RunAgentOptions | undefined;
   resolveReportFallbackProviderModel: () => StepProviderInfo | undefined;
   /** Update persona session after a phase run */

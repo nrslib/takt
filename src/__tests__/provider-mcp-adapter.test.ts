@@ -56,6 +56,30 @@ describe('ProviderMcpAdapter interface boundary (MCP-ADAPTER-SPLIT)', () => {
     }
   });
 
+  it.each([
+    ['fixed', 'header-value'],
+    ['legacy ${VAR}', '${MCP_HEADER_VALUE}'],
+  ])('keeps Codex HTTP servers with case-variant duplicate headers for %s values', async (_description, headerValue) => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const server = interpolateMcpEnv({ type: 'http', url: 'http://localhost/mcp', headers: {
+      'X-Api-Key': headerValue,
+      'x-api-key': headerValue,
+    } }, { MCP_HEADER_VALUE: 'header-value' });
+    const servers: ResolvedMcpServers = { enabled: true, servers: { remote: server }, serverNames: ['remote'], identity: 'remote' };
+    const prepared = await createMcpAdapter('codex').prepare(servers, { cwd: '/tmp/test' });
+    try {
+      expect(prepared.excludedServerNames).toBeUndefined();
+      expect(prepared.config?.mcp_servers?.remote).toEqual({
+        url: 'http://localhost/mcp',
+        http_headers: { 'X-Api-Key': 'header-value', 'x-api-key': 'header-value' },
+      });
+      expect(warning).not.toHaveBeenCalled();
+    } finally {
+      await prepared.dispose();
+      warning.mockRestore();
+    }
+  });
+
   it('recognizes only complete variable and bearer values representable by native Codex settings', () => {
     expect(getCodexHeaderEnvRef(['', { env: 'ACCESS' }, ''])).toEqual({ name: 'ACCESS', bearer: false });
     expect(getCodexHeaderEnvRef(['Bearer ', { env: 'ACCESS' }, ''])).toEqual({ name: 'ACCESS', bearer: true });

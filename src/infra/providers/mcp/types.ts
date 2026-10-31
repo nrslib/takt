@@ -23,6 +23,10 @@ export function isStdioServer(server: McpServerConfig): server is McpStdioServer
 /** Context passed to `ProviderMcpAdapter.prepare`. */
 export interface ProviderMcpContext {
   cwd: string;
+  /** Session-local tools explicitly approved by the conversation owner. */
+  toolApprovalAllowlist?: Readonly<Record<string, readonly string[]>>;
+  /** Conversation-owned servers whose tools are all approved. */
+  approvedServerNames?: readonly string[];
   abortSignal?: AbortSignal;
   /** Optional source path for error messages (e.g. `<project>/.takt/runtime.yaml`). */
   sourcePath?: string;
@@ -75,8 +79,15 @@ export interface PreparedProviderMcp {
   serverConfig?: Record<string, unknown>;
   /** Identity of the resolved set (for shared server pool isolation). */
   identity?: string;
-  /** Trusted task-state MCP tools allowed for this prepared server set. */
-  taskStateMcpTools?: readonly string[];
+  /**
+   * MCP permissions of a conversation (OpenCode). `serverNames` are the
+   * conversation-approved user servers (every tool allowed); `tools` are the
+   * individually allowed `mcp__<server>__<tool>` names of the built-in server.
+   */
+  conversationMcpPermissions?: {
+    readonly serverNames: readonly string[];
+    readonly tools: readonly string[];
+  };
   /** Isolated workspace config root (Cursor). */
   configRoot?: string;
   /** Resolved server set for test inspection (Mock). */

@@ -12,6 +12,30 @@
 
 - runtime MCP の HTTP/SSE ヘッダで `${env:NAME}` による provider の環境変数参照を追加しました。秘密値を起動素材へ転記しません。Codex は Bearer トークンと値全体が参照のヘッダに MCP 専用実行を含めて対応し、参照変数をツールシェルから除外します。実測した OpenCode v1/v2 も対応します。未確認の provider と Codex で表現できないヘッダは警告して対象サーバだけを除外します。未定義変数は起動前に失敗し、`${NAME}` の従来の展開は維持します。
 
+## [0.73.0] - 2026-10-27
+
+### Added
+
+- `takt manager` で、バックグラウンドの daemon につながるゴール相談用の TUI を開けるようにしました(#1904)。manager とゴールを相談し、`/make-goal` で会話からゴールの登録案を作り、承認を選ぶと登録します。会話は daemon で動くため、受け付けたターンは TUI を閉じても続き、同じリポジトリまたはワークスペースで manager を開き直すと同じ会話につながります。claude(claude-sdk)と codex では、manager が道具を使う前に AI の判断役が審査し、許可、理由付きの拒否、人への確認のいずれかを決めます。`manager.sensitive_paths` で機密の読み取り対象を追加でき、`runtime.yaml` の `provider.targets.internal_agents.manager-permission-judge` で判断役の provider と model を割り当てられます。daemon は `takt daemon stop` で止めます。
+- 対話式の `takt list` で、実行中のタスクに **Stop（停止依頼）** で停止を依頼できるようにしました。ワーカーが自分で中断し、終了時の状態を決めます。**Mark as failed** は従来どおり状態を変えるだけです。
+- `takt list --non-interactive --action delete` で `--status`、`--goal`、`--branch` による絞り込みができるようにしました。`--yes` がなければ該当タスクを一覧表示するだけで(`--format json` 対応)、`--yes` を付けると削除します。MCP ツール `takt_cleanup_tasks`(`all` ツールセット)も同じ動きで、`confirm: true` のときだけ削除します。
+- `/verify` で、main モジュールにある Quint のシナリオ `run` 宣言を、`quint run` の通過後に `quint test` で実行するようにしました(#1753)。`expect` を満たさなければ検証は失敗し、すべての対象が通過したときだけ `quint verify` に進みます。
+
+### Changed
+
+- TAKT の動作に Git 2.38 以上が必要になりました。ゴールの完了判定で `git merge-tree --write-tree` によるツリー比較を使います。
+- `merge-review-fix` と `merge-review-fix-simple` は、CI 後に `CONFLICTING` になった PR を再同期し、push、Caccia、新しい HEAD での CI 待ちを、最初のレビューを繰り返さずに行うようになりました(#1893)。再同期の回数は最初の同期を除いて `max(2, runtime の並列数 - 1)` までで、CLI で指定した並列数は Requeue と Retry でも引き継がれます。上限に達しても衝突が残る場合はコメントを残し、マージせずに COMPLETE で終わります。`BEHIND` なだけの PR は既存のマージ条件に進みます。使用済みの CI 復旧回数は変わりません。
+- worktree の `auto_pr` タスクと Pipeline の `--auto-pr` で PR を正常に作成・更新した後、`caccia.enabled` が true なら Caccia を自動実行するように戻しました(#1883)。実行した workflow または自動で始まる merge workflow に Caccia effect が明示されている場合は、後処理での Caccia を抑止します。そうでなければ merge 開始前に Caccia を完了します。Git push 自体では Caccia を開始しません。
+
+### Fixed
+
+- Copilot provider で、月間クォータ切れ(HTTP 402)を再試行せず使い切りとして扱うようにしました。`rate_limit_fallback.switch_chain` がすぐに provider を切り替えます。429 と 402 が同時に届いた場合は 402 を優先します。@kanae-chaika さん、ありがとうございます。
+
+### Internal
+
+- Codex SDK を 0.164.0 に更新しました。
+- マシンの負荷が高いとタイムアウトしていた manager の結合テストで、待ち時間の上限を延ばしました。
+
 ## [0.72.0] - 2026-10-23
 
 ### Added

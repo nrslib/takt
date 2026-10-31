@@ -80,6 +80,22 @@ function createPayload(ending: typeof endings[number]) {
 beforeEach(() => { vi.clearAllMocks(); });
 
 describe('workflow terminal publication without previous-run notices', () => {
+  it.each(['meta', 'session'] as const)(
+    'should propagate a %s persistence error instead of treating it as a trace issue', async (stage) => {
+      const payload = createPayload(endings[0]);
+      const persistenceError = new Error(`${stage} persistence failed`);
+      const failingWrite = stage === 'meta' ? io.finalizeMeta : io.append;
+      failingWrite.mockImplementationOnce(() => { throw persistenceError; });
+      const publisher = createFileWorkflowRunTerminalPublisher({ runPaths });
+
+      await expect(publisher.finish({ status: 'completed', iteration: 2 }, payload))
+        .rejects.toBe(persistenceError);
+
+      expect(io.renderTrace).not.toHaveBeenCalled();
+      expect(io.atomicWrite).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(endings)('should finish $status ($reason) without creating a notice file', async (ending) => {
     const payload = createPayload(ending);
     const publisher = createFileWorkflowRunTerminalPublisher({ runPaths });
@@ -91,6 +107,8 @@ describe('workflow terminal publication without previous-run notices', () => {
     }));
     expect(io.append).toHaveBeenCalledExactlyOnceWith(join(runPaths.logsAbs, 'test-session.jsonl'), payload.sessionRecord);
     expect(io.atomicWrite).toHaveBeenCalledExactlyOnceWith(join(runPaths.runRootAbs, 'trace.md'), '# Trace');
+    expect(io.finalizeMeta.mock.invocationCallOrder[0]).toBeLessThan(io.append.mock.invocationCallOrder[0]!);
+    expect(io.append.mock.invocationCallOrder[0]).toBeLessThan(io.atomicWrite.mock.invocationCallOrder[0]!);
     const writePaths = [...io.write.mock.calls, ...io.atomicWrite.mock.calls].map(([path]) => basename(String(path)));
     expect(writePaths).not.toContain('session-state.json');
   });

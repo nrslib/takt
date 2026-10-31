@@ -10,7 +10,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `provider.defaults.assignment` selects a named runtime assignment by default, after CLI and directory selections.
 - Runtime MCP HTTP/SSE headers accept `${env:NAME}` provider environment references without copying secret values into startup materials. Codex supports bearer tokens and complete header values, including MCP-only execution, and excludes referenced variables from its tool shell. Verified OpenCode v1/v2 support native header references; unverified providers and unrepresentable Codex headers warn and exclude only the affected server. Undefined variables fail before startup; `${NAME}` retains its existing interpolation behavior.
+
+## [0.73.0] - 2026-10-27
+
+### Added
+
+- `takt manager` opens a goal conversation TUI connected to a background daemon (#1904). You discuss goals with the manager, type `/make-goal` to create a goal proposal from the conversation, and register it by selecting Approve. Conversations run in the daemon, so an accepted turn continues after the TUI is closed, and reopening manager for the same repository or workspace connects to the same conversation. With claude (claude-sdk) or codex, an AI permission judge reviews the manager's tool use before execution and allows it, denies it with a reason, or asks a person. `manager.sensitive_paths` adds sensitive read targets, and `provider.targets.internal_agents.manager-permission-judge` in `runtime.yaml` assigns the judge's provider and model. Stop the daemon with `takt daemon stop`.
+- The interactive `takt list` can request a stop for a running task with **Stop**. The worker interrupts itself and decides the final state. **Mark as failed** still only changes the status.
+- `takt list --non-interactive --action delete` accepts `--status`, `--goal`, and `--branch` filters. Without `--yes` it only lists the matching tasks (`--format json` is supported); `--yes` deletes them. The MCP tool `takt_cleanup_tasks` (in the `all` tool set) does the same, deleting only with `confirm: true`.
+- `/verify` executes Quint scenario `run` declarations in the main module with `quint test` after `quint run` passes (#1753). An unsatisfied `expect` fails verification, and `quint verify` runs only after every target has passed.
+
+### Changed
+
+- TAKT now requires Git 2.38 or later. Goal completion compares trees with `git merge-tree --write-tree`.
+- `merge-review-fix` and `merge-review-fix-simple` now resynchronize PRs that become `CONFLICTING` after CI, then push, run Caccia and wait for CI on the new HEAD without repeating the initial review (#1893). Resynchronizations are limited to `max(2, runtime concurrency - 1)`, excluding initial synchronization; CLI concurrency overrides persist through Requeue and Retry. Persistent conflicts at the limit produce a comment and end COMPLETE without merging. PRs that are only `BEHIND` proceed to the existing merge conditions. Used CI recovery budgets remain unchanged.
+- Restored automatic Caccia after successful PR creation or update by worktree `auto_pr` tasks and Pipeline `--auto-pr` when `caccia.enabled` is true (#1883). Explicit Caccia effects in the executed workflow or an automatically started merge workflow suppress post-processing Caccia; otherwise it finishes before merge starts. Git push itself does not start Caccia.
+
+### Fixed
+
+- The Copilot provider now treats a monthly quota exhaustion (HTTP 402) as exhausted instead of retrying it, so `rate_limit_fallback.switch_chain` switches providers right away. When a 429 and a 402 arrive together, the 402 wins. Thanks to @kanae-chaika.
+
+### Internal
+
+- Updated the Codex SDK to 0.164.0.
+- Lengthened the wait limits in manager integration tests that timed out under heavy machine load.
 
 ## [0.72.0] - 2026-10-23
 

@@ -47,7 +47,7 @@ import {
   resolveRuntimeProfileResourceContext,
   type RuntimeProviderResolutionContext,
 } from './resolution-context.js';
-import { validateRuntimeProviderSection, flattenProfiles, type FlatProfile } from './policy.js';
+import { validateRuntimeProviderSection, flattenProfiles, type FlatProfile, type RuntimeProviderAssignmentOrigins } from './policy.js';
 import { hasActiveProviderContent, type McpSection } from './schema.js';
 import { hasActiveMcpAssignments } from './mode.js';
 import type {
@@ -129,6 +129,7 @@ export type ProviderConfigModel =
       section: RuntimeProviderSection | undefined;
       mcp: McpSection | undefined;
       resolutionContext?: RuntimeProviderResolutionContext;
+      assignmentOrigins?: RuntimeProviderAssignmentOrigins;
     };
 
 /** Factory/registry: pick the matching compiler for the loaded configuration format. */
@@ -139,7 +140,7 @@ export function compileProviderEnvironment(
     case 'legacy':
       return compileLegacyProviderEnvironment(model.legacy);
     case 'runtime-v1':
-      return compileRuntimeProviderEnvironment(model.section, model.resolutionContext, model.mcp);
+      return compileRuntimeProviderEnvironment(model.section, model.resolutionContext, model.mcp, model.assignmentOrigins);
   }
 }
 
@@ -177,6 +178,7 @@ export function compileRuntimeProviderEnvironment(
   section: RuntimeProviderSection | undefined,
   resolutionContext?: RuntimeProviderResolutionContext,
   mcp?: McpSection,
+  assignmentOrigins?: RuntimeProviderAssignmentOrigins,
 ): CompiledProviderEnvironment {
   if (section === undefined || !hasActiveProviderContent(section)) {
     return {
@@ -198,7 +200,7 @@ export function compileRuntimeProviderEnvironment(
 
   // Reuse the runtime section's up-front validation: unknown profile/pool references,
   // cyclic `extends`, missing providers, and OpenCode profiles missing models all throw here.
-  validateRuntimeProviderSection(section);
+  validateRuntimeProviderSection(section, assignmentOrigins);
 
   const flatProfiles = flattenProfiles(section.profiles ?? {});
 
@@ -369,10 +371,11 @@ function buildInternalAgents(
     assistant: 'assistant',
     'loop-judge': 'loopJudge',
     'review-completion-judge': 'completionRetryJudge',
+    'manager-permission-judge': 'managerPermissionJudge',
   };
   const result: InternalAgentEnvironment = {};
   for (const [key, assignment] of Object.entries(map)) {
-    const seat = seats[key];
+    const seat = Object.hasOwn(seats, key) ? seats[key] : undefined;
     if (seat === undefined) {
       throw new Error(
         `runtime.yaml \`provider.targets.internal_agents\` supports only ${Object.keys(seats)
@@ -598,6 +601,7 @@ const PROVIDER_OPTIONS_RAW_KEY: Partial<Record<ProviderType, string>> = {
   kiro: 'kiro',
   pi: 'pi',
   'deepseek-harness': 'deepseek_harness',
+  devin: 'devin',
 };
 
 /** Merge capabilities with validated profile options, trusting non-loopback URLs only in global profiles. */

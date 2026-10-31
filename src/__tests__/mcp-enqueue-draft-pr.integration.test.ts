@@ -214,7 +214,7 @@ describe('MCP draft selection persistence and execution', () => {
       vi.spyOn(taskInfra, 'resolveBaseBranch').mockReturnValue({ branch: 'main' });
       vi.spyOn(taskInfra, 'branchExists').mockReturnValue(false);
       vi.spyOn(taskInfra, 'createSharedCloneAbortable').mockResolvedValue({ path: cloneCwd, branch: 'takt/draft' });
-      vi.spyOn(taskInfra, 'autoCommitAndPush').mockResolvedValue({ success: true, commitHash: 'abc123', message: 'Committed' });
+      vi.spyOn(taskInfra, 'autoCommitAndPush').mockResolvedValue({ success: true, commitHash: 'abc123', publishedHead: 'abc123'.padEnd(40, '0'), message: 'Committed' });
       vi.spyOn(taskGit, 'pushBranch').mockReturnValue(undefined);
       const gitProvider = new GitHubProvider();
       vi.spyOn(gitProvider, 'findExistingPr').mockReturnValue(undefined);

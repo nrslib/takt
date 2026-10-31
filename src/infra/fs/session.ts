@@ -99,6 +99,7 @@ export function parseNdjsonLogContent(content: string, sourcePath: string): Sess
             instruction: record.instruction,
             status: record.status,
             timestamp: record.timestamp,
+            iteration: record.iteration,
             content: record.content,
             ...(record.workflow ? { workflow: record.workflow } : {}),
             ...(record.stack ? { stack: record.stack } : {}),
@@ -110,6 +111,18 @@ export function parseNdjsonLogContent(content: string, sourcePath: string): Sess
             ...(record.failureCategory ? { failureCategory: record.failureCategory } : {}),
           });
           sessionLog.iterations++;
+        }
+        break;
+
+      case 'step_start':
+        if (sessionLog) {
+          const start = {
+            step: record.step, iteration: record.iteration, timestamp: record.timestamp,
+            ...(record.workflow === undefined ? {} : { workflow: record.workflow }),
+            ...(record.stack === undefined ? {} : { stack: record.stack }),
+            ...(record.parallel === undefined ? {} : { parallel: record.parallel }),
+          };
+          (sessionLog.stepStarts ??= []).push(start);
         }
         break;
 

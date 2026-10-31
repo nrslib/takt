@@ -21,6 +21,7 @@ import {
   AGENT_FAILURE_CATEGORIES,
   classifyAbortSignalReason,
   createProviderErrorFailure,
+  createSessionContinuationUnsupportedFailure,
   createProviderStreamParseFailure,
   createStreamIdleTimeoutFailure,
   formatAgentFailure,
@@ -32,8 +33,13 @@ import {
   mapToCodexSandboxMode,
   CodexCallOptions,
 } from './types.js';
-import { buildCodexSessionConfig } from './session-config.js';
+import { buildCodexSessionConfig, hasCodexShellEnvironmentFilter } from './session-config.js';
 import { prepareCodexMcpExclusions, prepareCodexMcpIsolation } from './mcp-isolation.js';
+import { delimiter } from 'node:path';
+import { resolveCodexSdkCli } from './cli-runtime.js';
+import { prepareCodexToolPermissionHook } from './tool-permission-hook.js';
+import { resolveCodexHookTrust } from './hook-trust.js';
+import { buildCodexToolPermissionHookConfig } from './tool-permission-hook-protocol.js';
 import { validateProviderImageAttachments } from '../providers/imageAttachments.js';
 import {
   type CodexEvent,
@@ -215,6 +221,7 @@ export class CodexClient {
     externalSignal: AbortSignal | undefined,
     abortCause: 'timeout' | 'external' | undefined,
     timeoutMessage: string,
+    resumedThreadId: string | undefined,
   ): AgentFailureDetail {
     if (abortCause === 'timeout') {
       return createStreamIdleTimeoutFailure(timeoutMessage);
@@ -227,6 +234,10 @@ export class CodexClient {
     }
     if (message.startsWith(CODEX_PARSE_FAILURE_PREFIX)) {
       return createProviderStreamParseFailure(message);
+    }
+    if (resumedThreadId !== undefined && message.split('\n').some((line) =>
+      line.trim() === `Error: thread/resume: thread/resume failed: no rollout found for thread id ${resumedThreadId} (code -32600)`)) {
+      return createSessionContinuationUnsupportedFailure('Codex rejected the saved session.');
     }
     return createProviderErrorFailure(message);
   }
@@ -323,19 +334,48 @@ export class CodexClient {
       emitResult(options.onStream, false, response.error ?? response.content, options.sessionId, failure.category);
       return response;
     }
-    const response = await this.callWithSdk(agentType, prompt, { ...options, onStream: managedFailureStream(options.onStream, loaded.stale, 'codex') }, loaded.modules[0].Codex);
-    return managedFailureResponse(response, loaded.stale, 'codex');
+    let hook: Awaited<ReturnType<typeof prepareCodexToolPermissionHook>> | undefined;
+    const usesHook = options.onToolPermissionDecision !== undefined && options.internalAgentIsolation !== 'strict-readonly' && !options.mcpOnlySideEffects;
+    try {
+      if (usesHook) {
+        hook = await prepareCodexToolPermissionHook(options.onToolPermissionDecision!, options.abortSignal);
+      }
+      const runtime = hook === undefined ? undefined : resolveCodexSdkCli(options.codexPathOverride, loaded.directory);
+      const response = await this.callWithSdk(agentType, prompt, {
+        ...options,
+        onStream: managedFailureStream(options.onStream, loaded.stale, 'codex'),
+      }, loaded.modules[0].Codex, hook === undefined || runtime === undefined ? undefined : { ...hook, ...runtime });
+      return managedFailureResponse(response, loaded.stale, 'codex');
+    } catch (error) {
+      if (!usesHook) throw error;
+      const rawFailure = options.abortSignal?.aborted ? classifyAbortSignalReason(options.abortSignal.reason)
+        : createProviderErrorFailure(getErrorMessage(error));
+      const failure = hook === undefined ? rawFailure : { ...rawFailure, reason: hook.redact(rawFailure.reason) };
+      const response = this.buildErrorResponse(agentType, options.sessionId, failure, options, 0);
+      emitResult(options.onStream, false, response.error ?? response.content, options.sessionId, failure.category);
+      return response;
+    } finally {
+      await hook?.dispose();
+    }
   }
 
-  private async callWithSdk(agentType: string, prompt: string, options: CodexCallOptions, Codex: typeof import('@openai/codex-sdk')['Codex']): Promise<AgentResponse> {
+  private async callWithSdk(
+    agentType: string, prompt: string, options: CodexCallOptions, Codex: typeof import('@openai/codex-sdk')['Codex'],
+    hook: (Awaited<ReturnType<typeof prepareCodexToolPermissionHook>> & ReturnType<typeof resolveCodexSdkCli>) | undefined,
+  ): Promise<AgentResponse> {
+    const redact = (message: string) => hook === undefined ? message : hook.redact(message);
+    const redactFailure = (failure: AgentFailureDetail): AgentFailureDetail => hook === undefined
+      ? failure : { ...failure, reason: redact(failure.reason) };
+    const readOnlyStep = options.executionPhase === 1 && options.edit === false;
     const threadOptions = {
       ...(options.model ? { model: options.model } : {}),
       workingDirectory: options.cwd,
       skipGitRepoCheck: true,
-      ...(options.permissionControl === 'codex'
+      ...(options.permissionControl === 'codex' && options.executionPhase !== 2
+          && !readOnlyStep
         ? {}
         : {
-            sandboxMode: options.mcpOnlySideEffects ? 'read-only' as const : options.permissionMode
+            sandboxMode: readOnlyStep || options.executionPhase === 2 || options.mcpOnlySideEffects ? 'read-only' as const : options.permissionMode
               ? mapToCodexSandboxMode(options.permissionMode)
               : 'workspace-write' as const,
             ...(options.mcpOnlySideEffects
@@ -384,6 +424,30 @@ export class CodexClient {
       return errorResponse;
     }
     const { config: codexConfig, env: codexEnvironment } = sessionConfig;
+    let hookConfigOverrides: string[] | undefined;
+    if (hook !== undefined) {
+      if (hook.pathDirs.length > 0) {
+        codexEnvironment.PATH = [...hook.pathDirs, ...(codexEnvironment.PATH === undefined ? [] : [codexEnvironment.PATH])].join(delimiter);
+      }
+      const shellPolicy = codexConfig.shell_environment_policy as {
+        set?: Record<string, string>;
+        filters?: Record<string, string>;
+      } | undefined;
+      codexConfig.shell_environment_policy = {
+        ...shellPolicy,
+        ...(codexEnvironment.PATH === undefined
+            || hasCodexShellEnvironmentFilter(shellPolicy?.filters, 'PATH')
+          ? {}
+          : { set: { ...shellPolicy?.set, PATH: codexEnvironment.PATH } }),
+      };
+      const trust = await resolveCodexHookTrust({
+        executablePath: hook.executablePath, cwd: options.cwd, env: codexEnvironment,
+        definition: hook.definition, abortSignal: options.abortSignal,
+      });
+      codexConfig.features = { ...(codexConfig.features as Record<string, boolean> | undefined), hooks: true };
+      codexConfig.hooks = buildCodexToolPermissionHookConfig(hook.definition);
+      hookConfigOverrides = [`hooks.state={${JSON.stringify(trust.key)}={trusted_hash=${JSON.stringify(trust.trustedHash)}}}`];
+    }
 
     let isolation: Awaited<ReturnType<typeof prepareCodexMcpIsolation>> | undefined;
     let mcpExclusions: string[] = [];
@@ -416,8 +480,11 @@ export class CodexClient {
         ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
         ...(isolation === undefined ? {
           env: codexEnvironment, config: codexConfig,
-          ...(mcpExclusions.length === 0 ? {} : { configOverrides: mcpExclusions }),
-          ...(options.codexPathOverride ? { codexPathOverride: options.codexPathOverride } : {}),
+          ...(hookConfigOverrides === undefined && mcpExclusions.length === 0 ? {} : {
+            configOverrides: [...(hookConfigOverrides ?? []), ...mcpExclusions],
+          }),
+          ...(hook !== undefined ? { codexPathOverride: hook.executablePath }
+            : options.codexPathOverride ? { codexPathOverride: options.codexPathOverride } : {}),
         } : isolation),
       };
       const codex = new Codex(codexClientOptions);
@@ -487,7 +554,9 @@ export class CodexClient {
         let sawTurnCompleted = false;
         let lastStreamErrorMessage: string | undefined;
 
-        for await (const event of events as AsyncGenerator<CodexEvent>) {
+        for await (const rawEvent of events as AsyncGenerator<CodexEvent>) {
+          // SDK events are JSON; remove echoed hook credentials before diagnostics and stream consumers.
+          const event = hook === undefined ? rawEvent : JSON.parse(redact(JSON.stringify(rawEvent))) as CodexEvent;
           resetIdleTimeout();
           diag.onFirstEvent(event.type);
           diag.onEvent(event.type);
@@ -596,13 +665,14 @@ export class CodexClient {
         diag.onCompleted(success ? 'normal' : 'error', boundedStreamFailureMessage);
 
         if (!success) {
-          const failure = this.resolveFailureDetail(
+          const failure = redactFailure(this.resolveFailureDetail(
             failureMessage || 'Codex execution failed',
             streamAbortController.signal,
             options.abortSignal,
             abortCause,
             timeoutMessage,
-          );
+            threadId,
+          ));
           const rateLimitClass = classifyRateLimitError(failureMessage);
           if (
             failure.category === AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR
@@ -621,7 +691,7 @@ export class CodexClient {
             return rateLimitedResponse;
           }
 
-          if ((!failedAfterStreamError || rateLimitClass === 'Transient')
+          if (!options.callerManagedSession && (!failedAfterStreamError || rateLimitClass === 'Transient')
             && this.shouldRetry(failure, standardRetryCount, timeoutRetryCount)) {
             const boundedFailureMessage = boundCodexFailureMessage(failure.reason, options, true);
             log.info('Retrying Codex call after transient failure', {
@@ -684,7 +754,7 @@ export class CodexClient {
           && (trimmed.startsWith('{') || trimmed.startsWith('```'));
         const refusalDetected = !looksLikePureStructuredOutput && isCodexSafetyRefusal(trimmed);
         if (refusalDetected) {
-          if (refusalRetryCount < CODEX_REFUSAL_MAX_RETRIES) {
+          if (!options.callerManagedSession && refusalRetryCount < CODEX_REFUSAL_MAX_RETRIES) {
             refusalRetryCount += 1;
             log.info('Retrying Codex call after safety-filter refusal', { agentType, attempt, refusalRetryCount });
             // 拒否文脈を持ち越さないため、この call がセッションを開始した場合は
@@ -731,14 +801,15 @@ export class CodexClient {
         };
         return response;
       } catch (error) {
-        const rawErrorMessage = getErrorMessage(error);
-        let failure = this.resolveFailureDetail(
+        const rawErrorMessage = redact(getErrorMessage(error));
+        let failure = redactFailure(this.resolveFailureDetail(
           rawErrorMessage,
           streamAbortController.signal,
           options.abortSignal,
           abortCause,
           timeoutMessage,
-        );
+          threadId,
+        ));
         const rateLimitClass = classifyRateLimitError(rawErrorMessage);
         if (
           failure.category === AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR
@@ -770,7 +841,7 @@ export class CodexClient {
           boundedErrorMessage,
         );
 
-        if (this.shouldRetry(failure, standardRetryCount, timeoutRetryCount)) {
+        if (!options.callerManagedSession && this.shouldRetry(failure, standardRetryCount, timeoutRetryCount)) {
           const retryErrorMessage = boundCodexFailureMessage(errorMessage, options, true);
           log.info('Retrying Codex call after transient exception', {
             agentType,
@@ -785,8 +856,8 @@ export class CodexClient {
             await waitForRateLimitRetry(retryState.retryAttempt, options.abortSignal);
             continue;
           } catch (retryError) {
-            failure = this.resolveFailureDetail(getErrorMessage(retryError), streamAbortController.signal,
-              options.abortSignal, abortCause, timeoutMessage);
+            failure = redactFailure(this.resolveFailureDetail(redact(getErrorMessage(retryError)), streamAbortController.signal,
+              options.abortSignal, abortCause, timeoutMessage, threadId));
           }
         }
 

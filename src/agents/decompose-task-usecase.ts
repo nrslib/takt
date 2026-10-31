@@ -52,6 +52,7 @@ export interface DecomposeTaskOptions {
   resolvedProvider?: ProviderType;
   resolvedProviderOptions?: StepProviderOptions;
   permissionMode?: PermissionMode;
+  edit?: RunAgentOptions['edit'];
   projectCwd?: string;
   onStream?: StreamCallback;
   onActivity?: RunAgentOptions['onActivity'];
@@ -72,12 +73,10 @@ export interface DecomposeTaskOptions {
   onDispatch?: RunAgentOptions['onDispatch'];
   onAgentResponse?: (response: AgentResponse) => void;
   onAgentError?: (error: unknown) => void;
+  onValidationError?: (error: unknown) => void;
 }
 
-export type MorePartsOptions = Omit<
-  DecomposeTaskOptions,
-  'onPromptResolved'
-> & {
+export type MorePartsOptions = DecomposeTaskOptions & {
   cancellablePartIds: readonly string[];
   /** Known IDs tolerated in model output but removed before the response is returned. */
   ignoredCancelPartIds?: readonly string[];
@@ -150,6 +149,7 @@ export async function requestDecompositionRawResponse(
       onActivity: options.onActivity,
       workflowMeta: options.workflowMeta,
       executionPhase: 1,
+      edit: options.edit,
       childProcessEnv: options.childProcessEnv,
       abortSignal: options.abortSignal,
       failureDir: options.failureDir,
@@ -187,7 +187,14 @@ export async function decomposeTask(
         options,
         rejectedDecomposition,
       );
-      return parseDecomposition(response, maxInitialParts);
+      try {
+        return parseDecomposition(response, maxInitialParts);
+      } catch (error) {
+        if (error instanceof TeamLeaderDecompositionValidationError) {
+          options.onValidationError?.(error);
+        }
+        throw error;
+      }
     },
   });
 }
@@ -260,10 +267,12 @@ export async function requestMorePartsRawResponse(
       onActivity: options.onActivity,
       workflowMeta: options.workflowMeta,
       executionPhase: 1,
+      edit: options.edit,
       childProcessEnv: options.childProcessEnv,
       abortSignal: options.abortSignal,
       failureDir: options.failureDir,
       sessionId: options.sessionId,
+      onPromptResolved: options.onPromptResolved,
       onDispatch: options.onDispatch,
     });
   } catch (error) {
@@ -300,10 +309,16 @@ export async function requestMoreParts(
   }
 
   const ignoredCancelPartIds = new Set(options.ignoredCancelPartIds ?? []);
-  const parsedResponse = toMorePartsResponse(response.structuredOutput, [
-    ...options.cancellablePartIds,
-    ...ignoredCancelPartIds,
-  ]);
+  let parsedResponse: ReturnType<typeof toMorePartsResponse>;
+  try {
+    parsedResponse = toMorePartsResponse(response.structuredOutput, [
+      ...options.cancellablePartIds,
+      ...ignoredCancelPartIds,
+    ]);
+  } catch (error) {
+    options.onValidationError?.(error);
+    throw error;
+  }
   return {
     ...parsedResponse,
     cancelPartIds: parsedResponse.cancelPartIds.filter((partId) => !ignoredCancelPartIds.has(partId)),

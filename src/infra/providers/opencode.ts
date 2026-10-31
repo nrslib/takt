@@ -73,15 +73,18 @@ function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
     if (tool !== 'Read') throw new Error(`OpenCode strict tool allowlist does not support: ${tool}`);
     return true;
   });
-  const allowedMcpTools = (strictTools ?? options.preparedMcp?.taskStateMcpTools)
+  const conversationMcp = options.preparedMcp?.conversationMcpPermissions;
+  const allowedMcpTools = (strictTools ?? conversationMcp?.tools)
     ?.map(toOpenCodeMcpToolName)
     .filter((tool): tool is string => tool !== undefined);
+  const allowedMcpServers = strictTools === undefined ? conversationMcp?.serverNames : undefined;
   if (options.imageAttachments && options.imageAttachments.length > 0) {
     log.info('OpenCode provider does not support imageAttachments; ignoring');
   }
 
   return {
     cwd: options.cwd,
+    callerManagedSession: options.callerManagedSession,
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
     ...(model === undefined ? {} : { model }),
@@ -89,6 +92,7 @@ function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
     allowedTools: openCodeAllowedTools,
     ...(strictTools === undefined ? {} : { strictToolAllowlist: strictTools }),
     ...(allowedMcpTools === undefined ? {} : { allowedMcpTools }),
+    ...(allowedMcpServers === undefined ? {} : { allowedMcpServers }),
     permissionMode: options.permissionMode,
     internalAgentIsolation: options.internalAgentIsolation,
     allowReadonlyFileRead: options.allowReadonlyFileRead,

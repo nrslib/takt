@@ -33,6 +33,7 @@ function toCursorOptions(options: ProviderCallOptions): CursorCallOptions {
     cursorCliPath: resolveCursorCliPath(),
     childProcessEnv: options.childProcessEnv,
     preparedMcp: options.preparedMcp,
+    callerManagedMcp: options.callerManagedMcp,
   };
 }
 

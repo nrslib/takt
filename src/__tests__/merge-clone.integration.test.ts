@@ -4,8 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkflowExecutionRequest } from '../features/tasks/execute/workflowExecutionApi.js';
+import type { WorkflowExecutionEvent } from '../features/tasks/execute/types.js';
+import type { WorkflowResumePoint } from '../core/models/workflow-types.js';
+import type { runSyncConflictResolver } from '../infra/service/runSyncConflictResolver.js';
 
-const mocks = vi.hoisted(() => ({ details: vi.fn(), status: vi.fn(), workflow: vi.fn(), logError: vi.fn(), agent: vi.fn(), comment: vi.fn() }));
+const mocks = vi.hoisted(() => ({ details: vi.fn(), status: vi.fn(), workflow: vi.fn(), logError: vi.fn(), agent: vi.fn(), comment: vi.fn(), resolver: vi.fn() }));
+vi.mock('../infra/service/runSyncConflictResolver.js', () => ({ runSyncConflictResolver: mocks.resolver }));
 vi.mock('../infra/git/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getGitProvider: () => ({ checkCliStatus: () => ({ available: true }),
@@ -13,6 +17,10 @@ vi.mock('../infra/git/index.js', async (importOriginal) => ({
 }));
 vi.mock('../infra/github/pr.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()), fetchPrDetails: mocks.details, fetchPrStatus: mocks.status,
+}));
+vi.mock('../infra/github/issue.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../infra/github/issue.js')>()),
+  checkGhCli: () => ({ available: true }),
 }));
 vi.mock('../agents/agent-usecases.js', () => ({ executeAgent: mocks.agent }));
 vi.mock('../agents/runner.js', () => ({ runAgent: vi.fn() }));
@@ -36,6 +44,10 @@ import { issueTellableRunningTask } from '../features/tasks/liveIntervention.js'
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { LiveInterventionFileStore } from '../infra/workflow/live-intervention-store.js';
 import { stageTaskSpecForExecution } from '../features/tasks/execute/taskSpecContext.js';
+import { executeRunTaskAndCompleteWithDetails } from '../features/tasks/execute/runTaskExecution.js';
+import { createDefaultSystemStepServices } from '../infra/workflow/system/DefaultSystemStepServices.js';
+import { createInitialState } from '../core/workflow/engine/state-manager.js';
+import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 
 describe('Merge PR persistent clone ownership', () => {
   let root: string;
@@ -56,6 +68,10 @@ describe('Merge PR persistent clone ownership', () => {
     root = mkdtempSync(join(tmpdir(), 'takt-merge-clone-'));
     project = join(root, 'project');
     fork = join(root, 'fork.git');
+    const gitConfig = join(root, 'gitconfig');
+    writeFileSync(gitConfig, '');
+    vi.stubEnv('GIT_CONFIG_GLOBAL', gitConfig);
+    vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1');
     git(root, 'init', '--initial-branch=main', project);
     git(project, 'config', 'user.name', 'Merge Test');
     git(project, 'config', 'user.email', 'merge@example.com');
@@ -63,6 +79,7 @@ describe('Merge PR persistent clone ownership', () => {
     git(project, 'add', 'code.txt');
     git(project, 'commit', '-m', 'base');
     baseHead = git(project, 'rev-parse', 'HEAD');
+    git(root, 'config', '--file', gitConfig, `url.file://${project}.insteadOf`, 'git@github.com:org/repo.git');
     git(root, 'clone', '--bare', project, fork);
     const author = join(root, 'author');
     git(root, 'clone', fork, author);
@@ -112,6 +129,390 @@ describe('Merge PR persistent clone ownership', () => {
     return runMerge({ projectCwd: project, prNumber: 123, concurrency: 1,
       settings: resolveMergeSettings({ workflow: 'merge-review' }) });
   }
+
+  describe('requeued merge preparation', () => {
+    const resumePoint: WorkflowResumePoint = {
+      version: 2,
+      stack: [{ workflow: 'merge-review', workflow_ref: 'merge-review', step: 'review',
+        kind: 'agent', occurrence: 2, step_iterations: { sync: 1, resolve_conflicts: 1, review: 2 } }],
+      iteration: 7, elapsed_ms: 1234,
+      workflow_call_invocations: {}, workflow_step_participations: {},
+    };
+
+    function commitFile(cwd: string, path: string, content: string): string {
+      writeFileSync(join(cwd, path), content);
+      git(cwd, 'add', '--', path);
+      git(cwd, 'commit', '-m', `update ${path}`);
+      return git(cwd, 'rev-parse', 'HEAD');
+    }
+
+    function advancePr(path: string, content: string): void {
+      const author = join(root, 'author');
+      const head = commitFile(author, path, content);
+      git(author, 'push', 'origin', 'HEAD:refs/heads/feature/pr');
+      prHead = head;
+      mocks.details.mockReturnValue({ number: 123, headBranch: 'feature/pr', baseBranch: 'main', headSha: head,
+        headRepositoryUrl: fork, headRepositoryPushUrls: [fork], sameRepository: false });
+    }
+
+    function useSameRepository(): void {
+      const details = mocks.details.getMockImplementation()!();
+      mocks.details.mockReturnValue({ ...details, sameRepository: true });
+    }
+
+    async function prepareRetry(editClone: (cwd: string, request: WorkflowExecutionRequest) => void) {
+      const execute = mocks.workflow.getMockImplementation()!;
+      mocks.workflow.mockImplementationOnce(async (request: WorkflowExecutionRequest) => {
+        await execute(request);
+        editClone(request.cwd, request);
+        throw new Error('review interrupted before push');
+      });
+      expect(await run()).toMatchObject({ exitCode: 1 });
+      const runner = new TaskRunner(project);
+      const failed = runner.listFailedTasks()[0]!;
+      expect(failed.failure?.error).toBe('review interrupted before push');
+      expect(failed.data?.merge_clone_prepared).toBe(true);
+      const clone = failed.worktreePath!;
+      const localHead = git(clone, 'rev-parse', 'HEAD');
+      expect(git(fork, 'rev-parse', 'refs/heads/feature/pr')).toBe(prHead);
+      runner.requeueTask(failed.name, ['failed'], { resumePoint });
+      const claimed = runner.claimNextTasks(1)[0]!;
+      expect(claimed.name).toBe(failed.name);
+      expect(claimed.worktreePath).toBe(clone);
+      expect(claimed.data?.resume_point).toEqual(resumePoint);
+      mocks.workflow.mockClear().mockImplementation(async (request: WorkflowExecutionRequest) => {
+        expect(request.cwd).toBe(clone);
+        expect(request.resumePoint).toEqual(claimed.data!.resume_point);
+        expect(request.startStep).toBeUndefined();
+        expect(git(clone, 'merge-base', localHead, 'HEAD')).toBe(localHead);
+        expect(git(clone, 'merge-base', prHead, 'HEAD')).toBe(prHead);
+        expect(request.prExecutionContext?.headSha).toBe(git(clone, 'rev-parse', 'HEAD'));
+        expect(git(clone, 'ls-files', '-u')).toBe('');
+        expect(existsSync(join(clone, '.git', 'MERGE_HEAD'))).toBe(false);
+        expect(git(fork, 'rev-parse', 'refs/heads/feature/pr')).toBe(prHead);
+        return { success: true };
+      });
+      mocks.status.mockResolvedValue({ merged: true });
+      mocks.resolver.mockReset();
+      return { runner, claimed, clone, localHead };
+    }
+
+    function retry(context: Awaited<ReturnType<typeof prepareRetry>>) {
+      return executeRunTaskAndCompleteWithDetails(context.claimed, context.runner, project,
+        undefined, { outputMode: 'silent' });
+    }
+
+    async function expectContinued(context: Awaited<ReturnType<typeof prepareRetry>>) {
+      expect(await retry(context)).toEqual({ success: true });
+      expect(mocks.workflow).toHaveBeenCalledOnce();
+      expect(context.runner.listAllTaskItems().find((task) => task.name === context.claimed.name)?.kind)
+        .toBe('completed');
+      expect(git(fork, 'rev-parse', 'refs/heads/feature/pr')).toBe(prHead);
+    }
+
+    async function expectPreparationFailed(context: Awaited<ReturnType<typeof prepareRetry>>) {
+      const result = await retry(context);
+      expect(result.success).toBe(false);
+      expect(result.failureReason).toEqual(expect.any(String));
+      expect(mocks.workflow).not.toHaveBeenCalled();
+      const failed = context.runner.listFailedTasks().find((task) => task.name === context.claimed.name)!;
+      expect(failed.worktreePath).toBe(context.clone);
+      expect(failed.failure?.error).toBe(result.failureReason);
+      expect(existsSync(context.clone)).toBe(true);
+      expect(git(context.clone, 'rev-parse', 'HEAD')).toBe(context.localHead);
+      expect(git(context.clone, 'ls-files', '-u')).toBe('');
+      expect(existsSync(join(context.clone, '.git', 'MERGE_HEAD'))).toBe(false);
+      expect(git(fork, 'rev-parse', 'refs/heads/feature/pr')).toBe(prHead);
+    }
+
+    function resolveConflict(options: Parameters<typeof runSyncConflictResolver>[0]) {
+      expect(options.projectCwd).toBe(project);
+      expect(options.cwd).not.toBe(project);
+      expect(options.abortSignal?.aborted).toBe(false);
+      expect(git(options.cwd, 'ls-files', '-u')).toContain('code.txt');
+      expect(existsSync(join(options.cwd, '.git', 'MERGE_HEAD'))).toBe(true);
+      writeFileSync(join(options.cwd, 'code.txt'), 'local resolution and remote change\n');
+      return { persona: 'conflict-resolver', status: 'done', content: 'resolved', timestamp: new Date() };
+    }
+
+    it('同じheadなら同じcloneと保存済みの再開位置から継続する', async () => {
+      const context = await prepareRetry(() => {});
+      await expectContinued(context);
+      expect(mocks.resolver).not.toHaveBeenCalled();
+    });
+
+    it('未pushのマージコミットを保持し保存済みの再開位置から継続する', async () => {
+      const context = await prepareRetry((cwd, request) => {
+        request.prMergePushRecorder!.record(prHead, baseHead, request.prExecutionContext!);
+        commitFile(project, 'base-work.txt', 'previous base work\n');
+        git(cwd, 'fetch', 'base', 'refs/heads/main');
+        git(cwd, 'merge', '--no-ff', '--no-edit', 'FETCH_HEAD');
+        expect(git(cwd, 'rev-list', '--parents', '-n', '1', 'HEAD').split(' ')).toHaveLength(3);
+      });
+      const execute = mocks.workflow.getMockImplementation()!;
+      mocks.workflow.mockImplementation(async (request: WorkflowExecutionRequest) => {
+        expect(git(request.cwd, 'rev-parse', 'HEAD')).toBe(context.localHead);
+        expect(readFileSync(join(request.cwd, 'base-work.txt'), 'utf8')).toBe('previous base work\n');
+        return execute(request);
+      });
+      await expectContinued(context);
+      expect(mocks.resolver).not.toHaveBeenCalled();
+    });
+
+    it('PR側だけが進んだ場合は最新headへfast-forwardして継続する', async () => {
+      const context = await prepareRetry(() => {});
+      advancePr('remote-only.txt', 'new remote work\n');
+      const execute = mocks.workflow.getMockImplementation()!;
+      mocks.workflow.mockImplementation(async (request: WorkflowExecutionRequest) => {
+        expect(git(request.cwd, 'rev-parse', 'HEAD')).toBe(prHead);
+        expect(readFileSync(join(request.cwd, 'remote-only.txt'), 'utf8')).toBe('new remote work\n');
+        return execute(request);
+      });
+      await expectContinued(context);
+      expect(mocks.resolver).not.toHaveBeenCalled();
+    });
+
+    it('再試行で取り込んだremote headの履歴が次の再試行前に書き換わったら停止する', async () => {
+      const originalRemoteHead = prHead;
+      const context = await prepareRetry((cwd) => {
+        commitFile(cwd, 'local-only.txt', 'unpushed local work\n');
+        commitFile(project, 'base-work.txt', 'unpushed base work\n');
+        git(cwd, 'fetch', 'base', 'refs/heads/main');
+        git(cwd, 'merge', '--no-ff', '--no-edit', 'FETCH_HEAD');
+      });
+      advancePr('remote-first.txt', 'first remote update\n');
+      const firstRemoteHead = prHead;
+      const execute = mocks.workflow.getMockImplementation()!;
+      mocks.workflow.mockImplementationOnce(async (request: WorkflowExecutionRequest) => {
+        await execute(request);
+        expect(readFileSync(join(request.cwd, 'local-only.txt'), 'utf8')).toBe('unpushed local work\n');
+        expect(readFileSync(join(request.cwd, 'base-work.txt'), 'utf8')).toBe('unpushed base work\n');
+        throw new Error('review interrupted after remote synchronization');
+      });
+      expect((await retry(context)).success).toBe(false);
+      const runner = new TaskRunner(project);
+      const failed = runner.listFailedTasks().find((task) => task.name === context.claimed.name)!;
+      expect(failed.failure?.error).toBe('review interrupted after remote synchronization');
+      expect(failed.data?.merge_known_remote_head_sha).toBe(firstRemoteHead);
+      const synchronizedHead = git(context.clone, 'rev-parse', 'HEAD');
+      expect(git(context.clone, 'merge-base', context.localHead, synchronizedHead)).toBe(context.localHead);
+      expect(git(context.clone, 'merge-base', firstRemoteHead, synchronizedHead)).toBe(firstRemoteHead);
+      runner.requeueTask(failed.name, ['failed'], { resumePoint });
+      const claimed = runner.claimNextTasks(1)[0]!;
+      expect(claimed.data?.merge_known_remote_head_sha).toBe(firstRemoteHead);
+
+      const author = join(root, 'author');
+      git(author, 'reset', '--hard', originalRemoteHead);
+      prHead = commitFile(author, 'remote-rewrite.txt', 'replacement remote update\n');
+      git(author, 'push', '--force', 'origin', 'HEAD:refs/heads/feature/pr');
+      mocks.details.mockReturnValue({ number: 123, headBranch: 'feature/pr', baseBranch: 'main', headSha: prHead,
+        headRepositoryUrl: fork, headRepositoryPushUrls: [fork], sameRepository: false });
+      expect(git(fork, 'merge-base', originalRemoteHead, prHead)).toBe(originalRemoteHead);
+      expect(git(fork, 'merge-base', firstRemoteHead, prHead)).not.toBe(firstRemoteHead);
+      mocks.workflow.mockClear();
+      const result = await executeRunTaskAndCompleteWithDetails(claimed, runner, project,
+        undefined, { outputMode: 'silent' });
+      expect(result.success).toBe(false);
+      expect(mocks.workflow).not.toHaveBeenCalled();
+      expect(git(context.clone, 'rev-parse', 'HEAD')).toBe(synchronizedHead);
+      expect(runner.listFailedTasks().find((task) => task.name === claimed.name)).toMatchObject({
+        worktreePath: context.clone, data: { merge_known_remote_head_sha: firstRemoteHead },
+      });
+      expect(git(fork, 'rev-parse', 'refs/heads/feature/pr')).toBe(prHead);
+    });
+
+    it('分岐したPR headを取り込み双方のコミットと内容を保持する', async () => {
+      const context = await prepareRetry((cwd) => { commitFile(cwd, 'local-only.txt', 'unpushed local work\n'); });
+      advancePr('remote-only.txt', 'new remote work\n');
+      commitFile(project, 'later-base.txt', 'base work after the interrupted run\n');
+      git(context.clone, 'config', 'merge.ff', 'only');
+      const execute = mocks.workflow.getMockImplementation()!;
+      mocks.workflow.mockImplementation(async (request: WorkflowExecutionRequest) => {
+        expect(readFileSync(join(request.cwd, 'local-only.txt'), 'utf8')).toBe('unpushed local work\n');
+        expect(readFileSync(join(request.cwd, 'remote-only.txt'), 'utf8')).toBe('new remote work\n');
+        expect(existsSync(join(request.cwd, 'later-base.txt'))).toBe(false);
+        return execute(request);
+      });
+      await expectContinued(context);
+      expect(mocks.resolver).not.toHaveBeenCalled();
+    });
+
+    it('分岐したheadの衝突をAIが編集した後に検証してマージを完了する', async () => {
+      const context = await prepareRetry((cwd) => { commitFile(cwd, 'code.txt', 'local resolution\n'); });
+      advancePr('code.txt', 'remote change\n');
+      useSameRepository();
+      mocks.resolver.mockImplementation(resolveConflict);
+      const execute = mocks.workflow.getMockImplementation()!;
+      mocks.workflow.mockImplementation(async (request: WorkflowExecutionRequest) => {
+        expect(readFileSync(join(request.cwd, 'code.txt'), 'utf8')).toBe('local resolution and remote change\n');
+        return execute(request);
+      });
+      await expectContinued(context);
+      expect(mocks.resolver).toHaveBeenCalledOnce();
+      expect(mocks.resolver.mock.calls[0]![0]).toMatchObject({ cwd: context.clone, projectCwd: project,
+        abortSignal: mocks.workflow.mock.calls[0]![0].abortSignal });
+    });
+
+    it.each(['error response', 'exception', 'unresolved markers'] as const)(
+      'AIの%sではworkflowを開始せず失敗を保存し今回のマージを中止する', async (failure) => {
+        const context = await prepareRetry((cwd) => { commitFile(cwd, 'code.txt', 'local resolution\n'); });
+        advancePr('code.txt', 'remote change\n');
+        useSameRepository();
+        mocks.resolver.mockImplementation((options: Parameters<typeof runSyncConflictResolver>[0]) => {
+          expect(git(options.cwd, 'ls-files', '-u')).toContain('code.txt');
+          if (failure === 'exception') throw new Error('resolver unavailable');
+          return { persona: 'conflict-resolver', status: failure === 'error response' ? 'error' : 'done',
+            content: '', error: failure === 'error response' ? 'resolver failed' : undefined, timestamp: new Date() };
+        });
+        await expectPreparationFailed(context);
+        expect(mocks.resolver).toHaveBeenCalledOnce();
+        expect(readFileSync(join(context.clone, 'code.txt'), 'utf8')).toBe('local resolution\n');
+      });
+
+    it('メタデータ取得後にPR headが動いたらfetch結果を拒否する', async () => {
+      const context = await prepareRetry(() => {});
+      const snapshot = mocks.details.getMockImplementation()!;
+      mocks.details.mockImplementationOnce(() => {
+        const details = snapshot();
+        advancePr('remote-only.txt', 'head moved during fetch\n');
+        return details;
+      });
+      await expectPreparationFailed(context);
+      expect(mocks.resolver).not.toHaveBeenCalled();
+    });
+
+    it('AI解消中にPR headがさらに動いたらworkflowを開始しない', async () => {
+      const context = await prepareRetry((cwd) => { commitFile(cwd, 'code.txt', 'local resolution\n'); });
+      advancePr('code.txt', 'remote change\n');
+      useSameRepository();
+      mocks.resolver.mockImplementation((options: Parameters<typeof runSyncConflictResolver>[0]) => {
+        const response = resolveConflict(options);
+        advancePr('later.txt', 'head moved during AI resolution\n');
+        return response;
+      });
+      const result = await retry(context);
+      expect(mocks.resolver).toHaveBeenCalledOnce();
+      expect(result).toMatchObject({ success: false, failureReason: expect.any(String) });
+      expect(mocks.workflow).not.toHaveBeenCalled();
+      expect(context.runner.listFailedTasks().find((task) => task.name === context.claimed.name)?.failure?.error)
+        .toBe(result.failureReason);
+      expect(git(context.clone, 'merge-base', context.localHead, 'HEAD')).toBe(context.localHead);
+      expect(git(fork, 'rev-parse', 'refs/heads/feature/pr')).toBe(prHead);
+    });
+
+    it('forkの衝突はAI解消前に停止してマージを中止する', async () => {
+      const context = await prepareRetry((cwd) => { commitFile(cwd, 'code.txt', 'local resolution\n'); });
+      advancePr('code.txt', 'remote change\n');
+      await expectPreparationFailed(context);
+      expect(mocks.resolver).not.toHaveBeenCalled();
+    });
+
+    it('force-pushで削除されたremote履歴を再導入せず停止する', async () => {
+      const context = await prepareRetry((cwd) => { commitFile(cwd, 'local-only.txt', 'local work\n'); });
+      const author = join(root, 'author');
+      git(author, 'reset', '--hard', baseHead);
+      prHead = commitFile(author, 'replacement.txt', 'replacement\n');
+      git(author, 'push', '--force', 'origin', 'HEAD:refs/heads/feature/pr');
+      mocks.details.mockReturnValue({ number: 123, headBranch: 'feature/pr', baseBranch: 'main', headSha: prHead,
+        headRepositoryUrl: fork, headRepositoryPushUrls: [fork], sameRepository: false });
+      await expectPreparationFailed(context);
+      expect(mocks.resolver).not.toHaveBeenCalled();
+    });
+
+    it('取り込んだforkの変更を脅威検査し拒否時はworkflowを開始しない', async () => {
+      const context = await prepareRetry((cwd) => { commitFile(cwd, 'local-only.txt', 'unpushed local work\n'); });
+      advancePr('remote-only.txt', 'new remote work\n');
+      const check = vi.spyOn(threatCheck, 'checkForkThreats').mockImplementation(async (options) => {
+        expect(options.cwd).toBe(context.clone);
+        expect(git(options.cwd, 'merge-base', prHead, 'HEAD')).toBe(prHead);
+        expect(git(options.cwd, 'merge-base', context.localHead, 'HEAD')).toBe(context.localHead);
+        return { passed: false, comment: 'review required' };
+      });
+      expect(await retry(context)).toEqual({ success: false });
+      expect(check).toHaveBeenCalledOnce();
+      expect(mocks.workflow).not.toHaveBeenCalled();
+      expect(mocks.comment).toHaveBeenCalledOnce();
+      expect(context.runner.listFailedTasks().some((task) => task.name === context.claimed.name)).toBe(true);
+    });
+
+    it.each(['PR number', 'head branch', 'clone branch', 'origin remote', 'base remote'] as const)(
+      '%sが別の識別情報なら同期とworkflowを開始しない', async (identity) => {
+        const context = await prepareRetry(() => {});
+        if (identity === 'PR number' || identity === 'head branch') {
+          const details = mocks.details.getMockImplementation()!();
+          mocks.details.mockReturnValue({ ...details,
+            ...(identity === 'PR number' ? { number: 456 } : { headBranch: 'other/pr' }) });
+        } else if (identity === 'clone branch') {
+          git(context.clone, 'checkout', '-b', 'other/pr');
+        } else {
+          git(context.clone, 'remote', 'set-url', identity === 'origin remote' ? 'origin' : 'base', join(root, 'other.git'));
+        }
+        const fetch = vi.spyOn(cloneExec, 'runGitCommandAbortable');
+        await expectPreparationFailed(context);
+        expect(fetch.mock.calls.filter(([, args]) => args[0] === 'fetch')).toEqual([]);
+        expect(mocks.resolver).not.toHaveBeenCalled();
+      });
+    });
+
+  it.each(['Requeue', 'Retry'])('%sでもCLIの実行並列数から決まる取り込み直し上限を設定変更後まで保持する', async (mode) => {
+    mkdirSync(join(project, '.takt'), { recursive: true });
+    writeFileSync(join(project, '.takt', 'config.yaml'), 'provider: mock\nmerge:\n  concurrency: 2\n');
+    const execute = mocks.workflow.getMockImplementation()!;
+    const limits: unknown[] = [];
+    mocks.workflow.mockImplementation(async (request: WorkflowExecutionRequest) => {
+      const config = normalizeWorkflowConfig({ name: 'sync-observation', initial_step: 'sync', steps: [
+        { name: 'sync', mode: 'system', effects: [{ type: 'sync_with_root', pr: 123 }],
+          rules: [{ condition: 'when(true)', next: 'COMPLETE' }] },
+      ] }, project);
+      const state = createInitialState(config, { provider: 'mock', projectCwd: project });
+      state.stepIterations.set('sync', 1);
+      const service = createDefaultSystemStepServices({ cwd: request.cwd, projectCwd: project, task: request.task,
+        prExecutionContext: request.prExecutionContext, prGitOperations: request.prGitOperations });
+      const result = await service.executeEffect({ type: 'sync_with_root', pr: 123 }, { pr: 123 }, state);
+      expect(result).toMatchObject({ success: true, failed: false });
+      limits.push(result.resyncLimit);
+      return execute(request);
+    });
+    await runMerge({ projectCwd: project, prNumber: 123, concurrency: 5,
+      settings: resolveMergeSettings({ workflow: 'merge-review', concurrency: 2 }) });
+    const runner = new TaskRunner(project);
+    const failed = runner.listFailedTasks()[0]!;
+    writeFileSync(join(project, '.takt', 'config.yaml'), 'provider: mock\nmerge:\n  concurrency: 3\n');
+    if (mode === 'Requeue') {
+      runner.requeueTask(failed.name, ['failed']);
+    } else {
+      await persistFailedTaskRetry({ task: failed, projectDir: project, worktreePath: failed.worktreePath!,
+        startStep: undefined, retryNote: undefined, resumePoint: undefined, workflow: undefined,
+        taskDir: undefined, sourceRunSlug: null, restartPoint: undefined });
+    }
+    const claimed = runner.claimNextTasks(1)[0]!;
+    await executePersistedPrMergeTask(claimed, runner, project);
+    expect(mocks.workflow).toHaveBeenCalledTimes(2);
+    expect(limits).toEqual([4, 4]);
+    expect(mocks.workflow.mock.calls[1]![0].cwd).toBe(failed.worktreePath);
+  });
+  it('relays only child warning progress during a silent linked merge and preserves the merge result', async () => {
+    mkdirSync(join(project, '.takt'), { recursive: true });
+    writeFileSync(join(project, '.takt', 'config.yaml'), 'merge:\n  auto_start: true\n  workflow: merge-review\n');
+    const warning = { type: 'progress', level: 'warn', message: 'merge trace failed' } as const;
+    mocks.workflow.mockImplementationOnce(async (request: WorkflowExecutionRequest) => {
+      await request.eventSink?.({ type: 'run_started', runDirectory: request.cwd, reportDirectory: request.cwd, ndjsonLogPath: 'log' });
+      await request.eventSink?.({ type: 'output', outputType: 'text', message: warning.message });
+      await request.eventSink?.({ type: 'progress', message: 'ordinary progress' });
+      await request.eventSink?.(warning);
+      await request.eventSink?.({ type: 'completed', success: true });
+      return { success: true };
+    });
+    mocks.status.mockResolvedValue({ merged: true });
+    const events: WorkflowExecutionEvent[] = [];
+    await runLinkedMergeSafely(project, 'https://github.com/org/repo/pull/123', undefined, {
+      outputMode: 'silent', eventSink: (event) => { events.push(event); },
+    });
+    expect(mocks.workflow).toHaveBeenCalledOnce();
+    expect(events).toEqual([warning]);
+    expect(new TaskRunner(project).listAllTaskItems().filter((task) => task.kind === 'completed')).toHaveLength(1);
+  });
+
   it('同秒の再投入でもプロジェクト側の既存runを避け、保存値とtaskSpecを同じslugで実行する', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-02-16T01:02:03.000Z'));

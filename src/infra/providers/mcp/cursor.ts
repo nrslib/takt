@@ -23,6 +23,8 @@ import { validateTransports, onceDispose, classifyMcpFailure } from './adapter.j
 import { ensureCurrentTmpDirExists } from '../../../shared/utils/index.js';
 import { buildEnvWithNestedObservabilitySnapshot } from '../../../shared/telemetry/index.js';
 
+const CURSOR_APPROVE_MCPS_FLAG = '--approve-mcps';
+
 export function createCursorMcpAdapter(): ProviderMcpAdapter {
   return {
     validate(servers, context) {
@@ -69,9 +71,13 @@ export function createCursorMcpAdapter(): ProviderMcpAdapter {
         await rm(configRoot, { recursive: true, force: true });
         throw error;
       }
+      // Only conversation-approved servers are approved here; workflow steps
+      // never pass `approvedServerNames`, so their arguments stay unchanged.
+      const approvesServers = (context.approvedServerNames?.length ?? 0) > 0;
       return {
         configRoot,
         ...(env === undefined ? {} : { env, excludedServerNames: excludedNames }),
+        ...(approvesServers ? { args: [CURSOR_APPROVE_MCPS_FLAG] } : {}),
         dispose: onceDispose(async () => {
           await rm(configRoot, { recursive: true, force: true });
         }),

@@ -1,6 +1,9 @@
-import { beforeEach, expect, it, vi } from 'vitest';
-const doubles = vi.hoisted(() => ({ diff: vi.fn(), history: vi.fn(), relation: vi.fn(), allowed: vi.fn(), readRecordPage: vi.fn() }));
-vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { readRecordPage = doubles.readRecordPage; } }));
+import { beforeEach,expect,it,vi } from 'vitest';
+import { getTaktGoalDiff,getTaktGoalHistory,getTaktGoalRelation } from '../features/mcp/goalReadOperations.js';
+import { completeGoalInputSchema,getGoalInputSchema,goalDiffInputSchema,goalHistoryInputSchema,mergeGoalTaskInputSchema } from '../features/mcp/schemas.js';
+import { goalRecord } from './helpers/goal-fixtures.js';
+const doubles = vi.hoisted(() => ({ diff: vi.fn(), history: vi.fn(), relation: vi.fn(), allowed: vi.fn(), get: vi.fn() }));
+vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.get; } }));
 vi.mock('../infra/goals/inspection.js', () => ({
   inspectGoalDiff: doubles.diff, inspectGoalHistory: doubles.history, inspectGoalRelation: doubles.relation,
   GOAL_READ_MAX_ITEMS: 50, GOAL_READ_MAX_BYTES: 65536,
@@ -8,35 +11,32 @@ vi.mock('../infra/goals/inspection.js', () => ({
 vi.mock('../features/mcp/operations.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../features/mcp/operations.js')>(), assertCwdAllowedByMcpRoot: doubles.allowed,
 }));
-import { getTaktGoalDiff, getTaktGoalHistory, getTaktGoalRelation } from '../features/mcp/goalReadOperations.js';
-import { listTaktGoalRecords } from '../features/mcp/goalDecisionOperations.js';
-import { completeGoalInputSchema, goalDiffInputSchema, goalHistoryInputSchema, listGoalRecordsInputSchema, mergeGoalTaskInputSchema } from '../features/mcp/schemas.js';
-import { goalRecord } from './helpers/goal-fixtures.js';
 const input = { cwd: '/project', goalId: goalRecord().id };
 const signal = new AbortController().signal;
+it('accepts human verification steps without discarding their whitespace', () => {
+  const completion = { ...input, expectedSha: 'a'.repeat(40), summary: 'evidence', humanChecks: '  画面を開く\n結果を確認する  ' };
+  expect(completeGoalInputSchema.parse(completion)).toEqual(completion);
+});
+
+it.each(['', ' \n\t '])('rejects invalid human verification steps %#', (humanChecks) => {
+  expect(completeGoalInputSchema.safeParse({ ...input, expectedSha: 'a'.repeat(40), summary: 'evidence', humanChecks }).success).toBe(false);
+});
+
+it.each(['createdAt', 'pullRequest', 'pullRequest.number', 'pullRequest.url', 'completion.humanChecks'])(
+  'accepts the saved goal selector %s', (path) => {
+    expect(getGoalInputSchema.parse({ ...input, path })).toEqual({ ...input, path });
+  },
+);
+const workLog = [
+  { id: '550e8400-e29b-41d4-a716-446655440003', summary: 'Submitted initial work', recordedAt: '2026-10-13T00:00:00Z' },
+  { id: '550e8400-e29b-41d4-a716-446655440004', summary: 'Integrated completed work', recordedAt: '2026-10-13T01:00:00Z' },
+];
 beforeEach(() => {
   vi.resetAllMocks();
   doubles.diff.mockResolvedValue({ files: [], truncated: false });
   doubles.history.mockResolvedValue({ commits: [], truncated: false });
   doubles.relation.mockResolvedValue({ included: false, ahead: 2 });
-  doubles.readRecordPage.mockResolvedValue({ records: [], total: 0, nextOffset: null });
-});
-it.each([
-  { kind: 'operations', contextGoalId: input.goalId, defaultEventId: 'current-event' },
-  { kind: 'operations', contextGoalId: '550e8400-e29b-41d4-a716-446655440002', defaultEventId: undefined },
-  { kind: 'operations', contextGoalId: undefined, defaultEventId: undefined },
-  { kind: 'decisions', contextGoalId: input.goalId, defaultEventId: undefined },
-  { kind: 'decisions', contextGoalId: '550e8400-e29b-41d4-a716-446655440002', defaultEventId: undefined },
-  { kind: 'decisions', contextGoalId: undefined, defaultEventId: undefined },
-] as const)('selects $kind event filters with context goal $contextGoalId', async ({ kind, contextGoalId, defaultEventId }) => {
-  const deps = contextGoalId === undefined ? {} : { goalEventContext: { goalId: contextGoalId, eventId: 'current-event' } };
-  for (const eventId of [undefined, 'past-event']) {
-    doubles.readRecordPage.mockClear();
-    const request = listGoalRecordsInputSchema.parse({ ...input, eventId, offset: 2, limit: 3 });
-    const result = await listTaktGoalRecords(request, deps, kind);
-    expect(result.isError).toBeUndefined();
-    expect(doubles.readRecordPage).toHaveBeenCalledExactlyOnceWith(input.goalId, kind, eventId ?? defaultEventId, 2, 3, 48 * 1024);
-  }
+  doubles.get.mockResolvedValue({ ...goalRecord(), workLog });
 });
 it('passes optional selectors and default bounds without a target branch', async () => {
   expect((await getTaktGoalDiff({ ...input, taskName: 'task', file: 'a\tb' }, {}, signal)).isError).toBeUndefined();
@@ -65,5 +65,8 @@ it('converts inspection and root errors into MCP errors without reporting succes
 });
 it('does not return oversized serialized metadata as a complete result', async () => {
   doubles.diff.mockResolvedValue({ files: [], patch: 'x'.repeat(65537), truncated: false });
-  expect((await getTaktGoalDiff(input, {}, signal)).isError).toBe(true);
+  const result = await getTaktGoalDiff(input, {}, signal);
+  expect(result.isError).toBeUndefined();
+  expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(65536);
+  expect(JSON.parse((result.content[0] as { text: string }).text)).toMatchObject({ truncated: true, patch: expect.any(String) });
 });

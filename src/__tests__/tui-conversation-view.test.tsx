@@ -5417,6 +5417,26 @@ describe('ConversationView', () => {
     app.unmount();
   });
 
+  it('should hide slash completions with Escape and restore them after editing the same draft', async () => {
+    const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, NO_ORDER_COMMANDS);
+    const app = renderConversation(conversation, 'chat', vi.fn());
+    await flushFrames();
+    app.stdin.write('/');
+    await flushFrames();
+    expect(app.lastFrame()).toContain('/cancel');
+    app.stdin.write(ESC);
+    await flushFrames();
+    expect(app.lastFrame()).not.toContain('/cancel');
+    expect(app.lastFrame()).toContain(visiblePromptLine('/'));
+    app.stdin.write('ca');
+    await flushFrames();
+    expect(app.lastFrame()).toContain('❯ /cancel');
+    app.stdin.write(TAB);
+    await flushFrames();
+    expect(app.lastFrame()).toContain(visiblePromptLine('/cancel'));
+    app.unmount();
+  });
+
   it('should offer the order commands only when the run makes them available', async () => {
     const conversation = createScriptedConversation(NO_LOCAL_COMMANDS, {
       enableRetryCommand: true,

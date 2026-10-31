@@ -26,6 +26,7 @@ export interface JsonTaskFailure {
 }
 
 export interface JsonTaskListItem {
+  goal_id?: string;
   kind: TaskListItem['kind'];
   name: string;
   createdAt: string;
@@ -84,6 +85,7 @@ function serializeTaskFailure(failure: TaskFailure | undefined): JsonTaskFailure
 
 export function serializeTaskListItemForJson(task: TaskListItem): JsonTaskListItem {
   return {
+    goal_id: task.goalId,
     kind: task.kind,
     name: task.name,
     createdAt: task.createdAt,

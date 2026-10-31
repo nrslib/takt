@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TaskListItem } from '../infra/task/types.js';
 import type { SelectOptionItem } from '../shared/prompt/index.js';
-import type { TaskDeletionCleanup } from '../infra/task/taskDeletionService.js';
 
 const {
   mockSelectMultipleOptions, mockConfirm, mockDeleteTask, mockValidateTask, mockRunner,
@@ -28,10 +27,11 @@ vi.mock('../shared/prompt/index.js', () => ({
 vi.mock('../infra/task/index.js', () => ({
   TaskRunner: class {
     constructor(projectDir: string) { mockRunner(projectDir); }
-    deleteTask(name: string, kind: string, cleanup?: TaskDeletionCleanup) {
+    deleteTaskWithCleanup(name: string, kind: string, cleanup: () => boolean): boolean {
       mockValidateTask(name, kind);
-      cleanup?.();
+      if (!cleanup()) return false;
       mockDeleteTask(name, kind);
+      return true;
     }
   },
 }));

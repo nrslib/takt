@@ -11,9 +11,14 @@
 ```yaml
 # ~/.takt/config.yaml
 language: en                  # UI 语言：'en' 或 'ja'
+director:
+  patrol_interval: 900        # director 巡检间隔（秒，正整数，默认：900）
+  slack:
+    channel_id: C0DIR
+    allowed_user_ids: [U0AAA]
 logging:
   level: info                 # 日志级别：debug、info、warn、error
-provider: claude-sdk              # 默认 provider：claude-sdk、claude、claude-headless、claude-terminal、codex、opencode、deepseek-harness、cursor、copilot、kiro、pi 或 mock
+provider: claude-sdk              # 默认 provider：claude-sdk、claude、claude-headless、claude-terminal、codex、opencode、deepseek-harness、cursor、copilot、kiro、devin、pi 或 mock
 model: sonnet                 # 默认 model（可省略，原样传给 provider）
 branch_name_strategy: romaji  # 分支名生成策略：'romaji'（快）或 'ai'（慢）
 prevent_sleep: false          # 执行期间阻止 macOS 空闲睡眠（caffeinate）
@@ -108,6 +113,7 @@ assistant:
 # cursor_cli_path: /usr/local/bin/cursor-agent
 # copilot_cli_path: /usr/local/bin/github-copilot-cli
 # kiro_cli_path: /usr/local/bin/kiro-cli
+# devin_cli_path: /usr/local/bin/devin
 
 # VCS provider（可选）
 # 根据 git remote URL 自动检测（github.com → github，gitlab.com → gitlab）
@@ -178,12 +184,15 @@ assistant:
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `language` | `"en"` \| `"ja"` | `"en"` | UI 语言 |
+| `director.patrol_interval` | 正整数秒 | `900` | daemon 运行期间定时 director 巡检的间隔。仅限全局配置。 |
+| `director.slack.channel_id` | string | - | director 的 Slack 频道。仅限全局配置，参阅[通过 Slack 与 director 对话](#通过-slack-与-director-对话)。 |
+| `director.slack.allowed_user_ids` | string[] | - | 允许从 Slack 向 director 发言的用户。配置 `director.slack` 时必填；空数组表示不接受任何用户的发言。 |
 | `logging.level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | 日志级别 |
 | `logging.trace` | boolean | `false` | 启用 trace 级日志 |
 | `logging.debug` | boolean | `false` | 启用 debug 日志（`debug.log` + `prompts.jsonl`） |
 | `logging.provider_events` | boolean | `false` | 持久化 provider stream event |
 | `logging.usage_events` | boolean | `false` | 持久化 usage event 日志 |
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-headless"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"mock"` | `"claude-sdk"` | 默认 AI provider（`claude` 是 `claude-sdk` 的别名，`claude-headless` 使用 headless CLI）；`deepseek-harness` 是官方 DeepSeek Harness TypeScript SDK/runtime `0.2.1-alpha.2` |
+| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-headless"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"devin"` \| `"mock"` | `"claude-sdk"` | 默认 AI provider（`claude` 是 `claude-sdk` 的别名，`claude-headless` 使用 headless CLI）；`deepseek-harness` 是官方 DeepSeek Harness TypeScript SDK/runtime `0.2.1-rc.3` |
 | `model` | string | - | 默认 model 名称，原样传给 provider |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | 分支名生成策略 |
 | `prevent_sleep` | boolean | `false` | 阻止 macOS 空闲睡眠 |
@@ -225,6 +234,7 @@ assistant:
 | `cursor_cli_path` | string | - | Cursor Agent CLI 绝对路径覆盖 |
 | `copilot_cli_path` | string | - | Copilot CLI 绝对路径覆盖 |
 | `kiro_cli_path` | string | - | Kiro CLI 绝对路径覆盖 |
+| `devin_cli_path` | string | - | Devin CLI 绝对路径覆盖 |
 | `enable_builtin_workflows` | boolean | `true` | 是否启用 builtin workflow |
 | `disabled_builtins` | string[] | `[]` | 按 workflow `name` 禁用 builtin workflow |
 | `pipeline` | object | - | Pipeline 模板设置 |
@@ -244,7 +254,7 @@ assistant:
 | `sync_conflict_resolver` | object | `{ auto_approve_tools: false }` | sync conflict resolver 策略 |
 | `observability` | object | disabled | opt-in OpenTelemetry 基础设施 |
 
-Codex、Claude SDK、claude-headless 和 Copilot 对临时 HTTP 429 错误使用同一 provider 最多重试 8 次，等待时间依次为 1、2、4、8、16、30、30、30 秒。Codex、Claude SDK、claude-headless、Copilot 和 OpenCode 在观察到工具执行事件后收到 429 时不会自动重试，以免重复执行工作区操作。OpenCode 与其他临时错误共享尝试预算，最多重试 2 次（共尝试 3 次），等待时间为 250ms 和 500ms。重试成功则正常完成。明确匹配已知额度耗尽信号的通知会立即进入 `rate_limit_fallback.switch_chain`；持续的临时限流会在重试预算耗尽后进入该流程。同一错误同时包含限流和额度耗尽时，以额度耗尽为准。未配置切换目标时仍会停止执行。没有与重试相关的配置项，其他错误的现有重试条件保持不变。
+Codex、Claude SDK、claude-headless 和 Copilot 对临时 HTTP 429 错误使用同一 provider 最多重试 8 次，等待时间依次为 1、2、4、8、16、30、30、30 秒。Codex、Claude SDK、claude-headless、Copilot 和 OpenCode 在观察到工具执行事件后收到 429 时不会自动重试，以免重复执行工作区操作。OpenCode 与其他临时错误共享尝试预算，最多重试 2 次（共尝试 3 次），等待时间为 250ms 和 500ms。重试成功则正常完成。明确匹配已知额度耗尽信号的通知会立即进入 `rate_limit_fallback.switch_chain`；持续的临时限流会在重试预算耗尽后进入该流程。同一错误同时包含限流和额度耗尽时，以额度耗尽为准。Copilot 的 `session.error` 表示月度配额耗尽（`statusCode` 402、`errorType: quota` 或 `errorCode: quota_exceeded` 之一）时同样视为额度耗尽，不重试，立即进入 `rate_limit_fallback.switch_chain`。未配置切换目标时仍会停止执行。没有与重试相关的配置项，其他错误的现有重试条件保持不变。
 
 ## Caccia Review Loop
 
@@ -291,7 +301,7 @@ ignore_exceed: false          # 对 takt run 和 takt watch 应用 --ignore-exce
 #     - .takt/assistant-notes.md
 
 # provider 专属选项（旧版项目默认值；runtime.yaml 的 profile 现在拥有这些选项）
-# codex / claude / claude_terminal / cursor / copilot / kiro / pi 也支持
+# codex / claude / claude_terminal / cursor / copilot / kiro / devin / pi 也支持
 #   guards.call_timeout_ms（未设置时为 60 分钟）。
 # provider_options:
 #   codex:
@@ -310,6 +320,7 @@ ignore_exceed: false          # 对 takt run 和 takt watch 应用 --ignore-exce
 #       reasoning_byte_limit: 4194304
 #   kiro:
 #     agent: my-default-agent
+#     effort: medium
 #   pi:
 #     extensions: [npm:pi-fff]
 #     no_skills: true
@@ -383,7 +394,7 @@ provider_options:
 
 ### Provider inactivity deadline 与 OpenCode execution guard
 
-所有 provider 都使用 `guards.call_timeout_ms` 作为没有可观察 provider event 时允许的最长时间。每个 stream/tool event、阶段完成和新的 provider attempt 都会重置计时器；累计执行时间没有上限。它适用于 `codex`、`opencode`、`claude`（由 `claude-sdk`、别名 `claude` 和 `claude-headless` 共享）、`claude_terminal`、`cursor`、`copilot`、`kiro` 和 `pi`。取值是 60,000 到 86,400,000 之间的整数毫秒，默认 3,600,000 ms（60 分钟）。通常的 `provider_options` profile 解析路径会将该值应用到 engine 的 parent-step deadline，并向所有 provider 传递同一个 `AbortSignal`。`claude_terminal.timeout_ms` 为兼容性保留，仅在未设置 `guards.call_timeout_ms` 时使用。
+所有 provider 都使用 `guards.call_timeout_ms` 作为没有可观察 provider event 时允许的最长时间。每个 stream/tool event、阶段完成和新的 provider attempt 都会重置计时器；累计执行时间没有上限。它适用于 `codex`、`opencode`、`claude`（由 `claude-sdk`、别名 `claude` 和 `claude-headless` 共享）、`claude_terminal`、`cursor`、`copilot`、`kiro`、`devin` 和 `pi`。取值是 60,000 到 86,400,000 之间的整数毫秒，默认 3,600,000 ms（60 分钟）。通常的 `provider_options` profile 解析路径会将该值应用到 engine 的 parent-step deadline，并向所有 provider 传递同一个 `AbortSignal`。`claude_terminal.timeout_ms` 为兼容性保留，仅在未设置 `guards.call_timeout_ms` 时使用。
 
 `provider_options.opencode.guards.profile` 默认是 `standard`。`minimal` 只关闭启发式循环检测；时间、资源上限、完整性和严格修正 guard 仍然强制启用。`model_profiles` 按解析出的 model 字符串以声明顺序选择 profile，唯一通配符是 `*`。guard leaf 在 provider-option 层之间独立合并；较高优先级的 `model_profiles` 值会替换较低优先级的完整 map。
 
@@ -464,9 +475,119 @@ TAKT_ALLOY_CONCURRENCY=1 TAKT_ALLOY_HEAP=2g TAKT_ALLOY_STACK=128m takt
 
 除了配置 key 覆盖外，`TAKT_NOTIFY_WEBHOOK` 设置 Slack Incoming Webhook URL。设置后，TAKT 会在 pipeline 完成和 `takt run` 任务批次结束时发送 Slack 通知。
 
+## 通过 Slack 与 manager 对话
+
+在对话消息列中发送 `/make-goal` 可创建注册提案。使用「Approve registration（批准注册）」或「Continue conversation（继续对话）」操作；旧版本提案的按钮无效。
+
+通过 Slack 的 Socket Mode，可以与 manager 对话，无需提供公开 URL。对话回复和询问的回答使用下述 Slack App；“目标已完成”等通知仍通过 `TAKT_NOTIFY_WEBHOOK` 配置的 Incoming Webhook 发送。两者可以同时使用。
+
+### 创建 Slack App
+
+1. 在 Slack 的 App 创建页面选择 **From an app manifest**，选定工作区，然后粘贴以下 YAML：
+
+   ```yaml
+   display_information:
+     name: TAKT manager
+   features:
+     bot_user:
+       display_name: TAKT manager
+       always_online: true
+   oauth_config:
+     scopes:
+       bot:
+         - chat:write
+         - channels:history
+         - groups:history
+   settings:
+     event_subscriptions:
+       bot_events:
+         - message.channels
+         - message.groups
+     interactivity:
+       is_enabled: true
+     socket_mode_enabled: true
+   ```
+
+2. 将 App 安装到工作区，在 **OAuth & Permissions** 中复制机器人令牌（`xoxb-…`）。
+3. 在 **Basic Information → App-Level Tokens** 中创建带有 `connections:write` 权限的 App-Level Token，并复制该令牌（`xapp-…`）。
+4. 在用于对话的频道中执行 `/invite @TAKT manager`，邀请机器人加入。
+5. 在 Slack 的频道详情中查看频道 ID。打开每位获准用户的个人资料，选择“复制成员 ID”以获取用户 ID。
+
+### 配置和启动
+
+在仓库的 `.takt/config.yaml` 中指定一个对话频道，以及允许发送消息和操作按钮的 Slack 用户：
+
+```yaml
+manager:
+  slack:
+    channel_id: C0123ABCD
+    allowed_user_ids: [U0AAAAAA]
+```
+
+`manager.slack` 仅支持仓库配置，不能写入全局 `~/.takt/config.yaml`。不要在 `manager.slack` 中填写令牌；配置验证会拒绝令牌字段。
+
+仓库的 `.takt/config.yaml` 可能纳入版本控制并与他人共享。修改 `manager.slack.allowed_user_ids` 会改变哪些 Slack 用户可以向 manager 发送输入。启动 daemon 前，请检查仓库配置的变更，并仅使用你信任的配置。
+
+Slack 配置和已注册的仓库列表在 daemon 启动时读取。更改后，请运行 `takt daemon stop` 并重新启动 daemon，以应用包括移除允许用户在内的更改。
+
+在启动 daemon 的 shell 中设置两个令牌环境变量，然后使用 `takt manager` 或 `takt daemon` 启动。例如：
+
+```bash
+export TAKT_SLACK_APP_TOKEN='xapp-...'
+export TAKT_SLACK_BOT_TOKEN='xoxb-...'
+takt manager
+```
+
+`TAKT_SLACK_APP_TOKEN` 使用带有 `connections:write` 权限的 App-Level Token，`TAKT_SLACK_BOT_TOKEN` 使用机器人令牌。daemon 读取后会从自身环境中删除这两个变量，避免 provider 和工具子进程继承令牌。没有自动启动机制，需要使用上述命令之一启动 daemon。
+
+只要有仓库配置了 Slack，且两个令牌均已设置，即使没有任务，daemon 也会继续监听。未配置 Slack 或缺少任一令牌时，daemon 仍按原有规则在空闲时退出。如果两个仓库配置了同一频道，两者的 Slack 都会被禁用，原因会写入 `~/.takt/logs/daemon.log`。
+
+### 对话和回答询问
+
+- 在配置的频道中发消息，manager 会在该消息的消息列中回复；之后请在同一消息列继续交流。该仓库的所有对话消息列都连接到同一个 manager 对话，并与 TUI 共享。回复只发送到发言所在的消息列；对 TUI 发言的回复不会发送到 Slack。
+- 不响应其他频道中的消息、发给机器人的私信，以及不在 `allowed_user_ids` 中的用户发送的消息或按钮操作。
+- 对话正在处理时发送的消息会收到“处理中”的回复，不会排队或执行。请在处理结束后重新发送。
+- 每条询问（问题、审批或操作请求）都会在配置的频道中单独发布为新消息，不放入已有消息列。通过按钮选择允许或拒绝、审批范围以及回答选项。如果选择比“仅本次”更广的审批范围，按钮会打开对话框；编辑建议的权限语句并确认后，该语句会追加到权限 Markdown 中。
+- 自由文本回答应回复到对应询问的消息列。当消息与询问的关联有效时，回复会作为回答处理，不会进入 manager 对话。回答会以 `slack` 为来源保存。
+- Slack 连接时已经待回答的询问不会发布到 Slack，请在 TUI 中按 `Ctrl+R` 回答。连接后出现的新询问每条只发布一次，不会重发。如果消息与询问的关联保存失败或无法读取，该消息列中的回复会作为普通对话处理，不会成为回答。
+- “目标已完成”等通知不会通过对话连接发布，仍由 `TAKT_NOTIFY_WEBHOOK` 发送。
+
+## 通过 Slack 与 director 对话
+
+在全局 `~/.takt/config.yaml` 中配置 director 频道和允许的用户，不要写入项目的 `.takt/config.yaml`：
+
+```yaml
+# ~/.takt/config.yaml
+director:
+  slack:
+    channel_id: C0DIR
+    allowed_user_ids: [U0AAA]
+```
+
+使用与 manager 相同的 Slack App 和环境变量 `TAKT_SLACK_APP_TOKEN` / `TAKT_SLACK_BOT_TOKEN`。按照[创建 Slack App](#创建-slack-app)的说明，将机器人邀请到 director 频道，并在启动 `takt daemon` 的 shell 中设置这两个变量。令牌只通过环境变量传递，不写入配置文件。修改 Slack 配置后，请重新启动 daemon。
+
+获准用户在 director 频道中的发言会进入 director 对话，不会进入 manager 对话。director 在原消息的消息列中回复。不在 `director.slack.allowed_user_ids` 中的用户发言会被忽略。即使 manager 使用同一频道，普通发言仍交给 director；manager 的询问按钮和对话框操作则使用 `manager.slack.allowed_user_ids`。
+
+director 将一次对话或巡检中新产生的通知汇总为该频道中的一条消息，包括已完成的工作，以及合并审批、未回答的询问等需要人工决定的事项。被现有去重机制抑制的通知不会重复发布。未配置 `director.slack` 时，director 不会向 Slack 发布消息，也不接受 Slack 发言。连接需要同时设置两个令牌环境变量。现有的 `TAKT_NOTIFY_WEBHOOK` 通知路径不变。
+
+## manager 敏感文件设置
+
+通过全局 `~/.takt/config.yaml` 或项目 `.takt/config.yaml` 中的 `manager.sensitive_paths`，可以添加即使位于负责仓库内也需要交给 manager 权限判断 agent 的文件和目录。
+
+```yaml
+manager:
+  sensitive_paths:
+    - private
+    - config/credentials.json
+```
+
+默认项为 `.env`、`.env.*`、`id_rsa`、`id_dsa`、`id_ecdsa`、`id_ed25519`、`*.key`、`*.pem`、`*.crt`、`*.cer`、`*.p12`、`*.pfx`。两个配置列表都会追加到默认项，省略或设置为空列表也不能删除默认项。单独的名称适用于任意目录深度。包含目录部分的相对路径以各个负责仓库为基准，也支持绝对路径和 `~/` 路径。目录项包含其所有下级文件和目录。名称模式支持在开头或末尾使用单个 `*`；此设置不用于定义允许规则。
+
+Claude 的 `Read`、`Glob` 和 `Grep` 只有在路径和符号链接解析后的目标全部是负责范围内可读取的普通目标时，才能跳过权限判断 agent。搜索候选通过路径和元数据检查，不会读取敏感文件的内容。搜索模式支持使用 `*`、`**` 和 `?` 的简单形式；排除、花括号展开、字符类、转义或无法确定范围的指定都会交给权限判断 agent。隐藏路径、遍历的目录和符号链接会被保守地检查，因此即使搜索条件较严格，也仍可能需要审查。Codex 的内置工具仍然需要审查。
+
 ## API Key 配置
 
-TAKT 支持 Claude、Codex、OpenCode、Pi、官方 DeepSeek Harness SDK、Cursor、Copilot 和 Kiro provider。Claude/Codex/OpenCode 使用各自 SDK credential，Pi 使用 Pi SDK credential store 或 provider 原生环境变量，DeepSeek Harness 先通过 `takt install deepseek-harness` 安装 TypeScript SDK/runtime，再通过官方 credential store（`$DSH_HOME/.credentials.yaml`，默认 `~/.dsh/.credentials.yaml`）或 `DEEPSEEK_API_KEY` 认证，Cursor 支持 API key 或已有 `cursor-agent login` session，Copilot 使用 GitHub token，Kiro 使用 API key。
+TAKT 支持 Claude、Codex、OpenCode、Pi、官方 DeepSeek Harness SDK、Cursor、Copilot、Kiro 和 Devin provider。Claude/Codex/OpenCode 使用各自 SDK credential，Pi 使用 Pi SDK credential store 或 provider 原生环境变量，DeepSeek Harness 先通过 `takt install deepseek-harness` 安装 TypeScript SDK/runtime，再通过官方 credential store（`$DSH_HOME/.credentials.yaml`，默认 `~/.dsh/.credentials.yaml`）或 `DEEPSEEK_API_KEY` 认证，Cursor 支持 API key 或已有 `cursor-agent login` session，Copilot 使用 GitHub token，Kiro 使用 API key。
 
 全局配置 schema 还保留了一些当前不能作为顶层 provider 选择的 legacy 或 provider integration API key 字段。这些字段本身不会启用 provider；请根据所选 provider，使用下文记录的认证环境变量或配置 key。
 
@@ -525,12 +646,13 @@ kiro_api_key: ...              # Kiro CLI
 | Cursor Agent | `TAKT_CURSOR_API_KEY` | `cursor_api_key` |
 | GitHub Copilot CLI | `TAKT_COPILOT_GITHUB_TOKEN` | `copilot_github_token` |
 | Kiro CLI | `TAKT_KIRO_API_KEY`（`KIRO_API_KEY` fallback） | `kiro_api_key` |
+| Devin CLI | `devin auth login` 凭据存储 | - |
 
 如果将 API key 写入配置文件，请勿将该文件 commit 到 Git；更推荐环境变量，并可将 `~/.takt/config.yaml` 加入全局 `.gitignore`。
 
 ### 安全
 
-TAKT 不读取、复制或改写保存的 DeepSeek credential 值。DeepSeek Harness TypeScript SDK/runtime 支持 glibc >= 2.28 的 Linux x64/arm64 和 macOS arm64 >= 14.0。Cursor 已有 `cursor-agent login` session 时可以不设置 API key；Copilot 和 Kiro 仍需各自的 CLI。
+TAKT 不读取、复制或改写保存的 DeepSeek credential 值。DeepSeek Harness TypeScript SDK/runtime 支持 glibc >= 2.28 的 Linux x64/arm64 和 macOS arm64 >= 14.0。Cursor 已有 `cursor-agent login` session 时可以不设置 API key；Copilot、Kiro 和 Devin 仍需各自的 CLI。Devin provider 需要安装 `devin` CLI 并通过 `devin auth login` 认证；TAKT 不向子进程传递凭据，但 `WINDSURF_API_KEY` 环境变量在已设置时会转发给子进程。
 
 ### CLI 路径覆盖
 
@@ -540,6 +662,7 @@ export TAKT_CODEX_CLI_PATH=/usr/local/bin/codex
 export TAKT_CURSOR_CLI_PATH=/usr/local/bin/cursor-agent
 export TAKT_COPILOT_CLI_PATH=/usr/local/bin/github-copilot-cli
 export TAKT_KIRO_CLI_PATH=/usr/local/bin/kiro-cli
+export TAKT_DEVIN_CLI_PATH=/usr/local/bin/devin
 ```
 
 ```yaml
@@ -549,6 +672,7 @@ codex_cli_path: /usr/local/bin/codex
 cursor_cli_path: /usr/local/bin/cursor-agent
 copilot_cli_path: /usr/local/bin/github-copilot-cli
 kiro_cli_path: /usr/local/bin/kiro-cli
+devin_cli_path: /usr/local/bin/devin
 ```
 
 路径必须是可执行文件的绝对路径。CLI 路径覆盖只属于全局配置，不要写入项目 `.takt/config.yaml`。
@@ -566,6 +690,7 @@ kiro_cli_path: /usr/local/bin/kiro-cli
 - **Cursor Agent** 将 model 原样传给 `cursor-agent --model <model>`。
 - **GitHub Copilot CLI** 将 model 原样传给 `copilot --model <model>`。
 - **Kiro CLI** 将 model 原样传给 `kiro-cli chat --model <model>`。
+- **Devin CLI** 将 model 传给 `devin acp --model <model>`（例如 `swe-2-max`、`swe-2-high`、`swe-2-medium`）；ACP session 会把该名称解析为 `model` 与 `thought_level` 配置项，无法解析或应用的名称会立即报错，而不是静默回退到默认值。该校验仅适用于新建 session；恢复的 session 保留创建时使用的 model，不会重新解析所指定的名称。省略时使用用户 Devin config 中配置的默认 model。
 
 ### 示例
 
@@ -661,6 +786,8 @@ provider:
       selector:
         profile: router
       review-completion-judge:
+        profile: router
+      manager-permission-judge:
         profile: router
 
   auto_routing:
@@ -816,7 +943,7 @@ defaults
   < steps
 ```
 
-内部 `selector`、`assistant`、`loop-judge` 和 `review-completion-judge` 使用单独的顺序；未分配的 seat 使用普通默认解析：
+内部 `selector`、`assistant`、`loop-judge`、`review-completion-judge` 和 `manager-permission-judge` 使用单独的解析顺序。`manager-permission-judge` 在 manager 使用 claude（claude-sdk）或 codex provider 的对话中，负责工具执行前的权限审查。可通过 `runtime.yaml` 中的 `provider.targets.internal_agents.manager-permission-judge` 指定其 provider 和 model，使用 `profile` 或 `ladder`，不能使用 `pool`。所有 seat 都是可选的；未分配时使用普通默认解析。不过，`manager-permission-judge` 未分配时使用与 manager 相同的 provider、model 和 provider options：
 
 ```text
 defaults
@@ -862,11 +989,15 @@ Provider profile 可以为不同 provider 设置默认权限模式和按 step �
 
 ### 权限模式
 
-| 模式 | 说明 | Claude | Codex | OpenCode | Pi | DeepSeek Harness | Cursor Agent | Copilot | Kiro CLI |
-|------|------|--------|-------|----------|----|------------------|--------------|---------|----------|
-| `readonly` | 只读，不修改文件 | `default` | `read-only` | `read-only` | `read`、`grep`、`find`、`ls`、`codemode` | 此 SDK 不提供 | 默认 flags（无 `--force`） | 无权限 flags | `--trust-tools=read,grep` |
-| `edit` | 允许带确认的文件编辑 | `acceptEdits` | `workspace-write` | `workspace-write` | `read`、`grep`、`find`、`ls`、`edit`、`write`、`bash`、`codemode` | 此 SDK 不提供 | 默认 flags（无 `--force`） | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` |
-| `full` | 绕过所有权限检查 | `bypassPermissions` | `danger-full-access` | `danger-full-access` | 所有注册 Pi 工具 | 此 SDK 不提供 | `--force` | `--yolo` | `--trust-all-tools` |
+| 模式 | 说明 | Claude | Codex | OpenCode | Pi | DeepSeek Harness | Cursor Agent | Copilot | Kiro CLI | Devin CLI |
+|------|------|--------|-------|----------|----|------------------|--------------|---------|----------|-----------|
+| `readonly` | 只读，不修改文件 | `default` | `read-only` | `read-only` | `read`、`grep`、`find`、`ls`、`codemode` | 此 SDK 不提供 | 默认 flags（无 `--force`） | 无权限 flags | `--trust-tools=read,grep` | `ask` ACP session mode + 生成的 `--config` deny 规则（`exec`、`edit`、`Write(**)`、`mcp__*`） |
+| `edit` | 允许带确认的文件编辑 | `acceptEdits` | `workspace-write` | `workspace-write` | `read`、`grep`、`find`、`ls`、`edit`、`write`、`bash`、`codemode` | 此 SDK 不提供 | 默认 flags（无 `--force`） | `--allow-all-tools --no-ask-user` | `--trust-tools=read,grep,write,shell` | `accept-edits` ACP session mode + 生成的 `--config` allow 规则（`exec`、`edit`、`Write(**)`） |
+| `full` | 绕过所有权限检查 | `bypassPermissions` | `danger-full-access` | `danger-full-access` | 所有注册 Pi 工具 | 此 SDK 不提供 | `--force` | `--yolo` | `--trust-all-tools` | `bypass` ACP session mode；permission 请求以 `allow_once` 应答 |
+
+Devin 通过 `devin acp`（基于 stdio 的 Agent Client Protocol）而不是 print 模式运行，因此权限模式分三层实施：用 `session/set_mode` 设置的 ACP session mode（`readonly` 对应 `ask`，`edit` 和未设置对应 `accept-edits`，`full` 对应 `bypass`）、追加到以用户 Devin 配置（`$XDG_CONFIG_HOME/devin/config.json`，默认 `~/.config/devin/config.json`；Windows 为 `%APPDATA%\devin\config.json`）为基础生成的 `--config` 中的 permission 规则，以及对 `session/request_permission` 的应答——对送达 TAKT 的请求，只有 `full` 模式选择 `allow_once`，`allow_always` 因会把决定持久化到 Devin config 而从不被选择。`strict-readonly` 内部 agent 隔离还会额外 deny `Fetch(**)`。
+
+生成的 `--config` 只替换 Devin 的用户级配置。仓库内项目级 `.devin/config.json`（以及 `.devin/config.local.json`）在 Devin 中优先级更高，其 `permissions.allow` 规则会在 Devin 向 TAKT 发起权限请求之前预先批准 tool 调用。实测：在 `edit` 模式或未设置权限模式时，仓库 `.devin/config.json` 中的 `allow: ["exec", ...]` 让一条本应被 TAKT 拒绝的 shell 命令得以执行。`readonly` 和 `strict-readonly` 不受影响（ACP `ask` 模式不暴露 write/exec 工具），且对于 TAKT 发出的规则，TAKT 的 `deny` 规则仍优先于项目的 `allow` 规则。在不受信任的仓库上运行 `edit` 模式的 Devin step 之前，请先检查该仓库的 `.devin/config.json`。
 
 Pi 的权限模式是 SDK active-tool allowlist，而不是操作系统 sandbox；TAKT 不为 Pi 增加逐工具确认。使用 Pi 时请确保 workflow 输入和 extension 可信。
 
@@ -1108,7 +1239,7 @@ SDK 不提供此 provider 所需的 permission control，因此请求 permission
 
 旧版 Python/uv 管理文件和 `takt deepseek-harness install` 不再使用。TAKT 不会迁移或删除用户文件。如需删除旧 managed environment，请先检查再手动处理；`~/.dsh` credential store 仍由用户管理。
 
-默认交互会话使用 SDK 标准工具；显式 allowlist（包括 `[]`）仍不受支持。report/status phase 保留禁用工具的空 allowlist，在 resume、新 session 重试及 DeepSeek fallback 路径中均会在 SDK 启动前拒绝。这是在执行前防止工具副作用，而不是执行后才检测。请为这些 phase 使用兼容的 provider。
+默认交互会话使用 SDK 标准工具；显式 allowlist（包括 `[]`）仍不受支持。report phase 使用只读工具，status phase 使用禁用工具的空 allowlist；这些限制在 resume、新 session 重试及 DeepSeek fallback 路径中均会在 SDK 启动前拒绝。这是在执行前防止工具副作用，而不是执行后才检测。请为这些 phase 使用兼容的 provider。
 
 persona 的 first-step 信息将未声明工具保留为 `undefined`，与显式 `[]` 区分；空和非空的显式列表都会传到 DeepSeek guard。DeepSeek 交互失败不使用通用 stale-session retry。拒绝限制时可保留仍运行的 session；遇到 `session_continuation_unsupported` 时则清除保存 ID，并说明下一个用户 turn 将创建没有旧历史的新 SDK session。历史恢复仍等待 SDK 支持，因此允许 ID 改变。不会静默重跑被拒绝的 turn，也不会放宽限制；workflow 继续执行仍需新的 TAKT session/run。
 
@@ -1151,6 +1282,8 @@ provider_options:
 ```
 
 使用 `permission_control: codex` 时，TAKT 从每次 Codex 调用（包括 strict isolated structured 调用）中省略 `sandboxMode` 和 `networkAccessEnabled`，由 Codex 的 `config.toml`、`default_permissions` 和 permission profile 决定实际权限。无论 `network_access` 来自 capability、runtime profile、routing、项目或全局配置，还是环境变量覆盖，解析后的值都会被接受且不会产生警告，但不会用于这些 Codex 权限字段。非交互执行仍会设置 `approvalPolicy: never`，`reasoning_effort`、`fast_mode`、`skills` 等非权限控制选项也会继续生效。
+
+但 Phase 2 和显式设置 `edit: false` 的 step 的 Phase 1 仍会传入 `read-only` sandbox。Codex 在 Phase 1 中无论解析出的 permission mode 是什么，都会使用此 sandbox，包括 `permission_control: codex`。这些调用的 `network_access` 也按 TAKT 管理权限时的规则处理。
 
 要按名称选择 Codex 配置 profile，请在 `permission_control: codex` 下设置 `config_profile`：
 
@@ -1379,6 +1512,7 @@ Companion 的 structured call 使用和其他 TAKT-owned structured agent 一样
 | `mock` | 取决于 scenario |
 | `opencode` | Live |
 | `pi` | Live |
+| `devin` | Live |
 | `cursor`、`copilot`、`kiro` | 不可用 |
 
 当 live tool event 不可用时，完成审查和 turn 边界的 finding 传递仍会运行。

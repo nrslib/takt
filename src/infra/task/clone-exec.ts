@@ -462,7 +462,7 @@ export function runGitCommandAbortable(
         return;
       }
       const message = stderr.trim() || `git ${args[0]} exited with code ${code}`;
-      rejectOnce(new Error(message));
+      rejectOnce(Object.assign(new Error(message), { status: code }));
     });
 
     if (timeoutMs !== undefined) {

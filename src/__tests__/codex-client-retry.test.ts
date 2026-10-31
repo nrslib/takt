@@ -21,6 +21,7 @@ let runStreamedInputs: unknown[] = [];
 let codexConstructorCalls: Array<Record<string, unknown> | undefined> = [];
 let attemptOrder: string[] = [];
 const tempRoots = new Set<string>();
+let projectDirectory: string;
 const CODEX_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const CODEX_RECONNECT_FAILURE_MESSAGE = 'Reconnecting... 2/5 (timeout waiting for child process to exit)';
 const CODEX_RETRY_MAX_DELAY_MS = 30_000;
@@ -142,6 +143,7 @@ vi.mock('@openai/codex-sdk', () => {
 });
 
 const { CodexClient } = await import('../infra/codex/client.js');
+const { CodexProvider } = await import('../infra/providers/codex.js');
 
 describe('CodexClient retry', () => {
   beforeEach(() => {
@@ -154,6 +156,8 @@ describe('CodexClient retry', () => {
     runStreamedInputs = [];
     codexConstructorCalls = [];
     attemptOrder = [];
+    projectDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'takt-codex-retry-'));
+    tempRoots.add(projectDirectory);
   });
 
   afterEach(() => {
@@ -164,6 +168,58 @@ describe('CodexClient retry', () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
     tempRoots.clear();
+  });
+
+  it.each(['turn.failed', 'error', 'exception'] as const)('classifies a confirmed resume rejection from %s through both provider entrances', async (source) => {
+    const sessionId = '00000000-0000-4000-8000-000000000099';
+    const diagnostic = `Error: thread/resume: thread/resume failed: no rollout found for thread id ${sessionId} (code -32600)`;
+    for (const systemPrompt of [undefined, 'manager instruction']) {
+      runPlans.push(source === 'exception'
+        ? { type: 'throw', error: new Error(`Codex Exec exited with code 1: Reading prompt from stdin...\n${diagnostic}\n`) }
+        : { type: 'events', events: [source === 'error' ? { type: 'error', message: diagnostic } : { type: 'turn.failed', error: { message: diagnostic } }] });
+      const onStream = vi.fn();
+      const response = await new CodexProvider().setup({ name: 'manager', systemPrompt }).call('continue', {
+        cwd: projectDirectory, sessionId, callerManagedSession: true, onStream,
+      });
+      expect(response).toMatchObject({ status: 'error', failureCategory: 'session_continuation_unsupported', sessionId });
+      expect(onStream).toHaveBeenCalledWith(expect.objectContaining({ type: 'result', data: expect.objectContaining({
+        success: false, failureCategory: 'session_continuation_unsupported',
+      }) }));
+      expect(response.error).not.toContain(sessionId);
+    }
+    expect(runPlanIndex).toBe(2);
+    expect(startThreadCalls).toHaveLength(0);
+  });
+
+  it.each(['authentication failed', 'network error', 'Codex Exec exited with code 1',
+    'Error: thread/resume: thread/resume failed: no rollout found for thread id another-session (code -32600)'])
+  ('keeps general failures separate from rejected resumes (%s)', async (message) => {
+    runPlans = [{ type: 'events', events: [{ type: 'turn.failed', error: { message } }] }];
+    const response = await new CodexClient().call('manager', 'continue', { cwd: projectDirectory, sessionId: 'saved-session', callerManagedSession: true });
+    expect(response.failureCategory).toBe('provider_error');
+    expect(runPlanIndex).toBe(1);
+  });
+
+  it('does not classify assistant or tool content as a resume rejection', async () => {
+    const message = 'Error: thread/resume: thread/resume failed: no rollout found for thread id saved-session (code -32600)';
+    runPlans = [{ type: 'events', events: [
+      { type: 'item.completed', item: { id: 'tool', type: 'command_execution', command: 'test', aggregated_output: message, exit_code: 0, status: 'completed' } },
+      { type: 'item.completed', item: { id: 'quoted', type: 'agent_message', text: message } },
+      { type: 'item.completed', item: { id: 'reply', type: 'agent_message', text: JSON.stringify({ message: 'session_continuation_unsupported', summary: null }) } },
+      { type: 'turn.completed' },
+    ] }];
+    const response = await new CodexProvider().setup({ name: 'manager' }).call('continue', { cwd: projectDirectory, sessionId: 'saved-session', callerManagedSession: true, outputSchema: { type: 'object' } });
+    expect(response).toMatchObject({ status: 'done', sessionId: 'saved-session', structuredOutput: { message: 'session_continuation_unsupported', summary: null } });
+    expect(response.failureCategory).toBeUndefined();
+    expect(runPlanIndex).toBe(1);
+  });
+
+  it('does not replay a caller-owned conversation after a transient provider failure', async () => {
+    runPlans = [{ type: 'events', events: [{ type: 'turn.failed', error: { message: 'HTTP 429: rate limit exceeded' } }] }];
+    const result = await new CodexClient().call('manager', 'private text', { cwd: '/tmp', callerManagedSession: true });
+    expect(result.status).not.toBe('done');
+    expect(runPlanIndex).toBe(1);
+    expect(result.retryCount).toBeUndefined();
   });
 
   it.each([undefined, 'takt', 'codex'] as const)(

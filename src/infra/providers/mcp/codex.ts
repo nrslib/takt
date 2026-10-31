@@ -26,14 +26,17 @@ export function createCodexMcpAdapter(): ProviderMcpAdapter {
     },
     async prepare(
       servers: ResolvedMcpServers,
-      _context: ProviderMcpContext,
+      context: ProviderMcpContext,
     ): Promise<PreparedProviderMcp> {
+      if (!servers.enabled || Object.keys(servers.servers).length === 0) {
+        return { dispose: noopDispose, config: {} };
+      }
       const names = new Set(Object.values(servers.servers).flatMap((server) =>
         Object.values(getMcpHeaderEnvRefs(server)).flatMap((parts) =>
           parts.flatMap((part) => typeof part === 'string' ? [] : [part.env]))));
       const selected = filterMcpHeaderEnvServers('codex', servers, true);
       const excludedServerNames = selected.excludedServerNames ?? [];
-      const mcpServers = toCodexMcpServers(selected.servers);
+      const mcpServers = toCodexMcpServers(selected.servers, context.toolApprovalAllowlist, context.approvedServerNames);
       return {
         dispose: noopDispose,
         ...(excludedServerNames.length === 0 ? {} : { excludedServerNames }),
@@ -53,15 +56,23 @@ export function createCodexMcpAdapter(): ProviderMcpAdapter {
 
 function toCodexMcpServers(
   servers: Record<string, ResolvedMcpServers['servers'][string]>,
+  toolApprovalAllowlist: ProviderMcpContext['toolApprovalAllowlist'],
+  approvedServerNames: ProviderMcpContext['approvedServerNames'],
 ): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   for (const [name, server] of Object.entries(servers)) {
-    result[name] = toCodexServer(server);
+    const tools = toolApprovalAllowlist !== undefined && Object.hasOwn(toolApprovalAllowlist, name)
+      ? toolApprovalAllowlist[name] : undefined;
+    result[name] = {
+      ...toCodexServer(server),
+      ...(approvedServerNames?.includes(name) ? { default_tools_approval_mode: 'approve' } : {}),
+      ...(tools === undefined ? {} : { tools: Object.fromEntries(tools.map((tool) => [tool, { approval_mode: 'approve' }])) }),
+    };
   }
   return result;
 }
 
-function toCodexServer(server: McpServerConfig): unknown {
+function toCodexServer(server: McpServerConfig): Record<string, unknown> {
   if (isStdioServer(server)) {
     return {
       command: server.command,

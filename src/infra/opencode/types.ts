@@ -68,7 +68,8 @@ function isPermissionAllowedByRuleset(
 
   return ruleset.some((rule) => (
     rule.action === 'allow'
-    && (rule.permission === permission || rule.permission === '*')
+    && (rule.permission === permission || rule.permission === '*'
+      || (rule.permission.endsWith('_*') && permission.startsWith(rule.permission.slice(0, -1))))
   ));
 }
 
@@ -458,6 +459,7 @@ function toOpenCodeAllowedPermission(tool: string): string | null {
 
 /** Options for calling OpenCode */
 export interface OpenCodeCallOptions {
+  callerManagedSession?: true;
   cwd: string;
   abortSignal?: AbortSignal;
   sessionId?: string;
@@ -470,6 +472,8 @@ export interface OpenCodeCallOptions {
   strictToolAllowlist?: OpenCodeAllowedTools;
   /** Trusted task-state MCP tools in OpenCode's normalized permission names. */
   allowedMcpTools?: readonly string[];
+  /** Conversation-approved MCP server names as assigned (every tool of each server is allowed). */
+  allowedMcpServers?: readonly string[];
   permissionMode?: PermissionMode;
   internalAgentIsolation?: import('../../shared/types/provider.js').InternalAgentIsolation;
   allowReadonlyFileRead?: boolean;

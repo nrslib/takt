@@ -76,6 +76,7 @@ function resolveActiveRuntimeProviderEnvironment(
       kind: 'runtime-v1',
       section,
       mcp: runtimeFile?.mcp,
+      assignmentOrigins: resolvedRuntimeFile.assignmentOrigins,
       resolutionContext: createRuntimeProviderResolutionContext(
         projectCwd,
         resolvedRuntimeFile.profileOrigins,
@@ -123,6 +124,12 @@ export function resolveRuntimeInternalAgentProvider(
     return explicit;
   }
   return defaultsProfileEntry(env);
+}
+
+export function resolveRuntimeManagerPermissionJudgeProvider(
+  projectCwd: string,
+): ProviderRoutingEntry | undefined {
+  return resolveActiveRuntimeProviderEnvironment(projectCwd)?.internalAgents?.managerPermissionJudge;
 }
 
 /**
