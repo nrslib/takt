@@ -428,10 +428,14 @@ tui:
 director:
   slackNotifications: "director からのお知らせ（完了・人の判断が必要な事項）"
   patrolFailed: "director の見回りに失敗しました"
+  projectUnreadable: "director が project を読み取れませんでした"
   description: "実験的な director 会話 TUI を開きます"
   experimentalNotice: "director は実験的機能です。動作や保存形式は変更されます。"
   costNotice: "director は AI を動かすため、provider API の費用がかかります。"
   placeholder: "manager の状況や指示を相談してください"
+  managerReply: "manager {managerId} の返事（操作ID: {operationId}）: {message}"
+  managerError: "manager {managerId} の伝言処理が失敗しました（操作ID: {operationId}）: {message}"
+  managerInterrupted: "manager {managerId} の伝言処理が中断されました（操作ID: {operationId}）: {message}"
 manager:
   goalPr:
     objective: "目的"
@@ -444,6 +448,7 @@ manager:
     disconnected: "daemon に再接続しています。"
     incomplete: "読み出しが不完全です。再読み込みが完了するまで要約を承認できません。"
     interrupted: "前の処理は中断されました。新しい発言を送信できます。"
+    director_interrupted: "directorの伝言（操作ID: {operationId}）は中断されました。自動では再実行しません。"
     permission_appended: "許可文を追記しました。回答の保存結果を確認してください。"
     assignment_changed: '担当が変わりました。現在の担当で会話を開き直してください。'
     busy: "処理中です。完了してからもう一度送信してください。"

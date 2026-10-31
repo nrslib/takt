@@ -20,7 +20,7 @@ import { createConversationService } from '../features/manager/conversationServi
 import { createTuiConversationPort } from '../features/manager/tuiConversationPort.js';
 import { ConversationStore } from '../infra/conversations/store.js';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
-import { writeDaemonOwner } from '../infra/daemon/owner.js';
+import { removeDaemonOwner, writeDaemonOwner } from '../infra/daemon/owner.js';
 import { conversationRecord } from './helpers/conversation-fixtures.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { askTaktGoalQuestion } from '../features/mcp/goalQuestionOperations.js';
@@ -134,6 +134,38 @@ function captureAndStopPolling() {
     }
   };
 }
+
+it('connects to the current daemon when the previous daemon stops during assignment resolution', async () => {
+  client.close();
+  let expired = false;
+  let restarted = false;
+  const port = createTuiConversationPort(directory, { deliver: async () => ({ kind: 'unavailable', reason: 'IPC only' }) });
+  doubles.ensure.mockImplementationOnce(async () => {
+    if (expired) {
+      writeDaemonOwner(directory, owner);
+      server = await createConversationIpcServer(directory, owner, service);
+      restarted = true;
+    }
+  });
+  client = new ConversationIpcClient(assignment, undefined, { reconnect: false, port: { ...port, async resolve(selected) {
+    const resolved = await port.resolve(selected);
+    await server.close();
+    removeDaemonOwner(directory, owner);
+    expired = true;
+    return resolved;
+  } } });
+  try {
+    await client.connect();
+    await complete();
+    expect(client.getSnapshot()).toMatchObject({ connection: 'connected', state: { pending: { revision: 4 } } });
+    expect(execute).not.toHaveBeenCalled();
+  } finally {
+    if (expired && !restarted) {
+      writeDaemonOwner(directory, owner);
+      server = await createConversationIpcServer(directory, owner, service);
+    }
+  }
+});
 
 it('regenerates with /make-goal on the same screen and registers the new proposal only with Up and Enter', async () => {
   const summary = { objective: 'Replacement JSON export', outOfScope: ['CSV'], acceptanceCriteria: ['JSON exists'], constraints: [] };

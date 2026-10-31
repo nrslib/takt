@@ -26,7 +26,9 @@ export function createDirectorPatrol(
       if (completedAt !== undefined && Date.now() - completedAt < intervalSeconds * 1000) return;
       pending = Promise.resolve().then(async () => {
         signal.throwIfAborted();
-        if ((await listDirectorManagers(configDirectory)).length === 0) return;
+        const { managers, errors } = await listDirectorManagers(configDirectory);
+        for (const failure of errors) log.warn(getLabel('director.projectUnreadable', language), failure);
+        if (managers.length === 0) return;
         signal.throwIfAborted();
         const prepared = await prepareDirectorTurn(configDirectory, notifications, signal, {}, true, delivery);
         try {
@@ -34,6 +36,7 @@ export function createDirectorPatrol(
             event: 'director_patrol',
             observedAt: new Date().toISOString(),
             patrolIntervalSeconds: intervalSeconds,
+            errors,
           });
           await prepared.executor.execute({
             prompt, instruction: prompt, sessionId: undefined,

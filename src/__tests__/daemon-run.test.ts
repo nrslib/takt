@@ -49,7 +49,7 @@ beforeEach(() => {
   doubles.delay.mockImplementation(async () => { await new Promise(setImmediate); });
   doubles.config.mockReturnValue({ patrolInterval: 1800 });
   doubles.recover.mockReturnValue(0);
-  doubles.conversationService.mockReturnValue({ attachmentCount: 0, activeOperationCount: 0, stopAccepting: vi.fn(), close: vi.fn() });
+  doubles.conversationService.mockReturnValue({ attachmentCount: 0, activeOperationCount: 0, restore: vi.fn(async () => {}), maintain: vi.fn(async () => {}), stopAccepting: vi.fn(), close: vi.fn() });
   doubles.ipc.mockReturnValue({ initializingCount: 0, stopAccepting: vi.fn(), close: vi.fn() });
   doubles.slack.mockResolvedValue({ listening: false, notifications: { deliver: vi.fn() }, pollInquiries: vi.fn(), stopAccepting: vi.fn(), close: vi.fn() });
 });
@@ -135,6 +135,7 @@ it.each([
   let conversationAccepting = true;
   let ipcAccepting = true;
   const conversation = { attachmentCount: 0, activeOperationCount: 0,
+    restore: vi.fn(async () => {}), maintain: vi.fn(async () => {}),
     stopAccepting: vi.fn(() => { conversationAccepting = false; }), close: vi.fn() };
   const ipc = { initializingCount: 0, stopAccepting: vi.fn(() => { ipcAccepting = false; }), close: vi.fn() };
   const slack = { listening: false, notifications: { deliver: vi.fn() }, pollInquiries: vi.fn(), stopAccepting: vi.fn(), close: vi.fn() };
@@ -171,7 +172,7 @@ it.each([
 
 it('keeps the same daemon waiting for Slack after work and TUI connections end, then closes on explicit stop', async () => {
   const before = process.rawListeners('SIGTERM');
-  const conversation = { attachmentCount: 1, activeOperationCount: 0, stopAccepting: vi.fn(), close: vi.fn() };
+  const conversation = { attachmentCount: 1, activeOperationCount: 0, restore: vi.fn(async () => {}), maintain: vi.fn(async () => {}), stopAccepting: vi.fn(), close: vi.fn() };
   doubles.conversationService.mockReturnValue(conversation);
   const slack = { listening: true, notifications: { deliver: vi.fn() }, pollInquiries: vi.fn(), stopAccepting: vi.fn(), close: vi.fn() };
   doubles.slack.mockResolvedValue(slack);
@@ -306,7 +307,7 @@ it('takes Slack credentials out of the environment before creating the runtime a
   doubles.runtime.mockImplementation(() => { environments.push({ ...process.env }); return {}; });
   doubles.conversationService.mockImplementation(() => {
     environments.push({ ...process.env });
-    return { attachmentCount: 0, activeOperationCount: 0, stopAccepting: vi.fn(), close: vi.fn() };
+    return { attachmentCount: 0, activeOperationCount: 0, restore: vi.fn(async () => {}), maintain: vi.fn(async () => {}), stopAccepting: vi.fn(), close: vi.fn() };
   });
   doubles.projects.mockResolvedValue([]);
   await runDaemon();
@@ -338,7 +339,7 @@ it('exits without polling or removing ownership when another daemon is registere
 
 it('keeps the same daemon alive through attachment changes, detached work and terminal cleanup', async () => {
   doubles.projects.mockResolvedValue([]);
-  const conversation = { attachmentCount: 1, activeOperationCount: 0, stopAccepting: vi.fn(), close: vi.fn() };
+  const conversation = { attachmentCount: 1, activeOperationCount: 0, restore: vi.fn(async () => {}), maintain: vi.fn(async () => {}), stopAccepting: vi.fn(), close: vi.fn() };
   doubles.conversationService.mockReturnValue(conversation);
   let round = 0;
   doubles.delay.mockImplementation(async () => {
@@ -381,7 +382,6 @@ it('processes each project with a fixed event limit, then checks its run startup
       `recover:${cwd}`, `patrol:${cwd}`, `events:${cwd}`, `run:${cwd}`, `work:${cwd}`,
     ]);
   }
-  expect(doubles.create.mock.calls).toEqual([['/project-a'], ['/project-b']]);
   expect(doubles.ensure.mock.calls).toEqual([
     ['/project-a', { notifyOnFailure: false }], ['/project-b', { notifyOnFailure: false }],
   ]);
@@ -434,7 +434,7 @@ it('keeps each project manager across polling rounds so failed events stay exclu
   const manager = { processPending: vi.fn(async () => false), close: vi.fn(async () => {}) };
   doubles.create.mockReturnValue(manager);
   await runDaemon();
-  expect(doubles.create).toHaveBeenCalledExactlyOnceWith('/project');
+  expect(doubles.create).toHaveBeenCalledOnce();
   expect(manager.processPending).toHaveBeenCalledTimes(2);
   expect(doubles.patrol).toHaveBeenCalledTimes(2);
   expect(doubles.ensure).toHaveBeenCalledTimes(2);

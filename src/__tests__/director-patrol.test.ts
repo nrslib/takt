@@ -1,15 +1,15 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createDirectorPatrol } from '../features/director/patrol.js';
 
-const doubles = vi.hoisted(() => ({ prepare: vi.fn(), managers: vi.fn(), execute: vi.fn(), dispose: vi.fn(), error: vi.fn() }));
+const doubles = vi.hoisted(() => ({ prepare: vi.fn(), managers: vi.fn(), execute: vi.fn(), dispose: vi.fn(), error: vi.fn(), warn: vi.fn() }));
 vi.mock('../features/director/conversationRuntime.js', () => ({ prepareDirectorTurn: doubles.prepare }));
 vi.mock('../features/director/managers.js', () => ({ listDirectorManagers: doubles.managers }));
-vi.mock('../shared/utils/debug.js', () => ({ createLogger: () => ({ error: doubles.error }) }));
+vi.mock('../shared/utils/debug.js', () => ({ createLogger: () => ({ error: doubles.error, warn: doubles.warn }) }));
 beforeEach(() => {
   vi.resetAllMocks();
   vi.useFakeTimers();
   vi.setSystemTime(new Date('2026-10-29T01:00:00Z'));
-  doubles.managers.mockResolvedValue([{}]);
+  doubles.managers.mockResolvedValue({ managers: [{ kind: 'repository', repositoryDirectory: '/good', repositoryDirectories: ['/good'] }], errors: [] });
   doubles.prepare.mockResolvedValue({ executor: { execute: doubles.execute }, dispose: doubles.dispose });
 });
 afterEach(() => vi.useRealTimers());
@@ -33,14 +33,14 @@ it.each(['ja', 'en'] as const)('starts a separate patrol with observation time a
   await patrol.close();
   expect(doubles.prepare).toHaveBeenCalledExactlyOnceWith('/config', notifications, signal, {}, true, undefined);
   const input = doubles.execute.mock.calls[0]![0];
-  expect(JSON.parse(input.prompt)).toEqual({ event: 'director_patrol', observedAt: '2026-10-29T01:00:00.000Z', patrolIntervalSeconds: 600 });
+  expect(JSON.parse(input.prompt)).toMatchObject({ event: 'director_patrol', observedAt: '2026-10-29T01:00:00.000Z', patrolIntervalSeconds: 600 });
   expect(input).toMatchObject({ sessionId: undefined, assignment: undefined, abortSignal: signal });
   expect(doubles.dispose).toHaveBeenCalledOnce();
   expect(patrol.running).toBe(false);
 });
 
 it('skips providers with no managers and after cancellation', async () => {
-  doubles.managers.mockResolvedValue([]);
+  doubles.managers.mockResolvedValue({ managers: [], errors: [] });
   const patrol = createDirectorPatrol('/config', { notify: vi.fn() }, 900, 'en');
   const controller = new AbortController();
   patrol.poll(controller.signal);
@@ -50,6 +50,42 @@ it('skips providers with no managers and after cancellation', async () => {
   vi.advanceTimersByTime(900_000);
   patrol.poll(controller.signal);
   expect(doubles.managers).toHaveBeenCalledOnce();
+});
+
+it.each(['ja', 'en'] as const)('records unreadable projects and passes their reasons to the remaining patrol in %s', async (language) => {
+  const errors = [{ repositoryDirectory: '/broken', reason: 'fatal: not a git repository' }];
+  doubles.managers.mockResolvedValue({
+    managers: [{ kind: 'repository', repositoryDirectory: '/good', repositoryDirectories: ['/good'] }], errors,
+  });
+  const patrol = createDirectorPatrol('/config', { notify: vi.fn() }, 600, language);
+
+  patrol.poll(new AbortController().signal);
+  await patrol.close();
+
+  expect(doubles.execute).toHaveBeenCalledOnce();
+  const input = doubles.execute.mock.calls[0]![0];
+  expect(JSON.parse(input.prompt)).toMatchObject({ event: 'director_patrol', errors });
+  expect(input.instruction).toBe(input.prompt);
+  const logs = JSON.stringify([...doubles.warn.mock.calls, ...doubles.error.mock.calls]);
+  expect(logs).toContain('/broken');
+  expect(logs).toContain('not a git repository');
+  expect(doubles.dispose).toHaveBeenCalledOnce();
+  expect(patrol.running).toBe(false);
+});
+
+it('records unreadable projects without starting a provider when no managers remain', async () => {
+  doubles.managers.mockResolvedValue({ managers: [], errors: [{ repositoryDirectory: '/missing', reason: 'ENOENT: no such file or directory' }] });
+  const patrol = createDirectorPatrol('/config', { notify: vi.fn() }, 600, 'en');
+
+  patrol.poll(new AbortController().signal);
+  await patrol.close();
+
+  const logs = JSON.stringify([...doubles.warn.mock.calls, ...doubles.error.mock.calls]);
+  expect(logs).toContain('/missing');
+  expect(logs).toContain('ENOENT');
+  expect(doubles.prepare).not.toHaveBeenCalled();
+  expect(doubles.execute).not.toHaveBeenCalled();
+  expect(patrol.running).toBe(false);
 });
 
 it('prevents overlap and measures the next deadline from completion', async () => {

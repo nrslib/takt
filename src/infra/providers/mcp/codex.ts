@@ -29,7 +29,7 @@ export function createCodexMcpAdapter(): ProviderMcpAdapter {
       if (!servers.enabled || Object.keys(servers.servers).length === 0) {
         return { dispose: noopDispose, config: {} };
       }
-      const mcpServers = toCodexMcpServers(servers.servers, context.toolApprovalAllowlist);
+      const mcpServers = toCodexMcpServers(servers.servers, context.toolApprovalAllowlist, context.approvedServerNames);
       return { dispose: noopDispose, config: { mcp_servers: mcpServers } };
     },
     classifyFailure(error) {
@@ -41,6 +41,7 @@ export function createCodexMcpAdapter(): ProviderMcpAdapter {
 function toCodexMcpServers(
   servers: Record<string, ResolvedMcpServers['servers'][string]>,
   toolApprovalAllowlist: ProviderMcpContext['toolApprovalAllowlist'],
+  approvedServerNames: ProviderMcpContext['approvedServerNames'],
 ): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   for (const [name, server] of Object.entries(servers)) {
@@ -48,6 +49,7 @@ function toCodexMcpServers(
       ? toolApprovalAllowlist[name] : undefined;
     result[name] = {
       ...toCodexServer(server),
+      ...(approvedServerNames?.includes(name) ? { default_tools_approval_mode: 'approve' } : {}),
       ...(tools === undefined ? {} : { tools: Object.fromEntries(tools.map((tool) => [tool, { approval_mode: 'approve' }])) }),
     };
   }

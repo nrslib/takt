@@ -91,6 +91,7 @@ function buildMakerPlan(
 ): ConversationPlan {
   const assistantConversationInput = {
     assistantMode: 'assistant' as const,
+    includeAssistantMcpServers: false,
     enableAssistantRetryCommands: false,
     formalSpec: false,
     formalSpecComments: true,

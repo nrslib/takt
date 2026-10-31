@@ -1194,6 +1194,26 @@ mcp:
 
 ### スキーマ
 
+通常モードと grill-me モードの両方のアシスタント会話には `mcp.targets.personas.assistant` を使います。
+MCP に対応する provider では、アシスタントに内蔵の読み取り専用 `takt` server も付きます。
+`takt` という名前で利用者が定義した server はアシスタントに渡されず、内蔵の `takt` server が使われます。
+この場合、通知は出ません。
+MCP に対応しない provider では、MCP を使わずに会話を続け、その旨を通知します。
+例えば、設定済みの Backlog MCP server は次のように割り当てます。
+
+```yaml
+version: 1
+mcp:
+  servers:
+    backlog:
+      type: stdio
+      command: backlog-mcp-server
+  targets:
+    personas:
+      assistant:
+        servers: [backlog]
+```
+
 | フィールド | 型 | 説明 |
 |---|---|---|
 | `mcp.servers` | `{ <名前>: ServerEntry }` | 名前付き MCP server 定義（`stdio` / `sse` / `http`）。ここで定義しただけでは有効化せず、`defaults` または `targets` で割り当てる必要があります。 |

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import test from 'node:test';
+import test, { after } from 'node:test';
 import { parse } from 'yaml';
 import buildPrompt, { buildManagerSystemPrompt, loadManagerCase } from './manager-work-split-prompt.mjs';
 import { createManagerConversationPlan } from '../dist/features/manager/conversationPlan.js';
@@ -10,15 +10,18 @@ import { buildGoalTurnContext, buildManagerGoalSummary } from '../dist/features/
 import { GoalSchema } from '../dist/infra/goals/schema.js';
 import { ManagerEventSchema } from '../dist/infra/goals/events.js';
 import { invalidateGlobalConfigCache } from '../dist/infra/config/global/globalConfig.js';
-import { goalDiffInputSchema, goalHistoryInputSchema, recordGoalWorkLogInputSchema, tellGoalRunInputSchema } from '../dist/features/mcp/schemas.js';
+import { getRunInputSchema, goalDiffInputSchema, goalHistoryInputSchema, recordGoalWorkLogInputSchema, tellGoalRunInputSchema } from '../dist/features/mcp/schemas.js';
 
 const suite = parse(readFileSync(new URL('./scenarios/manager-work-split/manager-work-split.yaml', import.meta.url), 'utf8'));
 const preserveEnv = (key, prior) => { if (prior === undefined) delete process.env[key]; else process.env[key] = prior; };
+const inheritedInstructionRoot = process.env.TAKT_EVAL_MANAGER_INSTRUCTION_ROOT;
+delete process.env.TAKT_EVAL_MANAGER_INSTRUCTION_ROOT;
+after(() => preserveEnv('TAKT_EVAL_MANAGER_INSTRUCTION_ROOT', inheritedInstructionRoot));
 
-test('assembles all 56 turn prompts without a provider call, excluding scoring conditions', (t) => {
+test('assembles all 76 turn prompts without a provider call, excluding scoring conditions', (t) => {
   const now = Date.now();
   t.mock.method(Date, 'now', () => now);
-  assert.equal(suite.tests.length, 56);
+  assert.equal(suite.tests.length, 76);
   for (const { vars } of suite.tests) {
     const fixture = loadManagerCase(vars.case, vars.lang);
     const prompt = buildPrompt({ vars });
@@ -226,7 +229,7 @@ test('event fixtures carry production goal memory, inbox events and current task
     assert.equal(context.references.tasks, `${fixture.cwd}/.takt/tasks.yaml`);
     const readGoal = fixture.readResults.find(({ tool }) => tool === 'takt_get_goal').result.goal;
     assert.deepEqual(GoalSchema.parse(readGoal), goal);
-    assert.ok(goal.workLog.some(({ summary }) => fixture.tasks.some((task) => summary.includes(task.completion.sha))));
+    assert.ok(goal.workLog.some(({ summary }) => fixture.tasks.some((task) => task.completion !== undefined && summary.includes(task.completion.sha))));
   }
 });
 
@@ -296,7 +299,9 @@ test('work contents, integrated verification and constraint cases receive semant
     'escalate-repeated-failure', 'escalate-not-on-first-failure',
     'mail-dispatch-state', 'local-config-tampering', 'offline-sync-queue',
     'report-publish-replacement', 'conflicting-calendar-visibility',
-    'reservation-validation', 'legacy-date-format', 'archive-test-coverage', 'quoted-csv-fields', 'inventory-retry-idempotency']);
+    'reservation-validation', 'legacy-date-format', 'archive-test-coverage', 'quoted-csv-fields', 'inventory-retry-idempotency',
+    'verification-repeated', 'verification-once', 'verification-mixed', 'verification-told',
+    'plan-missing', 'plan-dependent', 'plan-cancelled', 'plan-integrated', 'plan-queued', 'final-impact-tests']);
   for (const row of suite.tests) {
     assert.equal(row.assert?.[0]?.type === 'llm-rubric', semanticCases.has(row.vars.case));
     if (row.assert) assert.match(row.assert[0].value, row.vars.lang === 'ja'
@@ -332,4 +337,127 @@ test('failure fixtures preserve attempts, revised instructions and causes throug
       }
     }
   }
+});
+
+test('instruction file switching preserves input, schemas and other facets in both languages', () => {
+  const root = mkdtempSync(join(tmpdir(), 'takt-manager-instruction-test-'));
+  const prior = process.env.TAKT_EVAL_MANAGER_INSTRUCTION_ROOT;
+  try {
+    delete process.env.TAKT_EVAL_MANAGER_INSTRUCTION_ROOT;
+    for (const lang of ['ja', 'en']) {
+      mkdirSync(join(root, lang));
+      const instruction = readFileSync(new URL(`../builtins/${lang}/facets/instructions/manager.md`, import.meta.url), 'utf8');
+      writeFileSync(join(root, lang, 'manager.md'), instruction);
+      const vars = { case: 'plan-missing', lang };
+      const green = buildPrompt({ vars });
+      process.env.TAKT_EVAL_MANAGER_INSTRUCTION_ROOT = root;
+      assert.equal(buildPrompt({ vars }), green);
+      const marker = `INSTRUCTION_VARIANT_${lang}`;
+      writeFileSync(join(root, lang, 'manager.md'), `${marker}\n${instruction}`);
+      assert.equal(buildPrompt({ vars }).replace(`${marker}\n`, ''), green);
+      assert.doesNotMatch(buildPrompt({ vars }), /\{\{include:/);
+      delete process.env.TAKT_EVAL_MANAGER_INSTRUCTION_ROOT;
+    }
+    process.env.TAKT_EVAL_MANAGER_INSTRUCTION_ROOT = 'relative/path';
+    assert.throws(() => buildPrompt({ vars: { case: 'plan-missing', lang: 'ja' } }), /absolute path/);
+    process.env.TAKT_EVAL_MANAGER_INSTRUCTION_ROOT = join(root, 'missing');
+    assert.throws(() => buildPrompt({ vars: { case: 'plan-missing', lang: 'ja' } }), /ENOENT/);
+  } finally {
+    preserveEnv('TAKT_EVAL_MANAGER_INSTRUCTION_ROOT', prior);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('verification fixtures distinguish separate finished checks, a single check, mixed causes and prior instruction', () => {
+  for (const lang of ['ja', 'en']) {
+    for (const caseId of ['verification-repeated', 'verification-once', 'verification-mixed', 'verification-told']) {
+      const fixture = loadManagerCase(caseId, lang);
+      const run = fixture.readResults.find(({ tool, arguments: args }) => tool === 'takt_get_run' && args.view === undefined).result;
+      const checks = run.stepLogs.filter(({ step, status }) => step === 'fix-verifier' && status === 'done');
+      assert.equal(checks.length, caseId === 'verification-once' ? 1 : 2);
+      assert.equal(new Set(checks.map(({ timestamp }) => timestamp)).size, checks.length);
+      assert.ok(run.stepLogs.every((entry, index) => entry.index === index && !Object.hasOwn(entry, 'content')));
+      assert.equal(Object.hasOwn(run, 'task'), false);
+      const logReads = fixture.readResults.filter(({ tool, arguments: args }) => tool === 'takt_get_run' && args.view === 'log');
+      assert.equal(logReads.length, checks.length);
+      assert.deepEqual(logReads.map(({ arguments: args }) => args.stepIndex), checks.map(({ index }) => index));
+      for (const check of checks) {
+        const read = logReads.find(({ arguments: args }) => args.stepIndex === check.index);
+        assert.deepEqual(getRunInputSchema.parse(read.arguments), {
+          cwd: fixture.cwd, runSlug: run.runSlug, view: 'log', stepIndex: check.index,
+        });
+        const { log, ...metadata } = read.result;
+        const { stepLogs: _stepLogs, reports: _reports, ...runMetadata } = run;
+        assert.deepEqual(metadata, runMetadata);
+        const { content, totalBytes, offset, returnedBytes, direction, truncated, nextOffset, ...summary } = log;
+        assert.deepEqual(summary, check);
+        assert.ok(content.includes('IDX-17'));
+        assert.equal(content.includes('IDX-22'), caseId === 'verification-mixed');
+        assert.deepEqual({ totalBytes, offset, returnedBytes, direction, truncated, nextOffset }, {
+          totalBytes: Buffer.byteLength(content), offset: 0, returnedBytes: Buffer.byteLength(content),
+          direction: 'backward', truncated: false, nextOffset: null,
+        });
+      }
+      assert.equal(run.stepLogs.filter(({ step }) => step === 'review-adjudication').length, 1);
+      const patrol = fixture.goal.workLog.find(({ kind }) => kind === 'patrol');
+      assert.ok(Date.parse(patrol.recordedAt) > Date.parse(run.stepLogs[0].timestamp));
+      assert.ok(Date.parse(patrol.recordedAt) < Date.parse(checks[0].timestamp));
+      assert.equal(run.reports.length, checks.length);
+      assert.equal(fixture.goal.workLog.length, caseId === 'verification-told' ? 3 : 2);
+      assert.equal(fixture.tasks.find(({ status }) => status === 'running').runSlug, run.runSlug);
+    }
+  }
+});
+
+test('plan fixtures store the plan in objective and integrations and cancellations in work records', () => {
+  for (const lang of ['ja', 'en']) {
+    for (const caseId of ['plan-missing', 'plan-dependent', 'plan-cancelled', 'plan-integrated', 'plan-queued']) {
+      const fixture = loadManagerCase(caseId, lang);
+      assert.equal(fixture.event.kind, 'completion');
+      assert.equal(Object.hasOwn(fixture.goal, 'plan'), false);
+      assert.ok(fixture.goal.objective.includes('5. usage-docs:'));
+      const eventTask = fixture.tasks.find(({ name }) => name === fixture.event.taskName);
+      assert.deepEqual(eventTask.completion, fixture.event.result);
+      assert.ok(fixture.goal.workLog.some(({ summary }) => summary.includes(eventTask.completion.sha)));
+      const foundation = fixture.goal.workLog.find(({ summary }) => summary.includes('result-1 (foundation)'));
+      for (const task of fixture.tasks.filter(({ startedAt, goalWorkKey }) => startedAt && goalWorkKey !== 'foundation')) {
+        assert.ok(Date.parse(task.startedAt) > Date.parse(foundation.recordedAt));
+      }
+      const docs = fixture.tasks.find(({ goalWorkKey }) => goalWorkKey === 'usage-docs');
+      assert.equal(docs?.status, caseId === 'plan-integrated' ? 'completed' : caseId === 'plan-queued' ? 'pending' : undefined);
+      if (docs?.startedAt) {
+        const display = fixture.goal.workLog.find(({ summary }) => summary.includes('result-4 (display)'));
+        assert.ok(Date.parse(docs.startedAt) > Date.parse(display.recordedAt));
+      }
+      if (caseId === 'plan-dependent') assert.equal(fixture.tasks.find(({ goalWorkKey }) => goalWorkKey === 'display').status, 'running');
+      if (caseId === 'plan-cancelled') assert.ok(fixture.goal.workLog.some(({ summary }) => summary.includes('docs/index.md')));
+    }
+  }
+});
+
+test('final-check input contains direct and child-process consumers and unrelated tests as read results', () => {
+  for (const lang of ['ja', 'en']) {
+    const fixture = loadManagerCase('final-impact-tests', lang);
+    const files = Object.fromEntries(fixture.readResults.filter(({ tool }) => tool === 'Read')
+      .map(({ arguments: args, result }) => [args.file_path.replace(`${fixture.cwd}/`, ''), result]));
+    assert.ok(fixture.goal.objective.includes('channel'));
+    assert.ok(fixture.goal.acceptanceCriteria.some((criterion) => criterion.includes('channel')));
+    assert.equal(fixture.readResults.find(({ tool }) => tool === 'takt_get_goal').result.goal, fixture.goal);
+    const sessionTasks = fixture.tasks.filter(({ goalWorkKey }) => ['storage', 'commands', 'display'].includes(goalWorkKey));
+    assert.equal(sessionTasks.length, 3);
+    for (const task of sessionTasks) {
+      assert.ok(fixture.goal.objective.includes(`${task.goalWorkKey}: ${task.goalPurpose}`));
+    }
+    assert.ok(files['changes.patch'].includes('src/daemon/session.ts'));
+    assert.ok(files['src/__tests__/it-session-store.test.ts'].includes('../daemon/session.js'));
+    assert.ok(files['src/__tests__/it-daemon-process.test.ts'].includes('dist/app/cli/index.js'));
+    assert.ok(files['src/__tests__/it-daemon-conversations.test.ts'].includes('./helpers/daemon-fixture.js'));
+    assert.ok(files['src/__tests__/helpers/daemon-fixture.ts'].includes('dist/app/cli/index.js'));
+    assert.ok(files['src/daemon/store.ts'].includes('./session.js'));
+    assert.ok(files['src/__tests__/it-session-colors.test.ts'].includes('../ui/session-colors.js'));
+    assert.ok(files['src/__tests__/it-storage-export.test.ts'].includes('../storage/export.js'));
+    assert.equal(fixture.readResults.some(({ tool }) => tool === 'Bash'), false);
+  }
+  assert.ok(suite.providers.some(({ config }) => config.model === 'gpt-6.1-terra' && config.reasoning_effort === 'medium'));
+  assert.ok(suite.providers.some(({ config }) => config.model === 'gpt-6-luna' && config.reasoning_effort === 'max'));
 });

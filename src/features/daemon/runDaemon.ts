@@ -24,6 +24,7 @@ import { createDirectorPatrol } from '../director/patrol.js';
 import { resolveDirectorConfig } from '../../infra/config/directorConfig.js';
 import { loadGlobalConfig } from '../../infra/config/global/globalConfig.js';
 import type { DirectorNotificationDelivery } from '../director/notificationDelivery.js';
+import { ManagerTurnScheduler } from '../manager/managerTurnScheduler.js';
 
 const POLL_INTERVAL_MS = 500;
 const SLACK_INQUIRY_POLL_INTERVAL_MS = 5_000;
@@ -64,6 +65,7 @@ export async function runDaemon(): Promise<void> {
   let resolveSlack!: (ports: Awaited<ReturnType<typeof createDaemonSlackPorts>> | undefined) => void;
   const slackReady = new Promise<Awaited<ReturnType<typeof createDaemonSlackPorts>> | undefined>((resolve) => { resolveSlack = resolve; });
   const deliveries = new Set<Promise<void>>();
+  const scheduler = new ManagerTurnScheduler();
   const notifications: DirectorNotificationDelivery = { async deliver(batch) {
     if (directorConfig?.slack === undefined) return;
     const pending = slackReady.then(async (ports) => {
@@ -74,6 +76,7 @@ export async function runDaemon(): Promise<void> {
     deliveries.add(pending);
   } };
   const conversations = createConversationService({ configDirectory: globalConfigDirectory, owner,
+    scheduler,
     runtime: createDaemonConversationRuntime(globalConfigDirectory, { notify: (notification) => conversations.notifyDirector(notification) }, notifications),
     onDomainChange: () => { domainGeneration++; projectWork.clear(); } });
   let ipc: Awaited<ReturnType<typeof createConversationIpcServer>> | undefined;
@@ -99,7 +102,7 @@ export async function runDaemon(): Promise<void> {
       if (controller.signal.aborted) return false;
       let manager = managers.get(cwd);
       if (manager === undefined) {
-        manager = createRunEventManager(cwd);
+        manager = createRunEventManager(cwd, scheduler);
         managers.set(cwd, manager);
       }
       await manager.processPending(controller.signal, EVENTS_PER_PROJECT);
@@ -141,6 +144,7 @@ export async function runDaemon(): Promise<void> {
     const globalConfig = loadGlobalConfig();
     directorConfig = resolveDirectorConfig(globalConfig);
     initDebugLogger({ enabled: true, logFile: join(globalConfigDirectory, 'logs', 'daemon.log') });
+    await conversations.restore();
     ipc = await createConversationIpcServer(globalConfigDirectory, owner, conversations);
     if (controller.signal.aborted) return;
     const initialProjects = await listDaemonProjects(globalConfigDirectory);
@@ -162,6 +166,7 @@ export async function runDaemon(): Promise<void> {
       }
       const projects = await listDaemonProjects(globalConfigDirectory);
       if (controller.signal.aborted) break;
+      await conversations.maintain();
       if (slackInquiryPolling === undefined && Date.now() >= nextSlackInquiryPoll) {
         nextSlackInquiryPoll = Date.now() + SLACK_INQUIRY_POLL_INTERVAL_MS;
         const currentSlack = slack;

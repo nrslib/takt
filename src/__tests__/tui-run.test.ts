@@ -2283,6 +2283,65 @@ describe('runTui', () => {
       await run;
     });
 
+    it.each(['assistant', 'grill-me'] as const)(
+      'should switch in %s mode to a provider that rejects the assigned MCP servers and report it when the conversation is rebuilt',
+      async (mode) => {
+        const projectDir = mkdtempSync(join(tmpdir(), 'takt-tui-provider-switch-mcp-'));
+        try {
+          mkdirSync(join(projectDir, '.takt'), { recursive: true });
+          // claude accepts sse, codex accepts only stdio and http.
+          writeFileSync(join(projectDir, '.takt', 'runtime.yaml'), [
+            'version: 1',
+            'mcp:',
+            '  servers:',
+            '    backlog:',
+            '      type: sse',
+            '      url: https://example.test/mcp',
+            '  targets:',
+            '    personas:',
+            '      assistant:',
+            '        servers: [backlog]',
+            '',
+          ].join('\n'));
+          mockSelectInteractiveMode.mockResolvedValue(mode);
+          mockResolveAssistantProviderModel.mockImplementation((
+            _cwd: string,
+            overrides?: { provider?: string; model?: string },
+          ) => ({
+            runtimeManaged: false,
+            provider: overrides?.provider ?? 'claude',
+            model: overrides?.model ?? 'mock-model',
+          }));
+          mockSelectInteractiveProvider.mockResolvedValue('codex');
+          mockCreateTuiConversation.mockReturnValueOnce(createConversationDouble());
+          const tree = scriptRender();
+          const run = startRun({ cwd: projectDir });
+          await waitForMount(tree, 1);
+
+          tree.conversationProps().onExit(
+            { kind: 'handoff', id: 'provider' },
+            { history: ['/provider'], queue: [] },
+          );
+          await waitForMount(tree, 2);
+
+          expect(tree.conversationProps().initialEntries ?? []).toEqual([]);
+          await expect(tree.conversationProps().conversation.submit(submitInput())).resolves.toMatchObject({
+            kind: 'error',
+            message: expect.stringContaining('Failed to switch conversation settings:'),
+          });
+          expect(mockCreateTuiConversation).toHaveBeenCalledTimes(1);
+
+          tree.conversationProps().onExit(
+            { kind: 'result', result: { action: 'cancel', task: '' } },
+            { history: [], queue: [] },
+          );
+          await expect(run).resolves.toBeDefined();
+        } finally {
+          rmSync(projectDir, { recursive: true, force: true });
+        }
+      },
+    );
+
     it('should retain real conversation history when switching to an MCP-unsupported provider', async () => {
       realTuiConversation.current = true;
       const piProvider = getProvider('pi');
