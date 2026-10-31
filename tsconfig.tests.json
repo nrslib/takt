@@ -8,6 +8,7 @@
   // something red.
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    "allowJs": true,
     "noEmit": true,
     "rootDir": "."
   },
@@ -17,9 +18,11 @@
     "e2e/specs/run-recovery.e2e.ts",
     "e2e/specs/task-auto-pr.e2e.ts",
     "e2e/specs/watch.e2e.ts",
+    "eval/providers/phase-session.test.mjs",
     "eval/scenarios/tell/exceeded-start-semantic.test.ts",
     "eval/scenarios/tell/inline-utterance-semantic.test.ts",
     "eval/scenarios/tell/tell-semantic.test.ts",
+    "eval/scripts/prepare-review-artifact-input-handoff.test.mjs",
     "src/__tests__/abort-handler.test.ts",
     "src/__tests__/acpAgent.test.ts",
     "src/__tests__/acpConversationFactory.test.ts",
