@@ -377,6 +377,8 @@ takt director --help
 
 manager 推进其负责的仓库或 workspace 的目标，提交任务、整合成果并申请完成。director 查看所有 manager 的目标和未回答的询问，将需要处理的事项告知人，并通过 manager 对话传达信息。决定仍由人作出；director 只把人明确提出的合并指令转发给负责的 manager，自己不执行合并。
 
+通过 `takt_tell_manager` 发送的消息，即使 manager 正忙也会保存。工具在保存后立即返回操作 ID 和 manager，无需等待回复；消息按保存顺序处理。回复、失败和中断结果会保存，稍后在 director 界面中以同一操作 ID 通知。manager 列表和巡检会说明无法读取的 project 及其原因，并继续处理其余 manager。
+
 在全局 `~/.takt/config.yaml` 中设置 `director.patrol_interval`（秒，默认 `900`）和 `director.slack.channel_id` / `director.slack.allowed_user_ids`。参阅[全局配置字段参考](./configuration.zh-CN.md#全局配置字段参考)。
 
 **director 的 Slack：** 使用与 manager 相同的 Slack App 和 `TAKT_SLACK_APP_TOKEN` / `TAKT_SLACK_BOT_TOKEN`，将机器人邀请到 director 频道，并在修改 Slack 配置后重新启动 daemon。配置 `director.slack` 后，可以接收汇总通知并允许获准用户对话，回复发送到原消息列。连接步骤参阅[通过 Slack 与 director 对话](./configuration.zh-CN.md#通过-slack-与-director-对话)，完整的分工与限制参阅 [director CLI 说明](./cli-reference.zh-CN.md#director实验性)。
