@@ -473,9 +473,11 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
                 : resolveAssistantProviderModel(options.cwd, { provider }).model),
             };
             requestRebuild();
+            // Only the capability notice is needed here. Resolving the runtime.yaml assignments would
+            // throw from this handler; an assignment the new provider rejects is reported by the rebuild.
             const capability = selectedMode === 'persona'
               ? undefined
-              : resolveTaskStateMcp(provider, options.lang).unavailableNotice;
+              : resolveTaskStateMcp(options.cwd, provider, options.lang, false).unavailableNotice;
             return {
               kind: 'continue' as const,
               ...(capability === undefined ? {} : { notice: capability }),

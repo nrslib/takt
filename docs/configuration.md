@@ -1211,6 +1211,25 @@ mcp:
 
 ### Schema
 
+Use `mcp.targets.personas.assistant` for both normal and grill-me assistant conversations.
+When the provider supports MCP, the assistant also gets its built-in read-only `takt` server.
+A server that you define under the name `takt` is not passed to the assistant. The built-in `takt` server is used instead, and no notice is shown.
+When the provider does not support MCP, the conversation continues without MCP and shows a notice.
+For example, assign a configured Backlog MCP server as follows:
+
+```yaml
+version: 1
+mcp:
+  servers:
+    backlog:
+      type: stdio
+      command: backlog-mcp-server
+  targets:
+    personas:
+      assistant:
+        servers: [backlog]
+```
+
 | Field | Type | Description |
 |---|---|---|
 | `mcp.servers` | `{ <name>: ServerEntry }` | Named MCP server definitions (`stdio` / `sse` / `http`). Defining a server here alone does not enable it — it must be assigned through `defaults` or `targets`. |

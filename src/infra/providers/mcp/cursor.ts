@@ -19,6 +19,8 @@ import { isStdioServer } from './types.js';
 import { validateTransports, onceDispose, classifyMcpFailure } from './adapter.js';
 import { ensureCurrentTmpDirExists } from '../../../shared/utils/index.js';
 
+const CURSOR_APPROVE_MCPS_FLAG = '--approve-mcps';
+
 export function createCursorMcpAdapter(): ProviderMcpAdapter {
   return {
     validate(servers, context) {
@@ -26,7 +28,7 @@ export function createCursorMcpAdapter(): ProviderMcpAdapter {
     },
     async prepare(
       servers: ResolvedMcpServers,
-      _context: ProviderMcpContext,
+      context: ProviderMcpContext,
     ): Promise<PreparedProviderMcp> {
       if (!servers.enabled || Object.keys(servers.servers).length === 0) {
         return { dispose: () => Promise.resolve() };
@@ -43,8 +45,12 @@ export function createCursorMcpAdapter(): ProviderMcpAdapter {
         await rm(configRoot, { recursive: true, force: true });
         throw error;
       }
+      // Only conversation-approved servers are approved here; workflow steps
+      // never pass `approvedServerNames`, so their arguments stay unchanged.
+      const approvesServers = (context.approvedServerNames?.length ?? 0) > 0;
       return {
         configRoot,
+        ...(approvesServers ? { args: [CURSOR_APPROVE_MCPS_FLAG] } : {}),
         dispose: onceDispose(async () => {
           await rm(configRoot, { recursive: true, force: true });
         }),

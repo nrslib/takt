@@ -18,7 +18,7 @@ import type {
 } from './types.js';
 import { isStdioServer } from './types.js';
 import { validateTransports, onceDispose, noopDispose, classifyMcpFailure } from './adapter.js';
-import { isTrustedTaskStateMcpServers } from './task-state.js';
+import { isTrustedConversationMcpServers, isTrustedTaskStateMcpServers } from './task-state.js';
 import { ensureCurrentTmpDirExists } from '../../../shared/utils/index.js';
 
 export function createCopilotMcpAdapter(): ProviderMcpAdapter {
@@ -33,13 +33,13 @@ export function createCopilotMcpAdapter(): ProviderMcpAdapter {
       if (!servers.enabled || Object.keys(servers.servers).length === 0) {
         return { dispose: noopDispose, args: [] };
       }
-      // MCP tool approval must not contradict TAKT's permission mode
-      // (order.md:220). A readonly execution must not enable MCP servers
-      // because MCP tools can have side effects the permission mode forbids.
+      // Only conversation-owned records and the generated task-state record
+      // may bypass the general readonly restriction.
       const hasTrustedTaskStateServers = context.permissionMode === 'readonly'
         && context.taskStateMcpServers === servers.servers
         && isTrustedTaskStateMcpServers(context.taskStateMcpServers);
-      if (context.permissionMode === 'readonly' && !hasTrustedTaskStateServers) {
+      if (context.permissionMode === 'readonly' && !hasTrustedTaskStateServers
+        && !isTrustedConversationMcpServers(servers.servers)) {
         throw new Error(
           'Copilot MCP adapter cannot prepare MCP servers under readonly permission mode: MCP tools may have side effects that contradict the permission mode (order.md:220)',
         );
@@ -55,7 +55,7 @@ export function createCopilotMcpAdapter(): ProviderMcpAdapter {
         throw error;
       }
       return {
-        args: [`--additional-mcp-config=@${configPath}`],
+        args: [`--additional-mcp-config=@${configPath}`, ...toCopilotMcpToolAllowances(context)],
         path: configPath,
         dispose: onceDispose(async () => {
           await rm(tempDir, { recursive: true, force: true });
@@ -66,6 +66,26 @@ export function createCopilotMcpAdapter(): ProviderMcpAdapter {
       return classifyMcpFailure(error);
     },
   };
+}
+
+/**
+ * The client passes no allow-all flag in readonly or without a permission mode,
+ * so the approved MCP tools are named with `--allow-tool`, which the GitHub
+ * Copilot CLI documentation describes as allowing a specific tool without
+ * asking for approval. A bare server name covers every tool of that server and
+ * `server(tool)` covers one tool
+ * (https://docs.github.com/en/copilot/concepts/agents/about-copilot-cli).
+ * `edit` and `full` already allow every tool, and workflow steps carry no
+ * approvals, so nothing is added for them.
+ */
+function toCopilotMcpToolAllowances(context: ProviderMcpContext): string[] {
+  if (context.permissionMode !== undefined && context.permissionMode !== 'readonly') {
+    return [];
+  }
+  const wholeServers = (context.approvedServerNames ?? []).map((name) => `--allow-tool=${name}`);
+  const individualTools = Object.entries(context.toolApprovalAllowlist ?? {})
+    .flatMap(([server, tools]) => tools.map((tool) => `--allow-tool=${server}(${tool})`));
+  return [...wholeServers, ...individualTools];
 }
 
 function toCopilotMcpJson(
