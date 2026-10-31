@@ -544,7 +544,7 @@ describe('release verification wiring', () => {
     expect(deepSeekJob?.strategy?.matrix?.os).toEqual([
       'ubuntu-24.04',
       'ubuntu-24.04-arm',
-      'macos-14',
+      'macos-15',
     ]);
     expect(nodeSetup?.with?.['node-version']).toBe('22.22.0');
     expect(install?.env?.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD).toBe('1');
