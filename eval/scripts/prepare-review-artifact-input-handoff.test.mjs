@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { readFileSync, readdirSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
@@ -26,6 +26,21 @@ test('all four cases use the exact declared producer receipt in the current Phas
     ['backend-review.md', 'testing-review.md'],
     ['review-target.md', 'backend-review.md', 'review-summary.md'],
   ]);
+  const replanProducerRoot = join(
+    repo,
+    'eval/.work/review-artifact-input-handoff/.takt/runs/eval/replan/reports/subworkflows',
+  );
+  const resolutionPaths = readdirSync(replanProducerRoot, { recursive: true })
+    .filter((path) => basename(path) === 'review-resolution.md');
+  assert.equal(resolutionPaths.length, 1);
+  const producerDir = dirname(join(replanProducerRoot, resolutionPaths[0]));
+  for (const name of ['review-resolution.md', 'summary.md']) {
+    assert.ok(readFileSync(join(producerDir, name), 'utf8').trim().length > 0,
+      `final-gate must produce a nonempty ${name}`);
+  }
+  const replanReceipt = receipts.find((receipt) => receipt.case === 'replan');
+  assert.ok(replanReceipt.injected_report_scopes.every((report) => report.reference !== 'summary.md'),
+    'replan must receive only its selected report, even when the producer writes multiple reports');
   for (const receipt of receipts) {
     assert.equal(receipt.baseline_sha, '946a0283df86e00dce84b7d381a6bb188b29594b');
     const oldPrompt = readFileSync(join(promptDir, `${receipt.case}-baseline.md`), 'utf8');

@@ -21,6 +21,7 @@ export function DirectorView({ client, lang, onExit }: {
   const editorRef = useRef(editor);
   const submitting = useRef(false);
   const displayed = useRef(new Set<string>());
+  const displayedMessages = useRef(new Set<string>());
   const mounted = useRef(true);
   const { stdout } = useStdout();
   const [columns, setColumns] = useState(stdout.columns ?? 80);
@@ -37,6 +38,10 @@ export function DirectorView({ client, lang, onExit }: {
   useEffect(() => {
     mounted.current = true;
     const unsubscribe = client.onOutput((output) => {
+      if (output.kind === 'user_message' && !displayedMessages.current.has(output.operationId)) {
+        displayedMessages.current.add(output.operationId);
+        append(output.message, 'user');
+      }
       if (output.kind === 'result' && output.result.kind !== 'goal_registered') append(output.result.message);
       if (output.kind === 'notice') {
         if (!displayed.current.has(output.id)) { displayed.current.add(output.id); append(output.message); }
@@ -66,7 +71,7 @@ export function DirectorView({ client, lang, onExit }: {
       submitting.current = true;
       edit(commitEditorInput(editorRef.current, text));
       append(text, 'user');
-      void client.submit({ kind: 'message', text }).then((result) => {
+      void client.submit({ kind: 'message', text }, (id) => { displayedMessages.current.add(id); }).then((result) => {
         if (result.kind === 'error') append(result.message);
         else if (result.kind === 'busy') append(getLabel('manager.conversation.busy', lang));
       }).catch((error: unknown) => append(getErrorMessage(error))).finally(() => { submitting.current = false; });

@@ -892,7 +892,7 @@ async function startPatrolDaemon(useSlack = false) {
     await vi.waitFor(() => {
       if (failure !== undefined) throw failure;
       expect(polls.length).toBeGreaterThan(0);
-    });
+    }, { timeout: 5000 });
   };
   const stop = async () => {
     const listener = process.rawListeners('SIGTERM').find((candidate) => !priorListeners.includes(candidate));

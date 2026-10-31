@@ -23,6 +23,8 @@ import type { Goal } from '../infra/goals/schema.js';
 import { saveManagerToolPermissionInquiry } from '../features/manager/toolPermissionInquiry.js';
 import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
 import * as goalService from '../infra/goals/service.js';
+import { ConversationTransferReceiver } from '../features/manager/conversationTransferReceiver.js';
+import type { ConversationDelivery } from '../features/manager/conversationPort.js';
 
 const doubles = vi.hoisted(() => ({ assignment: vi.fn() }));
 vi.mock('../features/manager/assignment.js', async (original) => ({ ...await original<typeof import('../features/manager/assignment.js')>(),
@@ -76,6 +78,106 @@ afterEach(async () => {
   for (const value of clients) value.socket.destroy();
   await service.close();
   await server.close();
+});
+
+it('finishes each output transfer before newer state on both attachments', async () => {
+  const deliveries: ConversationDelivery[] = [];
+  const originalOpen = service.open;
+  const opening = vi.spyOn(service, 'open').mockImplementation(async (...args) => {
+    deliveries.push(args[1]);
+    return originalOpen(...args);
+  });
+  const first = await authenticated(); const second = await authenticated();
+  const openedFirst = await opened(first); const openedSecond = await opened(second);
+  await first.items(openedFirst.read.transferId); await second.items(openedSecond.read.transferId);
+  let resume!: () => void;
+  const gate = new Promise<void>((resolve) => { resume = resolve; });
+  let paused = 0;
+  const originalWrite = Socket.prototype.write;
+  const writing = vi.spyOn(Socket.prototype, 'write').mockImplementation(function (this: Socket, chunk: Uint8Array | string,
+    encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void), callback?: (error?: Error | null) => void): boolean {
+    const complete = typeof encodingOrCallback === 'function' ? encodingOrCallback : callback;
+    const encoding = typeof encodingOrCallback === 'string' ? encodingOrCallback : undefined;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(Buffer.from(chunk).toString('utf8'));
+    } catch {
+      return originalWrite.call(this, chunk, encoding, complete);
+    }
+    if (parsed === null || typeof parsed !== 'object') {
+      return originalWrite.call(this, chunk, encoding, complete);
+    }
+    const frame = parsed as { type: string; output?: { kind: string; purpose?: string } };
+    if (frame.type === 'event' && frame.output?.kind === 'transfer_start' && frame.output.purpose === 'output') {
+      paused++;
+      return originalWrite.call(this, chunk, encoding, (error) => { void gate.then(() => complete?.(error)); });
+    }
+    return originalWrite.call(this, chunk, encoding, complete);
+  });
+  const notice = { kind: 'notice' as const, id: 'shared-notice', message: 'Shared conversation notice' };
+  const initial = first.frames.find(({ output }) => output?.transferId === openedFirst.read.transferId)!.output!;
+  const version = { revision: initial.revision, stateSequence: initial.stateSequence, operationId: null };
+  const sending = deliveries.map((delivery) => delivery.deliver(selected.conversationId, notice, version));
+  try {
+    await vi.waitFor(() => expect(paused).toBe(2));
+    const state = first.latestState()!;
+    await Promise.all(deliveries.map((delivery) => delivery.deliver(selected.conversationId,
+      { kind: 'pending', state }, { ...version, stateSequence: version.stateSequence + 1 })));
+    resume();
+    await Promise.all(sending);
+    const responses = await Promise.all([first.request('snapshot', { attachmentId: openedFirst.attachmentId }),
+      second.request('snapshot', { attachmentId: openedSecond.attachmentId })]);
+    await first.items(responses[0]!.result!.read.transferId);
+    await second.items(responses[1]!.result!.read.transferId);
+    for (const value of [first, second]) {
+      const observer = { state: vi.fn(), item: vi.fn(), output: vi.fn(), read: vi.fn(), remove: vi.fn() };
+      const receiver = new ConversationTransferReceiver(selected.conversationId, observer);
+      expect(() => { for (const frame of value.frames) if (frame.type === 'event') receiver.receive(frame); }).not.toThrow();
+      expect(observer.output.mock.calls.filter(([output]) => output.kind === 'notice').map(([output]) => output)).toEqual([notice]);
+    }
+  } finally { resume(); await Promise.all(sending); writing.mockRestore(); opening.mockRestore(); }
+});
+
+it('bounds admitted requests across input batches while responses are pending', async () => {
+  const value = await authenticated(); const initial = await opened(value); await value.items(initial.read.transferId);
+  let resume!: () => void;
+  const gate = new Promise<void>((resolve) => { resume = resolve; });
+  const snapshot = service.snapshot.bind(service);
+  const reading = vi.spyOn(service, 'snapshot').mockImplementation(async (id) => { await gate; return snapshot(id); });
+  const frames = Array.from({ length: 1000 }, (_, index) => encodeConversationFrame({ protocolVersion: 1, type: 'request',
+    requestId: `bounded-${index}`, method: 'snapshot', params: { attachmentId: initial.attachmentId } }));
+  try {
+    value.socket.write(Buffer.concat(frames));
+    await vi.waitFor(() => expect(reading.mock.calls.length).toBeGreaterThan(1));
+    await new Promise<void>((resolve) => { setTimeout(resolve, 100); });
+    const bound = Math.ceil(2 * 16 * 1024 / Math.min(...frames.map((frame) => frame.length))) + 1;
+    expect(reading.mock.calls.length).toBeLessThanOrEqual(bound);
+    resume();
+    await vi.waitFor(() => expect(value.frames.filter((frame) => frame.requestId?.startsWith('bounded-'))).toHaveLength(frames.length), { timeout: 10000 });
+    expect(value.socket.destroyed).toBe(false);
+  } finally { resume(); reading.mockRestore(); }
+});
+
+it('admits a second large request but bounds further pending frames', async () => {
+  const value = await authenticated(); const initial = await opened(value); await value.items(initial.read.transferId);
+  let resume!: () => void;
+  const gate = new Promise<void>((resolve) => { resume = resolve; });
+  const submitting = vi.spyOn(service, 'submit').mockImplementation(async () => {
+    await gate;
+    return { kind: 'busy', operationId: '650e8400-e29b-41d4-a716-446655440001' };
+  });
+  const frames = Array.from({ length: 3 }, (_, index) => encodeConversationFrame({ protocolVersion: 1, type: 'request',
+    requestId: `large-pending-${index}`, method: 'submit', params: { attachmentId: initial.attachmentId,
+      speaker: selected.speaker, command: { kind: 'message', text: 'x'.repeat(128 * 1024) } } }));
+  try {
+    value.socket.write(Buffer.concat(frames));
+    await vi.waitFor(() => expect(submitting).toHaveBeenCalledTimes(2));
+    await new Promise<void>((resolve) => { setTimeout(resolve, 100); });
+    expect(submitting).toHaveBeenCalledTimes(2);
+    resume();
+    await vi.waitFor(() => expect(value.frames.filter((frame) => frame.requestId?.startsWith('large-pending-'))).toHaveLength(frames.length));
+    expect(value.socket.destroyed).toBe(false);
+  } finally { resume(); submitting.mockRestore(); }
 });
 
 it('continues the daemon-owned director session over IPC after detach without changing the manager record', async () => {
