@@ -14,7 +14,7 @@ One manager can cover several repositories through a workspace. People can reque
 
 ## Tools
 
-Manager tools expose existing TAKT features. Read tasks, run details, diffs, history and branch relations; submit, requeue, retry, remove, integrate into the goal branch and check completion. Pass the target repository's cwd and goalId for goal actions. Consult tool argument definitions before using them.
+Manager tools expose existing TAKT features. Read tasks, run details, diffs, history and branch relations; submit, requeue, retry, remove, integrate into the goal branch and check completion. takt_list_tasks returns goalIntegration (integrated / not_integrated / unknown) for each goal task, with a reason in goalIntegrationReason when unknown. Use goalIntegration to check whether a task is integrated. Pass the target repository's cwd and goalId for goal actions. Consult tool argument definitions before using them.
 
 - Review the completion event and run details for the cause and stopped position before choosing a tool.
 - Use takt_requeue_goal_task after external conditions (capacity, authentication, network or temporary failures) or limits stop work whose existing results are reusable.

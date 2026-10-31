@@ -22,7 +22,7 @@ export async function runGoalGit(
   const managed = spawnManagedProcess('git', [
     '-c', 'commit.gpgSign=false', '-c', 'merge.gpgSign=false', ...args,
   ], {
-    cwd, env: await buildSafeGitEnvironment(cwd, { allowGitHooks: false, allowGitFilters: false }),
+    cwd, env: await buildSafeGitEnvironment(cwd, { allowGitHooks: false, allowGitFilters: false }, signal),
     stdio: ['ignore', 'pipe', 'pipe'],
   }, signal);
   const { child } = managed;

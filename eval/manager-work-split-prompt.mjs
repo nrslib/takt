@@ -1,6 +1,6 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
 import { toJSONSchema } from 'zod/v4';
@@ -52,7 +52,18 @@ export function buildManagerSystemPrompt(fixture) {
     const persona = resolveFacetByName('manager', 'personas', context);
     const policy = resolveFacetByName('manager', 'policies', context);
     const knowledge = resolveFacetByName('manager', 'knowledge', context);
-    const instructionSource = resolveFacetByNameWithSource('manager', 'instructions', context);
+    const instructionRoot = process.env.TAKT_EVAL_MANAGER_INSTRUCTION_ROOT;
+    if (instructionRoot !== undefined && !isAbsolute(instructionRoot)) {
+      throw new Error('TAKT_EVAL_MANAGER_INSTRUCTION_ROOT must be an absolute path');
+    }
+    const instructionSource = instructionRoot === undefined
+      ? resolveFacetByNameWithSource('manager', 'instructions', context)
+      : {
+        content: readFileSync(join(instructionRoot, fixture.lang, 'manager.md'), 'utf8'),
+        sourcePath: join(instructionRoot, fixture.lang, 'manager.md'),
+        facetType: 'instructions',
+        refName: 'manager',
+      };
     const instruction = instructionSource === undefined ? undefined
       : resolveRefToContent('manager', { manager: instructionSource }, projectDir, 'instructions', context);
     if ([persona, policy, knowledge, instruction].some((body) => body === undefined)) {
