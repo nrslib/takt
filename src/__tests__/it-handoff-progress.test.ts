@@ -338,7 +338,7 @@ describe('handoff command progress on the released terminal', () => {
       else expect(mocks.confirm.mock.calls[0]?.[0]).toBe(getLabel('tui.assistantRetry.requeueConfirm', lang, { task: 'parser-repair', summary: 'Parser repair', workflow: 'development', start: 'Restart implement' }));
     });
 
-    it('shows the instruction-composition label only between recipient selection and confirmation', async () => {
+    it('shows the instruction-composition label before confirming the sole recipient', async () => {
       let initial: Screen = [];
       let waiting: Screen = [];
       mocks.callAI.mockImplementation(async (_prompt, _system, _tools, _cwd, _ctx, opts) => {
@@ -353,7 +353,7 @@ describe('handoff command progress on the released terminal', () => {
 
       assertProgress(initial, 'tell', lang);
       assertProgress(waiting, 'tell', lang, 'Latest instruction');
-      expect(promptScreens.map((item) => item.kind)).toEqual(['select', 'confirm']);
+      expect(promptScreens.map((item) => item.kind)).toEqual(['confirm']);
       expect(promptScreens.every((item) => item.screen.every((line) => !SPINNER.test(line)))).toBe(true);
       expect(mocks.confirm.mock.calls[0]?.[0]).toBe(getLabel('tui.tell.confirm', lang, { task: 'parser-repair', summary: 'Parser repair', workflow: 'development', step: 'implement', runSlug: 'running-run', content: 'Complete instruction' }));
       expect(mocks.issueTell).toHaveBeenCalledWith('/repo', 'running-run', 'Complete instruction');

@@ -230,14 +230,12 @@ describe('tell command and live intervention file store', () => {
           tasks: [expect.objectContaining({ name: taskName, summary: expectedSummary })],
         });
 
-        mockSelectOptionWithDefault.mockClear().mockResolvedValueOnce(null);
+        mockConfirmWithCancel.mockClear().mockResolvedValueOnce({ kind: 'cancelled' });
         await runTellCommand({
           cwd: projectCwd, lang: 'en', inlineText: 'Keep the scope.', history: [],
           sessionContext: makeSessionContext(), preferredRunSlug: runSlug,
         });
-        expect(mockSelectOptionWithDefault).toHaveBeenCalledWith(expect.any(String), [
-          expect.objectContaining({ value: runSlug, label: taskName, description: expectedSummary }),
-        ], runSlug);
+        expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringContaining(expectedSummary));
       }
     }
   });
@@ -258,6 +256,7 @@ describe('tell command and live intervention file store', () => {
       ],
     }), 'utf8');
 
+    mockCallAIWithRetry.mockResolvedValueOnce({ result: { success: true, content: '{"runSlug":"run-b"}' } });
     const notice = await runTellCommand({
       cwd: projectCwd,
       lang: 'en',
@@ -267,17 +266,10 @@ describe('tell command and live intervention file store', () => {
       preferredRunSlug: 'run-a',
     });
 
-    expect(mockSelectOptionWithDefault).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.arrayContaining([
-        expect.objectContaining({ value: 'run-a', label: 'task-a' }),
-        expect.objectContaining({ value: 'run-b', label: 'task-b' }),
-      ]),
-      'run-a',
-    );
+    expect(mockSelectOptionWithDefault).not.toHaveBeenCalled();
     expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringContaining('task-b'));
     expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringContaining('Add an audit log for Task B.'));
-    expect(mockCallAIWithRetry).toHaveBeenCalledOnce();
+    expect(mockCallAIWithRetry).toHaveBeenCalledTimes(2);
     expect(notice).toContain('instruction #1');
 
     const storeA = new LiveInterventionFileStore(projectCwd, 'run-a');
@@ -315,11 +307,8 @@ describe('tell command and live intervention file store', () => {
         sessionContext: makeSessionContext(), preferredRunSlug: runSlug,
       });
 
-      expect(mockSelectOptionWithDefault).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.arrayContaining([expect.objectContaining({ value: runSlug, label: task.name })]),
-        runSlug,
-      );
+      expect(mockSelectOptionWithDefault).not.toHaveBeenCalled();
+      expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringContaining(task.name));
       expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringContaining(runSlug));
       expect(mockConfirmWithCancel).toHaveBeenCalledWith(expect.stringContaining('Keep the agreed merge scope.'));
       expect(notice).toContain('instruction #1');

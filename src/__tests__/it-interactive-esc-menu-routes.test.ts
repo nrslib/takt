@@ -75,9 +75,6 @@ describe('readline conversation confirmation to menu routes', () => {
         await terminal.send('\x1B[B\r');
         await terminal.waitForPrompt(getLabel('interactive.formalSpecPrompt', 'en'), mark);
       } else if (route === 'tell') {
-        await terminal.waitForPrompt(getLabel('tui.tell.selectPrompt', 'en'), mark);
-        mark = terminal.mark();
-        await terminal.send('\r');
         await terminal.waitForPrompt(tellInstruction, mark);
         await terminal.waitForPrompt('[Y/n]:', mark);
       } else {
