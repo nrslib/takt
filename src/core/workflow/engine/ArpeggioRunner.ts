@@ -30,6 +30,7 @@ import type {
   LiveInterventionChannel,
   PreparedLiveInterventionDelivery,
 } from '../live-intervention/types.js';
+import { resolveLiveInterventionPrompt } from '../live-intervention/prompt.js';
 import {
   createLiveInterventionDeliveryCommitter,
   type LiveInterventionDeliveryCommitter,
@@ -654,7 +655,7 @@ export class ArpeggioRunner {
             },
             instructionContext,
             runtime,
-            liveDelivery?.prompt,
+            resolveLiveInterventionPrompt(liveIntervention, liveDelivery, agentOptions.language),
           );
           if (!didEmitPhaseStart) {
             throw new Error(`Missing prompt parts for phase start: ${step.name}:1`);

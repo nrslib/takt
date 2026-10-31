@@ -154,6 +154,7 @@ export interface ResolvedTaskExecution {
   resumePoint?: WorkflowResumePoint;
   restartPoint?: WorkflowRestartPoint;
   resumeSource?: RunResumeSource;
+  sourceResumePoint?: WorkflowResumePoint;
   autoPr: boolean;
   draftPr: boolean;
   managedPr: boolean;
@@ -304,6 +305,7 @@ export async function resolveTaskExecution(
   const configuredStartStep = resolveTaskStartStepValue(normalizedData);
   const resumePoint = normalizedData.resume_point;
   const restartPoint = normalizedData.restart_point as WorkflowRestartPoint | undefined;
+  const sourceResumePoint = normalizedData.source_resume_point;
   const contextOverride = options?.taskContext;
   let prContext = resolvePrReviewContext(task.name, normalizedData, defaultCwd, contextOverride);
 
@@ -448,6 +450,7 @@ export async function resolveTaskExecution(
     ...(retryResume.resumePoint ? { resumePoint: retryResume.resumePoint } : {}),
     ...(retryResume.restartPoint ? { restartPoint: retryResume.restartPoint } : {}),
     ...(resumeSource ? { resumeSource } : {}),
+    ...(retryResume.restartPoint !== undefined && sourceResumePoint !== undefined ? { sourceResumePoint } : {}),
     ...(data.issue !== undefined ? { issueNumber: data.issue } : {}),
     ...(prContext
       ? { prNumber: prContext.prNumber }

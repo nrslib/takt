@@ -119,11 +119,11 @@ export interface ReportPhaseRunnerContext extends BasePhaseRunnerContext {
   /** Build resume options for a step */
   buildResumeOptions: (step: WorkflowStep, sessionId: string, overrides: Pick<RunAgentOptions, 'maxTurns'>) => RunAgentOptions;
   /** Build options for report phase retry in a new session */
-  buildNewSessionReportOptions: (step: WorkflowStep, overrides: Pick<RunAgentOptions, 'allowedTools' | 'maxTurns'>) => RunAgentOptions;
+  buildNewSessionReportOptions: (step: WorkflowStep, overrides: Pick<RunAgentOptions, 'maxTurns'>) => RunAgentOptions;
   buildFallbackReportOptions: (
     step: WorkflowStep,
     failedPrimaryOptions: RunAgentOptions,
-    overrides: Pick<RunAgentOptions, 'allowedTools' | 'maxTurns'>,
+    overrides: Pick<RunAgentOptions, 'maxTurns'>,
   ) => RunAgentOptions | undefined;
   resolveReportFallbackProviderModel: () => StepProviderInfo | undefined;
   /** Update persona session after a phase run */

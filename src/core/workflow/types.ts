@@ -684,6 +684,7 @@ export interface WorkflowEngineOptions extends PrMergeOptions {
   /** Stateless authored path for retrying from a new nested position. */
   restartPoint?: WorkflowRestartPoint;
   resumeSource?: RunResumeSource;
+  sourceResumePoint?: WorkflowResumePoint;
   operationJournal?: WorkflowOperationJournalContext;
   /** Override report directory name (without parent path). */
   reportDirName?: string;

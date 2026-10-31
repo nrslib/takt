@@ -150,7 +150,8 @@ const { buildDynamicParallelSelectionIdentity } = await import('../../dist/core/
       if (!step?.outputContracts?.some((entry) => entry.name === name)) {
         throw new Error(`${id}: ${workflow.name}/${stepName} does not contract ${name}`);
       }
-      participation.record(workflow, stepName, path, [name], parallelParent);
+      const reportNames = participation.get(workflow, stepName, path, parallelParent)?.report_names ?? [];
+      participation.record(workflow, stepName, path, [...reportNames, name], parallelParent);
       writeFileSync(join(directory, name), body.trim() + '\n');
     };
     const registerDynamic = (workflow, stepName, path, directory, selected) => {
@@ -284,6 +285,8 @@ const { buildDynamicParallelSelectionIdentity } = await import('../../dist/core/
       const call = registerCall(current, 'peer-review', [], reportDir);
       registerReport(call.child, 'final-gate', call.path, call.directory, 'review-resolution.md',
         '# Review resolution\nBLOCKED. EXT-LOCK-27: the production hardware approval is pending with the operator. No local code or test task remains; retain the exact external acceptance evidence.');
+      registerReport(call.child, 'final-gate', call.path, call.directory, 'summary.md',
+        '# Summary\nBLOCKED: production hardware approval is pending. No local implementation or verification work remains.');
     },
     currentTarget: (workflow) => stepOf(workflow, 'replan'),
     baselineTarget: (currentTarget) => oldInstruction(currentTarget, 'replan'),

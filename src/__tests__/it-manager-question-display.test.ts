@@ -151,6 +151,14 @@ function expectGoalMemory(memory: string, goal: Goal): void {
   });
 }
 
+function expectConversationInput(prompt: string, text: string, goal: Goal, operationId: string): void {
+  const [conversation, context] = prompt.split('\n\nBusiness context (not approval): ');
+  const [turnContext, ...paragraphs] = conversation!.split('\n\n');
+  expect(turnContext!.split('\n')[0]).toBe(`Conversation operation ID: ${operationId}`);
+  expect(paragraphs.join('\n\n')).toBe(text);
+  expectGoalMemory(JSON.stringify(JSON.parse(context!).goals), goal);
+}
+
 const irreversibleWarning = /取り消せ|元に戻せ|不可逆|cannot.*undo|irreversible/iu;
 
 async function expectAbortConfirmation(goal: Goal): Promise<void> {
@@ -575,11 +583,13 @@ it.each([
 ])('keeps abort examples as conversation text without opening confirmation: %s', async (text) => {
   const saved = goalRecord();
   const { store, call, send } = await mountGoalControls('ja', saved);
+  const submit = vi.spyOn(session!, 'submit');
   await send(text);
   await vi.waitFor(() => expect(call).toHaveBeenCalledOnce(), { timeout: 10_000 });
-  const [conversation, context] = call.mock.calls[0]![0].split('\n\nBusiness context (not approval): ');
-  expect(conversation).toBe(text);
-  expectGoalMemory(JSON.stringify(JSON.parse(context!).goals), saved);
+  expect(submit).toHaveBeenCalledOnce();
+  const submission = await submit.mock.results[0]!.value;
+  if (submission.kind !== 'accepted') throw new Error('Expected an accepted conversation turn');
+  expectConversationInput(call.mock.calls[0]![0], text, saved, submission.operationId);
   expect(await store.get(saved.id)).toEqual(saved);
   expect(app!.lastFrame()!.replace(/\s+/gu, ' ')).not.toMatch(irreversibleWarning);
 });
@@ -810,12 +820,14 @@ it.each([
 ])('keeps command-like conversation text as ordinary input: %s', async (prefix) => {
   const saved = goalRecord();
   const { store, call, send } = await mountGoalControls('ja', saved);
+  const submit = vi.spyOn(session!, 'submit');
   const text = prefix.includes('GOAL') ? prefix.replace('GOAL', goalId) : `${prefix} ${goalId}`;
   await send(text);
   await vi.waitFor(() => expect(call).toHaveBeenCalledOnce(), { timeout: 10_000 });
-  const [conversation, context] = call.mock.calls[0]![0].split('\n\nBusiness context (not approval): ');
-  expect(conversation).toBe(text);
-  expectGoalMemory(JSON.stringify(JSON.parse(context!).goals), saved);
+  expect(submit).toHaveBeenCalledOnce();
+  const submission = await submit.mock.results[0]!.value;
+  if (submission.kind !== 'accepted') throw new Error('Expected an accepted conversation turn');
+  expectConversationInput(call.mock.calls[0]![0], text, saved, submission.operationId);
   expect(await store.get(goalId)).toEqual(saved);
 });
 

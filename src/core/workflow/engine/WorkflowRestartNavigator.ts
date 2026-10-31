@@ -41,6 +41,18 @@ export class WorkflowRestartNavigator {
     return targetStep.name;
   }
 
+  isSelectedCallPath(
+    step: WorkflowStep,
+    callStack: readonly WorkflowResumePointEntry[],
+  ): boolean {
+    if (!this.active) {
+      return false;
+    }
+    this.assertCallStackMatches(callStack);
+    const entry = this.restartPoint.stack[callStack.length];
+    return entry?.kind === 'workflow_call' && entry.step === step.name;
+  }
+
   resolveChildStartStep(
     childWorkflow: WorkflowConfig,
     callStack: readonly WorkflowResumePointEntry[],

@@ -152,6 +152,9 @@ export class WorkflowEngine extends EventEmitter {
     const restartPoint = options.restartPoint === undefined
       ? undefined
       : WorkflowRestartPointSchema.parse(options.restartPoint);
+    const sourceResumePoint = options.sourceResumePoint === undefined
+      ? undefined
+      : parseWorkflowResumePoint(options.sourceResumePoint);
     if (resumePoint !== undefined && restartPoint !== undefined) {
       throw new Error('Workflow engine cannot own both resumePoint and restartPoint');
     }
@@ -248,16 +251,21 @@ export class WorkflowEngine extends EventEmitter {
       this.options.resumePoint,
       initialMaxSteps,
     );
-    if (restartPoint !== undefined && this.options.resumeSource?.sourceRunSlug !== undefined) {
-      const sourceResumePoint = readRunMetaBySlug(
-        this.cwd,
-        this.options.resumeSource.sourceRunSlug,
-        undefined,
-        this.options.runPathsDirectory,
-      )?.resumePoint;
-      if (sourceResumePoint !== undefined) {
-        this.sharedRuntime.workflowCallInvocationEvidence = restoreWorkflowCallInvocationEvidence(sourceResumePoint);
-        this.sharedRuntime.resumeInvocationSource = sourceResumePoint;
+    if (restartPoint !== undefined) {
+      const sourceRunSlug = this.options.resumeSource?.sourceRunSlug;
+      const restoredSourceResumePoint = sourceResumePoint ?? (sourceRunSlug === undefined
+        ? undefined
+        : readRunMetaBySlug(
+          this.cwd,
+          sourceRunSlug,
+          undefined,
+          this.options.runPathsDirectory,
+        )?.resumePoint);
+      if (restoredSourceResumePoint !== undefined) {
+        this.sharedRuntime.workflowCallInvocationEvidence = restoreWorkflowCallInvocationEvidence(restoredSourceResumePoint);
+        this.sharedRuntime.workflowStepParticipationIndex = restoreWorkflowStepParticipationIndex(restoredSourceResumePoint);
+        this.sharedRuntime.resumeInvocationSource = restoredSourceResumePoint;
+        resumeWorkflowMatches(restoredSourceResumePoint.stack[0]!, this.config);
       }
     }
     this.sharedRuntime.resumeInvocationSource ??= this.options.resumePoint;
@@ -274,16 +282,19 @@ export class WorkflowEngine extends EventEmitter {
     this.sharedRuntime.workflowStepParticipationIndex ??=
       restoreWorkflowStepParticipationIndex(this.options.resumePoint);
     this.sharedRuntime.reportGenerationIndex ??=
-      new ReportGenerationIndex(this.options.resumePoint?.missing_report_generations);
+      new ReportGenerationIndex(
+        this.options.resumePoint?.missing_report_generations,
+        this.options.resumePoint?.report_input_recoveries,
+      );
     if (
       this.sharedRuntime.resumeArtifactOccurrenceIndex === undefined
       && (this.options.resumeSource?.resumeMode === 'requeue' || this.options.resumeSource?.resumeMode === 'retry')
     ) {
       const manifest = readResumeReportSnapshotManifest(this.cwd, runPaths.slug, this.options.runPathsDirectory);
-      const sourceResumePoint = manifest === undefined
+      const artifactSourceResumePoint = sourceResumePoint ?? (manifest === undefined
         ? undefined
-        : readRunMetaBySlug(this.cwd, manifest.sourceRunSlug, undefined, this.options.runPathsDirectory)?.resumePoint;
-      if (manifest !== undefined && sourceResumePoint === undefined) {
+        : readRunMetaBySlug(this.cwd, manifest.sourceRunSlug, undefined, this.options.runPathsDirectory)?.resumePoint);
+      if (manifest !== undefined && artifactSourceResumePoint === undefined) {
         log.warn(
           `${this.options.resumeSource?.resumeMode === 'retry' ? 'Retry' : 'Requeue'} artifact occurrence restoration is unavailable because source run metadata or resume point is missing`,
           { sourceRunSlug: manifest.sourceRunSlug },
@@ -291,7 +302,7 @@ export class WorkflowEngine extends EventEmitter {
       }
       this.sharedRuntime.resumeArtifactOccurrenceIndex = new ResumeArtifactOccurrenceIndex(
         manifest,
-        sourceResumePoint,
+        artifactSourceResumePoint,
       );
     }
     restoreActiveResumePoint(
@@ -505,10 +516,20 @@ export class WorkflowEngine extends EventEmitter {
     step: WorkflowStep,
     resumeStackPrefix: readonly WorkflowResumePointEntry[],
   ): number {
+    const selectedRestartOccurrence = isWorkflowCallStep(step)
+      && this.sharedRuntime.restartNavigator?.isSelectedCallPath(step, resumeStackPrefix) === true
+      ? this.sharedRuntime.workflowCallInvocationEvidence!.index.getSelectedRestartCallInstance(
+          this.sharedRuntime.resumeInvocationSource,
+          this.config,
+          step.name,
+          resumeStackPrefix,
+        )
+      : undefined;
     return this.resumeContinuation.claimStepOccurrence({
       step,
       resumeStackPrefix,
       state: this.state,
+      ...(selectedRestartOccurrence === undefined ? {} : { selectedRestartOccurrence }),
       ...(isWorkflowCallStep(step)
         ? {
             isOccurrenceNamespaceReserved: (occurrence: number) => (
@@ -540,12 +561,35 @@ export class WorkflowEngine extends EventEmitter {
     this.emit(event, ...args);
   }
 
+  private rebindResumeInvocationsForReportDiscovery(): void {
+    const rebinds = this.sharedRuntime.workflowCallInvocationEvidence!.index.rebindResumeInvocationsForReportDiscovery(
+      this.sharedRuntime.resumeInvocationSource,
+      this.config,
+      this.resumeStackPrefix,
+      (step) => this.options.workflowCallResolver?.({
+        parentWorkflow: this.config,
+        step,
+        projectCwd: this.projectCwd,
+        lookupCwd: this.cwd,
+      }) ?? null,
+    );
+    for (const rebind of rebinds) {
+      this.sharedRuntime.workflowStepParticipationIndex!.rebindInvocation(
+        rebind.from,
+        rebind.to,
+        rebind.previousCallInstance,
+        rebind.callInstance,
+      );
+    }
+  }
+
   private inheritPreviousReviewReports(): void {
     const resumeSource = this.options.resumeSource;
     const currentStep = this.config.steps.find((step) => step.name === this.state.currentStep);
     if (!resumeSource || !currentStep || currentStep.name !== FIX_STEP_NAME || !this.isResumeTarget(currentStep)) {
       return;
     }
+    this.rebindResumeInvocationsForReportDiscovery();
     const reportNameResult = resolveInheritedReviewReportNamesWithDiagnostics(createReviewReportDiscoveryContext({
       step: currentStep,
       workflow: this.config,
@@ -663,6 +707,7 @@ export class WorkflowEngine extends EventEmitter {
       workflow_call_invocations: workflowCallInvocations,
       workflow_step_participations: workflowStepParticipations,
       missing_report_generations: this.sharedRuntime.reportGenerationIndex!.serialized(),
+      report_input_recoveries: this.sharedRuntime.reportGenerationIndex!.serializedInputRecoveries(),
     };
   }
 
@@ -701,6 +746,7 @@ export class WorkflowEngine extends EventEmitter {
         this.resumeStackPrefix,
       );
     }
+    this.rebindResumeInvocationsForReportDiscovery();
     this.workflowCallRunner.cancelPendingInvocation();
     if (step.parallel !== undefined && !isDynamicParallelSubSteps(step.parallel)) {
       this.sharedRuntime.workflowCallInvocationEvidence!.index.clearPreviousParallelChildInvocations(
@@ -782,6 +828,7 @@ export class WorkflowEngine extends EventEmitter {
       workflow_call_invocations: workflowCallInvocations,
       workflow_step_participations: workflowStepParticipations,
       missing_report_generations: this.sharedRuntime.reportGenerationIndex!.serialized(),
+      report_input_recoveries: this.sharedRuntime.reportGenerationIndex!.serializedInputRecoveries(),
     };
     this.activeResumePoint = refreshedResumePoint;
     this.sharedRuntime.activeResumePoint = refreshedResumePoint;
@@ -1053,6 +1100,7 @@ function restoreActiveResumePoint(
     restored.workflow_call_invocations = current.workflow_call_invocations;
     restored.workflow_step_participations = current.workflow_step_participations;
     restored.missing_report_generations = current.missing_report_generations;
+    restored.report_input_recoveries = current.report_input_recoveries;
   }
 
   sharedRuntime.activeResumePoint = restored;

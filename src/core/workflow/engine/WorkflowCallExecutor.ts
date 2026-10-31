@@ -310,6 +310,11 @@ export class WorkflowCallExecutor {
         lookupCwd: this.deps.getCwd(),
       }),
     });
+    const savedChildEntry = options.resumePoint?.stack[resumeStackPrefix.length + 1];
+    if (savedChildEntry !== undefined && resumePoint === undefined) {
+      const location = JSON.stringify(`${savedChildEntry.workflow}/${savedChildEntry.step}`);
+      throw new Error(`Saved resume position ${location} cannot be resolved for workflow_call step "${step.name}"`);
+    }
     return {
       frame: currentFrame,
       ...(resumePoint !== undefined ? {
@@ -328,10 +333,18 @@ export class WorkflowCallExecutor {
   ): void {
     const parentConfig = this.deps.getConfig();
     const index = this.deps.sharedRuntime.workflowCallInvocationEvidence!.index;
-    index.rebindResumeInvocation(
+    const rebind = index.rebindResumeInvocation(
       this.deps.sharedRuntime.resumeInvocationSource, parentConfig, step.name, resumeStackPrefix, occurrence,
       this.deps.sharedRuntime.restartNavigator?.isActive() === true,
     );
+    if (rebind !== undefined) {
+      this.deps.sharedRuntime.workflowStepParticipationIndex!.rebindInvocation(
+        rebind.from,
+        rebind.to,
+        rebind.previousCallInstance,
+        rebind.callInstance,
+      );
+    }
     const existing = index.get(parentConfig, step.name, resumeStackPrefix);
     if (existing?.call_instance === occurrence) {
       if (existing.completed === true) {
@@ -420,7 +433,9 @@ export class WorkflowCallExecutor {
             expectedInvocation,
           );
         } else if ((this.deps.getOptions().resumePoint !== undefined || this.deps.getOptions().restartPoint !== undefined || this.deps.sharedRuntime.restartNavigator !== undefined)
-          && existingNamespace?.stepName === step.name && existingNamespace.workflowName === childWorkflow.name) {
+          && existingNamespace?.stepName === step.name
+          && existingNamespace.workflowName === childWorkflow.name
+          && existingNamespace.iteration === occurrence) {
           const savedOccurrence = existingNamespace.iteration;
           const sourceRecord = Object.entries(this.deps.sharedRuntime.resumeInvocationSource?.workflow_call_invocations ?? {})
             .find(([, record]) => record.report_namespace_segment === existing.report_namespace_segment);
@@ -428,14 +443,12 @@ export class WorkflowCallExecutor {
           const savedPrefix = sourceIdentity?.calls.length === resumeStackSnapshot.length
             ? resumeStackSnapshot.map((entry, index) => ({ ...entry, occurrence: sourceIdentity.calls[index]!.instance }))
             : resumeStackSnapshot;
-          const sameDefinitionNamespace = savedOccurrence === '*'
-            ? undefined
-            : buildWorkflowCallSiteIdentity({
-                stack: [...savedPrefix, buildWorkflowResumePointEntry(
-                  parentConfig, step.name, 'workflow_call', savedOccurrence, this.deps.state.stepIterations, savedOccurrence,
-                )],
-                childWorkflow,
-              }).runPathSegment;
+          const sameDefinitionNamespace = buildWorkflowCallSiteIdentity({
+            stack: [...savedPrefix, buildWorkflowResumePointEntry(
+              parentConfig, step.name, 'workflow_call', savedOccurrence, this.deps.state.stepIterations, savedOccurrence,
+            )],
+            childWorkflow,
+          }).runPathSegment;
           if (existing.report_namespace_segment !== sameDefinitionNamespace) {
             log.warn('Saved workflow call site digest differs from current workflow', { step: step.name, saved: existing.report_namespace_segment, current: expectedInvocation.report_namespace_segment });
           }

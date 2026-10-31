@@ -31,6 +31,7 @@ import {
   buildWorkflowResumePointEntry,
 } from '../core/workflow/workflow-reference.js';
 import { readRunMetaBySlug } from '../core/workflow/run/run-meta.js';
+import { WorkflowEngine } from '../core/workflow/engine/WorkflowEngine.js';
 
 const tempDirs = new Set<string>();
 let originalTaktConfigDir: string | undefined;
@@ -1585,6 +1586,98 @@ describe('task restart persistence and execution resolution', () => {
       'child-first-persona',
     ]);
     expect(getScenarioQueue()?.remaining).toBe(0);
+  });
+
+  it('should continue multiple calls after a root-agent retry when the parent ref changed and source metadata is missing', async () => {
+    const projectDir = createProject();
+    writeRootRestartLifecycleWorkflows(projectDir);
+    writeFailedTask(projectDir);
+    const rootWorkflowPath = path.join(projectDir, '.takt', 'workflows', 'default.yaml');
+    fs.writeFileSync(rootWorkflowPath, fs.readFileSync(rootWorkflowPath, 'utf-8')
+      .replace('max_steps: 10', 'max_steps: 4')
+      .replace('      - condition: ok\n        next: COMPLETE', '      - condition: ok\n        next: selected'));
+    invalidateAllResolvedConfigCache();
+    const root = loadWorkflowByIdentifier('default', projectDir);
+    if (root === null) throw new Error('Expected root restart workflow');
+    const restartPoint: WorkflowRestartPoint = {
+      stack: [buildWorkflowRestartPointEntry(root, 'selected', 'agent')],
+    };
+    const sourceRunSlug = 'source-run';
+    const sourceNamespace = `iteration-4--step-delegate--workflow-child--site-${'a'.repeat(64)}`;
+    const sourceReportDir = path.join(
+      projectDir, '.takt', 'runs', sourceRunSlug, 'reports', 'subworkflows', sourceNamespace,
+    );
+    fs.mkdirSync(sourceReportDir, { recursive: true });
+    fs.writeFileSync(path.join(sourceReportDir, 'result.md'), 'saved call artifact');
+    const sourceResumePoint: WorkflowResumePoint = {
+      version: 2,
+      stack: [{
+        workflow: 'default', workflow_ref: 'old-parent-ref', step: 'selected', kind: 'agent', occurrence: 1,
+      }],
+      iteration: 2,
+      elapsed_ms: 100,
+      workflow_call_invocations: {
+        '{"workflow":"old-parent-ref","step":"delegate","calls":[]}': {
+          call_instance: 4,
+          report_namespace_segment: sourceNamespace,
+        },
+      },
+      workflow_step_participations: {},
+    };
+    expect(readRunMetaBySlug(projectDir, sourceRunSlug)).toBeNull();
+    const runner = new TaskRunner(projectDir);
+    runner.requeueTask('nested-retry', ['failed'], {
+      startStep: undefined,
+      retryNote: 'restart root agent with saved call occurrences',
+      resumePoint: undefined,
+      workflow: undefined,
+      taskDir: undefined,
+      sourceRunSlug,
+      restartPoint,
+      sourceResumePoint,
+    });
+    const running = runner.claimNextTasks(1)[0];
+    if (running === undefined) throw new Error('Expected root-agent restart task');
+    const mockCallLog = path.join(projectDir, 'root-agent-occurrences.ndjson');
+    process.env.TAKT_MOCK_CALL_LOG = mockCallLog;
+    setMockScenario([
+      { persona: 'selected-persona', status: 'done', content: 'selected first' },
+      { persona: 'child-first-persona', status: 'done', content: 'child fifth' },
+      { persona: 'selected-persona', status: 'done', content: 'selected second' },
+      { persona: 'child-first-persona', status: 'done', content: 'child sixth' },
+    ]);
+    const callStarts: Array<{ callInstance: number; parentWorkflow: string }> = [];
+    const originalEmit = WorkflowEngine.prototype.emit;
+    vi.spyOn(WorkflowEngine.prototype, 'emit').mockImplementation(function (this: WorkflowEngine, event, ...args) {
+      if (event === 'workflow_call:start') {
+        const payload = args[0] as { step: string; callInstance: number; parentWorkflow: string };
+        if (payload.step === 'delegate') {
+          callStarts.push({ callInstance: payload.callInstance, parentWorkflow: payload.parentWorkflow });
+        }
+      }
+      return originalEmit.call(this, event, ...args);
+    });
+
+    const success = await executeAndCompleteTask(
+      running,
+      runner,
+      projectDir,
+      { provider: 'mock' },
+      { outputMode: 'silent' },
+    );
+
+    expect(success).toBe(false);
+    expect(readStartedMockPersonas(mockCallLog)).toEqual([
+      'selected-persona',
+      'child-first-persona',
+      'selected-persona',
+      'child-first-persona',
+    ]);
+    expect(getScenarioQueue()?.remaining).toBe(0);
+    expect(callStarts).toEqual([5, 6].map((callInstance) => ({
+      callInstance,
+      parentWorkflow: restartPoint.stack[0]!.workflow_ref,
+    })));
   });
 
   it('should enter the child initial step from a terminal root workflow_call restart', async () => {

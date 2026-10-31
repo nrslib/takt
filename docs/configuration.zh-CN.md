@@ -11,6 +11,11 @@
 ```yaml
 # ~/.takt/config.yaml
 language: en                  # UI 语言：'en' 或 'ja'
+director:
+  patrol_interval: 900        # director 巡检间隔（秒，正整数，默认：900）
+  slack:
+    channel_id: C0DIR
+    allowed_user_ids: [U0AAA]
 logging:
   level: info                 # 日志级别：debug、info、warn、error
 provider: claude-sdk              # 默认 provider：claude-sdk、claude、claude-headless、claude-terminal、codex、opencode、deepseek-harness、cursor、copilot、kiro、devin、pi 或 mock
@@ -179,12 +184,15 @@ assistant:
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `language` | `"en"` \| `"ja"` | `"en"` | UI 语言 |
+| `director.patrol_interval` | 正整数秒 | `900` | daemon 运行期间定时 director 巡检的间隔。仅限全局配置。 |
+| `director.slack.channel_id` | string | - | director 的 Slack 频道。仅限全局配置，参阅[通过 Slack 与 director 对话](#通过-slack-与-director-对话)。 |
+| `director.slack.allowed_user_ids` | string[] | - | 允许从 Slack 向 director 发言的用户。配置 `director.slack` 时必填；空数组表示不接受任何用户的发言。 |
 | `logging.level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | 日志级别 |
 | `logging.trace` | boolean | `false` | 启用 trace 级日志 |
 | `logging.debug` | boolean | `false` | 启用 debug 日志（`debug.log` + `prompts.jsonl`） |
 | `logging.provider_events` | boolean | `false` | 持久化 provider stream event |
 | `logging.usage_events` | boolean | `false` | 持久化 usage event 日志 |
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-headless"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"devin"` \| `"mock"` | `"claude-sdk"` | 默认 AI provider（`claude` 是 `claude-sdk` 的别名，`claude-headless` 使用 headless CLI）；`deepseek-harness` 是官方 DeepSeek Harness TypeScript SDK/runtime `0.2.1-alpha.2` |
+| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-headless"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"devin"` \| `"mock"` | `"claude-sdk"` | 默认 AI provider（`claude` 是 `claude-sdk` 的别名，`claude-headless` 使用 headless CLI）；`deepseek-harness` 是官方 DeepSeek Harness TypeScript SDK/runtime `0.2.1-rc.3` |
 | `model` | string | - | 默认 model 名称，原样传给 provider |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | 分支名生成策略 |
 | `prevent_sleep` | boolean | `false` | 阻止 macOS 空闲睡眠 |
@@ -312,6 +320,7 @@ ignore_exceed: false          # 对 takt run 和 takt watch 应用 --ignore-exce
 #       reasoning_byte_limit: 4194304
 #   kiro:
 #     agent: my-default-agent
+#     effort: medium
 #   pi:
 #     extensions: [npm:pi-fff]
 #     no_skills: true
@@ -542,6 +551,24 @@ takt manager
 - 自由文本回答应回复到对应询问的消息列。当消息与询问的关联有效时，回复会作为回答处理，不会进入 manager 对话。回答会以 `slack` 为来源保存。
 - Slack 连接时已经待回答的询问不会发布到 Slack，请在 TUI 中按 `Ctrl+R` 回答。连接后出现的新询问每条只发布一次，不会重发。如果消息与询问的关联保存失败或无法读取，该消息列中的回复会作为普通对话处理，不会成为回答。
 - “目标已完成”等通知不会通过对话连接发布，仍由 `TAKT_NOTIFY_WEBHOOK` 发送。
+
+## 通过 Slack 与 director 对话
+
+在全局 `~/.takt/config.yaml` 中配置 director 频道和允许的用户，不要写入项目的 `.takt/config.yaml`：
+
+```yaml
+# ~/.takt/config.yaml
+director:
+  slack:
+    channel_id: C0DIR
+    allowed_user_ids: [U0AAA]
+```
+
+使用与 manager 相同的 Slack App 和环境变量 `TAKT_SLACK_APP_TOKEN` / `TAKT_SLACK_BOT_TOKEN`。按照[创建 Slack App](#创建-slack-app)的说明，将机器人邀请到 director 频道，并在启动 `takt daemon` 的 shell 中设置这两个变量。令牌只通过环境变量传递，不写入配置文件。修改 Slack 配置后，请重新启动 daemon。
+
+获准用户在 director 频道中的发言会进入 director 对话，不会进入 manager 对话。director 在原消息的消息列中回复。不在 `director.slack.allowed_user_ids` 中的用户发言会被忽略。即使 manager 使用同一频道，普通发言仍交给 director；manager 的询问按钮和对话框操作则使用 `manager.slack.allowed_user_ids`。
+
+director 将一次对话或巡检中新产生的通知汇总为该频道中的一条消息，包括已完成的工作，以及合并审批、未回答的询问等需要人工决定的事项。被现有去重机制抑制的通知不会重复发布。未配置 `director.slack` 时，director 不会向 Slack 发布消息，也不接受 Slack 发言。连接需要同时设置两个令牌环境变量。现有的 `TAKT_NOTIFY_WEBHOOK` 通知路径不变。
 
 ## manager 敏感文件设置
 
@@ -1212,7 +1239,7 @@ SDK 不提供此 provider 所需的 permission control，因此请求 permission
 
 旧版 Python/uv 管理文件和 `takt deepseek-harness install` 不再使用。TAKT 不会迁移或删除用户文件。如需删除旧 managed environment，请先检查再手动处理；`~/.dsh` credential store 仍由用户管理。
 
-默认交互会话使用 SDK 标准工具；显式 allowlist（包括 `[]`）仍不受支持。report/status phase 保留禁用工具的空 allowlist，在 resume、新 session 重试及 DeepSeek fallback 路径中均会在 SDK 启动前拒绝。这是在执行前防止工具副作用，而不是执行后才检测。请为这些 phase 使用兼容的 provider。
+默认交互会话使用 SDK 标准工具；显式 allowlist（包括 `[]`）仍不受支持。report phase 使用只读工具，status phase 使用禁用工具的空 allowlist；这些限制在 resume、新 session 重试及 DeepSeek fallback 路径中均会在 SDK 启动前拒绝。这是在执行前防止工具副作用，而不是执行后才检测。请为这些 phase 使用兼容的 provider。
 
 persona 的 first-step 信息将未声明工具保留为 `undefined`，与显式 `[]` 区分；空和非空的显式列表都会传到 DeepSeek guard。DeepSeek 交互失败不使用通用 stale-session retry。拒绝限制时可保留仍运行的 session；遇到 `session_continuation_unsupported` 时则清除保存 ID，并说明下一个用户 turn 将创建没有旧历史的新 SDK session。历史恢复仍等待 SDK 支持，因此允许 ID 改变。不会静默重跑被拒绝的 turn，也不会放宽限制；workflow 继续执行仍需新的 TAKT session/run。
 
@@ -1255,6 +1282,8 @@ provider_options:
 ```
 
 使用 `permission_control: codex` 时，TAKT 从每次 Codex 调用（包括 strict isolated structured 调用）中省略 `sandboxMode` 和 `networkAccessEnabled`，由 Codex 的 `config.toml`、`default_permissions` 和 permission profile 决定实际权限。无论 `network_access` 来自 capability、runtime profile、routing、项目或全局配置，还是环境变量覆盖，解析后的值都会被接受且不会产生警告，但不会用于这些 Codex 权限字段。非交互执行仍会设置 `approvalPolicy: never`，`reasoning_effort`、`fast_mode`、`skills` 等非权限控制选项也会继续生效。
+
+但 Phase 2 和显式设置 `edit: false` 的 step 的 Phase 1 仍会传入 `read-only` sandbox。Codex 在 Phase 1 中无论解析出的 permission mode 是什么，都会使用此 sandbox，包括 `permission_control: codex`。这些调用的 `network_access` 也按 TAKT 管理权限时的规则处理。
 
 要按名称选择 Codex 配置 profile，请在 `permission_control: codex` 下设置 `config_profile`：
 

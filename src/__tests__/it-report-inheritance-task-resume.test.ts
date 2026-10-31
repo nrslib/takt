@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, 
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
 const injectedRuntimeEnvironmentFailure = vi.hoisted(() => ({ enabled: false }));
 
@@ -655,7 +656,7 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
   }
 
   if (mode === 'retry') {
-    it.each([[1, 'delegate'], [2, 'delegate'], [2, 'COMPLETE']] as const)('retries the saved invocation %s and reads its report with next %s', async (stopAt, next) => {
+    it.each([[1, 'delegate', true], [2, 'delegate', true], [2, 'COMPLETE', true], [2, 'COMPLETE', false]] as const)('retries the saved invocation %s with next %s and source run slug %s', async (stopAt, next, useSourceRunSlug) => {
       environment = createEnvironment();
       process.env.TAKT_CONFIG_DIR = environment.globalDir;
       invalidateGlobalConfigCache();
@@ -700,7 +701,21 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
         return target.value;
       });
       if (selected?.selection.kind !== 'restart') throw new Error('Expected restart');
-      const retry = runner.startReExecution(failed.name, ['failed'], 'retry', { restartPoint: selected.selection.restartPoint, sourceRunSlug: slug });
+      if (!useSourceRunSlug) {
+        const tasksPath = join(environment.projectDir, '.takt', 'tasks.yaml');
+        const storedTasks = parseYaml(readFileSync(tasksPath, 'utf-8')) as { tasks: Array<Record<string, unknown>> };
+        const storedTask = storedTasks.tasks.find((task) => task.name === failed.name);
+        if (storedTask === undefined) throw new Error('Expected failed task record');
+        delete storedTask.run_slug;
+        delete storedTask.source_run_slug;
+        writeFileSync(tasksPath, stringifyYaml(storedTasks));
+      }
+      const retry = runner.startReExecution(failed.name, ['failed'], 'retry', {
+        restartPoint: selected.selection.restartPoint,
+        ...(useSourceRunSlug ? { sourceRunSlug: slug } : { sourceResumePoint: point }),
+      });
+      expect(retry.sourceRunSlug).toBe(useSourceRunSlug ? slug : undefined);
+      if (!useSourceRunSlug) expect(retry.data?.source_resume_point).toEqual(point);
       const instructions: string[] = [];
       const lifecycle: Array<{ event: string; instance: number; savedInstance: number | undefined }> = [];
       const originalEmit = WorkflowEngine.prototype.emit;
@@ -720,11 +735,14 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
       });
       await executeAndCompleteTask(retry, runner, environment.projectDir);
       expect(instructions).toHaveLength(stopAt === 2 && next === 'delegate' ? 2 : 1);
-      expect(instructions[0]).toContain(stopAt === 1 ? 'first report' : 'second report');
-      expect(instructions[0]).not.toContain(stopAt === 1 ? 'second report' : 'first report');
+      if (useSourceRunSlug) {
+        expect(instructions[0]).toContain(stopAt === 1 ? 'first report' : 'second report');
+        expect(instructions[0]).not.toContain(stopAt === 1 ? 'second report' : 'first report');
+      }
       const starts = lifecycle.filter((event) => event.event === 'workflow_call:start');
       const completions = lifecycle.filter((event) => event.event === 'workflow_call:complete');
       expect(starts).toHaveLength(instructions.length);
+      expect(starts[0]?.instance).toBe(stopAt);
       expect(completions.map((event) => event.instance)).toEqual(starts.map((event) => event.instance));
       expect(starts.map((event) => event.savedInstance)).toEqual(starts.map((event) => event.instance));
       if (starts.length === 2) expect(starts[1]!.instance).not.toBe(starts[0]!.instance);
@@ -981,6 +999,170 @@ describe.each(resumeModes)('IT: report inheritance through %s task resume', (mod
       expect(instructions[0]).toContain('saved first invocation report');
       expect(instructions[0]).not.toContain('other invocation report');
     });
+
+    it('restores selected retry evidence from task data when source run metadata has no resume point', async () => {
+      environment = createEnvironment();
+      process.env.TAKT_CONFIG_DIR = environment.globalDir;
+      invalidateGlobalConfigCache();
+      const point = buildResumePoint(environment.projectDir);
+      const savedRecord = Object.values(point.workflow_call_invocations)[0]!;
+      writeSourceRunMeta(environment.projectDir);
+      const reportDir = join(
+        environment.projectDir,
+        '.takt',
+        'runs',
+        sourceRunSlug,
+        'reports',
+        'subworkflows',
+        savedRecord.report_namespace_segment,
+      );
+      mkdirSync(reportDir, { recursive: true });
+      writeFileSync(join(reportDir, '05-arch-review.md'), 'saved task-data report');
+      const runner = new TaskRunner(environment.projectDir);
+      runner.addTask('selected retry without run checkpoint', { workflow: 'parent-fix' });
+      const sourceTask = runner.claimNextTasks(1)[0]!;
+      const source = runner.updateRunningTaskExecution(sourceTask.name, { runSlug: sourceRunSlug });
+      runner.failTask({
+        task: source,
+        success: false,
+        response: 'source task stopped',
+        executionLog: ['source task stopped'],
+        startedAt: '2026-07-17T00:00:00.000Z',
+        completedAt: '2026-07-17T00:01:00.000Z',
+      });
+      runner.requeueTask(source.name, ['failed'], { resumePoint: point, sourceRunSlug });
+      const checkpointTask = runner.claimNextTasks(1)[0]!;
+      runner.forceFailRunningTask(checkpointTask.name, { step: 'fix', error: 'stop with task checkpoint' });
+      const existing = runner.listAllTaskItems().find((item) => item.name === source.name)!;
+      const taskResumePoint = existing.data?.resume_point;
+      expect(taskResumePoint).toEqual(point);
+      expect(readRunMetaBySlug(environment.projectDir, sourceRunSlug)?.resumePoint).toBeUndefined();
+      const { parent } = loadResumeWorkflows(environment.projectDir);
+      const selected = await selectTaskRetryStart(parent, {
+        projectCwd: environment.projectDir,
+        lookupCwd: environment.projectDir,
+        resumePoint: taskResumePoint,
+      }, async (_message, options) => {
+        const target = options.find((option) => option.selectable !== false && option.label.trim() === '"fix"');
+        if (target === undefined) throw new Error('Expected selected child restart');
+        return target.value;
+      });
+      if (selected?.selection.kind !== 'restart') throw new Error('Expected selected child restart');
+      const task = runner.startReExecution(existing.name, ['failed'], 'retry', {
+        restartPoint: selected.selection.restartPoint,
+        sourceResumePoint: taskResumePoint,
+        sourceRunSlug,
+      });
+      expect(task.data?.resume_point).toBeUndefined();
+      expect(task.data?.source_resume_point).toEqual(point);
+      const instructions: string[] = [];
+      vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+        options?.onPromptResolved?.({
+          systemPrompt: typeof persona === 'string' ? persona : '',
+          userInstruction: instruction,
+        });
+        instructions.push(instruction);
+        return {
+          persona: 'fixer',
+          status: 'done',
+          content: '[FIX:1]\nfix complete',
+          timestamp: new Date(),
+          sessionId: 'fix-session',
+        };
+      });
+
+      const success = await executeAndCompleteTask(task, runner, environment.projectDir);
+
+      expect(success, runner.listAllTaskItems().find((item) => item.name === task.name)?.failure?.error).toBe(true);
+      expect(instructions).toEqual([expect.stringContaining('saved task-data report')]);
+    });
+
+    it.each([false, true])('restores root-agent report evidence and warns for a changed source ref: %s', async (updated) => {
+      environment = createEnvironment();
+      process.env.TAKT_CONFIG_DIR = environment.globalDir;
+      invalidateGlobalConfigCache();
+      const workflowDir = join(environment.projectDir, '.takt', 'workflows');
+      const parentPath = join(workflowDir, 'parent-fix.yaml');
+      const parentDefinition = [
+        'name: parent-fix', 'initial_step: delegate', 'max_steps: 4', 'steps:',
+        '  - name: delegate', '    kind: workflow_call', '    call: child-fix',
+        '    rules:', '      - condition: COMPLETE', '        next: fix',
+        '  - name: fix', '    persona: ./personas/fixer.md',
+        '    input_reports:', '      from_step: delegate', '      reports: all',
+        '    instruction: "Root inherited report: {report:05-arch-review.md}"',
+        '    rules:', '      - condition: fix complete', '        next: COMPLETE',
+      ].join('\n');
+      writeFileSync(parentPath, parentDefinition);
+      invalidateAllResolvedConfigCache();
+      const { parent: oldParent } = loadResumeWorkflows(environment.projectDir);
+      const childPoint = buildResumePoint(environment.projectDir);
+      const [savedIdentity, savedInvocation] = Object.entries(childPoint.workflow_call_invocations)[0]!;
+      const resumePoint = {
+        ...childPoint,
+        workflow_call_invocations: {
+          [savedIdentity]: { ...savedInvocation, completed: true },
+        },
+        stack: [buildWorkflowResumePointEntry(oldParent, 'fix', 'agent', 1, new Map([['delegate', 1]]))],
+      };
+      writeSourceRunMeta(environment.projectDir, resumePoint);
+      const savedRecord = resumePoint.workflow_call_invocations[savedIdentity]!;
+      const reportDir = join(environment.projectDir, '.takt', 'runs', sourceRunSlug, 'reports', 'subworkflows', savedRecord.report_namespace_segment);
+      mkdirSync(reportDir, { recursive: true });
+      writeFileSync(join(reportDir, '05-arch-review.md'), 'saved selected root report');
+      const runner = new TaskRunner(environment.projectDir);
+      runner.addTask('restart root agent report', { workflow: 'parent-fix' });
+      const sourceTask = runner.claimNextTasks(1)[0]!;
+      const source = runner.updateRunningTaskExecution(sourceTask.name, { runSlug: sourceRunSlug });
+      runner.failTask({
+        task: source, success: false, response: 'source task stopped', executionLog: ['source task stopped'],
+        startedAt: '2026-07-17T00:00:00.000Z', completedAt: '2026-07-17T00:01:00.000Z',
+      });
+      if (updated) {
+        const builtinRoot = join(environment.root, 'builtins');
+        const builtinWorkflows = join(builtinRoot, 'en', 'workflows');
+        mkdirSync(builtinWorkflows, { recursive: true });
+        writeFileSync(join(builtinWorkflows, 'parent-fix.yaml'), parentDefinition);
+        rmSync(parentPath);
+        vi.spyOn(resources, 'getResourcesDir').mockReturnValue(builtinRoot);
+        vi.spyOn(resources, 'getLanguageResourcesDir').mockImplementation((lang) => join(builtinRoot, lang));
+      }
+      invalidateAllResolvedConfigCache();
+      const { parent, child } = loadResumeWorkflows(environment.projectDir);
+      expect(getWorkflowReference(parent) !== getWorkflowReference(oldParent)).toBe(updated);
+      const selected = await selectTaskRetryStart(parent, {
+        projectCwd: environment.projectDir, lookupCwd: environment.projectDir, resumePoint,
+      }, async (_message, options) => {
+        const target = options.filter((option) => option.selectable !== false && option.label.trim() === '"fix"').at(-1);
+        if (target === undefined) throw new Error('Expected selected root restart');
+        return target.value;
+      });
+      if (selected?.selection.kind !== 'restart') throw new Error('Expected root restart selection');
+      expect(selected.selection.restartPoint.stack.map((entry) => entry.step)).toEqual(['fix']);
+      const task = runner.startReExecution(source.name, ['failed'], 'retry', {
+        restartPoint: selected.selection.restartPoint, sourceRunSlug,
+      });
+      const writeLog = vi.spyOn(DebugLogger.getInstance(), 'writeLog');
+      const instructions: string[] = [];
+      vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+        options?.onPromptResolved?.({ systemPrompt: typeof persona === 'string' ? persona : '', userInstruction: instruction });
+        instructions.push(instruction);
+        return { persona: 'fixer', status: 'done', content: '[FIX:1]\nfix complete', timestamp: new Date(), sessionId: 'fix-session' };
+      });
+
+      const success = await executeAndCompleteTask(task, runner, environment.projectDir);
+
+      expect(success, runner.listAllTaskItems().find((item) => item.name === task.name)?.failure?.error).toBe(true);
+      expect(instructions).toEqual([expect.stringContaining('saved selected root report')]);
+      const warnings = writeLog.mock.calls.filter(([level, , message]) => level === 'WARN' && message.includes('Saved workflow reference'));
+      expect(warnings.length > 0).toBe(updated);
+      const retrySlug = findRunSlugExcluding(environment.projectDir, new Set([sourceRunSlug]));
+      const saved = readRunMetaBySlug(environment.projectDir, retrySlug)?.resumePoint;
+      const currentDelegate = buildWorkflowResumePointEntry(parent, 'delegate', 'workflow_call', 1, undefined, 1);
+      const expectedParticipation = new WorkflowStepParticipationIndex(new Map());
+      expectedParticipation.record(child, 'reviewers', [currentDelegate], []);
+      expectedParticipation.record(child, 'arch-review', [currentDelegate], ['05-arch-review.md']);
+      expect(saved?.workflow_step_participations).toEqual(expect.objectContaining(expectedParticipation.serialized()));
+    });
   }
 
   it('starts the first agent with all regular reports inherited and the skipped-link notice displayed', async () => {
@@ -1213,6 +1395,77 @@ describe('IT: nested final-gate report resolution through TaskRunner requeue', (
 
     expect(secondSuccess).toBe(true);
     expect(instructions).toHaveLength(1);
+  });
+
+  describe.each(['requeue', 'retry'] as const)('root agent report inheritance through %s', (mode) => {
+    it.each(['fix', 'implement'] as const)('resumes a root agent (%s) with a completed workflow call report after the parent reference changes', async (stepName) => {
+      environment = createEnvironment();
+      process.env.TAKT_CONFIG_DIR = environment.globalDir;
+      invalidateGlobalConfigCache();
+      const workflowDir = join(environment.projectDir, '.takt', 'workflows');
+      writeFileSync(join(workflowDir, 'parent-fix.yaml'), [
+        'name: parent-fix', 'initial_step: delegate', 'max_steps: 4', 'steps:',
+        '  - name: delegate', '    kind: workflow_call', '    call: child-fix',
+        '    rules:', '      - condition: COMPLETE', `        next: ${stepName}`,
+        `  - name: ${stepName}`, '    persona: ./personas/fixer.md',
+        '    input_reports:', '      from_step: delegate', '      reports: all',
+        '    instruction: "Root inherited report: {report:05-arch-review.md}"',
+        '    rules:', '      - condition: fix complete', '        next: COMPLETE',
+      ].join('\n'));
+      invalidateAllResolvedConfigCache();
+      const previousParentRef = `project:sha256:${'a'.repeat(64)}`;
+      const childPoint = buildResumePoint(environment.projectDir, undefined, previousParentRef);
+      const { parent } = loadResumeWorkflows(environment.projectDir);
+      const savedParent = attachWorkflowOpaqueRef({ ...parent }, previousParentRef);
+      const [savedIdentity, savedInvocation] = Object.entries(childPoint.workflow_call_invocations)[0]!;
+      const resumePoint = {
+        ...childPoint,
+        workflow_call_invocations: {
+          [savedIdentity]: { ...savedInvocation, completed: true },
+        },
+        stack: [
+          buildWorkflowResumePointEntry(savedParent, stepName, 'agent', 1, new Map([['delegate', 1]])),
+        ],
+      };
+      const savedRecord = Object.values(resumePoint.workflow_call_invocations)[0]!;
+      writeSourceRunMeta(environment.projectDir, resumePoint);
+      const reportDir = join(environment.projectDir, '.takt', 'runs', sourceRunSlug, 'reports', 'subworkflows', savedRecord.report_namespace_segment);
+      mkdirSync(reportDir, { recursive: true });
+      writeFileSync(join(reportDir, '05-arch-review.md'), 'saved root report');
+      const instructions: string[] = [];
+      vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+        options?.onPromptResolved?.({ systemPrompt: typeof persona === 'string' ? persona : '', userInstruction: instruction });
+        instructions.push(instruction);
+        return { persona: 'fixer', status: 'done', content: '[FIX:1]\nfix complete', timestamp: new Date(), sessionId: 'fix-session' };
+      });
+      const runner = new TaskRunner(environment.projectDir);
+      runner.addTask('resume root agent report', { workflow: 'parent-fix' });
+      const sourceTask = runner.claimNextTasks(1)[0]!;
+      const taskWithSourceRun = runner.updateRunningTaskExecution(sourceTask.name, { runSlug: sourceRunSlug });
+      let task: TaskInfo;
+      if (mode === 'requeue') {
+        runner.exceedTask(taskWithSourceRun.name, {
+          currentStep: stepName, newMaxSteps: 4, currentIteration: 1, resumePoint,
+        });
+        runner.requeueExceededTask(taskWithSourceRun.name);
+        task = runner.claimNextTasks(1)[0]!;
+      } else {
+        completeSourceTask(runner, taskWithSourceRun);
+        task = runner.startReExecution(taskWithSourceRun.name, ['completed'], mode, {
+          startStep: undefined, retryNote: undefined, resumePoint,
+        });
+      }
+
+      const success = await executeAndCompleteTask(task, runner, environment.projectDir);
+
+      expect(success, runner.listAllTaskItems().find((item) => item.name === task.name)?.failure?.error).toBe(true);
+      const resumedRunSlug = findResumedRunSlug(environment.projectDir);
+      expect(readFileSync(join(
+        environment.projectDir, '.takt', 'runs', resumedRunSlug, 'reports', 'subworkflows',
+        savedRecord.report_namespace_segment, '05-arch-review.md',
+      ), 'utf-8')).toBe('saved root report');
+      expect(instructions).toEqual([expect.stringContaining('saved root report')]);
+    });
   });
 });
 

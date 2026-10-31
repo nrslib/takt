@@ -1,5 +1,6 @@
 import type {
   WorkflowCallInvocationRecord,
+  WorkflowCallStep,
   WorkflowConfig,
   WorkflowResumePoint,
   WorkflowResumePointEntry,
@@ -168,6 +169,47 @@ export class WorkflowCallInvocationIndex {
     return record === undefined ? undefined : { ...record };
   }
 
+  getSelectedRestartCallInstance(
+    source: WorkflowResumePoint | undefined,
+    workflow: WorkflowConfig,
+    stepName: string,
+    path: readonly WorkflowResumePointEntry[],
+  ): number | undefined {
+    return this.findSelectedRestartRecord(source, workflow, stepName, path)?.[1].call_instance;
+  }
+
+  private findSelectedRestartRecord(
+    source: WorkflowResumePoint | undefined,
+    workflow: WorkflowConfig,
+    stepName: string,
+    path: readonly WorkflowResumePointEntry[],
+  ): readonly [string, WorkflowCallInvocationRecord] | undefined {
+    if (source === undefined) return undefined;
+    const root = source.stack[0];
+    if (root === undefined || root.workflow !== (path[0]?.workflow ?? workflow.name)) return undefined;
+    const candidates = [...this.restoredRecords].filter(([identity]) => {
+      const parsed = parseIdentity(identity);
+      if (parsed.step !== stepName || parsed.calls.length !== path.length) return false;
+      if ((parsed.calls[0]?.workflow ?? parsed.workflow) !== root.workflow_ref) return false;
+      return parsed.calls.every((call, index) => {
+        const entry = normalizeWorkflowResumePointEntry(path[index]!);
+        if (call.step !== entry.step || call.kind !== entry.kind) return false;
+        const ancestorIdentity = serializeWorkflowExecutionIdentity({ workflow: call.workflow, step: call.step, calls: parsed.calls.slice(0, index) });
+        const ancestor = this.restoredRecords.get(ancestorIdentity);
+        const currentAncestorIdentity = buildWorkflowCallInvocationIdentity(entry.workflow_ref, entry.step, path.slice(0, index));
+        const currentAncestor = this.records.get(currentAncestorIdentity);
+        const namespace = ancestor === undefined ? undefined : parseWorkflowCallNamespaceSegment(ancestor.report_namespace_segment);
+        const expectedChild = index + 1 < path.length ? path[index + 1]!.workflow : workflow.name;
+        return ancestor?.call_instance === call.instance
+          && currentAncestor?.call_instance === entry.call_instance
+          && ancestor.report_namespace_segment === currentAncestor?.report_namespace_segment
+          && namespace?.workflowName === expectedChild;
+      });
+    });
+    if (candidates.length > 1) throw new Error(`Workflow-call step "${stepName}" has ambiguous saved invocation records`);
+    return candidates[0];
+  }
+
   rebindResumeInvocation(
     source: WorkflowResumePoint | undefined,
     workflow: WorkflowConfig,
@@ -175,40 +217,39 @@ export class WorkflowCallInvocationIndex {
     path: readonly WorkflowResumePointEntry[],
     occurrence: number,
     selectedRestart: boolean,
-  ): void {
+  ): { from: string; to: string; previousCallInstance: number; callInstance: number } | undefined {
     const frame = source?.stack[path.length];
     if (selectedRestart && source !== undefined) {
       const currentIdentity = buildWorkflowCallInvocationIdentity(getWorkflowReference(workflow), stepName, path);
-      const root = source.stack[0];
-      if (root === undefined || root.workflow !== (path[0]?.workflow ?? workflow.name)) return;
-      const candidates = [...this.restoredRecords].filter(([identity]) => {
-        const parsed = parseIdentity(identity);
-        if (parsed.step !== stepName || parsed.calls.length !== path.length) return false;
-        if ((parsed.calls[0]?.workflow ?? parsed.workflow) !== root.workflow_ref) return false;
-        return parsed.calls.every((call, index) => {
-          const entry = normalizeWorkflowResumePointEntry(path[index]!);
-          if (call.step !== entry.step || call.kind !== entry.kind) return false;
-          const ancestorIdentity = serializeWorkflowExecutionIdentity({ workflow: call.workflow, step: call.step, calls: parsed.calls.slice(0, index) });
-          const ancestor = this.restoredRecords.get(ancestorIdentity);
-          const currentAncestorIdentity = buildWorkflowCallInvocationIdentity(entry.workflow_ref, entry.step, path.slice(0, index));
-          const currentAncestor = this.records.get(currentAncestorIdentity);
-          const namespace = ancestor === undefined ? undefined : parseWorkflowCallNamespaceSegment(ancestor.report_namespace_segment);
-          const expectedChild = index + 1 < path.length ? path[index + 1]!.workflow : workflow.name;
-          return ancestor?.call_instance === call.instance
-            && currentAncestor?.call_instance === entry.call_instance
-            && ancestor.report_namespace_segment === currentAncestor?.report_namespace_segment
-            && namespace?.workflowName === expectedChild;
-        });
-      });
-      if (candidates.length > 1) throw new Error(`Workflow-call step "${stepName}" has ambiguous saved invocation records`);
-      const candidate = candidates[0];
+      const candidate = this.findSelectedRestartRecord(source, workflow, stepName, path);
       if (candidate === undefined) return;
-      if (candidate[0] !== currentIdentity && this.records.has(currentIdentity)) throw new Error(`Workflow-call step "${stepName}" has conflicting invocation records`);
-      if (!this.records.has(candidate[0])) throw new Error(`Workflow-call step "${stepName}" saved invocation was already rebound`);
-      this.records.delete(candidate[0]);
-      this.assertNamespaceAvailable(currentIdentity, candidate[1].report_namespace_segment);
-      this.records.set(currentIdentity, { ...candidate[1], call_instance: occurrence });
-      return;
+      const currentRecord = this.records.get(currentIdentity);
+      if (candidate[0] !== currentIdentity && currentRecord !== undefined) {
+        if (currentRecord.report_namespace_segment !== candidate[1].report_namespace_segment) {
+          throw new Error(`Workflow-call step "${stepName}" has conflicting invocation records`);
+        }
+        this.moveInvocationAndDescendants(currentIdentity, currentIdentity, stepName, currentRecord, occurrence);
+        return {
+          from: currentIdentity,
+          to: currentIdentity,
+          previousCallInstance: currentRecord.call_instance,
+          callInstance: occurrence,
+        };
+      }
+      const savedEntry = this.records.has(candidate[0])
+        ? [candidate[0], this.records.get(candidate[0])!] as const
+        : [...this.records.entries()].find(([, record]) => (
+            record.report_namespace_segment === candidate[1].report_namespace_segment
+          ));
+      if (savedEntry === undefined) throw new Error(`Workflow-call step "${stepName}" saved invocation was already rebound`);
+      const [savedIdentity, savedRecord] = savedEntry;
+      this.moveInvocationAndDescendants(savedIdentity, currentIdentity, stepName, savedRecord, occurrence);
+      return {
+        from: savedIdentity,
+        to: currentIdentity,
+        previousCallInstance: savedRecord.call_instance,
+        callInstance: occurrence,
+      };
     }
     if (frame === undefined || frame.workflow !== workflow.name) return;
     if (frame.step === stepName) {
@@ -227,16 +268,89 @@ export class WorkflowCallInvocationIndex {
     if (savedIdentity !== migratedIdentity && this.records.has(savedIdentity) && this.records.has(migratedIdentity)) {
       throw new Error(`Workflow-call step "${stepName}" has conflicting invocation records`);
     }
-    const oldPath = this.records.has(savedIdentity) ? savedPath : path;
     const oldIdentity = this.records.has(savedIdentity) ? savedIdentity : migratedIdentity;
     if (oldIdentity === newIdentity) return;
     const record = this.records.get(oldIdentity);
     if (record === undefined || record.call_instance !== occurrence) return;
-    const oldPrefix = parseIdentity(buildWorkflowCallInvocationIdentity(frame.workflow_ref, stepName, [...oldPath, frame])).calls;
-    const newFrame = { ...frame, workflow_ref: getWorkflowReference(workflow) };
-    const newPrefix = parseIdentity(buildWorkflowCallInvocationIdentity(getWorkflowReference(workflow), stepName, [...path, newFrame])).calls;
+    this.moveInvocationAndDescendants(oldIdentity, newIdentity, stepName, record, record.call_instance);
+    return {
+      from: oldIdentity,
+      to: newIdentity,
+      previousCallInstance: record.call_instance,
+      callInstance: record.call_instance,
+    };
+  }
+
+  rebindResumeInvocationsForReportDiscovery(
+    source: WorkflowResumePoint | undefined,
+    workflow: WorkflowConfig,
+    path: readonly WorkflowResumePointEntry[],
+    resolveWorkflowCall: (step: WorkflowCallStep) => WorkflowConfig | null,
+  ): Array<{ from: string; to: string; previousCallInstance: number; callInstance: number }> {
+    if (source === undefined) return [];
+    const frame = source.stack[path.length];
+    if (frame === undefined || frame.workflow !== workflow.name) return [];
+    if (!path.every((entry, index) => {
+      const saved = source.stack[index];
+      return saved !== undefined && saved.workflow === entry.workflow && saved.step === entry.step
+        && saved.kind === entry.kind && saved.occurrence === entry.occurrence
+        && normalizeWorkflowResumePointEntry(saved).call_instance === normalizeWorkflowResumePointEntry(entry).call_instance;
+    })) return [];
+    const savedPath = source.stack.slice(0, path.length);
+    const rebinds: Array<{ from: string; to: string; previousCallInstance: number; callInstance: number }> = [];
+    for (const step of workflow.steps) {
+      if (step.kind !== 'workflow_call') continue;
+      const savedIdentity = buildWorkflowCallInvocationIdentity(frame.workflow_ref, step.name, savedPath);
+      const migratedIdentity = buildWorkflowCallInvocationIdentity(frame.workflow_ref, step.name, path);
+      const newIdentity = buildWorkflowCallInvocationIdentity(getWorkflowReference(workflow), step.name, path);
+      if (savedIdentity !== migratedIdentity && this.records.has(savedIdentity) && this.records.has(migratedIdentity)) {
+        throw new Error(`Workflow-call step "${step.name}" has conflicting invocation records`);
+      }
+      const oldIdentity = this.records.has(savedIdentity) ? savedIdentity : migratedIdentity;
+      const record = this.records.get(oldIdentity);
+      if (record === undefined) continue;
+      const childWorkflow = resolveWorkflowCall(step);
+      if (
+        childWorkflow !== null
+        && !workflowCallNamespaceSegmentMatchesInvocation(
+          record.report_namespace_segment,
+          step.name,
+          childWorkflow.name,
+        )
+      ) {
+        continue;
+      }
+      if (oldIdentity === newIdentity) continue;
+      this.moveInvocationAndDescendants(oldIdentity, newIdentity, step.name, record, record.call_instance);
+      rebinds.push({
+        from: oldIdentity,
+        to: newIdentity,
+        previousCallInstance: record.call_instance,
+        callInstance: record.call_instance,
+      });
+    }
+    return rebinds;
+  }
+
+  private moveInvocationAndDescendants(
+    oldIdentity: string,
+    newIdentity: string,
+    stepName: string,
+    record: WorkflowCallInvocationRecord,
+    newCallInstance: number,
+  ): void {
+    const sourceIdentity = parseIdentity(oldIdentity);
+    const targetIdentity = parseIdentity(newIdentity);
+    const oldPrefix = [
+      ...sourceIdentity.calls,
+      { workflow: sourceIdentity.workflow, step: sourceIdentity.step, kind: 'workflow_call' as const, instance: record.call_instance },
+    ];
+    const newPrefix = [
+      ...targetIdentity.calls,
+      { workflow: targetIdentity.workflow, step: targetIdentity.step, kind: 'workflow_call' as const, instance: newCallInstance },
+    ];
     const moves: Array<{ from: string; to: string; record: WorkflowCallInvocationRecord }> = [
-      { from: oldIdentity, to: newIdentity, record },
+      { from: oldIdentity, to: newIdentity, record: { ...record, call_instance: newCallInstance } },
     ];
     for (const [identity, descendant] of this.records) {
       const parsed = parseIdentity(identity);

@@ -276,7 +276,8 @@ export async function enrichTaskActionConversationContext(
   };
   let runContext: RetryRunInfo | null = null;
   let runSessionContext: RunSessionContext | undefined;
-  let resumePoint = undefined;
+  let resumePoint = task.executionRequest?.resumePoint;
+  const sourceResumePoint = task.executionRequest?.sourceResumePoint;
   let failedStep = base.failure?.step ?? '';
   let lastMessage = base.failure?.lastMessage ?? '';
   if (task.runId !== undefined) {
@@ -294,7 +295,7 @@ export async function enrichTaskActionConversationContext(
         stepLogs: boundTaskActionContext(formatted.runStepLogs),
         reports: boundTaskActionContext(formatted.runReports),
       };
-      resumePoint = detail.meta.resumePoint;
+      resumePoint = detail.meta.resumePoint ?? task.executionRequest?.resumePoint;
       failedStep = detail.meta.failure?.step ?? failedStep;
       lastMessage = detail.history.find((event) => event.content)?.content ?? lastMessage;
     } catch (error) {
@@ -348,6 +349,7 @@ export async function enrichTaskActionConversationContext(
         ...(failedStep.length === 0 ? {} : { step: failedStep }),
         ...(lastMessage.length === 0 ? {} : { lastMessage }),
       };
+  const retrySourceResumePoint = resumePoint ?? sourceResumePoint;
   return {
     ...base,
     generation: task.generation,
@@ -361,6 +363,7 @@ export async function enrichTaskActionConversationContext(
     ...(failure === undefined ? {} : { failure }),
     ...(retryStartOptions === undefined ? {} : { retryStartOptions }),
     ...(retryStartSelections === undefined ? {} : { retryStartSelections }),
+    ...(retrySourceResumePoint === undefined ? {} : { retrySourceResumePoint }),
     ...(workflowInitialStep === undefined ? {} : { workflowInitialStep }),
   };
 }
@@ -804,6 +807,9 @@ function executionRequestForTaskAction(
     resumeMode: 'retry',
     sourceRunSlug,
     ...retryStartOwnership,
+    ...(retryStartOwnership.restartPoint === undefined || claim.context.retrySourceResumePoint === undefined
+      ? {}
+      : { sourceResumePoint: claim.context.retrySourceResumePoint }),
     retryNote: input,
   };
 }

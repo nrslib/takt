@@ -21,6 +21,11 @@ export interface DeepSeekCredentialPatch {
   disposeSync: () => void;
 }
 
+export interface DeepSeekCredentialPatchOptions {
+  /** Reference used only by the DeepSeek LLM plugin for this runtime. */
+  runtimeCredentialReference?: string;
+}
+
 /**
  * Build the process-owned patch that hands the official runtime the credential store
  * path and the reference name. The patch never contains a credential value.
@@ -31,6 +36,7 @@ export async function createDeepSeekCredentialPatch(
   binding: DeepSeekCredentialBinding,
   systemPrompt?: string,
   plugins: readonly ResolvedDeepSeekHarnessPlugin[] = [],
+  options: DeepSeekCredentialPatchOptions = {},
 ): Promise<DeepSeekCredentialPatch> {
   let patchDirectoryPath: string;
   try {
@@ -45,7 +51,7 @@ export async function createDeepSeekCredentialPatch(
       // this composition requires a trusted workspace; a credential reference
       // is not an OS-level read-isolation boundary for model-callable tools.
       { id: 'credentials', config: { path: binding.home.credentialsPath } },
-      { id: 'llm-deepseek', config: { apiKeyEnv: binding.ref } },
+      { id: 'llm-deepseek', config: { apiKeyEnv: options.runtimeCredentialReference ?? binding.ref } },
       { id: 'session-persistence-jsonl', disabled: true },
       { id: 'session-log-deepseek', config: { enabled: false } },
       ...(systemPrompt === undefined
@@ -63,23 +69,31 @@ export async function createDeepSeekCredentialPatch(
     ensurePrivateDirectory(patchDirectoryPath);
     writeNewPrivateFileWithMode(patchPath, stringifyYaml(document), PATCH_FILE_MODE);
     let disposed = false;
+    let pendingDisposal: Promise<void> | undefined;
     return {
       path: patchPath,
-      dispose: async (): Promise<void> => {
-        if (disposed) {
-          return;
-        }
-        disposed = true;
-        await rm(patchPath, { force: true });
-        await rm(patchDirectoryPath, { recursive: true, force: true });
+      dispose: (): Promise<void> => {
+        if (pendingDisposal !== undefined) return pendingDisposal;
+        if (disposed) return Promise.resolve();
+        const cleanup = (async (): Promise<void> => {
+          try {
+            await rm(patchPath, { force: true });
+            await rm(patchDirectoryPath, { recursive: true, force: true });
+            disposed = true;
+          } finally {
+            pendingDisposal = undefined;
+          }
+        })();
+        pendingDisposal = cleanup;
+        return cleanup;
       },
       disposeSync: (): void => {
         if (disposed) {
           return;
         }
-        disposed = true;
         rmSync(patchPath, { force: true });
         rmSync(patchDirectoryPath, { recursive: true, force: true });
+        disposed = true;
       },
     };
   } catch (error) {

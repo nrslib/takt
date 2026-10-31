@@ -53,6 +53,7 @@ export interface ProviderCallOptions {
   preparedMcp?: PreparedProviderMcp;
   maxTurns?: number;
   permissionMode?: PermissionMode;
+  edit?: boolean;
   providerOptions?: StepProviderOptions;
   onStream?: StreamCallback;
   onActivity?: ProviderActivityCallback;

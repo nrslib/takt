@@ -333,12 +333,17 @@ describe('IT: failed retry order revision queueing in terminal worktree', () => 
           { path: '"failed-retry-it" > "develop" → "development-core" > "peer-review"', ...(onHeading ? { description: '最終確認' } : {}) },
         ];
         for (const id of [chosenId, 'resume-checkpoint']) {
-          expect(payload.startOptions.find((option) => option.id === id)).toMatchObject({
+          const option = payload.startOptions.find((candidate) => candidate.id === id);
+          if (id === 'resume-checkpoint' && position === 'renamed leaf') {
+            expect(option).toBeUndefined();
+            continue;
+          }
+          expect(option).toMatchObject({
             path: id === 'resume-checkpoint' && position !== 'leaf'
               ? '"failed-retry-it" > "develop" → "development-core" > "peer-review"'
               : `"failed-retry-it" > "develop" → "development-core" > "peer-review" → "review-suite" > "${gateName}"`,
           });
-          expect(payload.startOptions.find((option) => option.id === id)?.headings).toEqual(expectedHeadings);
+          expect(option?.headings).toEqual(expectedHeadings);
         }
         expect(payload.startOptions.every((option) => !option.id.startsWith('heading:'))).toBe(true);
         const heading = context.startOptions.options.find((option) => option.id === 'heading:2.2')!;

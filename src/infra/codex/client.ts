@@ -366,14 +366,16 @@ export class CodexClient {
     const redact = (message: string) => hook === undefined ? message : hook.redact(message);
     const redactFailure = (failure: AgentFailureDetail): AgentFailureDetail => hook === undefined
       ? failure : { ...failure, reason: redact(failure.reason) };
+    const readOnlyStep = options.executionPhase === 1 && options.edit === false;
     const threadOptions = {
       ...(options.model ? { model: options.model } : {}),
       workingDirectory: options.cwd,
       skipGitRepoCheck: true,
-      ...(options.permissionControl === 'codex'
+      ...(options.permissionControl === 'codex' && options.executionPhase !== 2
+          && !readOnlyStep
         ? {}
         : {
-            sandboxMode: options.mcpOnlySideEffects ? 'read-only' as const : options.permissionMode
+            sandboxMode: readOnlyStep || options.executionPhase === 2 || options.mcpOnlySideEffects ? 'read-only' as const : options.permissionMode
               ? mapToCodexSandboxMode(options.permissionMode)
               : 'workspace-write' as const,
             ...(options.mcpOnlySideEffects

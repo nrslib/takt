@@ -26,6 +26,8 @@ import {
 } from '../core/workflow/workflow-step-participation-index.js';
 import { getReportFiles } from '../core/workflow/output-contract-files.js';
 import { buildDynamicParallelSelectionIdentity } from '../core/workflow/dynamic-parallel/identity.js';
+import { buildWorkflowCallSiteIdentity } from '../core/workflow/workflow-call-site-identity.js';
+import { DebugLogger } from '../shared/utils/debug.js';
 
 function makeWorkflow(
   name: string,
@@ -983,6 +985,76 @@ describe('review report discovery', () => {
       failures: [],
     });
     expect(resolver).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the saved report namespace and warns when only the child definition changes', () => {
+    const call = makeNormalizedWorkflowCallStep({ name: 'delegate', call: 'child-review' });
+    const fix = makeStep({ name: 'fix' });
+    const parent = makeWorkflow('parent', [call, fix]);
+    const steps = [makeStep({
+      name: 'review',
+      outputContracts: [{ name: 'review.md', format: '# Review' }],
+    })];
+    const savedChild = attachWorkflowOpaqueRef(makeWorkflow('child-review', steps), 'project:child-old');
+    const currentChild = attachWorkflowOpaqueRef(makeWorkflow('child-review', steps), 'project:child-new');
+    const callPath = [buildWorkflowResumePointEntry(parent, 'delegate', 'workflow_call', 1, undefined, 1)];
+    const savedNamespace = buildWorkflowCallSiteIdentity({
+      stack: callPath,
+      childWorkflow: savedChild,
+    }).runPathSegment;
+    const invocationIndex = new WorkflowCallInvocationIndex(new Map());
+    invocationIndex.record(parent, 'delegate', [], {
+      call_instance: 1,
+      report_namespace_segment: savedNamespace,
+      completed: true,
+    });
+    const stepIndex = new WorkflowStepParticipationIndex(new Map());
+    stepIndex.record(currentChild, 'review', callPath, ['review.md']);
+    const writeLog = vi.spyOn(DebugLogger.getInstance(), 'writeLog');
+
+    expect(resolveInheritedReviewReportNamesWithDiagnostics({
+      step: fix,
+      workflow: parent,
+      workflowCallResolver: () => currentChild,
+      projectCwd: '/project',
+      lookupCwd: '/worktree',
+      resumeStackPrefix: [],
+      participation: participation(parent, [], invocationIndex.snapshot(), stepIndex.snapshot()),
+    })).toEqual({
+      reportNames: [`subworkflows/${savedNamespace}/review.md`],
+      failures: [],
+    });
+    expect(writeLog.mock.calls.some(([level, , message]) => (
+      level === 'WARN' && message.includes('digest differs')
+    ))).toBe(true);
+  });
+
+  it('rejects reports saved by a different callee', () => {
+    const call = makeNormalizedWorkflowCallStep({ name: 'delegate', call: 'child-b' });
+    const fix = makeStep({ name: 'fix' });
+    const parent = makeWorkflow('parent', [call, fix]);
+    const invocationIndex = new WorkflowCallInvocationIndex(new Map());
+    invocationIndex.record(parent, 'delegate', [], {
+      call_instance: 1,
+      report_namespace_segment: 'iteration-1--step-delegate--workflow-child-a',
+      completed: true,
+    });
+
+    expect(resolveInheritedReviewReportNamesWithDiagnostics({
+      step: fix,
+      workflow: parent,
+      workflowCallResolver: () => makeWorkflow('child-b', [makeStep({
+        name: 'review',
+        outputContracts: [{ name: 'review.md', format: '# Review' }],
+      })]),
+      projectCwd: '/project',
+      lookupCwd: '/worktree',
+      resumeStackPrefix: [],
+      participation: participation(parent, [], invocationIndex.snapshot()),
+    })).toEqual({
+      reportNames: [],
+      failures: [{ kind: 'fatal', reason: 'workflow_call_invocation_namespace_mismatch:delegate' }],
+    });
   });
 
   it('uses exact child workflow participation when discovering dynamic reports', () => {

@@ -366,7 +366,8 @@ describe('TaskRunner (tasks.yaml)', () => {
       startedAt: new Date().toISOString(), completedAt: new Date().toISOString() });
     runner.requeueTask(task.name, ['failed']);
     const claimed = new TaskRunner(testDir).claimNextTasks(1)[0]!;
-    expect(claimed.data).toMatchObject({ merge_pushed_head_sha: c, merge_push_base_head_sha: b,
+    expect(claimed.data).toMatchObject({ merge_known_remote_head_sha: c,
+      merge_pushed_head_sha: c, merge_push_base_head_sha: b,
       merge_push_source: 'caccia' });
   });
 
@@ -2760,7 +2761,8 @@ describe('failed PR merge task publication', () => {
     lifecycle.recordPrMergePushedHead(record.name, newHeadSha, oldHeadSha, 'manual');
 
     expect(store.read().tasks[0]).toMatchObject({
-      status: 'failed', merge_pushed_head_sha: newHeadSha, merge_push_base_head_sha: oldHeadSha,
+      status: 'failed', merge_known_remote_head_sha: newHeadSha,
+      merge_pushed_head_sha: newHeadSha, merge_push_base_head_sha: oldHeadSha,
       merge_push_source: 'manual',
     });
   });

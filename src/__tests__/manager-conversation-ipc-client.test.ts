@@ -238,6 +238,31 @@ it('requires a fresh completed read after reconnecting the same client', async (
   expect(value.getSnapshot().readStatus).toBe('complete');
 });
 
+it('connects to a fresh daemon after asynchronous assignment preparation', async () => {
+  let ready = false;
+  doubles.ensure.mockImplementationOnce(async () => { ready = true; });
+  doubles.resolve.mockImplementationOnce(async () => {
+    await Promise.resolve();
+    // 接続前の非同期処理中に、attachmentのないdaemonが終了する条件。
+    if (ready) ready = false;
+    return selected;
+  });
+  const connect = doubles.connect.getMockImplementation()!;
+  doubles.connect.mockImplementationOnce((...args) => {
+    if (!ready) {
+      const socket = new FakeSocket(() => {});
+      sockets.push(socket);
+      queueMicrotask(() => socket.emit('error', Object.assign(new Error('connect ENOENT: daemon exited during assignment preparation'), { code: 'ENOENT' })));
+      return socket;
+    }
+    return connect(...args);
+  });
+  const value = client();
+  await value.connect();
+  expect(value.getSnapshot().connection).toBe('connected');
+  expect(sockets[0]!.requests.map(({ method }) => method)).toEqual(['hello', 'open']);
+});
+
 it('authenticates the current owner and opens the resolved identity with CLI overrides before applying a complete read', async () => {
   const value = client(); const listener = vi.fn(); const unsubscribe = value.subscribe(listener);
   await value.connect();
@@ -373,11 +398,22 @@ it('closes only the attachment and rejects pending requests without sending abor
   await expect(value.connect()).rejects.toThrow();
 });
 
-it('releases a request when its bounded timeout expires', async () => {
+it('keeps an unanswered request pending until exactly five seconds despite unrelated output', async () => {
   const value = client(); await value.connect(); submit = () => {};
   vi.useFakeTimers();
-  const result = expect(value.submit({ kind: 'message', text: 'unknown outcome' })).rejects.toThrow();
-  await vi.advanceTimersByTimeAsync(5000); await result;
+  let settled = false;
+  const pending = value.submit({ kind: 'message', text: 'unknown outcome' }).finally(() => { settled = true; });
+  const result = expect(pending).rejects.toThrow('IPC request timed out');
+  await vi.advanceTimersByTimeAsync(4000);
+  const version = { transferId: randomUUID(), revision: 4, stateSequence: 1, operationId: null };
+  for await (const { frame } of conversationTransferFrames(record.id, version, 'output', (async function* () {
+    yield { kind: 'notice', id: 'unrelated-notice', message: 'Daemon is still running' };
+  })())) sockets[0]!.emit('data', encodeConversationFrame(frame));
+  await vi.advanceTimersByTimeAsync(999);
+  expect(settled).toBe(false);
+  expect(value.getSnapshot().connection).toBe('connected');
+  expect(sockets[0]!.destroyed).toBe(false);
+  await vi.advanceTimersByTimeAsync(1); await result;
   expect(value.getSnapshot().connection).toBe('disconnected');
   expect(sockets[0]!.destroyed).toBe(true);
 });

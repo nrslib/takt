@@ -98,6 +98,54 @@ it('waits for IPC readiness after its newly spawned daemon has published the own
   expect(child.unref).toHaveBeenCalledOnce();
 });
 
+it('waits for the winning daemon IPC after its own child loses the startup race', async () => {
+  const winner = { ...owner, pid: owner.pid + 1 };
+  doubles.spawn.mockImplementation(() => {
+    queueMicrotask(() => {
+      doubles.read.mockReturnValue(winner);
+      child.exitCode = 0;
+      child.emit('spawn');
+    });
+    return child;
+  });
+  doubles.ready.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+  await ensureDaemon();
+
+  expect(doubles.ready.mock.calls).toEqual([
+    [process.env.TAKT_CONFIG_DIR, winner],
+    [process.env.TAKT_CONFIG_DIR, winner],
+  ]);
+  expect(doubles.delay).toHaveBeenCalledExactlyOnceWith(50);
+  expect(doubles.spawn).toHaveBeenCalledOnce();
+  expect(doubles.remove).not.toHaveBeenCalled();
+  expect(doubles.close).toHaveBeenCalledExactlyOnceWith(42);
+});
+
+it('bounds IPC readiness waiting for the winning daemon after its own child exits', async () => {
+  const winner = { ...owner, pid: owner.pid + 1 };
+  let now = 0;
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
+  doubles.spawn.mockImplementation(() => {
+    queueMicrotask(() => {
+      doubles.read.mockReturnValue(winner);
+      child.exitCode = 0;
+      child.emit('spawn');
+    });
+    return child;
+  });
+  doubles.ready.mockResolvedValue(false);
+  doubles.delay.mockImplementation(async (ms: number) => { now += ms; });
+
+  await expect(ensureDaemon()).rejects.toThrow();
+
+  expect(now).toBe(5_000);
+  expect(doubles.ready).toHaveBeenCalledWith(process.env.TAKT_CONFIG_DIR, winner);
+  expect(doubles.spawn).toHaveBeenCalledOnce();
+  expect(doubles.remove).not.toHaveBeenCalled();
+  expect(doubles.close).toHaveBeenCalledExactlyOnceWith(42);
+});
+
 it.each([{ version: 'old-version' }, { cliPath: '/old/cli.js' }])('stops the old daemon before replacing a differing owner: %j', async (difference) => {
   const old = { ...owner, ...difference, pid: 1234 };
   doubles.read.mockReturnValue(old);

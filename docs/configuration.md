@@ -14,6 +14,11 @@ If the global configuration directory and the current project's `.takt/` point t
 ```yaml
 # ~/.takt/config.yaml
 language: en                  # UI language: 'en' or 'ja'
+director:
+  patrol_interval: 900        # Director patrol interval in seconds (positive integer, default: 900)
+  slack:
+    channel_id: C0DIR
+    allowed_user_ids: [U0AAA]
 logging:
   level: info                 # Log level: debug, info, warn, error
 provider: claude-sdk              # Default provider: claude-sdk, claude, claude-headless, claude-terminal, codex, opencode, deepseek-harness, cursor, copilot, kiro, devin, pi, or mock
@@ -186,12 +191,15 @@ Dynamic parallel and `dynamic_facets` selectors use read-only mode with only `Re
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `language` | `"en"` \| `"ja"` | `"en"` | UI language |
+| `director.patrol_interval` | positive integer seconds | `900` | Interval between scheduled director patrols while the daemon is running. Global-only. |
+| `director.slack.channel_id` | string | - | Director Slack channel. Global-only; see [Slack conversations with director](#slack-conversations-with-director). |
+| `director.slack.allowed_user_ids` | string[] | - | Users allowed to send messages to director from Slack. Required when `director.slack` is configured; an empty list accepts no users. |
 | `logging.level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | Log level |
 | `logging.trace` | boolean | `false` | Enable trace-level logging (suppresses high-frequency debug noise) |
 | `logging.debug` | boolean | `false` | Enable debug logging (`debug.log` + `prompts.jsonl`) |
 | `logging.provider_events` | boolean | `false` | Persist provider stream events |
 | `logging.usage_events` | boolean | `false` | Persist usage event logs |
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-headless"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"devin"` \| `"mock"` | `"claude-sdk"` | Default concrete AI provider (`claude-sdk` = Agent SDK mode, `claude` = alias for `claude-sdk`, `claude-headless` = headless CLI mode, `claude-terminal` = experimental interactive terminal mode, `pi` = Pi SDK mode, `deepseek-harness` = official DeepSeek Harness TypeScript SDK/runtime `0.2.1-alpha.2`) |
+| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-headless"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"devin"` \| `"mock"` | `"claude-sdk"` | Default concrete AI provider (`claude-sdk` = Agent SDK mode, `claude` = alias for `claude-sdk`, `claude-headless` = headless CLI mode, `claude-terminal` = experimental interactive terminal mode, `pi` = Pi SDK mode, `deepseek-harness` = official DeepSeek Harness TypeScript SDK/runtime `0.2.1-rc.3`) |
 | `model` | string | - | Default model name (passed to provider as-is) |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | Branch name generation strategy |
 | `prevent_sleep` | boolean | `false` | Prevent macOS idle sleep (caffeinate) |
@@ -325,6 +333,7 @@ ignore_exceed: false          # Applies to takt run and takt watch like --ignore
 #       reasoning_byte_limit: 4194304
 #   kiro:
 #     agent: my-default-agent
+#     effort: medium
 #   pi:
 #     extensions: [npm:pi-fff]
 #     no_skills: true
@@ -545,6 +554,24 @@ When a repository has Slack configured and both tokens are present, the daemon k
 - Answer free-text inquiries by replying in the inquiry post's thread. When its inquiry binding is available, the reply is treated as an answer, not a manager conversation message. Answers are saved with source `slack`.
 - Inquiries already pending when Slack connects are not posted to Slack; answer them in the TUI with `Ctrl+R`. Each new inquiry after connection is posted once, with no retry. If the binding between a post and its inquiry could not be saved or cannot be read, replies in that thread are treated as ordinary conversation, not answers.
 - Notices such as goal completion are not posted through the conversation connection. They continue to arrive through `TAKT_NOTIFY_WEBHOOK`.
+
+## Slack conversations with director
+
+Configure the director channel and permitted users in global `~/.takt/config.yaml`, not project `.takt/config.yaml`:
+
+```yaml
+# ~/.takt/config.yaml
+director:
+  slack:
+    channel_id: C0DIR
+    allowed_user_ids: [U0AAA]
+```
+
+Use the same Slack App and `TAKT_SLACK_APP_TOKEN` / `TAKT_SLACK_BOT_TOKEN` environment variables as manager. Follow [Create the Slack App](#create-the-slack-app), invite the bot to the director channel, and set both variables in the shell that starts `takt daemon`. Tokens belong in environment variables, not configuration files. Restart the daemon after changing Slack settings.
+
+Messages from permitted users in the director channel go to the director conversation, not manager. Director replies in the original post's thread. Messages from users outside `director.slack.allowed_user_ids` are ignored. If manager uses the same channel, ordinary messages still go to director; manager inquiry buttons and modals use `manager.slack.allowed_user_ids`.
+
+Director groups new notices from one turn or patrol into one post in this channel, covering completed work and decisions needed from a person, such as merge approval and unanswered inquiries. Notices suppressed by the existing duplicate check are not posted again. Without `director.slack`, director neither posts to nor accepts messages from Slack. Both token variables are required to connect. This does not change the existing `TAKT_NOTIFY_WEBHOOK` notification path.
 
 ## Manager sensitive read targets
 
@@ -1184,6 +1211,25 @@ mcp:
 
 ### Schema
 
+Use `mcp.targets.personas.assistant` for both normal and grill-me assistant conversations.
+When the provider supports MCP, the assistant also gets its built-in read-only `takt` server.
+A server that you define under the name `takt` is not passed to the assistant. The built-in `takt` server is used instead, and no notice is shown.
+When the provider does not support MCP, the conversation continues without MCP and shows a notice.
+For example, assign a configured Backlog MCP server as follows:
+
+```yaml
+version: 1
+mcp:
+  servers:
+    backlog:
+      type: stdio
+      command: backlog-mcp-server
+  targets:
+    personas:
+      assistant:
+        servers: [backlog]
+```
+
 | Field | Type | Description |
 |---|---|---|
 | `mcp.servers` | `{ <name>: ServerEntry }` | Named MCP server definitions (`stdio` / `sse` / `http`). Defining a server here alone does not enable it — it must be assigned through `defaults` or `targets`. |
@@ -1476,7 +1522,7 @@ Provider options can also be set with the corresponding `TAKT_PROVIDER_OPTIONS_*
 | Codex permissions and Skills | `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=codex`, `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO=true`, `TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER=true` |
 | Claude Skills | `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED=true` |
 | Claude terminal | `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`, `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500` |
-| Kiro agent | `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` |
+| Kiro agent and effort | `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent`, `TAKT_PROVIDER_OPTIONS_KIRO_EFFORT=medium` |
 | Pi thinking and resources | `TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL=high`, `TAKT_PROVIDER_OPTIONS_PI_EXTENSIONS='["npm:pi-fff"]'`, `TAKT_PROVIDER_OPTIONS_PI_NO_EXTENSIONS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_SKILLS=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_PROMPT_TEMPLATES=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_THEMES=true`, `TAKT_PROVIDER_OPTIONS_PI_NO_CONTEXT_FILES=true` |
 | Pi system prompt | `TAKT_PROVIDER_OPTIONS_PI_SYSTEM_PROMPT_MODE=append` or `replace` |
 
@@ -1547,7 +1593,7 @@ You can continue a session while the same runtime remains active and the model, 
 
 The DeepSeek SDK can use file, search, shell, and subagent tools. Its workspace-write boundary limits writes but does not isolate secret-file reads. Run it in a trusted workspace. TAKT disables the SDK's session-file persistence and session-log API upload.
 
-The SDK does not support permission modes or callbacks, `bypassPermissions`, an explicit allowed-tools list, a nonempty MCP server map, `maxTurns`, structured output, or image attachments. Steps that require these fail before execution. Tool-free report or status phases also cannot use this provider; choose a provider that supports those controls.
+The SDK does not support permission modes or callbacks, `bypassPermissions`, an explicit allowed-tools list, a nonempty MCP server map, `maxTurns`, structured output, or image attachments. Steps that require these fail before execution. Report phases with read-only tools and tool-free status phases also cannot use this provider; choose a provider that supports those controls.
 
 When migrating from the old Python/uv version, remove `runtime_mode`, Python/uv-only options, `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_RUNTIME_MODE`, and `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PYTHON_PATH` from configuration. Use `takt install deepseek-harness`. Before manually removing old `venv/`, `pyproject.toml`, or `uv.lock` files, stop all TAKT/DeepSeek processes, back up needed data, and confirm they belong to the old environment. Keep the `$DSH_HOME` credential store and current `deepseek-harness/sdk`, `state/`, `dsh-home/`, and `install.lock`.
 
@@ -1620,6 +1666,8 @@ provider_options:
 ```
 
 With `permission_control: codex`, Codex settings control sandbox and network permissions. TAKT's `network_access` setting does not affect effective Codex permissions in this mode. TAKT still sets `approvalPolicy: never` for non-interactive runs, so check the Codex configuration you use. `reasoning_effort`, `fast_mode`, and `skills` continue to apply.
+
+Phase 2 and Phase 1 of steps with an explicit `edit: false` still pass a `read-only` sandbox. Codex uses this sandbox in Phase 1 regardless of the resolved permission mode, including with `permission_control: codex`. These calls also handle `network_access` as in TAKT-managed permission control.
 
 To select a named Codex configuration profile, add `config_profile` alongside `permission_control: codex`:
 

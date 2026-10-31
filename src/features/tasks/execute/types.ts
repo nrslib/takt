@@ -283,6 +283,7 @@ export interface WorkflowExecutionOptions extends PrMergeOptions {
   /** Stateless authored path for retrying from a new nested position. */
   restartPoint?: WorkflowRestartPoint;
   resumeSource?: RunResumeSource;
+  sourceResumePoint?: WorkflowResumePoint;
   /** Resolver used to inspect workflow_call targets before engine construction. */
   workflowCallResolver?: WorkflowCallResolver;
   /** Override report directory name (e.g. "20260201-015714-foptng") */
@@ -387,6 +388,7 @@ export interface ExecuteTaskOptions extends PrMergeOptions {
   /** Stateless authored path for retrying from a new nested position. */
   restartPoint?: WorkflowRestartPoint;
   resumeSource?: RunResumeSource;
+  sourceResumePoint?: WorkflowResumePoint;
   /** Override report directory name (e.g. "20260201-015714-foptng") */
   reportDirName?: string;
   taskSpec?: ResolvedTaskSpec;

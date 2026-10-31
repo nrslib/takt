@@ -14,6 +14,11 @@ phase 粒度の usage events と集計方法は [Observability Guide](./observab
 ```yaml
 # ~/.takt/config.yaml
 language: en                  # UI 言語: 'en' または 'ja'
+director:
+  patrol_interval: 900        # director の見回り間隔（秒、正の整数、デフォルト: 900）
+  slack:
+    channel_id: C0DIR
+    allowed_user_ids: [U0AAA]
 logging:
   level: info                 # ログレベル: debug, info, warn, error
 provider: claude-sdk              # デフォルト provider: claude-sdk, claude, claude-headless, claude-terminal, codex, opencode, deepseek-harness, cursor, copilot, kiro, devin, pi, または mock
@@ -186,12 +191,15 @@ dynamic parallel と `dynamic_facets` の selector は読み取り専用で、`R
 | フィールド | 型 | デフォルト | 説明 |
 |-----------|------|---------|------|
 | `language` | `"en"` \| `"ja"` | `"en"` | UI 言語 |
+| `director.patrol_interval` | 正の整数（秒） | `900` | daemon 稼働中に director の見回りを行う間隔。グローバル設定のみ。 |
+| `director.slack.channel_id` | string | - | director の Slack チャンネル。グローバル設定のみ。[Slack で director と会話する](#slack-で-director-と会話する)を参照。 |
+| `director.slack.allowed_user_ids` | string[] | - | Slack から director への発言を許可するユーザー。`director.slack` を設定するときは必須。空配列では誰の発言も受け付けない。 |
 | `logging.level` | `"debug"` \| `"info"` \| `"warn"` \| `"error"` | `"info"` | ログレベル |
 | `logging.trace` | boolean | `false` | trace レベルのログを有効化（高頻度のデバッグノイズを抑制） |
 | `logging.debug` | boolean | `false` | デバッグログを有効化（`debug.log` + `prompts.jsonl`） |
 | `logging.provider_events` | boolean | `false` | provider stream イベントを永続化 |
 | `logging.usage_events` | boolean | `false` | usage イベントログを永続化 |
-| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-headless"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"devin"` \| `"mock"` | `"claude-sdk"` | デフォルトの具体 AI provider（`claude-sdk` = Agent SDK モード、`claude` = `claude-sdk` のエイリアス、`claude-headless` = ヘッドレス CLI モード、`claude-terminal` = experimental interactive terminal モード、`pi` = Pi SDK モード、`deepseek-harness` = 公式 DeepSeek Harness TypeScript SDK/runtime `0.2.1-alpha.2`） |
+| `provider` | `"claude"` \| `"claude-sdk"` \| `"claude-headless"` \| `"claude-terminal"` \| `"codex"` \| `"opencode"` \| `"deepseek-harness"` \| `"pi"` \| `"cursor"` \| `"copilot"` \| `"kiro"` \| `"devin"` \| `"mock"` | `"claude-sdk"` | デフォルトの具体 AI provider（`claude-sdk` = Agent SDK モード、`claude` = `claude-sdk` のエイリアス、`claude-headless` = ヘッドレス CLI モード、`claude-terminal` = experimental interactive terminal モード、`pi` = Pi SDK モード、`deepseek-harness` = 公式 DeepSeek Harness TypeScript SDK/runtime `0.2.1-rc.3`） |
 | `model` | string | - | デフォルトモデル名（provider にそのまま渡される） |
 | `branch_name_strategy` | `"romaji"` \| `"ai"` | `"romaji"` | ブランチ名生成方式 |
 | `prevent_sleep` | boolean | `false` | macOS アイドルスリープ防止（caffeinate） |
@@ -321,6 +329,7 @@ ignore_exceed: false          # takt run / takt watch で --ignore-exceed 相当
 #       reasoning_byte_limit: 4194304
 #   kiro:
 #     agent: my-default-agent
+#     effort: medium
 #   pi:
 #     extensions: [npm:pi-fff]
 #     no_skills: true
@@ -541,6 +550,24 @@ Slack を設定したリポジトリがあり、両方のトークンがそろ�
 - 自由記述の回答は、その問い合わせの投稿のスレッドに返信します。投稿と問い合わせの対応が有効な場合、返信は会話ではなく回答として扱われます。回答は出どころ `slack` として保存されます。
 - Slack 接続時にすでに未回答の問い合わせは Slack に投稿されません。TUI の `Ctrl+R` で回答してください。接続後の新しい問い合わせは1件につき1回投稿し、再送しません。投稿と問い合わせの対応を保存できなかった場合や読み取れない場合、そのスレッドへの返信は回答にならず、通常の会話として扱われます。
 - 「完成しました」などの知らせは、会話の接続からは投稿しません。引き続き `TAKT_NOTIFY_WEBHOOK` で届きます。
+
+## Slack で director と会話する
+
+director のチャンネルと許可するユーザーは、プロジェクトの `.takt/config.yaml` ではなく、グローバルの `~/.takt/config.yaml` に設定します。
+
+```yaml
+# ~/.takt/config.yaml
+director:
+  slack:
+    channel_id: C0DIR
+    allowed_user_ids: [U0AAA]
+```
+
+manager と同じ Slack App と環境変数 `TAKT_SLACK_APP_TOKEN` / `TAKT_SLACK_BOT_TOKEN` を使います。[Slack App を作る](#slack-app-を作る)に従ってボットを director のチャンネルへ招待し、`takt daemon` を起動するシェルで両変数を設定してください。トークンは設定ファイルに書かず、環境変数で渡します。Slack 設定を変更したら daemon を起動し直してください。
+
+director のチャンネルに許可された人が書いた発言は、manager ではなく director の会話に渡ります。director の返事は元の投稿のスレッドに届きます。`director.slack.allowed_user_ids` にない人の発言は無視します。manager と同じチャンネルを使う場合も、通常の発言は director に渡り、manager の問い合わせボタンとモーダルの操作には `manager.slack.allowed_user_ids` が適用されます。
+
+director は、1回の会話または見回りで出た新しい知らせを、このチャンネルへの1件の投稿にまとめます。終わった仕事と、マージ承認や未回答の問い合わせなど人に決めてほしいことを知らせます。既存の重複抑止で除かれた知らせは再投稿しません。`director.slack` がなければ、director は Slack に投稿せず、発言も受け付けません。接続には両方のトークン環境変数が必要です。既存の `TAKT_NOTIFY_WEBHOOK` による通知経路は変わりません。
 
 ## manager の秘密ファイル設定
 
@@ -1167,6 +1194,26 @@ mcp:
 
 ### スキーマ
 
+通常モードと grill-me モードの両方のアシスタント会話には `mcp.targets.personas.assistant` を使います。
+MCP に対応する provider では、アシスタントに内蔵の読み取り専用 `takt` server も付きます。
+`takt` という名前で利用者が定義した server はアシスタントに渡されず、内蔵の `takt` server が使われます。
+この場合、通知は出ません。
+MCP に対応しない provider では、MCP を使わずに会話を続け、その旨を通知します。
+例えば、設定済みの Backlog MCP server は次のように割り当てます。
+
+```yaml
+version: 1
+mcp:
+  servers:
+    backlog:
+      type: stdio
+      command: backlog-mcp-server
+  targets:
+    personas:
+      assistant:
+        servers: [backlog]
+```
+
 | フィールド | 型 | 説明 |
 |---|---|---|
 | `mcp.servers` | `{ <名前>: ServerEntry }` | 名前付き MCP server 定義（`stdio` / `sse` / `http`）。ここで定義しただけでは有効化せず、`defaults` または `targets` で割り当てる必要があります。 |
@@ -1444,7 +1491,7 @@ provider option は対応する `TAKT_PROVIDER_OPTIONS_*` 環境変数でも指�
 | Codex の権限と Skill | `TAKT_PROVIDER_OPTIONS_CODEX_PERMISSION_CONTROL=codex`、`TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_REPO=true`、`TAKT_PROVIDER_OPTIONS_CODEX_SKILLS_USER=true` |
 | Claude の Skill | `TAKT_PROVIDER_OPTIONS_CLAUDE_SKILLS_ENABLED=true` |
 | Claude terminal | `TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_BACKEND=tmux`、`TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TIMEOUT_MS=900000`、`TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_KEEP_SESSION=false`、`TAKT_PROVIDER_OPTIONS_CLAUDE_TERMINAL_TRANSCRIPT_POLL_INTERVAL_MS=500` |
-| Kiro の agent | `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent` |
+| Kiro の agent と effort | `TAKT_PROVIDER_OPTIONS_KIRO_AGENT=planner-agent`、`TAKT_PROVIDER_OPTIONS_KIRO_EFFORT=medium` |
 | Pi の推論・リソース | `TAKT_PROVIDER_OPTIONS_PI_THINKING_LEVEL=high`、`TAKT_PROVIDER_OPTIONS_PI_EXTENSIONS='["npm:pi-fff"]'`、`TAKT_PROVIDER_OPTIONS_PI_NO_EXTENSIONS=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_SKILLS=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_PROMPT_TEMPLATES=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_THEMES=true`、`TAKT_PROVIDER_OPTIONS_PI_NO_CONTEXT_FILES=true` |
 | Pi の system prompt | `TAKT_PROVIDER_OPTIONS_PI_SYSTEM_PROMPT_MODE=append` または `replace` |
 
@@ -1514,7 +1561,7 @@ Git source の動作も引き続き利用できます。平文の `http://` と 
 
 DeepSeek SDK はファイル操作、検索、shell、subagent などのツールを使います。SDK の workspace-write は書き込みを制限しますが、secret file の読み取りを隔離しません。信頼する workspace で実行してください。TAKT は SDK の session ファイルへの永続化と session log の API 送信を無効にしています。
 
-DeepSeek SDK は permission mode/callback、`bypassPermissions`、明示的な allowed-tools list、空でない MCP server map、`maxTurns`、structured output、image attachment に対応していません。これらを必要とする step は実行前にエラーになります。report/status phase のようにツール禁止を要求する step も実行できません。対応する制約を提供する別の provider を選んでください。
+DeepSeek SDK は permission mode/callback、`bypassPermissions`、明示的な allowed-tools list、空でない MCP server map、`maxTurns`、structured output、image attachment に対応していません。これらを必要とする step は実行前にエラーになります。読み取り専用のツールを使う report phase と、ツールを使わない status phase も実行できません。対応する制約を提供する別の provider を選んでください。
 
 以前の Python/uv 版から移行する場合は、`runtime_mode` と Python/uv 専用 option、および `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_RUNTIME_MODE` と `TAKT_PROVIDER_OPTIONS_DEEPSEEK_HARNESS_PYTHON_PATH` を設定から除いてください。現在の導入コマンドは `takt install deepseek-harness` です。旧 `venv/`、`pyproject.toml`、`uv.lock` を手動で整理する場合は、すべての TAKT/DeepSeek process を停止し、必要なデータをバックアップしてから旧環境のファイルであることを確認してください。`$DSH_HOME` の credential store と現在の `deepseek-harness/sdk`、`state/`、`dsh-home/`、`install.lock` は保持します。
 
@@ -1585,6 +1632,8 @@ provider_options:
 ```
 
 `permission_control: codex` ではサンドボックスとネットワークの権限を Codex の設定に委ねます。この場合、TAKT の `network_access` は Codex の実効権限に反映されません。非対話実行の `approvalPolicy: never` は引き続き適用されるため、使用する Codex の設定を確認してください。`reasoning_effort`、`fast_mode`、`skills` は通常どおり適用されます。
+
+ただし、Phase 2 と、`edit: false` を明示した step の Phase 1 では、TAKT が `read-only` sandbox を渡します。Codex の Phase 1 では、解決された permission mode にかかわらずこの sandbox を使用し、`permission_control: codex` でも適用されます。この場合は `network_access` も通常の TAKT 管理時と同じ扱いになります。
 
 Codex の設定プロファイルを名前で選択するには、`permission_control: codex` と一緒に `config_profile` を指定します。
 

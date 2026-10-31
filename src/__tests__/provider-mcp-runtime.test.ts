@@ -6,6 +6,7 @@ import { createMcpAdapter, type ResolvedMcpServers, type ProviderMcpContext } fr
 import { TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
 import { TAKT_MCP_MANAGER_TOOL_NAMES } from '../features/mcp/server.js';
 import { createTaskStateMcpServers } from '../features/interactive/taskStateMcp.js';
+import { markConversationMcpServers } from '../infra/providers/mcp/task-state.js';
 
 /**
  * Contracts covered (see plan.md 完了契約):
@@ -273,6 +274,118 @@ describe('Cursor adapter (MCP-CURSOR)', () => {
   });
 });
 
+describe('Cursor adapter MCP approval for conversations', () => {
+  const approvalFlags = (args: readonly string[] | undefined) =>
+    (args ?? []).filter((arg) => arg.startsWith('--approve-mcps'));
+
+  it.each(['readonly', 'edit', 'full', undefined] as const)(
+    'passes --approve-mcps when the conversation approved user servers in permission mode %s and never adds --force itself',
+    async (permissionMode) => {
+      const prepared = await createMcpAdapter('cursor').prepare(
+        resolvedServers(),
+        baseContext({ approvedServerNames: ['common-tools'], ...(permissionMode === undefined ? {} : { permissionMode }) }),
+      );
+      try {
+        expect(approvalFlags(prepared.args)).toEqual(['--approve-mcps']);
+        expect((prepared.args ?? []).filter((arg) => arg.startsWith('--force'))).toEqual([]);
+      } finally {
+        await prepared.dispose();
+      }
+    },
+  );
+
+  it.each([
+    { name: 'an empty approved list', approvedServerNames: [] as string[] },
+    { name: 'no approved list (a workflow step)', approvedServerNames: undefined },
+  ])('does not pass --approve-mcps with $name even when servers are prepared', async ({ approvedServerNames }) => {
+    for (const permissionMode of ['readonly', 'full'] as const) {
+      const prepared = await createMcpAdapter('cursor').prepare(
+        resolvedServers(),
+        baseContext({ permissionMode, ...(approvedServerNames === undefined ? {} : { approvedServerNames }) }),
+      );
+      try {
+        expect(approvalFlags(prepared.args)).toEqual([]);
+      } finally {
+        await prepared.dispose();
+      }
+    }
+  });
+});
+
+describe('Copilot adapter MCP tool permissions for conversations', () => {
+  const TAKT_READ_TOOLS = ['takt_list_tasks', 'takt_get_run', 'takt_list_goals', 'takt_get_goal'];
+  const conversationServers = (): ResolvedMcpServers => {
+    const servers = markConversationMcpServers({ backlog: { command: 'backlog' }, ...createTaskStateMcpServers() });
+    return { enabled: true, servers, serverNames: Object.keys(servers), identity: 'conversation' };
+  };
+  const allowedTools = (args: readonly string[] | undefined) =>
+    (args ?? []).filter((arg) => arg.startsWith('--allow-tool')).sort();
+  const expectedAllowances = [
+    '--allow-tool=backlog',
+    ...TAKT_READ_TOOLS.map((tool) => `--allow-tool=takt(${tool})`),
+  ].sort();
+
+  it.each(['readonly', undefined] as const)(
+    'allows the approved server as a whole and each built-in takt tool one by one in permission mode %s',
+    async (permissionMode) => {
+      const prepared = await createMcpAdapter('copilot').prepare(conversationServers(), baseContext({
+        approvedServerNames: ['backlog'],
+        toolApprovalAllowlist: { takt: TAKT_READ_TOOLS },
+        ...(permissionMode === undefined ? {} : { permissionMode }),
+      }));
+      try {
+        expect(allowedTools(prepared.args)).toEqual(expectedAllowances);
+        expect((prepared.args ?? []).find((arg) => arg.startsWith('--additional-mcp-config'))).toBeDefined();
+      } finally {
+        await prepared.dispose();
+      }
+    },
+  );
+
+  it('allows only the built-in takt tools when the conversation approved no user servers', async () => {
+    const taskState = createTaskStateMcpServers();
+    const prepared = await createMcpAdapter('copilot').prepare(
+      { enabled: true, servers: taskState, serverNames: Object.keys(taskState), identity: 'takt:stdio' },
+      baseContext({
+        permissionMode: 'readonly', approvedServerNames: [], taskStateMcpServers: taskState,
+        toolApprovalAllowlist: { takt: TAKT_READ_TOOLS },
+      }),
+    );
+    try {
+      expect(allowedTools(prepared.args)).toEqual(TAKT_READ_TOOLS.map((tool) => `--allow-tool=takt(${tool})`).sort());
+    } finally {
+      await prepared.dispose();
+    }
+  });
+
+  it.each(['edit', 'full'] as const)('does not add MCP tool permissions in permission mode %s', async (permissionMode) => {
+    const prepared = await createMcpAdapter('copilot').prepare(conversationServers(), baseContext({
+      permissionMode, approvedServerNames: ['backlog'], toolApprovalAllowlist: { takt: TAKT_READ_TOOLS },
+    }));
+    try {
+      expect(allowedTools(prepared.args)).toEqual([]);
+      expect((prepared.args ?? []).find((arg) => arg.startsWith('--additional-mcp-config'))).toBeDefined();
+    } finally {
+      await prepared.dispose();
+    }
+  });
+
+  it.each(['edit', 'full', undefined] as const)(
+    'keeps the arguments of a workflow step (no approval fields) to the MCP config in permission mode %s',
+    async (permissionMode) => {
+      const prepared = await createMcpAdapter('copilot').prepare(
+        resolvedServers(),
+        baseContext(permissionMode === undefined ? {} : { permissionMode }),
+      );
+      try {
+        expect(prepared.args).toEqual([expect.stringMatching(/^--additional-mcp-config=@/)]);
+      } finally {
+        await prepared.dispose();
+      }
+    },
+  );
+});
+
 describe('Copilot adapter (MCP-COPILOT)', () => {
   it('Given the copilot adapter, When prepared with servers, Then the CLI args include --additional-mcp-config=@<path>', async () => {
     const adapter = createMcpAdapter('copilot');
@@ -348,6 +461,16 @@ describe('Copilot adapter (MCP-COPILOT)', () => {
       serverNames: Object.keys(copiedServers),
       identity: 'takt:stdio',
     }, baseContext({ permissionMode: 'readonly', taskStateMcpServers }))).rejects.toThrow(/readonly permission mode/);
+  });
+
+  it('accepts a registered conversation record but rejects its copy in Copilot readonly mode', async () => {
+    const adapter = createMcpAdapter('copilot');
+    const servers = markConversationMcpServers({ backlog: { command: 'backlog' }, ...createTaskStateMcpServers() });
+    const resolved = { enabled: true, servers, serverNames: Object.keys(servers), identity: 'conversation' };
+    const context = baseContext({ permissionMode: 'readonly' });
+    const prepared = await adapter.prepare(resolved, context);
+    await prepared.dispose();
+    await expect(adapter.prepare({ ...resolved, servers: { ...servers } }, context)).rejects.toThrow(/readonly permission mode/);
   });
 
   it('Given the copilot adapter with edit permission mode, When prepared with servers, Then --additional-mcp-config is added (permission-consistent)', async () => {

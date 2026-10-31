@@ -129,3 +129,18 @@ it('bounds connection, post and shutdown waits', async () => {
   const closed = client.close();
   await vi.advanceTimersByTimeAsync(10_000); await closed;
 });
+
+it('disconnects a connection that completes after startup timed out and the listener closed', async () => {
+  vi.useFakeTimers();
+  let connect!: () => void;
+  sdk.start.mockReturnValue(new Promise<void>((resolve) => { connect = resolve; }));
+  const client = createSlackClient({ appToken: 'app', botToken: 'bot' });
+  const starting = expect(client.start(vi.fn())).rejects.toThrow();
+  await vi.advanceTimersByTimeAsync(10_000);
+  await starting;
+  await client.close();
+  expect(sdk.disconnect).toHaveBeenCalledOnce();
+  connect();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(sdk.disconnect).toHaveBeenCalledTimes(2);
+});

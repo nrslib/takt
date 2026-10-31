@@ -38,6 +38,7 @@ export class WorkflowResumeContinuation {
     readonly step: WorkflowStep;
     readonly resumeStackPrefix: readonly WorkflowResumePointEntry[];
     readonly state: WorkflowState;
+    readonly selectedRestartOccurrence?: number;
     readonly isOccurrenceNamespaceReserved?: (occurrence: number) => boolean;
   }): number {
     const frameIndex = input.resumeStackPrefix.length;
@@ -46,6 +47,10 @@ export class WorkflowResumeContinuation {
       input.step.name,
       input.resumeStackPrefix,
     );
+    if (input.selectedRestartOccurrence !== undefined) {
+      input.state.stepIterations.set(stepIterationIdentity, input.selectedRestartOccurrence);
+      return input.selectedRestartOccurrence;
+    }
     const source = this.#source;
     const sourceFrame = source?.stack[frameIndex];
     if (

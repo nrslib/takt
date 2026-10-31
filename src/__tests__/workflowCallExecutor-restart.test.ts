@@ -8,7 +8,11 @@ import type {
 } from '../core/models/index.js';
 import { WorkflowCallExecutor } from '../core/workflow/engine/WorkflowCallExecutor.js';
 import { WorkflowRestartNavigator } from '../core/workflow/engine/WorkflowRestartNavigator.js';
-import { WorkflowCallInvocationIndex } from '../core/workflow/workflow-call-invocation-index.js';
+import {
+  restoreWorkflowCallInvocationEvidence,
+  WorkflowCallInvocationIndex,
+} from '../core/workflow/workflow-call-invocation-index.js';
+import { WorkflowStepParticipationIndex } from '../core/workflow/workflow-step-participation-index.js';
 import { buildWorkflowCallSiteIdentity } from '../core/workflow/workflow-call-site-identity.js';
 import { attachWorkflowOpaqueRef } from '../shared/workflowConfigMetadata.js';
 import { DebugLogger } from '../shared/utils/debug.js';
@@ -244,6 +248,57 @@ async function consumeNestedWorkflowCallRestart() {
 }
 
 describe('WorkflowCallExecutor nested restart contract', () => {
+  it.each([
+    { updatedRef: true, occurrence: 1 },
+    { updatedRef: false, occurrence: 2 },
+  ])('rebinds selected restart participation with ref change=$updatedRef and occurrence=$occurrence', ({ updatedRef, occurrence }) => {
+    const step = makeCallStep('delegate', 'coding');
+    const oldRef = updatedRef ? 'old-parent' : 'same-parent';
+    const currentRef = updatedRef ? 'new-parent' : 'same-parent';
+    const oldParent = attachWorkflowOpaqueRef(makeWorkflow('default', 'delegate', [step]), oldRef);
+    const parent = attachWorkflowOpaqueRef(makeWorkflow('default', 'delegate', [step]), currentRef);
+    const child = makeWorkflow('coding', 'reviewers', [{ name: 'reviewers', persona: 'reviewer', instruction: 'Review' }]);
+    const oldCall = { ...makeRuntimeCallEntry('default', 'delegate', 1), workflow_ref: oldRef };
+    const namespace = buildWorkflowCallSiteIdentity({ stack: [oldCall], childWorkflow: child }).runPathSegment;
+    const sourceIndex = new WorkflowCallInvocationIndex(new Map());
+    sourceIndex.record(oldParent, step.name, [], { call_instance: 1, report_namespace_segment: namespace, completed: true });
+    const participation = new WorkflowStepParticipationIndex(new Map());
+    participation.record(child, 'reviewers', [oldCall], ['plan.md']);
+    const source = {
+      version: 2 as const,
+      stack: [{ ...oldCall, step: 'stopped', kind: 'agent' as const }],
+      iteration: 1,
+      elapsed_ms: 0,
+      workflow_call_invocations: sourceIndex.serialized(),
+      workflow_step_participations: participation.serialized(),
+    };
+    const restartPoint = {
+      stack: [
+        { workflow: 'default', workflow_ref: currentRef, step: 'delegate', kind: 'workflow_call' as const, call_instance: 1 as const },
+        { workflow: 'coding', workflow_ref: 'coding', step: 'reviewers', kind: 'agent' as const },
+      ],
+    };
+    const execution = makeExecutor({
+      parent,
+      state: makeState('default', 'delegate', occurrence),
+      restartPoint,
+      childEngine: makeChildEngine(child),
+      sharedRuntime: {
+        startedAtMs: Date.now(),
+        restartNavigator: new WorkflowRestartNavigator(restartPoint),
+        resumeInvocationSource: source,
+        workflowCallInvocationEvidence: restoreWorkflowCallInvocationEvidence(source),
+        workflowStepParticipationIndex: participation,
+      },
+    });
+
+    execution.executor.recordPendingInvocation(step, occurrence, []);
+
+    const currentCall = { ...makeRuntimeCallEntry('default', 'delegate', occurrence), workflow_ref: currentRef };
+    expect(participation.get(child, 'reviewers', [currentCall])).toEqual({ report_names: ['plan.md'] });
+    expect(participation.get(child, 'reviewers', [oldCall])).toBeUndefined();
+  });
+
   it('rebinds nested records for the matching ancestor and current invocation instance', () => {
     const root = makeWorkflow('outer', 'call', [makeCallStep('call', 'default')]);
     const oldParent = attachWorkflowOpaqueRef(makeWorkflow('default', 'delegate', [makeCallStep('delegate', 'coding')]), 'old-parent');
@@ -346,6 +401,33 @@ describe('WorkflowCallExecutor nested restart contract', () => {
       expect.objectContaining({ runPathNamespace: ['subworkflows', saved.report_namespace_segment] }));
     execution.executor.markCompletedInvocation(request.preparedExecution);
     expect(index.get(parent, step.name, [])).toEqual({ ...saved, completed: true });
+  });
+
+  it('rejects a saved invocation namespace whose iteration differs from the execution occurrence', () => {
+    const step = makeCallStep('delegate', 'coding');
+    const parent = makeWorkflow('default', 'delegate', [step]);
+    const child = makeWorkflow('coding', 'review', [
+      { name: 'review', persona: 'reviewer', instruction: 'Review' },
+    ]);
+    const restartPoint: WorkflowRestartPoint = { stack: [
+      { workflow: 'default', workflow_ref: 'default', step: 'delegate', kind: 'workflow_call', call_instance: 2 },
+      { workflow: 'coding', workflow_ref: 'coding', step: 'review', kind: 'agent' },
+    ] };
+    const oldChild = attachWorkflowOpaqueRef({ ...child }, 'old-child-ref');
+    const saved = { call_instance: 2, report_namespace_segment: buildWorkflowCallSiteIdentity({
+      stack: [makeRuntimeCallEntry('default', 'delegate', 1)], childWorkflow: oldChild,
+    }).runPathSegment };
+    const index = new WorkflowCallInvocationIndex(new Map());
+    index.record(parent, step.name, [], saved);
+    const execution = makeExecutor({
+      parent, state: makeState('default', 'delegate', 2), restartPoint, childEngine: makeChildEngine(child),
+      sharedRuntime: { startedAtMs: Date.now(), restartNavigator: new WorkflowRestartNavigator(restartPoint), workflowCallInvocationEvidence: { kind: 'exact', index } },
+    });
+
+    expect(() => makeRequest(execution.executor, {
+      step, child, callStack: [makeRuntimeCallEntry('default', 'delegate', 2)],
+    })).toThrow('invocation record does not match the canonical call site');
+    expect(index.get(parent, step.name, [])).toEqual(saved);
   });
 
   it('selects the saved invocation for the matching ancestor instance', () => {
