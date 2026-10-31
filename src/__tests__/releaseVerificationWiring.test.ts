@@ -310,6 +310,7 @@ describe('release verification wiring', () => {
     { name: 'published release', workflow: globalInstallWorkflow },
   ])('should wire $name global installation checks to the shared gate with Java 17 or later', ({ workflow }) => {
     const job = workflow.jobs?.['global-install'];
+    expect(job?.strategy?.matrix?.os).toEqual(['ubuntu-latest', 'macos-15']);
     const npmVersions = job?.strategy?.matrix?.npm ?? [];
     expect(npmVersions).toEqual(expect.arrayContaining(['10.9.4', '11.16.0']));
     expect(npmVersions.some((version) => /^12\.\d+\.\d+$/.test(version))).toBe(true);
@@ -544,7 +545,7 @@ describe('release verification wiring', () => {
     expect(deepSeekJob?.strategy?.matrix?.os).toEqual([
       'ubuntu-24.04',
       'ubuntu-24.04-arm',
-      'macos-14',
+      'macos-15',
     ]);
     expect(nodeSetup?.with?.['node-version']).toBe('22.22.0');
     expect(install?.env?.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD).toBe('1');
