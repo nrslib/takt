@@ -418,6 +418,18 @@ it.each([false, true])('restores queued messages without any client and never re
         operationId: startedId, conversationId: fixture.id, directorConversationId: conversationId({ kind: 'daemon' }),
         result: { kind: 'error', code: 'interrupted', message: expect.stringContaining(startedId!) },
       });
+      const directorId = conversationId({ kind: 'daemon' });
+      const director = await second.service.open({ conversationId: directorId, assignment: { kind: 'daemon' }, speaker,
+        binding: { port: 'tui', key: directorId, counterpart: speaker }, agentOverrides: { provider: 'mock' } }, {
+        deliver: async () => ({ kind: 'delivered' }),
+      });
+      const notifications: string[] = [];
+      for await (const item of director.read.items) if (item.kind === 'display_event') notifications.push(item.event.message);
+      director.read.complete();
+      const interrupted = notifications.filter((message) => message.includes(startedId!));
+      expect(interrupted).toHaveLength(1);
+      expect(interrupted[0]).toMatch(/interrupt|中断/i);
+      expect(interrupted[0]).toContain(fixture.id);
     }
   } finally { restored.release(); await second.stop(); }
 });

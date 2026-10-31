@@ -4,7 +4,7 @@ import * as managerConfig from '../infra/config/managerConfig.js';
 import { createInquiry } from '../infra/goals/inquiry.js';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { beforeEach, afterEach, expect, it, vi } from 'vitest';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { createConversationService } from '../features/manager/conversationService.js';
 import { ConversationStore } from '../infra/conversations/store.js';
@@ -28,6 +28,7 @@ import { GoalSchema } from '../infra/goals/schema.js';
 import { mergeTaktGoalPr } from '../features/mcp/goalIntegrationOperations.js';
 import * as goalPrMerge from '../features/manager/mergeGoalPr.js';
 import { DirectorMessageResultStore } from '../infra/conversations/directorMessageResults.js';
+import { DirectorNotificationStore, type DirectorNotification, type DirectorNotificationSubject } from '../infra/conversations/directorNotifications.js';
 import { ManagerTurnScheduler } from '../features/manager/managerTurnScheduler.js';
 
 const doubles = vi.hoisted(() => ({ assignment: vi.fn(), register: vi.fn(), notification: vi.fn(), codexRun: vi.fn(), tmux: vi.fn(), transcript: vi.fn(), pasteInput: vi.fn(), taskItems: vi.fn<() => TaskState[]>() }));
@@ -864,7 +865,7 @@ it.each([1, 4])('caches goal projections after a completed initial read with %i 
   expect(reads.mock.calls.filter(([path]) => basename(path) === 'goal.json')).toHaveLength(0);
 });
 
-const directorActor = { namespace: 'agent', id: 'director' };
+const directorActor = { namespace: 'agent', id: 'director' } as const;
 async function openDirector() {
   const opened = await service.open({ conversationId: record.id, assignment: record.assignment,
     binding: { port: 'director', key: record.id, counterpart: record.counterpart }, speaker: directorActor }, delivery);
@@ -1304,7 +1305,7 @@ it('retains a saved director reply after restart between result persistence and 
   expect(store.read(record.id, record.assignment)).toMatchObject({ revision: 4, pending: record.pending });
 });
 
-it('restores an already saved director reply without displaying it as an interrupted turn', async () => {
+it.each([false, true])('restores an already saved director reply with one notification and no interruption (notification already saved=%s)', async (notificationSaved) => {
   const operationId = randomUUID();
   const source = conversationId({ kind: 'daemon' });
   store.write({ ...record, lastSpeaker: directorActor,
@@ -1312,10 +1313,240 @@ it('restores an already saved director reply without displaying it as an interru
   const saved = { operationId, conversationId: record.id, directorConversationId: source,
     result: { kind: 'reply' as const, message: 'completed before stopping' } };
   new DirectorMessageResultStore(directory).write(saved);
+  if (notificationSaved) {
+    await service.restore();
+    const notifications = await savedDirectorNotifications();
+    expect(notifications).toHaveLength(1);
+    await service.close();
+    store.write({ ...record, lastSpeaker: directorActor,
+      running: { operationId, kind: 'message', owner: { pid: owner.pid, identity: owner.identity }, directorConversationId: source } });
+    service = createConversationService({ configDirectory: directory, owner,
+      runtime: { resolve: resolveRuntime, close: closeRuntime }, onDomainChange: vi.fn() });
+  }
   await service.restore();
   const opened = await open();
   expect(await state(opened.read)).toMatchObject({ running: null, interrupted: false, pending: record.pending });
   expect(new DirectorMessageResultStore(directory).read(operationId)).toEqual(saved);
   expect(execute).not.toHaveBeenCalled();
   expect(doubles.notification).not.toHaveBeenCalled();
+  expect(await savedDirectorNotifications()).toEqual([{ id: expect.any(String), message: expect.stringContaining(operationId) }]);
+  expect((await savedDirectorNotifications())[0]!.message).toContain(saved.result.message);
+});
+
+async function savedDirectorNotifications() {
+  const notifications = [];
+  for await (const notification of new DirectorNotificationStore(directory).iterate()) notifications.push(notification);
+  return notifications;
+}
+
+describe('human interruption delivery during director notification recovery', () => {
+  const webhookUrl = 'https://example.test/interrupted-manager';
+  const fetchNotification = vi.fn<typeof fetch>();
+  const source = conversationId({ kind: 'daemon' });
+  const directorStorageError = new Error('Director notification storage unavailable');
+
+  beforeEach(async () => {
+    const actual = await vi.importActual<typeof import('../features/manager/turnFailureNotification.js')>(
+      '../features/manager/turnFailureNotification.js');
+    doubles.notification.mockImplementation(actual.notifyManagerTurnFailure);
+    vi.stubEnv('TAKT_NOTIFY_WEBHOOK', webhookUrl);
+    fetchNotification.mockReset().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchNotification);
+    mkdirSync(join(repository, '.takt'), { recursive: true });
+    writeFileSync(join(repository, '.takt', 'config.yaml'), 'language: en\nmanager:\n  notifications:\n    blocked: true\n');
+  });
+  afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
+
+  function saveInterruptedConversation() {
+    const operationId = randomUUID();
+    const nextOperationId = randomUUID();
+    const saved = { ...record, lastSpeaker: directorActor,
+      running: { operationId, kind: 'message' as const, owner: { pid: owner.pid, identity: owner.identity }, directorConversationId: source },
+      directorMessages: [{ operationId: nextOperationId, directorConversationId: source, speaker: directorActor, text: 'D2' }] };
+    store.write(saved);
+    return { operationId, nextOperationId, saved };
+  }
+
+  async function restoreThrough(entry: 'restore' | 'open') {
+    if (entry === 'restore') await service.restore();
+    else { const opened = await open(); opened.read.cancel(); }
+  }
+
+  async function restartService() {
+    await service.close();
+    service = createConversationService({ configDirectory: directory, owner,
+      runtime: { resolve: resolveRuntime, close: closeRuntime }, onDomainChange: vi.fn() });
+  }
+
+  function failDirectorNotification() {
+    return vi.spyOn(DirectorNotificationStore.prototype, 'create').mockImplementation(() => { throw directorStorageError; });
+  }
+
+  it.each([
+    { entry: 'restore' as const, notificationFails: false }, { entry: 'restore' as const, notificationFails: true },
+    { entry: 'open' as const, notificationFails: false }, { entry: 'open' as const, notificationFails: true },
+  ])('delivers a new interruption through $entry and continues D2 after notification failure=$notificationFails', async ({ entry, notificationFails }) => {
+    const { operationId, saved } = saveInterruptedConversation();
+    const failing = notificationFails ? failDirectorNotification() : undefined;
+    if (notificationFails) {
+      await expect(restoreThrough(entry)).rejects.toBe(directorStorageError);
+      expect(store.read(record.id, record.assignment)).toEqual(saved);
+      expect(execute).not.toHaveBeenCalled();
+      expect(await savedDirectorNotifications()).toEqual([]);
+    } else await restoreThrough(entry);
+
+    const interrupted = new DirectorMessageResultStore(directory).read(operationId);
+    expect(interrupted).toMatchObject({ operationId, conversationId: record.id, directorConversationId: source,
+      result: { kind: 'error', code: 'interrupted', message: expect.stringContaining(operationId) } });
+    expect(fetchNotification).toHaveBeenCalledOnce();
+    const [url, request] = fetchNotification.mock.calls[0]!;
+    expect(url).toBe(webhookUrl);
+    expect(request).toMatchObject({ method: 'POST', headers: { 'Content-Type': 'application/json' } });
+    const body = JSON.parse(String(request?.body)) as { text: string };
+    expect(body.text).toContain(operationId);
+    expect(body.text).toContain(interrupted!.result.message);
+
+    if (notificationFails) {
+      await restartService();
+      await expect(service.restore()).rejects.toBe(directorStorageError);
+      expect(store.read(record.id, record.assignment)).toEqual(saved);
+      expect(execute).not.toHaveBeenCalled();
+      expect(fetchNotification).toHaveBeenCalledOnce();
+      failing!.mockRestore();
+      await restartService();
+      await service.restore();
+    }
+    await vi.waitFor(() => expect(store.read(record.id, record.assignment)?.running).toBeNull());
+    expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['D2']);
+    expect(new DirectorMessageResultStore(directory).read(operationId)).toEqual(interrupted);
+    const director = await service.open({ conversationId: source, assignment: { kind: 'daemon' }, speaker: record.counterpart,
+      binding: { port: 'tui', key: source, counterpart: record.counterpart }, agentOverrides: { provider: 'mock' } }, delivery);
+    const messages: string[] = [];
+    for await (const item of director.read.items) if (item.kind === 'display_event') messages.push(item.event.message);
+    director.read.complete();
+    const notices = messages.filter((message) => message.includes(operationId));
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain(interrupted!.result.message);
+    expect(fetchNotification).toHaveBeenCalledOnce();
+  });
+
+  it.each(['restore', 'open'] as const)('does not notify when the interruption result cannot be saved through %s', async (entry) => {
+    const { operationId, saved } = saveInterruptedConversation();
+    const error = new Error('Result storage unavailable');
+    vi.spyOn(DirectorMessageResultStore.prototype, 'write').mockImplementation(() => { throw error; });
+    const create = failDirectorNotification();
+    await expect(restoreThrough(entry)).rejects.toBe(error);
+    expect(new DirectorMessageResultStore(directory).read(operationId)).toBeUndefined();
+    expect(create).not.toHaveBeenCalled();
+    expect(fetchNotification).not.toHaveBeenCalled();
+    expect(store.read(record.id, record.assignment)).toEqual(saved);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { kind: 'reply' as const, message: 'Saved reply' },
+    { kind: 'error' as const, code: 'operation_failed', message: 'Saved failure' },
+    { kind: 'error' as const, code: 'interrupted', message: 'Saved interruption' },
+  ])('does not notify again for a saved $message when director notification storage fails', async (result) => {
+    const { operationId, saved } = saveInterruptedConversation();
+    const persisted = { operationId, conversationId: record.id, directorConversationId: source, result };
+    const results = new DirectorMessageResultStore(directory);
+    results.write(persisted);
+    failDirectorNotification();
+    await expect(service.restore()).rejects.toBe(directorStorageError);
+    expect(results.read(operationId)).toEqual(persisted);
+    expect(fetchNotification).not.toHaveBeenCalled();
+    expect(store.read(record.id, record.assignment)).toEqual(saved);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('honors disabled blocked notifications while retaining the director storage failure', async () => {
+    const { saved } = saveInterruptedConversation();
+    writeFileSync(join(repository, '.takt', 'config.yaml'), 'language: en\nmanager:\n  notifications:\n    blocked: false\n');
+    failDirectorNotification();
+    await expect(service.restore()).rejects.toBe(directorStorageError);
+    expect(fetchNotification).not.toHaveBeenCalled();
+    expect(store.read(record.id, record.assignment)).toEqual(saved);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('preserves the director storage failure when the human webhook delivery fails', async () => {
+    const { saved } = saveInterruptedConversation();
+    fetchNotification.mockRejectedValueOnce(new Error('Webhook unavailable'));
+    vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    failDirectorNotification();
+    await expect(service.restore()).rejects.toBe(directorStorageError);
+    expect(fetchNotification).toHaveBeenCalledOnce();
+    expect(store.read(record.id, record.assignment)).toEqual(saved);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('does not notify before the recovered running state can be saved', async () => {
+    const { operationId, saved } = saveInterruptedConversation();
+    vi.spyOn(ConversationStore.prototype, 'write').mockImplementation(() => { throw new Error('Conversation storage unavailable'); });
+    await expect(service.restore()).rejects.toMatchObject({ code: 'storage_error' });
+    expect(new DirectorMessageResultStore(directory).read(operationId)?.result).toMatchObject({ code: 'interrupted' });
+    expect(await savedDirectorNotifications()).toHaveLength(1);
+    expect(fetchNotification).not.toHaveBeenCalled();
+    expect(store.read(record.id, record.assignment)).toEqual(saved);
+    expect(execute).not.toHaveBeenCalled();
+  });
+});
+
+it('keeps separate notifications for distinct director operations returning identical replies', async () => {
+  const director = await openDirector();
+  const operationIds: string[] = [];
+  for (const text of ['first instruction', 'second instruction']) {
+    const accepted = await tell(director, text);
+    if (accepted.kind !== 'accepted') throw new Error('Director message must be accepted');
+    operationIds.push(accepted.operationId);
+    await vi.waitFor(() => expect(outputs).toContainEqual({ kind: 'result', operationId: accepted.operationId,
+      result: { kind: 'reply', message: 'manager reply' } }));
+  }
+  const notifications = await savedDirectorNotifications();
+  expect(notifications).toHaveLength(2);
+  for (const operationId of operationIds) {
+    expect(notifications.filter((notification) => notification.message.includes(operationId)))
+      .toEqual([{ id: expect.any(String), message: expect.stringContaining('manager reply') }]);
+  }
+});
+
+it.each(['notification', 'record'] as const)('recovers the director notification after a failed %s save without rerunning the provider', async (failure) => {
+  const director = await openDirector();
+  const release = holdNextTurn();
+  let fail = false;
+  let failures = 0;
+  const create: (this: DirectorNotificationStore, message: string, subject?: DirectorNotificationSubject) => DirectorNotification | undefined
+    = DirectorNotificationStore.prototype.create;
+  vi.spyOn(DirectorNotificationStore.prototype, 'create').mockImplementation(function (this: DirectorNotificationStore, message, subject?) {
+    if (failure === 'notification' && fail) { failures++; throw new Error('notification unavailable'); }
+    return subject === undefined ? create.call(this, message) : create.call(this, message, subject);
+  });
+  const write = ConversationStore.prototype.write;
+  vi.spyOn(ConversationStore.prototype, 'write').mockImplementation(function (this: ConversationStore, value) {
+    if (failure === 'record' && fail && value.id === record.id && value.running === null) {
+      failures++; throw new Error('terminal record unavailable');
+    }
+    write.call(this, value);
+  });
+  try {
+    const accepted = await tell(director, 'complete once despite storage failure');
+    if (accepted.kind !== 'accepted') throw new Error('Director message must be accepted');
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+    fail = true;
+    release();
+    await vi.waitFor(() => expect(failures).toBeGreaterThan(0));
+    expect(new DirectorMessageResultStore(directory).read(accepted.operationId)?.result).toEqual({ kind: 'reply', message: 'held reply' });
+    expect(store.read(record.id, record.assignment)?.running?.operationId).toBe(accepted.operationId);
+    expect(await savedDirectorNotifications()).toHaveLength(failure === 'notification' ? 0 : 1);
+    expect(outputs.filter((output) => output.kind === 'result' && output.operationId === accepted.operationId)).toEqual([]);
+    fail = false;
+    await service.maintain();
+    await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
+    await service.maintain();
+    expect(await savedDirectorNotifications()).toEqual([{ id: expect.any(String), message: expect.stringContaining(accepted.operationId) }]);
+    expect((await savedDirectorNotifications())[0]!.message).toContain('held reply');
+    expect(store.read(record.id, record.assignment)?.running).toBeNull();
+    expect(execute).toHaveBeenCalledOnce();
+  } finally { fail = false; release(); }
 });

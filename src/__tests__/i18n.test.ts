@@ -10,6 +10,15 @@ beforeEach(() => {
 });
 
 describe('getLabel', () => {
+  it.each(['ja', 'en'] as const)('expands the manager, operation and result in every director result notice for %s', (lang) => {
+    const values = { managerId: `manager-${'a'.repeat(64)}`, operationId: '11111111-1111-4111-8111-111111111111', message: 'saved result' };
+    for (const key of ['director.managerReply', 'director.managerError', 'director.managerInterrupted']) {
+      const notice = getLabel(key, lang, values);
+      for (const value of Object.values(values)) expect(notice).toContain(value);
+      expect(notice).not.toMatch(/\{(?:managerId|operationId|message)\}/u);
+    }
+  });
+
   it.each(['ja', 'en'] as const)('includes the operation ID in a localized director interruption notice for %s', (lang) => {
     const operationId = '11111111-1111-4111-8111-111111111111';
     const notice = getLabel('manager.conversation.director_interrupted', lang, { operationId });

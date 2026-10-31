@@ -94,6 +94,18 @@ export function createConversationService(input: {
     kind: 'error' as const, code: 'interrupted',
     message: getLabel('manager.conversation.director_interrupted', conversation.language, { operationId }),
   });
+  const saveDirectorNotification = (saved: Parameters<DirectorMessageResultStore['write']>[0], language: 'ja' | 'en'): void => {
+    const result = saved.result;
+    const label = result.kind === 'reply' ? 'director.managerReply'
+      : result.code === 'interrupted' ? 'director.managerInterrupted' : 'director.managerError';
+    notifications.create(getLabel(label, language, {
+      operationId: saved.operationId, managerId: saved.conversationId, message: result.message,
+    }), { key: JSON.stringify(['director-message-result', saved.operationId]), state: result.kind });
+  };
+  const saveDirectorResult = (saved: Parameters<DirectorMessageResultStore['write']>[0], language: 'ja' | 'en'): void => {
+    results.write(saved);
+    saveDirectorNotification(saved, language);
+  };
   const nextRevision = (revision: number): number => {
     if (revision >= Number.MAX_SAFE_INTEGER) throw new ConversationError('operation_failed');
     return revision + 1;
@@ -405,8 +417,8 @@ export function createConversationService(input: {
     if (result === undefined) throw new Error('Manager operation has no terminal result');
     if (operation.directorConversationId !== undefined) {
       if (result.kind !== 'reply' && result.kind !== 'error') throw new Error('Director message requires a reply or error');
-      results.write({ operationId: operation.id, conversationId: conversation.record.id,
-        directorConversationId: operation.directorConversationId, result });
+      saveDirectorResult({ operationId: operation.id, conversationId: conversation.record.id,
+        directorConversationId: operation.directorConversationId, result }, conversation.language);
     }
     save(conversation, { ...conversation.record, running: null });
     conversation.active = undefined;
@@ -474,11 +486,15 @@ export function createConversationService(input: {
           throw new Error('Director message recovery identity mismatch');
         }
         conversation.interrupted = existing === undefined || existing.result.kind === 'error' && existing.result.code === 'interrupted';
-        if (existing === undefined) {
-          const result = interruptedResult(conversation, running.operationId);
-          results.write({ operationId: running.operationId, conversationId: record.id,
-            directorConversationId: running.directorConversationId, result });
-          interrupted = result.message;
+        const saved = existing ?? { operationId: running.operationId, conversationId: record.id,
+          directorConversationId: running.directorConversationId, result: interruptedResult(conversation, running.operationId) };
+        results.write(saved);
+        if (existing === undefined) interrupted = saved.result.message;
+        try {
+          saveDirectorNotification(saved, conversation.language);
+        } catch (error) {
+          if (interrupted !== undefined) await notifyManagerTurnFailure(cwd, undefined, new Error(interrupted));
+          throw error;
         }
       }
       save(conversation, { ...record, running: null, sessionId: null });
