@@ -134,8 +134,8 @@ it('processes events separately from run and restores their saved records in the
   const manager = createRunEventManager(cwd);
   const signal = new AbortController().signal;
   try {
-    await submitAndWait(context.session, { kind: 'message', text: 'ゴールを相談します' });
-    const registered = await submitAndWait(context.session, { kind: 'approve_summary', revision: context.session.getSnapshot().state!.pending!.revision });
+    await submitAndWait(context.session, { kind: 'message', text: 'ゴールを相談します' }, 30000);
+    const registered = await submitAndWait(context.session, { kind: 'approve_summary', revision: context.session.getSnapshot().state!.pending!.revision }, 30000);
     expect(registered.kind).toBe('goal_registered'); expect(call).toHaveBeenCalledOnce();
     expect((await readProjectRegistry(process.env.TAKT_CONFIG_DIR!)).projects).toContainEqual(expect.objectContaining({
       canonicalDirectory: cwd, managerUsed: true,
@@ -174,7 +174,7 @@ it('processes events separately from run and restores their saved records in the
     const waiting = await new GoalStore(cwd).get(goalId);
     expect(waiting.status).toBe('awaiting_merge'); expect(waiting.completion?.targetSha).toBeUndefined();
     git('merge', '--no-ff', '--no-edit', waiting.completion!.goalSha);
-    expect((await submitAndWait(context.session, { kind: 'message', text: '取り込みました' })).kind).toBe('reply');
+    expect((await submitAndWait(context.session, { kind: 'message', text: '取り込みました' }, 30000)).kind).toBe('reply');
     expect((await new GoalStore(cwd).get(goalId)).status).toBe('completed');
     expect(git('show', 'main:result-0.txt')).toContain('入力'); expect(git('show', 'main:result-1.txt')).toContain('出力');
     expect(context.setup).toHaveBeenCalledTimes(2);

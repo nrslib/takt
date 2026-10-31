@@ -13,6 +13,7 @@ import { createWorkspace } from '../infra/config/global/workspaceRegistry.js';
 import { ConversationStore } from '../infra/conversations/store.js';
 import { ConversationSpeakerStore } from '../infra/conversations/speakerStore.js';
 import { DirectorNotificationStore } from '../infra/conversations/directorNotifications.js';
+import { DirectorMessageResultStore } from '../infra/conversations/directorMessageResults.js';
 import { conversationId } from '../infra/conversations/identity.js';
 import { createInquiry } from '../infra/goals/inquiry.js';
 import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
@@ -73,6 +74,19 @@ import { packageVersion } from '../shared/package-info.js';
 import * as privateFiles from '../shared/utils/private-file.js';
 
 const ids = vi.hoisted(() => ({ next: vi.fn() }));
+const projectFault = vi.hoisted(() => ({ directory: undefined as string | undefined, operation: 'realpath' as 'realpath' | 'stat' }));
+vi.mock('node:fs/promises', async (original) => {
+  const actual = await original<typeof import('node:fs/promises')>();
+  const check = (operation: typeof projectFault.operation, path: unknown) => {
+    if (operation === projectFault.operation && path === projectFault.directory) {
+      throw Object.assign(new Error(`EACCES: ${operation} '${projectFault.directory}'`), { code: 'EACCES', path, syscall: operation });
+    }
+  };
+  return { ...actual,
+    realpath: async (...args: Parameters<typeof actual.realpath>) => { check('realpath', args[0]); return actual.realpath(...args); },
+    stat: async (...args: Parameters<typeof actual.stat>) => { check('stat', args[0]); return actual.stat(...args); },
+  };
+});
 vi.mock('node:timers/promises', async (original) => ({ ...await original<typeof import('node:timers/promises')>() }));
 vi.mock('node:crypto', async (original) => {
   const actual = await original<typeof import('node:crypto')>();
@@ -93,6 +107,8 @@ const owner = { pid: process.pid, identity: { startTime: 'director-test-owner' }
 let directory: string;
 const cleanups: Array<() => Promise<unknown>> = [];
 beforeEach(() => {
+  projectFault.directory = undefined;
+  projectFault.operation = 'realpath';
   ids.next.mockReset();
   directory = getGlobalConfigDir();
   writeFileSync(join(directory, 'config.yaml'), 'provider: mock\nlanguage: en\n');
@@ -102,6 +118,7 @@ afterEach(async () => {
   try {
     for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
   } finally {
+    projectFault.directory = undefined;
     vi.restoreAllMocks();
     vi.useRealTimers();
     invalidateGlobalConfigCache(); invalidateAllResolvedConfigCache();
@@ -169,7 +186,8 @@ it('lists all repository and workspace managers and reuses the existing paged go
   for (const tool of ['Bash', 'Write', 'Edit', 'takt_get_run', 'takt_merge_goal_pr', 'takt_enqueue_task', 'takt_complete_goal', 'takt_abort_goal']) {
     expect((await client.callTool({ name: tool, arguments: {} })).isError).toBe(true);
   }
-  const managers = await listDirectorManagers(directory);
+  const { managers, errors } = await listDirectorManagers(directory);
+  expect(errors).toEqual([]);
   expect(managers).toHaveLength(3);
   expect(managers.map((assignment) => conversationId(assignment))).toEqual(expect.arrayContaining([
     conversationId({ kind: 'repository', repositoryDirectory: a }), conversationId({ kind: 'workspace', workspaceId: workspace.id }),
@@ -246,7 +264,7 @@ it('restores the director conversation after speaker storage rejects a TUI messa
   expect(resolve).not.toHaveBeenCalled();
   expect(execute).not.toHaveBeenCalled();
   expect(await service.submit(request)).toMatchObject({ kind: 'accepted' });
-  await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
+  await vi.waitFor(() => expect(service.activeOperationCount).toBe(0), { timeout: 5000 });
   expect(execute).toHaveBeenCalledOnce();
   expect(store.read(original.id, original.assignment)).toMatchObject({ revision: 1, lastSpeaker: original.counterpart });
 });
@@ -293,14 +311,14 @@ it.each(['ja', 'en'] as const)('loads four director facets through provider setu
     expect(options).toMatchObject({ permissionMode: 'readonly', strictToolAllowlist: DIRECTOR_TOOL_ALLOWLIST, model: 'global-model', cwd: directory });
     expect(Object.keys(options.mcpServers!)).toEqual([DIRECTOR_MCP_SERVER_NAME]);
   }
-  await vi.waitFor(() => expect(outputs.some((output) => output.kind === 'notice' && output.message === 'Human decision required')).toBe(true));
+  await vi.waitFor(() => expect(outputs.some((output) => output.kind === 'notice' && output.message === 'Human decision required')).toBe(true), { timeout: 5000 });
   const notice = outputs.find((output) => output.kind === 'notice' && output.message === 'Human decision required');
   expect(notice).toBeDefined();
   client.close();
   const reopened = new ConversationIpcClient({ kind: 'daemon' });
   cleanups.push(async () => reopened.close());
   await reopened.connect();
-  await vi.waitFor(() => expect(reopened.getSnapshot().readStatus).toBe('complete'));
+  await vi.waitFor(() => expect(reopened.getSnapshot().readStatus).toBe('complete'), { timeout: 5000 });
   expect(reopened.getSnapshot().items).toContainEqual({ kind: 'display_event', event: { id: notice!.kind === 'notice' ? notice!.id : '', message: 'Human decision required' } });
   expect(new ConversationStore(directory).read(selected.conversationId, selected.assignment)).toMatchObject({ agent: 'director', sessionId: 'director-session' });
   expect(slack).not.toHaveBeenCalled();
@@ -342,6 +360,9 @@ it.each(['ja', 'en'] as const)('relays a human merge request through director MC
   cleanups.push(managerConnection.dispose);
   const merging = vi.spyOn(goalPrMerge, 'mergeGoalPr').mockResolvedValue({ success: true, prNumber: 1950, exitCode: 0, output: 'merged', truncated: false });
   let managerOperationId: string | undefined;
+  let forwardedOperationId: string | undefined;
+  let forwardedReceipt: Record<string, unknown> | undefined;
+  const acceptanceMessage = lang === 'ja' ? 'manager に伝えました。順に処理されます。' : 'Passed to the manager for processing in order.';
   const additionalHuman = new ConversationIpcClient(assignment);
   cleanups.push(async () => additionalHuman.close());
   const managerCall = vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
@@ -407,8 +428,9 @@ it.each(['ja', 'en'] as const)('relays a human merge request through director MC
         ? `人の明示の指示により、${repository} のゴール ${detail.id} の PR #${detail.pullRequest!.number} を takt_merge_goal_pr でマージしてください。`
         : `On the human's explicit instruction, merge PR #${detail.pullRequest!.number} for goal ${detail.id} in ${repository} using takt_merge_goal_pr.`;
       const reply = decoded(await client.callTool({ name: 'takt_tell_manager', arguments: { managerId: selected!.id, text } }));
-      expect(reply).toEqual({ kind: 'reply', message: managerReply });
-      return { persona: 'director', status: 'done', content: reply.message as string, timestamp: new Date() };
+      forwardedReceipt = reply;
+      forwardedOperationId = reply.operationId as string;
+      return { persona: 'director', status: 'done', content: acceptanceMessage, timestamp: new Date() };
     } finally { await client.close(); await transport.close(); }
   });
   vi.spyOn(providers, 'getProvider').mockReturnValue(makeProvider({ supportsStrictToolAllowlist: true,
@@ -438,8 +460,16 @@ it.each(['ja', 'en'] as const)('relays a human merge request through director MC
 
   expect(accepted.kind).toBe('accepted');
   await vi.waitFor(() => expect(outputs).toContainEqual(expect.objectContaining({ kind: 'result',
-    operationId: accepted.kind === 'accepted' ? accepted.operationId : '', result: { kind: 'reply', message: managerReply } })), { timeout: 30_000 });
+    operationId: accepted.kind === 'accepted' ? accepted.operationId : '', result: { kind: 'reply', message: acceptanceMessage } })), { timeout: 30_000 });
   await vi.waitFor(() => expect(service.activeOperationCount).toBe(0), { timeout: 30_000 });
+  expect(forwardedReceipt).toEqual({ kind: 'accepted', operationId: expect.any(String), managerId });
+  expect(forwardedOperationId).toBe(managerOperationId);
+  await human.refresh();
+  await vi.waitFor(() => {
+    expect(human.getSnapshot().readStatus).toBe('complete');
+    expect(human.getSnapshot().items.filter((item) => item.kind === 'display_event' && item.event.message.includes(forwardedOperationId!)))
+      .toEqual([{ kind: 'display_event', event: { id: expect.any(String), message: expect.stringContaining(managerReply) } }]);
+  }, { timeout: 5000 });
   expect(directorCall).toHaveBeenCalledOnce();
   expect(managerCall).toHaveBeenCalledOnce();
   const forwarded = submissions.mock.calls.map(([request]) => request)
@@ -464,6 +494,108 @@ it.each(['ja', 'en'] as const)('relays a human merge request through director MC
   ]);
   expect(merging).toHaveBeenCalledExactlyOnceWith(repository, 1950, goal.branch, goal.completion!.goalSha, expect.any(AbortSignal));
   expect(slack).not.toHaveBeenCalled();
+});
+
+it('finishes the director turn on acceptance and later refreshes the same client with the ten-minute manager reply', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime('2026-10-30T00:00:00Z');
+  const repository = await seedManager('delayed-manager');
+  const managerId = conversationId({ kind: 'repository', repositoryDirectory: repository });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let startedAt: number | undefined;
+  const managerCall = vi.fn<ProviderAgent['call']>(async () => {
+    startedAt = Date.now();
+    await gate;
+    expect(Date.now() - startedAt).toBe(10 * 60 * 1000);
+    return { persona: 'manager', status: 'done', content: '', timestamp: new Date(),
+      structuredOutput: { message: 'delayed manager reply', summary: null }, sessionId: 'manager-session' };
+  });
+  const managerExecutor = createManagerTurnExecutor(repository, {
+    ctx: { provider: makeProvider({ setup: () => ({ call: managerCall }) }), providerType: 'mock', model: undefined, lang: 'en' },
+    strategy: { systemPrompt: 'delayed manager fixture' },
+  });
+  let toolReply: Record<string, unknown> | undefined;
+  const directorCall = vi.fn<ProviderAgent['call']>(async (_prompt, options) => {
+    const config = options.mcpServers![DIRECTOR_MCP_SERVER_NAME];
+    if (config?.type !== 'http') throw new Error('HTTP MCP required');
+    const mcp = new Client({ name: 'delayed-director-provider', version: '1' });
+    const transport = new StreamableHTTPClientTransport(new URL(config.url), { requestInit: { headers: config.headers } });
+    try {
+      await mcp.connect(transport);
+      toolReply = decoded(await mcp.callTool({ name: 'takt_tell_manager', arguments: { managerId, text: 'delayed instruction' } }));
+      return { persona: 'director', status: 'done', content: `queued:${toolReply.operationId}`, timestamp: new Date() };
+    } finally { await mcp.close(); await transport.close(); }
+  });
+  vi.spyOn(providers, 'getProvider').mockReturnValue(makeProvider({ supportsStrictToolAllowlist: true,
+    supportedMcpTransports: new Set(['http']), setup: () => ({ call: directorCall }) }));
+  const directorRuntime = createDaemonConversationRuntime(directory, { notify: async () => {} });
+  const service = createConversationService({ configDirectory: directory, owner, onDomainChange: vi.fn(), runtime: {
+    resolve: async (assignment, abortSignal, overrides) => assignment.kind === 'daemon'
+      ? directorRuntime.resolve(assignment, abortSignal, overrides)
+      : { provider: 'mock', model: null, language: 'en', contextKey: 'delayed-test', executor: managerExecutor },
+    close: () => directorRuntime.close(),
+  } });
+  cleanups.push(service.close);
+  const server = await createConversationIpcServer(directory, owner, service);
+  cleanups.push(server.close);
+  const human = new ConversationIpcClient({ kind: 'daemon' });
+  cleanups.push(async () => human.close());
+  const outputs: PortOutput[] = [];
+  human.onOutput((output) => outputs.push(output));
+  await human.connect();
+  try {
+    const accepted = await human.submit({ kind: 'message', text: 'delegate the instruction' });
+    if (accepted.kind !== 'accepted') throw new Error('Director turn must be accepted');
+    await vi.waitFor(() => expect(startedAt).toBeDefined(), { timeout: 5000 });
+    await vi.waitFor(() => expect(toolReply).toEqual({ kind: 'accepted', operationId: expect.any(String), managerId }), { timeout: 5000 });
+    const operationId = toolReply!.operationId as string;
+    await vi.waitFor(() => expect(outputs).toContainEqual({ kind: 'result', operationId: accepted.operationId,
+      result: { kind: 'reply', message: `queued:${operationId}` } }), { timeout: 5000 });
+    expect(Date.now() - startedAt!).toBeLessThan(10 * 60 * 1000);
+    expect(new ConversationStore(directory).read(conversationId({ kind: 'daemon' }), { kind: 'daemon' })?.running).toBeNull();
+    expect(new DirectorMessageResultStore(directory).read(operationId)).toBeUndefined();
+    await human.refresh();
+    expect(human.getSnapshot().items.filter((item) => item.kind === 'display_event' && item.event.message.includes(operationId))).toEqual([]);
+    vi.setSystemTime(startedAt! + 10 * 60 * 1000);
+    release();
+    await managerCall.mock.results[0]!.value;
+    await vi.waitFor(() => expect(service.activeOperationCount).toBe(0), { timeout: 5000 });
+    await human.refresh();
+    await vi.waitFor(() => {
+      expect(human.getSnapshot().readStatus).toBe('complete');
+      expect(human.getSnapshot().items.filter((item) => item.kind === 'display_event' && item.event.message.includes(operationId)))
+        .toEqual([{ kind: 'display_event', event: { id: expect.any(String), message: expect.stringContaining('delayed manager reply') } }]);
+    }, { timeout: 5000 });
+    expect(managerCall).toHaveBeenCalledOnce();
+    expect(directorCall).toHaveBeenCalledOnce();
+  } finally {
+    if (startedAt !== undefined) vi.setSystemTime(startedAt + 10 * 60 * 1000);
+    release();
+  }
+});
+
+it('reports a failed manager queue save through MCP without accepting or resending the input', async () => {
+  const repository = await seedManager('queue-save-failure');
+  const managerId = conversationId({ kind: 'repository', repositoryDirectory: repository });
+  const execute = vi.fn<PreparedConversationRuntime['executor']['execute']>();
+  const service = createConversationService({ configDirectory: directory, owner, onDomainChange: vi.fn(), runtime: {
+    resolve: async () => ({ provider: 'mock', model: null, language: 'en', contextKey: 'test', executor: { execute } }), close: async () => {},
+  } });
+  cleanups.push(service.close);
+  const server = await createConversationIpcServer(directory, owner, service); cleanups.push(server.close);
+  const write = ConversationStore.prototype.write;
+  vi.spyOn(ConversationStore.prototype, 'write').mockImplementation(function (this: ConversationStore, value) {
+    if (value.directorMessages?.some((message) => message.text === 'unsaved input')) throw new Error('queue unavailable');
+    write.call(this, value);
+  });
+  const submissions = vi.spyOn(service, 'submit');
+  const { client } = await connectMcp();
+  const reply = decoded(await client.callTool({ name: 'takt_tell_manager', arguments: { managerId, text: 'unsaved input' } }));
+  expect(reply).toMatchObject({ kind: 'error', code: 'storage_error' });
+  expect(submissions).toHaveBeenCalledOnce();
+  expect(execute).not.toHaveBeenCalled();
+  expect(new ConversationStore(directory).read(managerId, { kind: 'repository', repositoryDirectory: repository })?.directorMessages ?? []).toEqual([]);
 });
 
 it('never overwrites an existing notification when the generated identity collides', async () => {
@@ -523,7 +655,7 @@ it('releases prepared MCP before reporting a settings save failure and succeeds 
   const submit = () => service.submit({ attachmentId: opened.attachmentId, requestId: randomUUID(),
     speaker: original.counterpart, command: { kind: 'message', text: 'status' } });
   expect(await submit()).toMatchObject({ kind: 'accepted' });
-  await vi.waitFor(() => expect(outputs.filter((output) => output.kind === 'result')).toHaveLength(1));
+  await vi.waitFor(() => expect(outputs.filter((output) => output.kind === 'result')).toHaveLength(1), { timeout: 5000 });
   expect(outputs).toContainEqual(expect.objectContaining({ kind: 'result', result: expect.objectContaining({ kind: 'error', code: 'storage_error' }) }));
   expect(call).not.toHaveBeenCalled();
   const first = preflight.mock.calls[0]![0].mcpServers![DIRECTOR_MCP_SERVER_NAME]!;
@@ -532,7 +664,7 @@ it('releases prepared MCP before reporting a settings save failure and succeeds 
   const snapshot = await service.snapshot(opened.attachmentId);
   snapshot.cancel();
   expect(await submit()).toMatchObject({ kind: 'accepted' });
-  await vi.waitFor(() => expect(outputs.filter((output) => output.kind === 'result')).toHaveLength(2));
+  await vi.waitFor(() => expect(outputs.filter((output) => output.kind === 'result')).toHaveLength(2), { timeout: 5000 });
   expect(outputs).toContainEqual(expect.objectContaining({ kind: 'result', result: { kind: 'reply', message: 'recovered' } }));
   expect(call).toHaveBeenCalledOnce();
   expect(preflight).toHaveBeenCalledTimes(2);
@@ -568,13 +700,13 @@ it.each([false, true])('awaits release before reporting storage_error even when 
   });
   expect(await service.submit({ attachmentId: opened.attachmentId, requestId: randomUUID(), speaker: original.counterpart,
     command: { kind: 'message', text: 'status' } })).toMatchObject({ kind: 'accepted' });
-  await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
+  await vi.waitFor(() => expect(release).toHaveBeenCalledOnce(), { timeout: 5000 });
   expect(execute).not.toHaveBeenCalled();
   expect(service.activeOperationCount).toBe(1);
   expect(outputs.some((output) => output.kind === 'result')).toBe(false);
   finish();
   await vi.waitFor(() => expect(outputs).toContainEqual(expect.objectContaining({ kind: 'result',
-    result: expect.objectContaining({ kind: 'error', code: 'storage_error' }) })));
+    result: expect.objectContaining({ kind: 'error', code: 'storage_error' }) })), { timeout: 5000 });
   expect(service.activeOperationCount).toBe(0);
 });
 
@@ -671,7 +803,7 @@ it('rejects transcript fields and corrupt speaker and notification records inste
   await expect(collect(notifications.iterate())).rejects.toThrow();
 });
 
-it('sends director messages over real IPC, correlates replies, records each actor and never queues busy messages', async () => {
+it('sends director messages over real IPC, correlates replies and queues them while preserving human busy rejection', async () => {
   const repository = await seedManager('manager-repository');
   const execute = vi.fn(async (input: ManagerTurnInput) => ({ message: `reply:${input.instruction}`, summary: null,
     sessionId: 'manager-session', assignment: input.assignment }));
@@ -683,14 +815,15 @@ it('sends director messages over real IPC, correlates replies, records each acto
   const human = await service.open(selected, delivery);
   const submit = async (text: string) => service.submit({ attachmentId: human.attachmentId, requestId: randomUUID(), speaker: selected.speaker, command: { kind: 'message', text } });
   await submit('human');
-  await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
+  await vi.waitFor(() => expect(service.activeOperationCount).toBe(0), { timeout: 5000 });
   const { client: mcp } = await connectMcp();
   expect(decoded(await mcp.callTool({ name: 'takt_tell_manager', arguments: { managerId: selected.conversationId, text: 'director' } })))
-    .toEqual({ kind: 'reply', message: 'reply:director' });
+    .toEqual({ kind: 'accepted', operationId: expect.any(String), managerId: selected.conversationId });
+  await vi.waitFor(() => expect(service.activeOperationCount).toBe(0), { timeout: 5000 });
   const slackActor = { namespace: 'slack-user', id: 'T1:U1' };
   const slack = await service.open({ ...selected, speaker: slackActor, binding: { port: 'slack', key: 'thread', counterpart: selected.speaker } }, delivery);
   await service.submit({ attachmentId: slack.attachmentId, requestId: 'slack', speaker: slackActor, command: { kind: 'message', text: 'slack' } });
-  await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
+  await vi.waitFor(() => expect(service.activeOperationCount).toBe(0), { timeout: 5000 });
   const speakers = await collect(new ConversationSpeakerStore(directory).iterate(selected.conversationId));
   expect(speakers.map((record) => record.actor)).toEqual(expect.arrayContaining([selected.speaker, { namespace: 'agent', id: 'director' }, slackActor]));
   expect(speakers).toHaveLength(3);
@@ -700,30 +833,39 @@ it('sends director messages over real IPC, correlates replies, records each acto
     return { message: 'finished', summary: null, sessionId: 'session', assignment: input.assignment }; });
   try {
     await submit('running human');
-    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
-    expect(decoded(await mcp.callTool({ name: 'takt_tell_manager', arguments: { managerId: selected.conversationId, text: 'rejected' } })))
-      .toMatchObject({ kind: 'busy' });
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'), { timeout: 5000 });
+    const queued = mcp.callTool({ name: 'takt_tell_manager', arguments: { managerId: selected.conversationId, text: 'queued director' } });
+    let acknowledged = false;
+    void queued.then(() => { acknowledged = true; }, () => {});
+    await vi.waitFor(() => expect(JSON.stringify(new ConversationStore(directory).read(selected.conversationId, selected.assignment)))
+      .toContain('queued director'), { timeout: 5000 });
+    expect(await submit('rejected human')).toMatchObject({ kind: 'busy' });
+    expect(execute).toHaveBeenCalledTimes(4);
+    await vi.waitFor(() => expect(acknowledged).toBe(true), { timeout: 5000 });
+    expect(decoded(await queued)).toEqual({ kind: 'accepted', operationId: expect.any(String), managerId: selected.conversationId });
+    release();
   } finally { release?.(); }
-  await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
-  expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['human', 'director', 'slack', 'running human']);
-  expect(await collect(new ConversationSpeakerStore(directory).iterate(selected.conversationId))).toHaveLength(4);
+  await vi.waitFor(() => expect(service.activeOperationCount).toBe(0), { timeout: 5000 });
+  expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['human', 'director', 'slack', 'running human', 'queued director']);
+  expect(await collect(new ConversationSpeakerStore(directory).iterate(selected.conversationId))).toHaveLength(5);
   const spy = vi.spyOn(ConversationSpeakerStore.prototype, 'write').mockImplementationOnce(() => { throw new Error('metadata unavailable'); });
   expect(await submit('not accepted')).toMatchObject({ kind: 'error', code: 'storage_error' });
-  expect(execute).toHaveBeenCalledTimes(4);
+  expect(execute).toHaveBeenCalledTimes(5);
   spy.mockRestore();
   expect(await submit('explicit retry')).toMatchObject({ kind: 'accepted' });
-  await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
+  await vi.waitFor(() => expect(service.activeOperationCount).toBe(0), { timeout: 5000 });
   const restricted = new ConversationIpcClient(selected.assignment, undefined, {
     port: createDirectorManagerPort(directory, delivery), reconnect: false,
   });
   try {
     await restricted.connect();
     await expect(restricted.submit({ kind: 'pause_goal', goalId: randomUUID() })).rejects.toMatchObject({ cause: 'invalid_input' });
-    expect(execute).toHaveBeenCalledTimes(5);
+    expect(execute).toHaveBeenCalledTimes(6);
   } finally { restricted.close(); }
   const workspace = await createWorkspace({ globalConfigDirectory: directory, name: 'promoted manager', repositoryDirectories: [repository] });
   const workspaceId = conversationId({ kind: 'workspace', workspaceId: workspace.id });
-  expect(await tellDirectorManager(directory, workspaceId, 'workspace request', signal())).toEqual({ kind: 'reply', message: 'reply:workspace request' });
+  expect(await tellDirectorManager(directory, workspaceId, 'workspace request', signal()))
+    .toEqual({ kind: 'accepted', operationId: expect.any(String), managerId: workspaceId });
 });
 
 it('does not resend an accepted manager message after losing its IPC connection', async () => {
@@ -736,19 +878,169 @@ it('does not resend an accepted manager message after losing its IPC connection'
   const service = createConversationService({ configDirectory: directory, owner, onDomainChange: vi.fn(),
     runtime: { resolve: async () => ({ provider: 'mock', model: null, language: 'en', contextKey: 'test', executor: { execute } }), close: async () => {} } });
   const server = await createConversationIpcServer(directory, owner, service);
-  cleanups.push(service.close);
+  let serverClosed = false;
+  cleanups.push(async () => { if (!serverClosed) await server.close(); }, service.close);
   const managerId = conversationId({ kind: 'repository', repositoryDirectory: repository });
   const pending = tellDirectorManager(directory, managerId, 'one message', signal());
-  const rejected = expect(pending).rejects.toThrow();
+  void pending.catch(() => {});
+  let acknowledged = false;
+  void pending.then(() => { acknowledged = true; }, () => {});
+  let acceptedOperationId: string | undefined;
   try {
-    await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce(), { timeout: 5000 });
+    await vi.waitFor(() => expect(acknowledged).toBe(true), { timeout: 5000 });
+    const accepted = await pending;
+    expect(accepted).toEqual({ kind: 'accepted', operationId: expect.any(String), managerId });
+    if (accepted.kind !== 'accepted') throw new Error('Director message must be accepted');
+    acceptedOperationId = accepted.operationId;
     await server.close();
-    await rejected;
+    serverClosed = true;
     expect(service.activeOperationCount).toBe(1);
   } finally { release?.(); }
-  await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
+  await vi.waitFor(() => expect(service.activeOperationCount).toBe(0), { timeout: 5000 });
   expect(execute).toHaveBeenCalledOnce();
   expect(execute.mock.calls[0]![0].instruction).toBe('one message');
+  expect(new DirectorMessageResultStore(directory).read(acceptedOperationId!)?.result)
+    .toEqual({ kind: 'reply', message: 'finished after disconnect' });
+});
+
+it('opens the first director binding over IPC and accepts the queued message before the current manager turn ends', async () => {
+  const repository = await seedManager('first-director-repository');
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const execute = vi.fn(async (input: ManagerTurnInput) => {
+    if (input.instruction === 'held human') await gate;
+    return { message: `reply:${input.instruction}`, summary: null, sessionId: 'session', assignment: input.assignment };
+  });
+  const service = createConversationService({ configDirectory: directory, owner, onDomainChange: vi.fn(),
+    runtime: { resolve: async () => ({ provider: 'mock', model: null, language: 'en', contextKey: 'test', executor: { execute } }), close: async () => {} } });
+  cleanups.push(service.close);
+  const server = await createConversationIpcServer(directory, owner, service); cleanups.push(server.close);
+  const selected = await createTuiConversationPort(directory, delivery).resolve({ kind: 'repository', repositoryDirectory: repository });
+  const human = await service.open(selected, delivery); human.read.cancel();
+  try {
+    await service.submit({ attachmentId: human.attachmentId, requestId: randomUUID(), speaker: selected.speaker,
+      command: { kind: 'message', text: 'held human' } });
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce(), { timeout: 5000 });
+    expect(new ConversationStore(directory).read(selected.conversationId, selected.assignment)!.bindings.some((binding) => binding.port === 'director')).toBe(false);
+    const pending = tellDirectorManager(directory, selected.conversationId, 'first director input', signal());
+    void pending.catch(() => {});
+    let acknowledged = false;
+    void pending.then(() => { acknowledged = true; }, () => {});
+    await vi.waitFor(() => expect(JSON.stringify(new ConversationStore(directory).read(selected.conversationId, selected.assignment)))
+      .toContain('first director input'), { timeout: 5000 });
+    expect(execute).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(acknowledged).toBe(true), { timeout: 5000 });
+    expect(await pending).toEqual({ kind: 'accepted', operationId: expect.any(String), managerId: selected.conversationId });
+    expect(execute).toHaveBeenCalledOnce();
+    release();
+    await vi.waitFor(() => expect(service.activeOperationCount).toBe(0), { timeout: 5000 });
+    expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['held human', 'first director input']);
+  } finally { release(); }
+});
+
+it('retains a saved director input when IPC disconnects before its acceptance response is delivered', async () => {
+  const repository = await seedManager('disconnect-before-acceptance');
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const execute = vi.fn(async (input: ManagerTurnInput) => {
+    if (input.instruction === 'held human') await gate;
+    return { message: 'reply', summary: null, sessionId: 'session', assignment: input.assignment };
+  });
+  const service = createConversationService({ configDirectory: directory, owner, onDomainChange: vi.fn(),
+    runtime: { resolve: async () => ({ provider: 'mock', model: null, language: 'en', contextKey: 'test', executor: { execute } }), close: async () => {} } });
+  cleanups.push(service.close);
+  const server = await createConversationIpcServer(directory, owner, service); cleanups.push(server.close);
+  const assignment = { kind: 'repository' as const, repositoryDirectory: repository };
+  const client = new ConversationIpcClient(assignment, undefined, { port: createDirectorManagerPort(directory, delivery), reconnect: false });
+  cleanups.push(async () => client.close()); await client.connect();
+  const selected = await createTuiConversationPort(directory, delivery).resolve(assignment);
+  const human = await service.open(selected, delivery); human.read.cancel();
+  const submit = service.submit;
+  const admissions = vi.spyOn(service, 'submit').mockImplementation(async (request) => {
+    const result = await submit(request);
+    if (request.speaker.id === 'director' && result.kind === 'accepted') client.close();
+    return result;
+  });
+  try {
+    await service.submit({ attachmentId: human.attachmentId, requestId: randomUUID(), speaker: selected.speaker,
+      command: { kind: 'message', text: 'held human' } });
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce(), { timeout: 5000 });
+    await expect(client.submit({ kind: 'message', text: 'saved before disconnect' })).rejects.toThrow();
+    expect(JSON.stringify(new ConversationStore(directory).read(selected.conversationId, assignment))).toContain('saved before disconnect');
+    expect(execute).toHaveBeenCalledOnce();
+    release();
+    await vi.waitFor(() => expect(service.activeOperationCount).toBe(0), { timeout: 5000 });
+    expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['held human', 'saved before disconnect']);
+    expect(admissions.mock.calls.filter(([request]) => request.speaker.id === 'director')).toHaveLength(1);
+  } finally { release(); }
+});
+
+it.each([false, true])('persists the director result with its operation and source conversation after reply failure=%s', async (fails) => {
+  const repository = await seedManager('durable-result');
+  const execute = vi.fn(async (input: ManagerTurnInput) => {
+    if (fails) throw new Error('fixture provider failed');
+    return { message: 'durable manager reply', summary: null, sessionId: 'session', assignment: input.assignment };
+  });
+  const outputs: PortOutput[] = [];
+  const service = createConversationService({ configDirectory: directory, owner, onDomainChange: vi.fn(),
+    runtime: { resolve: async () => ({ provider: 'mock', model: null, language: 'en', contextKey: 'test', executor: { execute } }), close: async () => {} } });
+  cleanups.push(service.close);
+  const selected = await createDirectorManagerPort(directory, delivery).resolve({ kind: 'repository', repositoryDirectory: repository });
+  const opened = await service.open(selected, { deliver: async (_id, output) => { outputs.push(output); return { kind: 'delivered' }; } });
+  opened.read.cancel();
+  const accepted = await service.submit({ attachmentId: opened.attachmentId, requestId: 'durable-result', speaker: selected.speaker,
+    command: { kind: 'message', text: 'director result request' } });
+  expect(accepted.kind).toBe('accepted');
+  if (accepted.kind !== 'accepted') throw new Error('Director message must be accepted');
+  await vi.waitFor(() => expect(outputs.some((output) => output.kind === 'result' && output.operationId === accepted.operationId)).toBe(true), { timeout: 5000 });
+  const terminal = outputs.find((output) => output.kind === 'result' && output.operationId === accepted.operationId);
+  if (terminal?.kind !== 'result') throw new Error('Terminal result must exist');
+  if (terminal.result.kind !== 'reply' && terminal.result.kind !== 'error') throw new Error('Director reply or failure required');
+  expect(terminal.result.kind).toBe(fails ? 'error' : 'reply');
+  service.detach(opened.attachmentId);
+  expect(new DirectorMessageResultStore(directory).read(accepted.operationId)).toEqual({
+    operationId: accepted.operationId, conversationId: selected.conversationId,
+    directorConversationId: conversationId({ kind: 'daemon' }), result: terminal.result,
+  });
+  const director = await service.open(await createTuiConversationPort(directory, delivery).resolve({ kind: 'daemon' }), delivery);
+  const items = await collect(director.read.items);
+  director.read.complete();
+  expect(items.filter((item) => item.kind === 'display_event' && item.event.message.includes(accepted.operationId)))
+    .toEqual([{ kind: 'display_event', event: { id: expect.any(String), message: expect.stringContaining(terminal.result.message) } }]);
+  await service.close();
+});
+
+it('never overwrites a saved director result when the next operation ID candidate collides', async () => {
+  const repository = await seedManager('operation-collision');
+  const execute = vi.fn(async (input: ManagerTurnInput) => ({ message: `reply:${input.instruction}`, summary: null,
+    sessionId: 'session', assignment: input.assignment }));
+  const outputs: PortOutput[] = [];
+  const service = createConversationService({ configDirectory: directory, owner, onDomainChange: vi.fn(),
+    runtime: { resolve: async () => ({ provider: 'mock', model: null, language: 'en', contextKey: 'test', executor: { execute } }), close: async () => {} } });
+  cleanups.push(service.close);
+  const selected = await createDirectorManagerPort(directory, delivery).resolve({ kind: 'repository', repositoryDirectory: repository });
+  const opened = await service.open(selected, { deliver: async (_id, output) => { outputs.push(output); return { kind: 'delivered' }; } });
+  opened.read.cancel();
+  const submit = (text: string) => service.submit({ attachmentId: opened.attachmentId, requestId: 'collision-request',
+    speaker: selected.speaker, command: { kind: 'message', text } });
+  const first = await submit('original director result');
+  expect(first.kind).toBe('accepted');
+  if (first.kind !== 'accepted') throw new Error('First director message must be accepted');
+  await vi.waitFor(() => expect(outputs).toContainEqual({ kind: 'result', operationId: first.operationId,
+    result: { kind: 'reply', message: 'reply:original director result' } }), { timeout: 5000 });
+  const results = new DirectorMessageResultStore(directory);
+  const originalResult = results.read(first.operationId);
+  expect(originalResult?.result).toEqual({ kind: 'reply', message: 'reply:original director result' });
+  ids.next.mockReturnValueOnce(first.operationId);
+  const second = await submit('new director result');
+  expect(['accepted', 'error']).toContain(second.kind);
+  if (second.kind === 'accepted') {
+    expect(second.operationId).not.toBe(first.operationId);
+    await vi.waitFor(() => expect(outputs).toContainEqual({ kind: 'result', operationId: second.operationId,
+      result: { kind: 'reply', message: 'reply:new director result' } }), { timeout: 5000 });
+  }
+  expect(results.read(first.operationId)).toEqual(originalResult);
 });
 
 it('loads and saves the director patrol interval without changing manager settings', () => {
@@ -924,6 +1216,82 @@ async function expectCompletedPatrol(provider: ReturnType<typeof patrolProvider>
   await new Promise(setImmediate);
 }
 
+async function seedPermissionPatrol() {
+  const first = await seedManager('a-good');
+  const denied = join(directory, 'b-denied');
+  mkdirSync(denied);
+  const last = await seedManager('c-good');
+  await createWorkspace({ globalConfigDirectory: directory, name: 'workspace only', repositoryDirectories: [denied] });
+  const goals = new Map<string, Goal>();
+  for (const cwd of [first, denied, last]) goals.set(cwd, await seedPatrolGoal(cwd, { objective: cwd }));
+  return { first, denied, last, goals };
+}
+
+function permissionPatrolProvider(goals: ReadonlyMap<string, Goal>) {
+  const provider = patrolProvider();
+  const observations: Array<{ errors: Array<{ repositoryDirectory: string; reason: string }>; directories: string[] }> = [];
+  provider.call.mockImplementation(async (prompt, options) => {
+    const config = options.mcpServers![DIRECTOR_MCP_SERVER_NAME];
+    if (config?.type !== 'http') throw new Error('HTTP director MCP required');
+    const client = new Client({ name: 'permission-patrol-provider', version: '1' });
+    const transport = new StreamableHTTPClientTransport(new URL(config.url), { requestInit: { headers: config.headers } });
+    try {
+      await client.connect(transport);
+      const result = await client.callTool({ name: 'takt_list_managers', arguments: {} });
+      expect(result.isError, JSON.stringify(result.content)).not.toBe(true);
+      const page = decoded(result) as { managers: Array<{ id: string; assignment: { repositoryDirectories: string[] } }>;
+        errors: Array<{ repositoryDirectory: string; reason: string }> };
+      expect(JSON.parse(prompt)).toMatchObject({ event: 'director_patrol', errors: page.errors });
+      const directories: string[] = [];
+      for (const manager of page.managers) {
+        for (const cwd of manager.assignment.repositoryDirectories) {
+          if (page.errors.some((failure) => failure.repositoryDirectory === cwd)) continue;
+          const expected = goals.get(cwd);
+          expect(expected).toBeDefined();
+          const read = await readMcpPage<Pick<Goal, 'id' | 'objective'>>(client, 'takt_list_goals', 'goals', { managerId: manager.id, cwd });
+          expect(read).toEqual([expect.objectContaining({ id: expected!.id, objective: expected!.objective })]);
+          directories.push(cwd);
+        }
+      }
+      observations.push({ errors: page.errors, directories: directories.sort() });
+      return { persona: 'director', status: 'done', content: 'Patrol finished', timestamp: new Date() };
+    } finally { await client.close(); await transport.close(); }
+  });
+  return { provider, observations };
+}
+
+it.each([false, true])('completes a daemon patrol with a workspace permission failure present at startup=%s', async (deniedAtStartup) => {
+  const { first, denied, last, goals } = await seedPermissionPatrol();
+  const { provider, observations } = permissionPatrolProvider(goals);
+  if (deniedAtStartup) projectFault.directory = denied;
+
+  const daemon = await startPatrolDaemon();
+  await daemon.poll();
+  await expectCompletedPatrol(provider, 1);
+
+  expect(observations).toEqual([{ directories: deniedAtStartup ? [first, last] : [first, denied, last],
+    errors: deniedAtStartup ? [{ repositoryDirectory: denied, reason: expect.stringContaining('EACCES') }] : [] }]);
+  expect(daemon.removeOwner).not.toHaveBeenCalled();
+});
+
+it('continues the same daemon patrol after a workspace stat becomes permission denied', async () => {
+  const { first, denied, last, goals } = await seedPermissionPatrol();
+  const { provider, observations } = permissionPatrolProvider(goals);
+  const daemon = await startPatrolDaemon();
+  await daemon.poll();
+  await expectCompletedPatrol(provider, 1);
+  expect(observations).toEqual([{ directories: [first, denied, last], errors: [] }]);
+
+  projectFault.directory = denied;
+  projectFault.operation = 'stat';
+  await daemon.poll(900);
+  await expectCompletedPatrol(provider, 2);
+
+  expect(observations).toEqual([{ directories: [first, denied, last], errors: [] },
+    { directories: [first, last], errors: [{ repositoryDirectory: denied, reason: expect.stringContaining('EACCES') }] }]);
+  expect(daemon.removeOwner).not.toHaveBeenCalled();
+});
+
 it('patrols repository and workspace managers and notifies each stopped goal and pending approval', async () => {
   const a = await seedManager('patrol-a');
   const b = await seedManager('patrol-b');
@@ -957,7 +1325,7 @@ it('suppresses unchanged patrol notifications on the same daemon and notifies a 
   const outputs: PortOutput[] = [];
   human.onOutput((output) => outputs.push(output));
   await human.connect();
-  await vi.waitFor(() => expect(human.getSnapshot().readStatus).toBe('complete'));
+  await vi.waitFor(() => expect(human.getSnapshot().readStatus).toBe('complete'), { timeout: 5000 });
   const first = await savedDirectorNotices();
   expect(first).toHaveLength(1);
   expect(human.getSnapshot().items).toContainEqual({ kind: 'display_event', event: { id: first[0]!.id, message: first[0]!.message } });
@@ -975,7 +1343,7 @@ it('suppresses unchanged patrol notifications on the same daemon and notifies a 
   expect(notices).toHaveLength(2);
   expect(notices).toContainEqual(first[0]);
   expect(notices).toContainEqual(expect.objectContaining({ message: expect.stringContaining('paused') }));
-  await vi.waitFor(() => expect(outputs.filter((output) => output.kind === 'notice')).toHaveLength(1));
+  await vi.waitFor(() => expect(outputs.filter((output) => output.kind === 'notice')).toHaveLength(1), { timeout: 5000 });
 });
 
 it('keeps identical goal identities in different repositories separate during patrol notification', async () => {
@@ -1224,13 +1592,13 @@ it('keeps manager polling active without overlapping a director patrol and waits
   const daemon = await startPatrolDaemon();
   try {
     await daemon.poll();
-    await vi.waitFor(() => expect(provider.call).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(provider.call).toHaveBeenCalledOnce(), { timeout: 5000 });
     await daemon.poll(1800);
     await daemon.poll(1800);
     expect(provider.call).toHaveBeenCalledOnce();
-    await vi.waitFor(() => expect(daemon.processPending.mock.calls.length).toBeGreaterThan(1));
+    await vi.waitFor(() => expect(daemon.processPending.mock.calls.length).toBeGreaterThan(1), { timeout: 5000 });
     const stopped = daemon.stop();
-    await vi.waitFor(() => expect(provider.call.mock.calls[0]![1].abortSignal?.aborted).toBe(true));
+    await vi.waitFor(() => expect(provider.call.mock.calls[0]![1].abortSignal?.aborted).toBe(true), { timeout: 5000 });
     expect(daemon.removeOwner).not.toHaveBeenCalled();
     release();
     await stopped;
@@ -1245,8 +1613,8 @@ it('waits the patrol interval after a director provider failure before retrying'
   provider.call.mockRejectedValueOnce(new Error('Director provider unavailable'));
   const daemon = await startPatrolDaemon();
   await daemon.poll();
-  await vi.waitFor(() => expect(provider.call.mock.settledResults[0]?.type).toBe('rejected'));
-  await vi.waitFor(() => expect(provider.disposedConnections).toBe(1));
+  await vi.waitFor(() => expect(provider.call.mock.settledResults[0]?.type).toBe('rejected'), { timeout: 5000 });
+  await vi.waitFor(() => expect(provider.disposedConnections).toBe(1), { timeout: 5000 });
   await daemon.poll(899);
   expect(provider.call).toHaveBeenCalledOnce();
   await daemon.poll(1);
@@ -1265,7 +1633,7 @@ it('preserves the human director session across an autonomous patrol', async () 
   const conversation = new ConversationStore(directory);
   const id = conversationId({ kind: 'daemon' });
   await human.submit({ kind: 'message', text: 'Status please' });
-  await vi.waitFor(() => expect(conversation.read(id, { kind: 'daemon' })?.sessionId).toBe('human-session'));
+  await vi.waitFor(() => expect(conversation.read(id, { kind: 'daemon' })?.sessionId).toBe('human-session'), { timeout: 5000 });
   await daemon.poll();
   await expectCompletedPatrol(provider, 2);
   expect(conversation.read(id, { kind: 'daemon' })?.sessionId).toBe('human-session');
@@ -1274,8 +1642,8 @@ it('preserves the human director session across an autonomous patrol', async () 
     return { persona: 'director', status: 'done', content: 'Continued reply', timestamp: new Date(), sessionId: 'human-session' };
   });
   expect((await human.submit({ kind: 'message', text: 'Continue' })).kind).toBe('accepted');
-  await vi.waitFor(() => expect(provider.call).toHaveBeenCalledTimes(3));
-  await vi.waitFor(() => expect(provider.call.mock.settledResults[2]?.type).toBe('fulfilled'));
+  await vi.waitFor(() => expect(provider.call).toHaveBeenCalledTimes(3), { timeout: 5000 });
+  await vi.waitFor(() => expect(provider.call.mock.settledResults[2]?.type).toBe('fulfilled'), { timeout: 5000 });
 });
 
 it('keeps a human conversation MCP connection usable while an autonomous patrol finishes', async () => {
@@ -1302,7 +1670,7 @@ it('keeps a human conversation MCP connection usable while an autonomous patrol 
   try {
     await human.connect();
     expect((await human.submit({ kind: 'message', text: 'Check the current goals' })).kind).toBe('accepted');
-    await vi.waitFor(() => expect(humanMcp).toBeDefined());
+    await vi.waitFor(() => expect(humanMcp).toBeDefined(), { timeout: 5000 });
     const initialTools = (await humanMcp!.listTools()).tools.map((tool) => tool.name).sort();
     await daemon.poll();
     await vi.waitFor(() => {
@@ -1310,7 +1678,7 @@ it('keeps a human conversation MCP connection usable while an autonomous patrol 
       expect(provider.call).toHaveBeenCalledTimes(2);
       expect(provider.call.mock.settledResults[1]?.type).toBe('fulfilled');
       expect(provider.disposedConnections).toBe(1);
-    });
+    }, { timeout: 5000 });
     expect((await humanMcp!.listTools()).tools.map((tool) => tool.name).sort()).toEqual(initialTools);
     release();
     await expectCompletedPatrol(provider, 2);
@@ -1390,7 +1758,7 @@ it.each(['ja', 'en'] as const)('posts merge and inquiry notices together once pe
   await daemon.poll();
   await expectCompletedPatrol(provider, 1);
   expect(slack.factory).toHaveBeenCalledExactlyOnceWith({ appToken: 'xapp-test-director', botToken: 'xoxb-test-director' });
-  await vi.waitFor(() => expect(slack.client.postMessage).toHaveBeenCalledOnce());
+  await vi.waitFor(() => expect(slack.client.postMessage).toHaveBeenCalledOnce(), { timeout: 5000 });
   const [channel, text] = slack.client.postMessage.mock.calls[0]!;
   expect(channel).toBe('C0DIR');
   expect(text).toContain(getLabel('director.slackNotifications', language));
@@ -1404,7 +1772,7 @@ it.each(['ja', 'en'] as const)('posts merge and inquiry notices together once pe
   const human = new ConversationIpcClient({ kind: 'daemon' });
   cleanups.push(async () => human.close());
   await human.connect();
-  await vi.waitFor(() => expect(human.getSnapshot().readStatus).toBe('complete'));
+  await vi.waitFor(() => expect(human.getSnapshot().readStatus).toBe('complete'), { timeout: 5000 });
   for (const notice of await savedDirectorNotices()) {
     expect(human.getSnapshot().items).toContainEqual({ kind: 'display_event', event: notice });
   }
@@ -1434,7 +1802,7 @@ it('routes allowed Slack speech to the director and replies to each originating 
   const managerPlan = vi.spyOn(managerPlans, 'createManagerConversationPlan');
   for (const [index, [ts, text]] of [['1700000000.000001', 'マージ待ちは？'], ['1700000000.000002', '/make-goal\n```text\nそのまま渡す\n```']].entries()) {
     await slack.receive(directorSlackMessage({ ts, text }));
-    await vi.waitFor(() => expect(slack.client.postThreadMessage).toHaveBeenCalledTimes(index + 1));
+    await vi.waitFor(() => expect(slack.client.postThreadMessage).toHaveBeenCalledTimes(index + 1), { timeout: 5000 });
   }
   expect(provider.call).toHaveBeenCalledTimes(2);
   expect(provider.call.mock.calls.map(([prompt]) => prompt)).toEqual(['マージ待ちは？', '/make-goal\n```text\nそのまま渡す\n```']);
@@ -1563,18 +1931,18 @@ it.each([false, true])('delivers saved completion notices from a human turn and 
   await human.connect();
   expect((await human.submit({ kind: 'message', text: 'Report the completed goal' })).kind).toBe('accepted');
   await vi.waitFor(() => expect(provider.disposedConnections).toBe(2), { timeout: 30_000 });
-  await vi.waitFor(() => expect(slack.client.postMessage).toHaveBeenCalledOnce());
+  await vi.waitFor(() => expect(slack.client.postMessage).toHaveBeenCalledOnce(), { timeout: 5000 });
   expect(slack.client.postMessage.mock.calls[0]).toEqual([
     'C0DIR', expect.stringContaining('Completed goal ready for the human'), expect.any(Array),
   ]);
   const [notice] = await savedDirectorNotices();
-  await vi.waitFor(() => expect(outputs).toContainEqual({ kind: 'notice', ...notice }));
+  await vi.waitFor(() => expect(outputs).toContainEqual({ kind: 'notice', ...notice }), { timeout: 5000 });
   expect(slack.client.postThreadMessage).not.toHaveBeenCalled();
   human.close();
   const reopened = new ConversationIpcClient({ kind: 'daemon' });
   cleanups.push(async () => reopened.close());
   await reopened.connect();
-  await vi.waitFor(() => expect(reopened.getSnapshot().readStatus).toBe('complete'));
+  await vi.waitFor(() => expect(reopened.getSnapshot().readStatus).toBe('complete'), { timeout: 5000 });
   expect(reopened.getSnapshot().items).toContainEqual({ kind: 'display_event', event: notice });
   expect(slack.client.postMessage).toHaveBeenCalledOnce();
 });

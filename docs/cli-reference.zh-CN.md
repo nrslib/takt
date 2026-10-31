@@ -94,9 +94,17 @@ director 是实验性功能，行为和保存的数据格式可能随时更改�
 
 manager 推进其负责的仓库或 workspace 的目标，提交任务、整合成果并申请完成。director 查看所有 manager 的目标和未回答的询问，对需要人工处理的事项保存通知，包括等待合并、已暂停的目标、已保存的 `blocked` 通知和未回答的询问。向 manager 提问或传达信息时，通过 manager 对话发送，并将 `director` 记录为发言者。同一对象的保存状态不变时，不会重复通知。
 
+`takt_tell_manager` 会将消息以“等待执行”的状态保存到 manager 的对话记录中，即使 manager 正忙也会接受。保存后立即返回操作 ID 和 manager，无需等待回复。每个 manager 的对话轮次和收件箱事件共用一个执行名额。当前处理结束后，等待的消息按保存顺序、优先于收件箱事件，以 `director` 为发言者各执行一次。人从 TUI 或 Slack 发送的消息仍会在 manager 正忙时被拒绝，不会保存或稍后执行。
+
+回复、失败和中断结果会以同一操作 ID 保存，稍后在 director 界面中通知。如果消息保存失败，工具会返回失败，不会接受该消息。接受后即使连接中断，已保存的消息仍会保留，director 不会自动重发。
+
+daemon 重启后，尚未开始的消息即使没有客户端连接也会执行。已经开始但在结果保存前停止的消息，会向 director 和人报告为中断，不会自动重新执行。
+
 director 不能执行 shell 命令、写入文件或修改配置。run 阶段、裁定、日志等任务内部信息由各 manager 检查。合并决策、规格决策以及删除等不可逆操作仍由人决定；director 不代替人回答询问。
 
-只有人明确指示“合并目标 G”时，director 才会请 G 的 manager 使用 `takt merge` 合并其 PR。转发前，director 会唯一确定仓库、目标和 manager，确认当前目标为 `awaiting_merge`，并读取已保存的 PR 编号和 URL。如果对象不明确、状态不同、没有保存 PR 或读取失败，会向人说明原因而不转发。director 自己不执行合并；manager 通过 `takt_merge_goal_pr` 调用 `takt merge`。转发或接受指令本身不代表合并成功。收到忙碌响应或连接中断时，不会排队或自动重发。
+只有人明确指示“合并目标 G”时，director 才会请 G 的 manager 使用 `takt merge` 合并其 PR。转发前，director 会唯一确定仓库、目标和 manager，确认当前目标为 `awaiting_merge`，并读取已保存的 PR 编号和 URL。如果对象不明确、状态不同、没有保存 PR 或读取失败，会向人说明原因而不转发。director 自己不执行合并；manager 通过 `takt_merge_goal_pr` 调用 `takt merge`。转发或接受指令本身不代表合并成功；director 会根据稍后收到的同一操作 ID 的结果报告成败。执行时仍会通过现有检查：如果目标已暂停、已中止、不再是 `awaiting_merge`，或 PR 编号与保存的编号不符，则不会合并。
+
+manager 列表（`takt_list_managers`）和巡检按 project 分别读取。无法读取的 project（例如不是 Git 仓库的目录）会连同原因一起说明，并返回其余 manager、继续巡检。单个 project 的读取失败不会导致整个列表或巡检失败。
 
 ### 巡检配置
 
