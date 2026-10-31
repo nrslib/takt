@@ -134,6 +134,7 @@ TAKT の実行には Node.js `>=22.22.0` と Git `>=2.38` が必要です（ゴ�
 - `copilot` — [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli)
 - `cursor` — [Cursor Agent](https://docs.cursor.com/)
 - `kiro` — [Kiro CLI](https://kiro.dev/docs/cli/headless/)
+- `devin` — [Devin CLI](https://devin.ai/)
 
 任意:
 
@@ -293,6 +294,7 @@ workflow ファイルの正式ディレクトリ名は `workflows/` です。
 | `takt watch` | タスクキューを監視し、pending タスクを自動実行します（常駐プロセス） |
 | `takt ui` | 実験的な Viewer 中心の Web UI を `http://127.0.0.1:20525` で起動します |
 | `takt manager` | daemon に接続する実験的なゴール相談 TUI を起動します。`Ctrl+R` で問い合わせ、`Ctrl+G` で進行中のゴールを開きます。この2つのキーは manager の処理中も使えます。入力欄に `/make-goal` と打って `Enter` を押すと、現在の会話からゴールの登録案を作ります。案が表示済みでも作り直すだけで、登録はしません。`↑` 承認 / `↓` 続行 / `Enter` 決定で操作し、承認を選んで `Enter` で登録します。`/` を打つと `/make-goal` が補完候補に出て、`Tab` で確定できます。それ以外の `/` で始まる入力は普通の発言として送ります。材料不足なら会話を続けられます。担当の追加・削除・名前変更は会話で依頼します。動作・設定・保存するデータの形式は予告なく変わることがあります。自動でタスクを投入・実行するため、provider の API の費用がかかります。claude（claude-sdk）または codex では、道具の実行前に AI が審査します。起動時に必要なら daemon を起動し、準備が整うまで待ちます。daemon が会話の実行、イベント処理と巡回を行います。`takt daemon stop` で daemon を停止できます |
+| `takt director` | 全 manager を見渡す実験的な会話 TUI を開きます。[director](#director実験的)を参照してください |
 | `takt list` | タスクブランチを管理します（マージ、リトライ、リキュー、停止依頼、強制失敗、追加指示、削除） |
 | `takt #N` | GitHub Issue を初期入力としてタスク化します |
 | `takt merge` | workflow で PR のレビュー・修正・マージを行います |
@@ -374,12 +376,31 @@ exec は前回の設定から開始するか、初回実行時はデフォルト
 
 プリセットの解決順序、`/setup` の保存先、画像の制限、`session_key` の挙動は [CLI Reference](./cli-reference.ja.md) の Instant Exec モードを参照してください。
 
+## director（実験的）
+
+対話端末で director と会話する TUI を開きます。
+
+```bash
+takt director
+takt director --help
+```
+
+会話は daemon が保持するため、TUI を閉じて開き直すと続きにつながります。別の担当リポジトリから起動しても同じ会話です。前の画面の発言や返事は再表示されません。director は実験的機能で、動作や保存するデータの形式は予告なく変わることがあります。会話と定期的な見回りは、どちらも provider を呼び出すため費用がかかります。
+
+manager は担当するリポジトリまたは workspace のゴールを進め、タスクの投入、成果の取り込み、完成の申請を行います。director は全 manager のゴールと未回答の問い合わせを確認し、人に対応が必要な事項を知らせ、manager の会話を通じて連絡します。判断は人に残し、マージも人の明示指示を担当 manager に転送するだけで、director 自身は実行しません。
+
+`takt_tell_manager` の伝言は、manager が処理中でも保存されます。保存した時点で操作 ID と manager が返り、返事を待たずに保存順に処理されます。返事・失敗・中断は保存され、あとで同じ操作 ID 付きで director の画面に知らされます。manager 一覧と見回りは、読めない project を理由付きで示し、残りの manager の処理を続けます。
+
+グローバルの `~/.takt/config.yaml` に、`director.patrol_interval`（秒、既定 `900`）と `director.slack.channel_id` / `director.slack.allowed_user_ids` を設定します。[グローバル設定フィールドリファレンス](./configuration.ja.md#グローバル設定フィールドリファレンス)を参照してください。
+
+**director の Slack:** manager と同じ Slack App と `TAKT_SLACK_APP_TOKEN` / `TAKT_SLACK_BOT_TOKEN` を使い、ボットを director のチャンネルへ招待します。Slack 設定を変更したら daemon を起動し直してください。`director.slack` を設定すると、まとめた通知が届き、許可された人が会話できます。返事は元のスレッドに届きます。接続手順は[Slack で director と会話する](./configuration.ja.md#slack-で-director-と会話する)、詳しい役割と制限は[director の見回り](./goal-management.ja.md#director-の見回り)を参照してください。
+
 ## 設定
 
 最小限の `~/.takt/config.yaml` は次の通りです。
 
 ```yaml
-provider: claude-sdk    # claude-sdk, claude (alias), claude-headless, claude-terminal, codex, opencode, deepseek-harness, cursor, copilot, kiro, pi, or mock
+provider: claude-sdk    # claude-sdk, claude (alias), claude-headless, claude-terminal, codex, opencode, deepseek-harness, cursor, copilot, kiro, devin, pi, or mock
 model: sonnet       # プロバイダーにそのまま渡されます
 language: ja        # en or ja
 ```

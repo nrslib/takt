@@ -11,8 +11,6 @@ import { getGlobalConfigPath, getRepertoireDir } from '../infra/config/paths.js'
 import { invalidateGlobalConfigCache, loadGlobalConfig, saveGlobalConfig } from '../infra/config/global/globalConfig.js';
 import { loadProjectConfig, saveProjectConfig, updateProjectConfig } from '../infra/config/project/projectConfig.js';
 import { invalidateAllResolvedConfigCache } from '../infra/config/resolutionCache.js';
-import { GlobalConfigSchema, ProjectConfigSchema } from '../core/models/config-schemas.js';
-import { loadGlobalConfigTraceState } from '../infra/config/global/globalConfigCore.js';
 
 describe('command system input configuration', () => {
   let projectDir: string;
@@ -49,8 +47,7 @@ describe('command system input configuration', () => {
     projectDir = mkdtempSync(join(tmpdir(), 'takt-command-config-'));
     mkdirSync(join(projectDir, '.takt', 'workflows'), { recursive: true });
     workflowPath = join(projectDir, '.takt', 'workflows', 'command.yaml');
-    vi.stubEnv('TAKT_WORKFLOW_SYSTEM_COMMANDS_TRUSTED_PROJECTS', undefined);
-    writeGlobal({ workflow_system_commands_trusted_projects: [projectDir] });
+    writeGlobal({});
     writeProject({});
     writeWorkflow();
   });
@@ -63,30 +60,16 @@ describe('command system input configuration', () => {
   });
 
   it.each([
-    { roots: 'same', global: false, project: true, allowed: true },
-    { roots: 'empty', global: false, project: true, allowed: true },
-    { roots: 'absent', global: undefined, project: true, allowed: true },
-    { roots: 'parent', global: false, project: true, allowed: true },
-    { roots: 'other', global: false, project: true, allowed: true },
-    { roots: 'missing', global: false, project: true, allowed: true },
-    { roots: 'same', global: true, project: false, allowed: false },
-    { roots: 'empty', global: true, project: false, allowed: false },
-    { roots: 'empty', global: true, project: true, allowed: true },
-    { roots: 'empty', global: true, project: undefined, allowed: true },
-    { roots: 'same', global: true, project: undefined, allowed: true },
-    { roots: 'same', global: false, project: undefined, allowed: false },
-    { roots: 'empty', global: false, project: false, allowed: false },
-    { roots: 'empty', global: false, project: undefined, allowed: false },
-    { roots: 'absent', global: undefined, project: undefined, allowed: false },
-  ])('resolves global $global and project $project regardless of registration $roots', ({ roots, global, project, allowed }) => {
-    const other = join(projectDir, 'other');
-    mkdirSync(other);
-    const registered = roots === 'same' ? [projectDir] : roots === 'parent' ? [dirname(projectDir)]
-      : roots === 'other' ? [other] : roots === 'missing' ? [join(projectDir, 'missing')] : [];
-    writeGlobal({
-      ...(roots === 'absent' ? {} : { workflow_system_commands_trusted_projects: registered }),
-      ...(global === undefined ? {} : { workflow_system_commands: { custom_scripts: global } }),
-    });
+    { global: false, project: true, allowed: true },
+    { global: true, project: false, allowed: false },
+    { global: true, project: true, allowed: true },
+    { global: true, project: undefined, allowed: true },
+    { global: false, project: undefined, allowed: false },
+    { global: false, project: false, allowed: false },
+    { global: undefined, project: true, allowed: true },
+    { global: undefined, project: undefined, allowed: false },
+  ])('resolves global $global and project $project across workflow loaders', ({ global, project, allowed }) => {
+    writeGlobal(global === undefined ? {} : { workflow_system_commands: { custom_scripts: global } });
     writeProject(project === undefined ? {} : { workflow_system_commands: { custom_scripts: project } });
     const scopedDirectory = join(getRepertoireDir(), '@owner', 'repo', 'workflows');
     mkdirSync(scopedDirectory, { recursive: true });
@@ -98,24 +81,6 @@ describe('command system input configuration', () => {
       if (allowed) expect(load()?.steps[0]?.systemInputs).toHaveLength(1);
       else expect(load).toThrow();
     }
-  });
-
-  it('preserves global-only registrations through save, reload, environment and trace', () => {
-    writeGlobal({ workflow_system_commands_trusted_projects: [projectDir] });
-    saveGlobalConfig({ ...loadGlobalConfig(), language: 'ja' });
-    invalidateGlobalConfigCache();
-    expect(loadGlobalConfig().workflowSystemCommandsTrustedProjects).toEqual([projectDir]);
-    expect(loadGlobalConfigTraceState().getOrigin('workflow_system_commands_trusted_projects')).toBe('global');
-    expect(parse(readFileSync(getGlobalConfigPath(), 'utf8')).workflow_system_commands_trusted_projects).toEqual([projectDir]);
-    expect(ProjectConfigSchema.safeParse({ workflow_system_commands_trusted_projects: [projectDir] }).success).toBe(false);
-    expect(GlobalConfigSchema.safeParse({ workflow_system_commands_trusted_projects: ['relative'] }).success).toBe(false);
-    vi.stubEnv('TAKT_WORKFLOW_SYSTEM_COMMANDS_TRUSTED_PROJECTS', JSON.stringify([projectDir]));
-    writeGlobal({});
-    writeProject({ workflow_system_commands: { custom_scripts: true } });
-    expect(loadGlobalConfig().workflowSystemCommandsTrustedProjects).toEqual([projectDir]);
-    expect(loadProjectConfig(projectDir)).not.toHaveProperty('workflowSystemCommandsTrustedProjects');
-    expect(loadGlobalConfigTraceState().getOrigin('workflow_system_commands_trusted_projects')).toBe('env');
-    expect(loadWorkflowFromFile(workflowPath, projectDir).steps[0]?.systemInputs).toHaveLength(1);
   });
 
   it('rejects command inputs without dedicated permission', () => {
@@ -134,9 +99,7 @@ describe('command system input configuration', () => {
     { global: undefined, project: true, allowed: true },
     { global: true, project: {}, allowed: true },
   ])('resolves global $global and project $project permission', ({ global, project, allowed }) => {
-    writeGlobal({ workflow_system_commands_trusted_projects: [projectDir],
-      ...(global === undefined ? {} : { workflow_system_commands: { custom_scripts: global } }),
-    });
+    writeGlobal(global === undefined ? {} : { workflow_system_commands: { custom_scripts: global } });
     writeProject(project === undefined ? {} : {
       workflow_system_commands: typeof project === 'boolean' ? { custom_scripts: project } : project,
     });

@@ -81,6 +81,7 @@ import type {
 import type { CompanionDiffBaseline } from '../companion/step-runtime.js';
 import type { PreparedLiveInterventionDelivery } from '../live-intervention/types.js';
 import { createLiveInterventionDeliveryCommitter } from '../live-intervention/delivery.js';
+import { resolveLiveInterventionPrompt } from '../live-intervention/prompt.js';
 import { Phase1ReportInputTracker } from '../instruction/report-inputs.js';
 
 const log = createLogger('team-leader-runner');
@@ -306,8 +307,10 @@ export class TeamLeaderRunner {
       initialLiveDelivery,
       () => reportInputTracker.recordDelivery(initialLiveDelivery),
     );
-    const leaderInstruction = [instruction, initialLiveDelivery?.prompt]
-      .filter((part): part is string => part !== undefined && part.length > 0)
+    const leaderInstruction = [instruction, resolveLiveInterventionPrompt(
+      liveIntervention, initialLiveDelivery, this.deps.engineOptions.language,
+    )]
+      .filter((part) => part.length > 0)
       .join('\n\n');
     const leaderRuntime = await this.resolveLeaderAutoRouting(
       leaderStep,
@@ -501,6 +504,7 @@ export class TeamLeaderRunner {
       resolvedProvider: leaderProvider,
       resolvedProviderOptions: leaderProviderInfo.providerOptions,
       permissionMode: leaderProviderInfo.permissionMode,
+      edit: leaderBaseOptions.edit,
       projectCwd: this.deps.engineOptions.projectCwd,
       mcpServers: leaderMcpServers,
       mcpAssignment: leaderBaseOptions.mcpAssignment,
@@ -557,6 +561,7 @@ export class TeamLeaderRunner {
       resolvedProvider: leaderProvider,
       resolvedProviderOptions: leaderProviderInfo.providerOptions,
       permissionMode: leaderProviderInfo.permissionMode,
+      edit: leaderBaseOptions.edit,
       projectCwd: this.deps.engineOptions.projectCwd,
       language: this.deps.engineOptions.language,
       inspectTools,
@@ -641,8 +646,10 @@ export class TeamLeaderRunner {
       let response: MorePartsResponse;
       try {
         response = await structuredCaller.requestMoreParts(
-          [input.instruction, liveDelivery?.prompt]
-            .filter((part): part is string => part !== undefined && part.length > 0)
+          [input.instruction, resolveLiveInterventionPrompt(
+            liveIntervention, liveDelivery, this.deps.engineOptions.language,
+          )]
+            .filter((part) => part.length > 0)
             .join('\n\n'),
           input.results,
           input.existingIds,
@@ -689,7 +696,9 @@ export class TeamLeaderRunner {
         );
         try {
           const followUpResponse = await structuredCaller.requestMoreParts(
-            [input.instruction, followUpDelivery.prompt]
+            [input.instruction, resolveLiveInterventionPrompt(
+              liveIntervention, followUpDelivery, this.deps.engineOptions.language,
+            )]
               .filter((part): part is string => part.length > 0)
               .join('\n\n'),
             input.results,
@@ -1283,7 +1292,13 @@ export class TeamLeaderRunner {
       preparedInstruction.injectedReports,
       reportInputTracker.snapshot(),
       (reportName) => writtenReportNames.push(reportName),
-      phase1ExecutionLog?.toReportInput(),
+      phase1ExecutionLog === undefined
+        ? undefined
+        : await this.deps.stepExecutor.savePhase1ExecutionLog(
+          phase1ExecutionLog,
+          executableStep.name,
+          stepIteration,
+        ),
     );
 
     state.stepOutputs.set(step.name, aggregatedResponse);
@@ -1442,7 +1457,7 @@ export class TeamLeaderRunner {
         sanitizeText: this.deps.sanitizeObservabilityText,
       },
       (partStep) => {
-        return this.deps.stepExecutor.buildInstruction(
+        const instruction = this.deps.stepExecutor.buildInstruction(
           partStep,
           partIteration,
           state,
@@ -1451,6 +1466,9 @@ export class TeamLeaderRunner {
           runtime?.fallback,
           instructionTransaction,
         );
+        return [instruction, resolveLiveInterventionPrompt(
+          this.deps.engineOptions.liveIntervention, undefined, this.deps.engineOptions.language,
+        )].filter((part) => part.length > 0).join('\n\n');
       },
       runtime,
       executionAbortSignal,

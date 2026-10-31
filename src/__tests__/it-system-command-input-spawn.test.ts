@@ -122,6 +122,7 @@ describe('command system input process boundary', () => {
     expect(kill.mock.calls.some((call) => call[1] === 'SIGTERM')
       || child.kill.mock.calls.some((call) => call[0] === 'SIGTERM')).toBe(true);
     child.emit('close', null, 'SIGTERM');
+    await vi.advanceTimersByTimeAsync(1100);
     const state = await running;
     expect(state.status).toBe('completed');
     expect(state.systemContexts.get('check')?.result).toMatchObject({ timed_out: true });

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { auditPhase2Trace } from './phase1-execution-log-audit.mjs';
 
 export class ExecutionAuditError extends Error {}
 
@@ -306,7 +307,7 @@ export function inspectPhase1Receipts(trace, workspace) {
 export function scoreExecutionBoundaryV3(sample, targetTrace, phase1Trace, workspace) {
   assertFreshExecution(targetTrace, 'Phase 2');
   const failures = [];
-  if (targetTrace?.toolCount !== 0) failures.push('Phase 2 used tools');
+  failures.push(...auditPhase2Trace(targetTrace, workspace));
   let receipts;
   if (sample.kind === 'live-phase1-chain') {
     assertFreshExecution(phase1Trace, 'Phase 1');
@@ -318,8 +319,8 @@ export function scoreExecutionBoundaryV3(sample, targetTrace, phase1Trace, works
       if (!receipts.reads.some(row => row.path === path)) failures.push('Missing actual file-body inspection: ' + path);
     }
   }
-  const successReason = receipts ? 'Fresh tool-free Phase 2; actual fixture receipts verified'
-    : 'Fresh tool-free Phase 2; synthetic handoff, no actual Phase 1 receipt verification';
+  const successReason = receipts ? 'Fresh readonly Phase 2; actual fixture receipts verified'
+    : 'Fresh readonly Phase 2; synthetic handoff, no actual Phase 1 receipt verification';
   return { pass: failures.length === 0, score: failures.length === 0 ? 1 : 0, reason: failures.join('; ') || successReason,
     ...(receipts ? { verifiedReceipts: [...new Set([...receipts.build, ...receipts.test, ...receipts.reads.map(row => row.receipt)])] } : {}) };
 }

@@ -47,7 +47,7 @@ describe('command system input execution entrypoints', () => {
   beforeEach(() => {
     vi.mocked(childProcess.spawn).mockClear();
     projectDir = mkdtempSync(join(tmpdir(), 'takt-command-entrypoint-'));
-    writeFileSync(getGlobalConfigPath(), stringify({ workflow_system_commands_trusted_projects: [projectDir] }));
+    writeFileSync(getGlobalConfigPath(), stringify({}));
     mkdirSync(join(projectDir, '.takt', 'workflows'), { recursive: true });
     workflowPath = join(projectDir, '.takt', 'workflows', 'approval.yaml');
     promptLog = join(projectDir, 'prompts.jsonl');
@@ -166,26 +166,24 @@ describe('command system input execution entrypoints', () => {
     }));
   }
 
-  function writeGlobalPermission(permission: boolean | undefined, trusted = false): void {
-    writeFileSync(getGlobalConfigPath(), stringify({
-      ...(permission === undefined ? {} : { workflow_system_commands: { custom_scripts: permission } }),
-      workflow_system_commands_trusted_projects: trusted ? [projectDir] : [],
-    }));
+  function writeGlobalPermission(permission: boolean | undefined): void {
+    writeFileSync(getGlobalConfigPath(), stringify(
+      permission === undefined ? {} : { workflow_system_commands: { custom_scripts: permission } },
+    ));
     invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
   }
 
   it.each([
-    { global: false, project: true, pr: false, trusted: true, allowed: true },
-    { global: false, project: true, pr: false, trusted: false, allowed: true },
+    { global: false, project: true, pr: false, allowed: true },
     { global: false, project: true, pr: true, allowed: true },
     { global: undefined, project: true, pr: true, allowed: true },
     { global: false, project: false, pr: true, allowed: false },
     { global: true, project: true, pr: true, allowed: true },
     { global: true, project: false, pr: true, allowed: false },
-  ])('enforces configuration permission before shell startup ($global/$project, PR=$pr)', async ({ global, project, pr, trusted, allowed }) => {
+  ])('enforces configuration permission before shell startup ($global/$project, PR=$pr)', async ({ global, project, pr, allowed }) => {
     writeCommandWorkflow(project);
-    writeGlobalPermission(global, trusted);
+    writeGlobalPermission(global);
     const spawn = vi.mocked(childProcess.spawn);
     const execution = executeTaskWithResult({
       task: 'Inspect approval', cwd: projectDir, projectCwd: projectDir, workflowIdentifier: workflowPath,
@@ -266,13 +264,12 @@ describe('command system input execution entrypoints', () => {
   });
 
   it.each([
-    { global: false, project: true, trusted: true, allowed: true },
-    { global: false, project: true, trusted: false, allowed: true },
-    { global: false, project: false, trusted: false, allowed: false },
-    { global: true, project: true, trusted: false, allowed: true },
-  ])('reads original project permission when executing in a separate clone: $global/$project/$trusted', async ({ global, project, trusted, allowed }) => {
+    { global: false, project: true, allowed: true },
+    { global: false, project: false, allowed: false },
+    { global: true, project: true, allowed: true },
+  ])('reads original project permission when executing in a separate clone: $global/$project', async ({ global, project, allowed }) => {
     writeCommandWorkflow(project);
-    writeGlobalPermission(global, trusted);
+    writeGlobalPermission(global);
     const clone = join(projectDir, 'clone');
     mkdirSync(join(clone, '.takt'), { recursive: true });
     writeFileSync(join(clone, '.takt', 'config.yaml'), stringify({
@@ -309,7 +306,7 @@ describe('command system input execution entrypoints', () => {
       workflowIdentifier: resolved.workflowIdentifier, prContext: resolved.prContext,
       outputMode: 'silent' as const, agentOverrides: { provider: 'mock' as const },
     };
-    writeGlobalPermission(false, true);
+    writeGlobalPermission(false);
     expect((await executeTaskWithResult(request)).success).toBe(true);
     expect(readFileSync(join(projectDir, 'command-ran'), 'utf8')).toBe('approved');
     rmSync(join(projectDir, 'command-ran'));

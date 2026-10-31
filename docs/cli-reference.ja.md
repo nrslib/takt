@@ -19,7 +19,7 @@
 | `--skip-git` | ブランチ作成、コミット、プッシュをスキップ（pipeline モード、workflow のみ実行） |
 | `--repo <owner/repo>` | リポジトリを指定（PR 作成用） |
 | `-q, --quiet` | 最小出力モード: AI 出力を抑制（CI 向け） |
-| `--provider <name>` | エージェント provider を上書き（claude\|claude-sdk\|claude-headless\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|pi\|mock） |
+| `--provider <name>` | エージェント provider を上書き（claude\|claude-sdk\|claude-headless\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|devin\|pi\|mock） |
 | `--auto-strategy <strategy>` | auto routing の strategy を上書き（`cost`\|`balanced`\|`performance`）。実行時に effective `auto_routing` を持つ現在の workflow または workflow_call child へ到達した場合に適用し、それ以外では warning を出して無視します。 |
 | `--model <name>` | エージェントモデルを上書き |
 | `--runtime-assignment <name>` | 合成後の runtime `provider.assignments` を起動単位で選択。`provider.directories` より優先 |
@@ -87,6 +87,19 @@ manager を開くと、必要なら daemon を起動し、準備が整うまで�
 `takt daemon stop` で manager 用のバックグラウンド daemon を明示的に停止できます。自動終了するのは、対象プロジェクトに未完了のゴール、処理待ちのイベント、待機中・実行中のタスクがなく、プロジェクトの確認処理もなく、TUI の接続と会話の操作（初期化・実行・後片付け）がすべてなくなったときだけです。保存された承認待ちの要約だけでは daemon は起動し続けません。
 
 `takt manager` は対話端末でゴール相談の TUI を起動します。manager は実験的機能です。動作・設定・保存するデータの形式は予告なく変わることがあります。自動でタスクを投入・実行するため、provider の API の費用がかかります。
+
+## director（実験的）
+
+`takt director` は対話端末で会話の TUI を開きます。会話は daemon が保持するため、閉じて起動し直すと前の会話の続きにつながります。別の担当リポジトリから起動しても同じ会話です。前の画面の発言や返事は再表示せず、履歴は provider のセッションで管理します。
+
+```bash
+takt director
+takt director --help
+```
+
+director は実験的機能で、動作や保存するデータの形式は予告なく変わることがあります。会話と定期的な見回りには provider の費用がかかります。manager がゴールを進めてタスクを実行し、director は全 manager の確認、人への通知、人の明示的なマージ指示の担当 manager への転送を行います。director 自身は PR をマージしません。役割分担、グローバルの `director.patrol_interval` と `director.slack` の設定、Slack 接続の詳細は、[director の見回り](./goal-management.ja.md#director-の見回り)を参照してください。
+
+`takt_tell_manager` の伝言は、manager が処理中でも保存されます。保存した時点で操作 ID と manager が返り、返事を待たずに保存順に処理されます。返事・失敗・中断は保存され、あとで同じ操作 ID 付きで director の画面に知らされます。manager 一覧（`takt_list_managers`）と見回りは、読めない project を理由付きで示し、残りの manager の処理を続けます。
 
 ## Web UI の実行境界
 

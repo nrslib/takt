@@ -6,8 +6,10 @@ import type { AssistantCliOverrides } from '../../core/config/provider-resolutio
 import type { ManagerAssignment } from './startupResolution.js';
 import type { ManagerDisplayEvent } from './savedEvents.js';
 
+export type ConversationDisplayAssignment = ManagerAssignment | { readonly kind: 'daemon'; readonly repositoryDirectories: readonly string[] };
+
 export type ConversationCommand =
-  | { kind: 'message'; text: string }
+  | { kind: 'message'; text: string; display?: boolean }
   | { kind: 'approve_summary'; revision: number; requirePending?: boolean }
   | { kind: 'dismiss_summary'; revision: number }
   | { kind: 'answer_question'; target: QuestionTarget; questionId: string; answer: GoalAnswerInput;
@@ -27,7 +29,7 @@ export interface ConversationState {
 }
 export type SnapshotValue =
   | { kind: 'state'; state: ConversationState }
-  | { kind: 'assignment'; assignment: ManagerAssignment }
+  | { kind: 'assignment'; assignment: ConversationDisplayAssignment }
   | { kind: 'goal'; goal: Pick<Goal, 'id' | 'objective' | 'status' | 'executionStatus'> & { repositoryDirectory: string } }
   | { kind: 'inquiry'; inquiry: { target: QuestionTarget; question: GoalQuestion; objective?: string } }
   | { kind: 'display_event'; event: ManagerDisplayEvent };
@@ -50,6 +52,7 @@ export type OperationResult =
   | { kind: 'error'; code: string; message: string; answerSaved?: boolean; permissionAppended?: boolean };
 export type PortOutput =
   | { kind: 'snapshot'; read: SnapshotRead }
+  | { kind: 'user_message'; operationId: string; message: string }
   | { kind: 'reply' | 'progress'; operationId: string; message: string }
   | { kind: 'pending' | 'running'; state: ConversationState }
   | { kind: 'notice'; id: string; message: string }

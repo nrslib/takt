@@ -797,7 +797,7 @@ system step は TAKT エンジン自身が実行する step で、agent は起�
 
 `type: command`はworkflowに固定した文字列をshellで実行します。以下の許可設定は既定で無効です。projectの明示値はglobalより優先され、projectで未指定の場合はglobalの値を使います。`workflow_command_gates.custom_scripts`とは独立し、無許可のworkflowは読み込み時に拒否されます。
 
-`workflow_system_commands_trusted_projects`への登録は許可判定に影響しません。別cloneでも元のproject設定を使います。各実行で許可を解決し、rootと子workflowへ同じ値を渡します。`wait`では設定を読み直しません。詳細は[設定ガイド](configuration.ja.md)を参照してください。
+別cloneでも元のproject設定を使います。各実行で許可を解決し、rootと子workflowへ同じ値を渡します。`wait`では設定を読み直しません。詳細は[設定ガイド](configuration.ja.md)を参照してください。
 
 pipeline または対話モードが現在のディレクトリに PR をチェックアウトする場合は、切り替え前の設定から許可を決めます。対話セッションでは Issue に切り替えた後も同じディレクトリでこの許可を使います。PR が追加した project 設定だけでは許可されません。
 
@@ -842,7 +842,7 @@ steps:
 
 TAKT は command のテンプレート展開や引数の追加をしません。直前の応答本文は `TAKT_PREVIOUS_RESPONSE_FILE`、同じ応答に構造化出力があれば `TAKT_PREVIOUS_STRUCTURED_OUTPUT_FILE` で非公開ファイルのパスを渡します。本文がなければ空ファイルを渡し、構造化出力がなければその環境変数は設定しません。スクリプト側でファイルを読み、値を検証してください。ファイルは run の context 配下に保存し、run の成果物として保持します。環境変数はコマンドゲートと同じ基本許可リストと、この2つのファイルパスに限定します。
 
-無通信タイムアウトは適用しません。実行期限または中断時に SIGTERM を送り、終了しなければ100ms後に SIGKILL を送ります。`wait` は確認ごとにコマンドを実行し直し、各実行に `timeout_ms` を適用します。各確認は同じ直前応答を参照し、次の system step は直前の system 応答を参照します。前回の JSON は引き継ぎません。`wait.max_retries`、`on_timeout`、ステップの計数、`loop_monitors`、元の agent に戻った際のセッション継続は既存の規則に従います。
+無通信タイムアウトは適用しません。POSIX では実行期限または中断時にプロセスグループへ SIGTERM を送り、終了しなければ100ms後に SIGKILL を送ります。Windows では `taskkill /T /F` でプロセスツリーを強制終了し、taskkill の完了を待ちます。`wait` は確認ごとにコマンドを実行し直し、各実行に `timeout_ms` を適用します。各確認は同じ直前応答を参照し、次の system step は直前の system 応答を参照します。前回の JSON は引き継ぎません。`wait.max_retries`、`on_timeout`、ステップの計数、`loop_monitors`、元の agent に戻った際のセッション継続は既存の規則に従います。
 
 `effects` はエンジン側のアクションを実行します: `commit_and_push`、`caccia`、`enqueue_task`、`comment_pr`、`sync_with_root`、`resolve_conflicts_with_ai`、`merge_pr`、`close_pr`。各 effect type は 1 step につき最大 1 回しか書けず、結果は `when(effect.<step>.<type>.<field>)` でルーティングします。
 
@@ -898,6 +898,8 @@ output_contracts:
       format: decisions
 ```
 
+Phase 2 では、provider の既存の読み取り専用の設定を使い、レポートの根拠に必要な箇所だけを読みます。今回の Phase 1 実行記録はマスク済み JSONL として保存され、パスとバイト数が渡されます。長い文字列は複数行に分かれているため、検索して周辺だけを参照できます。Phase 2 ではファイルの変更、テスト・ビルドの実行、新しい調査や指摘・判定・計画の追加をせず、Phase 1 の確認実績と Phase 2 で読んだ内容を区別します。最終回答は TAKT がレポートファイルに保存します。Phase 3 ではツールを使いません。
+
 各レポートエントリには `name` と `format` が必須です。任意フィールドが2つあります。
 
 - `use_judge`（デフォルト `true`）— そのレポートを Phase 3 のステータス判定に入力するかどうか。書き出すだけで判定の根拠にしないレポートには `use_judge: false` を指定します。rules の判定が必要な step では少なくとも 1 件の `use_judge` レポートを残す必要があります。
@@ -951,7 +953,7 @@ promotion は並列サブ step ではサポートされません。
 | `policy` | - | policy キーまたはキー配列（section map、または bare 名で project → user → builtin の順に解決） |
 | `knowledge` | - | knowledge キーまたはキー配列（section map、または bare 名で project → user → builtin の順に解決） |
 | `instruction` | - | instruction キー・インライン文字列、またはそれらを並べた空でない配列。facet 参照は section map、または bare 名で project → user → builtin の順に解決 |
-| `edit` | - | step がプロジェクトファイルを編集できるか (`true` / `false`) |
+| `edit` | - | step がプロジェクトファイルを編集できるか (`true` / `false`)。Codex では `false` を明示した step の Phase 1 を `read-only` sandbox で動かす |
 | `companion` | - | 解決済み runtime profile を使う Companion reviewer を通常 agent step または Team Leader step で実行（[Companion レビュアー](#companion-レビュアー)参照） |
 | `completion_retry` | - | 必須の `retry_instruction` facet と任意の再試行上限を持つ object でレビュー網羅性確認を有効化 |
 | `pass_previous_response` | `true` | 前の step の出力を `{previous_response}` に渡す |
@@ -971,6 +973,8 @@ workflow YAML では provider と model を指定できません。runtime profi
 実効ツール一覧は設定値より狭くなる場合があります。`edit: false` の場合、または step に `output_contracts` があり `edit: true` ではない場合、TAKT は provider 呼び出し前に `provider_options.*.allowed_tools` からコマンド・編集系 tool を除去します。Claude 系 provider ではカンマ区切り entry を atomic な tool spec に正規化し、`Bash(...)` は `(` より前の canonical tool 名で判定してから、`Bash`、`Edit`、`Write`、`Apply_Patch`、`Patch` を除去します。OpenCode では `bash`、`edit`、`write` など lowercase の tool を除去します。同じ read-only フィルタは`part_edit: false` または継承された `edit: false` などにより part の実効 edit 設定が false の場合の `team_leader.part_allowed_tools` にも適用されます。
 
 Pi provider は generic な `Read`、`Glob`、`Grep`、`Edit`、`Write`、`Bash` 名を Pi SDK tool へ変換します。Pi は TAKT の MCP server と structured output に対応しません。step-level の MCP 設定は drop され、session-level の MCP 設定は対応 provider が必要です。`max_turns` は Pi call で無視します。
+
+`edit: false` を明示した step は、Codex では Phase 1 を `read-only` sandbox で実行します。解決された permission mode にかかわらず、`permission_control: codex` でも適用されます。team leader の part（`part_edit` または `edit` の継承）、parallel の各 sub-step、`workflow_call` の子 workflow の各 step にも、それぞれの実効 `edit` 設定が適用されます。共通の権限解決、ほかの provider の動作、`edit` 未指定・`edit: true` の動作は変わりません。
 
 ## Workflow レベルの設定
 
@@ -1212,7 +1216,7 @@ Companion 定義は `.takt/companions/`、`~/.takt/companions/`、`builtins/{lan
 ## ベストプラクティス
 
 1. **イテレーション数を妥当に保つ** — 開発系 workflow では 10〜30 程度が一般的
-2. **レビュー step では `edit: false`** — レビュアーがコードを変更しないようにする
+2. **レビュー step では `edit: false`** — レビュアーがコードを変更しないようにする。Codex では Phase 1 を `read-only` sandbox で実行する
 3. **わかりやすい step 名を使う** — ログが読みやすくなる
 4. **workflow は段階的にテストする** — 単純な構成から始めて複雑化する
 5. **`takt eject <workflow>` でカスタマイズする** — ビルトイン workflow をコピーして編集する

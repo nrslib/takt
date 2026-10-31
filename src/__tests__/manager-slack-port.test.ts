@@ -139,6 +139,29 @@ it('turns an inquiry reply into an answer command without creating a conversatio
   port.close();
 });
 
+it.each([true, false])('identifies a saved inquiry thread without loading its current question, bound=%s', (bound) => {
+  const { port, input, client } = fixture();
+  inquiries.find.mockReturnValue(bound ? { channelId: endpoint.channelId, parentTs: endpoint.parentTs,
+    questionId: '550e8400-e29b-41d4-a716-446655440000', target: { goalId: null, owner: { kind: 'repository', repositoryDirectory: '/canonical' } } } : undefined);
+  expect(port.isInquiryThread(endpoint.channelId, endpoint.parentTs)).toBe(bound);
+  expect(inquiries.find).toHaveBeenCalledExactlyOnceWith(endpoint.channelId, endpoint.parentTs);
+  expect(inquiries.goal).not.toHaveBeenCalled();
+  expect(input.open).not.toHaveBeenCalled();
+  expect(inquiries.save).not.toHaveBeenCalled();
+  expect(client.postMessage).not.toHaveBeenCalled();
+});
+
+it('treats an unreadable inquiry binding as an ordinary thread in both classification and receive', async () => {
+  const { port, input } = fixture();
+  inquiries.find.mockImplementation(() => { throw new Error('Unreadable binding'); });
+  vi.mocked(input.open).mockResolvedValue({ attachmentId: 'attachment', read: read() });
+  vi.mocked(input.submit).mockResolvedValue({ kind: 'accepted', operationId: 'operation' });
+  expect(port.isInquiryThread(endpoint.channelId, endpoint.parentTs)).toBe(false);
+  await port.receive(endpoint, '80');
+  expect(input.submit).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ command: { kind: 'message', text: '80' } }));
+  port.close();
+});
+
 it('opens a permission modal but submits only after the originating user confirms its sentence', async () => {
   const { port, input, client } = fixture();
   const question = createInquiry({ kind: 'approval', body: 'Allow?', operation: { toolName: 'Bash', args: 'npm test', cwd: '/canonical' } });

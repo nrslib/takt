@@ -30,3 +30,5 @@ output_contracts:
   report:
     - name: review-resolution.md
       format: supervisor-validation
+    - name: summary.md
+      format: supervisor-summary

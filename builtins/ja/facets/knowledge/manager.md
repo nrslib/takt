@@ -14,7 +14,7 @@ TUI は相談、要約の承認、質問への回答、一時停止・再開・�
 
 ## 道具
 
-manager の道具は既存の TAKT の機能への口です。タスク一覧、run の詳細、差分、履歴、ブランチの関係を読み、投入、再開、やり直し、削除、ゴール用ブランチへの取り込み、完成の確認を行えます。ゴールの操作には対象リポジトリの cwd と goalId を渡します。道具の引数定義を確認して使ってください。
+manager の道具は既存の TAKT の機能への口です。タスク一覧、run の詳細、差分、履歴、ブランチの関係を読み、投入、再開、やり直し、削除、ゴール用ブランチへの取り込み、完成の確認を行えます。takt_list_tasks はゴールの各タスクに goalIntegration（integrated / not_integrated / unknown）を返し、unknown のときは goalIntegrationReason に理由を出します。取り込み済みかは goalIntegration で確かめてください。ゴールの操作には対象リポジトリの cwd と goalId を渡します。道具の引数定義を確認して使ってください。
 
 - 終了イベントと run の詳細で原因と止まった位置を確認してから道具を選びます。
 - 外の事情（容量・認証・ネットワーク・一時的な障害）や上限で止まり、それまでの作業が使えるなら takt_requeue_goal_task で再開します。
@@ -24,10 +24,11 @@ manager の道具は既存の TAKT の機能への口です。タスク一覧、
 - takt_pause_goal / takt_resume_goal / takt_abort_goal は対象の cwd と goalId を受け取り、中止には理由が必要です。takt_list_goals で特定し、曖昧なら人に質問します。どの操作も判断役を通した人の確認が必要です。一時停止は実行中タスクを止めず、新しい実行とイベント処理を保留します。再開は保留した処理を進めます。中止は未実行タスクを無効にし、実行中タスクを中断します。中止は取り消せず、記録・ブランチは残るため、実行前の確認事項に含めます。
 - takt_list_standalone_inquiries は、現在の担当先に保存された、ゴールに属さない未回答の問い合わせを読み、id・種類・本文・作成時刻などを返します。
 - takt_withdraw_standalone_inquiry は、ゴールに属さない未回答の問い合わせを id と理由で取り下げます。未回答でないものは状態も保存済みの回答も変えません。
+- takt_tell_run は実行中のゴールタスクに追加の指示を送り、同じ内容を作業の記録に保存します。cwd、goalId、taskName、content を渡します。
 
 保存された再開位置が使えなければ、返された候補と run の詳細から開始位置を選びます。
 
-ゴール用ブランチに成果を集め、取り込み先に反映して完成します。manager.main_merge は approve が既定で、人の取り込みを待ちます。auto は自動で取り込みますが、取り込み先がチェックアウト中なら人を待ちます。
+ゴール用ブランチに成果を集め、取り込み先に反映して完成します。manager.main_merge は approve が既定で、PR を公開して director 経由の人の明示指示を待ちます。auto は自動で取り込みますが、取り込み先がチェックアウト中なら PR を公開し、同じ指示を待ちます。
 
 ## 記憶と通知
 
@@ -45,4 +46,10 @@ manager は毎ターン、ゴール所属とゴールなしの未回答の問い
 
 タスクの startedAt は実行開始、質問とゴールの createdAt は作成時刻です。takt_get_run は currentIteration、currentStepStartedAt、currentStepExecutionCount と、終了した段階の timestamp / iteration を返します。開始時刻と回数は保存された開始ログから読み、現在の段階に対応するログがなければ開始時刻は不明です。
 
-manager.patrol_interval は秒単位で、既定は 1800 秒です。未完成で active なゴールを前回の巡回終了からこの間隔で点検します。新規ゴールの初回は作成時刻から数えます。巡回は失敗を blocked で知らせてイベントを消し、成功・失敗とも終了時刻を保存します。失敗して残っている通常のイベントは巡回時に再試行します。
+manager.patrol_interval は秒単位で、既定は 900 秒です。未完成で active なゴールを前回の巡回終了からこの間隔で点検します。新規ゴールの初回は作成時刻から数えます。巡回は失敗を blocked で知らせてイベントを消し、成功・失敗とも終了時刻を保存します。失敗して残っている通常のイベントは巡回時に再試行します。
+
+## ゴールの PR
+
+完成申請が awaiting_merge になるとブランチを push し、取り込み先を base とする PR を作成または再利用します。PR 本文は目的、ブランチ差分による変更、summary の確認結果、humanChecks の人の確認手順を含みます。PR の番号と URL は pullRequest に保存され、takt_get_goal / takt_list_goals から読めます。
+
+takt_merge_goal_pr は cwd、goalId、保存 PR と一致する正整数の prNumber、現在のターンで渡された conversationOperationId で、そのリポジトリの takt merge を動かします。director 経由の人の明示指示がある場合だけ使います。道具の成功だけでは完成せず、takt_check_goal_completion を使います。squash で PR に追加された変更が確認を妨げる場合は、保存済みの取り込み先ブランチをゴールブランチに取り込むタスクで合わせます。

@@ -1,16 +1,40 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { buildCommandEnv, runBoundedCommand } from '../shared/utils/bounded-command-runner.js';
 
 function shellQuote(value: string): string {
+  if (process.platform === 'win32') return `"${value}"`;
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
+function waitForCommandPids(pidFile: string): Promise<{ commandPid: number; descendantPid: number }> {
+  return vi.waitFor(() => {
+    const [commandPid, descendantPid] = readFileSync(pidFile, 'utf8').trim().split(/\s+/).map(Number);
+    if (
+      commandPid === undefined || descendantPid === undefined
+      || !Number.isInteger(commandPid) || commandPid <= 0
+      || !Number.isInteger(descendantPid) || descendantPid <= 0
+    ) {
+      throw new Error('Command PIDs were not recorded');
+    }
+    return { commandPid, descendantPid };
+  }, { timeout: 5_000, interval: 20 });
+}
+
+function isProcessGone(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ESRCH') return true;
+    throw error;
+  }
+}
+
 describe('bounded command runner process tree', () => {
-  // This runner uses process-group signaling only on POSIX.
-  it.skipIf(process.platform === 'win32')('kills a running descendant after timeout', async () => {
+  it.each(['timeout', 'abort'] as const)('kills the command and its descendant after %s and settles', async (reason) => {
     const testRoot = mkdtempSync(join(tmpdir(), 'takt-bounded-command-'));
     const pidFile = join(testRoot, 'pids.txt');
     const scriptPath = join(testRoot, 'command.cjs');
@@ -25,28 +49,42 @@ describe('bounded command runner process tree', () => {
     let commandPid: number | undefined;
     let descendantPid: number | undefined;
     try {
-      const result = await runBoundedCommand({
+      const controller = new AbortController();
+      let settled = false;
+      const running = runBoundedCommand({
         command: `${shellQuote(process.execPath)} ${shellQuote(scriptPath)} ${shellQuote(pidFile)}`,
         cwd: testRoot,
-        timeoutMs: 1_000,
+        timeoutMs: reason === 'timeout' ? 1_000 : 30_000,
         env: buildCommandEnv(process.env),
+        signal: controller.signal,
+      }).then((result) => {
+        settled = true;
+        return result;
       });
 
-      [commandPid, descendantPid] = readFileSync(pidFile, 'utf8').split(' ').map(Number);
-      expect(result.timedOut).toBe(true);
-      expect(commandPid).toBeGreaterThan(0);
-      expect(descendantPid).toBeGreaterThan(0);
-      expect(() => process.kill(descendantPid, 0)).toThrow();
+      ({ commandPid, descendantPid } = await waitForCommandPids(pidFile));
+      if (reason === 'abort') controller.abort();
+      const result = await running;
+      expect(result).toMatchObject({
+        timedOut: reason === 'timeout',
+        aborted: reason === 'abort',
+      });
+
+      const terminatedPids = [commandPid, descendantPid];
+      await vi.waitFor(() => {
+        for (const pid of terminatedPids) expect(isProcessGone(pid)).toBe(true);
+      }, { timeout: 5_000, interval: 20 });
+      expect(settled).toBe(true);
     } finally {
       for (const pid of [commandPid, descendantPid]) {
         if (pid === undefined || !Number.isInteger(pid) || pid <= 0) continue;
         try {
           process.kill(pid, 'SIGKILL');
         } catch {
-          // The process was already terminated by the timeout.
+          // Cleanup is best-effort after the runner has terminated the processes.
         }
       }
       rmSync(testRoot, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 });

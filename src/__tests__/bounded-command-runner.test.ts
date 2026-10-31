@@ -3,8 +3,18 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { buildCommandEnv, runBoundedCommand } from '../shared/utils/bounded-command-runner.js';
 
-const doubles = vi.hoisted(() => ({ spawn: vi.fn() }));
+const doubles = vi.hoisted(() => ({
+  spawn: vi.fn(),
+  crossSpawn: vi.fn(),
+  resolveSystem32ExecutablePath: vi.fn(),
+}));
 vi.mock('node:child_process', () => ({ spawn: doubles.spawn }));
+vi.mock('cross-spawn', () => ({ default: doubles.crossSpawn }));
+vi.mock('../shared/utils/executable-path.js', () => ({
+  resolveSystem32ExecutablePath: doubles.resolveSystem32ExecutablePath,
+}));
+
+const originalPlatform = process.platform;
 
 describe('bounded command runner', () => {
   let child: ReturnType<typeof createChild>;
@@ -16,11 +26,15 @@ describe('bounded command runner', () => {
   const options = { command: ' fixed command ', cwd: '/task', timeoutMs: 1000, env: {} };
   beforeEach(() => {
     vi.useFakeTimers();
+    Object.defineProperty(process, 'platform', { configurable: true, value: 'linux' });
     child = createChild();
     doubles.spawn.mockReset().mockReturnValue(child);
+    doubles.crossSpawn.mockReset();
+    doubles.resolveSystem32ExecutablePath.mockReset();
     vi.spyOn(process, 'kill').mockReturnValue(true);
   });
   afterEach(() => {
+    Object.defineProperty(process, 'platform', { configurable: true, value: originalPlatform });
     child.stdout.destroy();
     child.stderr.destroy();
     vi.restoreAllMocks();
@@ -111,6 +125,39 @@ describe('bounded command runner', () => {
       exitCode: null, timedOut: reason === 'timeout', aborted: reason === 'abort',
     });
     expect(remove).toHaveBeenCalledWith('abort', expect.any(Function));
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['timeout', 'abort'])('kills the Windows process tree and waits for taskkill after %s', async (reason) => {
+    Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' });
+    const killer = new EventEmitter();
+    const taskkillPath = 'C:\\Windows\\System32\\taskkill.exe';
+    doubles.resolveSystem32ExecutablePath.mockReturnValue(taskkillPath);
+    doubles.crossSpawn.mockReturnValue(killer);
+    const controller = new AbortController();
+    let settled = false;
+    const running = runBoundedCommand({ ...options, signal: controller.signal }).then((result) => {
+      settled = true;
+      return result;
+    });
+
+    if (reason === 'abort') controller.abort();
+    else await vi.advanceTimersByTimeAsync(1000);
+
+    expect(doubles.resolveSystem32ExecutablePath).toHaveBeenCalledWith('taskkill.exe');
+    expect(doubles.crossSpawn).toHaveBeenCalledWith(taskkillPath, [
+      '/pid', String(child.pid), '/T', '/F',
+    ], { stdio: 'ignore', windowsHide: true });
+    expect(process.kill).not.toHaveBeenCalled();
+
+    child.emit('close', null);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    killer.emit('close', 0, null);
+    expect(await running).toMatchObject({
+      exitCode: null, timedOut: reason === 'timeout', aborted: reason === 'abort',
+    });
     expect(vi.getTimerCount()).toBe(0);
   });
 

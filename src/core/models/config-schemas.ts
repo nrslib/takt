@@ -3,7 +3,6 @@
  */
 
 import { z } from 'zod/v4';
-import { isAbsolute } from 'node:path';
 import { DEFAULT_LANGUAGE } from '../../shared/constants.js';
 import { MAX_ASSISTANT_INIT_FILES } from './assistant-config.js';
 import { VCS_PROVIDER_TYPES } from './vcs-types.js';
@@ -218,22 +217,22 @@ const ProjectConfigObjectBaseSchema = z.object({
   with_submodules: z.boolean().optional(),
 }).strict();
 
+const SlackConfigSchema = z.object({
+  channel_id: z.string().trim().min(1),
+  allowed_user_ids: z.array(z.string().trim().min(1)),
+}).strict();
+
 const ProjectConfigObjectSchema = ProjectConfigObjectBaseSchema.extend({
   manager: ProjectConfigObjectBaseSchema.shape.manager.unwrap().extend({
     main_merge: z.enum(['auto', 'approve']).optional(),
-    slack: z.object({
-      channel_id: z.string().trim().min(1),
-      allowed_user_ids: z.array(z.string().trim().min(1)),
-    }).strict().optional(),
+    slack: SlackConfigSchema.optional(),
   }).optional(),
 });
 
 export const ProjectConfigSchema = ProjectConfigObjectSchema;
 
 const GlobalOnlyConfigSchema = z.object({
-  workflow_system_commands_trusted_projects: z.array(z.string().refine((path) => isAbsolute(path), {
-    message: 'Trusted project roots must be absolute paths',
-  })).optional(),
+  director: z.object({ patrol_interval: z.number().int().positive().optional(), slack: SlackConfigSchema.optional() }).strict().optional(),
   language: LanguageSchema.optional().default(DEFAULT_LANGUAGE),
   logging: LoggingConfigSchema.optional(),
   worktree_dir: z.string().optional(),
@@ -250,6 +249,7 @@ const GlobalOnlyConfigSchema = z.object({
   cursor_cli_path: z.string().optional(),
   copilot_cli_path: z.string().optional(),
   kiro_cli_path: z.string().optional(),
+  devin_cli_path: z.string().optional(),
   copilot_github_token: z.string().optional(),
   kiro_api_key: z.string().optional(),
   opencode_api_key: z.string().optional(),

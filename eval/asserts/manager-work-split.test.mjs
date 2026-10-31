@@ -14,7 +14,7 @@ const selectedKeys = {
   'constraint-carryover': ['resolve-assignment'],
   'constraint-carryover-data': ['channel-totals'],
   'constraint-once': ['ping-log', 'users-paging'],
-  'integration-check': ['check-results'],
+  'integration-check': [],
   'escalate-repeated-failure': ['admin-copy'],
   'escalate-not-on-first-failure': ['csv-import'],
   'no-check-docs': [],
@@ -23,7 +23,27 @@ const selectedKeys = {
   'summary-keeps-constraint': [],
   'summary-keeps-constraint-web': [],
   'summary-no-invented-constraint': [],
+  'mail-dispatch-state': [],
+  'local-config-tampering': [],
+  'offline-sync-queue': [],
+  'report-publish-replacement': [],
+  'reservation-validation': [],
+  'legacy-date-format': [],
+  'archive-test-coverage': [],
+  'quoted-csv-fields': [],
+  'inventory-retry-idempotency': [],
+  'conflicting-calendar-visibility': [],
+  'unchanged-adjudication': [],
 };
+const patrolTellCases = new Set([
+  'mail-dispatch-state', 'local-config-tampering', 'offline-sync-queue', 'report-publish-replacement',
+]);
+const patrolRequiredCases = new Set([
+  'reservation-validation', 'legacy-date-format', 'archive-test-coverage', 'quoted-csv-fields',
+  'inventory-retry-idempotency',
+]);
+const patrolNoTellCases = new Set(['unchanged-adjudication']);
+const patrolQuestionCases = new Set(['conflicting-calendar-visibility']);
 const suite = parse(readFileSync(new URL('../scenarios/manager-work-split/manager-work-split.yaml', import.meta.url), 'utf8'));
 function assertSemanticGrader(caseId, lang) {
   const row = suite.tests.find(({ vars }) => vars.case === caseId && vars.lang === lang);
@@ -33,6 +53,12 @@ function enqueue(fixture, key) {
   return { tool: 'takt_enqueue_goal_task', arguments: {
     cwd: fixture.cwd, goalId: fixture.goal.id, workKey: key, purpose: `Implement ${key}`,
     task: `On the current tip of ${fixture.goal.branch}, run npm run build and targeted tests for ${key}; report evidence.`, workflow: 'default',
+  } };
+}
+function tellRun(fixture, content = 'Keep the required behavior and correct the repair scope.') {
+  const task = fixture.tasks.find(({ status }) => status === 'running');
+  return { tool: 'takt_tell_run', arguments: {
+    cwd: fixture.cwd, goalId: fixture.goal.id, taskName: task.name, content,
   } };
 }
 function goodOutput(caseId, lang) {
@@ -59,6 +85,27 @@ function goodOutput(caseId, lang) {
     output.calls[0].arguments.task = lang === 'ja'
       ? 'docs/sales-csv.md と data/sales_sample.csv を読んでから sales/loader.py を実装する。sale_date、amount、channel と既存の日付形式を使い、見本データで読み込みと入力検証を確認する。'
       : 'Read docs/sales-csv.md and data/sales_sample.csv before implementing sales/loader.py. Use sale_date, amount, channel and the existing date format; verify loading and validation with the sample data.';
+  }
+  if (caseId === 'integration-check') {
+    output.calls.push({ tool: 'takt_record_goal_work_log', arguments: {
+      cwd: fixture.cwd, goalId: fixture.goal.id,
+      summary: 'Prepare dependencies in a temporary worktree at the combined goal tip; build and test saved progress through restart and list display. Record results before completion.',
+    } });
+  }
+  if (patrolTellCases.has(caseId)) {
+    output.calls.push(tellRun(fixture));
+    output.calls.push({ tool: 'takt_record_goal_work_log', arguments: {
+      cwd: fixture.cwd, goalId: fixture.goal.id, summary: 'Recorded the repair item and the source supporting the instruction.',
+    } });
+  }
+  if (patrolQuestionCases.has(caseId)) {
+    output.calls.push({ tool: 'takt_ask_goal_question', arguments: {
+      cwd: fixture.cwd,
+      goalId: fixture.goal.id,
+      body: 'The two acceptance criteria conflict under the external service constraint. Which behavior should take priority?',
+      options: ['Wait for external confirmation before showing the item.', 'Show the item locally while marking it unconfirmed.'],
+      recommendation: 'Clarify which acceptance criterion takes priority before changing either one.',
+    } });
   }
   if (caseId === 'constraint-carryover-data') {
     output.calls[0].arguments.purpose = fixture.readResults[0].result.work[0].purpose;
@@ -107,16 +154,18 @@ function goodOutput(caseId, lang) {
 const score = (output, caseId, lang = 'ja') => evaluate(typeof output === 'string' ? output : JSON.stringify(output), { vars: { case: caseId, lang } });
 function writingCalls(fixture, _keys) {
   const base = { cwd: fixture.cwd, goalId: fixture.goal.id };
-  const task = fixture.tasks[0];
+  const task = fixture.tasks.find(({ status }) => status === 'running') ?? fixture.tasks[0];
+  const completedTask = fixture.tasks.find(({ status }) => status === 'completed') ?? task;
   return {
     takt_enqueue_goal_task: enqueue(fixture, 'unexpected-work').arguments,
     takt_requeue_goal_task: { ...base, taskName: task.name },
     takt_retry_goal_task: { ...base, taskName: task.name, task: 'Corrected instructions.' },
     takt_remove_goal_task: { ...base, taskName: task.name, reason: 'No longer needed.' },
-    takt_merge_goal_task: { ...base, taskName: task.name, expectedSha: task.completion.sha },
+    takt_merge_goal_task: { ...base, taskName: completedTask.name, expectedSha: completedTask.completion.sha },
     takt_complete_goal: { ...base, expectedSha: 'c'.repeat(40), summary: 'Reviewed acceptance evidence.' },
     takt_check_goal_completion: base,
     takt_ask_goal_question: { ...base, body: 'Approve these work units?' },
+    takt_tell_run: { ...base, taskName: task.name, content: 'Review the repair target.' },
     takt_withdraw_goal_question: { ...base, questionId: '650e8400-e29b-41d4-a716-446655440001' },
     takt_notify_goal: { ...base, kind: 'custom', body: 'Decision recorded.' },
     takt_record_goal_work_log: {
@@ -186,6 +235,7 @@ for (const lang of ['ja', 'en']) {
       assert.equal(score(correct, caseId, lang).pass, true);
       const wrong = structuredClone(correct);
       if (caseId.startsWith('summary-')) wrong.response.summary = null;
+      else if (patrolNoTellCases.has(caseId) || patrolRequiredCases.has(caseId) || caseId === 'integration-check') wrong.response.summary = { objective: 'Invalid event summary' };
       else wrong.calls = [];
       assert.equal(score(wrong, caseId, lang).pass, false);
     });
@@ -196,7 +246,12 @@ for (const lang of ['ja', 'en']) {
         ? ['takt_enqueue_goal_task', 'takt_notify_goal', 'takt_ask_goal_question', 'takt_record_goal_work_log']
         : caseId === 'escalate-not-on-first-failure'
           ? ['takt_enqueue_goal_task', 'takt_requeue_goal_task', 'takt_retry_goal_task', 'takt_record_goal_work_log', 'takt_notify_goal']
-          : caseId.startsWith('summary-') ? [] : [
+        : patrolTellCases.has(caseId) ? ['takt_tell_run', 'takt_record_goal_work_log', 'takt_notify_goal']
+          : patrolQuestionCases.has(caseId) ? ['takt_ask_goal_question', 'takt_tell_run', 'takt_record_goal_work_log', 'takt_notify_goal']
+            : patrolRequiredCases.has(caseId) ? ['takt_tell_run', 'takt_ask_goal_question', 'takt_record_goal_work_log', 'takt_notify_goal']
+            : patrolNoTellCases.has(caseId) ? ['takt_record_goal_work_log', 'takt_notify_goal']
+              : caseId.startsWith('summary-') ? [] : caseId === 'integration-check'
+                ? ['takt_record_goal_work_log', 'takt_notify_goal'] : [
         'takt_merge_goal_task', 'takt_record_goal_work_log', 'takt_notify_goal',
         caseId.startsWith('no-check-') || caseId === 'integration-already-checked' ? 'takt_complete_goal' : 'takt_enqueue_goal_task',
       ];
@@ -225,6 +280,78 @@ for (const lang of ['ja', 'en']) {
       });
     }
   }
+}
+for (const lang of ['ja', 'en']) {
+  test(`${lang}: sends one instruction only for unsupported or unnecessarily complex repair items`, () => {
+    for (const caseId of patrolTellCases) {
+      const output = goodOutput(caseId, lang);
+      assertSemanticGrader(caseId, lang);
+      assert.equal(score(output, caseId, lang).pass, true);
+      assert.equal(output.calls.filter(({ tool }) => tool === 'takt_tell_run').length, 1);
+      const duplicate = structuredClone(output);
+      duplicate.calls.push(structuredClone(duplicate.calls.find(({ tool }) => tool === 'takt_tell_run')));
+      assert.equal(score(duplicate, caseId, lang).pass, false);
+      const withoutTell = structuredClone(output);
+      withoutTell.calls = withoutTell.calls.filter(({ tool }) => tool !== 'takt_tell_run');
+      assert.equal(score(withoutTell, caseId, lang).pass, false);
+      const wrongTask = structuredClone(output);
+      wrongTask.calls.find(({ tool }) => tool === 'takt_tell_run').arguments.taskName = 'another-task';
+      assert.equal(score(wrongTask, caseId, lang).pass, false);
+    }
+  });
+
+  test(`${lang}: permits instructions and questions for required items subject to semantic grading`, () => {
+    for (const caseId of patrolRequiredCases) {
+      const fixture = loadManagerCase(caseId, lang);
+      const output = goodOutput(caseId, lang);
+      assertSemanticGrader(caseId, lang);
+      assert.equal(score(output, caseId, lang).pass, true);
+      output.calls.push(tellRun(fixture));
+      output.calls.push({ tool: 'takt_ask_goal_question', arguments: {
+        cwd: fixture.cwd, goalId: fixture.goal.id, body: 'Please clarify the basis for the required behavior.',
+      } });
+      assert.equal(score(output, caseId, lang).pass, true);
+      const duplicate = structuredClone(output);
+      duplicate.calls.push(structuredClone(duplicate.calls[0]));
+      duplicate.calls[2].arguments.content = 'Continue the required repair.';
+      assert.equal(score(duplicate, caseId, lang).pass, false);
+      output.calls[1].arguments.recipient = 'director';
+      assert.equal(score(output, caseId, lang).pass, false);
+      delete output.calls[1].arguments.recipient;
+      output.calls[0].arguments.taskName = 'another-task';
+      assert.equal(score(output, caseId, lang).pass, false);
+    }
+  });
+
+  test(`${lang}: does not tell a running task to drop a required behavior, test or unchanged adjudication`, () => {
+    for (const caseId of patrolNoTellCases) {
+      const output = goodOutput(caseId, lang);
+      assert.equal(score(output, caseId, lang).pass, true);
+      assert.equal(output.calls.filter(({ tool }) => tool === 'takt_tell_run').length, 0);
+      output.calls.push(tellRun(loadManagerCase(caseId, lang)));
+      assert.equal(score(output, caseId, lang).pass, false);
+    }
+  });
+
+  test(`${lang}: asks a human about conflicting criteria and permits a run instruction subject to semantic grading`, () => {
+    const caseId = 'conflicting-calendar-visibility';
+    const output = goodOutput(caseId, lang);
+    assertSemanticGrader(caseId, lang);
+    assert.equal(score(output, caseId, lang).pass, true);
+    const instruction = lang === 'ja'
+      ? '人の回答までこの方針に依存する結論を出さず、受け入れ条件は変えない。依存しない作業は続けてよい。'
+      : 'Do not decide matters dependent on this choice until the person answers; keep both criteria and continue independent work.';
+    output.calls.push(tellRun(loadManagerCase(caseId, lang), instruction));
+    assert.equal(score(output, caseId, lang).pass, true);
+    const duplicate = structuredClone(output);
+    duplicate.calls.push(structuredClone(duplicate.calls[1]));
+    assert.equal(score(duplicate, caseId, lang).pass, false);
+    const wrongTask = structuredClone(output);
+    wrongTask.calls[1].arguments.taskName = 'another-task';
+    assert.equal(score(wrongTask, caseId, lang).pass, false);
+    output.calls = output.calls.filter(({ tool }) => tool !== 'takt_ask_goal_question');
+    assert.equal(score(output, caseId, lang).pass, false);
+  });
 }
 test('accepts a complete JSON code fence while preserving production envelope validation', () => {
   const output = JSON.stringify(goodOutput('parallel-cli', 'ja'), null, 2);
@@ -262,21 +389,18 @@ for (const lang of ['ja', 'en']) {
     assert.equal(score(output, 'parallel-cli', lang).pass, false);
   });
 }
-test('reads only the first complete JSON object before later JSON or prose, including code fences', () => {
-  const output = goodOutput('parallel-cli', 'ja');
-  output.response.message = '波括弧 { } と引用符 "、バックスラッシュ \\、末尾の波括弧 }';
-  const trailing = ['\n{}', '\nAdditional explanation', '\n{"incomplete":', '\n```json\n{}\n```'];
-  for (const json of [JSON.stringify(output), JSON.stringify(output, null, 2)]) {
-    for (const suffix of trailing) {
-      assert.equal(score(`${json}${suffix}`, 'parallel-cli').pass, true);
-      assert.equal(score(`\`\`\`json\n${json}${suffix}\n\`\`\``, 'parallel-cli').pass, true);
-      assert.equal(score(`\`\`\`json\n${json}\n\`\`\`${suffix}`, 'parallel-cli').pass, true);
-    }
+test('rejects trailing content and additional envelopes, including prohibited calls', () => {
+  const caseId = 'reservation-validation';
+  const output = goodOutput(caseId, 'ja');
+  const forbidden = structuredClone(output);
+  forbidden.calls.push(tellRun(loadManagerCase(caseId, 'ja')));
+  const json = JSON.stringify(output);
+  const suffixes = ['\n{}', '\nAdditional explanation', `\n${JSON.stringify(forbidden)}`, '\n```json\n{}\n```'];
+  for (const suffix of suffixes) {
+    assert.equal(score(`${json}${suffix}`, caseId).pass, false);
+    assert.equal(score(`\`\`\`json\n${json}${suffix}\n\`\`\``, caseId).pass, false);
+    assert.equal(score(`\`\`\`json\n${json}\n\`\`\`${suffix}`, caseId).pass, false);
   }
-  const wrong = structuredClone(output);
-  wrong.calls[0].arguments.workflow = 'invented';
-  assert.equal(score(`${JSON.stringify(wrong)}\n${JSON.stringify(output)}`, 'parallel-cli').pass, false);
-  assert.equal(score(`{}\n${JSON.stringify(output)}`, 'parallel-cli').pass, false);
 });
 test('rejects malformed JSON and malformed production response/call envelopes inside or outside fences', () => {
   for (const output of [
@@ -321,18 +445,30 @@ for (const lang of ['ja', 'en']) {
     assert.equal(score(output, 'human-order', lang).pass, false);
   });
 }
-test('rejects premature completion and missing or multiple verification tasks', () => {
+test('rejects premature completion and check-only tasks', () => {
   const output = goodOutput('integration-check', 'ja');
   output.calls.push(goodOutput('no-check-docs', 'ja').calls[0]);
   assert.equal(score(output, 'integration-check').pass, false);
   output.calls.pop();
-  output.calls = [];
-  assert.equal(score(output, 'integration-check').pass, false);
   output.calls = [enqueue(loadManagerCase('integration-check', 'ja'), 'check-a'), enqueue(loadManagerCase('integration-check', 'ja'), 'check-b')];
   assert.equal(score(output, 'integration-check').pass, false);
 });
 
 for (const lang of ['ja', 'en']) {
+  test(`${lang}: final-check plans and work logs are optional when test selection is not being assessed`, () => {
+    for (const caseId of ['integration-check', 'plan-cancelled', 'plan-integrated']) {
+      const fixture = loadManagerCase(caseId, lang);
+      const output = { response: { message: 'Final checks remain unverified.', summary: null }, calls: [] };
+      assert.equal(score(output, caseId, lang).pass, true, caseId);
+      output.calls.push({ tool: 'takt_record_goal_work_log', arguments: {
+        cwd: fixture.cwd, goalId: fixture.goal.id, summary: 'Required work is integrated.',
+      } });
+      assert.equal(score(output, caseId, lang).pass, true, caseId);
+      output.calls.push(enqueue(fixture, 'usage-docs'));
+      assert.equal(score(output, caseId, lang).pass, false, caseId);
+    }
+  });
+
   test(`${lang}: accepts ordered work bodies including equivalent wording and explicit deferrals`, () => {
     const bodies = lang === 'ja' ? [
       ['shared-resource', 'web-permissions', 'web 用の実行ロールに読み取り権限を追加する。'],
@@ -355,7 +491,7 @@ for (const lang of ['ja', 'en']) {
     }
   });
 
-  test(`${lang}: accepts alternative verification wording and delegates negated instructions to the rubric`, () => {
+  test(`${lang}: delegates final-check plan meaning to the rubric`, () => {
     const output = goodOutput('integration-check', lang);
     const tasks = lang === 'ja' ? [
       'takt/goal/catalog の最新版で npm run build と npm test を実行し、保存形式から読み取りまで受け入れ条件を確認する。失敗があれば直す。',
@@ -369,7 +505,7 @@ for (const lang of ['ja', 'en']) {
       'Do not run build or tests on the current takt/goal/catalog tip. Update the README.',
     ];
     for (const task of tasks) {
-      output.calls[0].arguments.task = task;
+      output.calls[0].arguments.summary = task;
       assert.equal(score(output, 'integration-check', lang).pass, true);
     }
     assertSemanticGrader('integration-check', lang);
@@ -442,7 +578,7 @@ test('validates integration taskName, reviewed SHA and ordering before new submi
 });
 
 for (const lang of ['ja', 'en']) {
-  test(`${lang}: accepts integration of a known task using its reviewed SHA`, () => {
+  test(`${lang}: rejects repeated integration after integration-check results are already saved`, () => {
     const fixture = loadManagerCase('integration-check', lang);
     const task = fixture.tasks[0];
     const output = goodOutput('integration-check', lang);
@@ -450,7 +586,7 @@ for (const lang of ['ja', 'en']) {
       cwd: fixture.cwd, goalId: fixture.goal.id, taskName: task.name,
       expectedSha: task.completion.sha,
     } });
-    assert.equal(score(output, 'integration-check', lang).pass, true);
+    assert.equal(score(output, 'integration-check', lang).pass, false);
   });
 
 }
@@ -666,5 +802,62 @@ for (const lang of ['ja', 'en']) {
       output.calls.push(enqueue(fixture, 'csv-import'));
       assert.equal(score(output, caseId, lang).pass, false);
     }
+  });
+}
+
+const gapCases = [
+  'verification-repeated', 'verification-once', 'verification-mixed', 'verification-told',
+  'plan-missing', 'plan-dependent', 'plan-cancelled', 'plan-integrated', 'plan-queued', 'final-impact-tests',
+];
+for (const lang of ['ja', 'en']) {
+  test(`${lang}: new cases enforce writing operations, production arguments and semantic grading`, () => {
+    for (const caseId of gapCases) {
+      const fixture = loadManagerCase(caseId, lang);
+      const base = { cwd: fixture.cwd, goalId: fixture.goal.id };
+      const record = { tool: 'takt_record_goal_work_log', arguments: { ...base, summary: 'Decision and reason.' } };
+      const output = { response: { message: 'Decision recorded.', summary: null }, calls: [record] };
+      if (['verification-repeated', 'verification-mixed'].includes(caseId)) output.calls.unshift(tellRun(fixture));
+      if (caseId === 'plan-missing') output.calls.unshift(enqueue(fixture, 'usage-docs'));
+      assertSemanticGrader(caseId, lang);
+      assert.equal(score(output, caseId, lang).pass, true, caseId);
+      const invalid = structuredClone(output);
+      invalid.calls[0].arguments.goalId = '650e8400-e29b-41d4-a716-446655440099';
+      assert.equal(score(invalid, caseId, lang).pass, false, caseId);
+      for (const tool of ['takt_complete_goal', 'takt_merge_goal_task']) {
+        const invalid = structuredClone(output);
+        invalid.calls.push({ tool, arguments: writingCalls(fixture, [])[tool] });
+        assert.equal(score(invalid, caseId, lang).pass, false, caseId);
+      }
+      const extraWork = structuredClone(output);
+      extraWork.calls.push(enqueue(fixture, 'check-only'));
+      assert.equal(score(extraWork, caseId, lang).pass, false, caseId);
+      if (['verification-once', 'verification-told'].includes(caseId)) {
+        output.calls.push(tellRun(fixture));
+        assert.equal(score(output, caseId, lang).pass, false);
+      }
+      if (['verification-repeated', 'verification-mixed', 'plan-missing'].includes(caseId)) {
+        const missingAction = structuredClone(output);
+        missingAction.calls.shift();
+        assert.equal(score(missingAction, caseId, lang).pass, false);
+        const missingLog = structuredClone(output);
+        missingLog.calls.pop();
+        assert.equal(score(missingLog, caseId, lang).pass, false);
+        const duplicate = structuredClone(output);
+        duplicate.calls.unshift(structuredClone(duplicate.calls[0]));
+        assert.equal(score(duplicate, caseId, lang).pass, false);
+      }
+      if (['plan-cancelled', 'plan-integrated', 'final-impact-tests'].includes(caseId)) {
+        output.calls = [];
+        assert.equal(score(output, caseId, lang).pass, caseId !== 'final-impact-tests');
+      }
+    }
+  });
+  test(`${lang}: plan-missing rejects assigning an already integrated plan item`, () => {
+    const fixture = loadManagerCase('plan-missing', lang);
+    const output = { response: { message: 'Next work.', summary: null }, calls: [
+      enqueue(fixture, 'storage'),
+      { tool: 'takt_record_goal_work_log', arguments: { cwd: fixture.cwd, goalId: fixture.goal.id, summary: 'Next work.' } },
+    ] };
+    assert.equal(score(output, 'plan-missing', lang).pass, false);
   });
 }

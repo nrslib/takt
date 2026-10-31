@@ -17,6 +17,7 @@ import {
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import { renderPhaseContext } from '../../../shared/prompts/phase-context.js';
 import type { InjectedReport, Phase1ReportInputs } from './prepared-instruction.js';
+import type { Phase1ExecutionLogReference } from '../phase1-execution-log.js';
 
 /**
  * Context for building report phase instruction.
@@ -40,8 +41,8 @@ export interface ReportInstructionContext {
   targetFile?: string;
   /** Latest Phase 1 work result, supplied regardless of report session reuse. */
   lastResponse?: string;
-  /** Engine-captured evidence from the current Phase 1 execution. */
-  phase1ExecutionLog?: string;
+  /** Engine-managed reference to evidence from the current Phase 1 execution. */
+  phase1ExecutionLog?: Phase1ExecutionLogReference;
   /** Advisory diagnostics emitted by the reviewer completion check. */
   completionRetryDiagnostic?: string;
   /** Engine-computed changed file set for `{review_scope}` in output contracts. */
@@ -138,7 +139,8 @@ export class ReportInstructionBuilder {
         ? this.context.lastResponse
         : language === 'ja' ? '今回の作業フェーズの回答を取得できませんでした。' : 'The response from the current work phase could not be retrieved.',
       hasPhase1ExecutionLog: this.context.phase1ExecutionLog !== undefined,
-      phase1ExecutionLog: this.context.phase1ExecutionLog ?? '',
+      phase1ExecutionLogPath: this.context.phase1ExecutionLog?.path ?? '',
+      phase1ExecutionLogBytes: String(this.context.phase1ExecutionLog?.byteSize ?? 0),
       hasCompletionRetryDiagnostic:
         this.context.completionRetryDiagnostic !== undefined,
       completionRetryDiagnostic: this.context.completionRetryDiagnostic ?? '',

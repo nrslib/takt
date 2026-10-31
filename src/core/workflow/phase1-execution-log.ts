@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { StreamEvent } from '../../shared/types/provider.js';
 import { normalizeProviderEventValue } from '../../shared/utils/logMetadata.js';
 import { collectEmbeddedSensitiveValues, REDACTED_VALUE } from '../../shared/utils/sensitive-text.js';
@@ -99,6 +102,28 @@ function maskTextFragments(chunks: readonly string[]): string[] {
     offset += chunk.length;
     return output;
   });
+}
+
+export interface Phase1ExecutionLogReference {
+  readonly path: string;
+  readonly byteSize: number;
+  readonly stepName: string;
+  readonly stepIteration: number;
+}
+
+export async function savePhase1ExecutionLog(
+  log: Phase1ExecutionLog,
+  logsDirectory: string,
+  stepName: string,
+  stepIteration: number,
+): Promise<Phase1ExecutionLogReference> {
+  const content = log.toReportInput();
+  const directory = join(logsDirectory, 'phase1-execution');
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const safeStepName = stepName.replace(/[^A-Za-z0-9._-]/g, '_');
+  const path = join(directory, `${safeStepName}-${stepIteration}-${randomUUID()}.jsonl`);
+  await writeFile(path, content, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  return { path, byteSize: Buffer.byteLength(content), stepName, stepIteration };
 }
 
 /** Evidence captured by the engine for one step execution, independent of provider log settings. */
@@ -232,7 +257,7 @@ export class Phase1ExecutionLog {
       }
     }
     for (const source of new Set([...pendingOutputs.keys(), ...pendingIdlessOutputs.keys(), ...pendingTexts.keys()])) finishSource(source);
-    return JSON.stringify(this.entries.flatMap((entry, index) => {
+    return serializePhase1ExecutionLog(this.entries.flatMap((entry, index) => {
       if (omitted.has(index) || (entry.kind === 'instruction' && !entry.dispatched)) return [];
       const retained = replacements.get(index) ?? entry;
       return [retained.kind === 'provider_event' ? this.sanitize(retained) : retained];
@@ -242,4 +267,35 @@ export class Phase1ExecutionLog {
   private sanitize<T>(value: T): T {
     return JSON.parse(JSON.stringify(value, normalizeProviderEventValue)) as T;
   }
+}
+
+/** Split masked strings so line-oriented readers can retrieve evidence within large events. */
+function serializePhase1ExecutionLog(entries: readonly unknown[]): string {
+  const lines: string[] = [];
+  for (const [entryIndex, entry] of entries.entries()) {
+    const chunks: unknown[] = [];
+    const split = (value: unknown, field: readonly (string | number)[]): unknown => {
+      if (typeof value === 'string' && value.length > 2000) {
+        const parts: string[] = [];
+        for (let offset = 0; offset < value.length;) {
+          let end = Math.min(offset + 2000, value.length);
+          // Keep UTF-16 surrogate pairs together when cutting Unicode text.
+          if (end < value.length && /[\uD800-\uDBFF]/.test(value[end - 1]!)) end--;
+          parts.push(value.slice(offset, end));
+          offset = end;
+        }
+        for (const [part, content] of parts.entries()) {
+          chunks.push({ kind: 'content_chunk', entry: entryIndex, field, part: part + 1, total: parts.length, content });
+        }
+        return { chunks: parts.length, characters: value.length };
+      }
+      if (Array.isArray(value)) return value.map((item, index) => split(item, [...field, index]));
+      if (value !== null && typeof value === 'object') {
+        return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, split(item, [...field, key])]));
+      }
+      return value;
+    };
+    lines.push(JSON.stringify(split(entry, [])), ...chunks.map((chunk) => JSON.stringify(chunk)));
+  }
+  return lines.length === 0 ? '' : `${lines.join('\n')}\n`;
 }

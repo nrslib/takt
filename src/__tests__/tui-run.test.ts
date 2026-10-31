@@ -76,6 +76,15 @@ vi.mock('../features/interactive/taskInstructionFormat.js', async (importOrigina
   resolveFormalSpecConfiguration: mockResolveFormalSpecConfiguration,
 }));
 
+const recordWriteFailure = vi.hoisted(() => ({ enabled: false }));
+vi.mock('../infra/config/project/sessionStore.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../infra/config/project/sessionStore.js')>();
+  return { ...actual, writeFileAtomic: (...args: Parameters<typeof actual.writeFileAtomic>) => {
+    if (recordWriteFailure.enabled && String(args[0]).endsWith('interactive-sessions.json')) throw new Error('write failed');
+    return actual.writeFileAtomic(...args);
+  } };
+});
+
 const mockCreateStore = (cwd: string): unknown => storeOverride.current?.(cwd);
 
 vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
@@ -142,6 +151,9 @@ vi.mock('../infra/config/paths.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../infra/config/paths.js')>();
   return {
     ...actual,
+    getProjectConfigDir: (projectDir: string) => projectDir === '/repo'
+      ? join(actual.getGlobalConfigDir(), 'synthetic-project', '.takt')
+      : actual.getProjectConfigDir(projectDir),
     ensureDir: (directory: string) => {
       // The synthetic cwd must not create a directory outside the test sandbox.
       if (directory !== '/repo/.takt') actual.ensureDir(directory);
@@ -188,9 +200,14 @@ vi.mock('../infra/git/index.js', async (importOriginal) => ({
 import { resolveAssistantProviderModelFromConfig, type AssistantCliOverrides } from '../core/config/provider-resolution.js';
 import { composeRuntimeProviderOverride } from '../infra/config/runtime-provider/override.js';
 import { runTui } from '../features/tui/runTui.js';
+import { runTuiTaskConversation } from '../features/tui/runTuiTask.js';
+import { makeSessionContext } from './test-helpers.js';
 import { takeTerminalOwnership } from '../features/tui/terminalOwnership.js';
 import { ProviderNotConfiguredError } from '../features/interactive/sessionInitialization.js';
 import { getProvider } from '../infra/providers/index.js';
+import * as prompt from '../shared/prompt/index.js';
+import { recordTurn } from '../features/interactive/interactiveSessionRecords.js';
+import * as sessionExistence from '../features/interactive/interactiveSessionExistence.js';
 
 const originalStdoutWrite = process.stdout.write;
 
@@ -356,6 +373,8 @@ afterEach(() => {
   process.stdout.write = originalStdoutWrite;
   storeOverride.current = undefined;
   realTuiConversation.current = false;
+  recordWriteFailure.enabled = false;
+  vi.restoreAllMocks();
   mockSelectAction.mockReset();
 });
 
@@ -2283,6 +2302,65 @@ describe('runTui', () => {
       await run;
     });
 
+    it.each(['assistant', 'grill-me'] as const)(
+      'should switch in %s mode to a provider that rejects the assigned MCP servers and report it when the conversation is rebuilt',
+      async (mode) => {
+        const projectDir = mkdtempSync(join(tmpdir(), 'takt-tui-provider-switch-mcp-'));
+        try {
+          mkdirSync(join(projectDir, '.takt'), { recursive: true });
+          // claude accepts sse, codex accepts only stdio and http.
+          writeFileSync(join(projectDir, '.takt', 'runtime.yaml'), [
+            'version: 1',
+            'mcp:',
+            '  servers:',
+            '    backlog:',
+            '      type: sse',
+            '      url: https://example.test/mcp',
+            '  targets:',
+            '    personas:',
+            '      assistant:',
+            '        servers: [backlog]',
+            '',
+          ].join('\n'));
+          mockSelectInteractiveMode.mockResolvedValue(mode);
+          mockResolveAssistantProviderModel.mockImplementation((
+            _cwd: string,
+            overrides?: { provider?: string; model?: string },
+          ) => ({
+            runtimeManaged: false,
+            provider: overrides?.provider ?? 'claude',
+            model: overrides?.model ?? 'mock-model',
+          }));
+          mockSelectInteractiveProvider.mockResolvedValue('codex');
+          mockCreateTuiConversation.mockReturnValueOnce(createConversationDouble());
+          const tree = scriptRender();
+          const run = startRun({ cwd: projectDir });
+          await waitForMount(tree, 1);
+
+          tree.conversationProps().onExit(
+            { kind: 'handoff', id: 'provider' },
+            { history: ['/provider'], queue: [] },
+          );
+          await waitForMount(tree, 2);
+
+          expect(tree.conversationProps().initialEntries ?? []).toEqual([]);
+          await expect(tree.conversationProps().conversation.submit(submitInput())).resolves.toMatchObject({
+            kind: 'error',
+            message: expect.stringContaining('Failed to switch conversation settings:'),
+          });
+          expect(mockCreateTuiConversation).toHaveBeenCalledTimes(1);
+
+          tree.conversationProps().onExit(
+            { kind: 'result', result: { action: 'cancel', task: '' } },
+            { history: [], queue: [] },
+          );
+          await expect(run).resolves.toBeDefined();
+        } finally {
+          rmSync(projectDir, { recursive: true, force: true });
+        }
+      },
+    );
+
     it('should retain real conversation history when switching to an MCP-unsupported provider', async () => {
       realTuiConversation.current = true;
       const piProvider = getProvider('pi');
@@ -2851,6 +2929,82 @@ describe('runTui', () => {
   });
 
   describe('selectors between mounts', () => {
+    it.each(['resident', 'task'] as const)('keeps resume and subsequent input usable in %s TUI when record recovery cannot write', async (mode) => {
+      const projectDir = mkdtempSync(join(tmpdir(), 'takt-record-recovery-'));
+      const recordsPath = join(projectDir, '.takt', 'interactive-sessions.json');
+      mkdirSync(dirname(recordsPath), { recursive: true });
+      writeFileSync(recordsPath, '{invalid json');
+      recordWriteFailure.enabled = true;
+      realTuiConversation.current = true;
+      const call = vi.fn(async () => ({ persona: 'interactive', status: 'done' as const,
+        content: 'reply', timestamp: new Date(), sessionId: 'conversation' }));
+      vi.spyOn(getProvider('mock'), 'setup').mockReturnValue({ call } as ProviderAgent);
+      mockSelectRecentSession.mockImplementation(async (...args) => {
+        const actual = await vi.importActual<typeof import('../features/interactive/sessionSelector.js')>('../features/interactive/sessionSelector.js');
+        return actual.selectRecentSession(args[0], args[1], args[2], args[3]);
+      });
+      vi.spyOn(prompt, 'selectOption').mockImplementation(async (_message, choices) => {
+        expect(choices).toEqual(expect.arrayContaining([expect.objectContaining({ label: 'first', value: 'conversation' })]));
+        expect(readFileSync(recordsPath, 'utf8')).toBe('{invalid json');
+        recordWriteFailure.enabled = false;
+        return '__new__';
+      });
+      const tree = scriptRender();
+      const run = mode === 'resident' ? startRun({ cwd: projectDir }) : runTuiTaskConversation({
+        cwd: projectDir, plan: { ctx: makeSessionContext({ provider: getProvider('mock') }), strategy: {
+          systemPrompt: 'system', allowedTools: [], formalSpec: false, modelCheckTimeoutSeconds: 300,
+          transformPrompt: (message: string) => message, introMessage: 'task conversation',
+        } },
+      });
+      const input = (text: string) => ({ text, abortSignal: new AbortController().signal, onAssistantChunk: vi.fn() });
+      try {
+        await waitForMount(tree, 1);
+        await tree.conversationProps().conversation.submit(input('first'));
+        tree.conversationProps().onExit({ kind: 'resume_session' }, { history: [], queue: [] });
+        await waitForMount(tree, 2);
+        await tree.conversationProps().conversation.submit(input('second'));
+        expect(JSON.parse(readFileSync(recordsPath, 'utf8'))).toMatchObject([
+          { sessionId: 'conversation', inputs: ['first', 'second'], response: 'reply' },
+        ]);
+        tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
+        await run;
+      } finally {
+        rmSync(projectDir, { recursive: true, force: true });
+      }
+    });
+
+    it('uses the changed provider for the session list in the same TUI', async () => {
+      const projectDir = mkdtempSync(join(tmpdir(), 'takt-provider-records-'));
+      recordTurn({ cwd: projectDir, provider: 'mock', sessionId: 'mock-session', input: 'mock input', response: 'mock reply' });
+      recordTurn({ cwd: projectDir, provider: 'codex', sessionId: 'codex-session', input: 'codex input', response: 'codex reply' });
+      const displayed: string[][] = [];
+      vi.spyOn(sessionExistence, 'interactiveSessionExists').mockResolvedValue(undefined);
+      vi.spyOn(prompt, 'selectOption').mockImplementation(async (_message, choices) => {
+        displayed.push(choices.map((choice) => String(choice.value)));
+        return '__new__';
+      });
+      mockSelectRecentSession.mockImplementation(async (...args) => {
+        const actual = await vi.importActual<typeof import('../features/interactive/sessionSelector.js')>('../features/interactive/sessionSelector.js');
+        return actual.selectRecentSession(args[0], args[1], args[2], args[3]);
+      });
+      const tree = scriptRender();
+      mockSelectInteractiveProvider.mockResolvedValue('codex');
+      const run = startRun({ cwd: projectDir });
+      try {
+        await waitForMount(tree, 1);
+        tree.conversationProps().onExit({ kind: 'resume_session' }, { history: [], queue: [] });
+        await waitForMount(tree, 2);
+        tree.conversationProps().onExit({ kind: 'handoff', id: 'provider' }, { history: [], queue: [] });
+        await waitForMount(tree, 3);
+        tree.conversationProps().onExit({ kind: 'resume_session' }, { history: [], queue: [] });
+        await waitForMount(tree, 4);
+        expect(displayed).toEqual([['__new__', 'mock-session'], ['__new__', 'codex-session']]);
+        tree.conversationProps().onExit({ kind: 'result', result: { action: 'cancel', task: '' } }, { history: [], queue: [] });
+        await run;
+      } finally {
+        rmSync(projectDir, { recursive: true, force: true });
+      }
+    });
     it('should run the action selector with Ink unmounted and finish on its choice', async () => {
       const tree = scriptRender();
       mockSelectAction.mockImplementation(() => {
@@ -3202,7 +3356,7 @@ describe('runTui', () => {
       tree.conversationProps().onExit({ kind: 'resume_session' }, { history: ['/resume'], queue: [] });
       await waitForMount(tree, 2);
 
-      expect(mockSelectRecentSession).toHaveBeenCalledWith('/repo', 'en');
+      expect(mockSelectRecentSession).toHaveBeenCalledWith('/repo', 'en', 'mock', expect.anything());
       expect(conversation.resumeSession).toHaveBeenCalledWith('session-abc');
       expect(tree.mounts.count).toBe(2);
       expect(tree.conversationProps().initialHistory).toEqual(['/resume']);

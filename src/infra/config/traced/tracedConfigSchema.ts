@@ -34,6 +34,7 @@ const PROJECT_TRACKED_KEYS = [
   'cursor_cli_path',
   'copilot_cli_path',
   'kiro_cli_path',
+  'devin_cli_path',
   'copilot_github_token',
   'kiro_api_key',
   'opencode_api_key',
@@ -136,7 +137,6 @@ const PROJECT_TRACKED_KEYS = [
 ] as const;
 
 const GLOBAL_TRACKED_KEYS = [
-  'workflow_system_commands_trusted_projects',
   'language',
   'provider',
   'model',
@@ -177,6 +177,7 @@ const GLOBAL_TRACKED_KEYS = [
   'cursor_cli_path',
   'copilot_cli_path',
   'kiro_cli_path',
+  'devin_cli_path',
   'copilot_github_token',
   'kiro_api_key',
   'opencode_api_key',
@@ -198,6 +199,11 @@ const GLOBAL_TRACKED_KEYS = [
   'merge.threat_check_max_diff_bytes',
   'merge.where',
   'caccia',
+  'director',
+  'director.patrol_interval',
+  'director.slack',
+  'director.slack.channel_id',
+  'director.slack.allowed_user_ids',
   'manager',
   'manager.auto_run',
   'manager.patrol_interval',

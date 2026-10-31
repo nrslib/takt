@@ -11,6 +11,10 @@ import { MockProvider } from '../infra/providers/mock.js';
 import { resetScenario, setMockScenario } from '../infra/mock/index.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 
+vi.mock('../infra/task/repositoryDirectory.js', async (original) => ({
+  ...await original<typeof import('../infra/task/repositoryDirectory.js')>(),
+  resolveGitRepositoryDirectory: async (path: string) => path,
+}));
 vi.mock('../features/manager/managerMcp.js', async (original) => ({
   ...await original<typeof import('../features/manager/managerMcp.js')>(),
   connectManagerMcp: async () => ({ servers: {}, dispose: async () => {} }),

@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { spawnManagedProcess } from '../../shared/utils/spawn.js';
 import { buildSafeGitEnvironment } from '../task/git-environment.js';
-import { toLocalBranchRef } from '../../shared/utils/gitBranchValidation.js';
+import { toLocalBranchRef, toRemoteTrackingBranchRef } from '../../shared/utils/gitBranchValidation.js';
 
 export interface GoalGitOutput {
   output: Buffer;
@@ -22,7 +22,7 @@ export async function runGoalGit(
   const managed = spawnManagedProcess('git', [
     '-c', 'commit.gpgSign=false', '-c', 'merge.gpgSign=false', ...args,
   ], {
-    cwd, env: await buildSafeGitEnvironment(cwd, { allowGitHooks: false, allowGitFilters: false }),
+    cwd, env: await buildSafeGitEnvironment(cwd, { allowGitHooks: false, allowGitFilters: false }, signal),
     stdio: ['ignore', 'pipe', 'pipe'],
   }, signal);
   const { child } = managed;
@@ -68,6 +68,15 @@ export async function goalGitText(cwd: string, args: readonly string[], signal: 
 
 export async function resolveGoalBranchSha(cwd: string, branch: string, signal: AbortSignal | undefined): Promise<string> {
   return goalGitText(cwd, ['rev-parse', '--verify', `${toLocalBranchRef(branch)}^{commit}`], signal);
+}
+
+export async function fetchGoalIntegrationBranchSha(cwd: string, branch: string, signal: AbortSignal | undefined): Promise<string> {
+  const localRef = toLocalBranchRef(branch);
+  const remoteRef = toRemoteTrackingBranchRef(branch);
+  const timeout = AbortSignal.timeout(30_000);
+  await goalGitText(cwd, ['fetch', '--no-tags', '--no-write-fetch-head', 'origin', `+${localRef}:${remoteRef}`],
+    signal === undefined ? timeout : AbortSignal.any([signal, timeout]));
+  return goalGitText(cwd, ['rev-parse', '--verify', `${remoteRef}^{commit}`], signal);
 }
 
 export async function isGoalCommitIncluded(cwd: string, source: string, target: string, signal: AbortSignal | undefined): Promise<boolean> {
@@ -131,6 +140,11 @@ function runGoalGitSync(
 
 export function resolveGoalBranchShaSync(cwd: string, branch: string, env: NodeJS.ProcessEnv): string {
   const result = runGoalGitSync(cwd, ['rev-parse', '--verify', `${toLocalBranchRef(branch)}^{commit}`], env, [0]);
+  return parseObjectId(result.stdout.toString('utf8'));
+}
+
+export function resolveGoalRemoteBranchShaSync(cwd: string, branch: string, env: NodeJS.ProcessEnv): string {
+  const result = runGoalGitSync(cwd, ['rev-parse', '--verify', `${toRemoteTrackingBranchRef(branch)}^{commit}`], env, [0]);
   return parseObjectId(result.stdout.toString('utf8'));
 }
 

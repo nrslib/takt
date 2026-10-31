@@ -153,6 +153,20 @@ describe('manager conversation configuration and provider boundary', () => {
     expect(call).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['ja', 'en'] as const)('exposes task integration fields and status values in the %s manager tools guidance', (language) => {
+    const knowledge = readFileSync(join(process.cwd(), 'builtins', language, 'facets', 'knowledge', 'manager.md'), 'utf8');
+    const heading = language === 'ja' ? '## 道具' : '## Tools';
+    const paragraph = knowledge.split(heading)[1]?.trim().split('\n\n')[0];
+    expect(paragraph).toBeDefined();
+    const terms = paragraph?.match(/[A-Za-z_]+/g);
+    for (const field of ['takt_list_tasks', 'goalIntegration', 'integrated', 'not_integrated', 'unknown']) {
+      expect(terms).toContain(field);
+    }
+    expect(paragraph).toMatch(language === 'ja' ? /理由/ : /reason/i);
+    const plan = createManagerConversationPlan(cwd, { language });
+    expect(plan.strategy.systemPrompt).toContain(paragraph!);
+  });
+
   it('passes full permissions without a fixed tool allowlist to the mock provider', async () => {
     const provider = new MockProvider();
     const call = vi.fn<ProviderAgent['call']>().mockResolvedValue({ persona: 'manager', status: 'done', timestamp: new Date('2026-10-05T12:00:00Z'), content: JSON.stringify({ message: 'question', summary: null }), structuredOutput: { message: 'question', summary: null } });

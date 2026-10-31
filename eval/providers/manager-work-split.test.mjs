@@ -11,6 +11,7 @@ const providerUrl = new URL('./manager-work-split.mjs', import.meta.url).href;
 const codexConfigs = [
   { cli: 'codex', model: 'gpt-6-sol', reasoning_effort: 'low', timeout_ms: 1000 },
   { cli: 'codex', model: 'gpt-6-luna', reasoning_effort: 'max', timeout_ms: 1000 },
+  { cli: 'codex', model: 'gpt-6.1-terra', reasoning_effort: 'medium', timeout_ms: 1000 },
 ];
 
 function createReplayFixture(t) {
@@ -115,9 +116,9 @@ test('retains Codex replay restrictions without MCP discovery or per-server over
 test('concurrent Codex exec launches use separate homes containing only auth.json and retain model, effort and sandbox', (t) => {
   const fixture = createReplayFixture(t);
   const { results, launches } = runFakeReplays(fixture, codexConfigs);
-  assert.deepEqual(results, [{ output: 'fake response' }, { output: 'fake response' }]);
-  assert.equal(launches.length, 2);
-  assert.equal(new Set(launches.map(({ codexHome }) => codexHome)).size, 2);
+  assert.deepEqual(results, codexConfigs.map(() => ({ output: 'fake response' })));
+  assert.equal(launches.length, codexConfigs.length);
+  assert.equal(new Set(launches.map(({ codexHome }) => codexHome)).size, codexConfigs.length);
   const auth = readFileSync(join(fixture.sourceHome, 'auth.json'), 'utf8');
   for (const launch of launches) {
     const { args, cwd, codexHome, files, input } = launch;

@@ -44,7 +44,7 @@ vi.mock('../core/workflow/phase-runner.js', async (importOriginal) => {
 const temporaryRoots: string[] = [];
 
 describe('Caccia report lifecycle', () => {
-  it.each([true, false])('uses project permission %s for commands in an unregistered Caccia project', async (allowed) => {
+  it.each([true, false])('uses project permission %s for commands in a Caccia project', async (allowed) => {
     const projectCwd = mkdtempSync(join(tmpdir(), 'takt-caccia-command-'));
     temporaryRoots.push(projectCwd);
     mkdirSync(join(projectCwd, '.takt', 'workflows'), { recursive: true });
@@ -52,8 +52,7 @@ describe('Caccia report lifecycle', () => {
       language: 'en', vcs_provider: 'github', provider: 'mock',
       workflow_system_commands: { custom_scripts: allowed },
     }));
-    saveGlobalConfig({ ...loadGlobalConfig(), workflowSystemCommandsTrustedProjects: [],
-      workflowSystemCommands: { customScripts: false } });
+    saveGlobalConfig({ ...loadGlobalConfig(), workflowSystemCommands: { customScripts: false } });
     const workflow = parse(readFileSync(new URL('../../builtins/en/workflows/caccia.yaml', import.meta.url), 'utf8'));
     workflow.max_steps = 2;
     workflow.initial_step = 'check';

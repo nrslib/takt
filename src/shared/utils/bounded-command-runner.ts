@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { forceTerminateWindowsProcess } from './spawn.js';
 import { truncateUtf8 } from './utf8.js';
 
 export const MAX_COMMAND_OUTPUT_BYTES = 64 * 1024;
@@ -93,16 +94,20 @@ export function runBoundedCommand(options: {
       resolve(result);
     }
 
+    function recordKillError(error: unknown): void {
+      const message = error instanceof Error ? error.message : String(error);
+      result.error = new Error(`Failed to kill command: ${message}`);
+      result.stderr += `${result.stderr ? '\n' : ''}${result.error.message}`;
+    }
+
     function kill(signal: NodeJS.Signals): boolean {
       if (child.pid === undefined) return true;
       try {
-        process.kill(process.platform === 'win32' ? child.pid : -child.pid, signal);
+        process.kill(-child.pid, signal);
         return true;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ESRCH') return true;
-        const message = error instanceof Error ? error.message : String(error);
-        result.error = new Error(`Failed to kill command: ${message}`);
-        result.stderr += `${result.stderr ? '\n' : ''}${result.error.message}`;
+        recordKillError(error);
         return false;
       }
     }
@@ -113,6 +118,12 @@ export function runBoundedCommand(options: {
       clearTimeout(timeout);
       if (child.pid === undefined) {
         settle();
+        return;
+      }
+      if (process.platform === 'win32') {
+        void forceTerminateWindowsProcess(child.pid)
+          .catch(recordKillError)
+          .finally(settle);
         return;
       }
       kill('SIGTERM');

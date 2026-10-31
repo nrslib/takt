@@ -533,6 +533,7 @@ async function executeWorkflowInternal(
         phase1ProcessSafetyByStep,
         systemStepServicesFactory: (serviceOptions) => createDefaultSystemStepServices({
           ...serviceOptions,
+          runPaths: bootstrap.runPaths,
           ...gitSafety,
           ...(options.cacciaExecutionSource === undefined ? {} : { cacciaService: {
             execute: (prNumber) => cacciaEffect({

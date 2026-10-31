@@ -19,6 +19,7 @@ export type ProviderProfileName =
   | 'kiro'
   | 'pi'
   | 'deepseek-harness'
+  | 'devin'
   | 'mock';
 
 /** Permission profile for a single provider. */

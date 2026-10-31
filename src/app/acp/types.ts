@@ -39,7 +39,10 @@ export type CreateAcpElicitation = (
 export type AcpConversationSessionOptions = Pick<
   ConversationSessionOptions,
   'cwd' | 'outputMode'
->;
+> & {
+  /** Receives the capability notice of a provider without MCP support; the agent delivers it to the client. */
+  onMcpUnavailableNotice?: (notice: string) => void;
+};
 
 export interface TaktAcpAgentDependencies {
   createConversationSession?: (options: AcpConversationSessionOptions) => ConversationSession;

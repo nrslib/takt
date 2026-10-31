@@ -1,0 +1,308 @@
+ja:
+  lang: ja
+  turn: event
+  cwd: /workspace/project
+  concurrency: 2
+  defaultWorkflow: default
+  mainMerge: auto
+  goal: &a1
+    id: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-11T20:00:00.000Z
+    objective: 倉庫の在庫差分を反映する
+    outOfScope:
+      - 外部の倉庫 API の変更
+    acceptanceCriteria:
+      - 同じ在庫調整の再試行や重複配信で数量を二重に加算しない。
+      - 適用済みの調整は再起動後も重複して反映しない。
+    constraints: []
+    mode: local
+    status: created
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/warehouse-reconcile
+    startBranch: main
+    integrationBranch: main
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-000000000032
+        recordedAt: 2026-10-11T23:00:00.000Z
+        summary: "seed-index を takt/goal/warehouse-reconcile に取り込みました。成果 SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。索引の土台を用意しました。"
+    questions: []
+  event:
+    kind: patrol
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-12T00:01:00.000Z
+  tasks:
+    - name: seed-index
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: completed
+      status: completed
+      createdAt: 2026-10-11T20:10:00.000Z
+      startedAt: 2026-10-11T20:15:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-seed-index
+      completion:
+        success: true
+        interrupted: false
+        branch: takt/task/seed-index
+        sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        workflowResult: completed
+      goalWorkKey: seed-index
+      goalPurpose: 索引の土台を用意する
+    - name: warehouse-reconcile
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: running
+      status: running
+      createdAt: 2026-10-11T23:10:00.000Z
+      startedAt: 2026-10-11T23:15:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-warehouse-reconcile
+      goalWorkKey: warehouse-reconcile
+      goalPurpose: 調整イベントを検証し、在庫数に反映する。
+  readResults:
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goal: *a1
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/goal-request.md
+      result: |-
+        # 倉庫の在庫差分を反映する
+
+        ## 目的
+        倉庫の在庫差分を反映する
+
+        ## 受け入れ条件
+        - 同じ在庫調整の再試行や重複配信で数量を二重に加算しない。
+        - 適用済みの調整は再起動後も重複して反映しない。
+
+        ## 作業指示
+        調整イベントを検証し、在庫数に反映する。
+
+        ## 範囲外
+        - 外部の倉庫 API の変更
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/project-policy.md
+      result: イベントには安定した調整 ID があり、永続ストレージを使える。
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/.takt/runs/reports/review-resolution.md
+      result: |-
+        ## 修正対象
+        調整 ID を永続的に記録し、再試行や再起動後に同じ調整を二度適用しない。
+
+        ## 裁定の根拠
+        再試行時に増分をもう一度加えると、受け入れ条件に反して在庫数が重複する。
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-warehouse-reconcile
+      result:
+        runSlug: run-warehouse-reconcile
+        task: 調整イベントを検証し、在庫数に反映する。
+        workflow: default
+        status: running
+        currentStep: review
+        currentIteration: 3
+        currentStepStartedAt: 2026-10-12T00:00:00.000Z
+        currentStepExecutionCount: 3
+        phase: 1
+        stepLogs:
+          - step: review
+            persona: reviewer
+            status: done
+            iteration: 1
+            timestamp: 2026-10-11T23:03:00.000Z
+            content: 対象項目の不具合を報告した。周回 1。
+          - step: review-adjudication
+            persona: review-adjudicator
+            status: done
+            iteration: 1
+            timestamp: 2026-10-11T23:04:00.000Z
+            content: 対象項目を修正対象として採用した。周回 1。
+          - step: fix
+            persona: coder
+            status: done
+            iteration: 1
+            timestamp: 2026-10-11T23:05:00.000Z
+            content: 修正を試みたが、項目を解消できなかった。周回 1。
+          - step: review
+            persona: reviewer
+            status: done
+            iteration: 2
+            timestamp: 2026-10-11T23:06:00.000Z
+            content: 1周目に修正を試みた項目が残っていると報告した。周回 2。
+          - step: review-adjudication
+            persona: review-adjudicator
+            status: done
+            iteration: 2
+            timestamp: 2026-10-11T23:07:00.000Z
+            content: 対象項目を修正対象として採用した。周回 2。
+          - step: fix
+            persona: coder
+            status: done
+            iteration: 2
+            timestamp: 2026-10-11T23:08:00.000Z
+            content: 修正を試みたが、項目を解消できなかった。周回 2。
+        reports:
+          - filename: review-resolution.md
+            sizeBytes: 740
+          - filename: implementation.md
+            sizeBytes: 520
+en:
+  lang: en
+  turn: event
+  cwd: /workspace/project
+  concurrency: 2
+  defaultWorkflow: default
+  mainMerge: auto
+  goal: &a2
+    id: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-11T20:00:00.000Z
+    objective: Apply warehouse inventory adjustments
+    outOfScope:
+      - Changes to the external warehouse API
+    acceptanceCriteria:
+      - Retries or duplicate delivery of the same inventory adjustment must not add its quantity twice.
+      - An applied adjustment must not be applied again after restart.
+    constraints: []
+    mode: local
+    status: created
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/warehouse-reconcile
+    startBranch: main
+    integrationBranch: main
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-000000000032
+        recordedAt: 2026-10-11T23:00:00.000Z
+        summary: "Integrated seed-index into takt/goal/warehouse-reconcile. Result SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa. Prepared the index foundation."
+    questions: []
+  event:
+    kind: patrol
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-12T00:01:00.000Z
+  tasks:
+    - name: seed-index
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: completed
+      status: completed
+      createdAt: 2026-10-11T20:10:00.000Z
+      startedAt: 2026-10-11T20:15:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-seed-index
+      completion:
+        success: true
+        interrupted: false
+        branch: takt/task/seed-index
+        sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        workflowResult: completed
+      goalWorkKey: seed-index
+      goalPurpose: Prepare the index foundation
+    - name: warehouse-reconcile
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: running
+      status: running
+      createdAt: 2026-10-11T23:10:00.000Z
+      startedAt: 2026-10-11T23:15:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-warehouse-reconcile
+      goalWorkKey: warehouse-reconcile
+      goalPurpose: Validate adjustment events and apply them to inventory.
+  readResults:
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goal: *a2
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/goal-request.md
+      result: |-
+        # Apply warehouse inventory adjustments
+
+        ## Objective
+        Apply warehouse inventory adjustments
+
+        ## Acceptance criteria
+        - Retries or duplicate delivery of the same inventory adjustment must not add its quantity twice.
+        - An applied adjustment must not be applied again after restart.
+
+        ## Work instructions
+        Validate adjustment events and apply them to inventory.
+
+        ## Out of scope
+        - Changes to the external warehouse API
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/project-policy.md
+      result: Each event has a stable adjustment ID, and persistent storage is available.
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/.takt/runs/reports/review-resolution.md
+      result: |-
+        ## Items to fix
+        Persist adjustment IDs and prevent the same adjustment from being applied twice after retry or restart.
+
+        ## Adjudication basis
+        Applying the increment again on retry would duplicate the stock change and violate the acceptance criteria.
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-warehouse-reconcile
+      result:
+        runSlug: run-warehouse-reconcile
+        task: Validate adjustment events and apply them to inventory.
+        workflow: default
+        status: running
+        currentStep: review
+        currentIteration: 3
+        currentStepStartedAt: 2026-10-12T00:00:00.000Z
+        currentStepExecutionCount: 3
+        phase: 1
+        stepLogs:
+          - step: review
+            persona: reviewer
+            status: done
+            iteration: 1
+            timestamp: 2026-10-11T23:03:00.000Z
+            content: Reported the repair item. Cycle 1.
+          - step: review-adjudication
+            persona: review-adjudicator
+            status: done
+            iteration: 1
+            timestamp: 2026-10-11T23:04:00.000Z
+            content: Accepted the item for repair. Cycle 1.
+          - step: fix
+            persona: coder
+            status: done
+            iteration: 1
+            timestamp: 2026-10-11T23:05:00.000Z
+            content: Attempted a fix, but could not resolve the item. Cycle 1.
+          - step: review
+            persona: reviewer
+            status: done
+            iteration: 2
+            timestamp: 2026-10-11T23:06:00.000Z
+            content: Reported that the item addressed in cycle 1 remained unresolved. Cycle 2.
+          - step: review-adjudication
+            persona: review-adjudicator
+            status: done
+            iteration: 2
+            timestamp: 2026-10-11T23:07:00.000Z
+            content: Accepted the item for repair. Cycle 2.
+          - step: fix
+            persona: coder
+            status: done
+            iteration: 2
+            timestamp: 2026-10-11T23:08:00.000Z
+            content: Attempted a fix, but could not resolve the item. Cycle 2.
+        reports:
+          - filename: review-resolution.md
+            sizeBytes: 740
+          - filename: implementation.md
+            sizeBytes: 520

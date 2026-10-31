@@ -56,6 +56,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const mounted = useRef(true);
   const exiting = useRef(false);
   const displayed = useRef(new Set<string>());
+  const displayedMessages = useRef(new Set<string>());
   const lastError = useRef<string | null>(null);
   const pendingAnswer = useRef<{ text: string; operationId?: string } | null>(null);
   const goalOperations = useRef(new Map<string, { kind: 'pause' | 'resume' | 'abort'; goal: ManagerAbortTarget['goal'] }>());
@@ -80,8 +81,8 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const busy = sending || state?.running != null;
   active.current = busy;
   const canApprove = snapshot.connection === 'connected' && snapshot.readStatus === 'complete' && !busy;
-  const append = (content: string): void => {
-    if (mounted.current) setEntries((previous) => [...previous, { role: 'assistant', content: toDisplayText(sanitizeSensitiveText(content)) }]);
+  const append = (content: string, role: TranscriptEntry['role'] = 'assistant'): void => {
+    if (mounted.current) setEntries((previous) => [...previous, { role, content: toDisplayText(sanitizeSensitiveText(content)) }]);
   };
   const send = async (command: ConversationCommand, onAccepted?: (id: string) => void): Promise<string | null> => {
     if (submitting.current && command.kind !== 'abort_turn') { append(getLabel('manager.conversation.busy', lang)); return null; }
@@ -106,6 +107,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const edit = (next: EditorState): void => { editorRef.current = next; setEditor(next); };
   const editAnswer = (next: EditorState): void => { answerEditorRef.current = next; setAnswerEditor(next); };
   const currentAssignment = snapshot.items.find((item) => item.kind === 'assignment')?.assignment ?? assignment;
+  if (currentAssignment.kind === 'daemon') throw new Error('Manager view received a director assignment');
   const goals = snapshot.items.flatMap((item) => item.kind === 'goal' ? [item.goal] : []);
   const questions: PendingQuestion[] = snapshot.items.flatMap((item): PendingQuestion[] => {
     if (item.kind !== 'inquiry') return [];
@@ -159,7 +161,12 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   useEffect(() => {
     mounted.current = true;
     const unsubscribe = client.onOutput((output) => {
-      if (output.kind === 'result') showResult(output.result, output.operationId);
+      if (output.kind === 'user_message') {
+        if (!displayedMessages.current.has(output.operationId)) {
+          displayedMessages.current.add(output.operationId);
+          append(output.message, 'user');
+        }
+      } else if (output.kind === 'result') showResult(output.result, output.operationId);
       else if (output.kind === 'progress' || output.kind === 'reply' || output.kind === 'notice') append(output.message);
     });
     const timer = setInterval(() => {
@@ -179,11 +186,15 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   };
   const submit = (text: string): void => {
     const summaryRequest = text.trim() === MAKE_GOAL_COMMAND;
-    if (!summaryRequest) setEntries((previous) => [...previous, { role: 'user', content: toDisplayText(text) }]);
+    if (!summaryRequest) append(text, 'user');
     else setSummarizing(true);
     resetChoice();
-    void send({ kind: 'message', text: summaryRequest ? getLabel('manager.goSummaryRequest', lang) : text },
-      summaryRequest ? (id) => { summaryOperation.current = id; } : undefined)
+    void send({ kind: 'message', text: summaryRequest ? getLabel('manager.goSummaryRequest', lang) : text,
+      ...(summaryRequest ? { display: false } : {}) },
+      (id) => {
+        if (summaryRequest) summaryOperation.current = id;
+        else displayedMessages.current.add(id);
+      })
       .then((id) => { if (id === null && summaryRequest) setSummarizing(false); });
   };
   const changeGoal = async (kind: 'pause' | 'resume' | 'abort', target: ManagerAbortTarget['goal'], confirmed = false, retry = false): Promise<void> => {

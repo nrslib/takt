@@ -5,6 +5,7 @@ import { createReadToolDefinition, type ExtensionAPI } from '@earendil-works/pi-
 
 export const COMPAT_MODEL = 'takt-compat-test/offline';
 export const EXECUTION_FILE = 'tool-executions.txt';
+export const TURN_END_FILE = 'turn-end-events.txt';
 
 /** Extracts text consistently from user, assistant, and tool-result messages. */
 function messageText(message: Message): string {
@@ -31,6 +32,9 @@ export default function registerCompatibilityProbe(pi: ExtensionAPI): void {
   });
   registerProbe('allowed_probe');
   registerProbe('write');
+  pi.on('turn_end', (_event, ctx) => {
+    appendFileSync(join(ctx.cwd, TURN_END_FILE), 'completed\n');
+  });
   pi.registerTool({
     name: 'orchestrator',
     label: 'orchestrator',
@@ -51,6 +55,8 @@ export default function registerCompatibilityProbe(pi: ExtensionAPI): void {
   pi.registerProvider(model.provider);
   pi.on('session_shutdown', () => undefined);
   pi.on('before_agent_start', (event) => {
+    if (event.messageType !== 'user') return;
+
     registerProbe('dynamic_probe');
     if (!event.prompt.includes('codemode')) {
       pi.setActiveTools(['orchestrator', 'write', 'ambient_deferred', 'ambient_codemode']);
@@ -61,7 +67,7 @@ export default function registerCompatibilityProbe(pi: ExtensionAPI): void {
       model.setResponses([(context) => fauxAssistantMessage(JSON.stringify(
         context.messages
           .filter((message) => message.role === 'user' || message.role === 'assistant')
-          .map(messageText),
+          .map((message) => ({ role: message.role, text: messageText(message) })),
       ))]);
     } else if (event.prompt === 'selected tools') {
       model.setResponses([

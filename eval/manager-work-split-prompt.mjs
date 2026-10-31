@@ -1,6 +1,6 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
 import { toJSONSchema } from 'zod/v4';
@@ -22,6 +22,7 @@ export const managerWriteSchemas = {
   takt_check_goal_completion: schemas.goalWriteInputSchema,
   takt_ask_goal_question: schemas.askGoalQuestionInputSchema,
   takt_withdraw_goal_question: schemas.withdrawGoalQuestionInputSchema,
+  takt_tell_run: schemas.tellGoalRunInputSchema,
   takt_notify_goal: schemas.notifyGoalInputSchema,
   takt_record_goal_work_log: schemas.recordGoalWorkLogInputSchema,
 };
@@ -36,7 +37,10 @@ export function loadManagerCase(caseId, lang) {
   if (!['ja', 'en'].includes(lang)) throw new Error(`Invalid language: ${lang}`);
   const fixture = parse(readFileSync(join(repoRoot, 'eval', 'cases', 'manager-work-split', `${caseId}.yaml`), 'utf8'))[lang];
   if (fixture?.lang !== lang) throw new Error(`Missing ${lang} case: ${caseId}`);
-  return fixture;
+  if (fixture.event?.kind !== 'patrol') return fixture;
+  const offset = Date.now() - Date.parse(fixture.event.createdAt);
+  return JSON.parse(JSON.stringify(fixture).replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/g,
+    (timestamp) => new Date(Date.parse(timestamp) + offset).toISOString()));
 }
 
 export function buildManagerSystemPrompt(fixture) {
@@ -48,7 +52,18 @@ export function buildManagerSystemPrompt(fixture) {
     const persona = resolveFacetByName('manager', 'personas', context);
     const policy = resolveFacetByName('manager', 'policies', context);
     const knowledge = resolveFacetByName('manager', 'knowledge', context);
-    const instructionSource = resolveFacetByNameWithSource('manager', 'instructions', context);
+    const instructionRoot = process.env.TAKT_EVAL_MANAGER_INSTRUCTION_ROOT;
+    if (instructionRoot !== undefined && !isAbsolute(instructionRoot)) {
+      throw new Error('TAKT_EVAL_MANAGER_INSTRUCTION_ROOT must be an absolute path');
+    }
+    const instructionSource = instructionRoot === undefined
+      ? resolveFacetByNameWithSource('manager', 'instructions', context)
+      : {
+        content: readFileSync(join(instructionRoot, fixture.lang, 'manager.md'), 'utf8'),
+        sourcePath: join(instructionRoot, fixture.lang, 'manager.md'),
+        facetType: 'instructions',
+        refName: 'manager',
+      };
     const instruction = instructionSource === undefined ? undefined
       : resolveRefToContent('manager', { manager: instructionSource }, projectDir, 'instructions', context);
     if ([persona, policy, knowledge, instruction].some((body) => body === undefined)) {

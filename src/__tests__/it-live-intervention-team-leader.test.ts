@@ -124,7 +124,7 @@ describe('TeamLeaderRunner live intervention integration', () => {
     const workerInstructions: string[] = [];
 
     const structuredCaller: StructuredCaller = {
-      judgeStatus: async () => ({ label: 'done', method: 'auto_select' }),
+      judgeStatus: async () => ({ candidateIndex: 0, method: 'auto_select' }),
       evaluateCondition: async () => 0,
       decomposeTask: async (_instruction, _maxInitialParts, options) => {
         dispatchStructuredPrompt(options, 'decompose the task');
@@ -197,7 +197,7 @@ describe('TeamLeaderRunner live intervention integration', () => {
     expect(feedbackOptions?.sessionId).toBe('leader-session');
     expect(feedbackInstruction.indexOf('leader feedback instruction')).toBeGreaterThanOrEqual(0);
     expect(workerInstructions).toHaveLength(1);
-    expect(workerInstructions[0]).not.toContain('leader feedback instruction');
+    expect(workerInstructions[0]!.split('leader feedback instruction').length - 1).toBe(notifyDispatch ? 1 : 0);
     expect(store.read()).toMatchObject({
       pending: 0,
       deliveredSameSession: notifyDispatch ? 1 : 0,
@@ -207,13 +207,67 @@ describe('TeamLeaderRunner live intervention integration', () => {
     });
   });
 
+  it('passes previously delivered instructions once to the leader and workers without relying on generated parts', async () => {
+    const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
+    const content = 'docs は変えない';
+    await store.issue(content);
+    let leaderInstruction = '';
+    const structuredCaller: StructuredCaller = {
+      judgeStatus: async () => ({ candidateIndex: 0, method: 'auto_select' }),
+      evaluateCondition: async () => 0,
+      decomposeTask: async (instruction, _maxInitialParts, options) => {
+        leaderInstruction = instruction;
+        dispatchStructuredPrompt(options, instruction);
+        return {
+          parts: [{ id: 'part-1', title: 'one part', instruction: 'run one part' }],
+          sessionId: 'leader-session',
+        };
+      },
+      requestMoreParts: async (_instruction, _results, _existingIds, options) => {
+        options.onDispatch?.(undefined);
+        return { done: true, reasoning: 'no more parts', cancelPartIds: [], parts: [] };
+      },
+    };
+    vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
+      options.onPromptResolved?.({ systemPrompt: persona ?? '', userInstruction: instruction });
+      options.onDispatch?.(options.permissionMode);
+      return makeResponse({ content: 'done', sessionId: `${persona}-session` });
+    });
+    const config: WorkflowConfig = {
+      name: 'history-team-leader', maxSteps: 4, initialStep: 'plan',
+      steps: [
+        makeStep('plan', { rules: [makeRule('done', 'implement')] }),
+        makeStep('implement', {
+          teamLeader: {
+            persona: '../personas/team-leader.md', maxConcurrency: 1, timeoutMs: 10000,
+            partPersona: '../personas/coder.md', partAllowedTools: ['Read', 'Edit', 'Write'],
+            partEdit: true, partPermissionMode: 'edit',
+          },
+          rules: [makeRule('done', 'COMPLETE')],
+        }),
+      ],
+    };
+    engine = new WorkflowEngine(config, projectCwd, 'test task', createEngineOptions(projectCwd, store, structuredCaller));
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    const calls = vi.mocked(runAgent).mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.[0]).toBe('../personas/coder.md');
+    expect(store.read()).toMatchObject({ pending: 0, deliveredNextStep: 1, deliveredSameSession: 0 });
+    expect.soft(leaderInstruction.split(content).length - 1, 'leader').toBe(1);
+    expect.soft(calls[0]![1].split(content).length - 1, 'initial planner').toBe(1);
+    expect.soft(calls[1]![1].split(content).length - 1, 'worker').toBe(1);
+  });
+
   it('injects instructions already pending at the start of the leader step', async () => {
     const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
     await store.issue('apply before decomposition', '2026-09-03T00:00:00.000Z');
     let decompositionInstruction = '';
 
     const structuredCaller: StructuredCaller = {
-      judgeStatus: async () => ({ label: 'done', method: 'auto_select' }),
+      judgeStatus: async () => ({ candidateIndex: 0, method: 'auto_select' }),
       evaluateCondition: async () => 0,
       decomposeTask: async (instruction, _maxInitialParts, options) => {
         decompositionInstruction = instruction;
@@ -282,7 +336,7 @@ describe('TeamLeaderRunner live intervention integration', () => {
     let feedbackCallCount = 0;
 
     const structuredCaller: StructuredCaller = {
-      judgeStatus: async () => ({ label: 'done', method: 'auto_select' }),
+      judgeStatus: async () => ({ candidateIndex: 0, method: 'auto_select' }),
       evaluateCondition: async () => 0,
       decomposeTask: async (_instruction, _maxInitialParts, options) => {
         dispatchStructuredPrompt(options, 'decompose');
@@ -382,7 +436,7 @@ describe('TeamLeaderRunner live intervention integration', () => {
     const workerInstructions: string[] = [];
 
     const structuredCaller: StructuredCaller = {
-      judgeStatus: async () => ({ label: 'done', method: 'auto_select' }),
+      judgeStatus: async () => ({ candidateIndex: 0, method: 'auto_select' }),
       evaluateCondition: async () => 0,
       decomposeTask: async (_instruction, _maxInitialParts, options) => {
         dispatchStructuredPrompt(options, 'decompose');
@@ -473,7 +527,7 @@ describe('TeamLeaderRunner live intervention integration', () => {
     const workerInstructions: string[] = [];
 
     const structuredCaller: StructuredCaller = {
-      judgeStatus: async () => ({ label: 'done', method: 'auto_select' }),
+      judgeStatus: async () => ({ candidateIndex: 0, method: 'auto_select' }),
       evaluateCondition: async () => 0,
       decomposeTask: async (_instruction, _maxInitialParts, options) => {
         dispatchStructuredPrompt(options, 'decompose');
@@ -578,7 +632,7 @@ describe('TeamLeaderRunner live intervention integration', () => {
     let feedbackCallCount = 0;
 
     const structuredCaller: StructuredCaller = {
-      judgeStatus: async () => ({ label: 'done', method: 'auto_select' }),
+      judgeStatus: async () => ({ candidateIndex: 0, method: 'auto_select' }),
       evaluateCondition: async () => 0,
       decomposeTask: async (_instruction, _maxInitialParts, options) => {
         dispatchStructuredPrompt(options, 'decompose');
@@ -700,7 +754,7 @@ describe('TeamLeaderRunner live intervention integration', () => {
     let feedbackCallCount = 0;
 
     const structuredCaller: StructuredCaller = {
-      judgeStatus: async () => ({ label: 'done', method: 'auto_select' }),
+      judgeStatus: async () => ({ candidateIndex: 0, method: 'auto_select' }),
       evaluateCondition: async () => 0,
       decomposeTask: async (_instruction, _maxInitialParts, options) => {
         dispatchStructuredPrompt(options, 'decompose');
@@ -845,7 +899,7 @@ describe('TeamLeaderRunner live intervention integration', () => {
     let feedbackCallCount = 0;
 
     const structuredCaller: StructuredCaller = {
-      judgeStatus: async () => ({ label: 'done', method: 'auto_select' }),
+      judgeStatus: async () => ({ candidateIndex: 0, method: 'auto_select' }),
       evaluateCondition: async () => 0,
       decomposeTask: async (_instruction, _maxInitialParts, options) => {
         dispatchStructuredPrompt(options, 'decompose');
@@ -975,7 +1029,7 @@ describe('TeamLeaderRunner live intervention integration', () => {
     let morePartsCallCount = 0;
 
     const structuredCaller: StructuredCaller = {
-      judgeStatus: async () => ({ label: 'done', method: 'auto_select' }),
+      judgeStatus: async () => ({ candidateIndex: 0, method: 'auto_select' }),
       evaluateCondition: async () => 0,
       decomposeTask: async (instruction, _maxInitialParts, options) => {
         dispatchStructuredPrompt(options, instruction);
@@ -1067,7 +1121,7 @@ describe('TeamLeaderRunner live intervention integration', () => {
     const feedbackSessions: Array<string | undefined> = [];
 
     const structuredCaller: StructuredCaller = {
-      judgeStatus: async () => ({ label: 'done', method: 'auto_select' }),
+      judgeStatus: async () => ({ candidateIndex: 0, method: 'auto_select' }),
       evaluateCondition: async () => 0,
       decomposeTask: async (instruction, _maxInitialParts, options) => {
         dispatchStructuredPrompt(options, instruction);
@@ -1163,7 +1217,7 @@ describe('TeamLeaderRunner live intervention integration', () => {
     const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
     const feedbackSessions: Array<string | undefined> = [];
     const structuredCaller: StructuredCaller = {
-      judgeStatus: async () => ({ label: 'done', method: 'auto_select' }),
+      judgeStatus: async () => ({ candidateIndex: 0, method: 'auto_select' }),
       evaluateCondition: async () => 0,
       decomposeTask: async (instruction, _maxInitialParts, options) => {
         dispatchStructuredPrompt(options, instruction);
@@ -1263,7 +1317,7 @@ describe('TeamLeaderRunner live intervention integration', () => {
     const store = new LiveInterventionFileStore(projectCwd, REPORT_DIR);
     const requestFeedback = vi.fn();
     const structuredCaller: StructuredCaller = {
-      judgeStatus: async () => ({ label: 'done', method: 'auto_select' }),
+      judgeStatus: async () => ({ candidateIndex: 0, method: 'auto_select' }),
       evaluateCondition: async () => 0,
       decomposeTask: async (_instruction, _maxInitialParts, options) => {
         dispatchStructuredPrompt(options, 'decompose');

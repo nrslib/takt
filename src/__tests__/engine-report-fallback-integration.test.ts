@@ -6,6 +6,7 @@ import type { StructuredCaller } from '../agents/structured-caller.js';
 import type { RunAgentOptions } from '../agents/runner.js';
 import type { AgentResponse, WorkflowConfig } from '../core/models/index.js';
 import { WorkflowEngine } from '../core/workflow/index.js';
+import { reportPhaseEventTools } from '../core/workflow/report-phase-tools.js';
 import type { StreamEvent } from '../shared/types/provider.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import { LiveInterventionFileStore } from '../infra/workflow/live-intervention-store.js';
@@ -44,6 +45,12 @@ function workflowConfig(): WorkflowConfig {
       ],
     }],
   };
+}
+
+function readExecutionLogFromReportPrompt(prompt: string): string {
+  const path = prompt.split('\n').find((line) => line.startsWith('- Path: '))?.slice('- Path: '.length);
+  if (path === undefined) throw new Error('Phase 1 execution log reference missing from report prompt');
+  return readFileSync(path, 'utf8');
 }
 
 function queueAttempt(result: AgentResponse, streamEvents: StreamEvent[] = []): void {
@@ -90,7 +97,7 @@ describe('WorkflowEngine report fallback integration', () => {
     vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
       options?.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: prompt });
       options?.onDispatch?.(options.permissionMode);
-      if (options?.allowedTools?.length === 0) {
+      if (options?.executionPhase === 2) {
         reportCalls += 1;
         if (reportCalls === 1) await store.issue(pending);
         return response({ content: resume && reportCalls < 3 ? '' : '# Report\nCurrent requirement recorded.' });
@@ -116,18 +123,18 @@ describe('WorkflowEngine report fallback integration', () => {
 
     expect((await engine.run()).status).toBe('completed');
     const calls = vi.mocked(runAgent).mock.calls;
-    const work = calls.filter(([, , options]) => options?.allowedTools?.length !== 0);
+    const work = calls.filter(([, , options]) => options?.executionPhase !== 2);
     expect(work).toHaveLength(mode === 'same_session' ? 2 : 1);
     const deliveryPrompt = work.at(-1)![1];
     expect(deliveryPrompt).toContain(revision);
-    const reports = calls.filter(([, , options]) => options?.allowedTools?.length === 0);
+    const reports = calls.filter(([, , options]) => options?.executionPhase === 2);
     expect(reports).toHaveLength(resume ? 3 : 1);
     for (const [, prompt, options] of reports) {
       expect(prompt).toContain(revision);
       expect(prompt).toContain('An earlier ordinary user requirement.');
       expect(prompt).toContain('Implementation and checks completed.');
       expect(prompt).not.toContain(pending);
-      expect(options?.allowedTools).toEqual([]);
+      expect(options?.allowedTools).toEqual(options?.resolvedProvider === 'codex' ? undefined : reportPhaseEventTools(options?.resolvedProvider));
     }
     if (resume) {
       expect(reports[1]![2]?.sessionId).toBeUndefined();
@@ -192,7 +199,7 @@ describe('WorkflowEngine report fallback integration', () => {
       expect(prompt).toContain(JSON.stringify(revisions));
       expect(prompt).toContain(JSON.stringify(upstream));
       expect(prompt).toContain('Implementation and checks completed.');
-      expect(options).toMatchObject({ allowedTools: [] });
+      expect(options).toMatchObject({ permissionMode: 'readonly', executionPhase: 2 });
     }
     expect(reportCalls[0]![2]?.sessionId).toBe(resume ? 'coder-session' : undefined);
     if (resume) {
@@ -230,7 +237,7 @@ describe('WorkflowEngine report fallback integration', () => {
     vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
       options?.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: prompt });
       options?.onDispatch?.(options.permissionMode);
-      const isReport = options?.allowedTools?.length === 0;
+      const isReport = options?.executionPhase === 2;
       const attempt = isReport ? (reportAttempts.get(String(persona)) ?? 0) + 1 : 0;
       if (isReport) reportAttempts.set(String(persona), attempt);
       if (!isReport && persona !== 'planner') {
@@ -258,15 +265,16 @@ describe('WorkflowEngine report fallback integration', () => {
     });
     engine.addUserInput(revision);
     expect((await engine.run()).status).toBe('completed');
-    const reportCalls = vi.mocked(runAgent).mock.calls.filter(([, , options]) => options?.allowedTools?.length === 0);
+    const reportCalls = vi.mocked(runAgent).mock.calls.filter(([, , options]) => options?.executionPhase === 2);
     expect(reportCalls).toHaveLength(4);
     for (const [persona, prompt, options] of reportCalls) {
+      const executionLog = readExecutionLogFromReportPrompt(prompt);
       expect(prompt).toContain(JSON.stringify(upstream));
       expect(prompt).toContain(revision);
       expect(prompt).toContain(liveRevision);
       expect(prompt).toContain('Part completed.');
-      expect(prompt).toContain(`${String(persona)}-only-evidence`);
-      expect(prompt).not.toContain(`${String(persona) === 'left' ? 'right' : 'left'}-only-evidence`);
+      expect(executionLog).toContain(`${String(persona)}-only-evidence`);
+      expect(executionLog).not.toContain(`${String(persona) === 'left' ? 'right' : 'left'}-only-evidence`);
       expect(options?.sessionId).toBeUndefined();
       expect(readFileSync(join(tmpRoot, '.takt', 'runs', 'parallel-report-inputs', 'reports', `${persona}.md`), 'utf-8'))
         .toBe('# Part report');
@@ -303,7 +311,7 @@ describe('WorkflowEngine report fallback integration', () => {
     vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
       options?.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: prompt });
       options?.onDispatch?.(options.permissionMode);
-      if (options?.allowedTools?.length === 0) {
+      if (options?.executionPhase === 2) {
         reportAttempts += 1;
         return response({ content: reportAttempts < 2 ? '' : '# Team report\nCurrent requirement recorded.' });
       }
@@ -323,7 +331,7 @@ describe('WorkflowEngine report fallback integration', () => {
 
     expect((await engine.run()).status).toBe('completed');
     expect(feedbackCalls).toBeGreaterThanOrEqual(2);
-    const reports = vi.mocked(runAgent).mock.calls.filter(([, , options]) => options?.allowedTools?.length === 0);
+    const reports = vi.mocked(runAgent).mock.calls.filter(([, , options]) => options?.executionPhase === 2);
     expect(reports).toHaveLength(2);
     for (const [, prompt, options] of reports) {
       for (const revision of revisions) {
@@ -331,7 +339,7 @@ describe('WorkflowEngine report fallback integration', () => {
         else expect(prompt).not.toContain(revision);
       }
       expect(prompt).toContain('Implementation and checks completed.');
-      expect(options?.allowedTools).toEqual([]);
+      expect(options?.allowedTools).toEqual(options?.resolvedProvider === 'codex' ? undefined : reportPhaseEventTools(options?.resolvedProvider));
       expect(options?.sessionId).toBeUndefined();
     }
     expect(reports[1]![2]?.resolvedProvider).toBe('codex');
@@ -374,7 +382,7 @@ describe('WorkflowEngine report fallback integration', () => {
     }), [{ type: 'tool_result', data: { id: 'phase1-call', content: 'verified phase1 tool output', isError: false } }]);
     queueAttempt(response({ content: '# Report\nfirst attempt' }), [{
       type: 'tool_use',
-      data: { id: 'tool-1', tool: 'read', input: {} },
+      data: { id: 'tool-1', tool: 'write', input: {} },
     }]);
     queueAttempt(response({ content: '# Report\nretry attempt' }), [{
       type: 'tool_use',
@@ -449,14 +457,15 @@ describe('WorkflowEngine report fallback integration', () => {
 
     const fallbackOptions = vi.mocked(runAgent).mock.calls[3]?.[2] as RunAgentOptions;
     for (const call of vi.mocked(runAgent).mock.calls.slice(1)) {
-      expect(call[1]).toContain('verified phase1 tool output');
-      expect(call[1]).toContain('Implement the task');
+      const executionLog = readExecutionLogFromReportPrompt(call[1]);
+      expect(executionLog).toContain('verified phase1 tool output');
+      expect(executionLog).toContain('Implement the task');
     }
     expect(fallbackOptions).toEqual(expect.objectContaining({
       resolvedProvider: 'codex',
       resolvedModel: 'gpt-5-report',
       permissionMode: 'readonly',
-      allowedTools: [],
+      allowedTools: undefined,
       sessionId: undefined,
     }));
     expect(reportProvenance).toEqual([{
@@ -505,12 +514,13 @@ describe('WorkflowEngine report fallback integration', () => {
     expect(calls[1]?.[2]?.sessionId).toBeUndefined();
     expect(calls[2]?.[2]?.sessionId).toBe(withSession ? 'work-session' : undefined);
     const reportPrompt = calls[2]![1];
-    expect(reportPrompt).toContain('failed attempt evidence');
-    expect(reportPrompt).toContain('provider_error_fresh');
-    expect(reportPrompt).toContain('current file content');
-    expect(reportPrompt).toContain('Checked the current file.');
+    const executionLog = readExecutionLogFromReportPrompt(reportPrompt);
+    expect(executionLog).toContain('failed attempt evidence');
+    expect(executionLog).toContain('provider_error_fresh');
+    expect(executionLog).toContain('current file content');
+    expect(executionLog).toContain('Checked the current file.');
     expect(reportPrompt).toContain('Review current.ts');
-    expect(calls[2]?.[2]?.allowedTools).toEqual([]);
+    expect(calls[2]?.[2]?.allowedTools).toEqual(reportPhaseEventTools(calls[2]?.[2]?.resolvedProvider));
   });
 
   it('keeps each repeated step execution record separate', async () => {
@@ -518,7 +528,7 @@ describe('WorkflowEngine report fallback integration', () => {
     const reportPrompts: string[] = [];
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {
       options?.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: instruction });
-      if (options?.allowedTools?.length === 0) {
+      if (options?.executionPhase === 2) {
         reportPrompts.push(instruction);
         return response({ content: '# Current report', sessionId: 'report-session' });
       }
@@ -554,9 +564,11 @@ describe('WorkflowEngine report fallback integration', () => {
 
     expect((await engine.run()).status).toBe('completed');
     expect(reportPrompts).toHaveLength(2);
-    expect(reportPrompts[0]).toContain('evidence-run-1');
-    expect(reportPrompts[0]).not.toContain('evidence-run-2');
-    expect(reportPrompts[1]).toContain('evidence-run-2');
-    expect(reportPrompts[1]).not.toContain('evidence-run-1');
+    const executionLogs = reportPrompts.map(readExecutionLogFromReportPrompt);
+    expect(executionLogs[0]).toContain('evidence-run-1');
+    expect(executionLogs[0]).not.toContain('evidence-run-2');
+    expect(executionLogs[1]).toContain('evidence-run-2');
+    expect(executionLogs[1]).not.toContain('evidence-run-1');
+    expect(new Set(reportPrompts.map((prompt) => prompt.match(/^- Path: (.+)$/m)?.[1])).size).toBe(2);
   });
 });

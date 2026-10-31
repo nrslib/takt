@@ -13,7 +13,7 @@ import { pagedResult } from './response.js';
 import type { GoalQuestion } from '../../infra/goals/schema.js';
 
 export function askTaktGoalQuestion(input: AskGoalQuestionInput, deps: McpOperationDependencies, signal: AbortSignal) {
-  return goalWrite(input, deps, signal, async (policy) => {
+  return goalWrite(input, deps, signal, async ({ policy }) => {
     const kind = input.kind ?? 'question';
     const matches = (question: GoalQuestion) => question.body === input.body
       && question.status === 'pending' && (question.kind ?? 'question') === kind;

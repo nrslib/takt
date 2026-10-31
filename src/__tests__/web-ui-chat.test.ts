@@ -203,6 +203,35 @@ describe('Web UI chat input', () => {
     }));
   });
 
+  it.each(['assistant', 'grill-me'] as const)(
+    'delivers the MCP-unavailable notice with the intro of a %s chat when the provider lacks MCP support',
+    (mode) => {
+      const notice = 'Task-state lookup is unavailable for provider pi; the conversation will continue without it.';
+      const plan = createPlan('default');
+      mockCreateAssistantConversationPlan.mockReturnValueOnce({
+        ...plan,
+        strategy: { ...plan.strategy, mcpUnavailableNotice: notice },
+      });
+      mockCreateConversationSession.mockReturnValue(createSessionDouble());
+
+      const created = createWebChatService().create('/repo', { workflow: 'default', mode });
+
+      expect(created.intro).toContain(notice);
+      expect(created.intro).toContain('default intro');
+    },
+  );
+
+  it.each(['assistant', 'grill-me'] as const)(
+    'shows only the intro of a %s chat when the provider supports MCP',
+    (mode) => {
+      mockCreateConversationSession.mockReturnValue(createSessionDouble());
+
+      const created = createWebChatService().create('/repo', { workflow: 'default', mode });
+
+      expect(created.intro).toBe('default intro');
+    },
+  );
+
   it.each(['verify-first', 'verify-second'])('preserves the artifact directory in an error reply for %s', async (directory) => {
     const session = createSessionDouble();
     const message = `interpretation failed\nVerification specifications and logs retained at: /repo/.takt/runs/${directory}\nRemove this directory manually when it is no longer needed.`;

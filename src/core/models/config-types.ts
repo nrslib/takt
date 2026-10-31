@@ -450,7 +450,7 @@ export interface ProjectConfig {
  */
 export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSubmodules' | 'assistant' | 'manager'> {
   /** @globalOnly */
-  workflowSystemCommandsTrustedProjects?: string[];
+  director?: { patrolInterval?: number; slack?: { channelId: string; allowedUserIds: string[] } };
   manager?: { autoRun?: boolean; patrolInterval?: number; defaultWorkflow?: string; notifications?: ManagerNotifications; sensitivePaths?: string[] };
   /** Global default for assistant task-instruction formatting. */
   assistant?: GlobalAssistantConfig;
@@ -499,6 +499,9 @@ export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSu
   /** @globalOnly */
   /** External Kiro CLI path (overridden by TAKT_KIRO_CLI_PATH env var) */
   kiroCliPath?: string;
+  /** @globalOnly */
+  /** External Devin CLI path (overridden by TAKT_DEVIN_CLI_PATH env var) */
+  devinCliPath?: string;
   /** @globalOnly */
   /** Copilot GitHub token (overridden by TAKT_COPILOT_GITHUB_TOKEN env var) */
   copilotGithubToken?: string;

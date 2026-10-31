@@ -310,6 +310,7 @@ describe('release verification wiring', () => {
     { name: 'published release', workflow: globalInstallWorkflow },
   ])('should wire $name global installation checks to the shared gate with Java 17 or later', ({ workflow }) => {
     const job = workflow.jobs?.['global-install'];
+    expect(job?.strategy?.matrix?.os).toEqual(['ubuntu-latest', 'macos-15']);
     const npmVersions = job?.strategy?.matrix?.npm ?? [];
     expect(npmVersions).toEqual(expect.arrayContaining(['10.9.4', '11.16.0']));
     expect(npmVersions.some((version) => /^12\.\d+\.\d+$/.test(version))).toBe(true);
@@ -437,7 +438,7 @@ describe('release verification wiring', () => {
     expect(manifest.scripts.prepare).toBeUndefined();
     expect(manifest.dependencies['@deepseek-ai/dsh-sdk-client']).toBeUndefined();
     expect(manifest.dependencies['@deepseek-ai/dsh']).toBeUndefined();
-    expect(manifest.devDependencies['@deepseek-ai/dsh-sdk-client']).toBe('0.2.1-alpha.2');
+    expect(manifest.devDependencies['@deepseek-ai/dsh-sdk-client']).toBe('0.2.1-rc.3');
     expect(manifest.files).toContain('managed/');
     expect(manifest.scripts.prepack).toBeUndefined();
     const lintSteps = ciWorkflow.jobs?.lint?.steps ?? [];
@@ -544,7 +545,7 @@ describe('release verification wiring', () => {
     expect(deepSeekJob?.strategy?.matrix?.os).toEqual([
       'ubuntu-24.04',
       'ubuntu-24.04-arm',
-      'macos-14',
+      'macos-15',
     ]);
     expect(nodeSetup?.with?.['node-version']).toBe('22.22.0');
     expect(install?.env?.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD).toBe('1');
@@ -554,6 +555,16 @@ describe('release verification wiring', () => {
       'npm test -- src/__tests__/deepseek-harness-client.test.ts',
     ]));
     expect(JSON.stringify(deepSeekJob)).not.toContain('TAKT_DEEPSEEK_HARNESS_LIVE');
+  });
+
+  it('should run real bounded command termination tests on Windows', () => {
+    const commands = ciWorkflow.jobs?.['windows-private-artifacts']?.steps
+      ?.map((step) => step.run)
+      .filter(Boolean);
+
+    expect(commands).toContain(
+      'npm test -- src/__tests__/bounded-command-runner.integration.test.ts',
+    );
   });
 
   it('should build and smoke test the Pi SDK on Windows and macOS', () => {

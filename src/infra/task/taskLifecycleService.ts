@@ -106,6 +106,19 @@ export class TaskLifecycleService {
     });
   }
 
+  recordPrMergeKnownRemoteHead(taskName: string, headSha: string): void {
+    this.store.update((current) => {
+      const index = current.tasks.findIndex((task) => task.name === taskName);
+      const task = current.tasks[index];
+      if (task?.status !== 'running' || task.merge_task !== true) {
+        throw new Error(`Running PR merge task not found: ${taskName}`);
+      }
+      const tasks = [...current.tasks];
+      tasks[index] = { ...task, merge_known_remote_head_sha: headSha };
+      return { tasks };
+    });
+  }
+
   recordPrMergePushedHead(
     taskName: string, headSha: string, previousRemoteHeadSha: string,
     source: NonNullable<TaskFileData['merge_push_source']>,
@@ -117,7 +130,7 @@ export class TaskLifecycleService {
         throw new Error(`Active or failed PR merge task not found: ${taskName}`);
       }
       const tasks = [...current.tasks];
-      tasks[index] = { ...task, merge_pushed_head_sha: headSha,
+      tasks[index] = { ...task, merge_known_remote_head_sha: headSha, merge_pushed_head_sha: headSha,
         merge_push_base_head_sha: previousRemoteHeadSha, merge_push_source: source };
       return { tasks };
     });

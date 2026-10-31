@@ -1,3 +1,4 @@
+import type { InteractiveSessionRecords } from '../interactive/interactiveSessionRecords.js';
 /**
  * Session connection layer for the Ink TUI.
  *
@@ -10,6 +11,7 @@
 import { SlashCommand } from '../../shared/constants.js';
 import type { StreamCallback } from '../../shared/types/provider.js';
 import { getLabel } from '../../shared/i18n/index.js';
+import { interactiveSessionExists } from '../interactive/interactiveSessionExistence.js';
 import {
   isDisabledVerifyCommand,
   matchSlashCommand,
@@ -58,6 +60,7 @@ export interface TuiConversationOptions {
   undeliveredMessages?: UndeliveredMessages;
   /** Keep temporary provider/model sessions out of persisted `/continue` metadata. */
   persistSession?: boolean;
+  interactiveSessionRecords?: InteractiveSessionRecords;
   sourceContext?: string;
   /** Enable settings handoffs owned by the resident interactive TUI. */
   enableSettingsCommands?: boolean;
@@ -245,6 +248,7 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
 
   const session = createConversationSession({
     cwd: options.cwd,
+    interactiveSessionRecords: options.interactiveSessionRecords,
     outputMode: 'silent',
     ctx,
     undeliveredMessages: options.undeliveredMessages,
@@ -389,7 +393,6 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
     },
 
     async submit(input: TuiSubmitInput): Promise<TuiSubmission> {
-      const text = input.text.trim();
       // This turn's own sinks, closed when the turn ends: a provider that keeps
       // streaming or reporting past its abort reaches a sink nobody is drawing
       // any more, never the turn that took its place.
@@ -398,7 +401,7 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
       let result: ConversationSessionResult;
       try {
         result = await session.handleUserMessage({
-          text,
+          text: input.text,
           abortSignal: input.abortSignal,
           confirmManagedProvider: input.confirmManagedProvider,
           onStream: (event) => {
@@ -470,6 +473,11 @@ export function createTuiConversation(options: TuiConversationOptions): TuiConve
     },
 
     async resumeSession(sessionId: string): Promise<string | undefined> {
+      if (await interactiveSessionExists(options.cwd, ctx.providerType, sessionId) === false) {
+        options.interactiveSessionRecords?.discard({ provider: ctx.providerType, sessionId });
+        session.setSessionId(undefined);
+        return getLabel('interactive.resumeSessionFailed', ctx.lang);
+      }
       if (strategy.resolveResumedSessionConfiguration) {
         const configuration = await strategy.resolveResumedSessionConfiguration();
         if (configuration === null) {

@@ -14,7 +14,7 @@ One manager can cover several repositories through a workspace. People can reque
 
 ## Tools
 
-Manager tools expose existing TAKT features. Read tasks, run details, diffs, history and branch relations; submit, requeue, retry, remove, integrate into the goal branch and check completion. Pass the target repository's cwd and goalId for goal actions. Consult tool argument definitions before using them.
+Manager tools expose existing TAKT features. Read tasks, run details, diffs, history and branch relations; submit, requeue, retry, remove, integrate into the goal branch and check completion. takt_list_tasks returns goalIntegration (integrated / not_integrated / unknown) for each goal task, with a reason in goalIntegrationReason when unknown. Use goalIntegration to check whether a task is integrated. Pass the target repository's cwd and goalId for goal actions. Consult tool argument definitions before using them.
 
 - Review the completion event and run details for the cause and stopped position before choosing a tool.
 - Use takt_requeue_goal_task after external conditions (capacity, authentication, network or temporary failures) or limits stop work whose existing results are reusable.
@@ -24,10 +24,11 @@ Manager tools expose existing TAKT features. Read tasks, run details, diffs, his
 - takt_pause_goal / takt_resume_goal / takt_abort_goal take the target cwd and goalId; abort also requires a reason. Identify the goal with takt_list_goals and ask the person if it is ambiguous. Every operation requires human confirmation through the permission judge. Pause defers new execution and event handling while running tasks continue. Resume advances deferred work. Abort invalidates unstarted tasks and interrupts running tasks. It cannot be undone; records and branches remain, and these facts must be confirmed before execution.
 - takt_list_standalone_inquiries reads unanswered inquiries without a goal saved under the current assignment, including their id, kind, body and creation time.
 - takt_withdraw_standalone_inquiry withdraws an unanswered inquiry without a goal using its id and a reason. An inquiry that is no longer unanswered keeps both its state and saved answer unchanged.
+- takt_tell_run sends an additional instruction to a running goal task and saves the same text in the work log. Pass cwd, goalId, taskName and content.
 
 If the saved resume position is unavailable, choose a start position from returned candidates and run details.
 
-Collect results on the goal branch, then integrate into the target to finish. manager.main_merge defaults to approve, waiting for a human merge. auto integrates automatically, but waits for a person when the target is checked out.
+Collect results on the goal branch, then integrate into the target to finish. manager.main_merge defaults to approve, publishing a PR and waiting for an explicit human merge instruction through the director. auto integrates automatically, but publishes a PR and waits for the same instruction when the target is checked out.
 
 ## Memory and notifications
 
@@ -45,4 +46,10 @@ A patrol event includes the observation time and the last work-record time exclu
 
 Task startedAt is the execution start; question and goal createdAt are their creation times. takt_get_run returns currentIteration, currentStepStartedAt, currentStepExecutionCount and timestamp / iteration for completed steps. Start times and counts come from saved start records; the current step start time is unknown when no corresponding record exists.
 
-manager.patrol_interval is in seconds and defaults to 1800. Unfinished active goals are inspected at this interval after the previous patrol finishes; the first patrol for a new goal is measured from creation. A failed patrol sends blocked and removes its event. Both successful and failed patrols save their completion time. Ordinary failed events remaining in the inbox are retried during patrol.
+manager.patrol_interval is in seconds and defaults to 900. Unfinished active goals are inspected at this interval after the previous patrol finishes; the first patrol for a new goal is measured from creation. A failed patrol sends blocked and removes its event. Both successful and failed patrols save their completion time. Ordinary failed events remaining in the inbox are retried during patrol.
+
+## Goal PRs
+
+A completion request that enters awaiting_merge pushes the branch and creates or reuses a PR to the integration target. Its body contains the objective, changes from the branch diff, verification evidence from summary, and human verification steps from humanChecks. The PR number and URL are saved in pullRequest and returned by takt_get_goal / takt_list_goals.
+
+takt_merge_goal_pr takes cwd, goalId, a positive integer prNumber matching the saved PR, and the conversationOperationId supplied with the current turn, and runs takt merge in that repository. Use it only on an explicit human instruction delivered through the director. Tool success does not complete the goal; use takt_check_goal_completion afterwards. If additional PR changes from a squash prevent verification, submit a task to bring the saved integration branch into the goal branch.

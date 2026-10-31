@@ -37,6 +37,7 @@ import type {
   LiveInterventionChannel,
   PreparedLiveInterventionDelivery,
 } from '../live-intervention/types.js';
+import { resolveLiveInterventionPrompt } from '../live-intervention/prompt.js';
 import {
   createLiveInterventionDeliveryCommitter,
   createScopedLiveInterventionChannel,
@@ -704,8 +705,6 @@ export class ParallelRunner {
               );
             }
             const scopedWorkflowCallLiveIntervention = liveIntervention !== undefined
-              && liveDelivery !== undefined
-              && liveDeliveryCommitter !== undefined
               ? createScopedLiveInterventionChannel(
                   liveIntervention,
                   liveDelivery,
@@ -757,8 +756,10 @@ export class ParallelRunner {
               reviewerOperationOrigin(subStep.name),
             ),
           );
-          const phase1Instruction = [subInstruction.text, liveDelivery?.prompt]
-            .filter((part): part is string => part !== undefined && part.length > 0)
+          const phase1Instruction = [subInstruction.text, resolveLiveInterventionPrompt(
+            liveIntervention, liveDelivery, this.deps.engineOptions.language,
+          )]
+            .filter((part) => part.length > 0)
             .join('\n\n');
           const reportInputTracker = new Phase1ReportInputTracker(subInstruction.reportInputs);
           const phase1ExecutionLog = getReportFiles(subStep.outputContracts).length > 0
@@ -1138,7 +1139,13 @@ export class ParallelRunner {
                 lastStructuredOutput: subResponse.structuredOutput,
                 injectedReports: subInstruction.injectedReports,
                 reportInputs: reportInputTracker.snapshot(),
-                phase1ExecutionLog: phase1ExecutionLog?.toReportInput(),
+                phase1ExecutionLog: phase1ExecutionLog === undefined
+                  ? undefined
+                  : await this.deps.stepExecutor.savePhase1ExecutionLog(
+                    phase1ExecutionLog,
+                    subStep.name,
+                    subIteration,
+                  ),
               }, (reportName) => {
                 writtenReportNames.push(reportName);
                 this.deps.stepExecutor.recordReportGeneration(phaseCtx.reportDir, reportName, true);
