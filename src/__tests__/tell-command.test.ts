@@ -628,7 +628,10 @@ describe('runTellCommand', () => {
         : [];
       await runTellCommand({
         cwd: '/project', lang, inlineText: note, history,
-        sessionContext: makeSessionContext({ lang, sessionId: 'chat-session', mcpServers: { chat: { command: 'chat-mcp' } } }),
+        sessionContext: makeSessionContext({ lang, sessionId: 'chat-session',
+          mcpServers: { backlog: { command: 'backlog-fixture' }, takt: { command: 'builtin-fixture' } },
+          taskStateMcpServers: { takt: { command: 'builtin-fixture' } },
+        }),
       });
 
       expect(mockCallAIWithRetry).toHaveBeenCalledOnce();

@@ -8,7 +8,7 @@
 import type { AgentResponse } from '../../core/models/index.js';
 import type { OpenCodeExecutionContext } from './execution-context.js';
 import { openCodeRuntimeSelection } from './runtime.js';
-import { mapsToOpenCodeEditPermission } from './allowedTools.js';
+import { mapsToOpenCodeEditPermission, toOpenCodeMcpServerPermission } from './allowedTools.js';
 import { AskUserQuestionDeniedError } from '../../core/workflow/ask-user-question-error.js';
 import { parseStructuredOutputObject } from '../../agents/structured-caller/shared.js';
 import { createLogger, getErrorMessage, createStreamDiagnostics, type StreamDiagnostics } from '../../shared/utils/index.js';
@@ -1230,11 +1230,17 @@ export class OpenCodeAttemptRunner {
       release = undefined;
       throw new Error(OPENCODE_STREAM_ABORTED_MESSAGE);
     }
+    // Every tool of an approved server is allowed by its `<server>_*` permission rule.
+    // Only the rules and a v1 prompt carry that wildcard: a v2 prompt names concrete
+    // tool ids, so v2 receives the server names and resolves their registered tools.
+    const allowedMcpPermissions = options.allowedMcpTools === undefined && options.allowedMcpServers === undefined
+      ? undefined
+      : [...(options.allowedMcpTools ?? []), ...(options.allowedMcpServers ?? []).map(toOpenCodeMcpServerPermission)];
     const permissionRuleset = buildOpenCodePermissionRuleset(
       options.permissionMode,
       options.networkAccess,
       options.allowedTools,
-      options.allowedMcpTools,
+      allowedMcpPermissions,
     );
     // The session is created once per step and reused across phases: a
     // session-scoped deny can never be escalated later, and recreating the
@@ -1246,7 +1252,7 @@ export class OpenCodeAttemptRunner {
       options.permissionMode,
       options.networkAccess,
       options.allowedTools,
-      options.allowedMcpTools,
+      allowedMcpPermissions,
       options.strictToolAllowlist,
     );
     if (sessionId === undefined) {
@@ -1313,7 +1319,7 @@ export class OpenCodeAttemptRunner {
       options.permissionMode,
       options.networkAccess,
       options.allowedTools,
-      options.allowedMcpTools,
+      opencodeApiClient.requiresExplicitMcpTools ? options.allowedMcpTools : allowedMcpPermissions,
       options.strictToolAllowlist,
     );
     if (options.disableSkills === true) {
@@ -1348,6 +1354,7 @@ export class OpenCodeAttemptRunner {
         : basePromptText;
     const promptPayload: Record<string, unknown> = {
       ...(opencodeApiClient.requiresExplicitMcpTools ? { allowConfiguredMcpTools: options.allowedTools === undefined && options.permissionMode !== 'readonly' } : {}),
+      ...(opencodeApiClient.requiresExplicitMcpTools && options.allowedMcpServers !== undefined ? { allowedMcpServers: options.allowedMcpServers } : {}),
       sessionID: activeSessionId,
       directory: options.cwd,
       model: parsedModel,

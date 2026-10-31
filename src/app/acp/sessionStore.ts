@@ -8,6 +8,8 @@ export interface TaktAcpSessionState {
   defaultAction: AcpDefaultAction;
   taskContext?: AcpTaskContext;
   mcpServers?: Record<string, McpServerConfig>;
+  /** Sent to the client with the first prompt, once the client knows the session id. */
+  pendingMcpUnavailableNotice?: string;
   abortController?: AbortController;
   cancelRequested: boolean;
   confirmationSequence: number;

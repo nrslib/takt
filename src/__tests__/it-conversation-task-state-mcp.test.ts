@@ -1,14 +1,18 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { stringify } from 'yaml';
+import type { McpAssignmentSection } from '../infra/config/runtime-provider/mcp-assignment.js';
 import type { AgentResponse, PermissionMode } from '../core/models/index.js';
 import { createTaktMcpServer } from '../app/mcp/server.js';
 import { callAIWithRetry } from '../features/interactive/aiCaller.js';
 import { createAssistantConversationPlan } from '../features/interactive/conversationPlan.js';
+import { extractRetrySelectionAgreement } from '../features/interactive/retrySelectionAgreement.js';
 import type { Provider, ProviderAgent, ProviderCallOptions, ProviderType } from '../infra/providers/types.js';
+import { DebugLogger } from '../shared/utils/debug.js';
 
 function createFakeProvider(
   providerCall: ProviderAgent['call'],
@@ -101,6 +105,218 @@ function createInteractivePlan(
 
 describe('conversation task-state MCP integration', () => {
   let projectCwd: string | undefined;
+
+  function writeRuntime(mcp: McpAssignmentSection): string {
+    projectCwd = mkdtempSync(join(process.env.TAKT_CONFIG_DIR!, 'assistant-runtime-'));
+    mkdirSync(join(projectCwd, '.takt'));
+    writeFileSync(join(projectCwd, '.takt', 'runtime.yaml'), stringify({ version: 1, mcp }));
+    return projectCwd;
+  }
+
+  const userServers = {
+    backlog: { type: 'stdio' as const, command: 'backlog-fixture' },
+    'takt-full': { type: 'stdio' as const, command: 'full-takt-fixture' },
+    takt: { type: 'stdio' as const, command: 'user-takt-must-not-start' },
+  };
+
+  it.each(['assistant', 'grill-me'] as const)(
+    'passes the assistant persona assignment to a provider turn in %s mode',
+    async (assistantMode) => {
+      const cwd = writeRuntime({ servers: userServers, targets: { personas: { assistant: { servers: ['backlog'] } } } });
+      const providerCall = vi.fn(async (_prompt: string, _options: ProviderCallOptions): Promise<AgentResponse> => successfulResponse());
+      const { provider } = createFakeProvider(providerCall);
+      const plan = createInteractivePlan(cwd, provider, 'claude-sdk', { assistantMode });
+
+      const outcome = await callAIWithRetry('read and register issues', plan.strategy.systemPrompt, plan.strategy.allowedTools,
+        cwd, plan.ctx, { outputMode: 'silent', persistSession: false });
+
+      expect(outcome.result?.success).toBe(true);
+      const options = providerCall.mock.calls[0]![1] as ProviderCallOptions;
+      expect(Object.keys(options.mcpServers!).sort()).toEqual(['backlog', 'takt']);
+      expect(options.mcpServers!.backlog).toEqual(userServers.backlog);
+      expect(options.allowedTools).toEqual(expect.arrayContaining(['mcp__backlog',
+        'mcp__takt__takt_list_tasks', 'mcp__takt__takt_get_run',
+        'mcp__takt__takt_list_goals', 'mcp__takt__takt_get_goal']));
+      expect(options.allowedTools?.filter((tool) => tool === 'mcp__takt' || tool.startsWith('mcp__takt__')).sort())
+        .toEqual(['mcp__takt__takt_get_goal', 'mcp__takt__takt_get_run', 'mcp__takt__takt_list_goals', 'mcp__takt__takt_list_tasks']);
+    },
+  );
+
+  it.each([
+    { name: 'defaults without an assistant target', defaults: { servers: ['backlog'] }, targets: {}, expected: ['backlog', 'takt'] },
+    { name: 'the union of defaults and assistant additions', defaults: { servers: ['backlog'] },
+      targets: { personas: { assistant: { servers: ['backlog', 'takt-full'] } } }, expected: ['backlog', 'takt', 'takt-full'] },
+    { name: 'assistant exclusions over both additions', defaults: { servers: ['backlog', 'takt-full'] },
+      targets: { personas: { assistant: { servers: ['backlog'], exclude: ['backlog'] } } }, expected: ['takt', 'takt-full'] },
+    { name: 'selector exclusions over both additions', defaults: { servers: ['backlog', 'takt-full'] },
+      targets: { personas: { assistant: { servers: ['backlog'] } }, internal_agents: { selector: { exclude: ['backlog'] } } },
+      expected: ['takt', 'takt-full'] },
+  ] satisfies Array<{ name: string; defaults: McpAssignmentSection['defaults']; targets: McpAssignmentSection['targets']; expected: string[] }>)
+    ('applies $name to the servers sent to the provider', async ({ defaults, targets, expected }) => {
+      const cwd = writeRuntime({ servers: userServers, defaults, targets });
+      const providerCall = vi.fn(async (_prompt: string, _options: ProviderCallOptions): Promise<AgentResponse> => successfulResponse());
+      const { provider } = createFakeProvider(providerCall);
+      const plan = createInteractivePlan(cwd, provider, 'claude-sdk');
+
+      const outcome = await callAIWithRetry('prompt', plan.strategy.systemPrompt, plan.strategy.allowedTools,
+        cwd, plan.ctx, { outputMode: 'silent', persistSession: false });
+
+      expect(outcome.result?.success).toBe(true);
+      const options = providerCall.mock.calls[0]![1];
+      expect(Object.keys(options.mcpServers!).sort()).toEqual(expected);
+      const permittedUserServers = options.allowedTools?.filter((tool) => tool === 'mcp__backlog' || tool === 'mcp__takt-full');
+      expect(permittedUserServers?.sort()).toEqual(expected.filter((name) => name !== 'takt').map((name) => `mcp__${name}`).sort());
+    });
+
+  it.each(['assistant', 'grill-me'] as const)('ignores internal persona target names in %s mode', (assistantMode) => {
+    const cwd = writeRuntime({ servers: userServers, targets: { personas: {
+      interactive: { servers: ['backlog'] }, 'grill-me-interactive': { servers: ['backlog'] },
+    } } });
+    const { provider } = createFakeProvider(vi.fn(async () => successfulResponse()));
+    const plan = createInteractivePlan(cwd, provider, 'claude-sdk', { assistantMode });
+    expect(Object.keys(plan.ctx.mcpServers!)).toEqual(['takt']);
+  });
+
+  it('uses only the builtin read-only takt server when a user definition collides', async () => {
+    const cwd = writeRuntime({ servers: userServers, defaults: { servers: ['backlog', 'takt'] } });
+    const providerCall = vi.fn(async (_prompt: string, _options: ProviderCallOptions): Promise<AgentResponse> => successfulResponse());
+    const { provider } = createFakeProvider(providerCall);
+    const log = vi.spyOn(DebugLogger.prototype, 'writeLog');
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const onNotice = vi.fn();
+    try {
+      const plan = createInteractivePlan(cwd, provider, 'claude-sdk');
+      const outcome = await callAIWithRetry('inspect tasks', plan.strategy.systemPrompt, plan.strategy.allowedTools,
+        cwd, plan.ctx, { outputMode: 'silent', persistSession: false, onNotice });
+
+      expect(outcome.result?.success).toBe(true);
+      const options = providerCall.mock.calls[0]![1];
+      expect(Object.keys(options.mcpServers!).sort()).toEqual(['backlog', 'takt']);
+      expect(options.mcpServers!.takt).toMatchObject({ command: process.execPath,
+        args: [expect.any(String), '--tool-set', 'read-only', '--include-reference-markers'] });
+      expect(options.allowedTools?.filter((tool) => tool === 'mcp__takt' || tool.startsWith('mcp__takt__')).sort())
+        .toEqual(['mcp__takt__takt_get_goal', 'mcp__takt__takt_get_run', 'mcp__takt__takt_list_goals', 'mcp__takt__takt_list_tasks']);
+      expect(plan.strategy.mcpUnavailableNotice).toBeUndefined();
+      expect(onNotice).not.toHaveBeenCalled();
+      expect(stdout).not.toHaveBeenCalled();
+      expect(stderr).not.toHaveBeenCalled();
+      expect(log).not.toHaveBeenCalled();
+    } finally {
+      log.mockRestore();
+      stdout.mockRestore();
+      stderr.mockRestore();
+    }
+  });
+
+  it('keeps builtin takt available when runtime exclusions name takt', () => {
+    const cwd = writeRuntime({ servers: userServers, defaults: { servers: ['takt'] }, targets: {
+      personas: { assistant: { exclude: ['takt'] } }, internal_agents: { selector: { exclude: ['takt'] } },
+    } });
+    const { provider } = createFakeProvider(vi.fn(async () => successfulResponse()));
+    const plan = createInteractivePlan(cwd, provider, 'claude-sdk');
+    expect(plan.ctx.mcpServers!.takt).toMatchObject({ command: process.execPath,
+      args: [expect.any(String), '--tool-set', 'read-only', '--include-reference-markers'] });
+  });
+
+  it('rejects an assigned unsupported transport while creating a supported provider plan', () => {
+    const cwd = writeRuntime({ servers: { backlog: { type: 'sse', url: 'https://example.test/mcp' } },
+      targets: { personas: { assistant: { servers: ['backlog'] } } } });
+    const providerCall = vi.fn(async () => successfulResponse());
+    const { provider } = createFakeProvider(providerCall);
+    expect(() => createInteractivePlan(cwd, provider, 'codex')).toThrow();
+    expect(providerCall).not.toHaveBeenCalled();
+  });
+
+  it.each(['assistant', 'grill-me'] as const)('passes assigned servers to readonly Copilot in %s mode', async (assistantMode) => {
+    const cwd = writeRuntime({ servers: userServers, targets: { personas: { assistant: { servers: ['backlog'] } } } });
+    const providerCall = vi.fn(async (_prompt: string, options: ProviderCallOptions) => {
+      expect(Object.keys(options.mcpServers!).sort()).toEqual(['backlog', 'takt']);
+      const payload = JSON.parse(readFileSync(options.preparedMcp!.path!, 'utf8')) as { mcpServers: Record<string, { args?: string[] }> };
+      expect(Object.keys(payload.mcpServers).sort()).toEqual(['backlog', 'takt']);
+      expect(payload.mcpServers.takt!.args).toContain('read-only');
+      return successfulResponse();
+    });
+    const { provider } = createFakeProvider(providerCall);
+    const plan = createInteractivePlan(cwd, provider, 'copilot', { assistantMode, permissionMode: 'readonly' });
+    const outcome = await callAIWithRetry('prompt', plan.strategy.systemPrompt, plan.strategy.allowedTools,
+      cwd, plan.ctx, { outputMode: 'silent', persistSession: false });
+    expect(outcome.result?.success).toBe(true);
+    expect(outcome.error).toBeUndefined();
+    expect(providerCall).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { name: 'without a user takt definition', defaults: undefined },
+    { name: 'with a user takt definition that collides with the builtin', defaults: { servers: ['backlog', 'takt'] } },
+  ] satisfies Array<{ name: string; defaults: McpAssignmentSection['defaults'] }>)(
+    'approves every tool of assigned Codex user servers and only the builtin read-only takt tools $name',
+    async ({ defaults }) => {
+      for (const assistantMode of ['assistant', 'grill-me'] as const) {
+        const cwd = writeRuntime({
+          servers: userServers,
+          ...(defaults === undefined ? {} : { defaults }),
+          targets: { personas: { assistant: { servers: ['backlog', 'takt-full'] } } },
+        });
+        const providerCall = vi.fn(async (_prompt: string, _options: ProviderCallOptions): Promise<AgentResponse> => successfulResponse());
+        const { provider } = createFakeProvider(providerCall);
+        const plan = createInteractivePlan(cwd, provider, 'codex', { assistantMode });
+        const outcome = await callAIWithRetry('prompt', plan.strategy.systemPrompt, plan.strategy.allowedTools,
+          cwd, plan.ctx, { outputMode: 'silent', persistSession: false });
+
+        expect(outcome.result?.success).toBe(true);
+        const entries = providerCall.mock.calls[0]![1].preparedMcp!.config!.mcp_servers!;
+        expect(Object.keys(entries).sort()).toEqual(['backlog', 'takt', 'takt-full']);
+        for (const name of ['backlog', 'takt-full']) {
+          expect(entries[name]).toMatchObject({ default_tools_approval_mode: 'approve' });
+        }
+        expect(entries.takt).not.toHaveProperty('default_tools_approval_mode');
+        expect(entries.takt).toMatchObject({ args: expect.arrayContaining(['read-only']) });
+        expect((entries.takt as { tools?: unknown }).tools).toEqual({
+          takt_get_goal: { approval_mode: 'approve' },
+          takt_get_run: { approval_mode: 'approve' },
+          takt_list_goals: { approval_mode: 'approve' },
+          takt_list_tasks: { approval_mode: 'approve' },
+        });
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it('drops both MCP server sets when extracting retry agreement after a configured conversation turn', async () => {
+    const cwd = writeRuntime({ servers: userServers, targets: { personas: { assistant: { servers: ['backlog'] } } } });
+    const providerCall = vi.fn(async (_prompt: string, _options: ProviderCallOptions): Promise<AgentResponse> => successfulResponse());
+    const { provider } = createFakeProvider(providerCall);
+    const plan = createInteractivePlan(cwd, provider, 'claude-sdk');
+    const outcome = await callAIWithRetry('retry the task', plan.strategy.systemPrompt, plan.strategy.allowedTools,
+      cwd, plan.ctx, { outputMode: 'silent', persistSession: false });
+    expect(outcome.result?.success).toBe(true);
+    expect(Object.keys(providerCall.mock.calls[0]![1].mcpServers!).sort()).toEqual(['backlog', 'takt']);
+
+    await expect(extractRetrySelectionAgreement({ cwd, lang: 'en', sessionContext: plan.ctx,
+      history: [{ role: 'user', content: 'retry the task' }] })).resolves.toBe('copilot response');
+
+    const options = providerCall.mock.calls[1]![1];
+    expect(options.mcpServers).toBeUndefined();
+    expect(options.preparedMcp).toBeUndefined();
+    expect(options.allowedTools).toEqual([]);
+  });
+
+  it.each(['pi', 'deepseek-harness'] as const)('continues a configured %s conversation with a notice and no MCP', async (providerType) => {
+    const cwd = writeRuntime({ servers: userServers, targets: { personas: { assistant: { servers: ['backlog'] } } } });
+    const providerCall = vi.fn(async (_prompt: string, _options: ProviderCallOptions): Promise<AgentResponse> => successfulResponse());
+    const { provider } = createFakeProvider(providerCall);
+    const plan = createInteractivePlan(cwd, provider, providerType);
+    const outcome = await callAIWithRetry('prompt', plan.strategy.systemPrompt, plan.strategy.allowedTools,
+      cwd, plan.ctx, { outputMode: 'silent', persistSession: false });
+
+    expect(outcome.result?.success).toBe(true);
+    expect(plan.strategy.mcpUnavailableNotice).toEqual(expect.stringContaining('does not support MCP servers'));
+    const options = providerCall.mock.calls[0]![1];
+    expect(options.mcpServers).toBeUndefined();
+    expect(options.preparedMcp).toBeUndefined();
+    expect(options.allowedTools?.filter((tool) => tool.startsWith('mcp__')) ?? []).toEqual([]);
+  });
 
   afterEach(() => {
     if (projectCwd !== undefined) {
@@ -273,7 +489,7 @@ describe('conversation task-state MCP integration', () => {
   });
 
   it('does not pass task-state MCP or permissions to a strict-readonly attempt', async () => {
-    projectCwd = mkdtempSync(join(tmpdir(), 'takt-conversation-task-state-mcp-'));
+    projectCwd = writeRuntime({ servers: userServers, targets: { personas: { assistant: { servers: ['backlog'] } } } });
     const readOnlyToolNames = await listTaktToolNames('read-only');
     const providerCall = vi.fn(async (_prompt: string, options: ProviderCallOptions) => {
       expect(options.mcpServers).toBeUndefined();
@@ -281,6 +497,7 @@ describe('conversation task-state MCP integration', () => {
       expect(options.allowedTools).not.toEqual(expect.arrayContaining(
         readOnlyToolNames.map(toClaudeMcpToolName),
       ));
+      expect(options.allowedTools?.filter((tool) => tool.startsWith('mcp__')) ?? []).toEqual([]);
       return successfulResponse();
     });
     const { provider } = createFakeProvider(providerCall);
