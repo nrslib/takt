@@ -7,6 +7,7 @@ const {
   mockReadRunMetaBySlug,
   mockResolveTaskWorkflowValue,
   mockLoadWorkflowByIdentifier,
+  mockResolveWorkflowCallTarget,
   mockResolveTaskOrderContent,
   mockAssertReusableWorktreePath,
   mockAssertPrMergeRetryWorktreePath,
@@ -17,6 +18,7 @@ const {
     typeof data?.workflow === 'string' ? data.workflow : undefined
   )),
   mockLoadWorkflowByIdentifier: vi.fn((_identifier: string, _projectDir: string, _options?: { lookupCwd?: string }): WorkflowConfig | null => null),
+  mockResolveWorkflowCallTarget: vi.fn(),
   mockResolveTaskOrderContent: vi.fn((_projectDir: string, _taskDir: string | undefined, _content: string) => 'Canonical order'),
   mockAssertReusableWorktreePath: vi.fn((_projectDir: string, _worktreePath: string) => undefined),
   mockAssertPrMergeRetryWorktreePath: vi.fn((_projectDir: string, _worktreePath: string,
@@ -30,16 +32,12 @@ vi.mock('../infra/task/index.js', () => ({
 vi.mock('../infra/config/index.js', () => ({
   loadWorkflowByIdentifier: (identifier: string, projectDir: string, options?: { lookupCwd?: string }) =>
     mockLoadWorkflowByIdentifier(identifier, projectDir, options),
+  resolveWorkflowCallTarget: (...args: unknown[]) => mockResolveWorkflowCallTarget(...args),
 }));
 
 vi.mock('../core/workflow/run/run-meta.js', () => ({
   readRunMetaBySlug: (cwd: string, slug: string, onWarning?: (message: string) => void) =>
     mockReadRunMetaBySlug(cwd, slug, onWarning),
-}));
-
-vi.mock('../core/workflow/workflow-reference.js', async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  workflowEntryMatchesWorkflow: vi.fn(() => false),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -255,6 +253,73 @@ describe('prepareFailedTaskRetry', () => {
     expect(context.workflowOverride).toBe('other-workflow');
     expect(() => resolveFailedTaskRetryStart(context, 'model-invented-option'))
       .toThrow('Unknown task retry start selection: model-invented-option');
+  });
+
+  it('selects a leaf under the failed root call after its ref changes and a child step is removed', () => {
+    const child: WorkflowConfig = {
+      name: 'child', initialStep: 'child-leaf', maxSteps: 5, subworkflow: { callable: true },
+      steps: [{ name: 'child-leaf', persona: 'coder', personaDisplayName: 'coder', instruction: '' }],
+    };
+    const root: WorkflowConfig = {
+      name: 'default', initialStep: 'root-first', maxSteps: 5,
+      steps: [
+        { name: 'root-first', persona: 'planner', personaDisplayName: 'planner', instruction: '' },
+        { name: 'delegate', kind: 'workflow_call', call: 'child', personaDisplayName: 'delegate', instruction: '' },
+      ],
+    };
+    mockLoadWorkflowByIdentifier.mockReturnValue(root);
+    mockResolveWorkflowCallTarget.mockReturnValue(child);
+    const resumePoint = {
+      version: 2 as const,
+      stack: [
+        { workflow: 'default', workflow_ref: 'saved-parent-ref', step: 'delegate', kind: 'workflow_call' as const, occurrence: 1, call_instance: 1 },
+        { workflow: 'child', workflow_ref: 'saved-child-ref', step: 'removed-leaf', kind: 'agent' as const, occurrence: 1 },
+      ],
+      iteration: 2,
+      elapsed_ms: 0,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
+    };
+    const task: TaskListItem = {
+      ...failedTask,
+      failure: { step: 'removed-leaf', error: 'child failed' },
+      data: { task: failedTask.content, workflow: 'default', resume_point: resumePoint },
+    };
+
+    const preparation = prepareFailedTaskRetry(task, '/project');
+    const context = buildFailedTaskRetryStartContext(preparation, '/project', 'default');
+    const resolved = resolveFailedTaskRetryStart(context, context.startOptions.defaultId);
+
+    expect(context.options.preferredRootStep).toBe('delegate');
+    expect(resolved.restartPoint?.stack.map((entry) => entry.step)).toEqual(['delegate', 'child-leaf']);
+    expect(resolved.sourceResumePoint).toEqual(resumePoint);
+  });
+
+  it('carries restart evidence into a second CLI retry without presenting the old source as Resume', () => {
+    const sourceResumePoint = {
+      version: 2 as const,
+      stack: [{
+        workflow: 'default', workflow_ref: 'saved-root-ref', step: 'plan', kind: 'agent' as const, occurrence: 1,
+      }],
+      iteration: 1,
+      elapsed_ms: 0,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
+    };
+    const task: TaskListItem = {
+      ...failedTask,
+      data: { task: failedTask.content, workflow: 'default', source_resume_point: sourceResumePoint },
+    };
+
+    const preparation = prepareFailedTaskRetry(task, '/project');
+    const context = buildFailedTaskRetryStartContext(preparation, '/project', 'default');
+    const resolved = resolveFailedTaskRetryStart(context, context.startOptions.defaultId);
+
+    expect(preparation.resumePoint).toBeUndefined();
+    expect(context.options.resumePoint).toBeUndefined();
+    expect(context.startOptions.options.some((option) => option.id === 'resume-checkpoint')).toBe(false);
+    expect(resolved.restartPoint).toBeDefined();
+    expect(resolved.sourceResumePoint).toEqual(sourceResumePoint);
   });
 
   it('rejects a non-failed task before touching its worktree', () => {

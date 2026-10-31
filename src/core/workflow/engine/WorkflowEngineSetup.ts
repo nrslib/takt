@@ -214,9 +214,7 @@ export function isResumedReportInputStep(
     && currentFrame?.kind === 'agent'
     && matchesResumeStackPrefix(source.stack, currentStack.slice(0, -1))
     && workflowEntriesMatch(sourceFrame, currentFrame)
-    && sourceFrame.step === stepName
     && currentFrame.step === stepName
-    && sourceFrame.occurrence === occurrence
     && currentFrame.occurrence === occurrence;
 }
 

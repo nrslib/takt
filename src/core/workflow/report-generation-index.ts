@@ -61,12 +61,7 @@ export class ReportGenerationIndex {
     const recovery = this.missing.get(this.namespace(reportsRootDir, resolve(reportDir, reportName)))?.recovery;
     return recovery !== undefined && recovery.length > 0
       && stack !== undefined && recovery.length === stack.length
-      && recovery.every((entry, index) => {
-        const current = stack[index]!;
-        return workflowEntriesMatch(entry, current)
-          && entry.kind === current.kind && entry.step === current.step
-          && entry.occurrence === current.occurrence;
-      });
+      && recovery.every((entry, index) => workflowEntriesMatch(entry, stack[index]!));
   }
 
   serializedInputRecoveries(): NonNullable<WorkflowResumePoint['report_input_recoveries']> {

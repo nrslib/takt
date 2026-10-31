@@ -104,7 +104,7 @@ function createResumeOption(
   if (options.resumePoint === undefined) {
     return undefined;
   }
-  let stack = options.resumePoint.stack;
+  const stack = options.resumePoint.stack;
   const resolve = (): ReturnType<typeof resolveTaskRetryStackPath> => {
     try {
       return resolveTaskRetryStackPath(rootWorkflow, stack, options);
@@ -114,18 +114,9 @@ function createResumeOption(
       return { reason };
     }
   };
-  let resolved = resolve();
-  let truncationReason: string | undefined;
+  const resolved = resolve();
   if ('reason' in resolved) {
-    const failure = resolved;
-    while (stack.length > 1 && 'reason' in resolved) {
-      stack = stack.slice(0, -1);
-      resolved = resolve();
-    }
-    if ('reason' in resolved) {
-      return failure;
-    }
-    truncationReason = failure.reason;
+    return resolved;
   }
   const resolvedPath = formatTaskRetryPath(resolved.segments);
   return {
@@ -133,9 +124,7 @@ function createResumeOption(
     path: resolvedPath,
     headings: resolved.headings,
     label: `${RESUME_LABEL_PREFIX}${formatTaskRetryPath([stack.at(-1)!.step])}`,
-    description: truncationReason === undefined
-      ? resolvedPath
-      : `Full saved position could not be resolved: ${sanitizeTerminalText(truncationReason)}. Resume will use the valid prefix: ${resolvedPath}.`,
+    description: resolvedPath,
     selection: { kind: 'resume', resumePoint: { ...options.resumePoint, stack } },
   };
 }

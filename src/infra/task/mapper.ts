@@ -59,6 +59,7 @@ function buildTaskFileData(task: TaskRecord, content: string): TaskFileData {
     exceeded_max_steps: task.exceeded_max_steps,
     exceeded_current_iteration: task.exceeded_current_iteration,
     resume_point: task.resume_point,
+    source_resume_point: task.source_resume_point,
     [TASK_RESTART_POINT_KEY]: task[TASK_RESTART_POINT_KEY],
     source: task.source,
     pr_number: task.pr_number,

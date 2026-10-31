@@ -46,7 +46,7 @@ import { getWorkflowResumeFrameKind, isWorkflowCallStep } from '../step-kind.js'
 import { applyAutoRoutingStrategyOverride } from '../auto-routing/resolver.js';
 import { RoutingRuntime } from '../auto-routing/runtime.js';
 import { resolveEffectiveAutoRouting } from '../auto-routing/effective-auto-routing.js';
-import { buildWorkflowResumePointEntry, workflowEntryMatchesWorkflow } from '../workflow-reference.js';
+import { buildWorkflowResumePointEntry } from '../workflow-reference.js';
 import { runWithWorkflowSpan, type WorkflowSpanOutcome, type WorkflowSpanParams } from '../observability/workflowSpans.js';
 import { WorkflowEngineStepCoordinator } from './WorkflowEngineStepCoordinator.js';
 import type { WorkflowCallExecutionToken } from './WorkflowCallRunner.js';
@@ -77,7 +77,7 @@ import { withWorkflowTargetContext } from '../provider-target-resolution.js';
 import { readResumeReportSnapshotManifest } from '../run/resume-report-snapshot.js';
 import { ResumeArtifactOccurrenceIndex } from '../run/resume-artifact-occurrence-index.js';
 import { readRunMetaBySlug } from '../run/run-meta.js';
-import { validateWorkflowResumeRoot } from '../run/resume-point.js';
+import { resumeWorkflowMatches, validateWorkflowResumeRoot } from '../run/resume-point.js';
 const log = createLogger('workflow-engine');
 
 type WorkflowEngineRuntimeOptions = WorkflowEngineOptions & {
@@ -132,6 +132,7 @@ export class WorkflowEngine extends EventEmitter {
   private readonly resumeStackPrefix: WorkflowResumePointEntry[];
   private activeResumePoint: WorkflowResumePoint | undefined;
   private readonly resumeContinuation: WorkflowResumeContinuation;
+  private reservedNextWorkflowCall: { step: string; occurrence: number } | undefined;
 
   private readonly optionsBuilder: WorkflowEngineServices['optionsBuilder'];
   private readonly stepExecutor: WorkflowEngineServices['stepExecutor'];
@@ -151,6 +152,9 @@ export class WorkflowEngine extends EventEmitter {
     const restartPoint = options.restartPoint === undefined
       ? undefined
       : WorkflowRestartPointSchema.parse(options.restartPoint);
+    const sourceResumePoint = options.sourceResumePoint === undefined
+      ? undefined
+      : parseWorkflowResumePoint(options.sourceResumePoint);
     if (resumePoint !== undefined && restartPoint !== undefined) {
       throw new Error('Workflow engine cannot own both resumePoint and restartPoint');
     }
@@ -247,6 +251,24 @@ export class WorkflowEngine extends EventEmitter {
       this.options.resumePoint,
       initialMaxSteps,
     );
+    if (restartPoint !== undefined) {
+      const sourceRunSlug = this.options.resumeSource?.sourceRunSlug;
+      const restoredSourceResumePoint = sourceResumePoint ?? (sourceRunSlug === undefined
+        ? undefined
+        : readRunMetaBySlug(
+          this.cwd,
+          sourceRunSlug,
+          undefined,
+          this.options.runPathsDirectory,
+        )?.resumePoint);
+      if (restoredSourceResumePoint !== undefined) {
+        this.sharedRuntime.workflowCallInvocationEvidence = restoreWorkflowCallInvocationEvidence(restoredSourceResumePoint);
+        this.sharedRuntime.workflowStepParticipationIndex = restoreWorkflowStepParticipationIndex(restoredSourceResumePoint);
+        this.sharedRuntime.resumeInvocationSource = restoredSourceResumePoint;
+        resumeWorkflowMatches(restoredSourceResumePoint.stack[0]!, this.config);
+      }
+    }
+    this.sharedRuntime.resumeInvocationSource ??= this.options.resumePoint;
     if (restartNavigator !== undefined) {
       if (this.sharedRuntime.restartNavigator !== undefined) {
         throw new Error('Workflow restart navigator is already initialized');
@@ -266,21 +288,21 @@ export class WorkflowEngine extends EventEmitter {
       );
     if (
       this.sharedRuntime.resumeArtifactOccurrenceIndex === undefined
-      && this.options.resumeSource?.resumeMode === 'requeue'
+      && (this.options.resumeSource?.resumeMode === 'requeue' || this.options.resumeSource?.resumeMode === 'retry')
     ) {
       const manifest = readResumeReportSnapshotManifest(this.cwd, runPaths.slug, this.options.runPathsDirectory);
-      const sourceResumePoint = manifest === undefined
+      const artifactSourceResumePoint = sourceResumePoint ?? (manifest === undefined
         ? undefined
-        : readRunMetaBySlug(this.cwd, manifest.sourceRunSlug, undefined, this.options.runPathsDirectory)?.resumePoint;
-      if (manifest !== undefined && sourceResumePoint === undefined) {
+        : readRunMetaBySlug(this.cwd, manifest.sourceRunSlug, undefined, this.options.runPathsDirectory)?.resumePoint);
+      if (manifest !== undefined && artifactSourceResumePoint === undefined) {
         log.warn(
-          'Requeue artifact occurrence restoration is unavailable because source run metadata or resume point is missing',
+          `${this.options.resumeSource?.resumeMode === 'retry' ? 'Retry' : 'Requeue'} artifact occurrence restoration is unavailable because source run metadata or resume point is missing`,
           { sourceRunSlug: manifest.sourceRunSlug },
         );
       }
       this.sharedRuntime.resumeArtifactOccurrenceIndex = new ResumeArtifactOccurrenceIndex(
         manifest,
-        sourceResumePoint,
+        artifactSourceResumePoint,
       );
     }
     restoreActiveResumePoint(
@@ -453,7 +475,7 @@ export class WorkflowEngine extends EventEmitter {
           buildWorkflowMeta: (step, runtime) => this.optionsBuilder.buildWorkflowMeta(step, runtime),
           resolveRuntimeForStep: this.stepCoordinator.resolveRuntimeForStep.bind(this.stepCoordinator),
           claimStepOccurrence: (step) => (
-            this.claimStepOccurrence(step, this.resumeStackPrefix)
+            this.claimRunLoopStepOccurrence(step)
           ),
           setActiveStep: this.activateStep.bind(this),
           cancelPendingStepActivation: () => this.workflowCallRunner.cancelPendingInvocation(),
@@ -494,10 +516,20 @@ export class WorkflowEngine extends EventEmitter {
     step: WorkflowStep,
     resumeStackPrefix: readonly WorkflowResumePointEntry[],
   ): number {
+    const selectedRestartOccurrence = isWorkflowCallStep(step)
+      && this.sharedRuntime.restartNavigator?.isSelectedCallPath(step, resumeStackPrefix) === true
+      ? this.sharedRuntime.workflowCallInvocationEvidence!.index.getSelectedRestartCallInstance(
+          this.sharedRuntime.resumeInvocationSource,
+          this.config,
+          step.name,
+          resumeStackPrefix,
+        )
+      : undefined;
     return this.resumeContinuation.claimStepOccurrence({
       step,
       resumeStackPrefix,
       state: this.state,
+      ...(selectedRestartOccurrence === undefined ? {} : { selectedRestartOccurrence }),
       ...(isWorkflowCallStep(step)
         ? {
             isOccurrenceNamespaceReserved: (occurrence: number) => (
@@ -512,6 +544,15 @@ export class WorkflowEngine extends EventEmitter {
     });
   }
 
+  private claimRunLoopStepOccurrence(step: WorkflowStep): number {
+    if (this.reservedNextWorkflowCall?.step === step.name) {
+      const occurrence = this.reservedNextWorkflowCall.occurrence;
+      this.reservedNextWorkflowCall = undefined;
+      return occurrence;
+    }
+    return this.claimStepOccurrence(step, this.resumeStackPrefix);
+  }
+
   private emitEvent(event: string, ...args: unknown[]): void {
     if (event === 'workflow:complete' || event === 'workflow:abort') {
       this.emit(event, snapshotWorkflowState(this.state), ...args.slice(1));
@@ -520,12 +561,35 @@ export class WorkflowEngine extends EventEmitter {
     this.emit(event, ...args);
   }
 
+  private rebindResumeInvocationsForReportDiscovery(): void {
+    const rebinds = this.sharedRuntime.workflowCallInvocationEvidence!.index.rebindResumeInvocationsForReportDiscovery(
+      this.sharedRuntime.resumeInvocationSource,
+      this.config,
+      this.resumeStackPrefix,
+      (step) => this.options.workflowCallResolver?.({
+        parentWorkflow: this.config,
+        step,
+        projectCwd: this.projectCwd,
+        lookupCwd: this.cwd,
+      }) ?? null,
+    );
+    for (const rebind of rebinds) {
+      this.sharedRuntime.workflowStepParticipationIndex!.rebindInvocation(
+        rebind.from,
+        rebind.to,
+        rebind.previousCallInstance,
+        rebind.callInstance,
+      );
+    }
+  }
+
   private inheritPreviousReviewReports(): void {
     const resumeSource = this.options.resumeSource;
     const currentStep = this.config.steps.find((step) => step.name === this.state.currentStep);
     if (!resumeSource || !currentStep || currentStep.name !== FIX_STEP_NAME || !this.isResumeTarget(currentStep)) {
       return;
     }
+    this.rebindResumeInvocationsForReportDiscovery();
     const reportNameResult = resolveInheritedReviewReportNamesWithDiagnostics(createReviewReportDiscoveryContext({
       step: currentStep,
       workflow: this.config,
@@ -604,7 +668,7 @@ export class WorkflowEngine extends EventEmitter {
     const entry = resumePoint?.stack[this.resumeStackPrefix.length];
     return entry !== undefined
       && entry.step === step.name
-      && workflowEntryMatchesWorkflow(entry, this.config);
+      && resumeWorkflowMatches(entry, this.config);
   }
 
   private buildResumePoint(
@@ -668,8 +732,13 @@ export class WorkflowEngine extends EventEmitter {
     step: WorkflowStep,
     iteration: number,
     occurrence: number,
+    preparingNextStep = false,
   ): WorkflowCallExecutionToken | undefined {
     if (isWorkflowCallStep(step)) {
+      if (preparingNextStep && this.sharedRuntime.resumeArtifactOccurrenceIndex !== undefined) {
+        occurrence = this.claimStepOccurrence(step, this.resumeStackPrefix);
+        this.reservedNextWorkflowCall = { step: step.name, occurrence };
+      }
       return this.workflowCallRunner.activateInvocation(
         step,
         iteration,
@@ -677,6 +746,7 @@ export class WorkflowEngine extends EventEmitter {
         this.resumeStackPrefix,
       );
     }
+    this.rebindResumeInvocationsForReportDiscovery();
     this.workflowCallRunner.cancelPendingInvocation();
     if (step.parallel !== undefined && !isDynamicParallelSubSteps(step.parallel)) {
       this.sharedRuntime.workflowCallInvocationEvidence!.index.clearPreviousParallelChildInvocations(
@@ -983,7 +1053,7 @@ export class WorkflowEngine extends EventEmitter {
           buildWorkflowMeta: (step, runtime) => this.optionsBuilder.buildWorkflowMeta(step, runtime),
           resolveRuntimeForStep: this.stepCoordinator.resolveRuntimeForStep.bind(this.stepCoordinator),
           claimStepOccurrence: (step) => (
-            this.claimStepOccurrence(step, this.resumeStackPrefix)
+            this.claimRunLoopStepOccurrence(step)
           ),
           setActiveStep: this.activateStep.bind(this),
           cancelPendingStepActivation: () => this.workflowCallRunner.cancelPendingInvocation(),

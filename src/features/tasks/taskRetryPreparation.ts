@@ -10,7 +10,8 @@ import type {
   WorkflowResumePoint,
 } from '../../core/models/index.js';
 import { readRunMetaBySlug, type RunMeta } from '../../core/workflow/run/run-meta.js';
-import { workflowEntryMatchesWorkflow } from '../../core/workflow/workflow-reference.js';
+import { resumeWorkflowMatches } from '../../core/workflow/run/resume-point.js';
+import { getWorkflowResumeFrameKind } from '../../core/workflow/step-kind.js';
 import { warn } from '../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
 import { resolveTaskOrderContent } from './orderRevision.js';
@@ -39,6 +40,7 @@ export interface FailedTaskRetryPreparation {
   readonly previousStartStep?: string;
   readonly previousOrderContent: string;
   readonly resumePoint: WorkflowResumePoint | undefined;
+  readonly sourceResumePoint?: WorkflowResumePoint;
 }
 
 export interface FailedTaskRetryStartContext {
@@ -47,6 +49,7 @@ export interface FailedTaskRetryStartContext {
   readonly workflowOverride: string | undefined;
   readonly options: SelectTaskRetryStartOptions;
   readonly startOptions: TaskRetryStartOptionsModel;
+  readonly sourceResumePoint: WorkflowResumePoint | undefined;
 }
 
 export interface ResolvedFailedTaskRetryStart {
@@ -54,6 +57,7 @@ export interface ResolvedFailedTaskRetryStart {
   readonly startStep: string | undefined;
   readonly resumePoint: WorkflowResumePoint | undefined;
   readonly restartPoint: WorkflowRestartPoint | undefined;
+  readonly sourceResumePoint: WorkflowResumePoint | undefined;
 }
 
 function requireFailedTaskFailure(task: TaskListItem): TaskFailure {
@@ -170,6 +174,7 @@ export function prepareFailedTaskRetry(
     previousStartStep: task.data?.start_step,
     previousOrderContent,
     resumePoint,
+    sourceResumePoint: task.data?.source_resume_point,
   };
 }
 
@@ -181,8 +186,10 @@ function resolvePreferredRootStep(
   const rootEntry = resumePoint?.stack[0];
   if (
     rootEntry
-    && workflowEntryMatchesWorkflow(rootEntry, workflowConfig)
-    && workflowConfig.steps.some((step) => step.name === rootEntry.step)
+    && resumeWorkflowMatches(rootEntry, workflowConfig)
+    && workflowConfig.steps.some((step) => (
+      step.name === rootEntry.step && getWorkflowResumeFrameKind(step) === rootEntry.kind
+    ))
   ) {
     return rootEntry.step;
   }
@@ -221,6 +228,7 @@ export function buildFailedTaskRetryStartContext(
     workflowOverride: resolveSelectedWorkflowOverride(preparation.previousWorkflow, workflowName),
     options,
     startOptions: buildTaskRetryStartOptions(workflowConfig, options),
+    sourceResumePoint: preparation.sourceResumePoint,
   };
 }
 
@@ -239,5 +247,8 @@ export function resolveFailedTaskRetryStart(
     startStep: ownership.startStep,
     resumePoint: ownership.resumePoint,
     restartPoint: ownership.restartPoint,
+    sourceResumePoint: ownership.restartPoint === undefined
+      ? undefined
+      : context.options.resumePoint ?? context.sourceResumePoint,
   };
 }

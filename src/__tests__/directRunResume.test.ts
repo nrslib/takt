@@ -531,7 +531,7 @@ describe('resumeDirectRun', () => {
       mockFindLatestResumableDirectRun.mockReturnValue(createRun({ resumePoint: point }));
     });
 
-    describe.each(['terminal call', 'valid child checkpoint', 'removed child checkpoint'] as const)('%s callable validation', (position) => {
+    describe.each(['terminal call', 'valid child checkpoint'] as const)('%s callable validation', (position) => {
       const savedPoint = position === 'terminal call' ? { ...point, stack: [point.stack[0]!] } : point;
       const child: WorkflowConfig = {
         name: 'child', initialStep: 'plan', maxSteps: 10,
@@ -550,10 +550,7 @@ describe('resumeDirectRun', () => {
         expect(mockSelectOption).toHaveBeenCalledTimes(1);
         expect(mockExecuteTaskWithResult).toHaveBeenCalledWith(expect.objectContaining({
           startStep: 'delegate',
-          resumePoint: {
-            ...savedPoint,
-            stack: position === 'removed child checkpoint' ? [point.stack[0]!] : savedPoint.stack,
-          },
+          resumePoint: savedPoint,
           restartPoint: undefined,
         }));
       });
@@ -636,17 +633,29 @@ describe('resumeDirectRun', () => {
       });
     });
 
-    it('should retain parent call state when only the child checkpoint is removed', async () => {
+    it.each([
+      { scenario: 'removed child step', overrides: { step: 'removed' }, location: 'child/removed' },
+      { scenario: 'child step kind change', overrides: { kind: 'system' as const }, location: 'child/review' },
+      { scenario: 'child workflow name mismatch', overrides: { workflow: 'other-child' }, location: 'other-child/review' },
+    ])('should not adopt the parent call or start an agent for a $scenario', async ({ overrides, location }) => {
+      const invalidPoint: WorkflowResumePoint = {
+        ...point,
+        stack: [point.stack[0]!, { ...point.stack[1]!, ...overrides }],
+      };
+      mockFindLatestResumableDirectRun.mockReturnValue(createRun({ resumePoint: invalidPoint }));
       mockResolveWorkflowCallTarget.mockReturnValue({
-        name: 'child', initialStep: 'plan', maxSteps: 10, subworkflow: { callable: true }, steps: [workflow.steps[0]!],
+        name: 'child', initialStep: 'plan', maxSteps: 10, subworkflow: { callable: true }, steps: workflow.steps,
       });
       mockSelectOption.mockResolvedValueOnce('requeue');
+      mockSelectOption.mockImplementationOnce(async (_message, options: Array<{ label: string; value: string }>) => {
+        expect(mockWarn.mock.calls.flat().join('\n')).toContain(location);
+        expect(options.some((option) => option.value === 'resume-checkpoint')).toBe(false);
+        return null;
+      });
 
-      expect(await resumeDirectRun('/project')).toBe(true);
-      expect(mockSelectOption).toHaveBeenCalledTimes(1);
-      expect(mockExecuteTaskWithResult).toHaveBeenCalledWith(expect.objectContaining({
-        startStep: 'delegate', resumePoint: { ...point, stack: [point.stack[0]!] }, restartPoint: undefined,
-      }));
+      expect(await resumeDirectRun('/project')).toBe(false);
+      expect(mockSelectOption).toHaveBeenCalledTimes(2);
+      expect(mockExecuteTaskWithResult).not.toHaveBeenCalled();
     });
 
     it.each(['null', 'throw'] as const)('should offer an explicit restart when the callee resolver returns %s', async (failure) => {

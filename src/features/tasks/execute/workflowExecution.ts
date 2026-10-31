@@ -517,6 +517,7 @@ async function executeWorkflowInternal(
         resumePoint: options.resumePoint,
         restartPoint: options.restartPoint,
         resumeSource: artifactResumeSource,
+        sourceResumePoint: options.sourceResumePoint,
         operationJournal: bootstrap.operationJournal,
         reportDirName: bootstrap.runSlug,
         ...(options.runPathsDirectory === undefined ? {} : { runPathsDirectory: options.runPathsDirectory }),

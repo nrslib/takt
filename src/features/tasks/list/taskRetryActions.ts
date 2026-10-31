@@ -237,6 +237,7 @@ export async function requeueFailedTask(
     taskDir: undefined,
     sourceRunSlug: selection.matchedRunSlug,
     restartPoint: selection.selectedRestartPoint,
+    sourceResumePoint: selection.selectedRestartPoint === undefined ? undefined : selection.resumePoint ?? selection.sourceResumePoint,
   });
 
   info(`Task "${sanitizeTerminalText(task.name)}" has been requeued.`);
@@ -323,6 +324,7 @@ export async function retryFailedTask(
       taskDir: task.taskDir,
       sourceRunSlug: selection.matchedRunSlug,
       restartPoint: selection.selectedRestartPoint,
+      sourceResumePoint: selection.selectedRestartPoint === undefined ? undefined : selection.resumePoint ?? selection.sourceResumePoint,
       ...(retryResult.source === 'go'
         ? {
           revisedOrder: {

@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { WorkflowConfig, WorkflowResumePoint, WorkflowResumePointEntry, WorkflowStep } from '../core/models/index.js';
-import { getWorkflowResumeFrameError, validateWorkflowResumeRoot } from '../core/workflow/run/resume-point.js';
+import { getWorkflowResumeFrameError, trimResumePointStackForWorkflow, validateWorkflowResumeRoot } from '../core/workflow/run/resume-point.js';
 import { attachWorkflowOpaqueRef } from '../shared/workflowConfigMetadata.js';
+import { DebugLogger } from '../shared/utils/debug.js';
 
 const agent = { name: 'reviewers', personaDisplayName: 'reviewer', instruction: 'Review' } satisfies WorkflowStep;
 const workflow: WorkflowConfig = {
@@ -23,16 +24,16 @@ function point(overrides: Partial<WorkflowResumePointEntry> = {}): WorkflowResum
 }
 
 describe('saved workflow resume root validation', () => {
-  it('explains why an absolute-path-derived builtin checkpoint cannot be verified', () => {
+  it('accepts a legacy builtin checkpoint when workflow and step names match', () => {
     const current = attachWorkflowOpaqueRef({ ...workflow }, `builtin:v2:sha256:${'b'.repeat(64)}`);
     const saved = point({ workflow_ref: `builtin:sha256:${'a'.repeat(64)}` });
-
-    const reason = getWorkflowResumeFrameError(current, saved.stack[0]!, current.steps);
-
-    expect(reason).toMatch(/legacy|旧/i);
-    expect(reason).toMatch(/absolute.path|絶対パス/i);
-    expect(reason).toMatch(/content|本文|内容/i);
-    expect(() => validateWorkflowResumeRoot(current, saved)).toThrow(reason);
+    const writeLog = vi.spyOn(DebugLogger.getInstance(), 'writeLog');
+    try {
+      validateWorkflowResumeRoot(current, saved);
+      expect(writeLog.mock.calls.some(([level]) => level === 'WARN')).toBe(true);
+    } finally {
+      writeLog.mockRestore();
+    }
   });
 
   it('accepts an exactly matching legacy builtin checkpoint restored from a bundle', () => {
@@ -50,7 +51,7 @@ describe('saved workflow resume root validation', () => {
 
   it.each([
     { overrides: { step: 'removed-reviewers' }, reason: /step not found/ },
-    { overrides: { workflow_ref: 'other' }, reason: /identity mismatch/ },
+    { overrides: { workflow: 'other' }, reason: /workflow|identity/i },
     { overrides: { kind: 'system' as const }, reason: /kind mismatch/ },
   ])('rejects an invalid root with an explanatory reason: $overrides', ({ overrides, reason }) => {
     expect(() => validateWorkflowResumeRoot(workflow, point(overrides))).toThrow(reason);
@@ -58,6 +59,12 @@ describe('saved workflow resume root validation', () => {
 
   it('rejects an empty saved stack', () => {
     expect(() => validateWorkflowResumeRoot(workflow, { ...point(), stack: [] })).toThrow(/stack is empty/);
+  });
+
+  it('reports both workflow names when the saved name differs', () => {
+    const saved = point({ workflow: 'previous', workflow_ref: 'project:old' });
+    expect(getWorkflowResumeFrameError(workflow, saved.stack[0]!, workflow.steps))
+      .toBe('Saved resume position "previous/reviewers" has a workflow name mismatch (saved: "previous", current: "default")');
   });
 
   it('reports an ambiguous saved step', () => {
@@ -70,4 +77,29 @@ describe('saved workflow resume root validation', () => {
     expect(() => validateWorkflowResumeRoot(parallel, point({ kind: 'parallel' }))).not.toThrow();
     expect(() => validateWorkflowResumeRoot(parallel, point())).toThrow(/kind mismatch/);
   });
+
+  it('keeps the saved position when the workflow ref changes', () => {
+    const current = attachWorkflowOpaqueRef({ ...workflow }, 'project:new');
+    const saved = point({ workflow_ref: 'project:old' });
+    expect(() => validateWorkflowResumeRoot(current, saved)).not.toThrow();
+    expect(trimResumePointStackForWorkflow({ workflow: current, resumePoint: saved, resolveWorkflowCall: () => null }))
+      .toEqual(saved);
+  });
+
+  it.each([true, false])('warns about a workflow ref mismatch only when refs differ: %s', (mismatch) => {
+    const current = attachWorkflowOpaqueRef({ ...workflow }, 'project:current');
+    const saved = point({ workflow_ref: mismatch ? 'project:previous' : 'project:current' });
+    const writeLog = vi.spyOn(DebugLogger.getInstance(), 'writeLog');
+    try {
+      validateWorkflowResumeRoot(current, saved);
+      const warnings = writeLog.mock.calls.filter(([level]) => level === 'WARN');
+      expect(warnings.length > 0).toBe(mismatch);
+      if (mismatch) {
+        expect(JSON.stringify(warnings)).toMatch(/workflow|ref|hash/i);
+      }
+    } finally {
+      writeLog.mockRestore();
+    }
+  });
+
 });

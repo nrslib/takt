@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import type { InteractiveMode } from '../../core/models/index.js';
+import type { InteractiveMode, WorkflowResumePoint } from '../../core/models/index.js';
 import { getWorkflowDescription } from '../../infra/config/index.js';
 import {
   createAssistantConversationPlan,
@@ -70,6 +70,7 @@ export interface WebTaskActionContext {
     readonly id: string;
     readonly selection: TaskRetryStartSelection;
   }[];
+  readonly retrySourceResumePoint?: WorkflowResumePoint;
   readonly failure?: {
     readonly code: string;
     readonly message: string;

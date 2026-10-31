@@ -18,7 +18,8 @@ describe('resumed report input step', () => {
     expect(isResumedReportInputStep(source, [{ ...frame, occurrence: 3 }], 'final-gate', 3)).toBe(false);
     expect(isResumedReportInputStep(source, [frame], 'other', 2)).toBe(false);
     expect(isResumedReportInputStep(source, [{ ...frame, step: 'other' }], 'final-gate', 2)).toBe(false);
-    expect(isResumedReportInputStep(source, [{ ...frame, workflow_ref: 'other' }], 'final-gate', 2)).toBe(false);
+    expect(isResumedReportInputStep(source, [{ ...frame, workflow: 'other' }], 'final-gate', 2)).toBe(false);
+    expect(isResumedReportInputStep(source, [{ ...frame, workflow_ref: 'other' }], 'final-gate', 2)).toBe(true);
     expect(isResumedReportInputStep(undefined, [frame], 'final-gate', 2)).toBe(false);
     expect(isResumedReportInputStep(source, undefined, 'final-gate', 2)).toBe(false);
   });
@@ -38,8 +39,14 @@ describe('resumed report input step', () => {
     expect(isResumedReportInputStep(source, [{ ...parent }, { ...frame }], frame.step, 2)).toBe(true);
     expect(isResumedReportInputStep(source, [parent], frame.step, 2)).toBe(false);
     expect(isResumedReportInputStep(source, [frame], frame.step, 2)).toBe(false);
+    expect(isResumedReportInputStep(
+      source,
+      [{ ...parent, workflow_ref: 'updated-parent' }, frame],
+      frame.step,
+      2,
+    )).toBe(true);
     for (const otherParent of [
-      { ...parent, workflow_ref: 'sibling' },
+      { ...parent, workflow: 'sibling' },
       { ...parent, step: 'other-delegate' },
       { ...parent, occurrence: 2 },
       { ...parent, call_instance: 2 },

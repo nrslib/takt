@@ -80,6 +80,7 @@ function prepareRetry(
   return { kind: 'failed', options: {
     task, projectDir: input.cwd, worktreePath: preparation.worktreePath,
     startStep: start.startStep, resumePoint: start.resumePoint, restartPoint: start.restartPoint,
+    sourceResumePoint: start.sourceResumePoint,
     retryNote, workflow: context.workflowOverride,
     taskDir: kind === 'retry' ? task.taskDir : undefined, sourceRunSlug: preparation.matchedRunSlug,
     ...(kind === 'retry' ? { revisedOrder: {
