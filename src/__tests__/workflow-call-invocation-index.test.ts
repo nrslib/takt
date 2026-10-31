@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { WorkflowConfig } from '../core/models/types.js';
 import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
+import { attachWorkflowOpaqueRef } from '../shared/workflowConfigMetadata.js';
 import {
   WorkflowCallInvocationIndex,
   buildWorkflowCallInvocationIdentity,
@@ -18,6 +19,56 @@ function makeWorkflow(name: string): WorkflowConfig {
 }
 
 describe('WorkflowCallInvocationIndex', () => {
+  it('rebinds descendant records for the saved call without changing other calls', () => {
+    const oldParent = attachWorkflowOpaqueRef(makeWorkflow('parent'), 'parent-old');
+    const parent = attachWorkflowOpaqueRef(makeWorkflow('parent'), 'parent-new');
+    const child = makeWorkflow('child');
+    const nested = makeWorkflow('nested');
+    const oldCall = buildWorkflowResumePointEntry(oldParent, 'delegate', 'workflow_call', 1, undefined, 1);
+    const newCall = buildWorkflowResumePointEntry(parent, 'delegate', 'workflow_call', 1, undefined, 1);
+    const otherCall = buildWorkflowResumePointEntry(oldParent, 'delegate', 'workflow_call', 2, undefined, 2);
+    const nestedCall = buildWorkflowResumePointEntry(child, 'nested', 'workflow_call', 1, undefined, 1);
+    const index = new WorkflowCallInvocationIndex(new Map());
+    const rootRecord = { call_instance: 1, report_namespace_segment: 'iteration-1--step-delegate--workflow-child' };
+    const nestedRecord = { call_instance: 1, report_namespace_segment: 'iteration-1--step-nested--workflow-nested' };
+    const otherRecord = { call_instance: 2, report_namespace_segment: 'iteration-2--step-nested--workflow-nested' };
+    index.record(oldParent, 'delegate', [], rootRecord);
+    index.record(child, 'nested', [oldCall], nestedRecord);
+    index.record(child, 'nested', [otherCall], otherRecord);
+    const source = {
+      version: 2 as const,
+      stack: [oldCall, nestedCall, buildWorkflowResumePointEntry(nested, 'fix', 'agent', 1)],
+      iteration: 1, elapsed_ms: 0,
+      workflow_call_invocations: index.serialized(), workflow_step_participations: {},
+    };
+
+    index.rebindResumeInvocation(source, parent, 'delegate', [], 1, false);
+
+    expect(index.get(parent, 'delegate', [])).toEqual(rootRecord);
+    expect(index.get(child, 'nested', [newCall])).toEqual(nestedRecord);
+    expect(index.get(child, 'nested', [oldCall])).toBeUndefined();
+    expect(index.get(child, 'nested', [otherCall])).toEqual(otherRecord);
+    index.validateResumePoint({ ...source, stack: [newCall, nestedCall, source.stack[2]!] });
+  });
+
+  it('rejects a descendant identity collision without changing saved records', () => {
+    const oldParent = attachWorkflowOpaqueRef(makeWorkflow('parent'), 'parent-old');
+    const parent = attachWorkflowOpaqueRef(makeWorkflow('parent'), 'parent-new');
+    const child = makeWorkflow('child');
+    const oldCall = buildWorkflowResumePointEntry(oldParent, 'delegate', 'workflow_call', 1, undefined, 1);
+    const newCall = buildWorkflowResumePointEntry(parent, 'delegate', 'workflow_call', 1, undefined, 1);
+    const index = new WorkflowCallInvocationIndex(new Map());
+    index.record(oldParent, 'delegate', [], { call_instance: 1, report_namespace_segment: 'iteration-1--step-delegate--workflow-child' });
+    index.record(child, 'nested', [oldCall], { call_instance: 1, report_namespace_segment: 'iteration-1--step-nested--workflow-nested' });
+    index.record(child, 'nested', [newCall], { call_instance: 1, report_namespace_segment: 'iteration-2--step-nested--workflow-nested' });
+    const saved = index.serialized();
+    const source = { version: 2 as const, stack: [oldCall], iteration: 1, elapsed_ms: 0,
+      workflow_call_invocations: saved, workflow_step_participations: {} };
+
+    expect(() => index.rebindResumeInvocation(source, parent, 'delegate', [], 1, false)).toThrow(/conflicting invocation records/);
+    expect(index.serialized()).toEqual(saved);
+  });
+
   it('should distinguish the same nested call step under different ancestor invocations', () => {
     const parent = makeWorkflow('parent');
     const child = makeWorkflow('child');

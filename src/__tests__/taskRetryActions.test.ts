@@ -1737,7 +1737,7 @@ describe('retryFailedTask', () => {
     expect(mockFindPreviousOrderContent).not.toHaveBeenCalled();
   });
 
-  it('should default to the valid parent checkpoint when the saved child step is removed', async () => {
+  it('should offer an authored restart when the saved child step is removed', async () => {
     mockFindRunForTask.mockReturnValue('run-1');
     mockLoadWorkflowByIdentifier.mockReturnValue({
       ...defaultWorkflowConfig,
@@ -1791,16 +1791,9 @@ describe('retryFailedTask', () => {
 
     await retryFailedTask(makeFailedTask(), '/project');
 
-    expectResumeCandidateIsDefault();
-    expect(mockRequeueTask.mock.calls.at(-1)?.[2]).toMatchObject({
-      restartPoint: undefined,
-      resumePoint: {
-        version: 2, iteration: 7, elapsed_ms: 183245,
-        stack: [{ workflow: 'default', workflow_ref: 'default', step: 'delegate', kind: 'workflow_call',
-          occurrence: 1, call_instance: 1 }],
-        workflow_call_invocations: {}, workflow_step_participations: {},
-      },
-    });
+    const candidates = mockSelectOptionWithDefault.mock.calls.at(-1)?.[1] as Array<{ value: string }>;
+    expect(candidates.some(({ value }) => value === 'resume-checkpoint')).toBe(false);
+    expect(mockRequeueTask.mock.calls.at(-1)?.[2]).toMatchObject({ resumePoint: undefined });
   });
 
   it.each([false, true])('should omit an unavailable Resume target and allow restart choice %s', async (restart) => {

@@ -46,7 +46,7 @@ import { getWorkflowResumeFrameKind, isWorkflowCallStep } from '../step-kind.js'
 import { applyAutoRoutingStrategyOverride } from '../auto-routing/resolver.js';
 import { RoutingRuntime } from '../auto-routing/runtime.js';
 import { resolveEffectiveAutoRouting } from '../auto-routing/effective-auto-routing.js';
-import { buildWorkflowResumePointEntry, workflowEntryMatchesWorkflow } from '../workflow-reference.js';
+import { buildWorkflowResumePointEntry } from '../workflow-reference.js';
 import { runWithWorkflowSpan, type WorkflowSpanOutcome, type WorkflowSpanParams } from '../observability/workflowSpans.js';
 import { WorkflowEngineStepCoordinator } from './WorkflowEngineStepCoordinator.js';
 import type { WorkflowCallExecutionToken } from './WorkflowCallRunner.js';
@@ -77,7 +77,7 @@ import { withWorkflowTargetContext } from '../provider-target-resolution.js';
 import { readResumeReportSnapshotManifest } from '../run/resume-report-snapshot.js';
 import { ResumeArtifactOccurrenceIndex } from '../run/resume-artifact-occurrence-index.js';
 import { readRunMetaBySlug } from '../run/run-meta.js';
-import { validateWorkflowResumeRoot } from '../run/resume-point.js';
+import { resumeWorkflowMatches, validateWorkflowResumeRoot } from '../run/resume-point.js';
 const log = createLogger('workflow-engine');
 
 type WorkflowEngineRuntimeOptions = WorkflowEngineOptions & {
@@ -132,6 +132,7 @@ export class WorkflowEngine extends EventEmitter {
   private readonly resumeStackPrefix: WorkflowResumePointEntry[];
   private activeResumePoint: WorkflowResumePoint | undefined;
   private readonly resumeContinuation: WorkflowResumeContinuation;
+  private reservedNextWorkflowCall: { step: string; occurrence: number } | undefined;
 
   private readonly optionsBuilder: WorkflowEngineServices['optionsBuilder'];
   private readonly stepExecutor: WorkflowEngineServices['stepExecutor'];
@@ -247,6 +248,19 @@ export class WorkflowEngine extends EventEmitter {
       this.options.resumePoint,
       initialMaxSteps,
     );
+    if (restartPoint !== undefined && this.options.resumeSource?.sourceRunSlug !== undefined) {
+      const sourceResumePoint = readRunMetaBySlug(
+        this.cwd,
+        this.options.resumeSource.sourceRunSlug,
+        undefined,
+        this.options.runPathsDirectory,
+      )?.resumePoint;
+      if (sourceResumePoint !== undefined) {
+        this.sharedRuntime.workflowCallInvocationEvidence = restoreWorkflowCallInvocationEvidence(sourceResumePoint);
+        this.sharedRuntime.resumeInvocationSource = sourceResumePoint;
+      }
+    }
+    this.sharedRuntime.resumeInvocationSource ??= this.options.resumePoint;
     if (restartNavigator !== undefined) {
       if (this.sharedRuntime.restartNavigator !== undefined) {
         throw new Error('Workflow restart navigator is already initialized');
@@ -263,7 +277,7 @@ export class WorkflowEngine extends EventEmitter {
       new ReportGenerationIndex(this.options.resumePoint?.missing_report_generations);
     if (
       this.sharedRuntime.resumeArtifactOccurrenceIndex === undefined
-      && this.options.resumeSource?.resumeMode === 'requeue'
+      && (this.options.resumeSource?.resumeMode === 'requeue' || this.options.resumeSource?.resumeMode === 'retry')
     ) {
       const manifest = readResumeReportSnapshotManifest(this.cwd, runPaths.slug, this.options.runPathsDirectory);
       const sourceResumePoint = manifest === undefined
@@ -271,7 +285,7 @@ export class WorkflowEngine extends EventEmitter {
         : readRunMetaBySlug(this.cwd, manifest.sourceRunSlug, undefined, this.options.runPathsDirectory)?.resumePoint;
       if (manifest !== undefined && sourceResumePoint === undefined) {
         log.warn(
-          'Requeue artifact occurrence restoration is unavailable because source run metadata or resume point is missing',
+          `${this.options.resumeSource?.resumeMode === 'retry' ? 'Retry' : 'Requeue'} artifact occurrence restoration is unavailable because source run metadata or resume point is missing`,
           { sourceRunSlug: manifest.sourceRunSlug },
         );
       }
@@ -450,7 +464,7 @@ export class WorkflowEngine extends EventEmitter {
           buildWorkflowMeta: (step, runtime) => this.optionsBuilder.buildWorkflowMeta(step, runtime),
           resolveRuntimeForStep: this.stepCoordinator.resolveRuntimeForStep.bind(this.stepCoordinator),
           claimStepOccurrence: (step) => (
-            this.claimStepOccurrence(step, this.resumeStackPrefix)
+            this.claimRunLoopStepOccurrence(step)
           ),
           setActiveStep: this.activateStep.bind(this),
           cancelPendingStepActivation: () => this.workflowCallRunner.cancelPendingInvocation(),
@@ -507,6 +521,15 @@ export class WorkflowEngine extends EventEmitter {
           }
         : {}),
     });
+  }
+
+  private claimRunLoopStepOccurrence(step: WorkflowStep): number {
+    if (this.reservedNextWorkflowCall?.step === step.name) {
+      const occurrence = this.reservedNextWorkflowCall.occurrence;
+      this.reservedNextWorkflowCall = undefined;
+      return occurrence;
+    }
+    return this.claimStepOccurrence(step, this.resumeStackPrefix);
   }
 
   private emitEvent(event: string, ...args: unknown[]): void {
@@ -601,7 +624,7 @@ export class WorkflowEngine extends EventEmitter {
     const entry = resumePoint?.stack[this.resumeStackPrefix.length];
     return entry !== undefined
       && entry.step === step.name
-      && workflowEntryMatchesWorkflow(entry, this.config);
+      && resumeWorkflowMatches(entry, this.config);
   }
 
   private buildResumePoint(
@@ -664,8 +687,13 @@ export class WorkflowEngine extends EventEmitter {
     step: WorkflowStep,
     iteration: number,
     occurrence: number,
+    preparingNextStep = false,
   ): WorkflowCallExecutionToken | undefined {
     if (isWorkflowCallStep(step)) {
+      if (preparingNextStep && this.sharedRuntime.resumeArtifactOccurrenceIndex !== undefined) {
+        occurrence = this.claimStepOccurrence(step, this.resumeStackPrefix);
+        this.reservedNextWorkflowCall = { step: step.name, occurrence };
+      }
       return this.workflowCallRunner.activateInvocation(
         step,
         iteration,
@@ -978,7 +1006,7 @@ export class WorkflowEngine extends EventEmitter {
           buildWorkflowMeta: (step, runtime) => this.optionsBuilder.buildWorkflowMeta(step, runtime),
           resolveRuntimeForStep: this.stepCoordinator.resolveRuntimeForStep.bind(this.stepCoordinator),
           claimStepOccurrence: (step) => (
-            this.claimStepOccurrence(step, this.resumeStackPrefix)
+            this.claimRunLoopStepOccurrence(step)
           ),
           setActiveStep: this.activateStep.bind(this),
           cancelPendingStepActivation: () => this.workflowCallRunner.cancelPendingInvocation(),

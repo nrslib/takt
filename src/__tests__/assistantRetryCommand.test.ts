@@ -561,14 +561,14 @@ describe('runAssistantRetryCommand', () => {
     mocks.resolveWorkflowCallTarget.mockImplementation((_parent, step) => step.call === 'child' ? child : leaf);
     mocks.listAllTaskItems.mockReturnValue([{ ...exceededTask, data: { ...exceededTask.data!, resume_point: resumePoint } }]);
     setStartResponse('not JSON');
-    setStartResponse('{"startOptionId":"resume-checkpoint"}');
+    setStartResponse(position === 'renamed leaf' ? '{"startOptionId":"restart:1.0.0"}' : '{"startOptionId":"resume-checkpoint"}');
 
     await runAssistantRetryCommand({ ...options, command: 'requeue', inlineText: 'Restart child final-gate.' });
 
     expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(2);
     for (const [prompt] of mocks.callAIWithRetry.mock.calls) {
       const payload = JSON.parse(prompt);
-      for (const id of ['restart:1.0.0', 'resume-checkpoint']) {
+      for (const id of position === 'renamed leaf' ? ['restart:1.0.0'] : ['restart:1.0.0', 'resume-checkpoint']) {
         expect(payload.startOptions.find((option: { id: string }) => option.id === id)).toMatchObject({
           path: id === 'resume-checkpoint' && position !== 'leaf'
             ? '"development" > "delegate" → "child" > "review"'
@@ -580,10 +580,16 @@ describe('runAssistantRetryCommand', () => {
           { path: '"development" > "delegate" → "child" > "review"', ...(onHeading ? { description: 'Child review' } : {}) },
         ]);
       }
+      if (position === 'renamed leaf') {
+        expect(payload.startOptions.some((option: { id: string }) => option.id === 'resume-checkpoint')).toBe(false);
+      }
       expect(payload.startOptions.every((option: { id: string }) => !option.id.startsWith('heading:'))).toBe(true);
     }
-    expect(mocks.requeueTask.mock.calls[0]![2].resumePoint).toEqual({ ...resumePoint,
-      stack: position === 'leaf' ? resumePoint.stack : resumePoint.stack.slice(0, 2) });
+    if (position === 'renamed leaf') {
+      expect(mocks.requeueTask.mock.calls[0]![2].resumePoint).toBeUndefined();
+    } else {
+      expect(mocks.requeueTask.mock.calls[0]![2].resumePoint).toEqual(resumePoint);
+    }
     expect(mocks.requeueExceededTask).not.toHaveBeenCalled();
   });
 
