@@ -389,6 +389,8 @@ takt director --help
 
 manager は担当するリポジトリまたは workspace のゴールを進め、タスクの投入、成果の取り込み、完成の申請を行います。director は全 manager のゴールと未回答の問い合わせを確認し、人に対応が必要な事項を知らせ、manager の会話を通じて連絡します。判断は人に残し、マージも人の明示指示を担当 manager に転送するだけで、director 自身は実行しません。
 
+`takt_tell_manager` の伝言は、manager が処理中でも保存されます。保存した時点で操作 ID と manager が返り、返事を待たずに保存順に処理されます。返事・失敗・中断は保存され、あとで同じ操作 ID 付きで director の画面に知らされます。manager 一覧と見回りは、読めない project を理由付きで示し、残りの manager の処理を続けます。
+
 グローバルの `~/.takt/config.yaml` に、`director.patrol_interval`（秒、既定 `900`）と `director.slack.channel_id` / `director.slack.allowed_user_ids` を設定します。[グローバル設定フィールドリファレンス](./configuration.ja.md#グローバル設定フィールドリファレンス)を参照してください。
 
 **director の Slack:** manager と同じ Slack App と `TAKT_SLACK_APP_TOKEN` / `TAKT_SLACK_BOT_TOKEN` を使い、ボットを director のチャンネルへ招待します。Slack 設定を変更したら daemon を起動し直してください。`director.slack` を設定すると、まとめた通知が届き、許可された人が会話できます。返事は元のスレッドに届きます。接続手順は[Slack で director と会話する](./configuration.ja.md#slack-で-director-と会話する)、詳しい役割と制限は[director の見回り](./goal-management.ja.md#director-の見回り)を参照してください。

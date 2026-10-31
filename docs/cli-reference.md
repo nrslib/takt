@@ -102,6 +102,8 @@ takt director --help
 
 Director is experimental; behavior and saved data formats may change without notice. Conversations and scheduled patrols incur provider costs. Manager advances goals and executes tasks; director checks all managers, notifies the human, and relays explicit human merge instructions to the responsible manager. Director does not merge PRs itself. See [Director patrol](./goal-management.md#director-patrol) for responsibilities, global `director.patrol_interval` and `director.slack` settings, and Slack setup.
 
+Messages sent through `takt_tell_manager` are saved even while manager is busy. The tool returns an operation ID and manager as soon as the message is saved, without waiting for a reply; messages are processed in saved order. Replies, failures, and interruptions are saved and shown later in the director TUI with the same operation ID. Manager listing (`takt_list_managers`) and patrol report unreadable projects with reasons and continue with the remaining managers.
+
 ## Web UI execution boundary
 
 Run `takt ui` to start the experimental local Web UI on `http://127.0.0.1:20525`, or pass `--port`. The command warns that the experimental interface may change without notice. If an instance for the same `TAKT_CONFIG_DIR` is already running, the command prints its actual URL and PID without starting another process. Use `takt ui stop` for a graceful stop and `takt ui restart [--port <number>]` to stop and start it again.
