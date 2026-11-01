@@ -470,6 +470,21 @@ describe('WorkflowCallExecutor nested restart contract', () => {
     expect(navigator.resolveChildStartStep(child, [makeRuntimeCallEntry('default', 'delegate')])).toBe('review');
   });
 
+  it('rejects a changed child workflow name even when its ref matches', () => {
+    const navigator = new WorkflowRestartNavigator({ stack: [
+      { workflow: 'default', workflow_ref: 'default', step: 'delegate', kind: 'workflow_call', call_instance: 1 },
+      { workflow: 'coding', workflow_ref: 'coding', step: 'review', kind: 'agent' },
+    ] });
+    const root = makeWorkflow('default', 'delegate', [makeCallStep('delegate', 'coding')]);
+    const child = attachWorkflowOpaqueRef(makeWorkflow('other', 'review', [
+      { name: 'review', persona: 'reviewer', instruction: 'Review' },
+    ]), 'coding');
+    expect(navigator.resolveRootStartStep(root, undefined)).toBe('delegate');
+
+    expect(() => navigator.resolveChildStartStep(child, [makeRuntimeCallEntry('default', 'delegate')]))
+      .toThrow('does not match child workflow "other"');
+  });
+
   it('should consume a terminal authored system step when resolving the root start', () => {
     const restartPoint: WorkflowRestartPoint = {
       stack: [{ workflow: 'default', workflow_ref: 'default', step: 'checkpoint', kind: 'system' }],

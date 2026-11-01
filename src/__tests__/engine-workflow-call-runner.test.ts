@@ -570,7 +570,7 @@ steps:
     expect(createEngine.mock.calls[0]?.[3]?.startStep).toBeUndefined();
   });
 
-  it('resume_point の child step が消えていたら child initial_step から再開する', async () => {
+  it('resume_point の child step が消えていたら agent 開始前に再開を拒否する', async () => {
     writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
 subworkflow:
   callable: true
@@ -648,12 +648,16 @@ steps:
         workflow_step_participations: {},
       },
     }));
+    let abortReason: string | undefined;
+    engine.on('workflow:abort', (_state, reason) => {
+      abortReason = reason;
+    });
 
     const state = await engine.run();
-    const calledPersona = vi.mocked(runAgent).mock.calls[0]?.[0];
 
-    expect(state.status).toBeDefined();
-    expect(calledPersona, state.lastOutput?.content).toContain('fixer');
+    expect(state.status).toBe('aborted');
+    expect(abortReason).toContain('Saved resume position "takt/coding/review"');
+    expect(runAgent).not.toHaveBeenCalled();
   });
 
   it('resume_point の child step が残っていればその step から再開する', async () => {
