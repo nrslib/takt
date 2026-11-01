@@ -82,7 +82,10 @@ export class WorkflowRestartNavigator {
     workflow: WorkflowConfig,
     relationship: 'root' | 'child',
   ): WorkflowStep {
-    if (!resumeWorkflowMatches(entry, workflow)) {
+    if (
+      !resumeWorkflowMatches(entry, workflow)
+      || (relationship === 'root' && entry.workflow_ref !== getWorkflowReference(workflow))
+    ) {
       throw new Error(
         `Restart path workflow "${entry.workflow}" (ref "${entry.workflow_ref}") does not match ${relationship} workflow "${workflow.name}" (ref "${getWorkflowReference(workflow)}")`,
       );

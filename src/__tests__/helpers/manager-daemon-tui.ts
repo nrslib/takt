@@ -9,6 +9,7 @@ import { readDaemonOwner } from '../../infra/daemon/owner.js';
 import { ConversationStore } from '../../infra/conversations/store.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 import { captureOwnedChild, terminateOwnedProcess } from './owned-process.js';
+import { PrivateArtifactPublicationConflictError } from '../../shared/utils/private-file.js';
 
 const built = (path: string): string => pathToFileURL(join(process.cwd(), 'dist', path)).href;
 const require = createRequire(import.meta.url);
@@ -230,7 +231,13 @@ registerHooks({ resolve(specifier, context, nextResolve) {
     .filter(Boolean).map((line) => JSON.parse(line) as Observation);
   const state = (path = repository) => {
     const assignment = { kind: 'repository' as const, repositoryDirectory: path };
-    return new ConversationStore(directory).read(conversationId(assignment), assignment);
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return new ConversationStore(directory).read(conversationId(assignment), assignment);
+      } catch (error) {
+        if (!(error instanceof PrivateArtifactPublicationConflictError) || attempt === 2) throw error;
+      }
+    }
   };
   const start = async (path: string, model: string | undefined): Promise<ManagerTuiProcess> => {
     const child = spawn(process.execPath, ['--import', pathToFileURL(preload).href, '--input-type=module', '-e', `

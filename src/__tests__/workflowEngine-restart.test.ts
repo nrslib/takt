@@ -319,6 +319,7 @@ describe('WorkflowEngine root restart contract', () => {
     expect(() => new WorkflowEngine(root, tmpDir, 'mismatched root', {
       projectCwd: tmpDir,
       restartPoint,
+      workflowCallResolver: () => null,
     })).toThrow(
       'Restart path workflow "root" (ref "project:other") does not match root workflow "root" (ref "project:root")',
     );

@@ -1730,14 +1730,19 @@ describe('task restart persistence and execution resolution', () => {
     expect(getScenarioQueue()?.remaining).toBe(0);
   });
 
-  it.each(['unchanged', 'updated refs'])('should execute a persisted grandchild restart through real nested engines with %s', async (change) => {
+  it.each(['unchanged', 'updated child refs'])('should execute a persisted grandchild restart through real nested engines with %s', async (change) => {
     const projectDir = createProject();
     writeRestartExecutionWorkflows(projectDir);
     writeFailedTask(projectDir);
     invalidateAllResolvedConfigCache();
     const originalPoint = buildExecutionRestartPoint(projectDir);
-    const restartPoint = change === 'updated refs'
-      ? { stack: originalPoint.stack.map((entry) => ({ ...entry, workflow_ref: `${entry.workflow_ref}-old` })) }
+    const restartPoint = change === 'updated child refs'
+      ? {
+          stack: originalPoint.stack.map((entry, index) => ({
+            ...entry,
+            workflow_ref: index === 0 ? entry.workflow_ref : `${entry.workflow_ref}-old`,
+          })),
+        }
       : originalPoint;
     const mockCallLog = path.join(projectDir, 'mock-calls.ndjson');
     process.env.TAKT_MOCK_CALL_LOG = mockCallLog;
