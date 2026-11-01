@@ -307,11 +307,11 @@ describe('WorkflowEngine root restart contract', () => {
     },
   );
 
-  it('should reject a root workflow identity mismatch during construction', () => {
+  it('should reject a root workflow name mismatch during construction', () => {
     const root = attachWorkflowOpaqueRef(makeRoot(), 'project:root');
     const restartPoint = makeRestartPoint({
-      workflow: 'root',
-      workflow_ref: 'project:other',
+      workflow: 'other',
+      workflow_ref: 'project:root',
       step: 'selected',
       kind: 'agent',
     });
@@ -319,9 +319,8 @@ describe('WorkflowEngine root restart contract', () => {
     expect(() => new WorkflowEngine(root, tmpDir, 'mismatched root', {
       projectCwd: tmpDir,
       restartPoint,
-      workflowCallResolver: () => null,
     })).toThrow(
-      'Restart path workflow "root" (ref "project:other") does not match root workflow "root" (ref "project:root")',
+      'Restart path workflow "other" (ref "project:root") does not match root workflow "root" (ref "project:root")',
     );
   });
 
