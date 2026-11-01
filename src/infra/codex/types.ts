@@ -72,3 +72,10 @@ export interface CodexCallOptions {
 }
 
 export const CODEX_CONFIG_PROFILE_ENV = 'TAKT_CODEX_CONFIG_PROFILE';
+
+// Enumerable symbols survive the SDK's Object.assign environment copy without
+// occupying a user-controlled environment variable name.
+export const CODEX_SPAWN_PROFILE = Symbol('codexSpawnProfile');
+export type CodexSpawnEnvironment = Record<string, string> & {
+  [CODEX_SPAWN_PROFILE]?: { configProfile?: string };
+};

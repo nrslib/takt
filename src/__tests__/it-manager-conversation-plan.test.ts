@@ -36,7 +36,7 @@ vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
   loadManagedSdk: (await import('./helpers/managed-sdk.js')).loadManagedSdk,
   inspectProviderInstallation: vi.fn(async () => ({ state: 'ready', directory: '/test/managed/codex' })),
 }));
-vi.mock('../infra/codex/mcp-list.js', () => ({ runCodexMcpList: vi.fn() }));
+vi.mock('../infra/codex/mcp-list.js', () => ({ runCodexMcpList: vi.fn(), hasCodexMcpServer: vi.fn() }));
 vi.mock('../infra/claude/client.js', () => ({ callClaude: vi.fn(), callClaudeCustom: vi.fn() }));
 
 

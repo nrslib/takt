@@ -33,8 +33,8 @@ import {
   mapToCodexSandboxMode,
   CodexCallOptions,
 } from './types.js';
-import { buildCodexSessionConfig } from './session-config.js';
-import { prepareCodexMcpIsolation } from './mcp-isolation.js';
+import { buildCodexSessionConfig, hasCodexShellEnvironmentFilter } from './session-config.js';
+import { prepareCodexMcpExclusions, prepareCodexMcpIsolation } from './mcp-isolation.js';
 import { delimiter } from 'node:path';
 import { resolveCodexSdkCli } from './cli-runtime.js';
 import { prepareCodexToolPermissionHook } from './tool-permission-hook.js';
@@ -431,12 +431,14 @@ export class CodexClient {
       }
       const shellPolicy = codexConfig.shell_environment_policy as {
         set?: Record<string, string>;
+        filters?: Record<string, string>;
       } | undefined;
       codexConfig.shell_environment_policy = {
         ...shellPolicy,
-        ...(codexEnvironment.PATH === undefined ? {} : {
-          set: { ...shellPolicy?.set, PATH: codexEnvironment.PATH },
-        }),
+        ...(codexEnvironment.PATH === undefined
+            || hasCodexShellEnvironmentFilter(shellPolicy?.filters, 'PATH')
+          ? {}
+          : { set: { ...shellPolicy?.set, PATH: codexEnvironment.PATH } }),
       };
       const trust = await resolveCodexHookTrust({
         executablePath: hook.executablePath, cwd: options.cwd, env: codexEnvironment,
@@ -447,9 +449,27 @@ export class CodexClient {
       hookConfigOverrides = [`hooks.state={${JSON.stringify(trust.key)}={trusted_hash=${JSON.stringify(trust.trustedHash)}}}`];
     }
 
-    const isolation = options.mcpOnlySideEffects
-      ? await prepareCodexMcpIsolation(options, codexConfig, codexEnvironment)
-      : undefined;
+    let isolation: Awaited<ReturnType<typeof prepareCodexMcpIsolation>> | undefined;
+    let mcpExclusions: string[] = [];
+    try {
+      isolation = options.mcpOnlySideEffects
+        ? await prepareCodexMcpIsolation(options, codexConfig, codexEnvironment)
+        : undefined;
+      if (isolation === undefined) {
+        mcpExclusions = await prepareCodexMcpExclusions(options, codexConfig, codexEnvironment);
+      }
+    } catch (error) {
+      const failure = createProviderErrorFailure(getErrorMessage(error));
+      const errorResponse = this.buildErrorResponse(agentType, threadId, failure, options, 0);
+      emitResult(
+        options.onStream,
+        false,
+        errorResponse.error ?? errorResponse.content,
+        threadId,
+        failure.category,
+      );
+      return errorResponse;
+    }
 
     while (true) {
       const attempt = standardRetryCount + timeoutRetryCount + refusalRetryCount + 1;
@@ -460,7 +480,9 @@ export class CodexClient {
         ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
         ...(isolation === undefined ? {
           env: codexEnvironment, config: codexConfig,
-          ...(hookConfigOverrides === undefined ? {} : { configOverrides: hookConfigOverrides }),
+          ...(hookConfigOverrides === undefined && mcpExclusions.length === 0 ? {} : {
+            configOverrides: [...(hookConfigOverrides ?? []), ...mcpExclusions],
+          }),
           ...(hook !== undefined ? { codexPathOverride: hook.executablePath }
             : options.codexPathOverride ? { codexPathOverride: options.codexPathOverride } : {}),
         } : isolation),

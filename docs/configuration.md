@@ -1290,6 +1290,34 @@ When both the global and project `runtime.yaml` carry an `mcp` section, the proj
 
 `${NAME}` references in `command`, `args`, `env`, `url`, and `headers` are resolved against `process.env` before agent startup. An undefined required environment variable fails fast; TAKT never silently substitutes an empty string. Resolved secret values (env, headers) are never written to logs or error messages.
 
+For runtime HTTP/SSE **headers only**, use `${env:NAME}` to let the provider read its own environment. TAKT checks that the variable is defined and passes its name, without copying its value into arguments, temporary files, configuration JSON in environment variables, or logs. The variable remains in the provider process environment. `${NAME}` still interpolates immediately and can expose its value in those startup materials; fixed headers are unchanged. No additional configuration key or `provider_options` setting is needed.
+
+```yaml
+mcp:
+  servers:
+    datadog:
+      type: http
+      url: https://mcp.datadoghq.com/api/unstable/mcp-server/mcp
+      headers:
+        Authorization: "Bearer ${env:DD_ACCESS_TOKEN}"
+        X-Tenant: "${TENANT}"
+  defaults:
+    servers: [datadog]
+```
+
+| Provider / execution path | Runtime header references |
+|---|---|
+| Codex, including MCP-only execution (CLI 0.162.1 verified) | Supported: `Authorization: "Bearer ${env:X}"` uses `bearer_token_env_var`; a complete `${env:X}` header value uses `env_http_headers` |
+| OpenCode v1 / v2 (CLIs 1.18.2 / 2.0.18 verified) | Supported: converted to `{env:X}` in `OPENCODE_CONFIG_CONTENT`; surrounding text is supported |
+| Claude SDK / Headless / Terminal | Unverified for TAKT's inline/file/terminal paths; affected servers are excluded |
+| Cursor / Copilot / other providers | Unverified; affected servers are excluded |
+
+Codex cannot represent other surrounding text such as `Token ${env:X}` or multiple references in one header. TAKT warns with the provider, server, and reason, and excludes that entire server for the current execution. The same rule applies to unverified providers. Other servers and subsequent workflow steps continue. TAKT never falls back to plaintext; use `${NAME}` explicitly if that behavior is wanted. Undefined variables fail before exclusion warnings or provider startup, including on unsupported providers. Empty but defined variables are accepted. `${env:NAME}` has no new meaning in URLs or stdio fields, and text produced by `${NAME}` interpolation is not reinterpreted as a provider reference.
+
+Codex automatically excludes referenced variables from its AI tool shell using `shell_environment_policy.filters`, while retaining the usual PATH setting. A referenced PATH is not copied back into the shell configuration. This applies to normal and MCP-only execution. Other providers have no equivalent shell exclusion provided by TAKT: OpenCode shell tools can still inherit these variables.
+
+With `${NAME}`, current startup exposure is argv for Codex and Claude SDK, temporary files for Claude Headless/Terminal, Cursor and Copilot, and the `OPENCODE_CONFIG_CONTENT` JSON for OpenCode. `${env:NAME}` avoids those copies on the supported paths above; it does not remove the value from the provider's own process environment.
+
 ### Provider transport compatibility
 
 Each provider declares the transports it supports. When a resolved server uses an unsupported transport, TAKT fails fast before agent startup and reports the provider, server, transport, supported transports, and the runtime.yaml source path.

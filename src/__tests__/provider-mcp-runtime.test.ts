@@ -1,11 +1,16 @@
-import { describe, expect, it } from 'vitest';
-import { statSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { statSync, readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 // New modules under test (implemented in the following `implement` step).
 import { createMcpAdapter, type ResolvedMcpServers, type ProviderMcpContext } from '../infra/providers/mcp/index.js';
 import { TAKT_MANAGER_MCP_SERVER_NAME } from '../features/manager/managerMcp.js';
 import { TAKT_MCP_MANAGER_TOOL_NAMES } from '../features/mcp/server.js';
 import { createTaskStateMcpServers } from '../features/interactive/taskStateMcp.js';
+import { McpSectionSchema } from '../infra/config/runtime-provider/mcp-schema.js';
+import { resolveMcpAssignment } from '../infra/config/runtime-provider/mcp-assignment.js';
+import { buildCodexSessionConfig } from '../infra/codex/session-config.js';
+import { CODEX_TOOL_PERMISSION_ENDPOINT_ENV, CODEX_TOOL_PERMISSION_TOKEN_ENV } from '../infra/codex/tool-permission-hook-protocol.js';
 import { markConversationMcpServers } from '../infra/providers/mcp/task-state.js';
 
 /**
@@ -145,6 +150,357 @@ describe('Codex adapter (MCP-CODEX)', () => {
     // No mcp_servers must be set when no servers are assigned — do not enable unassigned native servers.
     expect(config?.mcp_servers).toBeUndefined();
     await prepared.dispose();
+  });
+});
+
+describe('Codex runtime header environment references', () => {
+  beforeEach(() => {
+    vi.stubEnv('MCP_HEADER_ACCESS', 'synthetic-access-fragment.signature-fragment');
+    vi.stubEnv('MCP_HEADER_KEY', 'synthetic-key-fragment');
+    vi.stubEnv('MCP_HEADER_TENANT', 'tenant-a');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  function runtimeServers(
+    headers: Record<string, string>,
+    serverNames: string[] = ['datadog', 'github'],
+  ): ResolvedMcpServers {
+    const section = McpSectionSchema.parse({
+      servers: {
+        datadog: { type: 'http', url: 'https://example.com/mcp', headers },
+        github: { type: 'stdio', command: 'github-mcp' },
+      },
+      defaults: { servers: serverNames },
+    });
+    return resolveMcpAssignment(section, {
+      persona: 'coder', tags: [], stepQualifiedName: 'default/implement',
+      isWorkflowCallNode: false, isInternalAgent: false,
+    });
+  }
+
+  function expectNoSecretValues(value: unknown): void {
+    if (typeof value === 'string') {
+      for (const fragment of ['synthetic-access-fragment', 'signature-fragment', 'synthetic-key-fragment']) {
+        expect(value).not.toContain(fragment);
+      }
+    } else if (value !== null && typeof value === 'object') {
+      for (const child of Object.values(value)) expectNoSecretValues(child);
+    }
+  }
+
+  it('converts runtime bearer and arbitrary header references into native Codex environment names', async () => {
+    const servers = runtimeServers({
+      Authorization: 'Bearer ${env:MCP_HEADER_ACCESS}', 'X-Key': '${env:MCP_HEADER_KEY}',
+      'X-Tenant': '${MCP_HEADER_TENANT}', 'X-Static': 'fixed',
+    });
+    const adapter = createMcpAdapter('codex');
+    adapter.validate(servers);
+    const prepared = await adapter.prepare(servers, baseContext());
+    try {
+      expect(prepared.config?.mcp_servers?.datadog).toEqual({
+        url: 'https://example.com/mcp', bearer_token_env_var: 'MCP_HEADER_ACCESS',
+        env_http_headers: { 'X-Key': 'MCP_HEADER_KEY' },
+        http_headers: { 'X-Tenant': 'tenant-a', 'X-Static': 'fixed' },
+      });
+      expect(prepared.config?.mcp_servers?.github).toEqual({ command: 'github-mcp' });
+      expectNoSecretValues(prepared.config);
+    } finally {
+      await prepared.dispose();
+    }
+  });
+
+  it('does not reinterpret legacy interpolation output as a provider reference', async () => {
+    vi.stubEnv('MCP_HEADER_TEXT', '${env:MCP_HEADER_ACCESS}');
+    const adapter = createMcpAdapter('codex');
+    const prepared = await adapter.prepare(runtimeServers({ 'X-Text': '${MCP_HEADER_TEXT}' }), baseContext());
+    try {
+      expect(prepared.config?.mcp_servers?.datadog).toEqual({
+        url: 'https://example.com/mcp', http_headers: { 'X-Text': '${env:MCP_HEADER_ACCESS}' },
+      });
+    } finally {
+      await prepared.dispose();
+    }
+  });
+
+  it('warns and drops only the server whose header cannot be represented by Codex', async () => {
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const servers = runtimeServers({ Authorization: 'Token ${env:MCP_HEADER_ACCESS}' });
+    const adapter = createMcpAdapter('codex');
+    adapter.validate(servers);
+    const prepared = await adapter.prepare(servers, baseContext());
+    try {
+      expect(prepared.config?.mcp_servers?.datadog).toBeUndefined();
+      expect(prepared.config?.mcp_servers?.github).toEqual({ command: 'github-mcp' });
+      expect(prepared.excludedServerNames).toEqual(['datadog']);
+      expect(prepared.config?.shell_environment_policy?.filters).toEqual({ MCP_HEADER_ACCESS: 'exclude' });
+      const messages = [...output.mock.calls, ...warnings.mock.calls].map((args) => args.join(' '));
+      expect(messages.some((message) => /codex/i.test(message) && message.includes('datadog')
+        && /support|represent|対応|表現/i.test(message))).toBe(true);
+      expectNoSecretValues(messages);
+      expectNoSecretValues(prepared.config);
+      expect(servers).toMatchObject({
+        enabled: true, serverNames: ['datadog', 'github'],
+        servers: {
+          datadog: { type: 'http', headers: { Authorization: 'Token ${env:MCP_HEADER_ACCESS}' } },
+          github: { type: 'stdio', command: 'github-mcp' },
+        },
+      });
+    } finally {
+      await prepared.dispose();
+    }
+  });
+
+  it.each([
+    CODEX_TOOL_PERMISSION_ENDPOINT_ENV,
+    CODEX_TOOL_PERMISSION_TOKEN_ENV,
+  ])('warns and excludes a Codex server that references reserved hook credential %s', async (name) => {
+    vi.stubEnv(name, 'fixture-hook-credential');
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const servers = runtimeServers({ Authorization: `Bearer \${env:${name}}` });
+    const prepared = await createMcpAdapter('codex').prepare(servers, baseContext());
+    try {
+      expect(prepared.config?.mcp_servers?.datadog).toBeUndefined();
+      expect(prepared.config?.mcp_servers?.github).toEqual({ command: 'github-mcp' });
+      expect(prepared.excludedServerNames).toEqual(['datadog']);
+      expect(prepared.config?.shell_environment_policy?.filters).toEqual({ [name]: 'exclude' });
+      const session = buildCodexSessionConfig({
+        cwd: '/tmp/test', preparedMcp: prepared, childProcessEnv: { [name]: 'fixture-parent-credential' },
+      });
+      expect(session.env[name]).toBeUndefined();
+      const messages = [...output.mock.calls, ...warnings.mock.calls].map((args) => args.join(' '));
+      expect(messages.some((message) => message.includes('datadog') && message.includes('reserved'))).toBe(true);
+      expectNoSecretValues([messages, prepared.config, session.config]);
+    } finally {
+      await prepared.dispose();
+    }
+  });
+
+  it('excludes Codex servers whose header names differ only by case', async () => {
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const servers = runtimeServers({ 'X-Key': '${env:MCP_HEADER_KEY}', 'x-key': 'literal' });
+    const prepared = await createMcpAdapter('codex').prepare(servers, baseContext());
+
+    try {
+      expect(prepared.config?.mcp_servers?.datadog).toBeUndefined();
+      expect(prepared.config?.mcp_servers?.github).toEqual({ command: 'github-mcp' });
+      expect(prepared.excludedServerNames).toEqual(['datadog']);
+      expect(prepared.config?.shell_environment_policy?.filters).toEqual({ MCP_HEADER_KEY: 'exclude' });
+      const messages = [...output.mock.calls, ...warnings.mock.calls].map((args) => args.join(' '));
+      expect(messages.some((message) => message.includes('header names that differ only by case'))).toBe(true);
+    } finally {
+      await prepared.dispose();
+    }
+  });
+
+  it('keeps literal and legacy headers unchanged when no provider reference is present', async () => {
+    const prepared = await createMcpAdapter('codex').prepare(runtimeServers({
+      'X-Tenant': '${MCP_HEADER_TENANT}', 'X-Static': 'fixed',
+    }), baseContext());
+    try {
+      expect(prepared.config?.mcp_servers?.datadog).toEqual({
+        url: 'https://example.com/mcp', http_headers: { 'X-Tenant': 'tenant-a', 'X-Static': 'fixed' },
+      });
+    } finally {
+      await prepared.dispose();
+    }
+  });
+
+  it('prepares an empty effective MCP set when every assigned server has an unrepresentable header', async () => {
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const servers = runtimeServers({ Authorization: 'Token ${env:MCP_HEADER_ACCESS}' }, ['datadog']);
+    const adapter = createMcpAdapter('codex');
+    adapter.validate(servers);
+    const prepared = await adapter.prepare(servers, baseContext());
+    try {
+      expect(prepared.config?.mcp_servers).toBeUndefined();
+      expect(prepared.excludedServerNames).toEqual(['datadog']);
+      expect(prepared.config?.shell_environment_policy?.filters).toEqual({ MCP_HEADER_ACCESS: 'exclude' });
+      const messages = [...output.mock.calls, ...warnings.mock.calls].map((args) => args.join(' '));
+      expect(messages.some((message) => /codex/i.test(message) && message.includes('datadog'))).toBe(true);
+      expectNoSecretValues(messages);
+      expectNoSecretValues(prepared.config);
+    } finally {
+      await prepared.dispose();
+    }
+  });
+
+  it('converts references for measured OpenCode runtimes without exposing values in config JSON', async () => {
+    const prepared = await createMcpAdapter('opencode').prepare(runtimeServers({
+      Authorization: 'Bearer ${env:MCP_HEADER_ACCESS}', 'X-Key': '${env:MCP_HEADER_KEY}', 'X-Tenant': '${MCP_HEADER_TENANT}',
+    }), baseContext());
+    try {
+      expect(prepared.serverConfig?.datadog).toEqual({ type: 'remote', url: 'https://example.com/mcp', headers: {
+        Authorization: 'Bearer {env:MCP_HEADER_ACCESS}', 'X-Key': '{env:MCP_HEADER_KEY}', 'X-Tenant': 'tenant-a',
+      } });
+      expectNoSecretValues([prepared.serverConfig, prepared.identity]);
+    } finally { await prepared.dispose(); }
+  });
+
+  it('keeps OpenCode identity independent of provider reference values', async () => {
+    const adapter = createMcpAdapter('opencode');
+    const headers = { Authorization: '${MCP_HEADER_TENANT} ${env:MCP_HEADER_ACCESS}' };
+    const a = await adapter.prepare(runtimeServers(headers), baseContext());
+    vi.stubEnv('MCP_HEADER_ACCESS', 'rotated-secret-fragment');
+    const b = await adapter.prepare(runtimeServers(headers), baseContext());
+    try {
+      expect(a.identity).toBe(b.identity);
+      expect(b.serverConfig?.datadog).toMatchObject({ headers: {
+        Authorization: 'tenant-a {env:MCP_HEADER_ACCESS}',
+      } });
+      expectNoSecretValues([a.identity, b.identity]);
+      for (const fragment of ['tenant-a', 'rotated-secret-fragment']) {
+        expect(a.identity).not.toContain(fragment);
+        expect(b.identity).not.toContain(fragment);
+      }
+    } finally { await a.dispose(); await b.dispose(); }
+  });
+
+  it('distinguishes legacy interpolation changes without exposing the expanded value', async () => {
+    const adapter = createMcpAdapter('opencode');
+    const headers = { Authorization: 'Bearer ${env:MCP_HEADER_ACCESS}', 'X-Tenant': '${MCP_HEADER_TENANT}' };
+    const a = await adapter.prepare(runtimeServers(headers), baseContext());
+    vi.stubEnv('MCP_HEADER_TENANT', 'tenant-b');
+    const b = await adapter.prepare(runtimeServers(headers), baseContext());
+    try {
+      expect(a.identity).not.toBe(b.identity);
+      expect(b.serverConfig?.datadog).toMatchObject({ headers: { 'X-Tenant': 'tenant-b' } });
+      expect(a.identity).not.toContain('tenant-a');
+      expect(b.identity).not.toContain('tenant-b');
+    } finally { await a.dispose(); await b.dispose(); }
+  });
+
+  it('preserves legacy interpolation output as literal header text', async () => {
+    const adapter = createMcpAdapter('opencode');
+    vi.stubEnv('MCP_HEADER_TEXT', '${env:MCP_HEADER_ACCESS}');
+    const a = await adapter.prepare(runtimeServers({ 'X-Text': '${MCP_HEADER_TEXT}' }), baseContext());
+    const b = await adapter.prepare(runtimeServers({ 'X-Text': 'fixed' }), baseContext());
+    try {
+      expect(a.serverConfig?.datadog).toMatchObject({ headers: { 'X-Text': '${env:MCP_HEADER_ACCESS}' } });
+      expect(a.identity).not.toBe(b.identity);
+      expect(a.identity).not.toContain('MCP_HEADER_ACCESS');
+    } finally { await a.dispose(); await b.dispose(); }
+  });
+
+  it('distinguishes fixed headers even without provider references', async () => {
+    const adapter = createMcpAdapter('opencode');
+    const a = await adapter.prepare(runtimeServers({ 'X-Tenant': 'tenant-a' }), baseContext());
+    const b = await adapter.prepare(runtimeServers({ 'X-Tenant': 'tenant-b' }), baseContext());
+    try {
+      expect(a.identity).not.toBe(b.identity);
+      expect(a.identity).not.toContain('tenant-a');
+      expect(b.identity).not.toContain('tenant-b');
+    } finally { await a.dispose(); await b.dispose(); }
+  });
+
+  it('canonicalizes OpenCode server and header order while preserving each reference position', async () => {
+    const adapter = createMcpAdapter('opencode');
+    const aServers = runtimeServers({
+      Authorization: '${env:MCP_HEADER_ACCESS}:${env:MCP_HEADER_KEY}', 'X-Key': '${env:MCP_HEADER_KEY}',
+    });
+    const reversedServers = runtimeServers({
+      'X-Key': '${env:MCP_HEADER_KEY}', Authorization: '${env:MCP_HEADER_ACCESS}:${env:MCP_HEADER_KEY}',
+    });
+    const a = await adapter.prepare(aServers, baseContext());
+    const b = await adapter.prepare({ ...reversedServers,
+      servers: Object.fromEntries(Object.entries(reversedServers.servers).reverse()),
+    }, baseContext());
+    const swapped = await adapter.prepare(runtimeServers({
+      Authorization: '${env:MCP_HEADER_KEY}:${env:MCP_HEADER_ACCESS}', 'X-Key': '${env:MCP_HEADER_KEY}',
+    }), baseContext());
+    const moved = await adapter.prepare(runtimeServers({
+      Authorization: '${env:MCP_HEADER_KEY}', 'X-Key': '${env:MCP_HEADER_ACCESS}:${env:MCP_HEADER_KEY}',
+    }), baseContext());
+    try {
+      expect(a.identity).toBe(b.identity);
+      expect(a.identity).not.toBe(swapped.identity);
+      expect(a.identity).not.toBe(moved.identity);
+    } finally { await a.dispose(); await b.dispose(); await swapped.dispose(); await moved.dispose(); }
+  });
+
+  it.each(['claude-sdk', 'claude-headless', 'claude-terminal', 'cursor', 'copilot', 'mock'] as const)(
+    'warns once and keeps unrelated servers when %s cannot resolve provider header references', async (provider) => {
+      const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const servers = runtimeServers({ Authorization: 'Bearer ${env:MCP_HEADER_ACCESS}' });
+      const adapter = createMcpAdapter(provider);
+      adapter.validate(servers);
+      const workspace = provider === 'cursor' ? mkdtempSync(join(tmpdir(), 'cursor-runtime-')) : undefined;
+      if (workspace !== undefined) {
+        vi.stubEnv('HOME', workspace);
+        vi.stubEnv('USERPROFILE', workspace);
+        vi.stubEnv('CURSOR_DATA_DIR', join(workspace, 'data'));
+      }
+      const prepared = await adapter.prepare(servers, baseContext(workspace === undefined ? {} : { cwd: workspace }));
+      try {
+        let material: unknown;
+        if (provider === 'claude-sdk') material = prepared.sdkOptions?.mcpServers;
+        else if (provider === 'mock') material = prepared.resolvedServers?.servers;
+        else material = JSON.parse(readFileSync(prepared.path ?? join(prepared.configRoot!, '.cursor/mcp.json'), 'utf8')).mcpServers;
+        expect(material).toHaveProperty('github');
+        expect(material).not.toHaveProperty('datadog');
+        const messages = [...output.mock.calls, ...warnings.mock.calls].map((args) => args.join(' '));
+        expect(messages.filter((message) => message.includes('datadog') && message.includes(provider))).toHaveLength(1);
+        expectNoSecretValues([material, messages]);
+        expect(servers.serverNames).toEqual(['datadog', 'github']);
+      } finally {
+        await prepared.dispose();
+        if (workspace !== undefined) rmSync(workspace, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it('passes an explicit empty Claude SDK server set after all runtime references are excluded', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const prepared = await createMcpAdapter('claude-sdk').prepare(runtimeServers({
+      Authorization: 'Bearer ${env:MCP_HEADER_ACCESS}',
+    }, ['datadog']), baseContext());
+    try { expect(prepared.sdkOptions).toEqual({ strictMcpConfig: true, mcpServers: {} }); }
+    finally { await prepared.dispose(); }
+  });
+
+  it.each([true, false])('keeps Copilot disable arguments when all servers are excluded=%s', async (allExcluded) => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const prepared = await createMcpAdapter('copilot').prepare(runtimeServers({
+      Authorization: 'Bearer ${env:MCP_HEADER_ACCESS}',
+    }, allExcluded ? ['datadog'] : ['datadog', 'github']), baseContext());
+    try {
+      expect(prepared.args?.slice(0, 2)).toEqual(['--disable-mcp-server', 'datadog']);
+      if (allExcluded) expect(prepared.args).toHaveLength(2);
+      else expect(JSON.parse(readFileSync(prepared.path!, 'utf8')).mcpServers).toEqual({ github: { command: 'github-mcp' } });
+    } finally { await prepared.dispose(); }
+  });
+
+  it.each([true, false])('consumes runtime SSE headers in Claude SDK selection (reference=%s)', async (reference) => {
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const section = McpSectionSchema.parse({ servers: {
+      datadog: { type: 'sse', url: 'https://example.com/sse', headers: {
+        Authorization: reference ? 'Bearer ${env:MCP_HEADER_ACCESS}' : 'fixed',
+      } }, github: { command: 'github-mcp' },
+    }, defaults: { servers: ['datadog', 'github'] } });
+    const servers = resolveMcpAssignment(section, {
+      persona: 'coder', tags: [], stepQualifiedName: 'default/implement',
+      isWorkflowCallNode: false, isInternalAgent: false,
+    });
+    const adapter = createMcpAdapter('claude-sdk');
+    adapter.validate(servers);
+    const prepared = await adapter.prepare(servers, baseContext());
+    try {
+      expect(prepared.sdkOptions?.mcpServers).toHaveProperty('github');
+      if (reference) expect(prepared.sdkOptions?.mcpServers).not.toHaveProperty('datadog');
+      else expect(prepared.sdkOptions?.mcpServers?.datadog).toMatchObject({ type: 'sse', headers: { Authorization: 'fixed' } });
+      const messages = [...output.mock.calls, ...warnings.mock.calls].map((args) => args.join(' '));
+      expect(messages.filter((message) => message.includes('datadog') && message.includes('claude-sdk') && message.includes('not been verified'))).toHaveLength(reference ? 1 : 0);
+    } finally { await prepared.dispose(); }
   });
 });
 
