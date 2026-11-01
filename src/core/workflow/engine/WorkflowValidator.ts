@@ -264,6 +264,27 @@ function findWorkflowCallStep(
   return undefined;
 }
 
+export function validateWorkflowReportInputContracts(config: WorkflowConfig, options: WorkflowEngineOptions): void {
+  const context = {
+    workflowCallResolver: options.workflowCallResolver,
+    projectCwd: options.projectCwd,
+    lookupCwd: options.projectCwd,
+  };
+  for (const [stepIndex, step] of config.steps.entries()) {
+    try {
+      reportInputNames(config, step, context);
+      for (const subStep of step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel)) {
+        reportInputNames(config, subStep, context);
+      }
+    } catch (error) {
+      throw withWorkflowStepErrorPath(error, ['steps', stepIndex]);
+    }
+  }
+  for (const monitor of config.loopMonitors ?? []) {
+    reportInputNames(config, { name: loopJudgeStepName(monitor.cycle), inputReports: monitor.judge.inputReports }, context);
+  }
+}
+
 export function validateWorkflowConfig(config: WorkflowConfig, options: WorkflowEngineOptions): void {
   const initialStep = config.steps.find((step) => step.name === config.initialStep);
   if (!initialStep) {
@@ -327,11 +348,6 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
             }
           }
         }
-        reportInputNames(config, consumer, {
-          workflowCallResolver: options.workflowCallResolver,
-          projectCwd: options.projectCwd,
-          lookupCwd: options.projectCwd,
-        });
       };
       if (step.kind === 'system' && step.inputReports !== undefined) {
         throw withWorkflowStepErrorPath(
@@ -438,9 +454,6 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       'Invalid loop_monitor judge rule',
       ['loop_monitors', monitorIndex, 'judge', 'rules'],
     );
-    reportInputNames(config, { name: loopJudgeStepName(monitor.cycle), inputReports: monitor.judge.inputReports }, {
-      workflowCallResolver: options.workflowCallResolver, projectCwd: options.projectCwd, lookupCwd: options.projectCwd,
-    });
     for (const input of reportInputEntries(monitor.judge.inputReports)) {
       if (!monitor.cycle.includes(input.fromStep)) throw new Error(`Invalid loop_monitor: report input source "${input.fromStep}" is outside cycle`);
     }

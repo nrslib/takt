@@ -1,6 +1,7 @@
 import { basename } from 'node:path';
 import { getAllParallelSubSteps, type WorkflowConfig, type WorkflowStep } from '../models/types.js';
 import { reportInputEntries } from '../models/workflow-report-input.js';
+import type { WorkflowReportInput } from '../models/workflow-types.js';
 import type { WorkflowCallResolver } from './types.js';
 import { getReportFiles } from './output-contract-files.js';
 import { getWorkflowReference } from './workflow-reference.js';
@@ -34,6 +35,7 @@ export function reportInputNames(
   workflow: WorkflowConfig,
   consumer: Pick<WorkflowStep, 'name' | 'inputReports'>,
   context: ReportInputContractContext,
+  skipNestedContractResolution?: (input: WorkflowReportInput) => boolean,
 ): readonly (readonly string[])[] {
   const collect = (
     step: WorkflowStep,
@@ -68,7 +70,9 @@ export function reportInputNames(
       throw new Error(`Report input source "${input.fromStep}" has no report output contract`);
     }
     const selected = input.reports === 'all' ? undefined : new Set(input.reports);
-    const paths = [...new Set(collect(source, workflow, [getWorkflowReference(workflow)], selected))];
+    const paths = input.reports !== 'all' && skipNestedContractResolution?.(input) === true
+      ? input.reports
+      : [...new Set(collect(source, workflow, [getWorkflowReference(workflow)], selected))];
     if (selected !== undefined) {
       for (const name of selected) {
         const matches = paths.filter((path) => basename(path) === name);

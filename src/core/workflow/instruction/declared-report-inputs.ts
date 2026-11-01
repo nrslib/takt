@@ -49,6 +49,29 @@ function logicalProducer(sourceName: string, reportPath: string): string {
   return steps.join(' / ');
 }
 
+function hasSourceExecutionEvidence(source: WorkflowStep, context: DeclaredReportInputContext): boolean {
+  const invocationEvidence = context.sharedRuntime.workflowCallInvocationEvidence;
+  const participationIndex = context.sharedRuntime.workflowStepParticipationIndex;
+  if (invocationEvidence === undefined || participationIndex === undefined) {
+    throw new Error(`Report input evidence is unavailable for "${source.name}"`);
+  }
+  const sourceOccurrence = context.state.stepIterations.get(
+    buildWorkflowStackStepIterationIdentity(
+      context.workflow,
+      source.name,
+      context.resumeStackPrefix,
+    ),
+  );
+  return sourceOccurrence !== undefined
+    || context.state.stepOutputs.has(source.name)
+    || context.state.restoredStepIterationNames.has(source.name)
+    || source.kind === 'workflow_call' && invocationEvidence.index.get(
+      context.workflow,
+      source.name,
+      context.resumeStackPrefix,
+    ) !== undefined;
+}
+
 /** Resolve only the declared producer's completed execution and contracted reports. */
 function resolveReportInputEntry(
   consumer: Pick<WorkflowStep, 'name' | 'inputReports'>,
@@ -65,28 +88,11 @@ function resolveReportInputEntry(
   if (invocationEvidence === undefined || participationIndex === undefined) {
     throw new Error(`Report input evidence is unavailable for "${declaration.fromStep}"`);
   }
-  if (declaration.optionalIfUnrun === true) {
-    const sourceOccurrence = context.state.stepIterations.get(
-      buildWorkflowStackStepIterationIdentity(
-        context.workflow,
-        source.name,
-        context.resumeStackPrefix,
-      ),
-    );
-    const hasSourceEvidence = sourceOccurrence !== undefined
-      || context.state.stepOutputs.has(source.name)
-      || context.state.restoredStepIterationNames.has(source.name)
-      || source.kind === 'workflow_call' && invocationEvidence.index.get(
-        context.workflow,
-        source.name,
-        context.resumeStackPrefix,
-      ) !== undefined;
-    if (!hasSourceEvidence) {
-      return {
-        declaredNames: names,
-        reports: [],
-      };
-    }
+  if (declaration.optionalIfUnrun === true && !hasSourceExecutionEvidence(source, context)) {
+    return {
+      declaredNames: names,
+      reports: [],
+    };
   }
   const result = resolveWorkflowStepReportNamesWithDiagnostics(source, createReviewReportDiscoveryContext({
     step: source,
@@ -149,7 +155,11 @@ export function resolveDeclaredReportInputs(
   context: DeclaredReportInputContext,
 ): DeclaredReportInputs | undefined {
   if (consumer.inputReports === undefined) return undefined;
-  const names = reportInputNames(context.workflow, consumer, context);
+  const names = reportInputNames(context.workflow, consumer, context, (declaration) => {
+    if (declaration.optionalIfUnrun !== true || declaration.reports === 'all') return false;
+    const source = context.workflow.steps.find((step) => step.name === declaration.fromStep);
+    return source?.kind === 'workflow_call' && !hasSourceExecutionEvidence(source, context);
+  });
   const inputs = reportInputEntries(consumer.inputReports).map((entry, index) =>
     resolveReportInputEntry(consumer, context, entry, names[index]!));
   return { declaredNames: inputs.flatMap((input) => input.declaredNames), reports: inputs.flatMap((input) => input.reports) };
