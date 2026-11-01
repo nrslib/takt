@@ -759,7 +759,44 @@ steps:
     expect(fixStart?.[6]).toBe(7);
   });
 
-  it('resume_point の深い child step が消えていたら直近の workflow_call から再開する', async () => {
+  it.each([
+    {
+      change: '削除',
+      savedStep: 'review',
+      initialStep: 'fix',
+      terminalStep: `  - name: fix
+    persona: fixer
+    instruction: "Fix child workflow"
+    rules:
+      - condition: done
+        next: COMPLETE`,
+    },
+    {
+      change: '改名',
+      savedStep: 'review',
+      initialStep: 'final',
+      terminalStep: `  - name: final
+    persona: fixer
+    instruction: "Fix child workflow"
+    rules:
+      - condition: done
+        next: COMPLETE`,
+    },
+    {
+      change: 'kind変更',
+      savedStep: 'review',
+      initialStep: 'review',
+      terminalStep: `  - name: review
+    kind: system
+    rules:
+      - condition: when(true)
+        next: COMPLETE`,
+    },
+  ])('resume_point の深い child step が$changeされていたら下位 workflow を開始せず再開を拒否する', async ({
+    savedStep,
+    initialStep,
+    terminalStep,
+  }) => {
     writeWorkflow(tmpDir, 'takt/coding.yaml', `name: takt/coding
 subworkflow:
   callable: true
@@ -776,15 +813,10 @@ steps:
     writeWorkflow(tmpDir, 'takt/review-loop.yaml', `name: takt/review-loop
 subworkflow:
   callable: true
-initial_step: fix
+initial_step: ${initialStep}
 max_steps: 5
 steps:
-  - name: fix
-    persona: fixer
-    instruction: "Fix child workflow"
-    rules:
-      - condition: done
-        next: COMPLETE
+${terminalStep}
 `);
 
     const config = createParentWorkflow(tmpDir, {
@@ -808,13 +840,7 @@ steps:
     const childConfig = loadWorkflowOrThrow('takt/coding', tmpDir);
     const nestedChildConfig = loadWorkflowOrThrow('takt/review-loop', tmpDir);
 
-    vi.mocked(runAgent).mockResolvedValueOnce(makeResponse({
-      persona: 'fixer',
-      content: 'done',
-    }));
-    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }]);
-
-    engine = new WorkflowEngine(config, tmpDir, 'Resume nested workflow_call from nearest valid parent', createWorkflowCallOptions(tmpDir, {
+    engine = new WorkflowEngine(config, tmpDir, 'Reject invalid nested workflow_call resume position', createWorkflowCallOptions(tmpDir, {
       initialIteration: 7,
       resumePoint: {
         version: 2,
@@ -838,7 +864,7 @@ steps:
           {
             workflow: 'takt/review-loop',
             workflow_ref: getWorkflowReference(nestedChildConfig),
-            step: 'review',
+            step: savedStep,
             kind: 'agent',
             occurrence: 1,
           },
@@ -894,12 +920,16 @@ steps:
         workflow_step_participations: {},
       },
     }));
+    let abortReason: string | undefined;
+    engine.on('workflow:abort', (_state, reason) => {
+      abortReason = reason;
+    });
 
     const state = await engine.run();
-    const calledPersona = vi.mocked(runAgent).mock.calls[0]?.[0];
 
-    expect(state.status).toBeDefined();
-    expect(calledPersona, state.lastOutput?.content).toContain('fixer');
+    expect(state.status).toBe('aborted');
+    expect(abortReason).toContain(`Saved resume position "takt/review-loop/${savedStep}"`);
+    expect(runAgent).not.toHaveBeenCalled();
   });
 
   it('WorkflowCallRunner は child engine に subworkflow report namespace を渡す', async () => {

@@ -296,9 +296,10 @@ export class WorkflowCallExecutor {
       return undefined;
     }
     const currentFrame = { ...frame, workflow_ref: getWorkflowReference(this.deps.getConfig()) };
+    const savedResumePoint = options.resumePoint;
     const resumePoint = trimResumePointStackForWorkflow({
       workflow: childWorkflow,
-      resumePoint: options.resumePoint,
+      resumePoint: savedResumePoint,
       resumeStackPrefix: [
         ...resumeStackPrefix,
         currentFrame,
@@ -310,9 +311,16 @@ export class WorkflowCallExecutor {
         lookupCwd: this.deps.getCwd(),
       }),
     });
-    const savedChildEntry = options.resumePoint?.stack[resumeStackPrefix.length + 1];
-    if (savedChildEntry !== undefined && resumePoint === undefined) {
-      const location = JSON.stringify(`${savedChildEntry.workflow}/${savedChildEntry.step}`);
+    const savedChildEntry = savedResumePoint?.stack[resumeStackPrefix.length + 1];
+    if (
+      savedResumePoint !== undefined
+      && savedChildEntry !== undefined
+      && resumePoint?.stack.length !== savedResumePoint.stack.length
+    ) {
+      const unresolvedEntry = resumePoint === undefined
+        ? savedChildEntry
+        : savedResumePoint.stack[resumePoint.stack.length]!;
+      const location = JSON.stringify(`${unresolvedEntry.workflow}/${unresolvedEntry.step}`);
       throw new Error(`Saved resume position ${location} cannot be resolved for workflow_call step "${step.name}"`);
     }
     return {

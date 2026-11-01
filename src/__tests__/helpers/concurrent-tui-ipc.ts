@@ -306,20 +306,30 @@ finally { process.disconnect(); }
     let pid: number | undefined;
     let state = 'release';
     try {
+      log('cleanup-release:before');
       release();
+      log('cleanup-release:after');
       for (const tracked of children) {
         const { child, owned } = tracked;
         pid = child.pid;
         state = tracked.state();
-        if (owned !== undefined) await terminateOwnedProcess(owned, () => child.exitCode !== null || child.signalCode !== null);
+        if (owned !== undefined) {
+          log('cleanup-child-terminate:before', child.pid);
+          await terminateOwnedProcess(owned, () => child.exitCode !== null || child.signalCode !== null);
+          log('cleanup-child-terminate:after', child.pid);
+        }
       }
       pid = undefined;
       state = 'read-daemon-owner';
+      log('cleanup-read-daemon-owner:before');
       const owner = readDaemonOwner(directory);
+      log('cleanup-read-daemon-owner:after', owner?.pid);
       if (owner !== undefined) {
         pid = owner.pid;
         state = 'terminate-daemon';
+        log('cleanup-daemon-terminate:before', owner.pid);
         await terminateOwnedProcess({ pid: owner.pid, identity: owner.identity }, () => false);
+        log('cleanup-daemon-terminate:after', owner.pid);
       }
     } catch (error) {
       throw contextError('cleanup', error, pid, state);

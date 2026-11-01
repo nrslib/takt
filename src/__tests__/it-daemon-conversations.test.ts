@@ -169,10 +169,25 @@ it.each(['manager', 'director'] as const)('keeps two %s screens connected to the
     }
   } finally {
     log('cleanup:before');
+    log('final-read-observations:before');
     const observations = fixture.readObservations();
-    console.info(JSON.stringify({ kind, ...ipcMeasurements(observations, clients.map((client) => client.child.pid!), concurrentAt),
-      timeline: observations.filter((row) => row.event !== 'refresh' && row.event !== 'event_loop'),
-      owner: readDaemonOwner(fixture.directory) }));
+    log('final-read-observations:after');
+    log('final-ipc-measurements:before');
+    const measurements = ipcMeasurements(observations, clients.map((client) => client.child.pid!), concurrentAt);
+    log('final-ipc-measurements:after');
+    log('final-read-daemon-owner:before');
+    const owner = readDaemonOwner(fixture.directory);
+    log('final-read-daemon-owner:after', owner?.pid);
+    log('final-diagnostics-json:before');
+    const diagnostics = JSON.stringify({ kind,
+      observationCount: observations.length,
+      requestCount: measurements.requests.reduce((total, request) => total + request.count, 0),
+      serviceCallCount: measurements.service.reduce((total, service) => total + service.calls, 0),
+      owner });
+    log('final-diagnostics-json:after');
+    log('final-console-info:before');
+    console.info(diagnostics);
+    log('final-console-info:after');
     await fixture.cleanup();
     log('cleanup:after');
   }
