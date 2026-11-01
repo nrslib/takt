@@ -308,7 +308,7 @@ export class WorkflowCallInvocationIndex {
       }
       const oldIdentity = this.records.has(savedIdentity) ? savedIdentity : migratedIdentity;
       const record = this.records.get(oldIdentity);
-      if (record === undefined) continue;
+      if (record === undefined || oldIdentity === newIdentity) continue;
       const childWorkflow = resolveWorkflowCall(step);
       if (
         childWorkflow !== null
@@ -320,7 +320,6 @@ export class WorkflowCallInvocationIndex {
       ) {
         continue;
       }
-      if (oldIdentity === newIdentity) continue;
       this.moveInvocationAndDescendants(oldIdentity, newIdentity, step.name, record, record.call_instance);
       rebinds.push({
         from: oldIdentity,
