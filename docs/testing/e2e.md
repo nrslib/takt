@@ -116,7 +116,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - Execute中は英語・日本語それぞれで末尾の省略記号を含む待機placeholder全文が現在画面の1行に表示され、入力が破棄されることを確認する。成功・失敗後は同じPTYで通常入力を送信し、既知のinteractive応答を受信できることを確認する。
     - Makerの承認操作から元projectのprovider、model、permission、provider optionsが実行へ伝播し、成果物の同名`edit` capabilityがMaker制御workflowへ混入しない一方、成果物側にはそのcapabilityが保持されることをsession recordとmock call logで確認する。
     - readableなPASS Doctor reportではreviewが`approved`を選択し、FAIL、欠落、読取不能では`needs_fix`を選択することを、実report内容とruntime遷移で確認する。
-    - 成功・失敗画面にはfilesystem上のregular fileかつ非symlinkである実Doctor report pathが表示され、失敗画面には具体的な`rule_no_match`理由も表示されることを確認する。Doctor report pathがdirectoryまたはsymlinkの場合はreportなし表示となることも確認する。materialization前に予定rootを占有した失敗では、artifact pathと`EEXIST`理由だけが表示され、Doctor report表記と推測した`.takt/runs` pathが表示されないことを確認する。
+    - 成功・失敗画面にはfilesystem上のregular fileかつ非symlinkである実Doctor report pathが表示され、失敗画面には具体的な`rule_no_match`理由も表示されることを確認する。Doctor report pathがdirectoryまたはsymlinkの場合はreportなし表示となることも確認する。materialization前に予定rootを占有した失敗では、artifact pathと`EEXIST`理由だけが表示され、Doctor report表記と推測した`.takt/runs` pathが表示されないことを確認する。画面と本文の対応は公開現在版で確認し、検索対象から`.takt-report-internal`の実行記録・固定版を除外する。
     - 専用fixtureで初回reviewの`needs_fix`からfixへ進み、更新Doctor report後の再reviewが`approved`となってCOMPLETEへ到達することを、step開始順、最終Doctor report、review report、完了画面で確認する。
     - 同じTUIから再実行したときに別timestampの成果物rootが作成され、1回目root配下の相対directory/file一覧と全file byte内容が完全に維持されることを確認する。
     - 実行後も `.takt/tasks.yaml` とworktreeが作成されず、Git branchとHEADが変化しないことを確認する。

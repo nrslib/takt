@@ -64,10 +64,17 @@ export interface PreparedProviderMcp {
   sdkOptions?: { mcpServers?: Record<string, unknown>; strictMcpConfig?: boolean };
   /** CLI args to append when launching a CLI provider. */
   args?: string[];
+  /** Adapter-owned environment overrides for the provider process. */
+  env?: Readonly<Record<string, string>>;
+  /** Runtime-excluded names, distinct from the servers prepared for connection. */
+  excludedServerNames?: readonly string[];
   /** Temp file path for cleanup verification. */
   path?: string;
   /** Codex `CodexOptions.config` to merge. */
-  config?: { mcp_servers?: Record<string, unknown> };
+  config?: {
+    mcp_servers?: Record<string, unknown>;
+    shell_environment_policy?: { filters: Record<string, 'exclude'> };
+  };
   /** OpenCode SDK server config to merge into `createOpencode`. */
   serverConfig?: Record<string, unknown>;
   /** Identity of the resolved set (for shared server pool isolation). */

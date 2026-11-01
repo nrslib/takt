@@ -209,6 +209,7 @@ steps:
 | `{user_inputs}` | workflow 中に追加で得たユーザー入力（テンプレートに無ければ自動注入） |
 | `{report_dir}` | レポートディレクトリのパス (例: `.takt/runs/20250126-143052-task-summary/reports`) |
 | `{report:filename}` | [レポート参照の探索](#レポート参照の探索)に従って本文を埋め込む |
+| `{report_history:filename}` | 宣言した `history: {previous: N}` の固定パスを古い順に示す一覧。過去本文は展開しない |
 | `{review_scope}` | TAKT が算出した、このタスクの変更ファイル一覧 |
 
 `{review_scope}` は実行の由来によって対象が変わります。
@@ -773,7 +774,7 @@ step が別の workflow を名前で呼び出します。子 workflow は同じ 
 
 system step は TAKT エンジン自身が実行する step で、agent は起動しません。`kind: system`（または短縮形の `mode: system`。両方の宣言は設定エラー）で宣言します。system step には `persona`、`instruction`、`provider`、`structured_output`、`output_contracts`、`quality_gates` などの agent 用フィールドを宣言できません。完全なスキーマは `src/core/models/workflow-system-schemas.ts` を参照してください。builtin の `auto-improvement-loop` workflow（`builtins/ja/workflows/auto-improvement-loop.yaml`）が参考実装で、system step と planner agent step だけで PR 対応・Issue 駆動計画・新規改善計画の間をルーティングします。
 
-`system_inputs` はエンジンが提供するコンテキストを読み取り、各エントリを `as` で名前に束縛します。利用できる type は `task_context`、`branch_context`、`pr_context`、`issue_context`、`task_queue_context`、`pr_list`、`pr_selection`、`issue_list`、`issue_selection` です（`pr_list` / `pr_selection` は `where` フィルタを受け取り、両者の `where` は一致している必要があります）。binding 名は step 内で一意でなければなりません。束縛した値は `context.<step>.<binding>...` として `when()` rule を駆動し、後続の agent instruction からは `{context:step.binding.field}` で参照できます。
+`system_inputs` はエンジンが提供するコンテキストの読み取りや固定コマンドの実行を行い、各エントリを `as` で名前に束縛します。利用できる type は `task_context`、`branch_context`、`pr_context`、`issue_context`、`task_queue_context`、`pr_list`、`pr_selection`、`issue_list`、`issue_selection`、`pr_status`、`pr_ci_failure`、`command` です（`pr_list` / `pr_selection` は `where` フィルタを受け取り、両者の `where` は一致している必要があります）。`command` の実行には許可設定が必要です。詳細は[固定コマンドの input](#固定コマンドの-input)を参照してください。binding 名は step 内で一意でなければなりません。束縛した値は `context.<step>.<binding>...` として `when()` rule を駆動し、後続の agent instruction からは `{context:step.binding.field}` で参照できます。
 
 ```yaml
   - name: route_context
@@ -792,6 +793,57 @@ system step は TAKT エンジン自身が実行する step で、agent は起�
       - condition: when(context.route_context.selected_pr.exists == true)
         next: plan_from_existing_pr
 ```
+
+#### 固定コマンドの input
+
+`type: command`はworkflowに固定した文字列をshellで実行します。以下の許可設定は既定で無効です。projectの明示値はglobalより優先され、projectで未指定の場合はglobalの値を使います。`workflow_command_gates.custom_scripts`とは独立し、無許可のworkflowは読み込み時に拒否されます。
+
+別cloneでも元のproject設定を使います。各実行で許可を解決し、rootと子workflowへ同じ値を渡します。`wait`では設定を読み直しません。詳細は[設定ガイド](configuration.ja.md)を参照してください。
+
+pipeline または対話モードが現在のディレクトリに PR をチェックアウトする場合は、切り替え前の設定から許可を決めます。対話セッションでは Issue に切り替えた後も同じディレクトリでこの許可を使います。PR が追加した project 設定だけでは許可されません。
+
+```yaml
+workflow_system_commands:
+  custom_scripts: true
+```
+
+```yaml
+name: approval-command
+steps:
+  - name: check
+    kind: system
+    system_inputs:
+      - type: command
+        as: approval
+        command: node scripts/check-approval.mjs
+        timeout_ms: 1000
+        output: json
+    wait:
+      until: when(context.check.approval.json.ready == true)
+      interval_ms: 1000
+      max_retries: 30
+      on_timeout: ABORT
+    rules:
+      - condition: when(context.approval.json.status == "approved")
+        next: consume
+      - condition: when(true)
+        next: ABORT
+  - name: consume
+    instruction: "承認結果: {context:check.approval.json.status}"
+    rules:
+      - condition: when(true)
+        next: COMPLETE
+```
+
+`timeout_ms` は必須で、1～2147483647 の整数です。既定値や無期限指定はありません。`output: json` は省略できます。`cwd` は指定できず、タスクの実行ディレクトリ（worktree ならクローン）で起動します。pipeline と対話モードで同じ動作をします。command は effects には指定できません。
+
+結果には `exit_code`（終了コードを取得できない場合は `null`）、`timed_out`、`stdout`、`stderr` が入ります。`json` は `output: json` を指定し、タイムアウトせず終了コード 0 で JSON を解析できた場合だけ入ります。非ゼロ終了とタイムアウトは rules へ渡す結果です。stdout と stderr の合計が 65536 バイトを超えた場合、起動できない場合、成功時の JSON が不正な場合はステップが失敗し、effects と rules は実行されません。
+
+現在の command binding は条件評価時に `context.approval...` とも書けます。既存のステップ名付き scope が同名ならそちらを優先します。保存する値と後続 instruction の参照は `context.check.approval...` の形式です。
+
+TAKT は command のテンプレート展開や引数の追加をしません。直前の応答本文は `TAKT_PREVIOUS_RESPONSE_FILE`、同じ応答に構造化出力があれば `TAKT_PREVIOUS_STRUCTURED_OUTPUT_FILE` で非公開ファイルのパスを渡します。本文がなければ空ファイルを渡し、構造化出力がなければその環境変数は設定しません。スクリプト側でファイルを読み、値を検証してください。ファイルは run の context 配下に保存し、run の成果物として保持します。環境変数はコマンドゲートと同じ基本許可リストと、この2つのファイルパスに限定します。
+
+無通信タイムアウトは適用しません。POSIX では実行期限または中断時にプロセスグループへ SIGTERM を送り、終了しなければ100ms後に SIGKILL を送ります。Windows では `taskkill /T /F` でプロセスツリーを強制終了し、taskkill の完了を待ちます。`wait` は確認ごとにコマンドを実行し直し、各実行に `timeout_ms` を適用します。各確認は同じ直前応答を参照し、次の system step は直前の system 応答を参照します。前回の JSON は引き継ぎません。`wait.max_retries`、`on_timeout`、ステップの計数、`loop_monitors`、元の agent に戻った際のセッション継続は既存の規則に従います。
 
 `effects` はエンジン側のアクションを実行します: `commit_and_push`、`caccia`、`enqueue_task`、`comment_pr`、`sync_with_root`、`resolve_conflicts_with_ai`、`merge_pr`、`close_pr`。各 effect type は 1 step につき最大 1 回しか書けず、結果は `when(effect.<step>.<type>.<field>)` でルーティングします。
 
@@ -868,7 +920,27 @@ agent step、`workflow_call`、parallel の親・子 step は同じ workflow 内
     結果: {report:fix-report.md}
 ```
 
-`reports: all` は指定した step の完了済み実行から全レポートを選びます。選択された並列レビュアーや入れ子の呼び出しで作成された報告も対象です。ファイル名を列挙した場合は一致する公開レポートだけを選び、欠落や重複があれば失敗します。`{report:filename}` は選択した本文をその位置に展開します。入力側や祖先に同名のレポートがあっても宣言した生成元の本文を使います。`reports: all` が同名の報告を複数選ぶ場合、その名前の `{report:filename}` は曖昧として失敗します。構文で参照しなかった選択済みの報告は agent の Phase 1 指示の末尾へ追加し、同名の報告にはそれぞれの論理的な生成元を示します。`workflow_call` は入れ子の呼び出し先まで同じ入力を渡します。parallel の親にある宣言は子にも適用されますが、子自身の宣言があればそちらを使います。報告がない場合や呼び出しが未完了の場合、近隣のディレクトリから探さずに失敗します。実行前の経路から入力側へ進む場合に限り `optional_if_unrun: true` を指定してください。入力元の実行前も出力契約にある報告名は予約され、同名の無関係なローカル・祖先の報告にはフォールバックしません。入力元が開始した後は報告が必須です。
+`reports: all` は指定した step の完了済み実行から全レポートを選びます。選択された並列レビュアーや入れ子の呼び出しで作成された報告も対象です。ファイル名を列挙した場合は一致する公開レポートだけを選び、欠落や重複があれば失敗します。`{report:filename}` は選択した本文をその位置に展開します。入力側や祖先に同名のレポートがあっても宣言した生成元の本文を使います。`reports: all` が同名の報告を複数選ぶ場合、その名前の `{report:filename}` は曖昧として失敗します。構文で参照しなかった選択済みの報告は agent の Phase 1 指示の末尾へ追加します。選択名は宣言した生成元をまたいで一意でなければなりません。`reports: all` と任意の未実行生成元も含め、placeholder がなくても doctor とランタイムは曖昧な宣言を拒否します。`workflow_call` は入れ子の呼び出し先まで同じ入力を渡します。parallel の親にある宣言は子にも適用されますが、子自身の宣言があればそちらを使います。報告がない場合や呼び出しが未完了の場合、近隣のディレクトリから探さずに失敗します。実行前の経路から入力側へ進む場合に限り `optional_if_unrun: true` を指定してください。入力元の実行前も出力契約にある報告名は予約され、同名の無関係なローカル・祖先の報告にはフォールバックしません。入力元が開始した後は報告が必須です。
+
+複数の生成元は空でない配列で宣言できます。既存の単一オブジェクト形も使用できます。`optional_if_unrun` と `history` は要素ごとに適用します。
+
+```yaml
+input_reports:
+  - from_step: remediation
+    reports: [fix-plan.md, fix-report.md]
+    history: {previous: 2}
+  - from_step: adjudicate
+    reports: [review-resolution.md]
+    optional_if_unrun: true
+```
+
+`{report:filename}` は現在版を UTF-16 のコード単位で8,000文字まで展開します。超過時は先頭に加え、省略表示と展開した版を固定した正確なパスを渡します。続きはそのパスから読んでください。自動追加する現在版にも同じコード定数を適用し、YAML では設定できません。
+
+`history: {previous: N}` は同じ生成元・実行系列の現在版を除く完了済み過去実行を最大 N 回選びます。N は非負の安全な整数で、0なら過去実行を選びません。`{report_history:filename}` は本文を含まない一覧を古い順に展開します。各行は実行識別、順序、完了状態、生成元、固定版パスを示します。同じ実行の計画と報告は共通の実行識別を持ちます。選択した全行を渡し、別の件数上限は設けません。履歴不足・未完了・報告欠落を明示し、別の実行や古い版で穴埋めしません。並列・入れ子・再開でも実行識別と版を保持します。実行記録のない旧 run の履歴は取得不能とし、日時から推定しません。参照されなかった宣言済み履歴も自動追加します。
+
+履歴を指定した入力には現在版の実行記録も付けます。開始・完了順序は同じ実行系列で共有する番号です。呼び出し単位の実行識別に加え、個々の報告を作った生成元の開始・完了順序を示すため、修正完了後に検証が始まったかを比較できます。取得できない順序は取得不能と表示します。
+
+`loop_monitors[].judge.input_reports` は同じ形と履歴指定を受け付けます。各 `from_step` は監視対象の `cycle` 内に限定し、範囲外なら doctor とランタイムが拒否します。宣言がある judge には `Report Directory`、現在版本文、履歴を同じ展開規則で渡します。宣言がない judge の入力は維持します。
 
 ## Step レベルのプロバイダープロモーション
 

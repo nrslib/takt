@@ -61,7 +61,11 @@ import {
   type WorkflowCallInvocationEvidence,
 } from '../workflow-call-invocation-index.js';
 import { SelectorInputReader } from '../dynamic-parallel/selector-input-reader.js';
-import { restoreWorkflowStepParticipationIndex } from '../workflow-step-participation-index.js';
+import {
+  buildWorkflowStepParticipationIdentity,
+  restoreWorkflowStepParticipationIndex,
+} from '../workflow-step-participation-index.js';
+import { getReportFiles } from '../output-contract-files.js';
 import { resolveDeclaredReportInputs } from '../instruction/declared-report-inputs.js';
 import {
   createWorkflowStepAbortSignalContext,
@@ -494,6 +498,22 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     getCurrentWorkflowStack: params.getCurrentWorkflowStack,
     emitEvent: params.emitEvent,
     getWorkflowCallRunner: () => workflowCallRunner,
+    beginReportExecution: (subStep, parallelParentStepName) => {
+      const reportNames = getReportFiles(subStep.outputContracts);
+      if (reportNames.length === 0) return undefined;
+      return params.sharedRuntime.reportExecutions!.begin(
+        buildWorkflowStepParticipationIdentity(
+          getWorkflowReference(params.config),
+          subStep.name,
+          params.resumeStackPrefix,
+          parallelParentStepName,
+        ),
+        subStep.name,
+        params.runPaths.reportsAbs,
+        reportNames,
+      );
+    },
+    finishReportExecution: (id, completed) => params.sharedRuntime.reportExecutions!.finish(id, completed),
     claimStepOccurrence: params.claimStepOccurrence,
     updateMaxSteps: params.updateMaxSteps,
     setActiveResumePoint: (step, iteration, occurrence) => params.setActiveResumePoint(
@@ -559,6 +579,7 @@ export function createWorkflowEngineServices(params: WorkflowEngineSetupParams):
     task: params.task,
     projectCwd: params.projectCwd,
     getCwd: params.getCwd,
+    getContextDirectory: () => params.getRunPaths().contextAbs,
     createProviderStream: (step, provider, model) => optionsBuilder.buildProviderStream(
       step, provider, model, params.options.onStream,
     ),

@@ -31,6 +31,7 @@ function fakePreparedMcp(): PreparedProviderMcp {
     serverConfig: { 'test-server': { type: 'stdio' } },
     identity: 'test-server:stdio',
     configRoot: '/tmp/fake-configroot',
+    env: { CURSOR_DATA_DIR: '/tmp/fake-cursor-data' },
     resolvedServers: {
       enabled: true,
       servers: { 'test-server': { type: 'stdio', command: 'srv' } },

@@ -1,3 +1,4 @@
+import { normalizeReportInputs } from './workflowReportInputNormalizer.js';
 import type { z } from 'zod';
 import type {
   AgentWorkflowStep,
@@ -400,11 +401,7 @@ export function normalizeStepFromRaw(
     }
     const normalizedStep: WorkflowCallStep = {
       name: step.name,
-      inputReports: step.input_reports === undefined ? undefined : {
-        fromStep: step.input_reports.from_step,
-        reports: step.input_reports.reports,
-        optionalIfUnrun: step.input_reports.optional_if_unrun,
-      },
+      inputReports: normalizeReportInputs(step.input_reports),
       description: step.description,
       kind: 'workflow_call',
       call: step.call!,
@@ -467,11 +464,7 @@ export function normalizeStepFromRaw(
     'session' | 'parallel' | 'concurrency' | 'arpeggio' | 'teamLeader' | 'dynamicFacets'
   > = {
     name: step.name,
-    inputReports: step.input_reports === undefined ? undefined : {
-      fromStep: step.input_reports.from_step,
-      reports: step.input_reports.reports,
-      optionalIfUnrun: step.input_reports.optional_if_unrun,
-    },
+    inputReports: normalizeReportInputs(step.input_reports),
     description: step.description,
     sessionKey: step.session_key,
     requiresUserInput: step.requires_user_input,

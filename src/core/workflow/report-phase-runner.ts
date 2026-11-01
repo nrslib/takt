@@ -104,6 +104,7 @@ export async function runReportPhase(
       report.reportName,
       report.reportContent,
       ctx.reportContentSanitizer,
+      (content) => ctx.onReportPersisted?.(report.reportName, content),
     );
     onReportWritten?.(report.reportName);
   });

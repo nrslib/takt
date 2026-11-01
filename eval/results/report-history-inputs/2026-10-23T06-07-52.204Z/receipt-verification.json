@@ -1,0 +1,92 @@
+[
+  {
+    "role": "fix-plan",
+    "pass": true,
+    "receipts": [
+      {
+        "version": "prior",
+        "path": "fix-plan/project/reports/.takt-report-internal/executions/versions/722f2f10-8f6f-4bc2-94bf-f2ce424a39df/review-resolution.md",
+        "marker": "PRIOR_4e06ff02-b9cc-4204-839a-c61e9963b334",
+        "cwd": "fix-plan/project",
+        "command": "/bin/zsh -lc 'wc -l reports/.takt-report-internal/executions/versions/7f302c05-2181-4458-9946-df3fa6827149/review-resolution.md reports/.takt-report-internal/executions/versions/722f2f10-8f6f-4bc2-94bf-f2ce424a39df/review-resolution.md; cat reports/.takt-report-internal/executions/versions/722f2f10-8f6f-4bc2-94bf-f2ce424a39df/review-resolution.md'",
+        "exitCode": 0,
+        "status": "completed",
+        "commandExcerpt": false,
+        "recordedCommandHash": "28e64a69418a3abb58b7bd6603652fe8cfaea74785d5812f5c4c38006b5f7079",
+        "exitCodeScope": "recorded command",
+        "output": "前回の裁定。照合証拠: PRIOR_4e06ff02-b9cc-4204-839a-c61e9963b334",
+        "artifactHash": "ea7bf8074c17621de5d1461082215dac2ee7e04655c5491f0914749e51721170"
+      },
+      {
+        "version": "current",
+        "path": "fix-plan/project/reports/.takt-report-internal/executions/versions/7f302c05-2181-4458-9946-df3fa6827149/review-resolution.md",
+        "marker": "CURRENT_c8577413-7c6c-4874-aa0f-8725353614e9",
+        "cwd": "fix-plan/project",
+        "command": "/bin/zsh -lc \"sed -n '821,1103p' reports/.takt-report-internal/executions/versions/7f302c05-2181-4458-9946-df3fa6827149/review-resolution.md; cat reports/.takt-report-internal/executions/index.json\"",
+        "exitCode": 0,
+        "status": "completed",
+        "commandExcerpt": false,
+        "recordedCommandHash": "1a19a28d6aa4adae3624e1d41c292ff36d2d1e18872359e18a1005f0b59a7495",
+        "exitCodeScope": "recorded command",
+        "output": "照合証拠: CURRENT_c8577413-7c6c-4874-aa0f-8725353614e9",
+        "artifactHash": "bb1bb5f6db9581537e05ef7788322622544c8b3148418f9226d7edc06cb01176"
+      },
+      {
+        "version": "current",
+        "path": "fix-plan/project/reports/.takt-report-internal/executions/versions/7f302c05-2181-4458-9946-df3fa6827149/review-resolution.md",
+        "marker": "CURRENT_c8577413-7c6c-4874-aa0f-8725353614e9",
+        "cwd": "fix-plan/project",
+        "command": "tail -n 8 reports/.takt-report-internal/executions/versions/7f302c05-2181-4458-9946-df3fa6827149/review-resolution.md",
+        "exitCode": 0,
+        "status": "completed",
+        "commandExcerpt": true,
+        "recordedCommandHash": "d746dc59203a5cc9679f5a65dd49f2cceb7a896436b7563f1725124601bc0b34",
+        "exitCodeScope": "recorded command",
+        "output": "照合証拠: CURRENT_c8577413-7c6c-4874-aa0f-8725353614e9",
+        "artifactHash": "bb1bb5f6db9581537e05ef7788322622544c8b3148418f9226d7edc06cb01176"
+      }
+    ],
+    "currentProof": "CURRENT_c8577413-7c6c-4874-aa0f-8725353614e9",
+    "priorProof": "PRIOR_4e06ff02-b9cc-4204-839a-c61e9963b334",
+    "currentTargets": "B",
+    "progress": "改善"
+  },
+  {
+    "role": "loop-monitor",
+    "pass": true,
+    "receipts": [
+      {
+        "version": "prior",
+        "path": "loop-monitor/project/reports/.takt-report-internal/executions/versions/61bd966a-0738-4fe2-bd62-51c465a64d48/fix-report.md",
+        "marker": "PRIOR_de5dc563-7a1d-4662-b8c8-7c05612e6ff1",
+        "cwd": "loop-monitor/project",
+        "command": "/bin/zsh -lc 'cat reports/.takt-report-internal/executions/versions/61bd966a-0738-4fe2-bd62-51c465a64d48/fix-report.md'",
+        "exitCode": 0,
+        "status": "completed",
+        "commandExcerpt": false,
+        "recordedCommandHash": "f621f87425f60a21941e01ce2ce42ce3ebeda62132a658632e59e4e608e39984",
+        "exitCodeScope": "recorded command",
+        "output": "前回の修正報告。照合証拠: PRIOR_de5dc563-7a1d-4662-b8c8-7c05612e6ff1",
+        "artifactHash": "b8280524e8cdf162f8fde8945ddce6a811f56310de56882ff13ac54a071bf06d"
+      },
+      {
+        "version": "current",
+        "path": "loop-monitor/project/reports/.takt-report-internal/executions/versions/57175643-365b-4676-a8aa-5404094ebcc5/fix-report.md",
+        "marker": "CURRENT_edcc0761-a5c3-45e7-bb68-7e5e9d94c07c",
+        "cwd": "loop-monitor/project",
+        "command": "/bin/zsh -lc \"sed -n '801,1200p' reports/.takt-report-internal/executions/versions/57175643-365b-4676-a8aa-5404094ebcc5/fix-report.md\"",
+        "exitCode": 0,
+        "status": "completed",
+        "commandExcerpt": false,
+        "recordedCommandHash": "85557b63a43355ac7495fb19b100155a35ffebb3ee5a9f3769a87200488de48b",
+        "exitCodeScope": "recorded command",
+        "output": "照合証拠: CURRENT_edcc0761-a5c3-45e7-bb68-7e5e9d94c07c",
+        "artifactHash": "758734e6b97f510be7536473b71add44a805cf4a8a3d59b84a92b352a4711244"
+      }
+    ],
+    "currentProof": "CURRENT_edcc0761-a5c3-45e7-bb68-7e5e9d94c07c",
+    "priorProof": "PRIOR_de5dc563-7a1d-4662-b8c8-7c05612e6ff1",
+    "currentTargets": "B",
+    "progress": "改善"
+  }
+]

@@ -14,7 +14,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CodexOptions, ThreadOptions, TurnOptions } from '@openai/codex-sdk';
 import type { CodexCallOptions } from '../infra/codex/types.js';
 import { CodexProvider } from '../infra/providers/codex.js';
-import { runCodexMcpList } from '../infra/codex/mcp-list.js';
+import { hasCodexMcpServer, runCodexMcpList } from '../infra/codex/mcp-list.js';
 
 const {
   mockBuildCodexSkillConfig,
@@ -77,7 +77,7 @@ vi.mock('@openai/codex-sdk', () => {
 vi.mock('../infra/codex/skill-config.js', () => ({
   buildCodexSkillConfig: mockBuildCodexSkillConfig,
 }));
-vi.mock('../infra/codex/mcp-list.js', () => ({ runCodexMcpList: vi.fn() }));
+vi.mock('../infra/codex/mcp-list.js', () => ({ runCodexMcpList: vi.fn(), hasCodexMcpServer: vi.fn() }));
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../shared/utils/index.js')>()),
@@ -170,6 +170,61 @@ describe('CodexClient — structuredOutput 抽出', () => {
     delete process.env.TAKT_OBSERVABILITY;
     delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
     vi.mocked(runCodexMcpList).mockReset();
+    vi.mocked(hasCodexMcpServer).mockReset();
+  });
+
+  it.each([[true, undefined], [false, undefined], [true, 'review']] as const)('applies exclusions only to existing native servers in the normal SDK route (ambient=%s, profile=%s)', async (ambient, configProfile) => {
+    vi.mocked(hasCodexMcpServer).mockResolvedValue(ambient);
+    mockEvents = [{ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } }];
+    const preparedMcp = { dispose: async () => {}, excludedServerNames: ['datadog'], config: {
+      shell_environment_policy: { filters: { MCP_HEADER_ACCESS: 'exclude' as const } },
+    } };
+    const result = await new CodexClient().call('coder', 'prompt', { cwd: '/repo', preparedMcp, configProfile });
+    expect(result.status).toBe('done');
+    expect(vi.mocked(hasCodexMcpServer).mock.calls[0]?.[0]).toMatchObject({ serverName: 'datadog', configProfile });
+    expect(lastCodexConstructorOptions?.configOverrides).toEqual(ambient ? ['mcp_servers.datadog.enabled=false'] : undefined);
+    expect(lastCodexConstructorOptions?.config).toMatchObject({ shell_environment_policy: { filters: { MCP_HEADER_ACCESS: 'exclude' } } });
+  });
+
+  it('returns MCP exclusion preparation failures as provider errors', async () => {
+    vi.mocked(hasCodexMcpServer).mockRejectedValue(new Error('Codex MCP configuration is invalid'));
+    const onStream = vi.fn();
+
+    const result = await new CodexClient().call('coder', 'prompt', {
+      cwd: '/repo', onStream,
+      preparedMcp: { dispose: async () => {}, excludedServerNames: ['datadog'] },
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.failureCategory).toBe('provider_error');
+    expect(result.error).toContain('Codex MCP configuration is invalid');
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'result',
+      data: expect.objectContaining({ success: false, failureCategory: 'provider_error' }),
+    });
+    expect(mockStartThread).not.toHaveBeenCalled();
+  });
+
+  it('keeps configured MCP transports in the table override used for dotted exclusions', async () => {
+    vi.mocked(hasCodexMcpServer).mockResolvedValue(true);
+    mockEvents = [{ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } }];
+
+    const result = await new CodexClient().call('coder', 'prompt', {
+      cwd: '/repo',
+      preparedMcp: {
+        dispose: async () => {},
+        excludedServerNames: ['name.with.dots'],
+        config: { mcp_servers: {
+          retained: { command: 'node', args: ['retained.js'] },
+          'name.with.dots': { url: 'https://example.com/mcp', http_headers: { 'X-Key': 'value' } },
+        } },
+      },
+    });
+
+    expect(result.status).toBe('done');
+    expect(lastCodexConstructorOptions?.configOverrides).toEqual([
+      'mcp_servers={"retained" = {"command" = "node", "args" = ["retained.js"]}, "name.with.dots" = {"url" = "https://example.com/mcp", "http_headers" = {"X-Key" = "value"}, "enabled" = false}}',
+    ]);
   });
 
   it('MCP-only の一覧取得とセッションに同じ CLI・環境・設定を渡し、既存 MCP をすべて無効にする', async () => {
@@ -214,10 +269,13 @@ describe('CodexClient — structuredOutput 抽出', () => {
 
   it.each([true, false])('MCP-only の同名サーバーが enabled=%s の場合、SDK セッション開始前に失敗する', async (enabled) => {
     vi.mocked(runCodexMcpList).mockResolvedValue(JSON.stringify([{ name: 'unique_manager', enabled }]));
-    await expect(new CodexClient().call('manager', 'prompt', {
+    const result = await new CodexClient().call('manager', 'prompt', {
       cwd: '/tmp', codexPathOverride: '/opt/codex', mcpOnlySideEffects: true,
       preparedMcp: { dispose: async () => {}, config: { mcp_servers: { unique_manager: { command: 'node' } } } },
-    })).rejects.toThrow();
+    });
+    expect(result.status).toBe('error');
+    expect(result.failureCategory).toBe('provider_error');
+    expect(result.error).toContain('TAKT MCP server name conflicts');
     expect(lastCodexConstructorOptions).toBeUndefined();
     expect(mockStartThread).not.toHaveBeenCalled();
   });
@@ -225,18 +283,30 @@ describe('CodexClient — structuredOutput 抽出', () => {
   it.each(['not-json', '{}', '[{"name":"extra"}]', '[{"enabled":true}]', '[{"name":"extra","enabled":"true"}]', '[null]'])
   ('MCP-only の一覧が不正な場合、SDK セッション開始前に失敗する: %s', async (json) => {
     vi.mocked(runCodexMcpList).mockResolvedValue(json);
-    await expect(new CodexClient().call('manager', 'prompt', {
+    const result = await new CodexClient().call('manager', 'prompt', {
       cwd: '/tmp', codexPathOverride: '/opt/codex', mcpOnlySideEffects: true,
-    })).rejects.toThrow();
+    });
+    expect(result.status).toBe('error');
+    expect(result.failureCategory).toBe('provider_error');
     expect(lastCodexConstructorOptions).toBeUndefined();
     expect(mockStartThread).not.toHaveBeenCalled();
   });
 
-  it('MCP-only の一覧取得が失敗した場合、SDK セッション開始前に失敗する', async () => {
+  it('MCP-only の一覧取得が失敗した場合、provider error を返して SDK セッションを開始しない', async () => {
     vi.mocked(runCodexMcpList).mockRejectedValue(new Error('list failed'));
-    await expect(new CodexClient().call('manager', 'prompt', {
-      cwd: '/tmp', codexPathOverride: '/opt/codex', mcpOnlySideEffects: true,
-    })).rejects.toThrow();
+    const onStream = vi.fn();
+
+    const result = await new CodexClient().call('manager', 'prompt', {
+      cwd: '/tmp', codexPathOverride: '/opt/codex', mcpOnlySideEffects: true, onStream,
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.failureCategory).toBe('provider_error');
+    expect(result.error).toContain('list failed');
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'result',
+      data: expect.objectContaining({ success: false, failureCategory: 'provider_error' }),
+    });
     expect(lastCodexConstructorOptions).toBeUndefined();
     expect(mockStartThread).not.toHaveBeenCalled();
   });

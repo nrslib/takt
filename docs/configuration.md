@@ -164,6 +164,8 @@ Dynamic parallel and `dynamic_facets` selectors use read-only mode with only `Re
 #   custom_scripts: false                # Allow custom scripts (default: false; builtin presets always allowed)
 # workflow_command_gates:                # Workflow YAML command quality gate policy
 #   custom_scripts: false                # Allow command gates from workflow YAML (default: false)
+# workflow_system_commands:             # Workflow system command input policy
+#   custom_scripts: false
 # sync_conflict_resolver:                # Sync conflict resolver policy
 #   auto_approve_tools: false            # Allow auto-approval of tools (default: false)
 
@@ -257,6 +259,7 @@ Dynamic parallel and `dynamic_facets` selectors use read-only mode with only `Re
 | `workflow_arpeggio` | object | all `false` | Arpeggio custom code policy (`custom_data_source_modules`, `custom_merge_inline_js`, `custom_merge_files`) |
 | `workflow_runtime_prepare` | object | `{ custom_scripts: false }` | Runtime prepare policy (builtin presets always allowed) |
 | `workflow_command_gates` | object | `{ custom_scripts: false }` | Workflow YAML command quality gate policy |
+| `workflow_system_commands` | object | `{ custom_scripts: false }` | Workflow system command input policy |
 | `workflow_overrides` | object | - | Workflow-level overrides: top-level / per-step / per-persona `quality_gates` (AI directives or `type: command` gates) and `quality_gates_edit_only` |
 | `sync_conflict_resolver` | object | `{ auto_approve_tools: false }` | Sync conflict resolver policy |
 | `observability` | object | disabled | Opt-in OpenTelemetry foundation. `enabled` initializes the SDK, `monitor` writes workflow metrics to `.takt/runs/<run>/monitor.json`, `session_log_exporter` writes a shadow session log from spans, and `usage_events_phase` writes phase-level usage events to `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl`. With `enabled: true` and `OTEL_EXPORTER_OTLP_ENDPOINT`, TAKT also sends spans and metrics through OTLP using standard `OTEL_EXPORTER_OTLP_*` environment variables; TAKT does not add an OTLP config key. |
@@ -427,6 +430,7 @@ The project's `.takt/config.yaml` can override many global settings, including `
 | `workflow_arpeggio` | object | - | Arpeggio custom code policy (overrides global) |
 | `workflow_runtime_prepare` | object | - | Runtime prepare policy (overrides global) |
 | `workflow_command_gates` | object | - | Workflow YAML command quality gate policy (overrides global) |
+| `workflow_system_commands` | object | - | Workflow system command input policy |
 | `sync_conflict_resolver` | object | - | Sync conflict resolver policy (overrides global) |
 | `observability` | object | - | Project-level OpenTelemetry opt-in override. `enabled` initializes the SDK, `monitor` writes workflow metrics to `.takt/runs/<run>/monitor.json`, `session_log_exporter` writes a shadow session log from spans, and `usage_events_phase` writes phase-level usage events to `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl`. With `enabled: true` and `OTEL_EXPORTER_OTLP_ENDPOINT`, TAKT also sends spans and metrics through OTLP using standard `OTEL_EXPORTER_OTLP_*` environment variables; TAKT does not add an OTLP config key. |
 
@@ -471,6 +475,23 @@ If memory is limited, lower the heap limit or set concurrency to 1. Use these TA
 Failed, errored, or timed-out verification retains specifications and logs under `.takt/runs/verify-*/` and reports the directory in the result message. Retained directories are excluded from automatic cleanup; remove them manually when no longer needed. Successful verification artifacts are deleted after result interpretation.
 
 If writing the retention marker fails, TAKT moves the ownership marker to the retention marker and reports the directory and write error. If the move also fails, TAKT leaves the ownership marker in place and reports that retention could not be confirmed, together with the directory and both errors. The remaining ownership marker protects the directory from automatic cleanup even after the owner Node process exits. Copy any needed artifacts manually.
+
+## Workflow system command input policy
+
+Disabled by default. An explicit project value, including `false`, overrides global; if the project value is absent, the global value applies. Unauthorized command inputs fail during workflow loading. This permission is independent of `workflow_command_gates.custom_scripts`.
+
+```yaml
+workflow_system_commands:
+  custom_scripts: true
+```
+
+`TAKT_WORKFLOW_SYSTEM_COMMANDS_CUSTOM_SCRIPTS=true`
+
+This environment variable overrides both project and global settings; `false` denies permission even when the project setting is `true`.
+
+A separate clone uses the original project configuration. Each run resolves permission once and passes it to root and child workflows; `wait` does not reload configuration.
+
+When a pipeline or interactive session checks out a PR in the current directory, it resolves permission before switching branches. The interactive session retains that permission for the directory, including after switching to an Issue. A project setting added by the PR alone does not grant permission.
 
 ## Environment Variable Overrides
 
@@ -1268,6 +1289,34 @@ When both the global and project `runtime.yaml` carry an `mcp` section, the proj
 ### Environment variable interpolation
 
 `${NAME}` references in `command`, `args`, `env`, `url`, and `headers` are resolved against `process.env` before agent startup. An undefined required environment variable fails fast; TAKT never silently substitutes an empty string. Resolved secret values (env, headers) are never written to logs or error messages.
+
+For runtime HTTP/SSE **headers only**, use `${env:NAME}` to let the provider read its own environment. TAKT checks that the variable is defined and passes its name, without copying its value into arguments, temporary files, configuration JSON in environment variables, or logs. The variable remains in the provider process environment. `${NAME}` still interpolates immediately and can expose its value in those startup materials; fixed headers are unchanged. No additional configuration key or `provider_options` setting is needed.
+
+```yaml
+mcp:
+  servers:
+    datadog:
+      type: http
+      url: https://mcp.datadoghq.com/api/unstable/mcp-server/mcp
+      headers:
+        Authorization: "Bearer ${env:DD_ACCESS_TOKEN}"
+        X-Tenant: "${TENANT}"
+  defaults:
+    servers: [datadog]
+```
+
+| Provider / execution path | Runtime header references |
+|---|---|
+| Codex, including MCP-only execution (CLI 0.162.1 verified) | Supported: `Authorization: "Bearer ${env:X}"` uses `bearer_token_env_var`; a complete `${env:X}` header value uses `env_http_headers` |
+| OpenCode v1 / v2 (CLIs 1.18.2 / 2.0.18 verified) | Supported: converted to `{env:X}` in `OPENCODE_CONFIG_CONTENT`; surrounding text is supported |
+| Claude SDK / Headless / Terminal | Unverified for TAKT's inline/file/terminal paths; affected servers are excluded |
+| Cursor / Copilot / other providers | Unverified; affected servers are excluded |
+
+Codex cannot represent other surrounding text such as `Token ${env:X}` or multiple references in one header. TAKT warns with the provider, server, and reason, and excludes that entire server for the current execution. The same rule applies to unverified providers. Other servers and subsequent workflow steps continue. TAKT never falls back to plaintext; use `${NAME}` explicitly if that behavior is wanted. Undefined variables fail before exclusion warnings or provider startup, including on unsupported providers. Empty but defined variables are accepted. `${env:NAME}` has no new meaning in URLs or stdio fields, and text produced by `${NAME}` interpolation is not reinterpreted as a provider reference.
+
+Codex automatically excludes referenced variables from its AI tool shell using `shell_environment_policy.filters`, while retaining the usual PATH setting. A referenced PATH is not copied back into the shell configuration. This applies to normal and MCP-only execution. Other providers have no equivalent shell exclusion provided by TAKT: OpenCode shell tools can still inherit these variables.
+
+With `${NAME}`, current startup exposure is argv for Codex and Claude SDK, temporary files for Claude Headless/Terminal, Cursor and Copilot, and the `OPENCODE_CONFIG_CONTENT` JSON for OpenCode. `${env:NAME}` avoids those copies on the supported paths above; it does not remove the value from the provider's own process environment.
 
 ### Provider transport compatibility
 

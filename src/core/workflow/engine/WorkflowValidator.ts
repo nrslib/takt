@@ -1,3 +1,5 @@
+import { reportInputEntries } from '../../models/workflow-report-input.js';
+import { reportInputNames } from '../report-input-contract.js';
 import type { AutoRoutingConfig } from '../../models/config-types.js';
 import type { AgentWorkflowStep, LoopMonitorRule, WorkflowConfig, WorkflowRule, WorkflowStep } from '../../models/types.js';
 import {
@@ -262,6 +264,27 @@ function findWorkflowCallStep(
   return undefined;
 }
 
+export function validateWorkflowReportInputContracts(config: WorkflowConfig, options: WorkflowEngineOptions): void {
+  const context = {
+    workflowCallResolver: options.workflowCallResolver,
+    projectCwd: options.projectCwd,
+    lookupCwd: options.projectCwd,
+  };
+  for (const [stepIndex, step] of config.steps.entries()) {
+    try {
+      reportInputNames(config, step, context);
+      for (const subStep of step.parallel === undefined ? [] : getAllParallelSubSteps(step.parallel)) {
+        reportInputNames(config, subStep, context);
+      }
+    } catch (error) {
+      throw withWorkflowStepErrorPath(error, ['steps', stepIndex]);
+    }
+  }
+  for (const monitor of config.loopMonitors ?? []) {
+    reportInputNames(config, { name: loopJudgeStepName(monitor.cycle), inputReports: monitor.judge.inputReports }, context);
+  }
+}
+
 export function validateWorkflowConfig(config: WorkflowConfig, options: WorkflowEngineOptions): void {
   const initialStep = config.steps.find((step) => step.name === config.initialStep);
   if (!initialStep) {
@@ -296,31 +319,32 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
     try {
       const stepPath = findWorkflowStepLocation(config, step) ?? ['steps', stepIndex];
       const validateReportInput = (consumer: WorkflowStep, consumerPath: readonly PropertyKey[]) => {
-        const input = consumer.inputReports;
-        if (input === undefined) return;
-        const sourceIndex = config.steps.findIndex((candidate) => candidate.name === input.fromStep);
-        const source = config.steps[sourceIndex];
-        if (source === undefined || sourceIndex === stepIndex || source.kind === 'system') {
-          throw withWorkflowStepErrorPath(
-            new Error(`input_reports.from_step must name another report-producing step in this workflow: "${input.fromStep}"`),
-            [...consumerPath, 'input_reports', 'from_step'],
-          );
-        }
-        if (source.kind !== 'workflow_call'
-          && source.parallel === undefined
-          && getReportFiles(source.outputContracts).length === 0) {
-          throw withWorkflowStepErrorPath(
-            new Error(`input_reports.from_step "${input.fromStep}" has no report output contract`),
-            [...consumerPath, 'input_reports', 'from_step'],
-          );
-        }
-        if (input.reports !== 'all') {
-          for (const [reportIndex, report] of input.reports.entries()) {
-            if (classifyReportRelativePath(report).kind !== 'public' || report.includes('/')) {
-              throw withWorkflowStepErrorPath(
-                new Error(`input_reports.reports requires a public report file name: "${report}"`),
-                [...consumerPath, 'input_reports', 'reports', reportIndex],
-              );
+        if (consumer.inputReports === undefined) return;
+        for (const input of reportInputEntries(consumer.inputReports)) {
+          const sourceIndex = config.steps.findIndex((candidate) => candidate.name === input.fromStep);
+          const source = config.steps[sourceIndex];
+          if (source === undefined || sourceIndex === stepIndex || source.kind === 'system') {
+            throw withWorkflowStepErrorPath(
+              new Error(`input_reports.from_step must name another report-producing step in this workflow: "${input.fromStep}"`),
+              [...consumerPath, 'input_reports', 'from_step'],
+            );
+          }
+          if (source.kind !== 'workflow_call'
+            && source.parallel === undefined
+            && getReportFiles(source.outputContracts).length === 0) {
+            throw withWorkflowStepErrorPath(
+              new Error(`input_reports.from_step "${input.fromStep}" has no report output contract`),
+              [...consumerPath, 'input_reports', 'from_step'],
+            );
+          }
+          if (input.reports !== 'all') {
+            for (const [reportIndex, report] of input.reports.entries()) {
+              if (classifyReportRelativePath(report).kind !== 'public' || report.includes('/')) {
+                throw withWorkflowStepErrorPath(
+                  new Error(`input_reports.reports requires a public report file name: "${report}"`),
+                  [...consumerPath, 'input_reports', 'reports', reportIndex],
+                );
+              }
             }
           }
         }
@@ -430,6 +454,9 @@ export function validateWorkflowConfig(config: WorkflowConfig, options: Workflow
       'Invalid loop_monitor judge rule',
       ['loop_monitors', monitorIndex, 'judge', 'rules'],
     );
+    for (const input of reportInputEntries(monitor.judge.inputReports)) {
+      if (!monitor.cycle.includes(input.fromStep)) throw new Error(`Invalid loop_monitor: report input source "${input.fromStep}" is outside cycle`);
+    }
     for (const cycleName of monitor.cycle) {
       if (!stepNames.has(cycleName)) {
         throw new Error(`Invalid loop_monitor: cycle references unknown step "${cycleName}"`);

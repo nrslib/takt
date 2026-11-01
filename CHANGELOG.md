@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - `provider.defaults.assignment` selects a named runtime assignment by default, after CLI and directory selections.
+- Runtime MCP HTTP/SSE headers accept `${env:NAME}` provider environment references without copying secret values into startup materials. Codex supports bearer tokens and complete header values, including MCP-only execution, and excludes referenced variables from its tool shell. Verified OpenCode v1/v2 support native header references; unverified providers and unrepresentable Codex headers warn and exclude only the affected server. Undefined variables fail before startup; `${NAME}` retains its existing interpolation behavior.
 
 ## [0.73.0] - 2026-10-27
 

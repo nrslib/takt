@@ -15,6 +15,7 @@ import {
 import { createInterface } from 'node:readline';
 import type { Readable } from 'node:stream';
 import '../infra/codex/codex-spawn-guard.js';
+import { CODEX_SPAWN_PROFILE } from '../infra/codex/types.js';
 
 vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -443,6 +444,24 @@ describe('codex-spawn-guard', () => {
     await waitForClose(child);
     expect(readFileSync(recordPath, 'utf8').trim().split('\n'))
       .toEqual(['exec', '--experimental-json', 'prompt']);
+  });
+
+  it.skipIf(process.platform === 'win32').each(['review', undefined])('keeps a referenced profile environment value separate from explicit profile %s', async (configProfile) => {
+    const { executablePath, recordPath } = makeRecordingExecutable();
+    const env = {
+      ...process.env, TAKT_TEST_RECORD: recordPath,
+      TAKT_CODEX_CONFIG_PROFILE: 'synthetic-header-value',
+      [CODEX_SPAWN_PROFILE]: { configProfile },
+    };
+    const child = childProcessModule.spawn(executablePath, ['exec', '--experimental-json', 'prompt'], { ...spawnOptions(), env: { ...env } });
+    await waitForClose(child);
+    const recorded = readFileSync(recordPath, 'utf8').trim().split('\n');
+    expect(recorded).toEqual([
+      'exec', ...(configProfile === undefined ? [] : ['--profile', configProfile]),
+      '--experimental-json', 'prompt', 'marker=synthetic-header-value',
+    ]);
+    expect(env.TAKT_CODEX_CONFIG_PROFILE).toBe('synthetic-header-value');
+    expect(env[CODEX_SPAWN_PROFILE]).toEqual({ configProfile });
   });
 
   it.skipIf(process.platform === 'win32')('forwards a profile through Provider, SDK, and the real CLI process', async () => {

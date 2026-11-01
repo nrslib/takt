@@ -88,7 +88,33 @@ describe('WorkflowEngine persona session resume with runtime MCP servers', () =>
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
     rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  it.each(['codex', 'mock'] as const)('rejects undefined header references before any %s agent or exclusion warning', async (provider) => {
+    vi.stubEnv('MCP_HEADER_MISSING', undefined);
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const config: WorkflowConfig = {
+      name: 'undefined-header', maxSteps: 2, initialStep: 'execute',
+      steps: [agentStep('execute', { rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' })] })],
+    };
+    const engine = new WorkflowEngine(config, tmpRoot, 'task', {
+      projectCwd: tmpRoot, provider, reportDirName: 'undefined-header',
+      structuredCaller: structuredCaller(vi.fn()),
+      mcpAssignment: { servers: { remote: {
+        type: 'http', url: 'http://localhost/mcp', headers: { Authorization: 'Bearer ${env:MCP_HEADER_MISSING}' },
+      } }, defaults: { servers: ['remote'] } },
+    });
+    const aborted = vi.fn();
+    engine.on('workflow:abort', aborted);
+    const state = await engine.run();
+    expect(state.status).toBe('aborted');
+    expect(aborted.mock.calls.flat().filter((value) => typeof value === 'string').join(' ')).toContain('MCP_HEADER_MISSING');
+    expect(runAgent).not.toHaveBeenCalled();
+    expect([...output.mock.calls, ...warnings.mock.calls].flat().join(' ')).not.toContain('excluded MCP server');
   });
 
   it.each(variants)('should resume Phase 1 in Phase 2 and continue it in the next step %s', async (_name, mcpAssignment) => {

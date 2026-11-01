@@ -210,6 +210,7 @@ export interface RuntimeStepResolution {
 }
 
 export interface WorkflowSharedRuntimeState {
+  reportExecutions?: import('./report-execution-store.js').ReportExecutionStore;
   workflowPromptTree?: import('./workflow-prompt-context.js').WorkflowPromptTree;
   startedAtMs: number;
   activeResumePoint?: WorkflowResumePoint;

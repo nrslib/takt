@@ -283,6 +283,8 @@ export interface ParallelRunnerDeps {
   readonly getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
   readonly emitEvent: (event: string, ...args: unknown[]) => void;
   readonly getWorkflowCallRunner?: () => WorkflowCallRunner;
+  readonly beginReportExecution?: (step: WorkflowStep, parallelParentStepName: string) => string | undefined;
+  readonly finishReportExecution?: (id: string, completed: boolean) => void;
   readonly claimStepOccurrence: (
     step: WorkflowStep,
     resumeStackPrefix: readonly WorkflowResumePointEntry[],
@@ -687,14 +689,17 @@ export class ParallelRunner {
         if (semaphore) {
           await semaphore.acquire();
         }
+        let reportExecution: string | undefined;
+        let completed = false;
         try {
+          reportExecution = this.deps.beginReportExecution?.(subStep, step.name);
           restartIfLiveInterventionPending();
           const startedAt = Date.now();
           subStepStartedAtByName.set(subStep.name, startedAt);
           const subStepDeadline = isAgentParallelSubStep(subStep)
             ? getSubStepDeadline(subStep)
             : undefined;
-          return await runWithExecutionDeadline(
+          const result = await runWithExecutionDeadline(
             executionDeadlineContext,
             subStepDeadline,
             async () => {
@@ -1309,7 +1314,10 @@ export class ParallelRunner {
         };
             },
           );
+          completed = result.response.status === 'done';
+          return result;
         } finally {
+          if (reportExecution !== undefined) this.deps.finishReportExecution?.(reportExecution, completed);
           if (semaphore) {
             semaphore.release();
           }

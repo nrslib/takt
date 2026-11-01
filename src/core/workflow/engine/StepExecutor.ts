@@ -1,3 +1,4 @@
+import { reportInputEntries } from '../../models/workflow-report-input.js';
 /**
  * Executes a single workflow step through the 3-phase model.
  *
@@ -1481,30 +1482,31 @@ export class StepExecutor {
       ...(workflowStep.parallel === undefined ? [] : getAllParallelSubSteps(workflowStep.parallel)),
     ]);
     const missingRequiredReports = missingReports.filter((name) => consumers.some((consumer) => {
-      const declared = consumer.inputReports;
-      if (declared?.fromStep === step.name
-        && (declared.reports === 'all' || declared.reports.includes(name))) {
-        return true;
-      }
-      if (declared !== undefined && declared.fromStep !== step.name) {
-        if (declared.reports !== 'all' && declared.reports.includes(name)) return false;
-        if (declared.reports === 'all') {
-          try {
-            // An unrun producer reserves its names here; the consumer enforces completion.
-            const ownershipProbe = {
-              ...consumer,
-              inputReports: { ...declared, optionalIfUnrun: true as const },
-            };
-            const declaredNames = this.deps.resolveDeclaredReportInputs(
-              ownershipProbe, state, reportDir,
-            )?.declaredNames ?? [];
-            if (declaredNames.includes(name)) return false;
-          } catch (error) {
-            log.debug('Could not resolve another producer while checking a current report', {
-              step: step.name,
-              consumer: consumer.name,
-              error: getErrorMessage(error),
-            });
+      for (const declared of reportInputEntries(consumer.inputReports)) {
+        if (declared.fromStep === step.name
+          && (declared.reports === 'all' || declared.reports.includes(name))) {
+          return true;
+        }
+        if (declared.fromStep !== step.name) {
+          if (declared.reports !== 'all' && declared.reports.includes(name)) return false;
+          if (declared.reports === 'all') {
+            try {
+              // An unrun producer reserves its names here; the consumer enforces completion.
+              const ownershipProbe = {
+                ...consumer,
+                inputReports: { ...declared, optionalIfUnrun: true as const },
+              };
+              const declaredNames = this.deps.resolveDeclaredReportInputs(
+                ownershipProbe, state, reportDir,
+              )?.declaredNames ?? [];
+              if (declaredNames.includes(name)) return false;
+            } catch (error) {
+              log.debug('Could not resolve another producer while checking a current report', {
+                step: step.name,
+                consumer: consumer.name,
+                error: getErrorMessage(error),
+              });
+            }
           }
         }
       }
@@ -1577,9 +1579,15 @@ export class StepExecutor {
           basename(resolvedPath),
         ) === true;
     };
+    const localInputs = this.deps.resolveDeclaredReportInputs(step, state, reportDir);
+    const inheritedInputs = this.deps.getInheritedReportInputs();
+    const overriddenNames = new Set(localInputs?.declaredNames ?? []);
     const declaredReportInputs = [
-      this.deps.getInheritedReportInputs(),
-      this.deps.resolveDeclaredReportInputs(step, state, reportDir),
+      inheritedInputs === undefined ? undefined : {
+        declaredNames: inheritedInputs.declaredNames.filter((name) => !overriddenNames.has(name)),
+        reports: inheritedInputs.reports.filter((report) => !overriddenNames.has(report.reference)),
+      },
+      localInputs,
     ].filter((value): value is DeclaredReportInputs => value !== undefined);
     const resumeReportConsumerKey = buildResumeReportConsumerKeyFromStack(
       this.deps.getCurrentWorkflowStack?.() ?? [],

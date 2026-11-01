@@ -398,6 +398,7 @@ tui:
     tellRequiresTty: "The additional instruction was not sent: /tell requires an interactive terminal."
     tellNoCandidates: "No running worktree-clone task can receive an additional instruction."
     tellExcluded: "Running tasks excluded from /tell:\n{tasks}"
+    tellExcludedMore: "... and {count} more excluded tasks"
     tellCancelled: "Additional instruction was not sent."
     tellStale: "The additional instruction was not sent: {error}"
     assistantRetryRequiresTty: "The task was not changed: /requeue and /retry require an interactive terminal."
@@ -414,6 +415,10 @@ tui:
     settingValueRequired: "{command} requires a value."
     imagePasteFailed: "The image could not be pasted."
   tell:
+    targetFailed: "Target unclear: {reason}"
+    targetUnresolved: "The conversation did not identify one recipient."
+    targetInvalid: "The assistant returned an invalid response."
+    targetUnknown: "The returned run is not among the candidates."
     selectPrompt: "Select the running task to tell:"
     confirm: "Send this additional instruction?\nTask: {task}\nSummary: {summary}\nWorkflow: {workflow}\nCurrent step: {step}\nRun slug: {runSlug}\nInstruction:\n{content}"
     sent: "Additional instruction sent to {task} (instruction #{instructionId})."

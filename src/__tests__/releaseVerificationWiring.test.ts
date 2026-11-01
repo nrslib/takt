@@ -557,6 +557,16 @@ describe('release verification wiring', () => {
     expect(JSON.stringify(deepSeekJob)).not.toContain('TAKT_DEEPSEEK_HARNESS_LIVE');
   });
 
+  it('should run real bounded command termination tests on Windows', () => {
+    const commands = ciWorkflow.jobs?.['windows-private-artifacts']?.steps
+      ?.map((step) => step.run)
+      .filter(Boolean);
+
+    expect(commands).toContain(
+      'npm test -- src/__tests__/bounded-command-runner.integration.test.ts',
+    );
+  });
+
   it('should build and smoke test the Pi SDK on Windows and macOS', () => {
     const piJob = ciWorkflow.jobs?.['pi-cross-platform'];
     const commands = piJob?.steps?.map((step) => step.run).filter(Boolean);
@@ -748,6 +758,15 @@ describe('release verification wiring', () => {
   it('routes tell task specification persistence through the light integration gate', () => {
     const testFile = 'src/__tests__/it-live-intervention-task-spec.test.ts';
 
+    expect(selectNpmTestRuns([testFile])).toEqual([
+      { npmArgs: ['run', 'test:it:light', '--', testFile] },
+    ]);
+  });
+
+  it('routes system command configuration to light IT and excludes it from heavy IT', () => {
+    const testFile = 'src/__tests__/it-system-command-input-config.test.ts';
+    expect(lightIntegrationConfig.test?.include).toContain(testFile);
+    expect(heavyParallelIntegrationConfig.test?.exclude).toContain(testFile);
     expect(selectNpmTestRuns([testFile])).toEqual([
       { npmArgs: ['run', 'test:it:light', '--', testFile] },
     ]);

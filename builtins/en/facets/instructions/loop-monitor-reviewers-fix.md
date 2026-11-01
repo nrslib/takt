@@ -1,10 +1,14 @@
 The review and repair loop has repeated {cycle_count} times.
 
-Inspect the latest review reports, decision record, repair reports, verification reports, and current code in the Report Directory. Determine whether the loop is converging, stalled, or diverging.
+Inspect the supplied current review reports, decision record, repair reports, verification reports, and actual code. Determine whether the loop is converging, stalled, or diverging. Do not assume that an absent report type has been generated.
+
+{{include:instructions/review-report-history}}
 
 {{include:instructions/fix-plan-validity}}
 
 First establish the observation point from report chronology. Determine whether verification or review ran after the latest repair. If neither ran, use the repair report's completion conditions and remaining work to distinguish waiting for verification from unfinished implementation.
+
+Use producer start and completion orders in the current report execution records to check whether verification or review started after the latest repair completed. Compare the actual report producers even when they share a parent call. If orders are unavailable or executions overlap, mark chronology as unverified rather than inferring it from file names, modification times, or identifiers.
 
 Across iterations, compare acceptance criteria newly satisfied, the same root causes that remain, code and evidence that changed, and newly confirmed structural or contract problems. Do not infer progress from counts or identifier changes alone; verify that implementation or evidence materially changed.
 

@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { interpolateMcpEnv } from '../infra/config/runtime-provider/mcp-schema.js';
+import { getCodexHeaderEnvRef } from '../infra/providers/mcp/header-env.js';
 // New modules under test (implemented in the following `implement` step).
 import {
   createMcpAdapter,
@@ -36,6 +38,56 @@ function resolvedServers(): ResolvedMcpServers {
 }
 
 describe('ProviderMcpAdapter interface boundary (MCP-ADAPTER-SPLIT)', () => {
+  it('keeps a shared runtime definition available to a supported step after another provider excludes it', async () => {
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const server = interpolateMcpEnv({ type: 'http', url: 'http://localhost/mcp', headers: {
+      Authorization: 'Bearer ${env:ACCESS}',
+    } }, { ACCESS: 'synthetic-secret' });
+    const servers: ResolvedMcpServers = { enabled: true, servers: { remote: server }, serverNames: ['remote'], identity: 'remote' };
+    const excluded = await createMcpAdapter('claude-sdk').prepare(servers, { cwd: '/tmp/test' });
+    const supported = await createMcpAdapter('codex').prepare(servers, { cwd: '/tmp/test' });
+    try {
+      expect(excluded.sdkOptions?.mcpServers).toEqual({});
+      expect(supported.config?.mcp_servers?.remote).toEqual({ url: 'http://localhost/mcp', bearer_token_env_var: 'ACCESS' });
+      expect(servers.serverNames).toEqual(['remote']);
+    } finally {
+      await excluded.dispose(); await supported.dispose(); output.mockRestore(); warning.mockRestore();
+    }
+  });
+
+  it.each([
+    ['fixed', 'header-value'],
+    ['legacy ${VAR}', '${MCP_HEADER_VALUE}'],
+  ])('keeps Codex HTTP servers with case-variant duplicate headers for %s values', async (_description, headerValue) => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const server = interpolateMcpEnv({ type: 'http', url: 'http://localhost/mcp', headers: {
+      'X-Api-Key': headerValue,
+      'x-api-key': headerValue,
+    } }, { MCP_HEADER_VALUE: 'header-value' });
+    const servers: ResolvedMcpServers = { enabled: true, servers: { remote: server }, serverNames: ['remote'], identity: 'remote' };
+    const prepared = await createMcpAdapter('codex').prepare(servers, { cwd: '/tmp/test' });
+    try {
+      expect(prepared.excludedServerNames).toBeUndefined();
+      expect(prepared.config?.mcp_servers?.remote).toEqual({
+        url: 'http://localhost/mcp',
+        http_headers: { 'X-Api-Key': 'header-value', 'x-api-key': 'header-value' },
+      });
+      expect(warning).not.toHaveBeenCalled();
+    } finally {
+      await prepared.dispose();
+      warning.mockRestore();
+    }
+  });
+
+  it('recognizes only complete variable and bearer values representable by native Codex settings', () => {
+    expect(getCodexHeaderEnvRef(['', { env: 'ACCESS' }, ''])).toEqual({ name: 'ACCESS', bearer: false });
+    expect(getCodexHeaderEnvRef(['Bearer ', { env: 'ACCESS' }, ''])).toEqual({ name: 'ACCESS', bearer: true });
+    expect(getCodexHeaderEnvRef(['Token ', { env: 'ACCESS' }, ''])).toBeUndefined();
+    expect(getCodexHeaderEnvRef(['', { env: 'ACCESS' }, '-suffix'])).toBeUndefined();
+    expect(getCodexHeaderEnvRef(['', { env: 'ACCESS' }, { env: 'OTHER' }, ''])).toBeUndefined();
+  });
+
   it.each(['claude-sdk', 'claude'] as const)('Given an adapter created for %s, When called with resolved servers and a minimal context, Then it does not require target selector context', async (provider) => {
     // Adapter unit test must work without target context — adapter does not know target selectors.
     const adapter = createMcpAdapter(provider);

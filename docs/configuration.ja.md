@@ -164,6 +164,8 @@ dynamic parallel と `dynamic_facets` の selector は読み取り専用で、`R
 #   custom_scripts: false                # カスタムスクリプトを許可（デフォルト: false、ビルトインプリセットは常に許可）
 # workflow_command_gates:                # workflow YAML command quality gate ポリシー
 #   custom_scripts: false                # workflow YAML の command gate を許可（デフォルト: false）
+# workflow_system_commands:             # workflow の system command input を許可するポリシー
+#   custom_scripts: false
 # sync_conflict_resolver:                # sync conflict resolver ポリシー
 #   auto_approve_tools: false            # ツールの自動承認を許可（デフォルト: false）
 
@@ -257,6 +259,7 @@ dynamic parallel と `dynamic_facets` の selector は読み取り専用で、`R
 | `workflow_arpeggio` | object | すべて `false` | Arpeggio カスタムコードポリシー（`custom_data_source_modules`, `custom_merge_inline_js`, `custom_merge_files`） |
 | `workflow_runtime_prepare` | object | `{ custom_scripts: false }` | ランタイム prepare ポリシー（ビルトインプリセットは常に許可） |
 | `workflow_command_gates` | object | `{ custom_scripts: false }` | workflow YAML command quality gate ポリシー |
+| `workflow_system_commands` | object | `{ custom_scripts: false }` | workflow の system command input を許可するポリシー |
 | `workflow_overrides` | object | - | workflow レベルの上書き。トップレベル / step 単位 / persona 単位の `quality_gates`（AI ディレクティブまたは `type: command` ゲート）と `quality_gates_edit_only` |
 | `sync_conflict_resolver` | object | `{ auto_approve_tools: false }` | sync conflict resolver ポリシー |
 | `observability` | object | 無効 | OpenTelemetry foundation の opt-in 設定。`enabled` で SDK を初期化し、`monitor` は workflow metric を `.takt/runs/<run>/monitor.json` に出力し、`session_log_exporter` は span 由来の shadow session log を出力します。`usage_events_phase` は phase 粒度の usage events を `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl` に出力します。`enabled: true` と `OTEL_EXPORTER_OTLP_ENDPOINT` が揃うと、TAKT は標準の `OTEL_EXPORTER_OTLP_*` 環境変数で span と metric も OTLP 送信します。TAKT 独自の OTLP config キーはありません。 |
@@ -423,6 +426,7 @@ OpenCode の `event_limit` は既定で 500,000、`text_byte_limit` は 1 MiB、
 | `workflow_arpeggio` | object | - | Arpeggio カスタムコードポリシー（グローバルを上書き） |
 | `workflow_runtime_prepare` | object | - | ランタイム prepare ポリシー（グローバルを上書き） |
 | `workflow_command_gates` | object | - | workflow YAML command quality gate ポリシー（グローバルを上書き） |
+| `workflow_system_commands` | object | - | workflow の system command input を許可するポリシー |
 | `sync_conflict_resolver` | object | - | sync conflict resolver ポリシー（グローバルを上書き） |
 | `observability` | object | - | プロジェクトレベルの OpenTelemetry opt-in 上書き。`enabled` で SDK を初期化し、`monitor` は workflow metric を `.takt/runs/<run>/monitor.json` に出力し、`session_log_exporter` は span 由来の shadow session log を出力します。`usage_events_phase` は phase 粒度の usage events を `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl` に出力します。`enabled: true` と `OTEL_EXPORTER_OTLP_ENDPOINT` が揃うと、TAKT は標準の `OTEL_EXPORTER_OTLP_*` 環境変数で span と metric も OTLP 送信します。TAKT 独自の OTLP config キーはありません。 |
 
@@ -467,6 +471,23 @@ TAKT_ALLOY_CONCURRENCY=1 TAKT_ALLOY_HEAP=2g TAKT_ALLOY_STACK=128m takt
 検証の失敗・エラー・時間切れでは`.takt/runs/verify-*/`の仕様とログを保持し、保存先を結果メッセージに表示します。保持したディレクトリは自動掃除の対象外です。不要になったら手動で削除してください。成功時は結果の解釈が終わってから削除します。
 
 保持マーカーの書き込みに失敗した場合は所有権マーカーを保持マーカーへ移動し、保存先と書き込みエラーを通知します。移動にも失敗した場合は所有権マーカーを残し、保持を確定できない旨と保存先、両方のエラーを通知します。残った所有権マーカーは所有するNodeプロセスの終了後もディレクトリを自動掃除から保護します。必要な成果物を手動で退避してください。
+
+## workflow の system command input を許可するポリシー
+
+既定は無効です。projectの明示値（`false`を含む）はglobalより優先されます。projectで未指定の場合はglobalの値を使います。未許可のcommand inputを含むworkflowは読み込み時にエラーになります。`workflow_command_gates.custom_scripts`とは独立しています。
+
+```yaml
+workflow_system_commands:
+  custom_scripts: true
+```
+
+`TAKT_WORKFLOW_SYSTEM_COMMANDS_CUSTOM_SCRIPTS=true`
+
+この環境変数はprojectとglobalの設定より優先され、`false`の場合はprojectが`true`でも許可されません。
+
+別cloneでの実行にも元のproject設定を使います。各実行で許可を解決し、rootと子workflowへ同じ値を渡します。`wait`中は再解決しません。
+
+pipeline または対話モードが現在のディレクトリに PR をチェックアウトする場合は、切り替え前の設定から許可を決めます。対話セッションでは Issue に切り替えた後も同じディレクトリでこの許可を使います。PR が追加した project 設定だけでは許可されません。
 
 ## 環境変数上書き
 
@@ -1252,6 +1273,34 @@ global と project 両方の `runtime.yaml` が `mcp` セクションを持つ�
 ### 環境変数補間
 
 `command`、`args`、`env`、`url`、`headers` 内の `${NAME}` 参照は agent 起動前に `process.env` で解決します。未定義の必須環境変数は fail-fast し、空文字列で黙に置換しません。解決済みの秘密値（env, headers）はログやエラーメッセージへ出力しません。
+
+runtime の HTTP/SSE の **headers だけ**で使える `${env:NAME}` は、provider が自身の環境変数を読む指定です。TAKT は定義の有無を確認して変数名を渡し、値を起動引数・一時ファイル・環境変数内の設定 JSON・ログへ転記しません。provider プロセスの環境には変数を残します。`${NAME}` は従来どおり起動前に展開するため、それらの起動素材に値が載る場合があります。固定ヘッダの内容は変わりません。新しい設定キーや `provider_options` の設定は不要です。
+
+```yaml
+mcp:
+  servers:
+    datadog:
+      type: http
+      url: https://mcp.datadoghq.com/api/unstable/mcp-server/mcp
+      headers:
+        Authorization: "Bearer ${env:DD_ACCESS_TOKEN}"
+        X-Tenant: "${TENANT}"
+  defaults:
+    servers: [datadog]
+```
+
+| Provider / 実行経路 | runtime ヘッダ参照への対応 |
+|---|---|
+| Codex（MCP 専用実行を含む。CLI 0.162.1 で確認） | 対応。`Authorization: "Bearer ${env:X}"` は `bearer_token_env_var`、値全体が `${env:X}` のヘッダは `env_http_headers` へ変換 |
+| OpenCode v1 / v2（CLI 1.18.2 / 2.0.18 で確認） | 対応。`OPENCODE_CONFIG_CONTENT` 内の `{env:X}` へ変換。前後の文字列も利用可能 |
+| Claude SDK / Headless / Terminal | TAKT のインライン・ファイル・terminal 経路は未確認のため対象サーバを除外 |
+| Cursor / Copilot / その他の provider | 未確認のため対象サーバを除外 |
+
+Codex では `Token ${env:X}` のような別の前置文字列や、1 つのヘッダ内の複数参照を表現できません。TAKT は provider 名・サーバ名・理由を含む警告を出し、その実行ではサーバ全体を除外します。未確認の provider にも同じ規則を適用します。他のサーバと後続の workflow step は継続します。平文へのフォールバックは行いません。従来の展開が必要な場合は利用者が `${NAME}` を明示してください。未定義変数は非対応 provider でも除外警告や provider 起動より前にエラーになります。空文字列でも定義済みなら受理します。URL と stdio のフィールドに `${env:NAME}` の意味は追加しません。`${NAME}` の展開結果も provider 参照として再解釈しません。
+
+Codex では参照変数を AI のツールシェルから `shell_environment_policy.filters` で自動除外し、通常の PATH 設定と合成します。PATH 自身が参照対象ならシェル設定へ値を転記しません。通常実行と MCP 専用実行の両方に適用します。他の provider には TAKT が提供する同等のシェル除外がなく、OpenCode のシェルツールには参照変数が継承されます。
+
+`${NAME}` を使う場合の起動素材への露出先は、Codex と Claude SDK では argv、Claude Headless/Terminal・Cursor・Copilot では一時ファイル、OpenCode では `OPENCODE_CONFIG_CONTENT` の JSON です。`${env:NAME}` は上表の対応経路でこれらへの転記を防ぎますが、provider 自身のプロセス環境から値を削除する機能ではありません。
 
 ### provider 別 transport 対応
 

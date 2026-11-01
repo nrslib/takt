@@ -1,4 +1,5 @@
 import type { WorkflowConfig } from '../../../core/models/index.js';
+import type { WorkflowSystemCommandsConfig } from '../../../core/models/config-types.js';
 import type { WorkflowEngineOptions } from '../../../core/workflow/types.js';
 import { resolveWorkflowCallTarget } from '../../../infra/config/index.js';
 import { getWorkflowSourcePath } from '../../../infra/config/loaders/workflowSourceMetadata.js';
@@ -8,11 +9,13 @@ export function createWorkflowExecutionContext(
   workflowConfig: WorkflowConfig,
   projectCwd: string,
   resourceRoot?: string,
+  workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig,
 ) {
   return {
     sourcePath: getWorkflowSourcePath(workflowConfig),
     trustInfo: getWorkflowTrustInfo(workflowConfig, projectCwd),
     resourceRoot,
+    workflowSystemCommandsPolicy,
   };
 }
 
