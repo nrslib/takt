@@ -15,6 +15,8 @@ import { formatProcessExitCause } from './process-exit.js';
 const TERMINATION_GRACE_MS = 250;
 const TERMINATION_SETTLE_INTERVAL_MS = 10;
 const TERMINATION_SETTLE_TIMEOUT_MS = 2_000;
+const WINDOWS_TERMINATION_SETTLE_INTERVAL_MS = 50;
+const WINDOWS_TERMINATION_SETTLE_TIMEOUT_MS = 5_000;
 
 export function crossSpawn(
   command: string,
@@ -63,12 +65,48 @@ function signalPosixProcessGroup(pid: number, signal: NodeJS.Signals): void {
   }
 }
 
+function isWindowsProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (isProcessMissing(error)) return false;
+    throw error;
+  }
+}
+
+function taskkilledProcessIds(output: string, rootPid: number): number[] {
+  const processIds = new Set([rootPid]);
+  for (const line of output.split(/\r?\n/)) {
+    const match = /\bPID\s+(\d+)/i.exec(line);
+    if (match !== null) processIds.add(Number(match[1]));
+  }
+  return [...processIds];
+}
+
+async function waitForWindowsProcessesExit(processIds: number[]): Promise<void> {
+  const deadline = Date.now() + WINDOWS_TERMINATION_SETTLE_TIMEOUT_MS;
+  while (true) {
+    const remaining = processIds.filter(isWindowsProcessRunning);
+    if (remaining.length === 0) return;
+    if (Date.now() >= deadline) {
+      throw new Error(`Windows processes did not terminate: ${remaining.join(', ')}`);
+    }
+    await delay(WINDOWS_TERMINATION_SETTLE_INTERVAL_MS);
+  }
+}
+
 export async function forceTerminateWindowsProcess(pid: number | undefined): Promise<void> {
   const targetPid = requireProcessId(pid);
   const taskkillExecutable = resolveSystem32ExecutablePath('taskkill.exe');
   const killer = crossSpawn(taskkillExecutable, ['/pid', String(targetPid), '/T', '/F'], {
-    stdio: 'ignore',
+    stdio: ['ignore', 'pipe', 'ignore'],
     windowsHide: true,
+  });
+  let output = '';
+  killer.stdout?.setEncoding('utf8');
+  killer.stdout?.on('data', (chunk: string) => {
+    output += chunk;
   });
   await new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -89,6 +127,7 @@ export async function forceTerminateWindowsProcess(pid: number | undefined): Pro
       ));
     });
   });
+  await waitForWindowsProcessesExit(taskkilledProcessIds(output, targetPid));
 }
 
 function isPosixProcessGroupRunning(pid: number): boolean {

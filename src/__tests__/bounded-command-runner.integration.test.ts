@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { buildCommandEnv, runBoundedCommand } from '../shared/utils/bounded-command-runner.js';
+import { removeDirectoryWhenReleased } from './helpers/remove-directory-when-released.js';
 
 function shellQuote(value: string): string {
   if (process.platform === 'win32') return `"${value}"`;
@@ -71,9 +72,7 @@ describe('bounded command runner process tree', () => {
       });
 
       const terminatedPids = [commandPid, descendantPid];
-      await vi.waitFor(() => {
-        for (const pid of terminatedPids) expect(isProcessGone(pid)).toBe(true);
-      }, { timeout: 5_000, interval: 20 });
+      for (const pid of terminatedPids) expect(isProcessGone(pid)).toBe(true);
       expect(settled).toBe(true);
     } finally {
       for (const pid of [commandPid, descendantPid]) {
@@ -84,7 +83,9 @@ describe('bounded command runner process tree', () => {
           // Cleanup is best-effort after the runner has terminated the processes.
         }
       }
-      rmSync(testRoot, { recursive: true, force: true });
+      await removeDirectoryWhenReleased(() => {
+        rmSync(testRoot, { recursive: true, force: true });
+      });
     }
   }, 15_000);
 });

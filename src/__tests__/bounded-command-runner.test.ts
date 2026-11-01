@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { buildCommandEnv, runBoundedCommand } from '../shared/utils/bounded-command-runner.js';
+import { removeDirectoryWhenReleased } from './helpers/remove-directory-when-released.js';
 
 const doubles = vi.hoisted(() => ({
   spawn: vi.fn(),
@@ -128,12 +129,22 @@ describe('bounded command runner', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it.each(['timeout', 'abort'])('kills the Windows process tree and waits for taskkill after %s', async (reason) => {
+  it.each(['timeout', 'abort'])('kills the Windows process tree and waits for taskkill and process exit after %s', async (reason) => {
     Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' });
-    const killer = new EventEmitter();
+    const killer = Object.assign(new EventEmitter(), { stdout: new PassThrough() });
     const taskkillPath = 'C:\\Windows\\System32\\taskkill.exe';
+    const descendantPids = [child.pid + 1, child.pid + 2];
+    const runningPids = new Set([child.pid, ...descendantPids]);
     doubles.resolveSystem32ExecutablePath.mockReturnValue(taskkillPath);
     doubles.crossSpawn.mockReturnValue(killer);
+    vi.mocked(process.kill).mockImplementation((pid, signal) => {
+      if (signal === 0 && !runningPids.has(Number(pid))) {
+        const error = new Error('Process not found') as NodeJS.ErrnoException;
+        error.code = 'ESRCH';
+        throw error;
+      }
+      return true;
+    });
     const controller = new AbortController();
     let settled = false;
     const running = runBoundedCommand({ ...options, signal: controller.signal }).then((result) => {
@@ -147,17 +158,71 @@ describe('bounded command runner', () => {
     expect(doubles.resolveSystem32ExecutablePath).toHaveBeenCalledWith('taskkill.exe');
     expect(doubles.crossSpawn).toHaveBeenCalledWith(taskkillPath, [
       '/pid', String(child.pid), '/T', '/F',
-    ], { stdio: 'ignore', windowsHide: true });
-    expect(process.kill).not.toHaveBeenCalled();
+    ], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+    expect(process.kill).not.toHaveBeenCalledWith(expect.any(Number), 'SIGTERM');
 
     child.emit('close', null);
     await Promise.resolve();
     expect(settled).toBe(false);
 
+    const externalParentPid = child.pid + 100;
+    for (const pid of [child.pid, ...descendantPids]) {
+      killer.stdout.write(
+        `SUCCESS: The process with PID ${pid} (child process of PID ${externalParentPid}) has been terminated.\n`,
+      );
+    }
     killer.emit('close', 0, null);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    for (const pid of runningPids) {
+      expect(process.kill).toHaveBeenCalledWith(pid, 0);
+    }
+    expect(process.kill).not.toHaveBeenCalledWith(externalParentPid, 0);
+
+    runningPids.delete(child.pid);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(settled).toBe(false);
+    expect(process.kill).toHaveBeenCalledWith(descendantPids[0], 0);
+    expect(process.kill).toHaveBeenCalledWith(descendantPids[1], 0);
+
+    runningPids.clear();
+    await vi.advanceTimersByTimeAsync(50);
     expect(await running).toMatchObject({
       exitCode: null, timedOut: reason === 'timeout', aborted: reason === 'abort',
     });
+    expect(vi.getTimerCount()).toBe(0);
+    killer.stdout.destroy();
+  });
+
+  it('waits for Windows directory removal while EPERM and EBUSY handles are released', async () => {
+    Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' });
+    const removeDirectory = vi.fn<() => void>();
+    for (const code of ['EPERM', 'EBUSY']) {
+      removeDirectory.mockImplementationOnce(() => {
+        const error = new Error('Directory is locked') as NodeJS.ErrnoException;
+        error.code = code;
+        throw error;
+      });
+    }
+    let settled = false;
+    const removal = removeDirectoryWhenReleased(removeDirectory).then(() => {
+      settled = true;
+    });
+
+    expect(removeDirectory).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(19);
+    expect(removeDirectory).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(removeDirectory).toHaveBeenCalledTimes(2);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(20);
+    await removal;
+    expect(removeDirectory).toHaveBeenCalledTimes(3);
+    expect(settled).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
   });
 
