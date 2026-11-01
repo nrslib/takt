@@ -31,6 +31,7 @@ import {
   buildWorkflowResumePointEntry,
 } from '../core/workflow/workflow-reference.js';
 import { readRunMetaBySlug } from '../core/workflow/run/run-meta.js';
+import { WorkflowEngine } from '../core/workflow/engine/WorkflowEngine.js';
 
 const tempDirs = new Set<string>();
 let originalTaktConfigDir: string | undefined;
@@ -579,7 +580,7 @@ describe('task restart persistence and execution resolution', () => {
     expect(getScenarioQueue()?.remaining).toBe(0);
   });
 
-  it('should refuse a queued builtin checkpoint when only its instruction changes', async () => {
+  it('should resume a queued builtin checkpoint when only its instruction changes', async () => {
     const { projectDir, root, runner, failed, point } = await failBuiltinImplementation();
     runner.requeueTask(failed.name, ['failed'], { resumePoint: point });
     writeBuiltinRetryWorkflow(root, 'Implement v2');
@@ -593,17 +594,17 @@ describe('task restart persistence and execution resolution', () => {
     const logPath = path.join(projectDir, 'changed-builtin-mock-calls.ndjson');
     fs.writeFileSync(logPath, '', 'utf-8');
     process.env.TAKT_MOCK_CALL_LOG = logPath;
-    setMockScenario([{ persona: 'coder', status: 'done', content: 'must not execute' }]);
+    setMockScenario([{ persona: 'coder', status: 'done', content: 'implementation complete' }]);
 
     const success = await executeAndCompleteTask(running, runner, projectDir,
       { provider: 'mock' }, { outputMode: 'silent' });
 
-    expect(options.resumeFailureReason).toEqual(expect.stringMatching(/identity mismatch/i));
-    expect(success).toBe(false);
-    expect(readStartedMockPersonas(logPath)).toEqual([]);
+    expect(options.defaultId).toBe('resume-checkpoint');
+    expect(success).toBe(true);
+    expect(readStartedMockPersonas(logPath)).toEqual(['coder']);
   });
 
-  it('should read a legacy builtin run and return its unusable checkpoint reason to retry choices', async () => {
+  it('should offer a legacy builtin checkpoint when its workflow and step names match', async () => {
     const { projectDir, workflowPath, failed, point } = await failBuiltinImplementation();
     const legacyRef = `builtin:sha256:${createHash('sha256').update(fs.realpathSync(workflowPath)).digest('hex')}`;
     const legacyPoint = { ...point, stack: [{ ...point.stack[0]!, workflow_ref: legacyRef }] };
@@ -619,9 +620,8 @@ describe('task restart persistence and execution resolution', () => {
       projectCwd: projectDir, lookupCwd: projectDir, resumePoint: restored?.resumePoint,
     });
 
-    expect(options.resumeFailureReason).toEqual(expect.stringMatching(/legacy|旧/i));
-    expect(options.resumeFailureReason).toMatch(/absolute.path|絶対パス/i);
-    expect(options.resumeFailureReason).toMatch(/content|本文|内容/i);
+    expect(options.defaultId).toBe('resume-checkpoint');
+    expect(options.resumeFailureReason).toBeUndefined();
   });
 
   it.each(['unchanged definition', 'instruction-only change'])('should resume the persisted reviewer failure after %s without rerunning planner', async (change) => {
@@ -706,7 +706,7 @@ describe('task restart persistence and execution resolution', () => {
     expect(refused.failure?.error).toMatch(/resum/i);
   });
 
-  it.each(['missing step', 'workflow identity mismatch', 'step kind mismatch'])('should reject direct execution with a saved root %s before any agent call', async (reason) => {
+  it.each(['missing step', 'workflow name mismatch', 'step kind mismatch'])('should reject direct execution with a saved root %s before any agent call', async (reason) => {
     const projectDir = createProject();
     writeRetryResumeWorkflow(projectDir, 'reviewers', 'Review');
     const root = requireRetryWorkflow(projectDir);
@@ -715,7 +715,7 @@ describe('task restart persistence and execution resolution', () => {
       version: 2,
       stack: [{ ...entry,
         ...(reason === 'missing step' ? { step: 'removed-reviewers' } : {}),
-        ...(reason === 'workflow identity mismatch' ? { workflow_ref: 'project:other' } : {}),
+        ...(reason === 'workflow name mismatch' ? { workflow: 'other' } : {}),
         ...(reason === 'step kind mismatch' ? { kind: 'system' as const } : {}),
       }],
       iteration: 2, elapsed_ms: 100,
@@ -755,7 +755,7 @@ describe('task restart persistence and execution resolution', () => {
     expect(readStartedMockPersonas(logPath)).toEqual(['reviewer']);
   });
 
-  it.each(['requeue', 'retry'])('should execute the valid parent call after %s trims a removed child checkpoint and retain saved counters', async (mode) => {
+  it.each(['removed', 'kind changed'])('should stop requeue when the child checkpoint is %s without starting another step', async (change) => {
     const projectDir = createProject();
     writeRootRestartLifecycleWorkflows(projectDir);
     fs.writeFileSync(path.join(projectDir, '.takt', 'config.yaml'), 'sync_project_local_takt_on_retry: false\n');
@@ -787,41 +787,35 @@ describe('task restart persistence and execution resolution', () => {
     if (point === undefined) throw new Error(`Expected a saved child checkpoint: ${failed.failure?.error}`);
     expect(point.stack.map((entry) => entry.step)).toEqual(['delegate', 'child-first']);
     const childPath = path.join(worktreePath, '.takt', 'workflows', 'child.yaml');
-    fs.writeFileSync(childPath, fs.readFileSync(childPath, 'utf-8')
-      .replace('initial_step: child-first', 'initial_step: child-new')
-      .replace('name: child-first\n', 'name: child-new\n'), 'utf-8');
+    const oldChild = fs.readFileSync(childPath, 'utf-8');
+    const updatedChild = change === 'removed'
+      ? oldChild.replace('initial_step: child-first', 'initial_step: child-new')
+        .replace('name: child-first\n', 'name: child-new\n')
+      : oldChild.replace('    persona: child-first-persona\n    instruction: Child initial step', [
+        '    parallel:',
+        '      - name: parallel-child',
+        '        persona: child-first-persona',
+        '        instruction: Child initial step',
+        '        rules:',
+        '          - condition: when(true)',
+        '            next: COMPLETE',
+      ].join('\n'));
+    fs.writeFileSync(childPath, updatedChild, 'utf-8');
     invalidateAllResolvedConfigCache();
-    const preparation = prepareFailedTaskRetry(failed, projectDir);
-    const context = buildFailedTaskRetryStartContext(preparation, projectDir, workflowPath);
-    expect(context.startOptions.defaultId).toBe('resume-checkpoint');
-    const selected = await selectTaskRetryStart(context.workflowConfig, context.options,
-      async (_message, _options, defaultId) => defaultId);
-    if (selected === null) throw new Error('Expected the parent Resume selection');
-    const expectedPoint = { ...point, stack: point.stack.slice(0, 1) };
-    expect(selected.selection).toEqual({ kind: 'resume', resumePoint: expectedPoint });
-    const ownership = resolveTaskRetryStartOwnership(selected.selection, context.workflowConfig);
-    await persistFailedTaskRetry({
-      task: failed, projectDir, worktreePath,
-      startStep: ownership.startStep, resumePoint: ownership.resumePoint,
-      restartPoint: ownership.restartPoint, retryNote: undefined,
-      workflow: context.workflowOverride, taskDir: failed.taskDir, sourceRunSlug: preparation.matchedRunSlug,
-      ...(mode === 'retry' ? { revisedOrder: { content: 'Complete the task with the updated child workflow', lang: 'en' as const } } : {}),
-    });
+    runner.requeueTask(failed.name, ['failed'], { resumePoint: point });
     const running = runner.claimNextTasks(1)[0]!;
-    expect(running.data?.resume_point).toEqual(expectedPoint);
-    expect(running.data?.restart_point).toBeUndefined();
-    const resolved = await resolveTaskExecution(running, projectDir, undefined, { outputMode: 'silent' });
-    expect(resolved.startStep).toBe('delegate');
-    expect(resolved.resumePoint).toEqual(expectedPoint);
-    const logPath = path.join(projectDir, 'trimmed-child-mock-calls.ndjson');
+    const logPath = path.join(projectDir, 'removed-child-mock-calls.ndjson');
+    fs.writeFileSync(logPath, '', 'utf-8');
     process.env.TAKT_MOCK_CALL_LOG = logPath;
-    setMockScenario([{ persona: 'child-first-persona', status: 'done', content: 'child complete' }]);
+    setMockScenario([{ persona: 'child-first-persona', status: 'done', content: 'must not execute' }]);
 
     const success = await executeAndCompleteTask(running, runner, projectDir,
       { provider: 'mock' }, { outputMode: 'silent' });
 
-    expect(success, runner.listAllTaskItems().find((item) => item.name === running.name)?.failure?.error).toBe(true);
-    expect(readStartedMockPersonas(logPath)).toEqual(['child-first-persona']);
+    expect(success).toBe(false);
+    const error = runner.listAllTaskItems().find((item) => item.name === running.name)?.failure?.error;
+    expect(error).toMatch(/child-first/);
+    expect(readStartedMockPersonas(logPath)).toEqual([]);
   });
 
   it('should reject a raw pending restart record with exceeded execution state without changing tasks.yaml', () => {
@@ -1451,7 +1445,7 @@ describe('task restart persistence and execution resolution', () => {
     }
   });
 
-  it('should persist and strictly revalidate the selected opaque ref for same-named workflow files', async () => {
+  it('should preserve the selected call path for same-named workflow files when the ref changes', async () => {
     const projectDir = createProject();
     writeWorkflow(projectDir, 'identity-root.yaml', [
       'name: identity-root',
@@ -1516,10 +1510,10 @@ describe('task restart persistence and execution resolution', () => {
     expect(() => validateTaskRetryRestartPoint(root, wrongRefPoint, {
       projectCwd: projectDir,
       lookupCwd: projectDir,
-    })).toThrow();
+    })).not.toThrow();
   });
 
-  it('should reject a changed grandchild workflow_ref in the complete restart path', () => {
+  it('should accept a changed grandchild workflow_ref in the complete restart path', () => {
     const projectDir = createProject();
     writeRestartExecutionWorkflows(projectDir);
     invalidateAllResolvedConfigCache();
@@ -1538,7 +1532,7 @@ describe('task restart persistence and execution resolution', () => {
     expect(() => validateTaskRetryRestartPoint(root, changedGrandchild, {
       projectCwd: projectDir,
       lookupCwd: projectDir,
-    })).toThrow();
+    })).not.toThrow();
   });
 
   it('should consume a root agent restart before executing a later normal workflow_call', async () => {
@@ -1594,6 +1588,98 @@ describe('task restart persistence and execution resolution', () => {
     expect(getScenarioQueue()?.remaining).toBe(0);
   });
 
+  it('should continue multiple calls after a root-agent retry when the parent ref changed and source metadata is missing', async () => {
+    const projectDir = createProject();
+    writeRootRestartLifecycleWorkflows(projectDir);
+    writeFailedTask(projectDir);
+    const rootWorkflowPath = path.join(projectDir, '.takt', 'workflows', 'default.yaml');
+    fs.writeFileSync(rootWorkflowPath, fs.readFileSync(rootWorkflowPath, 'utf-8')
+      .replace('max_steps: 10', 'max_steps: 4')
+      .replace('      - condition: ok\n        next: COMPLETE', '      - condition: ok\n        next: selected'));
+    invalidateAllResolvedConfigCache();
+    const root = loadWorkflowByIdentifier('default', projectDir);
+    if (root === null) throw new Error('Expected root restart workflow');
+    const restartPoint: WorkflowRestartPoint = {
+      stack: [buildWorkflowRestartPointEntry(root, 'selected', 'agent')],
+    };
+    const sourceRunSlug = 'source-run';
+    const sourceNamespace = `iteration-4--step-delegate--workflow-child--site-${'a'.repeat(64)}`;
+    const sourceReportDir = path.join(
+      projectDir, '.takt', 'runs', sourceRunSlug, 'reports', 'subworkflows', sourceNamespace,
+    );
+    fs.mkdirSync(sourceReportDir, { recursive: true });
+    fs.writeFileSync(path.join(sourceReportDir, 'result.md'), 'saved call artifact');
+    const sourceResumePoint: WorkflowResumePoint = {
+      version: 2,
+      stack: [{
+        workflow: 'default', workflow_ref: 'old-parent-ref', step: 'selected', kind: 'agent', occurrence: 1,
+      }],
+      iteration: 2,
+      elapsed_ms: 100,
+      workflow_call_invocations: {
+        '{"workflow":"old-parent-ref","step":"delegate","calls":[]}': {
+          call_instance: 4,
+          report_namespace_segment: sourceNamespace,
+        },
+      },
+      workflow_step_participations: {},
+    };
+    expect(readRunMetaBySlug(projectDir, sourceRunSlug)).toBeNull();
+    const runner = new TaskRunner(projectDir);
+    runner.requeueTask('nested-retry', ['failed'], {
+      startStep: undefined,
+      retryNote: 'restart root agent with saved call occurrences',
+      resumePoint: undefined,
+      workflow: undefined,
+      taskDir: undefined,
+      sourceRunSlug,
+      restartPoint,
+      sourceResumePoint,
+    });
+    const running = runner.claimNextTasks(1)[0];
+    if (running === undefined) throw new Error('Expected root-agent restart task');
+    const mockCallLog = path.join(projectDir, 'root-agent-occurrences.ndjson');
+    process.env.TAKT_MOCK_CALL_LOG = mockCallLog;
+    setMockScenario([
+      { persona: 'selected-persona', status: 'done', content: 'selected first' },
+      { persona: 'child-first-persona', status: 'done', content: 'child fifth' },
+      { persona: 'selected-persona', status: 'done', content: 'selected second' },
+      { persona: 'child-first-persona', status: 'done', content: 'child sixth' },
+    ]);
+    const callStarts: Array<{ callInstance: number; parentWorkflow: string }> = [];
+    const originalEmit = WorkflowEngine.prototype.emit;
+    vi.spyOn(WorkflowEngine.prototype, 'emit').mockImplementation(function (this: WorkflowEngine, event, ...args) {
+      if (event === 'workflow_call:start') {
+        const payload = args[0] as { step: string; callInstance: number; parentWorkflow: string };
+        if (payload.step === 'delegate') {
+          callStarts.push({ callInstance: payload.callInstance, parentWorkflow: payload.parentWorkflow });
+        }
+      }
+      return originalEmit.call(this, event, ...args);
+    });
+
+    const success = await executeAndCompleteTask(
+      running,
+      runner,
+      projectDir,
+      { provider: 'mock' },
+      { outputMode: 'silent' },
+    );
+
+    expect(success).toBe(false);
+    expect(readStartedMockPersonas(mockCallLog)).toEqual([
+      'selected-persona',
+      'child-first-persona',
+      'selected-persona',
+      'child-first-persona',
+    ]);
+    expect(getScenarioQueue()?.remaining).toBe(0);
+    expect(callStarts).toEqual([5, 6].map((callInstance) => ({
+      callInstance,
+      parentWorkflow: restartPoint.stack[0]!.workflow_ref,
+    })));
+  });
+
   it('should enter the child initial step from a terminal root workflow_call restart', async () => {
     const projectDir = createProject();
     writeRootRestartLifecycleWorkflows(projectDir);
@@ -1644,12 +1730,15 @@ describe('task restart persistence and execution resolution', () => {
     expect(getScenarioQueue()?.remaining).toBe(0);
   });
 
-  it('should execute a persisted grandchild restart through real nested engines and continue normal calls', async () => {
+  it.each(['unchanged', 'updated refs'])('should execute a persisted grandchild restart through real nested engines with %s', async (change) => {
     const projectDir = createProject();
     writeRestartExecutionWorkflows(projectDir);
     writeFailedTask(projectDir);
     invalidateAllResolvedConfigCache();
-    const restartPoint = buildExecutionRestartPoint(projectDir);
+    const originalPoint = buildExecutionRestartPoint(projectDir);
+    const restartPoint = change === 'updated refs'
+      ? { stack: originalPoint.stack.map((entry) => ({ ...entry, workflow_ref: `${entry.workflow_ref}-old` })) }
+      : originalPoint;
     const mockCallLog = path.join(projectDir, 'mock-calls.ndjson');
     process.env.TAKT_MOCK_CALL_LOG = mockCallLog;
     setMockScenario([

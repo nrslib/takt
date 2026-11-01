@@ -19,6 +19,7 @@ import {
 } from '../features/tasks/taskRetryStartPath.js';
 import type { SelectOptionItem } from '../shared/prompt/index.js';
 import { attachWorkflowOpaqueRef } from '../infra/config/loaders/workflowSourceMetadata.js';
+import { DebugLogger } from '../shared/utils/debug.js';
 
 const { mockResolveWorkflowCallTarget, mockWarn } = vi.hoisted(() => ({
   mockResolveWorkflowCallTarget: vi.fn(),
@@ -195,7 +196,7 @@ beforeEach(() => {
 });
 
 describe('invalid saved resume position', () => {
-  it.each([false, true])('should explain a legacy builtin mismatch against a project workflow, with matching ref: %s', async (matching) => {
+  it.each([false, true])('should retain a root checkpoint with matching names, with matching ref: %s', async (matching) => {
     const currentRef = `project:sha256:${'b'.repeat(64)}`;
     const root = makeWorkflow({
       name: 'default', ref: currentRef, steps: [agentStep('plan')],
@@ -209,22 +210,11 @@ describe('invalid saved resume position', () => {
     const cap = await capturePicker(root, { ...pathContext, resumePoint: point },
       (_options, defaultValue) => defaultValue);
 
-    expect(cap.options.some((option) => option.value === 'resume-checkpoint')).toBe(matching);
-    expect(cap.result?.selection.kind).toBe(matching ? 'resume' : 'restart');
-    if (matching) {
-      expect(mockWarn).not.toHaveBeenCalled();
-      expect(cap.result?.selection).toEqual({ kind: 'resume', resumePoint: point });
-    } else {
-      expect(mockWarn).toHaveBeenCalledTimes(1);
-      const notice = mockWarn.mock.calls[0]![0] as string;
-      expect(notice).toMatch(/legacy builtin workflow_ref/i);
-      expect(notice).toMatch(/absolute.path/i);
-      expect(notice).toMatch(/current workflow content/i);
-      expect(notice).not.toMatch(/current builtin/i);
-    }
+    expect(cap.options.some((option) => option.value === 'resume-checkpoint')).toBe(true);
+    expect(cap.result?.selection).toEqual({ kind: 'resume', resumePoint: point });
   });
 
-  it.each([false, true])('should retain the valid prefix for a legacy builtin child mismatch, with matching ref: %s', async (matching) => {
+  it.each([false, true])('should retain the full child checkpoint with matching names, with matching ref: %s', async (matching) => {
     const currentRef = `project:sha256:${'b'.repeat(64)}`;
     const child = makeWorkflow({
       name: 'coding', ref: currentRef, callable: true, steps: [agentStep('review')],
@@ -245,18 +235,10 @@ describe('invalid saved resume position', () => {
       (_options, defaultValue) => defaultValue);
 
     expect(cap.result?.selection).toEqual({
-      kind: 'resume', resumePoint: { ...point, stack: matching ? point.stack : point.stack.slice(0, 1) },
+      kind: 'resume', resumePoint: point,
     });
     const description = cap.options.find((option) => option.value === 'resume-checkpoint')!.description;
-    if (matching) {
-      expect(description).not.toMatch(/legacy/i);
-    } else {
-      expect(description).toMatch(/absolute.path/i);
-      expect(description).toMatch(/current workflow content/i);
-      expect(description).not.toMatch(/current builtin/i);
-      expect(description).toMatch(/valid prefix/i);
-    }
-    expect(mockWarn).not.toHaveBeenCalled();
+    expect(description).not.toMatch(/valid prefix/i);
   });
 
   it('should notify and cancel without a picker when an invalid checkpoint has no restart target', async () => {
@@ -294,11 +276,11 @@ describe('invalid saved resume position', () => {
   it.each([
     { reason: 'missing step', point: rootResumePoint('reviewers', 'agent'), detail: /reviewers/ },
     {
-      reason: 'workflow identity mismatch',
+      reason: 'workflow name mismatch',
       point: { ...rootResumePoint('plan', 'agent'), stack: [{
-        ...rootResumePoint('plan', 'agent').stack[0]!, workflow_ref: 'project:other',
+        ...rootResumePoint('plan', 'agent').stack[0]!, workflow: 'other',
       }] },
-      detail: /project:other|identity|reference|workflow_ref/i,
+      detail: /other|identity|workflow/i,
     },
     { reason: 'step kind mismatch', point: rootResumePoint('plan', 'system'), detail: /kind|system/i },
   ])('should explain $reason before offering an explicit restart', async ({ point, detail }) => {
@@ -593,10 +575,10 @@ describe('tree restart picker contracts', () => {
 describe('resume checkpoint is preserved across the tree picker', () => {
   it.each([
     { change: 'unchanged', length: 3 },
-    { change: 'last child renamed', length: 2 },
-    { change: 'middle child renamed', length: 1 },
+    { change: 'last child renamed', length: 0 },
+    { change: 'middle child renamed', length: 0 },
     { change: 'root missing', length: 0 },
-  ])('should preserve the longest valid prefix and counters when $change', async ({ change, length }) => {
+  ])('should preserve the full checkpoint or reject it when $change', async ({ change, length }) => {
     const leaf = makeWorkflow({
       name: 'leaf', ref: 'project:leaf', callable: true,
       steps: [agentStep(change === 'last child renamed' ? 'child-new' : 'child-first')],
@@ -631,35 +613,18 @@ describe('resume checkpoint is preserved across the tree picker', () => {
     const model = buildTaskRetryStartOptions(root, options);
     if (length === 0) {
       expect(model.options.some((option) => option.id === 'resume-checkpoint')).toBe(false);
-      expect(model.resumeFailureReason).toMatch(/child-first/);
+      expect(model.resumeFailureReason).toMatch(change === 'middle child renamed' ? /delegate-leaf/ : /child-first/);
       expect(() => resolveTaskRetryStartOption(root, options, 'resume-checkpoint')).toThrow();
     } else {
       expect(model.defaultId).toBe('resume-checkpoint');
       expect(model.resumeFailureReason).toBeUndefined();
       const resume = model.options.find((option) => option.id === 'resume-checkpoint');
-      expect(resume).toMatchObject({ path: length === 3
-        ? '"default" > "delegate" → "child" > "delegate-leaf" → "leaf" > "child-first"'
-        : length === 2
-          ? '"default" > "delegate" → "child" > "delegate-leaf"'
-          : '"default" > "delegate"' });
-      if (length < 3) {
-        expect(resume?.description).toContain('Full saved position could not be resolved:');
-        expect(resume?.description).toContain('Resume will use the valid prefix:');
-        expect(resume?.description).toContain('"default" > "delegate"');
-        expect(resume?.description).toContain(change === 'last child renamed' ? 'child-first' : 'delegate-leaf');
-      } else {
-        expect(resume?.description).not.toContain('Full saved position');
-      }
+      expect(resume).toMatchObject({ path: '"default" > "delegate" → "child" > "delegate-leaf" → "leaf" > "child-first"' });
+      expect(resume?.description).not.toContain('Full saved position');
       const selected = resolveTaskRetryStartOption(root, options, model.defaultId);
-      const expected = { ...point, stack: point.stack.slice(0, length) };
-      expect(selected.selection).toEqual({ kind: 'resume', resumePoint: expected });
-      expect(resolveTaskRetryStartOwnership(selected.selection, root)).toEqual({ startStep: 'delegate', resumePoint: expected });
-      expect(selected.label).toContain(`Resume failed position: "${point.stack[length - 1]!.step}"`);
-      expect(selected.label).toContain(length === 3
-        ? '"default" > "delegate" → "child" > "delegate-leaf" → "leaf" > "child-first"'
-        : length === 2
-          ? '"default" > "delegate" → "child" > "delegate-leaf"'
-          : '"default" > "delegate"');
+      expect(selected.selection).toEqual({ kind: 'resume', resumePoint: point });
+      expect(resolveTaskRetryStartOwnership(selected.selection, root)).toEqual({ startStep: 'delegate', resumePoint: point });
+      expect(selected.label).toContain('Resume failed position: "child-first"');
       const cap = await capturePicker(root, options, (_options, defaultValue) => defaultValue);
       expect(cap.result).toEqual(selected);
     }
@@ -1166,6 +1131,12 @@ describe('task retry start options without terminal selection', () => {
     };
     const selectionOptions = { ...pathContext, resumePoint };
     const catalog = buildTaskRetryStartOptions(root, selectionOptions);
+    if (renamed !== undefined) {
+      expect(catalog.options.some((option) => option.id === 'resume-checkpoint')).toBe(false);
+      expect(catalog.resumeFailureReason).toContain(renamed === 'leaf' ? 'final-gate' : 'review');
+      expect(() => resolveTaskRetryStartOption(root, selectionOptions, 'resume-checkpoint')).toThrow();
+      return;
+    }
     const resume = catalog.options.find((option) => option.id === 'resume-checkpoint')!;
     expect(resume.headings).toEqual([
       { path: '"default" > "delegate"', description: 'Root review' },
@@ -1175,7 +1146,6 @@ describe('task retry start options without terminal selection', () => {
     expect(resume.path).toBe(resolvedLength === 3
       ? '"default" > "delegate" → "child" > "review" → "leaf" > "final-gate"'
       : resolvedLength === 2 ? '"default" > "delegate" → "child" > "review"' : '"default" > "delegate"');
-    if (renamed !== undefined) expect(resume.description).toContain(renamed === 'leaf' ? 'final-gate' : 'review');
     expect(catalog.defaultId).toBe('resume-checkpoint');
     expect(resolveTaskRetryStartOption(root, selectionOptions, 'resume-checkpoint').selection).toEqual({
       kind: 'resume', resumePoint: { ...resumePoint, stack: resumePoint.stack.slice(0, resolvedLength) },
@@ -1393,13 +1363,31 @@ describe('persisted task retry restart validation', () => {
       .toThrow();
   });
 
-  it('should reject a root workflow identity mismatch', () => {
+  it('should accept a changed root workflow ref when the name and step match', () => {
     const root = makeWorkflow({
       name: 'default', ref: 'project:other-root', steps: [agentStep('plan')],
     });
 
     expect(() => validateTaskRetryRestartPoint(root, rootRestartPoint('plan'), pathContext))
-      .toThrow();
+      .not.toThrow();
+  });
+
+  it.each([true, false])('warns about a retry workflow ref mismatch only when refs differ: %s', (mismatch) => {
+    const root = makeWorkflow({ name: 'default', ref: mismatch ? 'project:updated' : 'project:root', steps: [agentStep('plan')] });
+    const writeLog = vi.spyOn(DebugLogger.getInstance(), 'writeLog');
+    try {
+      validateTaskRetryRestartPoint(root, rootRestartPoint('plan'), pathContext);
+      const warnings = writeLog.mock.calls.filter(([level]) => level === 'WARN');
+      expect(warnings.length > 0).toBe(mismatch);
+      if (mismatch) expect(JSON.stringify(warnings)).toMatch(/workflow|ref|hash/i);
+    } finally {
+      writeLog.mockRestore();
+    }
+  });
+
+  it('should reject a changed root workflow name even when the ref matches', () => {
+    const root = makeWorkflow({ name: 'other', ref: 'project:root', steps: [agentStep('plan')] });
+    expect(() => validateTaskRetryRestartPoint(root, rootRestartPoint('plan'), pathContext)).toThrow();
   });
 
   it('should reject a restart path when a non-call middle step cannot lead to the terminal entry', () => {
@@ -1448,7 +1436,7 @@ describe('persisted task retry restart validation', () => {
       .toThrow('workflow "coding" referenced by step "delegate" is not callable');
   });
 
-  it('should reject a nested restart path when the child workflow_ref no longer matches', () => {
+  it('should accept a nested restart path when only the child workflow_ref changes', () => {
     const root = makeWorkflow({
       name: 'default',
       ref: 'project:root',
@@ -1475,6 +1463,6 @@ describe('persisted task retry restart validation', () => {
     mockResolveWorkflowCallTarget.mockReturnValue(child);
 
     expect(() => validateTaskRetryRestartPoint(root, restartPoint, pathContext))
-      .toThrow('Task retry restart path cannot be resolved at step "finish"');
+      .not.toThrow();
   });
 });

@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { REPORT_EXECUTIONS_DIRECTORY, classifyReportRelativePath } from '../models/reserved-report-names.js';
 import { ensurePrivateDirectory, readPrivateFileState, writePrivateFile } from '../../shared/utils/private-file.js';
 import { runPrivateFileExclusive } from '../../shared/utils/private-file-lock.js';
+import { lstatOrUndefined } from '../../shared/utils/private-path-identity.js';
 import { pinReportContent } from './report-writer.js';
 import { buildWorkflowCallNamespaceSegment, parseWorkflowCallNamespaceSegment } from './workflow-call-namespace.js';
 import { parseWorkflowExecutionIdentity } from './workflow-execution-identity-codec.js';
@@ -72,6 +73,7 @@ export class ReportExecutionStore {
   }
 
   private read(): z.infer<typeof storeSchema> | undefined {
+    if (lstatOrUndefined(this.directory) === undefined) return undefined;
     const snapshot = readPrivateFileState(this.indexPath);
     return snapshot.state.exists && 'content' in snapshot
       ? storeSchema.parse(JSON.parse(snapshot.content.toString('utf8')))

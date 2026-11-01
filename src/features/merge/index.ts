@@ -318,6 +318,7 @@ async function runPrMergeWorkflow(
     ...(data.retry_note === undefined ? {} : { retryNote: data.retry_note }),
     ...(data.resume_point === undefined ? {} : { resumePoint: data.resume_point }),
     ...(data.restart_point === undefined ? {} : { restartPoint: data.restart_point }),
+    ...(data.source_resume_point === undefined ? {} : { sourceResumePoint: data.source_resume_point }),
     ...(task.resumeMode === undefined ? {} : { resumeSource: {
       ...(task.sourceRunSlug === undefined ? {} : { sourceRunSlug: task.sourceRunSlug }),
       resumeMode: task.resumeMode,

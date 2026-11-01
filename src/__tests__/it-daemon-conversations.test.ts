@@ -73,34 +73,62 @@ function ipcMeasurements(observations: IpcObservation[], pids: number[], concurr
 
 it.each(['manager', 'director'] as const)('keeps two %s screens connected to the same live conversation for thirty seconds after a reply', async (kind) => {
   const fixture = concurrentTuiFixture(kind);
+  const log = fixture.log;
   const clients: ConcurrentTui[] = [];
   let concurrentAt = Number.POSITIVE_INFINITY;
   try {
+    log('start-first:before');
     const first = await fixture.start(); clients.push(first);
+    log('start-first:after', first.child.pid);
+    log('ready-first:before', first.child.pid);
     await first.ready();
+    log('ready-first:after', first.child.pid);
+    log('inspect-first:before', first.child.pid);
     const initial = (await first.inspect()).snapshot.state!;
+    log('inspect-first:after', first.child.pid);
+    log('initial-snapshots:before', first.child.pid);
     await vi.waitFor(() => expect(fixture.readObservations().filter((row) => row.event === 'request'
       && row.pid === first.child.pid && row.method === 'snapshot').length).toBeGreaterThanOrEqual(3), { timeout: 5000 });
+    log('initial-snapshots:after', first.child.pid);
     concurrentAt = Date.now();
+    log('start-second:before');
     const second = await fixture.start(); clients.push(second);
+    log('start-second:after', second.child.pid);
+    log('ready-second:before', second.child.pid);
     await second.ready();
-    expect((await second.inspect()).snapshot.state?.conversationId).toBe(initial.conversationId);
+    log('ready-second:after', second.child.pid);
+    log('inspect-second:before', second.child.pid);
+    const secondScreen = await second.inspect();
+    log('inspect-second:after', second.child.pid);
+    expect(secondScreen.snapshot.state?.conversationId).toBe(initial.conversationId);
     const owner = readDaemonOwner(fixture.directory)!;
     expect(owner).toBeDefined();
     const text = 'Share this message with both open screens';
+    log('submit:before', first.child.pid);
     await first.submit(text);
+    log('submit:after', first.child.pid);
+    log('provider-start:before', owner.pid);
     await vi.waitFor(() => expect(fixture.readObservations()).toContainEqual(expect.objectContaining({
       event: 'provider_start', agent: kind, pid: owner.pid,
     })), { timeout: 10000 });
+    log('provider-start:after', owner.pid);
+    log('release:before', owner.pid);
     fixture.release();
+    log('release:after', owner.pid);
+    log('reply:before', first.child.pid);
     await vi.waitFor(async () => {
       const screen = await first.inspect();
       expect(screen.frame).toContain(fixture.reply);
       expect(screen.snapshot.state?.running).toBeNull();
     }, { timeout: 10000 });
+    log('reply:after', first.child.pid);
     const repliedAt = Date.now();
+    log('wait-30s:before', owner.pid);
     await delay(30000);
+    log('wait-30s:after', owner.pid);
+    log('final-inspect:before');
     const screens = await Promise.all(clients.map((client) => client.inspect()));
+    log('final-inspect:after');
     const observations = fixture.readObservations();
     const measurements = ipcMeasurements(observations, clients.map((client) => client.child.pid!), concurrentAt);
     expect(Date.now() - repliedAt).toBeGreaterThanOrEqual(30000);
@@ -140,11 +168,28 @@ it.each(['manager', 'director'] as const)('keeps two %s screens connected to the
       if (request.maxMs !== null) expect(request.maxMs).toBeLessThan(5000);
     }
   } finally {
+    log('cleanup:before');
+    log('final-read-observations:before');
     const observations = fixture.readObservations();
-    console.info(JSON.stringify({ kind, ...ipcMeasurements(observations, clients.map((client) => client.child.pid!), concurrentAt),
-      timeline: observations.filter((row) => row.event !== 'refresh' && row.event !== 'event_loop'),
-      owner: readDaemonOwner(fixture.directory) }));
+    log('final-read-observations:after');
+    log('final-ipc-measurements:before');
+    const measurements = ipcMeasurements(observations, clients.map((client) => client.child.pid!), concurrentAt);
+    log('final-ipc-measurements:after');
+    log('final-read-daemon-owner:before');
+    const owner = readDaemonOwner(fixture.directory);
+    log('final-read-daemon-owner:after', owner?.pid);
+    log('final-diagnostics-json:before');
+    const diagnostics = JSON.stringify({ kind,
+      observationCount: observations.length,
+      requestCount: measurements.requests.reduce((total, request) => total + request.count, 0),
+      serviceCallCount: measurements.service.reduce((total, service) => total + service.calls, 0),
+      owner });
+    log('final-diagnostics-json:after');
+    log('final-console-info:before');
+    console.info(diagnostics);
+    log('final-console-info:after');
     await fixture.cleanup();
+    log('cleanup:after');
   }
 }, 180_000);
 
@@ -268,7 +313,7 @@ it('executes provider calls and conversation writes only in the daemon process a
     expect([...new Set(calls.map(({ pid }) => pid))]).toEqual([owner.pid]);
     expect(calls.filter(({ agent }) => agent === 'manager').map(({ pid }) => pid)).toEqual([owner.pid]);
     expect(calls.filter(({ agent }) => agent === 'director').map(({ pid }) => pid)).toEqual([owner.pid]);
-    await vi.waitFor(() => expect(fixture.state()).toMatchObject({ pending: { summary: fixture.summary }, running: null }), { timeout: 30000 });
+    await vi.waitFor(async () => expect((await fixture.state())).toMatchObject({ pending: { summary: fixture.summary }, running: null }), { timeout: 30000 });
     const writes = fixture.readObservations().filter(({ event }) => event === 'write');
     expect(writes.some(({ pid, running }) => pid === owner.pid && !running)).toBe(true);
     expect(writes.filter(({ pid }) => pid === tui.child.pid)).toEqual([]);
@@ -283,13 +328,13 @@ it('finishes an accepted turn after Ctrl+C has exited the TUI process', async ()
     const tui = await fixture.start(fixture.repository, undefined);
     await waitForManager(tui, 'Discuss your goal');
     await submitManagerText(tui, 'Continue after I close this screen');
-    await vi.waitFor(() => expect(fixture.state()?.running?.kind).toBe('message'), { timeout: 30000 });
+    await vi.waitFor(async () => expect((await fixture.state())?.running?.kind).toBe('message'), { timeout: 30000 });
     const owner = readDaemonOwner(fixture.directory)!;
     await vi.waitFor(() => expect(fixture.readObservations()).toContainEqual(expect.objectContaining({ event: 'provider_start', agent: 'manager', pid: owner.pid })), { timeout: 30000 });
     await tui.exit();
-    expect(fixture.state()?.running).toMatchObject({ kind: 'message' });
+    expect((await fixture.state())?.running).toMatchObject({ kind: 'message' });
     fixture.release();
-    await vi.waitFor(() => expect(fixture.state()).toMatchObject({ pending: { summary: fixture.summary }, running: null }), { timeout: 30000 });
+    await vi.waitFor(async () => expect((await fixture.state())).toMatchObject({ pending: { summary: fixture.summary }, running: null }), { timeout: 30000 });
     expect(fixture.readObservations()).toContainEqual(expect.objectContaining({ event: 'provider_complete', agent: 'manager', pid: owner.pid }));
   } finally { await fixture.cleanup(); }
 });
@@ -302,8 +347,8 @@ it('reopens the same conversation and approves its restored summary with Up and 
     await waitForManager(first, 'Discuss your goal');
     await submitManagerText(first, 'Remember this proposal');
     await waitForManager(first, fixture.summary.objective);
-    await vi.waitFor(() => expect(fixture.state()?.pending?.summary).toEqual(fixture.summary), { timeout: 30000 });
-    const saved = fixture.state()!;
+    await vi.waitFor(async () => expect((await fixture.state())?.pending?.summary).toEqual(fixture.summary), { timeout: 30000 });
+    const saved = (await fixture.state())!;
     await first.exit();
     const second = await fixture.start(fixture.repository, undefined);
     await waitForManager(second, fixture.summary.objective);
@@ -311,8 +356,8 @@ it('reopens the same conversation and approves its restored summary with Up and 
     expect(opens.filter(({ pid }) => pid === first.child.pid).map(({ conversationId }) => conversationId)).toEqual([saved.id]);
     expect(opens.filter(({ pid }) => pid === second.child.pid).map(({ conversationId }) => conversationId)).toEqual([saved.id]);
     await second.approveSummary(saved.pending!.revision);
-    await vi.waitFor(() => expect(fixture.state()?.approval?.state).toBe('registered'), { timeout: 30000 });
-    const receipt = fixture.state()!.approval!;
+    await vi.waitFor(async () => expect((await fixture.state())?.approval?.state).toBe('registered'), { timeout: 30000 });
+    const receipt = (await fixture.state())!.approval!;
     expect(receipt.revision).toBe(saved.pending!.revision);
     expect((await new GoalStore(fixture.repository).get(receipt.goalId)).objective).toBe(fixture.summary.objective);
     expect(fixture.readObservations()).toContainEqual(expect.objectContaining({ event: 'request', pid: second.child.pid,
@@ -337,14 +382,14 @@ it('connects two TUI processes for the same canonical assignment to the same sav
     for (const tui of [first, second]) {
       expect(opens.filter(({ pid }) => pid === tui.child.pid).map(({ conversationId }) => conversationId)).toEqual([saved.id]);
     }
-    expect(fixture.state()?.pending).toEqual(saved.pending);
+    expect((await fixture.state())?.pending).toEqual(saved.pending);
     expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager')).toEqual([]);
     await expectCompletedFrames(second, [saved.pending!.summary.objective]);
     await first.exit();
     await waitForManager(second, saved.pending!.summary.objective);
     const reopened = await fixture.start(fixture.repository, undefined);
     await waitForManager(reopened, saved.pending!.summary.objective);
-    expect(fixture.state()).toMatchObject({ id: saved.id, revision: 4, pending: saved.pending });
+    expect((await fixture.state())).toMatchObject({ id: saved.id, revision: 4, pending: saved.pending });
     expect(fixture.readObservations().filter(({ event, method, pid }) => event === 'request' && method === 'open' && pid === reopened.child.pid)
       .map(({ conversationId }) => conversationId)).toEqual([saved.id]);
     await second.exit(); await reopened.exit();
@@ -360,11 +405,11 @@ it('finishes reading on the same Japanese screen after a /make-goal request with
     const tui = await fixture.start(fixture.repository, undefined);
     await waitForManager(tui, 'ゴールを相談してください');
     await tui.ready(null);
-    expect(fixture.state()?.pending).toBeNull();
+    expect((await fixture.state())?.pending).toBeNull();
     await submitManagerText(tui, '/make-goal');
     await waitForManager(tui, insufficient);
-    await vi.waitFor(() => expect(fixture.state()?.running).toBeNull(), { timeout: 30000 });
-    expect(fixture.state()?.pending).toBeNull();
+    await vi.waitFor(async () => expect((await fixture.state())?.running).toBeNull(), { timeout: 30000 });
+    expect((await fixture.state())?.pending).toBeNull();
 
     tui.key('こんにちは');
     await waitForManager(tui, 'こんにちは');
@@ -388,10 +433,10 @@ it('keeps every sampled Japanese screen complete during periodic refresh and acc
     await waitForManager(tui, saved.pending!.summary.objective);
     await expectCompletedFrames(tui, [saved.pending!.summary.objective, getLabel('manager.summaryInputHint', 'ja')]);
     await tui.approveSummary(saved.pending!.revision);
-    await vi.waitFor(() => expect(fixture.state()?.approval).toMatchObject({ revision: 4, state: 'registered' }), { timeout: 30000 });
+    await vi.waitFor(async () => expect((await fixture.state())?.approval).toMatchObject({ revision: 4, state: 'registered' }), { timeout: 30000 });
     expect(fixture.readObservations().filter(({ event, command, pid }) => event === 'request' && command === 'approve_summary' && pid === tui.child.pid))
       .toEqual([expect.objectContaining({ revision: saved.pending!.revision })]);
-    const receipt = fixture.state()!.approval!;
+    const receipt = (await fixture.state())!.approval!;
     expect((await new GoalStore(fixture.repository).get(receipt.goalId)).objective).toBe(saved.pending!.summary.objective);
     await tui.exit();
   } finally { await fixture.cleanup(); }
@@ -411,7 +456,7 @@ it('keeps repositories with the same basename in separate conversations', async 
     const opens = fixture.readObservations().filter(({ event, method, pid }) => event === 'request' && method === 'open' && pid === second.child.pid);
     expect(opens).toHaveLength(1);
     expect(opens[0]!.conversationId).not.toBe(saved.id);
-    expect(fixture.state(other)?.pending).toBeNull();
+    expect((await fixture.state(other))?.pending).toBeNull();
     expect(await second.frame()).not.toContain(saved.pending!.summary.objective);
     await first.exit(); await second.exit();
   } finally { await fixture.cleanup(); }
@@ -423,8 +468,8 @@ it('opens the same conversation after daemon stop and restart and accepts a new 
     const first = await fixture.start(fixture.repository, undefined);
     await waitForManager(first, 'Discuss your goal');
     await submitManagerText(first, 'This turn will be interrupted');
-    await vi.waitFor(() => expect(fixture.state()?.running?.kind).toBe('message'), { timeout: 30000 });
-    const before = fixture.state()!;
+    await vi.waitFor(async () => expect((await fixture.state())?.running?.kind).toBe('message'), { timeout: 30000 });
+    const before = (await fixture.state())!;
     const owner = readDaemonOwner(fixture.directory)!;
     await lifecycle.stopDaemon();
     await first.exit();
@@ -432,10 +477,10 @@ it('opens the same conversation after daemon stop and restart and accepts a new 
     const second = await fixture.start(fixture.repository, undefined);
     await waitForManager(second, 'Discuss your goal');
     expect(readDaemonOwner(fixture.directory)!.pid).not.toBe(owner.pid);
-    expect(fixture.state()).toMatchObject({ id: before.id, running: null });
+    expect((await fixture.state())).toMatchObject({ id: before.id, running: null });
     await submitManagerText(second, 'A new request after restart');
     await waitForManager(second, fixture.summary.objective);
-    await vi.waitFor(() => expect(fixture.state()).toMatchObject({ id: before.id, pending: { summary: fixture.summary }, running: null }), { timeout: 30000 });
+    await vi.waitFor(async () => expect((await fixture.state())).toMatchObject({ id: before.id, pending: { summary: fixture.summary }, running: null }), { timeout: 30000 });
     expect(fixture.readObservations().filter(({ event, pid }) => event === 'request' && pid === second.child.pid)
       .filter(({ command }) => command === 'message')).toHaveLength(1);
     expect(fixture.readObservations().filter(({ event, command }) => event === 'request' && command === 'message')).toHaveLength(2);
@@ -472,12 +517,12 @@ it('rejects a busy TUI message and never sends it after the active turn complete
     const tui = await fixture.start(fixture.repository, undefined);
     await waitForManager(tui, 'Discuss your goal');
     await submitManagerText(tui, 'The accepted request');
-    await vi.waitFor(() => expect(fixture.state()?.running?.kind).toBe('message'), { timeout: 30000 });
+    await vi.waitFor(async () => expect((await fixture.state())?.running?.kind).toBe('message'), { timeout: 30000 });
     await submitManagerText(tui, 'The rejected request');
     await waitForManager(tui, getLabel('manager.conversation.busy', 'en'));
     fixture.release();
     await waitForManager(tui, fixture.summary.objective);
-    await vi.waitFor(() => expect(fixture.state()?.running).toBeNull(), { timeout: 30000 });
+    await vi.waitFor(async () => expect((await fixture.state())?.running).toBeNull(), { timeout: 30000 });
     expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager')).toHaveLength(1);
     await tui.exit();
     expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager')).toHaveLength(1);
@@ -490,19 +535,19 @@ it('keeps a proposal arriving after busy /make-goal unregistered until a new exp
     const tui = await fixture.start(fixture.repository, undefined);
     await waitForManager(tui, 'Discuss your goal');
     await submitManagerText(tui, 'Prepare the proposal while this turn is active');
-    await vi.waitFor(() => expect(fixture.state()?.running?.kind).toBe('message'), { timeout: 30000 });
-    const operationId = fixture.state()!.running!.operationId;
+    await vi.waitFor(async () => expect((await fixture.state())?.running?.kind).toBe('message'), { timeout: 30000 });
+    const operationId = (await fixture.state())!.running!.operationId;
     await tui.ready(operationId);
-    expect(fixture.state()?.pending).toBeNull();
+    expect((await fixture.state())?.pending).toBeNull();
     await submitManagerText(tui, '/make-goal');
     await waitForManager(tui, getLabel('manager.conversation.busy', 'en'));
     fixture.release();
     await waitForManager(tui, fixture.summary.objective);
     await tui.ready(null);
     const requests = () => fixture.readObservations().filter(({ event, pid }) => event === 'request' && pid === tui.child.pid);
-    const proposal = fixture.state()!.pending!;
+    const proposal = (await fixture.state())!.pending!;
     expect(proposal.summary).toEqual(fixture.summary);
-    expect(fixture.state()?.approval).toBeNull();
+    expect((await fixture.state())?.approval).toBeNull();
     expect(requests().filter(({ command }) => command === 'message')).toHaveLength(2);
     expect(requests().filter(({ command }) => command === 'approve_summary')).toEqual([]);
     expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager')).toHaveLength(1);
@@ -510,8 +555,8 @@ it('keeps a proposal arriving after busy /make-goal unregistered until a new exp
     const goals = new GoalStore(fixture.repository);
     expect((await goals.list()).goals).toEqual([]);
     await tui.approveSummary(proposal.revision);
-    await vi.waitFor(() => expect(fixture.state()?.approval).toMatchObject({ state: 'registered', revision: proposal.revision }), { timeout: 30000 });
-    const receipt = fixture.state()!.approval!;
+    await vi.waitFor(async () => expect((await fixture.state())?.approval).toMatchObject({ state: 'registered', revision: proposal.revision }), { timeout: 30000 });
+    const receipt = (await fixture.state())!.approval!;
     expect((await goals.get(receipt.goalId)).objective).toBe(fixture.summary.objective);
     expect((await goals.list()).goals.map(({ id }) => id)).toEqual([receipt.goalId]);
     expect(requests().filter(({ command }) => command === 'approve_summary'))
@@ -557,12 +602,12 @@ it('updates the restored proposal on the same mounted screen and approves only t
       command: { kind: 'message', text: 'Replace the restored proposal' } })).result?.kind).toBe('accepted');
     await waitForManager(tui, fixture.summary.objective);
     expect(await tui.frame()).not.toContain(saved.pending!.summary.objective);
-    await vi.waitFor(() => expect(fixture.state()).toMatchObject({ revision: 5, running: null }), { timeout: 30000 });
+    await vi.waitFor(async () => expect((await fixture.state())).toMatchObject({ revision: 5, running: null }), { timeout: 30000 });
     await tui.approveSummary(5);
     await vi.waitFor(() => expect(fixture.readObservations()).toContainEqual(expect.objectContaining({
       event: 'request', pid: tui.child.pid, command: 'approve_summary', revision: 5,
     })), { timeout: 30000 });
-    await vi.waitFor(() => expect(fixture.state()?.approval).toMatchObject({ revision: 5, state: 'registered' }), { timeout: 30000 });
+    await vi.waitFor(async () => expect((await fixture.state())?.approval).toMatchObject({ revision: 5, state: 'registered' }), { timeout: 30000 });
     await tui.exit();
   } finally { observer?.socket.destroy(); await fixture.cleanup(); }
 });
@@ -606,7 +651,7 @@ it('reauthenticates and restores the proposal on the same mounted screen after a
       expect(observations.filter(({ event }) => event === 'submit_error')).toEqual([]);
     }, { timeout: 30000 });
     await vi.waitFor(async () => {
-      expect(fixture.state()).toMatchObject({ pending: null, running: null });
+      expect((await fixture.state())).toMatchObject({ pending: null, running: null });
       expect(await tui.frame()).not.toContain('Working');
     }, { timeout: 30000 });
     expect(fixture.readObservations().filter(({ event, command, pid }) => event === 'request' && command === 'message' && pid === tui.child.pid)).toEqual([]);
@@ -639,11 +684,11 @@ it('disables summary approval after an incomplete read and restores it after the
     tui.key('\r');
     await tui.frame();
     expect(fixture.readObservations().filter(({ event, command }) => event === 'request' && command === 'approve_summary')).toEqual([]);
-    expect(fixture.state()?.approval).toBeNull();
+    expect((await fixture.state())?.approval).toBeNull();
     writeFileSync(path, JSON.stringify(goal));
     await waitForManager(tui, saved.pending!.summary.objective);
     await tui.approveSummary(saved.pending!.revision);
-    await vi.waitFor(() => expect(fixture.state()?.approval).toMatchObject({ revision: 4, state: 'registered' }), { timeout: 30000 });
+    await vi.waitFor(async () => expect((await fixture.state())?.approval).toMatchObject({ revision: 4, state: 'registered' }), { timeout: 30000 });
     expect(fixture.readObservations().filter(({ event, command }) => event === 'request' && command === 'approve_summary')).toHaveLength(1);
     await tui.exit();
   } finally { await fixture.cleanup(); }
@@ -655,15 +700,15 @@ it('interrupts only the named turn with Escape and keeps the TUI available for a
     const tui = await fixture.start(fixture.repository, undefined);
     await waitForManager(tui, 'Discuss your goal');
     await submitManagerText(tui, 'Interrupt this turn explicitly');
-    await vi.waitFor(() => expect(fixture.state()?.running?.kind).toBe('message'), { timeout: 30000 });
-    const operationId = fixture.state()!.running!.operationId;
+    await vi.waitFor(async () => expect((await fixture.state())?.running?.kind).toBe('message'), { timeout: 30000 });
+    const operationId = (await fixture.state())!.running!.operationId;
     await tui.ready(operationId);
     await waitForManager(tui, 'Working');
     tui.key('\x1b[27u');
     await vi.waitFor(() => expect(fixture.readObservations()).toContainEqual(expect.objectContaining({
       event: 'request', pid: tui.child.pid, command: 'abort_turn', operationId,
     })), { timeout: 30000 });
-    await vi.waitFor(() => expect(fixture.state()?.running).toBeNull(), { timeout: 30000 });
+    await vi.waitFor(async () => expect((await fixture.state())?.running).toBeNull(), { timeout: 30000 });
     expect(tui.child.exitCode).toBeNull();
     expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_complete' && agent === 'manager')).toEqual([]);
     fixture.release();

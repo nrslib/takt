@@ -62,6 +62,7 @@ export const TaskExecutionConfigObjectSchema = z.object({
   merge_push_base_head_sha: z.string().regex(/^[0-9a-f]{40}$/u).optional(),
   merge_push_source: z.enum(['caccia', 'manual']).optional(),
   resume_point: WorkflowResumePointCodecSchema.optional(),
+  source_resume_point: WorkflowResumePointCodecSchema.optional(),
   [TASK_RESTART_POINT_KEY]: WorkflowRestartPointSchema.optional(),
 }).superRefine((data, ctx) => {
   if (data.resume_point !== undefined && data[TASK_RESTART_POINT_KEY] !== undefined) {

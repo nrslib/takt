@@ -544,6 +544,36 @@ describe('Merge PR persistent clone ownership', () => {
     expect(readFileSync(buildRunPaths(project, resumed.runSlug!).contextTaskOrderAbs, 'utf8'))
       .toBe(readFileSync(join(project, resumed.taskDir!, 'order.md'), 'utf8'));
   });
+  it('passes the saved source checkpoint to a selected restart when source run metadata has no resume point', async () => {
+    await run();
+    const runner = new TaskRunner(project);
+    const failed = runner.listFailedTasks()[0]!;
+    const sourceResumePoint: WorkflowResumePoint = {
+      version: 2,
+      stack: [{ workflow: 'merge-review', workflow_ref: 'merge-review', step: 'sync',
+        kind: 'agent', occurrence: 1 }],
+      iteration: 3,
+      elapsed_ms: 100,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
+    };
+    runner.requeueTask(failed.name, ['failed'], {
+      restartPoint: {
+        stack: [{ workflow: 'merge-review', workflow_ref: 'merge-review', step: 'review', kind: 'agent' }],
+      },
+      sourceResumePoint,
+    });
+    const claimed = runner.claimNextTasks(1)[0]!;
+    expect(existsSync(buildRunPaths(project, failed.runSlug!).runRootAbs)).toBe(false);
+    mocks.status.mockResolvedValue({ merged: true });
+
+    await executePersistedPrMergeTask(claimed, runner, project);
+
+    const request = mocks.workflow.mock.calls[1]![0] as WorkflowExecutionRequest;
+    expect(request.restartPoint).toEqual(claimed.data?.restart_point);
+    expect(request.resumePoint).toBeUndefined();
+    expect(request.sourceResumePoint).toEqual(sourceResumePoint);
+  });
   it('creates the real merge source and lets agents read delivered instructions from project context after resume', async () => {
     const threatAgent = mocks.agent.getMockImplementation()!;
     mocks.agent.mockImplementation((...args: Parameters<typeof runAgent>) =>

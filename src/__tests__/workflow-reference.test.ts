@@ -108,7 +108,7 @@ describe('workflow-reference', () => {
     expect(refs[0]).not.toBe(refs[1]);
   });
 
-  it('should reject a builtin checkpoint after an instruction-only change at the same path', () => {
+  it('should keep a builtin checkpoint after an instruction-only change at the same path', () => {
     const projectDir = createProjectDir();
     const root = join(projectDir, 'builtins');
     const filePath = join(root, 'ja', 'workflows', 'default.yaml');
@@ -122,7 +122,7 @@ describe('workflow-reference', () => {
     const current = withResourcesDirOverride(root, () => loadWorkflowFromFile(filePath, projectDir));
 
     expect(workflowEntryMatchesWorkflow(resumePoint.stack[0]!, current)).toBe(false);
-    expect(trimResumePointStackForWorkflow({ workflow: current, resumePoint, resolveWorkflowCall: () => null })).toBeUndefined();
+    expect(trimResumePointStackForWorkflow({ workflow: current, resumePoint, resolveWorkflowCall: () => null })).toEqual(resumePoint);
   });
 
   it.each(['project', 'user'] as const)('should preserve the absolute-path identity for %s workflows across content changes', (source) => {
@@ -385,7 +385,7 @@ describe('workflow-reference', () => {
     })).toEqual(resumePoint);
   });
 
-  it('child workflow の resume_point は親 workflow_call prefix の workflow_ref が違えば適用しない', () => {
+  it('child workflow の resume_point は親 workflow_call prefix の workflow_ref が違っても名前が一致すれば引き継ぐ', () => {
     const parentWorkflow = attachWorkflowOpaqueRef(normalizeWorkflowConfig({
         name: 'default',
         initial_step: 'delegate',
@@ -434,7 +434,7 @@ describe('workflow-reference', () => {
         buildWorkflowResumePointEntry(otherParentWorkflow, 'delegate', 'workflow_call', 1, undefined, 1),
       ],
       resolveWorkflowCall: () => null,
-    })).toBeUndefined();
+    })).toEqual(resumePoint);
   });
 
   it('同じ workflow_ref の parallel 親が通常 agent に変わった場合は深い suffix も親 frame も受理しない', () => {

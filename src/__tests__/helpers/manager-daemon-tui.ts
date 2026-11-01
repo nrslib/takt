@@ -9,6 +9,7 @@ import { readDaemonOwner } from '../../infra/daemon/owner.js';
 import { ConversationStore } from '../../infra/conversations/store.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 import { captureOwnedChild, terminateOwnedProcess } from './owned-process.js';
+import { PrivateArtifactPublicationConflictError } from '../../shared/utils/private-file.js';
 
 const built = (path: string): string => pathToFileURL(join(process.cwd(), 'dist', path)).href;
 const require = createRequire(import.meta.url);
@@ -228,9 +229,15 @@ registerHooks({ resolve(specifier, context, nextResolve) {
   const clients: Array<{ child: ChildProcess; owned: Awaited<ReturnType<typeof captureOwnedChild>> }> = [];
   const readObservations = (): Observation[] => readFileSync(observations, 'utf8').trim().split('\n')
     .filter(Boolean).map((line) => JSON.parse(line) as Observation);
-  const state = (path = repository) => {
+  const state = async (path = repository) => {
     const assignment = { kind: 'repository' as const, repositoryDirectory: path };
-    return new ConversationStore(directory).read(conversationId(assignment), assignment);
+    const read = () => new ConversationStore(directory).read(conversationId(assignment), assignment);
+    try {
+      return read();
+    } catch (error) {
+      if (!(error instanceof PrivateArtifactPublicationConflictError)) throw error;
+      return vi.waitFor(read, { timeout: 30000 });
+    }
   };
   const start = async (path: string, model: string | undefined): Promise<ManagerTuiProcess> => {
     const child = spawn(process.execPath, ['--import', pathToFileURL(preload).href, '--input-type=module', '-e', `

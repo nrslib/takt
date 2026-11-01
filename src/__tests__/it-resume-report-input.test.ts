@@ -23,6 +23,7 @@ import { createSharedRuntime } from '../core/workflow/engine/WorkflowEngineSetup
 import { formatMissingReportReference } from '../core/workflow/instruction/report-reference.js';
 import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
+import { attachWorkflowOpaqueRef } from '../shared/workflowConfigMetadata.js';
 import { applyDefaultMocks, createTestTmpDir, makeResponse, makeStep, makeRule } from './engine-test-helpers.js';
 
 describe('WorkflowEngine report inputs after report generation failure', () => {
@@ -123,6 +124,63 @@ describe('WorkflowEngine report inputs after report generation failure', () => {
     expect(vi.mocked(runAgent).mock.calls.some(([, , callOptions]) => (
       callOptions?.workflowMeta?.currentStep === 'adjudication'
     ))).toBe(false);
+  });
+
+  it('reads the previous report body after the workflow reference changes', async () => {
+    const reportName = 'review-resolution.md';
+    const priorBody = 'PREVIOUS_BODY_AFTER_REF_CHANGE';
+    const reportDir = join(tmpDir, '.takt', 'runs', 'test-report-dir', 'reports');
+    writeFileSync(join(reportDir, reportName), priorBody);
+    const baseConfig: WorkflowConfig = {
+      name: 'resume-ref-change', initialStep: 'final-gate', maxSteps: 5,
+      steps: [makeStep('final-gate', {
+        passPreviousResponse: false,
+        instruction: `Read prior review: {report:${reportName}}`,
+        outputContracts: [{ name: reportName, format: 'Write a review' }],
+        rules: [makeRule('done', 'COMPLETE')],
+      })],
+    };
+    const savedWorkflow = attachWorkflowOpaqueRef({ ...baseConfig }, 'project:saved-ref');
+    const currentWorkflow = attachWorkflowOpaqueRef({ ...baseConfig }, 'project:current-ref');
+    const savedFrame = {
+      workflow: savedWorkflow.name,
+      workflow_ref: getWorkflowReference(savedWorkflow),
+      step: 'final-gate',
+      kind: 'agent' as const,
+      occurrence: 1,
+    };
+    const resumePoint = parseWorkflowResumePoint({
+      version: 2,
+      stack: [savedFrame],
+      iteration: 1,
+      elapsed_ms: 0,
+      workflow_call_invocations: {},
+      workflow_step_participations: {},
+      missing_report_generations: { '': [reportName] },
+      report_input_recoveries: { [reportName]: [savedFrame] },
+    });
+    vi.mocked(runReportPhase).mockImplementation(async (_step, _iteration, context, onReportWritten) => {
+      writeFileSync(join(context.reportDir, reportName), 'CURRENT_GATE_REVIEW');
+      onReportWritten?.(reportName);
+    });
+    const engine = new WorkflowEngine(currentWorkflow, tmpDir, 'Review the changes', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      reportDirName: 'test-report-dir',
+      startStep: 'final-gate',
+      resumePoint,
+    });
+    engines.push(engine);
+
+    const state = await engine.run();
+    const prompts = vi.mocked(runAgent).mock.calls.filter(([, , options]) => (
+      options?.executionPhase === 1 && options.workflowMeta?.currentStep === 'final-gate'
+    ));
+
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]![1]).toContain(`Read prior review: ${priorBody}`);
+    expect(prompts[0]![1]).not.toContain(formatMissingReportReference(reportName));
+    expect(state.status).toBe('completed');
   });
 
   it('keeps unrelated failed reports blocked when resuming a report consumer', async () => {

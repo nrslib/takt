@@ -222,7 +222,13 @@ Socket.prototype.write = function(chunk, ...args) {
   return write.call(this, chunk, ...args);
 };
 `);
-  const children: Array<{ child: ChildProcess; owned: OwnedProcess | undefined }> = [];
+  const log = (stage: string, pid?: number): void => {
+    if (process.env.CI === undefined) return;
+    console.info(JSON.stringify({ event: 'concurrent-tui-stage', at: Date.now(), kind, stage, pid }));
+  };
+  const contextError = (operation: string, error: unknown, pid: number | undefined, state: string): Error =>
+    new Error(`Concurrent TUI ${operation} failed (at=${Date.now()} kind=${kind} pid=${pid} state=${state})`, { cause: error });
+  const children: Array<{ child: ChildProcess; owned: OwnedProcess | undefined; state: () => string }> = [];
   const readObservations = (): IpcObservation[] => readFileSync(observations, 'utf8').split('\n').filter(Boolean)
     .map((line) => JSON.parse(line) as IpcObservation);
   const start = async (): Promise<ConcurrentTui> => {
@@ -241,25 +247,48 @@ finally { process.disconnect(); }
     } });
     const messages: Array<{ kind: string; id?: number; message?: string } & Partial<Screen>> = [];
     let errors = '';
+    let startState = 'spawned';
+    let inspectState = 'not-started';
+    let inspectId: number | undefined;
     child.stdout!.resume();
     child.stderr!.on('data', (chunk: Buffer) => { errors += chunk.toString(); });
-    child.on('message', (message) => { messages.push(message as typeof messages[number]); });
-    const tracked = { child, owned: undefined as OwnedProcess | undefined };
+    child.on('message', (message) => {
+      const received = message as typeof messages[number];
+      messages.push(received);
+      if (received.kind === 'screen' && received.id === inspectId) inspectState = 'response-received';
+    });
+    const tracked = { child, owned: undefined as OwnedProcess | undefined, state: () => `${startState}/inspect-${inspectState}` };
     children.push(tracked);
-    tracked.owned = await captureOwnedChild(child);
     const healthy = (): void => {
       expect(messages.find(({ kind }) => kind === 'failure')?.message, errors).toBeUndefined();
       expect(child.exitCode, errors).toBeNull();
       expect(child.signalCode, errors).toBeNull();
     };
-    await vi.waitFor(() => { healthy(); expect(messages.some(({ kind }) => kind === 'mounted'), errors).toBe(true); }, { timeout: 30000 });
+    try {
+      startState = 'capture-owned-process';
+      tracked.owned = await captureOwnedChild(child);
+      startState = 'wait-mounted';
+      await vi.waitFor(() => { healthy(); expect(messages.some(({ kind }) => kind === 'mounted'), errors).toBe(true); }, { timeout: 30000 });
+      startState = 'mounted';
+    } catch (error) {
+      throw contextError('start', error, child.pid, startState);
+    }
     let nextId = 0;
     const inspect = async (): Promise<Screen> => {
-      healthy();
       const id = ++nextId;
-      child.send({ kind: 'inspect', id });
-      await vi.waitFor(() => { healthy(); expect(messages.some((message) => message.id === id), errors).toBe(true); }, { timeout: 3000 });
-      return messages.splice(messages.findIndex((message) => message.id === id), 1)[0] as Screen;
+      inspectId = id;
+      inspectState = 'send-started';
+      try {
+        healthy();
+        child.send({ kind: 'inspect', id }, (error) => {
+          if (inspectId !== id || inspectState === 'response-received') return;
+          inspectState = error === null ? 'response-waiting' : 'send-failed';
+        });
+        await vi.waitFor(() => { healthy(); expect(messages.some((message) => message.id === id), errors).toBe(true); }, { timeout: 3000 });
+        return messages.splice(messages.findIndex((message) => message.id === id), 1)[0] as Screen;
+      } catch (error) {
+        throw contextError('inspect', error, child.pid, `request-${id}/${inspectState}`);
+      }
     };
     const ready = async (): Promise<void> => {
       await vi.waitFor(async () => expect((await inspect()).snapshot).toMatchObject({ connection: 'connected', readStatus: 'complete' }), { timeout: 10000 });
@@ -274,12 +303,37 @@ finally { process.disconnect(); }
   };
   const release = (): void => { writeFileSync(gate, 'release'); };
   const cleanup = async (): Promise<void> => {
-    release();
-    for (const { child, owned } of children) {
-      if (owned !== undefined) await terminateOwnedProcess(owned, () => child.exitCode !== null || child.signalCode !== null);
+    let pid: number | undefined;
+    let state = 'release';
+    try {
+      log('cleanup-release:before');
+      release();
+      log('cleanup-release:after');
+      for (const tracked of children) {
+        const { child, owned } = tracked;
+        pid = child.pid;
+        state = tracked.state();
+        if (owned !== undefined) {
+          log('cleanup-child-terminate:before', child.pid);
+          await terminateOwnedProcess(owned, () => child.exitCode !== null || child.signalCode !== null);
+          log('cleanup-child-terminate:after', child.pid);
+        }
+      }
+      pid = undefined;
+      state = 'read-daemon-owner';
+      log('cleanup-read-daemon-owner:before');
+      const owner = readDaemonOwner(directory);
+      log('cleanup-read-daemon-owner:after', owner?.pid);
+      if (owner !== undefined) {
+        pid = owner.pid;
+        state = 'terminate-daemon';
+        log('cleanup-daemon-terminate:before', owner.pid);
+        await terminateOwnedProcess({ pid: owner.pid, identity: owner.identity }, () => false);
+        log('cleanup-daemon-terminate:after', owner.pid);
+      }
+    } catch (error) {
+      throw contextError('cleanup', error, pid, state);
     }
-    const owner = readDaemonOwner(directory);
-    if (owner !== undefined) await terminateOwnedProcess({ pid: owner.pid, identity: owner.identity }, () => false);
   };
-  return { directory, reply, start, release, readObservations, cleanup };
+  return { directory, reply, start, release, readObservations, cleanup, log };
 }

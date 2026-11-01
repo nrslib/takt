@@ -497,6 +497,7 @@ async function requeueFailedTask(
     taskDir: undefined,
     sourceRunSlug: resolved.preparation.matchedRunSlug,
     restartPoint: resolved.start.restartPoint,
+    sourceResumePoint: resolved.start.sourceResumePoint,
   });
   return getLabel('tui.errors.assistantRetryRequeued', options.lang, {
     task: displayTaskName(task),
@@ -743,6 +744,7 @@ async function retryFailedTask(
       taskDir: task.taskDir,
       sourceRunSlug: resolved.preparation.matchedRunSlug,
       restartPoint: resolved.start.restartPoint,
+    sourceResumePoint: resolved.start.sourceResumePoint,
       revisedOrder: {
         content: revisedOrder,
         lang: options.lang,

@@ -1072,6 +1072,7 @@ describe('requeueFailedTask', () => {
         taskDir: undefined,
         sourceRunSlug: undefined,
         restartPoint: nestedReviewRestartPoint,
+        sourceResumePoint: makeNestedCheckpoint(),
       },
     );
     expect(mockInfo).toHaveBeenCalledWith(
@@ -1110,6 +1111,7 @@ describe('requeueFailedTask', () => {
         taskDir: undefined,
         sourceRunSlug: undefined,
         restartPoint: nestedReviewRestartPoint,
+        sourceResumePoint: makeNestedCheckpoint(),
       },
     );
   });
@@ -1208,6 +1210,37 @@ describe('requeueFailedTask', () => {
 
     await expect(requeueFailedTask(task, '/project')).rejects.toThrow('missing failure details');
     expect(mockRequeueTask).not.toHaveBeenCalled();
+  });
+});
+
+describe.each(['requeue', 'retry'] as const)('%s with only a source checkpoint', (action) => {
+  it('should preserve the source checkpoint on the second restart selection', async () => {
+    const sourceResumePoint = makeNestedCheckpoint();
+    const task = makeFailedTask({
+      data: {
+        task: 'Do something',
+        workflow: 'default',
+        source_resume_point: sourceResumePoint,
+      },
+    });
+    mockLoadWorkflowByIdentifier.mockReturnValue(nestedRootWorkflowConfig);
+    selectStartCandidate('Restart from: default > delegate > coding > review');
+
+    if (action === 'requeue') {
+      await requeueFailedTask(task, '/project');
+    } else {
+      await retryFailedTask(task, '/project');
+    }
+
+    expect(mockRequeueTask).toHaveBeenCalledWith(
+      'my-task',
+      ['failed'],
+      expect.objectContaining({
+        resumePoint: undefined,
+        restartPoint: nestedReviewRestartPoint,
+        sourceResumePoint,
+      }),
+    );
   });
 });
 
@@ -1737,7 +1770,7 @@ describe('retryFailedTask', () => {
     expect(mockFindPreviousOrderContent).not.toHaveBeenCalled();
   });
 
-  it('should default to the valid parent checkpoint when the saved child step is removed', async () => {
+  it('should offer an authored restart when the saved child step is removed', async () => {
     mockFindRunForTask.mockReturnValue('run-1');
     mockLoadWorkflowByIdentifier.mockReturnValue({
       ...defaultWorkflowConfig,
@@ -1791,16 +1824,9 @@ describe('retryFailedTask', () => {
 
     await retryFailedTask(makeFailedTask(), '/project');
 
-    expectResumeCandidateIsDefault();
-    expect(mockRequeueTask.mock.calls.at(-1)?.[2]).toMatchObject({
-      restartPoint: undefined,
-      resumePoint: {
-        version: 2, iteration: 7, elapsed_ms: 183245,
-        stack: [{ workflow: 'default', workflow_ref: 'default', step: 'delegate', kind: 'workflow_call',
-          occurrence: 1, call_instance: 1 }],
-        workflow_call_invocations: {}, workflow_step_participations: {},
-      },
-    });
+    const candidates = mockSelectOptionWithDefault.mock.calls.at(-1)?.[1] as Array<{ value: string }>;
+    expect(candidates.some(({ value }) => value === 'resume-checkpoint')).toBe(false);
+    expect(mockRequeueTask.mock.calls.at(-1)?.[2]).toMatchObject({ resumePoint: undefined });
   });
 
   it.each([false, true])('should omit an unavailable Resume target and allow restart choice %s', async (restart) => {
@@ -1976,6 +2002,7 @@ describe('retryFailedTask', () => {
         taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: undefined,
         restartPoint: nestedReviewRestartPoint,
+        sourceResumePoint: makeNestedCheckpoint(),
       },
     );
   });
@@ -2059,6 +2086,7 @@ describe('retryFailedTask', () => {
         restartPoint: {
         stack: [{ workflow: 'default', workflow_ref: 'default', step: 'review', kind: 'agent' }],
       },
+        sourceResumePoint: resumePoint,
       },
     );
   });
@@ -2491,6 +2519,7 @@ describe('retryFailedTask', () => {
         taskDir: MOCK_CREATED_TASK_DIR,
         sourceRunSlug: undefined,
         restartPoint: nestedReviewRestartPoint,
+        sourceResumePoint: makeNestedCheckpoint(),
       },
     );
   });
