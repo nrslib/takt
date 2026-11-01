@@ -55,6 +55,10 @@ steps:
         next: fix
 
   - name: fix
+    input_reports:
+      - from_step: review
+        reports: [workflow-maker-review.md]
+        history: {previous: 2}
     description: レビューで指摘された欠陥を修正し、doctor相当の再検証結果を報告する
     capabilities: edit
     edit: true

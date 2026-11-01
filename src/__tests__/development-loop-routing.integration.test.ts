@@ -16,6 +16,7 @@ import { CycleDetector } from '../core/workflow/engine/cycle-detector.js';
 import { determineRuleTransition } from '../core/workflow/engine/transitions.js';
 import { validateWorkflowReportReferences } from '../core/workflow/instruction/report-reference-validation.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
+import { writePhaseReportFixture } from './helpers/phase-report-fixture.js';
 import { runReportPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
 import { createWorkflowCallResolver, createWorkflowExecutionContext } from '../features/tasks/execute/workflowExecutionContext.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowLoader.js';
@@ -33,7 +34,12 @@ let engine: WorkflowEngine | undefined;
 
 beforeEach(() => {
   vi.resetAllMocks();
-  vi.mocked(runReportPhase).mockResolvedValue(undefined);
+  vi.mocked(runReportPhase).mockImplementation(async (step, _iteration, context, onReportWritten) => {
+    for (const report of step.outputContracts ?? []) {
+      writePhaseReportFixture(context, report.name, 'Current routing fixture report');
+      onReportWritten?.(report.name);
+    }
+  });
   directory = createTestTmpDir();
 });
 afterEach(() => {
@@ -84,7 +90,7 @@ function start(config: WorkflowConfig, initialStep: string, options: Pick<Workfl
   engine = new WorkflowEngine({
     ...config,
     initialStep,
-    steps: config.steps.map(step => makeStep(step.name, { rules: step.rules })),
+    steps: config.steps.map(step => makeStep(step.name, { rules: step.rules, outputContracts: step.outputContracts })),
   }, directory, 'Complete required work without losing the accepted contract', {
     projectCwd: directory,
     provider: 'mock',

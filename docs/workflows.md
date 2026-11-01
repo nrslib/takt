@@ -208,6 +208,7 @@ String `quality_gates` remain AI completion directives and are injected into age
 | `{user_inputs}` | Additional user inputs during workflow (auto-injected if not in template) |
 | `{report_dir}` | Report directory path (e.g., `.takt/runs/20250126-143052-task-summary/reports`) |
 | `{report:filename}` | Inline report content using the [report reference lookup](#report-reference-lookup) |
+| `{report_history:filename}` | Oldest-first fixed-path list for the declared `history: {previous: N}`; no historical bodies |
 | `{review_scope}` | TAKT-computed list of files changed by this task |
 
 What `{review_scope}` covers depends on where the run came from.
@@ -921,7 +922,27 @@ An agent step, `workflow_call`, or parallel parent/sub-step can declare report i
     {report:fix-report.md}
 ```
 
-`reports: all` selects all reports produced by the source's completed execution, including selected parallel reviewers and nested calls. An explicit list selects those public report file names and rejects missing or ambiguous matches. `{report:filename}` inserts a selected report's body at that position, even when another report with the same name exists in the consumer's local or ancestor scope. If `reports: all` selects several reports with that name, a single `{report:filename}` is ambiguous and fails. Selected reports without a placeholder are appended to the agent's Phase 1 instruction; reports sharing a name are shown separately with their logical producers. A `workflow_call` passes the same selected inputs to its child agents, including through nested calls. A parallel parent's declaration applies to its children unless a child declares its own inputs. A missing, incomplete, or unrelated report fails the step; TAKT does not search neighboring report directories. Use `optional_if_unrun: true` only when a valid route reaches the consumer before its source has executed. Before the source runs, its contracted report names are reserved, so `{report:filename}` cannot fall back to an unrelated local or ancestor report of the same name. Once the source starts, its reports are required.
+`reports: all` selects all reports produced by the source's completed execution, including selected parallel reviewers and nested calls. An explicit list selects those public report file names and rejects missing or ambiguous matches. `{report:filename}` inserts a selected report's body at that position, even when another report with the same name exists in the consumer's local or ancestor scope. If `reports: all` selects several reports with that name, a single `{report:filename}` is ambiguous and fails. Selected reports without a placeholder are appended to the agent's Phase 1 instruction. Names selected across declared producers must be unique, including `reports: all` and optional unrun sources; doctor and runtime reject ambiguous declarations even without a placeholder. A `workflow_call` passes the same selected inputs to its child agents, including through nested calls. A parallel parent's declaration applies to its children unless a child declares its own inputs. A missing, incomplete, or unrelated report fails the step; TAKT does not search neighboring report directories. Use `optional_if_unrun: true` only when a valid route reaches the consumer before its source has executed. Before the source runs, its contracted report names are reserved, so `{report:filename}` cannot fall back to an unrelated local or ancestor report of the same name. Once the source starts, its reports are required.
+
+Multiple producers can be declared as a nonempty array. The single-object form remains supported. Each entry independently applies `optional_if_unrun` and `history`:
+
+```yaml
+input_reports:
+  - from_step: remediation
+    reports: [fix-plan.md, fix-report.md]
+    history: {previous: 2}
+  - from_step: adjudicate
+    reports: [review-resolution.md]
+    optional_if_unrun: true
+```
+
+`{report:filename}` inserts at most 8,000 UTF-16 code units of the current body. Longer bodies include an omission notice and the exact immutable version path for reading the remainder. This code constant also applies to automatically appended current reports; it is not configurable in YAML.
+
+`history: {previous: N}` selects up to N completed executions before the current execution from the same producer and execution lineage. N is a nonnegative safe integer; zero selects no previous executions. `{report_history:filename}` inserts an oldest-first list, never past bodies. Every row gives the execution identity, order, completion status, producer, and immutable version path. Plans and reports from the same execution share its identity. All selected rows are supplied, with no additional list limit. Insufficient history, incomplete executions, and missing reports are identified; gaps are not filled with unrelated or older versions. Parallel execution, nested calls, and resume preserve these identities and versions. Old runs without execution records have unavailable history; timestamps are not used to infer it. Unreferenced declared history is appended automatically.
+
+Inputs requesting history also include current execution records. Start and completion orders use a counter shared by the execution lineage. Alongside the call execution identity, each report's actual producer has its own start and completion orders, allowing comparison of verification start against repair completion. Missing orders are marked unavailable.
+
+`loop_monitors[].judge.input_reports` accepts the same forms and history options. Every `from_step` must belong to that monitor's `cycle`; doctor and runtime reject outside sources. A judge with declared inputs receives `Report Directory`, current bodies, and history using the same expansion rules. A judge without the declaration keeps its existing input.
 
 ## Runtime provider promotion
 

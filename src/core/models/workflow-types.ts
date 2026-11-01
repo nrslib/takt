@@ -220,6 +220,7 @@ export interface WorkflowReportInput {
   fromStep: string;
   reports: readonly string[] | 'all';
   optionalIfUnrun?: true;
+  history?: { previous: number };
 }
 
 export interface DynamicParallelSelectionSnapshot {
@@ -293,7 +294,7 @@ export interface WorkflowPromotionEntry {
 
 interface WorkflowStepBase {
   name: string;
-  inputReports?: WorkflowReportInput;
+  inputReports?: WorkflowReportInput | readonly WorkflowReportInput[];
   description?: string;
   personaDisplayName: string;
   providerRoutingPersonaKey?: string;
@@ -562,6 +563,7 @@ export interface LoopMonitorRule {
 }
 
 export interface LoopMonitorJudge {
+  inputReports?: WorkflowStep['inputReports'];
   persona?: string;
   personaPath?: string;
   personaRef?: string;

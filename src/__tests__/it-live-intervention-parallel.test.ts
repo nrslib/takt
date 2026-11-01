@@ -1,3 +1,4 @@
+import { writePhaseReportFixture } from './helpers/phase-report-fixture.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { join, resolve } from 'node:path';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -239,7 +240,7 @@ describe('ParallelRunner live intervention integration', () => {
     vi.mocked(runReportPhase).mockImplementation(async (_step, _iteration, context, onReportWritten) => {
       const reportDir = resolve(projectCwd, context.reportDir);
       mkdirSync(reportDir, { recursive: true });
-      writeFileSync(join(reportDir, 'review.md'), 'review report');
+      writePhaseReportFixture(context, 'review.md', 'review report');
       onReportWritten?.('review.md');
     });
     vi.mocked(runStatusJudgmentPhase).mockImplementation(async (step) => {

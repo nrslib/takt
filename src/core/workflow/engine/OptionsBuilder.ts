@@ -892,6 +892,9 @@ export class OptionsBuilder {
       observabilityEnabled: this.engineOptions.observability?.enabled === true,
       sanitizeObservabilityText: this.engineOptions.sanitizeObservabilityText,
       reportContentSanitizer: this.engineOptions.reportContentSanitizer,
+      onReportPersisted: (name, content) => this.engineOptions.sharedRuntime?.reportExecutions?.capture(
+        resolveReportDirectory(this.getCwd(), this.getReportDir()), name, content,
+      ),
       getCurrentWorkflowStack: this.getCurrentWorkflowStack,
       childProcessEnv: this.engineOptions.childProcessEnv,
       abortSignal: this.resolveAbortSignal(),

@@ -1,0 +1,40 @@
+{
+  "model": "gpt-6.1-sol",
+  "effort": "high",
+  "sandbox": "read-only",
+  "approvalPolicy": "never",
+  "observedTurnContexts": 1,
+  "startedFresh": true,
+  "networkAccessEnabled": false,
+  "webSearchMode": "disabled",
+  "executedPromptHash": "c1e033666e079358ed0e144d2d8724304b7995ea1361db66f6d7adafe6a11f60",
+  "executedResponseHash": "dd799afbfb224b1660d089e921e06b620f2551085616b5a8303a113fca9cbaf3",
+  "promptHash": "2712e4a7ab1422569d735552c0a6f0b9becf3c7da2a51742d968c6bb73768810",
+  "responseHash": "b31c8d01250d99265adaab17fca1132fca11d4fa18bd4cce04b6ccc0758785df",
+  "commands": [
+    {
+      "version": "current",
+      "path": "loop-monitor/project/reports/.takt-report-internal/executions/versions/74c413cf-730f-4f39-90ca-ae6b560066a7/fix-report.md",
+      "marker": "CURRENT_b2e9f89e-b1a4-428f-b50d-f40047e15af3",
+      "cwd": "loop-monitor/project",
+      "command": "/bin/zsh -lc 'cat reports/.takt-report-internal/executions/index.json; cat reports/.takt-report-internal/executions/versions/00ba2829-fea6-40d7-845e-b027fec75737/fix-report.md; nl -ba reports/.takt-report-internal/executions/versions/74c413cf-730f-4f39-90ca-ae6b560066a7/fix-report.md'",
+      "exitCode": 0,
+      "status": "completed",
+      "commandExcerpt": false,
+      "recordedCommandHash": "3441f94a10c9ac298e4735604a062d01c007f3c713326b7cfd9e001cde2bcc02",
+      "exitCodeScope": "recorded command",
+      "output": "照合証拠: CURRENT_b2e9f89e-b1a4-428f-b50d-f40047e15af3",
+      "artifactHash": "0dcb9c278ed02bcf799a8126acbd4681a639563cdcd05324acb6834de78e1a71"
+    }
+  ],
+  "toolCount": 7,
+  "toolTypes": [
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution"
+  ]
+}

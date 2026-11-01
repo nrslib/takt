@@ -18,6 +18,7 @@ import { createIsolatedEnv, updateIsolatedConfig, type IsolatedEnv } from '../he
 import { createTestRepo, type TestRepo } from '../helpers/test-repo';
 import { formatTaktRunResult, runTakt } from '../helpers/takt-runner';
 import { startTaktPty, type TaktPtySession } from '../helpers/takt-pty-runner';
+import { REPORT_INTERNAL_NAMESPACE } from '../../src/core/models/reserved-report-names.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -118,6 +119,7 @@ describe('E2E: Ink TUI', () => {
     for (const entry of readdirSync(root, { withFileTypes: true })) {
       const entryPath = join(root, entry.name);
       if (entry.isDirectory()) {
+        if (entry.name === REPORT_INTERNAL_NAMESPACE) continue;
         const nested = findFile(entryPath, filename);
         if (nested !== undefined) return nested;
       } else if (entry.name === filename) {
