@@ -44,6 +44,10 @@ export const WorkflowCommandGatesConfigSchema = z.object({
   custom_scripts: z.boolean().optional(),
 }).strict();
 
+export const WorkflowSystemCommandsConfigSchema = z.object({
+  custom_scripts: z.boolean().optional(),
+}).strict();
+
 export const WorkflowArpeggioConfigSchema = z.object({
   custom_data_source_modules: z.boolean().optional(),
   custom_merge_inline_js: z.boolean().optional(),
@@ -189,6 +193,7 @@ const ProjectConfigObjectBaseSchema = z.object({
   runtime: RuntimeConfigSchema,
   workflow_runtime_prepare: WorkflowRuntimePrepareConfigSchema.optional(),
   workflow_command_gates: WorkflowCommandGatesConfigSchema.optional(),
+  workflow_system_commands: WorkflowSystemCommandsConfigSchema.optional(),
   workflow_arpeggio: WorkflowArpeggioConfigSchema.optional(),
   sync_conflict_resolver: SyncConflictResolverConfigSchema.optional(),
   workflow_mcp_servers: WorkflowMcpServersConfigSchema.optional(),

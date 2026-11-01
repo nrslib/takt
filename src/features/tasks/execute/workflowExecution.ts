@@ -236,6 +236,7 @@ async function executeWorkflowInternal(
       workflowConfig,
       options.projectCwd,
       options.workflowResourceRoot,
+      options.workflowSystemCommandsPolicy,
     ),
   );
   const preparedBundle = prepareWorkflowExecutionBundle({

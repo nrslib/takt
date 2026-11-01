@@ -3,7 +3,7 @@
  */
 
 import { join } from 'node:path';
-import type { WorkflowArpeggioConfig, WorkflowCommandGatesConfig, WorkflowMcpServersConfig, WorkflowOverrides, WorkflowRuntimePrepareConfig } from '../../../core/models/config-types.js';
+import type { WorkflowArpeggioConfig, WorkflowCommandGatesConfig, WorkflowSystemCommandsConfig, WorkflowMcpServersConfig, WorkflowOverrides, WorkflowRuntimePrepareConfig } from '../../../core/models/config-types.js';
 import { WorkflowConfigRawSchema } from '../../../core/models/index.js';
 import type {
   WorkflowCallArgValue,
@@ -26,6 +26,7 @@ import {
 import {
   validateWorkflowRuntimePrepare,
   validateWorkflowCommandGates,
+  validateWorkflowSystemCommands,
 } from './workflowNormalizationPolicies.js';
 import { normalizeLoopMonitors } from './workflowLoopMonitorNormalizer.js';
 import { normalizeStepFromRaw, type WorkflowLevelDefinitions } from './workflowStepNormalizer.js';
@@ -103,6 +104,7 @@ interface NormalizeWorkflowConfigOptions {
   callableArgPolicy?: WorkflowCallArgResolutionPolicy,
   callableArgMode?: 'runtime' | 'discovery',
   workflowCommandGatesPolicy?: WorkflowCommandGatesConfig,
+  workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig,
   workflowPath?: string,
   workflowTrustInfo?: WorkflowTrustInfo,
 }
@@ -123,6 +125,7 @@ export function normalizeWorkflowConfig(
     callableArgPolicy,
     callableArgMode = 'runtime',
     workflowCommandGatesPolicy,
+    workflowSystemCommandsPolicy,
     workflowPath,
     workflowTrustInfo,
   } = options;
@@ -178,6 +181,7 @@ export function normalizeWorkflowConfig(
   const workflowRuntime = normalizeRuntime(parsed.workflow_config?.runtime);
   validateWorkflowRuntimePrepare(workflowRuntime, workflowRuntimePreparePolicy);
   validateWorkflowCommandGates(parsed.steps, workflowCommandGatesPolicy);
+  validateWorkflowSystemCommands(parsed.steps, workflowSystemCommandsPolicy);
   const workflowDefinitions: WorkflowLevelDefinitions = {
     ...(parsed.capabilities !== undefined
       ? { capabilityOptions: resolveCapabilitySets(parsed.capabilities, workflowDir, context) }

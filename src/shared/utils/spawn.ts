@@ -63,7 +63,7 @@ function signalPosixProcessGroup(pid: number, signal: NodeJS.Signals): void {
   }
 }
 
-async function forceTerminateWindowsProcess(pid: number | undefined): Promise<void> {
+export async function forceTerminateWindowsProcess(pid: number | undefined): Promise<void> {
   const targetPid = requireProcessId(pid);
   const taskkillExecutable = resolveSystem32ExecutablePath('taskkill.exe');
   const killer = crossSpawn(taskkillExecutable, ['/pid', String(targetPid), '/T', '/F'], {

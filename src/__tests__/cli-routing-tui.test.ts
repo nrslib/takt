@@ -79,6 +79,8 @@ vi.mock('../features/interactive/imageAttachments.js', () => ({
 
 vi.mock('../infra/config/index.js', () => ({
   getWorkflowDescription: (...args: unknown[]) => mockGetWorkflowDescription(...args),
+  loadGlobalConfig: () => ({}),
+  loadProjectConfig: () => ({}),
   loadWorkflowByIdentifier: (...args: unknown[]) => mockLoadWorkflowByIdentifier(...args),
   resolveConfigValue: vi.fn(() => false),
   resolveConfigValues: vi.fn(() => ({ language: 'en', interactivePreviewSteps: 3 })),

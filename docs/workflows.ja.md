@@ -773,7 +773,7 @@ step が別の workflow を名前で呼び出します。子 workflow は同じ 
 
 system step は TAKT エンジン自身が実行する step で、agent は起動しません。`kind: system`（または短縮形の `mode: system`。両方の宣言は設定エラー）で宣言します。system step には `persona`、`instruction`、`provider`、`structured_output`、`output_contracts`、`quality_gates` などの agent 用フィールドを宣言できません。完全なスキーマは `src/core/models/workflow-system-schemas.ts` を参照してください。builtin の `auto-improvement-loop` workflow（`builtins/ja/workflows/auto-improvement-loop.yaml`）が参考実装で、system step と planner agent step だけで PR 対応・Issue 駆動計画・新規改善計画の間をルーティングします。
 
-`system_inputs` はエンジンが提供するコンテキストを読み取り、各エントリを `as` で名前に束縛します。利用できる type は `task_context`、`branch_context`、`pr_context`、`issue_context`、`task_queue_context`、`pr_list`、`pr_selection`、`issue_list`、`issue_selection` です（`pr_list` / `pr_selection` は `where` フィルタを受け取り、両者の `where` は一致している必要があります）。binding 名は step 内で一意でなければなりません。束縛した値は `context.<step>.<binding>...` として `when()` rule を駆動し、後続の agent instruction からは `{context:step.binding.field}` で参照できます。
+`system_inputs` はエンジンが提供するコンテキストの読み取りや固定コマンドの実行を行い、各エントリを `as` で名前に束縛します。利用できる type は `task_context`、`branch_context`、`pr_context`、`issue_context`、`task_queue_context`、`pr_list`、`pr_selection`、`issue_list`、`issue_selection`、`pr_status`、`pr_ci_failure`、`command` です（`pr_list` / `pr_selection` は `where` フィルタを受け取り、両者の `where` は一致している必要があります）。`command` の実行には許可設定が必要です。詳細は[固定コマンドの input](#固定コマンドの-input)を参照してください。binding 名は step 内で一意でなければなりません。束縛した値は `context.<step>.<binding>...` として `when()` rule を駆動し、後続の agent instruction からは `{context:step.binding.field}` で参照できます。
 
 ```yaml
   - name: route_context
@@ -792,6 +792,57 @@ system step は TAKT エンジン自身が実行する step で、agent は起�
       - condition: when(context.route_context.selected_pr.exists == true)
         next: plan_from_existing_pr
 ```
+
+#### 固定コマンドの input
+
+`type: command`はworkflowに固定した文字列をshellで実行します。以下の許可設定は既定で無効です。projectの明示値はglobalより優先され、projectで未指定の場合はglobalの値を使います。`workflow_command_gates.custom_scripts`とは独立し、無許可のworkflowは読み込み時に拒否されます。
+
+別cloneでも元のproject設定を使います。各実行で許可を解決し、rootと子workflowへ同じ値を渡します。`wait`では設定を読み直しません。詳細は[設定ガイド](configuration.ja.md)を参照してください。
+
+pipeline または対話モードが現在のディレクトリに PR をチェックアウトする場合は、切り替え前の設定から許可を決めます。対話セッションでは Issue に切り替えた後も同じディレクトリでこの許可を使います。PR が追加した project 設定だけでは許可されません。
+
+```yaml
+workflow_system_commands:
+  custom_scripts: true
+```
+
+```yaml
+name: approval-command
+steps:
+  - name: check
+    kind: system
+    system_inputs:
+      - type: command
+        as: approval
+        command: node scripts/check-approval.mjs
+        timeout_ms: 1000
+        output: json
+    wait:
+      until: when(context.check.approval.json.ready == true)
+      interval_ms: 1000
+      max_retries: 30
+      on_timeout: ABORT
+    rules:
+      - condition: when(context.approval.json.status == "approved")
+        next: consume
+      - condition: when(true)
+        next: ABORT
+  - name: consume
+    instruction: "承認結果: {context:check.approval.json.status}"
+    rules:
+      - condition: when(true)
+        next: COMPLETE
+```
+
+`timeout_ms` は必須で、1～2147483647 の整数です。既定値や無期限指定はありません。`output: json` は省略できます。`cwd` は指定できず、タスクの実行ディレクトリ（worktree ならクローン）で起動します。pipeline と対話モードで同じ動作をします。command は effects には指定できません。
+
+結果には `exit_code`（終了コードを取得できない場合は `null`）、`timed_out`、`stdout`、`stderr` が入ります。`json` は `output: json` を指定し、タイムアウトせず終了コード 0 で JSON を解析できた場合だけ入ります。非ゼロ終了とタイムアウトは rules へ渡す結果です。stdout と stderr の合計が 65536 バイトを超えた場合、起動できない場合、成功時の JSON が不正な場合はステップが失敗し、effects と rules は実行されません。
+
+現在の command binding は条件評価時に `context.approval...` とも書けます。既存のステップ名付き scope が同名ならそちらを優先します。保存する値と後続 instruction の参照は `context.check.approval...` の形式です。
+
+TAKT は command のテンプレート展開や引数の追加をしません。直前の応答本文は `TAKT_PREVIOUS_RESPONSE_FILE`、同じ応答に構造化出力があれば `TAKT_PREVIOUS_STRUCTURED_OUTPUT_FILE` で非公開ファイルのパスを渡します。本文がなければ空ファイルを渡し、構造化出力がなければその環境変数は設定しません。スクリプト側でファイルを読み、値を検証してください。ファイルは run の context 配下に保存し、run の成果物として保持します。環境変数はコマンドゲートと同じ基本許可リストと、この2つのファイルパスに限定します。
+
+無通信タイムアウトは適用しません。POSIX では実行期限または中断時にプロセスグループへ SIGTERM を送り、終了しなければ100ms後に SIGKILL を送ります。Windows では `taskkill /T /F` でプロセスツリーを強制終了し、taskkill の完了を待ちます。`wait` は確認ごとにコマンドを実行し直し、各実行に `timeout_ms` を適用します。各確認は同じ直前応答を参照し、次の system step は直前の system 応答を参照します。前回の JSON は引き継ぎません。`wait.max_retries`、`on_timeout`、ステップの計数、`loop_monitors`、元の agent に戻った際のセッション継続は既存の規則に従います。
 
 `effects` はエンジン側のアクションを実行します: `commit_and_push`、`caccia`、`enqueue_task`、`comment_pr`、`sync_with_root`、`resolve_conflicts_with_ai`、`merge_pr`、`close_pr`。各 effect type は 1 step につき最大 1 回しか書けず、結果は `when(effect.<step>.<type>.<field>)` でルーティングします。
 
