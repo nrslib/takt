@@ -153,6 +153,21 @@ describe('manager conversation configuration and provider boundary', () => {
     expect(call).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['ja', 'en'] as const)('loads merged PR completion and patrol guidance from all three %s manager facets', (language) => {
+    const plan = createManagerConversationPlan(cwd, { language });
+    for (const kind of ['instructions', 'knowledge', 'policies']) {
+      const content = readFileSync(join(process.cwd(), 'builtins', language, 'facets', kind, 'manager.md'), 'utf8');
+      const guidance = content.split(/\n\s*\n/u).filter((paragraph) => /\bsquash\b/i.test(paragraph));
+      expect(guidance.length).toBeGreaterThan(0);
+      for (const paragraph of guidance) {
+        expect(paragraph).toContain('takt_check_goal_completion');
+        expect(paragraph).toMatch(language === 'ja' ? /マージ済み|マージされ(?:た|て)|取り込まれ/u : /\bmerged\b/i);
+        expect(paragraph).toMatch(language === 'ja' ? /巡回/ : /\bpatrol\b/i);
+        expect(plan.strategy.systemPrompt).toContain(paragraph);
+      }
+    }
+  });
+
   it.each(['ja', 'en'] as const)('exposes task integration fields and status values in the %s manager tools guidance', (language) => {
     const knowledge = readFileSync(join(process.cwd(), 'builtins', language, 'facets', 'knowledge', 'manager.md'), 'utf8');
     const heading = language === 'ja' ? '## 道具' : '## Tools';

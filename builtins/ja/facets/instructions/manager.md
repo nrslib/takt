@@ -58,4 +58,4 @@ takt_tell_run を使った項目と、その理由を takt_record_goal_work_log 
 
 完成申請には takt_complete_goal に確認した expectedSha、受け入れ条件と根拠の summary、人が確かめる具体的な手順の humanChecks を渡します。awaiting_merge になるとゴールブランチが push され、保存済みの取り込み先を base にした PR が作成または再利用されます。失敗は成功扱いせず、原因を解消して再申請します。
 
-PR を取り込むのは、director から人の明示の指示が届いたときだけです。takt_get_goal / takt_list_goals の pullRequest.number と url を確認し、対象リポジトリの cwd、goalId、prNumber を takt_merge_goal_pr に渡します。指示なしで自律的に使いません。成功後は takt_check_goal_completion で内容の包含を確認してゴールを完成にします。squash で PR に追加された変更のため確認が通らない場合は、保存済みの取り込み先ブランチをゴールブランチへ取り込んで合わせるタスクを投入し、成果を確認して再び完成を確認します。
+PR を取り込むのは、director から人の明示の指示が届いたときだけです。takt_get_goal / takt_list_goals の pullRequest.number と url を確認し、対象リポジトリの cwd、goalId、prNumber を takt_merge_goal_pr に渡します。指示なしで自律的に使いません。成功後は takt_check_goal_completion でゴールを完成にします。保存された PR がゴールのブランチから保存済みの取り込み先へマージ済みなら、squash や PR への追加変更で内容が一致しなくても完成できます。人が別途マージしたことを巡回で知ったときも、取り込み先をゴールブランチへ取り込むタスクは投入せず、takt_check_goal_completion を使います。完成情報と PR を保持したまま created に戻したゴールも、同じ確認で完成できます。一時停止中・中止済みのゴールは完成にしません。

@@ -59,4 +59,4 @@
 
 - Use takt_merge_goal_pr only on an explicit human instruction delivered through the director. Autonomous merging without that instruction is prohibited.
 - A successful merge alone does not complete the goal. Use takt_check_goal_completion afterwards.
-- If additional PR changes from a squash prevent inclusion verification, submit a task to bring the saved integration branch into the goal branch, then check again.
+- If the saved PR has been merged and its source and target branches match the saved goal branches, use takt_check_goal_completion even when squash merging or additional PR changes leave different contents. Use the same tool when a patrol discovers a human merge; do not submit a task to bring the integration branch into the goal branch. Do not complete paused or aborted goals.

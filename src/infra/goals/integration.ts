@@ -15,6 +15,7 @@ import { withdrawPendingGoalQuestions } from './questions.js';
 import type { Language } from '../../core/models/types.js';
 import { GoalPullRequestUnavailableError, prepareGoalPullRequest } from './pull-request.js';
 import { safeExternalErrorMessage } from '../../shared/utils/safeExternalErrorMessage.js';
+import { readGoalPullRequestStatus } from './pull-request-status.js';
 
 export async function getGoalTaskSource(cwd: string, goal: Goal, taskName: string): Promise<string> {
   const task = new TaskRunner(cwd).listTaskStateItems().find((item) => item.name === taskName);
@@ -99,6 +100,9 @@ function assertCompletionAllowed(current: Goal, previous: Goal): void {
   assertCompletionUnchanged(current, previous);
   if (current.executionStatus === 'paused') {
     throw new Error('Goal is paused. Resume it in the manager TUI before completing it.');
+  }
+  if (current.executionStatus === 'aborted') {
+    throw new Error('Goal is aborted. Work cannot continue for this goal.');
   }
 }
 
@@ -225,17 +229,34 @@ export async function checkGoalCompletion(
   const store = new GoalStore(cwd);
   const goal = await store.get(goalId);
   if (goal.status === 'completed') return { included: true, goal };
-  if (goal.status !== 'awaiting_merge' || goal.completion === undefined) throw new Error('Goal is not awaiting a human merge');
+  signal?.throwIfAborted();
+  if (goal.completion === undefined) throw new Error('Goal is not awaiting a human merge');
+  assertCompletionAllowed(goal, goal);
   const approvedSha = goal.completion.goalSha;
-  const targetSha = await resolveCompletionTargetSha(cwd, goal, signal);
-  const included = await isGoalContentIncluded(cwd, approvedSha, targetSha, signal);
+  const prStatus = await readGoalPullRequestStatus(cwd, goal, signal);
+  const mergedPr = prStatus?.status === 'available' && prStatus.pullRequest.state === 'MERGED'
+    ? prStatus.pullRequest : undefined;
+  if (goal.status === 'created' && mergedPr === undefined) throw new Error('Goal is not awaiting a human merge');
+  if (prStatus?.status === 'available' && prStatus.pullRequest.state === 'CLOSED') {
+    const current = store.getSync(goalId);
+    assertCompletionUnchanged(current, goal);
+    return { included: false, goal: current };
+  }
+  const targetSha = mergedPr === undefined
+    ? await resolveCompletionTargetSha(cwd, goal, signal) : mergedPr.baseRefOid;
+  const included = mergedPr !== undefined || await isGoalContentIncluded(cwd, approvedSha, targetSha, signal);
   if (!included) {
     const current = store.getSync(goalId);
     assertCompletionUnchanged(current, goal);
     return { included: false, goal: current };
   }
   const saved = await store.update(goalId, (current) => {
+    signal?.throwIfAborted();
     assertCompletionAllowed(current, goal);
+    if (mergedPr !== undefined && (current.branch !== goal.branch || current.integrationBranch !== goal.integrationBranch
+      || current.pullRequest?.number !== goal.pullRequest?.number || current.pullRequest?.url !== goal.pullRequest?.url)) {
+      throw new Error('Goal PR changed during the completion check. Use takt_check_goal_completion.');
+    }
     const completion = { ...current.completion!, targetBranch: current.integrationBranch, targetSha };
     return appendGoalNotification(withdrawPendingGoalQuestions({
       ...current, status: 'completed', completion,

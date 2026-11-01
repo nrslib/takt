@@ -52,4 +52,4 @@ manager.patrol_interval は秒単位で、既定は 900 秒です。未完成で
 
 完成申請が awaiting_merge になるとブランチを push し、取り込み先を base とする PR を作成または再利用します。PR 本文は目的、ブランチ差分による変更、summary の確認結果、humanChecks の人の確認手順を含みます。PR の番号と URL は pullRequest に保存され、takt_get_goal / takt_list_goals から読めます。
 
-takt_merge_goal_pr は cwd、goalId、保存 PR と一致する正整数の prNumber、現在のターンで渡された conversationOperationId で、そのリポジトリの takt merge を動かします。director 経由の人の明示指示がある場合だけ使います。道具の成功だけでは完成せず、takt_check_goal_completion を使います。squash で PR に追加された変更が確認を妨げる場合は、保存済みの取り込み先ブランチをゴールブランチに取り込むタスクで合わせます。
+takt_merge_goal_pr は cwd、goalId、保存 PR と一致する正整数の prNumber、現在のターンで渡された conversationOperationId で、そのリポジトリの takt merge を動かします。director 経由の人の明示指示がある場合だけ使います。道具の成功だけでは完成せず、takt_check_goal_completion を使います。保存 PR の元のブランチと取り込み先がゴールの保存内容に一致し、マージ済みなら、squash や PR への追加変更で内容や先端 SHA が変わっていても完成できます。巡回で人によるマージを知ったときも、取り込み先をゴールブランチに取り込むタスクは投入せず、この完成確認を使います。PR を確認できない取り込み待ちのゴールは、従来どおり内容の比較で判断します。
