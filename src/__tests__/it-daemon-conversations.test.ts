@@ -73,34 +73,62 @@ function ipcMeasurements(observations: IpcObservation[], pids: number[], concurr
 
 it.each(['manager', 'director'] as const)('keeps two %s screens connected to the same live conversation for thirty seconds after a reply', async (kind) => {
   const fixture = concurrentTuiFixture(kind);
+  const log = fixture.log;
   const clients: ConcurrentTui[] = [];
   let concurrentAt = Number.POSITIVE_INFINITY;
   try {
+    log('start-first:before');
     const first = await fixture.start(); clients.push(first);
+    log('start-first:after', first.child.pid);
+    log('ready-first:before', first.child.pid);
     await first.ready();
+    log('ready-first:after', first.child.pid);
+    log('inspect-first:before', first.child.pid);
     const initial = (await first.inspect()).snapshot.state!;
+    log('inspect-first:after', first.child.pid);
+    log('initial-snapshots:before', first.child.pid);
     await vi.waitFor(() => expect(fixture.readObservations().filter((row) => row.event === 'request'
       && row.pid === first.child.pid && row.method === 'snapshot').length).toBeGreaterThanOrEqual(3), { timeout: 5000 });
+    log('initial-snapshots:after', first.child.pid);
     concurrentAt = Date.now();
+    log('start-second:before');
     const second = await fixture.start(); clients.push(second);
+    log('start-second:after', second.child.pid);
+    log('ready-second:before', second.child.pid);
     await second.ready();
-    expect((await second.inspect()).snapshot.state?.conversationId).toBe(initial.conversationId);
+    log('ready-second:after', second.child.pid);
+    log('inspect-second:before', second.child.pid);
+    const secondScreen = await second.inspect();
+    log('inspect-second:after', second.child.pid);
+    expect(secondScreen.snapshot.state?.conversationId).toBe(initial.conversationId);
     const owner = readDaemonOwner(fixture.directory)!;
     expect(owner).toBeDefined();
     const text = 'Share this message with both open screens';
+    log('submit:before', first.child.pid);
     await first.submit(text);
+    log('submit:after', first.child.pid);
+    log('provider-start:before', owner.pid);
     await vi.waitFor(() => expect(fixture.readObservations()).toContainEqual(expect.objectContaining({
       event: 'provider_start', agent: kind, pid: owner.pid,
     })), { timeout: 10000 });
+    log('provider-start:after', owner.pid);
+    log('release:before', owner.pid);
     fixture.release();
+    log('release:after', owner.pid);
+    log('reply:before', first.child.pid);
     await vi.waitFor(async () => {
       const screen = await first.inspect();
       expect(screen.frame).toContain(fixture.reply);
       expect(screen.snapshot.state?.running).toBeNull();
     }, { timeout: 10000 });
+    log('reply:after', first.child.pid);
     const repliedAt = Date.now();
+    log('wait-30s:before', owner.pid);
     await delay(30000);
+    log('wait-30s:after', owner.pid);
+    log('final-inspect:before');
     const screens = await Promise.all(clients.map((client) => client.inspect()));
+    log('final-inspect:after');
     const observations = fixture.readObservations();
     const measurements = ipcMeasurements(observations, clients.map((client) => client.child.pid!), concurrentAt);
     expect(Date.now() - repliedAt).toBeGreaterThanOrEqual(30000);
@@ -140,11 +168,13 @@ it.each(['manager', 'director'] as const)('keeps two %s screens connected to the
       if (request.maxMs !== null) expect(request.maxMs).toBeLessThan(5000);
     }
   } finally {
+    log('cleanup:before');
     const observations = fixture.readObservations();
     console.info(JSON.stringify({ kind, ...ipcMeasurements(observations, clients.map((client) => client.child.pid!), concurrentAt),
       timeline: observations.filter((row) => row.event !== 'refresh' && row.event !== 'event_loop'),
       owner: readDaemonOwner(fixture.directory) }));
     await fixture.cleanup();
+    log('cleanup:after');
   }
 }, 180_000);
 
