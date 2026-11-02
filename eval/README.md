@@ -205,13 +205,8 @@ Terra Medium (`gpt-6.1-terra`)、Luna Max (`gpt-6-luna`) に渡す。比較す�
 利用者側 HEAD・問い合わせの前後状態を確認する。作業記録の意味は別途 rubric で採点する。
 ターンの評価上限は600秒（10分）で、許可判定を含めてテスト・片付け・作業記録・報告まで行う時間を確保する。時間切れは失敗として保存する。本番の実行時間制限は変更しない。
 
-```bash
-TAKT_EVAL_MANAGER_INSTRUCTION_ROOT="$manager_eval_red_root" \
-  npm run eval:prompts:manager-work-split -- \
-  --filter-pattern 'stopped-background-execution|integrated-task-execution'
-```
-
-変更後は指示書の参照先だけを切り替える。各3反復の成果物は eval/.results/manager-execution/ に保存する。
+後述の比較用指示書の作成後、実操作ケースも指示書の参照先だけを切り替えて実行する。
+各3反復の成果物は eval/.results/manager-execution/ に保存する。
 trial.json、events.jsonl、checks.jsonl、instruction.md、system-prompt.txt、saved-goal.json、worker-exit.json を照合する。
 テストは試行内の一時領域へ開始・終了記録を書き、worker が後片付けの前に checks.jsonl へ保存する。失敗・中断時も取得済みの記録を保存する。
 worker の標準エラーは非公開の `worker-stderr.log` に保存し、起動・通信の失敗調査に使う。
@@ -260,6 +255,17 @@ TAKT_EVAL_MANAGER_INSTRUCTION_ROOT="$manager_eval_dir/red" \
   npm run eval:prompts:manager-work-split -- --filter-providers 'codex-(terra-medium|luna-max)'
 TAKT_EVAL_MANAGER_INSTRUCTION_ROOT="$manager_eval_dir/green" \
   npm run eval:prompts:manager-work-split -- --filter-providers 'codex-(terra-medium|luna-max)'
+```
+
+実操作の追加2ケースは、上で作成した指示書を使って実行する。
+
+```bash
+TAKT_EVAL_MANAGER_INSTRUCTION_ROOT="$manager_eval_dir/red" \
+  npm run eval:prompts:manager-work-split -- \
+  --filter-pattern 'stopped-background-execution|integrated-task-execution'
+TAKT_EVAL_MANAGER_INSTRUCTION_ROOT="$manager_eval_dir/green" \
+  npm run eval:prompts:manager-work-split -- \
+  --filter-pattern 'stopped-background-execution|integrated-task-execution'
 ```
 
 両方とも3反復、生成キャッシュ無効で実行する。Sol / Opus も測る場合は両方のコマンドから

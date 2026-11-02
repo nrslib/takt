@@ -44,7 +44,7 @@ test('recursive discovery rejects duplicate suite names across categories', () =
   }
 });
 
-test('recursive discovery returns nested configs with root-relative paths and ignores non-YAML files', () => {
+test('recursive discovery returns nested configs and ignores non-YAML files and leftover manager filters', () => {
   const directory = mkdtempSync(join(tmpdir(), 'takt-eval-registry-'));
   try {
     const agentDirectory = join(directory, 'agents', 'review', 'nested');
@@ -54,6 +54,8 @@ test('recursive discovery returns nested configs with root-relative paths and ig
     writeFileSync(join(agentDirectory, 'alpha.yaml'), 'description: alpha\n');
     writeFileSync(join(scenarioDirectory, 'beta.yml'), 'description: beta\n');
     writeFileSync(join(agentDirectory, 'README.md'), '# ignored\n');
+    writeFileSync(join(agentDirectory, '.manager-filter-interrupted.yaml'), 'description: temporary\n');
+    writeFileSync(join(scenarioDirectory, '.manager-filter-interrupted.yaml'), 'description: temporary\n');
 
     const discovered = discoverPromptEvalConfigs(directory);
 

@@ -258,7 +258,7 @@ it.each(['available', 'unavailable', 'mismatch'] as const)('passes %s PR evidenc
     pullRequest: { number: 1950, url: 'https://github.com/example/project/pull/1950' } };
   const evidence = status === 'available'
     ? { status, pullRequest: { number: 1950, url: goal.pullRequest!.url, headRefName: goal.branch,
-      baseRefName: goal.integrationBranch, baseRefOid: 'b'.repeat(40), state: 'MERGED' } }
+      baseRefName: goal.integrationBranch, baseRefOid: 'b'.repeat(40), mergeCommit: { oid: 'c'.repeat(40) }, state: 'MERGED' } }
     : { status };
   doubles.readPr.mockResolvedValue(evidence);
   const queriedGoal = goal;

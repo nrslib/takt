@@ -101,7 +101,7 @@ describe('completion from the saved merged PR', () => {
   function prResponse(overrides: Record<string, unknown> = {}) {
     return JSON.stringify({ number: 1950, url: goal.pullRequest!.url,
       headRefName: goal.branch, baseRefName: goal.integrationBranch,
-      headRefOid: sourceSha, baseRefOid: targetSha, state: 'MERGED', ...overrides });
+      headRefOid: sourceSha, baseRefOid: 'c'.repeat(40), mergeCommit: { oid: targetSha }, state: 'MERGED', ...overrides });
   }
 
   beforeEach(async () => {
@@ -125,7 +125,7 @@ describe('completion from the saved merged PR', () => {
     const args = github.command.mock.calls[0]![0] as string[];
     expect(args.slice(0, 3)).toEqual(['pr', 'view', goal.pullRequest!.url]);
     expect(args[args.indexOf('--json') + 1]?.split(',')).toEqual(expect.arrayContaining([
-      'number', 'url', 'headRefName', 'baseRefName', 'state', 'baseRefOid',
+      'number', 'url', 'headRefName', 'baseRefName', 'state', 'baseRefOid', 'mergeCommit',
     ]));
     expect(doubles.merge).not.toHaveBeenCalled();
   });
@@ -134,6 +134,27 @@ describe('completion from the saved merged PR', () => {
     github.command.mockResolvedValue(prResponse({ headRefOid: 'c'.repeat(40) }));
     expect(await checkGoalCompletion('/project', goal.id, undefined, policy))
       .toMatchObject({ included: true, goal: { status: 'completed', completion: { goalSha: sourceSha } } });
+  });
+
+  it.each([
+    { status: 'awaiting_merge', included: false }, { status: 'awaiting_merge', included: true },
+    { status: 'created', included: false }, { status: 'created', included: true },
+  ] as const)('uses content comparison for a $status goal when the merged PR has no merge commit and inclusion is $included', async ({ status, included }) => {
+    goal = { ...goal, status };
+    github.command.mockResolvedValue(prResponse({ mergeCommit: null }));
+    doubles.contentIncluded.mockResolvedValue(included);
+    const before = structuredClone(goal);
+
+    const result = await checkGoalCompletion('/project', goal.id, undefined, policy);
+
+    expect(result).toMatchObject({ included, goal: { status: included ? 'completed' : status } });
+    expect(doubles.remoteSha).toHaveBeenLastCalledWith('/project', goal.integrationBranch, undefined);
+    expect(doubles.contentIncluded).toHaveBeenCalledWith('/project', sourceSha, targetSha, undefined);
+    if (included) expect(goal.completion?.targetSha).toBe(targetSha);
+    else {
+      expect(goal).toEqual(before);
+      expect(doubles.update).not.toHaveBeenCalled();
+    }
   });
 
   it('completes a merged PR into the saved integration branch when it is not main', async () => {
@@ -151,6 +172,7 @@ describe('completion from the saved merged PR', () => {
     { condition: 'different repository URL', response: { url: 'https://github.com/other/project/pull/1950' } },
     { condition: 'missing head branch', response: { headRefName: undefined } },
     { condition: 'invalid target SHA', response: { baseRefOid: 'invalid' } },
+    { condition: 'invalid merge commit SHA', response: { mergeCommit: { oid: 'invalid' } } },
   ])('uses content comparison for $condition', async ({ response }) => {
     github.command.mockResolvedValue(prResponse(response));
     const before = structuredClone(goal);

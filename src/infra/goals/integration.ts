@@ -242,9 +242,9 @@ export async function checkGoalCompletion(
     assertCompletionUnchanged(current, goal);
     return { included: false, goal: current };
   }
-  const targetSha = mergedPr === undefined
-    ? await resolveCompletionTargetSha(cwd, goal, signal) : mergedPr.baseRefOid;
-  const included = mergedPr !== undefined || await isGoalContentIncluded(cwd, approvedSha, targetSha, signal);
+  const mergedSha = mergedPr?.mergeCommit?.oid;
+  const targetSha = mergedSha ?? await resolveCompletionTargetSha(cwd, goal, signal);
+  const included = mergedSha !== undefined || await isGoalContentIncluded(cwd, approvedSha, targetSha, signal);
   if (!included) {
     const current = store.getSync(goalId);
     assertCompletionUnchanged(current, goal);

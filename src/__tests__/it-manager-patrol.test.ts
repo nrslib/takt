@@ -77,7 +77,7 @@ it('refreshes PR status on the same manager across patrols and completes an exte
     expect(directory).toBe(cwd);
     expect(args.slice(0, 3)).toEqual(['pr', 'view', pullRequest.url]);
     return JSON.stringify({ ...pullRequest, headRefName: goal.branch, baseRefName: 'main',
-      headRefOid: 'c'.repeat(40), baseRefOid: 'b'.repeat(40), state });
+      headRefOid: 'c'.repeat(40), baseRefOid: 'b'.repeat(40), mergeCommit: state === 'MERGED' ? { oid: 'b'.repeat(40) } : null, state });
   });
   const completionResults: Awaited<ReturnType<typeof checkTaktGoalCompletion>>[] = [];
   const prompts: string[] = [];

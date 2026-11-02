@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
-import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -148,7 +148,7 @@ function localServer(state, saveEvent) {
 
 export async function runManagerExecution(config, artifactDir, signal, suppliedProvider) {
   mkdirSync(artifactDir, { recursive: true });
-  const root = mkdtempSync(join(tmpdir(), 'takt-manager-execution-'));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'takt-manager-execution-')));
   const checksPath = join(root, 'checks.jsonl');
   writeFileSync(checksPath, '');
   const configDir = join(root, 'config');
@@ -268,7 +268,15 @@ export async function runManagerExecution(config, artifactDir, signal, suppliedP
       background = spawn(process.execPath, ['-e', "console.log('RUN inventory test'); setInterval(() => {}, 1000)"], { cwd: workspace, stdio: ['ignore', 'pipe', 'pipe'] });
       background.stdout.on('data', (chunk) => appendFileSync(outputPath, chunk));
       background.stderr.on('data', (chunk) => appendFileSync(outputPath, chunk));
-      await once(background.stdout, 'data');
+      const readiness = new AbortController();
+      try {
+        await Promise.race([
+          once(background.stdout, 'data', { signal: readiness.signal }),
+          once(background, 'exit', { signal: readiness.signal }).then(([code, signal]) => {
+            throw new Error(`Background process exited before producing output (code=${code}, signal=${signal})`);
+          }),
+        ]);
+      } finally { readiness.abort(); }
       trial.background = { pid: background.pid, started: true, workspace, outputPath };
       await store.update(goal.id, (value) => appendGoalWorkLog(value, { summary: `Previous inventory test: cwd=${workspace}; PID=${background.pid}; output=${outputPath}; result pending.` }));
       await turn('predecessor', config.lang === 'ja' ? '作業記録を確認して引き継ぎを受領してください。テスト結果の確認は次の指示で依頼します。' : 'Read and acknowledge the handover record. Test result verification will be requested in the next instruction.');

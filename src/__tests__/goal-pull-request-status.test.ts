@@ -7,7 +7,7 @@ const fetch = vi.hoisted(() => vi.fn());
 vi.mock('../infra/github/pr-status.js', () => ({ fetchPrMergeStatus: fetch }));
 let goal: Goal;
 const response = () => ({ number: 1950, url: goal.pullRequest!.url, headRefName: goal.branch,
-  baseRefName: goal.integrationBranch, baseRefOid: 'b'.repeat(40), state: 'MERGED' as const });
+  baseRefName: goal.integrationBranch, baseRefOid: 'b'.repeat(40), mergeCommit: { oid: 'c'.repeat(40) }, state: 'MERGED' as const });
 beforeEach(() => {
   goal = { ...goalRecord(), pullRequest: { number: 1950, url: 'https://github.com/example/project/pull/1950' } };
   fetch.mockReset().mockResolvedValue(response());

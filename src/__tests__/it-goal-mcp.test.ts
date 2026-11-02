@@ -1455,7 +1455,8 @@ describe('goal PR publication and merge through manager MCP', () => {
       expect(root).toBe(cwd);
       expect(args.slice(0, 3)).toEqual(['pr', 'view', pullRequest.url]);
       return JSON.stringify({ ...pullRequest, headRefName: branch, baseRefName: 'main',
-        headRefOid: prHeadSha, baseRefOid: git(remote, ['rev-parse', 'main']), state: prState });
+        headRefOid: prHeadSha, baseRefOid: git(remote, ['rev-parse', 'main']),
+        mergeCommit: prState === 'MERGED' ? { oid: git(remote, ['rev-parse', 'main']) } : null, state: prState });
     });
     vi.spyOn(GitHubProvider.prototype, 'checkCliStatus').mockReturnValue({ available: true });
     vi.mocked(githubPr.findExistingPr).mockReset().mockImplementation((head, root) => {
@@ -1575,7 +1576,6 @@ describe('goal PR publication and merge through manager MCP', () => {
       expect((await new GoalStore(cwd).get(goalId)).completion?.targetSha).toBe(sha);
       expect(git(cwd, ['rev-parse', 'main'])).toBe(base);
       expect(snapshot()).toEqual(original);
-      console.info('remote completion evidence', { A: sha, B: base, M: sha });
     });
   });
 
@@ -1663,7 +1663,6 @@ describe('goal PR publication and merge through manager MCP', () => {
       expect(await store.get(goalId)).toEqual(before);
       expect(readFileSync(savedFile)).toEqual(savedBytes);
       expect(new TaskRunner(cwd).listTaskStateItems()).toEqual(tasks);
-      console.info('completion tool description', (await client.listTools()).tools.find(({ name }) => name === 'takt_check_goal_completion')?.description);
 
       prState = 'MERGED';
       const merged = await check();
@@ -1686,6 +1685,7 @@ describe('goal PR publication and merge through manager MCP', () => {
         headRefName: condition === 'different head' ? 'another-goal' : branch,
         baseRefName: condition === 'different base' ? 'develop' : 'main',
         baseRefOid: git(remote, ['rev-parse', 'main']),
+        mergeCommit: condition === 'closed without merge' ? null : { oid: sha },
         state: condition === 'closed without merge' ? 'CLOSED' : 'MERGED',
       }));
       const store = new GoalStore(cwd);

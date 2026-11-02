@@ -50,5 +50,6 @@ eval/prompts/
 eval/fixtures/**/.takt/
 eval/.work/
 eval/.results/
+eval/**/.manager-filter-*.yaml
 .tmp/
 eval/scenarios/phase-awareness/.phase-awareness-*.json

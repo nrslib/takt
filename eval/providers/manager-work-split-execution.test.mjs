@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
+import childProcess, { execFileSync, spawn } from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -163,8 +164,7 @@ for (const kind of ['real', 'symlink']) {
       const trial = await runManagerExecution(config('integrated-task-execution'), join(root, 'artifacts'), new AbortController().signal, provider);
       assert.ok(mainWorktree);
       assert.ok(workspace);
-      if (kind === 'symlink') assert.notEqual(trial.cwd, mainWorktree);
-      else assert.equal(trial.cwd, mainWorktree);
+      assert.equal(trial.cwd, mainWorktree);
       assert.equal(trial.error, undefined);
       assert.deepEqual(trial.cleanedWorktrees, [workspace]);
       assert.equal(trial.cleanedWorktrees.includes(mainWorktree), false);
@@ -177,6 +177,56 @@ for (const kind of ['real', 'symlink']) {
     }
   });
 }
+
+test('background startup records an early exit and cleans up without calling the provider', { timeout: 10000 }, async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'manager-background-startup-'));
+  const originalSpawn = spawn;
+  const mock = t.mock.method(childProcess, 'spawn', (_command, _args, options) =>
+    originalSpawn(process.execPath, ['-e', 'process.exit(7)'], options));
+  syncBuiltinESMExports();
+  try {
+    const provider = { setup() { return { call() { assert.fail('Provider must not run after startup failure'); } }; } };
+    const trial = await runManagerExecution(config('stopped-background-execution'), root, new AbortController().signal, provider);
+    assert.equal(trial.complete, false);
+    assert.equal(trial.cleaned, true);
+    assert.match(trial.error, /code=7, signal=null/);
+    assert.ok(lines(root, 'events.jsonl').some(({ type, data }) => type === 'execution_error' && data.message === trial.error));
+    assert.equal(existsSync(trial.cwd), false);
+  } finally {
+    mock.mock.restore();
+    syncBuiltinESMExports();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('grading rejects a goal-tip check in the caller checkout even under a symlink temporary root', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'manager-caller-check-')));
+  const previousTmp = process.env.TMPDIR;
+  try {
+    const linkedRoot = join(root, 'linked');
+    symlinkSync(root, linkedRoot, 'dir');
+    process.env.TMPDIR = linkedRoot;
+    const provider = fakeProvider(async ({ options }) => {
+      const run = (command, args) => execFileSync(command, args, { cwd: options.cwd, encoding: 'utf8', stdio: 'pipe' });
+      options.onStream({ type: 'tool_use', data: { tool: 'Bash', id: 'check', input: { command: 'git checkout goal/inventory && npm test && git checkout main' } } });
+      run('git', ['checkout', 'goal/inventory']);
+      try { assert.match(run('npm', ['test']), /PASS inventory import/); }
+      finally { run('git', ['checkout', 'main']); }
+    });
+    const trial = await runManagerExecution(config('integrated-task-execution'), join(root, 'artifacts'), new AbortController().signal, provider);
+    assert.equal(trial.error, undefined);
+    assert.deepEqual(trial.after.git, trial.before.git);
+    const checks = lines(join(root, 'artifacts'), 'checks.jsonl');
+    assert.equal(checks[0].cwd, trial.cwd);
+    assert.equal(checks[0].head, trial.goalSha);
+    const grade = gradeExecution(trial, lines(join(root, 'artifacts'), 'events.jsonl'), checks);
+    assert.equal(grade.pass, false);
+  } finally {
+    if (previousTmp === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = previousTmp;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('verification records a check inside its allowed trial root and persists it before cleanup', async () => {
   const root = mkdtempSync(join(tmpdir(), 'manager-execution-test-'));
