@@ -9,6 +9,7 @@ import { MAKE_GOAL_COMMAND, useManagerInput } from './useManagerInput.js';
 import { ManagerAnswerDialog } from './ManagerAnswerDialog.js';
 import { ManagerAbortDialog } from './ManagerAbortDialog.js';
 import { ManagerSummaryDialog } from './ManagerSummaryDialog.js';
+import { formatPendingSummary } from './summaryDisplay.js';
 import { ManagerHelp } from './ManagerHelp.js';
 import { ManagerSelectionDialog } from './ManagerSelectionDialog.js';
 import { isGoalSelectionCandidate, useManagerSelection, type ManagerSelectedTarget, type ManagerSelectionCommand } from './useManagerSelection.js';
@@ -57,6 +58,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const exiting = useRef(false);
   const displayed = useRef(new Set<string>());
   const displayedMessages = useRef(new Set<string>());
+  const displayedSummaries = useRef(new Set<string>());
   const lastError = useRef<string | null>(null);
   const pendingAnswer = useRef<{ text: string; operationId?: string } | null>(null);
   const goalOperations = useRef(new Map<string, { kind: 'pause' | 'resume' | 'abort'; goal: ManagerAbortTarget['goal'] }>());
@@ -121,6 +123,14 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     setPending(state?.pending ?? null);
     resetChoice();
   }, [state?.revision, state?.pending]);
+  useEffect(() => {
+    if (state?.pending == null) return;
+    const key = `${state.conversationId}:${state.pending.revision}`;
+    if (displayedSummaries.current.has(key)) return;
+    const content = formatPendingSummary(state.pending, lang);
+    displayedSummaries.current.add(key);
+    append(content);
+  }, [state?.conversationId, state?.pending, lang]);
   useEffect(() => {
     if (snapshot.error !== null && snapshot.error !== lastError.current) append(snapshot.error);
     lastError.current = snapshot.error;
@@ -260,7 +270,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     {selection.selection !== null && <ManagerSelectionDialog selection={selection.selection} lang={lang} />}
     {answerTarget !== null && selection.selection === null && <ManagerAnswerDialog answerTarget={answerTarget} bodyText={questionAnswer.bodyText} lang={lang} />}
     {abortTarget !== null && selection.selection === null && <ManagerAbortDialog abortTarget={abortTarget.goal} retry={abortTarget.retry} approve={approve} lang={lang} />}
-    {summaryVisible && <ManagerSummaryDialog pending={pending} approve={approve} ja={ja} />}
+    {summaryVisible && <ManagerSummaryDialog approve={approve} lang={lang} />}
     <ManagerHelp lang={lang} />
     <StatusLine busy={busy} label={summarizing ? getLabel('manager.summaryWorking', lang) : ja ? '処理中' : 'Working'} streamed="" />
     <PromptInput text={visibleEditor.text} cursor={visibleEditor.cursor} contentWidth={contentWidth}
