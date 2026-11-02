@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { CreateAgentSessionOptions, DefaultPackageManager, ResolvedPaths } from '@earendil-works/pi-coding-agent';
 
 type MockResolvedPaths = {
-  [Kind in keyof ResolvedPaths]: Array<Pick<ResolvedPaths[Kind][number], 'path' | 'enabled'>>;
+  [Kind in 'extensions' | 'skills' | 'prompts' | 'themes']: Array<Pick<ResolvedPaths[Kind][number], 'path' | 'enabled'>>;
 };
 
 const TRUSTED_EXTENSION_PATH = '/private/tmp/takt-trusted-extension.ts';

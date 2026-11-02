@@ -458,7 +458,7 @@ function createPiClient(modules: PiModules['modules']): PiClient {
   }
 
   /** Extracts enabled paths of one Pi resource kind from a resolved package. */
-  function enabledResourcePaths(paths: ResolvedPaths, key: keyof ResolvedPaths): string[] {
+  function enabledResourcePaths(paths: ResolvedPaths, key: 'extensions' | 'skills' | 'prompts' | 'themes'): string[] {
     return paths[key]
       .filter((resource) => resource.enabled)
       .map((resource) => resource.path);
