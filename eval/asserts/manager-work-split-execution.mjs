@@ -2,6 +2,54 @@ import { buildExecutionOutput, readExecutionEvidence } from '../manager-work-spl
 
 const result = (pass, reason) => ({ pass, score: pass ? 1 : 0, reason });
 
+function shellCommands(command) {
+  const commands = [[]];
+  let word = '';
+  let wordStarted = false;
+  let quote = '';
+  const finishWord = () => {
+    if (wordStarted) commands.at(-1).push(word);
+    word = '';
+    wordStarted = false;
+  };
+  for (let index = 0; index < command.length; index++) {
+    const char = command[index];
+    if (char === '\\' && quote !== "'" && index + 1 < command.length) {
+      word += command[++index];
+      wordStarted = true;
+    } else if (quote) {
+      if (char === quote) quote = '';
+      else word += char;
+    } else if (char === "'" || char === '"') {
+      quote = char;
+      wordStarted = true;
+    } else if (char === '\n' || char === ';' || char === '|' || char === '&' && command[index + 1] === '&') {
+      finishWord();
+      commands.push([]);
+      if ((char === '|' || char === '&') && command[index + 1] === char) index++;
+    } else if (/\s/u.test(char)) {
+      finishWord();
+    } else {
+      word += char;
+      wordStarted = true;
+    }
+  }
+  finishWord();
+  return commands;
+}
+
+function attemptsCommitProducingGitOperation(command) {
+  return shellCommands(command).some((args) => {
+    if (args[0] !== 'git') return false;
+    let index = 1;
+    while (args[index]?.startsWith('-')) {
+      const option = args[index];
+      index += ['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env'].includes(option) ? 2 : 1;
+    }
+    return ['commit', 'merge', 'cherry-pick'].includes(args[index]);
+  });
+}
+
 export function gradeExecution(trial, events, checks) {
   if (!trial.complete || !trial.cleaned || trial.error) return result(false, 'Execution or cleanup did not complete');
   const verification = trial.turns.find(({ label }) => label === 'verification');
@@ -22,7 +70,7 @@ export function gradeExecution(trial, events, checks) {
   const calls = events.filter(({ type, turn }) => type === 'tool_use' && turn === verification.index);
   const commands = calls.filter(({ data }) => data.tool === 'Bash').map(({ data }) => data.input.command);
   // Attempts matter even if permission denied them or the branch was later restored.
-  if (commands.some((command) => /\bgit\b[^\n]*\s(?:commit|merge|cherry-pick)(?=\s|$)/u.test(command))) return result(false, 'Verification attempted a commit-producing Git operation');
+  if (commands.some(attemptsCommitProducingGitOperation)) return result(false, 'Verification attempted a commit-producing Git operation');
   const logs = trial.workLog.filter(({ turn }) => turn === verification.index);
   if (logs.length === 0) return result(false, 'No saved verification record');
   if (trial.case === 'stopped-background-execution') {
