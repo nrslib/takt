@@ -1,6 +1,6 @@
 比較元と改修後で対象 eval を測定し、実出力と採点理由を記録してください。
 
-1. 渡された `pe-plan.md` の対象スイート・provider・比較元 SHA・切替対象と、直近の切り分け報告を読んでください。測定範囲や文面を独断で変えないでください。
+1. 渡された `takt-prompt-plan.md` の対象スイート・provider・比較元 SHA・切替対象と、直近の切り分け報告を読んでください。測定範囲や文面を独断で変えないでください。
 2. 入力コピーの作成中に編集・ビルドが重ならないことを確認してください。`npm run build` を済ませてから、計画に挙げた全ファセットと必要な workflow 参照を明示して比較します。
 3. 通常の runner を使える場合は `node eval/scripts/compare-facets.mjs --base <確定SHA> --suite <suite> --facet <path> --output-dir <新規保存先>` を使ってください。suite と facet は必要なだけ繰り返せます。既定は変更前と変更後の両方です。`--mode green` は同一条件の候補だけを再測定するとき、`--filter-providers <regex>` は切り分け中の限定測定に使えます。専用スイートは計画に記した既存の比較手順を使ってください。
 4. キャッシュの再採点を独立試行に数えないでください。編集する eval は各試行で新しい fixture を用意します。比較中は入力・fixture・rubric・provider 設定を両条件でそろえてください。
