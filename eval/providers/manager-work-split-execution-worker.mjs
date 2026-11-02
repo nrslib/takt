@@ -297,7 +297,7 @@ export async function runManagerExecution(config, artifactDir, signal, suppliedP
         // Git's registry identifies worktrees owned by this disposable repository, even outside TMPDIR.
         const worktrees = git(state.cwd, 'worktree', 'list', '--porcelain').split('\n')
           .filter((line) => line.startsWith('worktree ')).map((line) => line.slice('worktree '.length));
-        trial.cleanedWorktrees = worktrees.filter((path) => path !== state.cwd);
+        trial.cleanedWorktrees = worktrees.slice(1);
         for (const path of trial.cleanedWorktrees) git(state.cwd, 'worktree', 'remove', '--force', path);
       }
     } catch (error) { cleanup.push({ status: 'rejected', reason: error }); }
