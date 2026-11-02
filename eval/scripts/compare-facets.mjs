@@ -3,10 +3,10 @@ import { createHash } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 import {
   chmodSync, closeSync, cpSync, existsSync, lstatSync, mkdirSync, openSync,
-  readFileSync, rmSync, symlinkSync, writeFileSync,
+  readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import path, { dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { assertProcessTreeSupport, trackProcessTree } from '../lib/process-tree.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -212,7 +212,9 @@ async function main() {
     : manifest.runs.some((run) => run.code !== 0 || !run.resultExists) ? 1 : 0;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+// シンボリックリンク経由で起動しても直接実行と分かるよう、両方を実体のパスにそろえて比べる
+if (process.argv[1]
+  && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(resolve(process.argv[1]))) {
   main().catch((error) => {
     console.error(error.message);
     process.exitCode = 1;
