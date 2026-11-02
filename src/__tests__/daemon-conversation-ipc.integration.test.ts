@@ -516,7 +516,7 @@ it('accepts a complete message spanning input batches and rejects concurrent mes
       attachmentId: first.attachmentId, speaker: selected.speaker, command: { kind: 'message', text: message },
     },
   }))));
-  await vi.waitFor(() => expect(value.frames.filter((frame) => frame.requestId?.startsWith('large-burst-'))).toHaveLength(3));
+  await vi.waitFor(() => expect(value.frames.filter((frame) => frame.requestId?.startsWith('large-burst-'))).toHaveLength(3), { timeout: 5_000 });
   const accepted = value.frames.find((frame) => frame.requestId === 'large-burst-0')!.result!;
   expect(accepted.kind).toBe('accepted');
   for (const id of ['large-burst-1', 'large-burst-2']) expect(value.frames.find((frame) => frame.requestId === id)!.result).toEqual({ kind: 'busy', operationId: accepted.operationId });

@@ -28,7 +28,8 @@ vi.mock('../../../src/infra/task/index.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../src/infra/task/index.js')>()),
   TaskRunner: class { listAllTaskItems() { return doubles.listTasks(); } },
 }));
-vi.mock('../../../src/features/tasks/taskRetryPreparation.js', () => ({
+vi.mock('../../../src/features/tasks/taskRetryPreparation.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../src/features/tasks/taskRetryPreparation.js')>()),
   prepareFailedTaskRetry: doubles.prepareRetry,
   buildFailedTaskRetryStartContext: () => ({
     workflowName: 'default', workflowConfig: { steps: [] }, options: {},
@@ -147,7 +148,7 @@ async function generate(entry: Entry, scenario: Scenario, ctx: SessionContext): 
     return result.task;
   }
   if (entry === 'retry') {
-    doubles.prepareRetry.mockReturnValue({ worktreePath: cwd, previousWorkflow: 'default', previousOrderContent: scenario.canonical, matchedRunSlug: 'failed-run', runMeta: null });
+    doubles.prepareRetry.mockReturnValue({ worktreePath: cwd, previousWorkflow: 'default', previousOrderContent: scenario.canonical, matchedRunSlug: 'failed-run', runMeta: null, skippedRuns: [] });
     const notice = await runAssistantRetryCommand({ cwd, lang: ctx.lang, command: 'retry', inlineText: scenario.note, history: scenario.history, sessionContext: ctx, formalSpec: false });
     if (doubles.persistRetry.mock.calls.length !== 1) throw new Error(`Retry did not save a generated revision: ${notice}`);
     return String(doubles.persistRetry.mock.calls[0]?.[0].revisedOrder.content);

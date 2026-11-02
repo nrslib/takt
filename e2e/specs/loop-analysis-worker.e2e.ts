@@ -3,26 +3,33 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
-import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env';
-import { copyWorkflowFixtureToRepo } from '../helpers/local-workflow-fixture';
-import { formatTaktRunResult, runTakt } from '../helpers/takt-runner';
-import { createLocalRepo, type LocalRepo } from '../helpers/test-repo';
-import { waitFor } from '../helpers/wait';
+import { createIsolatedEnv, type IsolatedEnv } from '../helpers/isolated-env.js';
+import { copyWorkflowFixtureToRepo } from '../helpers/local-workflow-fixture.js';
+import { formatTaktRunResult, runTakt } from '../helpers/takt-runner.js';
+import { createLocalRepo, type LocalRepo } from '../helpers/test-repo.js';
+import { waitFor } from '../helpers/wait.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-function findLoopAnalysisReports(directory: string): string[] {
+function findCompletedLoopAnalysisReports(directory: string): string[] {
   if (!existsSync(directory)) {
     return [];
   }
   const reports: string[] = [];
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (entry.name === '.takt-report-internal') continue;
     const path = join(directory, entry.name);
     if (entry.isDirectory()) {
-      reports.push(...findLoopAnalysisReports(path));
+      reports.push(...findCompletedLoopAnalysisReports(path));
     } else if (entry.name === 'loop-analysis.md') {
-      reports.push(path);
+      const metaPath = join(dirname(dirname(path)), 'meta.json');
+      if (!existsSync(metaPath)) continue;
+      const meta = JSON.parse(readFileSync(metaPath, 'utf8')) as Record<string, unknown>;
+      const report = readFileSync(path, 'utf8');
+      if (meta.status === 'completed' && /\nsource run: [^\r\n]+\n$/.test(report)) {
+        reports.push(path);
+      }
     }
   }
   return reports;
@@ -83,7 +90,7 @@ describe('E2E: detached loop analysis worker (mock)', () => {
     let reports: string[] = [];
     const reportWasSaved = await waitFor(
       () => {
-        reports = findLoopAnalysisReports(runsDirectory);
+        reports = findCompletedLoopAnalysisReports(runsDirectory);
         return reports.length === 1;
       },
       30_000,
@@ -154,9 +161,9 @@ describe('E2E: detached loop analysis worker (mock)', () => {
       }, timeout: 240_000 });
 
     expect(result.exitCode, formatTaktRunResult(result)).toBe(0);
-    const saved = await waitFor(() => findLoopAnalysisReports(join(repo.path, '.takt', 'runs')).length === 1, 30_000);
+    const saved = await waitFor(() => findCompletedLoopAnalysisReports(join(repo.path, '.takt', 'runs')).length === 1, 30_000);
     expect(saved).toBe(true);
-    const reports = findLoopAnalysisReports(join(repo.path, '.takt', 'runs'));
+    const reports = findCompletedLoopAnalysisReports(join(repo.path, '.takt', 'runs'));
     expect(reports).toHaveLength(1);
     expect(readFileSync(reports[0]!, 'utf8')).toContain('# Loop Analysis Report');
     const calls = readFileSync(callLog, 'utf8').trim().split('\n')

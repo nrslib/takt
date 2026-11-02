@@ -17,7 +17,8 @@ const {
   mockResolveWorkflowCallTarget,
   mockGetWorkflowDescription,
   mockRunTaskRetryMode,
-  mockFindRunForTask,
+  mockHistoryRunSlug,
+  mockListRuns,
   mockFindPreviousOrderContent,
   mockLoadRunSessionContext,
   mockGetRunPaths,
@@ -58,7 +59,11 @@ const {
     stepPreviews: [],
   })),
   mockRunTaskRetryMode: vi.fn(),
-  mockFindRunForTask: vi.fn<typeof import('../features/interactive/runSessionReader.js').findRunForTask>(() => null),
+  mockHistoryRunSlug: vi.fn<() => string | null>(() => null),
+  mockListRuns: vi.fn((_path: string) => {
+    const slug = mockHistoryRunSlug();
+    return slug === null ? [] : [{ name: slug, isDirectory: () => true }];
+  }),
   mockFindPreviousOrderContent: vi.fn(() => null),
   mockLoadRunSessionContext: vi.fn(),
   mockGetRunPaths: vi.fn(() => ({ logsDir: '/tmp/logs', reportsDir: '/tmp/reports' })),
@@ -132,7 +137,6 @@ vi.mock('../infra/config/index.js', () => ({
 
 vi.mock('../features/interactive/index.js', () => ({
   resolveLanguage: (lang?: string) => lang === 'ja' ? 'ja' : 'en',
-  findRunForTask: mockFindRunForTask,
   loadRunSessionContext: (...args: unknown[]) => mockLoadRunSessionContext(...args),
   getRunPaths: mockGetRunPaths,
   formatRunSessionForPrompt: mockFormatRunSessionForPrompt,
@@ -140,8 +144,15 @@ vi.mock('../features/interactive/index.js', () => ({
   findPreviousOrderContent: mockFindPreviousOrderContent,
 }));
 
-vi.mock('../features/interactive/runSessionReader.js', () => ({
-  findRunForTask: mockFindRunForTask,
+vi.mock('node:fs', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:fs')>()),
+  readdirSync: mockListRuns,
+}));
+
+vi.mock('../shared/utils/private-path-identity.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../shared/utils/private-path-identity.js')>()),
+  assertSafePath: vi.fn(),
+  lstatOrUndefined: () => ({ isDirectory: () => true }),
 }));
 
 vi.mock('../core/workflow/run/run-meta.js', () => ({
@@ -303,7 +314,7 @@ function makeNestedCheckpoint(): WorkflowResumePoint {
 }
 
 function configureNestedReviewRestart(): TaskListItem {
-  mockFindRunForTask.mockImplementationOnce(() => null);
+  mockHistoryRunSlug.mockImplementationOnce(() => null);
   mockLoadWorkflowByIdentifier.mockReturnValue(nestedRootWorkflowConfig);
   selectStartCandidate('Restart from: default > delegate > coding > review');
   return makeFailedTask({
@@ -429,11 +440,11 @@ function expectRestartCandidateIsDefault(leafStep: string): void {
 function expectEffectRestartCandidateIsHidden(): void {
   const call = mockSelectOptionWithDefault.mock.calls.at(-1);
   const options = call?.[1] as Array<{ label: string; value: string; selectable?: boolean }>;
-  // Only the authored "plan" leaf survives; the effect-backed system step is
-  // never presented as a selectable restart position.
+  // The initial start and authored "plan" leaf remain available; the
+  // effect-backed system step is never a selectable restart position.
   expect(
     options.filter((option) => option.selectable !== false).map((option) => option.label.trim()),
-  ).toEqual([JSON.stringify('plan')]);
+  ).toEqual(['Start workflow from the beginning', JSON.stringify('plan')]);
 }
 
 const autoRequeueNote = [
@@ -489,6 +500,7 @@ beforeEach(() => {
     reports: [],
   });
   mockReadRunMetaBySlug.mockReturnValue(null);
+  mockHistoryRunSlug.mockReset().mockReturnValue(null);
   mockStartReExecution.mockReturnValue({
     name: 'my-task',
     content: 'Do something',
@@ -498,6 +510,38 @@ beforeEach(() => {
   mockPrepareTaskSpecDirectory.mockReturnValue({
     taskDir: '/project/.takt/tasks/my-task',
     taskDirRelative: '.takt/tasks/my-task',
+  });
+});
+
+describe.each(['requeue', 'retry'] as const)('task-list %s default start', (action) => {
+  // SCN-TL-RESUME-P2 / SCN-RESUME-02-P1 and SCN-RESUME-02-N1.
+  it.each([false, true])('should preserve the default start with latest checkpoint=%s', async (saved) => {
+    const resumePoint: WorkflowResumePoint = {
+      version: 2,
+      stack: [{ workflow: 'default', workflow_ref: 'default', step: 'implement', kind: 'agent', occurrence: 1 }],
+      iteration: 2, elapsed_ms: 100, workflow_call_invocations: {}, workflow_step_participations: {},
+    };
+    const task = makeFailedTask({ runSlug: 'latest-run', failure: { step: 'implement', error: 'Boom' } });
+    mockReadRunMetaBySlug.mockReturnValue({
+      runSlug: 'latest-run', runRoot: '.takt/runs/latest-run',
+      reportDirectory: '.takt/runs/latest-run/reports', contextDirectory: '.takt/runs/latest-run/context',
+      logsDirectory: '.takt/runs/latest-run/logs',
+      task: task.name, workflow: 'default', status: 'failed', startTime: '2026-02-01T00:00:00.000Z',
+      ...(saved ? { resumePoint } : {}),
+    });
+    mockSelectOptionWithDefault.mockImplementationOnce((_message, _options, defaultValue) => defaultValue);
+
+    expect(await (action === 'requeue' ? requeueFailedTask : retryFailedTask)(task, '/project')).toBe(true);
+
+    expect(mockRequeueTask).toHaveBeenCalledWith(task.name, ['failed'], expect.objectContaining({
+      startStep: saved ? 'implement' : undefined,
+      resumePoint: saved ? resumePoint : undefined,
+      restartPoint: undefined,
+      sourceRunSlug: saved ? 'latest-run' : null,
+    }));
+    expect(mockInfo).toHaveBeenCalledWith(saved
+      ? expect.stringContaining('Resume failed position: "implement"')
+      : 'Selected start position: Start workflow from the beginning');
   });
 });
 
@@ -521,8 +565,8 @@ describe('requeueFailedTask', () => {
       ...effectWorkflowConfig, steps: [effectWorkflowConfig.steps[0]!],
     });
     if (source === 'run meta') {
-      mockFindRunForTask.mockReturnValueOnce('run-1');
-      mockReadRunMetaBySlug.mockReturnValueOnce({
+      mockHistoryRunSlug.mockReturnValueOnce('run-1');
+      mockReadRunMetaBySlug.mockReturnValue({
         runSlug: 'run-1', runRoot: '.takt/runs/run-1',
         reportDirectory: '.takt/runs/run-1/reports', contextDirectory: '.takt/runs/run-1/context',
         logsDirectory: '.takt/runs/run-1/logs',
@@ -553,8 +597,8 @@ describe('requeueFailedTask', () => {
       iteration: 2, elapsed_ms: 100, workflow_call_invocations: {}, workflow_step_participations: {},
     };
     mockLoadWorkflowByIdentifier.mockReturnValue({ ...effectWorkflowConfig, steps: [effectWorkflowConfig.steps[0]!] });
-    mockFindRunForTask.mockReturnValueOnce('run-1');
-    mockReadRunMetaBySlug.mockReturnValueOnce({
+    mockHistoryRunSlug.mockReturnValueOnce('run-1');
+    mockReadRunMetaBySlug.mockReturnValue({
       runSlug: 'run-1', runRoot: '.takt/runs/run-1',
       reportDirectory: '.takt/runs/run-1/reports', contextDirectory: '.takt/runs/run-1/context',
       logsDirectory: '.takt/runs/run-1/logs',
@@ -616,7 +660,7 @@ describe('requeueFailedTask', () => {
         resumePoint: undefined,
         workflow: undefined,
         taskDir: undefined,
-        sourceRunSlug: undefined,
+        sourceRunSlug: null,
         restartPoint: defaultPlanRestartPoint,
       },
     );
@@ -681,7 +725,7 @@ describe('requeueFailedTask', () => {
         resumePoint: undefined,
         workflow: undefined,
         taskDir: undefined,
-        sourceRunSlug: undefined,
+        sourceRunSlug: null,
         restartPoint: defaultPlanRestartPoint,
       },
     );
@@ -720,7 +764,7 @@ describe('requeueFailedTask', () => {
         resumePoint: undefined,
         workflow: undefined,
         taskDir: undefined,
-        sourceRunSlug: 'run-1',
+        sourceRunSlug: null,
         restartPoint: {
         stack: [{ workflow: 'default', workflow_ref: 'default', step: 'plan', kind: 'agent' }],
       },
@@ -765,7 +809,7 @@ describe('requeueFailedTask', () => {
         resumePoint: undefined,
         workflow: undefined,
         taskDir: undefined,
-        sourceRunSlug: 'run-1',
+        sourceRunSlug: null,
         restartPoint: defaultPlanRestartPoint,
       },
     );
@@ -816,7 +860,7 @@ describe('requeueFailedTask', () => {
         resumePoint: undefined,
         workflow: 'selected-workflow',
         taskDir: undefined,
-        sourceRunSlug: 'run-1',
+        sourceRunSlug: null,
         restartPoint: selectedWorkflowPlanRestartPoint,
       },
     );
@@ -864,7 +908,7 @@ describe('requeueFailedTask', () => {
         resumePoint: resumePoint,
         workflow: undefined,
         taskDir: undefined,
-        sourceRunSlug: undefined,
+        sourceRunSlug: null,
         restartPoint: undefined,
       },
     );
@@ -891,7 +935,7 @@ describe('requeueFailedTask', () => {
         resumePoint: undefined,
         workflow: undefined,
         taskDir: undefined,
-        sourceRunSlug: undefined,
+        sourceRunSlug: null,
         restartPoint: defaultPlanRestartPoint,
       },
     );
@@ -922,7 +966,7 @@ describe('requeueFailedTask', () => {
         resumePoint: undefined,
         workflow: undefined,
         taskDir: undefined,
-        sourceRunSlug: undefined,
+        sourceRunSlug: null,
         restartPoint: defaultPlanRestartPoint,
       },
     );
@@ -943,7 +987,7 @@ describe('requeueFailedTask', () => {
         resumePoint: undefined,
         workflow: undefined,
         taskDir: undefined,
-        sourceRunSlug: undefined,
+        sourceRunSlug: null,
         restartPoint: {
         stack: [{ workflow: 'default', workflow_ref: 'default', step: 'implement', kind: 'agent' }],
       },
@@ -972,7 +1016,7 @@ describe('requeueFailedTask', () => {
         resumePoint: undefined,
         workflow: 'selected-workflow',
         taskDir: undefined,
-        sourceRunSlug: undefined,
+        sourceRunSlug: null,
         restartPoint: defaultPlanRestartPoint,
       },
     );
@@ -1046,7 +1090,7 @@ describe('requeueFailedTask', () => {
         resumePoint: resumePoint,
         workflow: undefined,
         taskDir: undefined,
-        sourceRunSlug: undefined,
+        sourceRunSlug: null,
         restartPoint: undefined,
       },
     );
@@ -1070,7 +1114,7 @@ describe('requeueFailedTask', () => {
         resumePoint: undefined,
         workflow: undefined,
         taskDir: undefined,
-        sourceRunSlug: undefined,
+        sourceRunSlug: null,
         restartPoint: nestedReviewRestartPoint,
         sourceResumePoint: makeNestedCheckpoint(),
       },
@@ -1081,7 +1125,7 @@ describe('requeueFailedTask', () => {
   });
 
   it('should not expose a terminal root workflow_call as a restart target for Requeue', async () => {
-    mockFindRunForTask.mockImplementationOnce(() => null);
+    mockHistoryRunSlug.mockImplementationOnce(() => null);
     mockLoadWorkflowByIdentifier.mockReturnValue(nestedRootWorkflowConfig);
     mockSelectOptionWithDefault.mockImplementationOnce(
       (_message: string, options: Array<{ label: string; value: string; selectable?: boolean }>) => {
@@ -1109,7 +1153,7 @@ describe('requeueFailedTask', () => {
         resumePoint: undefined,
         workflow: undefined,
         taskDir: undefined,
-        sourceRunSlug: undefined,
+        sourceRunSlug: null,
         restartPoint: nestedReviewRestartPoint,
         sourceResumePoint: makeNestedCheckpoint(),
       },
@@ -1131,7 +1175,7 @@ describe('requeueFailedTask', () => {
         resumePoint: undefined,
         workflow: undefined,
         taskDir: undefined,
-        sourceRunSlug: undefined,
+        sourceRunSlug: null,
         restartPoint: {
         stack: [{ workflow: 'default', workflow_ref: 'default', step: 'plan', kind: 'agent' }],
       },
@@ -1144,7 +1188,7 @@ describe('requeueFailedTask', () => {
     // the terminal; the serialized leaf labels must stay distinct so the user
     // can tell them apart, and the confirmed label echoes the selected one.
     const selectedLabel = '"line\\\\n"';
-    mockFindRunForTask.mockImplementationOnce(() => null);
+    mockHistoryRunSlug.mockImplementationOnce(() => null);
     mockLoadWorkflowByIdentifier.mockReturnValue({
       ...defaultWorkflowConfig,
       initialStep: 'line\n',
@@ -1156,6 +1200,7 @@ describe('requeueFailedTask', () => {
     mockSelectOptionWithDefault.mockImplementationOnce(
       (_message: string, options: Array<{ label: string; value: string }>) => {
         expect(options.map((option) => option.label)).toEqual([
+          'Start workflow from the beginning',
           '"line\\n"',
           selectedLabel,
         ]);
@@ -1175,7 +1220,7 @@ describe('requeueFailedTask', () => {
         resumePoint: undefined,
         workflow: undefined,
         taskDir: undefined,
-        sourceRunSlug: undefined,
+        sourceRunSlug: null,
         restartPoint: {
         stack: [{ workflow: 'default', workflow_ref: 'default', step: 'line\\n', kind: 'agent' }],
       },
@@ -1250,11 +1295,14 @@ describe('retryFailedTask', () => {
       task: 'Do something', workflow: 'default', source: 'pr_review', pr_number: 42,
       branch: 'feature/pr', base_branch: 'main', merge_task: true, merge_clone_prepared: false,
     } });
-    mockReadRunMetaBySlug.mockReturnValueOnce({
+    mockReadRunMetaBySlug.mockReturnValue({
       runSlug: 'merge-run', runRoot: '.takt/runs/merge-run',
       reportDirectory: '.takt/runs/merge-run/reports', contextDirectory: '.takt/runs/merge-run/context',
       logsDirectory: '.takt/runs/merge-run/logs', task: 'Do something', workflow: 'default',
       status: 'failed', startTime: '2026-02-01T00:00:00.000Z',
+      resumePoint: { ...makeNestedCheckpoint(), stack: [
+        { workflow: 'default', workflow_ref: 'default', step: 'plan', kind: 'agent', occurrence: 1 },
+      ] },
     });
     expect(await retryFailedTask(task, '/project')).toBe(true);
     expect(mockReadRunMetaBySlug).toHaveBeenCalledWith('/project', 'merge-run', expect.any(Function));
@@ -1315,7 +1363,7 @@ describe('retryFailedTask', () => {
         resumePoint: undefined,
         workflow: undefined,
         taskDir: MOCK_CREATED_TASK_DIR,
-        sourceRunSlug: undefined,
+        sourceRunSlug: null,
         restartPoint: defaultPlanRestartPoint,
       },
     );
@@ -1448,7 +1496,7 @@ describe('retryFailedTask', () => {
         resumePoint: undefined,
         workflow: undefined,
         taskDir: MOCK_CREATED_TASK_DIR,
-        sourceRunSlug: undefined,
+        sourceRunSlug: null,
         restartPoint: defaultPlanRestartPoint,
       },
     );
@@ -1582,7 +1630,7 @@ describe('retryFailedTask', () => {
         resumePoint: undefined,
         workflow: undefined,
         taskDir: '.takt/tasks/my-task',
-        sourceRunSlug: undefined,
+        sourceRunSlug: null,
         restartPoint: defaultPlanRestartPoint,
       },
     );
@@ -1626,7 +1674,7 @@ describe('retryFailedTask', () => {
         resumePoint: undefined,
         workflow: undefined,
         taskDir: '.takt/tasks/my-task',
-        sourceRunSlug: undefined,
+        sourceRunSlug: null,
         restartPoint: defaultPlanRestartPoint,
       },
     );
@@ -1648,7 +1696,7 @@ describe('retryFailedTask', () => {
         resumePoint: undefined,
         workflow: 'selected-workflow',
         taskDir: MOCK_CREATED_TASK_DIR,
-        sourceRunSlug: undefined,
+        sourceRunSlug: null,
         restartPoint: defaultPlanRestartPoint,
       },
     );
@@ -1656,7 +1704,7 @@ describe('retryFailedTask', () => {
     expect(mockExecuteAndCompleteTask).not.toHaveBeenCalled();
   });
 
-  it('should pass failed step as default to selectOptionWithDefault', async () => {
+  it('should default to the workflow beginning without a saved position', async () => {
     const task = makeFailedTask();
 
     await retryFailedTask(task, '/project');
@@ -1668,11 +1716,12 @@ describe('retryFailedTask', () => {
       expect.objectContaining({ label: '"implement"' }),
       expect.objectContaining({ label: '"review"' }),
     ]));
-    expectRestartCandidateIsDefault('review');
+    expect(call?.[2]).toBe(call?.[1].find((option: { label: string }) =>
+      option.label === 'Start workflow from the beginning')?.value);
   });
 
   it('should prefer run meta resume_point root step as retry default', async () => {
-    mockFindRunForTask.mockReturnValue('run-1');
+    mockHistoryRunSlug.mockReturnValue('run-1');
     mockLoadWorkflowByIdentifier.mockReturnValue({
       ...defaultWorkflowConfig,
       initialStep: 'delegate',
@@ -1741,6 +1790,9 @@ describe('retryFailedTask', () => {
       logsDirectory: '.takt/runs/run-1/logs',
       status: 'failed',
       startTime: '2026-04-13T00:00:00.000Z',
+      resumePoint: { ...makeNestedCheckpoint(), stack: [
+        { workflow: 'default', workflow_ref: 'default', step: 'plan', kind: 'agent', occurrence: 1 },
+      ] },
     });
 
     await retryFailedTask(makeFailedTask({
@@ -1748,7 +1800,7 @@ describe('retryFailedTask', () => {
       runSlug: 'run-1',
     }), '/project');
 
-    expect(mockFindRunForTask).not.toHaveBeenCalled();
+    expect(mockListRuns).not.toHaveBeenCalled();
     expect(mockReadRunMetaBySlug).toHaveBeenCalledWith(
       '/project/.takt/worktrees/my-task',
       'run-1',
@@ -1757,7 +1809,7 @@ describe('retryFailedTask', () => {
     expect(mockFindPreviousOrderContent).not.toHaveBeenCalled();
   });
 
-  it('should keep using task.runSlug for retry context when run meta is missing', async () => {
+  it('should search history without loading absent run context when metadata is missing', async () => {
     mockReadRunMetaBySlug.mockReturnValue(null);
 
     await retryFailedTask(makeFailedTask({
@@ -1765,13 +1817,13 @@ describe('retryFailedTask', () => {
       runSlug: 'run-1',
     }), '/project');
 
-    expect(mockFindRunForTask).not.toHaveBeenCalled();
+    expect(mockListRuns).toHaveBeenCalled();
     expect(mockLoadRunSessionContext).not.toHaveBeenCalled();
     expect(mockFindPreviousOrderContent).not.toHaveBeenCalled();
   });
 
   it('should offer an authored restart when the saved child step is removed', async () => {
-    mockFindRunForTask.mockReturnValue('run-1');
+    mockHistoryRunSlug.mockReturnValue('run-1');
     mockLoadWorkflowByIdentifier.mockReturnValue({
       ...defaultWorkflowConfig,
       initialStep: 'delegate',
@@ -1830,7 +1882,7 @@ describe('retryFailedTask', () => {
   });
 
   it.each([false, true])('should omit an unavailable Resume target and allow restart choice %s', async (restart) => {
-    mockFindRunForTask.mockReturnValue('run-1');
+    mockHistoryRunSlug.mockReturnValue('run-1');
     mockLoadWorkflowByIdentifier.mockReturnValue({
       ...defaultWorkflowConfig,
       initialStep: 'delegate',
@@ -1912,7 +1964,7 @@ describe('retryFailedTask', () => {
         resumePoint: undefined,
         workflow: undefined,
         taskDir: MOCK_CREATED_TASK_DIR,
-        sourceRunSlug: 'run-1',
+        sourceRunSlug: null,
         restartPoint: {
         stack: [{ workflow: 'default', workflow_ref: 'default', step: 'implement', kind: 'agent' }],
       },
@@ -1921,7 +1973,7 @@ describe('retryFailedTask', () => {
   });
 
   it('should pass run meta resume_point when selected step matches root workflow_call step', async () => {
-    mockFindRunForTask.mockReturnValue('run-1');
+    mockHistoryRunSlug.mockReturnValue('run-1');
     const resumePoint = {
       version: 2 as const,
       stack: [
@@ -2000,7 +2052,7 @@ describe('retryFailedTask', () => {
         resumePoint: undefined,
         workflow: undefined,
         taskDir: MOCK_CREATED_TASK_DIR,
-        sourceRunSlug: undefined,
+        sourceRunSlug: null,
         restartPoint: nestedReviewRestartPoint,
         sourceResumePoint: makeNestedCheckpoint(),
       },
@@ -2022,7 +2074,7 @@ describe('retryFailedTask', () => {
         resumePoint: undefined,
         workflow: undefined,
         taskDir: MOCK_CREATED_TASK_DIR,
-        sourceRunSlug: 'run-1',
+        sourceRunSlug: null,
         restartPoint: {
         stack: [{ workflow: 'default', workflow_ref: 'default', step: 'plan', kind: 'agent' }],
       },
@@ -2031,7 +2083,7 @@ describe('retryFailedTask', () => {
   });
 
   it('should drop run meta resume_point when user selects a different parent step', async () => {
-    mockFindRunForTask.mockReturnValue('run-1');
+    mockHistoryRunSlug.mockReturnValue('run-1');
     const resumePoint = {
       version: 2 as const,
       stack: [
@@ -2105,7 +2157,7 @@ describe('retryFailedTask', () => {
         resumePoint: undefined,
         workflow: undefined,
         taskDir: MOCK_CREATED_TASK_DIR,
-        sourceRunSlug: 'run-1',
+        sourceRunSlug: null,
         restartPoint: {
         stack: [{ workflow: 'default', workflow_ref: 'default', step: 'plan', kind: 'agent' }],
       },
@@ -2127,7 +2179,7 @@ describe('retryFailedTask', () => {
         resumePoint: undefined,
         workflow: undefined,
         taskDir: MOCK_CREATED_TASK_DIR,
-        sourceRunSlug: 'run-1',
+        sourceRunSlug: null,
         restartPoint: defaultPlanRestartPoint,
       },
     );
@@ -2138,7 +2190,7 @@ describe('retryFailedTask', () => {
 
     await retryFailedTask(task, '/project');
 
-    expect(mockFindRunForTask).toHaveBeenCalledWith('/project/.takt/worktrees/my-task', 'Do something');
+    expect(mockListRuns).toHaveBeenCalledWith('/project/.takt/worktrees/my-task/.takt/runs', { withFileTypes: true });
   });
 
   it('should load retry workflow metadata from the existing worktree lookup root', async () => {
@@ -2217,7 +2269,7 @@ describe('retryFailedTask', () => {
 
     await expect(retryFailedTask(makeFailedTask(), '/project')).resolves.toBe(true);
     const firstOptions = mockSelectOptionWithDefault.mock.calls[0]?.[1] as unknown[] | undefined;
-    expect(firstOptions).toHaveLength(3);
+    expect(firstOptions).toHaveLength(4);
     expect(mockSelectOptionWithDefault).toHaveBeenCalledWith(
       expect.stringContaining('selected-workflow'),
       expect.arrayContaining([
@@ -2256,7 +2308,7 @@ describe('retryFailedTask', () => {
 
     await expect(retryFailedTask(makeFailedTask(), '/project')).resolves.toBe(true);
     const firstOptions = mockSelectOptionWithDefault.mock.calls[0]?.[1] as unknown[] | undefined;
-    expect(firstOptions).toHaveLength(3);
+    expect(firstOptions).toHaveLength(4);
     expect(mockSelectOptionWithDefault).toHaveBeenCalledWith(
       expect.stringContaining('selected-workflow'),
       expect.arrayContaining([
@@ -2288,7 +2340,7 @@ describe('retryFailedTask', () => {
 
   it('should warn when run meta parsing fails during retry resume resolution', async () => {
     const task = makeFailedTask();
-    mockFindRunForTask.mockReturnValue('run-1');
+    mockHistoryRunSlug.mockReturnValue('run-1');
     mockReadRunMetaBySlug.mockImplementation((_cwd: string, _slug: string, onWarning?: (warning: string) => void) => {
       onWarning?.('Failed to parse run metadata at /tmp/meta.json: broken json');
       return null;
@@ -2372,7 +2424,7 @@ describe('retryFailedTask', () => {
         resumePoint: undefined,
         workflow: undefined,
         taskDir: MOCK_CREATED_TASK_DIR,
-        sourceRunSlug: 'run-1',
+        sourceRunSlug: null,
         restartPoint: {
         stack: [{ workflow: 'default', workflow_ref: 'default', step: 'plan', kind: 'agent' }],
       },
@@ -2402,7 +2454,7 @@ describe('retryFailedTask', () => {
         resumePoint: undefined,
         workflow: undefined,
         taskDir: MOCK_CREATED_TASK_DIR,
-        sourceRunSlug: 'run-1',
+        sourceRunSlug: null,
         restartPoint: defaultPlanRestartPoint,
       },
     );
@@ -2432,7 +2484,7 @@ describe('retryFailedTask', () => {
         resumePoint: undefined,
         workflow: 'selected-workflow',
         taskDir: MOCK_CREATED_TASK_DIR,
-        sourceRunSlug: 'run-1',
+        sourceRunSlug: null,
         restartPoint: defaultPlanRestartPoint,
       },
     );
@@ -2475,6 +2527,7 @@ describe('retryFailedTask', () => {
     mockRunTaskRetryMode.mockResolvedValue({ action: 'save_task', task: '追加指示A', source: 'go' });
 
     const task = makeFailedTask({
+      runSlug: 'run-1',
       data: {
         task: 'Do something',
         workflow: 'default',
@@ -2517,7 +2570,7 @@ describe('retryFailedTask', () => {
         resumePoint: undefined,
         workflow: undefined,
         taskDir: MOCK_CREATED_TASK_DIR,
-        sourceRunSlug: undefined,
+        sourceRunSlug: null,
         restartPoint: nestedReviewRestartPoint,
         sourceResumePoint: makeNestedCheckpoint(),
       },
@@ -2540,7 +2593,7 @@ describe('retryFailedTask', () => {
         resumePoint: undefined,
         workflow: undefined,
         taskDir: MOCK_CREATED_TASK_DIR,
-        sourceRunSlug: 'run-1',
+        sourceRunSlug: null,
         restartPoint: {
         stack: [{ workflow: 'default', workflow_ref: 'default', step: 'plan', kind: 'agent' }],
       },
@@ -2574,7 +2627,7 @@ describe('retryFailedTask', () => {
         resumePoint: undefined,
         workflow: undefined,
         taskDir: MOCK_CREATED_TASK_DIR,
-        sourceRunSlug: 'run-1',
+        sourceRunSlug: null,
         restartPoint: defaultPlanRestartPoint,
       },
     );

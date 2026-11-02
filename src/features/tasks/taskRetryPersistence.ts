@@ -91,7 +91,7 @@ export async function persistFailedTaskRetry(options: FailedTaskRetryPersistence
         resumePoint: options.resumePoint,
         workflow: options.workflow,
         taskDir: revision?.taskDirRelative ?? options.taskDir,
-        sourceRunSlug: options.sourceRunSlug ?? undefined,
+        sourceRunSlug: options.sourceRunSlug,
         restartPoint: options.restartPoint,
         sourceResumePoint: options.sourceResumePoint,
         ...(options.freshStart ? { freshStart: true } : {}),

@@ -1821,6 +1821,20 @@ describe('TaskRunner (tasks.yaml)', () => {
       ),
     },
     {
+      name: 'manual requeue with explicitly no source',
+      record: { run_slug: 'current-run', source_run_slug: 'old-source', resume_mode: 'requeue' },
+      expectedSourceRunSlug: undefined,
+      expectedMode: 'requeue',
+      execute: (service: TaskRetryService) => service.requeueTask('task-a', ['failed'], { sourceRunSlug: null }),
+    },
+    {
+      name: 'manual requeue with omitted source and existing history',
+      record: { run_slug: 'current-run', source_run_slug: 'old-source', resume_mode: 'requeue' },
+      expectedSourceRunSlug: 'current-run',
+      expectedMode: 'requeue',
+      execute: (service: TaskRetryService) => service.requeueTask('task-a', ['failed']),
+    },
+    {
       name: 'direct re-execution with an explicit source',
       record: { run_slug: '20260717-current-run', source_run_slug: '20260717-original-run', resume_mode: 'instruct' },
       expectedSourceRunSlug: '20260717-explicit-run',

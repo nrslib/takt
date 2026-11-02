@@ -148,7 +148,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
   - 手順（ユーザー行動/コマンド）:
     - `runtime.yaml`で`loop_analysis.enabled: true`と`output: file`を設定する。
     - mock workflowを実行し、元のCLIプロセスの終了を確認する。
-    - 固定時間の待機ではなくreportファイルの出現を監視し、`loop-analysis.md`が保存されることを確認する。
+    - 固定時間の待機ではなく、分析runの完了と公開現在版のreportへの出典追記を監視し、`loop-analysis.md`が1件保存されることを確認する。`.takt-report-internal`配下の実行記録・固定版は検索対象から除外する。判定用mockは現在の構造化応答形式を返す。
     - 同じ fixture を未指定、`--runtime-assignment cost`、空文字名（`--runtime-assignment ""`）、空白名（`--runtime-assignment "  "`）で実行し、元の workflow と分析 agent の呼出しログがそれぞれ `unselected-model`、`analysis-cost-model`、`analysis-empty-model`、`analysis-spaces-model` を使うことを確認する。provider の注入は無効にし、親 CLI 終了後に保存された分析レポートの本文も確認する。
 - Exec mode（`e2e/specs/exec.e2e.ts`）
   - 目的: `takt exec` がプリセット一覧、前回設定の自動利用、`/setup`、`/go` から生成 workflow 実行まで動作することを確認。
