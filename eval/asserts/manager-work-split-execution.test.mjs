@@ -19,6 +19,111 @@ function evidence(caseId) {
 }
 const grade = ({ trial, events, checks }) => gradeExecution(trial, events, checks);
 
+test('accepts the goal tree, diff and merge-base verification command with a quoted merge label', () => {
+  const value = evidence('integrated-task-execution');
+  const command = 'echo "=== goal tip tree ===" && git ls-tree -r --name-only goal/inventory && echo "=== diff main..goal/inventory (stat) ===" && git diff --stat main..goal/inventory && echo "=== merge check: is task sha an ancestor of goal tip? ===" && git merge-base --is-ancestor 1aad06b goal/inventory && echo "YES integrated" || echo "NO"';
+  value.events.push({ type: 'tool_use', turn: 2, data: { tool: 'Bash', id: 'verification', input: { command } } });
+
+  const result = grade(value);
+  assert.equal(result.pass, true, result.reason);
+});
+
+for (const command of [
+  'git merge',
+  'git merge x',
+  'git commit -m m',
+  'git -C dir commit -m m',
+  'git -C dir merge x',
+  'git -c k=v commit',
+  'git cherry-pick abc',
+  'git --no-pager -C "dir with spaces" -c k=v commit -m m',
+  'git -Cdir -ck=v cherry-pick abc',
+  'git --git-dir dir merge x',
+]) {
+  test(`rejects a commit-producing Git subcommand: ${command}`, () => {
+    const value = evidence('integrated-task-execution');
+    value.events.push({ type: 'tool_use', turn: 2, data: { tool: 'Bash', id: 'verification', input: { command } } });
+
+    const result = grade(value);
+    assert.equal(result.pass, false);
+    assert.equal(result.reason, 'Verification attempted a commit-producing Git operation');
+  });
+}
+
+for (const command of [
+  'git merge-base --is-ancestor a b',
+  'git merge-tree a b',
+  'git log --grep commit',
+  'git diff main..goal commit',
+  'git -C commit status',
+  'git -C "" status',
+  'git -c "alias.note=commit" status',
+]) {
+  test(`accepts a Git command whose subcommand does not produce commits: ${command}`, () => {
+    const value = evidence('integrated-task-execution');
+    value.events.push({ type: 'tool_use', turn: 2, data: { tool: 'Bash', id: 'verification', input: { command } } });
+
+    const result = grade(value);
+    assert.equal(result.pass, true, result.reason);
+  });
+}
+
+for (const command of [
+  'cd d && git cherry-pick abc',
+  'true || git merge x',
+  'echo ok;git commit -m m',
+  'echo ok|git merge x',
+  'echo ok\ngit merge x',
+]) {
+  test(`rejects a commit-producing Git command after a shell separator: ${JSON.stringify(command)}`, () => {
+    const value = evidence('integrated-task-execution');
+    value.events.push({ type: 'tool_use', turn: 2, data: { tool: 'Bash', id: 'verification', input: { command } } });
+
+    const result = grade(value);
+    assert.equal(result.pass, false);
+    assert.equal(result.reason, 'Verification attempted a commit-producing Git operation');
+  });
+}
+
+for (const command of [
+  'git diff --stat main..goal/inventory && echo "=== merge check ===" && git merge-base --is-ancestor 1aad06b goal/inventory',
+  'echo "text && git merge x"',
+  "echo 'text;git commit -m m'",
+  "echo 'text \"git merge x\"'",
+  'echo "text \'git merge x\'"',
+  "git status && printf '%s' commit",
+  'echo "text \\" && git merge x" && git status',
+]) {
+  test(`accepts Git operation words in quoted text or another command's arguments: ${command}`, () => {
+    const value = evidence('integrated-task-execution');
+    value.events.push({ type: 'tool_use', turn: 2, data: { tool: 'Bash', id: 'verification', input: { command } } });
+
+    const result = grade(value);
+    assert.equal(result.pass, true, result.reason);
+  });
+}
+
+for (const outcome of ['no result', 'denied', 'cancelled']) {
+  test(`rejects a saved Git commit attempt with ${outcome} and unchanged Git state`, () => {
+    const value = evidence('stopped-background-execution');
+    value.checks = [];
+    assert.equal(grade(value).pass, true);
+    const command = 'git commit -m verify';
+    value.events.push({ type: 'tool_use', turn: 2, data: { tool: 'Bash', id: 'verification', input: { command } } });
+    if (outcome === 'denied') {
+      value.trial.denials.push({ turn: 2, reason: 'Commit needs approval' });
+      value.events.push({ type: 'permission', turn: 2, data: { tool: 'Bash', input: { command },
+        decision: { decision: 'deny', reason: 'Commit needs approval' } } });
+    } else if (outcome === 'cancelled') {
+      value.events.push({ type: 'tool_result', turn: 2, data: { id: 'verification', content: 'Operation cancelled', isError: true } });
+    }
+
+    const result = grade(value);
+    assert.equal(result.pass, false);
+    assert.equal(result.reason, 'Verification attempted a commit-producing Git operation');
+  });
+}
+
 test('accepts completed temporary goal-tip verification and stopped-check unconfirmed termination', () => {
   const integrated = evidence('integrated-task-execution');
   integrated.events.push({ type: 'tool_use', turn: 2, data: { tool: 'Bash', input: { command: 'git merge-base --is-ancestor task/import goal/inventory' } } });
