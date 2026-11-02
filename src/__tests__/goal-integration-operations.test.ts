@@ -92,6 +92,16 @@ it('passes reviewed SHA, notification policy and cancellation directly to integr
   await mergeTaktGoalTask({ ...input, taskName: 'task', expectedSha: 'a'.repeat(40) }, {}, signal);
   expect(doubles.merge).toHaveBeenCalledExactlyOnceWith(input.cwd, input.goalId, 'task', 'a'.repeat(40), signal, policy, 'ja');
 });
+it('returns clone cleanup diagnostics without changing the successful MCP merge response', async () => {
+  const sha = 'a'.repeat(40);
+  const cleanupWarning = { path: '/takt-worktrees/task-clone', reason: 'permission denied' };
+  doubles.merge.mockResolvedValueOnce({ status: 'merged', sha, cleanupWarning, goal: goalRecord() });
+
+  const result = await mergeTaktGoalTask({ ...input, taskName: 'task', expectedSha: sha }, {}, signal);
+
+  expect(result.isError).toBeUndefined();
+  expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ status: 'merged', sha, cleanupWarning });
+});
 it.each(['auto', 'approve'] as const)('uses the configured %s completion policy', async (mainMerge) => {
   doubles.config.mockReturnValue({ mainMerge, policy });
   await completeTaktGoal({ ...input, expectedSha: 'a'.repeat(40), summary: 'evidence' }, {}, signal);
