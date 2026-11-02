@@ -1,11 +1,11 @@
 name: takt-prompt-engineering
-description: 実行記録からファセットを改修し、独立レビューと eval の変更前後比較で効果を確認するTAKT開発用フロー。
+description: 実行記録をもとにファセットを改修し、独立したレビューと eval の変更前後の比較で効果を確かめる TAKT 開発用ワークフロー。
 max_steps: 48
 initial_step: takt-prompt-investigate
 
 steps:
   - name: takt-prompt-investigate
-    description: 原記録、決定規則、読む担当、eval と比較条件を調べる
+    description: 元の記録、判断規則、規則を読む担当、eval と比較条件を調べる
     persona: planner
     session_key: takt-prompt-investigator
     edit: false
@@ -39,7 +39,7 @@ steps:
         next: ABORT
 
   - name: takt-prompt-design-review
-    description: 汎用性と eval 設計を2つの独立セッションで反証する
+    description: 汎用性と eval 設計に反例を当て、2つの独立したセッションで確かめる
     edit: false
     concurrency: 2
     parallel:
@@ -95,7 +95,7 @@ steps:
         next: takt-prompt-investigate
 
   - name: takt-prompt-apply
-    description: 承認された日英ファセットと eval を実装し、製品コードが必要なら止める
+    description: 承認された日本語・英語のファセットと eval を実装し、製品コードの変更が必要なら止める
     persona: coder
     session_key: takt-prompt-author
     edit: true
@@ -147,7 +147,7 @@ steps:
         next: ABORT
 
   - name: takt-prompt-review
-    description: 言語の等価性と自然さ、範囲とファセット分類を独立レビューする
+    description: 日本語と英語の意味の一致、日本語の自然さ、変更範囲とファセットの分類を独立してレビューする
     edit: false
     concurrency: 2
     parallel:
@@ -209,7 +209,7 @@ steps:
         next: takt-prompt-apply
 
   - name: takt-prompt-measure
-    description: 比較条件をそろえた測定と同条件の再測定を行う
+    description: 比較条件をそろえて測定し、同じ条件で再測定する
     persona: takt-prompt-evaluator
     session_key: takt-prompt-measurer
     edit: true
@@ -238,7 +238,7 @@ steps:
         next: takt-prompt-classify
 
   - name: takt-prompt-classify
-    description: 各失敗の原記録と連続回数から次の対応を決める
+    description: 各失敗の元の記録と続いた回数から次の対応を決める
     persona: takt-prompt-evaluator
     session_key: takt-prompt-classifier
     session: refresh
@@ -306,7 +306,7 @@ steps:
         next: ABORT
 
   - name: takt-prompt-final-measure
-    description: 最後の文面で全対象・全 provider の比較を一括実行する
+    description: 最終的な文面で、全対象・全 provider の比較を一括で実行する
     persona: takt-prompt-evaluator
     session_key: takt-prompt-final-measurer
     session: refresh
@@ -335,7 +335,7 @@ steps:
         next: takt-prompt-classify
 
   - name: takt-prompt-final-check
-    description: 必須ゲートと報告を確認して完了を判断する
+    description: 必須の確認項目と報告を確かめ、完了を判断する
     persona: takt-prompt-supervisor
     session_key: takt-prompt-final-checker
     session: refresh
