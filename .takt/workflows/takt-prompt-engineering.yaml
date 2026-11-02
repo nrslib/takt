@@ -1,4 +1,4 @@
-name: prompt-engineering
+name: takt-prompt-engineering
 description: 実行記録からファセットを改修し、独立レビューと eval の変更前後比較で効果を確認するTAKT開発用フロー。
 max_steps: 48
 initial_step: pe-investigate

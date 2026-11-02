@@ -2,8 +2,8 @@
 
 ## TAKT でファセット改修を進める
 
-このリポジトリ専用の `.takt/workflows/prompt-engineering.yaml` を追加した。
-manager からはタスクの `workflow: prompt-engineering` で選択する。
+このリポジトリ専用の `.takt/workflows/takt-prompt-engineering.yaml` を追加した。
+manager からはタスクの `workflow: takt-prompt-engineering` で選択する。
 タスクには対象 run の場所、直したい振る舞い、対象ファセットや eval が分かればその名前を渡す。
 調査 → 汎用性と eval 設計の並列レビュー → 日英の実装 → 言語と範囲の並列レビュー →
 比較測定 → 失敗の切り分け → 最後の全件比較 → ゲートと報告の確認、の順で進む。
