@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { once } from 'node:events';
@@ -143,16 +143,52 @@ test('same manager executor observes a live predecessor then a stopped process a
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+for (const kind of ['real', 'symlink']) {
+  test(`cleanup removes only added worktrees with a ${kind} temporary root`, async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'manager-cleanup-test-')));
+    const realRoot = join(root, 'real');
+    const linkedRoot = join(root, 'linked');
+    const priorTmp = process.env.TMPDIR;
+    let mainWorktree;
+    let workspace;
+    try {
+      mkdirSync(realRoot);
+      symlinkSync(realRoot, linkedRoot, 'dir');
+      process.env.TMPDIR = kind === 'real' ? realRoot : linkedRoot;
+      const provider = fakeProvider(async ({ options }) => {
+        runPassingCheck(options);
+        mainWorktree = realpathSync(options.cwd);
+        workspace = realpathSync(join(dirname(options.cwd), 'check'));
+      });
+      const trial = await runManagerExecution(config('integrated-task-execution'), join(root, 'artifacts'), new AbortController().signal, provider);
+      assert.ok(mainWorktree);
+      assert.ok(workspace);
+      if (kind === 'symlink') assert.notEqual(trial.cwd, mainWorktree);
+      else assert.equal(trial.cwd, mainWorktree);
+      assert.equal(trial.error, undefined);
+      assert.deepEqual(trial.cleanedWorktrees, [workspace]);
+      assert.equal(trial.cleanedWorktrees.includes(mainWorktree), false);
+      assert.equal(trial.cleaned, true);
+      assert.equal(existsSync(workspace), false);
+    } finally {
+      if (priorTmp === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = priorTmp;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
 test('verification records a check inside its allowed trial root and persists it before cleanup', async () => {
   const root = mkdtempSync(join(tmpdir(), 'manager-execution-test-'));
+  let workspace;
   try {
     const provider = fakeProvider(async ({ options }) => {
       runPassingCheck(options);
+      workspace = realpathSync(join(dirname(options.cwd), 'check'));
       assert.equal(lines(dirname(options.cwd), 'checks.jsonl').length, 2);
       assert.deepEqual(lines(root, 'checks.jsonl'), []);
     });
     const trial = await runManagerExecution(config('integrated-task-execution'), root, new AbortController().signal, provider);
-    const workspace = join(dirname(trial.cwd), 'check');
     assert.equal(trial.error, undefined);
     assert.equal(gradeExecution(trial, lines(root, 'events.jsonl'), lines(root, 'checks.jsonl')).pass, true);
     assert.equal(lines(root, 'checks.jsonl').length, 2);
