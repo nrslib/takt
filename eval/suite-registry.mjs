@@ -802,7 +802,7 @@ export function discoverPromptEvalConfigs(rootDir = evalDir) {
         visit(path);
         continue;
       }
-      if (!entry.isFile() || !/\.ya?ml$/.test(entry.name)) continue;
+      if (!entry.isFile() || !/\.ya?ml$/.test(entry.name) || entry.name.startsWith('.manager-filter-')) continue;
 
       const name = basename(entry.name).replace(/\.ya?ml$/, '');
       const config = relative(rootDir, path).split(sep).join('/');

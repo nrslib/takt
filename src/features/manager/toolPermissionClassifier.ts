@@ -1,6 +1,6 @@
 import type { ToolPermissionDecisionRequest } from '../../core/workflow/types.js';
 import type { Language } from '../../core/models/types.js';
-import type { ProviderType } from '../../shared/types/provider.js';
+import { PROVIDER_NATIVE_STRUCTURED_OUTPUT_TOOL_NAME, type ProviderType } from '../../shared/types/provider.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { TAKT_MCP_MANAGER_TOOL_NAMES } from '../mcp/server.js';
 import { TAKT_MANAGER_MCP_SERVER_NAME } from './managerMcp.js';
@@ -317,6 +317,8 @@ function launchesAgent(words: string[]): boolean | undefined {
 }
 
 export function classifyManagerToolPermission(request: ToolPermissionDecisionRequest, language: Language, provider: ProviderType): Classification {
+  if ((provider === 'claude' || provider === 'claude-sdk')
+    && request.toolName === PROVIDER_NATIVE_STRUCTURED_OUTPUT_TOOL_NAME) return { decision: 'allow' };
   const passthroughTools = provider === 'codex' ? codexPassthroughTools : claudePassthroughTools;
   if (passthroughTools.has(request.toolName)) return { decision: 'allow' };
   if (provider !== 'codex' && ['Read', 'Glob', 'Grep'].includes(request.toolName)) {

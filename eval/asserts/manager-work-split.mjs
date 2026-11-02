@@ -1,6 +1,7 @@
 import { z } from 'zod/v4';
 import { GoalSummarySchema } from '../../dist/infra/goals/schema.js';
 import { loadManagerCase, managerWriteSchemas } from '../manager-work-split-prompt.mjs';
+import assertExecution from './manager-work-split-execution.mjs';
 
 const responseSchema = z.object({
   message: z.string().min(1),
@@ -37,11 +38,15 @@ const verificationTellCases = new Set(['verification-repeated', 'verification-mi
 const verificationNoTellCases = new Set(['verification-once', 'verification-told']);
 const planWaitCases = new Set(['plan-dependent', 'plan-queued']);
 const finalPlanCases = new Set(['integration-check', 'plan-cancelled', 'plan-integrated', 'final-impact-tests']);
+const verificationPlanCases = new Set(['stopped-background-check', 'integrated-task-verification', 'verification-before-integration']);
 const taskTools = new Set(['takt_enqueue_goal_task', 'takt_merge_goal_task']);
 const completionTools = new Set(['takt_complete_goal', 'takt_merge_goal_task']);
 const caseWriteTools = {
   ...Object.fromEntries(Object.keys(readyKeys).map((caseId) => [caseId, taskTools])),
   'plan-missing': new Set(['takt_enqueue_goal_task']),
+  'stopped-background-check': new Set(),
+  'integrated-task-verification': new Set(),
+  'verification-before-integration': new Set(['takt_merge_goal_task']),
   ...Object.fromEntries([...verificationTellCases].map((caseId) => [caseId, new Set(['takt_tell_run'])])),
   ...Object.fromEntries([...verificationNoTellCases, ...planWaitCases, ...finalPlanCases].map((caseId) => [caseId, new Set()])),
   'escalate-repeated-failure': new Set(['takt_enqueue_goal_task', 'takt_notify_goal', 'takt_ask_goal_question']),
@@ -78,6 +83,7 @@ function normalizeEnvelope(envelope, turn) {
 
 export default function assertManagerWorkSplit(output, context) {
   const { case: caseId, lang } = context.vars;
+  if (['stopped-background-execution', 'integrated-task-execution'].includes(caseId)) return assertExecution(output, context);
   if (!Object.hasOwn(caseWriteTools, caseId)) throw new Error(`Unknown case: ${caseId}`);
   const fixture = loadManagerCase(caseId, lang);
   let parsed;
@@ -128,6 +134,11 @@ export default function assertManagerWorkSplit(output, context) {
   }
   if (parsed.response.summary !== null) return result(false, 'Event response summary must be null');
   const workLogs = parsed.calls.filter(({ tool }) => tool === 'takt_record_goal_work_log');
+  if (verificationPlanCases.has(caseId)) {
+    const integrations = parsed.calls.filter(({ tool }) => tool === 'takt_merge_goal_task');
+    return result(workLogs.length > 0 && integrations.length <= 1,
+      'Record the verification target and method without redundant integration; waiting and commit semantics are graded by llm-rubric');
+  }
   if (verificationTellCases.has(caseId)) {
     return result(tells.length === 1 && workLogs.length > 0,
       'Send one verification instruction and record its reason; substance is graded by llm-rubric');

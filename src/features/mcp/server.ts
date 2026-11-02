@@ -290,7 +290,7 @@ export function createTaktMcpServer(
       inputSchema: reopenGoalInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal reopen failed', (deps) => reopenTaktGoal(projectInput(input, deps), deps, extra.signal), true));
     server.registerTool('takt_check_goal_completion', {
-      title: 'Check a human goal merge', description: 'Complete a waiting goal only when the saved approved SHA is included in its saved target branch. Responses fit 64 KiB, with explicit truncation. Read saved completion fields with takt_get_goal path and textOffset/maxBytes.',
+      title: 'Check a human goal merge', description: 'Complete an awaiting-merge goal when its saved PR is merged from the goal branch into the saved integration branch, even after squash merging or additional PR commits. A matching saved PR that is closed without merging prevents completion even if the content is included. A created goal retaining completion evidence and its merged PR can also complete; other created goals are rejected. Awaiting-merge goals use the existing content comparison when the matching PR is open, no PR is saved, GitHub is unavailable, or PR identity or branches do not match. Paused and aborted goals cannot complete. Use this after takt_merge_goal_pr or when patrol discovers an external human merge; no corrective integration task is needed. Responses fit 64 KiB, with explicit truncation. Read saved completion fields with takt_get_goal path and textOffset/maxBytes.',
       inputSchema: goalWriteInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal completion check failed', (deps) => checkTaktGoalCompletion(projectInput(input, deps), deps, extra.signal), true));
     server.registerTool('takt_get_goal_diff', {

@@ -21,6 +21,7 @@ import { randomUUID } from 'node:crypto';
 import { ManagerTurnScheduler } from './managerTurnScheduler.js';
 import { resolveCurrentManagerAssignment } from './assignment.js';
 import { conversationId } from '../../infra/conversations/identity.js';
+import { readGoalPullRequestStatus } from '../../infra/goals/pull-request-status.js';
 
 const MANAGER_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
@@ -111,7 +112,10 @@ export function createRunEventManager(cwd: string, scheduler?: ManagerTurnSchedu
               return true;
             }
           }
-          const prompt = buildGoalTurnContext(cwd, goal, saved.event, new TaskRunner(cwd).listTaskStateItems());
+          const pullRequestStatus = patrol && goal.status === 'awaiting_merge' && goal.executionStatus === 'active'
+            && goal.pullRequest !== undefined ? await readGoalPullRequestStatus(cwd, goal, turnSignal) : undefined;
+          turnSignal.throwIfAborted();
+          const prompt = buildGoalTurnContext(cwd, goal, saved.event, new TaskRunner(cwd).listTaskStateItems(), pullRequestStatus);
           let result;
           try {
             result = await runner.execute({

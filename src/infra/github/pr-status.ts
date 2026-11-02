@@ -4,6 +4,30 @@ import { runPrCommand } from './pr-command.js';
 import { actionsReference, readCiRerunStatus } from './pr-ci.js';
 import { assertGitHubPullRequestTarget, type GitHubPullRequestTarget } from './pull-request-target.js';
 
+const PrMergeStatusSchema = z.object({
+  number: z.number().int().safe().positive(),
+  url: z.url(),
+  headRefName: z.string().min(1),
+  baseRefName: z.string().min(1),
+  state: z.enum(['OPEN', 'CLOSED', 'MERGED']),
+  baseRefOid: z.string().regex(/^[0-9a-f]{40}$/i),
+  mergeCommit: z.object({ oid: z.string().regex(/^[0-9a-f]{40}$/i) }).nullable(),
+});
+
+export type PrMergeStatus = z.infer<typeof PrMergeStatusSchema>;
+
+export async function fetchPrMergeStatus(
+  target: GitHubPullRequestTarget, cwd: string, options?: PrStatusFetchOptions,
+): Promise<PrMergeStatus> {
+  const output = await runPrCommand([
+    'pr', 'view', target.url, '--json', 'number,url,headRefName,baseRefName,state,baseRefOid,mergeCommit',
+  ], cwd, options);
+  const status = PrMergeStatusSchema.parse(JSON.parse(output));
+  assertGitHubPullRequestTarget(status.url, target);
+  if (status.number !== target.number) throw new Error('PR status response does not match the requested PR');
+  return status;
+}
+
 const CheckSchema = z.discriminatedUnion('__typename', [
   z.object({ __typename: z.literal('CheckRun'), name: z.string(), detailsUrl: z.string().nullish(),
     workflowName: z.string().nullish(), status: z.string(), conclusion: z.string().nullable() }),

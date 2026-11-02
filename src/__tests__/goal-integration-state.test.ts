@@ -1,10 +1,12 @@
 import { GoalPullRequestUnavailableError, prepareGoalPullRequest } from '../infra/goals/pull-request.js';
-import { afterEach,beforeEach,expect,it,vi } from 'vitest';
+import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
 import { checkGoalCompletion,completeGoal,integrateGoalTask,reopenGoal } from '../infra/goals/integration.js';
 import type { Goal,GoalQuestion } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 const doubles = vi.hoisted(() => ({ get: vi.fn(), getSync: vi.fn(), list: vi.fn(), update: vi.fn(), tasks: vi.fn(), merge: vi.fn(), sha: vi.fn(), remoteSha: vi.fn(), included: vi.fn(), contentIncluded: vi.fn(), worktrees: vi.fn(), diff: vi.fn(), environment: vi.fn(), gitSync: vi.fn() }));
 const standalone = vi.hoisted(() => ({ construct: vi.fn(), create: vi.fn(), answer: vi.fn(), withdraw: vi.fn() }));
+const github = vi.hoisted(() => ({ command: vi.fn() }));
+vi.mock('../infra/github/pr-command.js', () => ({ runPrCommand: github.command }));
 vi.mock('../infra/goals/standalone-inquiries.js', () => ({ StandaloneInquiryStore: class {
   constructor() { standalone.construct(); }
   create = standalone.create; answer = standalone.answer; withdraw = standalone.withdraw;
@@ -78,6 +80,7 @@ function syncGitResult(args: string[], target: string, included: boolean) {
 }
 beforeEach(() => {
   vi.resetAllMocks(); goal = goalRecord();
+  github.command.mockRejectedValue(new Error('GitHub fake is unavailable'));
   vi.mocked(prepareGoalPullRequest).mockResolvedValue({ number: 1950, url: 'https://github.com/example/project/pull/1950' });
   vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(now);
   doubles.get.mockImplementation(async () => structuredClone(goal));
@@ -93,6 +96,205 @@ beforeEach(() => {
   doubles.gitSync.mockImplementation((_command: string, args: string[]) => syncGitResult(args, targetSha, false));
 });
 afterEach(() => vi.useRealTimers());
+
+describe('completion from the saved merged PR', () => {
+  function prResponse(overrides: Record<string, unknown> = {}) {
+    return JSON.stringify({ number: 1950, url: goal.pullRequest!.url,
+      headRefName: goal.branch, baseRefName: goal.integrationBranch,
+      headRefOid: sourceSha, baseRefOid: 'c'.repeat(40), mergeCommit: { oid: targetSha }, state: 'MERGED', ...overrides });
+  }
+
+  beforeEach(async () => {
+    await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check', 'ja');
+    doubles.remoteSha.mockResolvedValue(targetSha);
+    doubles.update.mockClear();
+    doubles.contentIncluded.mockClear();
+    github.command.mockResolvedValue(prResponse());
+  });
+
+  it.each(['awaiting_merge', 'created'] as const)('completes a %s goal from its merged PR despite different content', async (status) => {
+    goal = { ...goal, status, questions: completionInquiries() };
+    const completion = structuredClone(goal.completion);
+    const result = await checkGoalCompletion('/project', goal.id, undefined, policy);
+    expect(result).toMatchObject({ included: true, targetSha, goal: { status: 'completed' } });
+    expect(goal.completion).toEqual({ ...completion, targetBranch: 'main', targetSha });
+    expect(goal.questions?.filter((question) => question.status === 'pending')).toEqual([]);
+    expect(goal.notifications?.filter((notification) => notification.kind === 'completed'))
+      .toEqual([expect.objectContaining({ body: 'evidence' })]);
+    expect(doubles.contentIncluded).not.toHaveBeenCalled();
+    const args = github.command.mock.calls[0]![0] as string[];
+    expect(args.slice(0, 3)).toEqual(['pr', 'view', goal.pullRequest!.url]);
+    expect(args[args.indexOf('--json') + 1]?.split(',')).toEqual(expect.arrayContaining([
+      'number', 'url', 'headRefName', 'baseRefName', 'state', 'baseRefOid', 'mergeCommit',
+    ]));
+    expect(doubles.merge).not.toHaveBeenCalled();
+  });
+
+  it('accepts a merged PR whose head SHA differs from the approved SHA', async () => {
+    github.command.mockResolvedValue(prResponse({ headRefOid: 'c'.repeat(40) }));
+    expect(await checkGoalCompletion('/project', goal.id, undefined, policy))
+      .toMatchObject({ included: true, goal: { status: 'completed', completion: { goalSha: sourceSha } } });
+  });
+
+  it.each([
+    { status: 'awaiting_merge', included: false }, { status: 'awaiting_merge', included: true },
+    { status: 'created', included: false }, { status: 'created', included: true },
+  ] as const)('uses content comparison for a $status goal when the merged PR has no merge commit and inclusion is $included', async ({ status, included }) => {
+    goal = { ...goal, status };
+    github.command.mockResolvedValue(prResponse({ mergeCommit: null }));
+    doubles.contentIncluded.mockResolvedValue(included);
+    const before = structuredClone(goal);
+
+    const result = await checkGoalCompletion('/project', goal.id, undefined, policy);
+
+    expect(result).toMatchObject({ included, goal: { status: included ? 'completed' : status } });
+    expect(doubles.remoteSha).toHaveBeenLastCalledWith('/project', goal.integrationBranch, undefined);
+    expect(doubles.contentIncluded).toHaveBeenCalledWith('/project', sourceSha, targetSha, undefined);
+    if (included) expect(goal.completion?.targetSha).toBe(targetSha);
+    else {
+      expect(goal).toEqual(before);
+      expect(doubles.update).not.toHaveBeenCalled();
+    }
+  });
+
+  it('completes a merged PR into the saved integration branch when it is not main', async () => {
+    goal = { ...goal, integrationBranch: 'release', completion: { ...goal.completion!, targetBranch: 'release' } };
+    github.command.mockResolvedValue(prResponse());
+    expect(await checkGoalCompletion('/project', goal.id, undefined, policy)).toMatchObject({ included: true,
+      goal: { status: 'completed', completion: { targetBranch: 'release', targetSha } } });
+  });
+
+  it.each([
+    { condition: 'open', response: { state: 'OPEN' } },
+    { condition: 'different head branch', response: { headRefName: 'takt/another-goal' } },
+    { condition: 'different base branch', response: { baseRefName: 'develop' } },
+    { condition: 'different PR number', response: { number: 1951 } },
+    { condition: 'different repository URL', response: { url: 'https://github.com/other/project/pull/1950' } },
+    { condition: 'missing head branch', response: { headRefName: undefined } },
+    { condition: 'invalid target SHA', response: { baseRefOid: 'invalid' } },
+    { condition: 'invalid merge commit SHA', response: { mergeCommit: { oid: 'invalid' } } },
+  ])('uses content comparison for $condition', async ({ response }) => {
+    github.command.mockResolvedValue(prResponse(response));
+    const before = structuredClone(goal);
+    expect(await checkGoalCompletion('/project', goal.id, undefined, policy)).toEqual({ included: false, goal: before });
+    expect(goal).toEqual(before);
+    expect(doubles.contentIncluded).toHaveBeenCalledWith('/project', sourceSha, targetSha, undefined);
+  });
+
+  it.each([false, true])('keeps a matching closed PR awaiting merge when content inclusion is %s without completion effects', async (included) => {
+    goal = { ...goal, questions: completionInquiries() };
+    github.command.mockResolvedValue(prResponse({ state: 'CLOSED' }));
+    doubles.contentIncluded.mockResolvedValue(included);
+    const before = structuredClone(goal);
+
+    expect(await checkGoalCompletion('/project', goal.id, undefined, policy)).toEqual({ included: false, goal: before });
+
+    expect(goal).toEqual(before);
+    expect(doubles.update).not.toHaveBeenCalled();
+    expect(goal.questions?.filter((question) => question.status === 'pending')).toHaveLength(3);
+    expect(goal.notifications?.filter((notification) => notification.kind === 'completed')).toEqual([]);
+  });
+
+  it.each(['no saved PR', 'unauthenticated', 'network failure', 'invalid JSON', 'open PR', 'different head', 'different base', 'closed PR with different head', 'closed PR with different base'])(
+    'preserves both content comparison outcomes with %s', async (condition) => {
+      if (condition === 'no saved PR') delete goal.pullRequest;
+      else if (condition === 'invalid JSON') github.command.mockResolvedValue('{');
+      else if (condition === 'open PR') github.command.mockResolvedValue(prResponse({ state: 'OPEN' }));
+      else if (condition === 'different head') github.command.mockResolvedValue(prResponse({ headRefName: 'other' }));
+      else if (condition === 'different base') github.command.mockResolvedValue(prResponse({ baseRefName: 'develop' }));
+      else if (condition === 'closed PR with different head') github.command.mockResolvedValue(prResponse({ state: 'CLOSED', headRefName: 'other' }));
+      else if (condition === 'closed PR with different base') github.command.mockResolvedValue(prResponse({ state: 'CLOSED', baseRefName: 'develop' }));
+      else github.command.mockRejectedValue(new Error(condition));
+      const before = structuredClone(goal);
+      expect(await checkGoalCompletion('/project', goal.id, undefined, policy)).toEqual({ included: false, goal: before });
+      doubles.contentIncluded.mockResolvedValue(true);
+      expect(await checkGoalCompletion('/project', goal.id, undefined, policy))
+        .toMatchObject({ included: true, goal: { status: 'completed', completion: { goalSha: sourceSha } } });
+      if (condition === 'no saved PR') expect(github.command).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['status', 'approval'])('rejects a closed PR result after the saved %s changes during lookup', async (changed) => {
+    const response = prResponse({ state: 'CLOSED' });
+    github.command.mockImplementation(async () => {
+      goal = changed === 'status' ? { ...goal, status: 'created' }
+        : { ...goal, completion: { ...goal.completion!, goalSha: 'd'.repeat(40) } };
+      return response;
+    });
+
+    await expect(checkGoalCompletion('/project', goal.id, undefined, policy)).rejects.toThrow();
+
+    expect(doubles.update).not.toHaveBeenCalled();
+    expect(goal.status).toBe(changed === 'status' ? 'created' : 'awaiting_merge');
+    expect(goal.notifications?.some((notification) => notification.kind === 'completed')).toBe(false);
+  });
+
+  it.each(['open PR', 'closed PR', 'no PR', 'unavailable PR', 'no completion evidence'])(
+    'rejects a created goal with %s even when its content is included', async (condition) => {
+      goal = { ...goal, status: 'created' };
+      if (condition === 'no PR') delete goal.pullRequest;
+      if (condition === 'no completion evidence') delete goal.completion;
+      if (condition === 'open PR') github.command.mockResolvedValue(prResponse({ state: 'OPEN' }));
+      if (condition === 'closed PR') github.command.mockResolvedValue(prResponse({ state: 'CLOSED' }));
+      if (condition === 'unavailable PR') github.command.mockRejectedValue(new Error('not authenticated'));
+      doubles.contentIncluded.mockResolvedValue(true);
+      const before = structuredClone(goal);
+      await expect(checkGoalCompletion('/project', goal.id, undefined, policy)).rejects.toThrow();
+      expect(goal).toEqual(before);
+      expect(doubles.update).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['paused', 'aborted'] as const)('does not complete a goal that becomes %s during PR lookup', async (executionStatus) => {
+    const response = prResponse();
+    github.command.mockImplementation(async () => {
+      goal = { ...goal, executionStatus };
+      return response;
+    });
+    await expect(checkGoalCompletion('/project', goal.id, undefined, policy)).rejects.toThrow();
+    expect(goal.status).toBe('awaiting_merge');
+    expect(goal.executionStatus).toBe(executionStatus);
+    expect(goal.notifications?.some((notification) => notification.kind === 'completed')).toBe(false);
+  });
+
+  it.each(['approval', 'PR', 'goal branch', 'integration branch'])(
+    'rejects a stale PR result after the saved %s changes', async (changed) => {
+      const response = prResponse();
+      github.command.mockImplementation(async () => {
+        if (changed === 'approval') goal = { ...goal, completion: { ...goal.completion!, goalSha: 'd'.repeat(40) } };
+        if (changed === 'PR') goal = { ...goal, pullRequest: { number: 1951, url: 'https://github.com/example/project/pull/1951' } };
+        if (changed === 'goal branch') goal = { ...goal, branch: 'takt/replacement' };
+        if (changed === 'integration branch') goal = { ...goal, integrationBranch: 'develop' };
+        return response;
+      });
+      await expect(checkGoalCompletion('/project', goal.id, undefined, policy)).rejects.toThrow();
+      expect(goal.status).toBe('awaiting_merge');
+      expect(goal.notifications?.some((notification) => notification.kind === 'completed')).toBe(false);
+    },
+  );
+
+  it('does not save completion after cancellation during PR lookup', async () => {
+    const controller = new AbortController();
+    const before = structuredClone(goal);
+    github.command.mockImplementation(async () => {
+      controller.abort();
+      return prResponse();
+    });
+    await expect(checkGoalCompletion('/project', goal.id, controller.signal, policy)).rejects.toThrow();
+    expect(goal).toEqual(before);
+  });
+
+  it('retries a failed completion save without duplicating the completion notification', async () => {
+    const before = structuredClone(goal);
+    doubles.update.mockRejectedValueOnce(new Error('save failed'));
+    await expect(checkGoalCompletion('/project', goal.id, undefined, policy)).rejects.toThrow('save failed');
+    expect(goal).toEqual(before);
+    await checkGoalCompletion('/project', goal.id, undefined, policy);
+    await checkGoalCompletion('/project', goal.id, undefined, policy);
+    expect(goal.status).toBe('completed');
+    expect(goal.notifications?.filter((notification) => notification.kind === 'completed')).toHaveLength(1);
+  });
+});
 
 it.each(['check', 'complete', 'reopen'] as const)('uses the fetched target for %s when the goal has a saved PR', async (operation) => {
   await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check the result', 'ja');

@@ -10,7 +10,9 @@ const doubles = vi.hoisted(() => ({
   read: vi.fn(), remove: vi.fn(), get: vi.fn(), update: vi.fn(),
   plan: vi.fn(), connect: vi.fn(), dispose: vi.fn(), preflight: vi.fn(),
   turn: vi.fn(), createExecutor: vi.fn(), notify: vi.fn(), logError: vi.fn(),
+  readPr: vi.fn(),
 }));
+vi.mock('../infra/goals/pull-request-status.js', () => ({ readGoalPullRequestStatus: doubles.readPr }));
 vi.mock('../infra/goals/events.js', () => ({ readManagerEvents: doubles.read, deleteManagerEvent: doubles.remove }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.get; update = doubles.update; } }));
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { listTaskStateItems() { return []; } } }));
@@ -37,6 +39,7 @@ function saved(taskName: string): SavedManagerEvent {
 }
 beforeEach(() => {
   vi.resetAllMocks();
+  doubles.readPr.mockResolvedValue(undefined);
   inbox = []; goal = goalRecord();
   doubles.read.mockImplementation(() => [...inbox]);
   doubles.remove.mockImplementation((event: SavedManagerEvent) => { inbox = inbox.filter((item) => item !== event); });
@@ -247,6 +250,39 @@ it('transfers user MCP servers to connection setup and the merged servers to pre
     expect(doubles.createExecutor).toHaveBeenCalledWith('/project', expect.objectContaining({
       ctx: expect.objectContaining({ mcpServers: servers, providerOptions }),
     }));
+  } finally { await manager.close(); }
+});
+
+it.each(['available', 'unavailable', 'mismatch'] as const)('passes %s PR evidence into the patrol turn', async (status) => {
+  goal = { ...goal, status: 'awaiting_merge', createdAt: '2026-10-14T00:00:00Z',
+    pullRequest: { number: 1950, url: 'https://github.com/example/project/pull/1950' } };
+  const evidence = status === 'available'
+    ? { status, pullRequest: { number: 1950, url: goal.pullRequest!.url, headRefName: goal.branch,
+      baseRefName: goal.integrationBranch, baseRefOid: 'b'.repeat(40), mergeCommit: { oid: 'c'.repeat(40) }, state: 'MERGED' } }
+    : { status };
+  doubles.readPr.mockResolvedValue(evidence);
+  const queriedGoal = goal;
+  inbox = [patrol()];
+  const manager = createRunEventManager('/project');
+  try {
+    expect(await manager.processPending(new AbortController().signal, 1)).toBe(true);
+    expect(doubles.readPr).toHaveBeenCalledExactlyOnceWith('/project', queriedGoal, expect.any(AbortSignal));
+    expect(JSON.parse(doubles.turn.mock.calls[0]![0].text).patrol.pullRequestStatus).toEqual(evidence);
+    expect(inbox).toEqual([]);
+  } finally { await manager.close(); }
+});
+
+it.each(['created', 'no saved PR', 'ordinary event'])('does not query PR evidence for %s', async (condition) => {
+  goal = { ...goal, status: condition === 'created' ? 'created' : 'awaiting_merge',
+    createdAt: '2026-10-14T00:00:00Z',
+    ...(condition === 'no saved PR' ? {} : { pullRequest: { number: 1950, url: 'https://github.com/example/project/pull/1950' } }),
+  };
+  inbox = [condition === 'ordinary event' ? saved('task-a') : patrol()];
+  const manager = createRunEventManager('/project');
+  try {
+    await manager.processPending(new AbortController().signal, 1);
+    expect(doubles.readPr).not.toHaveBeenCalled();
+    expect(doubles.turn).toHaveBeenCalledOnce();
   } finally { await manager.close(); }
 });
 

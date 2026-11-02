@@ -44,7 +44,7 @@ test('recursive discovery rejects duplicate suite names across categories', () =
   }
 });
 
-test('recursive discovery returns nested configs with root-relative paths and ignores non-YAML files', () => {
+test('recursive discovery returns nested configs and ignores non-YAML files and leftover manager filters', () => {
   const directory = mkdtempSync(join(tmpdir(), 'takt-eval-registry-'));
   try {
     const agentDirectory = join(directory, 'agents', 'review', 'nested');
@@ -54,6 +54,8 @@ test('recursive discovery returns nested configs with root-relative paths and ig
     writeFileSync(join(agentDirectory, 'alpha.yaml'), 'description: alpha\n');
     writeFileSync(join(scenarioDirectory, 'beta.yml'), 'description: beta\n');
     writeFileSync(join(agentDirectory, 'README.md'), '# ignored\n');
+    writeFileSync(join(agentDirectory, '.manager-filter-interrupted.yaml'), 'description: temporary\n');
+    writeFileSync(join(scenarioDirectory, '.manager-filter-interrupted.yaml'), 'description: temporary\n');
 
     const discovered = discoverPromptEvalConfigs(directory);
 
@@ -256,9 +258,10 @@ test('manager work split is active, explicit, costly and has no prepare targets'
   assert.deepEqual(config.providers.map(({ config: { model, reasoning_effort } }) => [model, reasoning_effort]), [
     ['gpt-6-sol', 'low'], ['claude-opus-5', undefined], ['gpt-6-luna', 'max'],
     ['gpt-6.1-terra', 'medium'],
+    ['claude-opus-5', undefined],
   ]);
-  assert.equal(config.tests.length, 76);
-  assert.equal(new Set(config.tests.map(({ vars }) => vars.case)).size, 38);
+  assert.equal(config.tests.length, 86);
+  assert.equal(new Set(config.tests.map(({ vars }) => vars.case)).size, 43);
   for (const caseId of [
     'constraint-carryover-data', 'summary-keeps-constraint-web', 'escalate-repeated-failure',
     'escalate-not-on-first-failure', 'integration-already-checked', 'mail-dispatch-state',
@@ -267,6 +270,8 @@ test('manager work split is active, explicit, costly and has no prepare targets'
     'inventory-retry-idempotency', 'conflicting-calendar-visibility', 'unchanged-adjudication',
     'verification-repeated', 'verification-once', 'verification-mixed', 'verification-told',
     'plan-missing', 'plan-dependent', 'plan-cancelled', 'plan-integrated', 'plan-queued', 'final-impact-tests',
+    'stopped-background-check', 'integrated-task-verification', 'verification-before-integration',
+    'stopped-background-execution', 'integrated-task-execution',
   ]) {
     assert.deepEqual(config.tests.filter(({ vars }) => vars.case === caseId).map(({ vars }) => vars.lang), ['ja', 'en']);
   }
