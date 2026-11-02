@@ -217,6 +217,41 @@ describe('resolveTaskRetryRunSelection', () => {
     expect(result.resumePoint).toEqual(point('fix-verifier'));
   });
 
+  it.each([false, true])('does not transfer an unowned task checkpoint to an older run with its own checkpoint=%s', (hasOlderPoint) => {
+    const saved = point('review');
+    const head = run('head', '2026-11-02', { resumePoint: saved, currentStep: 'review' });
+    reportDirs.delete(`${cwd}/${head.reportDirectory}`);
+    const olderPoint = hasOlderPoint ? point('implement') : undefined;
+    const older = run('older', '2026-11-01', { resumePoint: olderPoint });
+
+    const result = resolveTaskRetryRunSelection({ ...task, runSlug: undefined,
+      data: { task: task.content, resume_point: saved },
+    }, cwd);
+
+    expect(result).toEqual({
+      matchedRunSlug: hasOlderPoint ? 'older' : null,
+      runMeta: hasOlderPoint ? older : null,
+      resumePoint: olderPoint,
+      skippedRuns: [
+        { runSlug: 'head', reason: 'missing_reports' },
+        ...(hasOlderPoint ? [] : [{ runSlug: 'older', reason: 'missing_resume_point' }]),
+      ],
+      failedStep: 'review',
+    });
+  });
+
+  it.each([false, true])('starts without a source for an unowned task checkpoint when discovered history exists=%s', (hasHistory) => {
+    if (hasHistory) run('older', '2026-11-01');
+
+    const result = resolveTaskRetryRunSelection({ ...task, runSlug: undefined,
+      data: { task: task.content, resume_point: point() },
+    }, cwd);
+
+    expect(result).toMatchObject({ matchedRunSlug: null, runMeta: null, resumePoint: undefined,
+      skippedRuns: hasHistory ? [{ runSlug: 'older', reason: 'missing_resume_point' }] : [],
+    });
+  });
+
   it('retains the latest diagnostic step when starting without a report source', () => {
     run('latest', '2026-11-02', { currentStep: 'implement' });
     expect(resolveTaskRetryRunSelection(task, cwd)).toMatchObject({ matchedRunSlug: null, failedStep: 'implement' });

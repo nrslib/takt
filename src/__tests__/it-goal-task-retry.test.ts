@@ -462,6 +462,36 @@ describe('goal task retry through manager MCP and persistent task execution', ()
       await executeQueued('implementer', { namespace, content: 'Previously completed planning' });
     });
 
+    // Scenario: 所有元が不明な checkpoint を別の run の report と組み合わせない
+    // Given: run slug 未記録のタスクと同じ位置を持つ最新 run に report がない
+    // When: requeue / retry する
+    // Then: 古い run 自身の位置から再開し、その位置もなければ初期段階から始める
+    it.each(entrances.flatMap((entrance) => [false, true].map((hasOlderPoint) => ({ entrance, hasOlderPoint }))))(
+      'keeps an unowned checkpoint out of older reports via $entrance with older checkpoint=$hasOlderPoint',
+      async ({ entrance, hasOlderPoint }) => {
+        const { point, namespace } = installNestedWorkflow();
+        const saved = point('fix-verifier');
+        const olderPoint = hasOlderPoint ? point('implement') : undefined;
+        writeHistoryRun(previousSlug, '2026-11-01T00:00:00Z', { point: olderPoint });
+        writeProgress(previousSlug, namespace, 'Older planning report');
+        writeHistoryRun(latestSlug, '2026-11-02T00:00:00Z', { point: saved, reports: false });
+        new TaskStore(cwd).update((current) => ({ tasks: current.tasks.map((task) => ({
+          ...task, run_slug: undefined, source_run_slug: undefined, resume_point: saved,
+        })) }));
+
+        await queueThrough(entrance);
+
+        const pending = new TaskRunner(cwd).listPendingTaskItems()[0]!;
+        expect(pending).toMatchObject({ worktreePath: clone, branch });
+        expect(pending.sourceRunSlug).toBe(hasOlderPoint ? previousSlug : undefined);
+        expect(pending.data?.resume_point).toEqual(olderPoint);
+        expect(pending.data?.start_step).toBeUndefined();
+        expect(pending.data?.restart_point).toBeUndefined();
+        await executeQueued(hasOlderPoint ? 'implementer' : 'planner',
+          hasOlderPoint ? { namespace, content: 'Older planning report' } : undefined);
+      },
+    );
+
     // SCN-TL-RESUME-P2
     it.each(entrances)('starts at the configured initial call in the same worktree when no run has a position via %s', async (entrance) => {
       installNestedWorkflow();

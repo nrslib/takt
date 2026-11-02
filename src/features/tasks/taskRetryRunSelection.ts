@@ -41,7 +41,7 @@ export function resolveTaskRetryRunSelection(task: TaskListItem, cwd: string): T
   function resolveResumePoint(runSlug: string | null, runMeta: RunMeta | null): WorkflowResumePoint | undefined {
     // A startup failure can leave the task checkpoint owned by its source run.
     return runMeta?.resumePoint ?? (
-      taskResumePointRunSlug === undefined || taskResumePointRunSlug === runSlug
+      taskResumePointRunSlug === runSlug
         ? task.data?.resume_point
         : undefined
     );
@@ -79,13 +79,9 @@ export function resolveTaskRetryRunSelection(task: TaskListItem, cwd: string): T
   candidates.sort((a, b) => b.startTime.localeCompare(a.startTime) || b.slug.localeCompare(a.slug));
   const head = candidates[0];
   const latest = latestSlug === null && head !== undefined
-    ? { slug: head.slug, meta: readRetryMeta(cwd, head.slug) }
-    : { slug: latestSlug, meta: latestMeta };
-  const latestPoint = resolveResumePoint(latest.slug, latest.meta);
-  if (latest.slug === null && latestPoint !== undefined) {
-    return { matchedRunSlug: latest.slug, runMeta: latest.meta, resumePoint: latestPoint, skippedRuns: [] };
-  }
-  const failedStep = latest.meta?.failure?.step.trim() || latest.meta?.currentStep?.trim();
+    ? readRetryMeta(cwd, head.slug)
+    : latestMeta;
+  const failedStep = latest?.failure?.step.trim() || latest?.currentStep?.trim();
   const skippedRuns: SkippedTaskRetryRun[] = [];
   if (latestSlug !== null) {
     skippedRuns.push({ runSlug: latestSlug, reason: latestMeta === null ? 'missing_metadata' : 'missing_resume_point' });

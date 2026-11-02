@@ -318,6 +318,7 @@ function configureNestedReviewRestart(): TaskListItem {
   mockLoadWorkflowByIdentifier.mockReturnValue(nestedRootWorkflowConfig);
   selectStartCandidate('Restart from: default > delegate > coding > review');
   return makeFailedTask({
+    runSlug: 'run-1',
     data: {
       task: 'Do something',
       workflow: 'default',
@@ -554,7 +555,7 @@ describe('requeueFailedTask', () => {
       stack: [{ workflow: 'default', workflow_ref: 'default', step: 'reviewers', kind: 'agent', occurrence: 1 }],
       iteration: 2, elapsed_ms: 100, workflow_call_invocations: {}, workflow_step_participations: {},
     };
-    const task = makeFailedTask({ data: {
+    const task = makeFailedTask({ runSlug: source === 'task' ? 'run-1' : undefined, data: {
       task: 'Do something', workflow: 'default',
       resume_point: source === 'task' ? invalidPoint : {
         ...invalidPoint,
@@ -606,15 +607,17 @@ describe('requeueFailedTask', () => {
     });
     mockSelectOptionWithDefault.mockImplementationOnce(async (_message, _options, defaultValue) => defaultValue);
 
-    expect(await requeueFailedTask(makeFailedTask({ data: {
+    expect(await requeueFailedTask(makeFailedTask({ runSlug: 'run-1', data: {
       task: 'Do something', workflow: 'default', resume_point: point,
     } }), '/project')).toBe(true);
     expect(mockWarn).not.toHaveBeenCalled();
-    expect(mockRequeueTask).toHaveBeenCalledWith('my-task', ['failed'], expect.objectContaining({ resumePoint: point }));
+    expect(mockRequeueTask).toHaveBeenCalledWith('my-task', ['failed'], expect.objectContaining({
+      resumePoint: point, sourceRunSlug: 'run-1',
+    }));
   });
 
   it.each(['requeue', 'retry'] as const)('should cancel %s without persisting after explaining a renamed saved step', async (action) => {
-    const task = makeFailedTask({ data: {
+    const task = makeFailedTask({ runSlug: 'run-1', data: {
       task: 'Do something', workflow: 'default',
       resume_point: {
         version: 2,
@@ -884,6 +887,7 @@ describe('requeueFailedTask', () => {
       workflow_step_participations: {},
     };
     const task = makeFailedTask({
+      runSlug: 'run-1',
       failure: { error: 'Boom' },
       data: {
         task: 'Do something',
@@ -908,7 +912,7 @@ describe('requeueFailedTask', () => {
         resumePoint: resumePoint,
         workflow: undefined,
         taskDir: undefined,
-        sourceRunSlug: null,
+        sourceRunSlug: 'run-1',
         restartPoint: undefined,
       },
     );
@@ -1072,6 +1076,7 @@ describe('requeueFailedTask', () => {
       },
     );
     const task = makeFailedTask({
+      runSlug: 'run-1',
       data: {
         task: 'Do something',
         workflow: 'default',
@@ -1090,7 +1095,7 @@ describe('requeueFailedTask', () => {
         resumePoint: resumePoint,
         workflow: undefined,
         taskDir: undefined,
-        sourceRunSlug: null,
+        sourceRunSlug: 'run-1',
         restartPoint: undefined,
       },
     );
@@ -1114,7 +1119,7 @@ describe('requeueFailedTask', () => {
         resumePoint: undefined,
         workflow: undefined,
         taskDir: undefined,
-        sourceRunSlug: null,
+        sourceRunSlug: 'run-1',
         restartPoint: nestedReviewRestartPoint,
         sourceResumePoint: makeNestedCheckpoint(),
       },
@@ -1135,6 +1140,7 @@ describe('requeueFailedTask', () => {
       },
     );
     const task = makeFailedTask({
+      runSlug: 'run-1',
       data: {
         task: 'Do something',
         workflow: 'default',
@@ -1153,7 +1159,7 @@ describe('requeueFailedTask', () => {
         resumePoint: undefined,
         workflow: undefined,
         taskDir: undefined,
-        sourceRunSlug: null,
+        sourceRunSlug: 'run-1',
         restartPoint: nestedReviewRestartPoint,
         sourceResumePoint: makeNestedCheckpoint(),
       },
@@ -2052,7 +2058,7 @@ describe('retryFailedTask', () => {
         resumePoint: undefined,
         workflow: undefined,
         taskDir: MOCK_CREATED_TASK_DIR,
-        sourceRunSlug: null,
+        sourceRunSlug: 'run-1',
         restartPoint: nestedReviewRestartPoint,
         sourceResumePoint: makeNestedCheckpoint(),
       },
@@ -2570,7 +2576,7 @@ describe('retryFailedTask', () => {
         resumePoint: undefined,
         workflow: undefined,
         taskDir: MOCK_CREATED_TASK_DIR,
-        sourceRunSlug: null,
+        sourceRunSlug: 'run-1',
         restartPoint: nestedReviewRestartPoint,
         sourceResumePoint: makeNestedCheckpoint(),
       },
