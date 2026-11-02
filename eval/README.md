@@ -1,5 +1,108 @@
 # Prompt Quality Eval
 
+## TAKT でファセット改修を進める
+
+このリポジトリ専用の `.takt/workflows/prompt-engineering.yaml` を追加した。
+manager からはタスクの `workflow: prompt-engineering` で選択する。
+タスクには対象 run の場所、直したい振る舞い、対象ファセットや eval が分かればその名前を渡す。
+調査 → 汎用性と eval 設計の並列レビュー → 日英の実装 → 言語と範囲の並列レビュー →
+比較測定 → 失敗の切り分け → 最後の全件比較 → ゲートと報告の確認、の順で進む。
+
+設計の指摘は調査へ、実装の指摘と確定したプロンプトの穴は実装へ戻す。
+eval の不備は `eval/` だけを直して測定へ戻す。単発の失敗は条件を変えずに再測定し、
+同じ機序が同じ条件で2回続いてから修正を判断する。変更前でも通るケースは fixture を見直すか、
+回帰ガードと明記する。製品コードや新しい評価機構が必要なら ABORT する。
+3往復で loop monitor が進捗を判断し、全体の上限は48段階である。
+
+通常の promptfoo スイートの比較には、ビルド後に次を明示実行する。
+**このコマンドは実 provider を呼ぶ。** `--suite` と `--facet` は繰り返して指定できる。
+
+```sh
+node eval/scripts/compare-facets.mjs \
+  --base main \
+  --suite state-after-event-plan \
+  --facet builtins/ja/facets/partials/instructions/change-contract-traceability.md \
+  --output-dir .tmp/facet-comparison-01
+```
+
+`--base` は調査時に main の SHA に固定する。比較で変える全ファセットを、include される partial と
+必要な workflow の facet 参照も含めて列挙する。追加ファセットは変更前で不在にし、削除ファセットは
+変更前で復元する。入力・fixture・採点・モデル設定は両条件でそろえる。
+専用 runner や環境変数で切り替えるスイートは、そのスイートの既存の比較手順を使う。
+
+既定の `--mode both` は変更前の全スイート、その後に変更後の全スイートを実行する。
+既存 `run-evals.mjs` を使い、各スイートに `--prepare --no-cache --output` を渡す。
+変更前が不合格でも変更後を実行し、非0の終了コードと結果の欠落を manifest に残す。
+比較スクリプトの終了コード1は失敗または結果欠落を含むことを示し、原因は結果と原記録で判断する。
+`--mode red` / `--mode green` と `--filter-providers <regex>` は切り分け中に使える。
+最終比較は絞り込みなしの `both` で、全スイート・全 provider を1回の呼び出しに含める。
+スイート既定の反復数を使い、mutable な評価は各試行に新しい作業コピーを用意する。
+
+出力先は新しい `.tmp/` または `eval/.results/` 配下を指定する。既存の出力先は上書きしない。
+追跡ファイルの現在の内容（未コミット変更を含む）、未追跡の `eval/` 入力、明示した追加ファセット、
+ビルド済み `dist/` を `input-workspace/` に写し、依存パッケージだけをシンボリックリンクで共有する。
+未追跡の eval 入力は無視設定の対象外だけを含める。入力コピーの作成中は編集とビルドを止め、
+使う新しいケースを `eval/` に置く。コピー後の実行で元の作業ツリーのファイルを書き換えることはない。
+
+各 `{red,green}/{suite}/workspace/` は独立したコピーで、red だけ列挙した対象を比較元の内容にする。
+`manifest.json` は比較元 SHA、文面のハッシュ、各実行のコマンド・終了情報、workspace・結果・生記録の
+絶対パスを持つ。`facets/{red,green}/` は比較した原文、`{red,green}/{suite}/results.json` は応答全文と採点、
+`runner.log` は prepare を含む実行ログである。プロンプトは `workspace/eval/prompts/`、参照 snapshot は
+そのプロンプトに記された Source Path、生成物と報告は `workspace/eval/.work/` または fixture 配下に残る。
+スイートごとにコピーを分けるため、後続の prepare や別の比較で上書きされない。
+
+通常 CLI の `cli-review`、`cli-plan-report`、`cli-review-adjudication`、`cli-adjudicator-no-fix`、
+`phase1-execution-log`、`interactive-topic-judge`（派生の `manager-work-split` を含む）は、
+比較 runner が渡す `TAKT_EVAL_RECORD_DIR` を使って試行ごとの `raw/trial-*/` を保存する。
+直接 eval を実行する場合も、この環境変数で保存先を指定できる。
+結果 JSON の各行の `response.metadata.execution_record` から次を読める。
+
+- `identity.json`: provider、プロンプトのラベル、ケースの変数（言語を含む）、`repeatIndex`（0始まり）、eval ID。
+- `prompt.md` と `result.json`: provider が受け取った最初の入力、最終応答またはエラー。入力は作業パスの書き換え前で、後続ターンの送信入力は含まない。
+- `process-N.stdout` と `process-N.stderr`: 実行中から追記する生のイベント列と途中出力・診断。各ストリームの先頭16 MiBまで保存する。
+- `process-N.json`: コマンド、作業場所、上限時間、終了コード・シグナル、`timedOut`、`aborted`、中断理由、観測バイト数と `truncated`。N は試行内のプロセス呼び出し順。
+- `project-N.json`: リポジトリ外の実行場所 `cwd` と、試行終了後のコピー先 `snapshotDirectory` の対応。
+- `project-N/`: 試行終了後にコピーした snapshot、報告、生成ファイル。結果取得後も残る。
+
+fixture は記録の有無にかかわらずリポジトリ外の一時ディレクトリで実行する。
+終了後に `project-N/` へコピーしてから一時ディレクトリを削除するため、実行中の Git の親探索で
+元の checkout を参照せず、保存された記録は一か所で確認できる。`process-N.json` の `cwd` は
+実行時のパスであり、保存コピーの場所は `project-N.json` からたどる。
+コピー前の強制終了やコピーの失敗では、外部の作業場所が残る場合がある。
+
+共通 CLI セッションを使う Claude は保存を有効にした場合に stream-json を使い、Codex は JSONL を保存する。
+テキストだけで再生する provider では、イベントを追加せず元のテキスト出力を保存する。
+タイムアウトでも途中の生出力と終了情報は残る。上限に達したログは `truncated: true` になり、
+記録されていない範囲を根拠に原因を断定できない。他の SDK・専用 provider は、それぞれの既存の
+artifact metadata と保存方法を確認する。`TAKT_INTERACTIVE_EVAL_OUTPUT_DIR` の生成記録も `raw/` に残る。
+
+SIGINT・SIGTERM では子孫を追跡して、別グループで起動されたプロセスも停止・確認してから終了する。
+POSIX では `ps` による一覧取得が必要で、利用できない場合はモデル起動前に失敗する。
+`manifest.interrupted` は比較全体の中断理由である。強制終了では `result.json` や `process-N.json` が
+`running` のまま残ることがあるため、比較の manifest と runner.log も照合する。
+作業ツリーの差し替え・復元・ロック・手動復旧は不要である。
+
+モデルを呼ばないスクリプトの検証は次で行う。
+
+```sh
+node --test eval/scripts/compare-facets.test.mjs eval/providers/execution-record.test.mjs
+```
+
+ワークフローのファセットはプロジェクト専用の日本語だけを用意した。
+改修対象の builtin ファセットは日英の意味をそろえる。
+provider とモデルは YAML で固定せず、現在の runtime 設定の解決に従う。
+各レビューは固有の `session_key` と `session: refresh` で実装から分離する。
+一般開発用のゲートが追加される `implement` 等とは異なる専用の段階名を使う。
+最終確認だけに build・lint・eval 契約・変更した eval の node --test・diff check を置いた。
+この追加自体の検証では実 provider は呼ばない。
+
+出典の手動手順からは commit / push / PR / CodeRabbit の操作を除き、失敗原因別の戻り先と
+反復の上限を workflow に置いた。設計レビューを汎用性と eval 設計の2担当に分け、
+モデル名が異なる手順書同士の指定は固定しなかった。元の `red-green.sh` の固定された対象リストと
+一時退避を、明示リスト・事前検証・追加削除への対応・独立した実行用コピーに変えた。
+`eval-results.sh` の DB の最新行や出力先頭による確認は、実行ごとの結果 JSON と原記録の全文確認に置き換えた。
+ルート `package.json` は許可範囲外なので、スイートの追加時も既存 runner の明示実行を使う。
+
 CI回復の実モデル評価はbuild後に`npm run eval:prompts:merge-ci-recovery`で明示実行します。
 調査6事例とレビュー5事例を日英で各3回、`gpt-5.6-sol`・reasoning effort `high`・生成キャッシュなしで評価します。
 調査はフレーク、mainの同一失敗、ランナー障害と403、外部シークレット欠落と空ログを比較します。

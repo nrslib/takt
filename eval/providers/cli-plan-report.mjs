@@ -1,3 +1,4 @@
+import { recordProviderCalls } from './execution-record.mjs';
 import { readFileSync } from 'node:fs';
 import {
   createCliReviewSession,
@@ -12,6 +13,7 @@ import {
 export default class CliPlanReportProvider {
   constructor(options = {}, dependencies = {}) {
     this.config = options.config ?? {};
+    this.callApi = recordProviderCalls(this, this.callApi);
     this.prepareWorkingDirectory = dependencies.prepareWorkingDirectory ?? prepareWorkingDirectory;
     this.createCliReviewSession = dependencies.createCliReviewSession ?? createCliReviewSession;
     this.readPrompt = dependencies.readPrompt ?? ((path) => readFileSync(path, 'utf8'));

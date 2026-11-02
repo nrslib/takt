@@ -1,3 +1,4 @@
+import { recordProviderCalls } from './execution-record.mjs';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -11,6 +12,7 @@ const evalDirectory = fileURLToPath(new URL('../', import.meta.url));
 export default class CliAdjudicatorNoFixProvider {
   constructor(options = {}, dependencies = {}) {
     this.config = options.config ?? {};
+    this.callApi = recordProviderCalls(this, this.callApi);
     this.createSession = dependencies.createSession ?? createCliReviewSession;
   }
 

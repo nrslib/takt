@@ -1,0 +1,463 @@
+name: prompt-engineering
+description: 実行記録からファセットを改修し、独立レビューと eval の変更前後比較で効果を確認するTAKT開発用フロー。
+max_steps: 48
+initial_step: pe-investigate
+
+steps:
+  - name: pe-investigate
+    description: 原記録、決定規則、読む担当、eval と比較条件を調べる
+    persona: planner
+    session_key: pe-investigator
+    edit: false
+    capabilities: readonly
+    policy:
+      - pe-evidence
+      - pe-generalization
+      - pe-eval-design
+    knowledge: pe-harness
+    instruction: pe-investigate
+    input_reports:
+      - from_step: pe-design-review
+        reports:
+          - pe-design-generality.md
+          - pe-design-eval.md
+        optional_if_unrun: true
+        history:
+          previous: 2
+      - from_step: pe-apply
+        reports:
+          - pe-implementation.md
+        optional_if_unrun: true
+    output_contracts:
+      report:
+        - name: pe-plan.md
+          format: pe-plan
+    rules:
+      - condition: 原記録と比較条件を確認でき、許可範囲で規則と eval の設計ができた
+        next: pe-design-review
+      - condition: 原記録や比較元を確認できない、または製品コードや新しい評価機構など範囲外の変更が必要
+        next: ABORT
+
+  - name: pe-design-review
+    description: 汎用性と eval 設計を2つの独立セッションで反証する
+    edit: false
+    concurrency: 2
+    parallel:
+      - name: pe-design-generality
+        persona: pe-reviewer
+        session_key: pe-design-generality
+        session: refresh
+        edit: false
+        capabilities: readonly
+        pass_previous_response: false
+        policy:
+          - pe-evidence
+          - pe-generalization
+        instruction: pe-design-generality
+        input_reports:
+          - from_step: pe-investigate
+            reports:
+              - pe-plan.md
+        output_contracts:
+          report:
+            - name: pe-design-generality.md
+              format: pe-review
+        rules:
+          - condition: 修正が必要な指摘なし
+          - condition: 根拠のある修正が必要な指摘あり
+      - name: pe-design-eval
+        persona: pe-reviewer
+        session_key: pe-design-eval
+        session: refresh
+        edit: false
+        capabilities: readonly
+        pass_previous_response: false
+        policy:
+          - pe-evidence
+          - pe-eval-design
+        knowledge: pe-harness
+        instruction: pe-design-eval
+        input_reports:
+          - from_step: pe-investigate
+            reports:
+              - pe-plan.md
+        output_contracts:
+          report:
+            - name: pe-design-eval.md
+              format: pe-review
+        rules:
+          - condition: 修正が必要な指摘なし
+          - condition: 根拠のある修正が必要な指摘あり
+    rules:
+      - condition: all("修正が必要な指摘なし")
+        next: pe-apply
+      - condition: any("根拠のある修正が必要な指摘あり")
+        next: pe-investigate
+
+  - name: pe-apply
+    description: 承認された日英ファセットと eval を実装し、製品コードが必要なら止める
+    persona: coder
+    session_key: pe-author
+    edit: true
+    capabilities: edit
+    policy:
+      - pe-evidence
+      - pe-facet-review
+      - pe-eval-design
+    knowledge: pe-harness
+    instruction: pe-apply
+    input_reports:
+      - from_step: pe-investigate
+        reports:
+          - pe-plan.md
+      - from_step: pe-design-review
+        reports:
+          - pe-design-generality.md
+          - pe-design-eval.md
+      - from_step: pe-review
+        reports:
+          - pe-language-review.md
+          - pe-scope-review.md
+        optional_if_unrun: true
+        history:
+          previous: 2
+      - from_step: pe-classify
+        reports:
+          - pe-classification.md
+        optional_if_unrun: true
+      - from_step: pe-final-check
+        reports:
+          - pe-summary.md
+        optional_if_unrun: true
+    quality_gates:
+      - 変更は builtins/{ja,en}/facets/、必要な workflow の facet 参照、eval/ に限ること
+      - 追加・変更した eval の node --test が成功すること
+    output_contracts:
+      report:
+        - name: pe-implementation.md
+          format: pe-change
+    rules:
+      - condition: 製品コードや新しい評価機構など許可範囲外の変更が必要と判明した
+        next: ABORT
+      - condition: 規則の発火条件・禁止・必須対応・非適用の意味を変える再設計が必要
+        next: pe-investigate
+      - condition: 承認された設計の意味を保った実装・修正と対象テストが完了した
+        next: pe-review
+      - condition: 許可範囲の作業を完了できず、続行に必要な情報や手段がない
+        next: ABORT
+
+  - name: pe-review
+    description: 言語の等価性と自然さ、範囲とファセット分類を独立レビューする
+    edit: false
+    concurrency: 2
+    parallel:
+      - name: pe-review-language
+        persona: pe-reviewer
+        session_key: pe-review-language
+        session: refresh
+        edit: false
+        capabilities: readonly
+        pass_previous_response: false
+        policy:
+          - pe-evidence
+          - pe-generalization
+          - pe-facet-review
+        instruction: pe-review-language
+        input_reports:
+          - from_step: pe-investigate
+            reports:
+              - pe-plan.md
+          - from_step: pe-apply
+            reports:
+              - pe-implementation.md
+        output_contracts:
+          report:
+            - name: pe-language-review.md
+              format: pe-review
+        rules:
+          - condition: 修正が必要な指摘なし
+          - condition: 根拠のある修正が必要な指摘あり
+      - name: pe-review-scope
+        persona: pe-reviewer
+        session_key: pe-review-scope
+        session: refresh
+        edit: false
+        capabilities: readonly
+        pass_previous_response: false
+        policy:
+          - pe-evidence
+          - pe-facet-review
+        instruction: pe-review-scope
+        input_reports:
+          - from_step: pe-investigate
+            reports:
+              - pe-plan.md
+          - from_step: pe-apply
+            reports:
+              - pe-implementation.md
+        output_contracts:
+          report:
+            - name: pe-scope-review.md
+              format: pe-review
+        rules:
+          - condition: 修正が必要な指摘なし
+          - condition: 根拠のある修正が必要な指摘あり
+    rules:
+      - condition: all("修正が必要な指摘なし")
+        next: pe-measure
+      - condition: any("根拠のある修正が必要な指摘あり")
+        next: pe-apply
+
+  - name: pe-measure
+    description: 比較条件をそろえた測定と同条件の再測定を行う
+    persona: pe-evaluator
+    session_key: pe-measurer
+    edit: true
+    capabilities: edit
+    policy: pe-evidence
+    knowledge: pe-harness
+    instruction: pe-measure
+    input_reports:
+      - from_step: pe-investigate
+        reports:
+          - pe-plan.md
+      - from_step: pe-classify
+        reports:
+          - pe-classification.md
+        optional_if_unrun: true
+      - from_step: pe-fix-eval
+        reports:
+          - pe-eval-fix.md
+        optional_if_unrun: true
+    output_contracts:
+      report:
+        - name: pe-measurement.md
+          format: pe-measurement
+    rules:
+      - condition: 測定が終わった、または失敗・エラー・原記録不足があった
+        next: pe-classify
+
+  - name: pe-classify
+    description: 各失敗の原記録と連続回数から次の対応を決める
+    persona: pe-evaluator
+    session_key: pe-classifier
+    session: refresh
+    edit: false
+    capabilities: readonly
+    policy: pe-evidence
+    knowledge: pe-harness
+    instruction: pe-classify
+    input_reports:
+      - from_step: pe-measure
+        reports:
+          - pe-measurement.md
+        history:
+          previous: 2
+      - from_step: pe-final-measure
+        reports:
+          - pe-final-measurement.md
+        optional_if_unrun: true
+        history:
+          previous: 2
+    output_contracts:
+      report:
+        - name: pe-classification.md
+          format: pe-classification
+    rules:
+      - condition: 原記録が不足して原因を判定できない、または範囲外の変更や外部対応が必要
+        next: ABORT
+      - condition: 変更後の失敗または評価系の予期しない失敗が同条件で2回連続しておらず、何も変えずに再測定が必要
+        next: pe-measure
+      - condition: 単発失敗の再測定は残っておらず、2回連続の原記録で確認したプロンプトの穴がある
+        next: pe-apply
+      - condition: 単発失敗の再測定と確定したプロンプトの穴は残っておらず、eval の不備または弁別不足の fixture 修正が必要
+        next: pe-fix-eval
+      - condition: 変更後の失敗と未処理事項がなく、弁別できないケースを回帰ガードと記録できた
+        next: pe-final-measure
+
+  - name: pe-fix-eval
+    description: 確定した eval の不備だけを修正する
+    persona: coder
+    session_key: pe-eval-author
+    edit: true
+    capabilities: edit
+    policy:
+      - pe-evidence
+      - pe-eval-design
+    instruction: pe-fix-eval
+    input_reports:
+      - from_step: pe-classify
+        reports:
+          - pe-classification.md
+      - from_step: pe-investigate
+        reports:
+          - pe-plan.md
+    quality_gates:
+      - 変更は eval/ の既存基盤の修正に限ること
+      - 追加・変更した eval の node --test が成功すること
+    output_contracts:
+      report:
+        - name: pe-eval-fix.md
+          format: pe-change
+    rules:
+      - condition: eval だけの修正と対象テストが完了し、変更前後を同じ新条件で再測定できる
+        next: pe-measure
+      - condition: 許可範囲外の変更が必要、または修正を完了できない
+        next: ABORT
+
+  - name: pe-final-measure
+    description: 最後の文面で全対象・全 provider の比較を一括実行する
+    persona: pe-evaluator
+    session_key: pe-final-measurer
+    session: refresh
+    edit: true
+    capabilities: edit
+    policy: pe-evidence
+    knowledge: pe-harness
+    instruction:
+      - pe-measure
+      - pe-final-measure
+    input_reports:
+      - from_step: pe-investigate
+        reports:
+          - pe-plan.md
+      - from_step: pe-classify
+        reports:
+          - pe-classification.md
+    output_contracts:
+      report:
+        - name: pe-final-measurement.md
+          format: pe-measurement
+    rules:
+      - condition: 全対象・全 provider を一括測定し、変更後の全行が成功し、原記録と比較表がそろった
+        next: pe-final-check
+      - condition: 変更後の不合格・エラー・欠落がある、または原記録を確認できない
+        next: pe-classify
+
+  - name: pe-final-check
+    description: 必須ゲートと報告を確認して完了を判断する
+    persona: pe-supervisor
+    session_key: pe-final-checker
+    session: refresh
+    edit: true
+    capabilities: edit
+    policy: pe-evidence
+    instruction: pe-final-check
+    input_reports:
+      - from_step: pe-investigate
+        reports:
+          - pe-plan.md
+      - from_step: pe-design-review
+        reports:
+          - pe-design-generality.md
+          - pe-design-eval.md
+      - from_step: pe-apply
+        reports:
+          - pe-implementation.md
+      - from_step: pe-review
+        reports:
+          - pe-language-review.md
+          - pe-scope-review.md
+      - from_step: pe-classify
+        reports:
+          - pe-classification.md
+      - from_step: pe-final-measure
+        reports:
+          - pe-final-measurement.md
+    quality_gates:
+      - npm run build が成功すること
+      - npm run lint が成功すること
+      - npm run eval:prompts:contracts が成功すること
+      - 追加・変更した eval の node --test が成功すること
+      - git diff --check が成功すること
+      - 弁別できないケースに回帰ガードと記載されていること
+    output_contracts:
+      report:
+        - name: pe-summary.md
+          format: pe-summary
+    rules:
+      - condition: ゲート、独立レビュー、最後の一括比較、回帰ガードの記載を確認でき、未解消事項がない
+        next: COMPLETE
+      - condition: 許可範囲の実装や報告に修正が必要
+        next: pe-apply
+      - condition: 比較の対象漏れや測定後の変更があり、最後の全件測定が必要
+        next: pe-final-measure
+      - condition: 原記録や外部条件の不足、範囲外の必要作業、またはゲート失敗で完了できない
+        next: ABORT
+
+loop_monitors:
+  - cycle:
+      - pe-investigate
+      - pe-design-review
+    threshold: 3
+    judge:
+      persona: pe-supervisor
+      instruction: pe-loop-judge
+      input_reports:
+        - from_step: pe-investigate
+          reports:
+            - pe-plan.md
+          history:
+            previous: 2
+        - from_step: pe-design-review
+          reports:
+            - pe-design-generality.md
+            - pe-design-eval.md
+          history:
+            previous: 2
+      rules:
+        - condition: 新しい証拠と許可範囲の未試行の対応を具体化できた
+          next: pe-investigate
+        - condition: 同じ失敗と対応の反復で進捗がない、または範囲内の打開手段がない
+          next: ABORT
+  - cycle:
+      - pe-apply
+      - pe-review
+    threshold: 3
+    judge:
+      persona: pe-supervisor
+      instruction: pe-loop-judge
+      input_reports:
+        - from_step: pe-apply
+          reports:
+            - pe-implementation.md
+          history:
+            previous: 2
+        - from_step: pe-review
+          reports:
+            - pe-language-review.md
+            - pe-scope-review.md
+          history:
+            previous: 2
+      rules:
+        - condition: 新しい証拠と許可範囲の未試行の対応を具体化できた
+          next: pe-apply
+        - condition: 同じ失敗と対応の反復で進捗がない、または範囲内の打開手段がない
+          next: ABORT
+  # 修正先が変わっても、切り分けに繰り返し戻る測定ループを数える。
+  - cycle:
+      - pe-classify
+    ignore_steps:
+      - pe-investigate
+      - pe-design-review
+      - pe-apply
+      - pe-review
+      - pe-measure
+      - pe-fix-eval
+      - pe-final-measure
+      - pe-final-check
+    threshold: 3
+    judge:
+      persona: pe-supervisor
+      instruction: pe-loop-judge
+      input_reports:
+        - from_step: pe-classify
+          reports:
+            - pe-classification.md
+          history:
+            previous: 2
+      rules:
+        - condition: 新しい証拠があり、同条件の再測定または確定した原因への未試行の対応を具体化できた
+          next: pe-classify
+        - condition: 同じ失敗と対応の反復で進捗がない、または範囲内の打開手段がない
+          next: ABORT
