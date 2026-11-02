@@ -5,10 +5,11 @@ import {
   symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, posix, resolve, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { setTimeout } from 'node:timers/promises';
+import { resolveComparisonOutputDir } from './compare-facets.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const gitDir = execFileSync('git', ['rev-parse', '--absolute-git-dir'], { cwd: repo, encoding: 'utf8' }).trim();
@@ -17,6 +18,28 @@ const facet = 'builtins/ja/facets/personas/coder.md';
 const added = 'builtins/ja/facets/personas/pe-test-only-added.md';
 const baseline = execFileSync('git', ['show', `${revision}:${facet}`], { cwd: repo, encoding: 'utf8' });
 const candidate = 'candidate\r\n文面\n';
+
+for (const [name, paths, root] of [['POSIX', posix, '/repo'], ['Windows', win32, 'C:\\repo']]) {
+  test(`${name}: accepts output directories beneath .tmp and eval/.results`, () => {
+    for (const parent of ['.tmp', paths.join('eval', '.results')]) {
+      const output = paths.join(parent, 'comparison');
+      assert.equal(resolveComparisonOutputDir(root, output, paths), paths.join(root, output));
+      assert.equal(resolveComparisonOutputDir(root, paths.join(root, output), paths), paths.join(root, output));
+    }
+  });
+
+  test(`${name}: rejects output roots, sibling names and paths outside the repository`, () => {
+    for (const output of [
+      '.tmp', paths.join('eval', '.results'),
+      paths.join('.tmp-other', 'comparison'), paths.join('eval', '.results-other', 'comparison'),
+      paths.join('..', 'comparison'), paths.resolve(root, '..', '.tmp', 'comparison'),
+      paths.join('.tmp', '..', 'comparison'),
+      ...(paths === win32 ? ['D:\\repo\\.tmp\\comparison'] : []),
+    ]) {
+      assert.throws(() => resolveComparisonOutputDir(root, output, paths));
+    }
+  });
+}
 
 function setup(t, environment = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'takt-compare-facets-'));
@@ -222,6 +245,8 @@ test('validates all paths and the baseline before starting measurement', (t) => 
     ['--facet', facet],
     ['--suite', 'sample'],
     ['--output-dir', 'builtins/result'],
+    ['--output-dir', '.tmp-other/result'],
+    ['--output-dir', '../comparison'],
     ['--filter-providers'],
   ]) {
     const fixture = setup(t);

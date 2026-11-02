@@ -5,11 +5,24 @@ import {
   chmodSync, closeSync, cpSync, existsSync, lstatSync, mkdirSync, openSync,
   readFileSync, rmSync, symlinkSync, writeFileSync,
 } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import path, { dirname, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { assertProcessTreeSupport, trackProcessTree } from '../lib/process-tree.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+
+export function resolveComparisonOutputDir(repo, outputDir, paths = path) {
+  const output = paths.resolve(repo, outputDir);
+  const allowed = [paths.join(repo, '.tmp'), paths.join(repo, 'eval', '.results')];
+  if (!allowed.some((root) => {
+    const relative = paths.relative(root, output);
+    return relative !== '' && relative !== '..'
+      && !relative.startsWith(`..${paths.sep}`) && !paths.isAbsolute(relative);
+  })) {
+    throw new Error('Output directory must be under .tmp/ or eval/.results/');
+  }
+  return output;
+}
 
 function parseArgs(args) {
   const options = { mode: 'both', base: 'main', suites: [], facets: [] };
@@ -91,10 +104,7 @@ function copyWorkspace(destination, paths) {
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   assertProcessTreeSupport();
-  const output = resolve(repo, options.outputDir);
-  if (![join(repo, '.tmp') + '/', join(repo, 'eval/.results') + '/'].some((prefix) => output.startsWith(prefix))) {
-    throw new Error('Output directory must be under .tmp/ or eval/.results/');
-  }
+  const output = resolveComparisonOutputDir(repo, options.outputDir);
   const base = git(['rev-parse', '--verify', `${options.base}^{commit}`]).toString().trim();
   const files = options.facets.map((path) => {
     const candidate = readCandidate(path);
@@ -202,7 +212,9 @@ async function main() {
     : manifest.runs.some((run) => run.code !== 0 || !run.resultExists) ? 1 : 0;
 }
 
-main().catch((error) => {
-  console.error(error.message);
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  main().catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+}
