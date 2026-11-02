@@ -369,7 +369,7 @@ it.each(['ja', 'en'] as const)('relays a human merge request through director MC
     const conversation = new ConversationStore(directory).read(managerId, assignment);
     expect(conversation).toBeDefined();
     managerOperationId = conversation!.running?.operationId;
-    expect(await additionalHuman.submit({ kind: 'message', text: 'additional human message' }))
+    expect(await additionalHuman.submit({ kind: 'approve_summary', revision: 4 }))
       .toEqual({ kind: 'busy', operationId: managerOperationId });
     expect(new ConversationStore(directory).read(managerId, assignment)).toMatchObject({
       lastSpeaker: { namespace: 'agent', id: 'director' }, running: { operationId: managerOperationId },
@@ -803,7 +803,7 @@ it('rejects transcript fields and corrupt speaker and notification records inste
   await expect(collect(notifications.iterate())).rejects.toThrow();
 });
 
-it('sends director messages over real IPC, correlates replies and queues them while preserving human busy rejection', async () => {
+it('sends director messages over real IPC, correlates replies and queues them together with human messages', async () => {
   const repository = await seedManager('manager-repository');
   const execute = vi.fn(async (input: ManagerTurnInput) => ({ message: `reply:${input.instruction}`, summary: null,
     sessionId: 'manager-session', assignment: input.assignment }));
@@ -839,18 +839,18 @@ it('sends director messages over real IPC, correlates replies and queues them wh
     void queued.then(() => { acknowledged = true; }, () => {});
     await vi.waitFor(() => expect(JSON.stringify(new ConversationStore(directory).read(selected.conversationId, selected.assignment)))
       .toContain('queued director'), { timeout: 5000 });
-    expect(await submit('rejected human')).toMatchObject({ kind: 'busy' });
+    expect(await submit('queued human')).toMatchObject({ kind: 'accepted', queuedMessageCount: 2 });
     expect(execute).toHaveBeenCalledTimes(4);
     await vi.waitFor(() => expect(acknowledged).toBe(true), { timeout: 5000 });
     expect(decoded(await queued)).toEqual({ kind: 'accepted', operationId: expect.any(String), managerId: selected.conversationId });
     release();
   } finally { release?.(); }
   await vi.waitFor(() => expect(service.activeOperationCount).toBe(0), { timeout: 5000 });
-  expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['human', 'director', 'slack', 'running human', 'queued director']);
-  expect(await collect(new ConversationSpeakerStore(directory).iterate(selected.conversationId))).toHaveLength(5);
+  expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['human', 'director', 'slack', 'running human', 'queued director', 'queued human']);
+  expect(await collect(new ConversationSpeakerStore(directory).iterate(selected.conversationId))).toHaveLength(6);
   const spy = vi.spyOn(ConversationSpeakerStore.prototype, 'write').mockImplementationOnce(() => { throw new Error('metadata unavailable'); });
   expect(await submit('not accepted')).toMatchObject({ kind: 'error', code: 'storage_error' });
-  expect(execute).toHaveBeenCalledTimes(5);
+  expect(execute).toHaveBeenCalledTimes(6);
   spy.mockRestore();
   expect(await submit('explicit retry')).toMatchObject({ kind: 'accepted' });
   await vi.waitFor(() => expect(service.activeOperationCount).toBe(0), { timeout: 5000 });
@@ -860,7 +860,7 @@ it('sends director messages over real IPC, correlates replies and queues them wh
   try {
     await restricted.connect();
     await expect(restricted.submit({ kind: 'pause_goal', goalId: randomUUID() })).rejects.toMatchObject({ cause: 'invalid_input' });
-    expect(execute).toHaveBeenCalledTimes(6);
+    expect(execute).toHaveBeenCalledTimes(7);
   } finally { restricted.close(); }
   const workspace = await createWorkspace({ globalConfigDirectory: directory, name: 'promoted manager', repositoryDirectories: [repository] });
   const workspaceId = conversationId({ kind: 'workspace', workspaceId: workspace.id });

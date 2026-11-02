@@ -80,7 +80,7 @@ it('yields to a director message between failed-event retries before continuing 
   const queue: string[] = [];
   const order: string[] = [];
   let releaseDirector!: () => void;
-  scheduler.registerDirector(id, { peek: () => queue[0], start: () => {
+  scheduler.registerQueue(id, { peek: () => queue[0], start: () => {
     const next = queue[0];
     if (next !== undefined && scheduler.tryAcquire(id, next)) {
       queue.shift(); order.push(next);

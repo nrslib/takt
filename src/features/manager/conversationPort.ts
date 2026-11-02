@@ -26,6 +26,7 @@ export interface ConversationState {
   approval: ConversationRecord['approval'];
   running: { operationId: string; kind: string } | null;
   interrupted: boolean;
+  queuedMessageCount?: number;
 }
 export type SnapshotValue =
   | { kind: 'state'; state: ConversationState }
@@ -44,7 +45,8 @@ export interface SnapshotRead extends OutputVersion {
   complete(): void;
   cancel(): void;
 }
-export type Submission = { kind: 'accepted' | 'busy'; operationId: string } | { kind: 'error'; code: string; message: string };
+export type Submission = { kind: 'accepted'; operationId: string; queuedMessageCount?: number }
+  | { kind: 'busy'; operationId: string } | { kind: 'error'; code: string; message: string };
 export type OperationResult =
   | { kind: 'reply'; message: string }
   | { kind: 'goal_registered'; goal: Goal }

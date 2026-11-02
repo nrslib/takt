@@ -4,6 +4,7 @@ import { conversationId } from '../infra/conversations/identity.js';
 import { ConversationError } from '../features/manager/conversationErrors.js';
 import type { ConversationDelivery, ConversationInput, SnapshotRead } from '../features/manager/conversationPort.js';
 import type { SlackClient } from '../infra/slack/client.js';
+import { getLabel } from '../shared/i18n/index.js';
 
 vi.mock('../shared/utils/debug.js', () => ({ createLogger: () => ({ error: vi.fn() }) }));
 beforeEach(() => vi.clearAllMocks());
@@ -28,6 +29,34 @@ function result(operationId = 'operation') {
   return { kind: 'result' as const, operationId, result: { kind: 'reply' as const, message: 'Director reply' } };
 }
 const version = { revision: 1, stateSequence: 1, operationId: 'operation' };
+
+it('acknowledges queued speech and later delivers its result to the same thread', async () => {
+  const { port, input, client } = fixture();
+  input.submit.mockResolvedValueOnce({ kind: 'accepted', operationId: 'operation', queuedMessageCount: 2 });
+  await port.receive(endpoint, 'status');
+  expect(client.postThreadMessage).toHaveBeenCalledExactlyOnceWith({ channelId: endpoint.channelId, parentTs: endpoint.parentTs },
+    getLabel('manager.conversation.queued', 'en', { count: '2' }));
+  expect(input.detach).not.toHaveBeenCalled();
+  const delivery = input.open.mock.calls[0]![1];
+  await delivery.deliver(id, result(), version);
+  expect(client.postThreadMessage).toHaveBeenCalledTimes(2);
+  expect(client.postThreadMessage).toHaveBeenLastCalledWith({ channelId: endpoint.channelId, parentTs: endpoint.parentTs }, 'Director reply');
+  expect(input.detach).toHaveBeenCalledExactlyOnceWith('attachment');
+  await port.close();
+});
+
+it.each(['ja', 'en'] as const)('returns queue capacity rejection only to the originating Slack thread (%s)', async (lang) => {
+  const { port, input, client } = fixture();
+  const message = getLabel('manager.conversation.queue_full', lang);
+  input.submit.mockResolvedValueOnce({ kind: 'error', code: 'queue_full', message });
+  await port.receive(endpoint, 'capacity request');
+  expect(input.submit).toHaveBeenCalledOnce();
+  expect(client.postThreadMessage).toHaveBeenCalledExactlyOnceWith(
+    { channelId: endpoint.channelId, parentTs: endpoint.parentTs }, message);
+  expect(client.postMessage).not.toHaveBeenCalled();
+  expect(input.detach).toHaveBeenCalledExactlyOnceWith('attachment');
+  await port.close();
+});
 
 it('binds Slack speech to the daemon conversation and preserves the original message', async () => {
   const { port, input, read } = fixture();

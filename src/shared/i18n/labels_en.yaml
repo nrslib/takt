@@ -457,6 +457,10 @@ manager:
     permission_appended: "The permission was appended. Check whether the answer was saved."
     assignment_changed: 'The assignment has changed. Reopen the conversation for the current assignment.'
     busy: "An operation is running. Submit again after it finishes."
+    queued: "Accepted. Your message will be processed in order after the current operation (waiting: {count})."
+    queue_full: "There are too many messages waiting, so this message could not be accepted. Please wait a little before sending it again."
+    message_too_large: "This message is too long. Please shorten it or split it into multiple messages."
+    waiting: "Working (messages waiting: {count})"
     stale_summary: "The summary has changed. Review the latest summary."
     invalid_assignment: "The assignment changed or the target is outside it. Reopen the conversation."
     unavailable_attachment: "The conversation is disconnected. Reopen it."

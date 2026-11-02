@@ -276,7 +276,20 @@ it('authenticates the current owner and opens the resolved identity with CLI ove
   expect(sockets[0]!.requests.at(-1)?.method).toBe('snapshot');
 });
 
-it('correlates out-of-order submit responses without replaying or queuing mutations', async () => {
+it('receives the waiting count in a state update and clears it when the queue drains', async () => {
+  const value = client(); await value.connect();
+  for (const [index, queuedMessageCount] of [2, undefined].entries()) {
+    const state = { conversationId: record.id, assignment: record.assignment, revision: 4, pending: record.pending,
+      approval: null, running: null, interrupted: false, ...(queuedMessageCount === undefined ? {} : { queuedMessageCount }) };
+    const metadata = { transferId: randomUUID(), revision: 4, stateSequence: index + 2, operationId: null };
+    for await (const { frame } of conversationTransferFrames(record.id, metadata, 'output', (async function* () {
+      yield { kind: 'pending', state };
+    })())) sockets[0]!.emit('data', encodeConversationFrame(frame));
+    await vi.waitFor(() => expect(value.getSnapshot().state?.queuedMessageCount).toBe(queuedMessageCount));
+  }
+});
+
+it('correlates out-of-order accepted responses and preserves the daemon queue count', async () => {
   const value = client(); await value.connect();
   const pending: Request[] = [];
   submit = (request) => { pending.push(request); };
@@ -284,9 +297,9 @@ it('correlates out-of-order submit responses without replaying or queuing mutati
   const second = value.submit({ kind: 'message', text: 'second' });
   await vi.waitFor(() => expect(pending).toHaveLength(2));
   const operationId = randomUUID();
-  sockets[0]!.response(pending[1]!, { kind: 'busy', operationId });
+  sockets[0]!.response(pending[1]!, { kind: 'accepted', operationId, queuedMessageCount: 2 });
   sockets[0]!.response(pending[0]!, { kind: 'accepted', operationId });
-  expect(await second).toEqual({ kind: 'busy', operationId });
+  expect(await second).toEqual({ kind: 'accepted', operationId, queuedMessageCount: 2 });
   expect(await first).toEqual({ kind: 'accepted', operationId });
   expect(sockets[0]!.requests.filter(({ method }) => method === 'submit')).toHaveLength(2);
 });
