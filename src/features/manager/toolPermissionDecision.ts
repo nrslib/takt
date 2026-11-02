@@ -2,7 +2,7 @@ import type { ToolPermissionDecisionHandler, ToolPermissionDecisionRequest } fro
 import type { ProviderType } from '../../shared/types/provider.js';
 import { getLabel } from '../../shared/i18n/index.js';
 import { classifyManagerToolPermission } from './toolPermissionClassifier.js';
-import { judgeManagerToolPermission, type Judgment, type ManagerPermissionGoal, type ManagerPermissionJudgePlan } from './toolPermissionJudge.js';
+import { judgeManagerToolPermission, type Judgment, type ManagerPermissionGoal, type ManagerPermissionJudgePlan, type ManagerObservedToolEvents } from './toolPermissionJudge.js';
 import { notifyManagerToolPermission } from './toolPermissionNotification.js';
 import { consumeManagerPermissionApproval, resolveManagerPermissionContext, saveManagerToolPermissionInquiry, type ManagerPermissionContext } from './toolPermissionInquiry.js';
 import type { InquiryOwner } from '../../infra/goals/standalone-inquiries.js';
@@ -15,6 +15,7 @@ interface ManagerPermissionHandlerInput {
   configDirectory: string;
   owner: InquiryOwner;
   instruction: string;
+  observedToolEvents?: ManagerObservedToolEvents;
   goal?: ManagerPermissionGoal;
   abortSignal: AbortSignal;
   onNotification?: (message: string) => void;

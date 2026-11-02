@@ -9,6 +9,10 @@ export default class ManagerWorkSplitOfflineProvider {
 
   async callApi(prompt, { vars }) {
     const fixture = loadManagerCase(vars.case, vars.lang);
+    if (fixture.execution === true) {
+      assert.deepEqual(JSON.parse(prompt), { case: vars.case, lang: vars.lang, user: fixture.user });
+      return { output: `${vars.case}/${vars.lang}` };
+    }
     assert.ok(prompt.startsWith('SYSTEM:\n'));
     assert.ok(prompt.includes(`Repository: ${JSON.stringify(fixture.cwd)}`));
     assert.ok(prompt.includes(`Concurrency limit: ${fixture.concurrency}`));

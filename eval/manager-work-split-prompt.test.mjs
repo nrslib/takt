@@ -18,13 +18,20 @@ const inheritedInstructionRoot = process.env.TAKT_EVAL_MANAGER_INSTRUCTION_ROOT;
 delete process.env.TAKT_EVAL_MANAGER_INSTRUCTION_ROOT;
 after(() => preserveEnv('TAKT_EVAL_MANAGER_INSTRUCTION_ROOT', inheritedInstructionRoot));
 
-test('assembles all 76 turn prompts without a provider call, excluding scoring conditions', (t) => {
+test('assembles all 86 turn prompts without a provider call, excluding scoring conditions', (t) => {
   const now = Date.now();
   t.mock.method(Date, 'now', () => now);
-  assert.equal(suite.tests.length, 76);
+  assert.equal(suite.tests.length, 86);
   for (const { vars } of suite.tests) {
     const fixture = loadManagerCase(vars.case, vars.lang);
     const prompt = buildPrompt({ vars });
+    if (fixture.execution === true) {
+      assert.deepEqual(JSON.parse(prompt), { case: vars.case, lang: vars.lang, user: fixture.user });
+      const row = suite.tests.find((entry) => entry.vars.case === vars.case && entry.vars.lang === vars.lang);
+      assert.deepEqual(row.providers, ['claude-sdk-opus-5']);
+      assert.doesNotMatch(prompt, /ps -p|exit code|結果行がない|process is absent/);
+      continue;
+    }
     assert.match(prompt, /SYSTEM:\n/);
     assert.doesNotMatch(prompt, /\{\{include:/);
     assert.ok(prompt.includes(`Concurrency limit: ${fixture.concurrency}`));
@@ -53,6 +60,49 @@ test('assembles all 76 turn prompts without a provider call, excluding scoring c
       const readGoal = fixture.readResults.find(({ tool }) => tool === 'takt_get_goal').result.goal;
       assert.deepEqual(GoalSchema.parse(readGoal), GoalSchema.parse(fixture.goal));
 
+    }
+  }
+});
+
+test('stopped-check inputs connect a previous launch to the current process and saved output observations', () => {
+  for (const lang of ['ja', 'en']) {
+    const fixture = loadManagerCase('stopped-background-check', lang);
+    const context = JSON.parse(buildGoalTurnContext(fixture.cwd, GoalSchema.parse(fixture.goal), fixture.event, fixture.tasks));
+    const processRead = fixture.readResults.find(({ tool, arguments: args }) => tool === 'Bash' && args.command.startsWith('ps -p '));
+    const pid = processRead.arguments.command.match(/ps -p (\d+)/)[1];
+    const outputRead = fixture.readResults.find(({ tool, arguments: args }) => tool === 'Read' && args.file_path.endsWith('.log'));
+    const launch = context.goal.workLog.find(({ summary }) => summary.includes(outputRead.arguments.file_path) && summary.includes(pid));
+    assert.ok(launch);
+    assert.ok(Date.parse(launch.recordedAt) < Date.parse(fixture.event.createdAt));
+    assert.equal(processRead.result, 'exit code: 1\nstdout: \nstderr: ');
+    assert.match(outputRead.result, /RUN /);
+    assert.doesNotMatch(outputRead.result, /PASS|FAIL|Tests\s+\d+/);
+    const prompt = buildPrompt({ vars: { case: 'stopped-background-check', lang } });
+    assert.ok(prompt.includes(JSON.stringify(fixture.readResults)));
+    assert.deepEqual(JSON.parse(prompt.split('USER:\n')[1].split('\n\n')[0]).goal.workLog, context.goal.workLog);
+  }
+});
+
+test('verification inputs expose integration state, result SHA and a distinct goal tip in both languages', () => {
+  for (const lang of ['ja', 'en']) {
+    for (const caseId of ['integrated-task-verification', 'verification-before-integration']) {
+      const fixture = loadManagerCase(caseId, lang);
+      const task = fixture.tasks[0];
+      const listed = fixture.readResults.find(({ tool }) => tool === 'takt_list_tasks').result.tasks.find(({ name }) => name === task.name);
+      const relation = fixture.readResults.find(({ tool }) => tool === 'takt_get_goal_relation').result;
+      const history = fixture.readResults.find(({ tool }) => tool === 'takt_get_goal_history');
+      assert.equal(listed.goalIntegration, caseId === 'integrated-task-verification' ? 'integrated' : 'not_integrated');
+      assert.equal(listed.goalId, fixture.goal.id);
+      assert.equal(relation.goalBranch, fixture.goal.branch);
+      assert.notEqual(relation.goalSha, task.completion.sha);
+      assert.ok(goalHistoryInputSchema.safeParse(history.arguments).success);
+      assert.equal(history.result.sourceBranch, task.completion.branch);
+      assert.equal(history.result.sourceSha, task.completion.sha);
+      const prompt = buildPrompt({ vars: { case: caseId, lang } });
+      assert.ok(prompt.includes(JSON.stringify(fixture.readResults)));
+      const context = JSON.parse(prompt.split('USER:\n')[1].split('\n\n')[0]);
+      assert.equal(context.tasks[0].completion.sha, task.completion.sha);
+      assert.equal(context.goal.branch, relation.goalBranch);
     }
   }
 });
@@ -301,7 +351,9 @@ test('work contents, integrated verification and constraint cases receive semant
     'report-publish-replacement', 'conflicting-calendar-visibility',
     'reservation-validation', 'legacy-date-format', 'archive-test-coverage', 'quoted-csv-fields', 'inventory-retry-idempotency',
     'verification-repeated', 'verification-once', 'verification-mixed', 'verification-told',
-    'plan-missing', 'plan-dependent', 'plan-cancelled', 'plan-integrated', 'plan-queued', 'final-impact-tests']);
+    'plan-missing', 'plan-dependent', 'plan-cancelled', 'plan-integrated', 'plan-queued', 'final-impact-tests',
+    'stopped-background-check', 'integrated-task-verification', 'verification-before-integration',
+    'stopped-background-execution', 'integrated-task-execution']);
   for (const row of suite.tests) {
     assert.equal(row.assert?.[0]?.type === 'llm-rubric', semanticCases.has(row.vars.case));
     if (row.assert) assert.match(row.assert[0].value, row.vars.lang === 'ja'
