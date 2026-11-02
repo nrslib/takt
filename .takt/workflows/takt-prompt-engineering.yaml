@@ -1,0 +1,463 @@
+name: takt-prompt-engineering
+description: 実行記録をもとにファセットを改修し、独立したレビューと eval の変更前後の比較で効果を確かめる TAKT 開発用ワークフロー。
+max_steps: 48
+initial_step: takt-prompt-investigate
+
+steps:
+  - name: takt-prompt-investigate
+    description: 元の記録、判断規則、規則を読む担当、eval と比較条件を調べる
+    persona: planner
+    session_key: takt-prompt-investigator
+    edit: false
+    capabilities: readonly
+    policy:
+      - takt-prompt-evidence
+      - takt-prompt-generalization
+      - takt-prompt-eval-design
+    knowledge: takt-prompt-harness
+    instruction: takt-prompt-investigate
+    input_reports:
+      - from_step: takt-prompt-design-review
+        reports:
+          - takt-prompt-design-generality.md
+          - takt-prompt-design-eval.md
+        optional_if_unrun: true
+        history:
+          previous: 2
+      - from_step: takt-prompt-apply
+        reports:
+          - takt-prompt-implementation.md
+        optional_if_unrun: true
+    output_contracts:
+      report:
+        - name: takt-prompt-plan.md
+          format: takt-prompt-plan
+    rules:
+      - condition: 原記録と比較条件を確認でき、許可範囲で規則と eval の設計ができた
+        next: takt-prompt-design-review
+      - condition: 原記録や比較元を確認できない、または製品コードや新しい評価機構など範囲外の変更が必要
+        next: ABORT
+
+  - name: takt-prompt-design-review
+    description: 汎用性と eval 設計に反例を当て、2つの独立したセッションで確かめる
+    edit: false
+    concurrency: 2
+    parallel:
+      - name: takt-prompt-design-generality
+        persona: takt-prompt-reviewer
+        session_key: takt-prompt-design-generality
+        session: refresh
+        edit: false
+        capabilities: readonly
+        pass_previous_response: false
+        policy:
+          - takt-prompt-evidence
+          - takt-prompt-generalization
+        instruction: takt-prompt-design-generality
+        input_reports:
+          - from_step: takt-prompt-investigate
+            reports:
+              - takt-prompt-plan.md
+        output_contracts:
+          report:
+            - name: takt-prompt-design-generality.md
+              format: takt-prompt-review
+        rules:
+          - condition: 修正が必要な指摘なし
+          - condition: 根拠のある修正が必要な指摘あり
+      - name: takt-prompt-design-eval
+        persona: takt-prompt-reviewer
+        session_key: takt-prompt-design-eval
+        session: refresh
+        edit: false
+        capabilities: readonly
+        pass_previous_response: false
+        policy:
+          - takt-prompt-evidence
+          - takt-prompt-eval-design
+        knowledge: takt-prompt-harness
+        instruction: takt-prompt-design-eval
+        input_reports:
+          - from_step: takt-prompt-investigate
+            reports:
+              - takt-prompt-plan.md
+        output_contracts:
+          report:
+            - name: takt-prompt-design-eval.md
+              format: takt-prompt-review
+        rules:
+          - condition: 修正が必要な指摘なし
+          - condition: 根拠のある修正が必要な指摘あり
+    rules:
+      - condition: all("修正が必要な指摘なし")
+        next: takt-prompt-apply
+      - condition: any("根拠のある修正が必要な指摘あり")
+        next: takt-prompt-investigate
+
+  - name: takt-prompt-apply
+    description: 承認された日本語・英語のファセットと eval を実装し、製品コードの変更が必要なら止める
+    persona: coder
+    session_key: takt-prompt-author
+    edit: true
+    capabilities: edit
+    policy:
+      - takt-prompt-evidence
+      - takt-prompt-facet-review
+      - takt-prompt-eval-design
+    knowledge: takt-prompt-harness
+    instruction: takt-prompt-apply
+    input_reports:
+      - from_step: takt-prompt-investigate
+        reports:
+          - takt-prompt-plan.md
+      - from_step: takt-prompt-design-review
+        reports:
+          - takt-prompt-design-generality.md
+          - takt-prompt-design-eval.md
+      - from_step: takt-prompt-review
+        reports:
+          - takt-prompt-language-review.md
+          - takt-prompt-scope-review.md
+        optional_if_unrun: true
+        history:
+          previous: 2
+      - from_step: takt-prompt-classify
+        reports:
+          - takt-prompt-classification.md
+        optional_if_unrun: true
+      - from_step: takt-prompt-final-check
+        reports:
+          - takt-prompt-summary.md
+        optional_if_unrun: true
+    quality_gates:
+      - 変更は builtins/{ja,en}/facets/、必要な workflow の facet 参照、eval/ に限ること
+      - 追加・変更した eval の node --test が成功すること
+    output_contracts:
+      report:
+        - name: takt-prompt-implementation.md
+          format: takt-prompt-change
+    rules:
+      - condition: 製品コードや新しい評価機構など許可範囲外の変更が必要と判明した
+        next: ABORT
+      - condition: 規則の発火条件・禁止・必須対応・非適用の意味を変える再設計が必要
+        next: takt-prompt-investigate
+      - condition: 承認された設計の意味を保った実装・修正と対象テストが完了した
+        next: takt-prompt-review
+      - condition: 許可範囲の作業を完了できず、続行に必要な情報や手段がない
+        next: ABORT
+
+  - name: takt-prompt-review
+    description: 日本語と英語の意味の一致、日本語の自然さ、変更範囲とファセットの分類を独立してレビューする
+    edit: false
+    concurrency: 2
+    parallel:
+      - name: takt-prompt-review-language
+        persona: takt-prompt-reviewer
+        session_key: takt-prompt-review-language
+        session: refresh
+        edit: false
+        capabilities: readonly
+        pass_previous_response: false
+        policy:
+          - takt-prompt-evidence
+          - takt-prompt-generalization
+          - takt-prompt-facet-review
+        instruction: takt-prompt-review-language
+        input_reports:
+          - from_step: takt-prompt-investigate
+            reports:
+              - takt-prompt-plan.md
+          - from_step: takt-prompt-apply
+            reports:
+              - takt-prompt-implementation.md
+        output_contracts:
+          report:
+            - name: takt-prompt-language-review.md
+              format: takt-prompt-review
+        rules:
+          - condition: 修正が必要な指摘なし
+          - condition: 根拠のある修正が必要な指摘あり
+      - name: takt-prompt-review-scope
+        persona: takt-prompt-reviewer
+        session_key: takt-prompt-review-scope
+        session: refresh
+        edit: false
+        capabilities: readonly
+        pass_previous_response: false
+        policy:
+          - takt-prompt-evidence
+          - takt-prompt-facet-review
+        instruction: takt-prompt-review-scope
+        input_reports:
+          - from_step: takt-prompt-investigate
+            reports:
+              - takt-prompt-plan.md
+          - from_step: takt-prompt-apply
+            reports:
+              - takt-prompt-implementation.md
+        output_contracts:
+          report:
+            - name: takt-prompt-scope-review.md
+              format: takt-prompt-review
+        rules:
+          - condition: 修正が必要な指摘なし
+          - condition: 根拠のある修正が必要な指摘あり
+    rules:
+      - condition: all("修正が必要な指摘なし")
+        next: takt-prompt-measure
+      - condition: any("根拠のある修正が必要な指摘あり")
+        next: takt-prompt-apply
+
+  - name: takt-prompt-measure
+    description: 比較条件をそろえて測定し、同じ条件で再測定する
+    persona: takt-prompt-evaluator
+    session_key: takt-prompt-measurer
+    edit: true
+    capabilities: edit
+    policy: takt-prompt-evidence
+    knowledge: takt-prompt-harness
+    instruction: takt-prompt-measure
+    input_reports:
+      - from_step: takt-prompt-investigate
+        reports:
+          - takt-prompt-plan.md
+      - from_step: takt-prompt-classify
+        reports:
+          - takt-prompt-classification.md
+        optional_if_unrun: true
+      - from_step: takt-prompt-fix-eval
+        reports:
+          - takt-prompt-eval-fix.md
+        optional_if_unrun: true
+    output_contracts:
+      report:
+        - name: takt-prompt-measurement.md
+          format: takt-prompt-measurement
+    rules:
+      - condition: 測定が終わった、または失敗・エラー・原記録不足があった
+        next: takt-prompt-classify
+
+  - name: takt-prompt-classify
+    description: 各失敗の元の記録と続いた回数から次の対応を決める
+    persona: takt-prompt-evaluator
+    session_key: takt-prompt-classifier
+    session: refresh
+    edit: false
+    capabilities: readonly
+    policy: takt-prompt-evidence
+    knowledge: takt-prompt-harness
+    instruction: takt-prompt-classify
+    input_reports:
+      - from_step: takt-prompt-measure
+        reports:
+          - takt-prompt-measurement.md
+        history:
+          previous: 2
+      - from_step: takt-prompt-final-measure
+        reports:
+          - takt-prompt-final-measurement.md
+        optional_if_unrun: true
+        history:
+          previous: 2
+    output_contracts:
+      report:
+        - name: takt-prompt-classification.md
+          format: takt-prompt-classification
+    rules:
+      - condition: 原記録が不足して原因を判定できない、または範囲外の変更や外部対応が必要
+        next: ABORT
+      - condition: 変更後の失敗または評価系の予期しない失敗が同条件で2回連続しておらず、何も変えずに再測定が必要
+        next: takt-prompt-measure
+      - condition: 単発失敗の再測定は残っておらず、2回連続の原記録で確認したプロンプトの穴がある
+        next: takt-prompt-apply
+      - condition: 単発失敗の再測定と確定したプロンプトの穴は残っておらず、eval の不備または弁別不足の fixture 修正が必要
+        next: takt-prompt-fix-eval
+      - condition: 変更後の失敗と未処理事項がなく、弁別できないケースを回帰ガードと記録できた
+        next: takt-prompt-final-measure
+
+  - name: takt-prompt-fix-eval
+    description: 確定した eval の不備だけを修正する
+    persona: coder
+    session_key: takt-prompt-eval-author
+    edit: true
+    capabilities: edit
+    policy:
+      - takt-prompt-evidence
+      - takt-prompt-eval-design
+    instruction: takt-prompt-fix-eval
+    input_reports:
+      - from_step: takt-prompt-classify
+        reports:
+          - takt-prompt-classification.md
+      - from_step: takt-prompt-investigate
+        reports:
+          - takt-prompt-plan.md
+    quality_gates:
+      - 変更は eval/ の既存基盤の修正に限ること
+      - 追加・変更した eval の node --test が成功すること
+    output_contracts:
+      report:
+        - name: takt-prompt-eval-fix.md
+          format: takt-prompt-change
+    rules:
+      - condition: eval だけの修正と対象テストが完了し、変更前後を同じ新条件で再測定できる
+        next: takt-prompt-measure
+      - condition: 許可範囲外の変更が必要、または修正を完了できない
+        next: ABORT
+
+  - name: takt-prompt-final-measure
+    description: 最終的な文面で、全対象・全 provider の比較を一括で実行する
+    persona: takt-prompt-evaluator
+    session_key: takt-prompt-final-measurer
+    session: refresh
+    edit: true
+    capabilities: edit
+    policy: takt-prompt-evidence
+    knowledge: takt-prompt-harness
+    instruction:
+      - takt-prompt-measure
+      - takt-prompt-final-measure
+    input_reports:
+      - from_step: takt-prompt-investigate
+        reports:
+          - takt-prompt-plan.md
+      - from_step: takt-prompt-classify
+        reports:
+          - takt-prompt-classification.md
+    output_contracts:
+      report:
+        - name: takt-prompt-final-measurement.md
+          format: takt-prompt-measurement
+    rules:
+      - condition: 全対象・全 provider を一括測定し、変更後の全行が成功し、原記録と比較表がそろった
+        next: takt-prompt-final-check
+      - condition: 変更後の不合格・エラー・欠落がある、または原記録を確認できない
+        next: takt-prompt-classify
+
+  - name: takt-prompt-final-check
+    description: 必須の確認項目と報告を確かめ、完了を判断する
+    persona: takt-prompt-supervisor
+    session_key: takt-prompt-final-checker
+    session: refresh
+    edit: true
+    capabilities: edit
+    policy: takt-prompt-evidence
+    instruction: takt-prompt-final-check
+    input_reports:
+      - from_step: takt-prompt-investigate
+        reports:
+          - takt-prompt-plan.md
+      - from_step: takt-prompt-design-review
+        reports:
+          - takt-prompt-design-generality.md
+          - takt-prompt-design-eval.md
+      - from_step: takt-prompt-apply
+        reports:
+          - takt-prompt-implementation.md
+      - from_step: takt-prompt-review
+        reports:
+          - takt-prompt-language-review.md
+          - takt-prompt-scope-review.md
+      - from_step: takt-prompt-classify
+        reports:
+          - takt-prompt-classification.md
+      - from_step: takt-prompt-final-measure
+        reports:
+          - takt-prompt-final-measurement.md
+    quality_gates:
+      - npm run build が成功すること
+      - npm run lint が成功すること
+      - npm run eval:prompts:contracts が成功すること
+      - 追加・変更した eval の node --test が成功すること
+      - git diff --check が成功すること
+      - 弁別できないケースに回帰ガードと記載されていること
+    output_contracts:
+      report:
+        - name: takt-prompt-summary.md
+          format: takt-prompt-summary
+    rules:
+      - condition: ゲート、独立レビュー、最後の一括比較、回帰ガードの記載を確認でき、未解消事項がない
+        next: COMPLETE
+      - condition: 許可範囲の実装や報告に修正が必要
+        next: takt-prompt-apply
+      - condition: 比較の対象漏れや測定後の変更があり、最後の全件測定が必要
+        next: takt-prompt-final-measure
+      - condition: 原記録や外部条件の不足、範囲外の必要作業、またはゲート失敗で完了できない
+        next: ABORT
+
+loop_monitors:
+  - cycle:
+      - takt-prompt-investigate
+      - takt-prompt-design-review
+    threshold: 3
+    judge:
+      persona: takt-prompt-supervisor
+      instruction: takt-prompt-loop-judge
+      input_reports:
+        - from_step: takt-prompt-investigate
+          reports:
+            - takt-prompt-plan.md
+          history:
+            previous: 2
+        - from_step: takt-prompt-design-review
+          reports:
+            - takt-prompt-design-generality.md
+            - takt-prompt-design-eval.md
+          history:
+            previous: 2
+      rules:
+        - condition: 新しい証拠と許可範囲の未試行の対応を具体化できた
+          next: takt-prompt-investigate
+        - condition: 同じ失敗と対応の反復で進捗がない、または範囲内の打開手段がない
+          next: ABORT
+  - cycle:
+      - takt-prompt-apply
+      - takt-prompt-review
+    threshold: 3
+    judge:
+      persona: takt-prompt-supervisor
+      instruction: takt-prompt-loop-judge
+      input_reports:
+        - from_step: takt-prompt-apply
+          reports:
+            - takt-prompt-implementation.md
+          history:
+            previous: 2
+        - from_step: takt-prompt-review
+          reports:
+            - takt-prompt-language-review.md
+            - takt-prompt-scope-review.md
+          history:
+            previous: 2
+      rules:
+        - condition: 新しい証拠と許可範囲の未試行の対応を具体化できた
+          next: takt-prompt-apply
+        - condition: 同じ失敗と対応の反復で進捗がない、または範囲内の打開手段がない
+          next: ABORT
+  # 修正先が変わっても、切り分けに繰り返し戻る測定ループを数える。
+  - cycle:
+      - takt-prompt-classify
+    ignore_steps:
+      - takt-prompt-investigate
+      - takt-prompt-design-review
+      - takt-prompt-apply
+      - takt-prompt-review
+      - takt-prompt-measure
+      - takt-prompt-fix-eval
+      - takt-prompt-final-measure
+      - takt-prompt-final-check
+    threshold: 3
+    judge:
+      persona: takt-prompt-supervisor
+      instruction: takt-prompt-loop-judge
+      input_reports:
+        - from_step: takt-prompt-classify
+          reports:
+            - takt-prompt-classification.md
+          history:
+            previous: 2
+      rules:
+        - condition: 新しい証拠があり、同条件の再測定または確定した原因への未試行の対応を具体化できた
+          next: takt-prompt-classify
+        - condition: 同じ失敗と対応の反復で進捗がない、または範囲内の打開手段がない
+          next: ABORT

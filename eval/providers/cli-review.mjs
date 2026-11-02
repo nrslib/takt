@@ -14,6 +14,8 @@ import { fileURLToPath } from 'node:url';
 import { spawnManagedProcess } from '../../dist/shared/utils/spawn.js';
 import { buildCodexSkillConfig } from '../../dist/infra/codex/skill-config.js';
 
+import { currentExecutionRecord, recordProviderCalls } from './execution-record.mjs';
+
 const evalDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 export function createIsolatedWorkingDirectory(sourceDirectory, copyDirectory = cpSync) {
@@ -80,7 +82,8 @@ export function prepareWorkingDirectory(config) {
     return { sourceDirectory, cwd: sourceDirectory, cleanup: () => undefined };
   }
 
-  const isolated = createIsolatedWorkingDirectory(sourceDirectory);
+  const temporary = createIsolatedWorkingDirectory(sourceDirectory);
+  const isolated = currentExecutionRecord()?.preserveProject(temporary) ?? temporary;
   try {
     assertRequiredSnapshots(isolated.cwd, config.required_snapshots);
   } catch (error) {
@@ -143,6 +146,7 @@ export async function runProcess(command, args, { cwd, input, timeoutMs, abortSi
     throw new Error(`${command} was aborted before it started`);
   }
 
+  const record = currentExecutionRecord()?.beginProcess({ command, args, cwd, timeoutMs });
   const controller = new AbortController();
   const managed = spawnManagedProcess(
     command,
@@ -151,11 +155,15 @@ export async function runProcess(command, args, { cwd, input, timeoutMs, abortSi
     controller.signal,
   );
   const { child } = managed;
+  let exit;
+  child.once('exit', (code, signal) => { exit = { code, signal }; });
+  let failureMessage;
   const stdout = [];
   const stderr = [];
   let timedOut = false;
   let aborted = false;
   let inputError;
+  let terminationSignal;
 
   const stop = (reason) => {
     if (!controller.signal.aborted) controller.abort(reason);
@@ -164,6 +172,17 @@ export async function runProcess(command, args, { cwd, input, timeoutMs, abortSi
     aborted = true;
     stop(new Error(`${command} was aborted`));
   };
+  const onSignal = (signal) => {
+    terminationSignal ??= signal;
+    aborted = true;
+    stop(new Error(`${command} interrupted by ${signal}`));
+  };
+  const onInt = () => onSignal('SIGINT');
+  const onTerm = () => onSignal('SIGTERM');
+  if (record) {
+    process.on('SIGINT', onInt);
+    process.on('SIGTERM', onTerm);
+  }
   const timer = timeoutMs > 0
     ? setTimeout(() => {
       timedOut = true;
@@ -172,8 +191,8 @@ export async function runProcess(command, args, { cwd, input, timeoutMs, abortSi
     : undefined;
   abortSignal?.addEventListener('abort', abort, { once: true });
 
-  child.stdout.on('data', (chunk) => stdout.push(chunk));
-  child.stderr.on('data', (chunk) => stderr.push(chunk));
+  child.stdout.on('data', (chunk) => { stdout.push(chunk); record?.chunk('stdout', chunk); });
+  child.stderr.on('data', (chunk) => { stderr.push(chunk); record?.chunk('stderr', chunk); });
   child.stdin.on('error', (error) => {
     inputError = error;
     stop(error);
@@ -181,7 +200,8 @@ export async function runProcess(command, args, { cwd, input, timeoutMs, abortSi
 
   try {
     child.stdin.end(input);
-    const { code, signal } = await managed.wait();
+    exit = await managed.wait();
+    const { code, signal } = exit;
     const output = Buffer.concat(stdout).toString('utf8');
     const errorOutput = Buffer.concat(stderr).toString('utf8');
     if (inputError !== undefined) throw inputError;
@@ -199,12 +219,16 @@ export async function runProcess(command, args, { cwd, input, timeoutMs, abortSi
     if (inputError !== undefined) failure = inputError;
     else if (aborted) failure = new Error(`${command} was aborted`);
     else if (timedOut) failure = new Error(`${command} timed out after ${timeoutMs}ms: ${Buffer.concat(stderr).toString('utf8')}`);
+    failureMessage = failure.message;
     failure.stdout = Buffer.concat(stdout).toString('utf8');
     failure.stderr = Buffer.concat(stderr).toString('utf8');
     throw failure;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
     abortSignal?.removeEventListener('abort', abort);
+    process.off('SIGINT', onInt);
+    process.off('SIGTERM', onTerm);
+    record?.finish({ code: exit?.code ?? null, signal: exit?.signal ?? null, timedOut, aborted, abortReason: terminationSignal ?? (aborted ? String(abortSignal?.reason) : null), error: failureMessage ?? null });
   }
 }
 
@@ -253,6 +277,7 @@ export function createCliReviewSession(config, {
   sandboxMode = 'read-only', allowedTools = ['Read', 'Glob', 'Grep'], processRunner = runProcess,
 }) {
   const timeoutMs = resolveTimeoutMs(config);
+  const captureEvents = onEvent !== undefined || currentExecutionRecord() !== undefined;
   if (!['read-only', 'workspace-write'].includes(sandboxMode)) throw new Error(`Unsupported eval sandbox: ${sandboxMode}`);
   const run = async (command, args, prompt) => {
     onInvocation?.({ command, args, cwd });
@@ -276,7 +301,7 @@ export function createCliReviewSession(config, {
         const args = [
           '-p',
           '--model', config.model,
-          ...(onEvent === undefined ? [] : ['--output-format', 'stream-json', '--verbose']),
+          ...(captureEvents ? ['--output-format', 'stream-json', '--verbose'] : []),
           '--allowed-tools', allowedTools.join(','),
           '--permission-mode', 'dontAsk',
           '--setting-sources=project',
@@ -284,7 +309,7 @@ export function createCliReviewSession(config, {
         ];
         const output = await run('claude', args, prompt);
         started = true;
-        if (onEvent === undefined) return output;
+        if (!captureEvents) return output;
         const events = cliEvents(output, onEvent);
         const result = events.findLast((event) => event.type === 'result');
         if (result === undefined || typeof result.result !== 'string' || result.is_error) {
@@ -344,6 +369,7 @@ export function createCliReviewSession(config, {
 export default class CliReviewProvider {
   constructor(options = {}) {
     this.config = options.config ?? {};
+    this.callApi = recordProviderCalls(this, this.callApi);
   }
 
   id() {
