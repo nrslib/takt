@@ -192,6 +192,22 @@ describe('resolveTaskRetryRunSelection', () => {
     expect(resolveTaskRetryRunSelection({ ...task, runSlug: undefined, taskDir: undefined }, cwd).matchedRunSlug).toBe('older');
   });
 
+  it.each([false, true])('skips a discovered head without reports when no run slug was saved and an older source exists=%s', (hasOlderSource) => {
+    const head = run('head', '2026-11-02', { resumePoint: point('review'), currentStep: 'review' });
+    reportDirs.delete(`${cwd}/${head.reportDirectory}`);
+    const older = hasOlderSource ? run('older', '2026-11-01', { resumePoint: point() }) : null;
+
+    const result = resolveTaskRetryRunSelection({ ...task, runSlug: undefined }, cwd);
+
+    expect(result).toEqual({
+      matchedRunSlug: hasOlderSource ? 'older' : null,
+      runMeta: older,
+      resumePoint: hasOlderSource ? point() : undefined,
+      skippedRuns: [{ runSlug: 'head', reason: 'missing_reports' }],
+      failedStep: 'review',
+    });
+  });
+
   it('keeps metadata checkpoint priority over a task checkpoint when no run slug was saved', () => {
     run('older', '2026-11-01', { resumePoint: point('fix-verifier'), task: task.content });
     const result = resolveTaskRetryRunSelection({ ...task, runSlug: undefined,

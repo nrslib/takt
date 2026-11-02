@@ -1,0 +1,8 @@
+ja:
+  lang: ja
+  execution: true
+  user: 前のターンのテストの結果を確かめて報告してください。
+en:
+  lang: en
+  execution: true
+  user: Check the previous turn test results and report.

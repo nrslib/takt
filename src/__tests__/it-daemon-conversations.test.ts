@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { expect, it, vi } from 'vitest';
 import { Client } from './helpers/conversation-ipc-client.js';
@@ -22,6 +22,11 @@ import { saveManagerToolPermissionInquiry } from '../features/manager/toolPermis
 import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
 
 const lifecycle = await import(pathToFileURL(join(process.cwd(), 'dist/features/daemon/lifecycle.js')).href) as typeof import('../features/daemon/lifecycle.js');
+
+async function waitForQueuedMessage(tui: ManagerTuiProcess): Promise<void> {
+  const message = getLabel('manager.conversation.queued', 'en', { count: '1' }).replace(/\s+/gu, '');
+  await vi.waitFor(async () => expect((await tui.frame()).replace(/\s+/gu, '')).toContain(message), { timeout: 30000 });
+}
 
 function ipcMeasurements(observations: IpcObservation[], pids: number[], concurrentAt: number) {
   const observedAt = Date.now();
@@ -511,38 +516,42 @@ it.each(['ja', 'en'] as const)('shows a short summary status without displaying 
   } finally { await fixture.cleanup(); }
 });
 
-it('rejects a busy TUI message and never sends it after the active turn completes', async () => {
+it('accepts a busy TUI message and executes it after the active turn completes', async () => {
   const fixture = managerDaemonFixture('en');
   try {
     const tui = await fixture.start(fixture.repository, undefined);
     await waitForManager(tui, 'Discuss your goal');
     await submitManagerText(tui, 'The accepted request');
     await vi.waitFor(async () => expect((await fixture.state())?.running?.kind).toBe('message'), { timeout: 30000 });
-    await submitManagerText(tui, 'The rejected request');
-    await waitForManager(tui, getLabel('manager.conversation.busy', 'en'));
+    await submitManagerText(tui, 'The queued request');
+    await waitForQueuedMessage(tui);
     fixture.release();
     await waitForManager(tui, fixture.summary.objective);
     await vi.waitFor(async () => expect((await fixture.state())?.running).toBeNull(), { timeout: 30000 });
-    expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager')).toHaveLength(1);
+    await vi.waitFor(() => expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager')).toHaveLength(2));
     await tui.exit();
-    expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager')).toHaveLength(1);
+    expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager')).toHaveLength(2);
   } finally { await fixture.cleanup(); }
 });
 
-it('keeps a proposal arriving after busy /make-goal unregistered until a new explicit approval on the same screen', async () => {
+it('keeps the queued /make-goal proposal unregistered until explicit approval on the same screen', async () => {
   const fixture = managerDaemonFixture('en');
   try {
     const tui = await fixture.start(fixture.repository, undefined);
     await waitForManager(tui, 'Discuss your goal');
     await submitManagerText(tui, 'Prepare the proposal while this turn is active');
     await vi.waitFor(async () => expect((await fixture.state())?.running?.kind).toBe('message'), { timeout: 30000 });
-    const operationId = (await fixture.state())!.running!.operationId;
+    const current = (await fixture.state())!;
+    const operationId = current.running!.operationId;
     await tui.ready(operationId);
     expect((await fixture.state())?.pending).toBeNull();
     await submitManagerText(tui, '/make-goal');
-    await waitForManager(tui, getLabel('manager.conversation.busy', 'en'));
+    await waitForQueuedMessage(tui);
     fixture.release();
     await waitForManager(tui, fixture.summary.objective);
+    await vi.waitFor(async () => expect(await fixture.state()).toMatchObject({
+      revision: current.revision + 1, pending: { revision: current.revision + 1 }, running: null,
+    }), { timeout: 30000 });
     await tui.ready(null);
     const requests = () => fixture.readObservations().filter(({ event, pid }) => event === 'request' && pid === tui.child.pid);
     const proposal = (await fixture.state())!.pending!;
@@ -550,7 +559,7 @@ it('keeps a proposal arriving after busy /make-goal unregistered until a new exp
     expect((await fixture.state())?.approval).toBeNull();
     expect(requests().filter(({ command }) => command === 'message')).toHaveLength(2);
     expect(requests().filter(({ command }) => command === 'approve_summary')).toEqual([]);
-    expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager')).toHaveLength(1);
+    expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager')).toHaveLength(2);
     expect(fixture.readObservations().filter(({ event, approvalState }) => event === 'write' && approvalState != null)).toEqual([]);
     const goals = new GoalStore(fixture.repository);
     expect((await goals.list()).goals).toEqual([]);
@@ -583,15 +592,52 @@ it('passes CLI provider and model overrides to the daemon provider call even whe
   } finally { await fixture.cleanup(); }
 });
 
-it('updates the restored proposal on the same mounted screen and approves only the new revision', async () => {
-  const fixture = managerDaemonFixture('en');
+it.each(['ja', 'en'] as const)('updates the restored proposal on the same mounted screen and approves only the new revision in %s', async (language) => {
+  const fixture = managerDaemonFixture(language);
   const saved = conversationRecord(fixture.repository);
+  const normalize = (text: string): string => text.replace(/\s+/gu, '').toLowerCase();
+  const summaryValues = (summary: typeof fixture.summary): string[] => [
+    summary.objective, ...summary.outOfScope, ...summary.acceptanceCriteria, ...summary.constraints,
+  ];
+  const previousValues = summaryValues(saved.pending!.summary);
+  const nextValues = summaryValues(fixture.summary);
+  const expectProposalFrame = (frame: string, updated: boolean): void => {
+    const rows = stripVTControlCharacters(frame).split('\n');
+    const heading = getLabel('manager.assignmentHeading', language, { name: basename(fixture.repository) });
+    expect(rows.filter((row) => row.trim() === heading)).toHaveLength(1);
+    const start = rows.findIndex((row) => row.trim() === heading);
+    const history = normalize(rows.slice(0, start).join('\n'));
+    const liveRows = rows.slice(start);
+    const live = liveRows.join('\n');
+    const normalizedLive = normalize(live);
+    for (const value of previousValues) expect(history.split(normalize(value))).toHaveLength(2);
+    for (const value of nextValues) expect(history.split(normalize(value))).toHaveLength(updated ? 2 : 1);
+    for (const value of [fixture.repository, getLabel('manager.summary.title', language)]) {
+      expect(history.split(normalize(value))).toHaveLength(updated ? 3 : 2);
+    }
+    if (updated) expect(history.indexOf(normalize(previousValues[0]!))).toBeLessThan(history.indexOf(normalize(nextValues[0]!)));
+    for (const value of [fixture.repository, ...previousValues, ...nextValues]) {
+      expect(normalizedLive).not.toContain(normalize(value));
+    }
+    expect(liveRows.length).toBeLessThanOrEqual(24);
+    const confirmation = getLabel('manager.summary.confirmation', language);
+    expect(normalizedLive.split(normalize(confirmation))).toHaveLength(2);
+    const dialogs = live.match(/╭[^\n]*\n[\s\S]*?╰[^\n]*/gu);
+    expect(dialogs).not.toBeNull();
+    const summaryDialogs = dialogs!.filter((dialog) => dialog.includes(confirmation));
+    expect(summaryDialogs).toHaveLength(1);
+    expect(summaryDialogs[0]!.split('\n').slice(1, -1).map((row) => row.replace(/^│\s*|\s*│$/gu, '')))
+      .toEqual([confirmation, getLabel('manager.summary.approve', language), getLabel('manager.summary.continue', language)]);
+  };
   new ConversationStore(fixture.directory).write(saved);
   fixture.release();
   let observer: Client | undefined;
   try {
     const tui = await fixture.start(fixture.repository, undefined);
     await waitForManager(tui, saved.pending!.summary.objective);
+    await vi.waitFor(async () => expectProposalFrame(await tui.frame(), false), { timeout: 30000 });
+    const requests = () => fixture.readObservations().filter(({ event, pid }) => event === 'request' && pid === tui.child.pid);
+    const goals = new GoalStore(fixture.repository);
     const ipc = readDaemonIpcState(fixture.directory)!;
     observer = new Client(ipc.endpoint);
     await observer.request('hello', { capability: ipc.capability });
@@ -601,14 +647,28 @@ it('updates the restored proposal on the same mounted screen and approves only t
     expect((await observer.request('submit', { attachmentId: opened.attachmentId, speaker: selected.speaker,
       command: { kind: 'message', text: 'Replace the restored proposal' } })).result?.kind).toBe('accepted');
     await waitForManager(tui, fixture.summary.objective);
-    expect(await tui.frame()).not.toContain(saved.pending!.summary.objective);
-    await vi.waitFor(async () => expect((await fixture.state())).toMatchObject({ revision: 5, running: null }), { timeout: 30000 });
+    await vi.waitFor(async () => expectProposalFrame(await tui.frame(), true), { timeout: 30000 });
+    await vi.waitFor(async () => expect((await fixture.state())).toMatchObject({ revision: 5, running: null, approval: null,
+      pending: { revision: 5, repositoryDirectory: fixture.repository, summary: fixture.summary } }), { timeout: 30000 });
+    const snapshotsBefore = requests().filter(({ method }) => method === 'snapshot').length;
+    await vi.waitFor(() => expect(requests().filter(({ method }) => method === 'snapshot').length)
+      .toBeGreaterThanOrEqual(snapshotsBefore + 2), { timeout: 30000 });
+    const samples = await tui.observeFrames();
+    expect(samples).toHaveLength(30);
+    for (const sample of samples) {
+      expect(sample.readStatus).toBe('complete');
+      expectProposalFrame(sample.frame, true);
+    }
+    expect(requests().filter(({ command }) => command === 'approve_summary')).toEqual([]);
+    expect((await goals.list()).goals).toEqual([]);
     await tui.approveSummary(5);
-    await vi.waitFor(() => expect(fixture.readObservations()).toContainEqual(expect.objectContaining({
-      event: 'request', pid: tui.child.pid, command: 'approve_summary', revision: 5,
-    })), { timeout: 30000 });
     await vi.waitFor(async () => expect((await fixture.state())?.approval).toMatchObject({ revision: 5, state: 'registered' }), { timeout: 30000 });
+    const receipt = (await fixture.state())!.approval!;
+    expect((await goals.get(receipt.goalId))).toMatchObject(fixture.summary);
+    expect((await goals.list()).goals.map(({ id }) => id)).toEqual([receipt.goalId]);
     await tui.exit();
+    expect(requests().filter(({ command }) => command === 'approve_summary'))
+      .toEqual([expect.objectContaining({ revision: 5 })]);
   } finally { observer?.socket.destroy(); await fixture.cleanup(); }
 });
 

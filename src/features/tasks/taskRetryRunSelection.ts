@@ -82,16 +82,15 @@ export function resolveTaskRetryRunSelection(task: TaskListItem, cwd: string): T
     ? { slug: head.slug, meta: readRetryMeta(cwd, head.slug) }
     : { slug: latestSlug, meta: latestMeta };
   const latestPoint = resolveResumePoint(latest.slug, latest.meta);
-  if (latestPoint !== undefined) {
+  if (latest.slug === null && latestPoint !== undefined) {
     return { matchedRunSlug: latest.slug, runMeta: latest.meta, resumePoint: latestPoint, skippedRuns: [] };
   }
   const failedStep = latest.meta?.failure?.step.trim() || latest.meta?.currentStep?.trim();
   const skippedRuns: SkippedTaskRetryRun[] = [];
-  if (latest.slug !== null) {
-    skippedRuns.push({ runSlug: latest.slug, reason: latest.meta === null ? 'missing_metadata' : 'missing_resume_point' });
+  if (latestSlug !== null) {
+    skippedRuns.push({ runSlug: latestSlug, reason: latestMeta === null ? 'missing_metadata' : 'missing_resume_point' });
   }
   for (const { slug } of candidates) {
-    if (slug === latest.slug) continue;
     const meta = readRetryMeta(cwd, slug);
     if (meta === null) {
       skippedRuns.push({ runSlug: slug, reason: 'missing_metadata' });

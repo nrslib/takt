@@ -9,6 +9,7 @@ import { MAKE_GOAL_COMMAND, useManagerInput } from './useManagerInput.js';
 import { ManagerAnswerDialog } from './ManagerAnswerDialog.js';
 import { ManagerAbortDialog } from './ManagerAbortDialog.js';
 import { ManagerSummaryDialog } from './ManagerSummaryDialog.js';
+import { formatPendingSummary } from './summaryDisplay.js';
 import { ManagerHelp } from './ManagerHelp.js';
 import { ManagerSelectionDialog } from './ManagerSelectionDialog.js';
 import { isGoalSelectionCandidate, useManagerSelection, type ManagerSelectedTarget, type ManagerSelectionCommand } from './useManagerSelection.js';
@@ -47,7 +48,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const [entries, setEntries] = useState<TranscriptEntry[]>(() => initialDiagnostics.map((content) => ({ role: 'assistant', content: toDisplayText(content) })));
   const [approve, setApprove] = useState(false);
   const [sending, setSending] = useState(false);
-  const submitting = useRef(false);
+  const submitting = useRef(0);
   const [summarizing, setSummarizing] = useState(false);
   const summaryOperation = useRef<string | null>(null);
   const active = useRef(false);
@@ -57,6 +58,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const exiting = useRef(false);
   const displayed = useRef(new Set<string>());
   const displayedMessages = useRef(new Set<string>());
+  const displayedSummaries = useRef(new Set<string>());
   const lastError = useRef<string | null>(null);
   const pendingAnswer = useRef<{ text: string; operationId?: string } | null>(null);
   const goalOperations = useRef(new Map<string, { kind: 'pause' | 'resume' | 'abort'; goal: ManagerAbortTarget['goal'] }>());
@@ -78,24 +80,27 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const selection = useManagerSelection();
   const slashCompletion = useSlashCompletion(resolveSlashCompletions(editor.text, lang, {}, MANAGER_COMMANDS));
   const state = snapshot.state;
-  const busy = sending || state?.running != null;
+  const busy = sending || state?.running != null || (state?.queuedMessageCount ?? 0) > 0;
   active.current = busy;
   const canApprove = snapshot.connection === 'connected' && snapshot.readStatus === 'complete' && !busy;
   const append = (content: string, role: TranscriptEntry['role'] = 'assistant'): void => {
     if (mounted.current) setEntries((previous) => [...previous, { role, content: toDisplayText(sanitizeSensitiveText(content)) }]);
   };
   const send = async (command: ConversationCommand, onAccepted?: (id: string) => void): Promise<string | null> => {
-    if (submitting.current && command.kind !== 'abort_turn') { append(getLabel('manager.conversation.busy', lang)); return null; }
-    submitting.current = true;
+    if (submitting.current && command.kind !== 'abort_turn' && command.kind !== 'message') { append(getLabel('manager.conversation.busy', lang)); return null; }
+    submitting.current++;
     setSending(true);
     try {
       const result = await client.submit(command, onAccepted);
-      if (result.kind === 'accepted') return result.operationId;
+      if (result.kind === 'accepted') {
+        if (result.queuedMessageCount !== undefined) append(getLabel('manager.conversation.queued', lang, { count: String(result.queuedMessageCount) }));
+        return result.operationId;
+      }
       append(result.kind === 'error' ? result.message : getLabel('manager.conversation.busy', lang));
       if (result.kind === 'error') void client.refresh().catch((error: unknown) => append(getErrorMessage(error)));
       return null;
     } catch (error) { append(getErrorMessage(error)); return null; }
-    finally { submitting.current = false; if (mounted.current) setSending(false); }
+    finally { submitting.current--; if (mounted.current) setSending(submitting.current > 0); }
   };
   const summaryApproval = useManagerSummaryApproval({ selected, setApprove, resetChoice,
     dismissSummary: async (revision) => {
@@ -121,6 +126,14 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     setPending(state?.pending ?? null);
     resetChoice();
   }, [state?.revision, state?.pending]);
+  useEffect(() => {
+    if (state?.pending == null) return;
+    const key = `${state.conversationId}:${state.pending.revision}`;
+    if (displayedSummaries.current.has(key)) return;
+    const content = formatPendingSummary(state.pending, lang);
+    displayedSummaries.current.add(key);
+    append(content);
+  }, [state?.conversationId, state?.pending, lang]);
   useEffect(() => {
     if (snapshot.error !== null && snapshot.error !== lastError.current) append(snapshot.error);
     lastError.current = snapshot.error;
@@ -260,9 +273,9 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     {selection.selection !== null && <ManagerSelectionDialog selection={selection.selection} lang={lang} />}
     {answerTarget !== null && selection.selection === null && <ManagerAnswerDialog answerTarget={answerTarget} bodyText={questionAnswer.bodyText} lang={lang} />}
     {abortTarget !== null && selection.selection === null && <ManagerAbortDialog abortTarget={abortTarget.goal} retry={abortTarget.retry} approve={approve} lang={lang} />}
-    {summaryVisible && <ManagerSummaryDialog pending={pending} approve={approve} ja={ja} />}
+    {summaryVisible && <ManagerSummaryDialog approve={approve} lang={lang} />}
     <ManagerHelp lang={lang} />
-    <StatusLine busy={busy} label={summarizing ? getLabel('manager.summaryWorking', lang) : ja ? '処理中' : 'Working'} streamed="" />
+    <StatusLine busy={busy} label={state?.queuedMessageCount ? getLabel('manager.conversation.waiting', lang, { count: String(state.queuedMessageCount) }) : summarizing ? getLabel('manager.summaryWorking', lang) : ja ? '処理中' : 'Working'} streamed="" />
     <PromptInput text={visibleEditor.text} cursor={visibleEditor.cursor} contentWidth={contentWidth}
       placeholder={answerTarget === null ? (ja ? 'ゴールを相談してください' : 'Discuss your goal') : (ja ? '回答を入力してください' : 'Enter your answer')}
       hint={inputHint} showHint={false}

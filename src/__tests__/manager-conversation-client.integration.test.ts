@@ -5,7 +5,7 @@ import { createElement } from 'react';
 import { cleanup, render } from 'ink-testing-library';
 import { ManagerView } from '../features/manager/ManagerView.js';
 import * as selectionDialog from '../features/manager/ManagerSelectionDialog.js';
-import * as summaryDialog from '../features/manager/ManagerSummaryDialog.js';
+import * as transcriptView from '../features/tui/TranscriptEntryView.js';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConversationIpcClient } from '../features/manager/conversationIpcClient.js';
@@ -42,6 +42,11 @@ vi.mock('../infra/task/repositoryDirectory.js', async (original) => ({ ...await 
   resolveGitRepositoryDirectory: async (path: string) => path }));
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { listTaskStateItems() { return []; } } }));
 vi.mock('../features/manager/conversationPlan.js', () => ({ createManagerConversationPlan: doubles.plan }));
+vi.mock('../features/tui/TranscriptEntryView.js', async (original) => {
+  const actual = await original<typeof import('../features/tui/TranscriptEntryView.js')>();
+  return { ...actual, TranscriptView: vi.fn((props: Parameters<typeof actual.TranscriptView>[0]) =>
+    createElement(actual.TranscriptView, props)) };
+});
 
 let directory: string;
 let repository: string;
@@ -187,8 +192,8 @@ it('regenerates with /make-goal on the same screen and registers the new proposa
     { kind: 'message', text: getLabel('manager.goSummaryRequest', 'en'), display: false },
   ]));
   await waitFor(() => {
-    expect(app.lastFrame()).toContain(summary.objective);
-    expect(app.lastFrame()).not.toContain('CSV出力');
+    expect(app.lastFrame()!.split(summary.objective)).toHaveLength(2);
+    expect(app.lastFrame()!.split('CSV出力')).toHaveLength(2);
     expect(client.getSnapshot().state).toMatchObject({ pending: { revision: 5, summary }, approval: null, running: null });
   });
   const record = conversationRecord(repository);
@@ -206,7 +211,9 @@ it('regenerates with /make-goal on the same screen and registers the new proposa
   await waitFor(() => expect(new ConversationStore(directory).read(record.id, record.assignment)?.approval)
     .toMatchObject({ revision: 5, state: 'registered' }));
   const receipt = new ConversationStore(directory).read(record.id, record.assignment)!.approval!;
-  expect((await new GoalStore(repository).get(receipt.goalId)).objective).toBe(summary.objective);
+  const goals = (await new GoalStore(repository).list()).goals;
+  expect(goals).toHaveLength(1);
+  expect(await new GoalStore(repository).get(receipt.goalId)).toMatchObject(summary);
   expect(registration).toHaveBeenCalledOnce();
 });
 
@@ -517,10 +524,14 @@ it.each([7, 9])('restores every pending constraint for %i large entries through 
   new ConversationStore(directory).write(record);
   await client.connect(); await complete();
   expect(client.getSnapshot().state).toMatchObject({ conversationId: record.id, revision: 4, pending: record.pending });
-  const component = vi.spyOn(summaryDialog, 'ManagerSummaryDialog');
+  const component = vi.mocked(transcriptView.TranscriptView);
   render(createElement(ManagerView, { cwd: repository, lang: 'en', client, assignment, initialDiagnostics: [], onExit() {} }));
-  await waitFor(() => expect(component).toHaveBeenCalled());
-  expect(component.mock.calls.at(-1)![0].pending).toEqual(record.pending);
+  await waitFor(() => {
+    const entries = component.mock.calls.at(-1)![0].entries.filter((entry) => entry.content.includes(record.pending!.summary.objective));
+    expect(entries).toHaveLength(1);
+    for (const value of record.pending!.summary.constraints) expect(entries[0]!.content).toContain(value);
+  });
+  expect(new ConversationStore(directory).read(record.id, record.assignment)?.pending).toEqual(record.pending);
 });
 
 it.each([7, 9])('restores the exact IDs, order and objectives of %i large goals through the production receiver', async (count) => {
@@ -703,7 +714,9 @@ it('[SCN-SNAP-SIZE-P1] receives at most 4096 IPC bytes for an unchanged refresh 
   expect(goals).toHaveLength(30);
   expect(inquiries).toHaveLength(30);
   const app = await snapshotView();
-  const headings = app.lastFrame()!.split('\n').slice(0, 2);
+  const headings = [getLabel('manager.assignmentHeading', 'en', { name: 'repository' }),
+    getLabel('manager.counts', 'en', { goals: String(goals.length), questions: String(inquiries.length) })];
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(headings.join('\n')));
   const bytes = observation.bytes;
 
   const received = await refreshSnapshot(client, observation);
@@ -714,7 +727,7 @@ it('[SCN-SNAP-SIZE-P1] receives at most 4096 IPC bytes for an unchanged refresh 
   expect.soft(received.items).toHaveLength(0);
   expect.soft(displayedGoals(client)).toEqual(goals);
   expect.soft(displayedInquiries(client)).toEqual(inquiries);
-  await vi.waitFor(() => expect(app.lastFrame()!.split('\n').slice(0, 2)).toEqual(headings));
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(headings.join('\n')));
 });
 
 it('[SCN-SNAP-SIZE-P2] initially receives all thirty goals and pending inquiries without historical events or notice items', async () => {
@@ -880,7 +893,7 @@ it('[SCN-SNAP-UI-P1] preserves the width eighty headings and both menus and disp
   const app = await snapshotView();
   const headings = [getLabel('manager.assignmentHeading', 'en', { name: 'repository' }),
     getLabel('manager.counts', 'en', { goals: '2', questions: '2' })];
-  await vi.waitFor(() => expect(app.lastFrame()!.split('\n').slice(0, 2)).toEqual(headings));
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(headings.join('\n')));
   expect(app.lastFrame()).not.toMatch(/Historical (?:work|notice)/u);
   await openSnapshotMenu(app, 'answer', connections[0]!);
   await vi.waitFor(() => {

@@ -19,7 +19,6 @@ export function DirectorView({ client, lang, onExit }: {
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [editor, setEditor] = useState(() => createEditorState(''));
   const editorRef = useRef(editor);
-  const submitting = useRef(false);
   const displayed = useRef(new Set<string>());
   const displayedMessages = useRef(new Set<string>());
   const mounted = useRef(true);
@@ -67,14 +66,13 @@ export function DirectorView({ client, lang, onExit }: {
     if (key.return) {
       const text = editorRef.current.text.trim();
       if (text.length === 0) return;
-      if (submitting.current || snapshot.state?.running != null) { append(getLabel('manager.conversation.busy', lang)); return; }
-      submitting.current = true;
       edit(commitEditorInput(editorRef.current, text));
       append(text, 'user');
       void client.submit({ kind: 'message', text }, (id) => { displayedMessages.current.add(id); }).then((result) => {
         if (result.kind === 'error') append(result.message);
         else if (result.kind === 'busy') append(getLabel('manager.conversation.busy', lang));
-      }).catch((error: unknown) => append(getErrorMessage(error))).finally(() => { submitting.current = false; });
+        else if (result.queuedMessageCount !== undefined) append(getLabel('manager.conversation.queued', lang, { count: String(result.queuedMessageCount) }));
+      }).catch((error: unknown) => append(getErrorMessage(error)));
       return;
     }
     const editing = resolveEditorKey(input, key, width);
@@ -89,6 +87,7 @@ export function DirectorView({ client, lang, onExit }: {
     {snapshot.connection !== 'connected' && <Text>{getLabel('manager.conversation.disconnected', lang)}</Text>}
     {snapshot.readStatus !== 'complete' && <Text>{getLabel(`manager.conversation.${snapshot.readStatus === 'reading' ? 'reading' : 'incomplete'}`, lang)}</Text>}
     {snapshot.state?.interrupted && <Text>{getLabel('manager.conversation.interrupted', lang)}</Text>}
+    {snapshot.state?.queuedMessageCount !== undefined && <Text>{getLabel('manager.conversation.waiting', lang, { count: String(snapshot.state.queuedMessageCount) })}</Text>}
     <PromptInput text={editor.text} cursor={editor.cursor} contentWidth={width}
       placeholder={getLabel('director.placeholder', lang)} hint="Enter / Ctrl+C" completions={[]} completionIndex={0} disabled={false} />
   </Box>;

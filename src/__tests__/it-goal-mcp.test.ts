@@ -23,6 +23,7 @@ import { saveGlobalConfig } from '../infra/config/global/globalConfig.js';
 import { ConversationStore } from '../infra/conversations/store.js';
 import { conversationRecord } from './helpers/conversation-fixtures.js';
 import { GoalStore } from '../infra/goals/store.js';
+import { isGoalContentIncluded } from '../infra/goals/git-command.js';
 import { GoalSchema } from '../infra/goals/schema.js';
 import { TaskRunner } from '../infra/task/index.js';
 import { LiveInterventionFileStore } from '../infra/workflow/live-intervention-store.js';
@@ -38,6 +39,12 @@ import * as githubPr from '../infra/github/pr.js';
 import type { CreatePrOptions } from '../infra/git/types.js';
 import * as processRunner from '../shared/utils/spawn.js';
 import { resolveCliInvocation } from '../shared/utils/cli-invocation.js';
+
+const prStatus = vi.hoisted(() => ({ command: vi.fn() }));
+vi.mock('../infra/github/pr-command.js', () => ({ runPrCommand: prStatus.command }));
+beforeEach(() => {
+  prStatus.command.mockReset().mockRejectedValue(new Error('GitHub fake is unavailable'));
+});
 
 vi.mock('../infra/github/pr.js', async (original) => ({
   ...await original<typeof import('../infra/github/pr.js')>(),
@@ -1560,6 +1567,8 @@ describe('goal PR publication and merge through manager MCP', () => {
   let branch: string;
   let sha: string;
   let prs: Array<CreatePrOptions & { number: number; url: string }>;
+  let prState: 'OPEN' | 'CLOSED' | 'MERGED';
+  let prHeadSha: string;
   const objective = '検証結果を人が確認できるようにする';
   const summary = '受け入れ条件を満たした。対象のテストが成功した。';
   const humanChecks = '結果の画面を開き、検証結果が表示されることを確認する。';
@@ -1584,6 +1593,15 @@ describe('goal PR publication and merge through manager MCP', () => {
     sha = git(cwd, ['commit-tree', tree, '-p', 'main', '-m', 'Expose goal verification results']);
     git(cwd, ['update-ref', `refs/heads/${branch}`, sha]);
     prs = [];
+    prState = 'OPEN';
+    prHeadSha = sha;
+    prStatus.command.mockImplementation(async (args: string[], root: string) => {
+      expect(root).toBe(cwd);
+      expect(args.slice(0, 3)).toEqual(['pr', 'view', pullRequest.url]);
+      return JSON.stringify({ ...pullRequest, headRefName: branch, baseRefName: 'main',
+        headRefOid: prHeadSha, baseRefOid: git(remote, ['rev-parse', 'main']),
+        mergeCommit: prState === 'MERGED' ? { oid: git(remote, ['rev-parse', 'main']) } : null, state: prState });
+    });
     vi.spyOn(GitHubProvider.prototype, 'checkCliStatus').mockReturnValue({ available: true });
     vi.mocked(githubPr.findExistingPr).mockReset().mockImplementation((head, root) => {
       expect(root).toBe(cwd);
@@ -1661,6 +1679,7 @@ describe('goal PR publication and merge through manager MCP', () => {
     const spawn = processRunner.spawnManagedProcess;
     return vi.spyOn(processRunner, 'spawnManagedProcess').mockImplementation((command, args, options, signal, lifecycle) => {
       if (command === 'git') return spawn(command, args, options, signal, lifecycle);
+      if (code === 0) prState = 'MERGED';
       const script = [
         "const { execFileSync } = require('node:child_process');",
         `execFileSync('git', ['--git-dir', ${JSON.stringify(remote)}, 'update-ref', 'refs/heads/main', ${JSON.stringify(target)}]);`,
@@ -1701,7 +1720,6 @@ describe('goal PR publication and merge through manager MCP', () => {
       expect((await new GoalStore(cwd).get(goalId)).completion?.targetSha).toBe(sha);
       expect(git(cwd, ['rev-parse', 'main'])).toBe(base);
       expect(snapshot()).toEqual(original);
-      console.info('remote completion evidence', { A: sha, B: base, M: sha });
     });
   });
 
@@ -1716,44 +1734,124 @@ describe('goal PR publication and merge through manager MCP', () => {
     });
   });
 
-  it('reopens a mismatched squash after branch deletion and integrates corrective task work', async () => {
+  it.each([
+    { path: 'merge tool', additionalCommits: 0, reopened: false },
+    { path: 'external merge', additionalCommits: 0, reopened: false },
+    { path: 'two review commits', additionalCommits: 2, reopened: false },
+    { path: 'reopened goal', additionalCommits: 0, reopened: true },
+  ])('completes a mismatched squash through $path without corrective tasks', async ({ path, additionalCommits, reopened }) => {
     const base = git(cwd, ['rev-parse', 'main']);
     const blob = git(cwd, ['hash-object', '-w', '--stdin'], 'changed during PR review\n');
     const tree = git(cwd, ['mktree'], `100644 blob ${blob}\tgoal-result.txt\n`);
     const merged = git(cwd, ['commit-tree', tree, '-p', base, '-m', 'squashed PR with review changes']);
     git(cwd, ['push', 'origin', `${merged}:refs/heads/merged`]);
-    mkdirSync(join(cwd, '.takt', 'workflows'), { recursive: true });
-    writeFileSync(join(cwd, '.takt', 'workflows', 'safe.yaml'), [
-      'name: safe', 'description: fixture', 'initial_step: work', 'steps:',
-      '  - name: work', '    instruction: "{task}"', '    rules:',
-      '      - condition: when(true)', '        next: COMPLETE', '',
-    ].join('\n'));
-    simulateRemoteMerge(true, merged);
+    for (let index = 0; index < additionalCommits; index++) {
+      prHeadSha = git(cwd, ['commit-tree', tree, '-p', prHeadSha, '-m', `human review change ${index + 1}`]);
+    }
+    if (additionalCommits > 0) {
+      expect(git(cwd, ['rev-list', '--count', `${sha}..${prHeadSha}`])).toBe('2');
+      expect(prHeadSha).not.toBe(sha);
+    }
+    writeFileSync(join(cwd, 'preserved.txt'), 'local work\n');
+    const snapshot = () => ({ head: git(cwd, ['rev-parse', 'HEAD']),
+      main: git(cwd, ['rev-parse', 'main']), goal: git(cwd, ['rev-parse', branch]),
+      index: existsSync(join(cwd, '.git', 'index')) ? readFileSync(join(cwd, '.git', 'index')) : undefined,
+      file: readFileSync(join(cwd, 'preserved.txt')) });
     await withMerge(async (client) => {
       const call = (name: string, args: Record<string, unknown> = {}) => client.callTool({ name, arguments: { cwd, goalId, ...args } });
-      expect((await merge(client)).isError).toBeUndefined();
+      if (reopened) {
+        const result = await call('takt_reopen_goal', { reason: '追加作業のため再開する' });
+        expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+        expect(await new GoalStore(cwd).get(goalId)).toMatchObject({ status: 'created', pullRequest, completion: { goalSha: sha } });
+      }
+      const original = snapshot();
+      const tasks = new TaskRunner(cwd).listTaskStateItems();
+      if (path === 'merge tool') {
+        simulateRemoteMerge(true, merged);
+        expect((await merge(client)).isError).toBeUndefined();
+      } else {
+        git(remote, ['update-ref', 'refs/heads/main', merged]);
+        prState = 'MERGED';
+      }
+      expect(git(cwd, ['rev-parse', `${sha}^{tree}`])).not.toBe(git(cwd, ['rev-parse', `${merged}^{tree}`]));
       const check = await call('takt_check_goal_completion');
-      expect(JSON.parse(firstTextContent(check.content))).toMatchObject({ included: false, goal: { status: 'awaiting_merge' } });
-      const reopened = await call('takt_reopen_goal', { reason: 'mainのレビュー変更を取り込む' });
-      expect(reopened.isError, firstTextContent(reopened.content)).toBeUndefined();
-      const enqueued = await call('takt_enqueue_goal_task', { task: 'mainを取り込む', purpose: 'squash後の内容を合わせる', workflow: 'safe' });
-      expect(enqueued.isError, firstTextContent(enqueued.content)).toBeUndefined();
-      const { taskName } = JSON.parse(firstTextContent(enqueued.content));
-      const runner = new TaskRunner(cwd);
-      expect(runner.listPendingTaskItems()).toEqual([expect.objectContaining({ data: expect.objectContaining({ base_branch: branch }) })]);
-      expect(runner.claimNextTasks(1)[0]!.name).toBe(taskName);
-      const corrected = git(cwd, ['commit-tree', tree, '-p', sha, '-p', merged, '-m', 'incorporate main review changes']);
-      const source = 'takt/corrective-result';
-      git(cwd, ['update-ref', `refs/heads/${source}`, corrected]);
-      const task = runner.updateRunningTaskExecution(taskName, { runSlug: 'corrective-run', branch: source });
-      runner.completeTask({ task, success: true, branch: source,
-        completion: { success: true, interrupted: false, branch: source, sha: corrected }, response: 'mainを取り込んだ',
-        executionLog: [], startedAt: '2026-10-15T00:00:00Z', completedAt: '2026-10-15T00:01:00Z' });
-      const integrated = await call('takt_merge_goal_task', { taskName, expectedSha: corrected });
-      expect(integrated.isError, firstTextContent(integrated.content)).toBeUndefined();
-      git(cwd, ['merge-base', '--is-ancestor', corrected, branch]);
-      expect((await new GoalStore(cwd).get(goalId)).status).toBe('created');
-      console.info('squash correction evidence', { A: sha, B: base, M: merged, corrected });
+      expect(check.isError, firstTextContent(check.content)).toBeUndefined();
+      expect(JSON.parse(firstTextContent(check.content))).toMatchObject({ included: true, goal: { status: 'completed' } });
+      expect(await new GoalStore(cwd).get(goalId)).toMatchObject({ status: 'completed',
+        completion: { goalSha: sha, targetSha: merged } });
+      expect(snapshot()).toEqual(original);
+      expect(new TaskRunner(cwd).listTaskStateItems()).toEqual(tasks);
+    });
+  });
+
+  it('keeps an included goal unchanged for a closed PR and completes it when only the PR state changes to merged through MCP', async () => {
+    await withMerge(async (client) => {
+      git(cwd, ['push', 'origin', `${sha}:refs/heads/main`]);
+      expect(await isGoalContentIncluded(cwd, sha, git(remote, ['rev-parse', 'main']), undefined)).toBe(true);
+      const store = new GoalStore(cwd);
+      await store.update(goalId, (goal) => ({ ...goal, questions: [{
+        id: '650e8400-e29b-41d4-a716-446655440001', kind: 'question', recipient: 'human',
+        body: '取り込みを確認してください', status: 'pending', createdAt: '2026-11-01T00:00:00.000Z',
+      }] }));
+      const before = await store.get(goalId);
+      const savedFile = join(cwd, '.takt', 'goals', goalId, 'goal.json');
+      const savedBytes = readFileSync(savedFile);
+      const tasks = new TaskRunner(cwd).listTaskStateItems();
+      const check = () => client.callTool({ name: 'takt_check_goal_completion', arguments: { cwd, goalId } });
+      prState = 'CLOSED';
+
+      const closed = await check();
+
+      expect(closed.isError, firstTextContent(closed.content)).toBeUndefined();
+      expect(JSON.parse(firstTextContent(closed.content))).toMatchObject({ included: false, goal: { status: 'awaiting_merge' } });
+      expect(await store.get(goalId)).toEqual(before);
+      expect(readFileSync(savedFile)).toEqual(savedBytes);
+      expect(new TaskRunner(cwd).listTaskStateItems()).toEqual(tasks);
+
+      prState = 'MERGED';
+      const merged = await check();
+      expect(merged.isError, firstTextContent(merged.content)).toBeUndefined();
+      expect(JSON.parse(firstTextContent(merged.content))).toMatchObject({ included: true, goal: { status: 'completed' } });
+      const completed = await store.get(goalId);
+      expect(completed.completion).toEqual({ ...before.completion, targetBranch: 'main', targetSha: sha });
+      expect(completed.questions).toEqual([expect.objectContaining({ id: before.questions![0]!.id, status: 'withdrawn' })]);
+      expect(completed.notifications?.filter(({ kind }) => kind === 'completed')).toEqual([
+        expect.objectContaining({ body: summary }),
+      ]);
+      expect(new TaskRunner(cwd).listTaskStateItems()).toEqual(tasks);
+    });
+  });
+
+  it.each(['closed without merge', 'different head', 'different base', 'unavailable GitHub'])('keeps an unincluded goal awaiting merge with %s through MCP', async (condition) => {
+    await withMerge(async (client) => {
+      if (condition === 'unavailable GitHub') prStatus.command.mockRejectedValue(new Error('not authenticated'));
+      else prStatus.command.mockResolvedValue(JSON.stringify({ ...pullRequest,
+        headRefName: condition === 'different head' ? 'another-goal' : branch,
+        baseRefName: condition === 'different base' ? 'develop' : 'main',
+        baseRefOid: git(remote, ['rev-parse', 'main']),
+        mergeCommit: condition === 'closed without merge' ? null : { oid: sha },
+        state: condition === 'closed without merge' ? 'CLOSED' : 'MERGED',
+      }));
+      const store = new GoalStore(cwd);
+      const before = await store.get(goalId);
+      const tasks = new TaskRunner(cwd).listTaskStateItems();
+      const result = await client.callTool({ name: 'takt_check_goal_completion', arguments: { cwd, goalId } });
+      expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+      expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ included: false, goal: { status: 'awaiting_merge' } });
+      expect(await store.get(goalId)).toEqual(before);
+      expect(new TaskRunner(cwd).listTaskStateItems()).toEqual(tasks);
+    });
+  });
+
+  it.each(['paused', 'aborted'] as const)('rejects completion of a %s goal even with a merged PR', async (executionStatus) => {
+    await withMerge(async (client) => {
+      prState = 'MERGED';
+      const store = new GoalStore(cwd);
+      await store.update(goalId, (goal) => ({ ...goal, executionStatus }));
+      const before = await store.get(goalId);
+      const result = await client.callTool({ name: 'takt_check_goal_completion', arguments: { cwd, goalId } });
+      expect(result.isError).toBe(true);
+      expect(await store.get(goalId)).toEqual(before);
     });
   });
 

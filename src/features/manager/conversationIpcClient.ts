@@ -17,7 +17,7 @@ const responseSchema = z.object({ protocolVersion: z.literal(1), type: z.literal
   result: z.unknown().optional(), error: z.object({ kind: z.literal('error'), code: z.string(), message: z.string() }).strict().optional() }).strict()
   .refine((response) => Object.hasOwn(response, 'result') !== (response.error !== undefined));
 const submissionSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('accepted'), operationId: z.uuid() }).strict(),
+  z.object({ kind: z.literal('accepted'), operationId: z.uuid(), queuedMessageCount: z.number().int().positive().optional() }).strict(),
   z.object({ kind: z.literal('busy'), operationId: z.uuid() }).strict(),
   z.object({ kind: z.literal('error'), code: z.string(), message: z.string() }).strict(),
 ]);

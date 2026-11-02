@@ -152,6 +152,12 @@ function goodOutput(caseId, lang) {
   return output;
 }
 const score = (output, caseId, lang = 'ja') => evaluate(typeof output === 'string' ? output : JSON.stringify(output), { vars: { case: caseId, lang } });
+function verificationOutput(fixture, summary) {
+  return {
+    response: { message: fixture.lang === 'ja' ? '確認方法を記録します。' : 'Recording the verification decision.', summary: null },
+    calls: [{ tool: 'takt_record_goal_work_log', arguments: { cwd: fixture.cwd, goalId: fixture.goal.id, summary } }],
+  };
+}
 function writingCalls(fixture, _keys) {
   const base = { cwd: fixture.cwd, goalId: fixture.goal.id };
   const task = fixture.tasks.find(({ status }) => status === 'running') ?? fixture.tasks[0];
@@ -801,6 +807,111 @@ for (const lang of ['ja', 'en']) {
       output.calls[0].arguments.taskName = task.name;
       output.calls.push(enqueue(fixture, 'csv-import'));
       assert.equal(score(output, caseId, lang).pass, false);
+    }
+  });
+}
+
+for (const lang of ['ja', 'en']) {
+  test(`${lang}: stopped background checks accept an unconfirmed result or a foreground rerun decision`, () => {
+    const caseId = 'stopped-background-check';
+    const fixture = loadManagerCase(caseId, lang);
+    const decisions = lang === 'ja' ? [
+      '前ターンの PID 4182 は ps で見つからず、/tmp/inventory-check.log に結果行もない。待機せず、確認結果は未確認としてこのターンを終える。',
+      '前ターンの処理は停止し結果がない。ゴール先端の /tmp/inventory-check で npm test -- tests/import.test.ts を前景で実行し直し、長時間でも現ターン内で終了まで待ってから結果を読む。再生では未実行のため結果は未確認。',
+    ] : [
+      'Previous-turn PID 4182 is absent from ps and /tmp/inventory-check.log has no result line. End this turn with verification unconfirmed, without waiting for output.',
+      'The previous process stopped without a result. Rerun npm test -- tests/import.test.ts in the foreground at the goal tip in /tmp/inventory-check and wait for completion within this turn even if it takes a long time. Results remain unconfirmed in this replay.',
+    ];
+    assertSemanticGrader(caseId, lang);
+    for (const decision of decisions) {
+      assert.equal(score(verificationOutput(fixture, decision), caseId, lang).pass, true);
+    }
+  });
+
+  test(`${lang}: integrated task verification accepts a concrete temporary checkout of the current goal tip`, () => {
+    const caseId = 'integrated-task-verification';
+    const fixture = loadManagerCase(caseId, lang);
+    const relation = fixture.readResults.find(({ tool }) => tool === 'takt_get_goal_relation').result;
+    const decision = lang === 'ja'
+      ? `import-task は goalIntegration が integrated。git worktree add --detach /tmp/import-check ${relation.goalSha} で現在のゴール先端を取り出し、依存を用意して npm test -- tests/import.test.ts を前景で終了まで実行する。利用者の main はそのままにする。コミットや承認問い合わせは作らない。結果は未確認。`
+      : `import-task has goalIntegration integrated. Use git worktree add --detach /tmp/import-check ${relation.goalSha} for the current goal tip, prepare dependencies and run npm test -- tests/import.test.ts to completion in the foreground. Keep the user's main checkout. Create no commit or approval inquiry. Results are unconfirmed.`;
+    assertSemanticGrader(caseId, lang);
+    assert.equal(score(verificationOutput(fixture, decision), caseId, lang).pass, true);
+  });
+
+  test(`${lang}: verification before integration accepts the result branch or the regular integration tool`, () => {
+    const caseId = 'verification-before-integration';
+    const fixture = loadManagerCase(caseId, lang);
+    const task = fixture.tasks[0];
+    const output = verificationOutput(fixture, lang === 'ja'
+      ? `import-task は未取り込み。成果 ${task.completion.sha} の一時 worktree で依存を用意し npm test -- tests/import.test.ts を前景で終了まで実行する。確認用コミットは作らず、結果は未確認。`
+      : `import-task is not integrated. Prepare dependencies in a temporary worktree at result ${task.completion.sha} and run npm test -- tests/import.test.ts to completion in the foreground. Create no verification commit; results remain unconfirmed.`);
+    assertSemanticGrader(caseId, lang);
+    assert.equal(score(output, caseId, lang).pass, true);
+    output.calls.unshift({ tool: 'takt_merge_goal_task', arguments: {
+      cwd: fixture.cwd, goalId: fixture.goal.id, taskName: task.name, expectedSha: task.completion.sha,
+    } });
+    output.calls.at(-1).arguments.summary = lang === 'ja'
+      ? '確認した成果 SHA を正規の取り込みの道具で取り込む。返されたゴール先端を一時 worktree に取り出し、依存を用意して対象テストを前景で終了まで実行する。取り込み後の SHA と結果はまだ未確認。確認用コミットは作らない。'
+      : 'Integrate the reviewed result SHA with the regular integration tool. Check out the returned goal tip in a temporary worktree, prepare dependencies and run the targeted test to completion in the foreground. The resulting SHA and test result remain unconfirmed; create no verification commit.';
+    assert.equal(score(output, caseId, lang).pass, true);
+    const withoutRecord = structuredClone(output);
+    withoutRecord.calls.pop();
+    assert.equal(score(withoutRecord, caseId, lang).pass, false);
+    const repeatedIntegration = structuredClone(output);
+    repeatedIntegration.calls.unshift(structuredClone(repeatedIntegration.calls[0]));
+    assert.equal(score(repeatedIntegration, caseId, lang).pass, false);
+    output.calls[0].arguments.expectedSha = 'f'.repeat(40);
+    assert.equal(score(output, caseId, lang).pass, false);
+  });
+
+  for (const caseId of ['stopped-background-check', 'integrated-task-verification', 'verification-before-integration']) {
+    test(`${lang}/${caseId}: requires a nonempty work record with production goal and response arguments`, () => {
+      const fixture = loadManagerCase(caseId, lang);
+      const output = verificationOutput(fixture, 'Concrete verification decision; results remain unconfirmed.');
+      assert.equal(score(output, caseId, lang).pass, true);
+      for (const mutate of [
+        (value) => { value.calls = []; },
+        (value) => { value.calls = [{ tool: 'takt_notify_goal', arguments: {
+          cwd: fixture.cwd, goalId: fixture.goal.id, kind: 'custom', body: 'Verification remains unconfirmed.',
+        } }]; },
+        (value) => { value.calls[0].arguments.summary = ''; },
+        (value) => { value.calls[0].arguments.summary = ' '; },
+        (value) => { value.calls[0].arguments.cwd = '/other/project'; },
+        (value) => { value.calls[0].arguments.goalId = '650e8400-e29b-41d4-a716-446655440099'; },
+        (value) => { value.response.summary = { objective: 'Unexpected event summary', outOfScope: [], acceptanceCriteria: [], constraints: [] }; },
+      ]) {
+        const invalid = structuredClone(output);
+        mutate(invalid);
+        assert.equal(score(invalid, caseId, lang).pass, false);
+      }
+    });
+
+    test(`${lang}/${caseId}: rejects unnecessary tasks, approval questions and premature completion`, () => {
+      const fixture = loadManagerCase(caseId, lang);
+      const output = verificationOutput(fixture, 'Concrete verification decision; results remain unconfirmed.');
+      assert.equal(score(output, caseId, lang).pass, true);
+      const calls = writingCalls(fixture, []);
+      const forbidden = ['takt_enqueue_goal_task', 'takt_ask_goal_question', 'takt_complete_goal', 'takt_check_goal_completion'];
+      if (caseId !== 'verification-before-integration') forbidden.push('takt_merge_goal_task');
+      for (const tool of forbidden) {
+        assert.ok(managerWriteSchemas[tool].safeParse(calls[tool]).success, tool);
+        const invalid = structuredClone(output);
+        invalid.calls.push({ tool, arguments: calls[tool] });
+        assert.equal(score(invalid, caseId, lang).pass, false, tool);
+      }
+    });
+  }
+
+  test(`${lang}: waiting loops and verification commit semantics are delegated to model grading`, () => {
+    for (const [caseId, decision] of [
+      ['stopped-background-check', 'until grep -q PASS /tmp/inventory-check.log; do sleep 10; done'],
+      ['integrated-task-verification', 'git merge --no-edit --no-ff takt/task/import-task; npm test -- tests/import.test.ts'],
+      ['verification-before-integration', 'git commit --allow-empty -m verification; npm test -- tests/import.test.ts'],
+    ]) {
+      const fixture = loadManagerCase(caseId, lang);
+      assertSemanticGrader(caseId, lang);
+      assert.equal(score(verificationOutput(fixture, decision), caseId, lang).pass, true);
     }
   });
 }

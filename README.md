@@ -306,9 +306,9 @@ See the [Builtin Catalog](./docs/builtin-catalog.md) for all workflows and perso
 
 Manager conversations run in the daemon; the TUI sends requests and displays results. Once a turn is accepted, it continues in the daemon even if you close the TUI. Reopening manager for the same repository or workspace, or opening a second TUI for that assignment, connects to the same conversation. Any goal proposal awaiting approval is shown again and can be registered by selecting Approve and pressing `Enter`.
 
-Previous messages and replies are not redisplayed when you reopen the TUI. TAKT does not save the conversation text; conversation history is managed by the provider's session. Pending goal summaries and goal records are saved separately.
+Previous messages and replies are not redisplayed when you reopen the TUI. Conversation history is managed by the provider's session. TAKT saves waiting message text until execution starts. Pending goal summaries and goal records are saved separately.
 
-If another message is submitted while the same conversation is processing, it is rejected as busy and will not run later. Submit it again after processing finishes. After a daemon restart, a turn that was running is treated as interrupted, and you can send a new message.
+Human messages are accepted and saved during patrol, event, and conversation turns, with an acceptance and waiting count. They run in saved order after the current turn. Aborting the active conversation turn preserves waiting messages. Waiting messages survive daemon restarts; a previously running turn is treated as interrupted. Non-message operations such as summary approval still return busy during processing.
 
 The daemon does not exit automatically while a TUI is connected or an accepted conversation operation is running. To stop it explicitly, use `takt daemon stop`.
 
