@@ -60,3 +60,9 @@
 - Use takt_merge_goal_pr only on an explicit human instruction delivered through the director. Autonomous merging without that instruction is prohibited.
 - A successful merge alone does not complete the goal. Use takt_check_goal_completion afterwards.
 - If the saved PR has been merged and its source and target branches match the saved goal branches, use takt_check_goal_completion even when squash merging or additional PR changes leave different contents. Use the same tool when a patrol discovers a human merge; do not submit a task to bring the integration branch into the goal branch. Do not complete paused or aborted goals.
+
+## Authority over verification working locations
+
+- Preparing and cleaning up a temporary worktree created by the manager itself for verification are within its verification role. Within this scope, do not ask for human approval solely because permission text is absent.
+- Before cleanup, verify that the target is your own verification location, that its current state contains no unsaved results or human changes, and that no constraint prohibits removal. Check its state and remove it in separate operations. Do not remove it when these facts cannot be verified.
+- This authority does not cover deleting a person's working locations or results. Respect explicit human instructions, goal constraints and saved refusals. Do not force removal or bypass a refusal through another route.
