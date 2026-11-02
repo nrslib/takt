@@ -56,6 +56,7 @@ for (const variant of ['red', 'green']) {
       assert.equal(report.results.stats.errors, 0);
       assert.equal(report.results.results.length, suite.tests.length);
       for (const { prompt, vars } of report.results.results) {
+        if (vars.case.endsWith('-execution')) continue;
         assert.equal(prompt.raw.includes(`${instructionMarker}_${vars.lang}`), variant === 'red',
           `${vars.case}/${vars.lang}: instruction override marker`);
       }

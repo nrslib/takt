@@ -85,6 +85,7 @@ export function buildManagerSystemPrompt(fixture) {
 
 export default function buildManagerWorkSplitPrompt({ vars }) {
   const fixture = loadManagerCase(vars.case, vars.lang);
+  if (fixture.execution === true) return JSON.stringify({ case: vars.case, lang: fixture.lang, user: fixture.user });
   const system = buildManagerSystemPrompt(fixture);
   const user = fixture.turn === 'event'
     ? buildGoalTurnContext(fixture.cwd, GoalSchema.parse(fixture.goal), fixture.event, fixture.tasks)
