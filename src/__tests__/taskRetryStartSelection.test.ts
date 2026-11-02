@@ -195,6 +195,28 @@ beforeEach(() => {
   mockWarn.mockReset();
 });
 
+describe('workflow initial start for checkpoint-less recovery', () => {
+  it('leaves execution ownership to the configured initial step even when it is not the first leaf', () => {
+    const workflow = makeWorkflow({ name: 'default', ref: 'project:root',
+      steps: [agentStep('wrong-first'), agentStep('initial'), agentStep('failed')], initialStep: 'initial' });
+    const options = { ...pathContext, allowInitialStart: true, preferredRootStep: 'failed' };
+    const model = buildTaskRetryStartOptions(workflow, options);
+    const selected = resolveTaskRetryStartOption(workflow, options, model.defaultId);
+    expect(selected.selection).toEqual({ kind: 'initial' });
+    expect(resolveTaskRetryStartOwnership(selected.selection, workflow)).toEqual({});
+  });
+
+  it('does not replace a saved position with initial start when both are available', () => {
+    const workflow = makeWorkflow({ name: 'default', ref: 'project:root', steps: [agentStep('plan'), agentStep('implement')] });
+    const saved = rootResumePoint('implement', 'agent');
+    const options = { ...pathContext, allowInitialStart: true, resumePoint: saved };
+    const model = buildTaskRetryStartOptions(workflow, options);
+    const selected = resolveTaskRetryStartOption(workflow, options, model.defaultId);
+    expect(selected.selection).toEqual({ kind: 'resume', resumePoint: saved });
+    expect(resolveTaskRetryStartOwnership(selected.selection, workflow).resumePoint).toEqual(saved);
+  });
+});
+
 describe('invalid saved resume position', () => {
   it.each([false, true])('should retain a root checkpoint with matching names, with matching ref: %s', async (matching) => {
     const currentRef = `project:sha256:${'b'.repeat(64)}`;

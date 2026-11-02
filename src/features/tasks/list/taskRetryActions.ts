@@ -12,7 +12,6 @@ import { info, header, blankLine, status, warn } from '../../../shared/ui/index.
 import type {
   WorkflowConfig,
   WorkflowRestartPoint,
-  WorkflowResumePoint,
 } from '../../../core/models/index.js';
 import {
   loadRunSessionContext,
@@ -41,6 +40,7 @@ import {
   InvalidTaskRetryResumeWithoutRestartError,
   resolveTaskRetryStartOwnership,
   type TaskRetryStartSelection,
+  type SelectTaskRetryStartOptions,
 } from './taskRetryStartSelection.js';
 import {
   buildFailedTaskRetryStartContext,
@@ -75,12 +75,7 @@ function displayFailureInfo(task: TaskListItem, failure: TaskFailure): void {
 
 async function selectRetryStart(
   workflowConfig: WorkflowConfig,
-  options: {
-    projectCwd: string;
-    lookupCwd: string;
-    resumePoint?: WorkflowResumePoint;
-    preferredRootStep?: string;
-  },
+  options: SelectTaskRetryStartOptions,
 ): Promise<TaskRetryStartSelection | null> {
   const result = await selectTaskRetryStart(
     workflowConfig,
@@ -180,7 +175,7 @@ async function prepareFailedTaskRetrySelection(
 
   let startContext: FailedTaskRetryStartContext;
   try {
-    startContext = buildFailedTaskRetryStartContext(preparation, projectDir, selectedWorkflow);
+    startContext = buildFailedTaskRetryStartContext(preparation, projectDir, selectedWorkflow, true);
   } catch (error) {
     if (!(error instanceof InvalidTaskRetryResumeWithoutRestartError)) {
       throw error;

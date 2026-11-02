@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TaskListItem } from '../infra/task/index.js';
 import type { WorkflowConfig } from '../core/models/index.js';
+import type { TaskRetryRunSelection } from '../features/tasks/taskRetryRunSelection.js';
 
 const {
-  mockFindRunForTask,
-  mockReadRunMetaBySlug,
+  mockResolveRunSelection,
   mockResolveTaskWorkflowValue,
   mockLoadWorkflowByIdentifier,
   mockResolveWorkflowCallTarget,
@@ -12,8 +12,7 @@ const {
   mockAssertReusableWorktreePath,
   mockAssertPrMergeRetryWorktreePath,
 } = vi.hoisted(() => ({
-  mockFindRunForTask: vi.fn((_cwd: string, _taskContent: string): string | null => null),
-  mockReadRunMetaBySlug: vi.fn((_cwd: string, _slug: string, _onWarning?: (message: string) => void) => null),
+  mockResolveRunSelection: vi.fn<(_task: TaskListItem, _cwd: string) => TaskRetryRunSelection>(),
   mockResolveTaskWorkflowValue: vi.fn((data?: Record<string, unknown>) => (
     typeof data?.workflow === 'string' ? data.workflow : undefined
   )),
@@ -35,18 +34,8 @@ vi.mock('../infra/config/index.js', () => ({
   resolveWorkflowCallTarget: (...args: unknown[]) => mockResolveWorkflowCallTarget(...args),
 }));
 
-vi.mock('../core/workflow/run/run-meta.js', () => ({
-  readRunMetaBySlug: (cwd: string, slug: string, onWarning?: (message: string) => void) =>
-    mockReadRunMetaBySlug(cwd, slug, onWarning),
-}));
-
-vi.mock('../shared/ui/index.js', () => ({
-  warn: vi.fn(),
-}));
-
-vi.mock('../shared/utils/text.js', async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  sanitizeTerminalText: (value: string) => value,
+vi.mock('../features/tasks/taskRetryRunSelection.js', () => ({
+  resolveTaskRetryRunSelection: mockResolveRunSelection,
 }));
 
 vi.mock('../features/tasks/orderRevision.js', () => ({
@@ -64,10 +53,6 @@ vi.mock('../features/tasks/execute/reusedWorktree.js', () => ({
   },
 }));
 
-vi.mock('../features/interactive/runSessionReader.js', () => ({
-  findRunForTask: (cwd: string, taskContent: string) => mockFindRunForTask(cwd, taskContent),
-}));
-
 vi.mock('../features/tasks/list/requeueHelpers.js', () => ({
   resolveSelectedWorkflowOverride: (previousWorkflow: string | undefined, selectedWorkflow: string) => (
     previousWorkflow === selectedWorkflow ? undefined : selectedWorkflow
@@ -78,6 +63,7 @@ import {
   buildFailedTaskRetryStartContext,
   prepareFailedTaskRetry,
   resolveFailedTaskRetryStart,
+  describeFailedTaskRetryStart,
 } from '../features/tasks/taskRetryPreparation.js';
 
 const workflow: WorkflowConfig = {
@@ -108,6 +94,10 @@ describe('prepareFailedTaskRetry', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockLoadWorkflowByIdentifier.mockReturnValue(workflow);
+    mockResolveRunSelection.mockImplementation((task) => ({
+      matchedRunSlug: task.data?.resume_point === undefined ? null : task.runSlug ?? null,
+      runMeta: null, resumePoint: task.data?.resume_point, skippedRuns: [],
+    }));
   });
 
   it('loads shared failed-task context from its worktree, run, and canonical order', () => {
@@ -117,7 +107,7 @@ describe('prepareFailedTaskRetry', () => {
       worktreePath: '/project/.worktrees/task-a',
       failure: { step: 'implement', error: 'build failed' },
       failedStep: 'implement',
-      matchedRunSlug: 'run-a',
+      matchedRunSlug: null,
       previousWorkflow: 'default',
       previousOrderContent: 'Canonical order',
     });
@@ -130,8 +120,7 @@ describe('prepareFailedTaskRetry', () => {
       '.takt/tasks/task-a',
       'task text',
     );
-    expect(mockReadRunMetaBySlug).toHaveBeenCalledWith('/project/.worktrees/task-a', 'run-a', expect.any(Function));
-    expect(mockFindRunForTask).not.toHaveBeenCalled();
+    expect(mockResolveRunSelection).toHaveBeenCalledWith(failedTask, '/project/.worktrees/task-a');
   });
 
   it('prepares a clone failure without execution history from the project and canonical order', () => {
@@ -146,7 +135,7 @@ describe('prepareFailedTaskRetry', () => {
       freshStart: true, worktreePath: undefined, interactionCwd: '/project', runsBaseDir: '/project',
       matchedRunSlug: null, previousOrderContent: 'Canonical order',
     });
-    expect(mockFindRunForTask).not.toHaveBeenCalled();
+    expect(mockResolveRunSelection).not.toHaveBeenCalled();
     expect(mockAssertReusableWorktreePath).not.toHaveBeenCalled();
   });
 
@@ -201,37 +190,14 @@ describe('prepareFailedTaskRetry', () => {
     const preparation = prepareFailedTaskRetry(task, '/project');
     expect(preparation).toMatchObject({ worktreePath: failedTask.worktreePath,
       interactionCwd: '/project', runsBaseDir: '/project' });
-    expect(mockReadRunMetaBySlug).toHaveBeenCalledWith('/project', 'run-a', expect.any(Function));
+    expect(mockResolveRunSelection).toHaveBeenCalledWith(task, '/project');
     buildFailedTaskRetryStartContext(preparation, '/project', 'default');
     expect(mockLoadWorkflowByIdentifier).toHaveBeenCalledWith('default', '/project', { lookupCwd: '/project' });
   });
 
-  it('merge taskにrunSlugがなければ同文の別taskのrun履歴を拾わない', () => {
-    mockFindRunForTask.mockReturnValue('unrelated-run');
-    const task: TaskListItem = { ...failedTask, runSlug: undefined,
-      data: { ...failedTask.data, task: failedTask.content, merge_task: true, merge_clone_prepared: true } };
-
-    const preparation = prepareFailedTaskRetry(task, '/project');
-
-    expect(preparation.matchedRunSlug).toBeNull();
-    expect(preparation.runMeta).toBeNull();
-    expect(mockFindRunForTask).not.toHaveBeenCalled();
-    expect(mockReadRunMetaBySlug).not.toHaveBeenCalled();
-  });
-
-  it('通常taskにrunSlugがなければcontentからrun履歴を探す', () => {
-    mockFindRunForTask.mockReturnValue('matched-run');
-    const task: TaskListItem = { ...failedTask, runSlug: undefined };
-
-    const preparation = prepareFailedTaskRetry(task, '/project');
-
-    expect(preparation.matchedRunSlug).toBe('matched-run');
-    expect(mockFindRunForTask).toHaveBeenCalledWith(failedTask.worktreePath, failedTask.content);
-  });
-
-  it('uses the previous workflow and resolves the selected existing start option', () => {
+  it('uses the previous workflow and defaults to its beginning without a checkpoint', () => {
     const preparation = prepareFailedTaskRetry(failedTask, '/project');
-    const context = buildFailedTaskRetryStartContext(preparation, '/project', 'default');
+    const context = buildFailedTaskRetryStartContext(preparation, '/project', 'default', true);
 
     expect(mockLoadWorkflowByIdentifier).toHaveBeenCalledWith(
       'default',
@@ -241,7 +207,16 @@ describe('prepareFailedTaskRetry', () => {
     expect(context.workflowOverride).toBeUndefined();
     expect(context.startOptions.options.length).toBeGreaterThan(0);
     const resolved = resolveFailedTaskRetryStart(context, context.startOptions.defaultId);
-    expect(resolved.label).toContain('implement');
+    expect(resolved.startStep).toBeUndefined();
+    expect(resolved.resumePoint).toBeUndefined();
+    expect(resolved.restartPoint).toBeUndefined();
+  });
+
+  it('preserves the task list default unless initial recovery is explicitly enabled', () => {
+    const preparation = prepareFailedTaskRetry(failedTask, '/project');
+    const context = buildFailedTaskRetryStartContext(preparation, '/project', 'default');
+    const resolved = resolveFailedTaskRetryStart(context, context.startOptions.defaultId);
+    expect(context.options.allowInitialStart).toBeUndefined();
     expect(resolved.restartPoint?.stack[0]?.step).toBe('implement');
   });
 
@@ -313,7 +288,8 @@ describe('prepareFailedTaskRetry', () => {
 
     const preparation = prepareFailedTaskRetry(task, '/project');
     const context = buildFailedTaskRetryStartContext(preparation, '/project', 'default');
-    const resolved = resolveFailedTaskRetryStart(context, context.startOptions.defaultId);
+    const restart = context.startOptions.options.find((option) => option.selectable && option.id.startsWith('restart:'))!;
+    const resolved = resolveFailedTaskRetryStart(context, restart.id);
 
     expect(preparation.resumePoint).toBeUndefined();
     expect(context.options.resumePoint).toBeUndefined();
@@ -328,5 +304,31 @@ describe('prepareFailedTaskRetry', () => {
     expect(() => prepareFailedTaskRetry(task, '/project'))
       .toThrow('Failed task retry action requires failed task. received: exceeded');
     expect(mockAssertReusableWorktreePath).not.toHaveBeenCalled();
+  });
+
+  it.each(['en', 'ja'] as const)('describes initial start, absent source and skipped run in %s', (lang) => {
+    const preparation = prepareFailedTaskRetry(failedTask, '/project');
+    const context = buildFailedTaskRetryStartContext(preparation, '/project', 'default', true);
+    const start = resolveFailedTaskRetryStart(context, context.startOptions.defaultId);
+    const description = describeFailedTaskRetryStart({ ...preparation,
+      skippedRuns: [{ runSlug: 'startup-run', reason: 'missing_resume_point' }],
+    }, start, lang);
+
+    expect(description).toContain('startup-run');
+    expect(description).toMatch(lang === 'en' ? /initial.*source.*none/is : /初期.*継承元.*なし/s);
+    expect(description).toMatch(lang === 'en' ? /no saved resume position/ : /再開位置がない/);
+  });
+
+  it('sanitizes selected and skipped run names before including them in a notice', () => {
+    const preparation = prepareFailedTaskRetry(failedTask, '/project');
+    const description = describeFailedTaskRetryStart({ ...preparation, matchedRunSlug: 'selected-\u001b[2J',
+      skippedRuns: [{ runSlug: 'skipped-\rforged', reason: 'missing_reports' }],
+    }, { label: 'implement', startStep: 'implement', resumePoint: undefined,
+      restartPoint: undefined, sourceResumePoint: undefined }, 'en');
+
+    expect(description).toContain('selected-');
+    expect(description).toContain('skipped-');
+    expect(description).not.toContain('\u001b');
+    expect(description).not.toContain('\r');
   });
 });

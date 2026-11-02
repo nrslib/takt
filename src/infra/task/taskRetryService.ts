@@ -20,7 +20,7 @@ export interface TaskRetryOptions {
   resumePoint?: WorkflowResumePoint;
   workflow?: string;
   taskDir?: string;
-  sourceRunSlug?: string;
+  sourceRunSlug?: string | null;
   restartPoint?: WorkflowRestartPoint;
   sourceResumePoint?: WorkflowResumePoint;
 }
@@ -137,11 +137,12 @@ function getAutoRequeueSkipResult(
 }
 
 function resolveResumeSource(
-  explicitSourceRunSlug: string | undefined,
+  explicitSourceRunSlug: string | null | undefined,
   task: TaskRecord,
   resumeMode: RunResumeSource['resumeMode'],
 ): RunResumeSource {
-  const sourceRunSlug = explicitSourceRunSlug ?? task.run_slug ?? task.source_run_slug;
+  const sourceRunSlug = explicitSourceRunSlug === null
+    ? undefined : explicitSourceRunSlug ?? task.run_slug ?? task.source_run_slug;
   return {
     ...(sourceRunSlug ? { sourceRunSlug } : {}),
     resumeMode,

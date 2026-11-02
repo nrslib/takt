@@ -117,6 +117,25 @@ describe('persistFailedTaskRetry', () => {
     expect(mockPersistRevision).not.toHaveBeenCalled();
   });
 
+  it('preserves an explicit absent source when restarting in the existing worktree', async () => {
+    await persistFailedTaskRetry({
+      ...retryOptions,
+      task: { ...failedTask, runSlug: 'stopped-before-start', sourceRunSlug: 'older-run' },
+      sourceRunSlug: null,
+      startStep: undefined,
+      resumePoint: undefined,
+      restartPoint: undefined,
+    });
+
+    expect(mockRequeueTask).toHaveBeenCalledWith('task-a', ['failed'], expect.objectContaining({
+      sourceRunSlug: null,
+      startStep: undefined,
+      resumePoint: undefined,
+      restartPoint: undefined,
+    }));
+    expect(mockAssertReusableWorktreePath).toHaveBeenCalledWith('/project', failedTask.worktreePath);
+  });
+
   it('未準備のPR merge cloneがまだ存在しなくても保存済みpathでrequeueする', async () => {
     await persistFailedTaskRetry({ ...retryOptions,
       task: { ...failedTask, data: { task: failedTask.content, merge_task: true, merge_clone_prepared: false } },
@@ -143,7 +162,7 @@ describe('persistFailedTaskRetry', () => {
       { workflow: undefined, worktreePath: undefined },
     );
     expect(mockRequeueTask).toHaveBeenCalledWith('task-a', ['failed'], expect.objectContaining({
-      freshStart: true, taskDir: '.takt/tasks/task-a', sourceRunSlug: undefined,
+      freshStart: true, taskDir: '.takt/tasks/task-a',
     }));
   });
 

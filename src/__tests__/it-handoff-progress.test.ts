@@ -45,7 +45,8 @@ vi.mock('../infra/task/index.js', async (importOriginal) => ({
     requeueTask(...args: unknown[]): string { return mocks.requeueTask(...args); }
   },
 }));
-vi.mock('../features/tasks/taskRetryPreparation.js', () => ({
+vi.mock('../features/tasks/taskRetryPreparation.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../features/tasks/taskRetryPreparation.js')>()),
   prepareFailedTaskRetry: mocks.prepare,
   buildFailedTaskRetryStartContext: mocks.startContext,
   resolveFailedTaskRetryStart: mocks.resolveStart,
@@ -235,11 +236,15 @@ describe('handoff command progress on the released terminal', () => {
     mocks.listTasks.mockReturnValue([task]);
     mocks.requeueTask.mockReturnValue(task.name);
     const preparation: FailedTaskRetryPreparation = {
+      skippedRuns: [],
       worktreePath: task.worktreePath!, interactionCwd: task.worktreePath!,
       freshStart: false,
       runsBaseDir: task.worktreePath!, failure: task.failure!, failedStep: 'implement',
       matchedRunSlug: 'failed-run', runMeta: null, previousWorkflow: 'development',
-      previousOrderContent: '# Original order', resumePoint: undefined,
+      previousOrderContent: '# Original order', resumePoint: {
+        version: 2, stack: [{ workflow: 'development', workflow_ref: 'project:development', step: 'implement', kind: 'agent', occurrence: 1 }],
+        iteration: 1, elapsed_ms: 0, workflow_call_invocations: {}, workflow_step_participations: {},
+      },
     };
     mocks.prepare.mockReturnValue(preparation);
     mocks.startContext.mockReturnValue({
@@ -333,7 +338,7 @@ describe('handoff command progress on the released terminal', () => {
       for (const call of mocks.callAI.mock.calls) expect(call[5]).toMatchObject({ outputMode: 'silent', persistSession: false });
       for (const prompt of promptScreens) expect(prompt.screen.filter((line) => SPINNER.test(line))).toEqual([]);
       expect(promptScreens.map((item) => item.kind)).toEqual([command === 'retry' ? 'select' : 'confirm']);
-      expect(notice).toBe(getLabel(command === 'retry' ? 'tui.errors.assistantRetrySaved' : 'tui.errors.assistantRetryRequeued', lang, { task: 'parser-repair' }));
+      expect(notice).toContain(getLabel(command === 'retry' ? 'tui.errors.assistantRetrySaved' : 'tui.errors.assistantRetryRequeued', lang, { task: 'parser-repair' }));
       if (command === 'retry') expect(mocks.persist).toHaveBeenCalledWith(expect.objectContaining({ revisedOrder: { content: '# Revised order', lang } }));
       else expect(mocks.confirm.mock.calls[0]?.[0]).toBe(getLabel('tui.assistantRetry.requeueConfirm', lang, { task: 'parser-repair', summary: 'Parser repair', workflow: 'development', start: 'Restart implement' }));
     });

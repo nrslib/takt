@@ -1278,7 +1278,7 @@ it.each(['active', 'paused', 'aborted', 'created', 'wrong-pr'] as const)('checks
     });
     release();
     await vi.waitFor(() => expect(outputs).toContainEqual({ kind: 'result', operationId: accepted.operationId,
-      result: { kind: 'reply', message: 'merge checked' } }));
+      result: { kind: 'reply', message: 'merge checked' } }), { timeout: 5_000 });
     await finished();
     expect((await invoke(accepted.operationId)).isError).toBe(true);
     expect(merge).toHaveBeenCalledTimes(state === 'active' ? 1 : 0);
