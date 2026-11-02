@@ -435,9 +435,15 @@ export function createConversationService(input: {
     await publish(conversation, { kind: 'pending', state }, outputVersion);
     await publish(conversation, { kind: 'result', operationId: operation.id, result }, outputVersion);
   };
+  const nextRunnableMessage = (conversation: LoadedConversation) => {
+    const message = conversation.record.directorMessages?.[0];
+    // Approval recovery must be able to acquire the slot before human input replaces its proposal.
+    if (message?.directorConversationId === undefined && conversation.record.approval?.state === 'reserved') return undefined;
+    return message;
+  };
   const startQueuedMessage = (conversation: LoadedConversation): void => {
     if (closed || conversation.storageFailed || conversation.active !== undefined) return;
-    const message = conversation.record.directorMessages?.[0];
+    const message = nextRunnableMessage(conversation);
     if (message === undefined || !scheduler.tryAcquire(conversation.record.id, message.operationId)) return;
     const operation: Operation = { id: message.operationId, controller: new AbortController(), cleanupComplete: false,
       queued: true,
@@ -454,8 +460,7 @@ export function createConversationService(input: {
         }
         const priorPending = conversation.record.pending;
         const humanMessage = message.directorConversationId === undefined;
-        const advancesRevision = humanMessage && conversation.record.approval?.state !== 'reserved'
-          && conversation.record.revision < Number.MAX_SAFE_INTEGER;
+        const advancesRevision = humanMessage && conversation.record.revision < Number.MAX_SAFE_INTEGER;
         save(conversation, { ...conversation.record, directorMessages: conversation.record.directorMessages!.slice(1),
           lastSpeaker: message.speaker,
           ...(advancesRevision
@@ -466,7 +471,6 @@ export function createConversationService(input: {
         started = true;
         const assignment = await currentAssignment(conversation);
         operation.controller.signal.throwIfAborted();
-        if (humanMessage && conversation.record.approval?.state === 'reserved') throw new ConversationError('registration_recovery');
         if (humanMessage && !advancesRevision) throw new ConversationError('operation_failed');
         try { speakers.write({ conversationId: conversation.record.id, operationId: message.operationId, actor: message.speaker }); }
         catch { throw new ConversationError('storage_error'); }
@@ -516,7 +520,7 @@ export function createConversationService(input: {
       if (interrupted !== undefined) await notifyManagerTurnFailure(cwd, undefined, new Error(interrupted));
     }
     conversations.set(record.id, conversation);
-    scheduler.registerQueue(record.id, { peek: () => conversation.record.directorMessages?.[0]?.operationId,
+    scheduler.registerQueue(record.id, { peek: () => nextRunnableMessage(conversation)?.operationId,
       start: () => startQueuedMessage(conversation) });
     return conversation;
   };
@@ -605,6 +609,7 @@ export function createConversationService(input: {
         const directorMessage = conversation.record.assignment.kind !== 'daemon' && attachment.speaker.namespace === 'agent'
           && attachment.speaker.id === 'director';
         if (command.kind === 'message' && (directorMessage || conversation.active !== undefined
+          || (conversation.record.directorMessages?.length ?? 0) > 0
           || scheduler.busyOperationId(conversation.record.id) !== undefined)) {
           await currentAssignment(conversation);
           checkAdmission();

@@ -675,6 +675,69 @@ it('does not accept or register when the reservation write fails', async () => {
   expect(await state(await service.snapshot(opened.attachmentId))).toMatchObject({ running: null, pending: record.pending });
 });
 
+it.each([false, true])('retains queued human messages through failed registration and drains them after approval recovery (restart: %s)', async (restart) => {
+  let opened = await open();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  doubles.register.mockImplementationOnce(async () => {
+    await gate;
+    throw new Error('creation failed');
+  });
+  const approval = await submit(opened.attachmentId, { kind: 'approve_summary', revision: 4 });
+  if (approval.kind !== 'accepted') throw new Error('Approval must be accepted');
+  const texts = ['first waiting human input', 'second waiting human input'];
+  try {
+    await vi.waitFor(() => expect(doubles.register).toHaveBeenCalledOnce());
+    for (const [index, text] of texts.entries()) {
+      expect(await submit(opened.attachmentId, { kind: 'message', text }))
+        .toMatchObject({ kind: 'accepted', queuedMessageCount: index + 1 });
+    }
+    expect(await submit(opened.attachmentId, { kind: 'approve_summary', revision: 4 }))
+      .toEqual({ kind: 'busy', operationId: approval.operationId });
+  } finally { release(); }
+  await vi.waitFor(() => expect(outputs).toContainEqual(expect.objectContaining({
+    kind: 'result', operationId: approval.operationId, result: expect.objectContaining({ kind: 'error' }),
+  })));
+  const saved = store.read(record.id, record.assignment)!;
+  expect(saved).toMatchObject({ revision: 4, pending: record.pending, approval: { state: 'reserved' }, running: null });
+  expect(saved.directorMessages?.map(({ text }) => text)).toEqual(texts);
+  expect(execute).not.toHaveBeenCalled();
+
+  if (restart) {
+    await service.close();
+    service = createConversationService({ configDirectory: directory, owner,
+      runtime: { resolve: resolveRuntime, close: closeRuntime }, onDomainChange: vi.fn() });
+    await service.restore();
+    opened = await open();
+  }
+  await service.maintain();
+  expect(store.read(record.id, record.assignment)?.directorMessages).toEqual(saved.directorMessages);
+  expect(await state(await service.snapshot(opened.attachmentId))).toMatchObject({ queuedMessageCount: 2, running: null });
+  expect(await submit(opened.attachmentId, { kind: 'message', text: 'third waiting human input' }))
+    .toMatchObject({ kind: 'accepted', queuedMessageCount: 3 });
+  texts.push('third waiting human input');
+  const queued = store.read(record.id, record.assignment)!.directorMessages!;
+  expect(await submit(opened.attachmentId, { kind: 'approve_summary', revision: 3 })).toMatchObject({ kind: 'error' });
+  expect(execute).not.toHaveBeenCalled();
+  expect(doubles.register).toHaveBeenCalledOnce();
+
+  execute.mockImplementation(async (input) => {
+    expect(store.read(record.id, record.assignment)?.approval).toMatchObject({ ...saved.approval, state: 'registered' });
+    return { message: `reply:${input.instruction}`, summary: null, sessionId: 'recovered-session', assignment: record.assignment };
+  });
+  expect(await submit(opened.attachmentId, { kind: 'approve_summary', revision: 4, requirePending: true }))
+    .toMatchObject({ kind: 'accepted' });
+  for (const message of queued) {
+    await vi.waitFor(() => expect(outputs).toContainEqual({ kind: 'result', operationId: message.operationId,
+      result: { kind: 'reply', message: `reply:${message.text}` } }));
+  }
+  await finished();
+  expect(doubles.register.mock.calls.map(([input]) => input.id)).toEqual([saved.approval!.goalId, saved.approval!.goalId]);
+  expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(texts);
+  expect(store.read(record.id, record.assignment)).toMatchObject({ revision: 8, pending: null,
+    approval: { ...saved.approval, state: 'registered' }, running: null, directorMessages: [] });
+});
+
 it.each(['abort_turn', 'close'] as const)('keeps the reserved proposal when %s interrupts registration, then registers the same ID on reapproval', async (kind) => {
   const opened = await open();
   let release!: () => void;
