@@ -201,6 +201,8 @@ export function createSlackConversationPort(options: {
         ownedOperationId = submission.operationId;
         targets.set(submission.operationId, { endpoint, attachmentId, conversationId: resolved.conversationId, makeGoal });
         attachmentId = undefined;
+        if (submission.queuedMessageCount !== undefined) await options.client.postThreadMessage(endpoint,
+          getLabel('manager.conversation.queued', options.language, { count: String(submission.queuedMessageCount) }));
       } else {
         const message = submission.kind === 'error' ? submission.message : getLabel('manager.conversation.busy', options.language);
         await options.client.postThreadMessage(endpoint, message);

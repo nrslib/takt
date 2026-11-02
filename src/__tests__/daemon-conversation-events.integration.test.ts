@@ -174,7 +174,7 @@ async function queueFixture(repositoryCount = 1) {
   const hook = vi.fn(async (_label: string, _signal: AbortSignal) => {});
   const call = vi.fn<ProviderAgent['call']>(async (prompt, options) => {
     const context = prompt.startsWith('{') ? JSON.parse(prompt) as { event: { kind: string; goalId: string } } : undefined;
-    const label = context === undefined ? prompt.match(/\b(?:D1|D2|human-input)\b/)?.[0] : `${context.event.kind}:${context.event.goalId}`;
+    const label = context === undefined ? prompt.match(/\b(?:D1|D2|human-input|human-first|human-second)\b/)?.[0] : `${context.event.kind}:${context.event.goalId}`;
     if (label === undefined) throw new Error(`Unexpected manager fixture prompt: ${prompt}`);
     turns.push(label); active++; maximumActive = Math.max(maximumActive, active);
     try {
@@ -294,7 +294,7 @@ it('shares one workspace execution slot across both repositories and conversatio
     const human = await fixture.open(daemon.service, false);
     await vi.waitFor(() => expect(fixture.turns).toEqual([`registered:${first.id}`]), { timeout: 5000 });
     expect((await tell('D1')).kind).toBe('accepted');
-    expect((await human('human-input')).kind).toBe('busy');
+    expect(await human('human-input')).toMatchObject({ kind: 'accepted', queuedMessageCount: 2 });
     saveManagerEvent(secondRepository, { kind: 'registered', goalId: second.id });
     saveManagerEvent(independentRepository, { kind: 'registered', goalId: independent.id });
     // 別managerの完了を待ち、daemonが後続イベントを調べた後も排他が保たれることを観測する。
@@ -305,9 +305,31 @@ it('shares one workspace execution slot across both repositories and conversatio
     expect(maximumWorkspaceTurns).toBe(1);
     held.release();
     await vi.waitFor(() => expect(fixture.turns.filter((label) => label !== independentLabel))
-      .toEqual([`registered:${first.id}`, 'D1', `registered:${second.id}`]), { timeout: 5000 });
+      .toEqual([`registered:${first.id}`, 'D1', 'human-input', `registered:${second.id}`]), { timeout: 5000 });
     await vi.waitFor(() => expect(readManagerEvents(secondRepository)).toEqual([]), { timeout: 5000 });
     expect(maximumWorkspaceTurns).toBe(1);
+  } finally { held.release(); await daemon.stop(); }
+});
+
+it('Given 巡回中の daemon When 人が2つ発言する Then 受付順に通常の会話ターンで処理する', async () => {
+  const fixture = await queueFixture();
+  const repository = fixture.repositories[0]!;
+  const goal = await fixture.createGoal(1);
+  const held = deferred();
+  fixture.hook.mockImplementation(async (label) => { if (label === `patrol:${goal.id}`) await held.promise; });
+  const daemon = await fixture.start();
+  try {
+    const human = await fixture.open(daemon.service, false);
+    vi.setSystemTime('2026-10-30T00:15:00Z');
+    await enqueueDueGoalPatrols(repository, 900);
+    await vi.waitFor(() => expect(fixture.turns).toEqual([`patrol:${goal.id}`]), { timeout: 5000 });
+    expect(await human('human-first')).toMatchObject({ kind: 'accepted', queuedMessageCount: 1 });
+    expect(await human('human-second')).toMatchObject({ kind: 'accepted', queuedMessageCount: 2 });
+    expect(fixture.store.read(fixture.id, fixture.assignment)?.directorMessages?.map(({ text }) => text)).toEqual(['human-first', 'human-second']);
+    held.release();
+    await vi.waitFor(() => expect(fixture.turns).toEqual([`patrol:${goal.id}`, 'human-first', 'human-second']), { timeout: 5000 });
+    await vi.waitFor(() => expect(fixture.store.read(fixture.id, fixture.assignment)).toMatchObject({ running: null, revision: 6, pending: null }), { timeout: 5000 });
+    expect(fixture.maximumActive).toBe(1);
   } finally { held.release(); await daemon.stop(); }
 });
 
@@ -365,7 +387,9 @@ it('keeps the patrol deadline and completion based interval when director messag
   } finally { before.release(); patrol.release(); await daemon.stop(); }
 });
 
-it.each([false, true])('restores queued messages without any client and never replays a started director message (started=%s)', async (started) => {
+it.each([{ started: false, humanQueue: false }, { started: true, humanQueue: false },
+  { started: false, humanQueue: true }, { started: true, humanQueue: true }])(
+  'Given saved input (human=$humanQueue) When daemon restarts Then waiting input runs without a client and started input is not replayed (started=$started)', async ({ started, humanQueue }) => {
   const fixture = await queueFixture();
   const held = deferred();
   fixture.hook.mockImplementation(async (label) => {
@@ -382,9 +406,9 @@ it.each([false, true])('restores queued messages without any client and never re
     expect(current.kind).toBe('accepted');
     if (current.kind === 'accepted') startedId = current.operationId;
     await vi.waitFor(() => expect(fixture.turns).toHaveLength(1), { timeout: 5000 });
-    expect((await tell('D2')).kind).toBe('accepted');
+    expect((await (humanQueue ? human('human-input') : tell('D2'))).kind).toBe('accepted');
     saved = fixture.store.read(fixture.id, fixture.assignment);
-    expect(JSON.stringify(saved)).toContain('D2');
+    expect(JSON.stringify(saved)).toContain(humanQueue ? 'human-input' : 'D2');
     persisted = new Map(readdirSync(fixture.directory, { recursive: true, encoding: 'utf8' }).filter((name) => name.endsWith('.json'))
       .map((name) => [name, readFileSync(join(fixture.directory, name), 'utf8')]));
   } finally { held.release(); await first.stop(); }
@@ -397,15 +421,15 @@ it.each([false, true])('restores queued messages without any client and never re
   fixture.turns.length = 0;
   fixture.hook.mockReset();
   const restored = deferred();
-  fixture.hook.mockImplementation(async (label) => { if (label === 'D2') await restored.promise; });
+  fixture.hook.mockImplementation(async (label) => { if (label === (humanQueue ? 'human-input' : 'D2')) await restored.promise; });
   const second = await fixture.start();
   try {
-    await vi.waitFor(() => expect(fixture.turns).toEqual(['D2']), { timeout: 5000 });
+    await vi.waitFor(() => expect(fixture.turns).toEqual([humanQueue ? 'human-input' : 'D2']), { timeout: 5000 });
     expect(doubles.removeOwner).toHaveBeenCalledTimes(1);
     expect(fixture.store.read(fixture.id, fixture.assignment)?.running).not.toBeNull();
     restored.release();
     await vi.waitFor(() => expect(fixture.store.read(fixture.id, fixture.assignment)?.running).toBeNull(), { timeout: 5000 });
-    expect(fixture.turns).toEqual(['D2']);
+    expect(fixture.turns).toEqual([humanQueue ? 'human-input' : 'D2']);
     if (started) {
       const speaker = { namespace: 'local', id: 'operator' };
       const opened = await second.service.open({ conversationId: fixture.id, assignment: fixture.assignment, speaker,

@@ -417,7 +417,7 @@ it('transfers the exact normal standalone approval and removes that inquiry on r
   expect(after.some(({ kind }) => kind === 'inquiry')).toBe(false);
 });
 
-it('rejects a simultaneous message without queueing it and completes the accepted operation after both clients disconnect', async () => {
+it('queues a simultaneous message and completes both operations after both clients disconnect', async () => {
   let input: ManagerTurnInput | undefined;
   execute.mockImplementationOnce((value) => new Promise((resolve) => {
     input = value; release = () => resolve({ message: 'finished', summary: null, sessionId: 'saved-session', assignment: value.assignment });
@@ -429,16 +429,16 @@ it('rejects a simultaneous message without queueing it and completes the accepte
   expect(accepted.kind).toBe('accepted');
   await vi.waitFor(() => expect(input).toBeDefined());
   expect((await second.request('submit', { attachmentId: secondOpen.attachmentId, speaker: selected.speaker,
-    command: { kind: 'message', text: 'rejected' } })).result).toEqual({ kind: 'busy', operationId: accepted.operationId });
+    command: { kind: 'message', text: 'queued' } })).result).toMatchObject({ kind: 'accepted', queuedMessageCount: 1 });
   first.socket.destroy(); second.socket.destroy();
   await vi.waitFor(() => expect(service.attachmentCount).toBe(0));
   expect(input!.abortSignal.aborted).toBe(false); expect(service.activeOperationCount).toBe(1);
   release!(); await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
-  expect(execute).toHaveBeenCalledOnce();
+  expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['accepted', 'queued']);
   const third = await authenticated(); const reopened = await opened(third);
-  expect((await third.items(reopened.read.transferId))[0]).toMatchObject({ kind: 'state', state: { revision: 5, pending: null, running: null } });
+  expect((await third.items(reopened.read.transferId))[0]).toMatchObject({ kind: 'state', state: { revision: 6, pending: null, running: null } });
   const saved = new ConversationStore(directory).read(selected.conversationId, selected.assignment)!;
-  expect(saved.sessionId).toBe('saved-session');
+  expect(saved.sessionId).toBe('session');
 });
 
 it.each([{ count: 2, delayed: false }, { count: 3, delayed: false }, { count: 2, delayed: true }, { count: 3, delayed: true }])('keeps all responses to $count simultaneous messages on the same connection (delayed writer: $delayed)', async ({ count, delayed }) => {
@@ -487,25 +487,24 @@ it.each([{ count: 2, delayed: false }, { count: 3, delayed: false }, { count: 2,
       expect(written).not.toHaveBeenCalled();
       release!();
       await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
-      expect(execute).toHaveBeenCalledOnce();
+      expect(execute).toHaveBeenCalledTimes(count);
       finishWrite();
     }
     await vi.waitFor(() => expect(value.frames.filter((frame) => requestIds.includes(frame.requestId ?? ''))).toHaveLength(count));
     const accepted = value.frames.find((frame) => frame.requestId === requestIds[0])!.result!;
     expect(accepted.kind).toBe('accepted');
-    for (const id of requestIds.slice(1)) expect(value.frames.find((frame) => frame.requestId === id)!.result).toEqual({ kind: 'busy', operationId: accepted.operationId });
+    for (const [index, id] of requestIds.slice(1).entries()) expect(value.frames.find((frame) => frame.requestId === id)!.result).toMatchObject({ kind: 'accepted', queuedMessageCount: index + 1 });
     expect(value.socket.destroyed).toBe(false);
     expect(written).toHaveBeenCalledTimes(count);
     expect(execute.mock.calls[0]![0].prompt).toBe(requestIds[0]);
     release!(); await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
-    expect(execute).toHaveBeenCalledOnce();
-    expect(submitted.mock.calls.map(([id, result]) => ({ id, kind: result.kind }))).toEqual([
-      ...requestIds.slice(1).map((id) => ({ id, kind: 'busy' })), { id: requestIds[0], kind: 'accepted' },
-    ]);
+    expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(requestIds);
+    expect(submitted.mock.calls.map(([id, result]) => ({ id, kind: result.kind })))
+      .toEqual(requestIds.map((id) => ({ id, kind: 'accepted' })));
   } finally { finishWrite(); submit.mockRestore(); writer.mockRestore(); }
 });
 
-it('accepts a complete message spanning input batches and rejects concurrent messages without truncation', async () => {
+it('accepts a complete message spanning input batches and queues concurrent messages without truncation', async () => {
   const text = 'x'.repeat(128 * 1024);
   execute.mockImplementationOnce((input) => new Promise((resolve) => {
     release = () => resolve({ message: 'finished', summary: null, sessionId: 'session', assignment: input.assignment });
@@ -516,14 +515,16 @@ it('accepts a complete message spanning input batches and rejects concurrent mes
       attachmentId: first.attachmentId, speaker: selected.speaker, command: { kind: 'message', text: message },
     },
   }))));
-  await vi.waitFor(() => expect(value.frames.filter((frame) => frame.requestId?.startsWith('large-burst-'))).toHaveLength(3));
+  // mainでも発言者情報を保存する同期子プロセスで1秒を超え、応答の受信が遅れる。
+  // 通常のClient.requestと同じ5秒のI/O待機余裕を確保する。
+  await vi.waitFor(() => expect(value.frames.filter((frame) => frame.requestId?.startsWith('large-burst-'))).toHaveLength(3), { timeout: 5_000 });
   const accepted = value.frames.find((frame) => frame.requestId === 'large-burst-0')!.result!;
   expect(accepted.kind).toBe('accepted');
-  for (const id of ['large-burst-1', 'large-burst-2']) expect(value.frames.find((frame) => frame.requestId === id)!.result).toEqual({ kind: 'busy', operationId: accepted.operationId });
+  for (const [index, id] of ['large-burst-1', 'large-burst-2'].entries()) expect(value.frames.find((frame) => frame.requestId === id)!.result).toMatchObject({ kind: 'accepted', queuedMessageCount: index + 1 });
   await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
   expect(execute.mock.calls[0]![0].prompt).toBe(text);
   release!(); await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
-  expect(execute).toHaveBeenCalledOnce();
+  expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual([text, 'second', 'third']);
   expect(value.socket.destroyed).toBe(false);
 });
 

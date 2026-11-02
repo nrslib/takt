@@ -9,6 +9,32 @@ import { stripAnsi } from '../shared/utils/text.js';
 import { randomUUID } from 'node:crypto';
 
 afterEach(cleanup);
+it.each(['ja', 'en'] as const)('shows queue capacity rejection in the submitting director TUI (%s)', async (lang) => {
+  const client = new ManagerClientDouble();
+  const message = getLabel('manager.conversation.queue_full', lang);
+  client.submit.mockResolvedValueOnce({ kind: 'error', code: 'queue_full', message });
+  const app = render(createElement(DirectorView, { client, lang, onExit: vi.fn() }));
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('director.costNotice', lang)));
+  app.stdin.write('capacity request');
+  await vi.waitFor(() => expect(app.lastFrame()).toContain('capacity request'));
+  app.stdin.write('\r');
+  await vi.waitFor(() => expect(client.commands()).toEqual([{ kind: 'message', text: 'capacity request' }]));
+  await vi.waitFor(() => expect(app.lastFrame()!.replace(/\s+/gu, '')).toContain(message.replace(/\s+/gu, '')));
+});
+
+it('accepts speech during a running director turn and shows its waiting count', async () => {
+  const client = new ManagerClientDouble();
+  client.change({ state: { ...client.getSnapshot().state!, running: { operationId: randomUUID(), kind: 'message' }, queuedMessageCount: 1 } });
+  client.submit.mockResolvedValueOnce({ kind: 'accepted', operationId: randomUUID(), queuedMessageCount: 2 });
+  const app = render(createElement(DirectorView, { client, lang: 'en', onExit: vi.fn() }));
+  await vi.waitFor(() => expect(app.lastFrame()).toContain(getLabel('manager.conversation.waiting', 'en', { count: '1' })));
+  app.stdin.write('new request');
+  await vi.waitFor(() => expect(app.lastFrame()).toContain('new request'));
+  app.stdin.write('\r');
+  await vi.waitFor(() => expect(client.commands()).toEqual([{ kind: 'message', text: 'new request' }]));
+  await vi.waitFor(() => expect(app.lastFrame()!.replace(/\s+/gu, ' ')).toContain(getLabel('manager.conversation.queued', 'en', { count: '2' })));
+  expect(app.lastFrame()).not.toContain(getLabel('manager.conversation.busy', 'en'));
+});
 it('shows a remote message once and avoids repeating its own accepted message', async () => {
   const client = new ManagerClientDouble();
   const app = render(createElement(DirectorView, { client, lang: 'en', onExit: vi.fn() }));

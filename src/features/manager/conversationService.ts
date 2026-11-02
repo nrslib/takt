@@ -4,6 +4,7 @@ import { ConversationSpeakerStore } from '../../infra/conversations/speakerStore
 import { createDirectorConversationPlan } from '../director/conversationPlan.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 import { ConversationActorSchema, ConversationAssignmentSchema, PortBindingSchema,
+  MAX_PENDING_MESSAGES, MAX_PENDING_MESSAGES_BYTES, PendingMessagesSchema,
   type ConversationRecord, type PendingSummary, type ConversationAssignment } from '../../infra/conversations/schema.js';
 import { ConversationStore } from '../../infra/conversations/store.js';
 import type { DaemonOwner } from '../../infra/daemon/owner.js';
@@ -43,6 +44,7 @@ const log = createLogger('manager-conversation');
 interface Operation {
   id: string; controller: AbortController; cleanupComplete: boolean; release(): void; completion?: Promise<void>;
   directorConversationId?: string; result?: OperationResult; startPending?: boolean;
+  queued?: boolean;
 }
 interface LoadedConversation {
   record: ConversationRecord;
@@ -79,7 +81,7 @@ export function createConversationService(input: {
   const results = new DirectorMessageResultStore(input.configDirectory);
   const scheduler = input.scheduler ?? new ManagerTurnScheduler();
   const conversations = new Map<string, LoadedConversation>();
-  const initializing = new Set<string>();
+  const initializing = new Map<string, Promise<void>>();
   const admissions = new Set<Promise<void>>();
   const attachments = new Map<string, Attachment>();
   let closed = false;
@@ -126,7 +128,8 @@ export function createConversationService(input: {
     const record = conversation.record;
     return structuredClone({ conversationId: record.id, assignment: record.assignment, revision: record.revision,
       pending: record.pending, approval: record.approval, running: record.running === null ? null
-        : { operationId: record.running.operationId, kind: record.running.kind }, interrupted: conversation.interrupted });
+        : { operationId: record.running.operationId, kind: record.running.kind }, interrupted: conversation.interrupted,
+      ...((record.directorMessages?.length ?? 0) > 0 ? { queuedMessageCount: record.directorMessages!.length } : {}) });
   };
   const version = (conversation: LoadedConversation, operationId: string | null): OutputVersion => ({
     revision: conversation.record.revision, stateSequence: conversation.sequence, operationId,
@@ -432,11 +435,18 @@ export function createConversationService(input: {
     await publish(conversation, { kind: 'pending', state }, outputVersion);
     await publish(conversation, { kind: 'result', operationId: operation.id, result }, outputVersion);
   };
-  const startDirector = (conversation: LoadedConversation): void => {
-    if (closed || conversation.storageFailed || conversation.active !== undefined) return;
+  const nextRunnableMessage = (conversation: LoadedConversation) => {
     const message = conversation.record.directorMessages?.[0];
+    // Approval recovery must be able to acquire the slot before human input replaces its proposal.
+    if (message?.directorConversationId === undefined && conversation.record.approval?.state === 'reserved') return undefined;
+    return message;
+  };
+  const startQueuedMessage = (conversation: LoadedConversation): void => {
+    if (closed || conversation.storageFailed || conversation.active !== undefined) return;
+    const message = nextRunnableMessage(conversation);
     if (message === undefined || !scheduler.tryAcquire(conversation.record.id, message.operationId)) return;
     const operation: Operation = { id: message.operationId, controller: new AbortController(), cleanupComplete: false,
+      queued: true,
       directorConversationId: message.directorConversationId,
       release: () => scheduler.release(conversation.record.id, message.operationId) };
     conversation.active = operation;
@@ -449,24 +459,30 @@ export function createConversationService(input: {
           return;
         }
         const priorPending = conversation.record.pending;
+        const humanMessage = message.directorConversationId === undefined;
+        const advancesRevision = humanMessage && conversation.record.revision < Number.MAX_SAFE_INTEGER;
         save(conversation, { ...conversation.record, directorMessages: conversation.record.directorMessages!.slice(1),
           lastSpeaker: message.speaker,
-          running: { operationId: message.operationId, kind: 'message', directorConversationId: message.directorConversationId,
+          ...(advancesRevision
+            ? { revision: nextRevision(conversation.record.revision), pending: null } : {}),
+          running: { operationId: message.operationId, kind: 'message',
+            ...(message.directorConversationId === undefined ? {} : { directorConversationId: message.directorConversationId }),
             owner: { pid: input.owner.pid, identity: input.owner.identity } } });
         started = true;
         const assignment = await currentAssignment(conversation);
         operation.controller.signal.throwIfAborted();
+        if (humanMessage && !advancesRevision) throw new ConversationError('operation_failed');
         try { speakers.write({ conversationId: conversation.record.id, operationId: message.operationId, actor: message.speaker }); }
         catch { throw new ConversationError('storage_error'); }
         void publish(conversation, { kind: 'running', state: capture(conversation) }, version(conversation, message.operationId));
-        await execute(conversation, operation, { kind: 'message', text: message.text }, assignment, priorPending, undefined);
+        await execute(conversation, operation, { kind: 'message', text: message.text }, assignment, priorPending, message.agentOverrides);
       } catch (error) {
         operation.cleanupComplete = true;
         if (!started && conversation.storageFailed) {
           operation.startPending = true;
           return;
         }
-        operation.result = operation.controller.signal.aborted
+        operation.result = operation.directorConversationId !== undefined && operation.controller.signal.aborted
           ? interruptedResult(conversation, operation.id) : conversationErrorResult(error, conversation.language);
         try {
           await finishOperation(conversation, operation);
@@ -504,14 +520,14 @@ export function createConversationService(input: {
       if (interrupted !== undefined) await notifyManagerTurnFailure(cwd, undefined, new Error(interrupted));
     }
     conversations.set(record.id, conversation);
-    scheduler.registerDirector(record.id, { peek: () => conversation.record.directorMessages?.[0]?.operationId,
-      start: () => startDirector(conversation) });
+    scheduler.registerQueue(record.id, { peek: () => nextRunnableMessage(conversation)?.operationId,
+      start: () => startQueuedMessage(conversation) });
     return conversation;
   };
   const recover = async (conversation: LoadedConversation): Promise<void> => {
     const operation = conversation.active;
     if (operation !== undefined && !operation.cleanupComplete) throw new ConversationError('storage_error');
-    if (operation?.directorConversationId !== undefined && !operation.startPending) {
+    if (operation?.queued && !operation.startPending) {
       await finishOperation(conversation, operation);
       return;
     }
@@ -527,9 +543,14 @@ export function createConversationService(input: {
       const binding = PortBindingSchema.parse(open.binding);
       const speaker = ConversationActorSchema.parse(open.speaker);
       if (typeof open.conversationId !== 'string') throw new ConversationError('invalid_input');
-      if (initializing.has(open.conversationId)) throw new ConversationError('busy');
+      const initialization = initializing.get(open.conversationId);
+      if (initialization !== undefined) {
+        await initialization;
+        return service.open(open, delivery);
+      }
       const existing = conversations.get(open.conversationId);
-      if (existing === undefined) initializing.add(open.conversationId);
+      let initialized: (() => void) | undefined;
+      if (existing === undefined) initializing.set(open.conversationId, new Promise<void>((resolve) => { initialized = resolve; }));
       const finishAdmission = beginAdmission();
       try {
         const assignment = await resolveAssignment(requested);
@@ -552,7 +573,6 @@ export function createConversationService(input: {
         if (conversation.storageFailed) throw new ConversationError('storage_error');
         const savedBinding = conversation.record.bindings.some((value) => JSON.stringify(value) === JSON.stringify(binding));
         if (!savedBinding) {
-          if (conversation.active !== undefined && !(speaker.namespace === 'agent' && speaker.id === 'director')) throw new ConversationError('busy');
           save(conversation, { ...conversation.record, bindings: [...conversation.record.bindings, binding] });
         }
         const attachmentId = randomUUID();
@@ -563,7 +583,10 @@ export function createConversationService(input: {
         attachments.set(attachmentId, attachment);
         scheduler.notify(conversation.record.id);
         return { attachmentId, read: readSnapshot(conversation, assignment, attachment) };
-      } finally { finishAdmission(); if (existing === undefined) initializing.delete(open.conversationId); }
+      } finally {
+        finishAdmission();
+        if (existing === undefined) { initializing.delete(open.conversationId); initialized!(); }
+      }
     },
     async submit(request): Promise<Submission> {
       let conversation: LoadedConversation | undefined;
@@ -583,17 +606,32 @@ export function createConversationService(input: {
         const command = parsedCommand.data;
         if ((conversation.record.assignment.kind === 'daemon' || attachment.speaker.namespace === 'agent' && attachment.speaker.id === 'director')
           && command.kind !== 'message') throw new ConversationError('invalid_input');
-        if (conversation.record.assignment.kind !== 'daemon' && attachment.speaker.namespace === 'agent'
-          && attachment.speaker.id === 'director' && command.kind === 'message') {
+        const directorMessage = conversation.record.assignment.kind !== 'daemon' && attachment.speaker.namespace === 'agent'
+          && attachment.speaker.id === 'director';
+        if (command.kind === 'message' && (directorMessage || conversation.active !== undefined
+          || (conversation.record.directorMessages?.length ?? 0) > 0
+          || scheduler.busyOperationId(conversation.record.id) !== undefined)) {
           await currentAssignment(conversation);
           checkAdmission();
+          if (conversation.storageFailed) throw new ConversationError('storage_error');
           const id = allocateOperationId();
-          save(conversation, { ...conversation.record, directorMessages: [...(conversation.record.directorMessages ?? []), {
-            operationId: id, text: command.text, speaker: { namespace: 'agent', id: 'director' },
-            directorConversationId: conversationId({ kind: 'daemon' }),
-          }] });
+          const message = {
+            operationId: id, text: command.text, speaker: attachment.speaker,
+            ...(directorMessage ? { directorConversationId: conversationId({ kind: 'daemon' }) }
+              : attachment.agentOverrides === undefined ? {} : { agentOverrides: attachment.agentOverrides }),
+          };
+          if (Buffer.byteLength(JSON.stringify([message]), 'utf8') > MAX_PENDING_MESSAGES_BYTES) throw new ConversationError('message_too_large');
+          if ((conversation.record.directorMessages?.length ?? 0) >= MAX_PENDING_MESSAGES) throw new ConversationError('queue_full');
+          const messages = [...(conversation.record.directorMessages ?? []), message];
+          if (!PendingMessagesSchema.safeParse(messages).success) throw new ConversationError('queue_full');
+          save(conversation, { ...conversation.record, directorMessages: messages });
+          const queuedMessageCount = conversation.record.directorMessages!.length;
+          if (!directorMessage && command.display !== false) {
+            void publish(conversation, { kind: 'user_message', operationId: id, message: command.text }, version(conversation, id));
+          }
+          void publish(conversation, { kind: 'pending', state: capture(conversation) }, version(conversation, conversation.active?.id ?? null));
           scheduler.notify(conversation.record.id);
-          return { kind: 'accepted', operationId: id };
+          return { kind: 'accepted', operationId: id, ...(directorMessage ? {} : { queuedMessageCount }) };
         }
         if (command.kind === 'abort_turn') {
           const active = conversation.active;

@@ -1,7 +1,8 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { conversationId, conversationIdentity } from '../infra/conversations/identity.js';
-import { ConversationAssignmentSchema, ConversationRecordSchema } from '../infra/conversations/schema.js';
+import { ConversationAssignmentSchema, ConversationRecordSchema, PendingMessagesSchema,
+  MAX_PENDING_MESSAGES, MAX_PENDING_MESSAGES_BYTES } from '../infra/conversations/schema.js';
 import { conversationRecord, directorConversationRecord } from './helpers/conversation-fixtures.js';
 
 describe('conversation identity and schema', () => {
@@ -65,7 +66,7 @@ describe('conversation identity and schema', () => {
     expect(ConversationRecordSchema.safeParse({ ...record, approval: { ...record.approval, revision: 3 } }).success).toBe(false);
   });
 
-  it('allows only director inputs with their source conversation in the waiting list', () => {
+  it('validates the director source and speaker in the shared waiting list', () => {
     const record = conversationRecord('/work/example');
     const message = { operationId: '00000000-0000-4000-8000-000000000001', text: 'request',
       speaker: { namespace: 'agent', id: 'director' }, directorConversationId: conversationId({ kind: 'daemon' }) };
@@ -74,6 +75,43 @@ describe('conversation identity and schema', () => {
     expect(ConversationRecordSchema.safeParse({ ...record, directorMessages: [{ ...message, directorConversationId: record.id }] }).success).toBe(false);
     expect(ConversationRecordSchema.safeParse({ ...directorConversationRecord(), directorMessages: [message] }).success).toBe(false);
     expect(ConversationRecordSchema.safeParse({ ...record, directorMessages: [message, message] }).success).toBe(false);
+  });
+
+  it('accepts the pending message count limit and rejects one more without changing the input', () => {
+    const record = conversationRecord('/work/example');
+    const messages = Array.from({ length: MAX_PENDING_MESSAGES }, (_, index) => ({
+      operationId: randomUUID(), text: `message ${index}`, speaker: record.counterpart,
+    }));
+    expect(PendingMessagesSchema.parse(messages)).toEqual(messages);
+    expect(PendingMessagesSchema.safeParse([
+      ...messages, { ...messages[0]!, operationId: randomUUID() },
+    ]).success).toBe(false);
+    expect(messages).toHaveLength(MAX_PENDING_MESSAGES);
+  });
+
+  it.each(['a', 'あ', '\n'])('limits the complete pending JSON in UTF-8 bytes, including escaping (%j)', (unit) => {
+    const record = conversationRecord('/work/example');
+    const message = { operationId: randomUUID(), text: '', speaker: record.counterpart,
+      agentOverrides: { provider: 'mock' as const, model: 'chosen' } };
+    const budget = MAX_PENDING_MESSAGES_BYTES - Buffer.byteLength(JSON.stringify([message]), 'utf8');
+    const unitBytes = Buffer.byteLength(JSON.stringify(unit), 'utf8') - 2;
+    const text = unit.repeat(Math.floor(budget / unitBytes)) + 'a'.repeat(budget % unitBytes);
+    const messages = [{ ...message, text }];
+    expect(Buffer.byteLength(JSON.stringify(messages), 'utf8')).toBe(MAX_PENDING_MESSAGES_BYTES);
+    expect(PendingMessagesSchema.safeParse(messages).success).toBe(true);
+    expect(PendingMessagesSchema.safeParse([{ ...message, text: `${text}a` }]).success).toBe(false);
+    expect(PendingMessagesSchema.safeParse([
+      { ...message, text: 'short', agentOverrides: { model: 'a'.repeat(MAX_PENDING_MESSAGES_BYTES) } },
+    ]).success).toBe(false);
+  });
+
+  it('retains previously accepted oversized queues for recovery while rejecting new admission', () => {
+    const record = conversationRecord('/work/example');
+    const messages = Array.from({ length: MAX_PENDING_MESSAGES + 1 }, () => ({
+      operationId: randomUUID(), text: 'accepted before limits', speaker: record.counterpart,
+    }));
+    expect(PendingMessagesSchema.safeParse(messages).success).toBe(false);
+    expect(ConversationRecordSchema.parse({ ...record, directorMessages: messages }).directorMessages).toEqual(messages);
   });
 
   it('requires an active director speaker and removes its operation ID from the waiting list on start', () => {
@@ -85,5 +123,13 @@ describe('conversation identity and schema', () => {
     expect(ConversationRecordSchema.safeParse({ ...record, running }).success).toBe(false);
     expect(ConversationRecordSchema.safeParse({ ...record, lastSpeaker: message.speaker, running, directorMessages: [message] }).success).toBe(false);
     expect(ConversationRecordSchema.parse({ ...record, lastSpeaker: message.speaker, running, directorMessages: [] }).pending).toEqual(record.pending);
+  });
+
+  it.each([conversationRecord('/work/example'), directorConversationRecord()])('persists human input and its execution options for $agent', (record) => {
+    const message = { operationId: '00000000-0000-4000-8000-000000000001', text: 'human request',
+      speaker: record.counterpart, agentOverrides: { provider: 'mock', model: 'chosen' } };
+    expect(ConversationRecordSchema.parse({ ...record, directorMessages: [message] }).directorMessages).toEqual([message]);
+    expect(ConversationRecordSchema.safeParse({ ...record, directorMessages: [message, message] }).success).toBe(false);
+    expect(ConversationRecordSchema.safeParse({ ...record, directorMessages: [{ ...message, agentOverrides: { provider: 'unknown' } }] }).success).toBe(false);
   });
 });

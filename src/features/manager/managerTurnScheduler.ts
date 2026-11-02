@@ -1,25 +1,25 @@
-interface DirectorTurnSource {
+interface QueuedTurnSource {
   peek(): string | undefined;
   start(): void;
 }
 
 export class ManagerTurnScheduler {
   private readonly active = new Map<string, string>();
-  private readonly directors = new Map<string, DirectorTurnSource>();
+  private readonly queues = new Map<string, QueuedTurnSource>();
   private readonly waiters = new Map<string, Set<() => void>>();
 
-  registerDirector(id: string, source: DirectorTurnSource): void {
-    this.directors.set(id, source);
+  registerQueue(id: string, source: QueuedTurnSource): void {
+    this.queues.set(id, source);
   }
 
   busyOperationId(id: string): string | undefined {
-    return this.active.get(id) ?? this.directors.get(id)?.peek();
+    return this.active.get(id) ?? this.queues.get(id)?.peek();
   }
 
   tryAcquire(id: string, operationId: string): boolean {
     if (this.active.has(id)) return false;
-    const director = this.directors.get(id)?.peek();
-    if (director !== undefined && director !== operationId) return false;
+    const queued = this.queues.get(id)?.peek();
+    if (queued !== undefined && queued !== operationId) return false;
     this.active.set(id, operationId);
     return true;
   }
@@ -31,7 +31,7 @@ export class ManagerTurnScheduler {
   }
 
   notify(id: string): void {
-    if (!this.active.has(id)) this.directors.get(id)?.start();
+    if (!this.active.has(id)) this.queues.get(id)?.start();
     for (const wake of [...(this.waiters.get(id) ?? [])]) wake();
   }
 

@@ -11,6 +11,39 @@ import { toDisplayText } from '../features/tui/displayText.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { cwd, mount, showProposal, summaryA, summaryB, waitFor, finish, ENTER, UP, DOWN, ESC, typeAndSubmit, approveSummary, promptFrame, ManagerClientDouble } from './helpers/manager-tui-fixtures.js';
 
+it('Given 送信応答を待つ TUI When 人が続けて発言する Then 両方送信して受付と待機件数を表示する', async () => {
+  const context = mount('ja');
+  let accepted!: () => void;
+  const firstId = randomUUID();
+  context.client.submit.mockImplementationOnce((_command, onAccepted) => new Promise((resolve) => {
+    accepted = () => { onAccepted?.(firstId); resolve({ kind: 'accepted', operationId: firstId }); };
+  })).mockResolvedValueOnce({ kind: 'accepted', operationId: randomUUID(), queuedMessageCount: 1 });
+  try {
+    await typeAndSubmit(context, '最初の発言');
+    await waitFor(() => expect(context.client.commands()).toHaveLength(1));
+    await typeAndSubmit(context, '次の発言');
+    await waitFor(() => expect(context.client.commands()).toEqual([
+      { kind: 'message', text: '最初の発言' }, { kind: 'message', text: '次の発言' },
+    ]));
+    await waitFor(() => expect(context.app.lastFrame()!.replace(/\s+/gu, '')).toContain(
+      getLabel('manager.conversation.queued', 'ja', { count: '1' }).replace(/\s+/gu, ''),
+    ));
+    context.client.change({ state: { ...context.client.getSnapshot().state!, running: { operationId: firstId, kind: 'message' }, queuedMessageCount: 1 } });
+    await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.conversation.waiting', 'ja', { count: '1' })));
+    expect(context.app.lastFrame()).not.toContain(getLabel('manager.conversation.busy', 'ja'));
+  } finally { accepted(); }
+});
+
+it.each(['ja', 'en'] as const)('shows queue capacity rejection in the submitting manager TUI (%s)', async (lang) => {
+  const context = mount(lang);
+  const message = getLabel('manager.conversation.queue_full', lang);
+  context.client.submit.mockResolvedValueOnce({ kind: 'error', code: 'queue_full', message });
+  await typeAndSubmit(context, 'capacity request');
+  await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'message', text: 'capacity request' }]));
+  await waitFor(() => expect(context.app.lastFrame()!.replace(/\s+/gu, '')).toContain(message.replace(/\s+/gu, '')));
+  expect(context.app.lastFrame()).not.toContain(getLabel('manager.conversation.queued', lang, { count: '1' }));
+});
+
 it('shows a remote message once and avoids repeating its own accepted message', async () => {
   const context = mount();
   await waitFor(() => expect(context.app.lastFrame()).toContain('Discuss your goal'));

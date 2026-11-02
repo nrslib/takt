@@ -7,6 +7,7 @@ import { createConversationService } from '../features/manager/conversationServi
 import { createTuiConversationPort } from '../features/manager/tuiConversationPort.js';
 import { createDaemonSlackPorts } from '../features/daemon/slackPorts.js';
 import { ConversationStore } from '../infra/conversations/store.js';
+import { MAX_PENDING_MESSAGES, MAX_PENDING_MESSAGES_BYTES } from '../infra/conversations/schema.js';
 import { conversationRecord } from './helpers/conversation-fixtures.js';
 import type { ManagerTurnInput } from '../features/manager/turnExecutor.js';
 import type { PortOutput } from '../features/manager/conversationPort.js';
@@ -263,6 +264,35 @@ it('acknowledges shutdown-time messages without starting a turn before or after 
   expect(service.attachmentCount).toBe(1);
 });
 
+it.each(['queue_full', 'message_too_large'] as const)('returns %s to the originating Slack thread without adding the message', async (code) => {
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  execute.mockImplementationOnce(async (input) => {
+    await gate;
+    return { message: 'active reply', summary: null, sessionId: 'session', assignment: input.assignment };
+  });
+  await submitTui('active input');
+  await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+  for (let index = 0; index < MAX_PENDING_MESSAGES; index++) {
+    expect(await submitTui(`accepted ${index}`)).toMatchObject({ kind: 'accepted', queuedMessageCount: index + 1 });
+  }
+  const store = new ConversationStore(directory);
+  const saved = store.read(selected.conversationId, selected.assignment)!;
+  const text = code === 'message_too_large' ? 'a'.repeat(MAX_PENDING_MESSAGES_BYTES) : 'capacity request';
+  const { pending, ack } = await emit({ text, thread_ts: '1700000000.000002' });
+  await pending;
+  expect(ack).toHaveBeenCalledOnce();
+  expect(sdk.post).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+    channel: 'C0123', thread_ts: '1700000000.000002', text: getLabel(`manager.conversation.${code}`, 'ja'),
+  }));
+  expect(store.read(selected.conversationId, selected.assignment)?.directorMessages).toEqual(saved.directorMessages);
+  expect(service.attachmentCount).toBe(1);
+  release!();
+  await finished(1);
+  expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual([
+    'active input', ...Array.from({ length: MAX_PENDING_MESSAGES }, (_, index) => `accepted ${index}`),
+  ]);
+});
+
 it('routes a channel post through the shared conversation and replies in its new thread', async () => {
   const { pending, ack } = await emit(); await pending; await finished(1);
   expect(ack).toHaveBeenCalledOnce();
@@ -374,15 +404,15 @@ it.each([false, true])('rejects a registered proposal button after conversation 
   expect(new ConversationStore(directory).read(selected.conversationId, selected.assignment)).toEqual(before);
 });
 
-it('rejects a make-goal request while the conversation is busy without running it later', async () => {
+it('accepts a make-goal request while busy and processes it after the active turn', async () => {
   const gate = new Promise<void>((resolve) => { release = resolve; });
   execute.mockImplementationOnce(async (input) => { await gate; return { message: 'later', summary: null, sessionId: 'session', assignment: input.assignment }; });
   expect((await submitTui('local')).kind).toBe('accepted');
   await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
   await (await emit({ text: '/make-goal' })).pending;
-  expect(sdk.post).toHaveBeenCalledWith(expect.objectContaining({ thread_ts: '1700000000.000001', text: getLabel('manager.conversation.busy', 'ja') }));
-  release!(); await finished(1);
-  expect(execute).toHaveBeenCalledOnce();
+  expect(sdk.post).toHaveBeenCalledWith(expect.objectContaining({ thread_ts: '1700000000.000001', text: getLabel('manager.conversation.queued', 'ja', { count: '1' }) }));
+  release!(); await finished(2);
+  expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['local', getLabel('manager.goSummaryRequest', 'ja')]);
 });
 
 it('does not post a proposal produced by a TUI turn', async () => {
@@ -528,7 +558,7 @@ it('posts only Slack-originated replies to their source threads across a TUI tur
   ]);
 });
 
-it.each(['new binding', 'saved binding'])('rejects Slack input during a TUI turn with %s and never executes it later', async (binding) => {
+it.each(['new binding', 'saved binding'])('accepts Slack input during a TUI turn with %s and delivers it later to its own thread', async (binding) => {
   if (binding === 'saved binding') { await (await emit()).pending; await finished(1); }
   sdk.post.mockClear(); execute.mockClear();
   const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -536,10 +566,10 @@ it.each(['new binding', 'saved binding'])('rejects Slack input during a TUI turn
   await submitTui('local');
   await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
   await (await emit({ text: 'こちらも' })).pending;
-  expect(sdk.post).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ thread_ts: '1700000000.000001', text: expect.stringContaining('処理中') }));
-  release!(); await finished(1);
-  expect(execute).toHaveBeenCalledOnce();
-  expect(execute.mock.calls[0]![0].instruction).toBe('local');
+  expect(sdk.post).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ thread_ts: '1700000000.000001', text: getLabel('manager.conversation.queued', 'ja', { count: '1' }) }));
+  release!(); await finished(2);
+  expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['local', 'こちらも']);
+  expect(sdk.post).toHaveBeenLastCalledWith(expect.objectContaining({ thread_ts: '1700000000.000001', text: 'reply:こちらも' }));
 });
 
 it('acknowledges the Socket Mode event while the provider is blocked and delivers after release', async () => {

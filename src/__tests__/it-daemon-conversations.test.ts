@@ -23,6 +23,11 @@ import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
 
 const lifecycle = await import(pathToFileURL(join(process.cwd(), 'dist/features/daemon/lifecycle.js')).href) as typeof import('../features/daemon/lifecycle.js');
 
+async function waitForQueuedMessage(tui: ManagerTuiProcess): Promise<void> {
+  const message = getLabel('manager.conversation.queued', 'en', { count: '1' }).replace(/\s+/gu, '');
+  await vi.waitFor(async () => expect((await tui.frame()).replace(/\s+/gu, '')).toContain(message), { timeout: 30000 });
+}
+
 function ipcMeasurements(observations: IpcObservation[], pids: number[], concurrentAt: number) {
   const observedAt = Date.now();
   const requests = observations.filter((row) => row.event === 'request' && row.requestId !== 'readiness' && pids.includes(row.pid));
@@ -511,38 +516,42 @@ it.each(['ja', 'en'] as const)('shows a short summary status without displaying 
   } finally { await fixture.cleanup(); }
 });
 
-it('rejects a busy TUI message and never sends it after the active turn completes', async () => {
+it('accepts a busy TUI message and executes it after the active turn completes', async () => {
   const fixture = managerDaemonFixture('en');
   try {
     const tui = await fixture.start(fixture.repository, undefined);
     await waitForManager(tui, 'Discuss your goal');
     await submitManagerText(tui, 'The accepted request');
     await vi.waitFor(async () => expect((await fixture.state())?.running?.kind).toBe('message'), { timeout: 30000 });
-    await submitManagerText(tui, 'The rejected request');
-    await waitForManager(tui, getLabel('manager.conversation.busy', 'en'));
+    await submitManagerText(tui, 'The queued request');
+    await waitForQueuedMessage(tui);
     fixture.release();
     await waitForManager(tui, fixture.summary.objective);
     await vi.waitFor(async () => expect((await fixture.state())?.running).toBeNull(), { timeout: 30000 });
-    expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager')).toHaveLength(1);
+    await vi.waitFor(() => expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager')).toHaveLength(2));
     await tui.exit();
-    expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager')).toHaveLength(1);
+    expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager')).toHaveLength(2);
   } finally { await fixture.cleanup(); }
 });
 
-it('keeps a proposal arriving after busy /make-goal unregistered until a new explicit approval on the same screen', async () => {
+it('keeps the queued /make-goal proposal unregistered until explicit approval on the same screen', async () => {
   const fixture = managerDaemonFixture('en');
   try {
     const tui = await fixture.start(fixture.repository, undefined);
     await waitForManager(tui, 'Discuss your goal');
     await submitManagerText(tui, 'Prepare the proposal while this turn is active');
     await vi.waitFor(async () => expect((await fixture.state())?.running?.kind).toBe('message'), { timeout: 30000 });
-    const operationId = (await fixture.state())!.running!.operationId;
+    const current = (await fixture.state())!;
+    const operationId = current.running!.operationId;
     await tui.ready(operationId);
     expect((await fixture.state())?.pending).toBeNull();
     await submitManagerText(tui, '/make-goal');
-    await waitForManager(tui, getLabel('manager.conversation.busy', 'en'));
+    await waitForQueuedMessage(tui);
     fixture.release();
     await waitForManager(tui, fixture.summary.objective);
+    await vi.waitFor(async () => expect(await fixture.state()).toMatchObject({
+      revision: current.revision + 1, pending: { revision: current.revision + 1 }, running: null,
+    }), { timeout: 30000 });
     await tui.ready(null);
     const requests = () => fixture.readObservations().filter(({ event, pid }) => event === 'request' && pid === tui.child.pid);
     const proposal = (await fixture.state())!.pending!;
@@ -550,7 +559,7 @@ it('keeps a proposal arriving after busy /make-goal unregistered until a new exp
     expect((await fixture.state())?.approval).toBeNull();
     expect(requests().filter(({ command }) => command === 'message')).toHaveLength(2);
     expect(requests().filter(({ command }) => command === 'approve_summary')).toEqual([]);
-    expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager')).toHaveLength(1);
+    expect(fixture.readObservations().filter(({ event, agent }) => event === 'provider_start' && agent === 'manager')).toHaveLength(2);
     expect(fixture.readObservations().filter(({ event, approvalState }) => event === 'write' && approvalState != null)).toEqual([]);
     const goals = new GoalStore(fixture.repository);
     expect((await goals.list()).goals).toEqual([]);

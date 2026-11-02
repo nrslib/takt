@@ -81,6 +81,8 @@ export function createDirectorSlackConversationPort(options: {
         operationId = submission.operationId;
         targets.set(operationId, { endpoint, attachmentId });
         attachmentId = undefined;
+        if (submission.queuedMessageCount !== undefined) await postReply(endpoint,
+          getLabel('manager.conversation.queued', options.language, { count: String(submission.queuedMessageCount) }));
       } else {
         const message = submission.kind === 'error' ? submission.message : getLabel('manager.conversation.busy', options.language);
         await postReply(endpoint, message);
