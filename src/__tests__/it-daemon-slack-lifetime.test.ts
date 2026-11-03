@@ -21,6 +21,7 @@ it.each((['director', 'manager'] as const).flatMap((agent) =>
     writeFileSync(join(directory, 'config.yaml'), `provider: mock\nlanguage: en\n${agent === 'director' ? `director:\n${slack}` : ''}`);
     await registerProject({ globalConfigDirectory: directory, projectDirectory: repository, command: 'manager', managerUsed: true });
     const moduleUrl = (path: string) => pathToFileURL(join(process.cwd(), 'dist', path)).href;
+    const { ensureDaemon } = await import(moduleUrl('features/daemon/lifecycle.js')) as typeof import('../features/daemon/lifecycle.js');
     const fakeClient = `export function createSlackClient() {
       let release, receive;
       return {
@@ -58,11 +59,7 @@ it.each((['director', 'manager'] as const).flatMap((agent) =>
         return next(url, context);
       } });
       const { runDaemon } = await import(${JSON.stringify(moduleUrl('features/daemon/runDaemon.js'))});
-      const { ensureDaemon } = await import(${JSON.stringify(moduleUrl('features/daemon/lifecycle.js'))});
-      const daemon = runDaemon();
-      await ensureDaemon();
-      process.stdout.write('ipc-ready\\n');
-      await daemon;
+      await runDaemon();
       process.stdout.write('finished\\n');`;
     const child = spawn(process.execPath, ['--input-type=module', '-e', script], {
       cwd: repository, env: { ...process.env, TAKT_SLACK_APP_TOKEN: 'xapp-test-1', TAKT_SLACK_BOT_TOKEN: 'xoxb-test-2' },
@@ -76,8 +73,8 @@ it.each((['director', 'manager'] as const).flatMap((agent) =>
       await vi.waitFor(() => expect(stdout, stderr).toContain('slack-pending\n'), { timeout: 5_000 });
       const owner = (await readDaemonOwner(directory))!;
       expect(owner.pid).toBe(child.pid);
-      await vi.waitFor(async () => expect(await isConversationIpcReady(directory, owner)).toBe(true), { timeout: 4_000 });
-      await vi.waitFor(() => expect(stdout, stderr).toContain('ipc-ready\n'), { timeout: 4_000 });
+      // 所有者登録前の ensureDaemon は、このテストと無関係な追加起動を発生させる。
+      await ensureDaemon();
       expect(child.exitCode, stderr).toBeNull();
       expect((await readDaemonOwner(directory))?.pid).toBe(owner.pid);
       expect(await isConversationIpcReady(directory, owner)).toBe(true);
