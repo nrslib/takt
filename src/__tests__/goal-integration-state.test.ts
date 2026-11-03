@@ -5,6 +5,9 @@ import type { Goal,GoalQuestion } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 const doubles = vi.hoisted(() => ({ get: vi.fn(), getSync: vi.fn(), list: vi.fn(), update: vi.fn(), tasks: vi.fn(), merge: vi.fn(), sha: vi.fn(), remoteSha: vi.fn(), included: vi.fn(), contentIncluded: vi.fn(), worktrees: vi.fn(), diff: vi.fn(), environment: vi.fn(), gitSync: vi.fn() }));
 const standalone = vi.hoisted(() => ({ construct: vi.fn(), create: vi.fn(), answer: vi.fn(), withdraw: vi.fn() }));
+const clones = vi.hoisted(() => ({ cleanup: vi.fn(), load: vi.fn() }));
+vi.mock('../infra/task/clone.js', () => ({ cleanupOrphanedClone: clones.cleanup }));
+vi.mock('../infra/task/clone-meta.js', () => ({ loadCloneMeta: clones.load }));
 const github = vi.hoisted(() => ({ command: vi.fn() }));
 vi.mock('../infra/github/pr-command.js', () => ({ runPrCommand: github.command }));
 vi.mock('../infra/goals/standalone-inquiries.js', () => ({ StandaloneInquiryStore: class {
@@ -80,6 +83,7 @@ function syncGitResult(args: string[], target: string, included: boolean) {
 }
 beforeEach(() => {
   vi.resetAllMocks(); goal = goalRecord();
+  clones.load.mockReturnValue({ clonePath: '/takt-worktrees/task-clone' });
   github.command.mockRejectedValue(new Error('GitHub fake is unavailable'));
   vi.mocked(prepareGoalPullRequest).mockResolvedValue({ number: 1950, url: 'https://github.com/example/project/pull/1950' });
   vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(now);
@@ -329,25 +333,73 @@ it('integrates reviewed task work and records it only in the shared work log', a
   expect(doubles.merge).toHaveBeenCalledExactlyOnceWith('/project', sourceSha, goal.branch, undefined);
   expect(goal.workLog).toEqual([expect.objectContaining({ summary: expect.stringContaining('task') })]);
   expect(goal.notifications).toEqual([expect.objectContaining({ kind: 'progress' })]);
+  expect(clones.cleanup).toHaveBeenCalledExactlyOnceWith('/project', 'takt/result', { throwOnError: true });
+  expect(doubles.update.mock.invocationCallOrder[0]).toBeLessThan(clones.cleanup.mock.invocationCallOrder[0]!);
 });
-it('does nothing when Git already contains the reviewed result, including after recording failed', async () => {
+it('cleans the clone without duplicating integration when Git already contains a result whose recording failed', async () => {
   doubles.update.mockRejectedValueOnce(new Error('save failed'));
   await expect(integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja')).rejects.toThrow();
+  expect(clones.cleanup).not.toHaveBeenCalled();
   doubles.included.mockResolvedValue(true);
   expect(await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja')).toMatchObject({ status: 'merged' });
   expect(doubles.merge).toHaveBeenCalledOnce();
   expect(doubles.update).toHaveBeenCalledOnce();
+  expect(clones.cleanup).toHaveBeenCalledExactlyOnceWith('/project', 'takt/result', { throwOnError: true });
 });
-it.each(['changed SHA', 'different goal', 'still running'])('rejects %s before changing Git', async (condition) => {
+it.each(['changed SHA', 'different goal', 'still running', 'still pending'])('rejects %s before changing Git', async (condition) => {
   if (condition === 'changed SHA') doubles.sha.mockResolvedValue(targetSha);
-  else doubles.tasks.mockReturnValue([{ name: 'task', goalId: condition === 'different goal' ? 'other' : goal.id, status: 'running', branch: 'takt/result', completion: { branch: 'takt/result' } }]);
+  else doubles.tasks.mockReturnValue([{ name: 'task', goalId: condition === 'different goal' ? 'other' : goal.id, status: condition === 'still pending' ? 'pending' : 'running', branch: 'takt/result', completion: { branch: 'takt/result' } }]);
   await expect(integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja')).rejects.toThrow();
   expect(doubles.merge).not.toHaveBeenCalled(); expect(doubles.update).not.toHaveBeenCalled();
+  expect(clones.cleanup).not.toHaveBeenCalled();
 });
 it.each(['conflict', 'checked_out'] as const)('leaves work unrecorded after a %s merge result', async (status) => {
   doubles.merge.mockResolvedValue({ status, conflicts: ['file'], worktrees: ['/worktree'] });
   expect(await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'en')).toMatchObject({ status });
   expect(doubles.update).not.toHaveBeenCalled();
+  expect(clones.cleanup).not.toHaveBeenCalled();
+});
+it.each(['pending', 'running'])('preserves a %s task clone even when its reviewed SHA is already included', async (status) => {
+  doubles.included.mockResolvedValue(true);
+  doubles.tasks.mockReturnValue([{ name: 'task', goalId: goal.id, status, branch: 'takt/result', completion: { branch: 'takt/result' } }]);
+
+  await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja');
+
+  expect(clones.cleanup).not.toHaveBeenCalled();
+  expect(doubles.merge).not.toHaveBeenCalled();
+  expect(doubles.update).not.toHaveBeenCalled();
+});
+it.each([false, true])('returns the merged result and clone cleanup failure with already included=%s', async (included) => {
+  doubles.included.mockResolvedValue(included);
+  doubles.sha.mockResolvedValueOnce(sourceSha).mockResolvedValueOnce(targetSha);
+  clones.cleanup.mockImplementation(() => { throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); });
+
+  const result = await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja');
+
+  expect(result).toMatchObject({ status: 'merged', sha: targetSha, sourceBranch: 'takt/result', expectedSha: sourceSha,
+    targetBranch: goal.branch, cleanupWarning: { path: '/takt-worktrees/task-clone', reason: expect.stringMatching(/permission denied/i) } });
+  expect(clones.cleanup).toHaveBeenCalledExactlyOnceWith('/project', 'takt/result', { throwOnError: true });
+  expect(goal.workLog).toHaveLength(included ? 0 : 1);
+});
+it('does not clean the task clone when the Git merge throws', async () => {
+  const failure = new Error('merge failed');
+  doubles.merge.mockRejectedValueOnce(failure);
+
+  await expect(integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja')).rejects.toBe(failure);
+
+  expect(clones.cleanup).not.toHaveBeenCalled();
+  expect(doubles.update).not.toHaveBeenCalled();
+});
+it('preserves the clone if the task resumes before integration finishes', async () => {
+  const task = doubles.tasks()[0];
+  doubles.merge.mockImplementationOnce(async () => {
+    doubles.tasks.mockReturnValue([{ ...task, status: 'running' }]);
+    return { status: 'merged', sha: targetSha };
+  });
+
+  expect(await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja')).toMatchObject({ status: 'merged' });
+
+  expect(clones.cleanup).not.toHaveBeenCalled();
 });
 it('waits for the target branch to contain the saved goal SHA before completing', async () => {
   goal = { ...goal, questions: completionInquiries() };
@@ -789,6 +841,7 @@ it('lets the manager integrate reviewed useful work from a failed task', async (
   doubles.tasks.mockReturnValue([{ name: 'task', goalId: goal.id, goalPurpose: '確認済みの途中成果', status: 'failed', branch: 'takt/result', completion: { success: false, branch: 'takt/result' } }]);
   expect(await integrateGoalTask('/project', goal.id, 'task', sourceSha, undefined, policy, 'ja')).toMatchObject({ status: 'merged' });
   expect(doubles.merge).toHaveBeenCalledOnce();
+  expect(clones.cleanup).toHaveBeenCalledExactlyOnceWith('/project', 'takt/result', { throwOnError: true });
 });
 
 it.each(['  追加の修正が必要  ', '理'.repeat(128 * 1024)])('reopens waiting work while preserving evidence and the complete reason', async (reason) => {

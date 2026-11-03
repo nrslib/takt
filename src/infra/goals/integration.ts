@@ -1,4 +1,6 @@
 import { TaskRunner } from '../task/runner.js';
+import { cleanupOrphanedClone } from '../task/clone.js';
+import { loadCloneMeta } from '../task/clone-meta.js';
 import { buildSafeGitEnvironment } from '../task/git-environment.js';
 import { GoalStore } from './store.js';
 import type { Goal } from './schema.js';
@@ -36,6 +38,21 @@ export async function assertReviewedGoalSha(
   if (actual !== expectedSha) throw new Error(`Reviewed SHA changed: expected ${expectedSha}, current ${actual}`);
 }
 
+function cleanupIntegratedTaskClone(
+  cwd: string, taskName: string, sourceBranch: string,
+): { cleanupWarning?: { path: string; reason: string } } {
+  const task = new TaskRunner(cwd).listTaskStateItems().find((item) => item.name === taskName);
+  if (task === undefined || task.status === 'pending' || task.status === 'running') return {};
+  const meta = loadCloneMeta(cwd, sourceBranch);
+  if (meta === null) return {};
+  try {
+    cleanupOrphanedClone(cwd, sourceBranch, { throwOnError: true });
+    return {};
+  } catch (error) {
+    return { cleanupWarning: { path: meta.clonePath, reason: safeExternalErrorMessage(error) } };
+  }
+}
+
 export async function integrateGoalTask(
   cwd: string, goalId: string, taskName: string, expectedSha: string, signal: AbortSignal | undefined,
   notifications: GoalNotificationPolicy, language: Language,
@@ -47,7 +64,8 @@ export async function integrateGoalTask(
   const targetSha = await resolveGoalBranchSha(cwd, goal.branch, signal);
   // 成果取り込みは内容一致だけで省略せず、厳密な到達性を維持する。
   if (await isGoalCommitIncluded(cwd, expectedSha, targetSha, signal)) {
-    return { status: 'merged', sha: targetSha, sourceBranch, expectedSha, targetBranch: goal.branch, goal };
+    return { status: 'merged', sha: targetSha, sourceBranch, expectedSha, targetBranch: goal.branch, goal,
+      ...cleanupIntegratedTaskClone(cwd, taskName, sourceBranch) };
   }
   if (goal.status !== 'created') throw new Error('Goal cannot integrate new work');
   const task = new TaskRunner(cwd).listTaskStateItems().find((item) => item.name === taskName);
@@ -61,7 +79,8 @@ export async function integrateGoalTask(
       summary: `Integrated ${taskName} (${expectedSha}) into ${goal.branch}: ${purpose}`,
     }), { kind: 'progress', body: formatIntegratedWorkNotification(purpose, language) }, notifications));
   }
-  return { ...result, sourceBranch, expectedSha, targetBranch: goal.branch, goal: saved };
+  return { ...result, sourceBranch, expectedSha, targetBranch: goal.branch, goal: saved,
+    ...(result.status === 'merged' ? cleanupIntegratedTaskClone(cwd, taskName, sourceBranch) : {}) };
 }
 
 function shellQuote(value: string): string {

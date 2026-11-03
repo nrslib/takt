@@ -14,6 +14,7 @@
   },
   "include": [
     "e2e/helpers/managed-sdk-setup.ts",
+    "e2e/specs/loop-analysis-worker.e2e.ts",
     "e2e/specs/project-execution-lock.e2e.ts",
     "e2e/specs/run-recovery.e2e.ts",
     "e2e/specs/runtime-mcp.e2e.ts",
@@ -668,6 +669,7 @@
     "src/__tests__/taskRetryActions.test.ts",
     "src/__tests__/taskRetryPersistence.test.ts",
     "src/__tests__/taskRetryPreparation.test.ts",
+    "src/__tests__/taskRetryRunSelection.test.ts",
     "src/__tests__/taskRetryStartSelection.test.ts",
     "src/__tests__/taskSpecContext.test.ts",
     "src/__tests__/taskStatusLabel.test.ts",

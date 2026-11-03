@@ -423,6 +423,13 @@ tui:
     confirm: "Send this additional instruction?\nTask: {task}\nSummary: {summary}\nWorkflow: {workflow}\nCurrent step: {step}\nRun slug: {runSlug}\nInstruction:\n{content}"
     sent: "Additional instruction sent to {task} (instruction #{instructionId})."
   assistantRetry:
+    initialStart: "Initial workflow step"
+    noSource: "none"
+    startSource: "Planned start: {start}. Source run: {source}."
+    skippedRun: "Skipped run {run}: {reason}."
+    missing_metadata: "run metadata missing"
+    missing_resume_point: "no saved resume position"
+    missing_reports: "reports directory missing"
     selectTask: "Select a task to return to the queue."
     selectStart: "Select a start position for the task."
     resumeUnavailable: "Saved resume position is unavailable: {reason}\nSaved resume information cannot be carried forward. Select a position to restart execution, or cancel."

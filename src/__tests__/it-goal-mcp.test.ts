@@ -1,9 +1,11 @@
 import * as goalPr from '../infra/goals/pull-request.js';
+import * as goalGit from '../infra/goals/git.js';
 vi.mock('../infra/goals/events.js', async (original) => ({ ...await original<typeof import('../infra/goals/events.js')>(), saveManagerEvent: vi.fn() }));
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { execFileSync } from 'node:child_process';
-import { existsSync,mkdirSync,mkdtempSync,readFileSync,realpathSync,rmSync,writeFileSync } from 'node:fs';
+import { existsSync,mkdirSync,mkdtempSync,readFileSync,realpathSync,rmSync,symlinkSync,writeFileSync } from 'node:fs';
+import * as fs from 'node:fs';
 import * as fsPromises from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -17,6 +19,7 @@ import { loadWorkflowByIdentifier,resolveWorkflowCallTarget } from '../infra/con
 import { invalidateResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
 import { getWorkflowSourcePath } from '../infra/config/loaders/workflowSourceMetadata.js';
 import { getGlobalConfigDir, getRepertoireDir } from '../infra/config/paths.js';
+import { saveGlobalConfig } from '../infra/config/global/globalConfig.js';
 import { ConversationStore } from '../infra/conversations/store.js';
 import { conversationRecord } from './helpers/conversation-fixtures.js';
 import { GoalStore } from '../infra/goals/store.js';
@@ -26,6 +29,7 @@ import { TaskRunner } from '../infra/task/index.js';
 import { LiveInterventionFileStore } from '../infra/workflow/live-intervention-store.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
 import { TaskStore } from '../infra/task/store.js';
+import { getCloneMetaPath,saveCloneMeta } from '../infra/task/clone-meta.js';
 import type { TaskRecord } from '../infra/task/schema.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 import { registerFixtureGoal } from './helpers/registered-goal.js';
@@ -51,6 +55,9 @@ vi.mock('../infra/github/pr.js', async (original) => ({
 
 vi.mock('node:fs/promises', async (importOriginal) => ({
   ...await importOriginal<typeof import('node:fs/promises')>(),
+}));
+vi.mock('node:fs', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:fs')>(),
 }));
 vi.mock('../shared/utils/private-artifact-backend.js', async (original) => ({ ...await original<typeof import('../shared/utils/private-artifact-backend.js')>() }));
 vi.mock('node:crypto', async (importOriginal) => {
@@ -80,7 +87,7 @@ describe('manager goal task enqueue', () => {
       '  - name: work', '    persona: coder', '    instruction: Implement input validation',
       '    rules:', '      - condition: when(true)', '        next: COMPLETE',
     ].join('\n'));
-  });
+  }, 120_000);
 
   afterEach(async () => {
     vi.restoreAllMocks();
@@ -699,6 +706,143 @@ describe('local goal integration and inspection through manager MCP', () => {
     expect((await client.listTools()).tools.map((tool) => tool.name), '拒否を未登録ツールのエラーで代替しない').toContain(name);
     return client.callTool({ name, arguments: { cwd, goalId, ...extra } });
   }
+
+  function saveTaskClone(task: { taskName: string; source: string; sha: string }, directory?: string) {
+    const cloneBase = join(cwd, '.takt', 'takt-worktrees');
+    saveGlobalConfig({ language: 'ja', autoFetch: false, worktreeDir: cloneBase });
+    mkdirSync(cloneBase, { recursive: true });
+    const path = directory ?? join(cloneBase, task.taskName);
+    git(cwd, ['clone', '--shared', '--no-checkout', '--', cwd, path]);
+    git(path, ['checkout', '--detach', task.sha]);
+    writeFileSync(join(path, 'task-owned.txt'), task.taskName);
+    saveCloneMeta(cwd, task.source, path);
+    new TaskStore(cwd).update((current) => ({ tasks: current.tasks.map((record) => record.name === task.taskName
+      ? { ...record, worktree: true, worktree_path: path } : record) }));
+    return { path, metadataPath: getCloneMetaPath(cwd, task.source) };
+  }
+
+  function cloneSnapshot(clone: { path: string; metadataPath: string }) {
+    return { content: readFileSync(join(clone.path, 'task-owned.txt'), 'utf8'),
+      metadata: readFileSync(clone.metadataPath, 'utf8') };
+  }
+
+  it.each([false, true])('[SCN-TL-CLEAN-P1] removes the integrated task clone and metadata with already included=%s', async (included) => {
+    const task = await saveResult({ 'result.txt': 'integrated work\n' });
+    const clone = saveTaskClone(task);
+    expect(existsSync(clone.path)).toBe(true);
+    expect(existsSync(clone.metadataPath)).toBe(true);
+    if (included) git(cwd, ['update-ref', `refs/heads/${branch}`, task.sha]);
+    const previous = await new GoalStore(cwd).get(goalId);
+
+    await withServer(cwd, 'manager', async (client) => {
+      const result = await call(client, mergeTool, { taskName: task.taskName, expectedSha: task.sha });
+
+      expect(result.isError).toBeUndefined();
+      expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ status: 'merged' });
+      expectIncluded(task.sha, branch);
+      expect(existsSync(clone.path)).toBe(false);
+      expect(existsSync(clone.metadataPath)).toBe(false);
+      const saved = await new GoalStore(cwd).get(goalId);
+      expect(saved.workLog).toHaveLength(previous.workLog.length + (included ? 0 : 1));
+    });
+  });
+
+  it('[SCN-TL-CLEAN-N1] preserves the task clone and metadata after an integration conflict', async () => {
+    const task = await saveResult({ 'tracked.txt': 'task change\n' });
+    const clone = saveTaskClone(task);
+    const before = cloneSnapshot(clone);
+    const target = await commitFiles(branch, { 'tracked.txt': 'goal change\n' });
+    git(cwd, ['update-ref', `refs/heads/${branch}`, target]);
+
+    await withServer(cwd, 'manager', async (client) => {
+      const result = await call(client, mergeTool, { taskName: task.taskName, expectedSha: task.sha });
+
+      expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ status: 'conflict', conflicts: ['tracked.txt'] });
+      expect(git(cwd, ['rev-parse', branch])).toBe(target);
+      expect(cloneSnapshot(clone)).toEqual(before);
+    });
+  });
+
+  it('[SCN-TL-CLEAN-N2] removes only the integrated clone while preserving running and unintegrated task clones', async () => {
+    const task = await saveResult({ 'result.txt': 'integrate this\n' });
+    const clone = saveTaskClone(task);
+    const waiting = await saveResult({ 'waiting.txt': 'not integrated\n' });
+    const waitingClone = saveTaskClone(waiting);
+    const runner = new TaskRunner(cwd);
+    const source = 'takt/running-task';
+    git(cwd, ['branch', source, base]);
+    const running = runner.addTask('running work', { workflow: 'safe', goal_id: goalId, goal_purpose: 'running work', branch: source });
+    expect(runner.claimNextTasks(1)[0]!.name).toBe(running.name);
+    runner.updateRunningTaskExecution(running.name, { runSlug: 'running-work', branch: source });
+    const runningClone = saveTaskClone({ taskName: running.name, source, sha: base });
+    const runningBefore = cloneSnapshot(runningClone);
+    const waitingBefore = cloneSnapshot(waitingClone);
+
+    await withServer(cwd, 'manager', async (client) => {
+      const result = await call(client, mergeTool, { taskName: task.taskName, expectedSha: task.sha });
+
+      expect(result.isError).toBeUndefined();
+      expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ status: 'merged' });
+      expectIncluded(task.sha, branch);
+      expect(cloneSnapshot(runningClone)).toEqual(runningBefore);
+      expect(cloneSnapshot(waitingClone)).toEqual(waitingBefore);
+      expect(new TaskRunner(cwd).listTaskStateItems()).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: running.name, status: 'running' }),
+        expect.objectContaining({ name: waiting.taskName, status: 'completed' }),
+      ]));
+      expect(existsSync(clone.path)).toBe(false);
+      expect(existsSync(clone.metadataPath)).toBe(false);
+    });
+  });
+
+  it('[SCN-TL-CLEAN-P2] returns the failed cleanup path and reason while keeping the task integration successful', async () => {
+    const task = await saveResult({ 'result.txt': 'integrated despite cleanup failure\n' });
+    const clone = saveTaskClone(task);
+    const before = cloneSnapshot(clone);
+    const remove = fs.rmSync;
+    let failedRemovals = 0;
+    vi.spyOn(fs, 'rmSync').mockImplementation((path, options) => {
+      if (path === clone.path) {
+        failedRemovals++;
+        throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+      }
+      remove(path, options);
+    });
+
+    await withServer(cwd, 'manager', async (client) => {
+      const result = await call(client, mergeTool, { taskName: task.taskName, expectedSha: task.sha });
+
+      expect(result.isError).toBeUndefined();
+      expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ status: 'merged',
+        cleanupWarning: { path: clone.path, reason: expect.stringMatching(/permission denied/i) } });
+      expectIncluded(task.sha, branch);
+      expect(cloneSnapshot(clone)).toEqual(before);
+      expect(failedRemovals).toBeGreaterThan(0);
+    });
+  });
+
+  it.each(['outside path', 'outward symlink'])('preserves a clone outside the configured base referenced through an %s', async (location) => {
+    const task = await saveResult({ 'result.txt': 'safe integration\n' });
+    const clone = saveTaskClone(task, join(cwd, '.takt', 'outside-clone'));
+    let referencedClonePath = clone.path;
+    if (location === 'outward symlink') {
+      referencedClonePath = join(cwd, '.takt', 'takt-worktrees', 'linked-clone');
+      symlinkSync(clone.path, referencedClonePath, 'dir');
+      saveCloneMeta(cwd, task.source, referencedClonePath);
+    }
+    const before = cloneSnapshot(clone);
+
+    await withServer(cwd, 'manager', async (client) => {
+      const result = await call(client, mergeTool, { taskName: task.taskName, expectedSha: task.sha });
+
+      expect(result.isError).toBeUndefined();
+      expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ status: 'merged',
+        cleanupWarning: { path: referencedClonePath, reason: expect.stringMatching(/\S/) } });
+      expectIncluded(task.sha, branch);
+      expect(cloneSnapshot(clone)).toEqual(before);
+      expect(existsSync(referencedClonePath)).toBe(true);
+    });
+  });
 
   function humanSnapshot(directory = cwd) {
     return {
@@ -1962,6 +2106,16 @@ describe('goal PR publication and merge through manager MCP', () => {
 
   it('terminates the merge subprocess when the MCP request is cancelled', async () => {
     const spawn = processRunner.spawnManagedProcess;
+    const restore = goalGit.restoreGoalBranch;
+    let markRestorationFinished!: () => void;
+    const restorationFinished = new Promise<void>((resolve) => { markRestorationFinished = resolve; });
+    vi.spyOn(goalGit, 'restoreGoalBranch').mockImplementation(async (...args) => {
+      try {
+        await restore(...args);
+      } finally {
+        markRestorationFinished();
+      }
+    });
     let managed: ReturnType<typeof spawn> | undefined;
     let markStarted!: () => void;
     const started = new Promise<void>((resolve) => { markStarted = resolve; });
@@ -1983,7 +2137,8 @@ describe('goal PR publication and merge through manager MCP', () => {
       await rejected;
       await expect(managed!.wait()).rejects.toBeDefined();
       expect(() => process.kill(managed!.child.pid!, 0)).toThrow();
-      await vi.waitFor(() => expect(git(cwd, ['rev-parse', '--verify', `refs/heads/${branch}`])).toBe(sha));
+      await restorationFinished;
+      expect(git(cwd, ['rev-parse', '--verify', `refs/heads/${branch}`])).toBe(sha);
       expect(await new GoalStore(cwd).get(goalId)).toEqual(before);
     });
   });
