@@ -132,7 +132,7 @@ it.each(['task_completed', 'pr_changed'] as const)('notifies the event repositor
   const failure = new Error('provider failed');
   f.execute.mockRejectedValue(failure);
   expect(await f.service.execute(f.input, f.io)).toMatchObject({ kind: 'completed', result: { kind: 'error' } });
-  expect(doubles.notify).toHaveBeenCalledExactlyOnceWith('/second', goalId, failure);
+  expect(doubles.notify).toHaveBeenCalledExactlyOnceWith('/second', goalId, failure, f.input.turn.operationId);
 });
 it('does not turn an event response into a human registration proposal', async () => {
   const f = fixture(); f.input.event.lane = 'other';

@@ -26,6 +26,7 @@ import { startDirectoryWatcher } from '../features/daemon/watchers/directories.j
 import { readWatchTasks } from '../features/daemon/watchers/state.js';
 import { FileEventStore } from '../infra/daemon/eventStore.js';
 import { DaemonPersistedFiles } from '../infra/daemon/persistedFiles.js';
+import * as daemonPrivateFiles from '../infra/daemon/privateFile.js';
 import { FileDaemonWatchSource } from '../features/daemon/watchSource.js';
 import { receiveInboxChange, restoreLegacyConversations } from '../features/daemon/inbox.js';
 import type { TurnOutcome } from '../core/daemon/messages.js';
@@ -140,7 +141,7 @@ it.each(['command', 'observation'] as const)('accepts human input after 32 defer
   expect(pending).toEqual([]);
 });
 
-it('persists a blocked notification for a goal event when the provider fails without a TUI attachment', async () => {
+it.each(['child', 'parent'] as const)('deduplicates child and parent failure notifications with %s saving first without a TUI attachment', async (first) => {
   const f = await fixture();
   vi.spyOn(workspaceRegistry, 'findWorkspaceForRepository').mockResolvedValue(undefined);
   const goal = goalRecord();
@@ -152,17 +153,21 @@ it('persists a blocked notification for a goal event when the provider fails wit
   accepted(await f.dispatcher.accept({ ...input('failed-completion', f.id, 'other'), event: { kind: 'task_completed',
     task: { repositoryDirectory: f.repository, goalId: goal.id, taskName: 'task' }, result: { success: true, interrupted: false } } }));
   const call = await f.runner.started(1);
+  const failure = { kind: 'failed' as const, message: 'process exited' };
+  if (first === 'parent') await f.runner.finish(call, failure);
   const outcome = await service.execute(call.input, { signal: call.signal, progress() {},
     request: (request) => f.dispatcher.request(call.turn, request, call.signal) });
   expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'error' } });
-  await f.runner.finish(call, outcome);
+  if (first === 'child') await f.runner.finish(call, failure);
   const saved = JSON.parse(await readFile(path, 'utf8')) as Goal;
-  expect(saved.notifications).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'blocked', severity: 'error' })]));
+  expect(saved.notifications).toEqual([expect.objectContaining({ id: call.turn.operationId, kind: 'blocked', severity: 'error' })]);
 });
 
-it('persists a blocked notification after an unattached turn process exits and includes it in the manager snapshot', async () => {
+it('persists a blocked notification for a large goal after an unattached turn process exits and includes it in the manager snapshot', async () => {
   const f = await fixture();
-  const goal = goalRecord();
+  const goal = { ...goalRecord(), workLog: Array.from({ length: 3 }, () => ({
+    id: randomUUID(), recordedAt: new Date().toISOString(), summary: 'x'.repeat(100 * 1024),
+  })) };
   const path = join(f.repository, '.takt', 'goals', goal.id, 'goal.json');
   await mkdir(join(path, '..'), { recursive: true });
   await writeFile(path, JSON.stringify(goal));
@@ -215,6 +220,34 @@ it('persists a blocked notification after an unattached turn process exits and i
   if (terminal.kind !== 'turn_finished') throw new Error('Expected terminal turn result');
   await f.conversations.apply({ ...terminal.turn, event: start.event, outcome: terminal.outcome });
   expect((JSON.parse(await readFile(path, 'utf8')) as Goal).notifications).toHaveLength(1);
+});
+
+it.each(['read', 'write'] as const)('logs a notification %s failure and starts the next conversation turn', async (phase) => {
+  const f = await fixture();
+  const goal = goalRecord();
+  const path = join(f.repository, '.takt', 'goals', goal.id, 'goal.json');
+  await mkdir(join(path, '..'), { recursive: true });
+  await writeFile(path, phase === 'read' ? '{' : JSON.stringify(goal));
+  const errors: string[] = [];
+  const restore = installDaemonErrorLog(async (message) => { errors.push(message); });
+  cleanups.push(async () => { restore(); });
+  vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+  const failure = new Error('notification save failed');
+  const write = daemonPrivateFiles.writePrivateFile;
+  if (phase === 'write') vi.spyOn(daemonPrivateFiles, 'writePrivateFile').mockImplementation(async (target, ...args) => {
+    if (target === path) throw failure;
+    return write(target, ...args);
+  });
+  accepted(await f.dispatcher.accept({ ...input('failed-completion', f.id, 'other'), event: { kind: 'task_completed',
+    task: { repositoryDirectory: f.repository, goalId: goal.id, taskName: 'task' }, result: { success: true, interrupted: false } } }));
+  const call = await f.runner.started(1);
+  accepted(await f.post('next-turn'));
+  await f.runner.finish(call, { kind: 'failed', message: 'process exited' });
+  const next = await f.runner.started(2);
+  expect(errors).toHaveLength(1);
+  expect(next.input.event.eventId).toBe('next-turn');
+  expect(f.outputs).toContainEqual(expect.objectContaining({ kind: 'result', operationId: call.turn.operationId }));
+  await f.runner.finish(next);
 });
 
 it('waits for attachments, accepted turns and initializing IPC, then closes the runner when idle', async () => {

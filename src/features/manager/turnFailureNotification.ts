@@ -12,7 +12,7 @@ import { resolveManagerNotificationOptions, sendSavedGoalNotifications } from '.
 
 const log = createLogger('manager-turn-failure-notification');
 
-export async function notifyManagerTurnFailure(cwd: string, goalId: string | undefined, error: unknown): Promise<string | undefined> {
+export async function notifyManagerTurnFailure(cwd: string, goalId: string | undefined, error: unknown, operationId?: string): Promise<string | undefined> {
   try {
     const { policy, webhookUrl } = resolveManagerNotificationOptions(cwd);
     if (!policy.blocked) return;
@@ -29,8 +29,9 @@ export async function notifyManagerTurnFailure(cwd: string, goalId: string | und
     const notification = managerTurnFailureNotification(goalId, error, language);
     let previous: Goal | undefined;
     const saved = await new GoalStore(cwd).update(goalId, (current) => {
+      if (operationId !== undefined && current.notifications?.some((notice) => notice.id === operationId)) return current;
       previous = current;
-      return appendGoalNotification(current, notification, policy);
+      return appendGoalNotification(current, notification, policy, operationId);
     });
     if (previous !== undefined) await sendSavedGoalNotifications(cwd, previous, saved, webhookUrl);
   } catch (notificationError) {

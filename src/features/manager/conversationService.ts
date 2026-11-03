@@ -178,7 +178,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
           return { kind: 'interrupted', change: state.change({ session: { ...state.current.session, sessionId: null } }) };
         }
         if (command.kind === 'message' && assignment.kind !== 'daemon') {
-          const notice = await notifyManagerTurnFailure(reference?.repositoryDirectory ?? cwd, reference?.goalId ?? undefined, error);
+          const notice = await notifyManagerTurnFailure(reference?.repositoryDirectory ?? cwd, reference?.goalId ?? undefined, error, input.turn.operationId);
           if (notice !== undefined) io.progress(notice);
         }
         return { kind: 'completed', result: conversationErrorResult(error, language) };

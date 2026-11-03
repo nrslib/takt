@@ -7,6 +7,7 @@ import { GoalAnswerSchema, GoalIdSchema, GoalSchema, GoalTaskResultSchema } from
 import type { Language } from '../../core/models/types.js';
 import { managerTurnFailureNotification } from '../goals/notifications.js';
 import { FileAsyncLock } from './lock.js';
+import { readDisplayFile } from './displayFiles.js';
 import { readPrivateFile, writePrivateFile } from './privateFile.js';
 
 const MAX_PROJECTION_BYTES = 256 * 1024;
@@ -36,8 +37,8 @@ export class DaemonPersistedFiles {
     const lock = new FileAsyncLock();
     const io = { signal: new AbortController().signal, timeoutMs: 5000 };
     await lock.exclusive(`${path}.lock`, () => lock.exclusive(join(repositoryDirectory, '.takt', 'goal-execution.lock'), async () => {
-      const goal = await this.readGoal(repositoryDirectory, goalId);
-      if (goal === undefined) throw new Error('Missing failed turn goal');
+      const goal = GoalSchema.parse(await readDisplayFile(path));
+      if (goal.id !== goalId) throw new Error('Stored goal identity mismatch');
       if (goal.notifications?.some((notice) => notice.id === operationId)) return;
       const notification = { ...managerTurnFailureNotification(goalId, message, language), id: operationId, recordedAt: new Date().toISOString() };
       const saved = GoalSchema.parse({ ...goal, notifications: [...(goal.notifications ?? []), notification] });

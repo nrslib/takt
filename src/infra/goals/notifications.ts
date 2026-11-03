@@ -8,10 +8,10 @@ import { GoalNotificationInputSchema, type Goal, type GoalNotificationInput, typ
 
 export type GoalNotificationPolicy = Record<ManagerNotificationKind, boolean>;
 
-export function appendGoalNotification(goal: Goal, input: GoalNotificationInput, policy: GoalNotificationPolicy): Goal {
+export function appendGoalNotification(goal: Goal, input: GoalNotificationInput, policy: GoalNotificationPolicy, id: string = randomUUID()): Goal {
   if (!policy[input.kind]) return goal;
   const notification = {
-    ...GoalNotificationInputSchema.parse(input), id: randomUUID(), recordedAt: new Date().toISOString(),
+    ...GoalNotificationInputSchema.parse(input), id, recordedAt: new Date().toISOString(),
   };
   if (goal.notifications?.some((saved) => saved.id === notification.id)) throw new Error('Notification ID already exists');
   return { ...goal, notifications: [...(goal.notifications ?? []), notification] };

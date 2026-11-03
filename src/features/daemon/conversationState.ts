@@ -65,17 +65,19 @@ export class DaemonConversations implements ConversationOwner {
     if (result.outcome.kind === 'interrupted') this.interrupted.add(result.conversationId);
     else this.interrupted.delete(result.conversationId);
     if (result.outcome.kind === 'failed' && current.state.assignment.kind !== 'daemon') {
-      const reference = eventGoalReference(result.event.event);
-      if (reference?.goalId !== undefined && reference.goalId !== null) {
-        const assignment = await this.routing.display(current.state.assignment);
-        if (!assignment.repositoryDirectories.includes(reference.repositoryDirectory)) throw new Error('Failed turn goal is outside assignment');
-        const global = await globalDaemonConfiguration(this.routing.directory);
-        const project = await readDaemonConfiguration(join(reference.repositoryDirectory, '.takt', 'config.yaml'));
-        if (project.manager?.notifications?.blocked ?? global.manager?.notifications?.blocked ?? true) {
-          await new DaemonPersistedFiles(this.routing.directory).saveTurnFailure(reference.repositoryDirectory, reference.goalId,
-            result.operationId, result.outcome.message, project.language ?? global.language ?? 'en');
+      try {
+        const reference = eventGoalReference(result.event.event);
+        if (reference?.goalId !== undefined && reference.goalId !== null) {
+          const assignment = await this.routing.display(current.state.assignment);
+          if (!assignment.repositoryDirectories.includes(reference.repositoryDirectory)) throw new Error('Failed turn goal is outside assignment');
+          const global = await globalDaemonConfiguration(this.routing.directory);
+          const project = await readDaemonConfiguration(join(reference.repositoryDirectory, '.takt', 'config.yaml'));
+          if (project.manager?.notifications?.blocked ?? global.manager?.notifications?.blocked ?? true) {
+            await new DaemonPersistedFiles(this.routing.directory).saveTurnFailure(reference.repositoryDirectory, reference.goalId,
+              result.operationId, result.outcome.message, project.language ?? global.language ?? 'en');
+          }
         }
-      }
+      } catch (error) { this.onError(error); }
     }
     const version = this.version(result.conversationId, current.state.revision, result.operationId);
     const outcome = result.outcome;
