@@ -1,5 +1,19 @@
 import eslint from '@eslint/js';
 import tseslint from 'typescript-eslint';
+import { daemonEntries, daemonReachability } from './scripts/daemon-reachability.mjs';
+import { daemonRules } from './scripts/daemon-lint-rules.mjs';
+
+// 最後の統合で常時有効にする。それまでは棚卸しと opt-in 検査に使う。
+const daemonOverrides = [];
+if (process.env.TAKT_DAEMON_LINT === '1') {
+  const root = import.meta.dirname;
+  const graph = await daemonReachability({ root, entries: await daemonEntries(root) });
+  if (graph.issues.length > 0) throw new Error(JSON.stringify(graph.issues));
+  daemonOverrides.push({ files: graph.files, rules: {
+    ...daemonRules,
+    '@typescript-eslint/no-floating-promises': 'error',
+  } });
+}
 
 export default tseslint.config(
   eslint.configs.recommended,
@@ -77,6 +91,7 @@ export default tseslint.config(
       '@typescript-eslint/no-explicit-any': 'off',
     },
   },
+  ...daemonOverrides,
   {
     ignores: ['dist/', 'node_modules/', '*.config.js', 'src/__tests__/'],
   }

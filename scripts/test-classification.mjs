@@ -380,6 +380,8 @@ export const publicContractIntegrationTestFiles = Object.freeze([
 export const lightContractIntegrationTestFiles = Object.freeze([
   'src/__tests__/analytics-workflowExecution.test.ts',
   'src/__tests__/cancellable-prompt-pipe.test.ts',
+  'src/__tests__/daemon-dispatcher.integration.test.ts',
+  'src/__tests__/daemon-reachability.integration.test.ts',
   'src/__tests__/sigint-interrupt.test.ts',
 ]);
 
