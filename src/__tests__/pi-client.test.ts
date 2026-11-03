@@ -1166,8 +1166,8 @@ export default function registerLifecycleTool(pi) {
       expect(response.status).toBe('error');
       expect(response.error).toContain('permission denied');
       expect(response.error).toContain('another project failure');
-      expect(response.error).toContain('user install failed');
-      expect(response.error).toContain('temporary install failed');
+      expect(response.error).toContain('user: user install failed');
+      expect(response.error).toContain('temporary: temporary install failed');
       expect(response.error).not.toContain('/private/tmp/project-secret');
       expect(response.error).not.toContain('no enabled resources');
     } finally {
