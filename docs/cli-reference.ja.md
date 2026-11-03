@@ -97,9 +97,9 @@ takt director
 takt director --help
 ```
 
-director は実験的機能で、動作や保存するデータの形式は予告なく変わることがあります。会話と定期的な見回りには provider の費用がかかります。manager がゴールを進めてタスクを実行し、director は全 manager の確認、人への通知、人の明示的なマージ指示の担当 manager への転送を行います。director 自身は PR をマージしません。役割分担、グローバルの `director.patrol_interval` と `director.slack` の設定、Slack 接続の詳細は、[director の見回り](./goal-management.ja.md#director-の見回り)を参照してください。
+director は実験的機能で、動作や保存するデータの形式は予告なく変わることがあります。人の発言とイベントによるターンには provider の費用がかかります。manager がゴールを進めてタスクを実行し、director は全 manager の確認、人への通知、人の明示的なマージ指示の担当 manager への転送を行います。director 自身は PR をマージしません。役割分担、グローバルの `director.slack` 設定と Slack 接続は、[director の役割](./goal-management.ja.md#director-の役割)を参照してください。
 
-`takt_tell_manager` の伝言は、manager が処理中でも保存されます。保存した時点で操作 ID と manager が返り、返事を待たずに保存順に処理されます。返事・失敗・中断は保存され、あとで同じ操作 ID 付きで director の画面に知らされます。manager 一覧（`takt_list_managers`）と見回りは、読めない project を理由付きで示し、残りの manager の処理を続けます。
+`takt_tell_manager` の伝言は、manager が処理中でも保存されます。保存した時点で操作 ID と manager が返り、返事を待たずに保存順に処理されます。返事・失敗・中断は保存され、あとで同じ操作 ID 付きで director の画面に知らされます。manager 一覧（`takt_list_managers`）は、読めない project を理由付きで示し、読める manager の処理を続けます。
 
 ## Web UI の実行境界
 

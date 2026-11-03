@@ -51,7 +51,7 @@ export function useManagerInput({
     slashCompletion.reset();
   };
   const insertText = (text: string): void => {
-    if (exiting.current || (answerTarget !== null && active.current)) return;
+    if (exiting.current) return;
     if (selection.selection !== null) return;
     if (abortTarget !== null) { onInputUnavailable(); return; }
     if (answerTarget !== null) questionAnswer.switchToFreeText();
@@ -84,8 +84,7 @@ export function useManagerInput({
     if (registering.current && key.escape) {
       return;
     }
-    if (answerTarget !== null && active.current) return;
-    if (!registering.current && !active.current && abortTarget !== null) {
+    if (abortTarget !== null) {
       if (input !== '' && !key.ctrl && !key.meta && !key.return && !key.escape) onInputUnavailable();
       abortConfirmation.handleInput(abortTarget, key, abortGoal);
       return;
@@ -100,7 +99,7 @@ export function useManagerInput({
       && editKey?.kind === 'insert' && /[\r\n]$/u.test(input);
     if (trailingEnter) insertText(input.replace(/(?:\r\n|\r|\n)$/u, ''));
     const submitInput = key.return || trailingEnter;
-    if (!registering.current && !active.current && answerTarget !== null) {
+    if (answerTarget !== null) {
       if (questionAnswer.handleInput(key, submitInput, editorRef, edit, saveAnswer)) return;
     }
     if (!registering.current && canApprove && answerTarget === null && pending !== null

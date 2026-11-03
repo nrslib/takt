@@ -62,6 +62,13 @@ export function DirectorView({ client, lang, onExit }: {
   usePaste((text) => edit(applyEditorKey(editorRef.current, { kind: 'insert', text })));
   useInput((input, key) => {
     if (key.ctrl && (input === 'c' || input === 'd')) { onExit(); return; }
+    if (key.escape) {
+      const running = snapshot.state?.running;
+      if (running !== undefined && running !== null) void client.submit({ kind: 'abort_turn', operationId: running.operationId, generation: running.generation })
+        .then((result) => { if (result.kind === 'error') append(result.message); })
+        .catch((error: unknown) => append(getErrorMessage(error)));
+      return;
+    }
     if (key.return && (key.shift || key.meta)) { edit(applyEditorKey(editorRef.current, { kind: 'newline' })); return; }
     if (key.return) {
       const text = editorRef.current.text.trim();
