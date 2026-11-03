@@ -17,10 +17,11 @@ export function withdrawGoalQuestion(goal: Goal, questionId: string, reason?: st
   return { ...goal, questions: goal.questions?.map((candidate) => candidate.id === questionId ? withdrawn : candidate) };
 }
 
-export function answerGoalQuestion(goal: Goal, questionId: string, answer: string | GoalAnswerInput): Goal {
+export function answerGoalQuestion(goal: Goal, questionId: string, answer: string | GoalAnswerInput,
+  source: NonNullable<GoalQuestion['answer']>['source'] = 'tui'): Goal {
   const question = goal.questions?.find((candidate) => candidate.id === questionId);
   if (question === undefined) throw new Error('Question does not exist');
-  const answered = answerInquiry(question, answer);
+  const answered = answerInquiry(question, answer, source);
   return {
     ...goal,
     questions: goal.questions?.map((candidate) => candidate.id === questionId ? answered : candidate),

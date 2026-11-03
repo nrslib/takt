@@ -10,7 +10,7 @@ const doubles = vi.hoisted(() => ({
   initProjectDirs: vi.fn(),
   initGitProvider: vi.fn(),
   spawn: vi.fn(),
-  runAnalysis: vi.fn(),
+  executeWorkflow: vi.fn(),
   selectOption: vi.fn(),
   promptInput: vi.fn(),
 }));
@@ -28,8 +28,9 @@ vi.mock('node:child_process', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:child_process')>()),
   spawn: doubles.spawn,
 }));
-vi.mock('../features/tasks/execute/workflowExecutionApi.js', () => ({
-  runLoopAnalysisWorkflowExecution: doubles.runAnalysis,
+vi.mock('../features/tasks/execute/workflowExecution.js', () => ({
+  executeWorkflow: doubles.executeWorkflow,
+  executeWorkflowForRun: vi.fn(),
 }));
 
 describe('runtime assignment invocation', () => {
@@ -220,6 +221,92 @@ describe('runtime assignment invocation', () => {
     });
   });
 
+  it('uses the default assignment across workflow and non-workflow resolvers', async () => {
+    const fixture = runtimeFixture();
+    writeRuntime(projectDir, { ...fixture, provider: {
+      ...fixture.provider, defaults: { assignment: 'cost' }, directories: {},
+      assignments: { ...fixture.provider.assignments, cost: {
+        ...fixture.provider.assignments.cost,
+        targets: { internal_agents: { selector: { profile: 'cost' }, assistant: { profile: 'base' } } },
+      } },
+    } });
+    await initialize();
+    const { resolveSelectorProviderForProject } = await import('../infra/config/selectorProviderResolution.js');
+    const { resolveAssistantProviderModel } = await import('../features/interactive/assistantConfig.js');
+    const { resolveNonWorkflowProviderModel } = await import('../infra/config/nonWorkflowProvider.js');
+    const { resolveAuxiliaryProviderEnvironment } = await import('../infra/config/runtime-provider/provider-environment.js');
+    const results = [
+      await workflowEnvironment(),
+      resolveSelectorProviderForProject(projectCwd),
+      resolveNonWorkflowProviderModel(projectCwd),
+      resolveAuxiliaryProviderEnvironment(projectCwd, { name: 'test-workflow' }),
+    ];
+    for (const result of results) expect(result).toMatchObject({
+      provider: 'codex', model: 'cost-model', providerOptions: { codex: { reasoningEffort: 'low' } },
+    });
+    expect(resolveAssistantProviderModel(projectCwd)).toMatchObject({ provider: 'mock', model: 'base-model' });
+    writeRuntime(projectDir, { ...fixture, provider: {
+      ...fixture.provider, defaults: { assignment: 'cost' }, directories: {},
+    } });
+    await initialize();
+    expect(resolveAssistantProviderModel(projectCwd)).toMatchObject({ provider: 'codex', model: 'cost-model' });
+  });
+
+  it.each(['defaults', 'targets'] as const)('reports the source of inherited %s in both resolution paths', async (field) => {
+    const fixture = runtimeFixture();
+    const write = (profile: string) => writeRuntime(projectDir, { ...fixture, provider: {
+      ...fixture.provider,
+      defaults: { profile: field === 'defaults' ? profile : 'base' },
+      targets: { internal_agents: { assistant: { profile: field === 'targets' ? profile : 'base' } } },
+      assignments: { partial: field === 'defaults'
+        ? { targets: { internal_agents: { selector: { profile: 'base' } } } }
+        : { defaults: { profile: 'base' } } },
+      directories: {},
+    } });
+    const { resolveAssistantProviderModel } = await import('../features/interactive/assistantConfig.js');
+    write('base');
+    await initialize('partial');
+    await expect(workflowEnvironment()).resolves.toMatchObject({ provider: 'mock', model: 'base-model' });
+    expect(resolveAssistantProviderModel(projectCwd)).toMatchObject({ provider: 'mock', model: 'base-model' });
+    write('missing');
+    await initialize('partial');
+    const source = field === 'defaults' ? 'defaults' : 'targets.internal_agents.assistant';
+    await expect(workflowEnvironment()).rejects.toThrow(`Unknown profile "missing" referenced by ${source}`);
+    expect(() => resolveAssistantProviderModel(projectCwd)).toThrow(`Unknown profile "missing" referenced by ${source}`);
+  });
+
+  it('preserves selected assignment origins in the invocation cache for both resolution paths', async () => {
+    const fixture = runtimeFixture();
+    writeRuntime(projectDir, { ...fixture, provider: {
+      ...fixture.provider,
+      assignments: { ...fixture.provider.assignments, cost: { defaults: { profile: 'missing' } } },
+    } });
+    await initialize('cost');
+    const { resolveAssistantProviderModel } = await import('../features/interactive/assistantConfig.js');
+    const error = 'Unknown profile "missing" referenced by assignments.cost.defaults';
+    await expect(workflowEnvironment()).rejects.toThrow(error);
+    expect(() => resolveAssistantProviderModel(projectCwd)).toThrow(error);
+  });
+
+  it('keeps provider and model overrides above the default assignment', async () => {
+    const fixture = runtimeFixture();
+    writeRuntime(projectDir, { ...fixture, provider: {
+      ...fixture.provider, defaults: { assignment: 'cost' }, directories: {},
+    } });
+    await initialize();
+    const { resolveRuntimeEnvironment } = await import('../infra/config/runtime-provider/provider-environment.js');
+    const { resolveAssistantProviderModel } = await import('../features/interactive/assistantConfig.js');
+    const overridden = resolveRuntimeEnvironment({ projectCwd, legacySignals: [], legacy: {
+      provider: 'mock', providerSource: 'cli', model: 'override-model', modelSource: 'cli',
+      personaProviders: undefined, providerRouting: undefined, autoRouting: undefined, providerOptions: undefined,
+    } }).providerEnvironment;
+    expect(overridden).toMatchObject({ provider: 'mock', model: 'override-model' });
+    expect(overridden.providerOptions).toBeUndefined();
+    expect(resolveAssistantProviderModel(projectCwd, { model: 'model-only' })).toMatchObject({
+      provider: 'codex', model: 'model-only', providerOptions: { codex: { reasoningEffort: 'low' } },
+    });
+  });
+
   it('uses --runtime-file instead of project runtime.yaml across runtime resolvers and the analysis worker', async () => {
     const runtimeFilePath = 'runtime.cost.yaml';
     const selectedRuntimeYaml = stringifyYaml({
@@ -336,6 +423,35 @@ describe('runtime assignment invocation', () => {
     expect(() => resolveNonWorkflowProviderModel(otherCwd)).toThrow('cost');
   });
 
+  it('uses the default assignment when the analysis job has no explicit selection', async () => {
+    const fixture = runtimeFixture();
+    writeRuntime(projectDir, { ...fixture, provider: {
+      ...fixture.provider, defaults: { assignment: 'cost' }, directories: {},
+    } });
+    await initialize('directory');
+    const jobPath = join(projectCwd, 'analysis.job.json');
+    const reportDirectory = join(projectDir, 'runs', 'analysis', 'reports');
+    mkdirSync(reportDirectory, { recursive: true });
+    writeFileSync(join(reportDirectory, 'loop-analysis.md'), '# Analysis\n');
+    writeFileSync(jobPath, JSON.stringify({
+      version: 1, projectCwd, sourceRunDirectory: join(projectDir, 'runs', 'source'),
+      output: 'file', parentPid: process.pid,
+    }), { mode: 0o600 });
+    const observedProvider = vi.fn();
+    doubles.executeWorkflow.mockImplementation(async (workflow, _task, cwd, options) => {
+      const { prepareWorkflowProviderEnvironment } = await import('../infra/config/runtime-provider/execution-preparation.js');
+      observedProvider(prepareWorkflowProviderEnvironment(options.projectCwd, cwd, workflow, options).providerEnvironment);
+      return { success: true, reportDirectory };
+    });
+    const { executeLoopAnalysisJob } = await import('../features/tasks/execute/loopAnalysisWorker.js');
+
+    await executeLoopAnalysisJob(jobPath);
+
+    expect(observedProvider).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'codex', model: 'cost-model', providerOptions: { codex: { reasoningEffort: 'low' } },
+    }));
+  });
+
   it('restores the job selection before resolving the analysis workflow provider', async () => {
     const jobPath = join(projectCwd, 'analysis.job.json');
     const reportDirectory = join(projectDir, 'runs', 'analysis', 'reports');
@@ -346,8 +462,9 @@ describe('runtime assignment invocation', () => {
       output: 'file', parentPid: process.pid, runtimeAssignment: 'cost',
     }), { mode: 0o600 });
     const observedProvider = vi.fn();
-    doubles.runAnalysis.mockImplementation(async () => {
-      observedProvider(await workflowEnvironment());
+    doubles.executeWorkflow.mockImplementation(async (workflow, _task, cwd, options) => {
+      const { prepareWorkflowProviderEnvironment } = await import('../infra/config/runtime-provider/execution-preparation.js');
+      observedProvider(prepareWorkflowProviderEnvironment(options.projectCwd, cwd, workflow, options).providerEnvironment);
       return { success: true, reportDirectory };
     });
     const { executeLoopAnalysisJob } = await import('../features/tasks/execute/loopAnalysisWorker.js');
@@ -369,7 +486,7 @@ describe('runtime assignment invocation', () => {
 
     await expect(runLoopAnalysisWorker(jobPath)).rejects.toThrow('typo');
 
-    expect(doubles.runAnalysis).not.toHaveBeenCalled();
+    expect(doubles.executeWorkflow).not.toHaveBeenCalled();
     const failures = readFileSync(join(projectCwd, 'worker-errors.jsonl'), 'utf8').trim().split('\n')
       .map((line) => JSON.parse(line) as { error: string });
     expect(failures).toHaveLength(1);

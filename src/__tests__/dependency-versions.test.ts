@@ -140,7 +140,7 @@ function getCaretUpperBound(version: NodeVersion): NodeVersion {
 
 describe('dependency versions', () => {
   it.each(['@earendil-works/pi-ai', '@earendil-works/pi-coding-agent'])(
-    'keeps %s at 1.1.0 for development without including it in a production install',
+    'keeps %s at 1.4.0 for development without including it in a production install',
     (packageName) => {
       const manifest = readPackageJson();
       const packageLock = readPackageLock();
@@ -151,11 +151,11 @@ describe('dependency versions', () => {
       ));
 
       expect(manifest.dependencies?.[packageName]).toBeUndefined();
-      expect(manifest.devDependencies?.[packageName]).toBe('1.1.0');
-      expect(packageLock.packages?.[`node_modules/${packageName}`]?.version).toBe('1.1.0');
+      expect(manifest.devDependencies?.[packageName]).toBe('1.4.0');
+      expect(packageLock.packages?.[`node_modules/${packageName}`]?.version).toBe('1.4.0');
       expect(taktProcessCopies.length).toBeGreaterThan(0);
       for (const [, lockedPackage] of taktProcessCopies) {
-        expect(lockedPackage.version).toBe('1.1.0');
+        expect(lockedPackage.version).toBe('1.4.0');
         expect(lockedPackage.dev).toBe(true);
       }
     },

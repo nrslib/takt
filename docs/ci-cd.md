@@ -70,7 +70,7 @@ Add `--auto-pr` to create a PR in pipeline mode. When combined with `--skip-git`
 | `--skip-git` | Skip branch creation, commit, and push (pipeline mode, workflow-only) |
 | `--repo <owner/repo>` | Specify repository (for PR creation) |
 | `-q, --quiet` | Minimal output mode: suppress AI output (for CI) |
-| `--provider <name>` | Override agent provider (claude\|claude-sdk\|claude-headless\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|pi\|mock) |
+| `--provider <name>` | Override agent provider (claude\|claude-sdk\|claude-headless\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|devin\|pi\|mock) |
 | `--model <name>` | Override agent model |
 | `--auto-strategy <strategy>` | Auto routing strategy (cost\|balanced\|performance) |
 
@@ -205,7 +205,7 @@ export TAKT_KIRO_API_KEY=...
 
 Priority: Environment variables take precedence over `config.yaml` settings.
 
-Run `takt install deepseek-harness` before a DeepSeek Harness job. It supports Linux x64/arm64 with glibc 2.28 or later and macOS arm64 14.0 or later. Install the respective CLIs for Cursor, Copilot, and Kiro.
+Run `takt install deepseek-harness` before a DeepSeek Harness job. It supports Linux x64/arm64 with glibc 2.28 or later and macOS arm64 14.0 or later. Install the respective CLIs for Cursor, Copilot, Kiro, and Devin.
 
 ## Cost Considerations
 

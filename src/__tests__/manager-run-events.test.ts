@@ -3,12 +3,16 @@ import { createRunEventManager } from '../features/manager/runEventManager.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import type { Goal } from '../infra/goals/schema.js';
 import type { SavedManagerEvent } from '../infra/goals/events.js';
+import { ManagerTurnScheduler } from '../features/manager/managerTurnScheduler.js';
+import { conversationId } from '../infra/conversations/identity.js';
 
 const doubles = vi.hoisted(() => ({
   read: vi.fn(), remove: vi.fn(), get: vi.fn(), update: vi.fn(),
   plan: vi.fn(), connect: vi.fn(), dispose: vi.fn(), preflight: vi.fn(),
   turn: vi.fn(), createExecutor: vi.fn(), notify: vi.fn(), logError: vi.fn(),
+  readPr: vi.fn(),
 }));
+vi.mock('../infra/goals/pull-request-status.js', () => ({ readGoalPullRequestStatus: doubles.readPr }));
 vi.mock('../infra/goals/events.js', () => ({ readManagerEvents: doubles.read, deleteManagerEvent: doubles.remove }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class { get = doubles.get; update = doubles.update; } }));
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { listTaskStateItems() { return []; } } }));
@@ -17,6 +21,9 @@ vi.mock('../features/manager/managerMcp.js', () => ({ connectManagerMcp: doubles
 vi.mock('../features/manager/turnResponse.js', () => ({ getManagerOutputSchema: () => ({ type: 'object' }) }));
 vi.mock('../features/manager/turnExecutor.js', () => ({ createManagerTurnExecutor: doubles.createExecutor }));
 vi.mock('../features/manager/turnFailureNotification.js', () => ({ notifyManagerTurnFailure: doubles.notify }));
+vi.mock('../features/manager/assignment.js', () => ({ resolveCurrentManagerAssignment: async (identity: { kind: 'repository'; repositoryDirectory: string }) => ({
+  ...identity, repositoryDirectories: [identity.repositoryDirectory],
+}) }));
 vi.mock('../infra/config/managerConfig.js', () => ({ resolveManagerConfig: () => ({ patrolInterval: 1800 }) }));
 vi.mock('../shared/ui/index.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../shared/ui/index.js')>(), error: doubles.logError,
@@ -32,6 +39,7 @@ function saved(taskName: string): SavedManagerEvent {
 }
 beforeEach(() => {
   vi.resetAllMocks();
+  doubles.readPr.mockResolvedValue(undefined);
   inbox = []; goal = goalRecord();
   doubles.read.mockImplementation(() => [...inbox]);
   doubles.remove.mockImplementation((event: SavedManagerEvent) => { inbox = inbox.filter((item) => item !== event); });
@@ -68,6 +76,43 @@ function holdTurn() {
   }));
   return { get signal() { return signal; }, output: () => output?.(), finish: () => finish() };
 }
+
+it('yields to a director message between failed-event retries before continuing the due patrol', async () => {
+  const scheduler = new ManagerTurnScheduler();
+  const id = conversationId({ kind: 'repository', repositoryDirectory: '/project' });
+  const queue: string[] = [];
+  const order: string[] = [];
+  let releaseDirector!: () => void;
+  scheduler.registerQueue(id, { peek: () => queue[0], start: () => {
+    const next = queue[0];
+    if (next !== undefined && scheduler.tryAcquire(id, next)) {
+      queue.shift(); order.push(next);
+      releaseDirector = () => scheduler.release(id, next);
+    }
+  } });
+  const manager = createRunEventManager('/project', scheduler);
+  inbox = [saved('failed-a'), saved('failed-b')];
+  doubles.turn.mockResolvedValue({ kind: 'error', message: 'first attempt failed' });
+  await manager.processPending(new AbortController().signal, 10);
+  expect(inbox).toHaveLength(2);
+  inbox.push(patrol());
+  doubles.turn.mockImplementation(async ({ text }: { text: string }) => {
+    const event = (JSON.parse(text) as { event: { kind: string; taskName?: string } }).event;
+    const label = event.taskName ?? event.kind;
+    order.push(label);
+    if (label === 'failed-a') queue.push('director');
+    return { kind: 'reply', message: `handled:${label}` };
+  });
+  const processing = manager.processPending(new AbortController().signal, 10);
+  try {
+    await vi.waitFor(() => expect(order).toEqual(['failed-a', 'director']));
+    expect(inbox.map(({ event }) => event.kind)).toEqual(['completion', 'patrol']);
+  } finally { releaseDirector?.(); }
+  expect(await processing).toBe(true);
+  expect(order).toEqual(['failed-a', 'director', 'failed-b', 'patrol']);
+  expect(inbox).toEqual([]);
+  await manager.close();
+});
 
 it('keeps a turn alive for fifty minutes of repeated provider output and records its completion once', async () => {
   vi.useFakeTimers();
@@ -205,6 +250,39 @@ it('transfers user MCP servers to connection setup and the merged servers to pre
     expect(doubles.createExecutor).toHaveBeenCalledWith('/project', expect.objectContaining({
       ctx: expect.objectContaining({ mcpServers: servers, providerOptions }),
     }));
+  } finally { await manager.close(); }
+});
+
+it.each(['available', 'unavailable', 'mismatch'] as const)('passes %s PR evidence into the patrol turn', async (status) => {
+  goal = { ...goal, status: 'awaiting_merge', createdAt: '2026-10-14T00:00:00Z',
+    pullRequest: { number: 1950, url: 'https://github.com/example/project/pull/1950' } };
+  const evidence = status === 'available'
+    ? { status, pullRequest: { number: 1950, url: goal.pullRequest!.url, headRefName: goal.branch,
+      baseRefName: goal.integrationBranch, baseRefOid: 'b'.repeat(40), mergeCommit: { oid: 'c'.repeat(40) }, state: 'MERGED' } }
+    : { status };
+  doubles.readPr.mockResolvedValue(evidence);
+  const queriedGoal = goal;
+  inbox = [patrol()];
+  const manager = createRunEventManager('/project');
+  try {
+    expect(await manager.processPending(new AbortController().signal, 1)).toBe(true);
+    expect(doubles.readPr).toHaveBeenCalledExactlyOnceWith('/project', queriedGoal, expect.any(AbortSignal));
+    expect(JSON.parse(doubles.turn.mock.calls[0]![0].text).patrol.pullRequestStatus).toEqual(evidence);
+    expect(inbox).toEqual([]);
+  } finally { await manager.close(); }
+});
+
+it.each(['created', 'no saved PR', 'ordinary event'])('does not query PR evidence for %s', async (condition) => {
+  goal = { ...goal, status: condition === 'created' ? 'created' : 'awaiting_merge',
+    createdAt: '2026-10-14T00:00:00Z',
+    ...(condition === 'no saved PR' ? {} : { pullRequest: { number: 1950, url: 'https://github.com/example/project/pull/1950' } }),
+  };
+  inbox = [condition === 'ordinary event' ? saved('task-a') : patrol()];
+  const manager = createRunEventManager('/project');
+  try {
+    await manager.processPending(new AbortController().signal, 1);
+    expect(doubles.readPr).not.toHaveBeenCalled();
+    expect(doubles.turn).toHaveBeenCalledOnce();
   } finally { await manager.close(); }
 });
 

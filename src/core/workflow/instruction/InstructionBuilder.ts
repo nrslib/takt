@@ -13,6 +13,7 @@ import type { InstructionContext } from './instruction-context.js';
 import { buildEditRule, buildGitRules } from './instruction-context.js';
 import { escapeTemplateChars, prepareTemplatePlaceholders, replaceTemplatePlaceholders } from './escape.js';
 import type { PreparedInstruction } from './prepared-instruction.js';
+import { renderCurrentReport } from './prepared-instruction.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import { renderPhaseContext } from '../../../shared/prompts/phase-context.js';
 import { renderFallbackNotice } from './fallback-notice.js';
@@ -109,11 +110,12 @@ export class InstructionBuilder {
     const hasFallbackNotice = fallbackNotice.length > 0;
 
     // Report info (from output contracts)
-    const hasReport = !!(this.step.outputContracts && this.step.outputContracts.length > 0 && this.context.reportDir);
+    const hasReport = !!(this.context.reportDir && (this.step.outputContracts?.length || this.step.inputReports !== undefined));
     let reportInfo = '';
     if (hasReport && this.step.outputContracts && this.context.reportDir) {
       reportInfo = renderReportContext(this.step.outputContracts, this.context.reportDir);
     }
+    if (hasReport && reportInfo.length === 0) reportInfo = `- Report Directory: ${this.context.reportDir}`;
 
     // Skip auto-injection for sections whose placeholders exist in the template
     const tmpl = this.step.instruction;
@@ -170,21 +172,32 @@ export class InstructionBuilder {
     const referencedDeclaredNames = new Set(
       [...workflowRules.injectedReports, ...prepared.injectedReports]
         .filter((report) => report.scope === 'declared-producer')
-        .map((report) => report.reference),
+        .map((report) => `${report.kind ?? 'current'}:${report.reference}`),
     );
-    const unreferencedDeclaredReports = (this.context.declaredReportInputs ?? [])
-      .flatMap(({ reports }) => reports)
-      .filter((report) => !referencedDeclaredNames.has(report.reference));
-    const instructions = unreferencedDeclaredReports.length === 0
+    const declaredReports = (this.context.declaredReportInputs ?? []).flatMap(({ reports }) => reports);
+    const unreferencedDeclaredReports = declaredReports
+      .flatMap((report) => [
+        { ...report, content: renderCurrentReport(report) },
+        ...(report.history === undefined ? [] : [{ reference: report.reference, scope: report.scope, producer: report.producer,
+          kind: 'history' as const, content: report.history }]),
+      ])
+      .filter((report) => !referencedDeclaredNames.has(`${report.kind ?? 'current'}:${report.reference}`));
+    const reportInstructions = unreferencedDeclaredReports.length === 0
       ? this.appendCompanionInstruction(prepared.text)
       : [
           this.appendCompanionInstruction(prepared.text),
           '',
           language === 'ja' ? '## 宣言された成果物入力' : '## Declared report inputs',
           unreferencedDeclaredReports.map((report) =>
-            `### ${report.producer === undefined ? report.reference : `${report.producer}: ${report.reference}`}\n${report.content}`,
+            `### ${report.producer === undefined ? report.reference : `${report.producer}: ${report.reference}`}${report.kind === 'history' ? ' (history)' : ''}\n${report.content}`,
           ).join('\n\n'),
         ].join('\n');
+    const currentExecutions = declaredReports.some((report) => report.history !== undefined)
+      ? declaredReports.flatMap((report) => report.execution === undefined ? [] : [
+          `- ${report.producer}: ${report.reference}; execution=${report.execution.id}; order=${report.execution.order}; completion_order=${report.execution.completionOrder ?? 'unavailable'}; producer execution=${report.origin?.id ?? 'unavailable'}; producer start=${report.origin?.order ?? 'unavailable'}; producer completion=${report.origin?.completionOrder ?? 'unavailable'}`,
+        ]) : [];
+    const instructions = currentExecutions.length === 0 ? reportInstructions
+      : [reportInstructions, '', language === 'ja' ? '## 現在レポートの実行記録' : '## Current report executions', ...currentExecutions].join('\n');
     const reportPreparation = this.step.outputContracts?.flatMap((entry) => {
       if (!isOutputContractItem(entry)) return [];
       const content = [entry.order, entry.format].filter(Boolean).join('\n\n');
@@ -271,7 +284,7 @@ export class InstructionBuilder {
       reportPreparation,
     });
     const referencedReports = new Map(
-      [...workflowRules.injectedReports, ...prepared.injectedReports].map((report) => [report.reference, report]),
+      [...workflowRules.injectedReports, ...prepared.injectedReports].map((report) => [`${report.kind ?? 'current'}:${report.reference}`, report]),
     );
     return {
       text,

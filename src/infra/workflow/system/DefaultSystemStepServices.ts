@@ -1,4 +1,5 @@
 import { TaskRunner } from '../../task/index.js';
+import { resolveCommandInput } from './system-command-input.js';
 import { getGitProvider } from '../../git/index.js';
 import { commitAndPushEffect } from './system-pr-code-effects.js';
 import type {
@@ -88,6 +89,9 @@ function resolveInput(
   resolutionContext?: SystemStepInputResolutionContext,
 ): unknown {
   switch (input.type) {
+    case 'command':
+      if (state === undefined) throw new Error('Command system input requires workflow state');
+      return resolveCommandInput(input, options, state);
     case 'pr_status': {
       const context = options.prExecutionContext;
       if (!context) throw new Error('pr_status requires PR execution context');

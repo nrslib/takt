@@ -117,6 +117,8 @@ vi.mock('../infra/task/index.js', () => ({
 
 vi.mock('../infra/config/index.js', () => ({
   getWorkflowDescription: mockGetWorkflowDescription,
+  loadGlobalConfig: () => ({}),
+  loadProjectConfig: () => ({}),
   resolveConfigValues: (...args: unknown[]) => mockResolveConfigValues(...args),
   resolveConfigValue: vi.fn(() => undefined),
   loadPersonaSessions: mockLoadPersonaSessions,

@@ -7,6 +7,16 @@ import type { McpServerConfig } from './types.js';
  */
 const trustedTaskStateMcpServerRecords = new WeakSet<object>();
 const trustedTaskStateMcpToolNames = new WeakMap<object, readonly string[]>();
+const trustedConversationMcpServerRecords = new WeakSet<object>();
+
+export function markConversationMcpServers(servers: Record<string, McpServerConfig>): Record<string, McpServerConfig> {
+  trustedConversationMcpServerRecords.add(servers);
+  return servers;
+}
+
+export function isTrustedConversationMcpServers(value: unknown): boolean {
+  return typeof value === 'object' && value !== null && trustedConversationMcpServerRecords.has(value);
+}
 
 export function markTaskStateMcpServers(
   servers: Record<string, McpServerConfig>,
@@ -22,6 +32,20 @@ export function isTrustedTaskStateMcpServers(value: unknown): value is Record<st
 }
 
 /**
+ * Resolve the raw (server-local) names of the trusted task-state read-only
+ * tools. Provider adapters that approve tools per server (for example Codex)
+ * consume these names directly.
+ */
+export function resolveTrustedTaskStateMcpToolNames(
+  value: unknown,
+): readonly string[] | undefined {
+  if (!isTrustedTaskStateMcpServers(value)) {
+    return undefined;
+  }
+  return trustedTaskStateMcpToolNames.get(value);
+}
+
+/**
  * Resolve the provider-facing names for the trusted task-state read-only
  * tools. The returned names use the Claude-compatible MCP convention because
  * that is the common allowlist format accepted by the provider boundary.
@@ -29,9 +53,5 @@ export function isTrustedTaskStateMcpServers(value: unknown): value is Record<st
 export function resolveTrustedTaskStateMcpAllowedTools(
   value: unknown,
 ): readonly string[] | undefined {
-  if (!isTrustedTaskStateMcpServers(value)) {
-    return undefined;
-  }
-  const toolNames = trustedTaskStateMcpToolNames.get(value);
-  return toolNames?.map((toolName) => `mcp__takt__${toolName}`);
+  return resolveTrustedTaskStateMcpToolNames(value)?.map((toolName) => `mcp__takt__${toolName}`);
 }

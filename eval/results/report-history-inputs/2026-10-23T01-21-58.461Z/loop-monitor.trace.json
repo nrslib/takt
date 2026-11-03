@@ -1,0 +1,42 @@
+{
+  "model": "gpt-6.1-sol",
+  "effort": "high",
+  "sandbox": "read-only",
+  "approvalPolicy": "never",
+  "observedTurnContexts": 1,
+  "startedFresh": true,
+  "networkAccessEnabled": false,
+  "webSearchMode": "disabled",
+  "executedPromptHash": "a779af22d0dd9a63a238fd035b87c44231b387deee130442cbcd1b25918bb2f2",
+  "executedResponseHash": "386918b1ffb48aa02994832dfc6f0e102a75bbf9f8936fd7519bf4e2745c3421",
+  "promptHash": "63b1f2bb20a1172bc6fe6335abd70d03eed45827708519110a18cfaf0f98e3be",
+  "responseHash": "7470a37279634a805a7eb8c45ca89f407480395bd01e03ca66c9ab24635c62ec",
+  "commands": [
+    {
+      "version": "current",
+      "path": "project/reports/.takt-report-internal/executions/versions/c9ccf238-aa61-4b47-a168-63b5909dfc6d/review-resolution.md",
+      "marker": "CURRENT_da73d9d8-fbb3-48d0-b144-26553fefebe2",
+      "cwd": "project",
+      "command": "/bin/zsh -lc \"sed -n '801,1200p' reports/.takt-report-internal/executions/versions/c9ccf238-aa61-4b47-a168-63b5909dfc6d/review-resolution.md; cat reports/.takt-report-internal/executions/versions/6c1b51db-563f-4834-b97d-dcb96fb8eb13/review-resolution.md\"",
+      "exitCode": 0,
+      "status": "completed",
+      "commandExcerpt": false,
+      "recordedCommandHash": "e78b6895bde45b6ebc81d6a3e808ef513d554f37d2a62b8ea2d7eda0ab615f86",
+      "exitCodeScope": "recorded command",
+      "output": "照合証拠: CURRENT_da73d9d8-fbb3-48d0-b144-26553fefebe2",
+      "artifactHash": "b8cec51eb798d04eaf48fbd04b32e47e5a0a629c8156676e454cf025ef327825"
+    }
+  ],
+  "toolCount": 9,
+  "toolTypes": [
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution"
+  ]
+}

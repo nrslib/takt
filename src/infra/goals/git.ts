@@ -67,3 +67,10 @@ export function createGoalBranch(cwd: string, branch: string, commit: string): v
 export function removeGoalBranch(cwd: string, branch: string, commit: string): void {
   git(cwd, ['update-ref', '-d', toLocalBranchRef(branch), commit]);
 }
+
+export async function restoreGoalBranch(cwd: string, branch: string, commit: string): Promise<void> {
+  const ref = toLocalBranchRef(branch);
+  if (!await hasExactRef(cwd, ref, undefined)) {
+    await goalGitText(cwd, ['update-ref', ref, commit, ''], undefined);
+  }
+}

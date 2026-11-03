@@ -28,7 +28,10 @@ import {
   resolveConfigValue,
   resolveConfigValues,
   loadPersonaSessions,
+  loadGlobalConfig,
+  loadProjectConfig,
 } from '../../infra/config/index.js';
+import { resolveWorkflowSystemCommandsForProject } from '../../infra/config/loaders/workflowNormalizationPolicies.js';
 import { resolvePersonaSessionId } from '../../infra/config/project/sessionStore.js';
 import { resolveAssistantProviderModel } from '../../features/interactive/assistantConfig.js';
 import { program } from './program.js';
@@ -209,6 +212,7 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       ...(sourceContext ? { sourceContext } : {}),
       ...(prBranch ? { excludeActions: ['create_issue'] as const } : {}),
       ...(opts.continue === true ? { continueSession: true } : {}),
+      ...(prBranch ? { getWorkflowSystemCommandsPolicy: () => selectOptions.workflowSystemCommandsPolicy } : {}),
       // The session stays open: each decision runs here and the conversation
       // takes the next one, until the user leaves it.
       dispatch: async (workflowId, actionResult) => {
@@ -399,6 +403,9 @@ export async function executeDefaultAction(task?: string): Promise<void> {
       };
     }
     if (prBranch) {
+      selectOptions.workflowSystemCommandsPolicy ??= resolveWorkflowSystemCommandsForProject(
+        loadGlobalConfig(), loadProjectConfig(resolvedCwd),
+      );
       info(`Fetching and checking out PR branch: ${prBranch}`);
       checkoutBranch(resolvedCwd, prBranch);
       if (selectOptions.prContext) {

@@ -31,7 +31,7 @@ export async function answerConversationInquiry(
       : (await new GoalStore(target.repositoryDirectory).get(target.goalId)).questions?.find(({ id }) => id === command.questionId);
     if (question === undefined) throw new ConversationError('invalid_input');
     // Validate the complete answer against the saved inquiry before changing any permission file.
-    answerInquiry(question, command.answer);
+    answerInquiry(question, command.answer, command.source);
     const permission = command.permission;
     if (permission !== undefined) {
       let scope = permission.scope;
@@ -52,11 +52,11 @@ export async function answerConversationInquiry(
     }
     signal.throwIfAborted();
     if (target.goalId === null) {
-      await standalone!.answer(command.questionId, command.answer);
+      await standalone!.answer(command.questionId, command.answer, command.source);
       answerSaved = true;
     } else {
       const saved = await new GoalStore(target.repositoryDirectory).update(target.goalId,
-        (goal) => answerGoalQuestion(goal, command.questionId, command.answer), () => { answerSaved = true; });
+        (goal) => answerGoalQuestion(goal, command.questionId, command.answer, command.source), () => { answerSaved = true; });
       const answer = saved.questions!.find(({ id }) => id === command.questionId)!.answer!;
       saveManagerEvent(target.repositoryDirectory, { kind: 'answer', goalId: target.goalId, questionId: command.questionId, answer });
       await ensureManagerRun(target.repositoryDirectory);

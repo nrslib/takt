@@ -1,8 +1,11 @@
-Implement according to the plan, making existing tests pass.
+Implement according to the plan, creating and running the necessary tests.
 Refer only to files within the Report Directory shown in the Workflow Context. Do not search or reference other report directories.
 Use reports in the Report Directory as the primary source of truth. If additional context is needed, you may consult Previous Response and conversation history as secondary sources (Previous Response may be unavailable). If information conflicts, prioritize reports in the Report Directory and actual file contents.
 
-**Important**: Tests have already been written. Implement production code to make existing tests pass.
+**Test report:**
+{report:test-report.md}
+
+- Create and run tests that required implementation first, along with tests found necessary during implementation
 - Review existing test files and understand the expected behavior
 - Implement production code to satisfy the plan requirements and contract map, using existing tests as executable evidence rather than as the upper bound of scope
 - Omit additional tests only after confirming that existing tests directly cover each contract ID's intended valid behavior and applicable counterexamples, boundary states, representative failure paths, and required integration paths. Otherwise add or strengthen tests; if that cannot be done in scope, record the specific unverified reason in the completion evidence

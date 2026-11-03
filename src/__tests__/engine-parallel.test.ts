@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
+import { writePhaseReportFixture } from './helpers/phase-report-fixture.js';
 import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -546,9 +547,9 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       'reports',
       reportName,
     );
-    vi.mocked(runReportPhase).mockImplementation(async (_step, _iteration, _context, onReportWritten) => {
+    vi.mocked(runReportPhase).mockImplementation(async (_step, _iteration, context, onReportWritten) => {
       mkdirSync(join(reportPath, '..'), { recursive: true });
-      writeFileSync(reportPath, '# Architecture review\n');
+      writePhaseReportFixture(context, reportName, '# Architecture review\n');
       onReportWritten?.(reportName);
       return undefined;
     });
@@ -1051,7 +1052,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       .toContain(facetKnowledge(config, 'security-facets', 'cli'));
   });
 
-  it('should preserve selected dynamic fragment metadata through participant and report execution', async () => {
+  it.each(['architecture', 'frontend'])('should preserve selected dynamic fragment metadata through participant and report execution when %s reports first', async (firstReporter) => {
     const raw = dynamicParallelWorkflowRaw();
     Object.assign(raw, {
       report_formats: {
@@ -1112,6 +1113,12 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       provider: string | undefined;
       providerOptions: unknown;
     }> = [];
+    const firstReportStarted = createDeferred();
+    vi.mocked(runReportPhase).mockImplementation(async (step) => {
+      if (step.name === firstReporter) {
+        firstReportStarted.resolve();
+      }
+    });
     vi.mocked(runAgent).mockImplementation(async (persona, _instruction, options) => {
       if (options?.outputSchema) {
         return makeResponse({
@@ -1132,6 +1139,9 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
         systemPrompt: persona ?? '',
         userInstruction: 'review',
       });
+      if (persona !== `${firstReporter}-reviewer`) {
+        await firstReportStarted.promise;
+      }
       return makeResponse({ persona: persona ?? 'reviewer', content: 'approved' });
     });
     mockRuleEvaluationSequence([
@@ -1163,8 +1173,9 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     ]);
     const reportedSteps = vi.mocked(runReportPhase).mock.calls.map(([step]) => step);
     expect(reportedSteps).toHaveLength(2);
-    expect(reportedSteps).toEqual([
-      expect.objectContaining({
+    expect(reportedSteps[0]?.name).toBe(firstReporter);
+    expect(Object.fromEntries(reportedSteps.map((step) => [step.name, step]))).toEqual({
+      architecture: expect.objectContaining({
         name: 'architecture',
         persona: 'architecture-reviewer',
         policyContents: [{ content: 'Architecture policy contract' }],
@@ -1174,7 +1185,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
           format: 'Return a metadata-aware review report.',
         })],
       }),
-      expect.objectContaining({
+      frontend: expect.objectContaining({
         name: 'frontend',
         persona: 'frontend-reviewer',
         policyContents: [{ content: 'Frontend policy contract' }],
@@ -1184,8 +1195,9 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
           format: 'Return a metadata-aware review report.',
         })],
       }),
-    ]);
+    });
     expect(reportedSteps.some((step) => step.name === 'backend')).toBe(false);
+    expect(state.lastOutput?.content.match(/^## .+$/gm)).toEqual(['## architecture', '## frontend']);
   });
 
   it('should record same-named parallel parent and child participation separately', async () => {
@@ -1204,11 +1216,11 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
       report: [{ name: 'frontend-review.md', format: 'review' }],
     };
     const config = normalizeWorkflowConfig(raw, tmpDir);
-    vi.mocked(runReportPhase).mockImplementation(async (step, _iteration, _context, onReportWritten) => {
+    vi.mocked(runReportPhase).mockImplementation(async (step, _iteration, context, onReportWritten) => {
       const reportDir = join(tmpDir, '.takt', 'runs', 'test-report-dir', 'reports');
       mkdirSync(reportDir, { recursive: true });
       for (const contract of step.outputContracts ?? []) {
-        writeFileSync(join(reportDir, contract.name), `${step.name} report`, 'utf-8');
+        writePhaseReportFixture(context, contract.name, `${step.name} report`);
         onReportWritten?.(contract.name);
       }
     });
@@ -1286,7 +1298,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
     };
     const reportDir = join(tmpDir, '.takt', 'runs', 'test-report-dir', 'reports');
     let testingAttempt = 0;
-    vi.mocked(runReportPhase).mockImplementation(async (step, _iteration, _context, onReportWritten) => {
+    vi.mocked(runReportPhase).mockImplementation(async (step, _iteration, context, onReportWritten) => {
       if (step.name === 'testing' && ++testingAttempt === failedAttempt) {
         throw new ReportPhaseGenerationError('report failed', 'provider_error', {
           requiresFreshPhase1: false,
@@ -1294,7 +1306,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
         });
       }
       for (const contract of step.outputContracts ?? []) {
-        writeFileSync(join(reportDir, contract.name), `${step.name} report from attempt ${testingAttempt}`);
+        writePhaseReportFixture(context, contract.name, `${step.name} report from attempt ${testingAttempt}`);
         onReportWritten?.(contract.name);
       }
     });
@@ -1363,7 +1375,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
         });
       }
       mkdirSync(context.reportDir, { recursive: true });
-      writeFileSync(join(context.reportDir, 'backend.md'), 'backend report');
+      writePhaseReportFixture(context, 'backend.md', 'backend report');
       onReportWritten?.('backend.md');
     });
     vi.mocked(runAgent).mockImplementation(async (persona, instruction, options) => {

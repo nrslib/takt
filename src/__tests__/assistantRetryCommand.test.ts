@@ -70,7 +70,8 @@ vi.mock('../features/tasks/execute/reusedWorktree.js', () => ({
   },
 }));
 
-vi.mock('../features/tasks/taskRetryPreparation.js', () => ({
+vi.mock('../features/tasks/taskRetryPreparation.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../features/tasks/taskRetryPreparation.js')>()),
   prepareFailedTaskRetry: (...args: unknown[]) => mocks.prepareFailedTaskRetry(...args),
   buildFailedTaskRetryStartContext: (...args: unknown[]) => mocks.buildFailedTaskRetryStartContext(...args),
   resolveFailedTaskRetryStart: (...args: unknown[]) => mocks.resolveFailedTaskRetryStart(...args),
@@ -163,7 +164,14 @@ const implementRestartPoint: WorkflowRestartPoint = {
   stack: [{ workflow: 'development', workflow_ref: 'project:development', step: 'implement', kind: 'agent' }],
 };
 
+const failedResumePoint: WorkflowResumePoint = {
+  version: 2,
+  stack: [{ workflow: 'development', workflow_ref: 'project:development', step: 'implement', kind: 'agent', occurrence: 1 }],
+  iteration: 1, elapsed_ms: 0, workflow_call_invocations: {}, workflow_step_participations: {},
+};
+
 const preparation: FailedTaskRetryPreparation = {
+  skippedRuns: [],
   worktreePath: task.worktreePath!,
   freshStart: false,
   interactionCwd: task.worktreePath!,
@@ -174,7 +182,7 @@ const preparation: FailedTaskRetryPreparation = {
   runMeta: null,
   previousWorkflow: 'development',
   previousOrderContent: '# Original order\n\nFix diagnostics.',
-  resumePoint: undefined,
+  resumePoint: failedResumePoint,
 };
 
 const options: AssistantRetryCommandOptions = {
@@ -242,9 +250,11 @@ function setPreparedStart(): void {
   mocks.prepareFailedTaskRetry.mockReturnValue(preparation);
   mocks.buildFailedTaskRetryStartContext.mockReturnValue({
     workflowName: 'development',
-    workflowConfig: { steps: [] },
+    workflowConfig: { name: 'development', initialStep: 'plan', maxSteps: 10,
+      steps: ['plan', 'implement'].map((name) => ({ name, personaDisplayName: name, instruction: name })),
+    },
     workflowOverride: undefined,
-    options: {},
+    options: { resumePoint: failedResumePoint },
     startOptions: {
       options: [
         { id: 'resume-checkpoint', label: 'Resume from implement', path: '"development" > "implement"', selectable: true },
@@ -256,7 +266,7 @@ function setPreparedStart(): void {
   });
   mocks.resolveFailedTaskRetryStart.mockImplementation((_context, id: string) => {
     if (id === 'resume-checkpoint') {
-      return { label: 'Resume from implement', startStep: 'implement', resumePoint: undefined, restartPoint: undefined };
+      return { label: 'Resume from implement', startStep: 'implement', resumePoint: failedResumePoint, restartPoint: undefined };
     }
     return { label: 'Restart implement', startStep: undefined, resumePoint: undefined, restartPoint: implementRestartPoint };
   });
@@ -561,14 +571,14 @@ describe('runAssistantRetryCommand', () => {
     mocks.resolveWorkflowCallTarget.mockImplementation((_parent, step) => step.call === 'child' ? child : leaf);
     mocks.listAllTaskItems.mockReturnValue([{ ...exceededTask, data: { ...exceededTask.data!, resume_point: resumePoint } }]);
     setStartResponse('not JSON');
-    setStartResponse('{"startOptionId":"resume-checkpoint"}');
+    setStartResponse(position === 'renamed leaf' ? '{"startOptionId":"restart:1.0.0"}' : '{"startOptionId":"resume-checkpoint"}');
 
     await runAssistantRetryCommand({ ...options, command: 'requeue', inlineText: 'Restart child final-gate.' });
 
     expect(mocks.callAIWithRetry).toHaveBeenCalledTimes(2);
     for (const [prompt] of mocks.callAIWithRetry.mock.calls) {
       const payload = JSON.parse(prompt);
-      for (const id of ['restart:1.0.0', 'resume-checkpoint']) {
+      for (const id of position === 'renamed leaf' ? ['restart:1.0.0'] : ['restart:1.0.0', 'resume-checkpoint']) {
         expect(payload.startOptions.find((option: { id: string }) => option.id === id)).toMatchObject({
           path: id === 'resume-checkpoint' && position !== 'leaf'
             ? '"development" > "delegate" → "child" > "review"'
@@ -580,10 +590,16 @@ describe('runAssistantRetryCommand', () => {
           { path: '"development" > "delegate" → "child" > "review"', ...(onHeading ? { description: 'Child review' } : {}) },
         ]);
       }
+      if (position === 'renamed leaf') {
+        expect(payload.startOptions.some((option: { id: string }) => option.id === 'resume-checkpoint')).toBe(false);
+      }
       expect(payload.startOptions.every((option: { id: string }) => !option.id.startsWith('heading:'))).toBe(true);
     }
-    expect(mocks.requeueTask.mock.calls[0]![2].resumePoint).toEqual({ ...resumePoint,
-      stack: position === 'leaf' ? resumePoint.stack : resumePoint.stack.slice(0, 2) });
+    if (position === 'renamed leaf') {
+      expect(mocks.requeueTask.mock.calls[0]![2].resumePoint).toBeUndefined();
+    } else {
+      expect(mocks.requeueTask.mock.calls[0]![2].resumePoint).toEqual(resumePoint);
+    }
     expect(mocks.requeueExceededTask).not.toHaveBeenCalled();
   });
 

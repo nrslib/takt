@@ -29,5 +29,8 @@ export function cloneWorkflowResumePoint(resumePoint: WorkflowResumePoint): Work
           .map(([namespace, names]) => [namespace, [...names]]),
       ),
     }),
+    ...(resumePoint.report_input_recoveries === undefined ? {} : {
+      report_input_recoveries: structuredClone(resumePoint.report_input_recoveries),
+    }),
   };
 }

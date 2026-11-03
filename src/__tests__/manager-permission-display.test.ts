@@ -1,4 +1,4 @@
-import { collectItems } from './helpers/manager-display-items.js';
+import { collectItems, iterateTestDisplayEvents } from './helpers/manager-display-items.js';
 import { createElement } from 'react';
 import { cleanup, render } from 'ink-testing-library';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -6,7 +6,6 @@ import { ManagerView } from '../features/manager/ManagerView.js';
 import { randomUUID } from 'node:crypto';
 import type { ConversationClientSnapshot } from '../features/manager/conversationIpcClient.js';
 import type { ConversationCommand, PortOutput } from '../features/manager/conversationPort.js';
-import * as savedEvents from '../features/manager/savedEvents.js';
 import type { Goal } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 
@@ -31,7 +30,7 @@ it.each(['ja', 'en'] as const)('shows a saved custom permission notice in %s for
   }] };
   doubles.goals = [goal];
 
-  const events = await collectItems(savedEvents.iterateManagerDisplayEvents({ kind: 'repository', repositoryDirectory: '/fixture/manager', repositoryDirectories: ['/fixture/manager'] }, language, new Map(), -Infinity));
+  const events = await collectItems(iterateTestDisplayEvents({ kind: 'repository', repositoryDirectory: '/fixture/manager', repositoryDirectories: ['/fixture/manager'] }, language, new Map(), -Infinity));
 
   expect(events).toEqual([expect.objectContaining({ message: expect.stringContaining(body) })]);
   expect(events[0]!.message).toContain(goal.id.slice(0, 8));
@@ -65,7 +64,7 @@ it.each(['ja', 'en'] as const)('displays a goal-less permission notice in %s dur
       app.stdin.write(text);
       await vi.waitFor(() => expect(app.lastFrame()).toContain(text));
       app.stdin.write('\r');
-      await vi.waitFor(() => expect(submit).toHaveBeenCalledWith({ kind: 'message', text }, undefined));
+      await vi.waitFor(() => expect(submit).toHaveBeenCalledWith({ kind: 'message', text }, expect.any(Function)));
       await vi.waitFor(() => expect(app.lastFrame()).toContain('会話を続けます'));
     }
     expect(submit).toHaveBeenCalledTimes(2);

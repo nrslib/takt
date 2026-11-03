@@ -4,6 +4,7 @@ import type {
   CodexPermissionControl,
   CodexReasoningEffort,
   CopilotEffort,
+  KiroEffort,
   DeepSeekReasoningEffort,
   DeepSeekHarnessProviderOptions,
   OpenCodeGuardProfile,
@@ -87,9 +88,13 @@ type RawProviderOptions = {
   };
   kiro?: {
     agent?: string;
+    effort?: KiroEffort;
     guards?: RawProviderGuardOptions;
   };
   cursor?: {
+    guards?: RawProviderGuardOptions;
+  };
+  devin?: {
     guards?: RawProviderGuardOptions;
   };
   deepseek_harness?: {
@@ -439,9 +444,10 @@ export function normalizeProviderOptions(
         : {}),
     };
   }
-  if (options.kiro?.agent !== undefined || options.kiro?.guards !== undefined) {
+  if (options.kiro?.agent !== undefined || options.kiro?.effort !== undefined || options.kiro?.guards !== undefined) {
     result.kiro = {
       ...(options.kiro.agent !== undefined ? { agent: options.kiro.agent } : {}),
+      ...(options.kiro.effort !== undefined ? { effort: options.kiro.effort } : {}),
       ...(options.kiro.guards?.call_timeout_ms !== undefined
         ? { guards: { callTimeoutMs: options.kiro.guards.call_timeout_ms } }
         : {}),
@@ -451,6 +457,13 @@ export function normalizeProviderOptions(
     result.cursor = {
       ...(options.cursor.guards.call_timeout_ms !== undefined
         ? { guards: { callTimeoutMs: options.cursor.guards.call_timeout_ms } }
+        : {}),
+    };
+  }
+  if (options.devin?.guards !== undefined) {
+    result.devin = {
+      ...(options.devin.guards.call_timeout_ms !== undefined
+        ? { guards: { callTimeoutMs: options.devin.guards.call_timeout_ms } }
         : {}),
     };
   }
@@ -677,6 +690,9 @@ export function mergeProviderOptions(
         ...(layer.kiro.agent !== undefined
           ? { agent: layer.kiro.agent }
           : {}),
+        ...(layer.kiro.effort !== undefined
+          ? { effort: layer.kiro.effort }
+          : {}),
         ...(layer.kiro.guards !== undefined
           ? { guards: { ...result.kiro?.guards, ...layer.kiro.guards } }
           : {}),
@@ -687,6 +703,14 @@ export function mergeProviderOptions(
         ...result.cursor,
         ...(layer.cursor.guards !== undefined
           ? { guards: { ...result.cursor?.guards, ...layer.cursor.guards } }
+          : {}),
+      };
+    }
+    if (layer.devin) {
+      result.devin = {
+        ...result.devin,
+        ...(layer.devin.guards !== undefined
+          ? { guards: { ...result.devin?.guards, ...layer.devin.guards } }
           : {}),
       };
     }
@@ -1163,6 +1187,12 @@ export function resolveEffectiveProviderOptions(
     stepOptions?.kiro?.agent,
     resolveProviderOptionOrigin(originResolver, 'kiro.agent', source),
   );
+  const kiroEffort = selectProviderValue(
+    resolvedConfigOptions.kiro?.effort,
+    personaOptions?.kiro?.effort,
+    stepOptions?.kiro?.effort,
+    resolveProviderOptionOrigin(originResolver, 'kiro.effort', source),
+  );
   const deepseekHarnessBaseUrl = selectProviderValueByScope(
     resolvedConfigOptions.deepseekHarness?.baseUrl,
     personaOptions?.deepseekHarness?.baseUrl,
@@ -1268,6 +1298,12 @@ export function resolveEffectiveProviderOptions(
     personaOptions?.cursor?.guards?.callTimeoutMs,
     stepOptions?.cursor?.guards?.callTimeoutMs,
     resolveProviderOptionOrigin(originResolver, 'cursor.guards.callTimeoutMs', source),
+  );
+  const devinCallTimeoutMs = selectProviderValue(
+    resolvedConfigOptions.devin?.guards?.callTimeoutMs,
+    personaOptions?.devin?.guards?.callTimeoutMs,
+    stepOptions?.devin?.guards?.callTimeoutMs,
+    resolveProviderOptionOrigin(originResolver, 'devin.guards.callTimeoutMs', source),
   );
   const claudeTerminalBackend = selectProviderValue(
     resolvedConfigOptions.claudeTerminal?.backend,
@@ -1408,10 +1444,11 @@ export function resolveEffectiveProviderOptions(
           },
         }
       : {}),
-    ...(kiroAgent !== undefined || kiroCallTimeoutMs !== undefined
+    ...(kiroAgent !== undefined || kiroEffort !== undefined || kiroCallTimeoutMs !== undefined
       ? {
           kiro: {
             ...(kiroAgent !== undefined ? { agent: kiroAgent } : {}),
+            ...(kiroEffort !== undefined ? { effort: kiroEffort } : {}),
             ...(kiroCallTimeoutMs !== undefined
               ? { guards: { callTimeoutMs: kiroCallTimeoutMs } }
               : {}),
@@ -1420,6 +1457,9 @@ export function resolveEffectiveProviderOptions(
       : {}),
     ...(cursorCallTimeoutMs !== undefined
       ? { cursor: { guards: { callTimeoutMs: cursorCallTimeoutMs } } }
+      : {}),
+    ...(devinCallTimeoutMs !== undefined
+      ? { devin: { guards: { callTimeoutMs: devinCallTimeoutMs } } }
       : {}),
     ...(deepseekHarnessBaseUrl !== undefined
       || deepseekHarnessMaxTokens !== undefined
@@ -1551,6 +1591,9 @@ function stripClaudeAllowedTools(
     ...(providerOptions.kiro !== undefined
       ? { kiro: { ...providerOptions.kiro } }
       : {}),
+    ...(providerOptions.devin !== undefined
+      ? { devin: { ...providerOptions.devin } }
+      : {}),
     ...(providerOptions.deepseekHarness !== undefined
       ? { deepseekHarness: {
           ...providerOptions.deepseekHarness,
@@ -1664,8 +1707,10 @@ export const PROVIDER_OPTION_PATHS = [
   'copilot.effort',
   'copilot.guards.callTimeoutMs',
   'kiro.agent',
+  'kiro.effort',
   'kiro.guards.callTimeoutMs',
   'cursor.guards.callTimeoutMs',
+  'devin.guards.callTimeoutMs',
   'deepseekHarness.baseUrl',
   'deepseekHarness.maxTokens',
   'deepseekHarness.requestTimeoutMs',

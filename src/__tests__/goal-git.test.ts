@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createGoalBranch, prepareGoalBranch, removeGoalBranch } from '../infra/goals/git.js';
+import { createGoalBranch, prepareGoalBranch, removeGoalBranch, restoreGoalBranch } from '../infra/goals/git.js';
 import type { GoalGitOutput } from '../infra/goals/git-command.js';
 import { goalId } from './helpers/goal-fixtures.js';
 
@@ -41,6 +41,23 @@ describe('Goal Git registration', () => {
     doubles.fetch.mockResolvedValue('');
     doubles.run.mockImplementation(referenceResult);
     doubles.exec.mockImplementation(gitResult);
+  });
+
+  it('restores an absent goal ref conditionally without a cancellation signal', async () => {
+    await restoreGoalBranch('/project', 'takt/goal', localCommit);
+    expect(doubles.fetch).toHaveBeenCalledExactlyOnceWith('/project', ['update-ref', 'refs/heads/takt/goal', localCommit, ''], undefined);
+  });
+
+  it('does not overwrite an existing goal ref', async () => {
+    references.set('refs/heads/takt/goal', 'refs/heads/takt/goal\n');
+    await restoreGoalBranch('/project', 'takt/goal', localCommit);
+    expect(doubles.fetch).not.toHaveBeenCalled();
+  });
+
+  it('propagates restoration failures', async () => {
+    const error = new Error('ref creation failed');
+    doubles.fetch.mockRejectedValue(error);
+    await expect(restoreGoalBranch('/project', 'takt/goal', localCommit)).rejects.toBe(error);
   });
 
   it('resolves the default local branch commit and integration branch when origin has no matching reference', async () => {

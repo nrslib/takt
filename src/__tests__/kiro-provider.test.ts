@@ -17,8 +17,8 @@ const {
   mockResolveKiroApiKey,
   mockResolveKiroCliPath,
 } = vi.hoisted(() => ({
-  mockResolveKiroApiKey: vi.fn(() => undefined),
-  mockResolveKiroCliPath: vi.fn(() => undefined),
+  mockResolveKiroApiKey: vi.fn((): string | undefined => undefined),
+  mockResolveKiroCliPath: vi.fn((): string | undefined => undefined),
 }));
 
 vi.mock('../infra/kiro/index.js', () => ({
@@ -156,6 +156,28 @@ describe('KiroProvider', () => {
       'plan the feature',
       expect.objectContaining({
         agent: 'planner-agent',
+      }),
+    );
+  });
+
+  it('Given providerOptions.kiro.effort, When agent is called, Then passes the effort to callKiro', async () => {
+    mockCallKiro.mockResolvedValue(doneResponse('coder'));
+
+    const provider = new KiroProvider();
+    const agent = provider.setup({ name: 'coder' });
+
+    await agent.call('implement', {
+      cwd: '/tmp/work',
+      providerOptions: {
+        kiro: { effort: 'medium' },
+      },
+    });
+
+    expect(mockCallKiro).toHaveBeenCalledWith(
+      'coder',
+      'implement',
+      expect.objectContaining({
+        effort: 'medium',
       }),
     );
   });

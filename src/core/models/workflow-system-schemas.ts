@@ -44,6 +44,12 @@ export const PrListWhereRawSchema = z.object({
 
 export const SystemInputRawSchema = z.discriminatedUnion('type', [
   SystemInputBindingSchema.extend({
+    type: z.literal('command'),
+    command: z.string().min(1),
+    timeout_ms: z.number().int().min(1).max(2147483647),
+    output: z.literal('json').optional(),
+  }).strict(),
+  SystemInputBindingSchema.extend({
     type: z.literal('pr_status'),
     source: z.literal('current_pr'),
     rerun_from: TemplateReferenceSchema.optional(),

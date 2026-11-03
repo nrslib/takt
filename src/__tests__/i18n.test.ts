@@ -10,6 +10,23 @@ beforeEach(() => {
 });
 
 describe('getLabel', () => {
+  it.each(['ja', 'en'] as const)('expands the manager, operation and result in every director result notice for %s', (lang) => {
+    const values = { managerId: `manager-${'a'.repeat(64)}`, operationId: '11111111-1111-4111-8111-111111111111', message: 'saved result' };
+    for (const key of ['director.managerReply', 'director.managerError', 'director.managerInterrupted']) {
+      const notice = getLabel(key, lang, values);
+      for (const value of Object.values(values)) expect(notice).toContain(value);
+      expect(notice).not.toMatch(/\{(?:managerId|operationId|message)\}/u);
+    }
+  });
+
+  it.each(['ja', 'en'] as const)('includes the operation ID in a localized director interruption notice for %s', (lang) => {
+    const operationId = '11111111-1111-4111-8111-111111111111';
+    const notice = getLabel('manager.conversation.director_interrupted', lang, { operationId });
+    expect(notice).toContain(operationId);
+    expect(notice).not.toContain('{operationId}');
+    expect(notice.length).toBeGreaterThan(operationId.length);
+  });
+
   it.each(['en', 'ja'] as const)('resolves distinct waiting, extended-thinking and responding labels for %s', (lang) => {
     const labels = ['thinking', 'extendedThinking', 'responding'].map((activity) => getLabel(`tui.ui.${activity}`, lang));
     for (const label of labels) {

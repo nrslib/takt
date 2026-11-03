@@ -11,6 +11,7 @@ import { resolveTtyPolicy } from '../../shared/prompt/tty.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
 import {
   getErrorMessage,
+  createLogger,
   hasInteractiveTerminal,
   sanitizeTerminalText,
   truncateText,
@@ -37,11 +38,14 @@ import {
   buildFailedTaskRetryStartContext,
   prepareFailedTaskRetry,
   resolveFailedTaskRetryStart,
+  describeFailedTaskRetryStart,
 } from '../tasks/taskRetryPreparation.js';
 import {
   appendRetryNote,
   persistFailedTaskRetry,
 } from '../tasks/taskRetryPersistence.js';
+
+const log = createLogger('assistant-retry');
 
 export interface AssistantRetryCommandOptions {
   readonly showProgress?: boolean;
@@ -391,6 +395,7 @@ async function resolveFailedStart(
       preparation,
       projectDir,
       preparation.previousWorkflow,
+      true,
     );
     resumeFailureReason = startContext.startOptions.resumeFailureReason;
     const selectableOptions = startContext.startOptions.options.filter((option) => option.selectable);
@@ -497,10 +502,13 @@ async function requeueFailedTask(
     taskDir: undefined,
     sourceRunSlug: resolved.preparation.matchedRunSlug,
     restartPoint: resolved.start.restartPoint,
+    sourceResumePoint: resolved.start.sourceResumePoint,
   });
+  const description = describeFailedTaskRetryStart(resolved.preparation, resolved.start, options.lang);
+  log.info(description);
   return getLabel('tui.errors.assistantRetryRequeued', options.lang, {
     task: displayTaskName(task),
-  });
+  }) + `\n${description}`;
 }
 
 async function requeueExceededTask(
@@ -743,6 +751,7 @@ async function retryFailedTask(
       taskDir: task.taskDir,
       sourceRunSlug: resolved.preparation.matchedRunSlug,
       restartPoint: resolved.start.restartPoint,
+    sourceResumePoint: resolved.start.sourceResumePoint,
       revisedOrder: {
         content: revisedOrder,
         lang: options.lang,
@@ -752,9 +761,11 @@ async function retryFailedTask(
     return formatNotice('tui.errors.assistantRetryGenerationFailed', options, error, resolved.resumeFailureReason);
   }
 
+  const description = describeFailedTaskRetryStart(resolved.preparation, resolved.start, options.lang);
+  log.info(description);
   return getLabel('tui.errors.assistantRetrySaved', options.lang, {
     task: displayTaskName(task),
-  });
+  }) + `\n${description}`;
 }
 
 /** Resolve, confirm, and queue a failed task without starting its workflow. */

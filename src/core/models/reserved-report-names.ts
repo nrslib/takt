@@ -13,6 +13,7 @@ import { unicodeDefaultCaseFoldNfc } from '../../shared/utils/unicode-default-ca
 
 export const RESUME_ARTIFACTS_FILE_NAME = 'resume-artifacts.json';
 export const REPORT_INTERNAL_NAMESPACE = '.takt-report-internal';
+export const REPORT_EXECUTIONS_DIRECTORY = `${REPORT_INTERNAL_NAMESPACE}/executions`;
 
 export type ReportRelativePathClassification =
   | {

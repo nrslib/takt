@@ -1,5 +1,6 @@
 import { lstatSync, realpathSync } from 'node:fs';
 import type { WorkflowCallArgValue, WorkflowConfig } from '../../../core/models/index.js';
+import type { WorkflowSystemCommandsConfig } from '../../../core/models/config-types.js';
 import type { WorkflowCallArgResolutionPolicy } from './workflowCallableArgResolver.js';
 import { loadWorkflowFromFile, loadWorkflowFromFileForDiscovery } from './workflowFileLoader.js';
 import {
@@ -11,6 +12,7 @@ import {
 type WorkflowLoadMode = 'runtime' | 'discovery';
 
 export interface WorkflowResolvedLoaderOptions {
+  workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig;
   callableArgs?: Record<string, WorkflowCallArgValue>;
   loadMode?: WorkflowLoadMode;
   lookupCwd: string;
@@ -61,6 +63,7 @@ export function loadWorkflowFileWithResolutionOptions(
     callableArgs: options.callableArgs,
     callableArgPolicy: buildWorkflowCallArgPolicy(options.parentTrustInfo, trustInfo),
     resourceRoot: resolveResourceRoot(options.resourceRoot),
+    workflowSystemCommandsPolicy: options.workflowSystemCommandsPolicy,
   });
 
   return workflow;

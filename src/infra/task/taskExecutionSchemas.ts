@@ -57,10 +57,12 @@ export const TaskExecutionConfigObjectSchema = z.object({
   merge_head_repository_push_urls: z.array(z.string().min(1)).nonempty().optional(),
   merge_initial_head_sha: z.string().regex(/^[0-9a-f]{40}$/u).optional(),
   merge_clone_prepared: z.boolean().optional(),
+  merge_known_remote_head_sha: z.string().regex(/^[0-9a-f]{40}$/u).optional(),
   merge_pushed_head_sha: z.string().regex(/^[0-9a-f]{40}$/u).optional(),
   merge_push_base_head_sha: z.string().regex(/^[0-9a-f]{40}$/u).optional(),
   merge_push_source: z.enum(['caccia', 'manual']).optional(),
   resume_point: WorkflowResumePointCodecSchema.optional(),
+  source_resume_point: WorkflowResumePointCodecSchema.optional(),
   [TASK_RESTART_POINT_KEY]: WorkflowRestartPointSchema.optional(),
 }).superRefine((data, ctx) => {
   if (data.resume_point !== undefined && data[TASK_RESTART_POINT_KEY] !== undefined) {

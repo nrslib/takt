@@ -1,0 +1,352 @@
+ja:
+  lang: ja
+  turn: event
+  cwd: /workspace/project
+  concurrency: 3
+  defaultWorkflow: default
+  mainMerge: auto
+  goal: &a2
+    id: 650e8400-e29b-41d4-a716-446655440000
+    objective: |-
+      研究音声の索引を実装する。作業の計画:
+      1. foundation: 共有の設定を用意する
+      2. storage: 索引の保存処理を作る
+      3. commands: 索引を操作する CLI を作る
+      4. display: 索引を表示する画面を作る
+      5. usage-docs: CLI と画面の使い方を docs/index.md に書く
+      2〜4 は 1 の取り込み後。5 は 3 と 4 の取り込み後に着手する。
+    outOfScope: []
+    acceptanceCriteria:
+      - 索引を保存し、CLI と画面で使え、使い方を文書で読める。
+    constraints:
+      - 最後の確認は manager 自身が行う。全体の heavy IT と E2E は流さず、影響するテストを個別に流す。
+    mode: local
+    status: created
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/catalog
+    startBranch: main
+    integrationBranch: main
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-000000000040
+        recordedAt: 2026-10-11T00:10:00.000Z
+        summary: "result-1 (foundation) を取り込んだ。成果 SHA: 1111111111111111111111111111111111111111。"
+      - id: 650e8400-e29b-41d4-a716-000000000041
+        recordedAt: 2026-10-11T00:12:00.000Z
+        summary: "result-2 (storage) を取り込んだ。成果 SHA: 2222222222222222222222222222222222222222。"
+      - id: 650e8400-e29b-41d4-a716-000000000042
+        recordedAt: 2026-10-11T00:13:00.000Z
+        summary: "result-3 (commands) を取り込んだ。成果 SHA: 3333333333333333333333333333333333333333。"
+      - id: 650e8400-e29b-41d4-a716-000000000043
+        recordedAt: 2026-10-11T00:14:00.000Z
+        summary: "result-4 (display) を取り込んだ。成果 SHA: 4444444444444444444444444444444444444444。"
+      - id: 650e8400-e29b-41d4-a716-000000000047
+        recordedAt: 2026-10-11T00:17:00.000Z
+        summary: 全作業の取り込みが済んだ。次は最後の確認。
+    questions: []
+  event:
+    kind: completion
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    taskName: result-4
+    runSlug: run-result-4
+    result: &a1
+      success: true
+      interrupted: false
+      branch: takt/task/result-4
+      sha: "4444444444444444444444444444444444444444"
+      workflowResult: completed
+    createdAt: 2026-10-11T00:18:00.000Z
+  tasks:
+    - name: result-1
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: completed
+      status: completed
+      createdAt: 2026-10-11T00:00:00.000Z
+      startedAt: 2026-10-11T00:01:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-result-1
+      completion:
+        success: true
+        interrupted: false
+        branch: takt/task/result-1
+        sha: "1111111111111111111111111111111111111111"
+        workflowResult: completed
+      goalWorkKey: foundation
+      goalPurpose: 共有の設定を用意する
+    - name: result-2
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: completed
+      status: completed
+      createdAt: 2026-10-11T00:10:00.000Z
+      startedAt: 2026-10-11T00:11:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-result-2
+      completion:
+        success: true
+        interrupted: false
+        branch: takt/task/result-2
+        sha: "2222222222222222222222222222222222222222"
+        workflowResult: completed
+      goalWorkKey: storage
+      goalPurpose: 索引の保存処理を作る
+    - name: result-3
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: completed
+      status: completed
+      createdAt: 2026-10-11T00:10:00.000Z
+      startedAt: 2026-10-11T00:11:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-result-3
+      completion:
+        success: true
+        interrupted: false
+        branch: takt/task/result-3
+        sha: "3333333333333333333333333333333333333333"
+        workflowResult: completed
+      goalWorkKey: commands
+      goalPurpose: 索引を操作する CLI を作る
+    - name: result-4
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: completed
+      status: completed
+      createdAt: 2026-10-11T00:10:00.000Z
+      startedAt: 2026-10-11T00:11:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-result-4
+      completion: *a1
+      goalWorkKey: display
+      goalPurpose: 索引を表示する画面を作る
+  readResults:
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goal: *a2
+    - tool: takt_list_tasks
+      arguments:
+        cwd: /workspace/project
+      result:
+        tasks:
+          - name: result-1
+            goalId: 650e8400-e29b-41d4-a716-446655440000
+            summary: 共有の設定を用意する
+            status: completed
+            startedAt: 2026-10-11T00:01:00.000Z
+            runSlug: run-result-1
+          - name: result-2
+            goalId: 650e8400-e29b-41d4-a716-446655440000
+            summary: 索引の保存処理を作る
+            status: completed
+            startedAt: 2026-10-11T00:11:00.000Z
+            runSlug: run-result-2
+          - name: result-3
+            goalId: 650e8400-e29b-41d4-a716-446655440000
+            summary: 索引を操作する CLI を作る
+            status: completed
+            startedAt: 2026-10-11T00:11:00.000Z
+            runSlug: run-result-3
+          - name: result-4
+            goalId: 650e8400-e29b-41d4-a716-446655440000
+            summary: 索引を表示する画面を作る
+            status: completed
+            startedAt: 2026-10-11T00:11:00.000Z
+            runSlug: run-result-4
+    - tool: takt_get_goal_relation
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goalBranch: takt/goal/catalog
+        goalSha: cccccccccccccccccccccccccccccccccccccccc
+        targetBranch: main
+        targetSha: dddddddddddddddddddddddddddddddddddddddd
+        included: false
+        ahead: 5
+    - tool: takt_list_workflows
+      arguments:
+        cwd: /workspace/project
+      result:
+        workflows:
+          - name: default
+            description: Implementation and review
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/project-policy.md
+      result: ゴール先端でビルドと影響するテストを確かめ、SHA と結果を残す。
+en:
+  lang: en
+  turn: event
+  cwd: /workspace/project
+  concurrency: 3
+  defaultWorkflow: default
+  mainMerge: auto
+  goal: &a4
+    id: 650e8400-e29b-41d4-a716-446655440000
+    objective: |-
+      Implement a recording index. Work plan:
+      1. foundation: Prepare shared configuration
+      2. storage: Implement index storage
+      3. commands: Implement index CLI commands
+      4. display: Implement the index display
+      5. usage-docs: Document the CLI and display in docs/index.md
+      Start 2–4 after integrating 1. Start 5 after integrating 3 and 4.
+    outOfScope: []
+    acceptanceCriteria:
+      - Save the index, use it through the CLI and display, and read usage documentation.
+    constraints:
+      - The manager performs the final check itself. Run affected tests individually; do not run the full heavy IT or E2E suites.
+    mode: local
+    status: created
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/catalog
+    startBranch: main
+    integrationBranch: main
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-000000000040
+        recordedAt: 2026-10-11T00:10:00.000Z
+        summary: "Integrated result-1 (foundation). Result SHA: 1111111111111111111111111111111111111111."
+      - id: 650e8400-e29b-41d4-a716-000000000041
+        recordedAt: 2026-10-11T00:12:00.000Z
+        summary: "Integrated result-2 (storage). Result SHA: 2222222222222222222222222222222222222222."
+      - id: 650e8400-e29b-41d4-a716-000000000042
+        recordedAt: 2026-10-11T00:13:00.000Z
+        summary: "Integrated result-3 (commands). Result SHA: 3333333333333333333333333333333333333333."
+      - id: 650e8400-e29b-41d4-a716-000000000043
+        recordedAt: 2026-10-11T00:14:00.000Z
+        summary: "Integrated result-4 (display). Result SHA: 4444444444444444444444444444444444444444."
+      - id: 650e8400-e29b-41d4-a716-000000000047
+        recordedAt: 2026-10-11T00:17:00.000Z
+        summary: All work has been integrated. Next is the final check.
+    questions: []
+  event:
+    kind: completion
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    taskName: result-4
+    runSlug: run-result-4
+    result: &a3
+      success: true
+      interrupted: false
+      branch: takt/task/result-4
+      sha: "4444444444444444444444444444444444444444"
+      workflowResult: completed
+    createdAt: 2026-10-11T00:18:00.000Z
+  tasks:
+    - name: result-1
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: completed
+      status: completed
+      createdAt: 2026-10-11T00:00:00.000Z
+      startedAt: 2026-10-11T00:01:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-result-1
+      completion:
+        success: true
+        interrupted: false
+        branch: takt/task/result-1
+        sha: "1111111111111111111111111111111111111111"
+        workflowResult: completed
+      goalWorkKey: foundation
+      goalPurpose: Prepare shared configuration
+    - name: result-2
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: completed
+      status: completed
+      createdAt: 2026-10-11T00:10:00.000Z
+      startedAt: 2026-10-11T00:11:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-result-2
+      completion:
+        success: true
+        interrupted: false
+        branch: takt/task/result-2
+        sha: "2222222222222222222222222222222222222222"
+        workflowResult: completed
+      goalWorkKey: storage
+      goalPurpose: Implement index storage
+    - name: result-3
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: completed
+      status: completed
+      createdAt: 2026-10-11T00:10:00.000Z
+      startedAt: 2026-10-11T00:11:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-result-3
+      completion:
+        success: true
+        interrupted: false
+        branch: takt/task/result-3
+        sha: "3333333333333333333333333333333333333333"
+        workflowResult: completed
+      goalWorkKey: commands
+      goalPurpose: Implement index CLI commands
+    - name: result-4
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: completed
+      status: completed
+      createdAt: 2026-10-11T00:10:00.000Z
+      startedAt: 2026-10-11T00:11:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-result-4
+      completion: *a3
+      goalWorkKey: display
+      goalPurpose: Implement the index display
+  readResults:
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goal: *a4
+    - tool: takt_list_tasks
+      arguments:
+        cwd: /workspace/project
+      result:
+        tasks:
+          - name: result-1
+            goalId: 650e8400-e29b-41d4-a716-446655440000
+            summary: Prepare shared configuration
+            status: completed
+            startedAt: 2026-10-11T00:01:00.000Z
+            runSlug: run-result-1
+          - name: result-2
+            goalId: 650e8400-e29b-41d4-a716-446655440000
+            summary: Implement index storage
+            status: completed
+            startedAt: 2026-10-11T00:11:00.000Z
+            runSlug: run-result-2
+          - name: result-3
+            goalId: 650e8400-e29b-41d4-a716-446655440000
+            summary: Implement index CLI commands
+            status: completed
+            startedAt: 2026-10-11T00:11:00.000Z
+            runSlug: run-result-3
+          - name: result-4
+            goalId: 650e8400-e29b-41d4-a716-446655440000
+            summary: Implement the index display
+            status: completed
+            startedAt: 2026-10-11T00:11:00.000Z
+            runSlug: run-result-4
+    - tool: takt_get_goal_relation
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goalBranch: takt/goal/catalog
+        goalSha: cccccccccccccccccccccccccccccccccccccccc
+        targetBranch: main
+        targetSha: dddddddddddddddddddddddddddddddddddddddd
+        included: false
+        ahead: 5
+    - tool: takt_list_workflows
+      arguments:
+        cwd: /workspace/project
+      result:
+        workflows:
+          - name: default
+            description: Implementation and review
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/project-policy.md
+      result: Check build and affected tests at the goal tip and record the SHA and results.

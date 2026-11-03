@@ -26,6 +26,8 @@ import {
 import type { InteractiveModeResult } from '../interactive/interactive.js';
 import { handOverAttachments } from './attachmentHandover.js';
 import { runTuiConversation, type TuiHandoffOutcome } from './conversationRunner.js';
+import { InteractiveSessionRecords } from '../interactive/interactiveSessionRecords.js';
+import { interactiveSessionExists } from '../interactive/interactiveSessionExistence.js';
 import { createTuiConversation, type InteractiveResultSource, type TuiHandoffId } from './tuiConversation.js';
 import { describeSessionModel } from './tuiSetup.js';
 
@@ -49,6 +51,7 @@ export async function runTuiTaskConversation(
   options: RunTuiTaskConversationOptions,
 ): Promise<InteractiveModeResult> {
   const { ctx, strategy } = options.plan;
+  const records = new InteractiveSessionRecords(options.cwd);
   // The canonical order's own images are already numbered; a paste here has to
   // continue past them rather than claim a placeholder the order uses.
   const attachmentStore = createSessionImageAttachmentStore(
@@ -85,11 +88,15 @@ export async function runTuiTaskConversation(
   };
 
   try {
+    await records.clean((provider, sessionId) => interactiveSessionExists(options.cwd, provider, sessionId));
     const result = await runTuiConversation({
       cwd: options.cwd,
       lang: ctx.lang,
+      interactiveSessionRecords: records,
+      getProvider: () => ctx.providerType,
       conversation: createTuiConversation({
         cwd: options.cwd,
+        interactiveSessionRecords: records,
         plan: options.plan,
         ...(options.workflowContext ? { workflowContext: options.workflowContext } : {}),
         attachmentStore,

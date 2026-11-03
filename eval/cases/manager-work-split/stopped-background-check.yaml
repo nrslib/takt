@@ -1,0 +1,240 @@
+ja:
+  lang: ja
+  turn: event
+  cwd: /workspace/project
+  concurrency: 3
+  defaultWorkflow: default
+  mainMerge: auto
+  goal: &a1
+    id: 650e8400-e29b-41d4-a716-446655440000
+    objective: 在庫のインポートを実装し、成果を確認してから利用手順の作業へ進む
+    outOfScope: []
+    acceptanceCriteria:
+      - 在庫を読み込み、同じ商品の数量を正しく集計できる。
+    constraints: []
+    mode: local
+    status: created
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/inventory
+    startBranch: main
+    integrationBranch: main
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-000000000080
+        recordedAt: 2026-10-11T00:10:00.000Z
+        summary: "import-task が完了した。成果 SHA: 1111111111111111111111111111111111111111。取り込みの道具で takt/goal/inventory へ取り込んだ。取り込み後のゴール SHA: cccccccccccccccccccccccccccccccccccccccc。"
+      - id: 650e8400-e29b-41d4-a716-000000000081
+        recordedAt: 2026-10-11T00:15:00.000Z
+        summary: 前のターンで cccccccccccccccccccccccccccccccccccccccc を取り出した /tmp/inventory-check に依存を用意し、npm test -- tests/import.test.ts > /tmp/inventory-check.log 2>&1 & を実行した。PID は 4182。完了を確認する前にターンが終わった。
+    questions: []
+  event:
+    kind: resumed
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-11T00:20:00.000Z
+  tasks:
+    - name: import-task
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: completed
+      status: completed
+      createdAt: 2026-10-11T00:00:00.000Z
+      startedAt: 2026-10-11T00:01:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-import-task
+      completion:
+        success: true
+        interrupted: false
+        branch: takt/task/import-task
+        sha: "1111111111111111111111111111111111111111"
+        workflowResult: completed
+      goalWorkKey: import
+      goalPurpose: 在庫のインポート処理を実装する
+  readResults:
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/check-request.md
+      result: 前のターンで始めたインポートのテストについて、いまの結果を確認してください。
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goal: *a1
+    - tool: takt_list_tasks
+      arguments:
+        cwd: /workspace/project
+      result:
+        tasks:
+          - name: import-task
+            goalId: 650e8400-e29b-41d4-a716-446655440000
+            summary: 在庫のインポート処理を実装する
+            status: completed
+            startedAt: 2026-10-11T00:01:00.000Z
+            runSlug: run-import-task
+            goalIntegration: integrated
+    - tool: takt_get_goal_relation
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goalBranch: takt/goal/inventory
+        goalSha: cccccccccccccccccccccccccccccccccccccccc
+        targetBranch: main
+        targetSha: dddddddddddddddddddddddddddddddddddddddd
+        included: false
+        ahead: 2
+    - tool: Bash
+      arguments:
+        command: git -C /workspace/project symbolic-ref --short HEAD
+      result: |
+        main
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/package.json
+      result:
+        scripts:
+          test: vitest run
+    - tool: takt_list_workflows
+      arguments:
+        cwd: /workspace/project
+      result:
+        workflows:
+          - name: default
+            description: Implementation and review
+    - tool: Bash
+      arguments:
+        command: ps -p 4182 -o pid=,args=
+      result: |-
+        exit code: 1
+        stdout: 
+        stderr: 
+    - tool: Read
+      arguments:
+        file_path: /tmp/inventory-check.log
+      result: |
+        > vitest run tests/import.test.ts
+        RUN v4.0.0 /tmp/inventory-check
+    - tool: Bash
+      arguments:
+        command: git -C /tmp/inventory-check rev-parse HEAD
+      result: |
+        cccccccccccccccccccccccccccccccccccccccc
+en:
+  lang: en
+  turn: event
+  cwd: /workspace/project
+  concurrency: 3
+  defaultWorkflow: default
+  mainMerge: auto
+  goal: &a2
+    id: 650e8400-e29b-41d4-a716-446655440000
+    objective: Implement inventory import and check its result before moving on to usage documentation
+    outOfScope: []
+    acceptanceCriteria:
+      - Import inventory and aggregate quantities for identical products correctly.
+    constraints: []
+    mode: local
+    status: created
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/inventory
+    startBranch: main
+    integrationBranch: main
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-000000000080
+        recordedAt: 2026-10-11T00:10:00.000Z
+        summary: "import-task completed at 1111111111111111111111111111111111111111. Integrated with the integration tool into takt/goal/inventory; goal SHA after integration: cccccccccccccccccccccccccccccccccccccccc."
+      - id: 650e8400-e29b-41d4-a716-000000000081
+        recordedAt: 2026-10-11T00:15:00.000Z
+        summary: In the previous turn, prepared dependencies at /tmp/inventory-check checked out at cccccccccccccccccccccccccccccccccccccccc and ran npm test -- tests/import.test.ts > /tmp/inventory-check.log 2>&1 &. PID 4182. The turn ended before completion was observed.
+    questions: []
+  event:
+    kind: resumed
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-11T00:20:00.000Z
+  tasks:
+    - name: import-task
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: completed
+      status: completed
+      createdAt: 2026-10-11T00:00:00.000Z
+      startedAt: 2026-10-11T00:01:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-import-task
+      completion:
+        success: true
+        interrupted: false
+        branch: takt/task/import-task
+        sha: "1111111111111111111111111111111111111111"
+        workflowResult: completed
+      goalWorkKey: import
+      goalPurpose: Implement inventory import
+  readResults:
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/check-request.md
+      result: Check the current result of the import test started in the previous turn.
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goal: *a2
+    - tool: takt_list_tasks
+      arguments:
+        cwd: /workspace/project
+      result:
+        tasks:
+          - name: import-task
+            goalId: 650e8400-e29b-41d4-a716-446655440000
+            summary: Implement inventory import
+            status: completed
+            startedAt: 2026-10-11T00:01:00.000Z
+            runSlug: run-import-task
+            goalIntegration: integrated
+    - tool: takt_get_goal_relation
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goalBranch: takt/goal/inventory
+        goalSha: cccccccccccccccccccccccccccccccccccccccc
+        targetBranch: main
+        targetSha: dddddddddddddddddddddddddddddddddddddddd
+        included: false
+        ahead: 2
+    - tool: Bash
+      arguments:
+        command: git -C /workspace/project symbolic-ref --short HEAD
+      result: |
+        main
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/package.json
+      result:
+        scripts:
+          test: vitest run
+    - tool: takt_list_workflows
+      arguments:
+        cwd: /workspace/project
+      result:
+        workflows:
+          - name: default
+            description: Implementation and review
+    - tool: Bash
+      arguments:
+        command: ps -p 4182 -o pid=,args=
+      result: |-
+        exit code: 1
+        stdout: 
+        stderr: 
+    - tool: Read
+      arguments:
+        file_path: /tmp/inventory-check.log
+      result: |
+        > vitest run tests/import.test.ts
+        RUN v4.0.0 /tmp/inventory-check
+    - tool: Bash
+      arguments:
+        command: git -C /tmp/inventory-check rev-parse HEAD
+      result: |
+        cccccccccccccccccccccccccccccccccccccccc

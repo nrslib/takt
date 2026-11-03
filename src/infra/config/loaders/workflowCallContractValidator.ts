@@ -1,4 +1,5 @@
 import { dirname } from 'node:path';
+import type { WorkflowSystemCommandsConfig } from '../../../core/models/config-types.js';
 import type {
   WorkflowCallArgValue,
   WorkflowConfig,
@@ -12,6 +13,7 @@ import { annotateWorkflowConfigFragmentError } from './workflowRawParser.js';
 import { collectWorkflowCallSteps } from './workflowParallelTraversal.js';
 
 interface WorkflowCallValidationLookupOptions {
+  workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig;
   basePath?: string;
   callableArgs?: Record<string, WorkflowCallArgValue>;
   lookupCwd: string;
@@ -30,6 +32,7 @@ interface ValidateWorkflowCallContractsDeps {
 }
 
 interface WorkflowCallContractValidationOptions {
+  workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig;
   allowPathBasedCalls?: boolean;
   lookupCwd?: string;
   resourceRoot?: string;
@@ -65,6 +68,7 @@ function validateWorkflowCallContractsRecursive(
   allowPathBasedCalls: boolean,
   resourceRoot: string | undefined,
   invocationIdentity: string,
+  workflowSystemCommandsPolicy: WorkflowSystemCommandsConfig | undefined,
 ): void {
   const validationKey = getWorkflowCallValidationKey(workflow, lookupCwd, invocationIdentity);
   if (traversal.completed.has(validationKey)) {
@@ -95,6 +99,7 @@ function validateWorkflowCallContractsRecursive(
         parentTrustInfo,
         skipWorkflowCallContractValidation: true,
         resourceRoot,
+        workflowSystemCommandsPolicy,
       });
       if (!childWorkflow) {
         continue;
@@ -109,6 +114,7 @@ function validateWorkflowCallContractsRecursive(
         allowPathBasedCalls,
         resourceRoot,
         getWorkflowCallInvocationIdentity(step.call, step.args),
+        workflowSystemCommandsPolicy,
       );
       try {
         validateWorkflowCallRulesAgainstChildReturns(step, childWorkflow, stepPath);
@@ -137,5 +143,6 @@ export function validateWorkflowCallContracts(
     options?.allowPathBasedCalls !== false,
     options?.resourceRoot,
     canonicalJson({ root: true }),
+    options?.workflowSystemCommandsPolicy,
   );
 }

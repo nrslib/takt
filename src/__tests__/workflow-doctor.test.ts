@@ -129,9 +129,9 @@ describe('workflow doctor', () => {
   const previousConfigDir = process.env.TAKT_CONFIG_DIR;
 
   beforeEach(() => {
-    vi.mocked(fs.statSync).mockImplementation(actualFs.statSync);
-    vi.mocked(fs.readFileSync).mockImplementation(actualFs.readFileSync);
-    vi.mocked(fs.readdirSync).mockImplementation(actualFs.readdirSync);
+    vi.mocked(fs.statSync).mockClear().mockImplementation(actualFs.statSync);
+    vi.mocked(fs.readFileSync).mockClear().mockImplementation(actualFs.readFileSync);
+    vi.mocked(fs.readdirSync).mockClear().mockImplementation(actualFs.readdirSync);
     createdWorktreeDirs = [];
     projectDir = mkdtempSync(join(tmpdir(), 'takt-workflow-doctor-'));
     process.env.TAKT_CONFIG_DIR = mkdtempSync(join(tmpdir(), 'takt-workflow-doctor-global-'));

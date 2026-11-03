@@ -10,7 +10,22 @@ import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfig
 import { MockProvider } from '../infra/providers/mock.js';
 import { resetScenario, setMockScenario } from '../infra/mock/index.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
+import { checkTaktGoalCompletion } from '../features/mcp/goalIntegrationOperations.js';
+import { TaskRunner } from '../infra/task/runner.js';
+import type { ProviderAgent } from '../infra/providers/types.js';
 
+const github = vi.hoisted(() => ({ command: vi.fn() }));
+vi.mock('../infra/github/pr-command.js', () => ({ runPrCommand: github.command }));
+vi.mock('../infra/goals/git-command.js', async (original) => ({
+  ...await original<typeof import('../infra/goals/git-command.js')>(),
+  fetchGoalIntegrationBranchSha: vi.fn(async () => 'b'.repeat(40)),
+  isGoalContentIncluded: vi.fn(async () => false),
+}));
+
+vi.mock('../infra/task/repositoryDirectory.js', async (original) => ({
+  ...await original<typeof import('../infra/task/repositoryDirectory.js')>(),
+  resolveGitRepositoryDirectory: async (path: string) => path,
+}));
 vi.mock('../features/manager/managerMcp.js', async (original) => ({
   ...await original<typeof import('../features/manager/managerMcp.js')>(),
   connectManagerMcp: async () => ({ servers: {}, dispose: async () => {} }),
@@ -26,6 +41,7 @@ let root: string;
 let cwd: string;
 let manager: ReturnType<typeof createRunEventManager>;
 beforeEach(async () => {
+  github.command.mockReset().mockRejectedValue(new Error('GitHub fake is unavailable'));
   root = realpathSync(mkdtempSync(join(tmpdir(), 'takt-patrol-')));
   cwd = join(root, 'project');
   mkdirSync(join(cwd, '.takt'), { recursive: true });
@@ -38,6 +54,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await manager.close(); resetScenario(); invalidateGlobalConfigCache();
+  vi.restoreAllMocks();
   vi.useRealTimers(); vi.unstubAllEnvs(); rmSync(root, { recursive: true, force: true });
 });
 const signal = new AbortController().signal;
@@ -45,6 +62,60 @@ function reply(message: string) {
   const structuredOutput = { message, summary: null };
   return { status: 'done' as const, content: JSON.stringify(structuredOutput), structuredOutput };
 }
+
+it('refreshes PR status on the same manager across patrols and completes an externally merged goal without tasks', async () => {
+  const store = new GoalStore(cwd);
+  const pullRequest = { number: 1950, url: 'https://github.com/example/project/pull/1950' };
+  const goal = await store.update(goalRecord().id, (current) => ({ ...current,
+    status: 'awaiting_merge', pullRequest,
+    completion: { goalBranch: current.branch, goalSha: 'a'.repeat(40), targetBranch: 'main',
+      summary: '確認が完了した', instructions: [], changeSummary: { filesChanged: 1, additions: 1,
+        deletions: 0, files: [], truncated: false, totalsTruncated: false } },
+  }));
+  let state = 'OPEN';
+  github.command.mockImplementation(async (args: string[], directory: string) => {
+    expect(directory).toBe(cwd);
+    expect(args.slice(0, 3)).toEqual(['pr', 'view', pullRequest.url]);
+    return JSON.stringify({ ...pullRequest, headRefName: goal.branch, baseRefName: 'main',
+      headRefOid: 'c'.repeat(40), baseRefOid: 'b'.repeat(40), mergeCommit: state === 'MERGED' ? { oid: 'b'.repeat(40) } : null, state });
+  });
+  const completionResults: Awaited<ReturnType<typeof checkTaktGoalCompletion>>[] = [];
+  const prompts: string[] = [];
+  const mergedStatus = /"[^"]+"\s*:\s*"merged"|"merged"\s*:\s*true/i;
+  const call = vi.fn<ProviderAgent['call']>().mockImplementation(async (prompt) => {
+    prompts.push(prompt);
+    if (mergedStatus.test(prompt)) {
+      completionResults.push(await checkTaktGoalCompletion({ cwd, goalId: goal.id }, {}, signal));
+    }
+    return { persona: 'manager', timestamp: new Date(), ...reply('巡回を確認した') };
+  });
+  const setup = vi.spyOn(MockProvider.prototype, 'setup').mockReturnValue({ call });
+  const tasks = new TaskRunner(cwd).listTaskStateItems();
+
+  await enqueueDueGoalPatrols(cwd, 1800);
+  await manager.processPending(signal, 10);
+  expect(prompts).toHaveLength(1);
+  expect(JSON.parse(prompts[0]!).goal.id).toBe(goal.id);
+  expect(prompts[0]).toMatch(/\bopen\b|"merged"\s*:\s*false/i);
+  expect(await store.get(goal.id)).toMatchObject({ status: 'awaiting_merge' });
+  expect(completionResults).toEqual([]);
+
+  state = 'MERGED';
+  vi.setSystemTime('2026-10-14T01:30:00Z');
+  await enqueueDueGoalPatrols(cwd, 1800);
+  await manager.processPending(signal, 10);
+
+  expect(prompts).toHaveLength(2);
+  expect(JSON.parse(prompts[1]!).goal.id).toBe(goal.id);
+  expect(prompts[1]).toMatch(mergedStatus);
+  expect(setup).toHaveBeenCalledOnce();
+  expect(completionResults).toHaveLength(1);
+  expect(completionResults[0]!.isError).toBeUndefined();
+  expect(await store.get(goal.id)).toMatchObject({ status: 'completed',
+    completion: { goalSha: 'a'.repeat(40), targetSha: 'b'.repeat(40) } });
+  expect(new TaskRunner(cwd).listTaskStateItems()).toEqual(tasks);
+  expect(readManagerEvents(cwd)).toEqual([]);
+});
 
 it('persists successful patrols and schedules the next one from the saved completion time after reopening', async () => {
   await enqueueDueGoalPatrols(cwd, 1800); await enqueueDueGoalPatrols(cwd, 1800);

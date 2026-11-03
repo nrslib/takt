@@ -13,7 +13,7 @@ vi.mock('node:child_process', () => ({
   spawn: mockSpawn,
 }));
 
-import { callCursor } from '../infra/cursor/client.js';
+import { callCursor, callCursorCustom } from '../infra/cursor/client.js';
 import { formatTaskStateReferenceMarker } from '../shared/task-state-reference.js';
 
 type SpawnScenario = {
@@ -223,6 +223,28 @@ describe('callCursor', () => {
     expect(args).not.toContain('--force');
     expect(options.env).not.toBe(process.env);
     expect(options.env?.CURSOR_API_KEY).toBeUndefined();
+  });
+
+  it.each([
+    ['normal', false, undefined, false],
+    ['custom', true, '/prepared-root', false],
+    ['failure', false, undefined, true],
+    ['abort', false, undefined, true],
+  ] as const)('forwards owned MCP environment and disposes it after %s execution', async (_label, custom, configRoot, failure) => {
+    mockSpawnWithScenario(failure ? { code: 2, stderr: 'failed' } : { stdout: JSON.stringify({ content: 'done' }) });
+    const dispose = vi.fn(async () => {});
+    const controller = new AbortController();
+    if (_label === 'abort') controller.abort();
+    const options = { cwd: '/repo', childProcessEnv: { CURSOR_DATA_DIR: '/original-data', OTEL_EXPORTER_OTLP_ENDPOINT: 'https://snapshot.example.test' },
+      abortSignal: controller.signal,
+      preparedMcp: { configRoot, env: { CURSOR_DATA_DIR: '/owned-data' }, dispose } };
+    const result = custom ? await callCursorCustom('custom', 'prompt', 'system', options) : await callCursor('coder', 'prompt', options);
+    expect(result.status).toBe(failure ? 'error' : 'done');
+    const [, args, spawned] = mockSpawn.mock.calls[0] as [string, string[], { cwd: string; env: NodeJS.ProcessEnv }];
+    expect(args[args.indexOf('--workspace') + 1]).toBe(configRoot ?? '/repo');
+    expect(spawned.cwd).toBe('/repo');
+    expect(spawned.env).toMatchObject({ CURSOR_DATA_DIR: '/owned-data', OTEL_EXPORTER_OTLP_ENDPOINT: 'https://snapshot.example.test' });
+    expect(dispose).toHaveBeenCalledTimes(1);
   });
 
   it('preserves ambient OTEL env when childProcessEnv is undefined', async () => {

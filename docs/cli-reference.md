@@ -19,7 +19,7 @@ This document provides a complete reference for all TAKT CLI commands and option
 | `--skip-git` | Skip branch creation, commit, and push (pipeline mode, workflow-only) |
 | `--repo <owner/repo>` | Specify repository (for PR creation) |
 | `-q, --quiet` | Minimal output mode: suppress AI output (for CI) |
-| `--provider <name>` | Override agent provider (claude\|claude-sdk\|claude-headless\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|pi\|mock) |
+| `--provider <name>` | Override agent provider (claude\|claude-sdk\|claude-headless\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|devin\|pi\|mock) |
 | `--auto-strategy <strategy>` | Override the auto-routing strategy (`cost`\|`balanced`\|`performance`). Applied when execution reaches the current workflow or a workflow-call child with effective `auto_routing`; otherwise, TAKT warns and ignores the option. |
 | `--model <name>` | Override agent model |
 | `--runtime-assignment <name>` | Select a merged runtime `provider.assignments` entry for this invocation; takes precedence over `provider.directories` |
@@ -85,11 +85,24 @@ Approximate sizes are 250 MB for Claude SDK, 340 MB for Codex, 60 MB for OpenCod
 
 In the manager TUI, `Ctrl+R` opens inquiries and `Ctrl+G` opens ongoing goals. Both keys work while manager is processing. Type `/make-goal` in the input box and press `Enter` to create a goal proposal from the current conversation. Even when a proposal is already displayed, this only regenerates it; it does not register the goal. Use `↑` Approve / `↓` Continue / `Enter` Confirm, then select Approve and press `Enter` to register it. Insufficient material is reported so you can continue the conversation. Typing `/` in the input box shows `/make-goal` as a completion candidate; press `Tab` to accept it. Input starting with `/` other than `/make-goal` is sent to manager as a regular message. See [Managing goals](./goal-management.md) for menu operations.
 
-Opening manager starts the daemon if needed and waits until it is ready. The TUI sends conversation requests to the daemon and displays results. Accepted turns continue after the TUI closes. Reopening for the same repository or workspace, or opening a second TUI for that assignment, connects to the same conversation and restores any summary awaiting approval, without redisplaying previous messages and replies. See [Managing goals](./goal-management.md) for busy rejection, storage, and interruption after a daemon restart.
+Opening manager starts the daemon if needed and waits until it is ready. The TUI sends conversation requests to the daemon and displays results. Accepted turns continue after the TUI closes. Reopening for the same repository or workspace, or opening a second TUI for that assignment, connects to the same conversation and restores any summary awaiting approval, without redisplaying previous messages and replies. See [Managing goals](./goal-management.md) for message acceptance and waiting, storage, and interruption after a daemon restart.
 
 Use `takt daemon stop` to stop the manager background daemon explicitly. It exits automatically only when its projects have no unfinished goals, pending events, or pending/running tasks, no project inspection is in progress, no TUI is connected, and no conversation operation is initializing, running, or finishing cleanup. A saved pending summary alone does not keep the daemon running.
 
 `takt manager` opens a goal conversation TUI in an interactive terminal. manager is experimental: behavior, settings, and saved data formats may change without notice. It automatically queues and runs tasks, which incurs provider API costs.
+
+## Director (experimental)
+
+`takt director` opens a conversation TUI in an interactive terminal. The daemon owns the conversation: closing and reopening the TUI continues the same conversation, including when launched from another assigned repository. Previous messages and replies are not redisplayed; history is managed by the provider's session.
+
+```bash
+takt director
+takt director --help
+```
+
+Director is experimental; behavior and saved data formats may change without notice. Conversations and scheduled patrols incur provider costs. Manager advances goals and executes tasks; director checks all managers, notifies the human, and relays explicit human merge instructions to the responsible manager. Director does not merge PRs itself. See [Director patrol](./goal-management.md#director-patrol) for responsibilities, global `director.patrol_interval` and `director.slack` settings, and Slack setup.
+
+Messages sent through `takt_tell_manager` are saved even while manager is busy. The tool returns an operation ID and manager as soon as the message is saved, without waiting for a reply; messages are processed in saved order. Replies, failures, and interruptions are saved and shown later in the director TUI with the same operation ID. Manager listing (`takt_list_managers`) and patrol report unreadable projects with reasons and continue with the remaining managers.
 
 ## Web UI execution boundary
 

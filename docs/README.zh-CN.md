@@ -125,6 +125,7 @@ TAKT 需要 Node.js `>=22.22.0` 和 Git `>=2.38`（目标完成判定使用 `git
 - `copilot` — [GitHub Copilot CLI](https://docs.github.com/en/copilot/github-copilot-in-the-cli)
 - `cursor` — [Cursor Agent](https://docs.cursor.com/)
 - `kiro` — [Kiro CLI](https://kiro.dev/docs/cli/headless/)
+- `devin` — [Devin CLI](https://devin.ai/)
 
 可选工具：
 
@@ -279,6 +280,7 @@ steps:
 | `takt watch` | 监视任务队列并自动执行待处理任务 |
 | `takt ui` | 在 `http://127.0.0.1:20525` 启动实验性的 Viewer 优先 Web UI |
 | `takt manager` | 启动连接到 daemon 的实验性目标对话 TUI。使用 `Ctrl+R` 打开询问列表，`Ctrl+G` 打开进行中的目标列表；manager 处理期间也可以使用这两个键。在输入框中输入 `/make-goal` 并按 `Enter`，即可根据当前对话生成目标注册草案。即使已显示草案，也只会重新生成，不会注册目标。使用 `↑` 批准 / `↓` 继续 / `Enter` 确定，选择批准后按 `Enter` 注册。输入 `/` 时会显示 `/make-goal` 补全候选，按 `Tab` 确认补全。其他以 `/` 开头的输入会作为普通消息发送。材料不足时可以继续对话。添加、删除或重命名负责的仓库需通过对话提出。行为、设置和保存的数据格式可能会随时更改，恕不另行通知。自动将任务加入队列并执行，因此会产生 provider API 费用。使用 claude（claude-sdk）或 codex 时，AI 会在工具执行前进行审查。启动时，manager 会按需启动 daemon，并等待其准备就绪；daemon 负责运行对话、处理事件和巡查。使用 `takt daemon stop` 可停止 daemon |
+| `takt director` | 打开统览所有 manager 的实验性对话 TUI；参阅 [director](#director实验性) |
 | `takt list` | 管理任务分支：合并、重试、重新排队、请求停止、强制失败、指导或删除 |
 | `takt #N` | 将 GitHub Issue 作为任务输入 |
 | `takt merge` | 使用 workflow 审查、修复并合并 PR |
@@ -292,11 +294,15 @@ steps:
 
 manager 对话由 daemon 执行，TUI 负责发送请求和显示结果。一轮对话被接受后，即使关闭 TUI，也会继续在 daemon 中处理。为同一个仓库或 workspace 重新打开 manager，或为同一负责范围打开第二个 TUI，都会连接到同一个对话。如果有等待批准的目标注册草案，它会重新显示，选择批准并按 `Enter` 即可注册。
 
-重新打开 TUI 时，不会重新显示之前的发言和回复。TAKT 不保存对话正文，对话历史由 provider 的会话管理。等待批准的目标摘要和目标记录会单独保存。
+重新打开 TUI 时，不会重新显示之前的发言和回复。对话历史由 provider 的会话管理。等待中的发言正文由 TAKT 保存到开始执行为止。等待批准的目标摘要和目标记录会单独保存。
 
-同一个对话正在处理时，后来发送的发言会以“处理中”被拒绝，也不会稍后执行。请在处理结束后重新发送。daemon 重启后，原先正在处理的一轮对话会被视为已中断，此时可以发送新的发言。
+巡检、事件或对话正在处理时，人的发言仍会保存并接受，界面会显示接受通知和等待数量。当前处理结束后按保存顺序执行。中断只影响当前对话轮次，不会删除等待中的发言。daemon 重启后仍会处理等待中的发言，原先正在执行的轮次则视为中断。总结批准等非发言操作在处理期间仍会被拒绝。
 
 只要有 TUI 保持连接，或仍有已接受的对话操作在执行，daemon 就不会自动退出。要明确停止它，请使用 `takt daemon stop`。
+
+**Slack 对话：** 也可以从配置的 Slack 频道连接到同一个 manager 对话。回复只发送到发言所在的消息列，不会转发 TUI 的回复。Socket Mode App 清单、令牌环境变量、仓库配置以及回答询问的方法，请参阅[通过 Slack 与 manager 对话](./configuration.zh-CN.md#通过-slack-与-manager-对话)。完成等通知仍通过独立的 `TAKT_NOTIFY_WEBHOOK` Incoming Webhook 发送。
+
+在对话消息列中发送 `/make-goal` 可创建注册提案。使用「Approve registration（批准注册）」或「Continue conversation（继续对话）」操作；旧版本提案的按钮无效。
 
 全部命令和选项请参阅 [CLI Reference](./cli-reference.zh-CN.md)。
 
@@ -358,12 +364,31 @@ exec preset 的解析顺序是：项目 `.takt/exec/presets/` → 全局 `$TAKT_
 
 exec 输入支持图片附件。使用 `/paste-image` 或 macOS 上的 `Ctrl+V` 附加剪贴板图片；TAKT 会插入 `[Image #N]` 占位符。只有在 Assistant 消息或 `/go` 备注中引用该占位符时，图片才会随请求发送。支持 PNG、JPEG、GIF 和 WebP，内联及剪贴板图片限制为 10 MiB。
 
+## director（实验性）
+
+在交互终端中打开 director 对话 TUI：
+
+```bash
+takt director
+takt director --help
+```
+
+对话由 daemon 持有，关闭并重新打开 TUI 后会继续同一个对话。从另一个负责的仓库启动，也会连接到同一个对话。之前的发言和回复不会重新显示。director 是实验性功能，行为和保存的数据格式可能随时更改，恕不另行通知。对话和定期巡检都会调用 provider 并产生费用。
+
+manager 推进其负责的仓库或 workspace 的目标，提交任务、整合成果并申请完成。director 查看所有 manager 的目标和未回答的询问，将需要处理的事项告知人，并通过 manager 对话传达信息。决定仍由人作出；director 只把人明确提出的合并指令转发给负责的 manager，自己不执行合并。
+
+通过 `takt_tell_manager` 发送的消息，即使 manager 正忙也会保存。工具在保存后立即返回操作 ID 和 manager，无需等待回复；消息按保存顺序处理。回复、失败和中断结果会保存，稍后在 director 界面中以同一操作 ID 通知。manager 列表和巡检会说明无法读取的 project 及其原因，并继续处理其余 manager。
+
+在全局 `~/.takt/config.yaml` 中设置 `director.patrol_interval`（秒，默认 `900`）和 `director.slack.channel_id` / `director.slack.allowed_user_ids`。参阅[全局配置字段参考](./configuration.zh-CN.md#全局配置字段参考)。
+
+**director 的 Slack：** 使用与 manager 相同的 Slack App 和 `TAKT_SLACK_APP_TOKEN` / `TAKT_SLACK_BOT_TOKEN`，将机器人邀请到 director 频道，并在修改 Slack 配置后重新启动 daemon。配置 `director.slack` 后，可以接收汇总通知并允许获准用户对话，回复发送到原消息列。连接步骤参阅[通过 Slack 与 director 对话](./configuration.zh-CN.md#通过-slack-与-director-对话)，完整的分工与限制参阅 [director CLI 说明](./cli-reference.zh-CN.md#director实验性)。
+
 ## 配置
 
 最小的 `~/.takt/config.yaml`：
 
 ```yaml
-provider: claude-sdk              # claude-sdk, claude (alias), claude-headless, claude-terminal, codex, opencode, deepseek-harness, cursor, copilot, kiro, pi, or mock
+provider: claude-sdk              # claude-sdk, claude (alias), claude-headless, claude-terminal, codex, opencode, deepseek-harness, cursor, copilot, kiro, devin, pi, or mock
 model: sonnet                 # 直接传给 provider
 language: en                  # en 或 ja；当前 UI 不提供 zh-CN
 ```

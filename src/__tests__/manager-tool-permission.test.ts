@@ -57,6 +57,7 @@ vi.mock('../infra/config/loaders/resource-resolver.js', () => ({
   resolveRefToContent: () => 'fixture instruction',
 }));
 vi.mock('../infra/config/managerConfig.js', () => ({ resolveManagerConfig: () => ({ mainMerge: 'approve', sensitivePaths: [] }) }));
+vi.mock('../infra/goals/inquiry-lock.js', () => ({ withInquiryLock: (_directory: string, action: () => Promise<unknown>) => action() }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class {
   constructor(directory: string) { doubles.store(directory); }
   update = doubles.update; get = async (id: string) => structuredClone(goal.id === id ? goal : { ...goalRecord(), id });
@@ -154,10 +155,118 @@ beforeEach(() => {
 });
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
+describe('manager current turn observations', () => {
+  it.each(['claude-sdk', 'codex'] as const)('passes observed %s tool inputs and raw results to the next judgment and clears them next turn', async (provider) => {
+    const executor = createExecutor(provider);
+    const events = [
+      { type: 'tool_use' as const, data: { id: 'create', tool: 'Bash', input: { command: 'git worktree add --detach tmp/verify HEAD' } } },
+      { type: 'tool_output' as const, data: { id: 'create', tool: 'Bash', output: 'Preparing worktree' } },
+      { type: 'tool_result' as const, data: { id: 'create', content: 'HEAD is now at abc123', isError: false } },
+      { type: 'tool_use' as const, data: { id: 'status', tool: 'Bash', input: { command: 'git -C tmp/verify status --porcelain' } } },
+      { type: 'tool_result' as const, data: { id: 'status', content: '', isError: false } },
+    ];
+    doubles.call.mockImplementationOnce(async (_prompt: string, options: DecisionOptions) => {
+      for (const event of events) options.onStream!(event);
+      expect(await handler(options)(request('Bash', { command: 'git worktree remove tmp/verify' }))).toEqual({ decision: 'allow' });
+      return reply();
+    });
+    await executeTurn(executor, { text: humanInstruction });
+    const first = JSON.parse(vi.mocked(executeIsolatedStructuredInternalAgent).mock.calls[0]![1]);
+    expect(first.observedToolEvents).toEqual({ events, truncated: false });
+    doubles.call.mockImplementationOnce(async (_prompt: string, options: DecisionOptions) => {
+      await handler(options)(request('Bash', { command: 'git worktree remove tmp/verify' }));
+      return reply();
+    });
+    await executeTurn(executor, { text: '次の確認' });
+    const next = JSON.parse(vi.mocked(executeIsolatedStructuredInternalAgent).mock.calls[1]![1]);
+    expect(next.observedToolEvents).toEqual({ events: [], truncated: false });
+  });
+  it('preserves denial text even when the provider reports isError false and leaves unmatched results unpaired', async () => {
+    const executor = createExecutor();
+    const events = [
+      { type: 'tool_use' as const, data: { id: 'create', tool: 'Bash', input: { command: 'git worktree add --detach tmp/verify HEAD' } } },
+      { type: 'tool_result' as const, data: { id: 'create', content: 'Error: PreToolUse:Bash hook error: Waiting for human confirmation', isError: false } },
+      { type: 'tool_result' as const, data: { content: 'unidentified output', isError: false } },
+    ];
+    vi.mocked(executeIsolatedStructuredInternalAgent).mockResolvedValue(judgment({ decision: 'deny', reason: 'Creation was denied' }));
+    doubles.call.mockImplementationOnce(async (_prompt: string, options: DecisionOptions) => {
+      for (const event of events) options.onStream!(event);
+      expectDenial(await handler(options)(request('Bash', { command: 'git worktree remove tmp/verify' })));
+      return reply();
+    });
+    await executeTurn(executor, { text: humanInstruction });
+    const observed = JSON.parse(vi.mocked(executeIsolatedStructuredInternalAgent).mock.calls[0]![1]).observedToolEvents;
+    expect(observed).toEqual({ events, truncated: false });
+  });
+  it('redacts observed secrets and reports incomplete observations instead of silently dropping large results', async () => {
+    const executor = createExecutor();
+    doubles.call.mockImplementationOnce(async (_prompt: string, options: DecisionOptions) => {
+      options.onStream!({ type: 'tool_use', data: { id: 'secret', tool: 'Bash', input: { apiToken: 'private-value', command: 'printf private-value' } } });
+      options.onStream!({ type: 'tool_result', data: { id: 'secret', content: 'private-value', isError: false } });
+      options.onStream!({ type: 'tool_result', data: { id: 'large', content: 'x'.repeat(70 * 1024), isError: false } });
+      await handler(options)(request());
+      return reply();
+    });
+    await executeTurn(executor, { text: humanInstruction });
+    const observed = JSON.parse(vi.mocked(executeIsolatedStructuredInternalAgent).mock.calls[0]![1]).observedToolEvents;
+    expect(observed.truncated).toBe(true);
+    expect(observed.events).toHaveLength(2);
+    expect(JSON.stringify(observed)).not.toContain('private-value');
+    expect(JSON.stringify(observed)).toContain('[REDACTED]');
+  });
+});
+
 describe('manager tool permission classification', () => {
+  it.each(['claude-sdk', 'codex'] as const)('passes the goal PR merge tool through the %s manager permission handler', async (provider) => {
+    const decision = await decide(`mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__takt_merge_goal_pr`, {
+      cwd, goalId: goal.id, prNumber: 1950,
+    }, 'ja', provider);
+
+    expect(decision).toEqual({ decision: 'allow' });
+    expect(executeIsolatedStructuredInternalAgent).not.toHaveBeenCalled();
+  });
+
   it.each(['ToolSearch'])('allows only the exact built-in %s without a judge', async (name) => {
     expect(await decide(name)).toEqual({ decision: 'allow' });
     expect(executeIsolatedStructuredInternalAgent).not.toHaveBeenCalled();
+  });
+  it.each(['claude', 'claude-sdk'] as const)('returns native structured output through the %s SDK hook without a judge', async (provider) => {
+    vi.mocked(executeIsolatedStructuredInternalAgent).mockRejectedValue(new Error('judge unavailable'));
+    const contextLookup = vi.spyOn(permissionInquiry, 'resolveManagerPermissionContext');
+    const session = createExecutor(provider);
+    const output = { message: '結果は未確認です', summary: null };
+    let hookOutput: unknown;
+    doubles.call.mockImplementationOnce(async (_prompt: string, options: DecisionOptions) => {
+      const sdk = buildSdkOptions({ cwd, abortSignal: options.abortSignal, outputSchema: options.outputSchema,
+        onToolPermissionDecision: handler(options) });
+      const hook = sdk.hooks?.PreToolUse?.find(({ matcher }) => matcher === undefined)?.hooks[0];
+      expect(hook).toBeTypeOf('function');
+      hookOutput = await hook!({ hook_event_name: 'PreToolUse', session_id: 'sdk-session',
+        transcript_path: '/fixture/transcript', cwd: toolCwd, tool_name: 'StructuredOutput', tool_input: output,
+        tool_use_id: 'native-output',
+      }, 'native-output', { signal: new AbortController().signal });
+      return { ...reply(), structuredOutput: output };
+    });
+    expect(await executeTurn(session, { text: humanInstruction,
+      goal: { id: goal.id, repositoryDirectory: cwd, constraints: goal.constraints },
+    })).toMatchObject(output);
+    expect(hookOutput).toEqual({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } });
+    expect(contextLookup).not.toHaveBeenCalled();
+    expect(executeIsolatedStructuredInternalAgent).not.toHaveBeenCalled();
+    expect(doubles.update).not.toHaveBeenCalled();
+    expect(doubles.inquiryApproval).not.toHaveBeenCalled();
+  });
+  it('keeps Codex StructuredOutput on the normal permission path', async () => {
+    vi.mocked(executeIsolatedStructuredInternalAgent).mockResolvedValue(judgment({ decision: 'deny', reason: 'judge examined operation' }));
+    expect(await decide('StructuredOutput', { message: '結果', summary: null }, 'ja', 'codex'))
+      .toEqual({ decision: 'deny', reason: 'judge examined operation' });
+    expect(executeIsolatedStructuredInternalAgent).toHaveBeenCalledOnce();
+  });
+  it('judges a Bash operation containing the native output name', async () => {
+    vi.mocked(executeIsolatedStructuredInternalAgent).mockResolvedValue(judgment({ decision: 'deny', reason: 'commit forbidden' }));
+    expect(await decide('Bash', { command: 'git commit -m StructuredOutput' }))
+      .toEqual({ decision: 'deny', reason: 'commit forbidden' });
+    expect(executeIsolatedStructuredInternalAgent).toHaveBeenCalledOnce();
   });
   it.each(TAKT_MCP_MANAGER_TOOL_NAMES)('allows the listed manager MCP full name for %s without a judge', async (name) => {
     expect(await decide(`mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${name}`)).toEqual({ decision: 'allow' });
@@ -165,6 +274,7 @@ describe('manager tool permission classification', () => {
   });
   it.each([
     'UnknownTool', 'ReadFile', 'read', 'ReadExtra', 'mcp__external__takt_get_goal',
+    'StructuredOutputExtra', 'structuredoutput', 'mcp__external__StructuredOutput',
     `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__get_unknown`,
     `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}_extra__takt_get_goal`,
     'mcp__external__get_records', 'mcp__external__list_records',

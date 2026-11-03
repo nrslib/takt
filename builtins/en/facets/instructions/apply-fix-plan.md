@@ -5,6 +5,8 @@ Success means completing every fix unit and every completion obligation derived 
 **Fix plan:**
 {report:fix-plan.md}
 
+Use this plan and the current decision to determine current repair targets. Read the supplied history lists to compare assumptions missing from earlier repairs; do not add targets from previous versions.
+
 **Important:**
 - Before editing, reconcile the plan's root cause, responsibility and source of truth, impact paths, methods, evidence, and completion criteria with the current code, Report Directory, and active constraints
 - When the plan contains a concrete cause investigation, execute its fixed conditions, single varied condition, observation target, and method before production repair, and confirm that the result matches the plan's premises. If it does not, do not repair; report the evidence that the fix plan requires revision

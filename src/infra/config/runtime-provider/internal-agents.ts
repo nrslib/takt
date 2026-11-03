@@ -76,6 +76,7 @@ function resolveActiveRuntimeProviderEnvironment(
       kind: 'runtime-v1',
       section,
       mcp: runtimeFile?.mcp,
+      assignmentOrigins: resolvedRuntimeFile.assignmentOrigins,
       resolutionContext: createRuntimeProviderResolutionContext(
         projectCwd,
         resolvedRuntimeFile.profileOrigins,

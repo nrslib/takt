@@ -236,6 +236,7 @@ async function executeWorkflowInternal(
       workflowConfig,
       options.projectCwd,
       options.workflowResourceRoot,
+      options.workflowSystemCommandsPolicy,
     ),
   );
   const preparedBundle = prepareWorkflowExecutionBundle({
@@ -517,6 +518,7 @@ async function executeWorkflowInternal(
         resumePoint: options.resumePoint,
         restartPoint: options.restartPoint,
         resumeSource: artifactResumeSource,
+        sourceResumePoint: options.sourceResumePoint,
         operationJournal: bootstrap.operationJournal,
         reportDirName: bootstrap.runSlug,
         ...(options.runPathsDirectory === undefined ? {} : { runPathsDirectory: options.runPathsDirectory }),
@@ -532,6 +534,7 @@ async function executeWorkflowInternal(
         phase1ProcessSafetyByStep,
         systemStepServicesFactory: (serviceOptions) => createDefaultSystemStepServices({
           ...serviceOptions,
+          runPaths: bootstrap.runPaths,
           ...gitSafety,
           ...(options.cacciaExecutionSource === undefined ? {} : { cacciaService: {
             execute: (prNumber) => cacciaEffect({

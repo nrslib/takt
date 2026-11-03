@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { projectIdForCanonicalDirectory } from '../config/global/projectRegistry.js';
 import { writeFileAtomic } from '../config/project/sessionStore.js';
 import { withFileLock } from '../fs/file-lock.js';
+import { withInquiryLock } from './inquiry-lock.js';
 import { createInquiry, answerInquiry, withdrawInquiry, consumeInquiryApproval } from './inquiry.js';
 import { isSameGoalOperation } from './questions.js';
 import { GoalQuestionSchema, type GoalAnswerInput, type GoalQuestion, type GoalQuestionInput } from './schema.js';
@@ -24,35 +25,39 @@ export class StandaloneInquiryStore {
   constructor(private readonly configDirectory: string, private readonly owner: InquiryOwner) {}
 
   async create(input: GoalQuestionInput): Promise<GoalQuestion> {
-    const question = createInquiry(input);
-    const directory = await this.directory();
-    const path = join(directory, `${question.id}.json`);
-    await this.assertUnusedId(path);
-    await mkdir(directory, { recursive: true, mode: 0o700 });
-    this.write(path, question);
-    return question;
+    return withInquiryLock(this.configDirectory, async () => {
+      const question = createInquiry(input);
+      const directory = await this.directory();
+      const path = join(directory, `${question.id}.json`);
+      await this.assertUnusedId(path);
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+      this.write(path, question);
+      return question;
+    });
   }
 
   async getOrCreateApproval(input: GoalQuestionInput & { kind: 'approval' }): Promise<GoalQuestion> {
-    const candidate = createInquiry(input);
-    const directory = await this.directory();
-    await mkdir(directory, { recursive: true, mode: 0o700 });
-    let existing: { name: string; question: GoalQuestion } | undefined;
-    const entries = await opendir(directory);
-    for await (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
-      const id = IdSchema.parse(entry.name.slice(0, -'.json'.length));
-      const question = await this.read(join(directory, entry.name), id);
-      if (question.kind === 'approval' && question.status === 'pending' && isSameGoalOperation(question, candidate)
-        && (existing === undefined || entry.name.localeCompare(existing.name) < 0)) {
-        existing = { name: entry.name, question };
+    return withInquiryLock(this.configDirectory, async () => {
+      const candidate = createInquiry(input);
+      const directory = await this.directory();
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+      let existing: { name: string; question: GoalQuestion } | undefined;
+      const entries = await opendir(directory);
+      for await (const entry of entries) {
+        if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+        const id = IdSchema.parse(entry.name.slice(0, -'.json'.length));
+        const question = await this.read(join(directory, entry.name), id);
+        if (question.kind === 'approval' && question.status === 'pending' && isSameGoalOperation(question, candidate)
+          && (existing === undefined || entry.name.localeCompare(existing.name) < 0)) {
+          existing = { name: entry.name, question };
+        }
       }
-    }
-    if (existing !== undefined) return existing.question;
-    const path = join(directory, `${candidate.id}.json`);
-    await this.assertUnusedId(path);
-    this.write(path, candidate);
-    return candidate;
+      if (existing !== undefined) return existing.question;
+      const path = join(directory, `${candidate.id}.json`);
+      await this.assertUnusedId(path);
+      this.write(path, candidate);
+      return candidate;
+    });
   }
 
   async list(): Promise<GoalQuestion[]> {
@@ -141,9 +146,10 @@ export class StandaloneInquiryStore {
     return { inquiries: candidates.slice(offset), totalCount };
   }
 
-  async answer(id: string, answer: string | GoalAnswerInput): Promise<GoalQuestion> {
+  async answer(id: string, answer: string | GoalAnswerInput,
+    source: NonNullable<GoalQuestion['answer']>['source'] = 'tui'): Promise<GoalQuestion> {
     const path = join(await this.directory(), `${IdSchema.parse(id)}.json`);
-    const answered = answerInquiry(await this.read(path, id), answer);
+    const answered = answerInquiry(await this.read(path, id), answer, source);
     this.write(path, answered);
     return answered;
   }

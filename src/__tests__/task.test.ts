@@ -366,7 +366,8 @@ describe('TaskRunner (tasks.yaml)', () => {
       startedAt: new Date().toISOString(), completedAt: new Date().toISOString() });
     runner.requeueTask(task.name, ['failed']);
     const claimed = new TaskRunner(testDir).claimNextTasks(1)[0]!;
-    expect(claimed.data).toMatchObject({ merge_pushed_head_sha: c, merge_push_base_head_sha: b,
+    expect(claimed.data).toMatchObject({ merge_known_remote_head_sha: c,
+      merge_pushed_head_sha: c, merge_push_base_head_sha: b,
       merge_push_source: 'caccia' });
   });
 
@@ -1820,6 +1821,20 @@ describe('TaskRunner (tasks.yaml)', () => {
       ),
     },
     {
+      name: 'manual requeue with explicitly no source',
+      record: { run_slug: 'current-run', source_run_slug: 'old-source', resume_mode: 'requeue' },
+      expectedSourceRunSlug: undefined,
+      expectedMode: 'requeue',
+      execute: (service: TaskRetryService) => service.requeueTask('task-a', ['failed'], { sourceRunSlug: null }),
+    },
+    {
+      name: 'manual requeue with omitted source and existing history',
+      record: { run_slug: 'current-run', source_run_slug: 'old-source', resume_mode: 'requeue' },
+      expectedSourceRunSlug: 'current-run',
+      expectedMode: 'requeue',
+      execute: (service: TaskRetryService) => service.requeueTask('task-a', ['failed']),
+    },
+    {
       name: 'direct re-execution with an explicit source',
       record: { run_slug: '20260717-current-run', source_run_slug: '20260717-original-run', resume_mode: 'instruct' },
       expectedSourceRunSlug: '20260717-explicit-run',
@@ -2760,7 +2775,8 @@ describe('failed PR merge task publication', () => {
     lifecycle.recordPrMergePushedHead(record.name, newHeadSha, oldHeadSha, 'manual');
 
     expect(store.read().tasks[0]).toMatchObject({
-      status: 'failed', merge_pushed_head_sha: newHeadSha, merge_push_base_head_sha: oldHeadSha,
+      status: 'failed', merge_known_remote_head_sha: newHeadSha,
+      merge_pushed_head_sha: newHeadSha, merge_push_base_head_sha: oldHeadSha,
       merge_push_source: 'manual',
     });
   });

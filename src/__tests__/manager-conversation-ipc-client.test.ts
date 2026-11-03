@@ -46,7 +46,7 @@ let helloOwner: () => typeof doubles.owner;
 async function respond(request: Request, socket: FakeSocket) {
   if (request.method === 'hello') { socket.response(request, { owner: helloOwner() }); return; }
   if (request.method === 'submit') { submit(request, socket); return; }
-  const read = { conversationId: record.id, transferId: randomUUID(), revision: 4, stateSequence: 1, operationId: null };
+  const read = { conversationId: record.id, transferId: randomUUID(), mode: 'initial' as const, revision: 4, stateSequence: 1, operationId: null };
   socket.response(request, { ...(request.method === 'open' ? { attachmentId: randomUUID() } : {}), read });
   const state = { conversationId: record.id, assignment: record.assignment, revision: 4, pending: record.pending,
     approval: null, running: null, interrupted: false };
@@ -82,7 +82,7 @@ function controlReads(method: 'open' | 'snapshot') {
 }
 
 async function snapshotWire(revision: number, stateSequence: number) {
-  const read = { conversationId: record.id, transferId: randomUUID(), revision, stateSequence, operationId: null };
+  const read = { conversationId: record.id, transferId: randomUUID(), mode: 'initial' as const, revision, stateSequence, operationId: null };
   const pending = { ...record.pending!, revision };
   const state = { conversationId: record.id, assignment: record.assignment, revision, pending,
     approval: null, running: null, interrupted: false };
@@ -99,6 +99,35 @@ function readResponse(target: { request: Request; socket: FakeSocket }, read: Co
     ...(target.request.method === 'open' ? { attachmentId: randomUUID() } : {}), read,
   });
 }
+
+it.each(['complete', 'incomplete'] as const)('publishes display items together when a transfer is %s even when each item arrives in a separate chunk', async (status) => {
+  const reads = controlReads('open');
+  const value = client();
+  const connecting = value.connect();
+  await vi.waitFor(() => expect(reads).toHaveLength(1));
+  const { read, state } = await snapshotWire(4, 1);
+  const items = Array.from({ length: 200 }, (_, index) => ({ kind: 'display_event' as const,
+    event: { id: `event-${index}`, message: `Work ${index}` } }));
+  const wire: Buffer[] = [];
+  for await (const { frame } of conversationTransferFrames(record.id, read, 'snapshot', (async function* () {
+    yield { kind: 'state', state }; yield* items;
+  })())) wire.push(encodeConversationFrame(frame));
+  const counts: number[] = [];
+  value.subscribe(() => counts.push(value.getSnapshot().items.length));
+  readResponse(reads[0]!, read);
+  await connecting;
+  for (const bytes of wire.slice(0, -1)) reads[0]!.socket.emit('data', bytes);
+
+  expect(value.getSnapshot().state).toEqual(state);
+  expect(new Set(counts)).toEqual(new Set([0]));
+  reads[0]!.socket.emit('data', status === 'complete' ? wire.at(-1)! : encodeConversationFrame({
+    protocolVersion: 1, type: 'event', conversationId: record.id,
+    output: { kind: 'transfer_error', transferId: read.transferId, code: 'read_failed' },
+  }));
+
+  expect(value.getSnapshot()).toMatchObject({ connection: 'connected', readStatus: status, items });
+  expect(new Set(counts)).toEqual(new Set([0, items.length]));
+});
 
 it('keeps the completed proposal usable while a background response and its transfer are pending', async () => {
   const reads = controlReads('open');
@@ -209,6 +238,31 @@ it('requires a fresh completed read after reconnecting the same client', async (
   expect(value.getSnapshot().readStatus).toBe('complete');
 });
 
+it('connects to a fresh daemon after asynchronous assignment preparation', async () => {
+  let ready = false;
+  doubles.ensure.mockImplementationOnce(async () => { ready = true; });
+  doubles.resolve.mockImplementationOnce(async () => {
+    await Promise.resolve();
+    // 接続前の非同期処理中に、attachmentのないdaemonが終了する条件。
+    if (ready) ready = false;
+    return selected;
+  });
+  const connect = doubles.connect.getMockImplementation()!;
+  doubles.connect.mockImplementationOnce((...args) => {
+    if (!ready) {
+      const socket = new FakeSocket(() => {});
+      sockets.push(socket);
+      queueMicrotask(() => socket.emit('error', Object.assign(new Error('connect ENOENT: daemon exited during assignment preparation'), { code: 'ENOENT' })));
+      return socket;
+    }
+    return connect(...args);
+  });
+  const value = client();
+  await value.connect();
+  expect(value.getSnapshot().connection).toBe('connected');
+  expect(sockets[0]!.requests.map(({ method }) => method)).toEqual(['hello', 'open']);
+});
+
 it('authenticates the current owner and opens the resolved identity with CLI overrides before applying a complete read', async () => {
   const value = client(); const listener = vi.fn(); const unsubscribe = value.subscribe(listener);
   await value.connect();
@@ -222,7 +276,20 @@ it('authenticates the current owner and opens the resolved identity with CLI ove
   expect(sockets[0]!.requests.at(-1)?.method).toBe('snapshot');
 });
 
-it('correlates out-of-order submit responses without replaying or queuing mutations', async () => {
+it('receives the waiting count in a state update and clears it when the queue drains', async () => {
+  const value = client(); await value.connect();
+  for (const [index, queuedMessageCount] of [2, undefined].entries()) {
+    const state = { conversationId: record.id, assignment: record.assignment, revision: 4, pending: record.pending,
+      approval: null, running: null, interrupted: false, ...(queuedMessageCount === undefined ? {} : { queuedMessageCount }) };
+    const metadata = { transferId: randomUUID(), revision: 4, stateSequence: index + 2, operationId: null };
+    for await (const { frame } of conversationTransferFrames(record.id, metadata, 'output', (async function* () {
+      yield { kind: 'pending', state };
+    })())) sockets[0]!.emit('data', encodeConversationFrame(frame));
+    await vi.waitFor(() => expect(value.getSnapshot().state?.queuedMessageCount).toBe(queuedMessageCount));
+  }
+});
+
+it('correlates out-of-order accepted responses and preserves the daemon queue count', async () => {
   const value = client(); await value.connect();
   const pending: Request[] = [];
   submit = (request) => { pending.push(request); };
@@ -230,9 +297,9 @@ it('correlates out-of-order submit responses without replaying or queuing mutati
   const second = value.submit({ kind: 'message', text: 'second' });
   await vi.waitFor(() => expect(pending).toHaveLength(2));
   const operationId = randomUUID();
-  sockets[0]!.response(pending[1]!, { kind: 'busy', operationId });
+  sockets[0]!.response(pending[1]!, { kind: 'accepted', operationId, queuedMessageCount: 2 });
   sockets[0]!.response(pending[0]!, { kind: 'accepted', operationId });
-  expect(await second).toEqual({ kind: 'busy', operationId });
+  expect(await second).toEqual({ kind: 'accepted', operationId, queuedMessageCount: 2 });
   expect(await first).toEqual({ kind: 'accepted', operationId });
   expect(sockets[0]!.requests.filter(({ method }) => method === 'submit')).toHaveLength(2);
 });
@@ -263,7 +330,7 @@ it.each([
   }
   await vi.waitFor(() => expect(pending).toBeDefined());
   const { request, socket } = pending!;
-  const read = { conversationId: record.id, transferId: randomUUID(), revision: 4, stateSequence: 2, operationId: null };
+  const read = { conversationId: record.id, transferId: randomUUID(), mode: 'initial' as const, revision: 4, stateSequence: 2, operationId: null };
   const state = { conversationId: record.id, assignment: record.assignment, revision: 4, pending: record.pending,
     approval: null, running: null, interrupted: false };
   const items = [
@@ -344,11 +411,22 @@ it('closes only the attachment and rejects pending requests without sending abor
   await expect(value.connect()).rejects.toThrow();
 });
 
-it('releases a request when its bounded timeout expires', async () => {
+it('keeps an unanswered request pending until exactly five seconds despite unrelated output', async () => {
   const value = client(); await value.connect(); submit = () => {};
   vi.useFakeTimers();
-  const result = expect(value.submit({ kind: 'message', text: 'unknown outcome' })).rejects.toThrow();
-  await vi.advanceTimersByTimeAsync(5000); await result;
+  let settled = false;
+  const pending = value.submit({ kind: 'message', text: 'unknown outcome' }).finally(() => { settled = true; });
+  const result = expect(pending).rejects.toThrow('IPC request timed out');
+  await vi.advanceTimersByTimeAsync(4000);
+  const version = { transferId: randomUUID(), revision: 4, stateSequence: 1, operationId: null };
+  for await (const { frame } of conversationTransferFrames(record.id, version, 'output', (async function* () {
+    yield { kind: 'notice', id: 'unrelated-notice', message: 'Daemon is still running' };
+  })())) sockets[0]!.emit('data', encodeConversationFrame(frame));
+  await vi.advanceTimersByTimeAsync(999);
+  expect(settled).toBe(false);
+  expect(value.getSnapshot().connection).toBe('connected');
+  expect(sockets[0]!.destroyed).toBe(false);
+  await vi.advanceTimersByTimeAsync(1); await result;
   expect(value.getSnapshot().connection).toBe('disconnected');
   expect(sockets[0]!.destroyed).toBe(true);
 });

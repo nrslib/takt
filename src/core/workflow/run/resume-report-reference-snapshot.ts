@@ -1,3 +1,4 @@
+import { reportInputEntries } from '../../models/workflow-report-input.js';
 import { lstatSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import type {
@@ -34,13 +35,12 @@ interface BuildResumeReportSnapshotConsumerOptions {
   readonly workflowCallResolver?: WorkflowCallResolver;
 }
 
-function declaredReportNames(
+function declaredReportEntryNames(
   workflow: WorkflowConfig,
-  declaration: WorkflowReportInput | undefined,
+  declaration: WorkflowReportInput,
   options: BuildResumeReportSnapshotConsumerOptions,
   resumeStackPrefix: readonly WorkflowResumePointEntry[],
 ): readonly string[] {
-  if (declaration === undefined) return [];
   if (declaration.reports !== 'all') return declaration.reports;
   const source = workflow.steps.find((step) => step.name === declaration.fromStep);
   if (source === undefined) return [];
@@ -64,6 +64,10 @@ function declaredReportNames(
     ? [...new Set(discovered.reportNames.map((name) => basename(name)))]
     : [];
 }
+function declaredReportNames(workflow: WorkflowConfig, declaration: WorkflowStep['inputReports'], options: BuildResumeReportSnapshotConsumerOptions, prefix: readonly WorkflowResumePointEntry[]): readonly string[] {
+  return reportInputEntries(declaration).flatMap((entry) => declaredReportEntryNames(workflow, entry, options, prefix));
+}
+
 
 function findWorkflowStep(workflow: WorkflowConfig, name: string): WorkflowStep | undefined {
   for (const step of workflow.steps) {

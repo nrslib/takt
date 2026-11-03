@@ -9,6 +9,8 @@
 
 {{include:instructions/final-preservation-check}}
 
+{{include:instructions/supervise-spec-deviations}}
+
 **現在のレビュー裁定:**
 {report:review-resolution.md}
 

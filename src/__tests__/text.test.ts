@@ -6,6 +6,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { createInterface } from 'node:readline';
+import { PassThrough } from 'node:stream';
 import {
   isFullWidth,
   getDisplayWidth,
@@ -15,6 +17,17 @@ import {
   truncateText,
 } from '../shared/utils/text.js';
 import { MAX_AGENT_FAILURE_MESSAGE_BYTES } from '../shared/types/agent-failure.js';
+
+function readlineWidth(text: string): number {
+  const input = Object.assign(new PassThrough(), { isTTY: true });
+  const output = Object.assign(new PassThrough(), { isTTY: true, columns: 1000 });
+  const reader = createInterface({ input, output, terminal: true });
+  reader.setPrompt('');
+  reader.write(text);
+  const { rows, cols } = reader.getCursorPos();
+  reader.close();
+  return rows * output.columns + cols;
+}
 
 describe('isFullWidth', () => {
   it('should return false for ASCII characters', () => {
@@ -46,6 +59,11 @@ describe('isFullWidth', () => {
     // U+2E80 is in CJK radicals range
     expect(isFullWidth(0x2E80)).toBe(true);
   });
+
+  it('counts an emoji as two terminal columns', () => {
+    expect(readlineWidth('😀')).toBe(2);
+    expect(isFullWidth('😀'.codePointAt(0)!)).toBe(true);
+  });
 });
 
 describe('getDisplayWidth', () => {
@@ -66,6 +84,12 @@ describe('getDisplayWidth', () => {
   it('should handle mixed ASCII and CJK', () => {
     expect(getDisplayWidth('hello漢字')).toBe(9); // 5 + 4
     expect(getDisplayWidth('AB漢C')).toBe(5); // 1+1+2+1
+  });
+
+  it('matches Node readline for an emoji-containing failure header', () => {
+    const header = `FAILURE_MARKER ${'😀'.repeat(60)}`;
+    expect(readlineWidth(header)).toBe(135);
+    expect(getDisplayWidth(header)).toBe(readlineWidth(header));
   });
 });
 
@@ -213,5 +237,17 @@ describe('truncateText', () => {
 
   it('should return text as-is when shorter than maxWidth', () => {
     expect(truncateText('abcd', 5)).toBe('abcd');
+  });
+
+  it('clips emoji without splitting a surrogate pair or exceeding terminal width', () => {
+    const clipped = truncateText(`FAILURE_MARKER ${'😀'.repeat(60)}`, 30);
+    expect(clipped).toContain('😀');
+    expect(clipped).toMatch(/…$/u);
+    expect(readlineWidth(clipped)).toBeLessThanOrEqual(30);
+    expect(clipped).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+  });
+
+  it('omits a joined emoji sequence as a whole when it does not fit', () => {
+    expect(truncateText('A👨‍👩‍👧‍👦B', 3)).toBe('A…');
   });
 });

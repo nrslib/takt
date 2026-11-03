@@ -44,6 +44,10 @@ export const WorkflowCommandGatesConfigSchema = z.object({
   custom_scripts: z.boolean().optional(),
 }).strict();
 
+export const WorkflowSystemCommandsConfigSchema = z.object({
+  custom_scripts: z.boolean().optional(),
+}).strict();
+
 export const WorkflowArpeggioConfigSchema = z.object({
   custom_data_source_modules: z.boolean().optional(),
   custom_merge_inline_js: z.boolean().optional(),
@@ -189,6 +193,7 @@ const ProjectConfigObjectBaseSchema = z.object({
   runtime: RuntimeConfigSchema,
   workflow_runtime_prepare: WorkflowRuntimePrepareConfigSchema.optional(),
   workflow_command_gates: WorkflowCommandGatesConfigSchema.optional(),
+  workflow_system_commands: WorkflowSystemCommandsConfigSchema.optional(),
   workflow_arpeggio: WorkflowArpeggioConfigSchema.optional(),
   sync_conflict_resolver: SyncConflictResolverConfigSchema.optional(),
   workflow_mcp_servers: WorkflowMcpServersConfigSchema.optional(),
@@ -212,15 +217,22 @@ const ProjectConfigObjectBaseSchema = z.object({
   with_submodules: z.boolean().optional(),
 }).strict();
 
+const SlackConfigSchema = z.object({
+  channel_id: z.string().trim().min(1),
+  allowed_user_ids: z.array(z.string().trim().min(1)),
+}).strict();
+
 const ProjectConfigObjectSchema = ProjectConfigObjectBaseSchema.extend({
   manager: ProjectConfigObjectBaseSchema.shape.manager.unwrap().extend({
     main_merge: z.enum(['auto', 'approve']).optional(),
+    slack: SlackConfigSchema.optional(),
   }).optional(),
 });
 
 export const ProjectConfigSchema = ProjectConfigObjectSchema;
 
 const GlobalOnlyConfigSchema = z.object({
+  director: z.object({ patrol_interval: z.number().int().positive().optional(), slack: SlackConfigSchema.optional() }).strict().optional(),
   language: LanguageSchema.optional().default(DEFAULT_LANGUAGE),
   logging: LoggingConfigSchema.optional(),
   worktree_dir: z.string().optional(),
@@ -237,6 +249,7 @@ const GlobalOnlyConfigSchema = z.object({
   cursor_cli_path: z.string().optional(),
   copilot_cli_path: z.string().optional(),
   kiro_cli_path: z.string().optional(),
+  devin_cli_path: z.string().optional(),
   copilot_github_token: z.string().optional(),
   kiro_api_key: z.string().optional(),
   opencode_api_key: z.string().optional(),

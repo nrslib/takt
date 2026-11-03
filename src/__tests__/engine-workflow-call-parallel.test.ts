@@ -1,3 +1,4 @@
+import { writePhaseReportFixture } from './helpers/phase-report-fixture.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
@@ -252,7 +253,7 @@ steps:
       if (step.name !== 'fix') return;
       mkdirSync(context.reportDir, { recursive: true });
       for (const report of step.outputContracts ?? []) {
-        writeFileSync(join(context.reportDir, report.name), `REPAIR_EVIDENCE_${report.name}`);
+        writePhaseReportFixture(context, report.name, `REPAIR_EVIDENCE_${report.name}`);
         onReportWritten?.(report.name);
       }
     });
@@ -322,7 +323,7 @@ steps:
     vi.mocked(runReportPhase).mockImplementation(async (step, _iteration, context, onReportWritten) => {
       if (step.name !== 'repair') return;
       mkdirSync(context.reportDir, { recursive: true });
-      writeFileSync(join(context.reportDir, reportName), `CURRENT-${replacement}`);
+      writePhaseReportFixture(context, reportName, `CURRENT-${replacement}`);
       onReportWritten?.(reportName);
       const rootReports = context.reportDir.split('/subworkflows/')[0]!;
       mkdirSync(rootReports, { recursive: true });
@@ -400,13 +401,13 @@ steps:
       if (step.name === 'consumer') {
         phase2Reports.push(context.injectedReports ?? []);
         mkdirSync(context.reportDir, { recursive: true });
-        writeFileSync(join(context.reportDir, 'summary.md'), 'SUMMARY');
+        writePhaseReportFixture(context, 'summary.md', 'SUMMARY');
         onReportWritten?.('summary.md');
         return;
       }
       if (step.name !== 'review-alpha' && step.name !== 'review-beta') return;
       mkdirSync(context.reportDir, { recursive: true });
-      writeFileSync(join(context.reportDir, 'review.md'), `REVIEW_${step.name}`);
+      writePhaseReportFixture(context, 'review.md', `REVIEW_${step.name}`);
       onReportWritten?.('review.md');
       const rootReports = context.reportDir.split('/subworkflows/')[0]!;
       writeFileSync(join(rootReports, 'review.md'), 'UNRELATED_REVIEW');
@@ -497,7 +498,7 @@ steps:
     vi.mocked(runReportPhase).mockImplementation(async (step, _iteration, context, onReportWritten) => {
       if (step.name !== 'write-outer' && step.name !== 'write-inner') return;
       mkdirSync(context.reportDir, { recursive: true });
-      writeFileSync(join(context.reportDir, 'review.md'), step.name === 'write-outer' ? 'OUTER_REVIEW' : 'INNER_REVIEW');
+      writePhaseReportFixture(context, 'review.md', step.name === 'write-outer' ? 'OUTER_REVIEW' : 'INNER_REVIEW');
       onReportWritten?.('review.md');
     });
     vi.mocked(mockRuleEvaluation).mockImplementation(() => ({ index: 0, method: 'phase3_tag' }));
@@ -605,7 +606,7 @@ steps:
     vi.mocked(runReportPhase).mockImplementation(async (step, _iteration, context, onReportWritten) => {
       if (step.name !== 'primary-plan' && step.name !== 'alternate-plan') return;
       mkdirSync(context.reportDir, { recursive: true });
-      writeFileSync(join(context.reportDir, 'fix-plan.md'), step.name === 'primary-plan' ? 'PRIMARY_PLAN' : 'ALTERNATE_PLAN');
+      writePhaseReportFixture(context, 'fix-plan.md', step.name === 'primary-plan' ? 'PRIMARY_PLAN' : 'ALTERNATE_PLAN');
       onReportWritten?.('fix-plan.md');
       const rootReports = context.reportDir.split('/subworkflows/')[0]!;
       writeFileSync(join(rootReports, 'fix-plan.md'), 'UNRELATED_PLAN');
@@ -687,7 +688,7 @@ steps:
         });
       }
       mkdirSync(context.reportDir, { recursive: true });
-      writeFileSync(join(context.reportDir, 'review.md'), `review from attempt ${reportAttempt}`);
+      writePhaseReportFixture(context, 'review.md', `review from attempt ${reportAttempt}`);
       onReportWritten?.('review.md');
     });
     const consumerPrompts: string[] = [];

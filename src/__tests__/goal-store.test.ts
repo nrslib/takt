@@ -1,3 +1,5 @@
+import type { Stats } from 'node:fs';
+import type { GoalProjectionCacheEntry } from '../infra/goals/store.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GoalStore } from '../infra/goals/store.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
@@ -5,8 +7,10 @@ import type { Goal } from '../infra/goals/schema.js';
 
 const doubles = vi.hoisted(() => ({
   read: vi.fn(), write: vi.fn(), lstat: vi.fn(), readdir: vi.fn(),
+  inspect: vi.fn(), ancestors: vi.fn(), opendir: vi.fn(),
   safe: vi.fn(), capture: vi.fn(), assertSnapshot: vi.fn(),
 }));
+vi.mock('node:fs/promises', () => ({ opendir: doubles.opendir }));
 vi.mock('node:fs', () => ({ readdirSync: doubles.readdir }));
 vi.mock('../infra/fs/file-lock.js', () => ({ withFileLock: (_path: string, action: () => unknown) => action() }));
 vi.mock('../infra/goals/execution-lock.js', () => ({ withGoalExecutionLock: (_cwd: string, action: () => unknown) => action() }));
@@ -16,6 +20,8 @@ vi.mock('../shared/utils/private-file.js', () => ({
 }));
 vi.mock('../shared/utils/private-path-identity.js', () => ({
   assertSafePath: doubles.safe, lstatOrUndefined: doubles.lstat,
+  inspectPrivateArtifactPath: doubles.inspect, assertAncestorIdentities: doubles.ancestors,
+  hasMatchingIdentity: (left: Stats, right: Stats) => left.dev === right.dev && left.ino === right.ino,
 }));
 
 describe('GoalStore validation and publication', () => {
@@ -128,5 +134,66 @@ describe('GoalStore validation and publication', () => {
     doubles.readdir.mockReturnValue([{ name: '../outside' }]);
     await expect(new GoalStore('/project').list()).rejects.toThrow();
     expect(doubles.read).not.toHaveBeenCalled();
+  });
+});
+
+describe('GoalStore display projection cache', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    doubles.opendir.mockImplementation(async () => (async function* () { yield { name: goalId }; })());
+    doubles.read.mockReturnValue({ content: Buffer.from(JSON.stringify(goalRecord())) });
+  });
+  it('reuses compact projections, reloads changed files and evicts deleted entries', async () => {
+    let stat = { dev: 1, ino: 1, size: 100, mtimeMs: 1, ctimeMs: 1 } as Stats;
+    doubles.lstat.mockImplementation(() => stat);
+    doubles.inspect.mockImplementation(() => ({ expectedStat: stat, ancestorIdentities: [] }));
+    const store = new GoalStore('/project');
+    const cache = new Map<string, GoalProjectionCacheEntry<string>>();
+    const project = vi.fn((goal: Goal) => goal.objective);
+    const collect = async () => { const result = []; for await (const value of store.iterateProjected(cache, project)) result.push(value); return result; };
+    expect(await collect()).toEqual([goalRecord().objective]);
+    expect(await collect()).toEqual([goalRecord().objective]);
+    expect(doubles.read).toHaveBeenCalledOnce();
+    expect(project).toHaveBeenCalledOnce();
+    stat = { ...stat, ino: 2 } as Stats;
+    doubles.read.mockReturnValue({ content: Buffer.from(JSON.stringify({ ...goalRecord(), objective: 'Replaced' })) });
+    expect(await collect()).toEqual(['Replaced']);
+    expect(doubles.read).toHaveBeenCalledTimes(2);
+    expect(doubles.ancestors).toHaveBeenCalledTimes(3);
+    doubles.opendir.mockImplementation(async () => (async function* () {})());
+    expect(await collect()).toEqual([]);
+    expect(cache.size).toBe(0);
+  });
+  it('propagates safety and changed-file validation failures without using the cached value', async () => {
+    const stat = { dev: 1, ino: 1, size: 100, mtimeMs: 1, ctimeMs: 1 } as Stats;
+    doubles.lstat.mockReturnValue(stat);
+    doubles.inspect.mockReturnValue({ expectedStat: stat, ancestorIdentities: [] });
+    const store = new GoalStore('/project');
+    const cache = new Map<string, GoalProjectionCacheEntry<string>>();
+    const collect = async () => { for await (const value of store.iterateProjected(cache, (goal) => goal.objective)) expect(value).toBe(goalRecord().objective); };
+    await collect();
+    doubles.inspect.mockImplementationOnce(() => { throw new Error('Unsafe path'); });
+    await expect(collect()).rejects.toThrow('Unsafe path');
+    doubles.inspect.mockReturnValue({ expectedStat: { ...stat, mtimeMs: 2 }, ancestorIdentities: [] });
+    doubles.read.mockReturnValue({ content: Buffer.from('{broken') });
+    await expect(collect()).rejects.toThrow('Invalid goal file');
+    expect(cache.size).toBe(0);
+  });
+  it('keeps cached projections unchanged when a consumer edits a previously returned value', async () => {
+    const stat = { dev: 1, ino: 1, size: 100, mtimeMs: 1, ctimeMs: 1 } as Stats;
+    doubles.lstat.mockReturnValue(stat);
+    doubles.inspect.mockReturnValue({ expectedStat: stat, ancestorIdentities: [] });
+    const store = new GoalStore('/project');
+    const cache = new Map<string, GoalProjectionCacheEntry<{ display: { objective: string } }>>();
+    const collect = async () => {
+      const values = [];
+      for await (const value of store.iterateProjected(cache, (goal) => ({ display: { objective: goal.objective } }))) values.push(value);
+      return values;
+    };
+    const first = await collect();
+    first[0]!.display.objective = 'Changed by consumer';
+
+    expect(await collect()).toEqual([{ display: { objective: goalRecord().objective } }]);
+    expect(doubles.read).toHaveBeenCalledOnce();
   });
 });

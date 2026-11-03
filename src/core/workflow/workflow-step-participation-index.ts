@@ -142,6 +142,46 @@ export class WorkflowStepParticipationIndex {
     );
   }
 
+  rebindInvocation(from: string, to: string, previousCallInstance: number, callInstance: number): void {
+    const source = parseWorkflowExecutionIdentity(from);
+    const target = parseWorkflowExecutionIdentity(to);
+    if (source === undefined || target === undefined) {
+      throw new Error('Cannot rebind workflow step participation from an invalid invocation identity');
+    }
+    const oldPrefix = [
+      ...source.calls,
+      { workflow: source.workflow, step: source.step, kind: 'workflow_call' as const, instance: previousCallInstance },
+    ];
+    const newPrefix = [
+      ...target.calls,
+      { workflow: target.workflow, step: target.step, kind: 'workflow_call' as const, instance: callInstance },
+    ];
+    const moves: Array<{ from: string; to: string; record: WorkflowStepParticipationRecord }> = [];
+    for (const [identity, record] of this.records) {
+      const parsed = parseWorkflowExecutionIdentity(identity);
+      if (parsed === undefined || parsed.calls.length < oldPrefix.length || !oldPrefix.every((expected, index) => {
+        const actual = parsed.calls[index];
+        return actual?.workflow === expected.workflow && actual.step === expected.step
+          && actual.kind === expected.kind && actual.instance === expected.instance;
+      })) continue;
+      moves.push({
+        from: identity,
+        to: serializeWorkflowExecutionIdentity({ ...parsed, calls: [...newPrefix, ...parsed.calls.slice(oldPrefix.length)] }),
+        record,
+      });
+    }
+    const movedIdentities = new Set(moves.map((move) => move.from));
+    const destinations = new Set<string>();
+    for (const move of moves) {
+      if (destinations.has(move.to) || (this.records.has(move.to) && !movedIdentities.has(move.to))) {
+        throw new Error(`Workflow-call step "${source.step}" has conflicting step participation records`);
+      }
+      destinations.add(move.to);
+    }
+    for (const move of moves) this.records.delete(move.from);
+    for (const move of moves) this.records.set(move.to, move.record);
+  }
+
   clearParallelParticipants(
     workflow: WorkflowConfig,
     parallelParentStepName: string,

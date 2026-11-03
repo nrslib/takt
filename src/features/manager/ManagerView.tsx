@@ -9,6 +9,7 @@ import { MAKE_GOAL_COMMAND, useManagerInput } from './useManagerInput.js';
 import { ManagerAnswerDialog } from './ManagerAnswerDialog.js';
 import { ManagerAbortDialog } from './ManagerAbortDialog.js';
 import { ManagerSummaryDialog } from './ManagerSummaryDialog.js';
+import { formatPendingSummary } from './summaryDisplay.js';
 import { ManagerHelp } from './ManagerHelp.js';
 import { ManagerSelectionDialog } from './ManagerSelectionDialog.js';
 import { isGoalSelectionCandidate, useManagerSelection, type ManagerSelectedTarget, type ManagerSelectionCommand } from './useManagerSelection.js';
@@ -47,7 +48,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const [entries, setEntries] = useState<TranscriptEntry[]>(() => initialDiagnostics.map((content) => ({ role: 'assistant', content: toDisplayText(content) })));
   const [approve, setApprove] = useState(false);
   const [sending, setSending] = useState(false);
-  const submitting = useRef(false);
+  const submitting = useRef(0);
   const [summarizing, setSummarizing] = useState(false);
   const summaryOperation = useRef<string | null>(null);
   const active = useRef(false);
@@ -56,6 +57,8 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const mounted = useRef(true);
   const exiting = useRef(false);
   const displayed = useRef(new Set<string>());
+  const displayedMessages = useRef(new Set<string>());
+  const displayedSummaries = useRef(new Set<string>());
   const lastError = useRef<string | null>(null);
   const pendingAnswer = useRef<{ text: string; operationId?: string } | null>(null);
   const goalOperations = useRef(new Map<string, { kind: 'pause' | 'resume' | 'abort'; goal: ManagerAbortTarget['goal'] }>());
@@ -77,24 +80,27 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const selection = useManagerSelection();
   const slashCompletion = useSlashCompletion(resolveSlashCompletions(editor.text, lang, {}, MANAGER_COMMANDS));
   const state = snapshot.state;
-  const busy = sending || state?.running != null;
+  const busy = sending || state?.running != null || (state?.queuedMessageCount ?? 0) > 0;
   active.current = busy;
   const canApprove = snapshot.connection === 'connected' && snapshot.readStatus === 'complete' && !busy;
-  const append = (content: string): void => {
-    if (mounted.current) setEntries((previous) => [...previous, { role: 'assistant', content: toDisplayText(sanitizeSensitiveText(content)) }]);
+  const append = (content: string, role: TranscriptEntry['role'] = 'assistant'): void => {
+    if (mounted.current) setEntries((previous) => [...previous, { role, content: toDisplayText(sanitizeSensitiveText(content)) }]);
   };
   const send = async (command: ConversationCommand, onAccepted?: (id: string) => void): Promise<string | null> => {
-    if (submitting.current && command.kind !== 'abort_turn') { append(getLabel('manager.conversation.busy', lang)); return null; }
-    submitting.current = true;
+    if (submitting.current && command.kind !== 'abort_turn' && command.kind !== 'message') { append(getLabel('manager.conversation.busy', lang)); return null; }
+    submitting.current++;
     setSending(true);
     try {
       const result = await client.submit(command, onAccepted);
-      if (result.kind === 'accepted') return result.operationId;
+      if (result.kind === 'accepted') {
+        if (result.queuedMessageCount !== undefined) append(getLabel('manager.conversation.queued', lang, { count: String(result.queuedMessageCount) }));
+        return result.operationId;
+      }
       append(result.kind === 'error' ? result.message : getLabel('manager.conversation.busy', lang));
       if (result.kind === 'error') void client.refresh().catch((error: unknown) => append(getErrorMessage(error)));
       return null;
     } catch (error) { append(getErrorMessage(error)); return null; }
-    finally { submitting.current = false; if (mounted.current) setSending(false); }
+    finally { submitting.current--; if (mounted.current) setSending(submitting.current > 0); }
   };
   const summaryApproval = useManagerSummaryApproval({ selected, setApprove, resetChoice,
     dismissSummary: async (revision) => {
@@ -106,6 +112,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const edit = (next: EditorState): void => { editorRef.current = next; setEditor(next); };
   const editAnswer = (next: EditorState): void => { answerEditorRef.current = next; setAnswerEditor(next); };
   const currentAssignment = snapshot.items.find((item) => item.kind === 'assignment')?.assignment ?? assignment;
+  if (currentAssignment.kind === 'daemon') throw new Error('Manager view received a director assignment');
   const goals = snapshot.items.flatMap((item) => item.kind === 'goal' ? [item.goal] : []);
   const questions: PendingQuestion[] = snapshot.items.flatMap((item): PendingQuestion[] => {
     if (item.kind !== 'inquiry') return [];
@@ -120,12 +127,20 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     resetChoice();
   }, [state?.revision, state?.pending]);
   useEffect(() => {
+    if (state?.pending == null) return;
+    const key = `${state.conversationId}:${state.pending.revision}`;
+    if (displayedSummaries.current.has(key)) return;
+    const content = formatPendingSummary(state.pending, lang);
+    displayedSummaries.current.add(key);
+    append(content);
+  }, [state?.conversationId, state?.pending, lang]);
+  useEffect(() => {
     if (snapshot.error !== null && snapshot.error !== lastError.current) append(snapshot.error);
     lastError.current = snapshot.error;
     for (const item of snapshot.items) {
       if (item.kind !== 'display_event' || displayed.current.has(item.event.id)) continue;
       displayed.current.add(item.event.id);
-      if (!item.event.suppressInitialDisplay) append(item.event.message);
+      append(item.event.message);
     }
     if (snapshot.readStatus === 'complete') selection.refresh(display);
   }, [snapshot.items, snapshot.readStatus, snapshot.error]);
@@ -159,7 +174,12 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   useEffect(() => {
     mounted.current = true;
     const unsubscribe = client.onOutput((output) => {
-      if (output.kind === 'result') showResult(output.result, output.operationId);
+      if (output.kind === 'user_message') {
+        if (!displayedMessages.current.has(output.operationId)) {
+          displayedMessages.current.add(output.operationId);
+          append(output.message, 'user');
+        }
+      } else if (output.kind === 'result') showResult(output.result, output.operationId);
       else if (output.kind === 'progress' || output.kind === 'reply' || output.kind === 'notice') append(output.message);
     });
     const timer = setInterval(() => {
@@ -179,11 +199,15 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   };
   const submit = (text: string): void => {
     const summaryRequest = text.trim() === MAKE_GOAL_COMMAND;
-    if (!summaryRequest) setEntries((previous) => [...previous, { role: 'user', content: toDisplayText(text) }]);
+    if (!summaryRequest) append(text, 'user');
     else setSummarizing(true);
     resetChoice();
-    void send({ kind: 'message', text: summaryRequest ? getLabel('manager.goSummaryRequest', lang) : text },
-      summaryRequest ? (id) => { summaryOperation.current = id; } : undefined)
+    void send({ kind: 'message', text: summaryRequest ? getLabel('manager.goSummaryRequest', lang) : text,
+      ...(summaryRequest ? { display: false } : {}) },
+      (id) => {
+        if (summaryRequest) summaryOperation.current = id;
+        else displayedMessages.current.add(id);
+      })
       .then((id) => { if (id === null && summaryRequest) setSummarizing(false); });
   };
   const changeGoal = async (kind: 'pause' | 'resume' | 'abort', target: ManagerAbortTarget['goal'], confirmed = false, retry = false): Promise<void> => {
@@ -249,9 +273,9 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     {selection.selection !== null && <ManagerSelectionDialog selection={selection.selection} lang={lang} />}
     {answerTarget !== null && selection.selection === null && <ManagerAnswerDialog answerTarget={answerTarget} bodyText={questionAnswer.bodyText} lang={lang} />}
     {abortTarget !== null && selection.selection === null && <ManagerAbortDialog abortTarget={abortTarget.goal} retry={abortTarget.retry} approve={approve} lang={lang} />}
-    {summaryVisible && <ManagerSummaryDialog pending={pending} approve={approve} ja={ja} />}
+    {summaryVisible && <ManagerSummaryDialog approve={approve} lang={lang} />}
     <ManagerHelp lang={lang} />
-    <StatusLine busy={busy} label={summarizing ? getLabel('manager.summaryWorking', lang) : ja ? '処理中' : 'Working'} streamed="" />
+    <StatusLine busy={busy} label={state?.queuedMessageCount ? getLabel('manager.conversation.waiting', lang, { count: String(state.queuedMessageCount) }) : summarizing ? getLabel('manager.summaryWorking', lang) : ja ? '処理中' : 'Working'} streamed="" />
     <PromptInput text={visibleEditor.text} cursor={visibleEditor.cursor} contentWidth={contentWidth}
       placeholder={answerTarget === null ? (ja ? 'ゴールを相談してください' : 'Discuss your goal') : (ja ? '回答を入力してください' : 'Enter your answer')}
       hint={inputHint} showHint={false}

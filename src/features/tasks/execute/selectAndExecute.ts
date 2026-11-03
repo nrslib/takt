@@ -19,6 +19,7 @@ import {
 } from './taskSpecContext.js';
 import { buildTraceTaskMetadata } from './traceTaskMetadata.js';
 import { checkTaskNameProvider, checkTaskProviders, terminalProviderConfirmation } from './providerPreflight.js';
+import type { WorkflowSystemCommandsConfig } from '../../../core/models/config-types.js';
 
 export type { WorktreeConfirmationResult, SelectAndExecuteOptions };
 
@@ -37,23 +38,25 @@ type WorkflowResolution =
   | { readonly kind: 'cancelled' }
   | { readonly kind: 'failed'; readonly reason: string };
 
-async function resolveWorkflow(cwd: string, override?: string): Promise<WorkflowResolution> {
+async function resolveWorkflow(cwd: string, override?: string, workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig): Promise<WorkflowResolution> {
   if (override) {
     if (isWorkflowPath(override)) {
       return { kind: 'resolved', identifier: override };
     }
-    const resolvedWorkflow = loadWorkflowByIdentifier(override, cwd);
+    const resolvedWorkflow = workflowSystemCommandsPolicy === undefined
+      ? loadWorkflowByIdentifier(override, cwd)
+      : loadWorkflowByIdentifier(override, cwd, { workflowSystemCommandsPolicy });
     if (!resolvedWorkflow) {
       return { kind: 'failed', reason: `Workflow not found: ${sanitizeTerminalText(override)}` };
     }
     return { kind: 'resolved', identifier: override };
   }
-  const identifier = await selectWorkflow(cwd);
+  const identifier = await selectWorkflow(cwd, ...(workflowSystemCommandsPolicy === undefined ? [] : [{ workflowSystemCommandsPolicy }]));
   return identifier === null ? { kind: 'cancelled' } : { kind: 'resolved', identifier };
 }
 
-export async function determineWorkflow(cwd: string, override?: string): Promise<string | null> {
-  const resolution = await resolveWorkflow(cwd, override);
+export async function determineWorkflow(cwd: string, override?: string, workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig): Promise<string | null> {
+  const resolution = await resolveWorkflow(cwd, override, workflowSystemCommandsPolicy);
   if (resolution.kind === 'failed') {
     error(resolution.reason);
   }
@@ -132,7 +135,7 @@ export async function selectAndExecuteTask(
 ): Promise<TaskExecutionOutcome | void> {
   let workflowIdentifier: string;
   if (options?.failureMode === 'return') {
-    const resolution = await resolveWorkflow(cwd, options.workflow);
+    const resolution = await resolveWorkflow(cwd, options.workflow, options.workflowSystemCommandsPolicy);
     if (resolution.kind === 'failed') {
       return { success: false, reason: resolution.reason };
     }
@@ -142,16 +145,24 @@ export async function selectAndExecuteTask(
     }
     workflowIdentifier = resolution.identifier;
   } else {
-    const identifier = await determineWorkflow(cwd, options?.workflow);
-    if (identifier === null) {
+    const resolution = await resolveWorkflow(cwd, options?.workflow, options?.workflowSystemCommandsPolicy);
+    if (resolution.kind === 'failed') error(resolution.reason);
+    if (resolution.kind !== 'resolved') {
       info('Cancelled');
       return;
     }
-    workflowIdentifier = identifier;
+    workflowIdentifier = resolution.identifier;
   }
 
   const execCwd = cwd;
-  try { await checkTaskProviders(cwd, workflowIdentifier, agentOverrides ?? {}, terminalProviderConfirmation()); }
+  try {
+    const confirmation = terminalProviderConfirmation();
+    if (options?.workflowSystemCommandsPolicy === undefined) {
+      await checkTaskProviders(cwd, workflowIdentifier, agentOverrides ?? {}, confirmation);
+    } else {
+      await checkTaskProviders(cwd, workflowIdentifier, agentOverrides ?? {}, confirmation, undefined, cwd, options.workflowSystemCommandsPolicy);
+    }
+  }
   catch (caught) {
     const reason = getErrorMessage(caught);
     error(reason);
@@ -206,6 +217,7 @@ export async function selectAndExecuteTask(
       cwd: execCwd,
       workflowIdentifier,
       projectCwd: cwd,
+      ...(options?.workflowSystemCommandsPolicy === undefined ? {} : { workflowSystemCommandsPolicy: options.workflowSystemCommandsPolicy }),
       agentOverrides,
       interactiveUserInput: options?.interactiveUserInput === true,
       interactiveMetadata: options?.interactiveMetadata,

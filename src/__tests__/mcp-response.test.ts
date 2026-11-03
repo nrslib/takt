@@ -128,6 +128,21 @@ describe('UTF-8 text ranges', () => {
 });
 
 describe('goal response projections', () => {
+  it('bounds human verification previews and keeps the complete saved field retrievable', () => {
+    const humanChecks = '画面を開いて結果を確認する。'.repeat(1000);
+    const pullRequest = { number: 1950, url: 'https://github.com/example/project/pull/1950' };
+    const goal = GoalSchema.parse({ ...goalRecord(), pullRequest,
+      completion: { goalBranch: 'goal', goalSha: 'a'.repeat(40), targetBranch: 'main', summary: 'evidence', humanChecks,
+        instructions: [], changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false } },
+    });
+    for (const result of [goalSummary(goal), goalWriteSummary(goal)]) {
+      expect(result.pullRequest).toEqual(pullRequest);
+      expect(Buffer.byteLength(result.completion!.humanChecks!)).toBeLessThanOrEqual(256);
+      expect(result.completion).toMatchObject({ truncated: true,
+        omissions: [{ path: 'completion.humanChecks', totalBytes: Buffer.byteLength(humanChecks) }] });
+    }
+    expect(selectGoalValue(goal, 'completion.humanChecks')).toBe(humanChecks);
+  });
   it('exposes read selectors without adding them to write inputs', () => {
     const identity = { cwd: '/project', goalId: goalRecord().id };
     expect(getGoalInputSchema.safeParse({ ...identity, path: 'workLog.summary', recordId: goalRecord().id, maxBytes: 4, textOffset: 0 }).success).toBe(true);

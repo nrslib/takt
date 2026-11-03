@@ -66,6 +66,7 @@ export function buildDynamicSelectorInstruction(input: DynamicSelectorInput): st
     `Report Directory:\n${input.reportDirectory}`,
     '',
     `Reports to inspect:\n${renderList(input.reportNames)}`,
+    'Read the supplied current-report paths. Use history only for comparison, never as additional current repair targets.',
     '',
     `Changed file paths:\n${renderList(input.changedPaths)}`,
     ...(input.selection.mode === 'cumulative'

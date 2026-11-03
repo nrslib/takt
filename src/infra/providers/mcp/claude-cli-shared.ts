@@ -7,6 +7,7 @@
  * adapters are thin wrappers (Policy「DRY」).
  */
 
+import { filterMcpHeaderEnvServers } from './header-env.js';
 import type {
   ProviderMcpAdapter,
   ProviderMcpContext,
@@ -28,6 +29,7 @@ export function createClaudeCliMcpAdapter(provider: ClaudeCliProvider): Provider
       servers: ResolvedMcpServers,
       _context: ProviderMcpContext,
     ): Promise<PreparedProviderMcp> {
+      servers = filterMcpHeaderEnvServers(provider, servers, true);
       if (!servers.enabled || Object.keys(servers.servers).length === 0) {
         // Empty set: MCP is disabled (order.md:152) but `--strict-mcp-config`
         // is still emitted so ambient project/user/plugin MCP config is not

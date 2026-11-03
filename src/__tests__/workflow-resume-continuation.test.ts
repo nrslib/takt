@@ -7,10 +7,14 @@ import type {
 } from '../core/models/index.js';
 import { WorkflowResumeContinuation } from '../core/workflow/engine/workflow-resume-continuation.js';
 import { buildScopedStepIterationIdentity } from '../core/workflow/step-iteration-identity.js';
-import { buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
+import {
+  buildWorkflowResumePointEntry,
+  getWorkflowReference,
+} from '../core/workflow/workflow-reference.js';
 import { ResumeArtifactOccurrenceIndex } from '../core/workflow/run/resume-artifact-occurrence-index.js';
 import { buildWorkflowCallInvocationIdentity } from '../core/workflow/workflow-call-invocation-index.js';
 import { buildWorkflowCallSiteIdentity } from '../core/workflow/workflow-call-site-identity.js';
+import { attachWorkflowOpaqueRef } from '../shared/workflowConfigMetadata.js';
 
 const ARTIFACT_HASH = '0'.repeat(64);
 const LEGACY_ACCIDENT_NAMESPACE = 'iteration-1--step-review--workflow-takt-experimental-review--site-128059303b1d3ce4bbe910a170a9f459001651ddaa51082a36b7b1494f81e8cb';
@@ -31,7 +35,7 @@ function invocationRecord(
     occurrence,
   );
   return {
-    identity: buildWorkflowCallInvocationIdentity(workflow.name, stepName, workflowCallPath),
+    identity: buildWorkflowCallInvocationIdentity(getWorkflowReference(workflow), stepName, workflowCallPath),
     namespace: buildWorkflowCallSiteIdentity({
       stack: [...workflowCallPath, frame],
       childWorkflow,
@@ -54,7 +58,10 @@ function artifactManifest(namespaces: readonly string[]) {
   };
 }
 
-function sourceResumePoint(records: readonly ReturnType<typeof invocationRecord>[]): WorkflowResumePoint {
+function sourceResumePoint(
+  records: readonly ReturnType<typeof invocationRecord>[],
+  completed = false,
+): WorkflowResumePoint {
   return {
     version: 2,
     stack: [],
@@ -63,6 +70,7 @@ function sourceResumePoint(records: readonly ReturnType<typeof invocationRecord>
     workflow_call_invocations: Object.fromEntries(records.map((record) => [record.identity, {
       call_instance: record.occurrence,
       report_namespace_segment: record.namespace,
+      ...(completed ? { completed: true } : {}),
     }])),
     workflow_step_participations: {},
   };
@@ -159,6 +167,69 @@ describe('WorkflowResumeContinuation', () => {
     expect(state.stepIterations.get('remediation')).toBe(8);
   });
 
+  it('selected restart は保存 occurrence を復元し、後続の新規呼び出しで artifact 最大値から継続する', () => {
+    const workflow = {
+      name: 'parent',
+      initialStep: 'remediation',
+      maxSteps: 10,
+      steps: [{
+        name: 'remediation',
+        kind: 'workflow_call',
+        personaDisplayName: 'Remediation workflow',
+        instruction: 'Call the remediation workflow',
+        call: 'experimental-remediation',
+        rules: [],
+      }],
+    } as WorkflowConfig;
+    const state: WorkflowState = {
+      workflowName: workflow.name,
+      currentStep: 'remediation',
+      iteration: 1,
+      stepOutputs: new Map(),
+      structuredOutputs: new Map(),
+      systemContexts: new Map(),
+      effectResults: new Map(),
+      userInputs: [],
+      personaSessions: new Map(),
+      stepIterations: new Map(),
+      restoredStepIterationNames: new Set(),
+      dynamicParallelSelections: new Map(),
+      dynamicFacetSelections: new Map(),
+      status: 'running',
+    };
+    const childWorkflow = {
+      name: 'experimental-remediation',
+      subworkflow: { callable: true },
+      initialStep: 'fix',
+      maxSteps: 10,
+      steps: [],
+    } as WorkflowConfig;
+    const records = [2, 6].map((occurrence) => invocationRecord(
+      workflow,
+      'remediation',
+      childWorkflow,
+      [],
+      occurrence,
+    ));
+    const index = new ResumeArtifactOccurrenceIndex(
+      artifactManifest(records.map((record) => record.namespace)),
+      sourceResumePoint([records.at(-1)!]),
+    );
+    const continuation = new WorkflowResumeContinuation(workflow, undefined, index);
+
+    expect(continuation.claimStepOccurrence({
+      step: workflow.steps[0]!,
+      resumeStackPrefix: [],
+      state,
+      selectedRestartOccurrence: 2,
+    })).toBe(2);
+    expect(continuation.claimStepOccurrence({
+      step: workflow.steps[0]!,
+      resumeStackPrefix: [],
+      state,
+    })).toBe(7);
+  });
+
   it('top-level と parallel 内の同名 workflow_call artifact を混同しない', () => {
     const child = { name: 'child', steps: [] } as unknown as WorkflowConfig;
     const workflow = {
@@ -217,6 +288,52 @@ describe('WorkflowResumeContinuation', () => {
 
     expect(index.getMaxOccurrence(child, 'delegate', [outerA])).toBe(4);
     expect(index.getMaxOccurrence(child, 'delegate', [outerB])).toBe(1);
+  });
+
+  it('root agent checkpoint の invocation graph から ref 変更後も nested occurrence と保存 namespace を復元する', () => {
+    const previousRoot = attachWorkflowOpaqueRef(
+      { name: 'root', steps: [] } as unknown as WorkflowConfig,
+      'old-root-ref',
+    );
+    const previousChild = attachWorkflowOpaqueRef(
+      { name: 'child', steps: [] } as unknown as WorkflowConfig,
+      'old-child-ref',
+    );
+    const currentRoot = attachWorkflowOpaqueRef(
+      { name: 'root', steps: [] } as unknown as WorkflowConfig,
+      'new-root-ref',
+    );
+    const currentChild = attachWorkflowOpaqueRef(
+      { name: 'child', steps: [] } as unknown as WorkflowConfig,
+      'new-child-ref',
+    );
+    const grandchild = { name: 'grandchild', steps: [] } as unknown as WorkflowConfig;
+    const previousOuter = buildWorkflowResumePointEntry(
+      previousRoot, 'outer', 'workflow_call', 2, undefined, 2,
+    );
+    const outer = invocationRecord(previousRoot, 'outer', previousChild, [], 2);
+    const nested = invocationRecord(previousChild, 'nested', grandchild, [previousOuter], 4);
+    const source = sourceResumePoint([outer, nested], true);
+    const rootedSource: WorkflowResumePoint = {
+      ...source,
+      stack: [{
+        workflow: previousRoot.name,
+        workflow_ref: getWorkflowReference(previousRoot),
+        step: 'stopped',
+        kind: 'agent',
+        occurrence: 1,
+      }],
+    };
+    const index = new ResumeArtifactOccurrenceIndex(
+      artifactManifest([outer.namespace, nested.namespace]),
+      rootedSource,
+    );
+    const currentOuter = buildWorkflowResumePointEntry(
+      currentRoot, 'outer', 'workflow_call', 2, undefined, 2,
+    );
+
+    expect(index.getMaxOccurrence(currentChild, 'nested', [currentOuter])).toBe(4);
+    expect(index.hasArtifactNamespacePath(['subworkflows', nested.namespace])).toBe(true);
   });
 
   it('partial manifest に artifact がない call-site の occurrence を進めない', () => {

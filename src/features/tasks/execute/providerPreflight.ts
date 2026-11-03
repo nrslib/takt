@@ -5,18 +5,27 @@ import { checkManagedProviders, type ConfirmManagedProvider } from '../../../inf
 import type { TaskInfo, TaskListItem, TaskRunner } from '../../../infra/task/index.js';
 import { DEFAULT_WORKFLOW_NAME } from '../../../shared/constants.js';
 import { assertPrMergeRetryWorktreePath, resolveReusedWorktreeExecution, toReusedTaskInfo, type ReusedTaskPreparationOverride } from './reusedWorktree.js';
+import type { WorkflowSystemCommandsConfig } from '../../../core/models/config-types.js';
+import { resolveWorkflowCallTarget } from '../../../infra/config/loaders/workflowCallResolver.js';
 
 export function terminalProviderConfirmation(): ConfirmManagedProvider | undefined {
   return process.stdin.isTTY === true && process.stdout.isTTY === true && !process.env.CI && process.env.TAKT_NO_TTY !== '1'
     ? (message) => confirm(message, false) : undefined;
 }
 
-export async function checkTaskProviders(cwd: string, identifier: string, options: WorkflowProviderPreparationOptions, confirmation: ConfirmManagedProvider | undefined, signal?: AbortSignal, executionCwd = cwd): Promise<void> {
-  const workflow = loadWorkflowByIdentifier(identifier, cwd, { lookupCwd: executionCwd });
+export async function checkTaskProviders(cwd: string, identifier: string, options: WorkflowProviderPreparationOptions, confirmation: ConfirmManagedProvider | undefined, signal?: AbortSignal, executionCwd = cwd, workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig): Promise<void> {
+  const workflow = loadWorkflowByIdentifier(identifier, cwd, {
+    lookupCwd: executionCwd,
+    ...(workflowSystemCommandsPolicy === undefined ? {} : { workflowSystemCommandsPolicy }),
+  });
   if (workflow === null) throw new Error(`Workflow not found: ${identifier}`);
   const providerOptions = resolveProviderOptionsWithTrace(cwd);
   await checkWorkflowProviders(cwd, executionCwd, workflow, {
-    ...options, providerOptions: providerOptions.value,
+    ...options,
+    ...(workflowSystemCommandsPolicy === undefined ? {} : {
+      workflowCallResolver: (input) => resolveWorkflowCallTarget(input.parentWorkflow, input.step, input.projectCwd, input.lookupCwd, { workflowSystemCommandsPolicy }),
+    }),
+    providerOptions: providerOptions.value,
     providerOptionsSource: providerOptions.source, providerOptionsOriginResolver: providerOptions.originResolver,
     selectorProviderOverrides: options.selectorProviderOverrides ?? {
       provider: options.provider, model: options.model,

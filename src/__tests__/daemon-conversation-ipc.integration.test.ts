@@ -11,18 +11,20 @@ import { encodeConversationFrame, MAX_CONVERSATION_FRAME_BYTES } from '../featur
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { readDaemonIpcState } from '../infra/daemon/ipcEndpoint.js';
 import { ConversationStore } from '../infra/conversations/store.js';
-import { conversationRecord } from './helpers/conversation-fixtures.js';
+import { conversationRecord, directorConversationRecord } from './helpers/conversation-fixtures.js';
+import { ConversationRecordSchema } from '../infra/conversations/schema.js';
 import type { ConversationOpen, PortOutput } from '../features/manager/conversationPort.js';
 import type { ManagerAssignment } from '../features/manager/startupResolution.js';
 import type { ManagerTurnInput } from '../features/manager/turnExecutor.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { askTaktGoalQuestion } from '../features/mcp/goalQuestionOperations.js';
 import { GoalStore } from '../infra/goals/store.js';
-import { formatGoalNotification } from '../infra/goals/notifications.js';
 import type { Goal } from '../infra/goals/schema.js';
 import { saveManagerToolPermissionInquiry } from '../features/manager/toolPermissionInquiry.js';
 import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
 import * as goalService from '../infra/goals/service.js';
+import { ConversationTransferReceiver } from '../features/manager/conversationTransferReceiver.js';
+import type { ConversationDelivery } from '../features/manager/conversationPort.js';
 
 const doubles = vi.hoisted(() => ({ assignment: vi.fn() }));
 vi.mock('../features/manager/assignment.js', async (original) => ({ ...await original<typeof import('../features/manager/assignment.js')>(),
@@ -76,6 +78,221 @@ afterEach(async () => {
   for (const value of clients) value.socket.destroy();
   await service.close();
   await server.close();
+});
+
+it('finishes each output transfer before newer state on both attachments', async () => {
+  const deliveries: ConversationDelivery[] = [];
+  const originalOpen = service.open;
+  const opening = vi.spyOn(service, 'open').mockImplementation(async (...args) => {
+    deliveries.push(args[1]);
+    return originalOpen(...args);
+  });
+  const first = await authenticated(); const second = await authenticated();
+  const openedFirst = await opened(first); const openedSecond = await opened(second);
+  await first.items(openedFirst.read.transferId); await second.items(openedSecond.read.transferId);
+  let resume!: () => void;
+  const gate = new Promise<void>((resolve) => { resume = resolve; });
+  let paused = 0;
+  const originalWrite = Socket.prototype.write;
+  const writing = vi.spyOn(Socket.prototype, 'write').mockImplementation(function (this: Socket, chunk: Uint8Array | string,
+    encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void), callback?: (error?: Error | null) => void): boolean {
+    const complete = typeof encodingOrCallback === 'function' ? encodingOrCallback : callback;
+    const encoding = typeof encodingOrCallback === 'string' ? encodingOrCallback : undefined;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(Buffer.from(chunk).toString('utf8'));
+    } catch {
+      return originalWrite.call(this, chunk, encoding, complete);
+    }
+    if (parsed === null || typeof parsed !== 'object') {
+      return originalWrite.call(this, chunk, encoding, complete);
+    }
+    const frame = parsed as { type: string; output?: { kind: string; purpose?: string } };
+    if (frame.type === 'event' && frame.output?.kind === 'transfer_start' && frame.output.purpose === 'output') {
+      paused++;
+      return originalWrite.call(this, chunk, encoding, (error) => { void gate.then(() => complete?.(error)); });
+    }
+    return originalWrite.call(this, chunk, encoding, complete);
+  });
+  const notice = { kind: 'notice' as const, id: 'shared-notice', message: 'Shared conversation notice' };
+  const initial = first.frames.find(({ output }) => output?.transferId === openedFirst.read.transferId)!.output!;
+  const version = { revision: initial.revision, stateSequence: initial.stateSequence, operationId: null };
+  const sending = deliveries.map((delivery) => delivery.deliver(selected.conversationId, notice, version));
+  try {
+    await vi.waitFor(() => expect(paused).toBe(2));
+    const state = first.latestState()!;
+    await Promise.all(deliveries.map((delivery) => delivery.deliver(selected.conversationId,
+      { kind: 'pending', state }, { ...version, stateSequence: version.stateSequence + 1 })));
+    resume();
+    await Promise.all(sending);
+    const responses = await Promise.all([first.request('snapshot', { attachmentId: openedFirst.attachmentId }),
+      second.request('snapshot', { attachmentId: openedSecond.attachmentId })]);
+    await first.items(responses[0]!.result!.read.transferId);
+    await second.items(responses[1]!.result!.read.transferId);
+    for (const value of [first, second]) {
+      const observer = { state: vi.fn(), item: vi.fn(), output: vi.fn(), read: vi.fn(), remove: vi.fn() };
+      const receiver = new ConversationTransferReceiver(selected.conversationId, observer);
+      expect(() => { for (const frame of value.frames) if (frame.type === 'event') receiver.receive(frame); }).not.toThrow();
+      expect(observer.output.mock.calls.filter(([output]) => output.kind === 'notice').map(([output]) => output)).toEqual([notice]);
+    }
+  } finally { resume(); await Promise.all(sending); writing.mockRestore(); opening.mockRestore(); }
+});
+
+it('bounds admitted requests across input batches while responses are pending', async () => {
+  const value = await authenticated(); const initial = await opened(value); await value.items(initial.read.transferId);
+  let resume!: () => void;
+  const gate = new Promise<void>((resolve) => { resume = resolve; });
+  const snapshot = service.snapshot.bind(service);
+  const reading = vi.spyOn(service, 'snapshot').mockImplementation(async (id) => { await gate; return snapshot(id); });
+  const frames = Array.from({ length: 1000 }, (_, index) => encodeConversationFrame({ protocolVersion: 1, type: 'request',
+    requestId: `bounded-${index}`, method: 'snapshot', params: { attachmentId: initial.attachmentId } }));
+  try {
+    value.socket.write(Buffer.concat(frames));
+    await vi.waitFor(() => expect(reading.mock.calls.length).toBeGreaterThan(1));
+    await new Promise<void>((resolve) => { setTimeout(resolve, 100); });
+    const bound = Math.ceil(2 * 16 * 1024 / Math.min(...frames.map((frame) => frame.length))) + 1;
+    expect(reading.mock.calls.length).toBeLessThanOrEqual(bound);
+    resume();
+    await vi.waitFor(() => expect(value.frames.filter((frame) => frame.requestId?.startsWith('bounded-'))).toHaveLength(frames.length), { timeout: 10000 });
+    expect(value.socket.destroyed).toBe(false);
+  } finally { resume(); reading.mockRestore(); }
+});
+
+it('admits a second large request but bounds further pending frames', async () => {
+  const value = await authenticated(); const initial = await opened(value); await value.items(initial.read.transferId);
+  let resume!: () => void;
+  const gate = new Promise<void>((resolve) => { resume = resolve; });
+  const submitting = vi.spyOn(service, 'submit').mockImplementation(async () => {
+    await gate;
+    return { kind: 'busy', operationId: '650e8400-e29b-41d4-a716-446655440001' };
+  });
+  const frames = Array.from({ length: 3 }, (_, index) => encodeConversationFrame({ protocolVersion: 1, type: 'request',
+    requestId: `large-pending-${index}`, method: 'submit', params: { attachmentId: initial.attachmentId,
+      speaker: selected.speaker, command: { kind: 'message', text: 'x'.repeat(128 * 1024) } } }));
+  try {
+    value.socket.write(Buffer.concat(frames));
+    await vi.waitFor(() => expect(submitting).toHaveBeenCalledTimes(2));
+    await new Promise<void>((resolve) => { setTimeout(resolve, 100); });
+    expect(submitting).toHaveBeenCalledTimes(2);
+    resume();
+    await vi.waitFor(() => expect(value.frames.filter((frame) => frame.requestId?.startsWith('large-pending-'))).toHaveLength(frames.length));
+    expect(value.socket.destroyed).toBe(false);
+  } finally { resume(); submitting.mockRestore(); }
+});
+
+it('continues the daemon-owned director session over IPC after detach without changing the manager record', async () => {
+  const manager = { ...conversationRecord(repository), sessionId: 'manager-session', bindings: [selected.binding] };
+  new ConversationStore(directory).write(manager);
+  const managerPath = join(directory, 'conversations', `${selected.conversationId}.json`);
+  const priorManager = readFileSync(managerPath);
+  const director = directorConversationRecord();
+  new ConversationStore(directory).write(director);
+  selected = { conversationId: director.id, assignment: director.assignment, binding: director.bindings[0]!, speaker: director.counterpart };
+  const first = await authenticated();
+  const initial = await opened(first);
+  expect((await first.items(initial.read.transferId))[0]).toMatchObject({
+    kind: 'state', state: { conversationId: director.id, assignment: director.assignment },
+  });
+  expect(execute).not.toHaveBeenCalled();
+
+  const accepted = (await first.request('submit', { attachmentId: initial.attachmentId, speaker: selected.speaker,
+    command: { kind: 'message', text: 'manager の状況を確認してください' } })).result!;
+  expect(accepted.kind).toBe('accepted');
+  await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
+  await vi.waitFor(async () => {
+    const replies: unknown[] = [];
+    for (const frame of first.frames) {
+      const output = frame.output;
+      if (output?.kind !== 'transfer_start' || output.purpose !== 'output' || output.operationId !== accepted.operationId) continue;
+      if (!first.frames.some((frame) => frame.output?.kind === 'transfer_end' && frame.output.transferId === output.transferId)) continue;
+      replies.push(...await first.items(output.transferId));
+    }
+    expect(replies).toContainEqual({ kind: 'result', operationId: accepted.operationId, result: { kind: 'reply', message: 'reply' } });
+  });
+  expect(execute).toHaveBeenCalledOnce();
+  expect(execute.mock.calls[0]![0].sessionId).toBeUndefined();
+  expect(new ConversationStore(directory).read(director.id, director.assignment)).toMatchObject({
+    agent: 'director', sessionId: 'session', running: null,
+  });
+  await first.request('detach', { attachmentId: initial.attachmentId });
+  first.socket.destroy();
+
+  const second = await authenticated();
+  const reopened = await opened(second);
+  expect((await second.items(reopened.read.transferId))[0]).toMatchObject({
+    kind: 'state', state: { conversationId: director.id, assignment: director.assignment, running: null },
+  });
+  const next = (await second.request('submit', { attachmentId: reopened.attachmentId, speaker: selected.speaker,
+    command: { kind: 'message', text: '続けてください' } })).result!;
+  expect(next.kind).toBe('accepted');
+  await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
+
+  expect(execute).toHaveBeenCalledTimes(2);
+  expect(execute.mock.calls[1]![0].sessionId).toBe('session');
+  expect(readFileSync(managerPath)).toEqual(priorManager);
+});
+
+it('opens one director conversation independently of repository and workspace manager assignments', async () => {
+  const delivery = { deliver: async () => ({ kind: 'delivered' as const }) };
+  const port = createTuiConversationPort(directory, delivery);
+  const director = directorConversationRecord();
+  const store = new ConversationStore(directory);
+  store.write(director);
+  const repositoryManager = await port.resolve({ kind: 'repository', repositoryDirectory: repository });
+  const first = { conversationId: director.id, assignment: director.assignment, binding: director.bindings[0]!, speaker: director.counterpart };
+  const firstOpen = await service.open(first, delivery);
+  const firstItems = firstOpen.read.items[Symbol.asyncIterator]();
+  const firstState = (await firstItems.next()).value;
+  await firstItems.return?.();
+  firstOpen.read.cancel();
+  const workspace = { kind: 'workspace' as const, workspaceId: '11111111-1111-4111-8111-111111111111',
+    name: 'workspace', repositoryDirectories: [repository, join(directory, 'second-repository')] };
+  doubles.assignment.mockResolvedValue(workspace);
+  const workspaceManager = await port.resolve({ kind: 'workspace', workspaceId: workspace.workspaceId });
+  store.write(ConversationRecordSchema.parse({ ...conversationRecord(repository), agent: 'manager',
+    id: workspaceManager.conversationId, assignment: workspaceManager.assignment, bindings: [workspaceManager.binding], pending: null }));
+  const secondOpen = await service.open(first, delivery);
+  const secondItems = secondOpen.read.items[Symbol.asyncIterator]();
+  const secondState = (await secondItems.next()).value;
+  await secondItems.return?.();
+  secondOpen.read.cancel();
+
+  expect(firstState).toMatchObject({ kind: 'state', state: { conversationId: director.id, assignment: director.assignment } });
+  expect(secondState).toEqual(firstState);
+  expect(secondOpen.read.conversationId).toBe(firstOpen.read.conversationId);
+  expect(secondOpen.read.conversationId).not.toBe(repositoryManager.conversationId);
+  expect(secondOpen.read.conversationId).not.toBe(workspaceManager.conversationId);
+  expect(store.read(secondOpen.read.conversationId, director.assignment)?.agent).toBe('director');
+  expect(execute).not.toHaveBeenCalled();
+});
+
+it('keeps an accepted director turn alive after its last TUI disconnects', async () => {
+  const director = directorConversationRecord();
+  new ConversationStore(directory).write(director);
+  selected = { conversationId: director.id, assignment: director.assignment, binding: director.bindings[0]!, speaker: director.counterpart };
+  const value = await authenticated();
+  const initial = await opened(value);
+  await value.items(initial.read.transferId);
+  execute.mockImplementationOnce(async (input) => {
+    await new Promise<void>((resolve) => { release = resolve; });
+    expect(input.abortSignal?.aborted).toBe(false);
+    return { message: 'director finished', summary: null, sessionId: 'director-finished', assignment: input.assignment };
+  });
+  const accepted = (await value.request('submit', { attachmentId: initial.attachmentId, speaker: selected.speaker,
+    command: { kind: 'message', text: '確認を続けてください' } })).result!;
+  expect(accepted.kind).toBe('accepted');
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+  value.socket.destroy();
+  await vi.waitFor(() => expect(service.attachmentCount).toBe(0));
+  expect(service.activeOperationCount).toBe(1);
+
+  release!();
+  await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
+
+  expect(execute).toHaveBeenCalledOnce();
+  expect(new ConversationStore(directory).read(director.id, director.assignment)).toMatchObject({
+    agent: 'director', sessionId: 'director-finished', running: null,
+  });
 });
 
 it('requires capability authentication and confirms readiness against the exact current owner', async () => {
@@ -186,20 +403,6 @@ it.each([7, 9])('transfers all %i large options created through the real goal-qu
   expect(value.sizes.every((bytes) => bytes <= MAX_CONVERSATION_FRAME_BYTES)).toBe(true);
 });
 
-it.each([7, 9])('transfers a single full notice containing %i large blocks', async (count) => {
-  const body = Array.from({ length: count }, (_, index) => `${index}:`.padEnd(128 * 1024, 'a')).join('\n');
-  const notification = { id: '11111111-1111-4111-8111-111111111111', kind: 'custom' as const, recordedAt: '2026-10-24T00:00:00.000Z', body };
-  const goal = { ...goalRecord(), notifications: [notification] }; saveGoal(goal);
-  const value = await authenticated(); const result = await opened(value);
-  const items = (await value.items(result.read.transferId)) as Array<{ kind: string; notice: unknown }>;
-  expect(items.filter(({ kind }) => kind === 'notice').map(({ notice }) => notice)).toEqual([
-    { id: notification.id, repositoryDirectory: repository, project: 'repository', goalId: goal.id, objective: goal.objective,
-      kind: notification.kind, recordedAt: notification.recordedAt,
-      message: formatGoalNotification(goal, notification, 'en', 'repository', 'tui', 'full') },
-  ]);
-  expect(value.sizes.every((bytes) => bytes <= MAX_CONVERSATION_FRAME_BYTES)).toBe(true);
-});
-
 it('transfers the exact normal standalone approval and removes that inquiry on refresh after withdrawal', async () => {
   const owner = { kind: 'repository' as const, repositoryDirectory: repository };
   const question = await saveManagerToolPermissionInquiry({ configDirectory: directory, owner,
@@ -214,7 +417,7 @@ it('transfers the exact normal standalone approval and removes that inquiry on r
   expect(after.some(({ kind }) => kind === 'inquiry')).toBe(false);
 });
 
-it('rejects a simultaneous message without queueing it and completes the accepted operation after both clients disconnect', async () => {
+it('queues a simultaneous message and completes both operations after both clients disconnect', async () => {
   let input: ManagerTurnInput | undefined;
   execute.mockImplementationOnce((value) => new Promise((resolve) => {
     input = value; release = () => resolve({ message: 'finished', summary: null, sessionId: 'saved-session', assignment: value.assignment });
@@ -226,16 +429,16 @@ it('rejects a simultaneous message without queueing it and completes the accepte
   expect(accepted.kind).toBe('accepted');
   await vi.waitFor(() => expect(input).toBeDefined());
   expect((await second.request('submit', { attachmentId: secondOpen.attachmentId, speaker: selected.speaker,
-    command: { kind: 'message', text: 'rejected' } })).result).toEqual({ kind: 'busy', operationId: accepted.operationId });
+    command: { kind: 'message', text: 'queued' } })).result).toMatchObject({ kind: 'accepted', queuedMessageCount: 1 });
   first.socket.destroy(); second.socket.destroy();
   await vi.waitFor(() => expect(service.attachmentCount).toBe(0));
   expect(input!.abortSignal.aborted).toBe(false); expect(service.activeOperationCount).toBe(1);
   release!(); await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
-  expect(execute).toHaveBeenCalledOnce();
+  expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(['accepted', 'queued']);
   const third = await authenticated(); const reopened = await opened(third);
-  expect((await third.items(reopened.read.transferId))[0]).toMatchObject({ kind: 'state', state: { revision: 5, pending: null, running: null } });
+  expect((await third.items(reopened.read.transferId))[0]).toMatchObject({ kind: 'state', state: { revision: 6, pending: null, running: null } });
   const saved = new ConversationStore(directory).read(selected.conversationId, selected.assignment)!;
-  expect(saved.sessionId).toBe('saved-session');
+  expect(saved.sessionId).toBe('session');
 });
 
 it.each([{ count: 2, delayed: false }, { count: 3, delayed: false }, { count: 2, delayed: true }, { count: 3, delayed: true }])('keeps all responses to $count simultaneous messages on the same connection (delayed writer: $delayed)', async ({ count, delayed }) => {
@@ -284,25 +487,24 @@ it.each([{ count: 2, delayed: false }, { count: 3, delayed: false }, { count: 2,
       expect(written).not.toHaveBeenCalled();
       release!();
       await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
-      expect(execute).toHaveBeenCalledOnce();
+      expect(execute).toHaveBeenCalledTimes(count);
       finishWrite();
     }
     await vi.waitFor(() => expect(value.frames.filter((frame) => requestIds.includes(frame.requestId ?? ''))).toHaveLength(count));
     const accepted = value.frames.find((frame) => frame.requestId === requestIds[0])!.result!;
     expect(accepted.kind).toBe('accepted');
-    for (const id of requestIds.slice(1)) expect(value.frames.find((frame) => frame.requestId === id)!.result).toEqual({ kind: 'busy', operationId: accepted.operationId });
+    for (const [index, id] of requestIds.slice(1).entries()) expect(value.frames.find((frame) => frame.requestId === id)!.result).toMatchObject({ kind: 'accepted', queuedMessageCount: index + 1 });
     expect(value.socket.destroyed).toBe(false);
     expect(written).toHaveBeenCalledTimes(count);
     expect(execute.mock.calls[0]![0].prompt).toBe(requestIds[0]);
     release!(); await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
-    expect(execute).toHaveBeenCalledOnce();
-    expect(submitted.mock.calls.map(([id, result]) => ({ id, kind: result.kind }))).toEqual([
-      ...requestIds.slice(1).map((id) => ({ id, kind: 'busy' })), { id: requestIds[0], kind: 'accepted' },
-    ]);
+    expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual(requestIds);
+    expect(submitted.mock.calls.map(([id, result]) => ({ id, kind: result.kind })))
+      .toEqual(requestIds.map((id) => ({ id, kind: 'accepted' })));
   } finally { finishWrite(); submit.mockRestore(); writer.mockRestore(); }
 });
 
-it('accepts a complete message spanning input batches and rejects concurrent messages without truncation', async () => {
+it('accepts a complete message spanning input batches and queues concurrent messages without truncation', async () => {
   const text = 'x'.repeat(128 * 1024);
   execute.mockImplementationOnce((input) => new Promise((resolve) => {
     release = () => resolve({ message: 'finished', summary: null, sessionId: 'session', assignment: input.assignment });
@@ -313,23 +515,26 @@ it('accepts a complete message spanning input batches and rejects concurrent mes
       attachmentId: first.attachmentId, speaker: selected.speaker, command: { kind: 'message', text: message },
     },
   }))));
-  await vi.waitFor(() => expect(value.frames.filter((frame) => frame.requestId?.startsWith('large-burst-'))).toHaveLength(3));
+  // mainでも発言者情報を保存する同期子プロセスで1秒を超え、応答の受信が遅れる。
+  // 通常のClient.requestと同じ5秒のI/O待機余裕を確保する。
+  await vi.waitFor(() => expect(value.frames.filter((frame) => frame.requestId?.startsWith('large-burst-'))).toHaveLength(3), { timeout: 5_000 });
   const accepted = value.frames.find((frame) => frame.requestId === 'large-burst-0')!.result!;
   expect(accepted.kind).toBe('accepted');
-  for (const id of ['large-burst-1', 'large-burst-2']) expect(value.frames.find((frame) => frame.requestId === id)!.result).toEqual({ kind: 'busy', operationId: accepted.operationId });
+  for (const [index, id] of ['large-burst-1', 'large-burst-2'].entries()) expect(value.frames.find((frame) => frame.requestId === id)!.result).toMatchObject({ kind: 'accepted', queuedMessageCount: index + 1 });
   await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
   expect(execute.mock.calls[0]![0].prompt).toBe(text);
   release!(); await vi.waitFor(() => expect(service.activeOperationCount).toBe(0));
-  expect(execute).toHaveBeenCalledOnce();
+  expect(execute.mock.calls.map(([input]) => input.instruction)).toEqual([text, 'second', 'third']);
   expect(value.socket.destroyed).toBe(false);
 });
 
-it('starts every replacement snapshot with a different transfer ID and its complete captured state', async () => {
+it('uses a fresh transfer ID and an empty delta after an unchanged completed read', async () => {
   const value = await authenticated();
   const first = await opened(value);
   const second = (await value.request('snapshot', { attachmentId: first.attachmentId })).result!;
   expect(second.read.transferId).not.toBe(first.read.transferId);
-  expect((await value.items(second.read.transferId))[0]).toMatchObject({ kind: 'state', state: { revision: 4 } });
+  expect(await value.items(second.read.transferId)).toEqual([]);
+  expect(value.latestState()).toMatchObject({ revision: 4 });
 });
 
 it('returns assignment-change rejection without waiting for a notice behind that request response', async () => {

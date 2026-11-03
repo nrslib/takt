@@ -1,9 +1,10 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { lstatSync, type Stats } from 'node:fs';
 import { basename, dirname, relative, resolve, sep } from 'node:path';
 import {
   classifyReportRelativePath,
   REPORT_INTERNAL_NAMESPACE,
+  REPORT_EXECUTIONS_DIRECTORY,
   reportPathRejectionMessage,
 } from '../models/reserved-report-names.js';
 import {
@@ -19,6 +20,15 @@ import type { ReportPublicationReceipt } from './report-publication.js';
 
 const PRIVATE_REPORT_MODE = 0o600;
 const PUBLICATION_ID_PATTERN = /^[a-f0-9]{64}$/;
+
+export function pinReportContent(reportDir: string, fileName: string, content: string): string {
+  const classification = classifyReportRelativePath(fileName);
+  if (classification.kind !== 'public') throw new Error(`Invalid report version name: ${fileName}`);
+  const path = resolve(reportDir, REPORT_EXECUTIONS_DIRECTORY, 'versions', randomUUID(), basename(fileName));
+  ensurePrivateDirectory(dirname(path));
+  writeNewPrivateFileWithMode(path, content, PRIVATE_REPORT_MODE);
+  return path;
+}
 
 function formatHistoryTimestamp(date: Date): string {
   const year = date.getUTCFullYear();
@@ -187,12 +197,14 @@ export function writeReportFile(
   fileName: string,
   content: string,
   sanitizeContent?: (content: string) => string,
+  onPersisted?: (content: string) => void,
 ): string {
   const { baseDir, targetPath, normalizedFileName } = resolveReportTarget(reportDir, fileName);
   return runReportPublicationExclusive(baseDir, targetPath, () => {
     const persistedContent = sanitizeContent === undefined ? content : sanitizeContent(content);
     backupExistingReport(baseDir, normalizedFileName, targetPath, sanitizeContent);
     writePrivateFile(targetPath, persistedContent);
+    onPersisted?.(persistedContent);
     return targetPath;
   });
 }

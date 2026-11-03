@@ -1,13 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   createLiveInterventionState,
   reduceLiveInterventionEvent,
 } from '../core/workflow/live-intervention/state.js';
 import type {
-  LiveInterventionEvent,
+  LiveInterventionChannel,
   LiveInterventionState,
 } from '../core/workflow/live-intervention/types.js';
-import { buildLiveInterventionPrompt } from '../core/workflow/live-intervention/prompt.js';
+import type { LiveInterventionEvent } from '../core/workflow/live-intervention/state.js';
+import { buildLiveInterventionPrompt, resolveLiveInterventionPrompt } from '../core/workflow/live-intervention/prompt.js';
 
 const FIRST_ISSUED_AT = '2026-09-03T00:00:00.000Z';
 const SECOND_ISSUED_AT = '2026-09-03T00:00:01.000Z';
@@ -28,6 +29,57 @@ function issue(
 }
 
 describe('live intervention state', () => {
+  it('selects only delivered history in issue order without changing delivery state', () => {
+    const state: LiveInterventionState = {
+      ...createLiveInterventionState(),
+      issuedTotal: 4, pending: 1, deliveredSameSession: 1, deliveredNextStep: 1,
+      unconsumedWarned: 1, warned: true,
+      instructions: [
+        { instructionId: 1, issuedAt: FIRST_ISSUED_AT, content: 'docs は変えない', state: 'deliveredSameSession' },
+        { instructionId: 2, issuedAt: SECOND_ISSUED_AT, content: 'pending instruction', state: 'pending' },
+        { instructionId: 3, issuedAt: SECOND_ISSUED_AT, content: 'focused tests only', state: 'deliveredNextStep' },
+        { instructionId: 4, issuedAt: SECOND_ISSUED_AT, content: 'warned instruction', state: 'unconsumedWarned' },
+      ],
+    };
+    const before = structuredClone(state);
+    const channel: LiveInterventionChannel = {
+      read: () => state, prepareDelivery: vi.fn(), commitDelivery: vi.fn(), recordTerminal: vi.fn(),
+    };
+
+    const prompt = resolveLiveInterventionPrompt(channel, undefined, 'ja');
+
+    expect(prompt.split('docs は変えない')).toHaveLength(2);
+    expect(prompt.split('focused tests only')).toHaveLength(2);
+    expect(prompt.indexOf('docs は変えない')).toBeLessThan(prompt.indexOf('focused tests only'));
+    expect(prompt).not.toContain('pending instruction');
+    expect(prompt).not.toContain('warned instruction');
+    expect(state).toEqual(before);
+    expect(channel.prepareDelivery).not.toHaveBeenCalled();
+    expect(channel.commitDelivery).not.toHaveBeenCalled();
+    expect(channel.recordTerminal).not.toHaveBeenCalled();
+  });
+
+  it('uses the complete prepared delivery once without adding delivered history again', () => {
+    const channel: LiveInterventionChannel = {
+      read: vi.fn(), prepareDelivery: vi.fn(), commitDelivery: vi.fn(), recordTerminal: vi.fn(),
+    };
+    const delivery = {
+      instructionIds: [2], prompt: 'docs は変えない\nfocused tests only',
+      context: { mode: 'next_step' as const, step: 'review', phase: 1 as const },
+    };
+
+    expect(resolveLiveInterventionPrompt(channel, delivery, 'ja')).toBe(delivery.prompt);
+    expect(channel.read).not.toHaveBeenCalled();
+  });
+
+  it('produces no additional prompt without a channel or delivered history', () => {
+    const channel: LiveInterventionChannel = {
+      read: createLiveInterventionState, prepareDelivery: vi.fn(), commitDelivery: vi.fn(), recordTerminal: vi.fn(),
+    };
+    expect(resolveLiveInterventionPrompt(undefined, undefined, 'ja')).toBe('');
+    expect(resolveLiveInterventionPrompt(channel, undefined, 'ja')).toBe('');
+  });
+
   it('keeps opaque issued bodies in order and frames the complete history for delivery', () => {
     const afterFirst = issue(
       createLiveInterventionState(),

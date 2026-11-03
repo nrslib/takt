@@ -30,10 +30,16 @@ export interface ManagerPermissionGoal {
 
 export type Judgment = { decision: 'allow' } | { decision: 'deny' | 'ask'; reason: string };
 
+export interface ManagerObservedToolEvents {
+  events: readonly unknown[];
+  truncated: boolean;
+}
+
 export async function judgeManagerToolPermission(
   plan: ManagerPermissionJudgePlan,
   request: ToolPermissionDecisionRequest,
-  turn: { instruction: string; goal?: ManagerPermissionGoal; abortSignal: AbortSignal; context: ManagerPermissionContext },
+  turn: { instruction: string; goal?: ManagerPermissionGoal; abortSignal: AbortSignal; context: ManagerPermissionContext;
+    observedToolEvents?: ManagerObservedToolEvents },
 ): Promise<Judgment> {
   const deadline = new AbortController();
   const signal = AbortSignal.any([turn.abortSignal, ...(request.abortSignal ? [request.abortSignal] : []), deadline.signal]);
@@ -48,6 +54,7 @@ export async function judgeManagerToolPermission(
       managerPersona: plan.managerPersona,
       managerPolicy: plan.managerPolicy,
       humanInstruction: turn.instruction,
+      ...(turn.observedToolEvents === undefined ? {} : { observedToolEvents: turn.observedToolEvents }),
       scopedPermissions: turn.context.scopedPermissions,
       relatedInquiries: turn.context.relatedInquiries,
       readErrors: turn.context.readErrors.map((message) => ({ message })),

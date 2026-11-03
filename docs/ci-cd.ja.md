@@ -70,7 +70,7 @@ Pipeline モードで PR を作成するには `--auto-pr` を指定します。
 | `--skip-git` | ブランチ作成、コミット、プッシュをスキップ（pipeline モード、workflow のみ実行） |
 | `--repo <owner/repo>` | リポジトリを指定（PR 作成用） |
 | `-q, --quiet` | 最小出力モード: AI 出力を抑制（CI 向け） |
-| `--provider <name>` | エージェント provider を上書き（claude\|claude-sdk\|claude-headless\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|pi\|mock） |
+| `--provider <name>` | エージェント provider を上書き（claude\|claude-sdk\|claude-headless\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|devin\|pi\|mock） |
 | `--model <name>` | エージェントモデルを上書き |
 | `--auto-strategy <strategy>` | 自動ルーティング戦略（cost\|balanced\|performance） |
 
@@ -205,7 +205,7 @@ export TAKT_KIRO_API_KEY=...
 
 優先順位: 環境変数は `config.yaml` の設定よりも優先されます。
 
-DeepSeek Harness を使うジョブでは先に `takt install deepseek-harness` を実行します。対応環境は glibc 2.28 以上の Linux x64/arm64 と macOS arm64 14.0 以上です。Cursor、Copilot、Kiro では各 CLI もインストールしてください。
+DeepSeek Harness を使うジョブでは先に `takt install deepseek-harness` を実行します。対応環境は glibc 2.28 以上の Linux x64/arm64 と macOS arm64 14.0 以上です。Cursor、Copilot、Kiro、Devin では各 CLI もインストールしてください。
 
 ## コストに関する注意
 

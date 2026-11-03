@@ -1,12 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { measureWidth } from '../shared/utils/grapheme.js';
+import { stripAnsi } from '../shared/utils/text.js';
 
 const doubles = vi.hoisted(() => ({
-  manager: vi.fn(), assistant: vi.fn(), list: vi.fn(), initialize: vi.fn(), resolveConfigValue: vi.fn(),
+  manager: vi.fn(), director: vi.fn(), assistant: vi.fn(), list: vi.fn(), initialize: vi.fn(), resolveConfigValue: vi.fn(),
 }));
 const daemon = vi.hoisted(() => ({ run: vi.fn(), stop: vi.fn() }));
 vi.mock('../features/daemon/runDaemon.js', () => ({ runDaemon: daemon.run }));
 vi.mock('../features/daemon/lifecycle.js', () => ({ stopDaemon: daemon.stop }));
 vi.mock('../features/manager/runManager.js', () => ({ runManager: doubles.manager }));
+vi.mock('../features/director/runDirector.js', () => ({ runDirector: doubles.director }));
 vi.mock('../features/tasks/list/index.js', () => ({ listTasks: doubles.list }));
 vi.mock('../app/cli/routing.js', () => ({ executeDefaultAction: doubles.assistant }));
 vi.mock('../app/cli/updateCheck.js', () => ({ runUpdateCheck: vi.fn() }));
@@ -23,6 +26,65 @@ beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
   doubles.resolveConfigValue.mockReturnValue('en');
+});
+
+describe('director CLI entrypoint', () => {
+  it.each([
+    { lang: 'ja', experimental: /実験的/u, costs: /provider.*費用/iu },
+    { lang: 'en', experimental: /experimental/iu, costs: /provider.*cost/iu },
+  ])('shows experimental and provider cost notices in director --help for $lang at 80 columns without starting AI', async ({ lang, experimental, costs }) => {
+    doubles.resolveConfigValue.mockReturnValue(lang);
+    const { program } = await import('../app/cli/program.js');
+    await import('../app/cli/commands.js');
+    const command = program.commands.find((candidate) => candidate.name() === 'director');
+    expect(command).toBeDefined();
+    command!.configureHelp({ helpWidth: 80 });
+    const writeOut = vi.fn();
+    program.configureOutput({ writeOut, writeErr: vi.fn() });
+
+    await expect(program.parseAsync(['node', 'takt', 'director', '--help']))
+      .rejects.toMatchObject({ code: 'commander.helpDisplayed', exitCode: 0 });
+
+    const output = stripAnsi(writeOut.mock.calls.map(([message]) => message).join(''));
+    const text = output.replace(/\s+/gu, ' ');
+    expect(text).toContain('Usage: takt director');
+    expect(text).toMatch(experimental);
+    expect(text).toMatch(costs);
+    for (const line of output.split('\n')) expect(measureWidth(line)).toBeLessThanOrEqual(80);
+    expect(doubles.director).not.toHaveBeenCalled();
+    expect(doubles.manager).not.toHaveBeenCalled();
+    expect(doubles.assistant).not.toHaveBeenCalled();
+    expect(daemon.run).not.toHaveBeenCalled();
+    expect(doubles.initialize).not.toHaveBeenCalled();
+  });
+
+  it('starts the director TUI through common initialization with CLI provider and model overrides', async () => {
+    await parse(['--provider', 'mock', '--model', 'director-test-model', 'director']);
+
+    const { program, cliVersion } = await import('../app/cli/program.js');
+    expect(doubles.initialize).toHaveBeenCalledExactlyOnceWith(program, cliVersion, true);
+    expect(doubles.director).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      cwd: '/test/manager-repository',
+      agentOverrides: expect.objectContaining({ provider: 'mock', model: 'director-test-model' }),
+    }));
+    expect(doubles.manager).not.toHaveBeenCalled();
+    expect(doubles.assistant).not.toHaveBeenCalled();
+  });
+
+  it('waits for common initialization before starting the director', async () => {
+    let complete!: () => void;
+    doubles.initialize.mockReturnValueOnce(new Promise<void>((resolve) => { complete = resolve; }));
+
+    const running = parse(['director']);
+    try {
+      await vi.waitFor(() => expect(doubles.initialize).toHaveBeenCalledOnce());
+      expect(doubles.director).not.toHaveBeenCalled();
+    } finally {
+      complete();
+      await running;
+    }
+    expect(doubles.director).toHaveBeenCalledOnce();
+  });
 });
 
 async function parse(args: string[]) {

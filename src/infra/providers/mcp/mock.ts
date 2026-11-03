@@ -7,6 +7,7 @@
  * fixture state. No temp files are created; `dispose` is a no-op.
  */
 
+import { filterMcpHeaderEnvServers } from './header-env.js';
 import type {
   ProviderMcpAdapter,
   ProviderMcpContext,
@@ -24,6 +25,7 @@ export function createMockMcpAdapter(): ProviderMcpAdapter {
       servers: ResolvedMcpServers,
       _context: ProviderMcpContext,
     ): Promise<PreparedProviderMcp> {
+      servers = filterMcpHeaderEnvServers('mock', servers, true);
       const prepared: PreparedProviderMcp = {
         dispose: noopDispose,
         resolvedServers: servers,

@@ -144,6 +144,40 @@ describe('OpenCode v2 transport', () => {
     } }), undefined);
   });
 
+  it.each([
+    { server: 'backlog__main', similar: 'backlog' },
+    { server: 'queue_', similar: 'queue' },
+  ])('waits for the registered tools of the approved server $server and enables only its namespace', async ({ server, similar }) => {
+    const approved = [{ id: `${server}_get_issue`, namespace: server }, { id: `${server}_add_issue`, namespace: server }];
+    const similarTool = { id: `${similar}_get_issue`, namespace: similar };
+    api.rpc.call.mockResolvedValueOnce({ output: [similarTool] }).mockResolvedValue({ output: [similarTool, ...approved] });
+    await (await createV2Transport('http://localhost', '')).session.promptAsync({ ...prompt, allowedMcpServers: [server] });
+    expect(api.rpc.call).toHaveBeenCalledTimes(2);
+    const update = api.session.update.mock.calls[0]![0] as { permissions: Array<{ action: string; effect: string }>; metadata: { takt: { tools: Record<string, boolean> } } };
+    expect(update.metadata.takt.tools).toMatchObject({ [approved[0]!.id]: true, [approved[1]!.id]: true });
+    expect(update.metadata.takt.tools[similarTool.id]).toBeUndefined();
+    const allowed = update.permissions.filter((rule) => rule.effect === 'allow').map((rule) => rule.action);
+    expect(allowed).toEqual(expect.arrayContaining(approved.map((tool) => tool.id)));
+    expect(allowed).not.toContain(similarTool.id);
+    expect(api.session.prompt).toHaveBeenCalledOnce();
+  });
+
+  it('keeps waiting while an approved server has not registered any tool', async () => {
+    vi.useFakeTimers();
+    try {
+      api.rpc.call.mockResolvedValue({ output: [{ id: 'backlog_get_issue', namespace: 'backlog' }] });
+      const sent = (await createV2Transport('http://localhost', '')).session.promptAsync({ ...prompt, allowedMcpServers: ['backlog__main'] });
+      const settled = sent.then(() => 'sent', (error: unknown) => String(error));
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(api.session.prompt).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(30_000);
+      await expect(settled).resolves.toMatch(/abort|timeout/i);
+      expect(api.session.prompt).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('refuses a session from a different directory', async () => {
     api.session.get.mockResolvedValue({ location: { directory: '/other' } });
     await expect((await createV2Transport('http://localhost', '')).session.promptAsync(prompt)).rejects.toThrow('different directory');

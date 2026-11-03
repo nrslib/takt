@@ -1,4 +1,4 @@
-import { readdirSync } from 'node:fs';
+import { readdirSync, type Stats } from 'node:fs';
 import { opendir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
@@ -8,7 +8,7 @@ import {
   ensurePrivateDirectory,
   writePrivateFile,
 } from '../../shared/utils/private-file.js';
-import { assertSafePath, lstatOrUndefined } from '../../shared/utils/private-path-identity.js';
+import { assertSafePath, lstatOrUndefined, inspectPrivateArtifactPath, assertAncestorIdentities, hasMatchingIdentity } from '../../shared/utils/private-path-identity.js';
 import { withFileLock } from '../fs/file-lock.js';
 import { GoalIdSchema, GoalSchema, type Goal } from './schema.js';
 import { withGoalExecutionLock } from './execution-lock.js';
@@ -16,6 +16,12 @@ import { withGoalExecutionLock } from './execution-lock.js';
 const GOAL_FILE_NAME = 'goal.json';
 
 class InvalidGoalFileError extends Error {}
+
+export interface GoalProjectionCacheEntry<T> { stat: Stats; value: T }
+
+function sameFileVersion(left: Stats, right: Stats): boolean {
+  return hasMatchingIdentity(left, right) && left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
+}
 
 interface GoalListResult<T = Goal> {
   goals: T[];
@@ -52,6 +58,41 @@ export class GoalStore {
   }
 
   async *iterate(): AsyncGenerator<Goal> {
+    for await (const { id, snapshot } of this.iterateIds()) {
+      const goal = this.read(id);
+      assertPrivateDirectoryReadSnapshot(snapshot);
+      if (goal !== undefined) yield goal;
+    }
+  }
+
+  async *iterateProjected<T>(cache: Map<string, GoalProjectionCacheEntry<T>>, project: (goal: Goal) => T): AsyncGenerator<T> {
+    const seen = new Set<string>();
+    for await (const { id, snapshot } of this.iterateIds()) {
+      const filePath = this.filePath(id);
+      const inspection = inspectPrivateArtifactPath(filePath, 'file');
+      const stat = inspection.expectedStat;
+      if (stat === undefined) { cache.delete(id); continue; }
+      const previous = cache.get(id);
+      let value: T;
+      if (previous !== undefined && sameFileVersion(previous.stat, stat)) value = previous.value;
+      else {
+        cache.delete(id);
+        const goal = this.read(id);
+        if (goal === undefined) throw new Error('Goal disappeared during projection');
+        value = project(goal);
+      }
+      assertAncestorIdentities(inspection.ancestorIdentities);
+      const current = lstatOrUndefined(filePath);
+      if (current === undefined || !sameFileVersion(stat, current)) throw new Error('Goal changed during projection');
+      cache.set(id, { stat: current, value });
+      seen.add(id);
+      assertPrivateDirectoryReadSnapshot(snapshot);
+      yield structuredClone(value);
+    }
+    for (const id of cache.keys()) if (!seen.has(id)) cache.delete(id);
+  }
+
+  private async *iterateIds() {
     assertSafePath(this.root, true);
     if (lstatOrUndefined(this.root) === undefined) return;
     const snapshot = capturePrivateDirectoryReadSnapshot(this.root);
@@ -60,9 +101,9 @@ export class GoalStore {
     ids.sort((left, right) => left.localeCompare(right));
     assertPrivateDirectoryReadSnapshot(snapshot);
     for (const id of ids) {
-      const goal = this.read(id);
       assertPrivateDirectoryReadSnapshot(snapshot);
-      if (goal !== undefined) yield goal;
+      yield { id, snapshot };
+      assertPrivateDirectoryReadSnapshot(snapshot);
     }
   }
 

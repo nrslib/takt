@@ -514,6 +514,7 @@ describe('manager workspace storage and repository boundaries', () => {
         expect(app.lastFrame()!.split('\n')[0]).toBe(getLabel('manager.assignmentHeading', lang, { name: basename(repositoryA) }));
       });
       const currentAssignment = (client.getSnapshot().items.find((item) => item.kind === 'assignment')?.assignment)!;
+      if (currentAssignment.kind === 'daemon') throw new Error('Unexpected director assignment');
       await removeManagerRepository(currentAssignment, repositoryA, globalDirectory);
       expect((await readWorkspace(globalDirectory, workspace.id))!.repositoryDirectories).toEqual([]);
       await vi.waitFor(() => {

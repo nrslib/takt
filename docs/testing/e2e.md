@@ -46,7 +46,7 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
 - `TAKT_E2E_PROVIDER=opencode TAKT_E2E_MODEL=kimi-code-plan-global/k3 TAKT_OPENCODE_VERSION=v2 TAKT_OPENCODE_PARALLEL_INTEGRATION=1 npx vitest run --config vitest.config.e2e.opencode-parallel.ts`: OpenCode 並列セッション専用スペック（`opencode-parallel-sessions.e2e.ts`）を長めのタイムアウト設定で単独実行する専用 config（直接実行時は provider、model、OpenCode CLI 世代、`TAKT_OPENCODE_PARALLEL_INTEGRATION=1` の指定が必要。この変数が未設定、または`opencode`がPATH上に見つからない場合はスペック全体がスキップされる。`TAKT_OPENCODE_PATH`の設定だけではこの条件を満たさない）。
 - `npx vitest run --config vitest.config.e2e.structured-output.ts`: `structured-output.e2e.ts` を単独実行する専用 config。OpenCode v2で直接実行する場合は `TAKT_E2E_PROVIDER=opencode TAKT_E2E_MODEL=kimi-code-plan-global/k3 TAKT_OPENCODE_VERSION=v2 npx vitest run --config vitest.config.e2e.structured-output.ts` を使用する。
 
-provider E2E スクリプトの対象は `claude-sdk` / `claude`（SDK別名）/ `claude-headless` / `codex` / `cursor` / `opencode`。`copilot`、`kiro`、`pi` には provider E2E 経路がない。`deepseek-harness` は credential や課金を伴わない、ローカル HTTP mock を使う SDK 統合テストと provider 単体テストで確認します。`src/__tests__/deepseek-harness-client.test.ts` は固定版の公式 TypeScript SDK/runtime をローカル HTTP mock に接続する heavy integration test で、`npm test -- src/__tests__/deepseek-harness-client.test.ts` から実行します。`src/__tests__/deepseek-harness-sdk-probe.integration.test.ts` は公開 SDK の継続制約を記録し、`src/__tests__/deepseek-harness-provider.test.ts` は provider 境界の動作を確認します。session は runtime が稼働し対応設定が変わらない間だけ複数 turn を FIFO で処理します。runtime の再起動・終了・設定変更後は保存済み履歴を継続できないため、新しい TAKT session または run を開始してください。runtime の session-persistence plugin は無効化し、SDK notification に credential を含むエラー文があっても runtime の JSONL session file に残さないようにしています。TAKT は継続拒否の判定に使う secret を含まない session marker を保持します。cross-runtime session の履歴保持は後続対応です。実 DeepSeek smoke は opt-in のままとし、通常 CI では実行しません。
+provider E2E スクリプトの対象は `claude-sdk` / `claude`（SDK別名）/ `claude-headless` / `codex` / `cursor` / `opencode`。`copilot`、`kiro`、`devin`、`pi` には provider E2E 経路がない。`deepseek-harness` は credential や課金を伴わない、ローカル HTTP mock を使う SDK 統合テストと provider 単体テストで確認します。`src/__tests__/deepseek-harness-client.test.ts` は固定版の公式 TypeScript SDK/runtime をローカル HTTP mock に接続する heavy integration test で、`npm test -- src/__tests__/deepseek-harness-client.test.ts` から実行します。`src/__tests__/deepseek-harness-sdk-probe.integration.test.ts` は公開 SDK の継続制約を記録し、`src/__tests__/deepseek-harness-provider.test.ts` は provider 境界の動作を確認します。session は runtime が稼働し対応設定が変わらない間だけ複数 turn を FIFO で処理します。runtime の再起動・終了・設定変更後は保存済み履歴を継続できないため、新しい TAKT session または run を開始してください。runtime の session-persistence plugin は無効化し、SDK notification に credential を含むエラー文があっても runtime の JSONL session file に残さないようにしています。TAKT は継続拒否の判定に使う secret を含まない session marker を保持します。cross-runtime session の履歴保持は後続対応です。実 DeepSeek smoke は opt-in のままとし、通常 CI では実行しません。
 
 GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` のみ。provider E2E は API 課金を伴うため CI には含めず、メンテナーが PR コメントコマンド `/ci`（OWNER 限定）で必要時にのみ実行する。
 
@@ -116,7 +116,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
     - Execute中は英語・日本語それぞれで末尾の省略記号を含む待機placeholder全文が現在画面の1行に表示され、入力が破棄されることを確認する。成功・失敗後は同じPTYで通常入力を送信し、既知のinteractive応答を受信できることを確認する。
     - Makerの承認操作から元projectのprovider、model、permission、provider optionsが実行へ伝播し、成果物の同名`edit` capabilityがMaker制御workflowへ混入しない一方、成果物側にはそのcapabilityが保持されることをsession recordとmock call logで確認する。
     - readableなPASS Doctor reportではreviewが`approved`を選択し、FAIL、欠落、読取不能では`needs_fix`を選択することを、実report内容とruntime遷移で確認する。
-    - 成功・失敗画面にはfilesystem上のregular fileかつ非symlinkである実Doctor report pathが表示され、失敗画面には具体的な`rule_no_match`理由も表示されることを確認する。Doctor report pathがdirectoryまたはsymlinkの場合はreportなし表示となることも確認する。materialization前に予定rootを占有した失敗では、artifact pathと`EEXIST`理由だけが表示され、Doctor report表記と推測した`.takt/runs` pathが表示されないことを確認する。
+    - 成功・失敗画面にはfilesystem上のregular fileかつ非symlinkである実Doctor report pathが表示され、失敗画面には具体的な`rule_no_match`理由も表示されることを確認する。Doctor report pathがdirectoryまたはsymlinkの場合はreportなし表示となることも確認する。materialization前に予定rootを占有した失敗では、artifact pathと`EEXIST`理由だけが表示され、Doctor report表記と推測した`.takt/runs` pathが表示されないことを確認する。画面と本文の対応は公開現在版で確認し、検索対象から`.takt-report-internal`の実行記録・固定版を除外する。
     - 専用fixtureで初回reviewの`needs_fix`からfixへ進み、更新Doctor report後の再reviewが`approved`となってCOMPLETEへ到達することを、step開始順、最終Doctor report、review report、完了画面で確認する。
     - 同じTUIから再実行したときに別timestampの成果物rootが作成され、1回目root配下の相対directory/file一覧と全file byte内容が完全に維持されることを確認する。
     - 実行後も `.takt/tasks.yaml` とworktreeが作成されず、Git branchとHEADが変化しないことを確認する。
@@ -148,7 +148,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
   - 手順（ユーザー行動/コマンド）:
     - `runtime.yaml`で`loop_analysis.enabled: true`と`output: file`を設定する。
     - mock workflowを実行し、元のCLIプロセスの終了を確認する。
-    - 固定時間の待機ではなくreportファイルの出現を監視し、`loop-analysis.md`が保存されることを確認する。
+    - 固定時間の待機ではなく、分析runの完了と公開現在版のreportへの出典追記を監視し、`loop-analysis.md`が1件保存されることを確認する。`.takt-report-internal`配下の実行記録・固定版は検索対象から除外する。判定用mockは現在の構造化応答形式を返す。
     - 同じ fixture を未指定、`--runtime-assignment cost`、空文字名（`--runtime-assignment ""`）、空白名（`--runtime-assignment "  "`）で実行し、元の workflow と分析 agent の呼出しログがそれぞれ `unselected-model`、`analysis-cost-model`、`analysis-empty-model`、`analysis-spaces-model` を使うことを確認する。provider の注入は無効にし、親 CLI 終了後に保存された分析レポートの本文も確認する。
 - Exec mode（`e2e/specs/exec.e2e.ts`）
   - 目的: `takt exec` がプリセット一覧、前回設定の自動利用、`/setup`、`/go` から生成 workflow 実行まで動作することを確認。

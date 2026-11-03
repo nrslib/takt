@@ -644,7 +644,9 @@ export async function createWorkflowExecutionBootstrap(
       },
     ]),
   );
-  validateWorkflowCallContracts(effectiveWorkflowConfig, projectCwd, cwd);
+  validateWorkflowCallContracts(effectiveWorkflowConfig, projectCwd, cwd, {
+    workflowSystemCommandsPolicy: options.workflowSystemCommandsPolicy,
+  });
   const providerEventLogger = createProviderEventLogger({
     logsDir: runPaths.logsAbs,
     sessionId: workflowSessionId,

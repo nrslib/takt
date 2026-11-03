@@ -289,9 +289,8 @@ describe('phase awareness through bundled workflow engines and providers', () =>
         'static:1:8', 'reviews:1:9', 'fixed:1:9', 'pool:1:9', 'gate:2:10',
       ].sort());
       for (const call of workflowCalls) {
-        const request = `${call.system}\n\n${call.instruction}`;
-        expect(request.match(/## (?:担当|Assignment)(?:\n|\\n)/g), request).toHaveLength(1);
-        expect(request.match(/## (?:担当とフェーズ|Assignment and phase)/g), request).toHaveLength(1);
+        expect(call.system.match(/^## (?:担当|Assignment)\n/gm), call.system).toHaveLength(1);
+        expect(call.instruction.match(/^## (?:担当とフェーズ|Assignment and phase)\n/gm), call.instruction).toHaveLength(1);
         const assignment = section(call.system, language === 'ja' ? '担当' : 'Assignment');
         const step = assignment.match(/^- (?:ステップ|Step): (\w+)/m)![1]!;
         const stepIteration = Number(assignment.match(/Step Iteration: (\d+)/)![1]);

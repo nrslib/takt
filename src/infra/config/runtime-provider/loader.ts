@@ -83,6 +83,7 @@ export type RuntimeProviderProfileOrigin = 'global' | 'project';
 export interface ResolvedRuntimeProviderFileWithOrigins {
   readonly runtimeFile: RuntimeProviderFile | undefined;
   readonly profileOrigins: ReadonlyMap<string, RuntimeProviderProfileOrigin>;
+  readonly assignmentOrigins?: { readonly defaults?: string; readonly targets?: string };
 }
 
 /** Resolve the effective file together with the layer that contributed each profile. */
@@ -103,7 +104,7 @@ export function resolveRuntimeProviderFileWithOrigins(
   const merged = !global ? project : !project ? global : mergeRuntimeProviderFiles(global, project);
   const normalized = merged === undefined ? undefined : normalizeRuntimeProviderDirectories(merged);
   return {
-    runtimeFile: selectRuntimeAssignment(normalized, input),
+    ...selectRuntimeAssignment(normalized, input),
     profileOrigins,
   };
 }
@@ -248,9 +249,13 @@ function normalizeDirectoryPath(directory: string): string {
 function selectRuntimeAssignment(
   file: RuntimeProviderFile | undefined,
   input: ResolveRuntimeProviderInput,
-): RuntimeProviderFile | undefined {
+): Pick<ResolvedRuntimeProviderFileWithOrigins, 'runtimeFile' | 'assignmentOrigins'> {
   const provider = file?.provider;
   const assignments = provider?.assignments ?? {};
+  const defaultAssignment = provider?.defaults?.assignment;
+  if (defaultAssignment !== undefined && !Object.hasOwn(assignments, defaultAssignment)) {
+    throw new Error(`runtime.yaml provider.defaults.assignment references unknown assignment "${defaultAssignment}"`);
+  }
   for (const [directory, assignmentName] of Object.entries(provider?.directories ?? {})) {
     if (!Object.hasOwn(assignments, assignmentName)) {
       throw new Error(
@@ -264,8 +269,9 @@ function selectRuntimeAssignment(
     const projectDirectory = normalizeDirectoryPath(dirname(input.projectConfigDir));
     assignmentName = provider.directories[projectDirectory];
   }
+  assignmentName ??= defaultAssignment;
   if (assignmentName === undefined) {
-    return file;
+    return { runtimeFile: file };
   }
   const assignment = Object.hasOwn(assignments, assignmentName) ? assignments[assignmentName] : undefined;
   if (
@@ -282,13 +288,18 @@ function selectRuntimeAssignment(
   const selectedProvider = { ...provider };
   if (assignment.defaults !== undefined) {
     selectedProvider.defaults = assignment.defaults;
+  } else if (defaultAssignment !== undefined) {
+    throw new Error(`runtime.yaml assignment "${assignmentName}" must specify defaults because provider.defaults.assignment "${defaultAssignment}" does not resolve to a profile or ladder`);
   }
   if (assignment.targets !== undefined) {
     selectedProvider.targets = assignment.targets;
   }
 
   return {
-    ...file,
-    provider: selectedProvider,
+    runtimeFile: { ...file, provider: selectedProvider },
+    assignmentOrigins: {
+      ...(assignment.defaults === undefined ? {} : { defaults: `assignments.${assignmentName}.defaults` }),
+      ...(assignment.targets === undefined ? {} : { targets: `assignments.${assignmentName}.targets` }),
+    },
   };
 }

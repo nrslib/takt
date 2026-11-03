@@ -333,6 +333,27 @@ describe('Codex tool permission command and turn resources', () => {
     await expectClosed(definition(sdk.construct.mock.calls[0]![0] as CodexOptions).command);
   });
 
+  it('does not reintroduce PATH into tool shells when MCP filters it with different casing', async () => {
+    vi.stubEnv('PATH', '/fixture/original-path');
+    const handler = vi.fn<ToolPermissionDecisionHandler>().mockResolvedValue({ decision: 'allow' });
+    const preparedMcp = {
+      dispose: async () => {},
+      config: {
+        mcp_servers: { probe: { command: 'probe' } },
+        shell_environment_policy: { filters: { pAtH: 'exclude' as const } },
+      },
+    };
+    sdk.run.mockImplementationOnce(async (config: CodexOptions) => {
+      const policy = config.config?.shell_environment_policy as ShellPolicy | undefined;
+      expect(policy?.filters).toEqual({ pAtH: 'exclude' });
+      expect(policy?.set?.PATH).toBeUndefined();
+      expect(Object.hasOwn(shellEnvironment(config, {}, {}), 'PATH')).toBe(false);
+    });
+    const response = await new CodexClient().call('manager', 'inspect', { ...options(handler), preparedMcp });
+    expect(response.status, response.error).toBe('done');
+    await expectClosed(definition(sdk.construct.mock.calls[0]![0] as CodexOptions).command);
+  });
+
   it.each([
     { name: 'user filter removed', user: {}, profiles: {}, privatePresent: true, outsidePresent: true },
     ...(['exclude', 'include'] as const).map((action) => ({

@@ -703,6 +703,17 @@ describe('createWorkflowExecutionBootstrap direct resume metadata', () => {
       expect.objectContaining({ name: workflowConfig.name }),
       '/project',
       '/project',
+      { workflowSystemCommandsPolicy: undefined },
+    );
+  });
+
+  it.each([true, false])('keeps resolved system command permission %s during bootstrap validation', async (customScripts) => {
+    await createWorkflowExecutionBootstrap(workflowConfig, 'Run approved workflow', '/project', {
+      projectCwd: '/project', workflowSystemCommandsPolicy: { customScripts },
+    });
+    expect(mockValidateWorkflowCallContracts).toHaveBeenCalledWith(
+      expect.objectContaining({ name: workflowConfig.name }), '/project', '/project',
+      { workflowSystemCommandsPolicy: { customScripts } },
     );
   });
 

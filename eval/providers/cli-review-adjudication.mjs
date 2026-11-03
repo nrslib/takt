@@ -1,3 +1,4 @@
+import { recordProviderCalls } from './execution-record.mjs';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -60,6 +61,7 @@ function requiredVariable(context, name) {
 export default class CliReviewAdjudicationProvider {
   constructor(options = {}, dependencies = {}) {
     this.config = options.config ?? {};
+    this.callApi = recordProviderCalls(this, this.callApi);
     this.prepareWorkingDirectory = dependencies.prepareWorkingDirectory ?? prepareWorkingDirectory;
     this.createCliReviewSession = dependencies.createCliReviewSession ?? createCliReviewSession;
     this.readPrompt = dependencies.readPrompt ?? ((path) => readFileSync(path, 'utf8'));

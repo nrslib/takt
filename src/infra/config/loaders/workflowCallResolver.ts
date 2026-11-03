@@ -1,6 +1,7 @@
 import { dirname } from 'node:path';
 import { isScopeRef } from '#faceted-prompting';
 import type { WorkflowCallStep, WorkflowConfig } from '../../../core/models/index.js';
+import type { WorkflowSystemCommandsConfig } from '../../../core/models/config-types.js';
 import { getAttachedWorkflowTrustInfo, getWorkflowSourcePath } from './workflowSourceMetadata.js';
 import { validateWorkflowCallRulesAgainstChildReturns } from './workflowCallContracts.js';
 import { getWorkflowTrustInfo, type WorkflowTrustInfo } from './workflowTrustSource.js';
@@ -11,6 +12,7 @@ import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../
 import { findWorkflowStepLocation } from '../../../core/workflow/workflow-step-location.js';
 
 export interface WorkflowCallParentContext {
+  workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig;
   sourcePath?: string;
   trustInfo?: WorkflowTrustInfo;
   resourceRoot?: string;
@@ -61,6 +63,7 @@ export function resolveWorkflowCallTarget(
     parentTrustInfo,
     skipWorkflowCallContractValidation: true,
     resourceRoot: parentContext?.resourceRoot,
+    workflowSystemCommandsPolicy: parentContext?.workflowSystemCommandsPolicy,
   });
 
   if (!childWorkflow) return null;

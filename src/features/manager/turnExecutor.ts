@@ -12,6 +12,10 @@ import { getManagerOutputSchema, parseManagerResponse } from './turnResponse.js'
 import { createAgentFailureError, isAgentFailureError } from '../../shared/types/agent-failure.js';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { withoutDiagnosticLogging } from '../../shared/utils/diagnostic-context.js';
+import { createBoundedSensitiveValues, sanitizeSensitiveValueWithKnownValues } from '../../shared/utils/sensitiveText.js';
+
+// Keep the judgment context finite; omitted observations must remain visible as omissions.
+const MAX_OBSERVED_TOOL_EVENT_BYTES = 64 * 1024;
 
 const addRepositoryTools = new Set([
   'takt_add_workspace_repository',
@@ -27,6 +31,7 @@ export interface ManagerTurnInput {
   abortSignal: AbortSignal;
   assignment: ManagerAssignmentIdentity | undefined;
   configDirectory: string;
+  conversationOperationId?: string;
   goal?: ManagerPermissionGoal;
   onProviderOutput?: () => void;
   onNotification?: (message: string) => void;
@@ -43,6 +48,9 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
         signal.throwIfAborted();
         let assignment = input.assignment;
         let sessionId = input.sessionId;
+        const observedEvents: string[] = [];
+        let observationsTruncated = false;
+        const sensitiveValues = createBoundedSensitiveValues();
         const servers = plan.ctx.mcpServers === undefined ? undefined : Object.fromEntries(
           Object.entries(plan.ctx.mcpServers).map(([name, config]) => [name,
             assignment === undefined || name !== TAKT_MANAGER_MCP_SERVER_NAME ? config : withManagerAssignment(config, assignment)]),
@@ -65,6 +73,10 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
           const onToolPermissionDecision = usesJudge ? createManagerToolPermissionHandler({
             plan: plan.permissionJudge!, provider: plan.ctx.providerType, cwd, instruction: input.instruction,
             goal: input.goal, configDirectory: input.configDirectory,
+            get observedToolEvents() {
+              return { events: observedEvents.map((value) => sanitizeSensitiveValueWithKnownValues(JSON.parse(value), sensitiveValues)),
+                truncated: observationsTruncated || sensitiveValues.exhausted };
+            },
             get owner() { return assignment ?? { kind: 'repository', repositoryDirectory: cwd }; },
             abortSignal: signal, onNotification: input.onNotification, onDenial: (reason) => { input.onDenial?.(reason); },
           }) : undefined;
@@ -72,7 +84,9 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
           const additions = new Set<string>();
           const call = async (prompt: string) => {
             signal.throwIfAborted();
-            const response = await agent.call(prompt, {
+            const turnPrompt = input.conversationOperationId === undefined ? prompt
+              : `Conversation operation ID: ${input.conversationOperationId}\nFor takt_merge_goal_pr, pass this ID as conversationOperationId. It identifies this turn; merge authorization is checked against the saved conversation.\n\n${prompt}`;
+            const response = await agent.call(turnPrompt, {
               cwd, model: plan.ctx.model, sessionId, abortSignal: signal,
               providerOptions: plan.ctx.providerOptions, permissionMode: 'full',
               outputSchema: getManagerOutputSchema(plan.ctx.providerType), language: plan.ctx.lang,
@@ -81,6 +95,19 @@ export function createManagerTurnExecutor(cwd: string, plan: ManagerConversation
               ...(onToolPermissionDecision === undefined ? {} : { onToolPermissionDecision }),
               onStream: (event) => {
                 input.onProviderOutput?.();
+                if (usesJudge && (event.type === 'tool_use' || event.type === 'tool_result' || event.type === 'tool_output')) {
+                  sensitiveValues.collect(event);
+                  const serialized = JSON.stringify(sanitizeSensitiveValueWithKnownValues(event, sensitiveValues));
+                  const bytes = Buffer.byteLength(serialized);
+                  if (bytes > MAX_OBSERVED_TOOL_EVENT_BYTES) observationsTruncated = true;
+                  else {
+                    while (observedEvents.reduce((size, value) => size + Buffer.byteLength(value), bytes) > MAX_OBSERVED_TOOL_EVENT_BYTES) {
+                      observedEvents.shift();
+                      observationsTruncated = true;
+                    }
+                    observedEvents.push(serialized);
+                  }
+                }
                 if (event.type === 'tool_result' || event.type === 'tool_output') usedTools = true;
                 if (event.type === 'tool_use') {
                   usedTools = true;

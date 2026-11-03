@@ -58,7 +58,8 @@ vi.mock('../infra/service/syncConflictFiles.js', () => ({
   captureSyncConflictFiles: (...args: unknown[]) => mockCaptureConflictFiles(...args),
 }));
 
-vi.mock('node:child_process', () => ({
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:child_process')>()),
   execFileSync: (...args: unknown[]) => mockExecFileSync(...args),
 }));
 
@@ -609,10 +610,12 @@ describe('system workflow PR sync integration', () => {
       },
     });
 
+    const abortReasons: string[] = [];
+    engine.on('workflow:abort', (_state, reason) => abortReasons.push(String(reason)));
     const state = await engine.run();
     const worktreePath = mockCloneAndIsolate.mock.calls[0]?.[1] as string;
 
-    expect(state.status).toBe('completed');
+    expect(state.status, abortReasons.join('; ')).toBe('completed');
     expect(mockCloneAndIsolate).toHaveBeenCalledTimes(1);
     expect(mockRemoveClone).toHaveBeenCalledTimes(1);
     expect(mockRemoveClone).toHaveBeenCalledWith(worktreePath);

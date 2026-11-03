@@ -20,8 +20,9 @@ export interface TaskRetryOptions {
   resumePoint?: WorkflowResumePoint;
   workflow?: string;
   taskDir?: string;
-  sourceRunSlug?: string;
+  sourceRunSlug?: string | null;
   restartPoint?: WorkflowRestartPoint;
+  sourceResumePoint?: WorkflowResumePoint;
 }
 
 function assertFreshCloneRetryCandidate(task: TaskRecord): void {
@@ -136,11 +137,12 @@ function getAutoRequeueSkipResult(
 }
 
 function resolveResumeSource(
-  explicitSourceRunSlug: string | undefined,
+  explicitSourceRunSlug: string | null | undefined,
   task: TaskRecord,
   resumeMode: RunResumeSource['resumeMode'],
 ): RunResumeSource {
-  const sourceRunSlug = explicitSourceRunSlug ?? task.run_slug ?? task.source_run_slug;
+  const sourceRunSlug = explicitSourceRunSlug === null
+    ? undefined : explicitSourceRunSlug ?? task.run_slug ?? task.source_run_slug;
   return {
     ...(sourceRunSlug ? { sourceRunSlug } : {}),
     resumeMode,
@@ -219,6 +221,7 @@ export class TaskRetryService {
             taskDir: target.task_dir,
             resumeSource: resolveResumeSource(undefined, target, 'requeue'),
             restartPoint,
+            sourceResumePoint: target.source_resume_point,
           },
         ),
         auto_requeue_count: nextAttempt,
@@ -275,6 +278,7 @@ export class TaskRetryService {
           taskDir: options.taskDir,
           resumeSource: resolveResumeSource(options.sourceRunSlug, target, resumeMode),
           restartPoint: options.restartPoint,
+          sourceResumePoint: options.sourceResumePoint,
         },
       );
 
@@ -323,6 +327,7 @@ export class TaskRetryService {
           taskDir: options.taskDir,
           resumeSource: options.freshStart ? undefined : resolveResumeSource(options.sourceRunSlug, target, 'requeue'),
           restartPoint: options.restartPoint,
+          sourceResumePoint: options.sourceResumePoint,
         },
       );
 

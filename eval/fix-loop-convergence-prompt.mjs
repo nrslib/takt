@@ -1,5 +1,5 @@
 // promptfoo prompt function: fix ループ収束規則の挙動評価。
-// builtins/ja の実ファセットを実行時に組み立ててロール別ヘッダを作り、
+// builtins の実ファセットを実行時に組み立ててロール別ヘッダを作り、
 // cases/fix-loop-convergence/<scenario>.md のシナリオ本文と合成する。
 // ファセットを変更すると、この評価は変更後の文面をそのまま対象にする。
 // 縮約構成の独立評価として、runtime の project → user → builtin resolver は使わず builtin 層だけを対象にする。
@@ -9,9 +9,10 @@ import { fileURLToPath } from 'node:url';
 import { expandFacetIncludes } from '#faceted-prompting/cli/facet-includes';
 
 const EVAL_DIR = dirname(fileURLToPath(import.meta.url));
-const FACETS_ROOT = join(EVAL_DIR, '../builtins/ja/facets');
 
-function expandFacet(relativePath) {
+
+function expandFacet(relativePath, language) {
+  const FACETS_ROOT = join(EVAL_DIR, '../builtins', language, 'facets');
   const body = readFileSync(join(FACETS_ROOT, relativePath), 'utf-8');
   return expandFacetIncludes({
     body,
@@ -26,8 +27,10 @@ const DRY_RUN_NOTE = 'これは机上評価環境であり、実際のコード�
 const ROLES = {
   fix: {
     intro: 'あなたは TAKT ワークフローの fix ステップを実行する coder エージェントである。次の instruction 全文に従うこと。',
+    introEn: 'You are the coder agent executing the fix step in a TAKT workflow. Follow the entire instruction below.',
     instruction: 'instructions/apply-fix-plan.md',
     afterInstruction: [DRY_RUN_NOTE],
+    afterInstructionEn: ['This is a dry-run evaluation: actual code edits and commands are unavailable. Describe edits at the level of a plan. Do not cite this restriction as a work result or as the reason for your decision. If the approach is executable within the repair boundary, treat the edits and relevant tests as completed. Follow the instruction and required output. Referenced reports are supplied in the scenario.'],
   },
   monitor: {
     intro: 'あなたは TAKT ワークフローの loop_monitor 判定を行う supervisor エージェントである。fix と fix-replan のサイクルが閾値 4 回に達した（{cycle_count}=4）。次の instruction 全文に従うこと。',
@@ -40,22 +43,33 @@ const ROLES = {
       '4. 要件を満たす実現可能な打開手段がない → ABORT',
     ].join('\n')],
   },
+  verifier: {
+    intro: 'あなたは TAKT ワークフローの fix-verifier ステップを実行する独立した検証エージェントである。以下の記録済み資料と instruction 全文から修正完了検証レポートを作成すること。',
+    introEn: 'You are the independent agent executing the fix-verifier step in a TAKT workflow. Produce a fix-verification report from the recorded materials and the entire instruction below.',
+    instruction: 'instructions/verify-fix.md',
+    outputContract: 'output-contracts/fix-verification.md',
+    afterInstruction: ['これは記録済み資料を使う机上評価である。資料に記載された現在のコードと実行証跡を検証対象とし、記載のない操作を実施したと主張しないこと。出力契約の結果欄に verified、incomplete、plan_invalid のいずれか1つを記すこと。'],
+    afterInstructionEn: ['This is a dry-run evaluation using recorded materials. Verify the current code and execution evidence supplied above. Do not claim to have performed unrecorded actions. Put exactly one of verified, incomplete, or plan_invalid in the output contract result field.'],
+  },
 };
 
 export default async function ({ vars }) {
+  const language = vars.language ?? 'ja';
+  if (!['ja', 'en'].includes(language)) throw new Error(`Unknown language: ${language}`);
   const role = ROLES[vars.role];
   if (role === undefined) throw new Error(`Unknown role: ${vars.role}`);
   const scenario = readFileSync(
-    join(EVAL_DIR, 'cases', 'fix-loop-convergence', `${vars.scenario}.md`),
+    join(EVAL_DIR, 'cases', 'fix-loop-convergence', `${vars.role === 'verifier' ? 'verifier-' : ''}${vars.scenario}.md`),
     'utf-8',
   );
   const sections = [
     scenario,
-    role.intro,
+    language === 'en' ? role.introEn ?? role.intro : role.intro,
     '--- INSTRUCTION（全文） ---',
-    expandFacet(role.instruction),
+    expandFacet(role.instruction, language),
     '--- INSTRUCTION ここまで ---',
-    ...role.afterInstruction,
+    ...(role.outputContract ? ['--- OUTPUT CONTRACT（全文） ---', expandFacet(role.outputContract, language)] : []),
+    ...(language === 'en' ? role.afterInstructionEn ?? role.afterInstruction : role.afterInstruction),
   ];
   return sections.join('\n\n');
 }

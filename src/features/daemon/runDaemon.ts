@@ -17,10 +17,17 @@ import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { failInterruptedTasksWithGoalEvents } from '../tasks/execute/claimTasks.js';
 import { resolveDaemonConfigDirectory } from '../../infra/daemon/ipcEndpoint.js';
 import { createConversationService } from '../manager/conversationService.js';
-import { createConversationRuntime } from '../manager/conversationRuntime.js';
+import { createDaemonConversationRuntime } from '../director/conversationRuntime.js';
 import { createConversationIpcServer } from './conversationIpcServer.js';
+import { createDaemonSlackPorts } from './slackPorts.js';
+import { createDirectorPatrol } from '../director/patrol.js';
+import { resolveDirectorConfig } from '../../infra/config/directorConfig.js';
+import { loadGlobalConfig } from '../../infra/config/global/globalConfig.js';
+import type { DirectorNotificationDelivery } from '../director/notificationDelivery.js';
+import { ManagerTurnScheduler } from '../manager/managerTurnScheduler.js';
 
 const POLL_INTERVAL_MS = 500;
+const SLACK_INQUIRY_POLL_INTERVAL_MS = 5_000;
 const EVENTS_PER_PROJECT = 10;
 const log = createLogger('daemon');
 
@@ -43,15 +50,40 @@ export async function runDaemon(): Promise<void> {
   const { cliPath } = resolveCliInvocation('daemon');
   const owner = { pid: process.pid, identity, version: packageVersion, cliPath };
   if (!registerDaemonOwner(globalConfigDirectory, owner)) return;
+  const appToken = process.env.TAKT_SLACK_APP_TOKEN;
+  const botToken = process.env.TAKT_SLACK_BOT_TOKEN;
+  // Slack credentials belong to the listener, not provider or tool subprocesses.
+  delete process.env.TAKT_SLACK_APP_TOKEN;
+  delete process.env.TAKT_SLACK_BOT_TOKEN;
   const controller = new AbortController();
   const managers = new Map<string, ReturnType<typeof createRunEventManager>>();
   const pollingFailures = new Map<string, PollingFailure>();
   const inFlight = new Map<string, Promise<void>>();
   const projectWork = new Map<string, boolean>();
   let domainGeneration = 0;
+  let directorConfig: ReturnType<typeof resolveDirectorConfig> | undefined;
+  let resolveSlack!: (ports: Awaited<ReturnType<typeof createDaemonSlackPorts>> | undefined) => void;
+  const slackReady = new Promise<Awaited<ReturnType<typeof createDaemonSlackPorts>> | undefined>((resolve) => { resolveSlack = resolve; });
+  const deliveries = new Set<Promise<void>>();
+  const scheduler = new ManagerTurnScheduler();
+  const notifications: DirectorNotificationDelivery = { async deliver(batch) {
+    if (directorConfig?.slack === undefined) return;
+    const pending = slackReady.then(async (ports) => {
+      if (ports !== undefined) await ports.notifications.deliver(batch);
+    }).catch((error: unknown) => {
+      log.error('Cannot deliver director notifications', { error: sanitizeSensitiveText(getErrorMessage(error)) });
+    }).finally(() => { deliveries.delete(pending); });
+    deliveries.add(pending);
+  } };
   const conversations = createConversationService({ configDirectory: globalConfigDirectory, owner,
-    runtime: createConversationRuntime(globalConfigDirectory), onDomainChange: () => { domainGeneration++; projectWork.clear(); } });
+    scheduler,
+    runtime: createDaemonConversationRuntime(globalConfigDirectory, { notify: (notification) => conversations.notifyDirector(notification) }, notifications),
+    onDomainChange: () => { domainGeneration++; projectWork.clear(); } });
   let ipc: Awaited<ReturnType<typeof createConversationIpcServer>> | undefined;
+  let slack: Awaited<ReturnType<typeof createDaemonSlackPorts>> | undefined;
+  let nextSlackInquiryPoll = 0;
+  let slackInquiryPolling: Promise<void> | undefined;
+  let director: ReturnType<typeof createDirectorPatrol> | undefined;
   const inspectProject = async (cwd: string): Promise<boolean> => {
     const errors: Array<{ error: unknown; failedAt: number }> = [];
     let hasWork = false;
@@ -70,7 +102,7 @@ export async function runDaemon(): Promise<void> {
       if (controller.signal.aborted) return false;
       let manager = managers.get(cwd);
       if (manager === undefined) {
-        manager = createRunEventManager(cwd);
+        manager = createRunEventManager(cwd, scheduler);
         managers.set(cwd, manager);
       }
       await manager.processPending(controller.signal, EVENTS_PER_PROJECT);
@@ -100,12 +132,30 @@ export async function runDaemon(): Promise<void> {
     }
     return hasWork;
   };
-  const stop = (): void => { controller.abort(); };
+  const stopAccepting = (): void => {
+    conversations.stopAccepting();
+    ipc?.stopAccepting();
+    slack?.stopAccepting();
+  };
+  const stop = (): void => { stopAccepting(); controller.abort(); };
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);
   try {
-    ipc = await createConversationIpcServer(globalConfigDirectory, owner, conversations);
+    const globalConfig = loadGlobalConfig();
+    directorConfig = resolveDirectorConfig(globalConfig);
     initDebugLogger({ enabled: true, logFile: join(globalConfigDirectory, 'logs', 'daemon.log') });
+    await conversations.restore();
+    ipc = await createConversationIpcServer(globalConfigDirectory, owner, conversations);
+    if (controller.signal.aborted) return;
+    const initialProjects = await listDaemonProjects(globalConfigDirectory);
+    if (controller.signal.aborted) return;
+    slack = await createDaemonSlackPorts({ projects: initialProjects, configDirectory: globalConfigDirectory, input: conversations,
+      director: { slack: directorConfig.slack, language: globalConfig.language },
+      tokens: appToken && botToken ? { appToken, botToken } : undefined, signal: controller.signal });
+    resolveSlack(slack);
+    if (controller.signal.aborted) return;
+    director = createDirectorPatrol(globalConfigDirectory, { notify: (notification) => conversations.notifyDirector(notification) },
+      directorConfig.patrolInterval, globalConfig.language, notifications);
     log.info('Daemon started', { pid: process.pid, version: packageVersion, cliPath });
     while (!controller.signal.aborted) {
       // Leave the first polling interval for the launching manager to observe startup.
@@ -115,15 +165,26 @@ export async function runDaemon(): Promise<void> {
         break;
       }
       const projects = await listDaemonProjects(globalConfigDirectory);
+      if (controller.signal.aborted) break;
+      await conversations.maintain();
+      if (slackInquiryPolling === undefined && Date.now() >= nextSlackInquiryPoll) {
+        nextSlackInquiryPoll = Date.now() + SLACK_INQUIRY_POLL_INTERVAL_MS;
+        const currentSlack = slack;
+        slackInquiryPolling = Promise.resolve().then(() => currentSlack.pollInquiries())
+          .catch((error: unknown) => {
+            log.error('Cannot poll Slack inquiries', { error: sanitizeSensitiveText(getErrorMessage(error)) });
+          })
+          .finally(() => { slackInquiryPolling = undefined; });
+      }
+      if (controller.signal.aborted) break;
       log.debug('Daemon projects', { projects });
       for (const cwd of projectWork.keys()) {
         if (!projects.includes(cwd)) projectWork.delete(cwd);
       }
-      if (inFlight.size === 0 && projects.every((cwd) => projectWork.get(cwd) === false)
-        && conversations.attachmentCount === 0 && conversations.activeOperationCount === 0) {
+      if (!director.running && inFlight.size === 0 && projects.every((cwd) => projectWork.get(cwd) === false)
+        && conversations.attachmentCount === 0 && conversations.activeOperationCount === 0 && !slack.listening) {
         if (ipc.initializingCount !== 0) continue;
-        conversations.stopAccepting();
-        ipc.stopAccepting();
+        stopAccepting();
         break;
       }
       for (const cwd of projects) {
@@ -131,18 +192,26 @@ export async function runDaemon(): Promise<void> {
         if (inFlight.has(cwd)) continue;
         const inspectedGeneration = domainGeneration;
         const processing = inspectProject(cwd)
-          .then((hasWork) => { if (domainGeneration === inspectedGeneration) projectWork.set(cwd, hasWork); })
+          .then((hasWork) => {
+            if (domainGeneration === inspectedGeneration) {
+              projectWork.set(cwd, hasWork);
+              if (hasWork || conversations.attachmentCount > 0 || conversations.activeOperationCount > 0 || slack?.listening) {
+                director?.poll(controller.signal);
+              }
+            }
+          })
           .catch((error: unknown) => {
             log.error('Cannot inspect daemon project', { cwd, error: sanitizeSensitiveText(getErrorMessage(error)) });
           })
           .finally(() => { inFlight.delete(cwd); });
         inFlight.set(cwd, processing);
       }
+      if (projects.every((cwd) => projectWork.has(cwd))) director.poll(controller.signal);
     }
   } finally {
-    controller.abort();
-    conversations.stopAccepting();
-    ipc?.stopAccepting();
+    resolveSlack(undefined);
+    stop();
+    await director?.close();
     try { await conversations.close(); }
     catch { log.error('Cannot close daemon conversations'); }
     await Promise.all(inFlight.values());
@@ -153,7 +222,7 @@ export async function runDaemon(): Promise<void> {
       try { await manager.close(); }
       catch (error) { log.error('Cannot close daemon project manager', { cwd, error: getErrorMessage(error) }); }
     }
-    try { await ipc?.close(); }
+    try { await slackInquiryPolling; await Promise.all(deliveries); await slack?.close(); await ipc?.close(); }
     finally {
       removeDaemonOwner(globalConfigDirectory, owner);
       process.removeListener('SIGTERM', stop);

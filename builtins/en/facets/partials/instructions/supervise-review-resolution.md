@@ -9,6 +9,8 @@ Record the results in the report before deciding.
 
 {{include:instructions/final-preservation-check}}
 
+{{include:instructions/supervise-spec-deviations}}
+
 **Current review resolution:**
 {report:review-resolution.md}
 

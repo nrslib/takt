@@ -1,4 +1,4 @@
-import { formatMissingReportReference } from '../core/workflow/instruction/report-reference.js';
+import { extractReportReferenceEntries, extractReportReferences, formatMissingReportReference } from '../core/workflow/instruction/report-reference.js';
 import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -51,6 +51,17 @@ vi.mock('node:fs', async () => {
 });
 import { resolveReportReferenceDetailed } from '../core/workflow/instruction/report-reference.js';
 import { inheritResumeReportSnapshot } from '../core/workflow/run/resume-report-snapshot.js';
+
+describe('report reference extraction', () => {
+  it('extracts current and history references with their kinds', () => {
+    const instruction = '{report:current.md}\n{report_history:previous.md}';
+    expect(extractReportReferenceEntries(instruction)).toEqual([
+      { kind: 'report', reference: 'current.md' },
+      { kind: 'report_history', reference: 'previous.md' },
+    ]);
+    expect(extractReportReferences(instruction)).toEqual(['current.md']);
+  });
+});
 
 describe('resolveReportReferenceDetailed', () => {
   const temporaryDirectories: string[] = [];

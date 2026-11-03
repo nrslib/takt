@@ -10,8 +10,8 @@ export function createTuiConversationPort(configDirectory: string, delivery: Con
     async resolve(selected) {
       const requested = selected.kind === 'repository'
         ? { kind: 'repository' as const, repositoryDirectory: await resolveGitRepositoryDirectory(selected.repositoryDirectory) } : selected;
-      const current = await resolveCurrentManagerAssignment(requested, configDirectory);
-      const assignment: ConversationAssignment = current.kind === 'workspace'
+      const current = requested.kind === 'daemon' ? requested : await resolveCurrentManagerAssignment(requested, configDirectory);
+      const assignment: ConversationAssignment = current.kind === 'daemon' ? current : current.kind === 'workspace'
         ? { kind: 'workspace', workspaceId: current.workspaceId }
         : { kind: 'repository', repositoryDirectory: current.repositoryDirectory };
       const actor = { namespace: 'local', id: 'operator' };

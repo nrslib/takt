@@ -24,17 +24,11 @@ import {
 } from '../features/tasks/execute/workflowExecutionBundle.js';
 
 const mockGetGitProvider = vi.hoisted(() => vi.fn());
-const mockWarn = vi.hoisted(() => vi.fn());
 let originalTaktConfigDir: string | undefined;
 
 vi.mock('../infra/git/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getGitProvider: mockGetGitProvider,
-}));
-
-vi.mock('../shared/ui/index.js', async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  warn: mockWarn,
 }));
 
 import { resolveTaskExecution, resolveTaskIssue } from '../features/tasks/execute/resolveTask.js';
@@ -58,7 +52,6 @@ afterEach(() => {
 });
 
 beforeEach(() => {
-  mockWarn.mockClear();
   originalTaktConfigDir = process.env.TAKT_CONFIG_DIR;
   invalidateGlobalConfigCache();
   invalidateAllResolvedConfigCache();
@@ -431,6 +424,21 @@ describe('resolveTaskExecution', () => {
       '      - condition: COMPLETE',
       '        next: COMPLETE',
     ].join('\n'));
+    fs.mkdirSync(path.join(workflowDir, 'takt'), { recursive: true });
+    fs.writeFileSync(path.join(workflowDir, 'takt', 'coding.yaml'), [
+      'name: takt/coding',
+      'subworkflow:',
+      '  callable: true',
+      'initial_step: review',
+      'max_steps: 5',
+      'steps:',
+      '  - name: review',
+      '    persona: reviewer',
+      '    instruction: Review',
+      '    rules:',
+      '      - condition: done',
+      '        next: COMPLETE',
+    ].join('\n'));
 
     const task = createTask({
       data: ({
@@ -460,15 +468,11 @@ describe('resolveTaskExecution', () => {
     const result = await resolveTaskExecutionStrict(task, root);
 
     expect(result.startStep).toBe('delegate');
-    expect(result.resumePoint).toEqual({
-      ...task.data?.resume_point,
-      stack: task.data?.resume_point?.stack.slice(0, 1),
-    });
+    expect(result.resumePoint).toEqual(task.data?.resume_point);
     expect(result.initialIterationOverride).toBeUndefined();
-    expect(mockWarn).toHaveBeenCalledTimes(1);
   });
 
-  it('should preserve resume_point when child workflow step no longer resolves', async () => {
+  it('should reject resume_point when child workflow step no longer resolves', async () => {
     const root = createTempProjectDir();
     const workflowDir = path.join(root, '.takt', 'workflows');
     fs.mkdirSync(path.join(workflowDir, 'takt'), { recursive: true });
@@ -530,17 +534,10 @@ describe('resolveTaskExecution', () => {
       } as unknown) as NonNullable<TaskInfo['data']>,
     });
 
-    const result = await resolveTaskExecutionStrict(task, root);
-
-    expect(result.startStep).toBe('delegate');
-    expect(result.resumePoint).toEqual({
-      ...resumePoint,
-      stack: resumePoint.stack.slice(0, 1),
-    });
-    expect(result.initialIterationOverride).toBeUndefined();
+    await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow(/takt\/coding\/review.*step not found/);
   });
 
-  it('should preserve resume_point when child workflow no longer exists', async () => {
+  it('should reject resume_point when child workflow no longer exists', async () => {
     const root = createTempProjectDir();
     const workflowDir = path.join(root, '.takt', 'workflows');
     fs.mkdirSync(workflowDir, { recursive: true });
@@ -582,14 +579,7 @@ describe('resolveTaskExecution', () => {
       } as unknown) as NonNullable<TaskInfo['data']>,
     });
 
-    const result = await resolveTaskExecutionStrict(task, root);
-
-    expect(result.startStep).toBe('delegate');
-    expect(result.resumePoint).toEqual({
-      ...resumePoint,
-      stack: resumePoint.stack.slice(0, 1),
-    });
-    expect(result.initialIterationOverride).toBeUndefined();
+    await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow(/delegate.*takt\/coding/);
   });
 
   it('should preserve child resume_point entries when worktree workflow exists only under execCwd', async () => {
@@ -669,7 +659,7 @@ describe('resolveTaskExecution', () => {
     expect(result.initialIterationOverride).toBeUndefined();
   });
 
-  it('should trim resume_point to the nearest valid workflow_call when a deep child step no longer resolves', async () => {
+  it('should reject resume_point when a deep child step no longer resolves', async () => {
     const root = createTempProjectDir();
     const workflowDir = path.join(root, '.takt', 'workflows');
     fs.mkdirSync(path.join(workflowDir, 'takt'), { recursive: true });
@@ -753,14 +743,7 @@ describe('resolveTaskExecution', () => {
       } as unknown) as NonNullable<TaskInfo['data']>,
     });
 
-    const result = await resolveTaskExecutionStrict(task, root);
-
-    expect(result.startStep).toBe('delegate');
-    expect(result.resumePoint).toEqual({
-      ...resumePoint,
-      stack: resumePoint.stack.slice(0, 2),
-    });
-    expect(result.initialIterationOverride).toBeUndefined();
+    await expect(resolveTaskExecutionStrict(task, root)).rejects.toThrow(/takt\/review-loop\/review.*step not found/);
   });
 
   it.each(['terminal', 'silent'] as const)('should reject an invalid resume_point despite a valid start_step in %s mode', async (outputMode) => {

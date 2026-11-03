@@ -20,6 +20,8 @@ import type { WorkflowStep } from '../core/models/index.js';
 import { semanticRuleCandidatesOf } from '../core/models/workflow-rule-condition.js';
 import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDetectionExhaustedError.js';
 import { detectCandidateIndex } from '../shared/utils/ruleIndex.js';
+import type { ReportPhaseRunnerContext } from '../core/workflow/phase-runner.js';
+import { writePhaseReportFixture } from './helpers/phase-report-fixture.js';
 
 function selectSemanticLabelFromTag(step: WorkflowStep, context: { lastResponse?: string }) {
   const candidates = semanticRuleCandidatesOf(step.rules ?? [], false);
@@ -143,11 +145,13 @@ vi.mock('../core/workflow/phase-runner.js', async (importOriginal) => ({
   runReportPhase: vi.fn().mockImplementation(async (
     step: WorkflowStep,
     _stepIteration: number,
-    context: { reportDir: string; lastResponse?: string },
+    context: ReportPhaseRunnerContext,
+    onReportWritten?: (name: string) => void,
   ) => {
     mkdirSync(context.reportDir, { recursive: true });
     for (const contract of step.outputContracts ?? []) {
-      writeFileSync(join(context.reportDir, contract.name), context.lastResponse ?? 'Mock report');
+      writePhaseReportFixture(context, contract.name, context.lastResponse ?? 'Mock report');
+      onReportWritten?.(contract.name);
     }
   }),
   runStatusJudgmentPhase: vi.fn().mockImplementation(selectSemanticLabelFromTag),

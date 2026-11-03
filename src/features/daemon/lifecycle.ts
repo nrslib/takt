@@ -79,8 +79,9 @@ export async function ensureDaemon(): Promise<void> {
           log.info('Daemon startup confirmed', { pid: started.pid });
           return;
         }
+      } else if (child.exitCode !== null || child.signalCode !== null) {
+        break;
       }
-      if (child.exitCode !== null || child.signalCode !== null) break;
       await delay(PROCESS_POLL_MS);
     }
     throw new Error('Daemon startup was not confirmed; see the global logs directory');

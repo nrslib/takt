@@ -1,0 +1,67 @@
+{
+  "model": "gpt-6.1-sol",
+  "effort": "high",
+  "sandbox": "read-only",
+  "approvalPolicy": "never",
+  "observedTurnContexts": 1,
+  "startedFresh": true,
+  "networkAccessEnabled": false,
+  "webSearchMode": "disabled",
+  "executedPromptHash": "2b9c6c5fa75bb19d228b078e89c0bb953ef5c27b19a4d79c5528eab12ec8abb3",
+  "executedResponseHash": "cf9856fafc4b76d0befe380099e9a1ca9b4efad44a43ecfc6b995928371265a6",
+  "promptHash": "bf8eb834a201f36449015d983169b424e5ea13c75abbff16347603d3a98a869f",
+  "responseHash": "9db84a162f5aa02dcc9e5afffadc8307be2b6bc4d06c678b5f3562df04728b9b",
+  "commands": [
+    {
+      "version": "prior",
+      "path": "loop-monitor/project/reports/.takt-report-internal/executions/versions/e1ea7c69-f4b2-4c25-bff8-e6df13c2f057/fix-report.md",
+      "marker": "PRIOR_9d6a220d-1061-439f-aa30-fa1f8d4e4ed4",
+      "cwd": "loop-monitor/project",
+      "command": "/bin/zsh -lc 'cat reports/.takt-report-internal/executions/versions/e1ea7c69-f4b2-4c25-bff8-e6df13c2f057/fix-report.md'",
+      "exitCode": 0,
+      "status": "completed",
+      "output": "前回の修正報告。照合証拠: PRIOR_9d6a220d-1061-439f-aa30-fa1f8d4e4ed4",
+      "artifactHash": "bda40d8e2c7f514089c7a884d7bcde3a3d222feb2e95a8c47865f77bea1e19e4"
+    },
+    {
+      "version": "current",
+      "path": "loop-monitor/project/reports/.takt-report-internal/executions/versions/fdc28591-4afd-4c68-8425-77198f523036/fix-report.md",
+      "marker": "CURRENT_a956e62e-dca5-4ff8-a7c7-71414c190e9d",
+      "cwd": "loop-monitor/project",
+      "command": "/bin/zsh -lc \"sed -n '801,1103p' reports/.takt-report-internal/executions/versions/fdc28591-4afd-4c68-8425-77198f523036/fix-report.md\"",
+      "exitCode": 0,
+      "status": "completed",
+      "output": "照合証拠: CURRENT_a956e62e-dca5-4ff8-a7c7-71414c190e9d",
+      "artifactHash": "42061e759882f3828ce3b03404770686948bf177515e8bb09042af1d4f9226d5"
+    },
+    {
+      "version": "prior",
+      "path": "loop-monitor/project/reports/.takt-report-internal/executions/versions/e1ea7c69-f4b2-4c25-bff8-e6df13c2f057/fix-report.md",
+      "marker": "PRIOR_9d6a220d-1061-439f-aa30-fa1f8d4e4ed4",
+      "cwd": "loop-monitor/project",
+      "command": "/bin/zsh -lc 'cat reports/.takt-report-internal/executions/versions/e1ea7c69-f4b2-4c25-bff8-e6df13c2f057/fix-report.md reports/.takt-report-internal/executions/index.json'",
+      "exitCode": 0,
+      "status": "completed",
+      "output": "前回の修正報告。照合証拠: PRIOR_9d6a220d-1061-439f-aa30-fa1f8d4e4ed4",
+      "artifactHash": "bda40d8e2c7f514089c7a884d7bcde3a3d222feb2e95a8c47865f77bea1e19e4"
+    }
+  ],
+  "toolCount": 15,
+  "toolTypes": [
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution",
+    "command_execution"
+  ]
+}

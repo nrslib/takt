@@ -72,6 +72,15 @@ program
   });
 
 program
+  .command('director')
+  .description('Open the experimental director conversation TUI')
+  .action(async () => {
+    const { getCliExecutionContext } = await import('./initialization.js');
+    const { runDirector } = await import('../../features/director/runDirector.js');
+    await runDirector({ cwd: getCliExecutionContext().cwd, agentOverrides: resolveAgentOverrides(program) });
+  });
+
+program
   .command('manager')
   .description('Open the experimental manager conversation TUI')
   .action(async () => {

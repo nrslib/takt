@@ -1,0 +1,95 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'write_tests の完了・実装先行・計画への差し戻しを日英で判定する'
+prompts:
+  - file://../../phase3-judgment-prompt.mjs
+providers:
+  - id: openai:codex-sdk
+    label: sol-high
+    config: &codex
+      model: gpt-6-sol
+      model_reasoning_effort: high
+      working_dir: ../../fixtures/phase3-judgment/tool-refusal
+      sandbox_mode: read-only
+      approval_policy: never
+      skip_git_repo_check: true
+      output_schema:
+        type: object
+        properties:
+          step:
+            type: integer
+            description: Matched rule number (1-based)
+          reason:
+            type: string
+            description: Brief justification for the decision
+        required: [step, reason]
+        additionalProperties: false
+  - id: openai:codex-sdk
+    label: luna-max
+    config:
+      <<: *codex
+      model: gpt-6-luna
+      model_reasoning_effort: max
+evaluateOptions:
+  repeat: 1
+  maxConcurrency: 2
+defaultTest:
+  vars:
+    variant: candidate
+    input_source: report
+    workflow: development-core
+    step_name: write_tests
+  assert:
+    - type: javascript
+      metric: write-tests-routing/row
+      value: file://../../asserts/write-tests-routing.mjs
+tests:
+  - description: 'ja: 未実装による想定失敗を伴うテスト作成'
+    vars:
+      language: ja
+      input: file://../../cases/write-tests-routing/created-ja.md
+      expected_rule_index: 1
+  - description: 'en: Tests written with expected failure from missing behavior'
+    vars:
+      language: en
+      input: file://../../cases/write-tests-routing/created-en.md
+      expected_rule_index: 1
+  - description: 'ja: 既存テストのみで修正前の不具合を検出'
+    vars:
+      language: ja
+      input: file://../../cases/write-tests-routing/existing-ja.md
+      expected_rule_index: 1
+  - description: 'en: Existing test alone detects the pre-fix failure'
+    vars:
+      language: en
+      input: file://../../cases/write-tests-routing/existing-en.md
+      expected_rule_index: 1
+  - description: 'ja: 本番スキーマ生成後にしか作れないテスト'
+    vars:
+      language: ja
+      input: file://../../cases/write-tests-routing/deferred-ja.md
+      expected_rule_index: 2
+  - description: 'en: Tests requiring production schema generation first'
+    vars:
+      language: en
+      input: file://../../cases/write-tests-routing/deferred-en.md
+      expected_rule_index: 2
+  - description: 'ja: 計画の誤った入口を修正する'
+    vars:
+      language: ja
+      input: file://../../cases/write-tests-routing/replan-ja.md
+      expected_rule_index: 3
+  - description: 'en: Revise an incorrect planned entry point'
+    vars:
+      language: en
+      input: file://../../cases/write-tests-routing/replan-en.md
+      expected_rule_index: 3
+  - description: 'ja: 外部装置待ちだけが残る'
+    vars:
+      language: ja
+      input: file://../../cases/write-tests-routing/blocked-ja.md
+      expected_rule_index: 3
+  - description: 'en: Only an external device remains unavailable'
+    vars:
+      language: en
+      input: file://../../cases/write-tests-routing/blocked-en.md
+      expected_rule_index: 3

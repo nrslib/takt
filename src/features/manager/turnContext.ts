@@ -4,6 +4,7 @@ import type { ManagerEvent } from '../../infra/goals/events.js';
 import type { TaskState } from '../../infra/task/types.js';
 import { goalSummary } from '../mcp/goalResponse.js';
 import { truncateUtf8 } from '../../shared/utils/utf8.js';
+import type { GoalPullRequestStatus } from '../../infra/goals/pull-request-status.js';
 
 const GOAL_MEMORY_MAX_BYTES = 64 * 1024;
 const goalRetrieval = 'Read details from the referenced goal file or use takt_get_goal with path, recordId and offset/limit or textOffset/maxBytes. Use takt_list_goals with offset/limit for omitted goals. Read only the needed ranges.';
@@ -62,7 +63,9 @@ export function buildGoalMemory(repositories: readonly {
   return serialize();
 }
 
-export function buildGoalTurnContext(cwd: string, goal: Goal, event: ManagerEvent, tasks: readonly TaskState[]): string {
+export function buildGoalTurnContext(
+  cwd: string, goal: Goal, event: ManagerEvent, tasks: readonly TaskState[], pullRequestStatus?: GoalPullRequestStatus,
+): string {
   const observedAt = new Date().toISOString();
   const lastProgressAt = goal.workLog.filter((record) => record.kind !== 'patrol').at(-1)?.recordedAt ?? goal.createdAt;
   return JSON.stringify({
@@ -74,6 +77,7 @@ export function buildGoalTurnContext(cwd: string, goal: Goal, event: ManagerEven
       patrol: {
         observedAt,
         lastProgressAt,
+        ...(pullRequestStatus === undefined ? {} : { pullRequestStatus }),
       },
     } : {}),
     references: { goal: join(cwd, '.takt', 'goals', goal.id, 'goal.json'), tasks: join(cwd, '.takt', 'tasks.yaml') },

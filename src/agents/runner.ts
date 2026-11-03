@@ -217,6 +217,7 @@ export class AgentRunner {
       model: resolution.model,
       ...(options.allowDefaultModel === true ? { allowDefaultModel: true } : {}),
       permissionMode: resolution.permissionMode,
+      edit: options.edit,
       providerOptions: resolution.providerOptions,
       onStream: options.onStream,
       onActivity: options.onActivity,

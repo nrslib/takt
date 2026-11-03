@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -16,6 +16,7 @@ import {
 } from '../infra/mock/index.js';
 import { callMock } from '../infra/mock/client.js';
 import { STATUS_VALUES } from '../core/models/status.js';
+import { REPORT_INTERNAL_NAMESPACE } from '../core/models/reserved-report-names.js';
 
 describe('ScenarioQueue', () => {
   it('should consume entries in order when no agent specified', () => {
@@ -389,6 +390,26 @@ describe('scenario file conditions', () => {
     }]);
     await expect(callMock('conductor', 'select status', { cwd: tempDir }))
       .resolves.toEqual(expect.objectContaining({ content: '[REVIEW:2]' }));
+  });
+
+  it('should ignore pinned execution versions when locating a public report', async () => {
+    writeFileSync(join(tempDir, 'workflow-maker-doctor.md'), 'Result: PASS\n');
+    const versions = join(tempDir, REPORT_INTERNAL_NAMESPACE, 'executions', 'versions', 'execution-id');
+    mkdirSync(versions, { recursive: true });
+    writeFileSync(join(versions, 'workflow-maker-doctor.md'), 'Result: FAIL\n');
+    setMockScenario([{
+      status: 'done',
+      content: '[REVIEW:1]',
+      mismatchContent: '[REVIEW:2]',
+      fileCondition: {
+        filename: 'workflow-maker-doctor.md',
+        state: 'readable',
+        includes: 'Result: PASS',
+      },
+    }]);
+
+    await expect(callMock('conductor', 'select status', { cwd: tempDir }))
+      .resolves.toEqual(expect.objectContaining({ content: '[REVIEW:1]' }));
   });
 
   itPosix.for(['fail', 'missing', 'unreadable'] as const)(

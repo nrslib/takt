@@ -224,6 +224,8 @@ export class TmuxTerminalBackend implements TerminalBackend {
       '-c',
       options.cwd,
       ...buildNewSessionEnvArgs(options.childProcessEnv),
+      // An existing tmux server may retain credentials removed from this process.
+      '/usr/bin/env', '-u', 'TAKT_SLACK_APP_TOKEN', '-u', 'TAKT_SLACK_BOT_TOKEN',
       ...launch,
     ], { cwd: options.cwd, childProcessEnv: options.childProcessEnv });
     if (options.resumeSessionId !== undefined) this.pendingResumes.set(name, options.resumeSessionId);

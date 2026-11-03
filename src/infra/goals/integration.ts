@@ -1,4 +1,6 @@
 import { TaskRunner } from '../task/runner.js';
+import { cleanupOrphanedClone } from '../task/clone.js';
+import { loadCloneMeta } from '../task/clone-meta.js';
 import { buildSafeGitEnvironment } from '../task/git-environment.js';
 import { GoalStore } from './store.js';
 import type { Goal } from './schema.js';
@@ -6,12 +8,16 @@ import { mergeGoalBranch, targetWorktrees } from './merge-git.js';
 import {
   isGoalCommitIncluded, isGoalContentIncluded, isGoalContentIncludedSync,
   resolveGoalBranchSha, resolveGoalBranchShaSync,
+  fetchGoalIntegrationBranchSha, resolveGoalRemoteBranchShaSync,
 } from './git-command.js';
 import { GOAL_DIFF_MAX_FILES, readGoalDiffSummary } from './diff-summary.js';
 import { appendGoalNotification, formatIntegratedWorkNotification, type GoalNotificationPolicy } from './notifications.js';
 import { appendGoalWorkLog } from './workLog.js';
 import { withdrawPendingGoalQuestions } from './questions.js';
 import type { Language } from '../../core/models/types.js';
+import { GoalPullRequestUnavailableError, prepareGoalPullRequest } from './pull-request.js';
+import { safeExternalErrorMessage } from '../../shared/utils/safeExternalErrorMessage.js';
+import { readGoalPullRequestStatus } from './pull-request-status.js';
 
 export async function getGoalTaskSource(cwd: string, goal: Goal, taskName: string): Promise<string> {
   const task = new TaskRunner(cwd).listTaskStateItems().find((item) => item.name === taskName);
@@ -32,6 +38,21 @@ export async function assertReviewedGoalSha(
   if (actual !== expectedSha) throw new Error(`Reviewed SHA changed: expected ${expectedSha}, current ${actual}`);
 }
 
+function cleanupIntegratedTaskClone(
+  cwd: string, taskName: string, sourceBranch: string,
+): { cleanupWarning?: { path: string; reason: string } } {
+  const task = new TaskRunner(cwd).listTaskStateItems().find((item) => item.name === taskName);
+  if (task === undefined || task.status === 'pending' || task.status === 'running') return {};
+  const meta = loadCloneMeta(cwd, sourceBranch);
+  if (meta === null) return {};
+  try {
+    cleanupOrphanedClone(cwd, sourceBranch, { throwOnError: true });
+    return {};
+  } catch (error) {
+    return { cleanupWarning: { path: meta.clonePath, reason: safeExternalErrorMessage(error) } };
+  }
+}
+
 export async function integrateGoalTask(
   cwd: string, goalId: string, taskName: string, expectedSha: string, signal: AbortSignal | undefined,
   notifications: GoalNotificationPolicy, language: Language,
@@ -43,7 +64,8 @@ export async function integrateGoalTask(
   const targetSha = await resolveGoalBranchSha(cwd, goal.branch, signal);
   // 成果取り込みは内容一致だけで省略せず、厳密な到達性を維持する。
   if (await isGoalCommitIncluded(cwd, expectedSha, targetSha, signal)) {
-    return { status: 'merged', sha: targetSha, sourceBranch, expectedSha, targetBranch: goal.branch, goal };
+    return { status: 'merged', sha: targetSha, sourceBranch, expectedSha, targetBranch: goal.branch, goal,
+      ...cleanupIntegratedTaskClone(cwd, taskName, sourceBranch) };
   }
   if (goal.status !== 'created') throw new Error('Goal cannot integrate new work');
   const task = new TaskRunner(cwd).listTaskStateItems().find((item) => item.name === taskName);
@@ -57,7 +79,8 @@ export async function integrateGoalTask(
       summary: `Integrated ${taskName} (${expectedSha}) into ${goal.branch}: ${purpose}`,
     }), { kind: 'progress', body: formatIntegratedWorkNotification(purpose, language) }, notifications));
   }
-  return { ...result, sourceBranch, expectedSha, targetBranch: goal.branch, goal: saved };
+  return { ...result, sourceBranch, expectedSha, targetBranch: goal.branch, goal: saved,
+    ...(result.status === 'merged' ? cleanupIntegratedTaskClone(cwd, taskName, sourceBranch) : {}) };
 }
 
 function shellQuote(value: string): string {
@@ -97,24 +120,61 @@ function assertCompletionAllowed(current: Goal, previous: Goal): void {
   if (current.executionStatus === 'paused') {
     throw new Error('Goal is paused. Resume it in the manager TUI before completing it.');
   }
+  if (current.executionStatus === 'aborted') {
+    throw new Error('Goal is aborted. Work cannot continue for this goal.');
+  }
+}
+
+function resolveCompletionTargetSha(cwd: string, goal: Goal, signal: AbortSignal | undefined): Promise<string> {
+  return goal.pullRequest === undefined
+    ? resolveGoalBranchSha(cwd, goal.integrationBranch, signal)
+    : fetchGoalIntegrationBranchSha(cwd, goal.integrationBranch, signal);
+}
+
+async function prepareCompletionPullRequest(
+  cwd: string, goal: Goal, completion: NonNullable<Goal['completion']>,
+  humanChecks: string | undefined, language: Language, signal: AbortSignal | undefined,
+): Promise<{ pullRequest?: Goal['pullRequest']; failure?: string }> {
+  try {
+    return { pullRequest: await prepareGoalPullRequest(cwd, goal, completion, humanChecks, language, signal) };
+  } catch (error) {
+    signal?.throwIfAborted();
+    if (!(error instanceof GoalPullRequestUnavailableError)) throw error;
+    return { failure: safeExternalErrorMessage(error) };
+  }
+}
+
+function recordPullRequestFailure(goal: Goal, failure: string | undefined): Goal {
+  return failure === undefined ? goal : appendGoalWorkLog(goal, { summary: failure });
 }
 
 export async function completeGoal(
   cwd: string, goalId: string, expectedSha: string, summary: string,
   mainMerge: 'auto' | 'approve', signal: AbortSignal | undefined,
   notifications: GoalNotificationPolicy,
+  humanChecks: string | undefined, language: Language,
 ): Promise<Record<string, unknown>> {
   const store = new GoalStore(cwd);
   const goal = await store.get(goalId);
   await assertReviewedGoalSha(cwd, goal.branch, expectedSha, signal);
   if (goal.status === 'completed') return { goal };
   const targetBranch = goal.integrationBranch;
-  const targetSha = await resolveGoalBranchSha(cwd, targetBranch, signal);
+  const targetSha = await resolveCompletionTargetSha(cwd, goal, signal);
   const included = await isGoalContentIncluded(cwd, expectedSha, targetSha, signal);
   if (goal.status === 'awaiting_merge' && goal.completion?.goalSha === expectedSha && !included) {
+    if (goal.pullRequest === undefined) {
+      const { pullRequest, failure } = await prepareCompletionPullRequest(
+        cwd, goal, goal.completion, humanChecks ?? goal.completion.humanChecks, language, signal,
+      );
+      await store.update(goalId, (current) => {
+        signal?.throwIfAborted();
+        assertCompletionAllowed(current, goal);
+        return recordPullRequestFailure({ ...current, ...(pullRequest === undefined ? {} : { pullRequest }) }, failure);
+      });
+    }
     const current = store.getSync(goalId);
     assertCompletionUnchanged(current, goal);
-    return { status: current.status, completion: current.completion };
+    return { status: current.status, completion: current.completion, goal: current };
   }
   const changeSummary = await readGoalDiffSummary(cwd, targetSha, expectedSha, GOAL_DIFF_MAX_FILES, signal);
   const completion = completionRecord(goal, expectedSha, targetBranch, summary, changeSummary, []);
@@ -133,12 +193,15 @@ export async function completeGoal(
   const worktrees = result?.status === 'checked_out' ? result.worktrees : await targetWorktrees(cwd, targetBranch, signal);
   const waiting = {
     ...completionRecord(goal, expectedSha, targetBranch, summary, changeSummary, worktrees),
+    ...(humanChecks === undefined ? {} : { humanChecks }),
     reason: result?.status === 'checked_out' ? 'Target branch is checked out; human merge required'
       : 'Repository manager.main_merge requires human merge',
   };
+  const { pullRequest, failure } = await prepareCompletionPullRequest(cwd, goal, waiting, humanChecks, language, signal);
   const saved = await store.update(goalId, (current) => {
-    assertCompletionUnchanged(current, goal);
-    const updated: Goal = { ...current, status: 'awaiting_merge', completion: waiting };
+    signal?.throwIfAborted();
+    assertCompletionAllowed(current, goal);
+    const updated = recordPullRequestFailure({ ...current, status: 'awaiting_merge', completion: waiting, pullRequest }, failure);
     return current.status === 'awaiting_merge' ? updated : appendGoalNotification(updated, {
       kind: 'awaiting_merge', body: summary,
     }, notifications);
@@ -153,7 +216,7 @@ export async function reopenGoal(
   const goal = await store.get(goalId);
   if (goal.status !== 'awaiting_merge' || goal.completion === undefined) throw new Error('Goal is not awaiting a human merge');
   const approvedSha = goal.completion.goalSha;
-  const targetSha = await resolveGoalBranchSha(cwd, goal.integrationBranch, signal);
+  const targetSha = await resolveCompletionTargetSha(cwd, goal, signal);
   if (await isGoalContentIncluded(cwd, approvedSha, targetSha, signal)) {
     throw new Error('Approved goal SHA is already included in the target branch. Use takt_check_goal_completion.');
   }
@@ -166,7 +229,9 @@ export async function reopenGoal(
       throw new Error('Approved goal SHA changed during the reopen check. Use takt_check_goal_completion.');
     }
     // 保存ロックを保持したまま、ロック待機中の対象ブランチ更新も確認する。
-    const currentTargetSha = resolveGoalBranchShaSync(cwd, current.integrationBranch, env);
+    const currentTargetSha = current.pullRequest === undefined
+      ? resolveGoalBranchShaSync(cwd, current.integrationBranch, env)
+      : resolveGoalRemoteBranchShaSync(cwd, current.integrationBranch, env);
     const included = isGoalContentIncludedSync(cwd, approvedSha, currentTargetSha, env);
     signal?.throwIfAborted();
     if (included) {
@@ -183,17 +248,34 @@ export async function checkGoalCompletion(
   const store = new GoalStore(cwd);
   const goal = await store.get(goalId);
   if (goal.status === 'completed') return { included: true, goal };
-  if (goal.status !== 'awaiting_merge' || goal.completion === undefined) throw new Error('Goal is not awaiting a human merge');
+  signal?.throwIfAborted();
+  if (goal.completion === undefined) throw new Error('Goal is not awaiting a human merge');
+  assertCompletionAllowed(goal, goal);
   const approvedSha = goal.completion.goalSha;
-  const targetSha = await resolveGoalBranchSha(cwd, goal.integrationBranch, signal);
-  const included = await isGoalContentIncluded(cwd, approvedSha, targetSha, signal);
+  const prStatus = await readGoalPullRequestStatus(cwd, goal, signal);
+  const mergedPr = prStatus?.status === 'available' && prStatus.pullRequest.state === 'MERGED'
+    ? prStatus.pullRequest : undefined;
+  if (goal.status === 'created' && mergedPr === undefined) throw new Error('Goal is not awaiting a human merge');
+  if (prStatus?.status === 'available' && prStatus.pullRequest.state === 'CLOSED') {
+    const current = store.getSync(goalId);
+    assertCompletionUnchanged(current, goal);
+    return { included: false, goal: current };
+  }
+  const mergedSha = mergedPr?.mergeCommit?.oid;
+  const targetSha = mergedSha ?? await resolveCompletionTargetSha(cwd, goal, signal);
+  const included = mergedSha !== undefined || await isGoalContentIncluded(cwd, approvedSha, targetSha, signal);
   if (!included) {
     const current = store.getSync(goalId);
     assertCompletionUnchanged(current, goal);
     return { included: false, goal: current };
   }
   const saved = await store.update(goalId, (current) => {
+    signal?.throwIfAborted();
     assertCompletionAllowed(current, goal);
+    if (mergedPr !== undefined && (current.branch !== goal.branch || current.integrationBranch !== goal.integrationBranch
+      || current.pullRequest?.number !== goal.pullRequest?.number || current.pullRequest?.url !== goal.pullRequest?.url)) {
+      throw new Error('Goal PR changed during the completion check. Use takt_check_goal_completion.');
+    }
     const completion = { ...current.completion!, targetBranch: current.integrationBranch, targetSha };
     return appendGoalNotification(withdrawPendingGoalQuestions({
       ...current, status: 'completed', completion,

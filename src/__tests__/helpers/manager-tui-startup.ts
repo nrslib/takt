@@ -118,7 +118,7 @@ it('accepts /ma with Tab without sending, then executes /make-goal on Enter', as
   });
   expect(context.client.submit).not.toHaveBeenCalled();
   context.app.stdin.write('\r');
-  await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'message', text: getLabel('manager.goSummaryRequest', 'en') }]));
+  await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'message', text: getLabel('manager.goSummaryRequest', 'en'), display: false }]));
 });
 
 it.each(['/xyz', 'こんにちは', '説明 /ma', '> /ma', '`/ma`', '~~~\n/ma\n~~~'])('keeps %j as a draft without slash candidates', async (text) => {
@@ -187,7 +187,6 @@ it.each(['ja', 'en'] as const)('projects new notices once while preserving assig
   const context = mount(lang);
   const assignment = context.client.getSnapshot().items[0]!;
   context.client.change({ items: [assignment,
-    { kind: 'display_event', event: { id: 'old', message: 'Historical record', suppressInitialDisplay: true } },
     { kind: 'display_event', event: { id: 'new', message: 'New work record' } },
   ] });
   await waitFor(() => expect(context.app.lastFrame()).toContain('New work record'));

@@ -7,6 +7,7 @@ import { buildTaskRetryStartOptions } from '../features/tasks/list/taskRetryStar
 import { filterSlashCommands } from '../features/interactive/slashCommandRegistry.js';
 import { buildInteractiveSystemPrompt } from '../features/interactive/conversationPlan.js';
 import { getLabel } from '../shared/i18n/index.js';
+import { recordTurn } from '../features/interactive/interactiveSessionRecords.js';
 
 let fixture: ReturnType<typeof createEscMenuFixture>;
 let terminal: EscMenuTerminal;
@@ -141,6 +142,10 @@ describe('TUI confirmation to conversation routes through the real runner', () =
       expect(capture.callCount).toBe(1);
       expect(capture.sessionIds[0]).toBe('original-session');
 
+      if (route === 'resume') {
+        recordTurn({ cwd: fixture.cwd, provider: 'mock', sessionId: 'selected-session', input: 'Previous conversation', response: '' });
+      }
+
       mark = terminal.mark();
       await terminal.send(command + '\r');
       if (route === 'resume') {
@@ -149,9 +154,6 @@ describe('TUI confirmation to conversation routes through the real runner', () =
         await terminal.send('\x1B[B\r');
         await terminal.waitForPrompt(getLabel('interactive.formalSpecPrompt', 'en'), mark);
       } else if (route === 'tell') {
-        await terminal.waitForPrompt(getLabel('tui.tell.selectPrompt', 'en'), mark);
-        mark = terminal.mark();
-        await terminal.send('\r');
         await terminal.waitForPrompt(tellInstruction, mark);
         await terminal.waitForPrompt('[Y/n]:', mark);
       } else {

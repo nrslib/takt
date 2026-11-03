@@ -2,6 +2,7 @@ import type { WorkflowEffect, WorkflowState, WorkflowStep } from '../../models/t
 import type { MergeMethod } from '../../models/config-types.js';
 import type { PrMergeOptions, PrStatus, PrStatusFetchOptions } from './pr-execution-context.js';
 import type { PrCiFailure, PrCiRerunResult } from './pr-ci.js';
+import type { RunPaths } from '../run/run-paths.js';
 import type { ProviderType, StreamCallback } from '../../../shared/types/provider.js';
 
 export interface SystemStepTaskContext {
@@ -115,6 +116,7 @@ export interface SystemStepGitProvider {
 }
 
 export interface SystemStepServicesOptions extends PrMergeOptions {
+  readonly runPaths?: RunPaths;
   readonly cacciaService?: {
     execute(prNumber: number): Promise<Record<string, unknown>>;
   };
@@ -123,6 +125,7 @@ export interface SystemStepServicesOptions extends PrMergeOptions {
   readonly allowGitHooks?: boolean;
   readonly allowGitFilters?: boolean;
   readonly cwd: string;
+  readonly contextDirectory?: string;
   readonly projectCwd: string;
   readonly task: string;
   readonly taskContext?: SystemStepTaskContext;

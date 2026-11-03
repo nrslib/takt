@@ -39,3 +39,11 @@ it('terminates a Git process group when its command timeout expires', async () =
   expect(killProcessGroup).toHaveBeenCalledWith(-child.pid, 'SIGKILL');
   child.emit('close', null, 'SIGKILL');
 });
+
+it('preserves the exit status of a failed Git command', async () => {
+  const child = new FakeChildProcess();
+  vi.mocked(spawn).mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+  const pending = runGitCommandAbortable('/project', ['merge-base', '--is-ancestor', 'a', 'b']);
+  child.emit('close', 1);
+  await expect(pending).rejects.toMatchObject({ status: 1 });
+});

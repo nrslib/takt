@@ -632,6 +632,7 @@ export function resolveRuntimeEnvironment(
       kind: 'runtime-v1',
       section,
       mcp: activeMcp,
+      assignmentOrigins: resolvedRuntimeFile.assignmentOrigins,
       resolutionContext: createRuntimeProviderResolutionContext(
         input.projectCwd,
         resolvedRuntimeFile.profileOrigins,

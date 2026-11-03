@@ -1,3 +1,4 @@
+import * as goalPr from '../infra/goals/pull-request.js';
 import { readManagerTestDisplay } from './helpers/manager-display-items.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -50,9 +51,11 @@ function session(call: ProviderAgent['call']) {
   return { setup, session: new ManagerServiceClient({ cwd, plan }) };
 }
 beforeEach(async () => {
+  vi.spyOn(goalPr, 'prepareGoalPullRequest').mockResolvedValue({ number: 1950, url: 'https://github.com/example/project/pull/1950' });
   root = realpathSync(mkdtempSync(join(tmpdir(), 'takt-manager-events-'))); cwd = join(root, 'project'); mkdirSync(cwd);
   vi.stubEnv('TAKT_CONFIG_DIR', join(root, 'global')); vi.stubEnv('TAKT_NOTIFY_WEBHOOK', undefined);
   git('init', '-b', 'main'); git('config', 'user.name', 'Test'); git('config', 'user.email', 'test@example.test');
+  git('remote', 'add', 'origin', cwd);
   writeFileSync(join(cwd, '.gitignore'), '.takt/\n'); git('add', '.gitignore'); git('commit', '-m', 'fixture');
   mkdirSync(join(cwd, '.takt')); writeFileSync(join(cwd, '.takt', 'config.yaml'), 'provider: mock\nlanguage: ja\nmanager:\n  auto_run: false\n');
   mkdirSync(join(cwd, '.takt', 'workflows')); writeFileSync(join(cwd, '.takt', 'workflows', 'safe.yaml'), 'name: safe\ninitial_step: implement\nsteps:\n  - name: implement\n    persona: coder\n    rules:\n      - condition: completed\n        next: COMPLETE\n');
@@ -96,11 +99,15 @@ it('processes events separately from run and restores their saved records in the
   let goalId = '';
   let results = 0;
   const call = vi.fn<ProviderAgent['call']>().mockImplementation(async (prompt) => {
-    if (prompt.startsWith('取り込みました')) {
-      await tool('takt_check_goal_completion', { goalId });
-      return reply('ゴールが完成しました');
+    if (!prompt.startsWith('{')) {
+      const [turnContext, ...paragraphs] = prompt.split('\n\n');
+      expect(turnContext).toMatch(/^Conversation operation ID: [a-f0-9-]{36}\n/u);
+      if (paragraphs.join('\n\n') === '取り込みました') {
+        await tool('takt_check_goal_completion', { goalId });
+        return reply('ゴールが完成しました');
+      }
+      return reply('要約を確認してください', goalInput());
     }
-    if (!prompt.startsWith('{')) return reply('要約を確認してください', goalInput());
     const event = ManagerEventSchema.parse((JSON.parse(prompt.split('\n\nGoal memory')[0]!) as { event: unknown }).event);
     if (event.kind === 'registered') {
       goalId = event.goalId;
@@ -123,11 +130,12 @@ it('processes events separately from run and restores their saved records in the
     return reply('結果を取り込みました');
   });
   const context = session(call);
+  const submit = vi.spyOn(context.session, 'submit');
   const manager = createRunEventManager(cwd);
   const signal = new AbortController().signal;
   try {
-    await submitAndWait(context.session, { kind: 'message', text: 'ゴールを相談します' });
-    const registered = await submitAndWait(context.session, { kind: 'approve_summary', revision: context.session.getSnapshot().state!.pending!.revision });
+    await submitAndWait(context.session, { kind: 'message', text: 'ゴールを相談します' }, 30000);
+    const registered = await submitAndWait(context.session, { kind: 'approve_summary', revision: context.session.getSnapshot().state!.pending!.revision }, 30000);
     expect(registered.kind).toBe('goal_registered'); expect(call).toHaveBeenCalledOnce();
     expect((await readProjectRegistry(process.env.TAKT_CONFIG_DIR!)).projects).toContainEqual(expect.objectContaining({
       canonicalDirectory: cwd, managerUsed: true,
@@ -166,7 +174,7 @@ it('processes events separately from run and restores their saved records in the
     const waiting = await new GoalStore(cwd).get(goalId);
     expect(waiting.status).toBe('awaiting_merge'); expect(waiting.completion?.targetSha).toBeUndefined();
     git('merge', '--no-ff', '--no-edit', waiting.completion!.goalSha);
-    expect((await submitAndWait(context.session, { kind: 'message', text: '取り込みました' })).kind).toBe('reply');
+    expect((await submitAndWait(context.session, { kind: 'message', text: '取り込みました' }, 30000)).kind).toBe('reply');
     expect((await new GoalStore(cwd).get(goalId)).status).toBe('completed');
     expect(git('show', 'main:result-0.txt')).toContain('入力'); expect(git('show', 'main:result-1.txt')).toContain('出力');
     expect(context.setup).toHaveBeenCalledTimes(2);
@@ -175,7 +183,11 @@ it('processes events separately from run and restores their saved records in the
     expect(call.mock.calls[4]![1].sessionId).toBe('shared-conversation');
     // Resumed provider sessions receive the request; current saved work is projected independently to the TUI.
     const latestWorkLog = (await new GoalStore(cwd).get(goalId)).workLog.filter((record) => record.kind !== 'patrol').at(-2)!.summary;
-    expect(call.mock.calls.at(-1)![0]).toBe('取り込みました');
+    const submission = await submit.mock.results.at(-1)!.value;
+    if (submission.kind !== 'accepted') throw new Error('Expected an accepted conversation turn');
+    const [turnContext, ...paragraphs] = call.mock.calls.at(-1)![0].split('\n\n');
+    expect(turnContext!.split('\n')[0]).toBe(`Conversation operation ID: ${submission.operationId}`);
+    expect(paragraphs.join('\n\n')).toBe('取り込みました');
     await context.session.refresh();
     expect(context.session.getSnapshot().items).toContainEqual(expect.objectContaining({
       kind: 'display_event', event: expect.objectContaining({ message: expect.stringContaining(latestWorkLog) }),

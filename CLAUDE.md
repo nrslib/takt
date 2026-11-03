@@ -65,7 +65,7 @@ agents/        agent-usecases (executeAgent, generateReport, judgeStatus, ...)
 
 ### Three-phase step model
 
-Each normal step runs up to three phases on the same provider session: Phase 1 main work (step's `allowed_tools`; `Write` excluded when a report is defined), Phase 2 report output (`Write` only, when `output_contracts` defined), Phase 3 status judgment (no tools, when tag-based rules exist). Implemented in `phase-runner.ts` / `report-phase-runner.ts` / `status-judgment-phase.ts`.
+Each normal step runs up to three phases on the same provider session: Phase 1 main work (step's `allowed_tools`; `Write` excluded when a report is defined), Phase 2 report output (readonly tools, when `output_contracts` defined; TAKT saves the response body), Phase 3 status judgment (no tools, when tag-based rules exist). Implemented in `phase-runner.ts` / `report-phase-runner.ts` / `status-judgment-phase.ts`.
 
 ### Rule evaluation (5-stage fallback)
 
@@ -77,7 +77,7 @@ Each normal step runs up to three phases on the same provider session: Phase 1 m
 
 ### Provider integration
 
-`src/infra/providers/` exposes a unified `Provider` interface. Registered: `claude-sdk` (default), `claude` (SDK alias), `claude-headless` (headless CLI), `claude-terminal` (interactive terminal), `codex`, `opencode` (shared server pool), `pi` (Pi SDK), `deepseek-harness` (official Python SDK bridge), `cursor`, `copilot`, `kiro`, `mock`. **Provider errors must surface through `AgentResponse.error`** — otherwise SDK failures appear as empty `blocked` output and are nearly impossible to debug. Use `--provider mock` to exercise the engine without a real API.
+`src/infra/providers/` exposes a unified `Provider` interface. Registered: `claude-sdk` (default), `claude` (SDK alias), `claude-headless` (headless CLI), `claude-terminal` (interactive terminal), `codex`, `opencode` (shared server pool), `pi` (Pi SDK), `deepseek-harness` (official Python SDK bridge), `cursor`, `copilot`, `kiro`, `devin`, `mock`. **Provider errors must surface through `AgentResponse.error`** — otherwise SDK failures appear as empty `blocked` output and are nearly impossible to debug. Use `--provider mock` to exercise the engine without a real API.
 
 ### Provider/model resolution priority
 

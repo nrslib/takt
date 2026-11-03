@@ -36,6 +36,8 @@ export const PROJECT_ENV_SPECS: readonly EnvSpec[] = [
   { path: 'workflow_runtime_prepare.custom_scripts', type: 'boolean' },
   { path: 'workflow_command_gates', type: 'json' },
   { path: 'workflow_command_gates.custom_scripts', type: 'boolean' },
+  { path: 'workflow_system_commands', type: 'json' },
+  { path: 'workflow_system_commands.custom_scripts', type: 'boolean' },
   { path: 'workflow_arpeggio', type: 'json' },
   { path: 'workflow_arpeggio.custom_data_source_modules', type: 'boolean' },
   { path: 'workflow_arpeggio.custom_merge_inline_js', type: 'boolean' },

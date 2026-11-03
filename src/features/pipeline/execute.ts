@@ -1,4 +1,5 @@
-import { resolveConfigValues } from '../../infra/config/index.js';
+import { loadGlobalConfig, loadProjectConfig, resolveConfigValues } from '../../infra/config/index.js';
+import { resolveWorkflowSystemCommandsForProject } from '../../infra/config/loaders/workflowNormalizationPolicies.js';
 import { info, error, status, blankLine } from '../../shared/ui/index.js';
 import { createLogger, getErrorMessage, getSlackWebhookUrl, sendSlackNotification, buildSlackRunSummary, generateRunId } from '../../shared/utils/index.js';
 import type { SlackTaskDetail } from '../../shared/utils/index.js';
@@ -86,6 +87,9 @@ async function runPipeline(options: PipelineExecutionOptions): Promise<PipelineO
   const taskContent = resolveTaskContent(options);
   if (!taskContent) return { exitCode: EXIT_ISSUE_FETCH_FAILED, result: buildResult() };
 
+  const workflowSystemCommandsPolicy = taskContent.prBranch && !options.createWorktree && !options.skipGit
+    ? resolveWorkflowSystemCommandsForProject(loadGlobalConfig(), loadProjectConfig(cwd))
+    : undefined;
   let context: ExecutionContext;
   try {
     context = await resolveExecutionContext(
@@ -116,6 +120,7 @@ async function runPipeline(options: PipelineExecutionOptions): Promise<PipelineO
       context,
       loopAnalysisPublication,
       preparedTask.taskSpec,
+      workflowSystemCommandsPolicy,
     );
     if (!workflowResult.success) return { exitCode: EXIT_WORKFLOW_FAILED, result: buildResult({ branch: context.branch }) };
 

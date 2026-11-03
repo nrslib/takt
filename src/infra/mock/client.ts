@@ -17,6 +17,7 @@ import { diagnosticLoggingSuppressed } from '../../shared/utils/diagnostic-conte
 import type { MockCallOptions, ScenarioEntry } from './types.js';
 import { assertPathSegmentsAreSafe } from '../../shared/utils/pathBoundary.js';
 import { executeMockMcpCalls } from './mcp.js';
+import { REPORT_INTERNAL_NAMESPACE } from '../../core/models/reserved-report-names.js';
 
 export type { MockCallOptions };
 
@@ -270,7 +271,7 @@ function findScenarioFiles(root: string, filename: string): string[] {
   return entries.flatMap((entry) => {
     const entryPath = resolve(root, entry.name);
     if (entry.isDirectory()) {
-      if (entry.name === 'node_modules' || entry.name === '.git') {
+      if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === REPORT_INTERNAL_NAMESPACE) {
         return [];
       }
       return findScenarioFiles(entryPath, filename);

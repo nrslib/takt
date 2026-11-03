@@ -53,6 +53,32 @@ it('saves a validated allow decision after its confirmed permission and publishe
   expect(doubles.run).toHaveBeenCalledExactlyOnceWith(repository);
 });
 
+it('preserves Slack provenance through goal persistence and the answer event', async () => {
+  const slackCommand = { ...command, source: 'slack' as const };
+  expect(await answer(slackCommand)).toMatchObject({ kind: 'answer_saved', answerSaved: true });
+  expect((await new GoalStore(repository).get(goalRecord().id)).questions![0]!.answer).toMatchObject({
+    decision: 'allow', scope: 'global', source: 'slack',
+  });
+  expect(doubles.event).toHaveBeenCalledExactlyOnceWith(repository, expect.objectContaining({
+    kind: 'answer', questionId: question.id, answer: expect.objectContaining({ source: 'slack' }),
+  }));
+});
+
+it('preserves Slack provenance when answering a standalone inquiry through the shared answer handler', async () => {
+  const owner = { kind: 'repository' as const, repositoryDirectory: repository };
+  const inquiry = await saveManagerToolPermissionInquiry({
+    request: { toolName: 'Bash', toolInput: { command: 'git status' }, cwd: repository },
+    reason: 'Confirm this operation', configDirectory: directory, owner,
+  });
+  const slackCommand = { ...command, source: 'slack' as const, target: { goalId: null, owner },
+    questionId: inquiry.id, permission: undefined, answer: { decision: 'allow' as const, scope: 'once' as const } };
+  expect(await answer(slackCommand)).toMatchObject({ kind: 'answer_saved', answerSaved: true });
+  expect(await new StandaloneInquiryStore(directory, owner).get(inquiry.id)).toMatchObject({
+    status: 'answered', answer: { decision: 'allow', scope: 'once', source: 'slack' },
+  });
+  expect(existsSync(join(directory, 'manager-permissions.md'))).toBe(false);
+});
+
 it('normalizes the operation subdirectory to its assigned repository before appending project permission', async () => {
   const nested = join(repository, 'operation'); mkdirSync(nested);
   vi.spyOn(repositories, 'resolveGitRepositoryDirectory').mockImplementation(async (path) => path === nested ? repository : path);

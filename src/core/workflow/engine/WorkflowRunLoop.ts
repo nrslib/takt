@@ -162,6 +162,7 @@ interface WorkflowRunLoopDeps {
     step: WorkflowStep,
     iteration: number,
     occurrence: number,
+    preparingNextStep?: boolean,
   ) => WorkflowCallExecutionToken | undefined;
   cancelPendingStepActivation: () => void;
   addUserInput: (input: string) => void;
@@ -452,7 +453,7 @@ function advanceActiveStep(deps: WorkflowRunLoopDeps, nextStep: string, iteratio
   const resolvedStep = deps.getStep(nextStep);
   deps.state.currentStep = nextStep;
   const nextOccurrence = (deps.state.stepIterations.get(nextStep) ?? 0) + 1;
-  deps.setActiveStep(resolvedStep, iteration, nextOccurrence);
+  deps.setActiveStep(resolvedStep, iteration, nextOccurrence, true);
 }
 
 function buildWorkflowAbortResult(

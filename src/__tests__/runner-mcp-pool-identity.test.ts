@@ -11,15 +11,12 @@ import type { AgentResponse } from '../core/models/index.js';
  *     different OpenCode shared server pool keys (order.md:191-195,269,333).
  *
  * The runner path is exercised by mocking `createMcpAdapter` and observing
- * the `ResolvedMcpServers.identity` the adapter receives. This verifies the
- * full chain: `RunAgentOptions.mcpServerIdentity` → `prepareMcpAdapter` →
- * `ResolvedMcpServers.identity` → `PreparedProviderMcp.identity` →
- * `buildSharedServerKey` (server-pool.ts:199). The OpenCode adapter passes
- * `servers.identity` straight through to `PreparedProviderMcp.identity`
- * (opencode.ts:35), and `buildSharedServerKey` incorporates that identity
- * into the pool key (server-pool.ts:199), so different identities yield
- * different pool keys. The adapter identity pass-through is separately
- * verified in `provider-mcp-runtime.test.ts:147-166`.
+ * the `ResolvedMcpServers.identity` the adapter receives. This verifies
+ * `RunAgentOptions.mcpServerIdentity` → `prepareMcpAdapter` →
+ * `ResolvedMcpServers.identity`. The OpenCode adapter combines `servers.identity`
+ * with a hash of the effective headers, and the pool incorporates that prepared
+ * identity into its key. The actual adapter and pool selection are covered
+ * separately in `opencode-mcp-pool-identity.test.ts`.
  */
 
 const fakeAgentResponse: AgentResponse = {

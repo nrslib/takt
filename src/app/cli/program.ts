@@ -91,7 +91,7 @@ export async function scheduleUpdateCheck(): Promise<void> {
 }
 
 program.hook('preSubcommand', async (_command, subcommand) => {
-  if (subcommand.name() !== 'manager') return;
+  if (!['manager', 'director'].includes(subcommand.name())) return;
   const [{ resolveConfigValue }, { getLabel }] = await Promise.all([
     import('../../infra/config/index.js'),
     import('../../shared/i18n/index.js'),
@@ -99,11 +99,12 @@ program.hook('preSubcommand', async (_command, subcommand) => {
   subcommand.configureHelp({
     commandDescription: () => {
       const lang = resolveConfigValue(process.cwd(), 'language');
+      const name = subcommand.name();
       return [
-        getLabel('manager.description', lang),
+        getLabel(`${name}.description`, lang),
         '',
-        getLabel('manager.experimentalNotice', lang),
-        getLabel('manager.costNotice', lang),
+        getLabel(`${name}.experimentalNotice`, lang),
+        getLabel(`${name}.costNotice`, lang),
       ].join('\n');
     },
   });
@@ -112,5 +113,5 @@ program.hook('preSubcommand', async (_command, subcommand) => {
 // Common initialization for all commands
 program.hook('preAction', async (_command, actionCommand) => {
   if (actionCommand.name() === 'daemon' || actionCommand.parent?.name() === 'daemon') return;
-  await runPreActionHook(actionCommand.name() === 'manager');
+  await runPreActionHook(['manager', 'director'].includes(actionCommand.name()));
 });

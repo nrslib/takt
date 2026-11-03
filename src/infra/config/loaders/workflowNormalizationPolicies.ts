@@ -3,8 +3,11 @@ import { isRuntimePreparePreset } from '../../../core/models/workflow-types.js';
 import type {
   WorkflowArpeggioConfig,
   WorkflowCommandGatesConfig,
+  WorkflowSystemCommandsConfig,
   WorkflowMcpServersConfig,
   WorkflowRuntimePrepareConfig,
+  GlobalConfig,
+  ProjectConfig,
 } from '../../../core/models/config-types.js';
 import type { WorkflowConfig, WorkflowStepRawSchema } from '../../../core/models/index.js';
 import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../../core/workflow/workflow-config-error.js';
@@ -44,6 +47,40 @@ export function validateWorkflowRuntimePrepare(
       `Workflow runtime.prepare custom script "${entry}" is disabled by default. `
       + 'Configure workflow_runtime_prepare.custom_scripts in project/global config to allow it.',
     );
+  }
+}
+
+export function resolveWorkflowSystemCommandsPolicy(
+  globalPolicy: WorkflowSystemCommandsConfig | undefined,
+  projectPolicy: WorkflowSystemCommandsConfig | undefined,
+): WorkflowSystemCommandsConfig | undefined {
+  const customScripts = projectPolicy?.customScripts ?? globalPolicy?.customScripts;
+  return customScripts === undefined ? undefined : { customScripts };
+}
+
+export function resolveWorkflowSystemCommandsForProject(
+  globalConfig: GlobalConfig,
+  projectConfig: ProjectConfig,
+): WorkflowSystemCommandsConfig {
+  return {
+    customScripts: resolveWorkflowSystemCommandsPolicy(
+      globalConfig.workflowSystemCommands, projectConfig.workflowSystemCommands,
+    )?.customScripts === true,
+  };
+}
+
+export function validateWorkflowSystemCommands(
+  steps: RawStep[],
+  policy: WorkflowSystemCommandsConfig | undefined,
+): void {
+  for (const [stepIndex, step] of steps.entries()) {
+    for (const [inputIndex, input] of (step.system_inputs ?? []).entries()) {
+      if (input.type !== 'command' || policy?.customScripts === true) continue;
+      throw withWorkflowStepErrorPath(new Error(
+        `Step "${step.name}" uses a command system input, which is disabled by default. `
+        + 'Configure workflow_system_commands.custom_scripts in project/global config to allow it.',
+      ), ['steps', stepIndex, 'system_inputs', inputIndex]);
+    }
   }
 }
 

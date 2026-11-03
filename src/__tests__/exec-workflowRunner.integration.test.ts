@@ -327,6 +327,7 @@ describe('runGeneratedWorkflow integration', () => {
       'copilot',
       'cursor',
       'deepseek-harness',
+      'devin',
       'kiro',
       'mock',
       'opencode',

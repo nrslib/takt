@@ -7,6 +7,7 @@ import { buildAutoRequeueNote } from '../../infra/task/retryNote.js';
 import { resolveConfigValue } from '../../infra/config/index.js';
 import {
   buildFailedTaskRetryStartContext, prepareFailedTaskRetry, resolveFailedTaskRetryStart,
+  describeFailedTaskRetryStart,
   type FailedTaskRetryStartContext,
 } from '../tasks/taskRetryPreparation.js';
 import {
@@ -47,7 +48,7 @@ function resolveStart(context: FailedTaskRetryStartContext, startStep: string | 
 }
 
 type PreparedRetry =
-  | { kind: 'failed'; options: FailedTaskRetryPersistenceOptions }
+  | { kind: 'failed'; options: FailedTaskRetryPersistenceOptions; startDescription: string }
   | { kind: 'exceeded'; options: RequeueExceededTaskOptions };
 
 function prepareRetry(
@@ -67,7 +68,7 @@ function prepareRetry(
   }
   const preparation = prepareFailedTaskRetry(task, input.cwd);
   if (preparation.previousWorkflow === undefined) throw new Error('Task has no previous workflow');
-  const context = buildFailedTaskRetryStartContext(preparation, input.cwd, preparation.previousWorkflow);
+  const context = buildFailedTaskRetryStartContext(preparation, input.cwd, preparation.previousWorkflow, true);
   const start = resolveStart(context, input.startStep);
   let retryNote: string | undefined;
   if (kind === 'requeue') {
@@ -77,9 +78,12 @@ function prepareRetry(
     const additional = (input as RequeueGoalTaskInput).retryNote;
     if (additional !== undefined) retryNote = appendRetryNote(retryNote, additional);
   }
-  return { kind: 'failed', options: {
+  return { kind: 'failed', startDescription: describeFailedTaskRetryStart(
+    preparation, start, resolveConfigValue(input.cwd, 'language'),
+  ), options: {
     task, projectDir: input.cwd, worktreePath: preparation.worktreePath,
     startStep: start.startStep, resumePoint: start.resumePoint, restartPoint: start.restartPoint,
+    sourceResumePoint: start.sourceResumePoint,
     retryNote, workflow: context.workflowOverride,
     taskDir: kind === 'retry' ? task.taskDir : undefined, sourceRunSlug: preparation.matchedRunSlug,
     ...(kind === 'retry' ? { revisedOrder: {
@@ -112,9 +116,12 @@ async function retryGoalTask(
       else await persistFailedTaskRetry(prepared.options);
       queued = true;
       await store.update(goal.id, (current) => appendGoalWorkLog(current, {
-        summary: `${kind === 'retry' ? 'Retried with corrected instructions' : 'Requeued'} ${input.taskName}`,
+        summary: `${kind === 'retry' ? 'Retried with corrected instructions' : 'Requeued'} ${input.taskName}`
+          + (prepared.kind === 'failed' ? `\n${prepared.startDescription}` : ''),
       }));
-      return { ...result, status: 'pending' };
+      return { ...result, status: 'pending',
+        ...(prepared.kind === 'failed' ? { retryStart: prepared.startDescription } : {}),
+      };
     }, `Goal task ${kind} failed`, kind);
   } finally {
     if (queued) await ensureManagerRun(input.cwd);

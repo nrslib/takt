@@ -37,6 +37,7 @@ import type {
   LiveInterventionChannel,
   PreparedLiveInterventionDelivery,
 } from '../live-intervention/types.js';
+import { resolveLiveInterventionPrompt } from '../live-intervention/prompt.js';
 import {
   createLiveInterventionDeliveryCommitter,
   createScopedLiveInterventionChannel,
@@ -55,6 +56,8 @@ import {
 } from './WorkflowCallExecutor.js';
 import { compactSessionBeforePhase1 } from './session-compaction.js';
 import { Phase1ReportInputTracker } from '../instruction/report-inputs.js';
+import { Phase1ExecutionLog } from '../phase1-execution-log.js';
+import { getReportFiles } from '../output-contract-files.js';
 import { invalidateExpectedPersonaSession, invalidatePersonaSessionIfExpected } from './session-invalidation.js';
 import { recordAgentUsageEvent } from './agent-usage-event.js';
 import {
@@ -280,6 +283,8 @@ export interface ParallelRunnerDeps {
   readonly getCurrentWorkflowStack?: () => WorkflowResumePointEntry[] | undefined;
   readonly emitEvent: (event: string, ...args: unknown[]) => void;
   readonly getWorkflowCallRunner?: () => WorkflowCallRunner;
+  readonly beginReportExecution?: (step: WorkflowStep, parallelParentStepName: string) => string | undefined;
+  readonly finishReportExecution?: (id: string, completed: boolean) => void;
   readonly claimStepOccurrence: (
     step: WorkflowStep,
     resumeStackPrefix: readonly WorkflowResumePointEntry[],
@@ -684,14 +689,17 @@ export class ParallelRunner {
         if (semaphore) {
           await semaphore.acquire();
         }
+        let reportExecution: string | undefined;
+        let completed = false;
         try {
+          reportExecution = this.deps.beginReportExecution?.(subStep, step.name);
           restartIfLiveInterventionPending();
           const startedAt = Date.now();
           subStepStartedAtByName.set(subStep.name, startedAt);
           const subStepDeadline = isAgentParallelSubStep(subStep)
             ? getSubStepDeadline(subStep)
             : undefined;
-          return await runWithExecutionDeadline(
+          const result = await runWithExecutionDeadline(
             executionDeadlineContext,
             subStepDeadline,
             async () => {
@@ -702,8 +710,6 @@ export class ParallelRunner {
               );
             }
             const scopedWorkflowCallLiveIntervention = liveIntervention !== undefined
-              && liveDelivery !== undefined
-              && liveDeliveryCommitter !== undefined
               ? createScopedLiveInterventionChannel(
                   liveIntervention,
                   liveDelivery,
@@ -755,10 +761,15 @@ export class ParallelRunner {
               reviewerOperationOrigin(subStep.name),
             ),
           );
-          const phase1Instruction = [subInstruction.text, liveDelivery?.prompt]
-            .filter((part): part is string => part !== undefined && part.length > 0)
+          const phase1Instruction = [subInstruction.text, resolveLiveInterventionPrompt(
+            liveIntervention, liveDelivery, this.deps.engineOptions.language,
+          )]
+            .filter((part) => part.length > 0)
             .join('\n\n');
           const reportInputTracker = new Phase1ReportInputTracker(subInstruction.reportInputs);
+          const phase1ExecutionLog = getReportFiles(subStep.outputContracts).length > 0
+            ? new Phase1ExecutionLog()
+            : undefined;
           subStepInstructionByName.set(subStep.name, phase1Instruction);
           const parentIteration = state.iteration;
           const subPm = providerInfoByStep.get(subStep.name);
@@ -808,14 +819,28 @@ export class ParallelRunner {
               ),
             }
           : baseOptions;
-        const agentCallOptions: RunAgentOptions = liveDeliveryCommitter === undefined
+        const recordingAgentOptions: RunAgentOptions = phase1ExecutionLog === undefined
           ? agentOptions
           : {
               ...agentOptions,
+              onStream: (event) => {
+                phase1ExecutionLog.recordEvent(event);
+                agentOptions.onStream?.(event);
+              },
+              onDispatch: (permissionMode) => {
+                agentOptions.onDispatch?.(permissionMode);
+                phase1ExecutionLog.markDispatched();
+              },
+            };
+        const agentCallOptions: RunAgentOptions = liveDeliveryCommitter === undefined
+          ? recordingAgentOptions
+          : {
+              ...recordingAgentOptions,
               onDispatch: (permissionMode) => {
                 baseOptions.onDispatch?.(permissionMode);
                 liveDeliveryCommitter.onDispatch(permissionMode);
                 reportInputTracker.recordDelivery(liveDelivery);
+                phase1ExecutionLog?.markDispatched();
               },
             };
         const promptResolvedAttempts = new Set<number>();
@@ -836,6 +861,8 @@ export class ParallelRunner {
               workflowStack: this.deps.getCurrentWorkflowStack?.(),
               sanitizeText: this.deps.sanitizeObservabilityText,
               providerInfo: subPm,
+              onPromptResolved: (prompt) => phase1ExecutionLog?.recordInstruction(attempt.reason, prompt),
+              onAttemptError: (error) => phase1ExecutionLog?.recordFailure(error),
               execute: (attemptInstruction, sessionId, onPromptResolved) => (
                 this.executeSubStepAgent(
                   executableSubStep,
@@ -868,6 +895,7 @@ export class ParallelRunner {
             if (result.promptResolved) {
               promptResolvedAttempts.add(attempt.sequence);
             }
+            phase1ExecutionLog?.recordResult(result.response);
             return result.response;
           },
           discardSession: (sessionId) => {
@@ -992,6 +1020,8 @@ export class ParallelRunner {
                     workflowStack: this.deps.getCurrentWorkflowStack?.(),
                     sanitizeText: this.deps.sanitizeObservabilityText,
                     providerInfo: subPm,
+                    onPromptResolved: (prompt) => phase1ExecutionLog?.recordInstruction(attempt.reason, prompt),
+                    onAttemptError: (error) => phase1ExecutionLog?.recordFailure(error),
                     execute: (attemptInstruction, attemptSessionId, onPromptResolved) => (
                       this.executeSubStepAgent(
                         executableSubStep,
@@ -1013,6 +1043,7 @@ export class ParallelRunner {
                       undefined,
                     ),
                   });
+                  phase1ExecutionLog?.recordResult(observed.response);
                   return observed.response;
                 },
                 discardSession: () => undefined,
@@ -1113,6 +1144,13 @@ export class ParallelRunner {
                 lastStructuredOutput: subResponse.structuredOutput,
                 injectedReports: subInstruction.injectedReports,
                 reportInputs: reportInputTracker.snapshot(),
+                phase1ExecutionLog: phase1ExecutionLog === undefined
+                  ? undefined
+                  : await this.deps.stepExecutor.savePhase1ExecutionLog(
+                    phase1ExecutionLog,
+                    subStep.name,
+                    subIteration,
+                  ),
               }, (reportName) => {
                 writtenReportNames.push(reportName);
                 this.deps.stepExecutor.recordReportGeneration(phaseCtx.reportDir, reportName, true);
@@ -1276,7 +1314,10 @@ export class ParallelRunner {
         };
             },
           );
+          completed = result.response.status === 'done';
+          return result;
         } finally {
+          if (reportExecution !== undefined) this.deps.finishReportExecution?.(reportExecution, completed);
           if (semaphore) {
             semaphore.release();
           }

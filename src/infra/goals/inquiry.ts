@@ -22,12 +22,13 @@ export function withdrawInquiry(question: GoalQuestion, reason?: string): GoalQu
   });
 }
 
-export function answerInquiry(question: GoalQuestion, answer: string | GoalAnswerInput): GoalQuestion {
+export function answerInquiry(question: GoalQuestion, answer: string | GoalAnswerInput,
+  source: NonNullable<GoalQuestion['answer']>['source'] = 'tui'): GoalQuestion {
   if (question.status !== 'pending') throw new Error('Question is not awaiting an answer');
   if (question.recipient !== 'human') throw new Error('Question is not addressed to a human');
   return GoalQuestionSchema.parse({
     ...question, status: 'answered', answer: {
-      ...(typeof answer === 'string' ? { text: answer } : answer), source: 'tui', answeredAt: new Date().toISOString(),
+      ...(typeof answer === 'string' ? { text: answer } : answer), source, answeredAt: new Date().toISOString(),
     },
   });
 }

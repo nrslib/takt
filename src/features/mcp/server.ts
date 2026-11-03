@@ -14,6 +14,7 @@ import {
   enqueueGoalTaskInputSchema,
   mergeGoalTaskInputSchema,
   completeGoalInputSchema,
+  mergeGoalPrInputSchema,
   reopenGoalInputSchema,
   abortGoalInputSchema,
   goalDiffInputSchema,
@@ -50,7 +51,7 @@ import type { InquiryOwner } from '../../infra/goals/standalone-inquiries.js';
 import { notifyTaktGoal } from './goalNotificationOperations.js';
 import { recordTaktGoalWorkLog, listTaktGoalRecords } from './goalWorkLogOperations.js';
 import { pauseTaktGoal, resumeTaktGoal, abortTaktGoal } from './goalExecutionOperations.js';
-import { mergeTaktGoalTask, completeTaktGoal, checkTaktGoalCompletion, reopenTaktGoal } from './goalIntegrationOperations.js';
+import { mergeTaktGoalTask, mergeTaktGoalPr, completeTaktGoal, checkTaktGoalCompletion, reopenTaktGoal } from './goalIntegrationOperations.js';
 import { getTaktGoalDiff, getTaktGoalHistory, getTaktGoalRelation } from './goalReadOperations.js';
 import { assertCwdAllowedByMcpRoot, errorResult } from './operations.js';
 import { workspaceResult } from './workspaceResponse.js';
@@ -88,6 +89,7 @@ export const TAKT_MCP_MANAGER_TOOL_NAMES = [
   'takt_stop_goal_task',
   'takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion',
   'takt_reopen_goal',
+  'takt_merge_goal_pr',
   'takt_tell_run',
   'takt_get_goal_diff', 'takt_get_goal_history', 'takt_get_goal_relation',
   'takt_ask_goal_question', 'takt_list_goal_questions', 'takt_get_goal_question',
@@ -270,15 +272,25 @@ export function createTaktMcpServer(
       inputSchema: removeGoalTaskInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal task removal failed', (deps) => removeTaktGoalTask(projectInput(input, deps), deps, extra.signal), false));
     server.registerTool('takt_complete_goal', {
-      title: 'Complete a reviewed goal', description: 'Apply repository manager.main_merge permission to the reviewed goal SHA and acceptance evidence. Auto merges or saves human merge instructions; conflicts keep the goal open. Responses fit 64 KiB, with explicit truncation. Read saved completion fields with takt_get_goal path and textOffset/maxBytes.',
+      title: 'Complete a reviewed goal', description: 'Apply repository manager.main_merge permission to the reviewed goal SHA and acceptance evidence. Auto merges or pushes and creates/reuses a PR to the saved target branch when awaiting merge; provide humanChecks for the PR. Conflicts keep the goal open. Responses fit 64 KiB, with explicit truncation. Read saved completion fields with takt_get_goal path and textOffset/maxBytes.',
       inputSchema: completeGoalInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal completion failed', (deps) => completeTaktGoal(projectInput(input, deps), deps, extra.signal), true));
+    server.registerTool('takt_merge_goal_pr', {
+      title: 'Merge a goal PR',
+      description: 'Run takt merge with the saved PR number in the target repository. Requires the current conversation operation to be an active message from the director conveying an explicit human instruction. Autonomous events, patrols and direct human messages to manager are rejected. manager.main_merge controls automatic goal completion, not this explicit PR merge. Rejects goals not awaiting merge, missing or mismatched PRs, paused and aborted goals. Returns command output and failure. After success use takt_check_goal_completion; this operation does not complete the goal.',
+      inputSchema: mergeGoalPrInputSchema,
+    }, (input, extra) => operation(input.cwd, 'Goal PR merge failed', (deps, assignment) => mergeTaktGoalPr(projectInput(input, deps), {
+      ...deps,
+      managerConversation: assignment === undefined ? undefined : {
+        configDirectory: globalConfigDirectory, assignment,
+      },
+    }, extra.signal), false));
     server.registerTool('takt_reopen_goal', {
       title: 'Reopen a waiting goal', description: 'Return an unmerged awaiting-merge goal to created with a required reason saved in its work log. Preserves completion evidence. Rejects completed, created, aborted or paused goals and approved SHAs already included in the target; use takt_check_goal_completion for an included SHA. Responses fit 64 KiB, with explicit truncation. Read saved reasons with takt_get_goal path workLog.summary, recordId and textOffset/maxBytes, and completion fields with path.',
       inputSchema: reopenGoalInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal reopen failed', (deps) => reopenTaktGoal(projectInput(input, deps), deps, extra.signal), true));
     server.registerTool('takt_check_goal_completion', {
-      title: 'Check a human goal merge', description: 'Complete a waiting goal only when the saved approved SHA is included in its saved target branch. Responses fit 64 KiB, with explicit truncation. Read saved completion fields with takt_get_goal path and textOffset/maxBytes.',
+      title: 'Check a human goal merge', description: 'Complete an awaiting-merge goal when its saved PR is merged from the goal branch into the saved integration branch, even after squash merging or additional PR commits. A matching saved PR that is closed without merging prevents completion even if the content is included. A created goal retaining completion evidence and its merged PR can also complete; other created goals are rejected. Awaiting-merge goals use the existing content comparison when the matching PR is open, no PR is saved, GitHub is unavailable, or PR identity or branches do not match. Paused and aborted goals cannot complete. Use this after takt_merge_goal_pr or when patrol discovers an external human merge; no corrective integration task is needed. Responses fit 64 KiB, with explicit truncation. Read saved completion fields with takt_get_goal path and textOffset/maxBytes.',
       inputSchema: goalWriteInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal completion check failed', (deps) => checkTaktGoalCompletion(projectInput(input, deps), deps, extra.signal), true));
     server.registerTool('takt_get_goal_diff', {
@@ -339,15 +351,15 @@ export function createTaktMcpServer(
     TAKT_MCP_READ_ONLY_TOOL_NAMES[0],
     {
       title: 'List TAKT tasks',
-      description: `Read a compact summary of project tasks and their run state. Individual worktree or run failures return that task's available basic information with an error while preserving the other tasks. Invalid worktree references are not read. Queue or cwd access failures remain whole-tool errors. Logs and report contents are not loaded. Responses fit 64 KiB, with explicit truncation. Use offset/limit for continuation. Optional view workspace is manager only. ${workspaceRetrieval}`,
+      description: `Read a compact summary of project tasks and their run state. Goal tasks include goalIntegration (integrated / not_integrated / unknown) and goalIntegrationReason when unknown. Individual worktree or run failures return that task's available basic information with an error while preserving the other tasks. Invalid worktree references are not read. Queue or cwd access failures remain whole-tool errors. Logs and report contents are not loaded. Responses fit 64 KiB, with explicit truncation. Use offset/limit for continuation. Optional view workspace is manager only. ${workspaceRetrieval}`,
       inputSchema: listTasksInputSchema,
     },
-    (input) => input.view === 'workspace' ? workspaceOperation(async () => {
+    (input, extra) => input.view === 'workspace' ? workspaceOperation(async () => {
       if (options.toolSet !== 'manager') throw new Error('Workspace view is only available to managers');
       const assignment = await currentAssignment();
       if (assignment.kind !== 'workspace') throw new Error('Manager does not belong to a workspace');
       return { id: assignment.workspaceId, name: assignment.name, repositoryDirectories: assignment.repositoryDirectories };
-    }, input) : operation(input.cwd, 'Task list failed', (deps) => listTaktTasks(projectInput(input, deps), deps)),
+    }, input) : operation(input.cwd, 'Task list failed', (deps) => listTaktTasks(projectInput(input, deps), deps, extra.signal)),
   );
 
   server.registerTool(

@@ -26,12 +26,12 @@ export interface ExceededTaskRecordUpdates {
 
 type TerminalTaskUpdates = Omit<
   Partial<TaskRecord>,
-  'start_step' | 'resume_point' | typeof TASK_RESTART_POINT_KEY | 'exceeded_current_iteration' | 'exceeded_max_steps'
+  'start_step' | 'resume_point' | 'source_resume_point' | typeof TASK_RESTART_POINT_KEY | 'exceeded_current_iteration' | 'exceeded_max_steps'
 >;
 
 type ClearedRetryTaskRecord = Omit<
   TaskRecord,
-  'start_step' | 'resume_point' | typeof TASK_RESTART_POINT_KEY | 'exceeded_current_iteration' | 'exceeded_max_steps'
+  'start_step' | 'resume_point' | 'source_resume_point' | typeof TASK_RESTART_POINT_KEY | 'exceeded_current_iteration' | 'exceeded_max_steps'
 >;
 
 interface RetryTaskRecordOptions {
@@ -42,6 +42,7 @@ interface RetryTaskRecordOptions {
   taskDir?: string;
   resumeSource?: RunResumeSource;
   restartPoint?: WorkflowRestartPoint;
+  sourceResumePoint?: WorkflowResumePoint;
 }
 
 export function buildClaimedTaskRecord(task: TaskRecord): TaskRecord {
@@ -139,6 +140,7 @@ export function buildRetryTaskRecord(
     start_step: options.startStep,
     retry_note: options.retryNote,
     resume_point: options.resumePoint,
+    source_resume_point: options.sourceResumePoint,
     ...(options.restartPoint === undefined
       ? {}
       : { [TASK_RESTART_POINT_KEY]: options.restartPoint }),
@@ -173,6 +175,7 @@ function clearRetryMetadata(task: TaskRecord): ClearedRetryTaskRecord {
   const retryMetadataKeys = new Set<string>([
     'start_step',
     'resume_point',
+    'source_resume_point',
     TASK_RESTART_POINT_KEY,
     'exceeded_current_iteration',
     'exceeded_max_steps',

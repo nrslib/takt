@@ -2,10 +2,14 @@ import type { LoopMonitorConfig, LoopMonitorJudge } from '../../../core/models/i
 import type { FacetResolutionContext, WorkflowSections } from './resource-resolver.js';
 import { resolvePersona, resolveRefToContent } from './resource-resolver.js';
 import { parseWorkflowRuleCondition } from '../../../core/models/workflow-rule-condition.js';
+import type { z } from 'zod';
+import type { WorkflowReportInputRawSchema } from '../../../core/models/workflow-schemas.js';
+import { normalizeReportInputs } from './workflowReportInputNormalizer.js';
 
 function normalizeLoopMonitorJudge(
   raw: {
     persona?: string;
+    input_reports?: z.infer<typeof WorkflowReportInputRawSchema>;
     instruction?: string;
     rules: Array<{ condition: string; next: string }>;
   },
@@ -15,6 +19,7 @@ function normalizeLoopMonitorJudge(
 ): LoopMonitorJudge {
   const { personaSpec, personaPath } = resolvePersona(raw.persona, sections, workflowDir, context);
   return {
+    inputReports: normalizeReportInputs(raw.input_reports),
     persona: personaSpec,
     personaPath,
     ...(raw.persona !== undefined && raw.persona.length > 0 ? { personaRef: raw.persona } : {}),
@@ -42,6 +47,7 @@ export function normalizeLoopMonitors(
     threshold: number;
     judge: {
       persona?: string;
+      input_reports?: z.infer<typeof WorkflowReportInputRawSchema>;
       instruction?: string;
       rules: Array<{ condition: string; next: string }>;
     };

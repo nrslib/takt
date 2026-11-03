@@ -12,9 +12,9 @@ const question = (index = 1): Extract<SnapshotItem, { kind: 'inquiry' }> => ({
 const goal = (executionStatus: 'active' | 'paused' = 'active'): Extract<SnapshotItem, { kind: 'goal' }> => ({
   kind: 'goal', goal: { id: goalRecord().id, objective: 'Control goal', status: 'created', executionStatus, repositoryDirectory: cwd },
 });
-function mounted(items: SnapshotItem[]) {
+function mounted(items: Exclude<SnapshotItem, { kind: 'state' | 'remove' }>[]) {
   const client = new ManagerClientDouble();
-  client.change({ items: [...client.getSnapshot().items, ...items.filter((item) => item.kind !== 'state')] });
+  client.change({ items: [...client.getSnapshot().items, ...items] });
   return mount('en', client);
 }
 function expectCommandHint(context: ReturnType<typeof mount>, visible: boolean): void {

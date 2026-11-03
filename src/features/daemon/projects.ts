@@ -28,8 +28,8 @@ export async function listDaemonProjects(globalConfigDirectory: string): Promise
         }
         directories.add(canonical);
       } catch (error) {
-        if (!(error instanceof Error && 'code' in error && (error.code === 'ENOENT' || error.code === 'ENOTDIR'))) throw error;
-        log.warn('Workspace project is unavailable', { directory });
+        if (!(error instanceof Error && 'code' in error && (error.code === 'ENOENT' || error.code === 'ENOTDIR' || error.code === 'EACCES'))) throw error;
+        log.warn('Workspace project is unavailable', { directory, error: sanitizeSensitiveText(getErrorMessage(error)) });
       }
     }
   }

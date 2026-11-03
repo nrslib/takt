@@ -39,6 +39,7 @@ import { RuleDetectionExhaustedError } from '../core/workflow/evaluation/RuleDet
 import { buildWorkflowCallInvocationIdentity } from '../core/workflow/workflow-call-invocation-index.js';
 import { getWorkflowReference } from '../core/workflow/workflow-reference.js';
 import { buildWorkflowCallSiteIdentity } from '../core/workflow/workflow-call-site-identity.js';
+import { ResumeArtifactOccurrenceIndex } from '../core/workflow/run/resume-artifact-occurrence-index.js';
 import {
   applyDefaultMocks,
   cleanupWorkflowEngine,
@@ -625,6 +626,71 @@ steps:
     expect(state.iteration).toBe(1);
     expect(state.stepIterations.get('delegate')).toBe(1);
     expect(startedSteps).toEqual([{ step: 'review', iteration: 1 }]);
+  });
+
+  it('resumes a workflow call checkpoint reserved before the next single iteration', async () => {
+    writeWorkflow(tmpDir, 'shared/review.yaml', `name: shared/review
+subworkflow:
+  callable: true
+initial_step: review
+steps:
+  - name: review
+    persona: reviewer
+    instruction: Review
+    rules:
+      - condition: done
+        next: COMPLETE
+`);
+    const config = createParentWorkflow(tmpDir, {
+      name: 'parent', initial_step: 'prepare', max_steps: 5,
+      steps: [
+        { name: 'prepare', persona: 'planner', instruction: 'Prepare', rules: [{ condition: 'done', next: 'delegate' }] },
+        { name: 'delegate', kind: 'workflow_call', call: 'shared/review', rules: [{ condition: 'COMPLETE', next: 'COMPLETE' }] },
+      ],
+    });
+    const child = loadWorkflowOrThrow('shared/review', tmpDir);
+    const oldNamespace = expectedWorkflowCallNamespace(config, 'delegate', 1, child)[1]!;
+    const source = {
+      version: 2 as const,
+      stack: [{ workflow: config.name, workflow_ref: getWorkflowReference(config), step: 'delegate', kind: 'workflow_call' as const, occurrence: 1, call_instance: 1 }],
+      iteration: 1,
+      elapsed_ms: 0,
+      workflow_call_invocations: {
+        [buildWorkflowCallInvocationIdentity(getWorkflowReference(config), 'delegate', [])]: { call_instance: 1, report_namespace_segment: oldNamespace },
+      },
+      workflow_step_participations: {},
+    };
+    const occurrenceIndex = new ResumeArtifactOccurrenceIndex({
+      version: 1, sourceRunSlug: 'source', targetRunSlug: 'target', createdAt: '2026-01-01T00:00:00Z',
+      files: [{ path: `subworkflows/${oldNamespace}/report.md`, size: 1, sha256: 'a'.repeat(64) }],
+    }, source);
+    mockPersonaResponses({ planner: 'done', reviewer: 'done' });
+    mockRuleEvaluationSequence([{ index: 0, method: 'phase3_tag' }, { index: 0, method: 'phase3_tag' }]);
+    engine = new WorkflowEngine(config, tmpDir, 'Reserve and resume', createWorkflowCallOptions(tmpDir, {
+      sharedRuntime: { startedAtMs: Date.now(), resumeArtifactOccurrenceIndex: occurrenceIndex },
+    }));
+    const started: number[] = [];
+    engine.on('workflow_call:start', (event) => started.push(event.callInstance));
+    const first = await engine.runSingleIteration();
+    const checkpoint = engine.getResumePoint();
+    expect(first.nextStep).toBe('delegate');
+    expect(started).toEqual([2]);
+    expect(checkpoint?.stack[0]).toMatchObject({ step: 'delegate', occurrence: 2, call_instance: 2 });
+    expect(Object.values(checkpoint!.workflow_call_invocations)[0]!.report_namespace_segment).not.toBe(oldNamespace);
+
+    const resumed = new WorkflowEngine(config, tmpDir, 'Reserve and resume', createWorkflowCallOptions(tmpDir, {
+      startStep: 'delegate', resumePoint: checkpoint, initialIteration: checkpoint!.iteration,
+    }));
+    try {
+      const resumedStarts: number[] = [];
+      resumed.on('workflow_call:start', (event) => resumedStarts.push(event.callInstance));
+      const result = await resumed.runSingleIteration();
+      expect(result.isComplete).toBe(true);
+      expect(resumedStarts).toEqual([2]);
+      expect(resumed.getState().stepIterations.get('delegate')).toBe(2);
+    } finally {
+      cleanupWorkflowEngine(resumed);
+    }
   });
 
   it('runSingleIteration の child 全体で延長後の共有上限を直ちに利用する', async () => {

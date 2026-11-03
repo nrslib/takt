@@ -248,6 +248,7 @@ async function executeAndCommit(
       ...(executionRequest?.startStep === undefined ? {} : { startStep: executionRequest.startStep }),
       ...(executionRequest?.resumePoint === undefined ? {} : { resumePoint: executionRequest.resumePoint }),
       ...(executionRequest?.restartPoint === undefined ? {} : { restartPoint: executionRequest.restartPoint }),
+      ...(executionRequest?.sourceResumePoint === undefined ? {} : { sourceResumePoint: executionRequest.sourceResumePoint }),
       ...(executionRequest?.retryNote === undefined ? {} : { retryNote: executionRequest.retryNote }),
       ...(executionRequest === undefined ? {} : {
         resumeSource: {

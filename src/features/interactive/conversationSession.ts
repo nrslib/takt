@@ -1,5 +1,6 @@
 import { SlashCommand } from '../../shared/constants.js';
 import { getLabel } from '../../shared/i18n/index.js';
+import type { InteractiveSessionRecords } from './interactiveSessionRecords.js';
 import { updatePersonaSession } from '../../infra/config/index.js';
 import { isDisabledVerifyCommand, matchSlashCommand } from './commandMatcher.js';
 import {
@@ -78,6 +79,7 @@ export interface ConversationSessionStrategy {
 
 export interface ConversationSessionOptions {
   cwd: string;
+  interactiveSessionRecords?: InteractiveSessionRecords;
   formalSpec: boolean;
   /** Resolved setting propagated to this session's summary prompt. */
   formalSpecComments?: boolean;
@@ -180,7 +182,7 @@ export interface InteractiveConversationSession extends ConversationSession {
   recordRejectedDraft(task: string): void;
   recordOperationResult(notice: string): void;
   /** Continue from a previously recorded provider session (/resume). */
-  setSessionId(nextSessionId: string): void;
+  setSessionId(nextSessionId: string | undefined): void;
   /** Current provider session used by this conversation. */
   getSessionId(): string | undefined;
   /** Apply the prompt configuration resolved for the selected session. */
@@ -260,6 +262,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
     ? [{ role: 'user', content: initialUserMessage }]
     : [];
   let sessionId = options.ctx.sessionId;
+  let selectedResumePending = false;
   let formalSpec = options.formalSpec;
   let formalSpecComments = options.formalSpecComments ?? options.strategy.formalSpecComments ?? true;
   let modelCheckTimeoutSeconds = options.modelCheckTimeoutSeconds;
@@ -291,6 +294,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
    * over the current one would undo a turn the user has already seen answered.
    */
   let currentTurn = 0;
+  let unidentifiedInputs: string[] = [];
   /**
    * What the front-end gates its own command list with. Sharing it is what keeps
    * a disabled command from being re-read as a command down here.
@@ -349,9 +353,18 @@ export function createConversationSession(options: ConversationSessionOptions): 
 
   async function handleRegularMessage(
     message: string,
-    input: ConversationTurnInput,
+    input: ConversationTurnInput & { text: string },
   ): Promise<ConversationSessionResult> {
     const isLatestTurn = beginTurn(input.abortSignal);
+    let recordedSessionId = sessionId;
+    let inputRevision: number | undefined;
+    if (options.interactiveSessionRecords !== undefined) {
+      if (recordedSessionId === undefined) {
+        unidentifiedInputs = [...unidentifiedInputs, input.text].slice(-3);
+      } else {
+        inputRevision = options.interactiveSessionRecords.recordInput({ provider: ctx.providerType, sessionId: recordedSessionId, input: input.text });
+      }
+    }
     const turn = undeliveredMessages.begin(message);
     const isCurrentTurn = (): boolean => isLatestTurn() && !turn.interrupted;
     const previousHistory = history;
@@ -376,6 +389,7 @@ export function createConversationSession(options: ConversationSessionOptions): 
         shouldSendSeededContext ? initialUserMessage : undefined,
       );
       const providerPrompt = resolveProviderPrompt(prompt);
+      const selectedSessionId = selectedResumePending ? sessionId : undefined;
       // Resolve placeholders after adding the handoff transcript so images from
       // the prior session remain attached to the first call of the new session.
       // A placeholder whose file went missing is the user's problem to fix, not a
@@ -407,11 +421,29 @@ export function createConversationSession(options: ConversationSessionOptions): 
           permissionMode: options.strategy.permissionMode,
           imageAttachments,
           ...(input.onNotice ? { onNotice: input.onNotice } : {}),
+          ...(selectedSessionId === undefined ? {} : { onSessionResumeFailure: () => {
+            if (!isCurrentTurn() || !selectedResumePending || sessionId !== selectedSessionId) return;
+            options.interactiveSessionRecords?.discard({ provider: ctx.providerType, sessionId: selectedSessionId });
+            unidentifiedInputs = [...unidentifiedInputs, input.text].slice(-3);
+            input.onNotice?.(getLabel('interactive.resumeSessionFailed', ctx.lang));
+          } }),
           ...(input.confirmManagedProvider ? { confirmManagedProvider: input.confirmManagedProvider } : {}),
         },
       );
       if (isCurrentTurn()) {
         sessionId = newSessionId;
+        selectedResumePending = false;
+        if (options.interactiveSessionRecords !== undefined && sessionId !== undefined && recordedSessionId !== sessionId) {
+          recordedSessionId = sessionId;
+          if (unidentifiedInputs.length > 0) {
+            for (const pendingInput of unidentifiedInputs) {
+              inputRevision = options.interactiveSessionRecords.recordInput({ provider: ctx.providerType, sessionId, input: pendingInput });
+            }
+            unidentifiedInputs = [];
+          } else {
+            inputRevision = options.interactiveSessionRecords.recordInput({ provider: ctx.providerType, sessionId, input: input.text });
+          }
+        }
       }
 
       if (!result) {
@@ -450,6 +482,9 @@ export function createConversationSession(options: ConversationSessionOptions): 
       shouldSendInitialPromptContext = false;
       shouldSendSeededContext = false;
       history = [...history, { role: 'assistant', content: result.content }];
+      if (options.interactiveSessionRecords !== undefined && sessionId !== undefined && inputRevision !== undefined) {
+        options.interactiveSessionRecords.recordResponse({ provider: ctx.providerType, sessionId, inputRevision, response: result.content });
+      }
       return {
         kind: 'assistant_response',
         content: result.content,
@@ -791,7 +826,10 @@ export function createConversationSession(options: ConversationSessionOptions): 
       return null;
     },
 
-    setSessionId(nextSessionId: string): void {
+    setSessionId(nextSessionId: string | undefined): void {
+      currentTurn += 1;
+      unidentifiedInputs = [];
+      selectedResumePending = nextSessionId !== undefined;
       sessionId = nextSessionId;
     },
 

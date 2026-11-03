@@ -17,9 +17,9 @@ Enter Send  Shift+Enter Newline  Esc Interrupt  ^R Inquiries  ^G Goals  ^C Exit
 /make-goal to create a goal proposal
 ```
 
-The daemon owns and runs manager conversations. Once a turn is accepted, closing the TUI only disconnects that screen; the turn continues in the daemon. Reopening manager for the same repository or workspace, or opening a second TUI for that assignment, connects to the same conversation. A pending goal proposal is shown again and can be registered by selecting Approve and pressing `Enter`, but previous messages and replies are not redisplayed. TAKT does not save conversation text; history is managed by the provider's session. Pending summaries and goal records are saved separately.
+The daemon owns and runs manager conversations. Once a turn is accepted, closing the TUI only disconnects that screen; the turn continues in the daemon. Reopening manager for the same repository or workspace, or opening a second TUI for that assignment, connects to the same conversation. A pending goal proposal is shown again and can be registered by selecting Approve and pressing `Enter`, but previous messages and replies are not redisplayed. Conversation history is managed by the provider's session. TAKT saves waiting message text until execution starts. Pending summaries and goal records are saved separately.
 
-Another message submitted while the same conversation is processing is rejected as busy and will not run later. Submit it again after processing finishes. After a daemon restart, a turn that was running is treated as interrupted, and new messages can be accepted. The daemon does not exit automatically while a TUI is connected or an accepted conversation operation is running. Use `takt daemon stop` for an explicit stop.
+Human messages are accepted during patrol, event, and conversation turns. They are saved and run as normal conversation turns in saved order after the current turn. TUI and Slack acknowledge acceptance with a waiting count; the TUI also shows the current waiting count. Aborting the active conversation turn leaves waiting messages intact. Non-message operations, including summary approval/dismissal and inquiry answers, still return busy during processing. After a daemon restart, the previously running turn is interrupted and waiting messages resume without a client reconnecting. Human replies are not saved or redisplayed, and Slack reply routing is not restored after a restart. The daemon does not exit automatically while a TUI is connected or an accepted conversation operation is running. Use `takt daemon stop` for an explicit stop.
 
 After registration, the manager inside the daemon handles events, submits tasks, checks and integrates results, and selects next work. The TUI displays work records and lets you continue the conversation with a manager that receives those records. Closing the TUI also leaves an already running run active.
 
@@ -83,13 +83,76 @@ Replace `command` with your server executable. No browser MCP server is bundled 
 
 Before processing each project's events, the daemon recovers interrupted tasks as `failed` and creates completion events for goal tasks. Recovery runs even without pending tasks, so restarting `takt run` is unnecessary. The manager reads the recovered task state when handling patrol events. Recovery failures are logged and passed to the existing patrol-interval and shutdown notification checks while subsequent processing continues. Recovery requires an absent or dead owner PID, or a known mismatch between the saved and current owner start times. A live PID with unavailable saved or current owner identity is left running.
 
-The daemon periodically inspects unfinished active goals. `manager.patrol_interval` is a positive integer in seconds, defaulting to `1800` (30 minutes); project settings override global settings. The first patrol for a new goal is measured from creation, and later patrols from the previous completion. It checks long-running work, repeated steps, stalled goals and unanswered questions, then resumes, retries or notifies as needed. For running tasks, manager can request an individual stop; issues it cannot resolve are reported to a person. Failed patrols send `blocked` and are checked again after the interval. Ordinary failed events remaining in the inbox are also retried during patrol.
+The daemon periodically inspects unfinished active goals. `manager.patrol_interval` is a positive integer in seconds, defaulting to `900` (15 minutes); project settings override global settings. The first patrol for a new goal is measured from creation, and later patrols from the previous completion. It checks long-running work, repeated steps, stalled goals and unanswered questions, then resumes, retries or notifies as needed. For running tasks, manager can request an individual stop; issues it cannot resolve are reported to a person. Failed patrols send `blocked` and are checked again after the interval. Ordinary failed events remaining in the inbox are also retried during patrol.
 
 ## Workspace
 
 Ask to add `/path/to/web`, remove a repository from the assignment, or rename the workspace. Starting from any member repository opens the same workspace. Each goal proceeds in one repository.
 
 Removing an assignment does not delete the repository or its goals. Repositories with unfinished goals cannot be removed; complete or abort those goals first. Starting outside a repository lets you choose a workspace.
+
+## Director patrol
+
+### Conversation
+
+Start director in an interactive terminal:
+
+```bash
+takt director
+takt director --help
+```
+
+`takt director` opens a conversation TUI. The daemon owns and runs the conversation; closing and reopening the TUI reconnects to the same conversation. Starting from any assigned repository connects to that same daemon-wide conversation. Previous messages and replies are not redisplayed when you reopen it; conversation history is managed by the provider's session.
+
+Director is experimental. Its behavior and saved data formats may change without notice. Conversations incur provider costs, and scheduled patrols also call the provider and incur costs.
+
+### Responsibilities and human decisions
+
+Manager advances goals within its assigned repository or workspace: it submits tasks, integrates results, and requests completion. Director looks across all managers' goals and unanswered inquiries. It saves notifications for work needing human attention, including goals awaiting merge, paused goals, saved `blocked` notifications, and unanswered inquiries. It can ask or inform a manager through the manager conversation, with `director` recorded as the speaker. Repeated notifications for the same saved target and state are suppressed.
+
+`takt_tell_manager` saves the message as waiting in the manager's conversation record, even while manager is busy. Once saved, it returns an operation ID and manager without waiting for a reply. Each manager shares one execution slot for conversation turns and inbox events. After the current turn finishes, waiting director messages run once in saved order, before inbox events, with `director` as the speaker. Human TUI and Slack messages use the same durable queue and share saved order with director messages. Human turns retain their original speaker and update proposals as normal conversation turns do. The director TUI and Slack conversation also accept human messages during processing.
+
+Replies, failures, and interruptions are saved with the same operation ID and shown later in the director TUI. If saving the message fails, the tool returns a failure without accepting it. An accepted message remains saved after a lost connection, and director does not automatically resend it.
+
+After a daemon restart, messages that have not started run even without a client connection. A message that started but has no saved result is reported as interrupted to director and the human, and is not automatically rerun.
+
+Director cannot run shell commands, write files, or change settings. It does not inspect task internals such as run phases, adjudications, or logs; each manager inspects its own tasks. Merge decisions, specification decisions, and irreversible operations such as deletion remain with the human. Director does not answer inquiries on the human's behalf.
+
+Only when the human explicitly says, for example, “merge goal G,” does director ask G's manager to merge its PR using `takt merge`. Before forwarding, director uniquely identifies the repository, goal, and manager, checks that the current goal is `awaiting_merge`, and reads the saved PR number and URL. If the target is ambiguous, the state differs, the PR is missing, or reading fails, it reports the reason without forwarding. Director never performs the merge itself. The manager executes it through `takt_merge_goal_pr`, which invokes `takt merge`. Forwarding or accepting the request alone does not mean the merge succeeded; director reports success or failure from the later result with the same operation ID. At execution time, existing checks prevent merging if the goal is paused, aborted, no longer `awaiting_merge`, or has a different saved PR number.
+
+Manager listing (`takt_list_managers`) and patrol read each project separately. Unreadable projects, such as directories that are not Git repositories, are reported with reasons; the remaining managers are returned and patrol continues. One unreadable project does not fail the whole listing or patrol.
+
+### Patrol settings
+
+While the daemon is running, director periodically inspects registered repository and workspace managers. Patrols run independently of the human conversation and do not count as human merge instructions. The daemon retains its existing idle-exit behavior.
+
+Set director options in global `~/.takt/config.yaml`, not project `.takt/config.yaml`:
+
+| Setting | Meaning |
+|---------|---------|
+| `director.patrol_interval` | Patrol interval in seconds; a positive integer, default `900` (15 minutes). |
+| `director.slack.channel_id` | Slack channel for director conversations and grouped notifications. |
+| `director.slack.allowed_user_ids` | Users allowed to talk to director from Slack; required when `director.slack` is configured. An empty list accepts no users. |
+
+See the [global config field reference](./configuration.md#global-config-field-reference).
+
+### Slack connection
+
+Use the same Slack App and `TAKT_SLACK_APP_TOKEN` / `TAKT_SLACK_BOT_TOKEN` environment variables as manager. Invite the bot to the director channel, set both variables in the shell that starts `takt daemon`, and restart the daemon after changing Slack settings. Keep tokens in environment variables rather than configuration files.
+
+Messages from allowed users enter the same director conversation, and replies go to the originating thread. New notifications from one conversation turn or patrol are grouped into one channel post. Without `director.slack`, director neither posts to nor accepts messages from Slack. Follow [Slack conversations with director](./configuration.md#slack-conversations-with-director) for the App setup and connection details.
+
+## Slack conversations
+
+In a conversation thread, send `/make-goal` to create a proposal. Use **Approve registration** or **Continue conversation**; buttons on an outdated proposal no longer work.
+
+You can talk to manager from one configured Slack channel using Socket Mode, without exposing a public URL. Follow [Slack conversations with manager](./configuration.md#slack-conversations-with-manager) to create and install the App, set `TAKT_SLACK_APP_TOKEN` and `TAKT_SLACK_BOT_TOKEN` in the shell that starts the daemon, and configure `manager.slack` in the repository's `.takt/config.yaml`. Start the daemon with `takt manager` or `takt daemon`.
+
+A post outside a thread receives a reply in that post's thread. Continue there; all conversation threads share the repository's manager conversation with the TUI. Replies go only to the originating thread, and replies to TUI messages do not appear in Slack. Messages sent during processing receive an acceptance and waiting count, run in saved order, and receive results in their original thread. Only the configured channel and `allowed_user_ids` are accepted; DMs to the bot are ignored.
+
+Each inquiry (a question, approval, or operation request) is a new post outside any thread in the configured channel. Answer approval decisions (Allow or Deny and scope) and choices with buttons. Choosing an approval scope broader than this time only opens a modal; edit and confirm the proposed sentence to append it to permission Markdown. Answer free-text inquiries in the inquiry post's thread. When its inquiry binding is available, the reply is treated as an answer rather than a manager conversation message. Answers are saved with source `slack`. See the [configuration guide](./configuration.md#slack-conversations-with-manager) for pending inquiries and binding failure behavior.
+
+Completion notices and other notifications continue to use the Incoming Webhook configured by `TAKT_NOTIFY_WEBHOOK`, separately from conversation replies. Both can be enabled together.
 
 ## Answers, pause and abort
 
@@ -102,7 +165,7 @@ Open menus with the following keys, including while manager is processing.
 
 Pausing stops new submissions and integrations while running tasks continue and results are deferred. Resuming advances deferred events and tasks. Before aborting, confirm that the operation is irreversible and that records and branches remain; aborting interrupts the goal's running tasks and invalidates unstarted tasks. `Esc` closes the list without making changes. If there are no eligible targets, the TUI shows a notice instead of opening a list.
 
-Aborting is irreversible. Goal records and branches remain. Answers are saved for the run manager's next decision. Receiving answers from Slack is not implemented.
+Aborting is irreversible. Goal records and branches remain. Answers are saved for the run manager's next decision.
 
 ### Answering inquiries
 
@@ -153,4 +216,4 @@ Goal memory is saved in `.takt/goals/<UUID>/goal.json`: objective, scope exclusi
 
 ## Future plans
 
-A choice of Docker or local execution, and goals spanning repositories are planned. A director would coordinate several managers, forward questions, receive delegated-work completion notices and support adjudication. It would order work across managers using dependencies, overlapping change targets and checks of combined results. These features are not implemented.
+A choice of Docker or local execution, goals spanning repositories, delegated-work completion notices and adjudication are planned. The director does not yet order work across managers using dependencies, overlapping change targets or combined-result checks.

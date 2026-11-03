@@ -31,6 +31,7 @@ function fakePreparedMcp(): PreparedProviderMcp {
     serverConfig: { 'test-server': { type: 'stdio' } },
     identity: 'test-server:stdio',
     configRoot: '/tmp/fake-configroot',
+    env: { CURSOR_DATA_DIR: '/tmp/fake-cursor-data' },
     resolvedServers: {
       enabled: true,
       servers: { 'test-server': { type: 'stdio', command: 'srv' } },
@@ -89,6 +90,10 @@ vi.mock('../infra/kiro/client.js', () => ({
   callKiro: vi.fn(async (): Promise<AgentResponse> => fakeAgentResponse),
 }));
 
+vi.mock('../infra/devin/index.js', () => ({
+  callDevin: vi.fn(async (): Promise<AgentResponse> => fakeAgentResponse),
+}));
+
 vi.mock('../infra/mock/client.js', () => ({
   MockClient: vi.fn(),
   callMock: vi.fn(async (): Promise<AgentResponse> => fakeAgentResponse),
@@ -107,6 +112,7 @@ vi.mock('../infra/config/index.js', () => ({
   resolveCopilotCliPath: () => '/usr/bin/copilot',
   resolveKiroApiKey: () => 'test-key',
   resolveKiroCliPath: () => '/usr/bin/kiro',
+  resolveDevinCliPath: () => '/usr/bin/devin',
 }));
 
 vi.mock('../infra/opencode/types.js', () => ({
@@ -314,6 +320,19 @@ describe('Provider toXxxOptions preparedMcp wiring (MCP-ADAPTER-WIRING)', () => 
       preparedMcp,
     });
     const options = getLastCallOptions(callKiro as unknown as { mock: { calls: unknown[][] } });
+    expect(options.preparedMcp).toBe(preparedMcp);
+  });
+
+  it('Given devin provider, When ProviderCallOptions.preparedMcp is set, Then callDevin receives preparedMcp in DevinCallOptions', async () => {
+    const { DevinProvider } = await import('../infra/providers/devin.js');
+    const { callDevin } = await import('../infra/devin/index.js');
+    const provider = new DevinProvider();
+    const agent = provider.setup({ name: 'test' });
+    await agent.call('prompt', {
+      cwd: '/tmp',
+      preparedMcp,
+    });
+    const options = getLastCallOptions(callDevin as unknown as { mock: { calls: unknown[][] } });
     expect(options.preparedMcp).toBe(preparedMcp);
   });
 

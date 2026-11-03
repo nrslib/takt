@@ -22,6 +22,7 @@ import {
   OperationRecoveryError,
 } from '../operations/operation-recovery-error.js';
 import type { CompanionStepRuntime } from '../companion/step-runtime.js';
+import type { Phase1ExecutionLog } from '../phase1-execution-log.js';
 
 export interface TeamLeaderPartObservability {
   readonly enabled: boolean;
@@ -39,6 +40,7 @@ export interface TeamLeaderPartExecutionOptions {
   readonly composeOptions?: (options: RunAgentOptions) => RunAgentOptions;
   readonly deadlineSignal?: AbortSignal;
   readonly providerInfo: StepProviderInfo;
+  readonly phase1ExecutionLog?: Phase1ExecutionLog;
   readonly createCompanionRuntime?: (
     partStep: NormalAgentWorkflowStep,
     abortSignal: AbortSignal,
@@ -123,6 +125,13 @@ export async function runTeamLeaderPart(
     signal = signals.length === 1 ? signals[0]! : AbortSignal.any(signals);
     dispose = legacyDeadline?.dispose ?? (() => {});
   }
+  const executionLog = executionOptions?.phase1ExecutionLog;
+  let cancellationRecorded = false;
+  const recordCancellation = (): void => {
+    if (cancellationRecorded) return;
+    cancellationRecorded = true;
+    executionLog?.recordResult({ status: 'cancelled', content: '' }, part.id);
+  };
   const baseRunOptions = parallelLogger
     ? {
       ...baseOptions,
@@ -145,7 +154,24 @@ export async function runTeamLeaderPart(
     using activeCompanionRuntime = companionRuntime;
     activeCompanionRuntime?.beginReviewAttempt();
     const teamComposedOptions = executionOptions?.composeOptions?.(baseRunOptions) ?? baseRunOptions;
-    const options = activeCompanionRuntime?.composeOptions(teamComposedOptions) ?? teamComposedOptions;
+    const composedOptions = activeCompanionRuntime?.composeOptions(teamComposedOptions) ?? teamComposedOptions;
+    const options: RunAgentOptions = executionLog === undefined
+      ? composedOptions
+      : {
+          ...composedOptions,
+          onPromptResolved: (prompt) => {
+            executionLog.recordInstruction('team_part', prompt, part.id);
+            composedOptions.onPromptResolved?.(prompt);
+          },
+          onStream: (event) => {
+            executionLog.recordEvent(event, part.id);
+            composedOptions.onStream?.(event);
+          },
+          onDispatch: (permissionMode) => {
+            composedOptions.onDispatch?.(permissionMode);
+            executionLog.markDispatched(part.id);
+          },
+        };
     const partInstruction = buildInstruction(partStepForExecution);
     const initialResponse = await runWithPhaseSpan({
       enabled: observability.enabled,
@@ -165,11 +191,18 @@ export async function runTeamLeaderPart(
         if (isTeamLeaderPartCancellation(signal.reason)) {
           throw signal.reason;
         }
+        executionLog?.recordResult(result, part.id);
         return result;
       } catch (error) {
         if (isTeamLeaderPartCancellation(signal.reason)) {
+          recordCancellation();
           throw signal.reason;
         }
+        if (isTeamLeaderPartCancellation(error)) {
+          recordCancellation();
+          throw error;
+        }
+        executionLog?.recordFailure(error, part.id);
         throw error;
       }
     }, (result) => ({
@@ -215,9 +248,11 @@ export async function runTeamLeaderPart(
       throw error;
     }
     if (isTeamLeaderPartCancellation(error)) {
+      recordCancellation();
       throw error;
     }
     if (isTeamLeaderPartCancellation(signal.reason)) {
+      recordCancellation();
       throw signal.reason;
     }
     return {

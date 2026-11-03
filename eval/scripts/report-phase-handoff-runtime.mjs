@@ -22,9 +22,9 @@ mock.module(pathToFileURL(join(revisionRoot, 'dist/agents/runner.js')).href, {
     runAgent: async (persona, instruction, options) => {
       options.onPromptResolved?.({ systemPrompt: persona ?? '', userInstruction: instruction });
       options.onDispatch?.(options.permissionMode);
-      const isReport = options.allowedTools?.length === 0;
-      calls.push({ persona, instruction, phase: isReport ? 2 : 1, allowedTools: options.allowedTools, sessionIdPresent: options.sessionId !== undefined });
-      if (isReport) return response('# Captured report payload');
+      calls.push({ persona, instruction, phase: options.executionPhase, permissionMode: options.permissionMode,
+        allowedTools: options.allowedTools, sessionIdPresent: options.sessionId !== undefined });
+      if (options.executionPhase === 2) return response('# Captured report payload');
       if (persona === 'fixture-upstream') return response(sample.upstream);
       return response(request.workResult ?? sample.workResult ?? '@@ACTUAL_PHASE1_RESPONSE@@');
     },
@@ -97,11 +97,12 @@ if (result.status !== 'completed') throw new Error('Payload capture engine did n
 const phase1 = calls.find(call => call.phase === 1 && call.persona !== 'fixture-upstream');
 const phase2 = calls.find(call => call.phase === 2);
 if (!phase1 || !phase2) throw new Error('Missing production Phase 1/2 payload');
-if (phase2.sessionIdPresent || phase2.allowedTools.length !== 0) throw new Error('Phase 2 must be fresh and tool-free');
+if (phase2.sessionIdPresent || phase2.permissionMode !== 'readonly') throw new Error('Phase 2 must be fresh and read-only');
 const persona = step.personaPath ? loadPersonaPromptFromPath(step.personaPath, workspace).trim() : '';
 writeFileSync(resolve(resultPath), JSON.stringify({
   phase1Prompt: persona ? `${persona}\n\n${phase1.instruction}` : phase1.instruction,
   phase2Prompt: persona ? `${persona}\n\n${phase2.instruction}` : phase2.instruction,
-  phase2Options: { allowedTools: phase2.allowedTools, sessionIdPresent: phase2.sessionIdPresent },
+  phase2Options: { executionPhase: phase2.phase, permissionMode: phase2.permissionMode,
+    allowedTools: phase2.allowedTools, sessionIdPresent: phase2.sessionIdPresent },
   liveInstructions: liveIntervention.read().instructions.map(({ content, state, deliveryMode }) => ({ content, state, deliveryMode })),
 }, null, 2) + '\n');

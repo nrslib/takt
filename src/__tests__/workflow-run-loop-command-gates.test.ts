@@ -1519,6 +1519,12 @@ describe('WorkflowRunLoop step deadline', () => {
     })).toBe(MINUTE * 2);
   });
 
+  it('devin の guards.callTimeoutMs が無応答期限として解決される', () => {
+    expect(resolveWorkflowStepCallTimeoutMs('devin', {
+      devin: { guards: { callTimeoutMs: MINUTE * 2 } },
+    })).toBe(MINUTE * 2);
+  });
+
   it('fallback の試行境界で同一 occurrence の無応答期限をリセットする', async () => {
     vi.useFakeTimers();
     const step = makeStep('work', {

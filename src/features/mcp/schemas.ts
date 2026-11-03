@@ -94,7 +94,7 @@ export const reopenGoalInputSchema = goalWriteInputSchema.extend({
 });
 export type ReopenGoalInput = z.infer<typeof reopenGoalInputSchema>;
 export const getGoalInputSchema = goalWriteInputSchema.extend({
-  path: z.string().max(512).regex(/^(objective|outOfScope|acceptanceCriteria|constraints|completion|questions|workLog|notifications)(\.(\d+|body|summary|recommendation|answer|text|options|instructions|reason|changeSummary|files|path|worktrees))*$/).optional()
+  path: z.string().max(512).regex(/^(createdAt|objective|outOfScope|acceptanceCriteria|constraints|completion|pullRequest|questions|workLog|notifications)(\.(\d+|body|summary|humanChecks|number|url|recommendation|answer|text|options|instructions|reason|changeSummary|files|path|worktrees))*$/).optional()
     .describe('Saved field path, for example workLog.0.summary or completion.summary. Array indices refer to saved order.'),
   recordId: z.uuid().optional().describe('Select a saved record by ID when path selects questions, workLog or notifications.'),
   limit: goalReadLimitSchema, offset: readOffsetSchema, ...textReadShape,
@@ -147,7 +147,13 @@ export const mergeGoalTaskInputSchema = goalWriteInputSchema.extend({
 });
 export const completeGoalInputSchema = goalWriteInputSchema.extend({
   expectedSha: reviewedShaSchema, summary: taskContentSchema.describe('Satisfied acceptance criteria and their supporting evidence.'),
+  humanChecks: taskContentSchema.optional().describe('Concrete steps a person can follow to verify the changes. Required when completion needs a PR.'),
 });
+export const mergeGoalPrInputSchema = goalWriteInputSchema.extend({
+  conversationOperationId: z.uuid().describe('Current conversation operation ID supplied with this turn. Never reuse an ID from an earlier turn.'),
+  prNumber: z.number().int().safe().positive().describe('Saved goal PR number to pass to takt merge.'),
+});
+export type MergeGoalPrInput = z.infer<typeof mergeGoalPrInputSchema>;
 export const goalDiffInputSchema = goalWriteInputSchema.extend({
   taskName: goalTaskNameSchema.optional(), file: z.string().min(1).max(4096).refine((value) => !value.includes('\0')).optional(),
   limit: goalReadLimitSchema,

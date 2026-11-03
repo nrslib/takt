@@ -21,6 +21,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 import { runAgent } from '../agents/runner.js';
 import { getAllParallelSubSteps, type WorkflowConfig } from '../core/models/types.js';
 import { WorkflowEngine } from '../core/workflow/index.js';
+import { writePhaseReportFixture } from './helpers/phase-report-fixture.js';
 import { ReportPhaseGenerationError, runReportPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
 import { invalidateAllResolvedConfigCache, invalidateGlobalConfigCache } from '../infra/config/index.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowLoader.js';
@@ -90,6 +91,8 @@ describe('review-remediation return routing and report handoff', () => {
     initialStep: 'gather' | 'remediation' = 'remediation') {
     writeFileSync(join(project, '.takt', 'config.yaml'), `language: ${language}\n`);
     const config = loadFocusedWorkflow(project, language, name, initialStep);
+    let preparingReviewer = initialStep === 'remediation' && isReviewFix(name);
+    if (preparingReviewer) config.initialStep = 'reviewers';
     const prompts: Array<{ step: string; text: string }> = [];
     const writtenReports: string[] = [];
     let verificationCount = 0;
@@ -108,6 +111,7 @@ describe('review-remediation return routing and report handoff', () => {
           ? verificationCount++ === 0 ? 2 : 0
         : step.name === 'fix-verifier' && scenario === 'failed_verification_replan'
           ? 1
+        : step.name === 'reviewers' && preparingReviewer ? 2
         : step.name === 'supervise' || step.name === 'reviewers' ? 1 : 0;
       return { index, method: step.parallel === undefined ? 'phase3_tag' : 'aggregate' };
     });
@@ -131,7 +135,7 @@ describe('review-remediation return routing and report handoff', () => {
           : report.name === 'fix-plan.md' ? 'FIX_PLAN_EVIDENCE'
           : report.name === 'fix-report.md' ? 'FIX_REPORT_EVIDENCE'
           : `OTHER_REPORT_${report.name}`;
-        writeFileSync(join(context.reportDir, report.name), body);
+        writePhaseReportFixture(context, report.name, body);
         onReportWritten?.(report.name);
         writtenReports.push(report.name);
       }
@@ -150,6 +154,14 @@ describe('review-remediation return routing and report handoff', () => {
       abortReasons.push(String(reason));
       abortFailures.push({ kind, failureCategory: failure.failureCategory });
     });
+    if (preparingReviewer) {
+      const upstream = await engine.runSingleIteration();
+      expect(upstream.nextStep).toBe('remediation');
+      expect(upstream.abort).toBeUndefined();
+      preparingReviewer = false;
+      prompts.length = 0;
+      writtenReports.length = 0;
+    }
     const state = await engine.run();
     return { state, prompts, writtenReports, abortReasons, abortFailures };
   }
@@ -343,7 +355,7 @@ describe('review-remediation return routing and report handoff', () => {
       vi.mocked(runReportPhase).mockImplementation(async (step, _iteration, context, onReportWritten) => {
         if (step.name === 'review') {
           if (partialOutput) {
-            writeFileSync(join(context.reportDir, 'review.md'), 'CURRENT_PARTIAL_REVIEW');
+            writePhaseReportFixture(context, 'review.md', 'CURRENT_PARTIAL_REVIEW');
             onReportWritten?.('review.md');
           }
           throw new ReportPhaseGenerationError('report failed', 'provider_error', {
@@ -351,7 +363,7 @@ describe('review-remediation return routing and report handoff', () => {
           });
         }
         for (const report of step.outputContracts ?? []) {
-          writeFileSync(join(context.reportDir, report.name), `CURRENT_${report.name}`);
+          writePhaseReportFixture(context, report.name, `CURRENT_${report.name}`);
           onReportWritten?.(report.name);
         }
       });
@@ -417,7 +429,7 @@ describe('review-remediation return routing and report handoff', () => {
           requiresFreshPhase1: false, failureReasons: ['provider_error'],
         });
       }
-      writeFileSync(join(context.reportDir, 'review.md'), 'CURRENT_LATER_REVIEW');
+      writePhaseReportFixture(context, 'review.md', 'CURRENT_LATER_REVIEW');
       onReportWritten?.('review.md');
     });
     engine = new WorkflowEngine(config, project, 'Review', createWorkflowCallOptions(project, {
@@ -468,7 +480,7 @@ describe('review-remediation return routing and report handoff', () => {
           requiresFreshPhase1: false, failureReasons: ['provider_error'],
         });
       }
-      writeFileSync(join(context.reportDir, 'other.md'), 'CURRENT_OTHER_REPORT');
+      writePhaseReportFixture(context, 'other.md', 'CURRENT_OTHER_REPORT');
       onReportWritten?.('other.md');
     });
     engine = new WorkflowEngine(config, project, 'Review', createWorkflowCallOptions(project, {

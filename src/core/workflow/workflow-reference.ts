@@ -93,8 +93,9 @@ export function workflowEntriesMatch(
 ): boolean {
   const normalizedLeft = normalizeWorkflowResumePointEntry(left);
   const normalizedRight = normalizeWorkflowResumePointEntry(right);
-  if (normalizedLeft.call_instance !== normalizedRight.call_instance) {
-    return false;
-  }
-  return normalizedLeft.workflow_ref === normalizedRight.workflow_ref;
+  return normalizedLeft.workflow === normalizedRight.workflow
+    && normalizedLeft.step === normalizedRight.step
+    && normalizedLeft.kind === normalizedRight.kind
+    && normalizedLeft.occurrence === normalizedRight.occurrence
+    && normalizedLeft.call_instance === normalizedRight.call_instance;
 }

@@ -49,6 +49,7 @@ export type {
   CodexReasoningEffort,
   ClaudeEffort,
   CopilotEffort,
+  KiroEffort,
   ClaudeSandboxSettings,
   ClaudePermissionsOptions,
   ProviderGuardOptions,
@@ -203,6 +204,7 @@ export interface WorkflowResumePoint {
   workflow_call_invocations: Record<string, WorkflowCallInvocationRecord>;
   workflow_step_participations: Record<string, WorkflowStepParticipationRecord>;
   missing_report_generations?: Record<string, string[]>;
+  report_input_recoveries?: Record<string, WorkflowResumePointEntry[]>;
 }
 
 export interface WorkflowStepParticipationRecord {
@@ -219,6 +221,7 @@ export interface WorkflowReportInput {
   fromStep: string;
   reports: readonly string[] | 'all';
   optionalIfUnrun?: true;
+  history?: { previous: number };
 }
 
 export interface DynamicParallelSelectionSnapshot {
@@ -292,7 +295,7 @@ export interface WorkflowPromotionEntry {
 
 interface WorkflowStepBase {
   name: string;
-  inputReports?: WorkflowReportInput;
+  inputReports?: WorkflowReportInput | readonly WorkflowReportInput[];
   description?: string;
   personaDisplayName: string;
   providerRoutingPersonaKey?: string;
@@ -561,6 +564,7 @@ export interface LoopMonitorRule {
 }
 
 export interface LoopMonitorJudge {
+  inputReports?: WorkflowStep['inputReports'];
   persona?: string;
   personaPath?: string;
   personaRef?: string;

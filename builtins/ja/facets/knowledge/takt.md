@@ -34,7 +34,7 @@ CLI → WorkflowEngine → Runner（4種） → RuleEvaluator → 次の step
 | フェーズ | 目的 | ツール | 条件 |
 |---------|------|--------|------|
 | Phase 1 | メイン作業 | step の allowed_tools | 常に |
-| Phase 2 | レポート出力 | Write のみ | output_contracts 定義時 |
+| Phase 2 | レポート出力 | 読み取り専用のツール | output_contracts 定義時 |
 | Phase 3 | ステータス判定 | なし（判定のみ） | タグベースルール時 |
 
 ## ルール評価
@@ -167,7 +167,7 @@ TAKT では Windows を副次プラットフォームとして扱う。主要な
 
 一方、明示的に新しいセッションとして実行した retry/fallback が成功した場合、応答に `sessionId` がなければ古い resumed session を使い続けてはならない。新規実行の結果として sessionId が得られなかったことを保存層へ伝え、古い session を clear または隔離する。
 
-Report Phase は Phase 1 の成果物を読む Phase 2 であり、readonly かつ tool-free の実行契約を持つ。report retry/fallback でも `permissionMode: readonly`、空の tool 許可、provider 能力 override（例: turn 上限）を落としてはならない。
+Report Phase は、読み取り専用のツールで Phase 1 の実行記録や関連ファイルの必要な箇所を読み、結果をまとめる Phase 2 である。ファイル変更、テスト・ビルド実行、新しい調査や指摘・判定・計画の追加は行わず、回答本文を TAKT が保存する。report retry/fallback でも `permissionMode: readonly`、読み取り専用のツール制限、provider 能力 override（例: turn 上限）が維持される。Phase 3 はツールを使わない。
 
 
 ## 非同期処理とプロセス境界

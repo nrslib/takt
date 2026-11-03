@@ -101,6 +101,7 @@ describe('TmuxTerminalBackend', () => {
         session.name,
         '-c',
         '/tmp/worktree',
+        '/usr/bin/env', '-u', 'TAKT_SLACK_APP_TOKEN', '-u', 'TAKT_SLACK_BOT_TOKEN',
         'claude',
         '--model',
         'opus',
@@ -150,6 +151,7 @@ describe('TmuxTerminalBackend', () => {
         'TAKT_OBSERVABILITY={"enabled":true}',
         '-e',
         'OTEL_EXPORTER_OTLP_ENDPOINT=https://collector.example.test',
+        '/usr/bin/env', '-u', 'TAKT_SLACK_APP_TOKEN', '-u', 'TAKT_SLACK_BOT_TOKEN',
         'claude',
       ]);
       expect(newSessionArgs).not.toContain('TAKT_OBSERVABILITY={"enabled":false}');

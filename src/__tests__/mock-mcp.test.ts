@@ -21,6 +21,31 @@ beforeEach(() => {
 });
 afterEach(() => { resetScenario(); vi.unstubAllEnvs(); });
 describe('mock provider real MCP calls', () => {
+  it.each(['get_issue', 'add_issue', 'takt_enqueue_goal_task'])(
+    'allows an unknown tool %s through an explicit server-wide grant', async (tool) => {
+      const onCallCompleted = vi.fn();
+      const request = { server: 'backlog', tool, arguments: { id: 'issue-1' } };
+      const granted: MockCallOptions = {
+        cwd: '/project', allowedTools: ['mcp__backlog'],
+        preparedMcp: { dispose: async () => {}, resolvedServers: {
+          enabled: true, identity: 'backlog-fixture', serverNames: ['backlog'],
+          servers: { backlog: { type: 'stdio', command: 'fixture' } },
+        } },
+      };
+
+      await expect(executeMockMcpCalls([request], granted, onCallCompleted)).resolves.toBe('completed');
+
+      expect(doubles.call).toHaveBeenCalledWith({ name: tool, arguments: request.arguments }, undefined, { signal: undefined });
+      expect(onCallCompleted).toHaveBeenCalledWith({ server: 'backlog', tool, result: { content: [] } });
+    },
+  );
+
+  it.each(['mcp__manage', 'mcp__manager-other', 'mcp__manager__other_tool'])(
+    'rejects grants for a different server or tool: %s', async (grant) => {
+      await expect(executeMockMcpCalls(calls, { ...options, allowedTools: [grant] }, vi.fn())).rejects.toThrow('not allowed');
+      expect(doubles.connect).not.toHaveBeenCalled();
+    },
+  );
   it('executes configured MCP tools with full permissions and no tool allowlist', async () => {
     const onCallCompleted = vi.fn();
     await expect(executeMockMcpCalls(calls, {

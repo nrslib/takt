@@ -11,7 +11,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import type { WorkflowConfig, WorkflowStep, LoopMonitorConfig, LoopMonitorRule } from '../core/models/index.js';
 
 // --- Mock setup (must be before imports that use these modules) ---
@@ -46,6 +47,13 @@ import { runAgent } from '../agents/runner.js';
 import { runReportPhase } from '../core/workflow/phase-runner.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import { compileRuntimeProviderEnvironment } from '../infra/config/runtime-provider/environment.js';
+import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfigCore.js';
+import { writeReportFile } from '../core/workflow/report-writer.js';
+import type { WorkflowEngineOptions } from '../core/workflow/types.js';
+import { buildWorkflowResumePointEntry, getWorkflowReference } from '../core/workflow/workflow-reference.js';
+import { buildWorkflowStepParticipationIdentity } from '../core/workflow/workflow-step-participation-index.js';
+import { inheritResumeReportSnapshot } from '../core/workflow/run/resume-report-snapshot.js';
+import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import {
   makeResponse,
   makeStep,
@@ -118,6 +126,489 @@ function buildConfigWithLoopMonitor(
 
   return config;
 }
+
+describe('report current versions and execution history in complete prompts', () => {
+  let tmpDir: string;
+  let originalConfigDir: string | undefined;
+  const engines: WorkflowEngine[] = [];
+  const plan = 'fix-plan.md';
+  const report = 'fix-report.md';
+  const bodyLimit = 8000;
+  const reportsRoot = () => join(tmpDir, '.takt', 'runs', 'test-report-dir', 'reports');
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    applyDefaultMocks();
+    tmpDir = createTestTmpDir();
+    originalConfigDir = process.env.TAKT_CONFIG_DIR;
+    process.env.TAKT_CONFIG_DIR = join(tmpDir, 'global');
+    invalidateGlobalConfigCache();
+  });
+
+  afterEach(() => {
+    engines.splice(0).forEach(cleanupWorkflowEngine);
+    if (originalConfigDir === undefined) delete process.env.TAKT_CONFIG_DIR;
+    else process.env.TAKT_CONFIG_DIR = originalConfigDir;
+    invalidateGlobalConfigCache();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function source() {
+    return makeStep('remediation', {
+      persona: 'writer',
+      outputContracts: [{ name: plan, format: 'Write the plan' }, { name: report, format: 'Write the report' }],
+      rules: [makeRule('done', 'consume')],
+    });
+  }
+
+  function consumer(instruction: string, previous = 2) {
+    const inputReports = { fromStep: 'remediation', reports: [plan, report], history: { previous } };
+    return makeStep('consume', {
+      persona: 'consumer', inputReports, instruction,
+      rules: [makeRule('again', 'remediation'), makeRule('finished', 'COMPLETE')],
+    });
+  }
+
+  function config(consume: WorkflowStep): WorkflowConfig {
+    return { name: 'report-history', initialStep: 'remediation', maxSteps: 20, steps: [source(), consume] };
+  }
+
+  function start(workflow: WorkflowConfig, options: Partial<WorkflowEngineOptions> = {}): WorkflowEngine {
+    const engine = new WorkflowEngine(workflow, tmpDir, 'Compare reports', {
+      projectCwd: tmpDir, provider: 'mock', model: 'mock-model', language: 'en', ...options,
+    });
+    engines.push(engine);
+    return engine;
+  }
+
+  async function useRealReportPhase(body: (name: string, occurrence: number) => string | Promise<string>) {
+    const actual = await vi.importActual<typeof import('../core/workflow/phase-runner.js')>('../core/workflow/phase-runner.js');
+    const active = new Map<string, { names: string[]; occurrence: number; index: number }>();
+    vi.mocked(runReportPhase).mockImplementation(async (step, occurrence, context, onWritten) => {
+      const identity = String(step.persona);
+      active.set(identity, { names: step.outputContracts!.map(({ name }) => name), occurrence, index: 0 });
+      try {
+        return await actual.runReportPhase(step, occurrence, context, onWritten);
+      } finally {
+        active.delete(identity);
+      }
+    });
+    const prompts: { persona: string; prompt: string }[] = [];
+    vi.mocked(runAgent).mockImplementation(async (persona, prompt, options) => {
+      options?.onPromptResolved?.({ systemPrompt: String(persona), userInstruction: prompt });
+      const generating = active.get(String(persona));
+      if (generating) {
+        const name = generating.names[generating.index++];
+        if (name === undefined) throw new Error('Unexpected extra report attempt');
+        return makeResponse({ persona: String(persona), content: await body(name, generating.occurrence) });
+      }
+      prompts.push({ persona: String(persona), prompt });
+      return makeResponse({ persona: String(persona), content: 'done',
+        ...(String(persona) === 'supervisor' ? { structuredOutput: { content: 'done' } } : {}) });
+    });
+    return prompts;
+  }
+
+  function rounds(count: number) {
+    mockRuleEvaluationSequence(Array.from({ length: count }, (_, index) => [
+      { index: 0, method: 'phase3_tag' as const },
+      { index: index === count - 1 ? 1 : 0, method: 'phase3_tag' as const },
+    ]).flat());
+  }
+
+  function section(prompt: string, name: string): string {
+    const begin = `${name}-BEGIN\n`;
+    const end = `\n${name}-END`;
+    expect(prompt).toContain(begin);
+    expect(prompt).toContain(end);
+    return prompt.split(begin)[1]!.split(end)[0]!;
+  }
+
+  function versionRows(text: string, root = reportsRoot()) {
+    const escapedRoot = root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(`${escapedRoot}/[^\\s\x60<>"|)]+`, 'g');
+    return text.split('\n').flatMap((line) => [...line.matchAll(pattern)].map(([path]) => ({ line, path })))
+      .filter(({ path }) => existsSync(path) && statSync(path).isFile());
+  }
+
+  it.each([bodyLimit - 1, bodyLimit])('keeps the entire current body at %i characters', async (length) => {
+    const body = `${'x'.repeat(length - 4)}TAIL`;
+    const prompts = await useRealReportPhase(() => body);
+    rounds(1);
+    const engine = start(config(consumer('CURRENT-BEGIN\n{report:fix-plan.md}\nCURRENT-END')));
+    expect((await engine.run()).status).toBe('completed');
+    expect(section(prompts.find(({ persona }) => persona === 'consumer')!.prompt, 'CURRENT')).toBe(body);
+  });
+
+  it.each(['placeholder', 'automatic input'] as const)('truncates %s at the limit and pins the exact body before another publication', async (mode) => {
+    const body = `${'x'.repeat(bodyLimit)}Z`;
+    const prompts = await useRealReportPhase((name) => name === plan ? body : 'short report');
+    rounds(1);
+    expect((await start(config(consumer(mode === 'placeholder'
+      ? 'CURRENT-BEGIN\n{report:fix-plan.md}\nCURRENT-END'
+      : 'Use the supplied reports'))).run()).status).toBe('completed');
+    const prompt = prompts.find(({ persona }) => persona === 'consumer')!.prompt;
+    const current = mode === 'placeholder' ? section(prompt, 'CURRENT') : prompt;
+    expect(current).toContain(body.slice(0, bodyLimit));
+    expect(current).not.toContain(body.slice(-32));
+    expect(current).toMatch(/truncat|omitt|省略/i);
+    const pinned = versionRows(current).filter(({ path }) => path !== join(reportsRoot(), plan));
+    expect(pinned.length).toBeGreaterThan(0);
+    expect(pinned.some(({ path }) => readFileSync(path, 'utf8') === body)).toBe(true);
+    writeReportFile(reportsRoot(), plan, 'NEW-PUBLIC-BODY');
+    expect(pinned.some(({ path }) => readFileSync(path, 'utf8') === body)).toBe(true);
+  });
+
+  it('expands current and history references at their template positions in one running engine', async () => {
+    const prompts = await useRealReportPhase((name, occurrence) => `BODY-${occurrence}-${name}`);
+    rounds(4);
+    expect((await start(config(consumer('CURRENT-BEGIN\n{report:fix-plan.md}\nCURRENT-END\nHISTORY-BEGIN\n{report_history:fix-plan.md}\nHISTORY-END'))).run()).status)
+      .toBe('completed');
+    const consumers = prompts.filter(({ persona }) => persona === 'consumer');
+    expect(consumers).toHaveLength(4);
+    for (const [index, { prompt }] of consumers.entries()) {
+      expect(section(prompt, 'CURRENT')).toBe(`BODY-${index + 1}-${plan}`);
+      const history = section(prompt, 'HISTORY');
+      expect(history).not.toContain('{report_history:');
+      const rows = versionRows(history);
+      const expected = Array.from({ length: Math.min(index, 2) }, (_, offset) => index - Math.min(index, 2) + offset + 1);
+      expect(rows.map(({ path }) => readFileSync(path, 'utf8'))).toEqual(expected.map((n) => `BODY-${n}-${plan}`));
+      const orders = rows.map(({ line }) => {
+        const match = /(?:^|\s)order=(\S+)(?=\s|$)/.exec(line);
+        expect(match).not.toBeNull();
+        expect(match![1]).toMatch(/^\d+$/);
+        const order = Number(match![1]);
+        expect(Number.isFinite(order)).toBe(true);
+        return order;
+      });
+      for (let position = 1; position < orders.length; position++) {
+        expect(orders[position]).toBeGreaterThan(orders[position - 1]!);
+      }
+      for (const { line, path } of rows) {
+        expect(line).toContain('remediation');
+        expect(line).toMatch(/completed|complete|done|完了/i);
+        expect(path).not.toBe(join(reportsRoot(), plan));
+      }
+      expect(history).not.toContain('BODY-');
+    }
+  });
+
+  it('pairs plan and report rows by execution and keeps identical bodies as distinct executions', async () => {
+    const prompts = await useRealReportPhase(() => 'IDENTICAL-BODY');
+    rounds(3);
+    expect((await start(config(consumer('PLANS-BEGIN\n{report_history:fix-plan.md}\nPLANS-END\nREPORTS-BEGIN\n{report_history:fix-report.md}\nREPORTS-END'))).run()).status)
+      .toBe('completed');
+    const prompt = prompts.filter(({ persona }) => persona === 'consumer').at(-1)!.prompt;
+    const plans = versionRows(section(prompt, 'PLANS'));
+    const reports = versionRows(section(prompt, 'REPORTS'));
+    expect(plans).toHaveLength(2);
+    expect(reports).toHaveLength(2);
+    expect(new Set([...plans, ...reports].map(({ path }) => path)).size).toBe(4);
+    const metadata = (row: { line: string; path: string }, name: string) =>
+      row.line.replaceAll(row.path, '<path>').replaceAll(name, '<report>');
+    expect(plans.map((row) => metadata(row, plan))).toEqual(reports.map((row) => metadata(row, report)));
+    expect(metadata(plans[0]!, plan)).not.toBe(metadata(plans[1]!, plan));
+  });
+
+  it('keeps inserted history placeholders, fenced examples and incomplete references literal', async () => {
+    const body = '{report_history:fix-plan.md}\n```md\n{report:extra.md}\n```\n~~~md\n{report_history:extra.md}\n~~~';
+    const prompts = await useRealReportPhase(() => body);
+    rounds(2);
+    writeReportFile(reportsRoot(), 'extra.md', 'UNRELATED-EXTRA');
+    expect((await start(config(consumer('CURRENT-BEGIN\n{report:fix-plan.md}\nCURRENT-END\nHISTORY-BEGIN\n{report_history:fix-plan.md}\nHISTORY-END\nINCOMPLETE-BEGIN\n{report:fix-plan.md\nINCOMPLETE-END'))).run()).status)
+      .toBe('completed');
+    const prompt = prompts.filter(({ persona }) => persona === 'consumer').at(-1)!.prompt;
+    expect(section(prompt, 'CURRENT')).toBe(body);
+    expect(section(prompt, 'INCOMPLETE')).toBe('{report:fix-plan.md');
+    const history = section(prompt, 'HISTORY');
+    expect(versionRows(history).map(({ path }) => readFileSync(path, 'utf8'))).toEqual([body]);
+    expect(history).not.toContain('UNRELATED-EXTRA');
+  });
+
+  it('appends every requested prior execution when no history placeholder is present', async () => {
+    const prompts = await useRealReportPhase((name, n) => `BODY-${n}-${name}`);
+    rounds(5);
+    expect((await start(config(consumer('Compare the supplied current reports and prior executions', 4))).run()).status)
+      .toBe('completed');
+    const prompt = prompts.filter(({ persona }) => persona === 'consumer').at(-1)!.prompt;
+    expect(versionRows(prompt).map(({ path }) => readFileSync(path, 'utf8'))
+      .filter((body) => body.endsWith(plan) && body !== `BODY-5-${plan}`))
+      .toEqual([1, 2, 3, 4].map((n) => `BODY-${n}-${plan}`));
+  });
+
+  it('explains the available history count on the first and second executions', async () => {
+    const prompts = await useRealReportPhase((name, n) => `BODY-${n}-${name}`);
+    rounds(2);
+    expect((await start(config(consumer('HISTORY-BEGIN\n{report_history:fix-plan.md}\nHISTORY-END'))).run()).status)
+      .toBe('completed');
+    const histories = prompts.filter(({ persona }) => persona === 'consumer').map(({ prompt }) => section(prompt, 'HISTORY'));
+    expect(versionRows(histories[0]!)).toEqual([]);
+    expect(histories[0]).not.toContain('{report_history:');
+    expect(histories[0]).toMatch(/0/);
+    expect(histories[0]).toMatch(/2/);
+    expect(versionRows(histories[1]!).map(({ path }) => readFileSync(path, 'utf8'))).toEqual([`BODY-1-${plan}`]);
+    expect(histories[1]).toMatch(/1/);
+    expect(histories[1]).toMatch(/2/);
+  });
+
+  it('excludes another run and parent call with the same producer occurrence and report names', async () => {
+    let lineage = 'FOREIGN';
+    const prompts = await useRealReportPhase((name, n) => `${lineage}-${n}-${name}`);
+    const outer = { name: 'outer', initialStep: 'delegate', maxSteps: 10, steps: [
+      makeStep('delegate', { kind: 'workflow_call', call: 'report-history' }),
+    ] };
+    const workflow = config(consumer('CURRENT-BEGIN\n{report:fix-plan.md}\nCURRENT-END\nHISTORY-BEGIN\n{report_history:fix-plan.md}\nHISTORY-END'));
+    rounds(2);
+    expect((await start(workflow, { reportDirName: 'foreign-run',
+      resumeStackPrefix: [buildWorkflowResumePointEntry(outer, 'delegate', 'workflow_call', 1, undefined, 1)],
+    }).run()).status).toBe('completed');
+    const foreignPrompt = prompts.filter(({ persona }) => persona === 'consumer').at(-1)!.prompt;
+    const foreignRows = versionRows(section(foreignPrompt, 'HISTORY'), tmpDir);
+    lineage = 'OWN';
+    rounds(2);
+    expect((await start(workflow, {
+      resumeStackPrefix: [buildWorkflowResumePointEntry(outer, 'delegate', 'workflow_call', 2, undefined, 2)],
+    }).run()).status).toBe('completed');
+    const prompt = prompts.filter(({ persona }) => persona === 'consumer').at(-1)!.prompt;
+    expect(section(prompt, 'CURRENT')).toBe(`OWN-2-${plan}`);
+    const ownRows = versionRows(section(prompt, 'HISTORY'), tmpDir);
+    expect(foreignRows).toHaveLength(1);
+    expect(ownRows.map(({ path }) => readFileSync(path, 'utf8'))).toEqual([`OWN-1-${plan}`]);
+    for (const { path } of ownRows) expect(path.startsWith(reportsRoot() + '/')).toBe(true);
+    expect(ownRows[0]!.line.replaceAll(ownRows[0]!.path, '<path>'))
+      .not.toBe(foreignRows[0]!.line.replaceAll(foreignRows[0]!.path, '<path>'));
+  });
+
+  it.each(['parallel', 'nested workflow_call'] as const)('preserves history from the actual %s producer', async (mode) => {
+    let occurrence = 0;
+    const prompts = await useRealReportPhase((name) => {
+      if (name === plan) occurrence += 1;
+      return `BODY-${occurrence}-${name}`;
+    });
+    const childSource = { ...source(), name: 'write', rules: [makeRule('done', 'COMPLETE')] };
+    const leaf: WorkflowConfig = { name: 'leaf', initialStep: 'write', maxSteps: 5,
+      subworkflow: { callable: true }, steps: [childSource] };
+    const child: WorkflowConfig = { name: 'child', initialStep: 'delegate', maxSteps: 5,
+      subworkflow: { callable: true }, steps: [makeStep('delegate', { kind: 'workflow_call', call: 'leaf',
+        rules: [makeRule('COMPLETE', 'COMPLETE')] })] };
+    const workflow = config(consumer('CURRENT-BEGIN\n{report:fix-plan.md}\nCURRENT-END\nHISTORY-BEGIN\n{report_history:fix-plan.md}\nHISTORY-END'));
+    workflow.steps[0] = mode === 'parallel'
+      ? makeStep('remediation', { parallel: [childSource], rules: [makeRule('all("done")', 'consume')] })
+      : makeStep('remediation', { kind: 'workflow_call', call: 'child', rules: [makeRule('COMPLETE', 'consume')] });
+    let consumed = 0;
+    vi.mocked(mockRuleEvaluation).mockImplementation((step) => ({
+      index: step.name === 'consume' && ++consumed === 3 ? 1 : 0,
+      method: step.parallel === undefined ? 'phase3_tag' : 'aggregate',
+    }));
+    const sharedRuntime: NonNullable<WorkflowEngineOptions['sharedRuntime']> = { startedAtMs: 0 };
+    expect((await start(workflow, {
+      workflowCallResolver: ({ step }) => step.call === 'leaf' ? leaf : child, sharedRuntime,
+    }).run()).status).toBe('completed');
+    const prompt = prompts.filter(({ persona }) => persona === 'consumer').at(-1)!.prompt;
+    expect(section(prompt, 'CURRENT')).toBe(`BODY-3-${plan}`);
+    const rows = versionRows(section(prompt, 'HISTORY'));
+    expect(rows.map(({ path }) => readFileSync(path, 'utf8'))).toEqual([`BODY-1-${plan}`, `BODY-2-${plan}`]);
+    const store = sharedRuntime.reportExecutions!;
+    const parentIdentity = buildWorkflowStepParticipationIdentity(getWorkflowReference(workflow), 'remediation', []);
+    const parents = store.executions(parentIdentity);
+    for (const [index, { line }] of rows.entries()) {
+      const match = /^- execution=(\S+) order=(\d+) completion_order=(\d+) status=completed producer=(\S+) origin_execution=(\S+) origin_producer=(\S+) origin_order=(\d+) origin_completion_order=(\d+) path=/.exec(line);
+      expect(match).not.toBeNull();
+      const callOccurrence = index + 1;
+      const originIdentity = mode === 'parallel'
+        ? buildWorkflowStepParticipationIdentity(getWorkflowReference(workflow), 'write', [], 'remediation')
+        : buildWorkflowStepParticipationIdentity(getWorkflowReference(leaf), 'write', [
+            buildWorkflowResumePointEntry(workflow, 'remediation', 'workflow_call', callOccurrence, undefined, callOccurrence),
+            buildWorkflowResumePointEntry(child, 'delegate', 'workflow_call', 1, undefined, 1),
+          ]);
+      const parent = parents[index]!;
+      const origin = store.executions(originIdentity)[mode === 'parallel' ? index : 0]!;
+      expect(match![1]!.endsWith(`/${parent.id}`)).toBe(true);
+      expect(Number(match![2])).toBe(parent.sequence);
+      expect(Number(match![3])).toBe(parent.completionOrder);
+      expect(match![4]).toBe('remediation');
+      expect(match![5]!.endsWith(`/${origin.id}`)).toBe(true);
+      expect(match![5]).not.toBe(match![1]);
+      expect(match![6]).toBe('write');
+      expect(Number(match![7])).toBe(origin.sequence);
+      expect(Number(match![8])).toBe(origin.completionOrder);
+    }
+  });
+
+  it('records each parallel child producer with its own start and completion in the complete prompt', async () => {
+    let notifyAlphaStarted!: () => void;
+    const alphaStarted = new Promise<void>((resolve) => { notifyAlphaStarted = resolve; });
+    let releaseAlpha!: () => void;
+    const alphaCanFinish = new Promise<void>((resolve) => { releaseAlpha = resolve; });
+    const prompts = await useRealReportPhase(async (name) => {
+      if (name === plan) {
+        notifyAlphaStarted();
+        await alphaCanFinish;
+      }
+      return `BODY-${name}`;
+    });
+    const alpha = makeStep('alpha', { persona: 'alpha-writer',
+      outputContracts: [{ name: plan, format: 'Write the plan' }], rules: [makeRule('done', 'COMPLETE')] });
+    const beta = makeStep('beta', { persona: 'beta-writer',
+      outputContracts: [{ name: report, format: 'Write the report' }], rules: [makeRule('done', 'COMPLETE')] });
+    const workflow = config(consumer('Compare the parallel producer executions', 0));
+    workflow.steps[0] = makeStep('remediation', {
+      parallel: [alpha, beta], rules: [makeRule('all("done")', 'consume')],
+    });
+    vi.mocked(mockRuleEvaluation).mockImplementation((step) => ({
+      index: step.name === 'consume' ? 1 : 0,
+      method: step.parallel === undefined ? 'phase3_tag' : 'aggregate',
+    }));
+    const sharedRuntime: NonNullable<WorkflowEngineOptions['sharedRuntime']> = { startedAtMs: 0 };
+    const engine = start(workflow, { sharedRuntime });
+    const store = sharedRuntime.reportExecutions!;
+    const alphaIdentity = buildWorkflowStepParticipationIdentity(getWorkflowReference(workflow), 'alpha', [], 'remediation');
+    const betaIdentity = buildWorkflowStepParticipationIdentity(getWorkflowReference(workflow), 'beta', [], 'remediation');
+    const finish = store.finish.bind(store);
+    vi.spyOn(store, 'finish').mockImplementation((id, completed) => {
+      finish(id, completed);
+      if (completed && store.executions(betaIdentity).some((entry) => entry.id === id)) releaseAlpha();
+    });
+    const running = engine.run();
+    await alphaStarted;
+    expect((await running).status).toBe('completed');
+
+    const prompt = prompts.find(({ persona }) => persona === 'consumer')!.prompt;
+    const rows = new Map(prompt.split('\n').flatMap((line) => {
+      const match = /^- remediation: ([^;]+); execution=([^;]+); order=(\d+); completion_order=(\d+); producer execution=([^;]+); producer start=(\d+); producer completion=(\d+)$/.exec(line);
+      return match === null ? [] : [[match[1]!, {
+        execution: match[2]!, order: Number(match[3]), completion: Number(match[4]),
+        origin: match[5]!, start: Number(match[6]), originCompletion: Number(match[7]),
+      }]];
+    }));
+    const alphaRow = rows.get(plan)!;
+    const betaRow = rows.get(report)!;
+    expect(rows.size).toBe(2);
+    expect(alphaRow.execution).toBe(betaRow.execution);
+    expect(alphaRow.origin).not.toBe(alphaRow.execution);
+    expect(betaRow.origin).not.toBe(betaRow.execution);
+    expect(alphaRow.origin).not.toBe(betaRow.origin);
+    expect(alphaRow.order).toBeLessThan(alphaRow.start);
+    expect(alphaRow.start).toBeLessThan(betaRow.start);
+    expect(betaRow.originCompletion).toBeLessThan(alphaRow.originCompletion);
+    expect(alphaRow.start).toBeLessThan(betaRow.originCompletion);
+    expect(betaRow.start).toBeLessThan(alphaRow.originCompletion);
+    expect(alphaRow.completion).toBeGreaterThan(alphaRow.originCompletion);
+    expect(betaRow.completion).toBe(alphaRow.completion);
+
+    const alphaExecution = store.executions(alphaIdentity)
+      .find((entry) => entry.id === alphaRow.origin.split('/').at(-1));
+    const betaExecution = store.executions(betaIdentity)
+      .find((entry) => entry.id === betaRow.origin.split('/').at(-1));
+    expect(alphaExecution).toMatchObject({ producer: 'alpha', sequence: alphaRow.start, completionOrder: alphaRow.originCompletion });
+    expect(betaExecution).toMatchObject({ producer: 'beta', sequence: betaRow.start, completionOrder: betaRow.originCompletion });
+  });
+
+  it('restores pinned history and execution identities into the resumed run', async () => {
+    const prompts = await useRealReportPhase((name, n) => `BODY-${n}-${name}`);
+    const workflow = config(consumer('CURRENT-BEGIN\n{report:fix-plan.md}\nCURRENT-END\nHISTORY-BEGIN\n{report_history:fix-plan.md}\nHISTORY-END'));
+    rounds(2);
+    const original = start(workflow);
+    let resumePoint: ReturnType<WorkflowEngine['getResumePoint']>;
+    let consumers = 0;
+    original.on('step:start', (step) => {
+      if (step.name !== 'consume' || ++consumers !== 2) return;
+      resumePoint = structuredClone(original.getResumePoint());
+      inheritResumeReportSnapshot({ cwd: tmpDir, sourceRunSlug: 'test-report-dir', targetRunSlug: 'resumed-run' });
+    });
+    expect((await original.run()).status).toBe('completed');
+    const before = prompts.filter(({ persona }) => persona === 'consumer').at(-1)!.prompt;
+    expect(resumePoint).toBeDefined();
+    expect(resumePoint?.stack[0]?.step).toBe('consume');
+    mockRuleEvaluationSequence([{ index: 1, method: 'phase3_tag' }]);
+    const resumed = start(workflow, { reportDirName: 'resumed-run', resumePoint,
+      startStep: 'consume', initialIteration: resumePoint!.iteration });
+    const abortReasons: string[] = [];
+    resumed.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
+    expect((await resumed.run()).status, abortReasons.join('\n')).toBe('completed');
+    const after = prompts.filter(({ persona }) => persona === 'consumer').at(-1)!.prompt;
+    expect(section(after, 'CURRENT')).toBe(section(before, 'CURRENT'));
+    const resumedRoot = join(tmpDir, '.takt', 'runs', 'resumed-run', 'reports');
+    const previousRows = versionRows(section(before, 'HISTORY'));
+    const restoredRows = versionRows(section(after, 'HISTORY'), tmpDir);
+    expect(previousRows).toHaveLength(1);
+    expect(restoredRows).toHaveLength(1);
+    expect(restoredRows.map(({ path }) => readFileSync(path, 'utf8'))).toEqual([`BODY-1-${plan}`]);
+    for (const { path } of restoredRows) expect(path.startsWith(resumedRoot + '/')).toBe(true);
+    expect(restoredRows[0]!.line.replaceAll(restoredRows[0]!.path, '<path>'))
+      .toBe(previousRows[0]!.line.replaceAll(previousRows[0]!.path, '<path>'));
+  });
+
+  it('marks a missing historical report without filling it from an older execution', async () => {
+    const prompts = await useRealReportPhase((name, n) => `BODY-${n}-${name}`);
+    const workflow = config(consumer('PLANS-BEGIN\n{report_history:fix-plan.md}\nPLANS-END\nREPORTS-BEGIN\n{report_history:fix-report.md}\nREPORTS-END'));
+    rounds(4);
+    const engine = start(workflow);
+    let produced = 0;
+    engine.on('step:start', (step) => {
+      if (step.name !== 'remediation' || ++produced !== 4) return;
+      const previous = prompts.filter(({ persona }) => persona === 'consumer').at(-1)!.prompt;
+      const missing = versionRows(section(previous, 'REPORTS'))
+        .find(({ path }) => readFileSync(path, 'utf8') === `BODY-2-${report}`);
+      expect(missing).toBeDefined();
+      rmSync(missing!.path);
+    });
+    expect((await engine.run()).status).toBe('completed');
+    const finalPrompt = prompts.filter(({ persona }) => persona === 'consumer').at(-1)!.prompt;
+    expect(versionRows(section(finalPrompt, 'PLANS')).map(({ path }) => readFileSync(path, 'utf8')))
+      .toEqual([`BODY-2-${plan}`, `BODY-3-${plan}`]);
+    const reportHistory = section(finalPrompt, 'REPORTS');
+    expect(versionRows(reportHistory).map(({ path }) => readFileSync(path, 'utf8'))).toEqual([`BODY-3-${report}`]);
+    expect(reportHistory).toMatch(/missing|unavailable|欠落|見つかりません/i);
+  });
+
+  it('passes current bodies, pinned history and Report Directory to the triggered judge', async () => {
+    const prompts = await useRealReportPhase((name, n) => `BODY-${n}-${name}`);
+    const judge = {
+      persona: 'supervisor',
+      inputReports: { fromStep: 'remediation', reports: [plan, report], history: { previous: 2 } },
+      instruction: 'CURRENT-BEGIN\n{report:fix-plan.md}\nCURRENT-END\nHISTORY-BEGIN\n{report_history:fix-plan.md}\nHISTORY-END',
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' }) as LoopMonitorRule],
+    };
+    const workflow = config(consumer('Compare reports'));
+    workflow.loopMonitors = [{ cycle: ['remediation', 'consume'], threshold: 3, judge }];
+    mockRuleEvaluationSequence([
+      ...Array.from({ length: 6 }, () => ({ index: 0, method: 'phase3_tag' as const })),
+      { index: 0, method: 'ai_judge' },
+    ]);
+    expect((await start(workflow).run()).status).toBe('completed');
+    const prompt = prompts.find(({ persona }) => persona === 'supervisor')!.prompt;
+    expect(section(prompt, 'CURRENT')).toBe(`BODY-3-${plan}`);
+    expect(versionRows(section(prompt, 'HISTORY')).map(({ path }) => readFileSync(path, 'utf8')))
+      .toEqual([`BODY-1-${plan}`, `BODY-2-${plan}`]);
+    expect(prompt).toContain(`Report Directory: ${reportsRoot()}`);
+  });
+
+  it('keeps the judge without input declarations free of report input context', async () => {
+    const prompts = await useRealReportPhase(() => 'SOURCE-REPORT-BODY');
+    const workflow = config(consumer('Compare reports'));
+    workflow.loopMonitors = [{ cycle: ['remediation', 'consume'], threshold: 1,
+      judge: { persona: 'supervisor', instruction: 'Judge cycle {cycle_count}',
+        rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' }) as LoopMonitorRule] } }];
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' }, { index: 0, method: 'phase3_tag' }, { index: 0, method: 'ai_judge' },
+    ]);
+    expect((await start(workflow).run()).status).toBe('completed');
+    const prompt = prompts.find(({ persona }) => persona === 'supervisor')!.prompt;
+    expect(prompt).toContain('Judge cycle 1');
+    expect(prompt).not.toContain('Report Directory:');
+    expect(versionRows(prompt)).toEqual([]);
+    expect(prompt).not.toContain('SOURCE-REPORT-BODY');
+  });
+
+  it('rejects a runtime judge declaration referring to a producer outside the cycle', () => {
+    const workflow = config(consumer('Compare reports'));
+    const judge = { persona: 'supervisor', inputReports: { fromStep: 'remediation', reports: [plan] },
+      rules: [normalizeRule({ condition: 'done', next: 'COMPLETE' }) as LoopMonitorRule] };
+    workflow.loopMonitors = [{ cycle: ['consume'], threshold: 1, judge }];
+    expect(() => start(workflow)).toThrow();
+  });
+});
 
 describe('WorkflowEngine Integration: Loop Monitors', () => {
   let tmpDir: string;

@@ -14,6 +14,34 @@ vi.mock('node:child_process', async (original) => ({
 const native = await vi.importActual<typeof import('node:child_process')>('node:child_process');
 afterEach(() => { vi.clearAllMocks(); });
 
+it.each([undefined, 'saved-session'])('removes Slack credentials inherited from an existing tmux server before provider execution (resume: %s)', async (resumeSessionId) => {
+  const root = mkdtempSync(join(getGlobalConfigDir(), 'terminal-environment-'));
+  const bin = join(root, 'bin');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'tmux'), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+  const observations: unknown[] = [];
+  boundary.execFile.mockImplementation((_file: string, args: string[], _options: unknown,
+    callback: (error: Error | null, value?: { stdout: string; stderr: string }) => void) => {
+    if (args[0] !== 'new-session') { callback(null, { stdout: '', stderr: '' }); return; }
+    const launch = args.slice(6);
+    // A tmux server keeps the environment from its own startup, independently of the current client.
+    native.execFile(launch[0]!, launch.slice(1), { cwd: root, encoding: 'utf8', timeout: 5000,
+      env: { ...process.env, PATH: `${bin}:/usr/bin:/bin`, TMUX_PANE: '%fixture',
+        TAKT_SLACK_APP_TOKEN: 'xapp-test-1', TAKT_SLACK_BOT_TOKEN: 'xoxb-test-2', PROVIDER_CANARY: 'kept' },
+    }, (error, stdout, stderr) => {
+      if (error === null) observations.push(JSON.parse(stdout));
+      callback(error, { stdout, stderr });
+    });
+  });
+  const backend = new TmuxTerminalBackend();
+  try {
+    await backend.start({ cwd: root, backend: 'tmux', resumeSessionId, command: { executable: process.execPath, args: ['-e',
+      "process.stdout.write(JSON.stringify({ app: Object.hasOwn(process.env, 'TAKT_SLACK_APP_TOKEN'), bot: Object.hasOwn(process.env, 'TAKT_SLACK_BOT_TOKEN'), canary: process.env.PROVIDER_CANARY }))",
+    ] } });
+    expect(observations).toEqual([{ app: false, bot: false, canary: 'kept' }]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 it.each(([
   ['target', 'No conversation found with session ID: saved-session'],
   ['other-id', 'No conversation found with session ID: another-session'],

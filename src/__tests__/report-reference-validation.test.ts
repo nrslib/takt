@@ -225,6 +225,20 @@ describe('report reference validation', () => {
     expect(diagnostics).toEqual([]);
   });
 
+  it.each(['plan.md', 'nested/plan.md', undefined])('checks declared names against the source output contracts (%s)', (reportName) => {
+    const diagnostics = validate([
+      makeStep({ name: 'start', outputContracts: [{ name: reportName ?? 'other.md', format: 'plan' }],
+        rules: [makeRule('done', 'consume')] }),
+      makeStep({ name: 'consume', inputReports: [{ fromStep: 'start', reports: ['plan.md'] }],
+        instruction: '{report:plan.md}' }),
+    ]);
+    if (reportName === undefined) {
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]?.message).toContain('{report:plan.md}');
+      expect(diagnostics[0]?.message).toContain('no step\'s output_contracts produce that report');
+    } else expect(diagnostics).toEqual([]);
+  });
+
   it('recognizes a parallel parent declaration in its agent child', () => {
     const diagnostics = validate([
       makeStep({ name: 'start', outputContracts: [{ name: 'plan.md', format: 'plan' }], rules: [makeRule('done', 'consume')] }),

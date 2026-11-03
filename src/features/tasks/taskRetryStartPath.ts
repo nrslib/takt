@@ -7,14 +7,13 @@ import {
   type WorkflowStep,
 } from '../../core/models/index.js';
 import { WorkflowRestartNavigator } from '../../core/workflow/engine/WorkflowRestartNavigator.js';
-import { getWorkflowResumeFrameError } from '../../core/workflow/run/resume-point.js';
+import { getWorkflowResumeFrameError, resumeWorkflowMatches } from '../../core/workflow/run/resume-point.js';
 import { getWorkflowStepKind, isWorkflowCallStep } from '../../core/workflow/step-kind.js';
 import { MAX_WORKFLOW_CALL_DEPTH } from '../../core/workflow/workflow-call-depth.js';
 import { isWorkflowRestartTarget } from '../../core/workflow/workflow-restart-target.js';
 import {
   buildWorkflowRestartPointEntry,
   getWorkflowReference,
-  workflowRestartEntryMatchesWorkflow,
 } from '../../core/workflow/workflow-reference.js';
 import { resolveWorkflowCallTarget } from '../../infra/config/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
@@ -248,7 +247,7 @@ function resolveTaskRetryStackPathWithOptions(
   for (let index = 0; index < stack.length; index += 1) {
     const entry = stack[index]!;
     const reason = options.requireRestartIdentity
-      ? (workflowRestartEntryMatchesWorkflow(entry as WorkflowRestartPointEntry, workflow)
+      ? (resumeWorkflowMatches(entry, workflow)
         ? undefined
         : `Saved restart position ${formatTaskRetryPath([entry.workflow, entry.step])} has a workflow identity mismatch`)
       : getWorkflowResumeFrameError(workflow, entry as WorkflowResumePointEntry, steps);

@@ -343,6 +343,7 @@ describe('denormalizeProviderOptions', () => {
       copilot: { guards: { call_timeout_ms: 120_000 } },
       kiro: { guards: { call_timeout_ms: 120_000 } },
       cursor: { guards: { call_timeout_ms: 120_000 } },
+      devin: { guards: { call_timeout_ms: 120_000 } },
       pi: { guards: { call_timeout_ms: 120_000 } },
     };
 
@@ -355,6 +356,7 @@ describe('denormalizeProviderOptions', () => {
       copilot: { guards: { callTimeoutMs: 120_000 } },
       kiro: { guards: { callTimeoutMs: 120_000 } },
       cursor: { guards: { callTimeoutMs: 120_000 } },
+      devin: { guards: { callTimeoutMs: 120_000 } },
       pi: { guards: { callTimeoutMs: 120_000 } },
     });
     expect(denormalizeProviderOptions(normalizedProviderOptions)).toEqual(rawProviderOptions);
@@ -416,6 +418,33 @@ describe('denormalizeProviderOptions', () => {
       },
     });
     expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
+  });
+
+  it.each(['low', 'medium', 'high', 'xhigh', 'max'])('should round-trip kiro effort through the schema and normalizers: %s', (effort) => {
+    const rawProviderOptions = {
+      kiro: {
+        effort,
+      },
+    };
+
+    const parsedProviderOptions = StepProviderOptionsObjectSchema.parse(rawProviderOptions);
+    const normalizedProviderOptions = normalizeProviderOptions(parsedProviderOptions);
+    const denormalizedProviderOptions = denormalizeProviderOptions(normalizedProviderOptions);
+
+    expect(normalizedProviderOptions).toEqual({
+      kiro: {
+        effort,
+      },
+    });
+    expect(denormalizedProviderOptions).toEqual(rawProviderOptions);
+  });
+
+  it('should reject a kiro effort value that kiro-cli does not accept', () => {
+    expect(() => StepProviderOptionsObjectSchema.parse({
+      kiro: {
+        effort: 'custom',
+      },
+    })).toThrow();
   });
 
   it('should round-trip kiro agent through normalize and denormalize', () => {

@@ -382,7 +382,7 @@ describe('シナリオ3・4: requeue → re-execution passes exceeded metadata t
     expect(capturedOptions.resumeSource).toEqual({ resumeMode: 'requeue' });
   });
 
-  it('scenario 6: re-execution trims workflow_call resume_point to the root step when the child no longer resolves', async () => {
+  it('scenario 6: re-execution rejects the saved position when the child no longer resolves', async () => {
     vi.mocked(loadWorkflowByIdentifier).mockReturnValue({
       name: 'test-workflow',
       maxSteps: 30,
@@ -440,34 +440,11 @@ describe('シナリオ3・4: requeue → re-execution passes exceeded metadata t
     const [task] = runner.claimNextTasks(1);
     if (!task) throw new Error('No task claimed');
 
-    vi.mocked(executeWorkflow).mockResolvedValueOnce({ success: true });
+    const success = await executeAndCompleteTask(task, runner, testDir);
 
-    await executeAndCompleteTask(task, runner, testDir);
-
-    const capturedOptions = vi.mocked(executeWorkflow).mock.calls[0]![3] as WorkflowExecutionOptions;
-    expect(capturedOptions.startStep).toBe('delegate');
-    expect(capturedOptions.resumePoint).toEqual({
-      version: 2,
-      stack: [
-        {
-          workflow: 'test-workflow',
-          workflow_ref: 'test-workflow',
-          step: 'delegate',
-          kind: 'workflow_call',
-          occurrence: 1,
-          call_instance: 1,
-        },
-      ],
-      iteration: 30,
-      elapsed_ms: 183245,
-      workflow_call_invocations: buildWorkflowCallInvocationRecordsFixture([{
-        workflowReference: 'test-workflow',
-        step: 'delegate',
-        ownerPath: [],
-        callInstance: 1,
-        childWorkflowReference: 'takt/coding',
-      }]),
-      workflow_step_participations: {},
-    });
+    expect(success).toBe(false);
+    expect(executeWorkflow).not.toHaveBeenCalled();
+    const error = runner.listAllTaskItems().find((item) => item.name === task.name)?.failure?.error;
+    expect(error).toMatch(/cannot resolve child workflow.*delegate/);
   });
 });

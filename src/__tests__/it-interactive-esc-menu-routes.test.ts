@@ -7,6 +7,7 @@ import { buildTaskRetryStartOptions } from '../features/tasks/list/taskRetryStar
 import { getLabel } from '../shared/i18n/index.js';
 import { personaMode } from '../features/interactive/personaMode.js';
 import { confirm } from '../shared/prompt/confirm.js';
+import { recordTurn } from '../features/interactive/interactiveSessionRecords.js';
 
 let fixture: ReturnType<typeof createEscMenuFixture>;
 let terminal: EscMenuTerminal;
@@ -62,6 +63,10 @@ describe('readline conversation confirmation to menu routes', () => {
       await terminal.waitForPrompt('> ', mark);
       expect(capture.callCount).toBe(1);
 
+      if (route === 'resume') {
+        recordTurn({ cwd: fixture.cwd, provider: 'mock', sessionId: 'selected-session', input: 'Previous conversation', response: '' });
+      }
+
       mark = terminal.mark();
       await terminal.send(command + '\r');
       if (route === 'resume') {
@@ -70,9 +75,6 @@ describe('readline conversation confirmation to menu routes', () => {
         await terminal.send('\x1B[B\r');
         await terminal.waitForPrompt(getLabel('interactive.formalSpecPrompt', 'en'), mark);
       } else if (route === 'tell') {
-        await terminal.waitForPrompt(getLabel('tui.tell.selectPrompt', 'en'), mark);
-        mark = terminal.mark();
-        await terminal.send('\r');
         await terminal.waitForPrompt(tellInstruction, mark);
         await terminal.waitForPrompt('[Y/n]:', mark);
       } else {

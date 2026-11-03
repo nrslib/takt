@@ -8,6 +8,49 @@
 
 ## [Unreleased]
 
+## [0.74.0] - 2026-11-02
+
+### Added
+
+- [Devin CLI](https://devin.ai/) を `devin acp` 経由で動かす `devin` provider を追加しました (#1897)。TAKT の権限モードは Devin のセッションモード（`readonly` → `ask`、`edit` → `accept-edits`、`full` → `bypass`）と、利用者の Devin の `config.json` の写しに追記する allow/deny の規則に対応付けます。ストリーミング、セッションの再開、ターンごとの使用量、`provider_options.devin.guards.call_timeout_ms` に対応します。実行ファイルは `devin_cli_path` または `TAKT_DEVIN_CLI_PATH` で上書きできます。
+- system ステップで、ワークフローに固定したコマンドを `system_inputs` の `type: command` で実行できるようにしました (#1905)。終了コード、`timed_out`、`stdout`、`stderr`、指定した場合は解析した `json` を、`when(...)` の遷移と後続ステップの `{context:...}` で使えます。`wait` と組み合わせると、条件を満たすまでコマンドを実行し直せます。`timeout_ms` は必須で、無通信のタイムアウトは掛かりません。agent の出力をコマンドに埋め込むことはせず、直前の応答は `TAKT_PREVIOUS_RESPONSE_FILE`（と `TAKT_PREVIOUS_STRUCTURED_OUTPUT_FILE`）のファイルで渡します。既定では無効で、`workflow_system_commands.custom_scripts: true` か `TAKT_WORKFLOW_SYSTEM_COMMANDS_CUSTOM_SCRIPTS=true` で有効にします。許可のないワークフローは読み込み時に失敗します。
+- `input_reports` に生成元の配列を書けるようにしました (#1814)。要素ごとに `from_step`、`reports`、`optional_if_unrun`、`history: {previous: N}` を持ちます。`{report_history:ファイル名}` は、その生成元の完了済みの過去の実行を古い順に、版を固定したレポートのパスとともに一覧にします。過去の本文は展開しません。`{report:ファイル名}` と自動で追記される現在のレポートは最大 8,000 文字までを載せ、超えた場合は省略の表示と続きを読むための正確なパスを付けます。レポート名は宣言したすべての生成元をまたいで一意である必要があり、`takt workflow doctor` と実行時の両方で検査します。`loop_monitors[].judge.input_reports` にも、監視する cycle の中の生成元について同じ形で書けます。
+- `runtime.yaml` の `provider.defaults.assignment` で、名前付きの runtime assignment を既定として選べるようにしました。明示した `--runtime-assignment` と一致する `provider.directories` が引き続き優先され、適用される assignment は 1 つだけです。
+- runtime MCP の HTTP/SSE ヘッダで、provider が自分の環境変数から読む `${env:NAME}` 参照を書けるようにしました (#1884)。秘密の値を起動引数・一時ファイル・ログに書きません。Codex は Bearer トークンと値全体が参照のヘッダに MCP 専用実行を含めて対応し、参照した変数をツールのシェルから除外します。実測した OpenCode v1/v2 もヘッダ参照に対応します。それ以外の provider と Codex で表現できないヘッダは、警告して対象のサーバだけを外します。未定義の変数は起動前に失敗し、`${NAME}` の従来の展開は変わりません。
+- 対話アシスタント（通常モードと grill-me モード）でも、`runtime.yaml` で割り当てた MCP サーバを使えるようにしました (#1930)。たとえば会話中に Backlog MCP から課題を読めます。アシスタントだけに割り当てるには `mcp.targets.personas.assistant` を使います。TAKT 内蔵の読み取り専用の `takt` サーバも引き続き付き、利用者が `takt` という名前で定義したサーバは無視します。
+- `provider_options.kiro.effort`（`low`、`medium`、`high`、`xhigh`、`max`）を `kiro-cli chat --effort` に渡すようにしました。優先順位はほかと同じ step > persona > config で、`TAKT_PROVIDER_OPTIONS_KIRO_EFFORT` で上書きできます。
+- `takt director` で director との会話を開けるようにしました。director は daemon の中で動き、この PC で動いている manager を見回る担当です。`director.patrol_interval` 秒ごと（既定 900）に見回り、止まったゴール、長く答えのない問い合わせ、進まないゴールを、同じ内容を繰り返さずに知らせます。人の「マージして」を manager に伝え、manager はゴールの PR に対して `takt merge` を実行します。グローバル設定に `director.slack.channel_id` と `director.slack.allowed_user_ids` を書くと、知らせを Slack に投稿し、そのチャンネルからの会話も受け付けます。あわせて manager は、ゴールの完成を申請するときにゴールのブランチを push し、main 向けの PR を 1 つ作るようにしました（既存の PR があれば使い回します）。
+- Slack から manager と会話できるようにしました。Socket Mode でつなぐため、公開 URL は要りません。リポジトリの `.takt/config.yaml` に `manager.slack.channel_id` と `manager.slack.allowed_user_ids` を書き、daemon を起動するシェルに `TAKT_SLACK_APP_TOKEN` / `TAKT_SLACK_BOT_TOKEN` を設定します。どのスレッドも TUI と同じ会話につながります。問い合わせは承認と選択肢のボタン付きで投稿され、自由記述はスレッドへの返信で答えます。スレッドに `/make-goal` と書くと、「登録を承認」「会話を続ける」のボタン付きで登録案が投稿されます。Slack App のマニフェストは設定ガイドにあります。
+
+### Changed
+
+- Phase 2（レポート出力）で読むだけの道具を使えるようにし、今回の Phase 1 の実行記録を Phase 2 が自分で読むようにしました。実際の指示、応答、ツール呼び出しと結果を含む記録は、マスクした JSONL として run ディレクトリに保存し、本文を埋め込まずにパスと大きさで渡します。大きなツール出力で入力の上限を超えることはなくなりました。Phase 1 が構造化出力で判定だけを返した場合や、再試行、新しいセッション、別 provider へのフォールバックでも同じように働きます。レポートは Phase 1 で行った確認と Phase 2 で読んだ内容を分けて書き、確かめられなかったことは未確認と書きます。Claude には Read、Glob、Grep、Bash を許し、Codex は Phase 2 を `read-only` の sandbox で動かします。Phase 2 ではファイルの変更、テストやビルドの実行、新しい調査はしません。
+- `edit: false` を明示した step の Phase 1 で、Codex を `read-only` の sandbox で動かすようにしました。`permission_control: codex`、team leader のパート、parallel のサブステップ、`workflow_call` の子の step も対象です。これまでは Codex がこうした step でもファイルを編集できました。ほかの provider と、`edit` 未指定・`edit: true` の step は変わりません。ビルトインの裁定の指示は、テストやビルドを実行しようとしないようにしました。
+- `/tell` の送り先を `/retry`・`/requeue` と同じ順序で決めるようにしました (#1923)。候補が 1 件なら自動で選び、複数なら AI が会話からタスクを選び、決められないときだけ理由を添えて選択画面を出します。送信前の確認画面は必ず出します。
+- `/resume` の一覧を、このプロジェクトで現在の provider を使って TAKT の対話モードが行った会話だけにし、直近に入力した文と最後の応答で見分けられるようにしました。Claude、Codex、OpenCode、Kiro では、もう存在しないセッションを一覧から外します。
+- ビルトインの最終判定（final-gate）は、指示書に明記された要件と最終的な実装を文面どおりに照らし合わせ、逸脱があれば `summary.md` に、該当要件の引用、実際の実装、変えた根拠、関連して残る不整合を書くようにしました (#1914)。根拠のある逸脱は引き続き承認し、根拠のない逸脱はこれまでどおり要件の未充足として扱います。
+- ビルトインのレビューと修正のワークフローは、過去の修正計画とレポートを `history` で修正計画・裁定・ループ監視の judge に渡すようにしました。agent に過去のレポートを探させることはしません。
+- ビルトインの `write_tests` が、先へ進む前に既存のすべての assertion とモックの照合を求めて `plan` との往復が続く問題を直しました (#1922)。テストファーストは維持し、実装後でないと書けないテストは理由を記録して実装後に扱います。
+- ビルトインの fix が、製品の修正が終わり、承認者のいないプロジェクト外の後始末だけが残っているときに、ループの上限まで「見直しが必要」を選び続けないようにしました (#1915)。
+- manager の巡回の既定間隔を 30 分から 900 秒（15 分）にしました。巡回では、同じ修正対象がレビューと修正を 2 周しても解消しないときに最新の裁定を読み、ゴールが求めていない修正対象を外すよう、また過剰な直し方を単純な作りに替えるよう、実行中のタスクに伝えます。あわせて manager は、ゴールの計画にまだ投入していない作業がないかを確かめ、最後の確認では変更の影響を受ける既存の結合テストも選びます。ゴールのタスクがゴールのブランチに取り込み済みかは、`takt_list_tasks` が返す `goalIntegration`（`integrated`、`not_integrated`、`unknown`）で読みます。
+- Pi SDK を 1.4.0 に、DeepSeek Harness SDK を 0.2.1-rc.3 に更新しました。古い managed 環境は更新が必要な状態として表示します。明示した DeepSeek Harness の認証情報は子プロセスの環境だけに渡し、追加のプラグインは引き続きほかの保存済みの認証情報を使えます。
+
+### Fixed
+
+- builtins などのワークフロー定義が更新されたあとも、止まったタスクを `/requeue` や `/retry` で再開できるようにしました (#1925)。保存した再開位置と `workflow_call` の呼び出し記録を、内容のハッシュではなくワークフロー名と step 名で照合し、ハッシュの違いはログに記録するだけにしました。前回の実行のレポートも引き続き使えます。保存した step がなくなった場合や種類が変わった場合は、これまでどおり位置を示して失敗します。
+- PR マージタスクを requeue したとき、クローンが PR の head より進んでいる・遅れている・分岐している場合に、ワークフロー開始前に `PR head changed during retry synchronization` で失敗しないようにしました (#1911)。前回の未 push のコミットを保ち、保存した位置から続けます。
+- `merge-review-fix` と `merge-review-fix-simple` で、CI の失敗の証拠を本文として展開せず、短い概要と保存したログファイルの索引として調査・修正・レビューの step に渡すようにしました。プロンプトが provider の入力の上限（約 290 万文字）を超えて止まるマージの run がありました。
+- `/tell` や `takt_tell_run` で送った指示が、送った時点で動いていたセッションだけでなく、`workflow_call` の子の step を含む run のあとのすべての step に届くようにしました。
+- レポートの段階が失敗した step から再開したとき、前の step が作った同じ名前の有効なレポートを欠落として扱わないようにしました。
+- 大きなリポジトリや、TUI を 2 つ開いたときに、manager の TUI で `IPC request timed out` と `Daemon disconnected` が繰り返し出る問題を直しました。最初の読み込みで画面に出さない記録を送らず、読み直しでは変わった項目だけを送ります。
+- Windows で、タイムアウトや中断で止めたコマンドのプロセスツリーが終了するまで待つようにし、一時ディレクトリの削除で `EPERM` にならないようにしました。
+- DeepSeek Harness の runtime が後始末の完了を返したあとに、起動制限の `cleanup-blocked` が残らないようにしました。
+
+### Internal
+
+- GitHub が 2026-11-02 に廃止する macOS 14 の CI ランナーを macOS 15 に替えました。
+- manager の eval ケースを追加し、非同期のログ保存と Devin の並列呼び出しの影響を受けたテストを直しました。
+
 ## [0.73.0] - 2026-10-27
 
 ### Added

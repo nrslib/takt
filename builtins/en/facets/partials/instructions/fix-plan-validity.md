@@ -4,6 +4,11 @@
 
 {{include:policies/evidence-based-judgment}}
 
+**Cleanup of files outside the project without an approver:**
+- In the fix plan, exclude this cleanup from product repair completion criteria and approval-waiting work, and report the affected files and remaining state
+- Even if an existing fix plan includes this cleanup, when all product repairs and required verification are complete, do not select plan revision or inability to proceed solely because cleanup remains. Treat the repair as complete and proceed to independent verification; apply the same distinction there
+- Do not treat incomplete product repairs, required verification, or its evidence as complete under this exception. Do not falsely report that external cleanup was performed, or add a new approval procedure or wait for human confirmation
+
 **Fix plan validity:**
 - Preserve each finding's ID and source-backed problem, acceptance criteria, and remediation boundary, and recheck its evidence against current code. Treat reviewer-proposed methods as candidates that do not override requirements, specifications, schemas, or public contracts
 - Plan findings with the same cause, violated observable condition, and acceptance criteria as one repair rather than splitting them by reported location. Do not merge findings merely because names, types, or files are close, and keep problems separate when their cause or acceptance criteria differ

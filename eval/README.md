@@ -1,5 +1,108 @@
 # Prompt Quality Eval
 
+## TAKT でファセット改修を進める
+
+このリポジトリ専用の `.takt/workflows/takt-prompt-engineering.yaml` を追加した。
+manager からはタスクの `workflow: takt-prompt-engineering` で選択する。
+タスクには対象 run の場所、直したい振る舞い、対象ファセットや eval が分かればその名前を渡す。
+調査 → 汎用性と eval 設計の並列レビュー → 日英の実装 → 言語と範囲の並列レビュー →
+比較測定 → 失敗の切り分け → 最後の全件比較 → ゲートと報告の確認、の順で進む。
+
+設計の指摘は調査へ、実装の指摘と確定したプロンプトの穴は実装へ戻す。
+eval の不備は `eval/` だけを直して測定へ戻す。単発の失敗は条件を変えずに再測定し、
+同じ機序が同じ条件で2回続いてから修正を判断する。変更前でも通るケースは fixture を見直すか、
+回帰ガードと明記する。製品コードや新しい評価機構が必要なら ABORT する。
+3往復で loop monitor が進捗を判断し、全体の上限は48段階である。
+
+通常の promptfoo スイートの比較には、ビルド後に次を明示実行する。
+**このコマンドは実 provider を呼ぶ。** `--suite` と `--facet` は繰り返して指定できる。
+
+```sh
+node eval/scripts/compare-facets.mjs \
+  --base main \
+  --suite state-after-event-plan \
+  --facet builtins/ja/facets/partials/instructions/change-contract-traceability.md \
+  --output-dir .tmp/facet-comparison-01
+```
+
+`--base` は調査時に main の SHA に固定する。比較で変える全ファセットを、include される partial と
+必要な workflow の facet 参照も含めて列挙する。追加ファセットは変更前で不在にし、削除ファセットは
+変更前で復元する。入力・fixture・採点・モデル設定は両条件でそろえる。
+専用 runner や環境変数で切り替えるスイートは、そのスイートの既存の比較手順を使う。
+
+既定の `--mode both` は変更前の全スイート、その後に変更後の全スイートを実行する。
+既存 `run-evals.mjs` を使い、各スイートに `--prepare --no-cache --output` を渡す。
+変更前が不合格でも変更後を実行し、非0の終了コードと結果の欠落を manifest に残す。
+比較スクリプトの終了コード1は失敗または結果欠落を含むことを示し、原因は結果と原記録で判断する。
+`--mode red` / `--mode green` と `--filter-providers <regex>` は切り分け中に使える。
+最終比較は絞り込みなしの `both` で、全スイート・全 provider を1回の呼び出しに含める。
+スイート既定の反復数を使い、mutable な評価は各試行に新しい作業コピーを用意する。
+
+出力先は新しい `.tmp/` または `eval/.results/` 配下を指定する。既存の出力先は上書きしない。
+追跡ファイルの現在の内容（未コミット変更を含む）、未追跡の `eval/` 入力、明示した追加ファセット、
+ビルド済み `dist/` を `input-workspace/` に写し、依存パッケージだけをシンボリックリンクで共有する。
+未追跡の eval 入力は無視設定の対象外だけを含める。入力コピーの作成中は編集とビルドを止め、
+使う新しいケースを `eval/` に置く。コピー後の実行で元の作業ツリーのファイルを書き換えることはない。
+
+各 `{red,green}/{suite}/workspace/` は独立したコピーで、red だけ列挙した対象を比較元の内容にする。
+`manifest.json` は比較元 SHA、文面のハッシュ、各実行のコマンド・終了情報、workspace・結果・生記録の
+絶対パスを持つ。`facets/{red,green}/` は比較した原文、`{red,green}/{suite}/results.json` は応答全文と採点、
+`runner.log` は prepare を含む実行ログである。プロンプトは `workspace/eval/prompts/`、参照 snapshot は
+そのプロンプトに記された Source Path、生成物と報告は `workspace/eval/.work/` または fixture 配下に残る。
+スイートごとにコピーを分けるため、後続の prepare や別の比較で上書きされない。
+
+通常 CLI の `cli-review`、`cli-plan-report`、`cli-review-adjudication`、`cli-adjudicator-no-fix`、
+`phase1-execution-log`、`interactive-topic-judge`（派生の `manager-work-split` を含む）は、
+比較 runner が渡す `TAKT_EVAL_RECORD_DIR` を使って試行ごとの `raw/trial-*/` を保存する。
+直接 eval を実行する場合も、この環境変数で保存先を指定できる。
+結果 JSON の各行の `response.metadata.execution_record` から次を読める。
+
+- `identity.json`: provider、プロンプトのラベル、ケースの変数（言語を含む）、`repeatIndex`（0始まり）、eval ID。
+- `prompt.md` と `result.json`: provider が受け取った最初の入力、最終応答またはエラー。入力は作業パスの書き換え前で、後続ターンの送信入力は含まない。
+- `process-N.stdout` と `process-N.stderr`: 実行中から追記する生のイベント列と途中出力・診断。各ストリームの先頭16 MiBまで保存する。
+- `process-N.json`: コマンド、作業場所、上限時間、終了コード・シグナル、`timedOut`、`aborted`、中断理由、観測バイト数と `truncated`。N は試行内のプロセス呼び出し順。
+- `project-N.json`: リポジトリ外の実行場所 `cwd` と、試行終了後のコピー先 `snapshotDirectory` の対応。
+- `project-N/`: 試行終了後にコピーした snapshot、報告、生成ファイル。結果取得後も残る。
+
+fixture は記録の有無にかかわらずリポジトリ外の一時ディレクトリで実行する。
+終了後に `project-N/` へコピーしてから一時ディレクトリを削除するため、実行中の Git の親探索で
+元の checkout を参照せず、保存された記録は一か所で確認できる。`process-N.json` の `cwd` は
+実行時のパスであり、保存コピーの場所は `project-N.json` からたどる。
+コピー前の強制終了やコピーの失敗では、外部の作業場所が残る場合がある。
+
+共通 CLI セッションを使う Claude は保存を有効にした場合に stream-json を使い、Codex は JSONL を保存する。
+テキストだけで再生する provider では、イベントを追加せず元のテキスト出力を保存する。
+タイムアウトでも途中の生出力と終了情報は残る。上限に達したログは `truncated: true` になり、
+記録されていない範囲を根拠に原因を断定できない。他の SDK・専用 provider は、それぞれの既存の
+artifact metadata と保存方法を確認する。`TAKT_INTERACTIVE_EVAL_OUTPUT_DIR` の生成記録も `raw/` に残る。
+
+SIGINT・SIGTERM では子孫を追跡して、別グループで起動されたプロセスも停止・確認してから終了する。
+POSIX では `ps` による一覧取得が必要で、利用できない場合はモデル起動前に失敗する。
+`manifest.interrupted` は比較全体の中断理由である。強制終了では `result.json` や `process-N.json` が
+`running` のまま残ることがあるため、比較の manifest と runner.log も照合する。
+作業ツリーの差し替え・復元・ロック・手動復旧は不要である。
+
+モデルを呼ばないスクリプトの検証は次で行う。
+
+```sh
+node --test eval/scripts/compare-facets.test.mjs eval/providers/execution-record.test.mjs
+```
+
+ワークフローのファセットはプロジェクト専用の日本語だけを用意した。
+改修対象の builtin ファセットは日英の意味をそろえる。
+provider とモデルは YAML で固定せず、現在の runtime 設定の解決に従う。
+各レビューは固有の `session_key` と `session: refresh` で実装から分離する。
+一般開発用のゲートが追加される `implement` 等とは異なる専用の段階名を使う。
+最終確認だけに build・lint・eval 契約・変更した eval の node --test・diff check を置いた。
+この追加自体の検証では実 provider は呼ばない。
+
+出典の手動手順からは commit / push / PR / CodeRabbit の操作を除き、失敗原因別の戻り先と
+反復の上限を workflow に置いた。設計レビューを汎用性と eval 設計の2担当に分け、
+モデル名が異なる手順書同士の指定は固定しなかった。元の `red-green.sh` の固定された対象リストと
+一時退避を、明示リスト・事前検証・追加削除への対応・独立した実行用コピーに変えた。
+`eval-results.sh` の DB の最新行や出力先頭による確認は、実行ごとの結果 JSON と原記録の全文確認に置き換えた。
+ルート `package.json` は許可範囲外なので、スイートの追加時も既存 runner の明示実行を使う。
+
 CI回復の実モデル評価はbuild後に`npm run eval:prompts:merge-ci-recovery`で明示実行します。
 調査6事例とレビュー5事例を日英で各3回、`gpt-5.6-sol`・reasoning effort `high`・生成キャッシュなしで評価します。
 調査はフレーク、mainの同一失敗、ランナー障害と403、外部シークレット欠落と空ログを比較します。
@@ -118,12 +221,13 @@ knowledge / instruction を全文組み立て、設定行も本番と同じ形�
 `cwd` を使う。イベント入力は dist の `buildGoalTurnContext`、会話入力は
 本番の `handleUserMessage` が渡す文書本文を使う。書き込みツールの引数 schema
 も dist から読み、テキスト再生の外側の JSON（`response` / `calls`）で採点する。
-この eval は「どの作業を投入し、どの操作を選ぶか、指示書に何を書くか」を計測する。
+既存のテキスト再生ケースは「どの作業を投入し、どの操作を選ぶか、指示書に何を書くか」を計測する。
 本番のツール呼び出しの結果を受けた後の挙動や、操作名の管理（再試行・重複・
-保存済み操作との照合）は測らない。すべてのケースで操作列を JavaScript assert で
-検査する。制約に関する6ケースに加え、`parallel-cli`、`parallel-docs-migration`、
+保存済み操作との照合）の実処理は測らない。保存済みの履歴を読んだあとの判断は測る。
+すべての再生ケースで操作列を JavaScript assert で検査し、`takt_tell_run` の引数 schema も本番の manager 用 schema から読み込む。
+制約に関する6ケースに加え、`parallel-cli`、`parallel-docs-migration`、
 `shared-resource`、`shared-definition`、`human-order`、`integration-check` は
-目的・指示書（本番の `purpose` / `task` 引数）や要約の実質を
+目的・指示書（本番の `purpose` / `task` 引数）、作業の記録や要約の実質を
 llm-rubric で判定する。追加した停止判断の2ケースも、通知・質問の説明や
 修正した指示書の内容を llm-rubric で判定する。再生時は一時の `CODEX_HOME` に元の環境から `auth.json` だけを置いて Codex を起動し、
 通常の設定、指示書、skill、MCP 設定を読み込まない。`auth.json` がない場合はコピーせず起動する。
@@ -141,27 +245,137 @@ TAKT と関係のない題材として、`constraint-carryover-data` は Python 
 成果の履歴と run の報告で統合後のビルドとテストを確認できる場合に、確認作業を足さず完成するかを測る。
 `escalate-not-on-first-failure` は CSV の仕様書の指定漏れによるデータ処理の初回失敗で、
 人の対応待ちで止まらず、読む資料と実装方針を補った指示書で投入するかを測る。
-17ケースを日英で、Sol Low (`gpt-6-sol`)、Opus 5 (`claude-opus-5`)、Luna Max
-(`gpt-6-luna`) に渡す。通常の gate は Sol Low、他の2行は本番条件との比較用。
+巡回用の11ケースは、要求にない途中状態、方針で対象外の脅威、範囲外の作業、保証を
+保てる単純な代替案を裁定に指摘されたときの `takt_tell_run`、受け入れ条件にある
+不具合・既存動作の回帰・テスト不足・形式仕様・再試行時の重複防止を指摘されたときに
+対象を外さないこと、条件が矛盾して人の判断が要るときの質問、裁定が変わらない同一 run
+への指示の繰り返し防止を測る。指示の内容と理由、代替案の適切さは該当ケースの
+llm-rubric で評価し、`takt_tell_run` の有無と質問操作は JavaScript assert で判定する。
+追加した10ケースは次を測る。
+
+- `verification-repeated` / `verification-once` / `verification-mixed` / `verification-told`:
+  裁定が変わらない実行中のタスクで、別々に終わった確認が同じ項目を2回続けて未完了と
+  した場合の介入。対象と基準を保ち、読む量を分けて必要な照合を終えさせる指示と理由を
+  採点する。1回だけ、実装の不足との混在、同じ項目への送信済みの指示を対照にする。
+  報告本文を読み取り結果として渡すため、報告を読みに行く行動や巡回の時機は測らない。
+- `plan-missing` / `plan-dependent` / `plan-cancelled` / `plan-integrated` / `plan-queued`:
+  取り込みが保存された終了イベントから、objective の5項目の計画と作業の記録を
+  照らす判断。総括には「全作業の取り込みが済んだ」と書かれているが、個別の記録と
+  今のタスクはケースごとに異なる。未投入の文書作業、前提が実行中、理由を記録して
+  取りやめ済み、全取り込み済み、投入済みで待機中を区別する。
+- `final-impact-tests`: 最後の確認に進む終了イベント。変更差分と各ファイルの本文を
+  `Read` の結果で渡す。直接の読み込み、共通処理、dist の lifecycle / CLI / 子プロセスや
+  fixture を通る利用経路、影響しない既存 IT を混ぜ、作業記録に残した対象と理由を採点する。
+  確認計画の評価であり、コマンドの実行や成功までは測らない。
+
+`integration-check`、`plan-cancelled`、`plan-integrated` は、余計なタスクや取りやめた作業の
+投入、確認前の完成申請、確認結果の捏造がないことを採点する。最後の確認計画を作業記録に
+書くことは必須にせず、書いていても計画の内容は採点しない。`final-impact-tests` は対象の
+テストと短い選択理由の記録を求めるが、ビルドや個別テストの実行計画の細部は求めない。
+
+追加した3ケースは次を測る。
+
+- `stopped-background-check`: 前ターンの背景起動記録、現在のプロセス不在、結果行のない出力から、
+  待ち続けず未確認として終えるか、現ターンで前景再実行して終了まで待つ判断を評価する。
+- `integrated-task-verification`: `goalIntegration: integrated` と成果・ゴール先端の SHA から、
+  確認用コミットや不要な承認問い合わせを作らず、ゴール先端の一時作業場所で確認する判断を評価する。
+- `verification-before-integration`: 未取り込みの成果も確認用コミットを作らず確認する対照ケース。
+  正規の取り込みの道具を使う選択は許容し、確認用の合成コミットと区別する。
+
+これらは具体的な確認方法・対象または未確認とする理由の作業記録を必要とする。
+操作・引数・記録の有無は JavaScript assert、待機方法や確認対象の意味は llm-rubric で判定する。
+実際の Bash の経過時間、同じ manager での次ターン受付、コミットや承認問い合わせの生成は測らない。
+
+43ケース・日英86入力のうち、既存の41ケース・82入力を、Sol Low (`gpt-6-sol`)、Opus 5 (`claude-opus-5`)、
+Terra Medium (`gpt-6.1-terra`)、Luna Max (`gpt-6-luna`) に渡す。比較する provider は
+`--filter-providers` で選べる。
 両CLI認証が必要で費用が高いため、既定実行から除外する。
 明示実行は `npm run eval:prompts:manager-work-split`（3反復、生成キャッシュ無効）。
 生の生成結果の保存は共通CLI provider の `TAKT_INTERACTIVE_EVAL_OUTPUT_DIR` を使える。
 
+実操作を観測する追加2ケース（stopped-background-execution、integrated-task-execution）は、
+専用の claude-sdk-opus-5 provider だけで実行する。既存の再生ケースには従来の4 provider だけを対応させる。
+試行ごとの worker が本番の manager plan / turn executor と権限判定を使い、ローカル MCP を接続する。
+使い捨て Git リポジトリ、隔離した TAKT 設定、背景プロセスとテストを用意し、実 GitHub や外部通知は使わない。
+管理対象 Claude SDK の既存資産は参照する。利用者の設定・許可記録を変更しない。
+試行ごとに `TMPDIR` も分離し、一時ファイルと worktree をその試行内に置く制約を渡す。
+終了時には使い捨てリポジトリの Git 登録から所有する worktree を回収し、失敗時も後片付けの結果を保存する。
+権限判定用モデルの effort は `low` に固定し、本番の判定処理と時間上限は維持する。
+
+停止ケースは同じ実行器で引き継ぎ→背景処理の停止・回収→確認→後続入力への応答を観測する。
+停止済みという調査結果は先に渡さない。未確認での終了と、実際に完了した前景再実行の両方を認める。
+取り込みケースは一時作業場所のテスト開始・終了時の HEAD と結果、コミットオブジェクト・既存参照・
+利用者側 HEAD・問い合わせの前後状態を確認する。作業記録の意味は別途 rubric で採点する。
+ターンの評価上限は600秒（10分）で、許可判定を含めてテスト・片付け・作業記録・報告まで行う時間を確保する。時間切れは失敗として保存する。本番の実行時間制限は変更しない。
+
+後述の比較用指示書の作成後、実操作ケースも指示書の参照先だけを切り替えて実行する。
+各3反復の成果物は eval/.results/manager-execution/ に保存する。
+trial.json、events.jsonl、checks.jsonl、instruction.md、system-prompt.txt、saved-goal.json、worker-exit.json を照合する。
+テストは試行内の一時領域へ開始・終了記録を書き、worker が後片付けの前に checks.jsonl へ保存する。失敗・中断時も取得済みの記録を保存する。
+worker の標準エラーは非公開の `worker-stderr.log` に保存し、起動・通信の失敗調査に使う。
+強制終了・起動失敗・認証失敗を正常なターン終了と扱わず、変更前合格も改善の証拠にしない。
+旧方式の30件の評価結果は保持する。
+
 モデルを呼ばない検証は build 済みの dist を用いて行う。
 
 ```bash
+node --test eval/providers/manager-work-split-execution.test.mjs
+node --test eval/asserts/manager-work-split-execution.test.mjs
+node --test eval/manager-work-split-config.test.mjs
 node --test eval/asserts/manager-work-split.test.mjs
 node --test eval/manager-work-split-prompt.test.mjs
 node --test eval/providers/manager-work-split.test.mjs
+node --test eval/manager-work-split-offline.test.mjs
 node --test eval/suite-registry.test.mjs
 ```
 
-RED は別の隔離コピーで日英の policy / knowledge / instruction を main の内容に
-差し替え、`TAKT_EVAL_MANAGER_OMIT_CONCURRENCY=1` で main の設定行を再現する。
-GREEN は改修後のファセットと Concurrency limit 行を使う。ケース・外側の再生指示・
-採点条件・モデル設定・反復数は両方で固定する。RED でも合格するケースは回帰ガード
-として扱い、改善の根拠に数えない。実モデルでの結果は未測定であり、差が出るとは
-断定しない。モデルの失敗と provider / grader の失敗は区別し、生成結果を確認する。
+`manager-work-split-offline.test.mjs` は promptfoo の CLI から実際にプロンプトを組み立て、
+RED は作業ツリーの指示書に目印の1行を加えた写し、GREEN は現行指示書そのままで、
+それぞれ全86入力をモデルを呼ばない provider に渡す。再生ケースでは組み立てたプロンプトの目印の有無で
+`TAKT_EVAL_MANAGER_INSTRUCTION_ROOT` による差し替えを確認し、Git や比較元 ref には依存しない。
+この確認では生成 provider と意味の採点をオフライン用に置き換え、組み立てだけを検証する。
+通常の eval の操作・rubric の合否を代用するものではない。
+
+今回の RED / GREEN は、`TAKT_EVAL_MANAGER_INSTRUCTION_ROOT` に置く日英の指示書だけを
+切り替える。指定先は絶対パスで、`ja/manager.md` と `en/manager.md` を置く。
+persona / policy / knowledge、入力、schema、外側の再生指示、rubric、provider、反復数は固定する。
+変数を省いた GREEN は作業ツリーの指示書を使う。過去の concurrency 行を省く切替は使わない。
+
+実モデルでの比較では、比較元の ref またはコミット SHA を人が選び、
+`TAKT_EVAL_RED_REF` に指定してから以下を実行する。マージ後の `main` には変更後の指示書が
+含まれるため、変更前の PR の基点 SHA などを指定する。比較元を取得できない場合は停止する。
+
+```bash
+: "${TAKT_EVAL_RED_REF:?比較元の ref または変更前の基点 SHA を指定してください}"
+manager_eval_dir="$(mktemp -d)"
+mkdir -p "$manager_eval_dir/red/ja" "$manager_eval_dir/red/en" \
+  "$manager_eval_dir/green/ja" "$manager_eval_dir/green/en"
+for lang in ja en; do
+  git show "${TAKT_EVAL_RED_REF}:builtins/$lang/facets/instructions/manager.md" > "$manager_eval_dir/red/$lang/manager.md" || exit 1
+  cp "builtins/$lang/facets/instructions/manager.md" "$manager_eval_dir/green/$lang/manager.md"
+done
+TAKT_EVAL_MANAGER_INSTRUCTION_ROOT="$manager_eval_dir/red" \
+  npm run eval:prompts:manager-work-split -- --filter-providers 'codex-(terra-medium|luna-max)'
+TAKT_EVAL_MANAGER_INSTRUCTION_ROOT="$manager_eval_dir/green" \
+  npm run eval:prompts:manager-work-split -- --filter-providers 'codex-(terra-medium|luna-max)'
+```
+
+実操作の追加2ケースは、上で作成した指示書を使って実行する。
+
+```bash
+TAKT_EVAL_MANAGER_INSTRUCTION_ROOT="$manager_eval_dir/red" \
+  npm run eval:prompts:manager-work-split -- \
+  --filter-pattern 'stopped-background-execution|integrated-task-execution'
+TAKT_EVAL_MANAGER_INSTRUCTION_ROOT="$manager_eval_dir/green" \
+  npm run eval:prompts:manager-work-split -- \
+  --filter-pattern 'stopped-background-execution|integrated-task-execution'
+```
+
+両方とも3反復、生成キャッシュ無効で実行する。Sol / Opus も測る場合は両方のコマンドから
+同じように filter を外す。実行後、一時ディレクトリには比較に使った指示書が残る。
+RED でも合格するケースは回帰ガードとして扱い、改善の根拠に数えない。
+実モデルでの結果は未測定であり、差が出るとは断定しない。モデルの失敗と provider / grader の
+失敗は区別し、生成結果を確認する。
 
 The `rescan` suite additionally runs local/open models through the opencode
 CLI (`eval/providers/opencode-review.sh`) to track how far facet design can
@@ -490,7 +704,7 @@ npm run eval:prompts:phase-awareness:smoke -- --red-dist /path/to/main/dist
 
 | Suite | Workflow / step | Fixture | Measures |
 |-------|-----------------|---------|----------|
-| `manager-work-split` | manager conversation / event turn | manager-work-split（17ケース×日英） | 同時投入と依存・共有資源・人の順序の区別、結合後の確認と不要な確認・確認済みの区別、制約の引き継ぎ・1回の担当・要約での保持・制約を作らないこと、人の対応が必要な失敗での停止と自力で直せる初回失敗の継続（Python データ処理と Web アプリを含む）。操作選択と引数のみを測定 |
+| `manager-work-split` | manager conversation / event turn | manager-work-split（43ケース×日英） | 同時投入と依存・共有資源・人の順序の区別、結合後の確認と不要な確認・確認済みの区別、制約の引き継ぎ・1回の担当・要約での保持・制約を作らないこと、人の対応が必要な失敗での停止と自力で直せる初回失敗の継続、巡回時に裁定対象と元の要求・方針・範囲を照合する判断（指示・対象外・単純化・継続・質問・変更なし）。操作選択と引数、確認の指示・計画の実質を測定。追加2ケースはSDK実行で終了・Git・問い合わせも観測 |
 | `phase-awareness` | review-adjudication / coding-review / implement の Phase 1 → 2 → 1、conductor の structured / tag / ai_judge | phase-awareness（1〜9・5b・6b・8b、会話・判定方式の別で14行） | 本番 dist を切り替える独立セッション。生イベントのツール出力・fixture前後差分・実行マーカー・StructuredOutput の別集計を検査。`npm run eval:prompts:phase-awareness` は Luna max の1・2を red/green 各10回、他は3回（5bはgreenのみ）。改善は1・2それぞれ green 10/10 かつ red ≤5/10。Sol low／Opus 5は参考。build後の `npm run eval:prompts:phase-awareness:smoke` はSol lowで各 red/green 1回のみ（5bも両方を確認）。`--red-dist <mainのdistの絶対パス>`（必須）・`--green-dist`（既定このdist）・`--cases 2,4,5,8,9`（対象を限定）を指定可能。ケース8はfixtureのテストファイル読み込み時とtest scriptのランナー起動時に印ファイルを書き、試行後に印があれば fail とする。ファイル変更はfixture前後差分で判定し、変更やテストの試行の文字列分類は行わない。ケース9は試行ごとに乱数で作る一意の文字列をdocs/内だけに置き、全ターンのモデル応答・ツール出力・試行で作成または変更したファイルのいずれかへの露出で fail とする。docs/を読んでも文字列を応答・ツール出力・生成ファイルに出さない場合は見逃すという限界がある。ケース8・9とも対象ソースを確認した証拠はツール出力の内容で検査し、コマンドやツール引数の文字列は分類しない。ケース1・2はturn2後に乱数で作った一意の文字列（ケース1は新レビューレポート内の各ID、ケース2は変更コードのコメント）が、turn3の生イベントのツール出力（Claudeのネイティブツール結果を含む）に現れたことを読み取りの証拠とし、コマンドやツール引数を分類しない。一意の文字列が送信入力に含まれないことも検査する。ケース1はIDごとの裁定を構造化抽出し、否定・矛盾を含め期待値と照合する。ケース1〜5・5b・8・9の内容は、対象とは別の新規・隔離された Sol low 採点セッションで実質を検査し、入力・生イベントを `content-grade/` に保存（同じ入力の集計では再利用）。採点CLIの失敗・タイムアウト・不正な採点応答は無効として合否から除き、表に不合格数・無効数を出す。無効が1件でもあれば1・2の改善は判定不能。常に `--no-cache`。送信入力・生イベント・セッション／終了コード・回答・前後差分・固定入力manifest・provider×ケース×red/green表は `eval/.results/phase-awareness/<実行日時>/`。contractsはモデルを呼ばない |
 | `review-external-confirmation` | peer-review / review-adjudication | review-external-confirmation (9 independent cases) | 採用済み問題の外部確認待ちへの移行、未修正・必要検証未実施・旧版成功・コード起因失敗の維持、根拠なし条件の範囲外、サービス停止の原因分類。human-approval は改善根拠に数えない回帰確認用 |
 | `security-threat-model` | takt-development-review / security-review (A1, A3, A5); peer-review / initial security-review (A2, A4) | security-threat-model (5 independent cases) | 明示された実行前提の新しい入口と、自動起動・書き込み credential・既存防御の迂回・Git merge driver の経路を区別する RED 先行評価 |

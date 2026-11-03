@@ -3,6 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { interpolateMcpEnv, McpSectionSchema } from '../infra/config/runtime-provider/mcp-schema.js';
+import { resolveMcpAssignment } from '../infra/config/runtime-provider/mcp-assignment.js';
+import { createCodexMcpAdapter } from '../infra/providers/mcp/codex.js';
 
 type MockEvent = Record<string, unknown>;
 type RunPlan =
@@ -858,6 +861,87 @@ describe('CodexClient retry', () => {
         },
       },
     });
+  });
+
+  it('passes runtime header secrets to the Codex process while excluding their names from its tool shell', async () => {
+    const shellPath = '/opt/takt/bin:/usr/bin:/bin';
+    const secret = 'synthetic-access-fragment.signature-fragment';
+    vi.stubEnv('PATH', shellPath);
+    vi.stubEnv('MCP_HEADER_ACCESS', secret);
+    vi.stubEnv('MCP_HEADER_KEY', 'synthetic-key-fragment');
+    const section = McpSectionSchema.parse({
+      servers: { datadog: {
+        type: 'http', url: 'https://example.com/mcp',
+        headers: { Authorization: 'Bearer ${env:MCP_HEADER_ACCESS}', 'X-Key': '${env:MCP_HEADER_KEY}' },
+      } },
+      defaults: { servers: ['datadog'] },
+    });
+    const servers = resolveMcpAssignment(section, {
+      persona: 'coder', tags: [], stepQualifiedName: 'default/implement',
+      isWorkflowCallNode: false, isInternalAgent: false,
+    });
+    const preparedMcp = await createCodexMcpAdapter().prepare(servers, { cwd: '/tmp' });
+    runPlans = [{
+      type: 'events', events: [
+        { type: 'thread.started', thread_id: 'thread-1' },
+        { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+      ],
+    }];
+
+    try {
+      const result = await new CodexClient().call('coder', 'prompt', { cwd: '/tmp', preparedMcp });
+      expect(result.status).toBe('done');
+      expect(codexConstructorCalls[0]).toMatchObject({
+        env: { PATH: shellPath, MCP_HEADER_ACCESS: secret, MCP_HEADER_KEY: 'synthetic-key-fragment' },
+        config: {
+          mcp_servers: { datadog: {
+            bearer_token_env_var: 'MCP_HEADER_ACCESS', env_http_headers: { 'X-Key': 'MCP_HEADER_KEY' },
+          } },
+          shell_environment_policy: {
+            set: { PATH: shellPath },
+            filters: { MCP_HEADER_ACCESS: 'exclude', MCP_HEADER_KEY: 'exclude' },
+          },
+        },
+      });
+      const config = JSON.stringify(codexConstructorCalls[0]?.config);
+      for (const fragment of ['synthetic-access-fragment', 'signature-fragment', 'synthetic-key-fragment']) {
+        expect(config).not.toContain(fragment);
+      }
+    } finally {
+      await preparedMcp.dispose();
+    }
+  });
+
+  it('does not copy PATH into shell settings when PATH itself is a provider header secret', async () => {
+    const shellPath = '/opt/takt/bin:/usr/bin:/bin';
+    vi.stubEnv('PATH', shellPath);
+    const server = interpolateMcpEnv({
+      type: 'http', url: 'https://example.com/mcp', headers: { 'X-Path': '${env:PATH}' },
+    });
+    const preparedMcp = await createCodexMcpAdapter().prepare({
+      enabled: true, servers: { datadog: server }, serverNames: ['datadog'], identity: 'datadog:http',
+    }, { cwd: '/tmp' });
+    runPlans = [{
+      type: 'events', events: [
+        { type: 'thread.started', thread_id: 'thread-1' },
+        { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+      ],
+    }];
+
+    try {
+      const result = await new CodexClient().call('coder', 'prompt', { cwd: '/tmp', preparedMcp });
+      expect(result.status).toBe('done');
+      expect(codexConstructorCalls[0]).toMatchObject({
+        env: { PATH: shellPath },
+        config: { shell_environment_policy: { filters: { PATH: 'exclude' } } },
+      });
+      const config = codexConstructorCalls[0]?.config as Record<string, unknown>;
+      const policy = config.shell_environment_policy as { set?: Record<string, string> };
+      expect(policy.set?.PATH).toBeUndefined();
+      expect(JSON.stringify(config)).not.toContain('/opt/takt/bin');
+    } finally {
+      await preparedMcp.dispose();
+    }
   });
 
   it('例外経路の at capacity を 1 秒、2 秒の指数バックオフで retry する', async () => {

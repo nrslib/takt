@@ -1528,10 +1528,34 @@ describe('executeAndCompleteTask', () => {
     expect(mockLoadWorkflowByIdentifier).toHaveBeenCalledWith(
       './.takt/workflows/default.yaml',
       '/project',
-      { lookupCwd: '/project/.takt/worktrees/task-a' },
+      expect.objectContaining({ lookupCwd: '/project/.takt/worktrees/task-a',
+        workflowSystemCommandsPolicy: { customScripts: false },
+      }),
     );
     expect(mockExecuteWorkflow.mock.calls[0]?.[0]).toMatchObject({
       name: 'worktree-default',
+    });
+  });
+
+  it.each([
+    { cwd: '/project', global: false, project: true, expected: true },
+    { cwd: '/project', global: true, project: true, expected: true },
+    { cwd: '/project', global: true, project: false, expected: false },
+    { cwd: '/clone', global: false, project: true, expected: true },
+    { cwd: '/clone', global: true, project: false, expected: false },
+  ])('passes resolved PR command permission $expected for $cwd ($global/$project)', async ({ cwd, global, project, expected }) => {
+    mockLoadGlobalConfig.mockReturnValue({ workflowSystemCommands: { customScripts: global } });
+    mockLoadProjectConfig.mockReturnValue({ workflowSystemCommands: { customScripts: project } });
+    await executeTask({
+      task: 'Review PR', cwd, projectCwd: '/project', workflowIdentifier: 'review',
+      prContext: { source: 'pr_review', prNumber: 1905, baseBranch: 'main', headBranch: 'feature/pr',
+        baseBranchSource: 'pull_request' },
+    });
+    expect(mockLoadWorkflowByIdentifier).toHaveBeenCalledWith('review', '/project', expect.objectContaining({
+      workflowSystemCommandsPolicy: { customScripts: expected },
+    }));
+    expect(mockExecuteWorkflow.mock.calls[0]?.[3]).toMatchObject({
+      workflowSystemCommandsPolicy: { customScripts: expected },
     });
   });
 

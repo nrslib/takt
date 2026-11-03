@@ -1,0 +1,308 @@
+ja:
+  lang: ja
+  turn: event
+  cwd: /workspace/project
+  concurrency: 2
+  defaultWorkflow: default
+  mainMerge: auto
+  goal: &a1
+    id: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-11T20:00:00.000Z
+    objective: 年次レポートを安全に公開する
+    outOfScope:
+      - 複数利用者が同時に公開する機能
+    acceptanceCriteria:
+      - 生成が完了したレポートだけを公開済みとして見せる。
+      - 生成に失敗した場合は前回のレポートを保ち、再起動後も不完全な内容を公開しない。
+    constraints: []
+    mode: local
+    status: created
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/annual-report
+    startBranch: main
+    integrationBranch: main
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-000000000032
+        recordedAt: 2026-10-11T23:00:00.000Z
+        summary: "seed-index を takt/goal/annual-report に取り込みました。成果 SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。索引の土台を用意しました。"
+    questions: []
+  event:
+    kind: patrol
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-12T00:01:00.000Z
+  tasks:
+    - name: seed-index
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: completed
+      status: completed
+      createdAt: 2026-10-11T20:10:00.000Z
+      startedAt: 2026-10-11T20:15:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-seed-index
+      completion:
+        success: true
+        interrupted: false
+        branch: takt/task/seed-index
+        sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        workflowResult: completed
+      goalWorkKey: seed-index
+      goalPurpose: 索引の土台を用意する
+    - name: annual-report
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: running
+      status: running
+      createdAt: 2026-10-11T23:10:00.000Z
+      startedAt: 2026-10-11T23:15:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-annual-report
+      goalWorkKey: annual-report
+      goalPurpose: レポートを生成し、完了した成果を公開先へ反映する。
+  readResults:
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goal: *a1
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/goal-request.md
+      result: |-
+        # 年次レポートを安全に公開する
+
+        ## 目的
+        年次レポートを安全に公開する
+
+        ## 受け入れ条件
+        - 生成が完了したレポートだけを公開済みとして見せる。
+        - 生成に失敗した場合は前回のレポートを保ち、再起動後も不完全な内容を公開しない。
+
+        ## 作業指示
+        レポートを生成し、完了した成果を公開先へ反映する。
+
+        ## 範囲外
+        - 複数利用者が同時に公開する機能
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/project-policy.md
+      result: 公開先は同じディレクトリ内の POSIX ファイルで、同一ファイルシステム上の rename は原子的。公開処理は同時に1つだけ動く。
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/.takt/runs/reports/review-resolution.md
+      result: |-
+        ## 修正対象
+        公開履歴テーブル、一時版の識別子、昇格ポインター、再起動時の照合処理を追加する。
+
+        ## 裁定の根拠
+        公開途中の停止で不完全なレポートが見える可能性をなくすため、公開状態を永続的に管理する必要がある。
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-annual-report
+      result:
+        runSlug: run-annual-report
+        task: レポートを生成し、完了した成果を公開先へ反映する。
+        workflow: default
+        status: running
+        currentStep: review
+        currentIteration: 3
+        currentStepStartedAt: 2026-10-12T00:00:00.000Z
+        currentStepExecutionCount: 3
+        phase: 1
+        stepLogs:
+          - step: review
+            persona: reviewer
+            status: done
+            iteration: 1
+            timestamp: 2026-10-11T23:03:00.000Z
+            content: 対象項目の不具合を報告した。周回 1。
+          - step: review-adjudication
+            persona: review-adjudicator
+            status: done
+            iteration: 1
+            timestamp: 2026-10-11T23:04:00.000Z
+            content: 対象項目を修正対象として採用した。周回 1。
+          - step: fix
+            persona: coder
+            status: done
+            iteration: 1
+            timestamp: 2026-10-11T23:05:00.000Z
+            content: 修正を試みたが、項目を解消できなかった。周回 1。
+          - step: review
+            persona: reviewer
+            status: done
+            iteration: 2
+            timestamp: 2026-10-11T23:06:00.000Z
+            content: 1周目に修正を試みた項目が残っていると報告した。周回 2。
+          - step: review-adjudication
+            persona: review-adjudicator
+            status: done
+            iteration: 2
+            timestamp: 2026-10-11T23:07:00.000Z
+            content: 対象項目を修正対象として採用した。周回 2。
+          - step: fix
+            persona: coder
+            status: done
+            iteration: 2
+            timestamp: 2026-10-11T23:08:00.000Z
+            content: 修正を試みたが、項目を解消できなかった。周回 2。
+        reports:
+          - filename: review-resolution.md
+            sizeBytes: 740
+          - filename: implementation.md
+            sizeBytes: 520
+en:
+  lang: en
+  turn: event
+  cwd: /workspace/project
+  concurrency: 2
+  defaultWorkflow: default
+  mainMerge: auto
+  goal: &a2
+    id: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-11T20:00:00.000Z
+    objective: Publish the annual report safely
+    outOfScope:
+      - Concurrent publishing by multiple users
+    acceptanceCriteria:
+      - Expose a report as published only after generation completes.
+      - Keep the previous report if generation fails, and never expose partial content after a restart.
+    constraints: []
+    mode: local
+    status: created
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/annual-report
+    startBranch: main
+    integrationBranch: main
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-000000000032
+        recordedAt: 2026-10-11T23:00:00.000Z
+        summary: "Integrated seed-index into takt/goal/annual-report. Result SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa. Prepared the index foundation."
+    questions: []
+  event:
+    kind: patrol
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-12T00:01:00.000Z
+  tasks:
+    - name: seed-index
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: completed
+      status: completed
+      createdAt: 2026-10-11T20:10:00.000Z
+      startedAt: 2026-10-11T20:15:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-seed-index
+      completion:
+        success: true
+        interrupted: false
+        branch: takt/task/seed-index
+        sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        workflowResult: completed
+      goalWorkKey: seed-index
+      goalPurpose: Prepare the index foundation
+    - name: annual-report
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: running
+      status: running
+      createdAt: 2026-10-11T23:10:00.000Z
+      startedAt: 2026-10-11T23:15:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-annual-report
+      goalWorkKey: annual-report
+      goalPurpose: Generate the report and publish the completed result.
+  readResults:
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goal: *a2
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/goal-request.md
+      result: |-
+        # Publish the annual report safely
+
+        ## Objective
+        Publish the annual report safely
+
+        ## Acceptance criteria
+        - Expose a report as published only after generation completes.
+        - Keep the previous report if generation fails, and never expose partial content after a restart.
+
+        ## Work instructions
+        Generate the report and publish the completed result.
+
+        ## Out of scope
+        - Concurrent publishing by multiple users
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/project-policy.md
+      result: The destination is a POSIX file in the same directory, and rename within the same filesystem is atomic. Only one publish job runs at a time.
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/.takt/runs/reports/review-resolution.md
+      result: |-
+        ## Items to fix
+        Add a publication-history table, staged-version identifiers, a promotion pointer and restart reconciliation.
+
+        ## Adjudication basis
+        Publication state must be managed durably to prevent an incomplete report from becoming visible after an interrupted publish.
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-annual-report
+      result:
+        runSlug: run-annual-report
+        task: Generate the report and publish the completed result.
+        workflow: default
+        status: running
+        currentStep: review
+        currentIteration: 3
+        currentStepStartedAt: 2026-10-12T00:00:00.000Z
+        currentStepExecutionCount: 3
+        phase: 1
+        stepLogs:
+          - step: review
+            persona: reviewer
+            status: done
+            iteration: 1
+            timestamp: 2026-10-11T23:03:00.000Z
+            content: Reported the repair item. Cycle 1.
+          - step: review-adjudication
+            persona: review-adjudicator
+            status: done
+            iteration: 1
+            timestamp: 2026-10-11T23:04:00.000Z
+            content: Accepted the item for repair. Cycle 1.
+          - step: fix
+            persona: coder
+            status: done
+            iteration: 1
+            timestamp: 2026-10-11T23:05:00.000Z
+            content: Attempted a fix, but could not resolve the item. Cycle 1.
+          - step: review
+            persona: reviewer
+            status: done
+            iteration: 2
+            timestamp: 2026-10-11T23:06:00.000Z
+            content: Reported that the item addressed in cycle 1 remained unresolved. Cycle 2.
+          - step: review-adjudication
+            persona: review-adjudicator
+            status: done
+            iteration: 2
+            timestamp: 2026-10-11T23:07:00.000Z
+            content: Accepted the item for repair. Cycle 2.
+          - step: fix
+            persona: coder
+            status: done
+            iteration: 2
+            timestamp: 2026-10-11T23:08:00.000Z
+            content: Attempted a fix, but could not resolve the item. Cycle 2.
+        reports:
+          - filename: review-resolution.md
+            sizeBytes: 740
+          - filename: implementation.md
+            sizeBytes: 520

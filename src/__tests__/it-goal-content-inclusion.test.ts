@@ -1,3 +1,4 @@
+import * as goalPr from '../infra/goals/pull-request.js';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -48,8 +49,10 @@ function squash(): string {
 }
 
 beforeEach(async () => {
+  vi.spyOn(goalPr, 'prepareGoalPullRequest').mockResolvedValue({ number: 1950, url: 'https://github.com/example/project/pull/1950' });
   cwd = realpathSync(mkdtempSync(join(tmpdir(), 'takt-goal-content-')));
   git(['init', '--initial-branch=main']);
+  git(['remote', 'add', 'origin', cwd]);
   mkdirSync(join(cwd, 'src'));
   baseSha = commitFiles({ 'src/a.ts': baseContent, 'second.txt': 'base second\n' }, 'base');
   goal = { ...goalRecord(), status: 'awaiting_merge' };
@@ -202,7 +205,7 @@ it('completes the same saved waiting goal after an external squash and target ad
 it('completes already squashed work through the reviewed completion entry', async () => {
   const targetSha = prepareHistory('squash followed by same-file work');
 
-  expect(await completeGoal(cwd, goal.id, sourceSha, 'evidence', 'approve', undefined, policy))
+  expect(await completeGoal(cwd, goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check the result', 'ja'))
     .toMatchObject({ status: 'merged', sha: targetSha });
   expect(await store.get(goal.id)).toMatchObject({ status: 'completed', completion: { goalSha: sourceSha, targetSha } });
 });
@@ -315,7 +318,7 @@ it.each([false, true])('requests completion with ignored submodules and recorded
   git(['update-ref', 'refs/heads/main', targetSha]);
   await store.update(goal.id, (current) => ({ ...current, status: 'created' }));
 
-  expect(await completeGoal(cwd, goal.id, sourceSha, 'evidence', 'approve', undefined, policy))
+  expect(await completeGoal(cwd, goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check the result', 'ja'))
     .toMatchObject({ status: included ? 'merged' : 'awaiting_merge' });
 
   const saved = await store.get(goal.id);

@@ -400,6 +400,7 @@ logging:
       ['claude_cli_path', 'claudeCliPath'],
       ['cursor_cli_path', 'cursorCliPath'],
       ['copilot_cli_path', 'copilotCliPath'],
+      ['devin_cli_path', 'devinCliPath'],
     ] as const)('should expand "~/" for %s', (yamlKey, configKey) => {
       writeFileSync(testConfigPath, `${yamlKey}: ~/.takt/bin/value\n`, 'utf-8');
 

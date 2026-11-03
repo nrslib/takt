@@ -5,6 +5,9 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { createElement } from 'react';
+import { PassThrough } from 'node:stream';
+import { render as renderInk } from 'ink';
+import { Terminal } from '@xterm/headless';
 import stringWidth from 'string-width';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ManagerView } from '../features/manager/ManagerView.js';
@@ -16,12 +19,14 @@ import { PromptInput } from '../features/tui/PromptInput.js';
 import { TranscriptView } from '../features/tui/TranscriptEntryView.js';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { invalidateResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
-import type { GoalQuestion } from '../infra/goals/schema.js';
+import type { GoalQuestion, ManagerGoalSummary } from '../infra/goals/schema.js';
 import { GoalStore } from '../infra/goals/store.js';
 import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
 import { appendGoalWorkLog } from '../infra/goals/workLog.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
+import { ManagerClientDouble, cwd as summaryRepository, ENTER, UP } from './helpers/manager-tui-fixtures.js';
+import { conversationRecord } from './helpers/conversation-fixtures.js';
 
 vi.mock('../features/tui/PromptInput.js', async (original) => {
   const actual = await original<typeof import('../features/tui/PromptInput.js')>();
@@ -56,6 +61,195 @@ function contentRows(box: string | undefined): string[] {
 function waitFor(assertions: () => void | Promise<void>): Promise<void> {
   return vi.waitFor(assertions, { timeout: 4000 });
 }
+
+describe('manager summary transcript and terminal height', () => {
+  const makeSummary = (version: number): ManagerGoalSummary => ({
+    objective: `Export proposal version ${version}`,
+    outOfScope: [`Excluded feature version ${version}`],
+    acceptanceCriteria: Array.from({ length: 12 }, (_, index) => `Acceptance ${version}-${String(index + 1).padStart(2, '0')}`),
+    constraints: [`Work constraint version ${version}`],
+    startBranch: `release-${version}`,
+    integrationBranch: `integration-${version}`,
+  });
+  const transcript = () => vi.mocked(TranscriptView).mock.calls.at(-1)![0].entries;
+  const prompt = () => vi.mocked(PromptInput).mock.calls.at(-1)![0];
+  const proposalEntries = (summary: ManagerGoalSummary) => transcript().filter((entry) => entry.content.includes(summary.objective));
+  const summaryValues = (summary: ManagerGoalSummary) => [
+    summaryRepository, summary.objective, ...summary.outOfScope, ...summary.acceptanceCriteria,
+    ...summary.constraints, summary.startBranch!, summary.integrationBranch!,
+  ];
+
+  function mountTerminal(lang: 'ja' | 'en', summary = makeSummary(4)) {
+    const client = new ManagerClientDouble();
+    client.proposal(summary, 4);
+    const frames: string[] = [];
+    const stdout = Object.assign(new PassThrough(), { columns: 80, rows: 24, isTTY: true });
+    stdout.on('data', (chunk: Buffer) => { frames.push(chunk.toString()); });
+    const stdin = Object.assign(new PassThrough(), {
+      isTTY: true, setRawMode: () => stdin, ref: () => stdin, unref: () => stdin,
+    });
+    const stderr = new PassThrough();
+    stderr.resume();
+    const terminal = new Terminal({ allowProposedApi: true, cols: 80, rows: 24, convertEol: true, scrollback: 10_000 });
+    const app = renderInk(createElement(ManagerView, { cwd: summaryRepository, lang, client,
+      assignment: { kind: 'repository', repositoryDirectory: summaryRepository, repositoryDirectories: [summaryRepository] },
+      initialDiagnostics: [], onExit: vi.fn() }), {
+      stdout: stdout as unknown as NodeJS.WriteStream, stdin: stdin as unknown as NodeJS.ReadStream,
+      stderr: stderr as unknown as NodeJS.WriteStream, interactive: true, exitOnCtrlC: false, patchConsole: false,
+    });
+    let played = 0;
+    return {
+      client, stdin,
+      async text(): Promise<string> {
+        await app.waitUntilRenderFlush();
+        for (const frame of frames.slice(played)) {
+          await new Promise<void>((resolve) => terminal.write(frame, resolve));
+          played += 1;
+        }
+        return Array.from({ length: terminal.buffer.active.length }, (_, index) =>
+          terminal.buffer.active.getLine(index)!.translateToString(true)).join('\n').trimEnd();
+      },
+      dispose(): void {
+        app.unmount(); app.cleanup(); terminal.dispose();
+        stdin.destroy(); stdout.destroy(); stderr.destroy();
+      },
+    };
+  }
+
+  it.each(['ja', 'en'] as const)('does not accumulate summary text or live headings after twenty updates at 80 by 24 in %s', async (lang) => {
+    const summary = makeSummary(4);
+    const context = mountTerminal(lang, summary);
+    try {
+      await waitFor(() => expect(prompt().disabled).toBe(true));
+      await context.text();
+      const initial = context.client.getSnapshot();
+      for (let index = 1; index <= 20; index += 1) {
+        context.client.change({ state: structuredClone(initial.state), items: [
+          ...initial.items,
+          ...Array.from({ length: index }, () => ({ kind: 'goal' as const,
+            goal: { ...goalRecord(), id: randomUUID(), repositoryDirectory: summaryRepository } })),
+        ] });
+        await waitFor(async () => expect(await context.text()).toContain(
+          getLabel('manager.counts', lang, { goals: String(index), questions: '0' })));
+      }
+      const text = await context.text();
+      for (const value of summaryValues(summary)) expect(text.split(value)).toHaveLength(2);
+      const rows = text.split('\n');
+      expect(rows.filter((row) => row === getLabel('manager.assignmentHeading', lang, { name: basename(summaryRepository) }))).toHaveLength(1);
+      const approve = lang === 'ja' ? '登録を承認' : 'Approve registration';
+      const dialogs = boxes(text).filter((box) => box.includes(approve));
+      expect(dialogs).toHaveLength(1);
+      expect(proposalEntries(summary)).toHaveLength(1);
+    } finally { context.dispose(); }
+  });
+
+  it.each(['ja', 'en'] as const)('keeps the entire live area within twenty-four rows with only a heading and two summary choices in %s', async (lang) => {
+    const context = mountTerminal(lang);
+    try {
+      await waitFor(() => expect(prompt().disabled).toBe(true));
+      const rows = (await context.text()).split('\n');
+      const heading = getLabel('manager.assignmentHeading', lang, { name: basename(summaryRepository) });
+      const start = rows.lastIndexOf(heading);
+      expect(start).toBeGreaterThanOrEqual(0);
+      const liveRows = rows.slice(start);
+      expect(liveRows.length).toBeLessThanOrEqual(24);
+      const approve = lang === 'ja' ? '登録を承認' : 'Approve registration';
+      const resume = lang === 'ja' ? '会話を続ける' : 'Continue conversation';
+      const dialog = boxes(liveRows.join('\n')).find((box) => box.includes(approve));
+      const contents = contentRows(dialog);
+      expect(contents).toHaveLength(3);
+      expect(contents[0]!.length).toBeGreaterThan(0);
+      expect(contents.slice(1)).toEqual([approve, resume]);
+      if (lang === 'en') expect(contents.join('\n')).not.toMatch(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u);
+    } finally { context.dispose(); }
+  });
+
+  it.each(['ja', 'en'] as const)('commits every restored proposal field once to the conversation transcript in %s', async (lang) => {
+    const summary = makeSummary(4);
+    const context = mountTerminal(lang, summary);
+    try {
+      await waitFor(() => expect(prompt().disabled).toBe(true));
+      const entries = proposalEntries(summary);
+      expect(entries).toHaveLength(1);
+      const content = entries[0]!.content;
+      for (const value of summaryValues(summary)) expect(content.split(value)).toHaveLength(2);
+      const sections = lang === 'ja' ? ['範囲外', '受け入れ条件', '作業の制約'] : ['Out of scope', 'Acceptance criteria', 'Work constraints'];
+      for (const section of sections) expect(content).toContain(section);
+      const text = await context.text();
+      for (const value of summaryValues(summary)) expect(text.split(value)).toHaveLength(2);
+      expect(context.client.getSnapshot().state?.pending?.summary).toEqual(summary);
+    } finally { context.dispose(); }
+  });
+
+  it.each(['ja', 'en'] as const)('appends revision five once after make-goal while retaining revision four on the same terminal in %s', async (lang) => {
+    const previous = makeSummary(4);
+    const next = makeSummary(5);
+    const context = mountTerminal(lang, previous);
+    try {
+      await waitFor(() => expect(prompt().disabled).toBe(true));
+      await context.text();
+      context.stdin.write('\x1b[200~/make-goal\x1b[201~');
+      await waitFor(() => expect(prompt().text).toBe('/make-goal'));
+      context.stdin.write(ENTER);
+      await waitFor(() => expect(context.client.commands()).toEqual([
+        { kind: 'message', text: getLabel('manager.goSummaryRequest', lang), display: false },
+      ]));
+      context.client.proposal(next, 5);
+      await waitFor(() => expect(prompt().disabled).toBe(true));
+      context.client.proposal(structuredClone(next), 5);
+      const text = await context.text();
+      for (const summary of [previous, next]) {
+        expect(proposalEntries(summary)).toHaveLength(1);
+        for (const value of summaryValues(summary).slice(1)) expect(text.split(value)).toHaveLength(2);
+      }
+      expect(text.indexOf(previous.objective)).toBeLessThan(text.indexOf(next.objective));
+      context.stdin.write(UP); context.stdin.write(ENTER);
+      await waitFor(() => expect(context.client.commands().at(-1)).toEqual({ kind: 'approve_summary', revision: 5 }));
+    } finally { context.dispose(); }
+  });
+
+  it('does not reprint a revision after its pending state disappears and is restored on the same screen', async () => {
+    const summary = makeSummary(4);
+    const context = mountTerminal('en', summary);
+    try {
+      await waitFor(() => expect(prompt().disabled).toBe(true));
+      await context.text();
+      context.client.change({ state: { ...context.client.getSnapshot().state!, pending: null } });
+      await waitFor(() => expect(prompt().disabled).toBe(false));
+      await context.text();
+      context.client.proposal(structuredClone(summary), 4);
+      await waitFor(() => expect(prompt().disabled).toBe(true));
+      const text = await context.text();
+      expect(proposalEntries(summary)).toHaveLength(1);
+      for (const value of summaryValues(summary)) expect(text.split(value)).toHaveLength(2);
+    } finally { context.dispose(); }
+  });
+
+  it('prints the same revision number for a different conversation on the same mounted screen', async () => {
+    const previous = makeSummary(4);
+    const next = makeSummary(5);
+    const context = mountTerminal('en', previous);
+    try {
+      await waitFor(() => expect(prompt().disabled).toBe(true));
+      await context.text();
+      const repository = summaryRepository + '-second';
+      const record = conversationRecord(repository);
+      context.client.change({
+        state: { ...context.client.getSnapshot().state!, conversationId: record.id, assignment: record.assignment,
+          pending: { revision: 4, repositoryDirectory: repository, summary: next } },
+        items: [{ kind: 'assignment', assignment: {
+          kind: 'repository', repositoryDirectory: repository, repositoryDirectories: [repository],
+        } }],
+      });
+      await waitFor(async () => expect(await context.text()).toContain(next.objective));
+      expect(proposalEntries(previous)).toHaveLength(1);
+      expect(proposalEntries(next)).toHaveLength(1);
+      const text = await context.text();
+      expect(text.split(previous.objective)).toHaveLength(2);
+      expect(text.split(next.objective)).toHaveLength(2);
+    } finally { context.dispose(); }
+  });
+});
 
 afterEach(() => {
   cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.mocked(PromptInput).mockClear(); vi.mocked(TranscriptView).mockClear();
@@ -140,15 +334,15 @@ describe('manager polling and answer cancellation', () => {
         await held;
         return directory;
       });
-    } else vi.spyOn(GoalStore.prototype, 'iterate').mockImplementation(async function* (this: GoalStore) {
+    } else vi.spyOn(GoalStore.prototype, 'iterateProjected').mockImplementation(async function* (this: GoalStore, _cache, project) {
       for await (const item of iterate.call(this)) {
         if (holdNext) {
           holdNext = false;
           entered();
           await held;
           if (outcome === 'error') throw new Error('Obsolete read failed');
-          yield { ...item, objective: 'Obsolete goal' };
-        } else yield item;
+          yield project({ ...item, objective: 'Obsolete goal' });
+        } else yield project(item);
       }
     });
     const reading = client.refresh();
@@ -196,7 +390,7 @@ describe('manager polling and answer cancellation', () => {
     const goals = await createGoalsWithHistory();
     const goalFile = join(cwd, '.takt', 'goals', goals[1]!.id, 'goal.json');
     const iterator = failure === 'repository'
-      ? vi.spyOn(GoalStore.prototype, 'iterate').mockImplementation(async function* () { throw new Error('repository read failed'); }) : undefined;
+      ? vi.spyOn(GoalStore.prototype, 'iterateProjected').mockImplementation(async function* () { throw new Error('repository read failed'); }) : undefined;
     if (failure === 'goal') writeFileSync(goalFile, '{}');
     const { client, read } = await mount('en');
     await waitFor(() => {
@@ -208,7 +402,7 @@ describe('manager polling and answer cancellation', () => {
     else writeFileSync(goalFile, JSON.stringify(goals[1]));
     await waitFor(() => {
       expect(client.getSnapshot().readStatus).toBe('complete');
-      expect(client.getSnapshot().items.filter((item) => item.kind === 'display_event')).toHaveLength(60);
+      expect(client.getSnapshot().items.filter((item) => item.kind === 'display_event')).toHaveLength(0);
       expect(client.getSnapshot().items.flatMap((item) => item.kind === 'goal' ? [item.goal.id] : []))
         .toEqual(goals.map((goal) => goal.id));
     });
@@ -229,7 +423,7 @@ describe('manager polling and answer cancellation', () => {
     const save = () => store.update(goalId, (goal) => appendGoalWorkLog(goal, { summary }));
     if (beforeStartup) await save();
     vi.setSystemTime(new Date('2026-10-21T10:00:00Z'));
-    const iterator = vi.spyOn(GoalStore.prototype, 'iterate').mockImplementation(async function* () {
+    const iterator = vi.spyOn(GoalStore.prototype, 'iterateProjected').mockImplementation(async function* () {
       throw new Error('initial display read rejected');
     });
     const { client, read } = await mount('en');
@@ -243,7 +437,7 @@ describe('manager polling and answer cancellation', () => {
     iterator.mockRestore();
     await waitFor(() => {
       expect(client.getSnapshot().readStatus).toBe('complete');
-      expect(client.getSnapshot().items.filter((item) => item.kind === 'display_event')).toHaveLength(61);
+      expect(client.getSnapshot().items.filter((item) => item.kind === 'display_event')).toHaveLength(beforeStartup ? 0 : 1);
       expect(transcript().filter((entry) => entry.content === `${goalId}: ${summary}`)).toHaveLength(beforeStartup ? 0 : 1);
     });
     const polls = read.mock.calls.length;
@@ -254,7 +448,7 @@ describe('manager polling and answer cancellation', () => {
     }
   });
 
-  it('reads all work records without a startup boundary and limits suppression to startup repositories', async () => {
+  it('reads all work records without a startup boundary and excludes old work only for startup repositories', async () => {
     const goals = await createGoalsWithHistory();
     const added = join(cwd, 'added');
     mkdirSync(added);
@@ -263,14 +457,12 @@ describe('manager polling and answer cancellation', () => {
       repositoryDirectories: [cwd, added] };
     const all = await readManagerTestDisplay(cwd, 'en', assignment);
     expect(all.events).toHaveLength(90);
-    for (const event of all.events) expect(event.suppressInitialDisplay).toBeUndefined();
     const bounded = await readManagerTestDisplay(cwd, 'en', assignment,
       new Map([[cwd, Date.now()]]));
-    expect(bounded.events).toHaveLength(90);
+    expect(bounded.events).toHaveLength(30);
     const addedEvents = bounded.events.filter((event) => event.message.startsWith(`${addedGoal.id}: `));
     expect(addedEvents).toHaveLength(30);
-    for (const event of addedEvents) expect(event.suppressInitialDisplay).toBeUndefined();
-    expect(bounded.events.filter((event) => event.suppressInitialDisplay)).toHaveLength(60);
+    expect(bounded.events).toEqual(addedEvents);
   });
 
   it.each(['ja', 'en'] as const)('suppresses historical work records and notices but keeps diagnostics and new records in the same screen in %s', async (lang) => {

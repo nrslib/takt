@@ -160,6 +160,7 @@ export class LoopMonitorJudgeRunner {
       .replace(/\{cycle_count\}/g, String(cycleCount));
     return {
       name: loopJudgeStepName(monitor.cycle),
+      inputReports: monitor.judge.inputReports,
       engineSynthesized: true,
       internalPromptContext: { kind: 'loop_monitor', ownerStepName: triggeringStep.name },
       internalFreshSession: true,

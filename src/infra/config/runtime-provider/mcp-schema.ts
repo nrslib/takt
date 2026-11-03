@@ -14,6 +14,7 @@
 
 import { z } from 'zod';
 import { buildChildProcessEnv } from '../../../shared/utils/child-process-env.js';
+import { attachMcpHeaderEnvRefs, interpolateMcpHeaders, MCP_HEADER_ENV_REFS } from './mcp-header-env.js';
 import type {
   McpServerConfig,
   McpStdioServerConfig,
@@ -203,17 +204,21 @@ export function interpolateMcpEnv(
       env: interpolateRecord(server.env, env),
     };
   } else if (isSse(server)) {
-    resolvedServer = {
+    const url = interpolateString(server.url, env);
+    const { headers, refs } = interpolateMcpHeaders(server.headers, env);
+    resolvedServer = attachMcpHeaderEnvRefs({
       type: 'sse',
-      url: interpolateString(server.url, env),
-      headers: interpolateRecord(server.headers, env),
-    };
+      url,
+      headers,
+    }, refs);
   } else {
-    resolvedServer = {
+    const url = interpolateString((server as McpHttpServerConfig).url, env);
+    const { headers, refs } = interpolateMcpHeaders((server as McpHttpServerConfig).headers, env);
+    resolvedServer = attachMcpHeaderEnvRefs({
       type: 'http',
-      url: interpolateString((server as McpHttpServerConfig).url, env),
-      headers: interpolateRecord((server as McpHttpServerConfig).headers, env),
-    };
+      url,
+      headers,
+    }, refs);
   }
   if (existingSafeSource !== undefined || hasEnvironmentReference(server)) {
     return attachMcpServerSafeSource(resolvedServer, safeSource);
@@ -319,16 +324,17 @@ function attachMcpServerSafeSource(
 }
 
 /**
- * Return the server without the internal log-safe-source metadata. Provider
+ * Return the server without internal log-safe-source or header-reference metadata. Provider
  * boundaries that serialize whole server objects (rather than projecting known
  * fields) must strip the metadata so it never reaches provider config files.
  */
 export function stripMcpServerInternalMetadata(server: McpServerConfig): McpServerConfig {
-  if (getMcpServerSafeSource(server) === undefined) {
+  if (getMcpServerSafeSource(server) === undefined && !Object.hasOwn(server, MCP_HEADER_ENV_REFS)) {
     return server;
   }
   const result = { ...server } as McpServerWithSafeSource;
   delete result[SAFE_MCP_SERVER_SOURCE];
+  Reflect.deleteProperty(result, MCP_HEADER_ENV_REFS);
   return result as McpServerConfig;
 }
 

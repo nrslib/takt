@@ -19,7 +19,7 @@
 | `--skip-git` | ブランチ作成、コミット、プッシュをスキップ（pipeline モード、workflow のみ実行） |
 | `--repo <owner/repo>` | リポジトリを指定（PR 作成用） |
 | `-q, --quiet` | 最小出力モード: AI 出力を抑制（CI 向け） |
-| `--provider <name>` | エージェント provider を上書き（claude\|claude-sdk\|claude-headless\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|pi\|mock） |
+| `--provider <name>` | エージェント provider を上書き（claude\|claude-sdk\|claude-headless\|claude-terminal\|codex\|opencode\|deepseek-harness\|cursor\|copilot\|kiro\|devin\|pi\|mock） |
 | `--auto-strategy <strategy>` | auto routing の strategy を上書き（`cost`\|`balanced`\|`performance`）。実行時に effective `auto_routing` を持つ現在の workflow または workflow_call child へ到達した場合に適用し、それ以外では warning を出して無視します。 |
 | `--model <name>` | エージェントモデルを上書き |
 | `--runtime-assignment <name>` | 合成後の runtime `provider.assignments` を起動単位で選択。`provider.directories` より優先 |
@@ -82,11 +82,24 @@ takt update codex     # 指定対象だけを更新
 
 manager の TUI では、`Ctrl+R` で問い合わせ、`Ctrl+G` で進行中のゴールを開きます。この2つのキーは manager が処理中でも使えます。入力欄に `/make-goal` と打って `Enter` を押すと、現在の会話からゴールの登録案を作ります。案が表示済みでも作り直すだけで、登録はしません。案は `↑` 承認 / `↓` 続行 / `Enter` 決定で操作し、承認を選んで `Enter` で登録します。材料不足の場合はその旨を表示し、会話を続けられます。入力欄で `/` を打つと `/make-goal` が補完候補に出て、`Tab` で確定できます。`/make-goal` 以外の `/` で始まる入力は普通の発言として manager に送ります。メニューの操作は[ゴール管理ガイド](./goal-management.ja.md)を参照してください。
 
-manager を開くと、必要なら daemon を起動し、準備が整うまで待ちます。TUI は会話の要求を daemon に送り、結果を表示します。受け付けたターンは TUI を閉じても続きます。同じリポジトリや workspace を担当先として開き直す場合も、同じ担当先で2つ目の TUI を開く場合も、同じ会話につながり、承認待ちの要約があれば再表示されます。前の画面の発言や返事は再表示されません。処理中の発言の拒否、保存する情報、daemon 再起動後の中断は[ゴール管理ガイド](./goal-management.ja.md)を参照してください。
+manager を開くと、必要なら daemon を起動し、準備が整うまで待ちます。TUI は会話の要求を daemon に送り、結果を表示します。受け付けたターンは TUI を閉じても続きます。同じリポジトリや workspace を担当先として開き直す場合も、同じ担当先で2つ目の TUI を開く場合も、同じ会話につながり、承認待ちの要約があれば再表示されます。前の画面の発言や返事は再表示されません。処理中の発言の受付・待機、保存する情報、daemon 再起動後の中断は[ゴール管理ガイド](./goal-management.ja.md)を参照してください。
 
 `takt daemon stop` で manager 用のバックグラウンド daemon を明示的に停止できます。自動終了するのは、対象プロジェクトに未完了のゴール、処理待ちのイベント、待機中・実行中のタスクがなく、プロジェクトの確認処理もなく、TUI の接続と会話の操作（初期化・実行・後片付け）がすべてなくなったときだけです。保存された承認待ちの要約だけでは daemon は起動し続けません。
 
 `takt manager` は対話端末でゴール相談の TUI を起動します。manager は実験的機能です。動作・設定・保存するデータの形式は予告なく変わることがあります。自動でタスクを投入・実行するため、provider の API の費用がかかります。
+
+## director（実験的）
+
+`takt director` は対話端末で会話の TUI を開きます。会話は daemon が保持するため、閉じて起動し直すと前の会話の続きにつながります。別の担当リポジトリから起動しても同じ会話です。前の画面の発言や返事は再表示せず、履歴は provider のセッションで管理します。
+
+```bash
+takt director
+takt director --help
+```
+
+director は実験的機能で、動作や保存するデータの形式は予告なく変わることがあります。会話と定期的な見回りには provider の費用がかかります。manager がゴールを進めてタスクを実行し、director は全 manager の確認、人への通知、人の明示的なマージ指示の担当 manager への転送を行います。director 自身は PR をマージしません。役割分担、グローバルの `director.patrol_interval` と `director.slack` の設定、Slack 接続の詳細は、[director の見回り](./goal-management.ja.md#director-の見回り)を参照してください。
+
+`takt_tell_manager` の伝言は、manager が処理中でも保存されます。保存した時点で操作 ID と manager が返り、返事を待たずに保存順に処理されます。返事・失敗・中断は保存され、あとで同じ操作 ID 付きで director の画面に知らされます。manager 一覧（`takt_list_managers`）と見回りは、読めない project を理由付きで示し、残りの manager の処理を続けます。
 
 ## Web UI の実行境界
 

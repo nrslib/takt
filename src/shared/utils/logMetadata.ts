@@ -47,3 +47,11 @@ export function normalizeLogValue(key: string, value: unknown): unknown {
   }
   return typeof value === 'string' ? normalizeLogMetadata(value) : value;
 }
+
+/** Mask secrets but preserve complete provider evidence; fixed length limits can hide Phase 2 tool results. */
+export function normalizeProviderEventValue(key: string, value: unknown): unknown {
+  if (isSensitiveLogKey(key)) {
+    return REDACTED_LOG_VALUE;
+  }
+  return typeof value === 'string' ? sanitizeSensitiveText(value) : value;
+}

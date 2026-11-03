@@ -46,6 +46,8 @@ import {
   type ResolvedFormalSpecConfiguration,
 } from '../interactive/taskInstructionFormat.js';
 import { runTuiConversation } from './conversationRunner.js';
+import { InteractiveSessionRecords } from '../interactive/interactiveSessionRecords.js';
+import { interactiveSessionExists } from '../interactive/interactiveSessionExistence.js';
 import { runConversationOperation } from '../interactive/operationFeedback.js';
 import type { ConversationDispatchOutcome } from '../interactive/actionDispatcher.js';
 import { handOverAttachments } from './attachmentHandover.js';
@@ -66,6 +68,7 @@ export interface RunTuiOptions {
   cwd: string;
   lang: 'en' | 'ja';
   workflowId?: string;
+  getWorkflowSystemCommandsPolicy?: () => import('../../core/models/config-types.js').WorkflowSystemCommandsConfig | undefined;
   previewCount: number | undefined;
   agentOverrides?: TaskExecutionOptions;
   taskHistory: TaskHistorySummaryItem[];
@@ -88,6 +91,7 @@ export type TuiRunResult =
   | { kind: 'selected'; workflowId: string; result: InteractiveModeResult };
 
 export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
+  const records = new InteractiveSessionRecords(options.cwd);
   const attachmentStore = createSessionImageAttachmentStore(options.cwd);
   const releaseExitCleanup = cleanupImageAttachmentStoreOnProcessExit(attachmentStore);
   let handedOver = false;
@@ -216,6 +220,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
       const firstStepOverrides = temporaryProviderActive && selectedProvider
         ? { provider: selectedProvider }
         : undefined;
+      const workflowSystemCommandsPolicy = options.getWorkflowSystemCommandsPolicy?.();
       const description = getWorkflowDescription(
         selectedWorkflowId,
         options.cwd,
@@ -223,6 +228,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
         options.cwd,
         workflowPreviewOverrides,
         firstStepOverrides,
+        ...(workflowSystemCommandsPolicy === undefined ? [] : [workflowSystemCommandsPolicy]),
       );
       const context = workflowContext(description);
       currentWorkflowContext = context;
@@ -282,6 +288,7 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
         : currentConversation.getSourceContext() ?? options.sourceContext;
       const nextConversation = createTuiConversation({
         cwd: options.cwd,
+        interactiveSessionRecords: records,
         undeliveredMessages,
         plan: nextPlan,
         workflowContext: context,
@@ -428,7 +435,8 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
           }
         }
         case 'workflow': {
-          const workflowId = await determineWorkflow(options.cwd, undefined);
+          const workflowSystemCommandsPolicy = options.getWorkflowSystemCommandsPolicy?.();
+          const workflowId = await determineWorkflow(options.cwd, undefined, ...(workflowSystemCommandsPolicy === undefined ? [] : [workflowSystemCommandsPolicy]));
           if (workflowId !== null && workflowId !== selectedWorkflowId) {
             selectedWorkflowId = workflowId;
             requestRebuild();
@@ -469,9 +477,11 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
                 : resolveAssistantProviderModel(options.cwd, { provider }).model),
             };
             requestRebuild();
+            // Only the capability notice is needed here. Resolving the runtime.yaml assignments would
+            // throw from this handler; an assignment the new provider rejects is reported by the rebuild.
             const capability = selectedMode === 'persona'
               ? undefined
-              : resolveTaskStateMcp(provider, options.lang).unavailableNotice;
+              : resolveTaskStateMcp(options.cwd, provider, options.lang, false).unavailableNotice;
             return {
               kind: 'continue' as const,
               ...(capability === undefined ? {} : { notice: capability }),
@@ -561,12 +571,15 @@ export async function runTui(options: RunTuiOptions): Promise<TuiRunResult> {
       return { kind: 'continue' as const };
     }
 
+    await records.clean((provider, sessionId) => interactiveSessionExists(options.cwd, provider, sessionId));
     const setup = await createCurrentConversation(true);
     const dispatch = options.dispatch;
     const result = await runTuiConversation({
       cwd: options.cwd,
       lang: options.lang,
       conversation: conversationFacade,
+      interactiveSessionRecords: records,
+      getProvider: () => selectedProvider ?? currentPlan.ctx.providerType,
       initialEntries: setup.initialEntries,
       submitMode: 'chat',
       autoSubmit: false,

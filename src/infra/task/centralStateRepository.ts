@@ -55,6 +55,7 @@ export interface CentralExecutionRequest {
   readonly startStep?: string;
   readonly resumePoint?: WorkflowResumePoint;
   readonly restartPoint?: WorkflowRestartPoint;
+  readonly sourceResumePoint?: WorkflowResumePoint;
   readonly retryNote?: string;
 }
 
@@ -872,6 +873,9 @@ function validateExecutionRequest(request: CentralExecutionRequest): void {
   }
   if (request.restartPoint !== undefined && !WorkflowRestartPointSchema.safeParse(request.restartPoint).success) {
     throw new CentralTaskCasError('Central execution request restart point is invalid');
+  }
+  if (request.sourceResumePoint !== undefined && !WorkflowResumePointSchema.safeParse(request.sourceResumePoint).success) {
+    throw new CentralTaskCasError('Central execution request source resume point is invalid');
   }
 }
 

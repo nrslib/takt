@@ -36,7 +36,7 @@ vi.mock('../infra/managed-providers/loader.js', async (importOriginal) => ({
   loadManagedSdk: (await import('./helpers/managed-sdk.js')).loadManagedSdk,
   inspectProviderInstallation: vi.fn(async () => ({ state: 'ready', directory: '/test/managed/codex' })),
 }));
-vi.mock('../infra/codex/mcp-list.js', () => ({ runCodexMcpList: vi.fn() }));
+vi.mock('../infra/codex/mcp-list.js', () => ({ runCodexMcpList: vi.fn(), hasCodexMcpServer: vi.fn() }));
 vi.mock('../infra/claude/client.js', () => ({ callClaude: vi.fn(), callClaudeCustom: vi.fn() }));
 
 
@@ -151,6 +151,20 @@ describe('manager conversation configuration and provider boundary', () => {
       expect(call).toHaveBeenCalledTimes(1);
     }
     expect(call).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['ja', 'en'] as const)('exposes task integration fields and status values in the %s manager tools guidance', (language) => {
+    const knowledge = readFileSync(join(process.cwd(), 'builtins', language, 'facets', 'knowledge', 'manager.md'), 'utf8');
+    const heading = language === 'ja' ? '## 道具' : '## Tools';
+    const paragraph = knowledge.split(heading)[1]?.trim().split('\n\n')[0];
+    expect(paragraph).toBeDefined();
+    const terms = paragraph?.match(/[A-Za-z_]+/g);
+    for (const field of ['takt_list_tasks', 'goalIntegration', 'integrated', 'not_integrated', 'unknown']) {
+      expect(terms).toContain(field);
+    }
+    expect(paragraph).toMatch(language === 'ja' ? /理由/ : /reason/i);
+    const plan = createManagerConversationPlan(cwd, { language });
+    expect(plan.strategy.systemPrompt).toContain(paragraph!);
   });
 
   it('passes full permissions without a fixed tool allowlist to the mock provider', async () => {

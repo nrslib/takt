@@ -2,11 +2,23 @@
 
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
+import { URL, pathToFileURL } from 'node:url';
+import { posix } from 'node:path';
+import process from 'node:process';
 import { satisfies } from 'semver';
 
-const sdkVersion = '0.2.1-alpha.2';
+const sdkVersion = '0.2.1-rc.3';
 const managedBase = 'managed/deepseek-harness/';
+
+/** Resolve a peer at the declaring package's placement level, then at ancestor levels. */
+function resolvePeerEntry(packages, packagePath, peerName) {
+  for (let directory = posix.dirname(packagePath); directory !== '.'; directory = posix.dirname(directory)) {
+    if (posix.basename(directory) !== 'node_modules') continue;
+    const candidate = `${directory}/${peerName}`;
+    if (Object.hasOwn(packages, candidate)) return packages[candidate];
+  }
+  return undefined;
+}
 
 /**
  * Verify pinned SDK/runtime versions across development and managed dependency graphs.
@@ -28,7 +40,7 @@ export function verifyDeepSeekManagedLock(root, rootLock, managed, lock, constan
     }
   }
   for (const [name, version] of Object.entries({
-    '@deepseek-ai/cordis': '4.0.5-alpha.1',
+    '@deepseek-ai/cordis': '4.0.5',
     '@deepseek-ai/dsh-llm': sdkVersion,
     '@deepseek-ai/dsh-scope': sdkVersion,
     '@deepseek-ai/dsh-session': sdkVersion,
@@ -40,6 +52,15 @@ export function verifyDeepSeekManagedLock(root, rootLock, managed, lock, constan
       || rootLock.packages?.[`node_modules/${name}`]?.version !== version
       || managed.dependencies[name] !== version) {
       throw new Error(`${name} must be pinned in the root and managed SDK dependency graphs`);
+    }
+  }
+  if (managed.dependencies['@deepseek-ai/cordis'] !== '4.0.5'
+    || managed.dependencies['@deepseek-ai/cordis-plugin-group'] !== '1.0.5') {
+    throw new Error('The managed npm project must pin Cordis and cordis-plugin-group within the SDK peer ranges');
+  }
+  for (const [name, version] of Object.entries(managed.dependencies)) {
+    if ((name === '@deepseek-ai/dsh' || name.startsWith('@deepseek-ai/dsh-')) && version !== sdkVersion) {
+      throw new Error(`${name} must be pinned to ${sdkVersion} in the managed npm project`);
     }
   }
   if (!constants.includes(`DEEPSEEK_HARNESS_SDK_VERSION = '${sdkVersion}'`)
@@ -61,9 +82,20 @@ export function verifyDeepSeekManagedLock(root, rootLock, managed, lock, constan
   }
   const peers = lock.packages['node_modules/@deepseek-ai/dsh-sdk-client']?.peerDependencies;
   for (const [name, version] of Object.entries(peers ?? {})) {
-    const pinned = name === '@deepseek-ai/cordis' ? '4.0.5-alpha.1' : version;
+    const pinned = name === '@deepseek-ai/cordis' ? '4.0.5' : version;
     if (managed.dependencies[name] !== pinned) {
       throw new Error(`${name} SDK peer must be explicitly pinned in the managed npm project`);
+    }
+  }
+  for (const [packagePath, entry] of Object.entries(lock.packages ?? {})) {
+    if (!packagePath.startsWith('node_modules/')) continue;
+    for (const [peerName, peerRange] of Object.entries(entry?.peerDependencies ?? {})) {
+      const peerEntry = resolvePeerEntry(lock.packages, packagePath, peerName);
+      const optional = entry?.peerDependenciesMeta?.[peerName]?.optional === true;
+      if ((!peerEntry && !optional)
+        || (peerEntry && (typeof peerEntry.version !== 'string' || !satisfies(peerEntry.version, peerRange)))) {
+        throw new Error(`${packagePath} peer ${peerName}@${peerRange} must resolve in the managed npm lock`);
+      }
     }
   }
 }

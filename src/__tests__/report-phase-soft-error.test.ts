@@ -151,6 +151,12 @@ function makeParallelRunner(): ParallelRunner {
       })),
       emitStepReports: vi.fn(),
       recordReportGeneration: vi.fn(),
+      savePhase1ExecutionLog: vi.fn(async (_executionLog, stepName: string, stepIteration: number) => ({
+        path: '/tmp/project/.takt/runs/test/logs/phase1-execution/security-review.json',
+        byteSize: 2,
+        stepName,
+        stepIteration,
+      })),
       finalizeReportGeneration: vi.fn(),
       persistPreviousResponseSnapshot: vi.fn(),
       normalizeStructuredOutput: vi.fn((_step: WorkflowStep, response: AgentResponse) => response),

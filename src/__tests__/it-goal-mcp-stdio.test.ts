@@ -1,3 +1,4 @@
+import * as goalPr from '../infra/goals/pull-request.js';
 import { readManagerTestDisplay } from './helpers/manager-display-items.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -635,6 +636,7 @@ describe('manager questions, answers and notifications through production bounda
   }
 
   beforeEach(async () => {
+    vi.spyOn(goalPr, 'prepareGoalPullRequest').mockResolvedValue({ number: 1950, url: 'https://github.com/example/project/pull/1950' });
     vi.mocked(ensureDaemon).mockReset().mockResolvedValue(undefined);
     resetScenario();
     vi.stubEnv('TAKT_NOTIFY_WEBHOOK', undefined);
@@ -645,6 +647,7 @@ describe('manager questions, answers and notifications through production bounda
     mkdirSync(globalDirectory, { recursive: true });
     vi.stubEnv('TAKT_CONFIG_DIR', globalDirectory);
     git(['init', '--initial-branch=main']);
+    git(['remote', 'add', 'origin', cwd]);
     git(['config', 'user.name', 'Manager Test']);
     git(['config', 'user.email', 'manager@example.test']);
     const tree = git(['hash-object', '-w', '-t', 'tree', '--stdin'], '');
@@ -949,12 +952,12 @@ describe('manager questions, answers and notifications through production bounda
     const display = await readManagerTestDisplay(cwd);
     expect(display.events).toHaveLength(kind === 'progress' ? 2 : 1);
     expect(display.events).toContainEqual({
-      id: JSON.stringify([goalId, 'notification', saved.notifications![0]!.id]), message: requests[0]!.text,
+      id: JSON.stringify([cwd, goalId, 'notification', saved.notifications![0]!.id]), message: requests[0]!.text,
     });
     if (kind === 'progress') {
       expect(saved.workLog).toHaveLength(1);
       expect(display.events[0]).toEqual({
-        id: JSON.stringify([goalId, 'work-log', saved.workLog[0]!.id]), message: `${goalId}: ${saved.workLog[0]!.summary}`,
+        id: JSON.stringify([cwd, goalId, 'work-log', saved.workLog[0]!.id]), message: `${goalId}: ${saved.workLog[0]!.summary}`,
       });
       expect(requests[0]!.text).toContain('出力の検証');
     }
@@ -967,7 +970,7 @@ describe('manager questions, answers and notifications through production bounda
     const saved = await new GoalStore(cwd).get(goalId);
     expect(saved.notifications).toBeUndefined();
     expect((await readManagerTestDisplay(cwd)).events).toEqual(kind === 'progress' ? [{
-      id: JSON.stringify([goalId, 'work-log', saved.workLog[0]!.id]), message: `${goalId}: ${saved.workLog[0]!.summary}`,
+      id: JSON.stringify([cwd, goalId, 'work-log', saved.workLog[0]!.id]), message: `${goalId}: ${saved.workLog[0]!.summary}`,
     }] : []);
     const goal = (await invoke('takt_get_goal')).goal;
     if (kind === 'question') expect(goal).toMatchObject({ questions: [expect.objectContaining({ status: 'pending' })] });

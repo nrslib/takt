@@ -19,6 +19,13 @@ import {
 import { generateReportDir } from '../shared/utils/reportDir.js';
 import { stripAnsi } from '../shared/utils/text.js';
 import { TaskPrefixWriter } from '../shared/ui/TaskPrefixWriter.js';
+import { parse, stringify } from 'yaml';
+import * as childProcess from 'node:child_process';
+
+vi.mock('node:child_process', async (original) => {
+  const actual = await original<typeof import('node:child_process')>();
+  return { ...actual, spawn: vi.fn(actual.spawn) };
+});
 
 const { mockRunAgent, mockRunStatusJudgmentPhase } = vi.hoisted(() => ({
   mockRunAgent: vi.fn(),
@@ -37,6 +44,74 @@ vi.mock('../core/workflow/phase-runner.js', async (importOriginal) => {
 const temporaryRoots: string[] = [];
 
 describe('Caccia report lifecycle', () => {
+  it.each([true, false])('uses project permission %s for commands in a Caccia project', async (allowed) => {
+    const projectCwd = mkdtempSync(join(tmpdir(), 'takt-caccia-command-'));
+    temporaryRoots.push(projectCwd);
+    mkdirSync(join(projectCwd, '.takt', 'workflows'), { recursive: true });
+    writeFileSync(join(projectCwd, '.takt', 'config.yaml'), stringify({
+      language: 'en', vcs_provider: 'github', provider: 'mock',
+      workflow_system_commands: { custom_scripts: allowed },
+    }));
+    saveGlobalConfig({ ...loadGlobalConfig(), workflowSystemCommands: { customScripts: false } });
+    const workflow = parse(readFileSync(new URL('../../builtins/en/workflows/caccia.yaml', import.meta.url), 'utf8'));
+    workflow.max_steps = 2;
+    workflow.initial_step = 'check';
+    workflow.steps.unshift({ name: 'check', mode: 'system', system_inputs: [{
+      type: 'command', as: 'result', command: 'printf approved > command-ran', timeout_ms: 1000,
+    }], rules: [{ condition: 'when(true)', next: 'address' }] });
+    writeFileSync(join(projectCwd, '.takt', 'workflows', 'command-caccia.yaml'), stringify(workflow));
+    const headSha = 'a'.repeat(40);
+    const spies: Array<{ mockRestore(): void }> = [
+      vi.spyOn(githubPr, 'fetchCodeRabbitReviewStatus').mockResolvedValue({
+        headSha, hasCodeRabbitPost: true, reviewedHeadShas: [headSha],
+      }),
+      vi.spyOn(githubPr, 'fetchCodeRabbitReviewThreads').mockResolvedValueOnce([{
+        id: 'command-thread', author: 'coderabbitai', body: 'Review', replies: [], isOutdated: false,
+        path: 'src/example.ts', url: 'https://github.com/org/repo/pull/42#discussion_r1',
+      }]).mockResolvedValueOnce([]),
+      vi.spyOn(githubPr, 'fetchCacciaPullRequestDetails').mockResolvedValue({
+        number: 42, headBranch: 'feature/command', headSha,
+        headRepositoryUrl: 'https://github.com/org/repo.git',
+        headRepositoryPushUrls: ['https://github.com/org/repo.git'],
+      }),
+      vi.spyOn(taskClone, 'cloneAndIsolateAbortable').mockImplementation(async () => undefined),
+      vi.spyOn(taskClone, 'runGitCommandAbortable').mockImplementation(async (_cwd, args) => ({
+        stdout: args[0] === 'rev-parse' ? `${headSha}\n` : '', stderr: '',
+      })),
+      vi.spyOn(githubPr, 'fetchCacciaPullRequestHeadSha').mockResolvedValue(headSha),
+      vi.spyOn(githubPr, 'resolveReviewThread').mockResolvedValue(undefined),
+      vi.spyOn(slackWebhook, 'getSlackWebhookUrl').mockReturnValue(undefined),
+    ];
+    const commit = vi.spyOn(taskGit, 'stageAndCommit').mockImplementation(async (cwd) => {
+      expect(readFileSync(join(cwd, 'command-ran'), 'utf8')).toBe('approved');
+      return undefined;
+    });
+    spies.push(commit);
+    mockRunAgent.mockImplementation(async (persona, instruction, options) => {
+      options?.onPromptResolved?.({ systemPrompt: typeof persona === 'string' ? persona : '', userInstruction: instruction });
+      return { persona: 'coder', status: 'done', timestamp: new Date(),
+        content: JSON.stringify([{ thread_id: 'command-thread', valid: false, reason: 'Intentional.' }]),
+      };
+    });
+    const spawn = vi.mocked(childProcess.spawn);
+    spawn.mockClear();
+    try {
+      const execution = runCaccia({ entry: 'linked', projectCwd, prNumber: 42, outputMode: 'silent',
+        settings: resolveCacciaSettings({ enabled: true, maxIterations: 1, workflow: 'command-caccia' }),
+      });
+      if (allowed) {
+        expect((await execution).outcome).toBe('success');
+        expect(commit).toHaveBeenCalledOnce();
+        expect(spawn).toHaveBeenCalledWith('printf approved > command-ran', expect.objectContaining({ shell: true }));
+      } else {
+        await expect(execution).rejects.toThrow();
+        expect(spawn).not.toHaveBeenCalled();
+        expect(commit).not.toHaveBeenCalled();
+      }
+      expect(existsSync(join(projectCwd, 'command-ran'))).toBe(false);
+    } finally { for (const spy of spies) spy.mockRestore(); }
+  });
+
   afterEach(() => {
     for (const root of temporaryRoots.splice(0)) {
       rmSync(root, { recursive: true, force: true });

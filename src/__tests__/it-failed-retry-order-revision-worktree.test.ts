@@ -6,10 +6,11 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { parse, stringify } from 'yaml';
 import { setMockScenario, resetScenario } from '../infra/mock/index.js';
-import { retryFailedTask } from '../features/tasks/list/taskRetryActions.js';
+import { MockProvider } from '../infra/providers/mock.js';
+import { requeueFailedTask, retryFailedTask } from '../features/tasks/list/taskRetryActions.js';
 import { instructBranch } from '../features/tasks/list/taskInstructionActions.js';
 import { createMockProvider, restoreStdin, setupRawStdin, toRawInputs } from './helpers/stdinSimulator.js';
-import { confirmWithCancel, selectOption } from '../shared/prompt/index.js';
+import { confirmWithCancel, selectOption, selectOptionWithDefault } from '../shared/prompt/index.js';
 import {
   invalidateGlobalConfigCache,
   invalidateAllResolvedConfigCache,
@@ -161,6 +162,7 @@ function addFailedTask(
   runSlug: string,
   orderContent: string,
   resumePoint?: WorkflowResumePoint,
+  failureStep = resumePoint === undefined ? 'fix' : resumePoint.stack[0]!.step,
 ): { runner: TaskRunner; task: ReturnType<TaskRunner['listAllTaskItems']>[number] } {
   const runner = new TaskRunner(projectDir);
   mkdirSync(join(projectDir, taskDirRelative), { recursive: true });
@@ -183,7 +185,7 @@ function addFailedTask(
     success: false,
     response: 'initial provider failure',
     executionLog: ['initial provider failure'],
-    failureStep: resumePoint === undefined ? 'fix' : resumePoint.stack[0]!.step,
+    failureStep,
     startedAt: '2026-08-15T00:00:00.000Z',
     completedAt: '2026-08-15T00:01:00.000Z',
   });
@@ -207,6 +209,7 @@ describe('IT: failed retry order revision queueing in terminal worktree', () => 
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
     restoreStdin();
     resetScenario();
@@ -214,6 +217,95 @@ describe('IT: failed retry order revision queueing in terminal worktree', () => 
     if (environment && existsSync(environment.root)) {
       rmSync(environment.root, { recursive: true, force: true });
     }
+  });
+
+  describe.each(['requeue', 'retry'] as const)('task-list %s start persistence', (action) => {
+    // SCN-TL-RESUME-P2 / SCN-RESUME-02-P1: no checkpoint defaults to plan.
+    // SCN-RESUME-02-N1: adding only the latest run checkpoint preserves implement.
+    it.each(['initial', 'saved', 'explicit'] as const)('executes %s selection after saving and reloading', async (mode) => {
+      for (const cwd of [environment.projectDir, environment.worktreePath]) {
+        writeFileSync(join(cwd, '.takt/workflows/failed-retry-it.yaml'), stringify({
+          name: 'failed-retry-it', initial_step: 'plan', max_steps: 4,
+          steps: ['plan', 'implement'].map((step) => ({
+            name: step,
+            persona: `./personas/${step === 'plan' ? 'planner' : 'implementer'}.md`,
+            instruction: '{task}',
+            rules: [{ condition: 'when(true)', next: 'COMPLETE' }],
+          })),
+        }));
+        for (const persona of ['planner', 'implementer']) {
+          writeFileSync(join(cwd, `.takt/workflows/personas/${persona}.md`), `You are ${persona}.`);
+        }
+      }
+      invalidateAllResolvedConfigCache();
+      const taskDir = '.takt/tasks/task-list-start';
+      const originalOrder = '# Original task-list order';
+      const revisedOrder = '# Revised task-list order';
+      const { task } = addFailedTask(environment.projectDir, environment.worktreePath,
+        'task-list-start', taskDir, 'latest-source', originalOrder, undefined, 'implement');
+      expect(task.failure?.step).toBe('implement');
+      expect(task.data?.resume_point).toBeUndefined();
+      const workflow = loadWorkflowByIdentifier('failed-retry-it', environment.projectDir,
+        { lookupCwd: environment.worktreePath });
+      if (workflow === null) throw new Error('Expected task-list workflow');
+      const resumePoint: WorkflowResumePoint = {
+        version: 2,
+        stack: [buildWorkflowResumePointEntry(workflow, 'implement', 'agent', 1)],
+        iteration: 2, elapsed_ms: 1000, workflow_call_invocations: {}, workflow_step_participations: {},
+      };
+      if (mode === 'saved') {
+        writeSourceRun(environment.worktreePath, task.name, 'failed-retry-it', 'latest-source', resumePoint);
+      }
+      if (mode === 'explicit') {
+        vi.mocked(selectOptionWithDefault).mockImplementationOnce(async (_message, options) =>
+          options.find((option) => option.label.trim() === JSON.stringify('implement'))!.value);
+      }
+      const output = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      if (action === 'retry') {
+        setupRawStdin(toRawInputs(['Revise this task.', '/go']));
+        setMockScenario([
+          { persona: 'retry', status: 'done', content: 'Ready to revise.' },
+          { persona: 'retry', status: 'done', content: revisedOrder },
+        ]);
+      }
+      expect(await (action === 'requeue' ? requeueFailedTask : retryFailedTask)(task, environment.projectDir)).toBe(true);
+      expect(output.mock.calls.flat().join('\n')).toContain(mode === 'initial'
+        ? 'Selected start position: Start workflow from the beginning'
+        : mode === 'saved' ? 'Resume failed position: "implement"' : 'Selected start position: "implement"');
+
+      const runner = new TaskRunner(environment.projectDir);
+      const pending = runner.listAllTaskItems()[0]!;
+      expect(pending.kind).toBe('pending');
+      expect(pending.sourceRunSlug).toBe(mode === 'saved' ? 'latest-source' : undefined);
+      expect(pending.data?.start_step).toBe(mode === 'saved' ? 'implement' : undefined);
+      expect(pending.data?.resume_point).toEqual(mode === 'saved' ? resumePoint : undefined);
+      expect(pending.data?.restart_point?.stack[0]?.step).toBe(mode === 'explicit' ? 'implement' : undefined);
+      expect(pending.worktreePath).toBe(environment.worktreePath);
+      expect(pending.data?.branch).toBe('takt/failed-task');
+      const expectedOrder = action === 'retry' ? revisedOrder : originalOrder;
+      expect(readFileSync(join(environment.projectDir, taskDir, 'order.md'), 'utf8')).toBe(expectedOrder);
+
+      const started: Array<{ persona: string; cwd: string | undefined; prompt: string }> = [];
+      const setup = MockProvider.prototype.setup;
+      vi.spyOn(MockProvider.prototype, 'setup').mockImplementation(function (this: MockProvider, config) {
+        const agent = setup.call(this, config);
+        return { call: async (prompt, options) => {
+          started.push({ persona: config.name, cwd: options.cwd, prompt });
+          return agent.call(prompt, options);
+        } };
+      });
+      const expectedPersona = mode === 'initial' ? 'planner' : 'implementer';
+      setMockScenario([{ persona: expectedPersona, status: 'done', content: 'Complete.' }]);
+      const claimed = new TaskRunner(environment.projectDir).claimNextTasks(1)[0]!;
+      expect(await executeAndCompleteTask(claimed, runner, environment.projectDir,
+        { provider: 'mock' }, { outputMode: 'silent' }),
+      JSON.stringify(runner.listAllTaskItems().map((item) => item.failure))).toBe(true);
+      expect(started[0]?.persona).toBe(expectedPersona);
+      expect(started[0]?.prompt).toContain(expectedOrder);
+      expect(started.every((entry) => entry.cwd === environment.worktreePath)).toBe(true);
+      expect(git(environment.worktreePath, ['branch', '--show-current'])).toBe('takt/failed-task');
+      expect(new TaskRunner(environment.projectDir).listAllTaskItems()[0]?.kind).toBe('completed');
+    });
   });
 
   describe.each(['retry', 'requeue'] as const)('assistant /%s nested selection recovery', (command) => {
@@ -333,12 +425,17 @@ describe('IT: failed retry order revision queueing in terminal worktree', () => 
           { path: '"failed-retry-it" > "develop" → "development-core" > "peer-review"', ...(onHeading ? { description: '最終確認' } : {}) },
         ];
         for (const id of [chosenId, 'resume-checkpoint']) {
-          expect(payload.startOptions.find((option) => option.id === id)).toMatchObject({
+          const option = payload.startOptions.find((candidate) => candidate.id === id);
+          if (id === 'resume-checkpoint' && position === 'renamed leaf') {
+            expect(option).toBeUndefined();
+            continue;
+          }
+          expect(option).toMatchObject({
             path: id === 'resume-checkpoint' && position !== 'leaf'
               ? '"failed-retry-it" > "develop" → "development-core" > "peer-review"'
               : `"failed-retry-it" > "develop" → "development-core" > "peer-review" → "review-suite" > "${gateName}"`,
           });
-          expect(payload.startOptions.find((option) => option.id === id)?.headings).toEqual(expectedHeadings);
+          expect(option?.headings).toEqual(expectedHeadings);
         }
         expect(payload.startOptions.every((option) => !option.id.startsWith('heading:'))).toBe(true);
         const heading = context.startOptions.options.find((option) => option.id === 'heading:2.2')!;
@@ -560,7 +657,7 @@ describe('IT: failed retry order revision queueing in terminal worktree', () => 
     expect(readFileSync(join(taskDirectory, archivedOrders[0]!), 'utf-8')).toBe(originalOrder);
     expect(finalTask.worktreePath).toBe(environment.worktreePath);
     expect(finalTask.runSlug).toBeUndefined();
-    expect(finalTask.sourceRunSlug).toBe(failedRunSlug);
+    expect(finalTask.sourceRunSlug).toBeUndefined();
 
     const runDirectory = join(environment.worktreePath, '.takt', 'runs');
     expect(readdirSync(runDirectory)).toEqual([failedRunSlug]);
@@ -625,7 +722,7 @@ describe('IT: failed retry order revision queueing in terminal worktree', () => 
     expect(finalTask.data?.start_step).toBe(expectedStart.startStep);
     expect(finalTask.data?.resume_point).toEqual(expectedStart.resumePoint);
     expect(finalTask.data?.restart_point).toEqual(expectedStart.restartPoint);
-    expect(finalTask.sourceRunSlug).toBe(runSlug);
+    expect(finalTask.sourceRunSlug).toBeUndefined();
     expect(capture.callCount).toBe(3);
     expect(capture.prompts[2]).toContain(originalOrder);
     expect(capture.prompts[2]).toContain('Apply the repair described in this conversation.');
@@ -690,7 +787,7 @@ describe('IT: failed retry order revision queueing in terminal worktree', () => 
     expect(finalTask.data?.resume_point).toEqual(expectedStart.resumePoint);
     expect(finalTask.data?.restart_point).toEqual(expectedStart.restartPoint);
     expect(finalTask.data?.retry_note).toContain('[Auto-requeue]');
-    expect(finalTask.sourceRunSlug).toBe(runSlug);
+    expect(finalTask.sourceRunSlug).toBeUndefined();
     expect(capture.callCount).toBe(2);
     expect(vi.mocked(confirmWithCancel)).toHaveBeenCalledWith(expect.stringContaining(expectedStart.label), false);
     expect(vi.mocked(selectOption)).not.toHaveBeenCalled();

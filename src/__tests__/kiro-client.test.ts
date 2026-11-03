@@ -499,6 +499,38 @@ describe('callKiro', () => {
     expect(args).not.toContain('--model');
   });
 
+  it('Given an effort option, When called, Then adds --effort with the given value', async () => {
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+    });
+
+    await callKiro('coder', 'implement', {
+      cwd: '/repo',
+      effort: 'medium',
+    });
+
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    const effortFlagIndex = args.indexOf('--effort');
+    expect(effortFlagIndex).toBeGreaterThanOrEqual(0);
+    expect(args[effortFlagIndex + 1]).toBe('medium');
+  });
+
+  it('Given no effort option, When called, Then does not add an --effort flag', async () => {
+    mockSpawnWithScenario({
+      stdout: 'done',
+      code: 0,
+    });
+
+    await callKiro('coder', 'implement', {
+      cwd: '/repo',
+      permissionMode: 'full',
+    });
+
+    const [, args] = mockSpawn.mock.calls[0] as [string, string[]];
+    expect(args).not.toContain('--effort');
+  });
+
   it('Given prompt starts with a Markdown list marker, When called, Then sends it via stdin unchanged', async () => {
     mockSpawnWithScenario({
       stdout: 'done',

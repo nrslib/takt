@@ -7,7 +7,7 @@
 language: en        # UI language: en | ja
 
 # Default provider and model
-# provider: claude-sdk                    # Default provider: claude-sdk | claude (alias) | claude-headless | claude-terminal | codex | opencode | deepseek-harness | pi | cursor | copilot | kiro | mock
+# provider: claude-sdk                    # Default provider: claude-sdk | claude (alias) | claude-headless | claude-terminal | codex | opencode | deepseek-harness | pi | cursor | copilot | kiro | devin | mock
 # model: sonnet                       # Default model (passed directly to provider)
 
 # Execution control
@@ -174,6 +174,7 @@ language: en        # UI language: en | ja
 # cursor_cli_path: "/absolute/path/to/cursor"  # Absolute path to cursor-agent CLI
 # copilot_cli_path: "/absolute/path/to/copilot" # Absolute path to Copilot CLI
 # kiro_cli_path: "/absolute/path/to/kiro-cli"   # Absolute path to Kiro CLI
+# devin_cli_path: "/absolute/path/to/devin"     # Absolute path to Devin CLI
 # copilot_github_token: "ghp_..."              # Copilot GitHub token
 
 # Misc

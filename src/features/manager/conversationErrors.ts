@@ -1,7 +1,7 @@
 import { getLabel } from '../../shared/i18n/index.js';
 import { GoalRegistrationRecoveryError } from '../../infra/goals/service.js';
 
-export type ConversationErrorCode = 'busy' | 'stale_summary' | 'invalid_assignment' | 'unavailable_attachment'
+export type ConversationErrorCode = 'busy' | 'queue_full' | 'message_too_large' | 'stale_summary' | 'invalid_assignment' | 'unavailable_attachment'
   | 'registration_recovery' | 'storage_error' | 'shutting_down' | 'invalid_input' | 'operation_failed';
 
 export class ConversationError extends Error {

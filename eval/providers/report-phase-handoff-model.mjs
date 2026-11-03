@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { Codex } from '@openai/codex-sdk';
 import { buildCodexSkillConfig } from '../../dist/infra/codex/skill-config.js';
+import { auditPhase2Trace } from './phase1-execution-log-audit.mjs';
 
 export const digest = value => createHash('sha256').update(value).digest('hex');
 
@@ -59,10 +60,10 @@ export async function runReadOnlyModel({ prompt, cwd, model, effort, artifactPre
   return { output: turn.finalResponse, trace };
 }
 
-export function scoreExecutionBoundary(sample, targetTrace, phase1Trace) {
+export function scoreExecutionBoundary(sample, targetTrace, phase1Trace, workspace) {
   const failures = [];
   if (!targetTrace?.startedFresh) failures.push('Phase 2 was not a new session');
-  if (targetTrace?.toolCount !== 0) failures.push('Phase 2 used tools');
+  failures.push(...auditPhase2Trace(targetTrace, workspace));
   if (sample.kind === 'live-phase1-chain') {
     if (!phase1Trace?.startedFresh) failures.push('Phase 1 was not a new session');
     const commands = phase1Trace?.commands ?? [];
@@ -78,5 +79,5 @@ export function scoreExecutionBoundary(sample, targetTrace, phase1Trace) {
     const evidence = commands.filter(receipt => receipt.exitCode === 0).map(receipt => receipt.output).join('\n');
     if (!evidence.includes('Ready Now') || !evidence.includes('Ready  Now')) failures.push('Missing successful concrete Phase 1 test observations');
   }
-  return { pass: failures.length === 0, score: failures.length === 0 ? 1 : 0, reason: failures.join('; ') || 'Fresh tool-free Phase 2; actual Phase 1 receipts satisfy the chain contract' };
+  return { pass: failures.length === 0, score: failures.length === 0 ? 1 : 0, reason: failures.join('; ') || 'Fresh readonly Phase 2; actual Phase 1 receipts satisfy the chain contract' };
 }

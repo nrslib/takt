@@ -11,8 +11,12 @@ import type { WorkflowCallResolver } from './types.js';
 import { getReportFiles } from './output-contract-files.js';
 import { MAX_WORKFLOW_CALL_DEPTH } from './workflow-call-depth.js';
 import { buildWorkflowResumePointEntry, getWorkflowReference } from './workflow-reference.js';
-import { workflowCallNamespaceSegmentMatchesInvocation } from './workflow-call-namespace.js';
-import { getErrorMessage } from '../../shared/utils/index.js';
+import {
+  parseWorkflowCallNamespaceSegment,
+  workflowCallNamespaceSegmentMatchesInvocation,
+} from './workflow-call-namespace.js';
+import { buildWorkflowCallSiteIdentity } from './workflow-call-site-identity.js';
+import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { buildDynamicParallelSelectionIdentity } from './dynamic-parallel/identity.js';
 import {
   resolveReviewReportStepParticipation,
@@ -22,6 +26,7 @@ import {
 } from './review-report-participation.js';
 
 const REPORT_PATH_SEPARATOR = '/';
+const log = createLogger('review-report-discovery');
 
 export interface InheritedReviewReportNamesResult {
   readonly reportNames: readonly string[];
@@ -269,6 +274,37 @@ function resolveWorkflowCallReportNames(
     };
   }
   const namespaceSegment = reportParticipation.invocation.report_namespace_segment;
+  const savedNamespace = parseWorkflowCallNamespaceSegment(namespaceSegment);
+  if (savedNamespace === undefined || savedNamespace.iteration === '*') {
+    return {
+      reportNames: [],
+      failures: [{
+        kind: 'fatal',
+        reason: `workflow_call_invocation_namespace_mismatch:${step.name}`,
+      }],
+    };
+  }
+  const currentDefinitionNamespace = buildWorkflowCallSiteIdentity({
+    stack: [
+      ...reportParticipation.resumeStackPrefix,
+      buildWorkflowResumePointEntry(
+        context.workflow,
+        step.name,
+        step.kind,
+        savedNamespace.iteration,
+        undefined,
+        reportParticipation.invocation.call_instance,
+      ),
+    ],
+    childWorkflow,
+  }).runPathSegment;
+  if (namespaceSegment !== currentDefinitionNamespace) {
+    log.warn('Saved workflow call site digest differs from current workflow', {
+      step: step.name,
+      saved: namespaceSegment,
+      current: currentDefinitionNamespace,
+    });
+  }
   const childNamespace = [
     ...namespace,
     'subworkflows',

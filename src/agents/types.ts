@@ -79,6 +79,7 @@ export interface RunAgentOptions {
   mcpServerIdentity?: string;
   maxTurns?: number;
   permissionMode?: PermissionMode;
+  edit?: boolean;
   permissionResolution?: {
     stepName: string;
     requiredPermissionMode?: PermissionMode;

@@ -4,12 +4,16 @@ import type { ConversationActor, ConversationAssignment, ConversationRecord, Por
 import type { WritablePermissionScope } from './scopedPermissionStorage.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
 import type { ManagerAssignment } from './startupResolution.js';
-import type { ManagerDisplayEvent, ManagerDisplayNotice } from './savedEvents.js';
+import type { ManagerDisplayEvent } from './savedEvents.js';
+
+export type ConversationDisplayAssignment = ManagerAssignment | { readonly kind: 'daemon'; readonly repositoryDirectories: readonly string[] };
 
 export type ConversationCommand =
-  | { kind: 'message'; text: string }
-  | { kind: 'approve_summary' | 'dismiss_summary'; revision: number }
+  | { kind: 'message'; text: string; display?: boolean }
+  | { kind: 'approve_summary'; revision: number; requirePending?: boolean }
+  | { kind: 'dismiss_summary'; revision: number }
   | { kind: 'answer_question'; target: QuestionTarget; questionId: string; answer: GoalAnswerInput;
+      source?: 'tui' | 'slack';
       permission?: { scope: WritablePermissionScope; sentence: string } }
   | { kind: 'pause_goal' | 'resume_goal' | 'abort_goal'; goalId: string }
   | { kind: 'abort_turn'; operationId: string };
@@ -22,21 +26,27 @@ export interface ConversationState {
   approval: ConversationRecord['approval'];
   running: { operationId: string; kind: string } | null;
   interrupted: boolean;
+  queuedMessageCount?: number;
 }
-export type SnapshotItem =
+export type SnapshotValue =
   | { kind: 'state'; state: ConversationState }
-  | { kind: 'assignment'; assignment: ManagerAssignment }
+  | { kind: 'assignment'; assignment: ConversationDisplayAssignment }
   | { kind: 'goal'; goal: Pick<Goal, 'id' | 'objective' | 'status' | 'executionStatus'> & { repositoryDirectory: string } }
   | { kind: 'inquiry'; inquiry: { target: QuestionTarget; question: GoalQuestion; objective?: string } }
-  | { kind: 'notice'; notice: ManagerDisplayNotice }
   | { kind: 'display_event'; event: ManagerDisplayEvent };
+export type SnapshotItem = SnapshotValue | { kind: 'remove'; key: string };
+export type SnapshotMode = 'initial' | 'delta';
 export interface OutputVersion { revision: number; stateSequence: number; operationId: string | null }
 export interface SnapshotRead extends OutputVersion {
   transferId: string;
   conversationId: string;
+  mode: SnapshotMode;
   items: AsyncIterable<SnapshotItem>;
+  complete(): void;
+  cancel(): void;
 }
-export type Submission = { kind: 'accepted' | 'busy'; operationId: string } | { kind: 'error'; code: string; message: string };
+export type Submission = { kind: 'accepted'; operationId: string; queuedMessageCount?: number }
+  | { kind: 'busy'; operationId: string } | { kind: 'error'; code: string; message: string };
 export type OperationResult =
   | { kind: 'reply'; message: string }
   | { kind: 'goal_registered'; goal: Goal }
@@ -44,6 +54,7 @@ export type OperationResult =
   | { kind: 'error'; code: string; message: string; answerSaved?: boolean; permissionAppended?: boolean };
 export type PortOutput =
   | { kind: 'snapshot'; read: SnapshotRead }
+  | { kind: 'user_message'; operationId: string; message: string }
   | { kind: 'reply' | 'progress'; operationId: string; message: string }
   | { kind: 'pending' | 'running'; state: ConversationState }
   | { kind: 'notice'; id: string; message: string }

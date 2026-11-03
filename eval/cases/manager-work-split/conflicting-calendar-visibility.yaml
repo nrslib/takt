@@ -1,0 +1,260 @@
+ja:
+  lang: ja
+  turn: event
+  cwd: /workspace/project
+  concurrency: 2
+  defaultWorkflow: default
+  mainMerge: auto
+  goal: &a1
+    id: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-11T20:00:00.000Z
+    objective: 地域カレンダーに予定を同期する
+    outOfScope:
+      - カレンダーの外観変更
+    acceptanceCriteria:
+      - 外部カレンダーが利用できない場合も、保存した予定をすぐ一覧に表示する。
+      - 外部カレンダーが確認するまでは、未確認の予定を一覧に表示しない。
+    constraints: []
+    mode: local
+    status: created
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/community-calendar
+    startBranch: main
+    integrationBranch: main
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-000000000032
+        recordedAt: 2026-10-11T23:00:00.000Z
+        summary: "seed-index を takt/goal/community-calendar に取り込みました。成果 SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa。索引の土台を用意しました。"
+    questions: []
+  event:
+    kind: patrol
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-12T00:01:00.000Z
+  tasks:
+    - name: seed-index
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: completed
+      status: completed
+      createdAt: 2026-10-11T20:10:00.000Z
+      startedAt: 2026-10-11T20:15:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-seed-index
+      completion:
+        success: true
+        interrupted: false
+        branch: takt/task/seed-index
+        sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        workflowResult: completed
+      goalWorkKey: seed-index
+      goalPurpose: 索引の土台を用意する
+    - name: community-calendar
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: running
+      status: running
+      createdAt: 2026-10-11T23:10:00.000Z
+      startedAt: 2026-10-11T23:15:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-community-calendar
+      goalWorkKey: community-calendar
+      goalPurpose: 予定を外部カレンダーへ同期し、一覧に表示する。
+  readResults:
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goal: *a1
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/goal-request.md
+      result: |-
+        # 地域カレンダーに予定を同期する
+
+        ## 目的
+        地域カレンダーに予定を同期する
+
+        ## 受け入れ条件
+        - 外部カレンダーが利用できない場合も、保存した予定をすぐ一覧に表示する。
+        - 外部カレンダーが確認するまでは、未確認の予定を一覧に表示しない。
+
+        ## 作業指示
+        予定を外部カレンダーへ同期し、一覧に表示する。
+
+        ## 範囲外
+        - カレンダーの外観変更
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/project-policy.md
+      result: 外部カレンダーに接続できない間は確認結果を取得できない。どちらの受け入れ条件を優先するかはプロジェクト文書で決めていない。
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/.takt/runs/reports/review-resolution.md
+      result: |-
+        ## 修正対象
+        未確認の予定を `pending` として一覧に出し、再接続後に外部カレンダーと照合する。
+
+        ## 裁定の根拠
+        利用できない間も予定をすぐに確認できる必要があるが、外部確認前は一覧に表示しない条件と矛盾する。
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-community-calendar
+      result:
+        runSlug: run-community-calendar
+        task: 予定を外部カレンダーへ同期し、一覧に表示する。
+        workflow: default
+        status: running
+        currentStep: review
+        currentIteration: 1
+        currentStepStartedAt: 2026-10-12T00:00:00.000Z
+        currentStepExecutionCount: 1
+        phase: 1
+        stepLogs:
+          - step: review
+            persona: reviewer
+            status: done
+            iteration: 1
+            timestamp: 2026-10-11T23:03:00.000Z
+            content: 対象項目の不具合を報告した。周回 1。
+          - step: review-adjudication
+            persona: review-adjudicator
+            status: done
+            iteration: 1
+            timestamp: 2026-10-11T23:04:00.000Z
+            content: 対象項目を修正対象として採用した。周回 1。
+        reports:
+          - filename: review-resolution.md
+            sizeBytes: 740
+          - filename: implementation.md
+            sizeBytes: 520
+en:
+  lang: en
+  turn: event
+  cwd: /workspace/project
+  concurrency: 2
+  defaultWorkflow: default
+  mainMerge: auto
+  goal: &a2
+    id: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-11T20:00:00.000Z
+    objective: Sync events to the community calendar
+    outOfScope:
+      - Changes to the calendar’s appearance
+    acceptanceCriteria:
+      - Show a saved event in the list immediately even when the external calendar is unavailable.
+      - Do not show an event in the list until the external calendar confirms it.
+    constraints: []
+    mode: local
+    status: created
+    executionStatus: active
+    acceptanceCriteriaVersion: 1
+    branch: takt/goal/community-calendar
+    startBranch: main
+    integrationBranch: main
+    workLog:
+      - id: 650e8400-e29b-41d4-a716-000000000032
+        recordedAt: 2026-10-11T23:00:00.000Z
+        summary: "Integrated seed-index into takt/goal/community-calendar. Result SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa. Prepared the index foundation."
+    questions: []
+  event:
+    kind: patrol
+    goalId: 650e8400-e29b-41d4-a716-446655440000
+    createdAt: 2026-10-12T00:01:00.000Z
+  tasks:
+    - name: seed-index
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: completed
+      status: completed
+      createdAt: 2026-10-11T20:10:00.000Z
+      startedAt: 2026-10-11T20:15:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-seed-index
+      completion:
+        success: true
+        interrupted: false
+        branch: takt/task/seed-index
+        sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        workflowResult: completed
+      goalWorkKey: seed-index
+      goalPurpose: Prepare the index foundation
+    - name: community-calendar
+      goalId: 650e8400-e29b-41d4-a716-446655440000
+      kind: running
+      status: running
+      createdAt: 2026-10-11T23:10:00.000Z
+      startedAt: 2026-10-11T23:15:00.000Z
+      filePath: /workspace/project/.takt/tasks.yaml
+      runSlug: run-community-calendar
+      goalWorkKey: community-calendar
+      goalPurpose: Sync events to the external calendar and display them in the list.
+  readResults:
+    - tool: takt_get_goal
+      arguments:
+        cwd: /workspace/project
+        goalId: 650e8400-e29b-41d4-a716-446655440000
+      result:
+        goal: *a2
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/goal-request.md
+      result: |-
+        # Sync events to the community calendar
+
+        ## Objective
+        Sync events to the community calendar
+
+        ## Acceptance criteria
+        - Show a saved event in the list immediately even when the external calendar is unavailable.
+        - Do not show an event in the list until the external calendar confirms it.
+
+        ## Work instructions
+        Sync events to the external calendar and display them in the list.
+
+        ## Out of scope
+        - Changes to the calendar’s appearance
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/project-policy.md
+      result: Confirmation cannot be obtained while the external calendar is unreachable. Project documents do not say which acceptance criterion takes priority.
+    - tool: Read
+      arguments:
+        file_path: /workspace/project/.takt/runs/reports/review-resolution.md
+      result: |-
+        ## Items to fix
+        Show unconfirmed events as `pending` and reconcile them with the external calendar after reconnection.
+
+        ## Adjudication basis
+        Immediate display while unavailable conflicts with the requirement not to display an event before external confirmation.
+    - tool: takt_get_run
+      arguments:
+        cwd: /workspace/project
+        runSlug: run-community-calendar
+      result:
+        runSlug: run-community-calendar
+        task: Sync events to the external calendar and display them in the list.
+        workflow: default
+        status: running
+        currentStep: review
+        currentIteration: 1
+        currentStepStartedAt: 2026-10-12T00:00:00.000Z
+        currentStepExecutionCount: 1
+        phase: 1
+        stepLogs:
+          - step: review
+            persona: reviewer
+            status: done
+            iteration: 1
+            timestamp: 2026-10-11T23:03:00.000Z
+            content: Reported the repair item. Cycle 1.
+          - step: review-adjudication
+            persona: review-adjudicator
+            status: done
+            iteration: 1
+            timestamp: 2026-10-11T23:04:00.000Z
+            content: Accepted the item for repair. Cycle 1.
+        reports:
+          - filename: review-resolution.md
+            sizeBytes: 740
+          - filename: implementation.md
+            sizeBytes: 520

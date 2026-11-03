@@ -14,6 +14,8 @@ import * as capabilityModule from '../infra/providers/provider-capabilities.js';
 import type { NormalAgentWorkflowStep, WorkflowResumePointEntry, WorkflowStep } from '../core/models/types.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { DeepSeekHarnessProvider } from '../infra/providers/deepseek-harness.js';
+import { buildOpenCodePromptTools } from '../infra/opencode/types.js';
+import { resolvePiActiveTools } from '../infra/providers/pi-tool-policy.js';
 
 function createPreToolUseInput(
   toolName: string,
@@ -1257,7 +1259,7 @@ describe('OptionsBuilder.buildResumeOptions', () => {
     vi.clearAllMocks();
   });
 
-  it('should enforce readonly permission and empty allowedTools for report/status phases', () => {
+  it('should enforce readonly permission and read tools for report phases', () => {
     // Given
     const step = createStep({ requiredPermissionMode: 'full' });
     const builder = createBuilder(step, { bypassPermissions: true });
@@ -1269,26 +1271,87 @@ describe('OptionsBuilder.buildResumeOptions', () => {
     expect(options.permissionMode).toBe('readonly');
     expect(options.permissionResolution).toBeUndefined();
     expect(options.bypassPermissions).toBeUndefined();
-    expect(options.allowedTools).toEqual([]);
+    expect(options.allowedTools).toBeUndefined();
     expect(Object.prototype.hasOwnProperty.call(options, 'maxTurns')).toBe(true);
     expect(options.maxTurns).toBe(3);
     expect(options.sessionId).toBe('session-123');
   });
 
-  it('retains tool-free or explicit constraints and rejects every DeepSeek report route before SDK startup', async () => {
+  it.each(['claude', 'claude-sdk', 'claude-headless', 'claude-terminal', 'codex', 'opencode', 'pi', 'mock',
+    'copilot', 'kiro', 'cursor', 'devin'] as const)(
+    'allows report tools on all three Phase 2 routes (%s)', (provider) => {
+      const readonlyStep = createStep({ provider, model: 'test-model', requiredPermissionMode: 'readonly',
+        edit: false });
+      const builder = createBuilder(readonlyStep, { bypassPermissions: true });
+      const phase1 = builder.buildAgentOptions(readonlyStep);
+      const expectedTools = ['codex', 'copilot', 'kiro', 'cursor', 'devin'].includes(provider) ? undefined
+        : provider === 'pi' ? ['read', 'grep', 'find', 'ls', 'codemode']
+          : provider === 'opencode' ? ['read', 'list', 'glob', 'grep']
+            : provider === 'mock' ? ['Read', 'Glob', 'Grep']
+              : ['Read', 'Glob', 'Grep', 'Bash'];
+      const primary = createStep({ provider: 'opencode', model: 'primary' });
+      const fallbackBuilder = createBuilder(primary, { reportFallbackProvider: { provider, model: 'test-model' } });
+      const routes = [
+        builder.buildResumeOptions(readonlyStep, 'session', { maxTurns: 3 }),
+        builder.buildNewSessionReportOptions(readonlyStep, { maxTurns: 3 }),
+        ...(provider === 'opencode' ? [] : [fallbackBuilder.buildFallbackReportOptions(primary,
+          { cwd: '/project', resolvedProvider: 'opencode' }, { maxTurns: 3 })!]),
+      ];
+      for (const options of routes) {
+        expect(options.allowedTools).toEqual(expectedTools);
+        expect(options.permissionMode).toBe('readonly');
+        expect(options.permissionResolution).toBeUndefined();
+        expect(options.bypassPermissions).toBeUndefined();
+        expect(options.executionPhase).toBe(2);
+        expect(options.outputSchema).toBeUndefined();
+      }
+      if (provider === 'pi') expect(phase1.allowedTools).toEqual(expectedTools);
+    },
+  );
+
+  it.each([undefined, ['Read', 'Glob', 'Grep']])(
+    'preserves OpenCode readonly file tools while excluding Skill from reports (%j)', (phase1AllowedTools) => {
+      const step = createStep({ provider: 'opencode', model: 'opencode/test-model' });
+      const builder = createBuilder(step);
+      const phase1Tools = buildOpenCodePromptTools('readonly', undefined, phase1AllowedTools);
+      const enabledNames = (tools: Record<string, boolean>): string[] => Object.entries(tools)
+        .filter(([, enabled]) => enabled).map(([name]) => name);
+      const phase1Names = enabledNames(phase1Tools);
+      expect(phase1Names).toContain('skill');
+
+      for (const options of [
+        builder.buildResumeOptions(step, 'session', { maxTurns: 3 }),
+        builder.buildNewSessionReportOptions(step, { maxTurns: 3 }),
+      ]) {
+        expect(new Set(options.allowedTools)).toEqual(new Set(phase1Names.filter((name) => name !== 'skill')));
+      }
+    },
+  );
+
+  it('allows the actual Pi readonly tool names after workflow aliases are normalized', () => {
+    const step = createStep({ provider: 'pi', model: 'test-model' });
+    const options = createBuilder(step).buildResumeOptions(step, 'session', { maxTurns: 3 });
+    const tools = ['read', 'grep', 'find', 'ls', 'codemode', 'bash', 'write', 'edit']
+      .map((name) => ({ name, source: 'builtin' }));
+    const phase1Names = resolvePiActiveTools('readonly', ['Read', 'Grep', 'Glob', 'LS', 'CodeMode'], tools);
+
+    expect(new Set(options.allowedTools)).toEqual(new Set(phase1Names));
+    expect(resolvePiActiveTools(options.permissionMode, options.allowedTools, tools)).toEqual(phase1Names);
+  });
+
+  it('rejects every DeepSeek report route before SDK startup when tool constraints cannot be enforced', async () => {
     const step = createStep({ provider: 'deepseek-harness', model: 'deepseek-v4-flash' });
     const builder = createBuilder(step);
 
     const resumeOptions = builder.buildResumeOptions(step, 'session-123', { maxTurns: 3 });
     const newSessionOptions = builder.buildNewSessionReportOptions(step, {
-      allowedTools: ['Read'],
       maxTurns: 3,
     });
 
     expect(resumeOptions.permissionMode).toBeUndefined();
     expect(resumeOptions.allowedTools).toEqual([]);
     expect(newSessionOptions.permissionMode).toBeUndefined();
-    expect(newSessionOptions.allowedTools).toEqual(['Read']);
+    expect(newSessionOptions.allowedTools).toEqual([]);
 
     const fallbackBuilder = createBuilder(
       createStep({ provider: 'opencode', model: 'opencode/report-model' }),
@@ -1297,17 +1360,15 @@ describe('OptionsBuilder.buildResumeOptions', () => {
     const fallbackOptions = fallbackBuilder.buildFallbackReportOptions(
       createStep({ provider: 'opencode', model: 'opencode/report-model' }),
       { cwd: '/project', resolvedProvider: 'opencode' },
-      { allowedTools: [], maxTurns: 3 },
+      { maxTurns: 3 },
     );
 
     expect(fallbackOptions).toBeDefined();
     expect(fallbackOptions?.permissionMode).toBeUndefined();
     expect(fallbackOptions?.allowedTools).toEqual([]);
 
-    const emptyOptions = builder.buildNewSessionReportOptions(step, { allowedTools: [], maxTurns: 3 });
-    const omittedOptions = builder.buildNewSessionReportOptions(step, { maxTurns: 3 });
     const provider = new DeepSeekHarnessProvider().setup({ name: 'report' });
-    for (const options of [resumeOptions, newSessionOptions, emptyOptions, omittedOptions, fallbackOptions!]) {
+    for (const options of [resumeOptions, newSessionOptions, fallbackOptions!]) {
       const response = await provider.call('Generate a tool-free report.', options);
       expect(response.status).toBe('error');
       expect(response.content).toContain('cannot honor allowedTools');
@@ -1323,7 +1384,6 @@ describe('OptionsBuilder.buildResumeOptions', () => {
     const builder = createBuilder(step);
 
     const options = builder.buildNewSessionReportOptions(step, {
-      allowedTools: [],
       maxTurns: 3,
     });
 
@@ -1370,11 +1430,9 @@ describe('OptionsBuilder.buildResumeOptions', () => {
     // When
     const resumeOptions = builder.buildResumeOptions(step, 'session-123', { maxTurns: 3 });
     const newSessionOptions = builder.buildNewSessionReportOptions(step, {
-      allowedTools: [],
       maxTurns: 3,
     });
     const fallbackOptions = builder.buildFallbackReportOptions(step, newSessionOptions, {
-      allowedTools: [],
       maxTurns: 3,
     });
 
@@ -1398,11 +1456,9 @@ describe('OptionsBuilder.buildResumeOptions', () => {
     }, recordActivity);
     const resumeOptions = builder.buildResumeOptions(step, 'session-123', { maxTurns: 3 });
     const newSessionOptions = builder.buildNewSessionReportOptions(step, {
-      allowedTools: [],
       maxTurns: 3,
     });
     const fallbackOptions = builder.buildFallbackReportOptions(step, newSessionOptions, {
-      allowedTools: [],
       maxTurns: 3,
     });
 
@@ -1464,7 +1520,6 @@ describe('OptionsBuilder.buildNewSessionReportOptions', () => {
     });
 
     const options = builder.buildNewSessionReportOptions(step, {
-      allowedTools: ['Write'],
       maxTurns: 3,
     });
 
@@ -1481,7 +1536,6 @@ describe('OptionsBuilder.buildNewSessionReportOptions', () => {
     });
 
     const options = builder.buildNewSessionReportOptions(step, {
-      allowedTools: [],
       maxTurns: 3,
     });
 
@@ -1495,12 +1549,11 @@ describe('OptionsBuilder.buildNewSessionReportOptions', () => {
     const builder = createBuilder(step);
 
     const options = builder.buildNewSessionReportOptions(step, {
-      allowedTools: [],
       maxTurns: 3,
     });
 
     expect(options.resolvedProvider).toBe('claude-terminal');
-    expect(options.allowedTools).toEqual([]);
+    expect(options.allowedTools).toEqual(['Read', 'Glob', 'Grep', 'Bash']);
     expect(Object.prototype.hasOwnProperty.call(options, 'maxTurns')).toBe(false);
     expect(options.maxTurns).toBeUndefined();
   });
@@ -1510,12 +1563,11 @@ describe('OptionsBuilder.buildNewSessionReportOptions', () => {
     const builder = createBuilder(step);
 
     const options = builder.buildNewSessionReportOptions(step, {
-      allowedTools: [],
       maxTurns: 3,
     });
 
     expect(options.resolvedProvider).toBe('opencode');
-    expect(options.allowedTools).toEqual([]);
+    expect(options.allowedTools).toEqual(['read', 'list', 'glob', 'grep']);
     expect(Object.prototype.hasOwnProperty.call(options, 'maxTurns')).toBe(false);
     expect(options.maxTurns).toBeUndefined();
   });
@@ -1547,7 +1599,6 @@ describe('OptionsBuilder.buildFallbackReportOptions', () => {
       resolvedProvider: 'opencode',
       resolvedModel: 'opencode/qwen3-coder-next',
     }, {
-      allowedTools: [],
       maxTurns: 3,
     });
 
@@ -1562,7 +1613,7 @@ describe('OptionsBuilder.buildFallbackReportOptions', () => {
     expect(options.permissionMode).toBe('readonly');
     expect(options.permissionResolution).toBeUndefined();
     expect(options.bypassPermissions).toBeUndefined();
-    expect(options.allowedTools).toEqual([]);
+    expect(options.allowedTools).toEqual(['Read', 'Glob', 'Grep']);
     expect(options.maxTurns).toBe(3);
     expect('providerSource' in options).toBe(false);
     expect('modelSource' in options).toBe(false);
@@ -1579,7 +1630,6 @@ describe('OptionsBuilder.buildFallbackReportOptions', () => {
       resolvedProvider: 'opencode',
       resolvedModel: 'opencode/qwen3-coder-next',
     }, {
-      allowedTools: [],
       maxTurns: 3,
     });
 
@@ -1602,7 +1652,6 @@ describe('OptionsBuilder.buildFallbackReportOptions', () => {
       cwd: '/project',
       resolvedProvider: 'codex',
     }, {
-      allowedTools: [],
       maxTurns: 3,
     });
 
@@ -1626,7 +1675,6 @@ describe('OptionsBuilder.buildFallbackReportOptions', () => {
       resolvedProvider: 'opencode',
       resolvedModel: 'opencode/qwen3-coder-next',
     }, {
-      allowedTools: [],
       maxTurns: 3,
     });
 
@@ -1667,7 +1715,6 @@ describe('OptionsBuilder.buildFallbackReportOptions', () => {
       resolvedProvider: 'opencode',
       resolvedModel: 'opencode/qwen3-coder-next',
     }, {
-      allowedTools: [],
       maxTurns: 3,
     });
 
@@ -1696,7 +1743,7 @@ describe('OptionsBuilder.buildFallbackReportOptions', () => {
       resolvedProvider: 'codex',
       resolvedModel: 'gpt-5.1-mini',
       permissionMode: 'readonly',
-      allowedTools: [],
+      allowedTools: undefined,
       maxTurns: 3,
       sessionId: undefined,
     });

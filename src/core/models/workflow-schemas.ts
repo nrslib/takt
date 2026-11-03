@@ -483,11 +483,17 @@ function validateCompletionRetryOptIn(
   }
 }
 
-const WorkflowReportInputRawSchema = z.object({
+const WorkflowReportInputEntryRawSchema = z.object({
   from_step: WorkflowStepNameSchema,
   reports: z.union([z.literal('all'), z.array(z.string().min(1)).min(1)]),
   optional_if_unrun: z.literal(true).optional(),
+  history: z.object({ previous: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER) }).strict().optional(),
 }).strict();
+
+export const WorkflowReportInputRawSchema = z.union([
+  WorkflowReportInputEntryRawSchema,
+  z.array(WorkflowReportInputEntryRawSchema).min(1),
+]);
 
 const AgentParallelSubStepRawObjectSchema = z.object({
   name: WorkflowStepNameSchema,
@@ -999,6 +1005,7 @@ export const LoopMonitorRuleSchema = z.object({
 
 /** Loop monitor judge schema */
 export const LoopMonitorJudgeSchema = z.object({
+  input_reports: WorkflowReportInputRawSchema.optional(),
   session_key: z.never({ message: 'session_key is not supported on loop_monitors.judge; judges always use a fresh session' }).optional(),
   persona: z.string().optional(),
   provider: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_PROVIDER_MESSAGE),

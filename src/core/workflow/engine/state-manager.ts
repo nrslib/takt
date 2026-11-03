@@ -15,9 +15,7 @@ import {
   MAX_INPUT_LENGTH,
 } from '../constants.js';
 import type { WorkflowEngineOptions } from '../types.js';
-import {
-  workflowEntryMatchesWorkflow,
-} from '../workflow-reference.js';
+import { resumeWorkflowMatches } from '../run/resume-point.js';
 
 /**
  * Manages workflow execution state.
@@ -45,7 +43,7 @@ export class StateManager {
     const resumeEntry = options.resumePoint?.stack[options.resumeStackPrefix?.length ?? 0];
     const stepIterations = resumeEntry !== undefined
       && resumeEntry.step === currentStep
-      && workflowEntryMatchesWorkflow(resumeEntry, config)
+      && resumeWorkflowMatches(resumeEntry, config)
       ? new Map(Object.entries(resumeEntry.step_iterations ?? {}))
       : new Map<string, number>();
     this.state = {

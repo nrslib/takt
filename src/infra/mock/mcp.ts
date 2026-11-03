@@ -15,7 +15,7 @@ export async function executeMockMcpCalls(
     const permission = `mcp__${call.server}__${call.tool}`;
     const allowed = options.allowedTools === undefined
       ? options.permissionMode === 'full'
-      : options.allowedTools.includes(permission);
+      : options.allowedTools.includes(permission) || options.allowedTools.includes(`mcp__${call.server}`);
     if (!allowed) throw new Error(`Mock MCP tool is not allowed: ${permission}`);
     if (options.abortSignal?.aborted) return 'aborted';
     const client = new Client({ name: 'takt-mock-provider', version: '1.0.0' });

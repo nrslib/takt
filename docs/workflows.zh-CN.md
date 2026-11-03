@@ -636,7 +636,7 @@ Team Leader agent 在运行时将任务分解成独立子部分，并把每部�
 
 System step 由 TAKT engine 执行，不启动 agent。使用 `kind: system` 或简写 `mode: system`，两者不能同时声明。System step 不能声明 `persona`、`instruction`、`provider`、`structured_output`、`output_contracts` 或 `quality_gates` 等 agent 字段。
 
-`system_inputs` 从 engine context 读取并通过 `as` 绑定名称；支持 `task_context`、`branch_context`、`pr_context`、`issue_context`、`task_queue_context`、`pr_list`、`pr_selection`、`issue_list` 和 `issue_selection`。绑定的值可通过 `when(context.<step>.<binding>...)` 使用，也可在后续 agent instruction 中使用 `{context:step.binding.field}`：
+`system_inputs` 从 engine context 读取数据或执行固定命令，并通过 `as` 绑定名称；支持 `task_context`、`branch_context`、`pr_context`、`issue_context`、`task_queue_context`、`pr_list`、`pr_selection`、`issue_list`、`issue_selection`、`pr_status`、`pr_ci_failure` 和 `command`。执行 `command` 需要授权设置，详见[固定命令 input](#固定命令-input)。绑定的值可通过 `when(context.<step>.<binding>...)` 使用，也可在后续 agent instruction 中使用 `{context:step.binding.field}`：
 
 ```yaml
   - name: route_context
@@ -655,6 +655,57 @@ System step 由 TAKT engine 执行，不启动 agent。使用 `kind: system` 或
       - condition: when(context.route_context.selected_pr.exists == true)
         next: plan_from_existing_pr
 ```
+
+#### 固定命令 input
+
+`type: command`执行workflow中固定的shell命令。以下权限默认禁用。project的显式值优先于global，未指定时使用global值。此权限独立于`workflow_command_gates.custom_scripts`。未授权的workflow在加载时失败。
+
+独立clone使用原project配置。每次运行解析权限并传给root和子workflow，`wait`期间不重新加载。参见[配置指南](configuration.zh-CN.md)。
+
+当 pipeline 或交互模式在当前目录检出 PR 时，会在切换分支前解析权限。交互会话在同一目录中保留该权限，切换到 Issue 后也使用该权限。仅由 PR 添加的 project 设置不会授予权限。
+
+```yaml
+workflow_system_commands:
+  custom_scripts: true
+```
+
+```yaml
+name: approval-command
+steps:
+  - name: check
+    kind: system
+    system_inputs:
+      - type: command
+        as: approval
+        command: node scripts/check-approval.mjs
+        timeout_ms: 1000
+        output: json
+    wait:
+      until: when(context.check.approval.json.ready == true)
+      interval_ms: 1000
+      max_retries: 30
+      on_timeout: ABORT
+    rules:
+      - condition: when(context.approval.json.status == "approved")
+        next: consume
+      - condition: when(true)
+        next: ABORT
+  - name: consume
+    instruction: "审批结果: {context:check.approval.json.status}"
+    rules:
+      - condition: when(true)
+        next: COMPLETE
+```
+
+`timeout_ms` 必填，必须是 1～2147483647 的整数，没有默认值或无限设置。`output: json` 可省略。YAML 不能指定 `cwd`，命令在任务执行目录中运行（worktree 任务使用克隆目录）。Pipeline 与交互模式行为相同。不支持 command effect。
+
+结果包含 `exit_code`（无法取得时为 `null`）、`timed_out`、`stdout` 和 `stderr`。仅当指定 `output: json`、退出码为 0、未超时且解析成功时才包含 `json`。非零退出和超时作为结果交给 rules。stdout 与 stderr 合计超过 65536 字节、启动失败、成功退出时的 JSON 无效都会使 step 失败，不执行 effects 或 rules。
+
+条件求值时还可用 `context.approval...` 引用当前 command binding；同名的现有 step scope 优先。持久化的 context 和后续 instruction 使用完整的 `context.check.approval...` scope。
+
+TAKT 不展开 command 占位符，也不追加参数。`TAKT_PREVIOUS_RESPONSE_FILE` 提供上一响应正文的私有文件路径，没有正文时文件为空。仅当同一响应有结构化输出时才设置 `TAKT_PREVIOUS_STRUCTURED_OUTPUT_FILE`。脚本负责读取文件并验证内容。文件保留在 run context 中作为运行产物。环境变量仅包含 command gate 的基本允许列表及这两个文件路径。
+
+不应用无通信超时。在 POSIX 上，执行超时或中断时向进程组发送 SIGTERM，100ms 后仍未退出则发送 SIGKILL。在 Windows 上，使用 `taskkill /T /F` 强制终止进程树，并等待 taskkill 完成。`wait` 每次检查重新执行命令，每次都有独立的 `timeout_ms`，并读取同一个上一响应。后续 system step 读取前一个 system 的响应。不会保留之前尝试的 JSON。沿用现有的 `wait.max_retries`、`on_timeout`、step 计数、`loop_monitors` 和 agent session 继续规则。
 
 `effects` 执行 engine-side action：`commit_and_push`, `caccia`, `enqueue_task`、`comment_pr`、`sync_with_root`、`resolve_conflicts_with_ai`、`merge_pr` 和 `close_pr`。每种 effect 在一个 step 中最多一次，结果通过 `when(effect.<step>.<type>.<field>)` 路由。
 
@@ -708,6 +759,8 @@ output_contracts:
       format: decisions
 ```
 
+Phase 2 沿用 provider 现有的 readonly 设置，只读取报告所需的证据。本次 Phase 1 执行记录以脱敏后的 JSONL 保存，并以路径和字节数传入。长字符串会拆成多行，便于搜索后只读取附近内容。Phase 2 不修改文件，不运行测试或构建，不开始新的调查，也不新增指摘、判定或计划；报告需区分 Phase 1 实际完成的确认与 Phase 2 读取的内容。TAKT 会把最终回答保存到报告文件。Phase 3 仍不使用工具。
+
 每项必须有 `name` 和 `format`。可选字段：`use_judge`（默认 `true`，决定 report 是否作为 Phase 3 status judgment 证据）和 `order`（替换默认 report-writing instruction 的 report-format facet）。需要 judgment 的规则至少保留一个 `use_judge` report。
 
 ## Runtime Provider Promotion
@@ -740,7 +793,7 @@ steps:
 | `policy` | - | policy key 或数组 |
 | `knowledge` | - | knowledge key 或数组 |
 | `instruction` | - | instruction key、内联文本，或由两者组成的非空有序数组；facet 名称按项目 → 用户 → builtin 解析 |
-| `edit` | - | 是否可以编辑项目文件 |
+| `edit` | - | 是否可以编辑项目文件。Codex 对显式设置 `false` 的 step，在 Phase 1 中使用 `read-only` sandbox |
 | `companion` | - | 在 normal agent step 或 Team Leader step 上运行 companion reviewer |
 | `completion_retry` | - | opt-in 的 reviewer 完整性检查与有界重试 |
 | `pass_previous_response` | `true` | 将上一个 step 输出传给 `{previous_response}` |
@@ -752,6 +805,8 @@ steps:
 | `quality_gates` | - | agent step 完成 gate；字符串是 AI 指令，`type: command` 是机器 gate |
 
 `completion_retry` 是只接受对象的显式 opt-in，要求 `retry_instruction`，可选 `min_retry` 与 `max_retry`。`max_retry` 未设置时内部上限为 4；`review_completion` 仍是已弃用别名，不能与 `completion_retry` 同时使用。Provider 和 model 不是 workflow 字段，必须由 runtime profile/routing 提供；workflow 中写入已移除字段会在加载边界失败。
+
+Codex 对显式设置 `edit: false` 的 step，在 Phase 1 中使用 `read-only` sandbox，无论解析出的 permission mode 是什么，包括 `permission_control: codex`。team leader 的 part（通过 `part_edit` 或继承的 `edit`）、parallel 子 step 和 `workflow_call` 子 workflow 中的各 step，分别使用自身的实际 `edit` 设置。通用权限解析、其他 provider、省略 `edit` 和 `edit: true` 的行为保持不变。
 
 ## Workflow 级配置
 

@@ -6,7 +6,7 @@
  * producer 実行後の resume で consumer の参照が必ず壊れる（v3-r4 の resume
  * 境界バグ）。ここでは旧 run の workflow 成果物全体を新 run の reports/
  * として原子的に継承する。writer の lock・履歴を保持する
- * `.takt-report-internal/` は継承しない。
+ * `.takt-report-internal/` は実行記録と固定版だけを継承し、lockや旧writer履歴は除外する。
  *
  * 重要なポイント:
  * - workflow成果物の選択コピーはしない。静的解析では workflow_call / loop
@@ -55,6 +55,8 @@ export { RESUME_ARTIFACTS_FILE_NAME } from '../../models/reserved-report-names.j
 import {
   classifyReportRelativePath,
   RESUME_ARTIFACTS_FILE_NAME,
+  REPORT_INTERNAL_NAMESPACE,
+  REPORT_EXECUTIONS_DIRECTORY,
 } from '../../models/reserved-report-names.js';
 
 export interface ResumeReportSnapshotFileEntry {
@@ -362,9 +364,15 @@ interface CopyResult {
 const PRIVATE_FILE_MODE = 0o600;
 type ResumeSnapshotEntryKind =
   | 'public'
+  | 'execution'
   | 'excluded';
 
 function classifyResumeSnapshotEntry(relativePath: string): ResumeSnapshotEntryKind {
+  const internal = REPORT_EXECUTIONS_DIRECTORY;
+  if (relativePath === REPORT_INTERNAL_NAMESPACE || relativePath === internal
+    || relativePath === `${internal}/index.json`
+    || relativePath === `${internal}/versions`
+    || new RegExp(`^${internal.replaceAll('.', '\\.')}/versions/[a-f0-9-]+(?:/[^/]+)?$`).test(relativePath)) return 'execution';
   const classification = classifyReportRelativePath(relativePath);
   if (classification.kind === 'public') {
     return 'public';
@@ -415,6 +423,11 @@ function copyReportsTree(
     const entryAbs = resolve(sourceRootAbs, entryRel);
     assertInside(sourceRootAbs, entryAbs, `source entry "${entryPosix}"`);
     const stat = inspectSnapshotSource(() => lstatSync(entryAbs));
+    if (entryKind === 'execution' && (!stat.isDirectory() && (!stat.isFile()
+      || !(entryPosix === `${REPORT_EXECUTIONS_DIRECTORY}/index.json`
+        || entryPosix.startsWith(`${REPORT_EXECUTIONS_DIRECTORY}/versions/`) && entryPosix.split('/').length === 5)))) {
+      continue;
+    }
     if (stat.isSymbolicLink()) {
       skippedEntries.push({ path: entryPosix, reason: 'symlink' });
       continue;
@@ -436,7 +449,7 @@ function copyReportsTree(
     ensurePrivateDirectory(stagingDirectory);
     const inheritedMode = stat.mode & PRIVATE_FILE_MODE;
     writePrivateFileWithMode(stagingAbs, content, inheritedMode);
-    files.push({
+    if (entryKind === 'public') files.push({
       path: entryPosix,
       size: content.length,
       sha256: createHash('sha256').update(content).digest('hex'),

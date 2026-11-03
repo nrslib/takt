@@ -122,10 +122,10 @@ it('does not queue a summary instruction rejected as busy or approve a later arr
   await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.conversation.busy', 'en')));
   await showProposal(context, summaryA, 5);
   await waitFor(() => expect(context.client.refresh).toHaveBeenCalled());
-  expect(context.client.commands()).toEqual([{ kind: 'message', text: getLabel('manager.goSummaryRequest', 'en') }]);
+  expect(context.client.commands()).toEqual([{ kind: 'message', text: getLabel('manager.goSummaryRequest', 'en'), display: false }]);
   approveSummary(context);
   await waitFor(() => expect(context.client.commands()).toEqual([
-    { kind: 'message', text: getLabel('manager.goSummaryRequest', 'en') },
+    { kind: 'message', text: getLabel('manager.goSummaryRequest', 'en'), display: false },
     { kind: 'approve_summary', revision: 5 },
   ]));
 });

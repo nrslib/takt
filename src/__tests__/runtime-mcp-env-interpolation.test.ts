@@ -22,6 +22,76 @@ import type {
  */
 
 describe('interpolateMcpEnv (MCP-ENV)', () => {
+  it.each(['http', 'sse'] as const)('keeps defined provider references in %s headers without expanding their values', (type) => {
+    const result = interpolateMcpEnv({
+      type,
+      url: 'https://example.com/mcp',
+      headers: { Authorization: 'Bearer ${env:MCP_ACCESS}', 'X-Key': '${env:MCP_KEY}' },
+    }, { MCP_ACCESS: 'synthetic-access', MCP_KEY: 'synthetic-key' });
+
+    expect((result as McpHttpServerConfig | McpSseServerConfig).headers).toEqual({
+      Authorization: 'Bearer ${env:MCP_ACCESS}',
+      'X-Key': '${env:MCP_KEY}',
+    });
+  });
+
+  it.each(['http', 'sse'] as const)('rejects an undefined provider reference in %s headers before startup', (type) => {
+    expect(() => interpolateMcpEnv({
+      type,
+      url: 'https://example.com/mcp',
+      headers: { Authorization: 'Bearer ${env:MCP_MISSING}' },
+    }, {})).toThrow(/MCP_MISSING/);
+  });
+
+  it('accepts a defined empty provider variable without treating it as undefined', () => {
+    const result = interpolateMcpEnv({
+      type: 'http',
+      url: 'https://example.com/mcp',
+      headers: { 'X-Key': '${env:MCP_EMPTY}' },
+    }, { MCP_EMPTY: '' });
+
+    expect((result as McpHttpServerConfig).headers?.['X-Key']).toBe('${env:MCP_EMPTY}');
+  });
+
+  it('rejects inherited object properties that are not defined environment variables', () => {
+    expect(() => interpolateMcpEnv({ type: 'http', url: 'https://example.com/mcp',
+      headers: { 'X-Key': '${env:toString}' },
+    }, {})).toThrow('toString');
+  });
+
+  it('distinguishes provider references from legacy references in the same header value', () => {
+    const result = interpolateMcpEnv({
+      type: 'http',
+      url: 'https://example.com/mcp',
+      headers: { Authorization: '${MCP_SCHEME} ${env:MCP_ACCESS}', 'X-Tenant': '${MCP_TENANT}' },
+    }, { MCP_SCHEME: 'Bearer', MCP_ACCESS: 'synthetic-access', MCP_TENANT: 'tenant-a' });
+
+    expect((result as McpHttpServerConfig).headers).toEqual({
+      Authorization: 'Bearer ${env:MCP_ACCESS}',
+      'X-Tenant': 'tenant-a',
+    });
+  });
+
+  it('keeps malformed provider reference strings literal', () => {
+    const headers = { empty: '${env:}', digit: '${env:9X}', unclosed: '${env:X', nested: '${${env:X}}' };
+    const result = interpolateMcpEnv({ type: 'http', url: 'https://example.com/mcp', headers }, {});
+
+    expect((result as McpHttpServerConfig).headers).toEqual(headers);
+  });
+
+  it('does not interpret provider reference syntax in URL or stdio fields', () => {
+    const remote = interpolateMcpEnv({ type: 'http', url: 'https://${env:MCP_HOST}/mcp' }, {});
+    const stdio = interpolateMcpEnv({
+      type: 'stdio', command: '${env:MCP_COMMAND}',
+      args: ['${env:MCP_ARG}'], env: { VALUE: '${env:MCP_VALUE}' },
+    }, {});
+
+    expect((remote as McpHttpServerConfig).url).toBe('https://${env:MCP_HOST}/mcp');
+    expect(stdio).toMatchObject({
+      command: '${env:MCP_COMMAND}', args: ['${env:MCP_ARG}'], env: { VALUE: '${env:MCP_VALUE}' },
+    });
+  });
+
   it('Given a stdio server with ${VAR} in env, When interpolated, Then the value is resolved from the explicit env source', () => {
     const result = interpolateMcpEnv({
       type: 'stdio',

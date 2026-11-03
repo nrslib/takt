@@ -32,7 +32,7 @@ vi.mock('../features/manager/managerMcp.js', async (original) => ({
   ...await original<typeof import('../features/manager/managerMcp.js')>(), connectManagerMcp: doubles.mcp,
 }));
 vi.mock('../features/tui/inkMount.js', () => ({ mountInk: doubles.mount }));
-vi.mock('../infra/codex/mcp-list.js', () => ({ runCodexMcpList: doubles.list }));
+vi.mock('../infra/codex/mcp-list.js', () => ({ runCodexMcpList: doubles.list, hasCodexMcpServer: vi.fn() }));
 vi.mock('../infra/codex/skill-config.js', () => ({ buildCodexSkillConfig: vi.fn() }));
 vi.mock('../infra/codex/cli-runtime.js', () => ({ resolveCodexSdkCli: () => ({ executablePath: '/test/codex', pathDirs: [] }) }));
 vi.mock('@openai/codex-sdk', () => ({ Codex: doubles.codex }));

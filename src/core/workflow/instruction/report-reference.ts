@@ -8,8 +8,8 @@
  * 通常ファイル（symlink 拒否）を検証する。欠落は実行を止めず、明示的な
  * 欠落文に置換する。
  *
- * doctor の静的解析（{report:X} 抽出）もこの parser を共用し、静的解析と
- * 実行時の構文解釈を揃える。
+ * doctor の静的解析（{report:X} / {report_history:X} 抽出）もこの parser を共用し、
+ * 静的解析と実行時の構文解釈を揃える。
  */
 
 import { lstatSync, realpathSync, type Stats } from 'node:fs';
@@ -22,16 +22,28 @@ import { readResumeReportSnapshotManifest } from '../run/resume-report-snapshot.
 import { readRegularFileNoFollow } from '../../../shared/utils/private-file.js';
 import { findReportInScopes } from './report-reference-scope.js';
 
-export const REPORT_REFERENCE_PATTERN = /\{report:([^}]+)\}/g;
+export const REPORT_REFERENCE_PATTERN = /\{(report|report_history):([^}]+)\}/g;
 
-/** テキストから {report:X} の参照名を抽出する（doctor と実行時で共用）。 */
-export function extractReportReferences(text: string | undefined): string[] {
+export interface ExtractedReportReference {
+  readonly kind: 'report' | 'report_history';
+  readonly reference: string;
+}
+
+/** doctor の静的解析で現在版と履歴の参照を区別して抽出する。 */
+export function extractReportReferenceEntries(text: string | undefined): ExtractedReportReference[] {
   if (!text) {
     return [];
   }
-  return [...text.matchAll(REPORT_REFERENCE_PATTERN)]
-    .map((match) => match[1] ?? '')
-    .filter((name) => name.length > 0);
+  return [...text.matchAll(REPORT_REFERENCE_PATTERN)].flatMap((match) => {
+    const kind = match[1];
+    const reference = match[2];
+    if ((kind !== 'report' && kind !== 'report_history') || reference === undefined || reference.length === 0) return [];
+    return [{ kind, reference }];
+  });
+}
+
+export function extractReportReferences(text: string | undefined): string[] {
+  return extractReportReferenceEntries(text).filter(({ kind }) => kind === 'report').map(({ reference }) => reference);
 }
 
 export interface ResolveReportReferenceContext {
